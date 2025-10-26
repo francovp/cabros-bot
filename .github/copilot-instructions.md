@@ -52,3 +52,9 @@ Where to look first when extending or debugging
 - `src/controllers/webhooks/handlers/alert/alert.js` for webhook shape and Telegram sending details.
 
 If anything in this file is unclear or you want more examples (tests, extra command patterns, or a CI/dev workflow), tell me which area to expand and I'll iterate.
+
+## Active Technologies
+- [if applicable, e.g., PostgreSQL, CoreData, files or N/A]   (001-gemini-grounding-alert)
+
+## Recent Changes
+- 001-gemini-grounding-alert: Added [if applicable, e.g., PostgreSQL, CoreData, files or N/A]  
