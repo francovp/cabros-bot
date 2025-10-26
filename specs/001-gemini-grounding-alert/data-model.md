@@ -102,3 +102,33 @@ interface TelegramMessage {
 - Must escape special Markdown characters
 - Must properly format URLs
 - Must maintain message size limits
+
+## Concrete Limits and Formatting Rules
+
+These limits are normative for implementation and tests:
+
+- Summary length: recommended target <= 250 characters OR <= 3 sentences. Implementations SHOULD enforce one of these and tests SHOULD assert compliance.
+- Maximum number of sources presented: `GROUNDING_MAX_SOURCES` with default = 3. The orchestrator and clients MUST respect this limit when forming `GroundedContext.results` and when formatting the final message.
+- Citation fields:
+  - `title`: string, max 80 characters; if longer, truncate with an ellipsis for display.
+  - `snippet`: string, max 160 characters; optional but preferred when available; if longer, truncate to 160 chars.
+  - `url`: valid HTTP/HTTPS URL; display as-is but ensure Markdown escaping and optionally disable web previews.
+- `confidence`: Optional numeric field in `GeminiResponse`. If present it MUST be a number between 0.0 and 1.0. Implementations may omit it if the provider doesn't return a score.
+- Telegram message assembly:
+- Telegram message assembly:
+
+- The final `TelegramMessage.text` MUST contain the original alert text first, then a clear separator (e.g., "--- Enriched Context ---"), then the summary, then a bulleted list of sources. Example formatting:
+
+```text
+<original alert text>
+
+--- Enriched Context ---
+Summary: <summary text up to 250 chars>
+Sources:
+- <title> — <snippet (optional)> — <url>
+- <title> — <url>
+```
+
+- Messages MUST escape MarkdownV2 special characters and observe Telegram size limits. When the total message exceeds Telegram limits, the implementation SHOULD truncate citations (oldest/lowest-priority) to fit and log the truncation event.
+
+These rules are the canonical contract for unit and integration tests. See `spec.md` reference and ensure all tasks that implement or test generation/formatting reference these constraints.

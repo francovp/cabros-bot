@@ -18,10 +18,14 @@
 
 **Goal**: Implement core services that are prerequisites for all user stories.
 
-- [ ] T005 Create `src/services/grounding/gemini.js` wrapper that calls `genai` to produce a concise summary given original text + grounded context and returns normalized `{ summary, citations }`. File: `src/services/grounding/gemini.js`
-- [ ] T006 Implement `src/services/grounding/genaiClient.js` to initialize and expose a small wrapper around `src/services/grounding/gemini.js` (googleSearch and Gemini calls). This wrapper will be the single integration point for `genai` usage (do NOT implement a separate custom web search client). File: `src/services/grounding/genaiClient.js`
-- [ ] T007 Implement basic Gemini text generation functionality in `src/services/grounding/gemini.js` that accepts context and `GEMINI_SYSTEM_PROMPT` and returns {summary, citations}. File: `src/services/grounding/gemini.js`
-- [ ] T008 Create `src/services/grounding/grounding.js` orchestrator that combines Gemini calls and optional search (if another provider is added in the future) with timeout handling (respect `GROUNDING_TIMEOUT_MS`). File: `src/services/grounding/grounding.js`
+- [ ] T005 Create `src/services/grounding/gemini.js` wrapper that calls `genai` to produce a concise summary given original text + grounded context and returns normalized `{ summary, citations }`. File: `src/services/grounding/gemini.js` (FR-001, FR-011)
+  - Acceptance: Given Alert + GroundedContext, returns a `GeminiResponse` with `summary` (<=250 chars or <=3 sentences) and `citations` array of `SearchResult` (max `GROUNDING_MAX_SOURCES`). Unit tests must mock genai and assert shape.
+- [ ] T006 Implement `src/services/grounding/genaiClient.js` to initialize and expose a small wrapper around `src/services/grounding/gemini.js` (googleSearch and Gemini calls). This wrapper will be the single integration point for `genai` usage (do NOT implement a separate custom web search client). File: `src/services/grounding/genaiClient.js` (FR-001, FR-004)
+  - Acceptance: Expose `search(query, opts)` and `llmCall(prompt, context, opts)` functions. `search` normalizes `SearchResult[]`, enforces `GROUNDING_MAX_SOURCES`, and returns within `GROUNDING_TIMEOUT_MS` (or rejects). Unit tests must stub `@google/genai` and verify normalization and timeout handling.
+- [ ] T007 Implement basic Gemini text generation functionality in `src/services/grounding/gemini.js` that accepts context and `GEMINI_SYSTEM_PROMPT` and returns {summary, citations}. File: `src/services/grounding/gemini.js` (FR-001)
+  - Acceptance: Given a composed prompt and `GroundedContext`, returns `GeminiResponse.summary` (<=250 chars or <=3 sentences) and `citations` referencing provided `SearchResult` objects. Add unit tests to verify trimming and language-preservation behavior.
+- [ ] T008 Create `src/services/grounding/grounding.js` orchestrator that combines Gemini calls and optional search (if another provider is added in the future) with timeout handling (respect `GROUNDING_TIMEOUT_MS`). File: `src/services/grounding/grounding.js` (FR-001, FR-003, FR-004)
+  - Acceptance: Derives query (via configured prompt), calls `genaiClient.search`, calls `gemini`/`genaiClient.llmCall`, enforces `GROUNDING_TIMEOUT_MS` and returns normalized `GeminiResponse`. On timeout/error it returns a clear error that `alert.js` can use to fallback. Integration tests should simulate timeouts and errors.
 
 ## Phase 3: User Story 1 - Enriquecer alertas con contexto verificado (P1)
 
@@ -37,8 +41,10 @@
 - [ ] T014 [US1] Implement logic in `src/controllers/webhooks/handlers/alert/alert.js` to append enriched content (summary + sources) after the original alert text in the Telegram message (FR-009)
 - [ ] T015 [US1] Implement logic in `src/controllers/webhooks/handlers/alert/alert.js` to include short citation (title/snippet) and URL for each source in the Telegram message (FR-002)
 - [ ] T016 [US1] Implement fallback mechanism in `src/controllers/webhooks/handlers/alert/alert.js` to send original text with a note if grounding fails (FR-003)
-- [ ] T017 [US1] Create integration tests for alert grounding in `tests/integration/alert-grounding.test.js` (SC-001, SC-002, SC-003)
-- [ ] T018 [US1] Create unit tests for `src/controllers/webhooks/handlers/alert/grounding.js` in `tests/unit/alert-handler.test.js`
+- [ ] T017 [US1] Create integration tests for alert grounding in `tests/integration/alert-grounding.test.js` (SC-001, SC-002, SC-003) (FR-001, FR-002, FR-003)
+  - Acceptance: Tests exercise a full POST /api/webhook/alert flow with mocked `genai` responses: (1) successful enrichment with >=1 citation and message formatting asserts, (2) timeout/failure -> fallback original text, (3) respects `GROUNDING_MAX_SOURCES` and `GROUNDING_TIMEOUT_MS`.
+- [ ] T018 [US1] Create unit tests for `src/controllers/webhooks/handlers/alert/grounding.js` in `tests/unit/alert-handler.test.js` (FR-011)
+  - Acceptance: Unit tests validate `deriveSearchQuery` behavior, prompt usage, and edge cases (empty input, very long input, non-English), asserting returned query strings and error handling.
 
 ## Phase 4: User Story 2 - Fallbacks y notificaciones de administrador (P2)
 
@@ -60,7 +66,8 @@
 - [ ] T023 [US3] Implement environment variable `GROUNDING_MAX_SOURCES` for maximum search results and wire it into grounding flow (default: 3). File: `src/services/grounding/config.js` and `src/services/grounding/grounding.js` (FR-004, FR-007)
 - [ ] T024 [US3] Implement environment variable `GROUNDING_TIMEOUT_MS` for grounding timeout and enforce it in the orchestrator (default: 8000 ms). File: `src/services/grounding/config.js` and `src/services/grounding/grounding.js` (FR-004, SC-002)
 - [ ] T025 [US3] Implement safe default behavior if grounding credentials or configuration are missing (FR-006)
-- [ ] T026 [US3] Update integration tests in `tests/integration/alert-grounding.test.js` to cover `ENABLE_GEMINI_GROUNDING=false` scenario
+- [ ] T026 [US3] Update integration tests in `tests/integration/alert-grounding.test.js` to cover `ENABLE_GEMINI_GROUNDING=false` scenario (FR-004)
+  - Acceptance: When `ENABLE_GEMINI_GROUNDING=false`, the handler forwards original text and does not call `genaiClient.search` or `llmCall` (mock assertions).
 
 - [ ] T033 [US1] Implement prompt configuration and validation: ensure `GEMINI_SYSTEM_PROMPT` (or `SEARCH_QUERY_PROMPT`) is loadable from env/config and validated by `src/services/grounding/config.js`; add a small test verifying the prompt is used to derive queries. File: `src/services/grounding/config.js`, `tests/unit/prompt-config.test.js` (FR-011)
 
@@ -72,10 +79,14 @@
 
 - [ ] T027 Implement logging (console) for steps and errors in `src/controllers/webhooks/handlers/alert/grounding.js` and `src/controllers/webhooks/handlers/alert/alert.js` (FR-005)
 - [ ] T028 Implement filtering of out-of-scope content before sending to external APIs (FR-010)
-- [ ] T029 Handle very long alerts (> 4000 characters) by truncating or summarizing before sending to search/LLM
-- [ ] T030 Handle content in languages other than English, requesting Gemini to respond in the same language if possible
-- [ ] T031 Filter duplicate or inaccessible sources (HTTP 403/404) and report effective sources
-- [ ] T032 Create unit tests for `src/services/grounding/gemini.js` in `tests/unit/gemini-client.test.js`
+- [ ] T029 Handle very long alerts (> 4000 characters) by truncating or summarizing before sending to search/LLM (FR-010, FR-001)
+  - Acceptance: Input >4000 chars is truncated/summarized before external calls; unit tests assert truncation and that final Telegram message includes a notice when truncation occurred.
+- [ ] T030 Handle content in languages other than English, requesting Gemini to respond in the same language if possible (FR-001)
+  - Acceptance: When input language detection indicates non-English, the prompt instructs Gemini to respond in the same language; tests assert language preservation for a sample non-English input.
+- [ ] T031 Filter duplicate or inaccessible sources (HTTP 403/404) and report effective sources (FR-002)
+  - Acceptance: The orchestrator filters duplicates and inaccessible URLs; returned `citations` only contain valid, reachable URLs (or are excluded) and a metric/log is emitted indicating filtered counts.
+- [ ] T032 Create unit tests for `src/services/grounding/gemini.js` in `tests/unit/gemini-client.test.js` (FR-001, FR-011)
+  - Acceptance: Unit tests mock `genaiClient` and verify `gemini.js` composes prompts correctly, enforces summary length, preserves language, and maps citations into the canonical `SearchResult` shape.
 
 ## Dependencies
 

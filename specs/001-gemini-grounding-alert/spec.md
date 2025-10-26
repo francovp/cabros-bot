@@ -93,15 +93,11 @@ Como operador quiero poder habilitar/deshabilitar el enriquecimiento vía variab
 
 - **FR-006**: The system MUST support a safe default behavior: if grounding credentials or necessary configuration are missing, the enrichment is disabled and the original text is forwarded.
 
+- **FR-007**: Search results should be passed and/or displayed to users with a default of 3 (configurable).
+- **FR-008**: The enriched content (summary + sources) MUST be added after the original alert text in the Telegram message.
 - **FR-010**: The system MUST filter out-of-scope content (e.g., sensitive data, irrelevant topics) before sending to external APIs.
 - **FR-011**: The system MUST use a dedicated, configurable prompt to derive the search query from the alert text.
 - **FR-012**: The system MUST validate incoming webhook payloads to prevent injection or malformed data.
-
-*Example of unclear requirements (questions included below):*
-
-- **FR-007**: How many search results should be passed and/or displayed to users? Default: 3 (configurable).
-- **FR-008**: Which search provider to use for grounding? The chosen provider and grounding implementation details are recorded in the Appendix (implementation section) to keep the main spec technology-agnostic.
-- **FR-009**: The enriched content (summary + sources) MUST be added after the original alert text in the Telegram message.
 
 ### Key Entities *(include if feature involves data)*
 
