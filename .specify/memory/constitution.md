@@ -1,50 +1,73 @@
-# [PROJECT_NAME] Constitution
-<!-- Example: Spec Constitution, TaskFlow Constitution, etc. -->
+<!--
+Sync Impact Report
+
+- Version change: unspecified/template -> 1.0.0
+- Modified principles: (added) Code Quality & Readability; Simplicity & Minimalism; Testing Policy (No TDD, Minimal Tests Required); Review & Quality Gates; Incremental Delivery & Versioning
+- Added sections: Development Workflow & Quality Gates
+- Removed sections: none (template placeholders replaced)
+- Templates requiring updates:
+	- .specify/templates/plan-template.md ✅ updated
+	- .specify/templates/spec-template.md ⚠ pending (recommend minor text to reflect testing policy)
+	- .specify/templates/tasks-template.md ✅ updated
+- Follow-up TODOs: RATIFICATION_DATE intentionally left TODO for confirmation
+-->
+
+# Cabros Crypto Bot — Specification Constitution
 
 ## Core Principles
 
-### [PRINCIPLE_1_NAME]
-<!-- Example: I. Library-First -->
-[PRINCIPLE_1_DESCRIPTION]
-<!-- Example: Every feature starts as a standalone library; Libraries must be self-contained, independently testable, documented; Clear purpose required - no organizational-only libraries -->
+### I. Code Quality & Readability
+All code MUST be written for humans first. Prioritize clear naming, small functions, and focused modules. Comments are permitted to explain "why" but MUST NOT duplicate obvious code behavior. Code that is hard to read is considered a bug and MUST be simplified before merging.
 
-### [PRINCIPLE_2_NAME]
-<!-- Example: II. CLI Interface -->
-[PRINCIPLE_2_DESCRIPTION]
-<!-- Example: Every library exposes functionality via CLI; Text in/out protocol: stdin/args → stdout, errors → stderr; Support JSON + human-readable formats -->
+Rationale: Readable code reduces onboarding time, lowers bug density, and speeds future changes.
 
-### [PRINCIPLE_3_NAME]
-<!-- Example: III. Test-First (NON-NEGOTIABLE) -->
-[PRINCIPLE_3_DESCRIPTION]
-<!-- Example: TDD mandatory: Tests written → User approved → Tests fail → Then implement; Red-Green-Refactor cycle strictly enforced -->
+### II. Simplicity & Minimalism
+Implement the simplest solution that correctly solves the stated requirement. Avoid premature abstraction and over‑engineering. Follow YAGNI (You Ain't Gonna Need It) when designing APIs and internal helpers.
 
-### [PRINCIPLE_4_NAME]
-<!-- Example: IV. Integration Testing -->
-[PRINCIPLE_4_DESCRIPTION]
-<!-- Example: Focus areas requiring integration tests: New library contract tests, Contract changes, Inter-service communication, Shared schemas -->
+Rationale: Simple implementations are easier to maintain, test, and reason about in small teams.
 
-### [PRINCIPLE_5_NAME]
-<!-- Example: V. Observability, VI. Versioning & Breaking Changes, VII. Simplicity -->
-[PRINCIPLE_5_DESCRIPTION]
-<!-- Example: Text I/O ensures debuggability; Structured logging required; Or: MAJOR.MINOR.BUILD format; Or: Start simple, YAGNI principles -->
+### III. Testing Policy (NO TDD Mandate)
+Testing is REQUIRED for critical logic and public-facing behaviors, but Test-Driven Development (TDD) is NOT mandated. The project REQUIRES a minimal, focused test-suite that covers:
 
-## [SECTION_2_NAME]
-<!-- Example: Additional Constraints, Security Requirements, Performance Standards, etc. -->
+- core business logic (unit-level, where bugs would cause wrong results)
+- regression tests for previously reported bugs when practical
 
-[SECTION_2_CONTENT]
-<!-- Example: Technology stack requirements, compliance standards, deployment policies, etc. -->
+Tests SHOULD be small in scope and fast. They MUST validate behavior and guard critical regressions. Writing tests early is encouraged, but teams are not required to follow a red‑green‑refactor TDD cycle.
 
-## [SECTION_3_NAME]
-<!-- Example: Development Workflow, Review Process, Quality Gates, etc. -->
+Rationale: We want reliable safety nets without enforcing workflow dogma that slows delivery.
 
-[SECTION_3_CONTENT]
-<!-- Example: Code review requirements, testing gates, deployment approval process, etc. -->
+### IV. Review & Quality Gates
+All changes MUST go through code review. Pull requests MUST include a brief description of the change, a summary of rationale for design decisions if non‑obvious, and the minimal tests added or updated. CI MUST run linters and basic tests before merge.
+
+Rationale: Peer review and automated checks catch style and logic issues early.
+
+### V. Incremental Delivery & Semantic Versioning
+Work in small, incremental changes. Public API or behavior changes MUST follow semantic versioning for released packages or published contracts. Breaking or governance-level changes to the constitution require a documented migration plan.
+
+Rationale: Small changes reduce blast radius and make rollbacks simpler.
+
+## Development Workflow & Quality Gates
+
+- PRs MUST reference the related spec/plan entry (e.g., specs/feature-name) and list test coverage for the change.
+- CI MUST run formatting (prettier/eslint/clang-format as applicable), static analysis, and the minimal test-suite.
+- Major architectural changes MUST be accompanied by a short design note (in the plan or PR) and a risk/rollback plan.
+- Tests are REQUIRED for critical paths; other tests are encouraged but kept minimal.
 
 ## Governance
-<!-- Example: Constitution supersedes all other practices; Amendments require documentation, approval, migration plan -->
 
-[GOVERNANCE_RULES]
-<!-- Example: All PRs/reviews must verify compliance; Complexity must be justified; Use [GUIDANCE_FILE] for runtime development guidance -->
+Amendments to this constitution MUST be proposed via a pull request against `.specify/memory/constitution.md`. Each amendment PR MUST include:
 
-**Version**: [CONSTITUTION_VERSION] | **Ratified**: [RATIFICATION_DATE] | **Last Amended**: [LAST_AMENDED_DATE]
-<!-- Example: Version: 2.1.1 | Ratified: 2025-06-13 | Last Amended: 2025-07-16 -->
+- a short rationale and scope of the change
+- a suggested semantic version bump and reason (MAJOR/MINOR/PATCH)
+- a short migration or compliance note if the amendment changes developer obligations
+
+Approval: A simple majority of maintainers (or the repository owners listed in README) MUST approve the PR for the amendment to be adopted. Emergency fixes MAY use a faster triage path but must be documented and ratified retroactively.
+
+Versioning rules (summary):
+
+- MAJOR: Backward-incompatible governance or principle removals/redefinitions
+- MINOR: New principle/section added or material expansion of guidance
+- PATCH: Wording clarifications, typos, or non‑semantic refinements
+
+**Version**: 1.0.0 | **Ratified**: TODO(RATIFICATION_DATE): confirm original adoption date | **Last Amended**: 2025-10-26
+<!-- End of constitution -->
