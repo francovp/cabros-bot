@@ -75,36 +75,6 @@ interface GroundAlertResponse {
 }
 ```
 
-### Search API Integration
-
-#### Derive Search Query
-
-```typescript
-interface DeriveQueryRequest {
-  alertText: string;
-  maxLength?: number;
-}
-
-interface DeriveQueryResponse {
-  query: string;
-  confidence: number;
-}
-```
-
-#### Fetch Search Results
-
-```typescript
-interface SearchRequest {
-  query: string;
-  maxResults?: number;
-}
-
-interface SearchResponse {
-  results: SearchResult[];
-  totalResults: number;
-}
-```
-
 ## Data Schemas
 
 ```typescript
@@ -130,13 +100,11 @@ Required environment variables for feature enablement:
 ```bash
 ENABLE_GEMINI_GROUNDING=true
 GEMINI_API_KEY=string
-SEARCH_API_KEY=string
 ```
 
 Optional configuration:
 
 ```bash
-SEARCH_CX=string                     # Search engine ID
 GEMINI_SYSTEM_PROMPT=string         # Custom system prompt
 GROUNDING_MAX_SOURCES=number        # Default: 3
 GROUNDING_TIMEOUT_MS=number         # Default: 8000

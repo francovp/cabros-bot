@@ -7,13 +7,10 @@ This feature adds context-enriched alerts to the Telegram bot by using Gemini AI
 
 1. Google Cloud Platform (GCP) Account with:
    - Gemini API enabled
-   - Search API enabled
-   - (Optional) Programmable Search Engine configured
+   - NOTE: Implementation uses the `@google/genai` package's googleSearch groundingTool; a Programmable Search Engine is NOT required for the initial implementation.
 
 2. API Keys and Credentials:
    - GEMINI_API_KEY
-   - SEARCH_API_KEY
-   - SEARCH_CX (optional)
 
 ## Configuration
 
@@ -23,10 +20,8 @@ Add these environment variables to enable and configure the feature:
 # Required for enabling the feature
 ENABLE_GEMINI_GROUNDING=true
 GEMINI_API_KEY=your_gemini_api_key
-SEARCH_API_KEY=your_search_api_key
 
 # Optional configuration
-SEARCH_CX=your_search_engine_id           # Optional: Custom Search Engine ID
 GEMINI_SYSTEM_PROMPT=your_custom_prompt   # Optional: Custom system prompt
 GROUNDING_MAX_SOURCES=3                   # Optional: Default is 3
 GROUNDING_TIMEOUT_MS=8000                 # Optional: Default is 8000ms
@@ -86,7 +81,6 @@ Bitcoin has surpassed $50,000 for the first time since Dec 2023, driven by incre
    - Monitor API quotas
 
 3. No sources in output:
-   - Verify Search API key permissions
    - Check `GROUNDING_MAX_SOURCES` setting
    - Review search query derivation logs
 

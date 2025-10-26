@@ -10,18 +10,21 @@ Add enriched context to webhook alerts using Gemini AI with Google Search ground
 ## Technical Context
 
 **Language/Version**: Node.js 20.x (from package.json engines)
-**Primary Dependencies**: 
-  - @google/genai - Gemini API client
+**Primary Dependencies**:
+
+  - @google/genai (a.k.a. `genai`) - Gemini API client and googleSearch groundingTool Tools (use latest `@google/genai` package implementation)
   - express - Web server framework
   - telegraf - Telegram Bot framework
 **Storage**: N/A (stateless webhooks)
 **Testing**: Jest (unit/integration testing)
 **Target Platform**: Linux server (existing bot infrastructure)
 **Project Type**: Single - Node.js webhook service
-**Constraints**: 
-  - External API timeout: 8000ms (configurable)
-  - Maximum 3 search results per alert (configurable)
+**Constraints**:
+
+  - External API timeout: 8000ms (configurable via `GROUNDING_TIMEOUT_MS`)
+  - Maximum 3 search results per alert (configurable via `GROUNDING_MAX_SOURCES`)
   - Message size limits for Telegram
+  - Grounding implementation MUST use the googleSearch groundingTool Tools; do NOT implement a separate/custom web search client or `searchapi` client as part of this feature. If an alternate provider is required later, implement a thin adapter behind a provider-agnostic interface as a follow-up task.
 **Scale/Scope**: 
   - Single webhook endpoint enhancement
   - Integration with 2 external APIs (Gemini, Google Search)
@@ -81,24 +84,32 @@ src/
 │       └── handlers/
 │           └── alert/
 │               ├── alert.js           # Existing webhook handler
-│               ├── grounding.js       # New grounding service integration
+│               ├── grounding.js       # Grounding integration entry (orchestration)
 │               └── types.ts           # Type definitions for alert enrichment
 ├── services/
 │   └── grounding/
-│       ├── gemini.js                 # Gemini API client
-│       ├── search.js                 # Google Search client
+│       ├── genaiClient.js            # Thin wrapper around @google/genai (googleSearch + LLM helpers)
+│       ├── gemini.js                 # Prompt composition and LLM post-processing (uses genaiClient)
+│       ├── grounding.js              # Orchestrator: derive query, collect evidence, enforce timeout
 │       └── types.ts                  # Shared types for grounding
 └── lib/
-    └── validation.js                 # Input validation helpers
+  └── validation.js                 # Input validation helpers
 
 tests/
 ├── integration/
 │   └── alert-grounding.test.js      # Integration tests for enrichment
 └── unit/
-    ├── alert-handler.test.js        # Unit tests for alert processing
-    ├── gemini-client.test.js        # Unit tests for Gemini integration
-    └── search-client.test.js        # Unit tests for Search integration
+  ├── alert-handler.test.js        # Unit tests for alert processing
+  └── gemini-client.test.js        # Unit tests for Gemini integration
 ```
+
+### Module responsibilities
+
+- `genaiClient.js`: Initialize and export a minimal, well-documented wrapper around `@google/genai` with two convenience functions: `search(query, opts)` (calls genai.googleSearch and returns normalized SearchResult[]), and `llmCall(prompt, context, opts)` (calls the LLM with provided prompt and context). Keep this file thin and free of business logic.
+- `grounding.js`: Orchestrator that (1) derives a search query (via a configurable prompt), (2) uses `genaiClient.search` to collect evidence (respecting `GROUNDING_MAX_SOURCES`), (3) calls `gemini.js`/`genaiClient.llmCall` to obtain summaries, and (4) enforces `GROUNDING_TIMEOUT_MS` with a clear fallback path.
+- `gemini.js`: Business-facing utilities for prompt composition and response normalization (maps LLM output into `GeminiResponse` with `summary`, `citations`).
+
+These responsibilities should be kept minimal to satisfy the Constitution's Simplicity & Minimalism principle.
 
 **Structure Decision**: The feature will be implemented within the existing single-project structure, adding new modules under `src/services/grounding/` for the Gemini and Search integrations, and extending the existing alert handler with grounding capabilities. This maintains the current project organization while cleanly separating the new functionality.
 

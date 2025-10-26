@@ -3,6 +3,8 @@
 **Feature Name**: Gemini Grounding Alert Feature
 **Feature Branch**: `001-gemini-grounding-alert`
 
+> NOTE: Implementation MUST use the official `@google/genai` package's googleSearch groundingTool to collect search results and provide grounding context to Gemini. Do NOT implement a custom web search client or `searchapi` client as part of this feature.
+
 ## Phase 1: Setup
 
 **Goal**: Initialize the project environment and install necessary dependencies.
@@ -16,10 +18,10 @@
 
 **Goal**: Implement core services that are prerequisites for all user stories.
 
-- [ ] T005 Create `src/services/grounding/search.js` for Google Search client
-- [ ] T006 Create `src/services/grounding/gemini.js` for Gemini API client
-- [ ] T007 Implement basic search functionality in `src/services/grounding/search.js`
-- [ ] T008 Implement basic Gemini text generation functionality in `src/services/grounding/gemini.js`
+- [ ] T005 Create `src/services/grounding/gemini.js` wrapper that calls `genai` to produce a concise summary given original text + grounded context and returns normalized `{ summary, citations }`. File: `src/services/grounding/gemini.js`
+- [ ] T006 Implement `src/services/grounding/genaiClient.js` to initialize and expose a small wrapper around `src/services/grounding/gemini.js` (googleSearch and Gemini calls). This wrapper will be the single integration point for `genai` usage (do NOT implement a separate custom web search client). File: `src/services/grounding/genaiClient.js`
+- [ ] T007 Implement basic Gemini text generation functionality in `src/services/grounding/gemini.js` that accepts context and `GEMINI_SYSTEM_PROMPT` and returns {summary, citations}. File: `src/services/grounding/gemini.js`
+- [ ] T008 Create `src/services/grounding/grounding.js` orchestrator that combines Gemini calls and optional search (if another provider is added in the future) with timeout handling (respect `GROUNDING_TIMEOUT_MS`). File: `src/services/grounding/grounding.js`
 
 ## Phase 3: User Story 1 - Enriquecer alertas con contexto verificado (P1)
 
@@ -29,7 +31,7 @@
 
 - [ ] T009 [US1] Create `src/controllers/webhooks/handlers/alert/grounding.js` for grounding service integration
 - [ ] T010 [US1] Implement `deriveSearchQuery` function in `src/controllers/webhooks/handlers/alert/grounding.js` (FR-011)
-- [ ] T011 [US1] Integrate Google Search client (`src/services/grounding/search.js`) into `src/controllers/webhooks/handlers/alert/grounding.js` to fetch search results (FR-001)
+- [ ] T011 [US1] Integrate `src/services/grounding/gemini.js` into the grounding flow (`src/services/grounding/grounding.js` to fetch search results and return normalized `SearchResult[]` (FR-001)
 - [ ] T012 [US1] Integrate Gemini API client (`src/services/grounding/gemini.js`) into `src/controllers/webhooks/handlers/alert/grounding.js` to generate summary with grounding (FR-001)
 - [ ] T013 [US1] Modify `src/controllers/webhooks/handlers/alert/alert.js` to call the new grounding service (FR-001)
 - [ ] T014 [US1] Implement logic in `src/controllers/webhooks/handlers/alert/alert.js` to append enriched content (summary + sources) after the original alert text in the Telegram message (FR-009)
@@ -55,10 +57,14 @@
 **Independent Test Criteria**: Set `ENABLE_GEMINI_GROUNDING=false` in the environment. Verify that the `postAlert` handler does not invoke Gemini or Google Search APIs and simply forwards the original alert text.
 
 - [ ] T022 [US3] Implement environment variable `ENABLE_GEMINI_GROUNDING` check in `src/controllers/webhooks/handlers/alert/alert.js` to enable/disable grounding (FR-004)
-- [ ] T023 [US3] Implement environment variable for maximum search results (e.g., `MAX_SEARCH_RESULTS`) in `src/controllers/webhooks/handlers/alert/grounding.js` (FR-004, FR-007)
-- [ ] T024 [US3] Implement environment variable for grounding timeout (e.g., `GROUNDING_TIMEOUT_MS`) in `src/controllers/webhooks/handlers/alert/grounding.js` (FR-004, SC-002)
+- [ ] T023 [US3] Implement environment variable `GROUNDING_MAX_SOURCES` for maximum search results and wire it into grounding flow (default: 3). File: `src/services/grounding/config.js` and `src/services/grounding/grounding.js` (FR-004, FR-007)
+- [ ] T024 [US3] Implement environment variable `GROUNDING_TIMEOUT_MS` for grounding timeout and enforce it in the orchestrator (default: 8000 ms). File: `src/services/grounding/config.js` and `src/services/grounding/grounding.js` (FR-004, SC-002)
 - [ ] T025 [US3] Implement safe default behavior if grounding credentials or configuration are missing (FR-006)
 - [ ] T026 [US3] Update integration tests in `tests/integration/alert-grounding.test.js` to cover `ENABLE_GEMINI_GROUNDING=false` scenario
+
+- [ ] T033 [US1] Implement prompt configuration and validation: ensure `GEMINI_SYSTEM_PROMPT` (or `SEARCH_QUERY_PROMPT`) is loadable from env/config and validated by `src/services/grounding/config.js`; add a small test verifying the prompt is used to derive queries. File: `src/services/grounding/config.js`, `tests/unit/prompt-config.test.js` (FR-011)
+
+- [ ] T034 [P] Add simple instrumentation for grounding: record basic metrics (latency, success/failure counts) via console structured logs and a small metrics helper `src/services/grounding/metrics.js`; add tests to assert timeout metric emission. File: `src/services/grounding/metrics.js`, `tests/unit/metrics.test.js` (SC-002, SC-001)
 
 ## Phase 6: Polish & Cross-Cutting Concerns
 
@@ -70,7 +76,6 @@
 - [ ] T030 Handle content in languages other than English, requesting Gemini to respond in the same language if possible
 - [ ] T031 Filter duplicate or inaccessible sources (HTTP 403/404) and report effective sources
 - [ ] T032 Create unit tests for `src/services/grounding/gemini.js` in `tests/unit/gemini-client.test.js`
-- [ ] T033 Create unit tests for `src/services/grounding/search.js` in `tests/unit/search-client.test.js`
 
 ## Dependencies
 
@@ -88,8 +93,8 @@ Completion Order:
 
 - **User Story 1**:
   - T010 [P] Implement `deriveSearchQuery` in `src/controllers/webhooks/handlers/alert/grounding.js`
-  - T011 [P] Integrate Google Search client in `src/controllers/webhooks/handlers/alert/grounding.js`
-  - T012 [P] Integrate Gemini API client in `src/controllers/webhooks/handlers/alert/grounding.js`
+  - T011 [P] Integrate `genaiClient` usage into the grounding flow (`src/services/grounding/grounding.js`) to fetch search results and evidence
+  - T012 [P] Integrate Gemini wrapper (`src/services/grounding/gemini.js`) into the grounding flow to produce summaries using grounded context
 
 - **User Story 3**:
   - T022 [P] Implement `ENABLE_GEMINI_GROUNDING` check in `src/controllers/webhooks/handlers/alert/alert.js`

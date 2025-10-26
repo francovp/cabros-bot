@@ -122,13 +122,15 @@ Como operador quiero poder habilitar/deshabilitar el enriquecimiento vía variab
 
 ### Assumptions
 
-- The environment will provide API keys via env vars when enrichment is desired: `GEMINI_API_KEY`, `SEARCH_API_KEY` and optionally `SEARCH_CX`.
+- The environment will provide API keys via env vars when enrichment is desired. Primary credential required: `GEMINI_API_KEY`.
 - Gemini API supports providing grounding context (either as system prompt + documents or a context block) and returning a concise summary with citations.
 - The project owner will confirm the search provider and the policy for including external links in Telegram messages (some chats may block links).
 
 ---
 
 The spec is ready for refinement. There are a small number of clarifying questions below which affect implementation details; see the checklist and the questions section.
+
+## Clarifications
 
 ### Session 2025-10-26
 
@@ -137,3 +139,4 @@ The spec is ready for refinement. There are a small number of clarifying questio
 - Q: How should the search query be derived from the alert text? → A: Use a dedicated, configurable prompt.
 - Q: Should the enriched message replace the original text or be appended/prepended? → A: Append: the enriched content (summary + sources) MUST be added after the original alert text in the Telegram message.
 - Q: How many search results should be passed and/or displayed to users? → A: Default: 3 (configurable).
+- Q: Which search provider/implementation should we use for grounding? → A: Use Gemini's googleSearch groundingTool via the latest `genai` package (no custom search client).
