@@ -93,11 +93,14 @@ Como operador quiero poder habilitar/deshabilitar el enriquecimiento vía variab
 
 - **FR-006**: The system MUST support a safe default behavior: if grounding credentials or necessary configuration are missing, the enrichment is disabled and the original text is forwarded.
 
+- **FR-010**: The system MUST filter out-of-scope content (e.g., sensitive data, irrelevant topics) before sending to external APIs.
+- **FR-011**: The system MUST use a dedicated, configurable prompt to derive the search query from the alert text.
+
 *Example of unclear requirements (questions included below):*
 
 - **FR-007**: How many search results should be passed and/or displayed to users? Default: 3 (configurable).
 - **FR-008**: Which search provider to use for grounding? The chosen provider and grounding implementation details are recorded in the Appendix (implementation section) to keep the main spec technology-agnostic.
-- **FR-009**: Should the enriched message replace the original text or be appended/prepended? Append: the enriched content (summary + sources) MUST be added after the original alert text in the Telegram message.
+- **FR-009**: The enriched content (summary + sources) MUST be added after the original alert text in the Telegram message.
 
 ### Key Entities *(include if feature involves data)*
 
@@ -125,3 +128,11 @@ Como operador quiero poder habilitar/deshabilitar el enriquecimiento vía variab
 ---
 
 The spec is ready for refinement. There are a small number of clarifying questions below which affect implementation details; see the checklist and the questions section.
+
+### Session 2025-10-26
+
+- Q: Should the system explicitly define out-of-scope content for processing by external APIs (e.g., sensitive data, irrelevant topics)? → A: Yes, explícitamente definir el contenido fuera de alcance.
+
+- Q: How should the search query be derived from the alert text? → A: Use a dedicated, configurable prompt.
+- Q: Should the enriched message replace the original text or be appended/prepended? → A: Append: the enriched content (summary + sources) MUST be added after the original alert text in the Telegram message.
+- Q: How many search results should be passed and/or displayed to users? → A: Default: 3 (configurable).
