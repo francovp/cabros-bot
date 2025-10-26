@@ -18,9 +18,6 @@ Add enriched context to webhook alerts using Gemini AI with Google Search ground
 **Testing**: Jest (unit/integration testing)
 **Target Platform**: Linux server (existing bot infrastructure)
 **Project Type**: Single - Node.js webhook service
-**Performance Goals**: 
-  - Webhook response time < 10s (including external API calls)
-  - Support for concurrent webhook processing
 **Constraints**: 
   - External API timeout: 8000ms (configurable)
   - Maximum 3 search results per alert (configurable)

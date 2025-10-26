@@ -95,6 +95,7 @@ Como operador quiero poder habilitar/deshabilitar el enriquecimiento vía variab
 
 - **FR-010**: The system MUST filter out-of-scope content (e.g., sensitive data, irrelevant topics) before sending to external APIs.
 - **FR-011**: The system MUST use a dedicated, configurable prompt to derive the search query from the alert text.
+- **FR-012**: The system MUST validate incoming webhook payloads to prevent injection or malformed data.
 
 *Example of unclear requirements (questions included below):*
 

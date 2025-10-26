@@ -10,7 +10,7 @@
 - [ ] T001 Install `@google/genai` dependency: `npm install @google/genai`
 - [ ] T002 Create `src/controllers/webhooks/handlers/alert/types.ts` for type definitions
 - [ ] T003 Create `src/services/grounding/types.ts` for shared grounding types
-- [ ] T004 Create `src/lib/validation.js` for input validation helpers
+- [ ] T004 Create `src/lib/validation.js` for input validation helpers (FR-012)
 
 ## Phase 2: Foundational
 
