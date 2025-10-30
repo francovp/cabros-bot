@@ -102,7 +102,7 @@ tests/
 | HTTP Client | Native fetch (no dependency) | Node 18+ has built-in fetch; reduces bundle size; keeps dependencies minimal |
 | Notification Abstraction | NotificationChannel base class + concrete impls | Enables future channels (Discord, Slack) without refactoring alert handler |
 | Retry Strategy | Per-message exponential backoff (no queue) | Simplifies initial implementation; respects GreenAPI 50 RPS limit |
-| Grounding | Single request, reused for both channels | Reduces API calls; simplifies enrichment logic |
+| Grounding | Single request in webhook handler, reused for both channels | Reduces API calls; enrichment in webhook handler before passing to NotificationManager |
 | Formatting | Two formatters (MarkdownV2, WhatsAppMarkdown) | Clear separation; each handles its channel's constraints |
 
 ## Next Steps

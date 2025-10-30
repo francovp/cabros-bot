@@ -62,7 +62,7 @@ This document contains **24 actionable implementation tasks** organized into **4
 
 - [ ] T004 Implement utility `retryHelper.js` in `src/lib/retryHelper.js` with function `sendWithRetry(sendFn, maxRetries=3, logger)` that implements exponential backoff (1s → 2s → 4s) with ±10% jitter, logging each attempt (WARN level for retries, ERROR level for exhausted), and returning `SendResult` object on success or after max retries
 
-- [ ] T005 Create helper function `truncateMessage(text, maxChars=20000)` in `src/lib/messageHelper.js` that truncates text to maxChars and appends "…" if truncation occurred. Include test case for edge case: exactly maxChars (no "…"), under maxChars (no "…"), over maxChars (add "…")
+- [ ] T005 Create helper function `truncateMessage(text, maxChars=20000)` in `src/lib/messageHelper.js` that truncates text to maxChars and appends "…" if truncation occurred. Truncation happens at send-time only (not during config validation). Include test case for edge case: exactly maxChars (no "…"), under maxChars (no "…"), over maxChars (add "…")
 
 - [ ] T006 Implement `MarkdownV2Formatter` in `src/services/notification/formatters/markdownV2Formatter.js` that escapes special MarkdownV2 characters (underscore, asterisk, brackets, parentheses, tilde, backtick, greater-than, hash, plus, hyphen, equals, pipe, braces, period, exclamation) and formats text according to Telegram MarkdownV2 spec. Refactor existing formatter logic from `src/controllers/webhooks/handlers/alert/alert.js` if applicable. Include JSDoc with example input/output.
 
@@ -154,11 +154,12 @@ User stories executed in priority order (P1 → P2a → P2b → P3). Each story 
   - Pass enriched alert to `notificationManager.sendToAll(alert)`
   - Both services (Telegram, WhatsApp) receive same enriched data, formatted independently
 
-- [ ] T017 Implement admin notification on multi-channel failure in `src/services/notification/NotificationManager.js`:
-  - After `sendToAll()` completes, check if any channels failed
-  - If failures detected: build notification message with failed channel names, attempt counts, errors
-  - Send admin notification via Telegram using existing `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID`
-  - Log: `INFO` if admin notification sent, `WARN` if admin chat not configured
+- [ ] T017 Implement admin notification on channel failure in `src/services/notification/NotificationManager.js`:
+  - After `sendToAll()` completes, check if any enabled channels failed
+  - If failures detected: build notification message with failed channel names (e.g., "whatsapp, telegram"), attempt counts, and errors
+  - Send admin notification via Telegram using existing `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID` (if configured and Telegram is enabled)
+  - Log: `INFO` if admin notification sent, `WARN` if admin chat not configured, `ERROR` if admin notification itself fails
+  - Design to support future channels (e.g., Discord, Slack) without refactoring
 
 - [ ] T018 Create integration test file `tests/integration/alert-dual-channel.test.js` that:
   - Mocks both Telegram and GreenAPI endpoints
@@ -340,7 +341,6 @@ Phase 4 (Polish)
 | Success Criteria | Tasks | Completion |
 |------------------|-------|-----------|
 | SC-001: WhatsApp delivery within 5s | T011, T013 | ✓ fetch timeout 10s, measured in integration test |
-| SC-002: 99% delivery success rate | T011, T012, T017 | ✓ retry logic + error handling |
 | SC-003: No latency impact from dual-channel | T014, T015 | ✓ parallel sendToAll() in NotificationManager |
 | SC-004: Graceful error handling | T017, T022 | ✓ admin notifications, no cross-channel blocking |
 | SC-005: Backward compatibility | T020, T022 | ✓ graceful degradation tests |

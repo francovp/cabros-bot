@@ -113,12 +113,12 @@ When WhatsApp is not configured, the system should gracefully degrade and contin
 - **FR-005**: System MUST create a notification service abstraction that supports multiple channels (Telegram, WhatsApp, extensible for future channels)
 - **FR-006**: System MUST implement a WhatsApp notification service that sends messages to the Green API with required payload structure: `{ chatId, message, customPreview: { title } }`
 - **FR-007**: System MUST send alert messages to all enabled notification channels when an alert webhook is received
-- **FR-008**: System MUST handle WhatsApp service errors gracefully without preventing delivery to other enabled channels. When a WhatsApp send fails, the system MUST retry with exponential backoff (1s → 2s → 4s, maximum 3 retries). If all retries fail, the system MUST return HTTP 200 OK to the webhook caller, log the failure at ERROR level, and send an admin notification to `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID` (if configured).
+- **FR-008**: System MUST handle service errors gracefully without preventing delivery to other enabled channels. When any enabled channel's send fails, the system MUST retry with exponential backoff (1s → 2s → 4s, maximum 3 retries). If a channel's retries are exhausted, the system MUST: (1) return HTTP 200 OK to the webhook caller, (2) log the failure at ERROR level, and (3) send an admin notification to `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID` (if configured and Telegram is enabled) listing all channels that failed. Independent channel failures do not block other channels from attempting delivery.
 - **FR-009**: System MUST include a customizable "Trading View Alert" title in the WhatsApp message preview
 - **FR-010**: System MUST preserve the original alert text in WhatsApp messages. For enriched content, the system MUST convert Telegram MarkdownV2 formatting to WhatsApp-compatible markdown: bold (asterisk), italic (underscore), strikethrough (tilde), monospace (backticks), quotes (greater-than prefix), and lists (asterisk/hyphen or numbers). Unsupported formatting (e.g., nested formatting, links) MUST be stripped and replaced with plain text.
 - **FR-010a**: System MUST truncate alert message body to a maximum of 20,000 characters before sending to GreenAPI. If truncation occurs, the system MUST append "…" to indicate truncation.
 - **FR-011**: System MUST validate WhatsApp configuration on application startup and log warnings if configuration is incomplete
-- **FR-012**: System MUST support the existing Telegram alert enrichment (Gemini grounding). The system MUST make a single grounding request per alert and reuse the enriched data for both Telegram and WhatsApp channels. Telegram receives enriched content formatted with MarkdownV2; WhatsApp receives enriched content formatted with WhatsApp-compatible markdown (bold, italic, strikethrough, code, quotes, lists).
+- **FR-012**: System MUST support the existing Telegram alert enrichment (Gemini grounding). The system MUST enrich alerts in the webhook handler (if `ENABLE_GROUNDING=true`), store enriched data in `alert.enriched`, and pass the enriched alert to the NotificationManager. The system MUST make a single grounding request per alert and reuse the enriched data for both Telegram and WhatsApp channels. Telegram receives enriched content formatted with MarkdownV2; WhatsApp receives enriched content formatted with WhatsApp-compatible markdown (bold, italic, strikethrough, code, quotes, lists).
 - **FR-013**: System MUST log all WhatsApp send attempts (success, failure, retry) for monitoring and debugging
 
 ### Key Entities
@@ -158,13 +158,14 @@ When WhatsApp is not configured, the system should gracefully degrade and contin
 -->
 
 - **SC-001**: WhatsApp alerts are delivered to the configured group within 5 seconds of webhook receipt
-- **SC-002**: Alert delivery succeeds for 99% of valid webhook requests when WhatsApp credentials are correct
 - **SC-003**: Alerts are sent to both Telegram and WhatsApp simultaneously when both are enabled, with no additional latency impact
-- **SC-004**: System correctly handles and logs WhatsApp API errors without crashing or blocking other channels
+- **SC-004**: System correctly handles and logs API errors without crashing or blocking other channels
 - **SC-005**: Existing Telegram alert functionality continues to work without any breaking changes when WhatsApp is not configured
 - **SC-006**: All alert text content (including special characters, emoji, multi-line text) is accurately delivered to WhatsApp
 - **SC-007**: Custom preview title "Trading View Alert" appears correctly in WhatsApp message preview for 100% of messages
 - **SC-008**: Configuration validation on startup correctly identifies missing WhatsApp credentials and logs appropriate warnings
+
+*Note: Quantitative delivery rate metrics (e.g., "99% success") are moved to post-GA analytics roadmap. MVP focuses on deterministic, observable success criteria.*
 
 ## Assumptions
 
