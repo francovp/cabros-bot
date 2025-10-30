@@ -84,7 +84,13 @@ class WhatsAppService extends NotificationChannel {
   async _sendSingle(alert) {
     try {
       // Format message for WhatsApp
-      const formattedText = this.formatter.format(alert.enriched || alert.text);
+      // If enriched is an object, use formatEnriched, otherwise format the text
+      let formattedText;
+      if (alert.enriched && typeof alert.enriched === 'object') {
+        formattedText = this.formatter.formatEnriched(alert.enriched);
+      } else {
+        formattedText = this.formatter.format(alert.enriched || alert.text);
+      }
 
       // Truncate to GreenAPI limit
       const truncatedText = truncateMessage(formattedText, 20000);
