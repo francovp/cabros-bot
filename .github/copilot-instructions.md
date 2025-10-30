@@ -55,6 +55,8 @@ If anything in this file is unclear or you want more examples (tests, extra comm
 
 ## Active Technologies
 - [if applicable, e.g., PostgreSQL, CoreData, files or N/A]   (001-gemini-grounding-alert)
+- Node.js 20.x (from package.json engines) + Express 4.17+, telegraf 4.3+ (existing); NO new HTTP client (use native fetch) (002-whatsapp-alerts)
+- N/A (stateless webhook handler; uses env vars for config) (002-whatsapp-alerts)
 
 ## Recent Changes
 - 001-gemini-grounding-alert: Added [if applicable, e.g., PostgreSQL, CoreData, files or N/A]  

@@ -1,0 +1,146 @@
+openapi: 3.0.0
+info:
+  title: Cabros Crypto Bot - Alert Webhook API
+  version: 1.0.0
+  description: Multi-channel alert webhook for Telegram and WhatsApp notifications
+
+servers:
+  - url: http://localhost:3000
+    description: Local development
+  - url: https://cabros-bot.render.com
+    description: Production
+
+paths:
+  /api/webhook/alert:
+    post:
+      summary: Submit an alert for multi-channel delivery
+      description: Receives an alert (e.g., from TradingView) and delivers it to configured channels (Telegram, WhatsApp)
+      tags:
+        - Webhooks
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                text:
+                  type: string
+                  description: Alert message body (max 20,000 characters)
+                  example: "BTCUSDT Price broke $45,000 support level. Major downtrend signal detected."
+                metadata:
+                  type: object
+                  description: Optional metadata for tracking
+                  properties:
+                    source:
+                      type: string
+                      example: "TradingView"
+                    webhookId:
+                      type: string
+                      example: "tv_alert_20251029_001"
+              required:
+                - text
+      responses:
+        '200':
+          description: Alert received and queued for delivery (eventual consistency model)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: "Alert received. Delivery in progress."
+                  results:
+                    type: array
+                    description: Delivery results for each enabled channel
+                    items:
+                      type: object
+                      properties:
+                        channel:
+                          type: string
+                          enum: [telegram, whatsapp]
+                        success:
+                          type: boolean
+                        messageId:
+                          type: string
+                          description: Platform-specific message ID
+                        error:
+                          type: string
+                          description: Error message if failed
+        '400':
+          description: Invalid alert payload
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  details:
+                    type: array
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+
+  /healthcheck:
+    get:
+      summary: Health check endpoint
+      description: Verify service is running
+      tags:
+        - Health
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "UP"
+
+components:
+  schemas:
+    Alert:
+      type: object
+      properties:
+        text:
+          type: string
+          maxLength: 20000
+        metadata:
+          type: object
+          properties:
+            source:
+              type: string
+            webhookId:
+              type: string
+      required:
+        - text
+
+    SendResult:
+      type: object
+      properties:
+        channel:
+          type: string
+          enum: [telegram, whatsapp]
+        success:
+          type: boolean
+        messageId:
+          type: string
+        error:
+          type: string
+        attemptCount:
+          type: integer
+        durationMs:
+          type: integer
