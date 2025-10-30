@@ -14,7 +14,22 @@ paths:
   /api/webhook/alert:
     post:
       summary: Submit an alert for multi-channel delivery
-      description: Receives an alert (e.g., from TradingView) and delivers it to configured channels (Telegram, WhatsApp)
+      description: |
+        Receives an alert (e.g., from TradingView) and delivers it to configured channels (Telegram, WhatsApp).
+        
+        **Behavior:**
+        - Supports both `application/json` and `text/plain` content types
+        - For JSON: expects `{ "text": "alert body" }` OR plain string body
+        - Always returns 200 OK (fail-open pattern for webhook reliability)
+        - Validates: non-empty UTF-8 text, max 20,000 characters
+        - Optional Gemini grounding enrichment (single request, reused across channels)
+        - Parallel delivery to all enabled channels with independent retry logic
+        - Max delivery time: 10 seconds (includes retries + grounding)
+        
+        **Retry Mechanism:**
+        - Exponential backoff: 1s → 2s → 4s (max 3 attempts per channel)
+        - Total retry time: ~7 seconds maximum
+        - Per-channel retry (one channel failure doesn't block others)
       tags:
         - Webhooks
       requestBody:
@@ -22,27 +37,41 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                text:
-                  type: string
-                  description: Alert message body (max 20,000 characters)
-                  example: "BTCUSDT Price broke $45,000 support level. Major downtrend signal detected."
-                metadata:
-                  type: object
-                  description: Optional metadata for tracking
+              oneOf:
+                - type: object
                   properties:
-                    source:
+                    text:
                       type: string
-                      example: "TradingView"
-                    webhookId:
-                      type: string
-                      example: "tv_alert_20251029_001"
-              required:
-                - text
+                      description: Alert message body (max 20,000 characters)
+                      maxLength: 20000
+                      minLength: 1
+                      example: "BTCUSDT Price broke $45,000 support level. Major downtrend signal detected."
+                    metadata:
+                      type: object
+                      description: Optional metadata for tracking
+                      properties:
+                        source:
+                          type: string
+                          example: "TradingView"
+                        webhookId:
+                          type: string
+                          example: "tv_alert_20251029_001"
+                  required:
+                    - text
+                - type: string
+                  description: Plain alert text (alternative to JSON object)
+                  maxLength: 20000
+                  minLength: 1
+                  example: "BTCUSDT Price broke $45,000 support level. Major downtrend signal detected."
+          text/plain:
+            schema:
+              type: string
+              maxLength: 20000
+              minLength: 1
+              example: "BTCUSDT Price broke $45,000 support level. Major downtrend signal detected."
       responses:
         '200':
-          description: Alert received and queued for delivery (eventual consistency model)
+          description: Alert received and processed (fail-open pattern - always returns 200 OK regardless of delivery success)
           content:
             application/json:
               schema:
@@ -50,29 +79,37 @@ paths:
                 properties:
                   success:
                     type: boolean
+                    description: Always true (indicates webhook was received and processed)
                     example: true
-                  message:
-                    type: string
-                    example: "Alert received. Delivery in progress."
                   results:
                     type: array
                     description: Delivery results for each enabled channel
                     items:
-                      type: object
-                      properties:
-                        channel:
-                          type: string
-                          enum: [telegram, whatsapp]
-                        success:
-                          type: boolean
-                        messageId:
-                          type: string
-                          description: Platform-specific message ID
-                        error:
-                          type: string
-                          description: Error message if failed
+                      $ref: '#/components/schemas/SendResult'
+                  enriched:
+                    type: boolean
+                    description: Whether Gemini grounding enrichment was applied to the alert
+                    example: true
+                required:
+                  - success
+                  - results
+                  - enriched
+              example:
+                success: true
+                results:
+                  - success: true
+                    channel: "telegram"
+                    messageId: "12345"
+                    attemptCount: 1
+                    durationMs: 234
+                  - success: true
+                    channel: "whatsapp"
+                    messageId: "true_120363xxxxx_BAE5..."
+                    attemptCount: 1
+                    durationMs: 456
+                enriched: true
         '400':
-          description: Invalid alert payload
+          description: Invalid alert payload (empty text, exceeds 20K chars, or malformed JSON)
           content:
             application/json:
               schema:
@@ -80,10 +117,11 @@ paths:
                 properties:
                   error:
                     type: string
-                  details:
-                    type: array
+                    example: "Alert text is required and must be non-empty"
+              example:
+                error: "Alert text exceeds maximum length of 20,000 characters"
         '500':
-          description: Internal server error
+          description: Internal server error (should not occur due to fail-open pattern, but included for completeness)
           content:
             application/json:
               schema:
@@ -91,6 +129,7 @@ paths:
                 properties:
                   error:
                     type: string
+                    example: "Internal server error"
 
   /healthcheck:
     get:
@@ -114,12 +153,16 @@ components:
   schemas:
     Alert:
       type: object
+      description: Alert request payload (supports both JSON object and plain string)
       properties:
         text:
           type: string
           maxLength: 20000
+          minLength: 1
+          description: Alert message body
         metadata:
           type: object
+          description: Optional tracking metadata (not used for delivery)
           properties:
             source:
               type: string
@@ -130,17 +173,97 @@ components:
 
     SendResult:
       type: object
+      description: Per-channel delivery result with retry metadata
       properties:
+        success:
+          type: boolean
+          description: Whether the message was successfully delivered to this channel
         channel:
           type: string
           enum: [telegram, whatsapp]
-        success:
-          type: boolean
+          description: Target channel identifier
         messageId:
           type: string
+          description: Platform-specific message ID (only present on success). For Telegram this is a numeric string, for WhatsApp it's in format "true_<chatId>_<messageHash>"
         error:
           type: string
+          description: Error message if delivery failed (only present on failure)
         attemptCount:
           type: integer
+          description: Number of delivery attempts made (1-3 due to retry mechanism)
+          minimum: 1
+          maximum: 3
         durationMs:
           type: integer
+          description: Total time taken for delivery including all retries (milliseconds)
+          minimum: 0
+      required:
+        - success
+        - channel
+        - attemptCount
+        - durationMs
+
+    # External API Response Schemas (for reference)
+    GreenAPISuccessResponse:
+      type: object
+      description: GreenAPI success response format (reference only - not returned by webhook)
+      properties:
+        idMessage:
+          type: string
+          description: Message ID in format "true_<chatId>_<messageHash>"
+          example: "true_120363xxxxx_BAE5F8C5D00F3DDB2740068580BB7B57"
+        webhookUrl:
+          type: string
+          description: Optional webhook URL for delivery status callbacks
+      required:
+        - idMessage
+      x-detection-rule: Success is detected by presence of `idMessage` field (not by a `success` boolean)
+
+    GreenAPIErrorResponse:
+      type: object
+      description: GreenAPI error response format (reference only - not returned by webhook)
+      properties:
+        error:
+          type: integer
+          description: Error code
+          enum: [1000, 1001, 1002, 1003, 1004, 1005]
+        message:
+          type: string
+          description: Human-readable error description
+      required:
+        - error
+        - message
+      example:
+        error: 1001
+        message: "Instance not connected to WhatsApp"
+      x-error-codes:
+        1000: Bad request (invalid parameters)
+        1001: Instance not connected
+        1002: Authentication failure
+        1003: Rate limit exceeded
+        1004: Request timeout
+        1005: Unsupported message type
+
+    TelegramSuccessResponse:
+      type: object
+      description: Telegram Bot API success response format (reference only - not returned by webhook)
+      properties:
+        message_id:
+          type: integer
+          description: Unique message identifier
+          example: 12345
+        chat:
+          type: object
+          properties:
+            id:
+              type: integer
+              description: Chat identifier
+        text:
+          type: string
+          description: Message text as sent
+        date:
+          type: integer
+          description: Unix timestamp
+      required:
+        - message_id
+      x-note: On error, Telegraf throws an exception which is caught and converted to SendResult with success=false

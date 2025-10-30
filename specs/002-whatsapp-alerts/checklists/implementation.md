@@ -144,13 +144,13 @@
 
 ## Category: Ambiguities, Conflicts & Gaps
 
-- [ ] CHK083 - Is there a conflict between "within 5 seconds" delivery SLA and maximum retry time of ~7 seconds? [Ambiguity, Spec §US1 Scenario 2 + Clarifications Q1]
+- [x] CHK083 - Is there a conflict between "within 5 seconds" delivery SLA and maximum retry time of ~7 seconds? [Ambiguity, Spec §US1 Scenario 2 + Clarifications Q1] - RESOLVED: Updated to 10-second SLA (includes all retries + grounding with 3s buffer)
 - [ ] CHK084 - Is the term "graceful degradation" used consistently across US2 and US4, or does it have different meanings? [Ambiguity, Spec §US2 + US4]
 - [ ] CHK085 - Is there ambiguity in "no additional latency impact" (SC-003) - does this mean <1ms, <10ms, or relative to baseline? [Ambiguity, Spec §Success Criteria §SC-003]
-- [ ] CHK086 - Is it clear whether enriched alert formatting should preserve MarkdownV2 syntax or convert to WhatsApp markdown? [Ambiguity, Spec §Clarifications Q5 + Data-Model §Formatters]
+- [x] CHK086 - Is it clear whether enriched alert formatting should preserve MarkdownV2 syntax or convert to WhatsApp markdown? [Ambiguity, Spec §Clarifications Q5 + Data-Model §Formatters] - RESOLVED: Added clarification - Telegram uses MarkdownV2Formatter, WhatsApp uses WhatsAppMarkdownFormatter with channel-specific conversion rules
 - [ ] CHK087 - Is the responsibility documented for who validates chat ID format (webhook handler, WhatsAppService, GreenAPI)? [Ambiguity, Gap]
 - [ ] CHK088 - Is it specified whether a webhook with empty alert text is valid and should be delivered? [Ambiguity, Gap - Validation rules specify "non-empty" but not when validated]
-- [ ] CHK089 - Is it clear whether failure to enrich an alert should block delivery or proceed with plain text? [Ambiguity, Gap]
+- [x] CHK089 - Is it clear whether failure to enrich an alert should block delivery or proceed with plain text? [Ambiguity, Gap] - RESOLVED: Enrichment failure MUST NOT block delivery - log at WARN, set enriched=null, proceed with original alert.text
 - [ ] CHK090 - Is there a conflict between "return 200 OK to webhook caller" always vs. "99% delivery success rate" requirement? [Conflict, Spec §Clarifications Q1 + §SC-002]
 
 ---

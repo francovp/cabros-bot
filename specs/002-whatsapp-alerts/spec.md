@@ -9,11 +9,13 @@
 
 ### Session 2025-10-29
 
-- Q: When WhatsApp API calls fail, what should the system do? → A: Use retry with exponential backoff (1s → 2s → 4s, max 3 retries). If all retries exhausted, return 200 OK to webhook caller, log the failure, and notify admin.
+- Q: When WhatsApp API calls fail, what should the system do? → A: Use retry with exponential backoff (1s → 2s → 4s, max 3 retries; total ~7s max). If all retries exhausted, return 200 OK to webhook caller, log the failure, and notify admin.
 - Q: How should the system handle alert text that exceeds reasonable length constraints? → A: Truncate alert message body to 20,000 characters (GreenAPI limit); add "…" suffix if truncated. For preview title, trust GreenAPI to handle; don't pre-validate title length.
 - Q: When GreenAPI returns rate-limit errors, should the system implement a global backoff strategy or handle each message independently? → A: Per-message exponential backoff. Each message retries independently (1s → 2s → 4s). GreenAPI sendMessage has 50 RPS limit, sufficient for typical alert volumes without global coordination.
 - Q: How should admin notifications be triggered when WhatsApp delivery fails after retries? → A: Via Telegram channel using existing `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID` to send admin alerts about WhatsApp failures.
 - Q: Should enriched alert content be sent to both channels identically, or should WhatsApp receive plain text while Telegram receives enriched content? → A: Both channels get enriched content, formatted appropriately per channel. Make only 1 grounding request and reuse data for both channels. WhatsApp supports limited markdown: underscore for italic, asterisk for bold, tilde for strikethrough, backticks for code, triple-backticks for monospace, greater-than for quotes, asterisk or hyphen for lists.
+- Q: How should enriched alert formatting be converted between channels? → A: When `alert.enriched` exists (Gemini grounding applied), the system formats it per channel: Telegram uses `MarkdownV2Formatter` (escapes special chars: _ * [ ] ( ) ~ ` > # + - = | { } . !), WhatsApp uses `WhatsAppMarkdownFormatter` (strips unsupported syntax like links → plain text, removes underline formatting, preserves bold/italic/strikethrough). Each formatter receives the enriched alert object and applies channel-specific rules. Plain (non-enriched) alerts are sent as-is to both channels.
+- Q: If grounding enrichment fails (ENABLE_GROUNDING=true but Gemini API errors), should the alert still be delivered? → A: YES. Enrichment failure must NOT block alert delivery. When grounding fails, log the error at WARN level, set `alert.enriched = null`, and proceed with delivery using the original `alert.text` to both channels. The webhook response includes `enriched: false` to indicate no enrichment was applied. This ensures critical alerts always reach users even if the enrichment service is unavailable.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -41,7 +43,7 @@ Trading View sends an alert webhook to the bot. The alert should be delivered to
 **Acceptance Scenarios**:
 
 1. **Given** a webhook is configured with a valid Green API URL and credentials, **When** an alert is posted to `/api/webhook/alert` with alert text, **Then** the alert is sent to the configured WhatsApp chat ID with the message text and trading view alert preview.
-2. **Given** WhatsApp delivery is enabled via `ENABLE_WHATSAPP_ALERTS=true`, **When** an alert webhook is received, **Then** the message reaches the WhatsApp group within 5 seconds.
+2. **Given** WhatsApp delivery is enabled via `ENABLE_WHATSAPP_ALERTS=true`, **When** an alert webhook is received, **Then** the message reaches the WhatsApp group within 10 seconds (including all retries).
 3. **Given** an alert contains special characters or emoji, **When** it is sent to WhatsApp, **Then** the message is properly formatted without encoding errors or lost content.
 
 ---
@@ -98,6 +100,7 @@ When WhatsApp is not configured, the system should gracefully degrade and contin
 - What happens if the Green API endpoint is temporarily unavailable?
 - How are multi-line alert texts handled in WhatsApp's custom preview field?
 - What happens if `WHATSAPP_CHAT_ID` contains invalid format or disconnected number?
+- What happens when grounding enrichment is enabled but the Gemini API fails or times out?
 
 ## Requirements *(mandatory)*
 
@@ -118,7 +121,7 @@ When WhatsApp is not configured, the system should gracefully degrade and contin
 - **FR-010**: System MUST preserve the original alert text in WhatsApp messages. For enriched content, the system MUST convert Telegram MarkdownV2 formatting to WhatsApp-compatible markdown: bold (asterisk), italic (underscore), strikethrough (tilde), monospace (backticks), quotes (greater-than prefix), and lists (asterisk/hyphen or numbers). Unsupported formatting (e.g., nested formatting, links) MUST be stripped and replaced with plain text.
 - **FR-010a**: System MUST truncate alert message body to a maximum of 20,000 characters before sending to GreenAPI. If truncation occurs, the system MUST append "…" to indicate truncation.
 - **FR-011**: System MUST validate WhatsApp configuration on application startup and log warnings if configuration is incomplete
-- **FR-012**: System MUST support the existing Telegram alert enrichment (Gemini grounding). The system MUST enrich alerts in the webhook handler (if `ENABLE_GROUNDING=true`), store enriched data in `alert.enriched`, and pass the enriched alert to the NotificationManager. The system MUST make a single grounding request per alert and reuse the enriched data for both Telegram and WhatsApp channels. Telegram receives enriched content formatted with MarkdownV2; WhatsApp receives enriched content formatted with WhatsApp-compatible markdown (bold, italic, strikethrough, code, quotes, lists).
+- **FR-012**: System MUST support the existing Telegram alert enrichment (Gemini grounding). The system MUST enrich alerts in the webhook handler (if `ENABLE_GROUNDING=true`), store enriched data in `alert.enriched`, and pass the enriched alert to the NotificationManager. The system MUST make a single grounding request per alert and reuse the enriched data for both Telegram and WhatsApp channels. Telegram receives enriched content formatted with MarkdownV2; WhatsApp receives enriched content formatted with WhatsApp-compatible markdown (bold, italic, strikethrough, code, quotes, lists). If grounding fails, the system MUST log the error at WARN level, set `alert.enriched = null`, and proceed with delivery using the original `alert.text`. Enrichment failure MUST NOT block alert delivery.
 - **FR-013**: System MUST log all WhatsApp send attempts (success, failure, retry) for monitoring and debugging
 
 ### Key Entities

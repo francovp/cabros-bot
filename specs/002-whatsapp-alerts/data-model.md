@@ -460,6 +460,7 @@ RegisterWebhookHandler (/api/webhook/alert)
 | Retry delays | 1s → 2s → 4s | Spec clarification Q1 |
 | Max retry attempts | 3 | Spec FR-008 |
 | Max total retry time | ~7 seconds | 1 + 2 + 4 = 7s |
+| SLA delivery time | 10 seconds | Includes all retries + grounding; 3s buffer for variance |
 | GreenAPI rate limit | 50 RPS | GreenAPI docs, spec research |
 | HTTP timeout | 10 seconds | Reasonable for GreenAPI (~2s typical) |
 | Grounding requests | 1 per alert | Spec clarification Q5 |

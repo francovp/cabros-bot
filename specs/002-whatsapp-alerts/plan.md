@@ -17,7 +17,7 @@ Add WhatsApp alert channel integration alongside existing Telegram alerts. The s
 **Testing**: jest 30.2+ (existing); minimal tests for WhatsApp send + retry logic + formatting  
 **Target Platform**: Node.js server (Linux/macOS, same as current)  
 **Project Type**: Single web application (Express webhook + background CLI commands)  
-**Performance Goals**: 99% successful delivery rate; 5-second delivery SLA per spec  
+**Performance Goals**: 99% successful delivery rate; 10-second delivery SLA per spec (includes all retries)  
 **Constraints**: GreenAPI 50 RPS limit (respected via per-message backoff); 20K char message limit; Telegram-only on config errors (backward compatible)  
 **Scale/Scope**: Multi-channel notification service; ~5-10 new files (services, handlers, tests); zero breaking changes to existing API
 
