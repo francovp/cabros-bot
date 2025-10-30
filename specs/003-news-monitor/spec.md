@@ -92,6 +92,24 @@ The system analyzes news and market data to identify significant trading signals
 
 ---
 
+### User Story 6 - Optional Secondary LLM Enrichment of Alerts (Priority: P2)
+
+When `ENABLE_LLM_ALERT_ENRICHMENT=true`, the system can invoke an optional secondary LLM model to re-analyze Gemini grounding results and refine confidence scores and alert reasoning. This feature is disabled by default and gracefully falls back to Gemini-only analysis if unavailable.
+
+**Why this priority**: Enables higher-quality alert signals by adding a second opinion from a different model. Optional to preserve core system reliability. Implemented as feature 004-llm-alert-enrichment.
+
+**Independent Test**: Can be tested by enabling enrichment, triggering an alert, and verifying secondary LLM is called and refined confidence is returned; also test fallback when enrichment is disabled or unavailable.
+
+**Acceptance Scenarios**:
+
+1. **Given** `ENABLE_LLM_ALERT_ENRICHMENT=true` and a market event is detected via Gemini, **When** the system processes the alert, **Then** the secondary LLM receives grounding data and returns enriched analysis with updated confidence and reasoning
+2. **Given** the secondary LLM enrichment succeeds, **When** the alert is generated, **Then** conservative confidence selection is applied: use minimum of (Gemini confidence, LLM confidence) to prevent false positives
+3. **Given** the secondary LLM is unavailable or times out, **When** enrichment is attempted, **Then** system falls back to Gemini-only analysis and continues processing without blocking alert delivery
+4. **Given** enrichment is enabled, **When** the response is returned, **Then** the response includes enrichment metadata (original_confidence, enriched_confidence, reasoning_excerpt) for trader context
+5. **Given** `ENABLE_LLM_ALERT_ENRICHMENT=false` or is unset, **When** alerts are processed, **Then** system uses Gemini analysis only (backward compatible)
+
+---
+
 ### Edge Cases
 
 - **Invalid symbol format**: System validates that symbols are non-empty strings (max 20 chars). Invalid symbols are passed to external APIs (Binance/Gemini) and returned as per-symbol status "error"; entire request is never rejected at HTTP level.
@@ -103,6 +121,10 @@ The system analyzes news and market data to identify significant trading signals
 - **Rate limiting from external APIs**: Handled by retry logic with exponential backoff. If rate-limited after 3 retries, per-symbol result includes status "error" with rate-limit message.
 - **Both Binance and Gemini fail for same symbol**: System returns analysis result without market price context (status "analyzed"). Alert is still sent if confidence threshold is met, based on news sentiment alone.
 - **No significant news detected for a symbol**: System returns analyzed result with empty alerts array and status "analyzed" (no error).
+- **Secondary LLM enrichment returns invalid confidence**: System logs error and falls back to Gemini-only result for that alert without blocking other symbols.
+- **Secondary LLM enrichment timeout (per symbol)**: If enrichment exceeds timeout budget (default: 10s per LLM call), system logs timeout and uses Gemini score without enrichment for that alert.
+- **Secondary LLM enrichment partially fails**: If enrichment succeeds for some symbols and fails for others, batch processing continues; affected alerts use Gemini scores; response indicates partial enrichment success.
+- **Enrichment cache hit on second call**: If same symbol with same event_category is re-analyzed within cache TTL, both primary analysis and enrichment results are returned from cache without redundant API calls.
 
 ## Requirements *(mandatory)*
 
@@ -124,16 +146,19 @@ The system analyzes news and market data to identify significant trading signals
 - **FR-014**: System MUST be feature-gated behind the `ENABLE_NEWS_MONITOR` environment variable (default: false) for safe rollout
 - **FR-015**: System MUST use the existing grounding service to contextualize alerts with extracted news sources, summaries, and citations
 - **FR-016**: System MUST format alerts for each notification channel using existing formatters: MarkdownV2 for Telegram, WhatsApp-compatible format for WhatsApp
-- **FR-017**: System MUST handle and gracefully log errors from external API calls (Gemini, Binance, Telegram, WhatsApp) without stopping the entire monitoring flow. All external API calls MUST use `retryHelper.sendWithRetry()` with 3 retries and exponential backoff (see FR-018).
-- **FR-018**: System MUST retry transient API failures using exponential backoff: Binance (3 retries, ~5s timeout), Gemini (3 retries, ~20s timeout), Telegram/WhatsApp (3 retries, ~10s timeout). Per-symbol 30s budget accounts for worst-case retry scenarios.
+- **FR-017**: System MUST handle and gracefully log errors from external API calls (Gemini, Binance, Telegram, WhatsApp, optional secondary LLM) without stopping the entire monitoring flow. All external API calls MUST use `retryHelper.sendWithRetry()` with 3 retries and exponential backoff (see FR-018).
+- **FR-018**: System MUST retry transient API failures using exponential backoff: Binance (3 retries, ~5s timeout), Gemini (3 retries, ~20s timeout), optional secondary LLM enrichment (3 retries, ~10s timeout), Telegram/WhatsApp (3 retries, ~10s timeout). Per-symbol 30s budget accounts for worst-case retry scenarios. Secondary LLM enrichment is independent and does not block alert delivery if it fails.
+- **FR-019**: System MUST support optional secondary LLM enrichment via `ENABLE_LLM_ALERT_ENRICHMENT` environment variable (default: false). When enabled, secondary LLM receives grounding results and returns refined confidence, reasoning, and recommended action. Implementation details deferred to feature 004-llm-alert-enrichment.
+- **FR-020**: System MUST apply conservative confidence selection when enrichment is applied: use minimum of (Gemini confidence, Secondary LLM confidence) to prevent false positives from LLM hallucination. Gemini-only analysis is used if enrichment is disabled or unavailable.
 
 ### Key Entities
 
-- **NewsAlert**: Represents a detected market event with symbol, headline, sentiment score, confidence, sources, and formatted message. Includes event_category (price_surge, price_decline, public_figure, regulatory).
+- **NewsAlert**: Represents a detected market event with symbol, headline, sentiment score, confidence, sources, and formatted message. Includes event_category (price_surge, price_decline, public_figure, regulatory). When enrichment is applied, includes original_confidence, enriched_confidence, reasoning_excerpt, and recommended_action.
 - **MarketContext**: Encapsulates price data (current, 24h change, volume) sourced from Binance or Gemini.
-- **CacheEntry**: In-memory record of analyzed news with timestamp and TTL for deduplication. Key is (symbol, event_category).
-- **AnalysisResult**: Container for per-symbol analysis output including alert, status, delivery results, totalDurationMs, cached flag, and requestId.
+- **CacheEntry**: In-memory record of analyzed news with timestamp and TTL for deduplication. Key is (symbol, event_category). When enrichment is enabled, also caches enrichment results to prevent redundant secondary LLM calls.
+- **AnalysisResult**: Container for per-symbol analysis output including alert, status, delivery results, totalDurationMs, cached flag, requestId, and optional enrichment metadata (when enrichment is enabled).
 - **ErrorResult**: Per-symbol error container with status "error", error code, and error message (returned for invalid symbols or API failures, not as HTTP-level rejection).
+- **EnrichmentMetadata**: Optional alert metadata wrapper (when `ENABLE_LLM_ALERT_ENRICHMENT=true`) including original_confidence, enriched_confidence, enrichment_applied, reasoning_excerpt, model_name, and processing_time_ms. Omitted when enrichment is disabled (backward compatible).
 
 ## Success Criteria *(mandatory)*
 
@@ -149,7 +174,9 @@ The system analyzes news and market data to identify significant trading signals
 - **SC-008**: Binance price fetching (when enabled) provides 99% accurate crypto prices compared to live market data. With aggressive timeout (~5s), Binance succeeds in 90% of requests. Gemini fallback (~20s) succeeds in 95% of requests. If both fail, system still delivers alerts based on news sentiment analysis alone (without price context).
 - **SC-009**: No alert is sent if confidence score is below the configured threshold (alerts only sent when actionable)
 - **SC-010**: System can be enabled/disabled via `ENABLE_NEWS_MONITOR` with zero impact on existing bot functionality
-- **SC-011**: All three event detection categories (price_surge, public_figure, regulatory) are correctly identified, scored, and included in alerts when Gemini analysis detects them
+- **SC-011**: All three event detection categories (price_surge, price_decline, public_figure, regulatory) are correctly identified, scored, and included in alerts when Gemini analysis detects them
+- **SC-012**: When secondary LLM enrichment is enabled (`ENABLE_LLM_ALERT_ENRICHMENT=true`), enriched alerts have confidence scores that are conservative (≤ original Gemini confidence) to prevent false positives. Enrichment succeeds in 95% of cases; failures gracefully fall back to Gemini-only analysis.
+- **SC-013**: When secondary LLM enrichment is disabled or unavailable, alert generation latency and quality are identical to Gemini-only analysis (backward compatible)
 
 ## Clarifications
 
@@ -167,7 +194,8 @@ The system analyzes news and market data to identify significant trading signals
 - **Q2: Observability & Metrics Instrumentation** → Deferred to planning phase. Will address in Phase 2 with Datadog integration strategy.
 - **Q3: Input Validation & Error Response** → A: Validate format but return per-symbol errors only; never reject entire request at HTTP level. Invalid symbols (e.g., non-existent crypto symbols) are caught by Binance/Gemini APIs and returned as per-symbol status "error", not HTTP 400.
 - **Q4: Response Transparency & Debugging** → A: Include full metadata in response: `totalDurationMs` per symbol (transparency), `cached` flag (debugging deduplication), and `requestId` (operational tracing). This aids external callers and operations in correlating logs and understanding delays.
-- **Q5: External API Retry & Rate Limit Handling** → A: Reuse existing `retryHelper.sendWithRetry()` with 3 retries and exponential backoff for all external APIs (Binance ~5s timeout, Gemini ~20s timeout, Telegram/WhatsApp ~10s timeout). Per-symbol 30s budget accounts for worst-case retry scenarios.
+- **Q5: External API Retry & Rate Limit Handling** → A: Reuse existing `retryHelper.sendWithRetry()` with 3 retries and exponential backoff for all external APIs (Binance ~5s timeout, Gemini ~20s timeout, optional LLM enrichment ~10s timeout, Telegram/WhatsApp ~10s timeout). Per-symbol 30s budget accounts for worst-case retry scenarios.
+- **Q6: Optional Secondary LLM Enrichment Integration** → A: Secondary LLM enrichment (feature 004-llm-alert-enrichment) is an optional overlay on top of Gemini analysis. When enabled via `ENABLE_LLM_ALERT_ENRICHMENT=true`, secondary LLM refines confidence and reasoning but does not replace Gemini. Conservative confidence (minimum of both scores) prevents false positives. If secondary LLM is unavailable, system falls back to Gemini-only analysis. Enrichment cache uses same TTL as primary news cache (6 hours default) to keep implementation simple.
 
 ## Assumptions
 
@@ -180,7 +208,9 @@ The system analyzes news and market data to identify significant trading signals
 - **Confidence scoring uses weighted formula**: `confidence = (0.6 × event_significance + 0.4 × |sentiment|)` where event_significance reflects price movement magnitude, source credibility, mention frequency; sentiment ranges -1.0 to +1.0
 - **Requester is responsible for correct symbol classification** (crypto symbols in crypto array, stocks in stocks array); system does not re-validate or cross-check classifications
 - **Gemini prompts are sophisticated enough to detect all three event categories** (price movements, public figures, regulatory); implementation will refine exact prompts and scoring weights
-- **Retry logic reuses existing `retryHelper.sendWithRetry()`**: 3 retries with exponential backoff for Binance (~5s), Gemini (~20s), Telegram/WhatsApp (~10s). Per-symbol 30s budget is sufficient for worst-case scenarios
+- **Retry logic reuses existing `retryHelper.sendWithRetry()`**: 3 retries with exponential backoff for Binance (~5s), Gemini (~20s), optional LLM enrichment (~10s), Telegram/WhatsApp (~10s). Per-symbol 30s budget is sufficient for worst-case scenarios
 - **Response metadata includes**: totalDurationMs (per symbol), cached flag (deduplication indicator), requestId (operational tracing). External callers can use these for debugging and transparency
 - **Format validation is lenient**: Invalid symbols are detected by external APIs, not rejected upfront; entire request is never rejected at HTTP level (format errors return per-symbol status "error")
+- **Optional secondary LLM enrichment**: Controlled via `ENABLE_LLM_ALERT_ENRICHMENT` environment variable (default: false). When enabled, secondary LLM refines Gemini results but system remains functional if enrichment is unavailable. Conservative confidence selection (minimum of Gemini + LLM scores) prevents false positives from LLM hallucination.
+- **Backward compatibility**: When enrichment is disabled or unavailable, system behaves identically to Gemini-only analysis. Response format supports optional enrichment metadata for forward compatibility.
 
