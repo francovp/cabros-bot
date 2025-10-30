@@ -132,19 +132,23 @@ class WhatsAppService extends NotificationChannel {
 
         const data = await response.json();
 
-        if (!data.success) {
-          this.logger?.warn?.(`GreenAPI returned success=false: ${data.error}`);
+        // GreenAPI returns idMessage on success, or error properties on failure
+        // Note: data.success field is unreliable; check for idMessage presence instead
+        if (data.idMessage) {
           return {
-            success: false,
+            success: true,
             channel: 'whatsapp',
-            error: `GreenAPI error: ${data.error || 'Unknown error'}`,
+            messageId: data.idMessage,
           };
         }
 
+        // If no idMessage, treat as error
+        const errorMsg = data.error || data.errorMessage || 'Unknown error';
+        this.logger?.warn?.(`GreenAPI returned error: ${errorMsg}`);
         return {
-          success: true,
+          success: false,
           channel: 'whatsapp',
-          messageId: data.idMessage,
+          error: `GreenAPI error: ${errorMsg}`,
         };
       } catch (error) {
         clearTimeout(timeoutId);
