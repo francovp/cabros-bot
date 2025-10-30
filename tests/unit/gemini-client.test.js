@@ -40,7 +40,7 @@ describe('Gemini Service', () => {
 				prompt: expect.stringContaining('Test alert'),
 				context: { citations: mockSearchResults },
 				opts: expect.objectContaining({
-					maxTokens: 1024,
+					model: 'gemini-2.0-flash',
 					temperature: 0.2,
 				}),
 			});

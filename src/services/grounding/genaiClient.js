@@ -25,18 +25,21 @@ class GenaiClient {
 				config,
 			});
 
-			console.debug('[genaiClient] search result candidates: ', result.candidates);
-			console.debug('[genaiClient] search full response usageMetadata: ', result.usageMetadata);
+			// Handle response structure - could be direct or wrapped in response property
+			const response = result.response || result;
 
-			const searchResultText = result.text || '';
+			console.debug('[genaiClient] search result candidates: ', response.candidates);
+			console.debug('[genaiClient] search full response usageMetadata: ', response.usageMetadata);
+
+			const searchResultText = response.text || '';
 
 			// Extract search results from grounding chunks safely
 			const groundingChunks = (
-				result &&
-				result.candidates &&
-				result.candidates[0] &&
-				result.candidates[0].groundingMetadata &&
-				result.candidates[0].groundingMetadata.groundingChunks
+				response &&
+				response.candidates &&
+				response.candidates[0] &&
+				response.candidates[0].groundingMetadata &&
+				response.candidates[0].groundingMetadata.groundingChunks
 			) || [];
 
 			// Map to normalized SearchResult objects
@@ -86,24 +89,32 @@ class GenaiClient {
 				context,
 			});
 
-			// Prefer the text() helper if available, otherwise try to extract from candidates
+			// Handle response structure - could be direct or wrapped in response property
+			const result = response.response || response;
+
+			// Prefer the text() helper if available (can be a function or property)
 			let text = '';
-			console.debug('[genaiClient] llmCall result candidates: ', response.candidates);
-			console.debug('[genaiClient] llmCall full response usageMetadata: ', response.usageMetadata);
-			if (response) {
-				if (typeof response.text !== 'undefined' && response.text !== null) {
-					text = response.text;
-					if (text === undefined || text === null) {
-						throw new Error(`LLM call failed: ${`text() returned ${text}`}`);
-					}
-				} else if (response.candidates && response.candidates[0]) {
+			console.debug('[genaiClient] llmCall result candidates: ', result.candidates);
+			console.debug('[genaiClient] llmCall full response usageMetadata: ', result.usageMetadata);
+			
+			if (result) {
+				// Try text() as a function first
+				if (typeof result.text === 'function') {
+					text = result.text();
+				} else if (typeof result.text === 'string') {
+					text = result.text;
+				} else if (result.candidates && result.candidates[0]) {
 					// attempt to find text in candidate structure
-					const cand = response.candidates[0];
+					const cand = result.candidates[0];
 					if (cand.content && Array.isArray(cand.content.parts) && cand.content.parts[0] && cand.content.parts[0].text) {
 						text = cand.content.parts[0].text;
-						console.debug('[genaiClient] extracted text via candidate structure: ', text);
-					} else {
-						throw new Error('LLM call failed: Unable to extract text from candidate');
+						console.debug('[genaiClient] extracted text via candidate.content.parts: ', text);
+					} else if (cand.content && Array.isArray(cand.content) && cand.content[0] && cand.content[0].text) {
+						text = cand.content[0].text;
+						console.debug('[genaiClient] extracted text via candidate.content[0].text: ', text);
+					} else if (cand.output && Array.isArray(cand.output) && cand.output[0] && cand.output[0].text) {
+						text = cand.output[0].text;
+						console.debug('[genaiClient] extracted text via candidate.output: ', text);
 					}
 				}
 			}

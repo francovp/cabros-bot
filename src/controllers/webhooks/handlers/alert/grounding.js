@@ -66,7 +66,7 @@ async function enrichAlert(alert) {
 			originalText: text,
 			summary,
 			citations,
-			extraText: `Powered by ${GROUNDING_MODEL_NAME})`,
+			extraText: `Powered by ${GROUNDING_MODEL_NAME}`,
 			truncated,
 		};
 	} catch (error) {
