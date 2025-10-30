@@ -5,6 +5,16 @@
 **Status**: Draft  
 **Input**: User description: "Add WhatsApp Alert Channel to Webhook with Green API integration"
 
+## Clarifications
+
+### Session 2025-10-29
+
+- Q: When WhatsApp API calls fail, what should the system do? → A: Use retry with exponential backoff (1s → 2s → 4s, max 3 retries). If all retries exhausted, return 200 OK to webhook caller, log the failure, and notify admin.
+- Q: How should the system handle alert text that exceeds reasonable length constraints? → A: Truncate alert message body to 20,000 characters (GreenAPI limit); add "…" suffix if truncated. For preview title, trust GreenAPI to handle; don't pre-validate title length.
+- Q: When GreenAPI returns rate-limit errors, should the system implement a global backoff strategy or handle each message independently? → A: Per-message exponential backoff. Each message retries independently (1s → 2s → 4s). GreenAPI sendMessage has 50 RPS limit, sufficient for typical alert volumes without global coordination.
+- Q: How should admin notifications be triggered when WhatsApp delivery fails after retries? → A: Via Telegram channel using existing `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID` to send admin alerts about WhatsApp failures.
+- Q: Should enriched alert content be sent to both channels identically, or should WhatsApp receive plain text while Telegram receives enriched content? → A: Both channels get enriched content, formatted appropriately per channel. Make only 1 grounding request and reuse data for both channels. WhatsApp supports limited markdown: underscore for italic, asterisk for bold, tilde for strikethrough, backticks for code, triple-backticks for monospace, greater-than for quotes, asterisk or hyphen for lists.
+
 ## User Scenarios & Testing *(mandatory)*
 
 <!--
@@ -103,11 +113,12 @@ When WhatsApp is not configured, the system should gracefully degrade and contin
 - **FR-005**: System MUST create a notification service abstraction that supports multiple channels (Telegram, WhatsApp, extensible for future channels)
 - **FR-006**: System MUST implement a WhatsApp notification service that sends messages to the Green API with required payload structure: `{ chatId, message, customPreview: { title } }`
 - **FR-007**: System MUST send alert messages to all enabled notification channels when an alert webhook is received
-- **FR-008**: System MUST handle WhatsApp service errors gracefully without preventing delivery to other enabled channels
+- **FR-008**: System MUST handle WhatsApp service errors gracefully without preventing delivery to other enabled channels. When a WhatsApp send fails, the system MUST retry with exponential backoff (1s → 2s → 4s, maximum 3 retries). If all retries fail, the system MUST return HTTP 200 OK to the webhook caller, log the failure at ERROR level, and send an admin notification to `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID` (if configured).
 - **FR-009**: System MUST include a customizable "Trading View Alert" title in the WhatsApp message preview
-- **FR-010**: System MUST preserve the original alert text in WhatsApp messages without Telegram-specific formatting (e.g., remove MarkdownV2 syntax if present)
+- **FR-010**: System MUST preserve the original alert text in WhatsApp messages. For enriched content, the system MUST convert Telegram MarkdownV2 formatting to WhatsApp-compatible markdown: bold (asterisk), italic (underscore), strikethrough (tilde), monospace (backticks), quotes (greater-than prefix), and lists (asterisk/hyphen or numbers). Unsupported formatting (e.g., nested formatting, links) MUST be stripped and replaced with plain text.
+- **FR-010a**: System MUST truncate alert message body to a maximum of 20,000 characters before sending to GreenAPI. If truncation occurs, the system MUST append "…" to indicate truncation.
 - **FR-011**: System MUST validate WhatsApp configuration on application startup and log warnings if configuration is incomplete
-- **FR-012**: System MUST support the existing Telegram alert enrichment (Gemini grounding) and deliver enriched content to both channels
+- **FR-012**: System MUST support the existing Telegram alert enrichment (Gemini grounding). The system MUST make a single grounding request per alert and reuse the enriched data for both Telegram and WhatsApp channels. Telegram receives enriched content formatted with MarkdownV2; WhatsApp receives enriched content formatted with WhatsApp-compatible markdown (bold, italic, strikethrough, code, quotes, lists).
 - **FR-013**: System MUST log all WhatsApp send attempts (success, failure, retry) for monitoring and debugging
 
 ### Key Entities
@@ -166,8 +177,9 @@ When WhatsApp is not configured, the system should gracefully degrade and contin
 
 ## Constraints
 
-- **Green API Rate Limits**: Messages may be rate-limited by Green API; system should implement retry strategy or queue if needed
-- **Character Limits**: WhatsApp preview titles are limited to ~60 characters; custom preview must fit this limit
+- **Green API Rate Limits**: GreenAPI sendMessage endpoint enforces 50 RPS limit. System implements per-message exponential backoff (max 3 retries with 1s → 2s → 4s delays) without global rate limit coordination.
+- **Message Length**: Alert message body truncated to 20,000 characters to respect GreenAPI JSON payload limits; preview title validation deferred to GreenAPI.
+- **Character Encoding**: Alert text uses UTF-8 encoding, which Green API supports natively
 - **Alert Format**: Removing MarkdownV2 formatting for WhatsApp requires plain text conversion; complex formatted alerts may lose styling
 - **Chat ID Format**: WhatsApp chat ID format must match Green API requirements (e.g., `120363xxxxx@g.us` for groups)
 - **Backward Compatibility**: System must not break existing Telegram-only deployments that don't configure WhatsApp
