@@ -43,7 +43,9 @@
 2. ✅ Event Detection: All three categories (price, public_figure, regulatory) with Gemini scoring
 3. ✅ Multi-Symbol Response: Return partial results on timeout (status: analyzed/timeout)
 4. ✅ Duplicate Detection: By (symbol, event_category); different categories generate separate alerts
-5. ✅ Timeout Budget: Binance + Gemini parallel; wait for Gemini (~15s) before returning
+5. ✅ Timeout Budget: Aggressive Binance (~5s) + Generous Gemini (~20s)
+   - If both timeout, return alert without price context
+   - Prioritizes fallback reliability and sentiment-based alerts
 
 ## Notes
 
