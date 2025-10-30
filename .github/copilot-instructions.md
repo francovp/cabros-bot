@@ -46,17 +46,56 @@ What an AI code change should preserve
 - Do not change how env gating works in `index.js` without adjusting tests/deploys — deployments rely on `RENDER` and `IS_PULL_REQUEST` checks.
 - Keep the `parse_mode: 'MarkdownV2'` when composing Telegram messages unless escaping/formatting is implemented project-wide.
 
+## Multi-Channel Notification Architecture (002-whatsapp-alerts)
+
+The alert delivery system now supports parallel delivery to multiple channels (Telegram, WhatsApp) without blocking. Key patterns:
+
+**Service Layer** (`src/services/notification/`):
+- `NotificationChannel.js` — Abstract base class defining send(alert), validate(), isEnabled() contract
+- `TelegramService.js` — Wraps Telegraf bot.telegram.sendMessage() with MarkdownV2 parsing
+- `WhatsAppService.js` — GreenAPI integration with message truncation (20K chars), 10s timeout, retry logic
+- `NotificationManager.js` — Orchestrates: validateAll() at startup, sendToAll() in parallel via Promise.allSettled()
+
+**Formatting** (`src/services/notification/formatters/`):
+- `MarkdownV2Formatter.js` — Escapes special chars (_ * [ ] ( ) ~ ` > # + - = | { } . !) for Telegram; preserves link URLs
+- `WhatsAppMarkdownFormatter.js` — Strips unsupported syntax (links → plain text, underline removed); logs conversions
+
+**Retry Logic** (`src/lib/retryHelper.js`):
+- sendWithRetry(sendFn, maxRetries=3, logger) with exponential backoff (1s, 2s, 4s) + ±10% jitter
+- Per-channel retry (one channel failure doesn't block others)
+- Returns SendResult { success, channel, messageId?, error?, attemptCount, durationMs }
+
+**Alert Flow**:
+1. Webhook receives text (plain or JSON)
+2. Optional Gemini enrichment (stored in alert.enriched) — single call, reused across channels
+3. notificationManager.sendToAll(alert) fires in parallel
+4. Returns 200 OK with per-channel results (fail-open pattern)
+
+**Configuration**:
+- WhatsApp disabled by default (ENABLE_WHATSAPP_ALERTS=false for backward compat)
+- Requires: WHATSAPP_API_URL, WHATSAPP_API_KEY, WHATSAPP_CHAT_ID (format: 120363xxxxx@g.us)
+- Telegram requires existing: BOT_TOKEN, TELEGRAM_CHAT_ID
+
+**Extending**:
+- Add new channel: Create class extending NotificationChannel, implement send(), validate(), isEnabled()
+- Register in NotificationManager constructor
+- Create tests in tests/unit/ and tests/integration/
+
 Where to look first when extending or debugging
-- `index.js` for lifecycle and bot wiring.
-- `src/controllers/commands/handlers/core/fetchPriceCryptoSymbol.js` for price logic and rounding rules.
-- `src/controllers/webhooks/handlers/alert/alert.js` for webhook shape and Telegram sending details.
+- `index.js` for lifecycle and bot wiring (calls initializeNotificationServices after bot.launch)
+- `src/controllers/webhooks/handlers/alert/alert.js` for webhook flow and notificationManager.sendToAll()
+- `src/services/notification/NotificationManager.js` for parallel send orchestration
+- `src/services/notification/WhatsAppService.js` for retry logic, GreenAPI integration, truncation
+- `src/lib/retryHelper.js` for exponential backoff timing
+- Tests in `tests/integration/` for multi-channel scenarios (dual-channel, config validation, graceful degradation)
 
 If anything in this file is unclear or you want more examples (tests, extra command patterns, or a CI/dev workflow), tell me which area to expand and I'll iterate.
 
 ## Active Technologies
-- [if applicable, e.g., PostgreSQL, CoreData, files or N/A]   (001-gemini-grounding-alert)
-- Node.js 20.x (from package.json engines) + Express 4.17+, telegraf 4.3+ (existing); NO new HTTP client (use native fetch) (002-whatsapp-alerts)
-- N/A (stateless webhook handler; uses env vars for config) (002-whatsapp-alerts)
+- Node.js 20.x (from package.json engines) + Express 4.17+, telegraf 4.3+; NO new HTTP client (use native fetch)
+- GreenAPI for WhatsApp (REST API integration via native fetch with AbortController timeout)
+- Google Gemini for optional alert enrichment (existing integration in grounding service)
+- N/A for storage (stateless webhook handler; uses env vars for config)
 
 ## Recent Changes
-- 001-gemini-grounding-alert: Added [if applicable, e.g., PostgreSQL, CoreData, files or N/A]  
+- 002-whatsapp-alerts: Added multi-channel notification system with TelegramService, WhatsAppService, NotificationManager; exponential backoff retry logic; MarkdownV2 and WhatsApp markdown formatters; comprehensive integration tests for parallel delivery, config validation, graceful degradation

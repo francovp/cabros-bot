@@ -2,6 +2,7 @@ const { getPrice, cryptoBotCmd } = require('./src/controllers/commands');
 const app = require('./app.js');
 const { Telegraf, Markup } = require('telegraf');
 const { getRoutes } = require('./src/routes');
+const { initializeNotificationServices } = require('./src/controllers/webhooks/handlers/alert/alert');
 require('dotenv').config();
 
 const token = process.env.BOT_TOKEN;
@@ -28,6 +29,9 @@ app.listen(port, async () => {
 		bot.command(['precio'], getPrice);
 		bot.command(['cryptobot'], cryptoBotCmd);
 		await bot.launch();
+
+		// Initialize notification services
+		await initializeNotificationServices(bot);
 
 		app.use('/api', getRoutes(bot));
 
