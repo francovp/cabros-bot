@@ -72,7 +72,9 @@ check_feature_branch() {
         return 0
     fi
 
-    if [[ ! "$branch" =~ ^[0-9]{3}- ]]; then
+    # Accept either numbered feature branches (e.g. 001-...) or conventional commit-style branches
+    # Examples: 001-feature-name or feat-datadog-pipeline-endpoints-sref-1314
+    if [[ ! "$branch" =~ ^([0-9]{3}-) ]] && [[ ! "$branch" =~ ^(feat|fix|build|ci|docs|style|refactor|perf|test)(-[a-z0-9][a-z0-9._]*)+ ]]; then
         echo "ERROR: Not on a feature branch. Current branch: $branch" >&2
         echo "Feature branches should be named like: 001-feature-name" >&2
         return 1
@@ -91,8 +93,8 @@ find_feature_dir_by_prefix() {
     local specs_dir="$repo_root/specs"
 
     # Extract numeric prefix from branch (e.g., "004" from "004-whatever")
-    if [[ ! "$branch_name" =~ ^([0-9]{3})- ]]; then
-        # If branch doesn't have numeric prefix, fall back to exact match
+    if [[ ! "$branch_name" =~ ^([0-9]{3}-) ]] && [[ ! "$branch_name" =~ ^(feat|fix|build|ci|docs|style|refactor|perf|test)(-[a-z0-9][a-z0-9._]*)+ ]]; then
+        # If branch doesn't have numeric prefix or valid prefix, fall back to exact match
         echo "$specs_dir/$branch_name"
         return
     fi
