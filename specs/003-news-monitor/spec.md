@@ -94,12 +94,15 @@ The system analyzes news and market data to identify significant trading signals
 
 ### Edge Cases
 
-- What happens when an external caller provides an invalid symbol format?
-- How does the system handle API timeouts (Binance, Gemini, Telegram, WhatsApp) gracefully?
-- What occurs if a symbol exists in both the default list and the request (no duplication)?
-- How does the system behave when NEWS_ALERT_THRESHOLD is set to very high values (e.g., 0.99) and no events meet the threshold?
-- What happens if the cache TTL is set to 0 (should allow constant re-analysis)?
-- How does the system handle malformed JSON or missing required fields in the request body?
+- **Invalid symbol format**: System validates that symbols are non-empty strings (max 20 chars). Invalid symbols are passed to external APIs (Binance/Gemini) and returned as per-symbol status "error"; entire request is never rejected at HTTP level.
+- **API timeouts (Binance, Gemini, Telegram, WhatsApp)**: Handled by `retryHelper.sendWithRetry()` with 3 retries and exponential backoff. If all retries fail, per-symbol result includes status "error" with timeout message. Notification channel failures do not block response (partial_success flag indicates mixed outcomes).
+- **Symbol duplication across request**: If same symbol appears in multiple arrays or multiple times, Gemini/Binance will return errors for misclassified symbols; no special deduplication needed.
+- **NEWS_ALERT_THRESHOLD set to extreme values** (e.g., 0.99): System correctly filters; alerts with confidence <0.99 are not sent. Response still includes analyzed results with their confidence scores so requester can audit filtering.
+- **NEWS_CACHE_TTL_HOURS set to 0**: System allows constant re-analysis (treated as no cache). Each call will trigger fresh Gemini analysis.
+- **Malformed JSON or missing required fields**: System validates JSON parsing and assumes valid arrays if present; omitted arrays default to env symbols. Per-field validation errors are logged but do not reject request.
+- **Rate limiting from external APIs**: Handled by retry logic with exponential backoff. If rate-limited after 3 retries, per-symbol result includes status "error" with rate-limit message.
+- **Both Binance and Gemini fail for same symbol**: System returns analysis result without market price context (status "analyzed"). Alert is still sent if confidence threshold is met, based on news sentiment alone.
+- **No significant news detected for a symbol**: System returns analyzed result with empty alerts array and status "analyzed" (no error).
 
 ## Requirements *(mandatory)*
 
@@ -109,7 +112,7 @@ The system analyzes news and market data to identify significant trading signals
 - **FR-002**: System MUST accept financial symbols via JSON body with separate arrays: `{ "crypto": ["BTCUSDT", "BNBUSDT"], "stocks": ["NVDA", "MSFT"] }`. If arrays are omitted, system defaults to `NEWS_SYMBOLS_CRYPTO` and `NEWS_SYMBOLS_STOCKS` environment variables. Requester is responsible for correct classification; system does not re-validate symbols.
 - **FR-003**: System MUST analyze news and market sentiment for each provided symbol using Gemini GoogleSearch (grounding service) to extract market context and sentiment indicators
 - **FR-004**: System MUST detect significant market events across three categories: (1) price movements exceeding the configured threshold (default: 5%) with bullish/bearish sentiment, (2) mentions of public figures (e.g., Trump, Elon Musk) making statements about the asset, (3) regulatory or official announcements. Each event receives a category tag and confidence score via Gemini analysis.
-- **FR-005**: System MUST assign a confidence score (0.0-1.0) to each alert based on significance and relevance
+- **FR-005**: System MUST assign a confidence score (0.0-1.0) to each alert using the formula: `confidence = (0.6 × event_significance + 0.4 × |sentiment|)` where event_significance is 0.0–1.0 based on price movement magnitude, source credibility, and mention frequency; sentiment is extracted from news articles as -1.0 (bearish) to +1.0 (bullish) scale.
 - **FR-006**: System MUST filter alerts by comparing confidence score against `NEWS_ALERT_THRESHOLD` (default: 0.7) and only send alerts meeting the threshold
 - **FR-007**: System MUST execute symbol analysis in parallel to minimize total response time
 - **FR-008**: System MUST send filtered alerts to all enabled notification channels (Telegram and WhatsApp) simultaneously without blocking on individual channel failures
@@ -117,18 +120,20 @@ The system analyzes news and market data to identify significant trading signals
 - **FR-010**: System MUST optionally integrate with Binance API for crypto symbols when `ENABLE_BINANCE_PRICE_CHECK=true`. System does NOT validate symbol classification; requester ensures crypto symbols are placed in crypto array. Binance API returns errors for invalid/non-crypto symbols, which system handles gracefully.
 - **FR-011**: System MUST execute Binance and Gemini price fetches with aggressive and generous timeouts: Binance ~5 seconds, Gemini ~20 seconds. If both calls fail or timeout, system returns analysis result without market price context (alert is still sent based on news sentiment). If one completes, use that result. Per-symbol timeout budget remains 30 seconds total.
 - **FR-012**: System MUST apply a timeout of configurable duration (default: 30 seconds via `NEWS_TIMEOUT_MS`) to the entire analysis flow per symbol
-- **FR-013**: System MUST return a JSON response containing per-symbol results with status (analyzed/cached/timeout/error), detected alerts, and notification delivery results. If some symbols timeout and others complete, response includes both completed results (status: "analyzed") and timeout results (status: "timeout") with HTTP 200 OK and "partial_success" flag.
+- **FR-013**: System MUST return a JSON response containing per-symbol results with status (analyzed/cached/timeout/error), detected alerts, notification delivery results, and metadata (totalDurationMs, cached, requestId). If some symbols timeout and others complete, response includes both completed results (status: "analyzed") and timeout results (status: "timeout") with HTTP 200 OK and "partial_success" flag.
 - **FR-014**: System MUST be feature-gated behind the `ENABLE_NEWS_MONITOR` environment variable (default: false) for safe rollout
 - **FR-015**: System MUST use the existing grounding service to contextualize alerts with extracted news sources, summaries, and citations
 - **FR-016**: System MUST format alerts for each notification channel using existing formatters: MarkdownV2 for Telegram, WhatsApp-compatible format for WhatsApp
-- **FR-017**: System MUST handle and gracefully log errors from external API calls (Gemini, Binance, Telegram, WhatsApp) without stopping the entire monitoring flow
+- **FR-017**: System MUST handle and gracefully log errors from external API calls (Gemini, Binance, Telegram, WhatsApp) without stopping the entire monitoring flow. All external API calls MUST use `retryHelper.sendWithRetry()` with 3 retries and exponential backoff (see FR-018).
+- **FR-018**: System MUST retry transient API failures using exponential backoff: Binance (3 retries, ~5s timeout), Gemini (3 retries, ~20s timeout), Telegram/WhatsApp (3 retries, ~10s timeout). Per-symbol 30s budget accounts for worst-case retry scenarios.
 
 ### Key Entities
 
-- **NewsAlert**: Represents a detected market event with symbol, headline, sentiment score, confidence, sources, and formatted message
-- **MarketContext**: Encapsulates price data (current, 24h change, volume) sourced from Binance or Gemini
-- **CacheEntry**: In-memory record of analyzed news with timestamp and TTL for deduplication
-- **AnalysisResult**: Container for per-symbol analysis output including alert, status, and delivery results
+- **NewsAlert**: Represents a detected market event with symbol, headline, sentiment score, confidence, sources, and formatted message. Includes event_category (price_surge, price_decline, public_figure, regulatory).
+- **MarketContext**: Encapsulates price data (current, 24h change, volume) sourced from Binance or Gemini.
+- **CacheEntry**: In-memory record of analyzed news with timestamp and TTL for deduplication. Key is (symbol, event_category).
+- **AnalysisResult**: Container for per-symbol analysis output including alert, status, delivery results, totalDurationMs, cached flag, and requestId.
+- **ErrorResult**: Per-symbol error container with status "error", error code, and error message (returned for invalid symbols or API failures, not as HTTP-level rejection).
 
 ## Success Criteria *(mandatory)*
 
@@ -148,13 +153,21 @@ The system analyzes news and market data to identify significant trading signals
 
 ## Clarifications
 
-### Session 2025-10-30
+### Session 2025-10-30 (Initial)
 
 - **Q1: Symbol Classification (Crypto vs Stock)** → A: Requester is responsible for separating symbols into two separate request objects: one for `crypto` and one for `stocks`. System trusts the classification. Binance will return errors for invalid/non-crypto symbols in crypto object; this is requester's responsibility.
 - **Q2: Event Detection Types (FR-004)** → A: Detect ALL event types with scoring by category: (1) price movements >5% with bullish/bearish sentiment, (2) mentions of public figures (Trump, Elon, etc.), (3) regulatory/official announcements. Implement via Gemini with sophisticated prompts that categorize and score each event type.
 - **Q3: Multi-Symbol Response Contract** → A: Return partial results on timeout. Endpoint waits up to 30s total. If 8/15 symbols complete and 7 timeout, return all 8 with status "analyzed" and 7 with status "timeout". No streaming or per-symbol early returns.
 - **Q4: Duplicate Detection Strategy** → A: Deduplicate by (symbol, event_category). System allows multiple alerts per symbol if they are different event categories (e.g., "price_surge" at 10:00 + "regulatory" at 11:00 for same symbol). Within cache TTL, same category for same symbol is deduplicated.
 - **Q5: Timeout Budget (Binance vs Gemini)** → A (Option D): Aggressive on Binance (~5s timeout), generous with Gemini fallback (~20s). If both fail, return analysis without market price context (system still sends alert based on news sentiment alone). Prioritizes fallback reliability over Binance speed.
+
+### Session 2025-10-30 (Clarification)
+
+- **Q1: Gemini Confidence & Sentiment Scoring** → A: Gemini extracts sentiment from news articles (positive/negative/neutral as -1.0 to +1.0 scale) and event significance (0.0–1.0 based on price movement magnitude, source credibility, mention frequency). Final confidence score uses weighted formula: `confidence = (0.6 × event_significance + 0.4 × |sentiment|)` clamped to [0, 1]. This formula is reproducible and debuggable.
+- **Q2: Observability & Metrics Instrumentation** → Deferred to planning phase. Will address in Phase 2 with Datadog integration strategy.
+- **Q3: Input Validation & Error Response** → A: Validate format but return per-symbol errors only; never reject entire request at HTTP level. Invalid symbols (e.g., non-existent crypto symbols) are caught by Binance/Gemini APIs and returned as per-symbol status "error", not HTTP 400.
+- **Q4: Response Transparency & Debugging** → A: Include full metadata in response: `totalDurationMs` per symbol (transparency), `cached` flag (debugging deduplication), and `requestId` (operational tracing). This aids external callers and operations in correlating logs and understanding delays.
+- **Q5: External API Retry & Rate Limit Handling** → A: Reuse existing `retryHelper.sendWithRetry()` with 3 retries and exponential backoff for all external APIs (Binance ~5s timeout, Gemini ~20s timeout, Telegram/WhatsApp ~10s timeout). Per-symbol 30s budget accounts for worst-case retry scenarios.
 
 ## Assumptions
 
@@ -164,6 +177,10 @@ The system analyzes news and market data to identify significant trading signals
 - Traders accept WhatsApp and Telegram as primary notification channels (both already integrated)
 - Default news symbols list is manageable (10-50 symbols typical); very large lists (100+) may require pagination or batching
 - Cache TTL of 6 hours is appropriate for most trading scenarios; traders can adjust via environment variable
-- Confidence scoring is based on sentiment analysis and event magnitude; exact algorithms are implementation details
-- **Requester is responsible for correct symbol classification** (crypto symbols in crypto array, stocks in stocks array); system does not re-validate
-- **Gemini prompts are sophisticated enough to detect all three event categories** (price, public figures, regulatory); implementation will define exact prompts and scoring weights
+- **Confidence scoring uses weighted formula**: `confidence = (0.6 × event_significance + 0.4 × |sentiment|)` where event_significance reflects price movement magnitude, source credibility, mention frequency; sentiment ranges -1.0 to +1.0
+- **Requester is responsible for correct symbol classification** (crypto symbols in crypto array, stocks in stocks array); system does not re-validate or cross-check classifications
+- **Gemini prompts are sophisticated enough to detect all three event categories** (price movements, public figures, regulatory); implementation will refine exact prompts and scoring weights
+- **Retry logic reuses existing `retryHelper.sendWithRetry()`**: 3 retries with exponential backoff for Binance (~5s), Gemini (~20s), Telegram/WhatsApp (~10s). Per-symbol 30s budget is sufficient for worst-case scenarios
+- **Response metadata includes**: totalDurationMs (per symbol), cached flag (deduplication indicator), requestId (operational tracing). External callers can use these for debugging and transparency
+- **Format validation is lenient**: Invalid symbols are detected by external APIs, not rejected upfront; entire request is never rejected at HTTP level (format errors return per-symbol status "error")
+
