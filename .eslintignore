@@ -1,0 +1,5 @@
+# ESLint ignore for test files that use different formatting
+node_modules/
+coverage/
+dist/
+build/

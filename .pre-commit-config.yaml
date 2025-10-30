@@ -1,0 +1,11 @@
+repos:
+  - repo: local
+    hooks:
+      - id: eslint
+        name: eslint (linter)
+        entry: npm run lint
+        language: system
+        types: [javascript]
+        pass_filenames: false
+        always_run: false
+        stages: [commit]

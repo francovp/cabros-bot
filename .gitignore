@@ -108,3 +108,6 @@ dist
 
 # Grounding service cache (temporary)
 .cache/grounding/
+
+# pre-commit cache
+.pre-commit/
