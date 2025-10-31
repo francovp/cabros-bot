@@ -26,7 +26,7 @@ An external scheduler (GitHub Actions, Render cron, third-party service) calls t
 
 ### User Story 2 - Traders Receive Alerts via Configured Channels (Priority: P1)
 
-When the news analysis detects a significant market event or sentiment shift, the system automatically sends alerts to the trader via both Telegram and WhatsApp simultaneously.
+When the news analysis detects a significant market event or sentiment shift, the system automatically sends alerts to the configured Telegram and WhatsApp chat IDs simultaneously. All alerts are sent to the same unified recipients (`TELEGRAM_CHAT_ID` and `WHATSAPP_CHAT_ID` environment variables); no per-trader or per-event-type routing in MVP.
 
 **Why this priority**: Alert delivery is critical - the analysis is only valuable if traders receive notifications. This ensures traders act on opportunities in real time.
 
@@ -34,7 +34,7 @@ When the news analysis detects a significant market event or sentiment shift, th
 
 **Acceptance Scenarios**:
 
-1. **Given** a significant market event is detected (e.g., BTCUSDT +8% with bullish news), **When** the analysis completes, **Then** alerts are sent to both Telegram and WhatsApp simultaneously
+1. **Given** a significant market event is detected (e.g., BTCUSDT +8% with bullish news), **When** the analysis completes, **Then** alerts are sent to both `TELEGRAM_CHAT_ID` and `WHATSAPP_CHAT_ID` simultaneously
 2. **Given** one notification channel fails (e.g., WhatsApp API temporarily unavailable), **When** sending occurs, **Then** the other channel (Telegram) still receives the alert and the response indicates partial success
 3. **Given** an alert is formatted for delivery, **When** it's sent to Telegram, **Then** it includes formatted context with symbol, price, sentiment score, and news sources
 4. **Given** an alert is formatted for delivery, **When** it's sent to WhatsApp, **Then** it includes the same information in WhatsApp-compatible format
@@ -132,8 +132,8 @@ When `ENABLE_LLM_ALERT_ENRICHMENT=true`, the system can invoke an optional secon
 
 - **FR-001**: System MUST provide an HTTP endpoint at `/api/news-monitor` that accepts POST and GET requests
 - **FR-002**: System MUST accept financial symbols via JSON body with separate arrays: `{ "crypto": ["BTCUSDT", "BNBUSDT"], "stocks": ["NVDA", "MSFT"] }`. If arrays are omitted, system defaults to `NEWS_SYMBOLS_CRYPTO` and `NEWS_SYMBOLS_STOCKS` environment variables. Requester is responsible for correct classification; system does not re-validate symbols.
-- **FR-003**: System MUST analyze news and market sentiment for each provided symbol using Gemini GoogleSearch (grounding service) to extract market context and sentiment indicators
-- **FR-004**: System MUST detect significant market events across three categories: (1) price movements exceeding the configured threshold (default: 5%) with bullish/bearish sentiment, (2) mentions of public figures (e.g., Trump, Elon Musk) making statements about the asset, (3) regulatory or official announcements. Each event receives a category tag and confidence score via Gemini analysis.
+- **FR-003**: System MUST analyze news and market sentiment for each provided symbol using Gemini GoogleSearch (grounding service) to extract market context and sentiment indicators. Gemini SHOULD return structured JSON with explicit fields: `{ event_category, event_significance, sentiment_score, sources }` for reproducibility and testability. System validates field types and value ranges ([0.0-1.0] for numeric fields) before applying confidence formula. If Gemini returns free-form text (fallback), system parses unstructured response using regex/NLP heuristics to extract event_category, significance, and sentiment.
+- **FR-004**: System MUST detect significant market events across three categories: (1) price movements exceeding the configured threshold (default: 5%) with bullish/bearish sentiment, (2) mentions of public figures (e.g., Trump, Elon Musk) making statements about the asset, (3) regulatory or official announcements. Each event receives a category tag and confidence score via Gemini analysis (structured JSON preferred, free-form fallback supported).
 - **FR-005**: System MUST assign a confidence score (0.0-1.0) to each alert using the formula: `confidence = (0.6 × event_significance + 0.4 × |sentiment|)` where event_significance is 0.0–1.0 based on price movement magnitude, source credibility, and mention frequency; sentiment is extracted from news articles as -1.0 (bearish) to +1.0 (bullish) scale.
 - **FR-006**: System MUST filter alerts by comparing confidence score against `NEWS_ALERT_THRESHOLD` (default: 0.7) and only send alerts meeting the threshold
 - **FR-007**: System MUST execute symbol analysis in parallel to minimize total response time
@@ -150,6 +150,7 @@ When `ENABLE_LLM_ALERT_ENRICHMENT=true`, the system can invoke an optional secon
 - **FR-018**: System MUST retry transient API failures using exponential backoff: Binance (3 retries, ~5s timeout), Gemini (3 retries, ~20s timeout), optional secondary LLM enrichment (3 retries, ~10s timeout), Telegram/WhatsApp (3 retries, ~10s timeout). Per-symbol 30s budget accounts for worst-case retry scenarios. Secondary LLM enrichment is independent and does not block alert delivery if it fails.
 - **FR-019**: System MUST support optional secondary LLM enrichment via `ENABLE_LLM_ALERT_ENRICHMENT` environment variable (default: false). When enabled, secondary LLM receives grounding results and returns refined confidence, reasoning, and recommended action. Implementation details deferred to feature 004-llm-alert-enrichment.
 - **FR-020**: System MUST apply conservative confidence selection when enrichment is applied: use minimum of (Gemini confidence, Secondary LLM confidence) to prevent false positives from LLM hallucination. Gemini-only analysis is used if enrichment is disabled or unavailable.
+- **FR-021**: System MUST implement verbose structured logging for operational visibility: log each external API call (Gemini, Binance, Telegram, WhatsApp) with request/response summaries at DEBUG/INFO level. Include per-symbol analysis timing, cache hits, enrichment decisions, and retry attempts. Log format should support easy parsing for Phase 2 Datadog integration. All errors, retries, and timeouts MUST be logged at WARN/ERROR level with correlation IDs (requestId) for audit trails.
 
 ### Key Entities
 
@@ -177,8 +178,16 @@ When `ENABLE_LLM_ALERT_ENRICHMENT=true`, the system can invoke an optional secon
 - **SC-011**: All three event detection categories (price_surge, price_decline, public_figure, regulatory) are correctly identified, scored, and included in alerts when Gemini analysis detects them
 - **SC-012**: When secondary LLM enrichment is enabled (`ENABLE_LLM_ALERT_ENRICHMENT=true`), enriched alerts have confidence scores that are conservative (≤ original Gemini confidence) to prevent false positives. Enrichment succeeds in 95% of cases; failures gracefully fall back to Gemini-only analysis.
 - **SC-013**: When secondary LLM enrichment is disabled or unavailable, alert generation latency and quality are identical to Gemini-only analysis (backward compatible)
+- **SC-014**: Verbose logging is enabled: 100% of external API calls (Gemini, Binance, Telegram, WhatsApp) are logged with request/response summaries. Per-symbol timing, cache hits, enrichment decisions, and retry attempts are captured in structured logs. All errors and timeouts include correlation IDs (requestId) for traceability.
+- **SC-015**: Gemini prompt strategy supports graceful degradation: Preferred structured JSON responses are validated and parsed correctly in 95%+ of calls. Free-form fallback parsing succeeds in 90%+ of degraded cases (when Gemini returns unstructured text). System continues processing without blocking either way.
 
 ## Clarifications
+
+### Session 2025-10-30 (Speckit Clarification - Interactive)
+
+- **Q1: Alert Recipient & Multi-Channel Routing Strategy** → A: Single unified recipient per channel; all alerts go to same `TELEGRAM_CHAT_ID` and `WHATSAPP_CHAT_ID`. No per-trader or per-event-type routing in MVP. Aligns with existing bot architecture.
+- **Q2: Gemini Prompt Strategy for Event Detection** → A: Hybrid two-stage approach. Preferred: Gemini returns structured JSON with `{ event_category, event_significance, sentiment_score, sources }`. System validates types/ranges before applying confidence formula. Fallback: If free-form text received, system parses using regex/NLP heuristics. Enrichment: Secondary LLM uses structured JSON for refined confidence (when `ENABLE_LLM_ALERT_ENRICHMENT=true`); if disabled, use Gemini confidence directly.
+- **Q3: Observability & Logging Strategy** → A: Verbose logging for MVP. Log each API call (Gemini, Binance, Telegram, WhatsApp) with request/response summaries. Include symbol-level timing, cache hits, enrichment decisions in structured logs. Foundation for Phase 2 Datadog integration. Enables operational debugging and audit trails during MVP.
 
 ### Session 2025-10-30 (Initial)
 
