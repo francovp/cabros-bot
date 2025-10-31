@@ -4,6 +4,7 @@ const { getRoutes } = require('../../src/routes');
 const { initializeNotificationServices } = require('../../src/controllers/webhooks/handlers/alert/alert');
 
 jest.mock('../../src/services/grounding/gemini');
+jest.mock('../../src/services/grounding/genaiClient');
 
 describe('News Monitor - Basic Endpoint Integration', () => {
 	const originalEnv = process.env;
@@ -36,6 +37,17 @@ describe('News Monitor - Basic Endpoint Integration', () => {
 			headline: 'Bitcoin surges on positive news',
 			confidence: 0.74,
 			sources: ['https://example.com/news']
+		});
+
+		// Mock genaiClient search method
+		const genaiClient = require('../../src/services/grounding/genaiClient');
+		genaiClient.search = jest.fn().mockResolvedValue({
+			results: [
+				{ url: 'https://example.com/1', title: 'Source 1' },
+				{ url: 'https://example.com/2', title: 'Source 2' }
+			],
+			searchResultText: 'Market context from search',
+			totalResults: 2
 		});
 
 		mockTelegramSendMessage = jest.fn().mockResolvedValue({ message_id: 'test-message-id' });

@@ -183,9 +183,16 @@ Some text after...`;
 	describe('analyzeNewsForSymbol', () => {
 		beforeEach(() => {
 			jest.clearAllMocks();
-		});
-
-		it('should calculate confidence using formula: 0.6*significance + 0.4*|sentiment|', async () => {
+			// Mock search() to return grounding results
+			genaiClient.search.mockResolvedValue({
+				results: [
+					{ url: 'https://example.com/1', title: 'Source 1' },
+					{ url: 'https://example.com/2', title: 'Source 2' }
+				],
+				searchResultText: 'Market context from search',
+				totalResults: 2
+			});
+			// Mock llmCall() to return analysis
 			genaiClient.llmCall.mockResolvedValue({
 				text: JSON.stringify({
 					event_category: 'price_surge',
@@ -195,7 +202,9 @@ Some text after...`;
 					sources: []
 				})
 			});
+		});
 
+		it('should calculate confidence using formula: 0.6*significance + 0.4*|sentiment|', async () => {
 			const result = await analyzeNewsForSymbol('BTCUSDT', 'Market context');
 
 			// confidence = (0.6 * 0.8) + (0.4 * |0.9|) = 0.48 + 0.36 = 0.84

@@ -160,9 +160,11 @@ class NewsAnalyzer {
 
 		// Fetch market context (price, 24h change, etc.)
 		const marketContext = await this.getMarketContext(symbol);
+		console.debug('[Analyzer] Market context for', symbol, ':', marketContext);
 
 		// Build analysis context for Gemini
 		const analysisContext = this.buildAnalysisContext(symbol, marketContext);
+		console.debug('[Analyzer] Analysis context for', symbol, ':', analysisContext);
 
 		// Call Gemini for sentiment analysis
 		console.debug('[Analyzer] Calling Gemini for symbol:', symbol);
@@ -324,32 +326,97 @@ class NewsAnalyzer {
 
 	/**
 	 * Fetch price via Gemini GoogleSearch
+	 * Extracts numeric price data from grounded search snippets
 	 * @param {string} symbol - Financial symbol
-	 * @returns {Promise<Object>} MarketContext or null
+	 * @returns {Promise<Object>} MarketContext with parsed price/change or null
 	 */
 	async fetchGeminiPrice(symbol) {
+		const genaiClient = require('../../../../services/grounding/genaiClient');
+
 		try {
 			// Timeout wrapper (~20s for Gemini)
 			const timeoutMs = 20000;
-			const timeoutPromise = new Promise((_, reject) =>
-				setTimeout(() => reject(new Error('Gemini fetch timeout')), timeoutMs)
-			);
-
-			// Note: In production, would call a specific Gemini price discovery endpoint
-			// For now, returning fallback market context
-			const geminiPromise = Promise.resolve({
-				price: null, // Would be parsed from Gemini response
-				change24h: null,
-				source: 'gemini',
-				timestamp: Date.now(),
+			let timeoutHandle;
+			const timeoutPromise = new Promise((_, reject) => {
+				timeoutHandle = setTimeout(() => reject(new Error('Gemini fetch timeout')), timeoutMs);
 			});
 
-			const result = await Promise.race([geminiPromise, timeoutPromise]);
-			console.debug(`[Analyzer] Gemini market context fetched for ${symbol}`);
-			return result;
+			// Use Gemini GoogleSearch to fetch current price
+			const searchPromise = genaiClient.search({
+				query: `current price of ${symbol} today`,
+				maxResults: 5,
+			});
+
+			const searchResult = await Promise.race([searchPromise, timeoutPromise]);
+			clearTimeout(timeoutHandle);
+
+			// Parse price and 24h change from search result text
+			const { price, change24h } = this.parsePriceFromSearchResult(
+				searchResult.searchResultText || '',
+				symbol,
+			);
+
+			console.debug(`[Analyzer] Gemini GoogleSearch market context fetched for ${symbol}: price=$${price}, change24h=${change24h}%`);
+			return {
+				price,
+				change24h,
+				source: 'gemini-grounding',
+				timestamp: Date.now(),
+				searchResults: searchResult.results || [],
+			};
 		} catch (error) {
 			console.warn(`[Analyzer] Gemini price fetch failed for ${symbol}: ${error.message}`);
 			return null;
+		}
+	}
+
+	/**
+	 * Parse price and 24h change from Gemini search result text
+	 * Uses regex patterns to extract financial data from snippets
+	 * @param {string} searchText - Raw search result text
+	 * @param {string} symbol - Symbol for context
+	 * @returns {Object} { price: number|null, change24h: number|null }
+	 */
+	parsePriceFromSearchResult(searchText, symbol) {
+		const result = { price: null, change24h: null };
+
+		if (!searchText || typeof searchText !== 'string') {
+			return result;
+		}
+
+		try {
+			// Pattern 1: "$123.45" or "123.45 USD/USDT" - more flexible to catch various formats
+			const pricePattern = /\$?([\d,]+\.?\d*)\s*(?:USD|USDT)?/gi;
+			const priceMatches = searchText.match(pricePattern);
+			if (priceMatches && priceMatches.length > 0) {
+				// Find first match that looks like a realistic price
+				for (const match of priceMatches) {
+					const cleanPrice = match.replace(/[$,\s]/g, '');
+					const parsedPrice = parseFloat(cleanPrice);
+					if (!isNaN(parsedPrice) && parsedPrice > 0 && parsedPrice < 1000000) {
+						result.price = parsedPrice;
+						break;
+					}
+				}
+			}
+
+			// Pattern 2: "+5.2%" or "-2.1% 24h change"
+			const changePattern = /([\+\-]?\d+\.?\d*)\s*%\s*(?:24[hH]|24-hour|daily)?/gi;
+			const changeMatches = searchText.match(changePattern);
+			if (changeMatches && changeMatches.length > 0) {
+				// Take the first match (usually the most recent/prominent)
+				const cleanChange = changeMatches[0].replace(/[%\s]/g, '');
+				const parsedChange = parseFloat(cleanChange);
+				if (!isNaN(parsedChange) && Math.abs(parsedChange) < 100) {
+					result.change24h = parsedChange;
+				}
+			}
+
+			console.debug(`[Analyzer] Parsed price from search text for ${symbol}:`, result);
+			return result;
+		} catch (error) {
+			console.warn(`[Analyzer] Price parsing error for ${symbol}:`, error.message);
+			return result;
 		}
 	}
 

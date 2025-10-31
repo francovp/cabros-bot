@@ -206,6 +206,10 @@ When `ENABLE_LLM_ALERT_ENRICHMENT=true`, the system can invoke an optional secon
 - **Q5: External API Retry & Rate Limit Handling** → A: Reuse existing `retryHelper.sendWithRetry()` with 3 retries and exponential backoff for all external APIs (Binance ~5s timeout, Gemini ~20s timeout, optional LLM enrichment ~10s timeout, Telegram/WhatsApp ~10s timeout). Per-symbol 30s budget accounts for worst-case retry scenarios.
 - **Q6: Optional Secondary LLM Enrichment Integration** → A: Secondary LLM enrichment (feature 004-llm-alert-enrichment) is an optional overlay on top of Gemini analysis. When enabled via `ENABLE_LLM_ALERT_ENRICHMENT=true`, secondary LLM refines confidence and reasoning but does not replace Gemini. Conservative confidence (minimum of both scores) prevents false positives. If secondary LLM is unavailable, system falls back to Gemini-only analysis. Enrichment cache uses same TTL as primary news cache (6 hours default) to keep implementation simple.
 
+### Session 2025-10-31 (Grounding Usage Clarification)
+
+- **Q: Grounding for `fetchGeminiPrice()` - Extract Prices from Search Snippets?** → A (Option A): Yes, extract numeric price data from Gemini's grounded search snippets using regex parsing of financial data. This provides market context fallback when Binance is unavailable or for non-crypto symbols. System uses regex patterns to parse price, 24h change %, and volume from search result snippets. If parsing fails, gracefully returns null/empty context without blocking alert delivery.
+
 ## Assumptions
 
 - External schedulers are responsible for calling the endpoint at appropriate intervals (e.g., every 30 minutes); the system does not self-schedule

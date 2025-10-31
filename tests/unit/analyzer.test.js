@@ -1,6 +1,16 @@
 const gemini = require('../../src/services/grounding/gemini');
 
 jest.mock('../../src/services/grounding/gemini');
+jest.mock('../../src/services/grounding/genaiClient', () => ({
+	search: jest.fn().mockResolvedValue({
+		results: [
+			{ url: 'https://example.com/1', title: 'Source 1' }
+		],
+		searchResultText: 'Market context',
+		totalResults: 1
+	}),
+	llmCall: jest.fn()
+}));
 
 describe('Analyzer - Unit Tests', () => {
 	beforeEach(() => {

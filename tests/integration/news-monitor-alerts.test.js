@@ -40,9 +40,17 @@ describe('News Monitor - Alert Delivery Response Structure (US2)', () => {
 			}),
 		}));
 
-		// Mock genaiClient
+		// Mock genaiClient with search method
 		jest.doMock('../../src/services/grounding/genaiClient', () => ({
 			llmCall: jest.fn().mockResolvedValue('test response'),
+			search: jest.fn().mockResolvedValue({
+				results: [
+					{ url: 'https://example.com/1', title: 'Source 1' },
+					{ url: 'https://example.com/2', title: 'Source 2' }
+				],
+				searchResultText: 'Market context from search',
+				totalResults: 2
+			}),
 		}));
 
 		// Mount routes with mock bot

@@ -1,6 +1,6 @@
 const genaiClient = require('./genaiClient');
 const { validateGeminiResponse } = require('../../lib/validation');
-const { GEMINI_SYSTEM_PROMPT } = require('./config');
+const { GEMINI_SYSTEM_PROMPT, GROUNDING_MODEL_NAME } = require('./config');
 const { EventCategory } = require('../../controllers/webhooks/handlers/newsMonitor/constants');
 
 // News analysis system prompt for Gemini
@@ -63,7 +63,7 @@ Alert: ${text}${contextPrompt}${contextSnippet}`;
 		const { text: summary } = await genaiClient.llmCall({
 			prompt,
 			context: { citations: searchResults },
-			opts: { model: 'gemini-2.0-flash', temperature: 0.2 },
+			opts: { model: GROUNDING_MODEL_NAME, temperature: 0.2 },
 		});
 
 		const response = {
@@ -96,16 +96,32 @@ module.exports = {
 };
 
 /**
- * Analyze news/context for a symbol and detect market events
+ * Analyze news/context for a symbol and detect market events using Gemini GoogleSearch
  * 003-news-monitor: User Story 5 (event detection)
  * @param {string} symbol - Financial symbol
  * @param {string} context - News/context text to analyze
  * @returns {Promise<Object>} Analysis result with event_category, sentiment, confidence
  */
 async function analyzeNewsForSymbol(symbol, context) {
-	const prompt = `Analyze this news/market context for symbol ${symbol}:
+	try {
+		// Use Gemini GoogleSearch to fetch market news and sentiment
+		const searchResult = await genaiClient.search({
+			query: `${symbol} news market sentiment events today`,
+			maxResults: 5,
+		});
 
-${context}
+		// Build enriched context from grounding results
+		const groundingContext = searchResult.searchResultText || '';
+		const sourcesList = searchResult.results
+			.map(r => r.url)
+			.filter(Boolean)
+			.slice(0, 5);
+
+		const enrichedContext = `${context}\n\nGrounded Context from Search:\n${groundingContext}\n\nSources: ${sourcesList.join(', ')}`;
+
+		const prompt = `Analyze this news/market context for symbol ${symbol}:
+
+${enrichedContext}
 
 Detect any market-moving events and respond with JSON only. Follow this exact format:
 {
@@ -116,26 +132,31 @@ Detect any market-moving events and respond with JSON only. Follow this exact fo
   "sources": ["url1", "url2"]
 }`;
 
-	try {
 		// Create a proper system instruction that will be passed to genaiClient
 		const fullPrompt = `${NEWS_ANALYSIS_SYSTEM_PROMPT}\n\n${prompt}`;
 		
 		const { text: response } = await genaiClient.llmCall({
 			prompt: fullPrompt,
-			opts: { model: 'gemini-2.0-flash', temperature: 0.3 },
+			opts: { model: GROUNDING_MODEL_NAME, temperature: 0.3 },
 		});
 
 		// Parse and validate JSON response
 		const analysisResult = parseNewsAnalysisResponse(response);
 
+		// Use grounded sources if available
+		if (sourcesList.length > 0 && analysisResult.sources.length === 0) {
+			analysisResult.sources = sourcesList.slice(0, 5);
+		}
+
 		// Calculate confidence using formula: (0.6 × event_significance + 0.4 × |sentiment|)
 		const confidence = 0.6 * analysisResult.event_significance + 0.4 * Math.abs(analysisResult.sentiment_score);
 		analysisResult.confidence = Math.max(0, Math.min(1, confidence)); // Clamp to [0, 1]
 
-		console.debug('[Gemini] News analysis complete', {
+		console.debug('[Gemini] News analysis complete with grounding', {
 			symbol,
 			category: analysisResult.event_category,
-			confidence: analysisResult.confidence
+			confidence: analysisResult.confidence,
+			groundedSources: analysisResult.sources.length
 		});
 
 		return analysisResult;
