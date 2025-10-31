@@ -55,14 +55,26 @@ What an AI code change should preserve
 3. **Understand failure modes** (see Common Failure Modes sections)
 4. **Follow existing code style**: Simple functions, explicit logging, env-driven config
 5. **Add tests** for critical paths after implementation
-6. **Update environment variables** section if adding new config
-7. **Update .github/copilot-instructions.md** with new patterns/context
+6. **Run focused tests during development** (see Test Execution Strategy below)
+7. **Update environment variables** section if adding new config
+8. **Update .github/copilot-instructions.md** with new patterns/context
+9. **Final full test run** before completion to ensure no regressions
 
 **Linting and Commits During Implementation**:
 - **Ignore linter issues during implementation**: Focus on feature functionality first; linter errors will be fixed in a dedicated final pass
 - **Make commits with `--no-verify`**: Use `git commit --no-verify -m "message"` to bypass pre-commit hooks during development (prevents blocking on linter/test failures mid-implementation)
 - **Final cleanup phase**: After all user stories are complete, run `npm run lint -- --fix` to auto-fix linting issues, then commit all linting changes in a single commit
 - **Rationale**: This approach maximizes development velocity during active feature work and prevents context-switching between implementation and linting
+
+**Test Execution Strategy**:
+- **During development**: Run focused/specific tests only, NOT the full test suite. Examples:
+  - `npm test -- tests/unit/price-parsing.test.js` — test single unit file
+  - `npm test -- tests/integration/news-monitor-basic.test.js` — test single integration file
+  - `npm test -- tests/unit/ --testTimeout=5000` — test entire unit directory
+  - `npm test -- --testNamePattern="should parse price"` — test by test name pattern
+- **After completing all changes**: Run the full test suite `npm test` once per implementation to ensure no regressions
+- **Rationale**: Full test runs take 2-5 minutes and consume significant token budget. Focused tests give rapid feedback (10-30s) during development. Only run full suite as final validation after full implementation phase.
+- **Performance tip**: Use `--testTimeout=5000` with unit tests to speed up execution; integration tests need higher timeouts (~10000ms)
 
 ### When extending a feature:
 
