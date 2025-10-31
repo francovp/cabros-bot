@@ -106,13 +106,22 @@ async function analyzeNewsForSymbol(symbol, context) {
 
 ${context}
 
-Detect any market-moving events and respond with JSON only.`;
+Detect any market-moving events and respond with JSON only. Follow this exact format:
+{
+  "event_category": "price_surge|price_decline|public_figure|regulatory|none",
+  "event_significance": 0.0-1.0,
+  "sentiment_score": -1.0-1.0,
+  "headline": "one-line event description",
+  "sources": ["url1", "url2"]
+}`;
 
 	try {
+		// Create a proper system instruction that will be passed to genaiClient
+		const fullPrompt = `${NEWS_ANALYSIS_SYSTEM_PROMPT}\n\n${prompt}`;
+		
 		const { text: response } = await genaiClient.llmCall({
-			prompt,
+			prompt: fullPrompt,
 			opts: { model: 'gemini-2.0-flash', temperature: 0.3 },
-			context: { systemPrompt: NEWS_ANALYSIS_SYSTEM_PROMPT }
 		});
 
 		// Parse and validate JSON response
