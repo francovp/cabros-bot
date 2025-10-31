@@ -46,6 +46,41 @@ What an AI code change should preserve
 - Do not change how env gating works in `index.js` without adjusting tests/deploys — deployments rely on `RENDER` and `IS_PULL_REQUEST` checks.
 - Keep the `parse_mode: 'MarkdownV2'` when composing Telegram messages unless escaping/formatting is implemented project-wide.
 
+## Development Workflow for AI Agents
+
+### When implementing a feature:
+
+1. **Read the spec** (`specs/*/spec.md`) for requirements and user stories
+2. **Check patterns** in this file for similar implementations
+3. **Understand failure modes** (see Common Failure Modes sections)
+4. **Follow existing code style**: Simple functions, explicit logging, env-driven config
+5. **Add tests** for critical paths after implementation
+6. **Update environment variables** section if adding new config
+7. **Update .github/copilot-instructions.md** with new patterns/context
+
+**Linting and Commits During Implementation**:
+- **Ignore linter issues during implementation**: Focus on feature functionality first; linter errors will be fixed in a dedicated final pass
+- **Make commits with `--no-verify`**: Use `git commit --no-verify -m "message"` to bypass pre-commit hooks during development (prevents blocking on linter/test failures mid-implementation)
+- **Final cleanup phase**: After all user stories are complete, run `npm run lint -- --fix` to auto-fix linting issues, then commit all linting changes in a single commit
+- **Rationale**: This approach maximizes development velocity during active feature work and prevents context-switching between implementation and linting
+
+### When extending a feature:
+
+1. **Locate entry points** (see "Where to look first" sections)
+2. **Trace data flow** through service layer
+3. **Identify dependencies** (other services, external APIs, env vars)
+4. **Add feature flag** if feature is optional
+5. **Implement graceful fallback** (don't break alert delivery)
+6. **Update documentation** (README for users, copilot-instructions for developers)
+
+### When debugging:
+
+1. **Check logs**: stdout for startup/shutdown, debug for processing steps, error for failures
+2. **Verify env vars**: Feature might be disabled or misconfigured
+3. **Test external APIs**: Check Gemini, Binance, Telegram, WhatsApp directly
+4. **Review test cases**: Existing tests reveal expected behavior
+5. **Check retry logic**: Some failures are transient and auto-recover
+
 ## Alert Enrichment with Gemini Grounding (001-gemini-grounding-alert)
 
 The system provides optional enrichment of webhook alerts using Google Gemini API with GoogleSearch grounding to fetch verified sources and context.
@@ -408,35 +443,6 @@ describe('news-monitor', () => {
   it('sends alert when confidence exceeds threshold', () => { ... })
 })
 ```
-
-## Development Workflow for AI Agents
-
-### When implementing a feature:
-
-1. **Read the spec** (`specs/*/spec.md`) for requirements and user stories
-2. **Check patterns** in this file for similar implementations
-3. **Understand failure modes** (see Common Failure Modes sections)
-4. **Follow existing code style**: Simple functions, explicit logging, env-driven config
-5. **Add tests** for critical paths after implementation
-6. **Update environment variables** section if adding new config
-7. **Update .github/copilot-instructions.md** with new patterns/context
-
-### When extending a feature:
-
-1. **Locate entry points** (see "Where to look first" sections)
-2. **Trace data flow** through service layer
-3. **Identify dependencies** (other services, external APIs, env vars)
-4. **Add feature flag** if feature is optional
-5. **Implement graceful fallback** (don't break alert delivery)
-6. **Update documentation** (README for users, copilot-instructions for developers)
-
-### When debugging:
-
-1. **Check logs**: stdout for startup/shutdown, debug for processing steps, error for failures
-2. **Verify env vars**: Feature might be disabled or misconfigured
-3. **Test external APIs**: Check Gemini, Binance, Telegram, WhatsApp directly
-4. **Review test cases**: Existing tests reveal expected behavior
-5. **Check retry logic**: Some failures are transient and auto-recover
 
 ## Common Implementation Tasks
 
