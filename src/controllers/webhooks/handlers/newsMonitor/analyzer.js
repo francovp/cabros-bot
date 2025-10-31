@@ -151,10 +151,17 @@ class NewsAnalyzer {
 		const analysisContext = this.buildAnalysisContext(symbol, marketContext);
 
 		// Call Gemini for sentiment analysis
+		console.debug('[Analyzer] Calling Gemini for symbol:', symbol);
 		const geminiAnalysis = await analyzeNewsForSymbol(symbol, analysisContext);
+		console.debug('[Analyzer] Gemini analysis result for', symbol, ':', {
+			event_category: geminiAnalysis.event_category,
+			confidence: geminiAnalysis.confidence,
+			sentiment_score: geminiAnalysis.sentiment_score,
+		});
 
 		// If no event detected, cache and return
 		if (geminiAnalysis.event_category === EventCategory.NONE) {
+			console.debug('[Analyzer] No event detected for', symbol);
 			this.cache.set(symbol, EventCategory.NONE, {
 				alert: null,
 				analysisResult: {
@@ -172,8 +179,9 @@ class NewsAnalyzer {
 		}
 
 		// Check confidence threshold
+		console.debug('[Analyzer] Checking threshold for', symbol, '- confidence:', geminiAnalysis.confidence.toFixed(2), 'threshold:', this.alertThreshold);
 		if (geminiAnalysis.confidence < this.alertThreshold) {
-			console.debug('[Analyzer] Confidence below threshold:', symbol, geminiAnalysis.confidence);
+			console.info('[Analyzer] Confidence below threshold:', symbol, '- confidence:', geminiAnalysis.confidence.toFixed(2), '< threshold:', this.alertThreshold);
 			this.cache.set(symbol, geminiAnalysis.event_category, {
 				alert: null,
 				analysisResult: {
@@ -206,9 +214,12 @@ class NewsAnalyzer {
 
 		// Build alert object
 		const alert = this.buildAlert(symbol, geminiAnalysis, marketContext, enrichmentMetadata);
+		console.info('[Analyzer] Alert built for', symbol, '- confidence:', alert.confidence.toFixed(2), 'event:', alert.eventCategory);
 
 		// Send to all notification channels
+		console.info('[Analyzer] Sending alert to notification channels for', symbol);
 		const deliveryResults = await this.notificationManager.sendToAll(alert);
+		console.info('[Analyzer] Alert delivery results for', symbol, ':', JSON.stringify(deliveryResults));
 
 		// Cache the result
 		this.cache.set(symbol, geminiAnalysis.event_category, {

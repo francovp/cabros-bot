@@ -55,8 +55,7 @@ class NewsMonitorHandler {
 			// Parse request
 			const { crypto, stocks } = this.parseRequest(req);
 			const allSymbols = [...(crypto || []), ...(stocks || [])];
-
-			// Validate request
+			console.debug('[NewsMonitor] handleRequest - parsed crypto:', crypto, 'stocks:', stocks);
 			const validationError = this.validateRequest(allSymbols);
 			if (validationError) {
 				return res.status(400).json({
@@ -71,6 +70,7 @@ class NewsMonitorHandler {
 				? allSymbols
 				: this.getDefaultSymbols();
 
+			console.debug('[NewsMonitor] allSymbols.length:', allSymbols.length, 'symbolsToAnalyze:', JSON.stringify(symbolsToAnalyze));
 			if (symbolsToAnalyze.length === 0) {
 				return res.status(400).json({
 					error: 'No symbols to analyze. Provide crypto/stocks or set env defaults.',
@@ -138,10 +138,15 @@ class NewsMonitorHandler {
    */
 	parsePostRequest(req) {
 		const body = req.body || {};
-		return {
-			crypto: Array.isArray(body.crypto) ? body.crypto : undefined,
-			stocks: Array.isArray(body.stocks) ? body.stocks : undefined,
+		console.debug('[NewsMonitor] parsePostRequest - req.body:', JSON.stringify(body));
+		const crypto = Array.isArray(body.crypto) ? body.crypto : undefined;
+		const stocks = Array.isArray(body.stocks) ? body.stocks : undefined;
+		const result = {
+			crypto,
+			stocks,
 		};
+		console.debug('[NewsMonitor] parsePostRequest - result:', result);
+		return result;
 	}
 
 	/**
