@@ -1,6 +1,28 @@
 const genaiClient = require('./genaiClient');
 const { validateGeminiResponse } = require('../../lib/validation');
 const { GEMINI_SYSTEM_PROMPT } = require('./config');
+const { EventCategory } = require('../../controllers/webhooks/handlers/newsMonitor/constants');
+
+// News analysis system prompt for Gemini
+const NEWS_ANALYSIS_SYSTEM_PROMPT = `You are a financial market sentiment analyst specializing in crypto and stock news analysis.
+Analyze the provided news/context and detect market-moving events.
+Respond ONLY with valid JSON in this exact format:
+{
+  "event_category": "price_surge|price_decline|public_figure|regulatory|none",
+  "event_significance": 0.0-1.0,
+  "sentiment_score": -1.0-1.0,
+  "headline": "one-line event description",
+  "sources": ["url1", "url2"]
+}
+
+Categories:
+- price_surge: Bullish events (positive news, price increases, upgrades)
+- price_decline: Bearish events (negative news, price declines, downgrades)
+- public_figure: Mentions of influential figures (Elon, Trump, etc.)
+- regulatory: Official announcements, policy changes, regulations
+- none: No significant event detected
+
+Be conservative with scores: 0.7+ only for high-credibility, well-sourced events.`;
 
 /**
  * Generates a summary with citations given an alert text and optional context
@@ -69,4 +91,87 @@ async function detectLanguage(text) {
 
 module.exports = {
 	generateGroundedSummary,
+	analyzeNewsForSymbol,
 };
+
+/**
+ * Analyze news/context for a symbol and detect market events
+ * 003-news-monitor: User Story 5 (event detection)
+ * @param {string} symbol - Financial symbol
+ * @param {string} context - News/context text to analyze
+ * @returns {Promise<Object>} Analysis result with event_category, sentiment, confidence
+ */
+async function analyzeNewsForSymbol(symbol, context) {
+	const prompt = `Analyze this news/market context for symbol ${symbol}:
+
+${context}
+
+Detect any market-moving events and respond with JSON only.`;
+
+	try {
+		const { text: response } = await genaiClient.llmCall({
+			prompt,
+			opts: { model: 'gemini-2.0-flash', temperature: 0.3 },
+			context: { systemPrompt: NEWS_ANALYSIS_SYSTEM_PROMPT }
+		});
+
+		// Parse and validate JSON response
+		const analysisResult = parseNewsAnalysisResponse(response);
+
+		// Calculate confidence using formula: (0.6 × event_significance + 0.4 × |sentiment|)
+		const confidence = 0.6 * analysisResult.event_significance + 0.4 * Math.abs(analysisResult.sentiment_score);
+		analysisResult.confidence = Math.max(0, Math.min(1, confidence)); // Clamp to [0, 1]
+
+		console.debug('[Gemini] News analysis complete', {
+			symbol,
+			category: analysisResult.event_category,
+			confidence: analysisResult.confidence
+		});
+
+		return analysisResult;
+	} catch (error) {
+		console.error('[Gemini] News analysis failed:', error.message);
+		throw error;
+	}
+}
+
+/**
+ * Parse and validate Gemini news analysis response
+ * @param {string} response - Raw Gemini response
+ * @returns {Object} Validated analysis result
+ */
+function parseNewsAnalysisResponse(response) {
+	try {
+		// Extract JSON from response
+		const jsonMatch = response.match(/\{[\s\S]*\}/);
+		if (!jsonMatch) {
+			throw new Error('No JSON found in response');
+		}
+
+		const parsed = JSON.parse(jsonMatch[0]);
+
+		// Validate required fields
+		if (!parsed.event_category || !Object.values(EventCategory).includes(parsed.event_category)) {
+			throw new Error(`Invalid event_category: ${parsed.event_category}`);
+		}
+
+		// Clamp numeric values
+		return {
+			event_category: parsed.event_category,
+			event_significance: Math.max(0, Math.min(1, parsed.event_significance || 0)),
+			sentiment_score: Math.max(-1, Math.min(1, parsed.sentiment_score || 0)),
+			headline: (parsed.headline || 'Market event detected').substring(0, 250),
+			sources: Array.isArray(parsed.sources) ? parsed.sources.slice(0, 10) : []
+		};
+	} catch (error) {
+		console.error('[Gemini] Response parsing failed:', error.message);
+		// Return neutral/none event on parsing failure
+		return {
+			event_category: EventCategory.NONE,
+			event_significance: 0,
+			sentiment_score: 0,
+			headline: 'Could not detect market event',
+			sources: []
+		};
+	}
+}

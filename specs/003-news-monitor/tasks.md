@@ -24,10 +24,10 @@
 
 **Purpose**: Project initialization and dependency setup
 
-- [ ] T001 Install Azure AI Inference dependencies in package.json (@azure-rest/ai-inference, @azure/core-auth, @azure/core-sse)
-- [ ] T002 [P] Update .env.example with NEWS_* environment variables (ENABLE_NEWS_MONITOR, NEWS_ALERT_THRESHOLD, NEWS_CACHE_TTL_HOURS, NEWS_TIMEOUT_MS, NEWS_SYMBOLS_CRYPTO, NEWS_SYMBOLS_STOCKS)
-- [ ] T003 [P] Update .env.example with AZURE_AI_* environment variables (AZURE_AI_ENDPOINT, AZURE_AI_API_KEY, AZURE_AI_MODEL)
-- [ ] T004 [P] Create directory structure for news monitor feature (src/controllers/webhooks/handlers/newsMonitor/, src/services/inference/, tests/integration/)
+- [X] T001 Install Azure AI Inference dependencies in package.json (@azure-rest/ai-inference, @azure/core-auth, @azure/core-sse)
+- [X] T002 [P] Update .env.example with NEWS_* environment variables (ENABLE_NEWS_MONITOR, NEWS_ALERT_THRESHOLD, NEWS_CACHE_TTL_HOURS, NEWS_TIMEOUT_MS, NEWS_SYMBOLS_CRYPTO, NEWS_SYMBOLS_STOCKS)
+- [X] T003 [P] Update .env.example with AZURE_AI_* environment variables (AZURE_AI_ENDPOINT, AZURE_AI_API_KEY, AZURE_AI_MODEL)
+- [X] T004 [P] Create directory structure for news monitor feature (src/controllers/webhooks/handlers/newsMonitor/, src/services/inference/, tests/integration/)
 
 ---
 
@@ -37,13 +37,13 @@
 
 **⚠️ CRITICAL**: No user story work can begin until this phase is complete
 
-- [ ] T005 Create cache module with TTL support in src/controllers/webhooks/handlers/newsMonitor/cache.js
-- [ ] T006 [P] Create types definitions file in src/controllers/webhooks/handlers/newsMonitor/types.ts (NewsAlert, MarketContext, AnalysisResult interfaces)
-- [ ] T007 [P] Create Azure AI Inference client wrapper in src/services/inference/azureAiClient.js
-- [ ] T008 Implement enrichment service with fallback logic in src/services/inference/enrichmentService.js (depends on T007)
-- [ ] T009 [P] Enhance Gemini service with news analysis prompt in src/services/grounding/gemini.js (add analyzeNewsForSymbol function)
-- [ ] T010 [P] Create analyzer orchestrator module in src/controllers/webhooks/handlers/newsMonitor/analyzer.js
-- [ ] T011 Register /api/news-monitor route in src/routes/index.js with feature gate check
+- [X] T005 Create cache module with TTL support in src/controllers/webhooks/handlers/newsMonitor/cache.js
+- [X] T006 [P] Create types definitions file in src/controllers/webhooks/handlers/newsMonitor/types.ts (NewsAlert, MarketContext, AnalysisResult interfaces)
+- [X] T007 [P] Create Azure AI Inference client wrapper in src/services/inference/azureAiClient.js
+- [X] T008 Implement enrichment service with fallback logic in src/services/inference/enrichmentService.js (depends on T007)
+- [X] T009 [P] Enhance Gemini service with news analysis prompt in src/services/grounding/gemini.js (add analyzeNewsForSymbol function)
+- [X] T010 [P] Create analyzer orchestrator module in src/controllers/webhooks/handlers/newsMonitor/analyzer.js
+- [X] T011 Register /api/news-monitor route in src/routes/index.js with feature gate check
 
 **Checkpoint**: Foundation ready - user story implementation can now begin in parallel
 
