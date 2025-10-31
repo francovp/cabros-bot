@@ -5,9 +5,9 @@
  * 003-news-monitor: User Stories 1-6
  */
 
-const { analyzeNewsForSymbol } = require('../../services/grounding/gemini');
+const { analyzeNewsForSymbol } = require('../../../../services/grounding/gemini');
 const { getCacheInstance } = require('./cache');
-const { getEnrichmentService } = require('../../services/inference/enrichmentService');
+const { getEnrichmentService } = require('../../../../services/inference/enrichmentService');
 const { AnalysisStatus, EventCategory } = require('./constants');
 
 // Placeholder for NotificationManager - will be injected
