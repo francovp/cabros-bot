@@ -463,6 +463,7 @@ class NewsAnalyzer {
 			sentimentScore: geminiAnalysis.sentiment_score,
 			confidence: finalConfidence,
 			sources: geminiAnalysis.sources,
+			text: formattedMessage,
 			formattedMessage,
 			timestamp: Date.now(),
 			marketContext: marketContext || undefined,
@@ -484,7 +485,13 @@ class NewsAnalyzer {
 		}
 
 		let message = `*${symbol} Alert*\n\n`;
-		message += `Event: ${analysis.headline || 'Market event detected'}\n`;
+		
+		// Use headline from analysis; provide sensible defaults if missing
+		const eventLabel = this.eventCategoryLabel(analysis.event_category);
+		const headline = (analysis.headline && analysis.headline.trim()) 
+			? analysis.headline 
+			: `${eventLabel} event detected`;
+		message += `Event: ${headline}\n`;
 		
 		const sentimentScore = analysis.sentiment_score ?? 0;
 		message += `Sentiment: ${this.sentimentLabel(sentimentScore)} (${sentimentScore.toFixed(2)})\n`;
@@ -502,6 +509,22 @@ class NewsAnalyzer {
 		}
 
 		return message;
+	}
+
+	/**
+	 * Get event category label
+	 * @param {string} category - Event category
+	 * @returns {string} Label
+	 */
+	eventCategoryLabel(category) {
+		const labels = {
+			price_surge: 'Bullish',
+			price_decline: 'Bearish',
+			public_figure: 'Public figure mention',
+			regulatory: 'Regulatory',
+			none: 'Market',
+		};
+		return labels[category] || 'Market';
 	}
 
 	/**
