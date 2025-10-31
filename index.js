@@ -23,6 +23,9 @@ app.listen(port, async () => {
 	const isPreviewEnv = process.env.RENDER === 'true' && process.env.IS_PULL_REQUEST === 'true';
 	console.debug('isPreviewEnv:', isPreviewEnv);
 
+	// Always mount routes (they gate access based on feature flags)
+	app.use('/api', getRoutes(bot));
+
 	if (telegramBotIsEnabled && !isPreviewEnv) {
 		console.log('Telegram Bot is enabled');
 		bot = new Telegraf(token);
@@ -32,8 +35,6 @@ app.listen(port, async () => {
 
 		// Initialize notification services
 		await initializeNotificationServices(bot);
-
-		app.use('/api', getRoutes(bot));
 
 		// Enable graceful stop
 		process.once('SIGINT', () => bot.stop('SIGINT'));
