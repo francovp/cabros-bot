@@ -112,7 +112,7 @@
 - [ ] T029 [US3] Implement cache.set() for storing analysis results in src/controllers/webhooks/handlers/newsMonitor/cache.js
 - [ ] T030 [US3] Implement cache.cleanup() with periodic setInterval (every 1 hour) in src/controllers/webhooks/handlers/newsMonitor/cache.js
 - [ ] T031 [US3] Integrate cache check before analysis in src/controllers/webhooks/handlers/newsMonitor/analyzer.js (check cache, return cached result if valid)
-- [ ] T032 [US3] Initialize cache on app startup in index.js (after bot launch, before registering routes)
+- [ ] T032 [US3] Initialize cache on app startup in index.js (after bot launch, before registering routes). **Note**: Cache stores both primary analysis (Gemini) and optional enrichment results (when `ENABLE_LLM_ALERT_ENRICHMENT=true`) under the same `(symbol, event_category)` key with same TTL. This prevents redundant API calls to both Gemini and secondary LLM for duplicate events. If enrichment fails, original Gemini analysis is cached; enrichment retry only occurs after cache entry expires.
 
 **Checkpoint**: At this point, User Stories 1, 2, AND 3 should all work - duplicate alerts are prevented, cached results are returned quickly
 

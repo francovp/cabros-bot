@@ -71,40 +71,24 @@ npm install
 
 ### 2. Create `.env` File
 
+Copy the `.env.example` file to `.env` and fill in your configuration values:
+
 ```bash
-# Required
-BOT_TOKEN=your_telegram_bot_token_here # Telegram bot token (from BotFather)
-TELEGRAM_CHAT_ID=your_telegram_chat_id_here # Chat ID where alerts are sent
-ENABLE_TELEGRAM_BOT=true
-
-# Optional: WhatsApp Alerts
-ENABLE_WHATSAPP_ALERTS=false
-WHATSAPP_API_URL=your_whatsapp_api_url # UltraMSG, GreenAPI, etc. e.g., https://api.green-api.com/...
-WHATSAPP_API_KEY=your_whatsapp_api_key
-WHATSAPP_CHAT_ID=your_whatsapp_chat_id_here # Chat or group chat ID
-
-# Optional: Admin notifications
-TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID=your_admin_chat_id_here # Optional chat ID for administration notifications and errors alerts
-
-# Optional: AI Grounding
-ENABLE_GEMINI_GROUNDING=false
-GOOGLE_API_KEY=your_google_ai_studio_api_key # Gemini API key (from Google AI Studio)
-
-# Optional: News Monitoring
-ENABLE_NEWS_MONITOR=false
-NEWS_SYMBOLS_CRYPTO=BTCUSDT,ETHUSD,BNBUSDT
-NEWS_SYMBOLS_STOCKS=NVDA,MSFT,AAPL
-NEWS_ALERT_THRESHOLD=0.7
-NEWS_CACHE_TTL_HOURS=6
-NEWS_TIMEOUT_MS=30000
-ENABLE_BINANCE_PRICE_CHECK=false
-
-# Optional: Secondary LLM Enrichment for News Alerts
-ENABLE_LLM_ALERT_ENRICHMENT=false
-AZURE_LLM_ENDPOINT=your_azure_or_github_models_endpoint_here # Azure AI or GitHub models endpoint URL (eg: https://models.github.ai/inference)
-AZURE_LLM_KEY=your_azure_api_key_or_github_pat_here # Azure AI API key or GitHub PAT (Personal Access Token)
-AZURE_LLM_MODEL=your_model_name_here # e.g: openai/gpt-5-mini
+cp .env.example .env
 ```
+
+Then edit `.env` with your specific values. See `.env.example` for complete documentation of all available environment variables organized by category:
+
+- **Required**: Core bot token and chat IDs
+- **Optional: WhatsApp**: GreenAPI integration for multi-channel alerts
+- **Optional: AI Grounding**: Gemini API for alert enrichment
+- **Optional: Admin Notifications**: Separate chat for deployment alerts
+- **Optional: Server Configuration**: Port, Render.com flags
+- **Optional: News Monitoring**: Feature flags and thresholds
+- **Optional: Binance Integration**: Real-time crypto prices
+- **Optional: Secondary LLM**: Azure AI or GitHub Models enrichment
+
+See [Environment Configuration](#environment-configuration) section below for detailed descriptions of each variable.
 
 ### 3. Run Development Server
 
@@ -526,6 +510,7 @@ The system prevents alert fatigue using an intelligent cache:
 - **TTL**: 6 hours by default (configurable via `NEWS_CACHE_TTL_HOURS`)
 - **Behavior**: Same event category for the same symbol within TTL is cached; different categories generate separate alerts
 - **Example**: BTCUSDT receives one "price_surge" alert at 10:00; calling the endpoint at 11:00 returns cached result. But a "regulatory" alert for BTCUSDT at 11:30 generates a new alert (different category).
+- **Enrichment Cache**: When secondary LLM enrichment is enabled (`ENABLE_LLM_ALERT_ENRICHMENT=true`), both primary analysis results AND enrichment results are cached under the same `(symbol, event_category)` key with the same TTL. This prevents redundant Gemini and LLM API calls for duplicate events. If enrichment fails, the original Gemini analysis is cached, and enrichment is not re-attempted until the cache entry expires.
 
 ### Timeout Strategy
 
@@ -747,6 +732,12 @@ The application logs to stdout:
 3. Check that crypto symbols are placed in `crypto` array (not `stocks`)
 4. If Binance fails, system automatically falls back to Gemini GoogleSearch
 5. Verify Binance API is accessible: `curl https://api.binance.com/api/v3/avgPrice?symbol=BTCUSDT`
+
+**Symbol Classification**: The system trusts that you've correctly classified symbols into `crypto` and `stocks` arrays. If a symbol is misclassified (e.g., "NVDA" in the `crypto` array), Binance will return an error like `Invalid symbol: NVDA`. In this case:
+- Verify the symbol exists on Binance: `https://api.binance.com/api/v3/avgPrice?symbol=NVDA` (will fail)
+- Move stock symbols to the `stocks` array
+- Use Binance symbol format (e.g., BTCUSDT for Bitcoin, not BTC)
+- System will fall back to Gemini GoogleSearch if symbol is not found on Binance
 
 #### Secondary LLM Enrichment Not Working
 
