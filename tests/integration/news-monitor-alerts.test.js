@@ -53,6 +53,12 @@ describe('News Monitor - Alert Delivery Response Structure (US2)', () => {
 			}),
 		}));
 
+		// Mock global fetch for WhatsApp API calls
+		global.fetch = jest.fn().mockResolvedValue({
+			ok: true,
+			json: async () => ({ success: true, idMessage: 'mock-wa-msg' }),
+		});
+
 		// Mount routes with mock bot
 		const routes = getRoutes(mockBot);
 		app.use('/api', routes);

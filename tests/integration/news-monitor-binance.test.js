@@ -46,6 +46,12 @@ describe('News Monitor - Binance Integration (US4)', () => {
 			sources: ['https://example.com/news']
 		});
 
+		// Mock global fetch for WhatsApp API calls
+		global.fetch = jest.fn().mockResolvedValue({
+			ok: true,
+			json: async () => ({ success: true, idMessage: 'mock-wa-msg' }),
+		});
+
 		mockBot = {
 			telegram: {
 				sendMessage: jest.fn().mockResolvedValue({ message_id: 'test-message-id' }),
