@@ -36,6 +36,15 @@ async function initializeNotificationServices(bot) {
   return notificationManager;
 }
 
+/**
+ * Get the initialized NotificationManager instance
+ * Used by other handlers (e.g., newsMonitor) to send alerts
+ * @returns {NotificationManager|null}
+ */
+function getNotificationManager() {
+  return notificationManager;
+}
+
 function postAlert(bot) {
   return async (req, res) => {
     const { body } = req;
@@ -100,4 +109,5 @@ function postAlert(bot) {
 module.exports = {
   postAlert,
   initializeNotificationServices,
+  getNotificationManager,
 };

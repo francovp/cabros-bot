@@ -2,13 +2,14 @@
  * News Monitor Webhook Handler
  * Main HTTP endpoint for /api/news-monitor
  * Handles POST and GET requests
- * 003-news-monitor: User Story 1 (endpoint & analysis)
+ * 003-news-monitor: User Story 1 (endpoint & analysis), User Story 2 (alert delivery)
  */
 
 const { v4: uuidv4 } = require('uuid');
-const { getAnalyzer } = require('./analyzer');
+const { getAnalyzer, setNotificationManager } = require('./analyzer');
 const { getCacheInstance } = require('./cache');
 const { AnalysisStatus } = require('./constants');
+const { getNotificationManager } = require('../alert/alert');
 
 class NewsMonitorHandler {
 	constructor() {
@@ -36,6 +37,12 @@ class NewsMonitorHandler {
 		const startTime = Date.now();
 
 		try {
+			// Inject notification manager into analyzer (set once before analysis)
+			const notificationManager = getNotificationManager();
+			if (notificationManager) {
+				setNotificationManager(notificationManager);
+			}
+
 			// Check feature flag
 			if (process.env.ENABLE_NEWS_MONITOR !== 'true') {
 				return res.status(403).json({
