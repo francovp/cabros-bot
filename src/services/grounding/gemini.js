@@ -92,6 +92,7 @@ async function detectLanguage(text) {
 module.exports = {
 	generateGroundedSummary,
 	analyzeNewsForSymbol,
+	parseNewsAnalysisResponse,
 };
 
 /**
