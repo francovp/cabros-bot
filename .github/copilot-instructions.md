@@ -96,6 +96,8 @@ If anything in this file is unclear or you want more examples (tests, extra comm
 - GreenAPI for WhatsApp (REST API integration via native fetch with AbortController timeout)
 - Google Gemini for optional alert enrichment (existing integration in grounding service)
 - N/A for storage (stateless webhook handler; uses env vars for config)
+- Node.js 20.x (matches existing codebase) (003-news-monitor)
+- In-memory cache for news deduplication (Map-based, TTL-aware, no persistence required) (003-news-monitor)
 
 ## Recent Changes
 - 002-whatsapp-alerts: Added multi-channel notification system with TelegramService, WhatsAppService, NotificationManager; exponential backoff retry logic; MarkdownV2 and WhatsApp markdown formatters; comprehensive integration tests for parallel delivery, config validation, graceful degradation
