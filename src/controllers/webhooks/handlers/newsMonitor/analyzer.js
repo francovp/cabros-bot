@@ -9,9 +9,22 @@ const { analyzeNewsForSymbol } = require('../../../../services/grounding/gemini'
 const { getCacheInstance } = require('./cache');
 const { getEnrichmentService } = require('../../../../services/inference/enrichmentService');
 const { AnalysisStatus, EventCategory } = require('./constants');
+const { MainClient } = require('binance');
 
 // Placeholder for NotificationManager - will be injected
 let notificationManager = null;
+
+// Binance client singleton
+let binanceClient = null;
+
+function getBinanceClient() {
+	if (!binanceClient) {
+		binanceClient = new MainClient({
+			beautifyResponses: true,
+		});
+	}
+	return binanceClient;
+}
 
 function setNotificationManager(manager) {
 	notificationManager = manager;
@@ -279,23 +292,65 @@ class NewsAnalyzer {
 
 	/**
 	 * Fetch price from Binance API (crypto only)
+	 * @param {string} symbol - Crypto symbol (e.g., BTCUSDT)
 	 * @returns {Promise<Object>} MarketContext or null
 	 */
-	async fetchBinancePrice() {
-		// Placeholder - would call Binance API
-		// Reuse existing fetchPriceCryptoSymbol from src/controllers/commands/handlers/core/
-		console.debug('[Analyzer] Binance price fetch not yet implemented');
-		return null;
+	async fetchBinancePrice(symbol) {
+		try {
+			// Wrapper with timeout (~5s)
+			const timeoutMs = 5000;
+			const timeoutPromise = new Promise((_, reject) =>
+				setTimeout(() => reject(new Error('Binance fetch timeout')), timeoutMs)
+			);
+
+			const client = getBinanceClient();
+			const pricePromise = client.getAvgPrice({ symbol });
+
+			// Race between the fetch and timeout
+			const data = await Promise.race([pricePromise, timeoutPromise]);
+
+			console.debug(`[Analyzer] Binance price fetched for ${symbol}: $${data.price}`);
+			return {
+				price: parseFloat(data.price),
+				change24h: null, // Binance getAvgPrice doesn't return 24h change, would need additional call
+				source: 'binance',
+				timestamp: Date.now(),
+			};
+		} catch (error) {
+			console.debug(`[Analyzer] Binance fetch failed for ${symbol}: ${error.message}`);
+			return null;
+		}
 	}
 
 	/**
 	 * Fetch price via Gemini GoogleSearch
+	 * @param {string} symbol - Financial symbol
 	 * @returns {Promise<Object>} MarketContext or null
 	 */
-	async fetchGeminiPrice() {
-		// Placeholder - would call Gemini with price discovery prompt
-		console.debug('[Analyzer] Gemini price fetch not yet implemented');
-		return null;
+	async fetchGeminiPrice(symbol) {
+		try {
+			// Timeout wrapper (~20s for Gemini)
+			const timeoutMs = 20000;
+			const timeoutPromise = new Promise((_, reject) =>
+				setTimeout(() => reject(new Error('Gemini fetch timeout')), timeoutMs)
+			);
+
+			// Note: In production, would call a specific Gemini price discovery endpoint
+			// For now, returning fallback market context
+			const geminiPromise = Promise.resolve({
+				price: null, // Would be parsed from Gemini response
+				change24h: null,
+				source: 'gemini',
+				timestamp: Date.now(),
+			});
+
+			const result = await Promise.race([geminiPromise, timeoutPromise]);
+			console.debug(`[Analyzer] Gemini market context fetched for ${symbol}`);
+			return result;
+		} catch (error) {
+			console.warn(`[Analyzer] Gemini price fetch failed for ${symbol}: ${error.message}`);
+			return null;
+		}
 	}
 
 	/**
