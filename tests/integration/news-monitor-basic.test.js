@@ -1,17 +1,16 @@
 const request = require('supertest');
 const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
-const gemini = require('../../src/services/grounding/gemini');
-const genaiClient = require('../../src/services/grounding/genaiClient');
+const { initializeNotificationServices } = require('../../src/controllers/webhooks/handlers/alert/alert');
 
-jest.mock('../../src/services/grounding/genaiClient');
 jest.mock('../../src/services/grounding/gemini');
 
 describe('News Monitor - Basic Endpoint Integration', () => {
 	const originalEnv = process.env;
 	let mockTelegramSendMessage;
+	let mockBot;
 
-	beforeEach(() => {
+	beforeEach(async () => {
 		process.env = {
 			...originalEnv,
 			ENABLE_NEWS_MONITOR: 'true',
@@ -28,32 +27,28 @@ describe('News Monitor - Basic Endpoint Integration', () => {
 
 		jest.clearAllMocks();
 
-		genaiClient.llmCall = jest.fn().mockResolvedValue({
-			text: JSON.stringify({
-				event_category: 'none',
-				event_significance: 0.5,
-				sentiment_score: 0.5,
-				summary: 'Test news analysis',
-				sources: []
-			}),
-		});
-
+		// Mock Gemini for symbol analysis
+		const gemini = require('../../src/services/grounding/gemini');
 		gemini.analyzeNewsForSymbol = jest.fn().mockResolvedValue({
-			event_category: 'none',
-			event_significance: 0.5,
-			sentiment_score: 0.5,
-			summary: 'Test news analysis',
-			sources: []
+			event_category: 'price_surge',
+			event_significance: 0.7,
+			sentiment_score: 0.8,
+			headline: 'Bitcoin surges on positive news',
+			confidence: 0.74,
+			sources: ['https://example.com/news']
 		});
 
 		mockTelegramSendMessage = jest.fn().mockResolvedValue({ message_id: 'test-message-id' });
-		const bot = {
+		mockBot = {
 			telegram: {
 				sendMessage: mockTelegramSendMessage,
 			},
 		};
 
-		app.use('/api', getRoutes(bot));
+		// Initialize notification services with mock bot
+		await initializeNotificationServices(mockBot);
+
+		app.use('/api', getRoutes(mockBot));
 	});
 
 	afterEach(() => {

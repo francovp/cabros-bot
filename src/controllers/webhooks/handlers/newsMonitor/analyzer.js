@@ -25,7 +25,8 @@ class NewsAnalyzer {
 	constructor() {
 		this.cache = getCacheInstance();
 		this.enrichmentService = getEnrichmentService();
-		this.notificationManager = getNotificationManager();
+		// Do NOT store notificationManager in constructor - get it dynamically
+		// to handle delayed initialization in tests and app startup
 		// Per-symbol timeout
 		this.timeout = parseInt(process.env.NEWS_TIMEOUT_MS || 30000);
 		this.alertThreshold = parseFloat(process.env.NEWS_ALERT_THRESHOLD || 0.7);
@@ -218,7 +219,17 @@ class NewsAnalyzer {
 
 		// Send to all notification channels
 		console.info('[Analyzer] Sending alert to notification channels for', symbol);
-		const deliveryResults = await this.notificationManager.sendToAll(alert);
+		const notificationMgr = getNotificationManager();
+		if (!notificationMgr) {
+			console.warn('[Analyzer] NotificationManager not initialized - skipping alert delivery');
+			return {
+				status: AnalysisStatus.ANALYZED,
+				alert,
+				deliveryResults: [],
+				cached: false,
+			};
+		}
+		const deliveryResults = await notificationMgr.sendToAll(alert);
 		console.info('[Analyzer] Alert delivery results for', symbol, ':', JSON.stringify(deliveryResults));
 
 		// Cache the result
@@ -345,16 +356,26 @@ class NewsAnalyzer {
    * @returns {string} Formatted message
    */
 	formatAlertMessage(symbol, analysis, marketContext) {
-		let message = `*${symbol} Alert*\n\n`;
-		message += `Event: ${analysis.headline}\n`;
-		message += `Sentiment: ${this.sentimentLabel(analysis.sentiment_score)} (${analysis.sentiment_score.toFixed(2)})\n`;
-		message += `Confidence: ${(analysis.confidence * 100).toFixed(0)}%\n`;
-
-		if (marketContext) {
-			message += `Price: $${marketContext.price} (${marketContext.change24h > 0 ? '+' : ''}${marketContext.change24h.toFixed(1)}%)\n`;
+		// Defensive checks for undefined properties
+		if (!analysis) {
+			return `*${symbol} Alert*\n\nNo analysis data available`;
 		}
 
-		if (analysis.sources && analysis.sources.length > 0) {
+		let message = `*${symbol} Alert*\n\n`;
+		message += `Event: ${analysis.headline || 'Market event detected'}\n`;
+		
+		const sentimentScore = analysis.sentiment_score ?? 0;
+		message += `Sentiment: ${this.sentimentLabel(sentimentScore)} (${sentimentScore.toFixed(2)})\n`;
+		
+		const confidence = analysis.confidence ?? 0;
+		message += `Confidence: ${(confidence * 100).toFixed(0)}%\n`;
+
+		if (marketContext && marketContext.price) {
+			const change = marketContext.change24h ?? 0;
+			message += `Price: $${marketContext.price} (${change > 0 ? '+' : ''}${change.toFixed(1)}%)\n`;
+		}
+
+		if (analysis.sources && Array.isArray(analysis.sources) && analysis.sources.length > 0) {
 			message += `Sources: ${analysis.sources.slice(0, 3).join(' | ')}\n`;
 		}
 

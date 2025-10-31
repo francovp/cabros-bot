@@ -7,11 +7,12 @@ describe('Analyzer - Unit Tests', () => {
 		jest.clearAllMocks();
 
 		gemini.analyzeNewsForSymbol = jest.fn().mockResolvedValue({
-			event_category: 'none',
-			event_significance: 0.5,
-			sentiment_score: 0.5,
-			summary: 'Test analysis',
-			sources: []
+			event_category: 'price_surge',
+			event_significance: 0.8,
+			sentiment_score: 0.8,
+			headline: 'Bitcoin surges on positive news',
+			confidence: 0.8,
+			sources: ['https://example.com/news']
 		});
 	});
 
@@ -61,18 +62,28 @@ describe('Analyzer - Unit Tests', () => {
 	it('should build alert object with correct structure', () => {
 		const { getAnalyzer } = require('../../src/controllers/webhooks/handlers/newsMonitor/analyzer');
 		const analyzer = getAnalyzer();
-		const alert = analyzer.buildAlert('BTCUSDT', 'Test alert', {
+		const geminiAnalysis = {
 			headline: 'Bitcoin Price Surge',
 			event_category: 'price_surge',
 			sentiment_score: 0.8,
 			confidence: 0.75,
-			event_significance: 0.9
-		});
+			event_significance: 0.9,
+			sources: ['https://example.com']
+		};
+		const marketContext = {
+			price: 42000,
+			change24h: 5.2,
+			source: 'binance',
+			timestamp: Date.now()
+		};
+		const alert = analyzer.buildAlert('BTCUSDT', geminiAnalysis, marketContext);
 
 		expect(alert).toHaveProperty('symbol');
-		expect(alert).toHaveProperty('text');
+		expect(alert).toHaveProperty('formattedMessage');
 		expect(alert.symbol).toBe('BTCUSDT');
-		expect(alert.text).toContain('Test alert');
+		expect(alert.eventCategory).toBe('price_surge');
+		expect(alert.confidence).toBe(0.75);
+		expect(alert.formattedMessage).toContain('BTCUSDT Alert');
 	});
 
 	it('analyzer should have getMarketContext method', () => {
