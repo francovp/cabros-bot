@@ -5,6 +5,7 @@ const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
 const genaiClient = require('../../src/services/grounding/genaiClient');
 const gemini = require('../../src/services/grounding/gemini');
+const { initializeNotificationServices } = require('../../src/controllers/webhooks/handlers/alert/alert');
 
 // Define mock search results
 const mockSearchResults = [
@@ -30,7 +31,7 @@ describe('Alert Grounding Integration', () => {
 	let mockFetch;
 	const originalEnv = process.env;
 
-	beforeEach(() => {
+	beforeEach(async () => {
 		// Mock environment variables
 		process.env = {
 			...originalEnv,
@@ -65,6 +66,7 @@ describe('Alert Grounding Integration', () => {
 		const bot = {
 			telegram: {
 				sendMessage: mockTelegramSendMessage,
+				getMe: jest.fn().mockResolvedValue({ id: 123456789, username: 'TestBot' }),
 			},
 		};
 
@@ -75,8 +77,11 @@ describe('Alert Grounding Integration', () => {
 		});
 		global.fetch = mockFetch;
 
+		// Initialize notification services
+		await initializeNotificationServices(bot);
+
 		// Mount routes
-		app.use('/api', getRoutes(bot));
+		app.use('/api', getRoutes());
 	});
 
 	afterEach(() => {

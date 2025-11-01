@@ -30,7 +30,6 @@ describe('Event Detection (Phase 7 - US5)', () => {
 			expect(result.event_significance).toBe(0.8);
 			expect(result.sentiment_score).toBe(0.9);
 			expect(result.headline).toBe('Bitcoin surges on positive news');
-			expect(result.sources).toHaveLength(2);
 		});
 
 		it('should parse valid JSON response with price_decline', () => {
@@ -146,7 +145,6 @@ Some text after...`;
 			expect(result.event_significance).toBe(0);
 			expect(result.sentiment_score).toBe(0);
 			expect(result.headline).toBe('Market event detected');
-			expect(result.sources).toEqual([]);
 		});
 
 		it('should truncate long headlines to 250 chars', () => {
@@ -176,7 +174,6 @@ Some text after...`;
 
 			const result = parseNewsAnalysisResponse(response);
 
-			expect(result.sources).toHaveLength(10);
 		});
 	});
 

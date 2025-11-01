@@ -15,6 +15,7 @@ describe('Graceful Degradation & Fallback', () => {
     mockBot = {
       telegram: {
         sendMessage: jest.fn().mockResolvedValue({ message_id: 'tg-123' }),
+        getMe: jest.fn().mockResolvedValue({ id: 123456789, username: 'TestBot' }),
       },
     };
 

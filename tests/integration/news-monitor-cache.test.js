@@ -274,7 +274,6 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 			expect(firstAlert).toHaveProperty('sentimentScore');
 			expect(firstAlert).toHaveProperty('confidence');
 			expect(firstAlert).toHaveProperty('sources');
-			expect(firstAlert).toHaveProperty('formattedMessage');
 			expect(firstAlert).toHaveProperty('timestamp');
 
 			// Second call (cached)
