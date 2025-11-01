@@ -9,6 +9,7 @@ const { analyzeNewsForSymbol } = require('../../../../services/grounding/gemini'
 const { getCacheInstance } = require('./cache');
 const { getEnrichmentService } = require('../../../../services/inference/enrichmentService');
 const { AnalysisStatus, EventCategory } = require('./constants');
+const { GROUNDING_MODEL_NAME } = require('../../../../services/grounding/config');
 const { MainClient } = require('binance');
 
 // Placeholder for NotificationManager - will be injected
@@ -41,7 +42,7 @@ class NewsAnalyzer {
 		// Do NOT store notificationManager in constructor - get it dynamically
 		// to handle delayed initialization in tests and app startup
 		// Per-symbol timeout
-		this.timeout = parseInt(process.env.NEWS_TIMEOUT_MS || 30000);
+		this.timeout = parseInt(process.env.NEWS_TIMEOUT_MS || 60000);
 		this.alertThreshold = parseFloat(process.env.NEWS_ALERT_THRESHOLD || 0.7);
 		this.enableBinance = process.env.ENABLE_BINANCE_PRICE_CHECK === 'true';
 	}
@@ -169,11 +170,7 @@ class NewsAnalyzer {
 		// Call Gemini for sentiment analysis
 		console.debug('[Analyzer] Calling Gemini for symbol:', symbol);
 		const geminiAnalysis = await analyzeNewsForSymbol(symbol, analysisContext);
-		console.debug('[Analyzer] Gemini analysis result for', symbol, ':', {
-			event_category: geminiAnalysis.event_category,
-			confidence: geminiAnalysis.confidence,
-			sentiment_score: geminiAnalysis.sentiment_score,
-		});
+		console.debug('[Analyzer] Gemini analysis result for', symbol, ':', geminiAnalysis);
 
 		// If no event detected, cache and return
 		if (geminiAnalysis.event_category === EventCategory.NONE) {
@@ -235,6 +232,7 @@ class NewsAnalyzer {
 		// Send to all notification channels
 		console.info('[Analyzer] Sending alert to notification channels for', symbol);
 		const notificationMgr = getNotificationManager();
+		console.debug('[Analyzer] Using NotificationManager:', notificationMgr);
 		if (!notificationMgr) {
 			console.warn('[Analyzer] NotificationManager not initialized - skipping alert delivery');
 			return {
@@ -332,29 +330,42 @@ class NewsAnalyzer {
 	 */
 	async fetchGeminiPrice(symbol) {
 		const genaiClient = require('../../../../services/grounding/genaiClient');
+		let { price, change24h } = { price: null, change24h: null };
 
 		try {
 			// Timeout wrapper (~20s for Gemini)
-			const timeoutMs = 20000;
+			const timeoutMs = 30000;
 			let timeoutHandle;
 			const timeoutPromise = new Promise((_, reject) => {
 				timeoutHandle = setTimeout(() => reject(new Error('Gemini fetch timeout')), timeoutMs);
 			});
 
 			// Use Gemini GoogleSearch to fetch current price
-			const searchPromise = genaiClient.search({
-				query: `current price of ${symbol} today`,
+			const priceSearchPromise = genaiClient.search({
+				query: `Get current price of ${symbol} today and respond with JSON only. Follow this exact format:
+{
+	"price": <number>,
+	"change_24h": <number>,
+	"context": "<detailed context about the price and market conditions>",
+	"sources": ["url1", "url2"]
+}`,
 				maxResults: 5,
 			});
 
-			const searchResult = await Promise.race([searchPromise, timeoutPromise]);
+			const priceSearchResult = await Promise.race([priceSearchPromise, timeoutPromise]);
 			clearTimeout(timeoutHandle);
 
-			// Parse price and 24h change from search result text
-			const { price, change24h } = this.parsePriceFromSearchResult(
-				searchResult.searchResultText || '',
-				symbol,
-			);
+			// Extract JSON from response
+			const jsonMatch = priceSearchResult.searchResultText
+				? priceSearchResult.searchResultText.match(/\{[\s\S]*\}/)
+				: null;
+			if (!jsonMatch) {
+				throw new Error('No JSON found in price search response');
+			}
+
+			const priceSearchResultParsed = JSON.parse(jsonMatch[0]);
+			price = parseFloat(priceSearchResultParsed.price);
+			change24h = parseFloat(priceSearchResultParsed.change_24h);
 
 			console.debug(`[Analyzer] Gemini GoogleSearch market context fetched for ${symbol}: price=$${price}, change24h=${change24h}%`);
 			return {
@@ -362,61 +373,12 @@ class NewsAnalyzer {
 				change24h,
 				source: 'gemini-grounding',
 				timestamp: Date.now(),
-				searchResults: searchResult.results || [],
+				context: priceSearchResultParsed.context || '',
+				sources: priceSearchResultParsed.sources || [],
 			};
 		} catch (error) {
 			console.warn(`[Analyzer] Gemini price fetch failed for ${symbol}: ${error.message}`);
 			return null;
-		}
-	}
-
-	/**
-	 * Parse price and 24h change from Gemini search result text
-	 * Uses regex patterns to extract financial data from snippets
-	 * @param {string} searchText - Raw search result text
-	 * @param {string} symbol - Symbol for context
-	 * @returns {Object} { price: number|null, change24h: number|null }
-	 */
-	parsePriceFromSearchResult(searchText, symbol) {
-		const result = { price: null, change24h: null };
-
-		if (!searchText || typeof searchText !== 'string') {
-			return result;
-		}
-
-		try {
-			// Pattern 1: "$123.45" or "123.45 USD/USDT" - more flexible to catch various formats
-			const pricePattern = /\$?([\d,]+\.?\d*)\s*(?:USD|USDT)?/gi;
-			const priceMatches = searchText.match(pricePattern);
-			if (priceMatches && priceMatches.length > 0) {
-				// Find first match that looks like a realistic price
-				for (const match of priceMatches) {
-					const cleanPrice = match.replace(/[$,\s]/g, '');
-					const parsedPrice = parseFloat(cleanPrice);
-					if (!isNaN(parsedPrice) && parsedPrice > 0 && parsedPrice < 1000000) {
-						result.price = parsedPrice;
-						break;
-					}
-				}
-			}
-
-			// Pattern 2: "+5.2%" or "-2.1% 24h change"
-			const changePattern = /([\+\-]?\d+\.?\d*)\s*%\s*(?:24[hH]|24-hour|daily)?/gi;
-			const changeMatches = searchText.match(changePattern);
-			if (changeMatches && changeMatches.length > 0) {
-				// Take the first match (usually the most recent/prominent)
-				const cleanChange = changeMatches[0].replace(/[%\s]/g, '');
-				const parsedChange = parseFloat(cleanChange);
-				if (!isNaN(parsedChange) && Math.abs(parsedChange) < 100) {
-					result.change24h = parsedChange;
-				}
-			}
-
-			console.debug(`[Analyzer] Parsed price from search text for ${symbol}:`, result);
-			return result;
-		} catch (error) {
-			console.warn(`[Analyzer] Price parsing error for ${symbol}:`, error.message);
-			return result;
 		}
 	}
 
@@ -433,7 +395,7 @@ class NewsAnalyzer {
 			context += `\n\nCurrent Market Data:
 - Price: $${marketContext.price}
 - 24h Change: ${marketContext.change24h}%
-- Source: ${marketContext.source}`;
+- Context: ${marketContext.context || 'N/A'}`;
 		}
 
 		context += '\n\nDetect any significant market-moving events.';
@@ -454,7 +416,54 @@ class NewsAnalyzer {
 			? enrichmentMetadata.enriched_confidence
 			: geminiAnalysis.confidence;
 
-		const formattedMessage = this.formatAlertMessage(symbol, geminiAnalysis, marketContext);
+		// Build the title/original text
+		const eventLabel = this.eventCategoryLabel(geminiAnalysis.event_category);
+		const headline = (geminiAnalysis.headline && geminiAnalysis.headline.trim())
+				? geminiAnalysis.headline 
+				: `${eventLabel} event detected`;
+		const alertTitle = `${symbol}: ${headline}`;
+
+		// Build the context (includes sentiment, confidence, price context)
+		const sentimentScore = geminiAnalysis.sentiment_score ?? 0;
+		const confidense = (finalConfidence * 100).toFixed(0);
+
+		let context = (geminiAnalysis.description && geminiAnalysis.description.trim())
+			? `${geminiAnalysis.description}\n\n`
+			: '';
+		
+		context += `*Sentiment:* ${this.sentimentLabel(sentimentScore)} (${sentimentScore.toFixed(2)})`;
+		
+		if (marketContext && marketContext.price) {
+			const change = marketContext.change24h ?? 0;
+			context += `\n*Price:* $${marketContext.price} (${change > 0 ? '+' : ''}${change.toFixed(1)}%)`;
+		}
+
+		// Build citations from sources
+		const citations = [];
+		if (geminiAnalysis.sources && Array.isArray(geminiAnalysis.sources)) {
+			geminiAnalysis.sources.slice(0, 3).forEach(source => {
+				if (typeof source === 'object' && source.title && source.url) {
+					citations.push({
+						title: source.title,
+						url: source.url,
+					});
+				} else if (typeof source === 'string') {
+					// Fallback for plain URLs
+					citations.push({
+						title: source,
+						url: source,
+					});
+				}
+			});
+		}
+
+		// Build enriched object for formatEnriched methods
+		const enriched = {
+			originalText: alertTitle,
+			summary: context,
+			citations,
+			extraText: `_Model Confidence: ${confidense}%_\n_Model used: ${GROUNDING_MODEL_NAME}_`,
+		};
 
 		return {
 			symbol,
@@ -463,8 +472,8 @@ class NewsAnalyzer {
 			sentimentScore: geminiAnalysis.sentiment_score,
 			confidence: finalConfidence,
 			sources: geminiAnalysis.sources,
-			text: formattedMessage,
-			formattedMessage,
+			text: alertTitle,
+			enriched,
 			timestamp: Date.now(),
 			marketContext: marketContext || undefined,
 			enrichmentMetadata: enrichmentMetadata || undefined,
@@ -505,7 +514,20 @@ class NewsAnalyzer {
 		}
 
 		if (analysis.sources && Array.isArray(analysis.sources) && analysis.sources.length > 0) {
-			message += `Sources: ${analysis.sources.slice(0, 3).join(' | ')}\n`;
+			const formattedSources = analysis.sources
+				.slice(0, 3)
+				.map(source => {
+					// Handle both full SearchResult objects and plain URLs for backward compatibility
+					if (typeof source === 'object' && source.title && source.url) {
+						// Escape special chars in title for MarkdownV2
+						const escapedTitle = (source.title || 'Source').replace(/[_*\[\]()~`>#+-=|{}.!]/g, '\\$&');
+						return `[${escapedTitle}](${source.url})`;
+					}
+					// Fallback for plain URLs
+					return source;
+				})
+				.join(' | ');
+			message += `Sources: ${formattedSources}\n`;
 		}
 
 		return message;

@@ -86,7 +86,7 @@ class MarkdownV2Formatter {
 			message += `\n\n*Fuentes:* ${formattedSources}`;
 		}
 
-		message += `\n\n_${escapedExtraText}_`;
+		message += `\n\n${escapedExtraText}`;
 
 		return message;
 	}

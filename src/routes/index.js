@@ -1,9 +1,10 @@
 const express = require('express');
 const { postAlert } = require('../controllers/webhooks/handlers/alert/alert');
 
-function getRoutes(bot) {
+function getRoutes() {
 	const router = express.Router();
-	router.post('/webhook/alert', postAlert(bot));
+	router.post('/webhook/alert', postAlert());
+	console.log('[Routes] Alert webhook endpoint registered at /api/webhook/alert');
 
 	// Register news-monitor endpoint if feature is enabled
 	if (process.env.ENABLE_NEWS_MONITOR === 'true') {

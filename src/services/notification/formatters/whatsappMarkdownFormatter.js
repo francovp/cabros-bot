@@ -138,7 +138,7 @@ class WhatsAppMarkdownFormatter {
       message += `\n\n*Fuentes:* ${formattedSources}`;
     }
 
-    message += `\n\n_${unescapedExtraText}_`;
+    message += `\n\n${unescapedExtraText}`;
 
     return message;
   }

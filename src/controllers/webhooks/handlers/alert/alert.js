@@ -49,11 +49,6 @@ function postAlert(bot) {
   return async (req, res) => {
     const { body } = req;
     try {
-      // Initialize manager if needed
-      if (!notificationManager) {
-        await initializeNotificationServices(bot);
-      }
-
       // Parse and validate alert text
       let alertText = '';
       if (typeof body === 'object' && 'text' in body) {

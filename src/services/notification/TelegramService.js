@@ -39,6 +39,18 @@ class TelegramService extends NotificationChannel {
       return { valid: false, message: 'Missing TELEGRAM_CHAT_ID' };
     }
 
+    if (!this.bot) {
+      return { valid: false, message: 'Bot instance not provided' };
+    }
+
+    // Verify bot token by calling getMe
+    try {
+      const botInfo = await this.bot.telegram.getMe();
+      this.logger?.info?.(`Telegram bot connected as @${botInfo.username} (ID: ${botInfo.id})`);
+    } catch (error) {
+      return { valid: false, message: `Invalid BOT_TOKEN: ${error.message}` };
+    }
+
     this.enabled = true;
     return { valid: true, message: 'Telegram configured' };
   }

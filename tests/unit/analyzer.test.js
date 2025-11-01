@@ -89,11 +89,11 @@ describe('Analyzer - Unit Tests', () => {
 		const alert = analyzer.buildAlert('BTCUSDT', geminiAnalysis, marketContext);
 
 		expect(alert).toHaveProperty('symbol');
-		expect(alert).toHaveProperty('formattedMessage');
+		expect(alert).toHaveProperty('enriched');
 		expect(alert.symbol).toBe('BTCUSDT');
 		expect(alert.eventCategory).toBe('price_surge');
 		expect(alert.confidence).toBe(0.75);
-		expect(alert.formattedMessage).toContain('BTCUSDT Alert');
+			expect(alert.enriched.originalText).toContain('BTCUSDT');
 	});
 
 	it('analyzer should have getMarketContext method', () => {

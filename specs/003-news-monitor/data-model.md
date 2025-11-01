@@ -39,6 +39,7 @@ enum EventCategory {
 - `symbol`: Non-empty string, max 20 characters, alphanumeric + underscore
 - `eventCategory`: Must be one of `EventCategory` enum values
 - `headline`: Non-empty string, max 250 characters
+- `description`: Optional string, max 500 characters
 - `sentimentScore`: Number in range [-1.0, 1.0]
 - `confidence`: Number in range [0.0, 1.0]
 - `sources`: Array of strings, max 10 sources, each max 500 characters
@@ -78,6 +79,8 @@ interface MarketContext {
   volume24h?: number;                // Optional 24-hour trading volume (USD)
   source: 'binance' | 'gemini';      // Data provider
   timestamp: number;                 // Unix timestamp (ms) when data was fetched
+  context?: string;                  // Optional additional context info
+  sources?: string[];                // Optional list of URLs for market data
 }
 ```
 
@@ -87,6 +90,8 @@ interface MarketContext {
 - `volume24h`: Optional positive number
 - `source`: Must be 'binance' or 'gemini'
 - `timestamp`: Positive integer (Unix timestamp in milliseconds)
+- `context`: Optional string, max 1000 characters
+- `sources`: Optional array of strings, max 5 sources, each max 500 characters
 
 **Relationships**:
 - Belongs-To `NewsAlert` (optional)

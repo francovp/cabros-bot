@@ -5,24 +5,7 @@ const { EventCategory } = require('../../controllers/webhooks/handlers/newsMonit
 
 // News analysis system prompt for Gemini
 const NEWS_ANALYSIS_SYSTEM_PROMPT = `You are a financial market sentiment analyst specializing in crypto and stock news analysis.
-Analyze the provided news/context and detect market-moving events.
-Respond ONLY with valid JSON in this exact format:
-{
-  "event_category": "price_surge|price_decline|public_figure|regulatory|none",
-  "event_significance": 0.0-1.0,
-  "sentiment_score": -1.0-1.0,
-  "headline": "one-line event description",
-  "sources": ["url1", "url2"]
-}
-
-Categories:
-- price_surge: Bullish events (positive news, price increases, upgrades)
-- price_decline: Bearish events (negative news, price declines, downgrades)
-- public_figure: Mentions of influential figures (Elon, Trump, etc.)
-- regulatory: Official announcements, policy changes, regulations
-- none: No significant event detected
-
-Be conservative with scores: 0.7+ only for high-credibility, well-sourced events.`;
+Analyze the provided news/context and detect market-moving events.`;
 
 /**
  * Generates a summary with citations given an alert text and optional context
@@ -109,9 +92,12 @@ async function analyzeNewsForSymbol(symbol, context) {
 			query: `${symbol} news market sentiment events today`,
 			maxResults: 5,
 		});
+		console.debug('[Gemini][analyzeNewsForSymbol] Grounding market news and sentiment search results:', searchResult);
 
 		// Build enriched context from grounding results
 		const groundingContext = searchResult.searchResultText || '';
+		// Store full SearchResult objects with title, snippet, url, and sourceDomain for formatting
+		/** @type {SearchResult[]} */
 		const sourcesList = searchResult.results
 			.map(r => r.url)
 			.filter(Boolean)
@@ -123,14 +109,23 @@ async function analyzeNewsForSymbol(symbol, context) {
 
 ${enrichedContext}
 
-Detect any market-moving events and respond with JSON only. Follow this exact format:
+Detect any market-moving events and respond ONLY with valid JSON in this exact format:
 {
   "event_category": "price_surge|price_decline|public_figure|regulatory|none",
   "event_significance": 0.0-1.0,
   "sentiment_score": -1.0-1.0,
   "headline": "one-line event description",
-  "sources": ["url1", "url2"]
-}`;
+  "description": "detailed event description up to 500 chars"
+}
+
+Categories:
+- price_surge: Bullish events (positive news, price increases, upgrades)
+- price_decline: Bearish events (negative news, price declines, downgrades)
+- public_figure: Mentions of influential figures (Elon, Trump, etc.)
+- regulatory: Official announcements, policy changes, regulations
+- none: No significant event detected
+
+Be conservative with scores: 0.7+ only for high-credibility, well-sourced events.`;
 
 		// Create a proper system instruction that will be passed to genaiClient
 		const fullPrompt = `${NEWS_ANALYSIS_SYSTEM_PROMPT}\n\n${prompt}`;
@@ -143,9 +138,11 @@ Detect any market-moving events and respond with JSON only. Follow this exact fo
 		// Parse and validate JSON response
 		const analysisResult = parseNewsAnalysisResponse(response);
 
-		// Use grounded sources if available
-		if (sourcesList.length > 0 && analysisResult.sources.length === 0) {
-			analysisResult.sources = sourcesList.slice(0, 5);
+		// Use grounded sources if available (store full SearchResult objects, not just URLs)
+		if (searchResult.results.length > 0) {
+			// Store full SearchResult objects with title, snippet, url, and sourceDomain for formatting
+			/** @type {SearchResult[]} */
+			analysisResult.sources = searchResult.results;
 		}
 
 		// Calculate confidence using formula: (0.6 × event_significance + 0.4 × |sentiment|)
@@ -192,7 +189,7 @@ function parseNewsAnalysisResponse(response) {
 			event_significance: Math.max(0, Math.min(1, parsed.event_significance || 0)),
 			sentiment_score: Math.max(-1, Math.min(1, parsed.sentiment_score || 0)),
 			headline: (parsed.headline || 'Market event detected').substring(0, 250),
-			sources: Array.isArray(parsed.sources) ? parsed.sources.slice(0, 10) : []
+			description: parsed.description || ''
 		};
 	} catch (error) {
 		console.error('[Gemini] Response parsing failed:', error.message);
@@ -202,7 +199,7 @@ function parseNewsAnalysisResponse(response) {
 			event_significance: 0,
 			sentiment_score: 0,
 			headline: 'Could not detect market event',
-			sources: []
+			description: ''
 		};
 	}
 }
