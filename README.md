@@ -32,6 +32,10 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 - `WHATSAPP_API_KEY` - GreenAPI API key for authentication
 - `WHATSAPP_CHAT_ID` - Destination WhatsApp chat/group ID (format: `120363xxxxx@g.us`)
 
+#### URL Shortening (004-url-shortening)
+
+- `BITLY_API_KEY` - Bitly API key for URL shortening (optional; when provided, long URLs in WhatsApp alerts are automatically shortened)
+
 #### AI Grounding
 
 - `ENABLE_GEMINI_GROUNDING` - Enable Gemini-based alert enrichment (`true` or `false`)
@@ -345,6 +349,45 @@ The alert webhook system supports simultaneous delivery to multiple channels (Te
 - Supports code blocks with triple backticks
 - Supports lists with asterisk or hyphen
 
+### URL Shortening for WhatsApp
+
+When `BITLY_API_KEY` is configured, URLs in WhatsApp alerts are automatically shortened to reduce character count and improve readability.
+
+**Features**:
+- **Automatic Detection**: Identifies HTTP/HTTPS URLs in alert text
+- **Shortened URLs**: Converts long URLs (e.g., `https://example.com/very/long/path?param=value`) to short Bitly links (e.g., `https://bit.ly/abc123`)
+- **Session-Scoped Cache**: Caches shortenings during request processing to avoid redundant API calls (1-hour TTL per session)
+- **Parallel Shortening**: Multiple URLs shortened concurrently
+- **Fallback Behavior**: If shortening fails or is disabled, original URLs are preserved
+- **Graceful Degradation**: Shortening errors don't block alert delivery
+
+**How It Works**:
+1. Alert received with one or more URLs
+2. URLShortener detects and extracts URLs (if `BITLY_API_KEY` configured)
+3. Checks session cache for previously shortened URLs
+4. Calls Bitly API for new URLs (with 3-retry exponential backoff)
+5. Replaces original URLs with shortened versions in alert text
+6. Alert delivered to WhatsApp (and other channels) with shortened URLs
+
+**Configuration**:
+- Set `BITLY_API_KEY` environment variable with your Bitly API key
+- Optional: URLs only shortened for WhatsApp; other channels receive original URLs
+- Cache per session: TTL 1 hour; cleared after request completes or session ends
+
+**Example**:
+
+**Before** (158 characters):
+```
+Sources: 
+- https://example.com/research/crypto/bitcoin/technical-analysis?date=2024-01-15&symbol=BTCUSDT&period=4h&includeIndicators=true
+```
+
+**After** (with Bitly):
+```
+Sources: 
+- https://bit.ly/crypto-analysis
+```
+
 ### Delivery Behavior
 
 **Parallel Sending**: Alerts sent to all enabled channels simultaneously without blocking
@@ -604,6 +647,27 @@ ENABLE_WHATSAPP_ALERTS=true
 WHATSAPP_API_URL=your_whatsapp_api_url
 WHATSAPP_API_KEY=your_whatsapp_api_key
 WHATSAPP_CHAT_ID=120363xxxxx@g.us
+
+# Optional: Enable URL shortening for WhatsApp
+BITLY_API_KEY=your_bitly_api_key
+```
+
+### With WhatsApp + URL Shortening
+
+```bash
+BOT_TOKEN=your_token
+TELEGRAM_CHAT_ID=telegram_chat_id
+ENABLE_TELEGRAM_BOT=true
+
+ENABLE_WHATSAPP_ALERTS=true
+WHATSAPP_API_URL=your_whatsapp_api_url
+WHATSAPP_API_KEY=your_whatsapp_api_key
+WHATSAPP_CHAT_ID=120363xxxxx@g.us
+
+# URL shortening for WhatsApp (long URLs automatically shortened via Bitly)
+BITLY_API_KEY=your_bitly_api_key
+
+# Alerts sent to both channels; WhatsApp receives shortened URLs
 ```
 
 ### With Gemini Enrichment
@@ -768,6 +832,30 @@ The application logs to stdout:
 2. Verify `TELEGRAM_CHAT_ID` is correct (use `/start` to find)
 3. Ensure bot has permission to send messages to the chat
 4. Check Telegram API status
+
+### URL Shortening
+
+**URLs not being shortened**:
+1. Verify `BITLY_API_KEY` is set in environment
+2. Check that alert text contains valid HTTP/HTTPS URLs
+3. Verify Bitly API key has sufficient quota (check Bitly dashboard)
+4. Check application logs for "URLShortener" error messages
+
+**Shortening timeout errors**:
+- Default timeout: 5 seconds per URL batch
+- If Bitly API is slow, increase timeout or reduce parallel URLs
+- URLs gracefully fallback to original if shortening fails
+- Alert still sends with original URLs
+
+**Cache issues**:
+- URL shortening cache is session-scoped (clears after request)
+- Same URL requested multiple times in quick succession uses cache
+- To clear cache manually, restart the application
+
+**WhatsApp message still too long**:
+- Shortening reduces URL length, not entire message
+- If full alert text > 20,000 chars, WhatsApp auto-truncates
+- Reduce alert detail or enable Gemini enrichment to summarize
 
 ### Retry Logic
 
