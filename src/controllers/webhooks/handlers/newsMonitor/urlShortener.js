@@ -88,14 +88,26 @@ class URLShortener {
 
     try {
       // Call Bitly API with retry logic
-      const shortUrl = await sendWithRetry(
+      // Wrap in format expected by sendWithRetry: { success: boolean, data?: string, error?: string }
+      const result = await sendWithRetry(
         async () => {
-          return await this.callBitlyAPI(longUrl);
+          try {
+            const url = await this.callBitlyAPI(longUrl);
+            return { success: true, data: url };
+          } catch (error) {
+            return { success: false, error: error.message };
+          }
         },
         3,
         console
       );
 
+      if (!result.success) {
+        console.warn("[URLShortener] Failed after retries:", result.error);
+        return null;
+      }
+
+      const shortUrl = result.data;
       // Store in cache
       this.cache.set(longUrl, shortUrl);
       console.debug("[URLShortener] Successfully shortened URL");
