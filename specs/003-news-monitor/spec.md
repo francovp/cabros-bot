@@ -2,6 +2,7 @@
 
 **Feature Branch**: `003-news-monitor`  
 **Created**: October 30, 2025  
+**Updated**: November 1, 2025 (Added URL Shortening for WhatsApp)  
 **Status**: Draft  
 **Input**: Endpoint HTTP para monitoreo de noticias y análisis de sentimiento de stocks y crypto con alertas configurables vía Telegram y WhatsApp, usando Gemini para contexto y Binance opcional para precios de crypto
 
@@ -36,8 +37,26 @@ When the news analysis detects a significant market event or sentiment shift, th
 
 1. **Given** a significant market event is detected (e.g., BTCUSDT +8% with bullish news), **When** the analysis completes, **Then** alerts are sent to both `TELEGRAM_CHAT_ID` and `WHATSAPP_CHAT_ID` simultaneously
 2. **Given** one notification channel fails (e.g., WhatsApp API temporarily unavailable), **When** sending occurs, **Then** the other channel (Telegram) still receives the alert and the response indicates partial success
-3. **Given** an alert is formatted for delivery, **When** it's sent to Telegram, **Then** it includes formatted context with symbol, price, sentiment score, and news sources
-4. **Given** an alert is formatted for delivery, **When** it's sent to WhatsApp, **Then** it includes the same information in WhatsApp-compatible format
+3. **Given** an alert is formatted for delivery, **When** it's sent to Telegram, **Then** it includes formatted context with symbol, price, sentiment score, and news sources (URLs as inline markdown links)
+4. **Given** an alert is formatted for delivery, **When** it's sent to WhatsApp, **Then** it includes the same information in WhatsApp-compatible format with source URLs shortened to user-friendly links
+
+---
+
+### User Story 2b - WhatsApp Source URL Shortening (Priority: P2)
+
+When sending alerts to WhatsApp with enriched citations, the system MUST shorten long source URLs (which can exceed 100+ characters each from Google's redirect wrappers) to manageable, friendly short URLs. This preserves link information in WhatsApp messages while keeping message size under the 20K character limit.
+
+**Why this priority**: Current implementation strips URLs entirely from WhatsApp messages, losing valuable source attribution. URL shortening enables traders to verify alert sources while keeping messages readable and within transmission limits. Bitly provides industry-standard URL shortening with reliable link generation.
+
+**Independent Test**: Can be fully tested by sending an alert with enriched citations to WhatsApp and verifying that each source URL is shortened (e.g., from 150+ chars to ~30 chars) and appears in the format "Title (short-url)" in the message. Verify fallback behavior when Bitly is unavailable.
+
+**Acceptance Scenarios**:
+
+1. **Given** an alert is enriched with citations from Google GoogleSearch (which returns long redirect URLs like "https://vertexaisearch.cloud.google.com/grounding-api-redirect/..."), **When** formatting for WhatsApp, **Then** each URL is shortened to a user-friendly format (e.g., "https://bit.ly/abc123") via Bitly API
+2. **Given** Bitly URL shortening succeeds, **When** the alert is sent to WhatsApp, **Then** the message includes formatted citations like "Reuters (https://bit.ly/abc1) / CoinDesk (https://bit.ly/def4)" instead of stripping URLs entirely
+3. **Given** Bitly API call fails, times out, or is rate-limited, **When** shortening is attempted, **Then** the system gracefully falls back to using the title only (current behavior: "Reuters / CoinDesk") and logs a warning at INFO level; alert delivery is NOT blocked
+4. **Given** multiple citations are included in an alert, **When** shortening occurs, **Then** all URLs are shortened in parallel via in-memory queue to minimize latency impact; per-symbol 30s analysis budget is not exceeded (URL shortening adds <1s per citation in typical case)
+5. **Given** an in-memory cache of shortened URLs is maintained, **When** the same source URL is encountered in a second alert (within session lifetime), **Then** the cached short URL is reused without making another Bitly API call (reduces API quota consumption)
 
 ---
 
@@ -113,7 +132,7 @@ When `ENABLE_LLM_ALERT_ENRICHMENT=true`, the system can invoke an optional secon
 ### Edge Cases
 
 - **Invalid symbol format**: System validates that symbols are non-empty strings (max 20 chars). Invalid symbols are passed to external APIs (Binance/Gemini) and returned as per-symbol status "error"; entire request is never rejected at HTTP level.
-- **API timeouts (Binance, Gemini, Telegram, WhatsApp)**: Handled by `retryHelper.sendWithRetry()` with 3 retries and exponential backoff. If all retries fail, per-symbol result includes status "error" with timeout message. Notification channel failures do not block response (partial_success flag indicates mixed outcomes).
+- **API timeouts (Binance, Gemini, Telegram, WhatsApp, Bitly)**: Handled by `retryHelper.sendWithRetry()` with 3 retries and exponential backoff. If all retries fail, per-symbol result includes status "error" with timeout message. Notification channel failures do not block response (partial_success flag indicates mixed outcomes). Bitly failures do not block WhatsApp delivery (graceful fallback to title-only citations).
 - **Symbol duplication across request**: If same symbol appears in multiple arrays or multiple times, Gemini/Binance will return errors for misclassified symbols; no special deduplication needed.
 - **NEWS_ALERT_THRESHOLD set to extreme values** (e.g., 0.99): System correctly filters; alerts with confidence <0.99 are not sent. Response still includes analyzed results with their confidence scores so requester can audit filtering.
 - **NEWS_CACHE_TTL_HOURS set to 0**: System allows constant re-analysis (treated as no cache). Each call will trigger fresh Gemini analysis.
@@ -125,6 +144,10 @@ When `ENABLE_LLM_ALERT_ENRICHMENT=true`, the system can invoke an optional secon
 - **Secondary LLM enrichment timeout (per symbol)**: If enrichment exceeds timeout budget (default: 10s per LLM call), system logs timeout and uses Gemini score without enrichment for that alert.
 - **Secondary LLM enrichment partially fails**: If enrichment succeeds for some symbols and fails for others, batch processing continues; affected alerts use Gemini scores; response indicates partial enrichment success.
 - **Enrichment cache hit on second call**: If same symbol with same event_category is re-analyzed within cache TTL, both primary analysis and enrichment results are returned from cache without redundant API calls.
+- **Bitly URL shortening rate limit**: After Bitly API rate limit is hit, system gracefully falls back to title-only citations for subsequent alerts and logs warning. Does not block alert delivery. Session-level cache prevents redundant Bitly calls.
+- **Bitly API returns invalid short URL format**: System validates response format and falls back to title-only citation if unexpected format received. Logs error at WARN level.
+- **URL cache accumulation**: In-memory URL cache grows with each unique source URL. Cache is session-scoped (resets on bot restart). For long-running sessions, cache may accumulate hundreds of entries (~50KB memory typical); acceptable for MVP. Phase 2 can add TTL-based eviction or Redis backing.
+- **Very long source titles from Google Search**: If enriched citation title exceeds 100 chars, system truncates to 50 chars + "..." before formatting. Shortened URL still included. Prevents excessively long message lines.
 
 ## Requirements *(mandatory)*
 
@@ -145,21 +168,25 @@ When `ENABLE_LLM_ALERT_ENRICHMENT=true`, the system can invoke an optional secon
 - **FR-013**: System MUST return a JSON response containing per-symbol results with status (analyzed/cached/timeout/error), detected alerts, notification delivery results, and metadata (totalDurationMs, cached, requestId). If some symbols timeout and others complete, response includes both completed results (status: "analyzed") and timeout results (status: "timeout") with HTTP 200 OK and "partial_success" flag.
 - **FR-014**: System MUST be feature-gated behind the `ENABLE_NEWS_MONITOR` environment variable (default: false) for safe rollout
 - **FR-015**: System MUST use the existing grounding service to contextualize alerts with extracted news sources, summaries, and citations
-- **FR-016**: System MUST format alerts for each notification channel using existing formatters: MarkdownV2 for Telegram, WhatsApp-compatible format for WhatsApp
-- **FR-017**: System MUST handle and gracefully log errors from external API calls (Gemini, Binance, Telegram, WhatsApp, optional secondary LLM) without stopping the entire monitoring flow. All external API calls MUST use `retryHelper.sendWithRetry()` with 3 retries and exponential backoff (see FR-018).
-- **FR-018**: System MUST retry transient API failures using exponential backoff: Binance (3 retries, ~5s timeout), Gemini (3 retries, ~20s timeout), optional secondary LLM enrichment (3 retries, ~10s timeout), Telegram/WhatsApp (3 retries, ~10s timeout). Per-symbol 30s budget accounts for worst-case retry scenarios. Secondary LLM enrichment is independent and does not block alert delivery if it fails.
+- **FR-016**: System MUST format alerts for each notification channel using existing formatters: MarkdownV2 for Telegram (with inline markdown links), WhatsApp-compatible format for WhatsApp (with shortened URLs via Bitly)
+- **FR-017**: System MUST handle and gracefully log errors from external API calls (Gemini, Binance, Telegram, WhatsApp, optional secondary LLM, Bitly) without stopping the entire monitoring flow. All external API calls MUST use `retryHelper.sendWithRetry()` with 3 retries and exponential backoff (see FR-018).
+- **FR-018**: System MUST retry transient API failures using exponential backoff: Binance (3 retries, ~5s timeout), Gemini (3 retries, ~20s timeout), optional secondary LLM enrichment (3 retries, ~10s timeout), Telegram/WhatsApp (3 retries, ~10s timeout), Bitly URL shortening (3 retries, ~5s timeout). Per-symbol 30s budget accounts for worst-case retry scenarios. Secondary LLM enrichment and Bitly shortening are independent and do not block alert delivery if they fail.
 - **FR-019**: System MUST support optional secondary LLM enrichment via `ENABLE_LLM_ALERT_ENRICHMENT` environment variable (default: false). When enabled, secondary LLM receives grounding results and returns refined confidence, reasoning, and recommended action. Implementation details deferred to feature 004-llm-alert-enrichment.
 - **FR-020**: System MUST apply conservative confidence selection when enrichment is applied: use minimum of (Gemini confidence, Secondary LLM confidence) to prevent false positives from LLM hallucination. Gemini-only analysis is used if enrichment is disabled or unavailable.
 - **FR-021**: System MUST implement verbose structured logging for operational visibility: log each external API call (Gemini, Binance, Telegram, WhatsApp) with request/response summaries at DEBUG/INFO level. Include per-symbol analysis timing, cache hits, enrichment decisions, and retry attempts. Log format should support easy parsing for Phase 2 Datadog integration. All errors, retries, and timeouts MUST be logged at WARN/ERROR level with correlation IDs (requestId) for audit trails.
+- **FR-022**: System MUST shorten source URLs when formatting alerts for WhatsApp using Bitly API (via `prettylink` npm package). Configuration: `BITLY_API_KEY` environment variable. When enabled (key provided), all citations in enriched alerts are shortened before sending to WhatsApp. Shortened URLs are cached in-memory (session-scoped) to reduce redundant API calls for duplicate sources. If Bitly API call fails, times out, or rate-limit is hit, system gracefully falls back to title-only citations (current behavior) without blocking WhatsApp delivery. Bitly failures are logged at INFO level.
+- **FR-023**: System MUST implement in-memory URL shortening cache (session-scoped) to store mapping of original URLs → shortened URLs. Cache prevents redundant Bitly API calls when same source appears in multiple alerts. Cache grows with unique sources; acceptable for MVP. Phase 2 can add TTL-based eviction or Redis backing. Cache is keyed by original URL, value is `{ shortUrl, timestamp, expiresAt }` (optional TTL).
+- **FR-024**: System MUST implement verbose structured logging for operational visibility: log each external API call (Gemini, Binance, Telegram, WhatsApp, Bitly) with request/response summaries at DEBUG/INFO level. Include per-symbol analysis timing, cache hits, enrichment decisions, URL shortening results, and retry attempts. Log format should support easy parsing for Phase 2 Datadog integration. All errors, retries, and timeouts MUST be logged at WARN/ERROR level with correlation IDs (requestId) for audit trails. Bitly errors should log at INFO level (graceful degradation, not fatal).
 
 ### Key Entities
 
-- **NewsAlert**: Represents a detected market event with symbol, headline, sentiment score, confidence, sources, and formatted message. Includes event_category (price_surge, price_decline, public_figure, regulatory). When enrichment is applied, includes original_confidence, enriched_confidence, reasoning_excerpt, and recommended_action.
+- **NewsAlert**: Represents a detected market event with symbol, headline, sentiment score, confidence, sources, and formatted message. Includes event_category (price_surge, price_decline, public_figure, regulatory). When enrichment is applied, includes original_confidence, enriched_confidence, reasoning_excerpt, and recommended_action. For WhatsApp delivery, sources include shortened URLs (if Bitly available) or titles only (fallback).
 - **MarketContext**: Encapsulates price data (current, 24h change, volume) sourced from Binance or Gemini.
 - **CacheEntry**: In-memory record of analyzed news with timestamp and TTL for deduplication. Key is (symbol, event_category). When enrichment is enabled, also caches enrichment results to prevent redundant secondary LLM calls.
 - **AnalysisResult**: Container for per-symbol analysis output including alert, status, delivery results, totalDurationMs, cached flag, requestId, and optional enrichment metadata (when enrichment is enabled).
 - **ErrorResult**: Per-symbol error container with status "error", error code, and error message (returned for invalid symbols or API failures, not as HTTP-level rejection).
 - **EnrichmentMetadata**: Optional alert metadata wrapper (when `ENABLE_LLM_ALERT_ENRICHMENT=true`) including original_confidence, enriched_confidence, enrichment_applied, reasoning_excerpt, model_name, and processing_time_ms. Omitted when enrichment is disabled (backward compatible).
+- **URLShortenerCache**: In-memory session-scoped map storing original_url → shortened_url mappings. Keyed by original URL hash or full URL, value is `{ shortUrl: string, timestamp: number, attempts: number }`. No TTL in MVP; cache reset on bot restart.
 
 ## Success Criteria *(mandatory)*
 
@@ -178,10 +205,20 @@ When `ENABLE_LLM_ALERT_ENRICHMENT=true`, the system can invoke an optional secon
 - **SC-011**: All three event detection categories (price_surge, price_decline, public_figure, regulatory) are correctly identified, scored, and included in alerts when Gemini analysis detects them
 - **SC-012**: When secondary LLM enrichment is enabled (`ENABLE_LLM_ALERT_ENRICHMENT=true`), enriched alerts have confidence scores that are conservative (≤ original Gemini confidence) to prevent false positives. Enrichment succeeds in 95% of cases; failures gracefully fall back to Gemini-only analysis.
 - **SC-013**: When secondary LLM enrichment is disabled or unavailable, alert generation latency and quality are identical to Gemini-only analysis (backward compatible)
-- **SC-014**: Verbose logging is enabled: 100% of external API calls (Gemini, Binance, Telegram, WhatsApp) are logged with request/response summaries. Per-symbol timing, cache hits, enrichment decisions, and retry attempts are captured in structured logs. All errors and timeouts include correlation IDs (requestId) for traceability.
+- **SC-014**: Verbose logging is enabled: 100% of external API calls (Gemini, Binance, Telegram, WhatsApp, Bitly) are logged with request/response summaries. Per-symbol timing, cache hits, enrichment decisions, URL shortening results, and retry attempts are captured in structured logs. All errors and timeouts include correlation IDs (requestId) for traceability.
 - **SC-015**: Gemini prompt strategy supports graceful degradation: Preferred structured JSON responses are validated and parsed correctly in 95%+ of calls. Free-form fallback parsing succeeds in 90%+ of degraded cases (when Gemini returns unstructured text). System continues processing without blocking either way.
+- **SC-016**: WhatsApp URL shortening (via Bitly) reduces average message size from 25K characters (with long redirect URLs) to <10K characters (with shortened URLs), improving WhatsApp delivery reliability and reducing truncation
+- **SC-017**: 90% of Bitly URL shortening requests succeed within 2 seconds (retried up to 3 times on failure). URLs are cached in-memory to reduce redundant API calls. Bitly failures gracefully fall back to title-only citations without blocking WhatsApp delivery.
+- **SC-018**: URL shortening cache prevents redundant Bitly API calls: 80%+ of source URLs in sequential alerts are cache hits, reducing API quota consumption by ~75% in typical scenarios
+- **SC-019**: Shortened URLs appear in WhatsApp messages in user-friendly format: "Title (https://bit.ly/abc123)" instead of current format (title only) or problematic format (long redirect URL)
 
 ## Clarifications
+
+### Session 2025-11-01 (URL Shortening Feature)
+
+- **Q1: URL Shortening Library & API** → A: Use Bitly API. Configuration via `BITLY_API_KEY` environment variable. When key is provided, all citations in WhatsApp enriched alerts are shortened. If Bitly unavailable or rate-limited, gracefully fall back to title-only citations without blocking delivery.
+- **Q2: URL Extraction & Caching Strategy** → A: Do NOT attempt to extract destination domain from Google's redirect wrapper URLs. Use full redirect URL as-is (Bitly handles extraction). Maintain in-memory session-scoped cache keyed by original URL, value is shortened URL. Cache resets on bot restart. Prevents redundant Bitly calls for duplicate sources.
+- **Q3: Cache Storage & Persistence** → A: In-memory only (session-scoped). No Redis or persistent storage in MVP. Cache stored in simple Map or object in WhatsAppService or URL shortener utility. Acceptable for MVP; Phase 2 can add Redis if needed for distributed bot instances or longer-running processes.
 
 ### Session 2025-10-30 (Speckit Clarification - Interactive)
 
@@ -221,9 +258,10 @@ When `ENABLE_LLM_ALERT_ENRICHMENT=true`, the system can invoke an optional secon
 - **Confidence scoring uses weighted formula**: `confidence = (0.6 × event_significance + 0.4 × |sentiment|)` where event_significance reflects price movement magnitude, source credibility, mention frequency; sentiment ranges -1.0 to +1.0
 - **Requester is responsible for correct symbol classification** (crypto symbols in crypto array, stocks in stocks array); system does not re-validate or cross-check classifications
 - **Gemini prompts are sophisticated enough to detect all three event categories** (price movements, public figures, regulatory); implementation will refine exact prompts and scoring weights
-- **Retry logic reuses existing `retryHelper.sendWithRetry()`**: 3 retries with exponential backoff for Binance (~5s), Gemini (~20s), optional LLM enrichment (~10s), Telegram/WhatsApp (~10s). Per-symbol 30s budget is sufficient for worst-case scenarios
+- **Retry logic reuses existing `retryHelper.sendWithRetry()`**: 3 retries with exponential backoff for Binance (~5s), Gemini (~20s), optional LLM enrichment (~10s), Telegram/WhatsApp (~10s), Bitly (~5s). Per-symbol 30s budget is sufficient for worst-case scenarios.
 - **Response metadata includes**: totalDurationMs (per symbol), cached flag (deduplication indicator), requestId (operational tracing). External callers can use these for debugging and transparency
 - **Format validation is lenient**: Invalid symbols are detected by external APIs, not rejected upfront; entire request is never rejected at HTTP level (format errors return per-symbol status "error")
-- **Optional secondary LLM enrichment**: Controlled via `ENABLE_LLM_ALERT_ENRICHMENT` environment variable (default: false). When enabled, secondary LLM refines Gemini results but system remains functional if enrichment is unavailable. Conservative confidence selection (minimum of Gemini + LLM scores) prevents false positives from LLM hallucination.
-- **Backward compatibility**: When enrichment is disabled or unavailable, system behaves identically to Gemini-only analysis. Response format supports optional enrichment metadata for forward compatibility.
+- **Bitly API is available** when `BITLY_API_KEY` is configured; graceful fallback to title-only citations if unavailable
+- **URL shortening cache is session-scoped**: In-memory only, resets on bot restart. No persistence across deployments. Acceptable for MVP; Phase 2 can add Redis backing if distributed bot instances need shared cache
+- **prettylink npm package** correctly wraps Bitly API and returns `{ link: "https://bit.ly/..." }` format; error handling gracefully falls back to original behavior
 

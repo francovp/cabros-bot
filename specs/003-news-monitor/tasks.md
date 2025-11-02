@@ -98,6 +98,32 @@
 
 ---
 
+## Phase 4b: User Story 2b - WhatsApp Source URL Shortening (Priority: P2)
+
+**Goal**: Shorten source URLs in WhatsApp alerts using Bitly API to reduce message size from ~25K chars to <10K chars while preserving source attribution
+
+**Why this story**: Current implementation strips URLs entirely from WhatsApp messages. URL shortening enables traders to verify alert sources while keeping messages readable and within transmission limits. Bitly provides industry-standard URL shortening with reliable link generation.
+
+**Independent Test**: Send an alert with enriched citations to WhatsApp and verify each source URL is shortened (e.g., from 150+ chars to ~30 chars) and appears in format "Title (short-url)". Verify fallback behavior when Bitly is unavailable.
+
+### Integration Tests for User Story 2b
+
+- [ ] T025 [P] [US2b] Create integration test for URL shortening with fallback in tests/integration/news-monitor-url-shortening.test.js (test Bitly success, timeout fallback, cache hits, graceful degradation)
+
+### Implementation for User Story 2b
+
+- [ ] T026 [US2b] Create URL shortener utility module in src/controllers/webhooks/handlers/newsMonitor/urlShortener.js (implement shortenUrl, shortenUrlsParallel functions with Bitly API integration)
+- [ ] T027 [US2b] Implement in-memory URL cache (session-scoped) in src/controllers/webhooks/handlers/newsMonitor/urlShortener.js (Map-based cache keyed by original URL, prevents redundant Bitly calls)
+- [ ] T028 [US2b] Integrate URL shortening into WhatsAppService formatter in src/services/notification/formatters/whatsappMarkdownFormatter.js (call shortenUrlsParallel for enriched citations, fallback to title-only on failure)
+- [ ] T029 [US2b] Add Bitly configuration validation in index.js (check BITLY_API_KEY presence, log if shortening disabled)
+- [ ] T030 [US2b] Add npm dependency for prettylink package in package.json (Bitly wrapper for URL shortening)
+
+**Checkpoint**: User Story 2b complete - WhatsApp messages now include shortened source URLs; graceful fallback to title-only if Bitly unavailable
+
+
+
+---
+
 ## Phase 5: User Story 3 - System Avoids Duplicate Alerts for Same News (Priority: P2)
 
 **Goal**: Implement intelligent cache mechanism that prevents duplicate alerts for the same (symbol, event_category) within TTL window (default: 6 hours)
@@ -106,17 +132,17 @@
 
 ### Integration Tests for User Story 3
 
-- [ ] T025 [P] [US3] Create integration test for cache deduplication in tests/integration/news-monitor-cache.test.js (test cache hit, cache miss after TTL, different event categories)
-- [ ] T026 [P] [US3] Create unit test for cache module in tests/unit/cache.test.js (test TTL enforcement, cleanup, key generation)
+- [ ] T031 [P] [US3] Create integration test for cache deduplication in tests/integration/news-monitor-cache.test.js (test cache hit, cache miss after TTL, different event categories)
+- [ ] T032 [P] [US3] Create unit test for cache module in tests/unit/cache.test.js (test TTL enforcement, cleanup, key generation)
 
 ### Implementation for User Story 3
 
-- [ ] T027 [US3] Implement cache key generation (symbol:event_category format) in src/controllers/webhooks/handlers/newsMonitor/cache.js
-- [ ] T028 [US3] Implement cache.get() with TTL check in src/controllers/webhooks/handlers/newsMonitor/cache.js
-- [ ] T029 [US3] Implement cache.set() for storing analysis results in src/controllers/webhooks/handlers/newsMonitor/cache.js
-- [ ] T030 [US3] Implement cache.cleanup() with periodic setInterval (every 1 hour) in src/controllers/webhooks/handlers/newsMonitor/cache.js
-- [ ] T031 [US3] Integrate cache check before analysis in src/controllers/webhooks/handlers/newsMonitor/analyzer.js (check cache, return cached result if valid)
-- [ ] T032 [US3] Initialize cache on app startup in index.js (after bot launch, before registering routes). **Note**: Cache stores both primary analysis (Gemini) and optional enrichment results (when `ENABLE_LLM_ALERT_ENRICHMENT=true`) under the same `(symbol, event_category)` key with same TTL. This prevents redundant API calls to both Gemini and secondary LLM for duplicate events. If enrichment fails, original Gemini analysis is cached; enrichment retry only occurs after cache entry expires.
+- [ ] T033 [US3] Implement cache key generation (symbol:event_category format) in src/controllers/webhooks/handlers/newsMonitor/cache.js
+- [ ] T034 [US3] Implement cache.get() with TTL check in src/controllers/webhooks/handlers/newsMonitor/cache.js
+- [ ] T035 [US3] Implement cache.set() for storing analysis results in src/controllers/webhooks/handlers/newsMonitor/cache.js
+- [ ] T036 [US3] Implement cache.cleanup() with periodic setInterval (every 1 hour) in src/controllers/webhooks/handlers/newsMonitor/cache.js
+- [ ] T037 [US3] Integrate cache check before analysis in src/controllers/webhooks/handlers/newsMonitor/analyzer.js (check cache, return cached result if valid)
+- [ ] T038 [US3] Initialize cache on app startup in index.js (after bot launch, before registering routes). **Note**: Cache stores both primary analysis (Gemini) and optional enrichment results (when `ENABLE_LLM_ALERT_ENRICHMENT=true`) under the same `(symbol, event_category)` key with same TTL. This prevents redundant API calls to both Gemini and secondary LLM for duplicate events. If enrichment fails, original Gemini analysis is cached; enrichment retry only occurs after cache entry expires.
 
 **Checkpoint**: At this point, User Stories 1, 2, AND 3 should all work - duplicate alerts are prevented, cached results are returned quickly
 
@@ -316,26 +342,28 @@ With multiple developers (after Foundational phase completes):
 
 ## Task Summary
 
-- **Total Tasks**: 56
+- **Total Tasks**: 62 (updated with User Story 2b)
 - **Setup Tasks**: 4 (Phase 1)
 - **Foundational Tasks**: 7 (Phase 2) - **BLOCKS all user stories**
 - **User Story 1 (P1)**: 8 tasks (2 tests + 6 implementation)
 - **User Story 2 (P1)**: 4 tasks (1 test + 3 implementation)
-- **User Story 3 (P2)**: 6 tasks (2 tests + 4 implementation)
+- **User Story 2b (P2)**: 6 tasks (1 test + 5 implementation) - **NEW: URL shortening for WhatsApp**
+- **User Story 3 (P2)**: 8 tasks (2 tests + 6 implementation)
 - **User Story 4 (P2)**: 4 tasks (1 test + 3 implementation)
 - **User Story 5 (P3)**: 4 tasks (0 tests + 4 implementation)
-- **User Story 6 (P2)**: 5 tasks (2 tests + 3 implementation)
+- **User Story 6 (P2)**: 7 tasks (2 tests + 5 implementation)
 - **Polish Tasks**: 8 (Phase 9)
 
 **MVP Scope (US1 + US2)**: 23 tasks  
-**Recommended First Release**: MVP + US3 (deduplication) = 29 tasks  
-**Full Feature**: All 56 tasks
+**Recommended First Release**: MVP + US2b (URL shortening) + US3 (deduplication) = 37 tasks  
+**Full Feature**: All 62 tasks
 
-**Parallel Opportunities**: 16 tasks marked [P] can run in parallel within their phases
+**Parallel Opportunities**: 17 tasks marked [P] can run in parallel within their phases
 
 **Independent Test Criteria**:
 - ✅ US1: Call endpoint with symbols, verify per-symbol results
 - ✅ US2: Trigger alert, verify both Telegram + WhatsApp receive message
+- ✅ US2b: Send enriched alert to WhatsApp, verify URLs are shortened via Bitly; verify fallback when unavailable
 - ✅ US3: Call endpoint twice within TTL, verify cached result
 - ✅ US4: Enable Binance, verify source="binance"; force timeout, verify source="gemini"
 - ✅ US5: Inject known event types, verify correct category and confidence
