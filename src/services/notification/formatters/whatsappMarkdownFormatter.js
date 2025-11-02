@@ -56,9 +56,11 @@ class WhatsAppMarkdownFormatter {
   /**
    * @param {Object} config - Configuration object
    * @param {Object} config.logger - Logger for conversion tracking (optional)
+   * @param {Object} config.urlShortener - URL shortener instance for Bitly integration (optional)
    */
   constructor(config = {}) {
     this.logger = config.logger || null;
+    this.urlShortener = config.urlShortener || null;
   }
 
   /**
@@ -95,7 +97,18 @@ class WhatsAppMarkdownFormatter {
    * @param {Object} enriched - Enriched alert object
    * @returns {string} Formatted message with bold text and sources
    */
-  formatEnriched(enriched = {}) {
+  /**
+   * Format enriched alert for WhatsApp with optional URL shortening for citations
+   * @async
+   * @param {Object} enriched - Enriched alert object with citations
+   * @param {string} enriched.originalText - Original alert text
+   * @param {string} enriched.summary - AI-generated summary
+   * @param {Array<{title: string, url: string}>} enriched.citations - Source citations with URLs
+   * @param {string} enriched.extraText - Additional text/metadata
+   * @param {boolean} enriched.truncated - Whether message was truncated
+   * @returns {Promise<string>} Formatted WhatsApp message
+   */
+  async formatEnriched(enriched = {}) {
     const { originalText = '', summary = '', citations = [], extraText = '', truncated = false } = enriched;
 
     // Unescape MarkdownV2 sequences
@@ -103,24 +116,49 @@ class WhatsAppMarkdownFormatter {
     const unescapedSummary = summary.replace(/\\([_*[\]()~`>#+\-=|{}.!])/g, '$1');
     const unescapedExtraText = extraText.replace(/\\([_*[\]()~`>#+\-=|{}.!])/g, '$1');
 
-    // Format citations: strip links to plain text (WhatsApp doesn't support inline links well)
+    // Format citations: attempt URL shortening via Bitly, fallback to title-only on failure
     let formattedSources = '';
-    let strippedLinks = 0;
-    citations.forEach(({ title = '', url = '' }) => {
-      // Strip markdown escaping from title
-      const cleanTitle = title.replace(/\\([_*[\]()~`>#+\-=|{}.!])/g, '$1');
-      if (formattedSources) {
-        formattedSources += ' / ';
-      }
-      formattedSources += cleanTitle; // Drop URL, just use title as plain text
-      strippedLinks++;
-    });
+    let shortenedUrls = 0;
+    let failedShortening = 0;
 
-    // Log stripped formats
-    if (strippedLinks > 0 && this.logger) {
-      this.logger.debug?.(
-        `WhatsApp formatter: Stripped ${strippedLinks} link(s) from citations (WhatsApp doesn't support inline links)`
-      );
+    if (citations.length > 0) {
+      // Extract URLs for shortening if URL shortener is available
+      const urls = citations.map(c => c.url).filter(url => url && (url.startsWith('http://') || url.startsWith('https://')));
+      
+      let shortenedMap = {};
+      if (this.urlShortener && urls.length > 0) {
+        try {
+          // Call shortenUrlsParallel to shorten all URLs at once
+          shortenedMap = await this.urlShortener.shortenUrlsParallel(urls);
+          shortenedUrls = Object.keys(shortenedMap).length;
+        } catch (error) {
+          // Log shortening failure but don't block message delivery
+          if (this.logger) {
+            this.logger.warn?.(`WhatsApp formatter: URL shortening failed, falling back to title-only: ${error.message}`);
+          }
+          failedShortening = urls.length;
+        }
+      }
+
+      // Build formatted sources with shortened URLs or title-only fallback
+      citations.forEach(({ title = '', url = '' }) => {
+        const cleanTitle = title.replace(/\\([_*[\]()~`>#+\-=|{}.!])/g, '$1');
+        if (formattedSources) {
+          formattedSources += ' / ';
+        }
+
+        // Try to use shortened URL if available, otherwise just title
+        if (shortenedMap[url]) {
+          formattedSources += `${cleanTitle} (${shortenedMap[url]})`;
+        } else {
+          formattedSources += cleanTitle;
+        }
+      });
+
+      // Log shortening results
+      if ((shortenedUrls > 0 || failedShortening > 0) && this.logger) {
+        this.logger.debug?.(`WhatsApp formatter: Shortened ${shortenedUrls} URL(s), failed: ${failedShortening}`);
+      }
     }
 
     // Build the message

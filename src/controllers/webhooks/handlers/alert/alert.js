@@ -5,6 +5,7 @@ const MarkdownV2Formatter = require('../../../../services/notification/formatter
 const TelegramService = require('../../../../services/notification/TelegramService');
 const WhatsAppService = require('../../../../services/notification/WhatsAppService');
 const NotificationManager = require('../../../../services/notification/NotificationManager');
+const { getURLShortener } = require('../../handlers/newsMonitor/urlShortener');
 
 // Initialize services
 let notificationManager = null;
@@ -23,6 +24,7 @@ async function initializeNotificationServices(bot) {
 
   const whatsappService = new WhatsAppService({
     logger: console,
+    urlShortener: getURLShortener(),
   });
 
   notificationManager = new NotificationManager(telegramService, whatsappService);

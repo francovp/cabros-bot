@@ -23,7 +23,8 @@ class WhatsAppService extends NotificationChannel {
     this.apiUrl = config.apiUrl || process.env.WHATSAPP_API_URL;
     this.apiKey = config.apiKey || process.env.WHATSAPP_API_KEY;
     this.chatId = config.chatId || process.env.WHATSAPP_CHAT_ID;
-    this.formatter = config.formatter || new WhatsAppMarkdownFormatter();
+    this.urlShortener = config.urlShortener || null;
+    this.formatter = config.formatter || new WhatsAppMarkdownFormatter({ urlShortener: this.urlShortener });
     this.logger = config.logger;
     this.enabled = false;
   }
@@ -84,10 +85,10 @@ class WhatsAppService extends NotificationChannel {
   async _sendSingle(alert) {
     try {
       // Format message for WhatsApp
-      // If enriched is an object, use formatEnriched, otherwise format the text
+      // If enriched is an object, use formatEnriched (async with URL shortening), otherwise format the text
       let formattedText;
       if (alert.enriched && typeof alert.enriched === 'object') {
-        formattedText = this.formatter.formatEnriched(alert.enriched);
+        formattedText = await this.formatter.formatEnriched(alert.enriched);
       } else {
         formattedText = this.formatter.format(alert.enriched || alert.text);
       }
