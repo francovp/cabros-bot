@@ -108,15 +108,15 @@
 
 ### Integration Tests for User Story 2b
 
-- [ ] T025 [P] [US2b] Create integration test for URL shortening with fallback in tests/integration/news-monitor-url-shortening.test.js (test Bitly success, timeout fallback, cache hits, graceful degradation)
+- [x] T025 [P] [US2b] Create integration test for URL shortening with fallback in tests/integration/news-monitor-url-shortening.test.js (test Bitly success, timeout fallback, cache hits, graceful degradation)
 
 ### Implementation for User Story 2b
 
-- [ ] T026 [US2b] Create URL shortener utility module in src/controllers/webhooks/handlers/newsMonitor/urlShortener.js (implement shortenUrl, shortenUrlsParallel functions with Bitly API integration)
-- [ ] T027 [US2b] Implement in-memory URL cache (session-scoped) in src/controllers/webhooks/handlers/newsMonitor/urlShortener.js (Map-based cache keyed by original URL, prevents redundant Bitly calls)
-- [ ] T028 [US2b] Integrate URL shortening into WhatsAppService formatter in src/services/notification/formatters/whatsappMarkdownFormatter.js (call shortenUrlsParallel for enriched citations, fallback to title-only on failure)
-- [ ] T029 [US2b] Add Bitly configuration validation in index.js (check BITLY_API_KEY presence, log if shortening disabled)
-- [ ] T030 [US2b] Add npm dependency for prettylink package in package.json (Bitly wrapper for URL shortening)
+- [x] T026 [US2b] Create URL shortener utility module in src/controllers/webhooks/handlers/newsMonitor/urlShortener.js (implement shortenUrl, shortenUrlsParallel functions with Bitly API integration)
+- [x] T027 [US2b] Implement in-memory URL cache (session-scoped) in src/controllers/webhooks/handlers/newsMonitor/urlShortener.js (Map-based cache keyed by original URL, prevents redundant Bitly calls)
+- [x] T028 [US2b] Integrate URL shortening into WhatsAppService formatter in src/services/notification/formatters/whatsappMarkdownFormatter.js (call shortenUrlsParallel for enriched citations, fallback to title-only on failure)
+- [x] T029 [US2b] Add Bitly configuration validation in index.js (check BITLY_API_KEY presence, log if shortening disabled)
+- [x] T030 [US2b] Add npm dependency for prettylink package in package.json (Bitly wrapper for URL shortening)
 
 **Checkpoint**: User Story 2b complete - WhatsApp messages now include shortened source URLs; graceful fallback to title-only if Bitly unavailable
 
@@ -132,17 +132,17 @@
 
 ### Integration Tests for User Story 3
 
-- [ ] T031 [P] [US3] Create integration test for cache deduplication in tests/integration/news-monitor-cache.test.js (test cache hit, cache miss after TTL, different event categories)
-- [ ] T032 [P] [US3] Create unit test for cache module in tests/unit/cache.test.js (test TTL enforcement, cleanup, key generation)
+- [x] T031 [P] [US3] Create integration test for cache deduplication in tests/integration/news-monitor-cache.test.js (test cache hit, cache miss after TTL, different event categories)
+- [x] T032 [P] [US3] Create unit test for cache module in tests/unit/cache.test.js (test TTL enforcement, cleanup, key generation)
 
 ### Implementation for User Story 3
 
-- [ ] T033 [US3] Implement cache key generation (symbol:event_category format) in src/controllers/webhooks/handlers/newsMonitor/cache.js
-- [ ] T034 [US3] Implement cache.get() with TTL check in src/controllers/webhooks/handlers/newsMonitor/cache.js
-- [ ] T035 [US3] Implement cache.set() for storing analysis results in src/controllers/webhooks/handlers/newsMonitor/cache.js
-- [ ] T036 [US3] Implement cache.cleanup() with periodic setInterval (every 1 hour) in src/controllers/webhooks/handlers/newsMonitor/cache.js
-- [ ] T037 [US3] Integrate cache check before analysis in src/controllers/webhooks/handlers/newsMonitor/analyzer.js (check cache, return cached result if valid)
-- [ ] T038 [US3] Initialize cache on app startup in index.js (after bot launch, before registering routes). **Note**: Cache stores both primary analysis (Gemini) and optional enrichment results (when `ENABLE_LLM_ALERT_ENRICHMENT=true`) under the same `(symbol, event_category)` key with same TTL. This prevents redundant API calls to both Gemini and secondary LLM for duplicate events. If enrichment fails, original Gemini analysis is cached; enrichment retry only occurs after cache entry expires.
+- [x] T033 [US3] Implement cache key generation (symbol:event_category format) in src/controllers/webhooks/handlers/newsMonitor/cache.js
+- [x] T034 [US3] Implement cache.get() with TTL check in src/controllers/webhooks/handlers/newsMonitor/cache.js
+- [x] T035 [US3] Implement cache.set() for storing analysis results in src/controllers/webhooks/handlers/newsMonitor/cache.js
+- [x] T036 [US3] Implement cache.cleanup() with periodic setInterval (every 1 hour) in src/controllers/webhooks/handlers/newsMonitor/cache.js
+- [x] T037 [US3] Integrate cache check before analysis in src/controllers/webhooks/handlers/newsMonitor/analyzer.js (check cache, return cached result if valid)
+- [x] T038 [US3] Initialize cache on app startup in index.js (after bot launch, before registering routes). **Note**: Cache stores both primary analysis (Gemini) and optional enrichment results (when `ENABLE_LLM_ALERT_ENRICHMENT=true`) under the same `(symbol, event_category)` key with same TTL. This prevents redundant API calls to both Gemini and secondary LLM for duplicate events. If enrichment fails, original Gemini analysis is cached; enrichment retry only occurs after cache entry expires.
 
 **Checkpoint**: At this point, User Stories 1, 2, AND 3 should all work - duplicate alerts are prevented, cached results are returned quickly
 
@@ -156,14 +156,14 @@
 
 ### Integration Tests for User Story 4
 
-- [ ] T033 [P] [US4] Create integration test for Binance integration with fallback in tests/integration/news-monitor-binance.test.js (test Binance success, timeout fallback, stock symbol skips Binance)
+- [x] T033 [P] [US4] Create integration test for Binance integration with fallback in tests/integration/news-monitor-binance.test.js (test Binance success, timeout fallback, stock symbol skips Binance)
 
 ### Implementation for User Story 4
 
-- [ ] T034 [US4] Implement getMarketContext() function with Binance/Gemini routing in src/controllers/webhooks/handlers/newsMonitor/analyzer.js (check isCrypto and ENABLE_BINANCE_PRICE_CHECK)
-- [ ] T035 [US4] Implement withTimeout() wrapper for Binance API calls (~5s) in src/controllers/webhooks/handlers/newsMonitor/analyzer.js
-- [ ] T036 [US4] Implement getGeminiPriceContext() fallback function in src/controllers/webhooks/handlers/newsMonitor/analyzer.js (call Gemini with price discovery prompt, ~20s timeout)
-- [ ] T037 [US4] Add MarketContext to NewsAlert in src/controllers/webhooks/handlers/newsMonitor/analyzer.js (include price, change24h, source, timestamp)
+- [x] T034 [US4] Implement getMarketContext() function with Binance/Gemini routing in src/controllers/webhooks/handlers/newsMonitor/analyzer.js (check isCrypto and ENABLE_BINANCE_PRICE_CHECK)
+- [x] T035 [US4] Implement withTimeout() wrapper for Binance API calls (~5s) in src/controllers/webhooks/handlers/newsMonitor/analyzer.js
+- [x] T036 [US4] Implement getGeminiPriceContext() fallback function in src/controllers/webhooks/handlers/newsMonitor/analyzer.js (call Gemini with price discovery prompt, ~20s timeout)
+- [x] T037 [US4] Add MarketContext to NewsAlert in src/controllers/webhooks/handlers/newsMonitor/analyzer.js (include price, change24h, source, timestamp)
 
 **Checkpoint**: At this point, User Stories 1-4 should all work - crypto prices are fetched from Binance when enabled, with reliable Gemini fallback
 
@@ -177,10 +177,10 @@
 
 ### Implementation for User Story 5
 
-- [ ] T038 [P] [US5] Create enhanced Gemini prompt template in src/services/grounding/config.js (NEWS_ANALYSIS_PROMPT with structured JSON format)
-- [ ] T039 [US5] Implement event detection logic with category classification in src/services/grounding/gemini.js (parse Gemini response, extract event_category, event_significance, sentiment_score)
-- [ ] T040 [US5] Implement fallback parsing for free-form Gemini responses in src/services/grounding/gemini.js (regex/NLP heuristics when JSON fails)
-- [ ] T041 [US5] Add validation for event detection response in src/lib/validation.js (validateNewsAnalysisResponse function)
+- [x] T038 [P] [US5] Create enhanced Gemini prompt template in src/services/grounding/config.js (NEWS_ANALYSIS_PROMPT with structured JSON format)
+- [x] T039 [US5] Implement event detection logic with category classification in src/services/grounding/gemini.js (parse Gemini response, extract event_category, event_significance, sentiment_score)
+- [x] T040 [US5] Implement fallback parsing for free-form Gemini responses in src/services/grounding/gemini.js (regex/NLP heuristics when JSON fails)
+- [x] T041 [US5] Add validation for event detection response in src/lib/validation.js (validateNewsAnalysisResponse function)
 
 **Checkpoint**: At this point, User Stories 1-5 should all work - system detects and categorizes different types of trading-relevant events
 
@@ -194,16 +194,16 @@
 
 ### Integration Tests for User Story 6
 
-- [ ] T042 [P] [US6] Create integration test for LLM enrichment with fallback in tests/integration/news-monitor-enrichment.test.js (test enrichment success, timeout fallback, disabled mode)
-- [ ] T043 [P] [US6] Create unit test for enrichment service in tests/unit/enrichment.test.js (test conservative confidence selection, error handling)
+- [x] T042 [P] [US6] Create integration test for LLM enrichment with fallback in tests/integration/news-monitor-enrichment.test.js (test enrichment success, timeout fallback, disabled mode)
+- [x] T043 [P] [US6] Create unit test for enrichment service in tests/unit/enrichment.test.js (test conservative confidence selection, error handling)
 
 ### Implementation for User Story 6
 
-- [ ] T044 [US6] Implement enrichAlert() function in src/services/inference/enrichmentService.js (call Azure AI with Gemini results, parse response, return EnrichmentMetadata)
-- [ ] T045 [US6] Implement conservative confidence selection in src/services/inference/enrichmentService.js (Math.min(geminiConfidence, llmConfidence))
-- [ ] T046 [US6] Add enrichment call with timeout (~10s) in src/controllers/webhooks/handlers/newsMonitor/analyzer.js (wrap with sendWithRetry, 3 retries)
-- [ ] T047 [US6] Add enrichmentMetadata to NewsAlert response in src/controllers/webhooks/handlers/newsMonitor/analyzer.js (original_confidence, enriched_confidence, reasoning_excerpt, model_name, processing_time_ms)
-- [ ] T048 [US6] Implement graceful fallback when enrichment disabled or fails in src/controllers/webhooks/handlers/newsMonitor/analyzer.js (log error, continue with Gemini confidence)
+- [x] T044 [US6] Implement enrichAlert() function in src/services/inference/enrichmentService.js (call Azure AI with Gemini results, parse response, return EnrichmentMetadata)
+- [x] T045 [US6] Implement conservative confidence selection in src/services/inference/enrichmentService.js (Math.min(geminiConfidence, llmConfidence))
+- [x] T046 [US6] Add enrichment call with timeout (~10s) in src/controllers/webhooks/handlers/newsMonitor/analyzer.js (wrap with sendWithRetry, 3 retries)
+- [x] T047 [US6] Add enrichmentMetadata to NewsAlert response in src/controllers/webhooks/handlers/newsMonitor/analyzer.js (original_confidence, enriched_confidence, reasoning_excerpt, model_name, processing_time_ms)
+- [x] T048 [US6] Implement graceful fallback when enrichment disabled or fails in src/controllers/webhooks/handlers/newsMonitor/analyzer.js (log error, continue with Gemini confidence)
 
 **Checkpoint**: At this point, ALL user stories should work - optional LLM enrichment refines confidence when enabled, falls back gracefully when disabled or unavailable
 
