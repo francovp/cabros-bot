@@ -287,6 +287,47 @@ The system provides an HTTP endpoint (`/api/news-monitor`) that analyzes financi
 - In-memory Map cache for news deduplication with TTL (003-news-monitor, no external storage)
 - Binance API client for precise crypto prices (003-news-monitor, optional fallback to Gemini GoogleSearch)
 
+## Terminology Guide: Grounding vs Enrichment
+
+The system uses two complementary terms with specific meanings:
+
+### **Grounding** (Technical Term)
+- Refers to **Google's Grounding Tools API** and GoogleSearch integration
+- Used in internal service architecture: `/src/services/grounding/`
+- Implementation detail: how we fetch verified sources and context
+- Example: `ENABLE_GEMINI_GROUNDING` env var, `groundingService.enrich()` method
+
+### **Enrichment** (User-Facing Term)
+- Refers to the **user value delivered**: alerts enhanced with context and sources
+- Used in alerts, documentation, and user messaging
+- Business concept: traders receive enriched data for better decisions
+- Example: `alert.enriched` data structure, "enriched alerts" in README
+
+### Key Mapping
+
+| Feature | Technical Service | User Benefit | Env Var |
+|---------|-------------------|--------------|---------|
+| 001 | Grounding (Gemini) | Enriched alerts with sources | ENABLE_GEMINI_GROUNDING |
+| 002 | NotificationManager | Enriched alerts on WhatsApp | ENABLE_WHATSAPP_ALERTS |
+| 003 | News analysis + Grounding | Enriched news alerts | ENABLE_NEWS_MONITOR |
+| 004 (future) | LLM refinement | Enriched confidence scoring | ENABLE_LLM_ALERT_ENRICHMENT |
+
+### Usage Guidelines
+
+**When documenting or adding features:**
+- Use **"grounding"** when describing technical implementation details
+- Use **"enrichment"** when describing user-facing features or data structures
+- Keep `ENABLE_GEMINI_GROUNDING` as-is (Gemini-specific flag name)
+- Use `alert.enriched` for all enrichment data (agnostic to method)
+
+**For new services (e.g., Feature 004):**
+- Don't create new grounding service unless using Google's Grounding Tools API
+- All enrichment methods contribute to the same `alert.enriched` data
+- This approach allows switching enrichment providers without breaking alerts
+
+See `/specs/TERMINOLOGY_GUIDE.md` for extended discussion and examples.
+
+
 ## Recent Changes
 - 001-gemini-grounding-alert: Added Gemini GoogleSearch grounding integration for alert enrichment; retrieves verified sources and context; graceful degradation on API failure; reuses single grounding call across notification channels
 - 002-whatsapp-alerts: Added multi-channel notification system with TelegramService, WhatsAppService, NotificationManager; exponential backoff retry logic; MarkdownV2 and WhatsApp markdown formatters; comprehensive integration tests for parallel delivery, config validation, graceful degradation
