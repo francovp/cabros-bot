@@ -467,6 +467,9 @@ components:
         enrichmentMetadata:
           $ref: '#/components/schemas/EnrichmentMetadata'
           description: Optional LLM enrichment (when ENABLE_LLM_ALERT_ENRICHMENT=true)
+        urlShortening:
+          $ref: '#/components/schemas/URLShorteningMetadata'
+          description: URL shortening status for WhatsApp delivery (when configured)
 
     MarketContext:
       type: object
@@ -662,3 +665,26 @@ components:
           type: string
           description: Unique correlation ID for tracing
           example: "req-xyz789"
+
+    URLShorteningMetadata:
+      type: object
+      description: Metadata about URL shortening for WhatsApp delivery
+      properties:
+        applied:
+          type: boolean
+          description: True if URL shortening was applied to sources
+          example: true
+        service:
+          type: string
+          description: URL shortening service used (e.g., 'bitly', 'tinyurl')
+          example: "bitly"
+        successCount:
+          type: integer
+          description: Number of URLs successfully shortened
+          minimum: 0
+          example: 2
+        failureCount:
+          type: integer
+          description: Number of URLs that failed to shorten (fell back to title-only)
+          minimum: 0
+          example: 0

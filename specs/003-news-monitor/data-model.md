@@ -249,6 +249,37 @@ interface NotificationDeliveryResult {
 
 ---
 
+### 7. URLShortenerCache
+
+In-memory session-scoped cache for shortened URLs to prevent redundant API calls.
+
+**Fields**:
+
+```typescript
+interface URLShortenerCache {
+  originalUrl: string;               // Original long URL from news source
+  shortUrl: string;                  // Shortened URL (e.g., "https://bit.ly/abc123")
+  timestamp: number;                 // Unix timestamp (ms) when shortened
+  attempts: number;                  // Number of shortening attempts (for debugging)
+}
+```
+
+**Validation Rules**:
+
+- `originalUrl`: Non-empty string, valid URL format, max 2000 characters
+- `shortUrl`: Non-empty string, valid URL format, max 500 characters
+- `timestamp`: Positive integer (Unix timestamp in milliseconds)
+- `attempts`: Positive integer (1-3, matching retry attempts)
+
+**Cache Key**: `originalUrl` (full URL string)
+
+**Relationships**:
+
+- Referenced by `WhatsAppFormatter` during alert formatting
+- Managed by `URLShortener` utility class
+
+---
+
 ## Request/Response Schemas
 
 ### HTTP Request Schema

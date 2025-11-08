@@ -316,6 +316,89 @@ async function getMarketContext(symbol, isCrypto) {
 - Reuse: `src/controllers/commands/handlers/core/fetchPriceCryptoSymbol.js`
 - New helper: `src/controllers/webhooks/handlers/newsMonitor/analyzer.js` - Implements fallback logic
 
+### 7. URL Shortening for WhatsApp Citations
+
+**Decision**: Use `prettylink` npm package for supported URL shortening services (Bitly, TinyURL, PicSee, reurl, Cutt.ly, Pixnet0rz.tw), with fallback to direct API calls for unsupported services, and title-only citations if all fail
+
+**Rationale**:
+
+- **Multi-service support**: `prettylink` provides unified interface for multiple shortening services
+- **Graceful fallback**: If prettylink fails or service unsupported, fall back to direct API calls using native fetch
+- **Fail-open pattern**: If shortening fails, use title-only citations (e.g., "Reuters / CoinDesk") without blocking alert delivery
+- **In-memory cache**: Session-scoped cache prevents redundant API calls for duplicate sources
+- **Performance**: Shortening typically <1s per citation, fits within 30s per-symbol budget
+
+**Implementation Pattern**:
+
+```javascript
+const prettylink = require('prettylink');
+
+class URLShortener {
+  constructor() {
+    this.cache = new Map(); // originalUrl -> shortUrl
+    this.service = process.env.URL_SHORTENER_SERVICE || 'bitly';
+  }
+
+  async shorten(url) {
+    // Check cache first
+    if (this.cache.has(url)) {
+      return this.cache.get(url);
+    }
+
+    try {
+      // Try prettylink for supported services
+      if (this.isSupportedByPrettylink(this.service)) {
+        const shortUrl = await prettylink.shorten(url, { service: this.service, apiKey: this.getApiKey() });
+        this.cache.set(url, shortUrl);
+        return shortUrl;
+      } else {
+        // Fallback to direct API call
+        const shortUrl = await this.shortenWithDirectAPI(url);
+        this.cache.set(url, shortUrl);
+        return shortUrl;
+      }
+    } catch (error) {
+      console.warn(`URL shortening failed for ${url}:`, error.message);
+      return null; // Fallback to title-only
+    }
+  }
+
+  isSupportedByPrettylink(service) {
+    return ['bitly', 'tinyurl', 'picsee', 'reurl', 'cuttly', 'pixnet0rz.tw'].includes(service);
+  }
+
+  async shortenWithDirectAPI(url) {
+    // Implement direct API calls for unsupported services
+    // Example for a hypothetical service
+    const response = await fetch(`https://api.${this.service}.com/shorten`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${this.getApiKey()}` },
+      body: JSON.stringify({ url })
+    });
+    const data = await response.json();
+    return data.shortUrl;
+  }
+}
+```
+
+**Configuration**:
+
+- `URL_SHORTENER_SERVICE`: Service name (default: 'bitly')
+- Service-specific tokens: `BITLY_ACCESS_TOKEN`, `TINYURL_API_KEY`, etc.
+- Services without tokens (TinyURL, Pixnet0rz.tw) enabled by setting service name
+
+**Alternatives Considered**:
+
+- **Single service only**: Too limiting, users may prefer different services
+- **No prettylink**: Would require custom wrappers for each service, more maintenance
+- **External URL shortener service**: Adds dependency, not needed for MVP
+
+**Integration Points**:
+
+- New module: `src/controllers/webhooks/handlers/newsMonitor/urlShortener.js`
+- Update: `src/services/notification/formatters/whatsappMarkdownFormatter.js` - Integrate shortening
+- Reuse: `src/lib/retryHelper.js` - Apply to shortening calls (3 retries, ~5s timeout)
+
 ---
 
 ## Summary of Technology Choices
@@ -328,6 +411,7 @@ async function getMarketContext(symbol, isCrypto) {
 | **Parallel Processing** | `Promise.allSettled()` | Non-blocking, returns partial results, native Node.js (no library needed) |
 | **Notification Delivery** | Existing `NotificationManager` (from 002-whatsapp-alerts) | Already supports Telegram + WhatsApp, retry logic, graceful degradation |
 | **Crypto Price Fetching** | Existing `binance` client with Gemini fallback | Already integrated, accurate real-time prices, fallback ensures reliability |
+| **URL Shortening** | `prettylink` npm package with direct API fallback | Multi-service support, graceful degradation, in-memory cache, fail-open pattern |
 | **Testing** | Jest + supertest | Existing test infrastructure, supports integration tests for HTTP endpoints |
 
 ---
@@ -335,6 +419,7 @@ async function getMarketContext(symbol, isCrypto) {
 ## Open Questions (None Remaining)
 
 All NEEDS CLARIFICATION items from Technical Context have been resolved:
+
 - ✅ Azure AI Inference integration pattern documented
 - ✅ Cache strategy defined (in-memory Map with TTL)
 - ✅ Gemini prompt strategy for event detection specified
@@ -342,5 +427,6 @@ All NEEDS CLARIFICATION items from Technical Context have been resolved:
 - ✅ Parallel processing approach selected
 - ✅ Multi-channel notification strategy (reuse existing)
 - ✅ Binance integration approach (reuse with fallback)
+- ✅ URL shortening strategy documented (prettylink + direct API fallback)
 
 **Ready for Phase 1: Design & Contracts**

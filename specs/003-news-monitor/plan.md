@@ -20,7 +20,7 @@ This feature implements an HTTP endpoint (`/api/news-monitor`) that analyzes new
 - `binance` ^2.10.2 - Binance API client (existing, for crypto price fetching)
 - `express` ^4.17.1 - HTTP server (existing)
 - `telegraf` ^4.3.0 - Telegram bot framework (existing)
-- `prettylink` ^1.1.0 - Bitly URL shortening wrapper (NEW for User Story 2b, for WhatsApp citation links)
+- `prettylink` ^1.1.0 - URL shortening wrapper for multiple services (Bitly, TinyURL, PicSee, reurl, Cutt.ly, Pixnet0rz.tw) with fallback to direct API calls for unsupported services
 
 **Storage**: In-memory cache for news deduplication (Map-based, TTL-aware, no persistence required) + in-memory URL shortening cache (session-scoped)
 **Testing**: Jest ^30.2.0 with supertest ^7.1.4 for integration tests; minimal test coverage per constitution (critical paths + regressions)  
@@ -35,15 +35,15 @@ This feature implements an HTTP endpoint (`/api/news-monitor`) that analyzes new
 
 **Constraints**: 
 - Must not block existing bot functionality when `ENABLE_NEWS_MONITOR=false`
-- Aggressive timeouts: Binance ~5s, Gemini ~20s, optional LLM enrichment ~10s, Bitly shortening ~5s per symbol
+- Aggressive timeouts: Binance ~5s, Gemini ~20s, optional LLM enrichment ~10s, URL shortening ~5s per symbol
 - Graceful degradation: notification channel failures and URL shortening failures do not block HTTP response or alert delivery
 - Conservative confidence selection when enrichment is enabled (min of Gemini + LLM scores)
-- URL shortening is optional and disabled if `BITLY_API_KEY` is not configured
+- URL shortening supports multiple services via `URL_SHORTENER_SERVICE` env var (default: 'bitly'); uses prettylink for supported services, direct API calls for unsupported; falls back to title-only citations if service unavailable
 
 **Scale/Scope**: 
 - Extensible: No hard limits on symbol count (30s timeout applies to entire batch)
-- 1hr cache TTL per (symbol, event_category) pair
-- 3 event categories: price_surge, price_decline, public_figure, regulatory
+  1hr cache TTL per (symbol, event_category) pair (configurable via `NEWS_CACHE_TTL_HOURS`)
+- 4 event categories: price_surge, price_decline, public_figure, regulatory
 - 2 notification channels: Telegram, WhatsApp (via existing notification manager)
 - URL shortening cache session-scoped: In-memory only, resets on bot restart (acceptable for MVP)
 
@@ -233,10 +233,10 @@ All constitution principles remain met after design phase. Architecture is simpl
 
 ---
 
-## Planning Phase Completion Summary
+**Planning Phase Completion Summary**
 
-**Status**: ✅ COMPLETE (Updated November 1, 2025 for User Story 2b)
-**Date**: October 31, 2025 (Updated November 1, 2025)
+**Status**: ✅ COMPLETE (Updated November 8, 2025 for Generic URL Shortening Support)
+**Date**: October 31, 2025 (Updated November 8, 2025)
 **Branch**: `003-news-monitor`
 
 ### Phase 0: Outline & Research ✅
@@ -252,20 +252,20 @@ All constitution principles remain met after design phase. Architecture is simpl
   - Open questions: None remaining
 
 ### Phase 1: Design & Contracts ✅
-- **data-model.md**: 7 core entities documented with validation rules (including URLShortenerCache)
+- **data-model.md**: 8 core entities documented with validation rules (including URLShortenerCache)
   - NewsAlert, MarketContext, CacheEntry, AnalysisResult, EnrichmentMetadata, NotificationDeliveryResult, URLShortenerCache
   - Request/response schemas defined
   - State transitions documented
-  - Environment configuration specified (includes BITLY_API_KEY)
+  - Environment configuration specified (includes URL_SHORTENER_SERVICE and service-specific tokens)
 - **contracts/news-monitor.openapi.yml**: OpenAPI 3.0.3 specification complete
   - POST /api/news-monitor endpoint
   - GET /api/news-monitor endpoint (query params)
   - Complete request/response schemas with examples
   - Error responses (400, 403, 500)
-  - Response includes URL shortening metadata (success flag)
+  - Response includes URL shortening metadata (applied, service, successCount, failureCount)
 - **quickstart.md**: Implementation guide complete
   - Installation instructions (includes prettylink)
-  - Environment configuration (includes BITLY_API_KEY)
+  - Environment configuration (includes URL_SHORTENER_SERVICE and tokens for multiple services)
   - 4 usage examples (basic, default symbols, GET, cached)
   - Advanced configuration (Binance, LLM enrichment, threshold tuning, URL shortening)
   - Troubleshooting guide (including URL shortening fallback scenarios)
@@ -339,13 +339,14 @@ specs/003-news-monitor/
    - External calls use retry with exponential backoff (default 3 attempts) but must still respect the overall timeout budget.
 
 7. **URL Shortening** (NEW for User Story 2b): 
-  - Optional feature controlled by presence of `BITLY_API_KEY`
-  - Uses `prettylink` npm package to wrap Bitly API
+  - Optional feature controlled by `URL_SHORTENER_SERVICE` env var (default: 'bitly')
+  - Uses `prettylink` npm package for supported services (Bitly, TinyURL, PicSee, reurl, Cutt.ly, Pixnet0rz.tw)
+  - Falls back to direct API calls for unsupported services
   - Session-scoped in-memory cache prevents redundant API calls for duplicate sources (originalUrl → shortUrl map; in-memory only, resets on process restart)
-  - Graceful fallback to title-only citations if Bitly unavailable, rate-limited, or shortening fails (shortening failures logged at INFO; alert delivery proceeds)
+  - Graceful fallback to title-only citations if shortening fails (shortening failures logged at INFO; alert delivery proceeds)
   - Reduces WhatsApp message size for enriched alerts (typical enriched payloads drop from ~25K chars to under ~10K chars when citations are shortened)
-  - Per-symbol 30s timeout budget accounts for shortening latency (shortening typically <1s per citation; Bitly calls use a ~5s timeout and 3 retries with backoff)
-  - Implementation notes (for engineers): validate `prettylink` responses, de-duplicate source URLs before calling Bitly, and include shortening metadata (success flag, shortUrl) in alert response payload for observability
+  - Per-symbol 30s timeout budget accounts for shortening latency (shortening typically <1s per citation; API calls use a ~5s timeout and 3 retries with backoff)
+  - Implementation notes (for engineers): validate `prettylink` responses, de-duplicate source URLs before calling shortening service, and include shortening metadata (applied flag, service, successCount, failureCount) in alert response payload for observability
 
 ### Ready for Implementation (Phase 2)
 
@@ -372,4 +373,4 @@ All constitution gates passed. Architecture approved for implementation (includi
 
 ---
 
-**End of plan.md (Updated November 1, 2025 for User Story 2b)**
+**End of plan.md (Updated November 8, 2025 for Generic URL Shortening Support)**

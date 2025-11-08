@@ -74,6 +74,15 @@ TELEGRAM_CHAT_ID=your-telegram-chat-id
 WHATSAPP_CHAT_ID=your-whatsapp-chat-id@g.us
 WHATSAPP_API_URL=https://api.greenapi.com
 WHATSAPP_API_KEY=your-greenapi-key
+
+# URL Shortening (optional, for WhatsApp citations)
+URL_SHORTENER_SERVICE=bitly                  # Service: 'bitly', 'tinyurl', 'picsee', 'reurl', 'cuttly', 'pixnet0rz.tw'
+BITLY_ACCESS_TOKEN=your-bitly-token          # Required for Bitly
+# TINYURL_API_KEY=your-tinyurl-key           # Required for TinyURL (if not provided, uses free API)
+# PICSEE_ACCESS_TOKEN=your-picsee-token      # Required for PicSee
+# REURL_ACCESS_TOKEN=your-reurl-token        # Required for reurl
+# CUTTLY_ACCESS_TOKEN=your-cuttly-token      # Required for Cutt.ly
+# PIXNET0RZ_TW_ACCESS_TOKEN=your-pixnet-token # Required for Pixnet0rz.tw
 ```
 
 ### 3. Start the Server
@@ -308,6 +317,36 @@ AZURE_AI_MODEL=gpt-4o
       "reasoning_excerpt": "Event significance is high due to multiple credible sources",
       "model_name": "gpt-4o",
       "processing_time_ms": 1250
+    }
+  }
+}
+```
+
+---
+
+### Enable URL Shortening for WhatsApp Citations
+
+```bash
+URL_SHORTENER_SERVICE=bitly
+BITLY_ACCESS_TOKEN=your-bitly-access-token
+```
+
+**Behavior:**
+- System shortens source URLs in WhatsApp alerts using configured service
+- Reduces message size from ~25K chars to <10K chars for enriched alerts
+- In-memory cache prevents redundant API calls for duplicate sources
+- Falls back to title-only citations if shortening fails (e.g., "Reuters / CoinDesk" instead of long URLs)
+- Supported services: `bitly`, `tinyurl`, `picsee`, `reurl`, `cuttly`, `pixnet0rz.tw`
+
+**Response includes shortening metadata:**
+```json
+{
+  "alert": {
+    "urlShortening": {
+      "applied": true,
+      "service": "bitly",
+      "successCount": 2,
+      "failureCount": 0
     }
   }
 }
