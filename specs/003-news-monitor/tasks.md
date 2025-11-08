@@ -25,7 +25,7 @@
 **Purpose**: Project initialization and dependency setup
 
 - [X] T001 Install Azure AI Inference dependencies in package.json (@azure-rest/ai-inference, @azure/core-auth, @azure/core-sse)
-- [X] T002 [P] Update .env.example with NEWS_* environment variables (ENABLE_NEWS_MONITOR, NEWS_ALERT_THRESHOLD, NEWS_CACHE_TTL_HOURS, NEWS_TIMEOUT_MS, NEWS_SYMBOLS_CRYPTO, NEWS_SYMBOLS_STOCKS)
+- [X] T002 [P] Update .env.example with NEWS_* environment variables (ENABLE_NEWS_MONITOR, NEWS_ALERT_THRESHOLD, NEWS_CACHE_TTL_HOURS, NEWS_TIMEOUT_MS, NEWS_SYMBOLS_CRYPTO, NEWS_SYMBOLS_STOCKS, URL_SHORTENER_SERVICE, BITLY_ACCESS_TOKEN, TINYURL_API_KEY, PICSEE_API_KEY, REURL_API_KEY, CUTTLY_API_KEY, PIXNET0RZ_API_KEY)
 - [X] T003 [P] Update .env.example with AZURE_AI_* environment variables (AZURE_AI_ENDPOINT, AZURE_AI_API_KEY, AZURE_AI_MODEL)
 - [X] T004 [P] Create directory structure for news monitor feature (src/controllers/webhooks/handlers/newsMonitor/, src/services/inference/, tests/integration/)
 
@@ -100,11 +100,11 @@
 
 ## Phase 4b: User Story 2b - WhatsApp Source URL Shortening (Priority: P2)
 
-**Goal**: Shorten source URLs in WhatsApp alerts using Bitly API to reduce message size from ~25K chars to <10K chars while preserving source attribution
+**Goal**: Shorten source URLs in WhatsApp alerts using configurable URL shortening service (Bitly, TinyURL, PicSee, reurl, Cutt.ly, Pixnet0rz.tw) to reduce message size from ~25K chars to <10K chars while preserving source attribution
 
-**Why this story**: Current implementation strips URLs entirely from WhatsApp messages. URL shortening enables traders to verify alert sources while keeping messages readable and within transmission limits. Bitly provides industry-standard URL shortening with reliable link generation.
+**Why this story**: Current implementation strips URLs entirely from WhatsApp messages. URL shortening enables traders to verify alert sources while keeping messages readable and within transmission limits. Multiple service support via `prettylink` package provides flexibility and fallback options.
 
-**Independent Test**: Send an alert with enriched citations to WhatsApp and verify each source URL is shortened (e.g., from 150+ chars to ~30 chars) and appears in format "Title (short-url)". Verify fallback behavior when Bitly is unavailable.
+**Independent Test**: Send an alert with enriched citations to WhatsApp and verify each source URL is shortened (e.g., from 150+ chars to ~30 chars) and appears in format "Title (short-url)". Verify fallback behavior when the configured shortening service is unavailable.
 
 ### Integration Tests for User Story 2b
 
@@ -112,13 +112,13 @@
 
 ### Implementation for User Story 2b
 
-- [x] T026 [US2b] Create URL shortener utility module in src/controllers/webhooks/handlers/newsMonitor/urlShortener.js (implement shortenUrl, shortenUrlsParallel functions with Bitly API integration)
-- [x] T027 [US2b] Implement in-memory URL cache (session-scoped) in src/controllers/webhooks/handlers/newsMonitor/urlShortener.js (Map-based cache keyed by original URL, prevents redundant Bitly calls)
-- [x] T028 [US2b] Integrate URL shortening into WhatsAppService formatter in src/services/notification/formatters/whatsappMarkdownFormatter.js (call shortenUrlsParallel for enriched citations, fallback to title-only on failure)
-- [x] T029 [US2b] Add Bitly configuration validation in index.js (check BITLY_API_KEY presence, log if shortening disabled)
-- [x] T030 [US2b] Add npm dependency for prettylink package in package.json (Bitly wrapper for URL shortening)
+- [x] T026 [US2b] Create URL shortener utility module in src/controllers/webhooks/handlers/newsMonitor/urlShortener.js (implement shortenUrl, shortenUrlsParallel functions with `prettylink` package support for multiple services and direct API calls for unsupported services)
+- [x] T027 [US2b] Implement in-memory URL cache (session-scoped) in src/controllers/webhooks/handlers/newsMonitor/urlShortener.js (Map-based cache keyed by original URL, prevents redundant shortening service calls)
+- [x] T028 [US2b] Integrate URL shortening into WhatsAppService formatter in src/services/notification/formatters/whatsappMarkdownFormatter.js (use URL_SHORTENER_SERVICE env var to select service, call shortenUrlsParallel for enriched citations, fallback to title-only on failure)
+- [x] T029 [US2b] Add URL shortening configuration validation in index.js (validate URL_SHORTENER_SERVICE value, check service-specific API key presence, log if shortening disabled)
+- [x] T030 [US2b] Add npm dependency for prettylink package in package.json (multi-service URL shortening wrapper supporting Bitly, TinyURL, PicSee, reurl, Cutt.ly, Pixnet0rz.tw with direct API fallback)
 
-**Checkpoint**: User Story 2b complete - WhatsApp messages now include shortened source URLs; graceful fallback to title-only if Bitly unavailable
+**Checkpoint**: User Story 2b complete - WhatsApp messages now include shortened source URLs via configurable service; graceful fallback to title-only if shortening unavailable
 
 
 
