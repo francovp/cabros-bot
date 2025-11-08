@@ -526,6 +526,10 @@ Crypto bot help command.
 
 ## News Monitoring & Event Detection
 
+**📖 [Full Quickstart specs/003-news-monitor/quickstart.md(Guide] Complete setup instructions, API reference, and advanced configuration.)** 
+
+**🔄 [Scheduled Monitoring Example](.github/workflows/news-monitor-cron.yml.example)** — GitHub Actions workflow for periodic symbol analysis.
+
 The news monitoring feature analyzes financial news and market sentiment to detect significant trading events automatically. When enabled, it provides real-time alerts about:
 
 - **Price Surges** (>5% gains): Triggered by positive news, bullish sentiment, and significant price movements

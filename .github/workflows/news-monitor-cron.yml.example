@@ -1,0 +1,67 @@
+# Example GitHub Actions Cron Workflow for News Monitoring
+# 
+# This workflow demonstrates how to schedule periodic news monitoring 
+# across your configured crypto and stock symbols.
+#
+# Usage:
+# 1. Copy this file to your actual workflow: cp .github/workflows/news-monitor-cron.yml.example .github/workflows/news-monitor-cron.yml
+# 2. Update the schedule, symbols, and webhook URL as needed
+# 3. Commit and push to enable the workflow
+#
+# Note: Replace WEBHOOK_URL with your actual deployment endpoint
+
+name: News Monitor - Scheduled Analysis
+
+# Run every 4 hours (typical market analysis frequency)
+on:
+  schedule:
+    - cron: '0 */4 * * *'
+  # Allow manual triggering
+  workflow_dispatch:
+
+jobs:
+  news_monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    
+    steps:
+      - name: Call News Monitor API
+        run: |
+          curl -X POST \
+            -H "Content-Type: application/json" \
+            -d '{
+              "crypto": ["BTCUSDT", "ETHUSD", "BNBUSDT"],
+              "stocks": ["AAPL", "GOOGL", "MSFT", "NVDA"]
+            }' \
+            "${{ secrets.NEWS_MONITOR_WEBHOOK_URL }}/api/news-monitor"
+        env:
+          WEBHOOK_URL: ${{ secrets.NEWS_MONITOR_WEBHOOK_URL }}
+        
+      - name: Log Analysis Results
+        if: failure()
+        run: echo "News monitoring failed. Check logs above for details."
+
+  # Optional: Send summary email on failures
+  notify_on_failure:
+    needs: news_monitor
+    runs-on: ubuntu-latest
+    if: failure()
+    
+    steps:
+      - name: Send failure notification
+        run: |
+          # Uncomment to enable email notifications:
+          # - Set up GitHub email notifications
+          # - Or integrate with external notification service (Slack, PagerDuty, etc.)
+          echo "News monitoring workflow failed. Review logs in Actions tab."
+
+# Environment Variables
+# Add these as repository secrets in GitHub:
+# - NEWS_MONITOR_WEBHOOK_URL: Full URL to your /api/news-monitor endpoint
+#   Example: https://your-bot.render.com/api/news-monitor
+
+# Customize for your needs:
+# - Update schedule (cron format): https://crontab.guru/
+# - Add more symbols to analyze
+# - Integrate with notification services (Slack, Discord, etc.)
+# - Add conditional triggers (only run during market hours, etc.)
