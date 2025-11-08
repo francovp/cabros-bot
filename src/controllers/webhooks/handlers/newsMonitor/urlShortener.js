@@ -1,9 +1,10 @@
 /**
  * URL Shortener Utility for WhatsApp Citations
- * 003-news-monitor: User Story 2b (WhatsApp URL shortening via Bitly)
+ * 003-news-monitor: User Story 2b (WhatsApp URL shortening via Bitly/TinyURL/PicSee/reurl/Cutt.ly/Pixnet0rz.tw)
  */
 
 const { sendWithRetry } = require("../../../../lib/retryHelper");
+const PrettyLink = require("prettylink");
 
 /**
  * URLShortenerCache - Session-scoped in-memory cache
@@ -45,20 +46,83 @@ class URLShortenerCache {
 }
 
 /**
- * URLShortener - Handles URL shortening via Bitly API
+ * URLShortener - Handles URL shortening via multiple services
+ * Supports: Bitly, TinyURL, PicSee, reurl, Cutt.ly, Pixnet0rz.tw (via prettylink)
  */
 class URLShortener {
   constructor() {
-    this.enabled = !!process.env.BITLY_API_KEY;
-    this.apiKey = process.env.BITLY_API_KEY;
+    this.service = (process.env.URL_SHORTENER_SERVICE || "bitly").toLowerCase();
     this.timeout = 5000; // 5s timeout per call
     this.cache = new URLShortenerCache();
 
-    if (this.enabled) {
-      console.debug("[URLShortener] Initialized with Bitly API key");
-    } else {
-      console.debug("[URLShortener] Disabled - BITLY_API_KEY not configured");
+    // Validate service
+    this.validServices = [
+      "bitly",
+      "tinyurl",
+      "picsee",
+      "reurl",
+      "cuttly",
+      "pixnet0rz.tw",
+    ];
+    if (!this.validServices.includes(this.service)) {
+      console.warn(
+        `[URLShortener] Invalid service: ${this.service}, defaulting to bitly`
+      );
+      this.service = "bitly";
     }
+
+    this.enabled = this.isServiceConfigured();
+
+    if (this.enabled) {
+      console.debug(
+        `[URLShortener] Initialized with service: ${this.service}`
+      );
+    } else {
+      console.debug(
+        `[URLShortener] Disabled - ${this.getRequiredEnvVar()} not configured`
+      );
+    }
+  }
+
+  /**
+   * Get required environment variable name(s) for current service
+   */
+  getRequiredEnvVar() {
+    const envVarMap = {
+      bitly: ["BITLY_ACCESS_TOKEN", "BITLY_API_KEY"], // Support both for backward compat
+      tinyurl: ["TINYURL_API_KEY"],
+      picsee: ["PICSEE_API_KEY"],
+      reurl: ["REURL_API_KEY"],
+      cuttly: ["CUTTLY_API_KEY"],
+      "pixnet0rz.tw": ["PIXNET0RZ_API_KEY"],
+    };
+    return envVarMap[this.service] || ["API_KEY"];
+  }
+
+  /**
+   * Check if service is properly configured with required API key
+   */
+  isServiceConfigured() {
+    const envVars = this.getRequiredEnvVar();
+    
+    // Check if any of the env vars is set
+    for (const envVar of envVars) {
+      const value = process.env[envVar];
+      if (value) {
+        return true;
+      }
+    }
+
+    // Some services might not require API keys initially
+    if (
+      this.service === "tinyurl" ||
+      this.service === "picsee" ||
+      this.service === "pixnet0rz.tw"
+    ) {
+      return true; // These may have default APIs
+    }
+
+    return false;
   }
 
   /**
@@ -69,7 +133,7 @@ class URLShortener {
   }
 
   /**
-   * Shorten a single URL using Bitly API
+   * Shorten a single URL using configured service
    */
   async shortenUrl(longUrl) {
     if (!this.enabled) {
@@ -87,13 +151,11 @@ class URLShortener {
     }
 
     try {
-      // Call Bitly API with retry logic
-      // Wrap in format expected by sendWithRetry: { success: boolean, data?: string, error?: string }
       const result = await sendWithRetry(
         async () => {
           try {
-            const url = await this.callBitlyAPI(longUrl);
-            return { success: true, data: url };
+            const shortUrl = await this.callShortenerAPI(longUrl);
+            return { success: true, data: shortUrl };
           } catch (error) {
             return { success: false, error: error.message };
           }
@@ -110,7 +172,9 @@ class URLShortener {
       const shortUrl = result.data;
       // Store in cache
       this.cache.set(longUrl, shortUrl);
-      console.debug("[URLShortener] Successfully shortened URL");
+      console.debug(
+        `[URLShortener] Successfully shortened URL via ${this.service}`
+      );
 
       return shortUrl;
     } catch (error) {
@@ -120,66 +184,56 @@ class URLShortener {
   }
 
   /**
-   * Make HTTPS request to Bitly API
+   * Call URL shortener API using prettylink
    */
-  async callBitlyAPI(longUrl) {
-    const https = require("https");
-
+  async callShortenerAPI(longUrl) {
     return new Promise((resolve, reject) => {
-      const postData = JSON.stringify({
-        long_url: longUrl,
-        domain: "bit.ly",
-      });
+      const timeoutId = setTimeout(() => {
+        reject(new Error("URL shortening timeout"));
+      }, this.timeout);
 
-      const options = {
-        hostname: "api-ssl.bitly.com",
-        path: "/v4/shorten",
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${this.apiKey}`,
-          "Content-Type": "application/json",
-          "Content-Length": Buffer.byteLength(postData),
-        },
-        timeout: this.timeout,
-      };
-
-      const req = https.request(options, (res) => {
-        let data = "";
-
-        res.on("data", (chunk) => {
-          data += chunk;
+      try {
+        const prettyLink = new PrettyLink({
+          service: this.service,
+          apiKey: this.getAPIKey(),
         });
 
-        res.on("end", () => {
-          try {
-            const json = JSON.parse(data);
-            if (res.statusCode >= 400) {
-              reject(
-                new Error(`HTTP ${res.statusCode}: ${json.description || data}`)
-              );
-            } else if (json.link) {
-              resolve(json.link);
+        prettyLink
+          .shorten(longUrl)
+          .then((shortUrl) => {
+            clearTimeout(timeoutId);
+            if (!shortUrl) {
+              reject(new Error("Empty response from shortener"));
             } else {
-              reject(new Error("No link in response"));
+              resolve(shortUrl);
             }
-          } catch (e) {
-            reject(new Error(`Failed to parse response: ${e.message}`));
-          }
-        });
-      });
-
-      req.on("timeout", () => {
-        req.destroy();
-        reject(new Error("Request timeout"));
-      });
-
-      req.on("error", (err) => {
-        reject(err);
-      });
-
-      req.write(postData);
-      req.end();
+          })
+          .catch((error) => {
+            clearTimeout(timeoutId);
+            reject(error);
+          });
+      } catch (error) {
+        clearTimeout(timeoutId);
+        reject(error);
+      }
     });
+  }
+
+  /**
+   * Get API key for current service (checks primary and fallback env vars)
+   */
+  getAPIKey() {
+    const envVars = this.getRequiredEnvVar();
+    
+    // Try each env var in order
+    for (const envVar of envVars) {
+      const value = process.env[envVar];
+      if (value) {
+        return value;
+      }
+    }
+    
+    return "";
   }
 
   /**
@@ -198,7 +252,10 @@ class URLShortener {
           results[url] = shortUrl;
         }
       } catch (error) {
-        console.warn("[URLShortener] Failed to shorten parallel URL");
+        console.warn(
+          "[URLShortener] Failed to shorten parallel URL:",
+          error.message
+        );
       }
     });
 
@@ -213,6 +270,7 @@ class URLShortener {
     return {
       size: this.cache.size(),
       enabled: this.enabled,
+      service: this.service,
     };
   }
 

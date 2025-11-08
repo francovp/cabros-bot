@@ -25,7 +25,7 @@
 **Purpose**: Project initialization and dependency setup
 
 - [X] T001 Install Azure AI Inference dependencies in package.json (@azure-rest/ai-inference, @azure/core-auth, @azure/core-sse)
-- [ ] T002 [P] Update .env.example with NEWS_* environment variables (ENABLE_NEWS_MONITOR, NEWS_ALERT_THRESHOLD, NEWS_CACHE_TTL_HOURS, NEWS_TIMEOUT_MS, NEWS_SYMBOLS_CRYPTO, NEWS_SYMBOLS_STOCKS, URL_SHORTENER_SERVICE, BITLY_ACCESS_TOKEN, TINYURL_API_KEY, PICSEE_API_KEY, REURL_API_KEY, CUTTLY_API_KEY, PIXNET0RZ_API_KEY)
+- [x] T002 [P] Update .env.example with NEWS_* environment variables (ENABLE_NEWS_MONITOR, NEWS_ALERT_THRESHOLD, NEWS_CACHE_TTL_HOURS, NEWS_TIMEOUT_MS, NEWS_SYMBOLS_CRYPTO, NEWS_SYMBOLS_STOCKS, URL_SHORTENER_SERVICE, BITLY_ACCESS_TOKEN, TINYURL_API_KEY, PICSEE_API_KEY, REURL_API_KEY, CUTTLY_API_KEY, PIXNET0RZ_API_KEY)
 - [X] T003 [P] Update .env.example with AZURE_AI_* environment variables (AZURE_AI_ENDPOINT, AZURE_AI_API_KEY, AZURE_AI_MODEL)
 - [X] T004 [P] Create directory structure for news monitor feature (src/controllers/webhooks/handlers/newsMonitor/, src/services/inference/, tests/integration/)
 
@@ -108,15 +108,15 @@
 
 ### Integration Tests for User Story 2b
 
-- [ ] T025 [P] [US2b] Create integration test for URL shortening with fallback in tests/integration/news-monitor-url-shortening.test.js (test Bitly success, timeout fallback, cache hits, graceful degradation)
+- [x] T025 [P] [US2b] Create integration test for URL shortening with fallback in tests/integration/news-monitor-url-shortening.test.js (test Bitly success, timeout fallback, cache hits, graceful degradation)
 
 ### Implementation for User Story 2b
 
-- [ ] T026 [US2b] Create URL shortener utility module in src/controllers/webhooks/handlers/newsMonitor/urlShortener.js (implement shortenUrl, shortenUrlsParallel functions with `prettylink` package support for multiple services and direct API calls for unsupported services)
-- [ ] T027 [US2b] Implement in-memory URL cache (session-scoped) in src/controllers/webhooks/handlers/newsMonitor/urlShortener.js (Map-based cache keyed by original URL, prevents redundant shortening service calls)
-- [ ] T028 [US2b] Integrate URL shortening into WhatsAppService formatter in src/services/notification/formatters/whatsappMarkdownFormatter.js (use URL_SHORTENER_SERVICE env var to select service, call shortenUrlsParallel for enriched citations, fallback to title-only on failure)
-- [ ] T029 [US2b] Add URL shortening configuration validation in index.js (validate URL_SHORTENER_SERVICE value, check service-specific API key presence, log if shortening disabled)
-- [ ] T030 [US2b] Add npm dependency for prettylink package in package.json (multi-service URL shortening wrapper supporting Bitly, TinyURL, PicSee, reurl, Cutt.ly, Pixnet0rz.tw with direct API fallback)
+- [x] T026 [US2b] Create URL shortener utility module in src/controllers/webhooks/handlers/newsMonitor/urlShortener.js (implement shortenUrl, shortenUrlsParallel functions with `prettylink` package support for multiple services and direct API calls for unsupported services)
+- [x] T027 [US2b] Implement in-memory URL cache (session-scoped) in src/controllers/webhooks/handlers/newsMonitor/urlShortener.js (Map-based cache keyed by original URL, prevents redundant shortening service calls)
+- [x] T028 [US2b] Integrate URL shortening into WhatsAppService formatter in src/services/notification/formatters/whatsappMarkdownFormatter.js (use URL_SHORTENER_SERVICE env var to select service, call shortenUrlsParallel for enriched citations, fallback to title-only on failure)
+- [x] T029 [US2b] Add URL shortening configuration validation in index.js (validate URL_SHORTENER_SERVICE value, check service-specific API key presence, log if shortening disabled)
+- [x] T030 [US2b] Add npm dependency for prettylink package in package.json (multi-service URL shortening wrapper supporting Bitly, TinyURL, PicSee, reurl, Cutt.ly, Pixnet0rz.tw with direct API fallback)
 
 **Checkpoint**: User Story 2b complete - WhatsApp messages now include shortened source URLs via configurable service; graceful fallback to title-only if shortening unavailable
 
@@ -213,14 +213,14 @@
 
 **Purpose**: Improvements that affect multiple user stories
 
-- [ ] T049 [P] Add comprehensive logging for all external API calls in src/controllers/webhooks/handlers/newsMonitor/analyzer.js (Gemini, Binance, Azure AI, Telegram, WhatsApp with request/response summaries)
-- [ ] T050 [P] Add structured logging for operational visibility in src/controllers/webhooks/handlers/newsMonitor/newsMonitor.js (per-symbol timing, cache hits, enrichment decisions, retry attempts)
-- [ ] T051 [P] Update README.md with news monitor feature documentation (link to quickstart.md, feature flags, basic usage)
-- [ ] T052 [P] Create example GitHub Actions cron workflow in .github/workflows/news-monitor-cron.yml.example
-- [ ] T053 Code cleanup and refactoring (remove console.log, ensure consistent error handling, validate all file paths)
-- [ ] T054 Run quickstart.md validation scenarios (test all 4 examples, verify troubleshooting guide accuracy)
-- [ ] T055 Performance optimization (ensure parallel processing works correctly, verify 30s timeout budget, test with 50+ symbols)
-- [ ] T056 [P] Add JSDoc comments to all public functions in src/controllers/webhooks/handlers/newsMonitor/ and src/services/inference/
+- [x] T049 [P] Add comprehensive logging for all external API calls in src/controllers/webhooks/handlers/newsMonitor/analyzer.js (Gemini, Binance, Azure AI, Telegram, WhatsApp with request/response summaries)
+- [x] T050 [P] Add structured logging for operational visibility in src/controllers/webhooks/handlers/newsMonitor/newsMonitor.js (per-symbol timing, cache hits, enrichment decisions, retry attempts)
+- [x] T051 [P] Update README.md with news monitor feature documentation (link to quickstart.md, feature flags, basic usage)
+- [x] T052 [P] Create example GitHub Actions cron workflow in .github/workflows/news-monitor-cron.yml.example
+- [x] T053 Code cleanup and refactoring (remove console.log, ensure consistent error handling, validate all file paths)
+- [x] T054 Run quickstart.md validation scenarios (test all 4 examples, verify troubleshooting guide accuracy)
+- [x] T055 Performance optimization (ensure parallel processing works correctly, verify 30s timeout budget, test with 50+ symbols)
+- [x] T056 [P] Add JSDoc comments to all public functions in src/controllers/webhooks/handlers/newsMonitor/ and src/services/inference/
 
 ---
 
