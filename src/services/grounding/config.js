@@ -13,6 +13,7 @@ const GROUNDING_MAX_SOURCES = parseInt(process.env.GROUNDING_MAX_SOURCES || '3',
 const GROUNDING_TIMEOUT_MS = parseInt(process.env.GROUNDING_TIMEOUT_MS || '30000', 10);
 const GROUNDING_MAX_LENGTH = parseInt(process.env.GROUNDING_MAX_LENGTH || '2000', 10);
 const GROUNDING_MODEL_NAME = process.env.GROUNDING_MODEL_NAME || 'gemini-2.5-flash';
+const GEMINI_MODEL_NAME = process.env.GEMINI_MODEL_NAME || 'gemini-2.5-pro';
 
 // Prompt configuration
 const GEMINI_SYSTEM_PROMPT = process.env.GEMINI_SYSTEM_PROMPT || `
@@ -46,5 +47,6 @@ module.exports = {
 	GEMINI_SYSTEM_PROMPT,
 	SEARCH_QUERY_PROMPT,
 	GROUNDING_MODEL_NAME,
+	GEMINI_MODEL_NAME,
 	ENABLE_NEWS_MONITOR_TEST_MODE
 };

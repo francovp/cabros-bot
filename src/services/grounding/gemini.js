@@ -1,6 +1,6 @@
 const genaiClient = require('./genaiClient');
 const { validateGeminiResponse } = require('../../lib/validation');
-const { GEMINI_SYSTEM_PROMPT, GROUNDING_MODEL_NAME, ENABLE_NEWS_MONITOR_TEST_MODE } = require('./config');
+const { GEMINI_SYSTEM_PROMPT, GROUNDING_MODEL_NAME, GEMINI_MODEL_NAME, ENABLE_NEWS_MONITOR_TEST_MODE } = require('./config');
 const { EventCategory } = require('../../controllers/webhooks/handlers/newsMonitor/constants');
 
 // News analysis system prompt for Gemini
@@ -136,30 +136,51 @@ async function analyzeNewsForSymbol(symbol, context) {
 
 ${enrichedContext}
 
-Detect any market-moving events and respond ONLY with valid JSON in this exact format:
+Instructions (important):
+
+- **Task:** Read the provided news/context and detect any market-moving event related to the symbol.
+- **Output:** Respond *only* with a single, valid JSON object (no surrounding text, no markdown, no commentary).
+- **JSON schema:** Follow the example exactly. Use real values (numbers/strings) — do NOT include type annotations or ranges inside the JSON.
+
+Example JSON (respond with a similar structure using real values):
 {
-  "event_category": "price_surge|price_decline|public_figure|regulatory|none",
-  "event_significance": 0.0-1.0,
-  "sentiment_score": -1.0-1.0,
-  "headline": "one-line event description",
-  "description": "detailed event description up to 2000 chars"
+  "event_category": "price_surge",
+  "event_significance": 0.75,
+  "sentiment_score": 0.45,
+  "headline": "One-line event description",
+  "description": "Detailed explanation of the event with bulletpoints and bold text."
 }
 
-Categories:
-- price_surge: Bullish events (positive news, price increases, upgrades)
-- price_decline: Bearish events (negative news, price declines, downgrades)
-- public_figure: Mentions of influential figures (Elon, Trump, etc.)
-- regulatory: Official announcements, policy changes, regulations
-- none: No significant event detected
+Field guidance:
 
-Be conservative with scores: 0.7+ only for high-credibility, well-sourced events.`;
+- **event_category** (string): one of **price_surge**, **price_decline**, **public_figure**, **regulatory**, **none**.
+- **event_significance** (number): 0.0 to 1.0 — how important the detected event is (use 0.0 for none, 1.0 for very significant).
+- **sentiment_score** (number): -1.0 to 1.0 — negative = bearish, positive = bullish.
+- **headline** (string): one concise line describing the event (max ~250 chars).
+- **description** (string): Detailed explanation with enrich text using bulletpoints, nextline and bold text for readability (up to ~2000 chars).
+
+Event category hints:
+
+- **price_surge:** Bullish events (positive news, material price increases, upgrades, major buying pressure).
+- **price_decline:** Bearish events (negative news, material price drops, downgrades, selling pressure).
+- **public_figure:** Mentions/quotes from high-impact individuals that can move markets (e.g., Elon Musk).
+- **regulatory:** Official announcements, policy changes, fines, or legal actions.
+- **none:** No significant event detected.
+
+Conservatism and formatting rules:
+
+- Be conservative when assigning high scores — prefer 0.6+ only for well-sourced, high-credibility events.
+- Do not include any extra text before/after the JSON. If uncertain, return **event_category: "none"** with low significance.
+- Keep numeric values as plain numbers (no percent signs or units inside the JSON fields).
+
+End of instructions.`
 
 		// Create a proper system instruction that will be passed to genaiClient
 		const fullPrompt = `${NEWS_ANALYSIS_SYSTEM_PROMPT}\n\n${prompt}`;
 		
 		const { text: response } = await genaiClient.llmCall({
 			prompt: fullPrompt,
-			opts: { model: GROUNDING_MODEL_NAME, temperature: 0.3 },
+			opts: { model: GEMINI_MODEL_NAME, temperature: 0.3 },
 		});
 
 		// Parse and validate JSON response
