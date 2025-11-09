@@ -143,15 +143,12 @@ class WhatsAppMarkdownFormatter {
       // Build formatted sources with shortened URLs or title-only fallback
       citations.forEach(({ title = '', url = '' }) => {
         const cleanTitle = title.replace(/\\([_*[\]()~`>#+\-=|{}.!])/g, '$1');
-        if (formattedSources) {
-          formattedSources += ' / ';
-        }
 
         // Try to use shortened URL if available, otherwise just title
         if (shortenedMap[url]) {
-          formattedSources += `${cleanTitle} (${shortenedMap[url]})`;
+          formattedSources += `\n- ${cleanTitle} (${shortenedMap[url]})`;
         } else {
-          formattedSources += cleanTitle;
+          formattedSources += `- ${cleanTitle}`;
         }
       });
 

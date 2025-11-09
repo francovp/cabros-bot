@@ -4,7 +4,7 @@
  */
 
 const { sendWithRetry } = require("../../../../lib/retryHelper");
-const PrettyLink = require("prettylink");
+const Prettylink = require('prettylink');
 
 /**
  * URLShortenerCache - Session-scoped in-memory cache
@@ -51,12 +51,14 @@ class URLShortenerCache {
  */
 class URLShortener {
   constructor() {
-    this.service = (process.env.URL_SHORTENER_SERVICE || "bitly").toLowerCase();
-    this.timeout = 5000; // 5s timeout per call
+    this.primaryService = (process.env.URL_SHORTENER_SERVICE || "reurl").toLowerCase();
+    this.timeout = 60000; // 5s timeout per call
     this.cache = new URLShortenerCache();
+    this.serviceFailures = new Map(); // Track consecutive failures per service
 
     // Validate service
     this.validServices = [
+      "test",
       "bitly",
       "tinyurl",
       "picsee",
@@ -64,62 +66,78 @@ class URLShortener {
       "cuttly",
       "pixnet0rz.tw",
     ];
-    if (!this.validServices.includes(this.service)) {
+
+    if (!this.validServices.includes(this.primaryService)) {
       console.warn(
-        `[URLShortener] Invalid service: ${this.service}, defaulting to bitly`
+        `[URLShortener] Invalid service: ${this.primaryService}, defaulting to reurl`
       );
-      this.service = "bitly";
+      this.primaryService = "reurl";
     }
 
-    this.enabled = this.isServiceConfigured();
-
-    if (this.enabled) {
-      console.debug(
-        `[URLShortener] Initialized with service: ${this.service}`
-      );
-    } else {
-      console.debug(
-        `[URLShortener] Disabled - ${this.getRequiredEnvVar()} not configured`
-      );
+    // Build list of configured services in preferred order
+    this.configuredServices = this.buildConfiguredServicesList();
+    this.enabled = this.configuredServices.length > 0;
+    
+    if (!this.enabled) {
+      console.warn("[URLShortener] No URL shortening services configured. URL shortening disabled.");
     }
   }
 
   /**
-   * Get required environment variable name(s) for current service
+   * Get required environment variable names for each service
    */
-  getRequiredEnvVar() {
+  getRequiredEnvVars() {
     const envVarMap = {
-      bitly: ["BITLY_ACCESS_TOKEN", "BITLY_API_KEY"], // Support both for backward compat
-      tinyurl: ["TINYURL_API_KEY"],
+      bitly: ["BITLY_ACCESS_TOKEN", "BITLY_API_KEY"],
       picsee: ["PICSEE_API_KEY"],
       reurl: ["REURL_API_KEY"],
       cuttly: ["CUTTLY_API_KEY"],
       "pixnet0rz.tw": ["PIXNET0RZ_API_KEY"],
     };
-    return envVarMap[this.service] || ["API_KEY"];
+    return envVarMap;
+  }
+
+  /**
+   * Build list of configured services, with primary service first
+   */
+  buildConfiguredServicesList() {
+    const configured = [];
+    const envVars = this.getRequiredEnvVars();
+
+    // Add primary service first if configured
+    if (this.isServiceConfigured(this.primaryService)) {
+      configured.push(this.primaryService);
+    }
+
+    // Add other configured services as fallbacks
+    for (const service of this.validServices) {
+      if (service !== this.primaryService && this.isServiceConfigured(service)) {
+        configured.push(service);
+      }
+    }
+
+    return configured;
   }
 
   /**
    * Check if service is properly configured with required API key
    */
-  isServiceConfigured() {
-    const envVars = this.getRequiredEnvVar();
+  isServiceConfigured(service) {
+    const envVars = this.getRequiredEnvVars();
+    const envVarKeys = envVars[service];
     
-    // Check if any of the env vars is set
-    for (const envVar of envVars) {
-      const value = process.env[envVar];
-      if (value) {
-        return true;
+    if (!envVarKeys) {
+      // Some services don't require API keys
+      if (service === "tinyurl" || service === "pixnet0rz.tw" || service === "test") {
+        return true; // These have free/open APIs
       }
     }
 
-    // Some services might not require API keys initially
-    if (
-      this.service === "tinyurl" ||
-      this.service === "picsee" ||
-      this.service === "pixnet0rz.tw"
-    ) {
-      return true; // These may have default APIs
+    // Check if at least one env var is defined for the service
+    for (const envVar of envVarKeys) {
+      if (process.env[envVar]) {
+        return true;
+      }
     }
 
     return false;
@@ -133,13 +151,81 @@ class URLShortener {
   }
 
   /**
-   * Shorten a single URL using configured service
+   * Get API key for a service (checks primary and fallback env vars)
    */
-  async shortenUrl(longUrl) {
-    if (!this.enabled) {
-      return null;
+  getAPIKey(service) {
+    const envVars = this.getRequiredEnvVars();
+    const envVarKeys = envVars[service];
+    
+    if (!envVarKeys) {
+      return "";
     }
 
+    // Try each potential env var name for this service
+    for (const envVar of envVarKeys) {
+      const value = process.env[envVar];
+      if (value) {
+        return value;
+      }
+    }
+    
+    return "";
+  }
+
+  /**
+   * Track service failure and check if service should be skipped
+   */
+  recordServiceFailure(service) {
+    const count = (this.serviceFailures.get(service) || 0) + 1;
+    this.serviceFailures.set(service, count);
+    return count;
+  }
+
+  /**
+   * Clear failure tracking (useful for testing or explicit reset)
+   */
+  clearFailureTracking() {
+    this.serviceFailures.clear();
+  }
+
+  /**
+   * Check if service has too many consecutive failures
+   */
+  shouldSkipService(service) {
+    const failureCount = this.serviceFailures.get(service) || 0;
+    const maxConsecutiveFailures = 2; // Skip after 2 consecutive failures
+    return failureCount >= maxConsecutiveFailures;
+  }
+
+  /**
+   * Track service failure and check if service should be skipped
+   */
+  recordServiceFailure(service) {
+    const count = (this.serviceFailures.get(service) || 0) + 1;
+    this.serviceFailures.set(service, count);
+    return count;
+  }
+
+  /**
+   * Clear failure tracking (useful for testing or explicit reset)
+   */
+  clearFailureTracking() {
+    this.serviceFailures.clear();
+  }
+
+  /**
+   * Check if service has too many consecutive failures
+   */
+  shouldSkipService(service) {
+    const failureCount = this.serviceFailures.get(service) || 0;
+    const maxConsecutiveFailures = 2; // Skip after 2 consecutive failures
+    return failureCount >= maxConsecutiveFailures;
+  }
+
+  /**
+   * Shorten a single URL using configured services with fallback
+   */
+  async shortenUrl(longUrl) {
     // Check cache first
     const cached = this.cache.get(longUrl);
     if (cached) {
@@ -150,56 +236,133 @@ class URLShortener {
       return cached;
     }
 
-    try {
-      const result = await sendWithRetry(
-        async () => {
-          try {
-            const shortUrl = await this.callShortenerAPI(longUrl);
-            return { success: true, data: shortUrl };
-          } catch (error) {
-            return { success: false, error: error.message };
-          }
-        },
-        3,
-        console
-      );
-
-      if (!result.success) {
-        console.warn("[URLShortener] Failed after retries:", result.error);
-        return null;
-      }
-
-      const shortUrl = result.data;
-      // Store in cache
-      this.cache.set(longUrl, shortUrl);
-      console.debug(
-        `[URLShortener] Successfully shortened URL via ${this.service}`
-      );
-
-      return shortUrl;
-    } catch (error) {
-      console.warn("[URLShortener] Failed to shorten URL:", error.message);
+    if (!this.enabled) {
+      console.warn("[URLShortener] URL shortening disabled, returning null");
       return null;
     }
+
+    const failedServices = new Set();
+    let lastError = null;
+
+    // Try each configured service in order
+    for (const service of this.configuredServices) {
+      if (failedServices.has(service)) {
+        continue; // Skip already failed services
+      }
+
+      if (this.shouldSkipService(service)) {
+        console.debug(`[URLShortener] Skipping service ${service} due to repeated failures`);
+        failedServices.add(service);
+        continue;
+      }
+
+      try {
+        console.debug(
+          `[URLShortener] Attempting to shorten URL via ${service}:`,
+          longUrl.substring(0, 50)
+        );
+
+        const shortUrl = await this.callShortenerAPI(longUrl, service);
+        
+        if (shortUrl) {
+          this.cache.set(longUrl, shortUrl);
+          // Reset failure count on success
+          this.serviceFailures.set(service, 0);
+          console.debug(
+            `[URLShortener] Successfully shortened URL via ${service}`
+          );
+          return shortUrl;
+        } else {
+          failedServices.add(service);
+          this.recordServiceFailure(service);
+          lastError = "Empty response from shortener";
+          console.warn(
+            `[URLShortener] Failed with ${service}: ${lastError}. Switching to alternative service...`
+          );
+        }
+      } catch (error) {
+        failedServices.add(service);
+        this.recordServiceFailure(service);
+        lastError = error.message;
+        console.warn(
+          `[URLShortener] Failed with ${service}: ${lastError}`
+        );
+        const nextService = this.getNextService(service);
+        if (nextService) {
+          console.warn(
+            `[URLShortener] Switching to alternative service: ${nextService}`
+          );
+        }
+      }
+    }
+
+    console.warn(
+      `All URL shortening services failed. Last error: ${lastError}`
+    );
+    return null;
+  }
+
+  /**
+   * Get next service after current one fails
+   */
+  getNextService(currentService) {
+    const idx = this.configuredServices.indexOf(currentService);
+    if (idx < this.configuredServices.length - 1) {
+      return this.configuredServices[idx + 1];
+    }
+    return null;
   }
 
   /**
    * Call URL shortener API using prettylink
    */
-  async callShortenerAPI(longUrl) {
+  async callShortenerAPI(longUrl, service) {
     return new Promise((resolve, reject) => {
       const timeoutId = setTimeout(() => {
         reject(new Error("URL shortening timeout"));
       }, this.timeout);
 
       try {
-        const prettyLink = new PrettyLink({
-          service: this.service,
-          apiKey: this.getAPIKey(),
-        });
+        let prettyLink;
+        switch (service) {
+          case "bitly":
+            prettyLink = new Prettylink.Bitly({
+              accessToken: this.getAPIKey(service),
+            });
+            break;
+          case "tinyurl":
+            prettyLink = new Prettylink.TinyURL();
+            break;
+          case "picsee":
+            prettyLink = new Prettylink.Picsee({
+              accessToken: this.getAPIKey(service),
+            });
+            break;
+          case "reurl":
+            prettyLink = new Prettylink.Reurl({
+              apiKey: this.getAPIKey(service),
+            });
+            break;
+          case "cuttly":
+            prettyLink = new Prettylink.Cuttly({
+              apiKey: this.getAPIKey(service),
+            });
+            break;
+          case "pixnet0rz.tw":
+            prettyLink = Prettylink.Pixnet0rz();
+            break;
+          case "test":
+            // Test service that returns a dummy short URL
+            clearTimeout(timeoutId);
+            resolve("https://short.url/test");
+            return;
+          default:
+            clearTimeout(timeoutId);
+            return reject(new Error(`Unsupported URL shortener service: ${service}`));
+        }
 
         prettyLink
-          .shorten(longUrl)
+          .short(longUrl)
           .then((shortUrl) => {
             clearTimeout(timeoutId);
             if (!shortUrl) {
@@ -220,23 +383,6 @@ class URLShortener {
   }
 
   /**
-   * Get API key for current service (checks primary and fallback env vars)
-   */
-  getAPIKey() {
-    const envVars = this.getRequiredEnvVar();
-    
-    // Try each env var in order
-    for (const envVar of envVars) {
-      const value = process.env[envVar];
-      if (value) {
-        return value;
-      }
-    }
-    
-    return "";
-  }
-
-  /**
    * Shorten multiple URLs in parallel
    */
   async shortenUrlsParallel(urls) {
@@ -247,6 +393,7 @@ class URLShortener {
     const results = {};
     const promises = urls.map(async (url) => {
       try {
+        console.debug("[URLShortener] Shortening URL in parallel:", url.substring(0, 50));
         const shortUrl = await this.shortenUrl(url);
         if (shortUrl) {
           results[url] = shortUrl;
@@ -270,7 +417,8 @@ class URLShortener {
     return {
       size: this.cache.size(),
       enabled: this.enabled,
-      service: this.service,
+      configuredServices: this.configuredServices,
+      primaryService: this.primaryService,
     };
   }
 

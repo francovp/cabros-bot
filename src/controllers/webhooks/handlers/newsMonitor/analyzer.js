@@ -9,7 +9,7 @@ const { analyzeNewsForSymbol } = require('../../../../services/grounding/gemini'
 const { getCacheInstance } = require('./cache');
 const { getEnrichmentService } = require('../../../../services/inference/enrichmentService');
 const { AnalysisStatus, EventCategory } = require('./constants');
-const { GROUNDING_MODEL_NAME } = require('../../../../services/grounding/config');
+const { GROUNDING_MODEL_NAME, ENABLE_NEWS_MONITOR_TEST_MODE } = require('../../../../services/grounding/config');
 const { MainClient } = require('binance');
 
 // Placeholder for NotificationManager - will be injected
@@ -213,7 +213,7 @@ class NewsAnalyzer {
 
 		// Optional LLM enrichment
 		let enrichmentMetadata = null;
-		if (this.enrichmentService.isEnabled()) {
+		if (this.enrichmentService.isEnabled() && ENABLE_NEWS_MONITOR_TEST_MODE !== true) {
 			enrichmentMetadata = await this.enrichmentService.enrichAlert(geminiAnalysis);
 			if (enrichmentMetadata && enrichmentMetadata.enriched_confidence < this.alertThreshold) {
 				console.debug('[Analyzer] Enrichment lowered confidence below threshold');
@@ -329,6 +329,19 @@ class NewsAnalyzer {
 	 * @returns {Promise<Object>} MarketContext with parsed price/change or null
 	 */
 	async fetchGeminiPrice(symbol) {
+
+		if (ENABLE_NEWS_MONITOR_TEST_MODE) {
+			console.debug(`[Analyzer] Test mode enabled - returning mock Gemini price for ${symbol}`);
+			return {
+				price: 123.45,
+				change24h: 1.23,
+				source: 'gemini-grounding-test-mode',
+				timestamp: Date.now(),
+				context: 'Mocked price data for testing purposes.',
+				sources: ['https://example.com/mock-price'],
+			};
+		}
+
 		const genaiClient = require('../../../../services/grounding/genaiClient');
 		let { price, change24h } = { price: null, change24h: null };
 

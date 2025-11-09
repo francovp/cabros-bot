@@ -1,6 +1,6 @@
 const genaiClient = require('./genaiClient');
 const { validateGeminiResponse } = require('../../lib/validation');
-const { GEMINI_SYSTEM_PROMPT, GROUNDING_MODEL_NAME } = require('./config');
+const { GEMINI_SYSTEM_PROMPT, GROUNDING_MODEL_NAME, ENABLE_NEWS_MONITOR_TEST_MODE } = require('./config');
 const { EventCategory } = require('../../controllers/webhooks/handlers/newsMonitor/constants');
 
 // News analysis system prompt for Gemini
@@ -20,6 +20,16 @@ async function generateGroundedSummary({ text, searchResults = [], searchResultT
 		preserveLanguage = true,
 		systemPrompt = GEMINI_SYSTEM_PROMPT,
 	} = options;
+
+	if (ENABLE_NEWS_MONITOR_TEST_MODE) {
+		console.debug('[Gemini][generateGroundedSummary] Test mode enabled, returning fixed summary.');
+		// In test mode, return a fixed summary for consistent testing
+		return {
+			summary: 'This is a test summary for news monitoring.',
+			citations: searchResults,
+			confidence: 0.9,
+		};
+	}
 
 	// Prepare prompt with language preservation if needed
 	const detectedLanguage = await detectLanguage(text);
@@ -86,6 +96,23 @@ module.exports = {
  * @returns {Promise<Object>} Analysis result with event_category, sentiment, confidence
  */
 async function analyzeNewsForSymbol(symbol, context) {
+	if (ENABLE_NEWS_MONITOR_TEST_MODE) {
+		console.debug('[Gemini][analyzeNewsForSymbol] Test mode enabled, returning fixed analysis.');
+		// In test mode, return a fixed analysis for consistent testing
+		return {
+			event_category: EventCategory.PRICE_SURGE,
+			event_significance: 0.8,
+			sentiment_score: 0.7,
+			headline: 'Test Event: Positive Market Movement',
+			description: 'This is a test event analysis for news monitoring.',
+			confidence: 0.9,
+			sources: [
+				{ title: 'Test Source 1', snippet: 'This is a test snippet.', url: 'https://example.com/test1', sourceDomain: 'example.com' },
+				{ title: 'Test Source 2', snippet: 'This is another test snippet.', url: 'https://example.com/test2', sourceDomain: 'example.com' },
+			],
+		};
+	}
+
 	try {
 		// Use Gemini GoogleSearch to fetch market news and sentiment
 		const searchResult = await genaiClient.search({

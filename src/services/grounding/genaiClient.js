@@ -1,5 +1,5 @@
 const { GoogleGenAI } = require('@google/genai');
-const { GEMINI_API_KEY, GROUNDING_MODEL_NAME } = require('./config');
+const { GEMINI_API_KEY, GROUNDING_MODEL_NAME, ENABLE_NEWS_MONITOR_TEST_MODE } = require('./config');
 
 class GenaiClient {
 	constructor() {
@@ -8,6 +8,30 @@ class GenaiClient {
 
 	async search({ query, model = GROUNDING_MODEL_NAME, maxResults = 3 }) {
 		try {
+
+			if (ENABLE_NEWS_MONITOR_TEST_MODE) {
+				console.debug('[genaiClient] News Monitor Test Mode enabled - returning mock search results');
+				return {
+					results: [
+						{
+							title: 'Test Article 1',
+							snippet: 'This is a snippet from test article 1.',
+							url: 'https://example.com/test-article-1',
+							sourceDomain: 'example.com',
+						},
+						{
+							title: 'Test Article 2',
+							snippet: 'This is a snippet from test article 2.',
+							url: 'https://example.com/test-article-2',
+							sourceDomain: 'example.com',
+						},
+					],
+					totalResults: 2,
+					searchResultText: 'Mock search results for testing purposes.',
+				};
+			}
+
+			console.debug(`[genaiClient] Performing search with query: "${query}" using model: "${model}"`);
 			// Use the model's Google Search tool to collect search results
 			const groundingTool = {
 				googleSearch: {},

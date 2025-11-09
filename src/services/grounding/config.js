@@ -1,6 +1,9 @@
 // Environment variables and configuration
 require('dotenv').config();
 
+// Test mode flag for news monitoring
+ENABLE_NEWS_MONITOR_TEST_MODE = process.env.ENABLE_NEWS_MONITOR_TEST_MODE === 'true';
+
 // Feature enablement and API keys
 const ENABLE_GEMINI_GROUNDING = process.env.ENABLE_GEMINI_GROUNDING === 'true';
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
@@ -43,4 +46,5 @@ module.exports = {
 	GEMINI_SYSTEM_PROMPT,
 	SEARCH_QUERY_PROMPT,
 	GROUNDING_MODEL_NAME,
+	ENABLE_NEWS_MONITOR_TEST_MODE
 };
