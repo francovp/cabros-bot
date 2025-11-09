@@ -157,7 +157,7 @@ Field guidance:
 - **event_significance** (number): 0.0 to 1.0 — how important the detected event is (use 0.0 for none, 1.0 for very significant).
 - **sentiment_score** (number): -1.0 to 1.0 — negative = bearish, positive = bullish.
 - **headline** (string): one concise line describing the event (max ~250 chars).
-- **description** (string): Detailed explanation with enrich text using bulletpoints, nextline and bold text for readability (up to ~2000 chars).
+- **description** (string): Detailed explanation with enrich text using hypen bulletpoints (not asterisks), nextline and bold text for readability (up to ~2000 chars).
 
 Event category hints:
 

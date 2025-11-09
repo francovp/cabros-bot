@@ -89,8 +89,10 @@ class WhatsAppService extends NotificationChannel {
       let formattedText;
       if (alert.enriched && typeof alert.enriched === 'object') {
         formattedText = await this.formatter.formatEnriched(alert.enriched);
+        console.debug('Formatted enriched WhatsApp message:', formattedText);
       } else {
         formattedText = this.formatter.format(alert.enriched || alert.text);
+        console.debug('Formatted WhatsApp message:', formattedText);
       }
 
       // Truncate to GreenAPI limit

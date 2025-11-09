@@ -83,8 +83,10 @@ class TelegramService extends NotificationChannel {
       let formattedText;
       if (alert.enriched && typeof alert.enriched === 'object') {
         formattedText = this.formatter.formatEnriched(alert.enriched);
+        console.debug('Formatted enriched content for Telegram:', formattedText);
       } else {
         formattedText = this.formatter.format(alert.enriched || alert.text);
+        console.debug('Formatted text for Telegram:', formattedText);
       }
 
       this.logger?.debug?.(`Sending to Telegram chat ${this.chatId}`);
