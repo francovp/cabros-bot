@@ -117,7 +117,7 @@ async function analyzeNewsForSymbol(symbol, context) {
 		// Use Gemini GoogleSearch to fetch market news and sentiment
 		const searchResult = await genaiClient.search({
 			query: `${symbol} news market sentiment events today`,
-			maxResults: 5,
+			maxResults: 3,
 		});
 		console.debug('[Gemini][analyzeNewsForSymbol] Grounding market news and sentiment search results:', searchResult);
 
@@ -126,11 +126,11 @@ async function analyzeNewsForSymbol(symbol, context) {
 		// Store full SearchResult objects with title, snippet, url, and sourceDomain for formatting
 		/** @type {SearchResult[]} */
 		const sourcesList = searchResult.results
-			.map(r => r.url)
+			.map(r => r.title || null)
 			.filter(Boolean)
-			.slice(0, 5);
 
 		const enrichedContext = `${context}\n\nGrounded Context from Search:\n${groundingContext}\n\nSources: ${sourcesList.join(', ')}`;
+		console.debug('[Gemini][analyzeNewsForSymbol] Enriched context for analysis:', enrichedContext);
 
 		const prompt = `Analyze this news/market context for symbol ${symbol}:
 
@@ -142,7 +142,7 @@ Detect any market-moving events and respond ONLY with valid JSON in this exact f
   "event_significance": 0.0-1.0,
   "sentiment_score": -1.0-1.0,
   "headline": "one-line event description",
-  "description": "detailed event description up to 500 chars"
+  "description": "detailed event description up to 2000 chars"
 }
 
 Categories:

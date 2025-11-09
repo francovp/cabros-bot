@@ -6,7 +6,7 @@ class GenaiClient {
 		this.genAI = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
 	}
 
-	async search({ query, model = GROUNDING_MODEL_NAME, maxResults = 3 }) {
+	async search({ query, model = GROUNDING_MODEL_NAME, maxResults = 3, textWithCitations = false }) {
 		try {
 
 			if (ENABLE_NEWS_MONITOR_TEST_MODE) {
@@ -52,20 +52,25 @@ class GenaiClient {
 			// Handle response structure - could be direct or wrapped in response property
 			const response = result.response || result;
 
-			console.debug('[genaiClient] search result candidates: ', response.candidates);
 			console.debug('[genaiClient] search full response usageMetadata: ', response.usageMetadata);
 
 			const searchResultText = response.text || '';
 
-			// Extract search results from grounding chunks safely
-			const groundingChunks = (
-				response &&
-				response.candidates &&
-				response.candidates[0] &&
-				response.candidates[0].groundingMetadata &&
-				response.candidates[0].groundingMetadata.groundingChunks
-			) || [];
+			const candidate = response?.candidates[0];
+			console.debug('[genaiClient] search result candidate[0]: ', candidate);
 
+			// Extract search results from grounding chunks safely
+			const groundingChunks = candidate?.groundingMetadata?.groundingChunks;
+			console.debug('[genaiClient] search groundingChunks: ', groundingChunks);
+
+			// Extract search results grounding Supports
+			const groundingSupports = candidate?.groundingMetadata?.groundingSupports;
+			console.debug('[genaiClient] search groundingSupports: ', groundingSupports);
+
+			if (textWithCitations) {
+				searchResultText = this._addCitations(searchResultText, groundingSupports, groundingChunks);
+			}
+			
 			// Map to normalized SearchResult objects
 			const results = groundingChunks
 				.filter(chunk => chunk.web)
@@ -152,6 +157,37 @@ class GenaiClient {
 		} catch (error) {
 			throw new Error(`LLM call failed: ${error.message}`);
 		}
+	}
+
+	_addCitations(text, supports, chunks) {
+		// Sort supports by end_index in descending order to avoid shifting issues when inserting.
+		const sortedSupports = [...supports].sort(
+			(a, b) => (b.segment?.endIndex ?? 0) - (a.segment?.endIndex ?? 0),
+		);
+
+		for (const support of sortedSupports) {
+			const endIndex = support.segment?.endIndex;
+			if (endIndex === undefined || !support.groundingChunkIndices?.length) {
+				continue;
+			}
+
+			const citationLinks = support.groundingChunkIndices
+			.map(i => {
+				const uri = chunks[i]?.web?.uri;
+				if (uri) {
+				return `[${i + 1}](${uri})`;
+				}
+				return null;
+			})
+			.filter(Boolean);
+
+			if (citationLinks.length > 0) {
+				const citationString = citationLinks.join(", ");
+				text = text.slice(0, endIndex) + citationString + text.slice(endIndex);
+			}
+		}
+
+		return text;
 	}
 }
 

@@ -362,7 +362,7 @@ class NewsAnalyzer {
 	"context": "<detailed context about the price and market conditions>",
 	"sources": ["url1", "url2"]
 }`,
-				maxResults: 5,
+				maxResults: 3,
 			});
 
 			const priceSearchResult = await Promise.race([priceSearchPromise, timeoutPromise]);
