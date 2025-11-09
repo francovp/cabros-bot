@@ -355,12 +355,12 @@ class NewsAnalyzer {
 
 			// Use Gemini GoogleSearch to fetch current price
 			const priceSearchPromise = genaiClient.search({
-				query: `Get current price of ${symbol} today and respond with JSON only. Follow this exact format:
+				query: `Get current price of ${symbol} today in USD and respond with ONLY valid JSON. Example format (respond with similar structure but with actual numbers):
 {
-	"price": <number>,
-	"change_24h": <number>,
-	"context": "<detailed context about the price and market conditions>",
-	"sources": ["url1", "url2"]
+  "price": 150.25,
+  "change_24h": 2.5,
+  "context": "detailed context about price and market",
+  "sources": ["url1", "url2"]
 }`,
 				maxResults: 3,
 			});
@@ -368,15 +368,32 @@ class NewsAnalyzer {
 			const priceSearchResult = await Promise.race([priceSearchPromise, timeoutPromise]);
 			clearTimeout(timeoutHandle);
 
-			// Extract JSON from response
-			const jsonMatch = priceSearchResult.searchResultText
-				? priceSearchResult.searchResultText.match(/\{[\s\S]*\}/)
-				: null;
-			if (!jsonMatch) {
-				throw new Error('No JSON found in price search response');
+			// Extract JSON from response - try to find valid JSON
+			let priceSearchResultParsed = null;
+			if (priceSearchResult.searchResultText) {
+				// Try multiple patterns to extract JSON
+				const jsonPatterns = [
+					/{[^{}]*"price"[^{}]*}/,  // Look for object with "price" property first
+					/{[\s\S]*}/,              // Fallback to any JSON-like structure
+				];
+
+				for (const pattern of jsonPatterns) {
+					const jsonMatch = priceSearchResult.searchResultText.match(pattern);
+					if (jsonMatch) {
+						try {
+							priceSearchResultParsed = JSON.parse(jsonMatch[0]);
+							break;
+						} catch (parseErr) {
+							// Continue to next pattern if this one fails
+							continue;
+						}
+					}
+				}
 			}
 
-			const priceSearchResultParsed = JSON.parse(jsonMatch[0]);
+			if (!priceSearchResultParsed) {
+				throw new Error('No valid JSON found in price search response');
+			}
 			price = parseFloat(priceSearchResultParsed.price);
 			change24h = parseFloat(priceSearchResultParsed.change_24h);
 
