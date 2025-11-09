@@ -178,10 +178,32 @@ End of instructions.`
 		// Create a proper system instruction that will be passed to genaiClient
 		const fullPrompt = `${NEWS_ANALYSIS_SYSTEM_PROMPT}\n\n${prompt}`;
 		
-		const { text: response } = await genaiClient.llmCall({
-			prompt: fullPrompt,
-			opts: { model: GEMINI_MODEL_NAME, temperature: 0.3 },
-		});
+		let response;
+		try {
+			const result = await genaiClient.llmCall({
+				prompt: fullPrompt,
+				opts: { model: GEMINI_MODEL_NAME, temperature: 0.3 },
+			});
+			response = result.text;
+		} catch (primaryError) {
+			// Check if error is due to model overload (503 UNAVAILABLE)
+			const errorMessage = primaryError.message || '';
+			if (errorMessage.includes('503') || errorMessage.includes('UNAVAILABLE') || errorMessage.includes('overloaded')) {
+				console.warn('[Gemini] Primary model overloaded, attempting fallback model:', GEMINI_MODEL_NAME_FALLBACK);
+				try {
+					const fallbackResult = await genaiClient.llmCall({
+						prompt: fullPrompt,
+						opts: { model: GEMINI_MODEL_NAME_FALLBACK, temperature: 0.3 },
+					});
+					response = fallbackResult.text;
+				} catch (fallbackError) {
+					console.error('[Gemini] Fallback model also failed:', fallbackError.message);
+					throw fallbackError;
+				}
+			} else {
+				throw primaryError;
+			}
+		}
 
 		// Parse and validate JSON response
 		const analysisResult = parseNewsAnalysisResponse(response);
