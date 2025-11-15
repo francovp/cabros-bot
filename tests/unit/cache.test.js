@@ -43,7 +43,7 @@ describe('Cache Module - Unit Tests', () => {
 		it('should store and retrieve cache entry', () => {
 			const data = {
 				alert: { symbol: 'BTCUSDT', confidence: 0.8 },
-				analysisResult: { status: 'analyzed' }
+				analysisResult: { status: 'analyzed' },
 			};
 
 			cache.set('BTCUSDT', EventCategory.PRICE_SURGE, data);
@@ -220,7 +220,7 @@ describe('Cache Module - Unit Tests', () => {
 		it('should prevent duplicate alerts for same symbol+category within TTL', () => {
 			const alert1 = {
 				alert: { symbol: 'BTCUSDT', eventCategory: 'price_surge', confidence: 0.8 },
-				deliveryResults: [{ channel: 'telegram', success: true }]
+				deliveryResults: [{ channel: 'telegram', success: true }],
 			};
 
 			// First analysis

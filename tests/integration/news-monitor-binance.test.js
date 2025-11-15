@@ -43,7 +43,7 @@ describe('News Monitor - Binance Integration (US4)', () => {
 			sentiment_score: 0.8,
 			headline: 'Bitcoin surges on positive news',
 			confidence: 0.74,
-			sources: ['https://example.com/news']
+			sources: ['https://example.com/news'],
 		});
 
 		mockBot = {
@@ -73,7 +73,7 @@ describe('News Monitor - Binance Integration (US4)', () => {
 		}
 		const cache = getCacheInstance();
 		cache.shutdown();
-		
+
 		setImmediate(() => {
 			jest.clearAllMocks();
 			done();
@@ -131,11 +131,11 @@ describe('News Monitor - Binance Integration (US4)', () => {
 
 			expect(response.body.results).toBeDefined();
 			expect(response.body.results.length).toBe(2);
-			
+
 			// Verify both symbols were analyzed
 			const btc = response.body.results.find(r => r.symbol === 'BTCUSDT');
 			const aapl = response.body.results.find(r => r.symbol === 'AAPL');
-			
+
 			expect(btc).toBeDefined();
 			expect(aapl).toBeDefined();
 			expect(btc.status).toBe('analyzed');
@@ -177,7 +177,7 @@ describe('News Monitor - Binance Integration (US4)', () => {
 
 			expect(response.body.results).toBeDefined();
 			const result = response.body.results[0];
-			
+
 			if (result.alert) {
 				// Alert should be present when confidence meets threshold
 				expect(result.alert).toBeDefined();

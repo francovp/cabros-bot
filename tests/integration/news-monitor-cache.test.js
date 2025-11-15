@@ -42,7 +42,7 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 			sentiment_score: 0.8,
 			headline: 'Bitcoin surges on positive news',
 			confidence: 0.74,
-			sources: ['https://example.com/news']
+			sources: ['https://example.com/news'],
 		});
 
 		mockBot = {
@@ -72,7 +72,7 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 		}
 		const cache = getCacheInstance();
 		cache.shutdown();
-		
+
 		// Give async handlers time to complete
 		setImmediate(() => {
 			jest.clearAllMocks();

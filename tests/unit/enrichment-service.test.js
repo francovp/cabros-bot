@@ -185,9 +185,9 @@ describe('EnrichmentService (Phase 8 - US6)', () => {
 
 			const mockAzureClient = azureAiClient.getAzureAIClient();
 			mockAzureClient.chatCompletion.mockResolvedValue('{"confidence": 0.8, "reasoning": "Event is credible and well-sourced from multiple outlets"}');
-			mockAzureClient.parseJsonResponse.mockReturnValue({ 
-				confidence: 0.8, 
-				reasoning: 'Event is credible and well-sourced from multiple outlets' 
+			mockAzureClient.parseJsonResponse.mockReturnValue({
+				confidence: 0.8,
+				reasoning: 'Event is credible and well-sourced from multiple outlets',
 			});
 
 			retryHelper.sendWithRetry.mockResolvedValue('{"confidence": 0.8, "reasoning": "Event is credible"}');
@@ -219,9 +219,9 @@ describe('EnrichmentService (Phase 8 - US6)', () => {
 			const longReasoning = 'A'.repeat(1000);
 			const mockAzureClient = azureAiClient.getAzureAIClient();
 			mockAzureClient.chatCompletion.mockResolvedValue(`{"confidence": 0.7, "reasoning": "${longReasoning}"}`);
-			mockAzureClient.parseJsonResponse.mockReturnValue({ 
-				confidence: 0.7, 
-				reasoning: longReasoning 
+			mockAzureClient.parseJsonResponse.mockReturnValue({
+				confidence: 0.7,
+				reasoning: longReasoning,
 			});
 
 			retryHelper.sendWithRetry.mockResolvedValue(`{"confidence": 0.7, "reasoning": "${longReasoning}"}`);
@@ -277,7 +277,7 @@ describe('EnrichmentService (Phase 8 - US6)', () => {
 
 			expect(consoleWarnSpy).toHaveBeenCalledWith(
 				expect.stringContaining('[EnrichmentService] Enrichment failed'),
-				expect.any(String)
+				expect.any(String),
 			);
 
 			consoleWarnSpy.mockRestore();
@@ -375,9 +375,9 @@ describe('EnrichmentService (Phase 8 - US6)', () => {
 				jest.clearAllMocks();
 
 				const mockAzureClient = azureAiClient.getAzureAIClient();
-				mockAzureClient.parseJsonResponse.mockReturnValue({ 
-					confidence: testCase.llm, 
-					reasoning: 'test' 
+				mockAzureClient.parseJsonResponse.mockReturnValue({
+					confidence: testCase.llm,
+					reasoning: 'test',
 				});
 
 				retryHelper.sendWithRetry.mockResolvedValue(`{"confidence": ${testCase.llm}}`);

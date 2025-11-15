@@ -7,28 +7,28 @@
  */
 
 const SPECIAL_CHARS = [
-  '\\',
-  //'_',
-  //'*',
-  '[',
-  ']',
-  '(',
-  ')',
-  '~',
-  '`',
-  '>',
-  '<',
-  '&',
-  '#',
-  '+',
-  '-',
-  '=',
-  '|',
-  '{',
-  '}',
-  '.',
-  '!'
-]
+	'\\',
+	// '_',
+	// '*',
+	'[',
+	']',
+	'(',
+	')',
+	'~',
+	'`',
+	'>',
+	'<',
+	'&',
+	'#',
+	'+',
+	'-',
+	'=',
+	'|',
+	'{',
+	'}',
+	'.',
+	'!',
+];
 
 /**
  * Normalize backslashes to avoid double-escaping
@@ -50,12 +50,12 @@ function normalizeBackslashes(text = '') {
  * @returns {string} Escaped text safe for MarkdownV2 parse_mode
  */
 function smartEscapeMarkdownV2(text) {
-	if (!text || typeof text !== "string") {
-		return "";
+	if (!text || typeof text !== 'string') {
+		return '';
 	}
 
 	// Escape only characters that are true markdown syntax elements
-	SPECIAL_CHARS.forEach(char => (text = text.replaceAll(char, `\\${char}`)))
+	SPECIAL_CHARS.forEach(char => (text = text.replaceAll(char, `\\${char}`)));
 	return text;
 }
 
@@ -90,21 +90,21 @@ class MarkdownV2Formatter {
 
 		// Use smart escape for content (escape markdown syntax, not regular punctuation)
 		const escapedText = smartEscapeMarkdownV2(
-			normalizeBackslashes(originalText)
+			normalizeBackslashes(originalText),
 		);
 		const escapedSummary = smartEscapeMarkdownV2(
-			normalizeBackslashes(summary)
+			normalizeBackslashes(summary),
 		);
 		const escapedExtraText = smartEscapeMarkdownV2(
-			normalizeBackslashes(extraText)
+			normalizeBackslashes(extraText),
 		);
 
 		// Format citations: [escapedTitle](url) - must keep URL unescaped for links to work
 		const formattedSources = citations
-			.map(({ title = "", url = "" }) => {
-				const unescapedTitle = title.replace(/\\([_*[\]~`>#{=|\.}])/g, "$1");
+			.map(({ title = '', url = '' }) => {
+				const unescapedTitle = title.replace(/\\([_*[\]~`>#{=|\.}])/g, '$1');
 				const escapedTitle = smartEscapeMarkdownV2(
-					normalizeBackslashes(unescapedTitle)
+					normalizeBackslashes(unescapedTitle),
 				);
 				// URLs in MarkdownV2 must not be escaped
 				return `[${escapedTitle}](${url})`;

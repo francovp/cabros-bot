@@ -46,10 +46,10 @@ describe('News Monitor - Alert Delivery Response Structure (US2)', () => {
 			search: jest.fn().mockResolvedValue({
 				results: [
 					{ url: 'https://example.com/1', title: 'Source 1' },
-					{ url: 'https://example.com/2', title: 'Source 2' }
+					{ url: 'https://example.com/2', title: 'Source 2' },
 				],
 				searchResultText: 'Market context from search',
-				totalResults: 2
+				totalResults: 2,
 			}),
 		}));
 

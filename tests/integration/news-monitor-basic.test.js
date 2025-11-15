@@ -36,7 +36,7 @@ describe('News Monitor - Basic Endpoint Integration', () => {
 			sentiment_score: 0.8,
 			headline: 'Bitcoin surges on positive news',
 			confidence: 0.74,
-			sources: ['https://example.com/news']
+			sources: ['https://example.com/news'],
 		});
 
 		// Mock genaiClient search method
@@ -44,10 +44,10 @@ describe('News Monitor - Basic Endpoint Integration', () => {
 		genaiClient.search = jest.fn().mockResolvedValue({
 			results: [
 				{ url: 'https://example.com/1', title: 'Source 1' },
-				{ url: 'https://example.com/2', title: 'Source 2' }
+				{ url: 'https://example.com/2', title: 'Source 2' },
 			],
 			searchResultText: 'Market context from search',
-			totalResults: 2
+			totalResults: 2,
 		});
 
 		// Mock global fetch for WhatsApp API calls
@@ -134,7 +134,7 @@ describe('News Monitor - Basic Endpoint Integration', () => {
 				.post('/api/news-monitor')
 				.send({
 					crypto: ['BTCUSDT', 'ETHUSD'],
-					stocks: ['AAPL']
+					stocks: ['AAPL'],
 				})
 				.expect(200);
 
@@ -147,7 +147,7 @@ describe('News Monitor - Basic Endpoint Integration', () => {
 				.post('/api/news-monitor')
 				.send({
 					crypto: ['BTCUSDT'],
-					stocks: []
+					stocks: [],
 				})
 				.expect(200);
 
@@ -164,7 +164,7 @@ describe('News Monitor - Basic Endpoint Integration', () => {
 				.post('/api/news-monitor')
 				.send({
 					crypto: ['BTCUSDT'],
-					stocks: []
+					stocks: [],
 				})
 				.expect(200);
 
@@ -178,7 +178,7 @@ describe('News Monitor - Basic Endpoint Integration', () => {
 				.post('/api/news-monitor')
 				.send({
 					crypto: ['BTCUSDT'],
-					stocks: []
+					stocks: [],
 				})
 				.expect(200);
 
@@ -193,7 +193,7 @@ describe('News Monitor - Basic Endpoint Integration', () => {
 				.post('/api/news-monitor')
 				.send({
 					crypto: [],
-					stocks: []
+					stocks: [],
 				})
 				.expect(200);
 
@@ -239,7 +239,7 @@ describe('News Monitor - Basic Endpoint Integration', () => {
 				.post('/api/news-monitor')
 				.send({
 					crypto: ['BTCUSDT'],
-					stocks: []
+					stocks: [],
 				})
 				.expect(200);
 
@@ -280,7 +280,7 @@ describe('News Monitor - Basic Endpoint Integration', () => {
 				.post('/api/news-monitor')
 				.send({
 					crypto: ['BTCUSDT', 'ETHUSD'],
-					stocks: []
+					stocks: [],
 				})
 				.expect(200);
 
@@ -294,7 +294,7 @@ describe('News Monitor - Basic Endpoint Integration', () => {
 				.post('/api/news-monitor')
 				.send({
 					crypto: [],
-					stocks: ['AAPL', 'MSFT']
+					stocks: ['AAPL', 'MSFT'],
 				})
 				.expect(200);
 
@@ -308,7 +308,7 @@ describe('News Monitor - Basic Endpoint Integration', () => {
 				.post('/api/news-monitor')
 				.send({
 					crypto: ['BTCUSDT'],
-					stocks: ['AAPL']
+					stocks: ['AAPL'],
 				})
 				.expect(200);
 

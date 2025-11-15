@@ -5,7 +5,7 @@
 
 const {
 	analyzeNewsForSymbol,
-	parseNewsAnalysisResponse
+	parseNewsAnalysisResponse,
 } = require('../../src/services/grounding/gemini');
 const { EventCategory } = require('../../src/controllers/webhooks/handlers/newsMonitor/constants');
 
@@ -21,7 +21,7 @@ describe('Event Detection (Phase 7 - US5)', () => {
 				event_significance: 0.8,
 				sentiment_score: 0.9,
 				headline: 'Bitcoin surges on positive news',
-				sources: ['https://example.com/news1', 'https://example.com/news2']
+				sources: ['https://example.com/news1', 'https://example.com/news2'],
 			});
 
 			const result = parseNewsAnalysisResponse(response);
@@ -38,7 +38,7 @@ describe('Event Detection (Phase 7 - US5)', () => {
 				event_significance: 0.7,
 				sentiment_score: -0.8,
 				headline: 'Market downturn on regulatory concerns',
-				sources: ['https://example.com']
+				sources: ['https://example.com'],
 			});
 
 			const result = parseNewsAnalysisResponse(response);
@@ -53,7 +53,7 @@ describe('Event Detection (Phase 7 - US5)', () => {
 				event_significance: 0.9,
 				sentiment_score: -0.5,
 				headline: 'SEC announces new crypto regulations',
-				sources: ['https://sec.gov']
+				sources: ['https://sec.gov'],
 			});
 
 			const result = parseNewsAnalysisResponse(response);
@@ -67,7 +67,7 @@ describe('Event Detection (Phase 7 - US5)', () => {
 				event_significance: 0.6,
 				sentiment_score: 0.4,
 				headline: 'Elon Musk comments on Bitcoin',
-				sources: ['https://twitter.com']
+				sources: ['https://twitter.com'],
 			});
 
 			const result = parseNewsAnalysisResponse(response);
@@ -98,7 +98,7 @@ Some text after...`;
 				event_significance: 1.5, // Should clamp to 1.0
 				sentiment_score: -1.5, // Should clamp to -1.0
 				headline: 'Test',
-				sources: []
+				sources: [],
 			});
 
 			const result = parseNewsAnalysisResponse(response);
@@ -113,7 +113,7 @@ Some text after...`;
 				event_significance: 0.5,
 				sentiment_score: 0.0,
 				headline: 'Invalid category',
-				sources: []
+				sources: [],
 			});
 
 			const result = parseNewsAnalysisResponse(response);
@@ -135,7 +135,7 @@ Some text after...`;
 
 		it('should handle missing fields with defaults', () => {
 			const response = JSON.stringify({
-				event_category: 'price_surge'
+				event_category: 'price_surge',
 				// Missing significance, sentiment, headline, sources
 			});
 
@@ -154,7 +154,7 @@ Some text after...`;
 				event_significance: 0.5,
 				sentiment_score: 0.0,
 				headline: longHeadline,
-				sources: []
+				sources: [],
 			});
 
 			const result = parseNewsAnalysisResponse(response);
@@ -169,7 +169,7 @@ Some text after...`;
 				event_significance: 0.5,
 				sentiment_score: 0.0,
 				headline: 'Test',
-				sources: sources
+				sources: sources,
 			});
 
 			const result = parseNewsAnalysisResponse(response);
@@ -184,10 +184,10 @@ Some text after...`;
 			genaiClient.search.mockResolvedValue({
 				results: [
 					{ url: 'https://example.com/1', title: 'Source 1' },
-					{ url: 'https://example.com/2', title: 'Source 2' }
+					{ url: 'https://example.com/2', title: 'Source 2' },
 				],
 				searchResultText: 'Market context from search',
-				totalResults: 2
+				totalResults: 2,
 			});
 			// Mock llmCall() to return analysis
 			genaiClient.llmCall.mockResolvedValue({
@@ -196,8 +196,8 @@ Some text after...`;
 					event_significance: 0.8,
 					sentiment_score: 0.9,
 					headline: 'Test',
-					sources: []
-				})
+					sources: [],
+				}),
 			});
 		});
 
@@ -215,8 +215,8 @@ Some text after...`;
 					event_significance: 0.7,
 					sentiment_score: -0.8,
 					headline: 'Test',
-					sources: []
-				})
+					sources: [],
+				}),
 			});
 
 			const result = await analyzeNewsForSymbol('BTCUSDT', 'Bearish news');
@@ -232,8 +232,8 @@ Some text after...`;
 					event_significance: 1.0,
 					sentiment_score: 1.0,
 					headline: 'Test',
-					sources: []
-				})
+					sources: [],
+				}),
 			});
 
 			const result = await analyzeNewsForSymbol('BTCUSDT', 'Context');
@@ -251,8 +251,8 @@ Some text after...`;
 					event_significance: 0.85,
 					sentiment_score: -0.6,
 					headline: 'SEC announcement',
-					sources: ['https://sec.gov']
-				})
+					sources: ['https://sec.gov'],
+				}),
 			});
 
 			const result = await analyzeNewsForSymbol('AAPL', 'Regulatory context');
@@ -273,7 +273,7 @@ Some text after...`;
 
 		it('should handle fallback when Gemini response cannot be parsed', async () => {
 			genaiClient.llmCall.mockResolvedValue({
-				text: 'Invalid response format'
+				text: 'Invalid response format',
 			});
 
 			const result = await analyzeNewsForSymbol('BTCUSDT', 'Context');
@@ -289,8 +289,8 @@ Some text after...`;
 					event_significance: 0.9,
 					sentiment_score: 0.95,
 					headline: 'Bitcoin hits record high',
-					sources: ['https://coinbase.com', 'https://kraken.com']
-				})
+					sources: ['https://coinbase.com', 'https://kraken.com'],
+				}),
 			});
 
 			const result = await analyzeNewsForSymbol('BTCUSDT', 'Bullish market data');
@@ -306,8 +306,8 @@ Some text after...`;
 					event_significance: 0.85,
 					sentiment_score: -0.9,
 					headline: 'Market crash after announcement',
-					sources: ['https://bloomberg.com']
-				})
+					sources: ['https://bloomberg.com'],
+				}),
 			});
 
 			const result = await analyzeNewsForSymbol('AAPL', 'Bearish market news');
@@ -323,8 +323,8 @@ Some text after...`;
 					event_significance: 0.6,
 					sentiment_score: 0.3,
 					headline: 'Elon Musk tweets about Tesla',
-					sources: ['https://twitter.com']
-				})
+					sources: ['https://twitter.com'],
+				}),
 			});
 
 			const result = await analyzeNewsForSymbol('TSLA', 'Social media context');
@@ -339,8 +339,8 @@ Some text after...`;
 					event_significance: 0.95,
 					sentiment_score: -0.7,
 					headline: 'Federal Reserve raises interest rates',
-					sources: ['https://federalreserve.gov']
-				})
+					sources: ['https://federalreserve.gov'],
+				}),
 			});
 
 			const result = await analyzeNewsForSymbol('SPY', 'Market regulation context');
@@ -355,8 +355,8 @@ Some text after...`;
 					event_significance: 0.2,
 					sentiment_score: 0.1,
 					headline: 'Regular market activity',
-					sources: []
-				})
+					sources: [],
+				}),
 			});
 
 			const result = await analyzeNewsForSymbol('XYZ', 'Normal market context');

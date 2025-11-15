@@ -4,12 +4,12 @@ jest.mock('../../src/services/grounding/gemini');
 jest.mock('../../src/services/grounding/genaiClient', () => ({
 	search: jest.fn().mockResolvedValue({
 		results: [
-			{ url: 'https://example.com/1', title: 'Source 1' }
+			{ url: 'https://example.com/1', title: 'Source 1' },
 		],
 		searchResultText: 'Market context',
-		totalResults: 1
+		totalResults: 1,
 	}),
-	llmCall: jest.fn()
+	llmCall: jest.fn(),
 }));
 
 describe('Analyzer - Unit Tests', () => {
@@ -22,7 +22,7 @@ describe('Analyzer - Unit Tests', () => {
 			sentiment_score: 0.8,
 			headline: 'Bitcoin surges on positive news',
 			confidence: 0.8,
-			sources: ['https://example.com/news']
+			sources: ['https://example.com/news'],
 		});
 	});
 
@@ -78,13 +78,13 @@ describe('Analyzer - Unit Tests', () => {
 			sentiment_score: 0.8,
 			confidence: 0.75,
 			event_significance: 0.9,
-			sources: ['https://example.com']
+			sources: ['https://example.com'],
 		};
 		const marketContext = {
 			price: 42000,
 			change24h: 5.2,
 			source: 'binance',
-			timestamp: Date.now()
+			timestamp: Date.now(),
 		};
 		const alert = analyzer.buildAlert('BTCUSDT', geminiAnalysis, marketContext);
 
@@ -93,7 +93,7 @@ describe('Analyzer - Unit Tests', () => {
 		expect(alert.symbol).toBe('BTCUSDT');
 		expect(alert.eventCategory).toBe('price_surge');
 		expect(alert.confidence).toBe(0.75);
-			expect(alert.enriched.originalText).toContain('BTCUSDT');
+		expect(alert.enriched.originalText).toContain('BTCUSDT');
 	});
 
 	it('analyzer should have getMarketContext method', () => {
