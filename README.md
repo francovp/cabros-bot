@@ -1,4 +1,4 @@
-# Cabros Crypto Bot
+# Cabros Bot
 
 Express + Telegraf-based Telegram bot service with multi-channel alert delivery (Telegram and WhatsApp) and intelligent news monitoring.
 
