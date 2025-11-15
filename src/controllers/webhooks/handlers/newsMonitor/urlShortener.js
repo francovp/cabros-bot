@@ -2,7 +2,7 @@
  * URL Shortener Utility for WhatsApp Citations
  * 003-news-monitor: User Story 2b (WhatsApp URL shortening via Bitly/TinyURL/PicSee/reurl/Cutt.ly/Pixnet0rz.tw)
  */
-
+const timersPromises = require('timers/promises');
 const { sendWithRetry } = require('../../../../lib/retryHelper');
 const Prettylink = require('prettylink');
 
@@ -51,7 +51,7 @@ class URLShortenerCache {
  */
 class URLShortener {
 	constructor() {
-		this.primaryService = (process.env.URL_SHORTENER_SERVICE || 'reurl').toLowerCase();
+		this.primaryService = (process.env.URL_SHORTENER_SERVICE || 'picsee').toLowerCase();
 		this.timeout = 60000; // 5s timeout per call
 		this.cache = new URLShortenerCache();
 		this.serviceFailures = new Map(); // Track consecutive failures per service
@@ -59,19 +59,17 @@ class URLShortener {
 		// Validate service
 		this.validServices = [
 			'test',
-			'bitly',
+			// 'bitly', // Disabled due to API limitations
 			'tinyurl',
 			'picsee',
-			'reurl',
 			'cuttly',
-			'pixnet0rz.tw',
 		];
 
 		if (!this.validServices.includes(this.primaryService)) {
 			console.warn(
-				`[URLShortener] Invalid service: ${this.primaryService}, defaulting to reurl`,
+				`[URLShortener] Invalid service: ${this.primaryService}, defaulting to picsee`,
 			);
-			this.primaryService = 'reurl';
+			this.primaryService = 'picsee';
 		}
 
 		// Build list of configured services in preferred order
@@ -91,8 +89,7 @@ class URLShortener {
 			bitly: ['BITLY_ACCESS_TOKEN', 'BITLY_API_KEY'],
 			picsee: ['PICSEE_API_KEY'],
 			reurl: ['REURL_API_KEY'],
-			cuttly: ['CUTTLY_API_KEY'],
-			'pixnet0rz.tw': ['PIXNET0RZ_API_KEY'],
+			cuttly: ['CUTTLY_API_KEY']
 		};
 		return envVarMap;
 	}
@@ -126,17 +123,17 @@ class URLShortener {
 		const envVars = this.getRequiredEnvVars();
 		const envVarKeys = envVars[service];
 
-		if (!envVarKeys) {
+		if (!envVarKeys || envVarKeys === undefined) {
 			// Some services don't require API keys
-			if (service === 'tinyurl' || service === 'pixnet0rz.tw' || service === 'test') {
+			if (service === 'tinyurl' || service === 'pixnet0rz.tw' || (service === 'test' && this.primaryService === 'test')) {
 				return true; // These have free/open APIs
 			}
-		}
-
-		// Check if at least one env var is defined for the service
-		for (const envVar of envVarKeys) {
-			if (process.env[envVar]) {
-				return true;
+		} else {
+			// Check if at least one env var is defined for the service
+			for (const envVar of envVarKeys) {
+				if (process.env[envVar]) {
+					return true;
+				}
 			}
 		}
 
@@ -261,7 +258,7 @@ class URLShortener {
 					`[URLShortener] Attempting to shorten URL via ${service}:`,
 					longUrl.substring(0, 50),
 				);
-
+				
 				const shortUrl = await this.callShortenerAPI(longUrl, service);
 
 				if (shortUrl) {
@@ -283,7 +280,7 @@ class URLShortener {
 			} catch (error) {
 				failedServices.add(service);
 				this.recordServiceFailure(service);
-				lastError = error.message;
+				lastError = error;
 				console.warn(
 					`[URLShortener] Failed with ${service}: ${lastError}`,
 				);
@@ -317,64 +314,46 @@ class URLShortener {
    * Call URL shortener API using prettylink
    */
 	async callShortenerAPI(longUrl, service) {
-		return new Promise((resolve, reject) => {
+		return new Promise(async (resolve, reject) => {
 			const timeoutId = setTimeout(() => {
 				reject(new Error('URL shortening timeout'));
 			}, this.timeout);
 
 			try {
-				let prettyLink;
+				let shortUrl, response, body = null;
+				const apiKey = this.getAPIKey(service);
 				switch (service) {
 				case 'bitly':
-					prettyLink = new Prettylink.Bitly({
-						accessToken: this.getAPIKey(service),
-					});
+					shortUrl = await new Prettylink.Bitly(apiKey).short(longUrl)
 					break;
 				case 'tinyurl':
-					prettyLink = new Prettylink.TinyURL();
+					shortUrl = await new Prettylink.TinyURL().short(longUrl)
 					break;
 				case 'picsee':
-					prettyLink = new Prettylink.Picsee({
-						accessToken: this.getAPIKey(service),
-					});
-					break;
-				case 'reurl':
-					prettyLink = new Prettylink.Reurl({
-						apiKey: this.getAPIKey(service),
-					});
+					await timersPromises.setTimeout(500);
+					body = await new Prettylink.Picsee(apiKey).short(longUrl)
+					shortUrl = body?.data?.picseeUrl;
 					break;
 				case 'cuttly':
-					prettyLink = new Prettylink.Cuttly({
-						apiKey: this.getAPIKey(service),
-					});
-					break;
-				case 'pixnet0rz.tw':
-					prettyLink = Prettylink.Pixnet0rz();
+					response = await new Prettylink.Cuttly(apiKey).short(longUrl)
+					body = JSON.parse(response);
+					shortUrl = body?.url?.shortLink;
 					break;
 				case 'test':
 					// Test service that returns a dummy short URL
-					clearTimeout(timeoutId);
-					resolve('https://short.url/test');
-					return;
+					shortUrl = 'https://short.url/test';
+					break;
 				default:
 					clearTimeout(timeoutId);
-					return reject(new Error(`Unsupported URL shortener service: ${service}`));
+					reject(new Error(`Unsupported URL shortener service: ${service}`));
 				}
 
-				prettyLink
-					.short(longUrl)
-					.then((shortUrl) => {
-						clearTimeout(timeoutId);
-						if (!shortUrl) {
-							reject(new Error('Empty response from shortener'));
-						} else {
-							resolve(shortUrl);
-						}
-					})
-					.catch((error) => {
-						clearTimeout(timeoutId);
-						reject(error);
-					});
+				clearTimeout(timeoutId);
+				if (!shortUrl) {
+					reject(new Error('Empty response from shortener'));
+				}
+				resolve(shortUrl);
+
 			} catch (error) {
 				clearTimeout(timeoutId);
 				reject(error);
@@ -388,6 +367,12 @@ class URLShortener {
 	async shortenUrlsParallel(urls) {
 		if (!this.enabled || !urls || urls.length === 0) {
 			return {};
+		}
+
+		if (this.primaryService === 'picsee') {
+			// PicSee API rate limits parallel requests, use sequential shortening
+			console.debug('[URLShortener] PicSee detected as primary service, using sequential shortening to avoid rate limits');
+			return await this.shortenUrlsSequential(urls);
 		}
 
 		const results = {};
@@ -407,6 +392,32 @@ class URLShortener {
 		});
 
 		await Promise.allSettled(promises);
+		return results;
+	}
+
+	/**
+	* Shorten multiple URLs sequentially (not in parallel)
+	*/
+	async shortenUrlsSequential(urls) {
+		if (!this.enabled || !urls || urls.length === 0) {
+			return {};
+		}
+
+		const results = {};
+		for (const url of urls) {
+			try {
+				console.debug('[URLShortener] Shortening URL sequentially:', url.substring(0, 50));
+				const shortUrl = await this.shortenUrl(url);
+				if (shortUrl) {
+					results[url] = shortUrl;
+				}
+			} catch (error) {
+				console.warn(
+					'[URLShortener] Failed to shorten sequential URL:',
+					error.message,
+				);
+			}
+		}
 		return results;
 	}
 
