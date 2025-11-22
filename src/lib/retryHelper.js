@@ -55,7 +55,7 @@ async function sendWithRetry(sendFn, maxRetries = 3, logger = null) {
         const delayMs = calculateBackoffDelay(attempt);
         if (logger) {
           logger.warn?.(
-            `Retry ${attempt}/${maxRetries}: send failed for ${result.channel}. Retrying in ${delayMs}ms`,
+            `Retry ${attempt}/${maxRetries}: send failed${result.channel ? ` for ${result.channel}` : ''}. Retrying in ${delayMs}ms`,
             { error: result.error }
           );
         }

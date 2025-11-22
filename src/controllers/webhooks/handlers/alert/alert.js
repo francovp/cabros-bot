@@ -5,6 +5,7 @@ const MarkdownV2Formatter = require('../../../../services/notification/formatter
 const TelegramService = require('../../../../services/notification/TelegramService');
 const WhatsAppService = require('../../../../services/notification/WhatsAppService');
 const NotificationManager = require('../../../../services/notification/NotificationManager');
+const { getURLShortener } = require('../../handlers/newsMonitor/urlShortener');
 
 // Initialize services
 let notificationManager = null;
@@ -23,6 +24,7 @@ async function initializeNotificationServices(bot) {
 
   const whatsappService = new WhatsAppService({
     logger: console,
+    urlShortener: getURLShortener(),
   });
 
   notificationManager = new NotificationManager(telegramService, whatsappService);
@@ -36,15 +38,19 @@ async function initializeNotificationServices(bot) {
   return notificationManager;
 }
 
+/**
+ * Get the initialized NotificationManager instance
+ * Used by other handlers (e.g., newsMonitor) to send alerts
+ * @returns {NotificationManager|null}
+ */
+function getNotificationManager() {
+  return notificationManager;
+}
+
 function postAlert(bot) {
   return async (req, res) => {
     const { body } = req;
     try {
-      // Initialize manager if needed
-      if (!notificationManager) {
-        await initializeNotificationServices(bot);
-      }
-
       // Parse and validate alert text
       let alertText = '';
       if (typeof body === 'object' && 'text' in body) {
@@ -100,4 +106,5 @@ function postAlert(bot) {
 module.exports = {
   postAlert,
   initializeNotificationServices,
+  getNotificationManager,
 };

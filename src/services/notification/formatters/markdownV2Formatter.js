@@ -1,22 +1,34 @@
 /**
  * MarkdownV2Formatter - Escapes and formats text for Telegram MarkdownV2
  * Handles special character escaping according to Telegram MarkdownV2 spec
+ * Key: Only escape characters that are true markdown syntax elements
+ *
+ * Reference: https://core.telegram.org/bots/api#markdownv2-style
  */
 
-/**
- * Escape special characters for Telegram MarkdownV2
- * MarkdownV2 requires escaping: _ * [ ] ( ) ~ ` > # + - = | { } . !
- * @param {string} text - Text to escape
- * @returns {string} Escaped text safe for MarkdownV2
- */
-function escapeMarkdownV2(text) {
-	if (!text || typeof text !== 'string') {
-		return '';
-	}
-
-	// Escape all MarkdownV2 special characters
-	return text.replace(/[_*[\]()~`>#+\-=|{}.!]/g, '\\$&');
-}
+const SPECIAL_CHARS = [
+	'\\',
+	// '_',
+	// '*',
+	'[',
+	']',
+	'(',
+	')',
+	'~',
+	'`',
+	'>',
+	'<',
+	'&',
+	'#',
+	'+',
+	'-',
+	'=',
+	'|',
+	'{',
+	'}',
+	'.',
+	'!',
+];
 
 /**
  * Normalize backslashes to avoid double-escaping
@@ -26,6 +38,25 @@ function escapeMarkdownV2(text) {
  */
 function normalizeBackslashes(text = '') {
 	return text.replace(/\\\\+/g, '\\');
+}
+
+/**
+ * Smart escape for MarkdownV2 content
+ * Escapes characters that could break MarkdownV2 parsing
+ *
+ * This approach keeps output readable while preventing markdown injection
+ *
+ * @param {string} text - Text to escape selectively
+ * @returns {string} Escaped text safe for MarkdownV2 parse_mode
+ */
+function smartEscapeMarkdownV2(text) {
+	if (!text || typeof text !== 'string') {
+		return '';
+	}
+
+	// Escape only characters that are true markdown syntax elements
+	SPECIAL_CHARS.forEach(char => (text = text.replaceAll(char, `\\${char}`)));
+	return text;
 }
 
 /**
@@ -46,7 +77,7 @@ class MarkdownV2Formatter {
 		const normalized = normalizeBackslashes(text);
 
 		// Escape MarkdownV2 special characters
-		return escapeMarkdownV2(normalized);
+		return smartEscapeMarkdownV2(normalized);
 	}
 
 	/**
@@ -57,21 +88,30 @@ class MarkdownV2Formatter {
 	formatEnriched(enriched = {}) {
 		const { originalText = '', summary = '', citations = [], extraText = '', truncated = false } = enriched;
 
-		// Escape and normalize individual components
-		const escapedText = escapeMarkdownV2(normalizeBackslashes(originalText));
-		const escapedSummary = escapeMarkdownV2(normalizeBackslashes(summary));
-		const escapedExtraText = escapeMarkdownV2(extraText);
+		// Use smart escape for content (escape markdown syntax, not regular punctuation)
+		const escapedText = smartEscapeMarkdownV2(
+			normalizeBackslashes(originalText),
+		);
+		const escapedSummary = smartEscapeMarkdownV2(
+			normalizeBackslashes(summary),
+		);
+		const escapedExtraText = smartEscapeMarkdownV2(
+			normalizeBackslashes(extraText),
+		);
 
 		// Format citations: [escapedTitle](url) - must keep URL unescaped for links to work
 		const formattedSources = citations
 			.map(({ title = '', url = '' }) => {
-				const escapedTitle = escapeMarkdownV2(normalizeBackslashes(title));
+				const unescapedTitle = title.replace(/\\([_*[\]~`>#{=|\.}])/g, '$1');
+				const escapedTitle = smartEscapeMarkdownV2(
+					normalizeBackslashes(unescapedTitle),
+				);
 				// URLs in MarkdownV2 must not be escaped
 				return `[${escapedTitle}](${url})`;
 			})
 			.join(' / ');
 
-		// Build the message
+		// Build the message - markdown delimiters (* for bold) are NOT escaped
 		let message = `*${escapedText}*`;
 
 		// Add truncation notice if needed
@@ -79,14 +119,16 @@ class MarkdownV2Formatter {
 			message += '\n\n_(Message was truncated due to length)_';
 		}
 
-		// Add enriched content sections
+		// Add enriched content sections - these delimiters are literal, not escaped
 		message += `\n\n*Contexto:*\n\n${escapedSummary}`;
 
 		if (citations.length > 0) {
-			message += `\n\n*Fuentes:* ${formattedSources}`;
+			message += `\n\n*Fuentes:*\n${formattedSources}`;
 		}
 
-		message += `\n\n_${escapedExtraText}_`;
+		if (escapedExtraText) {
+			message += `\n\n${escapedExtraText}`;
+		}
 
 		return message;
 	}

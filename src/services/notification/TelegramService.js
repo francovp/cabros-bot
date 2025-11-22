@@ -39,6 +39,18 @@ class TelegramService extends NotificationChannel {
       return { valid: false, message: 'Missing TELEGRAM_CHAT_ID' };
     }
 
+    if (!this.bot) {
+      return { valid: false, message: 'Bot instance not provided' };
+    }
+
+    // Verify bot token by calling getMe
+    try {
+      const botInfo = await this.bot.telegram.getMe();
+      this.logger?.info?.(`Telegram bot connected as @${botInfo.username} (ID: ${botInfo.id})`);
+    } catch (error) {
+      return { valid: false, message: `Invalid BOT_TOKEN: ${error.message}` };
+    }
+
     this.enabled = true;
     return { valid: true, message: 'Telegram configured' };
   }
@@ -71,8 +83,10 @@ class TelegramService extends NotificationChannel {
       let formattedText;
       if (alert.enriched && typeof alert.enriched === 'object') {
         formattedText = this.formatter.formatEnriched(alert.enriched);
+        console.debug('Formatted enriched content for Telegram:', formattedText);
       } else {
         formattedText = this.formatter.format(alert.enriched || alert.text);
+        console.debug('Formatted text for Telegram:', formattedText);
       }
 
       this.logger?.debug?.(`Sending to Telegram chat ${this.chatId}`);

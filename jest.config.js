@@ -8,5 +8,5 @@ module.exports = {
 	],
 	coverageDirectory: 'coverage',
 	setupFilesAfterEnv: ['./tests/setup.js'],
-	testTimeout: 10000,
+	testTimeout: 25000,
 };

@@ -25,6 +25,7 @@ describe('Dual-Channel Alert Integration', () => {
     mockBot = {
       telegram: {
         sendMessage: jest.fn().mockResolvedValue({ message_id: 'tg-123' }),
+        getMe: jest.fn().mockResolvedValue({ id: 123456789, username: 'TestBot' }),
       },
     };
 

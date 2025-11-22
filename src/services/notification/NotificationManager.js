@@ -55,14 +55,15 @@ class NotificationManager {
     const enabledChannels = Array.from(this.channels.values()).filter((ch) => ch.isEnabled());
 
     if (enabledChannels.length === 0) {
-      console.warn('No notification channels enabled');
+      console.warn('[NotificationManager] No notification channels enabled');
       return [];
     }
 
+    console.info('[NotificationManager] Sending alert to', enabledChannels.length, 'enabled channel(s):', enabledChannels.map(ch => ch.name).join(', '));
     const sendPromises = enabledChannels.map((ch) => ch.send(alert));
     const results = await Promise.allSettled(sendPromises);
 
-    return results.map((r, idx) =>
+    const formattedResults = results.map((r, idx) =>
       r.status === 'fulfilled'
         ? r.value
         : {
@@ -71,6 +72,15 @@ class NotificationManager {
             error: r.reason?.message || 'Unknown error',
           }
     );
+
+    console.info('[NotificationManager] Delivery results:', JSON.stringify(formattedResults.map(r => ({
+      channel: r.channel,
+      success: r.success,
+      messageId: r.messageId,
+      error: r.error,
+    }))));
+
+    return formattedResults;
   }
 }
 

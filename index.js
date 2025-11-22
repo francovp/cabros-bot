@@ -23,6 +23,9 @@ app.listen(port, async () => {
 	const isPreviewEnv = process.env.RENDER === 'true' && process.env.IS_PULL_REQUEST === 'true';
 	console.debug('isPreviewEnv:', isPreviewEnv);
 
+	// Always mount routes (they gate access based on feature flags)
+	app.use('/api', getRoutes());
+
 	if (telegramBotIsEnabled && !isPreviewEnv) {
 		console.log('Telegram Bot is enabled');
 		bot = new Telegraf(token);
@@ -32,8 +35,6 @@ app.listen(port, async () => {
 
 		// Initialize notification services
 		await initializeNotificationServices(bot);
-
-		app.use('/api', getRoutes(bot));
 
 		// Enable graceful stop
 		process.once('SIGINT', () => bot.stop('SIGINT'));
@@ -47,10 +48,15 @@ app.listen(port, async () => {
 				gitCommitUrl = `https://github.com/${process.env.RENDER_GIT_REPO_SLUG}/commit/${commitHash}`;
 				console.log(`Telegram bot deployed from commit ${gitCommitUrl} is running`);
 				text = `*Telegram bot deployed from commit [${commitHash}](${gitCommitUrl}) is running*`;
+				await bot.telegram.sendMessage(
+					process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID, text, { parse_mode: 'MarkdownV2' }
+				);
 			}
-			await bot.telegram.sendMessage(
-				process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID, text, { parse_mode: 'MarkdownV2' });
 		}
+	} else {
+		console.log('Telegram Bot is disabled');
+		// Initialize notification services
+		await initializeNotificationServices(null);
 	}
 });
 

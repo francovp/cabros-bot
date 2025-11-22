@@ -6,6 +6,7 @@ const genaiClient = require('../../src/services/grounding/genaiClient');
 jest.mock('../../src/services/grounding/genaiClient');
 jest.mock('../../src/services/grounding/config', () => ({
 	GEMINI_SYSTEM_PROMPT: 'Test system prompt',
+	GROUNDING_MODEL_NAME: 'gemini-2.0-flash',
 }));
 
 describe('Gemini Service', () => {
