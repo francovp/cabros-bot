@@ -25,7 +25,7 @@ describe('News Monitor - Binance Integration (US4)', () => {
 			TELEGRAM_CHAT_ID: '123456789',
 			RENDER: '',
 			IS_PULL_REQUEST: '',
-			GOOGLE_API_KEY: 'test-key',
+			GEMINI_API_KEY: 'test-key',
 			NEWS_SYMBOLS_CRYPTO: 'BTCUSDT',
 			NEWS_SYMBOLS_STOCKS: 'AAPL',
 			NEWS_ALERT_THRESHOLD: '0.7',

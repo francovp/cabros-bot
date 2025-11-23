@@ -39,7 +39,7 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 #### AI Grounding
 
 - `ENABLE_GEMINI_GROUNDING` - Enable Gemini-based alert enrichment (`true` or `false`)
-- `GOOGLE_API_KEY` - Google API key for Gemini access
+- `GEMINI_API_KEY` - Google API key for Gemini access
 
 #### Admin Notifications
 
@@ -141,7 +141,7 @@ When `ENABLE_GEMINI_GROUNDING=true`:
 ### Configuration
 
 - `ENABLE_GEMINI_GROUNDING` - Enable/disable enrichment (default: `false`)
-- `GOOGLE_API_KEY` - Google API key with Generative AI enabled
+- `GEMINI_API_KEY` - Google API key with Generative AI enabled
 
 ### Example Enrichment Flow
 
@@ -189,7 +189,7 @@ Bitcoin breaks $45,000 resistance with volume surge
 ### Troubleshooting
 
 - **Enrichment timeout**: If Gemini takes >8s, original alert is sent with warning logged
-- **API errors**: Missing `GOOGLE_API_KEY` or API rate limits fall back to original text
+- **API errors**: Missing `GEMINI_API_KEY` or API rate limits fall back to original text
 - **Long alerts**: Text >4000 chars may be truncated to manage costs
 - **Disabled enrichment**: Set `ENABLE_GEMINI_GROUNDING=false` to skip processing
 
@@ -477,7 +477,7 @@ WHATSAPP_CHAT_ID=120363xxxxx@g.us
 
 # Optional enrichment (applies to all channels)
 ENABLE_GEMINI_GROUNDING=true
-GOOGLE_API_KEY=your_google_api_key
+GEMINI_API_KEY=your_google_ai_studio_api_key
 ```
 
 ### Troubleshooting Multi-Channel Delivery
@@ -678,7 +678,7 @@ BITLY_API_KEY=your_bitly_api_key
 
 ```bash
 ENABLE_GEMINI_GROUNDING=true
-GOOGLE_API_KEY=your_google_api_key
+GEMINI_API_KEY=your_google_ai_studio_api_key
 
 # Alerts will be enriched with AI analysis before sending
 ```
@@ -691,7 +691,7 @@ TELEGRAM_CHAT_ID=telegram_chat_id
 ENABLE_TELEGRAM_BOT=true
 
 ENABLE_NEWS_MONITOR=true
-GOOGLE_API_KEY=your_google_ai_studio_api_key
+GEMINI_API_KEY=your_google_ai_studio_api_key
 NEWS_SYMBOLS_CRYPTO=BTCUSDT,ETHUSD,BNBUSDT
 NEWS_SYMBOLS_STOCKS=NVDA,MSFT,AAPL
 NEWS_ALERT_THRESHOLD=0.7
@@ -774,7 +774,7 @@ The application logs to stdout:
 #### News Monitor Endpoint Not Responding
 
 1. Verify `ENABLE_NEWS_MONITOR=true` in environment
-2. Verify `GOOGLE_API_KEY` is set (required for Gemini analysis)
+2. Verify `GEMINI_API_KEY` is set (required for Gemini analysis)
 3. Check application logs for "initializeNewsMonitor" message on startup
 4. Verify `/api/news-monitor` route is registered (check logs for route mounting)
 

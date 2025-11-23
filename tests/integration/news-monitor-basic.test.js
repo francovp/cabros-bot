@@ -21,7 +21,7 @@ describe('News Monitor - Basic Endpoint Integration', () => {
 			TELEGRAM_CHAT_ID: '123456789',
 			RENDER: '',
 			IS_PULL_REQUEST: '',
-			GOOGLE_API_KEY: 'test-key',
+			GEMINI_API_KEY: 'test-key',
 			NEWS_SYMBOLS_CRYPTO: 'BTCUSDT,ETHUSD',
 			NEWS_SYMBOLS_STOCKS: 'AAPL,MSFT',
 		};
@@ -259,8 +259,8 @@ describe('News Monitor - Basic Endpoint Integration', () => {
 		});
 
 		it('should handle missing configuration gracefully', async () => {
-			const originalGoogleApiKey = process.env.GOOGLE_API_KEY;
-			delete process.env.GOOGLE_API_KEY;
+			const originalGoogleApiKey = process.env.GEMINI_API_KEY;
+			delete process.env.GEMINI_API_KEY;
 
 			const res = await request(app)
 				.get('/api/news-monitor')
@@ -269,7 +269,7 @@ describe('News Monitor - Basic Endpoint Integration', () => {
 			expect(res.body).toHaveProperty('success');
 
 			if (originalGoogleApiKey) {
-				process.env.GOOGLE_API_KEY = originalGoogleApiKey;
+				process.env.GEMINI_API_KEY = originalGoogleApiKey;
 			}
 		});
 	});
