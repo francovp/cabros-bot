@@ -39,9 +39,9 @@ This repository is already initialized and wired for `/api/webhook/alert`, Gemin
 
 **Purpose**: Establish a shared, typed `EnrichedAlert` data model and keep contracts/docs aligned before implementing user stories.
 
-- [ ] T001 [P] Update `EnrichedAlert` and `Source` interfaces in `src/controllers/webhooks/handlers/alert/types.ts` to match `specs/004-enrich-alert-output/data-model.md` (fields for `original_text`, `sentiment`, `insights`, `technical_levels`, and `sources`).
-- [ ] T002 [P] Add matching `EnrichedAlert` and `Source` interfaces to `src/services/grounding/types.ts` so Gemini grounding and notification services share the same structured enriched alert data model.
-- [ ] T003 Align the internal data contract example in `specs/004-enrich-alert-output/contracts/api.md` with the updated `EnrichedAlert` interfaces and reference it from JSDoc comments in `src/controllers/webhooks/handlers/alert/grounding.js`.
+- [ ] T001 [P] Update `EnrichedAlert` and `Source` interfaces in `src/controllers/webhooks/handlers/alert/types.ts` to match `specs/004-enrich-alert-output/data-model.md` (fields for `original_text`, `sentiment`, `sentiment_score`, `insights`, `technical_levels`, and `sources`).
+- [ ] T002 [P] Add matching `EnrichedAlert` and `Source` interfaces to `src/services/grounding/types.ts` so Gemini grounding and notification services share the same structured enriched alert data model, including `sentiment_score`.
+- [ ] T003 Align the internal data contract example in `specs/004-enrich-alert-output/contracts/api.md` with the updated `EnrichedAlert` interfaces and reference it from JSDoc comments in `src/controllers/webhooks/handlers/alert/grounding.js`, explicitly documenting that `original_text` comes from the webhook request body and `sources` are derived from `genaiClient.search` `searchResults`.
 
 **Checkpoint**: The enriched alert data model is stable and shared between controllers, services, and documentation.
 
@@ -57,7 +57,7 @@ This repository is already initialized and wired for `/api/webhook/alert`, Gemin
 
 > Write these tests before or alongside implementation; they should initially fail against the current code.
 
-- [ ] T004 [P] [US1] Add unit tests for JSON-based enriched alert generation in `tests/unit/gemini-client.test.js` covering valid `EnrichedAlert` output, missing fields, and non-English alert text for `generateEnrichedAlert()` / `parseEnrichedAlertResponse()` in `src/services/grounding/gemini.js`.
+- [ ] T004 [P] [US1] Add unit tests for JSON-based enriched alert generation in `tests/unit/gemini-client.test.js` covering valid `EnrichedAlert` output (including `sentiment_score` range), missing fields, non-English (e.g., Spanish) alert text with preserved language for sentiment labels and insights, and “short alert” behaviour (`< 15` characters or `< 2` words → `NEUTRAL` sentiment, default `sentiment_score`, minimal insights) for `generateEnrichedAlert()` / `parseEnrichedAlertResponse()` in `src/services/grounding/gemini.js`.
 - [ ] T005 [P] [US1] Add unit tests in `tests/unit/news-alert-formatting.test.js` asserting that `MarkdownV2Formatter.formatEnriched()` in `src/services/notification/formatters/markdownV2Formatter.js` renders sections for Sentiment, Key Insights, Technical Levels, and Sources from an `EnrichedAlert`.
 - [ ] T006 [P] [US1] Extend WhatsApp enrichment tests in `tests/unit/whatsapp-formatter.test.js` for `WhatsAppMarkdownFormatter.formatEnriched()` in `src/services/notification/formatters/whatsappMarkdownFormatter.js` to verify Sentiment, Key Insights, Technical Levels, and Sources are rendered correctly with URL shortening.
 - [ ] T007 [P] [US1] Extend integration coverage in `tests/integration/alert-grounding.test.js` so `POST /api/webhook/alert` returns `enriched: true` and mock Telegram messages (via `src/services/notification/TelegramService.js`) include all structured sections for a sample alert.
@@ -86,13 +86,17 @@ This repository is already initialized and wired for `/api/webhook/alert`, Gemin
 - [ ] T014 [P] [US2] Extend `generateEnrichedAlert()` error-path tests in `tests/unit/gemini-client.test.js` to cover malformed JSON, missing required fields, and overly long responses, asserting that `parseEnrichedAlertResponse()` in `src/services/grounding/gemini.js` signals errors suitable for fallback.
 - [ ] T015 [P] [US2] Add unit tests in `tests/unit/alert-handler.test.js` for `enrichAlert()` in `src/controllers/webhooks/handlers/alert/grounding.js` and `postAlert()` in `src/controllers/webhooks/handlers/alert/alert.js` to verify `enriched: false` and successful delivery when enrichment throws.
 - [ ] T016 [P] [US2] Extend failure-path scenarios in `tests/integration/alert-grounding.test.js` (search failure, timeout) to also simulate invalid Gemini JSON and confirm that `POST /api/webhook/alert` still returns `{ success: true, enriched: false }` and delivers alerts to Telegram.
-- [ ] T017 [P] [US2] Add edge case tests in `tests/unit/news-alert-formatting.test.js` and `tests/unit/whatsapp-formatter.test.js` to ensure `formatEnriched()` in both formatters handles `EnrichedAlert` objects with empty `insights`, missing `technical_levels`, or no `sources` without throwing.
+- [ ] T017 [P] [US2] Add edge case tests in `tests/unit/news-alert-formatting.test.js` and `tests/unit/whatsapp-formatter.test.js` to ensure `formatEnriched()` in both formatters handles `EnrichedAlert` objects with empty `insights`, missing or empty `technical_levels`, or no `sources` without throwing, including the “short alert” degraded-enrichment case.
 
 ### Implementation for User Story 2
 
-- [ ] T018 [US2] Harden `parseEnrichedAlertResponse()` in `src/services/grounding/gemini.js` to detect invalid or incomplete `EnrichedAlert` JSON and throw descriptive errors or return safe defaults (e.g., `NEUTRAL` sentiment, empty `insights`) per `specs/004-enrich-alert-output/spec.md` Edge Cases.
-- [ ] T019 [US2] Update `enrichAlert()` in `src/controllers/webhooks/handlers/alert/grounding.js` to catch Gemini parsing/generation errors and either propagate a generic `"Alert enrichment failed"` error or downgrade to a minimal `EnrichedAlert` while logging the root cause.
-- [ ] T020 [US2] Ensure `postAlert()` in `src/controllers/webhooks/handlers/alert/alert.js` preserves fail-open behaviour by keeping `enriched = false` and still calling `notificationManager.sendToAll(alert)` whenever `enrichAlert()` fails (validation errors, timeouts, JSON parsing issues).
+- [ ] T018 [US2] Harden `parseEnrichedAlertResponse()` in `src/services/grounding/gemini.js` to detect invalid or incomplete `EnrichedAlert` JSON and either:
+  (a) degrade to a safe `EnrichedAlert` using defaults (e.g., `NEUTRAL` sentiment, default `sentiment_score`, minimal insights, empty `technical_levels` / `sources`), including handling “short alert” inputs as defined in the spec; or
+  (b) signal a fatal error that triggers plain-text fallback in `enrichAlert()`.
+- [ ] T019 [US2] Update `enrichAlert()` in `src/controllers/webhooks/handlers/alert/grounding.js` to preferentially keep `alert.enriched` populated with a degraded `EnrichedAlert` when `parseEnrichedAlertResponse()` returns a safe degraded object, and only propagate a fatal error when enrichment completely fails (timeout, no usable content).
+- [ ] T020 [US2] Ensure `postAlert()` in `src/controllers/webhooks/handlers/alert/alert.js` preserves fail-open behaviour by:
+  - Using enriched output (including degraded `EnrichedAlert` cases) whenever `alert.enriched` is present, and
+  - Falling back to plain-text alerts with `enriched = false` and still calling `notificationManager.sendToAll(alert)` whenever `enrichAlert()` reports a fatal failure (validation errors, timeouts, JSON parsing issues).
 - [ ] T021 [US2] Document fallback behaviour for malformed JSON, timeouts, very short alerts, and non-English alerts in `specs/004-enrich-alert-output/spec.md` and `specs/004-enrich-alert-output/quickstart.md`, aligning with User Story 2 acceptance scenarios.
 
 **Checkpoint**: User Story 2 is complete when all enrichment failures (model error, malformed JSON, timeout, invalid input) still result in alerts being delivered with `enriched: false` and no user-visible errors.
