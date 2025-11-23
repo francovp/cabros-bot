@@ -121,7 +121,7 @@ The system provides optional enrichment of webhook alerts using Google Gemini AP
 
 **Configuration**:
 - `ENABLE_GEMINI_GROUNDING` — Feature flag (default: false)
-- `GOOGLE_API_KEY` — Google API key with Generative AI enabled
+- `GEMINI_API_KEY` — Google API key with Generative AI enabled
 - Implicit: `ENABLE_TELEGRAM_BOT` must be true for grounding to be initialized
 
 **Enrichment Strategy**:
@@ -136,7 +136,7 @@ The system provides optional enrichment of webhook alerts using Google Gemini AP
 - If timeout exceeded, returns original alert text with warning
 
 **Common Failure Modes**:
-- Missing `GOOGLE_API_KEY` when `ENABLE_GEMINI_GROUNDING=true` → error logged at startup
+- Missing `GEMINI_API_KEY` when `ENABLE_GEMINI_GROUNDING=true` → error logged at startup
 - Gemini API unavailable or rate-limited → fallback to original text + warning log
 - Alert text too long (>4000 chars) → may be truncated by Gemini to avoid cost overruns
 - Non-English alert text → Gemini respects language; returns summary in same language if possible
