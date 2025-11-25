@@ -27,17 +27,41 @@ Send a POST request to `/api/webhook/alert` with a JSON body:
 
 The bot will reply with a formatted message:
 
-**Bitcoin breaks above $83,000 resistance level with strong volume.**
+```text
+*Bitcoin breaks above $83,000 resistance level with strong volume.*
 
-🟢 **Sentiment:** BULLISH
-
-💡 **Key Insights:**
+*Key Insights*
 • Bitcoin price surged past $83k.
 • Volume indicates strong momentum.
 
-📊 **Technical Levels:**
-• Support: $80,000
-• Resistance: $85,000
+Sentiment: BULLISH 🚀 (0.85)
 
-🔗 **Sources:**
-• [CoinDesk](https://coindesk.com/...)
+*Technical Levels*
+Supports: $80,000
+Resistances: $85,000
+
+*Sources*
+[CoinDesk](https://coindesk.com/...) / [CoinTelegraph](https://cointelegraph.com/...)
+```
+
+### Expected Output (WhatsApp)
+
+If WhatsApp alerts are enabled (`ENABLE_WHATSAPP_ALERTS=true`), the message will be formatted as:
+
+```text
+*Bitcoin breaks above $83,000 resistance level with strong volume.*
+
+*Key Insights*
+• Bitcoin price surged past $83k.
+• Volume indicates strong momentum.
+
+Sentiment: BULLISH 🚀 (0.85)
+
+*Technical Levels*
+Supports: $80,000
+Resistances: $85,000
+
+*Sources*
+CoinDesk: https://coindesk.com/...
+CoinTelegraph: https://cointelegraph.com/...
+```

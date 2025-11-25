@@ -44,8 +44,14 @@
 ### 3. Formatting Strategy
 
 - **Decision**: Update `MarkdownV2Formatter` (Telegram) and `WhatsAppMarkdownFormatter` (WhatsApp) to render the structured data.
+- **Strategy**: Implement a new `formatWebhookAlert` method for Feature 004. Preserve/rename existing logic as `formatNewsAlert` for Feature 003 to avoid breaking the News Monitor (Option B).
 - **Telegram**: Use bolding, emojis, and lists.
 - **WhatsApp**: Use bolding, emojis, and bullet points (plain text).
+
+### 4. Prompt Selection Strategy
+
+- **Decision**: Use Parameter-Driven Prompt Selection (Option A).
+- **Implementation**: Update `GroundingService` methods to accept a `useCase` or `promptType` parameter (e.g., `'NEWS_ANALYSIS'` vs `'ALERT_ENRICHMENT'`) to select the appropriate system instruction internally. This prevents regressions in Feature 003.
 
 ## Alternatives Considered
 
@@ -53,4 +59,14 @@
   - Pros: Less code duplication.
   - Cons: Might break other consumers if any (currently none known, but safer to be explicit).
   - Decision: We will effectively replace the logic but might keep the function signature compatible or create a new one. Given `alert.js` expects `enrichAlert`, we will align with that.
+
+- **Unified Formatter Method**:
+  - Pros: Single method for all alerts.
+  - Cons: Complex logic to handle different data structures (`NewsAlert` vs `EnrichedAlert`).
+  - Decision: Rejected in favor of separate methods for clarity and safety.
+
+- **Separate Service for Enrichment**:
+  - Pros: Complete isolation.
+  - Cons: Code duplication for Gemini client wrapping.
+  - Decision: Rejected in favor of parameter-driven prompt selection in the existing service.
 

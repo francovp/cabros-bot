@@ -26,6 +26,8 @@ Enrich webhook alerts with sentiment analysis, key insights, technical levels, a
 **Performance Goals**: < 2s latency increase for enrichment
 **Constraints**: Free tier Gemini limits, WhatsApp message length
 **Scale/Scope**: Low volume, high value alerts
+**Prompt Selection**: Parameter-Driven (Option A) in `GroundingService`
+**Formatter Strategy**: Separate `formatWebhookAlert` method (Option B)
 
 ## Constitution Check
 

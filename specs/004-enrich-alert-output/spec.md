@@ -77,3 +77,11 @@ As a system administrator, I want the system to deliver a standard summary if th
 - **SC-002**: Alerts are delivered to both Telegram and WhatsApp with correct formatting (verified by visual inspection or integration tests checking for markdown syntax errors).
 - **SC-003**: Fallback mechanism triggers successfully in 100% of analysis failure cases (verified by chaos testing/mocking).
 - **SC-004**: Latency for alert processing does not increase by more than 2 seconds compared to the current implementation.
+
+## Clarifications
+
+### Session 2025-11-24
+
+- **Q1: Scope & Relation to News Monitor (Feature 003)** → A: Feature 004 is distinct and targets the `/api/webhook/alert` endpoint only. It does not modify or override the `/api/news-monitor` endpoint or its "Secondary LLM" roadmap item.
+- **Q2: Formatter Conflict Strategy** → A: Implement a new `formatWebhookAlert` method for Feature 004 in the formatter classes. Preserve/rename existing logic as `formatNewsAlert` for Feature 003 to avoid breaking the News Monitor.
+- **Q3: Prompt Selection Strategy** → A: Use Parameter-Driven Prompt Selection (Option A). Update `GroundingService` methods to accept a `useCase` or `promptType` parameter (e.g., `'NEWS_ANALYSIS'` vs `'ALERT_ENRICHMENT'`) to select the appropriate system instruction internally. This prevents regressions in Feature 003.
