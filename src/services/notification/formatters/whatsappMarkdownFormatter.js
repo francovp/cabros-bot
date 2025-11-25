@@ -42,102 +42,177 @@ class WhatsAppMarkdownFormatter {
   }
 
   /**
-   * Format enriched alert for WhatsApp with optional URL shortening for citations
+   * Format Feature 003 NewsAlert (News Monitor)
    * @async
-   * @param {Object} enriched - Enriched alert object with citations
-   * @param {string} enriched.originalText - Original alert text
-   * @param {string} enriched.summary - AI-generated summary
-   * @param {Array<{title: string, url: string}>} enriched.citations - Source citations with URLs
-   * @param {string} enriched.extraText - Additional text/metadata
-   * @param {boolean} enriched.truncated - Whether message was truncated
+   * @param {Object} enriched - NewsAlert enriched object
    * @returns {Promise<string>} Formatted WhatsApp message
    */
-  async formatEnriched(enriched = {}) {
-    const { originalText = '', summary = '', citations = [], extraText = '', truncated = false } = enriched;
+  async formatNewsAlert(enriched = {}) {
+    const { originalText = '', summary = '', citations = [], extraText = '' } = enriched;
 
-    // Unescape MarkdownV2 sequences to get plain text/WhatsApp markdown
-    const unescapedText = originalText.replace(
-      /\\([_*[\]()~`>#+\-=|{}.!])/g,
-      "$1"
-    );
-    let unescapedSummary = summary.replace(/\\([_*[\]()~`>#+\-=|{}.!])/g, "$1");
-    const unescapedExtraText = extraText.replace(
-      /\\([_*[\]()~`>#+\-=|{}.!])/g,
-      "$1"
-    );
+    // Unescape MarkdownV2 sequences if present in originalText
+    const unescapedTitle = originalText.replace(/\\([_*[\]()~`>#+\-=|{}.!])/g, "$1");
+    let message = `*${unescapedTitle}*`;
 
-    // Convert MarkdownV2 bold (**text**) to WhatsApp bold (*text*)
-    unescapedSummary = unescapedSummary.replace(/\*\*/g, "*");
+    if (summary) {
+      // Unescape MarkdownV2 sequences in summary
+      const unescapedSummary = summary.replace(/\\([_*[\]()~`>#+\-=|{}.!])/g, "$1");
+      message += `\n\n${unescapedSummary}`;
+    }
 
-    // Convert bullet points from * to - for WhatsApp compatibility
-    unescapedSummary = unescapedSummary.replace(/^\*\s+/gm, "- ");
-    unescapedSummary = unescapedSummary.replace(/\n\*\s+/g, "\n- ");
-
-    // Format citations: attempt URL shortening via Bitly, fallback to title-only on failure
-    let formattedSources = '';
-    let shortenedUrls = 0;
-    let failedShortening = 0;
-
-    if (citations.length > 0) {
+    // Citations
+    if (citations && citations.length > 0) {
       // Extract URLs for shortening if URL shortener is available
       const urls = citations.map(c => c.url).filter(url => url && (url.startsWith('http://') || url.startsWith('https://')));
       
       let shortenedMap = {};
       if (this.urlShortener && urls.length > 0) {
         try {
+          shortenedMap = await this.urlShortener.shortenUrlsParallel(urls);
+        } catch (error) {
+          if (this.logger) {
+            this.logger.warn?.(`WhatsApp formatter: URL shortening failed, falling back to title-only: ${error.message}`);
+          }
+        }
+      }
+
+      message += '\n\n*Sources*';
+      citations.forEach(({ title = "", url = "" }) => {
+        const cleanTitle = title.replace(/\\([_*[\]()~`>#+\-=|{}.!])/g, "$1");
+        if (shortenedMap[url]) {
+          message += `\n- ${cleanTitle}: ${shortenedMap[url]}`;
+        } else if (url) {
+          message += `\n- ${cleanTitle}: ${url}`;
+        } else {
+          message += `\n- ${cleanTitle}`;
+        }
+      });
+    }
+
+    if (extraText) {
+      const unescapedExtra = extraText.replace(/\\([_*[\]()~`>#+\-=|{}.!])/g, "$1");
+      message += `\n\n${unescapedExtra}`;
+    }
+
+    return message;
+  }
+
+  /**
+   * Format Feature 004 EnrichedAlert (Webhook)
+   * @async
+   * @param {Object} enriched - EnrichedAlert object
+   * @returns {Promise<string>} Formatted WhatsApp message
+   */
+  async formatWebhookAlert(enriched = {}) {
+    const {
+      original_text = '',
+      sentiment = 'NEUTRAL',
+      sentiment_score = 0,
+      insights = [],
+      technical_levels = { supports: [], resistances: [] },
+      sources = [],
+      truncated = false,
+      extraText = ''
+    } = enriched;
+
+    // Unescape MarkdownV2 sequences to get plain text/WhatsApp markdown
+    const unescapedText = original_text.replace(
+      /\\([_*[\]()~`>#+\-=|{}.!])/g,
+      "$1"
+    );
+
+    // Build the message
+    let message = `*${unescapedText}*`;
+
+    if (truncated) {
+      message += '\n\n_(Message was truncated due to length)_';
+    }
+
+    // Insights
+    if (insights.length > 0) {
+      message += '\n\n*Key Insights*';
+      insights.forEach(insight => {
+        const cleanInsight = insight.replace(/\\([_*[\]()~`>#+\-=|{}.!])/g, "$1");
+        message += `\n• ${cleanInsight}`;
+      });
+    }
+
+    // Sentiment
+    const sentimentEmoji = sentiment === 'BULLISH' ? '🚀' : sentiment === 'BEARISH' ? '🔻' : '😐';
+    const score = sentiment_score.toFixed(2);
+    message += `\n\nSentiment: ${sentiment} ${sentimentEmoji} (${score})`;
+
+    // Technical Levels
+    const hasSupports = technical_levels.supports && technical_levels.supports.length > 0;
+    const hasResistances = technical_levels.resistances && technical_levels.resistances.length > 0;
+
+    if (hasSupports || hasResistances) {
+      message += '\n\n*Technical Levels*';
+      if (hasSupports) {
+        const supports = technical_levels.supports.join(', ');
+        message += `\nSupports: ${supports}`;
+      }
+      if (hasResistances) {
+        const resistances = technical_levels.resistances.join(', ');
+        message += `\nResistances: ${resistances}`;
+      }
+    }
+
+    // Sources
+    if (sources.length > 0) {
+      // Extract URLs for shortening if URL shortener is available
+      const urls = sources.map(c => c.url).filter(url => url && (url.startsWith('http://') || url.startsWith('https://')));
+      
+      let shortenedMap = {};
+      if (this.urlShortener && urls.length > 0) {
+        try {
           // Call shortenUrlsParallel to shorten all URLs at once
           shortenedMap = await this.urlShortener.shortenUrlsParallel(urls);
-          shortenedUrls = Object.keys(shortenedMap).length;
         } catch (error) {
           // Log shortening failure but don't block message delivery
           if (this.logger) {
             this.logger.warn?.(`WhatsApp formatter: URL shortening failed, falling back to title-only: ${error.message}`);
           }
-          failedShortening = urls.length;
         }
       }
 
-      // Build formatted sources with shortened URLs or title-only fallback
-      const sourcesArray = citations.map(({ title = "", url = "" }) => {
+      message += '\n\n*Sources*';
+      sources.forEach(({ title = "", url = "" }) => {
         const cleanTitle = title.replace(/\\([_*[\]()~`>#+\-=|{}.!])/g, "$1");
-
-        // Try to use shortened URL if available, otherwise just title
         if (shortenedMap[url]) {
-          return `- ${cleanTitle} (${shortenedMap[url]})`;
+          message += `\n- ${cleanTitle}: ${shortenedMap[url]}`;
+        } else if (url) {
+          message += `\n- ${cleanTitle}: ${url}`;
         } else {
-          return `- ${cleanTitle}`;
+          message += `\n- ${cleanTitle}`;
         }
       });
 
-      formattedSources = sourcesArray.join("\n");
-
-      // Log shortening results
-      if ((shortenedUrls > 0 || failedShortening > 0) && this.logger) {
-        this.logger.debug?.(`WhatsApp formatter: Shortened ${shortenedUrls} URL(s), failed: ${failedShortening}`);
+      if (extraText) {
+        const unescapedExtra = extraText.replace(/\\([_*[\]()~`>#+\-=|{}.!])/g, "$1");
+        message += `\n\n${unescapedExtra}`;
       }
-    }
-
-    // Build the message
-    let message = `*${unescapedText}*`;
-
-    // Add truncation notice if needed
-    if (truncated) {
-      message += '\n\n_(Message was truncated due to length)_';
-    }
-
-    // Add enriched content sections
-    message += `\n\n*Contexto:*\n\n${unescapedSummary}`;
-
-    if (formattedSources) {
-      message += `\n\n*Fuentes:*\n${formattedSources}`;
-    }
-
-    if (unescapedExtraText) {
-      message += `\n\n${unescapedExtraText}`;
     }
 
     return message;
   }
+
+  /**
+   * Format enriched alert for WhatsApp with optional URL shortening for citations
+   * Dispatches to specific formatter based on enriched data structure
+   * @async
+   * @param {Object} enriched - Enriched alert object
+   * @returns {Promise<string>} Formatted WhatsApp message
+   */
+  async formatEnriched(enriched = {}) {
+    // Check for Feature 004 EnrichedAlert structure (has original_text or insights array)
+    if (enriched.original_text || (enriched.insights && Array.isArray(enriched.insights))) {
+      return this.formatWebhookAlert(enriched);
+    }
+    // Fallback to Feature 003 NewsAlert structure
+    return this.formatNewsAlert(enriched);
+  }
+
 }
 
 module.exports = WhatsAppMarkdownFormatter;

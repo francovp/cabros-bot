@@ -11,12 +11,14 @@ let timeoutRequests = 0;
 /**
  * Record a successful grounding operation
  * @param {number} latencyMs Time taken in milliseconds
+ * @param {string} promptType Type of prompt used (ALERT_ENRICHMENT or NEWS_ANALYSIS)
  */
-function recordSuccess(latencyMs) {
+function recordSuccess(latencyMs, promptType = 'UNKNOWN') {
 	totalRequests++;
 	successRequests++;
-	console.debug('[METRICS] Grounding succeeded', {
+	console.debug('[METRICS] Enrichment succeeded', {
 		latencyMs,
+		promptType,
 		totalRequests,
 		successRequests,
 		failureRequests,
@@ -28,8 +30,9 @@ function recordSuccess(latencyMs) {
  * Record a failed grounding operation
  * @param {string} reason Error type (timeout or error)
  * @param {Error} error The actual error object
+ * @param {string} promptType Type of prompt used (ALERT_ENRICHMENT or NEWS_ANALYSIS)
  */
-function recordFailure(reason, error) {
+function recordFailure(reason, error, promptType = 'UNKNOWN') {
 	totalRequests++;
 	if (reason === 'timeout') {
 		timeoutRequests++;
@@ -37,9 +40,10 @@ function recordFailure(reason, error) {
 		failureRequests++;
 	}
 
-	console.error('[METRICS] Grounding failed', {
+	console.error('[METRICS] Enrichment failed', {
 		reason,
 		error: error.message,
+		promptType,
 		totalRequests,
 		successRequests,
 		failureRequests,

@@ -48,9 +48,9 @@ describe('WhatsAppService - T028 URL Shortening Integration', () => {
 			const alert = {
 				text: 'Alert text',
 				enriched: {
-					originalText: 'Original text',
-					summary: 'Summary',
-					citations: [
+					original_text: 'Original text',
+					insights: ['Summary'],
+					sources: [
 						{ title: 'Source', url: 'https://example.com/url' },
 					],
 				},
@@ -70,9 +70,9 @@ describe('WhatsAppService - T028 URL Shortening Integration', () => {
 			const alert = {
 				text: 'Alert',
 				enriched: {
-					originalText: 'Original',
-					summary: 'Summary',
-					citations: [
+					original_text: 'Original',
+					insights: ['Summary'],
+					sources: [
 						{ title: 'Source', url: 'https://example.com/url' },
 					],
 				},
@@ -89,9 +89,9 @@ describe('WhatsAppService - T028 URL Shortening Integration', () => {
 			const alert = {
 				text: 'Plain alert',
 				enriched: {
-					originalText: 'Alert',
-					summary: 'Summary',
-					citations: [],
+					original_text: 'Alert',
+					insights: ['Summary'],
+					sources: [],
 				},
 			};
 
@@ -122,9 +122,9 @@ describe('WhatsAppService - T028 URL Shortening Integration', () => {
 			const alert = {
 				text: 'Alert',
 				enriched: {
-					originalText: 'Text',
-					summary: 'Summary',
-					citations: [
+					original_text: 'Text',
+					insights: ['Summary'],
+					sources: [
 						{ title: 'Source', url: 'https://example.com/url' },
 					],
 				},
@@ -144,9 +144,9 @@ describe('WhatsAppService - T028 URL Shortening Integration', () => {
 			const alert = {
 				text: 'Alert',
 				enriched: {
-					originalText: 'Text',
-					summary: 'Summary',
-					citations: [
+					original_text: 'Text',
+					insights: ['Summary'],
+					sources: [
 						{ title: 'Source 1', url: 'https://example.com/url1' },
 						{ title: 'Source 2', url: 'https://example.com/url2' },
 					],
@@ -167,9 +167,9 @@ describe('WhatsAppService - T028 URL Shortening Integration', () => {
 			const alert1 = {
 				text: 'Alert 1',
 				enriched: {
-					originalText: 'Text 1',
-					summary: 'Summary 1',
-					citations: [
+					original_text: 'Text 1',
+					insights: ['Summary 1'],
+					sources: [
 						{ title: 'Source', url: 'https://example.com/url' },
 					],
 				},
@@ -200,9 +200,9 @@ describe('WhatsAppService - T028 URL Shortening Integration', () => {
 			const alert = {
 				text: 'Alert',
 				enriched: {
-					originalText: 'Text',
-					summary: 'Summary',
-					citations: [
+					original_text: 'Text',
+					insights: ['Summary'],
+					sources: [
 						{ title: 'Long URL', url: longUrl },
 					],
 				},
@@ -221,9 +221,9 @@ describe('WhatsAppService - T028 URL Shortening Integration', () => {
 			const alert = {
 				text: 'Alert',
 				enriched: {
-					originalText: 'Text',
-					summary: 'Summary',
-					citations: [
+					original_text: 'Text',
+					insights: ['Summary'],
+					sources: [
 						{ title: 'Source *bold* _italic_ ~strike~', url: 'https://example.com/url' },
 					],
 				},
@@ -247,9 +247,9 @@ describe('WhatsAppService - T028 URL Shortening Integration', () => {
 			const alert = {
 				text: 'Alert',
 				enriched: {
-					originalText: 'Text',
-					summary: 'Summary',
-					citations: [
+					original_text: 'Text',
+					insights: ['Summary'],
+					sources: [
 						{ title: 'Source', url: 'https://example.com/url' },
 					],
 				},
@@ -281,9 +281,9 @@ describe('WhatsAppService - T028 URL Shortening Integration', () => {
 			const alert = {
 				text: 'Alert',
 				enriched: {
-					originalText: 'Text',
-					summary: 'Summary',
-					citations: [
+					original_text: 'Text',
+					insights: ['Summary'],
+					sources: [
 						{ title: 'Source', url: 'https://example.com/url' },
 					],
 				},
@@ -305,9 +305,9 @@ describe('WhatsAppService - T028 URL Shortening Integration', () => {
 			const alert = {
 				text: 'Alert',
 				enriched: {
-					originalText: 'Text',
-					summary: 'Summary',
-					citations: [
+					original_text: 'Text',
+					insights: ['Summary'],
+					sources: [
 						{ title: 'Source', url: 'https://example.com/url' },
 					],
 				},
@@ -330,9 +330,9 @@ describe('WhatsAppService - T028 URL Shortening Integration', () => {
 			const alert = {
 				text: 'Alert',
 				enriched: {
-					originalText: 'Text',
-					summary: 'Summary',
-					citations: [
+					original_text: 'Text',
+					insights: ['Summary'],
+					sources: [
 						{ title: 'Source', url: 'https://example.com/url' },
 					],
 				},
@@ -371,9 +371,9 @@ describe('WhatsAppService - T028 URL Shortening Integration', () => {
 			const enrichedAlert = {
 				text: 'Alert',
 				enriched: {
-					originalText: 'Text',
-					summary: 'Summary',
-					citations: [
+					original_text: 'Text',
+					insights: ['Summary'],
+					sources: [
 						{ title: 'Source', url: 'https://example.com/url' },
 					],
 				},

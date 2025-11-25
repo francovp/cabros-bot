@@ -37,6 +37,127 @@ describe('WhatsAppMarkdownFormatter - T028 URL Shortening Integration', () => {
 		});
 	});
 
+	describe('formatEnriched() - New Structure (Sentiment, Insights, Technical Levels)', () => {
+		it('should format enriched alert with all sections', async () => {
+			const formatter = new WhatsAppMarkdownFormatter({
+				urlShortener: mockUrlShortener,
+			});
+
+			mockUrlShortener.shortenUrlsParallel.mockResolvedValue({
+				'https://coindesk.com/btc': 'https://bit.ly/btc',
+				'https://bloomberg.com/crypto': 'https://bit.ly/crypto',
+			});
+
+			const enriched = {
+				original_text: 'Bitcoin breaks 83k',
+				sentiment: 'BULLISH',
+				sentiment_score: 0.9,
+				insights: [
+					'Bitcoin price surged past $83k.',
+					'Volume indicates strong momentum.',
+				],
+				technical_levels: {
+					supports: ['$80,000', '$81,500'],
+					resistances: ['$85,000'],
+				},
+				sources: [
+					{
+						title: 'CoinDesk',
+						url: 'https://coindesk.com/btc',
+					},
+					{
+						title: 'Bloomberg',
+						url: 'https://bloomberg.com/crypto',
+					},
+				],
+			};
+
+			const result = await formatter.formatEnriched(enriched);
+
+			// Check Sentiment
+			expect(result).toContain('Sentiment: BULLISH 🚀 (0.90)');
+
+			// Check Insights
+			expect(result).toContain('*Key Insights*');
+			expect(result).toContain('• Bitcoin price surged past $83k.');
+			expect(result).toContain('• Volume indicates strong momentum.');
+
+			// Check Technical Levels
+			expect(result).toContain('*Technical Levels*');
+			expect(result).toContain('Supports: $80,000, $81,500');
+			expect(result).toContain('Resistances: $85,000');
+
+			// Check Sources
+			expect(result).toContain('*Sources*');
+			expect(result).toContain('CoinDesk: https://bit.ly/btc');
+			expect(result).toContain('Bloomberg: https://bit.ly/crypto');
+		});
+
+		it('should handle missing technical levels', async () => {
+			const formatter = new WhatsAppMarkdownFormatter({
+				urlShortener: mockUrlShortener,
+			});
+
+			const enriched = {
+				original_text: 'Alert',
+				sentiment: 'NEUTRAL',
+				sentiment_score: 0.5,
+				insights: ['Insight'],
+				technical_levels: { supports: [], resistances: [] },
+				sources: [],
+			};
+
+			const result = await formatter.formatEnriched(enriched);
+			expect(result).not.toContain('*Technical Levels*');
+		});
+
+		it('should handle degraded/short alert (minimal fields)', async () => {
+			const formatter = new WhatsAppMarkdownFormatter({
+				urlShortener: mockUrlShortener,
+			});
+
+			const degradedAlert = {
+				original_text: 'Short alert',
+				sentiment: 'NEUTRAL',
+				sentiment_score: 0,
+				insights: [],
+				technical_levels: { supports: [], resistances: [] },
+				sources: [],
+			};
+
+			const result = await formatter.formatEnriched(degradedAlert);
+
+			expect(result).toContain('*Short alert*');
+			expect(result).toContain('Sentiment: NEUTRAL 😐 (0.00)');
+			expect(result).not.toContain('*Key Insights*');
+			expect(result).not.toContain('*Technical Levels*');
+			expect(result).not.toContain('*Sources*');
+		});
+
+		it('should handle undefined optional fields', async () => {
+			const formatter = new WhatsAppMarkdownFormatter({
+				urlShortener: mockUrlShortener,
+			});
+
+			const minimalAlert = {
+				original_text: 'Minimal alert',
+				sentiment: 'BULLISH',
+				sentiment_score: 0.8,
+				// insights undefined
+				// technical_levels undefined
+				// sources undefined
+			};
+
+			const result = await formatter.formatEnriched(minimalAlert);
+
+			expect(result).toContain('*Minimal alert*');
+			expect(result).toContain('Sentiment: BULLISH 🚀 (0.80)');
+			expect(result).not.toContain('*Key Insights*');
+			expect(result).not.toContain('*Technical Levels*');
+			expect(result).not.toContain('*Sources*');
+		});
+	});
+
 	describe('formatEnriched() async - URL Shortening', () => {
 		it('should shorten URLs in enriched citations', async () => {
 			const formatter = new WhatsAppMarkdownFormatter({
@@ -48,9 +169,9 @@ describe('WhatsAppMarkdownFormatter - T028 URL Shortening Integration', () => {
 			});
 
 			const enriched = {
-				originalText: 'Market update',
-				summary: 'Bitcoin surged',
-				citations: [
+				original_text: 'Market update',
+				insights: ['Bitcoin surged'],
+				sources: [
 					{ title: 'Reuters', url: 'https://example.com/very/long/url' },
 				],
 			};
@@ -72,9 +193,9 @@ describe('WhatsAppMarkdownFormatter - T028 URL Shortening Integration', () => {
 			);
 
 			const enriched = {
-				originalText: 'Alert text',
-				summary: 'Update',
-				citations: [
+				original_text: 'Alert text',
+				insights: ['Update'],
+				sources: [
 					{ title: 'Source', url: 'https://example.com/url' },
 				],
 			};
@@ -89,9 +210,9 @@ describe('WhatsAppMarkdownFormatter - T028 URL Shortening Integration', () => {
 			const formatter = new WhatsAppMarkdownFormatter({});
 
 			const enriched = {
-				originalText: 'Alert',
-				summary: 'Update',
-				citations: [
+				original_text: 'Alert',
+				insights: ['Update'],
+				sources: [
 					{ title: 'Source', url: 'https://example.com/url' },
 				],
 			};
@@ -113,9 +234,9 @@ describe('WhatsAppMarkdownFormatter - T028 URL Shortening Integration', () => {
 			});
 
 			const enriched = {
-				originalText: 'News update',
-				summary: 'Market alert',
-				citations: [
+				original_text: 'News update',
+				insights: ['Market alert'],
+				sources: [
 					{ title: 'Bloomberg', url: 'https://example.com/url1' },
 					{ title: 'Reuters', url: 'https://example.com/url2' },
 				],
@@ -140,9 +261,9 @@ describe('WhatsAppMarkdownFormatter - T028 URL Shortening Integration', () => {
 			});
 
 			const enriched = {
-				originalText: 'Update',
-				summary: 'Summary',
-				citations: [
+				original_text: 'Update',
+				insights: ['Summary'],
+				sources: [
 					{ title: 'Working', url: 'https://example.com/url1' },
 					{ title: 'Failed', url: 'https://example.com/url2' },
 				],
@@ -167,9 +288,9 @@ describe('WhatsAppMarkdownFormatter - T028 URL Shortening Integration', () => {
 			});
 
 			const enriched = {
-				originalText: 'Original alert body',
-				summary: 'AI-generated summary text',
-				citations: [
+				original_text: 'Original alert body',
+				insights: ['AI-generated summary text'],
+				sources: [
 					{ title: 'Source', url: 'https://example.com/url' },
 				],
 			};
@@ -192,9 +313,9 @@ describe('WhatsAppMarkdownFormatter - T028 URL Shortening Integration', () => {
 			);
 
 			const enriched = {
-				originalText: 'Alert',
-				summary: 'Update',
-				citations: [
+				original_text: 'Alert',
+				insights: ['Update'],
+				sources: [
 					{ title: 'Source', url: 'https://example.com/url' },
 				],
 			};
@@ -211,9 +332,9 @@ describe('WhatsAppMarkdownFormatter - T028 URL Shortening Integration', () => {
 			});
 
 			const enriched = {
-				originalText: 'Alert without citations',
-				summary: 'Summary text',
-				citations: [],
+				original_text: 'Alert without citations',
+				insights: ['Summary text'],
+				sources: [],
 			};
 
 			const result = await formatter.formatEnriched(enriched);
@@ -229,9 +350,9 @@ describe('WhatsAppMarkdownFormatter - T028 URL Shortening Integration', () => {
 			});
 
 			const enriched = {
-				originalText: 'Alert',
-				summary: 'Summary',
-				citations: [
+				original_text: 'Alert',
+				insights: ['Summary'],
+				sources: [
 					{ title: 'Source without URL' },
 				],
 			};
@@ -254,9 +375,9 @@ describe('WhatsAppMarkdownFormatter - T028 URL Shortening Integration', () => {
 			});
 
 			const enriched = {
-				originalText: 'Alert',
-				summary: 'Summary',
-				citations: [
+				original_text: 'Alert',
+				insights: ['Summary'],
+				sources: [
 					{ title: 'Source', url: 'https://example.com/url' },
 				],
 			};
@@ -277,9 +398,9 @@ describe('WhatsAppMarkdownFormatter - T028 URL Shortening Integration', () => {
 			});
 
 			const enriched = {
-				originalText: 'x'.repeat(1000),
-				summary: 'Summary',
-				citations: [
+				original_text: 'x'.repeat(1000),
+				insights: ['Summary'],
+				sources: [
 					{ title: 'Source', url: 'https://example.com/url' },
 				],
 				truncated: true,
@@ -298,10 +419,10 @@ describe('WhatsAppMarkdownFormatter - T028 URL Shortening Integration', () => {
 			mockUrlShortener.shortenUrlsParallel.mockResolvedValue({});
 
 			const enriched = {
-				originalText: 'Alert text',
-				summary: 'Summary',
+				original_text: 'Alert text',
+				insights: ['Summary'],
 				extraText: 'Additional metadata',
-				citations: [],
+				sources: [],
 			};
 
 			const result = await formatter.formatEnriched(enriched);
@@ -319,9 +440,9 @@ describe('WhatsAppMarkdownFormatter - T028 URL Shortening Integration', () => {
 			});
 
 			const enriched = {
-				originalText: 'Alert \\*with\\* escapes',
-				summary: 'Summary\\_with\\_underscores',
-				citations: [
+				original_text: 'Alert \\*with\\* escapes',
+				insights: ['Summary\\_with\\_underscores'],
+				sources: [
 					{ title: 'Source \\*bold\\*', url: 'https://example.com/url' },
 				],
 			};
@@ -343,9 +464,9 @@ describe('WhatsAppMarkdownFormatter - T028 URL Shortening Integration', () => {
 			});
 
 			const enriched = {
-				originalText: 'Alert',
-				summary: 'Summary',
-				citations: [
+				original_text: 'Alert',
+				insights: ['Summary'],
+				sources: [
 					{ title: 'Valid', url: 'https://example.com/url' },
 					{ title: 'Invalid', url: 'not-a-url' },
 				],
@@ -369,9 +490,9 @@ describe('WhatsAppMarkdownFormatter - T028 URL Shortening Integration', () => {
 			});
 
 			const enriched = {
-				originalText: 'Alert',
-				summary: 'Summary',
-				citations: [
+				original_text: 'Alert',
+				insights: ['Summary'],
+				sources: [
 					{ title: 'Long URL', url: longUrl },
 				],
 			};
@@ -391,9 +512,9 @@ describe('WhatsAppMarkdownFormatter - T028 URL Shortening Integration', () => {
 			});
 
 			const enriched = {
-				originalText: 'Alert',
-				summary: 'Summary',
-				citations: [
+				original_text: 'Alert',
+				insights: ['Summary'],
+				sources: [
 					{ title: 'Source *bold* _italic_ ~strikethrough~', url: 'https://example.com/url' },
 				],
 			};
@@ -401,6 +522,38 @@ describe('WhatsAppMarkdownFormatter - T028 URL Shortening Integration', () => {
 			const result = await formatter.formatEnriched(enriched);
 
 			expect(result).toBeDefined();
+		});
+	});
+
+	describe('formatNewsAlert() - Backward Compatibility', () => {
+		it('should format news alert correctly', async () => {
+			const formatter = new WhatsAppMarkdownFormatter({
+				urlShortener: mockUrlShortener,
+			});
+
+			mockUrlShortener.shortenUrlsParallel.mockResolvedValue({
+				'https://example.com/1': 'https://bit.ly/1',
+			});
+
+			const enriched = {
+				originalText: 'Bitcoin surges',
+				summary: '*Sentiment:* Bullish 🚀 (0.85)\n*Price:* $83000',
+				citations: [
+					{ title: 'Source 1', url: 'https://example.com/1' },
+					{ title: 'Source 2', url: 'https://example.com/2' },
+				],
+				extraText: '_Model Confidence: 90%_',
+			};
+
+			const result = await formatter.formatEnriched(enriched);
+
+			expect(result).toContain('*Bitcoin surges*');
+			expect(result).toContain('*Sentiment:* Bullish 🚀 (0.85)');
+			expect(result).toContain('*Price:* $83000');
+			expect(result).toContain('*Sources*');
+			expect(result).toContain('Source 1: https://bit.ly/1');
+			expect(result).toContain('Source 2: https://example.com/2');
+			expect(result).toContain('_Model Confidence: 90%_');
 		});
 	});
 
@@ -454,9 +607,9 @@ describe('WhatsAppMarkdownFormatter - T028 URL Shortening Integration', () => {
 			});
 
 			const enriched = {
-				originalText: 'Alert',
-				summary: 'Summary',
-				citations: undefined,
+				original_text: 'Alert',
+				insights: ['Summary'],
+				sources: undefined,
 			};
 
 			const result = await formatter.formatEnriched(enriched);
@@ -473,9 +626,9 @@ describe('WhatsAppMarkdownFormatter - T028 URL Shortening Integration', () => {
 			);
 
 			const enriched = {
-				originalText: 'Alert',
-				summary: 'Summary',
-				citations: [
+				original_text: 'Alert',
+				insights: ['Summary'],
+				sources: [
 					{ title: 'Source', url: 'https://example.com/url' },
 				],
 			};
@@ -495,9 +648,9 @@ describe('WhatsAppMarkdownFormatter - T028 URL Shortening Integration', () => {
 			});
 
 			const enriched = {
-				originalText: 'Alert',
-				summary: 'Summary',
-				citations: [
+				original_text: 'Alert',
+				insights: ['Summary'],
+				sources: [
 					{ title: 'Valid HTTPS', url: 'https://example.com/valid' },
 					{ title: 'Valid HTTP', url: 'http://example.com/valid' },
 					{ title: 'No protocol', url: 'example.com/url' },

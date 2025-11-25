@@ -81,53 +81,124 @@ class MarkdownV2Formatter {
 	}
 
 	/**
-   * Format an enriched alert with summary and citations
-   * @param {Object} enriched - Enriched alert object with originalText, summary, citations, etc.
-   * @returns {string} Formatted message with bold title, summary, and sources
+   * Format an enriched alert with sentiment, insights, technical levels, and sources
+   * Dispatches to specific formatter based on enriched data structure
+   * @param {Object} enriched - Enriched alert object
+   * @returns {string} Formatted message with MarkdownV2 escaping
    */
 	formatEnriched(enriched = {}) {
-		const { originalText = '', summary = '', citations = [], extraText = '', truncated = false } = enriched;
+		// Check for Feature 004 EnrichedAlert structure (has original_text or insights array)
+		if (enriched.original_text || (enriched.insights && Array.isArray(enriched.insights))) {
+			return this.formatWebhookAlert(enriched);
+		}
+		// Fallback to Feature 003 NewsAlert structure
+		return this.formatNewsAlert(enriched);
+	}
 
-		// Use smart escape for content (escape markdown syntax, not regular punctuation)
-		const escapedText = smartEscapeMarkdownV2(
-			normalizeBackslashes(originalText),
-		);
-		const escapedSummary = smartEscapeMarkdownV2(
-			normalizeBackslashes(summary),
-		);
-		const escapedExtraText = smartEscapeMarkdownV2(
-			normalizeBackslashes(extraText),
-		);
+	/**
+   * Format Feature 004 EnrichedAlert (Webhook)
+   * @param {Object} enriched - EnrichedAlert object
+   * @returns {string} Formatted message
+   */
+	formatWebhookAlert(enriched = {}) {
+		const {
+			original_text = '',
+			sentiment = 'NEUTRAL',
+			sentiment_score = 0,
+			insights = [],
+			technical_levels = { supports: [], resistances: [] },
+			sources = [],
+			truncated = false,
+		} = enriched;
 
-		// Format citations: [escapedTitle](url) - must keep URL unescaped for links to work
-		const formattedSources = citations
-			.map(({ title = '', url = '' }) => {
-				const unescapedTitle = title.replace(/\\([_*[\]~`>#{=|\.}])/g, '$1');
-				const escapedTitle = smartEscapeMarkdownV2(
-					normalizeBackslashes(unescapedTitle),
-				);
-				// URLs in MarkdownV2 must not be escaped
-				return `[${escapedTitle}](${url})`;
-			})
-			.join(' / ');
+		// Use smart escape for content
+		const escapedText = smartEscapeMarkdownV2(normalizeBackslashes(original_text));
 
-		// Build the message - markdown delimiters (* for bold) are NOT escaped
+		// Build the message
 		let message = `*${escapedText}*`;
 
-		// Add truncation notice if needed
 		if (truncated) {
-			message += '\n\n_(Message was truncated due to length)_';
+			message += '\n\n_\\(Message was truncated due to length\\)_';
 		}
 
-		// Add enriched content sections - these delimiters are literal, not escaped
-		message += `\n\n*Contexto:*\n\n${escapedSummary}`;
 
-		if (citations.length > 0) {
-			message += `\n\n*Fuentes:*\n${formattedSources}`;
+		// Insights
+		if (insights.length > 0) {
+			message += '\n\n*Key Insights*';
+			insights.forEach(insight => {
+				message += `\n• ${smartEscapeMarkdownV2(normalizeBackslashes(insight))}`;
+			});
 		}
 
-		if (escapedExtraText) {
-			message += `\n\n${escapedExtraText}`;
+		// Sentiment
+		const sentimentEmoji = sentiment === 'BULLISH' ? '🚀' : sentiment === 'BEARISH' ? '🔻' : '😐';
+		const score = sentiment_score.toFixed(2).replace('.', '\\.'); // Escape dot
+		message += `\n\nSentiment: ${sentiment} ${sentimentEmoji} \\(${score}\\)`;
+
+		// Technical Levels
+		const hasSupports = technical_levels.supports && technical_levels.supports.length > 0;
+		const hasResistances = technical_levels.resistances && technical_levels.resistances.length > 0;
+
+		if (hasSupports || hasResistances) {
+			message += '\n\n*Technical Levels*';
+			if (hasSupports) {
+				const supports = technical_levels.supports.map(s => smartEscapeMarkdownV2(s)).join(', ');
+				message += `\nSupports: ${supports}`;
+			}
+			if (hasResistances) {
+				const resistances = technical_levels.resistances.map(r => smartEscapeMarkdownV2(r)).join(', ');
+				message += `\nResistances: ${resistances}`;
+			}
+		}
+
+		// Sources
+		if (sources.length > 0) {
+			const formattedSources = sources
+				.map(({ title = '', url = '' }) => {
+					const unescapedTitle = title.replace(/\\([_*[\]~`>#{=|\.}])/g, '$1');
+					const escapedTitle = smartEscapeMarkdownV2(normalizeBackslashes(unescapedTitle));
+					return `[${escapedTitle}](${url})`;
+				})
+				.join(' / ');
+			message += `\n\n*Sources*\n${formattedSources}`;
+		}
+
+		return message;
+	}
+
+	/**
+   * Format Feature 003 NewsAlert (News Monitor)
+   * @param {Object} enriched - NewsAlert enriched object
+   * @returns {string} Formatted message
+   */
+	formatNewsAlert(enriched = {}) {
+		const { originalText = '', summary = '', citations = [], extraText = '' } = enriched;
+
+		// Escape title
+		const escapedTitle = smartEscapeMarkdownV2(normalizeBackslashes(originalText));
+		let message = `*${escapedTitle}*`;
+
+		// Summary - assume it contains some markdown (*Sentiment:*) but also dynamic text.
+		// We append it as is to preserve NewsAnalyzer formatting.
+		if (summary) {
+			message += `\n\n${summary}`;
+		}
+
+		// Citations
+		if (citations && citations.length > 0) {
+			const formattedCitations = citations
+				.map(c => {
+					// Title might need escaping
+					const escapedTitle = smartEscapeMarkdownV2(normalizeBackslashes(c.title || 'Source'));
+					return `[${escapedTitle}](${c.url})`;
+				})
+				.join(' \\| '); // Escape pipe
+			message += `\n\nSources: ${formattedCitations}`;
+		}
+
+		// Extra text (Model confidence etc) - contains markdown (_)
+		if (extraText) {
+			message += `\n\n${extraText}`;
 		}
 
 		return message;

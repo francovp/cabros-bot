@@ -17,8 +17,11 @@ describe('Alert Handler', () => {
 	it('should enrich alert with grounded content', async () => {
 		const alert = { text: 'Bitcoin breaks $50,000 mark' };
 		const groundedContent = {
-			summary: 'Market update: BTC reaches 50k milestone',
-			citations: [
+			sentiment: 'BULLISH',
+			sentiment_score: 0.9,
+			insights: ['Market update: BTC reaches 50k milestone'],
+			technical_levels: { supports: [], resistances: [] },
+			sources: [
 				{
 					title: 'Test Source',
 					snippet: 'Test snippet',
@@ -33,9 +36,9 @@ describe('Alert Handler', () => {
 
 		const result = await enrichAlert(alert);
 
-		expect(result.originalText).toBe(alert.text);
-		expect(result.summary).toBe(groundedContent.summary);
-		expect(result.citations).toEqual(groundedContent.citations);
+		expect(result.original_text).toBe(alert.text);
+		expect(result.insights).toEqual(groundedContent.insights);
+		expect(result.sources).toEqual(groundedContent.sources);
 		expect(result.truncated).toBe(false);
 
 		expect(groundAlert).toHaveBeenCalledWith({
@@ -74,8 +77,11 @@ describe('Alert Handler', () => {
 	it('should preserve truncation status', async () => {
 		const alert = { text: 'A'.repeat(5000) };
 		const groundedContent = {
-			summary: 'Summary of long text',
-			citations: [],
+			sentiment: 'NEUTRAL',
+			sentiment_score: 0,
+			insights: ['Summary of long text'],
+			technical_levels: { supports: [], resistances: [] },
+			sources: [],
 			truncated: true,
 		};
 

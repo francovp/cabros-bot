@@ -55,10 +55,15 @@ describe('Alert Grounding Integration', () => {
 
 		genaiClient.llmCall.mockResolvedValue({
 			text: JSON.stringify({
-				summary: 'Test summary',
-				citations: mockSearchResults,
-				confidence: 0.85,
+				sentiment: 'BULLISH',
+				sentiment_score: 0.9,
+				insights: ['Insight 1', 'Insight 2'],
+				technical_levels: {
+					supports: ['80000'],
+					resistances: ['85000'],
+				},
 			}),
+			citations: mockSearchResults,
 		});
 
 		// Mock Telegram bot
@@ -113,6 +118,54 @@ describe('Alert Grounding Integration', () => {
 			const telegramResult = response.body.results.find(r => r.channel === 'telegram');
 			expect(telegramResult).toBeDefined();
 			expect(telegramResult.success).toBe(true);
+
+			// Verify Telegram message content
+			if (mockTelegramSendMessage.mock.calls.length > 0) {
+				const telegramCall = mockTelegramSendMessage.mock.calls[0];
+				const messageText = telegramCall[1];
+				// Assertions for new enriched format
+				expect(messageText).toContain('Sentiment: BULLISH');
+				expect(messageText).toContain('*Key Insights*');
+				expect(messageText).toContain('Insight 1');
+				expect(messageText).toContain('*Technical Levels*');
+				expect(messageText).toContain('Supports: 80000');
+				expect(messageText).toContain('*Sources*');
+				expect(messageText).toContain('[Test Result 1](https://test1.com)');
+			}
+		}, 10000);
+
+		it('should handle invalid Gemini JSON by degrading to safe alert', async () => {
+			// Mock invalid JSON response
+			genaiClient.llmCall.mockResolvedValue({
+				text: 'Invalid JSON',
+				citations: mockSearchResults,
+			});
+
+			const alertText = 'Test alert';
+
+			const response = await request(app)
+				.post('/api/webhook/alert')
+				.send({ text: alertText })
+				.expect(200);
+
+			expect(response.body.success).toBe(true);
+			// Should be true because we degrade to a safe enriched alert
+			expect(response.body.enriched).toBe(true);
+			expect(Array.isArray(response.body.results)).toBe(true);
+
+			// Verify telegram result
+			const telegramResult = response.body.results.find(r => r.channel === 'telegram');
+			expect(telegramResult).toBeDefined();
+			expect(telegramResult.success).toBe(true);
+
+			// Verify message content indicates degradation
+			if (mockTelegramSendMessage.mock.calls.length > 0) {
+				const telegramCall = mockTelegramSendMessage.mock.calls[0];
+				const messageText = telegramCall[1];
+				expect(messageText).toContain('NEUTRAL');
+				// The degraded alert might have specific insights or empty ones
+				// Depending on implementation of _createDegradedAlert
+			}
 		});
 
 		it('should handle grounding failure gracefully', async () => {
@@ -138,8 +191,8 @@ describe('Alert Grounding Integration', () => {
 
 		it('should respect grounding timeout', async () => {
 			// Simulate grounded summary taking too long by never resolving the
-			// generateGroundedSummary function (groundAlert times out around it)
-			jest.spyOn(gemini, 'generateGroundedSummary').mockImplementationOnce(() => new Promise(() => {
+			// generateEnrichedAlert function (groundAlert times out around it)
+			jest.spyOn(gemini, 'generateEnrichedAlert').mockImplementationOnce(() => new Promise(() => {
 				// never resolve to trigger grounding timeout
 			}));
 

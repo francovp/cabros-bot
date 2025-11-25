@@ -1,11 +1,7 @@
 const genaiClient = require('./genaiClient');
 const { validateGeminiResponse } = require('../../lib/validation');
-const { GEMINI_SYSTEM_PROMPT, GROUNDING_MODEL_NAME, GEMINI_MODEL_NAME, GEMINI_MODEL_NAME_FALLBACK, ENABLE_NEWS_MONITOR_TEST_MODE } = require('./config');
+const { GEMINI_SYSTEM_PROMPT, GROUNDING_MODEL_NAME, GEMINI_MODEL_NAME, GEMINI_MODEL_NAME_FALLBACK, ENABLE_NEWS_MONITOR_TEST_MODE, NEWS_ANALYSIS_SYSTEM_PROMPT } = require('./config');
 const { EventCategory } = require('../../controllers/webhooks/handlers/newsMonitor/constants');
-
-// News analysis system prompt for Gemini
-const NEWS_ANALYSIS_SYSTEM_PROMPT = `You are a financial market sentiment analyst specializing in crypto and stock news analysis.
-Analyze the provided news/context and detect market-moving events.`;
 
 /**
  * Generates a summary with citations given an alert text and optional context
@@ -84,6 +80,8 @@ async function detectLanguage(text) {
 
 module.exports = {
 	generateGroundedSummary,
+	generateEnrichedAlert,
+	parseEnrichedAlertResponse,
 	analyzeNewsForSymbol,
 	parseNewsAnalysisResponse,
 };
@@ -270,6 +268,118 @@ function parseNewsAnalysisResponse(response) {
 			sentiment_score: 0,
 			headline: 'Could not detect market event',
 			description: ''
+		};
+	}
+}
+
+/**
+ * Generates a structured enriched alert with sentiment, insights, and technical levels
+ * @param {object} params
+ * @param {string} params.text - Alert text
+ * @param {Array<import('./types').SearchResult>} params.searchResults - Grounding context
+ * @param {string} params.searchResultText - Additional context text
+ * @param {object} params.options - Options (maxLength, preserveLanguage)
+ * @returns {Promise<Omit<import('./types').EnrichedAlert, 'original_text' | 'sources'>>} Enriched alert data
+ */
+async function generateEnrichedAlert({ text, searchResults = [], searchResultText = '', options = {} }) {
+	const {
+		preserveLanguage = true,
+		systemPrompt = GEMINI_SYSTEM_PROMPT,
+	} = options;
+
+	// Short alert check (< 15 chars or < 2 words)
+	if (text.length < 15 || text.split(/\s+/).length < 2) {
+		return {
+			sentiment: 'NEUTRAL',
+			sentiment_score: 0.5,
+			insights: [],
+			technical_levels: { supports: [], resistances: [] },
+		};
+	}
+
+	// Prepare prompt with language preservation if needed
+	const detectedLanguage = await detectLanguage(text);
+	const langDirective = preserveLanguage && detectedLanguage !== 'en'
+		? `Respond in ${detectedLanguage} language. `
+		: '';
+
+	const contextPrompt = searchResults.length > 0
+		? `\n\nContext from verified sources:\n${searchResults
+			.map(result => `- ${result.title}\n  ${result.snippet}`)
+			.join('\n')}`
+		: '';
+
+	const contextSnippet = searchResultText
+		? `\n\nAdditional context for the sources:\n${searchResultText}`
+		: '';
+
+	const prompt = `${systemPrompt}\n\n${langDirective}
+Analyze this alert and provide structured insights, sentiment, and technical levels based on the context.
+
+Alert: ${text}${contextPrompt}${contextSnippet}
+
+Instructions:
+- **Output:** Respond *only* with a single, valid JSON object.
+- **JSON schema:**
+{
+  "sentiment": "BULLISH" | "BEARISH" | "NEUTRAL",
+  "sentiment_score": number (0.0 to 1.0),
+  "insights": string[] (max 3 key points),
+  "technical_levels": {
+    "supports": string[],
+    "resistances": string[]
+  }
+}
+`;
+
+	try {
+		const { text: responseText } = await genaiClient.llmCall({
+			prompt,
+			context: { citations: searchResults },
+			opts: { model: GROUNDING_MODEL_NAME, temperature: 0.2 },
+		});
+
+		return parseEnrichedAlertResponse(responseText);
+	} catch (error) {
+		throw new Error(`Enriched alert generation failed: ${error.message}`);
+	}
+}
+
+/**
+ * Parse and validate Gemini enriched alert response
+ * @param {string} response - Raw Gemini response
+ * @returns {object} Validated enriched alert data
+ */
+function parseEnrichedAlertResponse(response) {
+	try {
+		const jsonMatch = response.match(/\{[\s\S]*\}/);
+		if (!jsonMatch) {
+			throw new Error('No JSON found in response');
+		}
+
+		const parsed = JSON.parse(jsonMatch[0]);
+
+		// Validate required fields
+		if (!['BULLISH', 'BEARISH', 'NEUTRAL'].includes(parsed.sentiment)) {
+			parsed.sentiment = 'NEUTRAL';
+		}
+		
+		return {
+			sentiment: parsed.sentiment,
+			sentiment_score: Math.max(0, Math.min(1, parsed.sentiment_score || 0.5)),
+			insights: Array.isArray(parsed.insights) ? parsed.insights.slice(0, 3) : [],
+			technical_levels: {
+				supports: Array.isArray(parsed?.technical_levels?.supports) ? parsed.technical_levels.supports : [],
+				resistances: Array.isArray(parsed?.technical_levels?.resistances) ? parsed.technical_levels.resistances : [],
+			},
+		};
+	} catch (error) {
+		console.warn(`[Gemini] Response parsing failed, using safe defaults: ${error.message}`);
+		return {
+			sentiment: 'NEUTRAL',
+			sentiment_score: 0.5,
+			insights: [],
+			technical_levels: { supports: [], resistances: [] },
 		};
 	}
 }
