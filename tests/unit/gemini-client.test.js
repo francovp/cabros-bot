@@ -67,7 +67,7 @@ describe('Gemini Service', () => {
 
 			expect(genaiClient.llmCall).toHaveBeenCalledWith(
 				expect.objectContaining({
-					prompt: expect.stringContaining('Respond in es'),
+					prompt: expect.stringContaining('Respond in the same language as the Alert text.'),
 				}),
 			);
 		});
@@ -199,7 +199,7 @@ describe('Gemini Service', () => {
 
 			expect(genaiClient.llmCall).toHaveBeenCalledWith(
 				expect.objectContaining({
-					prompt: expect.stringContaining('Respond in unknown language'),
+					prompt: expect.stringContaining('Respond in the same language as the Alert text.'),
 				}),
 			);
 		});

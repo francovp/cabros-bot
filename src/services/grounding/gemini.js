@@ -28,9 +28,8 @@ async function generateGroundedSummary({ text, searchResults = [], searchResultT
 	}
 
 	// Prepare prompt with language preservation if needed
-	const detectedLanguage = await detectLanguage(text);
-	const langDirective = preserveLanguage && detectedLanguage !== 'en'
-		? `Respond in ${detectedLanguage} language. `
+	const langDirective = preserveLanguage
+		? 'Respond in the same language as the Alert text.'
 		: '';
 
 	const contextPrompt = searchResults.length > 0
@@ -67,16 +66,7 @@ Alert: ${text}${contextPrompt}${contextSnippet}`;
 	}
 }
 
-/**
- * Basic language detection - can be enhanced with a proper language detection library
- * @param {string} text Text to detect language for
- * @returns {Promise<string>} ISO language code
- */
-async function detectLanguage(text) {
-	// TODO: Implement proper language detection
-	// For now, just check if text has non-ASCII characters
-	return /[^a-zA-Z0-9\s.,!?]/.test(text) ? 'unknown' : 'es';
-}
+
 
 module.exports = {
 	generateGroundedSummary,
@@ -298,9 +288,8 @@ async function generateEnrichedAlert({ text, searchResults = [], searchResultTex
 	}
 
 	// Prepare prompt with language preservation if needed
-	const detectedLanguage = await detectLanguage(text);
-	const langDirective = preserveLanguage && detectedLanguage !== 'en'
-		? `Respond in ${detectedLanguage} language. `
+	const langDirective = preserveLanguage
+		? 'Respond in the same language as the Alert text.'
 		: '';
 
 	const contextPrompt = searchResults.length > 0
