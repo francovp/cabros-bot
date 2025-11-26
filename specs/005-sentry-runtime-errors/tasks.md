@@ -52,6 +52,10 @@ description: "Task list for feature 005-sentry-runtime-errors (Sentry runtime er
 - [ ] T008 Implement convenience wrappers in `src/services/monitoring/SentryService.js` (for example `captureRuntimeError` and `captureExternalFailure`) that build `ErrorEvent` skeletons for runtime and external failures before delegating to `captureEvent`
 - [ ] T009 Wire `SentryService.init()` into the application startup in `index.js` so monitoring is initialized once when the process starts, without altering existing Express or Telegram/WhatsApp boot logic
 
+### Additional tests for process-level error capture (FR-002)
+
+- [ ] T009A Add targeted tests (for example, a small harness under `tests/integration/sentry-process-errors.test.js` or equivalent) to verify that `uncaughtException` y `unhandledRejection` a nivel de proceso producen al menos un evento de error en Sentry antes de que el proceso termine o se reinicie, cumpliendo FR-002. Estos tests MUST stub o aislar la inicialización del proceso para no interferir con el runner principal de Jest.
+
 **Checkpoint**: Monitoring layer initialized and callable as a no-op when disabled; user stories can now add specific capture points.
 
 ---

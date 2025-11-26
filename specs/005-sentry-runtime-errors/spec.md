@@ -64,19 +64,29 @@ Como responsable de la plataforma, quiero poder decidir en qué entornos se acti
 
 ### Functional Requirements
 
-- **FR-001**: El sistema MUST capturar en Sentry todos los errores en tiempo de ejecución que hoy resultan en respuestas de error en los endpoints HTTP principales (como `/api/webhook/alert` y `/api/news-monitor`), incluyendo información mínima de contexto (tipo de endpoint, código de respuesta, entorno lógico y un identificador de request cuando exista).
+- **FR-001**: El sistema MUST capturar en Sentry todos los errores en tiempo de ejecución que hoy resultan en respuestas de error en los endpoints HTTP principales (como `/api/webhook/alert` y `/api/news-monitor`), incluyendo como mínimo el siguiente contexto:
+
+	- Identificación de la petición HTTP: método (`http.method`), ruta lógica o path (`http.target` o equivalente), código de respuesta final (`http.status_code`) y un identificador de request cuando exista (por ejemplo, un header `X-Request-ID` o un correlativo interno).
+	- Canal y feature de origen: tags como `channel=http-alert|news-monitor|telegram|whatsapp` y `feature=gemini-grounding|news-monitor|...` que permitan agrupar incidentes por flujo funcional.
+	- Entorno lógico y release: un tag `environment=production|preview|development|test` y un identificador de release derivado de la versión desplegada (por ejemplo, commit SHA o etiqueta de despliegue).
+	- Información básica del error: tipo de error de alto nivel (por ejemplo, `runtime_error`, `external_failure`), mensaje de error y, cuando sea posible, un stack trace resumido.
+	- Metadatos específicos del flujo: para alertas, al menos símbolo(s) afectados y tipo de alerta; para news monitor, al menos símbolo(s) y tipo de evento/noticia.
 
 - **FR-002**: El sistema MUST capturar en Sentry excepciones no controladas y rechazos de promesas no gestionados a nivel de proceso, de forma que al menos un evento por incidente quede registrado antes de que el proceso termine o se reinicie.
 
 - **FR-003**: La integración con Sentry MUST ser no intrusiva en la experiencia de usuario: la semántica de las respuestas HTTP y el comportamiento de envío de mensajes (Telegram, WhatsApp) MUST permanecer inalterados aunque Sentry falle, esté mal configurado o no esté disponible.
 
-- **FR-004**: Los operadores MUST poder controlar mediante configuración basada en entorno qué despliegues envían eventos a Sentry y con qué etiquetas de entorno y versión (por ejemplo, distinguir producción, preview y desarrollo, y asociar cada evento a un identificador de release derivado de la versión desplegada).
+- **FR-004**: Los operadores MUST poder controlar mediante configuración basada en entorno qué despliegues envían eventos a Sentry y con qué etiquetas de entorno y versión (por ejemplo, distinguir producción, preview y desarrollo, y asociar cada evento a un identificador de release derivado de la versión desplegada). Esta capacidad de control aplica a todos los entornos lógicos; el caso particular de entornos de preview se detalla en FR-011.
 
 - **FR-005**: Para cada fallo persistente en integraciones externas (por ejemplo, APIs de Telegram, WhatsApp, Gemini, Azure, acortadores de URL o Binance) que ya cuentan con lógica de reintentos, el sistema MUST generar un evento de error en Sentry cuando se agoten todos los reintentos sin éxito, incluyendo metadatos sobre el servicio afectado, número de intentos y duración total aproximada.
 
 - **FR-006**: La integración MUST evitar generar eventos de error en Sentry para comportamientos explícitamente esperados y controlados, como características deshabilitadas por `feature flags` (por ejemplo, `ENABLE_WHATSAPP_ALERTS=false`, `ENABLE_NEWS_MONITOR=false`), de forma que Sentry refleje incidentes reales y no ruido de configuración prevista.
 
-- **FR-007**: Los eventos de error asociados a contenido de alertas o noticias MUST respetar una política clara de tratamiento de datos, en la que por defecto se envíe a la herramienta de monitoring el texto completo de la alerta/noticia junto con los metadatos relevantes (por ejemplo, longitud del mensaje, símbolo, tipo de evento), siempre que el acceso a dicha herramienta esté restringido a operadores autorizados y se respeten las políticas internas de privacidad.
+- **FR-007**: Los eventos de error asociados a contenido de alertas o noticias MUST respetar una política clara de tratamiento de datos configurable.
+
+	- Por defecto, cuando la integración de monitoring está habilitada, el sistema MUST enviar a la herramienta de monitoring el texto completo de la alerta/noticia junto con metadatos relevantes (por ejemplo, longitud del mensaje, símbolo, tipo de evento), siempre que el acceso a dicha herramienta esté restringido a operadores autorizados y se respeten las políticas internas de privacidad.
+	- La configuración de monitoring MUST exponer un flag (por ejemplo, `sendAlertContent`) que permita desactivar el envío del texto completo. Cuando `sendAlertContent=false`, los eventos de error MUST incluir únicamente información resumida y metadatos (por ejemplo, `textLength`, número de símbolos, tipo de evento), sin el cuerpo íntegro del mensaje.
+	- La política elegida (texto completo vs solo metadatos) MUST poder definirse por entorno (por ejemplo, producción vs preview vs desarrollo) mediante configuración, sin requerir cambios en el código de los handlers.
 
 - **FR-008**: La solución MUST permitir que los tests automatizados y entornos de desarrollo local ejecuten el código sin necesidad de un proyecto Sentry real, pudiendo desactivar o reemplazar fácilmente la integración (por ejemplo, mediante configuración o un wrapper de monitoring) sin modificar los flujos de negocio.
 
@@ -84,7 +94,7 @@ Como responsable de la plataforma, quiero poder decidir en qué entornos se acti
 
 - **FR-010**: Para esta feature, el uso de la herramienta de monitoring MUST centrarse en la captura de errores; no es requisito registrar métricas de rendimiento ni trazas de solicitudes. Si en el futuro se habilita tracing/performance, dicha capacidad deberá poder activarse o desactivarse mediante configuración sin afectar a la semántica ni al tratamiento de los errores.
 
-- **FR-011**: La activación de la herramienta de monitoring en entornos de preview (por ejemplo, despliegues asociados a pull requests) MUST permitir que estos entornos reporten al mismo proyecto que producción, etiquetando de forma explícita los eventos con un entorno lógico como `preview`, y que dicha activación pueda configurarse de forma independiente a la de producción.
+- **FR-011**: Como especialización de FR-004 para entornos de preview, la activación de la herramienta de monitoring en entornos de preview (por ejemplo, despliegues asociados a pull requests) MUST permitir que estos entornos reporten al mismo proyecto que producción, etiquetando de forma explícita los eventos con un entorno lógico como `preview`, y que dicha activación pueda configurarse de forma independiente a la de producción.
 
 ### Key Entities *(include if feature involves data)*
 
@@ -104,9 +114,31 @@ Como responsable de la plataforma, quiero poder decidir en qué entornos se acti
 
 - **SC-003**: Los eventos generados en entornos diferentes (por ejemplo, producción vs preview vs desarrollo) son distinguibles en la herramienta de monitoring mediante etiquetas de entorno y versión, de modo que los operadores puedan filtrar incidentes de producción sin ruido de entornos no productivos.
 
-- **SC-004**: Al menos el 90% de los incidentes críticos en producción (definidos como errores que provocan fallos de entrega de alertas o news monitor) son detectables y triageables solo con la información disponible en la herramienta de monitoring, sin necesidad de acceso adicional a los servidores o a logs fuera del sistema.
+- **SC-004**: Al menos el 90% de los incidentes críticos en producción (según la definición de C1) —tanto errores 5xx sostenidos en `/api/webhook/alert` o `/api/news-monitor` como fallos definitivos de entrega tras reintentos en Telegram/WhatsApp— son detectables y triageables solo con la información disponible en la herramienta de monitoring (eventos y tags de Sentry), sin necesidad de acceso adicional a los servidores ni a logs fuera del sistema.
 
-- **SC-005**: En escenarios de volumen elevado de errores (por ejemplo, fallo sostenido de un proveedor externo), la integración con la herramienta de monitoring sigue permitiendo procesar alertas sin interrupciones apreciables, y el tiempo medio de procesamiento por alerta no aumenta más de un 20% respecto a la situación sin integración.
+## Clarifications
+
+### C1 – Definición de "incidente crítico en producción"
+
+Para efectos de esta especificación y de SC-004, un **incidente crítico en producción** se define como cualquiera de los siguientes casos:
+
+1. **Errores HTTP 5xx sostenidos** en los endpoints de alertas o news monitor (por ejemplo, `/api/webhook/alert` o `/api/news-monitor`), es decir, una condición en la que el servicio devuelve códigos 5xx de forma continuada durante un intervalo de tiempo apreciable o un número significativo de requests consecutivos (por ejemplo, un bug de código o un fallo persistente de infraestructura).
+2. **Fallo definitivo de entrega tras reintentos** en los canales soportados (Telegram, WhatsApp, HTTP de alertas/news monitor), es decir, casos en los que un mensaje o alerta no se entrega por ningún canal previsto después de agotar los reintentos y fallbacks configurados.
+
+Cuando el servicio se ejecuta en Render y el entorno lógico se configura como `production` o `preview`, los eventos de error MUST, siempre que sea razonable, incluir tags derivados de las variables de entorno por defecto de Render, si están presentes. En particular:
+
+- Identidad de servicio e instancia:
+	- `RENDER_SERVICE_ID`, `RENDER_SERVICE_NAME`, `RENDER_SERVICE_TYPE` (por ejemplo, `web`, `worker`)
+	- `RENDER_INSTANCE_ID` y `RENDER_DISCOVERY_SERVICE` (útiles para incidentes en servicios escalados)
+- Git y release:
+	- `RENDER_GIT_COMMIT`, `RENDER_GIT_BRANCH`, `RENDER_GIT_REPO_SLUG` para asociar eventos a una release concreta y a la rama de despliegue
+- Acceso externo:
+	- `RENDER_EXTERNAL_HOSTNAME`, `RENDER_EXTERNAL_URL` para identificar el hostname/URL público del servicio afectado
+- Contexto de entorno Render:
+	- `RENDER=true` (indicador de que corre en Render)
+	- `IS_PULL_REQUEST=true|false` para diferenciar servicios de preview asociados a pull requests
+
+Estos valores SHOULD mapearse a tags y contextos de Sentry (por ejemplo, `service.id`, `service.name`, `service.type`, `service.instance`, `git.commit`, `git.branch`, `deployment.url`) únicamente en entornos `production` y `preview`. En entornos de desarrollo/local o de test, su presencia es opcional y no es requisito enriquecer los eventos con estos metadatos.
 
 ### Assumptions
 
