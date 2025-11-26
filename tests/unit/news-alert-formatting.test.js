@@ -5,12 +5,133 @@
  */
 
 const { NewsAnalyzer } = require('../../src/controllers/webhooks/handlers/newsMonitor/analyzer');
+const MarkdownV2Formatter = require('../../src/services/notification/formatters/markdownV2Formatter');
 
 describe('News Alert Source Formatting', () => {
 	let analyzer;
+	let formatter;
 
 	beforeEach(() => {
 		analyzer = new NewsAnalyzer();
+		formatter = new MarkdownV2Formatter();
+	});
+
+	describe('MarkdownV2Formatter.formatEnriched', () => {
+		const mockEnrichedAlert = {
+			original_text: 'Bitcoin breaks 83k',
+			sentiment: 'BULLISH',
+			sentiment_score: 0.9,
+			insights: [
+				'Bitcoin price surged past $83k.',
+				'Volume indicates strong momentum.',
+			],
+			technical_levels: {
+				supports: ['$80,000', '$81,500'],
+				resistances: ['$85,000'],
+			},
+			sources: [
+				{
+					title: 'CoinDesk',
+					url: 'https://coindesk.com/btc',
+				},
+				{
+					title: 'Bloomberg',
+					url: 'https://bloomberg.com/crypto',
+				},
+			],
+		};
+
+		it('should format enriched alert with all sections', () => {
+			const message = formatter.formatEnriched(mockEnrichedAlert);
+
+			// Check Sentiment
+			expect(message).toContain('Sentiment: BULLISH 🚀 \\(0\\.90\\)');
+
+			// Check Insights
+			expect(message).toContain('*Key Insights*');
+			expect(message).toContain('• Bitcoin price surged past $83k\\.');
+			expect(message).toContain('• Volume indicates strong momentum\\.');
+
+			// Check Technical Levels
+			expect(message).toContain('*Technical Levels*');
+			expect(message).toContain('Supports: $80,000, $81,500');
+			expect(message).toContain('Resistances: $85,000');
+
+			// Check Sources
+			expect(message).toContain('*Sources*');
+			expect(message).toContain('[CoinDesk](https://coindesk.com/btc)');
+			expect(message).toContain('[Bloomberg](https://bloomberg.com/crypto)');
+		});
+
+		it('should handle missing technical levels', () => {
+			const alert = { ...mockEnrichedAlert, technical_levels: { supports: [], resistances: [] } };
+			const message = formatter.formatEnriched(alert);
+			expect(message).not.toContain('*Technical Levels*');
+		});
+
+		it('should handle missing sources', () => {
+			const alert = { ...mockEnrichedAlert, sources: [] };
+			const message = formatter.formatEnriched(alert);
+			expect(message).not.toContain('*Sources*');
+		});
+
+		it('should handle degraded/short alert (minimal fields)', () => {
+			const degradedAlert = {
+				original_text: 'Short alert',
+				sentiment: 'NEUTRAL',
+				sentiment_score: 0,
+				insights: [],
+				technical_levels: { supports: [], resistances: [] },
+				sources: [],
+			};
+			const message = formatter.formatEnriched(degradedAlert);
+
+			expect(message).toContain('*Short alert*');
+			expect(message).toContain('Sentiment: NEUTRAL 😐 \\(0\\.00\\)');
+			expect(message).not.toContain('*Key Insights*');
+			expect(message).not.toContain('*Technical Levels*');
+			expect(message).not.toContain('*Sources*');
+		});
+
+		it('should handle undefined optional fields', () => {
+			const minimalAlert = {
+				original_text: 'Minimal alert',
+				sentiment: 'BULLISH',
+				sentiment_score: 0.8,
+				// insights undefined
+				// technical_levels undefined
+				// sources undefined
+			};
+			const message = formatter.formatEnriched(minimalAlert);
+
+			expect(message).toContain('*Minimal alert*');
+			expect(message).toContain('Sentiment: BULLISH 🚀 \\(0\\.80\\)');
+			expect(message).not.toContain('*Key Insights*');
+			expect(message).not.toContain('*Technical Levels*');
+			expect(message).not.toContain('*Sources*');
+		});
+	});
+
+	describe('MarkdownV2Formatter.formatNewsAlert (Backward Compatibility)', () => {
+		const mockNewsAlert = {
+			originalText: 'Bitcoin surges',
+			summary: '*Sentiment:* Bullish 🚀 (0.85)\n*Price:* $83000',
+			citations: [
+				{ title: 'Source 1', url: 'https://example.com/1' },
+				{ title: 'Source 2', url: 'https://example.com/2' },
+			],
+			extraText: '_Model Confidence: 90%_',
+		};
+
+		it('should format news alert correctly', () => {
+			const message = formatter.formatEnriched(mockNewsAlert);
+
+			expect(message).toContain('*Bitcoin surges*');
+			expect(message).toContain('*Sentiment:* Bullish 🚀 (0.85)');
+			expect(message).toContain('*Price:* $83000');
+			expect(message).toContain('Sources: [Source 1](https://example.com/1) \\| [Source 2](https://example.com/2)');
+			expect(message).toContain('_Model Confidence: 90%_');
+		});
 	});
 
 	describe('formatAlertMessage with SearchResult objects', () => {

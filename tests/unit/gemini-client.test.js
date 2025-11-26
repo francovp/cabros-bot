@@ -1,6 +1,6 @@
 /* global jest, describe, it, expect, beforeEach */
 
-const { generateGroundedSummary } = require('../../src/services/grounding/gemini');
+const { generateGroundedSummary, generateEnrichedAlert } = require('../../src/services/grounding/gemini');
 const genaiClient = require('../../src/services/grounding/genaiClient');
 
 jest.mock('../../src/services/grounding/genaiClient');
@@ -12,6 +12,127 @@ jest.mock('../../src/services/grounding/config', () => ({
 describe('Gemini Service', () => {
 	beforeEach(() => {
 		jest.resetAllMocks();
+	});
+
+	describe('generateEnrichedAlert', () => {
+		const mockSearchResults = [{
+			title: 'Test Source',
+			snippet: 'Test snippet',
+			url: 'https://test.com',
+			sourceDomain: 'test.com',
+		}];
+
+		const mockEnrichedResponse = {
+			sentiment: 'BULLISH',
+			sentiment_score: 0.9,
+			insights: ['Insight 1', 'Insight 2'],
+			technical_levels: {
+				supports: ['80000'],
+				resistances: ['85000'],
+			},
+		};
+
+		it('should generate enriched alert with valid structure', async () => {
+			genaiClient.llmCall.mockResolvedValue({
+				text: JSON.stringify(mockEnrichedResponse),
+				citations: mockSearchResults,
+			});
+
+			const result = await generateEnrichedAlert({
+				text: 'Bitcoin breaks 83k',
+				searchResults: mockSearchResults,
+			});
+
+			expect(result.sentiment).toBe('BULLISH');
+			expect(result.sentiment_score).toBe(0.9);
+			expect(result.insights).toHaveLength(2);
+			expect(result.technical_levels.supports).toContain('80000');
+			// sources are not returned by generateEnrichedAlert
+		});
+
+		it('should handle non-English text with preserved language', async () => {
+			genaiClient.llmCall.mockResolvedValue({
+				text: JSON.stringify({
+					...mockEnrichedResponse,
+					insights: ['Insight en español'],
+				}),
+				citations: [],
+			});
+
+			await generateEnrichedAlert({
+				text: 'Bitcoin rompe 83k ahora mismo', // Longer text to bypass short alert check
+				searchResults: [],
+				options: { preserveLanguage: true },
+			});
+
+			expect(genaiClient.llmCall).toHaveBeenCalledWith(
+				expect.objectContaining({
+					prompt: expect.stringContaining('Respond in the same language as the Alert text.'),
+				}),
+			);
+		});
+
+		it('should handle short alerts with default neutral sentiment', async () => {
+			// Short alert < 15 chars
+			const result = await generateEnrichedAlert({
+				text: 'Hi',
+				searchResults: [],
+			});
+
+			expect(result.sentiment).toBe('NEUTRAL');
+			expect(result.sentiment_score).toBe(0.5);
+			expect(result.insights).toHaveLength(0);
+			expect(genaiClient.llmCall).not.toHaveBeenCalled();
+		});
+
+		it('should parse valid JSON response correctly', async () => {
+			genaiClient.llmCall.mockResolvedValue({
+				text: '```json\n' + JSON.stringify(mockEnrichedResponse) + '\n```',
+				citations: [],
+			});
+
+			const result = await generateEnrichedAlert({
+				text: 'Valid alert text that is long enough',
+				searchResults: [],
+			});
+
+			expect(result.sentiment).toBe('BULLISH');
+		});
+
+		it('should return defaults on malformed JSON', async () => {
+			genaiClient.llmCall.mockResolvedValue({
+				text: 'Invalid JSON',
+				citations: [],
+			});
+
+			const result = await generateEnrichedAlert({
+				text: 'Valid alert text that is long enough',
+				searchResults: [],
+			});
+
+			expect(result.sentiment).toBe('NEUTRAL');
+			expect(result.insights).toHaveLength(0);
+		});
+
+		it('should use provided system prompt', async () => {
+			genaiClient.llmCall.mockResolvedValue({
+				text: JSON.stringify(mockEnrichedResponse),
+				citations: [],
+			});
+
+			const customPrompt = 'Custom system prompt';
+			await generateEnrichedAlert({
+				text: 'Valid alert text',
+				searchResults: [],
+				options: { systemPrompt: customPrompt },
+			});
+
+			expect(genaiClient.llmCall).toHaveBeenCalledWith(
+				expect.objectContaining({
+					prompt: expect.stringContaining(customPrompt),
+				}),
+			);
+		});
 	});
 
 	describe('generateGroundedSummary', () => {
@@ -78,7 +199,7 @@ describe('Gemini Service', () => {
 
 			expect(genaiClient.llmCall).toHaveBeenCalledWith(
 				expect.objectContaining({
-					prompt: expect.stringContaining('Respond in unknown language'),
+					prompt: expect.stringContaining('Respond in the same language as the Alert text.'),
 				}),
 			);
 		});

@@ -6,10 +6,27 @@ export interface Alert {
 	metadata?: object;
 }
 
+export interface Source {
+	title: string;
+	url: string;
+	snippet?: string;
+}
+
+export interface TechnicalLevels {
+	supports: string[];
+	resistances: string[];
+}
+
 export interface EnrichedAlert {
-	originalText: string;
-	summary: string;
-	citations: SearchResult[];
+	original_text: string;
+	sentiment: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
+	sentiment_score: number;
+	insights: string[];
+	technical_levels: TechnicalLevels;
+	sources: Source[];
+	// Legacy fields for backward compatibility during migration
+	summary?: string;
+	citations?: SearchResult[];
 	extraText?: string;
 	truncated?: boolean;
 }

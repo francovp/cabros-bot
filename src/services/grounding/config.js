@@ -28,6 +28,11 @@ Keep summaries under ${GROUNDING_MAX_LENGTH} characters.
 Preserve the original language of the alert if possible.
 `.trim();
 
+const ALERT_ENRICHMENT_SYSTEM_PROMPT = `You are a financial market analyst. Your job is to analyze alerts and provide structured insights, sentiment, and technical levels.`;
+
+const NEWS_ANALYSIS_SYSTEM_PROMPT = `You are a financial market sentiment analyst specializing in crypto and stock news analysis.
+Analyze the provided news/context and detect market-moving events.`;
+
 // Search query prompt
 const SEARCH_QUERY_PROMPT = process.env.SEARCH_QUERY_PROMPT || `
 Extract key topics and entities from this alert to create a search query.
@@ -46,6 +51,8 @@ module.exports = {
 	GROUNDING_MAX_SOURCES,
 	GROUNDING_TIMEOUT_MS,
 	GEMINI_SYSTEM_PROMPT,
+	ALERT_ENRICHMENT_SYSTEM_PROMPT,
+	NEWS_ANALYSIS_SYSTEM_PROMPT,
 	SEARCH_QUERY_PROMPT,
 	GROUNDING_MODEL_NAME,
 	GEMINI_MODEL_NAME,

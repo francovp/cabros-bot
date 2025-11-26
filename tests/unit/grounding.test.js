@@ -1,7 +1,7 @@
 /* global describe, it, expect, jest */
 
 const { groundAlert } = require('../../src/services/grounding/grounding');
-const { generateGroundedSummary } = require('../../src/services/grounding/gemini');
+const { generateEnrichedAlert } = require('../../src/services/grounding/gemini');
 const genaiClient = require('../../src/services/grounding/genaiClient');
 
 jest.mock('../../src/services/grounding/metrics');
@@ -28,24 +28,26 @@ describe('Grounding Service', () => {
 			});
 
 			// Mock summary generation
-			generateGroundedSummary.mockResolvedValueOnce({
-				summary: 'Test summary',
-				citations: searchResults,
-				confidence: 0.85,
+			generateEnrichedAlert.mockResolvedValueOnce({
+				sentiment: 'BULLISH',
+				sentiment_score: 0.85,
+				insights: ['Test summary'],
+				technical_levels: { supports: [], resistances: [] },
+				sources: searchResults,
 			});
 
 			const result = await groundAlert({
 				text: 'Test alert',
 			});
 
-			expect(result.summary).toBe('Test summary');
-			expect(result.citations).toHaveLength(1);
-			expect(result.confidence).toBe(0.85);
+			expect(result.insights[0]).toBe('Test summary');
+			expect(result.sources).toHaveLength(1);
+			expect(result.sentiment_score).toBe(0.85);
 			expect(result.truncated).toBe(false);
 
 			// Verify search and LLM were called
 			expect(genaiClient.search).toHaveBeenCalled();
-			expect(generateGroundedSummary).toHaveBeenCalled();
+			expect(generateEnrichedAlert).toHaveBeenCalled();
 		});
 
 		it('should handle long text by truncating', async () => {
@@ -57,10 +59,12 @@ describe('Grounding Service', () => {
 				totalResults: 0,
 			});
 
-			generateGroundedSummary.mockResolvedValueOnce({
-				summary: 'Summary of truncated text',
-				citations: [],
-				confidence: 0.5,
+			generateEnrichedAlert.mockResolvedValueOnce({
+				sentiment: 'NEUTRAL',
+				sentiment_score: 0.5,
+				insights: ['Summary of truncated text'],
+				technical_levels: { supports: [], resistances: [] },
+				sources: [],
 			});
 
 			const result = await groundAlert({
@@ -92,6 +96,47 @@ describe('Grounding Service', () => {
 			await expect(groundAlert({
 				text: 'Test',
 			})).rejects.toThrow('Grounding failed: API error');
+		});
+
+		it('should use ALERT_ENRICHMENT prompt by default', async () => {
+			genaiClient.search.mockResolvedValueOnce({ results: [], totalResults: 0 });
+			generateEnrichedAlert.mockResolvedValueOnce({
+				sentiment: 'NEUTRAL',
+				sentiment_score: 0.5,
+				insights: [],
+				technical_levels: { supports: [], resistances: [] },
+				sources: [],
+			});
+
+			await groundAlert({ text: 'Test alert text' });
+
+			expect(generateEnrichedAlert).toHaveBeenCalledWith(expect.objectContaining({
+				options: expect.objectContaining({
+					systemPrompt: expect.stringContaining('structured insights, sentiment, and technical levels')
+				})
+			}));
+		});
+
+		it('should use NEWS_ANALYSIS prompt when requested', async () => {
+			genaiClient.search.mockResolvedValueOnce({ results: [], totalResults: 0 });
+			generateEnrichedAlert.mockResolvedValueOnce({
+				sentiment: 'NEUTRAL',
+				sentiment_score: 0.5,
+				insights: [],
+				technical_levels: { supports: [], resistances: [] },
+				sources: [],
+			});
+
+			await groundAlert({ 
+				text: 'Test alert text',
+				options: { promptType: 'NEWS_ANALYSIS' }
+			});
+
+			expect(generateEnrichedAlert).toHaveBeenCalledWith(expect.objectContaining({
+				options: expect.objectContaining({
+					systemPrompt: expect.stringContaining('sentiment analyst specializing in crypto and stock news')
+				})
+			}));
 		});
 	});
 });

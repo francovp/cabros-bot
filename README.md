@@ -132,8 +132,10 @@ When `ENABLE_GEMINI_GROUNDING=true`:
 
 ### Enrichment Features
 
+- **Sentiment Analysis**: Determines market sentiment (BULLISH/BEARISH/NEUTRAL) with confidence score
+- **Key Insights**: Extracts bullet points of critical information
+- **Technical Levels**: Identifies support and resistance levels mentioned in context
 - **Verified Sources**: Extracts URLs and titles from GoogleSearch results
-- **Market Context**: Provides summary of relevant market information
 - **Language Support**: Respects original language of alert text
 - **Graceful Fallback**: If enrichment fails, original alert is sent without delays
 - **Reusable Results**: Single grounding call shared across all notification channels
@@ -151,7 +153,7 @@ POST /api/webhook/alert
 Content-Type: application/json
 
 {
-  "text": "Bitcoin breaks $45,000 resistance with volume surge"
+  "text": "Bitcoin breaks $83,000 resistance level with strong volume."
 }
 ```
 
@@ -170,20 +172,22 @@ Content-Type: application/json
 }
 ```
 
-**Message sent to Telegram/WhatsApp:**
-```
-📊 Alert Summary
-Bitcoin breaks $45,000 resistance with volume surge
+**Message sent to Telegram:**
+```text
+*Bitcoin breaks $83,000 resistance level with strong volume.*
 
-📌 Context
-According to recent market reports, Bitcoin's price action at $45,000 represents a significant technical level with increased trading volume.
+*Key Insights*
+• Bitcoin price surged past $83k.
+• Volume indicates strong momentum.
 
-🔗 Sources
-1. Reuters: "Bitcoin rallies on institutional demand" - https://reuters.com/...
-2. CoinDesk: "Market analysis: $45k support holds strong" - https://coindesk.com/...
+Sentiment: BULLISH 🚀 (0.85)
 
-💡 Original Alert
-Bitcoin breaks $45,000 resistance with volume surge
+*Technical Levels*
+Supports: $80,000
+Resistances: $85,000
+
+*Sources*
+[CoinDesk](https://coindesk.com/...) / [CoinTelegraph](https://cointelegraph.com/...)
 ```
 
 ### Troubleshooting

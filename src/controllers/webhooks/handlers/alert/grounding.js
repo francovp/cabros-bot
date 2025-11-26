@@ -41,6 +41,12 @@ async function deriveSearchQuery(alertText, maxLength = 150) {
 
 /**
  * Enriches an alert with grounded context using Gemini
+ *
+ * Returns an EnrichedAlert object where:
+ * - `original_text` comes from the webhook request body
+ * - `sources` are derived from `genaiClient.search` `searchResults`
+ *
+ * @see specs/004-enrich-alert-output/contracts/api.md for the full data contract
  * @param {import('./types').Alert} alert
  * @returns {Promise<import('./types').EnrichedAlert>}
  */
@@ -55,7 +61,7 @@ async function enrichAlert(alert) {
 	const text = (typeof validated === 'string') ? validated : (validated && validated.text) ? validated.text : inputText;
 
 	try {
-		const { summary, citations, truncated } = await groundAlert({
+		const { sentiment, sentiment_score, insights, technical_levels, sources, truncated } = await groundAlert({
 			text,
 			options: {
 				preserveLanguage: true,
@@ -63,10 +69,12 @@ async function enrichAlert(alert) {
 		});
 
 		return {
-			originalText: text,
-			summary,
-			citations,
-			extraText: `_Powered by ${GROUNDING_MODEL_NAME}_`,
+			original_text: text,
+			sentiment,
+			sentiment_score,
+			insights,
+			technical_levels,
+			sources,
 			truncated,
 		};
 	} catch (error) {
