@@ -10,6 +10,7 @@ const { getAnalyzer, setNotificationManager } = require('./analyzer');
 const { getCacheInstance } = require('./cache');
 const { AnalysisStatus } = require('./constants');
 const { getNotificationManager } = require('../alert/alert');
+const sentryService = require('../../../../services/monitoring/SentryService');
 
 class NewsMonitorHandler {
 	constructor() {
@@ -111,6 +112,22 @@ class NewsMonitorHandler {
 			return res.status(200).json(response);
 		} catch (error) {
 			console.error('[NewsMonitor] Unexpected error:', error);
+
+			// Capture runtime error to Sentry (T013) - only for 500 errors
+			sentryService.captureRuntimeError({
+				channel: 'news-monitor',
+				error,
+				http: {
+					endpoint: '/api/news-monitor',
+					method: req.method,
+					statusCode: 500,
+					requestId,
+					featureFlagState: {
+						ENABLE_NEWS_MONITOR: process.env.ENABLE_NEWS_MONITOR === 'true',
+					},
+				},
+			});
+
 			return res.status(500).json({
 				error: 'Internal server error. Please try again later.',
 				code: 'INTERNAL_ERROR',

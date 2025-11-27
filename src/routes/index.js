@@ -6,14 +6,11 @@ function getRoutes() {
 	router.post('/webhook/alert', postAlert());
 	console.log('[Routes] Alert webhook endpoint registered at /api/webhook/alert');
 
-	// Register news-monitor endpoint if feature is enabled
-	if (process.env.ENABLE_NEWS_MONITOR === 'true') {
-		const { getNewsMonitor } = require('../controllers/webhooks/handlers/newsMonitor/newsMonitor');
-		const newsMonitor = getNewsMonitor();
-		router.post('/news-monitor', newsMonitor.handleRequest.bind(newsMonitor));
-		router.get('/news-monitor', newsMonitor.handleRequest.bind(newsMonitor));
-		console.log('[Routes] News Monitor endpoint registered at /api/news-monitor');
-	}
+	const { getNewsMonitor } = require('../controllers/webhooks/handlers/newsMonitor/newsMonitor');
+	const newsMonitor = getNewsMonitor();
+	router.post('/news-monitor', newsMonitor.handleRequest.bind(newsMonitor));
+	router.get('/news-monitor', newsMonitor.handleRequest.bind(newsMonitor));
+	console.log('[Routes] News Monitor endpoint registered at /api/news-monitor');
 
 	return router;
 }

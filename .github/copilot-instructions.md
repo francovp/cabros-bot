@@ -286,6 +286,7 @@ The system provides an HTTP endpoint (`/api/news-monitor`) that analyzes financi
 - prettylink npm package for URL shortening in WhatsApp citations (003-news-monitor, with fallback to direct API calls)
 - In-memory Map cache for news deduplication with TTL (003-news-monitor, no external storage)
 - Binance API client for precise crypto prices (003-news-monitor, optional fallback to Gemini GoogleSearch)
+- Sentry SDK for Node (`@sentry/node` v8) for backend runtime error monitoring (005-sentry-runtime-errors; error events only, no tracing by default)
 
 ## Terminology Guide: Grounding vs Enrichment
 
@@ -466,6 +467,7 @@ ENABLE_WHATSAPP_ALERTS (002)
 ENABLE_NEWS_MONITOR (003)
 ENABLE_BINANCE_PRICE_CHECK (003)
 ENABLE_LLM_ALERT_ENRICHMENT (003)
+ENABLE_SENTRY (005)
 ```
 
 **To add new feature**:
@@ -485,8 +487,55 @@ ENABLE_LLM_ALERT_ENRICHMENT (003)
 **To extend**:
 1. **Discord integration**: Add in `src/services/notification/DiscordService.js`
 2. **Error aggregation**: Track error rates in memory for metrics
-3. **Sentry reporting**: Track critical failures (requires new dependency)
+3. **Sentry reporting (005-sentry-runtime-errors)**: Use a thin monitoring service (planned `src/services/monitoring/SentryService.js`) that wraps `@sentry/node` for runtime errors only. Gated by `ENABLE_SENTRY` and `SENTRY_DSN`; MUST NOT change HTTP responses or notification fallbacks and SHOULD be stubbed/mocked in tests (no real Sentry traffic by default).
 4. **Telegram admin alerts**: Send critical errors to admin chat if configured
+
+## Runtime Error Monitoring with Sentry (005-sentry-runtime-errors)
+
+This feature introduces backend runtime error monitoring using Sentry's Node SDK (`@sentry/node`) with a strong focus on **non-intrusive, error-only** instrumentation.
+
+**Scope and goals**
+- Capture unexpected runtime errors in core flows:
+  - HTTP webhooks: `/api/webhook/alert`, `/api/news-monitor`.
+  - Notification channels: Telegram and WhatsApp when internal retries are exhausted.
+  - Process-level failures: `uncaughtException` and `unhandledRejection` via the SDK's built-in integrations.
+- Do **not** change public API contracts or user-visible behavior; monitoring is a side-effect only.
+
+**Planned core components**
+- `src/services/monitoring/SentryService.js` (new):
+  - Initializes `@sentry/node` once at startup (called from `index.js`).
+  - Resolves configuration from env (see below) and exposes helpers like `captureError({ channel, error, context })`.
+  - Applies tags (`channel`, `feature`, `environment`) and structured contexts (`http`, `external`, `alert`, `news`) as defined in `specs/005-sentry-runtime-errors/data-model.md`.
+- Existing handlers/services will call `SentryService` instead of importing `@sentry/node` directly:
+  - `src/controllers/webhooks/handlers/alert/alert.js`
+  - `src/controllers/webhooks/handlers/newsMonitor/newsMonitor.js`
+  - `src/services/notification/NotificationManager.js` and channel services when retries are exhausted.
+
+**Configuration (env vars)**
+- `ENABLE_SENTRY` (`'true'` to enable monitoring; otherwise no-op)
+- `SENTRY_DSN` (server-side DSN from Sentry project; required when `ENABLE_SENTRY==='true'` in environments where we want events)
+- Optional overrides (otherwise derived from existing deployment vars):
+  - `SENTRY_ENVIRONMENT` (e.g., `production`, `preview`, `development`)
+  - `SENTRY_RELEASE` (e.g., `cabros-bot@1.2.3+<git-sha>`)
+- Derivation rules (conceptual, see spec for details):
+  - If `SENTRY_ENVIRONMENT` is set, use it.
+  - Else if `RENDER==='true' && IS_PULL_REQUEST==='true'` → `environment='preview'`.
+  - Else if `NODE_ENV==='production'` or `RENDER==='true'` → `environment='production'`.
+  - Else → `environment='development'`.
+
+**Instrumentation rules for AI agents**
+- Use **only** the monitoring service (`SentryService`) for new Sentry instrumentation; do **not** scatter direct `@sentry/node.captureException` calls across handlers.
+- Treat monitoring as a best-effort side-effect:
+  - Sentry failures (bad DSN, network issues) MUST NOT introduce new 5xx responses or break existing fallbacks.
+  - Purely expected flows (feature flags disabling behavior, validation 4xx responses) MUST NOT be reported as errors.
+- When extending handlers:
+  - Capture **unexpected** runtime failures (5xx paths, exhausted retries) with appropriate `channel`/`feature` tags.
+  - Avoid instrumenting predictable, controlled logic errors (e.g., user input validation that returns 400/403 as per spec).
+
+**Testing guidance**
+- Unit tests for the monitoring service SHOULD mock `@sentry/node` so no network calls are made.
+- Integration tests MAY assert that monitoring helpers are called in error paths but MUST keep HTTP responses and notification behavior identical with Sentry enabled vs disabled.
+- Default for Jest and local dev is to run with Sentry disabled (`ENABLE_SENTRY=false` or no `SENTRY_DSN`), unless a test explicitly enables it with a fake DSN.
 
 ### Testing Patterns
 

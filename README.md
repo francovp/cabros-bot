@@ -65,6 +65,15 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 - `AZURE_LLM_KEY` - Azure AI Inference API key (required if enrichment enabled)
 - `AZURE_LLM_MODEL` - Azure AI LLM model name (e.g., `gpt-4o`, required if enrichment enabled)
 
+#### Runtime Error Monitoring (005-sentry-runtime-errors)
+
+- `ENABLE_SENTRY` - Enable Sentry error reporting (`true` or `false`, default: `false`)
+- `SENTRY_DSN` - Sentry Data Source Name (DSN) from your Sentry project settings
+- `SENTRY_ENVIRONMENT` - Explicit environment tag (`production`, `preview`, `development`). Auto-derived if not set
+- `SENTRY_RELEASE` - Explicit release tag (e.g., `v1.2.3`). Auto-derived from git commit if not set
+- `SENTRY_SEND_ALERT_CONTENT` - Include alert text in error events (`true` or `false`, default: `true`)
+- `SENTRY_SAMPLE_RATE_ERRORS` - Error sample rate from 0.0 to 1.0 (default: `1.0` = 100%)
+
 ## Setup
 
 ### 1. Install Dependencies
@@ -527,6 +536,69 @@ Precio de BTCUSDT es $45,000.50
 ### /cryptobot
 
 Crypto bot help command.
+
+## Runtime Error Monitoring (005-sentry-runtime-errors)
+
+**📖 [Quickstart Guide](specs/005-sentry-runtime-errors/quickstart.md)** — Complete setup and verification instructions.
+
+The runtime error monitoring feature captures unexpected errors across all application flows and reports them to Sentry for centralized visibility and debugging.
+
+### Monitored Flows
+
+- **Alert Webhook** (`/api/webhook/alert`): HTTP errors during alert processing
+- **News Monitor** (`/api/news-monitor`): Analysis errors and service failures
+- **Telegram Commands** (`/precio`, `/cryptobot`): Bot command handler errors
+- **WhatsApp Delivery**: Notification delivery failures after retry exhaustion
+- **Process Level**: Uncaught exceptions and unhandled promise rejections
+
+### Features
+
+- **Non-Intrusive**: Monitoring failures never affect HTTP responses or message delivery
+- **Environment Gating**: Auto-derives environment from Render.com variables (`production`, `preview`, `development`)
+- **Privacy Controls**: Optional exclusion of alert content from error events
+- **Graceful Degradation**: Works without affecting existing fallback mechanisms
+
+### Configuration
+
+```bash
+# Enable Sentry (required)
+ENABLE_SENTRY=true
+SENTRY_DSN=https://key@o123.ingest.sentry.io/456
+
+# Optional: Explicit environment (auto-derived if not set)
+SENTRY_ENVIRONMENT=production
+
+# Optional: Explicit release (derived from RENDER_GIT_COMMIT if not set)
+SENTRY_RELEASE=v1.2.3
+
+# Optional: Privacy control (default: true = include alert text)
+SENTRY_SEND_ALERT_CONTENT=false
+
+# Optional: Error sampling (default: 1.0 = 100%)
+SENTRY_SAMPLE_RATE_ERRORS=1.0
+```
+
+### Environment Auto-Detection
+
+| Condition | Environment |
+|-----------|-------------|
+| `SENTRY_ENVIRONMENT` set | Uses explicit value |
+| `RENDER=true` + `IS_PULL_REQUEST=true` | `preview` |
+| `RENDER=true` (no PR) | `production` |
+| `NODE_ENV=production` | `production` |
+| Default | `development` |
+
+### Troubleshooting
+
+**Errors not appearing in Sentry**:
+1. Verify `ENABLE_SENTRY=true` and `SENTRY_DSN` is set
+2. Check application logs for `[SentryService] Monitoring disabled` message
+3. Verify DSN format: `https://<key>@<org>.ingest.sentry.io/<project>`
+
+**Expected behaviors not reporting** (by design):
+- Validation errors (400 responses) are not reported
+- Feature-disabled responses (403) are not reported
+- These are expected behaviors, not runtime errors
 
 ## News Monitoring & Event Detection
 

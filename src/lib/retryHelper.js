@@ -35,12 +35,12 @@ function calculateBackoffDelay(attempt) {
  */
 async function sendWithRetry(sendFn, maxRetries = 3, logger = null) {
   let lastResult = null;
+  const totalStartTime = Date.now();
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      const startTime = Date.now();
       const result = await sendFn();
-      const durationMs = Date.now() - startTime;
+      const durationMs = Date.now() - totalStartTime;
 
       if (result.success) {
         if (logger && attempt > 1) {
@@ -85,11 +85,13 @@ async function sendWithRetry(sendFn, maxRetries = 3, logger = null) {
     logger.error?.(`All ${maxRetries} retries exhausted`, { lastResult });
   }
 
+  const totalDurationMs = Date.now() - totalStartTime;
   return {
     ...lastResult,
     success: false,
     error: lastResult?.error || `Max retries (${maxRetries}) exhausted`,
     attemptCount: maxRetries,
+    durationMs: totalDurationMs,
   };
 }
 

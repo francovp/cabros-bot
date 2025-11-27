@@ -12,6 +12,9 @@ process.env = {
 	SEARCH_MAX_RESULTS: '3',
 	GROUNDING_TIMEOUT_MS: '8000',
 	BOT_TOKEN: 'test-bot-token',
+	// Sentry disabled by default in tests
+	ENABLE_SENTRY: 'false',
+	SENTRY_DSN: undefined,
 };
 
 // Mock Telegram bot globally
@@ -20,6 +23,22 @@ global.bot = {
 		sendMessage: jest.fn().mockResolvedValue({ message_id: 'test-message-id' }),
 	},
 };
+
+// Mock @sentry/node globally to prevent real network calls
+jest.mock('@sentry/node', () => ({
+	init: jest.fn(),
+	captureException: jest.fn(() => 'mock-event-id'),
+	captureMessage: jest.fn(() => 'mock-event-id'),
+	flush: jest.fn().mockResolvedValue(true),
+	withScope: jest.fn((callback) => callback({
+		setTag: jest.fn(),
+		setContext: jest.fn(),
+		setExtra: jest.fn(),
+	})),
+	setTag: jest.fn(),
+	setContext: jest.fn(),
+	setExtra: jest.fn(),
+}));
 
 // Increase timeout for all tests
 jest.setTimeout(10000);
