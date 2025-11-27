@@ -3,7 +3,11 @@ const app = require('./app.js');
 const { Telegraf, Markup } = require('telegraf');
 const { getRoutes } = require('./src/routes');
 const { initializeNotificationServices } = require('./src/controllers/webhooks/handlers/alert/alert');
+const sentryService = require('./src/services/monitoring/SentryService');
 require('dotenv').config();
+
+// Initialize monitoring service first (must be before other imports that might throw)
+sentryService.init();
 
 const token = process.env.BOT_TOKEN;
 if (token === undefined) {

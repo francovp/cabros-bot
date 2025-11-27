@@ -6,6 +6,7 @@ const TelegramService = require('../../../../services/notification/TelegramServi
 const WhatsAppService = require('../../../../services/notification/WhatsAppService');
 const NotificationManager = require('../../../../services/notification/NotificationManager');
 const { getURLShortener } = require('../../handlers/newsMonitor/urlShortener');
+const sentryService = require('../../../../services/monitoring/SentryService');
 
 // Initialize services
 let notificationManager = null;
@@ -50,9 +51,13 @@ function getNotificationManager() {
 function postAlert(bot) {
   return async (req, res) => {
     const { body } = req;
+    // Declare at top of try scope so they're accessible in catch
+    let alertText = '';
+    let alert = null;
+    let enriched = false;
+
     try {
       // Parse and validate alert text
-      let alertText = '';
       if (typeof body === 'object' && 'text' in body) {
         console.debug('webhook/alert handler: body is an object');
         alertText = body.text;
@@ -64,8 +69,7 @@ function postAlert(bot) {
       const { text } = validateAlert(alertText);
 
       let messageText;
-      let enriched = false;
-      const alert = { text };
+      alert = { text };
 
       // Only attempt grounding if enabled (check env at runtime so tests can toggle)
       if (process.env.ENABLE_GEMINI_GROUNDING === 'true') {
@@ -96,6 +100,24 @@ function postAlert(bot) {
     } catch (error) {
       console.debug('webhook/alert handler: Error processing request');
       console.error('webhook/alert handler:', error);
+
+      // Capture runtime error to Sentry (T012)
+      sentryService.captureRuntimeError({
+        channel: 'http-alert',
+        error,
+        http: {
+          endpoint: '/api/webhook/alert',
+          method: 'POST',
+          statusCode: (error.response && error.response.error_code) || 500,
+        },
+        alert: {
+          textLength: alertText ? alertText.length : 0,
+          hasEnrichment: !!(alert && alert.enriched),
+          enrichedSource: alert && alert.enriched ? 'gemini-grounding' : undefined,
+          truncated: false,
+        },
+      });
+
       const status = (error.response && error.response.error_code) || 500;
       const errorResponse = error.response || { error: 'Internal server error', details: error.message };
       res.status(status).send(errorResponse);

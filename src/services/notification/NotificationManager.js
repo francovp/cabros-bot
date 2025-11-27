@@ -3,6 +3,8 @@
  * Manages Telegram and WhatsApp services, handles parallel sending and retry logic
  */
 
+const sentryService = require('../monitoring/SentryService');
+
 class NotificationManager {
   /**
    * @param {Object} telegramService - TelegramService instance
@@ -53,6 +55,7 @@ class NotificationManager {
    */
   async sendToAll(alert) {
     const enabledChannels = Array.from(this.channels.values()).filter((ch) => ch.isEnabled());
+    const startTime = Date.now();
 
     if (enabledChannels.length === 0) {
       console.warn('[NotificationManager] No notification channels enabled');
@@ -69,9 +72,32 @@ class NotificationManager {
         : {
             success: false,
             channel: enabledChannels[idx].name,
-            error: r.reason?.message || 'Unknown error',
+            error: (r.reason && r.reason.message) || 'Unknown error',
           }
     );
+
+    // Report external failures to Sentry (T014)
+    const totalDurationMs = Date.now() - startTime;
+    for (const result of formattedResults) {
+      if (!result.success && result.error) {
+        const providerMap = {
+          telegram: 'telegram-api',
+          whatsapp: 'whatsapp-greenapi',
+        };
+        const provider = providerMap[result.channel] || result.channel;
+
+        sentryService.captureExternalFailure({
+          channel: result.channel,
+          external: {
+            provider,
+            attemptCount: result.attemptCount || 1,
+            durationMs: result.durationMs || totalDurationMs,
+            lastErrorMessage: result.error,
+            lastErrorCode: result.statusCode,
+          },
+        });
+      }
+    }
 
     console.info('[NotificationManager] Delivery results:', JSON.stringify(formattedResults.map(r => ({
       channel: r.channel,

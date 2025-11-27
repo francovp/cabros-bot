@@ -43,6 +43,10 @@ SENTRY_DSN=https://<publicKey>@sentry.io/<projectId>
 SENTRY_ENVIRONMENT=production             # Optional, overrides derived values
 SENTRY_RELEASE=cabros-bot@1.0.0+local     # Optional, overrides derived release
 
+# Privacy controls
+SENTRY_SEND_ALERT_CONTENT=true            # Set to 'false' to exclude alert text from error events
+SENTRY_SAMPLE_RATE_ERRORS=1.0             # Error sample rate (0.0-1.0, default: 1.0 = 100%)
+
 # Existing envs reused for derivation (no change required)
 NODE_ENV=production
 RENDER=true                               # In Render deployments
@@ -251,18 +255,21 @@ To confirm that Sentry does not change user-visible behavior (User Story 2, FR-0
 Once this feature is implemented, the primary touchpoints will be:
 
 - `src/services/monitoring/SentryService.js`  
-  Initialization, configuration, and helpers for `captureError()`.
+  Initialization, configuration, and helpers for `captureRuntimeError()`, `captureExternalFailure()`, and `captureProcessError()`.
 
 - `index.js`  
   Calls into `SentryService.init()` early in process startup.
 
 - `src/controllers/webhooks/handlers/alert/alert.js`  
-  Uses monitoring helpers in error paths for `/api/webhook/alert`.
+  Uses `SentryService.captureRuntimeError()` in error paths for `/api/webhook/alert`.
 
 - `src/controllers/webhooks/handlers/newsMonitor/newsMonitor.js`  
-  Uses monitoring helpers for unexpected errors in `/api/news-monitor`.
+  Uses `SentryService.captureRuntimeError()` for unexpected errors in `/api/news-monitor`.
 
-- `src/services/notification/NotificationManager.js` and channel services  
-  Attach external failure metadata when retries are exhausted.
+- `src/services/notification/NotificationManager.js`
+  Uses `SentryService.captureExternalFailure()` when channel delivery fails after retries.
+
+- `src/controllers/commands.js`
+  Uses `SentryService.captureRuntimeError()` for Telegram command handler errors.
 
 Refer to `specs/005-sentry-runtime-errors/data-model.md` and `contracts/api.md` for detailed internal contracts and event shapes.
