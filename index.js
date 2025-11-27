@@ -1,13 +1,12 @@
+require('./instrument.js');
+
 const { getPrice, cryptoBotCmd } = require('./src/controllers/commands');
 const app = require('./app.js');
 const { Telegraf, Markup } = require('telegraf');
 const { getRoutes } = require('./src/routes');
 const { initializeNotificationServices } = require('./src/controllers/webhooks/handlers/alert/alert');
-const sentryService = require('./src/services/monitoring/SentryService');
+const Sentry = require('@sentry/node')
 require('dotenv').config();
-
-// Initialize monitoring service first (must be before other imports that might throw)
-sentryService.init();
 
 const token = process.env.BOT_TOKEN;
 if (token === undefined) {
@@ -19,6 +18,20 @@ let bot;
 const port = process.env.PORT || 80;
 const now = new Date();
 
+// Always mount routes (they gate access based on feature flags)
+app.use('/api', getRoutes());
+
+// The error handler must be registered before any other error middleware and after all controllers
+Sentry.setupExpressErrorHandler(app);
+
+// Optional fallthrough error handler
+app.use(function onError(err, req, res, next) {
+	// The error id is attached to `res.sentry` to be returned
+	// and optionally displayed to the user for support.
+	res.statusCode = 500;
+	res.end(res.sentry + '\n');
+});
+
 app.listen(port, async () => {
 	console.log(now + ' - Running server on port ' + port);
 
@@ -26,9 +39,6 @@ app.listen(port, async () => {
 	console.debug('telegramBotIsEnabled:', telegramBotIsEnabled);
 	const isPreviewEnv = process.env.RENDER === 'true' && process.env.IS_PULL_REQUEST === 'true';
 	console.debug('isPreviewEnv:', isPreviewEnv);
-
-	// Always mount routes (they gate access based on feature flags)
-	app.use('/api', getRoutes());
 
 	if (telegramBotIsEnabled && !isPreviewEnv) {
 		console.log('Telegram Bot is enabled');

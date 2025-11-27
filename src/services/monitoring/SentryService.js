@@ -222,6 +222,7 @@ class SentryService {
 				environment: this.config.environment,
 				release: this.config.release,
 				sampleRate: this.config.sampleRateErrors,
+				sendDefaultPii: true,
 
 				// Disable tracing/performance for this feature (FR-010)
 				tracesSampleRate: 0,
