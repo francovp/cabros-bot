@@ -203,7 +203,7 @@ class SentryService {
 			this.config = this._buildConfiguration();
 
 			if (!this.config.enabled) {
-				const reason = !process.env.SENTRY_DSN
+				const reason = !this.config.dsn
 					? 'SENTRY_DSN not configured'
 					: 'ENABLE_SENTRY is not true';
 

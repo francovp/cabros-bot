@@ -1,3 +1,5 @@
+// Load environment variables from .env file
+require('dotenv').config();
 require('./instrument.js');
 
 const { getPrice, cryptoBotCmd } = require('./src/controllers/commands');
@@ -5,8 +7,7 @@ const app = require('./app.js');
 const { Telegraf, Markup } = require('telegraf');
 const { getRoutes } = require('./src/routes');
 const { initializeNotificationServices } = require('./src/controllers/webhooks/handlers/alert/alert');
-const Sentry = require('@sentry/node')
-require('dotenv').config();
+const Sentry = require('@sentry/node');
 
 const token = process.env.BOT_TOKEN;
 if (token === undefined) {
