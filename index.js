@@ -21,6 +21,10 @@ const now = new Date();
 // Always mount routes (they gate access based on feature flags)
 app.use('/api', getRoutes());
 
+app.get('/debug-sentry', function mainHandler() {
+	throw new Error('Sentry debug test error!');
+});
+
 // The error handler must be registered before any other error middleware and after all controllers
 Sentry.setupExpressErrorHandler(app);
 
