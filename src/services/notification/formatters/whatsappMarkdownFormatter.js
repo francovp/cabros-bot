@@ -56,7 +56,14 @@ class WhatsAppMarkdownFormatter {
 
     if (summary) {
       // Unescape MarkdownV2 sequences in summary
-      const unescapedSummary = summary.replace(/\\([_*[\]()~`>#+\-=|{}.!])/g, "$1");
+      let unescapedSummary = summary.replace(/\\([_*[\]()~`>#+\-=|{}.!])/g, "$1");
+      // Convert MarkdownV2 bold (**text**) to WhatsApp bold (*text*)
+      unescapedSummary = unescapedSummary.replace(/\*\*/g, "*");
+
+      // Convert bullet points from * to - for WhatsApp compatibility
+      unescapedSummary = unescapedSummary.replace(/^\*\s+/gm, "- ");
+      unescapedSummary = unescapedSummary.replace(/\n\*\s+/g, "\n- ");
+
       message += `\n\n${unescapedSummary}`;
     }
 
