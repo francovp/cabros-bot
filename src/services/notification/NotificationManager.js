@@ -26,7 +26,7 @@ class NotificationManager {
     for (const [name, channel] of this.channels) {
       try {
         const result = await channel.validate();
-        console.log(
+        console.debug(
           `Notification channel ${name}: ${result.valid ? 'ENABLED' : 'DISABLED'} - ${result.message}`
         );
         results.push(result);
@@ -62,7 +62,7 @@ class NotificationManager {
       return [];
     }
 
-    console.info('[NotificationManager] Sending alert to', enabledChannels.length, 'enabled channel(s):', enabledChannels.map(ch => ch.name).join(', '));
+    console.debug('[NotificationManager] Sending alert to', enabledChannels.length, 'enabled channel(s):', enabledChannels.map(ch => ch.name).join(', '));
     const sendPromises = enabledChannels.map((ch) => ch.send(alert));
     const results = await Promise.allSettled(sendPromises);
 

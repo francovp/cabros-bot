@@ -207,7 +207,7 @@ End of instructions.`
 		const confidence = 0.6 * analysisResult.event_significance + 0.4 * Math.abs(analysisResult.sentiment_score);
 		analysisResult.confidence = Math.max(0, Math.min(1, confidence)); // Clamp to [0, 1]
 
-		console.debug('[Gemini] News analysis complete with grounding', {
+		console.info('[Gemini] News analysis complete with grounding', {
 			symbol,
 			category: analysisResult.event_category,
 			confidence: analysisResult.confidence,

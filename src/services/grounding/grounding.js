@@ -33,7 +33,7 @@ async function deriveSearchQuery(alertText, opts = {}) {
 
 		return response.text;
 	} catch (error) {
-		console.error('Query derivation failed:', error);
+		console.warn('[Grounding] Query derivation failed:', error.message);
 		// Fall back to truncated alert text
 		return alertText;
 	}
@@ -90,7 +90,6 @@ async function groundAlert({ text, options = {} }) {
 		]);
 
 		console.debug('Derived search query:', query);
-		console.debug('Using truncated text:', truncatedText);
 
 		// 1. Search for evidence
 		const { results: searchResults, totalResults, searchResultText } = await genaiClient.search({
@@ -98,10 +97,7 @@ async function groundAlert({ text, options = {} }) {
 			model: GROUNDING_MODEL_NAME,
 			maxResults: maxSources,
 		});
-		console.debug('Search results:', searchResults);
-		console.debug(`Retrieved ${searchResults.length} grounding search results`);
-		console.debug(`Total available results: ${totalResults}`);
-		console.debug(`Search result text: ${searchResultText}`);
+		console.debug(`[Grounding] Retrieved ${searchResults.length}/${totalResults} search results`);
 
 		// 2. Generate enriched alert with timeout
 		const [timeoutPromise, cleanupTimeout] = createTimeout();

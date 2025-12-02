@@ -57,11 +57,9 @@ class NewsCache {
 
 		if (this.isExpired(entry)) {
 			this.cache.delete(key);
-			console.debug('[NewsCache] Cache entry expired:', key);
 			return null;
 		}
 
-		console.debug('[NewsCache] Cache hit:', key);
 		return entry.data;
 	}
 
@@ -78,7 +76,6 @@ class NewsCache {
 			timestamp: Date.now(),
 			data,
 		});
-		console.debug('[NewsCache] Cache set:', key);
 	}
 
 	/**
@@ -103,7 +100,6 @@ class NewsCache {
    */
 	clear() {
 		this.cache.clear();
-		console.debug('[NewsCache] Cache cleared');
 	}
 
 	/**

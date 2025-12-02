@@ -50,6 +50,7 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 - `PORT` - HTTP server port (default: `80`)
 - `RENDER` - Render.com deployment flag (used internally)
 - `IS_PULL_REQUEST` - Render preview environment flag (disables bot in PRs)
+- `LOG_LEVEL` - Log verbosity (`debug`, `info`, `warn`, `error`, `silent`; defaults to `debug` in development and `info` in production)
 
 #### News Monitoring (003-news-monitor)
 

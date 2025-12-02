@@ -24,7 +24,7 @@ class NewsMonitorHandler {
    */
 	initialize() {
 		this.cache.initialize();
-		console.log('[NewsMonitor] Handler initialized');
+		console.debug('[NewsMonitor] Handler initialized');
 	}
 
 	/**
@@ -56,7 +56,6 @@ class NewsMonitorHandler {
 			// Parse request
 			const { crypto, stocks } = this.parseRequest(req);
 			const allSymbols = [...(crypto || []), ...(stocks || [])];
-			console.debug('[NewsMonitor] handleRequest - parsed crypto:', crypto, 'stocks:', stocks);
 			const validationError = this.validateRequest(allSymbols);
 			if (validationError) {
 				return res.status(400).json({
@@ -71,7 +70,7 @@ class NewsMonitorHandler {
 				? allSymbols
 				: this.getDefaultSymbols();
 
-			console.debug('[NewsMonitor] allSymbols.length:', allSymbols.length, 'symbolsToAnalyze:', JSON.stringify(symbolsToAnalyze));
+			console.info('[NewsMonitor] Analyzing symbols:', symbolsToAnalyze);
 			if (symbolsToAnalyze.length === 0) {
 				return res.status(400).json({
 					error: 'No symbols to analyze. Provide crypto/stocks or set env defaults.',
@@ -79,8 +78,6 @@ class NewsMonitorHandler {
 					requestId,
 				});
 			}
-
-			console.log('[NewsMonitor] Analyzing symbols:', symbolsToAnalyze, 'RequestID:', requestId);
 
 			// Run analysis
 			const results = await this.analyzer.analyzeSymbols(symbolsToAnalyze, requestId);
@@ -103,7 +100,7 @@ class NewsMonitorHandler {
 				delete response.partial_success;
 			}
 
-			console.log('[NewsMonitor] Request complete', {
+			console.info('[NewsMonitor] Request complete', {
 				requestId,
 				totalMs: response.totalDurationMs,
 				summary,
@@ -155,15 +152,12 @@ class NewsMonitorHandler {
    */
 	parsePostRequest(req) {
 		const body = req.body || {};
-		console.debug('[NewsMonitor] parsePostRequest - req.body:', JSON.stringify(body));
 		const crypto = Array.isArray(body.crypto) ? body.crypto : undefined;
 		const stocks = Array.isArray(body.stocks) ? body.stocks : undefined;
-		const result = {
+		return {
 			crypto,
 			stocks,
 		};
-		console.debug('[NewsMonitor] parsePostRequest - result:', result);
-		return result;
 	}
 
 	/**
