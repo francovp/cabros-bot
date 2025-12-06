@@ -161,20 +161,15 @@ class NewsAnalyzer {
 
 		// Fetch market context (price, 24h change, etc.)
 		const marketContext = await this.getMarketContext(symbol);
-		console.debug('[Analyzer] Market context for', symbol, ':', marketContext);
 
 		// Build analysis context for Gemini
 		const analysisContext = this.buildAnalysisContext(symbol, marketContext);
-		console.debug('[Analyzer] Analysis context for', symbol, ':', analysisContext);
 
 		// Call Gemini for sentiment analysis
-		console.debug('[Analyzer] Calling Gemini for symbol:', symbol);
 		const geminiAnalysis = await analyzeNewsForSymbol(symbol, analysisContext);
-		console.debug('[Analyzer] Gemini analysis result for', symbol, ':', geminiAnalysis);
 
 		// If no event detected, cache and return
 		if (geminiAnalysis.event_category === EventCategory.NONE) {
-			console.debug('[Analyzer] No event detected for', symbol);
 			this.cache.set(symbol, EventCategory.NONE, {
 				alert: null,
 				analysisResult: {
@@ -192,9 +187,8 @@ class NewsAnalyzer {
 		}
 
 		// Check confidence threshold
-		console.debug('[Analyzer] Checking threshold for', symbol, '- confidence:', geminiAnalysis.confidence.toFixed(2), 'threshold:', this.alertThreshold);
 		if (geminiAnalysis.confidence < this.alertThreshold) {
-			console.info('[Analyzer] Confidence below threshold:', symbol, '- confidence:', geminiAnalysis.confidence.toFixed(2), '< threshold:', this.alertThreshold);
+			console.info('[Analyzer] Confidence below threshold for', symbol, '-', geminiAnalysis.confidence.toFixed(2), '<', this.alertThreshold);
 			this.cache.set(symbol, geminiAnalysis.event_category, {
 				alert: null,
 				analysisResult: {
@@ -227,12 +221,10 @@ class NewsAnalyzer {
 
 		// Build alert object
 		const alert = this.buildAlert(symbol, geminiAnalysis, marketContext, enrichmentMetadata);
-		console.info('[Analyzer] Alert built for', symbol, '- confidence:', alert.confidence.toFixed(2), 'event:', alert.eventCategory);
 
 		// Send to all notification channels
-		console.info('[Analyzer] Sending alert to notification channels for', symbol);
+		console.info('[Analyzer] Sending alert:', symbol, 'confidence:', alert.confidence.toFixed(2), 'event:', alert.eventCategory);
 		const notificationMgr = getNotificationManager();
-		console.debug('[Analyzer] Using NotificationManager:', notificationMgr);
 		if (!notificationMgr) {
 			console.warn('[Analyzer] NotificationManager not initialized - skipping alert delivery');
 			return {
@@ -243,7 +235,7 @@ class NewsAnalyzer {
 			};
 		}
 		const deliveryResults = await notificationMgr.sendToAll(alert);
-		console.info('[Analyzer] Alert delivery results for', symbol, ':', JSON.stringify(deliveryResults));
+		console.info('[Analyzer] Alert delivery results for', symbol, ':', deliveryResults);
 
 		// Cache the result
 		this.cache.set(symbol, geminiAnalysis.event_category, {
@@ -277,7 +269,7 @@ class NewsAnalyzer {
 				const binanceContext = await this.fetchBinancePrice(symbol);
 				if (binanceContext) return binanceContext;
 			} catch (error) {
-				console.debug('[Analyzer] Binance fetch failed, trying Gemini:', error.message);
+				// Fall back to Gemini
 			}
 		}
 
@@ -309,7 +301,7 @@ class NewsAnalyzer {
 			// Race between the fetch and timeout
 			const data = await Promise.race([pricePromise, timeoutPromise]);
 
-			console.debug(`[Analyzer] Binance price fetched for ${symbol}: $${data.price}`);
+			console.debug(`[Analyzer] Binance price for ${symbol}: $${data.price}`);
 			return {
 				price: parseFloat(data.price),
 				change24h: null, // Binance getAvgPrice doesn't return 24h change, would need additional call
@@ -317,7 +309,7 @@ class NewsAnalyzer {
 				timestamp: Date.now(),
 			};
 		} catch (error) {
-			console.debug(`[Analyzer] Binance fetch failed for ${symbol}: ${error.message}`);
+			// Binance fetch failed - will fall back to Gemini
 			return null;
 		}
 	}

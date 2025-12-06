@@ -30,11 +30,11 @@ async function initializeNotificationServices(bot) {
 
   notificationManager = new NotificationManager(telegramService, whatsappService);
   
-  console.log('Initializing notification services...');
+  console.debug('Initializing notification services...');
   await notificationManager.validateAll();
   
   const enabledChannels = notificationManager.getEnabledChannels();
-  console.log(`Notification services initialized: ${enabledChannels.join(', ')}`);
+  console.debug(`Notification services initialized: ${enabledChannels.join(', ')}`);
   
   return notificationManager;
 }
@@ -59,10 +59,8 @@ function postAlert(bot) {
     try {
       // Parse and validate alert text
       if (typeof body === 'object' && 'text' in body) {
-        console.debug('webhook/alert handler: body is an object');
         alertText = body.text;
       } else {
-        console.debug('webhook/alert handler: body is text');
         alertText = body;
       }
 
@@ -79,27 +77,19 @@ function postAlert(bot) {
           const enrichedAlert = await enrichAlert({ text });
           enriched = true;
           alert.enriched = enrichedAlert;
-          console.debug('Enriched alert result: ', enrichedAlert);
-
-          console.debug('Generated grounded summary with citations');
+          console.debug('[Alert] Grounding completed, citations:', (enrichedAlert.citations && enrichedAlert.citations.length) || 0);
         } catch (error) {
-          console.error('Grounding failed:', error);
-
-          // Fall back to original text (still send to all channels)
-          console.debug('Using original text due to grounding failure');
+          console.warn('[Alert] Grounding failed, using original text:', error.message);
         }
       }
 
       // Send to all enabled notification channels
       const results = await notificationManager.sendToAll(alert);
 
-      console.debug('Notification results:', results);
-
       // Return 200 OK regardless of delivery success (fail-open pattern)
       res.json({ success: true, results, enriched });
     } catch (error) {
-      console.debug('webhook/alert handler: Error processing request');
-      console.error('webhook/alert handler:', error);
+      console.error('[Alert] Request failed:', error.message);
 
       // Capture runtime error to Sentry (T012)
       sentryService.captureRuntimeError({

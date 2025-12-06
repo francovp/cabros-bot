@@ -5,7 +5,7 @@ const getPrice = (context) => {
 	fetchSymbolPrice(context).then((result) => {
 		context.reply(`Precio de ${result.symbol} es ${result.price}`);
 	}).catch((error) => {
-		console.log(error);
+		console.error(error);
 		// Capture Telegram command errors to Sentry (T015)
 		sentryService.captureRuntimeError({
 			channel: 'telegram',
@@ -30,7 +30,7 @@ const cryptoBotCmd = (context) => {
 			// Nothing
 		}
 	} catch (error) {
-		console.log(error);
+		console.error(error);
 		// Capture Telegram command errors to Sentry (T015)
 		sentryService.captureRuntimeError({
 			channel: 'telegram',
