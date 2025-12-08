@@ -4,7 +4,9 @@
  * 003-news-monitor: User Story 6 (optional enrichment)
  */
 
-const https = require('https');
+const ModelClient = require("@azure-rest/ai-inference").default;
+const { isUnexpected } = require("@azure-rest/ai-inference");
+const { AzureKeyCredential } = require("@azure/core-auth");
 
 class AzureAIClient {
 	constructor() {
@@ -33,97 +35,45 @@ class AzureAIClient {
 	}
 
 	/**
-   * Make HTTP request to Azure AI Inference endpoint
-   * @param {string} method - HTTP method
-   * @param {string} path - Request path
-   * @param {Object} body - Request body (will be JSON stringified)
-   * @returns {Promise<Object>} Response body as JSON
-   */
-	async makeRequest(method, path, body = null) {
-		return new Promise((resolve, reject) => {
-			const url = new URL(this.endpoint);
-			const hostname = url.hostname;
-			const fullPath = path.startsWith('/') ? path : '/' + path;
-
-			const options = {
-				hostname,
-				path: fullPath,
-				method,
-				headers: {
-					'api-key': this.apiKey,
-					'Content-Type': 'application/json',
-					'User-Agent': 'cabros-bot/news-monitor',
-				},
-				timeout: this.timeout,
-			};
-
-			if (method !== 'GET' && body) {
-				const bodyStr = JSON.stringify(body);
-				options.headers['Content-Length'] = Buffer.byteLength(bodyStr);
-			}
-
-			const req = https.request(options, (res) => {
-				let data = '';
-
-				res.on('data', (chunk) => {
-					data += chunk;
-				});
-
-				res.on('end', () => {
-					try {
-						const json = JSON.parse(data);
-						if (res.statusCode >= 400) {
-							reject(new Error(`HTTP ${res.statusCode}: ${json.error || data}`));
-						} else {
-							resolve(json);
-						}
-					} catch (e) {
-						reject(new Error(`Failed to parse response: ${e.message}`));
-					}
-				});
-			});
-
-			req.on('timeout', () => {
-				req.destroy();
-				reject(new Error('Request timeout'));
-			});
-
-			req.on('error', (err) => {
-				reject(err);
-			});
-
-			if (method !== 'GET' && body) {
-				req.write(JSON.stringify(body));
-			}
-
-			req.end();
-		});
-	}
-
-	/**
    * Send chat completion request to Azure AI
    * @param {string} systemPrompt - System prompt
    * @param {string} userMessage - User message
    * @returns {Promise<string>} Model response
    */
 	async chatCompletion(systemPrompt, userMessage) {
+		if (!this.validate()) {
+			throw new Error('AzureAIClient configuration incomplete');
+		}
+
+		const client = ModelClient(
+			this.endpoint,
+			new AzureKeyCredential(this.apiKey)
+		);
+
 		const payload = {
-			model: this.model,
-			messages: [
-				{ role: 'system', content: systemPrompt },
-				{ role: 'user', content: userMessage },
-			],
-			temperature: 0.7,
-			max_tokens: 500,
-			top_p: 0.95,
+			body: {
+				messages: [
+					{ role: 'system', content: systemPrompt },
+					{ role: 'user', content: userMessage },
+				],
+				model: this.model,
+				temperature: 0.7,
+				max_tokens: 500,
+				top_p: 0.95,
+			},
+			timeout: this.timeout
 		};
 
 		try {
-			const response = await this.makeRequest('POST', '/chat/completions', payload);
+			const response = await client.path('/chat/completions').post(payload);
+
+			if (isUnexpected(response)) {
+				throw new Error(JSON.stringify(response.body.error));
+			}
 
 			// Handle standard OpenAI response format
-			if (response.choices && response.choices[0] && response.choices[0].message) {
-				return response.choices[0].message.content;
+			if (response.body.choices && response.body.choices[0] && response.body.choices[0].message) {
+				return response.body.choices[0].message.content;
 			}
 
 			throw new Error('Unexpected response format');
@@ -157,10 +107,20 @@ class AzureAIClient {
    * @returns {Promise<boolean>} True if healthy
    */
 	async healthCheck() {
+		if (!this.validate()) return false;
+
 		try {
+			const client = ModelClient(
+				this.endpoint,
+				new AzureKeyCredential(this.apiKey)
+			);
+
 			// Try a simple models endpoint call if available
-			const response = await this.makeRequest('GET', '/models', null);
-			return !!response;
+			const response = await client.path('/models').get({
+				timeout: this.timeout
+			});
+
+			return !isUnexpected(response);
 		} catch (error) {
 			console.error('[AzureAIClient] Health check failed:', error.message);
 			return false;
