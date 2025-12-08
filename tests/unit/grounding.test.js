@@ -112,8 +112,8 @@ describe('Grounding Service', () => {
 
 			expect(generateEnrichedAlert).toHaveBeenCalledWith(expect.objectContaining({
 				options: expect.objectContaining({
-					systemPrompt: expect.stringContaining('structured insights, sentiment, and technical levels')
-				})
+					systemPrompt: expect.stringContaining('structured insights, sentiment, and technical levels'),
+				}),
 			}));
 		});
 
@@ -127,15 +127,15 @@ describe('Grounding Service', () => {
 				sources: [],
 			});
 
-			await groundAlert({ 
+			await groundAlert({
 				text: 'Test alert text',
-				options: { promptType: 'NEWS_ANALYSIS' }
+				options: { promptType: 'NEWS_ANALYSIS' },
 			});
 
 			expect(generateEnrichedAlert).toHaveBeenCalledWith(expect.objectContaining({
 				options: expect.objectContaining({
-					systemPrompt: expect.stringContaining('sentiment analyst specializing in crypto and stock news')
-				})
+					systemPrompt: expect.stringContaining('sentiment analyst specializing in crypto and stock news'),
+				}),
 			}));
 		});
 	});

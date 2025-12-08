@@ -11,19 +11,19 @@
  * @returns {string} Truncated text with "…" if needed
  */
 function truncateMessage(text, maxChars = 20000) {
-  if (!text || typeof text !== 'string') {
-    return '';
-  }
+	if (!text || typeof text !== 'string') {
+		return '';
+	}
 
-  // If text is exactly at limit or under, no truncation needed
-  if (text.length <= maxChars) {
-    return text;
-  }
+	// If text is exactly at limit or under, no truncation needed
+	if (text.length <= maxChars) {
+		return text;
+	}
 
-  // Text exceeds limit; truncate and add "…"
-  return text.substring(0, maxChars) + '…';
+	// Text exceeds limit; truncate and add "…"
+	return text.substring(0, maxChars) + '…';
 }
 
 module.exports = {
-  truncateMessage,
+	truncateMessage,
 };

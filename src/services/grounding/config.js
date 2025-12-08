@@ -28,7 +28,7 @@ Keep summaries under ${GROUNDING_MAX_LENGTH} characters.
 Preserve the original language of the alert if possible.
 `.trim();
 
-const ALERT_ENRICHMENT_SYSTEM_PROMPT = `You are a financial market analyst. Your job is to analyze alerts and provide structured insights, sentiment, and technical levels.`;
+const ALERT_ENRICHMENT_SYSTEM_PROMPT = 'You are a financial market analyst. Your job is to analyze alerts and provide structured insights, sentiment, and technical levels.';
 
 const NEWS_ANALYSIS_SYSTEM_PROMPT = `You are a financial market sentiment analyst specializing in crypto and stock news analysis.
 Analyze the provided news/context and detect market-moving events.`;
@@ -57,5 +57,5 @@ module.exports = {
 	GROUNDING_MODEL_NAME,
 	GEMINI_MODEL_NAME,
 	GEMINI_MODEL_NAME_FALLBACK,
-	ENABLE_NEWS_MONITOR_TEST_MODE
+	ENABLE_NEWS_MONITOR_TEST_MODE,
 };

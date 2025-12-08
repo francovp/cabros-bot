@@ -68,7 +68,7 @@ app.listen(port, async () => {
 				console.log(`Telegram bot deployed from commit ${gitCommitUrl} is running`);
 				text = `*Telegram bot deployed from commit [${commitHash}](${gitCommitUrl}) is running*`;
 				await bot.telegram.sendMessage(
-					process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID, text, { parse_mode: 'MarkdownV2' }
+					process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID, text, { parse_mode: 'MarkdownV2' },
 				);
 			}
 		}
