@@ -18,7 +18,6 @@ const genaiClient = require('./genaiClient');
  * @returns {Promise<string>} Optimized search query
  */
 async function deriveSearchQuery(alertText, opts = {}) {
-
 	try {
 		const prompt = `Alert: ${alertText}`;
 		console.debug('Deriving search query with prompt: ', prompt);
@@ -27,6 +26,10 @@ async function deriveSearchQuery(alertText, opts = {}) {
 			userPrompt: prompt,
 			opts: { temperature: opts.temperature },
 		});
+
+		if (opts.tokenUsage && response.usage) {
+			opts.tokenUsage.addUsage(response.usage);
+		}
 
 		if (!response || !response.text) {
 			throw new Error('Invalid response from LLM');
@@ -55,6 +58,7 @@ async function groundAlert({ text, options = {} }) {
 		preserveLanguage = true,
 		maxLength = GROUNDING_MAX_LENGTH,
 		promptType = 'ALERT_ENRICHMENT', // Default to ALERT_ENRICHMENT for backward compatibility/current usage
+		tokenUsage,
 	} = options;
 
 	const startTime = Date.now();
@@ -85,11 +89,14 @@ async function groundAlert({ text, options = {} }) {
 	try {
 
 		// 1. Search for evidence
-		const { results: searchResults, totalResults, searchResultText } = await genaiClient.search({
+		const { results: searchResults, totalResults, searchResultText, usage: searchUsage } = await genaiClient.search({
 			query: text,
 			model: GROUNDING_MODEL_NAME,
 			maxResults: maxSources,
 		});
+		if (tokenUsage && searchUsage) {
+			tokenUsage.addUsage(searchUsage);
+		}
 		console.debug(`[Grounding] Retrieved ${searchResults.length}/${totalResults} search results`);
 
 		// 2. Generate enriched alert with timeout
@@ -99,7 +106,7 @@ async function groundAlert({ text, options = {} }) {
 				text: text,
 				searchResults,
 				searchResultText,
-				options: { preserveLanguage, maxLength, systemPrompt },
+				options: { preserveLanguage, maxLength, systemPrompt, tokenUsage },
 			}),
 			timeoutPromise,
 		]).finally(cleanupTimeout);
