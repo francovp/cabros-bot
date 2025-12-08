@@ -1,17 +1,32 @@
-/* global jest, describe, it, expect, beforeEach */
+/* global jest, describe, it, expect, beforeEach, afterEach */
 
 const { generateGroundedSummary, generateEnrichedAlert } = require('../../src/services/grounding/gemini');
 const genaiClient = require('../../src/services/grounding/genaiClient');
 
 jest.mock('../../src/services/grounding/genaiClient');
+jest.mock('../../src/services/inference/azureAiClient', () => ({
+	getAzureAIClient: jest.fn().mockReturnValue({
+		chatCompletion: jest.fn(),
+		validate: jest.fn().mockReturnValue(true),
+	}),
+}));
+
 jest.mock('../../src/services/grounding/config', () => ({
 	GEMINI_SYSTEM_PROMPT: 'Test system prompt',
 	GROUNDING_MODEL_NAME: 'gemini-2.0-flash',
+	GEMINI_MODEL_NAME: 'gemini-2.0-flash',
 }));
 
 describe('Gemini Service', () => {
+	const originalEnv = process.env;
+
 	beforeEach(() => {
 		jest.resetAllMocks();
+		process.env = { ...originalEnv, GEMINI_MODEL_NAME: 'gemini-2.0-flash' };
+	});
+
+	afterEach(() => {
+		process.env = originalEnv;
 	});
 
 	describe('generateEnrichedAlert', () => {
