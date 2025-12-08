@@ -15,6 +15,7 @@ async function generateGroundedSummary({ text, searchResults = [], searchResultT
 		maxLength = 250,
 		preserveLanguage = true,
 		systemPrompt = GEMINI_SYSTEM_PROMPT,
+		tokenUsage,
 	} = options;
 
 	if (ENABLE_NEWS_MONITOR_TEST_MODE) {
@@ -48,11 +49,15 @@ Please analyze this alert and provide a concise summary (max ${maxLength} chars)
 Alert: ${text}${contextPrompt}${contextSnippet}`;
 
 	try {
-		const { text: summary } = await genaiClient.llmCall({
+		const { text: summary, usage } = await genaiClient.llmCall({
 			prompt,
 			context: { citations: searchResults },
 			opts: { model: GROUNDING_MODEL_NAME, temperature: 0.2 },
 		});
+
+		if (tokenUsage && usage) {
+			tokenUsage.addUsage(usage);
+		}
 
 		const response = {
 			summary: summary.slice(0, maxLength),
@@ -83,7 +88,8 @@ module.exports = {
  * @param {string} context - News/context text to analyze
  * @returns {Promise<Object>} Analysis result with event_category, sentiment, confidence
  */
-async function analyzeNewsForSymbol(symbol, context) {
+async function analyzeNewsForSymbol(symbol, context, options = {}) {
+	const tokenUsage = options.tokenUsage;
 	if (ENABLE_NEWS_MONITOR_TEST_MODE) {
 		console.debug('[Gemini][analyzeNewsForSymbol] Test mode enabled, returning fixed analysis.');
 		// In test mode, return a fixed analysis for consistent testing
@@ -107,6 +113,9 @@ async function analyzeNewsForSymbol(symbol, context) {
 			query: `${symbol} news market sentiment events today`,
 			maxResults: 3,
 		});
+		if (tokenUsage && searchResult.usage) {
+			tokenUsage.addUsage(searchResult.usage);
+		}
 		console.debug('[Gemini][analyzeNewsForSymbol] Grounding market news and sentiment search results:', searchResult);
 
 		// Build enriched context from grounding results
@@ -172,6 +181,9 @@ End of instructions.`
 				prompt: fullPrompt,
 				opts: { model: GEMINI_MODEL_NAME, temperature: 0.3 },
 			});
+			if (tokenUsage && result.usage) {
+				tokenUsage.addUsage(result.usage);
+			}
 			response = result.text;
 		} catch (primaryError) {
 			// Check if error is due to model overload (503 UNAVAILABLE)
@@ -183,6 +195,9 @@ End of instructions.`
 						prompt: fullPrompt,
 						opts: { model: GEMINI_MODEL_NAME_FALLBACK, temperature: 0.3 },
 					});
+					if (tokenUsage && fallbackResult.usage) {
+						tokenUsage.addUsage(fallbackResult.usage);
+					}
 					response = fallbackResult.text;
 				} catch (fallbackError) {
 					console.error('[Gemini] Fallback model also failed:', fallbackError.message);
@@ -275,6 +290,7 @@ async function generateEnrichedAlert({ text, searchResults = [], searchResultTex
 	const {
 		preserveLanguage = true,
 		systemPrompt = GEMINI_SYSTEM_PROMPT,
+		tokenUsage,
 	} = options;
 
 	// Short alert check (< 15 chars or < 2 words)
@@ -322,11 +338,15 @@ Instructions:
 `;
 
 	try {
-		const { text: responseText } = await genaiClient.llmCall({
+		const { text: responseText, usage } = await genaiClient.llmCall({
 			prompt,
 			context: { citations: searchResults },
 			opts: { model: GROUNDING_MODEL_NAME, temperature: 0.2 },
 		});
+
+		if (tokenUsage && usage) {
+			tokenUsage.addUsage(usage);
+		}
 
 		return parseEnrichedAlertResponse(responseText);
 	} catch (error) {

@@ -18,14 +18,16 @@ const genaiClient = require('./genaiClient');
  * @returns {Promise<string>} Optimized search query
  */
 async function deriveSearchQuery(alertText, opts = {}) {
-
 	try {
 		const prompt = `${SEARCH_QUERY_PROMPT}\n\nAlert: ${alertText}`;
-		console.debug('Deriving search query with prompt: ', prompt);
 		const response = await genaiClient.llmCall({
 			prompt: prompt,
 			opts: { model: 'gemini-2.0-flash', temperature: opts.temperature },
 		});
+
+		if (opts.tokenUsage && response.usage) {
+			opts.tokenUsage.addUsage(response.usage);
+		}
 
 		if (!response || !response.text) {
 			throw new Error('Invalid response from LLM');
@@ -54,6 +56,7 @@ async function groundAlert({ text, options = {} }) {
 		preserveLanguage = true,
 		maxLength = GROUNDING_MAX_LENGTH,
 		promptType = 'ALERT_ENRICHMENT', // Default to ALERT_ENRICHMENT for backward compatibility/current usage
+		tokenUsage,
 	} = options;
 
 	const startTime = Date.now();
@@ -84,7 +87,7 @@ async function groundAlert({ text, options = {} }) {
 	try {
 		// Start both tasks in parallel
 		const [query, truncatedText] = await Promise.all([
-			deriveSearchQuery(text, { temperature: 0.2 }),
+			deriveSearchQuery(text, { temperature: 0.2, tokenUsage }),
 			// Handle very long alerts by truncating
 			text.length > 4000 ? text.slice(0, 4000) + '...' : text,
 		]);
@@ -92,11 +95,14 @@ async function groundAlert({ text, options = {} }) {
 		console.debug('Derived search query:', query);
 
 		// 1. Search for evidence
-		const { results: searchResults, totalResults, searchResultText } = await genaiClient.search({
+		const { results: searchResults, totalResults, searchResultText, usage: searchUsage } = await genaiClient.search({
 			query,
 			model: GROUNDING_MODEL_NAME,
 			maxResults: maxSources,
 		});
+		if (tokenUsage && searchUsage) {
+			tokenUsage.addUsage(searchUsage);
+		}
 		console.debug(`[Grounding] Retrieved ${searchResults.length}/${totalResults} search results`);
 
 		// 2. Generate enriched alert with timeout
@@ -106,7 +112,7 @@ async function groundAlert({ text, options = {} }) {
 				text: truncatedText,
 				searchResults,
 				searchResultText,
-				options: { preserveLanguage, maxLength, systemPrompt },
+				options: { preserveLanguage, maxLength, systemPrompt, tokenUsage },
 			}),
 			timeoutPromise,
 		]).finally(cleanupTimeout);

@@ -7,6 +7,7 @@ const WhatsAppService = require('../../../../services/notification/WhatsAppServi
 const NotificationManager = require('../../../../services/notification/NotificationManager');
 const { getURLShortener } = require('../../handlers/newsMonitor/urlShortener');
 const sentryService = require('../../../../services/monitoring/SentryService');
+const { TokenUsageTracker } = require('../../../../lib/tokenUsage');
 
 // Initialize services
 let notificationManager = null;
@@ -55,6 +56,7 @@ function postAlert(bot) {
 		let alertText = '';
 		let alert = null;
 		let enriched = false;
+		const tokenUsage = new TokenUsageTracker();
 
 		try {
 			// Parse and validate alert text
@@ -74,7 +76,10 @@ function postAlert(bot) {
 				try {
 					console.debug('Starting grounding process');
 
-					const enrichedAlert = await enrichAlert({ text });
+					const enrichedAlert = await enrichAlert({ text }, { tokenUsage });
+					if (enrichedAlert && typeof enrichedAlert === 'object') {
+						enrichedAlert.tokenUsage = tokenUsage.toJSON();
+					}
 					enriched = true;
 					alert.enriched = enrichedAlert;
 					console.debug('[Alert] Grounding completed, citations:', (enrichedAlert.citations && enrichedAlert.citations.length) || 0);
@@ -87,7 +92,7 @@ function postAlert(bot) {
 			const results = await notificationManager.sendToAll(alert);
 
 			// Return 200 OK regardless of delivery success (fail-open pattern)
-			res.json({ success: true, results, enriched });
+			res.json({ success: true, results, enriched, tokenUsage: tokenUsage.toJSON() });
 		} catch (error) {
 			console.error('[Alert] Request failed:', error.message);
 

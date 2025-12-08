@@ -59,6 +59,15 @@ function smartEscapeMarkdownV2(text) {
 	return text;
 }
 
+function formatTokenUsageMarkdown(tokenUsage) {
+	if (!tokenUsage) return '';
+	const input = Number(tokenUsage.inputTokens) || 0;
+	const output = Number(tokenUsage.outputTokens) || 0;
+	const total = Number(tokenUsage.totalTokens || (input + output));
+	const line = `Tokens: in ${input} | out ${output} | total ${total}`;
+	return smartEscapeMarkdownV2(normalizeBackslashes(line));
+}
+
 /**
  * MarkdownV2Formatter - Formats text for Telegram MarkdownV2 parse mode
  */
@@ -109,6 +118,7 @@ class MarkdownV2Formatter {
 			technical_levels = { supports: [], resistances: [] },
 			sources = [],
 			truncated = false,
+			tokenUsage,
 		} = enriched;
 
 		// Use smart escape for content
@@ -132,7 +142,7 @@ class MarkdownV2Formatter {
 
 		// Sentiment
 		const sentimentEmoji = sentiment === 'BULLISH' ? '🚀' : sentiment === 'BEARISH' ? '🔻' : '😐';
-		const score = sentiment_score.toFixed(2).replace('.', '\\.'); // Escape dot
+		const score = sentiment_score.toFixed(2).replace('.', '\\.');
 		message += `\n\nSentiment: ${sentiment} ${sentimentEmoji} \\(${score}\\)`;
 
 		// Technical Levels
@@ -156,11 +166,16 @@ class MarkdownV2Formatter {
 			const formattedSources = sources
 				.map(({ title = '', url = '' }) => {
 					const unescapedTitle = title.replace(/\\([_*[\]~`>#{=|\.}])/g, '$1');
-					const escapedTitle = smartEscapeMarkdownV2(normalizeBackslashes(unescapedTitle));
-					return `[${escapedTitle}](${url})`;
+					const escapedTitleForLink = smartEscapeMarkdownV2(normalizeBackslashes(unescapedTitle));
+					return `[${escapedTitleForLink}](${url})`;
 				})
 				.join(' / ');
 			message += `\n\n*Sources*\n${formattedSources}`;
+		}
+
+		const tokenLine = formatTokenUsageMarkdown(tokenUsage);
+		if (tokenLine) {
+			message += `\n\n_${tokenLine}_`;
 		}
 
 		return message;
@@ -172,7 +187,7 @@ class MarkdownV2Formatter {
    * @returns {string} Formatted message
    */
 	formatNewsAlert(enriched = {}) {
-		const { originalText = '', summary = '', citations = [], extraText = '' } = enriched;
+		const { originalText = '', summary = '', citations = [], extraText = '', tokenUsage } = enriched;
 
 		// Escape title
 		const escapedTitle = smartEscapeMarkdownV2(normalizeBackslashes(originalText));
@@ -188,17 +203,21 @@ class MarkdownV2Formatter {
 		if (citations && citations.length > 0) {
 			const formattedCitations = citations
 				.map(c => {
-					// Title might need escaping
-					const escapedTitle = smartEscapeMarkdownV2(normalizeBackslashes(c.title || 'Source'));
-					return `[${escapedTitle}](${c.url})`;
+					const escapedCitationTitle = smartEscapeMarkdownV2(normalizeBackslashes(c.title || 'Source'));
+					return `[${escapedCitationTitle}](${c.url})`;
 				})
-				.join(' \\| '); // Escape pipe
+				.join(' \\| ');
 			message += `\n\nSources: ${formattedCitations}`;
 		}
 
 		// Extra text (Model confidence etc) - contains markdown (_)
 		if (extraText) {
 			message += `\n\n${extraText}`;
+		}
+
+		const tokenLine = formatTokenUsageMarkdown(tokenUsage);
+		if (tokenLine) {
+			message += `\n\n_${tokenLine}_`;
 		}
 
 		return message;

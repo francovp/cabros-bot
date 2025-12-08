@@ -1,5 +1,6 @@
 const { GoogleGenAI } = require('@google/genai');
 const { GEMINI_API_KEY, GROUNDING_MODEL_NAME, ENABLE_NEWS_MONITOR_TEST_MODE } = require('./config');
+const { normalizeUsageMetadata } = require('../../lib/tokenUsage');
 
 class GenaiClient {
         constructor() {
@@ -50,6 +51,7 @@ class GenaiClient {
 
                         // Handle response structure - could be direct or wrapped in response property
                         const response = result?.response || result || {};
+                        const usage = normalizeUsageMetadata(response.usageMetadata);
 
                         console.debug('[genaiClient] search full response usageMetadata: ', response.usageMetadata);
 
@@ -97,6 +99,7 @@ class GenaiClient {
                                 results,
                                 totalResults: groundingChunks.length,
                                 searchResultText: searchResultText,
+                                usage,
                         };
                 } catch (error) {
                         // Normalize to expected error message prefix
@@ -120,6 +123,7 @@ class GenaiClient {
 
                         // Handle response structure - could be direct or wrapped in response property
                         const result = response?.response || response || {};
+                        const usage = normalizeUsageMetadata(result.usageMetadata);
 
                         // Prefer the text() helper if available (can be a function or property)
                         let text = '';
@@ -153,6 +157,7 @@ class GenaiClient {
                         return {
                                 text,
                                 citations: context.citations || [],
+                                usage,
                         };
                 } catch (error) {
                         throw new Error(`LLM call failed: ${error.message}`);
