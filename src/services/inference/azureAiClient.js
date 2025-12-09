@@ -4,17 +4,19 @@
  * 003-news-monitor: User Story 6 (optional enrichment)
  */
 
-const ModelClient = require("@azure-rest/ai-inference").default;
-const { isUnexpected } = require("@azure-rest/ai-inference");
-const { AzureKeyCredential } = require("@azure/core-auth");
+const ModelClient = require('@azure-rest/ai-inference').default;
+const { isUnexpected } = require('@azure-rest/ai-inference');
+const { AzureKeyCredential } = require('@azure/core-auth');
+const { AZURE_LLM_MODEL, AZURE_LLM_ENDPOINT } = require('../grounding/config');
 
 class AzureAIClient {
 	constructor() {
-		this.endpoint = process.env.AZURE_LLM_ENDPOINT;
+		this.endpoint = AZURE_LLM_ENDPOINT;
 		this.apiKey = process.env.AZURE_LLM_KEY;
-		this.model = process.env.AZURE_LLM_MODEL;
+		this.model = AZURE_LLM_MODEL;
 		// 10s timeout
 		this.timeout = 10000;
+		console.debug('[AzureAIClient] Initialized with endpoint:', this.endpoint, 'model:', this.model);
 	}
 
 	/**
@@ -47,7 +49,7 @@ class AzureAIClient {
 
 		const client = ModelClient(
 			this.endpoint,
-			new AzureKeyCredential(this.apiKey)
+			new AzureKeyCredential(this.apiKey),
 		);
 
 		const payload = {
@@ -58,10 +60,8 @@ class AzureAIClient {
 				],
 				model: this.model,
 				temperature: 0.7,
-				max_tokens: 500,
-				top_p: 0.95,
+				top_p: 1.0,
 			},
-			timeout: this.timeout
 		};
 
 		try {
@@ -112,12 +112,12 @@ class AzureAIClient {
 		try {
 			const client = ModelClient(
 				this.endpoint,
-				new AzureKeyCredential(this.apiKey)
+				new AzureKeyCredential(this.apiKey),
 			);
 
 			// Try a simple models endpoint call if available
 			const response = await client.path('/models').get({
-				timeout: this.timeout
+				timeout: this.timeout,
 			});
 
 			return !isUnexpected(response);

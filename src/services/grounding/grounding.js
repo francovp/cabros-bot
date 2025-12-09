@@ -20,11 +20,12 @@ const genaiClient = require('./genaiClient');
 async function deriveSearchQuery(alertText, opts = {}) {
 
 	try {
-		const prompt = `${SEARCH_QUERY_PROMPT}\n\nAlert: ${alertText}`;
+		const prompt = `Alert: ${alertText}`;
 		console.debug('Deriving search query with prompt: ', prompt);
-		const response = await genaiClient.llmCall({
-			prompt: prompt,
-			opts: { model: 'gemini-2.0-flash', temperature: opts.temperature },
+		const response = await genaiClient.llmCallv2({
+			systemPrompt: SEARCH_QUERY_PROMPT,
+			userPrompt: prompt,
+			opts: { temperature: opts.temperature },
 		});
 
 		if (!response || !response.text) {
@@ -82,18 +83,19 @@ async function groundAlert({ text, options = {} }) {
 	}
 
 	try {
-		// Start both tasks in parallel
-		const [query, truncatedText] = await Promise.all([
-			deriveSearchQuery(text, { temperature: 0.2 }),
-			// Handle very long alerts by truncating
-			text.length > 4000 ? text.slice(0, 4000) + '...' : text,
-		]);
+		let query, truncatedText = null;
+		// // Start both tasks in parallel
+		// const [query, truncatedText] = await Promise.all([
+		// 	deriveSearchQuery(text, { temperature: 0.2 }),
+		// 	// Handle very long alerts by truncating
+		// 	text.length > 4000 ? text.slice(0, 4000) + '...' : text,
+		// ]);
 
-		console.debug('Derived search query:', query);
+		// console.debug('Derived search query:', query);
 
 		// 1. Search for evidence
 		const { results: searchResults, totalResults, searchResultText } = await genaiClient.search({
-			query,
+			query: query || text,
 			model: GROUNDING_MODEL_NAME,
 			maxResults: maxSources,
 		});
@@ -103,7 +105,7 @@ async function groundAlert({ text, options = {} }) {
 		const [timeoutPromise, cleanupTimeout] = createTimeout();
 		const result = await Promise.race([
 			gemini.generateEnrichedAlert({
-				text: truncatedText,
+				text: truncatedText || text,
 				searchResults,
 				searchResultText,
 				options: { preserveLanguage, maxLength, systemPrompt },
