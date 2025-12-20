@@ -1,5 +1,6 @@
 const { GoogleGenAI } = require('@google/genai');
-const { GEMINI_API_KEY, GROUNDING_MODEL_NAME, ENABLE_NEWS_MONITOR_TEST_MODE } = require('./config');
+const { getAzureAIClient } = require('../inference/azureAiClient');
+const { GEMINI_API_KEY, GROUNDING_MODEL_NAME, ENABLE_NEWS_MONITOR_TEST_MODE, GEMINI_MODEL_NAME } = require('./config');
 
 class GenaiClient {
         constructor() {
@@ -105,7 +106,7 @@ class GenaiClient {
         }
 
         async llmCall({ prompt, context = {}, opts = {} }) {
-                const { model = GROUNDING_MODEL_NAME, temperature = 0.2 } = opts;
+                const { model = GEMINI_MODEL_NAME, temperature = 0.2 } = opts;
 
                 try {
                         const response = await this.genAI.models.generateContent({
@@ -157,6 +158,47 @@ class GenaiClient {
                 } catch (error) {
                         throw new Error(`LLM call failed: ${error.message}`);
                 }
+        }
+
+        /**
+         * Helper to switch between Gemini and Azure LLM based on configuration.
+         * Uses Azure if GEMINI_MODEL_NAME is not defined in environment variables.
+         * @param {object} params
+         * @param {string} params.systemPrompt - System prompt
+         * @param {string} params.userPrompt - User prompt
+         * @param {object} params.context - Context (citations) for Gemini
+         * @param {object} params.opts - Options (model, temperature) for Gemini
+         * @returns {Promise<{text: string, citations: Array}>} Response text and citations
+         */
+        async llmCallv2({ systemPrompt, userPrompt, context = {}, opts = {} }) {
+                // Check if GEMINI_MODEL_NAME is defined in process.env (ignoring default in config.js)
+                if (!GEMINI_MODEL_NAME) {
+                        console.debug('[Gemini] GEMINI_MODEL_NAME not defined, using Azure AI Client');
+                        const azureClient = getAzureAIClient();
+
+                        // Azure Client doesn't support citations/grounding in the same way, so we just return the text
+                        // The caller is responsible for ensuring the userPrompt contains necessary context
+                        const text = await azureClient.chatCompletion(systemPrompt, userPrompt);
+                        return {
+                                text,
+                                citations: context.citations || [],
+                        };
+                }
+
+                // Use Gemini
+                // Gemini usually expects a combined prompt or specific structure.
+                // The existing code passed combined prompts. We need to respect that.
+                // If the caller separated them, we join them for Gemini as per previous implementation patterns
+                // unless genaiClient handles system prompts separately (it doesn't seem to expose it directly in the call signature used previously).
+
+                // Previous calls were like: prompt = `${systemPrompt}\n\n${userPrompt}`.
+                const combinedPrompt = `${systemPrompt}\n\n${userPrompt}`;
+
+                return await this.llmCall({
+                        prompt: combinedPrompt,
+                        context,
+                        opts
+                });
         }
 
         _addCitations(text, supports, chunks) {

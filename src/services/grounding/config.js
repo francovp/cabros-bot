@@ -13,8 +13,10 @@ const GROUNDING_MAX_SOURCES = parseInt(process.env.GROUNDING_MAX_SOURCES || '3',
 const GROUNDING_TIMEOUT_MS = parseInt(process.env.GROUNDING_TIMEOUT_MS || '30000', 10);
 const GROUNDING_MAX_LENGTH = parseInt(process.env.GROUNDING_MAX_LENGTH || '2000', 10);
 const GROUNDING_MODEL_NAME = process.env.GROUNDING_MODEL_NAME || 'gemini-2.5-flash';
-const GEMINI_MODEL_NAME = process.env.GEMINI_MODEL_NAME || 'gemini-2.5-pro';
-const GEMINI_MODEL_NAME_FALLBACK = process.env.GEMINI_MODEL_NAME_FALLBACK || 'gemini-2.5-flash';
+const GEMINI_MODEL_NAME = process.env.GEMINI_MODEL_NAME || null;
+const GEMINI_MODEL_NAME_FALLBACK = process.env.GEMINI_MODEL_NAME_FALLBACK || 'gemini-2.5-flash-lite';
+const AZURE_LLM_MODEL = process.env.AZURE_LLM_MODEL || 'openai/gpt-4.1';
+const AZURE_LLM_ENDPOINT = process.env.AZURE_LLM_ENDPOINT || 'https://models.github.ai/inference';
 
 // Prompt configuration
 const GEMINI_SYSTEM_PROMPT = process.env.GEMINI_SYSTEM_PROMPT || `
@@ -57,5 +59,6 @@ module.exports = {
 	GROUNDING_MODEL_NAME,
 	GEMINI_MODEL_NAME,
 	GEMINI_MODEL_NAME_FALLBACK,
-	ENABLE_NEWS_MONITOR_TEST_MODE,
+	AZURE_LLM_MODEL,
+	AZURE_LLM_ENDPOINT,
 };

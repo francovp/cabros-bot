@@ -189,8 +189,8 @@ Some text after...`;
 				searchResultText: 'Market context from search',
 				totalResults: 2,
 			});
-			// Mock llmCall() to return analysis
-			genaiClient.llmCall.mockResolvedValue({
+			// Mock llmCallv2() (used by analyzeNewsForSymbol) to return analysis
+			genaiClient.llmCallv2.mockResolvedValue({
 				text: JSON.stringify({
 					event_category: 'price_surge',
 					event_significance: 0.8,
@@ -209,7 +209,7 @@ Some text after...`;
 		});
 
 		it('should calculate confidence with negative sentiment', async () => {
-			genaiClient.llmCall.mockResolvedValue({
+			genaiClient.llmCallv2.mockResolvedValue({
 				text: JSON.stringify({
 					event_category: 'price_decline',
 					event_significance: 0.7,
@@ -226,7 +226,7 @@ Some text after...`;
 		});
 
 		it('should clamp confidence to [0, 1] range', async () => {
-			genaiClient.llmCall.mockResolvedValue({
+			genaiClient.llmCallv2.mockResolvedValue({
 				text: JSON.stringify({
 					event_category: 'price_surge',
 					event_significance: 1.0,
@@ -245,7 +245,7 @@ Some text after...`;
 		});
 
 		it('should return full analysis result with all required fields', async () => {
-			genaiClient.llmCall.mockResolvedValue({
+			genaiClient.llmCallv2.mockResolvedValue({
 				text: JSON.stringify({
 					event_category: 'regulatory',
 					event_significance: 0.85,
@@ -266,13 +266,13 @@ Some text after...`;
 		});
 
 		it('should throw error when Gemini call fails', async () => {
-			genaiClient.llmCall.mockRejectedValue(new Error('API error'));
+			genaiClient.llmCallv2.mockRejectedValue(new Error('API error'));
 
 			await expect(analyzeNewsForSymbol('BTCUSDT', 'Context')).rejects.toThrow('API error');
 		});
 
 		it('should handle fallback when Gemini response cannot be parsed', async () => {
-			genaiClient.llmCall.mockResolvedValue({
+			genaiClient.llmCallv2.mockResolvedValue({
 				text: 'Invalid response format',
 			});
 
@@ -283,7 +283,7 @@ Some text after...`;
 		});
 
 		it('should detect price_surge events correctly', async () => {
-			genaiClient.llmCall.mockResolvedValue({
+			genaiClient.llmCallv2.mockResolvedValue({
 				text: JSON.stringify({
 					event_category: 'price_surge',
 					event_significance: 0.9,
@@ -300,7 +300,7 @@ Some text after...`;
 		});
 
 		it('should detect price_decline events correctly', async () => {
-			genaiClient.llmCall.mockResolvedValue({
+			genaiClient.llmCallv2.mockResolvedValue({
 				text: JSON.stringify({
 					event_category: 'price_decline',
 					event_significance: 0.85,
@@ -317,7 +317,7 @@ Some text after...`;
 		});
 
 		it('should detect public_figure mentions', async () => {
-			genaiClient.llmCall.mockResolvedValue({
+			genaiClient.llmCallv2.mockResolvedValue({
 				text: JSON.stringify({
 					event_category: 'public_figure',
 					event_significance: 0.6,
@@ -333,7 +333,7 @@ Some text after...`;
 		});
 
 		it('should detect regulatory events', async () => {
-			genaiClient.llmCall.mockResolvedValue({
+			genaiClient.llmCallv2.mockResolvedValue({
 				text: JSON.stringify({
 					event_category: 'regulatory',
 					event_significance: 0.95,
@@ -349,7 +349,7 @@ Some text after...`;
 		});
 
 		it('should return NONE when no significant event detected', async () => {
-			genaiClient.llmCall.mockResolvedValue({
+			genaiClient.llmCallv2.mockResolvedValue({
 				text: JSON.stringify({
 					event_category: 'none',
 					event_significance: 0.2,
