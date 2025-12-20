@@ -83,19 +83,10 @@ async function groundAlert({ text, options = {} }) {
 	}
 
 	try {
-		let query, truncatedText = null;
-		// // Start both tasks in parallel
-		// const [query, truncatedText] = await Promise.all([
-		// 	deriveSearchQuery(text, { temperature: 0.2 }),
-		// 	// Handle very long alerts by truncating
-		// 	text.length > 4000 ? text.slice(0, 4000) + '...' : text,
-		// ]);
-
-		// console.debug('Derived search query:', query);
 
 		// 1. Search for evidence
 		const { results: searchResults, totalResults, searchResultText } = await genaiClient.search({
-			query: query || text,
+			query: text,
 			model: GROUNDING_MODEL_NAME,
 			maxResults: maxSources,
 		});
@@ -105,7 +96,7 @@ async function groundAlert({ text, options = {} }) {
 		const [timeoutPromise, cleanupTimeout] = createTimeout();
 		const result = await Promise.race([
 			gemini.generateEnrichedAlert({
-				text: truncatedText || text,
+				text: text,
 				searchResults,
 				searchResultText,
 				options: { preserveLanguage, maxLength, systemPrompt },
