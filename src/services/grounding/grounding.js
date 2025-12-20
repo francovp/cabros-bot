@@ -28,7 +28,7 @@ async function deriveSearchQuery(alertText, opts = {}) {
 		});
 
 		if (opts.tokenUsage && response.usage) {
-			opts.tokenUsage.addUsage(response.usage);
+			opts.tokenUsage.addUsage(response.usage, 'gemini-2.0-flash');
 		}
 
 		if (!response || !response.text) {
@@ -95,7 +95,7 @@ async function groundAlert({ text, options = {} }) {
 			maxResults: maxSources,
 		});
 		if (tokenUsage && searchUsage) {
-			tokenUsage.addUsage(searchUsage);
+			tokenUsage.addUsage(searchUsage, GROUNDING_MODEL_NAME);
 		}
 		console.debug(`[Grounding] Retrieved ${searchResults.length}/${totalResults} search results`);
 

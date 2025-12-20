@@ -58,7 +58,7 @@ Alert: ${text}${contextPrompt}${contextSnippet}`;
 		});
 
 		if (tokenUsage && usage) {
-			tokenUsage.addUsage(usage);
+			tokenUsage.addUsage(usage, GROUNDING_MODEL_NAME);
 		}
 
 		const response = {
@@ -108,7 +108,7 @@ async function analyzeNewsForSymbol(symbol, context, options = {}) {
 			maxResults: 3,
 		});
 		if (tokenUsage && searchResult.usage) {
-			tokenUsage.addUsage(searchResult.usage);
+			tokenUsage.addUsage(searchResult.usage, GROUNDING_MODEL_NAME);
 		}
 		console.debug('[Gemini][analyzeNewsForSymbol] Grounding market news and sentiment search results:', searchResult);
 
@@ -174,7 +174,7 @@ End of instructions.`
 				opts: { model: GEMINI_MODEL_NAME, temperature: 0.3 }
 			});
 			if (tokenUsage && result.usage) {
-				tokenUsage.addUsage(result.usage);
+				tokenUsage.addUsage(result.usage, GEMINI_MODEL_NAME);
 			}
 			response = result.text;
 		} catch (primaryError) {
@@ -191,7 +191,7 @@ End of instructions.`
 						opts: { model: GEMINI_MODEL_NAME_FALLBACK, temperature: 0.3 }
 					});
 					if (tokenUsage && fallbackResult.usage) {
-						tokenUsage.addUsage(fallbackResult.usage);
+						tokenUsage.addUsage(fallbackResult.usage, GEMINI_MODEL_NAME_FALLBACK);
 					}
 					response = fallbackResult.text;
 				} catch (fallbackError) {
@@ -337,7 +337,7 @@ Instructions:
 		});
 
 		if (tokenUsage && usage) {
-			tokenUsage.addUsage(usage);
+			tokenUsage.addUsage(usage, GROUNDING_MODEL_NAME);
 		}
 
 		return parseEnrichedAlertResponse(responseText);

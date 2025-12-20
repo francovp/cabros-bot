@@ -92,7 +92,9 @@ function postAlert(bot) {
 			const results = await notificationManager.sendToAll(alert);
 
 			// Return 200 OK regardless of delivery success (fail-open pattern)
-			res.json({ success: true, results, enriched, tokenUsage: tokenUsage.toJSON() });
+			const tokenUsageJSON = tokenUsage.toJSON();
+			tokenUsageJSON.formattedSummary = tokenUsage.formatSummary();
+			res.json({ success: true, results, enriched, tokenUsage: tokenUsageJSON });
 		} catch (error) {
 			console.error('[Alert] Request failed:', error.message);
 
