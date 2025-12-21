@@ -11,6 +11,7 @@ const { getCacheInstance } = require('./cache');
 const { AnalysisStatus } = require('./constants');
 const { getNotificationManager } = require('../alert/alert');
 const sentryService = require('../../../../services/monitoring/SentryService');
+const { TokenUsageTracker } = require('../../../../lib/tokenUsage');
 
 class NewsMonitorHandler {
 	constructor() {
@@ -36,6 +37,7 @@ class NewsMonitorHandler {
 	async handleRequest(req, res) {
 		const requestId = uuidv4();
 		const startTime = Date.now();
+		const tokenUsage = new TokenUsageTracker();
 
 		try {
 			// Inject notification manager into analyzer (set once before analysis)
@@ -80,7 +82,7 @@ class NewsMonitorHandler {
 			}
 
 			// Run analysis
-			const results = await this.analyzer.analyzeSymbols(symbolsToAnalyze, requestId);
+			const results = await this.analyzer.analyzeSymbols(symbolsToAnalyze, requestId, tokenUsage);
 
 			// Generate summary
 			const summary = this.generateSummary(results);
@@ -93,6 +95,7 @@ class NewsMonitorHandler {
 				summary,
 				totalDurationMs: Date.now() - startTime,
 				requestId,
+				tokenUsage: tokenUsage.toJSON(),
 			};
 
 			// Remove partial_success if all succeeded

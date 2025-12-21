@@ -19,6 +19,17 @@ class WhatsAppMarkdownFormatter {
     this.urlShortener = config.urlShortener || null;
   }
 
+  _formatTokenUsage(tokenUsage) {
+    if (!tokenUsage) return '';
+    const input = Number(tokenUsage.inputTokens) || 0;
+    const output = Number(tokenUsage.outputTokens) || 0;
+    const total = Number(tokenUsage.totalTokens || (input + output));
+    const inputCost = Number(tokenUsage.inputCost || 0);
+    const outputCost = Number(tokenUsage.outputCost || 0);
+    const totalCost = Number(tokenUsage.totalCost || (Number(inputCost) + Number(outputCost))).toFixed(4);
+	  return `Tokens usage: ${total} ($${totalCost})`;
+  }
+
   /**
    * Format text for WhatsApp markdown
    * Converts MarkdownV2 or plain text to WhatsApp-compatible format
@@ -48,7 +59,7 @@ class WhatsAppMarkdownFormatter {
    * @returns {Promise<string>} Formatted WhatsApp message
    */
   async formatNewsAlert(enriched = {}) {
-    const { originalText = '', summary = '', citations = [], extraText = '' } = enriched;
+    const { originalText = '', summary = '', citations = [], extraText = '', tokenUsage } = enriched;
 
     // Unescape MarkdownV2 sequences if present in originalText
     const unescapedTitle = originalText.replace(/\\([_*[\]()~`>#+\-=|{}.!])/g, "$1");
@@ -101,6 +112,11 @@ class WhatsAppMarkdownFormatter {
       message += `\n\n${unescapedExtra}`;
     }
 
+    const tokenLine = this._formatTokenUsage(tokenUsage);
+    if (tokenLine) {
+      message += `\n\n_${tokenLine}_`;
+    }
+
     return message;
   }
 
@@ -119,7 +135,8 @@ class WhatsAppMarkdownFormatter {
       technical_levels = { supports: [], resistances: [] },
       sources = [],
       truncated = false,
-      extraText = ''
+      extraText = '',
+      tokenUsage,
     } = enriched;
 
     // Unescape MarkdownV2 sequences to get plain text/WhatsApp markdown
@@ -199,6 +216,11 @@ class WhatsAppMarkdownFormatter {
         const unescapedExtra = extraText.replace(/\\([_*[\]()~`>#+\-=|{}.!])/g, "$1");
         message += `\n\n${unescapedExtra}`;
       }
+    }
+
+    const tokenLine = this._formatTokenUsage(tokenUsage);
+    if (tokenLine) {
+      message += `\n\n_${tokenLine}_`;
     }
 
     return message;
