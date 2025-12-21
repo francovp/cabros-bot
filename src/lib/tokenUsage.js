@@ -34,7 +34,7 @@ const PRICING_PER_1M = {
 	'gemma-3-4b-it': { input: 0, output: 0 },
 	'gemma-3-8b-it': { input: 0, output: 0 },
 	// Legacy/Other models defaults (using Flash 2.0 pricing as baseline)
-	'default': { input: 0.10, output: 0.40 }
+	'default': { input: 0.10, output: 0.40 },
 };
 
 /**
@@ -140,7 +140,7 @@ class TokenUsageTracker {
 			totalTokens,
 			inputCost: this.inputCost,
 			outputCost: this.outputCost,
-			totalCost
+			totalCost,
 		};
 	}
 
