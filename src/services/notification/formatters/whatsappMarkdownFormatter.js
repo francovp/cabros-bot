@@ -24,7 +24,10 @@ class WhatsAppMarkdownFormatter {
     const input = Number(tokenUsage.inputTokens) || 0;
     const output = Number(tokenUsage.outputTokens) || 0;
     const total = Number(tokenUsage.totalTokens || (input + output));
-    return `Tokens: in ${input} | out ${output} | total ${total}`;
+    const inputCost = Number(tokenUsage.inputCost || 0);
+    const outputCost = Number(tokenUsage.outputCost || 0);
+    const totalCost = Number(tokenUsage.totalCost || (Number(inputCost) + Number(outputCost))).toFixed(4);
+	  return `Tokens usage: ${total} ($${totalCost})`;
   }
 
   /**

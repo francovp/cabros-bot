@@ -64,7 +64,10 @@ function formatTokenUsageMarkdown(tokenUsage) {
 	const input = Number(tokenUsage.inputTokens) || 0;
 	const output = Number(tokenUsage.outputTokens) || 0;
 	const total = Number(tokenUsage.totalTokens || (input + output));
-	const line = `Tokens: in ${input} | out ${output} | total ${total}`;
+	const inputCost = Number(tokenUsage.inputCost || 0);
+	const outputCost = Number(tokenUsage.outputCost || 0);
+	const totalCost = Number(tokenUsage.totalCost || (Number(inputCost) + Number(outputCost))).toFixed(4);
+	const line = `Tokens usage: ${total} ($${totalCost})`;
 	return smartEscapeMarkdownV2(normalizeBackslashes(line));
 }
 
