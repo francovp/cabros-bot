@@ -27,14 +27,8 @@ const PRICING_PER_1M = {
 	'gemini-2.5-flash': { input: 0.30, output: 2.50 },
 	'gemini-2.0-flash': { input: 0.10, output: 0.40 },
 	'gemini-2.5-flash-lite': { input: 0.10, output: 0.40 },
-	'gemma-3': { input: 0, output: 0 },
-	'gemma-3n': { input: 0, output: 0 },
-	'gemma-3-27b-it': { input: 0, output: 0 },
-	'gemma-3-1b-it': { input: 0, output: 0 },
-	'gemma-3-4b-it': { input: 0, output: 0 },
-	'gemma-3-8b-it': { input: 0, output: 0 },
-	// Legacy/Other models defaults (using Flash 2.0 pricing as baseline)
-	'default': { input: 0.10, output: 0.40 },
+	// Other models
+	'default': { input: 0.00, output: 0.00 },
 };
 
 /**
