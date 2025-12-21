@@ -1,5 +1,6 @@
 const { GoogleGenAI } = require('@google/genai');
 const { getAzureAIClient } = require('../inference/azureAiClient');
+const { getOpenRouterClient } = require('../inference/openRouterClient');
 const { GEMINI_API_KEY, GROUNDING_MODEL_NAME, ENABLE_NEWS_MONITOR_TEST_MODE, GEMINI_MODEL_NAME } = require('./config');
 const { normalizeUsageMetadata } = require('../../lib/tokenUsage');
 
@@ -166,8 +167,8 @@ class GenaiClient {
         }
 
         /**
-         * Helper to switch between Gemini and Azure LLM based on configuration.
-         * Uses Azure if GEMINI_MODEL_NAME is not defined in environment variables.
+         * Helper to switch between Gemini, Azure LLM, and OpenRouter based on configuration and availability.
+         * Priority: Gemini -> Azure -> OpenRouter
          * @param {object} params
          * @param {string} params.systemPrompt - System prompt
          * @param {string} params.userPrompt - User prompt
@@ -176,34 +177,64 @@ class GenaiClient {
          * @returns {Promise<{text: string, citations: Array}>} Response text and citations
          */
         async llmCallv2({ systemPrompt, userPrompt, context = {}, opts = {} }) {
-                // Check if GEMINI_MODEL_NAME is defined in process.env (ignoring default in config.js)
-                if (!GEMINI_MODEL_NAME) {
-                        console.debug('[Gemini] GEMINI_MODEL_NAME not defined, using Azure AI Client');
-                        const azureClient = getAzureAIClient();
+                let lastError;
 
-                        // Azure Client doesn't support citations/grounding in the same way, so we just return the text
-                        // The caller is responsible for ensuring the userPrompt contains necessary context
-                        const text = await azureClient.chatCompletion(systemPrompt, userPrompt);
-                        return {
-                                text,
-                                citations: context.citations || [],
-                        };
+                // 1. Try Gemini
+                if (GEMINI_MODEL_NAME) {
+                        try {
+                                // Previous calls were like: prompt = `${systemPrompt}\n\n${userPrompt}`.
+                                const combinedPrompt = `${systemPrompt}\n\n${userPrompt}`;
+                                return await this.llmCall({
+                                        prompt: combinedPrompt,
+                                        context,
+                                        opts
+                                });
+                        } catch (error) {
+                                console.warn('[GenaiClient] Gemini call failed, attempting failover:', error.message);
+                                lastError = error;
+                        }
+                } else {
+                        console.debug('[GenaiClient] GEMINI_MODEL_NAME not defined, skipping Gemini');
                 }
 
-                // Use Gemini
-                // Gemini usually expects a combined prompt or specific structure.
-                // The existing code passed combined prompts. We need to respect that.
-                // If the caller separated them, we join them for Gemini as per previous implementation patterns
-                // unless genaiClient handles system prompts separately (it doesn't seem to expose it directly in the call signature used previously).
+                // 2. Try Azure
+                try {
+                        const azureClient = getAzureAIClient();
+                        if (azureClient.validate()) {
+                                console.debug('[GenaiClient] Attempting Azure AI Client');
+                                const text = await azureClient.chatCompletion(systemPrompt, userPrompt);
+                                return {
+                                        text,
+                                        citations: context.citations || [],
+                                };
+                        } else {
+                            console.debug('[GenaiClient] Azure AI Client not configured, skipping');
+                        }
+                } catch (error) {
+                        console.warn('[GenaiClient] Azure call failed, attempting failover:', error.message);
+                        lastError = error;
+                }
 
-                // Previous calls were like: prompt = `${systemPrompt}\n\n${userPrompt}`.
-                const combinedPrompt = `${systemPrompt}\n\n${userPrompt}`;
+                // 3. Try OpenRouter
+                try {
+                        const openRouterClient = getOpenRouterClient();
+                        if (openRouterClient.validate()) {
+                                console.debug('[GenaiClient] Attempting OpenRouter Client');
+                                const text = await openRouterClient.chatCompletion(systemPrompt, userPrompt);
+                                return {
+                                        text,
+                                        citations: context.citations || [],
+                                };
+                        } else {
+                                console.debug('[GenaiClient] OpenRouter Client not configured, skipping');
+                        }
+                } catch (error) {
+                        console.warn('[GenaiClient] OpenRouter call failed:', error.message);
+                        lastError = error;
+                }
 
-                return await this.llmCall({
-                        prompt: combinedPrompt,
-                        context,
-                        opts
-                });
+                // If we reach here, all configured providers failed
+                throw new Error(`All LLM providers failed. Last error: ${lastError ? lastError.message : 'No providers configured'}`);
         }
 
         _addCitations(text, supports, chunks) {
