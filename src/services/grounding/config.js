@@ -8,6 +8,10 @@ ENABLE_NEWS_MONITOR_TEST_MODE = process.env.ENABLE_NEWS_MONITOR_TEST_MODE === 't
 const ENABLE_GEMINI_GROUNDING = process.env.ENABLE_GEMINI_GROUNDING === 'true';
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
+// Brave Search Configuration
+const BRAVE_SEARCH_API_KEY = process.env.BRAVE_SEARCH_API_KEY;
+const BRAVE_SEARCH_ENDPOINT = process.env.BRAVE_SEARCH_ENDPOINT || 'https://api.search.brave.com/res/v1/web/search';
+
 // Performance and control parameters
 const GROUNDING_MAX_SOURCES = parseInt(process.env.GROUNDING_MAX_SOURCES || '3', 10);
 const GROUNDING_TIMEOUT_MS = parseInt(process.env.GROUNDING_TIMEOUT_MS || '30000', 10);
@@ -48,6 +52,8 @@ if (ENABLE_GEMINI_GROUNDING && !GEMINI_API_KEY) {
 module.exports = {
 	ENABLE_GEMINI_GROUNDING,
 	GEMINI_API_KEY,
+	BRAVE_SEARCH_API_KEY,
+	BRAVE_SEARCH_ENDPOINT,
 	GROUNDING_MAX_SOURCES,
 	GROUNDING_TIMEOUT_MS,
 	GEMINI_SYSTEM_PROMPT,

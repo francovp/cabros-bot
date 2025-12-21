@@ -1,9 +1,70 @@
 const { GoogleGenAI } = require('@google/genai');
-const { GEMINI_API_KEY, GROUNDING_MODEL_NAME, ENABLE_NEWS_MONITOR_TEST_MODE } = require('./config');
+const {
+        GEMINI_API_KEY,
+        GROUNDING_MODEL_NAME,
+        ENABLE_NEWS_MONITOR_TEST_MODE,
+        BRAVE_SEARCH_API_KEY,
+        BRAVE_SEARCH_ENDPOINT
+} = require('./config');
 
 class GenaiClient {
         constructor() {
                 this.genAI = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+        }
+
+        async _searchBrave(query, count = 3) {
+                if (!BRAVE_SEARCH_API_KEY) {
+                        console.warn('[genaiClient] BRAVE_SEARCH_API_KEY is not set. Returning empty results.');
+                        return [];
+                }
+
+                try {
+                        const url = new URL(BRAVE_SEARCH_ENDPOINT);
+                        url.searchParams.append('q', query);
+                        url.searchParams.append('count', count);
+
+                        const response = await fetch(url.toString(), {
+                                method: 'GET',
+                                headers: {
+                                        'Accept': 'application/json',
+                                        'Accept-Encoding': 'gzip',
+                                        'X-Subscription-Token': BRAVE_SEARCH_API_KEY
+                                }
+                        });
+
+                        if (!response.ok) {
+                                throw new Error(`Brave Search API failed with status ${response.status}: ${response.statusText}`);
+                        }
+
+                        const data = await response.json();
+
+                        // Parse Brave results
+                        // Brave structure: { web: { results: [ { title, url, description, profile: { name } } ] } }
+                        const results = data.web?.results?.map(result => {
+                                let sourceDomain = '';
+                                if (result.profile && result.profile.name) {
+                                        sourceDomain = result.profile.name;
+                                } else if (result.url) {
+                                        try {
+                                                sourceDomain = new URL(result.url).hostname;
+                                        } catch (e) {
+                                                sourceDomain = '';
+                                        }
+                                }
+
+                                return {
+                                        title: result.title || 'Unknown Source',
+                                        snippet: result.description || '',
+                                        url: result.url || '',
+                                        sourceDomain: sourceDomain
+                                };
+                        }) || [];
+
+                        return results;
+                } catch (error) {
+                        console.error('[genaiClient] Brave Search error:', error);
+                        return [];
+                }
         }
 
         async search({ query, model = GROUNDING_MODEL_NAME, maxResults = 3, textWithCitations = false }) {
@@ -31,71 +92,28 @@ class GenaiClient {
                                 };
                         }
 
-                        console.debug(`[genaiClient] Performing search with query: "${query}" using model: "${model}"`);
-                        // Use the model's Google Search tool to collect search results
-                        const groundingTool = {
-                                googleSearch: {},
-                        };
+                        console.debug(`[genaiClient] Performing search with query: "${query}" using Brave Search API`);
 
-                        const config = {
-                                tools: [groundingTool],
-                                temperature: 0.2,
-                        };
+                        // 1. Get search results from Brave
+                        const results = await this._searchBrave(query, maxResults);
 
-                        const result = await this.genAI.models.generateContent({
-                                model: model,
-                                contents: query,
-                                config,
-                        });
+                        // 2. Generate text grounded in these results using LLM
+                        let searchResultText = '';
 
-                        // Handle response structure - could be direct or wrapped in response property
-                        const response = result?.response || result || {};
+                        if (results.length > 0) {
+                                const contextPrompt = results.map((r, i) => `[${i+1}] Title: ${r.title}\nSource: ${r.sourceDomain}\nURL: ${r.url}\nSnippet: ${r.snippet}`).join('\n\n');
 
-                        console.debug('[genaiClient] search full response usageMetadata: ', response.usageMetadata);
+                                const prompt = `Query: ${query}\n\nSearch Results:\n${contextPrompt}\n\nInstructions: Answer the query based *only* on the provided search results. If the search results are insufficient, state that. ${textWithCitations ? 'Cite your sources using [1], [2], etc.' : ''}`;
 
-                        let searchResultText = response.text || '';
-
-                        // Safely access first candidate (result may be unexpected shape)
-                        const candidate = response?.candidates?.[0];
-                        console.debug('[genaiClient] search result candidate[0]: ', candidate);
-
-                        // Extract search results from grounding chunks safely (default empty arrays)
-                        const groundingChunks = candidate?.groundingMetadata?.groundingChunks || [];
-                        console.debug('[genaiClient] search groundingChunks: ', groundingChunks);
-
-                        const groundingSupports = candidate?.groundingMetadata?.groundingSupports || [];
-                        console.debug('[genaiClient] search groundingSupports: ', groundingSupports);
-
-                        if (textWithCitations) {
-                                searchResultText = this._addCitations(searchResultText, groundingSupports, groundingChunks);
+                                const llmResponse = await this.llmCall({ prompt, opts: { model } });
+                                searchResultText = llmResponse.text;
+                        } else {
+                                searchResultText = "No search results found.";
                         }
-
-                        // Map to normalized SearchResult objects
-                        const results = groundingChunks
-                                .filter(chunk => chunk && chunk.web)
-                                .map(chunk => {
-                                        const uri = chunk.web.uri || '';
-                                        let sourceDomain = chunk.web.domain;
-                                        if (!sourceDomain && uri) {
-                                                try {
-                                                        sourceDomain = new URL(uri).hostname;
-                                                } catch (e) {
-                                                        sourceDomain = '';
-                                                }
-                                        }
-
-                                        return {
-                                                title: chunk.web.title || 'Unknown Source',
-                                                snippet: chunk.web.snippet || '',
-                                                url: uri,
-                                                sourceDomain: sourceDomain || '',
-                                        };
-                                })
-                                .slice(0, maxResults);
 
                         return {
                                 results,
-                                totalResults: groundingChunks.length,
+                                totalResults: results.length,
                                 searchResultText: searchResultText,
                         };
                 } catch (error) {
@@ -157,37 +175,6 @@ class GenaiClient {
                 } catch (error) {
                         throw new Error(`LLM call failed: ${error.message}`);
                 }
-        }
-
-        _addCitations(text, supports, chunks) {
-                // Sort supports by end_index in descending order to avoid shifting issues when inserting.
-                const sortedSupports = [...supports].sort(
-                        (a, b) => (b.segment?.endIndex ?? 0) - (a.segment?.endIndex ?? 0),
-                );
-
-                for (const support of sortedSupports) {
-                        const endIndex = support.segment?.endIndex;
-                        if (endIndex === undefined || !support.groundingChunkIndices?.length) {
-                                continue;
-                        }
-
-                        const citationLinks = support.groundingChunkIndices
-                        .map(i => {
-                                const uri = chunks[i]?.web?.uri;
-                                if (uri) {
-                                return `[${i + 1}](${uri})`;
-                                }
-                                return null;
-                        })
-                        .filter(Boolean);
-
-                        if (citationLinks.length > 0) {
-                                const citationString = citationLinks.join(", ");
-                                text = text.slice(0, endIndex) + citationString + text.slice(endIndex);
-                        }
-                }
-
-                return text;
         }
 }
 
