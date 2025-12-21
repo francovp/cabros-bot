@@ -58,7 +58,7 @@ Alert: ${text}${contextPrompt}${contextSnippet}`;
 		});
 
 		if (tokenUsage && usage) {
-			tokenUsage.addUsage(usage, GROUNDING_MODEL_NAME);
+			tokenUsage.addUsage(usage, GEMINI_MODEL_NAME);
 		}
 
 		const response = {
@@ -337,7 +337,7 @@ Instructions:
 		});
 
 		if (tokenUsage && usage) {
-			tokenUsage.addUsage(usage, GROUNDING_MODEL_NAME);
+			tokenUsage.addUsage(usage, GEMINI_MODEL_NAME);
 		}
 
 		return parseEnrichedAlertResponse(responseText);

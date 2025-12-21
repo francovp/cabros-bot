@@ -362,7 +362,7 @@ class NewsAnalyzer {
 			clearTimeout(timeoutHandle);
 
 			if (tokenUsage && priceSearchResult && priceSearchResult.usage) {
-				tokenUsage.addUsage(priceSearchResult.usage);
+				tokenUsage.addUsage(priceSearchResult.usage, GROUNDING_MODEL_NAME);
 			}
 
 			// Extract JSON from response - try to find valid JSON

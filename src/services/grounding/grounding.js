@@ -7,6 +7,7 @@ const {
 	ALERT_ENRICHMENT_SYSTEM_PROMPT,
 	NEWS_ANALYSIS_SYSTEM_PROMPT,
 	GEMINI_SYSTEM_PROMPT,
+	GEMINI_MODEL_NAME,
 } = require('./config');
 const gemini = require('./gemini');
 const genaiClient = require('./genaiClient');
@@ -28,7 +29,7 @@ async function deriveSearchQuery(alertText, opts = {}) {
 		});
 
 		if (opts.tokenUsage && response.usage) {
-			opts.tokenUsage.addUsage(response.usage, 'gemini-2.0-flash');
+			opts.tokenUsage.addUsage(response.usage, GEMINI_MODEL_NAME);
 		}
 
 		if (!response || !response.text) {
