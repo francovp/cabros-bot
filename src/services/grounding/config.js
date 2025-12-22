@@ -12,10 +12,11 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GROUNDING_MAX_SOURCES = parseInt(process.env.GROUNDING_MAX_SOURCES || '3', 10);
 const GROUNDING_TIMEOUT_MS = parseInt(process.env.GROUNDING_TIMEOUT_MS || '30000', 10);
 const GROUNDING_MAX_LENGTH = parseInt(process.env.GROUNDING_MAX_LENGTH || '2000', 10);
+const MODEL_PROVIDER = process.env.MODEL_PROVIDER || 'gemini';
 const GROUNDING_MODEL_NAME = process.env.GROUNDING_MODEL_NAME || 'gemini-2.5-flash';
 const GEMINI_MODEL_NAME = process.env.GEMINI_MODEL_NAME || null;
 const GEMINI_MODEL_NAME_FALLBACK = process.env.GEMINI_MODEL_NAME_FALLBACK || 'gemini-2.5-flash-lite';
-const AZURE_LLM_MODEL = process.env.AZURE_LLM_MODEL || 'openai/gpt-4.1';
+const AZURE_LLM_MODEL = process.env.AZURE_LLM_MODEL || null;
 const AZURE_LLM_ENDPOINT = process.env.AZURE_LLM_ENDPOINT || 'https://models.github.ai/inference';
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || 'google/gemini-2.0-flash-001';
@@ -65,4 +66,5 @@ module.exports = {
 	AZURE_LLM_ENDPOINT,
 	OPENROUTER_API_KEY,
 	OPENROUTER_MODEL,
+	MODEL_PROVIDER,
 };

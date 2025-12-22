@@ -1,7 +1,7 @@
 const { GoogleGenAI } = require('@google/genai');
 const { getAzureAIClient } = require('../inference/azureAiClient');
 const { getOpenRouterClient } = require('../inference/openRouterClient');
-const { GEMINI_API_KEY, GROUNDING_MODEL_NAME, ENABLE_NEWS_MONITOR_TEST_MODE, GEMINI_MODEL_NAME } = require('./config');
+const { GEMINI_API_KEY, GROUNDING_MODEL_NAME, ENABLE_NEWS_MONITOR_TEST_MODE, GEMINI_MODEL_NAME, MODEL_PROVIDER } = require('./config');
 const { normalizeUsageMetadata } = require('../../lib/tokenUsage');
 
 class GenaiClient {
@@ -180,10 +180,11 @@ class GenaiClient {
                 let lastError;
 
                 // 1. Try Gemini
-                if (GEMINI_MODEL_NAME) {
+                if (MODEL_PROVIDER === 'gemini' && GEMINI_MODEL_NAME) {
                         try {
                                 // Previous calls were like: prompt = `${systemPrompt}\n\n${userPrompt}`.
                                 const combinedPrompt = `${systemPrompt}\n\n${userPrompt}`;
+                                console.debug('[GenaiClient] Attempting Gemini LLM call');
                                 return await this.llmCall({
                                         prompt: combinedPrompt,
                                         context,
@@ -198,39 +199,44 @@ class GenaiClient {
                 }
 
                 // 2. Try Azure
-                try {
-                        const azureClient = getAzureAIClient();
-                        if (azureClient.validate()) {
-                                console.debug('[GenaiClient] Attempting Azure AI Client');
-                                const text = await azureClient.chatCompletion(systemPrompt, userPrompt);
-                                return {
-                                        text,
-                                        citations: context.citations || [],
-                                };
-                        } else {
-                            console.debug('[GenaiClient] Azure AI Client not configured, skipping');
+                if (MODEL_PROVIDER === 'azure') {
+                        try {
+                                const azureClient = getAzureAIClient();
+                                if (azureClient.validate()) {
+                                        console.debug('[GenaiClient] Attempting Azure AI Client');
+                                        const text = await azureClient.chatCompletion(systemPrompt, userPrompt);
+                                        return {
+                                                text,
+                                                citations: context.citations || [],
+                                        };
+                                } else {
+                                console.debug('[GenaiClient] Azure AI Client not configured, skipping');
+                                }
+                        } catch (error) {
+                                console.warn('[GenaiClient] Azure call failed, attempting failover:', error.message);
+                                lastError = error;
                         }
-                } catch (error) {
-                        console.warn('[GenaiClient] Azure call failed, attempting failover:', error.message);
-                        lastError = error;
                 }
 
-                // 3. Try OpenRouter
-                try {
-                        const openRouterClient = getOpenRouterClient();
-                        if (openRouterClient.validate()) {
-                                console.debug('[GenaiClient] Attempting OpenRouter Client');
-                                const text = await openRouterClient.chatCompletion(systemPrompt, userPrompt);
-                                return {
-                                        text,
-                                        citations: context.citations || [],
-                                };
-                        } else {
-                                console.debug('[GenaiClient] OpenRouter Client not configured, skipping');
+                if (MODEL_PROVIDER === 'openrouter') {
+
+                        // 3. Try OpenRouter
+                        try {
+                                const openRouterClient = getOpenRouterClient();
+                                if (openRouterClient.validate()) {
+                                        console.debug('[GenaiClient] Attempting OpenRouter Client');
+                                        const text = await openRouterClient.chatCompletion(systemPrompt, userPrompt);
+                                        return {
+                                                text,
+                                                citations: context.citations || [],
+                                        };
+                                } else {
+                                        console.debug('[GenaiClient] OpenRouter Client not configured, skipping');
+                                }
+                        } catch (error) {
+                                console.warn('[GenaiClient] OpenRouter call failed:', error.message);
+                                lastError = error;
                         }
-                } catch (error) {
-                        console.warn('[GenaiClient] OpenRouter call failed:', error.message);
-                        lastError = error;
                 }
 
                 // If we reach here, all configured providers failed

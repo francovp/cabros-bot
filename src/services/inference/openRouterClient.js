@@ -124,7 +124,7 @@ class OpenRouterClient {
 			const response = await fetch('https://openrouter.ai/api/v1/models', {
 				headers: {
 					'Authorization': `Bearer ${this.apiKey}`,
-				}
+				},
 			});
 
 			return response.ok;
