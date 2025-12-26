@@ -1,4 +1,5 @@
 const { GoogleGenAI } = require('@google/genai');
+const config = require('./config');
 const {
         GEMINI_API_KEY,
         GROUNDING_MODEL_NAME,
@@ -6,8 +7,9 @@ const {
         GEMINI_MODEL_NAME,
         MODEL_PROVIDER,
         BRAVE_SEARCH_API_KEY,
-        BRAVE_SEARCH_ENDPOINT
-} = require('./config');
+        BRAVE_SEARCH_ENDPOINT,
+        FORCE_BRAVE_SEARCH
+} = config;
 const { getAzureAIClient } = require('../inference/azureAiClient');
 const { getOpenRouterClient } = require('../inference/openRouterClient');
 const { normalizeUsageMetadata } = require('../../lib/tokenUsage');
