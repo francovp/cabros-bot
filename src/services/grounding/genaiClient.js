@@ -88,6 +88,7 @@ class GenaiClient {
 
                         const prompt = `Query: ${query}\n\nSearch Results:\n${contextPrompt}\n\nInstructions: Answer the query based *only* on the provided search results. If the search results are insufficient, state that. ${textWithCitations ? 'Cite your sources using [1], [2], etc.' : ''}`;
 
+                        console.debug('[genaiClient] Generating grounded text using LLM with Brave search results');
                         const llmResponse = await this.llmCall({ prompt, opts: { model } });
                         searchResultText = llmResponse.text;
                 } else {
@@ -230,7 +231,7 @@ class GenaiClient {
 
                         // Prefer the text() helper if available (can be a function or property)
                         let text = '';
-                        console.debug('[genaiClient] llmCall result candidates: ', result.candidates);
+                        console.debug('[genaiClient] llmCall result candidates: ', result.candidates[0]);
                         console.debug('[genaiClient] llmCall full response usageMetadata: ', result.usageMetadata);
 
                         if (result) {
