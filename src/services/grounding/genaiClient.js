@@ -1,12 +1,16 @@
 const { GoogleGenAI } = require('@google/genai');
-const config = require('./config');
 const {
         GEMINI_API_KEY,
         GROUNDING_MODEL_NAME,
         ENABLE_NEWS_MONITOR_TEST_MODE,
+        GEMINI_MODEL_NAME,
+        MODEL_PROVIDER,
         BRAVE_SEARCH_API_KEY,
         BRAVE_SEARCH_ENDPOINT
-} = config;
+} = require('./config');
+const { getAzureAIClient } = require('../inference/azureAiClient');
+const { getOpenRouterClient } = require('../inference/openRouterClient');
+const { normalizeUsageMetadata } = require('../../lib/tokenUsage');
 
 class GenaiClient {
         constructor() {
@@ -205,7 +209,7 @@ class GenaiClient {
         }
 
         async llmCall({ prompt, context = {}, opts = {} }) {
-                const { model = GROUNDING_MODEL_NAME, temperature = 0.2 } = opts;
+                const { model = GEMINI_MODEL_NAME, temperature = 0.2 } = opts;
 
                 try {
                         const response = await this.genAI.models.generateContent({
@@ -220,6 +224,7 @@ class GenaiClient {
 
                         // Handle response structure - could be direct or wrapped in response property
                         const result = response?.response || response || {};
+                        const usage = normalizeUsageMetadata(result.usageMetadata);
 
                         // Prefer the text() helper if available (can be a function or property)
                         let text = '';
@@ -253,10 +258,88 @@ class GenaiClient {
                         return {
                                 text,
                                 citations: context.citations || [],
+                                usage,
                         };
                 } catch (error) {
                         throw new Error(`LLM call failed: ${error.message}`);
                 }
+        }
+
+        /**
+         * Helper to switch between Gemini, Azure LLM, and OpenRouter based on configuration and availability.
+         * Priority: Gemini -> Azure -> OpenRouter
+         * @param {object} params
+         * @param {string} params.systemPrompt - System prompt
+         * @param {string} params.userPrompt - User prompt
+         * @param {object} params.context - Context (citations) for Gemini
+         * @param {object} params.opts - Options (model, temperature) for Gemini
+         * @returns {Promise<{text: string, citations: Array}>} Response text and citations
+         */
+        async llmCallv2({ systemPrompt, userPrompt, context = {}, opts = {} }) {
+                let lastError;
+
+                // 1. Try Gemini
+                if (MODEL_PROVIDER === 'gemini' && GEMINI_MODEL_NAME) {
+                        try {
+                                // Previous calls were like: prompt = `${systemPrompt}\n\n${userPrompt}`.
+                                const combinedPrompt = `${systemPrompt}\n\n${userPrompt}`;
+                                console.debug('[GenaiClient] Attempting Gemini LLM call');
+                                return await this.llmCall({
+                                        prompt: combinedPrompt,
+                                        context,
+                                        opts
+                                });
+                        } catch (error) {
+                                console.warn('[GenaiClient] Gemini call failed, attempting failover:', error.message);
+                                lastError = error;
+                        }
+                } else {
+                        console.debug('[GenaiClient] GEMINI_MODEL_NAME not defined, skipping Gemini');
+                }
+
+                // 2. Try Azure
+                if (MODEL_PROVIDER === 'azure') {
+                        try {
+                                const azureClient = getAzureAIClient();
+                                if (azureClient.validate()) {
+                                        console.debug('[GenaiClient] Attempting Azure AI Client');
+                                        const text = await azureClient.chatCompletion(systemPrompt, userPrompt);
+                                        return {
+                                                text,
+                                                citations: context.citations || [],
+                                        };
+                                } else {
+                                console.debug('[GenaiClient] Azure AI Client not configured, skipping');
+                                }
+                        } catch (error) {
+                                console.warn('[GenaiClient] Azure call failed, attempting failover:', error.message);
+                                lastError = error;
+                        }
+                }
+
+                if (MODEL_PROVIDER === 'openrouter') {
+
+                        // 3. Try OpenRouter
+                        try {
+                                const openRouterClient = getOpenRouterClient();
+                                if (openRouterClient.validate()) {
+                                        console.debug('[GenaiClient] Attempting OpenRouter Client');
+                                        const text = await openRouterClient.chatCompletion(systemPrompt, userPrompt);
+                                        return {
+                                                text,
+                                                citations: context.citations || [],
+                                        };
+                                } else {
+                                        console.debug('[GenaiClient] OpenRouter Client not configured, skipping');
+                                }
+                        } catch (error) {
+                                console.warn('[GenaiClient] OpenRouter call failed:', error.message);
+                                lastError = error;
+                        }
+                }
+
+                // If we reach here, all configured providers failed
+                throw new Error(`All LLM providers failed. Last error: ${lastError ? lastError.message : 'No providers configured'}`);
         }
 
         _addCitations(text, supports, chunks) {

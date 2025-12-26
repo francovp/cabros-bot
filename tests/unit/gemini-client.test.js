@@ -1,17 +1,32 @@
-/* global jest, describe, it, expect, beforeEach */
+/* global jest, describe, it, expect, beforeEach, afterEach */
 
 const { generateGroundedSummary, generateEnrichedAlert } = require('../../src/services/grounding/gemini');
 const genaiClient = require('../../src/services/grounding/genaiClient');
 
 jest.mock('../../src/services/grounding/genaiClient');
+jest.mock('../../src/services/inference/azureAiClient', () => ({
+	getAzureAIClient: jest.fn().mockReturnValue({
+		chatCompletion: jest.fn(),
+		validate: jest.fn().mockReturnValue(true),
+	}),
+}));
+
 jest.mock('../../src/services/grounding/config', () => ({
 	GEMINI_SYSTEM_PROMPT: 'Test system prompt',
 	GROUNDING_MODEL_NAME: 'gemini-2.0-flash',
+	GEMINI_MODEL_NAME: 'gemini-2.0-flash',
 }));
 
 describe('Gemini Service', () => {
+	const originalEnv = process.env;
+
 	beforeEach(() => {
 		jest.resetAllMocks();
+		process.env = { ...originalEnv, GEMINI_MODEL_NAME: 'gemini-2.0-flash' };
+	});
+
+	afterEach(() => {
+		process.env = originalEnv;
 	});
 
 	describe('generateEnrichedAlert', () => {
@@ -33,7 +48,7 @@ describe('Gemini Service', () => {
 		};
 
 		it('should generate enriched alert with valid structure', async () => {
-			genaiClient.llmCall.mockResolvedValue({
+			genaiClient.llmCallv2.mockResolvedValue({
 				text: JSON.stringify(mockEnrichedResponse),
 				citations: mockSearchResults,
 			});
@@ -51,7 +66,7 @@ describe('Gemini Service', () => {
 		});
 
 		it('should handle non-English text with preserved language', async () => {
-			genaiClient.llmCall.mockResolvedValue({
+			genaiClient.llmCallv2.mockResolvedValue({
 				text: JSON.stringify({
 					...mockEnrichedResponse,
 					insights: ['Insight en español'],
@@ -65,9 +80,9 @@ describe('Gemini Service', () => {
 				options: { preserveLanguage: true },
 			});
 
-			expect(genaiClient.llmCall).toHaveBeenCalledWith(
+			expect(genaiClient.llmCallv2).toHaveBeenCalledWith(
 				expect.objectContaining({
-					prompt: expect.stringContaining('Respond in the same language as the Alert text.'),
+					systemPrompt: expect.stringContaining('Respond in the same language as the Alert text.'),
 				}),
 			);
 		});
@@ -82,11 +97,11 @@ describe('Gemini Service', () => {
 			expect(result.sentiment).toBe('NEUTRAL');
 			expect(result.sentiment_score).toBe(0.5);
 			expect(result.insights).toHaveLength(0);
-			expect(genaiClient.llmCall).not.toHaveBeenCalled();
+			expect(genaiClient.llmCallv2).not.toHaveBeenCalled();
 		});
 
 		it('should parse valid JSON response correctly', async () => {
-			genaiClient.llmCall.mockResolvedValue({
+			genaiClient.llmCallv2.mockResolvedValue({
 				text: '```json\n' + JSON.stringify(mockEnrichedResponse) + '\n```',
 				citations: [],
 			});
@@ -100,7 +115,7 @@ describe('Gemini Service', () => {
 		});
 
 		it('should return defaults on malformed JSON', async () => {
-			genaiClient.llmCall.mockResolvedValue({
+			genaiClient.llmCallv2.mockResolvedValue({
 				text: 'Invalid JSON',
 				citations: [],
 			});
@@ -115,7 +130,7 @@ describe('Gemini Service', () => {
 		});
 
 		it('should use provided system prompt', async () => {
-			genaiClient.llmCall.mockResolvedValue({
+			genaiClient.llmCallv2.mockResolvedValue({
 				text: JSON.stringify(mockEnrichedResponse),
 				citations: [],
 			});
@@ -127,9 +142,9 @@ describe('Gemini Service', () => {
 				options: { systemPrompt: customPrompt },
 			});
 
-			expect(genaiClient.llmCall).toHaveBeenCalledWith(
+			expect(genaiClient.llmCallv2).toHaveBeenCalledWith(
 				expect.objectContaining({
-					prompt: expect.stringContaining(customPrompt),
+					systemPrompt: expect.stringContaining(customPrompt),
 				}),
 			);
 		});
@@ -144,7 +159,7 @@ describe('Gemini Service', () => {
 		}];
 
 		it('should generate summary with citations', async () => {
-			genaiClient.llmCall.mockResolvedValue({
+			genaiClient.llmCallv2.mockResolvedValue({
 				text: 'Test summary',
 				citations: mockSearchResults,
 			});
@@ -158,19 +173,18 @@ describe('Gemini Service', () => {
 			expect(result.citations).toEqual(mockSearchResults);
 			expect(result.confidence).toBe(0.85);
 
-			expect(genaiClient.llmCall).toHaveBeenCalledWith({
-				prompt: expect.stringContaining('Test alert'),
+			expect(genaiClient.llmCallv2).toHaveBeenCalledWith(expect.objectContaining({
+				userPrompt: expect.stringContaining('Test alert'),
 				context: { citations: mockSearchResults },
 				opts: expect.objectContaining({
-					model: 'gemini-2.0-flash',
 					temperature: 0.2,
 				}),
-			});
+			}));
 		});
 
 		it('should respect maxLength option', async () => {
 			const longText = 'x'.repeat(300);
-			genaiClient.llmCall.mockResolvedValue({
+			genaiClient.llmCallv2.mockResolvedValue({
 				text: longText,
 				citations: [],
 			});
@@ -186,7 +200,7 @@ describe('Gemini Service', () => {
 
 		it('should preserve language when specified', async () => {
 			const nonEnglishText = '¡Hola mundo!';
-			genaiClient.llmCall.mockResolvedValue({
+			genaiClient.llmCallv2.mockResolvedValue({
 				text: 'Test summary',
 				citations: [],
 			});
@@ -197,15 +211,15 @@ describe('Gemini Service', () => {
 				options: { preserveLanguage: true },
 			});
 
-			expect(genaiClient.llmCall).toHaveBeenCalledWith(
+			expect(genaiClient.llmCallv2).toHaveBeenCalledWith(
 				expect.objectContaining({
-					prompt: expect.stringContaining('Respond in the same language as the Alert text.'),
+					systemPrompt: expect.stringContaining('Respond in the same language as the Alert text.'),
 				}),
 			);
 		});
 
 		it('should handle empty search results', async () => {
-			genaiClient.llmCall.mockResolvedValue({
+			genaiClient.llmCallv2.mockResolvedValue({
 				text: 'Test summary',
 				citations: [],
 			});
@@ -221,7 +235,7 @@ describe('Gemini Service', () => {
 		});
 
 		it('should handle API errors gracefully', async () => {
-			genaiClient.llmCall.mockRejectedValue(new Error('API error'));
+			genaiClient.llmCallv2.mockRejectedValue(new Error('API error'));
 
 			await expect(generateGroundedSummary({
 				text: 'Test alert',

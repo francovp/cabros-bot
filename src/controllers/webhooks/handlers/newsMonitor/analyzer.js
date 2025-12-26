@@ -54,9 +54,9 @@ class NewsAnalyzer {
    * @param {string} requestId - Correlation ID for tracing
    * @returns {Promise<Object[]>} Array of AnalysisResult objects
    */
-	async analyzeSymbols(symbols, requestId) {
+	async analyzeSymbols(symbols, requestId, tokenUsage) {
 		const analysisPromises = symbols.map(symbol =>
-			this.analyzeSymbol(symbol, requestId).catch(error => ({
+			this.analyzeSymbol(symbol, requestId, tokenUsage).catch(error => ({
 				symbol,
 				status: AnalysisStatus.ERROR,
 				error: {
@@ -97,7 +97,7 @@ class NewsAnalyzer {
    * @param {string} requestId - Correlation ID
    * @returns {Promise<Object>} AnalysisResult object
    */
-	async analyzeSymbol(symbol, requestId) {
+	async analyzeSymbol(symbol, requestId, tokenUsage) {
 		const startTime = Date.now();
 		const analysis = {
 			symbol,
@@ -110,7 +110,7 @@ class NewsAnalyzer {
 		try {
 			// Attempt to run analysis with timeout
 			const result = await Promise.race([
-				this.analyzeSymbolInternal(symbol, requestId),
+				this.analyzeSymbolInternal(symbol, requestId, tokenUsage),
 				this.timeoutPromise(this.timeout),
 			]);
 
@@ -142,7 +142,7 @@ class NewsAnalyzer {
    * @param {string} requestId - Correlation ID
    * @returns {Promise<Object>} Partial AnalysisResult (status, alert, etc.)
    */
-	async analyzeSymbolInternal(symbol, requestId) {
+	async analyzeSymbolInternal(symbol, requestId, tokenUsage) {
 		// Try cache first
 		for (const category of Object.values(EventCategory)) {
 			if (category === EventCategory.NONE) continue;
@@ -160,13 +160,13 @@ class NewsAnalyzer {
 		}
 
 		// Fetch market context (price, 24h change, etc.)
-		const marketContext = await this.getMarketContext(symbol);
+		const marketContext = await this.getMarketContext(symbol, tokenUsage);
 
 		// Build analysis context for Gemini
 		const analysisContext = this.buildAnalysisContext(symbol, marketContext);
 
 		// Call Gemini for sentiment analysis
-		const geminiAnalysis = await analyzeNewsForSymbol(symbol, analysisContext);
+		const geminiAnalysis = await analyzeNewsForSymbol(symbol, analysisContext, { tokenUsage });
 
 		// If no event detected, cache and return
 		if (geminiAnalysis.event_category === EventCategory.NONE) {
@@ -220,7 +220,8 @@ class NewsAnalyzer {
 		}
 
 		// Build alert object
-		const alert = this.buildAlert(symbol, geminiAnalysis, marketContext, enrichmentMetadata);
+		const tokenUsageSummary = tokenUsage ? tokenUsage.toJSON() : null;
+		const alert = this.buildAlert(symbol, geminiAnalysis, marketContext, enrichmentMetadata, tokenUsageSummary);
 
 		// Send to all notification channels
 		console.info('[Analyzer] Sending alert:', symbol, 'confidence:', alert.confidence.toFixed(2), 'event:', alert.eventCategory);
@@ -262,7 +263,7 @@ class NewsAnalyzer {
    * @param {string} symbol - Financial symbol
    * @returns {Promise<Object|null>} MarketContext or null if unavailable
    */
-	async getMarketContext(symbol) {
+	async getMarketContext(symbol, tokenUsage) {
 		// Try Binance if enabled
 		if (this.enableBinance) {
 			try {
@@ -275,7 +276,7 @@ class NewsAnalyzer {
 
 		// Fall back to Gemini
 		try {
-			return await this.fetchGeminiPrice(symbol);
+			return await this.fetchGeminiPrice(symbol, tokenUsage);
 		} catch (error) {
 			console.warn('[Analyzer] Price context fetch failed:', error.message);
 			return null;
@@ -320,7 +321,7 @@ class NewsAnalyzer {
 	 * @param {string} symbol - Financial symbol
 	 * @returns {Promise<Object>} MarketContext with parsed price/change or null
 	 */
-	async fetchGeminiPrice(symbol) {
+	async fetchGeminiPrice(symbol, tokenUsage) {
 
 		if (ENABLE_NEWS_MONITOR_TEST_MODE) {
 			console.debug(`[Analyzer] Test mode enabled - returning mock Gemini price for ${symbol}`);
@@ -359,6 +360,10 @@ class NewsAnalyzer {
 
 			const priceSearchResult = await Promise.race([priceSearchPromise, timeoutPromise]);
 			clearTimeout(timeoutHandle);
+
+			if (tokenUsage && priceSearchResult && priceSearchResult.usage) {
+				tokenUsage.addUsage(priceSearchResult.usage, GROUNDING_MODEL_NAME);
+			}
 
 			// Extract JSON from response - try to find valid JSON
 			let priceSearchResultParsed = null;
@@ -432,7 +437,7 @@ class NewsAnalyzer {
    * @param {Object} enrichmentMetadata - Optional enrichment metadata
    * @returns {Object} NewsAlert object
    */
-	buildAlert(symbol, geminiAnalysis, marketContext, enrichmentMetadata) {
+	buildAlert(symbol, geminiAnalysis, marketContext, enrichmentMetadata, tokenUsageSummary) {
 		// Use enriched confidence if available
 		const finalConfidence = enrichmentMetadata
 			? enrichmentMetadata.enriched_confidence
@@ -485,6 +490,7 @@ class NewsAnalyzer {
 			summary: context,
 			citations,
 			extraText: `_Model Confidence: ${confidense}%_\n_Model used: ${GROUNDING_MODEL_NAME}_`,
+			tokenUsage: tokenUsageSummary || undefined,
 		};
 
 		return {

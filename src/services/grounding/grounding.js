@@ -7,6 +7,7 @@ const {
 	ALERT_ENRICHMENT_SYSTEM_PROMPT,
 	NEWS_ANALYSIS_SYSTEM_PROMPT,
 	GEMINI_SYSTEM_PROMPT,
+	GEMINI_MODEL_NAME,
 } = require('./config');
 const gemini = require('./gemini');
 const genaiClient = require('./genaiClient');
@@ -18,14 +19,18 @@ const genaiClient = require('./genaiClient');
  * @returns {Promise<string>} Optimized search query
  */
 async function deriveSearchQuery(alertText, opts = {}) {
-
 	try {
-		const prompt = `${SEARCH_QUERY_PROMPT}\n\nAlert: ${alertText}`;
+		const prompt = `Alert: ${alertText}`;
 		console.debug('Deriving search query with prompt: ', prompt);
-		const response = await genaiClient.llmCall({
-			prompt: prompt,
-			opts: { model: 'gemini-2.0-flash', temperature: opts.temperature },
+		const response = await genaiClient.llmCallv2({
+			systemPrompt: SEARCH_QUERY_PROMPT,
+			userPrompt: prompt,
+			opts: { temperature: opts.temperature },
 		});
+
+		if (opts.tokenUsage && response.usage) {
+			opts.tokenUsage.addUsage(response.usage, GEMINI_MODEL_NAME);
+		}
 
 		if (!response || !response.text) {
 			throw new Error('Invalid response from LLM');
@@ -54,6 +59,7 @@ async function groundAlert({ text, options = {} }) {
 		preserveLanguage = true,
 		maxLength = GROUNDING_MAX_LENGTH,
 		promptType = 'ALERT_ENRICHMENT', // Default to ALERT_ENRICHMENT for backward compatibility/current usage
+		tokenUsage,
 	} = options;
 
 	const startTime = Date.now();
@@ -82,31 +88,26 @@ async function groundAlert({ text, options = {} }) {
 	}
 
 	try {
-		// Start both tasks in parallel
-		const [query, truncatedText] = await Promise.all([
-			deriveSearchQuery(text, { temperature: 0.2 }),
-			// Handle very long alerts by truncating
-			text.length > 4000 ? text.slice(0, 4000) + '...' : text,
-		]);
-
-		console.debug('Derived search query:', query);
 
 		// 1. Search for evidence
-		const { results: searchResults, totalResults, searchResultText } = await genaiClient.search({
-			query,
+		const { results: searchResults, totalResults, searchResultText, usage: searchUsage } = await genaiClient.search({
+			query: text,
 			model: GROUNDING_MODEL_NAME,
 			maxResults: maxSources,
 		});
+		if (tokenUsage && searchUsage) {
+			tokenUsage.addUsage(searchUsage, GROUNDING_MODEL_NAME);
+		}
 		console.debug(`[Grounding] Retrieved ${searchResults.length}/${totalResults} search results`);
 
 		// 2. Generate enriched alert with timeout
 		const [timeoutPromise, cleanupTimeout] = createTimeout();
 		const result = await Promise.race([
 			gemini.generateEnrichedAlert({
-				text: truncatedText,
+				text: text,
 				searchResults,
 				searchResultText,
-				options: { preserveLanguage, maxLength, systemPrompt },
+				options: { preserveLanguage, maxLength, systemPrompt, tokenUsage },
 			}),
 			timeoutPromise,
 		]).finally(cleanupTimeout);

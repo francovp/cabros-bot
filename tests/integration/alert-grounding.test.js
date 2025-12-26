@@ -53,7 +53,7 @@ describe('Alert Grounding Integration', () => {
 			results: mockSearchResults,
 		});
 
-		genaiClient.llmCall.mockResolvedValue({
+		genaiClient.llmCallv2.mockResolvedValue({
 			text: JSON.stringify({
 				sentiment: 'BULLISH',
 				sentiment_score: 0.9,
@@ -136,7 +136,7 @@ describe('Alert Grounding Integration', () => {
 
 		it('should handle invalid Gemini JSON by degrading to safe alert', async () => {
 			// Mock invalid JSON response
-			genaiClient.llmCall.mockResolvedValue({
+			genaiClient.llmCallv2.mockResolvedValue({
 				text: 'Invalid JSON',
 				citations: mockSearchResults,
 			});
@@ -229,7 +229,7 @@ describe('Alert Grounding Integration', () => {
 
 			// Verify no API calls were made
 			expect(genaiClient.search).not.toHaveBeenCalled();
-			expect(genaiClient.llmCall).not.toHaveBeenCalled();
+			expect(genaiClient.llmCallv2).not.toHaveBeenCalled();
 
 			// Verify telegram result
 			const telegramResult = response.body.results.find(r => r.channel === 'telegram');

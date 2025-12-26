@@ -15,6 +15,7 @@ async function generateGroundedSummary({ text, searchResults = [], searchResultT
 		maxLength = 250,
 		preserveLanguage = true,
 		systemPrompt = GEMINI_SYSTEM_PROMPT,
+		tokenUsage,
 	} = options;
 
 	if (ENABLE_NEWS_MONITOR_TEST_MODE) {
@@ -42,17 +43,23 @@ async function generateGroundedSummary({ text, searchResults = [], searchResultT
 		? `\n\nAdditional context for the sources:\n${searchResultText}`
 		: '';
 
-	const prompt = `${systemPrompt}\n\n${langDirective}
-Please analyze this alert and provide a concise summary (max ${maxLength} chars) with citations based in the context:
+	// Split System and User parts
+	const fullSystemPrompt = `${systemPrompt}\n\n${langDirective}`;
+	const userPrompt = `Please analyze this alert and provide a concise summary (max ${maxLength} chars) with citations based in the context:
 
 Alert: ${text}${contextPrompt}${contextSnippet}`;
 
 	try {
-		const { text: summary } = await genaiClient.llmCall({
-			prompt,
+		const { text: summary, usage } = await genaiClient.llmCallv2({
+			systemPrompt: fullSystemPrompt,
+			userPrompt,
 			context: { citations: searchResults },
-			opts: { model: GROUNDING_MODEL_NAME, temperature: 0.2 },
+			opts: { temperature: 0.2 },
 		});
+
+		if (tokenUsage && usage) {
+			tokenUsage.addUsage(usage, GEMINI_MODEL_NAME);
+		}
 
 		const response = {
 			summary: summary.slice(0, maxLength),
@@ -66,16 +73,6 @@ Alert: ${text}${contextPrompt}${contextSnippet}`;
 	}
 }
 
-
-
-module.exports = {
-	generateGroundedSummary,
-	generateEnrichedAlert,
-	parseEnrichedAlertResponse,
-	analyzeNewsForSymbol,
-	parseNewsAnalysisResponse,
-};
-
 /**
  * Analyze news/context for a symbol and detect market events using Gemini GoogleSearch
  * 003-news-monitor: User Story 5 (event detection)
@@ -83,7 +80,8 @@ module.exports = {
  * @param {string} context - News/context text to analyze
  * @returns {Promise<Object>} Analysis result with event_category, sentiment, confidence
  */
-async function analyzeNewsForSymbol(symbol, context) {
+async function analyzeNewsForSymbol(symbol, context, options = {}) {
+	const tokenUsage = options.tokenUsage;
 	if (ENABLE_NEWS_MONITOR_TEST_MODE) {
 		console.debug('[Gemini][analyzeNewsForSymbol] Test mode enabled, returning fixed analysis.');
 		// In test mode, return a fixed analysis for consistent testing
@@ -103,10 +101,15 @@ async function analyzeNewsForSymbol(symbol, context) {
 
 	try {
 		// Use Gemini GoogleSearch to fetch market news and sentiment
+		// Note: We still rely on genaiClient for search. If Gemini is not configured, this might fail or return empty
+		// depending on how genaiClient handles missing config, but here we focus on switching the LLM call.
 		const searchResult = await genaiClient.search({
 			query: `${symbol} news market sentiment events today`,
 			maxResults: 3,
 		});
+		if (tokenUsage && searchResult.usage) {
+			tokenUsage.addUsage(searchResult.usage, GROUNDING_MODEL_NAME);
+		}
 		console.debug('[Gemini][analyzeNewsForSymbol] Grounding market news and sentiment search results:', searchResult);
 
 		// Build enriched context from grounding results
@@ -120,7 +123,7 @@ async function analyzeNewsForSymbol(symbol, context) {
 		const enrichedContext = `${context}\n\nGrounded Context from Search:\n${groundingContext}\n\nSources: ${sourcesList.join(', ')}`;
 		console.debug('[Gemini][analyzeNewsForSymbol] Enriched context for analysis:', enrichedContext);
 
-		const prompt = `Analyze this news/market context for symbol ${symbol}:
+		const userPrompt = `Analyze this news/market context for symbol ${symbol}:
 
 ${enrichedContext}
 
@@ -163,26 +166,33 @@ Conservatism and formatting rules:
 
 End of instructions.`
 
-		// Create a proper system instruction that will be passed to genaiClient
-		const fullPrompt = `${NEWS_ANALYSIS_SYSTEM_PROMPT}\n\n${prompt}`;
-		
 		let response;
 		try {
-			const result = await genaiClient.llmCall({
-				prompt: fullPrompt,
-				opts: { model: GEMINI_MODEL_NAME, temperature: 0.3 },
+			const result = await genaiClient.llmCallv2({
+				systemPrompt: NEWS_ANALYSIS_SYSTEM_PROMPT,
+				userPrompt,
+				opts: { model: GEMINI_MODEL_NAME, temperature: 0.3 }
 			});
+			if (tokenUsage && result.usage) {
+				tokenUsage.addUsage(result.usage, GEMINI_MODEL_NAME);
+			}
 			response = result.text;
 		} catch (primaryError) {
 			// Check if error is due to model overload (503 UNAVAILABLE)
+			// Note: This logic is specific to Gemini errors, but keeping it for safety if we are in Gemini path.
+			// Azure client might throw different errors.
 			const errorMessage = primaryError.message || '';
-			if (errorMessage.includes('503') || errorMessage.includes('UNAVAILABLE') || errorMessage.includes('overloaded')) {
+			if (process.env.GEMINI_MODEL_NAME && (errorMessage.includes('503') || errorMessage.includes('UNAVAILABLE') || errorMessage.includes('overloaded'))) {
 				console.warn('[Gemini] Primary model overloaded, attempting fallback model:', GEMINI_MODEL_NAME_FALLBACK);
 				try {
-					const fallbackResult = await genaiClient.llmCall({
-						prompt: fullPrompt,
-						opts: { model: GEMINI_MODEL_NAME_FALLBACK, temperature: 0.3 },
+					const fallbackResult = await genaiClient.llmCallv2({
+						systemPrompt: NEWS_ANALYSIS_SYSTEM_PROMPT,
+						userPrompt,
+						opts: { model: GEMINI_MODEL_NAME_FALLBACK, temperature: 0.3 }
 					});
+					if (tokenUsage && fallbackResult.usage) {
+						tokenUsage.addUsage(fallbackResult.usage, GEMINI_MODEL_NAME_FALLBACK);
+					}
 					response = fallbackResult.text;
 				} catch (fallbackError) {
 					console.error('[Gemini] Fallback model also failed:', fallbackError.message);
@@ -197,11 +207,7 @@ End of instructions.`
 		const analysisResult = parseNewsAnalysisResponse(response);
 
 		// Use grounded sources if available (store full SearchResult objects, not just URLs)
-		if (searchResult.results.length > 0) {
-			// Store full SearchResult objects with title, snippet, url, and sourceDomain for formatting
-			/** @type {SearchResult[]} */
-			analysisResult.sources = searchResult.results;
-		}
+		analysisResult.sources = searchResult.results || [];
 
 		// Calculate confidence using formula: (0.6 × event_significance + 0.4 × |sentiment|)
 		const confidence = 0.6 * analysisResult.event_significance + 0.4 * Math.abs(analysisResult.sentiment_score);
@@ -275,6 +281,7 @@ async function generateEnrichedAlert({ text, searchResults = [], searchResultTex
 	const {
 		preserveLanguage = true,
 		systemPrompt = GEMINI_SYSTEM_PROMPT,
+		tokenUsage,
 	} = options;
 
 	// Short alert check (< 15 chars or < 2 words)
@@ -302,8 +309,8 @@ async function generateEnrichedAlert({ text, searchResults = [], searchResultTex
 		? `\n\nAdditional context for the sources:\n${searchResultText}`
 		: '';
 
-	const prompt = `${systemPrompt}\n\n${langDirective}
-Analyze this alert and provide structured insights, sentiment, and technical levels based on the context.
+	const fullSystemPrompt = `${systemPrompt}\n\n${langDirective}`;
+	const userPrompt = `Analyze this alert and provide structured insights, sentiment, and technical levels based on the context.
 
 Alert: ${text}${contextPrompt}${contextSnippet}
 
@@ -322,11 +329,16 @@ Instructions:
 `;
 
 	try {
-		const { text: responseText } = await genaiClient.llmCall({
-			prompt,
+		const { text: responseText, usage } = await genaiClient.llmCallv2({
+			systemPrompt: fullSystemPrompt,
+			userPrompt,
 			context: { citations: searchResults },
-			opts: { model: GROUNDING_MODEL_NAME, temperature: 0.2 },
+			opts: { temperature: 0.2 },
 		});
+
+		if (tokenUsage && usage) {
+			tokenUsage.addUsage(usage, GEMINI_MODEL_NAME);
+		}
 
 		return parseEnrichedAlertResponse(responseText);
 	} catch (error) {
@@ -372,3 +384,11 @@ function parseEnrichedAlertResponse(response) {
 		};
 	}
 }
+
+module.exports = {
+	generateGroundedSummary,
+	generateEnrichedAlert,
+	parseEnrichedAlertResponse,
+	analyzeNewsForSymbol,
+	parseNewsAnalysisResponse,
+};

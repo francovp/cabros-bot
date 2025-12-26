@@ -50,11 +50,12 @@ async function deriveSearchQuery(alertText, maxLength = 150) {
  * @param {import('./types').Alert} alert
  * @returns {Promise<import('./types').EnrichedAlert>}
  */
-async function enrichAlert(alert) {
+async function enrichAlert(alert, options = {}) {
 	// Support being called with either a plain text string or an object
 	// { text, metadata }
 	const inputText = (typeof alert === 'string') ? alert : (alert && typeof alert.text === 'string' ? alert.text : alert);
 	const metadata = (alert && alert.metadata) ? alert.metadata : null;
+	const tokenUsage = options.tokenUsage;
 
 	const validated = validateAlert(inputText, metadata);
 	// validateAlert may return either a string (when mocked in tests) or an object { text, metadata }
@@ -65,6 +66,7 @@ async function enrichAlert(alert) {
 			text,
 			options: {
 				preserveLanguage: true,
+				tokenUsage,
 			},
 		});
 
