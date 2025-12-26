@@ -2,11 +2,16 @@
 require('dotenv').config();
 
 // Test mode flag for news monitoring
-ENABLE_NEWS_MONITOR_TEST_MODE = process.env.ENABLE_NEWS_MONITOR_TEST_MODE === 'true';
+const ENABLE_NEWS_MONITOR_TEST_MODE = process.env.ENABLE_NEWS_MONITOR_TEST_MODE === 'true';
 
 // Feature enablement and API keys
 const ENABLE_GEMINI_GROUNDING = process.env.ENABLE_GEMINI_GROUNDING === 'true';
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+
+// Brave Search Configuration
+const BRAVE_SEARCH_API_KEY = process.env.BRAVE_SEARCH_API_KEY;
+const BRAVE_SEARCH_ENDPOINT = process.env.BRAVE_SEARCH_ENDPOINT || 'https://api.search.brave.com/res/v1/web/search';
+const FORCE_BRAVE_SEARCH = process.env.FORCE_BRAVE_SEARCH === 'true';
 
 // Performance and control parameters
 const GROUNDING_MAX_SOURCES = parseInt(process.env.GROUNDING_MAX_SOURCES || '3', 10);
@@ -53,6 +58,9 @@ if (ENABLE_GEMINI_GROUNDING && !GEMINI_API_KEY) {
 module.exports = {
 	ENABLE_GEMINI_GROUNDING,
 	GEMINI_API_KEY,
+	BRAVE_SEARCH_API_KEY,
+	BRAVE_SEARCH_ENDPOINT,
+	FORCE_BRAVE_SEARCH,
 	GROUNDING_MAX_SOURCES,
 	GROUNDING_TIMEOUT_MS,
 	GEMINI_SYSTEM_PROMPT,
@@ -62,6 +70,7 @@ module.exports = {
 	GROUNDING_MODEL_NAME,
 	GEMINI_MODEL_NAME,
 	GEMINI_MODEL_NAME_FALLBACK,
+	ENABLE_NEWS_MONITOR_TEST_MODE,
 	AZURE_LLM_MODEL,
 	AZURE_LLM_ENDPOINT,
 	OPENROUTER_API_KEY,

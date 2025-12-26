@@ -310,9 +310,11 @@ async function generateEnrichedAlert({ text, searchResults = [], searchResultTex
 		: '';
 
 	const fullSystemPrompt = `${systemPrompt}\n\n${langDirective}`;
+	const context = `${text}${contextPrompt}${contextSnippet}`;
+	console.debug('[Gemini] Generating enriched alert with context:', context);
 	const userPrompt = `Analyze this alert and provide structured insights, sentiment, and technical levels based on the context.
 
-Alert: ${text}${contextPrompt}${contextSnippet}
+Alert: ${context}
 
 Instructions:
 - **Output:** Respond *only* with a single, valid JSON object.
