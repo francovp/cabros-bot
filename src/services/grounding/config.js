@@ -11,6 +11,7 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 // Brave Search Configuration
 const BRAVE_SEARCH_API_KEY = process.env.BRAVE_SEARCH_API_KEY;
 const BRAVE_SEARCH_ENDPOINT = process.env.BRAVE_SEARCH_ENDPOINT || 'https://api.search.brave.com/res/v1/web/search';
+const FORCE_BRAVE_SEARCH = process.env.FORCE_BRAVE_SEARCH === 'true';
 
 // Performance and control parameters
 const GROUNDING_MAX_SOURCES = parseInt(process.env.GROUNDING_MAX_SOURCES || '3', 10);
@@ -54,6 +55,7 @@ module.exports = {
 	GEMINI_API_KEY,
 	BRAVE_SEARCH_API_KEY,
 	BRAVE_SEARCH_ENDPOINT,
+	FORCE_BRAVE_SEARCH,
 	GROUNDING_MAX_SOURCES,
 	GROUNDING_TIMEOUT_MS,
 	GEMINI_SYSTEM_PROMPT,

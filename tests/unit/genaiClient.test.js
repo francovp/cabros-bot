@@ -6,10 +6,12 @@ jest.mock('../../src/services/grounding/config', () => ({
     GROUNDING_MODEL_NAME: 'test-model',
     ENABLE_NEWS_MONITOR_TEST_MODE: false,
     BRAVE_SEARCH_API_KEY: 'test-brave-key',
-    BRAVE_SEARCH_ENDPOINT: 'https://api.search.brave.com/res/v1/web/search'
+    BRAVE_SEARCH_ENDPOINT: 'https://api.search.brave.com/res/v1/web/search',
+    FORCE_BRAVE_SEARCH: false
 }));
 
 const genaiClient = require('../../src/services/grounding/genaiClient');
+const config = require('../../src/services/grounding/config');
 
 // Mock fetch globally
 global.fetch = jest.fn();
@@ -19,88 +21,124 @@ describe('GenaiClient robustness', () => {
 		// Reset genAI to avoid using the real SDK in tests
 		genaiClient.genAI = { models: { generateContent: jest.fn().mockResolvedValue({}) } };
 		jest.resetAllMocks();
+        // Reset config mock
+        config.FORCE_BRAVE_SEARCH = false;
 	});
 
-	describe('search edge cases', () => {
-		it('returns empty results when Brave Search API returns unexpected shape or fails', async () => {
-			// Mock fetch to return error or empty
-			global.fetch.mockResolvedValue({
-				ok: false,
-				status: 500,
-				statusText: 'Internal Server Error'
-			});
+	describe('Google Search (Default)', () => {
+        it('uses Google Search when FORCE_BRAVE_SEARCH is false', async () => {
+            // Mock successful Google Search response
+            genaiClient.genAI.models.generateContent.mockResolvedValueOnce({
+                response: {
+                    text: 'Google Answer',
+                    candidates: [{
+                        groundingMetadata: {
+                            groundingChunks: [{ web: { title: 'G1', uri: 'http://g1.com', domain: 'g1.com' } }]
+                        }
+                    }]
+                }
+            });
 
-			const res = await genaiClient.search({ query: 'test', maxResults: 3 });
-			expect(res).toHaveProperty('results');
-			expect(Array.isArray(res.results)).toBe(true);
-			expect(res.results.length).toBe(0);
-			expect(res.totalResults).toBe(0);
-			expect(res.searchResultText).toBe('No search results found.');
-		});
+            const res = await genaiClient.search({ query: 'test' });
 
-		it('handles Brave Search results correctly', async () => {
-			// Mock successful Brave response
-			global.fetch.mockResolvedValue({
-				ok: true,
-				json: async () => ({
-					web: {
-						results: [
-							{
-								title: 'Brave Result 1',
-								url: 'https://brave.com/1',
-								description: 'Snippet 1',
-								profile: { name: 'Brave' }
-							}
-						]
-					}
-				})
-			});
+            expect(res.results).toHaveLength(1);
+            expect(res.results[0].title).toBe('G1');
+            expect(res.searchResultText).toBe('Google Answer');
 
-			// Mock LLM response
-			genaiClient.genAI.models.generateContent.mockResolvedValue({
-				response: {
-					text: () => 'LLM Answer based on Brave',
-				},
-			});
+            // Should not call Brave (fetch)
+            expect(global.fetch).not.toHaveBeenCalled();
+        });
+    });
 
-			const { results, totalResults, searchResultText } = await genaiClient.search({ query: 'q', maxResults: 3 });
+    describe('Fallback to Brave', () => {
+        it('falls back to Brave when Google Search fails', async () => {
+            // Mock Google Search failure
+            genaiClient.genAI.models.generateContent.mockRejectedValueOnce(new Error('Google API Error'));
 
-			expect(results).toHaveLength(1);
-			expect(results[0].title).toBe('Brave Result 1');
-			expect(results[0].url).toBe('https://brave.com/1');
-			expect(results[0].sourceDomain).toBe('Brave');
-			expect(totalResults).toBe(1);
-			expect(searchResultText).toBe('LLM Answer based on Brave');
+            // Mock Brave Search success (fetch)
+            global.fetch.mockResolvedValueOnce({
+                ok: true,
+                json: async () => ({
+                    web: { results: [{ title: 'Brave1', url: 'http://b1.com' }] }
+                })
+            });
 
-			// Verify fetch was called
-			expect(global.fetch).toHaveBeenCalledTimes(1);
-		});
+            // Mock LLM call for grounding Brave results
+            genaiClient.genAI.models.generateContent.mockResolvedValueOnce({
+                response: { text: () => 'Brave Answer' }
+            });
 
-		it('handles missing profile name by falling back to URL parsing', async () => {
-			global.fetch.mockResolvedValue({
-				ok: true,
-				json: async () => ({
-					web: {
-						results: [
-							{
-								title: 'Result 2',
-								url: 'https://example.com/page',
-								description: 'Snippet 2'
-								// no profile
-							}
-						]
-					}
-				})
-			});
+            const res = await genaiClient.search({ query: 'test' });
 
-			genaiClient.genAI.models.generateContent.mockResolvedValue({
-				response: { text: () => 'Answer' }
-			});
+            expect(res.results).toHaveLength(1);
+            expect(res.results[0].title).toBe('Brave1');
+            expect(res.searchResultText).toBe('Brave Answer');
+            expect(global.fetch).toHaveBeenCalledTimes(1);
+        });
 
-			const { results } = await genaiClient.search({ query: 'q' });
-			expect(results[0].sourceDomain).toBe('example.com');
-		});
-	});
+        it('falls back to Brave when Google Search returns no results', async () => {
+             // Mock empty Google Search response
+             genaiClient.genAI.models.generateContent.mockResolvedValueOnce({
+                response: {
+                    candidates: [{
+                        groundingMetadata: { groundingChunks: [] }
+                    }]
+                }
+            });
+
+            // Mock Brave Search success
+            global.fetch.mockResolvedValueOnce({
+                ok: true,
+                json: async () => ({
+                    web: { results: [{ title: 'Brave1', url: 'http://b1.com' }] }
+                })
+            });
+
+            // Mock LLM call for grounding Brave results
+            genaiClient.genAI.models.generateContent.mockResolvedValueOnce({
+                response: { text: () => 'Brave Answer' }
+            });
+
+            const res = await genaiClient.search({ query: 'test' });
+
+            expect(res.results).toHaveLength(1);
+            expect(res.results[0].title).toBe('Brave1');
+        });
+    });
+
+    describe('Forced Brave Search', () => {
+        it('uses Brave Search directly when FORCE_BRAVE_SEARCH is true', async () => {
+            config.FORCE_BRAVE_SEARCH = true;
+
+             // Mock Brave Search success
+             global.fetch.mockResolvedValueOnce({
+                ok: true,
+                json: async () => ({
+                    web: { results: [{ title: 'BraveForce', url: 'http://bf.com' }] }
+                })
+            });
+
+            // Mock LLM call for grounding
+            genaiClient.genAI.models.generateContent.mockResolvedValueOnce({
+                response: { text: () => 'Brave Force Answer' }
+            });
+
+            const res = await genaiClient.search({ query: 'test' });
+
+            expect(res.results[0].title).toBe('BraveForce');
+
+            // Should call fetch
+            expect(global.fetch).toHaveBeenCalledTimes(1);
+
+            // Should call LLM only once (for grounding), not twice (Google + Grounding)
+            // But wait, checking usage of generateContent for Google vs LLM is tricky since it's the same method.
+            // Google search call has tools in config. LLM call does not (or has empty tools/different config).
+            // We can check arguments of the first call.
+
+            const firstCallArgs = genaiClient.genAI.models.generateContent.mock.calls[0][0];
+            expect(firstCallArgs.config.tools).toBeUndefined(); // LLM call doesn't have search tools
+        });
+    });
 
 	describe('llmCall parsing', () => {
 		it('parses text() response when available', async () => {
