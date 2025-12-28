@@ -10,6 +10,7 @@ const { initializeNotificationServices } = require('../../src/controllers/webhoo
 const { getCacheInstance } = require('../../src/controllers/webhooks/handlers/newsMonitor/cache');
 
 jest.mock('../../src/services/grounding/gemini');
+jest.mock('../../src/services/grounding/genaiClient');
 
 describe('News Monitor - Binance Integration (US4)', () => {
 	const originalEnv = process.env;

@@ -231,7 +231,7 @@ class GenaiClient {
 
                         // Prefer the text() helper if available (can be a function or property)
                         let text = '';
-                        console.debug('[genaiClient] llmCall result candidates: ', result.candidates[0]);
+                        console.debug('[genaiClient] llmCall result candidates: ', result.candidates?.[0]);
                         console.debug('[genaiClient] llmCall full response usageMetadata: ', result.usageMetadata);
 
                         if (result) {
