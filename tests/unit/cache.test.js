@@ -139,9 +139,9 @@ describe('Cache Module - Unit Tests', () => {
 
 			expect(cache.cache.size).toBe(2);
 
-			// Wait another 500ms (total 1s from first entry - should expire)
-			// But second entry should still be fresh (only 500ms old)
-			await new Promise(resolve => setTimeout(resolve, 500));
+			// Wait another 600ms (total 1.1s from first entry - should expire)
+			// But second entry should still be fresh (only 600ms old)
+			await new Promise(resolve => setTimeout(resolve, 600));
 
 			cache.cleanup();
 
