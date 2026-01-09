@@ -16,6 +16,10 @@ app.use(cors());
 // Use helmet for improved security
 app.use(helmet());
 
+// Apply rate limiting to all requests
+const rateLimiter = require('./src/lib/rateLimiter');
+app.use(rateLimiter);
+
 app.use('/healthcheck', require('express-healthcheck')());
 
 module.exports = app;
