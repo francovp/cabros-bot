@@ -18,5 +18,8 @@ app.use(helmet());
 
 app.use('/healthcheck', require('express-healthcheck')());
 
+// Rate Limiter (must be after healthcheck to avoid limiting health checks)
+app.use(require('./src/lib/rateLimiter'));
+
 module.exports = app;
 
