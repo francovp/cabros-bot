@@ -4,18 +4,23 @@ This project is a small Express + Telegraf (Telegram) bot service that exposes a
 
 Key files / entry points
 - `index.js` — app entry. Starts Express server and conditionally launches the Telegraf bot. Important logic for enabling the bot lives here.
+- `instrument.js` — initializes logging + monitoring early (loaded by `index.js`).
 - `app.js` — Express app configuration (body parsing, CORS, helmet, healthcheck route).
-- `src/routes/index.js` — registers routes (mounted under `/api` when the bot is enabled).
+- `src/routes/index.js` — registers HTTP API routes (mounted under `/api`; endpoints are feature-gated at runtime).
 - `src/controllers/commands.js` — Telegram command handlers wired in `index.js` (`/precio`, `/cryptobot`).
 - `src/controllers/commands/handlers/core/fetchPriceCryptoSymbol.js` — calls Binance `MainClient.getAvgPrice` to fetch prices.
 - `src/controllers/webhooks/handlers/alert/alert.js` — webhook handler that forwards alert text to a Telegram chat.
+- `src/services/monitoring/SentryService.js` — wraps `@sentry/node` for runtime error monitoring (005).
 - `src/controllers/helpers.js` — small numeric helper (`round10`) used by price formatting.
+- `src/lib/logging.js` — configures `console.*` levels via `LOG_LEVEL`.
+- `src/lib/rateLimiter.js` — global API rate limiting middleware (returns 429 when exceeded; configured via `RATE_LIMIT_WINDOW_MS`/`RATE_LIMIT_MAX`).
 
 Environment and runtime behavior (discoverable)
 - NODE version: `20.x` (see `package.json` engines).
-- Required env vars: `BOT_TOKEN` (throws if missing). Optional but relevant: `ENABLE_TELEGRAM_BOT`, `PORT`, `TELEGRAM_CHAT_ID`, `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID`, `RENDER`, `IS_PULL_REQUEST`, `RENDER_GIT_COMMIT`, `RENDER_GIT_REPO_SLUG`.
+- Required env vars: `BOT_TOKEN` (throws if missing; even when Telegram bot is disabled).
+- Optional but relevant (non-exhaustive; see feature sections below for full config): `ENABLE_TELEGRAM_BOT`, `PORT`, `TELEGRAM_CHAT_ID`, `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID`, `ENABLE_WHATSAPP_ALERTS`, `ENABLE_GEMINI_GROUNDING`, `GEMINI_API_KEY`, `BRAVE_SEARCH_API_KEY`, `BRAVE_SEARCH_ENDPOINT`, `FORCE_BRAVE_SEARCH`, `MODEL_PROVIDER`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `ENABLE_NEWS_MONITOR`, `ENABLE_SENTRY`, `SENTRY_DSN`, `LOG_LEVEL`, `RATE_LIMIT_WINDOW_MS`, `RATE_LIMIT_MAX`, `RENDER`, `IS_PULL_REQUEST`, `RENDER_GIT_COMMIT`, `RENDER_GIT_REPO_SLUG`.
 - Bot startup is gated: bot is launched only when `ENABLE_TELEGRAM_BOT === 'true'` and not a preview environment (`RENDER==='true' && IS_PULL_REQUEST==='true'` disables it).
-- Routes under `/api` (e.g. `/api/webhook/alert`) are only mounted after the bot is launched.
+- Routes under `/api` (e.g. `/api/webhook/alert`) are mounted regardless of bot launch; individual features and notification channels are gated via env flags and per-channel validation.
 
 Dev / run commands
 - `npm install` — install deps.
@@ -35,7 +40,8 @@ External integrations
 
 Common failure modes to check (based on code)
 - Missing `BOT_TOKEN` throws on startup (explicit check in `index.js`).
-- If `ENABLE_TELEGRAM_BOT` is not `'true'`, the bot and `/api` routes will not be available.
+- If `ENABLE_TELEGRAM_BOT` is not `'true'` (or you're in a Render preview environment), Telegram commands/alerts are disabled, but the HTTP routes under `/api` still exist.
+- Requests may be rejected with HTTP 429 due to the global rate limiter; tune `RATE_LIMIT_WINDOW_MS`/`RATE_LIMIT_MAX` as needed (`GET /healthcheck` is exempt).
 - Webhook failures will attempt to read `error.response` when building error responses; some external errors may not match that shape.
 
 Small, concrete examples
@@ -105,24 +111,26 @@ The system provides optional enrichment of webhook alerts using Google Gemini AP
 
 **Grounding Service Pattern**:
 - Enabled via `ENABLE_GEMINI_GROUNDING=true` (default: false)
-- Makes single Gemini API call with GoogleSearch grounding enabled
-- Returns structured response with summary and sources (URLs with titles)
+- Uses Gemini's GoogleSearch tool when available and falls back to Brave Search when needed to gather sources, then generates enriched output
+- Returns structured response with sentiment/insights/levels plus sources (URLs with titles)
 - Graceful degradation: if grounding fails (API error, timeout), sends original alert text and logs warning (does NOT block alert delivery)
 
 **Alert Enrichment Flow**:
 1. Webhook receives alert text (plain or JSON body with `text` property)
 2. If `ENABLE_GEMINI_GROUNDING=true`, call grounding service to fetch context
 3. Grounding service queries Gemini with alert text + system prompt + GoogleSearch results
-4. Gemini returns summary, extracted sources (URLs + titles), and key insights
-5. Enriched alert stored as `alert.enriched` object with structure: `{ summary, sources, insights, original_text }`
+4. Gemini returns structured insights (sentiment, key insights, technical levels) plus extracted sources (URLs + titles)
+5. Enriched alert stored as `alert.enriched` object with structure: `{ original_text, sentiment, sentiment_score, insights, technical_levels, sources, truncated }`
 6. Original `alert.text` preserved for fallback
 7. Enhanced alert sent to all enabled notification channels
-8. Webhook response includes `enriched: true/false` flag to indicate if enrichment was applied
+8. Webhook response includes `enriched: true/false`, per-channel delivery `results`, and a `tokenUsage` object (with a formatted summary) when grounding runs
 
 **Configuration**:
 - `ENABLE_GEMINI_GROUNDING` — Feature flag (default: false)
 - `GEMINI_API_KEY` — Google API key with Generative AI enabled
-- Implicit: `ENABLE_TELEGRAM_BOT` must be true for grounding to be initialized
+- `BRAVE_SEARCH_API_KEY`, `BRAVE_SEARCH_ENDPOINT`, `FORCE_BRAVE_SEARCH` — optional Brave Search fallback/override for grounding when GoogleSearch is unavailable or empty.
+- `MODEL_PROVIDER`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL` — optional provider routing for `llmCallv2()` (Gemini/Azure/OpenRouter) used by grounding/enrichment.
+- Grounding can run without the Telegram bot; Telegram delivery still requires a running bot + `TELEGRAM_CHAT_ID`.
 
 **Enrichment Strategy**:
 - Single grounding call per alert (results reused across all notification channels)
@@ -132,7 +140,7 @@ The system provides optional enrichment of webhook alerts using Google Gemini AP
 
 **Timeout & Retry**:
 - Grounding API calls use `retryHelper.sendWithRetry()` with 3 retries and exponential backoff
-- Timeout: ~8 seconds per call (configurable in grounding service)
+- Timeout: controlled by `GROUNDING_TIMEOUT_MS` (default: 30000 ms)
 - If timeout exceeded, returns original alert text with warning
 
 **Common Failure Modes**:
@@ -142,12 +150,24 @@ The system provides optional enrichment of webhook alerts using Google Gemini AP
 - Non-English alert text → Gemini respects language; returns summary in same language if possible
 
 **Where to look first when extending or debugging**:
-- `index.js` for lifecycle (calls initializeGroundingService if ENABLE_GEMINI_GROUNDING=true)
+- `instrument.js` / `index.js` for lifecycle (loads config; grounding runs per-request when `ENABLE_GEMINI_GROUNDING=true`)
 - `src/services/grounding/grounding.js` for orchestration logic and timeout handling
 - `src/controllers/webhooks/handlers/alert/alert.js` for webhook flow and grounding integration
 - `src/services/grounding/gemini.js` for prompt templates and response parsing
 - Tests in `tests/integration/alert-grounding.test.js` for end-to-end behavior
 - Tests in `tests/unit/grounding.test.js` and `tests/unit/gemini-client.test.js` for core logic
+
+
+## Enriched Webhook Alert Output (004-enrich-alert-output)
+
+The `/api/webhook/alert` flow can produce **structured enrichment** (in addition to sources) so alerts become actionable without leaving chat.
+
+**What changes for developers**:
+- When grounding is enabled, handlers attach an object at `alert.enriched` (see `src/controllers/webhooks/handlers/alert/grounding.js`) with fields like `sentiment`, `sentiment_score`, `insights`, `technical_levels`, and `sources`.
+- Telegram uses `MarkdownV2Formatter.formatEnriched()` when `alert.enriched` is an object (see `src/services/notification/TelegramService.js`). WhatsApp follows its own formatter rules.
+- Webhook responses include per-channel `results` plus a `tokenUsage` summary to help track LLM cost/usage.
+
+**Graceful fallback**: if enrichment fails (timeout/API errors/malformed output), delivery proceeds with `alert.text` (fail-open).
 
 ## Multi-Channel Notification Architecture (002-whatsapp-alerts)
 
@@ -311,7 +331,8 @@ The system uses two complementary terms with specific meanings:
 | 001 | Grounding (Gemini) | Enriched alerts with sources | ENABLE_GEMINI_GROUNDING |
 | 002 | NotificationManager | Enriched alerts on WhatsApp | ENABLE_WHATSAPP_ALERTS |
 | 003 | News analysis + Grounding | Enriched news alerts | ENABLE_NEWS_MONITOR |
-| 004 (future) | LLM refinement | Enriched confidence scoring | ENABLE_LLM_ALERT_ENRICHMENT |
+| 004 | Webhook alert output enrichment | Structured sentiment/insights/levels for `/api/webhook/alert` | ENABLE_GEMINI_GROUNDING |
+| 005 | Runtime error monitoring | Capture unexpected runtime errors (side-effect only) | ENABLE_SENTRY |
 
 ### Usage Guidelines
 
@@ -329,10 +350,53 @@ The system uses two complementary terms with specific meanings:
 See `/specs/TERMINOLOGY_GUIDE.md` for extended discussion and examples.
 
 
-## Recent Changes
-- 001-gemini-grounding-alert: Added Gemini GoogleSearch grounding integration for alert enrichment; retrieves verified sources and context; graceful degradation on API failure; reuses single grounding call across notification channels
-- 002-whatsapp-alerts: Added multi-channel notification system with TelegramService, WhatsAppService, NotificationManager; exponential backoff retry logic; MarkdownV2 and WhatsApp markdown formatters; comprehensive integration tests for parallel delivery, config validation, graceful degradation
-- 003-news-monitor: Added `/api/news-monitor` endpoint for financial news analysis and sentiment-based alerts; Gemini GoogleSearch integration for market context; optional secondary LLM enrichment via Azure AI Inference; in-memory deduplication cache; optional Binance price integration; parallel symbol analysis with timeout management; configurable event detection (price_surge, price_decline, public_figure, regulatory); URL shortening for WhatsApp citations using prettylink package for supported services and direct API calls for unsupported services
+## Recent Changes (by spec-kit)
+- 001-gemini-grounding-alert (improvements with PR #21, #20, #19): Added Gemini GoogleSearch grounding integration for alert enrichment; added Brave Search fallback/override; introduced provider routing (Gemini/Azure/OpenRouter); added token usage + cost estimation surfaced in notifications; graceful degradation on API failure; single grounding call reused across channels.
+- 002-whatsapp-alerts: Added multi-channel notification system with TelegramService, WhatsAppService, NotificationManager; exponential backoff retry logic; MarkdownV2 and WhatsApp markdown formatters; comprehensive integration tests for parallel delivery, config validation, graceful degradation.
+- 003-news-monitor (improvement with PR #18): Added `/api/news-monitor` endpoint for financial news analysis and sentiment-based alerts; Gemini GoogleSearch integration for market context; optional secondary LLM enrichment via Azure AI Inference (migrated to `@azure-rest/ai-inference`); in-memory deduplication cache; optional Binance price integration; parallel symbol analysis with timeout management; configurable event detection; URL shortening for WhatsApp citations.
+- 004-enrich-alert-output: Enriched `/api/webhook/alert` output with structured fields (sentiment, insights, technical levels) using the existing grounding pipeline; Telegram/WhatsApp formatters render structured enrichment when present.
+- 005-sentry-runtime-errors (PR #16): Added runtime error monitoring via `SentryService` + early initialization in `instrument.js`, plus Express error handler wiring; monitoring is gated by `ENABLE_SENTRY` + `SENTRY_DSN`.
+
+## Pull Requests
+
+This are some notable PRs that were merged outside of the spec-kit process. There were created manually or created by the "Jules" agent:
+
+- [#25](https://github.com/francovp/cabros-bot/pull/25) (open) docs: update agents.md for latest features
+  - Docs-only: standardizes/updates `agents.md` to match the current feature set (001–005) and runtime behavior.
+  - No runtime behavior changes.
+
+- [#23](https://github.com/francovp/cabros-bot/pull/23) (merged) feat: Add Global API Rate Limiting
+  - Implements a custom global in-memory rate limiter middleware, applied in `app.js` *after* `/healthcheck` (so health probes aren't rate-limited).
+  - Configurable via env: `RATE_LIMIT_WINDOW_MS`, `RATE_LIMIT_MAX`.
+  - Where to look: `src/lib/rateLimiter.js`, `app.js`, and tests under `tests/unit/`.
+
+- [#21](https://github.com/francovp/cabros-bot/pull/21) (merged) Implement Brave Search API for Grounding
+  - Adds Brave Search as a fallback provider for grounding when Google Search fails/returns empty results (and supports force-Brave mode).
+  - Adds env vars: `BRAVE_SEARCH_API_KEY`, `BRAVE_SEARCH_ENDPOINT`, `FORCE_BRAVE_SEARCH`.
+  - Where to look: `src/services/grounding/genaiClient.js`, `src/services/grounding/config.js`; unit tests in `tests/unit/genaiClient.test.js`.
+
+- [#20](https://github.com/francovp/cabros-bot/pull/20) (merged) feat: Add OpenRouter fallback support
+  - Introduces an LLM provider selector for `llmCallv2()` so grounding/enrichment can be routed to Gemini, Azure AI Inference, or OpenRouter.
+  - Adds env vars: `MODEL_PROVIDER`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL` (and tightens Azure model config via `AZURE_LLM_MODEL`).
+  - Where to look: `src/services/grounding/genaiClient.js`, `src/services/grounding/config.js`, `src/services/inference/openRouterClient.js`.
+
+- [#19](https://github.com/francovp/cabros-bot/pull/19) (merged) feat: Add token pricing calculation to messages
+  - Adds token usage + cost estimation plumbing for LLM calls and surfaces a “Tokens usage” line in Telegram/WhatsApp alert formatting.
+  - Where to look: `src/lib/tokenUsage.js`, `src/services/grounding/genaiClient.js`, `src/services/notification/formatters/MarkdownV2Formatter.js`, `src/services/notification/formatters/WhatsAppMarkdownFormatter.js`.
+
+- [#18](https://github.com/francovp/cabros-bot/pull/18) (merged) refactor: Update AzureAIClient to use `@azure-rest/ai-inference`
+  - Migrates Azure AI Inference integration to `@azure-rest/ai-inference` while keeping the `genaiClient` abstraction stable for alert/news flows.
+  - Aligns tests around the `llmCallv2({ systemPrompt, userPrompt })` interface.
+  - Where to look: `src/services/inference/azureAiClient.js`, `src/services/grounding/genaiClient.js`.
+
+- [#17](https://github.com/francovp/cabros-bot/pull/17) (merged) feat(logging): add configurable log level support
+  - Adds centralized console filtering via `LOG_LEVEL` and ensures logging is initialized early (via `instrument.js`).
+  - Where to look: `src/lib/logging.js`, `instrument.js`, `tests/setup.js`.
+
+- [#16](https://github.com/francovp/cabros-bot/pull/16) (merged) feat(sentry): implement runtime error monitoring for node.js service
+  - Adds non-intrusive runtime error monitoring with `@sentry/node`, wrapped by `src/services/monitoring/SentryService.js`.
+  - Gated via env: `ENABLE_SENTRY` + `SENTRY_DSN` (plus optional environment/release overrides).
+  - Where to look: `src/services/monitoring/SentryService.js`, `instrument.js`, and integration tests in `tests/integration/sentry-runtime-errors.test.js`.
 
 ## Architectural Patterns & Extension Guide
 
@@ -487,7 +551,7 @@ ENABLE_SENTRY (005)
 **To extend**:
 1. **Discord integration**: Add in `src/services/notification/DiscordService.js`
 2. **Error aggregation**: Track error rates in memory for metrics
-3. **Sentry reporting (005-sentry-runtime-errors)**: Use a thin monitoring service (planned `src/services/monitoring/SentryService.js`) that wraps `@sentry/node` for runtime errors only. Gated by `ENABLE_SENTRY` and `SENTRY_DSN`; MUST NOT change HTTP responses or notification fallbacks and SHOULD be stubbed/mocked in tests (no real Sentry traffic by default).
+3. **Sentry reporting (005-sentry-runtime-errors)**: Use a thin monitoring service (`src/services/monitoring/SentryService.js`) that wraps `@sentry/node` for runtime errors only. Gated by `ENABLE_SENTRY` and `SENTRY_DSN`; MUST NOT change HTTP responses or notification fallbacks and SHOULD be stubbed/mocked in tests (no real Sentry traffic by default).
 4. **Telegram admin alerts**: Send critical errors to admin chat if configured
 
 ## Runtime Error Monitoring with Sentry (005-sentry-runtime-errors)
@@ -501,10 +565,10 @@ This feature introduces backend runtime error monitoring using Sentry's Node SDK
   - Process-level failures: `uncaughtException` and `unhandledRejection` via the SDK's built-in integrations.
 - Do **not** change public API contracts or user-visible behavior; monitoring is a side-effect only.
 
-**Planned core components**
-- `src/services/monitoring/SentryService.js` (new):
+**Core components**
+- `src/services/monitoring/SentryService.js`:
   - Initializes `@sentry/node` once at startup (called from `index.js`).
-  - Resolves configuration from env (see below) and exposes helpers like `captureError({ channel, error, context })`.
+  - Resolves configuration from env (see below) and exposes helpers like `captureRuntimeError(...)` and `captureExternalFailure(...)`.
   - Applies tags (`channel`, `feature`, `environment`) and structured contexts (`http`, `external`, `alert`, `news`) as defined in `specs/005-sentry-runtime-errors/data-model.md`.
 - Existing handlers/services will call `SentryService` instead of importing `@sentry/node` directly:
   - `src/controllers/webhooks/handlers/alert/alert.js`
@@ -514,6 +578,8 @@ This feature introduces backend runtime error monitoring using Sentry's Node SDK
 **Configuration (env vars)**
 - `ENABLE_SENTRY` (`'true'` to enable monitoring; otherwise no-op)
 - `SENTRY_DSN` (server-side DSN from Sentry project; required when `ENABLE_SENTRY==='true'` in environments where we want events)
+- `SENTRY_SEND_ALERT_CONTENT` (default: true; controls whether alert/news text is included in event payloads)
+- `SENTRY_SAMPLE_RATE_ERRORS` (default: 1.0; error sampling rate 0.0-1.0)
 - Optional overrides (otherwise derived from existing deployment vars):
   - `SENTRY_ENVIRONMENT` (e.g., `production`, `preview`, `development`)
   - `SENTRY_RELEASE` (e.g., `cabros-bot@1.2.3+<git-sha>`)
