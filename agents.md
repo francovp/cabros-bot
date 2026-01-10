@@ -13,11 +13,12 @@ Key files / entry points
 - `src/services/monitoring/SentryService.js` — wraps `@sentry/node` for runtime error monitoring (005).
 - `src/controllers/helpers.js` — small numeric helper (`round10`) used by price formatting.
 - `src/lib/logging.js` — configures `console.*` levels via `LOG_LEVEL`.
+- `src/lib/rateLimiter.js` — global API rate limiting middleware (returns 429 when exceeded; configured via `RATE_LIMIT_WINDOW_MS`/`RATE_LIMIT_MAX`).
 
 Environment and runtime behavior (discoverable)
 - NODE version: `20.x` (see `package.json` engines).
 - Required env vars: `BOT_TOKEN` (throws if missing; even when Telegram bot is disabled).
-- Optional but relevant: `ENABLE_TELEGRAM_BOT`, `PORT`, `TELEGRAM_CHAT_ID`, `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID`, `ENABLE_WHATSAPP_ALERTS`, `ENABLE_GEMINI_GROUNDING`, `ENABLE_NEWS_MONITOR`, `ENABLE_SENTRY`, `LOG_LEVEL`, `RENDER`, `IS_PULL_REQUEST`, `RENDER_GIT_COMMIT`, `RENDER_GIT_REPO_SLUG`.
+- Optional but relevant (non-exhaustive; see feature sections below for full config): `ENABLE_TELEGRAM_BOT`, `PORT`, `TELEGRAM_CHAT_ID`, `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID`, `ENABLE_WHATSAPP_ALERTS`, `ENABLE_GEMINI_GROUNDING`, `GEMINI_API_KEY`, `BRAVE_SEARCH_API_KEY`, `BRAVE_SEARCH_ENDPOINT`, `FORCE_BRAVE_SEARCH`, `MODEL_PROVIDER`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `ENABLE_NEWS_MONITOR`, `ENABLE_SENTRY`, `SENTRY_DSN`, `LOG_LEVEL`, `RATE_LIMIT_WINDOW_MS`, `RATE_LIMIT_MAX`, `RENDER`, `IS_PULL_REQUEST`, `RENDER_GIT_COMMIT`, `RENDER_GIT_REPO_SLUG`.
 - Bot startup is gated: bot is launched only when `ENABLE_TELEGRAM_BOT === 'true'` and not a preview environment (`RENDER==='true' && IS_PULL_REQUEST==='true'` disables it).
 - Routes under `/api` (e.g. `/api/webhook/alert`) are mounted regardless of bot launch; individual features and notification channels are gated via env flags and per-channel validation.
 
@@ -40,6 +41,7 @@ External integrations
 Common failure modes to check (based on code)
 - Missing `BOT_TOKEN` throws on startup (explicit check in `index.js`).
 - If `ENABLE_TELEGRAM_BOT` is not `'true'` (or you're in a Render preview environment), Telegram commands/alerts are disabled, but the HTTP routes under `/api` still exist.
+- Requests may be rejected with HTTP 429 due to the global rate limiter; tune `RATE_LIMIT_WINDOW_MS`/`RATE_LIMIT_MAX` as needed (`GET /healthcheck` is exempt).
 - Webhook failures will attempt to read `error.response` when building error responses; some external errors may not match that shape.
 
 Small, concrete examples
@@ -126,6 +128,8 @@ The system provides optional enrichment of webhook alerts using Google Gemini AP
 **Configuration**:
 - `ENABLE_GEMINI_GROUNDING` — Feature flag (default: false)
 - `GEMINI_API_KEY` — Google API key with Generative AI enabled
+- `BRAVE_SEARCH_API_KEY`, `BRAVE_SEARCH_ENDPOINT`, `FORCE_BRAVE_SEARCH` — optional Brave Search fallback/override for grounding when GoogleSearch is unavailable or empty.
+- `MODEL_PROVIDER`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL` — optional provider routing for `llmCallv2()` (Gemini/Azure/OpenRouter) used by grounding/enrichment.
 - Grounding can run without the Telegram bot; Telegram delivery still requires a running bot + `TELEGRAM_CHAT_ID`.
 
 **Enrichment Strategy**:
@@ -346,12 +350,53 @@ The system uses two complementary terms with specific meanings:
 See `/specs/TERMINOLOGY_GUIDE.md` for extended discussion and examples.
 
 
-## Recent Changes
-- 001-gemini-grounding-alert: Added Gemini GoogleSearch grounding integration for alert enrichment; retrieves verified sources and context; graceful degradation on API failure; reuses single grounding call across notification channels
-- 002-whatsapp-alerts: Added multi-channel notification system with TelegramService, WhatsAppService, NotificationManager; exponential backoff retry logic; MarkdownV2 and WhatsApp markdown formatters; comprehensive integration tests for parallel delivery, config validation, graceful degradation
-- 003-news-monitor: Added `/api/news-monitor` endpoint for financial news analysis and sentiment-based alerts; Gemini GoogleSearch integration for market context; optional secondary LLM enrichment via Azure AI Inference; in-memory deduplication cache; optional Binance price integration; parallel symbol analysis with timeout management; configurable event detection (price_surge, price_decline, public_figure, regulatory); URL shortening for WhatsApp citations using prettylink package for supported services and direct API calls for unsupported services
-- 004-enrich-alert-output: Enriched `/api/webhook/alert` output with structured fields (sentiment, insights, technical levels) using the existing grounding pipeline; Telegram/WhatsApp formatters render structured enrichment when present
-- 005-sentry-runtime-errors: Added runtime error monitoring via `SentryService` + early initialization in `instrument.js`, plus Express error handler wiring; monitoring is gated by `ENABLE_SENTRY` + `SENTRY_DSN`
+## Recent Changes (by spec-kit)
+- 001-gemini-grounding-alert (improvements with PR #21, #20, #19): Added Gemini GoogleSearch grounding integration for alert enrichment; added Brave Search fallback/override; introduced provider routing (Gemini/Azure/OpenRouter); added token usage + cost estimation surfaced in notifications; graceful degradation on API failure; single grounding call reused across channels.
+- 002-whatsapp-alerts: Added multi-channel notification system with TelegramService, WhatsAppService, NotificationManager; exponential backoff retry logic; MarkdownV2 and WhatsApp markdown formatters; comprehensive integration tests for parallel delivery, config validation, graceful degradation.
+- 003-news-monitor (improvement with PR #18): Added `/api/news-monitor` endpoint for financial news analysis and sentiment-based alerts; Gemini GoogleSearch integration for market context; optional secondary LLM enrichment via Azure AI Inference (migrated to `@azure-rest/ai-inference`); in-memory deduplication cache; optional Binance price integration; parallel symbol analysis with timeout management; configurable event detection; URL shortening for WhatsApp citations.
+- 004-enrich-alert-output: Enriched `/api/webhook/alert` output with structured fields (sentiment, insights, technical levels) using the existing grounding pipeline; Telegram/WhatsApp formatters render structured enrichment when present.
+- 005-sentry-runtime-errors (PR #16): Added runtime error monitoring via `SentryService` + early initialization in `instrument.js`, plus Express error handler wiring; monitoring is gated by `ENABLE_SENTRY` + `SENTRY_DSN`.
+
+## Pull Requests
+
+This are some notable PRs that were merged outside of the spec-kit process. There were created manually or created by the "Jules" agent:
+
+- [#25](https://github.com/francovp/cabros-bot/pull/25) (open) docs: update agents.md for latest features
+  - Docs-only: standardizes/updates `agents.md` to match the current feature set (001–005) and runtime behavior.
+  - No runtime behavior changes.
+
+- [#23](https://github.com/francovp/cabros-bot/pull/23) (merged) feat: Add Global API Rate Limiting
+  - Implements a custom global in-memory rate limiter middleware, applied in `app.js` *after* `/healthcheck` (so health probes aren't rate-limited).
+  - Configurable via env: `RATE_LIMIT_WINDOW_MS`, `RATE_LIMIT_MAX`.
+  - Where to look: `src/lib/rateLimiter.js`, `app.js`, and tests under `tests/unit/`.
+
+- [#21](https://github.com/francovp/cabros-bot/pull/21) (merged) Implement Brave Search API for Grounding
+  - Adds Brave Search as a fallback provider for grounding when Google Search fails/returns empty results (and supports force-Brave mode).
+  - Adds env vars: `BRAVE_SEARCH_API_KEY`, `BRAVE_SEARCH_ENDPOINT`, `FORCE_BRAVE_SEARCH`.
+  - Where to look: `src/services/grounding/genaiClient.js`, `src/services/grounding/config.js`; unit tests in `tests/unit/genaiClient.test.js`.
+
+- [#20](https://github.com/francovp/cabros-bot/pull/20) (merged) feat: Add OpenRouter fallback support
+  - Introduces an LLM provider selector for `llmCallv2()` so grounding/enrichment can be routed to Gemini, Azure AI Inference, or OpenRouter.
+  - Adds env vars: `MODEL_PROVIDER`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL` (and tightens Azure model config via `AZURE_LLM_MODEL`).
+  - Where to look: `src/services/grounding/genaiClient.js`, `src/services/grounding/config.js`, `src/services/inference/openRouterClient.js`.
+
+- [#19](https://github.com/francovp/cabros-bot/pull/19) (merged) feat: Add token pricing calculation to messages
+  - Adds token usage + cost estimation plumbing for LLM calls and surfaces a “Tokens usage” line in Telegram/WhatsApp alert formatting.
+  - Where to look: `src/lib/tokenUsage.js`, `src/services/grounding/genaiClient.js`, `src/services/notification/formatters/MarkdownV2Formatter.js`, `src/services/notification/formatters/WhatsAppMarkdownFormatter.js`.
+
+- [#18](https://github.com/francovp/cabros-bot/pull/18) (merged) refactor: Update AzureAIClient to use `@azure-rest/ai-inference`
+  - Migrates Azure AI Inference integration to `@azure-rest/ai-inference` while keeping the `genaiClient` abstraction stable for alert/news flows.
+  - Aligns tests around the `llmCallv2({ systemPrompt, userPrompt })` interface.
+  - Where to look: `src/services/inference/azureAiClient.js`, `src/services/grounding/genaiClient.js`.
+
+- [#17](https://github.com/francovp/cabros-bot/pull/17) (merged) feat(logging): add configurable log level support
+  - Adds centralized console filtering via `LOG_LEVEL` and ensures logging is initialized early (via `instrument.js`).
+  - Where to look: `src/lib/logging.js`, `instrument.js`, `tests/setup.js`.
+
+- [#16](https://github.com/francovp/cabros-bot/pull/16) (merged) feat(sentry): implement runtime error monitoring for node.js service
+  - Adds non-intrusive runtime error monitoring with `@sentry/node`, wrapped by `src/services/monitoring/SentryService.js`.
+  - Gated via env: `ENABLE_SENTRY` + `SENTRY_DSN` (plus optional environment/release overrides).
+  - Where to look: `src/services/monitoring/SentryService.js`, `instrument.js`, and integration tests in `tests/integration/sentry-runtime-errors.test.js`.
 
 ## Architectural Patterns & Extension Guide
 
