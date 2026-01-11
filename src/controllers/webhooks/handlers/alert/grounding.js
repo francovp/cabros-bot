@@ -62,13 +62,20 @@ async function enrichAlert(alert, options = {}) {
 	const text = (typeof validated === 'string') ? validated : (validated && validated.text) ? validated.text : inputText;
 
 	try {
-		const { sentiment, sentiment_score, insights, technical_levels, sources, truncated } = await groundAlert({
+		const { sentiment, sentiment_score, insights, technical_levels, sources, truncated, modelUsed } = await groundAlert({
 			text,
 			options: {
 				preserveLanguage: true,
 				tokenUsage,
 			},
 		});
+
+		// Build footer with model metadata (controlled by env var, default: true)
+		const enableFooter = process.env.ENABLE_MESSAGE_FOOTER_METADATA !== 'false';
+		const modelName = modelUsed || GROUNDING_MODEL_NAME;
+		const extraText = enableFooter
+			? `Model used: ${modelName}_`
+			: '';
 
 		return {
 			original_text: text,
@@ -78,6 +85,7 @@ async function enrichAlert(alert, options = {}) {
 			technical_levels,
 			sources,
 			truncated,
+			extraText,
 		};
 	} catch (error) {
 		throw new Error(`Alert enrichment failed: ${error.message}`);

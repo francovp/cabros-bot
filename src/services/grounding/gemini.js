@@ -331,7 +331,7 @@ Instructions:
 `;
 
 	try {
-		const { text: responseText, usage } = await genaiClient.llmCallv2({
+		const { text: responseText, usage, modelUsed } = await genaiClient.llmCallv2({
 			systemPrompt: fullSystemPrompt,
 			userPrompt,
 			context: { citations: searchResults },
@@ -339,10 +339,14 @@ Instructions:
 		});
 
 		if (tokenUsage && usage) {
-			tokenUsage.addUsage(usage, GEMINI_MODEL_NAME);
+			const modelName = modelUsed || GEMINI_MODEL_NAME;
+			tokenUsage.addUsage(usage, modelName);
 		}
 
-		return parseEnrichedAlertResponse(responseText);
+		return {
+			...parseEnrichedAlertResponse(responseText),
+			modelUsed: modelUsed || GEMINI_MODEL_NAME,
+		};
 	} catch (error) {
 		throw new Error(`Enriched alert generation failed: ${error.message}`);
 	}

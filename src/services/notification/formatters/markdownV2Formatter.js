@@ -121,6 +121,7 @@ class MarkdownV2Formatter {
 			technical_levels = { supports: [], resistances: [] },
 			sources = [],
 			truncated = false,
+			extraText = '',
 			tokenUsage,
 		} = enriched;
 
@@ -174,6 +175,11 @@ class MarkdownV2Formatter {
 				})
 				.join(' / ');
 			message += `\n\n*Sources*\n${formattedSources}`;
+		}
+
+		// Model metadata footer
+		if (extraText) {
+			message += `\n\n${extraText}`;
 		}
 
 		const tokenLine = formatTokenUsageMarkdown(tokenUsage);

@@ -211,11 +211,12 @@ class WhatsAppMarkdownFormatter {
           message += `\n- ${cleanTitle}`;
         }
       });
+    }
 
-      if (extraText) {
-        const unescapedExtra = extraText.replace(/\\([_*[\]()~`>#+\-=|{}.!])/g, "$1");
-        message += `\n\n${unescapedExtra}`;
-      }
+    // Model metadata footer
+    if (extraText) {
+      const unescapedExtra = extraText.replace(/\\([_*[\]()~`>#+\-=|{}.!])/g, "$1");
+      message += `\n\n${unescapedExtra}`;
     }
 
     const tokenLine = this._formatTokenUsage(tokenUsage);

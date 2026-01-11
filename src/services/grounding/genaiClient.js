@@ -8,7 +8,10 @@ const {
         MODEL_PROVIDER,
         BRAVE_SEARCH_API_KEY,
         BRAVE_SEARCH_ENDPOINT,
-        FORCE_BRAVE_SEARCH
+        FORCE_BRAVE_SEARCH,
+	AZURE_LLM_MODEL,
+	OPENROUTER_MODEL,
+	GEMINI_MODEL_NAME_FALLBACK
 } = config;
 const { getAzureAIClient } = require('../inference/azureAiClient');
 const { getOpenRouterClient } = require('../inference/openRouterClient');
@@ -287,11 +290,16 @@ class GenaiClient {
                                 // Previous calls were like: prompt = `${systemPrompt}\n\n${userPrompt}`.
                                 const combinedPrompt = `${systemPrompt}\n\n${userPrompt}`;
                                 console.debug('[GenaiClient] Attempting Gemini LLM call');
-                                return await this.llmCall({
+                                const response = await this.llmCall({
                                         prompt: combinedPrompt,
                                         context,
                                         opts
                                 });
+
+                                return {
+                                        ...response,
+                                        modelUsed: opts.model || GEMINI_MODEL_NAME || GEMINI_MODEL_NAME_FALLBACK,
+                                };
                         } catch (error) {
                                 console.warn('[GenaiClient] Gemini call failed, attempting failover:', error.message);
                                 lastError = error;
@@ -310,6 +318,7 @@ class GenaiClient {
                                         return {
                                                 text,
                                                 citations: context.citations || [],
+                                                modelUsed: AZURE_LLM_MODEL || 'azure-llm',
                                         };
                                 } else {
                                 console.debug('[GenaiClient] Azure AI Client not configured, skipping');
@@ -320,9 +329,8 @@ class GenaiClient {
                         }
                 }
 
+                // 3. Try OpenRouter
                 if (MODEL_PROVIDER === 'openrouter') {
-
-                        // 3. Try OpenRouter
                         try {
                                 const openRouterClient = getOpenRouterClient();
                                 if (openRouterClient.validate()) {
@@ -331,6 +339,7 @@ class GenaiClient {
                                         return {
                                                 text,
                                                 citations: context.citations || [],
+                                                modelUsed: OPENROUTER_MODEL || 'openrouter-model',
                                         };
                                 } else {
                                         console.debug('[GenaiClient] OpenRouter Client not configured, skipping');
