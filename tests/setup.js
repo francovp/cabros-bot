@@ -18,6 +18,7 @@ process.env = {
 	// Silence verbose logging in tests (only errors shown by default)
 	// Set LOG_LEVEL=debug to enable verbose test output when debugging
 	LOG_LEVEL: process.env.LOG_LEVEL || 'error',
+	WEBHOOK_API_KEY: 'test-api-key',
 };
 
 // Configure logging early to apply level filtering in tests

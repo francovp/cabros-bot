@@ -84,7 +84,7 @@ describe('News Monitor - Binance Integration (US4)', () => {
 	describe('Binance Price Fetching', () => {
 		it('should include Binance price context when ENABLE_BINANCE_PRICE_CHECK=true', async () => {
 			const response = await request(app)
-				.get('/api/news-monitor?crypto=BTCUSDT')
+				.get('/api/news-monitor?crypto=BTCUSDT').set('x-api-key', 'test-api-key')
 				.expect(200);
 
 			expect(response.body.results).toBeDefined();
@@ -97,7 +97,7 @@ describe('News Monitor - Binance Integration (US4)', () => {
 
 		it('should skip Binance for stock symbols (non-crypto)', async () => {
 			const response = await request(app)
-				.get('/api/news-monitor?stocks=AAPL')
+				.get('/api/news-monitor?stocks=AAPL').set('x-api-key', 'test-api-key')
 				.expect(200);
 
 			expect(response.body.results).toBeDefined();
@@ -112,7 +112,7 @@ describe('News Monitor - Binance Integration (US4)', () => {
 			process.env.ENABLE_BINANCE_PRICE_CHECK = 'false';
 
 			const response = await request(app)
-				.post('/api/news-monitor')
+				.post('/api/news-monitor').set('x-api-key', 'test-api-key')
 				.send({ crypto: ['BTCUSDT'] })
 				.expect(200);
 
@@ -126,7 +126,7 @@ describe('News Monitor - Binance Integration (US4)', () => {
 	describe('Multi-Symbol with Binance', () => {
 		it('should handle multiple crypto and stock symbols with Binance mode', async () => {
 			const response = await request(app)
-				.post('/api/news-monitor')
+				.post('/api/news-monitor').set('x-api-key', 'test-api-key')
 				.send({ crypto: ['BTCUSDT'], stocks: ['AAPL'] })
 				.expect(200);
 
@@ -146,7 +146,7 @@ describe('News Monitor - Binance Integration (US4)', () => {
 		it('should independently analyze multiple crypto symbols with Binance', async () => {
 			// First request with multiple crypto
 			const response1 = await request(app)
-				.post('/api/news-monitor')
+				.post('/api/news-monitor').set('x-api-key', 'test-api-key')
 				.send({ crypto: ['BTCUSDT'] })
 				.expect(200);
 
@@ -161,7 +161,7 @@ describe('News Monitor - Binance Integration (US4)', () => {
 			// This test verifies the timeout logic works
 			// Actual timeout simulation would require mocking the fetch calls
 			const response = await request(app)
-				.get('/api/news-monitor?crypto=BTCUSDT')
+				.get('/api/news-monitor?crypto=BTCUSDT').set('x-api-key', 'test-api-key')
 				.expect(200);
 
 			expect(response.body.results).toBeDefined();
@@ -173,7 +173,7 @@ describe('News Monitor - Binance Integration (US4)', () => {
 	describe('Market Context in Alert', () => {
 		it('should include market context information in alert when available', async () => {
 			const response = await request(app)
-				.get('/api/news-monitor?crypto=BTCUSDT')
+				.get('/api/news-monitor?crypto=BTCUSDT').set('x-api-key', 'test-api-key')
 				.expect(200);
 
 			expect(response.body.results).toBeDefined();
@@ -190,7 +190,7 @@ describe('News Monitor - Binance Integration (US4)', () => {
 	describe('Response Structure with Binance', () => {
 		it('should return complete response structure with Binance enabled', async () => {
 			const response = await request(app)
-				.get('/api/news-monitor?crypto=BTCUSDT')
+				.get('/api/news-monitor?crypto=BTCUSDT').set('x-api-key', 'test-api-key')
 				.expect(200);
 
 			expect(response.body).toHaveProperty('results');

@@ -80,7 +80,7 @@ describe('News Monitor - Basic Endpoint Integration', () => {
 	describe('GET /api/news-monitor', () => {
 		it('should accept GET request with default symbols', async () => {
 			const res = await request(app)
-				.get('/api/news-monitor')
+				.get('/api/news-monitor').set('x-api-key', 'test-api-key').set('x-api-key', 'test-api-key')
 				.expect(200);
 
 			expect(res.body).toHaveProperty('success');
@@ -90,7 +90,7 @@ describe('News Monitor - Basic Endpoint Integration', () => {
 
 		it('should accept GET request with crypto symbols', async () => {
 			const res = await request(app)
-				.get('/api/news-monitor?crypto=BTCUSDT,ETHUSD')
+				.get('/api/news-monitor?crypto=BTCUSDT,ETHUSD').set('x-api-key', 'test-api-key').set('x-api-key', 'test-api-key')
 				.expect(200);
 
 			expect(res.body).toHaveProperty('success');
@@ -99,7 +99,7 @@ describe('News Monitor - Basic Endpoint Integration', () => {
 
 		it('should accept GET request with stock symbols', async () => {
 			const res = await request(app)
-				.get('/api/news-monitor?stocks=AAPL,MSFT')
+				.get('/api/news-monitor?stocks=AAPL,MSFT').set('x-api-key', 'test-api-key').set('x-api-key', 'test-api-key')
 				.expect(200);
 
 			expect(res.body).toHaveProperty('success');
@@ -107,7 +107,7 @@ describe('News Monitor - Basic Endpoint Integration', () => {
 
 		it('should include totalDurationMs in response', async () => {
 			const res = await request(app)
-				.get('/api/news-monitor')
+				.get('/api/news-monitor').set('x-api-key', 'test-api-key').set('x-api-key', 'test-api-key')
 				.expect(200);
 
 			expect(res.body).toHaveProperty('totalDurationMs');
@@ -116,7 +116,7 @@ describe('News Monitor - Basic Endpoint Integration', () => {
 
 		it('should include summary in response', async () => {
 			const res = await request(app)
-				.get('/api/news-monitor')
+				.get('/api/news-monitor').set('x-api-key', 'test-api-key').set('x-api-key', 'test-api-key')
 				.expect(200);
 
 			expect(res.body).toHaveProperty('summary');
@@ -131,7 +131,7 @@ describe('News Monitor - Basic Endpoint Integration', () => {
 	describe('POST /api/news-monitor', () => {
 		it('should accept POST request with symbol arrays', async () => {
 			const res = await request(app)
-				.post('/api/news-monitor')
+				.post('/api/news-monitor').set('x-api-key', 'test-api-key').set('x-api-key', 'test-api-key')
 				.send({
 					crypto: ['BTCUSDT', 'ETHUSD'],
 					stocks: ['AAPL'],
@@ -144,7 +144,7 @@ describe('News Monitor - Basic Endpoint Integration', () => {
 
 		it('should return results array with per-symbol status', async () => {
 			const res = await request(app)
-				.post('/api/news-monitor')
+				.post('/api/news-monitor').set('x-api-key', 'test-api-key').set('x-api-key', 'test-api-key')
 				.send({
 					crypto: ['BTCUSDT'],
 					stocks: [],
@@ -161,7 +161,7 @@ describe('News Monitor - Basic Endpoint Integration', () => {
 
 		it('should include alert field in result', async () => {
 			const res = await request(app)
-				.post('/api/news-monitor')
+				.post('/api/news-monitor').set('x-api-key', 'test-api-key').set('x-api-key', 'test-api-key')
 				.send({
 					crypto: ['BTCUSDT'],
 					stocks: [],
@@ -175,7 +175,7 @@ describe('News Monitor - Basic Endpoint Integration', () => {
 
 		it('should include cached property in per-symbol results', async () => {
 			const res = await request(app)
-				.post('/api/news-monitor')
+				.post('/api/news-monitor').set('x-api-key', 'test-api-key').set('x-api-key', 'test-api-key')
 				.send({
 					crypto: ['BTCUSDT'],
 					stocks: [],
@@ -190,7 +190,7 @@ describe('News Monitor - Basic Endpoint Integration', () => {
 
 		it('should use default symbols when empty arrays provided', async () => {
 			const res = await request(app)
-				.post('/api/news-monitor')
+				.post('/api/news-monitor').set('x-api-key', 'test-api-key').set('x-api-key', 'test-api-key')
 				.send({
 					crypto: [],
 					stocks: [],
@@ -203,7 +203,7 @@ describe('News Monitor - Basic Endpoint Integration', () => {
 
 		it('should handle missing request body by using defaults', async () => {
 			const res = await request(app)
-				.post('/api/news-monitor')
+				.post('/api/news-monitor').set('x-api-key', 'test-api-key').set('x-api-key', 'test-api-key')
 				.expect(200);
 
 			expect(res.body).toHaveProperty('success');
@@ -213,7 +213,7 @@ describe('News Monitor - Basic Endpoint Integration', () => {
 	describe('Response Structure', () => {
 		it('should return consistent requestId across requests', async () => {
 			const res = await request(app)
-				.get('/api/news-monitor?crypto=BTCUSDT')
+				.get('/api/news-monitor?crypto=BTCUSDT').set('x-api-key', 'test-api-key').set('x-api-key', 'test-api-key')
 				.expect(200);
 
 			expect(res.body).toHaveProperty('requestId');
@@ -223,7 +223,7 @@ describe('News Monitor - Basic Endpoint Integration', () => {
 
 		it('should include analysis summary', async () => {
 			const res = await request(app)
-				.get('/api/news-monitor')
+				.get('/api/news-monitor').set('x-api-key', 'test-api-key').set('x-api-key', 'test-api-key')
 				.expect(200);
 
 			const summary = res.body.summary;
@@ -236,7 +236,7 @@ describe('News Monitor - Basic Endpoint Integration', () => {
 
 		it('should return success: true on valid requests', async () => {
 			const res = await request(app)
-				.post('/api/news-monitor')
+				.post('/api/news-monitor').set('x-api-key', 'test-api-key').set('x-api-key', 'test-api-key')
 				.send({
 					crypto: ['BTCUSDT'],
 					stocks: [],
@@ -251,7 +251,7 @@ describe('News Monitor - Basic Endpoint Integration', () => {
 		it('should handle endpoint when feature disabled', async () => {
 			process.env.ENABLE_NEWS_MONITOR = 'false';
 			const res = await request(app)
-				.get('/api/news-monitor');
+				.get('/api/news-monitor').set('x-api-key', 'test-api-key').set('x-api-key', 'test-api-key');
 
 			expect([404, 403, 400]).toContain(res.status);
 
@@ -263,7 +263,7 @@ describe('News Monitor - Basic Endpoint Integration', () => {
 			delete process.env.GEMINI_API_KEY;
 
 			const res = await request(app)
-				.get('/api/news-monitor')
+				.get('/api/news-monitor').set('x-api-key', 'test-api-key').set('x-api-key', 'test-api-key')
 				.expect(200);
 
 			expect(res.body).toHaveProperty('success');
@@ -277,7 +277,7 @@ describe('News Monitor - Basic Endpoint Integration', () => {
 	describe('Symbol Handling', () => {
 		it('should process crypto symbols separately', async () => {
 			const res = await request(app)
-				.post('/api/news-monitor')
+				.post('/api/news-monitor').set('x-api-key', 'test-api-key').set('x-api-key', 'test-api-key')
 				.send({
 					crypto: ['BTCUSDT', 'ETHUSD'],
 					stocks: [],
@@ -291,7 +291,7 @@ describe('News Monitor - Basic Endpoint Integration', () => {
 
 		it('should process stock symbols separately', async () => {
 			const res = await request(app)
-				.post('/api/news-monitor')
+				.post('/api/news-monitor').set('x-api-key', 'test-api-key').set('x-api-key', 'test-api-key')
 				.send({
 					crypto: [],
 					stocks: ['AAPL', 'MSFT'],
@@ -305,7 +305,7 @@ describe('News Monitor - Basic Endpoint Integration', () => {
 
 		it('should handle mixed crypto and stock symbols', async () => {
 			const res = await request(app)
-				.post('/api/news-monitor')
+				.post('/api/news-monitor').set('x-api-key', 'test-api-key').set('x-api-key', 'test-api-key')
 				.send({
 					crypto: ['BTCUSDT'],
 					stocks: ['AAPL'],
@@ -319,7 +319,7 @@ describe('News Monitor - Basic Endpoint Integration', () => {
 	describe('Query Parameters', () => {
 		it('should parse crypto from query string', async () => {
 			const res = await request(app)
-				.get('/api/news-monitor?crypto=BTC,ETH')
+				.get('/api/news-monitor?crypto=BTC,ETH').set('x-api-key', 'test-api-key').set('x-api-key', 'test-api-key')
 				.expect(200);
 
 			expect(res.body).toHaveProperty('success');
@@ -327,7 +327,7 @@ describe('News Monitor - Basic Endpoint Integration', () => {
 
 		it('should parse stocks from query string', async () => {
 			const res = await request(app)
-				.get('/api/news-monitor?stocks=AAPL,MSFT')
+				.get('/api/news-monitor?stocks=AAPL,MSFT').set('x-api-key', 'test-api-key').set('x-api-key', 'test-api-key')
 				.expect(200);
 
 			expect(res.body).toHaveProperty('success');
@@ -335,7 +335,7 @@ describe('News Monitor - Basic Endpoint Integration', () => {
 
 		it('should handle both query parameters together', async () => {
 			const res = await request(app)
-				.get('/api/news-monitor?crypto=BTC&stocks=AAPL')
+				.get('/api/news-monitor?crypto=BTC&stocks=AAPL').set('x-api-key', 'test-api-key').set('x-api-key', 'test-api-key')
 				.expect(200);
 
 			expect(res.body).toHaveProperty('success');

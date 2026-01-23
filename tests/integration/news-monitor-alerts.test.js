@@ -80,7 +80,7 @@ describe('News Monitor - Alert Delivery Response Structure (US2)', () => {
 	describe('Alert delivery response structure validation', () => {
 		it('should return structured response with results array', async () => {
 			const response = await request(app)
-				.get('/api/news-monitor')
+				.get('/api/news-monitor').set('x-api-key', 'test-api-key')
 				.query({ crypto: 'BTCUSDT' });
 
 			expect(response.status).toBe(200);
@@ -91,7 +91,7 @@ describe('News Monitor - Alert Delivery Response Structure (US2)', () => {
 
 		it('should include symbol in each result', async () => {
 			const response = await request(app)
-				.get('/api/news-monitor')
+				.get('/api/news-monitor').set('x-api-key', 'test-api-key')
 				.query({ crypto: 'BTCUSDT' });
 
 			expect(response.status).toBe(200);
@@ -104,7 +104,7 @@ describe('News Monitor - Alert Delivery Response Structure (US2)', () => {
 
 		it('should include status field in each result', async () => {
 			const response = await request(app)
-				.get('/api/news-monitor')
+				.get('/api/news-monitor').set('x-api-key', 'test-api-key')
 				.query({ crypto: 'BTCUSDT' });
 
 			expect(response.status).toBe(200);
@@ -117,7 +117,7 @@ describe('News Monitor - Alert Delivery Response Structure (US2)', () => {
 
 		it('should include alert object when confidence meets threshold', async () => {
 			const response = await request(app)
-				.get('/api/news-monitor')
+				.get('/api/news-monitor').set('x-api-key', 'test-api-key')
 				.query({ crypto: 'BTCUSDT' });
 
 			expect(response.status).toBe(200);
@@ -135,7 +135,7 @@ describe('News Monitor - Alert Delivery Response Structure (US2)', () => {
 
 		it('should include requestId for correlation', async () => {
 			const response = await request(app)
-				.get('/api/news-monitor')
+				.get('/api/news-monitor').set('x-api-key', 'test-api-key')
 				.query({ crypto: 'BTCUSDT' });
 
 			expect(response.status).toBe(200);
@@ -150,7 +150,7 @@ describe('News Monitor - Alert Delivery Response Structure (US2)', () => {
 
 		it('should include summary with alert count statistics', async () => {
 			const response = await request(app)
-				.get('/api/news-monitor')
+				.get('/api/news-monitor').set('x-api-key', 'test-api-key')
 				.query({ crypto: 'BTCUSDT,ETHUSD' });
 
 			expect(response.status).toBe(200);
@@ -163,7 +163,7 @@ describe('News Monitor - Alert Delivery Response Structure (US2)', () => {
 
 		it('should include totalDurationMs in response', async () => {
 			const response = await request(app)
-				.get('/api/news-monitor')
+				.get('/api/news-monitor').set('x-api-key', 'test-api-key')
 				.query({ crypto: 'BTCUSDT' });
 
 			expect(response.status).toBe(200);
@@ -176,7 +176,7 @@ describe('News Monitor - Alert Delivery Response Structure (US2)', () => {
 	describe('Threshold filtering configuration', () => {
 		it('should respect NEWS_ALERT_THRESHOLD default (0.7)', async () => {
 			const response = await request(app)
-				.get('/api/news-monitor')
+				.get('/api/news-monitor').set('x-api-key', 'test-api-key')
 				.query({ crypto: 'BTCUSDT' });
 
 			expect(response.status).toBe(200);
@@ -187,7 +187,7 @@ describe('News Monitor - Alert Delivery Response Structure (US2)', () => {
 			process.env.NEWS_ALERT_THRESHOLD = '0.5';
 
 			const response = await request(app)
-				.get('/api/news-monitor')
+				.get('/api/news-monitor').set('x-api-key', 'test-api-key')
 				.query({ crypto: 'BTCUSDT' });
 
 			expect(response.status).toBe(200);
@@ -197,7 +197,7 @@ describe('News Monitor - Alert Delivery Response Structure (US2)', () => {
 			process.env.NEWS_ALERT_THRESHOLD = '0.9';
 
 			const response = await request(app)
-				.get('/api/news-monitor')
+				.get('/api/news-monitor').set('x-api-key', 'test-api-key')
 				.query({ crypto: 'BTCUSDT' });
 
 			expect(response.status).toBe(200);
@@ -207,7 +207,7 @@ describe('News Monitor - Alert Delivery Response Structure (US2)', () => {
 	describe('Multi-symbol analysis response', () => {
 		it('should handle multiple crypto symbols', async () => {
 			const response = await request(app)
-				.get('/api/news-monitor')
+				.get('/api/news-monitor').set('x-api-key', 'test-api-key')
 				.query({ crypto: 'BTCUSDT,ETHUSD' });
 
 			expect(response.status).toBe(200);
@@ -217,7 +217,7 @@ describe('News Monitor - Alert Delivery Response Structure (US2)', () => {
 
 		it('should handle multiple stock symbols', async () => {
 			const response = await request(app)
-				.get('/api/news-monitor')
+				.get('/api/news-monitor').set('x-api-key', 'test-api-key')
 				.query({ stocks: 'AAPL,MSFT,GOOGL' });
 
 			expect(response.status).toBe(200);
@@ -226,7 +226,7 @@ describe('News Monitor - Alert Delivery Response Structure (US2)', () => {
 
 		it('should handle mixed crypto and stock symbols', async () => {
 			const response = await request(app)
-				.get('/api/news-monitor')
+				.get('/api/news-monitor').set('x-api-key', 'test-api-key')
 				.query({ crypto: 'BTCUSDT', stocks: 'AAPL' });
 
 			expect(response.status).toBe(200);
@@ -235,7 +235,7 @@ describe('News Monitor - Alert Delivery Response Structure (US2)', () => {
 
 		it('should return per-symbol results even if some fail', async () => {
 			const response = await request(app)
-				.post('/api/news-monitor')
+				.post('/api/news-monitor').set('x-api-key', 'test-api-key')
 				.send({
 					crypto: ['BTCUSDT', 'INVALID_SYMBOL_XYZ'],
 					stocks: ['AAPL'],
@@ -250,7 +250,7 @@ describe('News Monitor - Alert Delivery Response Structure (US2)', () => {
 	describe('Cached results in response', () => {
 		it('should mark cached results with cached flag', async () => {
 			const response = await request(app)
-				.get('/api/news-monitor')
+				.get('/api/news-monitor').set('x-api-key', 'test-api-key')
 				.query({ crypto: 'BTCUSDT' });
 
 			expect(response.status).toBe(200);
@@ -262,7 +262,7 @@ describe('News Monitor - Alert Delivery Response Structure (US2)', () => {
 
 		it('should include totalDurationMs for each result', async () => {
 			const response = await request(app)
-				.get('/api/news-monitor')
+				.get('/api/news-monitor').set('x-api-key', 'test-api-key')
 				.query({ crypto: 'BTCUSDT' });
 
 			expect(response.status).toBe(200);
@@ -276,7 +276,7 @@ describe('News Monitor - Alert Delivery Response Structure (US2)', () => {
 	describe('Error handling in responses', () => {
 		it('should return 200 even with partial failures', async () => {
 			const response = await request(app)
-				.post('/api/news-monitor')
+				.post('/api/news-monitor').set('x-api-key', 'test-api-key')
 				.send({ crypto: ['BTCUSDT', 'INVALID'] });
 
 			expect(response.status).toBe(200);
@@ -285,7 +285,7 @@ describe('News Monitor - Alert Delivery Response Structure (US2)', () => {
 
 		it('should indicate partial_success when some symbols fail', async () => {
 			const response = await request(app)
-				.post('/api/news-monitor')
+				.post('/api/news-monitor').set('x-api-key', 'test-api-key')
 				.send({
 					crypto: ['BTCUSDT'],
 					stocks: ['INVALID_STOCK_XYZ'],
@@ -298,7 +298,7 @@ describe('News Monitor - Alert Delivery Response Structure (US2)', () => {
 		it('should return 200 even with default symbols when none provided', async () => {
 			// When empty body is sent, handler uses default symbols from env
 			const response = await request(app)
-				.post('/api/news-monitor')
+				.post('/api/news-monitor').set('x-api-key', 'test-api-key')
 				.send({});
 
 			expect(response.status).toBe(200);
@@ -307,7 +307,7 @@ describe('News Monitor - Alert Delivery Response Structure (US2)', () => {
 
 		it('should reject invalid symbol format', async () => {
 			const response = await request(app)
-				.post('/api/news-monitor')
+				.post('/api/news-monitor').set('x-api-key', 'test-api-key')
 				.send({
 					crypto: ['BTC@#$%'], // Invalid characters
 				});
@@ -320,7 +320,7 @@ describe('News Monitor - Alert Delivery Response Structure (US2)', () => {
 	describe('Event categorization in alerts', () => {
 		it('should include eventCategory in alert', async () => {
 			const response = await request(app)
-				.get('/api/news-monitor')
+				.get('/api/news-monitor').set('x-api-key', 'test-api-key')
 				.query({ crypto: 'BTCUSDT' });
 
 			expect(response.status).toBe(200);
@@ -333,7 +333,7 @@ describe('News Monitor - Alert Delivery Response Structure (US2)', () => {
 
 		it('should include sentiment score in alert', async () => {
 			const response = await request(app)
-				.get('/api/news-monitor')
+				.get('/api/news-monitor').set('x-api-key', 'test-api-key')
 				.query({ crypto: 'BTCUSDT' });
 
 			expect(response.status).toBe(200);
@@ -347,7 +347,7 @@ describe('News Monitor - Alert Delivery Response Structure (US2)', () => {
 
 		it('should include confidence score in alert', async () => {
 			const response = await request(app)
-				.get('/api/news-monitor')
+				.get('/api/news-monitor').set('x-api-key', 'test-api-key')
 				.query({ crypto: 'BTCUSDT' });
 
 			expect(response.status).toBe(200);
@@ -361,7 +361,7 @@ describe('News Monitor - Alert Delivery Response Structure (US2)', () => {
 
 		it('should include sources in alert', async () => {
 			const response = await request(app)
-				.get('/api/news-monitor')
+				.get('/api/news-monitor').set('x-api-key', 'test-api-key')
 				.query({ crypto: 'BTCUSDT' });
 
 			expect(response.status).toBe(200);
