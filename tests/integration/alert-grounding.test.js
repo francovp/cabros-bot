@@ -40,6 +40,7 @@ describe('Alert Grounding Integration', () => {
 			TELEGRAM_CHAT_ID: '123456789',
 			TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID: '987654321',
 			BOT_TOKEN: 'test-bot-token',
+			WEBHOOK_API_KEY: 'test-key',
 			ENABLE_TELEGRAM_BOT: 'true',
 			GROUNDING_MAX_SOURCES: '3',
 			GROUNDING_TIMEOUT_MS: '8000',
@@ -104,6 +105,7 @@ describe('Alert Grounding Integration', () => {
 
 			const response = await request(app)
 				.post('/api/webhook/alert')
+				.set('x-api-key', 'test-key')
 				.send({ text: alertText })
 				.expect(200);
 
@@ -145,6 +147,7 @@ describe('Alert Grounding Integration', () => {
 
 			const response = await request(app)
 				.post('/api/webhook/alert')
+				.set('x-api-key', 'test-key')
 				.send({ text: alertText })
 				.expect(200);
 
@@ -176,6 +179,7 @@ describe('Alert Grounding Integration', () => {
 
 			const response = await request(app)
 				.post('/api/webhook/alert')
+				.set('x-api-key', 'test-key')
 				.send({ text: alertText })
 				.expect(200);
 
@@ -200,6 +204,7 @@ describe('Alert Grounding Integration', () => {
 
 			const response = await request(app)
 				.post('/api/webhook/alert')
+				.set('x-api-key', 'test-key')
 				.send({ text: alertText })
 				.expect(200);
 
@@ -220,6 +225,7 @@ describe('Alert Grounding Integration', () => {
 
 			const response = await request(app)
 				.post('/api/webhook/alert')
+				.set('x-api-key', 'test-key')
 				.send({ text: alertText })
 				.expect(200);
 

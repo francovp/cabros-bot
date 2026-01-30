@@ -29,6 +29,7 @@ describe('News Monitor - Binance Integration (US4)', () => {
 			GEMINI_API_KEY: 'test-key',
 			NEWS_SYMBOLS_CRYPTO: 'BTCUSDT',
 			NEWS_SYMBOLS_STOCKS: 'AAPL',
+			WEBHOOK_API_KEY: 'test-key',
 			NEWS_ALERT_THRESHOLD: '0.7',
 			NEWS_CACHE_TTL_HOURS: '6',
 			ENABLE_BINANCE_PRICE_CHECK: 'true', // Enable Binance for this test suite
@@ -85,6 +86,7 @@ describe('News Monitor - Binance Integration (US4)', () => {
 		it('should include Binance price context when ENABLE_BINANCE_PRICE_CHECK=true', async () => {
 			const response = await request(app)
 				.get('/api/news-monitor?crypto=BTCUSDT')
+				.set('x-api-key', 'test-key')
 				.expect(200);
 
 			expect(response.body.results).toBeDefined();
@@ -98,6 +100,7 @@ describe('News Monitor - Binance Integration (US4)', () => {
 		it('should skip Binance for stock symbols (non-crypto)', async () => {
 			const response = await request(app)
 				.get('/api/news-monitor?stocks=AAPL')
+				.set('x-api-key', 'test-key')
 				.expect(200);
 
 			expect(response.body.results).toBeDefined();
@@ -113,6 +116,7 @@ describe('News Monitor - Binance Integration (US4)', () => {
 
 			const response = await request(app)
 				.post('/api/news-monitor')
+				.set('x-api-key', 'test-key')
 				.send({ crypto: ['BTCUSDT'] })
 				.expect(200);
 
@@ -127,6 +131,7 @@ describe('News Monitor - Binance Integration (US4)', () => {
 		it('should handle multiple crypto and stock symbols with Binance mode', async () => {
 			const response = await request(app)
 				.post('/api/news-monitor')
+				.set('x-api-key', 'test-key')
 				.send({ crypto: ['BTCUSDT'], stocks: ['AAPL'] })
 				.expect(200);
 
@@ -147,6 +152,7 @@ describe('News Monitor - Binance Integration (US4)', () => {
 			// First request with multiple crypto
 			const response1 = await request(app)
 				.post('/api/news-monitor')
+				.set('x-api-key', 'test-key')
 				.send({ crypto: ['BTCUSDT'] })
 				.expect(200);
 
@@ -162,6 +168,7 @@ describe('News Monitor - Binance Integration (US4)', () => {
 			// Actual timeout simulation would require mocking the fetch calls
 			const response = await request(app)
 				.get('/api/news-monitor?crypto=BTCUSDT')
+				.set('x-api-key', 'test-key')
 				.expect(200);
 
 			expect(response.body.results).toBeDefined();
@@ -174,6 +181,7 @@ describe('News Monitor - Binance Integration (US4)', () => {
 		it('should include market context information in alert when available', async () => {
 			const response = await request(app)
 				.get('/api/news-monitor?crypto=BTCUSDT')
+				.set('x-api-key', 'test-key')
 				.expect(200);
 
 			expect(response.body.results).toBeDefined();
@@ -191,6 +199,7 @@ describe('News Monitor - Binance Integration (US4)', () => {
 		it('should return complete response structure with Binance enabled', async () => {
 			const response = await request(app)
 				.get('/api/news-monitor?crypto=BTCUSDT')
+				.set('x-api-key', 'test-key')
 				.expect(200);
 
 			expect(response.body).toHaveProperty('results');

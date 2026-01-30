@@ -78,11 +78,13 @@ describe('Sentry Runtime Errors Integration (T011, T017, T024)', () => {
 		it('should not capture Sentry event for expected 403 when feature disabled (FR-006)', async () => {
 			process.env.ENABLE_SENTRY = 'true';
 			process.env.SENTRY_DSN = 'https://key@sentry.io/123';
+			process.env.WEBHOOK_API_KEY = 'test-key';
 			sentryService.init();
 
 			// When news monitor is disabled, 403 is expected behavior
 			const response = await request(app)
 				.post('/api/news-monitor')
+				.set('x-api-key', 'test-key')
 				.send({ crypto: ['BTC'] })
 				.expect(403);
 
@@ -96,6 +98,7 @@ describe('Sentry Runtime Errors Integration (T011, T017, T024)', () => {
 			process.env.ENABLE_NEWS_MONITOR = 'true';
 			process.env.ENABLE_SENTRY = 'true';
 			process.env.SENTRY_DSN = 'https://key@sentry.io/123';
+			process.env.WEBHOOK_API_KEY = 'test-key';
 			// Clear default symbols so empty request triggers validation error
 			delete process.env.NEWS_SYMBOLS_CRYPTO;
 			delete process.env.NEWS_SYMBOLS_STOCKS;
@@ -104,6 +107,7 @@ describe('Sentry Runtime Errors Integration (T011, T017, T024)', () => {
 			// Send invalid request (empty symbols with no defaults)
 			const response = await request(app)
 				.post('/api/news-monitor')
+				.set('x-api-key', 'test-key')
 				.send({ crypto: [], stocks: [] })
 				.expect(400);
 
@@ -118,6 +122,7 @@ describe('Sentry Runtime Errors Integration (T011, T017, T024)', () => {
 		it('should use preview environment when IS_PULL_REQUEST=true', () => {
 			process.env.ENABLE_SENTRY = 'true';
 			process.env.SENTRY_DSN = 'https://key@sentry.io/123';
+			process.env.WEBHOOK_API_KEY = 'test-key';
 			process.env.RENDER = 'true';
 			process.env.IS_PULL_REQUEST = 'true';
 			delete process.env.SENTRY_ENVIRONMENT;
@@ -131,6 +136,7 @@ describe('Sentry Runtime Errors Integration (T011, T017, T024)', () => {
 		it('should use production environment on Render without PR', () => {
 			process.env.ENABLE_SENTRY = 'true';
 			process.env.SENTRY_DSN = 'https://key@sentry.io/123';
+			process.env.WEBHOOK_API_KEY = 'test-key';
 			process.env.RENDER = 'true';
 			process.env.IS_PULL_REQUEST = 'false';
 			delete process.env.SENTRY_ENVIRONMENT;
@@ -144,6 +150,7 @@ describe('Sentry Runtime Errors Integration (T011, T017, T024)', () => {
 		it('should use development environment in local dev', () => {
 			process.env.ENABLE_SENTRY = 'true';
 			process.env.SENTRY_DSN = 'https://key@sentry.io/123';
+			process.env.WEBHOOK_API_KEY = 'test-key';
 			delete process.env.RENDER;
 			process.env.NODE_ENV = 'development';
 			delete process.env.SENTRY_ENVIRONMENT;
@@ -157,6 +164,7 @@ describe('Sentry Runtime Errors Integration (T011, T017, T024)', () => {
 		it('should allow explicit SENTRY_ENVIRONMENT override', () => {
 			process.env.ENABLE_SENTRY = 'true';
 			process.env.SENTRY_DSN = 'https://key@sentry.io/123';
+			process.env.WEBHOOK_API_KEY = 'test-key';
 			process.env.SENTRY_ENVIRONMENT = 'staging';
 			process.env.RENDER = 'true';
 			process.env.IS_PULL_REQUEST = 'true';
@@ -172,6 +180,7 @@ describe('Sentry Runtime Errors Integration (T011, T017, T024)', () => {
 		it('should report correct state when enabled', () => {
 			process.env.ENABLE_SENTRY = 'true';
 			process.env.SENTRY_DSN = 'https://key@sentry.io/123';
+			process.env.WEBHOOK_API_KEY = 'test-key';
 			sentryService.init();
 
 			const state = sentryService.getState();
@@ -195,6 +204,7 @@ describe('Sentry Runtime Errors Integration (T011, T017, T024)', () => {
 		it('should not affect response when DSN is invalid', async () => {
 			process.env.ENABLE_SENTRY = 'true';
 			process.env.SENTRY_DSN = 'invalid-dsn-format';
+			process.env.WEBHOOK_API_KEY = 'test-key';
 			process.env.ENABLE_GEMINI_GROUNDING = 'false';
 
 			// Even with potentially problematic DSN, init should not throw
