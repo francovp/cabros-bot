@@ -43,6 +43,7 @@ describe('Alert Grounding Integration', () => {
 			ENABLE_TELEGRAM_BOT: 'true',
 			GROUNDING_MAX_SOURCES: '3',
 			GROUNDING_TIMEOUT_MS: '8000',
+			WEBHOOK_API_KEY: 'test-webhook-key',
 		};
 
 		// Reset all mocks
@@ -104,6 +105,7 @@ describe('Alert Grounding Integration', () => {
 
 			const response = await request(app)
 				.post('/api/webhook/alert')
+				.set('x-api-key', 'test-webhook-key')
 				.send({ text: alertText })
 				.expect(200);
 
@@ -145,6 +147,7 @@ describe('Alert Grounding Integration', () => {
 
 			const response = await request(app)
 				.post('/api/webhook/alert')
+				.set('x-api-key', 'test-webhook-key')
 				.send({ text: alertText })
 				.expect(200);
 
@@ -176,6 +179,7 @@ describe('Alert Grounding Integration', () => {
 
 			const response = await request(app)
 				.post('/api/webhook/alert')
+				.set('x-api-key', 'test-webhook-key')
 				.send({ text: alertText })
 				.expect(200);
 
@@ -200,6 +204,7 @@ describe('Alert Grounding Integration', () => {
 
 			const response = await request(app)
 				.post('/api/webhook/alert')
+				.set('x-api-key', 'test-webhook-key')
 				.send({ text: alertText })
 				.expect(200);
 
@@ -220,6 +225,7 @@ describe('Alert Grounding Integration', () => {
 
 			const response = await request(app)
 				.post('/api/webhook/alert')
+				.set('x-api-key', 'test-webhook-key')
 				.send({ text: alertText })
 				.expect(200);
 

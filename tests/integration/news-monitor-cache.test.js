@@ -31,6 +31,7 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 			NEWS_SYMBOLS_STOCKS: 'AAPL',
 			NEWS_ALERT_THRESHOLD: '0.7',
 			NEWS_CACHE_TTL_HOURS: '6', // 6 hour TTL in production, but tests run fast
+			WEBHOOK_API_KEY: 'test-webhook-key',
 		};
 
 		jest.clearAllMocks();
@@ -85,6 +86,7 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 		it('should return "analyzed" status on first call (cache miss)', async () => {
 			const response = await request(app)
 				.get('/api/news-monitor?crypto=BTCUSDT')
+				.set('x-api-key', 'test-webhook-key')
 				.expect(200);
 
 			expect(response.body.results).toBeDefined();
@@ -98,6 +100,7 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 			// First call - cache miss
 			const response1 = await request(app)
 				.get('/api/news-monitor?crypto=BTCUSDT')
+				.set('x-api-key', 'test-webhook-key')
 				.expect(200);
 
 			expect(response1.body.results[0].status).toBe('analyzed');
@@ -106,6 +109,7 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 			// Second call - cache hit
 			const response2 = await request(app)
 				.get('/api/news-monitor?crypto=BTCUSDT')
+				.set('x-api-key', 'test-webhook-key')
 				.expect(200);
 
 			expect(response2.body.results[0].status).toBe('cached');
@@ -121,10 +125,12 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 
 			const response1 = await request(app)
 				.get('/api/news-monitor?crypto=BTCUSDT')
+				.set('x-api-key', 'test-webhook-key')
 				.expect(200);
 
 			const response2 = await request(app)
 				.get('/api/news-monitor?crypto=BTCUSDT')
+				.set('x-api-key', 'test-webhook-key')
 				.expect(200);
 
 			// Both should be from same category, so second is cached
@@ -138,6 +144,7 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 			// First call with multiple symbols
 			const response1 = await request(app)
 				.post('/api/news-monitor')
+				.set('x-api-key', 'test-webhook-key')
 				.send({ crypto: ['BTCUSDT'], stocks: ['AAPL'] })
 				.expect(200);
 
@@ -147,6 +154,7 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 			// Second call with same symbols
 			const response2 = await request(app)
 				.post('/api/news-monitor')
+				.set('x-api-key', 'test-webhook-key')
 				.send({ crypto: ['BTCUSDT'], stocks: ['AAPL'] })
 				.expect(200);
 
@@ -159,6 +167,7 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 			// First call with BTCUSDT only
 			const response1 = await request(app)
 				.post('/api/news-monitor')
+				.set('x-api-key', 'test-webhook-key')
 				.send({ crypto: ['BTCUSDT'] })
 				.expect(200);
 
@@ -167,6 +176,7 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 			// Second call with AAPL only (different symbol)
 			const response2 = await request(app)
 				.post('/api/news-monitor')
+				.set('x-api-key', 'test-webhook-key')
 				.send({ stocks: ['AAPL'] })
 				.expect(200);
 
@@ -176,6 +186,7 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 			// Third call with BTCUSDT again - should be cached
 			const response3 = await request(app)
 				.post('/api/news-monitor')
+				.set('x-api-key', 'test-webhook-key')
 				.send({ crypto: ['BTCUSDT'] })
 				.expect(200);
 
@@ -188,6 +199,7 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 			// First call
 			const response1 = await request(app)
 				.get('/api/news-monitor?crypto=BTCUSDT')
+				.set('x-api-key', 'test-webhook-key')
 				.expect(200);
 
 			const firstAlert = response1.body.results[0].alert;
@@ -195,6 +207,7 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 			// Second call (cached)
 			const response2 = await request(app)
 				.get('/api/news-monitor?crypto=BTCUSDT')
+				.set('x-api-key', 'test-webhook-key')
 				.expect(200);
 
 			const cachedAlert = response2.body.results[0].alert;
@@ -209,11 +222,13 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 			// First call
 			await request(app)
 				.get('/api/news-monitor?crypto=BTCUSDT')
+				.set('x-api-key', 'test-webhook-key')
 				.expect(200);
 
 			// Second call (cached)
 			const response2 = await request(app)
 				.get('/api/news-monitor?crypto=BTCUSDT')
+				.set('x-api-key', 'test-webhook-key')
 				.expect(200);
 
 			expect(response2.body.summary.cached).toBe(1);
@@ -224,11 +239,13 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 			// First call
 			await request(app)
 				.get('/api/news-monitor?crypto=BTCUSDT')
+				.set('x-api-key', 'test-webhook-key')
 				.expect(200);
 
 			// Second call (cached)
 			const response2 = await request(app)
 				.get('/api/news-monitor?crypto=BTCUSDT')
+				.set('x-api-key', 'test-webhook-key')
 				.expect(200);
 
 			const result = response2.body.results[0];
@@ -243,6 +260,7 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 			// First call (analyzed)
 			const response1 = await request(app)
 				.get('/api/news-monitor?crypto=BTCUSDT')
+				.set('x-api-key', 'test-webhook-key')
 				.expect(200);
 
 			const analyzedTime = response1.body.results[0].totalDurationMs;
@@ -250,6 +268,7 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 			// Second call (cached)
 			const response2 = await request(app)
 				.get('/api/news-monitor?crypto=BTCUSDT')
+				.set('x-api-key', 'test-webhook-key')
 				.expect(200);
 
 			const cachedTime = response2.body.results[0].totalDurationMs;
@@ -264,6 +283,7 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 			// First call
 			const response1 = await request(app)
 				.get('/api/news-monitor?crypto=BTCUSDT')
+				.set('x-api-key', 'test-webhook-key')
 				.expect(200);
 
 			const firstAlert = response1.body.results[0].alert;
@@ -280,6 +300,7 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 			// Second call (cached)
 			const response2 = await request(app)
 				.get('/api/news-monitor?crypto=BTCUSDT')
+				.set('x-api-key', 'test-webhook-key')
 				.expect(200);
 
 			const cachedAlert = response2.body.results[0].alert;
@@ -296,6 +317,7 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 			// First call with two symbols
 			const response1 = await request(app)
 				.post('/api/news-monitor')
+				.set('x-api-key', 'test-webhook-key')
 				.send({ crypto: ['BTCUSDT'], stocks: ['AAPL'] })
 				.expect(200);
 
@@ -307,6 +329,7 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 			// Second call with same symbols
 			const response2 = await request(app)
 				.post('/api/news-monitor')
+				.set('x-api-key', 'test-webhook-key')
 				.send({ crypto: ['BTCUSDT'], stocks: ['AAPL'] })
 				.expect(200);
 
@@ -319,6 +342,7 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 			// Since we only have mock symbols, new symbol will be from defaults
 			const response3 = await request(app)
 				.get('/api/news-monitor')
+				.set('x-api-key', 'test-webhook-key')
 				.expect(200);
 
 			// Should have mixed cache status

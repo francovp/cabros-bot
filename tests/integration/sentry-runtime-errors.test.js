@@ -73,6 +73,7 @@ describe('Sentry Runtime Errors Integration (T011, T017, T024)', () => {
 	describe('News Monitor Monitoring', () => {
 		beforeEach(() => {
 			process.env.ENABLE_NEWS_MONITOR = 'false';
+			process.env.WEBHOOK_API_KEY = 'test-webhook-key';
 		});
 
 		it('should not capture Sentry event for expected 403 when feature disabled (FR-006)', async () => {
@@ -83,6 +84,7 @@ describe('Sentry Runtime Errors Integration (T011, T017, T024)', () => {
 			// When news monitor is disabled, 403 is expected behavior
 			const response = await request(app)
 				.post('/api/news-monitor')
+				.set('x-api-key', 'test-webhook-key')
 				.send({ crypto: ['BTC'] })
 				.expect(403);
 
@@ -104,6 +106,7 @@ describe('Sentry Runtime Errors Integration (T011, T017, T024)', () => {
 			// Send invalid request (empty symbols with no defaults)
 			const response = await request(app)
 				.post('/api/news-monitor')
+				.set('x-api-key', 'test-webhook-key')
 				.send({ crypto: [], stocks: [] })
 				.expect(400);
 
