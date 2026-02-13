@@ -58,7 +58,7 @@ describe('Sentry Runtime Errors Integration (T011, T017, T024)', () => {
 
 	beforeEach(() => {
 		// Reset env and mocks
-		process.env = { ...originalEnv };
+		process.env = { ...originalEnv, WEBHOOK_API_KEY: 'test-key' };
 		jest.clearAllMocks();
 		sentryService._reset();
 
@@ -82,7 +82,7 @@ describe('Sentry Runtime Errors Integration (T011, T017, T024)', () => {
 
 			// When news monitor is disabled, 403 is expected behavior
 			const response = await request(app)
-				.post('/api/news-monitor')
+				.post('/api/news-monitor').set('x-api-key', 'test-key')
 				.send({ crypto: ['BTC'] })
 				.expect(403);
 
@@ -103,7 +103,7 @@ describe('Sentry Runtime Errors Integration (T011, T017, T024)', () => {
 
 			// Send invalid request (empty symbols with no defaults)
 			const response = await request(app)
-				.post('/api/news-monitor')
+				.post('/api/news-monitor').set('x-api-key', 'test-key')
 				.send({ crypto: [], stocks: [] })
 				.expect(400);
 
