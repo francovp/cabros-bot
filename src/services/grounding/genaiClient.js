@@ -8,7 +8,10 @@ const {
         MODEL_PROVIDER,
         BRAVE_SEARCH_API_KEY,
         BRAVE_SEARCH_ENDPOINT,
-        FORCE_BRAVE_SEARCH
+        FORCE_BRAVE_SEARCH,
+	AZURE_LLM_MODEL,
+	OPENROUTER_MODEL,
+	GEMINI_MODEL_NAME_FALLBACK
 } = config;
 const { getAzureAIClient } = require('../inference/azureAiClient');
 const { getOpenRouterClient } = require('../inference/openRouterClient');
@@ -74,7 +77,7 @@ class GenaiClient {
                 }
         }
 
-        async _executeBraveSearch(query, model, maxResults, textWithCitations) {
+        async _executeBraveSearch(query, maxResults) {
                 console.debug(`[genaiClient] Performing search with query: "${query}" using Brave Search API`);
 
                 // 1. Get search results from Brave
@@ -84,13 +87,9 @@ class GenaiClient {
                 let searchResultText = '';
 
                 if (results.length > 0) {
-                        const contextPrompt = results.map((r, i) => `[${i+1}] Title: ${r.title}\nSource: ${r.sourceDomain}\nURL: ${r.url}\nSnippet: ${r.snippet}`).join('\n\n');
+                        const context = results.map((r, i) => `[${i+1}] Title: ${r.title}\nSource: ${r.sourceDomain}\nURL: ${r.url}\nSnippet: ${r.snippet}`).join('\n\n');
 
-                        const prompt = `Query: ${query}\n\nSearch Results:\n${contextPrompt}\n\nInstructions: Answer the query based *only* on the provided search results. If the search results are insufficient, state that. ${textWithCitations ? 'Cite your sources using [1], [2], etc.' : ''}`;
-
-                        console.debug('[genaiClient] Generating grounded text using LLM with Brave search results');
-                        const llmResponse = await this.llmCall({ prompt, opts: { model } });
-                        searchResultText = llmResponse.text;
+                        searchResultText = context
                 } else {
                         searchResultText = "No search results found.";
                 }
@@ -193,8 +192,8 @@ class GenaiClient {
 
                 // Logic: Force Brave -> Google -> Fallback Brave
                 // Access FORCE_BRAVE_SEARCH dynamically from config object
-                if (config.FORCE_BRAVE_SEARCH) {
-                        return this._executeBraveSearch(query, model, maxResults, textWithCitations);
+                if (FORCE_BRAVE_SEARCH) {
+                        return this._executeBraveSearch(query, maxResults);
                 }
 
                 try {
@@ -208,7 +207,7 @@ class GenaiClient {
                 }
 
                 // Fallback to Brave
-                return this._executeBraveSearch(query, model, maxResults, textWithCitations);
+                return this._executeBraveSearch(query, maxResults);
         }
 
         async llmCall({ prompt, context = {}, opts = {} }) {
@@ -287,11 +286,16 @@ class GenaiClient {
                                 // Previous calls were like: prompt = `${systemPrompt}\n\n${userPrompt}`.
                                 const combinedPrompt = `${systemPrompt}\n\n${userPrompt}`;
                                 console.debug('[GenaiClient] Attempting Gemini LLM call');
-                                return await this.llmCall({
+                                const response = await this.llmCall({
                                         prompt: combinedPrompt,
                                         context,
                                         opts
                                 });
+
+                                return {
+                                        ...response,
+                                        modelUsed: opts.model || GEMINI_MODEL_NAME || GEMINI_MODEL_NAME_FALLBACK,
+                                };
                         } catch (error) {
                                 console.warn('[GenaiClient] Gemini call failed, attempting failover:', error.message);
                                 lastError = error;
@@ -310,6 +314,7 @@ class GenaiClient {
                                         return {
                                                 text,
                                                 citations: context.citations || [],
+                                                modelUsed: AZURE_LLM_MODEL || 'azure-llm',
                                         };
                                 } else {
                                 console.debug('[GenaiClient] Azure AI Client not configured, skipping');
@@ -320,9 +325,8 @@ class GenaiClient {
                         }
                 }
 
+                // 3. Try OpenRouter
                 if (MODEL_PROVIDER === 'openrouter') {
-
-                        // 3. Try OpenRouter
                         try {
                                 const openRouterClient = getOpenRouterClient();
                                 if (openRouterClient.validate()) {
@@ -331,6 +335,7 @@ class GenaiClient {
                                         return {
                                                 text,
                                                 citations: context.citations || [],
+                                                modelUsed: OPENROUTER_MODEL || 'openrouter-model',
                                         };
                                 } else {
                                         console.debug('[GenaiClient] OpenRouter Client not configured, skipping');
