@@ -4,14 +4,20 @@ const { validateApiKey } = require('../../src/lib/auth');
 
 describe('Security: API Key Validation', () => {
 	let app;
+	const originalEnv = process.env;
 
 	beforeEach(() => {
 		app = express();
+		process.env = { ...originalEnv };
 		process.env.WEBHOOK_API_KEY = 'valid-api-key';
 		app.use(express.json());
 		app.post('/protected', validateApiKey, (req, res) => {
 			res.status(200).json({ success: true });
 		});
+	});
+
+	afterEach(() => {
+		process.env = originalEnv;
 	});
 
 	it('should reject requests without x-api-key header', async () => {
@@ -43,20 +49,21 @@ describe('Security: API Key Validation', () => {
 		expect(res.body.success).toBe(true);
 	});
 
-	it('should handle missing WEBHOOK_API_KEY env var', async () => {
+	it('should allow requests (insecure mode) when WEBHOOK_API_KEY is not set', async () => {
 		delete process.env.WEBHOOK_API_KEY;
-		// Suppress console.error during this test
-		const originalConsoleError = console.error;
-		console.error = jest.fn();
+
+		// Suppress console.warn during this test
+		const originalConsoleWarn = console.warn;
+		console.warn = jest.fn();
 
 		const res = await request(app)
 			.post('/protected')
-			.set('x-api-key', 'some-key')
 			.send({});
 
-		expect(res.status).toBe(500);
-		expect(res.body.error).toBe('Server configuration error');
+		expect(res.status).toBe(200);
+		expect(res.body.success).toBe(true);
+		expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('insecure'));
 
-		console.error = originalConsoleError;
+		console.warn = originalConsoleWarn;
 	});
 });

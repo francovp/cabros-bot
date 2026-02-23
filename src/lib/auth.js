@@ -5,13 +5,14 @@ const crypto = require('crypto');
  * Requires `x-api-key` header to match `WEBHOOK_API_KEY` environment variable.
  */
 function validateApiKey(req, res, next) {
-	const apiKey = req.headers['x-api-key'];
 	const validApiKey = process.env.WEBHOOK_API_KEY;
 
 	if (!validApiKey) {
-		console.error('WEBHOOK_API_KEY is not set in environment variables');
-		return res.status(500).json({ error: 'Server configuration error' });
+		console.warn('WARNING: WEBHOOK_API_KEY is not set. Webhook endpoints are insecure.');
+		return next();
 	}
+
+	const apiKey = req.headers['x-api-key'];
 
 	if (!apiKey) {
 		return res.status(401).json({ error: 'Unauthorized: Missing API key' });
