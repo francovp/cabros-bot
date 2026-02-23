@@ -74,7 +74,7 @@ async function enrichAlert(alert, options = {}) {
 		const enableFooter = process.env.ENABLE_MESSAGE_FOOTER_METADATA !== 'false';
 		const modelName = modelUsed || GROUNDING_MODEL_NAME;
 		const extraText = enableFooter
-			? `Model used: ${modelName}_`
+			? `*Model used*: ` + '`' + `${modelName}` + '`' + `/ Grounding by ` + '`' + `${GROUNDING_MODEL_NAME}` + '`'
 			: '';
 
 		return {
