@@ -35,6 +35,7 @@ describe('Alert Grounding Integration', () => {
 		// Mock environment variables
 		process.env = {
 			...originalEnv,
+			WEBHOOK_API_KEY: 'test-key',
 			ENABLE_GEMINI_GROUNDING: 'true',
 			GEMINI_API_KEY: 'test-gemini-key',
 			TELEGRAM_CHAT_ID: '123456789',
@@ -103,7 +104,7 @@ describe('Alert Grounding Integration', () => {
 			const alertText = 'Bitcoin breaks $50,000 mark';
 
 			const response = await request(app)
-				.post('/api/webhook/alert')
+				.post('/api/webhook/alert').set('x-api-key', 'test-key')
 				.send({ text: alertText })
 				.expect(200);
 
@@ -144,7 +145,7 @@ describe('Alert Grounding Integration', () => {
 			const alertText = 'Test alert';
 
 			const response = await request(app)
-				.post('/api/webhook/alert')
+				.post('/api/webhook/alert').set('x-api-key', 'test-key')
 				.send({ text: alertText })
 				.expect(200);
 
@@ -175,7 +176,7 @@ describe('Alert Grounding Integration', () => {
 			const alertText = 'Test alert';
 
 			const response = await request(app)
-				.post('/api/webhook/alert')
+				.post('/api/webhook/alert').set('x-api-key', 'test-key')
 				.send({ text: alertText })
 				.expect(200);
 
@@ -199,7 +200,7 @@ describe('Alert Grounding Integration', () => {
 			const alertText = 'Test alert';
 
 			const response = await request(app)
-				.post('/api/webhook/alert')
+				.post('/api/webhook/alert').set('x-api-key', 'test-key')
 				.send({ text: alertText })
 				.expect(200);
 
@@ -219,7 +220,7 @@ describe('Alert Grounding Integration', () => {
 			const alertText = 'Test alert';
 
 			const response = await request(app)
-				.post('/api/webhook/alert')
+				.post('/api/webhook/alert').set('x-api-key', 'test-key')
 				.send({ text: alertText })
 				.expect(200);
 
