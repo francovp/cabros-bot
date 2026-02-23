@@ -12,7 +12,8 @@ function validateApiKey(req, res, next) {
 		return next();
 	}
 
-	const apiKey = req.headers['x-api-key'];
+	// Get API key from headers (recommended) or query params. Headers is recommended, query params are less secure.
+	const apiKey = req.headers['x-api-key'] || req.query['api-key'];
 
 	if (!apiKey) {
 		return res.status(401).json({ error: 'Unauthorized: Missing API key' });
