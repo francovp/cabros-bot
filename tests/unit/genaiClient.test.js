@@ -1,17 +1,19 @@
-/* global jest, describe, it, expect, beforeEach */
-
 // Mock config before requiring genaiClient
 jest.mock('../../src/services/grounding/config', () => ({
 	GEMINI_API_KEY: 'test-key',
 	GROUNDING_MODEL_NAME: 'test-model',
 	ENABLE_NEWS_MONITOR_TEST_MODE: false,
+	GEMINI_MODEL_NAME: 'test-gemini-model',
+	MODEL_PROVIDER: 'gemini',
 	BRAVE_SEARCH_API_KEY: 'test-brave-key',
 	BRAVE_SEARCH_ENDPOINT: 'https://api.search.brave.com/res/v1/web/search',
 	FORCE_BRAVE_SEARCH: false,
+	AZURE_LLM_MODEL: null,
+	OPENROUTER_MODEL: null,
+	GEMINI_MODEL_NAME_FALLBACK: 'gemini-2.5-flash-lite',
 }));
 
 const genaiClient = require('../../src/services/grounding/genaiClient');
-const config = require('../../src/services/grounding/config');
 
 // Mock fetch globally
 global.fetch = jest.fn();
@@ -21,8 +23,6 @@ describe('GenaiClient robustness', () => {
 		// Reset genAI to avoid using the real SDK in tests
 		genaiClient.genAI = { models: { generateContent: jest.fn().mockResolvedValue({}) } };
 		jest.resetAllMocks();
-		// Reset config mock
-		config.FORCE_BRAVE_SEARCH = false;
 	});
 
 	describe('Google Search (Default)', () => {
@@ -63,16 +63,12 @@ describe('GenaiClient robustness', () => {
 				}),
 			});
 
-			// Mock LLM call for grounding Brave results
-			genaiClient.genAI.models.generateContent.mockResolvedValueOnce({
-				response: { text: () => 'Brave Answer' },
-			});
-
 			const res = await genaiClient.search({ query: 'test' });
 
 			expect(res.results).toHaveLength(1);
 			expect(res.results[0].title).toBe('Brave1');
-			expect(res.searchResultText).toBe('Brave Answer');
+			expect(res.searchResultText).toContain('[1] Title: Brave1');
+			expect(res.searchResultText).toContain('URL: http://b1.com');
 			expect(global.fetch).toHaveBeenCalledTimes(1);
 		});
 
@@ -94,21 +90,36 @@ describe('GenaiClient robustness', () => {
 				}),
 			});
 
-			// Mock LLM call for grounding Brave results
-			genaiClient.genAI.models.generateContent.mockResolvedValueOnce({
-				response: { text: () => 'Brave Answer' },
-			});
-
 			const res = await genaiClient.search({ query: 'test' });
 
 			expect(res.results).toHaveLength(1);
 			expect(res.results[0].title).toBe('Brave1');
+			expect(res.searchResultText).toContain('[1] Title: Brave1');
 		});
 	});
 
 	describe('Forced Brave Search', () => {
 		it('uses Brave Search directly when FORCE_BRAVE_SEARCH is true', async () => {
-			config.FORCE_BRAVE_SEARCH = true;
+			jest.resetModules();
+			jest.doMock('../../src/services/grounding/config', () => ({
+				GEMINI_API_KEY: 'test-key',
+				GROUNDING_MODEL_NAME: 'test-model',
+				ENABLE_NEWS_MONITOR_TEST_MODE: false,
+				GEMINI_MODEL_NAME: 'test-gemini-model',
+				MODEL_PROVIDER: 'gemini',
+				BRAVE_SEARCH_API_KEY: 'test-brave-key',
+				BRAVE_SEARCH_ENDPOINT: 'https://api.search.brave.com/res/v1/web/search',
+				FORCE_BRAVE_SEARCH: true,
+				AZURE_LLM_MODEL: null,
+				OPENROUTER_MODEL: null,
+				GEMINI_MODEL_NAME_FALLBACK: 'gemini-2.5-flash-lite',
+			}));
+
+			const forcedGenaiClient = require('../../src/services/grounding/genaiClient');
+			forcedGenaiClient.genAI = { models: { generateContent: jest.fn() } };
+
+			const googleSpy = jest.spyOn(forcedGenaiClient, '_executeGoogleSearch');
+			const braveSpy = jest.spyOn(forcedGenaiClient, '_executeBraveSearch');
 
 			// Mock Brave Search success
 			global.fetch.mockResolvedValueOnce({
@@ -118,25 +129,14 @@ describe('GenaiClient robustness', () => {
 				}),
 			});
 
-			// Mock LLM call for grounding
-			genaiClient.genAI.models.generateContent.mockResolvedValueOnce({
-				response: { text: () => 'Brave Force Answer' },
-			});
-
-			const res = await genaiClient.search({ query: 'test' });
+			const res = await forcedGenaiClient.search({ query: 'test' });
 
 			expect(res.results[0].title).toBe('BraveForce');
-
-			// Should call fetch
+			expect(res.searchResultText).toContain('[1] Title: BraveForce');
 			expect(global.fetch).toHaveBeenCalledTimes(1);
-
-			// Should call LLM only once (for grounding), not twice (Google + Grounding)
-			// But wait, checking usage of generateContent for Google vs LLM is tricky since it's the same method.
-			// Google search call has tools in config. LLM call does not (or has empty tools/different config).
-			// We can check arguments of the first call.
-
-			const firstCallArgs = genaiClient.genAI.models.generateContent.mock.calls[0][0];
-			expect(firstCallArgs.config.tools).toBeUndefined(); // LLM call doesn't have search tools
+			expect(braveSpy).toHaveBeenCalledTimes(1);
+			expect(googleSpy).not.toHaveBeenCalled();
+			expect(forcedGenaiClient.genAI.models.generateContent).not.toHaveBeenCalled();
 		});
 	});
 
