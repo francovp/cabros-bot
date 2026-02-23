@@ -77,7 +77,7 @@ class GenaiClient {
                 }
         }
 
-        async _executeBraveSearch(query, model, maxResults, textWithCitations) {
+        async _executeBraveSearch(query, maxResults) {
                 console.debug(`[genaiClient] Performing search with query: "${query}" using Brave Search API`);
 
                 // 1. Get search results from Brave
@@ -87,13 +87,9 @@ class GenaiClient {
                 let searchResultText = '';
 
                 if (results.length > 0) {
-                        const contextPrompt = results.map((r, i) => `[${i+1}] Title: ${r.title}\nSource: ${r.sourceDomain}\nURL: ${r.url}\nSnippet: ${r.snippet}`).join('\n\n');
+                        const context = results.map((r, i) => `[${i+1}] Title: ${r.title}\nSource: ${r.sourceDomain}\nURL: ${r.url}\nSnippet: ${r.snippet}`).join('\n\n');
 
-                        const prompt = `Query: ${query}\n\nSearch Results:\n${contextPrompt}\n\nInstructions: Answer the query based *only* on the provided search results. If the search results are insufficient, state that. ${textWithCitations ? 'Cite your sources using [1], [2], etc.' : ''}`;
-
-                        console.debug('[genaiClient] Generating grounded text using LLM with Brave search results');
-                        const llmResponse = await this.llmCall({ prompt, opts: { model } });
-                        searchResultText = llmResponse.text;
+                        searchResultText = context
                 } else {
                         searchResultText = "No search results found.";
                 }
@@ -196,8 +192,8 @@ class GenaiClient {
 
                 // Logic: Force Brave -> Google -> Fallback Brave
                 // Access FORCE_BRAVE_SEARCH dynamically from config object
-                if (config.FORCE_BRAVE_SEARCH) {
-                        return this._executeBraveSearch(query, model, maxResults, textWithCitations);
+                if (FORCE_BRAVE_SEARCH) {
+                        return this._executeBraveSearch(query, maxResults);
                 }
 
                 try {
@@ -211,7 +207,7 @@ class GenaiClient {
                 }
 
                 // Fallback to Brave
-                return this._executeBraveSearch(query, model, maxResults, textWithCitations);
+                return this._executeBraveSearch(query, maxResults);
         }
 
         async llmCall({ prompt, context = {}, opts = {} }) {
