@@ -8,6 +8,7 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 - 🚀 **Webhook API**: HTTP endpoint for receiving alerts from external services (e.g., TradingView)
 - 📰 **News Monitoring**: Analyze financial news and market sentiment for crypto and stock symbols with AI-powered event detection
 - 🧠 **AI Enrichment**: Optional enhancement of alerts using Google Gemini API (grounding) and optional secondary LLM (Azure AI)
+- 📊 **TradingView MCP Enrichment**: Optional real-time technical analysis for webhook signals like `BTCUSDT(240) pasó a señal de VENTA`
 - 💎 **Event Detection**: Identify significant trading events (price surges, public figure mentions, regulatory announcements)
 - 💰 **Market Context**: Optional Binance integration for real-time crypto prices with Gemini fallback
 - 🎯 **Smart Deduplication**: In-memory cache prevents duplicate alerts for the same event category within 6-hour TTL
@@ -40,6 +41,16 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 
 - `ENABLE_GEMINI_GROUNDING` - Enable Gemini-based alert enrichment (`true` or `false`)
 - `GEMINI_API_KEY` - Google API key for Gemini access
+
+#### TradingView MCP Enrichment
+
+- `ENABLE_TRADINGVIEW_MCP_ENRICHMENT` - Enable TradingView MCP enrichment for TradingView-like webhook messages (`true` or `false`, default: `false`)
+- `TRADINGVIEW_MCP_URL` - MCP server HTTP endpoint (default: `http://localhost:8000/mcp`)
+- `TRADINGVIEW_MCP_TIMEOUT_MS` - Timeout per MCP request in milliseconds (default: `12000`)
+- `TRADINGVIEW_MCP_MAX_RETRIES` - Retries for MCP failures (default: `3`)
+- `TRADINGVIEW_MCP_DEFAULT_EXCHANGE` - Default exchange when not present in signal (default: `BINANCE`)
+- `TRADINGVIEW_MCP_DEFAULT_TIMEFRAME` - Default timeframe fallback (default: `1h`)
+- Runtime gate: TradingView MCP data is only used when webhook requests include `?useTradingViewData=true`
 
 #### Admin Notifications
 
@@ -96,6 +107,7 @@ Then edit `.env` with your specific values. See `.env.example` for complete docu
 - **Required**: Core bot token and chat IDs
 - **Optional: WhatsApp**: GreenAPI integration for multi-channel alerts
 - **Optional: AI Grounding**: Gemini API for alert enrichment
+- **Optional: TradingView MCP**: Real-time technical enrichment for webhook signals
 - **Optional: Admin Notifications**: Separate chat for deployment alerts
 - **Optional: Server Configuration**: Port, Render.com flags
 - **Optional: News Monitoring**: Feature flags and thresholds
@@ -131,7 +143,7 @@ Health check endpoint.
 
 The webhook alert system can optionally enrich alerts with verified sources and market context using Google Gemini API with GoogleSearch grounding.
 
-### How It Works
+### MCP Flow
 
 When `ENABLE_GEMINI_GROUNDING=true`:
 
@@ -155,11 +167,33 @@ When `ENABLE_GEMINI_GROUNDING=true`:
 - `ENABLE_GEMINI_GROUNDING` - Enable/disable enrichment (default: `false`)
 - `GEMINI_API_KEY` - Google API key with Generative AI enabled
 
+## TradingView Signal Enrichment with MCP
+
+When `ENABLE_TRADINGVIEW_MCP_ENRICHMENT=true`, webhook alerts matching TradingView-style patterns (for example `BTCUSDT(240) pasó a señal de VENTA`) are enriched with real technical data from the TradingView MCP server **only if the webhook request includes `?useTradingViewData=true`**.
+
+### How It Works
+
+1. Webhook receives alert text and the request includes `useTradingViewData=true`.
+2. System detects TradingView signal pattern (`SYMBOL(TF)` + side `VENTA/COMPRA` or `SELL/BUY`).
+3. If TradingView pattern is detected, it queries `coin_analysis` via MCP and uses that output as an **additional real-time technical source**.
+4. Gemini/Brave grounding still runs when enabled, and the final `alert.enriched` merges grounding context + MCP technical data.
+5. If either provider fails, the flow degrades gracefully to the other provider (or original text if none succeed).
+
+### Timeframe Mapping
+
+- `5 -> 5m`
+- `15 -> 15m`
+- `60 -> 1h`
+- `240 -> 4h`
+- `D/1D -> 1D`
+- `W/1W -> 1W`
+- `M/1M -> 1M`
+
 ### Example Enrichment Flow
 
 **Request:**
 ```bash
-POST /api/webhook/alert
+POST /api/webhook/alert?useTradingViewData=true
 Content-Type: application/json
 
 {
@@ -292,6 +326,8 @@ GET /api/news-monitor?crypto=BTCUSDT,ETHUSD&stocks=NVDA,MSFT
 ### POST /api/webhook/alert
 
 Send alert via webhook. Accepts either JSON or plain text.
+
+Optional query param: `useTradingViewData=true` enables TradingView MCP technical enrichment for this request (requires `ENABLE_TRADINGVIEW_MCP_ENRICHMENT=true`).
 
 **Request (JSON):**
 ```json
