@@ -2,6 +2,7 @@
 
 const { enrichAlert } = require('../../src/controllers/webhooks/handlers/alert/grounding');
 const { groundAlert } = require('../../src/services/grounding/grounding');
+const { GROUNDING_MODEL_NAME } = require('../../src/services/grounding/config');
 const { validateAlert } = require('../../src/lib/validation');
 const { tradingViewMcpService } = require('../../src/services/tradingview/TradingViewMcpService');
 
@@ -162,7 +163,7 @@ describe('Alert Handler', () => {
 		expect(result.technical_levels.resistances).toEqual(expect.arrayContaining(['68000', '69000']));
 		expect(result.sources).toEqual([{ title: 'Source 1', url: 'https://example.com' }]);
 		expect(result.extraText).toContain('*Model used*: `gemini-2.5-flash`');
-		expect(result.extraText).toContain('*Grounding*: `brave-search`, `tradingview-mcp`');
+		expect(result.extraText).toContain(`*Grounding*: \`${GROUNDING_MODEL_NAME}\`, \`tradingview-mcp\``);
 		expect((result.extraText.match(/\*Model used\*:/g) || []).length).toBe(1);
 
 		process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
