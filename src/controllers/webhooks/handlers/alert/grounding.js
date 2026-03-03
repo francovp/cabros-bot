@@ -40,7 +40,7 @@ function mergeEnrichmentData(text, geminiEnriched, mcpEnriched) {
 	const mcpLevels = mcp.technical_levels || { supports: [], resistances: [] };
 
 	const geminiScore = typeof gemini.sentiment_score === 'number' ? gemini.sentiment_score : null;
-	const mcpScore = typeof mcp.sentiment_score === 'number' ? Math.abs(mcp.sentiment_score) : null;
+	const mcpScore = typeof mcp.sentiment_score === 'number' ? mcp.sentiment_score : null;
 
 	const geminiBackticked = extractBacktickedValues(gemini.extraText);
 	const modelName = geminiBackticked[0] || GROUNDING_MODEL_NAME;

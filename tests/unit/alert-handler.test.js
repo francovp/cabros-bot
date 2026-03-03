@@ -169,6 +169,38 @@ describe('Alert Handler', () => {
 		process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
 	});
 
+	it('should preserve signed MCP sentiment score when Gemini score is missing', async () => {
+		const previousGeminiFlag = process.env.ENABLE_GEMINI_GROUNDING;
+		process.env.ENABLE_GEMINI_GROUNDING = 'true';
+
+		tradingViewMcpService.isEnabled.mockReturnValue(true);
+		tradingViewMcpService.enrichFromAlertText.mockResolvedValue({
+			original_text: 'BTCUSDT(240) pasó a señal de VENTA',
+			sentiment: 'BEARISH',
+			sentiment_score: -0.6,
+			insights: ['MCP bearish insight'],
+			technical_levels: { supports: ['65000'], resistances: ['68000'] },
+			sources: [],
+			truncated: false,
+		});
+
+		groundAlert.mockResolvedValue({
+			insights: ['Gemini insight without score'],
+			technical_levels: { supports: ['64000'], resistances: ['69000'] },
+			sources: [{ title: 'Source 1', url: 'https://example.com' }],
+			truncated: false,
+			modelUsed: 'gemini-2.5-flash',
+		});
+
+		const result = await enrichAlert({ text: 'BTCUSDT(240) pasó a señal de VENTA' });
+
+		expect(result.sentiment).toBe('BEARISH');
+		expect(result.sentiment_score).toBe(-0.6);
+		expect(result.insights).toEqual(expect.arrayContaining(['Gemini insight without score', 'MCP bearish insight']));
+
+		process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
+	});
+
 	it('should fallback to MCP enrichment when Gemini fails', async () => {
 		const previousGeminiFlag = process.env.ENABLE_GEMINI_GROUNDING;
 		process.env.ENABLE_GEMINI_GROUNDING = 'true';
