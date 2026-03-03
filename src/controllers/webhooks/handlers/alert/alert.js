@@ -70,21 +70,25 @@ function postAlert(bot) {
 
 			let messageText;
 			alert = { text };
+			const isGeminiEnabled = process.env.ENABLE_GEMINI_GROUNDING === 'true';
+			const isTradingViewMcpEnabled = process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT === 'true';
 
-			// Only attempt grounding if enabled (check env at runtime so tests can toggle)
-			if (process.env.ENABLE_GEMINI_GROUNDING === 'true') {
+			// Attempt enrichment if at least one provider is enabled (runtime env for test toggling)
+			if (isGeminiEnabled || isTradingViewMcpEnabled) {
 				try {
-					console.debug('Starting grounding process');
+					console.debug('Starting alert enrichment process');
 
 					const enrichedAlert = await enrichAlert({ text }, { tokenUsage });
 					if (enrichedAlert && typeof enrichedAlert === 'object') {
 						enrichedAlert.tokenUsage = tokenUsage.toJSON();
+						enriched = true;
+						alert.enriched = enrichedAlert;
+						console.debug('[Alert] Enrichment completed, sources:', (enrichedAlert.sources && enrichedAlert.sources.length) || 0);
+					} else {
+						console.debug('[Alert] Enrichment skipped: alert text did not match enabled providers');
 					}
-					enriched = true;
-					alert.enriched = enrichedAlert;
-					console.debug('[Alert] Grounding completed, citations:', (enrichedAlert.citations && enrichedAlert.citations.length) || 0);
 				} catch (error) {
-					console.warn('[Alert] Grounding failed, using original text:', error.message);
+					console.warn('[Alert] Enrichment failed, using original text:', error.message);
 				}
 			}
 
@@ -110,7 +114,7 @@ function postAlert(bot) {
 				alert: {
 					textLength: alertText ? alertText.length : 0,
 					hasEnrichment: !!(alert && alert.enriched),
-					enrichedSource: alert && alert.enriched ? 'gemini-grounding' : undefined,
+					enrichedSource: alert && alert.enriched && alert.enriched.extraText && alert.enriched.extraText.includes('tradingview-mcp') ? 'tradingview-mcp' : (alert && alert.enriched ? 'gemini-grounding' : undefined),
 					truncated: false,
 				},
 			});
