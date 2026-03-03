@@ -117,7 +117,7 @@ describe('Alert Handler', () => {
 		tradingViewMcpService.isEnabled.mockReturnValue(true);
 		tradingViewMcpService.enrichFromAlertText.mockResolvedValue(mcpEnriched);
 
-		const result = await enrichAlert({ text: 'BTCUSDT(240) pasó a señal de VENTA' });
+		const result = await enrichAlert({ text: 'BTCUSDT(240) pasó a señal de VENTA' }, { useTradingViewData: true });
 
 		expect(result).toEqual(mcpEnriched);
 		expect(tradingViewMcpService.enrichFromAlertText).toHaveBeenCalled();
@@ -152,7 +152,7 @@ describe('Alert Handler', () => {
 			modelUsed: 'gemini-2.5-flash',
 		});
 
-		const result = await enrichAlert({ text: 'BTCUSDT(240) pasó a señal de VENTA' });
+		const result = await enrichAlert({ text: 'BTCUSDT(240) pasó a señal de VENTA' }, { useTradingViewData: true });
 
 		expect(tradingViewMcpService.enrichFromAlertText).toHaveBeenCalled();
 		expect(groundAlert).toHaveBeenCalled();
@@ -192,7 +192,7 @@ describe('Alert Handler', () => {
 			modelUsed: 'gemini-2.5-flash',
 		});
 
-		const result = await enrichAlert({ text: 'BTCUSDT(240) pasó a señal de VENTA' });
+		const result = await enrichAlert({ text: 'BTCUSDT(240) pasó a señal de VENTA' }, { useTradingViewData: true });
 
 		expect(result.sentiment).toBe('BEARISH');
 		expect(result.sentiment_score).toBe(-0.6);
@@ -219,11 +219,35 @@ describe('Alert Handler', () => {
 		tradingViewMcpService.enrichFromAlertText.mockResolvedValue(mcpEnriched);
 		groundAlert.mockRejectedValue(new Error('Grounding API unavailable'));
 
-		const result = await enrichAlert({ text: 'BTCUSDT(240) pasó a señal de VENTA' });
+		const result = await enrichAlert({ text: 'BTCUSDT(240) pasó a señal de VENTA' }, { useTradingViewData: true });
 
 		expect(result).toEqual(mcpEnriched);
 		expect(tradingViewMcpService.enrichFromAlertText).toHaveBeenCalled();
 		expect(groundAlert).toHaveBeenCalled();
+
+		process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
+	});
+
+	it('should ignore TradingView MCP enrichment when useTradingViewData is not true', async () => {
+		const previousGeminiFlag = process.env.ENABLE_GEMINI_GROUNDING;
+		process.env.ENABLE_GEMINI_GROUNDING = 'false';
+
+		tradingViewMcpService.isEnabled.mockReturnValue(true);
+		tradingViewMcpService.enrichFromAlertText.mockResolvedValue({
+			original_text: 'BTCUSDT(240) pasó a señal de VENTA',
+			sentiment: 'BEARISH',
+			sentiment_score: -0.7,
+			insights: ['MCP insight'],
+			technical_levels: { supports: ['65000'], resistances: ['68000'] },
+			sources: [],
+			truncated: false,
+		});
+
+		const result = await enrichAlert({ text: 'BTCUSDT(240) pasó a señal de VENTA' });
+
+		expect(result).toBeNull();
+		expect(tradingViewMcpService.enrichFromAlertText).not.toHaveBeenCalled();
+		expect(groundAlert).not.toHaveBeenCalled();
 
 		process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
 	});

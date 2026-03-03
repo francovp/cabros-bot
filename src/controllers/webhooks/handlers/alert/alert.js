@@ -52,6 +52,7 @@ function getNotificationManager() {
 function postAlert(bot) {
 	return async (req, res) => {
 		const { body } = req;
+		const useTradingViewData = req.query && (req.query.useTradingViewData === true || req.query.useTradingViewData === 'true');
 		// Declare at top of try scope so they're accessible in catch
 		let alertText = '';
 		let alert = null;
@@ -71,14 +72,14 @@ function postAlert(bot) {
 			let messageText;
 			alert = { text };
 			const isGeminiEnabled = process.env.ENABLE_GEMINI_GROUNDING === 'true';
-			const isTradingViewMcpEnabled = process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT === 'true';
+			const isTradingViewMcpEnabled = process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT === 'true' && useTradingViewData;
 
 			// Attempt enrichment if at least one provider is enabled (runtime env for test toggling)
 			if (isGeminiEnabled || isTradingViewMcpEnabled) {
 				try {
 					console.debug('Starting alert enrichment process');
 
-					const enrichedAlert = await enrichAlert({ text }, { tokenUsage });
+					const enrichedAlert = await enrichAlert({ text }, { tokenUsage, useTradingViewData });
 					if (enrichedAlert && typeof enrichedAlert === 'object') {
 						enrichedAlert.tokenUsage = tokenUsage.toJSON();
 						enriched = true;

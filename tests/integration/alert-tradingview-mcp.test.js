@@ -65,7 +65,7 @@ describe('Alert TradingView MCP Integration', () => {
 		});
 
 		const response = await request(app)
-			.post('/api/webhook/alert')
+			.post('/api/webhook/alert?useTradingViewData=true')
 			.set('x-api-key', 'test-key')
 			.send({ text: 'BTCUSDT(240) pasó a señal de VENTA' })
 			.expect(200);
@@ -84,13 +84,37 @@ describe('Alert TradingView MCP Integration', () => {
 		tradingViewMcpService.enrichFromAlertText.mockResolvedValue(null);
 
 		const response = await request(app)
-			.post('/api/webhook/alert')
+			.post('/api/webhook/alert?useTradingViewData=true')
 			.set('x-api-key', 'test-key')
 			.send({ text: 'Mensaje genérico sin patrón' })
 			.expect(200);
 
 		expect(response.body.success).toBe(true);
 		expect(response.body.enriched).toBe(false);
+		expect(mockTelegramSendMessage).toHaveBeenCalledTimes(1);
+	});
+
+	it('does not use TradingView MCP when query param is missing', async () => {
+		tradingViewMcpService.enrichFromAlertText.mockResolvedValue({
+			original_text: 'BTCUSDT(240) pasó a señal de VENTA',
+			sentiment: 'BEARISH',
+			sentiment_score: -0.7,
+			insights: ['Señal detectada'],
+			technical_levels: { supports: ['65,664.12'], resistances: ['69,468.88'] },
+			sources: [],
+			truncated: false,
+			extraText: '*Model used*: `tradingview-mcp`',
+		});
+
+		const response = await request(app)
+			.post('/api/webhook/alert')
+			.set('x-api-key', 'test-key')
+			.send({ text: 'BTCUSDT(240) pasó a señal de VENTA' })
+			.expect(200);
+
+		expect(response.body.success).toBe(true);
+		expect(response.body.enriched).toBe(false);
+		expect(tradingViewMcpService.enrichFromAlertText).not.toHaveBeenCalled();
 		expect(mockTelegramSendMessage).toHaveBeenCalledTimes(1);
 	});
 });

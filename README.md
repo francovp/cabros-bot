@@ -50,6 +50,7 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 - `TRADINGVIEW_MCP_MAX_RETRIES` - Retries for MCP failures (default: `3`)
 - `TRADINGVIEW_MCP_DEFAULT_EXCHANGE` - Default exchange when not present in signal (default: `BINANCE`)
 - `TRADINGVIEW_MCP_DEFAULT_TIMEFRAME` - Default timeframe fallback (default: `1h`)
+- Runtime gate: TradingView MCP data is only used when webhook requests include `?useTradingViewData=true`
 
 #### Admin Notifications
 
@@ -168,11 +169,11 @@ When `ENABLE_GEMINI_GROUNDING=true`:
 
 ## TradingView Signal Enrichment with MCP
 
-When `ENABLE_TRADINGVIEW_MCP_ENRICHMENT=true`, webhook alerts matching TradingView-style patterns (for example `BTCUSDT(240) pasó a señal de VENTA`) are enriched with real technical data from the TradingView MCP server.
+When `ENABLE_TRADINGVIEW_MCP_ENRICHMENT=true`, webhook alerts matching TradingView-style patterns (for example `BTCUSDT(240) pasó a señal de VENTA`) are enriched with real technical data from the TradingView MCP server **only if the webhook request includes `?useTradingViewData=true`**.
 
 ### How It Works
 
-1. Webhook receives alert text.
+1. Webhook receives alert text and the request includes `useTradingViewData=true`.
 2. System detects TradingView signal pattern (`SYMBOL(TF)` + side `VENTA/COMPRA` or `SELL/BUY`).
 3. If TradingView pattern is detected, it queries `coin_analysis` via MCP and uses that output as an **additional real-time technical source**.
 4. Gemini/Brave grounding still runs when enabled, and the final `alert.enriched` merges grounding context + MCP technical data.
@@ -192,7 +193,7 @@ When `ENABLE_TRADINGVIEW_MCP_ENRICHMENT=true`, webhook alerts matching TradingVi
 
 **Request:**
 ```bash
-POST /api/webhook/alert
+POST /api/webhook/alert?useTradingViewData=true
 Content-Type: application/json
 
 {
@@ -325,6 +326,8 @@ GET /api/news-monitor?crypto=BTCUSDT,ETHUSD&stocks=NVDA,MSFT
 ### POST /api/webhook/alert
 
 Send alert via webhook. Accepts either JSON or plain text.
+
+Optional query param: `useTradingViewData=true` enables TradingView MCP technical enrichment for this request (requires `ENABLE_TRADINGVIEW_MCP_ENRICHMENT=true`).
 
 **Request (JSON):**
 ```json

@@ -150,7 +150,8 @@ async function enrichAlert(alert, options = {}) {
 	// validateAlert may return either a string (when mocked in tests) or an object { text, metadata }
 	const text = (typeof validated === 'string') ? validated : (validated && validated.text) ? validated.text : inputText;
 	const isGeminiEnabled = process.env.ENABLE_GEMINI_GROUNDING === 'true';
-	const isMcpEnabled = tradingViewMcpService.isEnabled();
+	const shouldUseTradingViewData = options.useTradingViewData === true;
+	const isMcpEnabled = shouldUseTradingViewData && tradingViewMcpService.isEnabled();
 
 	if (!isGeminiEnabled && !isMcpEnabled) {
 		return null;
