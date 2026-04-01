@@ -59,10 +59,6 @@ describe('Alert Grounding Integration', () => {
 				sentiment: 'BULLISH',
 				sentiment_score: 0.9,
 				insights: ['Insight 1', 'Insight 2'],
-				technical_levels: {
-					supports: ['80000'],
-					resistances: ['85000'],
-				},
 			}),
 			citations: mockSearchResults,
 		});
@@ -128,8 +124,7 @@ describe('Alert Grounding Integration', () => {
 				expect(messageText).toContain('Sentiment: BULLISH');
 				expect(messageText).toContain('*Key Insights*');
 				expect(messageText).toContain('Insight 1');
-				expect(messageText).toContain('*Technical Levels*');
-				expect(messageText).toContain('Supports: 80000');
+				expect(messageText).not.toContain('*Technical Levels*');
 				expect(messageText).toContain('*Sources*');
 				expect(messageText).toContain('[Test Result 1](https://test1.com)');
 			}

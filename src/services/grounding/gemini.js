@@ -269,7 +269,7 @@ function parseNewsAnalysisResponse(response) {
 }
 
 /**
- * Generates a structured enriched alert with sentiment, insights, and technical levels
+ * Generates a structured enriched alert with sentiment and key insights
  * @param {object} params
  * @param {string} params.text - Alert text
  * @param {Array<import('./types').SearchResult>} params.searchResults - Grounding context
@@ -290,7 +290,6 @@ async function generateEnrichedAlert({ text, searchResults = [], searchResultTex
 			sentiment: 'NEUTRAL',
 			sentiment_score: 0.5,
 			insights: [],
-			technical_levels: { supports: [], resistances: [] },
 		};
 	}
 
@@ -312,7 +311,7 @@ async function generateEnrichedAlert({ text, searchResults = [], searchResultTex
 	const fullSystemPrompt = `${systemPrompt}\n\n${langDirective}`;
 	const context = `${text}${contextPrompt}${contextSnippet}`;
 	console.debug('[Gemini] Generating enriched alert with context:', context);
-	const userPrompt = `Analyze this alert and provide structured insights, sentiment, and technical levels based on the context.
+	const userPrompt = `Analyze this alert and provide structured insights and sentiment based on the context.
 
 Alert: ${context}
 
@@ -322,11 +321,7 @@ Instructions:
 {
   "sentiment": "BULLISH" | "BEARISH" | "NEUTRAL",
   "sentiment_score": number (0.0 to 1.0),
-  "insights": string[] (max 3 key points),
-  "technical_levels": {
-    "supports": string[],
-    "resistances": string[]
-  }
+  "insights": string[] (max 3 key points)
 }
 `;
 
@@ -375,10 +370,6 @@ function parseEnrichedAlertResponse(response) {
 			sentiment: parsed.sentiment,
 			sentiment_score: Math.max(0, Math.min(1, parsed.sentiment_score || 0.5)),
 			insights: Array.isArray(parsed.insights) ? parsed.insights.slice(0, 3) : [],
-			technical_levels: {
-				supports: Array.isArray(parsed?.technical_levels?.supports) ? parsed.technical_levels.supports : [],
-				resistances: Array.isArray(parsed?.technical_levels?.resistances) ? parsed.technical_levels.resistances : [],
-			},
 		};
 	} catch (error) {
 		console.warn(`[Gemini] Response parsing failed, using safe defaults: ${error.message}`);
@@ -386,7 +377,6 @@ function parseEnrichedAlertResponse(response) {
 			sentiment: 'NEUTRAL',
 			sentiment_score: 0.5,
 			insights: [],
-			technical_levels: { supports: [], resistances: [] },
 		};
 	}
 }
