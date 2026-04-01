@@ -32,12 +32,27 @@ function extractBacktickedValues(text = '') {
 	return matches.map(match => match[1]).filter(Boolean);
 }
 
+function buildTechnicalLevels(levels = {}) {
+	const supports = mergeUnique(levels.supports || [], [], 6);
+	const resistances = mergeUnique(levels.resistances || [], [], 6);
+
+	if (supports.length === 0 && resistances.length === 0) {
+		return undefined;
+	}
+
+	return { supports, resistances };
+}
+
 function mergeEnrichmentData(text, geminiEnriched, mcpEnriched) {
 	const gemini = geminiEnriched || {};
 	const mcp = mcpEnriched || {};
 
 	const geminiLevels = gemini.technical_levels || { supports: [], resistances: [] };
 	const mcpLevels = mcp.technical_levels || { supports: [], resistances: [] };
+	const technicalLevels = buildTechnicalLevels({
+		supports: mergeUnique(geminiLevels.supports || [], mcpLevels.supports || []),
+		resistances: mergeUnique(geminiLevels.resistances || [], mcpLevels.resistances || []),
+	});
 
 	const geminiScore = typeof gemini.sentiment_score === 'number' ? gemini.sentiment_score : null;
 	const mcpScore = typeof mcp.sentiment_score === 'number' ? mcp.sentiment_score : null;
@@ -53,10 +68,7 @@ function mergeEnrichmentData(text, geminiEnriched, mcpEnriched) {
 		sentiment: gemini.sentiment || mcp.sentiment || 'NEUTRAL',
 		sentiment_score: geminiScore !== null ? geminiScore : (mcpScore !== null ? mcpScore : 0),
 		insights: mergeUnique(gemini.insights || [], mcp.insights || []),
-		technical_levels: {
-			supports: mergeUnique(geminiLevels.supports || [], mcpLevels.supports || []),
-			resistances: mergeUnique(geminiLevels.resistances || [], mcpLevels.resistances || []),
-		},
+		...(technicalLevels ? { technical_levels: technicalLevels } : {}),
 		sources: Array.isArray(gemini.sources) ? gemini.sources : [],
 		truncated: !!(gemini.truncated || mcp.truncated),
 		extraText,
@@ -64,7 +76,7 @@ function mergeEnrichmentData(text, geminiEnriched, mcpEnriched) {
 }
 
 async function enrichWithGemini(text, tokenUsage) {
-	const { sentiment, sentiment_score, insights, technical_levels, sources, truncated, modelUsed } = await groundAlert({
+	const { sentiment, sentiment_score, insights, sources, truncated, modelUsed } = await groundAlert({
 		text,
 		options: {
 			preserveLanguage: true,
@@ -84,7 +96,6 @@ async function enrichWithGemini(text, tokenUsage) {
 		sentiment,
 		sentiment_score,
 		insights,
-		technical_levels,
 		sources,
 		truncated,
 		extraText,

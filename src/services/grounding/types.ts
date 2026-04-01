@@ -21,7 +21,7 @@ export interface EnrichedAlert {
   sentiment: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
   sentiment_score: number;
   insights: string[];
-  technical_levels: TechnicalLevels;
+  technical_levels?: TechnicalLevels;
   sources: Source[];
 }
 

@@ -41,10 +41,6 @@ describe('Gemini Service', () => {
 			sentiment: 'BULLISH',
 			sentiment_score: 0.9,
 			insights: ['Insight 1', 'Insight 2'],
-			technical_levels: {
-				supports: ['80000'],
-				resistances: ['85000'],
-			},
 		};
 
 		it('should generate enriched alert with valid structure', async () => {
@@ -61,7 +57,7 @@ describe('Gemini Service', () => {
 			expect(result.sentiment).toBe('BULLISH');
 			expect(result.sentiment_score).toBe(0.9);
 			expect(result.insights).toHaveLength(2);
-			expect(result.technical_levels.supports).toContain('80000');
+			expect(result).not.toHaveProperty('technical_levels');
 			// sources are not returned by generateEnrichedAlert
 		});
 

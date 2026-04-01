@@ -32,7 +32,6 @@ describe('Grounding Service', () => {
 				sentiment: 'BULLISH',
 				sentiment_score: 0.85,
 				insights: ['Test summary'],
-				technical_levels: { supports: [], resistances: [] },
 				sources: searchResults,
 			});
 
@@ -63,7 +62,6 @@ describe('Grounding Service', () => {
 				sentiment: 'NEUTRAL',
 				sentiment_score: 0.5,
 				insights: ['Summary of truncated text'],
-				technical_levels: { supports: [], resistances: [] },
 				sources: [],
 			});
 
@@ -104,7 +102,6 @@ describe('Grounding Service', () => {
 				sentiment: 'NEUTRAL',
 				sentiment_score: 0.5,
 				insights: [],
-				technical_levels: { supports: [], resistances: [] },
 				sources: [],
 			});
 
@@ -112,7 +109,7 @@ describe('Grounding Service', () => {
 
 			expect(generateEnrichedAlert).toHaveBeenCalledWith(expect.objectContaining({
 				options: expect.objectContaining({
-					systemPrompt: expect.stringContaining('structured insights, sentiment, and technical levels'),
+					systemPrompt: expect.stringContaining('structured insights'),
 				}),
 			}));
 		});
@@ -123,7 +120,6 @@ describe('Grounding Service', () => {
 				sentiment: 'NEUTRAL',
 				sentiment_score: 0.5,
 				insights: [],
-				technical_levels: { supports: [], resistances: [] },
 				sources: [],
 			});
 

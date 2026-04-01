@@ -69,6 +69,7 @@ What an AI code change should preserve
 **Linting and Commits During Implementation**:
 - **Ignore linter issues during implementation**: Focus on feature functionality first; linter errors will be fixed in a dedicated final pass
 - **Make commits with `--no-verify`**: Use `git commit --no-verify -m "message"` to bypass pre-commit hooks during development (prevents blocking on linter/test failures mid-implementation)
+- **Do not push to remote from the agent**: Branch creation and local commits are allowed, but `git push` must be done manually by the user.
 - **Final cleanup phase**: After all user stories are complete DO NOT run linting and formatting, it will be done manually
 - **Rationale**: This approach maximizes development velocity during active feature work and prevents context-switching between implementation and linting
 
