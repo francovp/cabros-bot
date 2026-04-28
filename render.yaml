@@ -1,0 +1,24 @@
+previewsEnabled: true
+services:
+- type: web
+  plan: free
+  region: frankfurt
+  name: cabros-crypto-bot-telegram-iac
+  runtime: node
+  repo: https://github.com/francovp/cabros-crypto-bot-telegram
+  branch: master
+  buildCommand: npm install
+  startCommand: npm start
+  healthCheckPath: /healthcheck
+  pullRequestPreviewsEnabled: true
+  envVars:
+  - key: TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID
+    sync: false
+  - key: BOT_TOKEN
+    sync: false
+  - key: TELEGRAM_CHAT_ID
+    sync: false
+  - key: ENABLE_TELEGRAM_BOT
+    value: true
+    previewValue: false
+version: "1"

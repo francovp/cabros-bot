@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "skills": {
+    "answeroverflow": {
+      "version": "1.0.2",
+      "installedAt": 1771125217884
+    },
+    "tavily-search": {
+      "version": "1.0.0",
+      "installedAt": 1771125391871
+    },
+    "api-gateway": {
+      "version": "1.0.30",
+      "installedAt": 1771125512507
+    },
+    "brave-api-search": {
+      "version": "1.0.0",
+      "installedAt": 1771125851124
+    },
+    "tradingview-screener": {
+      "version": "1.1.0",
+      "installedAt": 1774837150048
+    },
+    "steam": {
+      "version": "0.4.0",
+      "installedAt": 1776649863930
+    },
+    "steam-games-updates": {
+      "version": "1.0.0",
+      "installedAt": 1776649866546
+    },
+    "steam-gaming-companion": {
+      "version": "1.0.0",
+      "installedAt": 1776649869210
+    },
+    "openclaw-cron-setup": {
+      "version": "1.0.0",
+      "installedAt": 1777263040275
+    }
+  }
+}

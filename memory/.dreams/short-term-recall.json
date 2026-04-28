@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "updatedAt": "2026-04-20T03:52:21.953Z",
+  "entries": {
+    "memory:memory/2026-03-23.md:1:5": {
+      "key": "memory:memory/2026-03-23.md:1:5",
+      "path": "memory/2026-03-23.md",
+      "startLine": 1,
+      "endLine": 5,
+      "source": "memory",
+      "snippet": "# 2026-03-23 - [10:18] Franco asked \"Estás vivo?\". I'm alive and kicking. - [10:25] Franco asked \"Y ahora?\". Ready for action.",
+      "recallCount": 1,
+      "dailyCount": 0,
+      "groundedCount": 0,
+      "totalScore": 0.4448156088590622,
+      "maxScore": 0.4448156088590622,
+      "firstRecalledAt": "2026-04-17T18:17:09.998Z",
+      "lastRecalledAt": "2026-04-17T18:17:09.998Z",
+      "queryHashes": [
+        "72c6e7dc7efb"
+      ],
+      "recallDays": [
+        "2026-04-17"
+      ],
+      "conceptTags": [
+        "franco",
+        "asked",
+        "estás",
+        "vivo",
+        "i'm",
+        "alive",
+        "kicking",
+        "ahora"
+      ]
+    },
+    "memory:memory/2024-03-05.md:1:1": {
+      "key": "memory:memory/2024-03-05.md:1:1",
+      "path": "memory/2024-03-05.md",
+      "startLine": 1,
+      "endLine": 1,
+      "source": "memory",
+      "snippet": "**User**: Why you do...",
+      "recallCount": 1,
+      "dailyCount": 0,
+      "groundedCount": 0,
+      "totalScore": 0.4227784931659698,
+      "maxScore": 0.4227784931659698,
+      "firstRecalledAt": "2026-04-20T03:52:21.953Z",
+      "lastRecalledAt": "2026-04-20T03:52:21.953Z",
+      "queryHashes": [
+        "0f9e2a035e5d"
+      ],
+      "recallDays": [
+        "2026-04-20"
+      ],
+      "conceptTags": [
+        "user",
+        "why",
+        "you"
+      ]
+    }
+  }
+}

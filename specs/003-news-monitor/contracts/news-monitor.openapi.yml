@@ -1,0 +1,690 @@
+openapi: 3.0.3
+info:
+  title: News Monitor API
+  description: |
+    News Monitoring with Sentiment Analysis and Alert Distribution API.
+    
+    This endpoint analyzes news and market sentiment for crypto and stock symbols using Gemini GoogleSearch grounding service. It detects significant market events, assigns confidence scores, and sends filtered alerts to Telegram and WhatsApp channels.
+    
+    **Features:**
+    - Parallel analysis of multiple symbols (crypto + stocks)
+    - Event detection: price movements, public figure mentions, regulatory announcements
+    - Intelligent deduplication (6hr cache TTL per symbol + event category)
+    - Optional Binance integration for precise crypto prices
+    - Optional secondary LLM enrichment for refined confidence scores
+    - Multi-channel notification delivery (Telegram + WhatsApp)
+  version: 1.0.0
+  contact:
+    name: Cabros Bot Team
+    email: support@example.com
+
+servers:
+  - url: https://cabros-bot.onrender.com/api
+    description: Production server
+  - url: http://localhost:3000/api
+    description: Local development server
+
+tags:
+  - name: News Monitor
+    description: News and sentiment analysis for financial symbols
+
+paths:
+  /news-monitor:
+    post:
+      tags:
+        - News Monitor
+      summary: Analyze news and sentiment for financial symbols
+      description: |
+        Analyzes news and market sentiment for provided crypto and stock symbols. Returns per-symbol results with detected alerts, confidence scores, and notification delivery outcomes.
+        
+        **Request behavior:**
+        - If `crypto` or `stocks` arrays are omitted, defaults to `NEWS_SYMBOLS_CRYPTO` and `NEWS_SYMBOLS_STOCKS` environment variables
+        - Requester is responsible for correct symbol classification (crypto vs stock)
+        - System analyzes symbols in parallel with 30s timeout per symbol
+        - Results include both successful analyses and timeouts/errors (partial success)
+        
+        **Alert behavior:**
+        - Alerts are sent only if confidence >= `NEWS_ALERT_THRESHOLD` (default: 0.7)
+        - Duplicate events within cache TTL (default: 6 hours) are suppressed
+        - Notifications are delivered to both Telegram and WhatsApp simultaneously
+        
+        **Feature flags:**
+        - `ENABLE_NEWS_MONITOR`: Must be `true` to access this endpoint (default: `false`)
+        - `ENABLE_BINANCE_PRICE_CHECK`: Enable Binance API for crypto prices (default: `false`)
+        - `ENABLE_LLM_ALERT_ENRICHMENT`: Enable secondary LLM refinement (default: `false`)
+      operationId: analyzeNewsMonitor
+      requestBody:
+        description: Financial symbols to analyze (crypto and/or stocks)
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NewsMonitorRequest'
+            examples:
+              cryptoAndStocks:
+                summary: Mixed crypto and stock symbols
+                value:
+                  crypto: ["BTCUSDT", "ETHUSD", "BNBUSDT"]
+                  stocks: ["NVDA", "MSFT", "TSLA"]
+              cryptoOnly:
+                summary: Crypto symbols only
+                value:
+                  crypto: ["BTCUSDT", "ETHUSD"]
+              stocksOnly:
+                summary: Stock symbols only
+                value:
+                  stocks: ["NVDA", "MSFT"]
+              defaultSymbols:
+                summary: Use environment variable defaults
+                value: {}
+      responses:
+        '200':
+          description: Successful analysis (includes partial success with timeouts/errors)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NewsMonitorResponse'
+              examples:
+                successfulAnalysis:
+                  summary: All symbols analyzed successfully
+                  value:
+                    success: true
+                    results:
+                      - symbol: "BTCUSDT"
+                        status: "analyzed"
+                        alert:
+                          symbol: "BTCUSDT"
+                          eventCategory: "price_surge"
+                          headline: "Bitcoin surges 8% on ETF approval news"
+                          sentimentScore: 0.85
+                          confidence: 0.82
+                          sources: ["https://example.com/news1"]
+                          formattedMessage: "🚀 *BTCUSDT Alert*\\n\\nPrice: $42,350 (+8.2%)\\nSentiment: Bullish (0.85)\\nEvent: Price Surge\\n\\nSources: [Link](https://example.com/news1)"
+                          timestamp: 1730390400000
+                          marketContext:
+                            price: 42350
+                            change24h: 8.2
+                            source: "binance"
+                            timestamp: 1730390400000
+                        deliveryResults:
+                          - success: true
+                            channel: "telegram"
+                            messageId: "12345"
+                            attemptCount: 1
+                            durationMs: 450
+                          - success: true
+                            channel: "whatsapp"
+                            messageId: "67890"
+                            attemptCount: 1
+                            durationMs: 620
+                        totalDurationMs: 4230
+                        cached: false
+                        requestId: "req-abc123"
+                    summary:
+                      total: 1
+                      analyzed: 1
+                      cached: 0
+                      timeout: 0
+                      error: 0
+                      alerts_sent: 1
+                    totalDurationMs: 4230
+                    requestId: "req-abc123"
+                partialSuccess:
+                  summary: Some symbols timeout or error
+                  value:
+                    success: true
+                    partial_success: true
+                    results:
+                      - symbol: "BTCUSDT"
+                        status: "analyzed"
+                        alert:
+                          symbol: "BTCUSDT"
+                          eventCategory: "price_surge"
+                          headline: "Bitcoin surges 8% on ETF approval news"
+                          sentimentScore: 0.85
+                          confidence: 0.82
+                          sources: ["https://example.com/news1"]
+                          formattedMessage: "🚀 *BTCUSDT Alert*\\n\\nPrice: $42,350 (+8.2%)\\nSentiment: Bullish (0.85)\\nEvent: Price Surge\\n\\nSources: [Link](https://example.com/news1)"
+                          timestamp: 1730390400000
+                        deliveryResults:
+                          - success: true
+                            channel: "telegram"
+                            messageId: "12345"
+                            attemptCount: 1
+                            durationMs: 450
+                        totalDurationMs: 4230
+                        cached: false
+                        requestId: "req-abc123"
+                      - symbol: "NVDA"
+                        status: "timeout"
+                        error:
+                          code: "ANALYSIS_TIMEOUT"
+                          message: "Analysis exceeded 30s budget"
+                        totalDurationMs: 30000
+                        cached: false
+                        requestId: "req-abc123"
+                    summary:
+                      total: 2
+                      analyzed: 1
+                      cached: 0
+                      timeout: 1
+                      error: 0
+                      alerts_sent: 1
+                    totalDurationMs: 30150
+                    requestId: "req-abc123"
+                cachedResult:
+                  summary: Result returned from cache
+                  value:
+                    success: true
+                    results:
+                      - symbol: "BTCUSDT"
+                        status: "cached"
+                        alert:
+                          symbol: "BTCUSDT"
+                          eventCategory: "price_surge"
+                          headline: "Bitcoin surges 8% on ETF approval news"
+                          sentimentScore: 0.85
+                          confidence: 0.82
+                          sources: ["https://example.com/news1"]
+                          formattedMessage: "🚀 *BTCUSDT Alert*\\n\\nPrice: $42,350 (+8.2%)\\nSentiment: Bullish (0.85)\\nEvent: Price Surge\\n\\nSources: [Link](https://example.com/news1)"
+                          timestamp: 1730390400000
+                        totalDurationMs: 12
+                        cached: true
+                        requestId: "req-def456"
+                    summary:
+                      total: 1
+                      analyzed: 0
+                      cached: 1
+                      timeout: 0
+                      error: 0
+                      alerts_sent: 0
+                    totalDurationMs: 12
+                    requestId: "req-def456"
+        '400':
+          description: Invalid request (e.g., too many symbols, invalid format)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                tooManySymbols:
+                  summary: Request exceeds 100 symbols
+                  value:
+                    error: "Too many symbols requested (max: 100)"
+                    code: "INVALID_REQUEST"
+                    requestId: "req-xyz789"
+        '403':
+          description: Feature disabled (ENABLE_NEWS_MONITOR=false)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                featureDisabled:
+                  summary: News monitor feature is disabled
+                  value:
+                    error: "News monitor feature is disabled. Set ENABLE_NEWS_MONITOR=true to enable."
+                    code: "FEATURE_DISABLED"
+                    requestId: "req-xyz789"
+        '500':
+          description: Internal server error (e.g., Gemini API failure, notification service down)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                internalError:
+                  summary: Unexpected server error
+                  value:
+                    error: "Internal server error. Please try again later."
+                    code: "INTERNAL_ERROR"
+                    requestId: "req-xyz789"
+
+    get:
+      tags:
+        - News Monitor
+      summary: Analyze news and sentiment for financial symbols (GET method)
+      description: |
+        Same as POST method but accepts symbols via query parameters. Useful for simple testing or cron jobs.
+        
+        **Query parameters:**
+        - `crypto`: Comma-separated crypto symbols (e.g., `?crypto=BTCUSDT,ETHUSD`)
+        - `stocks`: Comma-separated stock symbols (e.g., `?stocks=NVDA,MSFT`)
+        
+        If both are omitted, uses environment variable defaults.
+      operationId: analyzeNewsMonitorGet
+      parameters:
+        - name: crypto
+          in: query
+          description: Comma-separated crypto symbols
+          required: false
+          schema:
+            type: string
+            example: "BTCUSDT,ETHUSD,BNBUSDT"
+        - name: stocks
+          in: query
+          description: Comma-separated stock symbols
+          required: false
+          schema:
+            type: string
+            example: "NVDA,MSFT,TSLA"
+      responses:
+        '200':
+          description: Successful analysis
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NewsMonitorResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Feature disabled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  schemas:
+    NewsMonitorRequest:
+      type: object
+      properties:
+        crypto:
+          type: array
+          description: Array of crypto symbols to analyze
+          items:
+            type: string
+            pattern: '^[A-Z0-9_]{1,20}$'
+            example: "BTCUSDT"
+          maxItems: 100
+        stocks:
+          type: array
+          description: Array of stock symbols to analyze
+          items:
+            type: string
+            pattern: '^[A-Z0-9_]{1,20}$'
+            example: "NVDA"
+          maxItems: 100
+      example:
+        crypto: ["BTCUSDT", "ETHUSD"]
+        stocks: ["NVDA", "MSFT"]
+
+    NewsMonitorResponse:
+      type: object
+      required:
+        - success
+        - results
+        - summary
+        - totalDurationMs
+        - requestId
+      properties:
+        success:
+          type: boolean
+          description: True if at least one symbol was analyzed
+        partial_success:
+          type: boolean
+          description: True if some symbols timeout or error (optional, omitted if all succeed)
+        results:
+          type: array
+          description: Per-symbol analysis results
+          items:
+            $ref: '#/components/schemas/AnalysisResult'
+        summary:
+          $ref: '#/components/schemas/AnalysisSummary'
+        totalDurationMs:
+          type: integer
+          description: Total endpoint execution time in milliseconds
+          minimum: 0
+          example: 4230
+        requestId:
+          type: string
+          description: Unique correlation ID for tracing
+          example: "req-abc123"
+
+    AnalysisResult:
+      type: object
+      required:
+        - symbol
+        - status
+        - totalDurationMs
+        - cached
+        - requestId
+      properties:
+        symbol:
+          type: string
+          description: Financial symbol analyzed
+          example: "BTCUSDT"
+        status:
+          type: string
+          enum: [analyzed, cached, timeout, error]
+          description: |
+            Outcome of analysis:
+            - `analyzed`: Successfully analyzed (may or may not generate alert)
+            - `cached`: Returned from cache (duplicate within TTL)
+            - `timeout`: Analysis exceeded 30s budget
+            - `error`: API failure or validation error
+        alert:
+          $ref: '#/components/schemas/NewsAlert'
+          description: Detected alert (only if confidence >= threshold and status=analyzed)
+        deliveryResults:
+          type: array
+          description: Notification delivery outcomes (only if alert was sent)
+          items:
+            $ref: '#/components/schemas/NotificationDeliveryResult'
+        error:
+          $ref: '#/components/schemas/ErrorDetail'
+          description: Error information (only if status=error)
+        totalDurationMs:
+          type: integer
+          description: Analysis execution time in milliseconds
+          minimum: 0
+          example: 4230
+        cached:
+          type: boolean
+          description: True if result was returned from cache
+        requestId:
+          type: string
+          description: Unique correlation ID for tracing
+          example: "req-abc123"
+
+    NewsAlert:
+      type: object
+      required:
+        - symbol
+        - eventCategory
+        - headline
+        - sentimentScore
+        - confidence
+        - sources
+        - formattedMessage
+        - timestamp
+      properties:
+        symbol:
+          type: string
+          description: Financial symbol
+          example: "BTCUSDT"
+        eventCategory:
+          type: string
+          enum: [price_surge, price_decline, public_figure, regulatory, none]
+          description: |
+            Type of event detected:
+            - `price_surge`: Significant price increase with bullish sentiment
+            - `price_decline`: Significant price decrease with bearish sentiment
+            - `public_figure`: Mention of Trump, Elon Musk, etc.
+            - `regulatory`: Official announcements, policy changes
+            - `none`: No significant event detected
+          example: "price_surge"
+        headline:
+          type: string
+          description: Human-readable event description
+          maxLength: 250
+          example: "Bitcoin surges 8% on ETF approval news"
+        sentimentScore:
+          type: number
+          format: float
+          minimum: -1.0
+          maximum: 1.0
+          description: Sentiment score from -1.0 (bearish) to +1.0 (bullish)
+          example: 0.85
+        confidence:
+          type: number
+          format: float
+          minimum: 0.0
+          maximum: 1.0
+          description: Confidence score (0.0-1.0) calculated via formula
+          example: 0.82
+        sources:
+          type: array
+          description: URLs or titles of news sources
+          items:
+            type: string
+            maxLength: 500
+          maxItems: 10
+          example: ["https://example.com/news1"]
+        formattedMessage:
+          type: string
+          description: Notification-ready text (MarkdownV2 for Telegram)
+          maxLength: 4000
+          example: "🚀 *BTCUSDT Alert*\\n\\nPrice: $42,350 (+8.2%)\\nSentiment: Bullish (0.85)\\nEvent: Price Surge\\n\\nSources: [Link](https://example.com/news1)"
+        timestamp:
+          type: integer
+          format: int64
+          description: Unix timestamp (ms) when alert was created
+          example: 1730390400000
+        marketContext:
+          $ref: '#/components/schemas/MarketContext'
+          description: Optional price data (if available)
+        enrichmentMetadata:
+          $ref: '#/components/schemas/EnrichmentMetadata'
+          description: Optional LLM enrichment (when ENABLE_LLM_ALERT_ENRICHMENT=true)
+        urlShortening:
+          $ref: '#/components/schemas/URLShorteningMetadata'
+          description: URL shortening status for WhatsApp delivery (when configured)
+
+    MarketContext:
+      type: object
+      required:
+        - price
+        - change24h
+        - source
+        - timestamp
+      properties:
+        price:
+          type: number
+          format: float
+          description: Current asset price (USD)
+          minimum: 0.0
+          exclusiveMinimum: true
+          example: 42350
+        change24h:
+          type: number
+          format: float
+          description: 24-hour percentage change
+          example: 8.2
+        volume24h:
+          type: number
+          format: float
+          description: Optional 24-hour trading volume (USD)
+          minimum: 0.0
+          example: 15000000000
+        source:
+          type: string
+          enum: [binance, gemini]
+          description: Data provider
+          example: "binance"
+        timestamp:
+          type: integer
+          format: int64
+          description: Unix timestamp (ms) when data was fetched
+          example: 1730390400000
+
+    EnrichmentMetadata:
+      type: object
+      required:
+        - original_confidence
+        - enriched_confidence
+        - enrichment_applied
+        - reasoning_excerpt
+        - model_name
+        - processing_time_ms
+      properties:
+        original_confidence:
+          type: number
+          format: float
+          minimum: 0.0
+          maximum: 1.0
+          description: Gemini-only confidence score (0.0-1.0)
+          example: 0.82
+        enriched_confidence:
+          type: number
+          format: float
+          minimum: 0.0
+          maximum: 1.0
+          description: Secondary LLM refined score (0.0-1.0)
+          example: 0.78
+        enrichment_applied:
+          type: boolean
+          description: True if enrichment succeeded
+          example: true
+        reasoning_excerpt:
+          type: string
+          description: Brief explanation from LLM
+          maxLength: 500
+          example: "Event significance is high due to multiple credible sources and strong market reaction"
+        model_name:
+          type: string
+          description: Azure AI model identifier
+          maxLength: 100
+          example: "gpt-4o"
+        processing_time_ms:
+          type: integer
+          description: Enrichment execution time in milliseconds
+          minimum: 0
+          example: 1250
+
+    NotificationDeliveryResult:
+      type: object
+      required:
+        - success
+        - channel
+        - attemptCount
+        - durationMs
+      properties:
+        success:
+          type: boolean
+          description: True if message delivered successfully
+        channel:
+          type: string
+          enum: [telegram, whatsapp]
+          description: Notification channel
+        messageId:
+          type: string
+          description: Platform-specific message ID (only if success=true)
+          example: "12345"
+        error:
+          type: string
+          description: Error message (only if success=false)
+          example: "WhatsApp API rate limit exceeded"
+        attemptCount:
+          type: integer
+          minimum: 1
+          maximum: 3
+          description: Number of retry attempts (1-3)
+          example: 1
+        durationMs:
+          type: integer
+          minimum: 0
+          description: Delivery execution time in milliseconds
+          example: 450
+
+    AnalysisSummary:
+      type: object
+      required:
+        - total
+        - analyzed
+        - cached
+        - timeout
+        - error
+        - alerts_sent
+      properties:
+        total:
+          type: integer
+          description: Total symbols requested
+          minimum: 0
+          example: 2
+        analyzed:
+          type: integer
+          description: Symbols with status 'analyzed'
+          minimum: 0
+          example: 1
+        cached:
+          type: integer
+          description: Symbols with status 'cached'
+          minimum: 0
+          example: 0
+        timeout:
+          type: integer
+          description: Symbols with status 'timeout'
+          minimum: 0
+          example: 1
+        error:
+          type: integer
+          description: Symbols with status 'error'
+          minimum: 0
+          example: 0
+        alerts_sent:
+          type: integer
+          description: Number of alerts that met confidence threshold
+          minimum: 0
+          example: 1
+
+    ErrorDetail:
+      type: object
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: string
+          description: Error code
+          example: "ANALYSIS_TIMEOUT"
+        message:
+          type: string
+          description: Human-readable error description
+          example: "Analysis exceeded 30s budget"
+        originalError:
+          type: string
+          description: Stack trace or original error message (for debugging)
+
+    ErrorResponse:
+      type: object
+      required:
+        - error
+        - code
+        - requestId
+      properties:
+        error:
+          type: string
+          description: Human-readable error message
+          example: "Too many symbols requested (max: 100)"
+        code:
+          type: string
+          description: Machine-readable error code
+          example: "INVALID_REQUEST"
+        requestId:
+          type: string
+          description: Unique correlation ID for tracing
+          example: "req-xyz789"
+
+    URLShorteningMetadata:
+      type: object
+      description: Metadata about URL shortening for WhatsApp delivery
+      properties:
+        applied:
+          type: boolean
+          description: True if URL shortening was applied to sources
+          example: true
+        service:
+          type: string
+          description: URL shortening service used (e.g., 'bitly', 'tinyurl')
+          example: "bitly"
+        successCount:
+          type: integer
+          description: Number of URLs successfully shortened
+          minimum: 0
+          example: 2
+        failureCount:
+          type: integer
+          description: Number of URLs that failed to shorten (fell back to title-only)
+          minimum: 0
+          example: 0
