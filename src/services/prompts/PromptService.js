@@ -122,16 +122,30 @@ class PromptService {
 
 	async resolveRemotePrompt(definition, variables = {}, options = {}) {
 		let client;
+		const usingDefaultClientProvider = this.clientProvider === getLangfuseClient;
 
 		try {
 			client = await this.clientProvider();
 		} catch (error) {
-			const disabledReason = getLangfuseDisabledReason() || error.message;
+			const disabledReason = usingDefaultClientProvider
+				? getLangfuseDisabledReason() || error.message
+				: error.message;
 			this.warnOnce(
 				`langfuse-disabled:${disabledReason}`,
 				`[PromptService] Langfuse prompt management unavailable, using local fallbacks: ${disabledReason}`,
 			);
 			return null;
+		}
+
+		if (usingDefaultClientProvider) {
+			const disabledReason = getLangfuseDisabledReason();
+			if (disabledReason) {
+				this.warnOnce(
+					`langfuse-disabled:${disabledReason}`,
+					`[PromptService] Langfuse prompt management unavailable, using local fallbacks: ${disabledReason}`,
+				);
+				return null;
+			}
 		}
 
 		const label = options.label || getLangfusePromptLabel();
@@ -143,7 +157,7 @@ class PromptService {
 				label,
 				cacheTtlSeconds,
 			});
-			this.logger.debug(`[PromptService] Fetched Langfuse prompt "${definition.name}" successfully`);
+			this.logger.debug?.(`[PromptService] Fetched Langfuse prompt "${definition.name}" successfully`);
 
 			const compiledPrompt = prompt.compile(variables);
 			if (definition.type === 'chat') {
