@@ -12,6 +12,12 @@ process.env = {
 	SEARCH_MAX_RESULTS: '3',
 	GROUNDING_TIMEOUT_MS: '8000',
 	BOT_TOKEN: 'test-bot-token',
+	ENABLE_LANGFUSE_PROMPTS: 'false',
+	LANGFUSE_PUBLIC_KEY: '',
+	LANGFUSE_SECRET_KEY: '',
+	LANGFUSE_BASE_URL: 'https://cloud.langfuse.com',
+	LANGFUSE_PROMPT_LABEL: 'latest',
+	LANGFUSE_PROMPT_CACHE_TTL_SECONDS: '0',
 	// Sentry disabled by default in tests
 	ENABLE_SENTRY: 'false',
 	SENTRY_DSN: undefined,

@@ -7,12 +7,29 @@
 
 const { getAzureAIClient } = require('./azureAiClient');
 const { sendWithRetry } = require('../../lib/retryHelper');
+const { getPromptService, PromptKeys } = require('../prompts');
 
-const ENRICHMENT_SYSTEM_PROMPT = `You are a financial market analyst specializing in risk assessment. 
-Given an analysis result from Gemini, assess the confidence level of the detected event.
-Respond with JSON: {"confidence": 0.0-1.0, "reasoning": "brief explanation"}
-Use conservative scoring: 0.7+ only for highly credible, well-sourced events.
-Penalize vague events, single sources, or uncorroborated claims.`;
+const promptService = getPromptService();
+
+function formatSourcesForPrompt(sources = []) {
+	if (!Array.isArray(sources) || sources.length === 0) {
+		return 'none';
+	}
+
+	return sources
+		.map(source => {
+			if (typeof source === 'string') {
+				return source;
+			}
+
+			if (source && typeof source === 'object') {
+				return source.title || source.url || source.sourceDomain || 'source';
+			}
+
+			return 'source';
+		})
+		.join(', ');
+}
 
 class EnrichmentService {
 	constructor() {
@@ -36,25 +53,26 @@ class EnrichmentService {
 	/**
    * Build enrichment prompt from analysis result
    * @param {Object} analysisData - Gemini analysis with confidence
-   * @returns {string} User message for LLM
+   * @returns {Promise<{systemPrompt: string, userPrompt: string}>} Prompt pair for LLM
    */
-	buildEnrichmentPrompt(analysisData) {
+	async buildEnrichmentPrompt(analysisData) {
 		const {
 			headline,
 			sentiment_score,
 			event_significance,
-			sources,
+			sources = [],
 			gemini_confidence,
+			confidence,
 		} = analysisData;
 
-		return `Assess the confidence of this financial event:
-Event: ${headline}
-Sentiment Score: ${sentiment_score}
-Event Significance: ${event_significance}
-Sources: ${sources.length} (${sources.join(', ')})
-Initial Confidence (Gemini): ${gemini_confidence}
-
-Respond with JSON: {"confidence": <0.0-1.0>, "reasoning": "<brief assessment>"}`;
+		return promptService.getChatPrompt(PromptKeys.CONFIDENCE_ENRICHMENT, {
+			headline,
+			sentimentScore: sentiment_score,
+			eventSignificance: event_significance,
+			sourcesCount: sources.length,
+			sourcesText: formatSourcesForPrompt(sources),
+			geminiConfidence: gemini_confidence ?? confidence ?? 0,
+		});
 	}
 
 	/**
@@ -75,8 +93,8 @@ Respond with JSON: {"confidence": <0.0-1.0>, "reasoning": "<brief assessment>"}`
 		// Call LLM enrichment with retry logic
 			const enrichmentResponse = await sendWithRetry(
 				async () => {
-					const userPrompt = this.buildEnrichmentPrompt(geminiAnalysis);
-					return await this.azureClient.chatCompletion(ENRICHMENT_SYSTEM_PROMPT, userPrompt);
+					const { systemPrompt, userPrompt } = await this.buildEnrichmentPrompt(geminiAnalysis);
+					return await this.azureClient.chatCompletion(systemPrompt, userPrompt);
 				},
 				3,
 				console,

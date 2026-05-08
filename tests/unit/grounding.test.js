@@ -96,7 +96,7 @@ describe('Grounding Service', () => {
 			})).rejects.toThrow('Grounding failed: API error');
 		});
 
-		it('should use ALERT_ENRICHMENT prompt by default', async () => {
+		it('should use centralized alert prompt defaults by default', async () => {
 			genaiClient.search.mockResolvedValueOnce({ results: [], totalResults: 0 });
 			generateEnrichedAlert.mockResolvedValueOnce({
 				sentiment: 'NEUTRAL',
@@ -107,11 +107,8 @@ describe('Grounding Service', () => {
 
 			await groundAlert({ text: 'Test alert text' });
 
-			expect(generateEnrichedAlert).toHaveBeenCalledWith(expect.objectContaining({
-				options: expect.objectContaining({
-					systemPrompt: expect.stringContaining('structured insights'),
-				}),
-			}));
+			const call = generateEnrichedAlert.mock.calls[0][0];
+			expect(call.options.systemPrompt).toBeUndefined();
 		});
 
 		it('should use NEWS_ANALYSIS prompt when requested', async () => {

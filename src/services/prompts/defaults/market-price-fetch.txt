@@ -1,0 +1,7 @@
+Get current price of {{symbol}} today in USD and respond with ONLY valid JSON. Example format (respond with similar structure but with actual numbers):
+{
+  "price": 150.25,
+  "change_24h": 2.5,
+  "context": "detailed context about price and market",
+  "sources": ["url1", "url2"]
+}

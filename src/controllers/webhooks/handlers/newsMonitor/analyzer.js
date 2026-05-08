@@ -10,7 +10,10 @@ const { getCacheInstance } = require('./cache');
 const { getEnrichmentService } = require('../../../../services/inference/enrichmentService');
 const { AnalysisStatus, EventCategory } = require('./constants');
 const { GROUNDING_MODEL_NAME, ENABLE_NEWS_MONITOR_TEST_MODE } = require('../../../../services/grounding/config');
+const { getPromptService, PromptKeys } = require('../../../../services/prompts');
 const { MainClient } = require('binance');
+
+const promptService = getPromptService();
 
 // Placeholder for NotificationManager - will be injected
 let notificationManager = null;
@@ -346,15 +349,14 @@ class NewsAnalyzer {
 				timeoutHandle = setTimeout(() => reject(new Error('Gemini fetch timeout')), timeoutMs);
 			});
 
+			const { text: priceQuery } = await promptService.getTextPrompt(
+				PromptKeys.MARKET_PRICE_FETCH,
+				{ symbol },
+			);
+
 			// Use Gemini GoogleSearch to fetch current price
 			const priceSearchPromise = genaiClient.search({
-				query: `Get current price of ${symbol} today in USD and respond with ONLY valid JSON. Example format (respond with similar structure but with actual numbers):
-{
-  "price": 150.25,
-  "change_24h": 2.5,
-  "context": "detailed context about price and market",
-  "sources": ["url1", "url2"]
-}`,
+				query: priceQuery,
 				maxResults: 3,
 			});
 

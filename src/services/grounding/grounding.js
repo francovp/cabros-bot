@@ -1,16 +1,16 @@
 const {
 	GROUNDING_MAX_SOURCES,
 	GROUNDING_TIMEOUT_MS,
-	SEARCH_QUERY_PROMPT,
 	GROUNDING_MAX_LENGTH,
 	GROUNDING_MODEL_NAME,
-	ALERT_ENRICHMENT_SYSTEM_PROMPT,
 	NEWS_ANALYSIS_SYSTEM_PROMPT,
-	GEMINI_SYSTEM_PROMPT,
 	GEMINI_MODEL_NAME,
 } = require('./config');
 const gemini = require('./gemini');
 const genaiClient = require('./genaiClient');
+const { getPromptService, PromptKeys } = require('../prompts');
+
+const promptService = getPromptService();
 
 /**
  * Derives a search query from alert text using an LLM
@@ -20,11 +20,14 @@ const genaiClient = require('./genaiClient');
  */
 async function deriveSearchQuery(alertText, opts = {}) {
 	try {
-		const prompt = `Alert: ${alertText}`;
-		console.debug('Deriving search query with prompt: ', prompt);
+		const { systemPrompt, userPrompt } = await promptService.getChatPrompt(
+			PromptKeys.SEARCH_QUERY_DERIVATION,
+			{ alertText },
+		);
+		console.debug('Deriving search query with prompt: ', userPrompt);
 		const response = await genaiClient.llmCallv2({
-			systemPrompt: SEARCH_QUERY_PROMPT,
-			userPrompt: prompt,
+			systemPrompt,
+			userPrompt,
 			opts: { temperature: opts.temperature },
 		});
 
@@ -58,19 +61,15 @@ async function groundAlert({ text, options = {} }) {
 		timeoutMs = GROUNDING_TIMEOUT_MS,
 		preserveLanguage = true,
 		maxLength = GROUNDING_MAX_LENGTH,
-		promptType = 'ALERT_ENRICHMENT', // Default to ALERT_ENRICHMENT for backward compatibility/current usage
+		// Default to ALERT_ENRICHMENT for backward compatibility/current usage
+		promptType = 'ALERT_ENRICHMENT',
 		tokenUsage,
 	} = options;
 
 	const startTime = Date.now();
-
-	// Select system prompt based on promptType
-	let systemPrompt = GEMINI_SYSTEM_PROMPT;
-	if (promptType === 'ALERT_ENRICHMENT') {
-		systemPrompt = ALERT_ENRICHMENT_SYSTEM_PROMPT;
-	} else if (promptType === 'NEWS_ANALYSIS') {
-		systemPrompt = NEWS_ANALYSIS_SYSTEM_PROMPT;
-	}
+	const systemPromptOverride = promptType === 'NEWS_ANALYSIS'
+		? NEWS_ANALYSIS_SYSTEM_PROMPT
+		: undefined;
 
 	/**
 	 * Create a timeout promise that rejects after a specified time
@@ -107,7 +106,7 @@ async function groundAlert({ text, options = {} }) {
 				text: text,
 				searchResults,
 				searchResultText,
-				options: { preserveLanguage, maxLength, systemPrompt, tokenUsage },
+				options: { preserveLanguage, maxLength, systemPrompt: systemPromptOverride, tokenUsage },
 			}),
 			timeoutPromise,
 		]).finally(cleanupTimeout);

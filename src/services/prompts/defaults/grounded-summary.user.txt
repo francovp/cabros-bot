@@ -1,0 +1,3 @@
+Please analyze this alert and provide a concise summary (max {{maxLength}} chars) with citations based in the context:
+
+Alert: {{alertText}}{{contextPrompt}}{{contextSnippet}}
