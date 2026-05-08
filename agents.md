@@ -18,7 +18,7 @@ Key files / entry points
 Environment and runtime behavior (discoverable)
 - NODE version: `20.x` (see `package.json` engines).
 - Required env vars: `BOT_TOKEN` (throws if missing; even when Telegram bot is disabled).
-- Optional but relevant (non-exhaustive; see feature sections below for full config): `ENABLE_TELEGRAM_BOT`, `PORT`, `TELEGRAM_CHAT_ID`, `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID`, `ENABLE_WHATSAPP_ALERTS`, `ENABLE_GEMINI_GROUNDING`, `GEMINI_API_KEY`, `BRAVE_SEARCH_API_KEY`, `BRAVE_SEARCH_ENDPOINT`, `FORCE_BRAVE_SEARCH`, `MODEL_PROVIDER`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `ENABLE_NEWS_MONITOR`, `ENABLE_SENTRY`, `SENTRY_DSN`, `LOG_LEVEL`, `RATE_LIMIT_WINDOW_MS`, `RATE_LIMIT_MAX`, `RENDER`, `IS_PULL_REQUEST`, `RENDER_GIT_COMMIT`, `RENDER_GIT_REPO_SLUG`.
+- Optional but relevant (non-exhaustive; see feature sections below for full config): `ENABLE_TELEGRAM_BOT`, `PORT`, `TELEGRAM_CHAT_ID`, `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID`, `ENABLE_WHATSAPP_ALERTS`, `ENABLE_GEMINI_GROUNDING`, `GEMINI_API_KEY`, `ENABLE_LANGFUSE_PROMPTS`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL`, `LANGFUSE_PROMPT_LABEL`, `LANGFUSE_PROMPT_CACHE_TTL_SECONDS`, `BRAVE_SEARCH_API_KEY`, `BRAVE_SEARCH_ENDPOINT`, `FORCE_BRAVE_SEARCH`, `MODEL_PROVIDER`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `ENABLE_NEWS_MONITOR`, `ENABLE_SENTRY`, `SENTRY_DSN`, `LOG_LEVEL`, `RATE_LIMIT_WINDOW_MS`, `RATE_LIMIT_MAX`, `RENDER`, `IS_PULL_REQUEST`, `RENDER_GIT_COMMIT`, `RENDER_GIT_REPO_SLUG`.
 - Bot startup is gated: bot is launched only when `ENABLE_TELEGRAM_BOT === 'true'` and not a preview environment (`RENDER==='true' && IS_PULL_REQUEST==='true'` disables it).
 - Routes under `/api` (e.g. `/api/webhook/alert`) are mounted regardless of bot launch; individual features and notification channels are gated via env flags and per-channel validation.
 
@@ -108,6 +108,7 @@ The system provides optional enrichment of webhook alerts using Google Gemini AP
 - `grounding.js` — Orchestrates Gemini GoogleSearch grounding to fetch context and sources
 - `genaiClient.js` — Wrapper around Google Generative AI client
 - `gemini.js` — Gemini API configuration and prompt management
+- `src/services/prompts/` — Central prompt registry + Langfuse-backed runtime prompt resolution with local file-backed fallbacks
 - `alert.js` — Webhook handler that optionally calls grounding service
 
 **Grounding Service Pattern**:
@@ -154,9 +155,34 @@ The system provides optional enrichment of webhook alerts using Google Gemini AP
 - `instrument.js` / `index.js` for lifecycle (loads config; grounding runs per-request when `ENABLE_GEMINI_GROUNDING=true`)
 - `src/services/grounding/grounding.js` for orchestration logic and timeout handling
 - `src/controllers/webhooks/handlers/alert/alert.js` for webhook flow and grounding integration
-- `src/services/grounding/gemini.js` for prompt templates and response parsing
+- `src/services/grounding/gemini.js` for response parsing and prompt variable assembly
+- `src/services/prompts/` for runtime prompt definitions, Langfuse labels, and local fallback behavior (`defaults/*.txt`)
 - Tests in `tests/integration/alert-grounding.test.js` for end-to-end behavior
 - Tests in `tests/unit/grounding.test.js` and `tests/unit/gemini-client.test.js` for core logic
+
+## Centralized Prompt Management (Langfuse-backed)
+
+Runtime LLM prompts are centrally managed through `src/services/prompts/`.
+
+**Current pattern**:
+- `PromptService` resolves prompts by stable key/name.
+- If `ENABLE_LANGFUSE_PROMPTS=true`, prompts are fetched from Langfuse using `LANGFUSE_PROMPT_LABEL` and `LANGFUSE_PROMPT_CACHE_TTL_SECONDS`.
+- If Langfuse is disabled, misconfigured, unavailable, or missing a prompt, the system **fails open** to the local fallback text templates in `src/services/prompts/defaults/`.
+
+**Rules for future changes**:
+- Do **not** inline new runtime LLM prompt strings directly in feature code when they belong to production flows.
+- Register new prompts in `src/services/prompts/promptRegistry.js` with a stable Langfuse name and add matching local fallback text templates under `src/services/prompts/defaults/`.
+- Resolve prompts via `getPromptService()` from `src/services/prompts/`.
+- Keep provider routing (`genaiClient.llmCallv2`, Azure/OpenRouter clients) separate from prompt ownership.
+- Add or update unit tests in `tests/unit/prompt-service.test.js` and the affected feature tests whenever a prompt contract changes.
+
+**Current managed prompts**:
+- search-query derivation
+- grounded summary generation
+- alert enrichment
+- news analysis
+- confidence enrichment
+- Gemini market price fetch query
 
 
 ## Enriched Webhook Alert Output (004-enrich-alert-output)

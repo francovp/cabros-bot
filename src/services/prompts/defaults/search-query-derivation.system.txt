@@ -1,0 +1,2 @@
+Extract key topics and entities from this alert to create a search query.
+Focus on recent developments, market conditions, or specific events mentioned.

@@ -1,0 +1,8 @@
+Assess the confidence of this financial event:
+Event: {{headline}}
+Sentiment Score: {{sentimentScore}}
+Event Significance: {{eventSignificance}}
+Sources: {{sourcesCount}} ({{sourcesText}})
+Initial Confidence (Gemini): {{geminiConfidence}}
+
+Respond with JSON: {"confidence": <0.0-1.0>, "reasoning": "<brief assessment>"}

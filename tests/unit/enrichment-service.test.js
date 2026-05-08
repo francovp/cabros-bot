@@ -3,6 +3,17 @@
  * Tests: Conservative confidence selection, error handling, fallback logic
  */
 
+const mockPromptService = {
+	getChatPrompt: jest.fn(),
+};
+
+jest.mock('../../src/services/prompts', () => ({
+	getPromptService: jest.fn(() => mockPromptService),
+	PromptKeys: {
+		CONFIDENCE_ENRICHMENT: 'CONFIDENCE_ENRICHMENT',
+	},
+}));
+
 const { getEnrichmentService, EnrichmentService } = require('../../src/services/inference/enrichmentService');
 
 jest.mock('../../src/services/inference/azureAiClient');
@@ -20,6 +31,10 @@ describe('EnrichmentService (Phase 8 - US6)', () => {
 			ENABLE_LLM_ALERT_ENRICHMENT: 'false', // Disabled by default
 			AZURE_LLM_MODEL: 'gpt-4',
 		};
+		mockPromptService.getChatPrompt.mockResolvedValue({
+			systemPrompt: 'Risk assessment system prompt',
+			userPrompt: 'Risk assessment user prompt',
+		});
 	});
 
 	afterEach(() => {
@@ -56,7 +71,7 @@ describe('EnrichmentService (Phase 8 - US6)', () => {
 	});
 
 	describe('buildEnrichmentPrompt', () => {
-		it('should build prompt from analysis data', () => {
+		it('should build prompt from analysis data', async () => {
 			azureAiClient.getAzureAIClient.mockReturnValue({
 				validate: jest.fn().mockReturnValue(true),
 			});
@@ -70,16 +85,24 @@ describe('EnrichmentService (Phase 8 - US6)', () => {
 				gemini_confidence: 0.84,
 			};
 
-			const prompt = service.buildEnrichmentPrompt(analysisData);
+			const prompt = await service.buildEnrichmentPrompt(analysisData);
 
-			expect(prompt).toContain('Bitcoin surges on positive news');
-			expect(prompt).toContain('0.9'); // sentiment_score
-			expect(prompt).toContain('0.8'); // event_significance
-			expect(prompt).toContain('2'); // sources count
-			expect(prompt).toContain('0.84'); // gemini_confidence
+			expect(prompt.systemPrompt).toBe('Risk assessment system prompt');
+			expect(prompt.userPrompt).toBe('Risk assessment user prompt');
+			expect(mockPromptService.getChatPrompt).toHaveBeenCalledWith(
+				'CONFIDENCE_ENRICHMENT',
+				expect.objectContaining({
+					headline: 'Bitcoin surges on positive news',
+					sentimentScore: 0.9,
+					eventSignificance: 0.8,
+					sourcesCount: 2,
+					sourcesText: 'https://example.com/1, https://example.com/2',
+					geminiConfidence: 0.84,
+				}),
+			);
 		});
 
-		it('should include all required fields in prompt', () => {
+		it('should include all required fields in prompt variables', async () => {
 			azureAiClient.getAzureAIClient.mockReturnValue({
 				validate: jest.fn().mockReturnValue(true),
 			});
@@ -93,14 +116,19 @@ describe('EnrichmentService (Phase 8 - US6)', () => {
 				gemini_confidence: 0.75,
 			};
 
-			const prompt = service.buildEnrichmentPrompt(analysisData);
+			await service.buildEnrichmentPrompt(analysisData);
 
-			expect(prompt).toContain('Assess the confidence');
-			expect(prompt).toContain('Event:');
-			expect(prompt).toContain('Sentiment Score:');
-			expect(prompt).toContain('Event Significance:');
-			expect(prompt).toContain('Sources:');
-			expect(prompt).toContain('Initial Confidence (Gemini):');
+			expect(mockPromptService.getChatPrompt).toHaveBeenCalledWith(
+				'CONFIDENCE_ENRICHMENT',
+				expect.objectContaining({
+					headline: 'Market event',
+					sentimentScore: 0.5,
+					eventSignificance: 0.6,
+					sourcesCount: 1,
+					sourcesText: 'https://source1.com',
+					geminiConfidence: 0.75,
+				}),
+			);
 		});
 	});
 
@@ -136,6 +164,39 @@ describe('EnrichmentService (Phase 8 - US6)', () => {
 			// Conservative: min(0.9, 0.7) = 0.7
 			expect(result.enriched_confidence).toBe(0.7);
 			expect(result.original_confidence).toBe(0.9);
+		});
+
+		it('should send resolved prompt pair to the Azure client', async () => {
+			process.env.ENABLE_LLM_ALERT_ENRICHMENT = 'true';
+			const service = new EnrichmentService();
+
+			const mockAzureClient = azureAiClient.getAzureAIClient();
+			mockAzureClient.chatCompletion.mockResolvedValue('{"confidence": 0.7, "reasoning": "Well sourced"}');
+			mockAzureClient.parseJsonResponse.mockReturnValue({ confidence: 0.7, reasoning: 'Well sourced' });
+
+			retryHelper.sendWithRetry.mockImplementation(async (sendFn) => sendFn());
+
+			await service.enrichAlert({
+				confidence: 0.9,
+				headline: 'Prompt resolution event',
+				sentiment_score: 0.8,
+				event_significance: 0.75,
+				sources: [{ title: 'Reuters', url: 'https://reuters.com/test' }],
+			});
+
+			expect(mockPromptService.getChatPrompt).toHaveBeenCalledWith(
+				'CONFIDENCE_ENRICHMENT',
+				expect.objectContaining({
+					headline: 'Prompt resolution event',
+					sourcesCount: 1,
+					sourcesText: 'Reuters',
+					geminiConfidence: 0.9,
+				}),
+			);
+			expect(mockAzureClient.chatCompletion).toHaveBeenCalledWith(
+				'Risk assessment system prompt',
+				'Risk assessment user prompt',
+			);
 		});
 
 		it('should use Gemini confidence when LLM is lower (conservative selection)', async () => {

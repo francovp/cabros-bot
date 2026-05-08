@@ -8,6 +8,7 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 - 🚀 **Webhook API**: HTTP endpoint for receiving alerts from external services (e.g., TradingView)
 - 📰 **News Monitoring**: Analyze financial news and market sentiment for crypto and stock symbols with AI-powered event detection
 - 🧠 **AI Enrichment**: Optional enhancement of alerts using Google Gemini API (grounding) and optional secondary LLM (Azure AI)
+- 🧩 **Langfuse Prompt Management**: Manage all runtime LLM prompts centrally in Langfuse with local fail-open fallbacks
 - 📊 **TradingView MCP Enrichment**: Optional real-time technical analysis for webhook signals like `BTCUSDT(240) pasó a señal de VENTA`
 - 💎 **Event Detection**: Identify significant trading events (price surges, public figure mentions, regulatory announcements)
 - 💰 **Market Context**: Optional Binance integration for real-time crypto prices with Gemini fallback
@@ -41,6 +42,15 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 
 - `ENABLE_GEMINI_GROUNDING` - Enable Gemini-based alert enrichment (`true` or `false`)
 - `GEMINI_API_KEY` - Google API key for Gemini access
+
+#### Langfuse Prompt Management
+
+- `ENABLE_LANGFUSE_PROMPTS` - Fetch runtime prompts from Langfuse (`true` or `false`, default: `false`)
+- `LANGFUSE_PUBLIC_KEY` - Langfuse public key (required when Langfuse prompt management is enabled)
+- `LANGFUSE_SECRET_KEY` - Langfuse secret key (required when Langfuse prompt management is enabled)
+- `LANGFUSE_BASE_URL` - Langfuse base URL (default: `https://cloud.langfuse.com`)
+- `LANGFUSE_PROMPT_LABEL` - Prompt label to fetch (default: `latest` in local/dev/test, `production` in production-like environments)
+- `LANGFUSE_PROMPT_CACHE_TTL_SECONDS` - Prompt cache TTL in seconds (default: `0` for `latest`, `60` for `production`)
 
 #### TradingView MCP Enrichment
 
@@ -107,6 +117,7 @@ Then edit `.env` with your specific values. See `.env.example` for complete docu
 - **Required**: Core bot token and chat IDs
 - **Optional: WhatsApp**: GreenAPI integration for multi-channel alerts
 - **Optional: AI Grounding**: Gemini API for alert enrichment
+- **Optional: Prompt Management**: Langfuse-backed runtime prompts with local fallbacks
 - **Optional: TradingView MCP**: Real-time technical enrichment for webhook signals
 - **Optional: Admin Notifications**: Separate chat for deployment alerts
 - **Optional: Server Configuration**: Port, Render.com flags
@@ -166,6 +177,28 @@ When `ENABLE_GEMINI_GROUNDING=true`:
 
 - `ENABLE_GEMINI_GROUNDING` - Enable/disable enrichment (default: `false`)
 - `GEMINI_API_KEY` - Google API key with Generative AI enabled
+
+### How Langfuse Prompt Management Works
+
+When `ENABLE_LANGFUSE_PROMPTS=true`, runtime prompts are fetched from Langfuse through the centralized prompt service in `src/services/prompts/`.
+
+The local fallback prompts now live as editable text templates under `src/services/prompts/defaults/`, which makes them much easier to review, diff, and version independently from the prompt registry code.
+
+Managed prompts currently include:
+
+- search-query derivation
+- grounded summary generation
+- webhook alert enrichment
+- news analysis
+- secondary confidence enrichment
+- Gemini market price fetch query
+
+Behavior notes:
+
+- **Fail-open by design**: if Langfuse is disabled, misconfigured, unavailable, or missing a prompt, the app automatically falls back to the local prompt text files in `src/services/prompts/defaults/`.
+- **Label-based rollout**: use `LANGFUSE_PROMPT_LABEL` (for example `latest`, `staging`, or `production`) to switch prompt versions without code changes.
+- **SDK caching**: prompt fetches use the Langfuse SDK cache and can be tuned with `LANGFUSE_PROMPT_CACHE_TTL_SECONDS`.
+- **Current architecture contract**: prompts are compiled into the existing `systemPrompt` / `userPrompt` flow, so provider routing for Gemini, Azure, and OpenRouter remains unchanged.
 
 ## TradingView Signal Enrichment with MCP
 
@@ -721,6 +754,7 @@ npm run test:coverage
 - **messageHelper**: Message truncation and formatting
 - **MarkdownV2Formatter**: Telegram MarkdownV2 text escaping
 - **WhatsAppMarkdownFormatter**: WhatsApp markdown conversion
+- **PromptService** (`src/services/prompts/`): Centralized runtime prompt registry with Langfuse fetch + local file-based fallback behavior
 
 ### Alert Processing (News Monitor)
 
@@ -795,6 +829,21 @@ GEMINI_API_KEY=your_google_ai_studio_api_key
 
 # Alerts will be enriched with AI analysis before sending
 ```
+
+### With Langfuse Prompt Management
+
+```bash
+ENABLE_LANGFUSE_PROMPTS=true
+LANGFUSE_PUBLIC_KEY=pk-lf-your-public-key
+LANGFUSE_SECRET_KEY=sk-lf-your-secret-key
+LANGFUSE_BASE_URL=https://cloud.langfuse.com
+
+# Use "latest" locally and "production" in deployed environments
+LANGFUSE_PROMPT_LABEL=latest
+LANGFUSE_PROMPT_CACHE_TTL_SECONDS=0
+```
+
+With this enabled, prompt edits can be shipped from Langfuse without redeploying the bot. If Langfuse is unavailable, the service falls back to the local prompt registry automatically.
 
 ### With News Monitoring (Gemini-only)
 

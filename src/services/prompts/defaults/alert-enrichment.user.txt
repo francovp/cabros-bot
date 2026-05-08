@@ -1,0 +1,16 @@
+Analyze this alert and provide structured insights, sentiment, and technical levels based on the context.
+
+Alert: {{alertContext}}
+
+Instructions:
+- **Output:** Respond *only* with a single, valid JSON object.
+- **JSON schema:**
+{
+  "sentiment": "BULLISH" | "BEARISH" | "NEUTRAL",
+  "sentiment_score": number (0.0 to 1.0),
+  "insights": string[] (max 10 key points),
+  "technical_levels": {
+    "supports": string[],
+    "resistances": string[]
+  }
+}

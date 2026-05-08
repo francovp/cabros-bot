@@ -1,7 +1,30 @@
 const genaiClient = require('./genaiClient');
 const { validateGeminiResponse } = require('../../lib/validation');
-const { GEMINI_SYSTEM_PROMPT, GROUNDING_MODEL_NAME, GEMINI_MODEL_NAME, GEMINI_MODEL_NAME_FALLBACK, ENABLE_NEWS_MONITOR_TEST_MODE, NEWS_ANALYSIS_SYSTEM_PROMPT } = require('./config');
+const { GROUNDING_MODEL_NAME, GEMINI_MODEL_NAME, GEMINI_MODEL_NAME_FALLBACK, ENABLE_NEWS_MONITOR_TEST_MODE } = require('./config');
 const { EventCategory } = require('../../controllers/webhooks/handlers/newsMonitor/constants');
+const { getPromptService, PromptKeys } = require('../prompts');
+
+const promptService = getPromptService();
+
+function getLanguageDirective(preserveLanguage) {
+	return preserveLanguage
+		? 'Respond in the same language as the Alert text.'
+		: '';
+}
+
+function buildContextPrompt(searchResults = []) {
+	return searchResults.length > 0
+		? `\n\nContext from verified sources:\n${searchResults
+			.map(result => `- ${result.title}\n  ${result.snippet}`)
+			.join('\n')}`
+		: '';
+}
+
+function buildContextSnippet(searchResultText = '') {
+	return searchResultText
+		? `\n\nAdditional context for the sources:\n${searchResultText}`
+		: '';
+}
 
 /**
  * Generates a summary with citations given an alert text and optional context
@@ -14,7 +37,7 @@ async function generateGroundedSummary({ text, searchResults = [], searchResultT
 	const {
 		maxLength = 250,
 		preserveLanguage = true,
-		systemPrompt = GEMINI_SYSTEM_PROMPT,
+		systemPrompt: systemPromptOverride,
 		tokenUsage,
 	} = options;
 
@@ -28,30 +51,24 @@ async function generateGroundedSummary({ text, searchResults = [], searchResultT
 		};
 	}
 
-	// Prepare prompt with language preservation if needed
-	const langDirective = preserveLanguage
-		? 'Respond in the same language as the Alert text.'
-		: '';
-
-	const contextPrompt = searchResults.length > 0
-		? `\n\nContext from verified sources:\n${searchResults
-			.map(result => `- ${result.title}\n  ${result.snippet}`)
-			.join('\n')}`
-		: '';
-
-	const contextSnippet = searchResultText
-		? `\n\nAdditional context for the sources:\n${searchResultText}`
-		: '';
-
-	// Split System and User parts
-	const fullSystemPrompt = `${systemPrompt}\n\n${langDirective}`;
-	const userPrompt = `Please analyze this alert and provide a concise summary (max ${maxLength} chars) with citations based in the context:
-
-Alert: ${text}${contextPrompt}${contextSnippet}`;
+	const languageDirective = getLanguageDirective(preserveLanguage);
+	const contextPrompt = buildContextPrompt(searchResults);
+	const contextSnippet = buildContextSnippet(searchResultText);
+	const { systemPrompt, userPrompt } = await promptService.getChatPrompt(
+		PromptKeys.GROUNDED_SUMMARY,
+		{
+			alertText: text,
+			maxLength,
+			languageDirective,
+			contextPrompt,
+			contextSnippet,
+		},
+		{ systemPromptOverride },
+	);
 
 	try {
 		const { text: summary, usage } = await genaiClient.llmCallv2({
-			systemPrompt: fullSystemPrompt,
+			systemPrompt,
 			userPrompt,
 			context: { citations: searchResults },
 			opts: { temperature: 0.2 },
@@ -100,11 +117,16 @@ async function analyzeNewsForSymbol(symbol, context, options = {}) {
 	}
 
 	try {
+		const { text: searchQuery } = await promptService.getTextPrompt(
+			PromptKeys.NEWS_ANALYSIS_SEARCH_QUERY,
+			{ symbol },
+		);
+
 		// Use Gemini GoogleSearch to fetch market news and sentiment
 		// Note: We still rely on genaiClient for search. If Gemini is not configured, this might fail or return empty
 		// depending on how genaiClient handles missing config, but here we focus on switching the LLM call.
 		const searchResult = await genaiClient.search({
-			query: `${symbol} news market sentiment events today`,
+			query: searchQuery,
 			maxResults: 3,
 		});
 		if (tokenUsage && searchResult.usage) {
@@ -123,54 +145,16 @@ async function analyzeNewsForSymbol(symbol, context, options = {}) {
 		const enrichedContext = `${context}\n\nGrounded Context from Search:\n${groundingContext}\n\nSources: ${sourcesList.join(', ')}`;
 		console.debug('[Gemini][analyzeNewsForSymbol] Enriched context for analysis:', enrichedContext);
 
-		const userPrompt = `Analyze this news/market context for symbol ${symbol}:
-
-${enrichedContext}
-
-Instructions (important):
-
-- **Task:** Read the provided news/context and detect any market-moving event related to the symbol.
-- **Output:** Respond *only* with a single, valid JSON object (no surrounding text, no markdown, no commentary).
-- **JSON schema:** Follow the example exactly. Use real values (numbers/strings) — do NOT include type annotations or ranges inside the JSON.
-
-Example JSON (respond with a similar structure using real values):
-{
-  "event_category": "price_surge",
-  "event_significance": 0.75,
-  "sentiment_score": 0.45,
-  "headline": "One-line event description",
-  "description": "Detailed explanation of the event with bulletpoints and bold text."
-}
-
-Field guidance:
-
-- **event_category** (string): one of **price_surge**, **price_decline**, **public_figure**, **regulatory**, **none**.
-- **event_significance** (number): 0.0 to 1.0 — how important the detected event is (use 0.0 for none, 1.0 for very significant).
-- **sentiment_score** (number): -1.0 to 1.0 — negative = bearish, positive = bullish.
-- **headline** (string): one concise line describing the event (max ~250 chars).
-- **description** (string): Detailed explanation with enrich text using hypen bulletpoints (not asterisks), nextline and bold text for readability (up to ~2000 chars).
-
-Event category hints:
-
-- **price_surge:** Bullish events (positive news, material price increases, upgrades, major buying pressure).
-- **price_decline:** Bearish events (negative news, material price drops, downgrades, selling pressure).
-- **public_figure:** Mentions/quotes from high-impact individuals that can move markets (e.g., Elon Musk).
-- **regulatory:** Official announcements, policy changes, fines, or legal actions.
-- **none:** No significant event detected.
-
-Conservatism and formatting rules:
-
-- Be conservative when assigning high scores — prefer 0.6+ only for well-sourced, high-credibility events.
-- Do not include any extra text before/after the JSON. If uncertain, return **event_category: "none"** with low significance.
-- Keep numeric values as plain numbers (no percent signs or units inside the JSON fields).
-
-End of instructions.`
+		const prompt = await promptService.getChatPrompt(
+			PromptKeys.NEWS_ANALYSIS,
+			{ symbol, enrichedContext },
+		);
 
 		let response;
 		try {
 			const result = await genaiClient.llmCallv2({
-				systemPrompt: NEWS_ANALYSIS_SYSTEM_PROMPT,
-				userPrompt,
+				systemPrompt: prompt.systemPrompt,
+				userPrompt: prompt.userPrompt,
 				opts: { model: GEMINI_MODEL_NAME, temperature: 0.3 }
 			});
 			if (tokenUsage && result.usage) {
@@ -186,8 +170,8 @@ End of instructions.`
 				console.warn('[Gemini] Primary model overloaded, attempting fallback model:', GEMINI_MODEL_NAME_FALLBACK);
 				try {
 					const fallbackResult = await genaiClient.llmCallv2({
-						systemPrompt: NEWS_ANALYSIS_SYSTEM_PROMPT,
-						userPrompt,
+						systemPrompt: prompt.systemPrompt,
+						userPrompt: prompt.userPrompt,
 						opts: { model: GEMINI_MODEL_NAME_FALLBACK, temperature: 0.3 }
 					});
 					if (tokenUsage && fallbackResult.usage) {
@@ -280,7 +264,7 @@ function parseNewsAnalysisResponse(response) {
 async function generateEnrichedAlert({ text, searchResults = [], searchResultText = '', options = {} }) {
 	const {
 		preserveLanguage = true,
-		systemPrompt = GEMINI_SYSTEM_PROMPT,
+		systemPrompt: systemPromptOverride,
 		tokenUsage,
 	} = options;
 
@@ -293,41 +277,23 @@ async function generateEnrichedAlert({ text, searchResults = [], searchResultTex
 		};
 	}
 
-	// Prepare prompt with language preservation if needed
-	const langDirective = preserveLanguage
-		? 'Respond in the same language as the Alert text.'
-		: '';
-
-	const contextPrompt = searchResults.length > 0
-		? `\n\nContext from verified sources:\n${searchResults
-			.map(result => `- ${result.title}\n  ${result.snippet}`)
-			.join('\n')}`
-		: '';
-
-	const contextSnippet = searchResultText
-		? `\n\nAdditional context for the sources:\n${searchResultText}`
-		: '';
-
-	const fullSystemPrompt = `${systemPrompt}\n\n${langDirective}`;
-	const context = `${text}${contextPrompt}${contextSnippet}`;
-	console.debug('[Gemini] Generating enriched alert with context:', context);
-	const userPrompt = `Analyze this alert and provide structured insights and sentiment based on the context.
-
-Alert: ${context}
-
-Instructions:
-- **Output:** Respond *only* with a single, valid JSON object.
-- **JSON schema:**
-{
-  "sentiment": "BULLISH" | "BEARISH" | "NEUTRAL",
-  "sentiment_score": number (0.0 to 1.0),
-  "insights": string[] (max 3 key points)
-}
-`;
+	const languageDirective = getLanguageDirective(preserveLanguage);
+	const contextPrompt = buildContextPrompt(searchResults);
+	const contextSnippet = buildContextSnippet(searchResultText);
+	const alertContext = `${text}${contextPrompt}${contextSnippet}`;
+	console.debug('[Gemini] Generating enriched alert with context:', alertContext);
+	const { systemPrompt, userPrompt } = await promptService.getChatPrompt(
+		PromptKeys.ALERT_ENRICHMENT,
+		{
+			alertContext,
+			languageDirective,
+		},
+		{ systemPromptOverride },
+	);
 
 	try {
 		const { text: responseText, usage, modelUsed } = await genaiClient.llmCallv2({
-			systemPrompt: fullSystemPrompt,
+			systemPrompt,
 			userPrompt,
 			context: { citations: searchResults },
 			opts: { temperature: 0.2 },
@@ -369,7 +335,7 @@ function parseEnrichedAlertResponse(response) {
 		return {
 			sentiment: parsed.sentiment,
 			sentiment_score: Math.max(0, Math.min(1, parsed.sentiment_score || 0.5)),
-			insights: Array.isArray(parsed.insights) ? parsed.insights.slice(0, 3) : [],
+			insights: Array.isArray(parsed.insights) ? parsed.insights : [],
 		};
 	} catch (error) {
 		console.warn(`[Gemini] Response parsing failed, using safe defaults: ${error.message}`);

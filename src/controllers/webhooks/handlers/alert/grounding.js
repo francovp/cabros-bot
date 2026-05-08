@@ -61,7 +61,7 @@ function mergeEnrichmentData(text, geminiEnriched, mcpEnriched) {
 	const modelName = geminiBackticked[0] || GROUNDING_MODEL_NAME;
 	const groundingFromGemini = geminiBackticked[1] || GROUNDING_MODEL_NAME;
 	const groundingProviders = mergeUnique([groundingFromGemini], ['tradingview-mcp'], 8);
-	const extraText = `*Model used*: ` + '`' + `${modelName}` + '`' + `\n*Grounding*: ` + '`' + `${groundingProviders.join('`, `')}` + '`';
+	const extraText = '*Model used*: ' + '`' + `${modelName}` + '`' + '\n*Grounding*: ' + '`' + `${groundingProviders.join('`, `')}` + '`';
 
 	return {
 		original_text: text,
@@ -88,7 +88,7 @@ async function enrichWithGemini(text, tokenUsage) {
 	const enableFooter = process.env.ENABLE_MESSAGE_FOOTER_METADATA !== 'false';
 	const modelName = modelUsed || GROUNDING_MODEL_NAME;
 	const extraText = enableFooter
-		? `*Model used*: ` + '`' + `${modelName}` + '`' + `\n*Grounding*: ` + '`' + `${GROUNDING_MODEL_NAME}` + '`'
+		? '*Model used*: ' + '`' + `${modelName}` + '`' + '\n*Grounding*: ' + '`' + `${GROUNDING_MODEL_NAME}` + '`'
 		: '';
 
 	return {
