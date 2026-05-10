@@ -296,7 +296,7 @@ class NewsAnalyzer {
 			// Wrapper with timeout (~5s)
 			const timeoutMs = 5000;
 			const timeoutPromise = new Promise((_, reject) =>
-				setTimeout(() => reject(new Error('Binance fetch timeout')), timeoutMs)
+				setTimeout(() => reject(new Error('Binance fetch timeout')), timeoutMs),
 			);
 
 			const client = getBinanceClient();
@@ -372,8 +372,8 @@ class NewsAnalyzer {
 			if (priceSearchResult.searchResultText) {
 				// Try multiple patterns to extract JSON
 				const jsonPatterns = [
-					/{[^{}]*"price"[^{}]*}/,  // Look for object with "price" property first
-					/{[\s\S]*}/,              // Fallback to any JSON-like structure
+					/{[^{}]*"price"[^{}]*}/, // Look for object with "price" property first
+					/{[\s\S]*}/, // Fallback to any JSON-like structure
 				];
 
 				for (const pattern of jsonPatterns) {
@@ -448,8 +448,8 @@ class NewsAnalyzer {
 		// Build the title/original text
 		const eventLabel = this.eventCategoryLabel(geminiAnalysis.event_category);
 		const headline = (geminiAnalysis.headline && geminiAnalysis.headline.trim())
-				? geminiAnalysis.headline 
-				: `${eventLabel} event detected`;
+			? geminiAnalysis.headline
+			: `${eventLabel} event detected`;
 		const alertTitle = `${symbol}: ${headline}`;
 
 		// Build the context (includes sentiment, confidence, price context)
@@ -459,9 +459,9 @@ class NewsAnalyzer {
 		let context = (geminiAnalysis.description && geminiAnalysis.description.trim())
 			? `${geminiAnalysis.description}\n\n`
 			: '';
-		
+
 		context += `*Sentiment:* ${this.sentimentLabel(sentimentScore)} (${sentimentScore.toFixed(2)})`;
-		
+
 		if (marketContext && marketContext.price) {
 			const change = marketContext.change24h ?? 0;
 			context += `\n*Price:* $${marketContext.price} (${change > 0 ? '+' : ''}${change.toFixed(1)}%)`;
@@ -524,17 +524,17 @@ class NewsAnalyzer {
 		}
 
 		let message = `*${symbol} Alert*\n\n`;
-		
+
 		// Use headline from analysis; provide sensible defaults if missing
 		const eventLabel = this.eventCategoryLabel(analysis.event_category);
-		const headline = (analysis.headline && analysis.headline.trim()) 
-			? analysis.headline 
+		const headline = (analysis.headline && analysis.headline.trim())
+			? analysis.headline
 			: `${eventLabel} event detected`;
 		message += `Event: ${headline}\n`;
-		
+
 		const sentimentScore = analysis.sentiment_score ?? 0;
 		message += `Sentiment: ${this.sentimentLabel(sentimentScore)} (${sentimentScore.toFixed(2)})\n`;
-		
+
 		const confidence = analysis.confidence ?? 0;
 		message += `Confidence: ${(confidence * 100).toFixed(0)}%\n`;
 

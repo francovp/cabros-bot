@@ -9,7 +9,7 @@
  * @returns {Promise<void>}
  */
 function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /**
@@ -20,10 +20,10 @@ function sleep(ms) {
  * @returns {number} Delay in milliseconds
  */
 function calculateBackoffDelay(attempt) {
-  const baseDelay = Math.pow(2, attempt - 1) * 1000; // 1000ms, 2000ms, 4000ms
-  const jitterPercent = Math.random() * 0.2 - 0.1; // -10% to +10%
-  const jitter = baseDelay * jitterPercent;
-  return Math.round(baseDelay + jitter);
+	const baseDelay = Math.pow(2, attempt - 1) * 1000; // 1000ms, 2000ms, 4000ms
+	const jitterPercent = Math.random() * 0.2 - 0.1; // -10% to +10%
+	const jitter = baseDelay * jitterPercent;
+	return Math.round(baseDelay + jitter);
 }
 
 /**
@@ -34,69 +34,69 @@ function calculateBackoffDelay(attempt) {
  * @returns {Promise<Object>} SendResult object after success or max retries exhausted
  */
 async function sendWithRetry(sendFn, maxRetries = 3, logger = null) {
-  let lastResult = null;
-  const totalStartTime = Date.now();
+	let lastResult = null;
+	const totalStartTime = Date.now();
 
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      const result = await sendFn();
-      const durationMs = Date.now() - totalStartTime;
+	for (let attempt = 1; attempt <= maxRetries; attempt++) {
+		try {
+			const result = await sendFn();
+			const durationMs = Date.now() - totalStartTime;
 
-      if (result.success) {
-        if (logger && attempt > 1) {
-          logger.log?.(`Send succeeded on attempt ${attempt}/${maxRetries}`);
-        }
-        return { ...result, attemptCount: attempt, durationMs };
-      }
+			if (result.success) {
+				if (logger && attempt > 1) {
+					logger.log?.(`Send succeeded on attempt ${attempt}/${maxRetries}`);
+				}
+				return { ...result, attemptCount: attempt, durationMs };
+			}
 
-      // Failure; retry if attempts remain
-      lastResult = result;
-      if (attempt < maxRetries) {
-        const delayMs = calculateBackoffDelay(attempt);
-        if (logger) {
-          logger.warn?.(
-            `Retry ${attempt}/${maxRetries}: send failed${result.channel ? ` for ${result.channel}` : ''}. Retrying in ${delayMs}ms`,
-            { error: result.error }
-          );
-        }
+			// Failure; retry if attempts remain
+			lastResult = result;
+			if (attempt < maxRetries) {
+				const delayMs = calculateBackoffDelay(attempt);
+				if (logger) {
+					logger.warn?.(
+						`Retry ${attempt}/${maxRetries}: send failed${result.channel ? ` for ${result.channel}` : ''}. Retrying in ${delayMs}ms`,
+						{ error: result.error },
+					);
+				}
 
-        await sleep(delayMs);
-      }
-    } catch (error) {
-      lastResult = {
-        success: false,
-        channel: 'unknown',
-        error: error.message,
-      };
+				await sleep(delayMs);
+			}
+		} catch (error) {
+			lastResult = {
+				success: false,
+				channel: 'unknown',
+				error: error.message,
+			};
 
-      if (logger) {
-        logger.error?.(`Attempt ${attempt}/${maxRetries} threw exception`, { error: error.message });
-      }
+			if (logger) {
+				logger.error?.(`Attempt ${attempt}/${maxRetries} threw exception`, { error: error.message });
+			}
 
-      if (attempt < maxRetries) {
-        const delayMs = calculateBackoffDelay(attempt);
-        await sleep(delayMs);
-      }
-    }
-  }
+			if (attempt < maxRetries) {
+				const delayMs = calculateBackoffDelay(attempt);
+				await sleep(delayMs);
+			}
+		}
+	}
 
-  // All retries exhausted
-  if (logger) {
-    logger.error?.(`All ${maxRetries} retries exhausted`, { lastResult });
-  }
+	// All retries exhausted
+	if (logger) {
+		logger.error?.(`All ${maxRetries} retries exhausted`, { lastResult });
+	}
 
-  const totalDurationMs = Date.now() - totalStartTime;
-  return {
-    ...lastResult,
-    success: false,
-    error: lastResult?.error || `Max retries (${maxRetries}) exhausted`,
-    attemptCount: maxRetries,
-    durationMs: totalDurationMs,
-  };
+	const totalDurationMs = Date.now() - totalStartTime;
+	return {
+		...lastResult,
+		success: false,
+		error: lastResult?.error || `Max retries (${maxRetries}) exhausted`,
+		attemptCount: maxRetries,
+		durationMs: totalDurationMs,
+	};
 }
 
 module.exports = {
-  sendWithRetry,
-  calculateBackoffDelay,
-  sleep,
+	sendWithRetry,
+	calculateBackoffDelay,
+	sleep,
 };

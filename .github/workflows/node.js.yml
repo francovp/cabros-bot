@@ -21,11 +21,15 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+    - name: Install pnpm
+      uses: pnpm/action-setup@v3
+      with:
+        version: 8
     - name: Use Node.js ${{ matrix.node-version }}
       uses: actions/setup-node@v4
       with:
         node-version: ${{ matrix.node-version }}
-        cache: 'npm'
-    - run: npm ci
-    # - run: npm run build --if-present # No build step needed for this project, yet.
-    - run: npm test
+        cache: 'pnpm'
+    - run: pnpm install --frozen-lockfile
+    # - run: pnpm run build --if-present # No build step needed for this project, yet.
+    - run: pnpm test
