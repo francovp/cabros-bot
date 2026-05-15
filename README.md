@@ -165,9 +165,11 @@ When `ENABLE_GEMINI_GROUNDING=true`:
 
 ### Enrichment Features
 
-- **Sentiment Analysis**: Determines market sentiment (BULLISH/BEARISH/NEUTRAL) with confidence score
-- **Key Insights**: Extracts bullet points of critical information
-- **Technical Levels**: Identifies support and resistance levels mentioned in context
+- **Action-first CTA**: Leads with a clear next step instead of a generic technical summary
+- **Urgency traffic light**: Classifies webhook alerts as LOW / MEDIUM / HIGH urgency
+- **Simple scenarios**: Presents bull/bear "if X -> then Y" cases when enough context exists
+- **Human trader tone**: Rewrites alerts in a more direct, chat-friendly voice
+- **Repeat reminder mode**: Strong repeated sell signals can add a reminder banner on repeated equivalent alerts
 - **Verified Sources**: Extracts URLs and titles from GoogleSearch results
 - **Language Support**: Respects original language of alert text
 - **Graceful Fallback**: If enrichment fails, original alert is sent without delays
@@ -251,17 +253,26 @@ Content-Type: application/json
 
 **Message sent to Telegram:**
 ```text
-*Bitcoin breaks $83,000 resistance level with strong volume.*
+*🚨 RECOMMENDED ACTION*
+Prepare the long, but wait for confirmation before sizing up.
 
-*Key Insights*
+BTC is pushing higher, but confirmation still matters.
+
+*🟡 Urgency: Medium*
+Buyers are active, but the breakout still needs follow-through.
+
+*Scenarios*
+*Bull case*
+• If it breaks $85,000
+• next objective $88,000
+
+*Bear case*
+• If it loses $80,000
+• probable drop toward $78,000
+
+*Quick read*
 • Bitcoin price surged past $83k.
 • Volume indicates strong momentum.
-
-Sentiment: BULLISH 🚀 (0.85)
-
-*Technical Levels*
-Supports: $80,000
-Resistances: $85,000
 
 *Sources*
 [CoinDesk](https://coindesk.com/...) / [CoinTelegraph](https://cointelegraph.com/...)
@@ -1029,4 +1040,3 @@ The application logs to stdout:
 - Each retry waits: 1s, then 2s, then 4s
 - ±10% jitter prevents thundering herd
 - All retries logged at WARN/ERROR level
-

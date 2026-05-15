@@ -190,9 +190,10 @@ Runtime LLM prompts are centrally managed through `src/services/prompts/`.
 The `/api/webhook/alert` flow can produce **structured enrichment** (in addition to sources) so alerts become actionable without leaving chat.
 
 **What changes for developers**:
-- When grounding is enabled, handlers attach an object at `alert.enriched` (see `src/controllers/webhooks/handlers/alert/grounding.js`) with fields like `sentiment`, `sentiment_score`, `insights`, `technical_levels`, and `sources`.
+- When grounding is enabled, handlers attach an object at `alert.enriched` (see `src/controllers/webhooks/handlers/alert/grounding.js`) with action-first fields like `headline`, `recommended_action`, `urgency_level`, `urgency_reason`, `risk_warning`, `scenarios`, plus supporting data such as `sentiment`, `insights`, `technical_levels`, and `sources`.
 - Telegram uses `MarkdownV2Formatter.formatEnriched()` when `alert.enriched` is an object (see `src/services/notification/TelegramService.js`). WhatsApp follows its own formatter rules.
 - Webhook responses include per-channel `results` plus a `tokenUsage` summary to help track LLM cost/usage.
+- Repeated strong sell alerts can be annotated with a reminder banner via `AlertReminderService` when the same asset/signal appears again; there is no autonomous timer.
 
 **Graceful fallback**: if enrichment fails (timeout/API errors/malformed output), delivery proceeds with `alert.text` (fail-open).
 
@@ -358,7 +359,7 @@ The system uses two complementary terms with specific meanings:
 | 001 | Grounding (Gemini) | Enriched alerts with sources | ENABLE_GEMINI_GROUNDING |
 | 002 | NotificationManager | Enriched alerts on WhatsApp | ENABLE_WHATSAPP_ALERTS |
 | 003 | News analysis + Grounding | Enriched news alerts | ENABLE_NEWS_MONITOR |
-| 004 | Webhook alert output enrichment | Structured sentiment/insights/levels for `/api/webhook/alert` | ENABLE_GEMINI_GROUNDING |
+| 004 | Webhook alert output enrichment | Action-first CTA, urgency, scenarios, and human alert copy for `/api/webhook/alert` | ENABLE_GEMINI_GROUNDING |
 | 005 | Runtime error monitoring | Capture unexpected runtime errors (side-effect only) | ENABLE_SENTRY |
 
 ### Usage Guidelines
@@ -381,7 +382,7 @@ See `/specs/TERMINOLOGY_GUIDE.md` for extended discussion and examples.
 - 001-gemini-grounding-alert (improvements with PR #21, #20, #19): Added Gemini GoogleSearch grounding integration for alert enrichment; added Brave Search fallback/override; introduced provider routing (Gemini/Azure/OpenRouter); added token usage + cost estimation surfaced in notifications; graceful degradation on API failure; single grounding call reused across channels.
 - 002-whatsapp-alerts: Added multi-channel notification system with TelegramService, WhatsAppService, NotificationManager; exponential backoff retry logic; MarkdownV2 and WhatsApp markdown formatters; comprehensive integration tests for parallel delivery, config validation, graceful degradation.
 - 003-news-monitor (improvement with PR #18): Added `/api/news-monitor` endpoint for financial news analysis and sentiment-based alerts; Gemini GoogleSearch integration for market context; optional secondary LLM enrichment via Azure AI Inference (migrated to `@azure-rest/ai-inference`); in-memory deduplication cache; optional Binance price integration; parallel symbol analysis with timeout management; configurable event detection; URL shortening for WhatsApp citations.
-- 004-enrich-alert-output: Enriched `/api/webhook/alert` output with structured fields (sentiment, insights, technical levels) using the existing grounding pipeline; Telegram/WhatsApp formatters render structured enrichment when present.
+- 004-enrich-alert-output: Enriched `/api/webhook/alert` output with action-first fields (CTA, urgency, scenarios, warning copy) using the existing grounding pipeline; Telegram/WhatsApp formatters render the richer output when present, and repeated strong sell signals can surface a reminder banner.
 - 005-sentry-runtime-errors (PR #16): Added runtime error monitoring via `SentryService` + early initialization in `instrument.js`, plus Express error handler wiring; monitoring is gated by `ENABLE_SENTRY` + `SENTRY_DSN`.
 
 ## Pull Requests

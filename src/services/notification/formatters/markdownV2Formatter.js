@@ -6,6 +6,8 @@
  * Reference: https://core.telegram.org/bots/api#markdownv2-style
  */
 
+const { getWebhookCopy, normalizeActionableAlert } = require('../../alerts/actionableAlert');
+
 const SPECIAL_CHARS = [
 	'\\',
 	// '_',
@@ -71,6 +73,54 @@ function formatTokenUsageMarkdown(tokenUsage) {
 	return smartEscapeMarkdownV2(normalizeBackslashes(line));
 }
 
+function escapeDynamicText(text) {
+	return smartEscapeMarkdownV2(normalizeBackslashes(text));
+}
+
+function getUrgencyEmoji(level) {
+	if (level === 'HIGH') {
+		return '🔴';
+	}
+
+	if (level === 'MEDIUM') {
+		return '🟡';
+	}
+
+	return '🟢';
+}
+
+function formatScenarioBlock(label, scenario) {
+	if (!scenario || (!scenario.trigger && !scenario.outcome)) {
+		return '';
+	}
+
+	const lines = [`*${label}*`];
+	if (scenario.trigger) {
+		lines.push(`• ${escapeDynamicText(scenario.trigger)}`);
+	}
+	if (scenario.outcome) {
+		lines.push(`• ${escapeDynamicText(scenario.outcome)}`);
+	}
+
+	return lines.join('\n');
+}
+
+function formatKeyLevels(copy, technicalLevels = {}) {
+	const supports = technicalLevels.supports || [];
+	const resistances = technicalLevels.resistances || [];
+	const lines = [`*${copy.labels.keyLevels}*`];
+
+	if (supports.length > 0) {
+		lines.push(`${copy.labels.supports}: ${supports.map(level => escapeDynamicText(level)).join(', ')}`);
+	}
+
+	if (resistances.length > 0) {
+		lines.push(`${copy.labels.resistances}: ${resistances.map(level => escapeDynamicText(level)).join(', ')}`);
+	}
+
+	return lines.length > 1 ? lines.join('\n') : '';
+}
+
 /**
  * MarkdownV2Formatter - Formats text for Telegram MarkdownV2 parse mode
  */
@@ -113,81 +163,91 @@ class MarkdownV2Formatter {
    * @returns {string} Formatted message
    */
 	formatWebhookAlert(enriched = {}) {
+		const normalized = normalizeActionableAlert(enriched);
 		const {
-			original_text = '',
-			sentiment = 'NEUTRAL',
-			sentiment_score = 0,
+			headline = '',
+			recommended_action = '',
+			urgency_level = 'LOW',
+			urgency_reason = '',
+			risk_warning = null,
 			insights = [],
 			technical_levels = { supports: [], resistances: [] },
+			scenarios = { bull: null, bear: null },
 			sources = [],
 			truncated = false,
+			language = 'es',
+			reminder = null,
 			extraText = '',
 			tokenUsage,
-		} = enriched;
+		} = normalized;
 
-		// Use smart escape for content
-		const escapedText = smartEscapeMarkdownV2(normalizeBackslashes(original_text));
+		const copy = getWebhookCopy(language);
+		const sections = [];
 
-		// Build the message
-		let message = `*${escapedText}*`;
-
-		if (truncated) {
-			message += '\n\n_\\(Message was truncated due to length\\)_';
+		if (reminder && reminder.text) {
+			sections.push(`*🔔 ${copy.labels.reminder}*\n${escapeDynamicText(reminder.text)}`);
 		}
 
+		if (recommended_action) {
+			sections.push(`*🚨 ${copy.labels.action}*\n${escapeDynamicText(recommended_action)}`);
+		}
 
-		// Insights
+		if (headline) {
+			sections.push(escapeDynamicText(headline));
+		}
+
+		const urgencyLabel = copy.urgencyLabels[urgency_level] || urgency_level;
+		sections.push(`*${getUrgencyEmoji(urgency_level)} ${copy.labels.urgency}: ${escapeDynamicText(urgencyLabel)}*\n${escapeDynamicText(urgency_reason)}`);
+
+		if (risk_warning) {
+			sections.push(`*⚠️ ${copy.labels.caution}*\n${escapeDynamicText(risk_warning)}`);
+		}
+
+		const bullScenario = formatScenarioBlock(copy.labels.bull, scenarios.bull);
+		const bearScenario = formatScenarioBlock(copy.labels.bear, scenarios.bear);
+		if (bullScenario || bearScenario) {
+			sections.push([`*${copy.labels.scenarios}*`, bullScenario, bearScenario].filter(Boolean).join('\n'));
+		}
+
 		if (insights.length > 0) {
-			message += '\n\n*Key Insights*';
+			const insightSection = [`*${copy.labels.quickRead}*`];
 			insights.forEach(insight => {
-				message += `\n• ${smartEscapeMarkdownV2(normalizeBackslashes(insight))}`;
+				insightSection.push(`• ${escapeDynamicText(insight)}`);
 			});
+			sections.push(insightSection.join('\n'));
 		}
 
-		// Sentiment
-		const sentimentEmoji = sentiment === 'BULLISH' ? '🚀' : sentiment === 'BEARISH' ? '🔻' : '😐';
-		const score = sentiment_score.toFixed(2).replace('.', '\\.');
-		message += `\n\nSentiment: ${sentiment} ${sentimentEmoji} \\(${score}\\)`;
-
-		// Technical Levels
 		const hasSupports = technical_levels.supports && technical_levels.supports.length > 0;
 		const hasResistances = technical_levels.resistances && technical_levels.resistances.length > 0;
-
-		if (hasSupports || hasResistances) {
-			message += '\n\n*Technical Levels*';
-			if (hasSupports) {
-				const supports = technical_levels.supports.map(s => smartEscapeMarkdownV2(s)).join(', ');
-				message += `\nSupports: ${supports}`;
-			}
-			if (hasResistances) {
-				const resistances = technical_levels.resistances.map(r => smartEscapeMarkdownV2(r)).join(', ');
-				message += `\nResistances: ${resistances}`;
-			}
+		if (!bullScenario && !bearScenario && (hasSupports || hasResistances)) {
+			sections.push(formatKeyLevels(copy, technical_levels));
 		}
 
-		// Sources
+		if (truncated) {
+			sections.push('_\\(Message was truncated due to length\\)_');
+		}
+
 		if (sources.length > 0) {
 			const formattedSources = sources
 				.map(({ title = '', url = '' }) => {
-					const unescapedTitle = title.replace(/\\([_*[\]~`>#{=|\.}])/g, '$1');
+					const unescapedTitle = title.replace(/\\([_*[\]~`>#{=|.}])/g, '$1');
 					const escapedTitleForLink = smartEscapeMarkdownV2(normalizeBackslashes(unescapedTitle));
 					return `[${escapedTitleForLink}](${url})`;
 				})
 				.join(' / ');
-			message += `\n\n*Sources*\n${formattedSources}`;
+			sections.push(`*${copy.labels.sources}*\n${formattedSources}`);
 		}
 
-		// Model metadata footer
 		if (extraText) {
-			message += `\n\n${extraText}`;
+			sections.push(extraText);
 		}
 
 		const tokenLine = formatTokenUsageMarkdown(tokenUsage);
 		if (tokenLine) {
-			message += `\n\n_${tokenLine}_`;
+			sections.push(`_${tokenLine}_`);
 		}
 
-		return message;
+		return sections.filter(Boolean).join('\n\n');
 	}
 
 	/**

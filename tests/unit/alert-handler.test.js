@@ -1,5 +1,3 @@
-/* global jest, describe, it, expect, beforeEach */
-
 const { enrichAlert } = require('../../src/controllers/webhooks/handlers/alert/grounding');
 const { groundAlert } = require('../../src/services/grounding/grounding');
 const { GROUNDING_MODEL_NAME } = require('../../src/services/grounding/config');
@@ -47,7 +45,9 @@ describe('Alert Handler', () => {
 		expect(result.insights).toEqual(groundedContent.insights);
 		expect(result.sources).toEqual(groundedContent.sources);
 		expect(result.truncated).toBe(false);
-		expect(result).not.toHaveProperty('technical_levels');
+		expect(result.technical_levels).toEqual({ supports: [], resistances: [] });
+		expect(result.recommended_action).toBeTruthy();
+		expect(result.urgency_level).toBe('HIGH');
 
 		expect(groundAlert).toHaveBeenCalledWith({
 			text: alert.text,
@@ -134,6 +134,7 @@ describe('Alert Handler', () => {
 			original_text: 'BTCUSDT(240) pasó a señal de VENTA',
 			sentiment: 'BEARISH',
 			sentiment_score: -0.6,
+			signal_side: 'SELL',
 			insights: ['MCP insight'],
 			technical_levels: { supports: ['65000'], resistances: ['68000'] },
 			sources: [],
@@ -159,6 +160,7 @@ describe('Alert Handler', () => {
 		expect(result.insights).toEqual(expect.arrayContaining(['Gemini insight', 'MCP insight']));
 		expect(result.technical_levels.supports).toEqual(['65000']);
 		expect(result.technical_levels.resistances).toEqual(['68000']);
+		expect(result.signal_side).toBe('SELL');
 		expect(result.sources).toEqual([{ title: 'Source 1', url: 'https://example.com' }]);
 		expect(result.extraText).toContain('*Model used*: `gemini-2.5-flash`');
 		expect(result.extraText).toContain(`*Grounding*: \`${GROUNDING_MODEL_NAME}\`, \`tradingview-mcp\``);
@@ -176,6 +178,7 @@ describe('Alert Handler', () => {
 			original_text: 'BTCUSDT(240) pasó a señal de VENTA',
 			sentiment: 'BEARISH',
 			sentiment_score: -0.6,
+			signal_side: 'SELL',
 			insights: ['MCP bearish insight'],
 			technical_levels: { supports: ['65000'], resistances: ['68000'] },
 			sources: [],
@@ -195,6 +198,7 @@ describe('Alert Handler', () => {
 		expect(result.sentiment_score).toBe(-0.6);
 		expect(result.insights).toEqual(expect.arrayContaining(['Gemini insight without score', 'MCP bearish insight']));
 		expect(result.technical_levels).toEqual({ supports: ['65000'], resistances: ['68000'] });
+		expect(result.signal_side).toBe('SELL');
 
 		process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
 	});

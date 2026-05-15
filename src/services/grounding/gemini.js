@@ -140,7 +140,7 @@ async function analyzeNewsForSymbol(symbol, context, options = {}) {
 		/** @type {SearchResult[]} */
 		const sourcesList = searchResult.results
 			.map(r => r.title || null)
-			.filter(Boolean)
+			.filter(Boolean);
 
 		const enrichedContext = `${context}\n\nGrounded Context from Search:\n${groundingContext}\n\nSources: ${sourcesList.join(', ')}`;
 		console.debug('[Gemini][analyzeNewsForSymbol] Enriched context for analysis:', enrichedContext);
@@ -155,7 +155,7 @@ async function analyzeNewsForSymbol(symbol, context, options = {}) {
 			const result = await genaiClient.llmCallv2({
 				systemPrompt: prompt.systemPrompt,
 				userPrompt: prompt.userPrompt,
-				opts: { model: GEMINI_MODEL_NAME, temperature: 0.3 }
+				opts: { model: GEMINI_MODEL_NAME, temperature: 0.3 },
 			});
 			if (tokenUsage && result.usage) {
 				tokenUsage.addUsage(result.usage, GEMINI_MODEL_NAME);
@@ -172,7 +172,7 @@ async function analyzeNewsForSymbol(symbol, context, options = {}) {
 					const fallbackResult = await genaiClient.llmCallv2({
 						systemPrompt: prompt.systemPrompt,
 						userPrompt: prompt.userPrompt,
-						opts: { model: GEMINI_MODEL_NAME_FALLBACK, temperature: 0.3 }
+						opts: { model: GEMINI_MODEL_NAME_FALLBACK, temperature: 0.3 },
 					});
 					if (tokenUsage && fallbackResult.usage) {
 						tokenUsage.addUsage(fallbackResult.usage, GEMINI_MODEL_NAME_FALLBACK);
@@ -193,15 +193,15 @@ async function analyzeNewsForSymbol(symbol, context, options = {}) {
 		// Use grounded sources if available (store full SearchResult objects, not just URLs)
 		analysisResult.sources = searchResult.results || [];
 
-		// Calculate confidence using formula: (0.6 × event_significance + 0.4 × |sentiment|)
+		// Calculate confidence using the existing weighted formula.
 		const confidence = 0.6 * analysisResult.event_significance + 0.4 * Math.abs(analysisResult.sentiment_score);
-		analysisResult.confidence = Math.max(0, Math.min(1, confidence)); // Clamp to [0, 1]
+		analysisResult.confidence = Math.max(0, Math.min(1, confidence));
 
 		console.info('[Gemini] News analysis complete with grounding', {
 			symbol,
 			category: analysisResult.event_category,
 			confidence: analysisResult.confidence,
-			groundedSources: analysisResult.sources.length
+			groundedSources: analysisResult.sources.length,
 		});
 
 		return analysisResult;
@@ -237,7 +237,7 @@ function parseNewsAnalysisResponse(response) {
 			event_significance: Math.max(0, Math.min(1, parsed.event_significance || 0)),
 			sentiment_score: Math.max(-1, Math.min(1, parsed.sentiment_score || 0)),
 			headline: (parsed.headline || 'Market event detected').substring(0, 250),
-			description: parsed.description || ''
+			description: parsed.description || '',
 		};
 	} catch (error) {
 		console.error('[Gemini] Response parsing failed:', error.message);
@@ -247,7 +247,7 @@ function parseNewsAnalysisResponse(response) {
 			event_significance: 0,
 			sentiment_score: 0,
 			headline: 'Could not detect market event',
-			description: ''
+			description: '',
 		};
 	}
 }
@@ -272,8 +272,18 @@ async function generateEnrichedAlert({ text, searchResults = [], searchResultTex
 	if (text.length < 15 || text.split(/\s+/).length < 2) {
 		return {
 			sentiment: 'NEUTRAL',
-			sentiment_score: 0.5,
+			sentiment_score: 0,
 			insights: [],
+			technical_levels: { supports: [], resistances: [] },
+			scenarios: { bull: null, bear: null },
+			headline: '',
+			recommended_action: '',
+			urgency_level: 'LOW',
+			urgency_reason: '',
+			risk_warning: null,
+			asset_symbol: null,
+			timeframe: null,
+			signal_side: 'WAIT',
 		};
 	}
 
@@ -319,6 +329,21 @@ async function generateEnrichedAlert({ text, searchResults = [], searchResultTex
  * @returns {object} Validated enriched alert data
  */
 function parseEnrichedAlertResponse(response) {
+	function normalizeScenarioEntry(entry) {
+		if (!entry || typeof entry !== 'object') {
+			return null;
+		}
+
+		const trigger = typeof entry.trigger === 'string' ? entry.trigger.trim() : '';
+		const outcome = typeof entry.outcome === 'string' ? entry.outcome.trim() : '';
+
+		if (!trigger && !outcome) {
+			return null;
+		}
+
+		return { trigger, outcome };
+	}
+
 	try {
 		const jsonMatch = response.match(/\{[\s\S]*\}/);
 		if (!jsonMatch) {
@@ -331,18 +356,48 @@ function parseEnrichedAlertResponse(response) {
 		if (!['BULLISH', 'BEARISH', 'NEUTRAL'].includes(parsed.sentiment)) {
 			parsed.sentiment = 'NEUTRAL';
 		}
-		
+
 		return {
 			sentiment: parsed.sentiment,
-			sentiment_score: Math.max(0, Math.min(1, parsed.sentiment_score || 0.5)),
+			sentiment_score: typeof parsed.sentiment_score === 'number' ? parsed.sentiment_score : 0,
 			insights: Array.isArray(parsed.insights) ? parsed.insights : [],
+			technical_levels: {
+				supports: Array.isArray(parsed.technical_levels && parsed.technical_levels.supports)
+					? parsed.technical_levels.supports
+					: [],
+				resistances: Array.isArray(parsed.technical_levels && parsed.technical_levels.resistances)
+					? parsed.technical_levels.resistances
+					: [],
+			},
+			scenarios: {
+				bull: normalizeScenarioEntry(parsed.scenarios && parsed.scenarios.bull),
+				bear: normalizeScenarioEntry(parsed.scenarios && parsed.scenarios.bear),
+			},
+			headline: typeof parsed.headline === 'string' ? parsed.headline : '',
+			recommended_action: typeof parsed.recommended_action === 'string' ? parsed.recommended_action : '',
+			urgency_level: typeof parsed.urgency_level === 'string' ? parsed.urgency_level.toUpperCase() : '',
+			urgency_reason: typeof parsed.urgency_reason === 'string' ? parsed.urgency_reason : '',
+			risk_warning: typeof parsed.risk_warning === 'string' ? parsed.risk_warning : null,
+			asset_symbol: typeof parsed.asset_symbol === 'string' ? parsed.asset_symbol : null,
+			timeframe: typeof parsed.timeframe === 'string' ? parsed.timeframe : null,
+			signal_side: typeof parsed.signal_side === 'string' ? parsed.signal_side.toUpperCase() : 'WAIT',
 		};
 	} catch (error) {
 		console.warn(`[Gemini] Response parsing failed, using safe defaults: ${error.message}`);
 		return {
 			sentiment: 'NEUTRAL',
-			sentiment_score: 0.5,
+			sentiment_score: 0,
 			insights: [],
+			technical_levels: { supports: [], resistances: [] },
+			scenarios: { bull: null, bear: null },
+			headline: '',
+			recommended_action: '',
+			urgency_level: 'LOW',
+			urgency_reason: '',
+			risk_warning: null,
+			asset_symbol: null,
+			timeframe: null,
+			signal_side: 'WAIT',
 		};
 	}
 }

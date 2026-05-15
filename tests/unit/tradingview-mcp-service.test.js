@@ -44,10 +44,17 @@ describe('TradingViewMcpService', () => {
 		expect(result).toEqual(expect.objectContaining({
 			original_text: 'BTCUSDT(240) pasó a señal de VENTA',
 			sentiment: 'BEARISH',
+			signal_side: 'SELL',
+			urgency_level: expect.any(String),
+			recommended_action: expect.any(String),
 			technical_levels: expect.objectContaining({
 				supports: expect.any(Array),
 				resistances: expect.any(Array),
 			}),
+		}));
+		expect(result.scenarios).toEqual(expect.objectContaining({
+			bull: expect.anything(),
+			bear: expect.anything(),
 		}));
 		expect(result.insights.join(' ')).toContain('BTCUSDT');
 		expect(result.insights.join(' ')).toContain('4h');

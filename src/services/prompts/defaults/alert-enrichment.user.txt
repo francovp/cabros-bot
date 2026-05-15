@@ -1,4 +1,4 @@
-Analyze this alert and provide structured insights, sentiment, and technical levels based on the context.
+Analyze this alert and turn it into actionable trading guidance based on the context.
 
 Alert: {{alertContext}}
 
@@ -6,11 +6,38 @@ Instructions:
 - **Output:** Respond *only* with a single, valid JSON object.
 - **JSON schema:**
 {
+  "asset_symbol": string | null,
+  "timeframe": string | null,
+  "signal_side": "BUY" | "SELL" | "WAIT",
+  "headline": string,
+  "recommended_action": string,
+  "urgency_level": "LOW" | "MEDIUM" | "HIGH",
+  "urgency_reason": string,
+  "risk_warning": string | null,
   "sentiment": "BULLISH" | "BEARISH" | "NEUTRAL",
-  "sentiment_score": number (0.0 to 1.0),
-  "insights": string[] (max 10 key points),
+  "sentiment_score": number (-1.0 to 1.0, bullish positive, bearish negative),
+  "insights": string[] (max 4 short points),
   "technical_levels": {
     "supports": string[],
     "resistances": string[]
+  },
+  "scenarios": {
+    "bull": {
+      "trigger": string,
+      "outcome": string
+    } | null,
+    "bear": {
+      "trigger": string,
+      "outcome": string
+    } | null
   }
 }
+
+Rules:
+- `headline` must sound like a trader talking to another trader.
+- `recommended_action` must be explicit and actionable.
+- `urgency_level` must reflect how quickly the trader should react.
+- `urgency_reason` should explain the urgency in one short sentence.
+- `risk_warning` should only be present when there is a real caution, divergence, or trap risk.
+- `scenarios.bull` and `scenarios.bear` should use simple "if X -> then Y" logic when enough context exists.
+- Do not invent levels or symbols that are not supported by the alert or grounded context.

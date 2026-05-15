@@ -1,6 +1,7 @@
 /* global fetch, AbortController */
 
 const { sendWithRetry } = require('../../lib/retryHelper');
+const { detectAlertLanguage, normalizeActionableAlert, UrgencyLevel } = require('../alerts/actionableAlert');
 const { parseTradingViewSignal, normalizeTradingViewTimeframe } = require('./parseTradingViewSignal');
 
 class TradingViewMcpService {
@@ -262,12 +263,12 @@ class TradingViewMcpService {
 
 	_toEnrichedAlert(originalText, signal, analysis = {}) {
 		const { side, symbol, exchange, timeframe } = signal;
-		const sideLabel = side === 'SELL' ? 'VENTA' : 'COMPRA';
 		const sideSentiment = side === 'SELL' ? -0.55 : 0.55;
 		const rating = this._safeNumber(analysis && analysis.bollinger_analysis && analysis.bollinger_analysis.rating, 0);
 		const ratingBias = Math.max(-0.35, Math.min(0.35, rating / 10));
 		const sentimentScore = Math.max(-1, Math.min(1, sideSentiment + ratingBias));
 		const sentiment = sentimentScore > 0.15 ? 'BULLISH' : sentimentScore < -0.15 ? 'BEARISH' : 'NEUTRAL';
+		const language = detectAlertLanguage(originalText);
 
 		const priceData = (analysis && analysis.price_data) || {};
 		const indicators = (analysis && analysis.technical_indicators) || {};
@@ -283,15 +284,26 @@ class TradingViewMcpService {
 			this._formatLevel(bollinger.bb_upper),
 			this._formatLevel(priceData.high),
 		]);
+		const urgencyLevel = this._determineUrgency({
+			side,
+			sentimentScore,
+			indicators,
+			bollinger,
+			marketSentiment,
+		});
+		const insights = this._compactUnique(this._buildInsights({
+			language,
+			side,
+			symbol,
+			timeframe,
+			exchange,
+			priceData,
+			indicators,
+			marketSentiment,
+			rating,
+		}));
 
-		const insights = this._compactUnique([
-			`Señal detectada: ${sideLabel} para ${symbol} en ${timeframe} (${exchange})`,
-			`Precio actual: ${this._formatLevel(priceData.current_price)} (${this._formatPercent(priceData.change_percent)})`,
-			`RSI ${this._formatLevel(indicators.rsi)} (${indicators.rsi_signal || 'N/A'}) · ADX ${this._formatLevel(indicators.adx)} (${indicators.trend_strength || 'N/A'})`,
-			`Bollinger rating ${rating} (${bollinger.position || 'N/A'}) · Momentum ${marketSentiment.momentum || 'N/A'}`,
-		]);
-
-		return {
+		return normalizeActionableAlert({
 			original_text: originalText,
 			sentiment,
 			sentiment_score: sentimentScore,
@@ -302,8 +314,239 @@ class TradingViewMcpService {
 			},
 			sources: [],
 			truncated: false,
+			headline: this._buildHeadline({
+				language,
+				side,
+				symbol,
+				timeframe,
+				urgencyLevel,
+			}),
+			recommended_action: this._buildRecommendedAction({
+				language,
+				side,
+				urgencyLevel,
+			}),
+			urgency_level: urgencyLevel,
+			urgency_reason: this._buildUrgencyReason({
+				language,
+				side,
+				urgencyLevel,
+				indicators,
+				marketSentiment,
+			}),
+			risk_warning: this._buildRiskWarning({
+				language,
+				side,
+				indicators,
+				marketSentiment,
+			}),
+			scenarios: this._buildScenarios({
+				language,
+				supports,
+				resistances,
+			}),
+			asset_symbol: symbol,
+			timeframe,
+			signal_side: side,
 			extraText: '*Grounding*: `tradingview-mcp`',
+			language,
+			market_context: {
+				current_price: priceData.current_price,
+				change_percent: priceData.change_percent,
+			},
+			indicator_context: {
+				rsiSignal: indicators.rsi_signal || '',
+				trendStrength: indicators.trend_strength || '',
+				momentum: marketSentiment.momentum || '',
+				highConviction: urgencyLevel === UrgencyLevel.HIGH,
+				divergenceHint: this._hasDivergenceHint({ side, indicators, marketSentiment }),
+			},
+		});
+	}
+
+	_determineUrgency({ side, sentimentScore, indicators = {}, bollinger = {}, marketSentiment = {} }) {
+		const rsi = this._safeNumber(indicators.rsi, 0);
+		const adx = this._safeNumber(indicators.adx, 0);
+		const trendStrength = String(indicators.trend_strength || '').toLowerCase();
+		const momentum = String(marketSentiment.momentum || '').toLowerCase();
+		const position = String(bollinger.position || '').toLowerCase();
+		const extremeRsi = side === 'SELL' ? rsi >= 68 : rsi <= 32;
+		const strongTrend = adx >= 25 || trendStrength.includes('strong');
+		const alignedMomentum = side === 'SELL' ? momentum.includes('bear') : momentum.includes('bull');
+		const stretchedPrice = position.includes('upper') || position.includes('lower');
+
+		if (Math.abs(sentimentScore) >= 0.75 || (extremeRsi && (strongTrend || alignedMomentum || stretchedPrice))) {
+			return UrgencyLevel.HIGH;
+		}
+
+		if (Math.abs(sentimentScore) >= 0.45 || extremeRsi || strongTrend || alignedMomentum) {
+			return UrgencyLevel.MEDIUM;
+		}
+
+		return UrgencyLevel.LOW;
+	}
+
+	_buildInsights({ language, side, symbol, timeframe, exchange, priceData = {}, indicators = {}, marketSentiment = {}, rating }) {
+		const currentPrice = this._formatLevel(priceData.current_price);
+		const changePercent = this._formatPercent(priceData.change_percent);
+		const rsi = this._formatLevel(indicators.rsi);
+		const adx = this._formatLevel(indicators.adx);
+		const rsiSignal = indicators.rsi_signal || 'N/A';
+		const trendStrength = indicators.trend_strength || 'N/A';
+		const momentum = marketSentiment.momentum || 'N/A';
+
+		if (language === 'en') {
+			return [
+				`${side === 'SELL' ? 'Sell' : 'Buy'} signal detected on ${symbol} ${timeframe} (${exchange})`,
+				`Price sits at ${currentPrice} (${changePercent}) with ${momentum} momentum`,
+				`RSI ${rsi} (${rsiSignal}) and ADX ${adx} (${trendStrength}) keep the setup active`,
+				`Bollinger rating ${rating} still leans ${side === 'SELL' ? 'against buyers' : 'in favor of buyers'}`,
+			];
+		}
+
+		return [
+			`Senal de ${side === 'SELL' ? 'VENTA' : 'COMPRA'} en ${symbol} ${timeframe} (${exchange})`,
+			`Precio en ${currentPrice} (${changePercent}) con momentum ${momentum}`,
+			`RSI ${rsi} (${rsiSignal}) y ADX ${adx} (${trendStrength}) mantienen viva la jugada`,
+			`Bollinger rating ${rating} sigue ${side === 'SELL' ? 'presionando a los compradores' : 'favoreciendo a los compradores'}`,
+		];
+	}
+
+	_buildHeadline({ language, side, symbol, timeframe, urgencyLevel }) {
+		if (language === 'en') {
+			if (side === 'SELL') {
+				return urgencyLevel === UrgencyLevel.HIGH
+					? `${symbol} flipped in ${timeframe}. The bullish party looks done for now.`
+					: `${symbol} is weakening in ${timeframe}. Be careful buying the bounce.`;
+			}
+
+			return urgencyLevel === UrgencyLevel.HIGH
+				? `${symbol} is pressing higher in ${timeframe}, but only chase it with confirmation.`
+				: `${symbol} looks better in ${timeframe}, though it can still fake out before continuing.`;
+		}
+
+		if (side === 'SELL') {
+			return urgencyLevel === UrgencyLevel.HIGH
+				? `${symbol} cambio la estructura en ${timeframe}. Se acabo la fiesta alcista por ahora.`
+				: `${symbol} se esta enfriando en ${timeframe}. Ojo con seguir comprando arriba.`;
+		}
+
+		return urgencyLevel === UrgencyLevel.HIGH
+			? `${symbol} quiere romper en ${timeframe}, pero solo persiguelo si confirma.`
+			: `${symbol} mejora en ${timeframe}, aunque todavia puede barrer antes de seguir.`;
+	}
+
+	_buildRecommendedAction({ language, side, urgencyLevel }) {
+		if (language === 'en') {
+			if (side === 'SELL') {
+				return urgencyLevel === UrgencyLevel.HIGH
+					? 'Take partial profits or close the position and move the stop now.'
+					: 'Reduce risk and protect the position before looking for a fresh long.';
+			}
+
+			return urgencyLevel === UrgencyLevel.HIGH
+				? 'Look for continuation only with a confirmed break and a tight stop.'
+				: 'Prepare the long, but wait for confirmation before sizing up.';
+		}
+
+		if (side === 'SELL') {
+			return urgencyLevel === UrgencyLevel.HIGH
+				? 'Tomar ganancias parciales o cerrar posicion y subir el stop ahora.'
+				: 'Reducir exposicion y proteger la posicion antes de buscar otra compra.';
+		}
+
+		return urgencyLevel === UrgencyLevel.HIGH
+			? 'Buscar continuidad solo con ruptura confirmada y stop corto.'
+			: 'Preparar la entrada, pero esperar confirmacion antes de meter size.';
+	}
+
+	_buildUrgencyReason({ language, side, urgencyLevel, indicators = {}, marketSentiment = {} }) {
+		const rsi = this._formatLevel(indicators.rsi);
+		const adx = this._formatLevel(indicators.adx);
+		const momentum = marketSentiment.momentum || 'N/A';
+
+		if (language === 'en') {
+			if (urgencyLevel === UrgencyLevel.HIGH) {
+				return side === 'SELL'
+					? `Sell pressure stays active with RSI ${rsi}, ADX ${adx}, and ${momentum} momentum.`
+					: `Buy pressure stays active with RSI ${rsi}, ADX ${adx}, and ${momentum} momentum.`;
+			}
+
+			if (urgencyLevel === UrgencyLevel.MEDIUM) {
+				return side === 'SELL'
+					? 'The setup is turning lower, but it still needs cleaner follow-through.'
+					: 'Buyers are active, but the breakout still needs cleaner follow-through.';
+			}
+
+			return 'This is a smaller shift for now, so monitoring is enough.';
+		}
+
+		if (urgencyLevel === UrgencyLevel.HIGH) {
+			return side === 'SELL'
+				? `La venta sigue viva con RSI ${rsi}, ADX ${adx} y momentum ${momentum}.`
+				: `La compra sigue viva con RSI ${rsi}, ADX ${adx} y momentum ${momentum}.`;
+		}
+
+		if (urgencyLevel === UrgencyLevel.MEDIUM) {
+			return side === 'SELL'
+				? 'La estructura va girando a la baja, pero aun falta continuidad mas limpia.'
+				: 'Aparecen compradores, pero la ruptura aun necesita continuidad mas limpia.';
+		}
+
+		return 'Por ahora es un cambio menor, asi que basta con monitorear.';
+	}
+
+	_buildRiskWarning({ language, side, indicators = {}, marketSentiment = {} }) {
+		const rsiSignal = String(indicators.rsi_signal || '').toLowerCase();
+		const momentum = String(marketSentiment.momentum || '').toLowerCase();
+
+		if (side === 'SELL' && (rsiSignal.includes('overbought') || momentum.includes('bear'))) {
+			return language === 'en'
+				? 'Price can still bounce, but the strength is fading. Do not buy the top.'
+				: 'El precio todavia puede rebotar, pero la fuerza se esta agotando. No compres el peak.';
+		}
+
+		if (side === 'BUY' && (rsiSignal.includes('oversold') || momentum.includes('bull'))) {
+			return language === 'en'
+				? 'If the break does not confirm quickly, this can shake out longs before continuing.'
+				: 'Si la ruptura no confirma rapido, esto puede barrer largos antes de seguir.';
+		}
+
+		return null;
+	}
+
+	_buildScenarios({ language, supports = [], resistances = [] }) {
+		const [firstResistance, secondResistance] = resistances;
+		const [firstSupport, secondSupport] = supports;
+
+		return {
+			bull: firstResistance
+				? {
+					trigger: language === 'en' ? `If it breaks ${firstResistance}` : `Si rompe ${firstResistance}`,
+					outcome: secondResistance
+						? language === 'en' ? `next objective ${secondResistance}` : `objetivo ${secondResistance}`
+						: language === 'en' ? 'buyers can extend the move' : 'los compradores pueden estirar el movimiento',
+				}
+				: null,
+			bear: firstSupport
+				? {
+					trigger: language === 'en' ? `If it loses ${firstSupport}` : `Si pierde ${firstSupport}`,
+					outcome: secondSupport
+						? language === 'en' ? `probable drop toward ${secondSupport}` : `caida probable a ${secondSupport}`
+						: language === 'en' ? 'the selloff can speed up lower' : 'la caida puede acelerar mas abajo',
+				}
+				: null,
 		};
+	}
+
+	_hasDivergenceHint({ side, indicators = {}, marketSentiment = {} }) {
+		const rsiSignal = String(indicators.rsi_signal || '').toLowerCase();
+		const momentum = String(marketSentiment.momentum || '').toLowerCase();
+
+		return (
+			(side === 'SELL' && (rsiSignal.includes('overbought') || momentum.includes('bear')))
+			|| (side === 'BUY' && (rsiSignal.includes('oversold') || momentum.includes('bull')))
+		);
 	}
 
 	_formatPercent(value) {

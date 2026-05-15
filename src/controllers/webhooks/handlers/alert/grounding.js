@@ -1,6 +1,7 @@
 const { validateAlert } = require('../../../../lib/validation');
 const { groundAlert } = require('../../../../services/grounding/grounding');
 const { GROUNDING_MODEL_NAME } = require('../../../../services/grounding/config');
+const { normalizeActionableAlert, URGENCY_ORDER } = require('../../../../services/alerts/actionableAlert');
 const { tradingViewMcpService } = require('../../../../services/tradingview/TradingViewMcpService');
 
 function mergeUnique(first = [], second = [], maxItems = 6) {
@@ -36,11 +37,73 @@ function buildTechnicalLevels(levels = {}) {
 	const supports = mergeUnique(levels.supports || [], [], 6);
 	const resistances = mergeUnique(levels.resistances || [], [], 6);
 
-	if (supports.length === 0 && resistances.length === 0) {
-		return undefined;
+	return { supports, resistances };
+}
+
+function pickFirstText(...values) {
+	return values.find(value => typeof value === 'string' && value.trim()) || '';
+}
+
+function resolveUrgencyLevel(primary, secondary) {
+	const primaryScore = URGENCY_ORDER[primary] || 0;
+	const secondaryScore = URGENCY_ORDER[secondary] || 0;
+	return primaryScore >= secondaryScore ? primary : secondary;
+}
+
+function resolveSentiment(primarySentiment, secondarySentiment, primaryScore, secondaryScore) {
+	const primaryIsMeaningful = primarySentiment && (primarySentiment !== 'NEUTRAL' || Math.abs(primaryScore || 0) > 0);
+	if (primaryIsMeaningful) {
+		return primarySentiment;
 	}
 
-	return { supports, resistances };
+	const secondaryIsMeaningful = secondarySentiment && (secondarySentiment !== 'NEUTRAL' || Math.abs(secondaryScore || 0) > 0);
+	if (secondaryIsMeaningful) {
+		return secondarySentiment;
+	}
+
+	return primarySentiment || secondarySentiment || 'NEUTRAL';
+}
+
+function resolveSignalSide(primary, secondary) {
+	if (secondary && secondary !== 'WAIT') {
+		return secondary;
+	}
+
+	if (primary && primary !== 'WAIT') {
+		return primary;
+	}
+
+	return primary || secondary || null;
+}
+
+function resolveSentimentScore(primaryScore, secondaryScore) {
+	const primaryIsNumber = typeof primaryScore === 'number' && !Number.isNaN(primaryScore);
+	const secondaryIsNumber = typeof secondaryScore === 'number' && !Number.isNaN(secondaryScore);
+
+	if (primaryIsNumber && Math.abs(primaryScore) > 0) {
+		return primaryScore;
+	}
+
+	if (secondaryIsNumber && Math.abs(secondaryScore) > 0) {
+		return secondaryScore;
+	}
+
+	if (primaryIsNumber) {
+		return primaryScore;
+	}
+
+	if (secondaryIsNumber) {
+		return secondaryScore;
+	}
+
+	return 0;
+}
+
+function mergeScenarios(primary = {}, secondary = {}) {
+	return {
+		bull: (primary && primary.bull) || (secondary && secondary.bull) || null,
+		bear: (primary && primary.bear) || (secondary && secondary.bear) || null,
+	};
 }
 
 function mergeEnrichmentData(text, geminiEnriched, mcpEnriched) {
@@ -62,21 +125,55 @@ function mergeEnrichmentData(text, geminiEnriched, mcpEnriched) {
 	const groundingFromGemini = geminiBackticked[1] || GROUNDING_MODEL_NAME;
 	const groundingProviders = mergeUnique([groundingFromGemini], ['tradingview-mcp'], 8);
 	const extraText = '*Model used*: ' + '`' + `${modelName}` + '`' + '\n*Grounding*: ' + '`' + `${groundingProviders.join('`, `')}` + '`';
+	const urgencyLevel = resolveUrgencyLevel(gemini.urgency_level, mcp.urgency_level);
 
-	return {
+	return normalizeActionableAlert({
+		...mcp,
+		...gemini,
 		original_text: text,
-		sentiment: gemini.sentiment || mcp.sentiment || 'NEUTRAL',
-		sentiment_score: geminiScore !== null ? geminiScore : (mcpScore !== null ? mcpScore : 0),
+		sentiment: resolveSentiment(gemini.sentiment, mcp.sentiment, geminiScore, mcpScore),
+		sentiment_score: resolveSentimentScore(geminiScore, mcpScore),
 		insights: mergeUnique(gemini.insights || [], mcp.insights || []),
-		...(technicalLevels ? { technical_levels: technicalLevels } : {}),
+		technical_levels: technicalLevels,
 		sources: Array.isArray(gemini.sources) ? gemini.sources : [],
 		truncated: !!(gemini.truncated || mcp.truncated),
 		extraText,
-	};
+		headline: pickFirstText(gemini.headline, mcp.headline),
+		recommended_action: pickFirstText(gemini.recommended_action, mcp.recommended_action),
+		urgency_level: urgencyLevel,
+		urgency_reason: urgencyLevel === mcp.urgency_level
+			? pickFirstText(mcp.urgency_reason, gemini.urgency_reason)
+			: pickFirstText(gemini.urgency_reason, mcp.urgency_reason),
+		risk_warning: pickFirstText(gemini.risk_warning, mcp.risk_warning) || null,
+		scenarios: mergeScenarios(gemini.scenarios, mcp.scenarios),
+		asset_symbol: pickFirstText(gemini.asset_symbol, mcp.asset_symbol) || null,
+		timeframe: pickFirstText(gemini.timeframe, mcp.timeframe) || null,
+		signal_side: resolveSignalSide(gemini.signal_side, mcp.signal_side),
+		language: gemini.language || mcp.language,
+		market_context: gemini.market_context || mcp.market_context,
+		indicator_context: gemini.indicator_context || mcp.indicator_context,
+	});
 }
 
 async function enrichWithGemini(text, tokenUsage) {
-	const { sentiment, sentiment_score, insights, sources, truncated, modelUsed } = await groundAlert({
+	const {
+		sentiment,
+		sentiment_score,
+		insights,
+		technical_levels,
+		scenarios,
+		headline,
+		recommended_action,
+		urgency_level,
+		urgency_reason,
+		risk_warning,
+		asset_symbol,
+		timeframe,
+		signal_side,
+		sources,
+		truncated,
+		modelUsed,
+	} = await groundAlert({
 		text,
 		options: {
 			preserveLanguage: true,
@@ -91,15 +188,25 @@ async function enrichWithGemini(text, tokenUsage) {
 		? '*Model used*: ' + '`' + `${modelName}` + '`' + '\n*Grounding*: ' + '`' + `${GROUNDING_MODEL_NAME}` + '`'
 		: '';
 
-	return {
+	return normalizeActionableAlert({
 		original_text: text,
 		sentiment,
 		sentiment_score,
 		insights,
+		technical_levels,
+		scenarios,
+		headline,
+		recommended_action,
+		urgency_level,
+		urgency_reason,
+		risk_warning,
+		asset_symbol,
+		timeframe,
+		signal_side,
 		sources,
 		truncated,
 		extraText,
-	};
+	});
 }
 
 /**

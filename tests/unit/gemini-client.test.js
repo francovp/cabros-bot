@@ -1,5 +1,3 @@
-/* global jest, describe, it, expect, beforeEach, afterEach */
-
 const { generateGroundedSummary, generateEnrichedAlert } = require('../../src/services/grounding/gemini');
 const genaiClient = require('../../src/services/grounding/genaiClient');
 
@@ -38,9 +36,28 @@ describe('Gemini Service', () => {
 		}];
 
 		const mockEnrichedResponse = {
+			asset_symbol: 'BTCUSDT',
+			timeframe: '4h',
+			signal_side: 'BUY',
+			headline: 'BTC is pushing higher, but confirmation still matters.',
+			recommended_action: 'Prepare the long, but wait for confirmation before sizing up.',
+			urgency_level: 'MEDIUM',
+			urgency_reason: 'Buyers are active, but the breakout still needs follow-through.',
+			risk_warning: null,
 			sentiment: 'BULLISH',
 			sentiment_score: 0.9,
 			insights: ['Insight 1', 'Insight 2'],
+			technical_levels: {
+				supports: ['$80,000'],
+				resistances: ['$85,000'],
+			},
+			scenarios: {
+				bull: {
+					trigger: 'If it breaks $85,000',
+					outcome: 'next objective $88,000',
+				},
+				bear: null,
+			},
 		};
 
 		it('should generate enriched alert with valid structure', async () => {
@@ -57,7 +74,11 @@ describe('Gemini Service', () => {
 			expect(result.sentiment).toBe('BULLISH');
 			expect(result.sentiment_score).toBe(0.9);
 			expect(result.insights).toHaveLength(2);
-			expect(result).not.toHaveProperty('technical_levels');
+			expect(result.technical_levels).toEqual(mockEnrichedResponse.technical_levels);
+			expect(result.headline).toBe(mockEnrichedResponse.headline);
+			expect(result.recommended_action).toBe(mockEnrichedResponse.recommended_action);
+			expect(result.urgency_level).toBe('MEDIUM');
+			expect(result.signal_side).toBe('BUY');
 			// sources are not returned by generateEnrichedAlert
 		});
 
@@ -71,7 +92,7 @@ describe('Gemini Service', () => {
 			});
 
 			await generateEnrichedAlert({
-				text: 'Bitcoin rompe 83k ahora mismo', // Longer text to bypass short alert check
+				text: 'Bitcoin rompe 83k ahora mismo',
 				searchResults: [],
 				options: { preserveLanguage: true },
 			});
@@ -91,8 +112,10 @@ describe('Gemini Service', () => {
 			});
 
 			expect(result.sentiment).toBe('NEUTRAL');
-			expect(result.sentiment_score).toBe(0.5);
+			expect(result.sentiment_score).toBe(0);
 			expect(result.insights).toHaveLength(0);
+			expect(result.urgency_level).toBe('LOW');
+			expect(result.signal_side).toBe('WAIT');
 			expect(genaiClient.llmCallv2).not.toHaveBeenCalled();
 		});
 
@@ -123,6 +146,8 @@ describe('Gemini Service', () => {
 
 			expect(result.sentiment).toBe('NEUTRAL');
 			expect(result.insights).toHaveLength(0);
+			expect(result.urgency_level).toBe('LOW');
+			expect(result.scenarios).toEqual({ bull: null, bear: null });
 		});
 
 		it('should use provided system prompt', async () => {

@@ -1,10 +1,9 @@
-/* global jest, describe, it, beforeEach, afterEach, expect */
-
 const request = require('supertest');
 const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
 const genaiClient = require('../../src/services/grounding/genaiClient');
 const gemini = require('../../src/services/grounding/gemini');
+const { alertReminderService } = require('../../src/services/alerts/AlertReminderService');
 const { initializeNotificationServices } = require('../../src/controllers/webhooks/handlers/alert/alert');
 
 // Define mock search results
@@ -56,12 +55,28 @@ describe('Alert Grounding Integration', () => {
 
 		genaiClient.llmCallv2.mockResolvedValue({
 			text: JSON.stringify({
+				headline: 'BTC is pushing higher, but confirmation still matters.',
+				recommended_action: 'Prepare the long, but wait for confirmation before sizing up.',
+				urgency_level: 'MEDIUM',
+				urgency_reason: 'Buyers are active, but the breakout still needs follow-through.',
+				scenarios: {
+					bull: {
+						trigger: 'If it breaks $50,500',
+						outcome: 'next objective $52,000',
+					},
+					bear: {
+						trigger: 'If it loses $49,200',
+						outcome: 'probable drop toward $48,000',
+					},
+				},
 				sentiment: 'BULLISH',
 				sentiment_score: 0.9,
 				insights: ['Insight 1', 'Insight 2'],
 			}),
 			citations: mockSearchResults,
 		});
+
+		alertReminderService.reset();
 
 		// Mock Telegram bot
 		mockTelegramSendMessage = jest.fn().mockResolvedValue({ message_id: 'test-message-id' });
@@ -88,6 +103,7 @@ describe('Alert Grounding Integration', () => {
 
 	afterEach(() => {
 		process.env = originalEnv;
+		alertReminderService.reset();
 		// Remove mounted routes
 		if (app._router.stack.length > 0) {
 			app._router.stack.pop();
@@ -120,11 +136,12 @@ describe('Alert Grounding Integration', () => {
 			if (mockTelegramSendMessage.mock.calls.length > 0) {
 				const telegramCall = mockTelegramSendMessage.mock.calls[0];
 				const messageText = telegramCall[1];
-				// Assertions for new enriched format
-				expect(messageText).toContain('Sentiment: BULLISH');
-				expect(messageText).toContain('*Key Insights*');
+				expect(messageText).toContain('*🚨 RECOMMENDED ACTION*');
+				expect(messageText).toContain('Prepare the long, but wait for confirmation before sizing up\\.');
+				expect(messageText).toContain('*🟡 Urgency: Medium*');
+				expect(messageText).toContain('*Scenarios*');
+				expect(messageText).toContain('*Bull case*');
 				expect(messageText).toContain('Insight 1');
-				expect(messageText).not.toContain('*Technical Levels*');
 				expect(messageText).toContain('*Sources*');
 				expect(messageText).toContain('[Test Result 1](https://test1.com)');
 			}
@@ -158,9 +175,9 @@ describe('Alert Grounding Integration', () => {
 			if (mockTelegramSendMessage.mock.calls.length > 0) {
 				const telegramCall = mockTelegramSendMessage.mock.calls[0];
 				const messageText = telegramCall[1];
-				expect(messageText).toContain('NEUTRAL');
-				// The degraded alert might have specific insights or empty ones
-				// Depending on implementation of _createDegradedAlert
+				expect(messageText).toContain('*🚨 RECOMMENDED ACTION*');
+				expect(messageText).toContain('*🟢 Urgency: Low*');
+				expect(messageText).not.toContain('*Quick read*');
 			}
 		});
 

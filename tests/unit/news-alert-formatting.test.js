@@ -19,6 +19,10 @@ describe('News Alert Source Formatting', () => {
 	describe('MarkdownV2Formatter.formatEnriched', () => {
 		const mockEnrichedAlert = {
 			original_text: 'Bitcoin breaks 83k',
+			headline: 'BTC is pushing higher, but confirmation still matters.',
+			recommended_action: 'Prepare the long, but wait for confirmation before sizing up.',
+			urgency_level: 'MEDIUM',
+			urgency_reason: 'Buyers are active, but the breakout still needs follow-through.',
 			sentiment: 'BULLISH',
 			sentiment_score: 0.9,
 			insights: [
@@ -29,6 +33,17 @@ describe('News Alert Source Formatting', () => {
 				supports: ['$80,000', '$81,500'],
 				resistances: ['$85,000'],
 			},
+			scenarios: {
+				bull: {
+					trigger: 'If it breaks $85,000',
+					outcome: 'next objective $88,000',
+				},
+				bear: {
+					trigger: 'If it loses $80,000',
+					outcome: 'probable drop toward $78,000',
+				},
+			},
+			language: 'en',
 			sources: [
 				{
 					title: 'CoinDesk',
@@ -44,20 +59,21 @@ describe('News Alert Source Formatting', () => {
 		it('should format enriched alert with all sections', () => {
 			const message = formatter.formatEnriched(mockEnrichedAlert);
 
-			// Check Sentiment
-			expect(message).toContain('Sentiment: BULLISH 🚀 \\(0\\.90\\)');
+			expect(message).toContain('*🚨 RECOMMENDED ACTION*');
+			expect(message).toContain('Prepare the long, but wait for confirmation before sizing up\\.');
+			expect(message).toContain('*🟡 Urgency: Medium*');
+			expect(message).toContain('BTC is pushing higher, but confirmation still matters\\.');
 
-			// Check Insights
-			expect(message).toContain('*Key Insights*');
+			expect(message).toContain('*Scenarios*');
+			expect(message).toContain('*Bull case*');
+			expect(message).toContain('If it breaks $85,000');
+			expect(message).toContain('*Bear case*');
+			expect(message).toContain('If it loses $80,000');
+
+			expect(message).toContain('*Quick read*');
 			expect(message).toContain('• Bitcoin price surged past $83k\\.');
 			expect(message).toContain('• Volume indicates strong momentum\\.');
 
-			// Check Technical Levels
-			expect(message).toContain('*Technical Levels*');
-			expect(message).toContain('Supports: $80,000, $81,500');
-			expect(message).toContain('Resistances: $85,000');
-
-			// Check Sources
 			expect(message).toContain('*Sources*');
 			expect(message).toContain('[CoinDesk](https://coindesk.com/btc)');
 			expect(message).toContain('[Bloomberg](https://bloomberg.com/crypto)');
@@ -66,7 +82,7 @@ describe('News Alert Source Formatting', () => {
 		it('should handle missing technical levels', () => {
 			const alert = { ...mockEnrichedAlert, technical_levels: { supports: [], resistances: [] } };
 			const message = formatter.formatEnriched(alert);
-			expect(message).not.toContain('*Technical Levels*');
+			expect(message).not.toContain('*Key levels*');
 		});
 
 		it('should handle missing sources', () => {
@@ -86,16 +102,22 @@ describe('News Alert Source Formatting', () => {
 			};
 			const message = formatter.formatEnriched(degradedAlert);
 
-			expect(message).toContain('*Short alert*');
-			expect(message).toContain('Sentiment: NEUTRAL 😐 \\(0\\.00\\)');
-			expect(message).not.toContain('*Key Insights*');
-			expect(message).not.toContain('*Technical Levels*');
+			expect(message).toContain('*🚨 RECOMMENDED ACTION*');
+			expect(message).toContain('Short alert');
+			expect(message).toContain('*🟢 Urgency: Low*');
+			expect(message).not.toContain('*Quick read*');
+			expect(message).not.toContain('*Key levels*');
 			expect(message).not.toContain('*Sources*');
 		});
 
 		it('should handle undefined optional fields', () => {
 			const minimalAlert = {
 				original_text: 'Minimal alert',
+				headline: 'Minimal alert',
+				recommended_action: 'Monitor only and wait for a cleaner setup before acting.',
+				language: 'en',
+				urgency_level: 'LOW',
+				urgency_reason: 'This is a smaller shift for now, so monitoring is enough.',
 				sentiment: 'BULLISH',
 				sentiment_score: 0.8,
 				// insights undefined
@@ -104,10 +126,11 @@ describe('News Alert Source Formatting', () => {
 			};
 			const message = formatter.formatEnriched(minimalAlert);
 
-			expect(message).toContain('*Minimal alert*');
-			expect(message).toContain('Sentiment: BULLISH 🚀 \\(0\\.80\\)');
-			expect(message).not.toContain('*Key Insights*');
-			expect(message).not.toContain('*Technical Levels*');
+			expect(message).toContain('*🚨 RECOMMENDED ACTION*');
+			expect(message).toContain('Minimal alert');
+			expect(message).toContain('*🟢 Urgency: Low*');
+			expect(message).not.toContain('*Quick read*');
+			expect(message).not.toContain('*Key levels*');
 			expect(message).not.toContain('*Sources*');
 		});
 	});
@@ -258,7 +281,7 @@ describe('News Alert Source Formatting', () => {
 				headline: 'Price move detected',
 				sentiment_score: 0.6,
 				confidence: 0.7,
-				sources: [], // Empty array
+				sources: [],
 			};
 
 			const message = analyzer.formatAlertMessage('SYMBOL', analysis, null);

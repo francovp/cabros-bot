@@ -1,10 +1,10 @@
 require('dotenv').config();
 const { enrichAlert } = require('./grounding');
 const { validateAlert } = require('../../../../lib/validation');
-const MarkdownV2Formatter = require('../../../../services/notification/formatters/markdownV2Formatter');
 const TelegramService = require('../../../../services/notification/TelegramService');
 const WhatsAppService = require('../../../../services/notification/WhatsAppService');
 const NotificationManager = require('../../../../services/notification/NotificationManager');
+const { alertReminderService } = require('../../../../services/alerts/AlertReminderService');
 const { getURLShortener } = require('../../handlers/newsMonitor/urlShortener');
 const sentryService = require('../../../../services/monitoring/SentryService');
 const { TokenUsageTracker } = require('../../../../lib/tokenUsage');
@@ -49,7 +49,7 @@ function getNotificationManager() {
 	return notificationManager;
 }
 
-function postAlert(bot) {
+function postAlert() {
 	return async (req, res) => {
 		const { body } = req;
 		const useTradingViewData = req.query && (req.query.useTradingViewData === true || req.query.useTradingViewData === 'true');
@@ -69,7 +69,6 @@ function postAlert(bot) {
 
 			const { text } = validateAlert(alertText);
 
-			let messageText;
 			alert = { text };
 			const isGeminiEnabled = process.env.ENABLE_GEMINI_GROUNDING === 'true';
 			const isTradingViewMcpEnabled = process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT === 'true' && useTradingViewData;
@@ -83,7 +82,7 @@ function postAlert(bot) {
 					if (enrichedAlert && typeof enrichedAlert === 'object') {
 						enrichedAlert.tokenUsage = tokenUsage.toJSON();
 						enriched = true;
-						alert.enriched = enrichedAlert;
+						alert.enriched = alertReminderService.annotate(enrichedAlert);
 						console.debug('[Alert] Enrichment completed, sources:', (enrichedAlert.sources && enrichedAlert.sources.length) || 0);
 					} else {
 						console.debug('[Alert] Enrichment skipped: alert text did not match enabled providers');

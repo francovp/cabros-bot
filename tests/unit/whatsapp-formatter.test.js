@@ -24,7 +24,7 @@ describe('WhatsAppMarkdownFormatter - T028 URL Shortening Integration', () => {
 
 		it('should initialize without urlShortener (backward compatibility)', () => {
 			const formatter = new WhatsAppMarkdownFormatter({});
-			expect(formatter.urlShortener).toBeFalsy(); // Could be undefined or null
+			expect(formatter.urlShortener).toBeFalsy();
 		});
 
 		it('should initialize with logger', () => {
@@ -50,6 +50,10 @@ describe('WhatsAppMarkdownFormatter - T028 URL Shortening Integration', () => {
 
 			const enriched = {
 				original_text: 'Bitcoin breaks 83k',
+				headline: 'BTC is pushing higher, but confirmation still matters.',
+				recommended_action: 'Prepare the long, but wait for confirmation before sizing up.',
+				urgency_level: 'MEDIUM',
+				urgency_reason: 'Buyers are active, but the breakout still needs follow-through.',
 				sentiment: 'BULLISH',
 				sentiment_score: 0.9,
 				insights: [
@@ -60,6 +64,17 @@ describe('WhatsAppMarkdownFormatter - T028 URL Shortening Integration', () => {
 					supports: ['$80,000', '$81,500'],
 					resistances: ['$85,000'],
 				},
+				scenarios: {
+					bull: {
+						trigger: 'If it breaks $85,000',
+						outcome: 'next objective $88,000',
+					},
+					bear: {
+						trigger: 'If it loses $80,000',
+						outcome: 'probable drop toward $78,000',
+					},
+				},
+				language: 'en',
 				sources: [
 					{
 						title: 'CoinDesk',
@@ -74,20 +89,21 @@ describe('WhatsAppMarkdownFormatter - T028 URL Shortening Integration', () => {
 
 			const result = await formatter.formatEnriched(enriched);
 
-			// Check Sentiment
-			expect(result).toContain('Sentiment: BULLISH 🚀 (0.90)');
+			expect(result).toContain('*🚨 RECOMMENDED ACTION*');
+			expect(result).toContain('Prepare the long, but wait for confirmation before sizing up.');
+			expect(result).toContain('*🟡 Urgency: Medium*');
+			expect(result).toContain('BTC is pushing higher, but confirmation still matters.');
 
-			// Check Insights
-			expect(result).toContain('*Key Insights*');
-			expect(result).toContain('• Bitcoin price surged past $83k.');
-			expect(result).toContain('• Volume indicates strong momentum.');
+			expect(result).toContain('*Scenarios*');
+			expect(result).toContain('*Bull case*');
+			expect(result).toContain('If it breaks $85,000');
+			expect(result).toContain('*Bear case*');
+			expect(result).toContain('If it loses $80,000');
 
-			// Check Technical Levels
-			expect(result).toContain('*Technical Levels*');
-			expect(result).toContain('Supports: $80,000, $81,500');
-			expect(result).toContain('Resistances: $85,000');
+			expect(result).toContain('*Quick read*');
+			expect(result).toContain('- Bitcoin price surged past $83k.');
+			expect(result).toContain('- Volume indicates strong momentum.');
 
-			// Check Sources
 			expect(result).toContain('*Sources*');
 			expect(result).toContain('CoinDesk: https://bit.ly/btc');
 			expect(result).toContain('Bloomberg: https://bit.ly/crypto');
@@ -108,7 +124,7 @@ describe('WhatsAppMarkdownFormatter - T028 URL Shortening Integration', () => {
 			};
 
 			const result = await formatter.formatEnriched(enriched);
-			expect(result).not.toContain('*Technical Levels*');
+			expect(result).not.toContain('*Key levels*');
 		});
 
 		it('should handle degraded/short alert (minimal fields)', async () => {
@@ -127,10 +143,11 @@ describe('WhatsAppMarkdownFormatter - T028 URL Shortening Integration', () => {
 
 			const result = await formatter.formatEnriched(degradedAlert);
 
-			expect(result).toContain('*Short alert*');
-			expect(result).toContain('Sentiment: NEUTRAL 😐 (0.00)');
-			expect(result).not.toContain('*Key Insights*');
-			expect(result).not.toContain('*Technical Levels*');
+			expect(result).toContain('*🚨 RECOMMENDED ACTION*');
+			expect(result).toContain('Short alert');
+			expect(result).toContain('*🟢 Urgency: Low*');
+			expect(result).not.toContain('*Quick read*');
+			expect(result).not.toContain('*Key levels*');
 			expect(result).not.toContain('*Sources*');
 		});
 
@@ -141,6 +158,11 @@ describe('WhatsAppMarkdownFormatter - T028 URL Shortening Integration', () => {
 
 			const minimalAlert = {
 				original_text: 'Minimal alert',
+				headline: 'Minimal alert',
+				recommended_action: 'Monitor only and wait for a cleaner setup before acting.',
+				language: 'en',
+				urgency_level: 'LOW',
+				urgency_reason: 'This is a smaller shift for now, so monitoring is enough.',
 				sentiment: 'BULLISH',
 				sentiment_score: 0.8,
 				// insights undefined
@@ -150,10 +172,11 @@ describe('WhatsAppMarkdownFormatter - T028 URL Shortening Integration', () => {
 
 			const result = await formatter.formatEnriched(minimalAlert);
 
-			expect(result).toContain('*Minimal alert*');
-			expect(result).toContain('Sentiment: BULLISH 🚀 (0.80)');
-			expect(result).not.toContain('*Key Insights*');
-			expect(result).not.toContain('*Technical Levels*');
+			expect(result).toContain('*🚨 RECOMMENDED ACTION*');
+			expect(result).toContain('Minimal alert');
+			expect(result).toContain('*🟢 Urgency: Low*');
+			expect(result).not.toContain('*Quick read*');
+			expect(result).not.toContain('*Key levels*');
 			expect(result).not.toContain('*Sources*');
 		});
 	});
