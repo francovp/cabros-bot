@@ -39,101 +39,125 @@ class NewsMonitorHandler {
 		const startTime = Date.now();
 		const tokenUsage = new TokenUsageTracker();
 
-		try {
-			// Inject notification manager into analyzer (set once before analysis)
-			const notificationManager = getNotificationManager();
-			if (notificationManager) {
-				setNotificationManager(notificationManager);
-			}
-
-			// Check feature flag
-			if (process.env.ENABLE_NEWS_MONITOR !== 'true') {
-				return res.status(403).json({
-					error: 'News monitor feature is disabled. Set ENABLE_NEWS_MONITOR=true to enable.',
-					code: 'FEATURE_DISABLED',
-					requestId,
-				});
-			}
-
-			// Parse request
-			const { crypto, stocks } = this.parseRequest(req);
-			const allSymbols = [...(crypto || []), ...(stocks || [])];
-			const validationError = this.validateRequest(allSymbols);
-			if (validationError) {
-				return res.status(400).json({
-					error: validationError,
-					code: 'INVALID_REQUEST',
-					requestId,
-				});
-			}
-
-			// Get default symbols if not provided
-			const symbolsToAnalyze = allSymbols.length > 0
-				? allSymbols
-				: this.getDefaultSymbols();
-
-			console.info('[NewsMonitor] Analyzing symbols:', symbolsToAnalyze);
-			if (symbolsToAnalyze.length === 0) {
-				return res.status(400).json({
-					error: 'No symbols to analyze. Provide crypto/stocks or set env defaults.',
-					code: 'NO_SYMBOLS',
-					requestId,
-				});
-			}
-
-			// Run analysis
-			const results = await this.analyzer.analyzeSymbols(symbolsToAnalyze, requestId, tokenUsage);
-
-			// Generate summary
-			const summary = this.generateSummary(results);
-
-			// Build response
-			const response = {
-				success: summary.analyzed > 0 || summary.cached > 0,
-				partial_success: summary.timeout > 0 || summary.error > 0,
-				results,
-				summary,
-				totalDurationMs: Date.now() - startTime,
-				requestId,
-				tokenUsage: tokenUsage.toJSON(),
-			};
-
-			// Remove partial_success if all succeeded
-			if (!response.partial_success) {
-				delete response.partial_success;
-			}
-
-			console.info('[NewsMonitor] Request complete', {
-				requestId,
-				totalMs: response.totalDurationMs,
-				summary,
-			});
-
-			return res.status(200).json(response);
-		} catch (error) {
-			console.error('[NewsMonitor] Unexpected error:', error);
-
-			// Capture runtime error to Sentry (T013) - only for 500 errors
-			sentryService.captureRuntimeError({
-				channel: 'news-monitor',
-				error,
-				http: {
-					endpoint: '/api/news-monitor',
-					method: req.method,
-					statusCode: 500,
-					requestId,
-					featureFlagState: {
-						ENABLE_NEWS_MONITOR: process.env.ENABLE_NEWS_MONITOR === 'true',
-					},
+		return sentryService.withSpan(
+			{
+				name: 'news_monitor.webhook.process',
+				op: 'http.server.handler',
+				onlyIfParent: true,
+				attributes: {
+					'http.route': '/api/news-monitor',
+					'http.method': req.method,
 				},
-			});
+			},
+			async () => {
+				try {
+					// Inject notification manager into analyzer (set once before analysis)
+					const notificationManager = getNotificationManager();
+					if (notificationManager) {
+						setNotificationManager(notificationManager);
+					}
 
-			return res.status(500).json({
-				error: 'Internal server error. Please try again later.',
-				code: 'INTERNAL_ERROR',
-				requestId,
-			});
-		}
+					// Check feature flag
+					if (process.env.ENABLE_NEWS_MONITOR !== 'true') {
+						return res.status(403).json({
+							error: 'News monitor feature is disabled. Set ENABLE_NEWS_MONITOR=true to enable.',
+							code: 'FEATURE_DISABLED',
+							requestId,
+						});
+					}
+
+					// Parse request
+					const { crypto, stocks } = this.parseRequest(req);
+					const allSymbols = [...(crypto || []), ...(stocks || [])];
+					const validationError = this.validateRequest(allSymbols);
+					if (validationError) {
+						return res.status(400).json({
+							error: validationError,
+							code: 'INVALID_REQUEST',
+							requestId,
+						});
+					}
+
+					// Get default symbols if not provided
+					const symbolsToAnalyze = allSymbols.length > 0
+						? allSymbols
+						: this.getDefaultSymbols();
+
+					console.info('[NewsMonitor] Analyzing symbols:', symbolsToAnalyze);
+					if (symbolsToAnalyze.length === 0) {
+						return res.status(400).json({
+							error: 'No symbols to analyze. Provide crypto/stocks or set env defaults.',
+							code: 'NO_SYMBOLS',
+							requestId,
+						});
+					}
+
+					// Run analysis
+					const results = await sentryService.withSpan(
+						{
+							name: 'news_monitor.analyze_symbols',
+							op: 'news.analysis',
+							onlyIfParent: true,
+							attributes: {
+								'news.symbol_count': symbolsToAnalyze.length,
+								'news.request_id': requestId,
+							},
+						},
+						() => this.analyzer.analyzeSymbols(symbolsToAnalyze, requestId, tokenUsage),
+					);
+
+					// Generate summary
+					const summary = this.generateSummary(results);
+
+					// Build response
+					const response = {
+						success: summary.analyzed > 0 || summary.cached > 0,
+						partial_success: summary.timeout > 0 || summary.error > 0,
+						results,
+						summary,
+						totalDurationMs: Date.now() - startTime,
+						requestId,
+						tokenUsage: tokenUsage.toJSON(),
+					};
+
+					// Remove partial_success if all succeeded
+					if (!response.partial_success) {
+						delete response.partial_success;
+					}
+
+					console.info('[NewsMonitor] Request complete', {
+						requestId,
+						totalMs: response.totalDurationMs,
+						summary,
+					});
+
+					return res.status(200).json(response);
+				} catch (error) {
+					console.error('[NewsMonitor] Unexpected error:', error);
+
+					// Capture runtime error to Sentry (T013) - only for 500 errors
+					sentryService.captureRuntimeError({
+						channel: 'news-monitor',
+						error,
+						http: {
+							endpoint: '/api/news-monitor',
+							method: req.method,
+							statusCode: 500,
+							requestId,
+							featureFlagState: {
+								ENABLE_NEWS_MONITOR: process.env.ENABLE_NEWS_MONITOR === 'true',
+							},
+						},
+					});
+
+					return res.status(500).json({
+						error: 'Internal server error. Please try again later.',
+						code: 'INTERNAL_ERROR',
+						requestId,
+					});
+				}
+			},
+		);
 	}
 
 	/**

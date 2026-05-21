@@ -59,7 +59,20 @@ async function processEnrichment(alert, options) {
 	if (isGeminiEnabled || isTradingViewMcpEnabled) {
 		try {
 			console.debug('Starting alert enrichment process');
-			const enrichedAlert = await enrichAlert({ text: alert.text }, { tokenUsage, useTradingViewData });
+			const enrichedAlert = await sentryService.withSpan(
+				{
+					name: 'alerts.enrichment',
+					op: 'alert.enrich',
+					onlyIfParent: true,
+					attributes: {
+						'alert.length': alert.text.length,
+						'alert.use_tradingview_data': useTradingViewData,
+						'feature.gemini_grounding': isGeminiEnabled,
+						'feature.tradingview_mcp_enrichment': isTradingViewMcpEnabled,
+					},
+				},
+				() => enrichAlert({ text: alert.text }, { tokenUsage, useTradingViewData }),
+			);
 			if (enrichedAlert && typeof enrichedAlert === 'object') {
 				enrichedAlert.tokenUsage = tokenUsage.toJSON();
 				enriched = true;
@@ -84,50 +97,77 @@ function postAlert(bot) {
 		let alertText = '';
 		let alert = null;
 
-		try {
-			if (typeof body === 'object' && 'text' in body) {
-				alertText = body.text;
-			} else {
-				alertText = body;
-			}
-
-			const { text } = validateAlert(alertText);
-			alert = { text };
-
-			const tokenUsage = new TokenUsageTracker();
-			const enriched = await processEnrichment(alert, { tokenUsage, useTradingViewData });
-
-			// Send to all enabled notification channels
-			const results = await notificationManager.sendToAll(alert);
-
-			// Return 200 OK regardless of delivery success (fail-open pattern)
-			const tokenUsageJSON = tokenUsage.toJSON();
-			tokenUsageJSON.formattedSummary = tokenUsage.formatSummary();
-			res.json({ success: true, results, enriched, tokenUsage: tokenUsageJSON });
-		} catch (error) {
-			console.error('[Alert] Request failed:', error.message);
-
-			// Capture runtime error to Sentry (T012)
-			sentryService.captureRuntimeError({
-				channel: 'http-alert',
-				error,
-				http: {
-					endpoint: '/api/webhook/alert',
-					method: 'POST',
-					statusCode: (error.response && error.response.error_code) || 500,
+		return sentryService.withSpan(
+			{
+				name: 'alerts.webhook.process',
+				op: 'http.server.handler',
+				onlyIfParent: true,
+				attributes: {
+					'http.route': '/api/webhook/alert',
+					'http.method': 'POST',
+					'alert.use_tradingview_data': useTradingViewData,
 				},
-				alert: {
-					textLength: alertText ? alertText.length : 0,
-					hasEnrichment: !!(alert && alert.enriched),
-					enrichedSource: alert && alert.enriched && alert.enriched.extraText && alert.enriched.extraText.includes('tradingview-mcp') ? 'tradingview-mcp' : (alert && alert.enriched ? 'gemini-grounding' : undefined),
-					truncated: false,
-				},
-			});
+			},
+			async () => {
+				try {
+					if (typeof body === 'object' && 'text' in body) {
+						alertText = body.text;
+					} else {
+						alertText = body;
+					}
 
-			const status = (error.response && error.response.error_code) || 500;
-			const errorResponse = error.response || { error: 'Internal server error', details: error.message };
-			res.status(status).send(errorResponse);
-		}
+					const { text } = validateAlert(alertText);
+					alert = { text };
+
+					const tokenUsage = new TokenUsageTracker();
+					const enriched = await processEnrichment(alert, { tokenUsage, useTradingViewData });
+
+					// Send to all enabled notification channels
+					const enabledChannels = notificationManager ? notificationManager.getEnabledChannels() : [];
+					const results = await sentryService.withSpan(
+						{
+							name: 'alerts.notifications.dispatch',
+							op: 'notification.dispatch',
+							onlyIfParent: true,
+							attributes: {
+								'notification.enabled_channels_count': enabledChannels.length,
+								'notification.enabled_channels': enabledChannels.join(',') || 'none',
+								'alert.enriched': enriched,
+							},
+						},
+						() => notificationManager.sendToAll(alert),
+					);
+
+					// Return 200 OK regardless of delivery success (fail-open pattern)
+					const tokenUsageJSON = tokenUsage.toJSON();
+					tokenUsageJSON.formattedSummary = tokenUsage.formatSummary();
+					res.json({ success: true, results, enriched, tokenUsage: tokenUsageJSON });
+				} catch (error) {
+					console.error('[Alert] Request failed:', error.message);
+
+					// Capture runtime error to Sentry (T012)
+					sentryService.captureRuntimeError({
+						channel: 'http-alert',
+						error,
+						http: {
+							endpoint: '/api/webhook/alert',
+							method: 'POST',
+							statusCode: (error.response && error.response.error_code) || 500,
+						},
+						alert: {
+							textLength: alertText ? alertText.length : 0,
+							hasEnrichment: !!(alert && alert.enriched),
+							enrichedSource: alert && alert.enriched && alert.enriched.extraText && alert.enriched.extraText.includes('tradingview-mcp') ? 'tradingview-mcp' : (alert && alert.enriched ? 'gemini-grounding' : undefined),
+							truncated: false,
+						},
+					});
+
+					const status = (error.response && error.response.error_code) || 500;
+					const errorResponse = error.response || { error: 'Internal server error', details: error.message };
+					res.status(status).send(errorResponse);
+				}
+			},
+		);
 	};
 }
 

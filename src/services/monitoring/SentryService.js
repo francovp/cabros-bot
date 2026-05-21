@@ -80,6 +80,7 @@ const Sentry = require('@sentry/node');
  * @property {string} [release]
  * @property {boolean} sendAlertContent - Whether to include full alert/news text in events
  * @property {number} sampleRateErrors - Error sample rate (0.0-1.0)
+ * @property {number|undefined} tracesSampleRate - Trace sample rate (0.0-1.0), undefined disables tracing
  * @property {string[]} consoleLogLevels - Console levels captured as Sentry Logs
  */
 
@@ -204,12 +205,49 @@ class SentryService {
 	}
 
 	/**
+	 * Parse a mandatory sample rate value with fallback
+	 * @param {string|undefined} value
+	 * @param {number|undefined} fallback
+	 * @returns {number|undefined}
+	 */
+	_parseSampleRate(value, fallback) {
+		const parsed = Number.parseFloat(value);
+		if (!Number.isFinite(parsed)) {
+			return fallback;
+		}
+
+		if (parsed < 0) {
+			return 0;
+		}
+
+		if (parsed > 1) {
+			return 1;
+		}
+
+		return parsed;
+	}
+
+	/**
+	 * Parse an optional sample rate value
+	 * @param {string|undefined} value
+	 * @returns {number|undefined}
+	 */
+	_parseOptionalSampleRate(value) {
+		if (value === undefined || value === null || String(value).trim() === '') {
+			return undefined;
+		}
+
+		return this._parseSampleRate(value, undefined);
+	}
+
+	/**
 	 * Build monitoring configuration from environment variables
 	 * @returns {MonitoringConfiguration}
 	 */
 	_buildConfiguration() {
 		const dsn = process.env.SENTRY_DSN || undefined;
 		const enabled = process.env.ENABLE_SENTRY === 'true' && !!dsn;
+		const tracesSampleRate = this._parseOptionalSampleRate(process.env.SENTRY_TRACES_SAMPLE_RATE);
 
 		// Default sendAlertContent to true
 		return {
@@ -218,7 +256,8 @@ class SentryService {
 			environment: this._deriveEnvironment(),
 			release: this._deriveRelease(),
 			sendAlertContent: process.env.SENTRY_SEND_ALERT_CONTENT !== 'false',
-			sampleRateErrors: parseFloat(process.env.SENTRY_SAMPLE_RATE_ERRORS) || 1.0,
+			sampleRateErrors: this._parseSampleRate(process.env.SENTRY_SAMPLE_RATE_ERRORS, 1.0),
+			tracesSampleRate,
 			consoleLogLevels: this._parseConsoleLogLevels(),
 		};
 	}
@@ -246,8 +285,8 @@ class SentryService {
 				return;
 			}
 
-			// Initialize Sentry SDK
-			Sentry.init({
+			/** @type {import('@sentry/node').NodeOptions} */
+			const initOptions = {
 				dsn: this.config.dsn,
 				environment: this.config.environment,
 				release: this.config.release,
@@ -255,8 +294,6 @@ class SentryService {
 				sendDefaultPii: true,
 				// Enable Sentry Logs and forward high-severity console output as searchable logs.
 				enableLogs: true,
-				// Disable tracing/performance for this feature (FR-010)
-				tracesSampleRate: 0,
 
 				// Configure process-level error capture (FR-002)
 				integrations: (integrations) => {
@@ -272,7 +309,15 @@ class SentryService {
 					// Can be used for additional filtering or modification
 					return event;
 				},
-			});
+			};
+
+			// Per Sentry docs, tracing is fully disabled when tracesSampleRate/tracesSampler is not defined.
+			if (this.config.tracesSampleRate !== undefined) {
+				initOptions.tracesSampleRate = this.config.tracesSampleRate;
+			}
+
+			// Initialize Sentry SDK
+			Sentry.init(initOptions);
 
 			this.state = {
 				configured: true,
@@ -302,6 +347,14 @@ class SentryService {
 	}
 
 	/**
+	 * Check if trace capture is enabled
+	 * @returns {boolean}
+	 */
+	isTracingEnabled() {
+		return this.state.enabled && !!this.config && this.config.tracesSampleRate !== undefined;
+	}
+
+	/**
 	 * Get current service state (for testing and health checks)
 	 * @returns {MonitoringServiceState}
 	 */
@@ -315,6 +368,72 @@ class SentryService {
 	 */
 	getConfig() {
 		return this.config ? { ...this.config } : null;
+	}
+
+	/**
+	 * Execute callback within a Sentry span
+	 * @template T
+	 * @param {import('@sentry/node').StartSpanOptions} options
+	 * @param {(span?: import('@sentry/node').Span) => T} callback
+	 * @returns {T}
+	 */
+	withSpan(options, callback) {
+		if (typeof callback !== 'function') {
+			throw new Error('withSpan callback must be a function');
+		}
+
+		// If tracing is disabled or options are incomplete, run callback directly
+		if (!this.isTracingEnabled() || !options || !options.name) {
+			return callback();
+		}
+
+		let callbackHasStarted = false;
+		try {
+			return Sentry.startSpan(options, (span) => {
+				callbackHasStarted = true;
+				return callback(span);
+			});
+		} catch (error) {
+			// Preserve original control flow if callback itself throws
+			if (callbackHasStarted) {
+				throw error;
+			}
+
+			console.warn(`[SentryService] Failed to start span "${options.name}": ${error.message}`);
+			return callback();
+		}
+	}
+
+	/**
+	 * Execute callback within a manually controlled Sentry span
+	 * @template T
+	 * @param {import('@sentry/node').StartSpanOptions} options
+	 * @param {(span?: import('@sentry/node').Span) => T} callback
+	 * @returns {T}
+	 */
+	withManualSpan(options, callback) {
+		if (typeof callback !== 'function') {
+			throw new Error('withManualSpan callback must be a function');
+		}
+
+		if (!this.isTracingEnabled() || !options || !options.name) {
+			return callback();
+		}
+
+		let callbackHasStarted = false;
+		try {
+			return Sentry.startSpanManual(options, (span) => {
+				callbackHasStarted = true;
+				return callback(span);
+			});
+		} catch (error) {
+			if (callbackHasStarted) {
+				throw error;
+			}
+
+			console.warn(`[SentryService] Failed to start manual span "${options.name}": ${error.message}`);
+			return callback();
+		}
 	}
 
 	/**

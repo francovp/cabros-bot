@@ -1,5 +1,6 @@
 const { round10 } = require('../../../helpers');
 const { MainClient } = require('binance');
+const sentryService = require('../../../../services/monitoring/SentryService');
 
 const client = new MainClient({
 	// Optional (default: false) - when true, response strings are parsed to floats (only for known keys).
@@ -12,7 +13,19 @@ const fetchSymbolPrice = async (context) => {
 	const symbol = messageSplited[1];
 	try {
 		let price;
-		const data = await client.getAvgPrice({ symbol: symbol });
+		const data = await sentryService.withSpan(
+			{
+				name: 'binance.get_avg_price',
+				op: 'http.client',
+				onlyIfParent: true,
+				attributes: {
+					'provider.name': 'binance',
+					'provider.operation': 'getAvgPrice',
+					'crypto.symbol': symbol || 'missing',
+				},
+			},
+			() => client.getAvgPrice({ symbol: symbol }),
+		);
 		// The prices have been successfully retrieved
 		// So build the response object to trigger the success intent
 		if (data.price >= 1) {
@@ -36,4 +49,3 @@ const fetchSymbolPrice = async (context) => {
 };
 
 module.exports = { fetchSymbolPrice };
-

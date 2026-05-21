@@ -42,6 +42,18 @@ jest.mock('@sentry/node', () => ({
 	init: jest.fn(),
 	consoleIntegration: jest.fn(() => 'console-breadcrumb-integration'),
 	consoleLoggingIntegration: jest.fn(() => 'console-logging-integration'),
+	startSpan: jest.fn((_options, callback) => callback({
+		end: jest.fn(),
+		setAttribute: jest.fn(),
+		setStatus: jest.fn(),
+		setHttpStatus: jest.fn(),
+	})),
+	startSpanManual: jest.fn((_options, callback) => callback({
+		end: jest.fn(),
+		setAttribute: jest.fn(),
+		setStatus: jest.fn(),
+		setHttpStatus: jest.fn(),
+	})),
 	captureException: jest.fn(() => 'mock-event-id'),
 	captureMessage: jest.fn(() => 'mock-event-id'),
 	flush: jest.fn().mockResolvedValue(true),

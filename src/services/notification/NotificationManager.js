@@ -63,8 +63,33 @@ class NotificationManager {
 		}
 
 		console.debug('[NotificationManager] Sending alert to', enabledChannels.length, 'enabled channel(s):', enabledChannels.map(ch => ch.name).join(', '));
-		const sendPromises = enabledChannels.map((ch) => ch.send(alert));
-		const results = await Promise.allSettled(sendPromises);
+		const sendPromises = enabledChannels.map((ch) => sentryService.withSpan(
+			{
+				name: `notification.send.${ch.name}`,
+				op: 'notification.send',
+				onlyIfParent: true,
+				attributes: {
+					'notification.channel': ch.name,
+					'alert.enriched': !!(alert && alert.enriched),
+					'alert.length': alert && alert.text ? alert.text.length : 0,
+				},
+			},
+			() => ch.send(alert),
+		));
+
+		const results = await sentryService.withSpan(
+			{
+				name: 'notification.send_to_all',
+				op: 'notification.dispatch',
+				onlyIfParent: true,
+				attributes: {
+					'notification.enabled_channels_count': enabledChannels.length,
+					'notification.enabled_channels': enabledChannels.map(ch => ch.name).join(','),
+					'alert.enriched': !!(alert && alert.enriched),
+				},
+			},
+			() => Promise.allSettled(sendPromises),
+		);
 
 		const formattedResults = results.map((r, idx) =>
 			r.status === 'fulfilled'
