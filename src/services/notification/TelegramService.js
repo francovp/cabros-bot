@@ -31,6 +31,11 @@ class TelegramService extends NotificationChannel {
    * @returns {Promise<{valid: boolean, message: string, fields?: Object}>}
    */
 	async validate() {
+		if (process.env.ENABLE_TELEGRAM_BOT !== 'true') {
+			this.enabled = false;
+			return { valid: true, message: 'Telegram disabled via env' };
+		}
+
 		if (!this.botToken) {
 			return { valid: false, message: 'Missing BOT_TOKEN' };
 		}

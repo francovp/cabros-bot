@@ -101,6 +101,9 @@ function postAlert(bot) {
 
 		try {
 			const requestSpan = sentryService.getActiveSpan();
+			if (!notificationManager) {
+				await initializeNotificationServices(bot || null);
+			}
 
 			if (typeof body === 'object' && 'text' in body) {
 				alertText = body.text;
