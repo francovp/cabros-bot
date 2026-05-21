@@ -97,7 +97,7 @@ async function generateGroundedSummary({ text, searchResults = [], searchResultT
  * @param {string} context - News/context text to analyze
  * @returns {Promise<Object>} Analysis result with event_category, sentiment, confidence
  */
-async function analyzeNewsForSymbol(symbol, context, options = {}) {
+async function analyzeNewsForSymbol(symbol, contextInput, options = {}) {
 	const tokenUsage = options.tokenUsage;
 	if (ENABLE_NEWS_MONITOR_TEST_MODE) {
 		console.debug('[Gemini][analyzeNewsForSymbol] Test mode enabled, returning fixed analysis.');
@@ -142,6 +142,7 @@ async function analyzeNewsForSymbol(symbol, context, options = {}) {
 			.map(r => r.title || null)
 			.filter(Boolean);
 
+		const context = await Promise.resolve(contextInput);
 		const enrichedContext = `${context}\n\nGrounded Context from Search:\n${groundingContext}\n\nSources: ${sourcesList.join(', ')}`;
 		console.debug('[Gemini][analyzeNewsForSymbol] Enriched context for analysis:', enrichedContext);
 

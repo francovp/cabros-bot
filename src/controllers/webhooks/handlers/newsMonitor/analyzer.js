@@ -163,13 +163,16 @@ class NewsAnalyzer {
 		}
 
 		// Fetch market context (price, 24h change, etc.)
-		const marketContext = await this.getMarketContext(symbol, tokenUsage);
+		// OPTIMIZATION: Start market context fetch in parallel with Gemini search
+		const marketContextPromise = this.getMarketContext(symbol, tokenUsage);
 
-		// Build analysis context for Gemini
-		const analysisContext = this.buildAnalysisContext(symbol, marketContext);
+		// Build analysis context promise for Gemini
+		const analysisContextPromise = marketContextPromise.then(marketContext =>
+			this.buildAnalysisContext(symbol, marketContext),
+		);
 
 		// Call Gemini for sentiment analysis
-		const geminiAnalysis = await analyzeNewsForSymbol(symbol, analysisContext, { tokenUsage });
+		const geminiAnalysis = await analyzeNewsForSymbol(symbol, analysisContextPromise, { tokenUsage });
 
 		// If no event detected, cache and return
 		if (geminiAnalysis.event_category === EventCategory.NONE) {
@@ -221,6 +224,8 @@ class NewsAnalyzer {
 				};
 			}
 		}
+
+		const marketContext = await marketContextPromise;
 
 		// Build alert object
 		const tokenUsageSummary = tokenUsage ? tokenUsage.toJSON() : null;
