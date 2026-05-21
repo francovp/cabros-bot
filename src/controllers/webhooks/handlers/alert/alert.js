@@ -102,11 +102,7 @@ function postAlert(bot) {
 		try {
 			const requestSpan = sentryService.getActiveSpan();
 			if (!notificationManager) {
-				if (!bot) {
-					throw new Error('Notification services are not initialized');
-				}
-
-				await initializeNotificationServices(bot);
+				await initializeNotificationServices(bot || null);
 			}
 
 			if (typeof body === 'object' && 'text' in body) {
