@@ -97,77 +97,50 @@ function postAlert(bot) {
 		let alertText = '';
 		let alert = null;
 
-		return sentryService.withSpan(
-			{
-				name: 'alerts.webhook.process',
-				op: 'http.server.handler',
-				onlyIfParent: true,
-				attributes: {
-					'http.route': '/api/webhook/alert',
-					'http.method': 'POST',
-					'alert.use_tradingview_data': useTradingViewData,
+		try {
+			if (typeof body === 'object' && 'text' in body) {
+				alertText = body.text;
+			} else {
+				alertText = body;
+			}
+
+			const { text } = validateAlert(alertText);
+			alert = { text };
+
+			const tokenUsage = new TokenUsageTracker();
+			const enriched = await processEnrichment(alert, { tokenUsage, useTradingViewData });
+
+			// NotificationManager owns the custom dispatch spans.
+			const results = await notificationManager.sendToAll(alert);
+
+			// Return 200 OK regardless of delivery success (fail-open pattern)
+			const tokenUsageJSON = tokenUsage.toJSON();
+			tokenUsageJSON.formattedSummary = tokenUsage.formatSummary();
+			res.json({ success: true, results, enriched, tokenUsage: tokenUsageJSON });
+		} catch (error) {
+			console.error('[Alert] Request failed:', error.message);
+
+			// Capture runtime error to Sentry (T012)
+			sentryService.captureRuntimeError({
+				channel: 'http-alert',
+				error,
+				http: {
+					endpoint: '/api/webhook/alert',
+					method: 'POST',
+					statusCode: (error.response && error.response.error_code) || 500,
 				},
-			},
-			async () => {
-				try {
-					if (typeof body === 'object' && 'text' in body) {
-						alertText = body.text;
-					} else {
-						alertText = body;
-					}
+				alert: {
+					textLength: alertText ? alertText.length : 0,
+					hasEnrichment: !!(alert && alert.enriched),
+					enrichedSource: alert && alert.enriched && alert.enriched.extraText && alert.enriched.extraText.includes('tradingview-mcp') ? 'tradingview-mcp' : (alert && alert.enriched ? 'gemini-grounding' : undefined),
+					truncated: false,
+				},
+			});
 
-					const { text } = validateAlert(alertText);
-					alert = { text };
-
-					const tokenUsage = new TokenUsageTracker();
-					const enriched = await processEnrichment(alert, { tokenUsage, useTradingViewData });
-
-					// Send to all enabled notification channels
-					const enabledChannels = notificationManager ? notificationManager.getEnabledChannels() : [];
-					const results = await sentryService.withSpan(
-						{
-							name: 'alerts.notifications.dispatch',
-							op: 'notification.dispatch',
-							onlyIfParent: true,
-							attributes: {
-								'notification.enabled_channels_count': enabledChannels.length,
-								'notification.enabled_channels': enabledChannels.join(',') || 'none',
-								'alert.enriched': enriched,
-							},
-						},
-						() => notificationManager.sendToAll(alert),
-					);
-
-					// Return 200 OK regardless of delivery success (fail-open pattern)
-					const tokenUsageJSON = tokenUsage.toJSON();
-					tokenUsageJSON.formattedSummary = tokenUsage.formatSummary();
-					res.json({ success: true, results, enriched, tokenUsage: tokenUsageJSON });
-				} catch (error) {
-					console.error('[Alert] Request failed:', error.message);
-
-					// Capture runtime error to Sentry (T012)
-					sentryService.captureRuntimeError({
-						channel: 'http-alert',
-						error,
-						http: {
-							endpoint: '/api/webhook/alert',
-							method: 'POST',
-							statusCode: (error.response && error.response.error_code) || 500,
-						},
-						alert: {
-							textLength: alertText ? alertText.length : 0,
-							hasEnrichment: !!(alert && alert.enriched),
-							enrichedSource: alert && alert.enriched && alert.enriched.extraText && alert.enriched.extraText.includes('tradingview-mcp') ? 'tradingview-mcp' : (alert && alert.enriched ? 'gemini-grounding' : undefined),
-							truncated: false,
-						},
-					});
-
-					const status = (error.response && error.response.error_code) || 500;
-					const errorResponse = error.response || { error: 'Internal server error', details: error.message };
-					res.status(status).send(errorResponse);
-				}
-			},
-		);
+			const status = (error.response && error.response.error_code) || 500;
+			const errorResponse = error.response || { error: 'Internal server error', details: error.message };
+			res.status(status).send(errorResponse);
+		}
 	};
 }
 
