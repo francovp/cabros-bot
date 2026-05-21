@@ -4,7 +4,6 @@
  */
 const timersPromises = require('timers/promises');
 const { sendWithRetry } = require('../../../../lib/retryHelper');
-const Prettylink = require('prettylink');
 
 /**
  * URLShortenerCache - Session-scoped in-memory cache
@@ -89,7 +88,7 @@ class URLShortener {
 			bitly: ['BITLY_ACCESS_TOKEN', 'BITLY_API_KEY'],
 			picsee: ['PICSEE_API_KEY'],
 			reurl: ['REURL_API_KEY'],
-			cuttly: ['CUTTLY_API_KEY']
+			cuttly: ['CUTTLY_API_KEY'],
 		};
 		return envVarMap;
 	}
@@ -258,7 +257,7 @@ class URLShortener {
 					`[URLShortener] Attempting to shorten URL via ${service}:`,
 					longUrl.substring(0, 50),
 				);
-				
+
 				const shortUrl = await this.callShortenerAPI(longUrl, service);
 
 				if (shortUrl) {
@@ -311,7 +310,7 @@ class URLShortener {
 	}
 
 	/**
-   * Call URL shortener API using prettylink
+   * Call URL shortener API using native fetch
    */
 	async callShortenerAPI(longUrl, service) {
 		return new Promise(async (resolve, reject) => {
@@ -324,19 +323,36 @@ class URLShortener {
 				const apiKey = this.getAPIKey(service);
 				switch (service) {
 				case 'bitly':
-					shortUrl = await new Prettylink.Bitly(apiKey).short(longUrl)
+					response = await fetch('https://api-ssl.bitly.com/v4/shorten', {
+						method: 'POST',
+						headers: {
+							'Authorization': `Bearer ${apiKey}`,
+							'Content-Type': 'application/json',
+						},
+						body: JSON.stringify({ long_url: longUrl }),
+					});
+					body = await response.json();
+					shortUrl = body.link;
 					break;
 				case 'tinyurl':
-					shortUrl = await new Prettylink.TinyURL().short(longUrl)
+					response = await fetch(`https://tinyurl.com/api-create.php?url=${encodeURIComponent(longUrl)}`);
+					shortUrl = await response.text();
 					break;
 				case 'picsee':
 					await timersPromises.setTimeout(500);
-					body = await new Prettylink.Picsee(apiKey).short(longUrl)
+					response = await fetch(`https://api.picsee.co/v1/links?access_token=${apiKey}`, {
+						method: 'POST',
+						headers: {
+							'Content-Type': 'application/json',
+						},
+						body: JSON.stringify({ url: longUrl }),
+					});
+					body = await response.json();
 					shortUrl = body?.data?.picseeUrl;
 					break;
 				case 'cuttly':
-					response = await new Prettylink.Cuttly(apiKey).short(longUrl)
-					body = JSON.parse(response);
+					response = await fetch(`https://cutt.ly/api/api.php?key=${apiKey}&short=${encodeURIComponent(longUrl)}`);
+					body = await response.json();
 					shortUrl = body?.url?.shortLink;
 					break;
 				case 'test':

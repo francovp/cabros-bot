@@ -40,6 +40,8 @@ global.bot = {
 // Mock @sentry/node globally to prevent real network calls
 jest.mock('@sentry/node', () => ({
 	init: jest.fn(),
+	consoleIntegration: jest.fn(() => 'console-breadcrumb-integration'),
+	consoleLoggingIntegration: jest.fn(() => 'console-logging-integration'),
 	captureException: jest.fn(() => 'mock-event-id'),
 	captureMessage: jest.fn(() => 'mock-event-id'),
 	flush: jest.fn().mockResolvedValue(true),
@@ -51,7 +53,7 @@ jest.mock('@sentry/node', () => ({
 	setTag: jest.fn(),
 	setContext: jest.fn(),
 	setExtra: jest.fn(),
-}));
+}), { virtual: true });
 
 // Increase timeout for all tests
 jest.setTimeout(10000);
