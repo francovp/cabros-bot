@@ -105,7 +105,7 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 ### 1. Install Dependencies
 
 ```bash
-npm install
+pnpm install --frozen-lockfile
 ```
 
 ### 2. Create `.env` File
@@ -134,13 +134,13 @@ See [Environment Configuration](#environment-configuration) section below for de
 ### 3. Run Development Server
 
 ```bash
-npm run start-dev
+pnpm start-dev
 ```
 
 ### 4. Run Production Server
 
 ```bash
-npm start
+pnpm start
 ```
 
 ## API Endpoints
@@ -680,7 +680,7 @@ SENTRY_CONSOLE_LOG_LEVELS=warn,error
 3. Verify DSN format: `https://<key>@<org>.ingest.sentry.io/<project>`
 
 **Console warnings/errors not appearing in Sentry Logs**:
-1. Verify the installed `@sentry/node` version is `10.13.0` or newer
+1. Verify the installed `@sentry/node` version is `10.53.1` or newer
 2. Confirm Sentry initialized with `enableLogs: true`
 3. Confirm `SENTRY_CONSOLE_LOG_LEVELS` includes the level you are testing
 4. Check the Sentry Logs view, not only the Issues view
@@ -737,13 +737,13 @@ The system prevents alert fatigue using an intelligent cache:
 
 ```bash
 # Run all tests
-npm test
+pnpm test
 
 # Run with watch mode
-npm run test:watch
+pnpm test:watch
 
 # Generate coverage report
-npm run test:coverage
+pnpm test:coverage
 ```
 
 ## Architecture
@@ -923,7 +923,7 @@ The application includes support for Render.com deployment:
 
 ```bash
 # Start dev server with auto-reload
-npm run start-dev
+pnpm start-dev
 
 # Open ngrok tunnel for webhook testing
 ngrok http 80
