@@ -186,6 +186,36 @@ describe('SentryService', () => {
 				expect(config.sampleRateErrors).toBe(0.5);
 			});
 		});
+
+		describe('console log levels', () => {
+			it('should default to warn and error', () => {
+				delete process.env.SENTRY_CONSOLE_LOG_LEVELS;
+
+				const config = service._buildConfiguration();
+				expect(config.consoleLogLevels).toEqual(['warn', 'error']);
+			});
+
+			it('should parse comma-separated console log levels from env', () => {
+				process.env.SENTRY_CONSOLE_LOG_LEVELS = 'log, warn, error';
+
+				const config = service._buildConfiguration();
+				expect(config.consoleLogLevels).toEqual(['log', 'warn', 'error']);
+			});
+
+			it('should ignore invalid and duplicate console log levels', () => {
+				process.env.SENTRY_CONSOLE_LOG_LEVELS = 'warn, nope, error, warn, trace';
+
+				const config = service._buildConfiguration();
+				expect(config.consoleLogLevels).toEqual(['warn', 'error', 'trace']);
+			});
+
+			it('should fall back to default levels when env has no valid levels', () => {
+				process.env.SENTRY_CONSOLE_LOG_LEVELS = 'verbose,notice';
+
+				const config = service._buildConfiguration();
+				expect(config.consoleLogLevels).toEqual(['warn', 'error']);
+			});
+		});
 	});
 
 	describe('init()', () => {
@@ -202,6 +232,36 @@ describe('SentryService', () => {
 			}));
 			expect(service.isEnabled()).toBe(true);
 			expect(service.getState().configured).toBe(true);
+		});
+
+		it('should enable Sentry logs for console warn and error', () => {
+			process.env.ENABLE_SENTRY = 'true';
+			process.env.SENTRY_DSN = 'https://key@sentry.io/123';
+
+			service.init();
+
+			const initOptions = Sentry.init.mock.calls[0][0];
+			expect(initOptions.enableLogs).toBe(true);
+
+			const defaultIntegrations = ['default-integration'];
+			const integrations = initOptions.integrations(defaultIntegrations);
+
+			expect(Sentry.consoleLoggingIntegration).toHaveBeenCalledWith({ levels: ['warn', 'error'] });
+			expect(Sentry.consoleIntegration).not.toHaveBeenCalled();
+			expect(integrations).toEqual(['default-integration', 'console-logging-integration']);
+		});
+
+		it('should initialize Sentry logs with configured console levels', () => {
+			process.env.ENABLE_SENTRY = 'true';
+			process.env.SENTRY_DSN = 'https://key@sentry.io/123';
+			process.env.SENTRY_CONSOLE_LOG_LEVELS = 'log,error';
+
+			service.init();
+
+			const initOptions = Sentry.init.mock.calls[0][0];
+			initOptions.integrations([]);
+
+			expect(Sentry.consoleLoggingIntegration).toHaveBeenCalledWith({ levels: ['log', 'error'] });
 		});
 
 		it('should not initialize Sentry when disabled', () => {

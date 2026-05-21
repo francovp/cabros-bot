@@ -14,18 +14,17 @@ jobs:
 
     runs-on: ubuntu-latest
 
-    strategy:
-      matrix:
-        node-version: [20.x]
-        # See supported Node.js release schedule at https://nodejs.org/en/about/releases/
-
     steps:
     - uses: actions/checkout@v4
-    - name: Use Node.js ${{ matrix.node-version }}
+    - name: Install pnpm
+      uses: pnpm/action-setup@v3
+      with:
+        version: 10
+    - name: Use Node.js 20.x
       uses: actions/setup-node@v4
       with:
-        node-version: ${{ matrix.node-version }}
-        cache: 'npm'
-    - run: npm ci
-    # - run: npm run build --if-present # No build step needed for this project, yet.
-    - run: npm test
+        node-version: 20.x
+        cache: 'pnpm'
+    - run: pnpm install --frozen-lockfile
+    # - run: pnpm run build --if-present # No build step needed for this project, yet.
+    - run: pnpm test
