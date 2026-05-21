@@ -54,9 +54,10 @@ class NotificationManager {
    * @param {Object} alert - Alert object with text and optional enriched content
    * @returns {Promise<Array>} Array of SendResult objects (one per enabled channel)
    */
-	async sendToAll(alert) {
+	async sendToAll(alert, options = {}) {
 		const enabledChannels = Array.from(this.channels.values()).filter((ch) => ch.isEnabled());
 		const startTime = Date.now();
+		const { parentSpan } = options;
 
 		if (enabledChannels.length === 0) {
 			console.warn('[NotificationManager] No notification channels enabled');
@@ -64,8 +65,44 @@ class NotificationManager {
 		}
 
 		console.debug('[NotificationManager] Sending alert to', enabledChannels.length, 'enabled channel(s):', enabledChannels.map(ch => ch.name).join(', '));
-		const sendPromises = enabledChannels.map((ch) => ch.send(alert));
-		const results = await Promise.allSettled(sendPromises);
+		const dispatchSpan = sentryService.startInactiveSpan({
+			name: 'notification.send_to_all',
+			op: 'notification.dispatch',
+			onlyIfParent: true,
+			parentSpan,
+			attributes: {
+				'notification.enabled_channels_count': enabledChannels.length,
+				'notification.enabled_channels': enabledChannels.map(ch => ch.name).join(','),
+				'alert.enriched': !!(alert && alert.enriched),
+			},
+		});
+
+		let results;
+		try {
+			const sendPromises = enabledChannels.map((ch) => {
+				const sendSpan = sentryService.startInactiveSpan({
+					name: `notification.send.${ch.name}`,
+					op: 'notification.send',
+					onlyIfParent: true,
+					parentSpan: dispatchSpan,
+					attributes: {
+						'notification.channel': ch.name,
+						'alert.enriched': !!(alert && alert.enriched),
+						'alert.length': alert && alert.text ? alert.text.length : 0,
+					},
+				});
+
+				return Promise.resolve()
+					.then(() => ch.send(alert))
+					.finally(() => {
+						sentryService.endSpan(sendSpan);
+					});
+			});
+
+			results = await Promise.allSettled(sendPromises);
+		} finally {
+			sentryService.endSpan(dispatchSpan);
+		}
 
 		const formattedResults = results.map((r, idx) =>
 			r.status === 'fulfilled'

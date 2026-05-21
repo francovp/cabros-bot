@@ -40,6 +40,8 @@ class NewsMonitorHandler {
 		const tokenUsage = new TokenUsageTracker();
 
 		try {
+			const requestSpan = sentryService.getActiveSpan();
+
 			// Inject notification manager into analyzer (set once before analysis)
 			const notificationManager = getNotificationManager();
 			if (notificationManager) {
@@ -81,13 +83,25 @@ class NewsMonitorHandler {
 				});
 			}
 
-			// Run analysis
-			const results = await this.analyzer.analyzeSymbols(symbolsToAnalyze, requestId, tokenUsage);
+			const analysisSpan = sentryService.startInactiveSpan({
+				name: 'news_monitor.analyze_symbols',
+				op: 'news.analysis',
+				onlyIfParent: true,
+				parentSpan: requestSpan,
+				attributes: {
+					'news.symbol_count': symbolsToAnalyze.length,
+					'news.request_id': requestId,
+				},
+			});
 
-			// Generate summary
+			let results;
+			try {
+				results = await this.analyzer.analyzeSymbols(symbolsToAnalyze, requestId, tokenUsage);
+			} finally {
+				sentryService.endSpan(analysisSpan);
+			}
+
 			const summary = this.generateSummary(results);
-
-			// Build response
 			const response = {
 				success: summary.analyzed > 0 || summary.cached > 0,
 				partial_success: summary.timeout > 0 || summary.error > 0,
@@ -98,7 +112,6 @@ class NewsMonitorHandler {
 				tokenUsage: tokenUsage.toJSON(),
 			};
 
-			// Remove partial_success if all succeeded
 			if (!response.partial_success) {
 				delete response.partial_success;
 			}

@@ -1,15 +1,28 @@
 const { round10 } = require('../../../helpers');
 const { MainClient } = require('binance');
+const sentryService = require('../../../../services/monitoring/SentryService');
 
 const client = new MainClient({
 	// Optional (default: false) - when true, response strings are parsed to floats (only for known keys).
 	beautifyResponses: true,
 });
 
-const fetchSymbolPrice = async (context) => {
+const fetchSymbolPrice = async (context, options = {}) => {
 	// Check for parameters;
 	const messageSplited = context.message.text.split(' ');
 	const symbol = messageSplited[1];
+	const { parentSpan } = options;
+	const priceFetchSpan = sentryService.startInactiveSpan({
+		name: 'binance.get_avg_price',
+		op: 'http.client',
+		onlyIfParent: true,
+		parentSpan,
+		attributes: {
+			'provider.name': 'binance',
+			'provider.operation': 'getAvgPrice',
+			'crypto.symbol': symbol || 'missing',
+		},
+	});
 	try {
 		let price;
 		const data = await client.getAvgPrice({ symbol: symbol });
@@ -32,8 +45,9 @@ const fetchSymbolPrice = async (context) => {
 		console.error('Error fetching symbol price:', e);
 		// Reject the Promise to say that an error occurred while the handler was performing the action
 		return Promise.reject(e);
+	} finally {
+		sentryService.endSpan(priceFetchSpan);
 	}
 };
 
 module.exports = { fetchSymbolPrice };
-

@@ -50,13 +50,26 @@ function getNotificationManager() {
 }
 
 async function processEnrichment(alert, options) {
-	const { tokenUsage, useTradingViewData } = options;
+	const { tokenUsage, useTradingViewData, parentSpan } = options;
 	const isGeminiEnabled = process.env.ENABLE_GEMINI_GROUNDING === 'true';
 	const isTradingViewMcpEnabled = process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT === 'true' && useTradingViewData;
 
 	let enriched = false;
 
 	if (isGeminiEnabled || isTradingViewMcpEnabled) {
+		const enrichmentSpan = sentryService.startInactiveSpan({
+			name: 'alerts.enrichment',
+			op: 'alert.enrich',
+			onlyIfParent: true,
+			parentSpan,
+			attributes: {
+				'alert.length': alert.text.length,
+				'alert.use_tradingview_data': useTradingViewData,
+				'feature.gemini_grounding': isGeminiEnabled,
+				'feature.tradingview_mcp_enrichment': isTradingViewMcpEnabled,
+			},
+		});
+
 		try {
 			console.debug('Starting alert enrichment process');
 			const enrichedAlert = await enrichAlert({ text: alert.text }, { tokenUsage, useTradingViewData });
@@ -70,6 +83,8 @@ async function processEnrichment(alert, options) {
 			}
 		} catch (error) {
 			console.warn('[Alert] Enrichment failed, using original text:', error.message);
+		} finally {
+			sentryService.endSpan(enrichmentSpan);
 		}
 	}
 
@@ -85,6 +100,11 @@ function postAlert(bot) {
 		let alert = null;
 
 		try {
+			const requestSpan = sentryService.getActiveSpan();
+			if (!notificationManager) {
+				await initializeNotificationServices(bot || null);
+			}
+
 			if (typeof body === 'object' && 'text' in body) {
 				alertText = body.text;
 			} else {
@@ -95,10 +115,10 @@ function postAlert(bot) {
 			alert = { text };
 
 			const tokenUsage = new TokenUsageTracker();
-			const enriched = await processEnrichment(alert, { tokenUsage, useTradingViewData });
+			const enriched = await processEnrichment(alert, { tokenUsage, useTradingViewData, parentSpan: requestSpan });
 
-			// Send to all enabled notification channels
-			const results = await notificationManager.sendToAll(alert);
+			// NotificationManager owns the custom dispatch spans.
+			const results = await notificationManager.sendToAll(alert, { parentSpan: requestSpan });
 
 			// Return 200 OK regardless of delivery success (fail-open pattern)
 			const tokenUsageJSON = tokenUsage.toJSON();
