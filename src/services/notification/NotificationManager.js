@@ -63,33 +63,48 @@ class NotificationManager {
 		}
 
 		console.debug('[NotificationManager] Sending alert to', enabledChannels.length, 'enabled channel(s):', enabledChannels.map(ch => ch.name).join(', '));
-		const sendPromises = enabledChannels.map((ch) => sentryService.withSpan(
-			{
-				name: `notification.send.${ch.name}`,
-				op: 'notification.send',
-				onlyIfParent: true,
-				attributes: {
-					'notification.channel': ch.name,
-					'alert.enriched': !!(alert && alert.enriched),
-					'alert.length': alert && alert.text ? alert.text.length : 0,
-				},
+		const dispatchSpan = sentryService.startInactiveSpan({
+			name: 'notification.send_to_all',
+			op: 'notification.dispatch',
+			onlyIfParent: true,
+			attributes: {
+				'notification.enabled_channels_count': enabledChannels.length,
+				'notification.enabled_channels': enabledChannels.map(ch => ch.name).join(','),
+				'alert.enriched': !!(alert && alert.enriched),
 			},
-			() => ch.send(alert),
-		));
+		});
 
-		const results = await sentryService.withSpan(
-			{
-				name: 'notification.send_to_all',
-				op: 'notification.dispatch',
-				onlyIfParent: true,
-				attributes: {
-					'notification.enabled_channels_count': enabledChannels.length,
-					'notification.enabled_channels': enabledChannels.map(ch => ch.name).join(','),
-					'alert.enriched': !!(alert && alert.enriched),
-				},
-			},
-			() => Promise.allSettled(sendPromises),
-		);
+		let results;
+		try {
+			const sendPromises = enabledChannels.map((ch) => {
+				const sendSpanOptions = {
+					name: `notification.send.${ch.name}`,
+					op: 'notification.send',
+					onlyIfParent: true,
+					attributes: {
+						'notification.channel': ch.name,
+						'alert.enriched': !!(alert && alert.enriched),
+						'alert.length': alert && alert.text ? alert.text.length : 0,
+					},
+				};
+
+				if (dispatchSpan) {
+					sendSpanOptions.parentSpan = dispatchSpan;
+				}
+
+				const sendSpan = sentryService.startInactiveSpan(sendSpanOptions);
+
+				return Promise.resolve(
+					sentryService.withActiveSpan(sendSpan, () => ch.send(alert)),
+				).finally(() => {
+					sentryService.endSpan(sendSpan);
+				});
+			});
+
+			results = await Promise.allSettled(sendPromises);
+		} finally {
+			sentryService.endSpan(dispatchSpan);
+		}
 
 		const formattedResults = results.map((r, idx) =>
 			r.status === 'fulfilled'

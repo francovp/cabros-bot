@@ -57,20 +57,22 @@ async function processEnrichment(alert, options) {
 	let enriched = false;
 
 	if (isGeminiEnabled || isTradingViewMcpEnabled) {
+		const enrichmentSpan = sentryService.startInactiveSpan({
+			name: 'alerts.enrichment',
+`			op: 'alert.enrich',
+			onlyIfParent: true,
+			attributes: {
+				'alert.length': alert.text.length,
+				'alert.use_tradingview_data': useTradingViewData,
+				'feature.gemini_grounding': isGeminiEnabled,
+				'feature.tradingview_mcp_enrichment': isTradingViewMcpEnabled,
+			},
+		});
+
 		try {
 			console.debug('Starting alert enrichment process');
-			const enrichedAlert = await sentryService.withSpan(
-				{
-					name: 'alerts.enrichment',
-					op: 'alert.enrich',
-					onlyIfParent: true,
-					attributes: {
-						'alert.length': alert.text.length,
-						'alert.use_tradingview_data': useTradingViewData,
-						'feature.gemini_grounding': isGeminiEnabled,
-						'feature.tradingview_mcp_enrichment': isTradingViewMcpEnabled,
-					},
-				},
+			const enrichedAlert = await sentryService.withActiveSpan(
+				enrichmentSpan,
 				() => enrichAlert({ text: alert.text }, { tokenUsage, useTradingViewData }),
 			);
 			if (enrichedAlert && typeof enrichedAlert === 'object') {
@@ -83,6 +85,8 @@ async function processEnrichment(alert, options) {
 			}
 		} catch (error) {
 			console.warn('[Alert] Enrichment failed, using original text:', error.message);
+		} finally {
+			sentryService.endSpan(enrichmentSpan);
 		}
 	}
 

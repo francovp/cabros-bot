@@ -643,6 +643,69 @@ describe('SentryService', () => {
 	});
 
 	describe('span helpers', () => {
+		it('should return null from startInactiveSpan when tracing is disabled', () => {
+			process.env.ENABLE_SENTRY = 'true';
+			process.env.SENTRY_DSN = 'https://key@sentry.io/123';
+			delete process.env.SENTRY_TRACES_SAMPLE_RATE;
+			service.init();
+
+			const span = service.startInactiveSpan({ name: 'test-span' });
+
+			expect(span).toBeNull();
+			expect(Sentry.startInactiveSpan).not.toHaveBeenCalled();
+		});
+
+		it('should start inactive span when tracing is enabled', () => {
+			process.env.ENABLE_SENTRY = 'true';
+			process.env.SENTRY_DSN = 'https://key@sentry.io/123';
+			process.env.SENTRY_TRACES_SAMPLE_RATE = '1';
+			service.init();
+
+			const span = service.startInactiveSpan({ name: 'test-span', op: 'test' });
+
+			expect(span).toBeDefined();
+			expect(Sentry.startInactiveSpan).toHaveBeenCalledWith(
+				expect.objectContaining({ name: 'test-span', op: 'test' }),
+			);
+		});
+
+		it('should execute callback directly when withActiveSpan receives no span', () => {
+			process.env.ENABLE_SENTRY = 'true';
+			process.env.SENTRY_DSN = 'https://key@sentry.io/123';
+			process.env.SENTRY_TRACES_SAMPLE_RATE = '1';
+			service.init();
+
+			const callback = jest.fn(() => 'ok');
+			const result = service.withActiveSpan(null, callback);
+
+			expect(result).toBe('ok');
+			expect(callback).toHaveBeenCalledTimes(1);
+			expect(Sentry.withActiveSpan).not.toHaveBeenCalled();
+		});
+
+		it('should execute callback inside Sentry.withActiveSpan when tracing is enabled', () => {
+			process.env.ENABLE_SENTRY = 'true';
+			process.env.SENTRY_DSN = 'https://key@sentry.io/123';
+			process.env.SENTRY_TRACES_SAMPLE_RATE = '1';
+			service.init();
+
+			const span = service.startInactiveSpan({ name: 'test-span' });
+			const callback = jest.fn(() => 'ok');
+			const result = service.withActiveSpan(span, callback);
+
+			expect(result).toBe('ok');
+			expect(Sentry.withActiveSpan).toHaveBeenCalledTimes(1);
+			expect(Sentry.withActiveSpan).toHaveBeenCalledWith(span, expect.any(Function));
+		});
+
+		it('should end span safely', () => {
+			const span = { end: jest.fn() };
+
+			service.endSpan(span);
+
+			expect(span.end).toHaveBeenCalledTimes(1);
+		});
+
 		it('should execute callback directly when tracing is disabled', () => {
 			process.env.ENABLE_SENTRY = 'true';
 			process.env.SENTRY_DSN = 'https://key@sentry.io/123';

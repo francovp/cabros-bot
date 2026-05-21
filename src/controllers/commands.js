@@ -5,21 +5,19 @@ const getPrice = async (context) => {
 	const chatId = context.update && context.update.message && context.update.message.chat && context.update.message.chat.id;
 	const messageSplited = context.message.text.split(' ');
 	const symbol = messageSplited[1] || '';
+	const commandSpan = sentryService.startInactiveSpan({
+		name: 'telegram.command.precio',
+		op: 'bot.command',
+		forceTransaction: true,
+		attributes: {
+			'telegram.command': '/precio',
+			'telegram.chat_id': chatId ? String(chatId) : 'unknown',
+			'crypto.symbol': symbol || 'missing',
+		},
+	});
 
 	try {
-		const result = await sentryService.withSpan(
-			{
-				name: 'telegram.command.precio',
-				op: 'bot.command',
-				forceTransaction: true,
-				attributes: {
-					'telegram.command': '/precio',
-					'telegram.chat_id': chatId ? String(chatId) : 'unknown',
-					'crypto.symbol': symbol || 'missing',
-				},
-			},
-			() => fetchSymbolPrice(context),
-		);
+		const result = await sentryService.withActiveSpan(commandSpan, () => fetchSymbolPrice(context));
 		await context.reply(`Precio de ${result.symbol} es ${result.price}`);
 	} catch (error) {
 		console.error(error);
@@ -33,11 +31,22 @@ const getPrice = async (context) => {
 				symbol,
 			},
 		});
+	} finally {
+		sentryService.endSpan(commandSpan);
 	}
 };
 
 const cryptoBotCmd = (context) => {
 	const chatId = context.update && context.update.message && context.update.message.chat && context.update.message.chat.id;
+	const commandSpan = sentryService.startInactiveSpan({
+		name: 'telegram.command.cryptobot',
+		op: 'bot.command',
+		forceTransaction: true,
+		attributes: {
+			'telegram.command': '/cryptobot',
+			'telegram.chat_id': chatId ? String(chatId) : 'unknown',
+		},
+	});
 
 	try {
 		const messageSplited = context.message.text.split(' ');
@@ -60,6 +69,8 @@ const cryptoBotCmd = (context) => {
 				chatId,
 			},
 		});
+	} finally {
+		sentryService.endSpan(commandSpan);
 	}
 };
 

@@ -371,6 +371,65 @@ class SentryService {
 	}
 
 	/**
+	 * Start an inactive Sentry span for explicit lifecycle management
+	 * @param {import('@sentry/node').StartSpanOptions} options
+	 * @returns {import('@sentry/node').Span|null}
+	 */
+	startInactiveSpan(options) {
+		if (!this.isTracingEnabled() || !options || !options.name) {
+			return null;
+		}
+
+		try {
+			return Sentry.startInactiveSpan(options);
+		} catch (error) {
+			console.warn(`[SentryService] Failed to start inactive span "${options.name}": ${error.message}`);
+			return null;
+		}
+	}
+
+	/**
+	 * Run code with the provided span as the active span
+	 * @template T
+	 * @param {import('@sentry/node').Span|null|undefined} span
+	 * @param {() => T} callback
+	 * @returns {T}
+	 */
+	withActiveSpan(span, callback) {
+		if (typeof callback !== 'function') {
+			throw new Error('withActiveSpan callback must be a function');
+		}
+
+		if (!this.isTracingEnabled() || !span) {
+			return callback();
+		}
+
+		try {
+			return Sentry.withActiveSpan(span, callback);
+		} catch (error) {
+			console.warn('[SentryService] Failed to activate span:', error.message);
+			return callback();
+		}
+	}
+
+	/**
+	 * End a span safely
+	 * @param {import('@sentry/node').Span|null|undefined} span
+	 * @returns {void}
+	 */
+	endSpan(span) {
+		if (!span || typeof span.end !== 'function') {
+			return;
+		}
+
+		try {
+			span.end();
+		} catch (error) {
+			console.warn('[SentryService] Failed to end span:', error.message);
+		}
+	}
+
+	/**
 	 * Execute callback within a Sentry span
 	 * @template T
 	 * @param {import('@sentry/node').StartSpanOptions} options

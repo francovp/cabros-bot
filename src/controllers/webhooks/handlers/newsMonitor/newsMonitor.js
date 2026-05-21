@@ -81,18 +81,25 @@ class NewsMonitorHandler {
 				});
 			}
 
-			const results = await sentryService.withSpan(
-				{
-					name: 'news_monitor.analyze_symbols',
-					op: 'news.analysis',
-					onlyIfParent: true,
-					attributes: {
-						'news.symbol_count': symbolsToAnalyze.length,
-						'news.request_id': requestId,
-					},
+			const analysisSpan = sentryService.startInactiveSpan({
+				name: 'news_monitor.analyze_symbols',
+				op: 'news.analysis',
+				onlyIfParent: true,
+				attributes: {
+					'news.symbol_count': symbolsToAnalyze.length,
+					'news.request_id': requestId,
 				},
-				() => this.analyzer.analyzeSymbols(symbolsToAnalyze, requestId, tokenUsage),
-			);
+			});
+
+			let results;
+			try {
+				results = await sentryService.withActiveSpan(
+					analysisSpan,
+					() => this.analyzer.analyzeSymbols(symbolsToAnalyze, requestId, tokenUsage),
+				);
+			} finally {
+				sentryService.endSpan(analysisSpan);
+			}
 
 			const summary = this.generateSummary(results);
 			const response = {

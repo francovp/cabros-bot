@@ -11,21 +11,19 @@ const fetchSymbolPrice = async (context) => {
 	// Check for parameters;
 	const messageSplited = context.message.text.split(' ');
 	const symbol = messageSplited[1];
+	const priceFetchSpan = sentryService.startInactiveSpan({
+		name: 'binance.get_avg_price',
+		op: 'http.client',
+		onlyIfParent: true,
+		attributes: {
+			'provider.name': 'binance',
+			'provider.operation': 'getAvgPrice',
+			'crypto.symbol': symbol || 'missing',
+		},
+	});
 	try {
 		let price;
-		const data = await sentryService.withSpan(
-			{
-				name: 'binance.get_avg_price',
-				op: 'http.client',
-				onlyIfParent: true,
-				attributes: {
-					'provider.name': 'binance',
-					'provider.operation': 'getAvgPrice',
-					'crypto.symbol': symbol || 'missing',
-				},
-			},
-			() => client.getAvgPrice({ symbol: symbol }),
-		);
+		const data = await sentryService.withActiveSpan(priceFetchSpan, () => client.getAvgPrice({ symbol: symbol }));
 		// The prices have been successfully retrieved
 		// So build the response object to trigger the success intent
 		if (data.price >= 1) {
@@ -45,6 +43,8 @@ const fetchSymbolPrice = async (context) => {
 		console.error('Error fetching symbol price:', e);
 		// Reject the Promise to say that an error occurred while the handler was performing the action
 		return Promise.reject(e);
+	} finally {
+		sentryService.endSpan(priceFetchSpan);
 	}
 };
 
