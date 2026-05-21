@@ -22,20 +22,21 @@ class NotificationManager {
    * @returns {Promise<Array>} Array of validation results
    */
 	async validateAll() {
-		const results = [];
-		for (const [name, channel] of this.channels) {
+		const channelsArray = Array.from(this.channels.entries());
+		const validationPromises = channelsArray.map(async ([name, channel]) => {
 			try {
 				const result = await channel.validate();
 				console.debug(
 					`Notification channel ${name}: ${result.valid ? 'ENABLED' : 'DISABLED'} - ${result.message}`,
 				);
-				results.push(result);
+				return result;
 			} catch (error) {
 				console.error(`Error validating ${name} channel:`, error.message);
-				results.push({ valid: false, message: `Validation error: ${error.message}` });
+				return { valid: false, message: `Validation error: ${error.message}` };
 			}
-		}
-		return results;
+		});
+
+		return await Promise.all(validationPromises);
 	}
 
 	/**
