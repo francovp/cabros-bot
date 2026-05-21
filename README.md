@@ -96,6 +96,7 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 - `SENTRY_RELEASE` - Explicit release tag (e.g., `v1.2.3`). Auto-derived from git commit if not set
 - `SENTRY_SEND_ALERT_CONTENT` - Include alert text in error events (`true` or `false`, default: `true`)
 - `SENTRY_SAMPLE_RATE_ERRORS` - Error sample rate from 0.0 to 1.0 (default: `1.0` = 100%)
+- `SENTRY_TRACES_SAMPLE_RATE` - Trace sample rate from 0.0 to 1.0 (leave unset to disable tracing and custom spans)
 - `SENTRY_CONSOLE_LOG_LEVELS` - Comma-separated console levels sent as Sentry Logs (default: `warn,error`; allowed: `debug`, `info`, `warn`, `error`, `log`, `assert`, `trace`)
 - Sentry Logs are enabled automatically when `ENABLE_SENTRY=true`; configured console levels are sent as Sentry Logs.
 
@@ -632,6 +633,7 @@ When enabled, it also forwards configured console levels to Sentry Logs using th
 - **Privacy Controls**: Optional exclusion of alert content from error events
 - **Structured Console Logs**: All `console.*` output is emitted as one-line JSON with `timestamp`, `level`, `message`, `service`, `environment`, and optional `attributes`, `parameters`, and `error`
 - **Console Log Capture**: Configured console levels are captured as searchable Sentry Logs
+- **Optional Tracing/Spans**: Enable transaction traces plus custom spans for alert processing, news analysis, and multi-channel delivery
 - **Graceful Degradation**: Works without affecting existing fallback mechanisms
 
 ### Configuration
@@ -652,6 +654,9 @@ SENTRY_SEND_ALERT_CONTENT=false
 
 # Optional: Error sampling (default: 1.0 = 100%)
 SENTRY_SAMPLE_RATE_ERRORS=1.0
+
+# Optional: Trace sampling (leave unset to disable tracing)
+SENTRY_TRACES_SAMPLE_RATE=0.1
 
 # Optional: Console log levels captured as Sentry Logs (default: warn,error)
 SENTRY_CONSOLE_LOG_LEVELS=warn,error

@@ -168,7 +168,7 @@ class NewsAnalyzer {
 
 		// Build analysis context promise for Gemini
 		const analysisContextPromise = marketContextPromise.then(marketContext =>
-			this.buildAnalysisContext(symbol, marketContext)
+			this.buildAnalysisContext(symbol, marketContext),
 		);
 
 		// Call Gemini for sentiment analysis

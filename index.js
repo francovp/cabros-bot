@@ -50,7 +50,6 @@ app.listen(port, async () => {
 		bot = new Telegraf(token);
 		bot.command(['precio'], getPrice);
 		bot.command(['cryptobot'], cryptoBotCmd);
-		await bot.launch();
 
 		// Initialize notification services
 		await initializeNotificationServices(bot);

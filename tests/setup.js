@@ -38,10 +38,22 @@ global.bot = {
 };
 
 // Mock @sentry/node globally to prevent real network calls
+const createMockSpan = () => ({
+	end: jest.fn(),
+	setAttribute: jest.fn(),
+	setStatus: jest.fn(),
+	setHttpStatus: jest.fn(),
+});
+
 jest.mock('@sentry/node', () => ({
 	init: jest.fn(),
 	consoleIntegration: jest.fn(() => 'console-breadcrumb-integration'),
 	consoleLoggingIntegration: jest.fn(() => 'console-logging-integration'),
+	startSpan: jest.fn((_options, callback) => callback(createMockSpan())),
+	startSpanManual: jest.fn((_options, callback) => callback(createMockSpan())),
+	startInactiveSpan: jest.fn(() => createMockSpan()),
+	getActiveSpan: jest.fn(() => createMockSpan()),
+	withActiveSpan: jest.fn((_span, callback) => callback()),
 	captureException: jest.fn(() => 'mock-event-id'),
 	captureMessage: jest.fn(() => 'mock-event-id'),
 	flush: jest.fn().mockResolvedValue(true),

@@ -16,6 +16,7 @@ describe('Dual-Channel Alert Integration', () => {
 	beforeEach(() => {
 		// Setup for testing
 		process.env.ENABLE_WHATSAPP_ALERTS = 'true';
+		process.env.ENABLE_TELEGRAM_BOT = 'true';
 		process.env.WHATSAPP_API_URL = 'https://api.green.com/waInstance123/';
 		process.env.WHATSAPP_API_KEY = 'test-key-123';
 		process.env.WHATSAPP_CHAT_ID = '120363xxxxx@g.us';

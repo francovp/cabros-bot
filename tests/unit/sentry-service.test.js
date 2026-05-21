@@ -185,6 +185,36 @@ describe('SentryService', () => {
 				const config = service._buildConfiguration();
 				expect(config.sampleRateErrors).toBe(0.5);
 			});
+
+			it('should allow zero value from env', () => {
+				process.env.SENTRY_SAMPLE_RATE_ERRORS = '0';
+
+				const config = service._buildConfiguration();
+				expect(config.sampleRateErrors).toBe(0);
+			});
+		});
+
+		describe('tracesSampleRate', () => {
+			it('should be undefined when not configured', () => {
+				delete process.env.SENTRY_TRACES_SAMPLE_RATE;
+
+				const config = service._buildConfiguration();
+				expect(config.tracesSampleRate).toBeUndefined();
+			});
+
+			it('should parse traces sample rate from env', () => {
+				process.env.SENTRY_TRACES_SAMPLE_RATE = '0.25';
+
+				const config = service._buildConfiguration();
+				expect(config.tracesSampleRate).toBe(0.25);
+			});
+
+			it('should clamp traces sample rate above 1.0', () => {
+				process.env.SENTRY_TRACES_SAMPLE_RATE = '5';
+
+				const config = service._buildConfiguration();
+				expect(config.tracesSampleRate).toBe(1);
+			});
 		});
 
 		describe('console log levels', () => {
@@ -228,10 +258,23 @@ describe('SentryService', () => {
 			expect(Sentry.init).toHaveBeenCalledTimes(1);
 			expect(Sentry.init).toHaveBeenCalledWith(expect.objectContaining({
 				dsn: 'https://key@sentry.io/123',
-				tracesSampleRate: 0,
 			}));
+			const initOptions = Sentry.init.mock.calls[0][0];
+			expect(initOptions.tracesSampleRate).toBeUndefined();
 			expect(service.isEnabled()).toBe(true);
 			expect(service.getState().configured).toBe(true);
+		});
+
+		it('should initialize tracing when traces sample rate is configured', () => {
+			process.env.ENABLE_SENTRY = 'true';
+			process.env.SENTRY_DSN = 'https://key@sentry.io/123';
+			process.env.SENTRY_TRACES_SAMPLE_RATE = '0.2';
+
+			service.init();
+
+			const initOptions = Sentry.init.mock.calls[0][0];
+			expect(initOptions.tracesSampleRate).toBe(0.2);
+			expect(service.isTracingEnabled()).toBe(true);
 		});
 
 		it('should enable Sentry logs for console warn and error', () => {
@@ -596,6 +639,127 @@ describe('SentryService', () => {
 
 			await service.flush(3000);
 			expect(Sentry.flush).toHaveBeenCalledWith(3000);
+		});
+	});
+
+	describe('span helpers', () => {
+		it('should return null from startInactiveSpan when tracing is disabled', () => {
+			process.env.ENABLE_SENTRY = 'true';
+			process.env.SENTRY_DSN = 'https://key@sentry.io/123';
+			delete process.env.SENTRY_TRACES_SAMPLE_RATE;
+			service.init();
+
+			const span = service.startInactiveSpan({ name: 'test-span' });
+
+			expect(span).toBeNull();
+			expect(Sentry.startInactiveSpan).not.toHaveBeenCalled();
+		});
+
+		it('should start inactive span when tracing is enabled', () => {
+			process.env.ENABLE_SENTRY = 'true';
+			process.env.SENTRY_DSN = 'https://key@sentry.io/123';
+			process.env.SENTRY_TRACES_SAMPLE_RATE = '1';
+			service.init();
+
+			const span = service.startInactiveSpan({ name: 'test-span', op: 'test' });
+
+			expect(span).toBeDefined();
+			expect(Sentry.startInactiveSpan).toHaveBeenCalledWith(
+				expect.objectContaining({ name: 'test-span', op: 'test' }),
+			);
+		});
+
+		it('should return active span when tracing is enabled', () => {
+			process.env.ENABLE_SENTRY = 'true';
+			process.env.SENTRY_DSN = 'https://key@sentry.io/123';
+			process.env.SENTRY_TRACES_SAMPLE_RATE = '1';
+			service.init();
+
+			const span = service.getActiveSpan();
+
+			expect(span).toBeDefined();
+			expect(Sentry.getActiveSpan).toHaveBeenCalledTimes(1);
+		});
+
+		it('should execute callback directly when withActiveSpan receives no span', () => {
+			process.env.ENABLE_SENTRY = 'true';
+			process.env.SENTRY_DSN = 'https://key@sentry.io/123';
+			process.env.SENTRY_TRACES_SAMPLE_RATE = '1';
+			service.init();
+
+			const callback = jest.fn(() => 'ok');
+			const result = service.withActiveSpan(null, callback);
+
+			expect(result).toBe('ok');
+			expect(callback).toHaveBeenCalledTimes(1);
+			expect(Sentry.withActiveSpan).not.toHaveBeenCalled();
+		});
+
+		it('should execute callback inside Sentry.withActiveSpan when tracing is enabled', () => {
+			process.env.ENABLE_SENTRY = 'true';
+			process.env.SENTRY_DSN = 'https://key@sentry.io/123';
+			process.env.SENTRY_TRACES_SAMPLE_RATE = '1';
+			service.init();
+
+			const span = service.startInactiveSpan({ name: 'test-span' });
+			const callback = jest.fn(() => 'ok');
+			const result = service.withActiveSpan(span, callback);
+
+			expect(result).toBe('ok');
+			expect(Sentry.withActiveSpan).toHaveBeenCalledTimes(1);
+			expect(Sentry.withActiveSpan).toHaveBeenCalledWith(span, expect.any(Function));
+		});
+
+		it('should end span safely', () => {
+			const span = { end: jest.fn() };
+
+			service.endSpan(span);
+
+			expect(span.end).toHaveBeenCalledTimes(1);
+		});
+
+		it('should execute callback directly when tracing is disabled', () => {
+			process.env.ENABLE_SENTRY = 'true';
+			process.env.SENTRY_DSN = 'https://key@sentry.io/123';
+			delete process.env.SENTRY_TRACES_SAMPLE_RATE;
+			service.init();
+
+			const callback = jest.fn(() => 'ok');
+			const result = service.withSpan({ name: 'test-span' }, callback);
+
+			expect(result).toBe('ok');
+			expect(callback).toHaveBeenCalledTimes(1);
+			expect(Sentry.startSpan).not.toHaveBeenCalled();
+		});
+
+		it('should execute callback inside Sentry.startSpan when tracing is enabled', () => {
+			process.env.ENABLE_SENTRY = 'true';
+			process.env.SENTRY_DSN = 'https://key@sentry.io/123';
+			process.env.SENTRY_TRACES_SAMPLE_RATE = '1';
+			service.init();
+
+			const callback = jest.fn(() => 'ok');
+			const result = service.withSpan({ name: 'test-span', op: 'test' }, callback);
+
+			expect(result).toBe('ok');
+			expect(Sentry.startSpan).toHaveBeenCalledTimes(1);
+			expect(Sentry.startSpan).toHaveBeenCalledWith(
+				expect.objectContaining({ name: 'test-span', op: 'test' }),
+				expect.any(Function),
+			);
+		});
+
+		it('should execute callback inside Sentry.startSpanManual when tracing is enabled', () => {
+			process.env.ENABLE_SENTRY = 'true';
+			process.env.SENTRY_DSN = 'https://key@sentry.io/123';
+			process.env.SENTRY_TRACES_SAMPLE_RATE = '1';
+			service.init();
+
+			const callback = jest.fn(() => 'ok');
+			const result = service.withManualSpan({ name: 'test-span' }, callback);
+
+			expect(result).toBe('ok');
+			expect(Sentry.startSpanManual).toHaveBeenCalledTimes(1);
 		});
 	});
 });
