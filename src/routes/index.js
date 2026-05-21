@@ -2,9 +2,9 @@ const express = require('express');
 const { postAlert } = require('../controllers/webhooks/handlers/alert/alert');
 const { validateApiKey } = require('../lib/auth');
 
-function getRoutes() {
+function getRoutes(botOrGetter) {
 	const router = express.Router();
-	router.post('/webhook/alert', validateApiKey, postAlert());
+	router.post('/webhook/alert', validateApiKey, postAlert(botOrGetter));
 
 	const { getNewsMonitor } = require('../controllers/webhooks/handlers/newsMonitor/newsMonitor');
 	const newsMonitor = getNewsMonitor();
