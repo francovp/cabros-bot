@@ -16,15 +16,15 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+    - name: Install pnpm
+      uses: pnpm/action-setup@v3
+      with:
+        version: 10 # Compatible with node 20.x
     - name: Setup Node.js 20
       uses: actions/setup-node@v4
       with:
         node-version: 20
         cache: pnpm
-    - name: Install pnpm
-      uses: pnpm/action-setup@v3
-      with:
-        version: 10 # Compatible with node 20.x
     - run: pnpm install --frozen-lockfile
     # - run: pnpm run build --if-present # No build step needed for this project, yet.
     - run: pnpm test
