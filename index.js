@@ -50,7 +50,6 @@ app.listen(port, async () => {
 		bot = new Telegraf(token);
 		bot.command(['precio'], getPrice);
 		bot.command(['cryptobot'], cryptoBotCmd);
-		await bot.launch();
 
 		// Initialize notification services
 		await initializeNotificationServices(bot);
@@ -58,6 +57,11 @@ app.listen(port, async () => {
 		// Enable graceful stop
 		process.once('SIGINT', () => bot.stop('SIGINT'));
 		process.once('SIGTERM', () => bot.stop('SIGTERM'));
+
+		// Start polling without blocking the rest of bootstrap.
+		void bot.launch().catch((error) => {
+			console.error('[index] Failed to launch Telegram bot:', error.message);
+		});
 
 		if (process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID !== undefined) {
 			console.log('Telegram Admin Notifications Chat ID:', process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID);
