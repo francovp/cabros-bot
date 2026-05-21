@@ -20,6 +20,7 @@ describe('Graceful Degradation & Fallback', () => {
 		};
 
 		// Setup minimum config
+		process.env.ENABLE_TELEGRAM_BOT = 'true';
 		process.env.BOT_TOKEN = 'test-bot-token';
 		process.env.TELEGRAM_CHAT_ID = '-1001234567890';
 	});
