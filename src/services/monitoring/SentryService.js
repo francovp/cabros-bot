@@ -223,14 +223,18 @@ class SentryService {
 				release: this.config.release,
 				sampleRate: this.config.sampleRateErrors,
 				sendDefaultPii: true,
-
+				// Enable Sentry Logs and forward high-severity console output as searchable logs.
+				enableLogs: true,
 				// Disable tracing/performance for this feature (FR-010)
 				tracesSampleRate: 0,
 
 				// Configure process-level error capture (FR-002)
 				integrations: (integrations) => {
-					// Keep default integrations but configure them appropriately
-					return integrations;
+					// Keep default integrations and add Sentry Logs capture for console.warn/error.
+					return [
+						...integrations,
+						Sentry.consoleLoggingIntegration({ levels: ['warn', 'error'] }),
+					];
 				},
 
 				// beforeSend hook for additional filtering if needed

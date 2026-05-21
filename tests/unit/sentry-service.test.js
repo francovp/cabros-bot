@@ -204,6 +204,23 @@ describe('SentryService', () => {
 			expect(service.getState().configured).toBe(true);
 		});
 
+		it('should enable Sentry logs for console warn and error', () => {
+			process.env.ENABLE_SENTRY = 'true';
+			process.env.SENTRY_DSN = 'https://key@sentry.io/123';
+
+			service.init();
+
+			const initOptions = Sentry.init.mock.calls[0][0];
+			expect(initOptions.enableLogs).toBe(true);
+
+			const defaultIntegrations = ['default-integration'];
+			const integrations = initOptions.integrations(defaultIntegrations);
+
+			expect(Sentry.consoleLoggingIntegration).toHaveBeenCalledWith({ levels: ['warn', 'error'] });
+			expect(Sentry.consoleIntegration).not.toHaveBeenCalled();
+			expect(integrations).toEqual(['default-integration', 'console-logging-integration']);
+		});
+
 		it('should not initialize Sentry when disabled', () => {
 			process.env.ENABLE_SENTRY = 'false';
 			process.env.SENTRY_DSN = 'https://key@sentry.io/123';

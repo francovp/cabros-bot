@@ -21,7 +21,7 @@
   "dependencies": {
     "@google/genai": "^1.27.0",
     "@langfuse/client": "^5.0.1",
-    "@sentry/node": "^8.0.0",
+    "@sentry/node": "^10.53.1",
     "binance": "^2.10.2",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",

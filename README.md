@@ -95,6 +95,7 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 - `SENTRY_RELEASE` - Explicit release tag (e.g., `v1.2.3`). Auto-derived from git commit if not set
 - `SENTRY_SEND_ALERT_CONTENT` - Include alert text in error events (`true` or `false`, default: `true`)
 - `SENTRY_SAMPLE_RATE_ERRORS` - Error sample rate from 0.0 to 1.0 (default: `1.0` = 100%)
+- Sentry Logs are enabled automatically when `ENABLE_SENTRY=true`; `console.warn` and `console.error` are sent as Sentry Logs.
 
 ## Setup
 
@@ -612,6 +613,7 @@ Crypto bot help command.
 **📖 [Quickstart Guide](specs/005-sentry-runtime-errors/quickstart.md)** — Complete setup and verification instructions.
 
 The runtime error monitoring feature captures unexpected errors across all application flows and reports them to Sentry for centralized visibility and debugging.
+When enabled, it also forwards `console.warn` and `console.error` calls to Sentry Logs using the JavaScript SDK console logging integration.
 
 ### Monitored Flows
 
@@ -626,6 +628,7 @@ The runtime error monitoring feature captures unexpected errors across all appli
 - **Non-Intrusive**: Monitoring failures never affect HTTP responses or message delivery
 - **Environment Gating**: Auto-derives environment from Render.com variables (`production`, `preview`, `development`)
 - **Privacy Controls**: Optional exclusion of alert content from error events
+- **Console Log Capture**: `console.warn` and `console.error` are captured as searchable Sentry Logs
 - **Graceful Degradation**: Works without affecting existing fallback mechanisms
 
 ### Configuration
@@ -664,6 +667,11 @@ SENTRY_SAMPLE_RATE_ERRORS=1.0
 1. Verify `ENABLE_SENTRY=true` and `SENTRY_DSN` is set
 2. Check application logs for `[SentryService] Monitoring disabled` message
 3. Verify DSN format: `https://<key>@<org>.ingest.sentry.io/<project>`
+
+**Console warnings/errors not appearing in Sentry Logs**:
+1. Verify the installed `@sentry/node` version is `10.13.0` or newer
+2. Confirm Sentry initialized with `enableLogs: true`
+3. Check the Sentry Logs view, not only the Issues view
 
 **Expected behaviors not reporting** (by design):
 - Validation errors (400 responses) are not reported
@@ -1029,4 +1037,3 @@ The application logs to stdout:
 - Each retry waits: 1s, then 2s, then 4s
 - ±10% jitter prevents thundering herd
 - All retries logged at WARN/ERROR level
-
