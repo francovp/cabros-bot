@@ -49,6 +49,14 @@ function getNotificationManager() {
 	return notificationManager;
 }
 
+function resolveBot(botOrGetter) {
+	if (typeof botOrGetter === 'function') {
+		return botOrGetter();
+	}
+
+	return botOrGetter || null;
+}
+
 async function processEnrichment(alert, options) {
 	const { tokenUsage, useTradingViewData, parentSpan } = options;
 	const isGeminiEnabled = process.env.ENABLE_GEMINI_GROUNDING === 'true';
@@ -91,7 +99,7 @@ async function processEnrichment(alert, options) {
 	return enriched;
 }
 
-function postAlert(bot) {
+function postAlert(botOrGetter) {
 	return async (req, res) => {
 		const { body } = req;
 		const useTradingViewData = req.query && (req.query.useTradingViewData === true || req.query.useTradingViewData === 'true');
@@ -101,8 +109,9 @@ function postAlert(bot) {
 
 		try {
 			const requestSpan = sentryService.getActiveSpan();
+			const bot = resolveBot(botOrGetter);
 			if (!notificationManager) {
-				await initializeNotificationServices(bot || null);
+				await initializeNotificationServices(bot);
 			}
 
 			if (typeof body === 'object' && 'text' in body) {

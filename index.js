@@ -20,7 +20,7 @@ const port = process.env.PORT || 80;
 const now = new Date();
 
 // Always mount routes (they gate access based on feature flags)
-app.use('/api', getRoutes());
+app.use('/api', getRoutes(() => bot));
 
 app.get('/debug-sentry', function mainHandler() {
 	throw new Error('Sentry debug test error!');
@@ -50,6 +50,7 @@ app.listen(port, async () => {
 		bot = new Telegraf(token);
 		bot.command(['precio'], getPrice);
 		bot.command(['cryptobot'], cryptoBotCmd);
+		await bot.launch();
 
 		// Initialize notification services
 		await initializeNotificationServices(bot);
