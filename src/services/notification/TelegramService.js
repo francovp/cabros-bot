@@ -45,8 +45,7 @@ class TelegramService extends NotificationChannel {
 		}
 
 		if (!this.bot) {
-			this.enabled = false;
-			return { valid: true, message: 'Telegram disabled: bot instance not provided' };
+			return { valid: false, message: 'Bot instance not provided' };
 		}
 
 		// Verify bot token by calling getMe
