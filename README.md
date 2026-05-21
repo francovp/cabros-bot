@@ -71,7 +71,8 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 - `PORT` - HTTP server port (default: `80`)
 - `RENDER` - Render.com deployment flag (used internally)
 - `IS_PULL_REQUEST` - Render preview environment flag (disables bot in PRs)
-- `LOG_LEVEL` - Log verbosity (`debug`, `info`, `warn`, `error`, `silent`; defaults to `debug` in development and `info` in production)
+- `LOG_LEVEL` - Structured JSON log verbosity (`debug`, `info`, `warn`, `error`, `silent`; defaults to `debug` in development and `info` in production)
+- `SERVICE_NAME` - Optional service name included in JSON logs (default: package name or `cabros-bot`)
 
 #### News Monitoring (003-news-monitor)
 
@@ -614,7 +615,7 @@ Crypto bot help command.
 **📖 [Quickstart Guide](specs/005-sentry-runtime-errors/quickstart.md)** — Complete setup and verification instructions.
 
 The runtime error monitoring feature captures unexpected errors across all application flows and reports them to Sentry for centralized visibility and debugging.
-When enabled, it also forwards `console.warn` and `console.error` calls to Sentry Logs using the JavaScript SDK console logging integration.
+When enabled, it also forwards configured console levels to Sentry Logs using the JavaScript SDK console logging integration.
 
 ### Monitored Flows
 
@@ -629,7 +630,8 @@ When enabled, it also forwards `console.warn` and `console.error` calls to Sentr
 - **Non-Intrusive**: Monitoring failures never affect HTTP responses or message delivery
 - **Environment Gating**: Auto-derives environment from Render.com variables (`production`, `preview`, `development`)
 - **Privacy Controls**: Optional exclusion of alert content from error events
-- **Console Log Capture**: `console.warn` and `console.error` are captured as searchable Sentry Logs
+- **Structured Console Logs**: All `console.*` output is emitted as one-line JSON with `timestamp`, `level`, `message`, `service`, `environment`, and optional `attributes`, `parameters`, and `error`
+- **Console Log Capture**: Configured console levels are captured as searchable Sentry Logs
 - **Graceful Degradation**: Works without affecting existing fallback mechanisms
 
 ### Configuration

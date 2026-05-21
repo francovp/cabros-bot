@@ -12,13 +12,13 @@ Key files / entry points
 - `src/controllers/webhooks/handlers/alert/alert.js` — webhook handler that forwards alert text to a Telegram chat.
 - `src/services/monitoring/SentryService.js` — wraps `@sentry/node` for runtime error monitoring (005).
 - `src/controllers/helpers.js` — small numeric helper (`round10`) used by price formatting.
-- `src/lib/logging.js` — configures `console.*` levels via `LOG_LEVEL`.
+- `src/lib/logging.js` — configures `console.*` levels via `LOG_LEVEL` and emits one-line structured JSON logs.
 - `src/lib/rateLimiter.js` — global API rate limiting middleware (returns 429 when exceeded; configured via `RATE_LIMIT_WINDOW_MS`/`RATE_LIMIT_MAX`).
 
 Environment and runtime behavior (discoverable)
 - NODE version: `20.x` (see `package.json` engines).
 - Required env vars: `BOT_TOKEN` (throws if missing; even when Telegram bot is disabled).
-- Optional but relevant (non-exhaustive; see feature sections below for full config): `ENABLE_TELEGRAM_BOT`, `PORT`, `TELEGRAM_CHAT_ID`, `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID`, `ENABLE_WHATSAPP_ALERTS`, `ENABLE_GEMINI_GROUNDING`, `GEMINI_API_KEY`, `ENABLE_LANGFUSE_PROMPTS`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL`, `LANGFUSE_PROMPT_LABEL`, `LANGFUSE_PROMPT_CACHE_TTL_SECONDS`, `BRAVE_SEARCH_API_KEY`, `BRAVE_SEARCH_ENDPOINT`, `FORCE_BRAVE_SEARCH`, `MODEL_PROVIDER`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `ENABLE_NEWS_MONITOR`, `ENABLE_SENTRY`, `SENTRY_DSN`, `LOG_LEVEL`, `RATE_LIMIT_WINDOW_MS`, `RATE_LIMIT_MAX`, `RENDER`, `IS_PULL_REQUEST`, `RENDER_GIT_COMMIT`, `RENDER_GIT_REPO_SLUG`.
+- Optional but relevant (non-exhaustive; see feature sections below for full config): `ENABLE_TELEGRAM_BOT`, `PORT`, `TELEGRAM_CHAT_ID`, `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID`, `ENABLE_WHATSAPP_ALERTS`, `ENABLE_GEMINI_GROUNDING`, `GEMINI_API_KEY`, `ENABLE_LANGFUSE_PROMPTS`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL`, `LANGFUSE_PROMPT_LABEL`, `LANGFUSE_PROMPT_CACHE_TTL_SECONDS`, `BRAVE_SEARCH_API_KEY`, `BRAVE_SEARCH_ENDPOINT`, `FORCE_BRAVE_SEARCH`, `MODEL_PROVIDER`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `ENABLE_NEWS_MONITOR`, `ENABLE_SENTRY`, `SENTRY_DSN`, `SENTRY_CONSOLE_LOG_LEVELS`, `LOG_LEVEL`, `SERVICE_NAME`, `RATE_LIMIT_WINDOW_MS`, `RATE_LIMIT_MAX`, `RENDER`, `IS_PULL_REQUEST`, `RENDER_GIT_COMMIT`, `RENDER_GIT_REPO_SLUG`.
 - Bot startup is gated: bot is launched only when `ENABLE_TELEGRAM_BOT === 'true'` and not a preview environment (`RENDER==='true' && IS_PULL_REQUEST==='true'` disables it).
 - Routes under `/api` (e.g. `/api/webhook/alert`) are mounted regardless of bot launch; individual features and notification channels are gated via env flags and per-channel validation.
 
@@ -32,7 +32,7 @@ Patterns and conventions to follow
 - Telegram command handlers receive `context` (Telegraf). Commands parse the full text with `context.message.text.split(' ')` and expect parameters at index 1. Example: `/precio BTCUSDT` where symbol = `messageSplited[1]`.
 - When interacting with external APIs, handlers return Promises (resolve on success, reject on error). `fetchSymbolPrice` is async and returns `{ price, symbol }` when successful.
 - Webhook `/api/webhook/alert` accepts either plain text (text/plain body) or JSON body with a `text` property. The handler sends messages with `parse_mode: 'MarkdownV2'` to `process.env.TELEGRAM_CHAT_ID`.
-- Simple, explicit logging is used (`console.log`, `console.debug`, `console.warn`, `console.error`) rather than a structured logger. When Sentry is enabled, configured console levels are forwarded to Sentry Logs via `SENTRY_CONSOLE_LOG_LEVELS` (default: `warn,error`).
+- Use `console.log`, `console.debug`, `console.info`, `console.warn`, and `console.error` through the centralized logger. `src/lib/logging.js` emits structured one-line JSON with `timestamp`, `level`, `message`, `service`, `environment`, `pid`, and optional `attributes`, `parameters`, and `error`; sensitive keys such as tokens, secrets, passwords, API keys, authorization headers, cookies, and DSNs are redacted.
 
 External integrations
 - Binance: uses `binance` package `MainClient` and `getAvgPrice({ symbol })` (see `fetchPriceCryptoSymbol.js`). Responses are configured with `beautifyResponses: true`.
@@ -572,7 +572,7 @@ ENABLE_SENTRY (005)
 **Patterns**:
 - Graceful degradation: Enrichment failure ≠ alert failure
 - Partial success: Return mixed results (some channels fail, others succeed)
-- Logging: Explicit console.log/debug/warn/error (not structured logging)
+- Logging: Use existing `console.*` methods; the centralized logger formats every emitted log as structured JSON.
 - Admin notifications: Optional `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID` for failures
 
 **To extend**:
