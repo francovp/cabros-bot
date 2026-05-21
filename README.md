@@ -71,7 +71,8 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 - `PORT` - HTTP server port (default: `80`)
 - `RENDER` - Render.com deployment flag (used internally)
 - `IS_PULL_REQUEST` - Render preview environment flag (disables bot in PRs)
-- `LOG_LEVEL` - Log verbosity (`debug`, `info`, `warn`, `error`, `silent`; defaults to `debug` in development and `info` in production)
+- `LOG_LEVEL` - Structured JSON log verbosity (`debug`, `info`, `warn`, `error`, `silent`; defaults to `debug` in development and `info` in production)
+- `SERVICE_NAME` - Optional service name included in JSON logs (default: package name or `cabros-bot`)
 
 #### News Monitoring (003-news-monitor)
 
@@ -95,6 +96,8 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 - `SENTRY_RELEASE` - Explicit release tag (e.g., `v1.2.3`). Auto-derived from git commit if not set
 - `SENTRY_SEND_ALERT_CONTENT` - Include alert text in error events (`true` or `false`, default: `true`)
 - `SENTRY_SAMPLE_RATE_ERRORS` - Error sample rate from 0.0 to 1.0 (default: `1.0` = 100%)
+- `SENTRY_CONSOLE_LOG_LEVELS` - Comma-separated console levels sent as Sentry Logs (default: `warn,error`; allowed: `debug`, `info`, `warn`, `error`, `log`, `assert`, `trace`)
+- Sentry Logs are enabled automatically when `ENABLE_SENTRY=true`; configured console levels are sent as Sentry Logs.
 
 ## Setup
 
@@ -612,6 +615,7 @@ Crypto bot help command.
 **📖 [Quickstart Guide](specs/005-sentry-runtime-errors/quickstart.md)** — Complete setup and verification instructions.
 
 The runtime error monitoring feature captures unexpected errors across all application flows and reports them to Sentry for centralized visibility and debugging.
+When enabled, it also forwards configured console levels to Sentry Logs using the JavaScript SDK console logging integration.
 
 ### Monitored Flows
 
@@ -626,6 +630,8 @@ The runtime error monitoring feature captures unexpected errors across all appli
 - **Non-Intrusive**: Monitoring failures never affect HTTP responses or message delivery
 - **Environment Gating**: Auto-derives environment from Render.com variables (`production`, `preview`, `development`)
 - **Privacy Controls**: Optional exclusion of alert content from error events
+- **Structured Console Logs**: All `console.*` output is emitted as one-line JSON with `timestamp`, `level`, `message`, `service`, `environment`, and optional `attributes`, `parameters`, and `error`
+- **Console Log Capture**: Configured console levels are captured as searchable Sentry Logs
 - **Graceful Degradation**: Works without affecting existing fallback mechanisms
 
 ### Configuration
@@ -646,6 +652,9 @@ SENTRY_SEND_ALERT_CONTENT=false
 
 # Optional: Error sampling (default: 1.0 = 100%)
 SENTRY_SAMPLE_RATE_ERRORS=1.0
+
+# Optional: Console log levels captured as Sentry Logs (default: warn,error)
+SENTRY_CONSOLE_LOG_LEVELS=warn,error
 ```
 
 ### Environment Auto-Detection
@@ -664,6 +673,12 @@ SENTRY_SAMPLE_RATE_ERRORS=1.0
 1. Verify `ENABLE_SENTRY=true` and `SENTRY_DSN` is set
 2. Check application logs for `[SentryService] Monitoring disabled` message
 3. Verify DSN format: `https://<key>@<org>.ingest.sentry.io/<project>`
+
+**Console warnings/errors not appearing in Sentry Logs**:
+1. Verify the installed `@sentry/node` version is `10.13.0` or newer
+2. Confirm Sentry initialized with `enableLogs: true`
+3. Confirm `SENTRY_CONSOLE_LOG_LEVELS` includes the level you are testing
+4. Check the Sentry Logs view, not only the Issues view
 
 **Expected behaviors not reporting** (by design):
 - Validation errors (400 responses) are not reported
@@ -1029,4 +1044,3 @@ The application logs to stdout:
 - Each retry waits: 1s, then 2s, then 4s
 - ±10% jitter prevents thundering herd
 - All retries logged at WARN/ERROR level
-

@@ -156,7 +156,7 @@ async function analyzeNewsForSymbol(symbol, contextInput, options = {}) {
 			const result = await genaiClient.llmCallv2({
 				systemPrompt: prompt.systemPrompt,
 				userPrompt: prompt.userPrompt,
-				opts: { model: GEMINI_MODEL_NAME, temperature: 0.3 }
+				opts: { model: GEMINI_MODEL_NAME, temperature: 0.3 },
 			});
 			if (tokenUsage && result.usage) {
 				tokenUsage.addUsage(result.usage, GEMINI_MODEL_NAME);
@@ -173,7 +173,7 @@ async function analyzeNewsForSymbol(symbol, contextInput, options = {}) {
 					const fallbackResult = await genaiClient.llmCallv2({
 						systemPrompt: prompt.systemPrompt,
 						userPrompt: prompt.userPrompt,
-						opts: { model: GEMINI_MODEL_NAME_FALLBACK, temperature: 0.3 }
+						opts: { model: GEMINI_MODEL_NAME_FALLBACK, temperature: 0.3 },
 					});
 					if (tokenUsage && fallbackResult.usage) {
 						tokenUsage.addUsage(fallbackResult.usage, GEMINI_MODEL_NAME_FALLBACK);
@@ -202,7 +202,7 @@ async function analyzeNewsForSymbol(symbol, contextInput, options = {}) {
 			symbol,
 			category: analysisResult.event_category,
 			confidence: analysisResult.confidence,
-			groundedSources: analysisResult.sources.length
+			groundedSources: analysisResult.sources.length,
 		});
 
 		return analysisResult;
@@ -238,7 +238,7 @@ function parseNewsAnalysisResponse(response) {
 			event_significance: Math.max(0, Math.min(1, parsed.event_significance || 0)),
 			sentiment_score: Math.max(-1, Math.min(1, parsed.sentiment_score || 0)),
 			headline: (parsed.headline || 'Market event detected').substring(0, 250),
-			description: parsed.description || ''
+			description: parsed.description || '',
 		};
 	} catch (error) {
 		console.error('[Gemini] Response parsing failed:', error.message);
@@ -248,7 +248,7 @@ function parseNewsAnalysisResponse(response) {
 			event_significance: 0,
 			sentiment_score: 0,
 			headline: 'Could not detect market event',
-			description: ''
+			description: '',
 		};
 	}
 }
@@ -332,7 +332,7 @@ function parseEnrichedAlertResponse(response) {
 		if (!['BULLISH', 'BEARISH', 'NEUTRAL'].includes(parsed.sentiment)) {
 			parsed.sentiment = 'NEUTRAL';
 		}
-		
+
 		return {
 			sentiment: parsed.sentiment,
 			sentiment_score: Math.max(0, Math.min(1, parsed.sentiment_score || 0.5)),
