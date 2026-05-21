@@ -51,7 +51,7 @@ jest.mock('@sentry/node', () => ({
 	setTag: jest.fn(),
 	setContext: jest.fn(),
 	setExtra: jest.fn(),
-}));
+}), { virtual: true });
 
 // Increase timeout for all tests
 jest.setTimeout(10000);
