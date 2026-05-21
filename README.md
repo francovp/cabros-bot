@@ -95,7 +95,8 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 - `SENTRY_RELEASE` - Explicit release tag (e.g., `v1.2.3`). Auto-derived from git commit if not set
 - `SENTRY_SEND_ALERT_CONTENT` - Include alert text in error events (`true` or `false`, default: `true`)
 - `SENTRY_SAMPLE_RATE_ERRORS` - Error sample rate from 0.0 to 1.0 (default: `1.0` = 100%)
-- Sentry Logs are enabled automatically when `ENABLE_SENTRY=true`; `console.warn` and `console.error` are sent as Sentry Logs.
+- `SENTRY_CONSOLE_LOG_LEVELS` - Comma-separated console levels sent as Sentry Logs (default: `warn,error`; allowed: `debug`, `info`, `warn`, `error`, `log`, `assert`, `trace`)
+- Sentry Logs are enabled automatically when `ENABLE_SENTRY=true`; configured console levels are sent as Sentry Logs.
 
 ## Setup
 
@@ -649,6 +650,9 @@ SENTRY_SEND_ALERT_CONTENT=false
 
 # Optional: Error sampling (default: 1.0 = 100%)
 SENTRY_SAMPLE_RATE_ERRORS=1.0
+
+# Optional: Console log levels captured as Sentry Logs (default: warn,error)
+SENTRY_CONSOLE_LOG_LEVELS=warn,error
 ```
 
 ### Environment Auto-Detection
@@ -671,7 +675,8 @@ SENTRY_SAMPLE_RATE_ERRORS=1.0
 **Console warnings/errors not appearing in Sentry Logs**:
 1. Verify the installed `@sentry/node` version is `10.13.0` or newer
 2. Confirm Sentry initialized with `enableLogs: true`
-3. Check the Sentry Logs view, not only the Issues view
+3. Confirm `SENTRY_CONSOLE_LOG_LEVELS` includes the level you are testing
+4. Check the Sentry Logs view, not only the Issues view
 
 **Expected behaviors not reporting** (by design):
 - Validation errors (400 responses) are not reported

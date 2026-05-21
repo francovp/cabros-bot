@@ -80,6 +80,7 @@ const Sentry = require('@sentry/node');
  * @property {string} [release]
  * @property {boolean} sendAlertContent - Whether to include full alert/news text in events
  * @property {number} sampleRateErrors - Error sample rate (0.0-1.0)
+ * @property {string[]} consoleLogLevels - Console levels captured as Sentry Logs
  */
 
 /**
@@ -111,6 +112,9 @@ const FEATURE_NAMES = {
 	'news-enrichment': 'news-enrichment',
 	'process': 'process',
 };
+
+const DEFAULT_CONSOLE_LOG_LEVELS = ['warn', 'error'];
+const ALLOWED_CONSOLE_LOG_LEVELS = new Set(['debug', 'info', 'warn', 'error', 'log', 'assert', 'trace']);
 
 /**
  * SentryService singleton instance
@@ -175,6 +179,31 @@ class SentryService {
 	}
 
 	/**
+	 * Parse Sentry console log levels from environment variables
+	 * @returns {string[]}
+	 */
+	_parseConsoleLogLevels() {
+		const configuredLevels = process.env.SENTRY_CONSOLE_LOG_LEVELS;
+
+		if (!configuredLevels) {
+			return DEFAULT_CONSOLE_LOG_LEVELS;
+		}
+
+		const parsedLevels = [];
+		configuredLevels
+			.split(',')
+			.map((level) => level.trim().toLowerCase())
+			.filter(Boolean)
+			.forEach((level) => {
+				if (ALLOWED_CONSOLE_LOG_LEVELS.has(level) && !parsedLevels.includes(level)) {
+					parsedLevels.push(level);
+				}
+			});
+
+		return parsedLevels.length > 0 ? parsedLevels : DEFAULT_CONSOLE_LOG_LEVELS;
+	}
+
+	/**
 	 * Build monitoring configuration from environment variables
 	 * @returns {MonitoringConfiguration}
 	 */
@@ -190,6 +219,7 @@ class SentryService {
 			release: this._deriveRelease(),
 			sendAlertContent: process.env.SENTRY_SEND_ALERT_CONTENT !== 'false',
 			sampleRateErrors: parseFloat(process.env.SENTRY_SAMPLE_RATE_ERRORS) || 1.0,
+			consoleLogLevels: this._parseConsoleLogLevels(),
 		};
 	}
 
@@ -230,10 +260,10 @@ class SentryService {
 
 				// Configure process-level error capture (FR-002)
 				integrations: (integrations) => {
-					// Keep default integrations and add Sentry Logs capture for console.warn/error.
+					// Keep default integrations and add configured console output as Sentry Logs.
 					return [
 						...integrations,
-						Sentry.consoleLoggingIntegration({ levels: ['warn', 'error'] }),
+						Sentry.consoleLoggingIntegration({ levels: this.config.consoleLogLevels }),
 					];
 				},
 

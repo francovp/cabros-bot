@@ -32,7 +32,7 @@ Patterns and conventions to follow
 - Telegram command handlers receive `context` (Telegraf). Commands parse the full text with `context.message.text.split(' ')` and expect parameters at index 1. Example: `/precio BTCUSDT` where symbol = `messageSplited[1]`.
 - When interacting with external APIs, handlers return Promises (resolve on success, reject on error). `fetchSymbolPrice` is async and returns `{ price, symbol }` when successful.
 - Webhook `/api/webhook/alert` accepts either plain text (text/plain body) or JSON body with a `text` property. The handler sends messages with `parse_mode: 'MarkdownV2'` to `process.env.TELEGRAM_CHAT_ID`.
-- Simple, explicit logging is used (`console.log`, `console.debug`, `console.warn`, `console.error`) rather than a structured logger. When Sentry is enabled, `console.warn` and `console.error` are forwarded to Sentry Logs.
+- Simple, explicit logging is used (`console.log`, `console.debug`, `console.warn`, `console.error`) rather than a structured logger. When Sentry is enabled, configured console levels are forwarded to Sentry Logs via `SENTRY_CONSOLE_LOG_LEVELS` (default: `warn,error`).
 
 External integrations
 - Binance: uses `binance` package `MainClient` and `getAvgPrice({ symbol })` (see `fetchPriceCryptoSymbol.js`). Responses are configured with `beautifyResponses: true`.
@@ -578,7 +578,7 @@ ENABLE_SENTRY (005)
 **To extend**:
 1. **Discord integration**: Add in `src/services/notification/DiscordService.js`
 2. **Error aggregation**: Track error rates in memory for metrics
-3. **Sentry reporting (005-sentry-runtime-errors)**: Use a thin monitoring service (`src/services/monitoring/SentryService.js`) that wraps `@sentry/node` for runtime errors and Sentry Logs capture of `console.warn`/`console.error`. Gated by `ENABLE_SENTRY` and `SENTRY_DSN`; MUST NOT change HTTP responses or notification fallbacks and SHOULD be stubbed/mocked in tests (no real Sentry traffic by default).
+3. **Sentry reporting (005-sentry-runtime-errors)**: Use a thin monitoring service (`src/services/monitoring/SentryService.js`) that wraps `@sentry/node` for runtime errors and Sentry Logs capture of configured console levels. Gated by `ENABLE_SENTRY` and `SENTRY_DSN`; MUST NOT change HTTP responses or notification fallbacks and SHOULD be stubbed/mocked in tests (no real Sentry traffic by default).
 4. **Telegram admin alerts**: Send critical errors to admin chat if configured
 
 ## Runtime Error Monitoring with Sentry (005-sentry-runtime-errors)
@@ -590,7 +590,7 @@ This feature introduces backend runtime error monitoring using Sentry's Node SDK
   - HTTP webhooks: `/api/webhook/alert`, `/api/news-monitor`.
   - Notification channels: Telegram and WhatsApp when internal retries are exhausted.
   - Process-level failures: `uncaughtException` and `unhandledRejection` via the SDK's built-in integrations.
-- Capture `console.warn` and `console.error` calls as searchable Sentry Logs when monitoring is enabled.
+- Capture configured console levels as searchable Sentry Logs when monitoring is enabled.
 - Do **not** change public API contracts or user-visible behavior; monitoring is a side-effect only.
 
 **Core components**
@@ -598,7 +598,7 @@ This feature introduces backend runtime error monitoring using Sentry's Node SDK
   - Initializes `@sentry/node` once at startup (called from `index.js`).
   - Resolves configuration from env (see below) and exposes helpers like `captureRuntimeError(...)` and `captureExternalFailure(...)`.
   - Applies tags (`channel`, `feature`, `environment`) and structured contexts (`http`, `external`, `alert`, `news`) as defined in `specs/005-sentry-runtime-errors/data-model.md`.
-  - Enables Sentry Logs with `enableLogs: true` and `Sentry.consoleLoggingIntegration({ levels: ['warn', 'error'] })`.
+  - Enables Sentry Logs with `enableLogs: true` and `Sentry.consoleLoggingIntegration({ levels })`, where `levels` comes from `SENTRY_CONSOLE_LOG_LEVELS`.
 - Existing handlers/services will call `SentryService` instead of importing `@sentry/node` directly:
   - `src/controllers/webhooks/handlers/alert/alert.js`
   - `src/controllers/webhooks/handlers/newsMonitor/newsMonitor.js`
@@ -609,6 +609,7 @@ This feature introduces backend runtime error monitoring using Sentry's Node SDK
 - `SENTRY_DSN` (server-side DSN from Sentry project; required when `ENABLE_SENTRY==='true'` in environments where we want events)
 - `SENTRY_SEND_ALERT_CONTENT` (default: true; controls whether alert/news text is included in event payloads)
 - `SENTRY_SAMPLE_RATE_ERRORS` (default: 1.0; error sampling rate 0.0-1.0)
+- `SENTRY_CONSOLE_LOG_LEVELS` (default: `warn,error`; comma-separated levels captured as Sentry Logs; allowed values: `debug`, `info`, `warn`, `error`, `log`, `assert`, `trace`)
 - Optional overrides (otherwise derived from existing deployment vars):
   - `SENTRY_ENVIRONMENT` (e.g., `production`, `preview`, `development`)
   - `SENTRY_RELEASE` (e.g., `cabros-bot@1.2.3+<git-sha>`)
