@@ -40,6 +40,8 @@ class NewsMonitorHandler {
 		const tokenUsage = new TokenUsageTracker();
 
 		try {
+			const requestSpan = sentryService.getActiveSpan();
+
 			// Inject notification manager into analyzer (set once before analysis)
 			const notificationManager = getNotificationManager();
 			if (notificationManager) {
@@ -85,6 +87,7 @@ class NewsMonitorHandler {
 				name: 'news_monitor.analyze_symbols',
 				op: 'news.analysis',
 				onlyIfParent: true,
+				parentSpan: requestSpan,
 				attributes: {
 					'news.symbol_count': symbolsToAnalyze.length,
 					'news.request_id': requestId,
@@ -93,10 +96,7 @@ class NewsMonitorHandler {
 
 			let results;
 			try {
-				results = await sentryService.withActiveSpan(
-					analysisSpan,
-					() => this.analyzer.analyzeSymbols(symbolsToAnalyze, requestId, tokenUsage),
-				);
+				results = await this.analyzer.analyzeSymbols(symbolsToAnalyze, requestId, tokenUsage);
 			} finally {
 				sentryService.endSpan(analysisSpan);
 			}

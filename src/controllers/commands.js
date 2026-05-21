@@ -17,7 +17,7 @@ const getPrice = async (context) => {
 	});
 
 	try {
-		const result = await sentryService.withActiveSpan(commandSpan, () => fetchSymbolPrice(context));
+		const result = await fetchSymbolPrice(context, { parentSpan: commandSpan });
 		await context.reply(`Precio de ${result.symbol} es ${result.price}`);
 	} catch (error) {
 		console.error(error);

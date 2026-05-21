@@ -7,14 +7,16 @@ const client = new MainClient({
 	beautifyResponses: true,
 });
 
-const fetchSymbolPrice = async (context) => {
+const fetchSymbolPrice = async (context, options = {}) => {
 	// Check for parameters;
 	const messageSplited = context.message.text.split(' ');
 	const symbol = messageSplited[1];
+	const { parentSpan } = options;
 	const priceFetchSpan = sentryService.startInactiveSpan({
 		name: 'binance.get_avg_price',
 		op: 'http.client',
 		onlyIfParent: true,
+		parentSpan,
 		attributes: {
 			'provider.name': 'binance',
 			'provider.operation': 'getAvgPrice',
@@ -23,7 +25,7 @@ const fetchSymbolPrice = async (context) => {
 	});
 	try {
 		let price;
-		const data = await sentryService.withActiveSpan(priceFetchSpan, () => client.getAvgPrice({ symbol: symbol }));
+		const data = await client.getAvgPrice({ symbol: symbol });
 		// The prices have been successfully retrieved
 		// So build the response object to trigger the success intent
 		if (data.price >= 1) {

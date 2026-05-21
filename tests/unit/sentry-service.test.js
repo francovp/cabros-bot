@@ -669,6 +669,18 @@ describe('SentryService', () => {
 			);
 		});
 
+		it('should return active span when tracing is enabled', () => {
+			process.env.ENABLE_SENTRY = 'true';
+			process.env.SENTRY_DSN = 'https://key@sentry.io/123';
+			process.env.SENTRY_TRACES_SAMPLE_RATE = '1';
+			service.init();
+
+			const span = service.getActiveSpan();
+
+			expect(span).toBeDefined();
+			expect(Sentry.getActiveSpan).toHaveBeenCalledTimes(1);
+		});
+
 		it('should execute callback directly when withActiveSpan receives no span', () => {
 			process.env.ENABLE_SENTRY = 'true';
 			process.env.SENTRY_DSN = 'https://key@sentry.io/123';

@@ -52,6 +52,7 @@ jest.mock('@sentry/node', () => ({
 	startSpan: jest.fn((_options, callback) => callback(createMockSpan())),
 	startSpanManual: jest.fn((_options, callback) => callback(createMockSpan())),
 	startInactiveSpan: jest.fn(() => createMockSpan()),
+	getActiveSpan: jest.fn(() => createMockSpan()),
 	withActiveSpan: jest.fn((_span, callback) => callback()),
 	captureException: jest.fn(() => 'mock-event-id'),
 	captureMessage: jest.fn(() => 'mock-event-id'),

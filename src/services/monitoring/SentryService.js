@@ -371,6 +371,23 @@ class SentryService {
 	}
 
 	/**
+	 * Get the current active Sentry span
+	 * @returns {import('@sentry/node').Span|undefined}
+	 */
+	getActiveSpan() {
+		if (!this.isTracingEnabled()) {
+			return undefined;
+		}
+
+		try {
+			return Sentry.getActiveSpan();
+		} catch (error) {
+			console.warn('[SentryService] Failed to get active span:', error.message);
+			return undefined;
+		}
+	}
+
+	/**
 	 * Start an inactive Sentry span for explicit lifecycle management
 	 * @param {import('@sentry/node').StartSpanOptions} options
 	 * @returns {import('@sentry/node').Span|null}

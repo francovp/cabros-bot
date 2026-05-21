@@ -53,9 +53,10 @@ class NotificationManager {
    * @param {Object} alert - Alert object with text and optional enriched content
    * @returns {Promise<Array>} Array of SendResult objects (one per enabled channel)
    */
-	async sendToAll(alert) {
+	async sendToAll(alert, options = {}) {
 		const enabledChannels = Array.from(this.channels.values()).filter((ch) => ch.isEnabled());
 		const startTime = Date.now();
+		const { parentSpan } = options;
 
 		if (enabledChannels.length === 0) {
 			console.warn('[NotificationManager] No notification channels enabled');
@@ -67,6 +68,7 @@ class NotificationManager {
 			name: 'notification.send_to_all',
 			op: 'notification.dispatch',
 			onlyIfParent: true,
+			parentSpan,
 			attributes: {
 				'notification.enabled_channels_count': enabledChannels.length,
 				'notification.enabled_channels': enabledChannels.map(ch => ch.name).join(','),
@@ -77,28 +79,23 @@ class NotificationManager {
 		let results;
 		try {
 			const sendPromises = enabledChannels.map((ch) => {
-				const sendSpanOptions = {
+				const sendSpan = sentryService.startInactiveSpan({
 					name: `notification.send.${ch.name}`,
 					op: 'notification.send',
 					onlyIfParent: true,
+					parentSpan: dispatchSpan,
 					attributes: {
 						'notification.channel': ch.name,
 						'alert.enriched': !!(alert && alert.enriched),
 						'alert.length': alert && alert.text ? alert.text.length : 0,
 					},
-				};
-
-				if (dispatchSpan) {
-					sendSpanOptions.parentSpan = dispatchSpan;
-				}
-
-				const sendSpan = sentryService.startInactiveSpan(sendSpanOptions);
-
-				return Promise.resolve(
-					sentryService.withActiveSpan(sendSpan, () => ch.send(alert)),
-				).finally(() => {
-					sentryService.endSpan(sendSpan);
 				});
+
+				return Promise.resolve()
+					.then(() => ch.send(alert))
+					.finally(() => {
+						sentryService.endSpan(sendSpan);
+					});
 			});
 
 			results = await Promise.allSettled(sendPromises);
