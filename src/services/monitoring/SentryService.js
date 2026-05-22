@@ -706,6 +706,28 @@ class SentryService {
 	}
 
 	/**
+	 * Capture LLM usage metrics
+	 * @param {Object} params
+	 * @param {string} params.model
+	 * @param {number} params.inputTokens
+	 * @param {number} params.outputTokens
+	 * @param {number} params.durationMs
+	 */
+	captureLlmMetric({ model, inputTokens = 0, outputTokens = 0, durationMs = 0 }) {
+		if (!this.state.enabled) return;
+		try {
+			const tags = { model: model || 'unknown' };
+			Sentry.metrics.count('llm_calls', 1, { tags });
+			Sentry.metrics.distribution('llm_input_tokens', inputTokens, { tags });
+			Sentry.metrics.distribution('llm_output_tokens', outputTokens, { tags });
+			Sentry.metrics.distribution('llm_duration', durationMs, { tags });
+		} catch (error) {
+			// Never throw - monitoring failures should not affect application behavior
+			console.warn(`[SentryService] Failed to capture LLM metrics: ${error.message}`);
+		}
+	}
+
+	/**
 	 * Flush pending events (for graceful shutdown)
 	 * @param {number} [timeout=2000] - Timeout in milliseconds
 	 * @returns {Promise<boolean>}
