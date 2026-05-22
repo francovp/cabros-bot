@@ -8,6 +8,8 @@
 const { getAzureAIClient } = require('./azureAiClient');
 const { sendWithRetry } = require('../../lib/retryHelper');
 const { getPromptService, PromptKeys } = require('../prompts');
+const sentryService = require('../monitoring/SentryService');
+const { normalizeUsageMetadata } = require('../../lib/tokenUsage');
 
 const promptService = getPromptService();
 
@@ -93,15 +95,21 @@ class EnrichmentService {
 		// Call LLM enrichment with retry logic
 			const enrichmentResponse = await sendWithRetry(
 				async () => {
+					const startTime = Date.now();
 					const { systemPrompt, userPrompt } = await this.buildEnrichmentPrompt(geminiAnalysis);
-					return await this.azureClient.chatCompletion(systemPrompt, userPrompt);
+					const result = await this.azureClient.chatCompletion(systemPrompt, userPrompt);
+					const durationMs = Date.now() - startTime;
+					const usage = normalizeUsageMetadata(result.usage) || { inputTokens: 0, outputTokens: 0 };
+
+					sentryService.captureLlmMetric({ model: process.env.AZURE_LLM_MODEL || 'unknown', inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, durationMs });
+					return result;
 				},
 				3,
 				console,
 			);
 
 			// Parse LLM response
-			const llmResult = this.azureClient.parseJsonResponse(enrichmentResponse);
+			const llmResult = this.azureClient.parseJsonResponse(enrichmentResponse.text);
 
 			// Apply conservative confidence selection
 			const finalConfidence = Math.min(geminiConfidence, llmResult.confidence);

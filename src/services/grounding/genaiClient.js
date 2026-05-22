@@ -16,6 +16,7 @@ const {
 const { getAzureAIClient } = require('../inference/azureAiClient');
 const { getOpenRouterClient } = require('../inference/openRouterClient');
 const { normalizeUsageMetadata } = require('../../lib/tokenUsage');
+const sentryService = require('../monitoring/SentryService');
 
 class GenaiClient {
 	constructor() {
@@ -284,6 +285,7 @@ class GenaiClient {
 		if (MODEL_PROVIDER === 'gemini' && GEMINI_MODEL_NAME) {
 			try {
 				// Previous calls were like: prompt = `${systemPrompt}\n\n${userPrompt}`.
+				const startTime = Date.now();
 				const combinedPrompt = `${systemPrompt}\n\n${userPrompt}`;
 				console.debug('[GenaiClient] Attempting Gemini LLM call');
 				const response = await this.llmCall({
@@ -291,6 +293,8 @@ class GenaiClient {
 					context,
 					opts,
 				});
+				const durationMs = Date.now() - startTime;
+				sentryService.captureLlmMetric({ model: response.modelUsed, inputTokens: response.usage?.inputTokens || 0, outputTokens: response.usage?.outputTokens || 0, durationMs });
 
 				return {
 					...response,
@@ -309,8 +313,12 @@ class GenaiClient {
 			try {
 				const azureClient = getAzureAIClient();
 				if (azureClient.validate()) {
+					const startTime = Date.now();
 					console.debug('[GenaiClient] Attempting Azure AI Client');
-					const text = await azureClient.chatCompletion(systemPrompt, userPrompt);
+					const { text, usage } = await azureClient.chatCompletion(systemPrompt, userPrompt);
+					const durationMs = Date.now() - startTime;
+					const usageNorm = normalizeUsageMetadata(usage);
+					sentryService.captureLlmMetric({ model: AZURE_LLM_MODEL || 'azure-llm', inputTokens: usageNorm?.inputTokens || 0, outputTokens: usageNorm?.outputTokens || 0, durationMs });
 					return {
 						text,
 						citations: context.citations || [],
@@ -330,8 +338,12 @@ class GenaiClient {
 			try {
 				const openRouterClient = getOpenRouterClient();
 				if (openRouterClient.validate()) {
+					const startTime = Date.now();
 					console.debug('[GenaiClient] Attempting OpenRouter Client');
-					const text = await openRouterClient.chatCompletion(systemPrompt, userPrompt);
+					const { text, usage } = await openRouterClient.chatCompletion(systemPrompt, userPrompt);
+					const durationMs = Date.now() - startTime;
+					const usageNorm = normalizeUsageMetadata(usage);
+					sentryService.captureLlmMetric({ model: OPENROUTER_MODEL || 'openrouter-model', inputTokens: usageNorm?.inputTokens || 0, outputTokens: usageNorm?.outputTokens || 0, durationMs });
 					return {
 						text,
 						citations: context.citations || [],

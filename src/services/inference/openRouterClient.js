@@ -73,7 +73,10 @@ class OpenRouterClient {
 
 			// Handle standard OpenAI response format
 			if (data.choices && data.choices[0] && data.choices[0].message) {
-				return data.choices[0].message.content;
+				return {
+					text: data.choices[0].message.content,
+					usage: data.usage || {},
+				};
 			}
 
 			throw new Error('Unexpected response format');

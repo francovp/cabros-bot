@@ -73,7 +73,10 @@ class AzureAIClient {
 
 			// Handle standard OpenAI response format
 			if (response.body.choices && response.body.choices[0] && response.body.choices[0].message) {
-				return response.body.choices[0].message.content;
+				return {
+					text: response.body.choices[0].message.content,
+					usage: response.body.usage || {},
+				};
 			}
 
 			throw new Error('Unexpected response format');
