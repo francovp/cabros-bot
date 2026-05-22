@@ -55,7 +55,7 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 #### TradingView MCP Enrichment
 
 - `ENABLE_TRADINGVIEW_MCP_ENRICHMENT` - Enable TradingView MCP enrichment for TradingView-like webhook messages (`true` or `false`, default: `false`)
-- `TRADINGVIEW_MCP_URL` - MCP server HTTP endpoint (default: `http://localhost:8000/mcp`)
+- `TRADINGVIEW_MCP_URL` - MCP server HTTP endpoint (default: `https://tradingview-mcp.onrender.com/mcp`)
 - `TRADINGVIEW_MCP_TIMEOUT_MS` - Timeout per MCP request in milliseconds (default: `12000`)
 - `TRADINGVIEW_MCP_MAX_RETRIES` - Retries for MCP failures (default: `3`)
 - `TRADINGVIEW_MCP_DEFAULT_EXCHANGE` - Default exchange when not present in signal (default: `BINANCE`)
