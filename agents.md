@@ -10,6 +10,8 @@ Key files / entry points
 - `src/controllers/commands.js` — Telegram command handlers wired in `index.js` (`/precio`, `/cryptobot`).
 - `src/controllers/commands/handlers/core/fetchPriceCryptoSymbol.js` — calls Binance `MainClient.getAvgPrice` to fetch prices.
 - `src/controllers/webhooks/handlers/alert/alert.js` — webhook handler that forwards alert text to a Telegram chat.
+- `src/controllers/webhooks/handlers/tradingViewAlert/tradingViewAlert.js` — `POST /api/tradingview-alert` handler that builds TradingView MCP analysis reports and sends them through notification channels.
+- `src/services/tradingview/tradingViewAlertReport.js` — parses `EXCHANGE:SYMBOL` requests and formats grouped Spanish technical-analysis reports.
 - `src/services/monitoring/SentryService.js` — wraps `@sentry/node` for runtime error monitoring (005).
 - `src/controllers/helpers.js` — small numeric helper (`round10`) used by price formatting.
 - `src/lib/logging.js` — configures `console.*` levels via `LOG_LEVEL` and emits one-line structured JSON logs.
@@ -18,7 +20,7 @@ Key files / entry points
 Environment and runtime behavior (discoverable)
 - NODE version: `20.x` (see `package.json` engines).
 - Required env vars: `BOT_TOKEN` (throws if missing; even when Telegram bot is disabled).
-- Optional but relevant (non-exhaustive; see feature sections below for full config): `ENABLE_TELEGRAM_BOT`, `PORT`, `TELEGRAM_CHAT_ID`, `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID`, `ENABLE_WHATSAPP_ALERTS`, `ENABLE_GEMINI_GROUNDING`, `GEMINI_API_KEY`, `ENABLE_LANGFUSE_PROMPTS`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL`, `LANGFUSE_PROMPT_LABEL`, `LANGFUSE_PROMPT_CACHE_TTL_SECONDS`, `BRAVE_SEARCH_API_KEY`, `BRAVE_SEARCH_ENDPOINT`, `FORCE_BRAVE_SEARCH`, `MODEL_PROVIDER`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `ENABLE_NEWS_MONITOR`, `ENABLE_SENTRY`, `SENTRY_DSN`, `SENTRY_TRACES_SAMPLE_RATE`, `SENTRY_CONSOLE_LOG_LEVELS`, `LOG_LEVEL`, `SERVICE_NAME`, `RATE_LIMIT_WINDOW_MS`, `RATE_LIMIT_MAX`, `RENDER`, `IS_PULL_REQUEST`, `RENDER_GIT_COMMIT`, `RENDER_GIT_REPO_SLUG`.
+- Optional but relevant (non-exhaustive; see feature sections below for full config): `ENABLE_TELEGRAM_BOT`, `PORT`, `TELEGRAM_CHAT_ID`, `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID`, `ENABLE_WHATSAPP_ALERTS`, `ENABLE_GEMINI_GROUNDING`, `GEMINI_API_KEY`, `ENABLE_LANGFUSE_PROMPTS`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL`, `LANGFUSE_PROMPT_LABEL`, `LANGFUSE_PROMPT_CACHE_TTL_SECONDS`, `BRAVE_SEARCH_API_KEY`, `BRAVE_SEARCH_ENDPOINT`, `FORCE_BRAVE_SEARCH`, `MODEL_PROVIDER`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `ENABLE_NEWS_MONITOR`, `TRADINGVIEW_ALERT_SYMBOLS`, `TRADINGVIEW_MCP_URL`, `TRADINGVIEW_MCP_TIMEOUT_MS`, `TRADINGVIEW_MCP_MAX_RETRIES`, `TRADINGVIEW_MCP_DEFAULT_TIMEFRAME`, `ENABLE_SENTRY`, `SENTRY_DSN`, `SENTRY_TRACES_SAMPLE_RATE`, `SENTRY_CONSOLE_LOG_LEVELS`, `LOG_LEVEL`, `SERVICE_NAME`, `RATE_LIMIT_WINDOW_MS`, `RATE_LIMIT_MAX`, `RENDER`, `IS_PULL_REQUEST`, `RENDER_GIT_COMMIT`, `RENDER_GIT_REPO_SLUG`.
 - Bot startup is gated: bot is launched only when `ENABLE_TELEGRAM_BOT === 'true'` and not a preview environment (`RENDER==='true' && IS_PULL_REQUEST==='true'` disables it).
 - Routes under `/api` (e.g. `/api/webhook/alert`) are mounted regardless of bot launch; individual features and notification channels are gated via env flags and per-channel validation.
 
@@ -37,6 +39,7 @@ Patterns and conventions to follow
 External integrations
 - Binance: uses `binance` package `MainClient` and `getAvgPrice({ symbol })` (see `fetchPriceCryptoSymbol.js`). Responses are configured with `beautifyResponses: true`.
 - Telegram: `telegraf` package; commands wired in `index.js` and direct `bot.telegram.sendMessage` used for alerts and admin notifications.
+- TradingView MCP: remote MCP Streamable HTTP endpoint defaults to `https://tradingview-mcp.onrender.com/mcp`; `coin_analysis` expects complete symbols split from `EXCHANGE:SYMBOL` values such as `BINANCE:BTCUSDT` and `NASDAQ:NVDA`.
 
 Common failure modes to check (based on code)
 - Missing `BOT_TOKEN` throws on startup (explicit check in `index.js`).
@@ -47,6 +50,7 @@ Common failure modes to check (based on code)
 Small, concrete examples
 - Get price via Telegram: send message `/precio BTCUSDT` -> handler calls `client.getAvgPrice({ symbol: 'BTCUSDT' })` and replies with `Precio de BTCUSDT es <price>`.
 - Send a webhook alert (when bot enabled): POST to `/api/webhook/alert` with body `{ "text": "Alert body" }` or `text/plain` body `Alert body`.
+- Generate a TradingView report: POST to `/api/tradingview-alert` with body `{ "symbols": ["BINANCE:BTCUSDT", "NASDAQ:NVDA"], "timeframe": "1D" }`; if `symbols` is empty it falls back to `TRADINGVIEW_ALERT_SYMBOLS`, and returns 400 if neither is present.
 
 What an AI code change should preserve
 - Do not change how env gating works in `index.js` without adjusting tests/deploys — deployments rely on `RENDER` and `IS_PULL_REQUEST` checks.
@@ -196,6 +200,25 @@ The `/api/webhook/alert` flow can produce **structured enrichment** (in addition
 
 **Graceful fallback**: if enrichment fails (timeout/API errors/malformed output), delivery proceeds with `alert.text` (fail-open).
 
+## TradingView Expanded Alert Reports
+
+The system provides a `POST /api/tradingview-alert` endpoint that builds a Spanish technical-analysis report from TradingView MCP `coin_analysis` data and sends the generated message through all enabled notification channels.
+
+**Request pattern**:
+- Body must provide `symbols` as complete TradingView identifiers (`EXCHANGE:SYMBOL`), for example `BINANCE:BTCUSDT`, `BINANCE:ETHUSDC`, or `NASDAQ:NVDA`.
+- `timeframe` is optional and must be one of the MCP-supported intervals (`5m`, `15m`, `1h`, `4h`, `1D`, `1W`, `1M`); it falls back to `TRADINGVIEW_MCP_DEFAULT_TIMEFRAME` or `1D`.
+- If body symbols are missing or empty, the handler falls back to `TRADINGVIEW_ALERT_SYMBOLS` (comma-separated). If neither exists, it returns `400 NO_SYMBOLS`.
+
+**Core Components**:
+- `src/controllers/webhooks/handlers/tradingViewAlert/tradingViewAlert.js` — request handler, per-symbol MCP orchestration, notification dispatch, and response assembly.
+- `src/services/tradingview/TradingViewMcpService.js` — MCP JSON-RPC/Streamable HTTP client and `coin_analysis` wrapper.
+- `src/services/tradingview/tradingViewAlertReport.js` — request parsing, RSI grouping, trend/MACD/stop-loss derivation, and final Markdown report formatting.
+
+**Failure behavior**:
+- Individual MCP symbol failures are returned with `status: "error"` and omitted from the report.
+- If all requested symbols fail, the endpoint returns `502 ALL_SYMBOLS_FAILED` and does not send notifications.
+- The endpoint does not normalize crypto pairs; callers must pass full symbols such as `BINANCE:BTCUSDT`.
+
 ## Multi-Channel Notification Architecture (002-whatsapp-alerts)
 
 The alert delivery system now supports parallel delivery to multiple channels (Telegram, WhatsApp) without blocking. Key patterns:
@@ -333,6 +356,7 @@ The system provides an HTTP endpoint (`/api/news-monitor`) that analyzes financi
 - prettylink npm package for URL shortening in WhatsApp citations (003-news-monitor, with fallback to direct API calls)
 - In-memory Map cache for news deduplication with TTL (003-news-monitor, no external storage)
 - Binance API client for precise crypto prices (003-news-monitor, optional fallback to Gemini GoogleSearch)
+- TradingView MCP remote Streamable HTTP server for technical `coin_analysis` report generation (`POST /api/tradingview-alert`)
 - Sentry SDK for Node (`@sentry/node` v10) for backend runtime error monitoring and warn/error console log capture (005-sentry-runtime-errors; no tracing by default)
 
 ## Terminology Guide: Grounding vs Enrichment

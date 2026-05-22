@@ -1,10 +1,12 @@
 const express = require('express');
 const { postAlert } = require('../controllers/webhooks/handlers/alert/alert');
+const { postTradingViewAlert } = require('../controllers/webhooks/handlers/tradingViewAlert/tradingViewAlert');
 const { validateApiKey } = require('../lib/auth');
 
 function getRoutes(botOrGetter) {
 	const router = express.Router();
 	router.post('/webhook/alert', validateApiKey, postAlert(botOrGetter));
+	router.post('/tradingview-alert', validateApiKey, postTradingViewAlert(botOrGetter));
 
 	const { getNewsMonitor } = require('../controllers/webhooks/handlers/newsMonitor/newsMonitor');
 	const newsMonitor = getNewsMonitor();

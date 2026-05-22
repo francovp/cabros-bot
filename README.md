@@ -9,7 +9,7 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 - 📰 **News Monitoring**: Analyze financial news and market sentiment for crypto and stock symbols with AI-powered event detection
 - 🧠 **AI Enrichment**: Optional enhancement of alerts using Google Gemini API (grounding) and optional secondary LLM (Azure AI)
 - 🧩 **Langfuse Prompt Management**: Manage all runtime LLM prompts centrally in Langfuse with local fail-open fallbacks
-- 📊 **TradingView MCP Enrichment**: Optional real-time technical analysis for webhook signals like `BTCUSDT(240) pasó a señal de VENTA`
+- 📊 **TradingView MCP Analysis**: Optional webhook enrichment plus expanded technical-analysis reports from TradingView MCP data
 - 💎 **Event Detection**: Identify significant trading events (price surges, public figure mentions, regulatory announcements)
 - 💰 **Market Context**: Optional Binance integration for real-time crypto prices with Gemini fallback
 - 🎯 **Smart Deduplication**: In-memory cache prevents duplicate alerts for the same event category within 6-hour TTL
@@ -52,14 +52,15 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 - `LANGFUSE_PROMPT_LABEL` - Prompt label to fetch (default: `latest` in local/dev/test, `production` in production-like environments)
 - `LANGFUSE_PROMPT_CACHE_TTL_SECONDS` - Prompt cache TTL in seconds (default: `0` for `latest`, `60` for `production`)
 
-#### TradingView MCP Enrichment
+#### TradingView MCP Analysis
 
 - `ENABLE_TRADINGVIEW_MCP_ENRICHMENT` - Enable TradingView MCP enrichment for TradingView-like webhook messages (`true` or `false`, default: `false`)
-- `TRADINGVIEW_MCP_URL` - MCP server HTTP endpoint (default: `http://localhost:8000/mcp`)
+- `TRADINGVIEW_ALERT_SYMBOLS` - Comma-separated fallback symbols for `/api/tradingview-alert` using `EXCHANGE:SYMBOL` format (for example `BINANCE:BTCUSDT,NASDAQ:NVDA`)
+- `TRADINGVIEW_MCP_URL` - MCP server HTTP endpoint (default: `https://tradingview-mcp.onrender.com/mcp`)
 - `TRADINGVIEW_MCP_TIMEOUT_MS` - Timeout per MCP request in milliseconds (default: `12000`)
 - `TRADINGVIEW_MCP_MAX_RETRIES` - Retries for MCP failures (default: `3`)
 - `TRADINGVIEW_MCP_DEFAULT_EXCHANGE` - Default exchange when not present in signal (default: `BINANCE`)
-- `TRADINGVIEW_MCP_DEFAULT_TIMEFRAME` - Default timeframe fallback (default: `1h`)
+- `TRADINGVIEW_MCP_DEFAULT_TIMEFRAME` - Default timeframe fallback (default: `1D` for `/api/tradingview-alert`, `1h` for webhook signal enrichment)
 - Runtime gate: TradingView MCP data is only used when webhook requests include `?useTradingViewData=true`
 
 #### Admin Notifications
@@ -359,6 +360,51 @@ GET /api/news-monitor?crypto=BTCUSDT,ETHUSD&stocks=NVDA,MSFT
 - `cached` - Result returned from cache (within TTL for same event category)
 - `timeout` - Analysis exceeded per-symbol timeout (30s default)
 - `error` - API failure (Binance, Gemini, or other service error)
+
+### POST /api/tradingview-alert
+
+Generate an expanded technical-analysis report with TradingView MCP `coin_analysis` data and send it through all enabled notification channels.
+
+**Request (JSON):**
+```json
+{
+  "symbols": ["BINANCE:BTCUSDT", "NASDAQ:NVDA"],
+  "timeframe": "1D"
+}
+```
+
+If `symbols` is empty or omitted, the endpoint falls back to `TRADINGVIEW_ALERT_SYMBOLS`. If neither is defined, it returns `400 NO_SYMBOLS`. Symbols must be complete `EXCHANGE:SYMBOL` identifiers; crypto pairs are not normalized automatically.
+
+**Response:**
+```json
+{
+  "success": true,
+  "alertText": "📊 *ANÁLISIS AMPLIADO — Friday 22/05/2026*...",
+  "results": [
+    {
+      "symbol": "NASDAQ:NVDA",
+      "status": "analyzed",
+      "price": 219.51,
+      "rsi": 57.8
+    }
+  ],
+  "deliveryResults": [
+    {
+      "channel": "telegram",
+      "success": true,
+      "messageId": "123456"
+    }
+  ],
+  "summary": {
+    "total": 1,
+    "analyzed": 1,
+    "error": 0,
+    "delivered": 1
+  },
+  "requestId": "req-abc123",
+  "totalDurationMs": 1200
+}
+```
 
 ### POST /api/webhook/alert
 

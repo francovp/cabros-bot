@@ -24,7 +24,7 @@ class TradingViewMcpService {
 		);
 
 		return {
-			url: this.config.url || process.env.TRADINGVIEW_MCP_URL || 'http://localhost:8000/mcp',
+			url: this.config.url || process.env.TRADINGVIEW_MCP_URL || 'https://tradingview-mcp.onrender.com/mcp',
 			timeoutMs,
 			maxRetries,
 			defaultExchange,
@@ -76,6 +76,20 @@ class TradingViewMcpService {
 		}
 
 		return rpcResult;
+	}
+
+	async analyzeSymbolIdentifier({ raw, exchange, symbol, timeframe }) {
+		const analysis = await this.callCoinAnalysis({ symbol, exchange, timeframe });
+		if (analysis && analysis.error) {
+			throw new Error(analysis.error);
+		}
+
+		return {
+			...analysis,
+			requested_symbol: raw,
+			requested_exchange: exchange,
+			requested_timeframe: timeframe,
+		};
 	}
 
 	async _callTool(toolName, args = {}) {
