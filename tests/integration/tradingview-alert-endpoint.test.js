@@ -83,14 +83,52 @@ describe('TradingView alert endpoint', () => {
 		expect(res.body.deliveryResults).toEqual([
 			expect.objectContaining({ success: true, channel: 'telegram', messageId: 'tv-message-id' }),
 		]);
-		expect(tradingViewMcpService.analyzeSymbolIdentifier).toHaveBeenCalledWith({
+		expect(tradingViewMcpService.analyzeSymbolIdentifier).toHaveBeenCalledWith(expect.objectContaining({
 			raw: 'NASDAQ:NVDA',
 			exchange: 'NASDAQ',
 			symbol: 'NVDA',
 			timeframe: '1D',
-		});
+		}));
 		expect(mockTelegramSendMessage).toHaveBeenCalledTimes(1);
 		expect(mockTelegramSendMessage.mock.calls[0][1]).toContain('ANÁLISIS AMPLIADO');
+	});
+
+	it('returns 504 when the TradingView alert deadline expires before analysis completes', async () => {
+		process.env.TRADINGVIEW_ALERT_TIMEOUT_MS = '5';
+		tradingViewMcpService.analyzeSymbolIdentifier.mockImplementation(({ signal }) => {
+			if (!signal) {
+				return Promise.resolve({
+					price_data: { current_price: 100 },
+					technical_indicators: { rsi: 50 },
+				});
+			}
+
+			return new Promise((resolve, reject) => {
+				signal.addEventListener('abort', () => {
+					reject(new Error(signal.reason?.message || 'deadline reached'));
+				});
+			});
+		});
+
+		const res = await request(app)
+			.post('/api/tradingview-alert')
+			.set('x-api-key', 'test-key')
+			.send({ symbols: ['NASDAQ:NVDA'], timeframe: '1D' })
+			.expect(504);
+
+		expect(res.body).toEqual(expect.objectContaining({
+			success: false,
+			code: 'TRADINGVIEW_ALERT_TIMEOUT',
+			timedOut: true,
+			timeoutMs: 5,
+		}));
+		expect(res.body.results).toEqual([
+			expect.objectContaining({
+				symbol: 'NASDAQ:NVDA',
+				status: 'timeout',
+			}),
+		]);
+		expect(mockTelegramSendMessage).not.toHaveBeenCalled();
 	});
 
 	it('falls back to TRADINGVIEW_ALERT_SYMBOLS when body symbols are empty', async () => {
@@ -192,5 +230,33 @@ describe('TradingView alert endpoint', () => {
 			'start:NASDAQ:AAPL',
 			'end:NASDAQ:AAPL',
 		]);
+	});
+
+	it('stops analysis and marks remaining symbols as timeout when deadline is aborted', async () => {
+		const controller = new AbortController();
+		tradingViewMcpService.analyzeSymbolIdentifier.mockImplementationOnce(async () => {
+			controller.abort(new Error('TradingView alert analysis timeout after 60000ms'));
+			throw new Error('TradingView alert analysis timeout after 60000ms');
+		});
+
+		const results = await analyzeSymbols({
+			symbols: [
+				{ raw: 'NASDAQ:NVDA', exchange: 'NASDAQ', symbol: 'NVDA' },
+				{ raw: 'NASDAQ:AAPL', exchange: 'NASDAQ', symbol: 'AAPL' },
+			],
+			timeframe: '1D',
+		}, { signal: controller.signal });
+
+		expect(results).toEqual([
+			expect.objectContaining({
+				symbol: 'NASDAQ:NVDA',
+				status: 'timeout',
+			}),
+			expect.objectContaining({
+				symbol: 'NASDAQ:AAPL',
+				status: 'timeout',
+			}),
+		]);
+		expect(tradingViewMcpService.analyzeSymbolIdentifier).toHaveBeenCalledTimes(1);
 	});
 });

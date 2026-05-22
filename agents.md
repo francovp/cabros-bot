@@ -20,7 +20,7 @@ Key files / entry points
 Environment and runtime behavior (discoverable)
 - NODE version: `20.x` (see `package.json` engines).
 - Required env vars: `BOT_TOKEN` (throws if missing; even when Telegram bot is disabled).
-- Optional but relevant (non-exhaustive; see feature sections below for full config): `ENABLE_TELEGRAM_BOT`, `PORT`, `TELEGRAM_CHAT_ID`, `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID`, `ENABLE_WHATSAPP_ALERTS`, `ENABLE_GEMINI_GROUNDING`, `GEMINI_API_KEY`, `ENABLE_LANGFUSE_PROMPTS`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL`, `LANGFUSE_PROMPT_LABEL`, `LANGFUSE_PROMPT_CACHE_TTL_SECONDS`, `BRAVE_SEARCH_API_KEY`, `BRAVE_SEARCH_ENDPOINT`, `FORCE_BRAVE_SEARCH`, `MODEL_PROVIDER`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `ENABLE_NEWS_MONITOR`, `TRADINGVIEW_ALERT_SYMBOLS`, `TRADINGVIEW_MCP_URL`, `TRADINGVIEW_MCP_TIMEOUT_MS`, `TRADINGVIEW_MCP_MAX_RETRIES`, `TRADINGVIEW_MCP_DEFAULT_TIMEFRAME`, `ENABLE_SENTRY`, `SENTRY_DSN`, `SENTRY_TRACES_SAMPLE_RATE`, `SENTRY_CONSOLE_LOG_LEVELS`, `LOG_LEVEL`, `SERVICE_NAME`, `RATE_LIMIT_WINDOW_MS`, `RATE_LIMIT_MAX`, `RENDER`, `IS_PULL_REQUEST`, `RENDER_GIT_COMMIT`, `RENDER_GIT_REPO_SLUG`.
+- Optional but relevant (non-exhaustive; see feature sections below for full config): `ENABLE_TELEGRAM_BOT`, `PORT`, `TELEGRAM_CHAT_ID`, `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID`, `ENABLE_WHATSAPP_ALERTS`, `ENABLE_GEMINI_GROUNDING`, `GEMINI_API_KEY`, `ENABLE_LANGFUSE_PROMPTS`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL`, `LANGFUSE_PROMPT_LABEL`, `LANGFUSE_PROMPT_CACHE_TTL_SECONDS`, `BRAVE_SEARCH_API_KEY`, `BRAVE_SEARCH_ENDPOINT`, `FORCE_BRAVE_SEARCH`, `MODEL_PROVIDER`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `ENABLE_NEWS_MONITOR`, `TRADINGVIEW_ALERT_SYMBOLS`, `TRADINGVIEW_ALERT_TIMEOUT_MS`, `TRADINGVIEW_MCP_URL`, `TRADINGVIEW_MCP_TIMEOUT_MS`, `TRADINGVIEW_MCP_MAX_RETRIES`, `TRADINGVIEW_MCP_DEFAULT_TIMEFRAME`, `ENABLE_SENTRY`, `SENTRY_DSN`, `SENTRY_TRACES_SAMPLE_RATE`, `SENTRY_CONSOLE_LOG_LEVELS`, `LOG_LEVEL`, `SERVICE_NAME`, `RATE_LIMIT_WINDOW_MS`, `RATE_LIMIT_MAX`, `RENDER`, `IS_PULL_REQUEST`, `RENDER_GIT_COMMIT`, `RENDER_GIT_REPO_SLUG`.
 - Bot startup is gated: bot is launched only when `ENABLE_TELEGRAM_BOT === 'true'` and not a preview environment (`RENDER==='true' && IS_PULL_REQUEST==='true'` disables it).
 - Routes under `/api` (e.g. `/api/webhook/alert`) are mounted regardless of bot launch; individual features and notification channels are gated via env flags and per-channel validation.
 
@@ -208,6 +208,7 @@ The system provides a `POST /api/tradingview-alert` endpoint that builds a Spani
 - Body must provide `symbols` as complete TradingView identifiers (`EXCHANGE:SYMBOL`), for example `BINANCE:BTCUSDT`, `BINANCE:ETHUSDC`, or `NASDAQ:NVDA`.
 - `timeframe` is optional and must be one of the MCP-supported intervals (`5m`, `15m`, `1h`, `4h`, `1D`, `1W`, `1M`); it falls back to `TRADINGVIEW_MCP_DEFAULT_TIMEFRAME` or `1D`.
 - If body symbols are missing or empty, the handler falls back to `TRADINGVIEW_ALERT_SYMBOLS` (comma-separated). If neither exists, it returns `400 NO_SYMBOLS`.
+- Analysis has an endpoint-level deadline via `TRADINGVIEW_ALERT_TIMEOUT_MS` (default 60s, capped at 120s) so repeated MCP failures do not hold the request open for the full per-symbol retry chain.
 
 **Core Components**:
 - `src/controllers/webhooks/handlers/tradingViewAlert/tradingViewAlert.js` — request handler, per-symbol MCP orchestration, notification dispatch, and response assembly.
@@ -216,6 +217,7 @@ The system provides a `POST /api/tradingview-alert` endpoint that builds a Spani
 
 **Failure behavior**:
 - Individual MCP symbol failures are returned with `status: "error"` and omitted from the report.
+- Timeout-aborted symbols are returned with `status: "timeout"`; if no symbols finish before the deadline, the endpoint returns `504 TRADINGVIEW_ALERT_TIMEOUT` and does not send notifications.
 - If all requested symbols fail, the endpoint returns `502 ALL_SYMBOLS_FAILED` and does not send notifications.
 - The endpoint does not normalize crypto pairs; callers must pass full symbols such as `BINANCE:BTCUSDT`.
 

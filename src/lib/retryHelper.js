@@ -12,6 +12,29 @@ function sleep(ms) {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function sleepWithSignal(ms, signal) {
+	if (!signal) {
+		return sleep(ms);
+	}
+
+	if (signal.aborted) {
+		return Promise.reject(createAbortError(signal));
+	}
+
+	return new Promise((resolve, reject) => {
+		const timeoutId = setTimeout(() => {
+			signal.removeEventListener('abort', onAbort);
+			resolve();
+		}, ms);
+		const onAbort = () => {
+			clearTimeout(timeoutId);
+			reject(createAbortError(signal));
+		};
+
+		signal.addEventListener('abort', onAbort, { once: true });
+	});
+}
+
 /**
  * Calculate backoff delay with jitter
  * Exponential backoff: attempt 1 → 1s, attempt 2 → 2s, attempt 3 → 4s
@@ -33,13 +56,22 @@ function calculateBackoffDelay(attempt) {
  * @param {Object} logger - Logger object with warn() and error() methods (optional)
  * @returns {Promise<Object>} SendResult object after success or max retries exhausted
  */
-async function sendWithRetry(sendFn, maxRetries = 3, logger = null) {
+async function sendWithRetry(sendFn, maxRetries = 3, logger = null, options = {}) {
 	let lastResult = null;
 	const totalStartTime = Date.now();
+	const signal = options.signal;
+
+	if (signal && signal.aborted) {
+		return buildAbortedResult(signal, lastResult, totalStartTime, 0);
+	}
 
 	for (let attempt = 1; attempt <= maxRetries; attempt++) {
+		if (signal && signal.aborted) {
+			return buildAbortedResult(signal, lastResult, totalStartTime, attempt - 1);
+		}
+
 		try {
-			const result = await sendFn();
+			const result = await sendFn({ attempt, signal });
 			const durationMs = Date.now() - totalStartTime;
 
 			if (result.success) {
@@ -51,6 +83,10 @@ async function sendWithRetry(sendFn, maxRetries = 3, logger = null) {
 
 			// Failure; retry if attempts remain
 			lastResult = result;
+			if (signal && signal.aborted) {
+				return buildAbortedResult(signal, lastResult, totalStartTime, attempt);
+			}
+
 			if (attempt < maxRetries) {
 				const delayMs = calculateBackoffDelay(attempt);
 				if (logger) {
@@ -60,7 +96,10 @@ async function sendWithRetry(sendFn, maxRetries = 3, logger = null) {
 					);
 				}
 
-				await sleep(delayMs);
+				const abortedResult = await waitForRetryDelay(delayMs, signal, lastResult, totalStartTime, attempt);
+				if (abortedResult) {
+					return abortedResult;
+				}
 			}
 		} catch (error) {
 			lastResult = {
@@ -69,13 +108,20 @@ async function sendWithRetry(sendFn, maxRetries = 3, logger = null) {
 				error: error.message,
 			};
 
+			if (isAbortError(error, signal)) {
+				return buildAbortedResult(signal, lastResult, totalStartTime, attempt, error);
+			}
+
 			if (logger) {
 				logger.error?.(`Attempt ${attempt}/${maxRetries} threw exception`, { error: error.message });
 			}
 
 			if (attempt < maxRetries) {
 				const delayMs = calculateBackoffDelay(attempt);
-				await sleep(delayMs);
+				const abortedResult = await waitForRetryDelay(delayMs, signal, lastResult, totalStartTime, attempt);
+				if (abortedResult) {
+					return abortedResult;
+				}
 			}
 		}
 	}
@@ -93,6 +139,67 @@ async function sendWithRetry(sendFn, maxRetries = 3, logger = null) {
 		attemptCount: maxRetries,
 		durationMs: totalDurationMs,
 	};
+}
+
+async function waitForRetryDelay(delayMs, signal, lastResult, totalStartTime, attemptCount) {
+	try {
+		await sleepWithSignal(delayMs, signal);
+		return null;
+	} catch (error) {
+		if (isAbortError(error, signal)) {
+			return buildAbortedResult(signal, lastResult, totalStartTime, attemptCount, error);
+		}
+
+		throw error;
+	}
+}
+
+function buildAbortedResult(signal, lastResult, totalStartTime, attemptCount, error = null) {
+	const totalDurationMs = Date.now() - totalStartTime;
+	return {
+		...lastResult,
+		success: false,
+		channel: lastResult?.channel || 'unknown',
+		error: getAbortMessage(signal, error || lastResult),
+		attemptCount,
+		durationMs: totalDurationMs,
+		aborted: true,
+	};
+}
+
+function isAbortError(error, signal) {
+	return Boolean(
+		(signal && signal.aborted)
+		|| (error && error.name === 'AbortError')
+		|| (error && error.name === 'AbortSignalError'),
+	);
+}
+
+function createAbortError(signal) {
+	const error = new Error(getAbortMessage(signal));
+	error.name = 'AbortSignalError';
+	return error;
+}
+
+function getAbortMessage(signal, fallback = null) {
+	const reason = signal && signal.reason;
+	if (reason instanceof Error && reason.message) {
+		return reason.message;
+	}
+
+	if (typeof reason === 'string' && reason) {
+		return reason;
+	}
+
+	if (fallback instanceof Error && fallback.message) {
+		return fallback.message;
+	}
+
+	if (fallback && typeof fallback.error === 'string' && fallback.error) {
+		return fallback.error;
+	}
+
+	return 'Operation aborted';
 }
 
 module.exports = {

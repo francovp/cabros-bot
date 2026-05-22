@@ -99,6 +99,28 @@ describe('TradingViewMcpService', () => {
 		expect(service.callCoinAnalysis).toHaveBeenCalledTimes(2);
 	});
 
+	it('stops retrying report symbol analysis when the deadline is aborted', async () => {
+		const controller = new AbortController();
+		const service = new TradingViewMcpService({
+			maxRetries: 3,
+			logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
+		});
+		service.callCoinAnalysis = jest.fn().mockImplementation(async () => {
+			controller.abort(new Error('TradingView alert analysis timeout after 60000ms'));
+			throw new Error('TradingView alert analysis timeout after 60000ms');
+		});
+
+		await expect(service.analyzeSymbolIdentifier({
+			raw: 'NASDAQ:NVDA',
+			exchange: 'NASDAQ',
+			symbol: 'NVDA',
+			timeframe: '1D',
+			signal: controller.signal,
+		})).rejects.toThrow('TradingView MCP call failed for NASDAQ:NVDA');
+
+		expect(service.callCoinAnalysis).toHaveBeenCalledTimes(1);
+	});
+
 	it('parses rpc payload from SSE body', () => {
 		const service = new TradingViewMcpService();
 		const body = [

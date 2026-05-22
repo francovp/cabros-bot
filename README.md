@@ -56,6 +56,7 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 
 - `ENABLE_TRADINGVIEW_MCP_ENRICHMENT` - Enable TradingView MCP enrichment for TradingView-like webhook messages (`true` or `false`, default: `false`)
 - `TRADINGVIEW_ALERT_SYMBOLS` - Comma-separated fallback symbols for `/api/tradingview-alert` using `EXCHANGE:SYMBOL` format (for example `BINANCE:BTCUSDT,NASDAQ:NVDA`)
+- `TRADINGVIEW_ALERT_TIMEOUT_MS` - Total analysis deadline for `/api/tradingview-alert` in milliseconds (default: `60000`, capped at `120000`)
 - `TRADINGVIEW_MCP_URL` - MCP server HTTP endpoint (default: `https://tradingview-mcp.onrender.com/mcp`)
 - `TRADINGVIEW_MCP_TIMEOUT_MS` - Timeout per MCP request in milliseconds (default: `12000`)
 - `TRADINGVIEW_MCP_MAX_RETRIES` - Retries for MCP failures (default: `3`)
@@ -374,6 +375,8 @@ Generate an expanded technical-analysis report with TradingView MCP `coin_analys
 ```
 
 If `symbols` is empty or omitted, the endpoint falls back to `TRADINGVIEW_ALERT_SYMBOLS`. If neither is defined, it returns `400 NO_SYMBOLS`. Symbols must be complete `EXCHANGE:SYMBOL` identifiers; crypto pairs are not normalized automatically.
+
+The endpoint stops analysis at `TRADINGVIEW_ALERT_TIMEOUT_MS` (default 60 seconds, max 120 seconds). If the deadline is reached before any symbol is analyzed, it returns `504 TRADINGVIEW_ALERT_TIMEOUT`; completed symbols are returned and remaining symbols are marked with `status: "timeout"`.
 
 **Response:**
 ```json
