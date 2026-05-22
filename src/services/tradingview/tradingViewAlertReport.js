@@ -141,17 +141,18 @@ function buildReportRow({ input = {}, analysis = {} }) {
 	const priceData = analysis.price_data || {};
 	const indicators = analysis.technical_indicators || {};
 	const bollinger = analysis.bollinger_analysis || {};
+	const currentBollinger = analysis.bollinger_bands || {};
 	const price = numberOrNull(priceData.current_price ?? priceData.close);
 	const changePercent = numberOrNull(priceData.change_percent);
-	const rsi = numberOrNull(indicators.rsi);
-	const sma20 = numberOrNull(indicators.sma20 ?? bollinger.bb_middle);
-	const macd = numberOrNull(indicators.macd);
-	const macdSignal = numberOrNull(indicators.macd_signal);
-	const atr = numberOrNull(indicators.atr ?? analysis.atr ?? analysis.volatility?.atr);
+	const rsi = numberOrNull(indicators.rsi ?? analysis.rsi?.value);
+	const sma20 = numberOrNull(indicators.sma20 ?? bollinger.bb_middle ?? analysis.sma?.sma20 ?? currentBollinger.middle);
+	const macd = numberOrNull(indicators.macd ?? analysis.macd?.macd_line);
+	const macdSignal = numberOrNull(indicators.macd_signal ?? analysis.macd?.signal_line);
+	const atr = numberOrNull(indicators.atr ?? analysis.atr?.value ?? analysis.atr ?? analysis.volatility?.atr);
 	const trend = getTrend(price, sma20);
 	const macdDirection = getMacdDirection(macd, macdSignal);
 	const volume = getVolumeLabel(analysis);
-	const stopLoss = getStopLoss(price, atr, bollinger);
+	const stopLoss = getStopLoss(price, atr, bollinger, currentBollinger);
 
 	return {
 		symbol: input.symbol || stripExchange(analysis.symbol) || 'UNKNOWN',
@@ -257,10 +258,16 @@ function getMacdDirection(macd, macdSignal) {
 function getVolumeLabel(analysis) {
 	const ratio = numberOrNull(
 		analysis.volume_analysis?.volume_ratio
+		?? analysis.volume_analysis?.ratio
 		?? analysis.volume_data?.volume_ratio
 		?? analysis.technical_indicators?.volume_ratio
 		?? analysis.price_data?.relative_volume,
 	);
+	const signal = analysis.volume_analysis?.signal;
+
+	if (typeof signal === 'string' && signal.trim()) {
+		return signal.trim();
+	}
 
 	if (ratio === null) {
 		return 'Normal';
@@ -277,7 +284,7 @@ function getVolumeLabel(analysis) {
 	return 'Normal';
 }
 
-function getStopLoss(price, atr, bollinger) {
+function getStopLoss(price, atr, bollinger, currentBollinger = {}) {
 	if (price === null) {
 		return null;
 	}
@@ -286,7 +293,7 @@ function getStopLoss(price, atr, bollinger) {
 		return price - (atr * 1.5);
 	}
 
-	const bbLower = numberOrNull(bollinger.bb_lower);
+	const bbLower = numberOrNull(bollinger.bb_lower ?? currentBollinger.lower);
 	if (bbLower !== null) {
 		return bbLower;
 	}

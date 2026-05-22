@@ -112,4 +112,42 @@ describe('TradingView alert report', () => {
 		expect(report).toContain('AAPL $304.99 (+0.9%) | RSI 76.2');
 		expect(report).toContain('- *Sugerencia:* VENDER / TOMAR GANANCIAS');
 	});
+
+	it('formats the current MCP top-level indicator schema', () => {
+		const report = buildTradingViewAlertReport([
+			{
+				input: { raw: 'NASDAQ:NVDA', exchange: 'NASDAQ', symbol: 'NVDA' },
+				analysis: {
+					price_data: {
+						current_price: 216.14,
+						change_percent: -2.157,
+						volume: 107015953,
+					},
+					rsi: {
+						value: 54.45,
+						signal: 'Neutral',
+					},
+					macd: {
+						macd_line: 6.970568,
+						signal_line: 7.789632,
+						crossover: 'Bearish',
+					},
+					sma: {
+						sma20: 214.786,
+					},
+					bollinger_bands: {
+						lower: 194.2218,
+					},
+					volume_analysis: {
+						signal: 'Normal',
+					},
+				},
+			},
+		], { now: new Date('2026-05-22T12:00:00Z') });
+
+		expect(report).toContain('NVDA $216.14 (-2.2%) | RSI 54.5');
+		expect(report).toContain('- *Tendencia (SMA20):* Alcista | *MACD:* Bearish');
+		expect(report).toContain('- *Volumen:* Normal');
+		expect(report).toContain('- *Stop Loss sugerido:* $194.22');
+	});
 });

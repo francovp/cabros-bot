@@ -2,6 +2,7 @@ const request = require('supertest');
 const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
 const { initializeNotificationServices } = require('../../src/controllers/webhooks/handlers/alert/alert');
+const { analyzeSymbols } = require('../../src/controllers/webhooks/handlers/tradingViewAlert/tradingViewAlert');
 const { tradingViewMcpService } = require('../../src/services/tradingview/TradingViewMcpService');
 
 jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
@@ -156,5 +157,40 @@ describe('TradingView alert endpoint', () => {
 			}),
 		]);
 		expect(mockTelegramSendMessage).not.toHaveBeenCalled();
+	});
+
+	it('analyzes symbols sequentially to avoid concurrent MCP failures', async () => {
+		let activeCalls = 0;
+		let maxActiveCalls = 0;
+		const callOrder = [];
+
+		tradingViewMcpService.analyzeSymbolIdentifier.mockImplementation(async ({ raw }) => {
+			activeCalls++;
+			maxActiveCalls = Math.max(maxActiveCalls, activeCalls);
+			callOrder.push(`start:${raw}`);
+			await Promise.resolve();
+			activeCalls--;
+			callOrder.push(`end:${raw}`);
+			return {
+				price_data: { current_price: 100 },
+				technical_indicators: { rsi: 50 },
+			};
+		});
+
+		await analyzeSymbols({
+			symbols: [
+				{ raw: 'NASDAQ:NVDA', exchange: 'NASDAQ', symbol: 'NVDA' },
+				{ raw: 'NASDAQ:AAPL', exchange: 'NASDAQ', symbol: 'AAPL' },
+			],
+			timeframe: '1D',
+		});
+
+		expect(maxActiveCalls).toBe(1);
+		expect(callOrder).toEqual([
+			'start:NASDAQ:NVDA',
+			'end:NASDAQ:NVDA',
+			'start:NASDAQ:AAPL',
+			'end:NASDAQ:AAPL',
+		]);
 	});
 });

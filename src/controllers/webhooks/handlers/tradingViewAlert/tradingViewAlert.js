@@ -96,29 +96,33 @@ function postTradingViewAlert(botOrGetter) {
 }
 
 async function analyzeSymbols({ symbols, timeframe }) {
-	return Promise.all(symbols.map(async (input) => {
+	const results = [];
+
+	for (const input of symbols) {
 		try {
 			const analysis = await tradingViewMcpService.analyzeSymbolIdentifier({
 				...input,
 				timeframe,
 			});
 
-			return {
+			results.push({
 				symbol: input.raw,
 				status: 'analyzed',
 				input,
 				analysis,
-			};
+			});
 		} catch (error) {
 			console.warn('[TradingViewAlert] Symbol analysis failed:', input.raw, error.message);
-			return {
+			results.push({
 				symbol: input.raw,
 				status: 'error',
 				input,
 				error: error.message,
-			};
+			});
 		}
-	}));
+	}
+
+	return results;
 }
 
 function compactResults(results) {
@@ -137,8 +141,8 @@ function compactResults(results) {
 			price: result.analysis && result.analysis.price_data
 				? result.analysis.price_data.current_price ?? result.analysis.price_data.close
 				: undefined,
-			rsi: result.analysis && result.analysis.technical_indicators
-				? result.analysis.technical_indicators.rsi
+			rsi: result.analysis
+				? result.analysis.technical_indicators?.rsi ?? result.analysis.rsi?.value
 				: undefined,
 		};
 	});
