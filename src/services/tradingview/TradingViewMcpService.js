@@ -79,13 +79,22 @@ class TradingViewMcpService {
 	}
 
 	async analyzeSymbolIdentifier({ raw, exchange, symbol, timeframe }) {
-		const analysis = await this.callCoinAnalysis({ symbol, exchange, timeframe });
-		if (analysis && analysis.error) {
-			throw new Error(analysis.error);
+		const cfg = this.getConfig();
+		const result = await sendWithRetry(async () => {
+			try {
+				const analysis = await this.callCoinAnalysis({ symbol, exchange, timeframe });
+				return { success: true, channel: 'tradingview-mcp', analysis };
+			} catch (error) {
+				return { success: false, channel: 'tradingview-mcp', error: error.message };
+			}
+		}, cfg.maxRetries, this.logger);
+
+		if (!result.success) {
+			throw new Error(`TradingView MCP call failed for ${raw || `${exchange}:${symbol}`}: ${result.error || 'unknown error'}`);
 		}
 
 		return {
-			...analysis,
+			...result.analysis,
 			requested_symbol: raw,
 			requested_exchange: exchange,
 			requested_timeframe: timeframe,

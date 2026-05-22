@@ -72,6 +72,33 @@ describe('TradingViewMcpService', () => {
 			.toThrow('TradingView MCP call failed');
 	});
 
+	it('retries report symbol analysis before returning a transient MCP failure', async () => {
+		const service = new TradingViewMcpService({
+			maxRetries: 2,
+			logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
+		});
+		service.callCoinAnalysis = jest.fn()
+			.mockRejectedValueOnce(new Error('Analysis failed: Expecting value: line 1 column 1 (char 0)'))
+			.mockResolvedValueOnce({
+				price_data: { current_price: 219.51 },
+				technical_indicators: { rsi: 57.8 },
+			});
+
+		const result = await service.analyzeSymbolIdentifier({
+			raw: 'NASDAQ:NVDA',
+			exchange: 'NASDAQ',
+			symbol: 'NVDA',
+			timeframe: '1D',
+		});
+
+		expect(result).toEqual(expect.objectContaining({
+			requested_symbol: 'NASDAQ:NVDA',
+			price_data: { current_price: 219.51 },
+			technical_indicators: { rsi: 57.8 },
+		}));
+		expect(service.callCoinAnalysis).toHaveBeenCalledTimes(2);
+	});
+
 	it('parses rpc payload from SSE body', () => {
 		const service = new TradingViewMcpService();
 		const body = [
