@@ -1,10 +1,12 @@
 const express = require('express');
 const { postAlert } = require('../controllers/webhooks/handlers/alert/alert');
+const { postExpandedAnalysisAlert } = require('../controllers/webhooks/handlers/expandedAnalysisAlert/expandedAnalysisAlert');
 const { validateApiKey } = require('../lib/auth');
 
 function getRoutes(botOrGetter) {
 	const router = express.Router();
 	router.post('/webhook/alert', validateApiKey, postAlert(botOrGetter));
+	router.post('/webhook/expanded-analysis-alert', validateApiKey, postExpandedAnalysisAlert(botOrGetter));
 
 	const { getNewsMonitor } = require('../controllers/webhooks/handlers/newsMonitor/newsMonitor');
 	const newsMonitor = getNewsMonitor();

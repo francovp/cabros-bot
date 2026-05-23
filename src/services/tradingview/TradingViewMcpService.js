@@ -3,6 +3,19 @@
 const { sendWithRetry } = require('../../lib/retryHelper');
 const { parseTradingViewSignal, normalizeTradingViewTimeframe } = require('./parseTradingViewSignal');
 
+function getAbortMessage(signal, fallback) {
+	const reason = signal && signal.reason;
+	if (reason instanceof Error && reason.message) {
+		return reason.message;
+	}
+
+	if (typeof reason === 'string' && reason) {
+		return reason;
+	}
+
+	return fallback;
+}
+
 class TradingViewMcpService {
 	constructor(config = {}) {
 		this.config = config;
@@ -64,12 +77,12 @@ class TradingViewMcpService {
 		return this._toEnrichedAlert(signal.rawText || '', { symbol, exchange, timeframe, side: signal.side }, result.analysis);
 	}
 
-	async callCoinAnalysis({ symbol, exchange, timeframe }) {
+	async callCoinAnalysis({ symbol, exchange, timeframe, signal }) {
 		const rpcResult = await this._callTool('coin_analysis', {
 			symbol,
 			exchange,
 			timeframe,
-		});
+		}, { signal });
 		const normalizedResult = this._unwrapSchemaResult(rpcResult);
 
 		if (normalizedResult && normalizedResult.error) {
@@ -83,7 +96,31 @@ class TradingViewMcpService {
 		return normalizedResult;
 	}
 
-	async _callTool(toolName, args = {}) {
+	async analyzeSymbolIdentifier({ raw, exchange, symbol, timeframe, signal }) {
+		const cfg = this.getConfig();
+		const result = await sendWithRetry(async () => {
+			try {
+				const analysis = await this.callCoinAnalysis({ symbol, exchange, timeframe, signal });
+				return { success: true, channel: 'tradingview-mcp', analysis };
+			} catch (error) {
+				return { success: false, channel: 'tradingview-mcp', error: error.message };
+			}
+		}, cfg.maxRetries, this.logger, { signal });
+
+		if (!result.success) {
+			throw new Error(`TradingView MCP call failed for ${raw || `${exchange}:${symbol}`}: ${result.error || 'unknown error'}`);
+		}
+
+		return {
+			...result.analysis,
+			requested_symbol: raw,
+			requested_exchange: exchange,
+			requested_timeframe: timeframe,
+		};
+	}
+
+	async _callTool(toolName, args = {}, options = {}) {
+		const { signal } = options;
 		const initializeRequest = {
 			jsonrpc: '2.0',
 			id: this._nextRequestId('initialize'),
@@ -98,7 +135,7 @@ class TradingViewMcpService {
 			},
 		};
 
-		const initResponse = await this._rpcRequest(initializeRequest);
+		const initResponse = await this._rpcRequest(initializeRequest, { signal });
 		const sessionId = initResponse.sessionId;
 
 		if (!sessionId) {
@@ -109,7 +146,7 @@ class TradingViewMcpService {
 			jsonrpc: '2.0',
 			method: 'notifications/initialized',
 			params: {},
-		}, { sessionId, expectResponse: false });
+		}, { sessionId, expectResponse: false, signal });
 
 		const toolCallRequest = {
 			jsonrpc: '2.0',
@@ -121,7 +158,7 @@ class TradingViewMcpService {
 			},
 		};
 
-		const toolResponse = await this._rpcRequest(toolCallRequest, { sessionId });
+		const toolResponse = await this._rpcRequest(toolCallRequest, { sessionId, signal });
 		const callResult = toolResponse.rpc && toolResponse.rpc.result;
 
 		if (!callResult) {
@@ -164,9 +201,24 @@ class TradingViewMcpService {
 
 	async _rpcRequest(payload, options = {}) {
 		const cfg = this.getConfig();
-		const { sessionId, expectResponse = true } = options;
+		const { sessionId, expectResponse = true, signal } = options;
 		const controller = new AbortController();
-		const timeoutId = setTimeout(() => controller.abort(), cfg.timeoutMs);
+		const timeoutId = setTimeout(() => {
+			controller.abort(new Error(`TradingView MCP timeout after ${cfg.timeoutMs}ms`));
+		}, cfg.timeoutMs);
+		let onAbort = null;
+
+		if (signal) {
+			if (signal.aborted) {
+				clearTimeout(timeoutId);
+				throw new Error(getAbortMessage(signal, 'TradingView MCP request aborted'));
+			}
+
+			onAbort = () => {
+				controller.abort(signal.reason || new Error('TradingView MCP request aborted'));
+			};
+			signal.addEventListener('abort', onAbort, { once: true });
+		}
 
 		const headers = {
 			'Content-Type': 'application/json',
@@ -178,6 +230,7 @@ class TradingViewMcpService {
 		}
 
 		let response;
+		let bodyText;
 		try {
 			response = await fetch(cfg.url, {
 				method: 'POST',
@@ -185,18 +238,25 @@ class TradingViewMcpService {
 				body: JSON.stringify(payload),
 				signal: controller.signal,
 			});
+			bodyText = await response.text();
 		} catch (error) {
-			if (error.name === 'AbortError') {
+			if (controller.signal.aborted || error.name === 'AbortError') {
+				if (signal && signal.aborted) {
+					throw new Error(getAbortMessage(signal, 'TradingView MCP request aborted'));
+				}
+
 				throw new Error(`TradingView MCP timeout after ${cfg.timeoutMs}ms`);
 			}
 
 			throw new Error(`TradingView MCP request failed: ${error.message}`);
 		} finally {
 			clearTimeout(timeoutId);
+			if (signal && onAbort) {
+				signal.removeEventListener('abort', onAbort);
+			}
 		}
 
 		const nextSessionId = response.headers.get('mcp-session-id') || sessionId;
-		const bodyText = await response.text();
 
 		if (!response.ok && !(response.status === 202 && !expectResponse)) {
 			throw new Error(`TradingView MCP HTTP ${response.status}: ${bodyText || 'empty response'}`);

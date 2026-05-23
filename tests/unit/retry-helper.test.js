@@ -136,6 +136,22 @@ describe('retryHelper', () => {
 
 			expect(result.durationMs).toBeGreaterThanOrEqual(100);
 		});
+
+		it('should stop before the first attempt when signal is already aborted', async () => {
+			const controller = new AbortController();
+			controller.abort(new Error('deadline reached'));
+			const mockSendFn = jest.fn().mockResolvedValue({
+				success: true,
+				channel: 'test',
+			});
+
+			const result = await sendWithRetry(mockSendFn, 3, null, { signal: controller.signal });
+
+			expect(result.success).toBe(false);
+			expect(result.error).toBe('deadline reached');
+			expect(result.attemptCount).toBe(0);
+			expect(mockSendFn).not.toHaveBeenCalled();
+		});
 	});
 
 	describe('sleep', () => {
