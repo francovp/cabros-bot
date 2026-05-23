@@ -361,7 +361,7 @@ describe('Expanded Analysis Alert endpoint', () => {
 
 		expect(res.body.success).toBe(true);
 		expect(res.body.alertText).toContain('Alineación Multi-TF:');
-		expect(res.body.alertText).toContain('Semanal (1W): Alcista (RSI 58.2)');
+		expect(res.body.alertText).toContain('• *Semanal (1W):* Alcista (RSI 58.2)');
 		expect(res.body.results[0]).toEqual(expect.objectContaining({
 			symbol: 'NASDAQ:NVDA',
 			status: 'analyzed',
