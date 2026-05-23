@@ -6,6 +6,8 @@
 const NotificationChannel = require('./NotificationChannel');
 const MarkdownV2Formatter = require('./formatters/markdownV2Formatter');
 
+const DEFAULT_MAX_MESSAGE_LENGTH = 4000;
+
 class TelegramService extends NotificationChannel {
 	/**
    * @param {Object} config
@@ -23,6 +25,7 @@ class TelegramService extends NotificationChannel {
 		this.chatId = config.chatId || process.env.TELEGRAM_CHAT_ID;
 		this.formatter = config.formatter || new MarkdownV2Formatter();
 		this.logger = config.logger;
+		this.maxMessageLength = config.maxMessageLength || DEFAULT_MAX_MESSAGE_LENGTH;
 		this.enabled = false;
 	}
 
@@ -95,17 +98,24 @@ class TelegramService extends NotificationChannel {
 			}
 
 			this.logger?.debug?.(`Sending to Telegram chat ${this.chatId}`);
+			const messageParts = splitTelegramMessage(formattedText, this.maxMessageLength);
 
 			// Send to Telegram
-			const result = await this.bot.telegram.sendMessage(this.chatId, formattedText, {
-				parse_mode: 'MarkdownV2',
-				disable_web_page_preview: !!alert.enriched,
-			});
+			const messageIds = [];
+			for (const messagePart of messageParts) {
+				const result = await this.bot.telegram.sendMessage(this.chatId, messagePart, {
+					parse_mode: 'MarkdownV2',
+					disable_web_page_preview: !!alert.enriched,
+				});
+				messageIds.push(String(result.message_id));
+			}
 
 			return {
 				success: true,
 				channel: 'telegram',
-				messageId: String(result.message_id),
+				messageId: messageIds.join(','),
+				messageIds,
+				messageCount: messageIds.length,
 			};
 		} catch (error) {
 			this.logger?.error?.(`Failed to send to Telegram: ${error.message}`);
@@ -116,6 +126,39 @@ class TelegramService extends NotificationChannel {
 			};
 		}
 	}
+}
+
+function splitTelegramMessage(text, maxLength = DEFAULT_MAX_MESSAGE_LENGTH) {
+	if (!text || typeof text !== 'string') {
+		return [''];
+	}
+
+	if (text.length <= maxLength) {
+		return [text];
+	}
+
+	const chunks = [];
+	let remaining = text;
+
+	while (remaining.length > maxLength) {
+		let splitAt = remaining.lastIndexOf('\n\n', maxLength);
+		if (splitAt < Math.floor(maxLength / 2)) {
+			splitAt = remaining.lastIndexOf('\n', maxLength);
+		}
+		if (splitAt <= 0) {
+			splitAt = maxLength;
+		}
+
+		const chunk = remaining.slice(0, splitAt).trimEnd();
+		chunks.push(chunk || remaining.slice(0, maxLength));
+		remaining = remaining.slice(splitAt).trimStart();
+	}
+
+	if (remaining) {
+		chunks.push(remaining);
+	}
+
+	return chunks;
 }
 
 module.exports = TelegramService;

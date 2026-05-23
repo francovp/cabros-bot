@@ -164,6 +164,22 @@ describe('Expanded Analysis Alert endpoint', () => {
 		expect(mockTelegramSendMessage).not.toHaveBeenCalled();
 	});
 
+	it('returns 400 for non-object request bodies instead of using env fallback symbols', async () => {
+		process.env.EXPANDED_ANALYSIS_ALERT_SYMBOLS = 'NASDAQ:AAPL';
+
+		const res = await request(app)
+			.post('/api/webhook/expanded-analysis-alert')
+			.set('x-api-key', 'test-key')
+			.set('Content-Type', 'text/plain')
+			.send('NASDAQ:NVDA')
+			.expect(400);
+
+		expect(res.body.code).toBe('INVALID_REQUEST');
+		expect(res.body.error).toBe('request body must be a JSON object');
+		expect(tradingViewMcpService.analyzeSymbolIdentifier).not.toHaveBeenCalled();
+		expect(mockTelegramSendMessage).not.toHaveBeenCalled();
+	});
+
 	it('returns 400 for invalid symbol identifiers', async () => {
 		const res = await request(app)
 			.post('/api/webhook/expanded-analysis-alert')
@@ -187,6 +203,40 @@ describe('Expanded Analysis Alert endpoint', () => {
 		expect(res.body.error).toBe('timeframe must be a string');
 		expect(tradingViewMcpService.analyzeSymbolIdentifier).not.toHaveBeenCalled();
 		expect(mockTelegramSendMessage).not.toHaveBeenCalled();
+	});
+
+	it('splits long reports into Telegram-sized messages', async () => {
+		const symbols = Array.from({ length: 50 }, (_, index) => `NASDAQ:SYM${index + 1}`);
+		tradingViewMcpService.analyzeSymbolIdentifier.mockImplementation(async () => ({
+			price_data: {
+				current_price: 219.51,
+				change_percent: -1.8,
+				volume: 70213090,
+			},
+			technical_indicators: {
+				rsi: 57.8,
+				sma20: 214.1,
+				macd: 6.1,
+				macd_signal: 7.2,
+				atr: 7.69,
+			},
+		}));
+
+		const res = await request(app)
+			.post('/api/webhook/expanded-analysis-alert')
+			.set('x-api-key', 'test-key')
+			.send({ symbols, timeframe: '1D' })
+			.expect(200);
+
+		expect(res.body.summary).toEqual(expect.objectContaining({
+			total: 50,
+			analyzed: 50,
+			delivered: 1,
+		}));
+		expect(mockTelegramSendMessage.mock.calls.length).toBeGreaterThan(1);
+		mockTelegramSendMessage.mock.calls.forEach((call) => {
+			expect(call[1].length).toBeLessThanOrEqual(4000);
+		});
 	});
 
 	it('does not mount the old endpoint path', async () => {

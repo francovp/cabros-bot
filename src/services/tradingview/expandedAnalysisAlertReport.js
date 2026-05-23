@@ -33,7 +33,7 @@ class ExpandedAnalysisAlertRequestError extends Error {
 }
 
 function parseExpandedAnalysisAlertRequest(req = {}) {
-	const body = req.body || {};
+	const body = getRequestBody(req);
 	const rawSymbols = getRequestSymbols(body);
 	const symbols = rawSymbols.map(parseSymbolIdentifier);
 	validateTimeframeType(body);
@@ -51,6 +51,18 @@ function parseExpandedAnalysisAlertRequest(req = {}) {
 	}
 
 	return { symbols, timeframe };
+}
+
+function getRequestBody(req = {}) {
+	if (!Object.prototype.hasOwnProperty.call(req, 'body') || req.body === undefined) {
+		return {};
+	}
+
+	if (req.body === null || typeof req.body !== 'object' || Array.isArray(req.body)) {
+		throw new ExpandedAnalysisAlertRequestError('request body must be a JSON object');
+	}
+
+	return req.body;
 }
 
 function validateTimeframeType(body = {}) {

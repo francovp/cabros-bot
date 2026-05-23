@@ -52,6 +52,16 @@ describe('Expanded Analysis Alert report', () => {
 		expect(() => parseExpandedAnalysisAlertRequest({ body: {} })).toThrow('No expanded analysis symbols provided');
 	});
 
+	it('rejects non-object request bodies before using env fallback symbols', () => {
+		process.env = {
+			...originalEnv,
+			EXPANDED_ANALYSIS_ALERT_SYMBOLS: 'NASDAQ:AAPL',
+		};
+
+		expect(() => parseExpandedAnalysisAlertRequest({ body: 'NASDAQ:NVDA' }))
+			.toThrow('request body must be a JSON object');
+	});
+
 	it('rejects symbols that are not EXCHANGE:SYMBOL identifiers', () => {
 		expect(() => parseExpandedAnalysisAlertRequest({
 			body: { symbols: ['NVDA'], timeframe: '1D' },
