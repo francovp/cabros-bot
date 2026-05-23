@@ -20,7 +20,7 @@ We upgraded the `POST /api/webhook/expanded-analysis-alert` webhook to optionall
 
 ### Tests
 - **[expanded-analysis-alert-report.test.js](file:///Users/fgvaleriop/repositorios/cabros-crypto-bot-telegram/tests/unit/expanded-analysis-alert-report.test.js)**: Added unit tests for parsing the parameter and formatting the multi-TF output in Spanish.
-- **[expanded-analysis-alert-endpoint.test.js](file:///Users/fgvaleriop/repositorios/cabros-crypto-bot-telegram/tests/integration/expanded-analysis-alert-endpoint.test.js)**: Added integration test assertions to verify controller logic, parameter handling, and fail-open behaviors.
+- **[expanded-analysis-alert-endpoint.test.js](file:///Users/fgvaleriop/repositorios/cabros-crypto-bot-telegram/tests/integration/expanded-analysis-alert-endpoint.test.js)**: Added integration test assertions to verify controller logic, parameter handling, and fail-open behaviors. Resolved a test assertion mismatch by formatting expected string with markdown bold asterisks (`• *Semanal (1W):*` instead of `Semanal (1W):`).
 
 ---
 
