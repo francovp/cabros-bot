@@ -48,6 +48,7 @@ function postExpandedAnalysisAlert(botOrGetter) {
 				.map((result) => ({
 					input: result.input,
 					analysis: result.analysis,
+					multiTimeframe: result.multiTimeframe,
 				}));
 
 			if (analyzedItems.length === 0) {
@@ -117,7 +118,7 @@ function postExpandedAnalysisAlert(botOrGetter) {
 	};
 }
 
-async function analyzeSymbols({ symbols, timeframe }, options = {}) {
+async function analyzeSymbols({ symbols, timeframe, includeMultiTimeframe }, options = {}) {
 	const { signal } = options;
 	const results = [];
 
@@ -141,11 +142,29 @@ async function analyzeSymbols({ symbols, timeframe }, options = {}) {
 				...analysisRequest,
 			});
 
+			let multiTimeframe = null;
+			if (includeMultiTimeframe) {
+				try {
+					multiTimeframe = await tradingViewMcpService.callMultiTimeframeAnalysis({
+						symbol: input.symbol,
+						exchange: input.exchange,
+						signal,
+					});
+				} catch (mErr) {
+					console.warn(
+						'[ExpandedAnalysisAlert] Multi-timeframe analysis failed for',
+						input.raw,
+						mErr.message,
+					);
+				}
+			}
+
 			results.push({
 				symbol: input.raw,
 				status: 'analyzed',
 				input,
 				analysis,
+				multiTimeframe,
 			});
 		} catch (error) {
 			if (isAbortTriggered(signal, error)) {
@@ -192,6 +211,7 @@ function compactResults(results) {
 			rsi: result.analysis
 				? result.analysis.technical_indicators?.rsi ?? result.analysis.rsi?.value
 				: undefined,
+			multiTimeframe: result.multiTimeframe ? 'success' : undefined,
 		};
 	});
 }
