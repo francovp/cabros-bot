@@ -7,7 +7,7 @@ describe('TradingViewMcpService', () => {
 		expect(result).toBeNull();
 	});
 
-	it('maps coin analysis into webhook enriched alert', async () => {
+	it('maps new coin_analysis schema into webhook enriched alert', async () => {
 		const service = new TradingViewMcpService({
 			maxRetries: 1,
 			defaultExchange: 'BINANCE',
@@ -22,19 +22,29 @@ describe('TradingViewMcpService', () => {
 				high: 64997.44,
 				low: 64828.62,
 			},
-			bollinger_analysis: {
-				rating: -3,
-				bb_upper: 69468.88,
-				bb_lower: 65664.11,
-				position: 'Below Lower',
+			bollinger_bands: {
+				upper: 69468.88,
+				lower: 65664.11,
+				position: 'Lower Half',
 			},
-			technical_indicators: {
-				rsi: 29.38,
-				rsi_signal: 'Oversold',
-				adx: 15.97,
+			rsi: {
+				value: 29.38,
+				signal: 'Oversold',
+			},
+			adx: {
+				value: 15.97,
 				trend_strength: 'Weak',
 			},
+			support_resistance: {
+				support_1: 64000.5,
+				resistance_1: 66000.2,
+			},
+			market_structure: {
+				trend: 'Bearish',
+				trend_score: -3,
+			},
 			market_sentiment: {
+				overall_rating: -2,
 				momentum: 'Bearish',
 			},
 		});
@@ -51,11 +61,60 @@ describe('TradingViewMcpService', () => {
 		}));
 		expect(result.insights.join(' ')).toContain('BTCUSDT');
 		expect(result.insights.join(' ')).toContain('4h');
+		expect(result.insights.join(' ')).toContain('Rating -2');
 		expect(result.extraText).toContain('tradingview-mcp');
 		expect(service.callCoinAnalysis).toHaveBeenCalledWith({
 			symbol: 'BTCUSDT',
 			exchange: 'BINANCE',
 			timeframe: '4h',
+		});
+	});
+
+	it('prefers structuredContent when MCP server returns schema-native tool results', async () => {
+		const service = new TradingViewMcpService({ logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() } });
+
+		service._rpcRequest = jest
+			.fn()
+			.mockResolvedValueOnce({ sessionId: 'test-session' })
+			.mockResolvedValueOnce({ status: 202 })
+			.mockResolvedValueOnce({
+				rpc: {
+					result: {
+						content: [{ type: 'text', text: 'non-json fallback text' }],
+						structuredContent: {
+							symbol: 'BINANCE:BTCUSDT',
+							price_data: { current_price: 70000 },
+						},
+						isError: false,
+					},
+				},
+			});
+
+		const result = await service._callTool('coin_analysis', { symbol: 'BTCUSDT' });
+		expect(result).toEqual({
+			symbol: 'BINANCE:BTCUSDT',
+			price_data: { current_price: 70000 },
+		});
+	});
+
+	it('unwraps schema result wrapper from coin_analysis payloads', async () => {
+		const service = new TradingViewMcpService({ logger: { warn: jest.fn(), error: jest.fn() } });
+		service._callTool = jest.fn().mockResolvedValue({
+			result: {
+				symbol: 'BINANCE:BTCUSDT',
+				price_data: { current_price: 71000 },
+			},
+		});
+
+		const result = await service.callCoinAnalysis({
+			symbol: 'BTCUSDT',
+			exchange: 'BINANCE',
+			timeframe: '4h',
+		});
+
+		expect(result).toEqual({
+			symbol: 'BINANCE:BTCUSDT',
+			price_data: { current_price: 71000 },
 		});
 	});
 

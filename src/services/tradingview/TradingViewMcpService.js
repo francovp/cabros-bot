@@ -83,12 +83,17 @@ class TradingViewMcpService {
 			exchange,
 			timeframe,
 		}, { signal });
+		const normalizedResult = this._unwrapSchemaResult(rpcResult);
 
-		if (rpcResult && rpcResult.error) {
-			throw new Error(rpcResult.error);
+		if (normalizedResult && normalizedResult.error) {
+			throw new Error(normalizedResult.error);
 		}
 
-		return rpcResult;
+		if (!normalizedResult || typeof normalizedResult !== 'object' || Array.isArray(normalizedResult)) {
+			throw new Error('TradingView MCP coin_analysis returned invalid payload');
+		}
+
+		return normalizedResult;
 	}
 
 	async analyzeSymbolIdentifier({ raw, exchange, symbol, timeframe, signal }) {
@@ -163,6 +168,10 @@ class TradingViewMcpService {
 		if (callResult.isError) {
 			const errorMessage = this._extractContentText(callResult) || `TradingView MCP tool ${toolName} returned isError=true`;
 			throw new Error(errorMessage);
+		}
+
+		if (callResult.structuredContent && typeof callResult.structuredContent === 'object') {
+			return callResult.structuredContent;
 		}
 
 		const contentText = this._extractContentText(callResult);
@@ -324,31 +333,59 @@ class TradingViewMcpService {
 		const { side, symbol, exchange, timeframe } = signal;
 		const sideLabel = side === 'SELL' ? 'VENTA' : 'COMPRA';
 		const sideSentiment = side === 'SELL' ? -0.55 : 0.55;
-		const rating = this._safeNumber(analysis && analysis.bollinger_analysis && analysis.bollinger_analysis.rating, 0);
+		const priceData = (analysis && analysis.price_data) || {};
+		const indicators = (analysis && analysis.technical_indicators) || {};
+		const rsiData = (analysis && analysis.rsi) || {};
+		const adxData = (analysis && analysis.adx) || {};
+		const legacyBollinger = (analysis && analysis.bollinger_analysis) || {};
+		const bollingerBands = (analysis && analysis.bollinger_bands) || {};
+		const supportResistance = (analysis && analysis.support_resistance) || {};
+		const marketSentiment = (analysis && analysis.market_sentiment) || {};
+		const marketStructure = (analysis && analysis.market_structure) || {};
+		const timeframeContext = (analysis && analysis.timeframe_context) || {};
+
+		const rating = this._firstNumber([
+			marketSentiment.overall_rating,
+			marketStructure.trend_score,
+			legacyBollinger.rating,
+		], 0);
 		const ratingBias = Math.max(-0.35, Math.min(0.35, rating / 10));
 		const sentimentScore = Math.max(-1, Math.min(1, sideSentiment + ratingBias));
 		const sentiment = sentimentScore > 0.15 ? 'BULLISH' : sentimentScore < -0.15 ? 'BEARISH' : 'NEUTRAL';
 
-		const priceData = (analysis && analysis.price_data) || {};
-		const indicators = (analysis && analysis.technical_indicators) || {};
-		const bollinger = (analysis && analysis.bollinger_analysis) || {};
-		const marketSentiment = (analysis && analysis.market_sentiment) || {};
+		const rsiValue = this._firstNumber([rsiData.value, indicators.rsi], null);
+		const adxValue = this._firstNumber([adxData.value, indicators.adx], null);
+		const rsiSignal = rsiData.signal || indicators.rsi_signal || 'N/A';
+		const trendStrength = adxData.trend_strength || indicators.trend_strength || 'N/A';
+		const bollingerPosition = bollingerBands.position || legacyBollinger.position || 'N/A';
+		const momentumLabel = marketSentiment.momentum || marketSentiment.buy_sell_signal || marketStructure.trend || 'N/A';
+		const trendLabel = marketStructure.trend || timeframeContext.bias || 'N/A';
 
 		const supports = this._compactUnique([
-			this._formatLevel(bollinger.bb_lower),
+			this._formatLevel(supportResistance.nearest_support),
+			this._formatLevel(supportResistance.support_1),
+			this._formatLevel(supportResistance.support_2),
+			this._formatLevel(supportResistance.support_3),
+			this._formatLevel(bollingerBands.lower),
+			this._formatLevel(legacyBollinger.bb_lower),
 			this._formatLevel(priceData.low),
-		]);
+		]).slice(0, 4);
 
 		const resistances = this._compactUnique([
-			this._formatLevel(bollinger.bb_upper),
+			this._formatLevel(supportResistance.nearest_resistance),
+			this._formatLevel(supportResistance.resistance_1),
+			this._formatLevel(supportResistance.resistance_2),
+			this._formatLevel(supportResistance.resistance_3),
+			this._formatLevel(bollingerBands.upper),
+			this._formatLevel(legacyBollinger.bb_upper),
 			this._formatLevel(priceData.high),
-		]);
+		]).slice(0, 4);
 
 		const insights = this._compactUnique([
 			`Señal detectada: ${sideLabel} para ${symbol} en ${timeframe} (${exchange})`,
 			`Precio actual: ${this._formatLevel(priceData.current_price)} (${this._formatPercent(priceData.change_percent)})`,
-			`RSI ${this._formatLevel(indicators.rsi)} (${indicators.rsi_signal || 'N/A'}) · ADX ${this._formatLevel(indicators.adx)} (${indicators.trend_strength || 'N/A'})`,
-			`Bollinger rating ${rating} (${bollinger.position || 'N/A'}) · Momentum ${marketSentiment.momentum || 'N/A'}`,
+			`RSI ${this._formatLevel(rsiValue)} (${rsiSignal}) · ADX ${this._formatLevel(adxValue)} (${trendStrength})`,
+			`Tendencia ${trendLabel} · Bollinger ${bollingerPosition} · Momentum ${momentumLabel} · Rating ${rating}`,
 		]);
 
 		return {
@@ -401,6 +438,32 @@ class TradingViewMcpService {
 		}
 
 		return value;
+	}
+
+	_firstNumber(values = [], fallback = null) {
+		for (const value of values) {
+			if (typeof value === 'number' && !Number.isNaN(value)) {
+				return value;
+			}
+		}
+
+		return fallback;
+	}
+
+	_unwrapSchemaResult(result) {
+		if (!result || typeof result !== 'object' || Array.isArray(result)) {
+			return result;
+		}
+
+		const keys = Object.keys(result);
+		if (keys.length === 1 && Object.prototype.hasOwnProperty.call(result, 'result')) {
+			const innerResult = result.result;
+			if (innerResult && typeof innerResult === 'object' && !Array.isArray(innerResult)) {
+				return innerResult;
+			}
+		}
+
+		return result;
 	}
 
 	_nextRequestId(prefix) {
