@@ -391,6 +391,53 @@ The system provides an HTTP endpoint (`/api/news-monitor`) that analyzes financi
 - Binance API client for precise crypto prices (003-news-monitor, optional fallback to Gemini GoogleSearch)
 - TradingView MCP remote Streamable HTTP server for technical `coin_analysis` report generation (`POST /api/webhook/expanded-analysis-alert`)
 - Sentry SDK for Node (`@sentry/node` v10) for backend runtime error monitoring and warn/error console log capture (005-sentry-runtime-errors; no tracing by default)
+- Cloud Firestore via `firebase-admin` v9.x for server-side alert document persistence (006-firestore-alert-storage; fire-and-forget, never blocks delivery)
+
+## Firestore Alert Storage (006-firestore-alert-storage)
+
+Every successful `POST /api/webhook/alert` request is persisted as a document in the `alerts` Firestore collection after the HTTP response has been sent.
+
+**Core Component**:
+- `src/services/storage/AlertStorageService.js` — lazy `firebase-admin` singleton, `saveAlert()` wrapper, fail-open error handling
+
+**Data Model** (collection: `alerts`, document ID: auto-generated):
+
+| Field | Type | Description |
+|---|---|---|
+| `receivedAt` | Timestamp | Server-side timestamp (FieldValue.serverTimestamp()) |
+| `text` | string | Original alert text (max 20,000 chars) |
+| `enriched` | boolean | Whether enrichment ran |
+| `enrichmentData` | map \| null | Full `alert.enriched` object from Gemini/TradingView |
+| `tokenUsage` | map \| null | `tokenUsage.toJSON()` result including `formattedSummary` |
+| `deliveryResults` | array | Per-channel `SendResult` objects from `notificationManager.sendToAll()` |
+| `source` | string | Always `"webhook"` |
+| `useTradingViewData` | boolean | Whether `?useTradingViewData=true` was set on the request |
+
+**Credential Configuration** (choose one):
+- **Option A** — `GOOGLE_APPLICATION_CREDENTIALS=/path/to/serviceAccountKey.json` (file path, good for local dev)
+- **Option B** — `FIREBASE_SERVICE_ACCOUNT_JSON={"type":"service_account",...}` (inline JSON string, preferred for Render.com secrets)
+
+**Configuration**:
+- `ENABLE_FIRESTORE_ALERT_STORAGE` — Feature flag (default: false)
+- `FIREBASE_PROJECT_ID` — Optional project ID override (usually embedded in the service account JSON)
+
+**Failure Behavior** (fail-open):
+- `saveAlert()` never throws — all Firestore errors are caught and logged as `console.warn`
+- Storage is fire-and-forget: `res.json()` is sent **before** the Firestore write is awaited
+- If `ENABLE_FIRESTORE_ALERT_STORAGE` is not `'true'`, `getFirestore()` returns `null` immediately
+- If `firebase-admin` initialization fails (bad credentials, wrong project), `db` is set to `null` and a warning is logged; subsequent calls are no-ops
+
+**Alert Flow Integration** (`src/controllers/webhooks/handlers/alert/alert.js`):
+```
+Webhook → validate → enrich → sendToAll → res.json() → saveAlert() [fire-and-forget]
+```
+Storage happens **after** the HTTP response; the caller is never blocked.
+
+**Where to look first when extending or debugging**:
+- `src/services/storage/AlertStorageService.js` — initialization, credential parsing, `saveAlert()` logic
+- `src/controllers/webhooks/handlers/alert/alert.js` — fire-and-forget call site (after `res.json()`)
+- Tests in `tests/unit/alert-storage-service.test.js`
+- Firebase Console → Firestore → `alerts` collection for live document inspection
 
 ## Terminology Guide: Grounding vs Enrichment
 
@@ -440,6 +487,7 @@ See `/specs/TERMINOLOGY_GUIDE.md` for extended discussion and examples.
 - 003-news-monitor (improvement with PR #18): Added `/api/news-monitor` endpoint for financial news analysis and sentiment-based alerts; Gemini GoogleSearch integration for market context; optional secondary LLM enrichment via Azure AI Inference (migrated to `@azure-rest/ai-inference`); in-memory deduplication cache; optional Binance price integration; parallel symbol analysis with timeout management; configurable event detection; URL shortening for WhatsApp citations.
 - 004-enrich-alert-output: Enriched `/api/webhook/alert` output with structured fields (sentiment, insights, technical levels) using the existing grounding pipeline; Telegram/WhatsApp formatters render structured enrichment when present.
 - 005-sentry-runtime-errors (PR #16): Added runtime error monitoring via `SentryService` + early initialization in `instrument.js`, plus Express error handler wiring; monitoring is gated by `ENABLE_SENTRY` + `SENTRY_DSN`.
+- 006-firestore-alert-storage: Added Cloud Firestore persistence for every `/api/webhook/alert` payload; `firebase-admin` singleton initialized from `FIREBASE_SERVICE_ACCOUNT_JSON` or `GOOGLE_APPLICATION_CREDENTIALS`; fire-and-forget after `res.json()` so storage never blocks delivery (fail-open).
 
 ## Pull Requests
 
@@ -616,6 +664,7 @@ ENABLE_NEWS_MONITOR (003)
 ENABLE_BINANCE_PRICE_CHECK (003)
 ENABLE_LLM_ALERT_ENRICHMENT (003)
 ENABLE_SENTRY (005)
+ENABLE_FIRESTORE_ALERT_STORAGE (006)
 ```
 
 **To add new feature**:

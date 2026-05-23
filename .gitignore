@@ -113,3 +113,7 @@ dist
 .pre-commit/
 .antigravitycli/d692de83-250d-4a99-9114-d5a414385673.json
 .DS_Store
+
+# Firebase Functions
+functions/node_modules/
+functions/.eslintcache
