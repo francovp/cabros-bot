@@ -2,7 +2,7 @@ const request = require('supertest');
 const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
 const { initializeNotificationServices } = require('../../src/controllers/webhooks/handlers/alert/alert');
-const { analyzeSymbols } = require('../../src/controllers/webhooks/handlers/tradingViewAlert/tradingViewAlert');
+const { analyzeSymbols } = require('../../src/controllers/webhooks/handlers/expandedAnalysisAlert/expandedAnalysisAlert');
 const { tradingViewMcpService } = require('../../src/services/tradingview/TradingViewMcpService');
 
 jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
@@ -11,7 +11,7 @@ jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
 	},
 }));
 
-describe('TradingView alert endpoint', () => {
+describe('Expanded Analysis Alert endpoint', () => {
 	const originalEnv = process.env;
 	let mockTelegramSendMessage;
 	let mockBot;
@@ -24,7 +24,7 @@ describe('TradingView alert endpoint', () => {
 			ENABLE_WHATSAPP_ALERTS: 'false',
 			BOT_TOKEN: 'test-bot-token',
 			TELEGRAM_CHAT_ID: '123456789',
-			TRADINGVIEW_ALERT_SYMBOLS: '',
+			EXPANDED_ANALYSIS_ALERT_SYMBOLS: '',
 			TRADINGVIEW_MCP_DEFAULT_TIMEFRAME: '1D',
 		};
 
@@ -49,7 +49,7 @@ describe('TradingView alert endpoint', () => {
 		}
 	});
 
-	it('generates a TradingView report, sends it, and returns delivery results', async () => {
+	it('generates an expanded analysis report, sends it, and returns delivery results', async () => {
 		tradingViewMcpService.analyzeSymbolIdentifier.mockResolvedValueOnce({
 			symbol: 'NASDAQ:NVDA',
 			price_data: {
@@ -67,7 +67,7 @@ describe('TradingView alert endpoint', () => {
 		});
 
 		const res = await request(app)
-			.post('/api/tradingview-alert')
+			.post('/api/webhook/expanded-analysis-alert')
 			.set('x-api-key', 'test-key')
 			.send({ symbols: ['NASDAQ:NVDA'], timeframe: '1D' })
 			.expect(200);
@@ -93,8 +93,8 @@ describe('TradingView alert endpoint', () => {
 		expect(mockTelegramSendMessage.mock.calls[0][1]).toContain('ANÁLISIS AMPLIADO');
 	});
 
-	it('returns 504 when the TradingView alert deadline expires before analysis completes', async () => {
-		process.env.TRADINGVIEW_ALERT_TIMEOUT_MS = '5';
+	it('returns 504 when the expanded analysis alert deadline expires before analysis completes', async () => {
+		process.env.EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS = '5';
 		tradingViewMcpService.analyzeSymbolIdentifier.mockImplementation(({ signal }) => {
 			if (!signal) {
 				return Promise.resolve({
@@ -111,14 +111,14 @@ describe('TradingView alert endpoint', () => {
 		});
 
 		const res = await request(app)
-			.post('/api/tradingview-alert')
+			.post('/api/webhook/expanded-analysis-alert')
 			.set('x-api-key', 'test-key')
 			.send({ symbols: ['NASDAQ:NVDA'], timeframe: '1D' })
 			.expect(504);
 
 		expect(res.body).toEqual(expect.objectContaining({
 			success: false,
-			code: 'TRADINGVIEW_ALERT_TIMEOUT',
+			code: 'EXPANDED_ANALYSIS_ALERT_TIMEOUT',
 			timedOut: true,
 			timeoutMs: 5,
 		}));
@@ -131,15 +131,15 @@ describe('TradingView alert endpoint', () => {
 		expect(mockTelegramSendMessage).not.toHaveBeenCalled();
 	});
 
-	it('falls back to TRADINGVIEW_ALERT_SYMBOLS when body symbols are empty', async () => {
-		process.env.TRADINGVIEW_ALERT_SYMBOLS = 'NASDAQ:AAPL';
+	it('falls back to EXPANDED_ANALYSIS_ALERT_SYMBOLS when body symbols are empty', async () => {
+		process.env.EXPANDED_ANALYSIS_ALERT_SYMBOLS = 'NASDAQ:AAPL';
 		tradingViewMcpService.analyzeSymbolIdentifier.mockResolvedValueOnce({
 			price_data: { current_price: 304.99, change_percent: 0.9 },
 			technical_indicators: { rsi: 76.2, sma20: 296.5, macd: 2.3, macd_signal: 1.1 },
 		});
 
 		const res = await request(app)
-			.post('/api/tradingview-alert')
+			.post('/api/webhook/expanded-analysis-alert')
 			.set('x-api-key', 'test-key')
 			.send({ symbols: [] })
 			.expect(200);
@@ -150,23 +150,23 @@ describe('TradingView alert endpoint', () => {
 		}));
 	});
 
-	it('returns 400 when neither body symbols nor TRADINGVIEW_ALERT_SYMBOLS are defined', async () => {
+	it('returns 400 when neither body symbols nor EXPANDED_ANALYSIS_ALERT_SYMBOLS are defined', async () => {
 		const res = await request(app)
-			.post('/api/tradingview-alert')
+			.post('/api/webhook/expanded-analysis-alert')
 			.set('x-api-key', 'test-key')
 			.send({})
 			.expect(400);
 
 		expect(res.body).toEqual(expect.objectContaining({
 			code: 'NO_SYMBOLS',
-			error: 'No TradingView symbols provided. Pass body.symbols or set TRADINGVIEW_ALERT_SYMBOLS.',
+			error: 'No expanded analysis symbols provided. Pass body.symbols or set EXPANDED_ANALYSIS_ALERT_SYMBOLS.',
 		}));
 		expect(mockTelegramSendMessage).not.toHaveBeenCalled();
 	});
 
 	it('returns 400 for invalid symbol identifiers', async () => {
 		const res = await request(app)
-			.post('/api/tradingview-alert')
+			.post('/api/webhook/expanded-analysis-alert')
 			.set('x-api-key', 'test-key')
 			.send({ symbols: ['NVDA'] })
 			.expect(400);
@@ -176,11 +176,24 @@ describe('TradingView alert endpoint', () => {
 		expect(mockTelegramSendMessage).not.toHaveBeenCalled();
 	});
 
+	it('does not mount the old endpoint path', async () => {
+		const removedEndpointPath = ['', 'api', ['tradingview', 'alert'].join('-')].join('/');
+
+		await request(app)
+			.post(removedEndpointPath)
+			.set('x-api-key', 'test-key')
+			.send({ symbols: ['NASDAQ:NVDA'], timeframe: '1D' })
+			.expect(404);
+
+		expect(tradingViewMcpService.analyzeSymbolIdentifier).not.toHaveBeenCalled();
+		expect(mockTelegramSendMessage).not.toHaveBeenCalled();
+	});
+
 	it('returns 502 and skips delivery when all symbols fail', async () => {
 		tradingViewMcpService.analyzeSymbolIdentifier.mockRejectedValueOnce(new Error('No data found'));
 
 		const res = await request(app)
-			.post('/api/tradingview-alert')
+			.post('/api/webhook/expanded-analysis-alert')
 			.set('x-api-key', 'test-key')
 			.send({ symbols: ['NASDAQ:UNKNOWN'] })
 			.expect(502);
@@ -235,8 +248,8 @@ describe('TradingView alert endpoint', () => {
 	it('stops analysis and marks remaining symbols as timeout when deadline is aborted', async () => {
 		const controller = new AbortController();
 		tradingViewMcpService.analyzeSymbolIdentifier.mockImplementationOnce(async () => {
-			controller.abort(new Error('TradingView alert analysis timeout after 60000ms'));
-			throw new Error('TradingView alert analysis timeout after 60000ms');
+			controller.abort(new Error('Expanded analysis alert timeout after 60000ms'));
+			throw new Error('Expanded analysis alert timeout after 60000ms');
 		});
 
 		const results = await analyzeSymbols({

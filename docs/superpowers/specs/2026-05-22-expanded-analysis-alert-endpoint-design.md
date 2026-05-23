@@ -1,8 +1,8 @@
-# TradingView Alert Endpoint Design
+# Expanded Analysis Alert Endpoint Design
 
 **Goal:** Add a POST endpoint that generates an expanded technical-analysis alert from TradingView MCP data, sends it through the existing notification channels, and returns delivery results.
 
-**Endpoint:** `POST /api/tradingview-alert`
+**Endpoint:** `POST /api/webhook/expanded-analysis-alert`
 
 **Request Body:**
 
@@ -15,7 +15,7 @@
 
 **Configuration:**
 
-- `TRADINGVIEW_ALERT_SYMBOLS`: comma-separated fallback symbol list, using `EXCHANGE:SYMBOL` entries.
+- `EXPANDED_ANALYSIS_ALERT_SYMBOLS`: comma-separated fallback symbol list, using `EXCHANGE:SYMBOL` entries.
 - `TRADINGVIEW_MCP_DEFAULT_TIMEFRAME`: fallback timeframe when the request omits `timeframe`; default `1D`.
 - `TRADINGVIEW_MCP_URL`: remote MCP endpoint; default `https://tradingview-mcp.onrender.com/mcp`.
 - `TRADINGVIEW_MCP_TIMEOUT_MS` and `TRADINGVIEW_MCP_MAX_RETRIES`: reuse existing MCP timeout/retry controls.
@@ -23,7 +23,7 @@
 **Validation:**
 
 - `symbols` must be an array of strings in `EXCHANGE:SYMBOL` form.
-- If body symbols are missing or empty, use `TRADINGVIEW_ALERT_SYMBOLS`.
+- If body symbols are missing or empty, use `EXPANDED_ANALYSIS_ALERT_SYMBOLS`.
 - If neither source provides symbols, return `400 NO_SYMBOLS`.
 - Symbols are passed to MCP as provided after splitting exchange and symbol. The endpoint does not add crypto quote suffixes.
 

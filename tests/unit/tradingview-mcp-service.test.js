@@ -165,8 +165,8 @@ describe('TradingViewMcpService', () => {
 			logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
 		});
 		service.callCoinAnalysis = jest.fn().mockImplementation(async () => {
-			controller.abort(new Error('TradingView alert analysis timeout after 60000ms'));
-			throw new Error('TradingView alert analysis timeout after 60000ms');
+			controller.abort(new Error('Expanded analysis alert timeout after 60000ms'));
+			throw new Error('Expanded analysis alert timeout after 60000ms');
 		});
 
 		await expect(service.analyzeSymbolIdentifier({

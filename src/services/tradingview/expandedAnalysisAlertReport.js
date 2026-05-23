@@ -24,29 +24,29 @@ const SUPPORTED_TIMEFRAME_ALIASES = new Set([
 	'1M',
 ]);
 
-class TradingViewAlertRequestError extends Error {
+class ExpandedAnalysisAlertRequestError extends Error {
 	constructor(message, code = 'INVALID_REQUEST') {
 		super(message);
-		this.name = 'TradingViewAlertRequestError';
+		this.name = 'ExpandedAnalysisAlertRequestError';
 		this.code = code;
 	}
 }
 
-function parseTradingViewAlertRequest(req = {}) {
+function parseExpandedAnalysisAlertRequest(req = {}) {
 	const body = req.body || {};
 	const rawSymbols = getRequestSymbols(body);
 	const symbols = rawSymbols.map(parseSymbolIdentifier);
 	const timeframe = parseTimeframe(body.timeframe);
 
 	if (symbols.length === 0) {
-		throw new TradingViewAlertRequestError(
-			'No TradingView symbols provided. Pass body.symbols or set TRADINGVIEW_ALERT_SYMBOLS.',
+		throw new ExpandedAnalysisAlertRequestError(
+			'No expanded analysis symbols provided. Pass body.symbols or set EXPANDED_ANALYSIS_ALERT_SYMBOLS.',
 			'NO_SYMBOLS',
 		);
 	}
 
 	if (symbols.length > MAX_SYMBOLS) {
-		throw new TradingViewAlertRequestError(`Too many symbols requested (max: ${MAX_SYMBOLS})`);
+		throw new ExpandedAnalysisAlertRequestError(`Too many symbols requested (max: ${MAX_SYMBOLS})`);
 	}
 
 	return { symbols, timeframe };
@@ -55,7 +55,7 @@ function parseTradingViewAlertRequest(req = {}) {
 function getRequestSymbols(body = {}) {
 	if (Object.prototype.hasOwnProperty.call(body, 'symbols')) {
 		if (!Array.isArray(body.symbols)) {
-			throw new TradingViewAlertRequestError('symbols must be an array of EXCHANGE:SYMBOL strings');
+			throw new ExpandedAnalysisAlertRequestError('symbols must be an array of EXCHANGE:SYMBOL strings');
 		}
 
 		const bodySymbols = body.symbols
@@ -67,7 +67,7 @@ function getRequestSymbols(body = {}) {
 		}
 	}
 
-	return (process.env.TRADINGVIEW_ALERT_SYMBOLS || '')
+	return (process.env.EXPANDED_ANALYSIS_ALERT_SYMBOLS || '')
 		.split(',')
 		.map((symbol) => symbol.trim())
 		.filter(Boolean);
@@ -75,13 +75,13 @@ function getRequestSymbols(body = {}) {
 
 function parseSymbolIdentifier(value) {
 	if (typeof value !== 'string') {
-		throw new TradingViewAlertRequestError('All symbols must be strings in EXCHANGE:SYMBOL format');
+		throw new ExpandedAnalysisAlertRequestError('All symbols must be strings in EXCHANGE:SYMBOL format');
 	}
 
 	const raw = value.trim().toUpperCase();
 	const match = raw.match(/^(?<exchange>[A-Z0-9_]+):(?<symbol>[A-Z0-9._-]{1,30})$/);
 	if (!match || !match.groups) {
-		throw new TradingViewAlertRequestError(`Symbol must use EXCHANGE:SYMBOL format: ${value}`);
+		throw new ExpandedAnalysisAlertRequestError(`Symbol must use EXCHANGE:SYMBOL format: ${value}`);
 	}
 
 	return {
@@ -98,13 +98,13 @@ function parseTimeframe(value) {
 	const normalizedToken = rawTimeframe.toUpperCase();
 
 	if (!SUPPORTED_MCP_TIMEFRAMES.has(rawTimeframe) && !SUPPORTED_TIMEFRAME_ALIASES.has(normalizedToken)) {
-		throw new TradingViewAlertRequestError(`Unsupported timeframe: ${rawTimeframe}`);
+		throw new ExpandedAnalysisAlertRequestError(`Unsupported timeframe: ${rawTimeframe}`);
 	}
 
 	return normalizeTradingViewTimeframe(rawTimeframe, '1D');
 }
 
-function buildTradingViewAlertReport(items = [], options = {}) {
+function buildExpandedAnalysisAlertReport(items = [], options = {}) {
 	const groups = {
 		extremeOversold: [],
 		oversold: [],
@@ -373,8 +373,8 @@ function numberOrNull(value) {
 }
 
 module.exports = {
-	TradingViewAlertRequestError,
-	parseTradingViewAlertRequest,
+	ExpandedAnalysisAlertRequestError,
+	parseExpandedAnalysisAlertRequest,
 	parseSymbolIdentifier,
-	buildTradingViewAlertReport,
+	buildExpandedAnalysisAlertReport,
 };

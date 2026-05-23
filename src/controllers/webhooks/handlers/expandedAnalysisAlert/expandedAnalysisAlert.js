@@ -3,10 +3,10 @@
 const { v4: uuidv4 } = require('uuid');
 const { tradingViewMcpService } = require('../../../../services/tradingview/TradingViewMcpService');
 const {
-	TradingViewAlertRequestError,
-	parseTradingViewAlertRequest,
-	buildTradingViewAlertReport,
-} = require('../../../../services/tradingview/tradingViewAlertReport');
+	ExpandedAnalysisAlertRequestError,
+	parseExpandedAnalysisAlertRequest,
+	buildExpandedAnalysisAlertReport,
+} = require('../../../../services/tradingview/expandedAnalysisAlertReport');
 const {
 	getNotificationManager,
 	initializeNotificationServices,
@@ -24,14 +24,14 @@ function resolveBot(botOrGetter) {
 	return botOrGetter || null;
 }
 
-function postTradingViewAlert(botOrGetter) {
+function postExpandedAnalysisAlert(botOrGetter) {
 	return async (req, res) => {
 		const requestId = uuidv4();
 		const startTime = Date.now();
 
 		try {
 			const requestSpan = sentryService.getActiveSpan();
-			const parsed = parseTradingViewAlertRequest(req);
+			const parsed = parseExpandedAnalysisAlertRequest(req);
 			const timeoutMs = getAlertTimeoutMs();
 			const deadline = createAlertDeadline(timeoutMs);
 			let results;
@@ -54,9 +54,9 @@ function postTradingViewAlert(botOrGetter) {
 				const timeoutError = timedOut;
 				return res.status(timeoutError ? 504 : 502).json({
 					success: false,
-					code: timeoutError ? 'TRADINGVIEW_ALERT_TIMEOUT' : 'ALL_SYMBOLS_FAILED',
+					code: timeoutError ? 'EXPANDED_ANALYSIS_ALERT_TIMEOUT' : 'ALL_SYMBOLS_FAILED',
 					error: timeoutError
-						? `TradingView alert analysis timed out after ${timeoutMs}ms.`
+						? `Expanded analysis alert timed out after ${timeoutMs}ms.`
 						: 'TradingView MCP failed for all requested symbols.',
 					results: compactResults(results),
 					summary: buildSummary(results, []),
@@ -67,7 +67,7 @@ function postTradingViewAlert(botOrGetter) {
 				});
 			}
 
-			const alertText = buildTradingViewAlertReport(analyzedItems);
+			const alertText = buildExpandedAnalysisAlertReport(analyzedItems);
 			let notificationManager = getNotificationManager();
 			if (!notificationManager) {
 				notificationManager = await initializeNotificationServices(resolveBot(botOrGetter));
@@ -88,7 +88,7 @@ function postTradingViewAlert(botOrGetter) {
 				totalDurationMs: Date.now() - startTime,
 			});
 		} catch (error) {
-			if (error instanceof TradingViewAlertRequestError) {
+			if (error instanceof ExpandedAnalysisAlertRequestError) {
 				return res.status(400).json({
 					error: error.message,
 					code: error.code,
@@ -96,12 +96,12 @@ function postTradingViewAlert(botOrGetter) {
 				});
 			}
 
-			console.error('[TradingViewAlert] Request failed:', error.message);
+			console.error('[ExpandedAnalysisAlert] Request failed:', error.message);
 			sentryService.captureRuntimeError({
 				channel: 'http-alert',
 				error,
 				http: {
-					endpoint: '/api/tradingview-alert',
+					endpoint: '/api/webhook/expanded-analysis-alert',
 					method: 'POST',
 					statusCode: 500,
 					requestId,
@@ -160,7 +160,7 @@ async function analyzeSymbols({ symbols, timeframe }, options = {}) {
 				break;
 			}
 
-			console.warn('[TradingViewAlert] Symbol analysis failed:', input.raw, error.message);
+			console.warn('[ExpandedAnalysisAlert] Symbol analysis failed:', input.raw, error.message);
 			results.push({
 				symbol: input.raw,
 				status: 'error',
@@ -213,7 +213,7 @@ function buildSummary(results, deliveryResults) {
 }
 
 function getAlertTimeoutMs() {
-	const parsedTimeout = parseInt(process.env.TRADINGVIEW_ALERT_TIMEOUT_MS || `${DEFAULT_ALERT_TIMEOUT_MS}`, 10);
+	const parsedTimeout = parseInt(process.env.EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS || `${DEFAULT_ALERT_TIMEOUT_MS}`, 10);
 
 	if (!Number.isFinite(parsedTimeout) || parsedTimeout <= 0) {
 		return DEFAULT_ALERT_TIMEOUT_MS;
@@ -225,7 +225,7 @@ function getAlertTimeoutMs() {
 function createAlertDeadline(timeoutMs) {
 	const controller = new AbortController();
 	const timeoutId = setTimeout(() => {
-		controller.abort(new Error(`TradingView alert analysis timeout after ${timeoutMs}ms`));
+		controller.abort(new Error(`Expanded analysis alert timeout after ${timeoutMs}ms`));
 	}, timeoutMs);
 
 	return {
@@ -257,7 +257,7 @@ function isAbortTriggered(signal, error) {
 	);
 }
 
-function getAbortMessage(signal, fallback = 'TradingView alert analysis timed out') {
+function getAbortMessage(signal, fallback = 'Expanded analysis alert timed out') {
 	const reason = signal && signal.reason;
 	if (reason instanceof Error && reason.message) {
 		return reason.message;
@@ -271,6 +271,6 @@ function getAbortMessage(signal, fallback = 'TradingView alert analysis timed ou
 }
 
 module.exports = {
-	postTradingViewAlert,
+	postExpandedAnalysisAlert,
 	analyzeSymbols,
 };

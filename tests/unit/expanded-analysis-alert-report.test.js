@@ -1,23 +1,23 @@
 const {
-	parseTradingViewAlertRequest,
-	buildTradingViewAlertReport,
-} = require('../../src/services/tradingview/tradingViewAlertReport');
+	parseExpandedAnalysisAlertRequest,
+	buildExpandedAnalysisAlertReport,
+} = require('../../src/services/tradingview/expandedAnalysisAlertReport');
 
-describe('TradingView alert report', () => {
+describe('Expanded Analysis Alert report', () => {
 	const originalEnv = process.env;
 
 	afterEach(() => {
 		process.env = originalEnv;
 	});
 
-	it('uses request body symbols before TRADINGVIEW_ALERT_SYMBOLS', () => {
+	it('uses request body symbols before EXPANDED_ANALYSIS_ALERT_SYMBOLS', () => {
 		process.env = {
 			...originalEnv,
-			TRADINGVIEW_ALERT_SYMBOLS: 'NASDAQ:MSFT',
+			EXPANDED_ANALYSIS_ALERT_SYMBOLS: 'NASDAQ:MSFT',
 			TRADINGVIEW_MCP_DEFAULT_TIMEFRAME: '4h',
 		};
 
-		const parsed = parseTradingViewAlertRequest({
+		const parsed = parseExpandedAnalysisAlertRequest({
 			body: {
 				symbols: [' BINANCE:BTCUSDT ', 'NASDAQ:NVDA'],
 				timeframe: '1D',
@@ -33,39 +33,39 @@ describe('TradingView alert report', () => {
 		});
 	});
 
-	it('falls back to TRADINGVIEW_ALERT_SYMBOLS and returns a clear error when none exist', () => {
+	it('falls back to EXPANDED_ANALYSIS_ALERT_SYMBOLS and returns a clear error when none exist', () => {
 		process.env = {
 			...originalEnv,
-			TRADINGVIEW_ALERT_SYMBOLS: 'NASDAQ:AAPL, BINANCE:ETHUSDC',
+			EXPANDED_ANALYSIS_ALERT_SYMBOLS: 'NASDAQ:AAPL, BINANCE:ETHUSDC',
 		};
 
-		expect(parseTradingViewAlertRequest({ body: {} }).symbols).toEqual([
+		expect(parseExpandedAnalysisAlertRequest({ body: {} }).symbols).toEqual([
 			{ raw: 'NASDAQ:AAPL', exchange: 'NASDAQ', symbol: 'AAPL' },
 			{ raw: 'BINANCE:ETHUSDC', exchange: 'BINANCE', symbol: 'ETHUSDC' },
 		]);
 
 		process.env = {
 			...originalEnv,
-			TRADINGVIEW_ALERT_SYMBOLS: '',
+			EXPANDED_ANALYSIS_ALERT_SYMBOLS: '',
 		};
 
-		expect(() => parseTradingViewAlertRequest({ body: {} })).toThrow('No TradingView symbols provided');
+		expect(() => parseExpandedAnalysisAlertRequest({ body: {} })).toThrow('No expanded analysis symbols provided');
 	});
 
 	it('rejects symbols that are not EXCHANGE:SYMBOL identifiers', () => {
-		expect(() => parseTradingViewAlertRequest({
+		expect(() => parseExpandedAnalysisAlertRequest({
 			body: { symbols: ['NVDA'], timeframe: '1D' },
 		})).toThrow('Symbol must use EXCHANGE:SYMBOL format: NVDA');
 	});
 
 	it('rejects unsupported timeframes instead of silently falling back', () => {
-		expect(() => parseTradingViewAlertRequest({
+		expect(() => parseExpandedAnalysisAlertRequest({
 			body: { symbols: ['NASDAQ:NVDA'], timeframe: '2h' },
 		})).toThrow('Unsupported timeframe: 2h');
 	});
 
 	it('builds a grouped Spanish markdown report from analyzed symbols', () => {
-		const report = buildTradingViewAlertReport([
+		const report = buildExpandedAnalysisAlertReport([
 			{
 				input: { raw: 'NASDAQ:NVDA', exchange: 'NASDAQ', symbol: 'NVDA' },
 				analysis: {
@@ -114,7 +114,7 @@ describe('TradingView alert report', () => {
 	});
 
 	it('formats the current MCP top-level indicator schema', () => {
-		const report = buildTradingViewAlertReport([
+		const report = buildExpandedAnalysisAlertReport([
 			{
 				input: { raw: 'NASDAQ:NVDA', exchange: 'NASDAQ', symbol: 'NVDA' },
 				analysis: {
