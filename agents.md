@@ -221,6 +221,36 @@ The system provides a `POST /api/webhook/expanded-analysis-alert` endpoint that 
 - If all requested symbols fail, the endpoint returns `502 ALL_SYMBOLS_FAILED` and does not send notifications.
 - The endpoint does not normalize crypto pairs; callers must pass full symbols such as `BINANCE:BTCUSDT`.
 
+## TradingView Market Scanner Alerts
+
+The system provides a `POST /api/webhook/market-scanner-alert` endpoint that runs multiple market scans (e.g. top gainers, top losers, volume breakout, smart volume, bollinger squeeze) on TradingView MCP server, generates a formatted Spanish market summary, and delivers it to all enabled notification channels.
+
+**Request pattern**:
+- Body is a JSON object with optional parameters:
+  - `exchange` — string (e.g. `BINANCE`, `NASDAQ`), defaults to `MARKET_SCANNER_DEFAULT_EXCHANGE` or `BINANCE`.
+  - `timeframe` — string (e.g. `1h`, `4h`, `1D`), defaults to `TRADINGVIEW_MCP_DEFAULT_TIMEFRAME` or `4h`.
+  - `scans` — array of scan types from `top_gainers`, `top_losers`, `volume_breakout_scanner`, `smart_volume_scanner`, `bollinger_scan`. Defaults to `['top_gainers', 'top_losers', 'volume_breakout_scanner']`.
+  - `limit` — integer limit of items per scan, clamped to `[1, 20]`, default 5.
+  - `bbw_threshold` — number representing Bollinger Band Width threshold for Bollinger squeeze scan, default 0.05.
+- The feature is gated by `ENABLE_MARKET_SCANNER=true`.
+- Endpoint-level deadline is controlled by `MARKET_SCANNER_TIMEOUT_MS` (default 90s, capped at 120s).
+
+**Core Components**:
+- `src/controllers/webhooks/handlers/marketScanner/marketScanner.js` — request handler, sequential scan executor, deadline manager, and notification dispatcher.
+- `src/services/tradingview/marketScannerReport.js` — request parsing and validation, section/item formatter, and report builder.
+- `src/services/tradingview/TradingViewMcpService.js` — uses `callScanTool` method to invoke scanner tools on the TradingView MCP server.
+
+**Failure behavior**:
+- Individual scanner tool failures are recorded with status `error` and included as warning lines in the output report.
+- Timeout-aborted scans are recorded as status `timeout`. If all scans fail or timeout, the endpoint returns 502/504 respectively.
+- Validation failures (e.g. invalid timeframe, bad scan types) return 400.
+
+**Where to look first when extending or debugging**:
+- `src/routes/index.js` for endpoint route definition.
+- `src/controllers/webhooks/handlers/marketScanner/marketScanner.js` for scan orchestration and deadline management.
+- `src/services/tradingview/marketScannerReport.js` for layout and item-specific formatters.
+- Tests in `tests/integration/market-scanner-endpoint.test.js` and `tests/unit/market-scanner-report.test.js` / `tests/unit/market-scanner.test.js`.
+
 ## Multi-Channel Notification Architecture (002-whatsapp-alerts)
 
 The alert delivery system now supports parallel delivery to multiple channels (Telegram, WhatsApp) without blocking. Key patterns:
