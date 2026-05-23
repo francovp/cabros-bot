@@ -119,6 +119,24 @@ class TradingViewMcpService {
 		};
 	}
 
+	async callMultiTimeframeAnalysis({ symbol, exchange, signal }) {
+		const rpcResult = await this._callTool('multi_timeframe_analysis', {
+			symbol,
+			exchange,
+		}, { signal });
+		const normalizedResult = this._unwrapSchemaResult(rpcResult);
+
+		if (normalizedResult && normalizedResult.error) {
+			throw new Error(normalizedResult.error);
+		}
+
+		if (!normalizedResult || typeof normalizedResult !== 'object' || Array.isArray(normalizedResult)) {
+			throw new Error('TradingView MCP multi_timeframe_analysis returned invalid payload');
+		}
+
+		return normalizedResult;
+	}
+
 	async callScanTool(toolName, args = {}, options = {}) {
 		const { signal } = options;
 		const cfg = this.getConfig();

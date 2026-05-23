@@ -8,6 +8,7 @@ const { tradingViewMcpService } = require('../../src/services/tradingview/Tradin
 jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
 	tradingViewMcpService: {
 		analyzeSymbolIdentifier: jest.fn(),
+		callMultiTimeframeAnalysis: jest.fn(),
 	},
 }));
 
@@ -334,5 +335,82 @@ describe('Expanded Analysis Alert endpoint', () => {
 			}),
 		]);
 		expect(tradingViewMcpService.analyzeSymbolIdentifier).toHaveBeenCalledTimes(1);
+	});
+
+	it('invokes callMultiTimeframeAnalysis, appends it to report, and returns success when includeMultiTimeframe is true', async () => {
+		tradingViewMcpService.analyzeSymbolIdentifier.mockResolvedValueOnce({
+			symbol: 'NASDAQ:NVDA',
+			price_data: { current_price: 219.51, change_percent: -1.8, volume: 70213090 },
+			technical_indicators: { rsi: 57.8, sma20: 214.1, macd: 6.1, macd_signal: 7.2 },
+		});
+
+		tradingViewMcpService.callMultiTimeframeAnalysis.mockResolvedValueOnce({
+			timeframes: {
+				'1W': { bias: 'Bullish', rsi: { value: 58.2 } },
+				'1D': { bias: 'Bearish', rsi: { value: 42.4 } },
+			},
+			alignment: { status: 'MIXED', confidence: 'Low' },
+			recommendation: { action: 'HOLD' },
+		});
+
+		const res = await request(app)
+			.post('/api/webhook/expanded-analysis-alert')
+			.set('x-api-key', 'test-key')
+			.send({ symbols: ['NASDAQ:NVDA'], timeframe: '1D', includeMultiTimeframe: true })
+			.expect(200);
+
+		expect(res.body.success).toBe(true);
+		expect(res.body.alertText).toContain('Alineación Multi-TF:');
+		expect(res.body.alertText).toContain('Semanal (1W): Alcista (RSI 58.2)');
+		expect(res.body.results[0]).toEqual(expect.objectContaining({
+			symbol: 'NASDAQ:NVDA',
+			status: 'analyzed',
+			multiTimeframe: 'success',
+		}));
+		expect(tradingViewMcpService.callMultiTimeframeAnalysis).toHaveBeenCalledWith(expect.objectContaining({
+			symbol: 'NVDA',
+			exchange: 'NASDAQ',
+		}));
+	});
+
+	it('fails open (returns base report) if callMultiTimeframeAnalysis fails when includeMultiTimeframe is true', async () => {
+		tradingViewMcpService.analyzeSymbolIdentifier.mockResolvedValueOnce({
+			symbol: 'NASDAQ:NVDA',
+			price_data: { current_price: 219.51, change_percent: -1.8, volume: 70213090 },
+			technical_indicators: { rsi: 57.8, sma20: 214.1, macd: 6.1, macd_signal: 7.2 },
+		});
+
+		tradingViewMcpService.callMultiTimeframeAnalysis.mockRejectedValueOnce(new Error('MCP Multi-TF error'));
+
+		const res = await request(app)
+			.post('/api/webhook/expanded-analysis-alert')
+			.set('x-api-key', 'test-key')
+			.send({ symbols: ['NASDAQ:NVDA'], timeframe: '1D', includeMultiTimeframe: true })
+			.expect(200);
+
+		expect(res.body.success).toBe(true);
+		expect(res.body.alertText).not.toContain('Alineación Multi-TF:');
+		expect(res.body.results[0]).toEqual(expect.objectContaining({
+			symbol: 'NASDAQ:NVDA',
+			status: 'analyzed',
+		}));
+		expect(res.body.results[0].multiTimeframe).toBeUndefined();
+	});
+
+	it('does not invoke callMultiTimeframeAnalysis if includeMultiTimeframe is omitted or false', async () => {
+		tradingViewMcpService.analyzeSymbolIdentifier.mockResolvedValueOnce({
+			symbol: 'NASDAQ:NVDA',
+			price_data: { current_price: 219.51, change_percent: -1.8, volume: 70213090 },
+			technical_indicators: { rsi: 57.8, sma20: 214.1, macd: 6.1, macd_signal: 7.2 },
+		});
+
+		const res = await request(app)
+			.post('/api/webhook/expanded-analysis-alert')
+			.set('x-api-key', 'test-key')
+			.send({ symbols: ['NASDAQ:NVDA'], timeframe: '1D', includeMultiTimeframe: false })
+			.expect(200);
+
+		expect(res.body.success).toBe(true);
+		expect(tradingViewMcpService.callMultiTimeframeAnalysis).not.toHaveBeenCalled();
 	});
 });

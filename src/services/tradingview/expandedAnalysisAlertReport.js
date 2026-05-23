@@ -38,6 +38,7 @@ function parseExpandedAnalysisAlertRequest(req = {}) {
 	const symbols = rawSymbols.map(parseSymbolIdentifier);
 	validateTimeframeType(body);
 	const timeframe = parseTimeframe(body.timeframe);
+	const includeMultiTimeframe = parseIncludeMultiTimeframe(body);
 
 	if (symbols.length === 0) {
 		throw new ExpandedAnalysisAlertRequestError(
@@ -50,7 +51,23 @@ function parseExpandedAnalysisAlertRequest(req = {}) {
 		throw new ExpandedAnalysisAlertRequestError(`Too many symbols requested (max: ${MAX_SYMBOLS})`);
 	}
 
-	return { symbols, timeframe };
+	return { symbols, timeframe, includeMultiTimeframe };
+}
+
+function parseIncludeMultiTimeframe(body = {}) {
+	const val = body.includeMultiTimeframe !== undefined ? body.includeMultiTimeframe : body.include_multi_timeframe;
+	if (val === undefined || val === null) {
+		return false;
+	}
+	if (typeof val !== 'boolean') {
+		if (typeof val === 'string') {
+			const lower = val.trim().toLowerCase();
+			if (lower === 'true') return true;
+			if (lower === 'false') return false;
+		}
+		throw new ExpandedAnalysisAlertRequestError('includeMultiTimeframe must be a boolean');
+	}
+	return val;
 }
 
 function getRequestBody(req = {}) {
@@ -160,7 +177,7 @@ function buildExpandedAnalysisAlertReport(items = [], options = {}) {
 	return lines.join('\n');
 }
 
-function buildReportRow({ input = {}, analysis = {} }) {
+function buildReportRow({ input = {}, analysis = {}, multiTimeframe }) {
 	const priceData = analysis.price_data || {};
 	const indicators = analysis.technical_indicators || {};
 	const bollinger = analysis.bollinger_analysis || {};
@@ -188,6 +205,7 @@ function buildReportRow({ input = {}, analysis = {} }) {
 		atr,
 		stopLoss,
 		suggestion: getSuggestion({ rsi, trend, macdDirection }),
+		multiTimeframe,
 	};
 }
 
@@ -205,12 +223,65 @@ function formatGroupRows(rows) {
 			`- *Sugerencia:* ${row.suggestion}`,
 		];
 
+		if (row.multiTimeframe) {
+			lines.push(formatMultiTimeframeSection(row.multiTimeframe));
+		}
+
 		if (index < rows.length - 1) {
 			lines.push('');
 		}
 
 		return lines;
 	});
+}
+
+function formatMultiTimeframeSection(mtf) {
+	const timeframes = mtf.timeframes || {};
+	const alignment = mtf.alignment || {};
+	const rec = mtf.recommendation || {};
+
+	const tfLines = [];
+	const tfOrder = ['1W', '1D', '4h', '1h', '15m'];
+	const tfNames = {
+		'1W': 'Semanal (1W)',
+		'1D': 'Diario (1D)',
+		'4h': '4H',
+		'1h': '1H',
+		'15m': '15M',
+	};
+
+	tfOrder.forEach((tf) => {
+		const data = timeframes[tf];
+		if (data) {
+			const bias = translateBias(data.bias);
+			const rsiVal = data.rsi?.value ?? data.rsi;
+			const rsiText = typeof rsiVal === 'number' ? ` (RSI ${rsiVal.toFixed(1)})` : '';
+			tfLines.push(`  • *${tfNames[tf]}:* ${bias}${rsiText}`);
+		}
+	});
+
+	return [
+		`- *Alineación Multi-TF:*`,
+		...tfLines,
+		`  • *Confluencia:* ${alignment.status || 'N/A'} (Confianza: ${alignment.confidence || 'N/A'})`,
+		`  • *Recomendación:* ${rec.action || 'N/A'}`,
+	].join('\n');
+}
+
+function translateBias(bias) {
+	if (!bias) {
+		return 'Neutral';
+	}
+
+	const lower = bias.toLowerCase().trim();
+	if (lower === 'bullish') {
+		return 'Alcista';
+	}
+	if (lower === 'bearish') {
+		return 'Bajista';
+	}
+
+	return bias;
 }
 
 function formatVolumeAtrLine(row) {

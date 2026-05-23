@@ -30,6 +30,7 @@ describe('Expanded Analysis Alert report', () => {
 				{ raw: 'NASDAQ:NVDA', exchange: 'NASDAQ', symbol: 'NVDA' },
 			],
 			timeframe: '1D',
+			includeMultiTimeframe: false,
 		});
 	});
 
@@ -165,5 +166,67 @@ describe('Expanded Analysis Alert report', () => {
 		expect(report).toContain('- *Tendencia (SMA20):* Alcista | *MACD:* Bearish');
 		expect(report).toContain('- *Volumen:* Normal');
 		expect(report).toContain('- *Stop Loss sugerido:* $194.22');
+	});
+
+	describe('includeMultiTimeframe updates', () => {
+		it('parses includeMultiTimeframe and include_multi_timeframe correctly', () => {
+			const parsed1 = parseExpandedAnalysisAlertRequest({
+				body: {
+					symbols: ['BINANCE:BTCUSDT'],
+					includeMultiTimeframe: true,
+				},
+			});
+			expect(parsed1.includeMultiTimeframe).toBe(true);
+
+			const parsed2 = parseExpandedAnalysisAlertRequest({
+				body: {
+					symbols: ['BINANCE:BTCUSDT'],
+					include_multi_timeframe: 'true',
+				},
+			});
+			expect(parsed2.includeMultiTimeframe).toBe(true);
+
+			const parsed3 = parseExpandedAnalysisAlertRequest({
+				body: {
+					symbols: ['BINANCE:BTCUSDT'],
+				},
+			});
+			expect(parsed3.includeMultiTimeframe).toBe(false);
+		});
+
+		it('throws request error if includeMultiTimeframe is not a boolean', () => {
+			expect(() => parseExpandedAnalysisAlertRequest({
+				body: {
+					symbols: ['BINANCE:BTCUSDT'],
+					includeMultiTimeframe: 'invalid',
+				},
+			})).toThrow('includeMultiTimeframe must be a boolean');
+		});
+
+		it('formats the report with multi-timeframe alignment correctly', () => {
+			const report = buildExpandedAnalysisAlertReport([
+				{
+					input: { raw: 'BINANCE:BTCUSDT', exchange: 'BINANCE', symbol: 'BTCUSDT' },
+					analysis: {
+						price_data: { current_price: 68000, change_percent: 1.5 },
+						technical_indicators: { rsi: 50 },
+					},
+					multiTimeframe: {
+						timeframes: {
+							'1W': { bias: 'Bullish', rsi: { value: 58.2 } },
+							'1D': { bias: 'Bearish', rsi: { value: 42.4 } },
+						},
+						alignment: { status: 'MIXED', confidence: 'Low' },
+						recommendation: { action: 'HOLD' },
+					},
+				},
+			], { now: new Date('2026-05-22T12:00:00Z') });
+
+			expect(report).toContain('- *Alineación Multi-TF:*');
+			expect(report).toContain('• *Semanal (1W):* Alcista (RSI 58.2)');
+			expect(report).toContain('• *Diario (1D):* Bajista (RSI 42.4)');
+			expect(report).toContain('• *Confluencia:* MIXED (Confianza: Low)');
+			expect(report).toContain('• *Recomendación:* HOLD');
+		});
 	});
 });
