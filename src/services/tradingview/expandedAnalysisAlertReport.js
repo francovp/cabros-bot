@@ -36,6 +36,7 @@ function parseExpandedAnalysisAlertRequest(req = {}) {
 	const body = req.body || {};
 	const rawSymbols = getRequestSymbols(body);
 	const symbols = rawSymbols.map(parseSymbolIdentifier);
+	validateTimeframeType(body);
 	const timeframe = parseTimeframe(body.timeframe);
 
 	if (symbols.length === 0) {
@@ -50,6 +51,16 @@ function parseExpandedAnalysisAlertRequest(req = {}) {
 	}
 
 	return { symbols, timeframe };
+}
+
+function validateTimeframeType(body = {}) {
+	if (
+		Object.prototype.hasOwnProperty.call(body, 'timeframe')
+		&& body.timeframe !== undefined
+		&& typeof body.timeframe !== 'string'
+	) {
+		throw new ExpandedAnalysisAlertRequestError('timeframe must be a string');
+	}
 }
 
 function getRequestSymbols(body = {}) {

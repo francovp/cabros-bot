@@ -64,6 +64,12 @@ describe('Expanded Analysis Alert report', () => {
 		})).toThrow('Unsupported timeframe: 2h');
 	});
 
+	it('rejects non-string timeframes instead of silently falling back', () => {
+		expect(() => parseExpandedAnalysisAlertRequest({
+			body: { symbols: ['NASDAQ:NVDA'], timeframe: 60 },
+		})).toThrow('timeframe must be a string');
+	});
+
 	it('builds a grouped Spanish markdown report from analyzed symbols', () => {
 		const report = buildExpandedAnalysisAlertReport([
 			{

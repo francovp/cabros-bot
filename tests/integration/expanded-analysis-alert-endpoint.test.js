@@ -176,6 +176,19 @@ describe('Expanded Analysis Alert endpoint', () => {
 		expect(mockTelegramSendMessage).not.toHaveBeenCalled();
 	});
 
+	it('returns 400 for non-string timeframes', async () => {
+		const res = await request(app)
+			.post('/api/webhook/expanded-analysis-alert')
+			.set('x-api-key', 'test-key')
+			.send({ symbols: ['NASDAQ:NVDA'], timeframe: 60 })
+			.expect(400);
+
+		expect(res.body.code).toBe('INVALID_REQUEST');
+		expect(res.body.error).toBe('timeframe must be a string');
+		expect(tradingViewMcpService.analyzeSymbolIdentifier).not.toHaveBeenCalled();
+		expect(mockTelegramSendMessage).not.toHaveBeenCalled();
+	});
+
 	it('does not mount the old endpoint path', async () => {
 		const removedEndpointPath = ['', 'api', ['tradingview', 'alert'].join('-')].join('/');
 
