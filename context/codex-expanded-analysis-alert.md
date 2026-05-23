@@ -11,6 +11,7 @@ Adds an Expanded Analysis Alert endpoint backed by TradingView MCP that accepts 
 - Added `POST /api/webhook/expanded-analysis-alert` behind the existing API-key middleware.
 - Parses request body `symbols` first, then falls back to `EXPANDED_ANALYSIS_ALERT_SYMBOLS`.
 - Returns `400 NO_SYMBOLS` when neither source provides symbols.
+- Returns `400 INVALID_REQUEST` for non-object request bodies, preventing `text/plain` or malformed payloads from triggering env fallback analysis and outbound notifications.
 - Returns `400 INVALID_REQUEST` when clients provide a non-string `timeframe` instead of silently falling back to the default interval.
 - Applies `EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS` as a total analysis deadline with a 60 second default and 120 second cap.
 - Returns `504 EXPANDED_ANALYSIS_ALERT_TIMEOUT` when the deadline expires before any symbol can be analyzed.
@@ -22,6 +23,7 @@ Adds an Expanded Analysis Alert endpoint backed by TradingView MCP that accepts 
 - Groups symbols by RSI into extreme oversold, oversold, neutral, and overbought sections.
 - Formats price, percent change, RSI, SMA20 trend, MACD direction, volume, optional ATR, suggested stop loss, and action suggestion.
 - Keeps crypto symbols strict: callers must pass full pairs such as `BINANCE:BTCUSDT`.
+- Large reports are guarded for Telegram delivery by splitting formatted Telegram messages into sequential chunks below the message-size cap.
 
 ### :satellite: MCP integration
 
@@ -45,6 +47,10 @@ Coordinates request parsing, sequential MCP analysis, deadline handling, report 
 
 Extends the shared retry helper with optional `AbortSignal` support so long retry chains can be cancelled without affecting existing callers.
 
+#### `src/services/notification/TelegramService.js`
+
+Splits long formatted Telegram messages into ordered chunks so large expanded analysis reports do not fail Telegram delivery when they exceed a single `sendMessage` payload limit.
+
 #### `src/services/tradingview/expandedAnalysisAlertReport.js`
 
 Owns validation and formatting for the report endpoint, including timeframe validation and grouped Markdown generation.
@@ -66,6 +72,7 @@ tests/integration/
 tests/unit/
 ├── retry-helper.test.js
 ├── expanded-analysis-alert-report.test.js
+├── telegram-service.test.js
 └── tradingview-mcp-service.test.js
 ```
 
@@ -73,15 +80,16 @@ tests/unit/
 
 ### Test Suite
 
-- **13 Unit Tests**
-- **9 Integration Tests**
+- **15 Unit Tests**
+- **11 Integration Tests**
 
 ### Test Coverage
 
 - Request body symbols take precedence over `EXPANDED_ANALYSIS_ALERT_SYMBOLS`.
 - Env fallback behavior and `400 NO_SYMBOLS`.
-- Invalid `EXCHANGE:SYMBOL`, unsupported timeframe, and non-string timeframe validation.
+- Invalid `EXCHANGE:SYMBOL`, unsupported timeframe, non-string timeframe, and non-object body validation.
 - Report grouping and Spanish Markdown formatting.
+- Telegram chunking for long formatted report delivery.
 - Current MCP schema mapping for RSI, SMA20 trend, MACD, volume, and stop loss.
 - Sequential symbol analysis to avoid concurrent MCP failures.
 - Endpoint deadline response with `504 EXPANDED_ANALYSIS_ALERT_TIMEOUT`.
@@ -96,6 +104,7 @@ tests/unit/
 - `tests/unit/expanded-analysis-alert-report.test.js`: parser and formatter coverage.
 - `tests/unit/tradingview-mcp-service.test.js`: retry and abort behavior for report symbol analysis.
 - `tests/unit/retry-helper.test.js`: abort-aware retry behavior.
+- `tests/unit/telegram-service.test.js`: Telegram message chunking coverage.
 - `tests/integration/expanded-analysis-alert-endpoint.test.js`: endpoint behavior, timeout handling, and notification dispatch coverage.
 
 ## Configuration Updates
@@ -123,6 +132,7 @@ TRADINGVIEW_MCP_DEFAULT_TIMEFRAME=1D
 - [x] `pnpm test -- tests/unit/tradingview-mcp-service.test.js tests/unit/expanded-analysis-alert-report.test.js tests/integration/expanded-analysis-alert-endpoint.test.js --testTimeout=10000`
 - [x] `pnpm test -- tests/unit/expanded-analysis-alert-report.test.js tests/unit/tradingview-mcp-service.test.js tests/integration/expanded-analysis-alert-endpoint.test.js --testTimeout=10000`
 - [x] `pnpm test -- tests/unit/expanded-analysis-alert-report.test.js tests/integration/expanded-analysis-alert-endpoint.test.js --testTimeout=10000`
+- [x] `pnpm test -- tests/unit/expanded-analysis-alert-report.test.js tests/integration/expanded-analysis-alert-endpoint.test.js tests/unit/telegram-service.test.js --testTimeout=10000`
 - [x] `pnpm test -- tests/unit/retry-helper.test.js tests/unit/tradingview-mcp-service.test.js tests/integration/expanded-analysis-alert-endpoint.test.js --testTimeout=10000`
 - [x] Live MCP smoke: new route completed a 2-symbol request with status 200 in about 54 seconds.
 - [x] Live timeout smoke: forced 1ms deadline returned `504 EXPANDED_ANALYSIS_ALERT_TIMEOUT` in about 33ms.
