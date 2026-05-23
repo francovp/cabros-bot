@@ -11,6 +11,7 @@ Adds an Expanded Analysis Alert endpoint backed by TradingView MCP that accepts 
 - Added `POST /api/webhook/expanded-analysis-alert` behind the existing API-key middleware.
 - Parses request body `symbols` first, then falls back to `EXPANDED_ANALYSIS_ALERT_SYMBOLS`.
 - Returns `400 NO_SYMBOLS` when neither source provides symbols.
+- Returns `400 INVALID_REQUEST` when clients provide a non-string `timeframe` instead of silently falling back to the default interval.
 - Applies `EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS` as a total analysis deadline with a 60 second default and 120 second cap.
 - Returns `504 EXPANDED_ANALYSIS_ALERT_TIMEOUT` when the deadline expires before any symbol can be analyzed.
 - Returns `502 ALL_SYMBOLS_FAILED` when every MCP analysis call fails and skips notification delivery.
@@ -79,7 +80,7 @@ tests/unit/
 
 - Request body symbols take precedence over `EXPANDED_ANALYSIS_ALERT_SYMBOLS`.
 - Env fallback behavior and `400 NO_SYMBOLS`.
-- Invalid `EXCHANGE:SYMBOL` and unsupported timeframe validation.
+- Invalid `EXCHANGE:SYMBOL`, unsupported timeframe, and non-string timeframe validation.
 - Report grouping and Spanish Markdown formatting.
 - Current MCP schema mapping for RSI, SMA20 trend, MACD, volume, and stop loss.
 - Sequential symbol analysis to avoid concurrent MCP failures.
@@ -121,6 +122,7 @@ TRADINGVIEW_MCP_DEFAULT_TIMEFRAME=1D
 - [x] `pnpm test -- tests/unit/expanded-analysis-alert-report.test.js tests/integration/expanded-analysis-alert-endpoint.test.js --testTimeout=5000`
 - [x] `pnpm test -- tests/unit/tradingview-mcp-service.test.js tests/unit/expanded-analysis-alert-report.test.js tests/integration/expanded-analysis-alert-endpoint.test.js --testTimeout=10000`
 - [x] `pnpm test -- tests/unit/expanded-analysis-alert-report.test.js tests/unit/tradingview-mcp-service.test.js tests/integration/expanded-analysis-alert-endpoint.test.js --testTimeout=10000`
+- [x] `pnpm test -- tests/unit/expanded-analysis-alert-report.test.js tests/integration/expanded-analysis-alert-endpoint.test.js --testTimeout=10000`
 - [x] `pnpm test -- tests/unit/retry-helper.test.js tests/unit/tradingview-mcp-service.test.js tests/integration/expanded-analysis-alert-endpoint.test.js --testTimeout=10000`
 - [x] Live MCP smoke: new route completed a 2-symbol request with status 200 in about 54 seconds.
 - [x] Live timeout smoke: forced 1ms deadline returned `504 EXPANDED_ANALYSIS_ALERT_TIMEOUT` in about 33ms.
