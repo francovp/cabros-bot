@@ -69,6 +69,7 @@ What an AI code change should preserve
 7. **Update environment variables** section if adding new config
 8. **Update .github/copilot-instructions.md** with new patterns/context
 9. **Final full test run** before completion to ensure no regressions
+10. **Archive Antigravity session artifacts**: MUST always copy all markdown artifacts (`implementation_plan.md`, `task.md`, `walkthrough.md`) from the agent's local `<appDataDir>/brain/<conversation-id>/` directory to the repository under `docs/antigravity/<conversation-id>/` before finishing.
 
 **Linting and Commits During Implementation**:
 - **Ignore linter issues during implementation**: Focus on feature functionality first; linter errors will be fixed in a dedicated final pass
