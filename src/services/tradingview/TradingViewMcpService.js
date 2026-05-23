@@ -119,6 +119,51 @@ class TradingViewMcpService {
 		};
 	}
 
+	async callScanTool(toolName, args = {}, options = {}) {
+		const { signal } = options;
+		const cfg = this.getConfig();
+
+		const result = await sendWithRetry(async () => {
+			try {
+				const rpcResult = await this._callTool(toolName, args, { signal });
+				return { success: true, channel: 'tradingview-mcp', data: rpcResult };
+			} catch (error) {
+				return { success: false, channel: 'tradingview-mcp', error: error.message };
+			}
+		}, cfg.maxRetries, this.logger, { signal });
+
+		if (!result.success) {
+			throw new Error(`TradingView MCP scan ${toolName} failed: ${result.error || 'unknown error'}`);
+		}
+
+		return this._normalizeScanResult(result.data);
+	}
+
+	_normalizeScanResult(data) {
+		if (Array.isArray(data)) {
+			return data;
+		}
+
+		if (data && typeof data === 'object' && Array.isArray(data.result)) {
+			return data.result;
+		}
+
+		if (data && typeof data === 'object' && !Array.isArray(data)) {
+			const unwrapped = this._unwrapSchemaResult(data);
+			if (Array.isArray(unwrapped)) {
+				return unwrapped;
+			}
+
+			if (unwrapped && typeof unwrapped === 'object' && Array.isArray(unwrapped.result)) {
+				return unwrapped.result;
+			}
+
+			return [unwrapped];
+		}
+
+		return [];
+	}
+
 	async _callTool(toolName, args = {}, options = {}) {
 		const { signal } = options;
 		const initializeRequest = {

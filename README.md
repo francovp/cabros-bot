@@ -102,6 +102,12 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 - `SENTRY_CONSOLE_LOG_LEVELS` - Comma-separated console levels sent as Sentry Logs (default: `warn,error`; allowed: `debug`, `info`, `warn`, `error`, `log`, `assert`, `trace`)
 - Sentry Logs are enabled automatically when `ENABLE_SENTRY=true`; configured console levels are sent as Sentry Logs.
 
+#### TradingView Market Scanner Alerts
+
+- `ENABLE_MARKET_SCANNER` - Enable market scanner endpoint (`true` or `false`, default: `false`)
+- `MARKET_SCANNER_DEFAULT_EXCHANGE` - Default exchange when not provided in request (default: `BINANCE`)
+- `MARKET_SCANNER_TIMEOUT_MS` - Timeout in milliseconds for scanner webhook process (default: `90000`, max `120000`)
+
 ## Setup
 
 ### 1. Install Dependencies
@@ -406,6 +412,67 @@ The endpoint stops analysis at `EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS` (default 60 
   },
   "requestId": "req-abc123",
   "totalDurationMs": 1200
+}
+```
+
+### POST /api/webhook/market-scanner-alert
+
+Execute multiple market scanner tools on the TradingView MCP server (such as top gainers, top losers, volume breakout, smart volume, or Bollinger squeeze), generate a formatted technical summary report in Spanish, and send it through all enabled notification channels.
+
+**Request (JSON):**
+```json
+{
+  "exchange": "BINANCE",
+  "timeframe": "4h",
+  "scans": [
+    "top_gainers",
+    "top_losers",
+    "volume_breakout_scanner",
+    "smart_volume_scanner",
+    "bollinger_scan"
+  ],
+  "limit": 5,
+  "bbw_threshold": 0.05
+}
+```
+
+- `exchange`: (Optional) The exchange identifier to run scans against. Defaults to `MARKET_SCANNER_DEFAULT_EXCHANGE` or `BINANCE`.
+- `timeframe`: (Optional) Interval for indicators (e.g. `5m`, `15m`, `1h`, `4h`, `1D`, `1W`, `1M`). Defaults to `TRADINGVIEW_MCP_DEFAULT_TIMEFRAME` or `4h`.
+- `scans`: (Optional) Array of scan types to execute sequentially. Defaults to `['top_gainers', 'top_losers', 'volume_breakout_scanner']`.
+- `limit`: (Optional) Max number of results per section (clamped to `[1, 20]`, default: `5`).
+- `bbw_threshold`: (Optional) Bollinger Band Width threshold for the Bollinger squeeze scan (default: `0.05`).
+
+**Response (JSON):**
+```json
+{
+  "success": true,
+  "alertText": "📡 *SCANNER DE MERCADO — Saturday 23/05/2026*\n...",
+  "scanResults": [
+    {
+      "scan": "top_gainers",
+      "status": "success",
+      "itemCount": 1
+    }
+  ],
+  "deliveryResults": [
+    {
+      "channel": "telegram",
+      "success": true,
+      "messageId": "123456"
+    }
+  ],
+  "summary": {
+    "totalScans": 1,
+    "success": 1,
+    "error": 0,
+    "timeout": 0,
+    "totalItems": 1,
+    "delivered": 1
+  },
+  "timedOut": false,
+  "timeoutMs": 90000,
+  "requestId": "req-xyz789",
+  "totalDurationMs": 1450
 }
 ```
 
