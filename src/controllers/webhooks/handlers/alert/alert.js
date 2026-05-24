@@ -8,6 +8,7 @@ const NotificationManager = require('../../../../services/notification/Notificat
 const { getURLShortener } = require('../../handlers/newsMonitor/urlShortener');
 const sentryService = require('../../../../services/monitoring/SentryService');
 const { TokenUsageTracker } = require('../../../../lib/tokenUsage');
+const alertStorageService = require('../../../../services/storage/AlertStorageService');
 
 // Initialize services
 let notificationManager = null;
@@ -133,6 +134,17 @@ function postAlert(botOrGetter) {
 			const tokenUsageJSON = tokenUsage.toJSON();
 			tokenUsageJSON.formattedSummary = tokenUsage.formatSummary();
 			res.json({ success: true, results, enriched, tokenUsage: tokenUsageJSON });
+
+			// Fire-and-forget: persist alert to Firestore after responding to the caller.
+			// Errors are caught inside saveAlert — delivery is never blocked by storage.
+			alertStorageService.saveAlert({
+				text: alert.text,
+				enriched,
+				enrichmentData: alert.enriched || null,
+				tokenUsage: tokenUsageJSON,
+				deliveryResults: results,
+				useTradingViewData,
+			}).catch(() => {}); // errors already logged inside AlertStorageService
 		} catch (error) {
 			console.error('[Alert] Request failed:', error.message);
 
