@@ -10,7 +10,7 @@ module.exports = {
 	setupFilesAfterEnv: ['./tests/setup.js'],
 	testTimeout: 25000,
 	modulePaths: [
-		'/Users/fgvaleriop/repositorios/cabros-crypto-bot-telegram/node_modules'
+		'./node_modules',
 	],
 	// pnpm worktree: firebase-admin lives in the parent repo's node_modules.
 	// Map it to a local manual mock so tests can run without installing dependencies.
