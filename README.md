@@ -516,6 +516,116 @@ BTC price is at $45,000 - breakout detected!
 }
 ```
 
+### Asynchronous Jobs API
+
+To run long-running technical analysis or market scans without hitting HTTP request limits or gateway timeouts (502/504), you can use the asynchronous jobs API. Both endpoints require the `x-api-key` header to be configured.
+
+#### POST /api/jobs/tradingview-analysis
+
+Start a background analysis or scanner job.
+
+**Request (JSON - Expanded Analysis):**
+```json
+{
+  "type": "expanded-analysis",
+  "symbols": ["BINANCE:BTCUSDT"],
+  "timeframe": "1D",
+  "includeMultiTimeframe": true
+}
+```
+
+**Request (JSON - Market Scanner):**
+```json
+{
+  "type": "market-scanner",
+  "exchange": "BINANCE",
+  "timeframe": "4h",
+  "scans": ["top_gainers", "top_losers"],
+  "limit": 5
+}
+```
+
+**Response (201 Created):**
+```json
+{
+  "success": true,
+  "jobId": "8f8ef192-349f-4318-8547-0e6d628bf739",
+  "status": "processing",
+  "createdAt": "2026-05-25T01:30:00.000Z"
+}
+```
+
+#### GET /api/jobs/:jobId
+
+Retrieve status, partial progress, final report, and delivery state of a job.
+Jobs are retained in memory and automatically evicted after 1 hour.
+
+**Response (200 OK - Processing):**
+```json
+{
+  "success": true,
+  "jobId": "8f8ef192-349f-4318-8547-0e6d628bf739",
+  "type": "expanded-analysis",
+  "status": "processing",
+  "progress": {
+    "total": 2,
+    "current": 1,
+    "status": "Analyzing symbol BINANCE:BTCUSDT (1/2)"
+  },
+  "results": [
+    {
+      "symbol": "BINANCE:BTCUSDT",
+      "status": "analyzed",
+      "price": 65430,
+      "rsi": 43.5
+    }
+  ],
+  "createdAt": "2026-05-25T01:30:00.000Z",
+  "updatedAt": "2026-05-25T01:30:05.000Z",
+  "totalDurationMs": 5123
+}
+```
+
+**Response (200 OK - Completed):**
+```json
+{
+  "success": true,
+  "jobId": "8f8ef192-349f-4318-8547-0e6d628bf739",
+  "type": "expanded-analysis",
+  "status": "completed",
+  "progress": {
+    "total": 1,
+    "current": 1,
+    "status": "Completed analysis"
+  },
+  "results": [
+    {
+      "symbol": "BINANCE:BTCUSDT",
+      "status": "analyzed",
+      "price": 65430,
+      "rsi": 43.5
+    }
+  ],
+  "alertText": "📊 *ANÁLISIS AMPLIADO — Monday 25/05/2026*...",
+  "deliveryResults": [
+    {
+      "channel": "telegram",
+      "success": true,
+      "messageId": "987654"
+    }
+  ],
+  "summary": {
+    "total": 1,
+    "analyzed": 1,
+    "error": 0,
+    "delivered": 1
+  },
+  "createdAt": "2026-05-25T01:30:00.000Z",
+  "updatedAt": "2026-05-25T01:30:12.000Z",
+  "totalDurationMs": 12053
+}
+```
+
 ## Multi-Channel Alerts (002)
 
 The alert webhook system supports simultaneous delivery to multiple channels (Telegram and WhatsApp) with independent retry logic and graceful degradation.
