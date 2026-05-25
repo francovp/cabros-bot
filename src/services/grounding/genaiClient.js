@@ -287,6 +287,7 @@ class GenaiClient {
 				// Previous calls were like: prompt = `${systemPrompt}\n\n${userPrompt}`.
 				const startTime = Date.now();
 				const combinedPrompt = `${systemPrompt}\n\n${userPrompt}`;
+				const modelUsed = opts.model || GEMINI_MODEL_NAME || GEMINI_MODEL_NAME_FALLBACK;
 				console.debug('[GenaiClient] Attempting Gemini LLM call');
 				const response = await this.llmCall({
 					prompt: combinedPrompt,
@@ -294,11 +295,16 @@ class GenaiClient {
 					opts,
 				});
 				const durationMs = Date.now() - startTime;
-				sentryService.captureLlmMetric({ model: response.modelUsed, inputTokens: response.usage?.inputTokens || 0, outputTokens: response.usage?.outputTokens || 0, durationMs });
+				sentryService.captureLlmMetric({
+					model: modelUsed,
+					inputTokens: response.usage?.inputTokens || 0,
+					outputTokens: response.usage?.outputTokens || 0,
+					durationMs,
+				});
 
 				return {
 					...response,
-					modelUsed: opts.model || GEMINI_MODEL_NAME || GEMINI_MODEL_NAME_FALLBACK,
+					modelUsed,
 				};
 			} catch (error) {
 				console.warn('[GenaiClient] Gemini call failed, attempting failover:', error.message);

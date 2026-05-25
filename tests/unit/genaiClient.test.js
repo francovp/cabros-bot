@@ -14,6 +14,7 @@ jest.mock('../../src/services/grounding/config', () => ({
 }));
 
 const genaiClient = require('../../src/services/grounding/genaiClient');
+const sentryService = require('../../src/services/monitoring/SentryService');
 
 // Mock fetch globally
 global.fetch = jest.fn();
@@ -183,6 +184,34 @@ describe('GenaiClient robustness', () => {
 			const out = await genaiClient.llmCall({ prompt: 'p' });
 			expect(out.text).toBe('');
 			expect(out.citations).toEqual([]);
+		});
+	});
+
+	describe('llmCallv2 metrics', () => {
+		it('captures Gemini metrics with the resolved model name', async () => {
+			const captureSpy = jest.spyOn(sentryService, 'captureLlmMetric').mockImplementation(() => {});
+			genaiClient.llmCall = jest.fn().mockResolvedValue({
+				text: 'llm response',
+				citations: [],
+				usage: {
+					inputTokens: 12,
+					outputTokens: 34,
+				},
+			});
+
+			const out = await genaiClient.llmCallv2({
+				systemPrompt: 'system',
+				userPrompt: 'user',
+			});
+
+			expect(out.modelUsed).toBe('test-gemini-model');
+			expect(captureSpy).toHaveBeenCalledWith(expect.objectContaining({
+				model: 'test-gemini-model',
+				inputTokens: 12,
+				outputTokens: 34,
+				durationMs: expect.any(Number),
+			}));
+			captureSpy.mockRestore();
 		});
 	});
 });
