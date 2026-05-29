@@ -16,8 +16,8 @@ function getRoutes(botOrGetter) {
 	router.post('/news-monitor', validateApiKey, newsMonitor.handleRequest.bind(newsMonitor));
 	router.get('/news-monitor', validateApiKey, newsMonitor.handleRequest.bind(newsMonitor));
 
-	router.get('/status', getApiStatus);
-	router.get('/capabilities', getApiStatus);
+	router.get('/status', validateApiKey, getApiStatus);
+	router.get('/capabilities', validateApiKey, getApiStatus);
 
 	return router;
 }

@@ -11,6 +11,7 @@ describe('Status endpoints', () => {
 		app.use(express.json());
 		app.use('/api', getRoutes(() => null));
 
+		process.env.WEBHOOK_API_KEY = 'status-key';
 		process.env.SERVICE_NAME = 'cabros-bot-test';
 		process.env.RENDER_GIT_COMMIT = 'abcdef1234567890';
 		process.env.NODE_ENV = 'test';
@@ -24,7 +25,7 @@ describe('Status endpoints', () => {
 		process.env.ENABLE_GEMINI_GROUNDING = 'true';
 		process.env.GEMINI_API_KEY = 'gemini-key';
 		process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT = 'true';
-		process.env.TRADINGVIEW_MCP_URL = 'https://tradingview-mcp.example/mcp';
+		delete process.env.TRADINGVIEW_MCP_URL;
 		process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 		process.env.FIREBASE_SERVICE_ACCOUNT_JSON = '{"project_id":"x"}';
 		process.env.ENABLE_SENTRY = 'true';
@@ -40,20 +41,47 @@ describe('Status endpoints', () => {
 		Object.assign(process.env, originalEnv);
 	});
 
-	it('returns machine-readable status on /api/status', async () => {
+	it('requires a valid API key when WEBHOOK_API_KEY is configured', async () => {
 		const response = await request(app).get('/api/status');
 
+		expect(response.status).toBe(401);
+		expect(response.body.error).toBe('Unauthorized: Missing API key');
+	});
+
+	it('returns machine-readable status on /api/status', async () => {
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
 		expect(response.status).toBe(200);
-		expect(response.body.service.name).toBe('cabros-bot-test');
-		expect(response.body.service.commit).toBe('abcdef1234567890');
+		expect(response.body.service).toEqual({
+			name: 'cabros-bot-test',
+			version: expect.any(String),
+			commit: 'abcdef1234567890',
+			environment: 'test',
+		});
+		expect(response.body.service).not.toHaveProperty('timestamp');
 		expect(response.body.featureFlags.telegramBot).toBe(true);
-		expect(response.body.deliveryChannels.telegram.configured).toBe(true);
-		expect(response.body.dependencies.gemini.configured).toBe(true);
-		expect(response.body.dependencies.sentry.configured).toBe(true);
+		expect(response.body.deliveryChannels.telegram).toEqual({ enabled: true, status: 'ready' });
+		expect(response.body.dependencies.gemini).toEqual({
+			enabled: true,
+			configured: true,
+			ready: true,
+			status: 'ready',
+		});
+		expect(response.body.dependencies.tradingViewMcp).toEqual({
+			enabled: true,
+			configured: true,
+			ready: true,
+			status: 'ready',
+		});
+		expect(response.body.dependencies.sentry.status).toBe('ready');
 	});
 
 	it('aliases /api/capabilities to the same payload shape', async () => {
-		const response = await request(app).get('/api/capabilities');
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
 
 		expect(response.status).toBe(200);
 		expect(response.body).toHaveProperty('service');
@@ -67,11 +95,46 @@ describe('Status endpoints', () => {
 		process.env.ENABLE_WHATSAPP_ALERTS = 'false';
 		process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT = 'false';
 
-		const response = await request(app).get('/api/status');
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
 
 		expect(response.status).toBe(200);
-		expect(response.body.dependencies.whatsapp.enabled).toBe(false);
-		expect(response.body.dependencies.whatsapp.configured).toBe(false);
-		expect(response.body.dependencies.tradingViewMcp.enabled).toBe(false);
+		expect(response.body.dependencies.whatsapp).toEqual({
+			enabled: false,
+			configured: false,
+			ready: false,
+			status: 'disabled',
+		});
+		expect(response.body.dependencies.tradingViewMcp.status).toBe('disabled');
+	});
+
+	it('does not leak configured secret values', async () => {
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+		const serializedBody = JSON.stringify(response.body);
+
+		expect(serializedBody).not.toContain('token');
+		expect(serializedBody).not.toContain('key');
+		expect(serializedBody).not.toContain('gemini-key');
+		expect(serializedBody).not.toContain('https://dsn.example');
+		expect(serializedBody).not.toContain('https://greenapi.example/');
+	});
+
+	it('reports preview-disabled Telegram delivery separately from the feature flag', async () => {
+		process.env.RENDER = 'true';
+		process.env.IS_PULL_REQUEST = 'true';
+		process.env.NODE_ENV = 'production';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.service.environment).toBe('preview');
+		expect(response.body.featureFlags.telegramBot).toBe(true);
+		expect(response.body.deliveryChannels.telegram).toEqual({ enabled: false, status: 'disabled' });
+		expect(response.body.dependencies.telegram.ready).toBe(false);
 	});
 });

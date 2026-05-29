@@ -153,13 +153,59 @@ pnpm start
 
 ## API Endpoints
 
-### POST /healthcheck
+### GET /healthcheck
 
 Health check endpoint.
 
 **Response:**
 ```json
 {"uptime":"..."}
+```
+
+### GET /api/status
+
+Machine-readable runtime status for operational tooling. This endpoint uses the same `WEBHOOK_API_KEY` protection as other `/api` endpoints when that environment variable is configured. Send the key with the `x-api-key` header.
+
+The response intentionally exposes only non-sensitive booleans and metadata: service identity, version, commit, environment, feature-flag state, delivery channel readiness, and dependency readiness/configuration status. Secret values such as bot tokens, API keys, DSNs, chat IDs, and provider URLs are not returned.
+
+`GET /api/capabilities` is an alias for the same payload.
+
+**Response:**
+```json
+{
+  "service": {
+    "name": "cabros-bot",
+    "version": "0.1.0",
+    "commit": "abcdef1234567890",
+    "environment": "production"
+  },
+  "featureFlags": {
+    "telegramBot": true,
+    "whatsappAlerts": false,
+    "geminiGrounding": true,
+    "newsMonitor": true,
+    "tradingViewMcpEnrichment": true,
+    "firestoreAlertStorage": true,
+    "sentryMonitoring": true,
+    "langfusePrompts": false,
+    "marketScanner": true,
+    "binancePriceCheck": false,
+    "llmAlertEnrichment": false
+  },
+  "deliveryChannels": {
+    "telegram": { "enabled": true, "status": "ready" },
+    "whatsapp": { "enabled": false, "status": "disabled" }
+  },
+  "dependencies": {
+    "telegram": { "enabled": true, "configured": true, "ready": true, "status": "ready" },
+    "whatsapp": { "enabled": false, "configured": false, "ready": false, "status": "disabled" },
+    "gemini": { "enabled": true, "configured": true, "ready": true, "status": "ready" },
+    "tradingViewMcp": { "enabled": true, "configured": true, "ready": true, "status": "ready" },
+    "firestore": { "enabled": true, "configured": true, "ready": true, "status": "ready" },
+    "sentry": { "enabled": true, "configured": true, "ready": true, "status": "ready" },
+    "langfuse": { "enabled": false, "configured": false, "ready": false, "status": "disabled" }
+  }
+}
 ```
 
 ## Alert Enrichment with Gemini Grounding (001)
