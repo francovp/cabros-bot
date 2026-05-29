@@ -10,6 +10,19 @@ function hasValue(value) {
 	return typeof value === 'string' ? value.trim().length > 0 : value != null;
 }
 
+function isGoogleManagedRuntime() {
+	return (
+		hasValue(process.env.K_SERVICE)
+		|| hasValue(process.env.K_REVISION)
+		|| hasValue(process.env.FUNCTION_TARGET)
+		|| hasValue(process.env.FUNCTION_NAME)
+		|| hasValue(process.env.GOOGLE_CLOUD_PROJECT)
+		|| hasValue(process.env.GCP_PROJECT)
+		|| hasValue(process.env.GCLOUD_PROJECT)
+		|| hasValue(process.env.GAE_SERVICE)
+	);
+}
+
 function getCommit() {
 	return process.env.RENDER_GIT_COMMIT
 		|| process.env.GIT_COMMIT
@@ -94,7 +107,8 @@ function getStatus() {
 		enabled: firestoreEnabled,
 		configured:
 			hasValue(process.env.FIREBASE_SERVICE_ACCOUNT_JSON)
-			|| hasValue(process.env.GOOGLE_APPLICATION_CREDENTIALS),
+			|| hasValue(process.env.GOOGLE_APPLICATION_CREDENTIALS)
+			|| isGoogleManagedRuntime(),
 	});
 	const sentry = dependencyStatus({
 		enabled: sentryEnabled,

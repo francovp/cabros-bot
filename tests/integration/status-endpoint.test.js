@@ -15,6 +15,7 @@ describe('Status endpoints', () => {
 		process.env.SERVICE_NAME = 'cabros-bot-test';
 		process.env.RENDER_GIT_COMMIT = 'abcdef1234567890';
 		process.env.NODE_ENV = 'test';
+		delete process.env.SENTRY_ENVIRONMENT;
 		process.env.ENABLE_TELEGRAM_BOT = 'true';
 		process.env.BOT_TOKEN = 'token';
 		process.env.TELEGRAM_CHAT_ID = '123';
@@ -107,6 +108,25 @@ describe('Status endpoints', () => {
 			status: 'disabled',
 		});
 		expect(response.body.dependencies.tradingViewMcp.status).toBe('disabled');
+	});
+
+	it('treats Firestore ADC on Google-managed runtimes as configured', async () => {
+		delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+		delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
+		process.env.K_SERVICE = 'cabros-bot';
+		process.env.GOOGLE_CLOUD_PROJECT = 'cabros-project';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.firestore).toEqual({
+			enabled: true,
+			configured: true,
+			ready: true,
+			status: 'ready',
+		});
 	});
 
 	it('does not leak configured secret values', async () => {
