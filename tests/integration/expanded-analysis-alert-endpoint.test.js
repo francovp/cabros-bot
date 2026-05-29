@@ -459,6 +459,12 @@ describe('Expanded Analysis Alert endpoint', () => {
 		expect(res.body.alertText).toContain('- *Confluencia:* 🟢 STRONG BUY · Señales Alineadas ✅ (Confianza: high)');
 		expect(res.body.alertText).toContain('- *Últimas Noticias:*');
 		expect(res.body.alertText).toContain('  • Bitcoin surges past 68k (CoinDesk)');
+		expect(res.body.results[0]).toEqual(expect.objectContaining({
+			symbol: 'BINANCE:BTCUSDT',
+			status: 'analyzed',
+			price: 68450.2,
+			rsi: 55.4,
+		}));
 		expect(tradingViewMcpService.analyzeSymbolIdentifier).toHaveBeenCalledWith(expect.objectContaining({
 			raw: 'BINANCE:BTCUSDT',
 			exchange: 'BINANCE',

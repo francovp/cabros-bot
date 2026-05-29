@@ -203,15 +203,17 @@ function compactResults(results) {
 			};
 		}
 
+		const technicalAnalysis = result.analysis && result.analysis.technical
+			? result.analysis.technical
+			: result.analysis || {};
+		const priceData = technicalAnalysis.price_data || {};
+		const indicators = technicalAnalysis.technical_indicators || {};
+
 		return {
 			symbol: result.symbol,
 			status: result.status,
-			price: result.analysis && result.analysis.price_data
-				? result.analysis.price_data.current_price ?? result.analysis.price_data.close
-				: undefined,
-			rsi: result.analysis
-				? result.analysis.technical_indicators?.rsi ?? result.analysis.rsi?.value
-				: undefined,
+			price: priceData.current_price ?? priceData.close,
+			rsi: indicators.rsi ?? technicalAnalysis.rsi?.value,
 			multiTimeframe: result.multiTimeframe ? 'success' : undefined,
 		};
 	});
