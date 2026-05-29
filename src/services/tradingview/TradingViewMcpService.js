@@ -74,7 +74,25 @@ class TradingViewMcpService {
 			throw new Error(`TradingView MCP call failed: ${result.error || 'unknown error'}`);
 		}
 
-		return this._toEnrichedAlert(signal.rawText || '', { symbol, exchange, timeframe, side: signal.side }, result.analysis);
+		let volumeAnalysis = null;
+		if (process.env.ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION === 'true') {
+			const vResult = await sendWithRetry(async () => {
+				try {
+					const volConfirm = await this.callVolumeConfirmation({ symbol, exchange, timeframe });
+					return { success: true, channel: 'tradingview-mcp', volConfirm };
+				} catch (error) {
+					return { success: false, channel: 'tradingview-mcp', error: error.message };
+				}
+			}, cfg.maxRetries, this.logger);
+
+			if (vResult.success) {
+				volumeAnalysis = vResult.volConfirm;
+			} else {
+				this.logger.warn(`[TradingViewMcpService] Volume confirmation failed for ${symbol}: ${vResult.error || 'unknown error'}`);
+			}
+		}
+
+		return this._toEnrichedAlert(signal.rawText || '', { symbol, exchange, timeframe, side: signal.side }, result.analysis, volumeAnalysis);
 	}
 
 	async callCoinAnalysis({ symbol, exchange, timeframe, signal }) {
@@ -132,6 +150,26 @@ class TradingViewMcpService {
 
 		if (!normalizedResult || typeof normalizedResult !== 'object' || Array.isArray(normalizedResult)) {
 			throw new Error('TradingView MCP multi_timeframe_analysis returned invalid payload');
+		}
+
+		return normalizedResult;
+	}
+
+	async callVolumeConfirmation({ symbol, exchange, timeframe, signal }) {
+		const fullSymbol = symbol.includes(':') ? symbol : `${exchange}:${symbol}`;
+		const rpcResult = await this._callTool('volume_confirmation_analysis', {
+			symbol: fullSymbol,
+			exchange,
+			timeframe,
+		}, { signal });
+		const normalizedResult = this._unwrapSchemaResult(rpcResult);
+
+		if (normalizedResult && normalizedResult.error) {
+			throw new Error(normalizedResult.error);
+		}
+
+		if (!normalizedResult || typeof normalizedResult !== 'object' || Array.isArray(normalizedResult)) {
+			throw new Error('TradingView MCP volume_confirmation_analysis returned invalid payload');
 		}
 
 		return normalizedResult;
@@ -392,7 +430,7 @@ class TradingViewMcpService {
 		return parsedPayloads[0];
 	}
 
-	_toEnrichedAlert(originalText, signal, analysis = {}) {
+	_toEnrichedAlert(originalText, signal, analysis = {}, volumeAnalysis = null) {
 		const { side, symbol, exchange, timeframe } = signal;
 		const sideLabel = side === 'SELL' ? 'VENTA' : 'COMPRA';
 		const sideSentiment = side === 'SELL' ? -0.55 : 0.55;
@@ -451,6 +489,13 @@ class TradingViewMcpService {
 			`Tendencia ${trendLabel} · Bollinger ${bollingerPosition} · Momentum ${momentumLabel} · Rating ${rating}`,
 		]);
 
+		if (volumeAnalysis && volumeAnalysis.volume_analysis) {
+			const volData = volumeAnalysis.volume_analysis;
+			const ratio = volData.volume_ratio !== undefined ? volData.volume_ratio : 1;
+			const confirms = ratio >= 1.2 ? 'YES' : 'NO';
+			insights.push(`Volume confirms: ${confirms} (${this._formatRatio(ratio)} avg)`);
+		}
+
 		return {
 			original_text: originalText,
 			sentiment,
@@ -464,6 +509,13 @@ class TradingViewMcpService {
 			truncated: false,
 			extraText: '*Grounding*: `tradingview-mcp`',
 		};
+	}
+
+	_formatRatio(value) {
+		if (typeof value !== 'number' || Number.isNaN(value)) {
+			return '1.0x';
+		}
+		return `${value.toFixed(1)}x`;
 	}
 
 	_formatPercent(value) {

@@ -11,6 +11,8 @@ Key files / entry points
 - `src/controllers/commands/handlers/core/fetchPriceCryptoSymbol.js` — calls Binance `MainClient.getAvgPrice` to fetch prices.
 - `src/controllers/webhooks/handlers/alert/alert.js` — webhook handler that forwards alert text to a Telegram chat.
 - `src/controllers/webhooks/handlers/expandedAnalysisAlert/expandedAnalysisAlert.js` — `POST /api/webhook/expanded-analysis-alert` handler that builds TradingView MCP analysis reports and sends them through notification channels.
+- `src/controllers/webhooks/handlers/jobs/jobs.js` — job creation (`POST /api/jobs/tradingview-analysis`) and status polling (`GET /api/jobs/:jobId`) handler.
+- `src/services/jobs/JobService.js` — manages in-memory job state, executes background TradingView analysis runs, and performs periodic expiration cleanup.
 - `src/services/tradingview/expandedAnalysisAlertReport.js` — parses `EXCHANGE:SYMBOL` requests and formats grouped Spanish technical-analysis reports.
 - `src/services/monitoring/SentryService.js` — wraps `@sentry/node` for runtime error monitoring (005).
 - `src/controllers/helpers.js` — small numeric helper (`round10`) used by price formatting.
@@ -251,6 +253,29 @@ The system provides a `POST /api/webhook/market-scanner-alert` endpoint that run
 - `src/controllers/webhooks/handlers/marketScanner/marketScanner.js` for scan orchestration and deadline management.
 - `src/services/tradingview/marketScannerReport.js` for layout and item-specific formatters.
 - Tests in `tests/integration/market-scanner-endpoint.test.js` and `tests/unit/market-scanner-report.test.js` / `tests/unit/market-scanner.test.js`.
+
+## Asynchronous TradingView Jobs
+
+The system provides asynchronous job endpoints to support executing both `expanded-analysis` and `market-scanner` workflows in the background, avoiding HTTP gateway timeouts.
+
+**Endpoints**:
+- `POST /api/jobs/tradingview-analysis` — Validates request payloads synchronously, returns `201 Created` with a `jobId`, and starts background execution.
+- `GET /api/jobs/:jobId` — Returns the current job status (`pending`, `processing`, `completed`, `failed`), progress, and final analysis/delivery outcomes.
+
+**Core Components**:
+- `src/services/jobs/JobService.js` — Coordinates job state tracking, background worker execution, progress reports, and job eviction (jobs older than 1 hour).
+- `src/controllers/webhooks/handlers/jobs/jobs.js` — HTTP route controller handlers (`postCreateJob`, `getJobStatus`).
+
+**Failure and Edge Case Behavior**:
+- Sync validation: throws `400` synchronously on invalid inputs before job registration.
+- Feature checks: returns `404 FEATURE_DISABLED` if market scanner jobs are created but `ENABLE_MARKET_SCANNER` is not `'true'`.
+- Eviction: jobs older than 1 hour are deleted from memory and return `404 Not Found`.
+- Background failures: if the worker runs into unexpected exceptions or timeouts, the job is marked `failed` and reported to Sentry.
+
+**Where to look first when extending or debugging**:
+- `src/services/jobs/JobService.js` for background processing and state transitions.
+- `src/controllers/webhooks/handlers/jobs/jobs.js` for parameters parsing.
+- Tests in `tests/unit/job-service.test.js`, `tests/unit/jobs-controller.test.js`, and `tests/integration/jobs-endpoint.test.js`.
 
 ## Multi-Channel Notification Architecture (002-whatsapp-alerts)
 
