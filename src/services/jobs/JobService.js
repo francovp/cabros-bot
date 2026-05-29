@@ -25,12 +25,15 @@ class JobService {
 	}
 
 	/**
-	 * Cleans up jobs older than 1 hour.
+	 * Cleans up jobs older than 1 hour if they are completed or failed.
 	 */
 	_cleanExpiredJobs() {
 		const now = Date.now();
 		for (const [id, job] of this.jobs.entries()) {
-			if (now - new Date(job.createdAt).getTime() > EXPIRATION_MS) {
+			if (
+				now - new Date(job.createdAt).getTime() > EXPIRATION_MS &&
+				(job.status === 'completed' || job.status === 'failed')
+			) {
 				this.jobs.delete(id);
 			}
 		}
@@ -123,6 +126,8 @@ class JobService {
 		}
 
 		// Validate timeoutMs if provided
+		let validatedTimeoutMs = DEFAULT_JOB_TIMEOUT_MS;
+		const MAX_JOB_TIMEOUT_MS = 600000; // 10 minutes
 		if (payload && payload.timeoutMs !== undefined) {
 			const timeoutVal = Number(payload.timeoutMs);
 			if (!Number.isFinite(timeoutVal) || !Number.isInteger(timeoutVal) || timeoutVal <= 0) {
@@ -135,6 +140,7 @@ class JobService {
 					throw new MarketScannerRequestError(msg);
 				}
 			}
+			validatedTimeoutMs = Math.min(timeoutVal, MAX_JOB_TIMEOUT_MS);
 		}
 
 		const jobId = uuidv4();
@@ -157,6 +163,7 @@ class JobService {
 			createdAt: new Date().toISOString(),
 			updatedAt: new Date().toISOString(),
 			totalDurationMs: 0,
+			timeoutMs: validatedTimeoutMs,
 		};
 
 		this.jobs.set(jobId, job);
@@ -186,14 +193,7 @@ class JobService {
 		job.updatedAt = new Date().toISOString();
 
 		// Setup Timeout AbortController
-		const MAX_JOB_TIMEOUT_MS = 600000; // 10 minutes
-		let timeoutMs = DEFAULT_JOB_TIMEOUT_MS;
-		if (payload && payload.timeoutMs !== undefined) {
-			const parsedTimeout = parseInt(payload.timeoutMs, 10);
-			if (Number.isFinite(parsedTimeout) && parsedTimeout > 0) {
-				timeoutMs = Math.min(parsedTimeout, MAX_JOB_TIMEOUT_MS);
-			}
-		}
+		const timeoutMs = job.timeoutMs || DEFAULT_JOB_TIMEOUT_MS;
 
 		const controller = new AbortController();
 		const timeoutId = setTimeout(() => {

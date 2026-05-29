@@ -79,6 +79,16 @@ describe('JobService Unit Tests', () => {
 			expect(result.jobId).toBeDefined();
 			expect(result.status).toBe('processing');
 		});
+
+		it('correctly validates and parses timeoutMs string format like 1e3', () => {
+			const metadata = jobService.createJob('expanded-analysis', {
+				symbols: ['BINANCE:BTCUSDT'],
+				timeoutMs: '1e3',
+			});
+
+			const rawJob = jobService.jobs.get(metadata.jobId);
+			expect(rawJob.timeoutMs).toBe(1000);
+		});
 	});
 
 	describe('Background execution and retrieval', () => {
@@ -185,7 +195,7 @@ describe('JobService Unit Tests', () => {
 	});
 
 	describe('Job eviction / cleanup', () => {
-		it('evicts jobs older than 1 hour', () => {
+		it('evicts jobs older than 1 hour if status is completed or failed', () => {
 			const metadata = jobService.createJob('expanded-analysis', {
 				symbols: ['BINANCE:BTCUSDT'],
 			});
@@ -198,10 +208,36 @@ describe('JobService Unit Tests', () => {
 
 			// Set createdAt to 2 hours ago
 			rawJob.createdAt = new Date(Date.now() - 7200000).toISOString();
+			rawJob.status = 'completed';
 
 			// Querying job should clean it up and return null
 			const job = jobService.getJob(jobId);
 			expect(job).toBeNull();
+			expect(jobService.jobs.has(jobId)).toBe(false);
+		});
+
+		it('does not evict jobs older than 1 hour if they are not completed or failed', () => {
+			const metadata = jobService.createJob('expanded-analysis', {
+				symbols: ['BINANCE:BTCUSDT'],
+			});
+
+			const jobId = metadata.jobId;
+			const rawJob = jobService.jobs.get(jobId);
+			expect(rawJob).toBeDefined();
+
+			// Set createdAt to 2 hours ago
+			rawJob.createdAt = new Date(Date.now() - 7200000).toISOString();
+			rawJob.status = 'processing';
+
+			// Querying job should NOT clean it up
+			const job = jobService.getJob(jobId);
+			expect(job).not.toBeNull();
+			expect(jobService.jobs.has(jobId)).toBe(true);
+
+			// Now set status to completed, querying it should clean it up
+			rawJob.status = 'completed';
+			const jobAfterComplete = jobService.getJob(jobId);
+			expect(jobAfterComplete).toBeNull();
 			expect(jobService.jobs.has(jobId)).toBe(false);
 		});
 	});
