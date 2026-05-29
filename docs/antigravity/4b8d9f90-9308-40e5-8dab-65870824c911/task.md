@@ -8,3 +8,9 @@
 - [x] CHK006 - Implement integration tests for the endpoints (`tests/integration/jobs-endpoint.test.js`).
 - [x] CHK007 - Verify all tests pass.
 - [x] CHK008 - Archive session artifacts to `docs/antigravity/` folder before completion.
+- [x] CHK009 - Modify `_cleanExpiredJobs()` to not evict processing or pending jobs.
+- [x] CHK010 - Store validated `timeoutMs` directly on the job object and reuse it in background execution.
+- [x] CHK011 - Add unit tests for the new eviction rules and the parsed `timeoutMs` representation.
+- [x] CHK012 - Run all tests and verify.
+- [x] CHK013 - Commit local changes and reply to the PR comments.
+
