@@ -209,7 +209,7 @@ describe('TradingViewMcpService', () => {
 		});
 
 		expect(service._callTool).toHaveBeenCalledWith('combined_analysis', {
-			symbol: 'BINANCE:BTCUSDT',
+			symbol: 'BTCUSDT',
 			exchange: 'BINANCE',
 			timeframe: '1h',
 		}, expect.anything());

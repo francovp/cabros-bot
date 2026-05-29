@@ -125,9 +125,8 @@ class TradingViewMcpService {
 	}
 
 	async callCombinedAnalysis({ symbol, exchange, timeframe, signal }) {
-		const fullSymbol = symbol.includes(':') ? symbol : `${exchange}:${symbol}`;
 		const rpcResult = await this._callTool('combined_analysis', {
-			symbol: fullSymbol,
+			symbol,
 			exchange,
 			timeframe,
 		}, { signal });
