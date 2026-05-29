@@ -60,6 +60,16 @@ describe('JobService Unit Tests', () => {
 			}).toThrow();
 		});
 
+		it('throws validation error if timeoutMs is not a positive integer', () => {
+			expect(() => {
+				jobService.createJob('expanded-analysis', { symbols: ['BINANCE:BTCUSDT'], timeoutMs: 'invalid' });
+			}).toThrow('timeoutMs must be a positive integer');
+
+			expect(() => {
+				jobService.createJob('expanded-analysis', { symbols: ['BINANCE:BTCUSDT'], timeoutMs: -100 });
+			}).toThrow('timeoutMs must be a positive integer');
+		});
+
 		it('creates a job and returns metadata on success', () => {
 			const result = jobService.createJob('expanded-analysis', {
 				symbols: ['BINANCE:BTCUSDT'],

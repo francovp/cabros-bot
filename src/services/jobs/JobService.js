@@ -122,6 +122,21 @@ class JobService {
 			throw error;
 		}
 
+		// Validate timeoutMs if provided
+		if (payload && payload.timeoutMs !== undefined) {
+			const timeoutVal = Number(payload.timeoutMs);
+			if (!Number.isFinite(timeoutVal) || !Number.isInteger(timeoutVal) || timeoutVal <= 0) {
+				const msg = 'timeoutMs must be a positive integer';
+				if (type === 'expanded-analysis') {
+					const { ExpandedAnalysisAlertRequestError } = require('../tradingview/expandedAnalysisAlertReport');
+					throw new ExpandedAnalysisAlertRequestError(msg);
+				} else {
+					const { MarketScannerRequestError } = require('../tradingview/marketScannerReport');
+					throw new MarketScannerRequestError(msg);
+				}
+			}
+		}
+
 		const jobId = uuidv4();
 		const job = {
 			jobId,
@@ -171,7 +186,15 @@ class JobService {
 		job.updatedAt = new Date().toISOString();
 
 		// Setup Timeout AbortController
-		const timeoutMs = payload.timeoutMs || DEFAULT_JOB_TIMEOUT_MS;
+		const MAX_JOB_TIMEOUT_MS = 600000; // 10 minutes
+		let timeoutMs = DEFAULT_JOB_TIMEOUT_MS;
+		if (payload && payload.timeoutMs !== undefined) {
+			const parsedTimeout = parseInt(payload.timeoutMs, 10);
+			if (Number.isFinite(parsedTimeout) && parsedTimeout > 0) {
+				timeoutMs = Math.min(parsedTimeout, MAX_JOB_TIMEOUT_MS);
+			}
+		}
+
 		const controller = new AbortController();
 		const timeoutId = setTimeout(() => {
 			controller.abort(new Error(`Job timed out after ${timeoutMs}ms`));

@@ -15,14 +15,14 @@ Adds an asynchronous job mode for long-running TradingView analysis and market s
 
 ### :shield: Synchronous Validation
 
-- Handles parameter and feature validation synchronously prior to creating jobs, ensuring bad requests receive immediate `400 Bad Request` feedback.
+- Handles parameter and feature validation synchronously prior to creating jobs, ensuring bad requests (including invalid `timeoutMs` values) receive immediate `400 Bad Request` feedback.
 
 ## Technical Implementation
 
 ### Architecture changes
 
 #### `JobService`
-Coordinates background executions, handles deadline controllers, processes symbols/scans sequentially with retry and signal propagation, and dispatches notifications via `NotificationManager`.
+Coordinates background executions, handles deadline controllers, processes symbols/scans sequentially with retry and signal propagation, and dispatches notifications via `NotificationManager`. Clamps `timeoutMs` to a safe 10 minutes maximum to prevent Node.js timer overflows.
 
 #### `JobsController`
 Exposes endpoint handlers for creating and polling jobs, incorporating Sentry error reporting.
@@ -41,12 +41,12 @@ src/
 
 ### Test Suite
 
-- **16 Unit Tests**
+- **17 Unit Tests**
 - **4 Integration Tests**
 
 ### Test Coverage
 
-- Synchronous input and feature validation.
+- Synchronous input, timeout, and feature validation.
 - In-memory job lifecycle transitions (`pending` -> `processing` -> `completed`/`failed`).
 - Real-time progress updates.
 - Background execution timeouts and MCP failure handling.
@@ -55,7 +55,7 @@ src/
 
 ### Test Files
 
-- `tests/unit/job-service.test.js`: JobService lifecycle and eviction tests.
+- `tests/unit/job-service.test.js`: JobService lifecycle, eviction, and timeout validation tests.
 - `tests/unit/jobs-controller.test.js`: Jobs controller parameter parsing and validation tests.
 - `tests/integration/jobs-endpoint.test.js`: End-to-end integration tests with progress polling.
 
@@ -68,7 +68,7 @@ src/
 
 ### Pre-merge Verification
 
-- [x] `npx jest --runInBand --detectOpenHandles` (All 512 tests passed successfully)
+- [x] `npx jest --runInBand --detectOpenHandles` (All 513 tests passed successfully)
 
 ### Post-merge Verification
 

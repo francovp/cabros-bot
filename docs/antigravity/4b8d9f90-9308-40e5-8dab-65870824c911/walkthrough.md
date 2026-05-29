@@ -10,6 +10,7 @@ Implemented an asynchronous job system for TradingView analysis workflows to dec
 - Added [JobService.js](file:///Users/fgvaleriop/.gemini/antigravity/worktrees/cabros-crypto-bot-telegram/implement-github-issue-53/src/services/jobs/JobService.js) to manage in-memory job states.
 - Implemented background execution loops that update progress indicators and append partial results in real-time as symbols are analyzed or scans run.
 - Configured automatic eviction of job objects older than 1 hour.
+- **Added synchronous positive integer validation and 10-minute maximum clamping for `timeoutMs` request payloads to prevent Node timer overflow issues.**
 
 ### Jobs Controller
 - Added [jobs.js](file:///Users/fgvaleriop/.gemini/antigravity/worktrees/cabros-crypto-bot-telegram/implement-github-issue-53/src/controllers/webhooks/handlers/jobs/jobs.js) containing `postCreateJob` and `getJobStatus` Express route handlers.
@@ -27,7 +28,7 @@ Implemented an asynchronous job system for TradingView analysis workflows to dec
 
 ### Automated Tests
 
-- Added [job-service.test.js](file:///Users/fgvaleriop/.gemini/antigravity/worktrees/cabros-crypto-bot-telegram/implement-github-issue-53/tests/unit/job-service.test.js) (8 unit tests passed).
+- Added [job-service.test.js](file:///Users/fgvaleriop/.gemini/antigravity/worktrees/cabros-crypto-bot-telegram/implement-github-issue-53/tests/unit/job-service.test.js) (9 unit tests passed, including new timeout validation assertions).
 - Added [jobs-controller.test.js](file:///Users/fgvaleriop/.gemini/antigravity/worktrees/cabros-crypto-bot-telegram/implement-github-issue-53/tests/unit/jobs-controller.test.js) (8 unit tests passed).
 - Added [jobs-endpoint.test.js](file:///Users/fgvaleriop/.gemini/antigravity/worktrees/cabros-crypto-bot-telegram/implement-github-issue-53/tests/integration/jobs-endpoint.test.js) (4 integration tests passed).
 
@@ -42,8 +43,8 @@ PASS tests/unit/job-service.test.js
 PASS tests/unit/jobs-controller.test.js
 ...
 Test Suites: 45 passed, 45 total
-Tests:       512 passed, 512 total
+Tests:       513 passed, 513 total
 Snapshots:   0 total
-Time:        55.297 s
+Time:        58.114 s
 ```
-All 512 tests passed successfully.
+All 513 tests passed successfully.
