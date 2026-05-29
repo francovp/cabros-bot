@@ -3,6 +3,7 @@ const { postAlert } = require('../controllers/webhooks/handlers/alert/alert');
 const { postExpandedAnalysisAlert } = require('../controllers/webhooks/handlers/expandedAnalysisAlert/expandedAnalysisAlert');
 const { postMarketScannerAlert } = require('../controllers/webhooks/handlers/marketScanner/marketScanner');
 const { validateApiKey } = require('../lib/auth');
+const { getApiStatus } = require('../controllers/status');
 
 function getRoutes(botOrGetter) {
 	const router = express.Router();
@@ -14,6 +15,9 @@ function getRoutes(botOrGetter) {
 	const newsMonitor = getNewsMonitor();
 	router.post('/news-monitor', validateApiKey, newsMonitor.handleRequest.bind(newsMonitor));
 	router.get('/news-monitor', validateApiKey, newsMonitor.handleRequest.bind(newsMonitor));
+
+	router.get('/status', getApiStatus);
+	router.get('/capabilities', getApiStatus);
 
 	return router;
 }
