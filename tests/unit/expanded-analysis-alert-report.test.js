@@ -31,6 +31,7 @@ describe('Expanded Analysis Alert report', () => {
 			],
 			timeframe: '1D',
 			includeMultiTimeframe: false,
+			analysisMode: 'standard',
 		});
 	});
 
@@ -227,6 +228,90 @@ describe('Expanded Analysis Alert report', () => {
 			expect(report).toContain('• *Diario (1D):* Bajista (RSI 42.4)');
 			expect(report).toContain('• *Confluencia:* MIXED (Confianza: Low)');
 			expect(report).toContain('• *Recomendación:* HOLD');
+		});
+	});
+
+	describe('analysisMode request validation', () => {
+		it('parses analysisMode and analysis_mode correctly', () => {
+			const parsed1 = parseExpandedAnalysisAlertRequest({
+				body: {
+					symbols: ['BINANCE:BTCUSDT'],
+					analysisMode: 'combined',
+				},
+			});
+			expect(parsed1.analysisMode).toBe('combined');
+
+			const parsed2 = parseExpandedAnalysisAlertRequest({
+				body: {
+					symbols: ['BINANCE:BTCUSDT'],
+					analysis_mode: 'standard',
+				},
+			});
+			expect(parsed2.analysisMode).toBe('standard');
+
+			const parsed3 = parseExpandedAnalysisAlertRequest({
+				body: {
+					symbols: ['BINANCE:BTCUSDT'],
+				},
+			});
+			expect(parsed3.analysisMode).toBe('standard');
+		});
+
+		it('throws request error if analysisMode is not a string', () => {
+			expect(() => parseExpandedAnalysisAlertRequest({
+				body: {
+					symbols: ['BINANCE:BTCUSDT'],
+					analysisMode: true,
+				},
+			})).toThrow('analysisMode must be a string');
+		});
+
+		it('throws request error if analysisMode is invalid value', () => {
+			expect(() => parseExpandedAnalysisAlertRequest({
+				body: {
+					symbols: ['BINANCE:BTCUSDT'],
+					analysisMode: 'invalid_mode',
+				},
+			})).toThrow('analysisMode must be either "standard" or "combined"');
+		});
+	});
+
+	describe('combined analysis report formatting', () => {
+		it('formats the report with Reddit sentiment, confluence, and news correctly', () => {
+			const report = buildExpandedAnalysisAlertReport([
+				{
+					input: { raw: 'BINANCE:BTCUSDT', exchange: 'BINANCE', symbol: 'BTCUSDT' },
+					analysis: {
+						technical: {
+							price_data: { current_price: 68000, change_percent: 1.5 },
+							technical_indicators: { rsi: 50 },
+						},
+						sentiment: {
+							sentiment_label: 'Bullish',
+							sentiment_score: 0.45,
+							posts_analyzed: 12,
+						},
+						confluence: {
+							recommendation: 'STRONG BUY',
+							confidence: 'high',
+							signals_agree: true,
+						},
+						news: {
+							latest: [
+								{ title: 'Bitcoin surges past 68k', url: 'https://coindesk.com/btc', source: 'CoinDesk' },
+								{ title: 'Crypto market gains momentum', url: 'https://bloomberg.com/crypto' },
+							],
+						},
+					},
+				},
+			], { now: new Date('2026-05-22T12:00:00Z') });
+
+			expect(report).toContain('BTCUSDT $68,000.00 (+1.5%) | RSI 50.0');
+			expect(report).toContain('- *Sentimiento Reddit:* 🐂 Alcista (Score: 0.45, 12 posts)');
+			expect(report).toContain('- *Confluencia:* 🟢 STRONG BUY · Señales Alineadas ✅ (Confianza: high)');
+			expect(report).toContain('- *Últimas Noticias:*');
+			expect(report).toContain('  • Bitcoin surges past 68k (CoinDesk)');
+			expect(report).toContain('  • Crypto market gains momentum (bloomberg.com)');
 		});
 	});
 });

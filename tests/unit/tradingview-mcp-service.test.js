@@ -191,4 +191,64 @@ describe('TradingViewMcpService', () => {
 		const rpc = service._decodeRpcBody(body, 'text/event-stream', 'abc');
 		expect(rpc).toEqual({ jsonrpc: '2.0', id: 'abc', result: { ok: true } });
 	});
+
+	it('calls combined_analysis tool and unwraps result in callCombinedAnalysis', async () => {
+		const service = new TradingViewMcpService({ logger: { warn: jest.fn(), error: jest.fn() } });
+		service._callTool = jest.fn().mockResolvedValue({
+			result: {
+				technical: { price_data: { current_price: 65000 } },
+				sentiment: { score: 0.8 },
+				news: { latest: [] },
+			},
+		});
+
+		const result = await service.callCombinedAnalysis({
+			symbol: 'BTCUSDT',
+			exchange: 'BINANCE',
+			timeframe: '1h',
+		});
+
+		expect(service._callTool).toHaveBeenCalledWith('combined_analysis', {
+			symbol: 'BINANCE:BTCUSDT',
+			exchange: 'BINANCE',
+			timeframe: '1h',
+		}, expect.anything());
+		expect(result).toEqual({
+			technical: { price_data: { current_price: 65000 } },
+			sentiment: { score: 0.8 },
+			news: { latest: [] },
+		});
+	});
+
+	it('routes to callCombinedAnalysis in analyzeSymbolIdentifier when analysisMode is combined', async () => {
+		const service = new TradingViewMcpService({
+			maxRetries: 1,
+			logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
+		});
+		service.callCombinedAnalysis = jest.fn().mockResolvedValue({
+			technical: { price_data: { current_price: 65000 } },
+			sentiment: { score: 0.8 },
+		});
+		service.callCoinAnalysis = jest.fn();
+
+		const result = await service.analyzeSymbolIdentifier({
+			raw: 'BINANCE:BTCUSDT',
+			exchange: 'BINANCE',
+			symbol: 'BTCUSDT',
+			timeframe: '1h',
+			analysisMode: 'combined',
+		});
+
+		expect(service.callCombinedAnalysis).toHaveBeenCalledWith(expect.objectContaining({
+			symbol: 'BTCUSDT',
+			exchange: 'BINANCE',
+			timeframe: '1h',
+		}));
+		expect(service.callCoinAnalysis).not.toHaveBeenCalled();
+		expect(result).toEqual(expect.objectContaining({
+			requested_symbol: 'BINANCE:BTCUSDT',
+			technical: { price_data: { current_price: 65000 } },
+			sentiment: { score: 0.8 },
+		}));
+	});
 });

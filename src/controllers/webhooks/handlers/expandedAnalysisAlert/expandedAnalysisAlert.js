@@ -118,7 +118,7 @@ function postExpandedAnalysisAlert(botOrGetter) {
 	};
 }
 
-async function analyzeSymbols({ symbols, timeframe, includeMultiTimeframe }, options = {}) {
+async function analyzeSymbols({ symbols, timeframe, includeMultiTimeframe, analysisMode }, options = {}) {
 	const { signal } = options;
 	const results = [];
 
@@ -133,6 +133,7 @@ async function analyzeSymbols({ symbols, timeframe, includeMultiTimeframe }, opt
 			const analysisRequest = {
 				...input,
 				timeframe,
+				analysisMode,
 			};
 			if (signal) {
 				analysisRequest.signal = signal;

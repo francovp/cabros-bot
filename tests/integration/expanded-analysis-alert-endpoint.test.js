@@ -413,4 +413,58 @@ describe('Expanded Analysis Alert endpoint', () => {
 		expect(res.body.success).toBe(true);
 		expect(tradingViewMcpService.callMultiTimeframeAnalysis).not.toHaveBeenCalled();
 	});
+
+	it('generates a combined analysis report, sends it, and returns delivery results when analysisMode is combined', async () => {
+		tradingViewMcpService.analyzeSymbolIdentifier.mockResolvedValueOnce({
+			technical: {
+				price_data: {
+					current_price: 68450.2,
+					change_percent: 1.2,
+					volume: 70213090,
+				},
+				technical_indicators: {
+					rsi: 55.4,
+					sma20: 67000.0,
+					macd: 6.1,
+					macd_signal: 7.2,
+					atr: 120.5,
+				},
+			},
+			sentiment: {
+				sentiment_label: 'Bullish',
+				sentiment_score: 0.45,
+				posts_analyzed: 12,
+			},
+			confluence: {
+				recommendation: 'STRONG BUY',
+				confidence: 'high',
+				signals_agree: true,
+			},
+			news: {
+				latest: [
+					{ title: 'Bitcoin surges past 68k', url: 'https://coindesk.com/btc', source: 'CoinDesk' }
+				],
+			},
+		});
+
+		const res = await request(app)
+			.post('/api/webhook/expanded-analysis-alert')
+			.set('x-api-key', 'test-key')
+			.send({ symbols: ['BINANCE:BTCUSDT'], timeframe: '1D', analysisMode: 'combined' })
+			.expect(200);
+
+		expect(res.body.success).toBe(true);
+		expect(res.body.alertText).toContain('BTCUSDT $68,450.20 (+1.2%) | RSI 55.4');
+		expect(res.body.alertText).toContain('- *Sentimiento Reddit:* 🐂 Alcista (Score: 0.45, 12 posts)');
+		expect(res.body.alertText).toContain('- *Confluencia:* 🟢 STRONG BUY · Señales Alineadas ✅ (Confianza: high)');
+		expect(res.body.alertText).toContain('- *Últimas Noticias:*');
+		expect(res.body.alertText).toContain('  • Bitcoin surges past 68k (CoinDesk)');
+		expect(tradingViewMcpService.analyzeSymbolIdentifier).toHaveBeenCalledWith(expect.objectContaining({
+			raw: 'BINANCE:BTCUSDT',
+			exchange: 'BINANCE',
+			symbol: 'BTCUSDT',
+			timeframe: '1D',
+			analysisMode: 'combined',
+		}));
+	});
 });
