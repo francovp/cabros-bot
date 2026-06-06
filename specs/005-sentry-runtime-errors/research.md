@@ -7,13 +7,13 @@
 
 ## Topic 1: Sentry SDK choice & initialization pattern
 
-**Decision**: Use the official `@sentry/node` v8 SDK with a minimal "error monitoring only" configuration, initialized once at process startup.
+**Decision**: Use the official `@sentry/node` v10 SDK with a minimal "error monitoring only" configuration, initialized once at process startup.
 
 **Rationale**:
 
 - The Sentry JavaScript docs recommend `@sentry/node` as the SDK for Node-based backends.
 - The SDK can load the DSN from `process.env.SENTRY_DSN` when `dsn` is omitted, avoiding hardcoded secrets.
-- The v8 Node docs (`v8-node.md`) show a simple initialization model plus optional Express helpers; we only need core error capture, not tracing/profiling.
+- The v10 Node docs show a simple initialization model plus optional Express helpers; we only need core error capture, not tracing/profiling.
 - Keeping initialization in a single `SentryService` module aligns with the Constitution's simplicity and readability goals.
 
 **Implementation notes** (conceptual):
@@ -26,7 +26,7 @@
 
 **Alternatives considered**:
 
-- **Using generic `@sentry/browser` or multi-environment SDKs only** – rejected because the official docs recommend `@sentry/node` for backend Node apps, and v8 provides Node-specific features (e.g., Express helpers, OnUnhandledRejection integration).
+- **Using generic `@sentry/browser` or multi-environment SDKs only** – rejected because the official docs recommend `@sentry/node` for backend Node apps, and v10 provides Node-specific features (e.g., Express helpers, OnUnhandledRejection integration).
 - **Custom HTTP client sending events directly to Sentry API** – rejected as unnecessary complexity and maintenance burden vs. using the official SDK.
 - **Using the Supabase Sentry JS integration** (`supabase-community/sentry-integration-js`) – rejected as it targets Supabase SDK instrumentation, which is not relevant here.
 
@@ -64,7 +64,7 @@
 
 **Rationale**:
 
-- The `v8-node` docs show `Sentry.setupExpressErrorHandler(app)` as a convenient way to capture Express errors, but our handlers already wrap their logic in `try/catch` and construct HTTP responses directly (they do not regularly call `next(err)`).
+- The Node docs show `Sentry.setupExpressErrorHandler(app)` as a convenient way to capture Express errors, but our handlers already wrap their logic in `try/catch` and construct HTTP responses directly (they do not regularly call `next(err)`).
 - Introducing global Express error middleware would require reworking existing error handling to route everything through `next(err)`, which is out-of-scope and risks changing observable HTTP behavior (conflicts with FR-003 and User Story 2).
 - Manual instrumentation in the few central catch blocks (`alert.js`, `newsMonitor.js`) is straightforward and makes it explicit which paths are monitored and how they are tagged.
 
@@ -146,10 +146,10 @@
 
 | Unknown (from Technical Context) | Resolution | Status |
 | -------------------------------- | ---------- | ------ |
-| Which SDK and init pattern to use for Node | Use official `@sentry/node` v8 with a single `SentryService` wrapper and error-only configuration | ✅ RESOLVED |
+| Which SDK and init pattern to use for Node | Use official `@sentry/node` v10 with a single `SentryService` wrapper and error-only configuration | ✅ RESOLVED |
 | How to capture `uncaughtException` / `unhandledRejection` safely | Rely on SDK's built-in integrations, configuring unhandled rejections to avoid changing process semantics | ✅ RESOLVED |
 | Whether to use Express helpers or manual instrumentation | Prefer manual instrumentation in existing catch blocks; skip `setupExpressErrorHandler` for now | ✅ RESOLVED |
 | How to map environments and releases | Derive from `SENTRY_ENVIRONMENT`/`SENTRY_RELEASE` when present, otherwise from `RENDER`, `IS_PULL_REQUEST`, `NODE_ENV`, and `RENDER_GIT_COMMIT` | ✅ RESOLVED |
 | How to structure tags/context for channels and external providers | Use Sentry tags and contexts for `channel`, `feature`, endpoints, and retry metadata; include full alert/news text by default per FR-007 | ✅ RESOLVED |
 
-All `NEEDS CLARIFICATION` items in the Technical Context have been addressed at the planning level. Details such as exact option names will be aligned with the current `@sentry/node` v8 documentation during implementation, but no additional research blockers remain for Phase 1 design.
+All `NEEDS CLARIFICATION` items in the Technical Context have been addressed at the planning level. Details such as exact option names will be aligned with the current `@sentry/node` v10 documentation during implementation, but no additional research blockers remain for Phase 1 design.

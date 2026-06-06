@@ -23,7 +23,7 @@ The integration will be gated by environment configuration, defaulting to a safe
 
 - express – existing HTTP server framework
 - telegraf – existing Telegram bot framework
-- @sentry/node – Sentry SDK for Node.js v8, initialized once at process startup via a `SentryService` wrapper with error-monitoring-only configuration (no tracing; DSN read from `SENTRY_DSN`/env)
+- @sentry/node – Sentry SDK for Node.js v10.53.1, initialized once at process startup via a `SentryService` wrapper with error-monitoring-only configuration (no tracing; DSN read from `SENTRY_DSN`/env)
 - jest – existing test runner for unit and integration tests
 
 **Storage**: N/A (stateless service; no new persistence required for this feature)

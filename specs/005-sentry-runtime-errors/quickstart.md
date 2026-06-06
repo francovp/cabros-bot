@@ -93,8 +93,8 @@ SENTRY_RELEASE=cabros-bot@dev
 1. Start the server:
 
 ```bash
-npm install
-npm run start-dev
+pnpm install --frozen-lockfile
+pnpm run start-dev
 ```
 
 1. Confirm in logs that monitoring initialized successfully (e.g., `Sentry monitoring enabled (environment=development, release=cabros-bot@dev)`).
@@ -208,7 +208,7 @@ To confirm that Sentry does not change user-visible behavior (User Story 2, FR-0
    - Run existing Jest suites (unit + integration):
 
    ```bash
-   npm test
+   pnpm test
    ```
 
    - Exercise manual scenarios for `/api/webhook/alert`, `/api/news-monitor`, Telegram, and WhatsApp.
