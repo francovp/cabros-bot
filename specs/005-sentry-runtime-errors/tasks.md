@@ -33,7 +33,7 @@ description: "Task list for feature 005-sentry-runtime-errors (Sentry runtime er
 
 **Purpose**: Prepare Sentry dependencies and basic monitoring structure without changing runtime behavior.
 
-- [X] T001 Update Sentry dependency in `package.json` to add `@sentry/node` (v8) to the `dependencies` section for the Node.js service
+- [X] T001 Update Sentry dependency in `package.json` to add `@sentry/node` (v10.53.1) to the `dependencies` section for the Node.js service
 - [X] T002 [P] Create monitoring service directory `src/services/monitoring/` to host `SentryService.js` and related helpers
 - [X] T003 [P] Configure Jest global setup in `jest.config.js` and `tests/setup.js` so `@sentry/node` and the monitoring layer can be safely mocked without sending real events
 

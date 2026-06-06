@@ -27,9 +27,9 @@ Environment and runtime behavior (discoverable)
 - Routes under `/api` (e.g. `/api/webhook/alert`) are mounted regardless of bot launch; individual features and notification channels are gated via env flags and per-channel validation.
 
 Dev / run commands
-- `npm install` — install deps.
-- `npm start` — run production entry (`node index.js`).
-- `npm run start-dev` — runs `nodemon index.js` for development.
+- `pnpm install --frozen-lockfile` — install deps.
+- `pnpm start` — run production entry (`node index.js`).
+- `pnpm run start-dev` — runs `nodemon index.js` for development.
 - Healthcheck endpoint: `GET /healthcheck` (provided by `app.js`).
 
 Patterns and conventions to follow
@@ -82,11 +82,11 @@ What an AI code change should preserve
 
 **Test Execution Strategy**:
 - **During development**: Run focused/specific tests only, NOT the full test suite. Examples:
-  - `npm test -- tests/unit/price-parsing.test.js` — test single unit file
-  - `npm test -- tests/integration/news-monitor-basic.test.js` — test single integration file
-  - `npm test -- tests/unit/ --testTimeout=5000` — test entire unit directory
-  - `npm test -- --testNamePattern="should parse price"` — test by test name pattern
-- **After completing all changes**: Run the full test suite `npm test` once per implementation to ensure no regressions
+  - `pnpm test -- tests/unit/price-parsing.test.js` — test single unit file
+  - `pnpm test -- tests/integration/news-monitor-basic.test.js` — test single integration file
+  - `pnpm test -- tests/unit/ --testTimeout=5000` — test entire unit directory
+  - `pnpm test -- --testNamePattern="should parse price"` — test by test name pattern
+- **After completing all changes**: Run the full test suite `pnpm test` once per implementation to ensure no regressions
 - **Rationale**: Full test runs take 2-5 minutes and consume significant token budget. Focused tests give rapid feedback (10-30s) during development. Only run full suite as final validation after full implementation phase.
 - **Performance tip**: Use `--testTimeout=5000` with unit tests to speed up execution; integration tests need higher timeouts (~10000ms)
 
@@ -415,7 +415,7 @@ The system provides an HTTP endpoint (`/api/news-monitor`) that analyzes financi
 - In-memory Map cache for news deduplication with TTL (003-news-monitor, no external storage)
 - Binance API client for precise crypto prices (003-news-monitor, optional fallback to Gemini GoogleSearch)
 - TradingView MCP remote Streamable HTTP server for technical `coin_analysis` report generation (`POST /api/webhook/expanded-analysis-alert`)
-- Sentry SDK for Node (`@sentry/node` v10) for backend runtime error monitoring and warn/error console log capture (005-sentry-runtime-errors; no tracing by default)
+- Sentry SDK for Node (`@sentry/node` v10.53.1) for backend runtime error monitoring and warn/error console log capture (005-sentry-runtime-errors; no tracing by default)
 - Cloud Firestore via `firebase-admin` v9.x for server-side alert document persistence (006-firestore-alert-storage; fire-and-forget, never blocks delivery)
 
 ## Firestore Alert Storage (006-firestore-alert-storage)
