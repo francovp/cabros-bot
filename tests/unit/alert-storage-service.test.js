@@ -14,7 +14,39 @@ const admin = require('firebase-admin');
 const AlertStorageService = require('../../src/services/storage/AlertStorageService');
 
 // ── Shorthand references to mock internals ──────────────────────────────────
-const { __mockAdd: mockAdd, __mockCollection: mockCollection, __mockInitializeApp: mockInitializeApp, __mockCert: mockCert } = admin;
+const {
+	__mockAdd: mockAdd,
+	__mockCollection: mockCollection,
+	__mockGet: mockGet,
+	__mockDocGet: mockDocGet,
+	__mockWhere: mockWhere,
+	__mockOrderBy: mockOrderBy,
+	__mockLimit: mockLimit,
+	__mockInitializeApp: mockInitializeApp,
+	__mockCert: mockCert,
+	__mockTimestampFromDate: mockTimestampFromDate,
+} = admin;
+
+function buildTimestamp(isoString) {
+	return {
+		toDate: () => new Date(isoString),
+	};
+}
+
+function buildQueryDoc(id, data) {
+	return {
+		id,
+		data: () => data,
+	};
+}
+
+function buildDocSnapshot(id, data) {
+	return {
+		exists: Boolean(data),
+		id,
+		data: () => data,
+	};
+}
 
 // ── Test suite ───────────────────────────────────────────────────────────────
 
@@ -216,6 +248,163 @@ describe('AlertStorageService', () => {
 
 			const calledWith = mockAdd.mock.calls[0][0];
 			expect(calledWith.enriched).toBe(true);
+		});
+	});
+
+	describe('listAlerts()', () => {
+		it('returns null when alert storage is disabled', async () => {
+			const result = await AlertStorageService.listAlerts({ limit: 10 });
+			expect(result).toBeNull();
+			expect(mockGet).not.toHaveBeenCalled();
+		});
+
+		it('lists alerts with formatted output and pagination metadata', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('alert-1', {
+						receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+						text: 'BTC alert',
+						enriched: true,
+						enrichmentData: { sentiment: 'bullish' },
+						tokenUsage: { totalTokens: 42 },
+						deliveryResults: [{ channel: 'telegram', success: true }],
+						source: 'webhook',
+						useTradingViewData: false,
+					}),
+					buildQueryDoc('alert-2', {
+						receivedAt: buildTimestamp('2026-06-06T11:00:00.000Z'),
+						text: 'ETH alert',
+						enriched: false,
+						enrichmentData: null,
+						tokenUsage: null,
+						deliveryResults: [],
+						source: 'webhook',
+						useTradingViewData: true,
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.listAlerts({ limit: 1 });
+
+			expect(mockCollection).toHaveBeenCalledWith('alerts');
+			expect(mockOrderBy).toHaveBeenCalledWith('receivedAt', 'desc');
+			expect(mockLimit).toHaveBeenCalledWith(2);
+			expect(result).toEqual({
+				alerts: [
+					{
+						id: 'alert-1',
+						receivedAt: '2026-06-06T12:00:00.000Z',
+						text: 'BTC alert',
+						enriched: true,
+						enrichmentData: { sentiment: 'bullish' },
+						tokenUsage: { totalTokens: 42 },
+						deliveryResults: [{ channel: 'telegram', success: true }],
+						source: 'webhook',
+						useTradingViewData: false,
+					},
+				],
+				hasMore: true,
+				nextBefore: '2026-06-06T12:00:00.000Z',
+			});
+		});
+
+		it('keeps scanning batches until it finds enough filtered alerts', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet
+				.mockResolvedValueOnce({
+					empty: false,
+					docs: [
+						buildQueryDoc('alert-1', {
+							receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+							text: 'Mismatch',
+							enriched: false,
+							enrichmentData: null,
+							tokenUsage: null,
+							deliveryResults: [],
+							source: 'webhook',
+							useTradingViewData: false,
+						}),
+						buildQueryDoc('alert-1b', {
+							receivedAt: buildTimestamp('2026-06-06T11:30:00.000Z'),
+							text: 'Second mismatch',
+							enriched: false,
+							enrichmentData: null,
+							tokenUsage: null,
+							deliveryResults: [],
+							source: 'webhook',
+							useTradingViewData: false,
+						}),
+					],
+				})
+				.mockResolvedValueOnce({
+					empty: false,
+					docs: [
+						buildQueryDoc('alert-2', {
+							receivedAt: buildTimestamp('2026-06-06T11:00:00.000Z'),
+							text: 'Match',
+							enriched: true,
+							enrichmentData: { sentiment: 'bullish' },
+							tokenUsage: null,
+							deliveryResults: [],
+							source: 'webhook',
+							useTradingViewData: false,
+						}),
+					],
+				});
+
+			const result = await AlertStorageService.listAlerts({
+				limit: 1,
+				before: '2026-06-06T13:00:00.000Z',
+				source: 'webhook',
+				enriched: true,
+			});
+
+			expect(mockTimestampFromDate).toHaveBeenCalledWith(new Date('2026-06-06T13:00:00.000Z'));
+			expect(mockWhere).toHaveBeenCalledWith('receivedAt', '<', expect.anything());
+			expect(mockGet).toHaveBeenCalledTimes(2);
+			expect(result.alerts).toHaveLength(1);
+			expect(result.alerts[0].id).toBe('alert-2');
+		});
+	});
+
+	describe('getAlertById()', () => {
+		it('returns null when the alert document does not exist', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockDocGet.mockResolvedValueOnce(buildDocSnapshot('missing-alert', null));
+
+			const result = await AlertStorageService.getAlertById('missing-alert');
+
+			expect(result).toBeNull();
+		});
+
+		it('returns a formatted alert when the document exists', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockDocGet.mockResolvedValueOnce(buildDocSnapshot('alert-123', {
+				receivedAt: buildTimestamp('2026-06-06T10:30:00.000Z'),
+				text: 'Stored alert',
+				enriched: false,
+				enrichmentData: null,
+				tokenUsage: null,
+				deliveryResults: [{ channel: 'telegram', success: true }],
+				source: 'webhook',
+				useTradingViewData: true,
+			}));
+
+			const result = await AlertStorageService.getAlertById('alert-123');
+
+			expect(result).toEqual({
+				id: 'alert-123',
+				receivedAt: '2026-06-06T10:30:00.000Z',
+				text: 'Stored alert',
+				enriched: false,
+				enrichmentData: null,
+				tokenUsage: null,
+				deliveryResults: [{ channel: 'telegram', success: true }],
+				source: 'webhook',
+				useTradingViewData: true,
+			});
 		});
 	});
 });

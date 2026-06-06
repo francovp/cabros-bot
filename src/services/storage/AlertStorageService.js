@@ -27,9 +27,58 @@
 const admin = require('firebase-admin');
 
 const COLLECTION_NAME = 'alerts';
+const DEFAULT_PAGE_SIZE = 50;
+const MAX_PAGE_SIZE = 100;
 
 // Lazy Firestore singleton
 let db = null;
+
+function isEnabled() {
+	return process.env.ENABLE_FIRESTORE_ALERT_STORAGE === 'true';
+}
+
+function clampLimit(limit) {
+	if (!Number.isInteger(limit) || limit < 1) {
+		return DEFAULT_PAGE_SIZE;
+	}
+
+	return Math.min(limit, MAX_PAGE_SIZE);
+}
+
+function getDocTimestamp(document) {
+	if (!document || !document.receivedAt || typeof document.receivedAt.toDate !== 'function') {
+		return null;
+	}
+
+	return document.receivedAt.toDate().toISOString();
+}
+
+function formatAlertDocument(doc) {
+	const data = doc.data() || {};
+	return {
+		id: doc.id,
+		receivedAt: getDocTimestamp(data),
+		text: typeof data.text === 'string' ? data.text : '',
+		enriched: Boolean(data.enriched),
+		enrichmentData: data.enrichmentData || null,
+		tokenUsage: data.tokenUsage || null,
+		deliveryResults: Array.isArray(data.deliveryResults) ? data.deliveryResults : [],
+		source: typeof data.source === 'string' ? data.source : null,
+		useTradingViewData: Boolean(data.useTradingViewData),
+	};
+}
+
+function matchesFilters(alert, filters) {
+	if (filters.source && alert.source !== filters.source) {
+		return false;
+	}
+
+	if (typeof filters.enriched === 'boolean' && alert.enriched !== filters.enriched) {
+		return false;
+	}
+
+	return true;
+}
 
 /**
  * Initialize Firebase Admin (idempotent) and return Firestore client.
@@ -43,7 +92,7 @@ let db = null;
  * @returns {FirebaseFirestore.Firestore | null}
  */
 function getFirestore() {
-	if (process.env.ENABLE_FIRESTORE_ALERT_STORAGE !== 'true') {
+	if (!isEnabled()) {
 		return null;
 	}
 
@@ -125,8 +174,98 @@ async function saveAlert({ text, enriched, enrichmentData, tokenUsage, deliveryR
 	}
 }
 
+/**
+ * Read stored alerts from Firestore with a descending receivedAt cursor.
+ *
+ * Filtering stays in memory so the endpoint does not require new composite
+ * Firestore indexes for source/enriched combinations.
+ *
+ * @param {Object} params
+ * @param {number} params.limit
+ * @param {string|undefined} params.before
+ * @param {string|undefined} params.source
+ * @param {boolean|undefined} params.enriched
+ * @returns {Promise<{alerts: Array, hasMore: boolean, nextBefore: string|null}|null>}
+ */
+async function listAlerts({ limit = DEFAULT_PAGE_SIZE, before, source, enriched } = {}) {
+	const firestore = getFirestore();
+	if (!firestore) {
+		return null;
+	}
+
+	const pageSize = clampLimit(limit);
+	const targetCount = pageSize + 1;
+	const matches = [];
+	let beforeCursor = before
+		? admin.firestore.Timestamp.fromDate(new Date(before))
+		: null;
+
+	while (matches.length < targetCount) {
+		let query = firestore.collection(COLLECTION_NAME).orderBy('receivedAt', 'desc').limit(targetCount);
+		if (beforeCursor) {
+			query = query.where('receivedAt', '<', beforeCursor);
+		}
+
+		const snapshot = await query.get();
+		if (!snapshot || snapshot.empty || !Array.isArray(snapshot.docs) || snapshot.docs.length === 0) {
+			break;
+		}
+
+		for (const doc of snapshot.docs) {
+			const formatted = formatAlertDocument(doc);
+			if (matchesFilters(formatted, { source, enriched })) {
+				matches.push(formatted);
+				if (matches.length >= targetCount) {
+					break;
+				}
+			}
+		}
+
+		const lastDoc = snapshot.docs[snapshot.docs.length - 1];
+		const lastData = lastDoc && typeof lastDoc.data === 'function' ? lastDoc.data() : null;
+		if (!lastData || !lastData.receivedAt || typeof lastData.receivedAt.toDate !== 'function') {
+			break;
+		}
+
+		beforeCursor = admin.firestore.Timestamp.fromDate(lastData.receivedAt.toDate());
+		if (snapshot.docs.length < targetCount) {
+			break;
+		}
+	}
+
+	const alerts = matches.slice(0, pageSize);
+	return {
+		alerts,
+		hasMore: matches.length > pageSize,
+		nextBefore: alerts.length > 0 ? alerts[alerts.length - 1].receivedAt : null,
+	};
+}
+
+/**
+ * Fetch a single stored alert by its Firestore document ID.
+ *
+ * @param {string} alertId
+ * @returns {Promise<Object|null>}
+ */
+async function getAlertById(alertId) {
+	const firestore = getFirestore();
+	if (!firestore) {
+		return null;
+	}
+
+	const snapshot = await firestore.collection(COLLECTION_NAME).doc(alertId).get();
+	if (!snapshot || !snapshot.exists) {
+		return null;
+	}
+
+	return formatAlertDocument(snapshot);
+}
+
 module.exports = {
+	isEnabled,
 	saveAlert,
+	listAlerts,
+	getAlertById,
 	// Exported for testing
 	getFirestore,
 	COLLECTION_NAME,

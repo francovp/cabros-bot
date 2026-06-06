@@ -12,6 +12,7 @@ Key files / entry points
 - `src/controllers/webhooks/handlers/alert/alert.js` — webhook handler that forwards alert text to a Telegram chat.
 - `src/controllers/webhooks/handlers/expandedAnalysisAlert/expandedAnalysisAlert.js` — `POST /api/webhook/expanded-analysis-alert` handler that builds TradingView MCP analysis reports and sends them through notification channels.
 - `src/controllers/webhooks/handlers/jobs/jobs.js` — job creation (`POST /api/jobs/tradingview-analysis`) and status polling (`GET /api/jobs/:jobId`) handler.
+- `src/controllers/alerts/alerts.js` — stored alert read handlers for `GET /api/alerts` and `GET /api/alerts/:alertId`.
 - `src/services/jobs/JobService.js` — manages in-memory job state, executes background TradingView analysis runs, and performs periodic expiration cleanup.
 - `src/services/tradingview/expandedAnalysisAlertReport.js` — parses `EXCHANGE:SYMBOL` requests and formats grouped Spanish technical-analysis reports.
 - `src/services/monitoring/SentryService.js` — wraps `@sentry/node` for runtime error monitoring (005).
@@ -25,6 +26,7 @@ Environment and runtime behavior (discoverable)
 - Optional but relevant (non-exhaustive; see feature sections below for full config): `ENABLE_TELEGRAM_BOT`, `PORT`, `TELEGRAM_CHAT_ID`, `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID`, `ENABLE_WHATSAPP_ALERTS`, `ENABLE_GEMINI_GROUNDING`, `GEMINI_API_KEY`, `ENABLE_LANGFUSE_PROMPTS`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL`, `LANGFUSE_PROMPT_LABEL`, `LANGFUSE_PROMPT_CACHE_TTL_SECONDS`, `BRAVE_SEARCH_API_KEY`, `BRAVE_SEARCH_ENDPOINT`, `FORCE_BRAVE_SEARCH`, `MODEL_PROVIDER`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `ENABLE_NEWS_MONITOR`, `EXPANDED_ANALYSIS_ALERT_SYMBOLS`, `EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS`, `TRADINGVIEW_MCP_URL`, `TRADINGVIEW_MCP_TIMEOUT_MS`, `TRADINGVIEW_MCP_MAX_RETRIES`, `TRADINGVIEW_MCP_DEFAULT_TIMEFRAME`, `ENABLE_SENTRY`, `SENTRY_DSN`, `SENTRY_TRACES_SAMPLE_RATE`, `SENTRY_CONSOLE_LOG_LEVELS`, `LOG_LEVEL`, `SERVICE_NAME`, `RATE_LIMIT_WINDOW_MS`, `RATE_LIMIT_MAX`, `RENDER`, `IS_PULL_REQUEST`, `RENDER_GIT_COMMIT`, `RENDER_GIT_REPO_SLUG`.
 - Bot startup is gated: bot is launched only when `ENABLE_TELEGRAM_BOT === 'true'` and not a preview environment (`RENDER==='true' && IS_PULL_REQUEST==='true'` disables it).
 - Routes under `/api` (e.g. `/api/webhook/alert`) are mounted regardless of bot launch; individual features and notification channels are gated via env flags and per-channel validation.
+- Stored alert read routes (`GET /api/alerts`, `GET /api/alerts/:alertId`) are also mounted under `/api`; they require `WEBHOOK_API_KEY` when configured and return `403 FEATURE_DISABLED` unless `ENABLE_FIRESTORE_ALERT_STORAGE=true`.
 
 Dev / run commands
 - `npm install` — install deps.
@@ -53,6 +55,7 @@ Small, concrete examples
 - Get price via Telegram: send message `/precio BTCUSDT` -> handler calls `client.getAvgPrice({ symbol: 'BTCUSDT' })` and replies with `Precio de BTCUSDT es <price>`.
 - Send a webhook alert (when bot enabled): POST to `/api/webhook/alert` with body `{ "text": "Alert body" }` or `text/plain` body `Alert body`.
 - Generate an expanded analysis alert: POST to `/api/webhook/expanded-analysis-alert` with body `{ "symbols": ["BINANCE:BTCUSDT", "NASDAQ:NVDA"], "timeframe": "1D" }`; if `symbols` is empty it falls back to `EXPANDED_ANALYSIS_ALERT_SYMBOLS`, and returns 400 if neither is present.
+- Inspect stored alerts: `GET /api/alerts?limit=50&before=2026-06-06T12:00:00.000Z&source=webhook&enriched=true` and `GET /api/alerts/:alertId`.
 
 What an AI code change should preserve
 - Do not change how env gating works in `index.js` without adjusting tests/deploys — deployments rely on `RENDER` and `IS_PULL_REQUEST` checks.
@@ -422,8 +425,9 @@ The system provides an HTTP endpoint (`/api/news-monitor`) that analyzes financi
 
 Every successful `POST /api/webhook/alert` request is persisted as a document in the `alerts` Firestore collection after the HTTP response has been sent.
 
-**Core Component**:
-- `src/services/storage/AlertStorageService.js` — lazy `firebase-admin` singleton, `saveAlert()` wrapper, fail-open error handling
+**Core Components**:
+- `src/services/storage/AlertStorageService.js` — lazy `firebase-admin` singleton, `saveAlert()` wrapper, read helpers (`listAlerts()`, `getAlertById()`), fail-open write handling
+- `src/controllers/alerts/alerts.js` — HTTP controller for stored alert list/detail endpoints
 
 **Data Model** (collection: `alerts`, document ID: auto-generated):
 
@@ -452,6 +456,11 @@ Every successful `POST /api/webhook/alert` request is persisted as a document in
 - If `ENABLE_FIRESTORE_ALERT_STORAGE` is not `'true'`, `getFirestore()` returns `null` immediately
 - If `firebase-admin` initialization fails (bad credentials, wrong project), `db` is set to `null` and a warning is logged; subsequent calls are no-ops
 
+**Read API**:
+- `GET /api/alerts` returns stored alerts ordered by `receivedAt` descending with `limit`, `before`, `source`, and `enriched` query support
+- `GET /api/alerts/:alertId` returns a single formatted alert document by Firestore document ID
+- Read filtering for `source` and `enriched` is applied in memory after `receivedAt`-ordered batches to avoid introducing new composite Firestore index requirements
+
 **Alert Flow Integration** (`src/controllers/webhooks/handlers/alert/alert.js`):
 ```
 Webhook → validate → enrich → sendToAll → res.json() → saveAlert() [fire-and-forget]
@@ -459,9 +468,10 @@ Webhook → validate → enrich → sendToAll → res.json() → saveAlert() [fi
 Storage happens **after** the HTTP response; the caller is never blocked.
 
 **Where to look first when extending or debugging**:
-- `src/services/storage/AlertStorageService.js` — initialization, credential parsing, `saveAlert()` logic
+- `src/services/storage/AlertStorageService.js` — initialization, credential parsing, `saveAlert()`, `listAlerts()`, and `getAlertById()` logic
+- `src/controllers/alerts/alerts.js` — list/detail request validation and response shaping
 - `src/controllers/webhooks/handlers/alert/alert.js` — fire-and-forget call site (after `res.json()`)
-- Tests in `tests/unit/alert-storage-service.test.js`
+- Tests in `tests/unit/alert-storage-service.test.js` and `tests/integration/alerts-endpoint.test.js`
 - Firebase Console → Firestore → `alerts` collection for live document inspection
 
 ## Terminology Guide: Grounding vs Enrichment
