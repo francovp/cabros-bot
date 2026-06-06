@@ -29,6 +29,7 @@ const admin = require('firebase-admin');
 const COLLECTION_NAME = 'alerts';
 const DEFAULT_PAGE_SIZE = 50;
 const MAX_PAGE_SIZE = 100;
+const STORAGE_UNAVAILABLE_CODE = 'STORAGE_UNAVAILABLE';
 
 // Lazy Firestore singleton
 let db = null;
@@ -78,6 +79,15 @@ function matchesFilters(alert, filters) {
 	}
 
 	return true;
+}
+
+function createStorageUnavailableError(cause) {
+	const error = new Error('Alert storage is enabled but Firestore is unavailable. Check Firestore credentials and project configuration.');
+	error.code = STORAGE_UNAVAILABLE_CODE;
+	if (cause) {
+		error.cause = cause;
+	}
+	return error;
 }
 
 /**
@@ -188,9 +198,13 @@ async function saveAlert({ text, enriched, enrichmentData, tokenUsage, deliveryR
  * @returns {Promise<{alerts: Array, hasMore: boolean, nextBefore: string|null}|null>}
  */
 async function listAlerts({ limit = DEFAULT_PAGE_SIZE, before, source, enriched } = {}) {
+	if (!isEnabled()) {
+		return null;
+	}
+
 	const firestore = getFirestore();
 	if (!firestore) {
-		return null;
+		throw createStorageUnavailableError();
 	}
 
 	const pageSize = clampLimit(limit);
@@ -206,7 +220,14 @@ async function listAlerts({ limit = DEFAULT_PAGE_SIZE, before, source, enriched 
 			query = query.where('receivedAt', '<', beforeCursor);
 		}
 
-		const snapshot = await query.get();
+		let snapshot;
+		try {
+			snapshot = await query.get();
+		} catch (error) {
+			console.warn('[AlertStorageService] Failed to read alerts from Firestore:', error.message);
+			throw createStorageUnavailableError(error);
+		}
+
 		if (!snapshot || snapshot.empty || !Array.isArray(snapshot.docs) || snapshot.docs.length === 0) {
 			break;
 		}
@@ -248,12 +269,22 @@ async function listAlerts({ limit = DEFAULT_PAGE_SIZE, before, source, enriched 
  * @returns {Promise<Object|null>}
  */
 async function getAlertById(alertId) {
-	const firestore = getFirestore();
-	if (!firestore) {
+	if (!isEnabled()) {
 		return null;
 	}
 
-	const snapshot = await firestore.collection(COLLECTION_NAME).doc(alertId).get();
+	const firestore = getFirestore();
+	if (!firestore) {
+		throw createStorageUnavailableError();
+	}
+
+	let snapshot;
+	try {
+		snapshot = await firestore.collection(COLLECTION_NAME).doc(alertId).get();
+	} catch (error) {
+		console.warn('[AlertStorageService] Failed to read alert from Firestore:', error.message);
+		throw createStorageUnavailableError(error);
+	}
 	if (!snapshot || !snapshot.exists) {
 		return null;
 	}
@@ -266,6 +297,7 @@ module.exports = {
 	saveAlert,
 	listAlerts,
 	getAlertById,
+	STORAGE_UNAVAILABLE_CODE,
 	// Exported for testing
 	getFirestore,
 	COLLECTION_NAME,

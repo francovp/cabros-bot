@@ -598,6 +598,7 @@ Jobs are retained in memory and automatically evicted after 1 hour.
 When `ENABLE_FIRESTORE_ALERT_STORAGE=true`, successful `POST /api/webhook/alert` requests are persisted to Firestore and can be inspected through the protected alerts read API.
 
 Both endpoints below require the same `x-api-key` header used by the webhook routes.
+If alert storage is enabled but Firestore credentials/project access are unavailable, both endpoints return `503 STORAGE_UNAVAILABLE` instead of a generic `500`.
 
 #### GET /api/alerts
 

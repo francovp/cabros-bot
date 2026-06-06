@@ -258,6 +258,17 @@ describe('AlertStorageService', () => {
 			expect(mockGet).not.toHaveBeenCalled();
 		});
 
+		it('throws STORAGE_UNAVAILABLE when Firestore initialization fails', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockInitializeApp.mockImplementationOnce(() => {
+				throw new Error('Bad credentials');
+			});
+
+			await expect(AlertStorageService.listAlerts({ limit: 10 })).rejects.toMatchObject({
+				code: 'STORAGE_UNAVAILABLE',
+			});
+		});
+
 		it('lists alerts with formatted output and pagination metadata', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 			mockGet.mockResolvedValueOnce({
@@ -367,9 +378,29 @@ describe('AlertStorageService', () => {
 			expect(result.alerts).toHaveLength(1);
 			expect(result.alerts[0].id).toBe('alert-2');
 		});
+
+		it('throws STORAGE_UNAVAILABLE when Firestore reads fail', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockRejectedValueOnce(new Error('Permission denied'));
+
+			await expect(AlertStorageService.listAlerts({ limit: 10 })).rejects.toMatchObject({
+				code: 'STORAGE_UNAVAILABLE',
+			});
+		});
 	});
 
 	describe('getAlertById()', () => {
+		it('throws STORAGE_UNAVAILABLE when Firestore initialization fails', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockInitializeApp.mockImplementationOnce(() => {
+				throw new Error('Bad credentials');
+			});
+
+			await expect(AlertStorageService.getAlertById('alert-123')).rejects.toMatchObject({
+				code: 'STORAGE_UNAVAILABLE',
+			});
+		});
+
 		it('returns null when the alert document does not exist', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 			mockDocGet.mockResolvedValueOnce(buildDocSnapshot('missing-alert', null));
@@ -404,6 +435,15 @@ describe('AlertStorageService', () => {
 				deliveryResults: [{ channel: 'telegram', success: true }],
 				source: 'webhook',
 				useTradingViewData: true,
+			});
+		});
+
+		it('throws STORAGE_UNAVAILABLE when Firestore detail reads fail', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockDocGet.mockRejectedValueOnce(new Error('Permission denied'));
+
+			await expect(AlertStorageService.getAlertById('alert-123')).rejects.toMatchObject({
+				code: 'STORAGE_UNAVAILABLE',
 			});
 		});
 	});

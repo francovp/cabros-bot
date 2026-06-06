@@ -4,6 +4,7 @@ jest.mock('../../src/services/storage/AlertStorageService', () => ({
 	isEnabled: jest.fn(),
 	listAlerts: jest.fn(),
 	getAlertById: jest.fn(),
+	STORAGE_UNAVAILABLE_CODE: 'STORAGE_UNAVAILABLE',
 }));
 
 const request = require('supertest');
@@ -118,6 +119,22 @@ describe('Alerts API Integration Tests', () => {
 		});
 	});
 
+	it('returns 503 when Firestore reads are unavailable for the list endpoint', async () => {
+		const error = new Error('Alert storage is enabled but Firestore is unavailable. Check Firestore credentials and project configuration.');
+		error.code = 'STORAGE_UNAVAILABLE';
+		alertStorageService.listAlerts.mockRejectedValue(error);
+
+		const res = await request(app)
+			.get('/api/alerts')
+			.set('x-api-key', 'test-key')
+			.expect(503);
+
+		expect(res.body).toEqual({
+			error: 'Alert storage is enabled but Firestore is unavailable. Check Firestore credentials and project configuration.',
+			code: 'STORAGE_UNAVAILABLE',
+		});
+	});
+
 	it('returns a single stored alert by id', async () => {
 		alertStorageService.getAlertById.mockResolvedValue({
 			id: 'alert-123',
@@ -164,6 +181,22 @@ describe('Alerts API Integration Tests', () => {
 		expect(res.body).toEqual({
 			error: 'Alert not found',
 			code: 'NOT_FOUND',
+		});
+	});
+
+	it('returns 503 when Firestore reads are unavailable for the detail endpoint', async () => {
+		const error = new Error('Alert storage is enabled but Firestore is unavailable. Check Firestore credentials and project configuration.');
+		error.code = 'STORAGE_UNAVAILABLE';
+		alertStorageService.getAlertById.mockRejectedValue(error);
+
+		const res = await request(app)
+			.get('/api/alerts/alert-123')
+			.set('x-api-key', 'test-key')
+			.expect(503);
+
+		expect(res.body).toEqual({
+			error: 'Alert storage is enabled but Firestore is unavailable. Check Firestore credentials and project configuration.',
+			code: 'STORAGE_UNAVAILABLE',
 		});
 	});
 });

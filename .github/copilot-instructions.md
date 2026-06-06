@@ -12,6 +12,7 @@
 
 - `src/services/storage/AlertStorageService.js` owns the Firestore boundary for alert persistence and reads.
 - `saveAlert()` stays fail-open and fire-and-forget after the webhook response.
+- Read endpoints should map Firestore initialization/read failures to `503 STORAGE_UNAVAILABLE` instead of a generic `500`.
 - `listAlerts()` and `getAlertById()` format Firestore documents into API-safe JSON with:
   - `id`
   - `receivedAt`

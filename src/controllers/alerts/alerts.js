@@ -126,15 +126,23 @@ function getAlertById(req, res) {
 function handleAsync(req, res, endpoint, handler) {
 	return Promise.resolve(handler()).catch((error) => {
 		console.error('[AlertsController] Request failed:', error.message);
+		const statusCode = error.code === alertStorageService.STORAGE_UNAVAILABLE_CODE ? 503 : 500;
 		sentryService.captureRuntimeError({
 			channel: 'alerts-controller',
 			error,
 			http: {
 				endpoint,
 				method: req.method,
-				statusCode: 500,
+				statusCode,
 			},
 		});
+
+		if (statusCode === 503) {
+			return res.status(503).json({
+				error: error.message,
+				code: alertStorageService.STORAGE_UNAVAILABLE_CODE,
+			});
+		}
 
 		return res.status(500).json({
 			error: 'Internal server error',
