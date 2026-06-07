@@ -1,6 +1,7 @@
 const packageJson = require('../../package.json');
 
 const DEFAULT_TRADINGVIEW_MCP_URL = 'https://tradingview-mcp.onrender.com/mcp';
+const DEFAULT_AZURE_LLM_ENDPOINT = 'https://models.github.ai/inference';
 
 function isEnabled(value) {
 	return value === 'true';
@@ -121,7 +122,7 @@ function getStatus() {
 	const llmAlertEnrichment = dependencyStatus({
 		enabled: llmAlertEnrichmentDependencyEnabled,
 		configured:
-			hasValue(process.env.AZURE_LLM_ENDPOINT)
+			hasValue(process.env.AZURE_LLM_ENDPOINT || DEFAULT_AZURE_LLM_ENDPOINT)
 			&& hasValue(process.env.AZURE_LLM_KEY)
 			&& hasValue(process.env.AZURE_LLM_MODEL),
 	});

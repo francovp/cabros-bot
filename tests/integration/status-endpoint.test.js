@@ -117,6 +117,26 @@ describe('Status endpoints', () => {
 		});
 	});
 
+	it('treats the default Azure LLM endpoint as configured for enrichment readiness', async () => {
+		process.env.ENABLE_NEWS_MONITOR = 'true';
+		process.env.ENABLE_LLM_ALERT_ENRICHMENT = 'true';
+		process.env.AZURE_LLM_KEY = 'azure-key';
+		process.env.AZURE_LLM_MODEL = 'gpt-4o-mini';
+		delete process.env.AZURE_LLM_ENDPOINT;
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.llmAlertEnrichment).toEqual({
+			enabled: true,
+			configured: true,
+			ready: true,
+			status: 'ready',
+		});
+	});
+
 	it('aliases /api/capabilities to the same payload shape', async () => {
 		const response = await request(app)
 			.get('/api/capabilities')
