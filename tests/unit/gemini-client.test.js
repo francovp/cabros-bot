@@ -15,6 +15,7 @@ jest.mock('../../src/services/grounding/config', () => ({
 	GEMINI_SYSTEM_PROMPT: 'Test system prompt',
 	GROUNDING_MODEL_NAME: 'gemini-2.0-flash',
 	GEMINI_MODEL_NAME: 'gemini-2.0-flash',
+	GEMINI_MODEL_NAME_FALLBACK: 'gemini-2.5-flash-lite',
 }));
 
 describe('Gemini Service', () => {
@@ -59,6 +60,45 @@ describe('Gemini Service', () => {
 			expect(result.insights).toHaveLength(2);
 			expect(result).not.toHaveProperty('technical_levels');
 			// sources are not returned by generateEnrichedAlert
+		});
+
+		it('retries with the fallback Gemini model on transient 500 INTERNAL errors', async () => {
+			genaiClient.llmCallv2
+				.mockRejectedValueOnce(Object.assign(
+					new Error('LLM call failed: ApiError: {"error":{"code":500,"message":"Internal error encountered.","status":"INTERNAL"}}'),
+					{ status: 500 },
+				))
+				.mockResolvedValueOnce({
+					text: JSON.stringify(mockEnrichedResponse),
+					citations: mockSearchResults,
+					modelUsed: 'gemini-2.5-flash-lite',
+				});
+
+			const result = await generateEnrichedAlert({
+				text: 'Bitcoin breaks 83k after a volatile session',
+				searchResults: mockSearchResults,
+			});
+
+			expect(result.sentiment).toBe('BULLISH');
+			expect(result.modelUsed).toBe('gemini-2.5-flash-lite');
+			expect(genaiClient.llmCallv2).toHaveBeenCalledTimes(2);
+			expect(genaiClient.llmCallv2).toHaveBeenNthCalledWith(
+				1,
+				expect.objectContaining({
+					opts: expect.objectContaining({
+						temperature: 0.2,
+					}),
+				}),
+			);
+			expect(genaiClient.llmCallv2).toHaveBeenNthCalledWith(
+				2,
+				expect.objectContaining({
+					opts: expect.objectContaining({
+						model: 'gemini-2.5-flash-lite',
+						temperature: 0.2,
+					}),
+				}),
+			);
 		});
 
 		it('should handle non-English text with preserved language', async () => {

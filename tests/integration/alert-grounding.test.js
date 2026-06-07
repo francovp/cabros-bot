@@ -5,6 +5,7 @@ const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
 const genaiClient = require('../../src/services/grounding/genaiClient');
 const gemini = require('../../src/services/grounding/gemini');
+const { GEMINI_MODEL_NAME_FALLBACK } = require('../../src/services/grounding/config');
 const { initializeNotificationServices } = require('../../src/controllers/webhooks/handlers/alert/alert');
 
 // Define mock search results
@@ -129,6 +130,44 @@ describe('Alert Grounding Integration', () => {
 				expect(messageText).toContain('[Test Result 1](https://test1.com)');
 			}
 		}, 10000);
+
+		it('should retry webhook enrichment with the fallback Gemini model on transient 500 INTERNAL errors', async () => {
+			genaiClient.llmCallv2
+				.mockRejectedValueOnce(Object.assign(
+					new Error('LLM call failed: ApiError: {"error":{"code":500,"message":"Internal error encountered.","status":"INTERNAL"}}'),
+					{ status: 500 },
+				))
+				.mockResolvedValueOnce({
+					text: JSON.stringify({
+						sentiment: 'BULLISH',
+						sentiment_score: 0.9,
+						insights: ['Fallback Insight'],
+					}),
+					citations: mockSearchResults,
+					modelUsed: 'gemini-2.5-flash-lite',
+				});
+
+			const response = await request(app)
+				.post('/api/webhook/alert').set('x-api-key', 'test-key')
+				.send({ text: 'Bitcoin breaks $50,000 mark after volatile trading' })
+				.expect(200);
+
+			expect(response.body.success).toBe(true);
+			expect(response.body.enriched).toBe(true);
+			expect(genaiClient.llmCallv2).toHaveBeenCalledTimes(2);
+			expect(genaiClient.llmCallv2).toHaveBeenNthCalledWith(
+				2,
+				expect.objectContaining({
+					opts: expect.objectContaining({
+						model: GEMINI_MODEL_NAME_FALLBACK,
+					}),
+				}),
+			);
+
+			const telegramResult = response.body.results.find(r => r.channel === 'telegram');
+			expect(telegramResult).toBeDefined();
+			expect(telegramResult.success).toBe(true);
+		});
 
 		it('should handle invalid Gemini JSON by degrading to safe alert', async () => {
 			// Mock invalid JSON response
