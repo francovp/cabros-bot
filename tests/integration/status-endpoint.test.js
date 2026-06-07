@@ -149,6 +149,24 @@ describe('Status endpoints', () => {
 		});
 	});
 
+	it('does not treat a bare Google project id as Firestore ADC readiness', async () => {
+		delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+		delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
+		process.env.GOOGLE_CLOUD_PROJECT = 'cabros-project';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.firestore).toEqual({
+			enabled: true,
+			configured: false,
+			ready: false,
+			status: 'misconfigured',
+		});
+	});
+
 	it('does not leak configured secret values', async () => {
 		const response = await request(app)
 			.get('/api/status')

@@ -16,9 +16,6 @@ function isGoogleManagedRuntime() {
 		|| hasValue(process.env.K_REVISION)
 		|| hasValue(process.env.FUNCTION_TARGET)
 		|| hasValue(process.env.FUNCTION_NAME)
-		|| hasValue(process.env.GOOGLE_CLOUD_PROJECT)
-		|| hasValue(process.env.GCP_PROJECT)
-		|| hasValue(process.env.GCLOUD_PROJECT)
 		|| hasValue(process.env.GAE_SERVICE)
 	);
 }
