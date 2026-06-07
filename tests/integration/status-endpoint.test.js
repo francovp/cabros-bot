@@ -197,6 +197,30 @@ describe('Status endpoints', () => {
 		});
 	});
 
+	it('normalizes mixed-case primary news monitor provider names', async () => {
+		process.env.ENABLE_GEMINI_GROUNDING = 'false';
+		process.env.ENABLE_NEWS_MONITOR = 'true';
+		process.env.MODEL_PROVIDER = 'Azure';
+		process.env.FORCE_BRAVE_SEARCH = 'true';
+		process.env.BRAVE_SEARCH_API_KEY = 'brave-key';
+		process.env.AZURE_LLM_KEY = 'azure-key';
+		process.env.AZURE_LLM_MODEL = 'gpt-4o-mini';
+		delete process.env.GEMINI_API_KEY;
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.newsMonitorLlm).toEqual({
+			enabled: true,
+			provider: 'azure',
+			configured: true,
+			ready: true,
+			status: 'ready',
+		});
+	});
+
 	it('reports Azure as misconfigured when the primary news monitor provider is missing credentials', async () => {
 		process.env.ENABLE_GEMINI_GROUNDING = 'false';
 		process.env.ENABLE_NEWS_MONITOR = 'true';
@@ -367,6 +391,22 @@ describe('Status endpoints', () => {
 		delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
 		delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
 		process.env.GOOGLE_CLOUD_PROJECT = 'cabros-project';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.firestore).toEqual({
+			enabled: true,
+			configured: false,
+			ready: false,
+			status: 'misconfigured',
+		});
+	});
+
+	it('treats malformed inline Firestore credentials as misconfigured', async () => {
+		process.env.FIREBASE_SERVICE_ACCOUNT_JSON = '{"project_id":';
 
 		const response = await request(app)
 			.get('/api/status')

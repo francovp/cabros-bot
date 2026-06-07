@@ -22,6 +22,19 @@ function isGoogleManagedRuntime() {
 	);
 }
 
+function hasValidJsonObject(value) {
+	if (!hasValue(value)) {
+		return false;
+	}
+
+	try {
+		const parsed = JSON.parse(value);
+		return parsed != null && typeof parsed === 'object' && !Array.isArray(parsed);
+	} catch (error) {
+		return false;
+	}
+}
+
 function getModelProvider() {
 	return typeof process.env.MODEL_PROVIDER === 'string' && process.env.MODEL_PROVIDER.trim().length > 0
 		? process.env.MODEL_PROVIDER.trim().toLowerCase()
@@ -159,7 +172,7 @@ function getStatus() {
 	const firestore = dependencyStatus({
 		enabled: firestoreEnabled,
 		configured:
-			hasValue(process.env.FIREBASE_SERVICE_ACCOUNT_JSON)
+			hasValidJsonObject(process.env.FIREBASE_SERVICE_ACCOUNT_JSON)
 			|| hasValue(process.env.GOOGLE_APPLICATION_CREDENTIALS)
 			|| isGoogleManagedRuntime(),
 	});
