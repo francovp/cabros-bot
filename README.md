@@ -168,7 +168,7 @@ Machine-readable runtime status for operational tooling. This endpoint uses the 
 
 The response intentionally exposes only non-sensitive booleans and metadata: service identity, version, commit, environment, feature-flag state, delivery channel readiness, and dependency readiness/configuration status. Secret values such as bot tokens, API keys, DSNs, chat IDs, and provider URLs are not returned.
 
-For `ENABLE_NEWS_MONITOR=true`, the payload also reports the primary LLM dependency used by that flow as `dependencies.newsMonitorLlm`, including the resolved provider (`gemini`, `azure`, or `openrouter`) and whether that provider is actually configured for runtime use.
+For `ENABLE_NEWS_MONITOR=true`, the payload also reports the primary LLM dependency used by that flow as `dependencies.newsMonitorLlm`, including the resolved provider (`gemini`, `azure`, or `openrouter`) and whether that provider is actually configured for runtime use. When `FORCE_BRAVE_SEARCH=true`, the payload also exposes `dependencies.braveSearch` so the forced search path can be monitored independently of Gemini.
 
 `GET /api/capabilities` is an alias for the same payload.
 
@@ -206,6 +206,7 @@ For `ENABLE_NEWS_MONITOR=true`, the payload also reports the primary LLM depende
     "firestore": { "enabled": true, "configured": true, "ready": true, "status": "ready" },
     "sentry": { "enabled": true, "configured": true, "ready": true, "status": "ready" },
     "langfuse": { "enabled": false, "configured": false, "ready": false, "status": "disabled" },
+    "braveSearch": { "enabled": false, "configured": false, "ready": false, "status": "disabled" },
     "newsMonitorLlm": { "provider": "gemini", "enabled": true, "configured": true, "ready": true, "status": "ready" },
     "llmAlertEnrichment": { "enabled": false, "configured": false, "ready": false, "status": "disabled" }
   }

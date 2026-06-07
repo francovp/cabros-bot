@@ -171,6 +171,10 @@ function getStatus() {
 		enabled: langfusePromptsEnabled,
 		configured: hasValue(process.env.LANGFUSE_PUBLIC_KEY) && hasValue(process.env.LANGFUSE_SECRET_KEY),
 	});
+	const braveSearch = dependencyStatus({
+		enabled: newsMonitorEnabled && forceBraveSearch,
+		configured: hasValue(process.env.BRAVE_SEARCH_API_KEY),
+	});
 	const newsMonitorLlm = getNewsMonitorLlmDependency({
 		enabled: newsMonitorEnabled,
 		provider: newsMonitorEnabled ? modelProvider : null,
@@ -221,6 +225,7 @@ function getStatus() {
 			firestore,
 			sentry,
 			langfuse,
+			braveSearch,
 			newsMonitorLlm,
 			llmAlertEnrichment,
 		},

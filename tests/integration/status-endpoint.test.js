@@ -76,6 +76,12 @@ describe('Status endpoints', () => {
 			ready: true,
 			status: 'ready',
 		});
+		expect(response.body.dependencies.braveSearch).toEqual({
+			enabled: false,
+			configured: false,
+			ready: false,
+			status: 'disabled',
+		});
 		expect(response.body.dependencies.sentry.status).toBe('ready');
 	});
 
@@ -145,6 +151,42 @@ describe('Status endpoints', () => {
 			configured: false,
 			ready: false,
 			status: 'disabled',
+		});
+		expect(response.body.dependencies.braveSearch).toEqual({
+			enabled: true,
+			configured: true,
+			ready: true,
+			status: 'ready',
+		});
+		expect(response.body.dependencies.newsMonitorLlm).toEqual({
+			enabled: true,
+			provider: 'azure',
+			configured: true,
+			ready: true,
+			status: 'ready',
+		});
+	});
+
+	it('reports forced Brave search as misconfigured when its API key is missing', async () => {
+		process.env.ENABLE_GEMINI_GROUNDING = 'false';
+		process.env.ENABLE_NEWS_MONITOR = 'true';
+		process.env.MODEL_PROVIDER = 'azure';
+		process.env.FORCE_BRAVE_SEARCH = 'true';
+		process.env.AZURE_LLM_KEY = 'azure-key';
+		process.env.AZURE_LLM_MODEL = 'gpt-4o-mini';
+		delete process.env.GEMINI_API_KEY;
+		delete process.env.BRAVE_SEARCH_API_KEY;
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.braveSearch).toEqual({
+			enabled: true,
+			configured: false,
+			ready: false,
+			status: 'misconfigured',
 		});
 		expect(response.body.dependencies.newsMonitorLlm).toEqual({
 			enabled: true,
