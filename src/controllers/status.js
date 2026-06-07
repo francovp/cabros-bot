@@ -76,11 +76,12 @@ function getStatus() {
 	const whatsappEnabled = isEnabled(process.env.ENABLE_WHATSAPP_ALERTS);
 	const geminiEnabled = isEnabled(process.env.ENABLE_GEMINI_GROUNDING);
 	const newsMonitorEnabled = isEnabled(process.env.ENABLE_NEWS_MONITOR);
-	const tradingViewMcpEnabled = isEnabled(process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT);
+	const marketScannerEnabled = isEnabled(process.env.ENABLE_MARKET_SCANNER);
+	const tradingViewMcpEnrichmentEnabled = isEnabled(process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT);
+	const tradingViewMcpEnabled = tradingViewMcpEnrichmentEnabled || marketScannerEnabled;
 	const firestoreEnabled = isEnabled(process.env.ENABLE_FIRESTORE_ALERT_STORAGE);
 	const sentryEnabled = isEnabled(process.env.ENABLE_SENTRY);
 	const langfusePromptsEnabled = isEnabled(process.env.ENABLE_LANGFUSE_PROMPTS);
-	const marketScannerEnabled = isEnabled(process.env.ENABLE_MARKET_SCANNER);
 	const binancePriceCheckEnabled = isEnabled(process.env.ENABLE_BINANCE_PRICE_CHECK);
 	const llmAlertEnrichmentEnabled = isEnabled(process.env.ENABLE_LLM_ALERT_ENRICHMENT);
 
@@ -131,7 +132,7 @@ function getStatus() {
 			whatsappAlerts: whatsappEnabled,
 			geminiGrounding: geminiEnabled,
 			newsMonitor: newsMonitorEnabled,
-			tradingViewMcpEnrichment: tradingViewMcpEnabled,
+			tradingViewMcpEnrichment: tradingViewMcpEnrichmentEnabled,
 			firestoreAlertStorage: firestoreEnabled,
 			sentryMonitoring: sentryEnabled,
 			langfusePrompts: langfusePromptsEnabled,

@@ -110,6 +110,26 @@ describe('Status endpoints', () => {
 		expect(response.body.dependencies.tradingViewMcp.status).toBe('disabled');
 	});
 
+	it('treats TradingView MCP as enabled when market scanner depends on it', async () => {
+		process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT = 'false';
+		process.env.ENABLE_MARKET_SCANNER = 'true';
+		delete process.env.TRADINGVIEW_MCP_URL;
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.marketScanner).toBe(true);
+		expect(response.body.featureFlags.tradingViewMcpEnrichment).toBe(false);
+		expect(response.body.dependencies.tradingViewMcp).toEqual({
+			enabled: true,
+			configured: true,
+			ready: true,
+			status: 'ready',
+		});
+	});
+
 	it('treats Firestore ADC on Google-managed runtimes as configured', async () => {
 		delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
 		delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
