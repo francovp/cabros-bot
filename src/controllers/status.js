@@ -138,6 +138,21 @@ function getNewsMonitorLlmDependency({ enabled, provider }) {
 	}
 }
 
+function getGeminiDependency({
+	enabled,
+	geminiGroundingEnabled,
+	modelProvider,
+}) {
+	const requiresGeminiModel = geminiGroundingEnabled && modelProvider === 'gemini';
+
+	return dependencyStatus({
+		enabled,
+		configured:
+			hasValue(process.env.GEMINI_API_KEY)
+			&& (!requiresGeminiModel || hasValue(process.env.GEMINI_MODEL_NAME)),
+	});
+}
+
 function getStatus() {
 	const previewEnvironment = isRenderPreview();
 	const modelProvider = getModelProvider();
@@ -171,9 +186,10 @@ function getStatus() {
 			&& hasValue(process.env.WHATSAPP_API_KEY)
 			&& hasValue(process.env.WHATSAPP_CHAT_ID),
 	});
-	const gemini = dependencyStatus({
+	const gemini = getGeminiDependency({
 		enabled: geminiEnabled,
-		configured: hasValue(process.env.GEMINI_API_KEY),
+		geminiGroundingEnabled,
+		modelProvider,
 	});
 	const tradingViewMcp = dependencyStatus({
 		enabled: tradingViewMcpEnabled,

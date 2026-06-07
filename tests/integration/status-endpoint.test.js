@@ -36,6 +36,7 @@ describe('Status endpoints', () => {
 		process.env.WHATSAPP_CHAT_ID = 'chat';
 		process.env.ENABLE_GEMINI_GROUNDING = 'true';
 		process.env.GEMINI_API_KEY = 'gemini-key';
+		process.env.GEMINI_MODEL_NAME = 'gemini-2.5-flash';
 		process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT = 'true';
 		delete process.env.TRADINGVIEW_MCP_URL;
 		process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
@@ -94,6 +95,24 @@ describe('Status endpoints', () => {
 			status: 'disabled',
 		});
 		expect(response.body.dependencies.sentry.status).toBe('ready');
+	});
+
+	it('treats Gemini grounding as misconfigured without a Gemini model on the Gemini provider path', async () => {
+		process.env.MODEL_PROVIDER = 'gemini';
+		delete process.env.GEMINI_MODEL_NAME;
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.geminiGrounding).toBe(true);
+		expect(response.body.dependencies.gemini).toEqual({
+			enabled: true,
+			configured: false,
+			ready: false,
+			status: 'misconfigured',
+		});
 	});
 
 	it('treats Gemini as enabled when news monitor depends on it', async () => {
