@@ -2,6 +2,7 @@ const packageJson = require('../../package.json');
 
 const DEFAULT_TRADINGVIEW_MCP_URL = 'https://tradingview-mcp.onrender.com/mcp';
 const DEFAULT_AZURE_LLM_ENDPOINT = 'https://models.github.ai/inference';
+const DEFAULT_OPENROUTER_MODEL = 'google/gemini-2.0-flash-001';
 
 function isEnabled(value) {
 	return value === 'true';
@@ -73,15 +74,59 @@ function dependencyStatus({ enabled, configured }) {
 	};
 }
 
+function providerDependencyStatus({ enabled, configured, provider = null }) {
+	return {
+		provider,
+		...dependencyStatus({ enabled, configured }),
+	};
+}
+
+function getNewsMonitorLlmDependency({ enabled, provider }) {
+	switch (provider) {
+	case 'gemini':
+		return providerDependencyStatus({
+			enabled,
+			provider,
+			configured: hasValue(process.env.GEMINI_API_KEY) && hasValue(process.env.GEMINI_MODEL_NAME),
+		});
+	case 'azure':
+		return providerDependencyStatus({
+			enabled,
+			provider,
+			configured:
+				hasValue(process.env.AZURE_LLM_ENDPOINT || DEFAULT_AZURE_LLM_ENDPOINT)
+				&& hasValue(process.env.AZURE_LLM_KEY)
+				&& hasValue(process.env.AZURE_LLM_MODEL),
+		});
+	case 'openrouter':
+		return providerDependencyStatus({
+			enabled,
+			provider,
+			configured:
+				hasValue(process.env.OPENROUTER_API_KEY)
+				&& hasValue(process.env.OPENROUTER_MODEL || DEFAULT_OPENROUTER_MODEL),
+		});
+	default:
+		return providerDependencyStatus({
+			enabled,
+			provider,
+			configured: false,
+		});
+	}
+}
+
 function getStatus() {
 	const previewEnvironment = isRenderPreview();
+	const modelProvider = getModelProvider();
 	const telegramFlagEnabled = isEnabled(process.env.ENABLE_TELEGRAM_BOT);
 	const telegramEnabled = telegramFlagEnabled && !previewEnvironment;
 	const whatsappEnabled = isEnabled(process.env.ENABLE_WHATSAPP_ALERTS);
 	const geminiGroundingEnabled = isEnabled(process.env.ENABLE_GEMINI_GROUNDING);
 	const newsMonitorEnabled = isEnabled(process.env.ENABLE_NEWS_MONITOR);
-	const newsMonitorUsesGemini = newsMonitorEnabled && getModelProvider() === 'gemini';
-	const geminiEnabled = geminiGroundingEnabled || newsMonitorUsesGemini;
+	const forceBraveSearch = isEnabled(process.env.FORCE_BRAVE_SEARCH);
+	const newsMonitorUsesGeminiSearch = newsMonitorEnabled && !forceBraveSearch;
+	const newsMonitorUsesGeminiLlm = newsMonitorEnabled && modelProvider === 'gemini';
+	const geminiEnabled = geminiGroundingEnabled || newsMonitorUsesGeminiSearch || newsMonitorUsesGeminiLlm;
 	const marketScannerEnabled = isEnabled(process.env.ENABLE_MARKET_SCANNER);
 	const tradingViewMcpEnrichmentEnabled = isEnabled(process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT);
 	const tradingViewMcpEnabled = tradingViewMcpEnrichmentEnabled || marketScannerEnabled;
@@ -125,6 +170,10 @@ function getStatus() {
 	const langfuse = dependencyStatus({
 		enabled: langfusePromptsEnabled,
 		configured: hasValue(process.env.LANGFUSE_PUBLIC_KEY) && hasValue(process.env.LANGFUSE_SECRET_KEY),
+	});
+	const newsMonitorLlm = getNewsMonitorLlmDependency({
+		enabled: newsMonitorEnabled,
+		provider: newsMonitorEnabled ? modelProvider : null,
 	});
 	const llmAlertEnrichment = dependencyStatus({
 		enabled: llmAlertEnrichmentDependencyEnabled,
@@ -172,6 +221,7 @@ function getStatus() {
 			firestore,
 			sentry,
 			langfuse,
+			newsMonitorLlm,
 			llmAlertEnrichment,
 		},
 	};

@@ -168,6 +168,8 @@ Machine-readable runtime status for operational tooling. This endpoint uses the 
 
 The response intentionally exposes only non-sensitive booleans and metadata: service identity, version, commit, environment, feature-flag state, delivery channel readiness, and dependency readiness/configuration status. Secret values such as bot tokens, API keys, DSNs, chat IDs, and provider URLs are not returned.
 
+For `ENABLE_NEWS_MONITOR=true`, the payload also reports the primary LLM dependency used by that flow as `dependencies.newsMonitorLlm`, including the resolved provider (`gemini`, `azure`, or `openrouter`) and whether that provider is actually configured for runtime use.
+
 `GET /api/capabilities` is an alias for the same payload.
 
 **Response:**
@@ -203,7 +205,9 @@ The response intentionally exposes only non-sensitive booleans and metadata: ser
     "tradingViewMcp": { "enabled": true, "configured": true, "ready": true, "status": "ready" },
     "firestore": { "enabled": true, "configured": true, "ready": true, "status": "ready" },
     "sentry": { "enabled": true, "configured": true, "ready": true, "status": "ready" },
-    "langfuse": { "enabled": false, "configured": false, "ready": false, "status": "disabled" }
+    "langfuse": { "enabled": false, "configured": false, "ready": false, "status": "disabled" },
+    "newsMonitorLlm": { "provider": "gemini", "enabled": true, "configured": true, "ready": true, "status": "ready" },
+    "llmAlertEnrichment": { "enabled": false, "configured": false, "ready": false, "status": "disabled" }
   }
 }
 ```

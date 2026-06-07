@@ -98,6 +98,32 @@ describe('Status endpoints', () => {
 		});
 	});
 
+	it('reports the primary news monitor Gemini provider separately from Gemini search readiness', async () => {
+		process.env.ENABLE_GEMINI_GROUNDING = 'false';
+		process.env.ENABLE_NEWS_MONITOR = 'true';
+		process.env.MODEL_PROVIDER = 'gemini';
+		delete process.env.GEMINI_MODEL_NAME;
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.gemini).toEqual({
+			enabled: true,
+			configured: true,
+			ready: true,
+			status: 'ready',
+		});
+		expect(response.body.dependencies.newsMonitorLlm).toEqual({
+			enabled: true,
+			provider: 'gemini',
+			configured: false,
+			ready: false,
+			status: 'misconfigured',
+		});
+	});
+
 	it('does not require Gemini when news monitor uses Brave search and Azure', async () => {
 		process.env.ENABLE_GEMINI_GROUNDING = 'false';
 		process.env.ENABLE_NEWS_MONITOR = 'true';
@@ -119,6 +145,70 @@ describe('Status endpoints', () => {
 			configured: false,
 			ready: false,
 			status: 'disabled',
+		});
+		expect(response.body.dependencies.newsMonitorLlm).toEqual({
+			enabled: true,
+			provider: 'azure',
+			configured: true,
+			ready: true,
+			status: 'ready',
+		});
+	});
+
+	it('reports Azure as misconfigured when the primary news monitor provider is missing credentials', async () => {
+		process.env.ENABLE_GEMINI_GROUNDING = 'false';
+		process.env.ENABLE_NEWS_MONITOR = 'true';
+		process.env.MODEL_PROVIDER = 'azure';
+		process.env.FORCE_BRAVE_SEARCH = 'true';
+		delete process.env.GEMINI_API_KEY;
+		delete process.env.AZURE_LLM_KEY;
+		delete process.env.AZURE_LLM_MODEL;
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.gemini).toEqual({
+			enabled: false,
+			configured: false,
+			ready: false,
+			status: 'disabled',
+		});
+		expect(response.body.dependencies.newsMonitorLlm).toEqual({
+			enabled: true,
+			provider: 'azure',
+			configured: false,
+			ready: false,
+			status: 'misconfigured',
+		});
+	});
+
+	it('reports OpenRouter as the primary news monitor provider', async () => {
+		process.env.ENABLE_GEMINI_GROUNDING = 'false';
+		process.env.ENABLE_NEWS_MONITOR = 'true';
+		process.env.MODEL_PROVIDER = 'openrouter';
+		process.env.FORCE_BRAVE_SEARCH = 'true';
+		delete process.env.GEMINI_API_KEY;
+		delete process.env.OPENROUTER_API_KEY;
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.gemini).toEqual({
+			enabled: false,
+			configured: false,
+			ready: false,
+			status: 'disabled',
+		});
+		expect(response.body.dependencies.newsMonitorLlm).toEqual({
+			enabled: true,
+			provider: 'openrouter',
+			configured: false,
+			ready: false,
+			status: 'misconfigured',
 		});
 	});
 
