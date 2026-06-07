@@ -79,6 +79,25 @@ describe('Status endpoints', () => {
 		expect(response.body.dependencies.sentry.status).toBe('ready');
 	});
 
+	it('treats Gemini as enabled when news monitor depends on it', async () => {
+		process.env.ENABLE_GEMINI_GROUNDING = 'false';
+		process.env.ENABLE_NEWS_MONITOR = 'true';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.geminiGrounding).toBe(false);
+		expect(response.body.featureFlags.newsMonitor).toBe(true);
+		expect(response.body.dependencies.gemini).toEqual({
+			enabled: true,
+			configured: true,
+			ready: true,
+			status: 'ready',
+		});
+	});
+
 	it('aliases /api/capabilities to the same payload shape', async () => {
 		const response = await request(app)
 			.get('/api/capabilities')

@@ -71,8 +71,9 @@ function getStatus() {
 	const telegramFlagEnabled = isEnabled(process.env.ENABLE_TELEGRAM_BOT);
 	const telegramEnabled = telegramFlagEnabled && !previewEnvironment;
 	const whatsappEnabled = isEnabled(process.env.ENABLE_WHATSAPP_ALERTS);
-	const geminiEnabled = isEnabled(process.env.ENABLE_GEMINI_GROUNDING);
+	const geminiGroundingEnabled = isEnabled(process.env.ENABLE_GEMINI_GROUNDING);
 	const newsMonitorEnabled = isEnabled(process.env.ENABLE_NEWS_MONITOR);
+	const geminiEnabled = geminiGroundingEnabled || newsMonitorEnabled;
 	const marketScannerEnabled = isEnabled(process.env.ENABLE_MARKET_SCANNER);
 	const tradingViewMcpEnrichmentEnabled = isEnabled(process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT);
 	const tradingViewMcpEnabled = tradingViewMcpEnrichmentEnabled || marketScannerEnabled;
@@ -127,7 +128,7 @@ function getStatus() {
 		featureFlags: {
 			telegramBot: telegramFlagEnabled,
 			whatsappAlerts: whatsappEnabled,
-			geminiGrounding: geminiEnabled,
+			geminiGrounding: geminiGroundingEnabled,
 			newsMonitor: newsMonitorEnabled,
 			tradingViewMcpEnrichment: tradingViewMcpEnrichmentEnabled,
 			firestoreAlertStorage: firestoreEnabled,
