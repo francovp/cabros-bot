@@ -1,6 +1,9 @@
+const { mkdtempSync, rmSync, writeFileSync } = require('fs');
 const request = require('supertest');
 const express = require('express');
 const { generateKeyPairSync } = require('crypto');
+const { tmpdir } = require('os');
+const { join } = require('path');
 const { getRoutes } = require('../../src/routes');
 
 const testPrivateKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({
@@ -16,8 +19,10 @@ const validFirestoreServiceAccountJson = JSON.stringify({
 describe('Status endpoints', () => {
 	const originalEnv = { ...process.env };
 	let app;
+	let tempDir;
 
 	beforeEach(() => {
+		tempDir = null;
 		app = express();
 		app.use(express.json());
 		app.use('/api', getRoutes(() => null));
@@ -52,6 +57,10 @@ describe('Status endpoints', () => {
 			}
 		});
 		Object.assign(process.env, originalEnv);
+
+		if (tempDir) {
+			rmSync(tempDir, { recursive: true, force: true });
+		}
 	});
 
 	it('requires a valid API key when WEBHOOK_API_KEY is configured', async () => {
@@ -432,6 +441,43 @@ describe('Status endpoints', () => {
 			configured: false,
 			ready: false,
 			status: 'misconfigured',
+		});
+	});
+
+	it('treats an unreadable Firestore credential file path as misconfigured', async () => {
+		delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+		process.env.GOOGLE_APPLICATION_CREDENTIALS = '/tmp/cabros-missing-service-account.json';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.firestore).toEqual({
+			enabled: true,
+			configured: false,
+			ready: false,
+			status: 'misconfigured',
+		});
+	});
+
+	it('treats a readable Firestore credential file path as configured', async () => {
+		delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+		tempDir = mkdtempSync(join(tmpdir(), 'cabros-firestore-'));
+		const credentialsPath = join(tempDir, 'service-account.json');
+		writeFileSync(credentialsPath, validFirestoreServiceAccountJson);
+		process.env.GOOGLE_APPLICATION_CREDENTIALS = credentialsPath;
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.firestore).toEqual({
+			enabled: true,
+			configured: true,
+			ready: true,
+			status: 'ready',
 		});
 	});
 

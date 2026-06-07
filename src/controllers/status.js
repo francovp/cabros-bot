@@ -1,4 +1,5 @@
 const { createPrivateKey } = require('crypto');
+const { accessSync, constants } = require('fs');
 const packageJson = require('../../package.json');
 
 const DEFAULT_TRADINGVIEW_MCP_URL = 'https://tradingview-mcp.onrender.com/mcp';
@@ -39,6 +40,19 @@ function hasValidInlineFirestoreCredentials(value) {
 		}
 
 		createPrivateKey({ key: privateKey, format: 'pem' });
+		return true;
+	} catch (error) {
+		return false;
+	}
+}
+
+function hasReadableFile(path) {
+	if (!hasValue(path)) {
+		return false;
+	}
+
+	try {
+		accessSync(path, constants.R_OK);
 		return true;
 	} catch (error) {
 		return false;
@@ -199,7 +213,7 @@ function getStatus() {
 		enabled: firestoreEnabled,
 		configured:
 			hasValidInlineFirestoreCredentials(process.env.FIREBASE_SERVICE_ACCOUNT_JSON)
-			|| hasValue(process.env.GOOGLE_APPLICATION_CREDENTIALS)
+			|| hasReadableFile(process.env.GOOGLE_APPLICATION_CREDENTIALS)
 			|| isGoogleManagedRuntime(),
 	});
 	const sentry = dependencyStatus({
