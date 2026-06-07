@@ -26,6 +26,28 @@ function buildContextSnippet(searchResultText = '') {
 		: '';
 }
 
+function shouldRetryGeminiWithFallback(error) {
+	if (!error) {
+		return false;
+	}
+
+	const status = Number(error.status);
+	if ([500, 503, 504].includes(status)) {
+		return true;
+	}
+
+	const errorMessage = String(error.message || '').toUpperCase();
+	return (
+		errorMessage.includes('500')
+		|| errorMessage.includes('503')
+		|| errorMessage.includes('504')
+		|| errorMessage.includes('INTERNAL')
+		|| errorMessage.includes('UNAVAILABLE')
+		|| errorMessage.includes('DEADLINE_EXCEEDED')
+		|| errorMessage.includes('OVERLOADED')
+	);
+}
+
 /**
  * Generates a summary with citations given an alert text and optional context
  * @param {string} text - Alert text to summarize
@@ -292,12 +314,32 @@ async function generateEnrichedAlert({ text, searchResults = [], searchResultTex
 	);
 
 	try {
-		const { text: responseText, usage, modelUsed } = await genaiClient.llmCallv2({
+		const llmParams = {
 			systemPrompt,
 			userPrompt,
 			context: { citations: searchResults },
 			opts: { temperature: 0.2 },
-		});
+		};
+		let llmResult;
+
+		try {
+			llmResult = await genaiClient.llmCallv2(llmParams);
+		} catch (error) {
+			if (!GEMINI_MODEL_NAME_FALLBACK || !shouldRetryGeminiWithFallback(error)) {
+				throw error;
+			}
+
+			console.warn('[Gemini] Primary enrichment model failed, attempting fallback model:', GEMINI_MODEL_NAME_FALLBACK);
+			llmResult = await genaiClient.llmCallv2({
+				...llmParams,
+				opts: {
+					...llmParams.opts,
+					model: GEMINI_MODEL_NAME_FALLBACK,
+				},
+			});
+		}
+
+		const { text: responseText, usage, modelUsed } = llmResult;
 
 		if (tokenUsage && usage) {
 			const modelName = modelUsed || GEMINI_MODEL_NAME;
