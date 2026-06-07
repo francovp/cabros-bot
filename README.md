@@ -64,6 +64,13 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 - `TRADINGVIEW_MCP_DEFAULT_TIMEFRAME` - Default timeframe fallback (default: `1D` for `/api/webhook/expanded-analysis-alert`, `1h` for webhook signal enrichment)
 - Runtime gate: TradingView MCP data is only used when webhook requests include `?useTradingViewData=true`
 
+#### Firestore Alert Storage
+
+- `ENABLE_FIRESTORE_ALERT_STORAGE` - Enable Firestore persistence and alert read API (`true` or `false`, default: `false`)
+- `FIREBASE_SERVICE_ACCOUNT_JSON` - Inline Firebase service account JSON for server-side Firestore access
+- `FIREBASE_PROJECT_ID` - Optional Firebase project override for Admin SDK initialization
+- `GOOGLE_APPLICATION_CREDENTIALS` - Optional path to a service account JSON file for local development
+
 #### Admin Notifications
 
 - `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID` - Chat ID for admin notifications and deployment alerts
@@ -583,6 +590,79 @@ Jobs are retained in memory and automatically evicted after 1 hour.
   "createdAt": "2026-05-25T01:30:00.000Z",
   "updatedAt": "2026-05-25T01:30:05.000Z",
   "totalDurationMs": 5123
+}
+```
+
+### Stored Alerts API
+
+When `ENABLE_FIRESTORE_ALERT_STORAGE=true`, successful `POST /api/webhook/alert` requests are persisted to Firestore and can be inspected through the protected alerts read API.
+
+Both endpoints below require the same `x-api-key` header used by the webhook routes.
+If alert storage is enabled but Firestore credentials/project access are unavailable, both endpoints return `503 STORAGE_UNAVAILABLE` instead of a generic `500`.
+
+#### GET /api/alerts
+
+List stored alerts ordered by `receivedAt` descending.
+
+**Query Parameters:**
+- `limit` - Integer between `1` and `100` (default: `50`)
+- `before` - Either a legacy ISO-8601 timestamp cursor or the opaque `nextBefore` token from a previous response
+- `source` - Optional source filter (current writes use `webhook`)
+- `enriched` - Optional boolean filter (`true` or `false`)
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "alerts": [
+    {
+      "id": "alert-1",
+      "receivedAt": "2026-06-06T12:00:00.000Z",
+      "text": "BTC alert",
+      "enriched": true,
+      "enrichmentData": {
+        "sentiment": "bullish"
+      },
+      "tokenUsage": {
+        "totalTokens": 42
+      },
+      "deliveryResults": [
+        {
+          "channel": "telegram",
+          "success": true
+        }
+      ],
+      "source": "webhook",
+      "useTradingViewData": false
+    }
+  ],
+  "pagination": {
+    "hasMore": false,
+    "limit": 50,
+    "nextBefore": "eyJ2IjoxLCJyZWNlaXZlZEF0IjoiMjAyNi0wNi0wNlQxMjowMDowMC4wMDBaIiwiaWQiOiJhbGVydC0xIn0"
+  }
+}
+```
+
+#### GET /api/alerts/:alertId
+
+Retrieve a single stored alert by Firestore document ID.
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "alert": {
+    "id": "alert-123",
+    "receivedAt": "2026-06-06T10:30:00.000Z",
+    "text": "Stored alert",
+    "enriched": false,
+    "enrichmentData": null,
+    "tokenUsage": null,
+    "deliveryResults": [],
+    "source": "webhook",
+    "useTradingViewData": true
+  }
 }
 ```
 
