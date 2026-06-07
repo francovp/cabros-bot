@@ -82,6 +82,7 @@ function getStatus() {
 	const langfusePromptsEnabled = isEnabled(process.env.ENABLE_LANGFUSE_PROMPTS);
 	const binancePriceCheckEnabled = isEnabled(process.env.ENABLE_BINANCE_PRICE_CHECK);
 	const llmAlertEnrichmentEnabled = isEnabled(process.env.ENABLE_LLM_ALERT_ENRICHMENT);
+	const llmAlertEnrichmentDependencyEnabled = llmAlertEnrichmentEnabled && newsMonitorEnabled;
 
 	const telegram = dependencyStatus({
 		enabled: telegramEnabled,
@@ -116,6 +117,13 @@ function getStatus() {
 	const langfuse = dependencyStatus({
 		enabled: langfusePromptsEnabled,
 		configured: hasValue(process.env.LANGFUSE_PUBLIC_KEY) && hasValue(process.env.LANGFUSE_SECRET_KEY),
+	});
+	const llmAlertEnrichment = dependencyStatus({
+		enabled: llmAlertEnrichmentDependencyEnabled,
+		configured:
+			hasValue(process.env.AZURE_LLM_ENDPOINT)
+			&& hasValue(process.env.AZURE_LLM_KEY)
+			&& hasValue(process.env.AZURE_LLM_MODEL),
 	});
 
 	return {
@@ -156,6 +164,7 @@ function getStatus() {
 			firestore,
 			sentry,
 			langfuse,
+			llmAlertEnrichment,
 		},
 	};
 }

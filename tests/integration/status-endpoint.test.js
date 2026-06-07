@@ -98,6 +98,25 @@ describe('Status endpoints', () => {
 		});
 	});
 
+	it('reports Azure LLM enrichment readiness when the feature flag is enabled', async () => {
+		process.env.ENABLE_NEWS_MONITOR = 'true';
+		process.env.ENABLE_LLM_ALERT_ENRICHMENT = 'true';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.llmAlertEnrichment).toBe(true);
+		expect(response.body.dependencies).toHaveProperty('llmAlertEnrichment');
+		expect(response.body.dependencies.llmAlertEnrichment).toEqual({
+			enabled: true,
+			configured: false,
+			ready: false,
+			status: 'misconfigured',
+		});
+	});
+
 	it('aliases /api/capabilities to the same payload shape', async () => {
 		const response = await request(app)
 			.get('/api/capabilities')
