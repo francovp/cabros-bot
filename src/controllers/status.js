@@ -21,6 +21,12 @@ function isGoogleManagedRuntime() {
 	);
 }
 
+function getModelProvider() {
+	return typeof process.env.MODEL_PROVIDER === 'string' && process.env.MODEL_PROVIDER.trim().length > 0
+		? process.env.MODEL_PROVIDER.trim().toLowerCase()
+		: 'gemini';
+}
+
 function getCommit() {
 	return process.env.RENDER_GIT_COMMIT
 		|| process.env.GIT_COMMIT
@@ -74,7 +80,8 @@ function getStatus() {
 	const whatsappEnabled = isEnabled(process.env.ENABLE_WHATSAPP_ALERTS);
 	const geminiGroundingEnabled = isEnabled(process.env.ENABLE_GEMINI_GROUNDING);
 	const newsMonitorEnabled = isEnabled(process.env.ENABLE_NEWS_MONITOR);
-	const geminiEnabled = geminiGroundingEnabled || newsMonitorEnabled;
+	const newsMonitorUsesGemini = newsMonitorEnabled && getModelProvider() === 'gemini';
+	const geminiEnabled = geminiGroundingEnabled || newsMonitorUsesGemini;
 	const marketScannerEnabled = isEnabled(process.env.ENABLE_MARKET_SCANNER);
 	const tradingViewMcpEnrichmentEnabled = isEnabled(process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT);
 	const tradingViewMcpEnabled = tradingViewMcpEnrichmentEnabled || marketScannerEnabled;

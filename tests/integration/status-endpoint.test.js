@@ -98,6 +98,30 @@ describe('Status endpoints', () => {
 		});
 	});
 
+	it('does not require Gemini when news monitor uses Brave search and Azure', async () => {
+		process.env.ENABLE_GEMINI_GROUNDING = 'false';
+		process.env.ENABLE_NEWS_MONITOR = 'true';
+		process.env.MODEL_PROVIDER = 'azure';
+		process.env.FORCE_BRAVE_SEARCH = 'true';
+		process.env.BRAVE_SEARCH_API_KEY = 'brave-key';
+		process.env.AZURE_LLM_KEY = 'azure-key';
+		process.env.AZURE_LLM_MODEL = 'gpt-4o-mini';
+		delete process.env.GEMINI_API_KEY;
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.newsMonitor).toBe(true);
+		expect(response.body.dependencies.gemini).toEqual({
+			enabled: false,
+			configured: false,
+			ready: false,
+			status: 'disabled',
+		});
+	});
+
 	it('reports Azure LLM enrichment readiness when the feature flag is enabled', async () => {
 		process.env.ENABLE_NEWS_MONITOR = 'true';
 		process.env.ENABLE_LLM_ALERT_ENRICHMENT = 'true';
