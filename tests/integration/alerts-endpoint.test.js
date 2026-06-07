@@ -5,12 +5,15 @@ jest.mock('../../src/services/storage/AlertStorageService', () => ({
 	listAlerts: jest.fn(),
 	getAlertById: jest.fn(),
 	STORAGE_UNAVAILABLE_CODE: 'STORAGE_UNAVAILABLE',
+	INVALID_CURSOR_MESSAGE: 'Invalid before cursor. Use an ISO-8601 timestamp or the nextBefore cursor from a previous response.',
+	parseAlertPaginationCursor: jest.fn(),
 }));
 
 const request = require('supertest');
 const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
 const alertStorageService = require('../../src/services/storage/AlertStorageService');
+const { encodeAlertPaginationCursor } = require('../../src/services/storage/alertPaginationCursor');
 
 describe('Alerts API Integration Tests', () => {
 	const originalEnv = process.env;
@@ -24,6 +27,22 @@ describe('Alerts API Integration Tests', () => {
 
 		jest.clearAllMocks();
 		alertStorageService.isEnabled.mockReturnValue(true);
+		alertStorageService.parseAlertPaginationCursor.mockImplementation((cursor) => {
+			if (!cursor) {
+				return null;
+			}
+
+			if (!Number.isNaN(Date.parse(cursor))) {
+				return { type: 'timestamp', receivedAt: new Date(cursor).toISOString(), documentId: null };
+			}
+
+			return encodeAlertPaginationCursor({
+				receivedAt: '2026-06-06T12:00:00.000Z',
+				id: 'alert-1',
+			}) === cursor
+				? { type: 'composite', receivedAt: '2026-06-06T12:00:00.000Z', documentId: 'alert-1' }
+				: null;
+		});
 		app.use('/api', getRoutes(null));
 	});
 
@@ -41,6 +60,10 @@ describe('Alerts API Integration Tests', () => {
 	});
 
 	it('returns stored alerts with parsed filters and pagination metadata', async () => {
+		const nextBefore = encodeAlertPaginationCursor({
+			receivedAt: '2026-06-06T12:00:00.000Z',
+			id: 'alert-1',
+		});
 		alertStorageService.listAlerts.mockResolvedValue({
 			alerts: [
 				{
@@ -56,7 +79,7 @@ describe('Alerts API Integration Tests', () => {
 				},
 			],
 			hasMore: true,
-			nextBefore: '2026-06-06T12:00:00.000Z',
+			nextBefore,
 		});
 
 		const res = await request(app)
@@ -88,7 +111,7 @@ describe('Alerts API Integration Tests', () => {
 			pagination: {
 				hasMore: true,
 				limit: 1,
-				nextBefore: '2026-06-06T12:00:00.000Z',
+				nextBefore,
 			},
 		});
 	});
@@ -100,8 +123,32 @@ describe('Alerts API Integration Tests', () => {
 			.expect(400);
 
 		expect(res.body).toEqual({
-			error: 'Invalid before cursor. Use an ISO-8601 timestamp.',
+			error: 'Invalid before cursor. Use an ISO-8601 timestamp or the nextBefore cursor from a previous response.',
 			code: 'INVALID_REQUEST',
+		});
+	});
+
+	it('accepts an opaque nextBefore cursor from a previous response', async () => {
+		const before = encodeAlertPaginationCursor({
+			receivedAt: '2026-06-06T12:00:00.000Z',
+			id: 'alert-1',
+		});
+		alertStorageService.listAlerts.mockResolvedValue({
+			alerts: [],
+			hasMore: false,
+			nextBefore: null,
+		});
+
+		await request(app)
+			.get(`/api/alerts?before=${encodeURIComponent(before)}`)
+			.set('x-api-key', 'test-key')
+			.expect(200);
+
+		expect(alertStorageService.listAlerts).toHaveBeenCalledWith({
+			before,
+			enriched: undefined,
+			limit: 50,
+			source: undefined,
 		});
 	});
 

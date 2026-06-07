@@ -29,4 +29,4 @@
 
 - Endpoint contract tests: `tests/integration/alerts-endpoint.test.js`
 - Firestore read/write unit coverage: `tests/unit/alert-storage-service.test.js`
-- When extending the alerts read API, keep `receivedAt` as the pagination cursor and preserve API-key protection on both list and detail routes.
+- When extending the alerts read API, preserve `receivedAt` as the primary sort key but encode `nextBefore` with a deterministic tie-breaker (document ID) so paginated reads do not skip same-timestamp alerts, and preserve API-key protection on both list and detail routes.

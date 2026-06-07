@@ -12,6 +12,7 @@
 // The moduleNameMapper in jest.config.js ensures this resolves to __mocks__/firebase-admin.js
 const admin = require('firebase-admin');
 const AlertStorageService = require('../../src/services/storage/AlertStorageService');
+const { parseAlertPaginationCursor } = require('../../src/services/storage/alertPaginationCursor');
 
 // ── Shorthand references to mock internals ──────────────────────────────────
 const {
@@ -22,9 +23,11 @@ const {
 	__mockWhere: mockWhere,
 	__mockOrderBy: mockOrderBy,
 	__mockLimit: mockLimit,
+	__mockStartAfter: mockStartAfter,
 	__mockInitializeApp: mockInitializeApp,
 	__mockCert: mockCert,
 	__mockTimestampFromDate: mockTimestampFromDate,
+	__mockDocumentId: mockDocumentId,
 } = admin;
 
 function buildTimestamp(isoString) {
@@ -269,6 +272,18 @@ describe('AlertStorageService', () => {
 			});
 		});
 
+		it('throws INVALID_REQUEST when the before cursor is malformed', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			await expect(AlertStorageService.listAlerts({
+				limit: 10,
+				before: 'not-a-valid-cursor',
+			})).rejects.toMatchObject({
+				code: 'INVALID_REQUEST',
+				message: AlertStorageService.INVALID_CURSOR_MESSAGE,
+			});
+		});
+
 		it('lists alerts with formatted output and pagination metadata', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 			mockGet.mockResolvedValueOnce({
@@ -300,24 +315,28 @@ describe('AlertStorageService', () => {
 			const result = await AlertStorageService.listAlerts({ limit: 1 });
 
 			expect(mockCollection).toHaveBeenCalledWith('alerts');
-			expect(mockOrderBy).toHaveBeenCalledWith('receivedAt', 'desc');
+			expect(mockOrderBy).toHaveBeenNthCalledWith(1, 'receivedAt', 'desc');
+			expect(mockDocumentId).toHaveBeenCalledTimes(1);
+			expect(mockOrderBy).toHaveBeenNthCalledWith(2, '__name__', 'desc');
 			expect(mockLimit).toHaveBeenCalledWith(2);
-			expect(result).toEqual({
-				alerts: [
-					{
-						id: 'alert-1',
-						receivedAt: '2026-06-06T12:00:00.000Z',
-						text: 'BTC alert',
-						enriched: true,
-						enrichmentData: { sentiment: 'bullish' },
-						tokenUsage: { totalTokens: 42 },
-						deliveryResults: [{ channel: 'telegram', success: true }],
-						source: 'webhook',
-						useTradingViewData: false,
-					},
-				],
-				hasMore: true,
-				nextBefore: '2026-06-06T12:00:00.000Z',
+			expect(result.alerts).toEqual([
+				{
+					id: 'alert-1',
+					receivedAt: '2026-06-06T12:00:00.000Z',
+					text: 'BTC alert',
+					enriched: true,
+					enrichmentData: { sentiment: 'bullish' },
+					tokenUsage: { totalTokens: 42 },
+					deliveryResults: [{ channel: 'telegram', success: true }],
+					source: 'webhook',
+					useTradingViewData: false,
+				},
+			]);
+			expect(result.hasMore).toBe(true);
+			expect(parseAlertPaginationCursor(result.nextBefore)).toEqual({
+				type: 'composite',
+				receivedAt: '2026-06-06T12:00:00.000Z',
+				documentId: 'alert-1',
 			});
 		});
 
@@ -377,6 +396,61 @@ describe('AlertStorageService', () => {
 			expect(mockGet).toHaveBeenCalledTimes(2);
 			expect(result.alerts).toHaveLength(1);
 			expect(result.alerts[0].id).toBe('alert-2');
+		});
+
+		it('uses the opaque nextBefore cursor to continue within tied timestamps', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('alert-b', {
+						receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+						text: 'Newest tie',
+						enriched: true,
+						enrichmentData: null,
+						tokenUsage: null,
+						deliveryResults: [],
+						source: 'webhook',
+						useTradingViewData: false,
+					}),
+					buildQueryDoc('alert-a', {
+						receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+						text: 'Older tie',
+						enriched: true,
+						enrichmentData: null,
+						tokenUsage: null,
+						deliveryResults: [],
+						source: 'webhook',
+						useTradingViewData: false,
+					}),
+				],
+			});
+
+			const firstPage = await AlertStorageService.listAlerts({ limit: 1 });
+
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('alert-a', {
+						receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+						text: 'Older tie',
+						enriched: true,
+						enrichmentData: null,
+						tokenUsage: null,
+						deliveryResults: [],
+						source: 'webhook',
+						useTradingViewData: false,
+					}),
+				],
+			});
+
+			const secondPage = await AlertStorageService.listAlerts({
+				limit: 1,
+				before: firstPage.nextBefore,
+			});
+
+			expect(mockStartAfter).toHaveBeenCalledWith(expect.anything(), 'alert-b');
+			expect(secondPage.alerts[0].id).toBe('alert-a');
 		});
 
 		it('throws STORAGE_UNAVAILABLE when Firestore reads fail', async () => {

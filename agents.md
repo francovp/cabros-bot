@@ -55,7 +55,7 @@ Small, concrete examples
 - Get price via Telegram: send message `/precio BTCUSDT` -> handler calls `client.getAvgPrice({ symbol: 'BTCUSDT' })` and replies with `Precio de BTCUSDT es <price>`.
 - Send a webhook alert (when bot enabled): POST to `/api/webhook/alert` with body `{ "text": "Alert body" }` or `text/plain` body `Alert body`.
 - Generate an expanded analysis alert: POST to `/api/webhook/expanded-analysis-alert` with body `{ "symbols": ["BINANCE:BTCUSDT", "NASDAQ:NVDA"], "timeframe": "1D" }`; if `symbols` is empty it falls back to `EXPANDED_ANALYSIS_ALERT_SYMBOLS`, and returns 400 if neither is present.
-- Inspect stored alerts: `GET /api/alerts?limit=50&before=2026-06-06T12:00:00.000Z&source=webhook&enriched=true` and `GET /api/alerts/:alertId`.
+- Inspect stored alerts: `GET /api/alerts?limit=50&before=2026-06-06T12:00:00.000Z&source=webhook&enriched=true` for the legacy older-than timestamp behavior, or reuse the opaque `pagination.nextBefore` cursor from a prior `/api/alerts` response to page without skipping ties, plus `GET /api/alerts/:alertId`.
 
 What an AI code change should preserve
 - Do not change how env gating works in `index.js` without adjusting tests/deploys — deployments rely on `RENDER` and `IS_PULL_REQUEST` checks.

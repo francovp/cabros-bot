@@ -25,11 +25,13 @@
  */
 
 const admin = require('firebase-admin');
+const { encodeAlertPaginationCursor, parseAlertPaginationCursor } = require('./alertPaginationCursor');
 
 const COLLECTION_NAME = 'alerts';
 const DEFAULT_PAGE_SIZE = 50;
 const MAX_PAGE_SIZE = 100;
 const STORAGE_UNAVAILABLE_CODE = 'STORAGE_UNAVAILABLE';
+const INVALID_CURSOR_MESSAGE = 'Invalid before cursor. Use an ISO-8601 timestamp or the nextBefore cursor from a previous response.';
 
 // Lazy Firestore singleton
 let db = null;
@@ -88,6 +90,33 @@ function createStorageUnavailableError(cause) {
 		error.cause = cause;
 	}
 	return error;
+}
+
+function createInvalidCursorError() {
+	const error = new Error(INVALID_CURSOR_MESSAGE);
+	error.code = 'INVALID_REQUEST';
+	return error;
+}
+
+function buildParsedCursorTimestamp(parsedCursor) {
+	return admin.firestore.Timestamp.fromDate(new Date(parsedCursor.receivedAt));
+}
+
+function getDocCursorValues(doc) {
+	if (!doc || typeof doc.data !== 'function') {
+		return null;
+	}
+
+	const data = doc.data() || {};
+	const receivedAt = getDocTimestamp(data);
+	if (!receivedAt || typeof doc.id !== 'string' || !doc.id) {
+		return null;
+	}
+
+	return {
+		receivedAt,
+		documentId: doc.id,
+	};
 }
 
 /**
@@ -210,14 +239,33 @@ async function listAlerts({ limit = DEFAULT_PAGE_SIZE, before, source, enriched 
 	const pageSize = clampLimit(limit);
 	const targetCount = pageSize + 1;
 	const matches = [];
-	let beforeCursor = before
-		? admin.firestore.Timestamp.fromDate(new Date(before))
+	const parsedBeforeCursor = before
+		? parseAlertPaginationCursor(before)
+		: null;
+	if (before && !parsedBeforeCursor) {
+		throw createInvalidCursorError();
+	}
+
+	let pageCursor = parsedBeforeCursor
+		? {
+			receivedAt: parsedBeforeCursor.receivedAt,
+			documentId: parsedBeforeCursor.documentId,
+		}
 		: null;
 
 	while (matches.length < targetCount) {
-		let query = firestore.collection(COLLECTION_NAME).orderBy('receivedAt', 'desc').limit(targetCount);
-		if (beforeCursor) {
-			query = query.where('receivedAt', '<', beforeCursor);
+		let query = firestore
+			.collection(COLLECTION_NAME)
+			.orderBy('receivedAt', 'desc')
+			.orderBy(admin.firestore.FieldPath.documentId(), 'desc')
+			.limit(targetCount);
+		if (pageCursor) {
+			const cursorTimestamp = buildParsedCursorTimestamp(pageCursor);
+			if (pageCursor.documentId) {
+				query = query.startAfter(cursorTimestamp, pageCursor.documentId);
+			} else {
+				query = query.where('receivedAt', '<', cursorTimestamp);
+			}
 		}
 
 		let snapshot;
@@ -242,13 +290,12 @@ async function listAlerts({ limit = DEFAULT_PAGE_SIZE, before, source, enriched 
 			}
 		}
 
-		const lastDoc = snapshot.docs[snapshot.docs.length - 1];
-		const lastData = lastDoc && typeof lastDoc.data === 'function' ? lastDoc.data() : null;
-		if (!lastData || !lastData.receivedAt || typeof lastData.receivedAt.toDate !== 'function') {
+		const lastDocCursor = getDocCursorValues(snapshot.docs[snapshot.docs.length - 1]);
+		if (!lastDocCursor) {
 			break;
 		}
 
-		beforeCursor = admin.firestore.Timestamp.fromDate(lastData.receivedAt.toDate());
+		pageCursor = lastDocCursor;
 		if (snapshot.docs.length < targetCount) {
 			break;
 		}
@@ -258,7 +305,9 @@ async function listAlerts({ limit = DEFAULT_PAGE_SIZE, before, source, enriched 
 	return {
 		alerts,
 		hasMore: matches.length > pageSize,
-		nextBefore: alerts.length > 0 ? alerts[alerts.length - 1].receivedAt : null,
+		nextBefore: alerts.length > 0
+			? encodeAlertPaginationCursor(alerts[alerts.length - 1])
+			: null,
 	};
 }
 
@@ -298,6 +347,8 @@ module.exports = {
 	listAlerts,
 	getAlertById,
 	STORAGE_UNAVAILABLE_CODE,
+	INVALID_CURSOR_MESSAGE,
+	parseAlertPaginationCursor,
 	// Exported for testing
 	getFirestore,
 	COLLECTION_NAME,

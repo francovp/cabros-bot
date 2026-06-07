@@ -606,7 +606,7 @@ List stored alerts ordered by `receivedAt` descending.
 
 **Query Parameters:**
 - `limit` - Integer between `1` and `100` (default: `50`)
-- `before` - ISO-8601 timestamp cursor; returns alerts older than this timestamp
+- `before` - Either a legacy ISO-8601 timestamp cursor or the opaque `nextBefore` token from a previous response
 - `source` - Optional source filter (current writes use `webhook`)
 - `enriched` - Optional boolean filter (`true` or `false`)
 
@@ -639,7 +639,7 @@ List stored alerts ordered by `receivedAt` descending.
   "pagination": {
     "hasMore": false,
     "limit": 50,
-    "nextBefore": "2026-06-06T12:00:00.000Z"
+    "nextBefore": "eyJ2IjoxLCJyZWNlaXZlZEF0IjoiMjAyNi0wNi0wNlQxMjowMDowMC4wMDBaIiwiaWQiOiJhbGVydC0xIn0"
   }
 }
 ```

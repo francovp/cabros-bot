@@ -52,10 +52,12 @@ function listAlerts(req, res) {
 			});
 		}
 
-		const before = req.query.before;
-		if (before && Number.isNaN(Date.parse(before))) {
+		const before = typeof req.query.before === 'string' && req.query.before.trim()
+			? req.query.before.trim()
+			: undefined;
+		if (before && !alertStorageService.parseAlertPaginationCursor(before)) {
 			return res.status(400).json({
-				error: 'Invalid before cursor. Use an ISO-8601 timestamp.',
+				error: alertStorageService.INVALID_CURSOR_MESSAGE,
 				code: 'INVALID_REQUEST',
 			});
 		}

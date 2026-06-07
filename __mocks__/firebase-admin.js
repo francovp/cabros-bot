@@ -12,16 +12,19 @@ const mockDocGet = jest.fn();
 const mockDoc = jest.fn(() => ({ get: mockDocGet }));
 const mockServerTimestamp = jest.fn(() => ({ _type: 'serverTimestamp' }));
 const mockTimestampFromDate = jest.fn((date) => ({ _type: 'timestamp', toDate: () => date }));
+const mockDocumentId = jest.fn(() => '__name__');
 const queryApi = {};
 const mockOrderBy = jest.fn(() => queryApi);
 const mockWhere = jest.fn(() => queryApi);
 const mockLimit = jest.fn(() => queryApi);
+const mockStartAfter = jest.fn(() => queryApi);
 Object.assign(queryApi, {
 	add: mockAdd,
 	doc: mockDoc,
 	orderBy: mockOrderBy,
 	where: mockWhere,
 	limit: mockLimit,
+	startAfter: mockStartAfter,
 	get: mockGet,
 });
 const mockCollection = jest.fn(() => queryApi);
@@ -33,6 +36,7 @@ let apps = [];
 const firestore = jest.fn(() => ({ collection: mockCollection }));
 firestore.FieldValue = { serverTimestamp: mockServerTimestamp };
 firestore.Timestamp = { fromDate: mockTimestampFromDate };
+firestore.FieldPath = { documentId: mockDocumentId };
 
 const mock = {
 	get apps() { return apps; },
@@ -49,8 +53,10 @@ const mock = {
 	__mockOrderBy: mockOrderBy,
 	__mockWhere: mockWhere,
 	__mockLimit: mockLimit,
+	__mockStartAfter: mockStartAfter,
 	__mockServerTimestamp: mockServerTimestamp,
 	__mockTimestampFromDate: mockTimestampFromDate,
+	__mockDocumentId: mockDocumentId,
 	__mockInitializeApp: mockInitializeApp,
 	__mockCert: mockCert,
 	__resetApps() { apps = []; },
