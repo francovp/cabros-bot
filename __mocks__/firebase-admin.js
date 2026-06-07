@@ -1,3 +1,4 @@
+/* global jest, module */
 'use strict';
 
 /**
