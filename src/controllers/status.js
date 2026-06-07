@@ -1,3 +1,4 @@
+const { createPrivateKey } = require('crypto');
 const packageJson = require('../../package.json');
 
 const DEFAULT_TRADINGVIEW_MCP_URL = 'https://tradingview-mcp.onrender.com/mcp';
@@ -22,14 +23,23 @@ function isGoogleManagedRuntime() {
 	);
 }
 
-function hasValidJsonObject(value) {
+function hasValidInlineFirestoreCredentials(value) {
 	if (!hasValue(value)) {
 		return false;
 	}
 
 	try {
 		const parsed = JSON.parse(value);
-		return parsed != null && typeof parsed === 'object' && !Array.isArray(parsed);
+		const projectId = parsed.projectId || parsed.project_id;
+		const clientEmail = parsed.clientEmail || parsed.client_email;
+		const privateKey = parsed.privateKey || parsed.private_key;
+
+		if (!hasValue(projectId) || !hasValue(clientEmail) || !hasValue(privateKey)) {
+			return false;
+		}
+
+		createPrivateKey({ key: privateKey, format: 'pem' });
+		return true;
 	} catch (error) {
 		return false;
 	}
@@ -172,7 +182,7 @@ function getStatus() {
 	const firestore = dependencyStatus({
 		enabled: firestoreEnabled,
 		configured:
-			hasValidJsonObject(process.env.FIREBASE_SERVICE_ACCOUNT_JSON)
+			hasValidInlineFirestoreCredentials(process.env.FIREBASE_SERVICE_ACCOUNT_JSON)
 			|| hasValue(process.env.GOOGLE_APPLICATION_CREDENTIALS)
 			|| isGoogleManagedRuntime(),
 	});

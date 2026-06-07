@@ -1,6 +1,17 @@
 const request = require('supertest');
 const express = require('express');
+const { generateKeyPairSync } = require('crypto');
 const { getRoutes } = require('../../src/routes');
+
+const testPrivateKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({
+	type: 'pkcs1',
+	format: 'pem',
+});
+const validFirestoreServiceAccountJson = JSON.stringify({
+	project_id: 'x',
+	client_email: 'firebase-adminsdk@test-project.iam.gserviceaccount.com',
+	private_key: testPrivateKey,
+});
 
 describe('Status endpoints', () => {
 	const originalEnv = { ...process.env };
@@ -28,7 +39,7 @@ describe('Status endpoints', () => {
 		process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT = 'true';
 		delete process.env.TRADINGVIEW_MCP_URL;
 		process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
-		process.env.FIREBASE_SERVICE_ACCOUNT_JSON = '{"project_id":"x"}';
+		process.env.FIREBASE_SERVICE_ACCOUNT_JSON = validFirestoreServiceAccountJson;
 		process.env.ENABLE_SENTRY = 'true';
 		process.env.SENTRY_DSN = 'https://dsn.example';
 	});
@@ -407,6 +418,24 @@ describe('Status endpoints', () => {
 
 	it('treats malformed inline Firestore credentials as misconfigured', async () => {
 		process.env.FIREBASE_SERVICE_ACCOUNT_JSON = '{"project_id":';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.firestore).toEqual({
+			enabled: true,
+			configured: false,
+			ready: false,
+			status: 'misconfigured',
+		});
+	});
+
+	it('treats incomplete inline Firestore credentials as misconfigured', async () => {
+		process.env.FIREBASE_SERVICE_ACCOUNT_JSON = JSON.stringify({
+			project_id: 'x',
+		});
 
 		const response = await request(app)
 			.get('/api/status')
