@@ -5,6 +5,7 @@ const { postMarketScannerAlert } = require('../controllers/webhooks/handlers/mar
 const { postCreateJob, getJobStatus } = require('../controllers/webhooks/handlers/jobs/jobs');
 const { listAlerts, getAlertById } = require('../controllers/alerts/alerts');
 const { validateApiKey } = require('../lib/auth');
+const { getApiStatus } = require('../controllers/status');
 
 function getRoutes(botOrGetter) {
 	const router = express.Router();
@@ -22,6 +23,9 @@ function getRoutes(botOrGetter) {
 	const newsMonitor = getNewsMonitor();
 	router.post('/news-monitor', validateApiKey, newsMonitor.handleRequest.bind(newsMonitor));
 	router.get('/news-monitor', validateApiKey, newsMonitor.handleRequest.bind(newsMonitor));
+
+	router.get('/status', validateApiKey, getApiStatus);
+	router.get('/capabilities', validateApiKey, getApiStatus);
 
 	return router;
 }
