@@ -76,14 +76,22 @@ class TradingViewMcpService {
 
 		let volumeAnalysis = null;
 		if (process.env.ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION === 'true') {
+			const volumeTimeoutMs = 5000;
+			const controller = new AbortController();
+			const timeoutId = setTimeout(() => {
+				controller.abort(new Error(`TradingView MCP volume confirmation timeout after ${volumeTimeoutMs}ms`));
+			}, volumeTimeoutMs);
+
 			const vResult = await sendWithRetry(async () => {
 				try {
-					const volConfirm = await this.callVolumeConfirmation({ symbol, exchange, timeframe });
+					const volConfirm = await this.callVolumeConfirmation({ symbol, exchange, timeframe, signal: controller.signal });
 					return { success: true, channel: 'tradingview-mcp', volConfirm };
 				} catch (error) {
 					return { success: false, channel: 'tradingview-mcp', error: error.message };
 				}
-			}, cfg.maxRetries, this.logger);
+			}, 1, this.logger);
+
+			clearTimeout(timeoutId);
 
 			if (vResult.success) {
 				volumeAnalysis = vResult.volConfirm;
@@ -491,9 +499,11 @@ class TradingViewMcpService {
 
 		if (volumeAnalysis && volumeAnalysis.volume_analysis) {
 			const volData = volumeAnalysis.volume_analysis;
-			const ratio = volData.volume_ratio !== undefined ? volData.volume_ratio : 1;
-			const confirms = ratio >= 1.2 ? 'YES' : 'NO';
-			insights.push(`Volume confirms: ${confirms} (${this._formatRatio(ratio)} avg)`);
+			const ratio = volData.volume_ratio;
+			if (typeof ratio === 'number' && Number.isFinite(ratio)) {
+				const confirms = ratio >= 1.2 ? 'YES' : 'NO';
+				insights.push(`Volume confirms: ${confirms} (${this._formatRatio(ratio)} avg)`);
+			}
 		}
 
 		return {
