@@ -11,6 +11,9 @@ Key files / entry points
 - `src/controllers/commands/handlers/core/fetchPriceCryptoSymbol.js` — calls Binance `MainClient.getAvgPrice` to fetch prices.
 - `src/controllers/webhooks/handlers/alert/alert.js` — webhook handler that forwards alert text to a Telegram chat.
 - `src/controllers/webhooks/handlers/expandedAnalysisAlert/expandedAnalysisAlert.js` — `POST /api/webhook/expanded-analysis-alert` handler that builds TradingView MCP analysis reports and sends them through notification channels.
+- `src/controllers/webhooks/handlers/jobs/jobs.js` — job creation (`POST /api/jobs/tradingview-analysis`) and status polling (`GET /api/jobs/:jobId`) handler.
+- `src/controllers/alerts/alerts.js` — stored alert read handlers for `GET /api/alerts` and `GET /api/alerts/:alertId`.
+- `src/services/jobs/JobService.js` — manages in-memory job state, executes background TradingView analysis runs, and performs periodic expiration cleanup.
 - `src/services/tradingview/expandedAnalysisAlertReport.js` — parses `EXCHANGE:SYMBOL` requests and formats grouped Spanish technical-analysis reports.
 - `src/services/monitoring/SentryService.js` — wraps `@sentry/node` for runtime error monitoring (005).
 - `src/controllers/helpers.js` — small numeric helper (`round10`) used by price formatting.
@@ -23,11 +26,12 @@ Environment and runtime behavior (discoverable)
 - Optional but relevant (non-exhaustive; see feature sections below for full config): `ENABLE_TELEGRAM_BOT`, `PORT`, `TELEGRAM_CHAT_ID`, `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID`, `ENABLE_WHATSAPP_ALERTS`, `ENABLE_GEMINI_GROUNDING`, `GEMINI_API_KEY`, `ENABLE_LANGFUSE_PROMPTS`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL`, `LANGFUSE_PROMPT_LABEL`, `LANGFUSE_PROMPT_CACHE_TTL_SECONDS`, `BRAVE_SEARCH_API_KEY`, `BRAVE_SEARCH_ENDPOINT`, `FORCE_BRAVE_SEARCH`, `MODEL_PROVIDER`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `ENABLE_NEWS_MONITOR`, `EXPANDED_ANALYSIS_ALERT_SYMBOLS`, `EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS`, `TRADINGVIEW_MCP_URL`, `TRADINGVIEW_MCP_TIMEOUT_MS`, `TRADINGVIEW_MCP_MAX_RETRIES`, `TRADINGVIEW_MCP_DEFAULT_TIMEFRAME`, `ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION`, `ENABLE_SENTRY`, `SENTRY_DSN`, `SENTRY_TRACES_SAMPLE_RATE`, `SENTRY_CONSOLE_LOG_LEVELS`, `LOG_LEVEL`, `SERVICE_NAME`, `RATE_LIMIT_WINDOW_MS`, `RATE_LIMIT_MAX`, `RENDER`, `IS_PULL_REQUEST`, `RENDER_GIT_COMMIT`, `RENDER_GIT_REPO_SLUG`.
 - Bot startup is gated: bot is launched only when `ENABLE_TELEGRAM_BOT === 'true'` and not a preview environment (`RENDER==='true' && IS_PULL_REQUEST==='true'` disables it).
 - Routes under `/api` (e.g. `/api/webhook/alert`) are mounted regardless of bot launch; individual features and notification channels are gated via env flags and per-channel validation.
+- Stored alert read routes (`GET /api/alerts`, `GET /api/alerts/:alertId`) are also mounted under `/api`; they require `WEBHOOK_API_KEY` when configured, return `403 FEATURE_DISABLED` unless `ENABLE_FIRESTORE_ALERT_STORAGE=true`, and return `503 STORAGE_UNAVAILABLE` when Firestore is enabled but unreadable.
 
 Dev / run commands
-- `npm install` — install deps.
-- `npm start` — run production entry (`node index.js`).
-- `npm run start-dev` — runs `nodemon index.js` for development.
+- `pnpm install --frozen-lockfile` — install deps.
+- `pnpm start` — run production entry (`node index.js`).
+- `pnpm run start-dev` — runs `nodemon index.js` for development.
 - Healthcheck endpoint: `GET /healthcheck` (provided by `app.js`).
 
 Patterns and conventions to follow
@@ -51,6 +55,7 @@ Small, concrete examples
 - Get price via Telegram: send message `/precio BTCUSDT` -> handler calls `client.getAvgPrice({ symbol: 'BTCUSDT' })` and replies with `Precio de BTCUSDT es <price>`.
 - Send a webhook alert (when bot enabled): POST to `/api/webhook/alert` with body `{ "text": "Alert body" }` or `text/plain` body `Alert body`.
 - Generate an expanded analysis alert: POST to `/api/webhook/expanded-analysis-alert` with body `{ "symbols": ["BINANCE:BTCUSDT", "NASDAQ:NVDA"], "timeframe": "1D" }`; if `symbols` is empty it falls back to `EXPANDED_ANALYSIS_ALERT_SYMBOLS`, and returns 400 if neither is present.
+- Inspect stored alerts: `GET /api/alerts?limit=50&before=2026-06-06T12:00:00.000Z&source=webhook&enriched=true` for the legacy older-than timestamp behavior, or reuse the opaque `pagination.nextBefore` cursor from a prior `/api/alerts` response to page without skipping ties, plus `GET /api/alerts/:alertId`.
 
 What an AI code change should preserve
 - Do not change how env gating works in `index.js` without adjusting tests/deploys — deployments rely on `RENDER` and `IS_PULL_REQUEST` checks.
@@ -80,11 +85,11 @@ What an AI code change should preserve
 
 **Test Execution Strategy**:
 - **During development**: Run focused/specific tests only, NOT the full test suite. Examples:
-  - `npm test -- tests/unit/price-parsing.test.js` — test single unit file
-  - `npm test -- tests/integration/news-monitor-basic.test.js` — test single integration file
-  - `npm test -- tests/unit/ --testTimeout=5000` — test entire unit directory
-  - `npm test -- --testNamePattern="should parse price"` — test by test name pattern
-- **After completing all changes**: Run the full test suite `npm test` once per implementation to ensure no regressions
+  - `pnpm test -- tests/unit/price-parsing.test.js` — test single unit file
+  - `pnpm test -- tests/integration/news-monitor-basic.test.js` — test single integration file
+  - `pnpm test -- tests/unit/ --testTimeout=5000` — test entire unit directory
+  - `pnpm test -- --testNamePattern="should parse price"` — test by test name pattern
+- **After completing all changes**: Run the full test suite `pnpm test` once per implementation to ensure no regressions
 - **Rationale**: Full test runs take 2-5 minutes and consume significant token budget. Focused tests give rapid feedback (10-30s) during development. Only run full suite as final validation after full implementation phase.
 - **Performance tip**: Use `--testTimeout=5000` with unit tests to speed up execution; integration tests need higher timeouts (~10000ms)
 
@@ -269,6 +274,29 @@ The system provides a `POST /api/webhook/market-scanner-alert` endpoint that run
 - `src/services/tradingview/marketScannerReport.js` for layout and item-specific formatters.
 - Tests in `tests/integration/market-scanner-endpoint.test.js` and `tests/unit/market-scanner-report.test.js` / `tests/unit/market-scanner.test.js`.
 
+## Asynchronous TradingView Jobs
+
+The system provides asynchronous job endpoints to support executing both `expanded-analysis` and `market-scanner` workflows in the background, avoiding HTTP gateway timeouts.
+
+**Endpoints**:
+- `POST /api/jobs/tradingview-analysis` — Validates request payloads synchronously, returns `201 Created` with a `jobId`, and starts background execution.
+- `GET /api/jobs/:jobId` — Returns the current job status (`pending`, `processing`, `completed`, `failed`), progress, and final analysis/delivery outcomes.
+
+**Core Components**:
+- `src/services/jobs/JobService.js` — Coordinates job state tracking, background worker execution, progress reports, and job eviction (jobs older than 1 hour).
+- `src/controllers/webhooks/handlers/jobs/jobs.js` — HTTP route controller handlers (`postCreateJob`, `getJobStatus`).
+
+**Failure and Edge Case Behavior**:
+- Sync validation: throws `400` synchronously on invalid inputs before job registration.
+- Feature checks: returns `404 FEATURE_DISABLED` if market scanner jobs are created but `ENABLE_MARKET_SCANNER` is not `'true'`.
+- Eviction: jobs older than 1 hour are deleted from memory and return `404 Not Found`.
+- Background failures: if the worker runs into unexpected exceptions or timeouts, the job is marked `failed` and reported to Sentry.
+
+**Where to look first when extending or debugging**:
+- `src/services/jobs/JobService.js` for background processing and state transitions.
+- `src/controllers/webhooks/handlers/jobs/jobs.js` for parameters parsing.
+- Tests in `tests/unit/job-service.test.js`, `tests/unit/jobs-controller.test.js`, and `tests/integration/jobs-endpoint.test.js`.
+
 ## Multi-Channel Notification Architecture (002-whatsapp-alerts)
 
 The alert delivery system now supports parallel delivery to multiple channels (Telegram, WhatsApp) without blocking. Key patterns:
@@ -407,15 +435,16 @@ The system provides an HTTP endpoint (`/api/news-monitor`) that analyzes financi
 - In-memory Map cache for news deduplication with TTL (003-news-monitor, no external storage)
 - Binance API client for precise crypto prices (003-news-monitor, optional fallback to Gemini GoogleSearch)
 - TradingView MCP remote Streamable HTTP server for technical `coin_analysis` report generation (`POST /api/webhook/expanded-analysis-alert`)
-- Sentry SDK for Node (`@sentry/node` v10) for backend runtime error monitoring and warn/error console log capture (005-sentry-runtime-errors; no tracing by default)
+- Sentry SDK for Node (`@sentry/node` v10.53.1) for backend runtime error monitoring and warn/error console log capture (005-sentry-runtime-errors; no tracing by default)
 - Cloud Firestore via `firebase-admin` v9.x for server-side alert document persistence (006-firestore-alert-storage; fire-and-forget, never blocks delivery)
 
 ## Firestore Alert Storage (006-firestore-alert-storage)
 
 Every successful `POST /api/webhook/alert` request is persisted as a document in the `alerts` Firestore collection after the HTTP response has been sent.
 
-**Core Component**:
-- `src/services/storage/AlertStorageService.js` — lazy `firebase-admin` singleton, `saveAlert()` wrapper, fail-open error handling
+**Core Components**:
+- `src/services/storage/AlertStorageService.js` — lazy `firebase-admin` singleton, `saveAlert()` wrapper, read helpers (`listAlerts()`, `getAlertById()`), fail-open write handling
+- `src/controllers/alerts/alerts.js` — HTTP controller for stored alert list/detail endpoints
 
 **Data Model** (collection: `alerts`, document ID: auto-generated):
 
@@ -444,6 +473,11 @@ Every successful `POST /api/webhook/alert` request is persisted as a document in
 - If `ENABLE_FIRESTORE_ALERT_STORAGE` is not `'true'`, `getFirestore()` returns `null` immediately
 - If `firebase-admin` initialization fails (bad credentials, wrong project), `db` is set to `null` and a warning is logged; subsequent calls are no-ops
 
+**Read API**:
+- `GET /api/alerts` returns stored alerts ordered by `receivedAt` descending with `limit`, `before`, `source`, and `enriched` query support
+- `GET /api/alerts/:alertId` returns a single formatted alert document by Firestore document ID
+- Read filtering for `source` and `enriched` is applied in memory after `receivedAt`-ordered batches to avoid introducing new composite Firestore index requirements
+
 **Alert Flow Integration** (`src/controllers/webhooks/handlers/alert/alert.js`):
 ```
 Webhook → validate → enrich → sendToAll → res.json() → saveAlert() [fire-and-forget]
@@ -451,9 +485,10 @@ Webhook → validate → enrich → sendToAll → res.json() → saveAlert() [fi
 Storage happens **after** the HTTP response; the caller is never blocked.
 
 **Where to look first when extending or debugging**:
-- `src/services/storage/AlertStorageService.js` — initialization, credential parsing, `saveAlert()` logic
+- `src/services/storage/AlertStorageService.js` — initialization, credential parsing, `saveAlert()`, `listAlerts()`, and `getAlertById()` logic
+- `src/controllers/alerts/alerts.js` — list/detail request validation and response shaping
 - `src/controllers/webhooks/handlers/alert/alert.js` — fire-and-forget call site (after `res.json()`)
-- Tests in `tests/unit/alert-storage-service.test.js`
+- Tests in `tests/unit/alert-storage-service.test.js` and `tests/integration/alerts-endpoint.test.js`
 - Firebase Console → Firestore → `alerts` collection for live document inspection
 
 ## Terminology Guide: Grounding vs Enrichment

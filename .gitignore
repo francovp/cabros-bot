@@ -117,3 +117,5 @@ dist
 # Firebase Functions
 functions/node_modules/
 functions/.eslintcache
+
+.pnpm-store/

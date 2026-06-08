@@ -122,11 +122,16 @@ class TradingViewMcpService {
 		return normalizedResult;
 	}
 
-	async analyzeSymbolIdentifier({ raw, exchange, symbol, timeframe, signal }) {
+	async analyzeSymbolIdentifier({ raw, exchange, symbol, timeframe, analysisMode, signal }) {
 		const cfg = this.getConfig();
 		const result = await sendWithRetry(async () => {
 			try {
-				const analysis = await this.callCoinAnalysis({ symbol, exchange, timeframe, signal });
+				let analysis;
+				if (analysisMode === 'combined') {
+					analysis = await this.callCombinedAnalysis({ symbol, exchange, timeframe, signal });
+				} else {
+					analysis = await this.callCoinAnalysis({ symbol, exchange, timeframe, signal });
+				}
 				return { success: true, channel: 'tradingview-mcp', analysis };
 			} catch (error) {
 				return { success: false, channel: 'tradingview-mcp', error: error.message };
@@ -143,6 +148,25 @@ class TradingViewMcpService {
 			requested_exchange: exchange,
 			requested_timeframe: timeframe,
 		};
+	}
+
+	async callCombinedAnalysis({ symbol, exchange, timeframe, signal }) {
+		const rpcResult = await this._callTool('combined_analysis', {
+			symbol,
+			exchange,
+			timeframe,
+		}, { signal });
+		const normalizedResult = this._unwrapSchemaResult(rpcResult);
+
+		if (normalizedResult && normalizedResult.error) {
+			throw new Error(normalizedResult.error);
+		}
+
+		if (!normalizedResult || typeof normalizedResult !== 'object' || Array.isArray(normalizedResult)) {
+			throw new Error('TradingView MCP combined_analysis returned invalid payload');
+		}
+
+		return normalizedResult;
 	}
 
 	async callMultiTimeframeAnalysis({ symbol, exchange, signal }) {

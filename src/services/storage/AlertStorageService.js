@@ -25,11 +25,99 @@
  */
 
 const admin = require('firebase-admin');
+const { encodeAlertPaginationCursor, parseAlertPaginationCursor } = require('./alertPaginationCursor');
 
 const COLLECTION_NAME = 'alerts';
+const DEFAULT_PAGE_SIZE = 50;
+const MAX_PAGE_SIZE = 100;
+const STORAGE_UNAVAILABLE_CODE = 'STORAGE_UNAVAILABLE';
+const INVALID_CURSOR_MESSAGE = 'Invalid before cursor. Use an ISO-8601 timestamp or the nextBefore cursor from a previous response.';
 
 // Lazy Firestore singleton
 let db = null;
+
+function isEnabled() {
+	return process.env.ENABLE_FIRESTORE_ALERT_STORAGE === 'true';
+}
+
+function clampLimit(limit) {
+	if (!Number.isInteger(limit) || limit < 1) {
+		return DEFAULT_PAGE_SIZE;
+	}
+
+	return Math.min(limit, MAX_PAGE_SIZE);
+}
+
+function getDocTimestamp(document) {
+	if (!document || !document.receivedAt || typeof document.receivedAt.toDate !== 'function') {
+		return null;
+	}
+
+	return document.receivedAt.toDate().toISOString();
+}
+
+function formatAlertDocument(doc) {
+	const data = doc.data() || {};
+	return {
+		id: doc.id,
+		receivedAt: getDocTimestamp(data),
+		text: typeof data.text === 'string' ? data.text : '',
+		enriched: Boolean(data.enriched),
+		enrichmentData: data.enrichmentData || null,
+		tokenUsage: data.tokenUsage || null,
+		deliveryResults: Array.isArray(data.deliveryResults) ? data.deliveryResults : [],
+		source: typeof data.source === 'string' ? data.source : null,
+		useTradingViewData: Boolean(data.useTradingViewData),
+	};
+}
+
+function matchesFilters(alert, filters) {
+	if (filters.source && alert.source !== filters.source) {
+		return false;
+	}
+
+	if (typeof filters.enriched === 'boolean' && alert.enriched !== filters.enriched) {
+		return false;
+	}
+
+	return true;
+}
+
+function createStorageUnavailableError(cause) {
+	const error = new Error('Alert storage is enabled but Firestore is unavailable. Check Firestore credentials and project configuration.');
+	error.code = STORAGE_UNAVAILABLE_CODE;
+	if (cause) {
+		error.cause = cause;
+	}
+	return error;
+}
+
+function createInvalidCursorError() {
+	const error = new Error(INVALID_CURSOR_MESSAGE);
+	error.code = 'INVALID_REQUEST';
+	return error;
+}
+
+function buildParsedCursorTimestamp(parsedCursor) {
+	return admin.firestore.Timestamp.fromDate(new Date(parsedCursor.receivedAt));
+}
+
+function getDocCursorValues(doc) {
+	if (!doc || typeof doc.data !== 'function') {
+		return null;
+	}
+
+	const data = doc.data() || {};
+	const receivedAt = getDocTimestamp(data);
+	if (!receivedAt || typeof doc.id !== 'string' || !doc.id) {
+		return null;
+	}
+
+	return {
+		receivedAt,
+		documentId: doc.id,
+	};
+}
 
 /**
  * Initialize Firebase Admin (idempotent) and return Firestore client.
@@ -43,7 +131,7 @@ let db = null;
  * @returns {FirebaseFirestore.Firestore | null}
  */
 function getFirestore() {
-	if (process.env.ENABLE_FIRESTORE_ALERT_STORAGE !== 'true') {
+	if (!isEnabled()) {
 		return null;
 	}
 
@@ -125,8 +213,142 @@ async function saveAlert({ text, enriched, enrichmentData, tokenUsage, deliveryR
 	}
 }
 
+/**
+ * Read stored alerts from Firestore with a descending receivedAt cursor.
+ *
+ * Filtering stays in memory so the endpoint does not require new composite
+ * Firestore indexes for source/enriched combinations.
+ *
+ * @param {Object} params
+ * @param {number} params.limit
+ * @param {string|undefined} params.before
+ * @param {string|undefined} params.source
+ * @param {boolean|undefined} params.enriched
+ * @returns {Promise<{alerts: Array, hasMore: boolean, nextBefore: string|null}|null>}
+ */
+async function listAlerts({ limit = DEFAULT_PAGE_SIZE, before, source, enriched } = {}) {
+	if (!isEnabled()) {
+		return null;
+	}
+
+	const firestore = getFirestore();
+	if (!firestore) {
+		throw createStorageUnavailableError();
+	}
+
+	const pageSize = clampLimit(limit);
+	const targetCount = pageSize + 1;
+	const matches = [];
+	const parsedBeforeCursor = before
+		? parseAlertPaginationCursor(before)
+		: null;
+	if (before && !parsedBeforeCursor) {
+		throw createInvalidCursorError();
+	}
+
+	let pageCursor = parsedBeforeCursor
+		? {
+			receivedAt: parsedBeforeCursor.receivedAt,
+			documentId: parsedBeforeCursor.documentId,
+		}
+		: null;
+
+	while (matches.length < targetCount) {
+		let query = firestore
+			.collection(COLLECTION_NAME)
+			.orderBy('receivedAt', 'desc')
+			.orderBy(admin.firestore.FieldPath.documentId(), 'desc')
+			.limit(targetCount);
+		if (pageCursor) {
+			const cursorTimestamp = buildParsedCursorTimestamp(pageCursor);
+			if (pageCursor.documentId) {
+				query = query.startAfter(cursorTimestamp, pageCursor.documentId);
+			} else {
+				query = query.where('receivedAt', '<', cursorTimestamp);
+			}
+		}
+
+		let snapshot;
+		try {
+			snapshot = await query.get();
+		} catch (error) {
+			console.warn('[AlertStorageService] Failed to read alerts from Firestore:', error.message);
+			throw createStorageUnavailableError(error);
+		}
+
+		if (!snapshot || snapshot.empty || !Array.isArray(snapshot.docs) || snapshot.docs.length === 0) {
+			break;
+		}
+
+		for (const doc of snapshot.docs) {
+			const formatted = formatAlertDocument(doc);
+			if (matchesFilters(formatted, { source, enriched })) {
+				matches.push(formatted);
+				if (matches.length >= targetCount) {
+					break;
+				}
+			}
+		}
+
+		const lastDocCursor = getDocCursorValues(snapshot.docs[snapshot.docs.length - 1]);
+		if (!lastDocCursor) {
+			break;
+		}
+
+		pageCursor = lastDocCursor;
+		if (snapshot.docs.length < targetCount) {
+			break;
+		}
+	}
+
+	const alerts = matches.slice(0, pageSize);
+	return {
+		alerts,
+		hasMore: matches.length > pageSize,
+		nextBefore: alerts.length > 0
+			? encodeAlertPaginationCursor(alerts[alerts.length - 1])
+			: null,
+	};
+}
+
+/**
+ * Fetch a single stored alert by its Firestore document ID.
+ *
+ * @param {string} alertId
+ * @returns {Promise<Object|null>}
+ */
+async function getAlertById(alertId) {
+	if (!isEnabled()) {
+		return null;
+	}
+
+	const firestore = getFirestore();
+	if (!firestore) {
+		throw createStorageUnavailableError();
+	}
+
+	let snapshot;
+	try {
+		snapshot = await firestore.collection(COLLECTION_NAME).doc(alertId).get();
+	} catch (error) {
+		console.warn('[AlertStorageService] Failed to read alert from Firestore:', error.message);
+		throw createStorageUnavailableError(error);
+	}
+	if (!snapshot || !snapshot.exists) {
+		return null;
+	}
+
+	return formatAlertDocument(snapshot);
+}
+
 module.exports = {
+	isEnabled,
 	saveAlert,
+	listAlerts,
+	getAlertById,
+	STORAGE_UNAVAILABLE_CODE,
+	INVALID_CURSOR_MESSAGE,
+	parseAlertPaginationCursor,
 	// Exported for testing
 	getFirestore,
 	COLLECTION_NAME,

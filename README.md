@@ -65,6 +65,13 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 - `ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION` - Enable volume confirmation validation for TradingView alerts (`true` or `false`, default: `false`)
 - Runtime gate: TradingView MCP data is only used when webhook requests include `?useTradingViewData=true`
 
+#### Firestore Alert Storage
+
+- `ENABLE_FIRESTORE_ALERT_STORAGE` - Enable Firestore persistence and alert read API (`true` or `false`, default: `false`)
+- `FIREBASE_SERVICE_ACCOUNT_JSON` - Inline Firebase service account JSON for server-side Firestore access
+- `FIREBASE_PROJECT_ID` - Optional Firebase project override for Admin SDK initialization
+- `GOOGLE_APPLICATION_CREDENTIALS` - Optional path to a service account JSON file for local development
+
 #### Admin Notifications
 
 - `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID` - Chat ID for admin notifications and deployment alerts
@@ -154,13 +161,64 @@ pnpm start
 
 ## API Endpoints
 
-### POST /healthcheck
+### GET /healthcheck
 
 Health check endpoint.
 
 **Response:**
 ```json
 {"uptime":"..."}
+```
+
+### GET /api/status
+
+Machine-readable runtime status for operational tooling. This endpoint uses the same `WEBHOOK_API_KEY` protection as other `/api` endpoints when that environment variable is configured. Send the key with the `x-api-key` header.
+
+The response intentionally exposes only non-sensitive booleans and metadata: service identity, version, commit, environment, feature-flag state, delivery channel readiness, and dependency readiness/configuration status. Secret values such as bot tokens, API keys, DSNs, chat IDs, and provider URLs are not returned.
+
+For `ENABLE_NEWS_MONITOR=true`, the payload also reports the primary LLM dependency used by that flow as `dependencies.newsMonitorLlm`, including the resolved provider (`gemini`, `azure`, or `openrouter`) and whether that provider is actually configured for runtime use. When `FORCE_BRAVE_SEARCH=true`, the payload also exposes `dependencies.braveSearch` so the forced search path can be monitored independently of Gemini. When `ENABLE_GEMINI_GROUNDING=true` and `MODEL_PROVIDER=gemini`, `dependencies.gemini` requires both `GEMINI_API_KEY` and `GEMINI_MODEL_NAME`, matching the runtime path used for grounded alert generation. Firestore readiness treats `GOOGLE_APPLICATION_CREDENTIALS` as configured only when the referenced credential file exists and is readable.
+
+`GET /api/capabilities` is an alias for the same payload.
+
+**Response:**
+```json
+{
+  "service": {
+    "name": "cabros-bot",
+    "version": "0.1.0",
+    "commit": "abcdef1234567890",
+    "environment": "production"
+  },
+  "featureFlags": {
+    "telegramBot": true,
+    "whatsappAlerts": false,
+    "geminiGrounding": true,
+    "newsMonitor": true,
+    "tradingViewMcpEnrichment": true,
+    "firestoreAlertStorage": true,
+    "sentryMonitoring": true,
+    "langfusePrompts": false,
+    "marketScanner": true,
+    "binancePriceCheck": false,
+    "llmAlertEnrichment": false
+  },
+  "deliveryChannels": {
+    "telegram": { "enabled": true, "status": "ready" },
+    "whatsapp": { "enabled": false, "status": "disabled" }
+  },
+  "dependencies": {
+    "telegram": { "enabled": true, "configured": true, "ready": true, "status": "ready" },
+    "whatsapp": { "enabled": false, "configured": false, "ready": false, "status": "disabled" },
+    "gemini": { "enabled": true, "configured": true, "ready": true, "status": "ready" },
+    "tradingViewMcp": { "enabled": true, "configured": true, "ready": true, "status": "ready" },
+    "firestore": { "enabled": true, "configured": true, "ready": true, "status": "ready" },
+    "sentry": { "enabled": true, "configured": true, "ready": true, "status": "ready" },
+    "langfuse": { "enabled": false, "configured": false, "ready": false, "status": "disabled" },
+    "braveSearch": { "enabled": false, "configured": false, "ready": false, "status": "disabled" },
+    "newsMonitorLlm": { "provider": "gemini", "enabled": true, "configured": true, "ready": true, "status": "ready" },
+    "llmAlertEnrichment": { "enabled": false, "configured": false, "ready": false, "status": "disabled" }
+  }
+}
 ```
 
 ## Alert Enrichment with Gemini Grounding (001)
@@ -514,6 +572,189 @@ BTC price is at $45,000 - breakout detected!
     }
   ],
   "enriched": false
+}
+```
+
+### Asynchronous Jobs API
+
+To run long-running technical analysis or market scans without hitting HTTP request limits or gateway timeouts (502/504), you can use the asynchronous jobs API. Both endpoints require the `x-api-key` header to be configured.
+
+#### POST /api/jobs/tradingview-analysis
+
+Start a background analysis or scanner job.
+
+**Request (JSON - Expanded Analysis):**
+```json
+{
+  "type": "expanded-analysis",
+  "symbols": ["BINANCE:BTCUSDT"],
+  "timeframe": "1D",
+  "includeMultiTimeframe": true
+}
+```
+
+**Request (JSON - Market Scanner):**
+```json
+{
+  "type": "market-scanner",
+  "exchange": "BINANCE",
+  "timeframe": "4h",
+  "scans": ["top_gainers", "top_losers"],
+  "limit": 5
+}
+```
+
+**Response (201 Created):**
+```json
+{
+  "success": true,
+  "jobId": "8f8ef192-349f-4318-8547-0e6d628bf739",
+  "status": "processing",
+  "createdAt": "2026-05-25T01:30:00.000Z"
+}
+```
+
+#### GET /api/jobs/:jobId
+
+Retrieve status, partial progress, final report, and delivery state of a job.
+Jobs are retained in memory and automatically evicted after 1 hour.
+
+**Response (200 OK - Processing):**
+```json
+{
+  "success": true,
+  "jobId": "8f8ef192-349f-4318-8547-0e6d628bf739",
+  "type": "expanded-analysis",
+  "status": "processing",
+  "progress": {
+    "total": 2,
+    "current": 1,
+    "status": "Analyzing symbol BINANCE:BTCUSDT (1/2)"
+  },
+  "results": [
+    {
+      "symbol": "BINANCE:BTCUSDT",
+      "status": "analyzed",
+      "price": 65430,
+      "rsi": 43.5
+    }
+  ],
+  "createdAt": "2026-05-25T01:30:00.000Z",
+  "updatedAt": "2026-05-25T01:30:05.000Z",
+  "totalDurationMs": 5123
+}
+```
+
+### Stored Alerts API
+
+When `ENABLE_FIRESTORE_ALERT_STORAGE=true`, successful `POST /api/webhook/alert` requests are persisted to Firestore and can be inspected through the protected alerts read API.
+
+Both endpoints below require the same `x-api-key` header used by the webhook routes.
+If alert storage is enabled but Firestore credentials/project access are unavailable, both endpoints return `503 STORAGE_UNAVAILABLE` instead of a generic `500`.
+
+#### GET /api/alerts
+
+List stored alerts ordered by `receivedAt` descending.
+
+**Query Parameters:**
+- `limit` - Integer between `1` and `100` (default: `50`)
+- `before` - Either a legacy ISO-8601 timestamp cursor or the opaque `nextBefore` token from a previous response
+- `source` - Optional source filter (current writes use `webhook`)
+- `enriched` - Optional boolean filter (`true` or `false`)
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "alerts": [
+    {
+      "id": "alert-1",
+      "receivedAt": "2026-06-06T12:00:00.000Z",
+      "text": "BTC alert",
+      "enriched": true,
+      "enrichmentData": {
+        "sentiment": "bullish"
+      },
+      "tokenUsage": {
+        "totalTokens": 42
+      },
+      "deliveryResults": [
+        {
+          "channel": "telegram",
+          "success": true
+        }
+      ],
+      "source": "webhook",
+      "useTradingViewData": false
+    }
+  ],
+  "pagination": {
+    "hasMore": false,
+    "limit": 50,
+    "nextBefore": "eyJ2IjoxLCJyZWNlaXZlZEF0IjoiMjAyNi0wNi0wNlQxMjowMDowMC4wMDBaIiwiaWQiOiJhbGVydC0xIn0"
+  }
+}
+```
+
+#### GET /api/alerts/:alertId
+
+Retrieve a single stored alert by Firestore document ID.
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "alert": {
+    "id": "alert-123",
+    "receivedAt": "2026-06-06T10:30:00.000Z",
+    "text": "Stored alert",
+    "enriched": false,
+    "enrichmentData": null,
+    "tokenUsage": null,
+    "deliveryResults": [],
+    "source": "webhook",
+    "useTradingViewData": true
+  }
+}
+```
+
+**Response (200 OK - Completed):**
+```json
+{
+  "success": true,
+  "jobId": "8f8ef192-349f-4318-8547-0e6d628bf739",
+  "type": "expanded-analysis",
+  "status": "completed",
+  "progress": {
+    "total": 1,
+    "current": 1,
+    "status": "Completed analysis"
+  },
+  "results": [
+    {
+      "symbol": "BINANCE:BTCUSDT",
+      "status": "analyzed",
+      "price": 65430,
+      "rsi": 43.5
+    }
+  ],
+  "alertText": "📊 *ANÁLISIS AMPLIADO — Monday 25/05/2026*...",
+  "deliveryResults": [
+    {
+      "channel": "telegram",
+      "success": true,
+      "messageId": "987654"
+    }
+  ],
+  "summary": {
+    "total": 1,
+    "analyzed": 1,
+    "error": 0,
+    "delivered": 1
+  },
+  "createdAt": "2026-05-25T01:30:00.000Z",
+  "updatedAt": "2026-05-25T01:30:12.000Z",
+  "totalDurationMs": 12053
 }
 ```
 

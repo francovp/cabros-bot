@@ -131,7 +131,6 @@ describe('TradingViewMcpService volume confirmation', () => {
 		expect(result).toBeDefined();
 		expect(result.insights.join(' ')).not.toContain('Volume confirms');
 	});
-
 	it('skips volume confirmation insight if volume_ratio is missing or non-numeric', async () => {
 		process.env.ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION = 'true';
 		const service = new TradingViewMcpService({

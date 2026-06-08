@@ -39,6 +39,7 @@ function parseExpandedAnalysisAlertRequest(req = {}) {
 	validateTimeframeType(body);
 	const timeframe = parseTimeframe(body.timeframe);
 	const includeMultiTimeframe = parseIncludeMultiTimeframe(body);
+	const analysisMode = parseAnalysisMode(body);
 
 	if (symbols.length === 0) {
 		throw new ExpandedAnalysisAlertRequestError(
@@ -51,7 +52,7 @@ function parseExpandedAnalysisAlertRequest(req = {}) {
 		throw new ExpandedAnalysisAlertRequestError(`Too many symbols requested (max: ${MAX_SYMBOLS})`);
 	}
 
-	return { symbols, timeframe, includeMultiTimeframe };
+	return { symbols, timeframe, includeMultiTimeframe, analysisMode };
 }
 
 function parseIncludeMultiTimeframe(body = {}) {
@@ -68,6 +69,21 @@ function parseIncludeMultiTimeframe(body = {}) {
 		throw new ExpandedAnalysisAlertRequestError('includeMultiTimeframe must be a boolean');
 	}
 	return val;
+}
+
+function parseAnalysisMode(body = {}) {
+	const val = body.analysisMode !== undefined ? body.analysisMode : body.analysis_mode;
+	if (val === undefined || val === null) {
+		return 'standard';
+	}
+	if (typeof val !== 'string') {
+		throw new ExpandedAnalysisAlertRequestError('analysisMode must be a string');
+	}
+	const normalized = val.trim().toLowerCase();
+	if (normalized !== 'standard' && normalized !== 'combined') {
+		throw new ExpandedAnalysisAlertRequestError('analysisMode must be either "standard" or "combined"');
+	}
+	return normalized;
 }
 
 function getRequestBody(req = {}) {
@@ -178,24 +194,29 @@ function buildExpandedAnalysisAlertReport(items = [], options = {}) {
 }
 
 function buildReportRow({ input = {}, analysis = {}, multiTimeframe }) {
-	const priceData = analysis.price_data || {};
-	const indicators = analysis.technical_indicators || {};
-	const bollinger = analysis.bollinger_analysis || {};
-	const currentBollinger = analysis.bollinger_bands || {};
+	const techData = analysis.technical || analysis || {};
+	const priceData = techData.price_data || {};
+	const indicators = techData.technical_indicators || {};
+	const bollinger = techData.bollinger_analysis || {};
+	const currentBollinger = techData.bollinger_bands || {};
 	const price = numberOrNull(priceData.current_price ?? priceData.close);
 	const changePercent = numberOrNull(priceData.change_percent);
-	const rsi = numberOrNull(indicators.rsi ?? analysis.rsi?.value);
-	const sma20 = numberOrNull(indicators.sma20 ?? bollinger.bb_middle ?? analysis.sma?.sma20 ?? currentBollinger.middle);
-	const macd = numberOrNull(indicators.macd ?? analysis.macd?.macd_line);
-	const macdSignal = numberOrNull(indicators.macd_signal ?? analysis.macd?.signal_line);
-	const atr = numberOrNull(indicators.atr ?? analysis.atr?.value ?? analysis.atr ?? analysis.volatility?.atr);
+	const rsi = numberOrNull(indicators.rsi ?? techData.rsi?.value);
+	const sma20 = numberOrNull(indicators.sma20 ?? bollinger.bb_middle ?? techData.sma?.sma20 ?? currentBollinger.middle);
+	const macd = numberOrNull(indicators.macd ?? techData.macd?.macd_line);
+	const macdSignal = numberOrNull(indicators.macd_signal ?? techData.macd?.signal_line);
+	const atr = numberOrNull(indicators.atr ?? techData.atr?.value ?? techData.atr ?? techData.volatility?.atr);
 	const trend = getTrend(price, sma20);
 	const macdDirection = getMacdDirection(macd, macdSignal);
-	const volume = getVolumeLabel(analysis);
+	const volume = getVolumeLabel(techData);
 	const stopLoss = getStopLoss(price, atr, bollinger, currentBollinger);
 
+	const sentiment = analysis.sentiment || null;
+	const confluence = analysis.confluence || null;
+	const news = analysis.news || null;
+
 	return {
-		symbol: input.symbol || stripExchange(analysis.symbol) || 'UNKNOWN',
+		symbol: input.symbol || stripExchange(techData.symbol) || 'UNKNOWN',
 		price,
 		changePercent,
 		rsi,
@@ -206,6 +227,9 @@ function buildReportRow({ input = {}, analysis = {}, multiTimeframe }) {
 		stopLoss,
 		suggestion: getSuggestion({ rsi, trend, macdDirection }),
 		multiTimeframe,
+		sentiment,
+		confluence,
+		news,
 	};
 }
 
@@ -223,6 +247,27 @@ function formatGroupRows(rows) {
 			`- *Sugerencia:* ${row.suggestion}`,
 		];
 
+		if (row.sentiment) {
+			const sentText = formatRedditSentiment(row.sentiment);
+			if (sentText) {
+				lines.push(sentText);
+			}
+		}
+
+		if (row.confluence) {
+			const confText = formatConfluence(row.confluence);
+			if (confText) {
+				lines.push(confText);
+			}
+		}
+
+		if (row.news) {
+			const newsText = formatNewsSection(row.news);
+			if (newsText) {
+				lines.push(newsText);
+			}
+		}
+
 		if (row.multiTimeframe) {
 			lines.push(formatMultiTimeframeSection(row.multiTimeframe));
 		}
@@ -233,6 +278,73 @@ function formatGroupRows(rows) {
 
 		return lines;
 	});
+}
+
+function formatRedditSentiment(sentiment) {
+	if (!sentiment) return null;
+	const label = translateSentimentLabel(sentiment.sentiment_label || sentiment.label);
+	const score = typeof sentiment.sentiment_score === 'number' ? sentiment.sentiment_score : (sentiment.score ?? 0);
+	const posts = sentiment.posts_analyzed ?? sentiment.posts ?? 0;
+
+	let emoji = '😐';
+	if (score > 0.15 || label.toLowerCase() === 'alcista') emoji = '🐂';
+	else if (score < -0.15 || label.toLowerCase() === 'bajista') emoji = '🐻';
+
+	return `- *Sentimiento Reddit:* ${emoji} ${label} (Score: ${score.toFixed(2)}, ${posts} posts)`;
+}
+
+function translateSentimentLabel(label) {
+	if (!label) return 'Neutral';
+	const lower = String(label).toLowerCase().trim();
+	if (lower === 'bullish' || lower === 'alcista') return 'Alcista';
+	if (lower === 'bearish' || lower === 'bajista') return 'Bajista';
+	if (lower === 'neutral') return 'Neutral';
+	return label;
+}
+
+function formatConfluence(confluence) {
+	if (!confluence) return null;
+	const rec = formatRecommendation(confluence.recommendation || confluence.action || 'N/A');
+	const confidence = confluence.confidence || 'N/A';
+	const agree = confluence.signals_agree === true || String(confluence.signals_agree).toLowerCase() === 'yes';
+	const agreeText = agree ? ' · Señales Alineadas ✅' : '';
+	return `- *Confluencia:* ${rec}${agreeText} (Confianza: ${confidence})`;
+}
+
+function formatRecommendation(rec) {
+	if (!rec) return 'N/A';
+	const upper = String(rec).toUpperCase().trim();
+	if (upper.includes('STRONG BUY')) return '🟢 STRONG BUY';
+	if (upper.includes('BUY')) return '🟢 BUY';
+	if (upper.includes('STRONG SELL')) return '🔴 STRONG SELL';
+	if (upper.includes('SELL')) return '🔴 SELL';
+	if (upper.includes('HOLD') || upper.includes('NEUTRAL')) return '🟡 HOLD';
+	return rec;
+}
+
+function formatNewsSection(news) {
+	if (!news || !Array.isArray(news.latest) || news.latest.length === 0) {
+		return null;
+	}
+
+	const articles = news.latest.slice(0, 3);
+	const lines = ['- *Últimas Noticias:*'];
+	articles.forEach(art => {
+		const title = art.title || 'Noticia';
+		let source = art.source || art.publisher || '';
+		if (!source && art.url) {
+			try {
+				const urlObj = new URL(art.url);
+				source = urlObj.hostname.replace('www.', '');
+			} catch {
+				source = '';
+			}
+		}
+		const sourceText = source ? ` (${source})` : '';
+		lines.push(`  • ${title}${sourceText}`);
+	});
+
+	return lines.join('\n');
 }
 
 function formatMultiTimeframeSection(mtf) {
