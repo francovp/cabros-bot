@@ -7,6 +7,8 @@
 - Stored alert reads now live at:
   - `GET /api/alerts`
   - `GET /api/alerts/:alertId`
+- TradingView volume confirmation now also has a direct API:
+  - `POST /api/webhook/volume-confirmation`
 
 ## Stored Alerts
 
@@ -28,5 +30,7 @@
 ## Testing Pattern
 
 - Endpoint contract tests: `tests/integration/alerts-endpoint.test.js`
+- Volume confirmation endpoint contract tests: `tests/integration/volume-confirmation-endpoint.test.js`
 - Firestore read/write unit coverage: `tests/unit/alert-storage-service.test.js`
 - When extending the alerts read API, preserve `receivedAt` as the primary sort key but encode `nextBefore` with a deterministic tie-breaker (document ID) so paginated reads do not skip same-timestamp alerts, and preserve API-key protection on both list and detail routes.
+- `POST /api/webhook/volume-confirmation` should accept `symbol` in `EXCHANGE:SYMBOL` format, normalize timeframe aliases with the shared TradingView helpers, and return structured JSON instead of formatted notification text.

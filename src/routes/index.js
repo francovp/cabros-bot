@@ -2,6 +2,7 @@ const express = require('express');
 const { postAlert } = require('../controllers/webhooks/handlers/alert/alert');
 const { postExpandedAnalysisAlert } = require('../controllers/webhooks/handlers/expandedAnalysisAlert/expandedAnalysisAlert');
 const { postMarketScannerAlert } = require('../controllers/webhooks/handlers/marketScanner/marketScanner');
+const { postVolumeConfirmation } = require('../controllers/webhooks/handlers/volumeConfirmation/volumeConfirmation');
 const { postCreateJob, getJobStatus } = require('../controllers/webhooks/handlers/jobs/jobs');
 const { listAlerts, getAlertById } = require('../controllers/alerts/alerts');
 const { validateApiKey } = require('../lib/auth');
@@ -12,6 +13,7 @@ function getRoutes(botOrGetter) {
 	router.post('/webhook/alert', validateApiKey, postAlert(botOrGetter));
 	router.post('/webhook/expanded-analysis-alert', validateApiKey, postExpandedAnalysisAlert(botOrGetter));
 	router.post('/webhook/market-scanner-alert', validateApiKey, postMarketScannerAlert(botOrGetter));
+	router.post('/webhook/volume-confirmation', validateApiKey, postVolumeConfirmation());
 	router.get('/alerts', validateApiKey, listAlerts);
 	router.get('/alerts/:alertId', validateApiKey, getAlertById);
 

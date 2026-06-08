@@ -11,6 +11,7 @@ Key files / entry points
 - `src/controllers/commands/handlers/core/fetchPriceCryptoSymbol.js` — calls Binance `MainClient.getAvgPrice` to fetch prices.
 - `src/controllers/webhooks/handlers/alert/alert.js` — webhook handler that forwards alert text to a Telegram chat.
 - `src/controllers/webhooks/handlers/expandedAnalysisAlert/expandedAnalysisAlert.js` — `POST /api/webhook/expanded-analysis-alert` handler that builds TradingView MCP analysis reports and sends them through notification channels.
+- `src/controllers/webhooks/handlers/volumeConfirmation/volumeConfirmation.js` — `POST /api/webhook/volume-confirmation` handler that returns structured TradingView MCP volume-confirmation data.
 - `src/controllers/webhooks/handlers/jobs/jobs.js` — job creation (`POST /api/jobs/tradingview-analysis`) and status polling (`GET /api/jobs/:jobId`) handler.
 - `src/controllers/alerts/alerts.js` — stored alert read handlers for `GET /api/alerts` and `GET /api/alerts/:alertId`.
 - `src/services/jobs/JobService.js` — manages in-memory job state, executes background TradingView analysis runs, and performs periodic expiration cleanup.
@@ -55,6 +56,7 @@ Small, concrete examples
 - Get price via Telegram: send message `/precio BTCUSDT` -> handler calls `client.getAvgPrice({ symbol: 'BTCUSDT' })` and replies with `Precio de BTCUSDT es <price>`.
 - Send a webhook alert (when bot enabled): POST to `/api/webhook/alert` with body `{ "text": "Alert body" }` or `text/plain` body `Alert body`.
 - Generate an expanded analysis alert: POST to `/api/webhook/expanded-analysis-alert` with body `{ "symbols": ["BINANCE:BTCUSDT", "NASDAQ:NVDA"], "timeframe": "1D" }`; if `symbols` is empty it falls back to `EXPANDED_ANALYSIS_ALERT_SYMBOLS`, and returns 400 if neither is present.
+- Run a direct volume confirmation check: POST to `/api/webhook/volume-confirmation` with body `{ "symbol": "BINANCE:BTCUSDT", "timeframe": "4h" }`.
 - Inspect stored alerts: `GET /api/alerts?limit=50&before=2026-06-06T12:00:00.000Z&source=webhook&enriched=true` for the legacy older-than timestamp behavior, or reuse the opaque `pagination.nextBefore` cursor from a prior `/api/alerts` response to page without skipping ties, plus `GET /api/alerts/:alertId`.
 
 What an AI code change should preserve
@@ -222,6 +224,26 @@ The `/api/webhook/alert` flow (with `?useTradingViewData=true`) supports volume 
   - `"Volume confirms: YES ({ratio}x avg)"` (if ratio is >= 1.2)
   - `"Volume confirms: NO ({ratio}x avg)"` (if ratio is < 1.2)
 - This volume confirmation is rendered in both Telegram and WhatsApp notification channels under the "Key Insights" section.
+
+## TradingView Volume Confirmation API
+
+The system also provides a dedicated `POST /api/webhook/volume-confirmation` endpoint for on-demand TradingView MCP volume checks without going through alert delivery.
+
+**Request pattern**:
+- Body must be a JSON object with `symbol` in full `EXCHANGE:SYMBOL` format, for example `BINANCE:BTCUSDT`.
+- `timeframe` is optional and accepts the same MCP-supported intervals and aliases already used in TradingView flows.
+- The endpoint reuses `TradingViewMcpService.callVolumeConfirmation()` and returns structured JSON including the normalized symbol, derived confirm/deny decision, numeric `volumeRatio`, and raw MCP payload as `analysis`.
+
+**Failure behavior**:
+- Invalid bodies or malformed symbols return `400 INVALID_REQUEST`.
+- TradingView MCP failures return `502 VOLUME_CONFIRMATION_FAILED`.
+- Existing alert fail-open behavior remains unchanged because this endpoint is separate from `/api/webhook/alert`.
+
+**Where to look first when extending or debugging**:
+- `src/routes/index.js` for route registration.
+- `src/controllers/webhooks/handlers/volumeConfirmation/volumeConfirmation.js` for request/response handling.
+- `src/services/tradingview/volumeConfirmationRequest.js` for request parsing and decision derivation.
+- `tests/integration/volume-confirmation-endpoint.test.js` for endpoint behavior coverage.
 
 ## TradingView Expanded Alert Reports
 
