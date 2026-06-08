@@ -22,6 +22,9 @@ describe('Status endpoints', () => {
 	let tempDir;
 
 	beforeEach(() => {
+		Object.keys(process.env).forEach((key) => {
+			delete process.env[key];
+		});
 		tempDir = null;
 		app = express();
 		app.use(express.json());
@@ -48,6 +51,8 @@ describe('Status endpoints', () => {
 		process.env.FIREBASE_SERVICE_ACCOUNT_JSON = validFirestoreServiceAccountJson;
 		process.env.ENABLE_SENTRY = 'true';
 		process.env.SENTRY_DSN = 'https://dsn.example';
+		delete process.env.BRAVE_SEARCH_API_KEY;
+		delete process.env.ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION;
 	});
 
 	afterEach(() => {
