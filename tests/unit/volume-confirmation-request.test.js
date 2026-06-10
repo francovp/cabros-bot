@@ -40,6 +40,17 @@ describe('volumeConfirmationRequest', () => {
 		})).toThrow(VolumeConfirmationRequestError);
 	});
 
+	it('accepts one-character TradingView symbols', () => {
+		expect(parseVolumeConfirmationRequest({
+			body: { symbol: 'NYSE:F' },
+		})).toEqual({
+			exchange: 'NYSE',
+			symbol: 'F',
+			rawSymbol: 'NYSE:F',
+			timeframe: '4h',
+		});
+	});
+
 	it('derives confirm and deny decisions from volume_ratio', () => {
 		expect(getVolumeDecision({
 			volume_analysis: { volume_ratio: 1.25 },

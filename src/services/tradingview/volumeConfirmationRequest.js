@@ -62,7 +62,7 @@ function parseSymbolIdentifier(rawSymbol) {
 	}
 
 	const trimmed = rawSymbol.trim().toUpperCase();
-	const match = trimmed.match(/^(?<exchange>[A-Z0-9._-]+):(?<symbol>[A-Z0-9._-]{2,30})$/);
+	const match = trimmed.match(/^(?<exchange>[A-Z0-9._-]+):(?<symbol>[A-Z0-9._-]{1,30})$/);
 
 	if (!match || !match.groups) {
 		throw new VolumeConfirmationRequestError('symbol must use EXCHANGE:SYMBOL format');
