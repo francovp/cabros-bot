@@ -96,7 +96,8 @@ function parseTimeframe(body = {}) {
 }
 
 function getVolumeDecision(analysis = {}) {
-	const ratio = Number(analysis.volume_analysis?.volume_ratio);
+	const rawRatio = analysis.volume_analysis?.volume_ratio;
+	const ratio = rawRatio === null || rawRatio === undefined ? Number.NaN : Number(rawRatio);
 
 	if (!Number.isFinite(ratio)) {
 		return {
