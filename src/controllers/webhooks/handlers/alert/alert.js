@@ -117,10 +117,6 @@ function postAlert(botOrGetter) {
 
 		try {
 			const requestSpan = sentryService.getActiveSpan();
-			const bot = resolveBot(botOrGetter);
-			if (!notificationManager) {
-				await initializeNotificationServices(bot);
-			}
 
 			if (typeof body === 'object' && 'text' in body) {
 				alertText = body.text;
@@ -149,6 +145,12 @@ function postAlert(botOrGetter) {
 					},
 					tokenUsage: tokenUsageJSON,
 				});
+			}
+
+			// Defer notification service initialization until we know we need delivery.
+			const bot = resolveBot(botOrGetter);
+			if (!notificationManager) {
+				await initializeNotificationServices(bot);
 			}
 
 			// NotificationManager owns the custom dispatch spans.
