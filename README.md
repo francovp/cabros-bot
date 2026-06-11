@@ -474,6 +474,44 @@ The endpoint stops analysis at `EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS` (default 60 
 }
 ```
 
+### POST /api/webhook/volume-confirmation
+
+Run TradingView MCP `volume_confirmation_analysis` on demand and return structured JSON without sending notifications.
+
+**Request (JSON):**
+```json
+{
+  "symbol": "BINANCE:BTCUSDT",
+  "timeframe": "4h"
+}
+```
+
+- `symbol`: Required `EXCHANGE:SYMBOL` identifier.
+- `timeframe`: Optional indicator interval. Defaults to `TRADINGVIEW_MCP_DEFAULT_TIMEFRAME` or `1h`.
+
+**Response (JSON):**
+```json
+{
+  "success": true,
+  "symbol": "BINANCE:BTCUSDT",
+  "exchange": "BINANCE",
+  "asset": "BTCUSDT",
+  "timeframe": "4h",
+  "confirmed": true,
+  "decision": "confirm",
+  "volumeRatio": 1.7,
+  "analysis": {
+    "symbol": "BINANCE:BTCUSDT",
+    "volume_analysis": {
+      "volume_ratio": 1.7,
+      "volume_strength": "HIGH"
+    }
+  }
+}
+```
+
+If the symbol format is invalid, the endpoint returns `400 INVALID_REQUEST`. If TradingView MCP fails, it returns `502 VOLUME_CONFIRMATION_FAILED` with the upstream error message.
+
 ### POST /api/webhook/market-scanner-alert
 
 Execute multiple market scanner tools on the TradingView MCP server (such as top gainers, top losers, volume breakout, smart volume, or Bollinger squeeze), generate a formatted technical summary report in Spanish, and send it through all enabled notification channels.
