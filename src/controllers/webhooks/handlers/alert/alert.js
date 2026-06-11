@@ -100,10 +100,17 @@ async function processEnrichment(alert, options) {
 	return enriched;
 }
 
+function resolveDryRun(req) {
+	const queryFlag = req.query && (req.query.dryRun === 'true' || req.query.dryRun === true);
+	const bodyFlag = req.body && typeof req.body === 'object' && (req.body.dryRun === true || req.body.dryRun === 'true');
+	return queryFlag || bodyFlag;
+}
+
 function postAlert(botOrGetter) {
 	return async (req, res) => {
 		const { body } = req;
 		const useTradingViewData = req.query && (req.query.useTradingViewData === true || req.query.useTradingViewData === 'true');
+		const dryRun = resolveDryRun(req);
 
 		let alertText = '';
 		let alert = null;
@@ -127,12 +134,27 @@ function postAlert(botOrGetter) {
 			const tokenUsage = new TokenUsageTracker();
 			const enriched = await processEnrichment(alert, { tokenUsage, useTradingViewData, parentSpan: requestSpan });
 
+			const tokenUsageJSON = tokenUsage.toJSON();
+			tokenUsageJSON.formattedSummary = tokenUsage.formatSummary();
+
+			if (dryRun) {
+				console.debug('[Alert] Dry-run mode: skipping delivery and Firestore persistence');
+				return res.json({
+					success: true,
+					dryRun: true,
+					enriched,
+					payload: {
+						text: alert.text,
+						enrichedData: alert.enriched || null,
+					},
+					tokenUsage: tokenUsageJSON,
+				});
+			}
+
 			// NotificationManager owns the custom dispatch spans.
 			const results = await notificationManager.sendToAll(alert, { parentSpan: requestSpan });
 
 			// Return 200 OK regardless of delivery success (fail-open pattern)
-			const tokenUsageJSON = tokenUsage.toJSON();
-			tokenUsageJSON.formattedSummary = tokenUsage.formatSummary();
 			res.json({ success: true, results, enriched, tokenUsage: tokenUsageJSON });
 
 			// Fire-and-forget: persist alert to Firestore after responding to the caller.
