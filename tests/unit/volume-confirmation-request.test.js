@@ -68,4 +68,22 @@ describe('volumeConfirmationRequest', () => {
 			volumeRatio: 0.95,
 		});
 	});
+
+	it('treats null or missing volume ratios as unknown', () => {
+		expect(getVolumeDecision({
+			volume_analysis: { volume_ratio: null },
+		})).toEqual({
+			confirmed: null,
+			decision: 'unknown',
+			volumeRatio: null,
+		});
+
+		expect(getVolumeDecision({
+			volume_analysis: {},
+		})).toEqual({
+			confirmed: null,
+			decision: 'unknown',
+			volumeRatio: null,
+		});
+	});
 });
