@@ -145,6 +145,44 @@ describe('Idempotency Service & Middleware', () => {
 
 			dateSpy.mockRestore();
 		});
+
+		test('should not evict pending reservations when cache reaches max size', async () => {
+			const originalMaxKeys = idempotencyService.maxKeys;
+			idempotencyService.maxKeys = 2;
+
+			try {
+				const pendingKey = 'pending-eviction-key';
+				const pendingPayload = { method: 'POST', path: '/api/webhook/alert', body: { text: 'alert-1' }, query: {} };
+
+				expect(idempotencyService.reserve(pendingKey, pendingPayload)).toEqual({ state: 'fresh' });
+
+				idempotencyService.set('completed-key', { method: 'POST', path: '/api/webhook/alert', body: { text: 'done' }, query: {} }, {
+					statusCode: 200,
+					body: { success: true },
+					headers: {},
+				});
+
+				const pendingRetry = idempotencyService.reserve(pendingKey, pendingPayload);
+				expect(pendingRetry.state).toBe('pending');
+
+				expect(idempotencyService.reserve('new-key', {
+					method: 'POST',
+					path: '/api/webhook/market-scanner-alert',
+					body: { text: 'fresh' },
+					query: {},
+				})).toEqual({ state: 'fresh' });
+
+				idempotencyService.set(pendingKey, pendingPayload, { statusCode: 202, body: { success: true }, headers: {} });
+
+				await expect(pendingRetry.promise).resolves.toMatchObject({
+					state: 'completed',
+					statusCode: 202,
+					responseBody: { success: true },
+				});
+			} finally {
+				idempotencyService.maxKeys = originalMaxKeys;
+			}
+		});
 	});
 
 	describe('idempotencyMiddleware', () => {

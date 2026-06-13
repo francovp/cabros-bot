@@ -52,6 +52,21 @@ class IdempotencyService {
 	}
 
 	/**
+	 * Prefer evicting completed records only; pending reservations must remain replayable.
+	 * @returns {boolean}
+	 */
+	evictOldestCompletedRecord() {
+		for (const [key, record] of this.cache.entries()) {
+			if (record.state === 'completed') {
+				this.cache.delete(key);
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	/**
 	 * Hash the request body/payload to verify it hasn't changed on retry
 	 * @param {any} payload
 	 * @returns {string} SHA-256 hash of serialized payload
@@ -126,10 +141,7 @@ class IdempotencyService {
 		}
 
 		if (this.cache.size >= this.maxKeys) {
-			const firstKey = this.cache.keys().next().value;
-			if (firstKey) {
-				this.cache.delete(firstKey);
-			}
+			this.evictOldestCompletedRecord();
 		}
 
 		const payloadHash = this.hashPayload(payload);
@@ -168,10 +180,7 @@ class IdempotencyService {
 	set(key, payload, { statusCode, body, headers }) {
 		const existing = this.cache.get(key);
 		if (!existing && this.cache.size >= this.maxKeys) {
-			const firstKey = this.cache.keys().next().value;
-			if (firstKey) {
-				this.cache.delete(firstKey);
-			}
+			this.evictOldestCompletedRecord();
 		}
 
 		const payloadHash = this.hashPayload(payload);
