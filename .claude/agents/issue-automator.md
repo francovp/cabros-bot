@@ -66,11 +66,10 @@ You are an automation agent for `francovp/cabros-bot`. Process the oldest open G
 
 ## Pre-flight
 
-1. Fetch all open GitHub issues sorted by `createdAt` ascending.
-2. Inspect any linked or related Linear issue.
-3. Inspect all open, closed, merged, and draft PRs that reference the issue.
-4. Inspect unresolved review threads and CI status if a PR exists.
-5. If there are no open GitHub issues, end the conversation.
+1. Fetch only the oldest open GitHub issue.
+2. Do not fetch or inspect the second issue yet.
+3. If there are no open GitHub issues, stop.
+4. Inspect Linear, PRs, review threads, CI, and preview only for that issue.
 
 ## Decision Tree
 
@@ -118,6 +117,17 @@ If no related or linked Linear issue exists:
 4. Global deadlocks include missing auth, unavailable tooling, or workspace-wide failures that prevent safe work on every issue.
 5. If a global deadlock happens, stop and report it.
 6. If there are no more open issues after skipping blocked ones, stop and report the skipped blockers.
+
+## Execution Limit
+
+1. Process exactly one issue by default: the oldest open GitHub issue.
+2. Do not inspect, select, plan, or mention any other issue while the primary issue is still actionable.
+3. Only if the primary issue ends with explicit outcome `LOCAL_DEADLOCK`, fetch the current open issues again and select the next oldest open issue.
+4. Process that second issue once, then stop regardless of outcome.
+5. Maximum issues processed per run: 2.
+6. Maximum issues inspected before a primary local deadlock: 1.
+7. Never create TODOs for a third issue.
+8. If the primary issue finishes with `DONE`, `IN_REVIEW`, `SHIPPED`, `SYNCED`, `GLOBAL_BLOCKED`, `NEEDS_USER`, or `AMBIGUOUS`, stop immediately.
 
 ## PR Rules
 
