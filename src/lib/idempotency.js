@@ -2,6 +2,41 @@
 
 const { idempotencyService } = require('../services/storage/IdempotencyService');
 
+function buildRequestFingerprint(req) {
+	return {
+		body: req.body || {},
+		query: req.query || {},
+	};
+}
+
+function sendCachedResponse(res, cachedRecord) {
+	res.set('Idempotency-Replay', 'true');
+
+	if (cachedRecord.headers) {
+		for (const [hk, hv] of Object.entries(cachedRecord.headers)) {
+			if (hv) res.set(hk, hv);
+		}
+	}
+
+	res.status(cachedRecord.statusCode);
+
+	let finalBody = cachedRecord.responseBody;
+	if (finalBody && typeof finalBody === 'object') {
+		finalBody = { ...finalBody, idempotencyReplayed: true };
+		return res.json(finalBody);
+	} else if (typeof finalBody === 'string') {
+		try {
+			const parsed = JSON.parse(finalBody);
+			parsed.idempotencyReplayed = true;
+			return res.json(parsed);
+		} catch (error) {
+			// Leave as plain string/text
+		}
+	}
+
+	return res.send(finalBody);
+}
+
 /**
  * Express middleware to handle idempotency key checks and response caching.
  */
@@ -17,38 +52,28 @@ function idempotencyMiddleware(req, res, next) {
 
 	// Ensure the key is a string (e.g., if array of headers received)
 	const keyToCheck = Array.isArray(key) ? key[0] : key;
+	const requestFingerprint = buildRequestFingerprint(req);
 
 	try {
-		const cachedRecord = idempotencyService.get(keyToCheck, req.body);
-		if (cachedRecord) {
+		const reservation = idempotencyService.reserve(keyToCheck, requestFingerprint);
+		if (reservation.state === 'completed') {
 			console.debug(`[Idempotency] Replaying cached response for key: ${keyToCheck}`);
-			res.set('Idempotency-Replay', 'true');
+			return sendCachedResponse(res, reservation.record);
+		}
 
-			// Restore cached headers
-			if (cachedRecord.headers) {
-				for (const [hk, hv] of Object.entries(cachedRecord.headers)) {
-					if (hv) res.set(hk, hv);
-				}
-			}
-
-			res.status(cachedRecord.statusCode);
-
-			let finalBody = cachedRecord.responseBody;
-			// If the response body is an object or parsed JSON, append idempotencyReplayed: true
-			if (finalBody && typeof finalBody === 'object') {
-				finalBody = { ...finalBody, idempotencyReplayed: true };
-				return res.json(finalBody);
-			} else if (typeof finalBody === 'string') {
-				try {
-					const parsed = JSON.parse(finalBody);
-					parsed.idempotencyReplayed = true;
-					return res.json(parsed);
-				} catch (e) {
-					// Leave as plain string/text
-				}
-			}
-
-			return res.send(finalBody);
+		if (reservation.state === 'pending') {
+			console.debug(`[Idempotency] Waiting for in-flight response for key: ${keyToCheck}`);
+			return reservation.promise
+				.then((cachedRecord) => sendCachedResponse(res, cachedRecord))
+				.catch((error) => {
+					if (error && error.code === 'IDEMPOTENCY_RELEASED') {
+						return res.status(409).json({
+							error: error.message,
+							code: error.code,
+						});
+					}
+					return next(error);
+				});
 		}
 	} catch (error) {
 		if (error.code === 'IDEMPOTENCY_CONFLICT') {
@@ -89,7 +114,7 @@ function idempotencyMiddleware(req, res, next) {
 			}
 		}
 
-		idempotencyService.set(keyToCheck, req.body, {
+		idempotencyService.set(keyToCheck, requestFingerprint, {
 			statusCode: res.statusCode,
 			body: responseBody,
 			headers: {
@@ -107,6 +132,15 @@ function idempotencyMiddleware(req, res, next) {
 		cacheResponse(obj);
 		return originalJson.apply(this, arguments);
 	};
+
+	res.on('finish', () => {
+		if (!responseCached && res.statusCode >= 500) {
+			const releaseError = new Error('Initial idempotent request failed before a replayable response was available');
+			releaseError.code = 'IDEMPOTENCY_RELEASED';
+			releaseError.statusCode = 409;
+			idempotencyService.release(keyToCheck, requestFingerprint, releaseError);
+		}
+	});
 
 	next();
 }
