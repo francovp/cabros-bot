@@ -187,6 +187,103 @@ describe('GenaiClient robustness', () => {
 		});
 	});
 
+	describe('_isNonRetryableGeminiError', () => {
+		it('returns true for 400 FAILED_PRECONDITION errors from Gemini SDK', () => {
+			const error = Object.assign(
+				new Error('User location is not supported for the API use.'),
+				{ status: 400, code: 'FAILED_PRECONDITION' },
+			);
+			expect(genaiClient._isNonRetryableGeminiError(error)).toBe(true);
+		});
+
+		it('returns true for 403 PERMISSION_DENIED errors', () => {
+			const error = Object.assign(
+				new Error('Permission denied.'),
+				{ status: 403, code: 'PERMISSION_DENIED' },
+			);
+			expect(genaiClient._isNonRetryableGeminiError(error)).toBe(true);
+		});
+
+		it('returns false for 500 INTERNAL errors (retryable)', () => {
+			const error = Object.assign(
+				new Error('Internal error encountered.'),
+				{ status: 500, code: 'INTERNAL' },
+			);
+			expect(genaiClient._isNonRetryableGeminiError(error)).toBe(false);
+		});
+
+		it('returns false for 503 UNAVAILABLE errors (retryable)', () => {
+			const error = Object.assign(
+				new Error('Service unavailable.'),
+				{ status: 503, code: 'UNAVAILABLE' },
+			);
+			expect(genaiClient._isNonRetryableGeminiError(error)).toBe(false);
+		});
+
+		it('returns false for 429 RATE_LIMITED errors (retryable)', () => {
+			const error = Object.assign(
+				new Error('Rate limited.'),
+				{ status: 429, code: 'RATE_LIMITED' },
+			);
+			expect(genaiClient._isNonRetryableGeminiError(error)).toBe(false);
+		});
+
+		it('returns false for null/undefined errors', () => {
+			expect(genaiClient._isNonRetryableGeminiError(null)).toBe(false);
+			expect(genaiClient._isNonRetryableGeminiError(undefined)).toBe(false);
+		});
+	});
+
+	describe('llmCall non-retryable error classification', () => {
+		it('throws NonRetryableProviderError when Gemini returns 400 FAILED_PRECONDITION', async () => {
+			const apiError = Object.assign(
+				new Error('User location is not supported for the API use.'),
+				{ status: 400, code: 'FAILED_PRECONDITION' },
+			);
+			genaiClient.genAI.models.generateContent.mockRejectedValueOnce(apiError);
+
+			await expect(genaiClient.llmCall({ prompt: 'test' }))
+				.rejects
+				.toThrow('LLM provider configuration error');
+		});
+
+		it('throws regular Error for 500 INTERNAL errors (retryable)', async () => {
+			const apiError = Object.assign(
+				new Error('Internal server error'),
+				{ status: 500 },
+			);
+			genaiClient.genAI.models.generateContent.mockRejectedValueOnce(apiError);
+
+			await expect(genaiClient.llmCall({ prompt: 'test' }))
+				.rejects
+				.toThrow('LLM call failed');
+		});
+	});
+
+	describe('llmCallv2 skips failover for NonRetryableProviderError', () => {
+		it('throws NonRetryableProviderError directly without attempting failover', async () => {
+			const apiError = Object.assign(
+				new Error('User location is not supported for the API use.'),
+				{ status: 400, code: 'FAILED_PRECONDITION' },
+			);
+			genaiClient.genAI.models.generateContent.mockRejectedValue(apiError);
+
+			const azureClient = require('../../src/services/inference/azureAiClient');
+			const openRouterClient = require('../../src/services/inference/openRouterClient');
+			const azureSpy = jest.spyOn(azureClient, 'getAzureAIClient');
+			const openRouterSpy = jest.spyOn(openRouterClient, 'getOpenRouterClient');
+
+			await expect(genaiClient.llmCallv2({
+				systemPrompt: 'system',
+				userPrompt: 'user',
+			})).rejects.toThrow('LLM provider configuration error');
+
+			// Azure and OpenRouter should NOT be called
+			expect(azureSpy).not.toHaveBeenCalled();
+			expect(openRouterSpy).not.toHaveBeenCalled();
+		});
+	});
+
 	describe('llmCallv2 metrics', () => {
 		it('captures Gemini metrics with the resolved model name', async () => {
 			const captureSpy = jest.spyOn(sentryService, 'captureLlmMetric').mockImplementation(() => {});
