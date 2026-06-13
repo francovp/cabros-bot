@@ -14,7 +14,7 @@ describe('Idempotency Service & Middleware', () => {
 	describe('IdempotencyService', () => {
 		test('should store and retrieve cached response details', () => {
 			const key = 'test-key-1';
-			const payload = { text: 'alert-1' };
+			const payload = { body: { text: 'alert-1' }, query: {} };
 			const response = {
 				statusCode: 200,
 				body: { success: true, results: [] },
@@ -38,10 +38,10 @@ describe('Idempotency Service & Middleware', () => {
 				headers: {},
 			};
 
-			idempotencyService.set(key, { text: 'alert-2' }, response);
+			idempotencyService.set(key, { body: { text: 'alert-2' }, query: {} }, response);
 
 			expect(() => {
-				idempotencyService.get(key, { text: 'different-alert' });
+				idempotencyService.reserve(key, { body: { text: 'different-alert' }, query: {} });
 			}).toThrow('Idempotency key was reused with a different payload');
 		});
 
@@ -50,7 +50,7 @@ describe('Idempotency Service & Middleware', () => {
 			expect(idempotencyService.getTtlMs()).toBe(1000);
 
 			const key = 'test-key-ttl';
-			const payload = { text: 'ttl-test' };
+			const payload = { body: { text: 'ttl-test' }, query: {} };
 			const response = { statusCode: 200, body: 'ok', headers: {} };
 
 			idempotencyService.set(key, payload, response);
@@ -70,21 +70,39 @@ describe('Idempotency Service & Middleware', () => {
 			idempotencyService.maxKeys = 3;
 
 			try {
-				idempotencyService.set('key-1', 'body-1', { statusCode: 200, body: '1' });
-				idempotencyService.set('key-2', 'body-2', { statusCode: 200, body: '2' });
-				idempotencyService.set('key-3', 'body-3', { statusCode: 200, body: '3' });
+				idempotencyService.set('key-1', { body: 'body-1', query: {} }, { statusCode: 200, body: '1' });
+				idempotencyService.set('key-2', { body: 'body-2', query: {} }, { statusCode: 200, body: '2' });
+				idempotencyService.set('key-3', { body: 'body-3', query: {} }, { statusCode: 200, body: '3' });
 
-				expect(idempotencyService.get('key-1', 'body-1')).not.toBeNull();
+				expect(idempotencyService.get('key-1', { body: 'body-1', query: {} })).not.toBeNull();
 
 				// Adding 4th key should evict 'key-1' (as it was the oldest inserted)
-				idempotencyService.set('key-4', 'body-4', { statusCode: 200, body: '4' });
+				idempotencyService.set('key-4', { body: 'body-4', query: {} }, { statusCode: 200, body: '4' });
 
-				expect(idempotencyService.get('key-1', 'body-1')).toBeNull();
-				expect(idempotencyService.get('key-2', 'body-2')).not.toBeNull();
-				expect(idempotencyService.get('key-4', 'body-4')).not.toBeNull();
+				expect(idempotencyService.get('key-1', { body: 'body-1', query: {} })).toBeNull();
+				expect(idempotencyService.get('key-2', { body: 'body-2', query: {} })).not.toBeNull();
+				expect(idempotencyService.get('key-4', { body: 'body-4', query: {} })).not.toBeNull();
 			} finally {
 				idempotencyService.maxKeys = originalMaxKeys;
 			}
+		});
+
+		test('should keep retries pending until the first matching request completes', async () => {
+			const key = 'pending-key';
+			const payload = { body: { text: 'alert-1' }, query: { useTradingViewData: 'true' } };
+
+			expect(idempotencyService.reserve(key, payload)).toEqual({ state: 'fresh' });
+
+			const pendingRetry = idempotencyService.reserve(key, payload);
+			expect(pendingRetry.state).toBe('pending');
+
+			idempotencyService.set(key, payload, { statusCode: 200, body: { success: true }, headers: {} });
+
+			await expect(pendingRetry.promise).resolves.toMatchObject({
+				state: 'completed',
+				statusCode: 200,
+				responseBody: { success: true },
+			});
 		});
 	});
 
@@ -194,7 +212,7 @@ describe('Idempotency Service & Middleware', () => {
 			res.status(503).json({ error: 'Service Unavailable' });
 
 			// Check that key is not in cache
-			const record = idempotencyService.get(key, req.body);
+			const record = idempotencyService.get(key, { body: req.body, query: req.query || {} });
 			expect(record).toBeNull();
 		});
 
@@ -206,9 +224,70 @@ describe('Idempotency Service & Middleware', () => {
 			res.status(400).json({ error: 'Bad Request' });
 
 			// Check that key is in cache
-			const record = idempotencyService.get(key, req.body);
+			const record = idempotencyService.get(key, { body: req.body, query: req.query || {} });
 			expect(record).not.toBeNull();
 			expect(record.statusCode).toBe(400);
+		});
+
+		test('should wait for in-flight request and replay once the first response is available', async () => {
+			const key = 'in-flight-key';
+			req.headers['idempotency-key'] = key;
+
+			idempotencyMiddleware(req, res, next);
+			expect(next).toHaveBeenCalledTimes(1);
+
+			const req2 = httpMocks.createRequest({
+				method: 'POST',
+				url: '/api/webhook/alert',
+				headers: { 'idempotency-key': key },
+				body: { text: 'test alert' },
+			});
+			const res2 = httpMocks.createResponse();
+			const next2 = jest.fn();
+
+			idempotencyMiddleware(req2, res2, next2);
+			expect(next2).not.toHaveBeenCalled();
+			expect(res2._isEndCalled()).toBe(false);
+
+			res.status(202).json({ success: true, details: 'alert sent' });
+
+			await new Promise(setImmediate);
+
+			expect(res2.statusCode).toBe(202);
+			expect(res2.getHeader('Idempotency-Replay')).toBe('true');
+			expect(JSON.parse(res2._getData())).toEqual({
+				success: true,
+				details: 'alert sent',
+				idempotencyReplayed: true,
+			});
+		});
+
+		test('should treat request query as part of the idempotency fingerprint', () => {
+			const key = 'query-sensitive-key';
+			req.headers['idempotency-key'] = key;
+			req.query = { useTradingViewData: 'true' };
+
+			idempotencyMiddleware(req, res, next);
+			res.status(200).json({ enriched: true });
+
+			const req2 = httpMocks.createRequest({
+				method: 'POST',
+				url: '/api/webhook/alert',
+				headers: { 'idempotency-key': key },
+				body: { text: 'test alert' },
+				query: {},
+			});
+			const res2 = httpMocks.createResponse();
+			const next2 = jest.fn();
+
+			idempotencyMiddleware(req2, res2, next2);
+
+			expect(next2).not.toHaveBeenCalled();
+			expect(res2.statusCode).toBe(409);
+			expect(JSON.parse(res2._getData())).toEqual({
+				error: 'Idempotency key was reused with a different payload',
+				code: 'IDEMPOTENCY_CONFLICT',
+			});
 		});
 	});
 });
