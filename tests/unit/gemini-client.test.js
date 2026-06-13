@@ -1,9 +1,20 @@
 /* global jest, describe, it, expect, beforeEach, afterEach */
 
 const { generateGroundedSummary, generateEnrichedAlert } = require('../../src/services/grounding/gemini');
-const genaiClient = require('../../src/services/grounding/genaiClient');
 
-jest.mock('../../src/services/grounding/genaiClient');
+// Use jest.requireActual to preserve NonRetryableProviderError class,
+// but mock the key methods (llmCallv2, search) so tests control responses.
+const actualGenaiClient = jest.requireActual('../../src/services/grounding/genaiClient');
+jest.mock('../../src/services/grounding/genaiClient', () => {
+	const actual = jest.requireActual('../../src/services/grounding/genaiClient');
+	return {
+		NonRetryableProviderError: actual.NonRetryableProviderError,
+		GenaiClient: actual.GenaiClient,
+		llmCallv2: jest.fn(),
+		search: jest.fn(),
+	};
+});
+const genaiClient = require('../../src/services/grounding/genaiClient');
 jest.mock('../../src/services/inference/azureAiClient', () => ({
 	getAzureAIClient: jest.fn().mockReturnValue({
 		chatCompletion: jest.fn(),
@@ -163,6 +174,27 @@ describe('Gemini Service', () => {
 
 			expect(result.sentiment).toBe('NEUTRAL');
 			expect(result.insights).toHaveLength(0);
+		});
+
+		it('returns neutral enrichment on NonRetryableProviderError instead of throwing', async () => {
+			const { NonRetryableProviderError } = require('../../src/services/grounding/genaiClient');
+			genaiClient.llmCallv2.mockRejectedValue(
+				new NonRetryableProviderError(
+					'LLM provider configuration error: User location is not supported for the API use.',
+					{ status: 400, provider: 'gemini' },
+				),
+			);
+
+			const result = await generateEnrichedAlert({
+				text: 'Valid alert text that is long enough for enrichment',
+				searchResults: [],
+			});
+
+			expect(result.sentiment).toBe('NEUTRAL');
+			expect(result.sentiment_score).toBe(0.5);
+			expect(result.insights).toEqual([]);
+			// Fallback model should NOT be called
+			expect(genaiClient.llmCallv2).toHaveBeenCalledTimes(1);
 		});
 
 		it('should use provided system prompt', async () => {
