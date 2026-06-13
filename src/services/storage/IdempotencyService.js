@@ -4,7 +4,7 @@ const crypto = require('crypto');
 
 class IdempotencyService {
 	constructor() {
-		this.cache = new Map(); // key -> { payloadHash, state, statusCode, responseBody, headers, createdAt, expiresAt }
+		this.cache = new Map(); // key -> { payloadHash, state, waiterCount, statusCode, responseBody, headers, createdAt, expiresAt }
 		this.defaultTtlMs = 300000; // 5 minutes default
 		this.maxKeys = 10000; // Protect against memory exhaustion
 
@@ -110,6 +110,7 @@ class IdempotencyService {
 					return { state: 'completed', record: existing };
 				}
 
+				existing.waiterCount = (existing.waiterCount || 0) + 1;
 				return { state: 'pending', promise: existing.completionPromise };
 			}
 		}
@@ -134,6 +135,7 @@ class IdempotencyService {
 		this.cache.set(key, {
 			payloadHash,
 			state: 'pending',
+			waiterCount: 0,
 			createdAt: now,
 			expiresAt: now + ttl,
 			completionPromise,
@@ -202,7 +204,7 @@ class IdempotencyService {
 
 		this.cache.delete(key);
 
-		if (typeof existing.rejectCompletion === 'function') {
+		if ((existing.waiterCount || 0) > 0 && typeof existing.rejectCompletion === 'function') {
 			existing.rejectCompletion(error || new Error('Idempotency reservation released'));
 		}
 	}

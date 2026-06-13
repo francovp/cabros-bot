@@ -89,7 +89,7 @@ describe('Idempotency Service & Middleware', () => {
 
 		test('should keep retries pending until the first matching request completes', async () => {
 			const key = 'pending-key';
-			const payload = { body: { text: 'alert-1' }, query: { useTradingViewData: 'true' } };
+			const payload = { method: 'POST', path: '/api/webhook/alert', body: { text: 'alert-1' }, query: { useTradingViewData: 'true' } };
 
 			expect(idempotencyService.reserve(key, payload)).toEqual({ state: 'fresh' });
 
@@ -103,6 +103,20 @@ describe('Idempotency Service & Middleware', () => {
 				statusCode: 200,
 				responseBody: { success: true },
 			});
+		});
+
+		test('should release failed reservations without rejecting when nobody is waiting', () => {
+			const key = 'released-without-waiters';
+			const payload = { method: 'POST', path: '/api/webhook/alert', body: { text: 'alert-1' }, query: {} };
+
+			expect(idempotencyService.reserve(key, payload)).toEqual({ state: 'fresh' });
+
+			expect(() => {
+				idempotencyService.release(key, payload, new Error('boom'));
+			}).not.toThrow();
+
+			expect(idempotencyService.get(key, payload)).toBeNull();
+			expect(idempotencyService.reserve(key, payload)).toEqual({ state: 'fresh' });
 		});
 	});
 
@@ -212,7 +226,12 @@ describe('Idempotency Service & Middleware', () => {
 			res.status(503).json({ error: 'Service Unavailable' });
 
 			// Check that key is not in cache
-			const record = idempotencyService.get(key, { body: req.body, query: req.query || {} });
+			const record = idempotencyService.get(key, {
+				method: req.method,
+				path: req.url,
+				body: req.body,
+				query: req.query || {},
+			});
 			expect(record).toBeNull();
 		});
 
@@ -224,7 +243,12 @@ describe('Idempotency Service & Middleware', () => {
 			res.status(400).json({ error: 'Bad Request' });
 
 			// Check that key is in cache
-			const record = idempotencyService.get(key, { body: req.body, query: req.query || {} });
+			const record = idempotencyService.get(key, {
+				method: req.method,
+				path: req.url,
+				body: req.body,
+				query: req.query || {},
+			});
 			expect(record).not.toBeNull();
 			expect(record.statusCode).toBe(400);
 		});
@@ -273,6 +297,34 @@ describe('Idempotency Service & Middleware', () => {
 			const req2 = httpMocks.createRequest({
 				method: 'POST',
 				url: '/api/webhook/alert',
+				headers: { 'idempotency-key': key },
+				body: { text: 'test alert' },
+				query: {},
+			});
+			const res2 = httpMocks.createResponse();
+			const next2 = jest.fn();
+
+			idempotencyMiddleware(req2, res2, next2);
+
+			expect(next2).not.toHaveBeenCalled();
+			expect(res2.statusCode).toBe(409);
+			expect(JSON.parse(res2._getData())).toEqual({
+				error: 'Idempotency key was reused with a different payload',
+				code: 'IDEMPOTENCY_CONFLICT',
+			});
+		});
+
+		test('should treat the endpoint path as part of the idempotency fingerprint', () => {
+			const key = 'path-sensitive-key';
+			req.headers['idempotency-key'] = key;
+			req.url = '/api/webhook/alert';
+
+			idempotencyMiddleware(req, res, next);
+			res.status(200).json({ endpoint: 'alert' });
+
+			const req2 = httpMocks.createRequest({
+				method: 'POST',
+				url: '/api/webhook/market-scanner-alert',
 				headers: { 'idempotency-key': key },
 				body: { text: 'test alert' },
 				query: {},

@@ -2,8 +2,26 @@
 
 const { idempotencyService } = require('../services/storage/IdempotencyService');
 
+function getRequestPath(req) {
+	if (typeof req.path === 'string' && req.path.length > 0) {
+		return req.path;
+	}
+
+	if (typeof req.originalUrl === 'string' && req.originalUrl.length > 0) {
+		return req.originalUrl.split('?')[0];
+	}
+
+	if (typeof req.url === 'string' && req.url.length > 0) {
+		return req.url.split('?')[0];
+	}
+
+	return '';
+}
+
 function buildRequestFingerprint(req) {
 	return {
+		method: req.method || 'GET',
+		path: getRequestPath(req),
 		body: req.body || {},
 		query: req.query || {},
 	};
