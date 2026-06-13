@@ -118,6 +118,33 @@ describe('Idempotency Service & Middleware', () => {
 			expect(idempotencyService.get(key, payload)).toBeNull();
 			expect(idempotencyService.reserve(key, payload)).toEqual({ state: 'fresh' });
 		});
+
+		test('should preserve pending reservations during cleanup and after ttl expiry', async () => {
+			process.env.WEBHOOK_IDEMPOTENCY_TTL_MS = '1';
+
+			const key = 'pending-cleanup-key';
+			const payload = { method: 'POST', path: '/api/webhook/alert', body: { text: 'alert-1' }, query: {} };
+
+			expect(idempotencyService.reserve(key, payload)).toEqual({ state: 'fresh' });
+
+			const now = Date.now();
+			const dateSpy = jest.spyOn(Date, 'now').mockReturnValue(now + 10);
+
+			idempotencyService.cleanup();
+
+			const pendingRetry = idempotencyService.reserve(key, payload);
+			expect(pendingRetry.state).toBe('pending');
+
+			idempotencyService.set(key, payload, { statusCode: 200, body: { success: true }, headers: {} });
+
+			await expect(pendingRetry.promise).resolves.toMatchObject({
+				state: 'completed',
+				statusCode: 200,
+				responseBody: { success: true },
+			});
+
+			dateSpy.mockRestore();
+		});
 	});
 
 	describe('idempotencyMiddleware', () => {

@@ -35,10 +35,20 @@ class IdempotencyService {
 	cleanup() {
 		const now = Date.now();
 		for (const [key, record] of this.cache.entries()) {
-			if (now > record.expiresAt) {
+			if (this.shouldDeleteExpiredRecord(record, now)) {
 				this.cache.delete(key);
 			}
 		}
+	}
+
+	/**
+	 * Pending reservations must survive TTL expiry until the original request finishes.
+	 * @param {Object} record
+	 * @param {number} [now]
+	 * @returns {boolean}
+	 */
+	shouldDeleteExpiredRecord(record, now = Date.now()) {
+		return record.state === 'completed' && now > record.expiresAt;
 	}
 
 	/**
@@ -67,7 +77,7 @@ class IdempotencyService {
 			return null;
 		}
 
-		if (Date.now() > record.expiresAt) {
+		if (this.shouldDeleteExpiredRecord(record)) {
 			this.cache.delete(key);
 			return null;
 		}
@@ -95,7 +105,7 @@ class IdempotencyService {
 
 		const existing = this.cache.get(key);
 		if (existing) {
-			if (Date.now() > existing.expiresAt) {
+			if (this.shouldDeleteExpiredRecord(existing)) {
 				this.cache.delete(key);
 			} else {
 				const currentHash = this.hashPayload(payload);
