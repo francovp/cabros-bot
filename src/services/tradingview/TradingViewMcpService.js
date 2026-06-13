@@ -35,6 +35,10 @@ class TradingViewMcpService {
 			this.config.defaultTimeframe || process.env.TRADINGVIEW_MCP_DEFAULT_TIMEFRAME || '1h',
 			'1h',
 		);
+		const enrichmentBudgetMs = parseInt(
+			this.config.enrichmentBudgetMs || process.env.TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS || '12000',
+			10,
+		);
 
 		return {
 			url: this.config.url || process.env.TRADINGVIEW_MCP_URL || 'https://tradingview-mcp.onrender.com/mcp',
@@ -42,54 +46,78 @@ class TradingViewMcpService {
 			maxRetries,
 			defaultExchange,
 			defaultTimeframe,
+			enrichmentBudgetMs,
 		};
 	}
 
-	async enrichFromAlertText(alertText) {
+	async enrichFromAlertText(alertText, options = {}) {
 		const { defaultTimeframe } = this.getConfig();
 		const parsed = parseTradingViewSignal(alertText, { defaultTimeframe });
 		if (!parsed) {
 			return null;
 		}
 
-		return this.enrichFromSignal(parsed);
+		return this.enrichFromSignal(parsed, options);
 	}
 
-	async enrichFromSignal(signal) {
+	async enrichFromSignal(parsedSignal, options = {}) {
 		const cfg = this.getConfig();
-		const symbol = signal.symbol.toUpperCase();
-		const exchange = (signal.exchange || cfg.defaultExchange).toUpperCase();
-		const timeframe = normalizeTradingViewTimeframe(signal.timeframe || signal.rawTimeframe, cfg.defaultTimeframe);
+		const budgetMs = options.budgetMs || cfg.enrichmentBudgetMs;
+		const symbol = parsedSignal.symbol.toUpperCase();
+		const exchange = (parsedSignal.exchange || cfg.defaultExchange).toUpperCase();
+		const timeframe = normalizeTradingViewTimeframe(parsedSignal.timeframe || parsedSignal.rawTimeframe, cfg.defaultTimeframe);
 
-		const result = await sendWithRetry(async () => {
+		// Create an overall budget controller for the enrichment timeout.
+		// When the budget is exceeded, all in-flight MCP calls are aborted.
+		const budgetController = new AbortController();
+		let budgetTimer = null;
+		if (budgetMs > 0) {
+			budgetTimer = setTimeout(() => {
+				budgetController.abort(new Error(`TradingView MCP enrichment budget exceeded (${budgetMs}ms)`));
+			}, budgetMs);
+		}
+
+		const cleanBudget = () => {
+			if (budgetTimer) {
+				clearTimeout(budgetTimer);
+				budgetTimer = null;
+			}
+		};
+
+		const result = await sendWithRetry(async ({ signal: retrySignal }) => {
 			try {
-				const analysis = await this.callCoinAnalysis({ symbol, exchange, timeframe });
+				const combinedSignal = retrySignal || budgetController.signal;
+				const analysis = await this.callCoinAnalysis({ symbol, exchange, timeframe, signal: combinedSignal });
 				return { success: true, channel: 'tradingview-mcp', analysis };
 			} catch (error) {
 				return { success: false, channel: 'tradingview-mcp', error: error.message };
 			}
-		}, cfg.maxRetries, this.logger);
+		}, cfg.maxRetries, this.logger, { signal: budgetController.signal });
 
+		// Budget still applies for volume confirmation, but the budget timer
+		// is stopped after the entire enrichment (coin + volume) completes.
 		if (!result.success) {
+			cleanBudget();
 			throw new Error(`TradingView MCP call failed: ${result.error || 'unknown error'}`);
 		}
 
 		let volumeAnalysis = null;
 		if (process.env.ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION === 'true') {
-			const volumeTimeoutMs = 5000;
+			const volumeTimeoutMs = Math.min(5000, Math.max(1000, (budgetMs || 12000) / 4));
 			const controller = new AbortController();
 			const timeoutId = setTimeout(() => {
 				controller.abort(new Error(`TradingView MCP volume confirmation timeout after ${volumeTimeoutMs}ms`));
 			}, volumeTimeoutMs);
 
-			const vResult = await sendWithRetry(async () => {
+			const vResult = await sendWithRetry(async ({ signal: retrySignal }) => {
 				try {
-					const volConfirm = await this.callVolumeConfirmation({ symbol, exchange, timeframe, signal: controller.signal });
+					const combinedSignal = retrySignal || controller.signal;
+					const volConfirm = await this.callVolumeConfirmation({ symbol, exchange, timeframe, signal: combinedSignal });
 					return { success: true, channel: 'tradingview-mcp', volConfirm };
 				} catch (error) {
 					return { success: false, channel: 'tradingview-mcp', error: error.message };
 				}
-			}, 1, this.logger);
+			}, 1, this.logger, { signal: controller.signal });
 
 			clearTimeout(timeoutId);
 
@@ -100,7 +128,8 @@ class TradingViewMcpService {
 			}
 		}
 
-		return this._toEnrichedAlert(signal.rawText || '', { symbol, exchange, timeframe, side: signal.side }, result.analysis, volumeAnalysis);
+		cleanBudget();
+		return this._toEnrichedAlert(parsedSignal.rawText || '', { symbol, exchange, timeframe, side: parsedSignal.side }, result.analysis, volumeAnalysis);
 	}
 
 	async callCoinAnalysis({ symbol, exchange, timeframe, signal }) {
