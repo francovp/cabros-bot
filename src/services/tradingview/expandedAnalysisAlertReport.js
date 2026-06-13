@@ -373,7 +373,7 @@ function formatMultiTimeframeSection(mtf) {
 	});
 
 	return [
-		`- *Alineación Multi-TF:*`,
+		'- *Alineación Multi-TF:*',
 		...tfLines,
 		`  • *Confluencia:* ${alignment.status || 'N/A'} (Confianza: ${alignment.confidence || 'N/A'})`,
 		`  • *Recomendación:* ${rec.action || 'N/A'}`,

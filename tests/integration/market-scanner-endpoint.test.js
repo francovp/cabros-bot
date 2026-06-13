@@ -125,7 +125,7 @@ describe('Market Scanner Alert endpoint', () => {
 						reject(new Error('AbortError'));
 					});
 				}
-			})
+			}),
 		);
 
 		const res = await request(app)

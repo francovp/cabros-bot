@@ -153,7 +153,7 @@ describe('Market Scanner Handler', () => {
 							reject(new Error('AbortError'));
 						});
 					}
-				})
+				}),
 			);
 
 			const handler = postMarketScannerAlert(null);
