@@ -4,7 +4,7 @@ const crypto = require('crypto');
 
 class IdempotencyService {
 	constructor() {
-		this.cache = new Map(); // key -> { payloadHash, statusCode, responseBody, headers, createdAt, expiresAt }
+		this.cache = new Map(); // key -> { payloadHash, state, statusCode, responseBody, headers, createdAt, expiresAt }
 		this.defaultTtlMs = 300000; // 5 minutes default
 		this.maxKeys = 10000; // Protect against memory exhaustion
 
@@ -81,7 +81,67 @@ class IdempotencyService {
 			throw error;
 		}
 
-		return record;
+		return record.state === 'completed' ? record : null;
+	}
+
+	/**
+	 * Reserve a key before request processing begins so retries cannot duplicate side effects.
+	 * @param {string} key
+	 * @param {any} payload
+	 * @returns {{state: 'fresh'} | {state: 'pending', promise: Promise<Object>} | {state: 'completed', record: Object}}
+	 */
+	reserve(key, payload) {
+		this.cleanup();
+
+		const existing = this.cache.get(key);
+		if (existing) {
+			if (Date.now() > existing.expiresAt) {
+				this.cache.delete(key);
+			} else {
+				const currentHash = this.hashPayload(payload);
+				if (existing.payloadHash !== currentHash) {
+					const error = new Error('Idempotency key was reused with a different payload');
+					error.code = 'IDEMPOTENCY_CONFLICT';
+					error.statusCode = 409;
+					throw error;
+				}
+
+				if (existing.state === 'completed') {
+					return { state: 'completed', record: existing };
+				}
+
+				return { state: 'pending', promise: existing.completionPromise };
+			}
+		}
+
+		if (this.cache.size >= this.maxKeys) {
+			const firstKey = this.cache.keys().next().value;
+			if (firstKey) {
+				this.cache.delete(firstKey);
+			}
+		}
+
+		const payloadHash = this.hashPayload(payload);
+		const now = Date.now();
+		const ttl = this.getTtlMs();
+		let resolveCompletion;
+		let rejectCompletion;
+		const completionPromise = new Promise((resolve, reject) => {
+			resolveCompletion = resolve;
+			rejectCompletion = reject;
+		});
+
+		this.cache.set(key, {
+			payloadHash,
+			state: 'pending',
+			createdAt: now,
+			expiresAt: now + ttl,
+			completionPromise,
+			resolveCompletion,
+			rejectCompletion,
+		});
+
+		return { state: 'fresh' };
 	}
 
 	/**
@@ -94,8 +154,8 @@ class IdempotencyService {
 	 * @param {Object} responseDetails.headers
 	 */
 	set(key, payload, { statusCode, body, headers }) {
-		if (this.cache.size >= this.maxKeys) {
-			// Evict oldest (Map maintains insertion order, keys().next().value returns the first key inserted)
+		const existing = this.cache.get(key);
+		if (!existing && this.cache.size >= this.maxKeys) {
 			const firstKey = this.cache.keys().next().value;
 			if (firstKey) {
 				this.cache.delete(firstKey);
@@ -105,16 +165,46 @@ class IdempotencyService {
 		const payloadHash = this.hashPayload(payload);
 		const now = Date.now();
 		const ttl = this.getTtlMs();
-
-		this.cache.set(key, {
+		const completedRecord = {
 			payloadHash,
+			state: 'completed',
 			statusCode,
 			responseBody: body,
 			headers: headers || {},
 			createdAt: now,
 			expiresAt: now + ttl,
-		});
+		};
+
+		this.cache.set(key, completedRecord);
+
+		if (existing && existing.state === 'pending' && typeof existing.resolveCompletion === 'function') {
+			existing.resolveCompletion(completedRecord);
+		}
 		console.debug(`[IdempotencyService] Cached result for key: ${key} (TTL: ${ttl}ms)`);
+	}
+
+	/**
+	 * Release a pending key without caching a response so future retries can process normally.
+	 * @param {string} key
+	 * @param {any} payload
+	 * @param {Error} [error]
+	 */
+	release(key, payload, error) {
+		const existing = this.cache.get(key);
+		if (!existing || existing.state !== 'pending') {
+			return;
+		}
+
+		const payloadHash = this.hashPayload(payload);
+		if (existing.payloadHash !== payloadHash) {
+			return;
+		}
+
+		this.cache.delete(key);
+
+		if (typeof existing.rejectCompletion === 'function') {
+			existing.rejectCompletion(error || new Error('Idempotency reservation released'));
+		}
 	}
 
 	/**
