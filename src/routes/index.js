@@ -1,5 +1,6 @@
 const express = require('express');
 const { postAlert } = require('../controllers/webhooks/handlers/alert/alert');
+const { postMessage } = require('../controllers/webhooks/handlers/message/message');
 const { postExpandedAnalysisAlert } = require('../controllers/webhooks/handlers/expandedAnalysisAlert/expandedAnalysisAlert');
 const { postMarketScannerAlert } = require('../controllers/webhooks/handlers/marketScanner/marketScanner');
 const { postVolumeConfirmation } = require('../controllers/webhooks/handlers/volumeConfirmation/volumeConfirmation');
@@ -12,6 +13,7 @@ const { idempotencyMiddleware } = require('../lib/idempotency');
 function getRoutes(botOrGetter) {
 	const router = express.Router();
 	router.post('/webhook/alert', validateApiKey, idempotencyMiddleware, postAlert(botOrGetter));
+	router.post('/webhook/message', validateApiKey, postMessage());
 	router.post('/webhook/expanded-analysis-alert', validateApiKey, idempotencyMiddleware, postExpandedAnalysisAlert(botOrGetter));
 	router.post('/webhook/market-scanner-alert', validateApiKey, idempotencyMiddleware, postMarketScannerAlert(botOrGetter));
 	router.post('/webhook/volume-confirmation', validateApiKey, postVolumeConfirmation());
