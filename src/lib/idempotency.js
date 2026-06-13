@@ -101,6 +101,13 @@ function idempotencyMiddleware(req, res, next) {
 				code: error.code,
 			});
 		}
+		if (error.code === 'IDEMPOTENCY_LIMIT_EXCEEDED') {
+			console.warn(`[Idempotency] Limit exceeded for key: ${keyToCheck}`);
+			return res.status(429).json({
+				error: error.message,
+				code: error.code,
+			});
+		}
 		return next(error);
 	}
 

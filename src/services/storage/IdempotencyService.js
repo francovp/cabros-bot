@@ -141,7 +141,13 @@ class IdempotencyService {
 		}
 
 		if (this.cache.size >= this.maxKeys) {
-			this.evictOldestCompletedRecord();
+			const evicted = this.evictOldestCompletedRecord();
+			if (!evicted) {
+				const error = new Error('Server is currently processing too many requests with idempotency keys');
+				error.code = 'IDEMPOTENCY_LIMIT_EXCEEDED';
+				error.statusCode = 429;
+				throw error;
+			}
 		}
 
 		const payloadHash = this.hashPayload(payload);

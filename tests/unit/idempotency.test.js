@@ -183,6 +183,28 @@ describe('Idempotency Service & Middleware', () => {
 				idempotencyService.maxKeys = originalMaxKeys;
 			}
 		});
+
+		test('should throw IDEMPOTENCY_LIMIT_EXCEEDED when cache size exceeds maxKeys and no completed keys can be evicted', () => {
+			const originalMaxKeys = idempotencyService.maxKeys;
+			idempotencyService.maxKeys = 2;
+
+			try {
+				idempotencyService.reserve('pending-1', { text: '1' });
+				idempotencyService.reserve('pending-2', { text: '2' });
+
+				let errorThrown;
+				try {
+					idempotencyService.reserve('pending-3', { text: '3' });
+				} catch (err) {
+					errorThrown = err;
+				}
+				expect(errorThrown).toBeDefined();
+				expect(errorThrown.code).toBe('IDEMPOTENCY_LIMIT_EXCEEDED');
+				expect(errorThrown.statusCode).toBe(429);
+			} finally {
+				idempotencyService.maxKeys = originalMaxKeys;
+			}
+		});
 	});
 
 	describe('idempotencyMiddleware', () => {
@@ -405,6 +427,36 @@ describe('Idempotency Service & Middleware', () => {
 				error: 'Idempotency key was reused with a different payload',
 				code: 'IDEMPOTENCY_CONFLICT',
 			});
+		});
+
+		test('should return 429 Too Many Requests in middleware when cache size is exceeded', () => {
+			const originalMaxKeys = idempotencyService.maxKeys;
+			idempotencyService.maxKeys = 1;
+
+			try {
+				req.headers['idempotency-key'] = 'key-1';
+				idempotencyMiddleware(req, res, next);
+
+				const req2 = httpMocks.createRequest({
+					method: 'POST',
+					url: '/api/webhook/alert',
+					headers: { 'idempotency-key': 'different-key' },
+					body: { text: 'test alert 2' },
+				});
+				const res2 = httpMocks.createResponse();
+				const next2 = jest.fn();
+
+				idempotencyMiddleware(req2, res2, next2);
+
+				expect(next2).not.toHaveBeenCalled();
+				expect(res2.statusCode).toBe(429);
+				expect(JSON.parse(res2._getData())).toEqual({
+					error: 'Server is currently processing too many requests with idempotency keys',
+					code: 'IDEMPOTENCY_LIMIT_EXCEEDED',
+				});
+			} finally {
+				idempotencyService.maxKeys = originalMaxKeys;
+			}
 		});
 	});
 });
