@@ -97,13 +97,14 @@ class TelegramService extends NotificationChannel {
 				console.debug('Formatted text for Telegram:', formattedText);
 			}
 
-			this.logger?.debug?.(`Sending to Telegram chat ${this.chatId}`);
+			const chatId = alert.telegramChatId || this.chatId;
+			this.logger?.debug?.(`Sending to Telegram chat ${chatId}`);
 			const messageParts = splitTelegramMessage(formattedText, this.maxMessageLength);
 
 			// Send to Telegram
 			const messageIds = [];
 			for (const messagePart of messageParts) {
-				const result = await this.bot.telegram.sendMessage(this.chatId, messagePart, {
+				const result = await this.bot.telegram.sendMessage(chatId, messagePart, {
 					parse_mode: 'MarkdownV2',
 					disable_web_page_preview: !!alert.enriched,
 				});

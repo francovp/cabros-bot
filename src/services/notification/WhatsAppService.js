@@ -101,9 +101,9 @@ class WhatsAppService extends NotificationChannel {
 			// Truncate to GreenAPI limit
 			const truncatedText = truncateMessage(formattedText, 20000);
 
-			// Build GreenAPI payload
+			// Build GreenAPI payload (support per-request chatId override)
 			const payload = {
-				chatId: this.chatId,
+				chatId: alert.whatsappChatId || this.chatId,
 				message: truncatedText,
 				customPreview: {
 					title: 'Trading View Alert',

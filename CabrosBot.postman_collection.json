@@ -222,6 +222,75 @@
 							"path": ["api", "webhook", "volume-confirmation"]
 						}
 					}
+				},
+				{
+					"name": "POST Send Message",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json", "type": "text" },
+							{ "key": "x-api-key", "value": "{{apiKey}}", "type": "text" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"message\": \"Custom notification from automation\",\n  \"channels\": [\"telegram\", \"whatsapp\"],\n  \"telegramChatId\": \"-1001234567890\",\n  \"whatsappChatId\": \"120363000000000000@g.us\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/webhook/message",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "webhook", "message"]
+						}
+					},
+					"response": [
+						{
+							"name": "Success (both channels)",
+							"status": "OK",
+							"code": 200,
+							"body": "{\n  \"success\": true,\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"tg-msg-123\",\n      \"attemptCount\": 1,\n      \"durationMs\": 450\n    },\n    {\n      \"channel\": \"whatsapp\",\n      \"success\": true,\n      \"messageId\": \"wa-msg-456\",\n      \"attemptCount\": 1,\n      \"durationMs\": 320\n    }\n  ]\n}"
+						},
+						{
+							"name": "Success (single channel)",
+							"status": "OK",
+							"code": 200,
+							"body": "{\n  \"success\": true,\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"tg-msg-789\",\n      \"attemptCount\": 1,\n      \"durationMs\": 410\n    }\n  ]\n}"
+						},
+						{
+							"name": "Error (empty message)",
+							"status": "Bad Request",
+							"code": 400,
+							"body": "{\n  \"success\": false,\n  \"error\": \"'message' is required and must be a non-empty string\",\n  \"details\": {\n    \"field\": \"message\"\n  }\n}"
+						},
+						{
+							"name": "Error (invalid telegramChatId)",
+							"status": "Bad Request",
+							"code": 400,
+							"body": "{\n  \"success\": false,\n  \"error\": \"\\\"telegramChatId\\\" must be a non-empty string if provided\",\n  \"details\": {\n    \"field\": \"telegramChatId\"\n  }\n}"
+						},
+						{
+							"name": "Error (invalid whatsappChatId)",
+							"status": "Bad Request",
+							"code": 400,
+							"body": "{\n  \"success\": false,\n  \"error\": \"\\\"whatsappChatId\\\" must be a non-empty string if provided\",\n  \"details\": {\n    \"field\": \"whatsappChatId\"\n  }\n}"
+						},
+						{
+							"name": "Error (unknown channel)",
+							"status": "Bad Request",
+							"code": 400,
+							"body": "{\n  \"success\": false,\n  \"error\": \"Unknown channel(s): discord. Valid channels: telegram, whatsapp\",\n  \"details\": {\n    \"field\": \"channels\",\n    \"unknownChannels\": [\"discord\"]\n  }\n}"
+						},
+						{
+							"name": "Partial Failure (WhatsApp down)",
+							"status": "OK",
+							"code": 200,
+							"body": "{\n  \"success\": true,\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"tg-msg-789\",\n      \"attemptCount\": 1,\n      \"durationMs\": 450\n    },\n    {\n      \"channel\": \"whatsapp\",\n      \"success\": false,\n      \"error\": \"GreenAPI request timeout\",\n      \"attemptCount\": 3,\n      \"durationMs\": 7800\n    }\n  ]\n}"
+						},
+						{
+							"name": "Unauthorized (missing API key)",
+							"status": "Unauthorized",
+							"code": 401,
+							"body": "{\n  \"error\": \"Unauthorized: Missing API key\"\n}"
+						}
+					]
 				}
 			]
 		},
