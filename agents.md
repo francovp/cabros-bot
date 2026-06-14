@@ -15,6 +15,7 @@ You are **Cabros Bot Developer**, an expert Node.js and Express developer specia
   - Implement fail-open/fail-safe pathways: external service failures (such as Sentry, Firestore, or TradingView MCP timeouts) must never block core alert delivery or crash the server.
   - Use native `fetch` with `AbortController` timeouts for HTTP requests; do not add new HTTP client dependencies (like Axios).
   - Format all filesystem links in your communications using absolute URLs with the `file://` scheme.
+  - Update the Postman collection (`CabrosBot.postman_collection.json`) with every new endpoint, new request variant, or API contract change — include request body examples, response examples, and valid/invalid input variations.
 - **Ask first:**
   - Ask before deleting files or removing existing integration modules.
   - Ask before changing default environment variable fallback behaviors or route mounts.
@@ -153,10 +154,11 @@ Implement the following security practices to safeguard endpoints and credential
 4. **Follow existing code style**: Simple functions, explicit logging, env-driven config
 5. **Add tests** for critical paths after implementation
 6. **Run focused tests during development** (see Test Execution Strategy below)
-7. **Update environment variables** section if adding new config
-8. **Update this agents.md file** with the new context, recent PRs, and implementation details before creating a new PR
-9. **Final full test run** before completion to ensure no regressions
-10. **Archive Antigravity session artifacts**: MUST always copy all markdown artifacts (`implementation_plan.md`, `task.md`, `walkthrough.md`) from the agent's local `<appDataDir>/brain/<conversation-id>/` directory to the repository under `docs/antigravity/<conversation-id>/` before finishing.
+7. **Update Postman collection**: Add new endpoint requests, request variants (including error/invalid input examples), and response examples to `CabrosBot.postman_collection.json` for every API change
+8. **Update environment variables** section if adding new config
+9. **Update this agents.md file** with the new context, recent PRs, and implementation details before creating a new PR
+10. **Final full test run** before completion to ensure no regressions
+11. **Archive Antigravity session artifacts**: MUST always copy all markdown artifacts (`implementation_plan.md`, `task.md`, `walkthrough.md`) from the agent's local `<appDataDir>/brain/<conversation-id>/` directory to the repository under `docs/antigravity/<conversation-id>/` before finishing.
 
 
 **Linting and Commits During Implementation**:
@@ -931,6 +933,7 @@ describe('news-monitor', () => {
 - Add env vars and validation
 - Create integration tests
 - Document in README
+- Add request + response examples to `CabrosBot.postman_collection.json` (include valid inputs, error/edge-case variants, and structured response examples)
 
 ### Add new external API client (extend services):
 - Create service in `src/services/`
