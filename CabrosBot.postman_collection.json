@@ -233,7 +233,7 @@
 						],
 						"body": {
 							"mode": "raw",
-							"raw": "{\n  \"message\": \"Custom notification from automation\",\n  \"channels\": [\"telegram\", \"whatsapp\"]\n}"
+							"raw": "{\n  \"message\": \"Custom notification from automation\",\n  \"channels\": [\"telegram\", \"whatsapp\"],\n  \"telegramChatId\": \"-1001234567890\",\n  \"whatsappChatId\": \"120363000000000000@g.us\"\n}"
 						},
 						"url": {
 							"raw": "{{baseUrl}}/api/webhook/message",
@@ -259,6 +259,18 @@
 							"status": "Bad Request",
 							"code": 400,
 							"body": "{\n  \"success\": false,\n  \"error\": \"'message' is required and must be a non-empty string\",\n  \"details\": {\n    \"field\": \"message\"\n  }\n}"
+						},
+						{
+							"name": "Error (invalid telegramChatId)",
+							"status": "Bad Request",
+							"code": 400,
+							"body": "{\n  \"success\": false,\n  \"error\": \"\\\"telegramChatId\\\" must be a non-empty string if provided\",\n  \"details\": {\n    \"field\": \"telegramChatId\"\n  }\n}"
+						},
+						{
+							"name": "Error (invalid whatsappChatId)",
+							"status": "Bad Request",
+							"code": 400,
+							"body": "{\n  \"success\": false,\n  \"error\": \"\\\"whatsappChatId\\\" must be a non-empty string if provided\",\n  \"details\": {\n    \"field\": \"whatsappChatId\"\n  }\n}"
 						},
 						{
 							"name": "Error (unknown channel)",

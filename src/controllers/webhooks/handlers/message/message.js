@@ -19,7 +19,7 @@ function validateMessageRequest(body) {
 		throw new MessageValidationError('Request body must be a JSON object');
 	}
 
-	const { message, channels } = body;
+	const { message, channels, telegramChatId, whatsappChatId } = body;
 
 	if (!message || typeof message !== 'string') {
 		throw new MessageValidationError('"message" is required and must be a non-empty string', {
@@ -41,18 +41,30 @@ function validateMessageRequest(body) {
 		);
 	}
 
+	if (telegramChatId !== undefined && (typeof telegramChatId !== 'string' || telegramChatId.length === 0)) {
+		throw new MessageValidationError('"telegramChatId" must be a non-empty string if provided', {
+			field: 'telegramChatId',
+		});
+	}
+
+	if (whatsappChatId !== undefined && (typeof whatsappChatId !== 'string' || whatsappChatId.length === 0)) {
+		throw new MessageValidationError('"whatsappChatId" must be a non-empty string if provided', {
+			field: 'whatsappChatId',
+		});
+	}
+
 	const text = message.length > MAX_MESSAGE_LENGTH
 		? message.substring(0, MAX_MESSAGE_LENGTH) + '...'
 		: message;
 
-	return { text, channels };
+	return { text, channels, telegramChatId, whatsappChatId };
 }
 
 function postMessage(botOrGetter) {
 	return async (req, res) => {
 		try {
-			const { text, channels } = validateMessageRequest(req.body);
-			const alert = { text };
+			const { text, channels, telegramChatId, whatsappChatId } = validateMessageRequest(req.body);
+			const alert = { text, telegramChatId, whatsappChatId };
 
 			let notificationManager = getNotificationManager();
 			if (!notificationManager) {

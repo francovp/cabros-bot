@@ -183,6 +183,136 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 	});
 
 	// ---------------------------------------------------------------------------
+	// Chat ID override cases
+	// ---------------------------------------------------------------------------
+	it('sends to a custom telegramChatId override', async () => {
+		const res = await request(app)
+			.post('/api/webhook/message')
+			.set('x-api-key', 'test-key')
+			.send({ message: 'Override TG chat', channels: ['telegram'], telegramChatId: '-100999888777' })
+			.expect(200);
+
+		expect(res.body.success).toBe(true);
+		expect(res.body.results).toHaveLength(1);
+		expect(res.body.results[0].channel).toBe('telegram');
+		expect(res.body.results[0].success).toBe(true);
+
+		// Verify sendMessage was called with the override chatId, not the default
+		expect(mockBot.telegram.sendMessage).toHaveBeenCalledWith(
+			'-100999888777',
+			expect.any(String),
+			expect.any(Object),
+		);
+	});
+
+	it('sends to a custom whatsappChatId override', async () => {
+		const res = await request(app)
+			.post('/api/webhook/message')
+			.set('x-api-key', 'test-key')
+			.send({ message: 'Override WA chat', channels: ['whatsapp'], whatsappChatId: '120363555555555555@g.us' })
+			.expect(200);
+
+		expect(res.body.success).toBe(true);
+		expect(res.body.results).toHaveLength(1);
+		expect(res.body.results[0].channel).toBe('whatsapp');
+		expect(res.body.results[0].success).toBe(true);
+
+		// Verify fetch was called with the override chatId in the body
+		const fetchCall = global.fetch.mock.calls[0];
+		const fetchBody = JSON.parse(fetchCall[1].body);
+		expect(fetchBody.chatId).toBe('120363555555555555@g.us');
+	});
+
+	it('sends with both chatId overrides simultaneously', async () => {
+		const res = await request(app)
+			.post('/api/webhook/message')
+			.set('x-api-key', 'test-key')
+			.send({
+				message: 'Override both chats',
+				channels: ['telegram', 'whatsapp'],
+				telegramChatId: '-100111222333',
+				whatsappChatId: '120363666666666666@g.us',
+			})
+			.expect(200);
+
+		expect(res.body.success).toBe(true);
+		expect(res.body.results).toHaveLength(2);
+
+		// Telegram used override
+		expect(mockBot.telegram.sendMessage).toHaveBeenCalledWith(
+			'-100111222333',
+			expect.any(String),
+			expect.any(Object),
+		);
+
+		// WhatsApp used override
+		const fetchCall = global.fetch.mock.calls[0];
+		const fetchBody = JSON.parse(fetchCall[1].body);
+		expect(fetchBody.chatId).toBe('120363666666666666@g.us');
+	});
+
+	it('returns 400 when telegramChatId is not a string', async () => {
+		const res = await request(app)
+			.post('/api/webhook/message')
+			.set('x-api-key', 'test-key')
+			.send({ message: 'Hello', channels: ['telegram'], telegramChatId: 12345 })
+			.expect(400);
+
+		expect(res.body.success).toBe(false);
+		expect(res.body.error).toContain('telegramChatId');
+	});
+
+	it('returns 400 when telegramChatId is an empty string', async () => {
+		const res = await request(app)
+			.post('/api/webhook/message')
+			.set('x-api-key', 'test-key')
+			.send({ message: 'Hello', channels: ['telegram'], telegramChatId: '' })
+			.expect(400);
+
+		expect(res.body.success).toBe(false);
+		expect(res.body.error).toContain('telegramChatId');
+	});
+
+	it('returns 400 when whatsappChatId is not a string', async () => {
+		const res = await request(app)
+			.post('/api/webhook/message')
+			.set('x-api-key', 'test-key')
+			.send({ message: 'Hello', channels: ['whatsapp'], whatsappChatId: true })
+			.expect(400);
+
+		expect(res.body.success).toBe(false);
+		expect(res.body.error).toContain('whatsappChatId');
+	});
+
+	it('returns 400 when whatsappChatId is an empty string', async () => {
+		const res = await request(app)
+			.post('/api/webhook/message')
+			.set('x-api-key', 'test-key')
+			.send({ message: 'Hello', channels: ['whatsapp'], whatsappChatId: '' })
+			.expect(400);
+
+		expect(res.body.success).toBe(false);
+		expect(res.body.error).toContain('whatsappChatId');
+	});
+
+	it('sends message without override when telegramChatId is not provided', async () => {
+		const res = await request(app)
+			.post('/api/webhook/message')
+			.set('x-api-key', 'test-key')
+			.send({ message: 'Default chat', channels: ['telegram'] })
+			.expect(200);
+
+		expect(res.body.success).toBe(true);
+
+		// Verify sendMessage was called with the default chatId
+		expect(mockBot.telegram.sendMessage).toHaveBeenCalledWith(
+			'123456789',
+			expect.any(String),
+			expect.any(Object),
+		);
+	});
+
+	// ---------------------------------------------------------------------------
 	// Provider failure isolation
 	// ---------------------------------------------------------------------------
 	it('does not block the other channel when one provider fails', async () => {
