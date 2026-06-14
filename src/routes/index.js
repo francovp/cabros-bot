@@ -3,6 +3,14 @@ const { postAlert } = require('../controllers/webhooks/handlers/alert/alert');
 const { postMessage } = require('../controllers/webhooks/handlers/message/message');
 const { postExpandedAnalysisAlert } = require('../controllers/webhooks/handlers/expandedAnalysisAlert/expandedAnalysisAlert');
 const { postMarketScannerAlert } = require('../controllers/webhooks/handlers/marketScanner/marketScanner');
+const {
+	postPreset,
+	listPresets,
+	getPreset,
+	deletePreset,
+	updatePreset,
+	postRunPreset,
+} = require('../controllers/webhooks/handlers/scannerPresets/scannerPresets');
 const { postVolumeConfirmation } = require('../controllers/webhooks/handlers/volumeConfirmation/volumeConfirmation');
 const { postCreateJob, getJobStatus } = require('../controllers/webhooks/handlers/jobs/jobs');
 const { listAlerts, getAlertById } = require('../controllers/alerts/alerts');
@@ -19,6 +27,12 @@ function getRoutes(botOrGetter) {
 	router.post('/webhook/volume-confirmation', validateApiKey, postVolumeConfirmation());
 	router.get('/alerts', validateApiKey, listAlerts);
 	router.get('/alerts/:alertId', validateApiKey, getAlertById);
+	router.post('/scanner-presets', validateApiKey, postPreset);
+	router.get('/scanner-presets', validateApiKey, listPresets);
+	router.get('/scanner-presets/:id', validateApiKey, getPreset);
+	router.put('/scanner-presets/:id', validateApiKey, updatePreset);
+	router.delete('/scanner-presets/:id', validateApiKey, deletePreset);
+	router.post('/scanner-presets/:id/run', validateApiKey, postRunPreset(botOrGetter));
 
 	// Async job endpoints
 	router.post('/jobs/tradingview-analysis', validateApiKey, postCreateJob(botOrGetter));
