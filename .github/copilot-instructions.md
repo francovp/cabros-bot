@@ -8,6 +8,14 @@
   - `GET /api/alerts`
   - `GET /api/alerts/:alertId`
 
+## Telegram Commands
+
+- Telegram command handlers live in `src/controllers/commands.js` and are wired in `index.js`.
+- `/analisis` and `/analysis` create `expanded-analysis` jobs through `JobService`.
+- `/scanner` creates `market-scanner` jobs through `JobService`; `ENABLE_MARKET_SCANNER=true` still gates execution.
+- `/noticias` and `/news` reuse the existing news monitor handler with a minimal in-process request/response adapter.
+- Command args use space-separated positionals plus `key=value` options, with comma-separated lists for symbols/scans.
+
 ## Stored Alerts
 
 - `src/services/storage/AlertStorageService.js` owns the Firestore boundary for alert persistence and reads.
