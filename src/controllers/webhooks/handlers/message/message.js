@@ -1,6 +1,6 @@
 require('dotenv').config();
 const sentryService = require('../../../../services/monitoring/SentryService');
-const { getNotificationManager } = require('../alert/alert');
+const { getNotificationManager, initializeNotificationServices } = require('../alert/alert');
 
 const VALID_CHANNELS = ['telegram', 'whatsapp'];
 const MAX_MESSAGE_LENGTH = 4000;
@@ -48,20 +48,28 @@ function validateMessageRequest(body) {
 	return { text, channels };
 }
 
-function postMessage() {
+function postMessage(botOrGetter) {
 	return async (req, res) => {
 		try {
 			const { text, channels } = validateMessageRequest(req.body);
 			const alert = { text };
 
-			const notificationManager = getNotificationManager();
+			let notificationManager = getNotificationManager();
 			if (!notificationManager) {
 				console.warn('[MessageWebhook] NotificationManager not initialized, initializing...');
-				// Cannot send without initialized services — this is a configuration problem.
-				return res.status(503).json({
-					success: false,
-					error: 'Notification services not initialized',
-				});
+
+				const bot = typeof botOrGetter === 'function' ? botOrGetter() : (botOrGetter || null);
+				if (bot) {
+					await initializeNotificationServices(bot);
+					notificationManager = getNotificationManager();
+				}
+
+				if (!notificationManager) {
+					return res.status(503).json({
+						success: false,
+						error: 'Notification services not initialized',
+					});
+				}
 			}
 
 			const results = await notificationManager.sendToChannels(alert, channels);

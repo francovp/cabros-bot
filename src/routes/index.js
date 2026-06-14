@@ -21,7 +21,7 @@ const { idempotencyMiddleware } = require('../lib/idempotency');
 function getRoutes(botOrGetter) {
 	const router = express.Router();
 	router.post('/webhook/alert', validateApiKey, idempotencyMiddleware, postAlert(botOrGetter));
-	router.post('/webhook/message', validateApiKey, postMessage());
+	router.post('/webhook/message', validateApiKey, postMessage(botOrGetter));
 	router.post('/webhook/expanded-analysis-alert', validateApiKey, idempotencyMiddleware, postExpandedAnalysisAlert(botOrGetter));
 	router.post('/webhook/market-scanner-alert', validateApiKey, idempotencyMiddleware, postMarketScannerAlert(botOrGetter));
 	router.post('/webhook/volume-confirmation', validateApiKey, postVolumeConfirmation());
