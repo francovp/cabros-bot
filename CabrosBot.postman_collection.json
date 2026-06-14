@@ -1,0 +1,552 @@
+{
+	"info": {
+		"name": "CabrosBot",
+		"description": "Collection for Cabros Bot API - Telegram + WhatsApp crypto/stock alert bot with TradingView MCP integration.",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"variable": [
+		{
+			"key": "baseUrl",
+			"value": "http://localhost:80",
+			"type": "string"
+		},
+		{
+			"key": "apiKey",
+			"value": "your-api-key-here",
+			"type": "string"
+		}
+	],
+	"item": [
+		{
+			"name": "Healthcheck",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "{{baseUrl}}/healthcheck",
+					"host": ["{{baseUrl}}"],
+					"path": ["healthcheck"]
+				}
+			},
+			"response": [
+				{
+					"name": "Success",
+					"status": "OK",
+					"code": 200,
+					"body": "{\"uptime\":\"42.5\"}"
+				}
+			]
+		},
+		{
+			"name": "Get Status",
+			"request": {
+				"method": "GET",
+				"header": [
+					{ "key": "x-api-key", "value": "{{apiKey}}", "type": "text" }
+				],
+				"url": {
+					"raw": "{{baseUrl}}/api/status",
+					"host": ["{{baseUrl}}"],
+					"path": ["api", "status"]
+				}
+			},
+			"response": [
+				{
+					"name": "Success",
+					"status": "OK",
+					"code": 200,
+					"body": "{\"service\":{\"name\":\"cabros-bot\",\"version\":\"0.1.0\"},\"featureFlags\":{\"telegramBot\":true,\"whatsappAlerts\":false,\"geminiGrounding\":false,\"newsMonitor\":false}}"
+				}
+			]
+		},
+		{
+			"name": "Get Capabilities",
+			"request": {
+				"method": "GET",
+				"header": [
+					{ "key": "x-api-key", "value": "{{apiKey}}", "type": "text" }
+				],
+				"url": {
+					"raw": "{{baseUrl}}/api/capabilities",
+					"host": ["{{baseUrl}}"],
+					"path": ["api", "capabilities"]
+				}
+			}
+		},
+		{
+			"name": "Webhooks",
+			"item": [
+				{
+					"name": "POST Send Alert",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json", "type": "text" },
+							{ "key": "x-api-key", "value": "{{apiKey}}", "type": "text" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"text\": \"BTCUSDT: Price breakout above $85,000 with strong volume\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/webhook/alert",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "webhook", "alert"]
+						}
+					},
+					"response": [
+						{
+							"name": "Success",
+							"status": "OK",
+							"code": 200,
+							"body": "{\"success\":true,\"results\":[{\"channel\":\"telegram\",\"success\":true,\"messageId\":\"12345\"}],\"enriched\":false}"
+						}
+					]
+				},
+				{
+					"name": "POST Send Alert (with TradingView data)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json", "type": "text" },
+							{ "key": "x-api-key", "value": "{{apiKey}}", "type": "text" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"text\": \"BTCUSDT(240) pasó a señal de VENTA\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/webhook/alert?useTradingViewData=true",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "webhook", "alert"],
+							"query": [
+								{ "key": "useTradingViewData", "value": "true" }
+							]
+						}
+					}
+				},
+				{
+					"name": "POST Expanded Analysis Alert",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json", "type": "text" },
+							{ "key": "x-api-key", "value": "{{apiKey}}", "type": "text" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"symbols\": [\"BINANCE:BTCUSDT\", \"NASDAQ:NVDA\"],\n  \"timeframe\": \"1D\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/webhook/expanded-analysis-alert",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "webhook", "expanded-analysis-alert"]
+						}
+					}
+				},
+				{
+					"name": "POST Expanded Analysis Alert (combined mode)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json", "type": "text" },
+							{ "key": "x-api-key", "value": "{{apiKey}}", "type": "text" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"symbols\": [\"BINANCE:BTCUSDT\"],\n  \"timeframe\": \"4h\",\n  \"analysisMode\": \"combined\",\n  \"includeMultiTimeframe\": true\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/webhook/expanded-analysis-alert",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "webhook", "expanded-analysis-alert"]
+						}
+					}
+				},
+				{
+					"name": "POST Market Scanner Alert",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json", "type": "text" },
+							{ "key": "x-api-key", "value": "{{apiKey}}", "type": "text" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"exchange\": \"BINANCE\",\n  \"timeframe\": \"4h\",\n  \"scans\": [\"top_gainers\", \"top_losers\", \"volume_breakout_scanner\"],\n  \"limit\": 5\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/webhook/market-scanner-alert",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "webhook", "market-scanner-alert"]
+						}
+					}
+				},
+				{
+					"name": "POST Market Scanner Alert (dry run)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json", "type": "text" },
+							{ "key": "x-api-key", "value": "{{apiKey}}", "type": "text" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"exchange\": \"BINANCE\",\n  \"timeframe\": \"1h\",\n  \"scans\": [\"bollinger_scan\", \"smart_volume_scanner\"],\n  \"limit\": 3\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/webhook/market-scanner-alert?dryRun=true",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "webhook", "market-scanner-alert"],
+							"query": [
+								{ "key": "dryRun", "value": "true" }
+							]
+						}
+					}
+				},
+				{
+					"name": "POST Volume Confirmation",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json", "type": "text" },
+							{ "key": "x-api-key", "value": "{{apiKey}}", "type": "text" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"symbol\": \"BINANCE:BTCUSDT\",\n  \"timeframe\": \"4h\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/webhook/volume-confirmation",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "webhook", "volume-confirmation"]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Scanner Presets",
+			"item": [
+				{
+					"name": "POST Create Scanner Preset",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json", "type": "text" },
+							{ "key": "x-api-key", "value": "{{apiKey}}", "type": "text" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"name\": \"Daily Scan\",\n  \"exchange\": \"BINANCE\",\n  \"timeframe\": \"4h\",\n  \"scans\": [\"top_gainers\", \"top_losers\", \"volume_breakout_scanner\"],\n  \"limit\": 10,\n  \"bbwThreshold\": 0.05\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/scanner-presets",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "scanner-presets"]
+						}
+					},
+					"response": [
+						{
+							"name": "Created",
+							"status": "Created",
+							"code": 201,
+							"body": "{\n  \"success\": true,\n  \"preset\": {\n    \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n    \"name\": \"Daily Scan\",\n    \"exchange\": \"BINANCE\",\n    \"timeframe\": \"4h\",\n    \"scans\": [\"top_gainers\", \"top_losers\", \"volume_breakout_scanner\"],\n    \"limit\": 10,\n    \"bbwThreshold\": 0.05,\n    \"createdAt\": \"2026-06-13T04:43:15.301Z\",\n    \"updatedAt\": \"2026-06-13T04:43:15.301Z\"\n  }\n}"
+						}
+					]
+				},
+				{
+					"name": "GET List Scanner Presets",
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "x-api-key", "value": "{{apiKey}}", "type": "text" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/scanner-presets",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "scanner-presets"]
+						}
+					},
+					"response": [
+						{
+							"name": "Success",
+							"status": "OK",
+							"code": 200,
+							"body": "{\n  \"success\": true,\n  \"presets\": [\n    {\n      \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n      \"name\": \"Daily Scan\",\n      \"exchange\": \"BINANCE\",\n      \"timeframe\": \"4h\",\n      \"scans\": [\"top_gainers\", \"top_losers\", \"volume_breakout_scanner\"],\n      \"limit\": 10,\n      \"bbwThreshold\": 0.05,\n      \"createdAt\": \"2026-06-13T04:43:15.301Z\",\n      \"updatedAt\": \"2026-06-13T04:43:15.301Z\"\n    }\n  ]\n}"
+						}
+					]
+				},
+				{
+					"name": "GET Get Scanner Preset by ID",
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "x-api-key", "value": "{{apiKey}}", "type": "text" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/scanner-presets/{{presetId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "scanner-presets", "{{presetId}}"]
+						}
+					},
+					"response": [
+						{
+							"name": "Success",
+							"status": "OK",
+							"code": 200,
+							"body": "{\n  \"success\": true,\n  \"preset\": {\n    \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n    \"name\": \"Daily Scan\",\n    \"exchange\": \"BINANCE\",\n    \"timeframe\": \"4h\",\n    \"scans\": [\"top_gainers\", \"top_losers\", \"volume_breakout_scanner\"],\n    \"limit\": 10,\n    \"bbwThreshold\": 0.05,\n    \"createdAt\": \"2026-06-13T04:43:15.301Z\",\n    \"updatedAt\": \"2026-06-13T04:43:15.301Z\"\n  }\n}"
+						}
+					]
+				},
+				{
+					"name": "PUT Update Scanner Preset",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json", "type": "text" },
+							{ "key": "x-api-key", "value": "{{apiKey}}", "type": "text" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"name\": \"Updated Scan\",\n  \"limit\": 15\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/scanner-presets/{{presetId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "scanner-presets", "{{presetId}}"]
+						}
+					},
+					"response": [
+						{
+							"name": "Success",
+							"status": "OK",
+							"code": 200,
+							"body": "{\n  \"success\": true,\n  \"preset\": {\n    \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n    \"name\": \"Updated Scan\",\n    \"exchange\": \"BINANCE\",\n    \"timeframe\": \"4h\",\n    \"scans\": [\"top_gainers\", \"top_losers\", \"volume_breakout_scanner\"],\n    \"limit\": 15,\n    \"bbwThreshold\": 0.05,\n    \"createdAt\": \"2026-06-13T04:43:15.301Z\",\n    \"updatedAt\": \"2026-06-13T04:43:15.301Z\"\n  }\n}"
+						}
+					]
+				},
+				{
+					"name": "DELETE Delete Scanner Preset",
+					"request": {
+						"method": "DELETE",
+						"header": [
+							{ "key": "x-api-key", "value": "{{apiKey}}", "type": "text" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/scanner-presets/{{presetId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "scanner-presets", "{{presetId}}"]
+						}
+					},
+					"response": [
+						{
+							"name": "Success",
+							"status": "OK",
+							"code": 200,
+							"body": "{\n  \"success\": true\n}"
+						}
+					]
+				},
+				{
+					"name": "POST Run Scanner Preset",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "x-api-key", "value": "{{apiKey}}", "type": "text" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/scanner-presets/{{presetId}}/run",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "scanner-presets", "{{presetId}}", "run"]
+						}
+					},
+					"response": [
+						{
+							"name": "Success",
+							"status": "OK",
+							"code": 200,
+							"body": "{\n  \"success\": true,\n  \"presetId\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n  \"alertText\": \"📡 *SCANNER DE MERCADO — ...\",\n  \"scanResults\": [\n    {\n      \"scan\": \"top_gainers\",\n      \"status\": \"success\",\n      \"itemCount\": 3\n    }\n  ],\n  \"summary\": {\n    \"totalScans\": 1,\n    \"success\": 1,\n    \"error\": 0,\n    \"timeout\": 0,\n    \"totalItems\": 3,\n    \"delivered\": 1\n  },\n  \"timedOut\": false,\n  \"timeoutMs\": 90000,\n  \"requestId\": \"req-xyz789\",\n  \"totalDurationMs\": 1450\n}"
+						}
+					]
+				},
+				{
+					"name": "POST Run Scanner Preset (dry run)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "x-api-key", "value": "{{apiKey}}", "type": "text" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/scanner-presets/{{presetId}}/run?dryRun=true",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "scanner-presets", "{{presetId}}", "run"],
+							"query": [
+								{ "key": "dryRun", "value": "true" }
+							]
+						}
+					},
+					"response": [
+						{
+							"name": "Success",
+							"status": "OK",
+							"code": 200,
+							"body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"presetId\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n  \"payload\": {\n    \"alertText\": \"📡 *SCANNER DE MERCADO — ...\"\n  },\n  \"scanResults\": [],\n  \"summary\": {\n    \"totalScans\": 1,\n    \"success\": 1,\n    \"error\": 0,\n    \"timeout\": 0,\n    \"totalItems\": 3,\n    \"delivered\": 0\n  },\n  \"timedOut\": false,\n  \"timeoutMs\": 90000,\n  \"requestId\": \"req-dryrun-abc\",\n  \"totalDurationMs\": 1200\n}"
+						}
+					]
+				}
+			]
+		},
+		{
+			"name": "News Monitor",
+			"item": [
+				{
+					"name": "POST News Monitor",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json", "type": "text" },
+							{ "key": "x-api-key", "value": "{{apiKey}}", "type": "text" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"crypto\": [\"BTCUSDT\", \"ETHUSD\"],\n  \"stocks\": [\"NVDA\", \"MSFT\"]\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/news-monitor",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "news-monitor"]
+						}
+					}
+				},
+				{
+					"name": "GET News Monitor",
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "x-api-key", "value": "{{apiKey}}", "type": "text" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/news-monitor?crypto=BTCUSDT,ETHUSD&stocks=NVDA",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "news-monitor"],
+							"query": [
+								{ "key": "crypto", "value": "BTCUSDT,ETHUSD" },
+								{ "key": "stocks", "value": "NVDA" }
+							]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Stored Alerts",
+			"item": [
+				{
+					"name": "GET List Alerts",
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "x-api-key", "value": "{{apiKey}}", "type": "text" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/alerts",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "alerts"]
+						}
+					}
+				},
+				{
+					"name": "GET List Alerts (filtered)",
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "x-api-key", "value": "{{apiKey}}", "type": "text" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/alerts?limit=10&enriched=true&source=webhook",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "alerts"],
+							"query": [
+								{ "key": "limit", "value": "10" },
+								{ "key": "enriched", "value": "true" },
+								{ "key": "source", "value": "webhook" }
+							]
+						}
+					}
+				},
+				{
+					"name": "GET Get Alert by ID",
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "x-api-key", "value": "{{apiKey}}", "type": "text" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/alerts/{{alertId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "alerts", "{{alertId}}"]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Async Jobs",
+			"item": [
+				{
+					"name": "POST Create TradingView Analysis Job",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json", "type": "text" },
+							{ "key": "x-api-key", "value": "{{apiKey}}", "type": "text" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"type\": \"expanded-analysis\",\n  \"symbols\": [\"BINANCE:BTCUSDT\"],\n  \"timeframe\": \"1D\",\n  \"includeMultiTimeframe\": true\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/jobs/tradingview-analysis",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "jobs", "tradingview-analysis"]
+						}
+					}
+				},
+				{
+					"name": "POST Create Market Scanner Job",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json", "type": "text" },
+							{ "key": "x-api-key", "value": "{{apiKey}}", "type": "text" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"type\": \"market-scanner\",\n  \"exchange\": \"BINANCE\",\n  \"timeframe\": \"4h\",\n  \"scans\": [\"top_gainers\", \"top_losers\"],\n  \"limit\": 5\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/jobs/tradingview-analysis",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "jobs", "tradingview-analysis"]
+						}
+					}
+				},
+				{
+					"name": "GET Get Job Status",
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "x-api-key", "value": "{{apiKey}}", "type": "text" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/jobs/{{jobId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "jobs", "{{jobId}}"]
+						}
+					}
+				}
+			]
+		}
+	]
+}
