@@ -187,5 +187,40 @@ describe('WhatsAppService', () => {
 			expect(result.success).toBe(false);
 			expect(result.error).toBeDefined();
 		});
+
+		it('should split long messages into multiple GreenAPI requests instead of truncating', async () => {
+			global.fetch = jest
+				.fn()
+				.mockResolvedValueOnce({
+					ok: true,
+					json: async () => ({ idMessage: 'msg-1' }),
+				})
+				.mockResolvedValueOnce({
+					ok: true,
+					json: async () => ({ idMessage: 'msg-2' }),
+				});
+
+			const longText = 'A'.repeat(20010);
+			const result = await service.send({ text: longText });
+
+			expect(result.success).toBe(true);
+			expect(result.channel).toBe('whatsapp');
+			expect(result.messageCount).toBe(2);
+			expect(result.messageIds).toEqual(['msg-1', 'msg-2']);
+			expect(result.messageId).toBe('msg-1,msg-2');
+			expect(global.fetch).toHaveBeenCalledTimes(2);
+			expect(mockLogger.warn).toHaveBeenCalledWith(
+				expect.stringContaining('sending 2 parts instead of truncating'),
+			);
+
+			const firstPayload = JSON.parse(global.fetch.mock.calls[0][1].body);
+			const secondPayload = JSON.parse(global.fetch.mock.calls[1][1].body);
+
+			expect(firstPayload.customPreview).toEqual({ title: 'Trading View Alert' });
+			expect(secondPayload.customPreview).toBeUndefined();
+			expect(firstPayload.message + secondPayload.message).toBe(longText);
+			expect(firstPayload.message.endsWith('…')).toBe(false);
+			expect(secondPayload.message.endsWith('…')).toBe(false);
+		});
 	});
 });

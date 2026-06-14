@@ -425,7 +425,7 @@ The alert delivery system now supports parallel delivery to multiple channels (T
 **Service Layer** (`src/services/notification/`):
 - `NotificationChannel.js` — Abstract base class defining send(alert), validate(), isEnabled() contract
 - `TelegramService.js` — Wraps Telegraf bot.telegram.sendMessage() with MarkdownV2 parsing
-- `WhatsAppService.js` — GreenAPI integration with message truncation (20K chars), 10s timeout, retry logic
+- `WhatsAppService.js` — GreenAPI integration with chunked delivery for payloads above the 20K char limit, 10s timeout, retry logic
 - `NotificationManager.js` — Orchestrates: validateAll() at startup, sendToAll() in parallel via Promise.allSettled()
 
 **Formatting** (`src/services/notification/formatters/`):
@@ -457,7 +457,7 @@ Where to look first when extending or debugging
 - `index.js` for lifecycle and bot wiring (calls initializeNotificationServices after bot.launch)
 - `src/controllers/webhooks/handlers/alert/alert.js` for webhook flow and notificationManager.sendToAll()
 - `src/services/notification/NotificationManager.js` for parallel send orchestration
-- `src/services/notification/WhatsAppService.js` for retry logic, GreenAPI integration, truncation
+- `src/services/notification/WhatsAppService.js` for retry logic, GreenAPI integration, and chunked delivery
 - `src/lib/retryHelper.js` for exponential backoff timing
 - Tests in `tests/integration/` for multi-channel scenarios (dual-channel, config validation, graceful degradation)
 
@@ -670,6 +670,7 @@ See `/specs/TERMINOLOGY_GUIDE.md` for extended discussion and examples.
 ## Recent Changes (by spec-kit)
 - 001-gemini-grounding-alert (improvements with PR #21, #20, #19): Added Gemini GoogleSearch grounding integration for alert enrichment; added Brave Search fallback/override; introduced provider routing (Gemini/Azure/OpenRouter); added token usage + cost estimation surfaced in notifications; graceful degradation on API failure; single grounding call reused across channels.
 - 002-whatsapp-alerts: Added multi-channel notification system with TelegramService, WhatsAppService, NotificationManager; exponential backoff retry logic; MarkdownV2 and WhatsApp markdown formatters; comprehensive integration tests for parallel delivery, config validation, graceful degradation.
+- issue #91 / branch `codex/fix-91-whatsapp-truncation`: WhatsApp delivery now splits GreenAPI payloads above the provider limit into sequential chunks instead of silently truncating with an ellipsis; regression coverage added for long alert payloads.
 - 003-news-monitor (improvement with PR #18): Added `/api/news-monitor` endpoint for financial news analysis and sentiment-based alerts; Gemini GoogleSearch integration for market context; optional secondary LLM enrichment via Azure AI Inference (migrated to `@azure-rest/ai-inference`); in-memory deduplication cache; optional Binance price integration; parallel symbol analysis with timeout management; configurable event detection; URL shortening for WhatsApp citations.
 - 004-enrich-alert-output: Enriched `/api/webhook/alert` output with structured fields (sentiment, insights, technical levels) using the existing grounding pipeline; Telegram/WhatsApp formatters render structured enrichment when present.
 - 005-sentry-runtime-errors (PR #16): Added runtime error monitoring via `SentryService` + early initialization in `instrument.js`, plus Express error handler wiring; monitoring is gated by `ENABLE_SENTRY` + `SENTRY_DSN`.

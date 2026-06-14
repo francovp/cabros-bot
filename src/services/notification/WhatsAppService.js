@@ -5,8 +5,10 @@
 
 const NotificationChannel = require('./NotificationChannel');
 const { sendWithRetry } = require('../../lib/retryHelper');
-const { truncateMessage } = require('../../lib/messageHelper');
+const { splitMessageIntoChunks } = require('../../lib/messageHelper');
 const WhatsAppMarkdownFormatter = require('./formatters/whatsappMarkdownFormatter');
+
+const GREEN_API_MESSAGE_LIMIT = 20000;
 
 class WhatsAppService extends NotificationChannel {
 	/**
@@ -69,43 +71,73 @@ class WhatsAppService extends NotificationChannel {
    * @returns {Promise<{success: boolean, channel: string, messageId?: string, error?: string, attemptCount?: number, durationMs?: number}>}
    */
 	async send(alert) {
-		const sendFn = async () => {
-			return this._sendSingle(alert);
-		};
+		try {
+			const formattedText = await this._formatAlert(alert);
+			const messageChunks = splitMessageIntoChunks(formattedText, GREEN_API_MESSAGE_LIMIT);
 
-		return sendWithRetry(sendFn, 3, this.logger);
+			if (messageChunks.length > 1) {
+				this.logger?.warn?.(
+					`WhatsApp message exceeded ${GREEN_API_MESSAGE_LIMIT} characters; sending ${messageChunks.length} parts instead of truncating`,
+				);
+				return this._sendChunkedMessage(messageChunks);
+			}
+
+			return sendWithRetry(
+				({ signal } = {}) => this._sendMessageChunk(messageChunks[0], { includePreview: true, signal }),
+				3,
+				this.logger,
+			);
+		} catch (error) {
+			this.logger?.error?.(`Failed to send to WhatsApp: ${error.message}`);
+			return {
+				success: false,
+				channel: 'whatsapp',
+				error: error.message,
+			};
+		}
 	}
 
 	/**
-   * Single send attempt to GreenAPI
+   * Format alert text for WhatsApp delivery
    * @private
    * @param {Object} alert - Alert object
-   * @returns {Promise<{success: boolean, channel: string, messageId?: string, error?: string}>}
+   * @returns {Promise<string>} Formatted message
    */
-	async _sendSingle(alert) {
+	async _formatAlert(alert) {
+		// Format message for WhatsApp.
+		// If enriched is an object, use formatEnriched (async with URL shortening), otherwise format the text.
+		let formattedText;
+		if (alert.enriched && typeof alert.enriched === 'object') {
+			formattedText = await this.formatter.formatEnriched(alert.enriched);
+			console.debug('Formatted enriched WhatsApp message length:', formattedText.length);
+		} else {
+			formattedText = this.formatter.format(alert.enriched || alert.text);
+			console.debug('Formatted WhatsApp message length:', formattedText.length);
+		}
+
+		return formattedText;
+	}
+
+	/**
+   * Send a formatted WhatsApp payload through GreenAPI
+   * @private
+   * @param {string} message - Preformatted WhatsApp message
+   * @param {Object} options - Delivery options
+   * @param {boolean} options.includePreview - Whether to include the custom preview payload
+   * @returns {Promise<{success: boolean, channel: string, messageId?: string, messageIds?: string[], messageCount?: number, error?: string}>}
+   */
+	async _sendMessageChunk(message, { includePreview = false } = {}) {
 		try {
-			// Format message for WhatsApp
-			// If enriched is an object, use formatEnriched (async with URL shortening), otherwise format the text
-			let formattedText;
-			if (alert.enriched && typeof alert.enriched === 'object') {
-				formattedText = await this.formatter.formatEnriched(alert.enriched);
-				console.debug('Formatted enriched WhatsApp message:', formattedText);
-			} else {
-				formattedText = this.formatter.format(alert.enriched || alert.text);
-				console.debug('Formatted WhatsApp message:', formattedText);
-			}
-
-			// Truncate to GreenAPI limit
-			const truncatedText = truncateMessage(formattedText, 20000);
-
-			// Build GreenAPI payload
 			const payload = {
 				chatId: this.chatId,
-				message: truncatedText,
-				customPreview: {
-					title: 'Trading View Alert',
-				},
+				message,
 			};
+
+			if (includePreview) {
+				payload.customPreview = {
+					title: 'Trading View Alert',
+				};
+			}
 
 			this.logger?.debug?.(`Sending to GreenAPI: ${this.apiUrl}${this.apiKey.substring(0, 5)}...`);
 
@@ -120,8 +152,6 @@ class WhatsAppService extends NotificationChannel {
 					body: JSON.stringify(payload),
 					signal: controller.signal,
 				});
-
-				clearTimeout(timeoutId);
 
 				if (!response.ok) {
 					const errorText = await response.text();
@@ -142,6 +172,8 @@ class WhatsAppService extends NotificationChannel {
 						success: true,
 						channel: 'whatsapp',
 						messageId: data.idMessage,
+						messageIds: [data.idMessage],
+						messageCount: 1,
 					};
 				}
 
@@ -154,14 +186,14 @@ class WhatsAppService extends NotificationChannel {
 					error: `GreenAPI error: ${errorMsg}`,
 				};
 			} catch (error) {
-				clearTimeout(timeoutId);
-
 				if (error.name === 'AbortError') {
 					this.logger?.error?.('GreenAPI request timeout (10s)');
 					throw new Error('GreenAPI request timeout');
 				}
 
 				throw error;
+			} finally {
+				clearTimeout(timeoutId);
 			}
 		} catch (error) {
 			this.logger?.error?.(`Failed to send to WhatsApp: ${error.message}`);
@@ -171,6 +203,59 @@ class WhatsAppService extends NotificationChannel {
 				error: error.message,
 			};
 		}
+	}
+
+	/**
+   * Send a WhatsApp message that has been split into multiple chunks.
+   * Each chunk retries independently to avoid duplicating already delivered parts.
+   * @private
+   * @param {Array<string>} messageChunks - Ordered message chunks
+   * @returns {Promise<{success: boolean, channel: string, messageId?: string, messageIds?: string[], messageCount?: number, error?: string}>}
+   */
+	async _sendChunkedMessage(messageChunks) {
+		const messageIds = [];
+		const startedAt = Date.now();
+		let totalAttempts = 0;
+
+		for (let index = 0; index < messageChunks.length; index += 1) {
+			const includePreview = index === 0;
+			const result = await sendWithRetry(
+				({ signal } = {}) => this._sendMessageChunk(messageChunks[index], { includePreview, signal }),
+				3,
+				this.logger,
+			);
+			totalAttempts += result.attemptCount || 1;
+
+			if (!result.success) {
+				return {
+					success: false,
+					channel: 'whatsapp',
+					messageId: messageIds.join(','),
+					messageIds,
+					messageCount: messageIds.length,
+					error: result.error,
+					attemptCount: totalAttempts,
+					durationMs: Date.now() - startedAt,
+					splitMessageCount: messageChunks.length,
+					failedPart: index + 1,
+				};
+			}
+
+			if (result.messageId) {
+				messageIds.push(result.messageId);
+			}
+		}
+
+		return {
+			success: true,
+			channel: 'whatsapp',
+			messageId: messageIds.join(','),
+			messageIds,
+			messageCount: messageIds.length,
+			attemptCount: totalAttempts,
+			durationMs: Date.now() - startedAt,
+			splitMessageCount: messageChunks.length,
+		};
 	}
 }
 
