@@ -82,6 +82,7 @@ describe('TradingViewMcpService volume confirmation', () => {
 			symbol: 'BTCUSDT',
 			exchange: 'BINANCE',
 			timeframe: '4h',
+			signal: expect.any(Object),
 		});
 
 		expect(result.insights).toContain('Volume confirms: YES (3.3x avg)');
@@ -128,6 +129,26 @@ describe('TradingViewMcpService volume confirmation', () => {
 
 		expect(service.logger.warn).toHaveBeenCalledWith(expect.stringContaining('Volume confirmation failed for BTCUSDT'));
 		expect(result).toBeDefined();
+		expect(result.insights.join(' ')).not.toContain('Volume confirms');
+	});
+	it('skips volume confirmation insight if volume_ratio is missing or non-numeric', async () => {
+		process.env.ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION = 'true';
+		const service = new TradingViewMcpService({
+			maxRetries: 1,
+			defaultExchange: 'BINANCE',
+			defaultTimeframe: '1h',
+			logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
+		});
+
+		service.callCoinAnalysis = jest.fn().mockResolvedValue({
+			price_data: { current_price: 64863.03, change_percent: 0.1 },
+		});
+
+		service.callVolumeConfirmation = jest.fn().mockResolvedValue({
+			volume_analysis: { volume_ratio: undefined },
+		});
+
+		const result = await service.enrichFromAlertText('BTCUSDT(240) pasó a señal de COMPRA');
 		expect(result.insights.join(' ')).not.toContain('Volume confirms');
 	});
 });

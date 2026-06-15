@@ -24,7 +24,9 @@ const FORCE_BRAVE_SEARCH = process.env.FORCE_BRAVE_SEARCH === 'true';
 const GROUNDING_MAX_SOURCES = parseInt(process.env.GROUNDING_MAX_SOURCES || '3', 10);
 const GROUNDING_TIMEOUT_MS = parseInt(process.env.GROUNDING_TIMEOUT_MS || '30000', 10);
 const GROUNDING_MAX_LENGTH = parseInt(process.env.GROUNDING_MAX_LENGTH || '2000', 10);
-const MODEL_PROVIDER = process.env.MODEL_PROVIDER || 'gemini';
+const MODEL_PROVIDER = typeof process.env.MODEL_PROVIDER === 'string' && process.env.MODEL_PROVIDER.trim().length > 0
+	? process.env.MODEL_PROVIDER.trim().toLowerCase()
+	: 'gemini';
 const GROUNDING_MODEL_NAME = FORCE_BRAVE_SEARCH ? 'brave-search' : process.env.GROUNDING_MODEL_NAME || 'gemini-2.5-flash';
 const GEMINI_MODEL_NAME = process.env.GEMINI_MODEL_NAME || null;
 const GEMINI_MODEL_NAME_FALLBACK = process.env.GEMINI_MODEL_NAME_FALLBACK || 'gemini-2.5-flash-lite';

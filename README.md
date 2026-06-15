@@ -62,6 +62,7 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 - `TRADINGVIEW_MCP_MAX_RETRIES` - Retries for MCP failures (default: `3`)
 - `TRADINGVIEW_MCP_DEFAULT_EXCHANGE` - Default exchange when not present in signal (default: `BINANCE`)
 - `TRADINGVIEW_MCP_DEFAULT_TIMEFRAME` - Default timeframe fallback (default: `1D` for `/api/webhook/expanded-analysis-alert`, `1h` for webhook signal enrichment)
+- `ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION` - Enable volume confirmation validation for TradingView alerts (`true` or `false`, default: `false`)
 - Runtime gate: TradingView MCP data is only used when webhook requests include `?useTradingViewData=true`
 
 #### Firestore Alert Storage
@@ -160,13 +161,64 @@ pnpm start
 
 ## API Endpoints
 
-### POST /healthcheck
+### GET /healthcheck
 
 Health check endpoint.
 
 **Response:**
 ```json
 {"uptime":"..."}
+```
+
+### GET /api/status
+
+Machine-readable runtime status for operational tooling. This endpoint uses the same `WEBHOOK_API_KEY` protection as other `/api` endpoints when that environment variable is configured. Send the key with the `x-api-key` header.
+
+The response intentionally exposes only non-sensitive booleans and metadata: service identity, version, commit, environment, feature-flag state, delivery channel readiness, and dependency readiness/configuration status. Secret values such as bot tokens, API keys, DSNs, chat IDs, and provider URLs are not returned.
+
+For `ENABLE_NEWS_MONITOR=true`, the payload also reports the primary LLM dependency used by that flow as `dependencies.newsMonitorLlm`, including the resolved provider (`gemini`, `azure`, or `openrouter`) and whether that provider is actually configured for runtime use. When `FORCE_BRAVE_SEARCH=true`, the payload also exposes `dependencies.braveSearch` so the forced search path can be monitored independently of Gemini. When `ENABLE_GEMINI_GROUNDING=true` and `MODEL_PROVIDER=gemini`, `dependencies.gemini` requires both `GEMINI_API_KEY` and `GEMINI_MODEL_NAME`, matching the runtime path used for grounded alert generation. Firestore readiness treats `GOOGLE_APPLICATION_CREDENTIALS` as configured only when the referenced credential file exists and is readable.
+
+`GET /api/capabilities` is an alias for the same payload.
+
+**Response:**
+```json
+{
+  "service": {
+    "name": "cabros-bot",
+    "version": "0.1.0",
+    "commit": "abcdef1234567890",
+    "environment": "production"
+  },
+  "featureFlags": {
+    "telegramBot": true,
+    "whatsappAlerts": false,
+    "geminiGrounding": true,
+    "newsMonitor": true,
+    "tradingViewMcpEnrichment": true,
+    "firestoreAlertStorage": true,
+    "sentryMonitoring": true,
+    "langfusePrompts": false,
+    "marketScanner": true,
+    "binancePriceCheck": false,
+    "llmAlertEnrichment": false
+  },
+  "deliveryChannels": {
+    "telegram": { "enabled": true, "status": "ready" },
+    "whatsapp": { "enabled": false, "status": "disabled" }
+  },
+  "dependencies": {
+    "telegram": { "enabled": true, "configured": true, "ready": true, "status": "ready" },
+    "whatsapp": { "enabled": false, "configured": false, "ready": false, "status": "disabled" },
+    "gemini": { "enabled": true, "configured": true, "ready": true, "status": "ready" },
+    "tradingViewMcp": { "enabled": true, "configured": true, "ready": true, "status": "ready" },
+    "firestore": { "enabled": true, "configured": true, "ready": true, "status": "ready" },
+    "sentry": { "enabled": true, "configured": true, "ready": true, "status": "ready" },
+    "langfuse": { "enabled": false, "configured": false, "ready": false, "status": "disabled" },
+    "braveSearch": { "enabled": false, "configured": false, "ready": false, "status": "disabled" },
+    "newsMonitorLlm": { "provider": "gemini", "enabled": true, "configured": true, "ready": true, "status": "ready" },
+    "llmAlertEnrichment": { "enabled": false, "configured": false, "ready": false, "status": "disabled" }
+  }
+}
 ```
 
 ## Alert Enrichment with Gemini Grounding (001)
@@ -421,6 +473,44 @@ The endpoint stops analysis at `EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS` (default 60 
   "totalDurationMs": 1200
 }
 ```
+
+### POST /api/webhook/volume-confirmation
+
+Run TradingView MCP `volume_confirmation_analysis` on demand and return structured JSON without sending notifications.
+
+**Request (JSON):**
+```json
+{
+  "symbol": "BINANCE:BTCUSDT",
+  "timeframe": "4h"
+}
+```
+
+- `symbol`: Required `EXCHANGE:SYMBOL` identifier.
+- `timeframe`: Optional indicator interval. Defaults to `TRADINGVIEW_MCP_DEFAULT_TIMEFRAME` or `1h`.
+
+**Response (JSON):**
+```json
+{
+  "success": true,
+  "symbol": "BINANCE:BTCUSDT",
+  "exchange": "BINANCE",
+  "asset": "BTCUSDT",
+  "timeframe": "4h",
+  "confirmed": true,
+  "decision": "confirm",
+  "volumeRatio": 1.7,
+  "analysis": {
+    "symbol": "BINANCE:BTCUSDT",
+    "volume_analysis": {
+      "volume_ratio": 1.7,
+      "volume_strength": "HIGH"
+    }
+  }
+}
+```
+
+If the symbol format is invalid, the endpoint returns `400 INVALID_REQUEST`. If TradingView MCP fails, it returns `502 VOLUME_CONFIRMATION_FAILED` with the upstream error message.
 
 ### POST /api/webhook/market-scanner-alert
 

@@ -24,6 +24,12 @@ function resolveBot(botOrGetter) {
 	return botOrGetter || null;
 }
 
+function resolveDryRun(req) {
+	const queryFlag = req.query && (req.query.dryRun === 'true' || req.query.dryRun === true);
+	const bodyFlag = req.body && typeof req.body === 'object' && (req.body.dryRun === true || req.body.dryRun === 'true');
+	return queryFlag || bodyFlag;
+}
+
 function postExpandedAnalysisAlert(botOrGetter) {
 	return async (req, res) => {
 		const requestId = uuidv4();
@@ -69,6 +75,22 @@ function postExpandedAnalysisAlert(botOrGetter) {
 			}
 
 			const alertText = buildExpandedAnalysisAlertReport(analyzedItems);
+			const dryRun = resolveDryRun(req);
+			if (dryRun) {
+				console.debug('[ExpandedAnalysisAlert] Dry-run mode: skipping delivery');
+				return res.status(200).json({
+					success: true,
+					dryRun: true,
+					payload: { alertText },
+					results: compactResults(results),
+					summary: buildSummary(results, []),
+					timedOut,
+					timeoutMs,
+					requestId,
+					totalDurationMs: Date.now() - startTime,
+				});
+			}
+
 			let notificationManager = getNotificationManager();
 			if (!notificationManager) {
 				notificationManager = await initializeNotificationServices(resolveBot(botOrGetter));
@@ -118,7 +140,7 @@ function postExpandedAnalysisAlert(botOrGetter) {
 	};
 }
 
-async function analyzeSymbols({ symbols, timeframe, includeMultiTimeframe }, options = {}) {
+async function analyzeSymbols({ symbols, timeframe, includeMultiTimeframe, analysisMode }, options = {}) {
 	const { signal } = options;
 	const results = [];
 
@@ -133,6 +155,7 @@ async function analyzeSymbols({ symbols, timeframe, includeMultiTimeframe }, opt
 			const analysisRequest = {
 				...input,
 				timeframe,
+				analysisMode,
 			};
 			if (signal) {
 				analysisRequest.signal = signal;
@@ -202,15 +225,17 @@ function compactResults(results) {
 			};
 		}
 
+		const technicalAnalysis = result.analysis && result.analysis.technical
+			? result.analysis.technical
+			: result.analysis || {};
+		const priceData = technicalAnalysis.price_data || {};
+		const indicators = technicalAnalysis.technical_indicators || {};
+
 		return {
 			symbol: result.symbol,
 			status: result.status,
-			price: result.analysis && result.analysis.price_data
-				? result.analysis.price_data.current_price ?? result.analysis.price_data.close
-				: undefined,
-			rsi: result.analysis
-				? result.analysis.technical_indicators?.rsi ?? result.analysis.rsi?.value
-				: undefined,
+			price: priceData.current_price ?? priceData.close,
+			rsi: indicators.rsi ?? technicalAnalysis.rsi?.value,
 			multiTimeframe: result.multiTimeframe ? 'success' : undefined,
 		};
 	});

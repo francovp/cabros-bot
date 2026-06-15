@@ -1,0 +1,9 @@
+- [x] Post a summary of pending work as a comment on the PR
+- [x] Make implementation changes (defer notification service initialization after dry-run checks)
+- [x] Run full test suite locally and verify all tests pass
+- [ ] Push local commit `c4301e9a` to GitHub remote branch (user manually runs `git push`)
+- [ ] Wait for PR checks to pass on GitHub
+- [ ] Wait for Render preview environment deployment
+- [ ] E2E test the deployed Render preview environment
+- [ ] Label GitHub Issue and PR as "In review", update Linear issue status to "In review"
+- [ ] Post walkthrough and final summary

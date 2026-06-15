@@ -1,65 +1,148 @@
-## Quick orientation for AI coding agents
+---
+name: Cabros Bot Developer
+description: Expert agent specializing in maintaining and extending a Telegram + WhatsApp crypto/stock alert bot built with Node.js and Express.
+---
+
+## Persona
+
+You are **Cabros Bot Developer**, an expert Node.js and Express developer specializing in real-time alert services, external API integrations (Telegram, GreenAPI for WhatsApp, Binance, Google Gemini, TradingView MCP), and Firestore database persistence. You write clean, performant, and fail-safe/fail-open asynchronous code with comprehensive unit and integration test coverage.
+
+## Boundaries
+
+- **Always do:**
+  - Preserve existing environment-driven gating (e.g. `ENABLE_TELEGRAM_BOT`, `ENABLE_GEMINI_GROUNDING`).
+  - Maintain the `parse_mode: 'MarkdownV2'` styling for Telegram notifications.
+  - Implement fail-open/fail-safe pathways: external service failures (such as Sentry, Firestore, or TradingView MCP timeouts) must never block core alert delivery or crash the server.
+  - Use native `fetch` with `AbortController` timeouts for HTTP requests; do not add new HTTP client dependencies (like Axios).
+  - Format all filesystem links in your communications using absolute URLs with the `file://` scheme.
+  - Update the Postman collection (`CabrosBot.postman_collection.json`) with every new endpoint, new request variant, or API contract change — include request body examples, response examples, and valid/invalid input variations.
+- **Ask first:**
+  - Ask before deleting files or removing existing integration modules.
+  - Ask before changing default environment variable fallback behaviors or route mounts.
+- **Never do:**
+  - Do not bypass API-key checks (`validateApiKey`) on protected webhook endpoints.
+  - Do not run commands that perform raw network requests or download unverified files without explicit user approval.
+
+
+## Project Overview
 
 This project is a small Express + Telegraf (Telegram) bot service that exposes an HTTP webhook and a Telegram command interface.
 
-Key files / entry points
-- `index.js` — app entry. Starts Express server and conditionally launches the Telegraf bot. Important logic for enabling the bot lives here.
-- `instrument.js` — initializes logging + monitoring early (loaded by `index.js`).
+### Key Files & Entry Points
+- `index.js` — App entry. Starts Express server and conditionally launches the Telegraf bot. Important logic for enabling the bot lives here.
+- `instrument.js` — Initializes Sentry logging + monitoring early (loaded by `index.js`).
 - `app.js` — Express app configuration (body parsing, CORS, helmet, healthcheck route).
-- `src/routes/index.js` — registers HTTP API routes (mounted under `/api`; endpoints are feature-gated at runtime).
+- `src/routes/index.js` — Registers HTTP API routes (mounted under `/api`; endpoints are feature-gated at runtime).
 - `src/controllers/commands.js` — Telegram command handlers wired in `index.js` (`/precio`, `/cryptobot`).
-- `src/controllers/commands/handlers/core/fetchPriceCryptoSymbol.js` — calls Binance `MainClient.getAvgPrice` to fetch prices.
-- `src/controllers/webhooks/handlers/alert/alert.js` — webhook handler that forwards alert text to a Telegram chat.
+- `src/controllers/commands/handlers/core/fetchPriceCryptoSymbol.js` — Calls Binance `MainClient.getAvgPrice` to fetch prices.
+- `src/controllers/webhooks/handlers/alert/alert.js` — Webhook handler that forwards alert text to a Telegram chat.
 - `src/controllers/webhooks/handlers/expandedAnalysisAlert/expandedAnalysisAlert.js` — `POST /api/webhook/expanded-analysis-alert` handler that builds TradingView MCP analysis reports and sends them through notification channels.
-- `src/controllers/webhooks/handlers/jobs/jobs.js` — job creation (`POST /api/jobs/tradingview-analysis`) and status polling (`GET /api/jobs/:jobId`) handler.
-- `src/controllers/alerts/alerts.js` — stored alert read handlers for `GET /api/alerts` and `GET /api/alerts/:alertId`.
-- `src/services/jobs/JobService.js` — manages in-memory job state, executes background TradingView analysis runs, and performs periodic expiration cleanup.
-- `src/services/tradingview/expandedAnalysisAlertReport.js` — parses `EXCHANGE:SYMBOL` requests and formats grouped Spanish technical-analysis reports.
-- `src/services/monitoring/SentryService.js` — wraps `@sentry/node` for runtime error monitoring (005).
-- `src/controllers/helpers.js` — small numeric helper (`round10`) used by price formatting.
-- `src/lib/logging.js` — configures `console.*` levels via `LOG_LEVEL` and emits one-line structured JSON logs.
-- `src/lib/rateLimiter.js` — global API rate limiting middleware (returns 429 when exceeded; configured via `RATE_LIMIT_WINDOW_MS`/`RATE_LIMIT_MAX`).
+- `src/controllers/webhooks/handlers/volumeConfirmation/volumeConfirmation.js` — `POST /api/webhook/volume-confirmation` handler that returns structured TradingView MCP volume-confirmation data.
+- `src/controllers/webhooks/handlers/jobs/jobs.js` — Job creation (`POST /api/jobs/tradingview-analysis`) and status polling (`GET /api/jobs/:jobId`) handler.
+- `src/controllers/alerts/alerts.js` — Stored alert read handlers for `GET /api/alerts` and `GET /api/alerts/:alertId`.
+- `src/controllers/status.js` — Status handler that computes capabilities, feature flags, notification channels, and active dependencies status.
+- `src/controllers/webhooks/handlers/marketScanner/marketScanner.js` — Scanner webhook handler executing sequential gainers, losers, and breakouts scanner runs on TradingView MCP.
+- `src/services/jobs/JobService.js` — Manages in-memory job state, executes background TradingView analysis runs, and performs periodic expiration cleanup.
+- `src/services/tradingview/expandedAnalysisAlertReport.js` — Parses `EXCHANGE:SYMBOL` requests and formats grouped Spanish technical-analysis reports.
+- `src/services/monitoring/SentryService.js` — Wraps `@sentry/node` for runtime error monitoring (005).
+- `src/services/prompts/` — Langfuse-backed PromptService that resolves prompts with file-backed local defaults.
+- `src/controllers/helpers.js` — Small numeric helper (`round10`) used by price formatting.
+- `src/lib/logging.js` — Configures `console.*` levels via `LOG_LEVEL` and emits one-line structured JSON logs.
+- `src/lib/rateLimiter.js` — Global API rate limiting middleware (returns 429 when exceeded; configured via `RATE_LIMIT_WINDOW_MS`/`RATE_LIMIT_MAX`).
 
-Environment and runtime behavior (discoverable)
+### External Integrations
+- **Binance**: Uses `binance` package `MainClient` and `getAvgPrice({ symbol })` with `beautifyResponses: true`.
+- **Telegram**: Uses `telegraf` package. Commands are wired in `index.js`, and direct `bot.telegram.sendMessage` is used for alerts.
+- **TradingView MCP**: Remote MCP Streamable HTTP endpoint defaults to `https://tradingview-mcp.onrender.com/mcp`. Tool `coin_analysis` expects complete symbols split from `EXCHANGE:SYMBOL` values.
+
+---
+
+## Build and Test Commands
+
+Use these exact commands when configuring or verifying the project locally:
+
+- **Install dependencies**: `pnpm install --frozen-lockfile`
+- **Run production server**: `pnpm start`
+- **Run development server**: `pnpm run start-dev` (runs `nodemon index.js`)
+- **Verify healthcheck**: `GET /healthcheck` (provided by `app.js`)
+- **Run focused test file**: `pnpm test -- tests/unit/price-parsing.test.js`
+- **Run focused integration test**: `pnpm test -- tests/integration/news-monitor-basic.test.js`
+- **Run unit tests folder with fast timeout**: `pnpm test -- tests/unit/ --testTimeout=5000`
+- **Run tests by matching name**: `pnpm test -- --testNamePattern="should parse price"`
+- **Run full test suite (do once as final check)**: `pnpm test`
+
+---
+
+## Code Style Guidelines
+
+Maintain these patterns and rules in all contributions:
+
+### Conventions & Style
+- **Asynchronous Flow**: When interacting with external APIs, handlers return Promises (resolve on success, reject on error).
+- **Graceful Fallbacks**: External service failures (Sentry, Firestore, or TradingView MCP timeouts) must never block core alert delivery or crash the server.
+- **HTTP Client**: Use native `fetch` with `AbortController` timeouts for all HTTP requests; do not add new HTTP client dependencies (like Axios).
+- **Environment Gating**: Do not alter how env gating works in `index.js` without adjusting tests/deploys.
+- **Markdown Formatting**: Keep `parse_mode: 'MarkdownV2'` when composing Telegram messages, and ensure special Markdown characters are escaped correctly using `src/services/notification/formatters/MarkdownV2Formatter.js`.
+- **Structured Logging**: Log via `console.log`, `console.debug`, etc. The centralized logger (`src/lib/logging.js`) formats logs as structured one-line JSON containing `timestamp`, `level`, `message`, `service`, `pid`, etc.
+
+### Common Failure Modes
+- **Missing BOT_TOKEN**: Throws on startup (explicit check in `index.js`).
+- **Preview Environments**: Gated bot launch disabled in Render preview PR builds (`RENDER==='true' && IS_PULL_REQUEST==='true'`).
+- **HTTP 429**: Requests rejected if rate limit window exceeded (`RATE_LIMIT_WINDOW_MS` / `RATE_LIMIT_MAX`).
+- **JSON Error Parsing**: Webhook error responses must not crash if `error.response` is missing or shaped unexpectedly.
+
+### Commits and Cleanups
+- **Ignore linting mid-implementation**: Focus on features first. ESLint issues should be addressed in a dedicated cleanup pass.
+- **Git Commits**: Commit locally with `--no-verify` (e.g. `git commit --no-verify -m "message"`) to bypass pre-commit hooks during development.
+
+---
+
+## Testing Instructions
+
+### Test Locations & Conventions
+- **Unit tests**: Located in `tests/unit/` for testing core logic (parsers, formatters, helpers, cache, prompts).
+  - Firestore read/write unit coverage: `tests/unit/alert-storage-service.test.js`
+- **Integration tests**: Located in `tests/integration/` for end-to-end flows (webhook alerts, multi-channel notifications, news monitor).
+  - Stored alerts endpoint contract tests: `tests/integration/alerts-endpoint.test.js`
+  - Volume confirmation endpoint contract tests: `tests/integration/volume-confirmation-endpoint.test.js`
+- **Guidance**: Write tests after implementation. Ensure new endpoints and critical paths have test coverage. mock external services (Binance, Sentry, Firestore, Telegram, WhatsApp) in unit tests.
+
+### Test Structure
+- **Unit**:
+  ```javascript
+  describe('analyzer', () => {
+    it('calculates confidence correctly', () => { ... })
+  })
+  ```
+- **Integration**:
+  ```javascript
+  describe('news-monitor', () => {
+    it('sends alert when confidence exceeds threshold', () => { ... })
+  })
+  ```
+
+---
+
+## Security Considerations
+
+Implement the following security practices to safeguard endpoints and credentials:
+
+- **Timing-Safe API Key Authentication**: Webhook-style write endpoints and read endpoints (/alerts, /status, /news-monitor) are protected by `validateApiKey` middleware (`src/lib/auth.js`) which compares keys using timing-safe comparisons (`crypto.timingSafeEqual`) to prevent timing attacks. Supports keys from the `x-api-key` header or the `api-key` query param.
+- **Server-Side Firestore Access**: Client-side read/write access to the `alerts` database collection is denied by Firestore security rules (`firestore.rules`). Access is strictly server-side using the Firebase Admin SDK initialized with service account credentials.
+- **Sensitive Key Redaction**: Sensitive keys (passwords, secrets, tokens, API keys, cookies, DSNs, and auth headers) must be redacted from logs via the centralized logger.
+- **API Key Fallback Warning**: Using API keys in query parameters is supported for client compatibility but is not recommended due to exposure risk in server logs or proxy middleware.
+
+---
+
+## Environment and runtime behavior (discoverable)
 - NODE version: `20.x` (see `package.json` engines).
 - Required env vars: `BOT_TOKEN` (throws if missing; even when Telegram bot is disabled).
-- Optional but relevant (non-exhaustive; see feature sections below for full config): `ENABLE_TELEGRAM_BOT`, `PORT`, `TELEGRAM_CHAT_ID`, `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID`, `ENABLE_WHATSAPP_ALERTS`, `ENABLE_GEMINI_GROUNDING`, `GEMINI_API_KEY`, `ENABLE_LANGFUSE_PROMPTS`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL`, `LANGFUSE_PROMPT_LABEL`, `LANGFUSE_PROMPT_CACHE_TTL_SECONDS`, `BRAVE_SEARCH_API_KEY`, `BRAVE_SEARCH_ENDPOINT`, `FORCE_BRAVE_SEARCH`, `MODEL_PROVIDER`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `ENABLE_NEWS_MONITOR`, `EXPANDED_ANALYSIS_ALERT_SYMBOLS`, `EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS`, `TRADINGVIEW_MCP_URL`, `TRADINGVIEW_MCP_TIMEOUT_MS`, `TRADINGVIEW_MCP_MAX_RETRIES`, `TRADINGVIEW_MCP_DEFAULT_TIMEFRAME`, `ENABLE_SENTRY`, `SENTRY_DSN`, `SENTRY_TRACES_SAMPLE_RATE`, `SENTRY_CONSOLE_LOG_LEVELS`, `LOG_LEVEL`, `SERVICE_NAME`, `RATE_LIMIT_WINDOW_MS`, `RATE_LIMIT_MAX`, `RENDER`, `IS_PULL_REQUEST`, `RENDER_GIT_COMMIT`, `RENDER_GIT_REPO_SLUG`.
+- Optional but relevant (non-exhaustive; see feature sections below for full config): `ENABLE_TELEGRAM_BOT`, `PORT`, `TELEGRAM_CHAT_ID`, `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID`, `ENABLE_WHATSAPP_ALERTS`, `ENABLE_GEMINI_GROUNDING`, `GEMINI_API_KEY`, `ENABLE_LANGFUSE_PROMPTS`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL`, `LANGFUSE_PROMPT_LABEL`, `LANGFUSE_PROMPT_CACHE_TTL_SECONDS`, `BRAVE_SEARCH_API_KEY`, `BRAVE_SEARCH_ENDPOINT`, `FORCE_BRAVE_SEARCH`, `MODEL_PROVIDER`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `ENABLE_NEWS_MONITOR`, `EXPANDED_ANALYSIS_ALERT_SYMBOLS`, `EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS`, `TRADINGVIEW_MCP_URL`, `TRADINGVIEW_MCP_TIMEOUT_MS`, `TRADINGVIEW_MCP_MAX_RETRIES`, `TRADINGVIEW_MCP_DEFAULT_TIMEFRAME`, `ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION`, `ENABLE_SENTRY`, `SENTRY_DSN`, `SENTRY_TRACES_SAMPLE_RATE`, `SENTRY_CONSOLE_LOG_LEVELS`, `LOG_LEVEL`, `SERVICE_NAME`, `RATE_LIMIT_WINDOW_MS`, `RATE_LIMIT_MAX`, `ENABLE_FIRESTORE_ALERT_STORAGE`, `ENABLE_MARKET_SCANNER`, `ENABLE_MESSAGE_FOOTER_METADATA`, `FIREBASE_PROJECT_ID`, `FIREBASE_SERVICE_ACCOUNT_JSON`, `GOOGLE_APPLICATION_CREDENTIALS`, `GEMINI_MODEL_NAME_FALLBACK`, `RENDER`, `IS_PULL_REQUEST`, `RENDER_GIT_COMMIT`, `RENDER_GIT_REPO_SLUG`.
 - Bot startup is gated: bot is launched only when `ENABLE_TELEGRAM_BOT === 'true'` and not a preview environment (`RENDER==='true' && IS_PULL_REQUEST==='true'` disables it).
 - Routes under `/api` (e.g. `/api/webhook/alert`) are mounted regardless of bot launch; individual features and notification channels are gated via env flags and per-channel validation.
 - Stored alert read routes (`GET /api/alerts`, `GET /api/alerts/:alertId`) are also mounted under `/api`; they require `WEBHOOK_API_KEY` when configured, return `403 FEATURE_DISABLED` unless `ENABLE_FIRESTORE_ALERT_STORAGE=true`, and return `503 STORAGE_UNAVAILABLE` when Firestore is enabled but unreadable.
 
-Dev / run commands
-- `pnpm install --frozen-lockfile` — install deps.
-- `pnpm start` — run production entry (`node index.js`).
-- `pnpm run start-dev` — runs `nodemon index.js` for development.
-- Healthcheck endpoint: `GET /healthcheck` (provided by `app.js`).
-
-Patterns and conventions to follow
-- Telegram command handlers receive `context` (Telegraf). Commands parse the full text with `context.message.text.split(' ')` and expect parameters at index 1. Example: `/precio BTCUSDT` where symbol = `messageSplited[1]`.
-- When interacting with external APIs, handlers return Promises (resolve on success, reject on error). `fetchSymbolPrice` is async and returns `{ price, symbol }` when successful.
-- Webhook `/api/webhook/alert` accepts either plain text (text/plain body) or JSON body with a `text` property. The handler sends messages with `parse_mode: 'MarkdownV2'` to `process.env.TELEGRAM_CHAT_ID`.
-- Use `console.log`, `console.debug`, `console.info`, `console.warn`, and `console.error` through the centralized logger. `src/lib/logging.js` emits structured one-line JSON with `timestamp`, `level`, `message`, `service`, `environment`, `pid`, and optional `attributes`, `parameters`, and `error`; sensitive keys such as tokens, secrets, passwords, API keys, authorization headers, cookies, and DSNs are redacted.
-
-External integrations
-- Binance: uses `binance` package `MainClient` and `getAvgPrice({ symbol })` (see `fetchPriceCryptoSymbol.js`). Responses are configured with `beautifyResponses: true`.
-- Telegram: `telegraf` package; commands wired in `index.js` and direct `bot.telegram.sendMessage` used for alerts and admin notifications.
-- TradingView MCP: remote MCP Streamable HTTP endpoint defaults to `https://tradingview-mcp.onrender.com/mcp`; `coin_analysis` expects complete symbols split from `EXCHANGE:SYMBOL` values such as `BINANCE:BTCUSDT` and `NASDAQ:NVDA`.
-
-Common failure modes to check (based on code)
-- Missing `BOT_TOKEN` throws on startup (explicit check in `index.js`).
-- If `ENABLE_TELEGRAM_BOT` is not `'true'` (or you're in a Render preview environment), Telegram commands/alerts are disabled, but the HTTP routes under `/api` still exist.
-- Requests may be rejected with HTTP 429 due to the global rate limiter; tune `RATE_LIMIT_WINDOW_MS`/`RATE_LIMIT_MAX` as needed (`GET /healthcheck` is exempt).
-- Webhook failures will attempt to read `error.response` when building error responses; some external errors may not match that shape.
-
-Small, concrete examples
-- Get price via Telegram: send message `/precio BTCUSDT` -> handler calls `client.getAvgPrice({ symbol: 'BTCUSDT' })` and replies with `Precio de BTCUSDT es <price>`.
-- Send a webhook alert (when bot enabled): POST to `/api/webhook/alert` with body `{ "text": "Alert body" }` or `text/plain` body `Alert body`.
-- Generate an expanded analysis alert: POST to `/api/webhook/expanded-analysis-alert` with body `{ "symbols": ["BINANCE:BTCUSDT", "NASDAQ:NVDA"], "timeframe": "1D" }`; if `symbols` is empty it falls back to `EXPANDED_ANALYSIS_ALERT_SYMBOLS`, and returns 400 if neither is present.
-- Inspect stored alerts: `GET /api/alerts?limit=50&before=2026-06-06T12:00:00.000Z&source=webhook&enriched=true` for the legacy older-than timestamp behavior, or reuse the opaque `pagination.nextBefore` cursor from a prior `/api/alerts` response to page without skipping ties, plus `GET /api/alerts/:alertId`.
-
-What an AI code change should preserve
-- Do not change how env gating works in `index.js` without adjusting tests/deploys — deployments rely on `RENDER` and `IS_PULL_REQUEST` checks.
-- Keep the `parse_mode: 'MarkdownV2'` when composing Telegram messages unless escaping/formatting is implemented project-wide.
+---
 
 ## Development Workflow for AI Agents
 
@@ -71,15 +154,16 @@ What an AI code change should preserve
 4. **Follow existing code style**: Simple functions, explicit logging, env-driven config
 5. **Add tests** for critical paths after implementation
 6. **Run focused tests during development** (see Test Execution Strategy below)
-7. **Update environment variables** section if adding new config
-8. **Update .github/copilot-instructions.md** with new patterns/context
-9. **Final full test run** before completion to ensure no regressions
-10. **Archive Antigravity session artifacts**: MUST always copy all markdown artifacts (`implementation_plan.md`, `task.md`, `walkthrough.md`) from the agent's local `<appDataDir>/brain/<conversation-id>/` directory to the repository under `docs/antigravity/<conversation-id>/` before finishing.
+7. **Update Postman collection**: Add new endpoint requests, request variants (including error/invalid input examples), and response examples to `CabrosBot.postman_collection.json` for every API change
+8. **Update environment variables** section if adding new config
+9. **Update this agents.md file** with the new context, recent PRs, and implementation details before creating a new PR
+10. **Final full test run** before completion to ensure no regressions
+11. **Archive Antigravity session artifacts**: MUST always copy all markdown artifacts (`implementation_plan.md`, `task.md`, `walkthrough.md`) from the agent's local `<appDataDir>/brain/<conversation-id>/` directory to the repository under `docs/antigravity/<conversation-id>/` before finishing.
+
 
 **Linting and Commits During Implementation**:
 - **Ignore linter issues during implementation**: Focus on feature functionality first; linter errors will be fixed in a dedicated final pass
 - **Make commits with `--no-verify`**: Use `git commit --no-verify -m "message"` to bypass pre-commit hooks during development (prevents blocking on linter/test failures mid-implementation)
-- **Do not push to remote from the agent**: Branch creation and local commits are allowed, but `git push` must be done manually by the user.
 - **Final cleanup phase**: After all user stories are complete DO NOT run linting and formatting, it will be done manually
 - **Rationale**: This approach maximizes development velocity during active feature work and prevents context-switching between implementation and linting
 
@@ -100,7 +184,7 @@ What an AI code change should preserve
 3. **Identify dependencies** (other services, external APIs, env vars)
 4. **Add feature flag** if feature is optional
 5. **Implement graceful fallback** (don't break alert delivery)
-6. **Update documentation** (README for users, copilot-instructions for developers)
+6. **Update documentation** (README for users, agents.md for developers)
 
 ### When debugging:
 
@@ -206,6 +290,43 @@ The `/api/webhook/alert` flow can produce **structured enrichment** (in addition
 
 **Graceful fallback**: if enrichment fails (timeout/API errors/malformed output), delivery proceeds with `alert.text` (fail-open).
 
+## TradingView Volume Confirmation (007-volume-breakout-alerts)
+
+The `/api/webhook/alert` flow (with `?useTradingViewData=true`) supports volume confirmation validation via the TradingView MCP server.
+
+**Core Components**:
+- `src/services/tradingview/TradingViewMcpService.js` — wrapper method `callVolumeConfirmation` and handling of volume confirmation integration during alert text analysis.
+- `src/controllers/webhooks/handlers/alert/alert.js` — receives request query and triggers the enrichment pipeline.
+
+**Behavior**:
+- Gated by `ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION=true` (default: `false`).
+- If enabled, the service issues an asynchronous query to the `volume_confirmation_analysis` tool on the TradingView MCP server.
+- The volume ratio check uses a fail-open pattern: if the call fails (e.g., timeout, network issue, bad symbol format), it logs a warning but proceeds with the rest of the enrichment data.
+- If successful, it appends a key insight to the alert:
+  - `"Volume confirms: YES ({ratio}x avg)"` (if ratio is >= 1.2)
+  - `"Volume confirms: NO ({ratio}x avg)"` (if ratio is < 1.2)
+- This volume confirmation is rendered in both Telegram and WhatsApp notification channels under the "Key Insights" section.
+
+## TradingView Volume Confirmation API
+
+The system also provides a dedicated `POST /api/webhook/volume-confirmation` endpoint for on-demand TradingView MCP volume checks without going through alert delivery.
+
+**Request pattern**:
+- Body must be a JSON object with `symbol` in full `EXCHANGE:SYMBOL` format, for example `BINANCE:BTCUSDT`.
+- `timeframe` is optional and accepts the same MCP-supported intervals and aliases already used in TradingView flows.
+- The endpoint reuses `TradingViewMcpService.callVolumeConfirmation()` and returns structured JSON including the normalized symbol, derived confirm/deny decision, numeric `volumeRatio`, and raw MCP payload as `analysis`.
+
+**Failure behavior**:
+- Invalid bodies or malformed symbols return `400 INVALID_REQUEST`.
+- TradingView MCP failures return `502 VOLUME_CONFIRMATION_FAILED`.
+- Existing alert fail-open behavior remains unchanged because this endpoint is separate from `/api/webhook/alert`.
+
+**Where to look first when extending or debugging**:
+- `src/routes/index.js` for route registration.
+- `src/controllers/webhooks/handlers/volumeConfirmation/volumeConfirmation.js` for request/response handling.
+- `src/services/tradingview/volumeConfirmationRequest.js` for request parsing and decision derivation.
+- `tests/integration/volume-confirmation-endpoint.test.js` for endpoint behavior coverage.
+
 ## TradingView Expanded Alert Reports
 
 The system provides a `POST /api/webhook/expanded-analysis-alert` endpoint that builds a Spanish technical-analysis report from TradingView MCP `coin_analysis` data and sends the generated message through all enabled notification channels.
@@ -213,6 +334,8 @@ The system provides a `POST /api/webhook/expanded-analysis-alert` endpoint that 
 **Request pattern**:
 - Body must provide `symbols` as complete TradingView identifiers (`EXCHANGE:SYMBOL`), for example `BINANCE:BTCUSDT`, `BINANCE:ETHUSDC`, or `NASDAQ:NVDA`.
 - `timeframe` is optional and must be one of the MCP-supported intervals (`5m`, `15m`, `1h`, `4h`, `1D`, `1W`, `1M`); it falls back to `TRADINGVIEW_MCP_DEFAULT_TIMEFRAME` or `1D`.
+- `analysisMode` is optional (`"standard"` or `"combined"`, defaults to `"standard"`). When set to `"combined"`, it calls the `combined_analysis` tool on the TradingView MCP server to retrieve technical indicators, Reddit sentiment analysis, RSS news headlines, and confluences.
+- `includeMultiTimeframe` (or `include_multi_timeframe`) is an optional boolean (defaults to `false`). When `true`, it calls the `multi_timeframe_analysis` tool to fetch alignment confluences across Weekly, Daily, 4h, 1h, and 15m intervals.
 - If body symbols are missing or empty, the handler falls back to `EXPANDED_ANALYSIS_ALERT_SYMBOLS` (comma-separated). If neither exists, it returns `400 NO_SYMBOLS`.
 - Analysis has an endpoint-level deadline via `EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS` (default 60s, capped at 120s) so repeated MCP failures do not hold the request open for the full per-symbol retry chain.
 
@@ -225,6 +348,7 @@ The system provides a `POST /api/webhook/expanded-analysis-alert` endpoint that 
 - Individual MCP symbol failures are returned with `status: "error"` and omitted from the report.
 - Timeout-aborted symbols are returned with `status: "timeout"`; if no symbols finish before the deadline, the endpoint returns `504 EXPANDED_ANALYSIS_ALERT_TIMEOUT` and does not send notifications.
 - If all requested symbols fail, the endpoint returns `502 ALL_SYMBOLS_FAILED` and does not send notifications.
+- If `includeMultiTimeframe` or `"analysisMode": "combined"` queries fail or timeout for a specific symbol, the handler uses a fail-open approach, logging the warning but proceeding with formatting the base technical report to avoid dropping the alert.
 - The endpoint does not normalize crypto pairs; callers must pass full symbols such as `BINANCE:BTCUSDT`.
 
 ## TradingView Market Scanner Alerts
@@ -279,6 +403,22 @@ The system provides asynchronous job endpoints to support executing both `expand
 - `src/services/jobs/JobService.js` for background processing and state transitions.
 - `src/controllers/webhooks/handlers/jobs/jobs.js` for parameters parsing.
 - Tests in `tests/unit/job-service.test.js`, `tests/unit/jobs-controller.test.js`, and `tests/integration/jobs-endpoint.test.js`.
+
+## Service Status and Capabilities API
+
+The system provides status and capability querying endpoints to verify service configuration and dependency readiness.
+
+**Endpoints**:
+- `GET /api/status` — Checks feature gates, enabled notification channels, and dependency states (e.g., testing Firestore connection and verifying TradingView MCP connection).
+- `GET /api/capabilities` — Alias of `/api/status`, returning identical JSON data.
+
+**Core Components**:
+- `src/controllers/status.js` — Compiles the capabilities payload with feature flags, notification channels, and active integrations.
+- `src/routes/index.js` — Registers the routes behind the `validateApiKey` middleware.
+
+**Failure and Edge Case Behavior**:
+- The API gates checks behind the `validateApiKey` middleware.
+- Dependency checking (like querying the TradingView MCP or testing Firestore credentials) is done safely and returns detailed state status (`ready`, `error`, `unconfigured`) in a clean JSON format.
 
 ## Multi-Channel Notification Architecture (002-whatsapp-alerts)
 
@@ -457,9 +597,21 @@ Every successful `POST /api/webhook/alert` request is persisted as a document in
 - If `firebase-admin` initialization fails (bad credentials, wrong project), `db` is set to `null` and a warning is logged; subsequent calls are no-ops
 
 **Read API**:
-- `GET /api/alerts` returns stored alerts ordered by `receivedAt` descending with `limit`, `before`, `source`, and `enriched` query support
-- `GET /api/alerts/:alertId` returns a single formatted alert document by Firestore document ID
-- Read filtering for `source` and `enriched` is applied in memory after `receivedAt`-ordered batches to avoid introducing new composite Firestore index requirements
+- `GET /api/alerts` returns stored alerts ordered by `receivedAt` descending with `limit`, `before`, `source`, and `enriched` query support.
+- `GET /api/alerts/:alertId` returns a single formatted alert document by Firestore document ID.
+- `listAlerts()` and `getAlertById()` in `src/services/storage/AlertStorageService.js` format Firestore documents into API-safe JSON with the following fields:
+  - `id`
+  - `receivedAt`
+  - `text`
+  - `enriched`
+  - `enrichmentData`
+  - `tokenUsage`
+  - `deliveryResults`
+  - `source`
+  - `useTradingViewData`
+- Read filtering for `source` and `enriched` is applied in memory after `receivedAt`-ordered batches to avoid introducing new composite Firestore index requirements.
+- Read endpoints must map Firestore initialization/read failures to `503 STORAGE_UNAVAILABLE` instead of a generic `500`.
+- When extending the alerts read API, preserve `receivedAt` as the primary sort key but encode `nextBefore` with a deterministic tie-breaker (document ID) so paginated reads do not skip same-timestamp alerts, and preserve API-key protection on both list and detail routes.
 
 **Alert Flow Integration** (`src/controllers/webhooks/handlers/alert/alert.js`):
 ```
@@ -499,6 +651,7 @@ The system uses two complementary terms with specific meanings:
 | 003 | News analysis + Grounding | Enriched news alerts | ENABLE_NEWS_MONITOR |
 | 004 | Webhook alert output enrichment | Structured sentiment/insights/levels for `/api/webhook/alert` | ENABLE_GEMINI_GROUNDING |
 | 005 | Runtime error monitoring | Capture unexpected runtime errors (side-effect only) | ENABLE_SENTRY |
+| 007 | TradingView Volume Confirmation | Volume confirmation check for Webhook alerts | ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION |
 
 ### Usage Guidelines
 
@@ -523,47 +676,7 @@ See `/specs/TERMINOLOGY_GUIDE.md` for extended discussion and examples.
 - 004-enrich-alert-output: Enriched `/api/webhook/alert` output with structured fields (sentiment, insights, technical levels) using the existing grounding pipeline; Telegram/WhatsApp formatters render structured enrichment when present.
 - 005-sentry-runtime-errors (PR #16): Added runtime error monitoring via `SentryService` + early initialization in `instrument.js`, plus Express error handler wiring; monitoring is gated by `ENABLE_SENTRY` + `SENTRY_DSN`.
 - 006-firestore-alert-storage: Added Cloud Firestore persistence for every `/api/webhook/alert` payload; `firebase-admin` singleton initialized from `FIREBASE_SERVICE_ACCOUNT_JSON` or `GOOGLE_APPLICATION_CREDENTIALS`; fire-and-forget after `res.json()` so storage never blocks delivery (fail-open).
-
-## Pull Requests
-
-This are some notable PRs that were merged outside of the spec-kit process. There were created manually or created by the "Jules" agent:
-
-- [#25](https://github.com/francovp/cabros-bot/pull/25) (open) docs: update agents.md for latest features
-  - Docs-only: standardizes/updates `agents.md` to match the current feature set (001–005) and runtime behavior.
-  - No runtime behavior changes.
-
-- [#23](https://github.com/francovp/cabros-bot/pull/23) (merged) feat: Add Global API Rate Limiting
-  - Implements a custom global in-memory rate limiter middleware, applied in `app.js` *after* `/healthcheck` (so health probes aren't rate-limited).
-  - Configurable via env: `RATE_LIMIT_WINDOW_MS`, `RATE_LIMIT_MAX`.
-  - Where to look: `src/lib/rateLimiter.js`, `app.js`, and tests under `tests/unit/`.
-
-- [#21](https://github.com/francovp/cabros-bot/pull/21) (merged) Implement Brave Search API for Grounding
-  - Adds Brave Search as a fallback provider for grounding when Google Search fails/returns empty results (and supports force-Brave mode).
-  - Adds env vars: `BRAVE_SEARCH_API_KEY`, `BRAVE_SEARCH_ENDPOINT`, `FORCE_BRAVE_SEARCH`.
-  - Where to look: `src/services/grounding/genaiClient.js`, `src/services/grounding/config.js`; unit tests in `tests/unit/genaiClient.test.js`.
-
-- [#20](https://github.com/francovp/cabros-bot/pull/20) (merged) feat: Add OpenRouter fallback support
-  - Introduces an LLM provider selector for `llmCallv2()` so grounding/enrichment can be routed to Gemini, Azure AI Inference, or OpenRouter.
-  - Adds env vars: `MODEL_PROVIDER`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL` (and tightens Azure model config via `AZURE_LLM_MODEL`).
-  - Where to look: `src/services/grounding/genaiClient.js`, `src/services/grounding/config.js`, `src/services/inference/openRouterClient.js`.
-
-- [#19](https://github.com/francovp/cabros-bot/pull/19) (merged) feat: Add token pricing calculation to messages
-  - Adds token usage + cost estimation plumbing for LLM calls and surfaces a “Tokens usage” line in Telegram/WhatsApp alert formatting.
-  - Where to look: `src/lib/tokenUsage.js`, `src/services/grounding/genaiClient.js`, `src/services/notification/formatters/MarkdownV2Formatter.js`, `src/services/notification/formatters/WhatsAppMarkdownFormatter.js`.
-
-- [#18](https://github.com/francovp/cabros-bot/pull/18) (merged) refactor: Update AzureAIClient to use `@azure-rest/ai-inference`
-  - Migrates Azure AI Inference integration to `@azure-rest/ai-inference` while keeping the `genaiClient` abstraction stable for alert/news flows.
-  - Aligns tests around the `llmCallv2({ systemPrompt, userPrompt })` interface.
-  - Where to look: `src/services/inference/azureAiClient.js`, `src/services/grounding/genaiClient.js`.
-
-- [#17](https://github.com/francovp/cabros-bot/pull/17) (merged) feat(logging): add configurable log level support
-  - Adds centralized console filtering via `LOG_LEVEL` and ensures logging is initialized early (via `instrument.js`).
-  - Where to look: `src/lib/logging.js`, `instrument.js`, `tests/setup.js`.
-
-- [#16](https://github.com/francovp/cabros-bot/pull/16) (merged) feat(sentry): implement runtime error monitoring for node.js service
-  - Adds non-intrusive runtime error monitoring with `@sentry/node`, wrapped by `src/services/monitoring/SentryService.js`.
-  - Gated via env: `ENABLE_SENTRY` + `SENTRY_DSN` (plus optional environment/release overrides).
-  - Where to look: `src/services/monitoring/SentryService.js`, `instrument.js`, and integration tests in `tests/integration/sentry-runtime-errors.test.js`.
+- 007-volume-breakout-alerts: Added TradingView volume confirmation check to the webhook alert enrichment flow (POST /api/webhook/alert?useTradingViewData=true) using the `volume_confirmation_analysis` tool from the TradingView MCP server. Configured via `ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION`.
 
 ## Architectural Patterns & Extension Guide
 
@@ -706,7 +819,7 @@ ENABLE_FIRESTORE_ALERT_STORAGE (006)
 1. Create `ENABLE_FEATURE_NAME=false` env var
 2. Validate at startup in `index.js` initialization
 3. Gate feature behind conditional: `if (process.env.ENABLE_FEATURE_NAME === 'true')`
-4. Update `.github/copilot-instructions.md` with new flag
+4. Update `agents.md` with new feature guidelines and flags
 
 ### Error Handling Pattern (All features)
 
@@ -820,6 +933,7 @@ describe('news-monitor', () => {
 - Add env vars and validation
 - Create integration tests
 - Document in README
+- Add request + response examples to `CabrosBot.postman_collection.json` (include valid inputs, error/edge-case variants, and structured response examples)
 
 ### Add new external API client (extend services):
 - Create service in `src/services/`

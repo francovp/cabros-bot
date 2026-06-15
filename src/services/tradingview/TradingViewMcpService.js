@@ -76,14 +76,22 @@ class TradingViewMcpService {
 
 		let volumeAnalysis = null;
 		if (process.env.ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION === 'true') {
+			const volumeTimeoutMs = 5000;
+			const controller = new AbortController();
+			const timeoutId = setTimeout(() => {
+				controller.abort(new Error(`TradingView MCP volume confirmation timeout after ${volumeTimeoutMs}ms`));
+			}, volumeTimeoutMs);
+
 			const vResult = await sendWithRetry(async () => {
 				try {
-					const volConfirm = await this.callVolumeConfirmation({ symbol, exchange, timeframe });
+					const volConfirm = await this.callVolumeConfirmation({ symbol, exchange, timeframe, signal: controller.signal });
 					return { success: true, channel: 'tradingview-mcp', volConfirm };
 				} catch (error) {
 					return { success: false, channel: 'tradingview-mcp', error: error.message };
 				}
-			}, cfg.maxRetries, this.logger);
+			}, 1, this.logger);
+
+			clearTimeout(timeoutId);
 
 			if (vResult.success) {
 				volumeAnalysis = vResult.volConfirm;
@@ -114,11 +122,16 @@ class TradingViewMcpService {
 		return normalizedResult;
 	}
 
-	async analyzeSymbolIdentifier({ raw, exchange, symbol, timeframe, signal }) {
+	async analyzeSymbolIdentifier({ raw, exchange, symbol, timeframe, analysisMode, signal }) {
 		const cfg = this.getConfig();
 		const result = await sendWithRetry(async () => {
 			try {
-				const analysis = await this.callCoinAnalysis({ symbol, exchange, timeframe, signal });
+				let analysis;
+				if (analysisMode === 'combined') {
+					analysis = await this.callCombinedAnalysis({ symbol, exchange, timeframe, signal });
+				} else {
+					analysis = await this.callCoinAnalysis({ symbol, exchange, timeframe, signal });
+				}
 				return { success: true, channel: 'tradingview-mcp', analysis };
 			} catch (error) {
 				return { success: false, channel: 'tradingview-mcp', error: error.message };
@@ -135,6 +148,25 @@ class TradingViewMcpService {
 			requested_exchange: exchange,
 			requested_timeframe: timeframe,
 		};
+	}
+
+	async callCombinedAnalysis({ symbol, exchange, timeframe, signal }) {
+		const rpcResult = await this._callTool('combined_analysis', {
+			symbol,
+			exchange,
+			timeframe,
+		}, { signal });
+		const normalizedResult = this._unwrapSchemaResult(rpcResult);
+
+		if (normalizedResult && normalizedResult.error) {
+			throw new Error(normalizedResult.error);
+		}
+
+		if (!normalizedResult || typeof normalizedResult !== 'object' || Array.isArray(normalizedResult)) {
+			throw new Error('TradingView MCP combined_analysis returned invalid payload');
+		}
+
+		return normalizedResult;
 	}
 
 	async callMultiTimeframeAnalysis({ symbol, exchange, signal }) {
@@ -491,9 +523,11 @@ class TradingViewMcpService {
 
 		if (volumeAnalysis && volumeAnalysis.volume_analysis) {
 			const volData = volumeAnalysis.volume_analysis;
-			const ratio = volData.volume_ratio !== undefined ? volData.volume_ratio : 1;
-			const confirms = ratio >= 1.2 ? 'YES' : 'NO';
-			insights.push(`Volume confirms: ${confirms} (${this._formatRatio(ratio)} avg)`);
+			const ratio = volData.volume_ratio;
+			if (typeof ratio === 'number' && Number.isFinite(ratio)) {
+				const confirms = ratio >= 1.2 ? 'YES' : 'NO';
+				insights.push(`Volume confirms: ${confirms} (${this._formatRatio(ratio)} avg)`);
+			}
 		}
 
 		return {

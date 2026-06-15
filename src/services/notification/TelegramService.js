@@ -97,15 +97,26 @@ class TelegramService extends NotificationChannel {
 				console.debug('Formatted text for Telegram:', formattedText);
 			}
 
-			this.logger?.debug?.(`Sending to Telegram chat ${this.chatId}`);
+			const chatId = alert.telegramChatId || this.chatId;
+			this.logger?.debug?.(`Sending to Telegram chat ${chatId}`);
 			const messageParts = splitTelegramMessage(formattedText, this.maxMessageLength);
 
-			// Send to Telegram
+			// Send to Telegram with MarkdownV2 first, fallback to plain text on parse errors
 			const messageIds = [];
 			for (const messagePart of messageParts) {
-				const result = await this.bot.telegram.sendMessage(this.chatId, messagePart, {
+				const result = await this.bot.telegram.sendMessage(chatId, messagePart, {
 					parse_mode: 'MarkdownV2',
 					disable_web_page_preview: !!alert.enriched,
+				}).catch((err) => {
+					const errMsg = (err && (err.description || err.message)) || '';
+					// If MarkdownV2 parse fails (400 can't parse entities), retry as plain text
+					if (errMsg.includes("can't parse entities")) {
+						this.logger?.warn?.(`Telegram MarkdownV2 parse failed, retrying as plain text: ${errMsg}`);
+						return this.bot.telegram.sendMessage(this.chatId, messagePart, {
+							disable_web_page_preview: !!alert.enriched,
+						});
+					}
+					throw err;
 				});
 				messageIds.push(String(result.message_id));
 			}

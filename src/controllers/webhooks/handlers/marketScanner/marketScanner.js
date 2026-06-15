@@ -24,6 +24,12 @@ function resolveBot(botOrGetter) {
 	return botOrGetter || null;
 }
 
+function resolveDryRun(req) {
+	const queryFlag = req.query && (req.query.dryRun === 'true' || req.query.dryRun === true);
+	const bodyFlag = req.body && typeof req.body === 'object' && (req.body.dryRun === true || req.body.dryRun === 'true');
+	return queryFlag || bodyFlag;
+}
+
 function postMarketScannerAlert(botOrGetter) {
 	return async (req, res) => {
 		const requestId = uuidv4();
@@ -74,6 +80,22 @@ function postMarketScannerAlert(botOrGetter) {
 				timeframe: parsed.timeframe,
 				now: new Date(),
 			});
+
+			const dryRun = resolveDryRun(req);
+			if (dryRun) {
+				console.debug('[MarketScanner] Dry-run mode: skipping delivery');
+				return res.status(200).json({
+					success: true,
+					dryRun: true,
+					payload: { alertText },
+					scanResults: compactScanResults(scanResults),
+					summary: buildSummary(scanResults, []),
+					timedOut,
+					timeoutMs,
+					requestId,
+					totalDurationMs: Date.now() - startTime,
+				});
+			}
 
 			let notificationManager = getNotificationManager();
 			if (!notificationManager) {
