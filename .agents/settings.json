@@ -1,5 +1,5 @@
 {
   "env": {
-    "RENDER_SERVICE_NAME": "cabros-crypto-bot-telegram"
+    "RENDER_SERVICE_NAME": "cabros-bot"
   }
 }
