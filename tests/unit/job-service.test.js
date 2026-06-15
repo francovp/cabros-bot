@@ -1,7 +1,11 @@
 'use strict';
 
+const admin = require('firebase-admin');
 const { JobService } = require('../../src/services/jobs/JobService');
 const { tradingViewMcpService } = require('../../src/services/tradingview/TradingViewMcpService');
+const JobRepository = require('../../src/services/jobs/JobRepository');
+
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
 	tradingViewMcpService: {
@@ -32,6 +36,11 @@ describe('JobService Unit Tests', () => {
 			...originalEnv,
 			ENABLE_MARKET_SCANNER: 'true',
 		};
+		delete process.env.ENABLE_FIRESTORE_JOB_STORAGE;
+		delete process.env.ENABLE_FIRESTORE_ALERT_STORAGE;
+		admin.__resetApps();
+		admin.__resetCollectionState();
+		JobRepository._resetForTesting();
 		jest.clearAllMocks();
 		jobService = new JobService();
 	});
@@ -41,37 +50,32 @@ describe('JobService Unit Tests', () => {
 	});
 
 	describe('createJob', () => {
-		it('throws UNSUPPORTED_TYPE for invalid job type', () => {
-			expect(() => {
-				jobService.createJob('invalid-type', {});
-			}).toThrow('Unsupported job type: invalid-type');
+		it('throws UNSUPPORTED_TYPE for invalid job type', async () => {
+			await expect(jobService.createJob('invalid-type', {}))
+				.rejects.toThrow('Unsupported job type: invalid-type');
 		});
 
-		it('throws FEATURE_DISABLED if market-scanner is requested but disabled', () => {
+		it('throws FEATURE_DISABLED if market-scanner is requested but disabled', async () => {
 			process.env.ENABLE_MARKET_SCANNER = 'false';
-			expect(() => {
-				jobService.createJob('market-scanner', {});
-			}).toThrow('Market scanner is not enabled');
+			await expect(jobService.createJob('market-scanner', {}))
+				.rejects.toThrow('Market scanner is not enabled');
 		});
 
-		it('throws validation error if request payload is invalid', () => {
-			expect(() => {
-				jobService.createJob('expanded-analysis', { symbols: 'not-an-array' });
-			}).toThrow();
+		it('throws validation error if request payload is invalid', async () => {
+			await expect(jobService.createJob('expanded-analysis', { symbols: 'not-an-array' }))
+				.rejects.toThrow();
 		});
 
-		it('throws validation error if timeoutMs is not a positive integer', () => {
-			expect(() => {
-				jobService.createJob('expanded-analysis', { symbols: ['BINANCE:BTCUSDT'], timeoutMs: 'invalid' });
-			}).toThrow('timeoutMs must be a positive integer');
+		it('throws validation error if timeoutMs is not a positive integer', async () => {
+			await expect(jobService.createJob('expanded-analysis', { symbols: ['BINANCE:BTCUSDT'], timeoutMs: 'invalid' }))
+				.rejects.toThrow('timeoutMs must be a positive integer');
 
-			expect(() => {
-				jobService.createJob('expanded-analysis', { symbols: ['BINANCE:BTCUSDT'], timeoutMs: -100 });
-			}).toThrow('timeoutMs must be a positive integer');
+			await expect(jobService.createJob('expanded-analysis', { symbols: ['BINANCE:BTCUSDT'], timeoutMs: -100 }))
+				.rejects.toThrow('timeoutMs must be a positive integer');
 		});
 
-		it('creates a job and returns metadata on success', () => {
-			const result = jobService.createJob('expanded-analysis', {
+		it('creates a job and returns metadata on success', async () => {
+			const result = await jobService.createJob('expanded-analysis', {
 				symbols: ['BINANCE:BTCUSDT'],
 			});
 
@@ -80,20 +84,18 @@ describe('JobService Unit Tests', () => {
 			expect(result.status).toBe('processing');
 		});
 
-		it('correctly validates and parses timeoutMs string format like 1e3', () => {
-			const metadata = jobService.createJob('expanded-analysis', {
+		it('correctly validates and parses timeoutMs string format like 1e3', async () => {
+			const metadata = await jobService.createJob('expanded-analysis', {
 				symbols: ['BINANCE:BTCUSDT'],
 				timeoutMs: '1e3',
 			});
 
-			const rawJob = jobService.jobs.get(metadata.jobId);
+			const rawJob = await jobService.repository.get(metadata.jobId);
 			expect(rawJob.timeoutMs).toBe(1000);
 		});
 	});
 
 	describe('Background execution and retrieval', () => {
-		const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
 		it('completes expanded-analysis job successfully', async () => {
 			tradingViewMcpService.analyzeSymbolIdentifier.mockResolvedValueOnce({
 				symbol: 'BINANCE:BTCUSDT',
@@ -101,18 +103,18 @@ describe('JobService Unit Tests', () => {
 				rsi: { value: 45 },
 			});
 
-			const metadata = jobService.createJob('expanded-analysis', {
+			const metadata = await jobService.createJob('expanded-analysis', {
 				symbols: ['BINANCE:BTCUSDT'],
 			});
 
 			const jobId = metadata.jobId;
 
 			// Poll until completed
-			let job = jobService.getJob(jobId);
+			let job = await jobService.getJob(jobId);
 			let attempts = 0;
 			while (job.status !== 'completed' && attempts < 10) {
 				await delay(20);
-				job = jobService.getJob(jobId);
+				job = await jobService.getJob(jobId);
 				attempts++;
 			}
 
@@ -137,18 +139,18 @@ describe('JobService Unit Tests', () => {
 		it('fails expanded-analysis job when all symbols fail', async () => {
 			tradingViewMcpService.analyzeSymbolIdentifier.mockRejectedValueOnce(new Error('MCP Failed'));
 
-			const metadata = jobService.createJob('expanded-analysis', {
+			const metadata = await jobService.createJob('expanded-analysis', {
 				symbols: ['BINANCE:BTCUSDT'],
 			});
 
 			const jobId = metadata.jobId;
 
 			// Poll until failed
-			let job = jobService.getJob(jobId);
+			let job = await jobService.getJob(jobId);
 			let attempts = 0;
 			while (job.status !== 'failed' && attempts < 10) {
 				await delay(20);
-				job = jobService.getJob(jobId);
+				job = await jobService.getJob(jobId);
 				attempts++;
 			}
 
@@ -167,18 +169,18 @@ describe('JobService Unit Tests', () => {
 				{ symbol: 'BINANCE:ETHUSDT', changePercent: 5.0, indicators: { close: 3200, RSI: 55 } },
 			]);
 
-			const metadata = jobService.createJob('market-scanner', {
+			const metadata = await jobService.createJob('market-scanner', {
 				scans: ['top_gainers'],
 			});
 
 			const jobId = metadata.jobId;
 
 			// Poll until completed
-			let job = jobService.getJob(jobId);
+			let job = await jobService.getJob(jobId);
 			let attempts = 0;
 			while (job.status !== 'completed' && attempts < 10) {
 				await delay(20);
-				job = jobService.getJob(jobId);
+				job = await jobService.getJob(jobId);
 				attempts++;
 			}
 
@@ -195,50 +197,88 @@ describe('JobService Unit Tests', () => {
 	});
 
 	describe('Job eviction / cleanup', () => {
-		it('evicts jobs older than 1 hour if status is completed or failed', () => {
-			const metadata = jobService.createJob('expanded-analysis', {
-				symbols: ['BINANCE:BTCUSDT'],
-			});
-
-			const jobId = metadata.jobId;
-
-			// Access internal jobs Map to manipulate the createdAt timestamp
-			const rawJob = jobService.jobs.get(jobId);
-			expect(rawJob).toBeDefined();
-
-			// Set createdAt to 2 hours ago
-			rawJob.createdAt = new Date(Date.now() - 7200000).toISOString();
-			rawJob.status = 'completed';
+		it('evicts jobs older than 1 hour if status is completed or failed', async () => {
+			const jobId = 'expired-completed-job';
+			const rawJob = {
+				jobId,
+				type: 'expanded-analysis',
+				status: 'completed',
+				progress: { total: 1, current: 1, status: 'Completed analysis' },
+				fullResults: [],
+				fullScanResults: [],
+				createdAt: new Date(Date.now() - 7200000).toISOString(),
+				updatedAt: new Date(Date.now() - 7200000).toISOString(),
+				totalDurationMs: 1000,
+			};
+			await jobService.repository.save(rawJob);
 
 			// Querying job should clean it up and return null
-			const job = jobService.getJob(jobId);
+			const job = await jobService.getJob(jobId);
 			expect(job).toBeNull();
-			expect(jobService.jobs.has(jobId)).toBe(false);
+			expect(jobService.repository.has(jobId)).toBe(false);
 		});
 
-		it('does not evict jobs older than 1 hour if they are not completed or failed', () => {
-			const metadata = jobService.createJob('expanded-analysis', {
-				symbols: ['BINANCE:BTCUSDT'],
-			});
-
-			const jobId = metadata.jobId;
-			const rawJob = jobService.jobs.get(jobId);
-			expect(rawJob).toBeDefined();
-
-			// Set createdAt to 2 hours ago
-			rawJob.createdAt = new Date(Date.now() - 7200000).toISOString();
-			rawJob.status = 'processing';
+		it('does not evict jobs older than 1 hour if they are not completed or failed', async () => {
+			const jobId = 'old-processing-job';
+			const rawJob = {
+				jobId,
+				type: 'expanded-analysis',
+				status: 'processing',
+				progress: { total: 1, current: 0, status: 'processing' },
+				fullResults: [],
+				fullScanResults: [],
+				createdAt: new Date(Date.now() - 7200000).toISOString(),
+				updatedAt: new Date(Date.now() - 7200000).toISOString(),
+				totalDurationMs: 0,
+			};
+			await jobService.repository.save(rawJob);
 
 			// Querying job should NOT clean it up
-			const job = jobService.getJob(jobId);
+			const job = await jobService.getJob(jobId);
 			expect(job).not.toBeNull();
-			expect(jobService.jobs.has(jobId)).toBe(true);
+			expect(jobService.repository.has(jobId)).toBe(true);
 
 			// Now set status to completed, querying it should clean it up
 			rawJob.status = 'completed';
-			const jobAfterComplete = jobService.getJob(jobId);
+			await jobService.repository.save(rawJob);
+			const jobAfterComplete = await jobService.getJob(jobId);
 			expect(jobAfterComplete).toBeNull();
-			expect(jobService.jobs.has(jobId)).toBe(false);
+			expect(jobService.repository.has(jobId)).toBe(false);
+		});
+	});
+
+	describe('Durable persistence', () => {
+		it('reads a completed job from Firestore after a service restart', async () => {
+			process.env.ENABLE_FIRESTORE_JOB_STORAGE = 'true';
+			tradingViewMcpService.analyzeSymbolIdentifier.mockResolvedValueOnce({
+				symbol: 'BINANCE:BTCUSDT',
+				price_data: { close: 65000, change_percent: 1.5 },
+				rsi: { value: 45 },
+			});
+
+			const metadata = await jobService.createJob('expanded-analysis', {
+				symbols: ['BINANCE:BTCUSDT'],
+			});
+
+			let job = await jobService.getJob(metadata.jobId);
+			let attempts = 0;
+			while (job.status !== 'completed' && attempts < 10) {
+				await delay(20);
+				job = await jobService.getJob(metadata.jobId);
+				attempts++;
+			}
+
+			JobRepository._resetForTesting();
+			const restartedService = new JobService();
+			const restored = await restartedService.getJob(metadata.jobId);
+
+			expect(restored).toMatchObject({
+				jobId: metadata.jobId,
+				type: 'expanded-analysis',
+				status: 'completed',
+			});
+			expect(restored.alertText).toContain('BTCUSDT');
+			expect(restored.results).toHaveLength(1);
 		});
 	});
 });

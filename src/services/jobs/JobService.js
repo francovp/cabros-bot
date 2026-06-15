@@ -15,26 +15,28 @@ const {
 	initializeNotificationServices,
 } = require('../../controllers/webhooks/handlers/alert/alert');
 const sentryService = require('../monitoring/SentryService');
+const { jobRepository } = require('./JobRepository');
 
 const EXPIRATION_MS = 3600000; // 1 hour
 const DEFAULT_JOB_TIMEOUT_MS = 300000; // 5 minutes
 
 class JobService {
-	constructor() {
-		this.jobs = new Map();
+	constructor(repository = jobRepository) {
+		this.repository = repository;
+		this.jobs = repository;
 	}
 
 	/**
 	 * Cleans up jobs older than 1 hour if they are completed or failed.
 	 */
-	_cleanExpiredJobs() {
+	async _cleanExpiredJobs() {
 		const now = Date.now();
-		for (const [id, job] of this.jobs.entries()) {
+		for (const [id, job] of this.repository.entries()) {
 			if (
 				now - new Date(job.createdAt).getTime() > EXPIRATION_MS &&
 				(job.status === 'completed' || job.status === 'failed')
 			) {
-				this.jobs.delete(id);
+				await this.repository.delete(id);
 			}
 		}
 	}
@@ -44,10 +46,18 @@ class JobService {
 	 * @param {string} jobId
 	 * @returns {Object|null}
 	 */
-	getJob(jobId) {
-		this._cleanExpiredJobs();
-		const job = this.jobs.get(jobId);
+	async getJob(jobId) {
+		await this._cleanExpiredJobs();
+		const job = await this.repository.get(jobId);
 		if (!job) {
+			return null;
+		}
+
+		if (
+			Date.now() - new Date(job.createdAt).getTime() > EXPIRATION_MS &&
+			(job.status === 'completed' || job.status === 'failed')
+		) {
+			await this.repository.delete(jobId);
 			return null;
 		}
 
@@ -103,8 +113,8 @@ class JobService {
 	 * @param {Function|Object} botOrGetter - Telegraf bot instance or getter
 	 * @returns {Object} The created job metadata
 	 */
-	createJob(type, payload, botOrGetter) {
-		this._cleanExpiredJobs();
+	async createJob(type, payload, botOrGetter) {
+		await this._cleanExpiredJobs();
 
 		// Synchronous validation based on job type
 		let parsed;
@@ -147,7 +157,7 @@ class JobService {
 		const job = {
 			jobId,
 			type,
-			status: 'pending',
+			status: 'processing',
 			progress: {
 				total: type === 'expanded-analysis' ? parsed.symbols.length : parsed.scans.length,
 				current: 0,
@@ -166,7 +176,7 @@ class JobService {
 			timeoutMs: validatedTimeoutMs,
 		};
 
-		this.jobs.set(jobId, job);
+		await this.repository.save(job);
 
 		// Execute background job (fire-and-forget)
 		this._runBackgroundJob(jobId, parsed, payload, botOrGetter).catch((error) => {
@@ -186,11 +196,12 @@ class JobService {
 	 */
 	async _runBackgroundJob(jobId, parsed, payload, botOrGetter) {
 		const startTime = Date.now();
-		const job = this.jobs.get(jobId);
+		const job = await this.repository.get(jobId);
 		if (!job) return;
 
 		job.status = 'processing';
 		job.updatedAt = new Date().toISOString();
+		await this._persistJob(job);
 
 		// Setup Timeout AbortController
 		const timeoutMs = job.timeoutMs || DEFAULT_JOB_TIMEOUT_MS;
@@ -226,6 +237,7 @@ class JobService {
 			clearTimeout(timeoutId);
 			job.totalDurationMs = Date.now() - startTime;
 			job.updatedAt = new Date().toISOString();
+			await this._persistJob(job);
 		}
 	}
 
@@ -237,6 +249,7 @@ class JobService {
 			job.progress.current = index;
 			job.progress.status = `Analyzing symbol ${input.raw} (${index + 1}/${symbols.length})`;
 			job.updatedAt = new Date().toISOString();
+			await this._persistJob(job);
 
 			if (signal && signal.aborted) {
 				this._appendTimeoutResults(job.fullResults, symbols.slice(index), this._getAbortMessage(signal));
@@ -304,6 +317,7 @@ class JobService {
 		job.progress.current = symbols.length;
 		job.progress.status = 'Completed analysis';
 		job.updatedAt = new Date().toISOString();
+		await this._persistJob(job);
 
 		const timedOut = job.fullResults.some((r) => r.status === 'timeout');
 		const analyzedItems = job.fullResults
@@ -320,6 +334,7 @@ class JobService {
 				? 'Expanded analysis job timed out.'
 				: 'TradingView MCP failed for all requested symbols.';
 			job.code = timedOut ? 'EXPANDED_ANALYSIS_ALERT_TIMEOUT' : 'ALL_SYMBOLS_FAILED';
+			await this._persistJob(job);
 			return;
 		}
 
@@ -335,6 +350,7 @@ class JobService {
 		job.deliveryResults = deliveryResults;
 		job.summary = this._buildExpandedSummary(job.fullResults, deliveryResults);
 		job.status = 'completed';
+		await this._persistJob(job);
 	}
 
 	async _executeMarketScanner(job, parsed, signal, botOrGetter) {
@@ -345,6 +361,7 @@ class JobService {
 			job.progress.current = index;
 			job.progress.status = `Running scan ${scanType} (${index + 1}/${scans.length})`;
 			job.updatedAt = new Date().toISOString();
+			await this._persistJob(job);
 
 			if (signal && signal.aborted) {
 				this._appendScannerTimeoutResults(job.fullScanResults, scans.slice(index), this._getAbortMessage(signal));
@@ -392,6 +409,7 @@ class JobService {
 		job.progress.current = scans.length;
 		job.progress.status = 'Completed scans';
 		job.updatedAt = new Date().toISOString();
+		await this._persistJob(job);
 
 		const timedOut = job.fullScanResults.some((r) => r.status === 'timeout');
 		const successfulScans = job.fullScanResults.filter((r) => r.status === 'success');
@@ -402,6 +420,7 @@ class JobService {
 				? 'Market scanner job timed out.'
 				: 'TradingView MCP failed for all requested scans.';
 			job.code = timedOut ? 'MARKET_SCANNER_TIMEOUT' : 'ALL_SCANS_FAILED';
+			await this._persistJob(job);
 			return;
 		}
 
@@ -421,6 +440,11 @@ class JobService {
 		job.deliveryResults = deliveryResults;
 		job.summary = this._buildScannerSummary(job.fullScanResults, deliveryResults);
 		job.status = 'completed';
+		await this._persistJob(job);
+	}
+
+	async _persistJob(job) {
+		await this.repository.save(job);
 	}
 
 	_buildScanArgs(parsed, scanType) {

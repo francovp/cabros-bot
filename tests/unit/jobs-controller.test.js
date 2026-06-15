@@ -22,7 +22,7 @@ describe('Jobs Controller Unit Tests', () => {
 	});
 
 	describe('postCreateJob', () => {
-		it('returns 400 if type is missing', () => {
+		it('returns 400 if type is missing', async () => {
 			const req = httpMocks.createRequest({
 				method: 'POST',
 				url: '/api/jobs/tradingview-analysis',
@@ -30,7 +30,7 @@ describe('Jobs Controller Unit Tests', () => {
 			});
 			const res = httpMocks.createResponse();
 
-			postCreateJob(null)(req, res);
+			await postCreateJob(null)(req, res);
 
 			expect(res.statusCode).toBe(400);
 			const data = res._getJSONData();
@@ -38,7 +38,7 @@ describe('Jobs Controller Unit Tests', () => {
 			expect(data.code).toBe('INVALID_REQUEST');
 		});
 
-		it('returns 201 and job metadata on successful creation', () => {
+		it('returns 201 and job metadata on successful creation', async () => {
 			const req = httpMocks.createRequest({
 				method: 'POST',
 				url: '/api/jobs/tradingview-analysis',
@@ -54,14 +54,14 @@ describe('Jobs Controller Unit Tests', () => {
 			};
 			jobService.createJob.mockReturnValueOnce(mockResult);
 
-			postCreateJob(null)(req, res);
+			await postCreateJob(null)(req, res);
 
 			expect(res.statusCode).toBe(201);
 			expect(res._getJSONData()).toEqual(mockResult);
 			expect(jobService.createJob).toHaveBeenCalledWith('expanded-analysis', req.body, null);
 		});
 
-		it('returns 404/400 if jobService.createJob throws a validation or feature error', () => {
+		it('returns 404/400 if jobService.createJob throws a validation or feature error', async () => {
 			const req = httpMocks.createRequest({
 				method: 'POST',
 				url: '/api/jobs/tradingview-analysis',
@@ -76,7 +76,7 @@ describe('Jobs Controller Unit Tests', () => {
 				throw error;
 			});
 
-			postCreateJob(null)(req, res);
+			await postCreateJob(null)(req, res);
 
 			expect(res.statusCode).toBe(404);
 			const data = res._getJSONData();
@@ -84,7 +84,7 @@ describe('Jobs Controller Unit Tests', () => {
 			expect(data.code).toBe('FEATURE_DISABLED');
 		});
 
-		it('returns 500 and records error to Sentry on unexpected throw', () => {
+		it('returns 500 and records error to Sentry on unexpected throw', async () => {
 			const req = httpMocks.createRequest({
 				method: 'POST',
 				url: '/api/jobs/tradingview-analysis',
@@ -96,7 +96,7 @@ describe('Jobs Controller Unit Tests', () => {
 				throw new Error('Unexpected DB error');
 			});
 
-			postCreateJob(null)(req, res);
+			await postCreateJob(null)(req, res);
 
 			expect(res.statusCode).toBe(500);
 			const data = res._getJSONData();
@@ -106,7 +106,7 @@ describe('Jobs Controller Unit Tests', () => {
 	});
 
 	describe('getJobStatus', () => {
-		it('returns 400 if jobId is missing', () => {
+		it('returns 400 if jobId is missing', async () => {
 			const req = httpMocks.createRequest({
 				method: 'GET',
 				url: '/api/jobs/',
@@ -114,13 +114,13 @@ describe('Jobs Controller Unit Tests', () => {
 			});
 			const res = httpMocks.createResponse();
 
-			getJobStatus(req, res);
+			await getJobStatus(req, res);
 
 			expect(res.statusCode).toBe(400);
 			expect(res._getJSONData().error).toBe('Missing jobId parameter');
 		});
 
-		it('returns 404 if job is not found', () => {
+		it('returns 404 if job is not found', async () => {
 			const req = httpMocks.createRequest({
 				method: 'GET',
 				url: '/api/jobs/missing-job-id',
@@ -130,7 +130,7 @@ describe('Jobs Controller Unit Tests', () => {
 
 			jobService.getJob.mockReturnValueOnce(null);
 
-			getJobStatus(req, res);
+			await getJobStatus(req, res);
 
 			expect(res.statusCode).toBe(404);
 			expect(res._getJSONData()).toEqual({
@@ -139,7 +139,7 @@ describe('Jobs Controller Unit Tests', () => {
 			});
 		});
 
-		it('returns 200 and job details if job exists', () => {
+		it('returns 200 and job details if job exists', async () => {
 			const req = httpMocks.createRequest({
 				method: 'GET',
 				url: '/api/jobs/existing-job-id',
@@ -156,7 +156,7 @@ describe('Jobs Controller Unit Tests', () => {
 			};
 			jobService.getJob.mockReturnValueOnce(mockJob);
 
-			getJobStatus(req, res);
+			await getJobStatus(req, res);
 
 			expect(res.statusCode).toBe(200);
 			expect(res._getJSONData()).toEqual({
@@ -165,7 +165,7 @@ describe('Jobs Controller Unit Tests', () => {
 			});
 		});
 
-		it('returns 500 and records error to Sentry on unexpected throw', () => {
+		it('returns 500 and records error to Sentry on unexpected throw', async () => {
 			const req = httpMocks.createRequest({
 				method: 'GET',
 				url: '/api/jobs/existing-job-id',
@@ -177,7 +177,7 @@ describe('Jobs Controller Unit Tests', () => {
 				throw new Error('Disk crash');
 			});
 
-			getJobStatus(req, res);
+			await getJobStatus(req, res);
 
 			expect(res.statusCode).toBe(500);
 			expect(sentryService.captureRuntimeError).toHaveBeenCalled();

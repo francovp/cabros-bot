@@ -40,6 +40,10 @@ function isEnabled() {
 	return process.env.ENABLE_FIRESTORE_ALERT_STORAGE === 'true';
 }
 
+function canInitializeFirestore() {
+	return isEnabled() || process.env.ENABLE_FIRESTORE_JOB_STORAGE === 'true';
+}
+
 function clampLimit(limit) {
 	if (!Number.isInteger(limit) || limit < 1) {
 		return DEFAULT_PAGE_SIZE;
@@ -131,7 +135,7 @@ function getDocCursorValues(doc) {
  * @returns {FirebaseFirestore.Firestore | null}
  */
 function getFirestore() {
-	if (!isEnabled()) {
+	if (!canInitializeFirestore()) {
 		return null;
 	}
 
