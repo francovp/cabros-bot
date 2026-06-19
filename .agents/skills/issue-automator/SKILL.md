@@ -20,6 +20,7 @@ description: >-
 12. Prefer `gh` and `linear` CLIs over MCP tools when available.
 13. Distinguish local blockers from global blockers.
 14. Stop cleanly on global blockers, ambiguity, or missing ownership.
+15. **GitHub user switching**: Before any `gh` CLI command, always switch to the `francovp` user with `gh auth switch --user francovp`. After all `gh` commands are complete, restore the original user with `gh auth switch --user <original_user>`. The helper script `scripts/gh-auth-utils.sh` provides `save_gh_user`, `switch_to_francovp`, and `restore_gh_user` functions for this pattern. All script-based `gh` calls (in `get-oldest-issue.sh`, `verify-preview.sh`) already source this helper — just call them as-is. For inline `gh` commands in the workflow below, execute the switch pattern manually or use the helper.
 
 ## Notification Webhook
 
@@ -55,13 +56,17 @@ curl --location "${NOTIFY_WEBHOOK_URL:-https://cabros-crypto-bot-telegram.onrend
 Follow these steps in strict chronological order to automate issue resolution:
 
 ### Step 1: Pre-flight & Selection
-1. Determine the target issue:
+1. **Switch gh to francovp user** — save the current user and switch to francovp for all `gh` commands in this session:
+   ```bash
+   source scripts/gh-auth-utils.sh && save_gh_user && switch_to_francovp
+   ```
+2. Determine the target issue:
    - **If the user specifies an issue number** (via `#42`, `issue 42`, `GH-42`, or similar): fetch that specific issue with `gh issue view <NUMBER> --json number,title,createdAt,labels,url`.
-   - **If no issue number is given**: run `scripts/get-oldest-issue.sh` to fetch the oldest open GitHub issue.
-2. Select it as the primary issue.
-3. Do not fetch, inspect, select, plan, or create TODOs for any second issue at this stage.
-4. If no open GitHub issues exist (and none was specified), stop execution immediately.
-5. For the primary issue:
+   - **If no issue number is given**: run `scripts/get-oldest-issue.sh` to fetch the oldest open GitHub issue (the script handles switching to francovp internally).
+3. Select it as the primary issue.
+4. Do not fetch, inspect, select, plan, or create TODOs for any second issue at this stage.
+5. If no open GitHub issues exist (and none was specified), stop execution immediately.
+6. For the primary issue:
    - Check any linked or related Linear issue.
    - Check all open, closed, merged, and draft PRs that reference the issue.
    - Check unresolved review threads and CI status if a PR exists.
@@ -136,6 +141,10 @@ If the primary issue ends with any other outcome (including `IN_REVIEW` with age
        "whatsappChatId": "'"${NOTIFY_WHATSAPP_CHAT_ID:-120363422033474991@g.us}"'"
      }'
    ```
+6. **Restore original GitHub user** after all `gh` commands are done:
+   ```bash
+   restore_gh_user
+   ```
 
 ## Outcome Summary Contract
 
@@ -149,7 +158,11 @@ Always include a final summary of execution containing:
 ## Error Handling & Troubleshooting
 
 Refer to this section when encountering execution issues:
-- **CLI Authentication Failures**: If `gh` or `linear` CLI calls fail due to auth, check if the respective environment tokens (`GITHUB_TOKEN`, `LINEAR_API_KEY`) are loaded. If CLI is unavailable, fallback to MCP commands. If both fail:
+- **CLI Authentication Failures**: If `gh` or `linear` CLI calls fail due to auth:
+  - First ensure the current user is `francovp` — run `gh auth switch --user francovp` and retry.
+  - Verify the `francovp` account has valid credentials with `gh auth status`.
+  - If the user switch itself fails, check if `GITHUB_TOKEN` env var is overriding the keyring-based auth.
+  - As last resort, check if `GITHUB_TOKEN` or `LINEAR_API_KEY` env vars are loaded. If CLI is unavailable, fallback to MCP commands. If both fail:
   - Send a global-deadlock notification:
     ```bash
     NOTIFY_MESSAGE="[GLOBAL_BLOCKED] Issue automator halted: CLI + MCP auth both failed for $repo/$issue. Human intervention required." \
