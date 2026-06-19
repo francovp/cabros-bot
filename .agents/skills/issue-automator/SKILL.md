@@ -8,11 +8,11 @@ description: >-
 
 1. If the user explicitly provides a GitHub issue number (e.g. `#42`, `issue 42`, `GH-42`), use that specific issue. Otherwise, work on the oldest open GitHub issue.
 2. Process only one issue by default.
-3. Process a second issue only if the first issue ends with explicit outcome `LOCAL_DEADLOCK` or `IN_REVIEW` with no agent writes.
-4. Never process more than 2 GitHub issues in one run.
-5. Never process, inspect deeply, plan, or create TODOs for a third issue.
+3. Process a further issue only after a skip outcome (`LOCAL_DEADLOCK` or `IN_REVIEW` with no agent writes). Non-skip outcomes stop the run — do not touch further issues.
+4. Never process more than 2 GitHub issues that require agent writes in one run. Issues already `IN_REVIEW` with no agent writes (skips) are zero-work — they do not consume this budget and only advance the cursor to the next oldest issue.
+5. Never inspect deeply, plan, or create TODOs for issues beyond the current cursor in the skip loop — only the issue currently being processed is touched at a time.
 6. Never build an unbounded work queue.
-7. Never continue to another issue after `DONE`, `SHIPPED`, `SYNCED`, `GLOBAL_BLOCKED`, `NEEDS_USER`, or `AMBIGUOUS`. For `IN_REVIEW`, stop only if the agent actively produced a PR or made changes; if the issue was already in review with no code/PR/Linear writes needed, treat it like `LOCAL_DEADLOCK` and continue to the next oldest issue.
+7. Never continue to another issue after `DONE`, `SHIPPED`, `SYNCED`, `GLOBAL_BLOCKED`, `NEEDS_USER`, or `AMBIGUOUS`. For `IN_REVIEW`, stop only if the agent actively produced a PR or made changes; if the issue was already in review with no code/PR/Linear writes needed, skip it — keep fetching the next oldest open issue until a non-skip outcome or no issues remain (see Step 6 skip loop).
 8. Never create duplicate Linear issues or duplicate PRs.
 9. Treat `agent-working` as an ownership claim, not as a decorative label.
 10. Use the GitHub issue number as the dedupe key for Linear.
@@ -100,20 +100,21 @@ Follow these steps in strict chronological order to automate issue resolution:
 3. Address any unresolved discussions, especially review comments from `@francovp` or `@codex`.
 4. Observe the quiet window and retry policies specified in `references/readiness-and-verification.md`.
 5. If the verification fails repeatedly with issue-specific errors, end with outcome `LOCAL_DEADLOCK`.
+### Step 6: Skip Loop — Advance Past Blocked or Already-Handled Issues
 
-### Step 6: Fallback Trigger (Conditional)
-1. If the primary issue ends with `LOCAL_DEADLOCK`:
-   - Write a concise blocker summary on the issue or PR.
-   - Sync GitHub, Linear, and PR states.
-   - Re-run `scripts/get-oldest-issue.sh` to fetch the next oldest open issue.
-   - Process this second issue as the fallback issue.
-   - If no fallback issue exists or if the fallback issue fails, stop execution.
-2. If the primary issue ends with `IN_REVIEW` and the agent made **no code/PR/Linear writes** (the issue was already handled):
-   - Do not modify the issue, PR, or Linear state — everything is already correct.
-   - Re-run `scripts/get-oldest-issue.sh` to fetch the next oldest open issue.
-   - Process this second issue as the fallback issue.
-   - If no fallback issue exists or if the fallback issue fails, stop execution.
-3. If the primary issue ends with any other outcome, or if `IN_REVIEW` with agent writes, stop execution immediately.
+Both `LOCAL_DEADLOCK` and `IN_REVIEW` with no agent writes are **skip outcomes** — the agent did not produce a PR or make changes for this issue. Keep advancing until a non-skip outcome or no issues remain.
+
+1. If `LOCAL_DEADLOCK`: Write a concise blocker summary on the issue or PR. Sync GitHub, Linear, and PR states.
+2. If `IN_REVIEW` with no agent writes: Do not modify the issue, PR, or Linear state — everything is already correct.
+3. Re-run `scripts/get-oldest-issue.sh` to fetch the next oldest open issue.
+4. If no more open issues exist, stop execution.
+5. Process this next issue from Steps 1–5 (treat it as the new primary).
+6. If it again ends with a skip outcome (`IN_REVIEW` no-writes or `LOCAL_DEADLOCK`), repeat from step 1.
+7. If it ends with any other outcome, proceed to Step 7 with that outcome.
+
+Skip outcomes do not count toward the max-2 issues-that-require-writes limit (Hard Rule #4).
+
+If the primary issue ends with any other outcome (including `IN_REVIEW` with agent writes), stop execution immediately.
 
 ### Step 7: Finalization & Sync
 1. Remove `agent-working` from the GitHub issue and PR.
@@ -140,7 +141,7 @@ Follow these steps in strict chronological order to automate issue resolution:
 
 Always include a final summary of execution containing:
 1. Primary issue processed and its outcome.
-2. Fallback issue processed (only if primary ended in `LOCAL_DEADLOCK` or `IN_REVIEW` with no agent writes) and its outcome.
+2. Outcome of the first non-skip issue, if any (issues with skip outcomes `LOCAL_DEADLOCK` or `IN_REVIEW` no-writes are counted as skipped and listed).
 3. Tools utilized (`gh`, `linear`, MCP, or scripts).
 4. Details of any global blockers.
 5. Performed verification steps (CI, reviews, Render preview ping, and E2E).
