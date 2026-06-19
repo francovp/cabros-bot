@@ -24,6 +24,7 @@ class JobService {
 	constructor(repository = jobRepository) {
 		this.repository = repository;
 		this.jobs = repository;
+		this.activeControllers = new Map();
 	}
 
 	/**
@@ -153,11 +154,29 @@ class JobService {
 			validatedTimeoutMs = Math.min(timeoutVal, MAX_JOB_TIMEOUT_MS);
 		}
 
+		const requestMetadata = {
+			type,
+			timeoutMs: validatedTimeoutMs,
+			...(type === 'expanded-analysis' ? {
+				symbols: parsed.symbols.map((s) => s.raw),
+				timeframe: parsed.timeframe,
+				includeMultiTimeframe: parsed.includeMultiTimeframe,
+				analysisMode: parsed.analysisMode,
+			} : {
+				exchange: parsed.exchange,
+				timeframe: parsed.timeframe,
+				scans: parsed.scans,
+				limit: parsed.limit,
+				bbwThreshold: parsed.bbwThreshold,
+			}),
+		};
+
 		const jobId = uuidv4();
 		const job = {
 			jobId,
 			type,
 			status: 'processing',
+			requestMetadata,
 			progress: {
 				total: type === 'expanded-analysis' ? parsed.symbols.length : parsed.scans.length,
 				current: 0,
@@ -207,6 +226,8 @@ class JobService {
 		const timeoutMs = job.timeoutMs || DEFAULT_JOB_TIMEOUT_MS;
 
 		const controller = new AbortController();
+		this.activeControllers.set(jobId, controller);
+
 		const timeoutId = setTimeout(() => {
 			controller.abort(new Error(`Job timed out after ${timeoutMs}ms`));
 		}, timeoutMs);
@@ -221,9 +242,22 @@ class JobService {
 			}
 		} catch (error) {
 			console.error(`[JobService] Job ${jobId} failed:`, error.message);
-			job.status = 'failed';
+
+			const currentJob = await this.repository.get(jobId);
+			if (currentJob && currentJob.status === 'cancelled') {
+				return;
+			}
+
+			const isTimeout =
+				error.message.includes('timed out') ||
+				error.name === 'TimeoutError' ||
+				error.name === 'AbortError' ||
+				(job.fullResults && job.fullResults.some((r) => r.status === 'timeout')) ||
+				(job.fullScanResults && job.fullScanResults.some((r) => r.status === 'timeout'));
+
+			job.status = isTimeout ? 'timed_out' : 'failed';
 			job.error = error.message;
-			job.code = error.code || 'INTERNAL_ERROR';
+			job.code = error.code || (isTimeout ? 'JOB_TIMEOUT' : 'INTERNAL_ERROR');
 
 			sentryService.captureRuntimeError({
 				channel: 'job-service',
@@ -235,6 +269,16 @@ class JobService {
 			});
 		} finally {
 			clearTimeout(timeoutId);
+			this.activeControllers.delete(jobId);
+
+			const finalJob = await this.repository.get(jobId);
+			if (finalJob && finalJob.status === 'cancelled') {
+				finalJob.totalDurationMs = Date.now() - startTime;
+				finalJob.updatedAt = new Date().toISOString();
+				await this._persistJob(finalJob);
+				return;
+			}
+
 			job.totalDurationMs = Date.now() - startTime;
 			job.updatedAt = new Date().toISOString();
 			await this._persistJob(job);
@@ -246,6 +290,12 @@ class JobService {
 
 		for (let index = 0; index < symbols.length; index++) {
 			const input = symbols[index];
+
+			const currentJob = await this.repository.get(job.jobId);
+			if (currentJob && currentJob.status === 'cancelled') {
+				break;
+			}
+
 			job.progress.current = index;
 			job.progress.status = `Analyzing symbol ${input.raw} (${index + 1}/${symbols.length})`;
 			job.updatedAt = new Date().toISOString();
@@ -314,6 +364,11 @@ class JobService {
 			}
 		}
 
+		const currentJob = await this.repository.get(job.jobId);
+		if (currentJob && currentJob.status === 'cancelled') {
+			return;
+		}
+
 		job.progress.current = symbols.length;
 		job.progress.status = 'Completed analysis';
 		job.updatedAt = new Date().toISOString();
@@ -329,7 +384,7 @@ class JobService {
 			}));
 
 		if (analyzedItems.length === 0) {
-			job.status = 'failed';
+			job.status = timedOut ? 'timed_out' : 'failed';
 			job.error = timedOut
 				? 'Expanded analysis job timed out.'
 				: 'TradingView MCP failed for all requested symbols.';
@@ -358,6 +413,12 @@ class JobService {
 
 		for (let index = 0; index < scans.length; index++) {
 			const scanType = scans[index];
+
+			const currentJob = await this.repository.get(job.jobId);
+			if (currentJob && currentJob.status === 'cancelled') {
+				break;
+			}
+
 			job.progress.current = index;
 			job.progress.status = `Running scan ${scanType} (${index + 1}/${scans.length})`;
 			job.updatedAt = new Date().toISOString();
@@ -406,6 +467,11 @@ class JobService {
 			}
 		}
 
+		const currentJob = await this.repository.get(job.jobId);
+		if (currentJob && currentJob.status === 'cancelled') {
+			return;
+		}
+
 		job.progress.current = scans.length;
 		job.progress.status = 'Completed scans';
 		job.updatedAt = new Date().toISOString();
@@ -415,7 +481,7 @@ class JobService {
 		const successfulScans = job.fullScanResults.filter((r) => r.status === 'success');
 
 		if (successfulScans.length === 0) {
-			job.status = 'failed';
+			job.status = timedOut ? 'timed_out' : 'failed';
 			job.error = timedOut
 				? 'Market scanner job timed out.'
 				: 'TradingView MCP failed for all requested scans.';
@@ -444,6 +510,13 @@ class JobService {
 	}
 
 	async _persistJob(job) {
+		const current = await this.repository.get(job.jobId);
+		if (current) {
+			const terminalStatuses = new Set(['completed', 'failed', 'cancelled', 'timed_out']);
+			if (terminalStatuses.has(current.status) && job.status === 'processing') {
+				return;
+			}
+		}
 		await this.repository.save(job);
 	}
 
@@ -569,6 +642,138 @@ class JobService {
 		}
 
 		return fallback;
+	}
+
+	async cancelJob(jobId) {
+		const job = await this.repository.get(jobId);
+		if (!job) {
+			return null;
+		}
+
+		const terminalStatuses = new Set(['completed', 'failed', 'cancelled', 'timed_out']);
+		if (terminalStatuses.has(job.status)) {
+			return {
+				success: false,
+				code: 'TERMINAL_JOB',
+				message: 'Job is already in a terminal state.',
+				status: job.status,
+			};
+		}
+
+		job.status = 'cancelled';
+		job.error = 'Job cancelled by user';
+		job.code = 'USER_CANCELLED';
+		job.updatedAt = new Date().toISOString();
+		await this._persistJob(job);
+
+		const controller = this.activeControllers.get(jobId);
+		if (controller) {
+			controller.abort(new Error('Job cancelled by user'));
+			this.activeControllers.delete(jobId);
+		}
+
+		return {
+			success: true,
+			jobId,
+			status: job.status,
+		};
+	}
+
+	async retryJob(jobId, botOrGetter) {
+		const job = await this.repository.get(jobId);
+		if (!job) {
+			return null;
+		}
+
+		const retryableStatuses = new Set(['failed', 'timed_out', 'cancelled']);
+		if (!retryableStatuses.has(job.status)) {
+			return {
+				success: false,
+				code: 'NOT_RETRYABLE',
+				message: `Job cannot be retried. Current status: ${job.status}`,
+			};
+		}
+
+		if (!job.requestMetadata) {
+			return {
+				success: false,
+				code: 'MISSING_METADATA',
+				message: 'Missing job request metadata for retry.',
+			};
+		}
+
+		const result = await this.createJob(job.requestMetadata.type, job.requestMetadata, botOrGetter);
+		return {
+			success: true,
+			oldJobId: jobId,
+			newJobId: result.jobId,
+			status: result.status,
+		};
+	}
+
+	async retryFailedJob(jobId, botOrGetter) {
+		const job = await this.repository.get(jobId);
+		if (!job) {
+			return null;
+		}
+
+		if (job.status === 'processing') {
+			return {
+				success: false,
+				code: 'JOB_ACTIVE',
+				message: 'Cannot retry a currently processing job.',
+			};
+		}
+
+		if (!job.requestMetadata) {
+			return {
+				success: false,
+				code: 'MISSING_METADATA',
+				message: 'Missing job request metadata for retry.',
+			};
+		}
+
+		const type = job.requestMetadata.type;
+		let failedItems = [];
+
+		if (type === 'expanded-analysis') {
+			const results = job.fullResults || [];
+			const successfulSymbols = new Set(
+				results
+					.filter((r) => r.status === 'analyzed')
+					.map((r) => r.symbol)
+			);
+			failedItems = (job.requestMetadata.symbols || []).filter((sym) => !successfulSymbols.has(sym));
+		} else if (type === 'market-scanner') {
+			const results = job.fullScanResults || [];
+			const successfulScans = new Set(
+				results
+					.filter((r) => r.status === 'success')
+					.map((r) => r.scan)
+			);
+			failedItems = (job.requestMetadata.scans || []).filter((scan) => !successfulScans.has(scan));
+		}
+
+		if (failedItems.length === 0) {
+			return {
+				success: false,
+				code: 'NO_FAILED_ITEMS',
+				message: 'No failed or timed-out items found to retry in the original job.',
+			};
+		}
+
+		const retryPayload = {
+			...job.requestMetadata,
+			...(type === 'expanded-analysis' ? { symbols: failedItems } : { scans: failedItems }),
+		};
+
+		const result = await this.createJob(type, retryPayload, botOrGetter);
+		return {
+			success: true,
+			oldJobId: jobId,
+			newJobId: result.jobId,
+			status: result.status,
+		};
 	}
 
 	_resolveBot(botOrGetter) {

@@ -12,7 +12,13 @@ const {
 	postRunPreset,
 } = require('../controllers/webhooks/handlers/scannerPresets/scannerPresets');
 const { postVolumeConfirmation } = require('../controllers/webhooks/handlers/volumeConfirmation/volumeConfirmation');
-const { postCreateJob, getJobStatus } = require('../controllers/webhooks/handlers/jobs/jobs');
+const {
+	postCreateJob,
+	getJobStatus,
+	postCancelJob,
+	postRetryJob,
+	postRetryFailedJob,
+} = require('../controllers/webhooks/handlers/jobs/jobs');
 const { listAlerts, getAlertById, replayAlert } = require('../controllers/alerts/alerts');
 const { validateApiKey } = require('../lib/auth');
 const { getApiStatus } = require('../controllers/status');
@@ -38,6 +44,9 @@ function getRoutes(botOrGetter) {
 	// Async job endpoints
 	router.post('/jobs/tradingview-analysis', validateApiKey, postCreateJob(botOrGetter));
 	router.get('/jobs/:jobId', validateApiKey, getJobStatus);
+	router.post('/jobs/:jobId/cancel', validateApiKey, postCancelJob);
+	router.post('/jobs/:jobId/retry', validateApiKey, postRetryJob(botOrGetter));
+	router.post('/jobs/:jobId/retry-failed', validateApiKey, postRetryFailedJob(botOrGetter));
 
 	const { getNewsMonitor } = require('../controllers/webhooks/handlers/newsMonitor/newsMonitor');
 	const newsMonitor = getNewsMonitor();

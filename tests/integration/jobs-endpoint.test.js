@@ -132,4 +132,60 @@ describe('Jobs API Integration Tests', () => {
 		expect(res.body.success).toBe(false);
 		expect(res.body.error).toBe('Job not found');
 	});
+
+	it('supports cancellation and retry flow end-to-end', async () => {
+		// Mock with a longer delay so we can cancel it mid-flight
+		tradingViewMcpService.analyzeSymbolIdentifier.mockImplementation(async () => {
+			await new Promise((resolve) => setTimeout(resolve, 200));
+			return {
+				symbol: 'BINANCE:BTCUSDT',
+				price_data: { close: 65000, change_percent: 1.5 },
+				rsi: { value: 45 },
+			};
+		});
+
+		// Create job
+		const createRes = await request(app)
+			.post('/api/jobs/tradingview-analysis')
+			.set('x-api-key', 'test-key')
+			.send({ type: 'expanded-analysis', symbols: ['BINANCE:BTCUSDT'] })
+			.expect(201);
+
+		const jobId = createRes.body.jobId;
+
+		// Cancel it immediately
+		const cancelRes = await request(app)
+			.post(`/api/jobs/${jobId}/cancel`)
+			.set('x-api-key', 'test-key')
+			.expect(200);
+
+		expect(cancelRes.body.success).toBe(true);
+		expect(cancelRes.body.status).toBe('cancelled');
+
+		// Poll status to verify it's cancelled and does not complete
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		const statusRes = await request(app)
+			.get(`/api/jobs/${jobId}`)
+			.set('x-api-key', 'test-key')
+			.expect(200);
+
+		expect(statusRes.body.status).toBe('cancelled');
+
+		// Attempt to cancel again (should return 409)
+		await request(app)
+			.post(`/api/jobs/${jobId}/cancel`)
+			.set('x-api-key', 'test-key')
+			.expect(409);
+
+		// Retry the cancelled job
+		const retryRes = await request(app)
+			.post(`/api/jobs/${jobId}/retry`)
+			.set('x-api-key', 'test-key')
+			.expect(201);
+
+		expect(retryRes.body.success).toBe(true);
+		expect(retryRes.body.oldJobId).toBe(jobId);
+		expect(retryRes.body.newJobId).toBeDefined();
+		expect(retryRes.body.status).toBe('processing');
+	});
 });

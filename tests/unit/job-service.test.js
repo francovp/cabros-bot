@@ -281,4 +281,86 @@ describe('JobService Unit Tests', () => {
 			expect(restored.results).toHaveLength(1);
 		});
 	});
+
+	describe('Cancellation and retry operations', () => {
+		it('cancels a running job and returns 409 if already completed', async () => {
+			const metadata = await jobService.createJob('expanded-analysis', {
+				symbols: ['BINANCE:BTCUSDT'],
+			});
+			const jobId = metadata.jobId;
+
+			// Cancel it
+			const cancelResult = await jobService.cancelJob(jobId);
+			expect(cancelResult.success).toBe(true);
+			expect(cancelResult.status).toBe('cancelled');
+
+			// Re-cancelling should return terminal error
+			const cancelAgain = await jobService.cancelJob(jobId);
+			expect(cancelAgain.success).toBe(false);
+			expect(cancelAgain.code).toBe('TERMINAL_JOB');
+
+			// Check job state
+			const job = await jobService.getJob(jobId);
+			expect(job.status).toBe('cancelled');
+		});
+
+		it('retries a failed/cancelled job and creates a new one with requestMetadata', async () => {
+			const metadata = await jobService.createJob('expanded-analysis', {
+				symbols: ['BINANCE:BTCUSDT'],
+				timeframe: '1H',
+			});
+			const jobId = metadata.jobId;
+
+			// Cancel it so it is terminal and retryable
+			await jobService.cancelJob(jobId);
+
+			// Retry it
+			const retryResult = await jobService.retryJob(jobId);
+			expect(retryResult.success).toBe(true);
+			expect(retryResult.oldJobId).toBe(jobId);
+			expect(retryResult.newJobId).toBeDefined();
+			expect(retryResult.status).toBe('processing');
+
+			// Check that the new job has the same metadata
+			const newJob = await jobService.repository.get(retryResult.newJobId);
+			expect(newJob.requestMetadata).toEqual(
+				expect.objectContaining({
+					type: 'expanded-analysis',
+					symbols: ['BINANCE:BTCUSDT'],
+					timeframe: '1h',
+				})
+			);
+		});
+
+		it('retries only failed items via retryFailedJob', async () => {
+			// Save a job that is completed with mixed status
+			const jobId = 'mixed-job';
+			const rawJob = {
+				jobId,
+				type: 'expanded-analysis',
+				status: 'completed',
+				progress: { total: 3, current: 3, status: 'Completed' },
+				requestMetadata: {
+					type: 'expanded-analysis',
+					symbols: ['BINANCE:BTCUSDT', 'BINANCE:ETHUSDT', 'BINANCE:SOLUSDT'],
+					timeframe: '60',
+				},
+				fullResults: [
+					{ symbol: 'BINANCE:BTCUSDT', status: 'analyzed' },
+					{ symbol: 'BINANCE:ETHUSDT', status: 'error', error: 'MCP error' },
+					{ symbol: 'BINANCE:SOLUSDT', status: 'timeout', error: 'Timed out' },
+				],
+				createdAt: new Date().toISOString(),
+				updatedAt: new Date().toISOString(),
+			};
+			await jobService.repository.save(rawJob);
+
+			const retryResult = await jobService.retryFailedJob(jobId);
+			expect(retryResult.success).toBe(true);
+			expect(retryResult.oldJobId).toBe(jobId);
+
+			const newJob = await jobService.repository.get(retryResult.newJobId);
+			expect(newJob.requestMetadata.symbols).toEqual(['BINANCE:ETHUSDT', 'BINANCE:SOLUSDT']);
+		});
+	});
 });
