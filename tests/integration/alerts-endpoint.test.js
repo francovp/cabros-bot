@@ -4,19 +4,28 @@ jest.mock('../../src/services/storage/AlertStorageService', () => ({
 	isEnabled: jest.fn(),
 	listAlerts: jest.fn(),
 	getAlertById: jest.fn(),
+	saveReplayAttempt: jest.fn(),
 	STORAGE_UNAVAILABLE_CODE: 'STORAGE_UNAVAILABLE',
 	INVALID_CURSOR_MESSAGE: 'Invalid before cursor. Use an ISO-8601 timestamp or the nextBefore cursor from a previous response.',
 	parseAlertPaginationCursor: jest.fn(),
+}));
+
+jest.mock('../../src/controllers/webhooks/handlers/alert/alert', () => ({
+	postAlert: jest.fn(() => (_req, res) => res.status(501).json({ error: 'not mocked' })),
+	initializeNotificationServices: jest.fn(),
+	getNotificationManager: jest.fn(),
 }));
 
 const request = require('supertest');
 const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
 const alertStorageService = require('../../src/services/storage/AlertStorageService');
+const alertHandler = require('../../src/controllers/webhooks/handlers/alert/alert');
 const { encodeAlertPaginationCursor } = require('../../src/services/storage/alertPaginationCursor');
 
 describe('Alerts API Integration Tests', () => {
 	const originalEnv = process.env;
+	let mockNotificationManager;
 
 	beforeEach(() => {
 		process.env = {
@@ -26,7 +35,13 @@ describe('Alerts API Integration Tests', () => {
 		};
 
 		jest.clearAllMocks();
+		mockNotificationManager = {
+			sendToChannels: jest.fn().mockResolvedValue([{ channel: 'telegram', success: true, messageId: 'tg-1' }]),
+		};
+		alertHandler.getNotificationManager.mockReturnValue(mockNotificationManager);
+		alertHandler.initializeNotificationServices.mockResolvedValue(mockNotificationManager);
 		alertStorageService.isEnabled.mockReturnValue(true);
+		alertStorageService.saveReplayAttempt.mockResolvedValue('replay-1');
 		alertStorageService.parseAlertPaginationCursor.mockImplementation((cursor) => {
 			if (!cursor) {
 				return null;
@@ -244,6 +259,75 @@ describe('Alerts API Integration Tests', () => {
 		expect(res.body).toEqual({
 			error: 'Alert storage is enabled but Firestore is unavailable. Check Firestore credentials and project configuration.',
 			code: 'STORAGE_UNAVAILABLE',
+		});
+	});
+
+	it('replays a stored alert to selected channels and records the replay attempt', async () => {
+		alertStorageService.getAlertById.mockResolvedValue({
+			id: 'alert-123',
+			receivedAt: '2026-06-06T12:34:56.000Z',
+			text: 'Replay me',
+			enriched: true,
+			enrichmentData: { sentiment: 'bullish' },
+			tokenUsage: { totalTokens: 42 },
+			deliveryResults: [{ channel: 'whatsapp', success: false }],
+			source: 'webhook',
+			useTradingViewData: false,
+		});
+
+		const res = await request(app)
+			.post('/api/alerts/alert-123/replay')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'replay-key-1')
+			.send({ channels: ['telegram'] })
+			.expect(200);
+
+		expect(mockNotificationManager.sendToChannels).toHaveBeenCalledWith({
+			text: 'Replay me',
+			enriched: { sentiment: 'bullish' },
+			replay: {
+				originalAlertId: 'alert-123',
+				idempotencyKey: 'replay-key-1',
+			},
+		}, ['telegram']);
+		expect(alertStorageService.saveReplayAttempt).toHaveBeenCalledWith({
+			alertId: 'alert-123',
+			idempotencyKey: 'replay-key-1',
+			channels: ['telegram'],
+			deliveryResults: [{ channel: 'telegram', success: true, messageId: 'tg-1' }],
+		});
+		expect(res.body).toEqual({
+			success: true,
+			alertId: 'alert-123',
+			replayId: 'replay-1',
+			results: [{ channel: 'telegram', success: true, messageId: 'tg-1' }],
+		});
+	});
+
+	it('returns 400 when replay is missing an idempotency key', async () => {
+		const res = await request(app)
+			.post('/api/alerts/alert-123/replay')
+			.set('x-api-key', 'test-key')
+			.send({ channels: ['telegram'] })
+			.expect(400);
+
+		expect(res.body).toEqual({
+			error: 'Replay requests require an idempotency-key header or idempotencyKey body field.',
+			code: 'INVALID_REQUEST',
+		});
+	});
+
+	it('returns 400 when replay channels contain unsupported names', async () => {
+		const res = await request(app)
+			.post('/api/alerts/alert-123/replay')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'replay-key-2')
+			.send({ channels: ['telegram', 'discord'] })
+			.expect(400);
+
+		expect(res.body).toEqual({
+			error: 'Unknown channel(s): discord. Valid channels: telegram, whatsapp.',
+			code: 'INVALID_REQUEST',
 		});
 	});
 });
