@@ -84,6 +84,10 @@ Maintain these patterns and rules in all contributions:
 - **Environment Gating**: Do not alter how env gating works in `index.js` without adjusting tests/deploys.
 - **Markdown Formatting**: Keep `parse_mode: 'MarkdownV2'` when composing Telegram messages, and ensure special Markdown characters are escaped correctly using `src/services/notification/formatters/MarkdownV2Formatter.js`.
 - **Structured Logging**: Log via `console.log`, `console.debug`, etc. The centralized logger (`src/lib/logging.js`) formats logs as structured one-line JSON containing `timestamp`, `level`, `message`, `service`, `pid`, etc.
+- **Verification Before Completion**: Before claiming a fix, feature, or test run is done, run the exact verification command fresh in the current state and read the full output first. No success claims from memory, assumptions, or partial checks.
+- **Systematic Debugging**: For any bug, test failure, or unexpected behavior, use `superpowers:systematic-debugging` first. Reproduce it, inspect the error, trace the root cause, then fix the source instead of patching symptoms.
+- **Test-First Changes**: For every feature, bugfix, or behavior change, use `superpowers:test-driven-development`. Write the failing test first, verify it fails for the right reason, then make the minimal code change to pass it.
+- **Review Discipline**: When handling PR feedback, use `superpowers:receiving-code-review` and `github:gh-address-comments`. Verify each comment against the codebase, avoid performative agreement, and address inline threads one at a time.
 
 ### Common Failure Modes
 - **Missing BOT_TOKEN**: Throws on startup (explicit check in `index.js`).
@@ -157,7 +161,7 @@ Implement the following security practices to safeguard endpoints and credential
 7. **Update Postman collection**: Add new endpoint requests, request variants (including error/invalid input examples), and response examples to `CabrosBot.postman_collection.json` for every API change
 8. **Update environment variables** section if adding new config
 9. **Update this agents.md file** with the new context, recent PRs, and implementation details before creating a new PR
-10. **Final full test run** before completion to ensure no regressions
+10. **Final verification pass** before completion: run the exact relevant checks again, then do the full test suite `pnpm test` once per implementation to ensure no regressions
 11. **Archive Antigravity session artifacts**: MUST always copy all markdown artifacts (`implementation_plan.md`, `task.md`, `walkthrough.md`) from the agent's local `<appDataDir>/brain/<conversation-id>/` directory to the repository under `docs/antigravity/<conversation-id>/` before finishing.
 
 
@@ -193,6 +197,14 @@ Implement the following security practices to safeguard endpoints and credential
 3. **Test external APIs**: Check Gemini, Binance, Telegram, WhatsApp directly
 4. **Review test cases**: Existing tests reveal expected behavior
 5. **Check retry logic**: Some failures are transient and auto-recover
+6. **Use systematic debugging**: Reproduce, trace root cause, then patch the source. No guess-and-check fixes.
+
+### When implementing changes:
+
+1. **Write the failing test first** for the exact behavior or regression you are changing
+2. **Watch the test fail for the right reason** before touching production code
+3. **Make the minimal code change** to pass the test
+4. **Verify the test passes and nothing else regressed**
 
 ## Alert Enrichment with Gemini Grounding (001-gemini-grounding-alert)
 
