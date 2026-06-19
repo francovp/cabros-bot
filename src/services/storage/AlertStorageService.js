@@ -31,6 +31,9 @@ const COLLECTION_NAME = 'alerts';
 const REPLAY_COLLECTION_NAME = 'alertReplays';
 const DEFAULT_PAGE_SIZE = 50;
 const MAX_PAGE_SIZE = 100;
+const DEFAULT_SUMMARY_LIMIT = 500;
+const MAX_SUMMARY_LIMIT = 1000;
+const MAX_SUMMARY_WINDOW_DAYS = 31;
 const STORAGE_UNAVAILABLE_CODE = 'STORAGE_UNAVAILABLE';
 const INVALID_CURSOR_MESSAGE = 'Invalid before cursor. Use an ISO-8601 timestamp or the nextBefore cursor from a previous response.';
 
@@ -74,6 +77,118 @@ function formatAlertDocument(doc) {
 		source: typeof data.source === 'string' ? data.source : null,
 		useTradingViewData: Boolean(data.useTradingViewData),
 	};
+}
+
+function getNumericValue(value) {
+	const numeric = Number(value);
+	return Number.isFinite(numeric) ? numeric : 0;
+}
+
+function incrementCounter(target, key) {
+	const normalizedKey = typeof key === 'string' && key.trim()
+		? key.trim()
+		: 'unknown';
+	target[normalizedKey] = (target[normalizedKey] || 0) + 1;
+}
+
+function extractAlertSymbol(data) {
+	const candidates = [
+		data.symbol,
+		data.ticker,
+		data.enrichmentData && data.enrichmentData.symbol,
+		data.enrichmentData && data.enrichmentData.ticker,
+		data.enrichmentData && data.enrichmentData.asset,
+		data.enrichmentData && data.enrichmentData.original_symbol,
+	];
+
+	const symbol = candidates.find((candidate) => typeof candidate === 'string' && candidate.trim());
+	return symbol ? symbol.trim().toUpperCase() : 'unknown';
+}
+
+function addTokenUsage(totals, tokenUsage) {
+	if (!tokenUsage || typeof tokenUsage !== 'object') {
+		return;
+	}
+
+	totals.inputTokens += getNumericValue(tokenUsage.inputTokens || tokenUsage.promptTokens);
+	totals.outputTokens += getNumericValue(tokenUsage.outputTokens || tokenUsage.completionTokens);
+	totals.totalTokens += getNumericValue(tokenUsage.totalTokens || tokenUsage.total);
+	totals.totalCost += getNumericValue(tokenUsage.totalCost);
+}
+
+function addDeliverySummary(summary, deliveryResults) {
+	if (!Array.isArray(deliveryResults)) {
+		return;
+	}
+
+	for (const result of deliveryResults) {
+		if (!result || typeof result !== 'object') {
+			continue;
+		}
+
+		const channel = typeof result.channel === 'string' && result.channel.trim()
+			? result.channel.trim()
+			: 'unknown';
+		if (!summary.byChannel[channel]) {
+			summary.byChannel[channel] = { total: 0, success: 0, failure: 0 };
+		}
+
+		summary.byChannel[channel].total += 1;
+		if (result.success) {
+			summary.byChannel[channel].success += 1;
+			summary.totalSuccess += 1;
+		} else {
+			summary.byChannel[channel].failure += 1;
+			summary.totalFailure += 1;
+		}
+	}
+}
+
+function collectLatency(samples, value) {
+	const numeric = Number(value);
+	if (Number.isFinite(numeric) && numeric >= 0) {
+		samples.push(numeric);
+	}
+}
+
+function averageLatency(samples) {
+	if (samples.length === 0) {
+		return null;
+	}
+
+	return Math.round(samples.reduce((sum, value) => sum + value, 0) / samples.length);
+}
+
+function buildSummaryWindow({ from, to, limit }) {
+	const now = new Date();
+	const parsedTo = to ? new Date(to) : now;
+	const maxWindowMs = MAX_SUMMARY_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+	let parsedFrom = from ? new Date(from) : new Date(parsedTo.getTime() - (24 * 60 * 60 * 1000));
+
+	if (parsedTo.getTime() - parsedFrom.getTime() > maxWindowMs) {
+		parsedFrom = new Date(parsedTo.getTime() - maxWindowMs);
+	}
+
+	if (parsedFrom.getTime() > parsedTo.getTime()) {
+		const error = new Error('Invalid summary window. from must be before or equal to to.');
+		error.code = 'INVALID_REQUEST';
+		throw error;
+	}
+
+	return {
+		from: parsedFrom.toISOString(),
+		to: parsedTo.toISOString(),
+		limit: clampSummaryLimit(limit),
+		maxDays: MAX_SUMMARY_WINDOW_DAYS,
+	};
+}
+
+function clampSummaryLimit(limit) {
+	if (!Number.isInteger(limit) || limit < 1) {
+		return DEFAULT_SUMMARY_LIMIT;
+	}
+
+	return Math.min(limit, MAX_SUMMARY_LIMIT);
 }
 
 function matchesFilters(alert, filters) {
@@ -381,11 +496,125 @@ async function saveReplayAttempt({ alertId, idempotencyKey, channels, deliveryRe
 	}
 }
 
+/**
+ * Build bounded aggregate metrics for stored alerts.
+ *
+ * The endpoint intentionally returns counts and totals only. Raw alert text,
+ * provider payloads, credentials, and error details stay out of the response.
+ *
+ * @param {Object} params
+ * @param {string|undefined} params.from ISO timestamp, defaults to 24h before to
+ * @param {string|undefined} params.to ISO timestamp, defaults to now
+ * @param {number|undefined} params.limit Maximum documents scanned, capped at 1000
+ * @returns {Promise<Object|null>}
+ */
+async function summarizeAlerts({ from, to, limit } = {}) {
+	if (!isEnabled()) {
+		return null;
+	}
+
+	const firestore = getFirestore();
+	if (!firestore) {
+		throw createStorageUnavailableError();
+	}
+
+	const window = buildSummaryWindow({ from, to, limit });
+	let snapshot;
+	try {
+		snapshot = await firestore
+			.collection(COLLECTION_NAME)
+			.where('receivedAt', '>=', admin.firestore.Timestamp.fromDate(new Date(window.from)))
+			.where('receivedAt', '<=', admin.firestore.Timestamp.fromDate(new Date(window.to)))
+			.orderBy('receivedAt', 'desc')
+			.limit(window.limit)
+			.get();
+	} catch (error) {
+		console.warn('[AlertStorageService] Failed to summarize alerts from Firestore:', error.message);
+		throw createStorageUnavailableError(error);
+	}
+
+	const summary = {
+		window,
+		totalAlerts: 0,
+		bySource: {},
+		bySymbol: {},
+		byFeatureFlag: {
+			enriched: 0,
+			plain: 0,
+			tradingViewData: 0,
+			withoutTradingViewData: 0,
+		},
+		enrichment: {
+			enrichedAlerts: 0,
+			plainAlerts: 0,
+			tokenUsage: {
+				inputTokens: 0,
+				outputTokens: 0,
+				totalTokens: 0,
+				totalCost: 0,
+			},
+		},
+		delivery: {
+			totalSuccess: 0,
+			totalFailure: 0,
+			byChannel: {},
+		},
+		latency: {
+			averageProcessingMs: null,
+			averageDeliveryMs: null,
+		},
+	};
+	const processingLatencySamples = [];
+	const deliveryLatencySamples = [];
+
+	const docs = snapshot && Array.isArray(snapshot.docs) ? snapshot.docs : [];
+	for (const doc of docs) {
+		const data = doc.data() || {};
+		const enriched = Boolean(data.enriched);
+		const useTradingViewData = Boolean(data.useTradingViewData);
+
+		summary.totalAlerts += 1;
+		incrementCounter(summary.bySource, data.source);
+		incrementCounter(summary.bySymbol, extractAlertSymbol(data));
+
+		if (enriched) {
+			summary.byFeatureFlag.enriched += 1;
+			summary.enrichment.enrichedAlerts += 1;
+		} else {
+			summary.byFeatureFlag.plain += 1;
+			summary.enrichment.plainAlerts += 1;
+		}
+
+		if (useTradingViewData) {
+			summary.byFeatureFlag.tradingViewData += 1;
+		} else {
+			summary.byFeatureFlag.withoutTradingViewData += 1;
+		}
+
+		addTokenUsage(summary.enrichment.tokenUsage, data.tokenUsage);
+		addDeliverySummary(summary.delivery, data.deliveryResults);
+		collectLatency(processingLatencySamples, data.processingTimeMs || data.processing_time_ms);
+
+		if (Array.isArray(data.deliveryResults)) {
+			for (const result of data.deliveryResults) {
+				collectLatency(deliveryLatencySamples, result && (result.latencyMs || result.deliveryLatencyMs || result.durationMs));
+			}
+		}
+	}
+
+	summary.enrichment.tokenUsage.totalCost = Number(summary.enrichment.tokenUsage.totalCost.toFixed(6));
+	summary.latency.averageProcessingMs = averageLatency(processingLatencySamples);
+	summary.latency.averageDeliveryMs = averageLatency(deliveryLatencySamples);
+
+	return summary;
+}
+
 module.exports = {
 	isEnabled,
 	saveAlert,
 	listAlerts,
 	getAlertById,
+	summarizeAlerts,
 	saveReplayAttempt,
 	STORAGE_UNAVAILABLE_CODE,
 	INVALID_CURSOR_MESSAGE,

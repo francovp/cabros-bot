@@ -6,6 +6,8 @@ const sentryService = require('../../services/monitoring/SentryService');
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
 const VALID_CHANNELS = ['telegram', 'whatsapp'];
+const DEFAULT_SUMMARY_LIMIT = 500;
+const MAX_SUMMARY_LIMIT = 1000;
 
 function parseLimit(rawLimit) {
 	if (rawLimit === undefined) {
@@ -34,6 +36,36 @@ function parseEnriched(rawEnriched) {
 	}
 
 	return null;
+}
+
+function parseSummaryLimit(rawLimit) {
+	if (rawLimit === undefined) {
+		return DEFAULT_SUMMARY_LIMIT;
+	}
+
+	const limit = Number.parseInt(rawLimit, 10);
+	if (!Number.isInteger(limit) || limit < 1 || limit > MAX_SUMMARY_LIMIT) {
+		return null;
+	}
+
+	return limit;
+}
+
+function parseOptionalTimestamp(rawValue, name) {
+	if (rawValue === undefined) {
+		return { value: undefined };
+	}
+
+	if (typeof rawValue !== 'string' || !rawValue.trim() || Number.isNaN(Date.parse(rawValue))) {
+		return {
+			error: {
+				error: `Invalid ${name} timestamp. Use an ISO-8601 timestamp.`,
+				code: 'INVALID_REQUEST',
+			},
+		};
+	}
+
+	return { value: new Date(rawValue).toISOString() };
 }
 
 function listAlerts(req, res) {
@@ -90,6 +122,46 @@ function listAlerts(req, res) {
 				limit,
 				nextBefore: result.nextBefore,
 			},
+		});
+	});
+}
+
+function summarizeAlerts(req, res) {
+	return handleAsync(req, res, '/api/alerts/summary', async () => {
+		if (!alertStorageService.isEnabled()) {
+			return res.status(403).json({
+				error: 'Alert storage feature is disabled. Set ENABLE_FIRESTORE_ALERT_STORAGE=true to enable.',
+				code: 'FEATURE_DISABLED',
+			});
+		}
+
+		const limit = parseSummaryLimit(req.query.limit);
+		if (limit === null) {
+			return res.status(400).json({
+				error: `Invalid limit. Use an integer between 1 and ${MAX_SUMMARY_LIMIT}.`,
+				code: 'INVALID_REQUEST',
+			});
+		}
+
+		const from = parseOptionalTimestamp(req.query.from, 'from');
+		if (from.error) {
+			return res.status(400).json(from.error);
+		}
+
+		const to = parseOptionalTimestamp(req.query.to, 'to');
+		if (to.error) {
+			return res.status(400).json(to.error);
+		}
+
+		const summary = await alertStorageService.summarizeAlerts({
+			from: from.value,
+			limit,
+			to: to.value,
+		});
+
+		return res.status(200).json({
+			success: true,
+			summary,
 		});
 	});
 }
@@ -239,7 +311,9 @@ function replayAlert(botOrGetter) {
 function handleAsync(req, res, endpoint, handler) {
 	return Promise.resolve(handler()).catch((error) => {
 		console.error('[AlertsController] Request failed:', error.message);
-		const statusCode = error.code === alertStorageService.STORAGE_UNAVAILABLE_CODE ? 503 : 500;
+		const statusCode = error.code === alertStorageService.STORAGE_UNAVAILABLE_CODE
+			? 503
+			: (error.code === 'INVALID_REQUEST' ? 400 : 500);
 		sentryService.captureRuntimeError({
 			channel: 'alerts-controller',
 			error,
@@ -257,6 +331,13 @@ function handleAsync(req, res, endpoint, handler) {
 			});
 		}
 
+		if (statusCode === 400) {
+			return res.status(400).json({
+				error: error.message,
+				code: 'INVALID_REQUEST',
+			});
+		}
+
 		return res.status(500).json({
 			error: 'Internal server error',
 			code: 'INTERNAL_ERROR',
@@ -268,4 +349,5 @@ module.exports = {
 	listAlerts,
 	getAlertById,
 	replayAlert,
+	summarizeAlerts,
 };

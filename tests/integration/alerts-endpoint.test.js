@@ -5,6 +5,7 @@ jest.mock('../../src/services/storage/AlertStorageService', () => ({
 	listAlerts: jest.fn(),
 	getAlertById: jest.fn(),
 	saveReplayAttempt: jest.fn(),
+	summarizeAlerts: jest.fn(),
 	STORAGE_UNAVAILABLE_CODE: 'STORAGE_UNAVAILABLE',
 	INVALID_CURSOR_MESSAGE: 'Invalid before cursor. Use an ISO-8601 timestamp or the nextBefore cursor from a previous response.',
 	parseAlertPaginationCursor: jest.fn(),
@@ -194,6 +195,130 @@ describe('Alerts API Integration Tests', () => {
 		expect(res.body).toEqual({
 			error: 'Alert storage is enabled but Firestore is unavailable. Check Firestore credentials and project configuration.',
 			code: 'STORAGE_UNAVAILABLE',
+		});
+	});
+
+	it('returns an alert analytics summary for a bounded time window', async () => {
+		alertStorageService.summarizeAlerts.mockResolvedValue({
+			window: {
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+				limit: 200,
+				maxDays: 31,
+			},
+			totalAlerts: 2,
+			bySource: { webhook: 2 },
+			bySymbol: { BTCUSDT: 1, ETHUSDT: 1 },
+			byFeatureFlag: {
+				enriched: 1,
+				plain: 1,
+				tradingViewData: 1,
+				withoutTradingViewData: 1,
+			},
+			enrichment: {
+				enrichedAlerts: 1,
+				plainAlerts: 1,
+				tokenUsage: {
+					inputTokens: 10,
+					outputTokens: 20,
+					totalTokens: 30,
+					totalCost: 0.001,
+				},
+			},
+			delivery: {
+				totalSuccess: 2,
+				totalFailure: 1,
+				byChannel: {
+					telegram: { total: 2, success: 1, failure: 1 },
+					whatsapp: { total: 1, success: 1, failure: 0 },
+				},
+			},
+			latency: {
+				averageProcessingMs: null,
+				averageDeliveryMs: 125,
+			},
+		});
+
+		const res = await request(app)
+			.get('/api/alerts/summary?from=2026-06-06T00:00:00.000Z&to=2026-06-07T00:00:00.000Z&limit=200')
+			.set('x-api-key', 'test-key')
+			.expect(200);
+
+		expect(alertStorageService.summarizeAlerts).toHaveBeenCalledWith({
+			from: '2026-06-06T00:00:00.000Z',
+			limit: 200,
+			to: '2026-06-07T00:00:00.000Z',
+		});
+		expect(res.body).toEqual({
+			success: true,
+			summary: {
+				window: {
+					from: '2026-06-06T00:00:00.000Z',
+					to: '2026-06-07T00:00:00.000Z',
+					limit: 200,
+					maxDays: 31,
+				},
+				totalAlerts: 2,
+				bySource: { webhook: 2 },
+				bySymbol: { BTCUSDT: 1, ETHUSDT: 1 },
+				byFeatureFlag: {
+					enriched: 1,
+					plain: 1,
+					tradingViewData: 1,
+					withoutTradingViewData: 1,
+				},
+				enrichment: {
+					enrichedAlerts: 1,
+					plainAlerts: 1,
+					tokenUsage: {
+						inputTokens: 10,
+						outputTokens: 20,
+						totalTokens: 30,
+						totalCost: 0.001,
+					},
+				},
+				delivery: {
+					totalSuccess: 2,
+					totalFailure: 1,
+					byChannel: {
+						telegram: { total: 2, success: 1, failure: 1 },
+						whatsapp: { total: 1, success: 1, failure: 0 },
+					},
+				},
+				latency: {
+					averageProcessingMs: null,
+					averageDeliveryMs: 125,
+				},
+			},
+		});
+	});
+
+	it('returns 400 when the summary window is invalid', async () => {
+		const res = await request(app)
+			.get('/api/alerts/summary?from=not-a-date')
+			.set('x-api-key', 'test-key')
+			.expect(400);
+
+		expect(res.body).toEqual({
+			error: 'Invalid from timestamp. Use an ISO-8601 timestamp.',
+			code: 'INVALID_REQUEST',
+		});
+		expect(alertStorageService.summarizeAlerts).not.toHaveBeenCalled();
+	});
+
+	it('returns 400 when the summary service rejects an inverted time window', async () => {
+		const error = new Error('Invalid summary window. from must be before or equal to to.');
+		error.code = 'INVALID_REQUEST';
+		alertStorageService.summarizeAlerts.mockRejectedValue(error);
+
+		const res = await request(app)
+			.get('/api/alerts/summary?from=2026-06-07T00:00:00.000Z&to=2026-06-06T00:00:00.000Z')
+			.set('x-api-key', 'test-key')
+			.expect(400);
+
+		expect(res.body).toEqual({
+			error: 'Invalid summary window. from must be before or equal to to.',
+			code: 'INVALID_REQUEST',
 		});
 	});
 
