@@ -1,41 +1,36 @@
-# docs(issue-automator): enforce create-pr handoff
+# fix(issue-automator): configure linear cli for cabrobot team
 
 ## Summary
 
-Tighten the `issue-automator` skill so PR creation always flows through the `create-pr` skill and Linear tickets are written with a structured, self-contained description.
+Configure the Linear CLI at the project root to target the CabroBot (CB) team so all `linear` queries, searches, and issue operations use the correct workspace and team.
 
 ## Key Changes
 
-### :link: Force PR creation through `create-pr`
+### :wrench: Configure Linear CLI for CabroBot team
 
-- Require every PR to be created or updated through the `create-pr` skill
-- Ban direct `gh pr create` and `gh pr edit` usage from `issue-automator`
-- Make the branch context file the source of truth for the PR body
-
-### :memo: Standardize Linear issue formatting
-
-- Add a required Linear issue body structure with `Summary`, `Context`, `Acceptance Criteria`, and `References`
-- Keep Linear tickets readable without jumping back to GitHub for basic context
-- Preserve the GitHub issue number as the dedupe key
+- Register `.linear.toml` at the project root targeting the CabroBot team
+- Set team ID to `3aaac7ad-6ca9-419b-a99e-925d97e9ec03` (key `CB`)
+- All `linear` CLI commands now default to the correct workspace and team
 
 ## Technical Implementation
 
-### Skill workflow changes
+### Linear CLI configuration
 
-#### `.agents/skills/issue-automator/SKILL.md`
+#### `.linear.toml` (new)
 
-- Added a hard rule to route all PR creation through the `create-pr` skill
-- Expanded the Linear tracker step with a predictable description format
-- Updated the action plan to require `context/<git-branch-name>.md` as the PR summary input before handing off to `create-pr`
+- Generated via `linear config --workspace knil` and edited to use the UUID team ID
+- `workspace = "knil"` — matches existing credentials
+- `team_id = "3aaac7ad-6ca9-419b-a99e-925d97e9ec03"` — CabroBot team UUID
+- `issue_sort = "priority"` — default sort order
 
 ## Testing
 
 ### Verification
 
-- `git diff --check`
-- Manual review of the updated workflow text for PR and Linear handoff
+- `linear team list` — shows CB team with correct ID
+- `linear team id` — returns the UUID
+- `linear issue list` — correctly scoped to CB team
 
 ## References
 
-- `create-pr` skill
 - `issue-automator` skill
