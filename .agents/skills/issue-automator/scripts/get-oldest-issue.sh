@@ -4,15 +4,22 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/gh-auth-utils.sh"
+
 # Ensure gh CLI is installed
 if ! command -v gh &> /dev/null; then
   echo "Error: 'gh' CLI is not installed or not in PATH." >&2
   exit 127
 fi
 
-# Ensure gh CLI is authenticated
+# Switch to francovp user for all gh commands; restore on exit
+trap 'restore_gh_user' EXIT
+save_gh_user
+switch_to_francovp
+
 if ! gh auth status &> /dev/null; then
-  echo "Error: 'gh' CLI is not authenticated. Please run 'gh auth login' or configure GITHUB_TOKEN." >&2
+  echo "Error: 'gh' CLI is not authenticated as francovp. Please run 'gh auth login' or configure GITHUB_TOKEN." >&2
   exit 1
 fi
 
