@@ -15,12 +15,12 @@ Every processed issue must end with exactly one of these outcomes:
 7. `NEEDS_USER`: Safe progress requires user input.
 8. `AMBIGUOUS`: Safe progress requires resolving ambiguity.
 
-Only a `LOCAL_DEADLOCK` on the primary issue, or an `IN_REVIEW` outcome with no agent writes performed, permits processing the second issue.
+`LOCAL_DEADLOCK` and `IN_REVIEW` with no agent writes are both **skip outcomes** — the agent produced no PR or changes for this issue. Both permit advancing to the next oldest issue in a skip loop until a non-skip outcome (`IN_REVIEW` with writes, `DONE`, `SHIPPED`, `SYNCED`, etc.) or no issues remain.
 
 ## Deadlock Policy
 
 1. **Local Deadlock Definition**: `LOCAL_DEADLOCK` means the issue is blocked by an issue-specific blocker that does not prevent safe work on a different issue.
-2. **Fallback Allowance**: A local deadlock on the primary issue allows exactly one fallback issue. An `IN_REVIEW` outcome with no agent writes also allows exactly one fallback issue. A local deadlock or `IN_REVIEW` (no writes) on the fallback issue stops the run.
+2. **Skip Loop Allowance**: Both `LOCAL_DEADLOCK` and `IN_REVIEW` with no agent writes are **skip outcomes** — they do not consume the issue-processing budget. The agent keeps fetching the next oldest issue in a skip loop until a non-skip outcome or no issues remain.
 3. **Local Blocker Examples**:
    - Failed checks that do not converge after the retry budget.
    - Preview deploy failures after retry budget.
@@ -37,4 +37,4 @@ Only a `LOCAL_DEADLOCK` on the primary issue, or an `IN_REVIEW` outcome with no 
    - Missing repository access.
    - Failures that prevent safe work in general.
 7. **Resolution**: If a global blocker is encountered, end the run with outcome `GLOBAL_BLOCKED`.
-8. **Limits**: Never retry indefinitely. Never continue past the fallback issue.
+8. **Limits**: Never retry indefinitely. After a non-skip outcome (`IN_REVIEW` with writes, `DONE`, `SHIPPED`, `SYNCED`), stop the run — do not process further issues. `LOCAL_DEADLOCK` and `IN_REVIEW` no-writes loop freely in a skip loop until a non-skip outcome or no issues remain.
