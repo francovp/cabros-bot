@@ -560,4 +560,98 @@ describe('AlertStorageService', () => {
 			});
 		});
 	});
+
+	describe('summarizeAlerts()', () => {
+		it('aggregates bounded alert analytics without exposing raw alert text', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('alert-1', {
+						receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+						text: 'BTC raw alert text should not leak',
+						enriched: true,
+						enrichmentData: { symbol: 'BTCUSDT' },
+						tokenUsage: {
+							inputTokens: 10,
+							outputTokens: 20,
+							totalTokens: 30,
+							totalCost: 0.001,
+						},
+						deliveryResults: [
+							{ channel: 'telegram', success: true, latencyMs: 100 },
+							{ channel: 'whatsapp', success: true, latencyMs: 150 },
+						],
+						source: 'webhook',
+						useTradingViewData: true,
+						processingTimeMs: 250,
+					}),
+					buildQueryDoc('alert-2', {
+						receivedAt: buildTimestamp('2026-06-06T11:00:00.000Z'),
+						text: 'ETH raw alert text should not leak',
+						enriched: false,
+						enrichmentData: { symbol: 'ETHUSDT' },
+						tokenUsage: null,
+						deliveryResults: [
+							{ channel: 'telegram', success: false, latencyMs: 200 },
+						],
+						source: 'webhook',
+						useTradingViewData: false,
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.summarizeAlerts({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+				limit: 200,
+			});
+
+			expect(mockCollection).toHaveBeenCalledWith('alerts');
+			expect(mockWhere).toHaveBeenCalledWith('receivedAt', '>=', expect.anything());
+			expect(mockWhere).toHaveBeenCalledWith('receivedAt', '<=', expect.anything());
+			expect(mockOrderBy).toHaveBeenCalledWith('receivedAt', 'desc');
+			expect(mockLimit).toHaveBeenCalledWith(200);
+			expect(result).toEqual({
+				window: {
+					from: '2026-06-06T00:00:00.000Z',
+					to: '2026-06-07T00:00:00.000Z',
+					limit: 200,
+					maxDays: 31,
+				},
+				totalAlerts: 2,
+				bySource: { webhook: 2 },
+				bySymbol: { BTCUSDT: 1, ETHUSDT: 1 },
+				byFeatureFlag: {
+					enriched: 1,
+					plain: 1,
+					tradingViewData: 1,
+					withoutTradingViewData: 1,
+				},
+				enrichment: {
+					enrichedAlerts: 1,
+					plainAlerts: 1,
+					tokenUsage: {
+						inputTokens: 10,
+						outputTokens: 20,
+						totalTokens: 30,
+						totalCost: 0.001,
+					},
+				},
+				delivery: {
+					totalSuccess: 2,
+					totalFailure: 1,
+					byChannel: {
+						telegram: { total: 2, success: 1, failure: 1 },
+						whatsapp: { total: 1, success: 1, failure: 0 },
+					},
+				},
+				latency: {
+					averageProcessingMs: 250,
+					averageDeliveryMs: 150,
+				},
+			});
+			expect(JSON.stringify(result)).not.toContain('raw alert text');
+		});
+	});
 });

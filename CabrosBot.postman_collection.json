@@ -545,6 +545,60 @@
 					}
 				},
 				{
+					"name": "GET Alert Analytics Summary",
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "x-api-key", "value": "{{apiKey}}", "type": "text" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/alerts/summary?from=2026-06-06T00:00:00.000Z&to=2026-06-07T00:00:00.000Z&limit=500",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "alerts", "summary"],
+							"query": [
+								{ "key": "from", "value": "2026-06-06T00:00:00.000Z" },
+								{ "key": "to", "value": "2026-06-07T00:00:00.000Z" },
+								{ "key": "limit", "value": "500" }
+							]
+						},
+						"description": "Returns bounded JSON-only aggregates for stored alerts. Requires ENABLE_FIRESTORE_ALERT_STORAGE=true and a valid x-api-key."
+					},
+					"response": [
+						{
+							"name": "200 OK - Analytics summary",
+							"status": "OK",
+							"code": 200,
+							"body": "{\n  \"success\": true,\n  \"summary\": {\n    \"window\": {\n      \"from\": \"2026-06-06T00:00:00.000Z\",\n      \"to\": \"2026-06-07T00:00:00.000Z\",\n      \"limit\": 500,\n      \"maxDays\": 31\n    },\n    \"totalAlerts\": 2,\n    \"bySource\": { \"webhook\": 2 },\n    \"bySymbol\": { \"BTCUSDT\": 1, \"ETHUSDT\": 1 },\n    \"byFeatureFlag\": {\n      \"enriched\": 1,\n      \"plain\": 1,\n      \"tradingViewData\": 1,\n      \"withoutTradingViewData\": 1\n    },\n    \"enrichment\": {\n      \"enrichedAlerts\": 1,\n      \"plainAlerts\": 1,\n      \"tokenUsage\": {\n        \"inputTokens\": 10,\n        \"outputTokens\": 20,\n        \"totalTokens\": 30,\n        \"totalCost\": 0.001\n      }\n    },\n    \"delivery\": {\n      \"totalSuccess\": 2,\n      \"totalFailure\": 1,\n      \"byChannel\": {\n        \"telegram\": { \"total\": 2, \"success\": 1, \"failure\": 1 },\n        \"whatsapp\": { \"total\": 1, \"success\": 1, \"failure\": 0 }\n      }\n    },\n    \"latency\": {\n      \"averageProcessingMs\": 250,\n      \"averageDeliveryMs\": 150\n    }\n  }\n}"
+						}
+					]
+				},
+				{
+					"name": "GET Alert Analytics Summary (invalid window)",
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "x-api-key", "value": "{{apiKey}}", "type": "text" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/alerts/summary?from=not-a-date",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "alerts", "summary"],
+							"query": [
+								{ "key": "from", "value": "not-a-date" }
+							]
+						},
+						"description": "Invalid input variant for summary timestamp validation."
+					},
+					"response": [
+						{
+							"name": "400 Bad Request - Invalid from timestamp",
+							"status": "Bad Request",
+							"code": 400,
+							"body": "{\n  \"error\": \"Invalid from timestamp. Use an ISO-8601 timestamp.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+						}
+					]
+				},
+				{
 					"name": "GET Get Alert by ID",
 					"request": {
 						"method": "GET",

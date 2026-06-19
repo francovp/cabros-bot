@@ -690,8 +690,8 @@ Set `ENABLE_FIRESTORE_JOB_STORAGE=true` plus the normal Firebase Admin credentia
 
 When `ENABLE_FIRESTORE_ALERT_STORAGE=true`, successful `POST /api/webhook/alert` requests are persisted to Firestore and can be inspected through the protected alerts read API.
 
-Both endpoints below require the same `x-api-key` header used by the webhook routes.
-If alert storage is enabled but Firestore credentials/project access are unavailable, both endpoints return `503 STORAGE_UNAVAILABLE` instead of a generic `500`.
+All endpoints below require the same `x-api-key` header used by the webhook routes.
+If alert storage is enabled but Firestore credentials/project access are unavailable, they return `503 STORAGE_UNAVAILABLE` instead of a generic `500`.
 
 #### GET /api/alerts
 
@@ -733,6 +733,76 @@ List stored alerts ordered by `receivedAt` descending.
     "hasMore": false,
     "limit": 50,
     "nextBefore": "eyJ2IjoxLCJyZWNlaXZlZEF0IjoiMjAyNi0wNi0wNlQxMjowMDowMC4wMDBaIiwiaWQiOiJhbGVydC0xIn0"
+  }
+}
+```
+
+#### GET /api/alerts/summary
+
+Return bounded JSON-only analytics for stored alerts without exposing raw alert text or credentials.
+
+**Query Parameters:**
+- `from` - Optional ISO-8601 lower bound; defaults to 24 hours before `to`
+- `to` - Optional ISO-8601 upper bound; defaults to request time
+- `limit` - Integer between `1` and `1000` (default: `500`)
+
+The service caps the queried window at 31 days to keep routine operator usage cheap.
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "summary": {
+    "window": {
+      "from": "2026-06-06T00:00:00.000Z",
+      "to": "2026-06-07T00:00:00.000Z",
+      "limit": 500,
+      "maxDays": 31
+    },
+    "totalAlerts": 2,
+    "bySource": {
+      "webhook": 2
+    },
+    "bySymbol": {
+      "BTCUSDT": 1,
+      "ETHUSDT": 1
+    },
+    "byFeatureFlag": {
+      "enriched": 1,
+      "plain": 1,
+      "tradingViewData": 1,
+      "withoutTradingViewData": 1
+    },
+    "enrichment": {
+      "enrichedAlerts": 1,
+      "plainAlerts": 1,
+      "tokenUsage": {
+        "inputTokens": 10,
+        "outputTokens": 20,
+        "totalTokens": 30,
+        "totalCost": 0.001
+      }
+    },
+    "delivery": {
+      "totalSuccess": 2,
+      "totalFailure": 1,
+      "byChannel": {
+        "telegram": {
+          "total": 2,
+          "success": 1,
+          "failure": 1
+        },
+        "whatsapp": {
+          "total": 1,
+          "success": 1,
+          "failure": 0
+        }
+      }
+    },
+    "latency": {
+      "averageProcessingMs": 250,
+      "averageDeliveryMs": 150
+    }
   }
 }
 ```
