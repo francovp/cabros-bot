@@ -188,4 +188,96 @@ describe('Jobs API Integration Tests', () => {
 		expect(retryRes.body.newJobId).toBeDefined();
 		expect(retryRes.body.status).toBe('processing');
 	});
+
+	describe('Async job callback integration', () => {
+		let fetchMock;
+
+		beforeEach(() => {
+			fetchMock = jest.fn().mockResolvedValue({ ok: true, status: 200 });
+			globalThis.fetch = fetchMock;
+		});
+
+		afterEach(() => {
+			delete globalThis.fetch;
+		});
+
+		it('allows creating a job with callbackUrl and triggers it on completion', async () => {
+			tradingViewMcpService.analyzeSymbolIdentifier.mockResolvedValueOnce({
+				symbol: 'BINANCE:BTCUSDT',
+				price_data: { close: 65000, change_percent: 1.5 },
+				rsi: { value: 45 },
+			});
+
+			const createRes = await request(app)
+				.post('/api/jobs/tradingview-analysis')
+				.set('x-api-key', 'test-key')
+				.send({
+					type: 'expanded-analysis',
+					symbols: ['BINANCE:BTCUSDT'],
+					callbackUrl: 'https://example.com/api/callback',
+					callbackSecret: 'my-signature-secret',
+				})
+				.expect(201);
+
+			const jobId = createRes.body.jobId;
+
+			let statusRes = await request(app)
+				.get(`/api/jobs/${jobId}`)
+				.set('x-api-key', 'test-key')
+				.expect(200);
+
+			let attempts = 0;
+			while (statusRes.body.status !== 'completed' && attempts < 10) {
+				await new Promise((resolve) => setTimeout(resolve, 30));
+				statusRes = await request(app)
+					.get(`/api/jobs/${jobId}`)
+					.set('x-api-key', 'test-key')
+					.expect(200);
+				attempts++;
+			}
+
+			expect(statusRes.body.status).toBe('completed');
+
+			let freshJob = statusRes.body;
+			let pollAttempts = 0;
+			while ((!freshJob.callbackStatus || freshJob.callbackStatus.status === 'pending') && pollAttempts < 20) {
+				await new Promise((resolve) => setTimeout(resolve, 20));
+				const checkRes = await request(app)
+					.get(`/api/jobs/${jobId}`)
+					.set('x-api-key', 'test-key')
+					.expect(200);
+				freshJob = checkRes.body;
+				pollAttempts++;
+			}
+
+			expect(fetchMock).toHaveBeenCalledTimes(1);
+			const [url, options] = fetchMock.mock.calls[0];
+			expect(url).toBe('https://example.com/api/callback');
+
+			expect(freshJob.callbackStatus).toBeDefined();
+			expect(freshJob.callbackStatus.status).toBe('success');
+			expect(freshJob.callbackStatus.attempts[0].statusCode).toBe(200);
+		});
+
+		it('returns 400 Bad Request if callbackUrl format is invalid', async () => {
+			const prevEnv = process.env.NODE_ENV;
+			process.env.NODE_ENV = 'production';
+
+			try {
+				const createRes = await request(app)
+					.post('/api/jobs/tradingview-analysis')
+					.set('x-api-key', 'test-key')
+					.send({
+						type: 'expanded-analysis',
+						symbols: ['BINANCE:BTCUSDT'],
+						callbackUrl: 'http://example.com/callback',
+					})
+					.expect(400);
+
+				expect(createRes.body.error).toContain('callbackUrl must be a valid HTTPS URL');
+			} finally {
+				process.env.NODE_ENV = prevEnv;
+			}
+		});
+	});
 });
