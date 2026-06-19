@@ -390,13 +390,15 @@ The system provides asynchronous job endpoints to support executing both `expand
 - `GET /api/jobs/:jobId` — Returns the current job status (`pending`, `processing`, `completed`, `failed`), progress, and final analysis/delivery outcomes.
 
 **Core Components**:
-- `src/services/jobs/JobService.js` — Coordinates job state tracking, background worker execution, progress reports, and job eviction (jobs older than 1 hour).
+- `src/services/jobs/JobService.js` — Coordinates job state tracking, background worker execution, progress reports, durable persistence checkpoints, and job eviction (jobs older than 1 hour).
+- `src/services/jobs/JobRepository.js` — Stores sanitized job records in memory and, when `ENABLE_FIRESTORE_JOB_STORAGE=true`, in Firestore collection `tradingviewJobs`.
 - `src/controllers/webhooks/handlers/jobs/jobs.js` — HTTP route controller handlers (`postCreateJob`, `getJobStatus`).
 
 **Failure and Edge Case Behavior**:
 - Sync validation: throws `400` synchronously on invalid inputs before job registration.
 - Feature checks: returns `404 FEATURE_DISABLED` if market scanner jobs are created but `ENABLE_MARKET_SCANNER` is not `'true'`.
-- Eviction: jobs older than 1 hour are deleted from memory and return `404 Not Found`.
+- Persistence: `createJob()` and `getJob()` are async because job metadata/results may be written to or read from Firestore.
+- Eviction: completed/failed jobs older than 1 hour are deleted from memory/Firestore and return `404 Not Found`; active jobs are preserved.
 - Background failures: if the worker runs into unexpected exceptions or timeouts, the job is marked `failed` and reported to Sentry.
 
 **Where to look first when extending or debugging**:

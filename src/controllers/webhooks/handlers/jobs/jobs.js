@@ -4,7 +4,7 @@ const { jobService } = require('../../../../services/jobs/JobService');
 const sentryService = require('../../../../services/monitoring/SentryService');
 
 function postCreateJob(botOrGetter) {
-	return (req, res) => {
+	return async (req, res) => {
 		const { type } = req.body || {};
 
 		if (!type) {
@@ -15,7 +15,7 @@ function postCreateJob(botOrGetter) {
 		}
 
 		try {
-			const result = jobService.createJob(type, req.body, botOrGetter);
+			const result = await jobService.createJob(type, req.body, botOrGetter);
 			return res.status(201).json(result);
 		} catch (error) {
 			if (
@@ -48,7 +48,7 @@ function postCreateJob(botOrGetter) {
 	};
 }
 
-function getJobStatus(req, res) {
+async function getJobStatus(req, res) {
 	const { jobId } = req.params;
 
 	if (!jobId) {
@@ -59,7 +59,7 @@ function getJobStatus(req, res) {
 	}
 
 	try {
-		const job = jobService.getJob(jobId);
+		const job = await jobService.getJob(jobId);
 
 		if (!job) {
 			return res.status(404).json({
