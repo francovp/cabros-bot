@@ -20,6 +20,7 @@ const {
 	__mockCollection: mockCollection,
 	__mockGet: mockGet,
 	__mockDocGet: mockDocGet,
+	__mockDocSet: mockDocSet,
 	__mockWhere: mockWhere,
 	__mockOrderBy: mockOrderBy,
 	__mockLimit: mockLimit,
@@ -517,6 +518,44 @@ describe('AlertStorageService', () => {
 			mockDocGet.mockRejectedValueOnce(new Error('Permission denied'));
 
 			await expect(AlertStorageService.getAlertById('alert-123')).rejects.toMatchObject({
+				code: 'STORAGE_UNAVAILABLE',
+			});
+		});
+	});
+
+	describe('saveReplayAttempt()', () => {
+		it('stores replay attempts in a separate collection using the idempotency key', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			const result = await AlertStorageService.saveReplayAttempt({
+				alertId: 'alert-123',
+				idempotencyKey: 'replay-key-1',
+				channels: ['telegram'],
+				deliveryResults: [{ channel: 'telegram', success: true }],
+			});
+
+			expect(result).toBe('alert-123_replay-key-1');
+			expect(mockCollection).toHaveBeenCalledWith('alertReplays');
+			expect(mockDocSet).toHaveBeenCalledWith({
+				alertId: 'alert-123',
+				idempotencyKey: 'replay-key-1',
+				channels: ['telegram'],
+				deliveryResults: [{ channel: 'telegram', success: true }],
+				replayedAt: expect.anything(),
+				source: 'alert-replay',
+			});
+		});
+
+		it('throws STORAGE_UNAVAILABLE when replay audit storage fails', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockDocSet.mockRejectedValueOnce(new Error('permission denied'));
+
+			await expect(AlertStorageService.saveReplayAttempt({
+				alertId: 'alert-123',
+				idempotencyKey: 'replay-key-2',
+				channels: ['telegram'],
+				deliveryResults: [],
+			})).rejects.toMatchObject({
 				code: 'STORAGE_UNAVAILABLE',
 			});
 		});

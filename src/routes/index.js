@@ -13,7 +13,7 @@ const {
 } = require('../controllers/webhooks/handlers/scannerPresets/scannerPresets');
 const { postVolumeConfirmation } = require('../controllers/webhooks/handlers/volumeConfirmation/volumeConfirmation');
 const { postCreateJob, getJobStatus } = require('../controllers/webhooks/handlers/jobs/jobs');
-const { listAlerts, getAlertById } = require('../controllers/alerts/alerts');
+const { listAlerts, getAlertById, replayAlert } = require('../controllers/alerts/alerts');
 const { validateApiKey } = require('../lib/auth');
 const { getApiStatus } = require('../controllers/status');
 const { idempotencyMiddleware } = require('../lib/idempotency');
@@ -26,6 +26,7 @@ function getRoutes(botOrGetter) {
 	router.post('/webhook/market-scanner-alert', validateApiKey, idempotencyMiddleware, postMarketScannerAlert(botOrGetter));
 	router.post('/webhook/volume-confirmation', validateApiKey, postVolumeConfirmation());
 	router.get('/alerts', validateApiKey, listAlerts);
+	router.post('/alerts/:alertId/replay', validateApiKey, idempotencyMiddleware, replayAlert(botOrGetter));
 	router.get('/alerts/:alertId', validateApiKey, getAlertById);
 	router.post('/scanner-presets', validateApiKey, postPreset);
 	router.get('/scanner-presets', validateApiKey, listPresets);

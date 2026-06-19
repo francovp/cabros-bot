@@ -557,6 +557,96 @@
 							"path": ["api", "alerts", "{{alertId}}"]
 						}
 					}
+				},
+				{
+					"name": "POST Replay Alert (telegram)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json", "type": "text" },
+							{ "key": "x-api-key", "value": "{{apiKey}}", "type": "text" },
+							{ "key": "idempotency-key", "value": "{{replayIdempotencyKey}}", "type": "text" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"channels\": [\"telegram\"]\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/alerts/{{alertId}}/replay",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "alerts", "{{alertId}}", "replay"]
+						}
+					},
+					"response": [
+						{
+							"name": "Success",
+							"originalRequest": {
+								"method": "POST",
+								"header": [
+									{ "key": "Content-Type", "value": "application/json", "type": "text" },
+									{ "key": "x-api-key", "value": "{{apiKey}}", "type": "text" },
+									{ "key": "idempotency-key", "value": "{{replayIdempotencyKey}}", "type": "text" }
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n  \"channels\": [\"telegram\"]\n}"
+								},
+								"url": {
+									"raw": "{{baseUrl}}/api/alerts/{{alertId}}/replay",
+									"host": ["{{baseUrl}}"],
+									"path": ["api", "alerts", "{{alertId}}", "replay"]
+								}
+							},
+							"status": "OK",
+							"code": 200,
+							"body": "{\n  \"success\": true,\n  \"alertId\": \"alert-123\",\n  \"replayId\": \"alert-123_replay-key-1\",\n  \"results\": [\n    { \"channel\": \"telegram\", \"success\": true, \"messageId\": \"123\" }\n  ]\n}"
+						},
+						{
+							"name": "Missing idempotency key",
+							"originalRequest": {
+								"method": "POST",
+								"header": [
+									{ "key": "Content-Type", "value": "application/json", "type": "text" },
+									{ "key": "x-api-key", "value": "{{apiKey}}", "type": "text" }
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n  \"channels\": [\"telegram\"]\n}"
+								},
+								"url": {
+									"raw": "{{baseUrl}}/api/alerts/{{alertId}}/replay",
+									"host": ["{{baseUrl}}"],
+									"path": ["api", "alerts", "{{alertId}}", "replay"]
+								}
+							},
+							"status": "Bad Request",
+							"code": 400,
+							"body": "{\n  \"error\": \"Replay requests require an idempotency-key header or idempotencyKey body field.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+						},
+						{
+							"name": "Invalid channel",
+							"originalRequest": {
+								"method": "POST",
+								"header": [
+									{ "key": "Content-Type", "value": "application/json", "type": "text" },
+									{ "key": "x-api-key", "value": "{{apiKey}}", "type": "text" },
+									{ "key": "idempotency-key", "value": "{{replayIdempotencyKey}}", "type": "text" }
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n  \"channels\": [\"telegram\", \"discord\"]\n}"
+								},
+								"url": {
+									"raw": "{{baseUrl}}/api/alerts/{{alertId}}/replay",
+									"host": ["{{baseUrl}}"],
+									"path": ["api", "alerts", "{{alertId}}", "replay"]
+								}
+							},
+							"status": "Bad Request",
+							"code": 400,
+							"body": "{\n  \"error\": \"Unknown channel(s): discord. Valid channels: telegram, whatsapp.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+						}
+					]
 				}
 			]
 		},

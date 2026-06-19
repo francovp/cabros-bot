@@ -5,6 +5,7 @@ const sentryService = require('../../services/monitoring/SentryService');
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
+const VALID_CHANNELS = ['telegram', 'whatsapp'];
 
 function parseLimit(rawLimit) {
 	if (rawLimit === undefined) {
@@ -125,6 +126,116 @@ function getAlertById(req, res) {
 	});
 }
 
+function parseReplayChannels(rawChannels) {
+	if (rawChannels === undefined) {
+		return VALID_CHANNELS;
+	}
+
+	if (!Array.isArray(rawChannels) || rawChannels.length === 0) {
+		return null;
+	}
+
+	const channels = rawChannels
+		.filter(channel => typeof channel === 'string')
+		.map(channel => channel.trim().toLowerCase())
+		.filter(Boolean);
+	const uniqueChannels = Array.from(new Set(channels));
+	if (uniqueChannels.length !== rawChannels.length) {
+		return null;
+	}
+
+	return uniqueChannels;
+}
+
+function getIdempotencyKey(req) {
+	return req.headers['idempotency-key']
+		|| (req.body && (req.body.idempotencyKey || req.body.idempotency_key))
+		|| (req.query && (req.query.idempotencyKey || req.query.idempotency_key));
+}
+
+function replayAlert(botOrGetter) {
+	return function handleReplayAlert(req, res) {
+		return handleAsync(req, res, `/api/alerts/${req.params.alertId}/replay`, async () => {
+			if (!alertStorageService.isEnabled()) {
+				return res.status(403).json({
+					error: 'Alert storage feature is disabled. Set ENABLE_FIRESTORE_ALERT_STORAGE=true to enable.',
+					code: 'FEATURE_DISABLED',
+				});
+			}
+
+			const { alertId } = req.params;
+			if (!alertId) {
+				return res.status(400).json({
+					error: 'Missing alertId parameter',
+					code: 'INVALID_REQUEST',
+				});
+			}
+
+			const idempotencyKey = getIdempotencyKey(req);
+			if (!idempotencyKey || typeof idempotencyKey !== 'string' || !idempotencyKey.trim()) {
+				return res.status(400).json({
+					error: 'Replay requests require an idempotency-key header or idempotencyKey body field.',
+					code: 'INVALID_REQUEST',
+				});
+			}
+
+			const channels = parseReplayChannels(req.body && req.body.channels);
+			if (!channels) {
+				return res.status(400).json({
+					error: 'channels must be a non-empty array of channel names.',
+					code: 'INVALID_REQUEST',
+				});
+			}
+
+			const unknownChannels = channels.filter(channel => !VALID_CHANNELS.includes(channel));
+			if (unknownChannels.length > 0) {
+				return res.status(400).json({
+					error: `Unknown channel(s): ${unknownChannels.join(', ')}. Valid channels: ${VALID_CHANNELS.join(', ')}.`,
+					code: 'INVALID_REQUEST',
+				});
+			}
+
+			const storedAlert = await alertStorageService.getAlertById(alertId);
+			if (!storedAlert) {
+				return res.status(404).json({
+					error: 'Alert not found',
+					code: 'NOT_FOUND',
+				});
+			}
+
+			const { getNotificationManager, initializeNotificationServices } = require('../webhooks/handlers/alert/alert');
+			let notificationManager = getNotificationManager();
+			if (!notificationManager) {
+				const bot = typeof botOrGetter === 'function' ? botOrGetter() : botOrGetter || null;
+				notificationManager = await initializeNotificationServices(bot);
+			}
+
+			const replayPayload = {
+				text: storedAlert.text,
+				enriched: storedAlert.enrichmentData || undefined,
+				replay: {
+					originalAlertId: alertId,
+					idempotencyKey: idempotencyKey.trim(),
+				},
+			};
+			const results = await notificationManager.sendToChannels(replayPayload, channels);
+			const replayId = await alertStorageService.saveReplayAttempt({
+				alertId,
+				idempotencyKey: idempotencyKey.trim(),
+				channels,
+				deliveryResults: results,
+			});
+
+			return res.status(200).json({
+				success: true,
+				alertId,
+				replayId,
+				results,
+			});
+		});
+	};
+}
+
 function handleAsync(req, res, endpoint, handler) {
 	return Promise.resolve(handler()).catch((error) => {
 		console.error('[AlertsController] Request failed:', error.message);
@@ -156,4 +267,5 @@ function handleAsync(req, res, endpoint, handler) {
 module.exports = {
 	listAlerts,
 	getAlertById,
+	replayAlert,
 };

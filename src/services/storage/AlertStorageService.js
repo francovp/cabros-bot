@@ -28,6 +28,7 @@ const admin = require('firebase-admin');
 const { encodeAlertPaginationCursor, parseAlertPaginationCursor } = require('./alertPaginationCursor');
 
 const COLLECTION_NAME = 'alerts';
+const REPLAY_COLLECTION_NAME = 'alertReplays';
 const DEFAULT_PAGE_SIZE = 50;
 const MAX_PAGE_SIZE = 100;
 const STORAGE_UNAVAILABLE_CODE = 'STORAGE_UNAVAILABLE';
@@ -345,17 +346,54 @@ async function getAlertById(alertId) {
 	return formatAlertDocument(snapshot);
 }
 
+/**
+ * Persist a replay attempt separately from the immutable original alert.
+ *
+ * @param {Object} params
+ * @param {string} params.alertId
+ * @param {string} params.idempotencyKey
+ * @param {Array<string>} params.channels
+ * @param {Array} params.deliveryResults
+ * @returns {Promise<string|null>}
+ */
+async function saveReplayAttempt({ alertId, idempotencyKey, channels, deliveryResults }) {
+	const firestore = getFirestore();
+	if (!firestore) {
+		throw createStorageUnavailableError();
+	}
+
+	const replayId = `${alertId}_${idempotencyKey}`;
+	const document = {
+		alertId,
+		idempotencyKey,
+		channels: Array.isArray(channels) ? channels : [],
+		deliveryResults: Array.isArray(deliveryResults) ? deliveryResults : [],
+		replayedAt: admin.firestore.FieldValue.serverTimestamp(),
+		source: 'alert-replay',
+	};
+
+	try {
+		await firestore.collection(REPLAY_COLLECTION_NAME).doc(replayId).set(document, { merge: false });
+		return replayId;
+	} catch (error) {
+		console.warn('[AlertStorageService] Failed to store alert replay attempt:', error.message);
+		throw createStorageUnavailableError(error);
+	}
+}
+
 module.exports = {
 	isEnabled,
 	saveAlert,
 	listAlerts,
 	getAlertById,
+	saveReplayAttempt,
 	STORAGE_UNAVAILABLE_CODE,
 	INVALID_CURSOR_MESSAGE,
 	parseAlertPaginationCursor,
 	// Exported for testing
 	getFirestore,
 	COLLECTION_NAME,
+	REPLAY_COLLECTION_NAME,
 	// Reset the cached db singleton between tests without module reloading
 	_resetForTesting() {
 		db = null;
