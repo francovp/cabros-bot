@@ -363,4 +363,298 @@ describe('JobService Unit Tests', () => {
 			expect(newJob.requestMetadata.symbols).toEqual(['BINANCE:ETHUSDT', 'BINANCE:SOLUSDT']);
 		});
 	});
+
+	describe('Async job completion callbacks', () => {
+		let fetchMock;
+
+		beforeEach(() => {
+			fetchMock = jest.fn();
+			globalThis.fetch = fetchMock;
+		});
+
+		afterEach(() => {
+			delete globalThis.fetch;
+		});
+
+		it('validates callbackUrl protocol and format', async () => {
+			const prevEnv = process.env.NODE_ENV;
+			const prevAllow = process.env.ALLOW_HTTP_CALLBACKS;
+			process.env.NODE_ENV = 'production';
+			process.env.ALLOW_HTTP_CALLBACKS = 'false';
+
+			try {
+				await expect(jobService.createJob('expanded-analysis', {
+					symbols: ['BINANCE:BTCUSDT'],
+					callbackUrl: 'http://example.com/callback',
+				})).rejects.toThrow('callbackUrl must be a valid HTTPS URL');
+
+				await expect(jobService.createJob('expanded-analysis', {
+					symbols: ['BINANCE:BTCUSDT'],
+					callbackUrl: 'not-a-url',
+				})).rejects.toThrow('callbackUrl must be a valid HTTPS URL');
+			} finally {
+				process.env.NODE_ENV = prevEnv;
+				process.env.ALLOW_HTTP_CALLBACKS = prevAllow;
+			}
+		});
+
+		it('allows http for localhost / local environments', async () => {
+			const prevEnv = process.env.NODE_ENV;
+			process.env.NODE_ENV = 'production';
+			try {
+				const res = await jobService.createJob('expanded-analysis', {
+					symbols: ['BINANCE:BTCUSDT'],
+					callbackUrl: 'http://localhost:8080/callback',
+				});
+				expect(res.success).toBe(true);
+			} finally {
+				process.env.NODE_ENV = prevEnv;
+			}
+		});
+
+		it('validates callbackSecret is a string', async () => {
+			await expect(jobService.createJob('expanded-analysis', {
+				symbols: ['BINANCE:BTCUSDT'],
+				callbackUrl: 'https://example.com/callback',
+				callbackSecret: 12345,
+			})).rejects.toThrow('callbackSecret must be a string');
+		});
+
+		it('validates callbackEvents is an array of strings with valid event types', async () => {
+			await expect(jobService.createJob('expanded-analysis', {
+				symbols: ['BINANCE:BTCUSDT'],
+				callbackUrl: 'https://example.com/callback',
+				callbackEvents: 'completed',
+			})).rejects.toThrow('callbackEvents must be an array of strings');
+
+			await expect(jobService.createJob('expanded-analysis', {
+				symbols: ['BINANCE:BTCUSDT'],
+				callbackUrl: 'https://example.com/callback',
+				callbackEvents: ['completed', 'invalid-event'],
+			})).rejects.toThrow('Invalid event in callbackEvents');
+		});
+
+		it('sends callback when job reaches terminal state and records success', async () => {
+			fetchMock.mockResolvedValueOnce({ ok: true, status: 200 });
+
+			tradingViewMcpService.analyzeSymbolIdentifier.mockResolvedValueOnce({
+				symbol: 'BINANCE:BTCUSDT',
+				price_data: { close: 65000, change_percent: 1.5 },
+				rsi: { value: 45 },
+			});
+
+			const metadata = await jobService.createJob('expanded-analysis', {
+				symbols: ['BINANCE:BTCUSDT'],
+				callbackUrl: 'https://example.com/callback',
+			});
+
+			let job = await jobService.getJob(metadata.jobId);
+			let attempts = 0;
+			while (job.status !== 'completed' && attempts < 10) {
+				await delay(20);
+				job = await jobService.getJob(metadata.jobId);
+				attempts++;
+			}
+
+			expect(job.status).toBe('completed');
+
+			await delay(100);
+
+			expect(fetchMock).toHaveBeenCalledTimes(1);
+			const [url, options] = fetchMock.mock.calls[0];
+			expect(url).toBe('https://example.com/callback');
+			expect(options.method).toBe('POST');
+			expect(options.headers['Content-Type']).toBe('application/json');
+
+			const body = JSON.parse(options.body);
+			expect(body.jobId).toBe(metadata.jobId);
+			expect(body.status).toBe('completed');
+			expect(body.totalDurationMs).toBeGreaterThanOrEqual(0);
+
+			const freshJob = await jobService.getJob(metadata.jobId);
+			expect(freshJob.callbackStatus).toBeDefined();
+			expect(freshJob.callbackStatus.status).toBe('success');
+			expect(freshJob.callbackStatus.attempts).toHaveLength(1);
+			expect(freshJob.callbackStatus.attempts[0].statusCode).toBe(200);
+		});
+
+		it('signs payload with HMAC signature if callbackSecret is provided', async () => {
+			fetchMock.mockResolvedValueOnce({ ok: true, status: 200 });
+
+			tradingViewMcpService.analyzeSymbolIdentifier.mockResolvedValueOnce({
+				symbol: 'BINANCE:BTCUSDT',
+				price_data: { close: 65000, change_percent: 1.5 },
+				rsi: { value: 45 },
+			});
+
+			const metadata = await jobService.createJob('expanded-analysis', {
+				symbols: ['BINANCE:BTCUSDT'],
+				callbackUrl: 'https://example.com/callback',
+				callbackSecret: 'super-secret',
+			});
+
+			let job = await jobService.getJob(metadata.jobId);
+			let attempts = 0;
+			while (job.status !== 'completed' && attempts < 10) {
+				await delay(20);
+				job = await jobService.getJob(metadata.jobId);
+				attempts++;
+			}
+
+			await delay(100);
+
+			expect(fetchMock).toHaveBeenCalledTimes(1);
+			const [, options] = fetchMock.mock.calls[0];
+			const signature = options.headers['x-callback-signature'];
+			expect(signature).toBeDefined();
+
+			const crypto = require('crypto');
+			const expectedSignature = crypto
+				.createHmac('sha256', 'super-secret')
+				.update(options.body)
+				.digest('hex');
+			expect(signature).toBe(expectedSignature);
+		});
+
+		it('signs payload with server-side configured secret if no client secret is provided', async () => {
+			const prevSecret = process.env.JOB_CALLBACK_SIGNING_SECRET;
+			process.env.JOB_CALLBACK_SIGNING_SECRET = 'server-secret';
+			fetchMock.mockResolvedValueOnce({ ok: true, status: 200 });
+
+			tradingViewMcpService.analyzeSymbolIdentifier.mockResolvedValueOnce({
+				symbol: 'BINANCE:BTCUSDT',
+				price_data: { close: 65000, change_percent: 1.5 },
+				rsi: { value: 45 },
+			});
+
+			try {
+				const metadata = await jobService.createJob('expanded-analysis', {
+					symbols: ['BINANCE:BTCUSDT'],
+					callbackUrl: 'https://example.com/callback',
+				});
+
+				let job = await jobService.getJob(metadata.jobId);
+				let attempts = 0;
+				while (job.status !== 'completed' && attempts < 10) {
+					await delay(20);
+					job = await jobService.getJob(metadata.jobId);
+					attempts++;
+				}
+
+				await delay(100);
+
+				expect(fetchMock).toHaveBeenCalledTimes(1);
+				const [, options] = fetchMock.mock.calls[0];
+				const signature = options.headers['x-callback-signature'];
+				expect(signature).toBeDefined();
+
+				const crypto = require('crypto');
+				const expectedSignature = crypto
+					.createHmac('sha256', 'server-secret')
+					.update(options.body)
+					.digest('hex');
+				expect(signature).toBe(expectedSignature);
+			} finally {
+				process.env.JOB_CALLBACK_SIGNING_SECRET = prevSecret;
+			}
+		});
+
+		it('retries up to 3 times on transient failure and fails open without affecting job status', async () => {
+			const prevDelay = process.env.JOB_CALLBACK_RETRY_DELAY_MS;
+			process.env.JOB_CALLBACK_RETRY_DELAY_MS = '1';
+
+			fetchMock
+				.mockRejectedValueOnce(new Error('Network error'))
+				.mockResolvedValueOnce({ ok: false, status: 502, statusText: 'Bad Gateway' })
+				.mockResolvedValueOnce({ ok: false, status: 503, statusText: 'Service Unavailable' })
+				.mockRejectedValueOnce(new Error('Timeout'));
+
+			tradingViewMcpService.analyzeSymbolIdentifier.mockResolvedValueOnce({
+				symbol: 'BINANCE:BTCUSDT',
+				price_data: { close: 65000, change_percent: 1.5 },
+				rsi: { value: 45 },
+			});
+
+			try {
+				const metadata = await jobService.createJob('expanded-analysis', {
+					symbols: ['BINANCE:BTCUSDT'],
+					callbackUrl: 'https://example.com/callback',
+				});
+
+				let job = await jobService.getJob(metadata.jobId);
+				let attempts = 0;
+				while (job.status !== 'completed' && attempts < 10) {
+					await delay(20);
+					job = await jobService.getJob(metadata.jobId);
+					attempts++;
+				}
+
+				expect(job.status).toBe('completed');
+
+				let freshJob = await jobService.getJob(metadata.jobId);
+				let pollAttempts = 0;
+				while ((!freshJob.callbackStatus || freshJob.callbackStatus.status === 'pending') && pollAttempts < 20) {
+					await delay(20);
+					freshJob = await jobService.getJob(metadata.jobId);
+					pollAttempts++;
+				}
+
+				expect(fetchMock).toHaveBeenCalledTimes(4);
+
+				expect(freshJob.callbackStatus.status).toBe('failed');
+				expect(freshJob.callbackStatus.attempts).toHaveLength(4);
+				expect(freshJob.callbackStatus.attempts[0].error).toBe('Network error');
+				expect(freshJob.callbackStatus.attempts[1].error).toBe('HTTP 502 Bad Gateway');
+				expect(freshJob.callbackStatus.attempts[2].error).toBe('HTTP 503 Service Unavailable');
+				expect(freshJob.callbackStatus.attempts[3].error).toBe('Timeout');
+			} finally {
+				process.env.JOB_CALLBACK_RETRY_DELAY_MS = prevDelay;
+			}
+		});
+
+		it('stops retrying once a retry succeeds', async () => {
+			const prevDelay = process.env.JOB_CALLBACK_RETRY_DELAY_MS;
+			process.env.JOB_CALLBACK_RETRY_DELAY_MS = '1';
+
+			fetchMock
+				.mockRejectedValueOnce(new Error('Network error'))
+				.mockResolvedValueOnce({ ok: true, status: 200 });
+
+			tradingViewMcpService.analyzeSymbolIdentifier.mockResolvedValueOnce({
+				symbol: 'BINANCE:BTCUSDT',
+				price_data: { close: 65000, change_percent: 1.5 },
+				rsi: { value: 45 },
+			});
+
+			try {
+				const metadata = await jobService.createJob('expanded-analysis', {
+					symbols: ['BINANCE:BTCUSDT'],
+					callbackUrl: 'https://example.com/callback',
+				});
+
+				let job = await jobService.getJob(metadata.jobId);
+				let attempts = 0;
+				while (job.status !== 'completed' && attempts < 10) {
+					await delay(20);
+					job = await jobService.getJob(metadata.jobId);
+					attempts++;
+				}
+
+				let freshJob = await jobService.getJob(metadata.jobId);
+				let pollAttempts = 0;
+				while ((!freshJob.callbackStatus || freshJob.callbackStatus.status === 'pending') && pollAttempts < 20) {
+					await delay(20);
+					freshJob = await jobService.getJob(metadata.jobId);
+					pollAttempts++;
+				}
+
+				expect(fetchMock).toHaveBeenCalledTimes(2);
+
+				expect(freshJob.callbackStatus.status).toBe('success');
+				expect(freshJob.callbackStatus.attempts).toHaveLength(2);
+			} finally {
+				process.env.JOB_CALLBACK_RETRY_DELAY_MS = prevDelay;
+			}
+		});
+	});
 });

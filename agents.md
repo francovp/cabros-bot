@@ -412,6 +412,7 @@ The system provides asynchronous job endpoints to support executing both `expand
 - Persistence: `createJob()` and `getJob()` are async because job metadata/results may be written to or read from Firestore.
 - Eviction: completed/failed jobs older than 1 hour are deleted from memory/Firestore and return `404 Not Found`; active jobs are preserved.
 - Background failures: if the worker runs into unexpected exceptions or timeouts, the job is marked `failed` and reported to Sentry.
+- Async Callbacks: If `callbackUrl` is provided, a callback is dispatched when the job reaches a terminal state (`completed`, `failed`, `cancelled`, `timed_out`). Payloads are signed with HMAC-SHA256 in the `x-callback-signature` header using `callbackSecret` (if provided by client) or the server-configured `JOB_CALLBACK_SIGNING_SECRET`. Transient network failures are retried up to 3 times (4 total attempts) with exponential backoff (starting at 1s, configurable via `JOB_CALLBACK_RETRY_DELAY_MS`). The callback process fails open, writing log events and updating job metadata (`callbackStatus`) without affecting the core job status.
 
 **Where to look first when extending or debugging**:
 - `src/services/jobs/JobService.js` for background processing and state transitions.
@@ -694,6 +695,7 @@ See `/specs/TERMINOLOGY_GUIDE.md` for extended discussion and examples.
 - 005-sentry-runtime-errors (PR #16): Added runtime error monitoring via `SentryService` + early initialization in `instrument.js`, plus Express error handler wiring; monitoring is gated by `ENABLE_SENTRY` + `SENTRY_DSN`.
 - 006-firestore-alert-storage: Added Cloud Firestore persistence for every `/api/webhook/alert` payload; `firebase-admin` singleton initialized from `FIREBASE_SERVICE_ACCOUNT_JSON` or `GOOGLE_APPLICATION_CREDENTIALS`; fire-and-forget after `res.json()` so storage never blocks delivery (fail-open).
 - 007-volume-breakout-alerts: Added TradingView volume confirmation check to the webhook alert enrichment flow (POST /api/webhook/alert?useTradingViewData=true) using the `volume_confirmation_analysis` tool from the TradingView MCP server. Configured via `ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION`.
+- 008-async-job-callbacks (CB-28): Added support for asynchronous job completion callbacks in TradingView analysis and market scanner jobs. Clients can specify callbackUrl, callbackSecret, and callbackEvents in POST /api/jobs/tradingview-analysis requests. The server signs the payloads with an HMAC-SHA256 signature, validates parameters (with node-only URL validation), and executes retries with exponential backoff on transient network failures, failing open without affecting the core job status.
 
 ## Architectural Patterns & Extension Guide
 
