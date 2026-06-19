@@ -758,6 +758,48 @@
 							"path": ["api", "jobs", "{{jobId}}"]
 						}
 					}
+				},
+				{
+					"name": "POST Cancel Job",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "x-api-key", "value": "{{apiKey}}", "type": "text" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/jobs/{{jobId}}/cancel",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "jobs", "{{jobId}}", "cancel"]
+						}
+					}
+				},
+				{
+					"name": "POST Retry Job",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "x-api-key", "value": "{{apiKey}}", "type": "text" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/jobs/{{jobId}}/retry",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "jobs", "{{jobId}}", "retry"]
+						}
+					}
+				},
+				{
+					"name": "POST Retry Failed Job",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "x-api-key", "value": "{{apiKey}}", "type": "text" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/jobs/{{jobId}}/retry-failed",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "jobs", "{{jobId}}", "retry-failed"]
+						}
+					}
 				}
 			]
 		}
