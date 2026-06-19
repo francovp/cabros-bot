@@ -21,6 +21,8 @@ description: >-
 13. Distinguish local blockers from global blockers.
 14. Stop cleanly on global blockers, ambiguity, or missing ownership.
 15. **GitHub user switching**: Before any `gh` CLI command, always switch to the `francovp` user with `gh auth switch --user francovp`. After all `gh` commands are complete, restore the original user with `gh auth switch --user <original_user>`. The helper script `scripts/gh-auth-utils.sh` provides `save_gh_user`, `switch_to_francovp`, and `restore_gh_user` functions for this pattern. All script-based `gh` calls (in `get-oldest-issue.sh`, `verify-preview.sh`) already source this helper — just call them as-is. For inline `gh` commands in the workflow below, execute the switch pattern manually or use the helper.
+16. Always use the `create-pr` skill to create or update PRs. Do not hand-roll PR creation with raw `gh pr create` or `gh pr edit` calls from this skill. The PR body must come from `context/<git-branch-name>.md` and follow the repository PR summary format enforced by `create-pr`.
+17. When creating or updating a Linear issue, write a readable ticket body with `Summary`, `Context`, `Acceptance Criteria`, and `References` sections so the tracker stays self-contained.
 
 ## Notification Webhook
 
@@ -82,6 +84,12 @@ Follow these steps in strict chronological order to automate issue resolution:
 2. If no Linear issue exists:
    - Create a new Linear backlog issue.
    - Use the GitHub issue number as the external dedupe key.
+   - Give the issue a concise, action-oriented title.
+   - Format the description with clear sections:
+     - `Summary` — one sentence on the problem or request
+     - `Context` — why the work exists and any important background
+     - `Acceptance Criteria` — what must be true to consider the issue done
+     - `References` — GitHub issue URL, related PRs, or docs
    - Link the Linear issue back to the GitHub issue.
    - Add `agent-working` label to the GitHub issue.
 3. If a Linear issue exists:
@@ -96,8 +104,9 @@ Follow these steps in strict chronological order to automate issue resolution:
    pnpm test
    ```
 4. If an open PR exists, reuse it. Do not create a parallel PR.
-5. Push changes and create/update the PR.
-6. Add `agent-working` to the PR once created.
+5. Update or create `context/<git-branch-name>.md` with the branch summary using the repository's PR description format (`Summary`, `Key Changes`, `Technical Implementation`, `Testing`, `References`). This file is the required input for the `create-pr` skill.
+6. Use the `create-pr` skill to push changes and create/update the PR. Do not call raw `gh pr create` or `gh pr edit` directly from this workflow.
+7. Add `agent-working` to the PR once created.
 
 ### Step 5: Verification & Deploy Check
 1. Ensure the PR meets all criteria in `references/readiness-and-verification.md`.
