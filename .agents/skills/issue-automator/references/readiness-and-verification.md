@@ -2,9 +2,9 @@
 
 This reference defines the verification rules, readiness criteria, and quiet window policies for PR submission.
 
-## Readiness Gate
+## Merge Gate
 
-A PR is ready to transition to `In review` only if all of these are true:
+A PR is ready to merge directly only if all of these are true and the agent is confident no human review is needed:
 
 1. **No Unresolved Discussions**: No open discussions or review threads remain, especially from `@francovp` and `@codex`.
 2. **All Checks Green**: All required checks are green or conclusively non-blocking.
@@ -13,6 +13,8 @@ A PR is ready to transition to `In review` only if all of these are true:
 5. **Criteria Matched**: The implementation matches all issue acceptance criteria.
 6. **No Ownership Conflict**: No active ownership conflicts remain.
 7. **Stability Period**: The head SHA has been stable for at least 5 minutes with no new Codex reviews or unresolved threads appearing.
+
+If any criterion is uncertain, keep the same gate but hand the PR off through `In review` instead of merging it directly.
 
 ## Preview and E2E
 

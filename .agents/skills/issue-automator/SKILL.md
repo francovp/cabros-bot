@@ -1,7 +1,7 @@
 ---
 name: issue-automator
 description: >-
-  Automates the end-to-end processing of open GitHub issues for the current repository. Use when the user requests automating issue resolution, synchronizing Linear tracker states, verifying Render preview deployments, or resolving review threads. Do not use for repositories other than the current repository or for general Git operations unrelated to issue lifecycle automation.
+  Automates the end-to-end processing of open GitHub issues for the current repository. Use when the user requests automating issue resolution, synchronizing Linear tracker states, verifying Render preview deployments, merging ready PRs without human review, or resolving review threads. Do not use for repositories other than the current repository or for general Git operations unrelated to issue lifecycle automation.
 ---
 
 ## Hard Rules
@@ -49,7 +49,7 @@ curl --location "${NOTIFY_WEBHOOK_URL:-https://cabros-crypto-bot-telegram.onrend
 
 **Events that trigger a notification:**
 1. **Global deadlock** — when `GLOBAL_BLOCKED` outcome is set, alerting humans that tooling/auth/infra prevents safe work.
-2. **PR in review** — when a PR is moved to `In review` in Step 7, notifying that human review is needed.
+2. **PR in review** — when a PR is intentionally handed off for human review in Step 7, notifying that human review is needed.
 
 ## Procedural Workflow
 
@@ -104,7 +104,7 @@ Follow these steps in strict chronological order to automate issue resolution:
 2. Retrieve the PR number and run `scripts/verify-preview.sh <PR_NUMBER>` to verify the Render preview deployment is live and healthy.
 3. Address any unresolved discussions, especially review comments from `@francovp` or `@codex`.
 4. Observe the quiet window and retry policies specified in `references/readiness-and-verification.md`.
-5. If the verification fails repeatedly with issue-specific errors, end with outcome `LOCAL_DEADLOCK`.
+5. If the PR is ready to land and the agent is confident no human review is needed, merge it, remove `agent-working`, sync GitHub/Linear to the shipped state, and end with outcome `SHIPPED`. If human review is still needed, continue to Step 7 instead. If the verification fails repeatedly with issue-specific errors, end with outcome `LOCAL_DEADLOCK`.
 ### Step 6: Skip Loop — Advance Past Blocked or Already-Handled Issues
 
 Both `LOCAL_DEADLOCK` and `IN_REVIEW` with no agent writes are **skip outcomes** — the agent did not produce a PR or make changes for this issue. Keep advancing until a non-skip outcome or no issues remain.
@@ -121,12 +121,13 @@ Skip outcomes do not count toward the max-2 issues-that-require-writes limit (Ha
 
 If the primary issue ends with any other outcome (including `IN_REVIEW` with agent writes), stop execution immediately.
 
-### Step 7: Finalization & Sync
-1. Remove `agent-working` from the GitHub issue and PR.
-2. Add the `In review` label to the GitHub issue and PR.
-3. Move the Linear issue to the `In review` column.
-4. Record the final outcome according to the contract in `references/outcomes-and-deadlocks.md`.
-5. Send an `In review` notification to alert humans that a PR needs review:
+### Step 7: Human Review Handoff & Sync
+1. Use this path only when human review is needed and the PR should not be merged directly.
+2. Remove `agent-working` from the GitHub issue and PR.
+3. Add the `In review` label to the GitHub issue and PR.
+4. Move the Linear issue to the `In review` column.
+5. Record the final outcome as `IN_REVIEW` according to `references/outcomes-and-deadlocks.md`.
+6. Send an `In review` notification to alert humans that a PR needs review:
    ```bash
    PR_URL="$(gh pr view --json url --jq .url 2>/dev/null || echo "N/A")"
    ISSUE_NUM="$(gh issue view --json number --jq .number 2>/dev/null || echo "N/A")"
@@ -141,7 +142,7 @@ If the primary issue ends with any other outcome (including `IN_REVIEW` with age
        "whatsappChatId": "'"${NOTIFY_WHATSAPP_CHAT_ID:-120363422033474991@g.us}"'"
      }'
    ```
-6. **Restore original GitHub user** after all `gh` commands are done:
+7. **Restore original GitHub user** after all `gh` commands are done:
    ```bash
    restore_gh_user
    ```
