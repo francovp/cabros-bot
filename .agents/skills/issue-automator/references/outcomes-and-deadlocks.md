@@ -7,7 +7,7 @@ This reference defines the required outcomes and the deadlock policy for issue a
 Every processed issue must end with exactly one of these outcomes:
 
 1. `DONE`: The issue is already completed and trackers were synced.
-2. `IN_REVIEW`: A PR is ready for review and trackers were synced.
+2. `IN_REVIEW`: A PR is intentionally handed off for human review and trackers were synced.
 3. `SHIPPED`: The code is already on `master` or covered by a merged PR.
 4. `SYNCED`: Only tracker synchronization was needed.
 5. `LOCAL_DEADLOCK`: The issue is blocked by an issue-specific blocker.
@@ -16,6 +16,8 @@ Every processed issue must end with exactly one of these outcomes:
 8. `AMBIGUOUS`: Safe progress requires resolving ambiguity.
 
 `LOCAL_DEADLOCK` and `IN_REVIEW` with no agent writes are both **skip outcomes** — the agent produced no PR or changes for this issue. Both permit advancing to the next oldest issue in a skip loop until a non-skip outcome (`IN_REVIEW` with writes, `DONE`, `SHIPPED`, `SYNCED`, etc.) or no issues remain.
+
+Use `SHIPPED` for direct merges. Use `IN_REVIEW` only when the PR is intentionally paused for human review.
 
 ## Deadlock Policy
 
