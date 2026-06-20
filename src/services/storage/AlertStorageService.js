@@ -34,6 +34,10 @@ const MAX_PAGE_SIZE = 100;
 const DEFAULT_SUMMARY_LIMIT = 500;
 const MAX_SUMMARY_LIMIT = 1000;
 const MAX_SUMMARY_WINDOW_DAYS = 31;
+const DEFAULT_EXPORT_LIMIT = 500;
+const MAX_EXPORT_LIMIT = 1000;
+const MAX_EXPORT_WINDOW_DAYS = 31;
+const MAX_EXPORT_TEXT_LENGTH = 1000;
 const STORAGE_UNAVAILABLE_CODE = 'STORAGE_UNAVAILABLE';
 const INVALID_CURSOR_MESSAGE = 'Invalid before cursor. Use an ISO-8601 timestamp or the nextBefore cursor from a previous response.';
 
@@ -144,6 +148,62 @@ function addDeliverySummary(summary, deliveryResults) {
 	}
 }
 
+function summarizeDeliveryResults(deliveryResults) {
+	if (!Array.isArray(deliveryResults)) {
+		return [];
+	}
+
+	return deliveryResults.map((result) => ({
+		channel: typeof result.channel === 'string' ? result.channel : null,
+		success: Boolean(result.success),
+		messageId: typeof result.messageId === 'string' ? result.messageId : null,
+		errorCode: typeof result.errorCode === 'string' ? result.errorCode : null,
+		statusCode: Number.isInteger(result.statusCode) ? result.statusCode : null,
+	})).filter(result => result.channel);
+}
+
+function summarizeTokenUsage(tokenUsage) {
+	if (!tokenUsage || typeof tokenUsage !== 'object') {
+		return null;
+	}
+
+	return {
+		inputTokens: getNumericValue(tokenUsage.inputTokens || tokenUsage.promptTokens),
+		outputTokens: getNumericValue(tokenUsage.outputTokens || tokenUsage.completionTokens),
+		totalTokens: getNumericValue(tokenUsage.totalTokens || tokenUsage.total),
+		totalCost: getNumericValue(tokenUsage.totalCost),
+	};
+}
+
+function truncateAlertText(text) {
+	if (typeof text !== 'string') {
+		return '';
+	}
+
+	return text.length > MAX_EXPORT_TEXT_LENGTH
+		? text.substring(0, MAX_EXPORT_TEXT_LENGTH)
+		: text;
+}
+
+function formatExportRecord(doc, { includeText }) {
+	const data = doc.data() || {};
+	const record = {
+		id: doc.id,
+		receivedAt: getDocTimestamp(data),
+		source: typeof data.source === 'string' ? data.source : null,
+		enriched: Boolean(data.enriched),
+		useTradingViewData: Boolean(data.useTradingViewData),
+		deliveryResults: summarizeDeliveryResults(data.deliveryResults),
+		tokenUsage: summarizeTokenUsage(data.tokenUsage),
+	};
+
+	if (includeText) {
+		record.text = truncateAlertText(data.text);
+	}
+
+	return record;
+}
+
 function collectLatency(samples, value) {
 	const numeric = Number(value);
 	if (Number.isFinite(numeric) && numeric >= 0) {
@@ -183,12 +243,51 @@ function buildSummaryWindow({ from, to, limit }) {
 	};
 }
 
+function buildExportWindow({ from, to, limit }) {
+	if (!from || !to) {
+		const error = new Error('Export requests require bounded from and to ISO-8601 timestamps.');
+		error.code = 'INVALID_REQUEST';
+		throw error;
+	}
+
+	const parsedFrom = new Date(from);
+	const parsedTo = new Date(to);
+	const maxWindowMs = MAX_EXPORT_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+
+	if (parsedFrom.getTime() > parsedTo.getTime()) {
+		const error = new Error('Invalid export window. from must be before or equal to to.');
+		error.code = 'INVALID_REQUEST';
+		throw error;
+	}
+
+	if (parsedTo.getTime() - parsedFrom.getTime() > maxWindowMs) {
+		const error = new Error(`Invalid export window. Maximum export window is ${MAX_EXPORT_WINDOW_DAYS} days.`);
+		error.code = 'INVALID_REQUEST';
+		throw error;
+	}
+
+	return {
+		from: parsedFrom.toISOString(),
+		to: parsedTo.toISOString(),
+		limit: clampExportLimit(limit),
+		maxDays: MAX_EXPORT_WINDOW_DAYS,
+	};
+}
+
 function clampSummaryLimit(limit) {
 	if (!Number.isInteger(limit) || limit < 1) {
 		return DEFAULT_SUMMARY_LIMIT;
 	}
 
 	return Math.min(limit, MAX_SUMMARY_LIMIT);
+}
+
+function clampExportLimit(limit) {
+	if (!Number.isInteger(limit) || limit < 1) {
+		return DEFAULT_EXPORT_LIMIT;
+	}
+
+	return Math.min(limit, MAX_EXPORT_LIMIT);
 }
 
 function matchesFilters(alert, filters) {
@@ -497,6 +596,54 @@ async function saveReplayAttempt({ alertId, idempotencyKey, channels, deliveryRe
 }
 
 /**
+ * Export a bounded set of stored alerts using safe, stable fields only.
+ *
+ * @param {Object} params
+ * @param {string} params.from ISO timestamp, required
+ * @param {string} params.to ISO timestamp, required
+ * @param {number|undefined} params.limit Maximum documents returned, capped at 1000
+ * @param {string|undefined} params.source Optional exact source filter
+ * @param {boolean|undefined} params.enriched Optional enriched/plain filter
+ * @param {boolean|undefined} params.includeText Include truncated alert text when true
+ * @returns {Promise<{window: Object, alerts: Array}>}
+ */
+async function exportAlerts({ from, to, limit, source, enriched, includeText = false } = {}) {
+	if (!isEnabled()) {
+		return null;
+	}
+
+	const firestore = getFirestore();
+	if (!firestore) {
+		throw createStorageUnavailableError();
+	}
+
+	const window = buildExportWindow({ from, to, limit });
+	let snapshot;
+	try {
+		snapshot = await firestore
+			.collection(COLLECTION_NAME)
+			.where('receivedAt', '>=', admin.firestore.Timestamp.fromDate(new Date(window.from)))
+			.where('receivedAt', '<=', admin.firestore.Timestamp.fromDate(new Date(window.to)))
+			.orderBy('receivedAt', 'desc')
+			.limit(window.limit)
+			.get();
+	} catch (error) {
+		console.warn('[AlertStorageService] Failed to export alerts from Firestore:', error.message);
+		throw createStorageUnavailableError(error);
+	}
+
+	const docs = snapshot && Array.isArray(snapshot.docs) ? snapshot.docs : [];
+	const alerts = docs
+		.map(doc => formatExportRecord(doc, { includeText }))
+		.filter(alert => matchesFilters(alert, { source, enriched }));
+
+	return {
+		window,
+		alerts,
+	};
+}
+
+/**
  * Build bounded aggregate metrics for stored alerts.
  *
  * The endpoint intentionally returns counts and totals only. Raw alert text,
@@ -615,6 +762,7 @@ module.exports = {
 	listAlerts,
 	getAlertById,
 	summarizeAlerts,
+	exportAlerts,
 	saveReplayAttempt,
 	STORAGE_UNAVAILABLE_CODE,
 	INVALID_CURSOR_MESSAGE,
