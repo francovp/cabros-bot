@@ -119,3 +119,5 @@ functions/node_modules/
 functions/.eslintcache
 
 .pnpm-store/
+
+context/
