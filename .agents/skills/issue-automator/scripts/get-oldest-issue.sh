@@ -24,7 +24,7 @@ if ! gh auth status &> /dev/null; then
 fi
 
 # Fetch the oldest open issue
-issue_json=$(gh issue list --state open --sort created --direction asc --limit 1 --json number,title,createdAt,labels,url 2>/dev/null)
+issue_json=$(gh issue list --state open --search "is:open is:issue sort:created-asc" --limit 1 --json number,title,createdAt,labels,url 2>/dev/null)
 
 if [ -z "$issue_json" ] || [ "$issue_json" == "[]" ]; then
   echo "No open issues found."
