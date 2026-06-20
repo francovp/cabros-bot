@@ -1,0 +1,285 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Cabros Bot API",
+    "version": "0.1.0",
+    "description": "Protected alerting and market-analysis APIs. Use the x-api-key header; the api-key query parameter exists only for legacy client compatibility and may leak through logs."
+  },
+  "servers": [{ "url": "/", "description": "Current deployment" }],
+  "tags": [
+    { "name": "Webhooks" },
+    { "name": "Alerts" },
+    { "name": "Scanner presets" },
+    { "name": "Jobs" },
+    { "name": "News" },
+    { "name": "Operations" }
+  ],
+  "paths": {
+    "/api/webhook/alert": {
+      "post": {
+        "tags": ["Webhooks"], "summary": "Deliver an alert", "operationId": "postAlert",
+        "parameters": [{ "$ref": "#/components/parameters/DryRun" }, { "$ref": "#/components/parameters/UseTradingViewData" }],
+        "requestBody": { "$ref": "#/components/requestBodies/Alert" },
+        "responses": { "200": { "$ref": "#/components/responses/DeliveryResult" }, "400": { "$ref": "#/components/responses/Error" }, "401": { "$ref": "#/components/responses/Unauthorized" } },
+        "security": [{ "ApiKeyHeader": [] }, { "ApiKeyQuery": [] }]
+      }
+    },
+    "/api/webhook/message": {
+      "post": {
+        "tags": ["Webhooks"], "summary": "Deliver a generic message", "operationId": "postMessage",
+        "requestBody": { "$ref": "#/components/requestBodies/Message" },
+        "responses": { "200": { "$ref": "#/components/responses/DeliveryResult" }, "400": { "$ref": "#/components/responses/Error" }, "401": { "$ref": "#/components/responses/Unauthorized" } },
+        "security": [{ "ApiKeyHeader": [] }, { "ApiKeyQuery": [] }]
+      }
+    },
+    "/api/webhook/expanded-analysis-alert": {
+      "post": {
+        "tags": ["Webhooks"], "summary": "Build and deliver expanded TradingView analysis", "operationId": "postExpandedAnalysisAlert",
+        "parameters": [{ "$ref": "#/components/parameters/DryRun" }],
+        "requestBody": { "$ref": "#/components/requestBodies/ExpandedAnalysis" },
+        "responses": { "200": { "$ref": "#/components/responses/AnalysisResult" }, "400": { "$ref": "#/components/responses/Error" }, "502": { "$ref": "#/components/responses/Error" }, "504": { "$ref": "#/components/responses/Error" } },
+        "security": [{ "ApiKeyHeader": [] }, { "ApiKeyQuery": [] }]
+      }
+    },
+    "/api/webhook/market-scanner-alert": {
+      "post": {
+        "tags": ["Webhooks"], "summary": "Run market scanners and deliver a report", "operationId": "postMarketScannerAlert",
+        "parameters": [{ "$ref": "#/components/parameters/DryRun" }],
+        "requestBody": { "$ref": "#/components/requestBodies/MarketScanner" },
+        "responses": { "200": { "$ref": "#/components/responses/AnalysisResult" }, "400": { "$ref": "#/components/responses/Error" }, "403": { "$ref": "#/components/responses/Error" }, "502": { "$ref": "#/components/responses/Error" }, "504": { "$ref": "#/components/responses/Error" } },
+        "security": [{ "ApiKeyHeader": [] }, { "ApiKeyQuery": [] }]
+      }
+    },
+    "/api/webhook/volume-confirmation": {
+      "post": {
+        "tags": ["Webhooks"], "summary": "Check TradingView volume confirmation", "operationId": "postVolumeConfirmation",
+        "requestBody": { "$ref": "#/components/requestBodies/VolumeConfirmation" },
+        "responses": { "200": { "$ref": "#/components/responses/AnalysisResult" }, "400": { "$ref": "#/components/responses/Error" }, "502": { "$ref": "#/components/responses/Error" } },
+        "security": [{ "ApiKeyHeader": [] }, { "ApiKeyQuery": [] }]
+      }
+    },
+    "/api/alerts": {
+      "get": {
+        "tags": ["Alerts"], "summary": "List stored alerts", "operationId": "listAlerts",
+        "parameters": [{ "$ref": "#/components/parameters/AlertListLimit" }, { "$ref": "#/components/parameters/Cursor" }, { "$ref": "#/components/parameters/Source" }, { "$ref": "#/components/parameters/Enriched" }],
+        "responses": { "200": { "$ref": "#/components/responses/AlertList" }, "403": { "$ref": "#/components/responses/Error" }, "503": { "$ref": "#/components/responses/Error" } },
+        "security": [{ "ApiKeyHeader": [] }, { "ApiKeyQuery": [] }]
+      }
+    },
+    "/api/alerts/summary": {
+      "get": {
+        "tags": ["Alerts"], "summary": "Summarize stored alert analytics", "operationId": "summarizeAlerts",
+        "parameters": [{ "$ref": "#/components/parameters/From" }, { "$ref": "#/components/parameters/To" }, { "$ref": "#/components/parameters/SummaryLimit" }, { "$ref": "#/components/parameters/Source" }, { "$ref": "#/components/parameters/Enriched" }],
+        "responses": { "200": { "$ref": "#/components/responses/JsonResult" }, "400": { "$ref": "#/components/responses/Error" }, "403": { "$ref": "#/components/responses/Error" }, "503": { "$ref": "#/components/responses/Error" } },
+        "security": [{ "ApiKeyHeader": [] }, { "ApiKeyQuery": [] }]
+      }
+    },
+    "/api/alerts/export": {
+      "get": {
+        "tags": ["Alerts"], "summary": "Export a bounded alert window", "operationId": "exportAlerts",
+        "parameters": [{ "$ref": "#/components/parameters/FromRequired" }, { "$ref": "#/components/parameters/ToRequired" }, { "$ref": "#/components/parameters/ExportFormat" }, { "$ref": "#/components/parameters/ExportLimit" }, { "$ref": "#/components/parameters/Source" }, { "$ref": "#/components/parameters/Enriched" }, { "$ref": "#/components/parameters/IncludeText" }],
+        "responses": { "200": { "description": "JSON Lines or CSV export", "content": { "application/x-ndjson": { "schema": { "type": "string" } }, "text/csv": { "schema": { "type": "string" } } } }, "400": { "$ref": "#/components/responses/Error" }, "403": { "$ref": "#/components/responses/Error" }, "503": { "$ref": "#/components/responses/Error" } },
+        "security": [{ "ApiKeyHeader": [] }, { "ApiKeyQuery": [] }]
+      }
+    },
+    "/api/alerts/{alertId}": {
+      "get": {
+        "tags": ["Alerts"], "summary": "Get a stored alert", "operationId": "getAlertById",
+        "parameters": [{ "$ref": "#/components/parameters/AlertId" }],
+        "responses": { "200": { "$ref": "#/components/responses/JsonResult" }, "404": { "$ref": "#/components/responses/Error" }, "503": { "$ref": "#/components/responses/Error" } },
+        "security": [{ "ApiKeyHeader": [] }, { "ApiKeyQuery": [] }]
+      }
+    },
+    "/api/alerts/{alertId}/replay": {
+      "post": {
+        "tags": ["Alerts"], "summary": "Replay a stored alert", "operationId": "replayAlert",
+        "parameters": [{ "$ref": "#/components/parameters/AlertId" }, { "$ref": "#/components/parameters/DryRun" }],
+        "requestBody": { "$ref": "#/components/requestBodies/Replay" },
+        "responses": { "200": { "$ref": "#/components/responses/DeliveryResult" }, "400": { "$ref": "#/components/responses/Error" }, "404": { "$ref": "#/components/responses/Error" }, "503": { "$ref": "#/components/responses/Error" } },
+        "security": [{ "ApiKeyHeader": [] }, { "ApiKeyQuery": [] }]
+      }
+    },
+    "/api/scanner-presets": {
+      "get": {
+        "tags": ["Scanner presets"], "summary": "List scanner presets", "operationId": "listScannerPresets",
+        "responses": { "200": { "$ref": "#/components/responses/JsonResult" }, "500": { "$ref": "#/components/responses/Error" } },
+        "security": [{ "ApiKeyHeader": [] }, { "ApiKeyQuery": [] }]
+      },
+      "post": {
+        "tags": ["Scanner presets"], "summary": "Create a scanner preset", "operationId": "createScannerPreset",
+        "requestBody": { "$ref": "#/components/requestBodies/ScannerPreset" },
+        "responses": { "201": { "$ref": "#/components/responses/JsonResult" }, "400": { "$ref": "#/components/responses/Error" }, "500": { "$ref": "#/components/responses/Error" } },
+        "security": [{ "ApiKeyHeader": [] }, { "ApiKeyQuery": [] }]
+      }
+    },
+    "/api/scanner-presets/{id}": {
+      "get": {
+        "tags": ["Scanner presets"], "summary": "Get a scanner preset", "operationId": "getScannerPreset",
+        "parameters": [{ "$ref": "#/components/parameters/PresetId" }],
+        "responses": { "200": { "$ref": "#/components/responses/JsonResult" }, "404": { "$ref": "#/components/responses/Error" }, "500": { "$ref": "#/components/responses/Error" } },
+        "security": [{ "ApiKeyHeader": [] }, { "ApiKeyQuery": [] }]
+      },
+      "put": {
+        "tags": ["Scanner presets"], "summary": "Update a scanner preset", "operationId": "updateScannerPreset",
+        "parameters": [{ "$ref": "#/components/parameters/PresetId" }],
+        "requestBody": { "$ref": "#/components/requestBodies/ScannerPreset" },
+        "responses": { "200": { "$ref": "#/components/responses/JsonResult" }, "400": { "$ref": "#/components/responses/Error" }, "404": { "$ref": "#/components/responses/Error" }, "500": { "$ref": "#/components/responses/Error" } },
+        "security": [{ "ApiKeyHeader": [] }, { "ApiKeyQuery": [] }]
+      },
+      "delete": {
+        "tags": ["Scanner presets"], "summary": "Delete a scanner preset", "operationId": "deleteScannerPreset",
+        "parameters": [{ "$ref": "#/components/parameters/PresetId" }],
+        "responses": { "200": { "$ref": "#/components/responses/JsonResult" }, "404": { "$ref": "#/components/responses/Error" }, "500": { "$ref": "#/components/responses/Error" } },
+        "security": [{ "ApiKeyHeader": [] }, { "ApiKeyQuery": [] }]
+      }
+    },
+    "/api/scanner-presets/{id}/run": {
+      "post": {
+        "tags": ["Scanner presets"], "summary": "Run a scanner preset", "operationId": "runScannerPreset",
+        "parameters": [{ "$ref": "#/components/parameters/PresetId" }, { "$ref": "#/components/parameters/DryRun" }],
+        "responses": { "200": { "$ref": "#/components/responses/AnalysisResult" }, "404": { "$ref": "#/components/responses/Error" }, "502": { "$ref": "#/components/responses/Error" }, "504": { "$ref": "#/components/responses/Error" } },
+        "security": [{ "ApiKeyHeader": [] }, { "ApiKeyQuery": [] }]
+      }
+    },
+    "/api/jobs/tradingview-analysis": {
+      "post": {
+        "tags": ["Jobs"], "summary": "Create an asynchronous TradingView job", "operationId": "createTradingViewJob",
+        "requestBody": { "$ref": "#/components/requestBodies/TradingViewJob" },
+        "responses": { "201": { "$ref": "#/components/responses/JobResult" }, "400": { "$ref": "#/components/responses/Error" }, "500": { "$ref": "#/components/responses/Error" } },
+        "security": [{ "ApiKeyHeader": [] }, { "ApiKeyQuery": [] }]
+      }
+    },
+    "/api/jobs/{jobId}": {
+      "get": {
+        "tags": ["Jobs"], "summary": "Get asynchronous job status", "operationId": "getJobStatus",
+        "parameters": [{ "$ref": "#/components/parameters/JobId" }],
+        "responses": { "200": { "$ref": "#/components/responses/JobResult" }, "404": { "$ref": "#/components/responses/Error" }, "500": { "$ref": "#/components/responses/Error" } },
+        "security": [{ "ApiKeyHeader": [] }, { "ApiKeyQuery": [] }]
+      }
+    },
+    "/api/jobs/{jobId}/cancel": {
+      "post": {
+        "tags": ["Jobs"], "summary": "Cancel an asynchronous job", "operationId": "cancelJob",
+        "parameters": [{ "$ref": "#/components/parameters/JobId" }],
+        "responses": { "200": { "$ref": "#/components/responses/JobResult" }, "404": { "$ref": "#/components/responses/Error" }, "409": { "$ref": "#/components/responses/Error" }, "500": { "$ref": "#/components/responses/Error" } },
+        "security": [{ "ApiKeyHeader": [] }, { "ApiKeyQuery": [] }]
+      }
+    },
+    "/api/jobs/{jobId}/retry": {
+      "post": {
+        "tags": ["Jobs"], "summary": "Retry a failed job", "operationId": "retryJob",
+        "parameters": [{ "$ref": "#/components/parameters/JobId" }],
+        "responses": { "201": { "$ref": "#/components/responses/JobResult" }, "404": { "$ref": "#/components/responses/Error" }, "409": { "$ref": "#/components/responses/Error" }, "500": { "$ref": "#/components/responses/Error" } },
+        "security": [{ "ApiKeyHeader": [] }, { "ApiKeyQuery": [] }]
+      }
+    },
+    "/api/jobs/{jobId}/retry-failed": {
+      "post": {
+        "tags": ["Jobs"], "summary": "Retry failed items in a completed job", "operationId": "retryFailedJobItems",
+        "parameters": [{ "$ref": "#/components/parameters/JobId" }],
+        "responses": { "201": { "$ref": "#/components/responses/JobResult" }, "400": { "$ref": "#/components/responses/Error" }, "404": { "$ref": "#/components/responses/Error" }, "409": { "$ref": "#/components/responses/Error" }, "500": { "$ref": "#/components/responses/Error" } },
+        "security": [{ "ApiKeyHeader": [] }, { "ApiKeyQuery": [] }]
+      }
+    },
+    "/api/news-monitor": {
+      "get": {
+        "tags": ["News"], "summary": "Analyze configured or queried market symbols", "operationId": "getNewsMonitor",
+        "parameters": [{ "$ref": "#/components/parameters/CryptoSymbols" }, { "$ref": "#/components/parameters/StockSymbols" }],
+        "responses": { "200": { "$ref": "#/components/responses/AnalysisResult" }, "400": { "$ref": "#/components/responses/Error" }, "403": { "$ref": "#/components/responses/Error" } },
+        "security": [{ "ApiKeyHeader": [] }, { "ApiKeyQuery": [] }]
+      },
+      "post": {
+        "tags": ["News"], "summary": "Analyze market symbols from a JSON request", "operationId": "postNewsMonitor",
+        "requestBody": { "$ref": "#/components/requestBodies/NewsMonitor" },
+        "responses": { "200": { "$ref": "#/components/responses/AnalysisResult" }, "400": { "$ref": "#/components/responses/Error" }, "403": { "$ref": "#/components/responses/Error" } },
+        "security": [{ "ApiKeyHeader": [] }, { "ApiKeyQuery": [] }]
+      }
+    },
+    "/api/status": {
+      "get": {
+        "tags": ["Operations"], "summary": "Get runtime capabilities and dependency readiness", "operationId": "getStatus",
+        "responses": { "200": { "$ref": "#/components/responses/StatusResult" } },
+        "security": [{ "ApiKeyHeader": [] }, { "ApiKeyQuery": [] }]
+      }
+    },
+    "/api/capabilities": {
+      "get": {
+        "tags": ["Operations"], "summary": "Alias for runtime status", "operationId": "getCapabilities",
+        "responses": { "200": { "$ref": "#/components/responses/StatusResult" } },
+        "security": [{ "ApiKeyHeader": [] }, { "ApiKeyQuery": [] }]
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "ApiKeyHeader": { "type": "apiKey", "in": "header", "name": "x-api-key" },
+      "ApiKeyQuery": { "type": "apiKey", "in": "query", "name": "api-key", "description": "Legacy compatibility only. Prefer x-api-key because query strings may be logged." }
+    },
+    "parameters": {
+      "AlertId": { "name": "alertId", "in": "path", "required": true, "schema": { "type": "string" }, "example": "alert-123" },
+      "PresetId": { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+      "JobId": { "name": "jobId", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+      "DryRun": { "name": "dryRun", "in": "query", "schema": { "type": "boolean", "default": false } },
+      "UseTradingViewData": { "name": "useTradingViewData", "in": "query", "schema": { "type": "boolean", "default": false } },
+      "AlertListLimit": { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 50 } },
+      "SummaryLimit": { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 1000, "default": 500 } },
+      "ExportLimit": { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 1000, "default": 500 } },
+      "Cursor": { "name": "cursor", "in": "query", "schema": { "type": "string" }, "description": "Opaque pagination cursor returned by the previous page." },
+      "Source": { "name": "source", "in": "query", "schema": { "type": "string" }, "example": "webhook" },
+      "Enriched": { "name": "enriched", "in": "query", "schema": { "type": "boolean" } },
+      "IncludeText": { "name": "includeText", "in": "query", "schema": { "type": "boolean", "default": false } },
+      "From": { "name": "from", "in": "query", "schema": { "type": "string", "format": "date-time" } },
+      "To": { "name": "to", "in": "query", "schema": { "type": "string", "format": "date-time" } },
+      "FromRequired": { "name": "from", "in": "query", "required": true, "schema": { "type": "string", "format": "date-time" } },
+      "ToRequired": { "name": "to", "in": "query", "required": true, "schema": { "type": "string", "format": "date-time" } },
+      "ExportFormat": { "name": "format", "in": "query", "schema": { "type": "string", "enum": ["jsonl", "csv"], "default": "jsonl" } },
+      "CryptoSymbols": { "name": "crypto", "in": "query", "schema": { "type": "string" }, "example": "BTCUSDT,ETHUSD" },
+      "StockSymbols": { "name": "stocks", "in": "query", "schema": { "type": "string" }, "example": "NVDA,MSFT" }
+    },
+    "requestBodies": {
+      "Alert": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AlertRequest" }, "example": { "text": "BTCUSDT broke resistance with strong volume" } }, "text/plain": { "schema": { "type": "string" }, "example": "BTCUSDT broke resistance" } } },
+      "Message": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MessageRequest" }, "example": { "message": "Deployment completed", "channels": ["telegram", "whatsapp"] } } } },
+      "ExpandedAnalysis": { "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ExpandedAnalysisRequest" }, "example": { "symbols": ["BINANCE:BTCUSDT", "NASDAQ:NVDA"], "timeframe": "1D", "analysisMode": "standard", "includeMultiTimeframe": false } } } },
+      "MarketScanner": { "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MarketScannerRequest" }, "example": { "exchange": "BINANCE", "timeframe": "4h", "scans": ["top_gainers", "top_losers", "volume_breakout_scanner"], "limit": 5 } } } },
+      "VolumeConfirmation": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/VolumeConfirmationRequest" }, "example": { "symbol": "BINANCE:BTCUSDT", "timeframe": "1h" } } } },
+      "Replay": { "content": { "application/json": { "schema": { "type": "object", "properties": { "channels": { "type": "array", "items": { "type": "string", "enum": ["telegram", "whatsapp"] } } } }, "example": { "channels": ["telegram"] } } } },
+      "ScannerPreset": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ScannerPresetRequest" }, "example": { "name": "Daily Scan", "exchange": "BINANCE", "timeframe": "4h", "scans": ["top_gainers"], "limit": 5 } } } },
+      "TradingViewJob": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TradingViewJobRequest" }, "examples": { "expandedAnalysis": { "value": { "type": "expanded-analysis", "symbols": ["BINANCE:BTCUSDT"], "timeframe": "1D" } }, "marketScanner": { "value": { "type": "market-scanner", "exchange": "BINANCE", "timeframe": "4h" } } } } } },
+      "NewsMonitor": { "content": { "application/json": { "schema": { "$ref": "#/components/schemas/NewsMonitorRequest" }, "example": { "crypto": ["BTCUSDT", "ETHUSD"], "stocks": ["NVDA"] } } } }
+    },
+    "responses": {
+      "Unauthorized": { "description": "API key rejected", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }, "example": { "error": "Unauthorized", "code": "UNAUTHORIZED" } } } },
+      "Error": { "description": "Request or service error", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }, "example": { "error": "Invalid request", "code": "INVALID_REQUEST" } } } },
+      "JsonResult": { "description": "Successful JSON response", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/JsonObject" } } } },
+      "DeliveryResult": { "description": "Per-channel delivery result", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DeliveryResult" }, "example": { "success": true, "results": [{ "channel": "telegram", "success": true }] } } } },
+      "AnalysisResult": { "description": "Analysis and delivery result", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/JsonObject" } } } },
+      "AlertList": { "description": "Stored alert page", "content": { "application/json": { "schema": { "type": "object", "properties": { "alerts": { "type": "array", "items": { "$ref": "#/components/schemas/JsonObject" } }, "nextCursor": { "type": ["string", "null"] } } } } } },
+      "JobResult": { "description": "Asynchronous job state", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Job" } } } },
+      "StatusResult": { "description": "Non-sensitive runtime readiness", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Status" } } } }
+    },
+    "schemas": {
+      "JsonObject": { "type": "object", "additionalProperties": true },
+      "Error": { "type": "object", "required": ["error"], "properties": { "error": { "type": "string" }, "code": { "type": "string" } } },
+      "AlertRequest": { "type": "object", "required": ["text"], "properties": { "text": { "type": "string", "minLength": 1 } } },
+      "MessageRequest": { "type": "object", "required": ["message", "channels"], "properties": { "message": { "type": "string", "minLength": 1 }, "channels": { "type": "array", "minItems": 1, "items": { "type": "string", "enum": ["telegram", "whatsapp"] } }, "telegramChatId": { "type": "string", "minLength": 1 }, "whatsappChatId": { "type": "string", "minLength": 1 } } },
+      "ExpandedAnalysisRequest": { "type": "object", "properties": { "symbols": { "type": "array", "maxItems": 50, "items": { "type": "string", "pattern": "^[A-Z0-9_]+:[A-Z0-9._-]+$" } }, "timeframe": { "type": "string", "enum": ["5m", "15m", "1h", "4h", "1D", "1W", "1M"] }, "analysisMode": { "type": "string", "enum": ["standard", "combined"], "default": "standard" }, "includeMultiTimeframe": { "type": "boolean", "default": false } } },
+      "MarketScannerRequest": {
+        "type": "object",
+        "properties": {
+          "exchange": { "type": "string", "default": "BINANCE" },
+          "timeframe": { "type": "string", "default": "4h" },
+          "scans": { "type": "array", "items": { "type": "string", "enum": ["top_gainers", "top_losers", "volume_breakout_scanner", "smart_volume_scanner", "bollinger_scan"] } },
+          "limit": { "type": "integer", "minimum": 1, "maximum": 20, "default": 5 },
+          "bbw_threshold": { "type": "number", "default": 0.05 }
+        }
+      },
+      "VolumeConfirmationRequest": { "type": "object", "required": ["symbol"], "properties": { "symbol": { "type": "string", "pattern": "^[A-Z0-9_]+:[A-Z0-9._-]+$" }, "timeframe": { "type": "string" } } },
+      "ScannerPresetRequest": { "type": "object", "required": ["name"], "properties": { "name": { "type": "string", "minLength": 1 }, "exchange": { "type": "string" }, "timeframe": { "type": "string" }, "scans": { "type": "array", "items": { "type": "string" } }, "limit": { "type": "integer", "minimum": 1, "maximum": 20 }, "bbw_threshold": { "type": "number" } } },
+      "TradingViewJobRequest": { "oneOf": [{ "allOf": [{ "type": "object", "required": ["type"], "properties": { "type": { "const": "expanded-analysis" } } }, { "$ref": "#/components/schemas/ExpandedAnalysisRequest" }] }, { "allOf": [{ "type": "object", "required": ["type"], "properties": { "type": { "const": "market-scanner" } } }, { "$ref": "#/components/schemas/MarketScannerRequest" }] }] },
+      "NewsMonitorRequest": { "type": "object", "properties": { "crypto": { "type": "array", "items": { "type": "string" } }, "stocks": { "type": "array", "items": { "type": "string" } } } },
+      "DeliveryResult": { "type": "object", "properties": { "success": { "type": "boolean" }, "results": { "type": "array", "items": { "type": "object", "properties": { "channel": { "type": "string" }, "success": { "type": "boolean" }, "error": { "type": "string" } } } }, "enriched": { "type": "boolean" }, "tokenUsage": { "$ref": "#/components/schemas/JsonObject" } } },
+      "Job": { "type": "object", "properties": { "success": { "type": "boolean" }, "jobId": { "type": "string", "format": "uuid" }, "status": { "type": "string", "enum": ["pending", "processing", "completed", "failed", "canceled"] }, "progress": { "$ref": "#/components/schemas/JsonObject" }, "result": { "$ref": "#/components/schemas/JsonObject" } } },
+      "Status": { "type": "object", "properties": { "service": { "$ref": "#/components/schemas/JsonObject" }, "featureFlags": { "$ref": "#/components/schemas/JsonObject" }, "deliveryChannels": { "$ref": "#/components/schemas/JsonObject" }, "dependencies": { "$ref": "#/components/schemas/JsonObject" } } }
+    }
+  }
+}

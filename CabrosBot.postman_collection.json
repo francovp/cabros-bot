@@ -35,10 +35,54 @@
 					"code": 200,
 					"body": "{\"uptime\":\"42.5\"}"
 				}
-			]
-		},
-		{
-			"name": "Get Status",
+				]
+			},
+			{
+				"name": "Get OpenAPI Contract",
+				"request": {
+					"method": "GET",
+					"header": [],
+					"description": "Public, read-only canonical OpenAPI contract. No API key is required.",
+					"url": {
+						"raw": "{{baseUrl}}/openapi.json",
+						"host": ["{{baseUrl}}"],
+						"path": ["openapi.json"]
+					}
+				},
+				"response": [
+					{
+						"name": "Success",
+						"status": "OK",
+						"code": 200,
+						"header": [{ "key": "Content-Type", "value": "application/json; charset=utf-8" }],
+						"body": "{\"openapi\":\"3.1.0\",\"info\":{\"title\":\"Cabros Bot API\",\"version\":\"0.1.0\"},\"paths\":{\"/api/status\":{\"get\":{\"security\":[{\"ApiKeyHeader\":[]},{\"ApiKeyQuery\":[]}]}}}}"
+					}
+				]
+			},
+			{
+				"name": "Open Interactive API Docs",
+				"request": {
+					"method": "GET",
+					"header": [],
+					"description": "Public Swagger UI backed by /openapi.json. Protected API calls still require authorization.",
+					"url": {
+						"raw": "{{baseUrl}}/docs",
+						"host": ["{{baseUrl}}"],
+						"path": ["docs"]
+					}
+				},
+				"response": [
+					{
+						"name": "Success",
+						"status": "OK",
+						"code": 200,
+						"header": [{ "key": "Content-Type", "value": "text/html; charset=UTF-8" }],
+						"body": "<!doctype html><html lang=\"en\"><head><title>Cabros Bot API</title></head><body><main id=\"swagger-ui\"></main></body></html>"
+					}
+				]
+			},
+			{
+				"name": "Get Status",
 			"request": {
 				"method": "GET",
 				"header": [
