@@ -162,6 +162,8 @@ pnpm start
 
 ## API Endpoints
 
+The canonical API contract is served publicly at [`/openapi.json`](http://localhost:80/openapi.json), with interactive Swagger UI at [`/docs`](http://localhost:80/docs). Use those endpoints for request schemas, response shapes, examples, and the current route inventory. Protected `/api` operations still require `x-api-key`; the documentation endpoints never expose configured credentials.
+
 ### GET /healthcheck
 
 Health check endpoint.
