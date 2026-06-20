@@ -8,6 +8,18 @@ const MAX_LIMIT = 100;
 const VALID_CHANNELS = ['telegram', 'whatsapp'];
 const DEFAULT_SUMMARY_LIMIT = 500;
 const MAX_SUMMARY_LIMIT = 1000;
+const DEFAULT_EXPORT_LIMIT = 500;
+const MAX_EXPORT_LIMIT = 1000;
+const EXPORT_FIELDS = [
+	'id',
+	'receivedAt',
+	'source',
+	'enriched',
+	'useTradingViewData',
+	'deliveryResults',
+	'tokenUsage',
+	'text',
+];
 
 function parseLimit(rawLimit) {
 	if (rawLimit === undefined) {
@@ -49,6 +61,40 @@ function parseSummaryLimit(rawLimit) {
 	}
 
 	return limit;
+}
+
+function parseExportLimit(rawLimit) {
+	if (rawLimit === undefined) {
+		return DEFAULT_EXPORT_LIMIT;
+	}
+
+	const limit = Number.parseInt(rawLimit, 10);
+	if (!Number.isInteger(limit) || limit < 1 || limit > MAX_EXPORT_LIMIT) {
+		return null;
+	}
+
+	return limit;
+}
+
+function parseBooleanFlag(rawValue, defaultValue = false) {
+	if (rawValue === undefined) {
+		return defaultValue;
+	}
+
+	if (rawValue === 'true' || rawValue === true) {
+		return true;
+	}
+
+	if (rawValue === 'false' || rawValue === false) {
+		return false;
+	}
+
+	return null;
+}
+
+function parseExportFormat(rawFormat) {
+	const format = rawFormat === undefined ? 'jsonl' : String(rawFormat).trim().toLowerCase();
+	return ['jsonl', 'csv'].includes(format) ? format : null;
 }
 
 function parseOptionalTimestamp(rawValue, name) {
@@ -163,6 +209,115 @@ function summarizeAlerts(req, res) {
 			success: true,
 			summary,
 		});
+	});
+}
+
+function escapeCsvValue(value) {
+	if (value === null || value === undefined) {
+		return '';
+	}
+
+	const serialized = typeof value === 'object'
+		? JSON.stringify(value)
+		: String(value);
+
+	if (/[",\n\r]/.test(serialized)) {
+		return `"${serialized.replace(/"/g, '""')}"`;
+	}
+
+	return serialized;
+}
+
+function buildCsv(alerts, includeText) {
+	const fields = includeText
+		? EXPORT_FIELDS
+		: EXPORT_FIELDS.filter(field => field !== 'text');
+	const rows = alerts.map(alert => fields.map(field => escapeCsvValue(alert[field])).join(','));
+	return [fields.join(','), ...rows].join('\n');
+}
+
+function exportAlerts(req, res) {
+	return handleAsync(req, res, '/api/alerts/export', async () => {
+		if (!alertStorageService.isEnabled()) {
+			return res.status(403).json({
+				error: 'Alert storage feature is disabled. Set ENABLE_FIRESTORE_ALERT_STORAGE=true to enable.',
+				code: 'FEATURE_DISABLED',
+			});
+		}
+
+		const format = parseExportFormat(req.query.format);
+		if (!format) {
+			return res.status(400).json({
+				error: 'Invalid export format. Use jsonl or csv.',
+				code: 'INVALID_REQUEST',
+			});
+		}
+
+		const limit = parseExportLimit(req.query.limit);
+		if (limit === null) {
+			return res.status(400).json({
+				error: `Invalid limit. Use an integer between 1 and ${MAX_EXPORT_LIMIT}.`,
+				code: 'INVALID_REQUEST',
+			});
+		}
+
+		const from = parseOptionalTimestamp(req.query.from, 'from');
+		if (from.error) {
+			return res.status(400).json(from.error);
+		}
+
+		const to = parseOptionalTimestamp(req.query.to, 'to');
+		if (to.error) {
+			return res.status(400).json(to.error);
+		}
+
+		if (!from.value || !to.value) {
+			return res.status(400).json({
+				error: 'Export requests require bounded from and to ISO-8601 timestamps.',
+				code: 'INVALID_REQUEST',
+			});
+		}
+
+		const enriched = parseEnriched(req.query.enriched);
+		if (enriched === null) {
+			return res.status(400).json({
+				error: 'Invalid enriched filter. Use true or false.',
+				code: 'INVALID_REQUEST',
+			});
+		}
+
+		const includeText = parseBooleanFlag(req.query.includeText, false);
+		if (includeText === null) {
+			return res.status(400).json({
+				error: 'Invalid includeText flag. Use true or false.',
+				code: 'INVALID_REQUEST',
+			});
+		}
+
+		const source = typeof req.query.source === 'string' && req.query.source.trim()
+			? req.query.source.trim()
+			: undefined;
+
+		const result = await alertStorageService.exportAlerts({
+			from: from.value,
+			to: to.value,
+			limit,
+			source,
+			enriched,
+			includeText,
+		});
+
+		const filename = `alerts-${from.value.substring(0, 10)}-${to.value.substring(0, 10)}.${format === 'csv' ? 'csv' : 'jsonl'}`;
+		res.set('Content-Disposition', `attachment; filename="${filename}"`);
+
+		if (format === 'csv') {
+			res.type('text/csv; charset=utf-8');
+			return res.status(200).send(`${buildCsv(result.alerts, includeText)}\n`);
+		}
+
+		res.type('application/x-ndjson; charset=utf-8');
+		const body = result.alerts.map(alert => JSON.stringify(alert)).join('\n');
+		return res.status(200).send(body ? `${body}\n` : '');
 	});
 }
 
@@ -350,4 +505,5 @@ module.exports = {
 	getAlertById,
 	replayAlert,
 	summarizeAlerts,
+	exportAlerts,
 };

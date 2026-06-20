@@ -6,6 +6,7 @@ jest.mock('../../src/services/storage/AlertStorageService', () => ({
 	getAlertById: jest.fn(),
 	saveReplayAttempt: jest.fn(),
 	summarizeAlerts: jest.fn(),
+	exportAlerts: jest.fn(),
 	STORAGE_UNAVAILABLE_CODE: 'STORAGE_UNAVAILABLE',
 	INVALID_CURSOR_MESSAGE: 'Invalid before cursor. Use an ISO-8601 timestamp or the nextBefore cursor from a previous response.',
 	parseAlertPaginationCursor: jest.fn(),
@@ -320,6 +321,122 @@ describe('Alerts API Integration Tests', () => {
 			error: 'Invalid summary window. from must be before or equal to to.',
 			code: 'INVALID_REQUEST',
 		});
+	});
+
+	it('exports bounded stored alerts as JSONL without raw text by default', async () => {
+		alertStorageService.exportAlerts.mockResolvedValue({
+			window: {
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+				limit: 2,
+				maxDays: 31,
+			},
+			alerts: [
+				{
+					id: 'alert-1',
+					receivedAt: '2026-06-06T12:00:00.000Z',
+					source: 'webhook',
+					enriched: true,
+					useTradingViewData: false,
+					deliveryResults: [{ channel: 'telegram', success: true, messageId: 'tg-1', errorCode: null, statusCode: null }],
+					tokenUsage: { inputTokens: 10, outputTokens: 20, totalTokens: 30, totalCost: 0.001 },
+				},
+			],
+		});
+
+		const res = await request(app)
+			.get('/api/alerts/export?format=jsonl&from=2026-06-06T00:00:00.000Z&to=2026-06-07T00:00:00.000Z&limit=2&source=webhook&enriched=true')
+			.set('x-api-key', 'test-key')
+			.expect(200);
+
+		expect(alertStorageService.exportAlerts).toHaveBeenCalledWith({
+			from: '2026-06-06T00:00:00.000Z',
+			to: '2026-06-07T00:00:00.000Z',
+			limit: 2,
+			source: 'webhook',
+			enriched: true,
+			includeText: false,
+		});
+		expect(res.headers['content-type']).toContain('application/x-ndjson');
+		expect(res.text.trim().split('\n').map(line => JSON.parse(line))).toEqual([
+			{
+				id: 'alert-1',
+				receivedAt: '2026-06-06T12:00:00.000Z',
+				source: 'webhook',
+				enriched: true,
+				useTradingViewData: false,
+				deliveryResults: [{ channel: 'telegram', success: true, messageId: 'tg-1', errorCode: null, statusCode: null }],
+				tokenUsage: { inputTokens: 10, outputTokens: 20, totalTokens: 30, totalCost: 0.001 },
+			},
+		]);
+		expect(res.text).not.toContain('raw secret text');
+	});
+
+	it('exports bounded stored alerts as CSV with optional text', async () => {
+		alertStorageService.exportAlerts.mockResolvedValue({
+			window: {
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+				limit: 1,
+				maxDays: 31,
+			},
+			alerts: [
+				{
+					id: 'alert-1',
+					receivedAt: '2026-06-06T12:00:00.000Z',
+					source: 'webhook',
+					enriched: false,
+					useTradingViewData: true,
+					deliveryResults: [{ channel: 'whatsapp', success: false, messageId: null, errorCode: 'PROVIDER_LIMIT', statusCode: 429 }],
+					tokenUsage: null,
+					text: 'BTC, breakout',
+				},
+			],
+		});
+
+		const res = await request(app)
+			.get('/api/alerts/export?format=csv&from=2026-06-06T00:00:00.000Z&to=2026-06-07T00:00:00.000Z&limit=1&includeText=true')
+			.set('x-api-key', 'test-key')
+			.expect(200);
+
+		expect(alertStorageService.exportAlerts).toHaveBeenCalledWith({
+			from: '2026-06-06T00:00:00.000Z',
+			to: '2026-06-07T00:00:00.000Z',
+			limit: 1,
+			source: undefined,
+			enriched: undefined,
+			includeText: true,
+		});
+		expect(res.headers['content-type']).toContain('text/csv');
+		expect(res.text).toContain('id,receivedAt,source,enriched,useTradingViewData,deliveryResults,tokenUsage,text');
+		expect(res.text).toContain('"BTC, breakout"');
+		expect(res.text).toContain('PROVIDER_LIMIT');
+	});
+
+	it('returns 400 when export bounds are missing', async () => {
+		const res = await request(app)
+			.get('/api/alerts/export?format=jsonl&from=2026-06-06T00:00:00.000Z')
+			.set('x-api-key', 'test-key')
+			.expect(400);
+
+		expect(res.body).toEqual({
+			error: 'Export requests require bounded from and to ISO-8601 timestamps.',
+			code: 'INVALID_REQUEST',
+		});
+		expect(alertStorageService.exportAlerts).not.toHaveBeenCalled();
+	});
+
+	it('returns 400 when export format is invalid', async () => {
+		const res = await request(app)
+			.get('/api/alerts/export?format=xlsx&from=2026-06-06T00:00:00.000Z&to=2026-06-07T00:00:00.000Z')
+			.set('x-api-key', 'test-key')
+			.expect(400);
+
+		expect(res.body).toEqual({
+			error: 'Invalid export format. Use jsonl or csv.',
+			code: 'INVALID_REQUEST',
+		});
+		expect(alertStorageService.exportAlerts).not.toHaveBeenCalled();
 	});
 
 	it('returns a single stored alert by id', async () => {

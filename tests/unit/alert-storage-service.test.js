@@ -561,6 +561,146 @@ describe('AlertStorageService', () => {
 		});
 	});
 
+	describe('exportAlerts()', () => {
+		it('returns null when alert storage is disabled', async () => {
+			const result = await AlertStorageService.exportAlerts({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+			});
+
+			expect(result).toBeNull();
+			expect(mockGet).not.toHaveBeenCalled();
+		});
+
+		it('requires a bounded from/to window', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			await expect(AlertStorageService.exportAlerts({
+				from: '2026-06-06T00:00:00.000Z',
+			})).rejects.toMatchObject({
+				code: 'INVALID_REQUEST',
+				message: 'Export requests require bounded from and to ISO-8601 timestamps.',
+			});
+		});
+
+		it('rejects export windows over 31 days', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			await expect(AlertStorageService.exportAlerts({
+				from: '2026-05-01T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+			})).rejects.toMatchObject({
+				code: 'INVALID_REQUEST',
+				message: 'Invalid export window. Maximum export window is 31 days.',
+			});
+		});
+
+		it('exports safe records with compact delivery and token fields', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('alert-1', {
+						receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+						text: `BTC breakout ${'x'.repeat(1200)}`,
+						enriched: true,
+						enrichmentData: { providerSecret: 'must-not-export' },
+						tokenUsage: {
+							promptTokens: 10,
+							completionTokens: 20,
+							total: 30,
+							totalCost: 0.001,
+							apiKey: 'must-not-export',
+						},
+						deliveryResults: [
+							{
+								channel: 'telegram',
+								success: true,
+								messageId: 'tg-1',
+								requestHeaders: { authorization: 'Bearer secret' },
+							},
+							{
+								channel: 'whatsapp',
+								success: false,
+								errorCode: 'PROVIDER_LIMIT',
+								statusCode: 429,
+								rawProviderResponse: { token: 'secret' },
+							},
+						],
+						source: 'webhook',
+						useTradingViewData: true,
+					}),
+					buildQueryDoc('alert-2', {
+						receivedAt: buildTimestamp('2026-06-06T11:00:00.000Z'),
+						text: 'Plain alert',
+						enriched: false,
+						enrichmentData: null,
+						tokenUsage: null,
+						deliveryResults: [],
+						source: 'webhook',
+						useTradingViewData: false,
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.exportAlerts({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+				limit: 2000,
+				source: 'webhook',
+				enriched: true,
+				includeText: true,
+			});
+
+			expect(mockCollection).toHaveBeenCalledWith('alerts');
+			expect(mockWhere).toHaveBeenCalledWith('receivedAt', '>=', expect.anything());
+			expect(mockWhere).toHaveBeenCalledWith('receivedAt', '<=', expect.anything());
+			expect(mockOrderBy).toHaveBeenCalledWith('receivedAt', 'desc');
+			expect(mockLimit).toHaveBeenCalledWith(1000);
+			expect(result.window).toEqual({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+				limit: 1000,
+				maxDays: 31,
+			});
+			expect(result.alerts).toHaveLength(1);
+			expect(result.alerts[0]).toEqual({
+				id: 'alert-1',
+				receivedAt: '2026-06-06T12:00:00.000Z',
+				source: 'webhook',
+				enriched: true,
+				useTradingViewData: true,
+				deliveryResults: [
+					{ channel: 'telegram', success: true, messageId: 'tg-1', errorCode: null, statusCode: null },
+					{ channel: 'whatsapp', success: false, messageId: null, errorCode: 'PROVIDER_LIMIT', statusCode: 429 },
+				],
+				tokenUsage: {
+					inputTokens: 10,
+					outputTokens: 20,
+					totalTokens: 30,
+					totalCost: 0.001,
+				},
+				text: expect.stringMatching(/^BTC breakout /),
+			});
+			expect(result.alerts[0].text.length).toBe(1000);
+			expect(JSON.stringify(result)).not.toContain('must-not-export');
+			expect(JSON.stringify(result)).not.toContain('authorization');
+			expect(JSON.stringify(result)).not.toContain('rawProviderResponse');
+		});
+
+		it('throws STORAGE_UNAVAILABLE when Firestore export reads fail', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockRejectedValueOnce(new Error('Permission denied'));
+
+			await expect(AlertStorageService.exportAlerts({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+			})).rejects.toMatchObject({
+				code: 'STORAGE_UNAVAILABLE',
+			});
+		});
+	});
+
 	describe('summarizeAlerts()', () => {
 		it('aggregates bounded alert analytics without exposing raw alert text', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
