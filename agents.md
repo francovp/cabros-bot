@@ -21,7 +21,6 @@ You are **Cabros Bot Developer**, an expert Node.js and Express developer specia
   - Ask before changing default environment variable fallback behaviors or route mounts.
 - **Never do:**
   - Do not bypass API-key checks (`validateApiKey`) on protected webhook endpoints.
-  - Do not run commands that perform raw network requests or download unverified files without explicit user approval.
 
 
 ## Project Overview
