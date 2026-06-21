@@ -2,13 +2,7 @@
 require('dotenv').config();
 require('./instrument.js');
 
-const {
-	getPrice,
-	cryptoBotCmd,
-	expandedAnalysisCmd,
-	marketScannerCmd,
-	newsMonitorCmd,
-} = require('./src/controllers/commands');
+const { getPrice, cryptoBotCmd } = require('./src/controllers/commands');
 const app = require('./app.js');
 const { Telegraf, Markup } = require('telegraf');
 const { getRoutes } = require('./src/routes');
@@ -56,9 +50,6 @@ app.listen(port, async () => {
 		bot = new Telegraf(token);
 		bot.command(['precio'], getPrice);
 		bot.command(['cryptobot'], cryptoBotCmd);
-		bot.command(['analisis', 'analysis'], expandedAnalysisCmd);
-		bot.command(['scanner'], marketScannerCmd);
-		bot.command(['noticias', 'news'], newsMonitorCmd);
 
 		// Initialize notification services
 		await initializeNotificationServices(bot);

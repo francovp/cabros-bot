@@ -1,13 +1,7 @@
 'use strict';
 
 const httpMocks = require('node-mocks-http');
-const {
-	postCreateJob,
-	getJobStatus,
-	postCancelJob,
-	postRetryJob,
-	postRetryFailedJob,
-} = require('../../src/controllers/webhooks/handlers/jobs/jobs');
+const { postCreateJob, getJobStatus } = require('../../src/controllers/webhooks/handlers/jobs/jobs');
 const { jobService } = require('../../src/services/jobs/JobService');
 const sentryService = require('../../src/services/monitoring/SentryService');
 
@@ -15,9 +9,6 @@ jest.mock('../../src/services/jobs/JobService', () => ({
 	jobService: {
 		createJob: jest.fn(),
 		getJob: jest.fn(),
-		cancelJob: jest.fn(),
-		retryJob: jest.fn(),
-		retryFailedJob: jest.fn(),
 	},
 }));
 
@@ -31,7 +22,7 @@ describe('Jobs Controller Unit Tests', () => {
 	});
 
 	describe('postCreateJob', () => {
-		it('returns 400 if type is missing', async () => {
+		it('returns 400 if type is missing', () => {
 			const req = httpMocks.createRequest({
 				method: 'POST',
 				url: '/api/jobs/tradingview-analysis',
@@ -39,7 +30,7 @@ describe('Jobs Controller Unit Tests', () => {
 			});
 			const res = httpMocks.createResponse();
 
-			await postCreateJob(null)(req, res);
+			postCreateJob(null)(req, res);
 
 			expect(res.statusCode).toBe(400);
 			const data = res._getJSONData();
@@ -47,7 +38,7 @@ describe('Jobs Controller Unit Tests', () => {
 			expect(data.code).toBe('INVALID_REQUEST');
 		});
 
-		it('returns 201 and job metadata on successful creation', async () => {
+		it('returns 201 and job metadata on successful creation', () => {
 			const req = httpMocks.createRequest({
 				method: 'POST',
 				url: '/api/jobs/tradingview-analysis',
@@ -63,14 +54,14 @@ describe('Jobs Controller Unit Tests', () => {
 			};
 			jobService.createJob.mockReturnValueOnce(mockResult);
 
-			await postCreateJob(null)(req, res);
+			postCreateJob(null)(req, res);
 
 			expect(res.statusCode).toBe(201);
 			expect(res._getJSONData()).toEqual(mockResult);
 			expect(jobService.createJob).toHaveBeenCalledWith('expanded-analysis', req.body, null);
 		});
 
-		it('returns 404/400 if jobService.createJob throws a validation or feature error', async () => {
+		it('returns 404/400 if jobService.createJob throws a validation or feature error', () => {
 			const req = httpMocks.createRequest({
 				method: 'POST',
 				url: '/api/jobs/tradingview-analysis',
@@ -85,7 +76,7 @@ describe('Jobs Controller Unit Tests', () => {
 				throw error;
 			});
 
-			await postCreateJob(null)(req, res);
+			postCreateJob(null)(req, res);
 
 			expect(res.statusCode).toBe(404);
 			const data = res._getJSONData();
@@ -93,7 +84,7 @@ describe('Jobs Controller Unit Tests', () => {
 			expect(data.code).toBe('FEATURE_DISABLED');
 		});
 
-		it('returns 500 and records error to Sentry on unexpected throw', async () => {
+		it('returns 500 and records error to Sentry on unexpected throw', () => {
 			const req = httpMocks.createRequest({
 				method: 'POST',
 				url: '/api/jobs/tradingview-analysis',
@@ -105,7 +96,7 @@ describe('Jobs Controller Unit Tests', () => {
 				throw new Error('Unexpected DB error');
 			});
 
-			await postCreateJob(null)(req, res);
+			postCreateJob(null)(req, res);
 
 			expect(res.statusCode).toBe(500);
 			const data = res._getJSONData();
@@ -115,7 +106,7 @@ describe('Jobs Controller Unit Tests', () => {
 	});
 
 	describe('getJobStatus', () => {
-		it('returns 400 if jobId is missing', async () => {
+		it('returns 400 if jobId is missing', () => {
 			const req = httpMocks.createRequest({
 				method: 'GET',
 				url: '/api/jobs/',
@@ -123,13 +114,13 @@ describe('Jobs Controller Unit Tests', () => {
 			});
 			const res = httpMocks.createResponse();
 
-			await getJobStatus(req, res);
+			getJobStatus(req, res);
 
 			expect(res.statusCode).toBe(400);
 			expect(res._getJSONData().error).toBe('Missing jobId parameter');
 		});
 
-		it('returns 404 if job is not found', async () => {
+		it('returns 404 if job is not found', () => {
 			const req = httpMocks.createRequest({
 				method: 'GET',
 				url: '/api/jobs/missing-job-id',
@@ -139,7 +130,7 @@ describe('Jobs Controller Unit Tests', () => {
 
 			jobService.getJob.mockReturnValueOnce(null);
 
-			await getJobStatus(req, res);
+			getJobStatus(req, res);
 
 			expect(res.statusCode).toBe(404);
 			expect(res._getJSONData()).toEqual({
@@ -148,7 +139,7 @@ describe('Jobs Controller Unit Tests', () => {
 			});
 		});
 
-		it('returns 200 and job details if job exists', async () => {
+		it('returns 200 and job details if job exists', () => {
 			const req = httpMocks.createRequest({
 				method: 'GET',
 				url: '/api/jobs/existing-job-id',
@@ -165,7 +156,7 @@ describe('Jobs Controller Unit Tests', () => {
 			};
 			jobService.getJob.mockReturnValueOnce(mockJob);
 
-			await getJobStatus(req, res);
+			getJobStatus(req, res);
 
 			expect(res.statusCode).toBe(200);
 			expect(res._getJSONData()).toEqual({
@@ -174,7 +165,7 @@ describe('Jobs Controller Unit Tests', () => {
 			});
 		});
 
-		it('returns 500 and records error to Sentry on unexpected throw', async () => {
+		it('returns 500 and records error to Sentry on unexpected throw', () => {
 			const req = httpMocks.createRequest({
 				method: 'GET',
 				url: '/api/jobs/existing-job-id',
@@ -186,154 +177,10 @@ describe('Jobs Controller Unit Tests', () => {
 				throw new Error('Disk crash');
 			});
 
-			await getJobStatus(req, res);
+			getJobStatus(req, res);
 
 			expect(res.statusCode).toBe(500);
 			expect(sentryService.captureRuntimeError).toHaveBeenCalled();
-		});
-	});
-
-	describe('postCancelJob', () => {
-		it('returns 400 if jobId is missing', async () => {
-			const req = httpMocks.createRequest({
-				method: 'POST',
-				url: '/api/jobs//cancel',
-				params: {},
-			});
-			const res = httpMocks.createResponse();
-
-			await postCancelJob(req, res);
-
-			expect(res.statusCode).toBe(400);
-			expect(res._getJSONData().error).toBe('Missing jobId parameter');
-		});
-
-		it('returns 404 if job is not found', async () => {
-			const req = httpMocks.createRequest({
-				method: 'POST',
-				url: '/api/jobs/missing-job-id/cancel',
-				params: { jobId: 'missing-job-id' },
-			});
-			const res = httpMocks.createResponse();
-
-			jobService.cancelJob.mockResolvedValueOnce(null);
-
-			await postCancelJob(req, res);
-
-			expect(res.statusCode).toBe(404);
-			expect(res._getJSONData().error).toBe('Job not found');
-		});
-
-		it('returns 409 if job is terminal', async () => {
-			const req = httpMocks.createRequest({
-				method: 'POST',
-				url: '/api/jobs/terminal-job-id/cancel',
-				params: { jobId: 'terminal-job-id' },
-			});
-			const res = httpMocks.createResponse();
-
-			const mockResult = {
-				success: false,
-				code: 'TERMINAL_JOB',
-				message: 'Job is already in a terminal state.',
-				status: 'completed',
-			};
-			jobService.cancelJob.mockResolvedValueOnce(mockResult);
-
-			await postCancelJob(req, res);
-
-			expect(res.statusCode).toBe(409);
-			expect(res._getJSONData().code).toBe('TERMINAL_JOB');
-		});
-
-		it('returns 200 on successful cancellation', async () => {
-			const req = httpMocks.createRequest({
-				method: 'POST',
-				url: '/api/jobs/running-job-id/cancel',
-				params: { jobId: 'running-job-id' },
-			});
-			const res = httpMocks.createResponse();
-
-			const mockResult = {
-				success: true,
-				jobId: 'running-job-id',
-				status: 'cancelled',
-			};
-			jobService.cancelJob.mockResolvedValueOnce(mockResult);
-
-			await postCancelJob(req, res);
-
-			expect(res.statusCode).toBe(200);
-			expect(res._getJSONData()).toEqual(mockResult);
-		});
-	});
-
-	describe('postRetryJob', () => {
-		it('returns 201 and new job details on success', async () => {
-			const req = httpMocks.createRequest({
-				method: 'POST',
-				url: '/api/jobs/failed-job-id/retry',
-				params: { jobId: 'failed-job-id' },
-			});
-			const res = httpMocks.createResponse();
-
-			const mockResult = {
-				success: true,
-				oldJobId: 'failed-job-id',
-				newJobId: 'new-job-id',
-				status: 'processing',
-			};
-			jobService.retryJob.mockResolvedValueOnce(mockResult);
-
-			await postRetryJob(null)(req, res);
-
-			expect(res.statusCode).toBe(201);
-			expect(res._getJSONData()).toEqual(mockResult);
-		});
-	});
-
-	describe('postRetryFailedJob', () => {
-		it('returns 201 on success', async () => {
-			const req = httpMocks.createRequest({
-				method: 'POST',
-				url: '/api/jobs/mixed-job-id/retry-failed',
-				params: { jobId: 'mixed-job-id' },
-			});
-			const res = httpMocks.createResponse();
-
-			const mockResult = {
-				success: true,
-				oldJobId: 'mixed-job-id',
-				newJobId: 'new-job-id',
-				status: 'processing',
-			};
-			jobService.retryFailedJob.mockResolvedValueOnce(mockResult);
-
-			await postRetryFailedJob(null)(req, res);
-
-			expect(res.statusCode).toBe(201);
-			expect(res._getJSONData()).toEqual(mockResult);
-		});
-
-		it('returns 400 if no failed items to retry', async () => {
-			const req = httpMocks.createRequest({
-				method: 'POST',
-				url: '/api/jobs/all-success-job-id/retry-failed',
-				params: { jobId: 'all-success-job-id' },
-			});
-			const res = httpMocks.createResponse();
-
-			const mockResult = {
-				success: false,
-				code: 'NO_FAILED_ITEMS',
-				message: 'No failed items to retry.',
-			};
-			jobService.retryFailedJob.mockResolvedValueOnce(mockResult);
-
-			await postRetryFailedJob(null)(req, res);
-
-			expect(res.statusCode).toBe(400);
-			expect(res._getJSONData().code).toBe('NO_FAILED_ITEMS');
 		});
 	});
 });

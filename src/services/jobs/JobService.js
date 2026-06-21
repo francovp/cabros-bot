@@ -1,6 +1,5 @@
 'use strict';
 
-const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
 const { tradingViewMcpService } = require('../tradingview/TradingViewMcpService');
 const {
@@ -16,49 +15,26 @@ const {
 	initializeNotificationServices,
 } = require('../../controllers/webhooks/handlers/alert/alert');
 const sentryService = require('../monitoring/SentryService');
-const { jobRepository } = require('./JobRepository');
 
 const EXPIRATION_MS = 3600000; // 1 hour
 const DEFAULT_JOB_TIMEOUT_MS = 300000; // 5 minutes
 
-function isValidCallbackUrl(urlStr) {
-	try {
-		const url = new URL(urlStr);
-		if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-			return false;
-		}
-		if (url.protocol === 'http:') {
-			const isLocal = url.hostname === 'localhost' ||
-				url.hostname === '127.0.0.1' ||
-				url.hostname === '::1' ||
-				process.env.NODE_ENV === 'test' ||
-				process.env.ALLOW_HTTP_CALLBACKS === 'true';
-			return isLocal;
-		}
-		return true;
-	} catch (err) {
-		return false;
-	}
-}
-
 class JobService {
-	constructor(repository = jobRepository) {
-		this.repository = repository;
-		this.jobs = repository;
-		this.activeControllers = new Map();
+	constructor() {
+		this.jobs = new Map();
 	}
 
 	/**
 	 * Cleans up jobs older than 1 hour if they are completed or failed.
 	 */
-	async _cleanExpiredJobs() {
+	_cleanExpiredJobs() {
 		const now = Date.now();
-		for (const [id, job] of this.repository.entries()) {
+		for (const [id, job] of this.jobs.entries()) {
 			if (
 				now - new Date(job.createdAt).getTime() > EXPIRATION_MS &&
 				(job.status === 'completed' || job.status === 'failed')
 			) {
-				await this.repository.delete(id);
+				this.jobs.delete(id);
 			}
 		}
 	}
@@ -68,18 +44,10 @@ class JobService {
 	 * @param {string} jobId
 	 * @returns {Object|null}
 	 */
-	async getJob(jobId) {
-		await this._cleanExpiredJobs();
-		const job = await this.repository.get(jobId);
+	getJob(jobId) {
+		this._cleanExpiredJobs();
+		const job = this.jobs.get(jobId);
 		if (!job) {
-			return null;
-		}
-
-		if (
-			Date.now() - new Date(job.createdAt).getTime() > EXPIRATION_MS &&
-			(job.status === 'completed' || job.status === 'failed')
-		) {
-			await this.repository.delete(jobId);
 			return null;
 		}
 
@@ -104,10 +72,6 @@ class JobService {
 				? job.totalDurationMs
 				: (Date.now() - new Date(job.createdAt).getTime()),
 		};
-
-		if (job.callbackStatus) {
-			formatted.callbackStatus = job.callbackStatus;
-		}
 
 		if (job.type === 'expanded-analysis') {
 			formatted.results = this._compactResults(job.fullResults);
@@ -139,8 +103,8 @@ class JobService {
 	 * @param {Function|Object} botOrGetter - Telegraf bot instance or getter
 	 * @returns {Object} The created job metadata
 	 */
-	async createJob(type, payload, botOrGetter) {
-		await this._cleanExpiredJobs();
+	createJob(type, payload, botOrGetter) {
+		this._cleanExpiredJobs();
 
 		// Synchronous validation based on job type
 		let parsed;
@@ -179,91 +143,11 @@ class JobService {
 			validatedTimeoutMs = Math.min(timeoutVal, MAX_JOB_TIMEOUT_MS);
 		}
 
-		let callbackUrl = null;
-		let callbackSecret = null;
-		let callbackEvents = ['completed', 'failed', 'cancelled', 'timed_out'];
-
-		if (payload && payload.callbackUrl !== undefined && payload.callbackUrl !== null) {
-			if (typeof payload.callbackUrl !== 'string' || !isValidCallbackUrl(payload.callbackUrl)) {
-				const msg = 'callbackUrl must be a valid HTTPS URL (HTTP only allowed for local development)';
-				if (type === 'expanded-analysis') {
-					const { ExpandedAnalysisAlertRequestError } = require('../tradingview/expandedAnalysisAlertReport');
-					throw new ExpandedAnalysisAlertRequestError(msg);
-				} else {
-					const { MarketScannerRequestError } = require('../tradingview/marketScannerReport');
-					throw new MarketScannerRequestError(msg);
-				}
-			}
-			callbackUrl = payload.callbackUrl;
-
-			if (payload.callbackSecret !== undefined && payload.callbackSecret !== null) {
-				if (typeof payload.callbackSecret !== 'string') {
-					const msg = 'callbackSecret must be a string';
-					if (type === 'expanded-analysis') {
-						const { ExpandedAnalysisAlertRequestError } = require('../tradingview/expandedAnalysisAlertReport');
-						throw new ExpandedAnalysisAlertRequestError(msg);
-					} else {
-						const { MarketScannerRequestError } = require('../tradingview/marketScannerReport');
-						throw new MarketScannerRequestError(msg);
-					}
-				}
-				callbackSecret = payload.callbackSecret;
-			}
-
-			if (payload.callbackEvents !== undefined && payload.callbackEvents !== null) {
-				if (!Array.isArray(payload.callbackEvents)) {
-					const msg = 'callbackEvents must be an array of strings';
-					if (type === 'expanded-analysis') {
-						const { ExpandedAnalysisAlertRequestError } = require('../tradingview/expandedAnalysisAlertReport');
-						throw new ExpandedAnalysisAlertRequestError(msg);
-					} else {
-						const { MarketScannerRequestError } = require('../tradingview/marketScannerReport');
-						throw new MarketScannerRequestError(msg);
-					}
-				}
-				const validEvents = new Set(['completed', 'failed', 'cancelled', 'timed_out', 'processing']);
-				for (const event of payload.callbackEvents) {
-					if (typeof event !== 'string' || !validEvents.has(event)) {
-						const msg = `Invalid event in callbackEvents: ${event}. Supported values are: ${[...validEvents].join(', ')}`;
-						if (type === 'expanded-analysis') {
-							const { ExpandedAnalysisAlertRequestError } = require('../tradingview/expandedAnalysisAlertReport');
-							throw new ExpandedAnalysisAlertRequestError(msg);
-						} else {
-							const { MarketScannerRequestError } = require('../tradingview/marketScannerReport');
-							throw new MarketScannerRequestError(msg);
-						}
-					}
-				}
-				callbackEvents = payload.callbackEvents;
-			}
-		}
-
-		const requestMetadata = {
-			type,
-			timeoutMs: validatedTimeoutMs,
-			callbackUrl,
-			callbackSecret,
-			callbackEvents,
-			...(type === 'expanded-analysis' ? {
-				symbols: parsed.symbols.map((s) => s.raw),
-				timeframe: parsed.timeframe,
-				includeMultiTimeframe: parsed.includeMultiTimeframe,
-				analysisMode: parsed.analysisMode,
-			} : {
-				exchange: parsed.exchange,
-				timeframe: parsed.timeframe,
-				scans: parsed.scans,
-				limit: parsed.limit,
-				bbwThreshold: parsed.bbwThreshold,
-			}),
-		};
-
 		const jobId = uuidv4();
 		const job = {
 			jobId,
 			type,
-			status: 'processing',
-			requestMetadata,
+			status: 'pending',
 			progress: {
 				total: type === 'expanded-analysis' ? parsed.symbols.length : parsed.scans.length,
 				current: 0,
@@ -280,21 +164,9 @@ class JobService {
 			updatedAt: new Date().toISOString(),
 			totalDurationMs: 0,
 			timeoutMs: validatedTimeoutMs,
-			...(callbackUrl ? {
-				callbackUrl,
-				callbackSecret,
-				callbackEvents,
-				callbackStatus: {
-					status: 'pending',
-					attempts: [],
-				},
-			} : {}),
 		};
 
-		await this.repository.save(job);
-
-		// Trigger callback for 'processing' if configured
-		await this._triggerCallbackIfConfigured(job);
+		this.jobs.set(jobId, job);
 
 		// Execute background job (fire-and-forget)
 		this._runBackgroundJob(jobId, parsed, payload, botOrGetter).catch((error) => {
@@ -314,19 +186,16 @@ class JobService {
 	 */
 	async _runBackgroundJob(jobId, parsed, payload, botOrGetter) {
 		const startTime = Date.now();
-		const job = await this.repository.get(jobId);
+		const job = this.jobs.get(jobId);
 		if (!job) return;
 
 		job.status = 'processing';
 		job.updatedAt = new Date().toISOString();
-		await this._persistJob(job);
 
 		// Setup Timeout AbortController
 		const timeoutMs = job.timeoutMs || DEFAULT_JOB_TIMEOUT_MS;
 
 		const controller = new AbortController();
-		this.activeControllers.set(jobId, controller);
-
 		const timeoutId = setTimeout(() => {
 			controller.abort(new Error(`Job timed out after ${timeoutMs}ms`));
 		}, timeoutMs);
@@ -341,22 +210,9 @@ class JobService {
 			}
 		} catch (error) {
 			console.error(`[JobService] Job ${jobId} failed:`, error.message);
-
-			const currentJob = await this.repository.get(jobId);
-			if (currentJob && currentJob.status === 'cancelled') {
-				return;
-			}
-
-			const isTimeout =
-				error.message.includes('timed out') ||
-				error.name === 'TimeoutError' ||
-				error.name === 'AbortError' ||
-				(job.fullResults && job.fullResults.some((r) => r.status === 'timeout')) ||
-				(job.fullScanResults && job.fullScanResults.some((r) => r.status === 'timeout'));
-
-			job.status = isTimeout ? 'timed_out' : 'failed';
+			job.status = 'failed';
 			job.error = error.message;
-			job.code = error.code || (isTimeout ? 'JOB_TIMEOUT' : 'INTERNAL_ERROR');
+			job.code = error.code || 'INTERNAL_ERROR';
 
 			sentryService.captureRuntimeError({
 				channel: 'job-service',
@@ -368,21 +224,8 @@ class JobService {
 			});
 		} finally {
 			clearTimeout(timeoutId);
-			this.activeControllers.delete(jobId);
-
-			const finalJob = await this.repository.get(jobId);
-			if (finalJob && finalJob.status === 'cancelled') {
-				finalJob.totalDurationMs = Date.now() - startTime;
-				finalJob.updatedAt = new Date().toISOString();
-				await this._persistJob(finalJob);
-				await this._triggerCallbackIfConfigured(finalJob);
-				return;
-			}
-
 			job.totalDurationMs = Date.now() - startTime;
 			job.updatedAt = new Date().toISOString();
-			await this._persistJob(job);
-			await this._triggerCallbackIfConfigured(job);
 		}
 	}
 
@@ -391,16 +234,9 @@ class JobService {
 
 		for (let index = 0; index < symbols.length; index++) {
 			const input = symbols[index];
-
-			const currentJob = await this.repository.get(job.jobId);
-			if (currentJob && currentJob.status === 'cancelled') {
-				break;
-			}
-
 			job.progress.current = index;
 			job.progress.status = `Analyzing symbol ${input.raw} (${index + 1}/${symbols.length})`;
 			job.updatedAt = new Date().toISOString();
-			await this._persistJob(job);
 
 			if (signal && signal.aborted) {
 				this._appendTimeoutResults(job.fullResults, symbols.slice(index), this._getAbortMessage(signal));
@@ -465,15 +301,9 @@ class JobService {
 			}
 		}
 
-		const currentJob = await this.repository.get(job.jobId);
-		if (currentJob && currentJob.status === 'cancelled') {
-			return;
-		}
-
 		job.progress.current = symbols.length;
 		job.progress.status = 'Completed analysis';
 		job.updatedAt = new Date().toISOString();
-		await this._persistJob(job);
 
 		const timedOut = job.fullResults.some((r) => r.status === 'timeout');
 		const analyzedItems = job.fullResults
@@ -485,12 +315,11 @@ class JobService {
 			}));
 
 		if (analyzedItems.length === 0) {
-			job.status = timedOut ? 'timed_out' : 'failed';
+			job.status = 'failed';
 			job.error = timedOut
 				? 'Expanded analysis job timed out.'
 				: 'TradingView MCP failed for all requested symbols.';
 			job.code = timedOut ? 'EXPANDED_ANALYSIS_ALERT_TIMEOUT' : 'ALL_SYMBOLS_FAILED';
-			await this._persistJob(job);
 			return;
 		}
 
@@ -506,7 +335,6 @@ class JobService {
 		job.deliveryResults = deliveryResults;
 		job.summary = this._buildExpandedSummary(job.fullResults, deliveryResults);
 		job.status = 'completed';
-		await this._persistJob(job);
 	}
 
 	async _executeMarketScanner(job, parsed, signal, botOrGetter) {
@@ -514,16 +342,9 @@ class JobService {
 
 		for (let index = 0; index < scans.length; index++) {
 			const scanType = scans[index];
-
-			const currentJob = await this.repository.get(job.jobId);
-			if (currentJob && currentJob.status === 'cancelled') {
-				break;
-			}
-
 			job.progress.current = index;
 			job.progress.status = `Running scan ${scanType} (${index + 1}/${scans.length})`;
 			job.updatedAt = new Date().toISOString();
-			await this._persistJob(job);
 
 			if (signal && signal.aborted) {
 				this._appendScannerTimeoutResults(job.fullScanResults, scans.slice(index), this._getAbortMessage(signal));
@@ -568,26 +389,19 @@ class JobService {
 			}
 		}
 
-		const currentJob = await this.repository.get(job.jobId);
-		if (currentJob && currentJob.status === 'cancelled') {
-			return;
-		}
-
 		job.progress.current = scans.length;
 		job.progress.status = 'Completed scans';
 		job.updatedAt = new Date().toISOString();
-		await this._persistJob(job);
 
 		const timedOut = job.fullScanResults.some((r) => r.status === 'timeout');
 		const successfulScans = job.fullScanResults.filter((r) => r.status === 'success');
 
 		if (successfulScans.length === 0) {
-			job.status = timedOut ? 'timed_out' : 'failed';
+			job.status = 'failed';
 			job.error = timedOut
 				? 'Market scanner job timed out.'
 				: 'TradingView MCP failed for all requested scans.';
 			job.code = timedOut ? 'MARKET_SCANNER_TIMEOUT' : 'ALL_SCANS_FAILED';
-			await this._persistJob(job);
 			return;
 		}
 
@@ -607,18 +421,6 @@ class JobService {
 		job.deliveryResults = deliveryResults;
 		job.summary = this._buildScannerSummary(job.fullScanResults, deliveryResults);
 		job.status = 'completed';
-		await this._persistJob(job);
-	}
-
-	async _persistJob(job) {
-		const current = await this.repository.get(job.jobId);
-		if (current) {
-			const terminalStatuses = new Set(['completed', 'failed', 'cancelled', 'timed_out']);
-			if (terminalStatuses.has(current.status) && job.status === 'processing') {
-				return;
-			}
-		}
-		await this.repository.save(job);
 	}
 
 	_buildScanArgs(parsed, scanType) {
@@ -745,239 +547,12 @@ class JobService {
 		return fallback;
 	}
 
-	async cancelJob(jobId) {
-		const job = await this.repository.get(jobId);
-		if (!job) {
-			return null;
-		}
-
-		const terminalStatuses = new Set(['completed', 'failed', 'cancelled', 'timed_out']);
-		if (terminalStatuses.has(job.status)) {
-			return {
-				success: false,
-				code: 'TERMINAL_JOB',
-				message: 'Job is already in a terminal state.',
-				status: job.status,
-			};
-		}
-
-		job.status = 'cancelled';
-		job.error = 'Job cancelled by user';
-		job.code = 'USER_CANCELLED';
-		job.updatedAt = new Date().toISOString();
-		await this._persistJob(job);
-
-		const controller = this.activeControllers.get(jobId);
-		if (controller) {
-			controller.abort(new Error('Job cancelled by user'));
-			this.activeControllers.delete(jobId);
-		} else {
-			await this._triggerCallbackIfConfigured(job);
-		}
-
-		return {
-			success: true,
-			jobId,
-			status: job.status,
-		};
-	}
-
-	async retryJob(jobId, botOrGetter) {
-		const job = await this.repository.get(jobId);
-		if (!job) {
-			return null;
-		}
-
-		const retryableStatuses = new Set(['failed', 'timed_out', 'cancelled']);
-		if (!retryableStatuses.has(job.status)) {
-			return {
-				success: false,
-				code: 'NOT_RETRYABLE',
-				message: `Job cannot be retried. Current status: ${job.status}`,
-			};
-		}
-
-		if (!job.requestMetadata) {
-			return {
-				success: false,
-				code: 'MISSING_METADATA',
-				message: 'Missing job request metadata for retry.',
-			};
-		}
-
-		const result = await this.createJob(job.requestMetadata.type, job.requestMetadata, botOrGetter);
-		return {
-			success: true,
-			oldJobId: jobId,
-			newJobId: result.jobId,
-			status: result.status,
-		};
-	}
-
-	async retryFailedJob(jobId, botOrGetter) {
-		const job = await this.repository.get(jobId);
-		if (!job) {
-			return null;
-		}
-
-		if (job.status === 'processing') {
-			return {
-				success: false,
-				code: 'JOB_ACTIVE',
-				message: 'Cannot retry a currently processing job.',
-			};
-		}
-
-		if (!job.requestMetadata) {
-			return {
-				success: false,
-				code: 'MISSING_METADATA',
-				message: 'Missing job request metadata for retry.',
-			};
-		}
-
-		const type = job.requestMetadata.type;
-		let failedItems = [];
-
-		if (type === 'expanded-analysis') {
-			const results = job.fullResults || [];
-			const successfulSymbols = new Set(
-				results
-					.filter((r) => r.status === 'analyzed')
-					.map((r) => r.symbol)
-			);
-			failedItems = (job.requestMetadata.symbols || []).filter((sym) => !successfulSymbols.has(sym));
-		} else if (type === 'market-scanner') {
-			const results = job.fullScanResults || [];
-			const successfulScans = new Set(
-				results
-					.filter((r) => r.status === 'success')
-					.map((r) => r.scan)
-			);
-			failedItems = (job.requestMetadata.scans || []).filter((scan) => !successfulScans.has(scan));
-		}
-
-		if (failedItems.length === 0) {
-			return {
-				success: false,
-				code: 'NO_FAILED_ITEMS',
-				message: 'No failed or timed-out items found to retry in the original job.',
-			};
-		}
-
-		const retryPayload = {
-			...job.requestMetadata,
-			...(type === 'expanded-analysis' ? { symbols: failedItems } : { scans: failedItems }),
-		};
-
-		const result = await this.createJob(type, retryPayload, botOrGetter);
-		return {
-			success: true,
-			oldJobId: jobId,
-			newJobId: result.jobId,
-			status: result.status,
-		};
-	}
-
 	_resolveBot(botOrGetter) {
 		if (typeof botOrGetter === 'function') {
 			return botOrGetter();
 		}
 
 		return botOrGetter || null;
-	}
-
-	async _triggerCallbackIfConfigured(job) {
-		if (!job.callbackUrl) return;
-
-		const events = job.callbackEvents || ['completed', 'failed', 'cancelled', 'timed_out'];
-		if (!events.includes(job.status)) {
-			return;
-		}
-
-		// Prevent duplicate callback trigger for the same terminal state
-		const terminalStates = new Set(['completed', 'failed', 'cancelled', 'timed_out']);
-		if (terminalStates.has(job.status) && job.callbackStatus && job.callbackStatus.status === 'success') {
-			return;
-		}
-
-		// Execute the callback in the background
-		this._sendCallbackWithRetry(job).catch((err) => {
-			console.error(`[JobService] Callback for job ${job.jobId} failed:`, err.message);
-		});
-	}
-
-	async _sendCallbackWithRetry(job) {
-		const callbackUrl = job.callbackUrl;
-		const secret = job.callbackSecret || process.env.JOB_CALLBACK_SIGNING_SECRET || '';
-		const payload = this._formatJobResponse(job);
-		const payloadStr = JSON.stringify(payload);
-
-		const headers = {
-			'Content-Type': 'application/json',
-		};
-		if (secret) {
-			headers['x-callback-signature'] = crypto.createHmac('sha256', secret).update(payloadStr).digest('hex');
-		}
-
-		const attempts = [];
-		let success = false;
-		const maxAttempts = 4; // 1 initial + 3 retries
-		let delayMs = process.env.JOB_CALLBACK_RETRY_DELAY_MS ? parseInt(process.env.JOB_CALLBACK_RETRY_DELAY_MS, 10) : 1000;
-
-		for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-			const controller = new AbortController();
-			const timeoutId = setTimeout(() => controller.abort(), 5000);
-			const timestamp = new Date().toISOString();
-
-			try {
-				const response = await fetch(callbackUrl, {
-					method: 'POST',
-					headers,
-					body: payloadStr,
-					signal: controller.signal,
-				});
-
-				clearTimeout(timeoutId);
-
-				const attemptInfo = {
-					attempt,
-					timestamp,
-					statusCode: response.status,
-				};
-
-				if (response.ok) {
-					attempts.push(attemptInfo);
-					success = true;
-					break;
-				} else {
-					attemptInfo.error = `HTTP ${response.status} ${response.statusText}`;
-					attempts.push(attemptInfo);
-				}
-			} catch (err) {
-				clearTimeout(timeoutId);
-				attempts.push({
-					attempt,
-					timestamp,
-					error: err.name === 'AbortError' ? 'Timeout' : err.message,
-				});
-			}
-
-			if (attempt < maxAttempts) {
-				await new Promise((resolve) => setTimeout(resolve, delayMs));
-				delayMs *= 2;
-			}
-		}
-
-		// Update job state in repository
-		const freshJob = await this.repository.get(job.jobId);
-		if (freshJob) {
-			freshJob.callbackStatus = {
-				status: success ? 'success' : 'failed',
-				attempts: [...(freshJob.callbackStatus?.attempts || []), ...attempts],
-			};
-			await this.repository.save(freshJob);
-		}
 	}
 }
 

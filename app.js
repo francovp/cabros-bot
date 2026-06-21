@@ -3,7 +3,6 @@ const express = require('express');
 const app = express();
 const cors = require('cors');
 const helmet = require('helmet');
-const { getOpenApiDocsRouter } = require('./src/openapi/docs');
 
 // Tell express to use body-parser's urlencoded parsing
 app.use(express.urlencoded({ extended: false }));
@@ -21,8 +20,5 @@ app.use('/healthcheck', require('express-healthcheck')());
 
 // Rate Limiter (must be after healthcheck to avoid limiting health checks)
 app.use(require('./src/lib/rateLimiter'));
-
-// Public, read-only API contract and interactive documentation.
-app.use(getOpenApiDocsRouter());
 
 module.exports = app;
