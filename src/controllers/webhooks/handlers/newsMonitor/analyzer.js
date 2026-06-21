@@ -39,6 +39,12 @@ function getNotificationManager() {
 	return notificationManager;
 }
 
+function hasExplicitRouting(routing = {}) {
+	return Array.isArray(routing.channels) ||
+		typeof routing.telegramChatId === 'string' ||
+		typeof routing.whatsappChatId === 'string';
+}
+
 class NewsAnalyzer {
 	constructor() {
 		this.cache = getCacheInstance();
@@ -154,10 +160,19 @@ class NewsAnalyzer {
 			const cached = this.cache.get(symbol, category);
 			if (cached) {
 				console.debug('[Analyzer] Returning cached result:', symbol, category);
+				let deliveryResults = cached.deliveryResults;
+				if (cached.alert && hasExplicitRouting(routing)) {
+					const notificationMgr = getNotificationManager();
+					if (notificationMgr) {
+						deliveryResults = await sendWithNotificationRouting(notificationMgr, cached.alert, routing);
+					} else {
+						deliveryResults = [];
+					}
+				}
 				return {
 					status: AnalysisStatus.CACHED,
 					alert: cached.alert,
-					deliveryResults: cached.deliveryResults,
+					deliveryResults,
 					cached: true,
 				};
 			}
