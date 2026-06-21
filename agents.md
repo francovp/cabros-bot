@@ -38,6 +38,7 @@ This project is a small Express + Telegraf (Telegram) bot service that exposes a
 - `src/controllers/webhooks/handlers/expandedAnalysisAlert/expandedAnalysisAlert.js` — `POST /api/webhook/expanded-analysis-alert` handler that builds TradingView MCP analysis reports and sends them through notification channels.
 - `src/controllers/webhooks/handlers/volumeConfirmation/volumeConfirmation.js` — `POST /api/webhook/volume-confirmation` handler that returns structured TradingView MCP volume-confirmation data.
 - `src/controllers/webhooks/handlers/jobs/jobs.js` — Job creation (`POST /api/jobs/tradingview-analysis`) and status polling (`GET /api/jobs/:jobId`) handler.
+- `src/services/notification/requestRouting.js` — Shared optional channel-routing validator/dispatcher for alert-producing routes (`channels`, `telegramChatId`, `whatsappChatId`) that preserves legacy broadcast behavior when `channels` is omitted.
 - `src/controllers/alerts/alerts.js` — Stored alert read, export, analytics, and replay handlers for `GET /api/alerts`, `GET /api/alerts/export`, `GET /api/alerts/summary`, `GET /api/alerts/:alertId`, and `POST /api/alerts/:alertId/replay`.
 - `src/controllers/status.js` — Status handler that computes capabilities, feature flags, notification channels, and active dependencies status.
 - `src/controllers/webhooks/handlers/marketScanner/marketScanner.js` — Scanner webhook handler executing sequential gainers, losers, and breakouts scanner runs on TradingView MCP.
@@ -146,6 +147,10 @@ Implement the following security practices to safeguard endpoints and credential
 - Bot startup is gated: bot is launched only when `ENABLE_TELEGRAM_BOT === 'true'` and not a preview environment (`RENDER==='true' && IS_PULL_REQUEST==='true'` disables it).
 - Routes under `/api` (e.g. `/api/webhook/alert`) are mounted regardless of bot launch; individual features and notification channels are gated via env flags and per-channel validation.
 - API documentation is public and read-only at `/docs` and `/openapi.json`; protected `/api` operations remain guarded by `validateApiKey` and the contract documents both header and legacy query authentication.
+- Alert-producing routes now accept optional per-request notification routing:
+  - `channels` — non-empty array limited to `telegram` and/or `whatsapp`
+  - `telegramChatId` / `whatsappChatId` — optional per-channel destination overrides
+  - If `channels` is omitted, delivery still uses the existing broadcast-to-all-enabled-channels behavior.
 - Stored alert read, export, analytics, and replay routes (`GET /api/alerts`, `GET /api/alerts/export`, `GET /api/alerts/summary`, `GET /api/alerts/:alertId`, `POST /api/alerts/:alertId/replay`) are also mounted under `/api`; they require `WEBHOOK_API_KEY` when configured, return `403 FEATURE_DISABLED` unless `ENABLE_FIRESTORE_ALERT_STORAGE=true`, and return `503 STORAGE_UNAVAILABLE` when Firestore is enabled but unreadable.
 
 ---

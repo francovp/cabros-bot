@@ -12,6 +12,7 @@ const { AnalysisStatus, EventCategory } = require('./constants');
 const { GROUNDING_MODEL_NAME, ENABLE_NEWS_MONITOR_TEST_MODE } = require('../../../../services/grounding/config');
 const { getPromptService, PromptKeys } = require('../../../../services/prompts');
 const { MainClient } = require('binance');
+const { sendWithNotificationRouting } = require('../../../../services/notification/requestRouting');
 
 const promptService = getPromptService();
 
@@ -57,9 +58,9 @@ class NewsAnalyzer {
    * @param {string} requestId - Correlation ID for tracing
    * @returns {Promise<Object[]>} Array of AnalysisResult objects
    */
-	async analyzeSymbols(symbols, requestId, tokenUsage) {
+	async analyzeSymbols(symbols, requestId, tokenUsage, routing = {}) {
 		const analysisPromises = symbols.map(symbol =>
-			this.analyzeSymbol(symbol, requestId, tokenUsage).catch(error => ({
+			this.analyzeSymbol(symbol, requestId, tokenUsage, routing).catch(error => ({
 				symbol,
 				status: AnalysisStatus.ERROR,
 				error: {
@@ -100,7 +101,7 @@ class NewsAnalyzer {
    * @param {string} requestId - Correlation ID
    * @returns {Promise<Object>} AnalysisResult object
    */
-	async analyzeSymbol(symbol, requestId, tokenUsage) {
+	async analyzeSymbol(symbol, requestId, tokenUsage, routing = {}) {
 		const startTime = Date.now();
 		const analysis = {
 			symbol,
@@ -113,7 +114,7 @@ class NewsAnalyzer {
 		try {
 			// Attempt to run analysis with timeout
 			const result = await Promise.race([
-				this.analyzeSymbolInternal(symbol, requestId, tokenUsage),
+				this.analyzeSymbolInternal(symbol, requestId, tokenUsage, routing),
 				this.timeoutPromise(this.timeout),
 			]);
 
@@ -145,7 +146,7 @@ class NewsAnalyzer {
    * @param {string} requestId - Correlation ID
    * @returns {Promise<Object>} Partial AnalysisResult (status, alert, etc.)
    */
-	async analyzeSymbolInternal(symbol, requestId, tokenUsage) {
+	async analyzeSymbolInternal(symbol, requestId, tokenUsage, routing = {}) {
 		// Try cache first
 		for (const category of Object.values(EventCategory)) {
 			if (category === EventCategory.NONE) continue;
@@ -238,7 +239,7 @@ class NewsAnalyzer {
 				cached: false,
 			};
 		}
-		const deliveryResults = await notificationMgr.sendToAll(alert);
+		const deliveryResults = await sendWithNotificationRouting(notificationMgr, alert, routing);
 		console.info('[Analyzer] Alert delivery results for', symbol, ':', deliveryResults);
 
 		// Cache the result

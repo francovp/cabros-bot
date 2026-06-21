@@ -17,6 +17,12 @@ const {
 } = require('../../controllers/webhooks/handlers/alert/alert');
 const sentryService = require('../monitoring/SentryService');
 const { jobRepository } = require('./JobRepository');
+const {
+	parseNotificationRouting,
+	sendWithNotificationRouting,
+	getRequestedChannels,
+	getDeliveredChannels,
+} = require('../notification/requestRouting');
 
 const EXPIRATION_MS = 3600000; // 1 hour
 const DEFAULT_JOB_TIMEOUT_MS = 300000; // 5 minutes
@@ -115,9 +121,16 @@ class JobService {
 			formatted.scanResults = this._compactScanResults(job.fullScanResults);
 		}
 
+		if (Array.isArray(job.requestedChannels)) {
+			formatted.requestedChannels = job.requestedChannels;
+		} else if (job.requestMetadata && Array.isArray(job.requestMetadata.channels)) {
+			formatted.requestedChannels = job.requestMetadata.channels;
+		}
+
 		if (job.status === 'completed') {
 			formatted.alertText = job.alertText;
 			formatted.deliveryResults = job.deliveryResults;
+			formatted.deliveredChannels = getDeliveredChannels(job.deliveryResults);
 			formatted.summary = job.summary;
 		} else if (job.status === 'failed') {
 			formatted.error = job.error;
@@ -141,6 +154,7 @@ class JobService {
 	 */
 	async createJob(type, payload, botOrGetter) {
 		await this._cleanExpiredJobs();
+		const routing = parseNotificationRouting(payload);
 
 		// Synchronous validation based on job type
 		let parsed;
@@ -244,6 +258,9 @@ class JobService {
 			callbackUrl,
 			callbackSecret,
 			callbackEvents,
+			...(routing.channels ? { channels: routing.channels } : {}),
+			...(routing.telegramChatId ? { telegramChatId: routing.telegramChatId } : {}),
+			...(routing.whatsappChatId ? { whatsappChatId: routing.whatsappChatId } : {}),
 			...(type === 'expanded-analysis' ? {
 				symbols: parsed.symbols.map((s) => s.raw),
 				timeframe: parsed.timeframe,
@@ -502,8 +519,10 @@ class JobService {
 			notificationManager = await initializeNotificationServices(this._resolveBot(botOrGetter));
 		}
 
-		const deliveryResults = await notificationManager.sendToAll({ text: alertText });
+		const routing = this._getRoutingFromJob(job);
+		const deliveryResults = await sendWithNotificationRouting(notificationManager, { text: alertText }, routing);
 		job.deliveryResults = deliveryResults;
+		job.requestedChannels = getRequestedChannels(notificationManager, routing);
 		job.summary = this._buildExpandedSummary(job.fullResults, deliveryResults);
 		job.status = 'completed';
 		await this._persistJob(job);
@@ -603,8 +622,10 @@ class JobService {
 			notificationManager = await initializeNotificationServices(this._resolveBot(botOrGetter));
 		}
 
-		const deliveryResults = await notificationManager.sendToAll({ text: alertText });
+		const routing = this._getRoutingFromJob(job);
+		const deliveryResults = await sendWithNotificationRouting(notificationManager, { text: alertText }, routing);
 		job.deliveryResults = deliveryResults;
+		job.requestedChannels = getRequestedChannels(notificationManager, routing);
 		job.summary = this._buildScannerSummary(job.fullScanResults, deliveryResults);
 		job.status = 'completed';
 		await this._persistJob(job);
@@ -619,6 +640,15 @@ class JobService {
 			}
 		}
 		await this.repository.save(job);
+	}
+
+	_getRoutingFromJob(job) {
+		const metadata = job && job.requestMetadata ? job.requestMetadata : {};
+		return {
+			channels: metadata.channels,
+			telegramChatId: metadata.telegramChatId,
+			whatsappChatId: metadata.whatsappChatId,
+		};
 	}
 
 	_buildScanArgs(parsed, scanType) {

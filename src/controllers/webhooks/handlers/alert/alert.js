@@ -9,6 +9,13 @@ const { getURLShortener } = require('../../handlers/newsMonitor/urlShortener');
 const sentryService = require('../../../../services/monitoring/SentryService');
 const { TokenUsageTracker } = require('../../../../lib/tokenUsage');
 const alertStorageService = require('../../../../services/storage/AlertStorageService');
+const {
+	NotificationRoutingValidationError,
+	parseNotificationRouting,
+	sendWithNotificationRouting,
+	getRequestedChannels,
+	getDeliveredChannels,
+} = require('../../../../services/notification/requestRouting');
 
 // Initialize services
 let notificationManager = null;
@@ -117,6 +124,7 @@ function postAlert(botOrGetter) {
 
 		try {
 			const requestSpan = sentryService.getActiveSpan();
+			const routing = parseNotificationRouting(typeof body === 'object' ? body : undefined);
 
 			if (typeof body === 'object' && 'text' in body) {
 				alertText = body.text;
@@ -154,10 +162,19 @@ function postAlert(botOrGetter) {
 			}
 
 			// NotificationManager owns the custom dispatch spans.
-			const results = await notificationManager.sendToAll(alert, { parentSpan: requestSpan });
+			const results = await sendWithNotificationRouting(notificationManager, alert, routing, { parentSpan: requestSpan });
+			const requestedChannels = getRequestedChannels(notificationManager, routing);
+			const deliveredChannels = getDeliveredChannels(results);
 
 			// Return 200 OK regardless of delivery success (fail-open pattern)
-			res.json({ success: true, results, enriched, tokenUsage: tokenUsageJSON });
+			res.json({
+				success: true,
+				results,
+				enriched,
+				tokenUsage: tokenUsageJSON,
+				requestedChannels,
+				deliveredChannels,
+			});
 
 			// Fire-and-forget: persist alert to Firestore after responding to the caller.
 			// Errors are caught inside saveAlert — delivery is never blocked by storage.
@@ -167,9 +184,18 @@ function postAlert(botOrGetter) {
 				enrichmentData: alert.enriched || null,
 				tokenUsage: tokenUsageJSON,
 				deliveryResults: results,
+				channels: requestedChannels,
 				useTradingViewData,
 			}).catch(() => {}); // errors already logged inside AlertStorageService
 		} catch (error) {
+			if (error instanceof NotificationRoutingValidationError) {
+				return res.status(error.statusCode).json({
+					success: false,
+					error: error.message,
+					details: error.details,
+				});
+			}
+
 			console.error('[Alert] Request failed:', error.message);
 
 			// Capture runtime error to Sentry (T012)

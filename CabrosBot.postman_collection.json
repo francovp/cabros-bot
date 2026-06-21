@@ -130,7 +130,7 @@
 						],
 						"body": {
 							"mode": "raw",
-							"raw": "{\n  \"text\": \"BTCUSDT: Price breakout above $85,000 with strong volume\"\n}"
+							"raw": "{\n  \"text\": \"BTCUSDT: Price breakout above $85,000 with strong volume\",\n  \"channels\": [\"telegram\"],\n  \"telegramChatId\": \"-1001234567890\"\n}"
 						},
 						"url": {
 							"raw": "{{baseUrl}}/api/webhook/alert",
@@ -179,7 +179,7 @@
 						],
 						"body": {
 							"mode": "raw",
-							"raw": "{\n  \"symbols\": [\"BINANCE:BTCUSDT\", \"NASDAQ:NVDA\"],\n  \"timeframe\": \"1D\"\n}"
+							"raw": "{\n  \"symbols\": [\"BINANCE:BTCUSDT\", \"NASDAQ:NVDA\"],\n  \"timeframe\": \"1D\",\n  \"channels\": [\"telegram\"],\n  \"telegramChatId\": \"-1001234567890\"\n}"
 						},
 						"url": {
 							"raw": "{{baseUrl}}/api/webhook/expanded-analysis-alert",
@@ -217,7 +217,7 @@
 						],
 						"body": {
 							"mode": "raw",
-							"raw": "{\n  \"exchange\": \"BINANCE\",\n  \"timeframe\": \"4h\",\n  \"scans\": [\"top_gainers\", \"top_losers\", \"volume_breakout_scanner\"],\n  \"limit\": 5\n}"
+							"raw": "{\n  \"exchange\": \"BINANCE\",\n  \"timeframe\": \"4h\",\n  \"scans\": [\"top_gainers\", \"top_losers\", \"volume_breakout_scanner\"],\n  \"limit\": 5,\n  \"channels\": [\"telegram\"]\n}"
 						},
 						"url": {
 							"raw": "{{baseUrl}}/api/webhook/market-scanner-alert",
@@ -466,8 +466,13 @@
 					"request": {
 						"method": "POST",
 						"header": [
+							{ "key": "Content-Type", "value": "application/json", "type": "text" },
 							{ "key": "x-api-key", "value": "{{apiKey}}", "type": "text" }
 						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"channels\": [\"telegram\"],\n  \"telegramChatId\": \"-1001234567890\"\n}"
+						},
 						"url": {
 							"raw": "{{baseUrl}}/api/scanner-presets/{{presetId}}/run",
 							"host": ["{{baseUrl}}"],
@@ -523,7 +528,7 @@
 						],
 						"body": {
 							"mode": "raw",
-							"raw": "{\n  \"crypto\": [\"BTCUSDT\", \"ETHUSD\"],\n  \"stocks\": [\"NVDA\", \"MSFT\"]\n}"
+							"raw": "{\n  \"crypto\": [\"BTCUSDT\", \"ETHUSD\"],\n  \"stocks\": [\"NVDA\", \"MSFT\"],\n  \"channels\": [\"telegram\"]\n}"
 						},
 						"url": {
 							"raw": "{{baseUrl}}/api/news-monitor",
@@ -545,7 +550,8 @@
 							"path": ["api", "news-monitor"],
 							"query": [
 								{ "key": "crypto", "value": "BTCUSDT,ETHUSD" },
-								{ "key": "stocks", "value": "NVDA" }
+								{ "key": "stocks", "value": "NVDA" },
+								{ "key": "channels", "value": "telegram" }
 							]
 						}
 					}
@@ -918,7 +924,7 @@
 						],
 						"body": {
 							"mode": "raw",
-							"raw": "{\n  \"type\": \"expanded-analysis\",\n  \"symbols\": [\"BINANCE:BTCUSDT\"],\n  \"timeframe\": \"1D\",\n  \"includeMultiTimeframe\": true\n}"
+							"raw": "{\n  \"type\": \"expanded-analysis\",\n  \"symbols\": [\"BINANCE:BTCUSDT\"],\n  \"timeframe\": \"1D\",\n  \"includeMultiTimeframe\": true,\n  \"channels\": [\"telegram\"],\n  \"telegramChatId\": \"-1001234567890\"\n}"
 						},
 						"url": {
 							"raw": "{{baseUrl}}/api/jobs/tradingview-analysis",
@@ -983,7 +989,7 @@
 						],
 						"body": {
 							"mode": "raw",
-							"raw": "{\n  \"type\": \"market-scanner\",\n  \"exchange\": \"BINANCE\",\n  \"timeframe\": \"4h\",\n  \"scans\": [\"top_gainers\", \"top_losers\"],\n  \"limit\": 5\n}"
+							"raw": "{\n  \"type\": \"market-scanner\",\n  \"exchange\": \"BINANCE\",\n  \"timeframe\": \"4h\",\n  \"scans\": [\"top_gainers\", \"top_losers\"],\n  \"limit\": 5,\n  \"channels\": [\"telegram\"]\n}"
 						},
 						"url": {
 							"raw": "{{baseUrl}}/api/jobs/tradingview-analysis",
