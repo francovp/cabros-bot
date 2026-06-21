@@ -68,6 +68,27 @@ function shouldRedeliverCachedAlert(notificationMgr, cachedDeliveryResults, rout
 	return requestedChannels.some((channel) => !deliveredSet.has(channel));
 }
 
+function getCachedRoutingMetadata(routing = {}) {
+	return {
+		channels: Array.isArray(routing.channels) ? [...routing.channels] : undefined,
+		telegramChatId: typeof routing.telegramChatId === 'string' ? routing.telegramChatId : undefined,
+		whatsappChatId: typeof routing.whatsappChatId === 'string' ? routing.whatsappChatId : undefined,
+	};
+}
+
+function cachedOverridesDiffer(cachedRouting = {}, routing = {}) {
+	return cachedRouting.telegramChatId !== (typeof routing.telegramChatId === 'string' ? routing.telegramChatId : undefined)
+		|| cachedRouting.whatsappChatId !== (typeof routing.whatsappChatId === 'string' ? routing.whatsappChatId : undefined);
+}
+
+function shouldRedeliverCachedAlertForRequest(notificationMgr, cachedEntry = {}, routing = {}) {
+	if (cachedOverridesDiffer(cachedEntry.routing, routing)) {
+		return true;
+	}
+
+	return shouldRedeliverCachedAlert(notificationMgr, cachedEntry.deliveryResults, routing);
+}
+
 class NewsAnalyzer {
 	constructor() {
 		this.cache = getCacheInstance();
@@ -186,7 +207,7 @@ class NewsAnalyzer {
 				let deliveryResults = cached.deliveryResults;
 				if (cached.alert) {
 					const notificationMgr = getNotificationManager();
-					if (shouldRedeliverCachedAlert(notificationMgr, cached.deliveryResults, routing)) {
+					if (shouldRedeliverCachedAlertForRequest(notificationMgr, cached, routing)) {
 						deliveryResults = await sendWithNotificationRouting(notificationMgr, cached.alert, routing);
 					} else if (!notificationMgr) {
 						deliveryResults = [];
@@ -289,6 +310,7 @@ class NewsAnalyzer {
 				cached: false,
 				requestId,
 			},
+			routing: getCachedRoutingMetadata(routing),
 			deliveryResults,
 		});
 

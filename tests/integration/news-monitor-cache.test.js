@@ -271,6 +271,44 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 			expect(mockFetch).toHaveBeenCalledTimes(2);
 		});
 
+		it('should re-deliver cached alerts to the default destination when the cached send used a chat override', async () => {
+			const response1 = await request(app)
+				.post('/api/news-monitor').set('x-api-key', 'test-key')
+				.send({
+					crypto: ['BTCUSDT'],
+					channels: ['telegram'],
+					telegramChatId: '-100999888777',
+				})
+				.expect(200);
+
+			expect(response1.body.results[0].cached).toBe(false);
+			expect(response1.body.requestedChannels).toEqual(['telegram']);
+			expect(response1.body.deliveredChannels).toEqual(['telegram']);
+			expect(mockBot.telegram.sendMessage).toHaveBeenCalledWith(
+				'-100999888777',
+				expect.any(String),
+				expect.any(Object),
+			);
+
+			const response2 = await request(app)
+				.post('/api/news-monitor').set('x-api-key', 'test-key')
+				.send({
+					crypto: ['BTCUSDT'],
+				})
+				.expect(200);
+
+			expect(response2.body.results[0].cached).toBe(true);
+			expect(response2.body.requestedChannels).toEqual(['telegram', 'whatsapp']);
+			expect(response2.body.deliveredChannels).toEqual(['telegram', 'whatsapp']);
+			expect(mockBot.telegram.sendMessage).toHaveBeenLastCalledWith(
+				'123456789',
+				expect.any(String),
+				expect.any(Object),
+			);
+			expect(mockBot.telegram.sendMessage).toHaveBeenCalledTimes(2);
+			expect(mockFetch).toHaveBeenCalledTimes(1);
+		});
+
 		it('should include cached alerts in response', async () => {
 			// First call
 			const response1 = await request(app)
