@@ -19,11 +19,25 @@ function getRequestPath(req) {
 }
 
 function buildRequestFingerprint(req) {
+	let body = req.body || {};
+	if (body && typeof body === 'object') {
+		body = { ...body };
+		delete body.idempotencyKey;
+		delete body.idempotency_key;
+	}
+
+	let query = req.query || {};
+	if (query && typeof query === 'object') {
+		query = { ...query };
+		delete query.idempotencyKey;
+		delete query.idempotency_key;
+	}
+
 	return {
 		method: req.method || 'GET',
 		path: getRequestPath(req),
-		body: req.body || {},
-		query: req.query || {},
+		body,
+		query,
 	};
 }
 
