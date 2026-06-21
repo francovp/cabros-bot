@@ -271,5 +271,54 @@ describe('Alert Grounding Integration', () => {
 			expect(telegramResult).toBeDefined();
 			expect(telegramResult.success).toBe(true);
 		});
+
+		it('routes alert delivery to requested channels only and reports requested channels', async () => {
+			process.env.ENABLE_GEMINI_GROUNDING = 'false';
+			process.env.ENABLE_WHATSAPP_ALERTS = 'true';
+			process.env.WHATSAPP_API_URL = 'https://api.greenapi.com/waInstance123/';
+			process.env.WHATSAPP_API_KEY = 'test-whatsapp-key';
+			process.env.WHATSAPP_CHAT_ID = '120363000000000000@g.us';
+
+			const response = await request(app)
+				.post('/api/webhook/alert').set('x-api-key', 'test-key')
+				.send({
+					text: 'Route this only to telegram',
+					channels: ['telegram'],
+					telegramChatId: '-100999888777',
+				})
+				.expect(200);
+
+			expect(response.body.success).toBe(true);
+			expect(response.body.requestedChannels).toEqual(['telegram']);
+			expect(response.body.deliveredChannels).toEqual(['telegram']);
+			expect(response.body.results).toHaveLength(1);
+			expect(response.body.results[0]).toEqual(expect.objectContaining({
+				channel: 'telegram',
+				success: true,
+			}));
+			expect(mockTelegramSendMessage).toHaveBeenCalledWith(
+				'-100999888777',
+				expect.any(String),
+				expect.any(Object),
+			);
+			expect(mockFetch).not.toHaveBeenCalled();
+		});
+
+		it('returns 400 when alert webhook receives an unsupported channel name', async () => {
+			process.env.ENABLE_GEMINI_GROUNDING = 'false';
+
+			const response = await request(app)
+				.post('/api/webhook/alert').set('x-api-key', 'test-key')
+				.send({
+					text: 'Bad channel request',
+					channels: ['telegram', 'discord'],
+				})
+				.expect(400);
+
+			expect(response.body.error).toContain('Unknown channel');
+			expect(response.body.error).toContain('discord');
+			expect(mockTelegramSendMessage).not.toHaveBeenCalled();
+			expect(mockFetch).not.toHaveBeenCalled();
+		});
 	});
 });

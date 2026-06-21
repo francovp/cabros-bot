@@ -12,6 +12,11 @@ const { AnalysisStatus, EventCategory } = require('./constants');
 const { GROUNDING_MODEL_NAME, ENABLE_NEWS_MONITOR_TEST_MODE } = require('../../../../services/grounding/config');
 const { getPromptService, PromptKeys } = require('../../../../services/prompts');
 const { MainClient } = require('binance');
+const {
+	sendWithNotificationRouting,
+	getRequestedChannels,
+	getDeliveredChannels,
+} = require('../../../../services/notification/requestRouting');
 
 const promptService = getPromptService();
 
@@ -38,6 +43,52 @@ function getNotificationManager() {
 	return notificationManager;
 }
 
+function hasExplicitRouting(routing = {}) {
+	return Array.isArray(routing.channels) ||
+		typeof routing.telegramChatId === 'string' ||
+		typeof routing.whatsappChatId === 'string';
+}
+
+function shouldRedeliverCachedAlert(notificationMgr, cachedDeliveryResults, routing = {}) {
+	if (!notificationMgr) {
+		return false;
+	}
+
+	if (hasExplicitRouting(routing)) {
+		return true;
+	}
+
+	const requestedChannels = getRequestedChannels(notificationMgr, routing);
+	const deliveredChannels = getDeliveredChannels(cachedDeliveryResults);
+	if (requestedChannels.length !== deliveredChannels.length) {
+		return true;
+	}
+
+	const deliveredSet = new Set(deliveredChannels);
+	return requestedChannels.some((channel) => !deliveredSet.has(channel));
+}
+
+function getCachedRoutingMetadata(routing = {}) {
+	return {
+		channels: Array.isArray(routing.channels) ? [...routing.channels] : undefined,
+		telegramChatId: typeof routing.telegramChatId === 'string' ? routing.telegramChatId : undefined,
+		whatsappChatId: typeof routing.whatsappChatId === 'string' ? routing.whatsappChatId : undefined,
+	};
+}
+
+function cachedOverridesDiffer(cachedRouting = {}, routing = {}) {
+	return cachedRouting.telegramChatId !== (typeof routing.telegramChatId === 'string' ? routing.telegramChatId : undefined)
+		|| cachedRouting.whatsappChatId !== (typeof routing.whatsappChatId === 'string' ? routing.whatsappChatId : undefined);
+}
+
+function shouldRedeliverCachedAlertForRequest(notificationMgr, cachedEntry = {}, routing = {}) {
+	if (cachedOverridesDiffer(cachedEntry.routing, routing)) {
+		return true;
+	}
+
+	return shouldRedeliverCachedAlert(notificationMgr, cachedEntry.deliveryResults, routing);
+}
+
 class NewsAnalyzer {
 	constructor() {
 		this.cache = getCacheInstance();
@@ -57,9 +108,9 @@ class NewsAnalyzer {
    * @param {string} requestId - Correlation ID for tracing
    * @returns {Promise<Object[]>} Array of AnalysisResult objects
    */
-	async analyzeSymbols(symbols, requestId, tokenUsage) {
+	async analyzeSymbols(symbols, requestId, tokenUsage, routing = {}) {
 		const analysisPromises = symbols.map(symbol =>
-			this.analyzeSymbol(symbol, requestId, tokenUsage).catch(error => ({
+			this.analyzeSymbol(symbol, requestId, tokenUsage, routing).catch(error => ({
 				symbol,
 				status: AnalysisStatus.ERROR,
 				error: {
@@ -100,7 +151,7 @@ class NewsAnalyzer {
    * @param {string} requestId - Correlation ID
    * @returns {Promise<Object>} AnalysisResult object
    */
-	async analyzeSymbol(symbol, requestId, tokenUsage) {
+	async analyzeSymbol(symbol, requestId, tokenUsage, routing = {}) {
 		const startTime = Date.now();
 		const analysis = {
 			symbol,
@@ -113,7 +164,7 @@ class NewsAnalyzer {
 		try {
 			// Attempt to run analysis with timeout
 			const result = await Promise.race([
-				this.analyzeSymbolInternal(symbol, requestId, tokenUsage),
+				this.analyzeSymbolInternal(symbol, requestId, tokenUsage, routing),
 				this.timeoutPromise(this.timeout),
 			]);
 
@@ -145,7 +196,7 @@ class NewsAnalyzer {
    * @param {string} requestId - Correlation ID
    * @returns {Promise<Object>} Partial AnalysisResult (status, alert, etc.)
    */
-	async analyzeSymbolInternal(symbol, requestId, tokenUsage) {
+	async analyzeSymbolInternal(symbol, requestId, tokenUsage, routing = {}) {
 		// Try cache first
 		for (const category of Object.values(EventCategory)) {
 			if (category === EventCategory.NONE) continue;
@@ -153,10 +204,19 @@ class NewsAnalyzer {
 			const cached = this.cache.get(symbol, category);
 			if (cached) {
 				console.debug('[Analyzer] Returning cached result:', symbol, category);
+				let deliveryResults = cached.deliveryResults;
+				if (cached.alert) {
+					const notificationMgr = getNotificationManager();
+					if (shouldRedeliverCachedAlertForRequest(notificationMgr, cached, routing)) {
+						deliveryResults = await sendWithNotificationRouting(notificationMgr, cached.alert, routing);
+					} else if (!notificationMgr) {
+						deliveryResults = [];
+					}
+				}
 				return {
 					status: AnalysisStatus.CACHED,
 					alert: cached.alert,
-					deliveryResults: cached.deliveryResults,
+					deliveryResults,
 					cached: true,
 				};
 			}
@@ -238,7 +298,7 @@ class NewsAnalyzer {
 				cached: false,
 			};
 		}
-		const deliveryResults = await notificationMgr.sendToAll(alert);
+		const deliveryResults = await sendWithNotificationRouting(notificationMgr, alert, routing);
 		console.info('[Analyzer] Alert delivery results for', symbol, ':', deliveryResults);
 
 		// Cache the result
@@ -250,6 +310,7 @@ class NewsAnalyzer {
 				cached: false,
 				requestId,
 			},
+			routing: getCachedRoutingMetadata(routing),
 			deliveryResults,
 		});
 

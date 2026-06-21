@@ -1,63 +1,33 @@
 require('dotenv').config();
 const sentryService = require('../../../../services/monitoring/SentryService');
 const { getNotificationManager, initializeNotificationServices } = require('../alert/alert');
-
-const VALID_CHANNELS = ['telegram', 'whatsapp'];
+const {
+	VALID_CHANNELS,
+	NotificationRoutingValidationError,
+	parseNotificationRouting,
+	sendWithNotificationRouting,
+} = require('../../../../services/notification/requestRouting');
 const MAX_MESSAGE_LENGTH = 4000;
-
-class MessageValidationError extends Error {
-	constructor(message, details = null) {
-		super(message);
-		this.name = 'MessageValidationError';
-		this.details = details;
-		this.statusCode = 400;
-	}
-}
 
 function validateMessageRequest(body) {
 	if (!body || typeof body !== 'object') {
-		throw new MessageValidationError('Request body must be a JSON object');
+		throw new NotificationRoutingValidationError('Request body must be a JSON object');
 	}
 
-	const { message, channels, telegramChatId, whatsappChatId } = body;
+	const { message } = body;
 
 	if (!message || typeof message !== 'string') {
-		throw new MessageValidationError('"message" is required and must be a non-empty string', {
+		throw new NotificationRoutingValidationError('"message" is required and must be a non-empty string', {
 			field: 'message',
 		});
 	}
-
-	if (!channels || !Array.isArray(channels) || channels.length === 0) {
-		throw new MessageValidationError('"channels" is required and must be a non-empty array', {
-			field: 'channels',
-		});
-	}
-
-	const unknownChannels = channels.filter(ch => !VALID_CHANNELS.includes(ch));
-	if (unknownChannels.length > 0) {
-		throw new MessageValidationError(
-			`Unknown channel(s): ${unknownChannels.join(', ')}. Valid channels: ${VALID_CHANNELS.join(', ')}`,
-			{ field: 'channels', unknownChannels },
-		);
-	}
-
-	if (telegramChatId !== undefined && (typeof telegramChatId !== 'string' || telegramChatId.length === 0)) {
-		throw new MessageValidationError('"telegramChatId" must be a non-empty string if provided', {
-			field: 'telegramChatId',
-		});
-	}
-
-	if (whatsappChatId !== undefined && (typeof whatsappChatId !== 'string' || whatsappChatId.length === 0)) {
-		throw new MessageValidationError('"whatsappChatId" must be a non-empty string if provided', {
-			field: 'whatsappChatId',
-		});
-	}
+	const routing = parseNotificationRouting(body, { requiredChannels: true });
 
 	const text = message.length > MAX_MESSAGE_LENGTH
 		? message.substring(0, MAX_MESSAGE_LENGTH) + '...'
 		: message;
 
-	return { text, channels, telegramChatId, whatsappChatId };
+	return { text, ...routing };
 }
 
 function postMessage(botOrGetter) {
@@ -84,11 +54,11 @@ function postMessage(botOrGetter) {
 				}
 			}
 
-			const results = await notificationManager.sendToChannels(alert, channels);
+			const results = await sendWithNotificationRouting(notificationManager, alert, { channels, telegramChatId, whatsappChatId });
 
 			res.json({ success: true, results });
 		} catch (error) {
-			if (error instanceof MessageValidationError) {
+			if (error instanceof NotificationRoutingValidationError) {
 				return res.status(error.statusCode).json({
 					success: false,
 					error: error.message,
@@ -117,7 +87,7 @@ function postMessage(botOrGetter) {
 
 module.exports = {
 	postMessage,
-	MessageValidationError,
+	MessageValidationError: NotificationRoutingValidationError,
 	VALID_CHANNELS,
 	MAX_MESSAGE_LENGTH,
 };

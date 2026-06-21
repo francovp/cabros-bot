@@ -14,6 +14,13 @@ const {
 	initializeNotificationServices,
 } = require('../alert/alert');
 const sentryService = require('../../../../services/monitoring/SentryService');
+const {
+	NotificationRoutingValidationError,
+	parseNotificationRouting,
+	sendWithNotificationRouting,
+	getRequestedChannels,
+	getDeliveredChannels,
+} = require('../../../../services/notification/requestRouting');
 
 const DEFAULT_SCANNER_TIMEOUT_MS = 90000;
 const MAX_SCANNER_TIMEOUT_MS = 120000;
@@ -144,6 +151,7 @@ function listPresets(req, res) {
 function getPreset(req, res) {
 	return (async () => {
 		try {
+			const routing = parseNotificationRouting(req.body);
 			const preset = await scannerPresetService.getPreset(req.params.id);
 			if (!preset) {
 				return res.status(404).json({
@@ -252,6 +260,7 @@ function postRunPreset(botOrGetter) {
 					code: 'FEATURE_DISABLED',
 				});
 			}
+			const routing = parseNotificationRouting(req.body);
 
 			const preset = await scannerPresetService.getPreset(req.params.id);
 			if (!preset) {
@@ -318,9 +327,11 @@ function postRunPreset(botOrGetter) {
 				notificationManager = await initializeNotificationServices(resolveBot(botOrGetter));
 			}
 
-			const deliveryResults = await notificationManager.sendToAll({ text: alertText }, {
+			const deliveryResults = await sendWithNotificationRouting(notificationManager, { text: alertText }, routing, {
 				parentSpan: sentryService.getActiveSpan(),
 			});
+			const requestedChannels = getRequestedChannels(notificationManager, routing);
+			const deliveredChannels = getDeliveredChannels(deliveryResults);
 			const summary = buildSummary(scanResults, deliveryResults);
 
 			return res.status(200).json({
@@ -329,6 +340,8 @@ function postRunPreset(botOrGetter) {
 				alertText,
 				scanResults: compactScanResults(scanResults),
 				deliveryResults,
+				requestedChannels,
+				deliveredChannels,
 				summary,
 				timedOut,
 				timeoutMs,
@@ -336,6 +349,14 @@ function postRunPreset(botOrGetter) {
 				totalDurationMs: Date.now() - startTime,
 			});
 		} catch (error) {
+			if (error instanceof NotificationRoutingValidationError) {
+				return res.status(400).json({
+					error: error.message,
+					code: 'INVALID_REQUEST',
+					requestId,
+				});
+			}
+
 			console.error('[ScannerPresets] Run failed:', error.message);
 			sentryService.captureRuntimeError({
 				channel: 'scanner-presets',

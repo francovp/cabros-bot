@@ -12,6 +12,12 @@ const { AnalysisStatus } = require('./constants');
 const { getNotificationManager } = require('../alert/alert');
 const sentryService = require('../../../../services/monitoring/SentryService');
 const { TokenUsageTracker } = require('../../../../lib/tokenUsage');
+const {
+	NotificationRoutingValidationError,
+	parseNotificationRouting,
+	getRequestedChannels,
+	getDeliveredChannels,
+} = require('../../../../services/notification/requestRouting');
 
 class NewsMonitorHandler {
 	constructor() {
@@ -58,6 +64,9 @@ class NewsMonitorHandler {
 			}
 
 			// Parse request
+			const routing = req.method === 'GET'
+				? parseNotificationRouting(req.query, { allowQueryChannels: true })
+				: parseNotificationRouting(req.body);
 			const { crypto, stocks } = this.parseRequest(req);
 			const allSymbols = [...(crypto || []), ...(stocks || [])];
 			const validationError = this.validateRequest(allSymbols);
@@ -96,17 +105,20 @@ class NewsMonitorHandler {
 
 			let results;
 			try {
-				results = await this.analyzer.analyzeSymbols(symbolsToAnalyze, requestId, tokenUsage);
+				results = await this.analyzer.analyzeSymbols(symbolsToAnalyze, requestId, tokenUsage, routing);
 			} finally {
 				sentryService.endSpan(analysisSpan);
 			}
 
 			const summary = this.generateSummary(results);
+			const notificationManagerForResponse = getNotificationManager();
 			const response = {
 				success: summary.analyzed > 0 || summary.cached > 0,
 				partial_success: summary.timeout > 0 || summary.error > 0,
 				results,
 				summary,
+				requestedChannels: getRequestedChannels(notificationManagerForResponse, routing),
+				deliveredChannels: getDeliveredChannels(results.flatMap((result) => result.deliveryResults || [])),
 				totalDurationMs: Date.now() - startTime,
 				requestId,
 				tokenUsage: tokenUsage.toJSON(),
@@ -124,6 +136,14 @@ class NewsMonitorHandler {
 
 			return res.status(200).json(response);
 		} catch (error) {
+			if (error instanceof NotificationRoutingValidationError) {
+				return res.status(400).json({
+					error: error.message,
+					code: 'INVALID_REQUEST',
+					requestId,
+				});
+			}
+
 			console.error('[NewsMonitor] Unexpected error:', error);
 
 			// Capture runtime error to Sentry (T013) - only for 500 errors

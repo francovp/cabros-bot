@@ -17,6 +17,7 @@ describe('Jobs API Integration Tests', () => {
 	const originalEnv = process.env;
 	let mockTelegramSendMessage;
 	let mockBot;
+	let mockFetch;
 
 	beforeEach(async () => {
 		process.env = {
@@ -39,6 +40,12 @@ describe('Jobs API Integration Tests', () => {
 			},
 		};
 
+		mockFetch = jest.fn().mockResolvedValue({
+			ok: true,
+			json: async () => ({ idMessage: 'wa-msg-456' }),
+		});
+		global.fetch = mockFetch;
+
 		await initializeNotificationServices(mockBot);
 		app.use('/api', getRoutes(mockBot));
 	});
@@ -48,6 +55,7 @@ describe('Jobs API Integration Tests', () => {
 		if (app._router && app._router.stack && app._router.stack.length > 0) {
 			app._router.stack.pop();
 		}
+		delete global.fetch;
 	});
 
 	it('returns 401 when POST /api/jobs/tradingview-analysis lacks valid api key', async () => {
@@ -121,6 +129,57 @@ describe('Jobs API Integration Tests', () => {
 		expect(statusRes.body.deliveryResults).toEqual([
 			expect.objectContaining({ success: true, channel: 'telegram', messageId: 'job-msg-id' }),
 		]);
+	});
+
+	it('routes async job delivery to requested channels only', async () => {
+		process.env.ENABLE_WHATSAPP_ALERTS = 'true';
+		process.env.WHATSAPP_API_URL = 'https://api.greenapi.com/waInstance123/';
+		process.env.WHATSAPP_API_KEY = 'test-whatsapp-key';
+		process.env.WHATSAPP_CHAT_ID = '120363000000000000@g.us';
+
+		tradingViewMcpService.analyzeSymbolIdentifier.mockResolvedValueOnce({
+			symbol: 'BINANCE:BTCUSDT',
+			price_data: { close: 65000, change_percent: 1.5 },
+			rsi: { value: 45 },
+		});
+
+		const createRes = await request(app)
+			.post('/api/jobs/tradingview-analysis')
+			.set('x-api-key', 'test-key')
+			.send({
+				type: 'expanded-analysis',
+				symbols: ['BINANCE:BTCUSDT'],
+				channels: ['telegram'],
+				telegramChatId: '-100999888777',
+			})
+			.expect(201);
+
+		const jobId = createRes.body.jobId;
+		let statusRes = await request(app)
+			.get(`/api/jobs/${jobId}`)
+			.set('x-api-key', 'test-key')
+			.expect(200);
+
+		let attempts = 0;
+		while (statusRes.body.status !== 'completed' && attempts < 10) {
+			await new Promise((resolve) => setTimeout(resolve, 30));
+			statusRes = await request(app)
+				.get(`/api/jobs/${jobId}`)
+				.set('x-api-key', 'test-key')
+				.expect(200);
+			attempts++;
+		}
+
+		expect(statusRes.body.status).toBe('completed');
+		expect(statusRes.body.requestedChannels).toEqual(['telegram']);
+		expect(statusRes.body.deliveredChannels).toEqual(['telegram']);
+		expect(statusRes.body.deliveryResults).toHaveLength(1);
+		expect(mockTelegramSendMessage).toHaveBeenCalledWith(
+			'-100999888777',
+			expect.any(String),
+			expect.any(Object),
+		);
+		expect(mockFetch).not.toHaveBeenCalled();
 	});
 
 	it('returns 404 for non-existent job ID', async () => {

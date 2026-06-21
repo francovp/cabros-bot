@@ -77,6 +77,7 @@ function formatAlertDocument(doc) {
 		enriched: Boolean(data.enriched),
 		enrichmentData: data.enrichmentData || null,
 		tokenUsage: data.tokenUsage || null,
+		channels: Array.isArray(data.channels) ? data.channels : [],
 		deliveryResults: Array.isArray(data.deliveryResults) ? data.deliveryResults : [],
 		source: typeof data.source === 'string' ? data.source : null,
 		useTradingViewData: Boolean(data.useTradingViewData),
@@ -401,11 +402,12 @@ function getFirestore() {
  * @param {boolean} params.enriched          - Whether enrichment ran
  * @param {Object|null} params.enrichmentData - alert.enriched object or null
  * @param {Object|null} params.tokenUsage    - tokenUsage.toJSON() result or null
+ * @param {Array<string>} params.channels    - Requested channels used for delivery
  * @param {Array}   params.deliveryResults   - Array of SendResult from notificationManager.sendToAll()
  * @param {boolean} params.useTradingViewData - Whether ?useTradingViewData=true was set on the request
  * @returns {Promise<string|null>} The new Firestore document ID, or null on failure/disabled
  */
-async function saveAlert({ text, enriched, enrichmentData, tokenUsage, deliveryResults, useTradingViewData }) {
+async function saveAlert({ text, enriched, enrichmentData, tokenUsage, channels, deliveryResults, useTradingViewData }) {
 	const firestore = getFirestore();
 	if (!firestore) {
 		return null;
@@ -418,6 +420,7 @@ async function saveAlert({ text, enriched, enrichmentData, tokenUsage, deliveryR
 			enriched: Boolean(enriched),
 			enrichmentData: enrichmentData || null,
 			tokenUsage: tokenUsage || null,
+			channels: Array.isArray(channels) ? channels : [],
 			deliveryResults: Array.isArray(deliveryResults) ? deliveryResults : [],
 			source: 'webhook',
 			useTradingViewData: Boolean(useTradingViewData),
