@@ -236,6 +236,41 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 			expect(mockFetch).toHaveBeenCalledTimes(1);
 		});
 
+		it('should re-deliver cached alerts to all enabled channels when a later request omits channels', async () => {
+			const response1 = await request(app)
+				.post('/api/news-monitor').set('x-api-key', 'test-key')
+				.send({
+					crypto: ['BTCUSDT'],
+					channels: ['whatsapp'],
+				})
+				.expect(200);
+
+			expect(response1.body.results[0].cached).toBe(false);
+			expect(response1.body.requestedChannels).toEqual(['whatsapp']);
+			expect(response1.body.deliveredChannels).toEqual(['whatsapp']);
+			expect(mockBot.telegram.sendMessage).not.toHaveBeenCalled();
+			expect(mockFetch).toHaveBeenCalledTimes(1);
+
+			const response2 = await request(app)
+				.post('/api/news-monitor').set('x-api-key', 'test-key')
+				.send({
+					crypto: ['BTCUSDT'],
+				})
+				.expect(200);
+
+			expect(response2.body.results[0].cached).toBe(true);
+			expect(response2.body.requestedChannels).toEqual(['telegram', 'whatsapp']);
+			expect(response2.body.deliveredChannels).toEqual(['telegram', 'whatsapp']);
+			expect(response2.body.results[0].deliveryResults).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({ channel: 'telegram', success: true }),
+					expect.objectContaining({ channel: 'whatsapp', success: true }),
+				]),
+			);
+			expect(mockBot.telegram.sendMessage).toHaveBeenCalledTimes(1);
+			expect(mockFetch).toHaveBeenCalledTimes(2);
+		});
+
 		it('should include cached alerts in response', async () => {
 			// First call
 			const response1 = await request(app)

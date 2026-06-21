@@ -12,7 +12,11 @@ const { AnalysisStatus, EventCategory } = require('./constants');
 const { GROUNDING_MODEL_NAME, ENABLE_NEWS_MONITOR_TEST_MODE } = require('../../../../services/grounding/config');
 const { getPromptService, PromptKeys } = require('../../../../services/prompts');
 const { MainClient } = require('binance');
-const { sendWithNotificationRouting } = require('../../../../services/notification/requestRouting');
+const {
+	sendWithNotificationRouting,
+	getRequestedChannels,
+	getDeliveredChannels,
+} = require('../../../../services/notification/requestRouting');
 
 const promptService = getPromptService();
 
@@ -43,6 +47,25 @@ function hasExplicitRouting(routing = {}) {
 	return Array.isArray(routing.channels) ||
 		typeof routing.telegramChatId === 'string' ||
 		typeof routing.whatsappChatId === 'string';
+}
+
+function shouldRedeliverCachedAlert(notificationMgr, cachedDeliveryResults, routing = {}) {
+	if (!notificationMgr) {
+		return false;
+	}
+
+	if (hasExplicitRouting(routing)) {
+		return true;
+	}
+
+	const requestedChannels = getRequestedChannels(notificationMgr, routing);
+	const deliveredChannels = getDeliveredChannels(cachedDeliveryResults);
+	if (requestedChannels.length !== deliveredChannels.length) {
+		return true;
+	}
+
+	const deliveredSet = new Set(deliveredChannels);
+	return requestedChannels.some((channel) => !deliveredSet.has(channel));
 }
 
 class NewsAnalyzer {
@@ -161,11 +184,11 @@ class NewsAnalyzer {
 			if (cached) {
 				console.debug('[Analyzer] Returning cached result:', symbol, category);
 				let deliveryResults = cached.deliveryResults;
-				if (cached.alert && hasExplicitRouting(routing)) {
+				if (cached.alert) {
 					const notificationMgr = getNotificationManager();
-					if (notificationMgr) {
+					if (shouldRedeliverCachedAlert(notificationMgr, cached.deliveryResults, routing)) {
 						deliveryResults = await sendWithNotificationRouting(notificationMgr, cached.alert, routing);
-					} else {
+					} else if (!notificationMgr) {
 						deliveryResults = [];
 					}
 				}

@@ -16,6 +16,7 @@ const EXPORT_FIELDS = [
 	'source',
 	'enriched',
 	'useTradingViewData',
+	'channels',
 	'deliveryResults',
 	'tokenUsage',
 	'text',

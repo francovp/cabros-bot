@@ -176,6 +176,7 @@ describe('AlertStorageService', () => {
 					{ channel: 'telegram', success: true },
 					{ channel: 'whatsapp', success: false },
 				],
+				channels: ['telegram'],
 				useTradingViewData: true,
 			});
 
@@ -193,9 +194,23 @@ describe('AlertStorageService', () => {
 					{ channel: 'telegram', success: true },
 					{ channel: 'whatsapp', success: false },
 				],
+				channels: ['telegram'],
 				source: 'webhook',
 				useTradingViewData: true,
 			});
+		});
+
+		it('persists requested channels for stored alert exports and replays', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockAdd.mockResolvedValueOnce({ id: 'id-channels' });
+
+			await AlertStorageService.saveAlert(buildParams({
+				channels: ['telegram'],
+				deliveryResults: [{ channel: 'telegram', success: true }],
+			}));
+
+			const calledWith = mockAdd.mock.calls[0][0];
+			expect(calledWith.channels).toEqual(['telegram']);
 		});
 
 		it('truncates text longer than 20000 characters', async () => {
@@ -296,6 +311,7 @@ describe('AlertStorageService', () => {
 						enriched: true,
 						enrichmentData: { sentiment: 'bullish' },
 						tokenUsage: { totalTokens: 42 },
+						channels: ['telegram'],
 						deliveryResults: [{ channel: 'telegram', success: true }],
 						source: 'webhook',
 						useTradingViewData: false,
@@ -328,6 +344,7 @@ describe('AlertStorageService', () => {
 					enriched: true,
 					enrichmentData: { sentiment: 'bullish' },
 					tokenUsage: { totalTokens: 42 },
+					channels: ['telegram'],
 					deliveryResults: [{ channel: 'telegram', success: true }],
 					source: 'webhook',
 					useTradingViewData: false,
@@ -493,6 +510,7 @@ describe('AlertStorageService', () => {
 				enriched: false,
 				enrichmentData: null,
 				tokenUsage: null,
+				channels: ['telegram'],
 				deliveryResults: [{ channel: 'telegram', success: true }],
 				source: 'webhook',
 				useTradingViewData: true,
@@ -507,6 +525,7 @@ describe('AlertStorageService', () => {
 				enriched: false,
 				enrichmentData: null,
 				tokenUsage: null,
+				channels: ['telegram'],
 				deliveryResults: [{ channel: 'telegram', success: true }],
 				source: 'webhook',
 				useTradingViewData: true,

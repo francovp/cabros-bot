@@ -408,7 +408,7 @@ describe('Alerts API Integration Tests', () => {
 			includeText: true,
 		});
 		expect(res.headers['content-type']).toContain('text/csv');
-		expect(res.text).toContain('id,receivedAt,source,enriched,useTradingViewData,deliveryResults,tokenUsage,text');
+		expect(res.text).toContain('id,receivedAt,source,enriched,useTradingViewData,channels,deliveryResults,tokenUsage,text');
 		expect(res.text).toContain('"BTC, breakout"');
 		expect(res.text).toContain('PROVIDER_LIMIT');
 	});
