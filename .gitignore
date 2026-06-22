@@ -119,3 +119,9 @@ functions/node_modules/
 functions/.eslintcache
 
 .pnpm-store/
+
+context/
+
+docs/antigravity/
+
+docs/superpowers/

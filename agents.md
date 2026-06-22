@@ -15,12 +15,12 @@ You are **Cabros Bot Developer**, an expert Node.js and Express developer specia
   - Implement fail-open/fail-safe pathways: external service failures (such as Sentry, Firestore, or TradingView MCP timeouts) must never block core alert delivery or crash the server.
   - Use native `fetch` with `AbortController` timeouts for HTTP requests; do not add new HTTP client dependencies (like Axios).
   - Format all filesystem links in your communications using absolute URLs with the `file://` scheme.
+  - Update the Postman collection (`CabrosBot.postman_collection.json`) with every new endpoint, new request variant, or API contract change — include request body examples, response examples, and valid/invalid input variations.
 - **Ask first:**
   - Ask before deleting files or removing existing integration modules.
   - Ask before changing default environment variable fallback behaviors or route mounts.
 - **Never do:**
   - Do not bypass API-key checks (`validateApiKey`) on protected webhook endpoints.
-  - Do not run commands that perform raw network requests or download unverified files without explicit user approval.
 
 
 ## Project Overview
@@ -38,7 +38,8 @@ This project is a small Express + Telegraf (Telegram) bot service that exposes a
 - `src/controllers/webhooks/handlers/expandedAnalysisAlert/expandedAnalysisAlert.js` — `POST /api/webhook/expanded-analysis-alert` handler that builds TradingView MCP analysis reports and sends them through notification channels.
 - `src/controllers/webhooks/handlers/volumeConfirmation/volumeConfirmation.js` — `POST /api/webhook/volume-confirmation` handler that returns structured TradingView MCP volume-confirmation data.
 - `src/controllers/webhooks/handlers/jobs/jobs.js` — Job creation (`POST /api/jobs/tradingview-analysis`) and status polling (`GET /api/jobs/:jobId`) handler.
-- `src/controllers/alerts/alerts.js` — Stored alert read handlers for `GET /api/alerts` and `GET /api/alerts/:alertId`.
+- `src/services/notification/requestRouting.js` — Shared optional channel-routing validator/dispatcher for alert-producing routes (`channels`, `telegramChatId`, `whatsappChatId`) that preserves legacy broadcast behavior when `channels` is omitted.
+- `src/controllers/alerts/alerts.js` — Stored alert read, export, analytics, and replay handlers for `GET /api/alerts`, `GET /api/alerts/export`, `GET /api/alerts/summary`, `GET /api/alerts/:alertId`, and `POST /api/alerts/:alertId/replay`.
 - `src/controllers/status.js` — Status handler that computes capabilities, feature flags, notification channels, and active dependencies status.
 - `src/controllers/webhooks/handlers/marketScanner/marketScanner.js` — Scanner webhook handler executing sequential gainers, losers, and breakouts scanner runs on TradingView MCP.
 - `src/services/jobs/JobService.js` — Manages in-memory job state, executes background TradingView analysis runs, and performs periodic expiration cleanup.
@@ -48,6 +49,8 @@ This project is a small Express + Telegraf (Telegram) bot service that exposes a
 - `src/controllers/helpers.js` — Small numeric helper (`round10`) used by price formatting.
 - `src/lib/logging.js` — Configures `console.*` levels via `LOG_LEVEL` and emits one-line structured JSON logs.
 - `src/lib/rateLimiter.js` — Global API rate limiting middleware (returns 429 when exceeded; configured via `RATE_LIMIT_WINDOW_MS`/`RATE_LIMIT_MAX`).
+- `src/openapi/openapi.json` — Canonical OpenAPI 3.1 contract for every mounted `/api` operation.
+- `src/openapi/docs.js` — Public, read-only `/openapi.json` and self-hosted Swagger UI `/docs` routes.
 
 ### External Integrations
 - **Binance**: Uses `binance` package `MainClient` and `getAvgPrice({ symbol })` with `beautifyResponses: true`.
@@ -83,6 +86,10 @@ Maintain these patterns and rules in all contributions:
 - **Environment Gating**: Do not alter how env gating works in `index.js` without adjusting tests/deploys.
 - **Markdown Formatting**: Keep `parse_mode: 'MarkdownV2'` when composing Telegram messages, and ensure special Markdown characters are escaped correctly using `src/services/notification/formatters/MarkdownV2Formatter.js`.
 - **Structured Logging**: Log via `console.log`, `console.debug`, etc. The centralized logger (`src/lib/logging.js`) formats logs as structured one-line JSON containing `timestamp`, `level`, `message`, `service`, `pid`, etc.
+- **Verification Before Completion**: Before claiming a fix, feature, or test run is done, run the exact verification command fresh in the current state and read the full output first. No success claims from memory, assumptions, or partial checks.
+- **Systematic Debugging**: For any bug, test failure, or unexpected behavior, use `superpowers:systematic-debugging` first. Reproduce it, inspect the error, trace the root cause, then fix the source instead of patching symptoms.
+- **Test-First Changes**: For every feature, bugfix, or behavior change, use `superpowers:test-driven-development`. Write the failing test first, verify it fails for the right reason, then make the minimal code change to pass it.
+- **Review Discipline**: When handling PR feedback, use `superpowers:receiving-code-review` and `github:gh-address-comments`. Verify each comment against the codebase, avoid performative agreement, and address inline threads one at a time.
 
 ### Common Failure Modes
 - **Missing BOT_TOKEN**: Throws on startup (explicit check in `index.js`).
@@ -139,7 +146,12 @@ Implement the following security practices to safeguard endpoints and credential
 - Optional but relevant (non-exhaustive; see feature sections below for full config): `ENABLE_TELEGRAM_BOT`, `PORT`, `TELEGRAM_CHAT_ID`, `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID`, `ENABLE_WHATSAPP_ALERTS`, `ENABLE_GEMINI_GROUNDING`, `GEMINI_API_KEY`, `ENABLE_LANGFUSE_PROMPTS`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL`, `LANGFUSE_PROMPT_LABEL`, `LANGFUSE_PROMPT_CACHE_TTL_SECONDS`, `BRAVE_SEARCH_API_KEY`, `BRAVE_SEARCH_ENDPOINT`, `FORCE_BRAVE_SEARCH`, `MODEL_PROVIDER`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `ENABLE_NEWS_MONITOR`, `EXPANDED_ANALYSIS_ALERT_SYMBOLS`, `EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS`, `TRADINGVIEW_MCP_URL`, `TRADINGVIEW_MCP_TIMEOUT_MS`, `TRADINGVIEW_MCP_MAX_RETRIES`, `TRADINGVIEW_MCP_DEFAULT_TIMEFRAME`, `ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION`, `ENABLE_SENTRY`, `SENTRY_DSN`, `SENTRY_TRACES_SAMPLE_RATE`, `SENTRY_CONSOLE_LOG_LEVELS`, `LOG_LEVEL`, `SERVICE_NAME`, `RATE_LIMIT_WINDOW_MS`, `RATE_LIMIT_MAX`, `ENABLE_FIRESTORE_ALERT_STORAGE`, `ENABLE_MARKET_SCANNER`, `ENABLE_MESSAGE_FOOTER_METADATA`, `FIREBASE_PROJECT_ID`, `FIREBASE_SERVICE_ACCOUNT_JSON`, `GOOGLE_APPLICATION_CREDENTIALS`, `GEMINI_MODEL_NAME_FALLBACK`, `RENDER`, `IS_PULL_REQUEST`, `RENDER_GIT_COMMIT`, `RENDER_GIT_REPO_SLUG`.
 - Bot startup is gated: bot is launched only when `ENABLE_TELEGRAM_BOT === 'true'` and not a preview environment (`RENDER==='true' && IS_PULL_REQUEST==='true'` disables it).
 - Routes under `/api` (e.g. `/api/webhook/alert`) are mounted regardless of bot launch; individual features and notification channels are gated via env flags and per-channel validation.
-- Stored alert read routes (`GET /api/alerts`, `GET /api/alerts/:alertId`) are also mounted under `/api`; they require `WEBHOOK_API_KEY` when configured, return `403 FEATURE_DISABLED` unless `ENABLE_FIRESTORE_ALERT_STORAGE=true`, and return `503 STORAGE_UNAVAILABLE` when Firestore is enabled but unreadable.
+- API documentation is public and read-only at `/docs` and `/openapi.json`; protected `/api` operations remain guarded by `validateApiKey` and the contract documents both header and legacy query authentication.
+- Alert-producing routes now accept optional per-request notification routing:
+  - `channels` — non-empty array limited to `telegram` and/or `whatsapp`
+  - `telegramChatId` / `whatsappChatId` — optional per-channel destination overrides
+  - If `channels` is omitted, delivery still uses the existing broadcast-to-all-enabled-channels behavior.
+- Stored alert read, export, analytics, and replay routes (`GET /api/alerts`, `GET /api/alerts/export`, `GET /api/alerts/summary`, `GET /api/alerts/:alertId`, `POST /api/alerts/:alertId/replay`) are also mounted under `/api`; they require `WEBHOOK_API_KEY` when configured, return `403 FEATURE_DISABLED` unless `ENABLE_FIRESTORE_ALERT_STORAGE=true`, and return `503 STORAGE_UNAVAILABLE` when Firestore is enabled but unreadable.
 
 ---
 
@@ -153,10 +165,11 @@ Implement the following security practices to safeguard endpoints and credential
 4. **Follow existing code style**: Simple functions, explicit logging, env-driven config
 5. **Add tests** for critical paths after implementation
 6. **Run focused tests during development** (see Test Execution Strategy below)
-7. **Update environment variables** section if adding new config
-8. **Update this agents.md file** with the new context, recent PRs, and implementation details before creating a new PR
-9. **Final full test run** before completion to ensure no regressions
-10. **Archive Antigravity session artifacts**: MUST always copy all markdown artifacts (`implementation_plan.md`, `task.md`, `walkthrough.md`) from the agent's local `<appDataDir>/brain/<conversation-id>/` directory to the repository under `docs/antigravity/<conversation-id>/` before finishing.
+7. **Update Postman collection**: Add new endpoint requests, request variants (including error/invalid input examples), and response examples to `CabrosBot.postman_collection.json` for every API change
+8. **Update environment variables** section if adding new config
+9. **Update this agents.md file** with the new context, recent PRs, and implementation details before creating a new PR
+10. **Final verification pass** before completion: run the exact relevant checks again, then do the full test suite `pnpm test` once per implementation to ensure no regressions
+11. **Archive Antigravity session artifacts**: MUST always copy all markdown artifacts (`implementation_plan.md`, `task.md`, `walkthrough.md`) from the agent's local `<appDataDir>/brain/<conversation-id>/` directory to the repository under `docs/antigravity/<conversation-id>/` before finishing.
 
 
 **Linting and Commits During Implementation**:
@@ -191,6 +204,14 @@ Implement the following security practices to safeguard endpoints and credential
 3. **Test external APIs**: Check Gemini, Binance, Telegram, WhatsApp directly
 4. **Review test cases**: Existing tests reveal expected behavior
 5. **Check retry logic**: Some failures are transient and auto-recover
+6. **Use systematic debugging**: Reproduce, trace root cause, then patch the source. No guess-and-check fixes.
+
+### When implementing changes:
+
+1. **Write the failing test first** for the exact behavior or regression you are changing
+2. **Watch the test fail for the right reason** before touching production code
+3. **Make the minimal code change** to pass the test
+4. **Verify the test passes and nothing else regressed**
 
 ## Alert Enrichment with Gemini Grounding (001-gemini-grounding-alert)
 
@@ -388,14 +409,17 @@ The system provides asynchronous job endpoints to support executing both `expand
 - `GET /api/jobs/:jobId` — Returns the current job status (`pending`, `processing`, `completed`, `failed`), progress, and final analysis/delivery outcomes.
 
 **Core Components**:
-- `src/services/jobs/JobService.js` — Coordinates job state tracking, background worker execution, progress reports, and job eviction (jobs older than 1 hour).
+- `src/services/jobs/JobService.js` — Coordinates job state tracking, background worker execution, progress reports, durable persistence checkpoints, and job eviction (jobs older than 1 hour).
+- `src/services/jobs/JobRepository.js` — Stores sanitized job records in memory and, when `ENABLE_FIRESTORE_JOB_STORAGE=true`, in Firestore collection `tradingviewJobs`.
 - `src/controllers/webhooks/handlers/jobs/jobs.js` — HTTP route controller handlers (`postCreateJob`, `getJobStatus`).
 
 **Failure and Edge Case Behavior**:
 - Sync validation: throws `400` synchronously on invalid inputs before job registration.
 - Feature checks: returns `404 FEATURE_DISABLED` if market scanner jobs are created but `ENABLE_MARKET_SCANNER` is not `'true'`.
-- Eviction: jobs older than 1 hour are deleted from memory and return `404 Not Found`.
+- Persistence: `createJob()` and `getJob()` are async because job metadata/results may be written to or read from Firestore.
+- Eviction: completed/failed jobs older than 1 hour are deleted from memory/Firestore and return `404 Not Found`; active jobs are preserved.
 - Background failures: if the worker runs into unexpected exceptions or timeouts, the job is marked `failed` and reported to Sentry.
+- Async Callbacks: If `callbackUrl` is provided, a callback is dispatched when the job reaches a terminal state (`completed`, `failed`, `cancelled`, `timed_out`). Payloads are signed with HMAC-SHA256 in the `x-callback-signature` header using `callbackSecret` (if provided by client) or the server-configured `JOB_CALLBACK_SIGNING_SECRET`. Transient network failures are retried up to 3 times (4 total attempts) with exponential backoff (starting at 1s, configurable via `JOB_CALLBACK_RETRY_DELAY_MS`). The callback process fails open, writing log events and updating job metadata (`callbackStatus`) without affecting the core job status.
 
 **Where to look first when extending or debugging**:
 - `src/services/jobs/JobService.js` for background processing and state transitions.
@@ -564,8 +588,8 @@ The system provides an HTTP endpoint (`/api/news-monitor`) that analyzes financi
 Every successful `POST /api/webhook/alert` request is persisted as a document in the `alerts` Firestore collection after the HTTP response has been sent.
 
 **Core Components**:
-- `src/services/storage/AlertStorageService.js` — lazy `firebase-admin` singleton, `saveAlert()` wrapper, read helpers (`listAlerts()`, `getAlertById()`), fail-open write handling
-- `src/controllers/alerts/alerts.js` — HTTP controller for stored alert list/detail endpoints
+- `src/services/storage/AlertStorageService.js` — lazy `firebase-admin` singleton, `saveAlert()` wrapper, read/export helpers (`listAlerts()`, `exportAlerts()`, `getAlertById()`), fail-open write handling
+- `src/controllers/alerts/alerts.js` — HTTP controller for stored alert list/export/detail endpoints
 
 **Data Model** (collection: `alerts`, document ID: auto-generated):
 
@@ -596,8 +620,11 @@ Every successful `POST /api/webhook/alert` request is persisted as a document in
 
 **Read API**:
 - `GET /api/alerts` returns stored alerts ordered by `receivedAt` descending with `limit`, `before`, `source`, and `enriched` query support.
+- `GET /api/alerts/export` returns bounded JSONL or CSV (`format=jsonl|csv`) for stored alerts. It requires both `from` and `to`, caps `limit` at 1000, caps the window at 31 days, supports `source`, `enriched`, and `includeText=true`, and only includes safe export fields. Raw alert text is excluded by default and truncated to 1000 chars when included.
+- `GET /api/alerts/summary` returns bounded JSON-only analytics for stored alerts, with `from`, `to`, and `limit` query support capped to a 31-day window and 1000 documents.
 - `GET /api/alerts/:alertId` returns a single formatted alert document by Firestore document ID.
-- `listAlerts()` and `getAlertById()` in `src/services/storage/AlertStorageService.js` format Firestore documents into API-safe JSON with the following fields:
+- `POST /api/alerts/:alertId/replay` reloads an immutable stored alert, rebuilds the current notification payload, dispatches it to requested channels (`telegram`, `whatsapp`, or both by default), and records the replay attempt in the separate `alertReplays` Firestore collection. It requires API-key auth and an idempotency key (`idempotency-key` header or `idempotencyKey` body/query field).
+- `listAlerts()`, `summarizeAlerts()`, `exportAlerts()`, and `getAlertById()` in `src/services/storage/AlertStorageService.js` format Firestore documents into API-safe JSON with the following fields:
   - `id`
   - `receivedAt`
   - `text`
@@ -609,6 +636,8 @@ Every successful `POST /api/webhook/alert` request is persisted as a document in
   - `useTradingViewData`
 - Read filtering for `source` and `enriched` is applied in memory after `receivedAt`-ordered batches to avoid introducing new composite Firestore index requirements.
 - Read endpoints must map Firestore initialization/read failures to `503 STORAGE_UNAVAILABLE` instead of a generic `500`.
+- Replay attempts must not mutate the original `alerts` document. Use `saveReplayAttempt()` to write an audit document with ID `${alertId}_${idempotencyKey}` in `alertReplays`.
+- Export responses must not expose API keys, service-account data, webhook secrets, raw provider credentials, full `enrichmentData`, or raw provider responses. Keep delivery status compact (`channel`, `success`, `messageId`, `errorCode`, `statusCode`) and token usage numeric-only.
 - When extending the alerts read API, preserve `receivedAt` as the primary sort key but encode `nextBefore` with a deterministic tie-breaker (document ID) so paginated reads do not skip same-timestamp alerts, and preserve API-key protection on both list and detail routes.
 
 **Alert Flow Integration** (`src/controllers/webhooks/handlers/alert/alert.js`):
@@ -618,8 +647,8 @@ Webhook → validate → enrich → sendToAll → res.json() → saveAlert() [fi
 Storage happens **after** the HTTP response; the caller is never blocked.
 
 **Where to look first when extending or debugging**:
-- `src/services/storage/AlertStorageService.js` — initialization, credential parsing, `saveAlert()`, `listAlerts()`, and `getAlertById()` logic
-- `src/controllers/alerts/alerts.js` — list/detail request validation and response shaping
+- `src/services/storage/AlertStorageService.js` — initialization, credential parsing, `saveAlert()`, `listAlerts()`, `exportAlerts()`, and `getAlertById()` logic
+- `src/controllers/alerts/alerts.js` — list/export/detail request validation and response shaping
 - `src/controllers/webhooks/handlers/alert/alert.js` — fire-and-forget call site (after `res.json()`)
 - Tests in `tests/unit/alert-storage-service.test.js` and `tests/integration/alerts-endpoint.test.js`
 - Firebase Console → Firestore → `alerts` collection for live document inspection
@@ -676,6 +705,7 @@ See `/specs/TERMINOLOGY_GUIDE.md` for extended discussion and examples.
 - 005-sentry-runtime-errors (PR #16): Added runtime error monitoring via `SentryService` + early initialization in `instrument.js`, plus Express error handler wiring; monitoring is gated by `ENABLE_SENTRY` + `SENTRY_DSN`.
 - 006-firestore-alert-storage: Added Cloud Firestore persistence for every `/api/webhook/alert` payload; `firebase-admin` singleton initialized from `FIREBASE_SERVICE_ACCOUNT_JSON` or `GOOGLE_APPLICATION_CREDENTIALS`; fire-and-forget after `res.json()` so storage never blocks delivery (fail-open).
 - 007-volume-breakout-alerts: Added TradingView volume confirmation check to the webhook alert enrichment flow (POST /api/webhook/alert?useTradingViewData=true) using the `volume_confirmation_analysis` tool from the TradingView MCP server. Configured via `ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION`.
+- 008-async-job-callbacks (CB-28): Added support for asynchronous job completion callbacks in TradingView analysis and market scanner jobs. Clients can specify callbackUrl, callbackSecret, and callbackEvents in POST /api/jobs/tradingview-analysis requests. The server signs the payloads with an HMAC-SHA256 signature, validates parameters (with node-only URL validation), and executes retries with exponential backoff on transient network failures, failing open without affecting the core job status.
 
 ## Architectural Patterns & Extension Guide
 
@@ -932,6 +962,7 @@ describe('news-monitor', () => {
 - Add env vars and validation
 - Create integration tests
 - Document in README
+- Add request + response examples to `CabrosBot.postman_collection.json` (include valid inputs, error/edge-case variants, and structured response examples)
 
 ### Add new external API client (extend services):
 - Create service in `src/services/`

@@ -201,7 +201,10 @@ describe('WhatsAppService', () => {
 				});
 
 			const longText = 'A'.repeat(20010);
-			const result = await service.send({ text: longText });
+			const result = await service.send({
+				text: longText,
+				whatsappChatId: 'override@g.us',
+			});
 
 			expect(result.success).toBe(true);
 			expect(result.channel).toBe('whatsapp');
@@ -216,6 +219,8 @@ describe('WhatsAppService', () => {
 			const firstPayload = JSON.parse(global.fetch.mock.calls[0][1].body);
 			const secondPayload = JSON.parse(global.fetch.mock.calls[1][1].body);
 
+			expect(firstPayload.chatId).toBe('override@g.us');
+			expect(secondPayload.chatId).toBe('override@g.us');
 			expect(firstPayload.customPreview).toEqual({ title: 'Trading View Alert' });
 			expect(secondPayload.customPreview).toBeUndefined();
 			expect(firstPayload.message + secondPayload.message).toBe(longText);

@@ -24,7 +24,10 @@ class WhatsAppService extends NotificationChannel {
 		this.name = 'whatsapp';
 		this.apiUrl = config.apiUrl || process.env.WHATSAPP_API_URL;
 		this.apiKey = config.apiKey || process.env.WHATSAPP_API_KEY;
-		this.chatId = config.chatId || process.env.WHATSAPP_CHAT_ID;
+
+		// In preview environments (IS_PULL_REQUEST=true), prefer WHATSAPP_PREVIEW_CHAT_ID
+		const isPreview = process.env.IS_PULL_REQUEST === 'true';
+		this.chatId = config.chatId || (isPreview && process.env.WHATSAPP_PREVIEW_CHAT_ID) || process.env.WHATSAPP_CHAT_ID;
 		this.urlShortener = config.urlShortener || null;
 		this.formatter = config.formatter || new WhatsAppMarkdownFormatter({ urlShortener: this.urlShortener });
 		this.logger = config.logger;
@@ -74,16 +77,21 @@ class WhatsAppService extends NotificationChannel {
 		try {
 			const formattedText = await this._formatAlert(alert);
 			const messageChunks = splitMessageIntoChunks(formattedText, GREEN_API_MESSAGE_LIMIT);
+			const chatId = alert.whatsappChatId || this.chatId;
 
 			if (messageChunks.length > 1) {
 				this.logger?.warn?.(
 					`WhatsApp message exceeded ${GREEN_API_MESSAGE_LIMIT} characters; sending ${messageChunks.length} parts instead of truncating`,
 				);
-				return this._sendChunkedMessage(messageChunks);
+				return this._sendChunkedMessage(messageChunks, chatId);
 			}
 
 			return sendWithRetry(
-				({ signal } = {}) => this._sendMessageChunk(messageChunks[0], { includePreview: true, signal }),
+				({ signal } = {}) => this._sendMessageChunk(messageChunks[0], {
+					chatId,
+					includePreview: true,
+					signal,
+				}),
 				3,
 				this.logger,
 			);
@@ -123,13 +131,14 @@ class WhatsAppService extends NotificationChannel {
    * @private
    * @param {string} message - Preformatted WhatsApp message
    * @param {Object} options - Delivery options
+	 * @param {string} options.chatId - Destination WhatsApp chat/group ID
    * @param {boolean} options.includePreview - Whether to include the custom preview payload
    * @returns {Promise<{success: boolean, channel: string, messageId?: string, messageIds?: string[], messageCount?: number, error?: string}>}
    */
-	async _sendMessageChunk(message, { includePreview = false } = {}) {
+	async _sendMessageChunk(message, { chatId = this.chatId, includePreview = false } = {}) {
 		try {
 			const payload = {
-				chatId: this.chatId,
+				chatId,
 				message,
 			};
 
@@ -210,9 +219,10 @@ class WhatsAppService extends NotificationChannel {
    * Each chunk retries independently to avoid duplicating already delivered parts.
    * @private
    * @param {Array<string>} messageChunks - Ordered message chunks
+	 * @param {string} chatId - Destination WhatsApp chat/group ID
    * @returns {Promise<{success: boolean, channel: string, messageId?: string, messageIds?: string[], messageCount?: number, error?: string}>}
    */
-	async _sendChunkedMessage(messageChunks) {
+	async _sendChunkedMessage(messageChunks, chatId) {
 		const messageIds = [];
 		const startedAt = Date.now();
 		let totalAttempts = 0;
@@ -220,7 +230,11 @@ class WhatsAppService extends NotificationChannel {
 		for (let index = 0; index < messageChunks.length; index += 1) {
 			const includePreview = index === 0;
 			const result = await sendWithRetry(
-				({ signal } = {}) => this._sendMessageChunk(messageChunks[index], { includePreview, signal }),
+				({ signal } = {}) => this._sendMessageChunk(messageChunks[index], {
+					chatId,
+					includePreview,
+					signal,
+				}),
 				3,
 				this.logger,
 			);

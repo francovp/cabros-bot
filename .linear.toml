@@ -1,0 +1,6 @@
+# linear cli
+# https://github.com/schpet/linear-cli
+
+workspace = "knil"
+team_id = "3aaac7ad-6ca9-419b-a99e-925d97e9ec03"
+issue_sort = "priority"
