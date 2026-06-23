@@ -28,8 +28,16 @@ const admin = require('firebase-admin');
 const { encodeAlertPaginationCursor, parseAlertPaginationCursor } = require('./alertPaginationCursor');
 
 const COLLECTION_NAME = 'alerts';
+const REPLAY_COLLECTION_NAME = 'alertReplays';
 const DEFAULT_PAGE_SIZE = 50;
 const MAX_PAGE_SIZE = 100;
+const DEFAULT_SUMMARY_LIMIT = 500;
+const MAX_SUMMARY_LIMIT = 1000;
+const MAX_SUMMARY_WINDOW_DAYS = 31;
+const DEFAULT_EXPORT_LIMIT = 500;
+const MAX_EXPORT_LIMIT = 1000;
+const MAX_EXPORT_WINDOW_DAYS = 31;
+const MAX_EXPORT_TEXT_LENGTH = 1000;
 const STORAGE_UNAVAILABLE_CODE = 'STORAGE_UNAVAILABLE';
 const INVALID_CURSOR_MESSAGE = 'Invalid before cursor. Use an ISO-8601 timestamp or the nextBefore cursor from a previous response.';
 
@@ -38,6 +46,10 @@ let db = null;
 
 function isEnabled() {
 	return process.env.ENABLE_FIRESTORE_ALERT_STORAGE === 'true';
+}
+
+function canInitializeFirestore() {
+	return isEnabled() || process.env.ENABLE_FIRESTORE_JOB_STORAGE === 'true';
 }
 
 function clampLimit(limit) {
@@ -65,10 +77,218 @@ function formatAlertDocument(doc) {
 		enriched: Boolean(data.enriched),
 		enrichmentData: data.enrichmentData || null,
 		tokenUsage: data.tokenUsage || null,
+		channels: Array.isArray(data.channels) ? data.channels : [],
 		deliveryResults: Array.isArray(data.deliveryResults) ? data.deliveryResults : [],
 		source: typeof data.source === 'string' ? data.source : null,
 		useTradingViewData: Boolean(data.useTradingViewData),
 	};
+}
+
+function getNumericValue(value) {
+	const numeric = Number(value);
+	return Number.isFinite(numeric) ? numeric : 0;
+}
+
+function incrementCounter(target, key) {
+	const normalizedKey = typeof key === 'string' && key.trim()
+		? key.trim()
+		: 'unknown';
+	target[normalizedKey] = (target[normalizedKey] || 0) + 1;
+}
+
+function extractAlertSymbol(data) {
+	const candidates = [
+		data.symbol,
+		data.ticker,
+		data.enrichmentData && data.enrichmentData.symbol,
+		data.enrichmentData && data.enrichmentData.ticker,
+		data.enrichmentData && data.enrichmentData.asset,
+		data.enrichmentData && data.enrichmentData.original_symbol,
+	];
+
+	const symbol = candidates.find((candidate) => typeof candidate === 'string' && candidate.trim());
+	return symbol ? symbol.trim().toUpperCase() : 'unknown';
+}
+
+function addTokenUsage(totals, tokenUsage) {
+	if (!tokenUsage || typeof tokenUsage !== 'object') {
+		return;
+	}
+
+	totals.inputTokens += getNumericValue(tokenUsage.inputTokens || tokenUsage.promptTokens);
+	totals.outputTokens += getNumericValue(tokenUsage.outputTokens || tokenUsage.completionTokens);
+	totals.totalTokens += getNumericValue(tokenUsage.totalTokens || tokenUsage.total);
+	totals.totalCost += getNumericValue(tokenUsage.totalCost);
+}
+
+function addDeliverySummary(summary, deliveryResults) {
+	if (!Array.isArray(deliveryResults)) {
+		return;
+	}
+
+	for (const result of deliveryResults) {
+		if (!result || typeof result !== 'object') {
+			continue;
+		}
+
+		const channel = typeof result.channel === 'string' && result.channel.trim()
+			? result.channel.trim()
+			: 'unknown';
+		if (!summary.byChannel[channel]) {
+			summary.byChannel[channel] = { total: 0, success: 0, failure: 0 };
+		}
+
+		summary.byChannel[channel].total += 1;
+		if (result.success) {
+			summary.byChannel[channel].success += 1;
+			summary.totalSuccess += 1;
+		} else {
+			summary.byChannel[channel].failure += 1;
+			summary.totalFailure += 1;
+		}
+	}
+}
+
+function summarizeDeliveryResults(deliveryResults) {
+	if (!Array.isArray(deliveryResults)) {
+		return [];
+	}
+
+	return deliveryResults.map((result) => ({
+		channel: typeof result.channel === 'string' ? result.channel : null,
+		success: Boolean(result.success),
+		messageId: typeof result.messageId === 'string' ? result.messageId : null,
+		errorCode: typeof result.errorCode === 'string' ? result.errorCode : null,
+		statusCode: Number.isInteger(result.statusCode) ? result.statusCode : null,
+	})).filter(result => result.channel);
+}
+
+function summarizeTokenUsage(tokenUsage) {
+	if (!tokenUsage || typeof tokenUsage !== 'object') {
+		return null;
+	}
+
+	return {
+		inputTokens: getNumericValue(tokenUsage.inputTokens || tokenUsage.promptTokens),
+		outputTokens: getNumericValue(tokenUsage.outputTokens || tokenUsage.completionTokens),
+		totalTokens: getNumericValue(tokenUsage.totalTokens || tokenUsage.total),
+		totalCost: getNumericValue(tokenUsage.totalCost),
+	};
+}
+
+function truncateAlertText(text) {
+	if (typeof text !== 'string') {
+		return '';
+	}
+
+	return text.length > MAX_EXPORT_TEXT_LENGTH
+		? text.substring(0, MAX_EXPORT_TEXT_LENGTH)
+		: text;
+}
+
+function formatExportRecord(doc, { includeText }) {
+	const data = doc.data() || {};
+	const record = {
+		id: doc.id,
+		receivedAt: getDocTimestamp(data),
+		source: typeof data.source === 'string' ? data.source : null,
+		enriched: Boolean(data.enriched),
+		useTradingViewData: Boolean(data.useTradingViewData),
+		deliveryResults: summarizeDeliveryResults(data.deliveryResults),
+		tokenUsage: summarizeTokenUsage(data.tokenUsage),
+	};
+
+	if (includeText) {
+		record.text = truncateAlertText(data.text);
+	}
+
+	return record;
+}
+
+function collectLatency(samples, value) {
+	const numeric = Number(value);
+	if (Number.isFinite(numeric) && numeric >= 0) {
+		samples.push(numeric);
+	}
+}
+
+function averageLatency(samples) {
+	if (samples.length === 0) {
+		return null;
+	}
+
+	return Math.round(samples.reduce((sum, value) => sum + value, 0) / samples.length);
+}
+
+function buildSummaryWindow({ from, to, limit }) {
+	const now = new Date();
+	const parsedTo = to ? new Date(to) : now;
+	const maxWindowMs = MAX_SUMMARY_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+	let parsedFrom = from ? new Date(from) : new Date(parsedTo.getTime() - (24 * 60 * 60 * 1000));
+
+	if (parsedTo.getTime() - parsedFrom.getTime() > maxWindowMs) {
+		parsedFrom = new Date(parsedTo.getTime() - maxWindowMs);
+	}
+
+	if (parsedFrom.getTime() > parsedTo.getTime()) {
+		const error = new Error('Invalid summary window. from must be before or equal to to.');
+		error.code = 'INVALID_REQUEST';
+		throw error;
+	}
+
+	return {
+		from: parsedFrom.toISOString(),
+		to: parsedTo.toISOString(),
+		limit: clampSummaryLimit(limit),
+		maxDays: MAX_SUMMARY_WINDOW_DAYS,
+	};
+}
+
+function buildExportWindow({ from, to, limit }) {
+	if (!from || !to) {
+		const error = new Error('Export requests require bounded from and to ISO-8601 timestamps.');
+		error.code = 'INVALID_REQUEST';
+		throw error;
+	}
+
+	const parsedFrom = new Date(from);
+	const parsedTo = new Date(to);
+	const maxWindowMs = MAX_EXPORT_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+
+	if (parsedFrom.getTime() > parsedTo.getTime()) {
+		const error = new Error('Invalid export window. from must be before or equal to to.');
+		error.code = 'INVALID_REQUEST';
+		throw error;
+	}
+
+	if (parsedTo.getTime() - parsedFrom.getTime() > maxWindowMs) {
+		const error = new Error(`Invalid export window. Maximum export window is ${MAX_EXPORT_WINDOW_DAYS} days.`);
+		error.code = 'INVALID_REQUEST';
+		throw error;
+	}
+
+	return {
+		from: parsedFrom.toISOString(),
+		to: parsedTo.toISOString(),
+		limit: clampExportLimit(limit),
+		maxDays: MAX_EXPORT_WINDOW_DAYS,
+	};
+}
+
+function clampSummaryLimit(limit) {
+	if (!Number.isInteger(limit) || limit < 1) {
+		return DEFAULT_SUMMARY_LIMIT;
+	}
+
+	return Math.min(limit, MAX_SUMMARY_LIMIT);
+}
+
+function clampExportLimit(limit) {
+	if (!Number.isInteger(limit) || limit < 1) {
+		return DEFAULT_EXPORT_LIMIT;
+	}
+
+	return Math.min(limit, MAX_EXPORT_LIMIT);
 }
 
 function matchesFilters(alert, filters) {
@@ -131,7 +351,7 @@ function getDocCursorValues(doc) {
  * @returns {FirebaseFirestore.Firestore | null}
  */
 function getFirestore() {
-	if (!isEnabled()) {
+	if (!canInitializeFirestore()) {
 		return null;
 	}
 
@@ -182,11 +402,12 @@ function getFirestore() {
  * @param {boolean} params.enriched          - Whether enrichment ran
  * @param {Object|null} params.enrichmentData - alert.enriched object or null
  * @param {Object|null} params.tokenUsage    - tokenUsage.toJSON() result or null
+ * @param {Array<string>} params.channels    - Requested channels used for delivery
  * @param {Array}   params.deliveryResults   - Array of SendResult from notificationManager.sendToAll()
  * @param {boolean} params.useTradingViewData - Whether ?useTradingViewData=true was set on the request
  * @returns {Promise<string|null>} The new Firestore document ID, or null on failure/disabled
  */
-async function saveAlert({ text, enriched, enrichmentData, tokenUsage, deliveryResults, useTradingViewData }) {
+async function saveAlert({ text, enriched, enrichmentData, tokenUsage, channels, deliveryResults, useTradingViewData }) {
 	const firestore = getFirestore();
 	if (!firestore) {
 		return null;
@@ -199,6 +420,7 @@ async function saveAlert({ text, enriched, enrichmentData, tokenUsage, deliveryR
 			enriched: Boolean(enriched),
 			enrichmentData: enrichmentData || null,
 			tokenUsage: tokenUsage || null,
+			channels: Array.isArray(channels) ? channels : [],
 			deliveryResults: Array.isArray(deliveryResults) ? deliveryResults : [],
 			source: 'webhook',
 			useTradingViewData: Boolean(useTradingViewData),
@@ -341,17 +563,217 @@ async function getAlertById(alertId) {
 	return formatAlertDocument(snapshot);
 }
 
+/**
+ * Persist a replay attempt separately from the immutable original alert.
+ *
+ * @param {Object} params
+ * @param {string} params.alertId
+ * @param {string} params.idempotencyKey
+ * @param {Array<string>} params.channels
+ * @param {Array} params.deliveryResults
+ * @returns {Promise<string|null>}
+ */
+async function saveReplayAttempt({ alertId, idempotencyKey, channels, deliveryResults }) {
+	const firestore = getFirestore();
+	if (!firestore) {
+		throw createStorageUnavailableError();
+	}
+
+	const replayId = `${alertId}_${idempotencyKey}`;
+	const document = {
+		alertId,
+		idempotencyKey,
+		channels: Array.isArray(channels) ? channels : [],
+		deliveryResults: Array.isArray(deliveryResults) ? deliveryResults : [],
+		replayedAt: admin.firestore.FieldValue.serverTimestamp(),
+		source: 'alert-replay',
+	};
+
+	try {
+		await firestore.collection(REPLAY_COLLECTION_NAME).doc(replayId).set(document, { merge: false });
+		return replayId;
+	} catch (error) {
+		console.warn('[AlertStorageService] Failed to store alert replay attempt:', error.message);
+		throw createStorageUnavailableError(error);
+	}
+}
+
+/**
+ * Export a bounded set of stored alerts using safe, stable fields only.
+ *
+ * @param {Object} params
+ * @param {string} params.from ISO timestamp, required
+ * @param {string} params.to ISO timestamp, required
+ * @param {number|undefined} params.limit Maximum documents returned, capped at 1000
+ * @param {string|undefined} params.source Optional exact source filter
+ * @param {boolean|undefined} params.enriched Optional enriched/plain filter
+ * @param {boolean|undefined} params.includeText Include truncated alert text when true
+ * @returns {Promise<{window: Object, alerts: Array}>}
+ */
+async function exportAlerts({ from, to, limit, source, enriched, includeText = false } = {}) {
+	if (!isEnabled()) {
+		return null;
+	}
+
+	const firestore = getFirestore();
+	if (!firestore) {
+		throw createStorageUnavailableError();
+	}
+
+	const window = buildExportWindow({ from, to, limit });
+	let snapshot;
+	try {
+		snapshot = await firestore
+			.collection(COLLECTION_NAME)
+			.where('receivedAt', '>=', admin.firestore.Timestamp.fromDate(new Date(window.from)))
+			.where('receivedAt', '<=', admin.firestore.Timestamp.fromDate(new Date(window.to)))
+			.orderBy('receivedAt', 'desc')
+			.limit(window.limit)
+			.get();
+	} catch (error) {
+		console.warn('[AlertStorageService] Failed to export alerts from Firestore:', error.message);
+		throw createStorageUnavailableError(error);
+	}
+
+	const docs = snapshot && Array.isArray(snapshot.docs) ? snapshot.docs : [];
+	const alerts = docs
+		.map(doc => formatExportRecord(doc, { includeText }))
+		.filter(alert => matchesFilters(alert, { source, enriched }));
+
+	return {
+		window,
+		alerts,
+	};
+}
+
+/**
+ * Build bounded aggregate metrics for stored alerts.
+ *
+ * The endpoint intentionally returns counts and totals only. Raw alert text,
+ * provider payloads, credentials, and error details stay out of the response.
+ *
+ * @param {Object} params
+ * @param {string|undefined} params.from ISO timestamp, defaults to 24h before to
+ * @param {string|undefined} params.to ISO timestamp, defaults to now
+ * @param {number|undefined} params.limit Maximum documents scanned, capped at 1000
+ * @returns {Promise<Object|null>}
+ */
+async function summarizeAlerts({ from, to, limit } = {}) {
+	if (!isEnabled()) {
+		return null;
+	}
+
+	const firestore = getFirestore();
+	if (!firestore) {
+		throw createStorageUnavailableError();
+	}
+
+	const window = buildSummaryWindow({ from, to, limit });
+	let snapshot;
+	try {
+		snapshot = await firestore
+			.collection(COLLECTION_NAME)
+			.where('receivedAt', '>=', admin.firestore.Timestamp.fromDate(new Date(window.from)))
+			.where('receivedAt', '<=', admin.firestore.Timestamp.fromDate(new Date(window.to)))
+			.orderBy('receivedAt', 'desc')
+			.limit(window.limit)
+			.get();
+	} catch (error) {
+		console.warn('[AlertStorageService] Failed to summarize alerts from Firestore:', error.message);
+		throw createStorageUnavailableError(error);
+	}
+
+	const summary = {
+		window,
+		totalAlerts: 0,
+		bySource: {},
+		bySymbol: {},
+		byFeatureFlag: {
+			enriched: 0,
+			plain: 0,
+			tradingViewData: 0,
+			withoutTradingViewData: 0,
+		},
+		enrichment: {
+			enrichedAlerts: 0,
+			plainAlerts: 0,
+			tokenUsage: {
+				inputTokens: 0,
+				outputTokens: 0,
+				totalTokens: 0,
+				totalCost: 0,
+			},
+		},
+		delivery: {
+			totalSuccess: 0,
+			totalFailure: 0,
+			byChannel: {},
+		},
+		latency: {
+			averageProcessingMs: null,
+			averageDeliveryMs: null,
+		},
+	};
+	const processingLatencySamples = [];
+	const deliveryLatencySamples = [];
+
+	const docs = snapshot && Array.isArray(snapshot.docs) ? snapshot.docs : [];
+	for (const doc of docs) {
+		const data = doc.data() || {};
+		const enriched = Boolean(data.enriched);
+		const useTradingViewData = Boolean(data.useTradingViewData);
+
+		summary.totalAlerts += 1;
+		incrementCounter(summary.bySource, data.source);
+		incrementCounter(summary.bySymbol, extractAlertSymbol(data));
+
+		if (enriched) {
+			summary.byFeatureFlag.enriched += 1;
+			summary.enrichment.enrichedAlerts += 1;
+		} else {
+			summary.byFeatureFlag.plain += 1;
+			summary.enrichment.plainAlerts += 1;
+		}
+
+		if (useTradingViewData) {
+			summary.byFeatureFlag.tradingViewData += 1;
+		} else {
+			summary.byFeatureFlag.withoutTradingViewData += 1;
+		}
+
+		addTokenUsage(summary.enrichment.tokenUsage, data.tokenUsage);
+		addDeliverySummary(summary.delivery, data.deliveryResults);
+		collectLatency(processingLatencySamples, data.processingTimeMs || data.processing_time_ms);
+
+		if (Array.isArray(data.deliveryResults)) {
+			for (const result of data.deliveryResults) {
+				collectLatency(deliveryLatencySamples, result && (result.latencyMs || result.deliveryLatencyMs || result.durationMs));
+			}
+		}
+	}
+
+	summary.enrichment.tokenUsage.totalCost = Number(summary.enrichment.tokenUsage.totalCost.toFixed(6));
+	summary.latency.averageProcessingMs = averageLatency(processingLatencySamples);
+	summary.latency.averageDeliveryMs = averageLatency(deliveryLatencySamples);
+
+	return summary;
+}
+
 module.exports = {
 	isEnabled,
 	saveAlert,
 	listAlerts,
 	getAlertById,
+	summarizeAlerts,
+	exportAlerts,
+	saveReplayAttempt,
 	STORAGE_UNAVAILABLE_CODE,
 	INVALID_CURSOR_MESSAGE,
 	parseAlertPaginationCursor,
 	// Exported for testing
 	getFirestore,
 	COLLECTION_NAME,
+	REPLAY_COLLECTION_NAME,
 	// Reset the cached db singleton between tests without module reloading
 	_resetForTesting() {
 		db = null;

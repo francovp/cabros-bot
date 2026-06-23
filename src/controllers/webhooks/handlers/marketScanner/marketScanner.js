@@ -12,6 +12,13 @@ const {
 	initializeNotificationServices,
 } = require('../alert/alert');
 const sentryService = require('../../../../services/monitoring/SentryService');
+const {
+	NotificationRoutingValidationError,
+	parseNotificationRouting,
+	sendWithNotificationRouting,
+	getRequestedChannels,
+	getDeliveredChannels,
+} = require('../../../../services/notification/requestRouting');
 
 const DEFAULT_SCANNER_TIMEOUT_MS = 90000;
 const MAX_SCANNER_TIMEOUT_MS = 120000;
@@ -44,6 +51,7 @@ function postMarketScannerAlert(botOrGetter) {
 			}
 
 			const requestSpan = sentryService.getActiveSpan();
+			const routing = parseNotificationRouting(req.body);
 			const parsed = parseMarketScannerRequest(req);
 			const timeoutMs = getMarketScannerTimeoutMs();
 			const deadline = createScannerDeadline(timeoutMs);
@@ -102,7 +110,9 @@ function postMarketScannerAlert(botOrGetter) {
 				notificationManager = await initializeNotificationServices(resolveBot(botOrGetter));
 			}
 
-			const deliveryResults = await notificationManager.sendToAll({ text: alertText }, { parentSpan: requestSpan });
+			const deliveryResults = await sendWithNotificationRouting(notificationManager, { text: alertText }, routing, { parentSpan: requestSpan });
+			const requestedChannels = getRequestedChannels(notificationManager, routing);
+			const deliveredChannels = getDeliveredChannels(deliveryResults);
 			const summary = buildSummary(scanResults, deliveryResults);
 
 			return res.status(200).json({
@@ -110,6 +120,8 @@ function postMarketScannerAlert(botOrGetter) {
 				alertText,
 				scanResults: compactScanResults(scanResults),
 				deliveryResults,
+				requestedChannels,
+				deliveredChannels,
 				summary,
 				timedOut,
 				timeoutMs,
@@ -117,6 +129,14 @@ function postMarketScannerAlert(botOrGetter) {
 				totalDurationMs: Date.now() - startTime,
 			});
 		} catch (error) {
+			if (error instanceof NotificationRoutingValidationError) {
+				return res.status(400).json({
+					error: error.message,
+					code: 'INVALID_REQUEST',
+					requestId,
+				});
+			}
+
 			if (error instanceof MarketScannerRequestError) {
 				return res.status(400).json({
 					error: error.message,

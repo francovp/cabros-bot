@@ -1,8 +1,0 @@
-- [x] Create a new Linear Backlog Issue associated to GitHub Issue #62
-- [x] Implement `IdempotencyService.js` in `src/services/storage/`
-- [x] Implement `idempotencyMiddleware` in `src/lib/idempotency.js`
-- [x] Modify `src/routes/index.js` to apply the middleware
-- [x] Add unit tests in `tests/unit/idempotency.test.js`
-- [x] Verify using unit tests and run the full test suite
-- [x] Create a Pull Request with the required naming convention
-- [x] Wait for deploy and verify with end-to-end tests against Preview environment

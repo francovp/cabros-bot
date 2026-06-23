@@ -16,6 +16,7 @@ describe('Expanded Analysis Alert endpoint', () => {
 	const originalEnv = process.env;
 	let mockTelegramSendMessage;
 	let mockBot;
+	let mockFetch;
 
 	beforeEach(async () => {
 		process.env = {
@@ -39,6 +40,12 @@ describe('Expanded Analysis Alert endpoint', () => {
 			},
 		};
 
+		mockFetch = jest.fn().mockResolvedValue({
+			ok: true,
+			json: async () => ({ idMessage: 'wa-msg-456' }),
+		});
+		global.fetch = mockFetch;
+
 		await initializeNotificationServices(mockBot);
 		app.use('/api', getRoutes(mockBot));
 	});
@@ -48,6 +55,7 @@ describe('Expanded Analysis Alert endpoint', () => {
 		if (app._router && app._router.stack && app._router.stack.length > 0) {
 			app._router.stack.pop();
 		}
+		delete global.fetch;
 	});
 
 	it('generates an expanded analysis report, sends it, and returns delivery results', async () => {
@@ -92,6 +100,48 @@ describe('Expanded Analysis Alert endpoint', () => {
 		}));
 		expect(mockTelegramSendMessage).toHaveBeenCalledTimes(1);
 		expect(mockTelegramSendMessage.mock.calls[0][1]).toContain('ANÁLISIS AMPLIADO');
+	});
+
+	it('routes expanded analysis delivery to requested channels only', async () => {
+		process.env.ENABLE_WHATSAPP_ALERTS = 'true';
+		process.env.WHATSAPP_API_URL = 'https://api.greenapi.com/waInstance123/';
+		process.env.WHATSAPP_API_KEY = 'test-whatsapp-key';
+		process.env.WHATSAPP_CHAT_ID = '120363000000000000@g.us';
+
+		tradingViewMcpService.analyzeSymbolIdentifier.mockResolvedValueOnce({
+			symbol: 'NASDAQ:NVDA',
+			price_data: {
+				current_price: 219.51,
+				change_percent: -1.8,
+			},
+			technical_indicators: {
+				rsi: 57.8,
+				sma20: 214.1,
+				macd: 6.1,
+				macd_signal: 7.2,
+			},
+		});
+
+		const res = await request(app)
+			.post('/api/webhook/expanded-analysis-alert')
+			.set('x-api-key', 'test-key')
+			.send({
+				symbols: ['NASDAQ:NVDA'],
+				timeframe: '1D',
+				channels: ['telegram'],
+				telegramChatId: '-100999888777',
+			})
+			.expect(200);
+
+		expect(res.body.requestedChannels).toEqual(['telegram']);
+		expect(res.body.deliveredChannels).toEqual(['telegram']);
+		expect(res.body.deliveryResults).toHaveLength(1);
+		expect(mockTelegramSendMessage).toHaveBeenCalledWith(
+			'-100999888777',
+			expect.any(String),
+			expect.any(Object),
+		);
+		expect(mockFetch).not.toHaveBeenCalled();
 	});
 
 	it('returns 504 when the expanded analysis alert deadline expires before analysis completes', async () => {
