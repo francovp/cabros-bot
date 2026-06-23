@@ -75,7 +75,7 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 
 #### Admin Notifications
 
-- `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID` - Chat ID for admin notifications and deployment alerts
+- `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID` - Chat ID for deployment alerts and fail-open notification-channel failure pages
 
 #### Server Configuration
 

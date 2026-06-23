@@ -87,7 +87,12 @@ describe('Dual-Channel Alert Integration', () => {
 			expect(results.length).toBe(2);
 			expect(results[0].success).toBe(true); // Telegram succeeded
 			expect(results[1].success).toBe(false); // WhatsApp failed
-			expect(mockBot.telegram.sendMessage).toHaveBeenCalledTimes(1);
+			expect(mockBot.telegram.sendMessage).toHaveBeenCalledTimes(2);
+			expect(mockBot.telegram.sendMessage).toHaveBeenLastCalledWith(
+				process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID,
+				expect.stringContaining('Failed channels: whatsapp'),
+				expect.objectContaining({ parse_mode: 'MarkdownV2' }),
+			);
 		});
 
 		it('should return response with both channels regardless of success', async () => {

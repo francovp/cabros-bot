@@ -49,6 +49,55 @@ class NotificationManager {
 			.map((ch) => ch.name);
 	}
 
+	async notifyAdminOfFailures(alert, results) {
+		const failures = results.filter(result => !result.success);
+		if (failures.length === 0) {
+			return;
+		}
+
+		const adminChatId = process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID;
+		const telegramService = this.channels.get('telegram');
+		if (!adminChatId) {
+			console.warn('[NotificationManager] Admin chat is not configured; delivery failure notification skipped');
+			return;
+		}
+		if (!telegramService || !telegramService.isEnabled()) {
+			console.warn('[NotificationManager] Telegram is disabled; delivery failure notification skipped');
+			return;
+		}
+
+		const succeededChannels = results.filter(result => result.success).map(result => result.channel);
+		const failureDetails = failures.map((result) => {
+			const metadata = [
+				result.statusCode ? `status ${result.statusCode}` : null,
+				result.attemptCount ? `attempts ${result.attemptCount}` : null,
+			].filter(Boolean);
+			return `- ${result.channel}: ${result.error || 'Unknown error'}${metadata.length ? ` (${metadata.join(', ')})` : ''}`;
+		});
+		const requestId = alert && (alert.requestId || alert.correlationId);
+		const message = [
+			'Notification delivery failure',
+			`Failed channels: ${failures.map(result => result.channel).join(', ')}`,
+			`Succeeded channels: ${succeededChannels.length ? succeededChannels.join(', ') : 'none'}`,
+			...failureDetails,
+			...(requestId ? [`Request ID: ${requestId}`] : []),
+		].join('\n');
+
+		try {
+			const adminResult = await telegramService.send({
+				text: message,
+				telegramChatId: adminChatId,
+			});
+			if (adminResult && adminResult.success) {
+				console.info('[NotificationManager] Admin delivery failure notification sent');
+			} else {
+				console.error('[NotificationManager] Admin delivery failure notification failed:', adminResult && adminResult.error);
+			}
+		} catch (error) {
+			console.error('[NotificationManager] Admin delivery failure notification failed:', error.message);
+		}
+	}
+
 	/**
     * Send alert to specific channels by name, in parallel
     * @param {Object} alert - Alert object with text and optional enriched content
@@ -158,6 +207,8 @@ class NotificationManager {
 			}
 		}
 
+		await this.notifyAdminOfFailures(alert, formattedResults);
+
 		console.info('[NotificationManager] Delivery results:', JSON.stringify(formattedResults.map(r => ({
 			channel: r.channel,
 			success: r.success,
@@ -255,6 +306,8 @@ class NotificationManager {
 				});
 			}
 		}
+
+		await this.notifyAdminOfFailures(alert, formattedResults);
 
 		console.info('[NotificationManager] Delivery results:', JSON.stringify(formattedResults.map(r => ({
 			channel: r.channel,
