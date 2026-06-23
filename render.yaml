@@ -7,8 +7,8 @@ services:
   runtime: node
   repo: https://github.com/francovp/cabros-crypto-bot-telegram
   branch: master
-  buildCommand: corepack enable && pnpm install --frozen-lockfile
-  startCommand: corepack enable && pnpm start
+  buildCommand: npm install -g pnpm && pnpm install --frozen-lockfile
+  startCommand: pnpm start
   healthCheckPath: /healthcheck
   pullRequestPreviewsEnabled: true
   envVars:

@@ -1,4 +1,5 @@
 const genaiClient = require('./genaiClient');
+const { NonRetryableProviderError } = genaiClient;
 const { validateGeminiResponse } = require('../../lib/validation');
 const { GROUNDING_MODEL_NAME, GEMINI_MODEL_NAME, GEMINI_MODEL_NAME_FALLBACK, ENABLE_NEWS_MONITOR_TEST_MODE } = require('./config');
 const { EventCategory } = require('../../controllers/webhooks/handlers/newsMonitor/constants');
@@ -324,19 +325,29 @@ async function generateEnrichedAlert({ text, searchResults = [], searchResultTex
 
 		try {
 			llmResult = await genaiClient.llmCallv2(llmParams);
-		} catch (error) {
-			if (!GEMINI_MODEL_NAME_FALLBACK || !shouldRetryGeminiWithFallback(error)) {
-				throw error;
-			}
+	} catch (error) {
+		if (error instanceof NonRetryableProviderError) {
+			console.warn('[Gemini] Non-retryable provider error, returning neutral enrichment:', error.message);
+			return {
+				sentiment: 'NEUTRAL',
+				sentiment_score: 0.5,
+				insights: [],
+				modelUsed: GEMINI_MODEL_NAME || 'unknown',
+			};
+		}
 
-			console.warn('[Gemini] Primary enrichment model failed, attempting fallback model:', GEMINI_MODEL_NAME_FALLBACK);
-			llmResult = await genaiClient.llmCallv2({
-				...llmParams,
-				opts: {
-					...llmParams.opts,
-					model: GEMINI_MODEL_NAME_FALLBACK,
-				},
-			});
+		if (!GEMINI_MODEL_NAME_FALLBACK || !shouldRetryGeminiWithFallback(error)) {
+			throw error;
+		}
+
+		console.warn('[Gemini] Primary enrichment model failed, attempting fallback model:', GEMINI_MODEL_NAME_FALLBACK);
+		llmResult = await genaiClient.llmCallv2({
+			...llmParams,
+			opts: {
+				...llmParams.opts,
+				model: GEMINI_MODEL_NAME_FALLBACK,
+			},
+		});
 		}
 
 		const { text: responseText, usage, modelUsed } = llmResult;

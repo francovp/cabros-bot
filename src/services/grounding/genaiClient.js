@@ -18,6 +18,27 @@ const { getOpenRouterClient } = require('../inference/openRouterClient');
 const { normalizeUsageMetadata } = require('../../lib/tokenUsage');
 const sentryService = require('../monitoring/SentryService');
 
+/**
+ * Error class for non-retryable provider configuration failures.
+ * Thrown when an LLM provider returns a known permanent error
+ * (e.g., 400 FAILED_PRECONDITION for unsupported location) that
+ * should not trigger failover or retry.
+ */
+class NonRetryableProviderError extends Error {
+	/**
+	 * @param {string} message - Human-readable error description
+	 * @param {object} [originalError] - The original provider error
+	 */
+	constructor(message, originalError) {
+		super(message);
+		this.name = 'NonRetryableProviderError';
+		/** @type {number|undefined} */
+		this.statusCode = originalError?.status || undefined;
+		/** @type {string|undefined} */
+		this.provider = originalError?.provider || 'gemini';
+	}
+}
+
 class GenaiClient {
 	constructor() {
 		this.genAI = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
@@ -211,6 +232,30 @@ class GenaiClient {
 		return this._executeBraveSearch(query, maxResults);
 	}
 
+	/**
+	 * Check if a Gemini API error is a non-retryable configuration/precondition failure.
+	 * 4xx errors (except 429 rate-limit) indicate permanent provider config issues
+	 * that should not trigger retry or failover.
+	 * @param {Error} error - The raw error from the Gemini SDK
+	 * @returns {boolean}
+	 */
+	_isNonRetryableGeminiError(error) {
+		if (!error) {
+			return false;
+		}
+		const status = Number(error.status);
+		if (status >= 400 && status < 500 && status !== 429) {
+			return true;
+		}
+		const errorMessage = String(error.message || '').toUpperCase();
+		return (
+			errorMessage.includes('FAILED_PRECONDITION')
+			|| errorMessage.includes('PERMISSION_DENIED')
+			|| errorMessage.includes('NOT_FOUND')
+			|| (errorMessage.includes('400') && errorMessage.includes('LOCATION'))
+		);
+	}
+
 	async llmCall({ prompt, context = {}, opts = {} }) {
 		const { model = GEMINI_MODEL_NAME, temperature = 0.2 } = opts;
 
@@ -264,6 +309,12 @@ class GenaiClient {
 				usage,
 			};
 		} catch (error) {
+			if (this._isNonRetryableGeminiError(error)) {
+				throw new NonRetryableProviderError(
+					`LLM provider configuration error: ${error.message}`,
+					{ ...error, provider: 'gemini' },
+				);
+			}
 			throw new Error(`LLM call failed: ${error.message}`);
 		}
 	}
@@ -307,6 +358,10 @@ class GenaiClient {
 					modelUsed,
 				};
 			} catch (error) {
+				if (error instanceof NonRetryableProviderError) {
+					console.warn('[GenaiClient] Gemini non-retryable provider error, skipping failover:', error.message);
+					throw error;
+				}
 				console.warn('[GenaiClient] Gemini call failed, attempting failover:', error.message);
 				lastError = error;
 			}
@@ -401,3 +456,5 @@ class GenaiClient {
 }
 
 module.exports = new GenaiClient();
+module.exports.NonRetryableProviderError = NonRetryableProviderError;
+module.exports.GenaiClient = GenaiClient;

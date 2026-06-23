@@ -68,7 +68,6 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 #### Firestore Alert Storage
 
 - `ENABLE_FIRESTORE_ALERT_STORAGE` - Enable Firestore persistence and alert read API (`true` or `false`, default: `false`)
-- `ENABLE_FIRESTORE_JOB_STORAGE` - Enable Firestore persistence for async TradingView jobs without enabling alert read APIs (`true` or `false`, default: `false`)
 - `FIREBASE_SERVICE_ACCOUNT_JSON` - Inline Firebase service account JSON for server-side Firestore access
 - `FIREBASE_PROJECT_ID` - Optional Firebase project override for Admin SDK initialization
 - `GOOGLE_APPLICATION_CREDENTIALS` - Optional path to a service account JSON file for local development
@@ -161,8 +160,6 @@ pnpm start
 ```
 
 ## API Endpoints
-
-The canonical API contract is served publicly at [`/openapi.json`](http://localhost:80/openapi.json), with interactive Swagger UI at [`/docs`](http://localhost:80/docs). Use those endpoints for request schemas, response shapes, examples, and the current route inventory. Protected `/api` operations still require `x-api-key`; the documentation endpoints never expose configured credentials.
 
 ### GET /healthcheck
 
@@ -658,9 +655,7 @@ Start a background analysis or scanner job.
 #### GET /api/jobs/:jobId
 
 Retrieve status, partial progress, final report, and delivery state of a job.
-Jobs are retained in memory and, when Firestore job storage is enabled, persisted to the `tradingviewJobs` collection so status survives process restarts. Completed and failed jobs are automatically evicted after 1 hour.
-
-Set `ENABLE_FIRESTORE_JOB_STORAGE=true` plus the normal Firebase Admin credentials (`FIREBASE_SERVICE_ACCOUNT_JSON` or `GOOGLE_APPLICATION_CREDENTIALS`) to enable durable job storage. The legacy in-memory path remains the fallback when Firestore is disabled or unavailable.
+Jobs are retained in memory and automatically evicted after 1 hour.
 
 **Response (200 OK - Processing):**
 ```json
@@ -692,8 +687,8 @@ Set `ENABLE_FIRESTORE_JOB_STORAGE=true` plus the normal Firebase Admin credentia
 
 When `ENABLE_FIRESTORE_ALERT_STORAGE=true`, successful `POST /api/webhook/alert` requests are persisted to Firestore and can be inspected through the protected alerts read API.
 
-All endpoints below require the same `x-api-key` header used by the webhook routes.
-If alert storage is enabled but Firestore credentials/project access are unavailable, they return `503 STORAGE_UNAVAILABLE` instead of a generic `500`.
+Both endpoints below require the same `x-api-key` header used by the webhook routes.
+If alert storage is enabled but Firestore credentials/project access are unavailable, both endpoints return `503 STORAGE_UNAVAILABLE` instead of a generic `500`.
 
 #### GET /api/alerts
 
@@ -735,76 +730,6 @@ List stored alerts ordered by `receivedAt` descending.
     "hasMore": false,
     "limit": 50,
     "nextBefore": "eyJ2IjoxLCJyZWNlaXZlZEF0IjoiMjAyNi0wNi0wNlQxMjowMDowMC4wMDBaIiwiaWQiOiJhbGVydC0xIn0"
-  }
-}
-```
-
-#### GET /api/alerts/summary
-
-Return bounded JSON-only analytics for stored alerts without exposing raw alert text or credentials.
-
-**Query Parameters:**
-- `from` - Optional ISO-8601 lower bound; defaults to 24 hours before `to`
-- `to` - Optional ISO-8601 upper bound; defaults to request time
-- `limit` - Integer between `1` and `1000` (default: `500`)
-
-The service caps the queried window at 31 days to keep routine operator usage cheap.
-
-**Response (200 OK):**
-```json
-{
-  "success": true,
-  "summary": {
-    "window": {
-      "from": "2026-06-06T00:00:00.000Z",
-      "to": "2026-06-07T00:00:00.000Z",
-      "limit": 500,
-      "maxDays": 31
-    },
-    "totalAlerts": 2,
-    "bySource": {
-      "webhook": 2
-    },
-    "bySymbol": {
-      "BTCUSDT": 1,
-      "ETHUSDT": 1
-    },
-    "byFeatureFlag": {
-      "enriched": 1,
-      "plain": 1,
-      "tradingViewData": 1,
-      "withoutTradingViewData": 1
-    },
-    "enrichment": {
-      "enrichedAlerts": 1,
-      "plainAlerts": 1,
-      "tokenUsage": {
-        "inputTokens": 10,
-        "outputTokens": 20,
-        "totalTokens": 30,
-        "totalCost": 0.001
-      }
-    },
-    "delivery": {
-      "totalSuccess": 2,
-      "totalFailure": 1,
-      "byChannel": {
-        "telegram": {
-          "total": 2,
-          "success": 1,
-          "failure": 1
-        },
-        "whatsapp": {
-          "total": 1,
-          "success": 1,
-          "failure": 0
-        }
-      }
-    },
-    "latency": {
-      "averageProcessingMs": 250,
-      "averageDeliveryMs": 150
-    }
   }
 }
 ```

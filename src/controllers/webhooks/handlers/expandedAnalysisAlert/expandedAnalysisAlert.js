@@ -12,13 +12,6 @@ const {
 	initializeNotificationServices,
 } = require('../alert/alert');
 const sentryService = require('../../../../services/monitoring/SentryService');
-const {
-	NotificationRoutingValidationError,
-	parseNotificationRouting,
-	sendWithNotificationRouting,
-	getRequestedChannels,
-	getDeliveredChannels,
-} = require('../../../../services/notification/requestRouting');
 
 const DEFAULT_ALERT_TIMEOUT_MS = 60000;
 const MAX_ALERT_TIMEOUT_MS = 120000;
@@ -44,7 +37,6 @@ function postExpandedAnalysisAlert(botOrGetter) {
 
 		try {
 			const requestSpan = sentryService.getActiveSpan();
-			const routing = parseNotificationRouting(req.body);
 			const parsed = parseExpandedAnalysisAlertRequest(req);
 			const timeoutMs = getAlertTimeoutMs();
 			const deadline = createAlertDeadline(timeoutMs);
@@ -104,9 +96,7 @@ function postExpandedAnalysisAlert(botOrGetter) {
 				notificationManager = await initializeNotificationServices(resolveBot(botOrGetter));
 			}
 
-			const deliveryResults = await sendWithNotificationRouting(notificationManager, { text: alertText }, routing, { parentSpan: requestSpan });
-			const requestedChannels = getRequestedChannels(notificationManager, routing);
-			const deliveredChannels = getDeliveredChannels(deliveryResults);
+			const deliveryResults = await notificationManager.sendToAll({ text: alertText }, { parentSpan: requestSpan });
 			const summary = buildSummary(results, deliveryResults);
 
 			return res.status(200).json({
@@ -114,8 +104,6 @@ function postExpandedAnalysisAlert(botOrGetter) {
 				alertText,
 				results: compactResults(results),
 				deliveryResults,
-				requestedChannels,
-				deliveredChannels,
 				summary,
 				timedOut,
 				timeoutMs,
@@ -123,14 +111,6 @@ function postExpandedAnalysisAlert(botOrGetter) {
 				totalDurationMs: Date.now() - startTime,
 			});
 		} catch (error) {
-			if (error instanceof NotificationRoutingValidationError) {
-				return res.status(400).json({
-					error: error.message,
-					code: 'INVALID_REQUEST',
-					requestId,
-				});
-			}
-
 			if (error instanceof ExpandedAnalysisAlertRequestError) {
 				return res.status(400).json({
 					error: error.message,

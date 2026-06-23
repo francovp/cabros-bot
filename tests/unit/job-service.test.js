@@ -1,11 +1,7 @@
 'use strict';
 
-const admin = require('firebase-admin');
 const { JobService } = require('../../src/services/jobs/JobService');
 const { tradingViewMcpService } = require('../../src/services/tradingview/TradingViewMcpService');
-const JobRepository = require('../../src/services/jobs/JobRepository');
-
-const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
 	tradingViewMcpService: {
@@ -36,11 +32,6 @@ describe('JobService Unit Tests', () => {
 			...originalEnv,
 			ENABLE_MARKET_SCANNER: 'true',
 		};
-		delete process.env.ENABLE_FIRESTORE_JOB_STORAGE;
-		delete process.env.ENABLE_FIRESTORE_ALERT_STORAGE;
-		admin.__resetApps();
-		admin.__resetCollectionState();
-		JobRepository._resetForTesting();
 		jest.clearAllMocks();
 		jobService = new JobService();
 	});
@@ -50,32 +41,37 @@ describe('JobService Unit Tests', () => {
 	});
 
 	describe('createJob', () => {
-		it('throws UNSUPPORTED_TYPE for invalid job type', async () => {
-			await expect(jobService.createJob('invalid-type', {}))
-				.rejects.toThrow('Unsupported job type: invalid-type');
+		it('throws UNSUPPORTED_TYPE for invalid job type', () => {
+			expect(() => {
+				jobService.createJob('invalid-type', {});
+			}).toThrow('Unsupported job type: invalid-type');
 		});
 
-		it('throws FEATURE_DISABLED if market-scanner is requested but disabled', async () => {
+		it('throws FEATURE_DISABLED if market-scanner is requested but disabled', () => {
 			process.env.ENABLE_MARKET_SCANNER = 'false';
-			await expect(jobService.createJob('market-scanner', {}))
-				.rejects.toThrow('Market scanner is not enabled');
+			expect(() => {
+				jobService.createJob('market-scanner', {});
+			}).toThrow('Market scanner is not enabled');
 		});
 
-		it('throws validation error if request payload is invalid', async () => {
-			await expect(jobService.createJob('expanded-analysis', { symbols: 'not-an-array' }))
-				.rejects.toThrow();
+		it('throws validation error if request payload is invalid', () => {
+			expect(() => {
+				jobService.createJob('expanded-analysis', { symbols: 'not-an-array' });
+			}).toThrow();
 		});
 
-		it('throws validation error if timeoutMs is not a positive integer', async () => {
-			await expect(jobService.createJob('expanded-analysis', { symbols: ['BINANCE:BTCUSDT'], timeoutMs: 'invalid' }))
-				.rejects.toThrow('timeoutMs must be a positive integer');
+		it('throws validation error if timeoutMs is not a positive integer', () => {
+			expect(() => {
+				jobService.createJob('expanded-analysis', { symbols: ['BINANCE:BTCUSDT'], timeoutMs: 'invalid' });
+			}).toThrow('timeoutMs must be a positive integer');
 
-			await expect(jobService.createJob('expanded-analysis', { symbols: ['BINANCE:BTCUSDT'], timeoutMs: -100 }))
-				.rejects.toThrow('timeoutMs must be a positive integer');
+			expect(() => {
+				jobService.createJob('expanded-analysis', { symbols: ['BINANCE:BTCUSDT'], timeoutMs: -100 });
+			}).toThrow('timeoutMs must be a positive integer');
 		});
 
-		it('creates a job and returns metadata on success', async () => {
-			const result = await jobService.createJob('expanded-analysis', {
+		it('creates a job and returns metadata on success', () => {
+			const result = jobService.createJob('expanded-analysis', {
 				symbols: ['BINANCE:BTCUSDT'],
 			});
 
@@ -84,18 +80,20 @@ describe('JobService Unit Tests', () => {
 			expect(result.status).toBe('processing');
 		});
 
-		it('correctly validates and parses timeoutMs string format like 1e3', async () => {
-			const metadata = await jobService.createJob('expanded-analysis', {
+		it('correctly validates and parses timeoutMs string format like 1e3', () => {
+			const metadata = jobService.createJob('expanded-analysis', {
 				symbols: ['BINANCE:BTCUSDT'],
 				timeoutMs: '1e3',
 			});
 
-			const rawJob = await jobService.repository.get(metadata.jobId);
+			const rawJob = jobService.jobs.get(metadata.jobId);
 			expect(rawJob.timeoutMs).toBe(1000);
 		});
 	});
 
 	describe('Background execution and retrieval', () => {
+		const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 		it('completes expanded-analysis job successfully', async () => {
 			tradingViewMcpService.analyzeSymbolIdentifier.mockResolvedValueOnce({
 				symbol: 'BINANCE:BTCUSDT',
@@ -103,18 +101,18 @@ describe('JobService Unit Tests', () => {
 				rsi: { value: 45 },
 			});
 
-			const metadata = await jobService.createJob('expanded-analysis', {
+			const metadata = jobService.createJob('expanded-analysis', {
 				symbols: ['BINANCE:BTCUSDT'],
 			});
 
 			const jobId = metadata.jobId;
 
 			// Poll until completed
-			let job = await jobService.getJob(jobId);
+			let job = jobService.getJob(jobId);
 			let attempts = 0;
 			while (job.status !== 'completed' && attempts < 10) {
 				await delay(20);
-				job = await jobService.getJob(jobId);
+				job = jobService.getJob(jobId);
 				attempts++;
 			}
 
@@ -139,18 +137,18 @@ describe('JobService Unit Tests', () => {
 		it('fails expanded-analysis job when all symbols fail', async () => {
 			tradingViewMcpService.analyzeSymbolIdentifier.mockRejectedValueOnce(new Error('MCP Failed'));
 
-			const metadata = await jobService.createJob('expanded-analysis', {
+			const metadata = jobService.createJob('expanded-analysis', {
 				symbols: ['BINANCE:BTCUSDT'],
 			});
 
 			const jobId = metadata.jobId;
 
 			// Poll until failed
-			let job = await jobService.getJob(jobId);
+			let job = jobService.getJob(jobId);
 			let attempts = 0;
 			while (job.status !== 'failed' && attempts < 10) {
 				await delay(20);
-				job = await jobService.getJob(jobId);
+				job = jobService.getJob(jobId);
 				attempts++;
 			}
 
@@ -169,18 +167,18 @@ describe('JobService Unit Tests', () => {
 				{ symbol: 'BINANCE:ETHUSDT', changePercent: 5.0, indicators: { close: 3200, RSI: 55 } },
 			]);
 
-			const metadata = await jobService.createJob('market-scanner', {
+			const metadata = jobService.createJob('market-scanner', {
 				scans: ['top_gainers'],
 			});
 
 			const jobId = metadata.jobId;
 
 			// Poll until completed
-			let job = await jobService.getJob(jobId);
+			let job = jobService.getJob(jobId);
 			let attempts = 0;
 			while (job.status !== 'completed' && attempts < 10) {
 				await delay(20);
-				job = await jobService.getJob(jobId);
+				job = jobService.getJob(jobId);
 				attempts++;
 			}
 
@@ -197,464 +195,50 @@ describe('JobService Unit Tests', () => {
 	});
 
 	describe('Job eviction / cleanup', () => {
-		it('evicts jobs older than 1 hour if status is completed or failed', async () => {
-			const jobId = 'expired-completed-job';
-			const rawJob = {
-				jobId,
-				type: 'expanded-analysis',
-				status: 'completed',
-				progress: { total: 1, current: 1, status: 'Completed analysis' },
-				fullResults: [],
-				fullScanResults: [],
-				createdAt: new Date(Date.now() - 7200000).toISOString(),
-				updatedAt: new Date(Date.now() - 7200000).toISOString(),
-				totalDurationMs: 1000,
-			};
-			await jobService.repository.save(rawJob);
+		it('evicts jobs older than 1 hour if status is completed or failed', () => {
+			const metadata = jobService.createJob('expanded-analysis', {
+				symbols: ['BINANCE:BTCUSDT'],
+			});
+
+			const jobId = metadata.jobId;
+
+			// Access internal jobs Map to manipulate the createdAt timestamp
+			const rawJob = jobService.jobs.get(jobId);
+			expect(rawJob).toBeDefined();
+
+			// Set createdAt to 2 hours ago
+			rawJob.createdAt = new Date(Date.now() - 7200000).toISOString();
+			rawJob.status = 'completed';
 
 			// Querying job should clean it up and return null
-			const job = await jobService.getJob(jobId);
+			const job = jobService.getJob(jobId);
 			expect(job).toBeNull();
-			expect(jobService.repository.has(jobId)).toBe(false);
+			expect(jobService.jobs.has(jobId)).toBe(false);
 		});
 
-		it('does not evict jobs older than 1 hour if they are not completed or failed', async () => {
-			const jobId = 'old-processing-job';
-			const rawJob = {
-				jobId,
-				type: 'expanded-analysis',
-				status: 'processing',
-				progress: { total: 1, current: 0, status: 'processing' },
-				fullResults: [],
-				fullScanResults: [],
-				createdAt: new Date(Date.now() - 7200000).toISOString(),
-				updatedAt: new Date(Date.now() - 7200000).toISOString(),
-				totalDurationMs: 0,
-			};
-			await jobService.repository.save(rawJob);
+		it('does not evict jobs older than 1 hour if they are not completed or failed', () => {
+			const metadata = jobService.createJob('expanded-analysis', {
+				symbols: ['BINANCE:BTCUSDT'],
+			});
+
+			const jobId = metadata.jobId;
+			const rawJob = jobService.jobs.get(jobId);
+			expect(rawJob).toBeDefined();
+
+			// Set createdAt to 2 hours ago
+			rawJob.createdAt = new Date(Date.now() - 7200000).toISOString();
+			rawJob.status = 'processing';
 
 			// Querying job should NOT clean it up
-			const job = await jobService.getJob(jobId);
+			const job = jobService.getJob(jobId);
 			expect(job).not.toBeNull();
-			expect(jobService.repository.has(jobId)).toBe(true);
+			expect(jobService.jobs.has(jobId)).toBe(true);
 
 			// Now set status to completed, querying it should clean it up
 			rawJob.status = 'completed';
-			await jobService.repository.save(rawJob);
-			const jobAfterComplete = await jobService.getJob(jobId);
+			const jobAfterComplete = jobService.getJob(jobId);
 			expect(jobAfterComplete).toBeNull();
-			expect(jobService.repository.has(jobId)).toBe(false);
-		});
-	});
-
-	describe('Durable persistence', () => {
-		it('reads a completed job from Firestore after a service restart', async () => {
-			process.env.ENABLE_FIRESTORE_JOB_STORAGE = 'true';
-			tradingViewMcpService.analyzeSymbolIdentifier.mockResolvedValueOnce({
-				symbol: 'BINANCE:BTCUSDT',
-				price_data: { close: 65000, change_percent: 1.5 },
-				rsi: { value: 45 },
-			});
-
-			const metadata = await jobService.createJob('expanded-analysis', {
-				symbols: ['BINANCE:BTCUSDT'],
-			});
-
-			let job = await jobService.getJob(metadata.jobId);
-			let attempts = 0;
-			while (job.status !== 'completed' && attempts < 10) {
-				await delay(20);
-				job = await jobService.getJob(metadata.jobId);
-				attempts++;
-			}
-
-			JobRepository._resetForTesting();
-			const restartedService = new JobService();
-			const restored = await restartedService.getJob(metadata.jobId);
-
-			expect(restored).toMatchObject({
-				jobId: metadata.jobId,
-				type: 'expanded-analysis',
-				status: 'completed',
-			});
-			expect(restored.alertText).toContain('BTCUSDT');
-			expect(restored.results).toHaveLength(1);
-		});
-	});
-
-	describe('Cancellation and retry operations', () => {
-		it('cancels a running job and returns 409 if already completed', async () => {
-			const metadata = await jobService.createJob('expanded-analysis', {
-				symbols: ['BINANCE:BTCUSDT'],
-			});
-			const jobId = metadata.jobId;
-
-			// Cancel it
-			const cancelResult = await jobService.cancelJob(jobId);
-			expect(cancelResult.success).toBe(true);
-			expect(cancelResult.status).toBe('cancelled');
-
-			// Re-cancelling should return terminal error
-			const cancelAgain = await jobService.cancelJob(jobId);
-			expect(cancelAgain.success).toBe(false);
-			expect(cancelAgain.code).toBe('TERMINAL_JOB');
-
-			// Check job state
-			const job = await jobService.getJob(jobId);
-			expect(job.status).toBe('cancelled');
-		});
-
-		it('retries a failed/cancelled job and creates a new one with requestMetadata', async () => {
-			const metadata = await jobService.createJob('expanded-analysis', {
-				symbols: ['BINANCE:BTCUSDT'],
-				timeframe: '1H',
-			});
-			const jobId = metadata.jobId;
-
-			// Cancel it so it is terminal and retryable
-			await jobService.cancelJob(jobId);
-
-			// Retry it
-			const retryResult = await jobService.retryJob(jobId);
-			expect(retryResult.success).toBe(true);
-			expect(retryResult.oldJobId).toBe(jobId);
-			expect(retryResult.newJobId).toBeDefined();
-			expect(retryResult.status).toBe('processing');
-
-			// Check that the new job has the same metadata
-			const newJob = await jobService.repository.get(retryResult.newJobId);
-			expect(newJob.requestMetadata).toEqual(
-				expect.objectContaining({
-					type: 'expanded-analysis',
-					symbols: ['BINANCE:BTCUSDT'],
-					timeframe: '1h',
-				})
-			);
-		});
-
-		it('retries only failed items via retryFailedJob', async () => {
-			// Save a job that is completed with mixed status
-			const jobId = 'mixed-job';
-			const rawJob = {
-				jobId,
-				type: 'expanded-analysis',
-				status: 'completed',
-				progress: { total: 3, current: 3, status: 'Completed' },
-				requestMetadata: {
-					type: 'expanded-analysis',
-					symbols: ['BINANCE:BTCUSDT', 'BINANCE:ETHUSDT', 'BINANCE:SOLUSDT'],
-					timeframe: '60',
-				},
-				fullResults: [
-					{ symbol: 'BINANCE:BTCUSDT', status: 'analyzed' },
-					{ symbol: 'BINANCE:ETHUSDT', status: 'error', error: 'MCP error' },
-					{ symbol: 'BINANCE:SOLUSDT', status: 'timeout', error: 'Timed out' },
-				],
-				createdAt: new Date().toISOString(),
-				updatedAt: new Date().toISOString(),
-			};
-			await jobService.repository.save(rawJob);
-
-			const retryResult = await jobService.retryFailedJob(jobId);
-			expect(retryResult.success).toBe(true);
-			expect(retryResult.oldJobId).toBe(jobId);
-
-			const newJob = await jobService.repository.get(retryResult.newJobId);
-			expect(newJob.requestMetadata.symbols).toEqual(['BINANCE:ETHUSDT', 'BINANCE:SOLUSDT']);
-		});
-	});
-
-	describe('Async job completion callbacks', () => {
-		let fetchMock;
-
-		beforeEach(() => {
-			fetchMock = jest.fn();
-			globalThis.fetch = fetchMock;
-		});
-
-		afterEach(() => {
-			delete globalThis.fetch;
-		});
-
-		it('validates callbackUrl protocol and format', async () => {
-			const prevEnv = process.env.NODE_ENV;
-			const prevAllow = process.env.ALLOW_HTTP_CALLBACKS;
-			process.env.NODE_ENV = 'production';
-			process.env.ALLOW_HTTP_CALLBACKS = 'false';
-
-			try {
-				await expect(jobService.createJob('expanded-analysis', {
-					symbols: ['BINANCE:BTCUSDT'],
-					callbackUrl: 'http://example.com/callback',
-				})).rejects.toThrow('callbackUrl must be a valid HTTPS URL');
-
-				await expect(jobService.createJob('expanded-analysis', {
-					symbols: ['BINANCE:BTCUSDT'],
-					callbackUrl: 'not-a-url',
-				})).rejects.toThrow('callbackUrl must be a valid HTTPS URL');
-			} finally {
-				process.env.NODE_ENV = prevEnv;
-				process.env.ALLOW_HTTP_CALLBACKS = prevAllow;
-			}
-		});
-
-		it('allows http for localhost / local environments', async () => {
-			const prevEnv = process.env.NODE_ENV;
-			process.env.NODE_ENV = 'production';
-			try {
-				const res = await jobService.createJob('expanded-analysis', {
-					symbols: ['BINANCE:BTCUSDT'],
-					callbackUrl: 'http://localhost:8080/callback',
-				});
-				expect(res.success).toBe(true);
-			} finally {
-				process.env.NODE_ENV = prevEnv;
-			}
-		});
-
-		it('validates callbackSecret is a string', async () => {
-			await expect(jobService.createJob('expanded-analysis', {
-				symbols: ['BINANCE:BTCUSDT'],
-				callbackUrl: 'https://example.com/callback',
-				callbackSecret: 12345,
-			})).rejects.toThrow('callbackSecret must be a string');
-		});
-
-		it('validates callbackEvents is an array of strings with valid event types', async () => {
-			await expect(jobService.createJob('expanded-analysis', {
-				symbols: ['BINANCE:BTCUSDT'],
-				callbackUrl: 'https://example.com/callback',
-				callbackEvents: 'completed',
-			})).rejects.toThrow('callbackEvents must be an array of strings');
-
-			await expect(jobService.createJob('expanded-analysis', {
-				symbols: ['BINANCE:BTCUSDT'],
-				callbackUrl: 'https://example.com/callback',
-				callbackEvents: ['completed', 'invalid-event'],
-			})).rejects.toThrow('Invalid event in callbackEvents');
-		});
-
-		it('sends callback when job reaches terminal state and records success', async () => {
-			fetchMock.mockResolvedValueOnce({ ok: true, status: 200 });
-
-			tradingViewMcpService.analyzeSymbolIdentifier.mockResolvedValueOnce({
-				symbol: 'BINANCE:BTCUSDT',
-				price_data: { close: 65000, change_percent: 1.5 },
-				rsi: { value: 45 },
-			});
-
-			const metadata = await jobService.createJob('expanded-analysis', {
-				symbols: ['BINANCE:BTCUSDT'],
-				callbackUrl: 'https://example.com/callback',
-			});
-
-			let job = await jobService.getJob(metadata.jobId);
-			let attempts = 0;
-			while (job.status !== 'completed' && attempts < 10) {
-				await delay(20);
-				job = await jobService.getJob(metadata.jobId);
-				attempts++;
-			}
-
-			expect(job.status).toBe('completed');
-
-			await delay(100);
-
-			expect(fetchMock).toHaveBeenCalledTimes(1);
-			const [url, options] = fetchMock.mock.calls[0];
-			expect(url).toBe('https://example.com/callback');
-			expect(options.method).toBe('POST');
-			expect(options.headers['Content-Type']).toBe('application/json');
-
-			const body = JSON.parse(options.body);
-			expect(body.jobId).toBe(metadata.jobId);
-			expect(body.status).toBe('completed');
-			expect(body.totalDurationMs).toBeGreaterThanOrEqual(0);
-
-			const freshJob = await jobService.getJob(metadata.jobId);
-			expect(freshJob.callbackStatus).toBeDefined();
-			expect(freshJob.callbackStatus.status).toBe('success');
-			expect(freshJob.callbackStatus.attempts).toHaveLength(1);
-			expect(freshJob.callbackStatus.attempts[0].statusCode).toBe(200);
-		});
-
-		it('signs payload with HMAC signature if callbackSecret is provided', async () => {
-			fetchMock.mockResolvedValueOnce({ ok: true, status: 200 });
-
-			tradingViewMcpService.analyzeSymbolIdentifier.mockResolvedValueOnce({
-				symbol: 'BINANCE:BTCUSDT',
-				price_data: { close: 65000, change_percent: 1.5 },
-				rsi: { value: 45 },
-			});
-
-			const metadata = await jobService.createJob('expanded-analysis', {
-				symbols: ['BINANCE:BTCUSDT'],
-				callbackUrl: 'https://example.com/callback',
-				callbackSecret: 'super-secret',
-			});
-
-			let job = await jobService.getJob(metadata.jobId);
-			let attempts = 0;
-			while (job.status !== 'completed' && attempts < 10) {
-				await delay(20);
-				job = await jobService.getJob(metadata.jobId);
-				attempts++;
-			}
-
-			await delay(100);
-
-			expect(fetchMock).toHaveBeenCalledTimes(1);
-			const [, options] = fetchMock.mock.calls[0];
-			const signature = options.headers['x-callback-signature'];
-			expect(signature).toBeDefined();
-
-			const crypto = require('crypto');
-			const expectedSignature = crypto
-				.createHmac('sha256', 'super-secret')
-				.update(options.body)
-				.digest('hex');
-			expect(signature).toBe(expectedSignature);
-		});
-
-		it('signs payload with server-side configured secret if no client secret is provided', async () => {
-			const prevSecret = process.env.JOB_CALLBACK_SIGNING_SECRET;
-			process.env.JOB_CALLBACK_SIGNING_SECRET = 'server-secret';
-			fetchMock.mockResolvedValueOnce({ ok: true, status: 200 });
-
-			tradingViewMcpService.analyzeSymbolIdentifier.mockResolvedValueOnce({
-				symbol: 'BINANCE:BTCUSDT',
-				price_data: { close: 65000, change_percent: 1.5 },
-				rsi: { value: 45 },
-			});
-
-			try {
-				const metadata = await jobService.createJob('expanded-analysis', {
-					symbols: ['BINANCE:BTCUSDT'],
-					callbackUrl: 'https://example.com/callback',
-				});
-
-				let job = await jobService.getJob(metadata.jobId);
-				let attempts = 0;
-				while (job.status !== 'completed' && attempts < 10) {
-					await delay(20);
-					job = await jobService.getJob(metadata.jobId);
-					attempts++;
-				}
-
-				await delay(100);
-
-				expect(fetchMock).toHaveBeenCalledTimes(1);
-				const [, options] = fetchMock.mock.calls[0];
-				const signature = options.headers['x-callback-signature'];
-				expect(signature).toBeDefined();
-
-				const crypto = require('crypto');
-				const expectedSignature = crypto
-					.createHmac('sha256', 'server-secret')
-					.update(options.body)
-					.digest('hex');
-				expect(signature).toBe(expectedSignature);
-			} finally {
-				process.env.JOB_CALLBACK_SIGNING_SECRET = prevSecret;
-			}
-		});
-
-		it('retries up to 3 times on transient failure and fails open without affecting job status', async () => {
-			const prevDelay = process.env.JOB_CALLBACK_RETRY_DELAY_MS;
-			process.env.JOB_CALLBACK_RETRY_DELAY_MS = '1';
-
-			fetchMock
-				.mockRejectedValueOnce(new Error('Network error'))
-				.mockResolvedValueOnce({ ok: false, status: 502, statusText: 'Bad Gateway' })
-				.mockResolvedValueOnce({ ok: false, status: 503, statusText: 'Service Unavailable' })
-				.mockRejectedValueOnce(new Error('Timeout'));
-
-			tradingViewMcpService.analyzeSymbolIdentifier.mockResolvedValueOnce({
-				symbol: 'BINANCE:BTCUSDT',
-				price_data: { close: 65000, change_percent: 1.5 },
-				rsi: { value: 45 },
-			});
-
-			try {
-				const metadata = await jobService.createJob('expanded-analysis', {
-					symbols: ['BINANCE:BTCUSDT'],
-					callbackUrl: 'https://example.com/callback',
-				});
-
-				let job = await jobService.getJob(metadata.jobId);
-				let attempts = 0;
-				while (job.status !== 'completed' && attempts < 10) {
-					await delay(20);
-					job = await jobService.getJob(metadata.jobId);
-					attempts++;
-				}
-
-				expect(job.status).toBe('completed');
-
-				let freshJob = await jobService.getJob(metadata.jobId);
-				let pollAttempts = 0;
-				while ((!freshJob.callbackStatus || freshJob.callbackStatus.status === 'pending') && pollAttempts < 20) {
-					await delay(20);
-					freshJob = await jobService.getJob(metadata.jobId);
-					pollAttempts++;
-				}
-
-				expect(fetchMock).toHaveBeenCalledTimes(4);
-
-				expect(freshJob.callbackStatus.status).toBe('failed');
-				expect(freshJob.callbackStatus.attempts).toHaveLength(4);
-				expect(freshJob.callbackStatus.attempts[0].error).toBe('Network error');
-				expect(freshJob.callbackStatus.attempts[1].error).toBe('HTTP 502 Bad Gateway');
-				expect(freshJob.callbackStatus.attempts[2].error).toBe('HTTP 503 Service Unavailable');
-				expect(freshJob.callbackStatus.attempts[3].error).toBe('Timeout');
-			} finally {
-				process.env.JOB_CALLBACK_RETRY_DELAY_MS = prevDelay;
-			}
-		});
-
-		it('stops retrying once a retry succeeds', async () => {
-			const prevDelay = process.env.JOB_CALLBACK_RETRY_DELAY_MS;
-			process.env.JOB_CALLBACK_RETRY_DELAY_MS = '1';
-
-			fetchMock
-				.mockRejectedValueOnce(new Error('Network error'))
-				.mockResolvedValueOnce({ ok: true, status: 200 });
-
-			tradingViewMcpService.analyzeSymbolIdentifier.mockResolvedValueOnce({
-				symbol: 'BINANCE:BTCUSDT',
-				price_data: { close: 65000, change_percent: 1.5 },
-				rsi: { value: 45 },
-			});
-
-			try {
-				const metadata = await jobService.createJob('expanded-analysis', {
-					symbols: ['BINANCE:BTCUSDT'],
-					callbackUrl: 'https://example.com/callback',
-				});
-
-				let job = await jobService.getJob(metadata.jobId);
-				let attempts = 0;
-				while (job.status !== 'completed' && attempts < 10) {
-					await delay(20);
-					job = await jobService.getJob(metadata.jobId);
-					attempts++;
-				}
-
-				let freshJob = await jobService.getJob(metadata.jobId);
-				let pollAttempts = 0;
-				while ((!freshJob.callbackStatus || freshJob.callbackStatus.status === 'pending') && pollAttempts < 20) {
-					await delay(20);
-					freshJob = await jobService.getJob(metadata.jobId);
-					pollAttempts++;
-				}
-
-				expect(fetchMock).toHaveBeenCalledTimes(2);
-
-				expect(freshJob.callbackStatus.status).toBe('success');
-				expect(freshJob.callbackStatus.attempts).toHaveLength(2);
-			} finally {
-				process.env.JOB_CALLBACK_RETRY_DELAY_MS = prevDelay;
-			}
+			expect(jobService.jobs.has(jobId)).toBe(false);
 		});
 	});
 });

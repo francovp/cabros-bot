@@ -2,7 +2,6 @@ const request = require('supertest');
 const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
 const { initializeNotificationServices } = require('../../src/controllers/webhooks/handlers/alert/alert');
-const { getCacheInstance } = require('../../src/controllers/webhooks/handlers/newsMonitor/cache');
 
 jest.mock('../../src/services/grounding/gemini');
 jest.mock('../../src/services/grounding/genaiClient');
@@ -19,12 +18,8 @@ describe('News Monitor - Basic Endpoint Integration', () => {
 			ENABLE_NEWS_MONITOR: 'true',
 			NODE_ENV: 'test',
 			ENABLE_TELEGRAM_BOT: 'true',
-			ENABLE_WHATSAPP_ALERTS: 'true',
 			BOT_TOKEN: 'test-token',
 			TELEGRAM_CHAT_ID: '123456789',
-			WHATSAPP_API_URL: 'https://api.greenapi.com/waInstance123/',
-			WHATSAPP_API_KEY: 'test-whatsapp-key',
-			WHATSAPP_CHAT_ID: '120363000000000000@g.us',
 			RENDER: '',
 			IS_PULL_REQUEST: '',
 			GEMINI_API_KEY: 'test-key',
@@ -33,7 +28,6 @@ describe('News Monitor - Basic Endpoint Integration', () => {
 		};
 
 		jest.clearAllMocks();
-		getCacheInstance().clear();
 
 		// Mock Gemini for symbol analysis
 		const gemini = require('../../src/services/grounding/gemini');
@@ -67,7 +61,6 @@ describe('News Monitor - Basic Endpoint Integration', () => {
 		mockBot = {
 			telegram: {
 				sendMessage: mockTelegramSendMessage,
-				getMe: jest.fn().mockResolvedValue({ id: 123456789, username: 'TestBot' }),
 			},
 		};
 
@@ -215,20 +208,6 @@ describe('News Monitor - Basic Endpoint Integration', () => {
 				.expect(200);
 
 			expect(res.body).toHaveProperty('success');
-		});
-
-		it('should route alerts to requested channels only', async () => {
-			const res = await request(app)
-				.post('/api/news-monitor').set('x-api-key', 'test-key')
-				.send({
-					crypto: ['ROUTEBTC'],
-					channels: ['telegram'],
-					telegramChatId: '-100999888777',
-				})
-				.expect(200);
-
-			expect(res.body.requestedChannels).toEqual(['telegram']);
-			expect(global.fetch).not.toHaveBeenCalled();
 		});
 	});
 

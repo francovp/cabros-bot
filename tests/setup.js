@@ -68,4 +68,4 @@ jest.mock('@sentry/node', () => ({
 }), { virtual: true });
 
 // Increase timeout for all tests
-jest.setTimeout(15000);
+jest.setTimeout(10000);

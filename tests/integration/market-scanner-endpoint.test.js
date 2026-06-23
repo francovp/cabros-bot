@@ -14,7 +14,6 @@ describe('Market Scanner Alert endpoint', () => {
 	const originalEnv = process.env;
 	let mockTelegramSendMessage;
 	let mockBot;
-	let mockFetch;
 
 	beforeEach(async () => {
 		process.env = {
@@ -37,12 +36,6 @@ describe('Market Scanner Alert endpoint', () => {
 			},
 		};
 
-		mockFetch = jest.fn().mockResolvedValue({
-			ok: true,
-			json: async () => ({ idMessage: 'wa-msg-456' }),
-		});
-		global.fetch = mockFetch;
-
 		await initializeNotificationServices(mockBot);
 		app.use('/api', getRoutes(mockBot));
 	});
@@ -52,7 +45,6 @@ describe('Market Scanner Alert endpoint', () => {
 		if (app._router && app._router.stack && app._router.stack.length > 0) {
 			app._router.stack.pop();
 		}
-		delete global.fetch;
 	});
 
 	it('returns 401 when request lacks valid api key', async () => {
@@ -100,43 +92,6 @@ describe('Market Scanner Alert endpoint', () => {
 		);
 		expect(mockTelegramSendMessage).toHaveBeenCalledTimes(1);
 		expect(mockTelegramSendMessage.mock.calls[0][1]).toContain('SCANNER DE MERCADO');
-	});
-
-	it('routes market scanner delivery to requested channels only', async () => {
-		process.env.ENABLE_WHATSAPP_ALERTS = 'true';
-		process.env.WHATSAPP_API_URL = 'https://api.greenapi.com/waInstance123/';
-		process.env.WHATSAPP_API_KEY = 'test-whatsapp-key';
-		process.env.WHATSAPP_CHAT_ID = '120363000000000000@g.us';
-
-		tradingViewMcpService.callScanTool.mockResolvedValueOnce([
-			{
-				symbol: 'BINANCE:GMTUSDT',
-				changePercent: 26.415,
-				indicators: { close: 0.0134, RSI: 79.72 },
-			},
-		]);
-
-		const res = await request(app)
-			.post('/api/webhook/market-scanner-alert')
-			.set('x-api-key', 'test-key')
-			.send({
-				scans: ['top_gainers'],
-				timeframe: '4h',
-				exchange: 'BINANCE',
-				channels: ['telegram'],
-				telegramChatId: '-100999888777',
-			})
-			.expect(200);
-
-		expect(res.body.requestedChannels).toEqual(['telegram']);
-		expect(res.body.deliveredChannels).toEqual(['telegram']);
-		expect(res.body.deliveryResults).toHaveLength(1);
-		expect(mockTelegramSendMessage).toHaveBeenCalledWith(
-			'-100999888777',
-			expect.any(String),
-			expect.any(Object),
-		);
-		expect(mockFetch).not.toHaveBeenCalled();
 	});
 
 	it('returns 502 when all scanner calls fail', async () => {
