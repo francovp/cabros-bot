@@ -63,11 +63,11 @@ describe('TradingViewMcpService', () => {
 		expect(result.insights.join(' ')).toContain('4h');
 		expect(result.insights.join(' ')).toContain('Rating -2');
 		expect(result.extraText).toContain('tradingview-mcp');
-		expect(service.callCoinAnalysis).toHaveBeenCalledWith({
+		expect(service.callCoinAnalysis).toHaveBeenCalledWith(expect.objectContaining({
 			symbol: 'BTCUSDT',
 			exchange: 'BINANCE',
 			timeframe: '4h',
-		});
+		}));
 	});
 
 	it('prefers structuredContent when MCP server returns schema-native tool results', async () => {
@@ -176,6 +176,32 @@ describe('TradingViewMcpService', () => {
 			timeframe: '1D',
 			signal: controller.signal,
 		})).rejects.toThrow('TradingView MCP call failed for NASDAQ:NVDA');
+
+		expect(service.callCoinAnalysis).toHaveBeenCalledTimes(1);
+	});
+
+	it('aborts MCP enrichment when budget timeout is exceeded', async () => {
+		const service = new TradingViewMcpService({
+			maxRetries: 3,
+			enrichmentBudgetMs: 50,
+			logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
+		});
+
+		service.callCoinAnalysis = jest.fn().mockImplementation(async ({ signal } = {}) => {
+			return new Promise((resolve, reject) => {
+				const timer = setTimeout(() => resolve({ price_data: { current_price: 100 } }), 500);
+				if (signal) {
+					signal.addEventListener('abort', () => {
+						clearTimeout(timer);
+						reject(new DOMException('TradingView MCP enrichment budget exceeded', 'AbortError'));
+					}, { once: true });
+				}
+			});
+		});
+
+		await expect(service.enrichFromAlertText('BTCUSDT(240) pasó a señal de VENTA'))
+			.rejects
+			.toThrow('TradingView MCP call failed');
 
 		expect(service.callCoinAnalysis).toHaveBeenCalledTimes(1);
 	});
