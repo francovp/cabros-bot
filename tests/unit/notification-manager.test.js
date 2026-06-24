@@ -111,4 +111,41 @@ describe('NotificationManager admin failure notifications', () => {
 			text: expect.stringContaining('Failed channels: whatsapp'),
 		}));
 	});
+
+	it('returns delivery results without waiting for the admin notification', async () => {
+		process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '-100-admin';
+		let resolveAdminNotification;
+		const adminNotification = new Promise((resolve) => {
+			resolveAdminNotification = resolve;
+		});
+		const telegramService = {
+			name: 'telegram',
+			isEnabled: jest.fn(() => true),
+			send: jest.fn()
+				.mockResolvedValueOnce({ success: true, channel: 'telegram', messageId: 'alert-1' })
+				.mockReturnValueOnce(adminNotification),
+		};
+		const whatsappService = {
+			name: 'whatsapp',
+			isEnabled: jest.fn(() => true),
+			send: jest.fn().mockResolvedValue({
+				success: false,
+				channel: 'whatsapp',
+				error: 'GreenAPI unavailable',
+			}),
+		};
+		const manager = new NotificationManager(telegramService, whatsappService);
+		let deliverySettled = false;
+
+		const delivery = manager.sendToAll({ text: 'BTC alert' }).then((results) => {
+			deliverySettled = true;
+			return results;
+		});
+		await new Promise(setImmediate);
+		const settledBeforeAdmin = deliverySettled;
+		resolveAdminNotification({ success: true, channel: 'telegram', messageId: 'admin-1' });
+		await delivery;
+
+		expect(settledBeforeAdmin).toBe(true);
+	});
 });

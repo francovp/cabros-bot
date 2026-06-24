@@ -207,7 +207,9 @@ class NotificationManager {
 			}
 		}
 
-		await this.notifyAdminOfFailures(alert, formattedResults);
+		void this.notifyAdminOfFailures(alert, formattedResults).catch((error) => {
+			console.error('[NotificationManager] Unexpected admin notification failure:', error.message);
+		});
 
 		console.info('[NotificationManager] Delivery results:', JSON.stringify(formattedResults.map(r => ({
 			channel: r.channel,
@@ -307,7 +309,9 @@ class NotificationManager {
 			}
 		}
 
-		await this.notifyAdminOfFailures(alert, formattedResults);
+		void this.notifyAdminOfFailures(alert, formattedResults).catch((error) => {
+			console.error('[NotificationManager] Unexpected admin notification failure:', error.message);
+		});
 
 		console.info('[NotificationManager] Delivery results:', JSON.stringify(formattedResults.map(r => ({
 			channel: r.channel,
