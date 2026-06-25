@@ -27,6 +27,10 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 
 ### Optional Variables
 
+#### Security
+
+- `WEBHOOK_API_KEY` - API key used to secure `/api/*` endpoints. When configured, clients must provide the key via the `x-api-key` header (or the `api-key` query parameter)
+
 #### WhatsApp Alerts (GreenAPI)
 
 - `ENABLE_WHATSAPP_ALERTS` - Enable WhatsApp alerts (`true` or `false`, default: `false`)
@@ -128,7 +132,7 @@ pnpm install --frozen-lockfile
 
 ### 2. Create `.env` File
 
-Copy the `.env.example` file to `.env` and fill in your configuration values:
+Copy the `.env.example` file (which serves as the canonical operator template) to `.env` and fill in your configuration values:
 
 ```bash
 cp .env.example .env
@@ -137,6 +141,7 @@ cp .env.example .env
 Then edit `.env` with your specific values. See `.env.example` for complete documentation of all available environment variables organized by category:
 
 - **Required**: Core bot token and chat IDs
+- **Optional: Security**: API Key configuration to secure webhook endpoints
 - **Optional: WhatsApp**: GreenAPI integration for multi-channel alerts
 - **Optional: AI Grounding**: Gemini API for alert enrichment
 - **Optional: Prompt Management**: Langfuse-backed runtime prompts with local fallbacks
