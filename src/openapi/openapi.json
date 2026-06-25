@@ -185,13 +185,13 @@
       "get": {
         "tags": ["News"], "summary": "Analyze configured or queried market symbols", "operationId": "getNewsMonitor",
         "parameters": [{ "$ref": "#/components/parameters/CryptoSymbols" }, { "$ref": "#/components/parameters/StockSymbols" }],
-        "responses": { "200": { "$ref": "#/components/responses/AnalysisResult" }, "400": { "$ref": "#/components/responses/Error" }, "403": { "$ref": "#/components/responses/Error" } },
+        "responses": { "200": { "$ref": "#/components/responses/NewsMonitorAnalysisResult" }, "400": { "$ref": "#/components/responses/Error" }, "403": { "$ref": "#/components/responses/Error" } },
         "security": [{ "ApiKeyHeader": [] }, { "ApiKeyQuery": [] }]
       },
       "post": {
         "tags": ["News"], "summary": "Analyze market symbols from a JSON request", "operationId": "postNewsMonitor",
         "requestBody": { "$ref": "#/components/requestBodies/NewsMonitor" },
-        "responses": { "200": { "$ref": "#/components/responses/AnalysisResult" }, "400": { "$ref": "#/components/responses/Error" }, "403": { "$ref": "#/components/responses/Error" } },
+        "responses": { "200": { "$ref": "#/components/responses/NewsMonitorAnalysisResult" }, "400": { "$ref": "#/components/responses/Error" }, "403": { "$ref": "#/components/responses/Error" } },
         "security": [{ "ApiKeyHeader": [] }, { "ApiKeyQuery": [] }]
       }
     },
@@ -253,6 +253,7 @@
       "JsonResult": { "description": "Successful JSON response", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/JsonObject" } } } },
       "DeliveryResult": { "description": "Per-channel delivery result", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DeliveryResult" }, "example": { "success": true, "results": [{ "channel": "telegram", "success": true }] } } } },
       "AnalysisResult": { "description": "Analysis and delivery result", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/JsonObject" } } } },
+      "NewsMonitorAnalysisResult": { "description": "News monitor analysis and delivery result", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/NewsMonitorResponse" } } } },
       "AlertList": { "description": "Stored alert page", "content": { "application/json": { "schema": { "type": "object", "properties": { "alerts": { "type": "array", "items": { "$ref": "#/components/schemas/JsonObject" } }, "nextCursor": { "type": ["string", "null"] } } } } } },
       "JobResult": { "description": "Asynchronous job state", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Job" } } } },
       "StatusResult": { "description": "Non-sensitive runtime readiness", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Status" } } } }
@@ -280,6 +281,32 @@
       "ScannerPresetRequest": { "type": "object", "required": ["name"], "properties": { "name": { "type": "string", "minLength": 1 }, "exchange": { "type": "string" }, "timeframe": { "type": "string" }, "scans": { "type": "array", "items": { "type": "string" } }, "limit": { "type": "integer", "minimum": 1, "maximum": 20 }, "bbw_threshold": { "type": "number" } } },
       "TradingViewJobRequest": { "oneOf": [{ "allOf": [{ "type": "object", "required": ["type"], "properties": { "type": { "const": "expanded-analysis" } } }, { "$ref": "#/components/schemas/ExpandedAnalysisRequest" }] }, { "allOf": [{ "type": "object", "required": ["type"], "properties": { "type": { "const": "market-scanner" } } }, { "$ref": "#/components/schemas/MarketScannerRequest" }] }] },
       "NewsMonitorRequest": { "type": "object", "properties": { "crypto": { "type": "array", "items": { "type": "string" } }, "stocks": { "type": "array", "items": { "type": "string" } }, "channels": { "type": "array", "minItems": 1, "items": { "type": "string", "enum": ["telegram", "whatsapp"] } }, "telegramChatId": { "type": "string", "minLength": 1 }, "whatsappChatId": { "type": "string", "minLength": 1 } } },
+      "NewsMonitorResponse": {
+        "type": "object",
+        "required": ["success", "results", "summary", "requestId"],
+        "properties": {
+          "success": { "type": "boolean" },
+          "partial_success": { "type": "boolean" },
+          "results": { "type": "array", "items": { "$ref": "#/components/schemas/JsonObject" } },
+          "summary": {
+            "type": "object",
+            "properties": {
+              "total": { "type": "integer" },
+              "analyzed": { "type": "integer" },
+              "cached": { "type": "integer" },
+              "timeout": { "type": "integer" },
+              "error": { "type": "integer" },
+              "quota_exhausted": { "type": "integer", "description": "Number of symbols that exhausted Gemini 429 RESOURCE_EXHAUSTED retries." },
+              "alerts_sent": { "type": "integer" }
+            }
+          },
+          "requestedChannels": { "type": "array", "items": { "type": "string" } },
+          "deliveredChannels": { "type": "array", "items": { "type": "string" } },
+          "totalDurationMs": { "type": "integer" },
+          "requestId": { "type": "string" },
+          "tokenUsage": { "$ref": "#/components/schemas/JsonObject" }
+        }
+      },
       "DeliveryResult": { "type": "object", "properties": { "success": { "type": "boolean" }, "results": { "type": "array", "items": { "type": "object", "properties": { "channel": { "type": "string" }, "success": { "type": "boolean" }, "error": { "type": "string" } } } }, "enriched": { "type": "boolean" }, "tokenUsage": { "$ref": "#/components/schemas/JsonObject" }, "requestedChannels": { "type": "array", "items": { "type": "string" } }, "deliveredChannels": { "type": "array", "items": { "type": "string" } } } },
       "Job": { "type": "object", "properties": { "success": { "type": "boolean" }, "jobId": { "type": "string", "format": "uuid" }, "status": { "type": "string", "enum": ["pending", "processing", "completed", "failed", "canceled"] }, "progress": { "$ref": "#/components/schemas/JsonObject" }, "result": { "$ref": "#/components/schemas/JsonObject" } } },
       "Status": { "type": "object", "properties": { "service": { "$ref": "#/components/schemas/JsonObject" }, "featureFlags": { "$ref": "#/components/schemas/JsonObject" }, "deliveryChannels": { "$ref": "#/components/schemas/JsonObject" }, "dependencies": { "$ref": "#/components/schemas/JsonObject" } } }

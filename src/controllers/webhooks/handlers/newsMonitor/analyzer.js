@@ -89,6 +89,51 @@ function shouldRedeliverCachedAlertForRequest(notificationMgr, cachedEntry = {},
 	return shouldRedeliverCachedAlert(notificationMgr, cachedEntry.deliveryResults, routing);
 }
 
+function parsePositiveInteger(value, fallback) {
+	const parsed = Number.parseInt(value, 10);
+	return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function isGeminiQuotaError(error) {
+	const status = Number(error && (error.status || error.statusCode || error.code));
+	if (status === 429) {
+		return true;
+	}
+
+	const message = String((error && error.message) || '').toUpperCase();
+	return message.includes('429') ||
+		message.includes('RESOURCE_EXHAUSTED') ||
+		message.includes('QUOTA');
+}
+
+function getQuotaRetryDelayMs(error, attempt, baseDelayMs) {
+	const retryDelay = error && (error.retryDelay || error.retryAfter || error.retryDelayMs);
+	if (typeof retryDelay === 'number' && retryDelay >= 0) {
+		return retryDelay;
+	}
+
+	const message = String((error && error.message) || '');
+	const retryDelayMatch = message.match(/retry(?:\s|-)?delay"?(?:\s*[:=]\s*)?"?(\d+(?:\.\d+)?)\s*(ms|s)?"?/i);
+	if (retryDelayMatch) {
+		const value = Number.parseFloat(retryDelayMatch[1]);
+		const unit = (retryDelayMatch[2] || 'ms').toLowerCase();
+		return unit === 's' ? value * 1000 : value;
+	}
+
+	const retryAfterMatch = message.match(/retry-after"?(?:\s*[:=]\s*)?"?(\d+(?:\.\d+)?)\s*(ms|s)?"?/i);
+	if (retryAfterMatch) {
+		const value = Number.parseFloat(retryAfterMatch[1]);
+		const unit = (retryAfterMatch[2] || 's').toLowerCase();
+		return unit === 'ms' ? value : value * 1000;
+	}
+
+	return baseDelayMs * (2 ** Math.max(0, attempt - 1));
+}
+
+function sleep(ms) {
+	return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 class NewsAnalyzer {
 	constructor() {
 		this.cache = getCacheInstance();
@@ -99,6 +144,9 @@ class NewsAnalyzer {
 		this.timeout = parseInt(process.env.NEWS_TIMEOUT_MS || 60000);
 		this.alertThreshold = parseFloat(process.env.NEWS_ALERT_THRESHOLD || 0.7);
 		this.enableBinance = process.env.ENABLE_BINANCE_PRICE_CHECK === 'true';
+		this.geminiConcurrency = parsePositiveInteger(process.env.NEWS_GEMINI_CONCURRENCY, Infinity);
+		this.geminiQuotaMaxRetries = parsePositiveInteger(process.env.NEWS_GEMINI_QUOTA_MAX_RETRIES, 2);
+		this.geminiQuotaRetryBaseMs = parsePositiveInteger(process.env.NEWS_GEMINI_QUOTA_RETRY_BASE_MS, 1000);
 	}
 
 	/**
@@ -109,39 +157,81 @@ class NewsAnalyzer {
    * @returns {Promise<Object[]>} Array of AnalysisResult objects
    */
 	async analyzeSymbols(symbols, requestId, tokenUsage, routing = {}) {
-		const analysisPromises = symbols.map(symbol =>
-			this.analyzeSymbol(symbol, requestId, tokenUsage, routing).catch(error => ({
-				symbol,
-				status: AnalysisStatus.ERROR,
-				error: {
-					code: 'ANALYSIS_ERROR',
-					message: error.message,
-				},
-				totalDurationMs: 0,
-				cached: false,
-				requestId,
-			})),
-		);
+		const limit = Math.min(this.geminiConcurrency, symbols.length);
+		const results = [];
+		let nextIndex = 0;
 
-		// Use Promise.allSettled to continue even if some fail
-		const results = await Promise.allSettled(analysisPromises);
-
-		return results.map(result => {
-			if (result.status === 'fulfilled') {
-				return result.value;
+		const runNext = async () => {
+			while (nextIndex < symbols.length) {
+				const currentIndex = nextIndex;
+				nextIndex += 1;
+				const symbol = symbols[currentIndex];
+				results[currentIndex] = await this.analyzeSymbol(symbol, requestId, tokenUsage, routing).catch(error => ({
+					symbol,
+					status: AnalysisStatus.ERROR,
+					error: {
+						code: isGeminiQuotaError(error) ? 'GEMINI_QUOTA_EXHAUSTED' : 'ANALYSIS_ERROR',
+						message: error.message,
+					},
+					totalDurationMs: 0,
+					cached: false,
+					requestId,
+				}));
 			}
-			// Should not happen due to catch above, but handle just in case
-			return {
-				status: AnalysisStatus.ERROR,
-				error: {
-					code: 'UNKNOWN_ERROR',
-					message: (result.reason && result.reason.message) || 'Unknown error',
-				},
-				totalDurationMs: 0,
-				cached: false,
-				requestId,
-			};
-		});
+		};
+
+		await Promise.all(Array.from({ length: limit }, runNext));
+
+		return results;
+	}
+
+	async runSymbolAnalysisWithRetry(symbol, requestId, tokenUsage, routing, startedAt) {
+		let attempt = 0;
+		let lastQuotaError = null;
+
+		while (attempt <= this.geminiQuotaMaxRetries) {
+			let timeoutHandle;
+			const elapsedMs = Date.now() - startedAt;
+			const remainingMs = this.timeout - elapsedMs;
+			if (remainingMs <= 0) {
+				throw new Error('TIMEOUT');
+			}
+
+			try {
+				const timeoutPromise = new Promise((_, reject) => {
+					timeoutHandle = setTimeout(() => reject(new Error('TIMEOUT')), remainingMs);
+				});
+				return await Promise.race([
+					this.analyzeSymbolInternal(symbol, requestId, tokenUsage, routing),
+					timeoutPromise,
+				]);
+			} catch (error) {
+				if (!isGeminiQuotaError(error) || attempt >= this.geminiQuotaMaxRetries) {
+					throw error;
+				}
+
+				lastQuotaError = error;
+				attempt += 1;
+				const delayMs = getQuotaRetryDelayMs(error, attempt, this.geminiQuotaRetryBaseMs);
+				const remainingAfterAttemptMs = this.timeout - (Date.now() - startedAt);
+				if (delayMs >= remainingAfterAttemptMs) {
+					console.warn('[Analyzer] Gemini quota retry skipped; delay exceeds remaining budget:', symbol);
+					throw lastQuotaError;
+				}
+
+				console.warn('[Analyzer] Gemini quota exhausted, retrying symbol analysis:', {
+					symbol,
+					attempt,
+					delayMs,
+					remainingMs: remainingAfterAttemptMs,
+				});
+				await sleep(delayMs);
+			} finally {
+				clearTimeout(timeoutHandle);
+			}
+		}
+
+		throw lastQuotaError;
 	}
 
 	/**
@@ -163,10 +253,7 @@ class NewsAnalyzer {
 
 		try {
 			// Attempt to run analysis with timeout
-			const result = await Promise.race([
-				this.analyzeSymbolInternal(symbol, requestId, tokenUsage, routing),
-				this.timeoutPromise(this.timeout),
-			]);
+			const result = await this.runSymbolAnalysisWithRetry(symbol, requestId, tokenUsage, routing, startTime);
 
 			return {
 				...analysis,

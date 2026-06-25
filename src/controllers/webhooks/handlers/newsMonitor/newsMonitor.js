@@ -104,13 +104,18 @@ class NewsMonitorHandler {
 			});
 
 			let results;
+			let summary;
 			try {
 				results = await this.analyzer.analyzeSymbols(symbolsToAnalyze, requestId, tokenUsage, routing);
+				summary = this.generateSummary(results);
+				if (analysisSpan && typeof analysisSpan.setAttribute === 'function') {
+					analysisSpan.setAttribute('news.quota_exhausted', summary.quota_exhausted);
+					analysisSpan.setAttribute('news.error_count', summary.error);
+				}
 			} finally {
 				sentryService.endSpan(analysisSpan);
 			}
 
-			const summary = this.generateSummary(results);
 			const notificationManagerForResponse = getNotificationManager();
 			const response = {
 				success: summary.analyzed > 0 || summary.cached > 0,
@@ -264,6 +269,7 @@ class NewsMonitorHandler {
 			cached: 0,
 			timeout: 0,
 			error: 0,
+			quota_exhausted: 0,
 			alerts_sent: 0,
 		};
 
@@ -282,6 +288,9 @@ class NewsMonitorHandler {
 				summary.timeout++;
 			} else if (result.status === AnalysisStatus.ERROR) {
 				summary.error++;
+				if (result.error && result.error.code === 'GEMINI_QUOTA_EXHAUSTED') {
+					summary.quota_exhausted++;
+				}
 			}
 		}
 
