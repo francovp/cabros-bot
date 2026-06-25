@@ -60,4 +60,19 @@ describe('OpenAPI contract', () => {
 			]);
 		}
 	});
+
+	it('keeps the shared analysis response generic outside news-monitor', () => {
+		if (!fs.existsSync(contractPath)) return;
+		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+
+		expect(contract.components.responses.AnalysisResult.content['application/json'].schema).toEqual({
+			$ref: '#/components/schemas/JsonObject',
+		});
+		expect(contract.paths['/api/news-monitor'].get.responses['200']).toEqual({
+			$ref: '#/components/responses/NewsMonitorAnalysisResult',
+		});
+		expect(contract.paths['/api/news-monitor'].post.responses['200']).toEqual({
+			$ref: '#/components/responses/NewsMonitorAnalysisResult',
+		});
+	});
 });
