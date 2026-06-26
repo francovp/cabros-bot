@@ -118,6 +118,24 @@ describe('Analyzer - Unit Tests', () => {
 		expect(result.error).toBeUndefined();
 	});
 
+	it('should honor quoted Gemini retryDelay values from RetryInfo JSON', async () => {
+		process.env.NEWS_GEMINI_QUOTA_MAX_RETRIES = '1';
+		process.env.NEWS_GEMINI_QUOTA_RETRY_BASE_MS = '1000';
+		const { NewsAnalyzer } = require('../../src/controllers/webhooks/handlers/newsMonitor/analyzer');
+		const analyzer = new NewsAnalyzer();
+		analyzer.timeout = 100;
+		const quotaError = new Error('429 RESOURCE_EXHAUSTED: {"error":{"details":[{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"1ms"}]}}');
+		analyzer.analyzeSymbolInternal = jest.fn()
+			.mockRejectedValueOnce(quotaError)
+			.mockResolvedValueOnce({ status: 'analyzed', alert: null, cached: false });
+
+		const result = await analyzer.analyzeSymbol('BTCUSDT', 'req-json-retry');
+
+		expect(analyzer.analyzeSymbolInternal).toHaveBeenCalledTimes(2);
+		expect(result.status).toBe('analyzed');
+		expect(result.error).toBeUndefined();
+	});
+
 	it('should return deterministic quota errors when retries are exhausted', async () => {
 		process.env.NEWS_GEMINI_QUOTA_MAX_RETRIES = '1';
 		process.env.NEWS_GEMINI_QUOTA_RETRY_BASE_MS = '1';

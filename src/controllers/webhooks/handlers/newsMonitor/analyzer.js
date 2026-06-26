@@ -113,14 +113,14 @@ function getQuotaRetryDelayMs(error, attempt, baseDelayMs) {
 	}
 
 	const message = String((error && error.message) || '');
-	const retryDelayMatch = message.match(/retry(?:\s|-)?delay[:=]?\s*(\d+(?:\.\d+)?)\s*(ms|s)?/i);
+	const retryDelayMatch = message.match(/"?retry(?:\s|-)?delay"?\s*[:=]?\s*"?(\d+(?:\.\d+)?)(ms|s)?"?/i);
 	if (retryDelayMatch) {
 		const value = Number.parseFloat(retryDelayMatch[1]);
 		const unit = (retryDelayMatch[2] || 'ms').toLowerCase();
 		return unit === 's' ? value * 1000 : value;
 	}
 
-	const retryAfterMatch = message.match(/retry-after[:=]?\s*(\d+(?:\.\d+)?)\s*(ms|s)?/i);
+	const retryAfterMatch = message.match(/"?retry-after"?\s*[:=]?\s*"?(\d+(?:\.\d+)?)(ms|s)?"?/i);
 	if (retryAfterMatch) {
 		const value = Number.parseFloat(retryAfterMatch[1]);
 		const unit = (retryAfterMatch[2] || 's').toLowerCase();
