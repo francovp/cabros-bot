@@ -151,6 +151,7 @@ async function analyzeNewsForSymbol(symbol, context, options = {}) {
 		const searchResult = await genaiClient.search({
 			query: searchQuery,
 			maxResults: 3,
+			rethrowQuotaErrors: true,
 		});
 		if (tokenUsage && searchResult.usage) {
 			tokenUsage.addUsage(searchResult.usage, GROUNDING_MODEL_NAME);

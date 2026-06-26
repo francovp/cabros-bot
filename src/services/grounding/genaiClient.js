@@ -201,7 +201,7 @@ class GenaiClient {
 		};
 	}
 
-	async search({ query, model = GROUNDING_MODEL_NAME, maxResults = 3, textWithCitations = false }) {
+	async search({ query, model = GROUNDING_MODEL_NAME, maxResults = 3, textWithCitations = false, rethrowQuotaErrors = false }) {
 		if (ENABLE_NEWS_MONITOR_TEST_MODE) {
 			console.debug('[genaiClient] News Monitor Test Mode enabled - returning mock search results');
 			return {
@@ -237,7 +237,7 @@ class GenaiClient {
 			}
 			console.warn('[genaiClient] Google Search returned no results. Falling back to Brave Search.');
 		} catch (error) {
-			if (isGeminiQuotaError(error)) {
+			if (rethrowQuotaErrors && isGeminiQuotaError(error)) {
 				throw error;
 			}
 			console.warn(`[genaiClient] Google Search failed: ${error.message}. Falling back to Brave Search.`);

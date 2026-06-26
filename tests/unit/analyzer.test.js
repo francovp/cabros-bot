@@ -100,6 +100,22 @@ describe('Analyzer - Unit Tests', () => {
 		expect(maxActive).toBeLessThanOrEqual(2);
 	});
 
+	it('should not give queued symbols a fresh timeout beyond the batch budget', async () => {
+		process.env.NEWS_GEMINI_CONCURRENCY = '1';
+		const { NewsAnalyzer } = require('../../src/controllers/webhooks/handlers/newsMonitor/analyzer');
+		const analyzer = new NewsAnalyzer();
+		analyzer.timeout = 25;
+		analyzer.analyzeSymbolInternal = jest.fn(() => new Promise(() => {}));
+
+		const results = await analyzer.analyzeSymbols(['BTCUSDT', 'ETHUSDT'], 'req-batch-timeout');
+
+		expect(analyzer.analyzeSymbolInternal).toHaveBeenCalledTimes(1);
+		expect(results).toEqual([
+			expect.objectContaining({ symbol: 'BTCUSDT', status: 'timeout' }),
+			expect.objectContaining({ symbol: 'ETHUSDT', status: 'timeout' }),
+		]);
+	});
+
 	it('should retry Gemini quota exhaustion within the symbol timeout budget', async () => {
 		process.env.NEWS_GEMINI_QUOTA_MAX_RETRIES = '1';
 		process.env.NEWS_GEMINI_QUOTA_RETRY_BASE_MS = '1';

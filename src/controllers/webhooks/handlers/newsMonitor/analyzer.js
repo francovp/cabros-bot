@@ -160,13 +160,14 @@ class NewsAnalyzer {
 		const limit = Math.min(this.geminiConcurrency, symbols.length);
 		const results = [];
 		let nextIndex = 0;
+		const batchStartedAt = Date.now();
 
 		const runNext = async () => {
 			while (nextIndex < symbols.length) {
 				const currentIndex = nextIndex;
 				nextIndex += 1;
 				const symbol = symbols[currentIndex];
-				results[currentIndex] = await this.analyzeSymbol(symbol, requestId, tokenUsage, routing).catch(error => ({
+				results[currentIndex] = await this.analyzeSymbol(symbol, requestId, tokenUsage, routing, batchStartedAt).catch(error => ({
 					symbol,
 					status: AnalysisStatus.ERROR,
 					error: {
@@ -241,8 +242,8 @@ class NewsAnalyzer {
    * @param {string} requestId - Correlation ID
    * @returns {Promise<Object>} AnalysisResult object
    */
-	async analyzeSymbol(symbol, requestId, tokenUsage, routing = {}) {
-		const startTime = Date.now();
+	async analyzeSymbol(symbol, requestId, tokenUsage, routing = {}, startedAt = Date.now()) {
+		const startTime = startedAt;
 		const analysis = {
 			symbol,
 			status: AnalysisStatus.ANALYZED,
@@ -509,6 +510,7 @@ class NewsAnalyzer {
 			const priceSearchPromise = genaiClient.search({
 				query: priceQuery,
 				maxResults: 3,
+				rethrowQuotaErrors: true,
 			});
 
 			const priceSearchResult = await Promise.race([priceSearchPromise, timeoutPromise]);
