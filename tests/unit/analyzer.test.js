@@ -156,6 +156,37 @@ describe('Analyzer - Unit Tests', () => {
 		}));
 	});
 
+	it('should retry when Gemini price search returns quota exhaustion', async () => {
+		process.env.NEWS_GEMINI_QUOTA_MAX_RETRIES = '1';
+		process.env.NEWS_GEMINI_QUOTA_RETRY_BASE_MS = '1';
+		const { NewsAnalyzer } = require('../../src/controllers/webhooks/handlers/newsMonitor/analyzer');
+		const activeGemini = require('../../src/services/grounding/gemini');
+		const activeGenaiClient = require('../../src/services/grounding/genaiClient');
+		const analyzer = new NewsAnalyzer();
+		analyzer.timeout = 1000;
+		const quotaError = new Error('429 RESOURCE_EXHAUSTED: {"error":{"details":[{"retryDelay":"1ms"}]}}');
+		activeGemini.analyzeNewsForSymbol.mockResolvedValue({
+			event_category: 'price_surge',
+			event_significance: 0.8,
+			sentiment_score: 0.8,
+			headline: 'Bitcoin surges on positive news',
+			confidence: 0.8,
+			sources: ['https://example.com/news'],
+		});
+		activeGenaiClient.search
+			.mockRejectedValueOnce(quotaError)
+			.mockResolvedValueOnce({
+				searchResultText: '{"price":"100","change_24h":"1.5","context":"ok","sources":[]}',
+				results: [],
+			});
+
+		const result = await analyzer.analyzeSymbol('BTCUSDT', 'req-price-quota');
+
+		expect(activeGenaiClient.search).toHaveBeenCalledTimes(2);
+		expect(activeGemini.analyzeNewsForSymbol).toHaveBeenCalledTimes(1);
+		expect(result.status).toBe('analyzed');
+	});
+
 	it('analyzer should have buildAlert method', () => {
 		const { getAnalyzer } = require('../../src/controllers/webhooks/handlers/newsMonitor/analyzer');
 		const analyzer = getAnalyzer();

@@ -73,6 +73,19 @@ describe('GenaiClient robustness', () => {
 			expect(global.fetch).toHaveBeenCalledTimes(1);
 		});
 
+		it('rethrows Gemini quota exhaustion instead of falling back to Brave', async () => {
+			const quotaError = Object.assign(
+				new Error('429 RESOURCE_EXHAUSTED: {"error":{"details":[{"retryDelay":"30s"}]}}'),
+				{ status: 429 },
+			);
+			genaiClient.genAI.models.generateContent.mockRejectedValueOnce(quotaError);
+
+			await expect(genaiClient.search({ query: 'test' }))
+				.rejects
+				.toThrow('RESOURCE_EXHAUSTED');
+			expect(global.fetch).not.toHaveBeenCalled();
+		});
+
 		it('falls back to Brave when Google Search returns no results', async () => {
 			// Mock empty Google Search response
 			genaiClient.genAI.models.generateContent.mockResolvedValueOnce({

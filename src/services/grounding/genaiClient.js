@@ -18,6 +18,18 @@ const { getOpenRouterClient } = require('../inference/openRouterClient');
 const { normalizeUsageMetadata } = require('../../lib/tokenUsage');
 const sentryService = require('../monitoring/SentryService');
 
+function isGeminiQuotaError(error) {
+	const status = Number(error && (error.status || error.statusCode || error.code));
+	if (status === 429) {
+		return true;
+	}
+
+	const message = String((error && error.message) || '').toUpperCase();
+	return message.includes('429') ||
+		message.includes('RESOURCE_EXHAUSTED') ||
+		message.includes('QUOTA');
+}
+
 /**
  * Error class for non-retryable provider configuration failures.
  * Thrown when an LLM provider returns a known permanent error
@@ -225,6 +237,9 @@ class GenaiClient {
 			}
 			console.warn('[genaiClient] Google Search returned no results. Falling back to Brave Search.');
 		} catch (error) {
+			if (isGeminiQuotaError(error)) {
+				throw error;
+			}
 			console.warn(`[genaiClient] Google Search failed: ${error.message}. Falling back to Brave Search.`);
 		}
 

@@ -429,6 +429,9 @@ class NewsAnalyzer {
 		try {
 			return await this.fetchGeminiPrice(symbol, tokenUsage);
 		} catch (error) {
+			if (isGeminiQuotaError(error)) {
+				throw error;
+			}
 			console.warn('[Analyzer] Price context fetch failed:', error.message);
 			return null;
 		}
@@ -488,11 +491,11 @@ class NewsAnalyzer {
 
 		const genaiClient = require('../../../../services/grounding/genaiClient');
 		let { price, change24h } = { price: null, change24h: null };
+		let timeoutHandle;
 
 		try {
 			// Timeout wrapper (~20s for Gemini)
 			const timeoutMs = 30000;
-			let timeoutHandle;
 			const timeoutPromise = new Promise((_, reject) => {
 				timeoutHandle = setTimeout(() => reject(new Error('Gemini fetch timeout')), timeoutMs);
 			});
@@ -554,8 +557,13 @@ class NewsAnalyzer {
 				sources: priceSearchResultParsed.sources || [],
 			};
 		} catch (error) {
+			if (isGeminiQuotaError(error)) {
+				throw error;
+			}
 			console.warn(`[Analyzer] Gemini price fetch failed for ${symbol}: ${error.message}`);
 			return null;
+		} finally {
+			clearTimeout(timeoutHandle);
 		}
 	}
 
