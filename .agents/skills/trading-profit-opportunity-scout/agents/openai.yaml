@@ -1,0 +1,4 @@
+interface:
+  display_name: "Trading Profit Scout"
+  short_description: "Find trading edge improvements"
+  default_prompt: "Use $trading-profit-opportunity-scout to find deduplicated prompt and TradingView MCP improvements that could improve trading outcomes."
