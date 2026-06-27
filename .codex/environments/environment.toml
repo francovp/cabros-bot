@@ -4,6 +4,7 @@ name = "cabros-crypto-bot-telegram"
 
 [setup]
 script = '''
+export PATH=/opt/homebrew/bin:$PATH
 cp $CODEX_SOURCE_TREE_PATH/.env $CODEX_WORKTREE_PATH
 cd "$CODEX_WORKTREE_PATH"
 pnpm install
