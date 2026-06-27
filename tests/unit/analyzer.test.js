@@ -27,6 +27,9 @@ describe('Analyzer - Unit Tests', () => {
 	});
 
 	afterEach(() => {
+		delete process.env.NEWS_GEMINI_CONCURRENCY;
+		delete process.env.NEWS_GEMINI_QUOTA_MAX_RETRIES;
+		delete process.env.NEWS_GEMINI_QUOTA_RETRY_BASE_MS;
 		jest.resetModules();
 	});
 
@@ -61,6 +64,143 @@ describe('Analyzer - Unit Tests', () => {
 		const results = await analyzer.analyzeSymbols([]);
 		expect(Array.isArray(results)).toBe(true);
 		expect(results.length).toBe(0);
+	});
+
+	it('should obey configured Gemini concurrency when analyzing multiple symbols', async () => {
+		process.env.NEWS_GEMINI_CONCURRENCY = '2';
+		const { NewsAnalyzer } = require('../../src/controllers/webhooks/handlers/newsMonitor/analyzer');
+		const analyzer = new NewsAnalyzer();
+		let active = 0;
+		let maxActive = 0;
+		const releaseQueue = [];
+
+		analyzer.analyzeSymbol = jest.fn(async (symbol) => {
+			active += 1;
+			maxActive = Math.max(maxActive, active);
+			await new Promise(resolve => releaseQueue.push(resolve));
+			active -= 1;
+			return { symbol, status: 'analyzed', cached: false };
+		});
+
+		const run = analyzer.analyzeSymbols(['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'ADAUSDT'], 'req-1');
+		await Promise.resolve();
+		await Promise.resolve();
+
+		expect(analyzer.analyzeSymbol).toHaveBeenCalledTimes(2);
+		expect(maxActive).toBeLessThanOrEqual(2);
+
+		while (releaseQueue.length > 0) {
+			releaseQueue.shift()();
+			await Promise.resolve();
+			await Promise.resolve();
+		}
+
+		const results = await run;
+		expect(results).toHaveLength(4);
+		expect(maxActive).toBeLessThanOrEqual(2);
+	});
+
+	it('should not give queued symbols a fresh timeout beyond the batch budget', async () => {
+		process.env.NEWS_GEMINI_CONCURRENCY = '1';
+		const { NewsAnalyzer } = require('../../src/controllers/webhooks/handlers/newsMonitor/analyzer');
+		const analyzer = new NewsAnalyzer();
+		analyzer.timeout = 25;
+		analyzer.analyzeSymbolInternal = jest.fn(() => new Promise(() => {}));
+
+		const results = await analyzer.analyzeSymbols(['BTCUSDT', 'ETHUSDT'], 'req-batch-timeout');
+
+		expect(analyzer.analyzeSymbolInternal).toHaveBeenCalledTimes(1);
+		expect(results).toEqual([
+			expect.objectContaining({ symbol: 'BTCUSDT', status: 'timeout' }),
+			expect.objectContaining({ symbol: 'ETHUSDT', status: 'timeout' }),
+		]);
+	});
+
+	it('should retry Gemini quota exhaustion within the symbol timeout budget', async () => {
+		process.env.NEWS_GEMINI_QUOTA_MAX_RETRIES = '1';
+		process.env.NEWS_GEMINI_QUOTA_RETRY_BASE_MS = '1';
+		const { NewsAnalyzer } = require('../../src/controllers/webhooks/handlers/newsMonitor/analyzer');
+		const analyzer = new NewsAnalyzer();
+		analyzer.timeout = 1000;
+		const quotaError = new Error('429 RESOURCE_EXHAUSTED: quota exceeded. RetryDelay: 1ms');
+		analyzer.analyzeSymbolInternal = jest.fn()
+			.mockRejectedValueOnce(quotaError)
+			.mockResolvedValueOnce({ status: 'analyzed', alert: null, cached: false });
+
+		const result = await analyzer.analyzeSymbol('BTCUSDT', 'req-2');
+
+		expect(analyzer.analyzeSymbolInternal).toHaveBeenCalledTimes(2);
+		expect(result.status).toBe('analyzed');
+		expect(result.error).toBeUndefined();
+	});
+
+	it('should honor quoted Gemini retryDelay values from RetryInfo JSON', async () => {
+		process.env.NEWS_GEMINI_QUOTA_MAX_RETRIES = '1';
+		process.env.NEWS_GEMINI_QUOTA_RETRY_BASE_MS = '1000';
+		const { NewsAnalyzer } = require('../../src/controllers/webhooks/handlers/newsMonitor/analyzer');
+		const analyzer = new NewsAnalyzer();
+		analyzer.timeout = 100;
+		const quotaError = new Error('429 RESOURCE_EXHAUSTED: {"error":{"details":[{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"1ms"}]}}');
+		analyzer.analyzeSymbolInternal = jest.fn()
+			.mockRejectedValueOnce(quotaError)
+			.mockResolvedValueOnce({ status: 'analyzed', alert: null, cached: false });
+
+		const result = await analyzer.analyzeSymbol('BTCUSDT', 'req-json-retry');
+
+		expect(analyzer.analyzeSymbolInternal).toHaveBeenCalledTimes(2);
+		expect(result.status).toBe('analyzed');
+		expect(result.error).toBeUndefined();
+	});
+
+	it('should return deterministic quota errors when retries are exhausted', async () => {
+		process.env.NEWS_GEMINI_QUOTA_MAX_RETRIES = '1';
+		process.env.NEWS_GEMINI_QUOTA_RETRY_BASE_MS = '1';
+		const { NewsAnalyzer } = require('../../src/controllers/webhooks/handlers/newsMonitor/analyzer');
+		const analyzer = new NewsAnalyzer();
+		const quotaError = new Error('429 RESOURCE_EXHAUSTED: quota exceeded. RetryDelay: 1ms');
+		analyzer.analyzeSymbolInternal = jest.fn().mockRejectedValue(quotaError);
+
+		const results = await analyzer.analyzeSymbols(['BTCUSDT'], 'req-3');
+
+		expect(analyzer.analyzeSymbolInternal).toHaveBeenCalledTimes(2);
+		expect(results[0]).toEqual(expect.objectContaining({
+			symbol: 'BTCUSDT',
+			status: 'error',
+			error: expect.objectContaining({
+				code: 'GEMINI_QUOTA_EXHAUSTED',
+			}),
+		}));
+	});
+
+	it('should retry when Gemini price search returns quota exhaustion', async () => {
+		process.env.NEWS_GEMINI_QUOTA_MAX_RETRIES = '1';
+		process.env.NEWS_GEMINI_QUOTA_RETRY_BASE_MS = '1';
+		const { NewsAnalyzer } = require('../../src/controllers/webhooks/handlers/newsMonitor/analyzer');
+		const activeGemini = require('../../src/services/grounding/gemini');
+		const activeGenaiClient = require('../../src/services/grounding/genaiClient');
+		const analyzer = new NewsAnalyzer();
+		analyzer.timeout = 1000;
+		const quotaError = new Error('429 RESOURCE_EXHAUSTED: {"error":{"details":[{"retryDelay":"1ms"}]}}');
+		activeGemini.analyzeNewsForSymbol.mockResolvedValue({
+			event_category: 'price_surge',
+			event_significance: 0.8,
+			sentiment_score: 0.8,
+			headline: 'Bitcoin surges on positive news',
+			confidence: 0.8,
+			sources: ['https://example.com/news'],
+		});
+		activeGenaiClient.search
+			.mockRejectedValueOnce(quotaError)
+			.mockResolvedValueOnce({
+				searchResultText: '{"price":"100","change_24h":"1.5","context":"ok","sources":[]}',
+				results: [],
+			});
+
+		const result = await analyzer.analyzeSymbol('BTCUSDT', 'req-price-quota');
+
+		expect(activeGenaiClient.search).toHaveBeenCalledTimes(2);
+		expect(activeGemini.analyzeNewsForSymbol).toHaveBeenCalledTimes(1);
+		expect(result.status).toBe('analyzed');
 	});
 
 	it('analyzer should have buildAlert method', () => {

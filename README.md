@@ -94,6 +94,9 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 - `NEWS_ALERT_THRESHOLD` - Confidence score threshold for sending alerts (default: `0.7`, range 0.0-1.0)
 - `NEWS_CACHE_TTL_HOURS` - Cache time-to-live for deduplication (default: `6` hours)
 - `NEWS_TIMEOUT_MS` - Per-symbol analysis timeout (default: `30000` ms)
+- `NEWS_GEMINI_CONCURRENCY` - Optional max concurrent Gemini-backed symbol analyses. Unset keeps legacy parallel fan-out.
+- `NEWS_GEMINI_QUOTA_MAX_RETRIES` - Max per-symbol retries for Gemini `429 RESOURCE_EXHAUSTED` errors (default: `2`)
+- `NEWS_GEMINI_QUOTA_RETRY_BASE_MS` - Base exponential backoff when Gemini does not provide retry delay metadata (default: `1000` ms)
 - `ENABLE_BINANCE_PRICE_CHECK` - Enable Binance crypto price fetching (`true` or `false`, default: `false`)
 - `ENABLE_LLM_ALERT_ENRICHMENT` - Enable optional secondary LLM enrichment (`true` or `false`, default: `false`)
 - `AZURE_LLM_ENDPOINT` - Azure AI Inference endpoint URL (required if enrichment enabled)
@@ -375,16 +378,12 @@ GET /api/news-monitor?crypto=BTCUSDT,ETHUSD&stocks=NVDA,MSFT
     {
       "symbol": "BTCUSDT",
       "status": "analyzed",
-      "alerts": [
-        {
-          "eventCategory": "price_surge",
-          "headline": "Bitcoin breaks $45,000 on positive market sentiment",
-          "confidence": 0.85,
-          "sentiment": 0.8,
-          "sources": ["Reuters", "CoinDesk"],
-          "message": "BTCUSDT: Price surge detected (+8.5%) with positive market sentiment (confidence: 0.85). Sources: Reuters, CoinDesk"
-        }
-      ],
+      "alert": {
+        "eventCategory": "price_surge",
+        "headline": "Bitcoin breaks $45,000 on positive market sentiment",
+        "confidence": 0.85,
+        "sources": ["Reuters", "CoinDesk"]
+      },
       "deliveryResults": [
         {
           "channel": "telegram",
@@ -399,23 +398,33 @@ GET /api/news-monitor?crypto=BTCUSDT,ETHUSD&stocks=NVDA,MSFT
       ],
       "totalDurationMs": 2847,
       "cached": false,
-      "enrichment": {
-        "applied": true,
-        "originalConfidence": 0.80,
-        "enrichedConfidence": 0.85,
-        "reasoning": "Secondary LLM confirms price surge with bullish indicators"
-      }
+      "requestId": "req-abc123def456"
     },
     {
       "symbol": "NVDA",
       "status": "cached",
-      "alerts": [],
+      "alert": null,
       "cached": true,
-      "cacheHitTime": "2025-10-31T15:30:00Z"
+      "requestId": "req-abc123def456"
     }
   ],
+  "summary": {
+    "total": 2,
+    "analyzed": 1,
+    "cached": 1,
+    "timeout": 0,
+    "error": 0,
+    "quota_exhausted": 0,
+    "alerts_sent": 1
+  },
+  "requestedChannels": ["telegram", "whatsapp"],
+  "deliveredChannels": ["telegram", "whatsapp"],
   "totalDurationMs": 5234,
-  "partialSuccess": false
+  "tokenUsage": {
+    "inputTokens": 120,
+    "outputTokens": 80,
+    "totalTokens": 200
+  }
 }
 ```
 
@@ -429,7 +438,7 @@ GET /api/news-monitor?crypto=BTCUSDT,ETHUSD&stocks=NVDA,MSFT
 - `analyzed` - Symbol successfully analyzed, alerts generated/filtered
 - `cached` - Result returned from cache (within TTL for same event category)
 - `timeout` - Analysis exceeded per-symbol timeout (30s default)
-- `error` - API failure (Binance, Gemini, or other service error)
+- `error` - API failure (Binance, Gemini, or other service error). Gemini quota exhaustion is reported as `error.code = "GEMINI_QUOTA_EXHAUSTED"` and counted in `summary.quota_exhausted`.
 
 ### POST /api/webhook/expanded-analysis-alert
 

@@ -73,6 +73,39 @@ describe('GenaiClient robustness', () => {
 			expect(global.fetch).toHaveBeenCalledTimes(1);
 		});
 
+		it('falls back to Brave for Gemini quota exhaustion by default', async () => {
+			const quotaError = Object.assign(
+				new Error('429 RESOURCE_EXHAUSTED: {"error":{"details":[{"retryDelay":"30s"}]}}'),
+				{ status: 429 },
+			);
+			genaiClient.genAI.models.generateContent.mockRejectedValueOnce(quotaError);
+			global.fetch.mockResolvedValueOnce({
+				ok: true,
+				json: async () => ({
+					web: { results: [{ title: 'BraveQuotaFallback', url: 'http://quota-fallback.com' }] },
+				}),
+			});
+
+			const res = await genaiClient.search({ query: 'test' });
+
+			expect(res.results).toHaveLength(1);
+			expect(res.results[0].title).toBe('BraveQuotaFallback');
+			expect(global.fetch).toHaveBeenCalledTimes(1);
+		});
+
+		it('rethrows Gemini quota exhaustion when requested by caller', async () => {
+			const quotaError = Object.assign(
+				new Error('429 RESOURCE_EXHAUSTED: {"error":{"details":[{"retryDelay":"30s"}]}}'),
+				{ status: 429 },
+			);
+			genaiClient.genAI.models.generateContent.mockRejectedValueOnce(quotaError);
+
+			await expect(genaiClient.search({ query: 'test', rethrowQuotaErrors: true }))
+				.rejects
+				.toThrow('RESOURCE_EXHAUSTED');
+			expect(global.fetch).not.toHaveBeenCalled();
+		});
+
 		it('falls back to Brave when Google Search returns no results', async () => {
 			// Mock empty Google Search response
 			genaiClient.genAI.models.generateContent.mockResolvedValueOnce({
