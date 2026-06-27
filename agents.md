@@ -983,25 +983,26 @@ describe('news-monitor', () => {
 
 ## Persistent News Monitor Deduplication (CB-38 / Issue #120)
 
-This feature introduces an optional persistent/shared backend (Firestore) for the news monitor cache (`NewsCache`) to ensure duplicate suppression survives restarts and scales across replicas.
+This feature introduces an optional persistent/shared backend (Firestore) for the news monitor cache (`NewsCache`) to ensure duplicate suppression survives restarts, scales across replicas, and resolves race conditions in distributed environments.
 
 **Core Components**:
-- `src/services/storage/NewsDedupStorageService.js` — Firestore storage helper to check, set, and delete deduplication cache entries in the `news-monitor-dedup` collection.
-- `src/controllers/webhooks/handlers/newsMonitor/cache.js` — Updated `NewsCache` that integrates with `NewsDedupStorageService`. All `get` and `set` methods are now **asynchronous** and return Promises.
-- `/api/status` — Surfaces active deduplication mode (`persistent` or `in-memory`) and backend information.
+- `src/services/storage/NewsDedupStorageService.js` — Firestore storage helper to check, get, set, delete, and atomically claim deduplication cache entries in the `news-monitor-dedup` collection.
+- `src/controllers/webhooks/handlers/newsMonitor/cache.js` — Updated `NewsCache` that integrates with `NewsDedupStorageService`. The `get()`, `set()`, and `claim()` methods are all asynchronous and return Promises.
+- `/api/status` — Surfaces active deduplication mode (`persistent` or `in-memory`), backend information, and validates Firestore credentials/readiness.
 
 **Configuration**:
 - `ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP` — Set to `'true'` to enable persistent Firestore-backed deduplication. Defaults to `'false'` (falls back to process-local in-memory cache).
 
 **Behavior & Fail-Open**:
 - Reads query the local memory cache first. On hit, they return immediately. On miss, they check Firestore. If found in Firestore, the local cache is populated.
-- Writes update the local memory cache, and if persistent mode is active, also save to Firestore.
+- Writes update the local memory cache, and if persistent mode is active, also save to Firestore with full payload metadata.
+- **Atomic Claiming**: Uses `claim()` (backed by Firestore `create()` inside `NewsDedupStorageService`) to atomically ensure only one replica delivers a given alert, preventing duplicate transmissions when replicas receive concurrent requests.
 - Fail-open strategy: any Firestore errors (permissions, timeouts, missing collection) are logged as warnings and the cache gracefully falls back to local in-memory operation.
 
 **Where to look first when extending or debugging**:
-- `src/controllers/webhooks/handlers/newsMonitor/cache.js` for cache lookup and eviction rules.
+- `src/controllers/webhooks/handlers/newsMonitor/cache.js` for cache lookup, claim, and eviction rules.
 - `src/services/storage/NewsDedupStorageService.js` for Firestore interactions.
 - `src/controllers/status.js` for deduplication mode reporting.
-- `tests/unit/news-monitor-persistent-dedup.test.js` for unit coverage of the persistent cache.
+- `tests/unit/news-monitor-persistent-dedup.test.js` for unit coverage of the persistent cache and atomic claim behavior.
 - `tests/integration/status-endpoint.test.js` for integration status tests.
 
