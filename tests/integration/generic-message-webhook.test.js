@@ -337,7 +337,12 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 		// Overall success is still true (fail-open pattern)
 		expect(res.body.success).toBe(true);
 
-		expect(mockBot.telegram.sendMessage).toHaveBeenCalledTimes(1);
+		expect(mockBot.telegram.sendMessage).toHaveBeenCalledTimes(2);
+		expect(mockBot.telegram.sendMessage).toHaveBeenLastCalledWith(
+			process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID,
+			expect.stringContaining('Failed channels: whatsapp'),
+			expect.objectContaining({ parse_mode: 'MarkdownV2' }),
+		);
 		// fetch is called multiple times due to WhatsApp retry logic
 		expect(global.fetch).toHaveBeenCalled();
 	});

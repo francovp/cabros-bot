@@ -861,6 +861,12 @@ ENABLE_FIRESTORE_ALERT_STORAGE (006)
 - Logging: Use existing `console.*` methods; the centralized logger formats every emitted log as structured JSON.
 - Admin notifications: Optional `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID` for failures
 
+### Notification delivery failure paging
+
+- `NotificationManager.sendToAll()` and `sendToChannels()` send one compact failure page to `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID` after any requested channel exhausts delivery retries.
+- The page lists failed/succeeded channels, provider errors, status/attempt metadata when available, and the request/correlation ID when present on the alert.
+- Admin paging calls `TelegramService.send()` directly instead of re-entering `NotificationManager`, so Telegram/admin delivery failures are logged but cannot recurse or change the original delivery results.
+
 **To extend**:
 1. **Discord integration**: Add in `src/services/notification/DiscordService.js`
 2. **Error aggregation**: Track error rates in memory for metrics
