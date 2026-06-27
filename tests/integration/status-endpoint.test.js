@@ -548,4 +548,40 @@ describe('Status endpoints', () => {
 		expect(response.body.deliveryChannels.telegram).toEqual({ enabled: false, status: 'disabled' });
 		expect(response.body.dependencies.telegram.ready).toBe(false);
 	});
+
+	it('reports news monitor deduplication as process-local (in-memory) by default', async () => {
+		process.env.ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP = 'false';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.newsMonitorDedup).toEqual({
+			enabled: false,
+			configured: false,
+			ready: false,
+			status: 'disabled',
+			mode: 'in-memory',
+			backend: null,
+		});
+	});
+
+	it('reports news monitor deduplication as persistent (firestore) when enabled', async () => {
+		process.env.ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP = 'true';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.newsMonitorDedup).toEqual({
+			enabled: true,
+			configured: true,
+			ready: true,
+			status: 'ready',
+			mode: 'persistent',
+			backend: 'firestore',
+		});
+	});
 });

@@ -289,7 +289,7 @@ class NewsAnalyzer {
 		for (const category of Object.values(EventCategory)) {
 			if (category === EventCategory.NONE) continue;
 
-			const cached = this.cache.get(symbol, category);
+			const cached = await this.cache.get(symbol, category);
 			if (cached) {
 				console.debug('[Analyzer] Returning cached result:', symbol, category);
 				let deliveryResults = cached.deliveryResults;
@@ -321,7 +321,7 @@ class NewsAnalyzer {
 
 		// If no event detected, cache and return
 		if (geminiAnalysis.event_category === EventCategory.NONE) {
-			this.cache.set(symbol, EventCategory.NONE, {
+			await this.cache.set(symbol, EventCategory.NONE, {
 				alert: null,
 				analysisResult: {
 					symbol,
@@ -340,7 +340,7 @@ class NewsAnalyzer {
 		// Check confidence threshold
 		if (geminiAnalysis.confidence < this.alertThreshold) {
 			console.info('[Analyzer] Confidence below threshold for', symbol, '-', geminiAnalysis.confidence.toFixed(2), '<', this.alertThreshold);
-			this.cache.set(symbol, geminiAnalysis.event_category, {
+			await this.cache.set(symbol, geminiAnalysis.event_category, {
 				alert: null,
 				analysisResult: {
 					symbol,
@@ -374,6 +374,19 @@ class NewsAnalyzer {
 		const tokenUsageSummary = tokenUsage ? tokenUsage.toJSON() : null;
 		const alert = this.buildAlert(symbol, geminiAnalysis, marketContext, enrichmentMetadata, tokenUsageSummary);
 
+		// Claim the cache key atomically before delivering the alert to prevent race conditions
+		const claimed = await this.cache.claim(symbol, geminiAnalysis.event_category);
+		if (!claimed) {
+			console.info('[Analyzer] Duplicate alert detected during claim, suppressing delivery for:', symbol, geminiAnalysis.event_category);
+			const cached = await this.cache.get(symbol, geminiAnalysis.event_category);
+			return {
+				status: AnalysisStatus.CACHED,
+				alert: cached ? cached.alert : alert,
+				deliveryResults: cached ? cached.deliveryResults : [],
+				cached: true,
+			};
+		}
+
 		// Send to all notification channels
 		console.info('[Analyzer] Sending alert:', symbol, 'confidence:', alert.confidence.toFixed(2), 'event:', alert.eventCategory);
 		const notificationMgr = getNotificationManager();
@@ -389,8 +402,8 @@ class NewsAnalyzer {
 		const deliveryResults = await sendWithNotificationRouting(notificationMgr, alert, routing);
 		console.info('[Analyzer] Alert delivery results for', symbol, ':', deliveryResults);
 
-		// Cache the result
-		this.cache.set(symbol, geminiAnalysis.event_category, {
+		// Cache the final results (updates the claimed cache entry with final metadata/results)
+		await this.cache.set(symbol, geminiAnalysis.event_category, {
 			alert,
 			analysisResult: {
 				symbol,

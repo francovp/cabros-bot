@@ -239,6 +239,21 @@ function getStatus() {
 			&& hasValue(process.env.AZURE_LLM_KEY)
 			&& hasValue(process.env.AZURE_LLM_MODEL),
 	});
+	const { getCacheInstance } = require('./webhooks/handlers/newsMonitor/cache');
+	const cache = getCacheInstance();
+	const newsMonitorDedupEnabled = isEnabled(process.env.ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP);
+	const newsMonitorDedupConfigured = newsMonitorDedupEnabled && firestore.configured;
+	const newsMonitorDedup = {
+		enabled: newsMonitorDedupEnabled,
+		configured: newsMonitorDedupConfigured,
+		ready: cache.dedupMode.mode === 'persistent',
+		status: getReadinessStatus({
+			enabled: newsMonitorDedupEnabled,
+			configured: cache.dedupMode.mode === 'persistent',
+		}),
+		mode: cache.dedupMode.mode,
+		backend: cache.dedupMode.backend,
+	};
 
 	return {
 		service: {
@@ -281,6 +296,7 @@ function getStatus() {
 			braveSearch,
 			newsMonitorLlm,
 			llmAlertEnrichment,
+			newsMonitorDedup,
 		},
 	};
 }

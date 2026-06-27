@@ -143,7 +143,8 @@ Implement the following security practices to safeguard endpoints and credential
 ## Environment and runtime behavior (discoverable)
 - NODE version: `20.x` (see `package.json` engines).
 - Required env vars: `BOT_TOKEN` (throws if missing; even when Telegram bot is disabled).
-- Optional but relevant (non-exhaustive; see feature sections below for full config): `ENABLE_TELEGRAM_BOT`, `PORT`, `TELEGRAM_CHAT_ID`, `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID`, `ENABLE_WHATSAPP_ALERTS`, `ENABLE_GEMINI_GROUNDING`, `GEMINI_API_KEY`, `ENABLE_LANGFUSE_PROMPTS`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL`, `LANGFUSE_PROMPT_LABEL`, `LANGFUSE_PROMPT_CACHE_TTL_SECONDS`, `BRAVE_SEARCH_API_KEY`, `BRAVE_SEARCH_ENDPOINT`, `FORCE_BRAVE_SEARCH`, `MODEL_PROVIDER`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `ENABLE_NEWS_MONITOR`, `EXPANDED_ANALYSIS_ALERT_SYMBOLS`, `EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS`, `TRADINGVIEW_MCP_URL`, `TRADINGVIEW_MCP_TIMEOUT_MS`, `TRADINGVIEW_MCP_MAX_RETRIES`, `TRADINGVIEW_MCP_DEFAULT_TIMEFRAME`, `ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION`, `ENABLE_SENTRY`, `SENTRY_DSN`, `SENTRY_TRACES_SAMPLE_RATE`, `SENTRY_CONSOLE_LOG_LEVELS`, `LOG_LEVEL`, `SERVICE_NAME`, `RATE_LIMIT_WINDOW_MS`, `RATE_LIMIT_MAX`, `ENABLE_FIRESTORE_ALERT_STORAGE`, `ENABLE_MARKET_SCANNER`, `ENABLE_MESSAGE_FOOTER_METADATA`, `FIREBASE_PROJECT_ID`, `FIREBASE_SERVICE_ACCOUNT_JSON`, `GOOGLE_APPLICATION_CREDENTIALS`, `GEMINI_MODEL_NAME_FALLBACK`, `RENDER`, `IS_PULL_REQUEST`, `RENDER_GIT_COMMIT`, `RENDER_GIT_REPO_SLUG`.
+- Optional but relevant (non-exhaustive; see feature sections below for full config): `ENABLE_TELEGRAM_BOT`, `PORT`, `TELEGRAM_CHAT_ID`, `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID`, `ENABLE_WHATSAPP_ALERTS`, `ENABLE_GEMINI_GROUNDING`, `GEMINI_API_KEY`, `ENABLE_LANGFUSE_PROMPTS`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL`, `LANGFUSE_PROMPT_LABEL`, `LANGFUSE_PROMPT_CACHE_TTL_SECONDS`, `BRAVE_SEARCH_API_KEY`, `BRAVE_SEARCH_ENDPOINT`, `FORCE_BRAVE_SEARCH`, `MODEL_PROVIDER`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `ENABLE_NEWS_MONITOR`, `EXPANDED_ANALYSIS_ALERT_SYMBOLS`, `EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS`, `TRADINGVIEW_MCP_URL`, `TRADINGVIEW_MCP_TIMEOUT_MS`, `TRADINGVIEW_MCP_MAX_RETRIES`, `TRADINGVIEW_MCP_DEFAULT_TIMEFRAME`, `ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION`, `ENABLE_SENTRY`, `SENTRY_DSN`, `SENTRY_TRACES_SAMPLE_RATE`, `SENTRY_CONSOLE_LOG_LEVELS`, `ENABLE_SENTRY_DEBUG_ROUTE`, `LOG_LEVEL`, `SERVICE_NAME`, `RATE_LIMIT_WINDOW_MS`, `RATE_LIMIT_MAX`, `ENABLE_FIRESTORE_ALERT_STORAGE`, `ENABLE_MARKET_SCANNER`, `ENABLE_MESSAGE_FOOTER_METADATA`, `FIREBASE_PROJECT_ID`, `FIREBASE_SERVICE_ACCOUNT_JSON`, `GOOGLE_APPLICATION_CREDENTIALS`, `GEMINI_MODEL_NAME_FALLBACK`, `RENDER`, `IS_PULL_REQUEST`, `RENDER_GIT_COMMIT`, `RENDER_GIT_REPO_SLUG`.
+
 - Bot startup is gated: bot is launched only when `ENABLE_TELEGRAM_BOT === 'true'` and not a preview environment (`RENDER==='true' && IS_PULL_REQUEST==='true'` disables it).
 - Routes under `/api` (e.g. `/api/webhook/alert`) are mounted regardless of bot launch; individual features and notification channels are gated via env flags and per-channel validation.
 - API documentation is public and read-only at `/docs` and `/openapi.json`; protected `/api` operations remain guarded by `validateApiKey` and the contract documents both header and legacy query authentication.
@@ -708,6 +709,7 @@ See `/specs/TERMINOLOGY_GUIDE.md` for extended discussion and examples.
 - 006-firestore-alert-storage: Added Cloud Firestore persistence for every `/api/webhook/alert` payload; `firebase-admin` singleton initialized from `FIREBASE_SERVICE_ACCOUNT_JSON` or `GOOGLE_APPLICATION_CREDENTIALS`; fire-and-forget after `res.json()` so storage never blocks delivery (fail-open).
 - 007-volume-breakout-alerts: Added TradingView volume confirmation check to the webhook alert enrichment flow (POST /api/webhook/alert?useTradingViewData=true) using the `volume_confirmation_analysis` tool from the TradingView MCP server. Configured via `ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION`.
 - 008-async-job-callbacks (CB-28): Added support for asynchronous job completion callbacks in TradingView analysis and market scanner jobs. Clients can specify callbackUrl, callbackSecret, and callbackEvents in POST /api/jobs/tradingview-analysis requests. The server signs the payloads with an HMAC-SHA256 signature, validates parameters (with node-only URL validation), and executes retries with exponential backoff on transient network failures, failing open without affecting the core job status.
+- news-monitor-persistent-dedup (CB-38 / Issue #120): Added optional Firestore-backed persistent deduplication store for news monitor alerts; converted cache operations to asynchronous; added fail-open fallback to in-memory mode; exposed active dedup mode/backend readiness in `/api/status`.
 
 ## Architectural Patterns & Extension Guide
 
@@ -978,3 +980,28 @@ describe('news-monitor', () => {
 - Implement retry with retryHelper
 - Add timeout handling
 - Example: `src/services/inference/azureAiClient.js`
+
+## Persistent News Monitor Deduplication (CB-38 / Issue #120)
+
+This feature introduces an optional persistent/shared backend (Firestore) for the news monitor cache (`NewsCache`) to ensure duplicate suppression survives restarts and scales across replicas.
+
+**Core Components**:
+- `src/services/storage/NewsDedupStorageService.js` — Firestore storage helper to check, set, and delete deduplication cache entries in the `news-monitor-dedup` collection.
+- `src/controllers/webhooks/handlers/newsMonitor/cache.js` — Updated `NewsCache` that integrates with `NewsDedupStorageService`. All `get` and `set` methods are now **asynchronous** and return Promises.
+- `/api/status` — Surfaces active deduplication mode (`persistent` or `in-memory`) and backend information.
+
+**Configuration**:
+- `ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP` — Set to `'true'` to enable persistent Firestore-backed deduplication. Defaults to `'false'` (falls back to process-local in-memory cache).
+
+**Behavior & Fail-Open**:
+- Reads query the local memory cache first. On hit, they return immediately. On miss, they check Firestore. If found in Firestore, the local cache is populated.
+- Writes update the local memory cache, and if persistent mode is active, also save to Firestore.
+- Fail-open strategy: any Firestore errors (permissions, timeouts, missing collection) are logged as warnings and the cache gracefully falls back to local in-memory operation.
+
+**Where to look first when extending or debugging**:
+- `src/controllers/webhooks/handlers/newsMonitor/cache.js` for cache lookup and eviction rules.
+- `src/services/storage/NewsDedupStorageService.js` for Firestore interactions.
+- `src/controllers/status.js` for deduplication mode reporting.
+- `tests/unit/news-monitor-persistent-dedup.test.js` for unit coverage of the persistent cache.
+- `tests/integration/status-endpoint.test.js` for integration status tests.
+

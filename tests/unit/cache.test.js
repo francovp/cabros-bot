@@ -40,32 +40,32 @@ describe('Cache Module - Unit Tests', () => {
 	});
 
 	describe('Cache Set and Get', () => {
-		it('should store and retrieve cache entry', () => {
+		it('should store and retrieve cache entry', async () => {
 			const data = {
 				alert: { symbol: 'BTCUSDT', confidence: 0.8 },
 				analysisResult: { status: 'analyzed' },
 			};
 
-			cache.set('BTCUSDT', EventCategory.PRICE_SURGE, data);
-			const retrieved = cache.get('BTCUSDT', EventCategory.PRICE_SURGE);
+			await cache.set('BTCUSDT', EventCategory.PRICE_SURGE, data);
+			const retrieved = await cache.get('BTCUSDT', EventCategory.PRICE_SURGE);
 
 			expect(retrieved).toEqual(data);
 		});
 
-		it('should return null for non-existent cache entry', () => {
-			const retrieved = cache.get('BTCUSDT', EventCategory.PRICE_SURGE);
+		it('should return null for non-existent cache entry', async () => {
+			const retrieved = await cache.get('BTCUSDT', EventCategory.PRICE_SURGE);
 			expect(retrieved).toBeNull();
 		});
 
-		it('should independently cache different event categories for same symbol', () => {
+		it('should independently cache different event categories for same symbol', async () => {
 			const data1 = { alert: { eventCategory: 'price_surge' } };
 			const data2 = { alert: { eventCategory: 'price_decline' } };
 
-			cache.set('BTCUSDT', EventCategory.PRICE_SURGE, data1);
-			cache.set('BTCUSDT', EventCategory.PRICE_DECLINE, data2);
+			await cache.set('BTCUSDT', EventCategory.PRICE_SURGE, data1);
+			await cache.set('BTCUSDT', EventCategory.PRICE_DECLINE, data2);
 
-			const retrieved1 = cache.get('BTCUSDT', EventCategory.PRICE_SURGE);
-			const retrieved2 = cache.get('BTCUSDT', EventCategory.PRICE_DECLINE);
+			const retrieved1 = await cache.get('BTCUSDT', EventCategory.PRICE_SURGE);
+			const retrieved2 = await cache.get('BTCUSDT', EventCategory.PRICE_DECLINE);
 
 			expect(retrieved1).toEqual(data1);
 			expect(retrieved2).toEqual(data2);
@@ -75,29 +75,29 @@ describe('Cache Module - Unit Tests', () => {
 	describe('TTL Enforcement', () => {
 		it('should return cached entry before TTL expiry', async () => {
 			const data = { alert: { symbol: 'BTCUSDT' } };
-			cache.set('BTCUSDT', EventCategory.PRICE_SURGE, data);
+			await cache.set('BTCUSDT', EventCategory.PRICE_SURGE, data);
 
 			// Wait 500ms (less than 1s TTL)
 			await new Promise(resolve => setTimeout(resolve, 500));
 
-			const retrieved = cache.get('BTCUSDT', EventCategory.PRICE_SURGE);
+			const retrieved = await cache.get('BTCUSDT', EventCategory.PRICE_SURGE);
 			expect(retrieved).toEqual(data);
 		});
 
 		it('should return null after TTL expiry', async () => {
 			const data = { alert: { symbol: 'BTCUSDT' } };
-			cache.set('BTCUSDT', EventCategory.PRICE_SURGE, data);
+			await cache.set('BTCUSDT', EventCategory.PRICE_SURGE, data);
 
 			// Wait for TTL to expire (1.1 seconds with 1s TTL)
 			await new Promise(resolve => setTimeout(resolve, 1100));
 
-			const retrieved = cache.get('BTCUSDT', EventCategory.PRICE_SURGE);
+			const retrieved = await cache.get('BTCUSDT', EventCategory.PRICE_SURGE);
 			expect(retrieved).toBeNull();
 		});
 
 		it('should remove expired entry on retrieval', async () => {
 			const data = { alert: { symbol: 'BTCUSDT' } };
-			cache.set('BTCUSDT', EventCategory.PRICE_SURGE, data);
+			await cache.set('BTCUSDT', EventCategory.PRICE_SURGE, data);
 
 			expect(cache.cache.size).toBe(1);
 
@@ -105,7 +105,7 @@ describe('Cache Module - Unit Tests', () => {
 			await new Promise(resolve => setTimeout(resolve, 1100));
 
 			// Retrieval should remove expired entry
-			cache.get('BTCUSDT', EventCategory.PRICE_SURGE);
+			await cache.get('BTCUSDT', EventCategory.PRICE_SURGE);
 			expect(cache.cache.size).toBe(0);
 		});
 	});
@@ -113,8 +113,8 @@ describe('Cache Module - Unit Tests', () => {
 	describe('Cache Cleanup', () => {
 		it('should remove expired entries during cleanup', async () => {
 			// Add two entries
-			cache.set('BTCUSDT', EventCategory.PRICE_SURGE, { alert: {} });
-			cache.set('ETHUSD', EventCategory.PRICE_SURGE, { alert: {} });
+			await cache.set('BTCUSDT', EventCategory.PRICE_SURGE, { alert: {} });
+			await cache.set('ETHUSD', EventCategory.PRICE_SURGE, { alert: {} });
 			expect(cache.cache.size).toBe(2);
 
 			// Wait for TTL to expire
@@ -129,13 +129,13 @@ describe('Cache Module - Unit Tests', () => {
 
 		it('should preserve non-expired entries during cleanup', async () => {
 			// Add first entry
-			cache.set('BTCUSDT', EventCategory.PRICE_SURGE, { alert: { symbol: 'BTCUSDT' } });
+			await cache.set('BTCUSDT', EventCategory.PRICE_SURGE, { alert: { symbol: 'BTCUSDT' } });
 
 			// Wait 500ms (less than TTL)
 			await new Promise(resolve => setTimeout(resolve, 500));
 
 			// Add second entry
-			cache.set('ETHUSD', EventCategory.PRICE_SURGE, { alert: { symbol: 'ETHUSD' } });
+			await cache.set('ETHUSD', EventCategory.PRICE_SURGE, { alert: { symbol: 'ETHUSD' } });
 
 			expect(cache.cache.size).toBe(2);
 
@@ -149,15 +149,15 @@ describe('Cache Module - Unit Tests', () => {
 			expect(cache.cache.size).toBe(1);
 
 			// Verify correct entry was preserved
-			const remaining = cache.get('ETHUSD', EventCategory.PRICE_SURGE);
+			const remaining = await cache.get('ETHUSD', EventCategory.PRICE_SURGE);
 			expect(remaining).not.toBeNull();
 		});
 	});
 
 	describe('Cache Statistics', () => {
-		it('should return correct cache statistics', () => {
-			cache.set('BTCUSDT', EventCategory.PRICE_SURGE, { alert: {} });
-			cache.set('ETHUSD', EventCategory.PRICE_DECLINE, { alert: {} });
+		it('should return correct cache statistics', async () => {
+			await cache.set('BTCUSDT', EventCategory.PRICE_SURGE, { alert: {} });
+			await cache.set('ETHUSD', EventCategory.PRICE_DECLINE, { alert: {} });
 
 			const stats = cache.getStats();
 
@@ -167,11 +167,11 @@ describe('Cache Module - Unit Tests', () => {
 			expect(stats.entries).toContain('ETHUSD:price_decline');
 		});
 
-		it('should reflect cache size after operations', () => {
+		it('should reflect cache size after operations', async () => {
 			let stats = cache.getStats();
 			expect(stats.size).toBe(0);
 
-			cache.set('BTCUSDT', EventCategory.PRICE_SURGE, { alert: {} });
+			await cache.set('BTCUSDT', EventCategory.PRICE_SURGE, { alert: {} });
 			stats = cache.getStats();
 			expect(stats.size).toBe(1);
 
@@ -182,25 +182,25 @@ describe('Cache Module - Unit Tests', () => {
 	});
 
 	describe('Cache Clear', () => {
-		it('should remove all cache entries', () => {
-			cache.set('BTCUSDT', EventCategory.PRICE_SURGE, { alert: {} });
-			cache.set('ETHUSD', EventCategory.PRICE_DECLINE, { alert: {} });
+		it('should remove all cache entries', async () => {
+			await cache.set('BTCUSDT', EventCategory.PRICE_SURGE, { alert: {} });
+			await cache.set('ETHUSD', EventCategory.PRICE_DECLINE, { alert: {} });
 			expect(cache.cache.size).toBe(2);
 
 			cache.clear();
 			expect(cache.cache.size).toBe(0);
 		});
 
-		it('should remove all entries even after multiple sets', () => {
-			cache.set('BTCUSDT', EventCategory.PRICE_SURGE, { alert: {} });
-			cache.set('ETHUSD', EventCategory.PRICE_DECLINE, { alert: {} });
-			cache.set('AAPL', EventCategory.PUBLIC_FIGURE, { alert: {} });
+		it('should remove all entries even after multiple sets', async () => {
+			await cache.set('BTCUSDT', EventCategory.PRICE_SURGE, { alert: {} });
+			await cache.set('ETHUSD', EventCategory.PRICE_DECLINE, { alert: {} });
+			await cache.set('AAPL', EventCategory.PUBLIC_FIGURE, { alert: {} });
 
 			cache.clear();
 
-			const s1 = cache.get('BTCUSDT', EventCategory.PRICE_SURGE);
-			const s2 = cache.get('ETHUSD', EventCategory.PRICE_DECLINE);
-			const s3 = cache.get('AAPL', EventCategory.PUBLIC_FIGURE);
+			const s1 = await cache.get('BTCUSDT', EventCategory.PRICE_SURGE);
+			const s2 = await cache.get('ETHUSD', EventCategory.PRICE_DECLINE);
+			const s3 = await cache.get('AAPL', EventCategory.PUBLIC_FIGURE);
 
 			expect(s1).toBeNull();
 			expect(s2).toBeNull();
@@ -217,31 +217,31 @@ describe('Cache Module - Unit Tests', () => {
 	});
 
 	describe('Deduplication Scenario', () => {
-		it('should prevent duplicate alerts for same symbol+category within TTL', () => {
+		it('should prevent duplicate alerts for same symbol+category within TTL', async () => {
 			const alert1 = {
 				alert: { symbol: 'BTCUSDT', eventCategory: 'price_surge', confidence: 0.8 },
 				deliveryResults: [{ channel: 'telegram', success: true }],
 			};
 
 			// First analysis
-			cache.set('BTCUSDT', EventCategory.PRICE_SURGE, alert1);
-			const cached1 = cache.get('BTCUSDT', EventCategory.PRICE_SURGE);
+			await cache.set('BTCUSDT', EventCategory.PRICE_SURGE, alert1);
+			const cached1 = await cache.get('BTCUSDT', EventCategory.PRICE_SURGE);
 			expect(cached1).toEqual(alert1);
 
 			// Second analysis (within TTL)
-			const cached2 = cache.get('BTCUSDT', EventCategory.PRICE_SURGE);
+			const cached2 = await cache.get('BTCUSDT', EventCategory.PRICE_SURGE);
 			expect(cached2).toEqual(cached1); // Same as first
 		});
 
-		it('should allow new alerts for same symbol after different event category', () => {
+		it('should allow new alerts for same symbol after different event category', async () => {
 			const alert1 = { alert: { eventCategory: 'price_surge' } };
 			const alert2 = { alert: { eventCategory: 'price_decline' } };
 
-			cache.set('BTCUSDT', EventCategory.PRICE_SURGE, alert1);
-			cache.set('BTCUSDT', EventCategory.PRICE_DECLINE, alert2);
+			await cache.set('BTCUSDT', EventCategory.PRICE_SURGE, alert1);
+			await cache.set('BTCUSDT', EventCategory.PRICE_DECLINE, alert2);
 
-			const cached1 = cache.get('BTCUSDT', EventCategory.PRICE_SURGE);
-			const cached2 = cache.get('BTCUSDT', EventCategory.PRICE_DECLINE);
+			const cached1 = await cache.get('BTCUSDT', EventCategory.PRICE_SURGE);
+			const cached2 = await cache.get('BTCUSDT', EventCategory.PRICE_DECLINE);
 
 			expect(cached1).toEqual(alert1);
 			expect(cached2).toEqual(alert2);
@@ -251,20 +251,20 @@ describe('Cache Module - Unit Tests', () => {
 			const alert1 = { alert: { version: 1 } };
 			const alert2 = { alert: { version: 2 } };
 
-			cache.set('BTCUSDT', EventCategory.PRICE_SURGE, alert1);
-			const first = cache.get('BTCUSDT', EventCategory.PRICE_SURGE);
+			await cache.set('BTCUSDT', EventCategory.PRICE_SURGE, alert1);
+			const first = await cache.get('BTCUSDT', EventCategory.PRICE_SURGE);
 			expect(first).toEqual(alert1);
 
 			// Wait for expiry
 			await new Promise(resolve => setTimeout(resolve, 1100));
 
 			// Old entry should be gone
-			const expired = cache.get('BTCUSDT', EventCategory.PRICE_SURGE);
+			const expired = await cache.get('BTCUSDT', EventCategory.PRICE_SURGE);
 			expect(expired).toBeNull();
 
 			// New entry can be added
-			cache.set('BTCUSDT', EventCategory.PRICE_SURGE, alert2);
-			const second = cache.get('BTCUSDT', EventCategory.PRICE_SURGE);
+			await cache.set('BTCUSDT', EventCategory.PRICE_SURGE, alert2);
+			const second = await cache.get('BTCUSDT', EventCategory.PRICE_SURGE);
 			expect(second).toEqual(alert2);
 		});
 	});
