@@ -5,7 +5,7 @@ services:
   region: frankfurt
   name: cabros-crypto-bot-telegram-iac
   runtime: node
-  repo: https://github.com/francovp/cabros-crypto-bot-telegram
+  repo: https://github.com/francovp/cabros-bot
   branch: master
   buildCommand: corepack enable && pnpm install --frozen-lockfile
   startCommand: corepack enable && pnpm start
