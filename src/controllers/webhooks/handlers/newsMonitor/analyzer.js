@@ -374,6 +374,19 @@ class NewsAnalyzer {
 		const tokenUsageSummary = tokenUsage ? tokenUsage.toJSON() : null;
 		const alert = this.buildAlert(symbol, geminiAnalysis, marketContext, enrichmentMetadata, tokenUsageSummary);
 
+		// Claim the cache key atomically before delivering the alert to prevent race conditions
+		const claimed = await this.cache.claim(symbol, geminiAnalysis.event_category);
+		if (!claimed) {
+			console.info('[Analyzer] Duplicate alert detected during claim, suppressing delivery for:', symbol, geminiAnalysis.event_category);
+			const cached = await this.cache.get(symbol, geminiAnalysis.event_category);
+			return {
+				status: AnalysisStatus.CACHED,
+				alert: cached ? cached.alert : alert,
+				deliveryResults: cached ? cached.deliveryResults : [],
+				cached: true,
+			};
+		}
+
 		// Send to all notification channels
 		console.info('[Analyzer] Sending alert:', symbol, 'confidence:', alert.confidence.toFixed(2), 'event:', alert.eventCategory);
 		const notificationMgr = getNotificationManager();
@@ -389,7 +402,7 @@ class NewsAnalyzer {
 		const deliveryResults = await sendWithNotificationRouting(notificationMgr, alert, routing);
 		console.info('[Analyzer] Alert delivery results for', symbol, ':', deliveryResults);
 
-		// Cache the result
+		// Cache the final results (updates the claimed cache entry with final metadata/results)
 		await this.cache.set(symbol, geminiAnalysis.event_category, {
 			alert,
 			analysisResult: {

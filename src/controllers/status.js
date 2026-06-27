@@ -239,14 +239,18 @@ function getStatus() {
 			&& hasValue(process.env.AZURE_LLM_KEY)
 			&& hasValue(process.env.AZURE_LLM_MODEL),
 	});
-
 	const { getCacheInstance } = require('./webhooks/handlers/newsMonitor/cache');
 	const cache = getCacheInstance();
+	const newsMonitorDedupEnabled = isEnabled(process.env.ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP);
+	const newsMonitorDedupConfigured = newsMonitorDedupEnabled && firestore.configured;
 	const newsMonitorDedup = {
-		enabled: cache.dedupMode.mode === 'persistent',
-		configured: cache.dedupMode.mode === 'persistent',
+		enabled: newsMonitorDedupEnabled,
+		configured: newsMonitorDedupConfigured,
 		ready: cache.dedupMode.mode === 'persistent',
-		status: cache.dedupMode.mode === 'persistent' ? 'ready' : 'disabled',
+		status: getReadinessStatus({
+			enabled: newsMonitorDedupEnabled,
+			configured: cache.dedupMode.mode === 'persistent',
+		}),
 		mode: cache.dedupMode.mode,
 		backend: cache.dedupMode.backend,
 	};

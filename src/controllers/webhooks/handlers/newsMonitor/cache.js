@@ -27,9 +27,11 @@ class NewsCache {
    * @returns {{ mode: 'persistent'|'in-memory', backend: 'firestore'|null }}
    */
 	get dedupMode() {
-		return newsDedupStorageService.isEnabled()
-			? { mode: 'persistent', backend: 'firestore' }
-			: { mode: 'in-memory', backend: null };
+		const persistent = newsDedupStorageService.isEnabled() && newsDedupStorageService.isReady();
+		return {
+			mode: persistent ? 'persistent' : 'in-memory',
+			backend: persistent ? 'firestore' : null,
+		};
 	}
 
 	/**
@@ -88,20 +90,20 @@ class NewsCache {
 		}
 
 		// Persistent dedup: check Firestore for cross-replica hits
-		if (newsDedupStorageService.isEnabled()) {
+		if (newsDedupStorageService.isEnabled() && newsDedupStorageService.isReady()) {
 			try {
-				const exists = await newsDedupStorageService.hasEntry(key);
-				if (exists) {
+				const entryData = await newsDedupStorageService.getEntry(key);
+				if (entryData) {
 					// Warm the local cache to avoid repeated Firestore lookups
 					this.cache.set(key, {
 						key,
 						timestamp: Date.now(),
-						data: { _dedupSource: 'firestore' },
+						data: entryData,
 					});
-					return { _dedupSource: 'firestore' };
+					return entryData;
 				}
 			} catch (error) {
-				console.warn('[NewsCache] Firestore hasEntry failed (fail-open):', error.message);
+				console.warn('[NewsCache] Firestore getEntry failed (fail-open):', error.message);
 			}
 		}
 
@@ -128,11 +130,55 @@ class NewsCache {
 		});
 
 		// Persistent dedup: write to Firestore (fail-open)
-		if (newsDedupStorageService.isEnabled()) {
-			newsDedupStorageService.setEntry(key, this.ttlMs).catch(err => {
+		if (newsDedupStorageService.isEnabled() && newsDedupStorageService.isReady()) {
+			newsDedupStorageService.setEntry(key, this.ttlMs, data).catch(err => {
 				console.warn('[NewsCache] Firestore setEntry failed (fail-open):', err.message);
 			});
 		}
+	}
+
+	/**
+	 * Claim a cache key atomically to prevent concurrent replica alerts.
+	 *
+	 * @param {string} symbol
+	 * @param {string} eventCategory
+	 * @returns {Promise<boolean>} true if claim succeeded, false if already claimed/exists
+	 */
+	async claim(symbol, eventCategory) {
+		const key = this.generateKey(symbol, eventCategory);
+		const entry = this.cache.get(key);
+
+		if (entry && !this.isExpired(entry)) {
+			return false;
+		}
+
+		// Persistent check/write
+		if (newsDedupStorageService.isEnabled() && newsDedupStorageService.isReady()) {
+			try {
+				const claimed = await newsDedupStorageService.claimEntry(key, this.ttlMs);
+				if (claimed) {
+					// Warm local cache so we don't hit Firestore on future calls
+					this.cache.set(key, {
+						key,
+						timestamp: Date.now(),
+						data: { status: 'claiming' },
+					});
+					return true;
+				}
+				return false;
+			} catch (error) {
+				console.warn('[NewsCache] Firestore claimEntry failed (fail-open):', error.message);
+				// Fail-open: continue to local check/claim
+			}
+		}
+
+		// Local claim
+		this.cache.set(key, {
+			key,
+			timestamp: Date.now(),
+			data: { status: 'claiming' },
+		});
+		return true;
 	}
 
 	/**

@@ -83,9 +83,22 @@ function getFirestore() {
  * @returns {Promise<boolean>} true if a valid (non-expired) entry exists
  */
 async function hasEntry(key) {
+	const entry = await getEntry(key);
+	return entry !== null;
+}
+
+/**
+ * Retrieve cached entry data from Firestore if valid and not expired.
+ *
+ * Fail-open: returns null on any Firestore error.
+ *
+ * @param {string} key - Dedup key (e.g. "BTCUSDT:price_surge")
+ * @returns {Promise<Object|null>} Stored data object or null if not found/expired
+ */
+async function getEntry(key) {
 	const firestore = getFirestore();
 	if (!firestore) {
-		return false;
+		return null;
 	}
 
 	try {
@@ -93,12 +106,12 @@ async function hasEntry(key) {
 		const doc = await docRef.get();
 
 		if (!doc.exists) {
-			return false;
+			return null;
 		}
 
 		const data = doc.data();
 		if (!data || !data.expiresAt) {
-			return false;
+			return null;
 		}
 
 		const now = admin.firestore.Timestamp.now();
@@ -107,13 +120,57 @@ async function hasEntry(key) {
 			docRef.delete().catch(err => {
 				console.debug('[NewsDedupStorageService] Failed to delete expired entry:', err.message);
 			});
+			return null;
+		}
+
+		return data.data || {};
+	} catch (error) {
+		console.warn('[NewsDedupStorageService] getEntry error (fail-open):', error.message);
+		return null;
+	}
+}
+
+/**
+ * Claim a dedup entry atomically using DocumentReference.create().
+ *
+ * @param {string} key - Dedup key
+ * @param {number} ttlMs - TTL in milliseconds
+ * @returns {Promise<boolean>} true if claim succeeded, false if already claimed/exists
+ */
+async function claimEntry(key, ttlMs) {
+	const firestore = getFirestore();
+	if (!firestore) {
+		return false;
+	}
+
+	try {
+		// First verify if a valid non-expired entry exists
+		const existing = await getEntry(key);
+		if (existing) {
 			return false;
 		}
 
+		const now = admin.firestore.Timestamp.now();
+		const expiresAtMs = now.toMillis() + ttlMs;
+		const expiresAt = admin.firestore.Timestamp.fromMillis(expiresAtMs);
+
+		const docRef = firestore.collection(COLLECTION_NAME).doc(key);
+		await docRef.create({
+			key,
+			createdAt: now,
+			expiresAt,
+			data: { status: 'claiming' },
+		});
+		console.debug('[NewsDedupStorageService] Dedup entry claimed:', key);
 		return true;
 	} catch (error) {
-		console.warn('[NewsDedupStorageService] hasEntry error (fail-open):', error.message);
-		return false;
+		if (error.code === 6 || error.message.includes('ALREADY_EXISTS')) {
+			console.debug('[NewsDedupStorageService] Dedup entry already exists during claim:', key);
+			return false;
+		}
+		console.warn('[NewsDedupStorageService] claimEntry error (fail-open):', error.message);
+		// Fail-open: allow claim to succeed so the replica can alert
+		return true;
 	}
 }
 
@@ -124,9 +181,10 @@ async function hasEntry(key) {
  *
  * @param {string} key - Dedup key
  * @param {number} ttlMs - TTL in milliseconds
+ * @param {Object} data - Cache data payload to store
  * @returns {Promise<void>}
  */
-async function setEntry(key, ttlMs) {
+async function setEntry(key, ttlMs, data) {
 	const firestore = getFirestore();
 	if (!firestore) {
 		return;
@@ -141,8 +199,9 @@ async function setEntry(key, ttlMs) {
 			key,
 			createdAt: now,
 			expiresAt,
+			data: data || null,
 		});
-		console.debug('[NewsDedupStorageService] Dedup entry written:', key);
+		console.debug('[NewsDedupStorageService] Dedup entry written with data:', key);
 	} catch (error) {
 		console.warn('[NewsDedupStorageService] setEntry error (fail-open):', error.message);
 	}
@@ -167,9 +226,23 @@ async function deleteEntry(key) {
 	}
 }
 
+/**
+ * Checks if the service is ready for operation (i.e. Firestore is initialized).
+ * @returns {boolean}
+ */
+function isReady() {
+	if (!isEnabled()) {
+		return false;
+	}
+	return getFirestore() !== null;
+}
+
 module.exports = {
 	isEnabled,
+	isReady,
 	hasEntry,
+	getEntry,
+	claimEntry,
 	setEntry,
 	deleteEntry,
 	COLLECTION_NAME,
@@ -178,3 +251,4 @@ module.exports = {
 		db = null;
 	},
 };
+
