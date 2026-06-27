@@ -169,7 +169,6 @@ Implement the following security practices to safeguard endpoints and credential
 8. **Update environment variables** section if adding new config
 9. **Update this agents.md file** with the new context, recent PRs, and implementation details before creating a new PR
 10. **Final verification pass** before completion: run the exact relevant checks again, then do the full test suite `pnpm test` once per implementation to ensure no regressions
-11. **Archive Antigravity session artifacts**: MUST always copy all markdown artifacts (`implementation_plan.md`, `task.md`, `walkthrough.md`) from the agent's local `<appDataDir>/brain/<conversation-id>/` directory to the repository under `docs/antigravity/<conversation-id>/` before finishing.
 
 
 **Linting and Commits During Implementation**:
