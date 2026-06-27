@@ -240,6 +240,17 @@ function getStatus() {
 			&& hasValue(process.env.AZURE_LLM_MODEL),
 	});
 
+	const { getCacheInstance } = require('./webhooks/handlers/newsMonitor/cache');
+	const cache = getCacheInstance();
+	const newsMonitorDedup = {
+		enabled: cache.dedupMode.mode === 'persistent',
+		configured: cache.dedupMode.mode === 'persistent',
+		ready: cache.dedupMode.mode === 'persistent',
+		status: cache.dedupMode.mode === 'persistent' ? 'ready' : 'disabled',
+		mode: cache.dedupMode.mode,
+		backend: cache.dedupMode.backend,
+	};
+
 	return {
 		service: {
 			name: process.env.SERVICE_NAME || packageJson.name || 'cabros-bot',
@@ -281,6 +292,7 @@ function getStatus() {
 			braveSearch,
 			newsMonitorLlm,
 			llmAlertEnrichment,
+			newsMonitorDedup,
 		},
 	};
 }

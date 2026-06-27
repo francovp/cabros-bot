@@ -289,7 +289,7 @@ class NewsAnalyzer {
 		for (const category of Object.values(EventCategory)) {
 			if (category === EventCategory.NONE) continue;
 
-			const cached = this.cache.get(symbol, category);
+			const cached = await this.cache.get(symbol, category);
 			if (cached) {
 				console.debug('[Analyzer] Returning cached result:', symbol, category);
 				let deliveryResults = cached.deliveryResults;
@@ -321,7 +321,7 @@ class NewsAnalyzer {
 
 		// If no event detected, cache and return
 		if (geminiAnalysis.event_category === EventCategory.NONE) {
-			this.cache.set(symbol, EventCategory.NONE, {
+			await this.cache.set(symbol, EventCategory.NONE, {
 				alert: null,
 				analysisResult: {
 					symbol,
@@ -340,7 +340,7 @@ class NewsAnalyzer {
 		// Check confidence threshold
 		if (geminiAnalysis.confidence < this.alertThreshold) {
 			console.info('[Analyzer] Confidence below threshold for', symbol, '-', geminiAnalysis.confidence.toFixed(2), '<', this.alertThreshold);
-			this.cache.set(symbol, geminiAnalysis.event_category, {
+			await this.cache.set(symbol, geminiAnalysis.event_category, {
 				alert: null,
 				analysisResult: {
 					symbol,
@@ -390,7 +390,7 @@ class NewsAnalyzer {
 		console.info('[Analyzer] Alert delivery results for', symbol, ':', deliveryResults);
 
 		// Cache the result
-		this.cache.set(symbol, geminiAnalysis.event_category, {
+		await this.cache.set(symbol, geminiAnalysis.event_category, {
 			alert,
 			analysisResult: {
 				symbol,
