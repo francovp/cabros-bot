@@ -357,7 +357,8 @@ describe('TradingViewMcpService', () => {
 			},
 		});
 		service.callMultiTimeframeAnalysis = jest.fn().mockResolvedValue({
-			alignment: 'bullish',
+			alignment: { status: 'bullish', confidence: 78 },
+			recommendation: { action: 'BUY' },
 			confluences: ['Weekly and Daily aligned'],
 		});
 
@@ -368,9 +369,11 @@ describe('TradingViewMcpService', () => {
 			exchange: 'BINANCE',
 		}));
 		expect(result.multiTimeframeData).toEqual({
-			alignment: 'bullish',
+			alignment: { status: 'bullish', confidence: 78 },
+			recommendation: { action: 'BUY' },
 			confluences: ['Weekly and Daily aligned'],
 		});
-		expect(result.insights.join(' ')).toContain('Multi-timeframe');
+		expect(result.insights).toContain('Multi-timeframe: bullish');
+		expect(result.insights.join(' ')).not.toContain('[object Object]');
 	});
 });

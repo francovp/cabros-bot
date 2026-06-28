@@ -622,7 +622,7 @@ class TradingViewMcpService {
 		}
 
 		if (multiTimeframeAnalysis) {
-			const alignment = multiTimeframeAnalysis.alignment || multiTimeframeAnalysis.recommendation || multiTimeframeAnalysis.trend || null;
+			const alignment = this._formatMultiTimeframeSummary(multiTimeframeAnalysis);
 			if (alignment) {
 				insights.push(`Multi-timeframe: ${alignment}`);
 			}
@@ -662,6 +662,24 @@ class TradingViewMcpService {
 		}
 
 		return disagree;
+	}
+
+	_formatMultiTimeframeSummary(multiTimeframeAnalysis = {}) {
+		const alignment = multiTimeframeAnalysis.alignment;
+		if (alignment && typeof alignment === 'object') {
+			return alignment.status || alignment.action || alignment.trend || alignment.summary || null;
+		}
+
+		if (alignment) {
+			return alignment;
+		}
+
+		const recommendation = multiTimeframeAnalysis.recommendation;
+		if (recommendation && typeof recommendation === 'object') {
+			return recommendation.action || recommendation.status || recommendation.summary || null;
+		}
+
+		return recommendation || multiTimeframeAnalysis.trend || null;
 	}
 
 	_formatRatio(value) {
