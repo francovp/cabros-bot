@@ -13,6 +13,7 @@ const app = require('./app.js');
 const { Telegraf, Markup } = require('telegraf');
 const { getRoutes } = require('./src/routes');
 const { initializeNotificationServices } = require('./src/controllers/webhooks/handlers/alert/alert');
+const { registerDebugSentryRoute } = require('./src/lib/debugSentryRoute');
 const Sentry = require('@sentry/node');
 
 const token = process.env.BOT_TOKEN;
@@ -28,9 +29,7 @@ const now = new Date();
 // Always mount routes (they gate access based on feature flags)
 app.use('/api', getRoutes(() => bot));
 
-app.get('/debug-sentry', function mainHandler() {
-	throw new Error('Sentry debug test error!');
-});
+registerDebugSentryRoute(app);
 
 // The error handler must be registered before any other error middleware and after all controllers
 Sentry.setupExpressErrorHandler(app);
