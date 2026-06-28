@@ -135,7 +135,12 @@ Follow these steps in strict chronological order to automate issue resolution:
 ### Step 5: Verification & Deploy Check
 1. Ensure the PR meets all criteria in `references/readiness-and-verification.md`.
 2. Retrieve the PR number and run `scripts/verify-preview.sh <PR_NUMBER>` to verify the Render preview deployment is live and healthy.
-3. Address any unresolved discussions, especially review comments from `@francovp` or `@codex`.
+3. **Address any unresolved discussions**, especially review comments from `@francovp` or `@codex`.
+   - **Codex review failure detection**: If a Codex review body text starts with `You have reached your Codex usage limits for code reviews`, the automated Codex review has failed due to rate limiting. Do NOT wait for Codex. Instead, immediately perform the code review yourself:
+     - Use `caveman-review` skill (`task(load_skills=["caveman-review"], ...)`) for compressed review findings, OR
+     - Deploy a `deep` subagent with explicit instructions to review the PR diff for correctness, edge cases, security concerns, type safety, and alignment with acceptance criteria.
+     - If the failed Codex review created a blocking review thread, resolve or address it after your self-review completes.
+     - A passing self-review satisfies the "no unresolved discussions" criterion in the merge gate — do NOT reset the quiet window for a usage-limited Codex review.
 4. Observe the quiet window and retry policies specified in `references/readiness-and-verification.md`.
 5. **Verify the PR title has the Linear ID suffix**: If `LINEAR_ISSUE_ID` is set and the PR title is missing `(LINEAR_ISSUE_ID)` at the end, fix it:
    ```bash

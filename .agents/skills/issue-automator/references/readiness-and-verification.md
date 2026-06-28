@@ -39,4 +39,17 @@ If any criterion is uncertain, keep the same gate but hand the PR off through `I
 1. **Window Duration**: After the latest commit, wait a quiet window of 5 minutes before calling the PR clean or ready.
 2. **Midpoint & Endpoint Checks**: During the quiet window, re-check reviews and threads once around the midpoint (2.5 minutes) and once at the end.
 3. **Reset Trigger**: If Codex posts a new review or a new thread appears, reset the quiet window from that event or from the new commit (whichever is later).
+   - **Exception — rate‑limited review**: If the Codex review body text starts with `You have reached your Codex usage limits for code reviews`, this is a review failure, not a real review. Do NOT reset the quiet window. Instead, perform a self-review (see Codex Review Rate Limit Handling section below).
 4. **Instability Handling**: If the quiet window cannot complete due to repeated issue-specific instability, end with outcome `LOCAL_DEADLOCK`.
+
+## Codex Review Rate Limit Handling
+
+Codex reviews may fail when the Codex usage quota for code reviews is exhausted. Detect and fall back to a self-review.
+
+1. **Detection**: When checking for Codex reviews on the PR, inspect the review body text. If it starts with `You have reached your Codex usage limits for code reviews`, the automated Codex review has failed due to rate limiting.
+2. **Self-Review Fallback**: Immediately perform a code review using available tools:
+   - Use `caveman-review` skill via `task(load_skills=["caveman-review"], ...)` for compressed, one-line-per-finding review output, OR
+   - Deploy a `deep` subagent with explicit instructions to review the PR diff for: logic correctness, edge case coverage, error handling, type safety, security concerns, and alignment with issue acceptance criteria and existing code patterns.
+3. **Thread Handling**: If the failed Codex review created a blocking review thread (e.g., Codex requested changes), resolve or address that thread once the self-review passes.
+4. **Gate Effect**: A passing self-review satisfies the "no unresolved discussions" criterion in the merge gate. The quiet window is NOT reset for a usage-limited Codex review — it continues normally.
+5. **Outcome**: If the self-review passes all criteria, the agent may proceed to merge (if otherwise ready) or hand off for human review per Step 7.
