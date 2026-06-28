@@ -6,6 +6,7 @@ const signalOutcomeService = require('../../../../services/storage/SignalOutcome
 const MarkdownV2Formatter = require('../../../../services/notification/formatters/markdownV2Formatter');
 const TelegramService = require('../../../../services/notification/TelegramService');
 const WhatsAppService = require('../../../../services/notification/WhatsAppService');
+const DiscordService = require('../../../../services/notification/DiscordService');
 const NotificationManager = require('../../../../services/notification/NotificationManager');
 const { getURLShortener } = require('../../handlers/newsMonitor/urlShortener');
 const sentryService = require('../../../../services/monitoring/SentryService');
@@ -39,7 +40,11 @@ async function initializeNotificationServices(bot) {
 		urlShortener: getURLShortener(),
 	});
 
-	notificationManager = new NotificationManager(telegramService, whatsappService);
+	const discordService = new DiscordService({
+		logger: console,
+	});
+
+	notificationManager = new NotificationManager(telegramService, whatsappService, discordService);
 
 	console.debug('Initializing notification services...');
 	await notificationManager.validateAll();

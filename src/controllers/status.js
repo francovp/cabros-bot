@@ -173,6 +173,7 @@ function getStatus() {
 	const telegramFlagEnabled = isEnabled(process.env.ENABLE_TELEGRAM_BOT);
 	const telegramEnabled = telegramFlagEnabled && !previewEnvironment;
 	const whatsappEnabled = isEnabled(process.env.ENABLE_WHATSAPP_ALERTS);
+	const discordEnabled = isEnabled(process.env.ENABLE_DISCORD_ALERTS);
 	const geminiGroundingEnabled = isEnabled(process.env.ENABLE_GEMINI_GROUNDING);
 	const newsMonitorEnabled = isEnabled(process.env.ENABLE_NEWS_MONITOR);
 	const forceBraveSearch = isEnabled(process.env.FORCE_BRAVE_SEARCH);
@@ -199,6 +200,10 @@ function getStatus() {
 			hasValue(process.env.WHATSAPP_API_URL)
 			&& hasValue(process.env.WHATSAPP_API_KEY)
 			&& hasValue(process.env.WHATSAPP_CHAT_ID),
+	});
+	const discord = dependencyStatus({
+		enabled: discordEnabled,
+		configured: hasValue(process.env.DISCORD_WEBHOOK_URL),
 	});
 	const gemini = getGeminiDependency({
 		enabled: geminiEnabled,
@@ -265,6 +270,7 @@ function getStatus() {
 		featureFlags: {
 			telegramBot: telegramFlagEnabled,
 			whatsappAlerts: whatsappEnabled,
+			discordAlerts: discordEnabled,
 			geminiGrounding: geminiGroundingEnabled,
 			newsMonitor: newsMonitorEnabled,
 			tradingViewMcpEnrichment: tradingViewMcpEnrichmentEnabled,
@@ -284,10 +290,15 @@ function getStatus() {
 				enabled: whatsapp.ready,
 				status: whatsapp.status,
 			},
+			discord: {
+				enabled: discord.ready,
+				status: discord.status,
+			},
 		},
 		dependencies: {
 			telegram,
 			whatsapp,
+			discord,
 			gemini,
 			tradingViewMcp,
 			firestore,

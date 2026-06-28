@@ -15,6 +15,7 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 			WEBHOOK_API_KEY: 'test-key',
 			ENABLE_TELEGRAM_BOT: 'true',
 			ENABLE_WHATSAPP_ALERTS: 'true',
+			ENABLE_DISCORD_ALERTS: 'false',
 			BOT_TOKEN: 'test-bot-token',
 			TELEGRAM_CHAT_ID: '123456789',
 			WHATSAPP_API_URL: 'https://api.greenapi.com/waInstance123/',
@@ -101,6 +102,70 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 		expect(global.fetch).toHaveBeenCalledTimes(1);
 	});
 
+	it('sends a message to discord only', async () => {
+		process.env.ENABLE_DISCORD_ALERTS = 'true';
+		process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/123/token';
+		global.fetch = jest.fn().mockResolvedValue({
+			ok: true,
+			json: async () => ({ id: 'discord-msg-789' }),
+		});
+
+		await initializeNotificationServices(mockBot);
+
+		const res = await request(app)
+			.post('/api/webhook/message')
+			.set('x-api-key', 'test-key')
+			.send({ message: 'Hello Discord', channels: ['discord'] })
+			.expect(200);
+
+		expect(res.body.success).toBe(true);
+		expect(res.body.results).toEqual([
+			{
+				success: true,
+				channel: 'discord',
+				messageId: 'discord-msg-789',
+				messageIds: ['discord-msg-789'],
+				messageCount: 1,
+			},
+		]);
+		expect(mockBot.telegram.sendMessage).not.toHaveBeenCalled();
+		expect(global.fetch).toHaveBeenCalledWith(
+			'https://discord.com/api/webhooks/123/token?wait=true',
+			expect.objectContaining({
+				method: 'POST',
+				body: JSON.stringify({ content: 'Hello Discord' }),
+			}),
+		);
+	});
+
+	it('sends to all enabled channels when channels is omitted', async () => {
+		process.env.ENABLE_DISCORD_ALERTS = 'true';
+		process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/123/token';
+		global.fetch = jest.fn()
+			.mockResolvedValueOnce({
+				ok: true,
+				json: async () => ({ idMessage: 'wa-msg-456' }),
+			})
+			.mockResolvedValueOnce({
+				ok: true,
+				json: async () => ({ id: 'discord-msg-456' }),
+			});
+
+		await initializeNotificationServices(mockBot);
+
+		const res = await request(app)
+			.post('/api/webhook/message')
+			.set('x-api-key', 'test-key')
+			.send({ message: 'Broadcast all channels' })
+			.expect(200);
+
+		expect(res.body.success).toBe(true);
+		expect(res.body.results).toHaveLength(3);
+		expect(res.body.results.map((result) => result.channel)).toEqual(['telegram', 'whatsapp', 'discord']);
+		expect(mockBot.telegram.sendMessage).toHaveBeenCalledTimes(1);
+		expect(global.fetch).toHaveBeenCalledTimes(2);
+	});
+
 	// ---------------------------------------------------------------------------
 	// Validation error cases
 	// ---------------------------------------------------------------------------
@@ -137,17 +202,6 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 		expect(res.body.error).toContain('message');
 	});
 
-	it('returns 400 when channels is missing', async () => {
-		const res = await request(app)
-			.post('/api/webhook/message')
-			.set('x-api-key', 'test-key')
-			.send({ message: 'Hello' })
-			.expect(400);
-
-		expect(res.body.success).toBe(false);
-		expect(res.body.error).toContain('channels');
-	});
-
 	it('returns 400 when channels is empty array', async () => {
 		const res = await request(app)
 			.post('/api/webhook/message')
@@ -163,11 +217,23 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 		const res = await request(app)
 			.post('/api/webhook/message')
 			.set('x-api-key', 'test-key')
-			.send({ message: 'Hello', channels: ['telegram', 'discord'] })
+			.send({ message: 'Hello', channels: ['telegram', 'slack'] })
 			.expect(400);
 
 		expect(res.body.success).toBe(false);
 		expect(res.body.error).toContain('Unknown channel');
+		expect(res.body.error).toContain('slack');
+	});
+
+	it('returns 400 when requesting discord and the channel is disabled', async () => {
+		const res = await request(app)
+			.post('/api/webhook/message')
+			.set('x-api-key', 'test-key')
+			.send({ message: 'Hello Discord', channels: ['discord'] })
+			.expect(400);
+
+		expect(res.body.success).toBe(false);
+		expect(res.body.error).toContain('disabled or misconfigured');
 		expect(res.body.error).toContain('discord');
 	});
 
