@@ -616,6 +616,11 @@ class NewsAnalyzer {
 			? enrichmentMetadata.enriched_confidence
 			: geminiAnalysis.confidence;
 
+		// Use geminiAnalysis confidence_reason unless enrichment provides its own
+		const confidenceReason = enrichmentMetadata && enrichmentMetadata.confidence_reason
+			? enrichmentMetadata.confidence_reason
+			: (geminiAnalysis.confidence_reason || '');
+
 		// Build the title/original text
 		const eventLabel = this.eventCategoryLabel(geminiAnalysis.event_category);
 		const headline = (geminiAnalysis.headline && geminiAnalysis.headline.trim())
@@ -658,11 +663,14 @@ class NewsAnalyzer {
 		}
 
 		// Build enriched object for formatEnriched methods
+		const enrichedExtraText = confidenceReason
+			? `_Model Confidence: ${confidense}%_\n_Reason: ${confidenceReason}_\n_Model used: ${GROUNDING_MODEL_NAME}_`
+			: `_Model Confidence: ${confidense}%_\n_Model used: ${GROUNDING_MODEL_NAME}_`;
 		const enriched = {
 			originalText: alertTitle,
 			summary: context,
 			citations,
-			extraText: `_Model Confidence: ${confidense}%_\n_Model used: ${GROUNDING_MODEL_NAME}_`,
+			extraText: enrichedExtraText,
 			tokenUsage: tokenUsageSummary || undefined,
 		};
 
@@ -672,6 +680,7 @@ class NewsAnalyzer {
 			headline: geminiAnalysis.headline,
 			sentimentScore: geminiAnalysis.sentiment_score,
 			confidence: finalConfidence,
+			confidence_reason: confidenceReason,
 			sources: geminiAnalysis.sources,
 			text: alertTitle,
 			enriched,
@@ -708,6 +717,10 @@ class NewsAnalyzer {
 
 		const confidence = analysis.confidence ?? 0;
 		message += `Confidence: ${(confidence * 100).toFixed(0)}%\n`;
+		const reason = analysis.confidence_reason || '';
+		if (reason) {
+			message += `Reason: ${reason}\n`;
+		}
 
 		if (marketContext && marketContext.price) {
 			const change = marketContext.change24h ?? 0;

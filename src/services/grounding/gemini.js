@@ -217,14 +217,16 @@ async function analyzeNewsForSymbol(symbol, context, options = {}) {
 		// Use grounded sources if available (store full SearchResult objects, not just URLs)
 		analysisResult.sources = searchResult.results || [];
 
-		// Calculate confidence using formula: (0.6 × event_significance + 0.4 × |sentiment|)
-		const confidence = 0.6 * analysisResult.event_significance + 0.4 * Math.abs(analysisResult.sentiment_score);
-		analysisResult.confidence = Math.max(0, Math.min(1, confidence)); // Clamp to [0, 1]
+		// Calculate calibrated confidence with source metadata penalties
+		const { confidence, confidence_reason } = calibrateNewsConfidence(analysisResult);
+		analysisResult.confidence = confidence;
+		analysisResult.confidence_reason = confidence_reason;
 
 		console.info('[Gemini] News analysis complete with grounding', {
 			symbol,
 			category: analysisResult.event_category,
 			confidence: analysisResult.confidence,
+			confidence_reason: analysisResult.confidence_reason,
 			groundedSources: analysisResult.sources.length,
 		});
 
@@ -255,13 +257,48 @@ function parseNewsAnalysisResponse(response) {
 			throw new Error(`Invalid event_category: ${parsed.event_category}`);
 		}
 
-		// Clamp numeric values
+		// Parse source metadata with defaults and clamping
+		const sourceCount = Number.isFinite(parsed.source_count)
+			? Math.max(0, Math.min(10, Math.round(parsed.source_count)))
+			: 0;
+
+		const sourceFreshness = Number.isFinite(parsed.source_freshness)
+			? Math.max(0, Math.min(1, parsed.source_freshness))
+			: 0.5;
+
+		const sourceQuality = Number.isFinite(parsed.source_quality)
+			? Math.max(0, Math.min(1, parsed.source_quality))
+			: 0.5;
+
+		const eventAgeHours = Number.isFinite(parsed.event_age_hours)
+			? Math.max(0, parsed.event_age_hours)
+			: null;
+
+		const timeHorizon = ['very_short_term', 'short_term', 'medium_term', 'long_term'].includes(parsed.time_horizon)
+			? parsed.time_horizon
+			: 'short_term';
+
+		const uncertaintyReason = typeof parsed.uncertainty_reason === 'string'
+			? parsed.uncertainty_reason.trim()
+			: '';
+
+		const invalidationHint = typeof parsed.invalidation_hint === 'string'
+			? parsed.invalidation_hint.trim()
+			: '';
+
 		return {
 			event_category: parsed.event_category,
 			event_significance: Math.max(0, Math.min(1, parsed.event_significance || 0)),
 			sentiment_score: Math.max(-1, Math.min(1, parsed.sentiment_score || 0)),
 			headline: (parsed.headline || 'Market event detected').substring(0, 250),
 			description: parsed.description || '',
+			source_count: sourceCount,
+			source_freshness: sourceFreshness,
+			source_quality: sourceQuality,
+			event_age_hours: eventAgeHours,
+			time_horizon: timeHorizon,
+			uncertainty_reason: uncertaintyReason,
+			invalidation_hint: invalidationHint,
 		};
 	} catch (error) {
 		console.error('[Gemini] Response parsing failed:', error.message);
@@ -272,8 +309,76 @@ function parseNewsAnalysisResponse(response) {
 			sentiment_score: 0,
 			headline: 'Could not detect market event',
 			description: '',
+			source_count: 0,
+			source_freshness: 0,
+			source_quality: 0,
+			event_age_hours: null,
+			time_horizon: 'short_term',
+			uncertainty_reason: 'parse error',
+			invalidation_hint: '',
 		};
 	}
+}
+
+/**
+ * Calculate calibrated confidence from news analysis result
+ * Applies penalties for limited sources, stale or low-quality sources, and uncertainty
+ * @param {Object} analysisResult - Parsed and validated news analysis result
+ * @returns {{ confidence: number, confidence_reason: string }} Calibrated confidence and reason
+ */
+function calibrateNewsConfidence(analysisResult) {
+	const { event_significance, sentiment_score, source_count, source_freshness, source_quality, uncertainty_reason, invalidation_hint } = analysisResult;
+
+	// Base confidence from significance and sentiment
+	const baseConfidence = 0.6 * event_significance + 0.4 * Math.abs(sentiment_score);
+
+	// Apply penalties
+	const reasons = [];
+	let penalty = 0;
+
+	// Source count penalty: penalize when fewer than 2 sources
+	if (source_count === 0) {
+		penalty += 0.3;
+		reasons.push('no corroborating sources');
+	} else if (source_count === 1) {
+		penalty += 0.15;
+		reasons.push('single source only');
+	}
+
+	// Source freshness penalty: penalize stale sources
+	if (source_freshness < 0.3) {
+		penalty += 0.15;
+		reasons.push('sources appear stale');
+	} else if (source_freshness < 0.6) {
+		penalty += 0.08;
+		reasons.push('moderate source freshness');
+	}
+
+	// Source quality penalty: penalize low-quality/unreliable domains
+	if (source_quality < 0.3) {
+		penalty += 0.2;
+		reasons.push('low source authority');
+	} else if (source_quality < 0.6) {
+		penalty += 0.1;
+		reasons.push('moderate source authority');
+	}
+
+	// Uncertainty penalty
+	if (uncertainty_reason && uncertainty_reason.length > 0) {
+		penalty += 0.1;
+		reasons.push(`uncertain: ${uncertainty_reason}`);
+	}
+
+	// Invalidation hint penalty
+	if (invalidation_hint && invalidation_hint.length > 0) {
+		penalty += 0.15;
+		reasons.push(`may invalidate: ${invalidation_hint}`);
+	}
+
+	const finalConfidence = Math.max(0, Math.min(1, baseConfidence - penalty));
+	const confidenceReason = reasons.length > 0 ? reasons.join('; ') : 'sufficient corroboration and freshness';
+
+	return { confidence: finalConfidence, confidence_reason: confidenceReason };
 }
 
 /**
@@ -407,4 +512,5 @@ module.exports = {
 	parseEnrichedAlertResponse,
 	analyzeNewsForSymbol,
 	parseNewsAnalysisResponse,
+	calibrateNewsConfidence,
 };
