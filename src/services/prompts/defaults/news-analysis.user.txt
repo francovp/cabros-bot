@@ -14,7 +14,14 @@ Example JSON (respond with a similar structure using real values):
   "event_significance": 0.75,
   "sentiment_score": 0.45,
   "headline": "One-line event description",
-  "description": "Detailed explanation of the event with bulletpoints and bold text."
+  "description": "Detailed explanation of the event with bulletpoints and bold text.",
+  "source_count": 3,
+  "source_freshness": 0.9,
+  "source_quality": 0.8,
+  "event_age_hours": 2,
+  "time_horizon": "short_term",
+  "uncertainty_reason": "",
+  "invalidation_hint": ""
 }
 
 Field guidance:
@@ -24,6 +31,13 @@ Field guidance:
 - **sentiment_score** (number): -1.0 to 1.0 — negative = bearish, positive = bullish.
 - **headline** (string): one concise line describing the event (max ~250 chars).
 - **description** (string): Detailed explanation with enrich text using hypen bulletpoints (not asterisks), nextline and bold text for readability (up to ~2000 chars).
+- **source_count** (number): integer count of corroborating sources (0 if none, cap at 10).
+- **source_freshness** (number): 0.0 to 1.0 — how recent/correlated the sources are (1.0 = very fresh/current, 0.0 = old/stale).
+- **source_quality** (number): 0.0 to 1.0 — domain credibility and authority of the sources (1.0 = high-authority domains, 0.0 = unknown/unreliable).
+- **event_age_hours** (number): approximate age of the event in hours (use 0 for breaking, 168+ for very old).
+- **time_horizon** (string): one of **very_short_term** (minutes–hours), **short_term** (hours–days), **medium_term** (days–weeks), **long_term** (weeks+) — how long the event effect is expected to last.
+- **uncertainty_reason** (string): empty string if confident, or a brief explanation of why analysis is uncertain (e.g. "conflicting signals", "limited sources").
+- **invalidation_hint** (string): empty string if event seems valid, or a brief condition that would invalidate this event (e.g. "if price reverses below support", "if news is later denied").
 
 Event category hints:
 
