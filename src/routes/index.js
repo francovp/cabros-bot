@@ -20,6 +20,7 @@ const {
 	postRetryFailedJob,
 } = require('../controllers/webhooks/handlers/jobs/jobs');
 const { listAlerts, getAlertById, replayAlert, summarizeAlerts, exportAlerts } = require('../controllers/alerts/alerts');
+const { getOutcomesSummary } = require('../controllers/outcomes/outcomes');
 const { validateApiKey } = require('../lib/auth');
 const { getApiStatus } = require('../controllers/status');
 const { idempotencyMiddleware } = require('../lib/idempotency');
@@ -54,6 +55,9 @@ function getRoutes(botOrGetter) {
 	const newsMonitor = getNewsMonitor();
 	router.post('/news-monitor', validateApiKey, newsMonitor.handleRequest.bind(newsMonitor));
 	router.get('/news-monitor', validateApiKey, newsMonitor.handleRequest.bind(newsMonitor));
+
+	// Shadow-mode signal outcome tracking
+	router.get('/outcomes/summary', validateApiKey, getOutcomesSummary);
 
 	router.get('/status', validateApiKey, getApiStatus);
 	router.get('/capabilities', validateApiKey, getApiStatus);

@@ -274,6 +274,7 @@ function getStatus() {
 			marketScanner: marketScannerEnabled,
 			binancePriceCheck: binancePriceCheckEnabled,
 			llmAlertEnrichment: llmAlertEnrichmentEnabled,
+			signalOutcomeTracking: isEnabled(process.env.ENABLE_SIGNAL_OUTCOME_TRACKING),
 		},
 		deliveryChannels: {
 			telegram: {
