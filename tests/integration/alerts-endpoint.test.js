@@ -71,9 +71,11 @@ describe('Alerts API Integration Tests', () => {
 	});
 
 	it('returns 401 when GET /api/alerts lacks a valid api key', async () => {
-		await request(app)
+		const res = await request(app)
 			.get('/api/alerts')
 			.expect(401);
+
+		expect(res.body.error).toContain('Unauthorized');
 	});
 
 	it('returns stored alerts with parsed filters and pagination metadata', async () => {
@@ -290,6 +292,7 @@ describe('Alerts API Integration Tests', () => {
 					averageProcessingMs: null,
 					averageDeliveryMs: 125,
 				},
+				shadowModeMetrics: 'No measurements found',
 			},
 		});
 	});
@@ -564,11 +567,11 @@ describe('Alerts API Integration Tests', () => {
 			.post('/api/alerts/alert-123/replay')
 			.set('x-api-key', 'test-key')
 			.set('idempotency-key', 'replay-key-2')
-			.send({ channels: ['telegram', 'discord'] })
+			.send({ channels: ['telegram', 'slack'] })
 			.expect(400);
 
 		expect(res.body).toEqual({
-			error: 'Unknown channel(s): discord. Valid channels: telegram, whatsapp.',
+			error: 'Unknown channel(s): slack. Valid channels: telegram, whatsapp, discord.',
 			code: 'INVALID_REQUEST',
 		});
 	});

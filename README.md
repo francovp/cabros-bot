@@ -38,6 +38,11 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 - `WHATSAPP_API_KEY` - GreenAPI API key for authentication
 - `WHATSAPP_CHAT_ID` - Destination WhatsApp chat/group ID (format: `120363xxxxx@g.us`)
 
+#### Discord Alerts (Webhook)
+
+- `ENABLE_DISCORD_ALERTS` - Enable Discord alerts (`true` or `false`, default: `false`)
+- `DISCORD_WEBHOOK_URL` - Discord webhook URL (e.g., `https://discord.com/api/webhooks/<id>/<token>`)
+
 #### URL Shortening (004-url-shortening)
 
 - `BITLY_API_KEY` - Bitly API key for URL shortening (optional; when provided, long URLs in WhatsApp alerts are automatically shortened)
@@ -893,7 +898,7 @@ Retrieve a single stored alert by Firestore document ID.
 
 ## Multi-Channel Alerts (002)
 
-The alert webhook system supports simultaneous delivery to multiple channels (Telegram and WhatsApp) with independent retry logic and graceful degradation.
+The alert webhook system supports simultaneous delivery to multiple channels (Telegram, WhatsApp, and Discord) with independent retry logic and graceful degradation.
 
 ### Supported Channels
 
@@ -913,6 +918,14 @@ The alert webhook system supports simultaneous delivery to multiple channels (Te
 - **Message Size**: Automatically truncated to 20,000 characters with "…" suffix if needed
 - **Provider**: GreenAPI (REST API via native fetch)
 
+#### Discord (Optional)
+
+- **Enabled by**: `ENABLE_DISCORD_ALERTS=true` + valid `DISCORD_WEBHOOK_URL`
+- **Format**: Plain Discord webhook content with Markdown-friendly text
+- **Timeout**: ~10 seconds per delivery
+- **Retry**: Single request per delivery
+- **Provider**: Discord webhook execute endpoint via native `fetch`
+
 ### Channel-Specific Formatting
 
 **Telegram (MarkdownV2)**:
@@ -926,6 +939,11 @@ The alert webhook system supports simultaneous delivery to multiple channels (Te
 - Supports bold (`*text*`), italic (`_text_`), strikethrough (`~text~`)
 - Supports code blocks with triple backticks
 - Supports lists with asterisk or hyphen
+
+**Discord**:
+- Sends webhook `content` payloads over native `fetch`
+- Reuses the plain-text/Markdown-friendly formatting path
+- Works with direct routing via `channels: ["discord"]`
 
 ### URL Shortening for WhatsApp
 
@@ -980,6 +998,7 @@ Sources:
 - Response includes per-channel results
 - HTTP 200 OK returned (fail-open pattern)
 - Failures logged at WARN/ERROR level
+- If `channels` is omitted in the generic message webhook, delivery fans out to every enabled channel
 
 **Example - Dual Channel Delivery**:
 
@@ -1053,6 +1072,10 @@ WHATSAPP_API_URL=https://7107.api.green-api.com/waInstance7107356806/
 WHATSAPP_API_KEY=your_greenapi_key
 WHATSAPP_CHAT_ID=120363xxxxx@g.us
 
+# Discord (optional)
+ENABLE_DISCORD_ALERTS=true
+DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/<id>/<token>
+
 # Optional enrichment (applies to all channels)
 ENABLE_GEMINI_GROUNDING=true
 GEMINI_API_KEY=your_google_ai_studio_api_key
@@ -1060,11 +1083,12 @@ GEMINI_API_KEY=your_google_ai_studio_api_key
 
 ### Troubleshooting Multi-Channel Delivery
 
-**Both channels failing**:
+**Multiple channels failing**:
 1. Verify network connectivity from server
 2. If `ENABLE_TELEGRAM_BOT=true`, check BOT_TOKEN validity (Telegram)
 3. Check GreenAPI credentials and account status (WhatsApp)
-4. Review application logs for detailed error messages
+4. Verify `DISCORD_WEBHOOK_URL` is still valid and not revoked (Discord)
+5. Review application logs for detailed error messages
 
 **API-only or WhatsApp-only startup**:
 1. Set `ENABLE_TELEGRAM_BOT=false`
@@ -1076,6 +1100,11 @@ GEMINI_API_KEY=your_google_ai_studio_api_key
 2. Check `WHATSAPP_CHAT_ID` format (should be `120363xxxxx@g.us`)
 3. Verify GreenAPI account is active
 4. Test API directly: `curl -X POST https://api.green-api.com/test`
+
+**Discord not sending**:
+1. Verify `ENABLE_DISCORD_ALERTS=true`
+2. Check `DISCORD_WEBHOOK_URL` format and channel permissions
+3. Confirm the webhook has not been deleted or regenerated in Discord
 
 **Message truncation**:
 - WhatsApp automatically truncates messages > 20,000 characters

@@ -109,6 +109,37 @@ function postExpandedAnalysisAlert(botOrGetter) {
 			const deliveredChannels = getDeliveredChannels(deliveryResults);
 			const summary = buildSummary(results, deliveryResults);
 
+			const signalOutcomeService = require('../../../../services/storage/SignalOutcomeService');
+			if (signalOutcomeService.isEnabled()) {
+				for (const item of analyzedItems) {
+					const sentiment = String(item.analysis.sentiment || item.analysis.market_sentiment?.overall_sentiment || '').toUpperCase();
+					const confluence = String(item.analysis.confluence?.recommendation || item.analysis.confluence?.action || '').toUpperCase();
+					let itemSide = 'BUY';
+					if (confluence.includes('SELL') || sentiment.includes('BEARISH') || sentiment.includes('BAJISTA')) {
+						itemSide = 'SELL';
+					}
+
+					const tech = item.analysis.technical || item.analysis || {};
+					const closePrice = tech.price_data?.current_price ?? tech.price_data?.close ?? null;
+					const score = item.analysis.market_sentiment?.overall_rating ?? tech.market_sentiment?.overall_rating ?? null;
+
+					signalOutcomeService.recordSignal({
+						requestId,
+						source: 'expanded-analysis',
+						symbol: item.input.symbol,
+						exchange: item.input.exchange,
+						timeframe: parsed.timeframe,
+						setupType: 'expanded-analysis',
+						score,
+						side: itemSide,
+						price: typeof closePrice === 'number' ? closePrice : null,
+						sources: [],
+						tokenUsage: null,
+						processingTimeMs: Date.now() - startTime,
+					}).catch(() => {});
+				}
+			}
+
 			return res.status(200).json({
 				success: true,
 				alertText,

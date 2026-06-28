@@ -115,6 +115,42 @@ function postMarketScannerAlert(botOrGetter) {
 			const deliveredChannels = getDeliveredChannels(deliveryResults);
 			const summary = buildSummary(scanResults, deliveryResults);
 
+			const signalOutcomeService = require('../../../../services/storage/SignalOutcomeService');
+			if (signalOutcomeService.isEnabled()) {
+				for (const scanResult of scanResults) {
+					if (scanResult.status === 'success' && Array.isArray(scanResult.items)) {
+						for (const item of scanResult.items) {
+							const closePrice = item.indicators?.close ?? null;
+							let itemSide = 'BUY';
+							if (scanResult.scan === 'top_losers') {
+								itemSide = 'SELL';
+							} else if (item.breakout_type) {
+								const lowerBreakout = item.breakout_type.trim().toLowerCase();
+								if (lowerBreakout === 'bearish' || lowerBreakout === 'sell') {
+									itemSide = 'SELL';
+								}
+							}
+							const itemScore = item.changePercent ?? item.indicators?.RSI ?? item.volume_ratio ?? null;
+
+							signalOutcomeService.recordSignal({
+								requestId,
+								source: 'market-scanner',
+								symbol: item.symbol,
+								exchange: parsed.exchange,
+								timeframe: parsed.timeframe,
+								setupType: scanResult.scan,
+								score: itemScore,
+								side: itemSide,
+								price: typeof closePrice === 'number' ? closePrice : null,
+								sources: [],
+								tokenUsage: null,
+								processingTimeMs: Date.now() - startTime,
+							}).catch(() => {});
+						}
+					}
+				}
+			}
+
 			return res.status(200).json({
 				success: true,
 				alertText,
