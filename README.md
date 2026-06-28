@@ -21,7 +21,7 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 
 ### Required Variables
 
-- `BOT_TOKEN` - Telegram bot token (from BotFather)
+- `BOT_TOKEN` - Telegram bot token (from BotFather). Required only when `ENABLE_TELEGRAM_BOT=true` and the app is expected to launch Telegraf outside PR previews
 - `TELEGRAM_CHAT_ID` - Telegram chat ID where alerts are sent
 - `ENABLE_TELEGRAM_BOT` - Enable Telegram bot (`true` or `false`)
 
@@ -1038,7 +1038,7 @@ curl -X POST https://your-domain/api/webhook/alert \
 ### Configuration for Multi-Channel
 
 ```bash
-# Telegram (required)
+# Telegram (required only when the Telegram bot is enabled outside PR previews)
 ENABLE_TELEGRAM_BOT=true
 BOT_TOKEN=your_telegram_token
 TELEGRAM_CHAT_ID=-1001234567890
@@ -1058,9 +1058,14 @@ GEMINI_API_KEY=your_google_ai_studio_api_key
 
 **Both channels failing**:
 1. Verify network connectivity from server
-2. Check BOT_TOKEN validity (Telegram)
+2. If `ENABLE_TELEGRAM_BOT=true`, check BOT_TOKEN validity (Telegram)
 3. Check GreenAPI credentials and account status (WhatsApp)
 4. Review application logs for detailed error messages
+
+**API-only or WhatsApp-only startup**:
+1. Set `ENABLE_TELEGRAM_BOT=false`
+2. Omit `BOT_TOKEN` if Telegram is intentionally disabled
+3. Keep using `/api` routes and non-Telegram channels normally
 
 **WhatsApp not sending**:
 1. Verify `ENABLE_WHATSAPP_ALERTS=true`
