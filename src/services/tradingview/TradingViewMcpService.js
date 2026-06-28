@@ -128,8 +128,33 @@ class TradingViewMcpService {
 			}
 		}
 
+		// Confluence enrichment: optional call to combined_analysis for broader context
+		// Gated by ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT=true (fail-open: errors do not block delivery)
+		let confluenceAnalysis = null;
+		if (process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT === 'true') {
+			const confluenceTimeoutMs = Math.min(8000, Math.max(2000, (budgetMs || 12000) / 2));
+			const confluenceController = new AbortController();
+			const confluenceTimeoutId = setTimeout(() => {
+				confluenceController.abort(new Error(`TradingView MCP confluence timeout after ${confluenceTimeoutMs}ms`));
+			}, confluenceTimeoutMs);
+
+			try {
+				confluenceAnalysis = await this.callCombinedAnalysis({
+					symbol,
+					exchange,
+					timeframe,
+					signal: confluenceController.signal,
+				});
+				console.debug(`[TradingViewMcpService] Confluence analysis fetched for ${symbol}`);
+			} catch (error) {
+				this.logger.warn(`[TradingViewMcpService] Confluence enrichment failed for ${symbol} (fail-open): ${error.message}`);
+			} finally {
+				clearTimeout(confluenceTimeoutId);
+			}
+		}
+
 		cleanBudget();
-		return this._toEnrichedAlert(parsedSignal.rawText || '', { symbol, exchange, timeframe, side: parsedSignal.side }, result.analysis, volumeAnalysis);
+		return this._toEnrichedAlert(parsedSignal.rawText || '', { symbol, exchange, timeframe, side: parsedSignal.side }, result.analysis, volumeAnalysis, confluenceAnalysis);
 	}
 
 	async callCoinAnalysis({ symbol, exchange, timeframe, signal }) {
@@ -491,7 +516,7 @@ class TradingViewMcpService {
 		return parsedPayloads[0];
 	}
 
-	_toEnrichedAlert(originalText, signal, analysis = {}, volumeAnalysis = null) {
+	_toEnrichedAlert(originalText, signal, analysis = {}, volumeAnalysis = null, confluenceAnalysis = null) {
 		const { side, symbol, exchange, timeframe } = signal;
 		const sideLabel = side === 'SELL' ? 'VENTA' : 'COMPRA';
 		const sideSentiment = side === 'SELL' ? -0.55 : 0.55;
@@ -559,6 +584,20 @@ class TradingViewMcpService {
 			}
 		}
 
+		// Confluence insight: append summary line when combined_analysis is available
+		if (confluenceAnalysis) {
+			const confSentiment = confluenceAnalysis.overall_sentiment || confluenceAnalysis.market_sentiment?.overall_rating;
+			const confBias = confluenceAnalysis.market_structure?.trend || confluenceAnalysis.timeframe_context?.bias;
+			if (confSentiment !== undefined || confBias) {
+				const confParts = [];
+				if (confBias) confParts.push(`Confluencia: ${confBias}`);
+				if (typeof confSentiment === 'number') confParts.push(`rating ${confSentiment}`);
+				if (confParts.length > 0) {
+					insights.push(confParts.join(' · '));
+				}
+			}
+		}
+
 		return {
 			original_text: originalText,
 			sentiment,
@@ -571,6 +610,7 @@ class TradingViewMcpService {
 			sources: [],
 			truncated: false,
 			extraText: '*Grounding*: `tradingview-mcp`',
+			confluenceData: confluenceAnalysis || null,
 		};
 	}
 

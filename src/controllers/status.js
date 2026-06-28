@@ -268,12 +268,14 @@ function getStatus() {
 			geminiGrounding: geminiGroundingEnabled,
 			newsMonitor: newsMonitorEnabled,
 			tradingViewMcpEnrichment: tradingViewMcpEnrichmentEnabled,
+			tradingViewConfluenceEnrichment: isEnabled(process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT),
 			firestoreAlertStorage: firestoreEnabled,
 			sentryMonitoring: sentryEnabled,
 			langfusePrompts: langfusePromptsEnabled,
 			marketScanner: marketScannerEnabled,
 			binancePriceCheck: binancePriceCheckEnabled,
 			llmAlertEnrichment: llmAlertEnrichmentEnabled,
+			signalOutcomeTracking: isEnabled(process.env.ENABLE_SIGNAL_OUTCOME_TRACKING),
 		},
 		deliveryChannels: {
 			telegram: {
