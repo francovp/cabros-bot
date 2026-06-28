@@ -209,7 +209,11 @@ function buildReportRow({ input = {}, analysis = {}, multiTimeframe }) {
 	const trend = getTrend(price, sma20);
 	const macdDirection = getMacdDirection(macd, macdSignal);
 	const volume = getVolumeLabel(techData);
-	const stopLoss = getStopLoss(price, atr, bollinger, currentBollinger);
+	const stopLossMeta = getStopLossMeta(price, atr, bollinger, currentBollinger);
+	const stopLoss = stopLossMeta.value;
+	const takeProfit = getTakeProfitTarget(price, atr, bollinger, currentBollinger, techData);
+	const invalidationDistance = getInvalidationDistance(price, stopLoss, stopLossMeta.source);
+	const riskRewardRatio = getRiskRewardRatio(price, stopLoss, takeProfit);
 
 	const sentiment = analysis.sentiment || null;
 	const confluence = analysis.confluence || null;
@@ -225,6 +229,9 @@ function buildReportRow({ input = {}, analysis = {}, multiTimeframe }) {
 		volume,
 		atr,
 		stopLoss,
+		takeProfit,
+		invalidationDistance,
+		riskRewardRatio,
 		suggestion: getSuggestion({ rsi, trend, macdDirection }),
 		multiTimeframe,
 		sentiment,
@@ -244,8 +251,11 @@ function formatGroupRows(rows) {
 			`- *Tendencia (SMA20):* ${row.trend} | *MACD:* ${row.macdDirection}`,
 			formatVolumeAtrLine(row),
 			`- *Stop Loss sugerido:* ${formatCurrency(row.stopLoss)}`,
+			formatTargetLine(row),
+			formatRiskRewardLine(row),
+			formatInvalidationLine(row),
 			`- *Sugerencia:* ${row.suggestion}`,
-		];
+		].filter(Boolean);
 
 		if (row.sentiment) {
 			const sentText = formatRedditSentiment(row.sentiment);
@@ -373,7 +383,7 @@ function formatMultiTimeframeSection(mtf) {
 	});
 
 	return [
-		`- *Alineación Multi-TF:*`,
+		'- *Alineación Multi-TF:*',
 		...tfLines,
 		`  • *Confluencia:* ${alignment.status || 'N/A'} (Confianza: ${alignment.confidence || 'N/A'})`,
 		`  • *Recomendación:* ${rec.action || 'N/A'}`,
@@ -490,21 +500,106 @@ function getVolumeLabel(analysis) {
 	return 'Normal';
 }
 
-function getStopLoss(price, atr, bollinger, currentBollinger = {}) {
+function getStopLossMeta(price, atr, bollinger, currentBollinger = {}) {
 	if (price === null) {
-		return null;
+		return { value: null, source: 'missing' };
 	}
 
 	if (atr !== null) {
-		return price - (atr * 1.5);
+		return { value: price - (atr * 1.5), source: 'atr' };
 	}
 
 	const bbLower = numberOrNull(bollinger.bb_lower ?? currentBollinger.lower);
 	if (bbLower !== null) {
-		return bbLower;
+		return { value: bbLower, source: 'bollinger' };
 	}
 
-	return price * 0.95;
+	return { value: price * 0.95, source: 'fallback' };
+}
+
+function getTakeProfitTarget(price, atr, bollinger, currentBollinger = {}, techData = {}) {
+	if (price === null) {
+		return null;
+	}
+
+	const nearestResistance = numberOrNull(
+		techData.support_resistance?.nearest_resistance
+		?? techData.support_resistance?.resistance_1
+		?? techData.resistance?.nearest,
+	);
+	if (nearestResistance !== null && nearestResistance > price) {
+		return nearestResistance;
+	}
+
+	const bbUpper = numberOrNull(bollinger.bb_upper ?? currentBollinger.upper);
+	if (bbUpper !== null && bbUpper > price) {
+		return bbUpper;
+	}
+
+	if (atr !== null) {
+		return price + (atr * 3);
+	}
+
+	return null;
+}
+
+function getInvalidationDistance(price, stopLoss, stopLossSource) {
+	if (price === null || stopLoss === null || stopLossSource === 'fallback') {
+		return null;
+	}
+
+	return Math.max(price - stopLoss, 0);
+}
+
+function getRiskRewardRatio(price, stopLoss, takeProfit) {
+	if (price === null || stopLoss === null || takeProfit === null) {
+		return null;
+	}
+
+	const risk = price - stopLoss;
+	const reward = takeProfit - price;
+
+	if (risk <= 0 || reward <= 0) {
+		return null;
+	}
+
+	return reward / risk;
+}
+
+function formatTargetLine(row) {
+	if (row.takeProfit === null) {
+		return null;
+	}
+
+	return `- *Target sugerido:* ${formatCurrency(row.takeProfit)}`;
+}
+
+function formatRiskRewardLine(row) {
+	if (row.riskRewardRatio === null) {
+		return null;
+	}
+
+	return `- *Risk/Reward:* ${formatNumber(row.riskRewardRatio, 2)}x · Setup ${classifyRiskReward(row.riskRewardRatio)}`;
+}
+
+function formatInvalidationLine(row) {
+	if (row.invalidationDistance === null) {
+		return null;
+	}
+
+	return `- *Invalidación:* ${formatCurrency(row.invalidationDistance)} por debajo del precio actual`;
+}
+
+function classifyRiskReward(ratio) {
+	if (ratio >= 2) {
+		return 'favorable';
+	}
+
+	if (ratio >= 1) {
+		return 'neutral';
+	}
+
+	return 'poor';
 }
 
 function getSuggestion({ rsi, trend, macdDirection }) {

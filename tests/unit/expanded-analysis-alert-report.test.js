@@ -169,6 +169,112 @@ describe('Expanded Analysis Alert report', () => {
 		expect(report).toContain('- *Stop Loss sugerido:* $194.22');
 	});
 
+	it('renders target, risk reward, and invalidation for deterministic ATR-based setups', () => {
+		const report = buildExpandedAnalysisAlertReport([
+			{
+				input: { raw: 'NASDAQ:AMD', exchange: 'NASDAQ', symbol: 'AMD' },
+				analysis: {
+					price_data: {
+						current_price: 100,
+						change_percent: 2.5,
+					},
+					technical_indicators: {
+						rsi: 54.2,
+						sma20: 98,
+						macd: 1.2,
+						macd_signal: 0.8,
+						atr: 4,
+					},
+				},
+			},
+		], { now: new Date('2026-05-22T12:00:00Z') });
+
+		expect(report).toContain('- *Target sugerido:* $112.00');
+		expect(report).toContain('- *Risk/Reward:* 2.00x · Setup favorable');
+		expect(report).toContain('- *Invalidación:* $6.00 por debajo del precio actual');
+	});
+
+	it('renders target, risk reward, and invalidation for deterministic Bollinger-based setups', () => {
+		const report = buildExpandedAnalysisAlertReport([
+			{
+				input: { raw: 'NASDAQ:NVDA', exchange: 'NASDAQ', symbol: 'NVDA' },
+				analysis: {
+					price_data: {
+						current_price: 100,
+						change_percent: 2.5,
+					},
+					technical_indicators: {
+						rsi: 54.2,
+						sma20: 98,
+						macd: 1.2,
+						macd_signal: 0.8,
+						atr: 4,
+					},
+					bollinger_bands: {
+						upper: 112,
+						lower: 94,
+					},
+				},
+			},
+		], { now: new Date('2026-05-22T12:00:00Z') });
+
+		expect(report).toContain('- *Target sugerido:* $112.00');
+		expect(report).toContain('- *Risk/Reward:* 2.00x · Setup favorable');
+		expect(report).toContain('- *Invalidación:* $6.00 por debajo del precio actual');
+	});
+
+	it('prefers nearest resistance over Bollinger and ATR targets', () => {
+		const report = buildExpandedAnalysisAlertReport([
+			{
+				input: { raw: 'NASDAQ:AAPL', exchange: 'NASDAQ', symbol: 'AAPL' },
+				analysis: {
+					price_data: {
+						current_price: 200,
+						change_percent: 1.2,
+					},
+					technical_indicators: {
+						rsi: 58,
+						sma20: 198,
+						macd: 1.5,
+						macd_signal: 1.2,
+						atr: 5,
+					},
+					bollinger_bands: {
+						upper: 210,
+						lower: 190,
+					},
+					support_resistance: {
+						nearest_resistance: 215,
+					},
+				},
+			},
+		], { now: new Date('2026-05-22T12:00:00Z') });
+
+		expect(report).toContain('- *Target sugerido:* $215.00');
+		expect(report).toContain('- *Risk/Reward:* 2.00x · Setup favorable');
+	});
+
+	it('omits target and risk reward when the report lacks enough data', () => {
+		const report = buildExpandedAnalysisAlertReport([
+			{
+				input: { raw: 'NASDAQ:TSLA', exchange: 'NASDAQ', symbol: 'TSLA' },
+				analysis: {
+					price_data: {
+						current_price: 250,
+						change_percent: -0.4,
+					},
+					technical_indicators: {
+						rsi: 49.5,
+					},
+				},
+			},
+		], { now: new Date('2026-05-22T12:00:00Z') });
+
+		expect(report).not.toContain('Target sugerido');
+		expect(report).not.toContain('Risk/Reward');
+		expect(report).not.toContain('Invalidación');
+	});
+
 	describe('includeMultiTimeframe updates', () => {
 		it('parses includeMultiTimeframe and include_multi_timeframe correctly', () => {
 			const parsed1 = parseExpandedAnalysisAlertRequest({
