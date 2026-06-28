@@ -10,13 +10,16 @@ Extends `POST /api/webhook/alert?useTradingViewData=true` with an optional confl
 
 - After the existing `coin_analysis` + optional `volume_confirmation_analysis` calls, an additional optional `combined_analysis` call is made when `ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT=true`
 - Fail-open: MCP errors (timeout, network, invalid payload) are caught and logged; alert delivery is **never blocked**
+- **Budget-aware**: the confluence call is wired to **both** its own per-call timeout AND the overall `budgetController` via `AbortSignal.any()`, so an exhausted enrichment budget cancels it immediately without waiting for a second timeout
+- The call is skipped entirely if the budget has already been consumed (`budgetController.signal.aborted`)
 - Confluence timeout is bounded: `min(8000, max(2000, budget / 2))` ms to stay within the overall enrichment budget
 - Logging: `debug` on success, `warn` on failure (consistent with existing volume confirmation pattern)
 
 ### 📊 Confluence data in enriched alert result (`_toEnrichedAlert()`)
 
 - Signature extended with optional `confluenceAnalysis` param (default `null` — fully backward-compatible)
-- When confluence data is available, a `Confluencia: <bias> · rating <N>` insight line is appended to the `insights` array
+- When confluence data is available, reads from `confluenceAnalysis.confluence` sub-object using the established MCP payload contract (`recommendation`, `confidence`, `signals_agree`) — same shape as used in `expandedAnalysisAlertReport.js`
+- Formats a `Confluencia: <rec> · Señales Alineadas ✅ · Confianza: <N>` insight line and appends it to the `insights` array
 - Raw `confluenceData` field added to the returned object for downstream formatters and storage
 
 ### 📋 Status visibility (`src/controllers/status.js`)

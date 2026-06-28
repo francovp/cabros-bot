@@ -129,21 +129,26 @@ class TradingViewMcpService {
 		}
 
 		// Confluence enrichment: optional call to combined_analysis for broader context
-		// Gated by ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT=true (fail-open: errors do not block delivery)
+		// Gated by ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT=true (fail-open: errors do not block delivery).
+		// The confluence call is wired to BOTH its own per-call timeout AND the overall budget signal
+		// (via AbortSignal.any) so an exhausted enrichment budget cancels it immediately.
 		let confluenceAnalysis = null;
-		if (process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT === 'true') {
+		if (process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT === 'true' && !budgetController.signal.aborted) {
 			const confluenceTimeoutMs = Math.min(8000, Math.max(2000, (budgetMs || 12000) / 2));
 			const confluenceController = new AbortController();
 			const confluenceTimeoutId = setTimeout(() => {
 				confluenceController.abort(new Error(`TradingView MCP confluence timeout after ${confluenceTimeoutMs}ms`));
 			}, confluenceTimeoutMs);
 
+			// Respect both the per-call timeout and the overall enrichment budget
+			const combinedSignal = AbortSignal.any([confluenceController.signal, budgetController.signal]);
+
 			try {
 				confluenceAnalysis = await this.callCombinedAnalysis({
 					symbol,
 					exchange,
 					timeframe,
-					signal: confluenceController.signal,
+					signal: combinedSignal,
 				});
 				console.debug(`[TradingViewMcpService] Confluence analysis fetched for ${symbol}`);
 			} catch (error) {
@@ -584,14 +589,19 @@ class TradingViewMcpService {
 			}
 		}
 
-		// Confluence insight: append summary line when combined_analysis is available
+		// Confluence insight: append summary line using the .confluence sub-object from combined_analysis.
+		// The MCP payload shape (established in expandedAnalysisAlertReport.js) is:
+		//   confluenceAnalysis.confluence = { recommendation, confidence, signals_agree }
 		if (confluenceAnalysis) {
-			const confSentiment = confluenceAnalysis.overall_sentiment || confluenceAnalysis.market_sentiment?.overall_rating;
-			const confBias = confluenceAnalysis.market_structure?.trend || confluenceAnalysis.timeframe_context?.bias;
-			if (confSentiment !== undefined || confBias) {
+			const conf = confluenceAnalysis.confluence;
+			if (conf) {
+				const rec = conf.recommendation || conf.action || null;
+				const confidence = conf.confidence || null;
+				const agree = conf.signals_agree === true || String(conf.signals_agree).toLowerCase() === 'yes';
 				const confParts = [];
-				if (confBias) confParts.push(`Confluencia: ${confBias}`);
-				if (typeof confSentiment === 'number') confParts.push(`rating ${confSentiment}`);
+				if (rec) confParts.push(`Confluencia: ${rec}`);
+				if (agree) confParts.push('Señales Alineadas ✅');
+				if (confidence) confParts.push(`Confianza: ${confidence}`);
 				if (confParts.length > 0) {
 					insights.push(confParts.join(' · '));
 				}
