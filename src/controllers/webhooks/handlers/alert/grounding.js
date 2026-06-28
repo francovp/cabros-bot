@@ -43,6 +43,22 @@ function buildTechnicalLevels(levels = {}) {
 	return { supports, resistances };
 }
 
+function extractPriorityMcpInsights(mcp = {}) {
+	if (!mcp.confluenceData || !Array.isArray(mcp.insights)) {
+		return [];
+	}
+
+	return mcp.insights.filter(insight => (
+		typeof insight === 'string'
+		&& (insight.startsWith('Confluencia:') || insight.startsWith('Confluencia contradictoria:'))
+	));
+}
+
+function hasContradictoryConfluenceInsight(mcp = {}) {
+	return Array.isArray(mcp.insights)
+		&& mcp.insights.some(insight => typeof insight === 'string' && insight.startsWith('Confluencia contradictoria:'));
+}
+
 function mergeEnrichmentData(text, geminiEnriched, mcpEnriched) {
 	const gemini = geminiEnriched || {};
 	const mcp = mcpEnriched || {};
@@ -56,22 +72,33 @@ function mergeEnrichmentData(text, geminiEnriched, mcpEnriched) {
 
 	const geminiScore = typeof gemini.sentiment_score === 'number' ? gemini.sentiment_score : null;
 	const mcpScore = typeof mcp.sentiment_score === 'number' ? mcp.sentiment_score : null;
+	const useMcpSentiment = hasContradictoryConfluenceInsight(mcp);
 
 	const geminiBackticked = extractBacktickedValues(gemini.extraText);
 	const modelName = geminiBackticked[0] || GROUNDING_MODEL_NAME;
 	const groundingFromGemini = geminiBackticked[1] || GROUNDING_MODEL_NAME;
 	const groundingProviders = mergeUnique([groundingFromGemini], ['tradingview-mcp'], 8);
 	const extraText = '*Model used*: ' + '`' + `${modelName}` + '`' + '\n*Grounding*: ' + '`' + `${groundingProviders.join('`, `')}` + '`';
+	const priorityMcpInsights = extractPriorityMcpInsights(mcp);
+	const remainingMcpInsights = Array.isArray(mcp.insights)
+		? mcp.insights.filter(insight => !priorityMcpInsights.includes(insight))
+		: [];
+	const insights = mergeUnique(
+		priorityMcpInsights,
+		mergeUnique(gemini.insights || [], remainingMcpInsights),
+	);
 
 	return {
 		original_text: text,
-		sentiment: gemini.sentiment || mcp.sentiment || 'NEUTRAL',
-		sentiment_score: geminiScore !== null ? geminiScore : (mcpScore !== null ? mcpScore : 0),
-		insights: mergeUnique(gemini.insights || [], mcp.insights || []),
+		sentiment: useMcpSentiment ? (mcp.sentiment || 'NEUTRAL') : (gemini.sentiment || mcp.sentiment || 'NEUTRAL'),
+		sentiment_score: useMcpSentiment && mcpScore !== null ? mcpScore : (geminiScore !== null ? geminiScore : (mcpScore !== null ? mcpScore : 0)),
+		insights,
 		...(technicalLevels ? { technical_levels: technicalLevels } : {}),
 		sources: Array.isArray(gemini.sources) ? gemini.sources : [],
 		truncated: !!(gemini.truncated || mcp.truncated),
 		extraText,
+		confluenceData: mcp.confluenceData || null,
+		multiTimeframeData: mcp.multiTimeframeData || null,
 	};
 }
 

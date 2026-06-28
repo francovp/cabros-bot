@@ -170,6 +170,37 @@
 					}
 				},
 				{
+					"name": "POST Send Alert Dry Run (TradingView confluence)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json", "type": "text" },
+							{ "key": "x-api-key", "value": "{{apiKey}}", "type": "text" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"text\": \"BTCUSDT(240) pasó a señal de COMPRA\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/webhook/alert?useTradingViewData=true&dryRun=true",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "webhook", "alert"],
+							"query": [
+								{ "key": "useTradingViewData", "value": "true" },
+								{ "key": "dryRun", "value": "true" }
+							]
+						}
+					},
+					"response": [
+						{
+							"name": "Dry run with confluence metadata",
+							"status": "OK",
+							"code": 200,
+							"body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"enriched\": true,\n  \"payload\": {\n    \"text\": \"BTCUSDT(240) pasó a señal de COMPRA\",\n    \"enrichedData\": {\n      \"sentiment\": \"NEUTRAL\",\n      \"insights\": [\"Confluencia contradictoria: SELL - Senales Mixtas - Confianza: 81\"],\n      \"confluenceData\": { \"confluence\": { \"recommendation\": \"SELL\", \"confidence\": 81, \"signals_agree\": false } },\n      \"multiTimeframeData\": { \"alignment\": \"bearish\" }\n    }\n  }\n}"
+						}
+					]
+				},
+				{
 					"name": "POST Expanded Analysis Alert",
 					"request": {
 						"method": "POST",
