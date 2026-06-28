@@ -1007,3 +1007,23 @@ This feature introduces an optional persistent/shared backend (Firestore) for th
 - `src/controllers/status.js` for deduplication mode reporting.
 - `tests/unit/news-monitor-persistent-dedup.test.js` for unit coverage of the persistent cache.
 - `tests/integration/status-endpoint.test.js` for integration status tests.
+
+## OpenAI SDK using Cloudflare AI Gateway (CB-46 / Issue #137)
+
+This feature introduces integration of the official `openai` SDK to interact with LLMs routed through Cloudflare AI Gateway.
+
+**Core Components**:
+- `src/services/inference/cloudflareAiClient.js` — OpenAI SDK wrapper that initializes `new OpenAI()` with `CF_AIG_TOKEN` as the API key and a custom `baseURL` targeting Cloudflare AI Gateway compatibility endpoints.
+- `src/services/grounding/genaiClient.js` — Normalizes client provider routing to delegate to `CloudflareAiClient` when `MODEL_PROVIDER=cloudflare` is specified.
+- `src/services/grounding/config.js` — Exports Cloudflare AI Gateway variables (`CF_AIG_TOKEN`, `CF_AIG_BASE_URL`, `CF_AIG_MODEL`).
+- `src/controllers/status.js` — Exposes the configuration status for `cloudflareAig` and `newsMonitorLlm` via `/api/status`, correctly supporting fallback to the default model `google-ai-studio/gemini-2.5-flash` when the `CF_AIG_MODEL` env var is omitted.
+
+**Configuration**:
+- `ENABLE_CLOUDFLARE_AIG` — Set to `'true'` to enable/expose the integration.
+- `CF_AIG_TOKEN` — Cloudflare API Gateway access token.
+- `CF_AIG_BASE_URL` — Cloudflare gateway compatibility base URL.
+- `CF_AIG_MODEL` — The gateway target model (e.g., `google-ai-studio/gemini-2.5-flash`). Falls back to `google-ai-studio/gemini-2.5-flash` for status reporting and runtime configuration checks.
+
+**Testing**:
+- Unit coverage in `tests/unit/cloudflare-client.test.js`.
+- Integration coverage in `tests/integration/status-endpoint.test.js`.
