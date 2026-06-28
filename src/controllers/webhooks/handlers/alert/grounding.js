@@ -43,6 +43,14 @@ function buildTechnicalLevels(levels = {}) {
 	return { supports, resistances };
 }
 
+function extractPriorityMcpInsights(mcp = {}) {
+	if (!mcp.confluenceData || !Array.isArray(mcp.insights)) {
+		return [];
+	}
+
+	return mcp.insights.filter(insight => typeof insight === 'string' && insight.startsWith('Confluencia:'));
+}
+
 function mergeEnrichmentData(text, geminiEnriched, mcpEnriched) {
 	const gemini = geminiEnriched || {};
 	const mcp = mcpEnriched || {};
@@ -62,12 +70,20 @@ function mergeEnrichmentData(text, geminiEnriched, mcpEnriched) {
 	const groundingFromGemini = geminiBackticked[1] || GROUNDING_MODEL_NAME;
 	const groundingProviders = mergeUnique([groundingFromGemini], ['tradingview-mcp'], 8);
 	const extraText = '*Model used*: ' + '`' + `${modelName}` + '`' + '\n*Grounding*: ' + '`' + `${groundingProviders.join('`, `')}` + '`';
+	const priorityMcpInsights = extractPriorityMcpInsights(mcp);
+	const remainingMcpInsights = Array.isArray(mcp.insights)
+		? mcp.insights.filter(insight => !priorityMcpInsights.includes(insight))
+		: [];
+	const insights = mergeUnique(
+		priorityMcpInsights,
+		mergeUnique(gemini.insights || [], remainingMcpInsights),
+	);
 
 	return {
 		original_text: text,
 		sentiment: gemini.sentiment || mcp.sentiment || 'NEUTRAL',
 		sentiment_score: geminiScore !== null ? geminiScore : (mcpScore !== null ? mcpScore : 0),
-		insights: mergeUnique(gemini.insights || [], mcp.insights || []),
+		insights,
 		...(technicalLevels ? { technical_levels: technicalLevels } : {}),
 		sources: Array.isArray(gemini.sources) ? gemini.sources : [],
 		truncated: !!(gemini.truncated || mcp.truncated),

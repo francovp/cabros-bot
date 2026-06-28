@@ -199,6 +199,49 @@ describe('Alert Handler', () => {
 		process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
 	});
 
+	it('should prioritize TradingView confluence insight when Gemini already fills the insight cap', async () => {
+		const previousGeminiFlag = process.env.ENABLE_GEMINI_GROUNDING;
+		process.env.ENABLE_GEMINI_GROUNDING = 'true';
+
+		tradingViewMcpService.isEnabled.mockReturnValue(true);
+		tradingViewMcpService.enrichFromAlertText.mockResolvedValue({
+			original_text: 'BTCUSDT(240) pasó a señal de COMPRA',
+			sentiment: 'BULLISH',
+			sentiment_score: 0.7,
+			insights: ['Confluencia: ALINEADA · Señales Alineadas YES · Confianza: 82', 'MCP secondary insight'],
+			confluenceData: { recommendation: 'ALINEADA', confidence: 82, signals_agree: true },
+			sources: [],
+			truncated: false,
+		});
+
+		groundAlert.mockResolvedValue({
+			sentiment: 'BULLISH',
+			sentiment_score: 0.8,
+			insights: [
+				'Gemini insight 1',
+				'Gemini insight 2',
+				'Gemini insight 3',
+				'Gemini insight 4',
+				'Gemini insight 5',
+				'Gemini insight 6',
+			],
+			sources: [{ title: 'Source 1', url: 'https://example.com' }],
+			truncated: false,
+			modelUsed: 'gemini-2.5-flash',
+		});
+
+		const result = await enrichAlert({ text: 'BTCUSDT(240) pasó a señal de COMPRA' }, { useTradingViewData: true });
+
+		expect(result.insights).toHaveLength(6);
+		expect(result.insights[0]).toBe('Confluencia: ALINEADA · Señales Alineadas YES · Confianza: 82');
+		expect(result.insights).toContain('Gemini insight 1');
+		expect(result.insights).toContain('Gemini insight 5');
+		expect(result.insights).not.toContain('Gemini insight 6');
+		expect(result.insights).not.toContain('MCP secondary insight');
+
+		process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
+	});
+
 	it('should fallback to MCP enrichment when Gemini fails', async () => {
 		const previousGeminiFlag = process.env.ENABLE_GEMINI_GROUNDING;
 		process.env.ENABLE_GEMINI_GROUNDING = 'true';
