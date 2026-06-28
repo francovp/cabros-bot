@@ -133,6 +133,7 @@ class TradingViewMcpService {
 		// The confluence call is wired to BOTH its own per-call timeout AND the overall budget signal
 		// (via AbortSignal.any) so an exhausted enrichment budget cancels it immediately.
 		let confluenceAnalysis = null;
+		let multiTimeframeAnalysis = null;
 		if (process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT === 'true' && !budgetController.signal.aborted) {
 			const confluenceTimeoutMs = Math.min(8000, Math.max(2000, (budgetMs || 12000) / 2));
 			const confluenceController = new AbortController();
@@ -151,6 +152,14 @@ class TradingViewMcpService {
 					signal: combinedSignal,
 				});
 				console.debug(`[TradingViewMcpService] Confluence analysis fetched for ${symbol}`);
+				if (process.env.ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME === 'true' && !budgetController.signal.aborted) {
+					multiTimeframeAnalysis = await this.callMultiTimeframeAnalysis({
+						symbol,
+						exchange,
+						signal: combinedSignal,
+					});
+					console.debug(`[TradingViewMcpService] Multi-timeframe confluence analysis fetched for ${symbol}`);
+				}
 			} catch (error) {
 				this.logger.warn(`[TradingViewMcpService] Confluence enrichment failed for ${symbol} (fail-open): ${error.message}`);
 			} finally {
@@ -159,7 +168,7 @@ class TradingViewMcpService {
 		}
 
 		cleanBudget();
-		return this._toEnrichedAlert(parsedSignal.rawText || '', { symbol, exchange, timeframe, side: parsedSignal.side }, result.analysis, volumeAnalysis, confluenceAnalysis);
+		return this._toEnrichedAlert(parsedSignal.rawText || '', { symbol, exchange, timeframe, side: parsedSignal.side }, result.analysis, volumeAnalysis, confluenceAnalysis, multiTimeframeAnalysis);
 	}
 
 	async callCoinAnalysis({ symbol, exchange, timeframe, signal }) {
@@ -521,7 +530,7 @@ class TradingViewMcpService {
 		return parsedPayloads[0];
 	}
 
-	_toEnrichedAlert(originalText, signal, analysis = {}, volumeAnalysis = null, confluenceAnalysis = null) {
+	_toEnrichedAlert(originalText, signal, analysis = {}, volumeAnalysis = null, confluenceAnalysis = null, multiTimeframeAnalysis = null) {
 		const { side, symbol, exchange, timeframe } = signal;
 		const sideLabel = side === 'SELL' ? 'VENTA' : 'COMPRA';
 		const sideSentiment = side === 'SELL' ? -0.55 : 0.55;
@@ -542,8 +551,7 @@ class TradingViewMcpService {
 			legacyBollinger.rating,
 		], 0);
 		const ratingBias = Math.max(-0.35, Math.min(0.35, rating / 10));
-		const sentimentScore = Math.max(-1, Math.min(1, sideSentiment + ratingBias));
-		const sentiment = sentimentScore > 0.15 ? 'BULLISH' : sentimentScore < -0.15 ? 'BEARISH' : 'NEUTRAL';
+		let sentimentScore = Math.max(-1, Math.min(1, sideSentiment + ratingBias));
 
 		const rsiValue = this._firstNumber([rsiData.value, indicators.rsi], null);
 		const adxValue = this._firstNumber([adxData.value, indicators.adx], null);
@@ -598,15 +606,29 @@ class TradingViewMcpService {
 				const rec = conf.recommendation || conf.action || null;
 				const confidence = conf.confidence || null;
 				const agree = conf.signals_agree === true || String(conf.signals_agree).toLowerCase() === 'yes';
+				const contradictory = this._isContradictoryConfluence(side, rec, conf.signals_agree);
 				const confParts = [];
-				if (rec) confParts.push(`Confluencia: ${rec}`);
+				if (rec) confParts.push(`${contradictory ? 'Confluencia contradictoria' : 'Confluencia'}: ${rec}`);
 				if (agree) confParts.push('Señales Alineadas ✅');
+				if (contradictory) confParts.push('Señales Mixtas ⚠️');
 				if (confidence) confParts.push(`Confianza: ${confidence}`);
 				if (confParts.length > 0) {
 					insights.push(confParts.join(' · '));
 				}
+				if (contradictory) {
+					sentimentScore = Math.max(-0.15, Math.min(0.15, sentimentScore * 0.15));
+				}
 			}
 		}
+
+		if (multiTimeframeAnalysis) {
+			const alignment = multiTimeframeAnalysis.alignment || multiTimeframeAnalysis.recommendation || multiTimeframeAnalysis.trend || null;
+			if (alignment) {
+				insights.push(`Multi-timeframe: ${alignment}`);
+			}
+		}
+
+		const sentiment = sentimentScore > 0.15 ? 'BULLISH' : sentimentScore < -0.15 ? 'BEARISH' : 'NEUTRAL';
 
 		return {
 			original_text: originalText,
@@ -621,7 +643,25 @@ class TradingViewMcpService {
 			truncated: false,
 			extraText: '*Grounding*: `tradingview-mcp`',
 			confluenceData: confluenceAnalysis || null,
+			multiTimeframeData: multiTimeframeAnalysis || null,
 		};
+	}
+
+	_isContradictoryConfluence(side, recommendation, signalsAgree) {
+		const rec = String(recommendation || '').toUpperCase();
+		const disagree = signalsAgree === false || ['NO', 'FALSE', '0'].includes(String(signalsAgree).toUpperCase());
+		const buyRec = rec.includes('BUY') || rec.includes('COMPRA') || rec.includes('LONG');
+		const sellRec = rec.includes('SELL') || rec.includes('VENTA') || rec.includes('SHORT');
+
+		if (side === 'BUY' && sellRec) {
+			return true;
+		}
+
+		if (side === 'SELL' && buyRec) {
+			return true;
+		}
+
+		return disagree;
 	}
 
 	_formatRatio(value) {
