@@ -616,6 +616,7 @@ describe('SentryService', () => {
 			expect(FEATURE_NAMES['news-monitor']).toBe('news-monitor');
 			expect(FEATURE_NAMES['telegram']).toBe('telegram-alerts');
 			expect(FEATURE_NAMES['whatsapp']).toBe('whatsapp-alerts');
+			expect(FEATURE_NAMES['discord']).toBe('discord-alerts');
 			expect(FEATURE_NAMES['grounding']).toBe('gemini-grounding');
 			expect(FEATURE_NAMES['news-enrichment']).toBe('news-enrichment');
 			expect(FEATURE_NAMES['process']).toBe('process');

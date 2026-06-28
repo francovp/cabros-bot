@@ -94,6 +94,41 @@ describe('Alert TradingView MCP Integration', () => {
 		expect(mockTelegramSendMessage).toHaveBeenCalledTimes(1);
 	});
 
+	it('returns confluence metadata in TradingView dry-run responses without delivery', async () => {
+		tradingViewMcpService.enrichFromAlertText.mockResolvedValue({
+			original_text: 'BTCUSDT(240) pasó a señal de COMPRA',
+			sentiment: 'NEUTRAL',
+			sentiment_score: 0.1,
+			insights: ['Confluencia contradictoria: SELL - Senales Mixtas - Confianza: 81'],
+			confluenceData: {
+				confluence: {
+					recommendation: 'SELL',
+					confidence: 81,
+					signals_agree: false,
+				},
+			},
+			multiTimeframeData: {
+				alignment: 'bearish',
+			},
+			sources: [],
+			truncated: false,
+			extraText: '*Model used*: `tradingview-mcp`',
+		});
+
+		const response = await request(app)
+			.post('/api/webhook/alert?useTradingViewData=true&dryRun=true')
+			.set('x-api-key', 'test-key')
+			.send({ text: 'BTCUSDT(240) pasó a señal de COMPRA' })
+			.expect(200);
+
+		expect(response.body.success).toBe(true);
+		expect(response.body.dryRun).toBe(true);
+		expect(response.body.enriched).toBe(true);
+		expect(response.body.payload.enrichedData.confluenceData.confluence.recommendation).toBe('SELL');
+		expect(response.body.payload.enrichedData.multiTimeframeData.alignment).toBe('bearish');
+		expect(mockTelegramSendMessage).not.toHaveBeenCalled();
+	});
+
 	it('does not use TradingView MCP when query param is missing', async () => {
 		tradingViewMcpService.enrichFromAlertText.mockResolvedValue({
 			original_text: 'BTCUSDT(240) pasó a señal de VENTA',

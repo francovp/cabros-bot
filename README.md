@@ -21,7 +21,7 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 
 ### Required Variables
 
-- `BOT_TOKEN` - Telegram bot token (from BotFather)
+- `BOT_TOKEN` - Telegram bot token (from BotFather). Required only when `ENABLE_TELEGRAM_BOT=true` and the app is expected to launch Telegraf outside PR previews
 - `TELEGRAM_CHAT_ID` - Telegram chat ID where alerts are sent
 - `ENABLE_TELEGRAM_BOT` - Enable Telegram bot (`true` or `false`)
 
@@ -37,6 +37,11 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 - `WHATSAPP_API_URL` - GreenAPI endpoint URL (e.g., `https://7107.api.green-api.com/waInstance7107356806/`)
 - `WHATSAPP_API_KEY` - GreenAPI API key for authentication
 - `WHATSAPP_CHAT_ID` - Destination WhatsApp chat/group ID (format: `120363xxxxx@g.us`)
+
+#### Discord Alerts (Webhook)
+
+- `ENABLE_DISCORD_ALERTS` - Enable Discord alerts (`true` or `false`, default: `false`)
+- `DISCORD_WEBHOOK_URL` - Discord webhook URL (e.g., `https://discord.com/api/webhooks/<id>/<token>`)
 
 #### URL Shortening (004-url-shortening)
 
@@ -68,6 +73,8 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 - `TRADINGVIEW_MCP_DEFAULT_EXCHANGE` - Default exchange when not present in signal (default: `BINANCE`)
 - `TRADINGVIEW_MCP_DEFAULT_TIMEFRAME` - Default timeframe fallback (default: `1D` for `/api/webhook/expanded-analysis-alert`, `1h` for webhook signal enrichment)
 - `ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION` - Enable volume confirmation validation for TradingView alerts (`true` or `false`, default: `false`)
+- `ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT` - Enable optional `combined_analysis` confluence enrichment for TradingView webhook alerts (`true` or `false`, default: `false`)
+- `ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME` - Also call `multi_timeframe_analysis` during confluence enrichment (`true` or `false`, default: `false`)
 - Runtime gate: TradingView MCP data is only used when webhook requests include `?useTradingViewData=true`
 
 #### Firestore Alert Storage
@@ -117,6 +124,7 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 - `SENTRY_SAMPLE_RATE_ERRORS` - Error sample rate from 0.0 to 1.0 (default: `1.0` = 100%)
 - `SENTRY_TRACES_SAMPLE_RATE` - Trace sample rate from 0.0 to 1.0 (leave unset to disable tracing and custom spans)
 - `SENTRY_CONSOLE_LOG_LEVELS` - Comma-separated console levels sent as Sentry Logs (default: `warn,error`; allowed: `debug`, `info`, `warn`, `error`, `log`, `assert`, `trace`)
+- `ENABLE_SENTRY_DEBUG_ROUTE` - Mount `GET /debug-sentry` only for explicit local/manual validation (`true` enables it; default disabled so normal runtime returns `404`)
 - Sentry Logs are enabled automatically when `ENABLE_SENTRY=true`; configured console levels are sent as Sentry Logs.
 
 #### TradingView Market Scanner Alerts
@@ -292,8 +300,10 @@ When `ENABLE_TRADINGVIEW_MCP_ENRICHMENT=true`, webhook alerts matching TradingVi
 1. Webhook receives alert text and the request includes `useTradingViewData=true`.
 2. System detects TradingView signal pattern (`SYMBOL(TF)` + side `VENTA/COMPRA` or `SELL/BUY`).
 3. If TradingView pattern is detected, it queries `coin_analysis` via MCP and uses that output as an **additional real-time technical source**.
-4. Gemini/Brave grounding still runs when enabled, and the final `alert.enriched` merges grounding context + MCP technical data.
-5. If either provider fails, the flow degrades gracefully to the other provider (or original text if none succeed).
+4. If `ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT=true`, it also calls `combined_analysis` inside the same enrichment budget and annotates or downgrades the signal when confluence contradicts the webhook side.
+5. If `ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME=true`, it also calls `multi_timeframe_analysis` and returns the raw multi-timeframe metadata in dry-run/stored enrichment data.
+6. Gemini/Brave grounding still runs when enabled, and the final `alert.enriched` merges grounding context + MCP technical data.
+7. If either provider fails, the flow degrades gracefully to the other provider (or original text if none succeed).
 
 ### Timeframe Mapping
 
@@ -888,7 +898,7 @@ Retrieve a single stored alert by Firestore document ID.
 
 ## Multi-Channel Alerts (002)
 
-The alert webhook system supports simultaneous delivery to multiple channels (Telegram and WhatsApp) with independent retry logic and graceful degradation.
+The alert webhook system supports simultaneous delivery to multiple channels (Telegram, WhatsApp, and Discord) with independent retry logic and graceful degradation.
 
 ### Supported Channels
 
@@ -908,6 +918,14 @@ The alert webhook system supports simultaneous delivery to multiple channels (Te
 - **Message Size**: Automatically truncated to 20,000 characters with "…" suffix if needed
 - **Provider**: GreenAPI (REST API via native fetch)
 
+#### Discord (Optional)
+
+- **Enabled by**: `ENABLE_DISCORD_ALERTS=true` + valid `DISCORD_WEBHOOK_URL`
+- **Format**: Plain Discord webhook content with Markdown-friendly text
+- **Timeout**: ~10 seconds per delivery
+- **Retry**: Single request per delivery
+- **Provider**: Discord webhook execute endpoint via native `fetch`
+
 ### Channel-Specific Formatting
 
 **Telegram (MarkdownV2)**:
@@ -921,6 +939,11 @@ The alert webhook system supports simultaneous delivery to multiple channels (Te
 - Supports bold (`*text*`), italic (`_text_`), strikethrough (`~text~`)
 - Supports code blocks with triple backticks
 - Supports lists with asterisk or hyphen
+
+**Discord**:
+- Sends webhook `content` payloads over native `fetch`
+- Reuses the plain-text/Markdown-friendly formatting path
+- Works with direct routing via `channels: ["discord"]`
 
 ### URL Shortening for WhatsApp
 
@@ -975,6 +998,7 @@ Sources:
 - Response includes per-channel results
 - HTTP 200 OK returned (fail-open pattern)
 - Failures logged at WARN/ERROR level
+- If `channels` is omitted in the generic message webhook, delivery fans out to every enabled channel
 
 **Example - Dual Channel Delivery**:
 
@@ -1037,7 +1061,7 @@ curl -X POST https://your-domain/api/webhook/alert \
 ### Configuration for Multi-Channel
 
 ```bash
-# Telegram (required)
+# Telegram (required only when the Telegram bot is enabled outside PR previews)
 ENABLE_TELEGRAM_BOT=true
 BOT_TOKEN=your_telegram_token
 TELEGRAM_CHAT_ID=-1001234567890
@@ -1048,6 +1072,10 @@ WHATSAPP_API_URL=https://7107.api.green-api.com/waInstance7107356806/
 WHATSAPP_API_KEY=your_greenapi_key
 WHATSAPP_CHAT_ID=120363xxxxx@g.us
 
+# Discord (optional)
+ENABLE_DISCORD_ALERTS=true
+DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/<id>/<token>
+
 # Optional enrichment (applies to all channels)
 ENABLE_GEMINI_GROUNDING=true
 GEMINI_API_KEY=your_google_ai_studio_api_key
@@ -1055,17 +1083,28 @@ GEMINI_API_KEY=your_google_ai_studio_api_key
 
 ### Troubleshooting Multi-Channel Delivery
 
-**Both channels failing**:
+**Multiple channels failing**:
 1. Verify network connectivity from server
-2. Check BOT_TOKEN validity (Telegram)
+2. If `ENABLE_TELEGRAM_BOT=true`, check BOT_TOKEN validity (Telegram)
 3. Check GreenAPI credentials and account status (WhatsApp)
-4. Review application logs for detailed error messages
+4. Verify `DISCORD_WEBHOOK_URL` is still valid and not revoked (Discord)
+5. Review application logs for detailed error messages
+
+**API-only or WhatsApp-only startup**:
+1. Set `ENABLE_TELEGRAM_BOT=false`
+2. Omit `BOT_TOKEN` if Telegram is intentionally disabled
+3. Keep using `/api` routes and non-Telegram channels normally
 
 **WhatsApp not sending**:
 1. Verify `ENABLE_WHATSAPP_ALERTS=true`
 2. Check `WHATSAPP_CHAT_ID` format (should be `120363xxxxx@g.us`)
 3. Verify GreenAPI account is active
 4. Test API directly: `curl -X POST https://api.green-api.com/test`
+
+**Discord not sending**:
+1. Verify `ENABLE_DISCORD_ALERTS=true`
+2. Check `DISCORD_WEBHOOK_URL` format and channel permissions
+3. Confirm the webhook has not been deleted or regenerated in Discord
 
 **Message truncation**:
 - WhatsApp automatically truncates messages > 20,000 characters
@@ -1170,6 +1209,12 @@ SENTRY_CONSOLE_LOG_LEVELS=warn,error
 2. Confirm Sentry initialized with `enableLogs: true`
 3. Confirm `SENTRY_CONSOLE_LOG_LEVELS` includes the level you are testing
 4. Check the Sentry Logs view, not only the Issues view
+
+**Manual Sentry error validation**:
+1. Keep `ENABLE_SENTRY_DEBUG_ROUTE` unset in production and preview environments
+2. For local-only validation, start the app with `ENABLE_SENTRY_DEBUG_ROUTE=true`
+3. Request `GET /debug-sentry` locally to trigger the intentional test error
+4. Remove the flag again after validation so the route falls back to `404`
 
 **Expected behaviors not reporting** (by design):
 - Validation errors (400 responses) are not reported

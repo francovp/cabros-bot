@@ -337,7 +337,17 @@ function calibrateNewsConfidence(analysisResult) {
 	let penalty = 0;
 
 	// Source count penalty: penalize when fewer than 2 sources
-	if (source_count === 0) {
+	if (source_count == null) {
+		// No explicit source_count from LLM, use sources array length as fallback
+		const fallbackCount = analysisResult.sources?.length || 0;
+		if (fallbackCount === 0) {
+			penalty += 0.3;
+			reasons.push('no corroborating sources');
+		} else if (fallbackCount === 1) {
+			penalty += 0.15;
+			reasons.push('single source only');
+		}
+	} else if (source_count === 0) {
 		penalty += 0.3;
 		reasons.push('no corroborating sources');
 	} else if (source_count === 1) {

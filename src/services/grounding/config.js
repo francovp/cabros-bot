@@ -37,7 +37,7 @@ const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || 'google/gemini-2.0-flas
 
 // Cloudflare AI Gateway Configuration
 const CF_AIG_TOKEN = process.env.CF_AIG_TOKEN;
-const CF_AIG_BASE_URL = process.env.CF_AIG_BASE_URL || 'https://gateway.ai.cloudflare.com/v1/f0948fb7672bd3554aa39021ed513b47/default/compat';
+const CF_AIG_BASE_URL = process.env.CF_AIG_BASE_URL;
 const CF_AIG_MODEL = process.env.CF_AIG_MODEL || 'google-ai-studio/gemini-2.5-flash';
 
 // Prompt configuration

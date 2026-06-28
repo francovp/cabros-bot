@@ -21,7 +21,7 @@ function validateMessageRequest(body) {
 			field: 'message',
 		});
 	}
-	const routing = parseNotificationRouting(body, { requiredChannels: true });
+	const routing = parseNotificationRouting(body);
 
 	const text = message.length > MAX_MESSAGE_LENGTH
 		? message.substring(0, MAX_MESSAGE_LENGTH) + '...'

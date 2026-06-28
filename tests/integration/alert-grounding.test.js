@@ -311,12 +311,12 @@ describe('Alert Grounding Integration', () => {
 				.post('/api/webhook/alert').set('x-api-key', 'test-key')
 				.send({
 					text: 'Bad channel request',
-					channels: ['telegram', 'discord'],
+					channels: ['telegram', 'slack'],
 				})
 				.expect(400);
 
 			expect(response.body.error).toContain('Unknown channel');
-			expect(response.body.error).toContain('discord');
+			expect(response.body.error).toContain('slack');
 			expect(mockTelegramSendMessage).not.toHaveBeenCalled();
 			expect(mockFetch).not.toHaveBeenCalled();
 		});

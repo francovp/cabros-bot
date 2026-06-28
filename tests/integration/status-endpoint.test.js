@@ -584,4 +584,47 @@ describe('Status endpoints', () => {
 			backend: 'firestore',
 		});
 	});
+
+	it('reports Cloudflare as the primary news monitor provider and fallback model as configured', async () => {
+		process.env.ENABLE_GEMINI_GROUNDING = 'false';
+		process.env.ENABLE_NEWS_MONITOR = 'true';
+		process.env.MODEL_PROVIDER = 'cloudflare';
+		process.env.CF_AIG_TOKEN = 'cloudflare-token';
+		process.env.CF_AIG_BASE_URL = 'https://gateway.ai.cloudflare.com/v1/xyz/default/compat';
+		delete process.env.CF_AIG_MODEL;
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.newsMonitorLlm).toEqual({
+			enabled: true,
+			provider: 'cloudflare',
+			configured: true,
+			ready: true,
+			status: 'ready',
+		});
+	});
+
+	it('reports Cloudflare as misconfigured if base URL is missing', async () => {
+		process.env.ENABLE_GEMINI_GROUNDING = 'false';
+		process.env.ENABLE_NEWS_MONITOR = 'true';
+		process.env.MODEL_PROVIDER = 'cloudflare';
+		process.env.CF_AIG_TOKEN = 'cloudflare-token';
+		delete process.env.CF_AIG_BASE_URL;
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.newsMonitorLlm).toEqual({
+			enabled: true,
+			provider: 'cloudflare',
+			configured: false,
+			ready: false,
+			status: 'misconfigured',
+		});
+	});
 });

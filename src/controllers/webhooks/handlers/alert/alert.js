@@ -1,9 +1,12 @@
 require('dotenv').config();
 const { enrichAlert } = require('./grounding');
 const { validateAlert } = require('../../../../lib/validation');
+const { v4: uuidv4 } = require('uuid');
+const signalOutcomeService = require('../../../../services/storage/SignalOutcomeService');
 const MarkdownV2Formatter = require('../../../../services/notification/formatters/markdownV2Formatter');
 const TelegramService = require('../../../../services/notification/TelegramService');
 const WhatsAppService = require('../../../../services/notification/WhatsAppService');
+const DiscordService = require('../../../../services/notification/DiscordService');
 const NotificationManager = require('../../../../services/notification/NotificationManager');
 const { getURLShortener } = require('../../handlers/newsMonitor/urlShortener');
 const sentryService = require('../../../../services/monitoring/SentryService');
@@ -37,7 +40,11 @@ async function initializeNotificationServices(bot) {
 		urlShortener: getURLShortener(),
 	});
 
-	notificationManager = new NotificationManager(telegramService, whatsappService);
+	const discordService = new DiscordService({
+		logger: console,
+	});
+
+	notificationManager = new NotificationManager(telegramService, whatsappService, discordService);
 
 	console.debug('Initializing notification services...');
 	await notificationManager.validateAll();
@@ -115,6 +122,8 @@ function resolveDryRun(req) {
 
 function postAlert(botOrGetter) {
 	return async (req, res) => {
+		const requestId = uuidv4();
+		const startTime = Date.now();
 		const { body } = req;
 		const useTradingViewData = req.query && (req.query.useTradingViewData === true || req.query.useTradingViewData === 'true');
 		const dryRun = resolveDryRun(req);
@@ -187,6 +196,27 @@ function postAlert(botOrGetter) {
 				channels: requestedChannels,
 				useTradingViewData,
 			}).catch(() => {}); // errors already logged inside AlertStorageService
+
+			if (signalOutcomeService.isEnabled()) {
+				const { parseTradingViewSignal } = require('../../../../services/tradingview/parseTradingViewSignal');
+				const parsed = parseTradingViewSignal(alert.text);
+				if (parsed) {
+					signalOutcomeService.recordSignal({
+						requestId,
+						source: 'webhook-alert',
+						symbol: parsed.symbol,
+						exchange: parsed.exchange || 'BINANCE',
+						timeframe: parsed.timeframe,
+						setupType: 'tradingview-enrichment',
+						score: alert.enriched ? alert.enriched.sentiment_score : null,
+						side: parsed.side,
+						price: null,
+						sources: alert.enriched && Array.isArray(alert.enriched.sources) ? alert.enriched.sources : [],
+						tokenUsage: tokenUsageJSON,
+						processingTimeMs: Date.now() - startTime,
+					}).catch(() => {});
+				}
+			}
 		} catch (error) {
 			if (error instanceof NotificationRoutingValidationError) {
 				return res.status(error.statusCode).json({

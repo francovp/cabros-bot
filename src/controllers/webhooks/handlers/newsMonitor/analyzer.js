@@ -402,6 +402,24 @@ class NewsAnalyzer {
 		const deliveryResults = await sendWithNotificationRouting(notificationMgr, alert, routing);
 		console.info('[Analyzer] Alert delivery results for', symbol, ':', deliveryResults);
 
+		const signalOutcomeService = require('../../../../services/storage/SignalOutcomeService');
+		if (signalOutcomeService.isEnabled()) {
+			const side = (alert.sentimentScore > 0) ? 'BUY' : 'SELL';
+			signalOutcomeService.recordSignal({
+				requestId,
+				source: 'news-monitor',
+				symbol: alert.symbol,
+				exchange: alert.marketContext && alert.marketContext.source === 'binance' ? 'BINANCE' : 'UNKNOWN',
+				timeframe: null,
+				setupType: 'news-alert',
+				score: alert.confidence,
+				side,
+				price: alert.marketContext ? alert.marketContext.price : null,
+				sources: alert.sources || [],
+				tokenUsage: alert.enriched ? alert.enriched.tokenUsage : null,
+			}).catch(() => {});
+		}
+
 		// Cache the final results (updates the claimed cache entry with final metadata/results)
 		await this.cache.set(symbol, geminiAnalysis.event_category, {
 			alert,
@@ -621,6 +639,18 @@ class NewsAnalyzer {
 			? enrichmentMetadata.confidence_reason
 			: (geminiAnalysis.confidence_reason || '');
 
+		// Include confidence calibration fields in alert for downstream delivery
+		const calibrationFields = {
+			source_count: geminiAnalysis.source_count,
+			source_freshness: geminiAnalysis.source_freshness,
+			source_quality: geminiAnalysis.source_quality,
+			event_age_hours: geminiAnalysis.event_age_hours,
+			time_horizon: geminiAnalysis.time_horizon,
+			uncertainty_reason: geminiAnalysis.uncertainty_reason,
+			invalidation_hint: geminiAnalysis.invalidation_hint,
+			confidence_reason: confidenceReason,
+		};
+
 		// Build the title/original text
 		const eventLabel = this.eventCategoryLabel(geminiAnalysis.event_category);
 		const headline = (geminiAnalysis.headline && geminiAnalysis.headline.trim())
@@ -684,6 +714,14 @@ class NewsAnalyzer {
 			sources: geminiAnalysis.sources,
 			text: alertTitle,
 			enriched,
+			// Include calibration fields at top level for backward compatibility
+			source_count: geminiAnalysis.source_count,
+			source_freshness: geminiAnalysis.source_freshness,
+			source_quality: geminiAnalysis.source_quality,
+			event_age_hours: geminiAnalysis.event_age_hours,
+			time_horizon: geminiAnalysis.time_horizon,
+			uncertainty_reason: geminiAnalysis.uncertainty_reason,
+			invalidation_hint: geminiAnalysis.invalidation_hint,
 			timestamp: Date.now(),
 			marketContext: marketContext || undefined,
 			enrichmentMetadata: enrichmentMetadata || undefined,

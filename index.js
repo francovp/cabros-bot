@@ -13,12 +13,11 @@ const app = require('./app.js');
 const { Telegraf, Markup } = require('telegraf');
 const { getRoutes } = require('./src/routes');
 const { initializeNotificationServices } = require('./src/controllers/webhooks/handlers/alert/alert');
+const { registerDebugSentryRoute } = require('./src/lib/debugSentryRoute');
+const { getTelegramBootstrapConfig } = require('./src/lib/telegramBootstrap');
 const Sentry = require('@sentry/node');
 
-const token = process.env.BOT_TOKEN;
-if (token === undefined) {
-	throw new Error('BOT_TOKEN must be provided!');
-}
+const { token } = getTelegramBootstrapConfig();
 
 let bot;
 
@@ -28,9 +27,7 @@ const now = new Date();
 // Always mount routes (they gate access based on feature flags)
 app.use('/api', getRoutes(() => bot));
 
-app.get('/debug-sentry', function mainHandler() {
-	throw new Error('Sentry debug test error!');
-});
+registerDebugSentryRoute(app);
 
 // The error handler must be registered before any other error middleware and after all controllers
 Sentry.setupExpressErrorHandler(app);
@@ -46,12 +43,11 @@ app.use(function onError(err, req, res, next) {
 app.listen(port, async () => {
 	console.log(now + ' - Running server on port ' + port);
 
-	const telegramBotIsEnabled = process.env.ENABLE_TELEGRAM_BOT === 'true';
+	const { telegramBotIsEnabled, isPreviewEnv, shouldStartTelegramBot } = getTelegramBootstrapConfig();
 	console.debug('telegramBotIsEnabled:', telegramBotIsEnabled);
-	const isPreviewEnv = process.env.RENDER === 'true' && process.env.IS_PULL_REQUEST === 'true';
 	console.debug('isPreviewEnv:', isPreviewEnv);
 
-	if (telegramBotIsEnabled && !isPreviewEnv) {
+	if (shouldStartTelegramBot) {
 		console.log('Telegram Bot is enabled');
 		bot = new Telegraf(token);
 		bot.command(['precio'], getPrice);

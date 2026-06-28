@@ -8,7 +8,7 @@
 const Sentry = require('@sentry/node');
 
 /**
- * @typedef {'http-alert' | 'news-monitor' | 'telegram' | 'whatsapp' | 'grounding' | 'news-enrichment' | 'process'} RuntimeChannelId
+ * @typedef {'http-alert' | 'news-monitor' | 'telegram' | 'whatsapp' | 'discord' | 'grounding' | 'news-enrichment' | 'process'} RuntimeChannelId
  */
 
 /**
@@ -16,7 +16,7 @@ const Sentry = require('@sentry/node');
  */
 
 /**
- * @typedef {'telegram-api' | 'whatsapp-greenapi' | 'gemini' | 'azure-llm' | 'binance' | 'url-shortener-bitly' | 'url-shortener-tinyurl' | 'url-shortener-other'} ExternalProviderId
+ * @typedef {'telegram-api' | 'whatsapp-greenapi' | 'discord-webhook' | 'gemini' | 'azure-llm' | 'binance' | 'url-shortener-bitly' | 'url-shortener-tinyurl' | 'url-shortener-other'} ExternalProviderId
  */
 
 /**
@@ -109,6 +109,7 @@ const FEATURE_NAMES = {
 	'news-monitor': 'news-monitor',
 	'telegram': 'telegram-alerts',
 	'whatsapp': 'whatsapp-alerts',
+	'discord': 'discord-alerts',
 	'grounding': 'gemini-grounding',
 	'news-enrichment': 'news-enrichment',
 	'process': 'process',
