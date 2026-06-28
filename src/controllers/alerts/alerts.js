@@ -2,6 +2,7 @@
 
 const alertStorageService = require('../../services/storage/AlertStorageService');
 const sentryService = require('../../services/monitoring/SentryService');
+const signalOutcomeService = require('../../services/storage/SignalOutcomeService');
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
@@ -206,6 +207,16 @@ function summarizeAlerts(req, res) {
 			to: to.value,
 		});
 
+		let shadowModeMetrics = 'No measurements found';
+		if (signalOutcomeService.isEnabled()) {
+			shadowModeMetrics = await signalOutcomeService.getMetricsSummary({
+				from: from.value,
+				to: to.value,
+				limit,
+			});
+		}
+		summary.shadowModeMetrics = shadowModeMetrics;
+
 		return res.status(200).json({
 			success: true,
 			summary,
@@ -307,6 +318,16 @@ function exportAlerts(req, res) {
 			enriched,
 			includeText,
 		});
+
+		let shadowModeMetrics = 'No measurements found';
+		if (signalOutcomeService.isEnabled()) {
+			shadowModeMetrics = await signalOutcomeService.getMetricsSummary({
+				from: from.value,
+				to: to.value,
+				limit,
+			});
+		}
+		res.set('X-Shadow-Mode-Metrics', JSON.stringify(shadowModeMetrics));
 
 		const filename = `alerts-${from.value.substring(0, 10)}-${to.value.substring(0, 10)}.${format === 'csv' ? 'csv' : 'jsonl'}`;
 		res.set('Content-Disposition', `attachment; filename="${filename}"`);

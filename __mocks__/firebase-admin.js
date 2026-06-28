@@ -42,10 +42,11 @@ function nextDocId() {
 	return `mock-doc-${mockState.docCounter}`;
 }
 
-function buildDocSnapshot(id, data) {
+function buildDocSnapshot(id, data, collectionName) {
 	return {
 		exists: Boolean(data),
 		id,
+		ref: createDocRef(collectionName || 'unknown', id),
 		data: () => data,
 	};
 }
@@ -65,7 +66,7 @@ function sortDocs(docs, field, direction) {
 }
 
 function buildQuerySnapshot(collectionName, queryState = {}) {
-	const docs = [...getCollectionState(collectionName).entries()].map(([id, data]) => buildDocSnapshot(id, data));
+	const docs = [...getCollectionState(collectionName).entries()].map(([id, data]) => buildDocSnapshot(id, data, collectionName));
 
 	if (queryState.orderByField) {
 		sortDocs(docs, queryState.orderByField, queryState.orderByDirection || 'asc');
@@ -90,7 +91,7 @@ function createDocRef(collectionName, id) {
 			}
 
 			const data = getCollectionState(collectionName).get(id) || null;
-			return Promise.resolve(buildDocSnapshot(id, data));
+			return Promise.resolve(buildDocSnapshot(id, data, collectionName));
 		},
 		set: (data) => {
 			const configured = mockDocSet(data);

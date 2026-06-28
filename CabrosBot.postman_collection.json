@@ -668,7 +668,7 @@
 							"name": "200 OK - Analytics summary",
 							"status": "OK",
 							"code": 200,
-							"body": "{\n  \"success\": true,\n  \"summary\": {\n    \"window\": {\n      \"from\": \"2026-06-06T00:00:00.000Z\",\n      \"to\": \"2026-06-07T00:00:00.000Z\",\n      \"limit\": 500,\n      \"maxDays\": 31\n    },\n    \"totalAlerts\": 2,\n    \"bySource\": { \"webhook\": 2 },\n    \"bySymbol\": { \"BTCUSDT\": 1, \"ETHUSDT\": 1 },\n    \"byFeatureFlag\": {\n      \"enriched\": 1,\n      \"plain\": 1,\n      \"tradingViewData\": 1,\n      \"withoutTradingViewData\": 1\n    },\n    \"enrichment\": {\n      \"enrichedAlerts\": 1,\n      \"plainAlerts\": 1,\n      \"tokenUsage\": {\n        \"inputTokens\": 10,\n        \"outputTokens\": 20,\n        \"totalTokens\": 30,\n        \"totalCost\": 0.001\n      }\n    },\n    \"delivery\": {\n      \"totalSuccess\": 2,\n      \"totalFailure\": 1,\n      \"byChannel\": {\n        \"telegram\": { \"total\": 2, \"success\": 1, \"failure\": 1 },\n        \"whatsapp\": { \"total\": 1, \"success\": 1, \"failure\": 0 }\n      }\n    },\n    \"latency\": {\n      \"averageProcessingMs\": 250,\n      \"averageDeliveryMs\": 150\n    }\n  }\n}"
+							"body": "{\n  \"success\": true,\n  \"summary\": {\n    \"window\": {\n      \"from\": \"2026-06-06T00:00:00.000Z\",\n      \"to\": \"2026-06-07T00:00:00.000Z\",\n      \"limit\": 500,\n      \"maxDays\": 31\n    },\n    \"totalAlerts\": 2,\n    \"bySource\": { \"webhook\": 2 },\n    \"bySymbol\": { \"BTCUSDT\": 1, \"ETHUSDT\": 1 },\n    \"byFeatureFlag\": {\n      \"enriched\": 1,\n      \"plain\": 1,\n      \"tradingViewData\": 1,\n      \"withoutTradingViewData\": 1\n    },\n    \"enrichment\": {\n      \"enrichedAlerts\": 1,\n      \"plainAlerts\": 1,\n      \"tokenUsage\": {\n        \"inputTokens\": 10,\n        \"outputTokens\": 20,\n        \"totalTokens\": 30,\n        \"totalCost\": 0.001\n      }\n    },\n    \"delivery\": {\n      \"totalSuccess\": 2,\n      \"totalFailure\": 1,\n      \"byChannel\": {\n        \"telegram\": { \"total\": 2, \"success\": 1, \"failure\": 1 },\n        \"whatsapp\": { \"total\": 1, \"success\": 1, \"failure\": 0 }\n      }\n    },\n    \"latency\": {\n      \"averageProcessingMs\": 250,\n      \"averageDeliveryMs\": 150\n    },\n    \"shadowModeMetrics\": {\n      \"totalSignalsEvaluated\": 1,\n      \"windows\": {\n        \"1h\": {\n          \"totalSignals\": 1,\n          \"hitRatePercent\": 100,\n          \"averageReturnPercent\": 0.7353,\n          \"averageMfePercent\": 0.7353,\n          \"averageMaePercent\": 0.0,\n          \"maxAdverseExcursionPercent\": 0.0\n        }\n      },\n      \"drawdownProxy\": {\n        \"averageMaxAdverseExcursionPercent\": 0.0,\n        \"absoluteMaxAdverseExcursionPercent\": 0.0\n      },\n      \"falsePositiveCandidatesCount\": 0,\n      \"falsePositiveCandidates\": [],\n      \"latencyCostMetadata\": {\n        \"averageProcessingTimeMs\": 250,\n        \"tokenUsage\": {\n          \"inputTokens\": 10,\n          \"outputTokens\": 20,\n          \"totalCost\": 0.001\n        }\n      }\n    }\n  }\n}"
 						}
 					]
 				},
@@ -746,13 +746,19 @@
             }
           ]
         },
-        "description": "Exports bounded stored alerts as JSON Lines. Requires from/to, validates x-api-key, and excludes raw text unless includeText=true."
+        "description": "Exports bounded stored alerts as JSON Lines. Requires from/to, validates x-api-key, and excludes raw text unless includeText=true"
       },
       "response": [
         {
           "name": "200 OK - JSONL export",
           "status": "OK",
           "code": 200,
+          "header": [
+            {
+              "key": "X-Shadow-Mode-Metrics",
+              "value": "{\"totalSignalsEvaluated\":1,\"windows\":{\"1h\":{\"totalSignals\":1,\"hitRatePercent\":100,\"averageReturnPercent\":0.7353,\"averageMfePercent\":0.7353,\"averageMaePercent\":0.0,\"maxAdverseExcursionPercent\":0.0}},\"drawdownProxy\":{\"averageMaxAdverseExcursionPercent\":0.0,\"absoluteMaxAdverseExcursionPercent\":0.0},\"falsePositiveCandidatesCount\":0,\"falsePositiveCandidates\":[],\"latencyCostMetadata\":{\"averageProcessingTimeMs\":250,\"tokenUsage\":{\"inputTokens\":10,\"outputTokens\":20,\"totalCost\":0.001}}}"
+            }
+          ],
           "body": "{\"id\":\"alert-123\",\"receivedAt\":\"2026-06-06T12:00:00.000Z\",\"source\":\"webhook\",\"enriched\":true,\"useTradingViewData\":false,\"deliveryResults\":[{\"channel\":\"telegram\",\"success\":true,\"messageId\":\"123\",\"errorCode\":null,\"statusCode\":null}],\"tokenUsage\":{\"inputTokens\":10,\"outputTokens\":20,\"totalTokens\":30,\"totalCost\":0.001}}\n"
         }
       ]
