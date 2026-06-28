@@ -231,10 +231,19 @@ function getStatus() {
 			|| hasReadableFile(process.env.GOOGLE_APPLICATION_CREDENTIALS)
 			|| isGoogleManagedRuntime(),
 	});
-	const sentry = dependencyStatus({
-		enabled: sentryEnabled,
-		configured: hasValue(process.env.SENTRY_DSN),
-	});
+	const sentryProfilingEnabled = sentryEnabled
+		&& hasValue(process.env.SENTRY_DSN)
+		&& hasValue(process.env.SENTRY_TRACES_SAMPLE_RATE);
+	const sentry = {
+		...dependencyStatus({
+			enabled: sentryEnabled,
+			configured: hasValue(process.env.SENTRY_DSN),
+		}),
+		profiling: dependencyStatus({
+			enabled: sentryProfilingEnabled,
+			configured: hasValue(process.env.SENTRY_PROFILE_SESSION_SAMPLE_RATE),
+		}),
+	};
 	const langfuse = dependencyStatus({
 		enabled: langfusePromptsEnabled,
 		configured: hasValue(process.env.LANGFUSE_PUBLIC_KEY) && hasValue(process.env.LANGFUSE_SECRET_KEY),
