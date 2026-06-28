@@ -616,18 +616,10 @@ class NewsAnalyzer {
 			? enrichmentMetadata.enriched_confidence
 			: geminiAnalysis.confidence;
 
-		// Include confidence calibration fields in alert for downstream delivery
-		const confidenceReason = geminiAnalysis.confidence_reason || 'legacy formula';
-		const calibrationFields = geminiAnalysis._hasCalibrationFields ? {
-			source_count: geminiAnalysis.source_count,
-			source_freshness: geminiAnalysis.source_freshness,
-			source_quality: geminiAnalysis.source_quality,
-			event_age: geminiAnalysis.event_age,
-			time_horizon: geminiAnalysis.time_horizon,
-			uncertainty_reason: geminiAnalysis.uncertainty_reason,
-			invalidation_hint: geminiAnalysis.invalidation_hint,
-			confidence_reason: confidenceReason,
-		} : null;
+		// Use geminiAnalysis confidence_reason unless enrichment provides its own
+		const confidenceReason = enrichmentMetadata && enrichmentMetadata.confidence_reason
+			? enrichmentMetadata.confidence_reason
+			: (geminiAnalysis.confidence_reason || '');
 
 		// Build the title/original text
 		const eventLabel = this.eventCategoryLabel(geminiAnalysis.event_category);
@@ -671,18 +663,16 @@ class NewsAnalyzer {
 		}
 
 		// Build enriched object for formatEnriched methods
+		const enrichedExtraText = confidenceReason
+			? `_Model Confidence: ${confidense}%_\n_Reason: ${confidenceReason}_\n_Model used: ${GROUNDING_MODEL_NAME}_`
+			: `_Model Confidence: ${confidense}%_\n_Model used: ${GROUNDING_MODEL_NAME}_`;
 		const enriched = {
 			originalText: alertTitle,
 			summary: context,
 			citations,
-			extraText: `_Model Confidence: ${confidense}%_\n_Model used: ${GROUNDING_MODEL_NAME}_`,
+			extraText: enrichedExtraText,
 			tokenUsage: tokenUsageSummary || undefined,
 		};
-
-		// Add calibration fields to enriched object if available
-		if (calibrationFields) {
-			enriched.confidence_calibration = calibrationFields;
-		}
 
 		return {
 			symbol,
@@ -690,17 +680,15 @@ class NewsAnalyzer {
 			headline: geminiAnalysis.headline,
 			sentimentScore: geminiAnalysis.sentiment_score,
 			confidence: finalConfidence,
+			confidence_reason: confidenceReason,
 			sources: geminiAnalysis.sources,
 			text: alertTitle,
 			enriched,
-			// Include calibration fields at top level for backward compatibility
-			...(calibrationFields || {}),
 			timestamp: Date.now(),
 			marketContext: marketContext || undefined,
 			enrichmentMetadata: enrichmentMetadata || undefined,
 		};
 	}
-
 
 	/**
    * Format alert message for notification channels
@@ -729,6 +717,10 @@ class NewsAnalyzer {
 
 		const confidence = analysis.confidence ?? 0;
 		message += `Confidence: ${(confidence * 100).toFixed(0)}%\n`;
+		const reason = analysis.confidence_reason || '';
+		if (reason) {
+			message += `Reason: ${reason}\n`;
+		}
 
 		if (marketContext && marketContext.price) {
 			const change = marketContext.change24h ?? 0;

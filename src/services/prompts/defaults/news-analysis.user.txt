@@ -15,13 +15,13 @@ Example JSON (respond with a similar structure using real values):
   "sentiment_score": 0.45,
   "headline": "One-line event description",
   "description": "Detailed explanation of the event with bulletpoints and bold text.",
-  "source_count": 2,
-  "source_freshness": "recent",
-  "source_quality": "high",
-  "event_age": "1h",
-  "time_horizon": "intraday",
-  "uncertainty_reason": "single-source report",
-  "invalidation_hint": "price returns below $42k"
+  "source_count": 3,
+  "source_freshness": 0.9,
+  "source_quality": 0.8,
+  "event_age_hours": 2,
+  "time_horizon": "short_term",
+  "uncertainty_reason": "",
+  "invalidation_hint": ""
 }
 
 Field guidance:
@@ -31,13 +31,13 @@ Field guidance:
 - **sentiment_score** (number): -1.0 to 1.0 — negative = bearish, positive = bullish.
 - **headline** (string): one concise line describing the event (max ~250 chars).
 - **description** (string): Detailed explanation with enrich text using hypen bulletpoints (not asterisks), nextline and bold text for readability (up to ~2000 chars).
-- **source_count** (integer): number of unique grounded sources cited (≥ 0).
-- **source_freshness** (string): one of **recent** (≤ 1h), **fresh** (1-6h), **stale** (6-24h), **old** (> 24h).
-- **source_quality** (string): one of **high** (tier-1 financial outlets, official sources), **medium** (mainstream business/tech), **low** (blogs, forums, social media).
-- **event_age** (string): human-readable age of the event (e.g., "1h", "6h", "2d").
-- **time_horizon** (string): one of **intraday**, **swing** (days-weeks), **positional** (weeks-months).
-- **uncertainty_reason** (string): brief reason for uncertainty (e.g., "single-source report", "conflicting narratives", "unverified claim", or empty string if high confidence).
-- **invalidation_hint** (string): condition that would invalidate the event thesis (e.g., "price returns below $42k", "official denial issued", or empty string if not applicable).
+- **source_count** (number): integer count of corroborating sources (0 if none, cap at 10).
+- **source_freshness** (number): 0.0 to 1.0 — how recent/correlated the sources are (1.0 = very fresh/current, 0.0 = old/stale).
+- **source_quality** (number): 0.0 to 1.0 — domain credibility and authority of the sources (1.0 = high-authority domains, 0.0 = unknown/unreliable).
+- **event_age_hours** (number): approximate age of the event in hours (use 0 for breaking, 168+ for very old).
+- **time_horizon** (string): one of **very_short_term** (minutes–hours), **short_term** (hours–days), **medium_term** (days–weeks), **long_term** (weeks+) — how long the event effect is expected to last.
+- **uncertainty_reason** (string): empty string if confident, or a brief explanation of why analysis is uncertain (e.g. "conflicting signals", "limited sources").
+- **invalidation_hint** (string): empty string if event seems valid, or a brief condition that would invalidate this event (e.g. "if price reverses below support", "if news is later denied").
 
 Event category hints:
 
@@ -52,8 +52,5 @@ Conservatism and formatting rules:
 - Be conservative when assigning high scores — prefer 0.6+ only for well-sourced, high-credibility events.
 - Do not include any extra text before/after the JSON. If uncertain, return **event_category: "none"** with low significance.
 - Keep numeric values as plain numbers (no percent signs or units inside the JSON fields).
-- For **source_freshness**, **source_quality**, **time_horizon**: use exact values from the lists above.
-- If **source_count** is 0, set **source_freshness** to "old" and **source_quality** to "low".
-- Include **uncertainty_reason** and **invalidation_hint** even if empty strings.
 
 End of instructions.

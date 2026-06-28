@@ -6,6 +6,7 @@
 const {
 	analyzeNewsForSymbol,
 	parseNewsAnalysisResponse,
+	calibrateNewsConfidence,
 } = require('../../src/services/grounding/gemini');
 const { EventCategory } = require('../../src/controllers/webhooks/handlers/newsMonitor/constants');
 
@@ -196,7 +197,13 @@ Some text after...`;
 					event_significance: 0.8,
 					sentiment_score: 0.9,
 					headline: 'Test',
-					sources: [],
+					source_count: 3,
+					source_freshness: 0.9,
+					source_quality: 0.9,
+					event_age_hours: 1,
+					time_horizon: 'short_term',
+					uncertainty_reason: '',
+					invalidation_hint: '',
 				}),
 			});
 		});
@@ -204,7 +211,7 @@ Some text after...`;
 		it('should calculate confidence using formula: 0.6*significance + 0.4*|sentiment|', async () => {
 			const result = await analyzeNewsForSymbol('BTCUSDT', 'Market context');
 
-			// confidence = (0.6 * 0.8) + (0.4 * |0.9|) = 0.48 + 0.36 = 0.84
+			// base = 0.6 * 0.8 + 0.4 * |0.9| = 0.84; good source data => no penalties
 			expect(result.confidence).toBeCloseTo(0.84, 5);
 		});
 
@@ -215,13 +222,19 @@ Some text after...`;
 					event_significance: 0.7,
 					sentiment_score: -0.8,
 					headline: 'Test',
-					sources: [],
+					source_count: 3,
+					source_freshness: 0.9,
+					source_quality: 0.9,
+					event_age_hours: 1,
+					time_horizon: 'short_term',
+					uncertainty_reason: '',
+					invalidation_hint: '',
 				}),
 			});
 
 			const result = await analyzeNewsForSymbol('BTCUSDT', 'Bearish news');
 
-			// confidence = (0.6 * 0.7) + (0.4 * |-0.8|) = 0.42 + 0.32 = 0.74
+			// base = 0.6 * 0.7 + 0.4 * |-0.8| = 0.74; good source data => no penalties
 			expect(result.confidence).toBeCloseTo(0.74, 5);
 		});
 
@@ -232,13 +245,19 @@ Some text after...`;
 					event_significance: 1.0,
 					sentiment_score: 1.0,
 					headline: 'Test',
-					sources: [],
+					source_count: 5,
+					source_freshness: 1.0,
+					source_quality: 1.0,
+					event_age_hours: 0,
+					time_horizon: 'short_term',
+					uncertainty_reason: '',
+					invalidation_hint: '',
 				}),
 			});
 
 			const result = await analyzeNewsForSymbol('BTCUSDT', 'Context');
 
-			// confidence = (0.6 * 1.0) + (0.4 * 1.0) = 1.0
+			// base = 0.6 * 1.0 + 0.4 * 1.0 = 1.0; perfect source data => no penalties
 			expect(result.confidence).toBe(1.0);
 			expect(result.confidence).toBeGreaterThanOrEqual(0);
 			expect(result.confidence).toBeLessThanOrEqual(1);
@@ -251,7 +270,13 @@ Some text after...`;
 					event_significance: 0.85,
 					sentiment_score: -0.6,
 					headline: 'SEC announcement',
-					sources: ['https://sec.gov'],
+					source_count: 2,
+					source_freshness: 0.8,
+					source_quality: 0.9,
+					event_age_hours: 2,
+					time_horizon: 'short_term',
+					uncertainty_reason: '',
+					invalidation_hint: '',
 				}),
 			});
 
@@ -263,6 +288,7 @@ Some text after...`;
 			expect(result).toHaveProperty('headline');
 			expect(result).toHaveProperty('sources');
 			expect(result).toHaveProperty('confidence');
+			expect(result).toHaveProperty('confidence_reason');
 		});
 
 		it('should throw error when Gemini call fails', async () => {
@@ -362,6 +388,303 @@ Some text after...`;
 			const result = await analyzeNewsForSymbol('XYZ', 'Normal market context');
 
 			expect(result.event_category).toBe('none');
+		});
+	});
+
+	describe('parseNewsAnalysisResponse - new source metadata fields', () => {
+		it('should parse source_count, source_freshness, source_quality from valid response', () => {
+			const response = JSON.stringify({
+				event_category: 'price_surge',
+				event_significance: 0.8,
+				sentiment_score: 0.7,
+				headline: 'Test',
+				description: 'Test description',
+				source_count: 5,
+				source_freshness: 0.9,
+				source_quality: 0.85,
+				event_age_hours: 3,
+				time_horizon: 'short_term',
+				uncertainty_reason: '',
+				invalidation_hint: '',
+			});
+
+			const result = parseNewsAnalysisResponse(response);
+
+			expect(result.source_count).toBe(5);
+			expect(result.source_freshness).toBe(0.9);
+			expect(result.source_quality).toBe(0.85);
+			expect(result.event_age_hours).toBe(3);
+			expect(result.time_horizon).toBe('short_term');
+			expect(result.uncertainty_reason).toBe('');
+			expect(result.invalidation_hint).toBe('');
+		});
+
+		it('should clamp source_count to [0, 10]', () => {
+			const over = parseNewsAnalysisResponse(JSON.stringify({
+				event_category: 'price_surge',
+				event_significance: 0.5,
+				sentiment_score: 0,
+				headline: 'Test',
+				source_count: 25,
+			}));
+			expect(over.source_count).toBe(10);
+
+			const under = parseNewsAnalysisResponse(JSON.stringify({
+				event_category: 'price_surge',
+				event_significance: 0.5,
+				sentiment_score: 0,
+				headline: 'Test',
+				source_count: -5,
+			}));
+			expect(under.source_count).toBe(0);
+		});
+
+		it('should clamp source_freshness and source_quality to [0, 1]', () => {
+			const over = parseNewsAnalysisResponse(JSON.stringify({
+				event_category: 'price_surge',
+				event_significance: 0.5,
+				sentiment_score: 0,
+				headline: 'Test',
+				source_freshness: 2.5,
+				source_quality: -0.5,
+			}));
+			expect(over.source_freshness).toBe(1);
+			expect(over.source_quality).toBe(0);
+		});
+
+		it('should apply defaults for missing new fields (backward compat)', () => {
+			const legacyResponse = JSON.stringify({
+				event_category: 'price_surge',
+				event_significance: 0.5,
+				sentiment_score: 0.3,
+				headline: 'Test',
+			});
+
+			const result = parseNewsAnalysisResponse(legacyResponse);
+
+			expect(result.source_count).toBe(0);
+			expect(result.source_freshness).toBe(0.5);
+			expect(result.source_quality).toBe(0.5);
+			expect(result.event_age_hours).toBeNull();
+			expect(result.time_horizon).toBe('short_term');
+			expect(result.uncertainty_reason).toBe('');
+			expect(result.invalidation_hint).toBe('');
+		});
+
+		it('should round source_count to an integer', () => {
+			const result = parseNewsAnalysisResponse(JSON.stringify({
+				event_category: 'price_surge',
+				event_significance: 0.5,
+				sentiment_score: 0,
+				headline: 'Test',
+				source_count: 3.7,
+			}));
+			expect(result.source_count).toBe(4);
+		});
+
+		it('should set time_horizon default for invalid values', () => {
+			const result = parseNewsAnalysisResponse(JSON.stringify({
+				event_category: 'price_surge',
+				event_significance: 0.5,
+				sentiment_score: 0,
+				headline: 'Test',
+				time_horizon: 'invalid_value',
+			}));
+			expect(result.time_horizon).toBe('short_term');
+		});
+
+		it('should trim uncertainty_reason and invalidation_hint', () => {
+			const result = parseNewsAnalysisResponse(JSON.stringify({
+				event_category: 'price_surge',
+				event_significance: 0.5,
+				sentiment_score: 0,
+				headline: 'Test',
+				uncertainty_reason: '  conflicting signals  ',
+				invalidation_hint: '  price reversal possible  ',
+			}));
+			expect(result.uncertainty_reason).toBe('conflicting signals');
+			expect(result.invalidation_hint).toBe('price reversal possible');
+		});
+
+		it('should include new fields in fallback response on parse error', () => {
+			const result = parseNewsAnalysisResponse('not valid json');
+			expect(result.event_category).toBe(EventCategory.NONE);
+			expect(result.source_count).toBe(0);
+			expect(result.source_freshness).toBe(0);
+			expect(result.source_quality).toBe(0);
+			expect(result.event_age_hours).toBeNull();
+			expect(result.time_horizon).toBe('short_term');
+			expect(result.uncertainty_reason).toBe('parse error');
+			expect(result.invalidation_hint).toBe('');
+		});
+	});
+
+	describe('calibrateNewsConfidence', () => {
+		it('should return high confidence for high-quality multi-source news', () => {
+			const result = calibrateNewsConfidence({
+				event_significance: 0.9,
+				sentiment_score: 0.8,
+				source_count: 3,
+				source_freshness: 0.95,
+				source_quality: 0.9,
+				uncertainty_reason: '',
+				invalidation_hint: '',
+			});
+
+			expect(result.confidence).toBeGreaterThan(0.7);
+			expect(result.confidence_reason).toContain('sufficient corroboration');
+			expect(result.confidence).toBeLessThanOrEqual(1);
+		});
+
+		it('should penalize single-source news', () => {
+			const multiSource = calibrateNewsConfidence({
+				event_significance: 0.9,
+				sentiment_score: 0.8,
+				source_count: 3,
+				source_freshness: 0.9,
+				source_quality: 0.9,
+				uncertainty_reason: '',
+				invalidation_hint: '',
+			});
+
+			const singleSource = calibrateNewsConfidence({
+				event_significance: 0.9,
+				sentiment_score: 0.8,
+				source_count: 1,
+				source_freshness: 0.9,
+				source_quality: 0.9,
+				uncertainty_reason: '',
+				invalidation_hint: '',
+			});
+
+			expect(singleSource.confidence).toBeLessThan(multiSource.confidence);
+			expect(singleSource.confidence_reason).toContain('single source');
+		});
+
+		it('should penalize stale sources (low freshness)', () => {
+			const fresh = calibrateNewsConfidence({
+				event_significance: 0.8,
+				sentiment_score: 0.7,
+				source_count: 3,
+				source_freshness: 0.95,
+				source_quality: 0.8,
+				uncertainty_reason: '',
+				invalidation_hint: '',
+			});
+
+			const stale = calibrateNewsConfidence({
+				event_significance: 0.8,
+				sentiment_score: 0.7,
+				source_count: 3,
+				source_freshness: 0.2,
+				source_quality: 0.8,
+				uncertainty_reason: '',
+				invalidation_hint: '',
+			});
+
+			expect(stale.confidence).toBeLessThan(fresh.confidence);
+			expect(stale.confidence_reason).toContain('stale');
+		});
+
+		it('should penalize low-quality/unreliable sources', () => {
+			const highQuality = calibrateNewsConfidence({
+				event_significance: 0.8,
+				sentiment_score: 0.7,
+				source_count: 3,
+				source_freshness: 0.9,
+				source_quality: 0.9,
+				uncertainty_reason: '',
+				invalidation_hint: '',
+			});
+
+			const lowQuality = calibrateNewsConfidence({
+				event_significance: 0.8,
+				sentiment_score: 0.7,
+				source_count: 3,
+				source_freshness: 0.9,
+				source_quality: 0.2,
+				uncertainty_reason: '',
+				invalidation_hint: '',
+			});
+
+			expect(lowQuality.confidence).toBeLessThan(highQuality.confidence);
+			expect(lowQuality.confidence_reason).toContain('low source authority');
+		});
+
+		it('should penalize uncertainty and invalidation hints', () => {
+			const clean = calibrateNewsConfidence({
+				event_significance: 0.8,
+				sentiment_score: 0.7,
+				source_count: 3,
+				source_freshness: 0.9,
+				source_quality: 0.8,
+				uncertainty_reason: '',
+				invalidation_hint: '',
+			});
+
+			const uncertain = calibrateNewsConfidence({
+				event_significance: 0.8,
+				sentiment_score: 0.7,
+				source_count: 3,
+				source_freshness: 0.9,
+				source_quality: 0.8,
+				uncertainty_reason: 'conflicting signals',
+				invalidation_hint: '',
+			});
+
+			const invalidatable = calibrateNewsConfidence({
+				event_significance: 0.8,
+				sentiment_score: 0.7,
+				source_count: 3,
+				source_freshness: 0.9,
+				source_quality: 0.8,
+				uncertainty_reason: '',
+				invalidation_hint: 'if price reverses below support',
+			});
+
+			expect(uncertain.confidence).toBeLessThan(clean.confidence);
+			expect(uncertain.confidence_reason).toContain('conflicting signals');
+			expect(invalidatable.confidence).toBeLessThan(clean.confidence);
+			expect(invalidatable.confidence_reason).toContain('may invalidate');
+		});
+
+		it('should return 0 confidence when penalties exceed base', () => {
+			const result = calibrateNewsConfidence({
+				event_significance: 0,
+				sentiment_score: 0,
+				source_count: 0,
+				source_freshness: 0,
+				source_quality: 0,
+				uncertainty_reason: 'no reliable data',
+				invalidation_hint: 'everything is uncertain',
+			});
+
+			expect(result.confidence).toBe(0);
+			expect(result.confidence_reason).toBeTruthy();
+		});
+
+		it('should clamp confidence to [0, 1]', () => {
+			const over = calibrateNewsConfidence({
+				event_significance: 2,
+				sentiment_score: 2,
+				source_count: 10,
+				source_freshness: 1,
+				source_quality: 1,
+				uncertainty_reason: '',
+				invalidation_hint: '',
+			});
+			expect(over.confidence).toBeLessThanOrEqual(1);
+
+			const under = calibrateNewsConfidence({
+				event_significance: -0.5,
+				sentiment_score: -0.5,
+				source_count: 0,
+				source_freshness: 0,
+				source_quality: 0,
+				uncertainty_reason: 'all bad',
+				invalidation_hint: 'everything is uncertain',
+			});
+			expect(under.confidence).toBeGreaterThanOrEqual(0);
 		});
 	});
 });
