@@ -276,6 +276,8 @@ describe('Alert Handler', () => {
 
 		const result = await enrichAlert({ text: 'BTCUSDT(240) pasó a señal de COMPRA' }, { useTradingViewData: true });
 
+		expect(result.sentiment).toBe('NEUTRAL');
+		expect(result.sentiment_score).toBe(0.1);
 		expect(result.insights).toHaveLength(6);
 		expect(result.insights[0]).toBe('Confluencia contradictoria: SELL · Señales Mixtas ⚠️ · Confianza: 81');
 		expect(result.insights).not.toContain('Gemini insight 6');

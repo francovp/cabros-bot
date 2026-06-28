@@ -54,6 +54,11 @@ function extractPriorityMcpInsights(mcp = {}) {
 	));
 }
 
+function hasContradictoryConfluenceInsight(mcp = {}) {
+	return Array.isArray(mcp.insights)
+		&& mcp.insights.some(insight => typeof insight === 'string' && insight.startsWith('Confluencia contradictoria:'));
+}
+
 function mergeEnrichmentData(text, geminiEnriched, mcpEnriched) {
 	const gemini = geminiEnriched || {};
 	const mcp = mcpEnriched || {};
@@ -67,6 +72,7 @@ function mergeEnrichmentData(text, geminiEnriched, mcpEnriched) {
 
 	const geminiScore = typeof gemini.sentiment_score === 'number' ? gemini.sentiment_score : null;
 	const mcpScore = typeof mcp.sentiment_score === 'number' ? mcp.sentiment_score : null;
+	const useMcpSentiment = hasContradictoryConfluenceInsight(mcp);
 
 	const geminiBackticked = extractBacktickedValues(gemini.extraText);
 	const modelName = geminiBackticked[0] || GROUNDING_MODEL_NAME;
@@ -84,8 +90,8 @@ function mergeEnrichmentData(text, geminiEnriched, mcpEnriched) {
 
 	return {
 		original_text: text,
-		sentiment: gemini.sentiment || mcp.sentiment || 'NEUTRAL',
-		sentiment_score: geminiScore !== null ? geminiScore : (mcpScore !== null ? mcpScore : 0),
+		sentiment: useMcpSentiment ? (mcp.sentiment || 'NEUTRAL') : (gemini.sentiment || mcp.sentiment || 'NEUTRAL'),
+		sentiment_score: useMcpSentiment && mcpScore !== null ? mcpScore : (geminiScore !== null ? geminiScore : (mcpScore !== null ? mcpScore : 0)),
 		insights,
 		...(technicalLevels ? { technical_levels: technicalLevels } : {}),
 		sources: Array.isArray(gemini.sources) ? gemini.sources : [],
