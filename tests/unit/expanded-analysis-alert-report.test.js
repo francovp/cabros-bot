@@ -275,6 +275,59 @@ describe('Expanded Analysis Alert report', () => {
 		expect(report).not.toContain('Invalidación');
 	});
 
+	it('omits long target output for overbought sell setups', () => {
+		const report = buildExpandedAnalysisAlertReport([
+			{
+				input: { raw: 'NASDAQ:AAPL', exchange: 'NASDAQ', symbol: 'AAPL' },
+				analysis: {
+					price_data: {
+						current_price: 304.99,
+						change_percent: 0.9,
+					},
+					technical_indicators: {
+						rsi: 76.2,
+						sma20: 296.5,
+						macd: 2.3,
+						macd_signal: 1.1,
+						atr: 5.91,
+					},
+				},
+			},
+		], { now: new Date('2026-05-22T12:00:00Z') });
+
+		expect(report).toContain('- *Sugerencia:* VENDER / TOMAR GANANCIAS');
+		expect(report).not.toContain('Target sugerido');
+		expect(report).not.toContain('Risk/Reward');
+	});
+
+	it('omits invalidation when the stop loss is above the current price', () => {
+		const report = buildExpandedAnalysisAlertReport([
+			{
+				input: { raw: 'NASDAQ:NVDA', exchange: 'NASDAQ', symbol: 'NVDA' },
+				analysis: {
+					price_data: {
+						current_price: 100,
+						change_percent: -1.1,
+					},
+					technical_indicators: {
+						rsi: 45,
+						sma20: 102,
+						macd: -0.4,
+						macd_signal: -0.6,
+					},
+					bollinger_bands: {
+						lower: 105,
+						upper: 120,
+					},
+				},
+			},
+		], { now: new Date('2026-05-22T12:00:00Z') });
+
+		expect(report).toContain('- *Stop Loss sugerido:* $105.00');
+		expect(report).not.toContain('Invalidación');
+		expect(report).not.toContain('Risk/Reward');
+	});
+
 	describe('includeMultiTimeframe updates', () => {
 		it('parses includeMultiTimeframe and include_multi_timeframe correctly', () => {
 			const parsed1 = parseExpandedAnalysisAlertRequest({

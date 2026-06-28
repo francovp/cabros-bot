@@ -211,7 +211,10 @@ function buildReportRow({ input = {}, analysis = {}, multiTimeframe }) {
 	const volume = getVolumeLabel(techData);
 	const stopLossMeta = getStopLossMeta(price, atr, bollinger, currentBollinger);
 	const stopLoss = stopLossMeta.value;
-	const takeProfit = getTakeProfitTarget(price, atr, bollinger, currentBollinger, techData);
+	const isOverbought = rsi !== null && rsi > 70;
+	const takeProfit = isOverbought
+		? null
+		: getTakeProfitTarget(price, atr, bollinger, currentBollinger, techData);
 	const invalidationDistance = getInvalidationDistance(price, stopLoss, stopLossMeta.source);
 	const riskRewardRatio = getRiskRewardRatio(price, stopLoss, takeProfit);
 
@@ -544,7 +547,7 @@ function getTakeProfitTarget(price, atr, bollinger, currentBollinger = {}, techD
 }
 
 function getInvalidationDistance(price, stopLoss, stopLossSource) {
-	if (price === null || stopLoss === null || stopLossSource === 'fallback') {
+	if (price === null || stopLoss === null || stopLossSource === 'fallback' || stopLoss >= price) {
 		return null;
 	}
 
