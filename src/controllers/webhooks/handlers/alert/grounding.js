@@ -48,7 +48,10 @@ function extractPriorityMcpInsights(mcp = {}) {
 		return [];
 	}
 
-	return mcp.insights.filter(insight => typeof insight === 'string' && insight.startsWith('Confluencia:'));
+	return mcp.insights.filter(insight => (
+		typeof insight === 'string'
+		&& (insight.startsWith('Confluencia:') || insight.startsWith('Confluencia contradictoria:'))
+	));
 }
 
 function mergeEnrichmentData(text, geminiEnriched, mcpEnriched) {
@@ -88,6 +91,8 @@ function mergeEnrichmentData(text, geminiEnriched, mcpEnriched) {
 		sources: Array.isArray(gemini.sources) ? gemini.sources : [],
 		truncated: !!(gemini.truncated || mcp.truncated),
 		extraText,
+		confluenceData: mcp.confluenceData || null,
+		multiTimeframeData: mcp.multiTimeframeData || null,
 	};
 }
 
