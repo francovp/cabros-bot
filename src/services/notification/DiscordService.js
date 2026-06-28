@@ -1,7 +1,9 @@
 const NotificationChannel = require('./NotificationChannel');
 const WhatsAppMarkdownFormatter = require('./formatters/whatsappMarkdownFormatter');
+const { splitMessageIntoChunks } = require('../../lib/messageHelper');
 
 const DEFAULT_TIMEOUT_MS = 10000;
+const DISCORD_MESSAGE_LIMIT = 2000;
 
 class DiscordService extends NotificationChannel {
 	constructor(config = {}) {
@@ -36,46 +38,24 @@ class DiscordService extends NotificationChannel {
 	async send(alert) {
 		try {
 			const content = await this.formatAlert(alert);
-			const controller = new AbortController();
-			const timeoutId = setTimeout(() => controller.abort(), this.timeoutMs);
+			const chunks = splitMessageIntoChunks(content, DISCORD_MESSAGE_LIMIT);
+			const messageIds = [];
 
-			try {
-				const response = await fetch(this.getExecutionUrl(), {
-					method: 'POST',
-					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({ content }),
-					signal: controller.signal,
-				});
-
-				if (!response.ok) {
-					const errorText = await response.text();
-					return {
-						success: false,
-						channel: 'discord',
-						error: `Discord webhook ${response.status}: ${errorText}`,
-						statusCode: response.status,
-					};
+			for (const chunk of chunks) {
+				const result = await this.sendChunk(chunk);
+				if (!result.success) {
+					return result;
 				}
-
-				const data = await response.json();
-				return {
-					success: true,
-					channel: 'discord',
-					messageId: data.id || 'discord-webhook',
-				};
-			} catch (error) {
-				if (error && error.name === 'AbortError') {
-					return {
-						success: false,
-						channel: 'discord',
-						error: 'Discord webhook request timeout',
-					};
-				}
-
-				throw error;
-			} finally {
-				clearTimeout(timeoutId);
+				messageIds.push(result.messageId);
 			}
+
+			return {
+				success: true,
+				channel: 'discord',
+				messageId: messageIds.join(','),
+				messageIds,
+				messageCount: messageIds.length,
+			};
 		} catch (error) {
 			this.logger?.error?.(`Failed to send to Discord: ${error.message}`);
 			return {
@@ -98,6 +78,49 @@ class DiscordService extends NotificationChannel {
 		}
 
 		return typeof alert.text === 'string' ? alert.text : '';
+	}
+
+	async sendChunk(content) {
+		const controller = new AbortController();
+		const timeoutId = setTimeout(() => controller.abort(), this.timeoutMs);
+
+		try {
+			const response = await fetch(this.getExecutionUrl(), {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ content }),
+				signal: controller.signal,
+			});
+
+			if (!response.ok) {
+				const errorText = await response.text();
+				return {
+					success: false,
+					channel: 'discord',
+					error: `Discord webhook ${response.status}: ${errorText}`,
+					statusCode: response.status,
+				};
+			}
+
+			const data = await response.json();
+			return {
+				success: true,
+				channel: 'discord',
+				messageId: data.id || 'discord-webhook',
+			};
+		} catch (error) {
+			if (error && error.name === 'AbortError') {
+				return {
+					success: false,
+					channel: 'discord',
+					error: 'Discord webhook request timeout',
+				};
+			}
+
+			throw error;
+		} finally {
+			clearTimeout(timeoutId);
+		}
 	}
 }
 

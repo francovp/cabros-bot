@@ -120,7 +120,13 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 
 		expect(res.body.success).toBe(true);
 		expect(res.body.results).toEqual([
-			{ success: true, channel: 'discord', messageId: 'discord-msg-789' },
+			{
+				success: true,
+				channel: 'discord',
+				messageId: 'discord-msg-789',
+				messageIds: ['discord-msg-789'],
+				messageCount: 1,
+			},
 		]);
 		expect(mockBot.telegram.sendMessage).not.toHaveBeenCalled();
 		expect(global.fetch).toHaveBeenCalledWith(

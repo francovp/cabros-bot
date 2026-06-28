@@ -72,6 +72,8 @@ describe('DiscordService', () => {
 				success: true,
 				channel: 'discord',
 				messageId: 'discord-msg-123',
+				messageIds: ['discord-msg-123'],
+				messageCount: 1,
 			});
 			expect(global.fetch).toHaveBeenCalledWith(
 				'https://discord.com/api/webhooks/123/token?wait=true',
@@ -111,6 +113,39 @@ describe('DiscordService', () => {
 			expect(result.success).toBe(false);
 			expect(result.channel).toBe('discord');
 			expect(result.error).toContain('Discord webhook request timeout');
+		});
+
+		it('splits long messages into multiple Discord webhook deliveries', async () => {
+			service = new DiscordService({
+				logger: mockLogger,
+				timeoutMs: 1000,
+			});
+			await service.validate();
+			global.fetch = jest.fn()
+				.mockResolvedValueOnce({
+					ok: true,
+					json: async () => ({ id: 'discord-msg-1' }),
+				})
+				.mockResolvedValueOnce({
+					ok: true,
+					json: async () => ({ id: 'discord-msg-2' }),
+				});
+
+			const longMessage = `${'A'.repeat(1995)} ${'B'.repeat(1995)}`;
+			const result = await service.send({ text: longMessage });
+
+			expect(result).toEqual({
+				success: true,
+				channel: 'discord',
+				messageId: 'discord-msg-1,discord-msg-2',
+				messageIds: ['discord-msg-1', 'discord-msg-2'],
+				messageCount: 2,
+			});
+			expect(global.fetch).toHaveBeenCalledTimes(2);
+			global.fetch.mock.calls.forEach((call) => {
+				const payload = JSON.parse(call[1].body);
+				expect(payload.content.length).toBeLessThanOrEqual(2000);
+			});
 		});
 	});
 });
