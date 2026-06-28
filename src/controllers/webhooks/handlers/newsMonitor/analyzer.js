@@ -621,6 +621,18 @@ class NewsAnalyzer {
 			? enrichmentMetadata.confidence_reason
 			: (geminiAnalysis.confidence_reason || '');
 
+		// Include confidence calibration fields in alert for downstream delivery
+		const calibrationFields = {
+			source_count: geminiAnalysis.source_count,
+			source_freshness: geminiAnalysis.source_freshness,
+			source_quality: geminiAnalysis.source_quality,
+			event_age_hours: geminiAnalysis.event_age_hours,
+			time_horizon: geminiAnalysis.time_horizon,
+			uncertainty_reason: geminiAnalysis.uncertainty_reason,
+			invalidation_hint: geminiAnalysis.invalidation_hint,
+			confidence_reason: confidenceReason,
+		};
+
 		// Build the title/original text
 		const eventLabel = this.eventCategoryLabel(geminiAnalysis.event_category);
 		const headline = (geminiAnalysis.headline && geminiAnalysis.headline.trim())
@@ -684,6 +696,14 @@ class NewsAnalyzer {
 			sources: geminiAnalysis.sources,
 			text: alertTitle,
 			enriched,
+			// Include calibration fields at top level for backward compatibility
+			source_count: geminiAnalysis.source_count,
+			source_freshness: geminiAnalysis.source_freshness,
+			source_quality: geminiAnalysis.source_quality,
+			event_age_hours: geminiAnalysis.event_age_hours,
+			time_horizon: geminiAnalysis.time_horizon,
+			uncertainty_reason: geminiAnalysis.uncertainty_reason,
+			invalidation_hint: geminiAnalysis.invalidation_hint,
 			timestamp: Date.now(),
 			marketContext: marketContext || undefined,
 			enrichmentMetadata: enrichmentMetadata || undefined,
