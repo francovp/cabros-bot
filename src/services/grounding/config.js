@@ -35,6 +35,11 @@ const AZURE_LLM_ENDPOINT = process.env.AZURE_LLM_ENDPOINT || 'https://models.git
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || 'google/gemini-2.0-flash-001';
 
+// Cloudflare AI Gateway Configuration
+const CF_AIG_TOKEN = process.env.CF_AIG_TOKEN;
+const CF_AIG_BASE_URL = process.env.CF_AIG_BASE_URL;
+const CF_AIG_MODEL = process.env.CF_AIG_MODEL || 'google-ai-studio/gemini-2.5-flash';
+
 // Prompt configuration
 const GEMINI_SYSTEM_PROMPT = getGroundedSummarySystemPrompt({
 	maxLength: GROUNDING_MAX_LENGTH,
@@ -73,5 +78,8 @@ module.exports = {
 	AZURE_LLM_ENDPOINT,
 	OPENROUTER_API_KEY,
 	OPENROUTER_MODEL,
+	CF_AIG_TOKEN,
+	CF_AIG_BASE_URL,
+	CF_AIG_MODEL,
 	MODEL_PROVIDER,
 };

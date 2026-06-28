@@ -5,6 +5,7 @@ const packageJson = require('../../package.json');
 const DEFAULT_TRADINGVIEW_MCP_URL = 'https://tradingview-mcp.onrender.com/mcp';
 const DEFAULT_AZURE_LLM_ENDPOINT = 'https://models.github.ai/inference';
 const DEFAULT_OPENROUTER_MODEL = 'google/gemini-2.0-flash-001';
+const DEFAULT_CF_AIG_MODEL = 'google-ai-studio/gemini-2.5-flash';
 
 function isEnabled(value) {
 	return value === 'true';
@@ -142,6 +143,15 @@ function getNewsMonitorLlmDependency({ enabled, provider }) {
 			configured:
 				hasValue(process.env.OPENROUTER_API_KEY)
 				&& hasValue(process.env.OPENROUTER_MODEL || DEFAULT_OPENROUTER_MODEL),
+		});
+	case 'cloudflare':
+		return providerDependencyStatus({
+			enabled,
+			provider,
+			configured:
+				hasValue(process.env.CF_AIG_TOKEN)
+				&& hasValue(process.env.CF_AIG_BASE_URL)
+				&& hasValue(process.env.CF_AIG_MODEL || DEFAULT_CF_AIG_MODEL),
 		});
 	default:
 		return providerDependencyStatus({
@@ -309,8 +319,15 @@ function getStatus() {
 			langfuse,
 			braveSearch,
 			newsMonitorLlm,
-			llmAlertEnrichment,
-			newsMonitorDedup,
+		llmAlertEnrichment,
+		cloudflareAig: dependencyStatus({
+			enabled: isEnabled(process.env.ENABLE_CLOUDFLARE_AIG),
+			configured:
+				hasValue(process.env.CF_AIG_TOKEN)
+				&& hasValue(process.env.CF_AIG_BASE_URL)
+				&& hasValue(process.env.CF_AIG_MODEL || DEFAULT_CF_AIG_MODEL),
+		}),
+		newsMonitorDedup,
 		},
 	};
 }
