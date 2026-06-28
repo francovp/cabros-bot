@@ -184,4 +184,62 @@ describe('Market Scanner Alert endpoint', () => {
 		expect(res.body.timedOut).toBe(true);
 		expect(mockTelegramSendMessage).not.toHaveBeenCalled();
 	});
+
+	it('dry-run ranked mode includes ranked flag, scores, and sorted items in alertText', async () => {
+		tradingViewMcpService.callScanTool.mockResolvedValueOnce([
+			{
+				symbol: 'BINANCE:BTCUSDT',
+				changePercent: 3.5,
+				indicators: { close: 65000, RSI: 62 },
+				volume_ratio: 1.8,
+				breakout_type: 'bullish',
+			},
+			{
+				symbol: 'BINANCE:SOLUSDT',
+				changePercent: 8.0,
+				indicators: { close: 150, RSI: 82 },
+				volume_ratio: 0.6,
+			},
+		]);
+
+		const res = await request(app)
+			.post('/api/webhook/market-scanner-alert')
+			.set('x-api-key', 'test-key')
+			.query({ dryRun: 'true' })
+			.send({ scans: ['top_gainers'], ranked: true })
+			.expect(200);
+
+		expect(res.body.ranked).toBe(true);
+		expect(res.body.dryRun).toBe(true);
+		expect(res.body.payload.alertText).toContain('BTCUSDT');
+		expect(res.body.payload.alertText).toContain('SOLUSDT');
+		// Scores should be visible in alert text
+		expect(res.body.payload.alertText).toContain('/100');
+		// Scores array should be present in scan results
+		expect(res.body.scanResults[0].scores).toBeDefined();
+		expect(res.body.scanResults[0].scores).toHaveLength(2);
+		expect(mockTelegramSendMessage).not.toHaveBeenCalled();
+	});
+
+	it('normal mode without ranked flag does not include scores', async () => {
+		tradingViewMcpService.callScanTool.mockResolvedValueOnce([
+			{
+				symbol: 'BINANCE:BTCUSDT',
+				changePercent: 3.5,
+				indicators: { close: 65000, RSI: 62 },
+				volume_ratio: 1.8,
+			},
+		]);
+
+		const res = await request(app)
+			.post('/api/webhook/market-scanner-alert')
+			.set('x-api-key', 'test-key')
+			.query({ dryRun: 'true' })
+			.send({ scans: ['top_gainers'] })
+			.expect(200);
+
+		expect(res.body.ranked).toBe(false);
+		expect(res.body.scanResults[0].scores).toBeUndefined();
+		expect(res.body.payload.alertText).not.toContain('/100');
+	});
 });

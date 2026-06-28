@@ -70,6 +70,7 @@ function postMarketScannerAlert(botOrGetter) {
 				const timeoutError = timedOut;
 				return res.status(timeoutError ? 504 : 502).json({
 					success: false,
+					ranked: parsed.ranked === true,
 					code: timeoutError ? 'MARKET_SCANNER_TIMEOUT' : 'ALL_SCANS_FAILED',
 					error: timeoutError
 						? `Market scanner timed out after ${timeoutMs}ms.`
@@ -87,6 +88,7 @@ function postMarketScannerAlert(botOrGetter) {
 				exchange: parsed.exchange,
 				timeframe: parsed.timeframe,
 				now: new Date(),
+				ranked: parsed.ranked === true,
 			});
 
 			const dryRun = resolveDryRun(req);
@@ -95,8 +97,9 @@ function postMarketScannerAlert(botOrGetter) {
 				return res.status(200).json({
 					success: true,
 					dryRun: true,
+					ranked: parsed.ranked === true,
 					payload: { alertText },
-					scanResults: compactScanResults(scanResults),
+					scanResults: compactScanResults(scanResults, parsed.ranked === true),
 					summary: buildSummary(scanResults, []),
 					timedOut,
 					timeoutMs,
@@ -153,8 +156,9 @@ function postMarketScannerAlert(botOrGetter) {
 
 			return res.status(200).json({
 				success: true,
+				ranked: parsed.ranked === true,
 				alertText,
-				scanResults: compactScanResults(scanResults),
+				scanResults: compactScanResults(scanResults, parsed.ranked === true),
 				deliveryResults,
 				requestedChannels,
 				deliveredChannels,
@@ -267,7 +271,7 @@ function buildScanArgs(parsed, scanType) {
 	return args;
 }
 
-function compactScanResults(results) {
+function compactScanResults(results, includeScores = false) {
 	return results.map((result) => {
 		if (result.status === 'error' || result.status === 'timeout') {
 			return {
@@ -277,11 +281,21 @@ function compactScanResults(results) {
 			};
 		}
 
-		return {
+		const compact = {
 			scan: result.scan,
 			status: result.status,
 			itemCount: result.items.length,
 		};
+
+		if (includeScores && Array.isArray(result.items) && result.items.length > 0) {
+			compact.scores = result.items.map((item) => ({
+				symbol: item.symbol,
+				score: item._score,
+				reason: item._scoreReason,
+			}));
+		}
+
+		return compact;
 	});
 }
 
