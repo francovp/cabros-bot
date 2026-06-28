@@ -117,6 +117,7 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 - `SENTRY_SAMPLE_RATE_ERRORS` - Error sample rate from 0.0 to 1.0 (default: `1.0` = 100%)
 - `SENTRY_TRACES_SAMPLE_RATE` - Trace sample rate from 0.0 to 1.0 (leave unset to disable tracing and custom spans)
 - `SENTRY_CONSOLE_LOG_LEVELS` - Comma-separated console levels sent as Sentry Logs (default: `warn,error`; allowed: `debug`, `info`, `warn`, `error`, `log`, `assert`, `trace`)
+- `ENABLE_SENTRY_DEBUG_ROUTE` - Mount `GET /debug-sentry` only for explicit local/manual validation (`true` enables it; default disabled so normal runtime returns `404`)
 - Sentry Logs are enabled automatically when `ENABLE_SENTRY=true`; configured console levels are sent as Sentry Logs.
 
 #### TradingView Market Scanner Alerts
@@ -1175,6 +1176,12 @@ SENTRY_CONSOLE_LOG_LEVELS=warn,error
 2. Confirm Sentry initialized with `enableLogs: true`
 3. Confirm `SENTRY_CONSOLE_LOG_LEVELS` includes the level you are testing
 4. Check the Sentry Logs view, not only the Issues view
+
+**Manual Sentry error validation**:
+1. Keep `ENABLE_SENTRY_DEBUG_ROUTE` unset in production and preview environments
+2. For local-only validation, start the app with `ENABLE_SENTRY_DEBUG_ROUTE=true`
+3. Request `GET /debug-sentry` locally to trigger the intentional test error
+4. Remove the flag again after validation so the route falls back to `404`
 
 **Expected behaviors not reporting** (by design):
 - Validation errors (400 responses) are not reported
