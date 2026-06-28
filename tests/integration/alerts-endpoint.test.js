@@ -290,6 +290,7 @@ describe('Alerts API Integration Tests', () => {
 					averageProcessingMs: null,
 					averageDeliveryMs: 125,
 				},
+				shadowModeMetrics: 'No measurements found',
 			},
 		});
 	});

@@ -402,6 +402,24 @@ class NewsAnalyzer {
 		const deliveryResults = await sendWithNotificationRouting(notificationMgr, alert, routing);
 		console.info('[Analyzer] Alert delivery results for', symbol, ':', deliveryResults);
 
+		const signalOutcomeService = require('../../../../services/storage/SignalOutcomeService');
+		if (signalOutcomeService.isEnabled()) {
+			const side = (alert.sentimentScore > 0) ? 'BUY' : 'SELL';
+			signalOutcomeService.recordSignal({
+				requestId,
+				source: 'news-monitor',
+				symbol: alert.symbol,
+				exchange: alert.marketContext && alert.marketContext.source === 'binance' ? 'BINANCE' : 'UNKNOWN',
+				timeframe: null,
+				setupType: 'news-alert',
+				score: alert.confidence,
+				side,
+				price: alert.marketContext ? alert.marketContext.price : null,
+				sources: alert.sources || [],
+				tokenUsage: alert.enriched ? alert.enriched.tokenUsage : null,
+			}).catch(() => {});
+		}
+
 		// Cache the final results (updates the claimed cache entry with final metadata/results)
 		await this.cache.set(symbol, geminiAnalysis.event_category, {
 			alert,
