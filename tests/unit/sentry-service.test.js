@@ -763,4 +763,94 @@ describe('SentryService', () => {
 			expect(Sentry.startSpanManual).toHaveBeenCalledTimes(1);
 		});
 	});
+
+	describe('Profiling Configuration (CB-47)', () => {
+		it('should set profileSessionSampleRate when tracing is enabled and env var is set', () => {
+			process.env.SENTRY_TRACES_SAMPLE_RATE = '1';
+			process.env.SENTRY_PROFILE_SESSION_SAMPLE_RATE = '0.5';
+
+			const config = service._buildConfiguration();
+
+			expect(config.profileSessionSampleRate).toBe(0.5);
+		});
+
+		it('should not set profileSessionSampleRate when tracing is disabled', () => {
+			delete process.env.SENTRY_TRACES_SAMPLE_RATE;
+			process.env.SENTRY_PROFILE_SESSION_SAMPLE_RATE = '0.5';
+
+			const config = service._buildConfiguration();
+
+			expect(config.profileSessionSampleRate).toBeUndefined();
+		});
+
+		it('should not set profileSessionSampleRate when SENTRY_PROFILE_SESSION_SAMPLE_RATE is not set', () => {
+			process.env.SENTRY_TRACES_SAMPLE_RATE = '1';
+			delete process.env.SENTRY_PROFILE_SESSION_SAMPLE_RATE;
+
+			const config = service._buildConfiguration();
+
+			expect(config.profileSessionSampleRate).toBeUndefined();
+		});
+
+		it('isProfilingEnabled() should return false when monitoring is disabled', () => {
+			delete process.env.ENABLE_SENTRY;
+			service.init();
+
+			expect(service.isProfilingEnabled()).toBe(false);
+		});
+
+		it('isProfilingEnabled() should return false when tracing is disabled', () => {
+			process.env.ENABLE_SENTRY = 'true';
+			process.env.SENTRY_DSN = 'https://key@sentry.io/123';
+			delete process.env.SENTRY_TRACES_SAMPLE_RATE;
+			process.env.SENTRY_PROFILE_SESSION_SAMPLE_RATE = '1';
+			service.init();
+
+			expect(service.isProfilingEnabled()).toBe(false);
+		});
+
+		it('isProfilingEnabled() should return false when profileSessionSampleRate is not set', () => {
+			process.env.ENABLE_SENTRY = 'true';
+			process.env.SENTRY_DSN = 'https://key@sentry.io/123';
+			process.env.SENTRY_TRACES_SAMPLE_RATE = '1';
+			delete process.env.SENTRY_PROFILE_SESSION_SAMPLE_RATE;
+			service.init();
+
+			expect(service.isProfilingEnabled()).toBe(false);
+		});
+
+		it('isProfilingEnabled() should return true when both tracing and profiling are enabled', () => {
+			process.env.ENABLE_SENTRY = 'true';
+			process.env.SENTRY_DSN = 'https://key@sentry.io/123';
+			process.env.SENTRY_TRACES_SAMPLE_RATE = '1';
+			process.env.SENTRY_PROFILE_SESSION_SAMPLE_RATE = '1';
+			service.init();
+
+			expect(service.isProfilingEnabled()).toBe(true);
+		});
+
+		it('should call Sentry.init with profileSessionSampleRate and profileLifecycle when both tracing and profiling are configured', () => {
+			process.env.ENABLE_SENTRY = 'true';
+			process.env.SENTRY_DSN = 'https://key@sentry.io/123';
+			process.env.SENTRY_TRACES_SAMPLE_RATE = '1';
+			process.env.SENTRY_PROFILE_SESSION_SAMPLE_RATE = '1';
+			service.init();
+
+			const initCall = Sentry.init.mock.calls[0][0];
+			expect(initCall.profileSessionSampleRate).toBe(1);
+			expect(initCall.profileLifecycle).toBe('trace');
+		});
+
+		it('should not set profileSessionSampleRate or profileLifecycle when profiling is not configured', () => {
+			process.env.ENABLE_SENTRY = 'true';
+			process.env.SENTRY_DSN = 'https://key@sentry.io/123';
+			process.env.SENTRY_TRACES_SAMPLE_RATE = '1';
+			delete process.env.SENTRY_PROFILE_SESSION_SAMPLE_RATE;
+			service.init();
+
+			const initCall = Sentry.init.mock.calls[0][0];
+			expect(initCall.profileSessionSampleRate).toBeUndefined();
+			expect(initCall.profileLifecycle).toBeUndefined();
+		});
+	});
 });

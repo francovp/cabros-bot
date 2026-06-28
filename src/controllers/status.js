@@ -288,6 +288,7 @@ function getStatus() {
 			tradingViewConfluenceMultiTimeframe: isEnabled(process.env.ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME),
 			firestoreAlertStorage: firestoreEnabled,
 			sentryMonitoring: sentryEnabled,
+			sentryProfiling: sentryEnabled && !!process.env.SENTRY_PROFILE_SESSION_SAMPLE_RATE,
 			langfusePrompts: langfusePromptsEnabled,
 			marketScanner: marketScannerEnabled,
 			binancePriceCheck: binancePriceCheckEnabled,
