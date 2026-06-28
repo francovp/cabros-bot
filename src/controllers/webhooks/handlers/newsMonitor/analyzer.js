@@ -650,6 +650,9 @@ class NewsAnalyzer {
 			invalidation_hint: geminiAnalysis.invalidation_hint,
 			confidence_reason: confidenceReason,
 		};
+		if (geminiAnalysis.calibration) {
+			calibrationFields.grounding_calibration = geminiAnalysis.calibration;
+		}
 
 		// Build the title/original text
 		const eventLabel = this.eventCategoryLabel(geminiAnalysis.event_category);
@@ -722,6 +725,7 @@ class NewsAnalyzer {
 			time_horizon: geminiAnalysis.time_horizon,
 			uncertainty_reason: geminiAnalysis.uncertainty_reason,
 			invalidation_hint: geminiAnalysis.invalidation_hint,
+			calibration: geminiAnalysis.calibration || undefined,
 			timestamp: Date.now(),
 			marketContext: marketContext || undefined,
 			enrichmentMetadata: enrichmentMetadata || undefined,

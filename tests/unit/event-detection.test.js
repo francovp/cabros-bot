@@ -184,8 +184,8 @@ Some text after...`;
 			// Mock search() to return grounding results
 			genaiClient.search.mockResolvedValue({
 				results: [
-					{ url: 'https://example.com/1', title: 'Source 1' },
-					{ url: 'https://example.com/2', title: 'Source 2' },
+					{ url: 'https://reuters.com/1', title: 'Source 1', sourceDomain: 'reuters.com', publishedAt: '2026-06-28T11:00:00Z' },
+					{ url: 'https://bloomberg.com/2', title: 'Source 2', sourceDomain: 'bloomberg.com', publishedAt: '2026-06-28T10:00:00Z' },
 				],
 				searchResultText: 'Market context from search',
 				totalResults: 2,
@@ -685,6 +685,145 @@ Some text after...`;
 				invalidation_hint: 'everything is uncertain',
 			});
 			expect(under.confidence).toBeGreaterThanOrEqual(0);
+		});
+	});
+
+	describe('calibrateNewsConfidence with actual grounding sources', () => {
+		const baseAnalysis = () => ({
+			event_significance: 0.8,
+			sentiment_score: 0.7,
+			source_count: 3,
+			source_freshness: 0.9,
+			source_quality: 0.9,
+			uncertainty_reason: '',
+			invalidation_hint: '',
+		});
+
+		const makeSource = (overrides) => ({
+			title: overrides.title || 'Source',
+			snippet: overrides.snippet || '',
+			url: overrides.url || 'https://example.com/article',
+			sourceDomain: overrides.sourceDomain || overrides.domain || 'example.com',
+			publishedAt: overrides.publishedAt,
+		});
+
+		it('should suppress alert when zero actual grounding sources are returned', () => {
+			const result = calibrateNewsConfidence(baseAnalysis(), []);
+
+			expect(result.confidence).toBeLessThan(0.5);
+			expect(result.confidence_reason).toContain('no corroborating sources');
+			expect(result.calibration.grounding_used).toBe(true);
+			expect(result.calibration.actual_source_count).toBe(0);
+			expect(result.calibration.effective_source_count).toBe(0);
+		});
+
+		it('should penalize a single actual grounding source', () => {
+			const sources = [
+				makeSource({ sourceDomain: 'reuters.com' }),
+			];
+			const result = calibrateNewsConfidence(baseAnalysis(), sources);
+
+			expect(result.confidence_reason).toContain('single source');
+			expect(result.calibration.actual_source_count).toBe(1);
+		});
+
+		it('should not penalize multiple high-quality grounding sources', () => {
+			const sources = [
+				makeSource({ sourceDomain: 'reuters.com', publishedAt: '2026-06-28T11:00:00Z' }),
+				makeSource({ sourceDomain: 'bloomberg.com', publishedAt: '2026-06-28T11:00:00Z' }),
+				makeSource({ sourceDomain: 'coindesk.com', publishedAt: '2026-06-28T11:00:00Z' }),
+			];
+			const result = calibrateNewsConfidence(baseAnalysis(), sources);
+
+			expect(result.confidence).toBeGreaterThan(0.7);
+			expect(result.calibration.actual_quality_tiers.high).toBe(3);
+			expect(result.calibration.actual_source_quality).toBeGreaterThan(0.8);
+		});
+
+		it('should apply unknown-freshness penalty when no dates are provided', () => {
+			const sources = [
+				makeSource({ sourceDomain: 'reuters.com' }),
+				makeSource({ sourceDomain: 'cnbc.com' }),
+			];
+			const result = calibrateNewsConfidence(baseAnalysis(), sources);
+
+			expect(result.confidence_reason).toContain('unknown freshness');
+			expect(result.calibration.has_explicit_dates).toBe(false);
+			expect(result.calibration.freshness_unknown).toBe(true);
+		});
+
+		it('should penalize stale grounding sources when dates are older than the freshness window', () => {
+			const now = new Date('2026-06-28T12:00:00Z');
+			const tenDaysAgo = new Date(now.getTime() - (10 * 24 * 60 * 60 * 1000)).toISOString();
+			const sources = [
+				makeSource({ sourceDomain: 'reuters.com', publishedAt: tenDaysAgo }),
+				makeSource({ sourceDomain: 'bloomberg.com', publishedAt: tenDaysAgo }),
+			];
+			const result = calibrateNewsConfidence(baseAnalysis(), sources, { now });
+
+			expect(result.confidence_reason).toMatch(/stale|freshness/);
+			expect(result.calibration.actual_stale_sources).toBe(2);
+			expect(result.calibration.actual_source_freshness).toBeLessThan(0.3);
+		});
+
+		it('should penalize low-quality domains', () => {
+			const sources = [
+				makeSource({ sourceDomain: 'rumors.blog' }),
+				makeSource({ sourceDomain: 'unknown-source.xyz' }),
+			];
+			const result = calibrateNewsConfidence(baseAnalysis(), sources);
+
+			expect(result.confidence_reason).toMatch(/low source authority|moderate source authority/);
+			expect(result.calibration.actual_quality_tiers.low).toBeGreaterThanOrEqual(1);
+			expect(result.calibration.actual_source_quality).toBeLessThan(0.6);
+		});
+
+		it('should let actual grounding count override an optimistic model source_count', () => {
+			const sources = [
+				makeSource({ sourceDomain: 'reuters.com' }),
+			];
+			const analysis = baseAnalysis();
+			analysis.source_count = 10; // model claims 10 sources, but grounding returned 1
+			const result = calibrateNewsConfidence(analysis, sources);
+
+			expect(result.calibration.model_source_count).toBe(10);
+			expect(result.calibration.actual_source_count).toBe(1);
+			expect(result.calibration.effective_source_count).toBe(1);
+			expect(result.confidence_reason).toContain('single source');
+		});
+
+		it('should fall back to model metadata when grounding sources are missing', () => {
+			const analysis = baseAnalysis();
+			const result = calibrateNewsConfidence(analysis, null);
+
+			expect(result.calibration.grounding_used).toBe(false);
+			expect(result.confidence_reason).toContain('sufficient corroboration');
+		});
+
+		it('should never throw and must fall back when grounding sources are malformed', () => {
+			const analysis = baseAnalysis();
+			const malformed = [{}, { url: null, sourceDomain: null }, { title: 'x' }];
+
+			expect(() => calibrateNewsConfidence(analysis, malformed)).not.toThrow();
+			const result = calibrateNewsConfidence(analysis, malformed);
+			expect(result.calibration.grounding_used).toBe(true);
+		});
+
+		it('should return a structured calibration block for downstream debug/dry-run surfaces', () => {
+			const sources = [
+				makeSource({ sourceDomain: 'reuters.com' }),
+				makeSource({ sourceDomain: 'bloomberg.com' }),
+			];
+			const result = calibrateNewsConfidence(baseAnalysis(), sources);
+
+			expect(result.calibration).toMatchObject({
+				grounding_used: true,
+				has_explicit_dates: false,
+				freshness_unknown: true,
+				actual_source_count: 2,
+				effective_source_count: 2,
+			});
+			expect(Array.isArray(result.calibration.actual_source_domains)).toBe(true);
 		});
 	});
 });

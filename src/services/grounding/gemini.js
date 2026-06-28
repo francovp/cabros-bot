@@ -27,6 +27,8 @@ function buildContextSnippet(searchResultText = '') {
 		: '';
 }
 
+const domainQuality = require('./domainQuality');
+
 function shouldRetryGeminiWithFallback(error) {
 	if (!error) {
 		return false;
@@ -215,19 +217,23 @@ async function analyzeNewsForSymbol(symbol, context, options = {}) {
 		const analysisResult = parseNewsAnalysisResponse(response);
 
 		// Use grounded sources if available (store full SearchResult objects, not just URLs)
-		analysisResult.sources = searchResult.results || [];
+		const groundedSources = Array.isArray(searchResult.results) ? searchResult.results : [];
+		analysisResult.sources = groundedSources;
 
 		// Calculate calibrated confidence with source metadata penalties
-		const { confidence, confidence_reason } = calibrateNewsConfidence(analysisResult);
+		const { confidence, confidence_reason, calibration } = calibrateNewsConfidence(analysisResult, groundedSources);
 		analysisResult.confidence = confidence;
 		analysisResult.confidence_reason = confidence_reason;
+		if (calibration) {
+			analysisResult.calibration = calibration;
+		}
 
 		console.info('[Gemini] News analysis complete with grounding', {
 			symbol,
 			category: analysisResult.event_category,
 			confidence: analysisResult.confidence,
 			confidence_reason: analysisResult.confidence_reason,
-			groundedSources: analysisResult.sources.length,
+			groundedSources: groundedSources.length,
 		});
 
 		return analysisResult;
@@ -321,24 +327,114 @@ function parseNewsAnalysisResponse(response) {
 }
 
 /**
- * Calculate calibrated confidence from news analysis result
- * Applies penalties for limited sources, stale or low-quality sources, and uncertainty
- * @param {Object} analysisResult - Parsed and validated news analysis result
- * @returns {{ confidence: number, confidence_reason: string }} Calibrated confidence and reason
+ * Derive calibrated source metadata from the actual grounding search results.
+ *
+ * This is wrapped in try/catch so a malformed grounding payload never blocks
+ * the notification path. If derivation throws, we return null and the caller
+ * falls back to the existing model-only calibration.
  */
-function calibrateNewsConfidence(analysisResult) {
-	const { event_significance, sentiment_score, source_count, source_freshness, source_quality, uncertainty_reason, invalidation_hint } = analysisResult;
+function deriveGroundingCalibration(groundingSources, options = {}) {
+	if (!Array.isArray(groundingSources)) {
+		return null;
+	}
+	if (groundingSources.length === 0) {
+		return {
+			actual_source_count: 0,
+			actual_source_quality: 0,
+			actual_source_freshness: 0,
+			actual_quality_tiers: {
+				high: 0,
+				medium: 0,
+				low: 0,
+				unknown: 0,
+			},
+			actual_source_domains: [],
+			actual_freshness_reason: 'no grounding sources returned',
+			actual_stale_sources: 0,
+			actual_dated_sources: 0,
+			has_explicit_dates: false,
+		};
+	}
+	const quality = domainQuality.scoreQuality(groundingSources);
+	const freshness = domainQuality.scoreFreshness(groundingSources, options);
+	return {
+		actual_source_count: quality.count,
+		actual_source_quality: Number(quality.qualityScore.toFixed(3)),
+		actual_source_freshness: Number(freshness.freshness.toFixed(3)),
+		actual_quality_tiers: quality.tierCounts,
+		actual_source_domains: quality.domains,
+		actual_freshness_reason: freshness.freshnessReason,
+		actual_stale_sources: freshness.staleSources,
+		actual_dated_sources: freshness.totalDated,
+		has_explicit_dates: freshness.hasExplicitDates,
+	};
+}
+
+/**
+ * Calculate calibrated confidence from news analysis result
+ *
+ * When `groundingSources` is provided, the actual grounding source metadata
+ * (count, quality, freshness) overrides the model-emitted values for penalty
+ * purposes. The model-emitted values are still preserved as
+ * `model_source_count`, `model_source_freshness`, `model_source_quality` on
+ * the returned calibration block so callers can compare.
+ *
+ * @param {Object} analysisResult - Parsed and validated news analysis result
+ * @param {Array<Object>} [groundingSources] - Actual SearchResult[] from genaiClient.search()
+ * @returns {{ confidence: number, confidence_reason: string, calibration: Object }}
+ */
+function calibrateNewsConfidence(analysisResult, groundingSources = null, options = {}) {
+	const {
+		event_significance,
+		sentiment_score,
+		source_count: modelSourceCount,
+		source_freshness: modelSourceFreshness,
+		source_quality: modelSourceQuality,
+		uncertainty_reason,
+		invalidation_hint,
+	} = analysisResult;
 
 	// Base confidence from significance and sentiment
 	const baseConfidence = 0.6 * event_significance + 0.4 * Math.abs(sentiment_score);
+
+	// Derive actual grounding metadata defensively. A malformed payload
+	// must never block the notification path.
+	let actualCalibration = null;
+	try {
+		actualCalibration = deriveGroundingCalibration(groundingSources, options);
+	} catch (error) {
+		console.warn('[Gemini] grounding calibration derivation failed, falling back to model metadata:', error.message);
+		actualCalibration = null;
+	}
+
+	// Determine authoritative source count for penalty purposes.
+	let effectiveSourceCount = modelSourceCount;
+	if (actualCalibration) {
+		effectiveSourceCount = actualCalibration.actual_source_count;
+	} else if (effectiveSourceCount == null && Array.isArray(analysisResult.sources)) {
+		effectiveSourceCount = analysisResult.sources.length;
+	}
+
+	// Determine authoritative freshness. Prefer explicit-date score; fall back to model.
+	let effectiveFreshness = modelSourceFreshness;
+	let freshnessIsUnknown = false;
+	if (actualCalibration) {
+		effectiveFreshness = actualCalibration.actual_source_freshness;
+		freshnessIsUnknown = actualCalibration.has_explicit_dates === false;
+	}
+
+	// Determine authoritative quality. Prefer domain-derived score over model.
+	let effectiveQuality = modelSourceQuality;
+	if (actualCalibration) {
+		effectiveQuality = actualCalibration.actual_source_quality;
+	}
 
 	// Apply penalties
 	const reasons = [];
 	let penalty = 0;
 
 	// Source count penalty: penalize when fewer than 2 sources
-	if (source_count == null) {
-		// No explicit source_count from LLM, use sources array length as fallback
+	if (effectiveSourceCount == null) {
 		const fallbackCount = analysisResult.sources?.length || 0;
 		if (fallbackCount === 0) {
 			penalty += 0.3;
@@ -347,28 +443,35 @@ function calibrateNewsConfidence(analysisResult) {
 			penalty += 0.15;
 			reasons.push('single source only');
 		}
-	} else if (source_count === 0) {
+	} else if (effectiveSourceCount === 0) {
 		penalty += 0.3;
-		reasons.push('no corroborating sources');
-	} else if (source_count === 1) {
+		reasons.push('no corroborating sources (grounding returned 0)');
+	} else if (effectiveSourceCount === 1) {
 		penalty += 0.15;
-		reasons.push('single source only');
+		reasons.push('single source only (grounding returned 1)');
 	}
 
-	// Source freshness penalty: penalize stale sources
-	if (source_freshness < 0.3) {
+	// Source freshness penalty: penalize stale sources. If explicit dates are
+	// missing from actual grounding sources, apply a conservative unknown-freshness
+	// penalty and label it. When grounding was used but yielded no sources,
+	// the source-count penalty already covers it.
+	if (actualCalibration && actualCalibration.actual_source_count > 0 && freshnessIsUnknown) {
+		penalty += 0.12;
+		reasons.push('unknown freshness (no dates on grounding sources)');
+	} else if (effectiveFreshness != null && effectiveFreshness < 0.3) {
 		penalty += 0.15;
 		reasons.push('sources appear stale');
-	} else if (source_freshness < 0.6) {
+	} else if (effectiveFreshness != null && effectiveFreshness < 0.6) {
 		penalty += 0.08;
 		reasons.push('moderate source freshness');
 	}
 
-	// Source quality penalty: penalize low-quality/unreliable domains
-	if (source_quality < 0.3) {
+	// Source quality penalty: penalize low-quality/unreliable domains.
+	// Skip when there are no sources at all (handled by source-count penalty).
+	if (effectiveQuality != null && effectiveQuality < 0.3) {
 		penalty += 0.2;
 		reasons.push('low source authority');
-	} else if (source_quality < 0.6) {
+	} else if (effectiveQuality != null && effectiveQuality < 0.6) {
 		penalty += 0.1;
 		reasons.push('moderate source authority');
 	}
@@ -388,7 +491,34 @@ function calibrateNewsConfidence(analysisResult) {
 	const finalConfidence = Math.max(0, Math.min(1, baseConfidence - penalty));
 	const confidenceReason = reasons.length > 0 ? reasons.join('; ') : 'sufficient corroboration and freshness';
 
-	return { confidence: finalConfidence, confidence_reason: confidenceReason };
+	const calibration = {
+		model_source_count: modelSourceCount,
+		model_source_freshness: modelSourceFreshness,
+		model_source_quality: modelSourceQuality,
+		effective_source_count: effectiveSourceCount,
+		effective_source_freshness: effectiveFreshness,
+		effective_source_quality: effectiveQuality,
+		grounding_used: actualCalibration != null,
+		freshness_unknown: freshnessIsUnknown,
+	};
+
+	if (actualCalibration) {
+		calibration.actual_source_count = actualCalibration.actual_source_count;
+		calibration.actual_source_quality = actualCalibration.actual_source_quality;
+		calibration.actual_source_freshness = actualCalibration.actual_source_freshness;
+		calibration.actual_quality_tiers = actualCalibration.actual_quality_tiers;
+		calibration.actual_source_domains = actualCalibration.actual_source_domains;
+		calibration.actual_stale_sources = actualCalibration.actual_stale_sources;
+		calibration.actual_dated_sources = actualCalibration.actual_dated_sources;
+		calibration.has_explicit_dates = actualCalibration.has_explicit_dates;
+		calibration.actual_freshness_reason = actualCalibration.actual_freshness_reason;
+	}
+
+	return {
+		confidence: finalConfidence,
+		confidence_reason: confidenceReason,
+		calibration,
+	};
 }
 
 /**

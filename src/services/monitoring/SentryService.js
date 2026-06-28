@@ -6,6 +6,7 @@
  */
 
 const Sentry = require('@sentry/node');
+const { nodeProfilingIntegration } = require('@sentry/profiling-node');
 
 /**
  * @typedef {'http-alert' | 'news-monitor' | 'telegram' | 'whatsapp' | 'discord' | 'grounding' | 'news-enrichment' | 'process'} RuntimeChannelId
@@ -81,6 +82,7 @@ const Sentry = require('@sentry/node');
  * @property {boolean} sendAlertContent - Whether to include full alert/news text in events
  * @property {number} sampleRateErrors - Error sample rate (0.0-1.0)
  * @property {number|undefined} tracesSampleRate - Trace sample rate (0.0-1.0), undefined disables tracing
+ * @property {number|undefined} profileSessionSampleRate - Profiling session sample rate (0.0-1.0), undefined disables profiling
  * @property {string[]} consoleLogLevels - Console levels captured as Sentry Logs
  */
 
@@ -249,6 +251,10 @@ class SentryService {
 		const dsn = process.env.SENTRY_DSN || undefined;
 		const enabled = process.env.ENABLE_SENTRY === 'true' && !!dsn;
 		const tracesSampleRate = this._parseOptionalSampleRate(process.env.SENTRY_TRACES_SAMPLE_RATE);
+		// Profiling requires tracing; only parse profile rate when tracing is enabled
+		const profileSessionSampleRate = tracesSampleRate !== undefined
+			? this._parseOptionalSampleRate(process.env.SENTRY_PROFILE_SESSION_SAMPLE_RATE)
+			: undefined;
 
 		// Default sendAlertContent to true
 		return {
@@ -259,6 +265,7 @@ class SentryService {
 			sendAlertContent: process.env.SENTRY_SEND_ALERT_CONTENT !== 'false',
 			sampleRateErrors: this._parseSampleRate(process.env.SENTRY_SAMPLE_RATE_ERRORS, 1.0),
 			tracesSampleRate,
+			profileSessionSampleRate,
 			consoleLogLevels: this._parseConsoleLogLevels(),
 		};
 	}
@@ -298,11 +305,15 @@ class SentryService {
 
 				// Configure process-level error capture (FR-002)
 				integrations: (integrations) => {
-					// Keep default integrations and add configured console output as Sentry Logs.
-					return [
-						...integrations,
-						Sentry.consoleLoggingIntegration({ levels: this.config.consoleLogLevels }),
-					];
+					const extra = [Sentry.consoleLoggingIntegration({ levels: this.config.consoleLogLevels })];
+					// Add profiling integration only when tracing + profiling are both enabled
+					if (
+						this.config.tracesSampleRate !== undefined &&
+						this.config.profileSessionSampleRate !== undefined
+					) {
+						extra.push(nodeProfilingIntegration());
+					}
+					return [...integrations, ...extra];
 				},
 
 				// beforeSend hook for additional filtering if needed
@@ -317,6 +328,15 @@ class SentryService {
 				initOptions.tracesSampleRate = this.config.tracesSampleRate;
 			}
 
+			// Profiling: attach profileSessionSampleRate and profileLifecycle only when tracing is on
+			if (
+				this.config.tracesSampleRate !== undefined &&
+				this.config.profileSessionSampleRate !== undefined
+			) {
+				initOptions.profileSessionSampleRate = this.config.profileSessionSampleRate;
+				initOptions.profileLifecycle = 'trace';
+			}
+
 			// Initialize Sentry SDK
 			Sentry.init(initOptions);
 
@@ -326,8 +346,11 @@ class SentryService {
 				lastInitError: undefined,
 			};
 
+			const profilingStatus = this.config.profileSessionSampleRate !== undefined
+				? `enabled (rate=${this.config.profileSessionSampleRate})`
+				: 'disabled';
 			console.info(
-				`[SentryService] Monitoring enabled (environment=${this.config.environment}, release=${this.config.release || 'auto'})`,
+				`[SentryService] Monitoring enabled (environment=${this.config.environment}, release=${this.config.release || 'auto'}, profiling=${profilingStatus})`,
 			);
 		} catch (error) {
 			console.error('[SentryService] Failed to initialize:', error.message);
@@ -356,6 +379,14 @@ class SentryService {
 	}
 
 	/**
+	 * Check if profiling is enabled (requires tracing to be on)
+	 * @returns {boolean}
+	 */
+	isProfilingEnabled() {
+		return this.isTracingEnabled() && !!this.config && this.config.profileSessionSampleRate !== undefined;
+	}
+
+	/**
 	 * Get current service state (for testing and health checks)
 	 * @returns {MonitoringServiceState}
 	 */
@@ -364,7 +395,7 @@ class SentryService {
 	}
 
 	/**
-	 * Get current configuration (for testing)
+	 * Get current configuration (without sensitive DSN)
 	 * @returns {MonitoringConfiguration|null}
 	 */
 	getConfig() {
