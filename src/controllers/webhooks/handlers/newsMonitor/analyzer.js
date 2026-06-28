@@ -616,6 +616,19 @@ class NewsAnalyzer {
 			? enrichmentMetadata.enriched_confidence
 			: geminiAnalysis.confidence;
 
+		// Include confidence calibration fields in alert for downstream delivery
+		const confidenceReason = geminiAnalysis.confidence_reason || 'legacy formula';
+		const calibrationFields = geminiAnalysis._hasCalibrationFields ? {
+			source_count: geminiAnalysis.source_count,
+			source_freshness: geminiAnalysis.source_freshness,
+			source_quality: geminiAnalysis.source_quality,
+			event_age: geminiAnalysis.event_age,
+			time_horizon: geminiAnalysis.time_horizon,
+			uncertainty_reason: geminiAnalysis.uncertainty_reason,
+			invalidation_hint: geminiAnalysis.invalidation_hint,
+			confidence_reason: confidenceReason,
+		} : null;
+
 		// Build the title/original text
 		const eventLabel = this.eventCategoryLabel(geminiAnalysis.event_category);
 		const headline = (geminiAnalysis.headline && geminiAnalysis.headline.trim())
@@ -666,6 +679,11 @@ class NewsAnalyzer {
 			tokenUsage: tokenUsageSummary || undefined,
 		};
 
+		// Add calibration fields to enriched object if available
+		if (calibrationFields) {
+			enriched.confidence_calibration = calibrationFields;
+		}
+
 		return {
 			symbol,
 			eventCategory: geminiAnalysis.event_category,
@@ -675,11 +693,14 @@ class NewsAnalyzer {
 			sources: geminiAnalysis.sources,
 			text: alertTitle,
 			enriched,
+			// Include calibration fields at top level for backward compatibility
+			...(calibrationFields || {}),
 			timestamp: Date.now(),
 			marketContext: marketContext || undefined,
 			enrichmentMetadata: enrichmentMetadata || undefined,
 		};
 	}
+
 
 	/**
    * Format alert message for notification channels
