@@ -143,6 +143,15 @@ function getNewsMonitorLlmDependency({ enabled, provider }) {
 				hasValue(process.env.OPENROUTER_API_KEY)
 				&& hasValue(process.env.OPENROUTER_MODEL || DEFAULT_OPENROUTER_MODEL),
 		});
+	case 'cloudflare':
+		return providerDependencyStatus({
+			enabled,
+			provider,
+			configured:
+				hasValue(process.env.CF_AIG_TOKEN)
+				&& hasValue(process.env.CF_AIG_BASE_URL)
+				&& hasValue(process.env.CF_AIG_MODEL),
+		});
 	default:
 		return providerDependencyStatus({
 			enabled,
@@ -295,8 +304,15 @@ function getStatus() {
 			langfuse,
 			braveSearch,
 			newsMonitorLlm,
-			llmAlertEnrichment,
-			newsMonitorDedup,
+		llmAlertEnrichment,
+		cloudflareAig: dependencyStatus({
+			enabled: isEnabled(process.env.ENABLE_CLOUDFLARE_AIG),
+			configured:
+				hasValue(process.env.CF_AIG_TOKEN)
+				&& hasValue(process.env.CF_AIG_BASE_URL)
+				&& hasValue(process.env.CF_AIG_MODEL),
+		}),
+		newsMonitorDedup,
 		},
 	};
 }

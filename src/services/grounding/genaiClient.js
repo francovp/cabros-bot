@@ -11,10 +11,12 @@ const {
 	FORCE_BRAVE_SEARCH,
 	AZURE_LLM_MODEL,
 	OPENROUTER_MODEL,
+	CF_AIG_MODEL,
 	GEMINI_MODEL_NAME_FALLBACK,
 } = config;
 const { getAzureAIClient } = require('../inference/azureAiClient');
 const { getOpenRouterClient } = require('../inference/openRouterClient');
+const { getCloudflareAiClient } = require('../inference/cloudflareAiClient');
 const { normalizeUsageMetadata } = require('../../lib/tokenUsage');
 const sentryService = require('../monitoring/SentryService');
 
@@ -430,6 +432,31 @@ class GenaiClient {
 				}
 			} catch (error) {
 				console.warn('[GenaiClient] OpenRouter call failed:', error.message);
+				lastError = error;
+			}
+		}
+
+		// 4. Try Cloudflare AI Gateway
+		if (MODEL_PROVIDER === 'cloudflare') {
+			try {
+				const cfClient = getCloudflareAiClient();
+				if (cfClient.validate()) {
+					const startTime = Date.now();
+					console.debug('[GenaiClient] Attempting Cloudflare AI Gateway Client');
+					const { text, usage } = await cfClient.chatCompletion(systemPrompt, userPrompt);
+					const durationMs = Date.now() - startTime;
+					const usageNorm = normalizeUsageMetadata(usage);
+					sentryService.captureLlmMetric({ model: CF_AIG_MODEL || 'cloudflare-aig', inputTokens: usageNorm?.inputTokens || 0, outputTokens: usageNorm?.outputTokens || 0, durationMs });
+					return {
+						text,
+						citations: context.citations || [],
+						modelUsed: CF_AIG_MODEL || 'cloudflare-aig',
+					};
+				} else {
+					console.debug('[GenaiClient] Cloudflare AI Gateway not configured, skipping');
+				}
+			} catch (error) {
+				console.warn('[GenaiClient] Cloudflare AI Gateway call failed:', error.message);
 				lastError = error;
 			}
 		}
