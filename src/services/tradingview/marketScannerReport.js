@@ -2,6 +2,7 @@ const {
 	normalizeTradingViewTimeframe,
 	SUPPORTED_MCP_TIMEFRAMES,
 } = require('./parseTradingViewSignal');
+const { rankScannerItems } = require('./marketScannerScoring');
 
 const SUPPORTED_SCAN_TYPES = new Set([
 	'top_gainers',
@@ -60,8 +61,9 @@ function parseMarketScannerRequest(req = {}) {
 	const scans = parseScans(body);
 	const limit = parseLimit(body);
 	const bbwThreshold = parseBbwThreshold(body);
+	const ranked = parseRanked(body);
 
-	return { exchange, timeframe, scans, limit, bbwThreshold };
+	return { exchange, timeframe, scans, limit, bbwThreshold, ranked };
 }
 
 function getRequestBody(req = {}) {
@@ -177,10 +179,31 @@ function parseBbwThreshold(body = {}) {
 	return threshold;
 }
 
+function parseRanked(body = {}) {
+	if (
+		!Object.prototype.hasOwnProperty.call(body, 'ranked')
+		|| body.ranked === undefined
+		|| body.ranked === null
+	) {
+		return false;
+	}
+
+	if (body.ranked === true || body.ranked === 'true') {
+		return true;
+	}
+
+	if (body.ranked === false || body.ranked === 'false') {
+		return false;
+	}
+
+	throw new MarketScannerRequestError('ranked must be a boolean');
+}
+
 function buildMarketScannerReport(scanResults = [], options = {}) {
 	const now = options.now || new Date();
 	const exchange = options.exchange || DEFAULT_EXCHANGE;
 	const timeframe = options.timeframe || '4h';
+	const ranked = options.ranked === true;
 
 	const lines = [
 		`📡 *SCANNER DE MERCADO — ${formatReportDate(now)}*`,
@@ -214,20 +237,24 @@ function buildMarketScannerReport(scanResults = [], options = {}) {
 			itemsToRender = itemsToRender.filter((item) => typeof item.changePercent === 'number' && item.changePercent < 0);
 		}
 
+		if (ranked) {
+			itemsToRender = rankScannerItems(itemsToRender, scanResult.scan);
+		}
+
 		if (itemsToRender.length === 0) {
 			lines.push('No hay.');
 			return;
 		}
 
 		itemsToRender.forEach((item, index) => {
-			lines.push(formatScanItem(item, index + 1, scanResult.scan));
+			lines.push(formatScanItem(item, index + 1, scanResult.scan, ranked));
 		});
 	});
 
 	return lines.join('\n');
 }
 
-function formatScanItem(item, rank, scanType) {
+function formatScanItem(item, rank, scanType, ranked = false) {
 	const symbol = stripExchange(item.symbol);
 	const price = formatCurrency(numberOrNull(item.indicators?.close ?? null));
 	const change = formatPercent(numberOrNull(item.changePercent ?? null));
@@ -248,6 +275,13 @@ function formatScanItem(item, rank, scanType) {
 	} else if (scanType === 'bollinger_scan') {
 		const bbw = numberOrNull(item.bbw ?? null);
 		suffix = ` | BBW ${formatNumber(bbw, 2)}`;
+	}
+
+	if (ranked && item._score !== undefined) {
+		suffix += ` | 🏆 ${item._score}/100`;
+		if (item._scoreReason) {
+			suffix += ` ${item._scoreReason}`;
+		}
 	}
 
 	return `${rank}. ${symbol} ${price} (${change})${suffix}`;

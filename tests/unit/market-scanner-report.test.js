@@ -27,6 +27,7 @@ describe('Market Scanner Report', () => {
 				scans: ['top_gainers', 'top_losers', 'volume_breakout_scanner'],
 				limit: 5,
 				bbwThreshold: 0.05,
+				ranked: false,
 			});
 		});
 
@@ -56,6 +57,7 @@ describe('Market Scanner Report', () => {
 				scans: ['top_gainers', 'bollinger_scan'],
 				limit: 15,
 				bbwThreshold: 0.02,
+				ranked: false,
 			});
 		});
 
