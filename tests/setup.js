@@ -67,5 +67,10 @@ jest.mock('@sentry/node', () => ({
 	setExtra: jest.fn(),
 }), { virtual: true });
 
+// Mock @sentry/profiling-node to prevent loading native binary in tests
+jest.mock('@sentry/profiling-node', () => ({
+	nodeProfilingIntegration: jest.fn(() => 'node-profiling-integration'),
+}), { virtual: true });
+
 // Increase timeout for all tests
 jest.setTimeout(15000);
