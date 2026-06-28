@@ -284,8 +284,10 @@ async function getMetricsSummary({ from, to, limit } = {}) {
 	}
 
 	try {
-		// Run evaluation first to update pending outcomes
-		await evaluatePendingOutcomes();
+		// Trigger evaluation in the background without blocking the query response
+		void evaluatePendingOutcomes().catch(error => {
+			console.warn('[SignalOutcomeService] Background pending outcomes evaluation failed:', error.message);
+		});
 
 		const parsedFrom = from ? new Date(from) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 		const parsedTo = to ? new Date(to) : new Date();

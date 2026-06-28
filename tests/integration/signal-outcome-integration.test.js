@@ -77,6 +77,9 @@ describe('Shadow-Mode Outcome Tracking Integration Tests', () => {
 			docData.outcomes[key].targetTime = pastIso;
 		}
 
+		// Manually trigger and await evaluation since it runs in the background in production
+		await SignalOutcomeService.evaluatePendingOutcomes();
+
 		const fromIso = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
 		const toIso = new Date(Date.now() + 1 * 24 * 60 * 60 * 1000).toISOString();
 
