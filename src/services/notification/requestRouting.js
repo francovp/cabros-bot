@@ -1,6 +1,6 @@
 'use strict';
 
-const VALID_CHANNELS = ['telegram', 'whatsapp'];
+const VALID_CHANNELS = ['telegram', 'whatsapp', 'discord'];
 
 class NotificationRoutingValidationError extends Error {
 	constructor(message, details = null) {
@@ -101,6 +101,14 @@ async function sendWithNotificationRouting(notificationManager, alert, routing =
 	};
 
 	if (routing.channels) {
+		const enabledChannels = getRequestedChannels(notificationManager);
+		const unavailableChannels = routing.channels.filter((channel) => !enabledChannels.includes(channel));
+		if (unavailableChannels.length > 0) {
+			throw new NotificationRoutingValidationError(
+				`Requested channel(s) disabled or misconfigured: ${unavailableChannels.join(', ')}`,
+				{ field: 'channels', unavailableChannels },
+			);
+		}
 		return notificationManager.sendToChannels(alertPayload, routing.channels, options);
 	}
 

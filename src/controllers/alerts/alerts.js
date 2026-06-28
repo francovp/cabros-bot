@@ -5,7 +5,7 @@ const sentryService = require('../../services/monitoring/SentryService');
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
-const VALID_CHANNELS = ['telegram', 'whatsapp'];
+const VALID_CHANNELS = ['telegram', 'whatsapp', 'discord'];
 const DEFAULT_SUMMARY_LIMIT = 500;
 const MAX_SUMMARY_LIMIT = 1000;
 const DEFAULT_EXPORT_LIMIT = 500;

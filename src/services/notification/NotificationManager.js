@@ -9,12 +9,16 @@ class NotificationManager {
 	/**
    * @param {Object} telegramService - TelegramService instance
    * @param {Object} whatsappService - WhatsAppService instance
+   * @param {Object} discordService - DiscordService instance
    */
-	constructor(telegramService, whatsappService) {
-		this.channels = new Map([
-			['telegram', telegramService],
-			['whatsapp', whatsappService],
-		]);
+	constructor(telegramService, whatsappService, discordService) {
+		this.channels = new Map(
+			[
+				['telegram', telegramService],
+				['whatsapp', whatsappService],
+				['discord', discordService],
+			].filter(([, channel]) => !!channel),
+		);
 	}
 
 	/**
@@ -191,6 +195,7 @@ class NotificationManager {
 				const providerMap = {
 					telegram: 'telegram-api',
 					whatsapp: 'whatsapp-greenapi',
+					discord: 'discord-webhook',
 				};
 				const provider = providerMap[result.channel] || result.channel;
 
@@ -293,6 +298,7 @@ class NotificationManager {
 				const providerMap = {
 					telegram: 'telegram-api',
 					whatsapp: 'whatsapp-greenapi',
+					discord: 'discord-webhook',
 				};
 				const provider = providerMap[result.channel] || result.channel;
 

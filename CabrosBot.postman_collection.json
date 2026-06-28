@@ -277,7 +277,7 @@
 						],
 						"body": {
 							"mode": "raw",
-							"raw": "{\n  \"message\": \"Custom notification from automation\",\n  \"channels\": [\"telegram\", \"whatsapp\"],\n  \"telegramChatId\": \"-1001234567890\",\n  \"whatsappChatId\": \"120363000000000000@g.us\"\n}"
+							"raw": "{\n  \"message\": \"Custom notification from automation\",\n  \"channels\": [\"telegram\", \"whatsapp\", \"discord\"],\n  \"telegramChatId\": \"-1001234567890\",\n  \"whatsappChatId\": \"120363000000000000@g.us\"\n}"
 						},
 						"url": {
 							"raw": "{{baseUrl}}/api/webhook/message",
@@ -287,10 +287,10 @@
 					},
 					"response": [
 						{
-							"name": "Success (both channels)",
+							"name": "Success (selected channels)",
 							"status": "OK",
 							"code": 200,
-							"body": "{\n  \"success\": true,\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"tg-msg-123\",\n      \"attemptCount\": 1,\n      \"durationMs\": 450\n    },\n    {\n      \"channel\": \"whatsapp\",\n      \"success\": true,\n      \"messageId\": \"wa-msg-456\",\n      \"attemptCount\": 1,\n      \"durationMs\": 320\n    }\n  ]\n}"
+							"body": "{\n  \"success\": true,\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"tg-msg-123\",\n      \"attemptCount\": 1,\n      \"durationMs\": 450\n    },\n    {\n      \"channel\": \"whatsapp\",\n      \"success\": true,\n      \"messageId\": \"wa-msg-456\",\n      \"attemptCount\": 1,\n      \"durationMs\": 320\n    },\n    {\n      \"channel\": \"discord\",\n      \"success\": true,\n      \"messageId\": \"discord-msg-789\"\n    }\n  ]\n}"
 						},
 						{
 							"name": "Success (single channel)",
@@ -320,7 +320,7 @@
 							"name": "Error (unknown channel)",
 							"status": "Bad Request",
 							"code": 400,
-							"body": "{\n  \"success\": false,\n  \"error\": \"Unknown channel(s): discord. Valid channels: telegram, whatsapp\",\n  \"details\": {\n    \"field\": \"channels\",\n    \"unknownChannels\": [\"discord\"]\n  }\n}"
+							"body": "{\n  \"success\": false,\n  \"error\": \"Unknown channel(s): slack. Valid channels: telegram, whatsapp, discord\",\n  \"details\": {\n    \"field\": \"channels\",\n    \"unknownChannels\": [\"slack\"]\n  }\n}"
 						},
 						{
 							"name": "Partial Failure (WhatsApp down)",
@@ -945,7 +945,7 @@
 								],
 								"body": {
 									"mode": "raw",
-									"raw": "{\n  \"channels\": [\"telegram\", \"discord\"]\n}"
+									"raw": "{\n  \"channels\": [\"telegram\", \"slack\"]\n}"
 								},
 								"url": {
 									"raw": "{{baseUrl}}/api/alerts/{{alertId}}/replay",
@@ -955,7 +955,7 @@
 							},
 							"status": "Bad Request",
 							"code": 400,
-							"body": "{\n  \"error\": \"Unknown channel(s): discord. Valid channels: telegram, whatsapp.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+							"body": "{\n  \"error\": \"Unknown channel(s): slack. Valid channels: telegram, whatsapp, discord.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
 						}
 					]
 				}
