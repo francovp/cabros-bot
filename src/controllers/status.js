@@ -1,6 +1,7 @@
 const { createPrivateKey } = require('crypto');
 const { accessSync, constants } = require('fs');
 const packageJson = require('../../package.json');
+const sentryService = require('../services/monitoring/SentryService');
 
 const DEFAULT_TRADINGVIEW_MCP_URL = 'https://tradingview-mcp.onrender.com/mcp';
 const DEFAULT_AZURE_LLM_ENDPOINT = 'https://models.github.ai/inference';
@@ -297,6 +298,7 @@ function getStatus() {
 			tradingViewConfluenceMultiTimeframe: isEnabled(process.env.ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME),
 			firestoreAlertStorage: firestoreEnabled,
 			sentryMonitoring: sentryEnabled,
+			sentryProfiling: sentryService.isProfilingEnabled(),
 			langfusePrompts: langfusePromptsEnabled,
 			marketScanner: marketScannerEnabled,
 			binancePriceCheck: binancePriceCheckEnabled,
