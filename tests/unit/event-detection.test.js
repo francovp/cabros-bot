@@ -181,11 +181,12 @@ Some text after...`;
 	describe('analyzeNewsForSymbol', () => {
 		beforeEach(() => {
 			jest.clearAllMocks();
+			const recentSourceDate = new Date(Date.now() - (60 * 60 * 1000)).toISOString();
 			// Mock search() to return grounding results
 			genaiClient.search.mockResolvedValue({
 				results: [
-					{ url: 'https://reuters.com/1', title: 'Source 1', sourceDomain: 'reuters.com', publishedAt: '2026-06-28T11:00:00Z' },
-					{ url: 'https://bloomberg.com/2', title: 'Source 2', sourceDomain: 'bloomberg.com', publishedAt: '2026-06-28T10:00:00Z' },
+					{ url: 'https://reuters.com/1', title: 'Source 1', sourceDomain: 'reuters.com', publishedAt: recentSourceDate },
+					{ url: 'https://bloomberg.com/2', title: 'Source 2', sourceDomain: 'bloomberg.com', publishedAt: recentSourceDate },
 				],
 				searchResultText: 'Market context from search',
 				totalResults: 2,
@@ -728,10 +729,11 @@ Some text after...`;
 		});
 
 		it('should not penalize multiple high-quality grounding sources', () => {
+			const recentSourceDate = new Date(Date.now() - (60 * 60 * 1000)).toISOString();
 			const sources = [
-				makeSource({ sourceDomain: 'reuters.com', publishedAt: '2026-06-28T11:00:00Z' }),
-				makeSource({ sourceDomain: 'bloomberg.com', publishedAt: '2026-06-28T11:00:00Z' }),
-				makeSource({ sourceDomain: 'coindesk.com', publishedAt: '2026-06-28T11:00:00Z' }),
+				makeSource({ sourceDomain: 'reuters.com', publishedAt: recentSourceDate }),
+				makeSource({ sourceDomain: 'bloomberg.com', publishedAt: recentSourceDate }),
+				makeSource({ sourceDomain: 'coindesk.com', publishedAt: recentSourceDate }),
 			];
 			const result = calibrateNewsConfidence(baseAnalysis(), sources);
 
