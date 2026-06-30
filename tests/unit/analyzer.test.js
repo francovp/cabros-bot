@@ -249,3 +249,55 @@ describe('Analyzer - Unit Tests', () => {
 		expect(typeof context).toBe('object');
 	});
 });
+
+describe('Analyzer - Grounding Calibration Surface', () => {
+	const { getAnalyzer } = require('../../src/controllers/webhooks/handlers/newsMonitor/analyzer');
+	const analyzer = getAnalyzer();
+
+	const baseAnalysis = (overrides = {}) => ({
+		headline: 'Test headline',
+		event_category: 'price_surge',
+		sentiment_score: 0.8,
+		confidence: 0.8,
+		event_significance: 0.9,
+		source_count: 2,
+		source_freshness: 0.9,
+		source_quality: 0.9,
+		event_age_hours: 1,
+		time_horizon: 'short_term',
+		uncertainty_reason: '',
+		invalidation_hint: '',
+		...overrides,
+	});
+
+	it('should expose grounding calibration in the alert payload for debug surfaces', () => {
+		const analysis = baseAnalysis({
+			calibration: {
+				grounding_used: true,
+				model_source_count: 5,
+				actual_source_count: 1,
+				actual_source_quality: 0.3,
+				actual_source_freshness: 0.2,
+				actual_quality_tiers: { high: 0, medium: 0, low: 1, unknown: 0 },
+				actual_source_domains: ['rumors.blog'],
+				has_explicit_dates: false,
+				freshness_unknown: true,
+			},
+		});
+		const alert = analyzer.buildAlert('BTCUSDT', analysis, null);
+
+		expect(alert.calibration).toBeDefined();
+		expect(alert.calibration.grounding_used).toBe(true);
+		expect(alert.calibration.actual_source_count).toBe(1);
+		expect(alert.calibration.actual_source_quality).toBe(0.3);
+	});
+
+	it('should not block notification when calibration payload is missing', () => {
+		const analysis = baseAnalysis();
+		const alert = analyzer.buildAlert('BTCUSDT', analysis, null);
+
+		expect(alert.symbol).toBe('BTCUSDT');
+		expect(alert.calibration).toBeUndefined();
+		expect(alert.confidence_reason).toBeDefined();
+	});
+});

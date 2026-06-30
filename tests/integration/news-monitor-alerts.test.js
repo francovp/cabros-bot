@@ -374,4 +374,86 @@ describe('News Monitor - Alert Delivery Response Structure (US2)', () => {
 			}
 		});
 	});
+
+	describe('Grounding calibration surfaces in alert response', () => {
+		beforeEach(() => {
+			jest.dontMock('../../src/services/grounding/gemini');
+			jest.dontMock('../../src/services/grounding/genaiClient');
+			jest.resetModules();
+
+			const localGemini = require('../../src/services/grounding/gemini');
+			const localGenaiClient = require('../../src/services/grounding/genaiClient');
+			jest.spyOn(localGemini, 'analyzeNewsForSymbol').mockResolvedValue({
+				event_category: 'price_surge',
+				event_significance: 0.85,
+				sentiment_score: 0.75,
+				headline: 'Bitcoin surges on regulatory clarity',
+				confidence: 0.45,
+				confidence_reason: 'no corroborating sources (grounding returned 0); low source authority',
+				source_count: 0,
+				source_freshness: 0,
+				source_quality: 0,
+				event_age_hours: 1,
+				time_horizon: 'short_term',
+				uncertainty_reason: '',
+				invalidation_hint: '',
+				calibration: {
+					grounding_used: true,
+					model_source_count: 3,
+					actual_source_count: 0,
+					actual_source_quality: 0,
+					actual_source_freshness: 0,
+					actual_quality_tiers: { high: 0, medium: 0, low: 0, unknown: 0 },
+					actual_source_domains: [],
+					has_explicit_dates: false,
+					freshness_unknown: true,
+				},
+			});
+			jest.spyOn(localGenaiClient, 'search').mockResolvedValue({
+				results: [],
+				searchResultText: '',
+				totalResults: 0,
+			});
+
+			process.env.NEWS_ALERT_THRESHOLD = '0.7';
+			const localApp = require('../../app');
+			const localRoutes = getRoutes(mockBot);
+			localApp.use('/api', localRoutes);
+		});
+
+		afterEach(() => {
+			jest.restoreAllMocks();
+			jest.doMock('../../src/services/grounding/gemini', () => ({
+				analyzeNewsForSymbol: jest.fn().mockResolvedValue({
+					event_category: 'price_surge',
+					headline: 'Bitcoin surges',
+					sentiment_score: 0.85,
+					confidence: 0.75,
+					sources: ['https://example.com'],
+				}),
+			}));
+			jest.doMock('../../src/services/grounding/genaiClient', () => ({
+				llmCall: jest.fn().mockResolvedValue('test response'),
+				search: jest.fn().mockResolvedValue({
+					results: [
+						{ url: 'https://example.com/1', title: 'Source 1' },
+						{ url: 'https://example.com/2', title: 'Source 2' },
+					],
+					searchResultText: 'Market context from search',
+					totalResults: 2,
+				}),
+			}));
+		});
+
+		it('should suppress alert when calibrated confidence from weak grounding is below NEWS_ALERT_THRESHOLD', async () => {
+			const localApp = require('../../app');
+			const response = await request(localApp)
+				.get('/api/news-monitor').set('x-api-key', 'test-key')
+				.query({ crypto: 'BTCUSDT' });
+
+			expect(response.status).toBe(200);
+			expect(response.body.results[0]).toBeDefined();
+			expect(response.body.results[0].alert).toBeNull();
+		});
+	});
 });
