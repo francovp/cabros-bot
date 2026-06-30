@@ -254,9 +254,44 @@ function buildMarketScannerReport(scanResults = [], options = {}) {
 	return lines.join('\n');
 }
 
+function getInvalidationDistance(price, stopLoss) {
+	if (price === null || stopLoss === null || stopLoss >= price) {
+		return null;
+	}
+	return price - stopLoss;
+}
+
+function getRiskRewardRatio(price, stopLoss, takeProfit) {
+	if (price === null || stopLoss === null || takeProfit === null) {
+		return null;
+	}
+
+	const risk = price - stopLoss;
+	const reward = takeProfit - price;
+
+	if (risk <= 0 || reward <= 0) {
+		return null;
+	}
+
+	return reward / risk;
+}
+
+function classifyRiskReward(ratio) {
+	if (ratio >= 2) {
+		return 'favorable';
+	}
+
+	if (ratio >= 1) {
+		return 'neutral';
+	}
+
+	return 'poor';
+}
+
 function formatScanItem(item, rank, scanType, ranked = false) {
 	const symbol = stripExchange(item.symbol);
-	const price = formatCurrency(numberOrNull(item.indicators?.close ?? null));
+	const priceVal = numberOrNull(item.indicators?.close ?? null);
+	const price = formatCurrency(priceVal);
 	const change = formatPercent(numberOrNull(item.changePercent ?? null));
 
 	let suffix = '';
@@ -284,7 +319,46 @@ function formatScanItem(item, rank, scanType, ranked = false) {
 		}
 	}
 
-	return `${rank}. ${symbol} ${price} (${change})${suffix}`;
+	let itemLine = `${rank}. ${symbol} ${price} (${change})${suffix}`;
+
+	if (priceVal !== null) {
+		const atr = numberOrNull(item.indicators?.atr ?? item.indicators?.ATR ?? item.atr ?? null);
+		const bbLower = numberOrNull(item.indicators?.bb_lower ?? item.indicators?.bollinger_lower ?? item.indicators?.lower ?? item.bollinger?.lower ?? item.bollinger_lower ?? null);
+		const bbUpper = numberOrNull(item.indicators?.bb_upper ?? item.indicators?.bollinger_upper ?? item.indicators?.upper ?? item.bollinger?.upper ?? item.bollinger_upper ?? null);
+		const support = numberOrNull(item.indicators?.support ?? item.indicators?.nearest_support ?? item.support ?? item.support_resistance?.nearest_support ?? null);
+		const resistance = numberOrNull(item.indicators?.resistance ?? item.indicators?.nearest_resistance ?? item.resistance ?? item.support_resistance?.nearest_resistance ?? null);
+
+		let stopLoss = null;
+		if (atr !== null) {
+			stopLoss = priceVal - (atr * 1.5);
+		} else if (bbLower !== null && bbLower < priceVal) {
+			stopLoss = bbLower;
+		} else if (support !== null && support < priceVal) {
+			stopLoss = support;
+		}
+
+		let takeProfit = null;
+		if (resistance !== null && resistance > priceVal) {
+			takeProfit = resistance;
+		} else if (bbUpper !== null && bbUpper > priceVal) {
+			takeProfit = bbUpper;
+		} else if (atr !== null) {
+			takeProfit = priceVal + (atr * 3);
+		}
+
+		if (stopLoss !== null && takeProfit !== null) {
+			const rrr = getRiskRewardRatio(priceVal, stopLoss, takeProfit);
+			const invDist = getInvalidationDistance(priceVal, stopLoss);
+
+			const rrrText = rrr !== null ? ` | Risk/Reward: ${formatNumber(rrr, 2)}x (${classifyRiskReward(rrr)})` : '';
+			const invText = invDist !== null ? ` (Invalidación: ${formatCurrency(invDist)})` : '';
+
+			itemLine += `\n  - *Stop Loss:* ${formatCurrency(stopLoss)}${invText}`;
+			itemLine += `\n  - *Target:* ${formatCurrency(takeProfit)}${rrrText}`;
+		}
+	}
+
+	return itemLine;
 }
 
 function getBreakoutEmoji(breakoutType) {
@@ -359,6 +433,9 @@ function formatNumber(value, decimals) {
 }
 
 function numberOrNull(value) {
+	if (value === null || value === undefined) {
+		return null;
+	}
 	const number = Number(value);
 	return Number.isFinite(number) ? number : null;
 }
