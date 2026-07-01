@@ -371,6 +371,13 @@ function getScanItemSide(scanType, item = {}) {
 		}
 	}
 
+	if (typeof item.trading_recommendation === 'string') {
+		const recommendation = item.trading_recommendation.trim().toLowerCase();
+		if (/\bsell\b/.test(recommendation)) {
+			return 'SELL';
+		}
+	}
+
 	return 'BUY';
 }
 

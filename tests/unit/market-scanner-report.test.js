@@ -453,6 +453,34 @@ describe('Market Scanner Report', () => {
 				expect(report).toContain('  - *Target:* $42.00 | Risk/Reward: 1.60x (neutral)');
 			});
 
+			it('computes short-side risk/reward levels for smart volume sell recommendations', () => {
+				const results = [
+					{
+						scan: 'smart_volume_scanner',
+						status: 'success',
+						items: [
+							{
+								symbol: 'BINANCE:SELLUSDT',
+								changePercent: -5.0,
+								volume_ratio: 2.0,
+								trading_recommendation: 'STRONG SELL',
+								indicators: { close: 100, atr: 4 },
+							},
+						],
+					},
+				];
+
+				const report = buildMarketScannerReport(results, {
+					exchange: 'BINANCE',
+					timeframe: '4h',
+					now: mockDate,
+				});
+
+				expect(report).toContain('1. SELLUSDT $100.00 (-5.0%) | Vol 2.0x  STRONG SELL');
+				expect(report).toContain('  - *Stop Loss:* $106.00 (Invalidación: $6.00)');
+				expect(report).toContain('  - *Target:* $88.00 | Risk/Reward: 2.00x (favorable)');
+			});
+
 			it('omits risk metadata when computed risk/reward is invalid', () => {
 				const results = [
 					{
