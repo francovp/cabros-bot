@@ -326,8 +326,8 @@ function formatScanItem(item, rank, scanType, ranked = false) {
 		const atr = numberOrNull(item.indicators?.atr ?? item.indicators?.ATR ?? item.atr ?? null);
 		const bbLower = numberOrNull(item.indicators?.bb_lower ?? item.indicators?.bollinger_lower ?? item.indicators?.lower ?? item.bollinger?.lower ?? item.bollinger_lower ?? null);
 		const bbUpper = numberOrNull(item.indicators?.bb_upper ?? item.indicators?.bollinger_upper ?? item.indicators?.upper ?? item.bollinger?.upper ?? item.bollinger_upper ?? null);
-		const support = numberOrNull(item.indicators?.support ?? item.indicators?.nearest_support ?? item.support ?? item.support_resistance?.nearest_support ?? null);
-		const resistance = numberOrNull(item.indicators?.resistance ?? item.indicators?.nearest_resistance ?? item.resistance ?? item.support_resistance?.nearest_resistance ?? null);
+			const support = numberOrNull(item.indicators?.support ?? item.indicators?.nearest_support ?? item.support ?? item.support_resistance?.nearest_support ?? item.support_resistance?.support_1 ?? null);
+			const resistance = numberOrNull(item.indicators?.resistance ?? item.indicators?.nearest_resistance ?? item.resistance ?? item.support_resistance?.nearest_resistance ?? item.support_resistance?.resistance_1 ?? null);
 
 		const { stopLoss, takeProfit } = getRiskLevelsForSide({
 			side,

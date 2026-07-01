@@ -343,10 +343,10 @@ describe('Market Scanner Report', () => {
 			expect(report).toContain('  - *Target:* $3,200.00 | Risk/Reward: 2.00x (favorable)');
 		});
 
-		it('covers support/resistance-based risk/reward formatting when support and resistance are present', () => {
-			const results = [
-				{
-					scan: 'top_gainers',
+			it('covers support/resistance-based risk/reward formatting when support and resistance are present', () => {
+				const results = [
+					{
+						scan: 'top_gainers',
 					status: 'success',
 					items: [
 						{
@@ -367,14 +367,41 @@ describe('Market Scanner Report', () => {
 			// Stop Loss = 95. Invalidation = 5
 			// Target = 110. RRR = 10 / 5 = 2.00x (favorable)
 			expect(report).toContain('1. SOLUSDT $100.00 (+4.5%)');
-			expect(report).toContain('  - *Stop Loss:* $95.00 (Invalidación: $5.00)');
-			expect(report).toContain('  - *Target:* $110.00 | Risk/Reward: 2.00x (favorable)');
-		});
+				expect(report).toContain('  - *Stop Loss:* $95.00 (Invalidación: $5.00)');
+				expect(report).toContain('  - *Target:* $110.00 | Risk/Reward: 2.00x (favorable)');
+			});
 
-		it('computes short-side risk/reward levels for top losers', () => {
-			const results = [
-				{
-					scan: 'top_losers',
+			it('covers numbered support/resistance levels from TradingView payloads', () => {
+				const results = [
+					{
+						scan: 'top_gainers',
+						status: 'success',
+						items: [
+							{
+								symbol: 'BINANCE:LEVELUSDT',
+								changePercent: 4.5,
+								indicators: { close: 100 },
+								support_resistance: { support_1: 94, resistance_1: 112 },
+							},
+						],
+					},
+				];
+
+				const report = buildMarketScannerReport(results, {
+					exchange: 'BINANCE',
+					timeframe: '4h',
+					now: mockDate,
+				});
+
+				expect(report).toContain('1. LEVELUSDT $100.00 (+4.5%)');
+				expect(report).toContain('  - *Stop Loss:* $94.00 (Invalidación: $6.00)');
+				expect(report).toContain('  - *Target:* $112.00 | Risk/Reward: 2.00x (favorable)');
+			});
+
+			it('computes short-side risk/reward levels for top losers', () => {
+				const results = [
+					{
+						scan: 'top_losers',
 					status: 'success',
 					items: [
 						{
