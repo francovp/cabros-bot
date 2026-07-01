@@ -286,5 +286,308 @@ describe('Market Scanner Report', () => {
 			expect(report).toContain('*🟢 TOP GANADORES*');
 			expect(report).toContain('⚠️ Error: MCP server connection refused');
 		});
+
+		it('covers ATR-based risk/reward formatting when close and ATR are present', () => {
+			const results = [
+				{
+					scan: 'top_gainers',
+					status: 'success',
+					items: [
+						{
+							symbol: 'BINANCE:BTCUSDT',
+							changePercent: 5.0,
+							indicators: { close: 60000, atr: 2000 },
+						},
+					],
+				},
+			];
+
+			const report = buildMarketScannerReport(results, {
+				exchange: 'BINANCE',
+				timeframe: '4h',
+				now: mockDate,
+			});
+
+			// Stop Loss = 60000 - (2000 * 1.5) = 57000. Invalidation = 3000
+			// Target = 60000 + (2000 * 3) = 66000. RRR = 6000 / 3000 = 2.00x (favorable)
+			expect(report).toContain('1. BTCUSDT $60,000.00 (+5.0%)');
+			expect(report).toContain('  - *Stop Loss:* $57,000.00 (Invalidación: $3,000.00)');
+			expect(report).toContain('  - *Target:* $66,000.00 | Risk/Reward: 2.00x (favorable)');
+		});
+
+		it('covers Bollinger-based risk/reward formatting when close, lower and upper bands are present', () => {
+			const results = [
+				{
+					scan: 'top_gainers',
+					status: 'success',
+					items: [
+						{
+							symbol: 'BINANCE:ETHUSDT',
+							changePercent: 3.2,
+							indicators: { close: 3000, bb_lower: 2900, bb_upper: 3200 },
+						},
+					],
+				},
+			];
+
+			const report = buildMarketScannerReport(results, {
+				exchange: 'BINANCE',
+				timeframe: '4h',
+				now: mockDate,
+			});
+
+			// Stop Loss = 2900. Invalidation = 100
+			// Target = 3200. RRR = 200 / 100 = 2.00x (favorable)
+			expect(report).toContain('1. ETHUSDT $3,000.00 (+3.2%)');
+			expect(report).toContain('  - *Stop Loss:* $2,900.00 (Invalidación: $100.00)');
+			expect(report).toContain('  - *Target:* $3,200.00 | Risk/Reward: 2.00x (favorable)');
+		});
+
+			it('covers support/resistance-based risk/reward formatting when support and resistance are present', () => {
+				const results = [
+					{
+						scan: 'top_gainers',
+					status: 'success',
+					items: [
+						{
+							symbol: 'BINANCE:SOLUSDT',
+							changePercent: 4.5,
+							indicators: { close: 100, support: 95, resistance: 110 },
+						},
+					],
+				},
+			];
+
+			const report = buildMarketScannerReport(results, {
+				exchange: 'BINANCE',
+				timeframe: '4h',
+				now: mockDate,
+			});
+
+			// Stop Loss = 95. Invalidation = 5
+			// Target = 110. RRR = 10 / 5 = 2.00x (favorable)
+			expect(report).toContain('1. SOLUSDT $100.00 (+4.5%)');
+				expect(report).toContain('  - *Stop Loss:* $95.00 (Invalidación: $5.00)');
+				expect(report).toContain('  - *Target:* $110.00 | Risk/Reward: 2.00x (favorable)');
+			});
+
+			it('covers numbered support/resistance levels from TradingView payloads', () => {
+				const results = [
+					{
+						scan: 'top_gainers',
+						status: 'success',
+						items: [
+							{
+								symbol: 'BINANCE:LEVELUSDT',
+								changePercent: 4.5,
+								indicators: { close: 100 },
+								support_resistance: { support_1: 94, resistance_1: 112 },
+							},
+						],
+					},
+				];
+
+				const report = buildMarketScannerReport(results, {
+					exchange: 'BINANCE',
+					timeframe: '4h',
+					now: mockDate,
+				});
+
+				expect(report).toContain('1. LEVELUSDT $100.00 (+4.5%)');
+				expect(report).toContain('  - *Stop Loss:* $94.00 (Invalidación: $6.00)');
+				expect(report).toContain('  - *Target:* $112.00 | Risk/Reward: 2.00x (favorable)');
+			});
+
+			it('computes short-side risk/reward levels for top losers', () => {
+				const results = [
+					{
+						scan: 'top_losers',
+					status: 'success',
+					items: [
+						{
+							symbol: 'BINANCE:BEARUSDT',
+							changePercent: -6.0,
+							indicators: { close: 100, atr: 4 },
+						},
+					],
+				},
+			];
+
+			const report = buildMarketScannerReport(results, {
+				exchange: 'BINANCE',
+				timeframe: '4h',
+				now: mockDate,
+			});
+
+			// Short setup: Stop Loss = 100 + (4 * 1.5) = 106. Target = 100 - (4 * 3) = 88.
+			expect(report).toContain('1. BEARUSDT $100.00 (-6.0%)');
+			expect(report).toContain('  - *Stop Loss:* $106.00 (Invalidación: $6.00)');
+			expect(report).toContain('  - *Target:* $88.00 | Risk/Reward: 2.00x (favorable)');
+		});
+
+			it('computes short-side risk/reward levels for bearish breakouts', () => {
+				const results = [
+					{
+						scan: 'volume_breakout_scanner',
+					status: 'success',
+					items: [
+						{
+							symbol: 'BINANCE:DROPUSDT',
+							changePercent: -4.0,
+							volume_ratio: 2.4,
+							breakout_type: 'bearish',
+							indicators: { close: 50, bb_lower: 42, bb_upper: 55 },
+						},
+					],
+				},
+			];
+
+			const report = buildMarketScannerReport(results, {
+				exchange: 'BINANCE',
+				timeframe: '4h',
+				now: mockDate,
+			});
+
+			expect(report).toContain('1. DROPUSDT $50.00 (-4.0%) | Vol 2.4x 📉');
+				expect(report).toContain('  - *Stop Loss:* $55.00 (Invalidación: $5.00)');
+				expect(report).toContain('  - *Target:* $42.00 | Risk/Reward: 1.60x (neutral)');
+			});
+
+			it('computes short-side risk/reward levels for smart volume sell recommendations', () => {
+				const results = [
+					{
+						scan: 'smart_volume_scanner',
+						status: 'success',
+						items: [
+							{
+								symbol: 'BINANCE:SELLUSDT',
+								changePercent: -5.0,
+								volume_ratio: 2.0,
+								trading_recommendation: 'STRONG SELL',
+								indicators: { close: 100, atr: 4 },
+							},
+						],
+					},
+				];
+
+				const report = buildMarketScannerReport(results, {
+					exchange: 'BINANCE',
+					timeframe: '4h',
+					now: mockDate,
+				});
+
+				expect(report).toContain('1. SELLUSDT $100.00 (-5.0%) | Vol 2.0x  STRONG SELL');
+				expect(report).toContain('  - *Stop Loss:* $106.00 (Invalidación: $6.00)');
+				expect(report).toContain('  - *Target:* $88.00 | Risk/Reward: 2.00x (favorable)');
+			});
+
+			it('omits risk metadata when computed risk/reward is invalid', () => {
+				const results = [
+					{
+						scan: 'top_gainers',
+						status: 'success',
+						items: [
+							{
+								symbol: 'BINANCE:FLATUSDT',
+								changePercent: 1.2,
+								indicators: { close: 100, atr: 0 },
+							},
+						],
+					},
+				];
+
+				const report = buildMarketScannerReport(results, {
+					exchange: 'BINANCE',
+					timeframe: '4h',
+					now: mockDate,
+				});
+
+				expect(report).toContain('1. FLATUSDT $100.00 (+1.2%)');
+				expect(report).not.toContain('  - *Stop Loss:* $100.00');
+				expect(report).not.toContain('  - *Target:* $100.00');
+				expect(report).not.toContain('Risk/Reward:');
+			});
+
+			it('omits risk metadata when ATR-derived levels are non-positive', () => {
+				const results = [
+					{
+						scan: 'top_gainers',
+						status: 'success',
+						items: [
+							{
+								symbol: 'BINANCE:TINYUSDT',
+								changePercent: 2.0,
+								indicators: { close: 0.01, atr: 0.02 },
+							},
+						],
+					},
+				];
+
+				const report = buildMarketScannerReport(results, {
+					exchange: 'BINANCE',
+					timeframe: '4h',
+					now: mockDate,
+				});
+
+				expect(report).toContain('1. TINYUSDT $0.010000 (+2.0%)');
+				expect(report).not.toContain('$-0.020000');
+				expect(report).not.toContain('Risk/Reward:');
+			});
+
+			it('classifies risk/reward using displayed precision', () => {
+				const results = [
+					{
+						scan: 'top_gainers',
+						status: 'success',
+						items: [
+							{
+								symbol: 'BINANCE:ROUNDUSDT',
+								changePercent: 2.0,
+								indicators: { close: 5.766732, atr: 0.076661 },
+							},
+						],
+					},
+				];
+
+				const report = buildMarketScannerReport(results, {
+					exchange: 'BINANCE',
+					timeframe: '4h',
+					now: mockDate,
+				});
+
+				expect(report).toContain('Risk/Reward: 2.00x (favorable)');
+			});
+
+			it('gracefully omits risk metadata when indicators are missing or incomplete', () => {
+				const results = [
+					{
+						scan: 'top_gainers',
+					status: 'success',
+					items: [
+						{
+							symbol: 'BINANCE:SOLUSDT',
+							changePercent: 4.5,
+							indicators: { close: 100 }, // only price, no other indicators
+						},
+						{
+							symbol: 'BINANCE:ADAUSDT',
+							changePercent: 1.0,
+							indicators: { close: 0.5, support: 0.4 }, // support present, but no resistance or ATR
+						},
+					],
+				},
+			];
+
+			const report = buildMarketScannerReport(results, {
+				exchange: 'BINANCE',
+				timeframe: '4h',
+				now: mockDate,
+			});
+
+			expect(report).toContain('1. SOLUSDT $100.00 (+4.5%)');
+			expect(report).not.toContain('SOLUSDT\n  - *Stop Loss:*');
+			expect(report).toContain('2. ADAUSDT $0.500000 (+1.0%)');
+			expect(report).not.toContain('ADAUSDT\n  - *Stop Loss:*');
+		});
 	});
 });
