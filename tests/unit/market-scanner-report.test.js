@@ -398,10 +398,10 @@ describe('Market Scanner Report', () => {
 			expect(report).toContain('  - *Target:* $88.00 | Risk/Reward: 2.00x (favorable)');
 		});
 
-		it('computes short-side risk/reward levels for bearish breakouts', () => {
-			const results = [
-				{
-					scan: 'volume_breakout_scanner',
+			it('computes short-side risk/reward levels for bearish breakouts', () => {
+				const results = [
+					{
+						scan: 'volume_breakout_scanner',
 					status: 'success',
 					items: [
 						{
@@ -422,14 +422,41 @@ describe('Market Scanner Report', () => {
 			});
 
 			expect(report).toContain('1. DROPUSDT $50.00 (-4.0%) | Vol 2.4x 📉');
-			expect(report).toContain('  - *Stop Loss:* $55.00 (Invalidación: $5.00)');
-			expect(report).toContain('  - *Target:* $42.00 | Risk/Reward: 1.60x (neutral)');
-		});
+				expect(report).toContain('  - *Stop Loss:* $55.00 (Invalidación: $5.00)');
+				expect(report).toContain('  - *Target:* $42.00 | Risk/Reward: 1.60x (neutral)');
+			});
 
-		it('gracefully omits risk metadata when indicators are missing or incomplete', () => {
-			const results = [
-				{
-					scan: 'top_gainers',
+			it('omits risk metadata when computed risk/reward is invalid', () => {
+				const results = [
+					{
+						scan: 'top_gainers',
+						status: 'success',
+						items: [
+							{
+								symbol: 'BINANCE:FLATUSDT',
+								changePercent: 1.2,
+								indicators: { close: 100, atr: 0 },
+							},
+						],
+					},
+				];
+
+				const report = buildMarketScannerReport(results, {
+					exchange: 'BINANCE',
+					timeframe: '4h',
+					now: mockDate,
+				});
+
+				expect(report).toContain('1. FLATUSDT $100.00 (+1.2%)');
+				expect(report).not.toContain('  - *Stop Loss:* $100.00');
+				expect(report).not.toContain('  - *Target:* $100.00');
+				expect(report).not.toContain('Risk/Reward:');
+			});
+
+			it('gracefully omits risk metadata when indicators are missing or incomplete', () => {
+				const results = [
+					{
+						scan: 'top_gainers',
 					status: 'success',
 					items: [
 						{

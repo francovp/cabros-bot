@@ -341,9 +341,13 @@ function formatScanItem(item, rank, scanType, ranked = false) {
 
 		if (stopLoss !== null && takeProfit !== null) {
 			const rrr = getRiskRewardRatio(priceVal, stopLoss, takeProfit, side);
+			if (rrr === null) {
+				return itemLine;
+			}
+
 			const invDist = getInvalidationDistance(priceVal, stopLoss);
 
-			const rrrText = rrr !== null ? ` | Risk/Reward: ${formatNumber(rrr, 2)}x (${classifyRiskReward(rrr)})` : '';
+			const rrrText = ` | Risk/Reward: ${formatNumber(rrr, 2)}x (${classifyRiskReward(rrr)})`;
 			const invText = invDist !== null ? ` (Invalidación: ${formatCurrency(invDist)})` : '';
 
 			itemLine += `\n  - *Stop Loss:* ${formatCurrency(stopLoss)}${invText}`;
