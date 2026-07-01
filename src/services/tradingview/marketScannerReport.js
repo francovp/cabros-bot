@@ -255,19 +255,19 @@ function buildMarketScannerReport(scanResults = [], options = {}) {
 }
 
 function getInvalidationDistance(price, stopLoss) {
-	if (price === null || stopLoss === null || stopLoss >= price) {
+	if (price === null || stopLoss === null || stopLoss === price) {
 		return null;
 	}
-	return price - stopLoss;
+	return Math.abs(price - stopLoss);
 }
 
-function getRiskRewardRatio(price, stopLoss, takeProfit) {
+function getRiskRewardRatio(price, stopLoss, takeProfit, side = 'BUY') {
 	if (price === null || stopLoss === null || takeProfit === null) {
 		return null;
 	}
 
-	const risk = price - stopLoss;
-	const reward = takeProfit - price;
+	const risk = side === 'SELL' ? stopLoss - price : price - stopLoss;
+	const reward = side === 'SELL' ? price - takeProfit : takeProfit - price;
 
 	if (risk <= 0 || reward <= 0) {
 		return null;
@@ -293,6 +293,7 @@ function formatScanItem(item, rank, scanType, ranked = false) {
 	const priceVal = numberOrNull(item.indicators?.close ?? null);
 	const price = formatCurrency(priceVal);
 	const change = formatPercent(numberOrNull(item.changePercent ?? null));
+	const side = getScanItemSide(scanType, item);
 
 	let suffix = '';
 
@@ -328,26 +329,18 @@ function formatScanItem(item, rank, scanType, ranked = false) {
 		const support = numberOrNull(item.indicators?.support ?? item.indicators?.nearest_support ?? item.support ?? item.support_resistance?.nearest_support ?? null);
 		const resistance = numberOrNull(item.indicators?.resistance ?? item.indicators?.nearest_resistance ?? item.resistance ?? item.support_resistance?.nearest_resistance ?? null);
 
-		let stopLoss = null;
-		if (atr !== null) {
-			stopLoss = priceVal - (atr * 1.5);
-		} else if (bbLower !== null && bbLower < priceVal) {
-			stopLoss = bbLower;
-		} else if (support !== null && support < priceVal) {
-			stopLoss = support;
-		}
-
-		let takeProfit = null;
-		if (resistance !== null && resistance > priceVal) {
-			takeProfit = resistance;
-		} else if (bbUpper !== null && bbUpper > priceVal) {
-			takeProfit = bbUpper;
-		} else if (atr !== null) {
-			takeProfit = priceVal + (atr * 3);
-		}
+		const { stopLoss, takeProfit } = getRiskLevelsForSide({
+			side,
+			price: priceVal,
+			atr,
+			bbLower,
+			bbUpper,
+			support,
+			resistance,
+		});
 
 		if (stopLoss !== null && takeProfit !== null) {
-			const rrr = getRiskRewardRatio(priceVal, stopLoss, takeProfit);
+			const rrr = getRiskRewardRatio(priceVal, stopLoss, takeProfit, side);
 			const invDist = getInvalidationDistance(priceVal, stopLoss);
 
 			const rrrText = rrr !== null ? ` | Risk/Reward: ${formatNumber(rrr, 2)}x (${classifyRiskReward(rrr)})` : '';
@@ -359,6 +352,95 @@ function formatScanItem(item, rank, scanType, ranked = false) {
 	}
 
 	return itemLine;
+}
+
+function getScanItemSide(scanType, item = {}) {
+	if (scanType === 'top_losers') {
+		return 'SELL';
+	}
+
+	if (typeof item.breakout_type === 'string') {
+		const breakoutType = item.breakout_type.trim().toLowerCase();
+		if (breakoutType === 'bearish' || breakoutType === 'sell') {
+			return 'SELL';
+		}
+	}
+
+	return 'BUY';
+}
+
+function getRiskLevelsForSide({
+	side,
+	price,
+	atr,
+	bbLower,
+	bbUpper,
+	support,
+	resistance,
+}) {
+	if (side === 'SELL') {
+		return getShortRiskLevels({ price, atr, bbLower, bbUpper, support, resistance });
+	}
+
+	return getLongRiskLevels({ price, atr, bbLower, bbUpper, support, resistance });
+}
+
+function getLongRiskLevels({
+	price,
+	atr,
+	bbLower,
+	bbUpper,
+	support,
+	resistance,
+}) {
+	let stopLoss = null;
+	if (atr !== null) {
+		stopLoss = price - (atr * 1.5);
+	} else if (bbLower !== null && bbLower < price) {
+		stopLoss = bbLower;
+	} else if (support !== null && support < price) {
+		stopLoss = support;
+	}
+
+	let takeProfit = null;
+	if (resistance !== null && resistance > price) {
+		takeProfit = resistance;
+	} else if (bbUpper !== null && bbUpper > price) {
+		takeProfit = bbUpper;
+	} else if (atr !== null) {
+		takeProfit = price + (atr * 3);
+	}
+
+	return { stopLoss, takeProfit };
+}
+
+function getShortRiskLevels({
+	price,
+	atr,
+	bbLower,
+	bbUpper,
+	support,
+	resistance,
+}) {
+	let stopLoss = null;
+	if (atr !== null) {
+		stopLoss = price + (atr * 1.5);
+	} else if (bbUpper !== null && bbUpper > price) {
+		stopLoss = bbUpper;
+	} else if (resistance !== null && resistance > price) {
+		stopLoss = resistance;
+	}
+
+	let takeProfit = null;
+	if (support !== null && support < price) {
+		takeProfit = support;
+	} else if (bbLower !== null && bbLower < price) {
+		takeProfit = bbLower;
+	} else if (atr !== null) {
+		takeProfit = price - (atr * 3);
+	}
+
+	return { stopLoss, takeProfit };
 }
 
 function getBreakoutEmoji(breakoutType) {

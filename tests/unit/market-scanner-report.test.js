@@ -371,6 +371,61 @@ describe('Market Scanner Report', () => {
 			expect(report).toContain('  - *Target:* $110.00 | Risk/Reward: 2.00x (favorable)');
 		});
 
+		it('computes short-side risk/reward levels for top losers', () => {
+			const results = [
+				{
+					scan: 'top_losers',
+					status: 'success',
+					items: [
+						{
+							symbol: 'BINANCE:BEARUSDT',
+							changePercent: -6.0,
+							indicators: { close: 100, atr: 4 },
+						},
+					],
+				},
+			];
+
+			const report = buildMarketScannerReport(results, {
+				exchange: 'BINANCE',
+				timeframe: '4h',
+				now: mockDate,
+			});
+
+			// Short setup: Stop Loss = 100 + (4 * 1.5) = 106. Target = 100 - (4 * 3) = 88.
+			expect(report).toContain('1. BEARUSDT $100.00 (-6.0%)');
+			expect(report).toContain('  - *Stop Loss:* $106.00 (Invalidación: $6.00)');
+			expect(report).toContain('  - *Target:* $88.00 | Risk/Reward: 2.00x (favorable)');
+		});
+
+		it('computes short-side risk/reward levels for bearish breakouts', () => {
+			const results = [
+				{
+					scan: 'volume_breakout_scanner',
+					status: 'success',
+					items: [
+						{
+							symbol: 'BINANCE:DROPUSDT',
+							changePercent: -4.0,
+							volume_ratio: 2.4,
+							breakout_type: 'bearish',
+							indicators: { close: 50, bb_lower: 42, bb_upper: 55 },
+						},
+					],
+				},
+			];
+
+			const report = buildMarketScannerReport(results, {
+				exchange: 'BINANCE',
+				timeframe: '4h',
+				now: mockDate,
+			});
+
+			expect(report).toContain('1. DROPUSDT $50.00 (-4.0%) | Vol 2.4x 📉');
+			expect(report).toContain('  - *Stop Loss:* $55.00 (Invalidación: $5.00)');
+			expect(report).toContain('  - *Target:* $42.00 | Risk/Reward: 1.60x (neutral)');
+		});
+
 		it('gracefully omits risk metadata when indicators are missing or incomplete', () => {
 			const results = [
 				{
