@@ -453,6 +453,56 @@ describe('Market Scanner Report', () => {
 				expect(report).not.toContain('Risk/Reward:');
 			});
 
+			it('omits risk metadata when ATR-derived levels are non-positive', () => {
+				const results = [
+					{
+						scan: 'top_gainers',
+						status: 'success',
+						items: [
+							{
+								symbol: 'BINANCE:TINYUSDT',
+								changePercent: 2.0,
+								indicators: { close: 0.01, atr: 0.02 },
+							},
+						],
+					},
+				];
+
+				const report = buildMarketScannerReport(results, {
+					exchange: 'BINANCE',
+					timeframe: '4h',
+					now: mockDate,
+				});
+
+				expect(report).toContain('1. TINYUSDT $0.010000 (+2.0%)');
+				expect(report).not.toContain('$-0.020000');
+				expect(report).not.toContain('Risk/Reward:');
+			});
+
+			it('classifies risk/reward using displayed precision', () => {
+				const results = [
+					{
+						scan: 'top_gainers',
+						status: 'success',
+						items: [
+							{
+								symbol: 'BINANCE:ROUNDUSDT',
+								changePercent: 2.0,
+								indicators: { close: 5.766732, atr: 0.076661 },
+							},
+						],
+					},
+				];
+
+				const report = buildMarketScannerReport(results, {
+					exchange: 'BINANCE',
+					timeframe: '4h',
+					now: mockDate,
+				});
+
+				expect(report).toContain('Risk/Reward: 2.00x (favorable)');
+			});
+
 			it('gracefully omits risk metadata when indicators are missing or incomplete', () => {
 				const results = [
 					{

@@ -339,15 +339,16 @@ function formatScanItem(item, rank, scanType, ranked = false) {
 			resistance,
 		});
 
-		if (stopLoss !== null && takeProfit !== null) {
+		if (stopLoss !== null && takeProfit !== null && stopLoss > 0 && takeProfit > 0) {
 			const rrr = getRiskRewardRatio(priceVal, stopLoss, takeProfit, side);
 			if (rrr === null) {
 				return itemLine;
 			}
 
 			const invDist = getInvalidationDistance(priceVal, stopLoss);
+			const displayedRrr = Number(rrr.toFixed(2));
 
-			const rrrText = ` | Risk/Reward: ${formatNumber(rrr, 2)}x (${classifyRiskReward(rrr)})`;
+			const rrrText = ` | Risk/Reward: ${formatNumber(displayedRrr, 2)}x (${classifyRiskReward(displayedRrr)})`;
 			const invText = invDist !== null ? ` (Invalidación: ${formatCurrency(invDist)})` : '';
 
 			itemLine += `\n  - *Stop Loss:* ${formatCurrency(stopLoss)}${invText}`;
