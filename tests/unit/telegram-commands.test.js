@@ -52,7 +52,7 @@ describe('Telegram TradingView commands', () => {
 	});
 
 	it('creates an expanded analysis job from Telegram args', async () => {
-		jobService.createJob.mockReturnValue({
+		jobService.createJob.mockResolvedValue({
 			success: true,
 			jobId: 'job-1',
 			status: 'pending',
@@ -76,7 +76,7 @@ describe('Telegram TradingView commands', () => {
 	});
 
 	it('creates a market scanner job from Telegram args', async () => {
-		jobService.createJob.mockReturnValue({
+		jobService.createJob.mockResolvedValue({
 			success: true,
 			jobId: 'job-2',
 			status: 'pending',
@@ -102,11 +102,9 @@ describe('Telegram TradingView commands', () => {
 	});
 
 	it('returns clear validation errors from job commands', async () => {
-		jobService.createJob.mockImplementation(() => {
-			const error = new Error('Market scanner is not enabled');
-			error.code = 'FEATURE_DISABLED';
-			throw error;
-		});
+		const error = new Error('Market scanner is not enabled');
+		error.code = 'FEATURE_DISABLED';
+		jobService.createJob.mockRejectedValue(error);
 		const context = buildContext('/scanner');
 
 		await marketScannerCmd(context);

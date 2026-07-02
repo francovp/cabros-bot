@@ -412,11 +412,13 @@ The system provides asynchronous job endpoints to support executing both `expand
 - `src/services/jobs/JobService.js` — Coordinates job state tracking, background worker execution, progress reports, durable persistence checkpoints, and job eviction (jobs older than 1 hour).
 - `src/services/jobs/JobRepository.js` — Stores sanitized job records in memory and, when `ENABLE_FIRESTORE_JOB_STORAGE=true`, in Firestore collection `tradingviewJobs`.
 - `src/controllers/webhooks/handlers/jobs/jobs.js` — HTTP route controller handlers (`postCreateJob`, `getJobStatus`).
+- `src/controllers/commands.js` — Telegram `/analisis` and `/scanner` commands create these jobs and must `await jobService.createJob()` before replying or handling validation/storage errors.
 
 **Failure and Edge Case Behavior**:
 - Sync validation: throws `400` synchronously on invalid inputs before job registration.
 - Feature checks: returns `404 FEATURE_DISABLED` if market scanner jobs are created but `ENABLE_MARKET_SCANNER` is not `'true'`.
 - Persistence: `createJob()` and `getJob()` are async because job metadata/results may be written to or read from Firestore.
+- Telegram commands: async `createJob()` rejections must stay inside the command `try/catch` so `replyValidationError()` can return clear command feedback instead of producing unhandled promise rejections.
 - Eviction: completed/failed jobs older than 1 hour are deleted from memory/Firestore and return `404 Not Found`; active jobs are preserved.
 - Background failures: if the worker runs into unexpected exceptions or timeouts, the job is marked `failed` and reported to Sentry.
 - Async Callbacks: If `callbackUrl` is provided, a callback is dispatched when the job reaches a terminal state (`completed`, `failed`, `cancelled`, `timed_out`). Payloads are signed with HMAC-SHA256 in the `x-callback-signature` header using `callbackSecret` (if provided by client) or the server-configured `JOB_CALLBACK_SIGNING_SECRET`. Transient network failures are retried up to 3 times (4 total attempts) with exponential backoff (starting at 1s, configurable via `JOB_CALLBACK_RETRY_DELAY_MS`). The callback process fails open, writing log events and updating job metadata (`callbackStatus`) without affecting the core job status.

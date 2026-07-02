@@ -54,7 +54,7 @@ const createTradingViewJobCommand = (type, command, buildPayload) => async (cont
 
 	try {
 		const payload = buildPayload(args);
-		const result = jobService.createJob(type, payload, buildBotFromContext(context));
+		const result = await jobService.createJob(type, payload, buildBotFromContext(context));
 		await context.reply(`Job ${result.jobId} creado para ${type}. Estado: ${result.status}.`);
 	} catch (error) {
 		await replyValidationError(context, error);
