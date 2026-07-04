@@ -434,6 +434,74 @@ describe('JobService Unit Tests', () => {
 			})).rejects.toThrow('Invalid event in callbackEvents');
 		});
 
+		it('sends separate callbacks for processing and completed events', async () => {
+			fetchMock
+				.mockResolvedValueOnce({ ok: true, status: 200 })
+				.mockResolvedValueOnce({ ok: true, status: 200 });
+
+			const job = {
+				jobId: 'job-callback-events',
+				type: 'expanded-analysis',
+				status: 'processing',
+				requestMetadata: {
+					type: 'expanded-analysis',
+					symbols: ['BINANCE:BTCUSDT'],
+					timeframe: '1D',
+					includeMultiTimeframe: false,
+					analysisMode: 'standard',
+					timeoutMs: 300000,
+					callbackUrl: 'https://example.com/callback',
+					callbackEvents: ['processing', 'completed'],
+				},
+				progress: { total: 1, current: 0, status: 'pending' },
+				fullResults: [],
+				fullScanResults: [],
+				alertText: null,
+				deliveryResults: [],
+				summary: null,
+				error: null,
+				code: null,
+				createdAt: new Date().toISOString(),
+				updatedAt: new Date().toISOString(),
+				totalDurationMs: 0,
+				timeoutMs: 300000,
+				callbackUrl: 'https://example.com/callback',
+				callbackEvents: ['processing', 'completed'],
+				callbackStatus: { status: 'pending', attempts: [] },
+			};
+
+			await jobService.repository.save(job);
+			await jobService._triggerCallbackIfConfigured(job);
+
+			let freshJob = await jobService.repository.get(job.jobId);
+			let pollAttempts = 0;
+			while (
+				(!freshJob.callbackStatus || freshJob.callbackStatus.status !== 'success')
+				&& pollAttempts < 20
+			) {
+				await delay(20);
+				freshJob = await jobService.repository.get(job.jobId);
+				pollAttempts++;
+			}
+
+			expect(fetchMock).toHaveBeenCalledTimes(1);
+
+			freshJob.status = 'completed';
+			freshJob.updatedAt = new Date().toISOString();
+			await jobService.repository.save(freshJob);
+			await jobService._triggerCallbackIfConfigured(freshJob);
+
+			pollAttempts = 0;
+			while (fetchMock.mock.calls.length < 2 && pollAttempts < 20) {
+				await delay(20);
+				pollAttempts++;
+			}
+
+			expect(fetchMock).toHaveBeenCalledTimes(2);
+			const statuses = fetchMock.mock.calls.map(([, options]) => JSON.parse(options.body).status);
+			expect(statuses).toEqual(['processing', 'completed']);
+		});
+
 		it('sends callback when job reaches terminal state and records success', async () => {
 			fetchMock.mockResolvedValueOnce({ ok: true, status: 200 });
 

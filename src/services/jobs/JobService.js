@@ -925,9 +925,7 @@ class JobService {
 			return;
 		}
 
-		// Prevent duplicate callback trigger for the same terminal state
-		const terminalStates = new Set(['completed', 'failed', 'cancelled', 'timed_out']);
-		if (terminalStates.has(job.status) && job.callbackStatus && job.callbackStatus.status === 'success') {
+		if (this._hasSuccessfulCallbackForEvent(job, job.status)) {
 			return;
 		}
 
@@ -937,8 +935,33 @@ class JobService {
 		});
 	}
 
+	_hasSuccessfulCallbackForEvent(job, event) {
+		const callbackStatus = job.callbackStatus;
+		if (!callbackStatus) {
+			return false;
+		}
+
+		if (callbackStatus.events && callbackStatus.events[event]) {
+			return callbackStatus.events[event].status === 'success';
+		}
+
+		const attempts = callbackStatus.attempts || [];
+		const hasEventAttempts = attempts.some((attempt) => attempt.event);
+		if (hasEventAttempts) {
+			return attempts.some((attempt) => attempt.event === event && attempt.statusCode >= 200 && attempt.statusCode < 300);
+		}
+
+		if (callbackStatus.status !== 'success') {
+			return false;
+		}
+
+		const terminalStates = new Set(['completed', 'failed', 'cancelled', 'timed_out']);
+		return terminalStates.has(event);
+	}
+
 	async _sendCallbackWithRetry(job) {
 		const callbackUrl = job.callbackUrl;
+		const callbackEvent = job.status;
 		const secret = job.callbackSecret || process.env.JOB_CALLBACK_SIGNING_SECRET || '';
 		const payload = this._formatJobResponse(job);
 		const payloadStr = JSON.stringify(payload);
@@ -972,6 +995,7 @@ class JobService {
 
 				const attemptInfo = {
 					attempt,
+					event: callbackEvent,
 					timestamp,
 					statusCode: response.status,
 				};
@@ -988,6 +1012,7 @@ class JobService {
 				clearTimeout(timeoutId);
 				attempts.push({
 					attempt,
+					event: callbackEvent,
 					timestamp,
 					error: err.name === 'AbortError' ? 'Timeout' : err.message,
 				});
@@ -1002,9 +1027,17 @@ class JobService {
 		// Update job state in repository
 		const freshJob = await this.repository.get(job.jobId);
 		if (freshJob) {
+			const existingEvents = freshJob.callbackStatus?.events || {};
 			freshJob.callbackStatus = {
 				status: success ? 'success' : 'failed',
 				attempts: [...(freshJob.callbackStatus?.attempts || []), ...attempts],
+				events: {
+					...existingEvents,
+					[callbackEvent]: {
+						status: success ? 'success' : 'failed',
+						attempts,
+					},
+				},
 			};
 			await this.repository.save(freshJob);
 		}

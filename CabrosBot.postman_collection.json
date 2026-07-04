@@ -1030,7 +1030,7 @@
 								],
 								"body": {
 									"mode": "raw",
-									"raw": "{\n  \"type\": \"expanded-analysis\",\n  \"symbols\": [\"BINANCE:BTCUSDT\"],\n  \"callbackUrl\": \"https://example.com/api/callback\",\n  \"callbackSecret\": \"my-signature-secret\",\n  \"callbackEvents\": [\"completed\", \"failed\"]\n}"
+									"raw": "{\n  \"type\": \"expanded-analysis\",\n  \"symbols\": [\"BINANCE:BTCUSDT\"],\n  \"callbackUrl\": \"https://example.com/api/callback\",\n  \"callbackSecret\": \"my-signature-secret\",\n  \"callbackEvents\": [\"processing\", \"completed\"]\n}"
 								},
 								"url": {
 									"raw": "{{baseUrl}}/api/jobs/tradingview-analysis",
@@ -1040,7 +1040,7 @@
 							},
 							"status": "Created",
 							"code": 201,
-							"body": "{\n  \"success\": true,\n  \"jobId\": \"job-uuid-123\",\n  \"status\": \"processing\",\n  \"createdAt\": \"2026-06-19T12:00:00.000Z\",\n  \"callbackStatus\": {\n    \"status\": \"pending\",\n    \"attempts\": []\n  }\n}"
+							"body": "{\n  \"success\": true,\n  \"jobId\": \"job-uuid-123\",\n  \"status\": \"processing\",\n  \"createdAt\": \"2026-06-19T12:00:00.000Z\",\n  \"callbackStatus\": {\n    \"status\": \"success\",\n    \"attempts\": [\n      {\n        \"attempt\": 1,\n        \"event\": \"processing\",\n        \"timestamp\": \"2026-06-19T12:00:01.000Z\",\n        \"statusCode\": 200\n      }\n    ],\n    \"events\": {\n      \"processing\": {\n        \"status\": \"success\",\n        \"attempts\": [\n          {\n            \"attempt\": 1,\n            \"event\": \"processing\",\n            \"timestamp\": \"2026-06-19T12:00:01.000Z\",\n            \"statusCode\": 200\n          }\n        ]\n      }\n    }\n  }\n}"
 						},
 						{
 							"name": "Create Job with Invalid Callback URL (HTTP)",
