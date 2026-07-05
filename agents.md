@@ -1030,3 +1030,20 @@ This feature introduces integration of the official `openai` SDK to interact wit
 **Testing**:
 - Unit coverage in `tests/unit/cloudflare-client.test.js`.
 - Integration coverage in `tests/integration/status-endpoint.test.js`.
+
+## Private Network SSRF Protection for Job Callbacks (CB-55 / Issue #152)
+
+This feature introduces validation of callback URLs to prevent Server-Side Request Forgery (SSRF) by blocking private-network, loopback, link-local, RFC1918, multicast, and metadata-service ranges during both callback URL acceptance (creation) and delivery (sending).
+
+**Core Components**:
+- `src/services/jobs/JobService.js` — Contains `isPrivateIp` IP range checks and `isValidCallbackUrl` async validation. Validates URL protocol, keeps HTTP-local allowance for tests/dev, and performs async DNS resolution of hostnames before checking resolved IP address ranges.
+- `tests/unit/job-service.test.js` — Standard unit tests covering loopback, link-local, RFC1918, multicast, and metadata-service (e.g. `169.254.169.254`) ranges.
+- `tests/integration/jobs-endpoint.test.js` — Endpoint verification tests checking HTTP 400 Bad Request responses for private callback URLs.
+
+**Configuration**:
+- `ALLOW_PRIVATE_CALLBACKS` — Set to `'true'` to bypass private-network/SSRF blocking on callback URLs (e.g. for local developer testing of private targets). Defaults to `'false'`.
+- `ALLOW_HTTP_CALLBACKS` — Existing flag to permit plain HTTP callbacks (restricted to localhost unless `NODE_ENV=test` or set to `'true'`).
+
+**Testing**:
+- Unit coverage: `pnpm test -- tests/unit/job-service.test.js`
+- Integration coverage: `pnpm test -- tests/integration/jobs-endpoint.test.js`

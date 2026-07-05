@@ -338,5 +338,67 @@ describe('Jobs API Integration Tests', () => {
 				process.env.NODE_ENV = prevEnv;
 			}
 		});
+
+		it('returns 400 Bad Request if callbackUrl is a private network IP in production', async () => {
+			const prevEnv = process.env.NODE_ENV;
+			const prevAllow = process.env.ALLOW_HTTP_CALLBACKS;
+			const prevPrivate = process.env.ALLOW_PRIVATE_CALLBACKS;
+
+			process.env.NODE_ENV = 'production';
+			process.env.ALLOW_HTTP_CALLBACKS = 'false';
+			delete process.env.ALLOW_PRIVATE_CALLBACKS;
+
+			try {
+				const createRes = await request(app)
+					.post('/api/jobs/tradingview-analysis')
+					.set('x-api-key', 'test-key')
+					.send({
+						type: 'expanded-analysis',
+						symbols: ['BINANCE:BTCUSDT'],
+						callbackUrl: 'https://127.0.0.1/callback',
+					})
+					.expect(400);
+
+				expect(createRes.body.error).toContain('callbackUrl must be a valid HTTPS URL');
+			} finally {
+				process.env.NODE_ENV = prevEnv;
+				process.env.ALLOW_HTTP_CALLBACKS = prevAllow;
+				if (prevPrivate !== undefined) {
+					process.env.ALLOW_PRIVATE_CALLBACKS = prevPrivate;
+				} else {
+					delete process.env.ALLOW_PRIVATE_CALLBACKS;
+				}
+			}
+		});
+
+		it('allows private network callbackUrl if ALLOW_PRIVATE_CALLBACKS override is set', async () => {
+			const prevEnv = process.env.NODE_ENV;
+			const prevAllow = process.env.ALLOW_HTTP_CALLBACKS;
+			const prevPrivate = process.env.ALLOW_PRIVATE_CALLBACKS;
+
+			process.env.NODE_ENV = 'production';
+			process.env.ALLOW_HTTP_CALLBACKS = 'false';
+			process.env.ALLOW_PRIVATE_CALLBACKS = 'true';
+
+			try {
+				await request(app)
+					.post('/api/jobs/tradingview-analysis')
+					.set('x-api-key', 'test-key')
+					.send({
+						type: 'expanded-analysis',
+						symbols: ['BINANCE:BTCUSDT'],
+						callbackUrl: 'https://127.0.0.1/callback',
+					})
+					.expect(201);
+			} finally {
+				process.env.NODE_ENV = prevEnv;
+				process.env.ALLOW_HTTP_CALLBACKS = prevAllow;
+				if (prevPrivate !== undefined) {
+					process.env.ALLOW_PRIVATE_CALLBACKS = prevPrivate;
+				} else {
+					delete process.env.ALLOW_PRIVATE_CALLBACKS;
+				}
+			}
+		});
 	});
 });

@@ -2,6 +2,8 @@
 
 const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
+const dns = require('dns');
+const net = require('net');
 const { tradingViewMcpService } = require('../tradingview/TradingViewMcpService');
 const {
 	parseExpandedAnalysisAlertRequest,
@@ -28,20 +30,119 @@ const EXPIRATION_MS = 3600000; // 1 hour
 const DEFAULT_JOB_TIMEOUT_MS = 300000; // 5 minutes
 const TERMINAL_JOB_STATUSES = new Set(['completed', 'failed', 'cancelled', 'timed_out']);
 
-function isValidCallbackUrl(urlStr) {
+function expandIPv6(ip) {
+	let fullIp = ip;
+	if (ip.includes('::')) {
+		const parts = ip.split('::');
+		const left = parts[0] ? parts[0].split(':') : [];
+		const right = parts[1] ? parts[1].split(':') : [];
+		const missingCount = 8 - (left.length + right.length);
+		const middle = Array(missingCount).fill('0');
+		fullIp = [...left, ...middle, ...right].join(':');
+	}
+	return fullIp.split(':').map(part => part.padStart(4, '0')).join(':');
+}
+
+function isPrivateIp(ip) {
+	if (!ip) return true;
+	
+	let cleanIp = ip.trim().toLowerCase();
+	
+	// Handle IPv4-mapped IPv6 address like ::ffff:192.168.1.1
+	if (cleanIp.startsWith('::ffff:')) {
+		const ipv4Candidate = ip.substring(7);
+		if (net.isIPv4(ipv4Candidate)) {
+			cleanIp = ipv4Candidate;
+		}
+	}
+
+	if (net.isIPv4(cleanIp)) {
+		const parts = cleanIp.split('.').map(Number);
+		if (parts.length !== 4 || parts.some(isNaN)) return true;
+
+		if (parts[0] === 127) return true; // Loopback
+		if (parts[0] === 10) return true; // RFC1918
+		if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true; // RFC1918
+		if (parts[0] === 192 && parts[1] === 168) return true; // RFC1918
+		if (parts[0] === 169 && parts[1] === 254) return true; // Link-local (includes 169.254.169.254)
+		if (parts[0] >= 224 && parts[0] <= 239) return true; // Multicast
+		if (parts[0] === 0 && parts[1] === 0 && parts[2] === 0 && parts[3] === 0) return true;
+		if (parts[0] === 255 && parts[1] === 255 && parts[2] === 255 && parts[3] === 255) return true;
+
+		return false;
+	}
+
+	if (net.isIPv6(cleanIp)) {
+		const expanded = expandIPv6(cleanIp);
+
+		if (expanded === '0000:0000:0000:0000:0000:0000:0000:0001') return true; // Loopback
+		if (expanded === '0000:0000:0000:0000:0000:0000:0000:0000') return true; // Unspecified
+		if (/^fe[89ab]/i.test(expanded)) return true; // Link-local
+		if (/^f[cd]/i.test(expanded)) return true; // ULA
+		if (expanded.startsWith('ff')) return true; // Multicast
+
+		// Hex IPv4-mapped IPv6 address: ::ffff:7f00:0001
+		if (expanded.startsWith('0000:0000:0000:0000:0000:ffff:')) {
+			const parts = expanded.split(':');
+			const part6 = parts[6];
+			const part7 = parts[7];
+			
+			const octet0 = parseInt(part6.substring(0, 2), 16);
+			const octet1 = parseInt(part6.substring(2, 4), 16);
+			const octet2 = parseInt(part7.substring(0, 2), 16);
+			const octet3 = parseInt(part7.substring(2, 4), 16);
+			
+			const mappedIpv4 = `${octet0}.${octet1}.${octet2}.${octet3}`;
+			return isPrivateIp(mappedIpv4);
+		}
+
+		return false;
+	}
+
+	return true;
+}
+
+async function isValidCallbackUrl(urlStr) {
 	try {
 		const url = new URL(urlStr);
 		if (url.protocol !== 'http:' && url.protocol !== 'https:') {
 			return false;
 		}
+
+		const hostname = url.hostname;
+
 		if (url.protocol === 'http:') {
-			const isLocal = url.hostname === 'localhost' ||
-				url.hostname === '127.0.0.1' ||
-				url.hostname === '::1' ||
+			const isLocal = hostname === 'localhost' ||
+				hostname === '127.0.0.1' ||
+				hostname === '::1' ||
 				process.env.NODE_ENV === 'test' ||
 				process.env.ALLOW_HTTP_CALLBACKS === 'true';
 			return isLocal;
 		}
+
+		const allowPrivate = process.env.ALLOW_PRIVATE_CALLBACKS === 'true' ||
+			process.env.NODE_ENV === 'test';
+
+		if (allowPrivate) {
+			return true;
+		}
+
+		let ip;
+		if (net.isIP(hostname)) {
+			ip = hostname;
+		} else {
+			try {
+				const lookupRes = await dns.promises.lookup(hostname);
+				ip = lookupRes.address;
+			} catch (dnsErr) {
+				return false; // DNS resolution failed
+			}
+		}
+
+		if (isPrivateIp(ip)) {
+			return false;
+		}
+
 		return true;
 	} catch (err) {
 		return false;
@@ -210,7 +311,7 @@ class JobService {
 		let callbackEvents = ['completed', 'failed', 'cancelled', 'timed_out'];
 
 		if (payload && payload.callbackUrl !== undefined && payload.callbackUrl !== null) {
-			if (typeof payload.callbackUrl !== 'string' || !isValidCallbackUrl(payload.callbackUrl)) {
+			if (typeof payload.callbackUrl !== 'string' || !await isValidCallbackUrl(payload.callbackUrl)) {
 				const msg = 'callbackUrl must be a valid HTTPS URL (HTTP only allowed for local development)';
 				if (type === 'expanded-analysis') {
 					const { ExpandedAnalysisAlertRequestError } = require('../tradingview/expandedAnalysisAlertReport');
@@ -970,6 +1071,35 @@ class JobService {
 
 	async _sendCallbackWithRetry(job) {
 		const callbackUrl = job.callbackUrl;
+
+		if (!await isValidCallbackUrl(callbackUrl)) {
+			console.warn(`[JobService] Aborting callback to unsafe URL: ${callbackUrl}`);
+			const freshJob = await this.repository.get(job.jobId);
+			if (freshJob) {
+				const existingEvents = freshJob.callbackStatus?.events || {};
+				const timestamp = new Date().toISOString();
+				const attemptInfo = {
+					attempt: 1,
+					event: job.status,
+					timestamp,
+					error: 'Callback URL is blocked (private network)',
+				};
+				freshJob.callbackStatus = {
+					status: 'failed',
+					attempts: [attemptInfo],
+					events: {
+						...existingEvents,
+						[job.status]: {
+							status: 'failed',
+							attempts: [attemptInfo],
+						},
+					},
+				};
+				await this.repository.save(freshJob);
+			}
+			return;
+		}
+
 		const callbackEvent = job.status;
 		const secret = job.callbackSecret || process.env.JOB_CALLBACK_SIGNING_SECRET || '';
 		const payload = this._formatJobResponse(job);

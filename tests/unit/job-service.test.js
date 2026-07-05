@@ -483,6 +483,104 @@ describe('JobService Unit Tests', () => {
 			}
 		});
 
+		describe('private-network blocking (SSRF protection)', () => {
+			let dnsSpy;
+
+			beforeAll(() => {
+				const dns = require('dns');
+				dnsSpy = jest.spyOn(dns.promises, 'lookup').mockImplementation(async (hostname) => {
+					if (hostname === 'example.com') {
+						return { address: '93.184.216.34' };
+					}
+					if (hostname === 'localhost') {
+						return { address: '127.0.0.1' };
+					}
+					throw new Error('ENOTFOUND');
+				});
+			});
+
+			afterAll(() => {
+				if (dnsSpy) {
+					dnsSpy.mockRestore();
+				}
+			});
+
+			it('rejects loopback, link-local, RFC1918, multicast, and metadata-service callback URLs in production', async () => {
+				const prevEnv = process.env.NODE_ENV;
+				const prevAllow = process.env.ALLOW_HTTP_CALLBACKS;
+				const prevPrivate = process.env.ALLOW_PRIVATE_CALLBACKS;
+
+				process.env.NODE_ENV = 'production';
+				process.env.ALLOW_HTTP_CALLBACKS = 'false';
+				delete process.env.ALLOW_PRIVATE_CALLBACKS;
+
+				try {
+					const blockedUrls = [
+						'https://localhost/callback',
+						'https://127.0.0.1/callback',
+						'https://[::1]/callback',
+						'https://10.0.0.1/callback',
+						'https://172.16.5.5/callback',
+						'https://192.168.1.100/callback',
+						'https://169.254.169.254/callback',
+						'https://[fe80::1]/callback',
+						'https://[fc00::]/callback',
+						'https://[ff02::1]/callback',
+						'https://[::ffff:127.0.0.1]/callback',
+						'https://[::ffff:7f00:0001]/callback',
+					];
+
+					for (const urlStr of blockedUrls) {
+						await expect(jobService.createJob('expanded-analysis', {
+							symbols: ['BINANCE:BTCUSDT'],
+							callbackUrl: urlStr,
+						})).rejects.toThrow('callbackUrl must be a valid HTTPS URL');
+					}
+
+					// Verify a public URL passes
+					const successRes = await jobService.createJob('expanded-analysis', {
+						symbols: ['BINANCE:BTCUSDT'],
+						callbackUrl: 'https://example.com/callback',
+					});
+					expect(successRes.success).toBe(true);
+				} finally {
+					process.env.NODE_ENV = prevEnv;
+					process.env.ALLOW_HTTP_CALLBACKS = prevAllow;
+					if (prevPrivate !== undefined) {
+						process.env.ALLOW_PRIVATE_CALLBACKS = prevPrivate;
+					} else {
+						delete process.env.ALLOW_PRIVATE_CALLBACKS;
+					}
+				}
+			});
+
+			it('allows private-network callback URLs if ALLOW_PRIVATE_CALLBACKS override is set', async () => {
+				const prevEnv = process.env.NODE_ENV;
+				const prevAllow = process.env.ALLOW_HTTP_CALLBACKS;
+				const prevPrivate = process.env.ALLOW_PRIVATE_CALLBACKS;
+
+				process.env.NODE_ENV = 'production';
+				process.env.ALLOW_HTTP_CALLBACKS = 'false';
+				process.env.ALLOW_PRIVATE_CALLBACKS = 'true';
+
+				try {
+					const res = await jobService.createJob('expanded-analysis', {
+						symbols: ['BINANCE:BTCUSDT'],
+						callbackUrl: 'https://127.0.0.1/callback',
+					});
+					expect(res.success).toBe(true);
+				} finally {
+					process.env.NODE_ENV = prevEnv;
+					process.env.ALLOW_HTTP_CALLBACKS = prevAllow;
+					if (prevPrivate !== undefined) {
+						process.env.ALLOW_PRIVATE_CALLBACKS = prevPrivate;
+					} else {
+						delete process.env.ALLOW_PRIVATE_CALLBACKS;
+					}
+				}
+			});
+		});
+
 		it('validates callbackSecret is a string', async () => {
 			await expect(jobService.createJob('expanded-analysis', {
 				symbols: ['BINANCE:BTCUSDT'],
