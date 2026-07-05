@@ -62,8 +62,8 @@ When an issue requires updating Render service environment variables, use the li
 - Service ID: `srv-cnb88vdjm4es73dd71i0`
 - Prefer the local Render CLI auth available at `~/.render/cli.yaml` when it is present and valid.
 - If the CLI auth is unavailable or stale, fall back to the Render REST API with the same credentials.
-- Update env vars with `PUT https://api.render.com/v1/services/{serviceId}/env-vars` as documented at https://api-docs.render.com/reference/update-env-vars-for-service.
-- This endpoint replaces the full env-var list. Read the current service vars first and send the complete desired set, or omitted keys will be removed.
+- Add or update each env var with `PUT https://api.render.com/v1/services/{serviceId}/env-vars/{envVarKey}` as documented at https://api-docs.render.com/reference/update-env-var.
+- Use the list endpoint only for inspection: `GET https://api.render.com/v1/services/{serviceId}/env-vars` is paginated, so walk all pages if you need to audit current values.
 - The env-var update does not deploy automatically. After the update, trigger a deploy with `POST https://api.render.com/v1/services/{serviceId}/deploys` so the change reaches production.
 
 ## Procedural Workflow
