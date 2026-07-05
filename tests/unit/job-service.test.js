@@ -197,7 +197,7 @@ describe('JobService Unit Tests', () => {
 	});
 
 	describe('Job eviction / cleanup', () => {
-		it('evicts jobs older than 1 hour if status is completed or failed', async () => {
+		it('evicts jobs older than 1 hour if status is terminal', async () => {
 			const jobId = 'expired-completed-job';
 			const rawJob = {
 				jobId,
@@ -218,7 +218,31 @@ describe('JobService Unit Tests', () => {
 			expect(jobService.repository.has(jobId)).toBe(false);
 		});
 
-		it('does not evict jobs older than 1 hour if they are not completed or failed', async () => {
+		it('evicts jobs older than 1 hour if status is cancelled or timed_out', async () => {
+			const statuses = ['cancelled', 'timed_out'];
+
+			for (const status of statuses) {
+				const jobId = `expired-${status}-job`;
+				const rawJob = {
+					jobId,
+					type: 'expanded-analysis',
+					status,
+					progress: { total: 1, current: 1, status },
+					fullResults: [],
+					fullScanResults: [],
+					createdAt: new Date(Date.now() - 7200000).toISOString(),
+					updatedAt: new Date(Date.now() - 7200000).toISOString(),
+					totalDurationMs: 1000,
+				};
+				await jobService.repository.save(rawJob);
+
+				const job = await jobService.getJob(jobId);
+				expect(job).toBeNull();
+				expect(jobService.repository.has(jobId)).toBe(false);
+			}
+		});
+
+		it('does not evict jobs older than 1 hour if they are not terminal', async () => {
 			const jobId = 'old-processing-job';
 			const rawJob = {
 				jobId,
@@ -330,6 +354,53 @@ describe('JobService Unit Tests', () => {
 					timeframe: '1h',
 				})
 			);
+		});
+
+		it('returns null when retrying expired retryable terminal jobs', async () => {
+			for (const status of ['cancelled', 'timed_out']) {
+				const jobId = `expired-${status}-retry-job`;
+				await jobService.repository.save({
+					jobId,
+					type: 'expanded-analysis',
+					status,
+					progress: { total: 1, current: 1, status },
+					requestMetadata: {
+						type: 'expanded-analysis',
+						symbols: ['BINANCE:BTCUSDT'],
+						timeframe: '1h',
+					},
+					fullResults: [],
+					fullScanResults: [],
+					createdAt: new Date(Date.now() - 7200000).toISOString(),
+					updatedAt: new Date(Date.now() - 7200000).toISOString(),
+					totalDurationMs: 1000,
+				});
+
+				const result = await jobService.retryJob(jobId);
+
+				expect(result).toBeNull();
+				expect(jobService.repository.has(jobId)).toBe(false);
+			}
+		});
+
+		it('returns null when cancelling an expired terminal job', async () => {
+			const jobId = 'expired-cancelled-cancel-job';
+			await jobService.repository.save({
+				jobId,
+				type: 'expanded-analysis',
+				status: 'cancelled',
+				progress: { total: 1, current: 1, status: 'cancelled' },
+				fullResults: [],
+				fullScanResults: [],
+				createdAt: new Date(Date.now() - 7200000).toISOString(),
+				updatedAt: new Date(Date.now() - 7200000).toISOString(),
+				totalDurationMs: 1000,
+			});
+
+			const result = await jobService.cancelJob(jobId);
+
+			expect(result).toBeNull();
+			expect(jobService.repository.has(jobId)).toBe(false);
 		});
 
 		it('retries only failed items via retryFailedJob', async () => {

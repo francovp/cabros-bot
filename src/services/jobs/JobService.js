@@ -26,6 +26,7 @@ const {
 
 const EXPIRATION_MS = 3600000; // 1 hour
 const DEFAULT_JOB_TIMEOUT_MS = 300000; // 5 minutes
+const TERMINAL_JOB_STATUSES = new Set(['completed', 'failed', 'cancelled', 'timed_out']);
 
 function isValidCallbackUrl(urlStr) {
 	try {
@@ -55,18 +56,37 @@ class JobService {
 	}
 
 	/**
-	 * Cleans up jobs older than 1 hour if they are completed or failed.
+	 * Cleans up terminal jobs older than 1 hour.
 	 */
 	async _cleanExpiredJobs() {
 		const now = Date.now();
 		for (const [id, job] of this.repository.entries()) {
-			if (
-				now - new Date(job.createdAt).getTime() > EXPIRATION_MS &&
-				(job.status === 'completed' || job.status === 'failed')
-			) {
+			if (this._isExpiredTerminalJob(job, now)) {
 				await this.repository.delete(id);
 			}
 		}
+	}
+
+	_isExpiredTerminalJob(job, now = Date.now()) {
+		return Boolean(
+			job &&
+			now - new Date(job.createdAt).getTime() > EXPIRATION_MS &&
+			TERMINAL_JOB_STATUSES.has(job.status)
+		);
+	}
+
+	async _getUnexpiredJob(jobId) {
+		const job = await this.repository.get(jobId);
+		if (!job) {
+			return null;
+		}
+
+		if (this._isExpiredTerminalJob(job)) {
+			await this.repository.delete(jobId);
+			return null;
+		}
+
+		return job;
 	}
 
 	/**
@@ -76,16 +96,8 @@ class JobService {
 	 */
 	async getJob(jobId) {
 		await this._cleanExpiredJobs();
-		const job = await this.repository.get(jobId);
+		const job = await this._getUnexpiredJob(jobId);
 		if (!job) {
-			return null;
-		}
-
-		if (
-			Date.now() - new Date(job.createdAt).getTime() > EXPIRATION_MS &&
-			(job.status === 'completed' || job.status === 'failed')
-		) {
-			await this.repository.delete(jobId);
 			return null;
 		}
 
@@ -106,7 +118,7 @@ class JobService {
 			progress: job.progress,
 			createdAt: job.createdAt,
 			updatedAt: job.updatedAt,
-			totalDurationMs: job.status === 'completed' || job.status === 'failed'
+			totalDurationMs: TERMINAL_JOB_STATUSES.has(job.status) && job.totalDurationMs !== undefined
 				? job.totalDurationMs
 				: (Date.now() - new Date(job.createdAt).getTime()),
 		};
@@ -634,8 +646,7 @@ class JobService {
 	async _persistJob(job) {
 		const current = await this.repository.get(job.jobId);
 		if (current) {
-			const terminalStatuses = new Set(['completed', 'failed', 'cancelled', 'timed_out']);
-			if (terminalStatuses.has(current.status) && job.status === 'processing') {
+			if (TERMINAL_JOB_STATUSES.has(current.status) && job.status === 'processing') {
 				return;
 			}
 		}
@@ -776,13 +787,12 @@ class JobService {
 	}
 
 	async cancelJob(jobId) {
-		const job = await this.repository.get(jobId);
+		const job = await this._getUnexpiredJob(jobId);
 		if (!job) {
 			return null;
 		}
 
-		const terminalStatuses = new Set(['completed', 'failed', 'cancelled', 'timed_out']);
-		if (terminalStatuses.has(job.status)) {
+		if (TERMINAL_JOB_STATUSES.has(job.status)) {
 			return {
 				success: false,
 				code: 'TERMINAL_JOB',
@@ -813,7 +823,7 @@ class JobService {
 	}
 
 	async retryJob(jobId, botOrGetter) {
-		const job = await this.repository.get(jobId);
+		const job = await this._getUnexpiredJob(jobId);
 		if (!job) {
 			return null;
 		}
@@ -845,7 +855,7 @@ class JobService {
 	}
 
 	async retryFailedJob(jobId, botOrGetter) {
-		const job = await this.repository.get(jobId);
+		const job = await this._getUnexpiredJob(jobId);
 		if (!job) {
 			return null;
 		}
@@ -955,8 +965,7 @@ class JobService {
 			return false;
 		}
 
-		const terminalStates = new Set(['completed', 'failed', 'cancelled', 'timed_out']);
-		return terminalStates.has(event);
+		return TERMINAL_JOB_STATUSES.has(event);
 	}
 
 	async _sendCallbackWithRetry(job) {
