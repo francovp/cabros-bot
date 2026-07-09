@@ -1036,8 +1036,8 @@ This feature introduces integration of the official `openai` SDK to interact wit
 This feature introduces validation of callback URLs to prevent Server-Side Request Forgery (SSRF) by blocking private-network, loopback, link-local, RFC1918, multicast, and metadata-service ranges during both callback URL acceptance (creation) and delivery (sending).
 
 **Core Components**:
-- `src/services/jobs/JobService.js` — Contains `isPrivateIp` IP range checks and `isValidCallbackUrl` async validation. Validates URL protocol, keeps HTTP-local allowance for tests/dev, and performs async DNS resolution of hostnames before checking resolved IP address ranges.
-- `tests/unit/job-service.test.js` — Standard unit tests covering loopback, link-local, RFC1918, multicast, and metadata-service (e.g. `169.254.169.254`) ranges.
+- `src/services/jobs/JobService.js` — Contains `isPrivateIp` IP range checks and `isValidCallbackUrl` async validation. Validates URL protocol, normalizes bracketed IPv6 literals, rejects a hostname when any DNS answer is private, revalidates before every delivery attempt, and disables automatic redirects.
+- `tests/unit/job-service.test.js` — Unit tests covering loopback, link-local, RFC1918, multicast, metadata-service (e.g. `169.254.169.254`), mixed public/private DNS answers, public IPv6 literals, redirect policy, and DNS changes between retries.
 - `tests/integration/jobs-endpoint.test.js` — Endpoint verification tests checking HTTP 400 Bad Request responses for private callback URLs.
 
 **Configuration**:

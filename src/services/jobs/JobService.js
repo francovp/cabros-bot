@@ -102,6 +102,13 @@ function isPrivateIp(ip) {
 	return true;
 }
 
+function normalizeHostname(hostname) {
+	if (hostname.startsWith('[') && hostname.endsWith(']')) {
+		return hostname.slice(1, -1);
+	}
+	return hostname;
+}
+
 async function isValidCallbackUrl(urlStr) {
 	try {
 		const url = new URL(urlStr);
@@ -109,7 +116,7 @@ async function isValidCallbackUrl(urlStr) {
 			return false;
 		}
 
-		const hostname = url.hostname;
+		const hostname = normalizeHostname(url.hostname);
 
 		if (url.protocol === 'http:') {
 			const isLocal = hostname === 'localhost' ||
@@ -127,19 +134,18 @@ async function isValidCallbackUrl(urlStr) {
 			return true;
 		}
 
-		let ip;
+		let addresses;
 		if (net.isIP(hostname)) {
-			ip = hostname;
+			addresses = [{ address: hostname }];
 		} else {
 			try {
-				const lookupRes = await dns.promises.lookup(hostname);
-				ip = lookupRes.address;
+				addresses = await dns.promises.lookup(hostname, { all: true, verbatim: true });
 			} catch (dnsErr) {
 				return false; // DNS resolution failed
 			}
 		}
 
-		if (isPrivateIp(ip)) {
+		if (!addresses.length || addresses.some(({ address }) => isPrivateIp(address))) {
 			return false;
 		}
 
@@ -1072,34 +1078,6 @@ class JobService {
 	async _sendCallbackWithRetry(job) {
 		const callbackUrl = job.callbackUrl;
 
-		if (!await isValidCallbackUrl(callbackUrl)) {
-			console.warn(`[JobService] Aborting callback to unsafe URL: ${callbackUrl}`);
-			const freshJob = await this.repository.get(job.jobId);
-			if (freshJob) {
-				const existingEvents = freshJob.callbackStatus?.events || {};
-				const timestamp = new Date().toISOString();
-				const attemptInfo = {
-					attempt: 1,
-					event: job.status,
-					timestamp,
-					error: 'Callback URL is blocked (private network)',
-				};
-				freshJob.callbackStatus = {
-					status: 'failed',
-					attempts: [attemptInfo],
-					events: {
-						...existingEvents,
-						[job.status]: {
-							status: 'failed',
-							attempts: [attemptInfo],
-						},
-					},
-				};
-				await this.repository.save(freshJob);
-			}
-			return;
-		}
-
 		const callbackEvent = job.status;
 		const secret = job.callbackSecret || process.env.JOB_CALLBACK_SIGNING_SECRET || '';
 		const payload = this._formatJobResponse(job);
@@ -1118,9 +1096,21 @@ class JobService {
 		let delayMs = process.env.JOB_CALLBACK_RETRY_DELAY_MS ? parseInt(process.env.JOB_CALLBACK_RETRY_DELAY_MS, 10) : 1000;
 
 		for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+			const timestamp = new Date().toISOString();
+
+			if (!await isValidCallbackUrl(callbackUrl)) {
+				console.warn(`[JobService] Aborting callback to unsafe URL: ${callbackUrl}`);
+				attempts.push({
+					attempt,
+					event: callbackEvent,
+					timestamp,
+					error: 'Callback URL is blocked (private network)',
+				});
+				break;
+			}
+
 			const controller = new AbortController();
 			const timeoutId = setTimeout(() => controller.abort(), 5000);
-			const timestamp = new Date().toISOString();
 
 			try {
 				const response = await fetch(callbackUrl, {
@@ -1128,6 +1118,7 @@ class JobService {
 					headers,
 					body: payloadStr,
 					signal: controller.signal,
+					redirect: 'error',
 				});
 
 				clearTimeout(timeoutId);

@@ -488,12 +488,22 @@ describe('JobService Unit Tests', () => {
 
 			beforeAll(() => {
 				const dns = require('dns');
-				dnsSpy = jest.spyOn(dns.promises, 'lookup').mockImplementation(async (hostname) => {
+				dnsSpy = jest.spyOn(dns.promises, 'lookup').mockImplementation(async (hostname, options) => {
 					if (hostname === 'example.com') {
-						return { address: '93.184.216.34' };
+						return options?.all
+							? [{ address: '93.184.216.34', family: 4 }]
+							: { address: '93.184.216.34', family: 4 };
 					}
 					if (hostname === 'localhost') {
-						return { address: '127.0.0.1' };
+						return options?.all
+							? [{ address: '127.0.0.1', family: 4 }]
+							: { address: '127.0.0.1', family: 4 };
+					}
+					if (hostname === 'mixed.example.com') {
+						return [
+							{ address: '93.184.216.34', family: 4 },
+							{ address: '169.254.169.254', family: 4 },
+						];
 					}
 					throw new Error('ENOTFOUND');
 				});
@@ -578,6 +588,32 @@ describe('JobService Unit Tests', () => {
 						delete process.env.ALLOW_PRIVATE_CALLBACKS;
 					}
 				}
+			});
+
+			it('rejects a hostname when any resolved address is private', async () => {
+				process.env.NODE_ENV = 'production';
+				delete process.env.ALLOW_PRIVATE_CALLBACKS;
+
+				await expect(jobService.createJob('expanded-analysis', {
+					symbols: ['BINANCE:BTCUSDT'],
+					callbackUrl: 'https://mixed.example.com/callback',
+				})).rejects.toThrow('callbackUrl must be a valid HTTPS URL');
+
+				expect(dnsSpy).toHaveBeenCalledWith('mixed.example.com', { all: true, verbatim: true });
+			});
+
+			it('accepts a public bracketed IPv6 literal without DNS lookup', async () => {
+				process.env.NODE_ENV = 'production';
+				delete process.env.ALLOW_PRIVATE_CALLBACKS;
+				dnsSpy.mockClear();
+
+				const result = await jobService.createJob('expanded-analysis', {
+					symbols: ['BINANCE:BTCUSDT'],
+					callbackUrl: 'https://[2606:4700:4700::1111]/callback',
+				});
+
+				expect(result.success).toBe(true);
+				expect(dnsSpy).not.toHaveBeenCalled();
 			});
 		});
 
@@ -702,6 +738,7 @@ describe('JobService Unit Tests', () => {
 			expect(url).toBe('https://example.com/callback');
 			expect(options.method).toBe('POST');
 			expect(options.headers['Content-Type']).toBe('application/json');
+			expect(options.redirect).toBe('error');
 
 			const body = JSON.parse(options.body);
 			expect(body.jobId).toBe(metadata.jobId);
@@ -713,6 +750,44 @@ describe('JobService Unit Tests', () => {
 			expect(freshJob.callbackStatus.status).toBe('success');
 			expect(freshJob.callbackStatus.attempts).toHaveLength(1);
 			expect(freshJob.callbackStatus.attempts[0].statusCode).toBe(200);
+		});
+
+		it('revalidates DNS before each retry and stops after rebinding to a private address', async () => {
+			const dns = require('dns');
+			const lookupSpy = jest.spyOn(dns.promises, 'lookup')
+				.mockResolvedValueOnce([{ address: '93.184.216.34', family: 4 }])
+				.mockResolvedValueOnce([{ address: '169.254.169.254', family: 4 }]);
+			process.env.NODE_ENV = 'production';
+			process.env.JOB_CALLBACK_RETRY_DELAY_MS = '1';
+			delete process.env.ALLOW_PRIVATE_CALLBACKS;
+			fetchMock.mockResolvedValue({ ok: false, status: 500, statusText: 'Server Error' });
+
+			const job = {
+				jobId: 'job-dns-rebinding',
+				type: 'expanded-analysis',
+				status: 'completed',
+				callbackUrl: 'https://rebind.example.com/callback',
+				callbackStatus: { status: 'pending', attempts: [] },
+				fullResults: [],
+				fullScanResults: [],
+				deliveryResults: [],
+				createdAt: new Date().toISOString(),
+				updatedAt: new Date().toISOString(),
+			};
+			await jobService.repository.save(job);
+
+			try {
+				await jobService._sendCallbackWithRetry(job);
+
+				expect(fetchMock).toHaveBeenCalledTimes(1);
+				expect(lookupSpy).toHaveBeenCalledTimes(2);
+				const freshJob = await jobService.repository.get(job.jobId);
+				expect(freshJob.callbackStatus.status).toBe('failed');
+				expect(freshJob.callbackStatus.attempts).toHaveLength(2);
+				expect(freshJob.callbackStatus.attempts[1].error).toBe('Callback URL is blocked (private network)');
+			} finally {
+				lookupSpy.mockRestore();
+			}
 		});
 
 		it('signs payload with HMAC signature if callbackSecret is provided', async () => {
