@@ -119,12 +119,14 @@ async function isValidCallbackUrl(urlStr) {
 		const hostname = normalizeHostname(url.hostname);
 
 		if (url.protocol === 'http:') {
-			const isLocal = hostname === 'localhost' ||
+			const httpAllowed = hostname === 'localhost' ||
 				hostname === '127.0.0.1' ||
 				hostname === '::1' ||
 				process.env.NODE_ENV === 'test' ||
 				process.env.ALLOW_HTTP_CALLBACKS === 'true';
-			return isLocal;
+			if (!httpAllowed) {
+				return false;
+			}
 		}
 
 		const allowPrivate = process.env.ALLOW_PRIVATE_CALLBACKS === 'true' ||

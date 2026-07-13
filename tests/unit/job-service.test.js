@@ -469,9 +469,9 @@ describe('JobService Unit Tests', () => {
 			}
 		});
 
-		it('allows http for localhost / local environments', async () => {
+		it('allows http for localhost in local environments', async () => {
 			const prevEnv = process.env.NODE_ENV;
-			process.env.NODE_ENV = 'production';
+			process.env.NODE_ENV = 'test';
 			try {
 				const res = await jobService.createJob('expanded-analysis', {
 					symbols: ['BINANCE:BTCUSDT'],
@@ -553,6 +553,31 @@ describe('JobService Unit Tests', () => {
 						callbackUrl: 'https://example.com/callback',
 					});
 					expect(successRes.success).toBe(true);
+				} finally {
+					process.env.NODE_ENV = prevEnv;
+					process.env.ALLOW_HTTP_CALLBACKS = prevAllow;
+					if (prevPrivate !== undefined) {
+						process.env.ALLOW_PRIVATE_CALLBACKS = prevPrivate;
+					} else {
+						delete process.env.ALLOW_PRIVATE_CALLBACKS;
+					}
+				}
+			});
+
+			it('rejects private HTTP callback URLs even when HTTP callbacks are enabled', async () => {
+				const prevEnv = process.env.NODE_ENV;
+				const prevAllow = process.env.ALLOW_HTTP_CALLBACKS;
+				const prevPrivate = process.env.ALLOW_PRIVATE_CALLBACKS;
+
+				process.env.NODE_ENV = 'production';
+				process.env.ALLOW_HTTP_CALLBACKS = 'true';
+				delete process.env.ALLOW_PRIVATE_CALLBACKS;
+
+				try {
+					await expect(jobService.createJob('expanded-analysis', {
+						symbols: ['BINANCE:BTCUSDT'],
+						callbackUrl: 'http://169.254.169.254/callback',
+					})).rejects.toThrow('callbackUrl must be a valid HTTPS URL');
 				} finally {
 					process.env.NODE_ENV = prevEnv;
 					process.env.ALLOW_HTTP_CALLBACKS = prevAllow;
