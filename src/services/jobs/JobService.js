@@ -64,6 +64,7 @@ function isPrivateIp(ip) {
 		if (parts[0] === 10) return true; // RFC1918
 		if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true; // RFC1918
 		if (parts[0] === 192 && parts[1] === 168) return true; // RFC1918
+		if (parts[0] === 100 && parts[1] >= 64 && parts[1] <= 127) return true; // RFC6598 shared address space
 		if (parts[0] === 169 && parts[1] === 254) return true; // Link-local (includes 169.254.169.254)
 		if (parts[0] >= 224 && parts[0] <= 239) return true; // Multicast
 		if (parts[0] === 0 && parts[1] === 0 && parts[2] === 0 && parts[3] === 0) return true;
@@ -109,11 +110,11 @@ function normalizeHostname(hostname) {
 	return hostname;
 }
 
-async function isValidCallbackUrl(urlStr) {
+async function validateCallbackUrl(urlStr) {
 	try {
 		const url = new URL(urlStr);
 		if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-			return false;
+			return { valid: false, reason: 'format' };
 		}
 
 		const hostname = normalizeHostname(url.hostname);
@@ -125,7 +126,7 @@ async function isValidCallbackUrl(urlStr) {
 				process.env.NODE_ENV === 'test' ||
 				process.env.ALLOW_HTTP_CALLBACKS === 'true';
 			if (!httpAllowed) {
-				return false;
+				return { valid: false, reason: 'format' };
 			}
 		}
 
@@ -133,7 +134,7 @@ async function isValidCallbackUrl(urlStr) {
 			process.env.NODE_ENV === 'test';
 
 		if (allowPrivate) {
-			return true;
+			return { valid: true };
 		}
 
 		let addresses;
@@ -143,18 +144,23 @@ async function isValidCallbackUrl(urlStr) {
 			try {
 				addresses = await dns.promises.lookup(hostname, { all: true, verbatim: true });
 			} catch (dnsErr) {
-				return false; // DNS resolution failed
+				return { valid: false, reason: 'dns' };
 			}
 		}
 
 		if (!addresses.length || addresses.some(({ address }) => isPrivateIp(address))) {
-			return false;
+			return { valid: false, reason: 'private' };
 		}
 
-		return true;
+		return { valid: true };
 	} catch (err) {
-		return false;
+		return { valid: false, reason: 'format' };
 	}
+}
+
+async function isValidCallbackUrl(urlStr) {
+	const result = await validateCallbackUrl(urlStr);
+	return result.valid;
 }
 
 class JobService {
@@ -1100,15 +1106,26 @@ class JobService {
 		for (let attempt = 1; attempt <= maxAttempts; attempt++) {
 			const timestamp = new Date().toISOString();
 
-			if (!await isValidCallbackUrl(callbackUrl)) {
-				console.warn(`[JobService] Aborting callback to unsafe URL: ${callbackUrl}`);
+			const callbackUrlValidation = await validateCallbackUrl(callbackUrl);
+			if (!callbackUrlValidation.valid) {
+				const isRetryableValidationFailure = callbackUrlValidation.reason === 'dns';
+				console.warn(`[JobService] ${isRetryableValidationFailure ? 'Retrying callback after validation failure' : 'Aborting callback to unsafe URL'}: ${callbackUrl}`);
 				attempts.push({
 					attempt,
 					event: callbackEvent,
 					timestamp,
-					error: 'Callback URL is blocked (private network)',
+					error: isRetryableValidationFailure
+						? 'Callback URL validation failed'
+						: 'Callback URL is blocked (private network)',
 				});
-				break;
+				if (!isRetryableValidationFailure) {
+					break;
+				}
+				if (attempt < maxAttempts) {
+					await new Promise((resolve) => setTimeout(resolve, delayMs));
+					delayMs *= 2;
+				}
+				continue;
 			}
 
 			const controller = new AbortController();

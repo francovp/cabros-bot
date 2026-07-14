@@ -532,6 +532,7 @@ describe('JobService Unit Tests', () => {
 						'https://10.0.0.1/callback',
 						'https://172.16.5.5/callback',
 						'https://192.168.1.100/callback',
+						'https://100.64.0.1/callback',
 						'https://169.254.169.254/callback',
 						'https://[fe80::1]/callback',
 						'https://[fc00::]/callback',
@@ -811,6 +812,49 @@ describe('JobService Unit Tests', () => {
 				expect(freshJob.callbackStatus.attempts).toHaveLength(2);
 				expect(freshJob.callbackStatus.attempts[1].error).toBe('Callback URL is blocked (private network)');
 			} finally {
+				lookupSpy.mockRestore();
+			}
+		});
+
+		it('retries delivery when DNS validation has a transient failure', async () => {
+			const dns = require('dns');
+			const lookupSpy = jest.spyOn(dns.promises, 'lookup')
+				.mockRejectedValueOnce(new Error('ENOTFOUND'))
+				.mockResolvedValueOnce([{ address: '93.184.216.34', family: 4 }]);
+			const prevEnv = process.env.NODE_ENV;
+			const prevDelay = process.env.JOB_CALLBACK_RETRY_DELAY_MS;
+			process.env.NODE_ENV = 'production';
+			process.env.JOB_CALLBACK_RETRY_DELAY_MS = '1';
+			delete process.env.ALLOW_PRIVATE_CALLBACKS;
+			fetchMock.mockResolvedValueOnce({ ok: true, status: 200 });
+
+			const job = {
+				jobId: 'job-transient-dns-failure',
+				type: 'expanded-analysis',
+				status: 'completed',
+				callbackUrl: 'https://flaky-dns.example.com/callback',
+				callbackStatus: { status: 'pending', attempts: [] },
+				fullResults: [],
+				fullScanResults: [],
+				deliveryResults: [],
+				createdAt: new Date().toISOString(),
+				updatedAt: new Date().toISOString(),
+			};
+			await jobService.repository.save(job);
+
+			try {
+				await jobService._sendCallbackWithRetry(job);
+
+				expect(lookupSpy).toHaveBeenCalledTimes(2);
+				expect(fetchMock).toHaveBeenCalledTimes(1);
+				const freshJob = await jobService.repository.get(job.jobId);
+				expect(freshJob.callbackStatus.status).toBe('success');
+				expect(freshJob.callbackStatus.attempts).toHaveLength(2);
+				expect(freshJob.callbackStatus.attempts[0].error).toBe('Callback URL validation failed');
+				expect(freshJob.callbackStatus.attempts[1].statusCode).toBe(200);
+			} finally {
+				process.env.NODE_ENV = prevEnv;
+				process.env.JOB_CALLBACK_RETRY_DELAY_MS = prevDelay;
 				lookupSpy.mockRestore();
 			}
 		});
