@@ -60,14 +60,19 @@ function isPrivateIp(ip) {
 		const parts = cleanIp.split('.').map(Number);
 		if (parts.length !== 4 || parts.some(isNaN)) return true;
 
+		if (parts[0] === 0) return true; // Current network / software-only
 		if (parts[0] === 127) return true; // Loopback
 		if (parts[0] === 10) return true; // RFC1918
 		if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true; // RFC1918
 		if (parts[0] === 192 && parts[1] === 168) return true; // RFC1918
+		if (parts[0] === 192 && parts[1] === 0) return true; // IETF special-purpose
 		if (parts[0] === 100 && parts[1] >= 64 && parts[1] <= 127) return true; // RFC6598 shared address space
 		if (parts[0] === 169 && parts[1] === 254) return true; // Link-local (includes 169.254.169.254)
+		if (parts[0] === 198 && (parts[1] === 18 || parts[1] === 19)) return true; // Benchmarking
+		if (parts[0] === 198 && parts[1] === 51 && parts[2] === 100) return true; // Documentation
+		if (parts[0] === 203 && parts[1] === 0 && parts[2] === 113) return true; // Documentation
 		if (parts[0] >= 224 && parts[0] <= 239) return true; // Multicast
-		if (parts[0] === 0 && parts[1] === 0 && parts[2] === 0 && parts[3] === 0) return true;
+		if (parts[0] >= 240) return true; // Reserved / limited broadcast
 		if (parts[0] === 255 && parts[1] === 255 && parts[2] === 255 && parts[3] === 255) return true;
 
 		return false;
@@ -108,6 +113,20 @@ function normalizeHostname(hostname) {
 		return hostname.slice(1, -1);
 	}
 	return hostname;
+}
+
+function sanitizeCallbackUrlForLog(urlStr) {
+	try {
+		const url = new URL(urlStr);
+		url.username = '';
+		url.password = '';
+		url.pathname = '/...';
+		url.search = '';
+		url.hash = '';
+		return url.toString();
+	} catch (err) {
+		return '[invalid callback URL]';
+	}
 }
 
 async function validateCallbackUrl(urlStr) {
@@ -1109,7 +1128,10 @@ class JobService {
 			const callbackUrlValidation = await validateCallbackUrl(callbackUrl);
 			if (!callbackUrlValidation.valid) {
 				const isRetryableValidationFailure = callbackUrlValidation.reason === 'dns';
-				console.warn(`[JobService] ${isRetryableValidationFailure ? 'Retrying callback after validation failure' : 'Aborting callback to unsafe URL'}: ${callbackUrl}`);
+				console.warn(
+					`[JobService] ${isRetryableValidationFailure ? 'Retrying callback after validation failure' : 'Aborting callback to unsafe URL'}:`,
+					sanitizeCallbackUrlForLog(callbackUrl),
+				);
 				attempts.push({
 					attempt,
 					event: callbackEvent,

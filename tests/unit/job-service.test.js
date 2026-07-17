@@ -526,6 +526,7 @@ describe('JobService Unit Tests', () => {
 
 				try {
 					const blockedUrls = [
+						'https://0.0.0.1/callback',
 						'https://localhost/callback',
 						'https://127.0.0.1/callback',
 						'https://[::1]/callback',
@@ -534,6 +535,8 @@ describe('JobService Unit Tests', () => {
 						'https://192.168.1.100/callback',
 						'https://100.64.0.1/callback',
 						'https://169.254.169.254/callback',
+						'https://198.18.0.1/callback',
+						'https://240.0.0.1/callback',
 						'https://[fe80::1]/callback',
 						'https://[fc00::]/callback',
 						'https://[ff02::1]/callback',
@@ -776,6 +779,67 @@ describe('JobService Unit Tests', () => {
 			expect(freshJob.callbackStatus.status).toBe('success');
 			expect(freshJob.callbackStatus.attempts).toHaveLength(1);
 			expect(freshJob.callbackStatus.attempts[0].statusCode).toBe(200);
+		});
+
+		it('sanitizes blocked callback URLs before logging delivery failures', async () => {
+			const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+			const prevEnv = process.env.NODE_ENV;
+			process.env.NODE_ENV = 'production';
+			delete process.env.ALLOW_PRIVATE_CALLBACKS;
+			const job = {
+				jobId: 'job-callback-blocked-log',
+				type: 'expanded-analysis',
+				status: 'completed',
+				requestMetadata: {
+					type: 'expanded-analysis',
+					symbols: ['BINANCE:BTCUSDT'],
+					timeframe: '1D',
+					includeMultiTimeframe: false,
+					analysisMode: 'standard',
+					timeoutMs: 300000,
+					callbackUrl: 'https://198.18.0.1/secret/path?token=super-secret',
+				},
+				progress: { total: 1, current: 1, status: 'completed' },
+				fullResults: [],
+				fullScanResults: [],
+				alertText: null,
+				deliveryResults: [],
+				summary: null,
+				error: null,
+				code: null,
+				createdAt: new Date().toISOString(),
+				updatedAt: new Date().toISOString(),
+				totalDurationMs: 0,
+				timeoutMs: 300000,
+				callbackUrl: 'https://198.18.0.1/secret/path?token=super-secret',
+				callbackStatus: { status: 'pending', attempts: [] },
+			};
+
+			await jobService.repository.save(job);
+			try {
+				await jobService._triggerCallbackIfConfigured(job);
+
+				let freshJob = await jobService.repository.get(job.jobId);
+				let pollAttempts = 0;
+				while ((!freshJob.callbackStatus || freshJob.callbackStatus.status === 'pending') && pollAttempts < 20) {
+					await delay(20);
+					freshJob = await jobService.repository.get(job.jobId);
+					pollAttempts++;
+				}
+
+				expect(fetchMock).not.toHaveBeenCalled();
+				expect(freshJob.callbackStatus.status).toBe('failed');
+				expect(warnSpy).toHaveBeenCalledWith(
+					expect.stringContaining('Aborting callback to unsafe URL'),
+					'https://198.18.0.1/...',
+				);
+				const loggedText = warnSpy.mock.calls.flat().join(' ');
+				expect(loggedText).not.toContain('super-secret');
+				expect(loggedText).not.toContain('/secret/path');
+			} finally {
+				process.env.NODE_ENV = prevEnv;
+				warnSpy.mockRestore();
+			}
 		});
 
 		it('revalidates DNS before each retry and stops after rebinding to a private address', async () => {
