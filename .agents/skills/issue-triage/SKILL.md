@@ -1,9 +1,9 @@
 ---
-name: triage-roi-issues
+name: issue-triage
 description: Classify and add ordered priority labels to eligible open GitHub issues for this bot. Use when asked to prioritize the trading-profit backlog, rank opportunities by ROI, apply ROI/QoL/performance/security/build-tool/developer-experience labels, or triage issues produced by trading-profit-opportunity-scout.
 ---
 
-# ROI Issue Triage
+# Issue Triage
 
 Apply one numbered `priority/*` label to each eligible open issue. This is a portfolio-ordering label, not an incident-severity label: leave the repository's existing `priority/p0` through `priority/p3` labels untouched.
 

@@ -1,4 +1,0 @@
-interface:
-  display_name: "ROI Issue Triage"
-  short_description: "Prioritize bot issues by ROI"
-  default_prompt: "Use $triage-roi-issues to label eligible open issues by ROI priority."
