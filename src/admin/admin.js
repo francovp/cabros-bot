@@ -267,7 +267,7 @@ const createJobStatusForm = () => {
 				method: 'POST', path: '/api/jobs/{jobId}/retry', label: 'Retry job', confirm: 'Retry this job?',
 			});
 		}
-		if (failedItems) {
+		if (job.status !== 'processing' && failedItems) {
 			definitions.push({
 				method: 'POST', path: '/api/jobs/{jobId}/retry-failed', label: 'Retry failed items',
 				confirm: 'Retry failed items for this job?',

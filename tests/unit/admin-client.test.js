@@ -293,6 +293,45 @@ describe('admin browser client', () => {
 		expect(findButton(statusForm, 'Retry failed items')).toBeUndefined();
 	});
 
+	it('does not offer or dispatch retry-failed for a processing job with failed items', async () => {
+		const job = {
+			success: true,
+			jobId: 'job-1',
+			type: 'expanded-analysis',
+			status: 'processing',
+			progress: { completed: 2, total: 4 },
+			createdAt: '2026-07-17T20:00:00.000Z',
+			updatedAt: '2026-07-17T20:01:00.000Z',
+			totalDurationMs: 60000,
+			results: [{ status: 'error' }, { status: 'timeout' }],
+		};
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/jobs/job-1') return response(job);
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'jobs');
+
+		const statusForm = findForm(browser.elementsById.view, 'GET /api/jobs/{jobId}');
+		statusForm.elements['path-jobId'].value = 'job-1';
+		await statusForm.dispatch('submit');
+		await flush();
+		const retryFailed = findButton(statusForm, 'Retry failed items');
+		if (retryFailed) {
+			await retryFailed.dispatch('click');
+			await flush();
+		}
+
+		expect(browser.context.fetch).not.toHaveBeenCalledWith(
+			'/api/jobs/job-1/retry-failed',
+			expect.anything(),
+		);
+		expect(retryFailed).toBeUndefined();
+	});
+
 	it('shows both retry actions only for a fetched failed job with failed items', async () => {
 		const job = { jobId: 'job-1', status: 'failed', results: [{ status: 'error' }] };
 		const browser = createBrowser({
