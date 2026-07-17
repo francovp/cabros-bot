@@ -36,15 +36,15 @@ Use the current repository unless the user explicitly supplies another one. Auth
 ```bash
 gh auth status
 repo_name="$(gh repo view --json nameWithOwner --jq .nameWithOwner)"
-gh issue list --repo "$repo_name" --state open --limit 100 --json number,title,body,labels,url
-gh pr list --repo "$repo_name" --state open --limit 100 --json number,title,body,labels,url
+gh api --paginate "repos/$repo_name/issues?state=open&per_page=100" --jq '.[] | select(.pull_request | not) | {number,title,body,labels,url}'
+gh api --paginate "repos/$repo_name/pulls?state=open&per_page=100" --jq '.[] | {number,title,body,labels,url}'
 ```
 
 Create only missing labels; do not use `--force` because it can overwrite repository-managed label metadata:
 
 ```bash
 ensure_label() {
-  if ! gh label list --repo "$repo_name" --limit 100 --json name --jq '.[].name' | rg -Fxq "$1"; then
+  if ! gh api --silent "repos/$repo_name/labels/${1//\//%2F}" >/dev/null 2>&1; then
     gh label create "$1" --repo "$repo_name" --description "$2" --color "$3"
   fi
 }
