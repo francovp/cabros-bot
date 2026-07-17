@@ -244,7 +244,7 @@
       "VolumeConfirmation": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/VolumeConfirmationRequest" }, "example": { "symbol": "BINANCE:BTCUSDT", "timeframe": "1h" } } } },
       "Replay": { "content": { "application/json": { "schema": { "type": "object", "properties": { "channels": { "type": "array", "items": { "type": "string", "enum": ["telegram", "whatsapp", "discord"] } } } }, "example": { "channels": ["telegram"] } } } },
       "ScannerPreset": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ScannerPresetRequest" }, "example": { "name": "Daily Scan", "exchange": "BINANCE", "timeframe": "4h", "scans": ["top_gainers"], "limit": 5 } } } },
-      "TradingViewJob": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TradingViewJobRequest" }, "examples": { "expandedAnalysis": { "value": { "type": "expanded-analysis", "symbols": ["BINANCE:BTCUSDT"], "timeframe": "1D", "channels": ["telegram"], "telegramChatId": "-1001234567890" } }, "marketScanner": { "value": { "type": "market-scanner", "exchange": "BINANCE", "timeframe": "4h", "channels": ["telegram"] } } } } } },
+      "TradingViewJob": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TradingViewJobRequest" }, "examples": { "expandedAnalysis": { "value": { "type": "expanded-analysis", "symbols": ["BINANCE:BTCUSDT"], "timeframe": "1D", "channels": ["telegram"], "telegramChatId": "-1001234567890" } }, "expandedAnalysisWithCallback": { "value": { "type": "expanded-analysis", "symbols": ["BINANCE:BTCUSDT", "NASDAQ:NVDA"], "timeframe": "4h", "callbackUrl": "https://myapp.example.com/job-done", "callbackSecret": "my-shared-secret", "callbackEvents": ["completed", "failed"], "timeoutMs": 120000 } }, "marketScanner": { "value": { "type": "market-scanner", "exchange": "BINANCE", "timeframe": "4h", "channels": ["telegram"] } }, "marketScannerWithCallback": { "value": { "type": "market-scanner", "exchange": "BINANCE", "timeframe": "4h", "scans": ["top_gainers", "volume_breakout_scanner"], "callbackUrl": "https://myapp.example.com/scan-done", "callbackEvents": ["completed", "failed", "timed_out"] } } } } } },
       "NewsMonitor": { "content": { "application/json": { "schema": { "$ref": "#/components/schemas/NewsMonitorRequest" }, "example": { "crypto": ["BTCUSDT", "ETHUSD"], "stocks": ["NVDA"], "channels": ["telegram"] } } } }
     },
     "responses": {
@@ -279,7 +279,37 @@
       },
       "VolumeConfirmationRequest": { "type": "object", "required": ["symbol"], "properties": { "symbol": { "type": "string", "pattern": "^[A-Z0-9_]+:[A-Z0-9._-]+$" }, "timeframe": { "type": "string" } } },
       "ScannerPresetRequest": { "type": "object", "required": ["name"], "properties": { "name": { "type": "string", "minLength": 1 }, "exchange": { "type": "string" }, "timeframe": { "type": "string" }, "scans": { "type": "array", "items": { "type": "string" } }, "limit": { "type": "integer", "minimum": 1, "maximum": 20 }, "bbw_threshold": { "type": "number" } } },
-      "TradingViewJobRequest": { "oneOf": [{ "allOf": [{ "type": "object", "required": ["type"], "properties": { "type": { "const": "expanded-analysis" } } }, { "$ref": "#/components/schemas/ExpandedAnalysisRequest" }] }, { "allOf": [{ "type": "object", "required": ["type"], "properties": { "type": { "const": "market-scanner" } } }, { "$ref": "#/components/schemas/MarketScannerRequest" }] }] },
+      "CallbackFields": {
+        "type": "object",
+        "properties": {
+          "callbackUrl": {
+            "type": "string",
+            "format": "uri",
+            "description": "HTTPS URL to receive a POST with the job result when it reaches a terminal state (or a configured intermediate event). HTTP is allowed only for localhost in development."
+          },
+          "callbackSecret": {
+            "type": "string",
+            "description": "Optional shared secret sent in the X-Callback-Secret header when delivering callbacks, for request authenticity verification."
+          },
+          "callbackEvents": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": ["completed", "failed", "cancelled", "timed_out", "processing"]
+            },
+            "description": "Events that trigger a callback delivery. Defaults to all terminal events: completed, failed, cancelled, timed_out.",
+            "default": ["completed", "failed", "cancelled", "timed_out"]
+          },
+          "timeoutMs": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 600000,
+            "description": "Maximum runtime for the job in milliseconds. Defaults to 300000 (5 minutes). Hard cap at 600000 (10 minutes).",
+            "default": 300000
+          }
+        }
+      },
+      "TradingViewJobRequest": { "oneOf": [{ "allOf": [{ "type": "object", "required": ["type"], "properties": { "type": { "const": "expanded-analysis" } } }, { "$ref": "#/components/schemas/ExpandedAnalysisRequest" }, { "$ref": "#/components/schemas/CallbackFields" }] }, { "allOf": [{ "type": "object", "required": ["type"], "properties": { "type": { "const": "market-scanner" } } }, { "$ref": "#/components/schemas/MarketScannerRequest" }, { "$ref": "#/components/schemas/CallbackFields" }] }] },
       "NewsMonitorRequest": { "type": "object", "properties": { "crypto": { "type": "array", "items": { "type": "string" } }, "stocks": { "type": "array", "items": { "type": "string" } }, "channels": { "type": "array", "minItems": 1, "items": { "type": "string", "enum": ["telegram", "whatsapp", "discord"] } }, "telegramChatId": { "type": "string", "minLength": 1 }, "whatsappChatId": { "type": "string", "minLength": 1 } } },
       "NewsMonitorResponse": {
         "type": "object",
@@ -308,7 +338,33 @@
         }
       },
       "DeliveryResult": { "type": "object", "properties": { "success": { "type": "boolean" }, "dryRun": { "type": "boolean" }, "payload": { "type": "object", "properties": { "text": { "type": "string" }, "enrichedData": { "type": ["object", "null"], "additionalProperties": true, "properties": { "confluenceData": { "type": ["object", "null"], "additionalProperties": true }, "multiTimeframeData": { "type": ["object", "null"], "additionalProperties": true } } } } }, "results": { "type": "array", "items": { "type": "object", "properties": { "channel": { "type": "string" }, "success": { "type": "boolean" }, "error": { "type": "string" } } } }, "enriched": { "type": "boolean" }, "tokenUsage": { "$ref": "#/components/schemas/JsonObject" }, "requestedChannels": { "type": "array", "items": { "type": "string" } }, "deliveredChannels": { "type": "array", "items": { "type": "string" } } } },
-      "Job": { "type": "object", "properties": { "success": { "type": "boolean" }, "jobId": { "type": "string", "format": "uuid" }, "status": { "type": "string", "enum": ["pending", "processing", "completed", "failed", "canceled"] }, "progress": { "$ref": "#/components/schemas/JsonObject" }, "result": { "$ref": "#/components/schemas/JsonObject" } } },
+      "Job": {
+        "type": "object",
+        "properties": {
+          "success": { "type": "boolean" },
+          "jobId": { "type": "string", "format": "uuid" },
+          "type": { "type": "string", "enum": ["expanded-analysis", "market-scanner"] },
+          "status": {
+            "type": "string",
+            "enum": ["pending", "processing", "completed", "failed", "cancelled", "timed_out"],
+            "description": "Current job status. Terminal statuses are: completed, failed, cancelled, timed_out."
+          },
+          "progress": { "$ref": "#/components/schemas/JsonObject" },
+          "createdAt": { "type": "string", "format": "date-time" },
+          "updatedAt": { "type": "string", "format": "date-time" },
+          "totalDurationMs": { "type": "integer", "description": "Total job duration in milliseconds." },
+          "callbackStatus": { "$ref": "#/components/schemas/JsonObject", "description": "Callback delivery state, present only when a callbackUrl was configured." },
+          "requestedChannels": { "type": "array", "items": { "type": "string" } },
+          "deliveredChannels": { "type": "array", "items": { "type": "string" } },
+          "results": { "$ref": "#/components/schemas/JsonObject", "description": "Per-symbol analysis results (expanded-analysis jobs only, when completed)." },
+          "scanResults": { "$ref": "#/components/schemas/JsonObject", "description": "Per-scan results (market-scanner jobs only, when completed)." },
+          "summary": { "$ref": "#/components/schemas/JsonObject" },
+          "alertText": { "type": "string", "description": "Formatted alert text delivered to notification channels (completed jobs only)." },
+          "deliveryResults": { "type": "array", "items": { "$ref": "#/components/schemas/JsonObject" } },
+          "error": { "type": "string", "description": "Error message (failed or timed_out jobs only)." },
+          "code": { "type": "string", "description": "Machine-readable error code (failed or timed_out jobs only)." }
+        }
+      },
       "Status": { "type": "object", "properties": { "service": { "$ref": "#/components/schemas/JsonObject" }, "featureFlags": { "$ref": "#/components/schemas/JsonObject" }, "deliveryChannels": { "$ref": "#/components/schemas/JsonObject" }, "dependencies": { "$ref": "#/components/schemas/JsonObject" } } }
     }
   }
