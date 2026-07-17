@@ -1,5 +1,8 @@
 'use strict';
 
+const fs = require('fs');
+const path = require('path');
+const vm = require('vm');
 const { createRequest } = require('../../src/admin/admin-request');
 
 describe('createRequest', () => {
@@ -25,6 +28,13 @@ describe('createRequest', () => {
 			.toThrow('API path must start with /api/');
 	});
 
+	it('rejects API paths containing query strings or fragments', () => {
+		expect(() => createRequest({ path: '/api/status?enabled=true', method: 'GET' }))
+			.toThrow('API path must start with /api/');
+		expect(() => createRequest({ path: '/api/status#details', method: 'GET' }))
+			.toThrow('API path must start with /api/');
+	});
+
 	it('omits undefined query values and empty JSON bodies', () => {
 		expect(createRequest({
 			path: '/api/status',
@@ -35,5 +45,19 @@ describe('createRequest', () => {
 			url: '/api/status?enabled=true',
 			options: { method: 'GET', headers: {} },
 		});
+	});
+});
+
+it('exposes a working helper on a browser-like window global', () => {
+	const browser = {};
+	const source = fs.readFileSync(path.join(__dirname, '../../src/admin/admin-request.js'), 'utf8');
+
+	vm.runInNewContext(source, { window: browser, URLSearchParams });
+
+	expect(browser.CabrosAdminRequest.createRequest({
+		path: '/api/status', method: 'GET', query: { detail: 'full' },
+	})).toEqual({
+		url: '/api/status?detail=full',
+		options: { method: 'GET', headers: {} },
 	});
 });

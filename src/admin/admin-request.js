@@ -15,7 +15,7 @@
 		&& (typeof body !== 'object' || Object.keys(body).length > 0);
 
 	const createRequest = ({ path, method, query, body, apiKey }) => {
-		if (!path.startsWith('/api/')) {
+		if (typeof path !== 'string' || !path.startsWith('/api/') || path.includes('?') || path.includes('#')) {
 			throw new Error('API path must start with /api/');
 		}
 
