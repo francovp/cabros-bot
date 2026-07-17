@@ -38,4 +38,26 @@ describe('public OpenAPI documentation', () => {
 		expect(stylesheet.status).toBe(200);
 		expect(stylesheet.headers['content-type']).toMatch(/text\/css/);
 	});
+
+	it('serves the API admin shell and external assets without an API key', async () => {
+		const page = await request(app).get('/admin');
+		const script = await request(app).get('/admin/admin.js');
+
+		expect(page.status).toBe(200);
+		expect(page.text).toContain('Cabros Bot Console');
+		expect(page.text).toContain('/admin/admin.js');
+		expect(page.text).not.toMatch(/admin\.(?:js|css)\?v=/);
+		expect(page.text).not.toContain(process.env.WEBHOOK_API_KEY);
+		expect(script.status).toBe(200);
+		expect(script.headers['content-type']).toMatch(/javascript/);
+		expect(script.headers['cache-control']).toBe('no-cache');
+	});
+
+	it('keeps the admin client contract-driven without exposing the configured API key', async () => {
+		const client = await request(app).get('/admin/admin.js');
+
+		expect(client.status).toBe(200);
+		expect(client.text).toContain('fetch(\'/openapi.json\')');
+		expect(client.text).not.toContain(process.env.WEBHOOK_API_KEY);
+	});
 });

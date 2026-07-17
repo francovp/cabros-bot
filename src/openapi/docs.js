@@ -7,6 +7,7 @@ const contract = require('./openapi.json');
 
 const docsHtmlPath = path.join(__dirname, 'index.html');
 const initializerPath = path.join(__dirname, 'swagger-initializer.js');
+const adminDir = path.join(__dirname, '../admin');
 
 function getOpenApiDocsRouter() {
 	const router = express.Router();
@@ -26,6 +27,16 @@ function getOpenApiDocsRouter() {
 		index: false,
 		immutable: true,
 		maxAge: '1d',
+	}));
+
+	router.get('/admin', (req, res) => {
+		res.set('Cache-Control', 'no-cache');
+		return res.sendFile(path.join(adminDir, 'index.html'));
+	});
+
+	router.use('/admin', express.static(adminDir, {
+		index: false,
+		setHeaders: (res) => res.setHeader('Cache-Control', 'no-cache'),
 	}));
 
 	return router;
