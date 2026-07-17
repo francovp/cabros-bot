@@ -1,0 +1,22 @@
+:root { color-scheme: dark; font-family: system-ui, sans-serif; background: #10151c; color: #edf2f7; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+button, input { font: inherit; }
+button { cursor: pointer; border: 1px solid #65758b; border-radius: .4rem; background: #1d2a3a; color: inherit; padding: .55rem .8rem; }
+button:hover { background: #2a3d54; }
+button:focus-visible, input:focus-visible { outline: 3px solid #65c3ff; outline-offset: 2px; }
+.console-shell { width: min(100% - 2rem, 70rem); margin: 2rem auto; display: grid; gap: 1rem; }
+header, section, nav { background: #17212d; border: 1px solid #34465b; border-radius: .6rem; padding: 1rem; }
+header, nav { display: flex; align-items: center; gap: .75rem; flex-wrap: wrap; }
+header h1 { margin: 0; font-size: clamp(1.4rem, 4vw, 2rem); margin-right: auto; }
+h2 { margin-top: 0; }
+label { display: grid; gap: .4rem; max-width: 30rem; }
+input { width: 100%; border: 1px solid #65758b; border-radius: .4rem; background: #0e1721; color: inherit; padding: .55rem; }
+#save-key { margin-top: .75rem; }
+#view { min-height: 5rem; }
+.request-state { color: #9ed0f5; }
+.response-block { overflow: auto; padding: 1rem; background: #0e1721; border-radius: .4rem; white-space: pre-wrap; }
+.destructive-action { background: #732f3f; border-color: #ef8798; }
+.destructive-action:hover { background: #944052; }
+.confirm-action { border: 2px solid #ef8798; padding: 1rem; }
+@media (max-width: 36rem) { .console-shell { width: min(100% - 1rem, 70rem); margin: .5rem auto; } header { align-items: stretch; } header button { width: 100%; } nav button { flex: 1 1 8rem; } }

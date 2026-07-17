@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cabros Bot Console</title>
+  <link rel="stylesheet" href="/admin/admin.css">
+</head>
+<body>
+  <main class="console-shell">
+    <header><h1>Cabros Bot Console</h1><button id="clear-key">Clear key</button></header>
+    <section aria-labelledby="connection-title">
+      <h2 id="connection-title">Connection</h2>
+      <label>API key <input id="api-key" type="password" autocomplete="off"></label>
+      <button id="save-key">Use key for this session</button>
+    </section>
+    <nav aria-label="Console sections">
+      <button data-view="status">Status</button><button data-view="alerts">Alerts</button>
+      <button data-view="presets">Presets</button><button data-view="jobs">Jobs</button>
+      <button data-view="analysis">Analysis</button><button data-view="playground">Playground</button>
+    </nav>
+    <section id="view" aria-live="polite"></section>
+  </main>
+  <script src="/admin/admin-request.js" defer></script>
+  <script src="/admin/admin.js" defer></script>
+</body>
+</html>
