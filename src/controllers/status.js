@@ -294,7 +294,7 @@ function getStatus() {
 			geminiGrounding: geminiGroundingEnabled,
 			newsMonitor: newsMonitorEnabled,
 			tradingViewMcpEnrichment: tradingViewMcpEnrichmentEnabled,
-			tradingViewConfluenceEnrichment: isEnabled(process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT),
+			tradingViewConfluenceEnrichment: process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT !== 'false',
 			tradingViewConfluenceMultiTimeframe: isEnabled(process.env.ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME),
 			firestoreAlertStorage: firestoreEnabled,
 			sentryMonitoring: sentryEnabled,

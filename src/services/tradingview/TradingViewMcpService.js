@@ -134,7 +134,7 @@ class TradingViewMcpService {
 		// (via AbortSignal.any) so an exhausted enrichment budget cancels it immediately.
 		let confluenceAnalysis = null;
 		let multiTimeframeAnalysis = null;
-		if (process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT === 'true' && !budgetController.signal.aborted) {
+		if (process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT !== 'false' && !budgetController.signal.aborted) {
 			const confluenceTimeoutMs = Math.min(8000, Math.max(2000, (budgetMs || 12000) / 2));
 			const confluenceController = new AbortController();
 			const confluenceTimeoutId = setTimeout(() => {
