@@ -158,6 +158,10 @@ Implement the following security practices to safeguard endpoints and credential
 
 ## Development Workflow for AI Agents
 
+### Repository skills
+
+- `triage-roi-issues` (`.agents/skills/triage-roi-issues/`): applies one ordered `priority/1-roi` through `priority/7-other` label to evidence-backed open issues, while preserving the existing operational `priority/p*` labels.
+
 ### When implementing a feature:
 
 1. **Read the spec** (`specs/*/spec.md`) for requirements and user stories
