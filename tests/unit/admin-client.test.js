@@ -197,6 +197,29 @@ describe('admin browser client', () => {
 		expect(events.slice(-2).map(([type]) => type)).toEqual(['confirm', 'fetch']);
 		expect(browser.helperCalls.at(-1).body.idempotencyKey).toEqual(expect.any(String));
 		expect(browser.helperCalls.at(-1).body.idempotencyKey).not.toBe('');
+		const replayIdempotencyKey = browser.helperCalls.at(-1).body.idempotencyKey;
+		await replayForm.dispatch('submit');
+		await flush();
+		expect(browser.helperCalls.at(-1).body.idempotencyKey).toBe(replayIdempotencyKey);
+	});
+
+	it('adds an idempotency key when Playground replays an alert', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {}),
+		});
+		await flush();
+		await selectView(browser, 'playground');
+
+		const playground = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
+			&& node.textContent.includes('Playground'));
+		const select = find(playground, (node) => node.tagName === 'SELECT');
+		select.value = select.children.find((option) => option.textContent.includes('POST /api/alerts/{alertId}/replay')).value;
+		await select.dispatch('change');
+		playground.elements['path-alertId'].value = 'alert-1';
+		await playground.dispatch('submit');
+		await flush();
+
+		expect(browser.helperCalls.at(-1).body.idempotencyKey).toEqual(expect.any(String));
 	});
 
 	it('retries the OpenAPI contract after the first load rejects', async () => {

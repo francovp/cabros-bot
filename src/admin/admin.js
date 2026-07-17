@@ -107,6 +107,14 @@ const withReplayIdempotencyKey = (definition, body) => {
 	return { ...(body || {}), idempotencyKey: createIdempotencyKey() };
 };
 
+const getRequestBody = (definition, form) => {
+	const input = form.elements.body;
+	const body = input ? parseJson(input.value, 'Request body') : undefined;
+	const requestBody = withReplayIdempotencyKey(definition, body);
+	if (input && requestBody !== body) input.value = JSON.stringify(requestBody, null, 2);
+	return requestBody;
+};
+
 const addJsonField = (form, labelText, name, value) => {
 	const label = element('label', { text: labelText });
 	const textarea = element('textarea');
@@ -338,10 +346,7 @@ const createOperationForm = (contract, definition) => {
 			const query = form.elements.query
 				? window.CabrosAdminRequest.validateQuery(parseJson(form.elements.query.value, 'Query'))
 				: undefined;
-			const body = withReplayIdempotencyKey(
-				definition,
-				form.elements.body ? parseJson(form.elements.body.value, 'Request body') : undefined,
-			);
+			const body = getRequestBody(definition, form);
 			sendRequest({
 				definition,
 				path: fillPath(definition.path, pathNames, form),
@@ -396,7 +401,7 @@ const renderPlayground = (contract, view) => {
 				definition,
 				path: fillPath(definition.path, pathNames, form),
 				query: window.CabrosAdminRequest.validateQuery(parseJson(form.elements.query.value, 'Query')),
-				body: parseJson(form.elements.body.value, 'Request body'),
+				body: getRequestBody(definition, form),
 				button,
 				output,
 			});
