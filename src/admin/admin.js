@@ -125,13 +125,9 @@ const showError = (output, message) => {
 	output.textContent = message;
 };
 
-const redactApiKey = (value, apiKey) => apiKey
-	? String(value).split(apiKey).join('[REDACTED]')
-	: String(value);
-
 const sendRequest = async ({ definition, path, query, body, button, output }) => {
 	const apiKey = document.getElementById('api-key').value;
-	const summary = redactApiKey(`${definition.method} ${path}`, apiKey);
+	const summary = window.CabrosAdminRequest.redactSecret(`${definition.method} ${path}`, apiKey);
 	let request;
 	try {
 		request = window.CabrosAdminRequest.createRequest({
@@ -146,7 +142,7 @@ const sendRequest = async ({ definition, path, query, body, button, output }) =>
 		return;
 	}
 
-	if (definition.confirm && !window.confirm(definition.confirm)) return;
+	if (!window.CabrosAdminRequest.confirmRequest(definition, (message) => window.confirm(message))) return;
 
 	button.disabled = true;
 	output.className = 'response-block request-state';
@@ -163,10 +159,10 @@ const sendRequest = async ({ definition, path, query, body, button, output }) =>
 			// Non-JSON responses stay readable as text.
 		}
 		output.className = `response-block${response.ok ? '' : ' response-error'}`;
-		output.textContent = `${summary}\nHTTP ${response.status} · ${elapsed} ms\n\n${redactApiKey(formatted, apiKey)}`;
+		output.textContent = `${summary}\nHTTP ${response.status} · ${elapsed} ms\n\n${window.CabrosAdminRequest.redactSecret(formatted, apiKey)}`;
 	} catch (error) {
 		const elapsed = Math.round(performance.now() - started);
-		showError(output, `${summary}\nNetwork error · ${elapsed} ms\n\n${redactApiKey(error.message, apiKey)}`);
+		showError(output, `${summary}\nNetwork error · ${elapsed} ms\n\n${window.CabrosAdminRequest.redactSecret(error.message, apiKey)}`);
 	} finally {
 		button.disabled = false;
 	}
@@ -194,7 +190,9 @@ const createOperationForm = (contract, definition) => {
 	form.addEventListener('submit', (event) => {
 		event.preventDefault();
 		try {
-			const query = form.elements.query ? parseJson(form.elements.query.value, 'Query') : undefined;
+			const query = form.elements.query
+				? window.CabrosAdminRequest.validateQuery(parseJson(form.elements.query.value, 'Query'))
+				: undefined;
 			const body = form.elements.body ? parseJson(form.elements.body.value, 'Request body') : undefined;
 			sendRequest({
 				definition,
@@ -211,21 +209,12 @@ const createOperationForm = (contract, definition) => {
 	return form;
 };
 
-const operationDefinitions = (contract) => Object.entries(contract.paths).flatMap(([path, methods]) => Object.entries(methods)
-	.filter(([method]) => ['get', 'post', 'put', 'patch', 'delete'].includes(method))
-	.map(([method, operation]) => ({
-		method: method.toUpperCase(),
-		path,
-		label: operation.summary || `${method.toUpperCase()} ${path}`,
-	})))
-	.sort((left, right) => left.path.localeCompare(right.path) || left.method.localeCompare(right.method));
-
 const renderPlayground = (contract, view) => {
 	const form = element('form', { className: 'operation-card playground' });
 	form.append(element('h2', { text: 'Playground' }));
 	const selectLabel = element('label', { text: 'Operation' });
 	const select = element('select');
-	const definitions = operationDefinitions(contract);
+	const definitions = window.CabrosAdminRequest.operationDefinitions(contract);
 	definitions.forEach((definition, index) => {
 		const option = element('option', { text: `${definition.method} ${definition.path} — ${definition.label}` });
 		option.value = index;
@@ -243,6 +232,7 @@ const renderPlayground = (contract, view) => {
 		fields.replaceChildren();
 		const definition = definitions[Number(select.value)];
 		const operation = getOperation(contract, definition);
+		button.className = definition.confirm ? 'destructive-action' : '';
 		addPathFields(fields, definition.path);
 		addJsonField(fields, 'Query JSON', 'query', getQueryExample(contract, operation));
 		addJsonField(fields, 'Request body JSON', 'body', getBodyExample(contract, operation));
@@ -257,7 +247,7 @@ const renderPlayground = (contract, view) => {
 			sendRequest({
 				definition,
 				path: fillPath(definition.path, pathNames, form),
-				query: parseJson(form.elements.query.value, 'Query'),
+				query: window.CabrosAdminRequest.validateQuery(parseJson(form.elements.query.value, 'Query')),
 				body: parseJson(form.elements.body.value, 'Request body'),
 				button,
 				output,

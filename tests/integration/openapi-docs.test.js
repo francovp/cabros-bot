@@ -42,13 +42,15 @@ describe('public OpenAPI documentation', () => {
 	it('serves the API admin shell and external assets without an API key', async () => {
 		const page = await request(app).get('/admin');
 		const script = await request(app).get('/admin/admin.js');
+		const versionedScript = await request(app).get('/admin/admin.js?v=2');
 
 		expect(page.status).toBe(200);
 		expect(page.text).toContain('Cabros Bot Console');
-		expect(page.text).toContain('/admin/admin.js');
+		expect(page.text).toContain('/admin/admin.js?v=2');
 		expect(page.text).not.toContain(process.env.WEBHOOK_API_KEY);
 		expect(script.status).toBe(200);
 		expect(script.headers['content-type']).toMatch(/javascript/);
+		expect(versionedScript.status).toBe(200);
 	});
 
 	it('keeps the admin client contract-driven without exposing the configured API key', async () => {
