@@ -1,9 +1,13 @@
 'use strict';
 
+/* global document, window */
+
 const VIEWS = {
 	status: [{ method: 'GET', path: '/api/status', label: 'Refresh status' }],
-	alerts: [{ method: 'GET', path: '/api/alerts', label: 'Load alerts' }],
-	presets: [{ method: 'GET', path: '/api/scanner-presets', label: 'Load presets' }],
+	presets: [
+		{ method: 'GET', path: '/api/scanner-presets', label: 'Load presets' },
+		{ method: 'POST', path: '/api/scanner-presets', label: 'Create preset' },
+	],
 	jobs: [{ method: 'POST', path: '/api/jobs/tradingview-analysis', label: 'Create job' }],
 	analysis: [
 		{ method: 'POST', path: '/api/webhook/expanded-analysis-alert', label: 'Expanded analysis' },
@@ -15,12 +19,14 @@ const VIEWS = {
 
 const VIEW_ACTIONS = {
 	alerts: [
+		{ method: 'GET', path: '/api/alerts/{alertId}', label: 'Get alert by ID' },
 		{
 			method: 'POST', path: '/api/alerts/{alertId}/replay', label: 'Replay alert',
 			confirm: 'Replay this alert?',
 		},
 	],
 	presets: [
+		{ method: 'PUT', path: '/api/scanner-presets/{id}', label: 'Update preset' },
 		{
 			method: 'POST', path: '/api/scanner-presets/{id}/run', label: 'Run preset',
 			confirm: 'Run this scanner preset?',
@@ -30,23 +36,23 @@ const VIEW_ACTIONS = {
 			confirm: 'Delete this scanner preset?',
 		},
 	],
-	jobs: [
-		{ method: 'GET', path: '/api/jobs/{jobId}', label: 'Get job status' },
-		{
-			method: 'POST', path: '/api/jobs/{jobId}/cancel', label: 'Cancel job',
-			confirm: 'Cancel this job?',
-		},
-		{
-			method: 'POST', path: '/api/jobs/{jobId}/retry', label: 'Retry job',
-			confirm: 'Retry this job?',
-		},
-	],
 };
 
-const contractPromise = fetch('/openapi.json').then((response) => {
-	if (!response.ok) throw new Error(`OpenAPI contract returned HTTP ${response.status}`);
-	return response.json();
-});
+let contractPromise;
+const loadContract = () => {
+	if (!contractPromise) {
+		contractPromise = fetch('/openapi.json')
+			.then((response) => {
+				if (!response.ok) throw new Error(`OpenAPI contract returned HTTP ${response.status}`);
+				return response.json();
+			})
+			.catch((error) => {
+				contractPromise = undefined;
+				throw error;
+			});
+	}
+	return contractPromise;
+};
 
 const element = (tag, options = {}) => {
 	const node = document.createElement(tag);
@@ -101,6 +107,18 @@ const addJsonField = (form, labelText, name, value) => {
 	form.append(label);
 };
 
+const addField = (form, labelText, name, options = {}) => {
+	const label = element('label', { text: labelText });
+	const input = element(options.tag || 'input');
+	input.name = name;
+	Object.entries(options).forEach(([key, value]) => {
+		if (key !== 'tag') input[key] = value;
+	});
+	label.append(input);
+	form.append(label);
+	return input;
+};
+
 const addPathFields = (form, path) => {
 	const names = [...path.matchAll(/\{([^}]+)\}/g)].map((match) => match[1]);
 	names.forEach((name) => {
@@ -152,20 +170,136 @@ const sendRequest = async ({ definition, path, query, body, button, output }) =>
 		const response = await fetch(request.url, request.options);
 		const elapsed = Math.round(performance.now() - started);
 		const text = await response.text();
+		let data;
 		let formatted = text || '(empty response)';
 		try {
-			formatted = JSON.stringify(JSON.parse(text), null, 2);
+			data = JSON.parse(text);
+			formatted = JSON.stringify(data, null, 2);
 		} catch (_) {
 			// Non-JSON responses stay readable as text.
 		}
 		output.className = `response-block${response.ok ? '' : ' response-error'}`;
 		output.textContent = `${summary}\nHTTP ${response.status} · ${elapsed} ms\n\n${window.CabrosAdminRequest.redactSecret(formatted, apiKey)}`;
+		return data;
 	} catch (error) {
 		const elapsed = Math.round(performance.now() - started);
 		showError(output, `${summary}\nNetwork error · ${elapsed} ms\n\n${window.CabrosAdminRequest.redactSecret(error.message, apiKey)}`);
 	} finally {
 		button.disabled = false;
 	}
+};
+
+const createAlertListForm = () => {
+	const definition = { method: 'GET', path: '/api/alerts', label: 'Load alerts' };
+	const form = element('form', { className: 'operation-card' });
+	form.append(
+		element('h3', { text: definition.label }),
+		element('code', { text: `${definition.method} ${definition.path}` }),
+	);
+	const limit = addField(form, 'Limit', 'limit', { type: 'number', min: 1, max: 100, value: 50 });
+	const before = addField(form, 'Before cursor', 'before', { placeholder: 'nextBefore from the previous page' });
+	const source = addField(form, 'Source', 'source', { placeholder: 'webhook' });
+	const enriched = addField(form, 'Enriched', 'enriched', { tag: 'select' });
+	[
+		['', 'All alerts'],
+		['true', 'Enriched only'],
+		['false', 'Not enriched'],
+	].forEach(([value, text]) => {
+		const option = element('option', { text });
+		option.value = value;
+		enriched.append(option);
+	});
+	const button = element('button', { text: definition.label });
+	button.type = 'submit';
+	const next = element('button', { text: 'Next page' });
+	next.type = 'button';
+	next.disabled = true;
+	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
+	form.append(button, next, output);
+
+	let nextBefore;
+	const requestPage = async (cursor) => {
+		if (cursor) before.value = cursor;
+		const query = Object.fromEntries(Object.entries({
+			limit: limit.value,
+			before: before.value,
+			source: source.value,
+			enriched: enriched.value,
+		}).filter(([, value]) => value !== ''));
+		const data = await sendRequest({ definition, path: definition.path, query, button, output });
+		nextBefore = data && data.pagination && data.pagination.nextBefore;
+		next.disabled = !nextBefore;
+	};
+	form.addEventListener('submit', (event) => {
+		event.preventDefault();
+		return requestPage(before.value);
+	});
+	next.addEventListener('click', () => requestPage(nextBefore));
+	return form;
+};
+
+const createJobStatusForm = () => {
+	const definition = { method: 'GET', path: '/api/jobs/{jobId}', label: 'Get job status' };
+	const form = element('form', { className: 'operation-card' });
+	form.append(
+		element('h3', { text: definition.label }),
+		element('code', { text: `${definition.method} ${definition.path}` }),
+	);
+	const pathNames = addPathFields(form, definition.path);
+	const button = element('button', { text: definition.label });
+	button.type = 'submit';
+	const actions = element('div', { className: 'form-actions' });
+	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
+	form.append(button, actions, output);
+
+	const renderActions = (job, jobId) => {
+		actions.replaceChildren();
+		const failedItems = [...(job.results || []), ...(job.scanResults || [])]
+			.some((result) => ['error', 'timeout'].includes(result.status));
+		const definitions = [];
+		if (['pending', 'processing'].includes(job.status)) {
+			definitions.push({
+				method: 'POST', path: '/api/jobs/{jobId}/cancel', label: 'Cancel job', confirm: 'Cancel this job?',
+			});
+		}
+		if (['failed', 'timed_out', 'cancelled'].includes(job.status)) {
+			definitions.push({
+				method: 'POST', path: '/api/jobs/{jobId}/retry', label: 'Retry job', confirm: 'Retry this job?',
+			});
+		}
+		if (failedItems) {
+			definitions.push({
+				method: 'POST', path: '/api/jobs/{jobId}/retry-failed', label: 'Retry failed items',
+				confirm: 'Retry failed items for this job?',
+			});
+		}
+		definitions.forEach((action) => {
+			const actionButton = element('button', { text: action.label });
+			actionButton.type = 'button';
+			actionButton.className = 'destructive-action';
+			actionButton.addEventListener('click', () => sendRequest({
+				definition: action,
+				path: action.path.replace('{jobId}', encodeURIComponent(jobId)),
+				button: actionButton,
+				output,
+			}));
+			actions.append(actionButton);
+		});
+	};
+
+	form.addEventListener('submit', async (event) => {
+		event.preventDefault();
+		const jobId = form.elements['path-jobId'].value;
+		const data = await sendRequest({
+			definition,
+			path: fillPath(definition.path, pathNames, form),
+			button,
+			output,
+		});
+		if (data && data.status) renderActions(data, jobId);
+		else actions.replaceChildren();
+	});
+	return form;
 };
 
 const createOperationForm = (contract, definition) => {
@@ -263,13 +397,23 @@ const renderView = async (name) => {
 	const view = document.getElementById('view');
 	view.replaceChildren(element('p', { className: 'request-state', text: 'Loading API contract…' }));
 	try {
-		const contract = await contractPromise;
+		const contract = await loadContract();
 		view.replaceChildren();
 		if (name === 'playground') {
 			renderPlayground(contract, view);
 			return;
 		}
 		view.append(element('h2', { text: name[0].toUpperCase() + name.slice(1) }));
+		if (name === 'alerts') {
+			view.append(createAlertListForm());
+			VIEW_ACTIONS.alerts.forEach((definition) => view.append(createOperationForm(contract, definition)));
+			return;
+		}
+		if (name === 'jobs') {
+			VIEWS.jobs.forEach((definition) => view.append(createOperationForm(contract, definition)));
+			view.append(createJobStatusForm());
+			return;
+		}
 		[...(VIEWS[name] || []), ...(VIEW_ACTIONS[name] || [])]
 			.forEach((definition) => view.append(createOperationForm(contract, definition)));
 	} catch (error) {

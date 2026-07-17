@@ -36,8 +36,7 @@ function getOpenApiDocsRouter() {
 
 	router.use('/admin', express.static(adminDir, {
 		index: false,
-		immutable: true,
-		maxAge: '1d',
+		setHeaders: (res) => res.setHeader('Cache-Control', 'no-cache'),
 	}));
 
 	return router;
