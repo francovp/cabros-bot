@@ -222,6 +222,28 @@ describe('admin browser client', () => {
 		expect(browser.helperCalls.at(-1).body.idempotencyKey).toEqual(expect.any(String));
 	});
 
+	it('preserves a supplied snake_case replay idempotency key', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {}),
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const replayForm = findForm(browser.elementsById.view, 'POST /api/alerts/{alertId}/replay');
+		replayForm.elements['path-alertId'].value = 'alert-1';
+		replayForm.elements.body.value = JSON.stringify({
+			channels: ['telegram'],
+			idempotency_key: 'operator-replay-key',
+		});
+		await replayForm.dispatch('submit');
+		await flush();
+
+		expect(browser.helperCalls.at(-1).body).toEqual({
+			channels: ['telegram'],
+			idempotency_key: 'operator-replay-key',
+		});
+	});
+
 	it('retries the OpenAPI contract after the first load rejects', async () => {
 		let contractAttempts = 0;
 		const browser = createBrowser({

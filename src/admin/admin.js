@@ -103,7 +103,7 @@ const createIdempotencyKey = () => (window.crypto && typeof window.crypto.random
 
 const withReplayIdempotencyKey = (definition, body) => {
 	if (definition.method !== 'POST' || definition.path !== '/api/alerts/{alertId}/replay') return body;
-	if (body && typeof body.idempotencyKey === 'string' && body.idempotencyKey.trim()) return body;
+	if (body && ['idempotencyKey', 'idempotency_key'].some((key) => typeof body[key] === 'string' && body[key].trim())) return body;
 	return { ...(body || {}), idempotencyKey: createIdempotencyKey() };
 };
 
