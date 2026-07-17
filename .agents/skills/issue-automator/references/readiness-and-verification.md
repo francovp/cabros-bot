@@ -36,8 +36,8 @@ If any criterion is uncertain, keep the same gate but hand the PR off through `I
 
 ## Quiet Window
 
-1. **Window Duration**: After the latest commit, wait a quiet window of 5 minutes before calling the PR clean or ready.
-2. **Midpoint & Endpoint Checks**: During the quiet window, re-check reviews and threads once around the midpoint (2.5 minutes) and once at the end.
+1. **Window Duration**: After the latest commit, wait a quiet window of 10 minutes before calling the PR clean or ready.
+2. **Midpoint & Endpoint Checks**: During the quiet window, re-check reviews and threads once around the midpoint (5 minutes) and once at the end.
 3. **Reset Trigger**: If Codex posts a new review or a new thread appears, reset the quiet window from that event or from the new commit (whichever is later).
    - **Exception — rate‑limited review**: If the Codex review body text starts with `You have reached your Codex usage limits for code reviews`, this is a review failure, not a real review. Do NOT reset the quiet window. Instead, perform a self-review (see Codex Review Rate Limit Handling section below).
 4. **Instability Handling**: If the quiet window cannot complete due to repeated issue-specific instability, end with outcome `LOCAL_DEADLOCK`.

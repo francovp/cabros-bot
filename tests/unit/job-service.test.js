@@ -197,7 +197,7 @@ describe('JobService Unit Tests', () => {
 	});
 
 	describe('Job eviction / cleanup', () => {
-		it('evicts jobs older than 1 hour if status is completed or failed', async () => {
+		it('evicts jobs older than 1 hour if status is terminal', async () => {
 			const jobId = 'expired-completed-job';
 			const rawJob = {
 				jobId,
@@ -218,7 +218,31 @@ describe('JobService Unit Tests', () => {
 			expect(jobService.repository.has(jobId)).toBe(false);
 		});
 
-		it('does not evict jobs older than 1 hour if they are not completed or failed', async () => {
+		it('evicts jobs older than 1 hour if status is cancelled or timed_out', async () => {
+			const statuses = ['cancelled', 'timed_out'];
+
+			for (const status of statuses) {
+				const jobId = `expired-${status}-job`;
+				const rawJob = {
+					jobId,
+					type: 'expanded-analysis',
+					status,
+					progress: { total: 1, current: 1, status },
+					fullResults: [],
+					fullScanResults: [],
+					createdAt: new Date(Date.now() - 7200000).toISOString(),
+					updatedAt: new Date(Date.now() - 7200000).toISOString(),
+					totalDurationMs: 1000,
+				};
+				await jobService.repository.save(rawJob);
+
+				const job = await jobService.getJob(jobId);
+				expect(job).toBeNull();
+				expect(jobService.repository.has(jobId)).toBe(false);
+			}
+		});
+
+		it('does not evict jobs older than 1 hour if they are not terminal', async () => {
 			const jobId = 'old-processing-job';
 			const rawJob = {
 				jobId,
@@ -332,6 +356,53 @@ describe('JobService Unit Tests', () => {
 			);
 		});
 
+		it('returns null when retrying expired retryable terminal jobs', async () => {
+			for (const status of ['cancelled', 'timed_out']) {
+				const jobId = `expired-${status}-retry-job`;
+				await jobService.repository.save({
+					jobId,
+					type: 'expanded-analysis',
+					status,
+					progress: { total: 1, current: 1, status },
+					requestMetadata: {
+						type: 'expanded-analysis',
+						symbols: ['BINANCE:BTCUSDT'],
+						timeframe: '1h',
+					},
+					fullResults: [],
+					fullScanResults: [],
+					createdAt: new Date(Date.now() - 7200000).toISOString(),
+					updatedAt: new Date(Date.now() - 7200000).toISOString(),
+					totalDurationMs: 1000,
+				});
+
+				const result = await jobService.retryJob(jobId);
+
+				expect(result).toBeNull();
+				expect(jobService.repository.has(jobId)).toBe(false);
+			}
+		});
+
+		it('returns null when cancelling an expired terminal job', async () => {
+			const jobId = 'expired-cancelled-cancel-job';
+			await jobService.repository.save({
+				jobId,
+				type: 'expanded-analysis',
+				status: 'cancelled',
+				progress: { total: 1, current: 1, status: 'cancelled' },
+				fullResults: [],
+				fullScanResults: [],
+				createdAt: new Date(Date.now() - 7200000).toISOString(),
+				updatedAt: new Date(Date.now() - 7200000).toISOString(),
+				totalDurationMs: 1000,
+			});
+
+			const result = await jobService.cancelJob(jobId);
+
+			expect(result).toBeNull();
+			expect(jobService.repository.has(jobId)).toBe(false);
+		});
+
 		it('retries only failed items via retryFailedJob', async () => {
 			// Save a job that is completed with mixed status
 			const jobId = 'mixed-job';
@@ -398,9 +469,9 @@ describe('JobService Unit Tests', () => {
 			}
 		});
 
-		it('allows http for localhost / local environments', async () => {
+		it('allows http for localhost in local environments', async () => {
 			const prevEnv = process.env.NODE_ENV;
-			process.env.NODE_ENV = 'production';
+			process.env.NODE_ENV = 'test';
 			try {
 				const res = await jobService.createJob('expanded-analysis', {
 					symbols: ['BINANCE:BTCUSDT'],
@@ -410,6 +481,183 @@ describe('JobService Unit Tests', () => {
 			} finally {
 				process.env.NODE_ENV = prevEnv;
 			}
+		});
+
+		describe('private-network blocking (SSRF protection)', () => {
+			let dnsSpy;
+
+			beforeAll(() => {
+				const dns = require('dns');
+				dnsSpy = jest.spyOn(dns.promises, 'lookup').mockImplementation(async (hostname, options) => {
+					if (hostname === 'example.com') {
+						return options?.all
+							? [{ address: '93.184.216.34', family: 4 }]
+							: { address: '93.184.216.34', family: 4 };
+					}
+					if (hostname === 'localhost') {
+						return options?.all
+							? [{ address: '127.0.0.1', family: 4 }]
+							: { address: '127.0.0.1', family: 4 };
+					}
+					if (hostname === 'mixed.example.com') {
+						return [
+							{ address: '93.184.216.34', family: 4 },
+							{ address: '169.254.169.254', family: 4 },
+						];
+					}
+					throw new Error('ENOTFOUND');
+				});
+			});
+
+			afterAll(() => {
+				if (dnsSpy) {
+					dnsSpy.mockRestore();
+				}
+			});
+
+			it('rejects loopback, link-local, RFC1918, multicast, and metadata-service callback URLs in production', async () => {
+				const prevEnv = process.env.NODE_ENV;
+				const prevAllow = process.env.ALLOW_HTTP_CALLBACKS;
+				const prevPrivate = process.env.ALLOW_PRIVATE_CALLBACKS;
+
+				process.env.NODE_ENV = 'production';
+				process.env.ALLOW_HTTP_CALLBACKS = 'false';
+				delete process.env.ALLOW_PRIVATE_CALLBACKS;
+
+				try {
+					const blockedUrls = [
+						'https://0.0.0.1/callback',
+						'https://localhost/callback',
+						'https://127.0.0.1/callback',
+						'https://[::1]/callback',
+						'https://10.0.0.1/callback',
+						'https://172.16.5.5/callback',
+						'https://192.0.0.8/callback',
+						'https://192.0.2.1/callback',
+						'https://192.168.1.100/callback',
+						'https://100.64.0.1/callback',
+						'https://169.254.169.254/callback',
+						'https://198.18.0.1/callback',
+						'https://240.0.0.1/callback',
+						'https://[fe80::1]/callback',
+						'https://[fc00::]/callback',
+						'https://[ff02::1]/callback',
+						'https://[::ffff:127.0.0.1]/callback',
+						'https://[::ffff:7f00:0001]/callback',
+					];
+
+					for (const urlStr of blockedUrls) {
+						await expect(jobService.createJob('expanded-analysis', {
+							symbols: ['BINANCE:BTCUSDT'],
+							callbackUrl: urlStr,
+						})).rejects.toThrow('callbackUrl must be a valid HTTPS URL');
+					}
+
+					// Verify a public URL passes
+					const successRes = await jobService.createJob('expanded-analysis', {
+						symbols: ['BINANCE:BTCUSDT'],
+						callbackUrl: 'https://example.com/callback',
+					});
+					expect(successRes.success).toBe(true);
+				} finally {
+					process.env.NODE_ENV = prevEnv;
+					process.env.ALLOW_HTTP_CALLBACKS = prevAllow;
+					if (prevPrivate !== undefined) {
+						process.env.ALLOW_PRIVATE_CALLBACKS = prevPrivate;
+					} else {
+						delete process.env.ALLOW_PRIVATE_CALLBACKS;
+					}
+				}
+			});
+
+			it('rejects private HTTP callback URLs even when HTTP callbacks are enabled', async () => {
+				const prevEnv = process.env.NODE_ENV;
+				const prevAllow = process.env.ALLOW_HTTP_CALLBACKS;
+				const prevPrivate = process.env.ALLOW_PRIVATE_CALLBACKS;
+
+				process.env.NODE_ENV = 'production';
+				process.env.ALLOW_HTTP_CALLBACKS = 'true';
+				delete process.env.ALLOW_PRIVATE_CALLBACKS;
+
+				try {
+					await expect(jobService.createJob('expanded-analysis', {
+						symbols: ['BINANCE:BTCUSDT'],
+						callbackUrl: 'http://169.254.169.254/callback',
+					})).rejects.toThrow('callbackUrl must be a valid HTTPS URL');
+				} finally {
+					process.env.NODE_ENV = prevEnv;
+					process.env.ALLOW_HTTP_CALLBACKS = prevAllow;
+					if (prevPrivate !== undefined) {
+						process.env.ALLOW_PRIVATE_CALLBACKS = prevPrivate;
+					} else {
+						delete process.env.ALLOW_PRIVATE_CALLBACKS;
+					}
+				}
+			});
+
+			it('allows private-network callback URLs if ALLOW_PRIVATE_CALLBACKS override is set', async () => {
+				const prevEnv = process.env.NODE_ENV;
+				const prevAllow = process.env.ALLOW_HTTP_CALLBACKS;
+				const prevPrivate = process.env.ALLOW_PRIVATE_CALLBACKS;
+
+				process.env.NODE_ENV = 'production';
+				process.env.ALLOW_HTTP_CALLBACKS = 'false';
+				process.env.ALLOW_PRIVATE_CALLBACKS = 'true';
+
+				try {
+					const res = await jobService.createJob('expanded-analysis', {
+						symbols: ['BINANCE:BTCUSDT'],
+						callbackUrl: 'https://127.0.0.1/callback',
+					});
+					expect(res.success).toBe(true);
+				} finally {
+					process.env.NODE_ENV = prevEnv;
+					process.env.ALLOW_HTTP_CALLBACKS = prevAllow;
+					if (prevPrivate !== undefined) {
+						process.env.ALLOW_PRIVATE_CALLBACKS = prevPrivate;
+					} else {
+						delete process.env.ALLOW_PRIVATE_CALLBACKS;
+					}
+				}
+			});
+
+			it('rejects a hostname when any resolved address is private', async () => {
+				process.env.NODE_ENV = 'production';
+				delete process.env.ALLOW_PRIVATE_CALLBACKS;
+
+				await expect(jobService.createJob('expanded-analysis', {
+					symbols: ['BINANCE:BTCUSDT'],
+					callbackUrl: 'https://mixed.example.com/callback',
+				})).rejects.toThrow('callbackUrl must be a valid HTTPS URL');
+
+				expect(dnsSpy).toHaveBeenCalledWith('mixed.example.com', { all: true, verbatim: true });
+			});
+
+			it('accepts public 192.0.0.0/16 addresses outside the IETF special-purpose /24', async () => {
+				process.env.NODE_ENV = 'production';
+				delete process.env.ALLOW_PRIVATE_CALLBACKS;
+
+				const result = await jobService.createJob('expanded-analysis', {
+					symbols: ['BINANCE:BTCUSDT'],
+					callbackUrl: 'https://192.0.3.1/callback',
+				});
+
+				expect(result.success).toBe(true);
+			});
+
+			it('accepts a public bracketed IPv6 literal without DNS lookup', async () => {
+				process.env.NODE_ENV = 'production';
+				delete process.env.ALLOW_PRIVATE_CALLBACKS;
+				dnsSpy.mockClear();
+
+				const result = await jobService.createJob('expanded-analysis', {
+					symbols: ['BINANCE:BTCUSDT'],
+					callbackUrl: 'https://[2606:4700:4700::1111]/callback',
+				});
+
+				expect(result.success).toBe(true);
+				expect(dnsSpy).not.toHaveBeenCalled();
+			});
 		});
 
 		it('validates callbackSecret is a string', async () => {
@@ -533,6 +781,7 @@ describe('JobService Unit Tests', () => {
 			expect(url).toBe('https://example.com/callback');
 			expect(options.method).toBe('POST');
 			expect(options.headers['Content-Type']).toBe('application/json');
+			expect(options.redirect).toBe('error');
 
 			const body = JSON.parse(options.body);
 			expect(body.jobId).toBe(metadata.jobId);
@@ -544,6 +793,148 @@ describe('JobService Unit Tests', () => {
 			expect(freshJob.callbackStatus.status).toBe('success');
 			expect(freshJob.callbackStatus.attempts).toHaveLength(1);
 			expect(freshJob.callbackStatus.attempts[0].statusCode).toBe(200);
+		});
+
+		it('sanitizes blocked callback URLs before logging delivery failures', async () => {
+			const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+			const prevEnv = process.env.NODE_ENV;
+			process.env.NODE_ENV = 'production';
+			delete process.env.ALLOW_PRIVATE_CALLBACKS;
+			const job = {
+				jobId: 'job-callback-blocked-log',
+				type: 'expanded-analysis',
+				status: 'completed',
+				requestMetadata: {
+					type: 'expanded-analysis',
+					symbols: ['BINANCE:BTCUSDT'],
+					timeframe: '1D',
+					includeMultiTimeframe: false,
+					analysisMode: 'standard',
+					timeoutMs: 300000,
+					callbackUrl: 'https://198.18.0.1/secret/path?token=super-secret',
+				},
+				progress: { total: 1, current: 1, status: 'completed' },
+				fullResults: [],
+				fullScanResults: [],
+				alertText: null,
+				deliveryResults: [],
+				summary: null,
+				error: null,
+				code: null,
+				createdAt: new Date().toISOString(),
+				updatedAt: new Date().toISOString(),
+				totalDurationMs: 0,
+				timeoutMs: 300000,
+				callbackUrl: 'https://198.18.0.1/secret/path?token=super-secret',
+				callbackStatus: { status: 'pending', attempts: [] },
+			};
+
+			await jobService.repository.save(job);
+			try {
+				await jobService._triggerCallbackIfConfigured(job);
+
+				let freshJob = await jobService.repository.get(job.jobId);
+				let pollAttempts = 0;
+				while ((!freshJob.callbackStatus || freshJob.callbackStatus.status === 'pending') && pollAttempts < 20) {
+					await delay(20);
+					freshJob = await jobService.repository.get(job.jobId);
+					pollAttempts++;
+				}
+
+				expect(fetchMock).not.toHaveBeenCalled();
+				expect(freshJob.callbackStatus.status).toBe('failed');
+				expect(warnSpy).toHaveBeenCalledWith(
+					expect.stringContaining('Aborting callback to unsafe URL'),
+					'https://198.18.0.1/...',
+				);
+				const loggedText = warnSpy.mock.calls.flat().join(' ');
+				expect(loggedText).not.toContain('super-secret');
+				expect(loggedText).not.toContain('/secret/path');
+			} finally {
+				process.env.NODE_ENV = prevEnv;
+				warnSpy.mockRestore();
+			}
+		});
+
+		it('revalidates DNS before each retry and stops after rebinding to a private address', async () => {
+			const dns = require('dns');
+			const lookupSpy = jest.spyOn(dns.promises, 'lookup')
+				.mockResolvedValueOnce([{ address: '93.184.216.34', family: 4 }])
+				.mockResolvedValueOnce([{ address: '169.254.169.254', family: 4 }]);
+			process.env.NODE_ENV = 'production';
+			process.env.JOB_CALLBACK_RETRY_DELAY_MS = '1';
+			delete process.env.ALLOW_PRIVATE_CALLBACKS;
+			fetchMock.mockResolvedValue({ ok: false, status: 500, statusText: 'Server Error' });
+
+			const job = {
+				jobId: 'job-dns-rebinding',
+				type: 'expanded-analysis',
+				status: 'completed',
+				callbackUrl: 'https://rebind.example.com/callback',
+				callbackStatus: { status: 'pending', attempts: [] },
+				fullResults: [],
+				fullScanResults: [],
+				deliveryResults: [],
+				createdAt: new Date().toISOString(),
+				updatedAt: new Date().toISOString(),
+			};
+			await jobService.repository.save(job);
+
+			try {
+				await jobService._sendCallbackWithRetry(job);
+
+				expect(fetchMock).toHaveBeenCalledTimes(1);
+				expect(lookupSpy).toHaveBeenCalledTimes(2);
+				const freshJob = await jobService.repository.get(job.jobId);
+				expect(freshJob.callbackStatus.status).toBe('failed');
+				expect(freshJob.callbackStatus.attempts).toHaveLength(2);
+				expect(freshJob.callbackStatus.attempts[1].error).toBe('Callback URL is blocked (private network)');
+			} finally {
+				lookupSpy.mockRestore();
+			}
+		});
+
+		it('retries delivery when DNS validation has a transient failure', async () => {
+			const dns = require('dns');
+			const lookupSpy = jest.spyOn(dns.promises, 'lookup')
+				.mockRejectedValueOnce(new Error('ENOTFOUND'))
+				.mockResolvedValueOnce([{ address: '93.184.216.34', family: 4 }]);
+			const prevEnv = process.env.NODE_ENV;
+			const prevDelay = process.env.JOB_CALLBACK_RETRY_DELAY_MS;
+			process.env.NODE_ENV = 'production';
+			process.env.JOB_CALLBACK_RETRY_DELAY_MS = '1';
+			delete process.env.ALLOW_PRIVATE_CALLBACKS;
+			fetchMock.mockResolvedValueOnce({ ok: true, status: 200 });
+
+			const job = {
+				jobId: 'job-transient-dns-failure',
+				type: 'expanded-analysis',
+				status: 'completed',
+				callbackUrl: 'https://flaky-dns.example.com/callback',
+				callbackStatus: { status: 'pending', attempts: [] },
+				fullResults: [],
+				fullScanResults: [],
+				deliveryResults: [],
+				createdAt: new Date().toISOString(),
+				updatedAt: new Date().toISOString(),
+			};
+			await jobService.repository.save(job);
+
+			try {
+				await jobService._sendCallbackWithRetry(job);
+
+				expect(lookupSpy).toHaveBeenCalledTimes(2);
+				expect(fetchMock).toHaveBeenCalledTimes(1);
+				const freshJob = await jobService.repository.get(job.jobId);
+				expect(freshJob.callbackStatus.status).toBe('success');
+				expect(freshJob.callbackStatus.attempts).toHaveLength(2);
+				expect(freshJob.callbackStatus.attempts[0].error).toBe('Callback URL validation failed');
+				expect(freshJob.callbackStatus.attempts[1].statusCode).toBe(200);
+			} finally {
+				process.env.NODE_ENV = prevEnv;
+				process.env.JOB_CALLBACK_RETRY_DELAY_MS = prevDelay;
+				lookupSpy.mockRestore();
+			}
 		});
 
 		it('signs payload with HMAC signature if callbackSecret is provided', async () => {

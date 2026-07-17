@@ -158,6 +158,10 @@ Implement the following security practices to safeguard endpoints and credential
 
 ## Development Workflow for AI Agents
 
+### Repository skills
+
+- `issue-triage` (`.agents/skills/issue-triage/`): applies one ordered `priority/1-roi` through `priority/7-other` label to evidence-backed open issues, while preserving the existing operational `priority/p*` labels.
+
 ### When implementing a feature:
 
 1. **Read the spec** (`specs/*/spec.md`) for requirements and user stories
@@ -419,7 +423,7 @@ The system provides asynchronous job endpoints to support executing both `expand
 - Feature checks: returns `404 FEATURE_DISABLED` if market scanner jobs are created but `ENABLE_MARKET_SCANNER` is not `'true'`.
 - Persistence: `createJob()` and `getJob()` are async because job metadata/results may be written to or read from Firestore.
 - Telegram commands: async `createJob()` rejections must stay inside the command `try/catch` so `replyValidationError()` can return clear command feedback instead of producing unhandled promise rejections.
-- Eviction: completed/failed jobs older than 1 hour are deleted from memory/Firestore and return `404 Not Found`; active jobs are preserved.
+- Eviction: terminal jobs (`completed`, `failed`, `cancelled`, `timed_out`) older than 1 hour are deleted from memory/Firestore and return `404 Not Found`; active jobs are preserved.
 - Background failures: if the worker runs into unexpected exceptions or timeouts, the job is marked `failed` and reported to Sentry.
 - Async Callbacks: If `callbackUrl` is provided, callbacks are dispatched for configured `callbackEvents` (`processing`, `completed`, `failed`, `cancelled`, `timed_out`). Payloads are signed with HMAC-SHA256 in the `x-callback-signature` header using `callbackSecret` (if provided by client) or the server-configured `JOB_CALLBACK_SIGNING_SECRET`. Transient network failures are retried up to 3 times (4 total attempts) with exponential backoff (starting at 1s, configurable via `JOB_CALLBACK_RETRY_DELAY_MS`). The callback process fails open, writing log events and updating job metadata (`callbackStatus`) without affecting the core job status. `callbackStatus.attempts` remains the compatibility log, and `callbackStatus.events[event]` tracks per-event success/failure so a successful `processing` callback does not suppress a later terminal callback.
 
@@ -713,6 +717,7 @@ See `/specs/TERMINOLOGY_GUIDE.md` for extended discussion and examples.
 - 007-volume-breakout-alerts: Added TradingView volume confirmation check to the webhook alert enrichment flow (POST /api/webhook/alert?useTradingViewData=true) using the `volume_confirmation_analysis` tool from the TradingView MCP server. Configured via `ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION`.
 - 009-tradingview-confluence-alerts (CB-44 / Issue #131): Added optional confluence enrichment for POST /api/webhook/alert?useTradingViewData=true. `ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT=true` calls `combined_analysis` within the same enrichment budget, annotates/downgrades contradictory confluence, and returns `confluenceData` in dry-run/stored enrichment payloads. `ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME=true` also calls `multi_timeframe_analysis` and returns `multiTimeframeData`.
 - 008-async-job-callbacks (CB-28, CB-52 / Issue #150 follow-up): Added support for asynchronous job completion callbacks in TradingView analysis and market scanner jobs. Clients can specify callbackUrl, callbackSecret, and callbackEvents in POST /api/jobs/tradingview-analysis requests. The server signs the payloads with an HMAC-SHA256 signature, validates parameters (with node-only URL validation), and executes retries with exponential backoff on transient network failures, failing open without affecting the core job status. Callback delivery is tracked per event in `callbackStatus.events` while preserving the aggregate `callbackStatus.attempts` log.
+- async-job-terminal-eviction (CB-54 / Issue #151): `JobService` now uses one terminal-status set for cleanup and terminal checks, so expired `cancelled` and `timed_out` jobs are evicted like `completed` and `failed` jobs while `processing` jobs remain available.
 - news-monitor-persistent-dedup (CB-38 / Issue #120): Added optional Firestore-backed persistent deduplication store for news monitor alerts; converted cache operations to asynchronous; added fail-open fallback to in-memory mode; exposed active dedup mode/backend readiness in `/api/status`.
 - shadow-mode-outcome-tracking (CB-42 / Issue #129): Added shadow-mode outcome tracking for alert-producing surfaces (webhook alerts, market scanner breakouts/gains/losses, expanded-analysis, news alerts). Normalizes signal metadata (requestId, source, symbol, exchange, timeframe, setupType, score, side, price, etc.) and periodically evaluates outcomes over +1h, +4h, +1D, and +1W windows using Binance historical candlestick data. Exposes aggregated metrics under `shadowModeMetrics` inside `GET /api/alerts/summary` and in custom header `X-Shadow-Mode-Metrics` inside `GET /api/alerts/export`.
 
@@ -1029,3 +1034,20 @@ This feature introduces integration of the official `openai` SDK to interact wit
 **Testing**:
 - Unit coverage in `tests/unit/cloudflare-client.test.js`.
 - Integration coverage in `tests/integration/status-endpoint.test.js`.
+
+## Private Network SSRF Protection for Job Callbacks (CB-55 / Issue #152)
+
+This feature introduces validation of callback URLs to prevent Server-Side Request Forgery (SSRF) by blocking private-network, loopback, link-local, RFC1918, multicast, and metadata-service ranges during both callback URL acceptance (creation) and delivery (sending).
+
+**Core Components**:
+- `src/services/jobs/JobService.js` — Contains `isPrivateIp` IP range checks and `isValidCallbackUrl` async validation. Validates URL protocol, normalizes bracketed IPv6 literals, rejects a hostname when any DNS answer is private, revalidates before every delivery attempt, and disables automatic redirects.
+- `tests/unit/job-service.test.js` — Unit tests covering loopback, link-local, RFC1918, multicast, metadata-service (e.g. `169.254.169.254`), mixed public/private DNS answers, public IPv6 literals, redirect policy, and DNS changes between retries.
+- `tests/integration/jobs-endpoint.test.js` — Endpoint verification tests checking HTTP 400 Bad Request responses for private callback URLs.
+
+**Configuration**:
+- `ALLOW_PRIVATE_CALLBACKS` — Set to `'true'` to bypass private-network/SSRF blocking on callback URLs (e.g. for local developer testing of private targets). Defaults to `'false'`.
+- `ALLOW_HTTP_CALLBACKS` — Existing flag to permit plain HTTP callbacks (restricted to localhost unless `NODE_ENV=test` or set to `'true'`).
+
+**Testing**:
+- Unit coverage: `pnpm test -- tests/unit/job-service.test.js`
+- Integration coverage: `pnpm test -- tests/integration/jobs-endpoint.test.js`

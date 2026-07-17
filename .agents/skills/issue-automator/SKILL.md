@@ -54,6 +54,18 @@ curl --location "${NOTIFY_WEBHOOK_URL:-https://cabros-crypto-bot-telegram.onrend
 1. **Global deadlock** — when `GLOBAL_BLOCKED` outcome is set, alerting humans that tooling/auth/infra prevents safe work.
 2. **PR in review** — when a PR is intentionally handed off for human review in Step 7, notifying that human review is needed.
 
+## Render Service Env Vars
+
+When an issue requires updating Render service environment variables, use the live `cabros-bot` service state instead of treating it like a code-only change.
+
+- Service name: `cabros-bot`
+- Service ID: `srv-cnb88vdjm4es73dd71i0`
+- Prefer the local Render CLI auth available at `~/.render/cli.yaml` when it is present and valid.
+- If the CLI auth is unavailable or stale, fall back to the Render REST API with the same credentials.
+- Add or update each env var with `PUT https://api.render.com/v1/services/{serviceId}/env-vars/{envVarKey}` as documented at https://api-docs.render.com/reference/update-env-var.
+- Use the list endpoint only for inspection: `GET https://api.render.com/v1/services/{serviceId}/env-vars` is paginated, so walk all pages if you need to audit current values.
+- The env-var update does not deploy automatically. After the update, trigger a deploy with `POST https://api.render.com/v1/services/{serviceId}/deploys` so the change reaches production.
+
 ## Procedural Workflow
 
 Follow these steps in strict chronological order to automate issue resolution:
