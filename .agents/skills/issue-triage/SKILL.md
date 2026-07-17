@@ -60,7 +60,10 @@ ensure_label "priority/7-other" "Concrete bot improvement outside higher categor
 For each eligible issue, remove only the old label in this namespace, then add the selected label:
 
 ```bash
-gh issue edit "$issue_number" --repo "$repo_name" --remove-label "$old_label"
+while IFS= read -r old_label; do
+  [ -n "$old_label" ] || continue
+  gh issue edit "$issue_number" --repo "$repo_name" --remove-label "$old_label"
+done < <(gh issue view "$issue_number" --repo "$repo_name" --json labels --jq '.labels[].name' | rg '^priority/[1-7]-' || true)
 gh issue edit "$issue_number" --repo "$repo_name" --add-label "$selected_label"
 gh issue view "$issue_number" --repo "$repo_name" --json url,labels
 ```
