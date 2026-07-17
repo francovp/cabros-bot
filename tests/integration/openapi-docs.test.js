@@ -50,4 +50,12 @@ describe('public OpenAPI documentation', () => {
 		expect(script.status).toBe(200);
 		expect(script.headers['content-type']).toMatch(/javascript/);
 	});
+
+	it('keeps the admin client contract-driven without exposing the configured API key', async () => {
+		const client = await request(app).get('/admin/admin.js');
+
+		expect(client.status).toBe(200);
+		expect(client.text).toContain("fetch('/openapi.json')");
+		expect(client.text).not.toContain(process.env.WEBHOOK_API_KEY);
+	});
 });

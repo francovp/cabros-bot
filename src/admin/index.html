@@ -8,16 +8,17 @@
 </head>
 <body>
   <main class="console-shell">
-    <header><h1>Cabros Bot Console</h1><button id="clear-key">Clear key</button></header>
+    <header><h1>Cabros Bot Console</h1><button id="clear-key" type="button">Clear key</button></header>
     <section aria-labelledby="connection-title">
       <h2 id="connection-title">Connection</h2>
       <label>API key <input id="api-key" type="password" autocomplete="off"></label>
-      <button id="save-key">Use key for this session</button>
+      <button id="save-key" type="button">Use key for this session</button>
+      <p id="key-state" class="request-state" aria-live="polite"></p>
     </section>
     <nav aria-label="Console sections">
-      <button data-view="status">Status</button><button data-view="alerts">Alerts</button>
-      <button data-view="presets">Presets</button><button data-view="jobs">Jobs</button>
-      <button data-view="analysis">Analysis</button><button data-view="playground">Playground</button>
+      <button data-view="status" type="button">Status</button><button data-view="alerts" type="button">Alerts</button>
+      <button data-view="presets" type="button">Presets</button><button data-view="jobs" type="button">Jobs</button>
+      <button data-view="analysis" type="button">Analysis</button><button data-view="playground" type="button">Playground</button>
     </nav>
     <section id="view" aria-live="polite"></section>
   </main>
