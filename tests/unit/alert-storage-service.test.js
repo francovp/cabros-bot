@@ -11,6 +11,7 @@
 
 // The moduleNameMapper in jest.config.js ensures this resolves to __mocks__/firebase-admin.js
 const admin = require('firebase-admin');
+const crypto = require('crypto');
 const AlertStorageService = require('../../src/services/storage/AlertStorageService');
 const { parseAlertPaginationCursor } = require('../../src/services/storage/alertPaginationCursor');
 
@@ -543,26 +544,43 @@ describe('AlertStorageService', () => {
 	});
 
 	describe('saveReplayAttempt()', () => {
-		it('stores replay attempts in a separate collection using the idempotency key', async () => {
+		it('stores replay attempts using a hashed idempotency key document ID', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			const idempotencyKey = 'replay/key-1';
+			const idempotencyKeyHash = crypto.createHash('sha256').update(idempotencyKey).digest('hex');
 
 			const result = await AlertStorageService.saveReplayAttempt({
 				alertId: 'alert-123',
-				idempotencyKey: 'replay-key-1',
+				idempotencyKey,
 				channels: ['telegram'],
 				deliveryResults: [{ channel: 'telegram', success: true }],
 			});
 
-			expect(result).toBe('alert-123_replay-key-1');
+			expect(result).toBe(`alert-123_${idempotencyKeyHash}`);
 			expect(mockCollection).toHaveBeenCalledWith('alertReplays');
 			expect(mockDocSet).toHaveBeenCalledWith({
 				alertId: 'alert-123',
-				idempotencyKey: 'replay-key-1',
+				idempotencyKey,
 				channels: ['telegram'],
 				deliveryResults: [{ channel: 'telegram', success: true }],
 				replayedAt: expect.anything(),
 				source: 'alert-replay',
 			});
+		});
+
+		it('uses a bounded replay document ID for long idempotency keys', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			const idempotencyKey = 'a'.repeat(10_000);
+
+			const result = await AlertStorageService.saveReplayAttempt({
+				alertId: 'alert-123',
+				idempotencyKey,
+				channels: [],
+				deliveryResults: [],
+			});
+
+			expect(result).toMatch(/^alert-123_[a-f0-9]{64}$/);
+			expect(result).toHaveLength('alert-123_'.length + 64);
 		});
 
 		it('throws STORAGE_UNAVAILABLE when replay audit storage fails', async () => {

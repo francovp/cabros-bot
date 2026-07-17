@@ -25,6 +25,7 @@
  */
 
 const admin = require('firebase-admin');
+const crypto = require('crypto');
 const { encodeAlertPaginationCursor, parseAlertPaginationCursor } = require('./alertPaginationCursor');
 
 const COLLECTION_NAME = 'alerts';
@@ -579,7 +580,8 @@ async function saveReplayAttempt({ alertId, idempotencyKey, channels, deliveryRe
 		throw createStorageUnavailableError();
 	}
 
-	const replayId = `${alertId}_${idempotencyKey}`;
+	const idempotencyKeyHash = crypto.createHash('sha256').update(idempotencyKey).digest('hex');
+	const replayId = `${alertId}_${idempotencyKeyHash}`;
 	const document = {
 		alertId,
 		idempotencyKey,
