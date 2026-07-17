@@ -1062,7 +1062,29 @@
 							},
 							"status": "Bad Request",
 							"code": 400,
-							"body": "{\n  \"error\": \"callbackUrl must be a valid HTTPS URL (except localhost/127.0.0.1 in non-prod environments)\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+							"body": "{\n  \"error\": \"callbackUrl must be a valid HTTPS URL (HTTP only allowed for local development)\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+						},
+						{
+							"name": "Create Job with Private Callback URL (SSRF Blocked)",
+							"originalRequest": {
+								"method": "POST",
+								"header": [
+									{ "key": "Content-Type", "value": "application/json", "type": "text" },
+									{ "key": "x-api-key", "value": "{{apiKey}}", "type": "text" }
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n  \"type\": \"expanded-analysis\",\n  \"symbols\": [\"BINANCE:BTCUSDT\"],\n  \"callbackUrl\": \"https://169.254.169.254/api/callback\"\n}"
+								},
+								"url": {
+									"raw": "{{baseUrl}}/api/jobs/tradingview-analysis",
+									"host": ["{{baseUrl}}"],
+									"path": ["api", "jobs", "tradingview-analysis"]
+								}
+							},
+							"status": "Bad Request",
+							"code": 400,
+							"body": "{\n  \"error\": \"callbackUrl must be a valid HTTPS URL (HTTP only allowed for local development)\",\n  \"code\": \"INVALID_REQUEST\"\n}"
 						}
 					]
 				},
