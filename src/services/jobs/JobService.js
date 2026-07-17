@@ -69,6 +69,7 @@ function isPrivateIp(ip) {
 		if (parts[0] === 100 && parts[1] >= 64 && parts[1] <= 127) return true; // RFC6598 shared address space
 		if (parts[0] === 169 && parts[1] === 254) return true; // Link-local (includes 169.254.169.254)
 		if (parts[0] === 198 && (parts[1] === 18 || parts[1] === 19)) return true; // Benchmarking
+		if (parts[0] === 192 && parts[1] === 0 && parts[2] === 2) return true; // Documentation
 		if (parts[0] === 198 && parts[1] === 51 && parts[2] === 100) return true; // Documentation
 		if (parts[0] === 203 && parts[1] === 0 && parts[2] === 113) return true; // Documentation
 		if (parts[0] >= 224 && parts[0] <= 239) return true; // Multicast

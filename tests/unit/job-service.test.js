@@ -533,6 +533,7 @@ describe('JobService Unit Tests', () => {
 						'https://10.0.0.1/callback',
 						'https://172.16.5.5/callback',
 						'https://192.0.0.8/callback',
+						'https://192.0.2.1/callback',
 						'https://192.168.1.100/callback',
 						'https://100.64.0.1/callback',
 						'https://169.254.169.254/callback',
