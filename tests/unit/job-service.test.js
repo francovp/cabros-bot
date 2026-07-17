@@ -532,6 +532,7 @@ describe('JobService Unit Tests', () => {
 						'https://[::1]/callback',
 						'https://10.0.0.1/callback',
 						'https://172.16.5.5/callback',
+						'https://192.0.0.8/callback',
 						'https://192.168.1.100/callback',
 						'https://100.64.0.1/callback',
 						'https://169.254.169.254/callback',
@@ -629,6 +630,18 @@ describe('JobService Unit Tests', () => {
 				})).rejects.toThrow('callbackUrl must be a valid HTTPS URL');
 
 				expect(dnsSpy).toHaveBeenCalledWith('mixed.example.com', { all: true, verbatim: true });
+			});
+
+			it('accepts public 192.0.0.0/16 addresses outside the IETF special-purpose /24', async () => {
+				process.env.NODE_ENV = 'production';
+				delete process.env.ALLOW_PRIVATE_CALLBACKS;
+
+				const result = await jobService.createJob('expanded-analysis', {
+					symbols: ['BINANCE:BTCUSDT'],
+					callbackUrl: 'https://192.0.3.1/callback',
+				});
+
+				expect(result.success).toBe(true);
 			});
 
 			it('accepts a public bracketed IPv6 literal without DNS lookup', async () => {
