@@ -13,6 +13,7 @@ const mockGetEntry = jest.fn().mockResolvedValue(null);
 const mockClaimEntry = jest.fn().mockResolvedValue(true);
 const mockSetEntry = jest.fn().mockResolvedValue(undefined);
 const mockDeleteEntry = jest.fn().mockResolvedValue(undefined);
+const admin = require('firebase-admin');
 
 jest.mock('../../src/services/storage/NewsDedupStorageService', () => ({
 	isEnabled: mockIsEnabled,
@@ -306,5 +307,52 @@ describe('NewsDedupStorageService — isEnabled()', () => {
 		process.env.ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP = 'true';
 		const realService = jest.requireActual('../../src/services/storage/NewsDedupStorageService');
 		expect(realService.isEnabled()).toBe(true);
+	});
+});
+
+describe('NewsDedupStorageService — claimEntry()', () => {
+	const originalNow = admin.firestore.Timestamp.now;
+	const originalFromMillis = admin.firestore.Timestamp.fromMillis;
+
+	afterEach(() => {
+		jest.clearAllMocks();
+		admin.firestore.mockClear();
+		admin.firestore.Timestamp.now = originalNow;
+		admin.firestore.Timestamp.fromMillis = originalFromMillis;
+		delete process.env.ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP;
+	});
+
+	it('replaces an expired Firestore claim atomically', async () => {
+		process.env.ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP = 'true';
+		const now = { toMillis: () => 10_000 };
+		const expiresAt = { toMillis: () => 15_000 };
+		const docRef = {};
+		const transaction = {
+			get: jest.fn().mockResolvedValue({
+				exists: true,
+				data: () => ({ expiresAt: { toMillis: () => 9_999 } }),
+			}),
+			set: jest.fn(),
+		};
+		const runTransaction = jest.fn(async callback => callback(transaction));
+
+		admin.firestore.mockReturnValue({
+			collection: () => ({ doc: () => docRef }),
+			runTransaction,
+		});
+		admin.firestore.Timestamp.now = jest.fn(() => now);
+		admin.firestore.Timestamp.fromMillis = jest.fn(() => expiresAt);
+
+		const realService = jest.requireActual('../../src/services/storage/NewsDedupStorageService');
+		realService._resetForTesting();
+
+		await expect(realService.claimEntry('BTCUSDT:price_surge', 5_000)).resolves.toBe(true);
+		expect(runTransaction).toHaveBeenCalledTimes(1);
+		expect(transaction.set).toHaveBeenCalledWith(docRef, {
+			key: 'BTCUSDT:price_surge',
+			createdAt: now,
+			expiresAt,
+			data: { status: 'claiming' },
+		});
 	});
 });
