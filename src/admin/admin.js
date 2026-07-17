@@ -97,6 +97,16 @@ const getQueryExample = (contract, operation) => Object.fromEntries(getParameter
 		? parameter.example
 		: parameter.schema.example !== undefined ? parameter.schema.example : parameter.schema.default]));
 
+const createIdempotencyKey = () => (window.crypto && typeof window.crypto.randomUUID === 'function'
+	? window.crypto.randomUUID()
+	: `admin-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+
+const withReplayIdempotencyKey = (definition, body) => {
+	if (definition.method !== 'POST' || definition.path !== '/api/alerts/{alertId}/replay') return body;
+	if (body && typeof body.idempotencyKey === 'string' && body.idempotencyKey.trim()) return body;
+	return { ...(body || {}), idempotencyKey: createIdempotencyKey() };
+};
+
 const addJsonField = (form, labelText, name, value) => {
 	const label = element('label', { text: labelText });
 	const textarea = element('textarea');
@@ -310,9 +320,10 @@ const createOperationForm = (contract, definition) => {
 	form.append(title, route);
 	const pathNames = addPathFields(form, definition.path);
 
-	if (definition.method === 'GET') {
+	if (definition.method === 'GET' || getParameters(contract, operation).some((parameter) => parameter.in === 'query')) {
 		addJsonField(form, 'Query JSON', 'query', getQueryExample(contract, operation));
-	} else if (operation && operation.requestBody) {
+	}
+	if (definition.method !== 'GET' && operation && operation.requestBody) {
 		addJsonField(form, 'Request body JSON', 'body', getBodyExample(contract, operation));
 	}
 
@@ -327,7 +338,10 @@ const createOperationForm = (contract, definition) => {
 			const query = form.elements.query
 				? window.CabrosAdminRequest.validateQuery(parseJson(form.elements.query.value, 'Query'))
 				: undefined;
-			const body = form.elements.body ? parseJson(form.elements.body.value, 'Request body') : undefined;
+			const body = withReplayIdempotencyKey(
+				definition,
+				form.elements.body ? parseJson(form.elements.body.value, 'Request body') : undefined,
+			);
 			sendRequest({
 				definition,
 				path: fillPath(definition.path, pathNames, form),

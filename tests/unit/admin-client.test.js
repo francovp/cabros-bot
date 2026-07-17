@@ -195,6 +195,8 @@ describe('admin browser client', () => {
 		await replayForm.dispatch('submit');
 		await flush();
 		expect(events.slice(-2).map(([type]) => type)).toEqual(['confirm', 'fetch']);
+		expect(browser.helperCalls.at(-1).body.idempotencyKey).toEqual(expect.any(String));
+		expect(browser.helperCalls.at(-1).body.idempotencyKey).not.toBe('');
 	});
 
 	it('retries the OpenAPI contract after the first load rejects', async () => {
@@ -270,6 +272,18 @@ describe('admin browser client', () => {
 		await selectView(browser, 'presets');
 		expect(findForm(browser.elementsById.view, 'POST /api/scanner-presets')).toBeDefined();
 		expect(findForm(browser.elementsById.view, 'PUT /api/scanner-presets/{id}')).toBeDefined();
+	});
+
+	it('renders query controls for POST operations that declare query parameters', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {}),
+		});
+		await flush();
+
+		await selectView(browser, 'presets');
+		const runForm = findForm(browser.elementsById.view, 'POST /api/scanner-presets/{id}/run');
+		expect(runForm.elements.query).toBeDefined();
+		expect(runForm.elements.query.value).toContain('"dryRun": false');
 	});
 
 	it('shows cancel only for a fetched active job', async () => {
