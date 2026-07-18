@@ -152,7 +152,8 @@ async function claimEntry(key, ttlMs) {
 			const existing = await transaction.get(docRef);
 			const existingData = existing.exists && existing.data();
 
-			if (existing.exists && (!existingData?.expiresAt || existingData.expiresAt.toMillis() > now.toMillis())) {
+			if (existing.exists && (typeof existingData?.expiresAt?.toMillis !== 'function'
+				|| existingData.expiresAt.toMillis() > now.toMillis())) {
 				return false;
 			}
 

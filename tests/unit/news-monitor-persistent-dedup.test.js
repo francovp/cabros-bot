@@ -355,4 +355,29 @@ describe('NewsDedupStorageService — claimEntry()', () => {
 			data: { status: 'claiming' },
 		});
 	});
+
+	it('treats a malformed existing expiry as an already claimed entry', async () => {
+		process.env.ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP = 'true';
+		const transaction = {
+			get: jest.fn().mockResolvedValue({
+				exists: true,
+				data: () => ({ expiresAt: 'invalid' }),
+			}),
+			set: jest.fn(),
+		};
+		const runTransaction = jest.fn(async callback => callback(transaction));
+
+		admin.firestore.mockReturnValue({
+			collection: () => ({ doc: () => ({}) }),
+			runTransaction,
+		});
+		admin.firestore.Timestamp.now = jest.fn(() => ({ toMillis: () => 10_000 }));
+		admin.firestore.Timestamp.fromMillis = jest.fn(() => ({ toMillis: () => 15_000 }));
+
+		const realService = jest.requireActual('../../src/services/storage/NewsDedupStorageService');
+		realService._resetForTesting();
+
+		await expect(realService.claimEntry('BTCUSDT:price_surge', 5_000)).resolves.toBe(false);
+		expect(transaction.set).not.toHaveBeenCalled();
+	});
 });
