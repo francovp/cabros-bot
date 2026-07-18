@@ -96,7 +96,30 @@ describe('SignalOutcomeService', () => {
 			expect(res).toBeNull();
 		});
 
-		it('saves a normalised document when enabled', async () => {
+		it('saves a normalised document when only SHADOW_MODE_OUTCOME_TRACKING is enabled', async () => {
+			process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING = 'true';
+			// Intentionally NOT setting ENABLE_FIRESTORE_ALERT_STORAGE or ENABLE_FIRESTORE_JOB_STORAGE
+			// to verify the fix for issue #155.
+
+			const resId = await SignalOutcomeService.recordSignal({
+				requestId: 'test-req-shadow-only',
+				source: 'market-scanner',
+				symbol: 'BINANCE:BTCUSDT',
+				price: 50000,
+				side: 'BUY',
+				score: 0.85,
+			});
+
+			expect(resId).not.toBeNull();
+			const saved = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(resId);
+			expect(saved).toBeDefined();
+			expect(saved.requestId).toBe('test-req-shadow-only');
+			expect(saved.source).toBe('market-scanner');
+			expect(saved.price).toBe(50000);
+			expect(saved.side).toBe('BUY');
+		});
+
+		it('saves a normalised document when enabled with both flags', async () => {
 			process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING = 'true';
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 
