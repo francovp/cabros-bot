@@ -16,6 +16,8 @@ Turn review debt left on merged PRs into a small, evidence-backed GitHub backlog
      ```bash
      gh auth status
      repo="$(gh repo view --json nameWithOwner --jq .nameWithOwner)"
+     owner="${repo%%/*}"
+     name="${repo#*/}"
      default_branch="$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name)"
      ```
 
