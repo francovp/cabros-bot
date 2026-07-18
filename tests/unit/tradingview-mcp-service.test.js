@@ -13,6 +13,7 @@ describe('TradingViewMcpService', () => {
 	});
 
 	it('maps new coin_analysis schema into webhook enriched alert', async () => {
+		process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT = 'false';
 		const service = new TradingViewMcpService({
 			maxRetries: 1,
 			defaultExchange: 'BINANCE',

@@ -131,7 +131,7 @@ async function getEntry(key) {
 }
 
 /**
- * Claim a dedup entry atomically using DocumentReference.create().
+ * Claim a dedup entry atomically, replacing it only when its TTL has expired.
  *
  * @param {string} key - Dedup key
  * @param {number} ttlMs - TTL in milliseconds
@@ -144,30 +144,34 @@ async function claimEntry(key, ttlMs) {
 	}
 
 	try {
-		// First verify if a valid non-expired entry exists
-		const existing = await getEntry(key);
-		if (existing) {
-			return false;
-		}
-
 		const now = admin.firestore.Timestamp.now();
 		const expiresAtMs = now.toMillis() + ttlMs;
 		const expiresAt = admin.firestore.Timestamp.fromMillis(expiresAtMs);
-
 		const docRef = firestore.collection(COLLECTION_NAME).doc(key);
-		await docRef.create({
-			key,
-			createdAt: now,
-			expiresAt,
-			data: { status: 'claiming' },
+		const claimed = await firestore.runTransaction(async transaction => {
+			const existing = await transaction.get(docRef);
+			const existingData = existing.exists && existing.data();
+
+			if (existing.exists && (typeof existingData?.expiresAt?.toMillis !== 'function'
+				|| existingData.expiresAt.toMillis() > now.toMillis())) {
+				return false;
+			}
+
+			transaction.set(docRef, {
+				key,
+				createdAt: now,
+				expiresAt,
+				data: { status: 'claiming' },
+			});
+			return true;
 		});
-		console.debug('[NewsDedupStorageService] Dedup entry claimed:', key);
-		return true;
-	} catch (error) {
-		if (error.code === 6 || error.message.includes('ALREADY_EXISTS')) {
+		if (!claimed) {
 			console.debug('[NewsDedupStorageService] Dedup entry already exists during claim:', key);
 			return false;
 		}
+		console.debug('[NewsDedupStorageService] Dedup entry claimed:', key);
+		return true;
+	} catch (error) {
 		console.warn('[NewsDedupStorageService] claimEntry error (fail-open):', error.message);
 		// Fail-open: allow claim to succeed so the replica can alert
 		return true;
@@ -251,4 +255,3 @@ module.exports = {
 		db = null;
 	},
 };
-
