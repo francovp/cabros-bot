@@ -50,7 +50,9 @@ function isEnabled() {
 }
 
 function canInitializeFirestore() {
-	return isEnabled() || process.env.ENABLE_FIRESTORE_JOB_STORAGE === 'true';
+	return isEnabled()
+		|| process.env.ENABLE_FIRESTORE_JOB_STORAGE === 'true'
+		|| process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING === 'true';
 }
 
 function clampLimit(limit) {
