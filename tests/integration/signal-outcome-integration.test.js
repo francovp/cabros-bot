@@ -30,7 +30,7 @@ describe('Shadow-Mode Outcome Tracking Integration Tests', () => {
 			...originalEnv,
 			WEBHOOK_API_KEY: 'test-key',
 			ENABLE_FIRESTORE_ALERT_STORAGE: 'true',
-			ENABLE_SHADOW_MODE_OUTCOME_TRACKING: 'true',
+			ENABLE_SIGNAL_OUTCOME_TRACKING: 'true',
 		};
 
 		app.use('/api', getRoutes(null));
@@ -111,7 +111,7 @@ describe('Shadow-Mode Outcome Tracking Integration Tests', () => {
 	});
 
 	it('returns "No measurements found" when shadow mode is disabled or no outcomes exist', async () => {
-		process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING = 'false';
+		process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'false';
 
 		const fromIso = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
 		const toIso = new Date(Date.now() + 1 * 24 * 60 * 60 * 1000).toISOString();

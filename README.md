@@ -81,6 +81,8 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 
 - `ENABLE_FIRESTORE_ALERT_STORAGE` - Enable Firestore persistence and alert read API (`true` or `false`, default: `false`)
 - `ENABLE_FIRESTORE_JOB_STORAGE` - Enable Firestore persistence for async TradingView jobs without enabling alert read APIs (`true` or `false`, default: `false`)
+- `ENABLE_SIGNAL_OUTCOME_TRACKING` - Enable shadow-mode signal outcome recording and evaluation (`true` or `false`, default: `false`)
+- `ENABLE_SHADOW_MODE_OUTCOME_TRACKING` - Legacy alias for signal outcome tracking, retained for one release
 - `FIREBASE_SERVICE_ACCOUNT_JSON` - Inline Firebase service account JSON for server-side Firestore access
 - `FIREBASE_PROJECT_ID` - Optional Firebase project override for Admin SDK initialization
 - `GOOGLE_APPLICATION_CREDENTIALS` - Optional path to a service account JSON file for local development

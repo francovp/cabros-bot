@@ -53,6 +53,8 @@ describe('Status endpoints', () => {
 		process.env.SENTRY_DSN = 'https://dsn.example';
 		delete process.env.BRAVE_SEARCH_API_KEY;
 		delete process.env.ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION;
+		delete process.env.ENABLE_SIGNAL_OUTCOME_TRACKING;
+		delete process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING;
 	});
 
 	afterEach(() => {
@@ -193,6 +195,28 @@ describe('Status endpoints', () => {
 
 		expect(response.status).toBe(200);
 		expect(response.body.featureFlags.messageFooterMetadata).toBe(false);
+	});
+
+	it('reports signal outcome tracking from the canonical environment variable', async () => {
+		process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.signalOutcomeTracking).toBe(true);
+	});
+
+	it('reports signal outcome tracking from the legacy environment variable', async () => {
+		process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING = 'true';
+
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.signalOutcomeTracking).toBe(true);
 	});
 
 	it('reports Firestore job storage as disabled by default', async () => {

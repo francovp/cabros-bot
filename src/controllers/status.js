@@ -206,6 +206,8 @@ function getStatus() {
 	const llmAlertEnrichmentEnabled = isEnabled(process.env.ENABLE_LLM_ALERT_ENRICHMENT);
 	const cloudflareAigEnabled = isEnabled(process.env.ENABLE_CLOUDFLARE_AIG);
 	const messageFooterMetadataEnabled = process.env.ENABLE_MESSAGE_FOOTER_METADATA !== 'false';
+	const signalOutcomeTrackingEnabled = isEnabled(process.env.ENABLE_SIGNAL_OUTCOME_TRACKING)
+		|| isEnabled(process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING);
 	const llmAlertEnrichmentDependencyEnabled = llmAlertEnrichmentEnabled && newsMonitorEnabled;
 
 	const telegram = dependencyStatus({
@@ -323,7 +325,7 @@ function getStatus() {
 			llmAlertEnrichment: llmAlertEnrichmentEnabled,
 			cloudflareAig: cloudflareAigEnabled,
 			messageFooterMetadata: messageFooterMetadataEnabled,
-			signalOutcomeTracking: isEnabled(process.env.ENABLE_SIGNAL_OUTCOME_TRACKING),
+			signalOutcomeTracking: signalOutcomeTrackingEnabled,
 		},
 		deliveryChannels: {
 			telegram: {
