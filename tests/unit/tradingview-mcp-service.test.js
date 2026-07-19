@@ -4,6 +4,7 @@ describe('TradingViewMcpService', () => {
 	afterEach(() => {
 		delete process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT;
 		delete process.env.ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME;
+		delete process.env.ENABLE_MESSAGE_FOOTER_METADATA;
 	});
 
 	it('returns null when alert text is not a TradingView signal', async () => {
@@ -74,6 +75,19 @@ describe('TradingViewMcpService', () => {
 			exchange: 'BINANCE',
 			timeframe: '4h',
 		}));
+	});
+
+	it('suppresses the metadata footer when explicitly disabled', async () => {
+		process.env.ENABLE_MESSAGE_FOOTER_METADATA = 'false';
+		const service = new TradingViewMcpService({
+			maxRetries: 1,
+			logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
+		});
+		service.callCoinAnalysis = jest.fn().mockResolvedValue({});
+
+		const result = await service.enrichFromAlertText('BTCUSDT(240) pasó a señal de VENTA');
+
+		expect(result.extraText).toBe('');
 	});
 
 	it('prefers structuredContent when MCP server returns schema-native tool results', async () => {

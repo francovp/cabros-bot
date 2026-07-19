@@ -629,6 +629,9 @@ class TradingViewMcpService {
 		}
 
 		const sentiment = sentimentScore > 0.15 ? 'BULLISH' : sentimentScore < -0.15 ? 'BEARISH' : 'NEUTRAL';
+		const extraText = process.env.ENABLE_MESSAGE_FOOTER_METADATA !== 'false'
+			? '*Grounding*: `tradingview-mcp`'
+			: '';
 
 		return {
 			original_text: originalText,
@@ -641,7 +644,7 @@ class TradingViewMcpService {
 			},
 			sources: [],
 			truncated: false,
-			extraText: '*Grounding*: `tradingview-mcp`',
+			extraText,
 			confluenceData: confluenceAnalysis || null,
 			multiTimeframeData: multiTimeframeAnalysis || null,
 		};
