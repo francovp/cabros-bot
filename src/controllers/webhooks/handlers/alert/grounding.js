@@ -59,6 +59,10 @@ function hasContradictoryConfluenceInsight(mcp = {}) {
 		&& mcp.insights.some(insight => typeof insight === 'string' && insight.startsWith('Confluencia contradictoria:'));
 }
 
+function isMessageFooterMetadataEnabled() {
+	return process.env.ENABLE_MESSAGE_FOOTER_METADATA !== 'false';
+}
+
 function mergeEnrichmentData(text, geminiEnriched, mcpEnriched) {
 	const gemini = geminiEnriched || {};
 	const mcp = mcpEnriched || {};
@@ -78,7 +82,9 @@ function mergeEnrichmentData(text, geminiEnriched, mcpEnriched) {
 	const modelName = geminiBackticked[0] || GROUNDING_MODEL_NAME;
 	const groundingFromGemini = geminiBackticked[1] || GROUNDING_MODEL_NAME;
 	const groundingProviders = mergeUnique([groundingFromGemini], ['tradingview-mcp'], 8);
-	const extraText = '*Model used*: ' + '`' + `${modelName}` + '`' + '\n*Grounding*: ' + '`' + `${groundingProviders.join('`, `')}` + '`';
+	const extraText = isMessageFooterMetadataEnabled()
+		? '*Model used*: ' + '`' + `${modelName}` + '`' + '\n*Grounding*: ' + '`' + `${groundingProviders.join('`, `')}` + '`'
+		: '';
 	const priorityMcpInsights = extractPriorityMcpInsights(mcp);
 	const remainingMcpInsights = Array.isArray(mcp.insights)
 		? mcp.insights.filter(insight => !priorityMcpInsights.includes(insight))
@@ -112,7 +118,7 @@ async function enrichWithGemini(text, tokenUsage) {
 	});
 
 	// Build footer with model metadata (controlled by env var, default: true)
-	const enableFooter = process.env.ENABLE_MESSAGE_FOOTER_METADATA !== 'false';
+	const enableFooter = isMessageFooterMetadataEnabled();
 	const modelName = modelUsed || GROUNDING_MODEL_NAME;
 	const extraText = enableFooter
 		? '*Model used*: ' + '`' + `${modelName}` + '`' + '\n*Grounding*: ' + '`' + `${GROUNDING_MODEL_NAME}` + '`'
