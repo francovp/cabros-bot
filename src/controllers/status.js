@@ -187,6 +187,7 @@ function getStatus() {
 	const discordEnabled = isEnabled(process.env.ENABLE_DISCORD_ALERTS);
 	const geminiGroundingEnabled = isEnabled(process.env.ENABLE_GEMINI_GROUNDING);
 	const newsMonitorEnabled = isEnabled(process.env.ENABLE_NEWS_MONITOR);
+	const newsMonitorTestModeEnabled = isEnabled(process.env.ENABLE_NEWS_MONITOR_TEST_MODE);
 	const forceBraveSearch = isEnabled(process.env.FORCE_BRAVE_SEARCH);
 	const newsMonitorUsesGeminiSearch = newsMonitorEnabled && !forceBraveSearch;
 	const newsMonitorUsesGeminiLlm = newsMonitorEnabled && modelProvider === 'gemini';
@@ -306,6 +307,7 @@ function getStatus() {
 			discordAlerts: discordEnabled,
 			geminiGrounding: geminiGroundingEnabled,
 			newsMonitor: newsMonitorEnabled,
+			newsMonitorTestMode: newsMonitorTestModeEnabled,
 			tradingViewMcpEnrichment: tradingViewMcpEnrichmentEnabled,
 			tradingViewVolumeConfirmation: tradingViewVolumeConfirmationFlagEnabled,
 			tradingViewConfluenceEnrichment: process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT !== 'false',

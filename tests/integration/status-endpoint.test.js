@@ -126,6 +126,26 @@ describe('Status endpoints', () => {
 		});
 	});
 
+	it('reports news monitor test mode as disabled by default', async () => {
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.newsMonitorTestMode).toBe(false);
+	});
+
+	it('reports news monitor test mode when enabled', async () => {
+		process.env.ENABLE_NEWS_MONITOR_TEST_MODE = 'true';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.newsMonitorTestMode).toBe(true);
+	});
+
 	it('reports message footer metadata as enabled by default', async () => {
 		const response = await request(app)
 			.get('/api/capabilities')
