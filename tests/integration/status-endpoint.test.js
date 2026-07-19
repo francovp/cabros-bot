@@ -127,6 +127,8 @@ describe('Status endpoints', () => {
 	});
 
 	it('reports Firestore job storage as disabled by default', async () => {
+		delete process.env.ENABLE_FIRESTORE_ALERT_STORAGE;
+
 		const response = await request(app)
 			.get('/api/capabilities')
 			.set('x-api-key', 'status-key');
@@ -141,7 +143,25 @@ describe('Status endpoints', () => {
 		});
 	});
 
+	it('reports Firestore job storage through the legacy alert-storage gate', async () => {
+		delete process.env.ENABLE_FIRESTORE_JOB_STORAGE;
+
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.firestoreJobStorage).toBe(true);
+		expect(response.body.dependencies.firestoreJobStorage).toEqual({
+			enabled: true,
+			configured: true,
+			ready: true,
+			status: 'ready',
+		});
+	});
+
 	it('reports Firestore job storage readiness when enabled', async () => {
+		delete process.env.ENABLE_FIRESTORE_ALERT_STORAGE;
 		process.env.ENABLE_FIRESTORE_JOB_STORAGE = 'true';
 
 		const response = await request(app)
