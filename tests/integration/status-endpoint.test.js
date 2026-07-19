@@ -143,6 +143,24 @@ describe('Status endpoints', () => {
 		});
 	});
 
+	it('does not report volume confirmation ready without MCP enrichment', async () => {
+		process.env.ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION = 'true';
+		process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT = 'false';
+
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.tradingViewVolumeConfirmation).toBe(true);
+		expect(response.body.dependencies.tradingViewVolumeConfirmation).toEqual({
+			enabled: false,
+			configured: true,
+			ready: false,
+			status: 'disabled',
+		});
+	});
+
 	it('treats Gemini grounding as misconfigured without a Gemini model on the Gemini provider path', async () => {
 		process.env.MODEL_PROVIDER = 'gemini';
 		delete process.env.GEMINI_MODEL_NAME;

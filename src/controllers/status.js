@@ -193,7 +193,8 @@ function getStatus() {
 	const geminiEnabled = geminiGroundingEnabled || newsMonitorUsesGeminiSearch || newsMonitorUsesGeminiLlm;
 	const marketScannerEnabled = isEnabled(process.env.ENABLE_MARKET_SCANNER);
 	const tradingViewMcpEnrichmentEnabled = isEnabled(process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT);
-	const tradingViewVolumeConfirmationEnabled = isEnabled(process.env.ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION);
+	const tradingViewVolumeConfirmationFlagEnabled = isEnabled(process.env.ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION);
+	const tradingViewVolumeConfirmationEnabled = tradingViewVolumeConfirmationFlagEnabled && tradingViewMcpEnrichmentEnabled;
 	const tradingViewMcpEnabled = tradingViewMcpEnrichmentEnabled || marketScannerEnabled;
 	const firestoreEnabled = isEnabled(process.env.ENABLE_FIRESTORE_ALERT_STORAGE);
 	const sentryEnabled = isEnabled(process.env.ENABLE_SENTRY);
@@ -299,7 +300,7 @@ function getStatus() {
 			geminiGrounding: geminiGroundingEnabled,
 			newsMonitor: newsMonitorEnabled,
 			tradingViewMcpEnrichment: tradingViewMcpEnrichmentEnabled,
-			tradingViewVolumeConfirmation: tradingViewVolumeConfirmationEnabled,
+			tradingViewVolumeConfirmation: tradingViewVolumeConfirmationFlagEnabled,
 			tradingViewConfluenceEnrichment: process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT !== 'false',
 			tradingViewConfluenceMultiTimeframe: isEnabled(process.env.ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME),
 			firestoreAlertStorage: firestoreEnabled,
