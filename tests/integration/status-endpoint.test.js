@@ -126,6 +126,26 @@ describe('Status endpoints', () => {
 		});
 	});
 
+	it('reports message footer metadata as enabled by default', async () => {
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.messageFooterMetadata).toBe(true);
+	});
+
+	it('reports message footer metadata as disabled when explicitly disabled', async () => {
+		process.env.ENABLE_MESSAGE_FOOTER_METADATA = 'false';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.messageFooterMetadata).toBe(false);
+	});
+
 	it('reports Firestore job storage as disabled by default', async () => {
 		delete process.env.ENABLE_FIRESTORE_ALERT_STORAGE;
 

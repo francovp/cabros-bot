@@ -365,7 +365,7 @@
           "code": { "type": "string", "description": "Machine-readable error code (failed or timed_out jobs only)." }
         }
       },
-      "Status": { "type": "object", "description": "Runtime status. featureFlags.firestoreJobStorage reports the ENABLE_FIRESTORE_JOB_STORAGE gate or the legacy ENABLE_FIRESTORE_ALERT_STORAGE gate; dependencies.firestoreJobStorage reports Firestore credential readiness for that runtime path.", "properties": { "service": { "$ref": "#/components/schemas/JsonObject" }, "featureFlags": { "$ref": "#/components/schemas/JsonObject" }, "deliveryChannels": { "$ref": "#/components/schemas/JsonObject" }, "dependencies": { "$ref": "#/components/schemas/JsonObject" } } }
+      "Status": { "type": "object", "description": "Runtime status. featureFlags.firestoreJobStorage reports the ENABLE_FIRESTORE_JOB_STORAGE gate or the legacy ENABLE_FIRESTORE_ALERT_STORAGE gate; dependencies.firestoreJobStorage reports Firestore credential readiness for that runtime path; featureFlags.messageFooterMetadata reports ENABLE_MESSAGE_FOOTER_METADATA and defaults to true unless explicitly set to false.", "properties": { "service": { "$ref": "#/components/schemas/JsonObject" }, "featureFlags": { "$ref": "#/components/schemas/JsonObject" }, "deliveryChannels": { "$ref": "#/components/schemas/JsonObject" }, "dependencies": { "$ref": "#/components/schemas/JsonObject" } } }
     }
   }
 }

@@ -167,6 +167,33 @@ describe('Alert Handler', () => {
 		process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
 	});
 
+	it('should suppress combined enrichment footer when message metadata is disabled', async () => {
+		const previousGeminiFlag = process.env.ENABLE_GEMINI_GROUNDING;
+		const previousFooterFlag = process.env.ENABLE_MESSAGE_FOOTER_METADATA;
+		process.env.ENABLE_GEMINI_GROUNDING = 'true';
+		process.env.ENABLE_MESSAGE_FOOTER_METADATA = 'false';
+
+		tradingViewMcpService.isEnabled.mockReturnValue(true);
+		tradingViewMcpService.enrichFromAlertText.mockResolvedValue({
+			insights: ['MCP insight'],
+			sources: [],
+			technical_levels: { supports: [], resistances: [] },
+		});
+		groundAlert.mockResolvedValue({
+			insights: ['Gemini insight'],
+			sources: [],
+			truncated: false,
+			modelUsed: 'gemini-2.5-flash',
+		});
+
+		const result = await enrichAlert({ text: 'BTCUSDT(240) pasó a señal de VENTA' }, { useTradingViewData: true });
+
+		expect(result.extraText).toBe('');
+
+		process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
+		process.env.ENABLE_MESSAGE_FOOTER_METADATA = previousFooterFlag;
+	});
+
 	it('should preserve signed MCP sentiment score when Gemini score is missing', async () => {
 		const previousGeminiFlag = process.env.ENABLE_GEMINI_GROUNDING;
 		process.env.ENABLE_GEMINI_GROUNDING = 'true';

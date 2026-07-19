@@ -203,6 +203,8 @@ When `ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION=true`, `featureFlags.tradingViewVol
 
 When `ENABLE_FIRESTORE_JOB_STORAGE=true`, `featureFlags.firestoreJobStorage` reports the async-job persistence gate and `dependencies.firestoreJobStorage` reports readiness using the configured Firestore credentials. The legacy `ENABLE_FIRESTORE_ALERT_STORAGE=true` gate also reports job storage as enabled because it activates the same runtime persistence path.
 
+`featureFlags.messageFooterMetadata` reports the `ENABLE_MESSAGE_FOOTER_METADATA` setting. It defaults to `true` and is disabled only when the environment variable is explicitly set to `false`.
+
 `GET /api/capabilities` is an alias for the same payload.
 
 **Response:**
@@ -227,7 +229,8 @@ When `ENABLE_FIRESTORE_JOB_STORAGE=true`, `featureFlags.firestoreJobStorage` rep
     "langfusePrompts": false,
     "marketScanner": true,
     "binancePriceCheck": false,
-    "llmAlertEnrichment": false
+    "llmAlertEnrichment": false,
+    "messageFooterMetadata": true
   },
   "deliveryChannels": {
     "telegram": { "enabled": true, "status": "ready" },
