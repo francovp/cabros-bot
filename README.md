@@ -201,6 +201,8 @@ For `ENABLE_NEWS_MONITOR=true`, the payload also reports the primary LLM depende
 
 When `ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION=true`, `featureFlags.tradingViewVolumeConfirmation` reports the gate value and `dependencies.tradingViewVolumeConfirmation` reports readiness only when the configured TradingView MCP endpoint and its parent MCP enrichment gate are active.
 
+When `ENABLE_FIRESTORE_JOB_STORAGE=true`, `featureFlags.firestoreJobStorage` reports the async-job persistence gate and `dependencies.firestoreJobStorage` reports readiness using the configured Firestore credentials, independently of alert storage.
+
 `GET /api/capabilities` is an alias for the same payload.
 
 **Response:**
@@ -220,6 +222,7 @@ When `ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION=true`, `featureFlags.tradingViewVol
     "tradingViewMcpEnrichment": true,
     "tradingViewVolumeConfirmation": false,
     "firestoreAlertStorage": true,
+    "firestoreJobStorage": false,
     "sentryMonitoring": true,
     "langfusePrompts": false,
     "marketScanner": true,
@@ -237,6 +240,7 @@ When `ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION=true`, `featureFlags.tradingViewVol
     "tradingViewMcp": { "enabled": true, "configured": true, "ready": true, "status": "ready" },
     "tradingViewVolumeConfirmation": { "enabled": false, "configured": true, "ready": false, "status": "disabled" },
     "firestore": { "enabled": true, "configured": true, "ready": true, "status": "ready" },
+    "firestoreJobStorage": { "enabled": false, "configured": true, "ready": false, "status": "disabled" },
     "sentry": { "enabled": true, "configured": true, "ready": true, "status": "ready" },
     "langfuse": { "enabled": false, "configured": false, "ready": false, "status": "disabled" },
     "braveSearch": { "enabled": false, "configured": false, "ready": false, "status": "disabled" },
