@@ -111,6 +111,56 @@ describe('Status endpoints', () => {
 		expect(response.body.dependencies.sentry.status).toBe('ready');
 	});
 
+	it('reports TradingView volume confirmation as disabled by default', async () => {
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.tradingViewVolumeConfirmation).toBe(false);
+		expect(response.body.dependencies.tradingViewVolumeConfirmation).toEqual({
+			enabled: false,
+			configured: true,
+			ready: false,
+			status: 'disabled',
+		});
+	});
+
+	it('reports TradingView volume confirmation readiness when enabled', async () => {
+		process.env.ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION = 'true';
+
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.tradingViewVolumeConfirmation).toBe(true);
+		expect(response.body.dependencies.tradingViewVolumeConfirmation).toEqual({
+			enabled: true,
+			configured: true,
+			ready: true,
+			status: 'ready',
+		});
+	});
+
+	it('does not report volume confirmation ready without MCP enrichment', async () => {
+		process.env.ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION = 'true';
+		process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT = 'false';
+
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.tradingViewVolumeConfirmation).toBe(true);
+		expect(response.body.dependencies.tradingViewVolumeConfirmation).toEqual({
+			enabled: false,
+			configured: true,
+			ready: false,
+			status: 'disabled',
+		});
+	});
+
 	it('treats Gemini grounding as misconfigured without a Gemini model on the Gemini provider path', async () => {
 		process.env.MODEL_PROVIDER = 'gemini';
 		delete process.env.GEMINI_MODEL_NAME;

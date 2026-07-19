@@ -199,6 +199,8 @@ The response intentionally exposes only non-sensitive booleans and metadata: ser
 
 For `ENABLE_NEWS_MONITOR=true`, the payload also reports the primary LLM dependency used by that flow as `dependencies.newsMonitorLlm`, including the resolved provider (`gemini`, `azure`, or `openrouter`) and whether that provider is actually configured for runtime use. When `FORCE_BRAVE_SEARCH=true`, the payload also exposes `dependencies.braveSearch` so the forced search path can be monitored independently of Gemini. When `ENABLE_GEMINI_GROUNDING=true` and `MODEL_PROVIDER=gemini`, `dependencies.gemini` requires both `GEMINI_API_KEY` and `GEMINI_MODEL_NAME`, matching the runtime path used for grounded alert generation. Firestore readiness treats `GOOGLE_APPLICATION_CREDENTIALS` as configured only when the referenced credential file exists and is readable.
 
+When `ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION=true`, `featureFlags.tradingViewVolumeConfirmation` reports the gate value and `dependencies.tradingViewVolumeConfirmation` reports readiness only when the configured TradingView MCP endpoint and its parent MCP enrichment gate are active.
+
 `GET /api/capabilities` is an alias for the same payload.
 
 **Response:**
@@ -216,6 +218,7 @@ For `ENABLE_NEWS_MONITOR=true`, the payload also reports the primary LLM depende
     "geminiGrounding": true,
     "newsMonitor": true,
     "tradingViewMcpEnrichment": true,
+    "tradingViewVolumeConfirmation": false,
     "firestoreAlertStorage": true,
     "sentryMonitoring": true,
     "langfusePrompts": false,
@@ -232,6 +235,7 @@ For `ENABLE_NEWS_MONITOR=true`, the payload also reports the primary LLM depende
     "whatsapp": { "enabled": false, "configured": false, "ready": false, "status": "disabled" },
     "gemini": { "enabled": true, "configured": true, "ready": true, "status": "ready" },
     "tradingViewMcp": { "enabled": true, "configured": true, "ready": true, "status": "ready" },
+    "tradingViewVolumeConfirmation": { "enabled": false, "configured": true, "ready": false, "status": "disabled" },
     "firestore": { "enabled": true, "configured": true, "ready": true, "status": "ready" },
     "sentry": { "enabled": true, "configured": true, "ready": true, "status": "ready" },
     "langfuse": { "enabled": false, "configured": false, "ready": false, "status": "disabled" },
