@@ -1053,3 +1053,12 @@ This feature introduces validation of callback URLs to prevent Server-Side Reque
 **Testing**:
 - Unit coverage: `pnpm test -- tests/unit/job-service.test.js`
 - Integration coverage: `pnpm test -- tests/integration/jobs-endpoint.test.js`
+
+## Message Footer Metadata Capability Flag (CB-71 / Issue #175)
+
+`/api/status` and its `/api/capabilities` alias expose `featureFlags.messageFooterMetadata`, matching the alert grounding default-on behavior. The flag is `true` unless `ENABLE_MESSAGE_FOOTER_METADATA=false`.
+
+**Core Components**:
+- `src/controllers/status.js` — Reports the effective message-footer metadata flag.
+- `tests/integration/status-endpoint.test.js` — Covers the default-enabled and explicit-disabled states.
+- `README.md`, `src/openapi/openapi.json`, and `CabrosBot.postman_collection.json` — Document the response field and default.
