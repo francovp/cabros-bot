@@ -191,6 +191,15 @@ describe('AlertStorageService', () => {
 			expect(mockAdd).not.toHaveBeenCalled();
 		});
 
+		it('does not save alerts when only signal outcome tracking is enabled', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+
+			const result = await AlertStorageService.saveAlert(buildParams());
+
+			expect(result).toBeNull();
+			expect(mockAdd).not.toHaveBeenCalled();
+		});
+
 		it('calls collection("alerts").add() with correctly shaped document', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 			const docId = 'abc123';

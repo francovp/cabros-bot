@@ -412,6 +412,10 @@ function getFirestore() {
  * @returns {Promise<string|null>} The new Firestore document ID, or null on failure/disabled
  */
 async function saveAlert({ text, enriched, enrichmentData, tokenUsage, channels, deliveryResults, useTradingViewData }) {
+	if (!isEnabled()) {
+		return null;
+	}
+
 	const firestore = getFirestore();
 	if (!firestore) {
 		return null;
