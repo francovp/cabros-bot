@@ -207,6 +207,8 @@ When `ENABLE_FIRESTORE_JOB_STORAGE=true`, `featureFlags.firestoreJobStorage` rep
 
 `featureFlags.messageFooterMetadata` reports the `ENABLE_MESSAGE_FOOTER_METADATA` setting. It defaults to `true` and is disabled only when the environment variable is explicitly set to `false`.
 
+`featureFlags.cloudflareAig` reports `ENABLE_CLOUDFLARE_AIG`, while `dependencies.cloudflareAig` reports whether the Cloudflare AI Gateway credentials are configured and ready.
+
 `GET /api/capabilities` is an alias for the same payload.
 
 **Response:**
@@ -233,6 +235,7 @@ When `ENABLE_FIRESTORE_JOB_STORAGE=true`, `featureFlags.firestoreJobStorage` rep
     "marketScanner": true,
     "binancePriceCheck": false,
     "llmAlertEnrichment": false,
+    "cloudflareAig": false,
     "messageFooterMetadata": true
   },
   "deliveryChannels": {
@@ -251,7 +254,8 @@ When `ENABLE_FIRESTORE_JOB_STORAGE=true`, `featureFlags.firestoreJobStorage` rep
     "langfuse": { "enabled": false, "configured": false, "ready": false, "status": "disabled" },
     "braveSearch": { "enabled": false, "configured": false, "ready": false, "status": "disabled" },
     "newsMonitorLlm": { "provider": "gemini", "enabled": true, "configured": true, "ready": true, "status": "ready" },
-    "llmAlertEnrichment": { "enabled": false, "configured": false, "ready": false, "status": "disabled" }
+    "llmAlertEnrichment": { "enabled": false, "configured": false, "ready": false, "status": "disabled" },
+    "cloudflareAig": { "enabled": false, "configured": false, "ready": false, "status": "disabled" }
   }
 }
 ```
