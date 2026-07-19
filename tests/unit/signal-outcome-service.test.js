@@ -33,11 +33,13 @@ describe('SignalOutcomeService', () => {
 		admin.__resetCollectionState();
 		AlertStorageService._resetForTesting();
 		delete process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING;
+		delete process.env.ENABLE_SIGNAL_OUTCOME_TRACKING;
 		delete process.env.ENABLE_FIRESTORE_ALERT_STORAGE;
 	});
 
 	afterEach(() => {
 		delete process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING;
+		delete process.env.ENABLE_SIGNAL_OUTCOME_TRACKING;
 		delete process.env.ENABLE_FIRESTORE_ALERT_STORAGE;
 	});
 
@@ -53,6 +55,11 @@ describe('SignalOutcomeService', () => {
 
 		it('returns true when ENABLE_SHADOW_MODE_OUTCOME_TRACKING is "true"', () => {
 			process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING = 'true';
+			expect(SignalOutcomeService.isEnabled()).toBe(true);
+		});
+
+		it('returns true when ENABLE_SIGNAL_OUTCOME_TRACKING is "true"', () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
 			expect(SignalOutcomeService.isEnabled()).toBe(true);
 		});
 	});
@@ -94,6 +101,19 @@ describe('SignalOutcomeService', () => {
 			process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING = 'false';
 			const res = await SignalOutcomeService.recordSignal({ symbol: 'BTCUSDT', price: 50000 });
 			expect(res).toBeNull();
+		});
+
+		it('records a signal when only ENABLE_SIGNAL_OUTCOME_TRACKING is enabled', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+
+			const resId = await SignalOutcomeService.recordSignal({
+				requestId: 'test-req-signal-tracking',
+				source: 'market-scanner',
+				symbol: 'BINANCE:BTCUSDT',
+				price: 50000,
+			});
+
+			expect(resId).not.toBeNull();
 		});
 
 		it('saves a normalised document when only SHADOW_MODE_OUTCOME_TRACKING is enabled', async () => {

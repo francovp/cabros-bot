@@ -17,7 +17,8 @@ function getBinanceClient() {
 }
 
 function isEnabled() {
-	return process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING === 'true';
+	return process.env.ENABLE_SIGNAL_OUTCOME_TRACKING === 'true'
+		|| process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING === 'true';
 }
 
 function normalizeSide(side) {

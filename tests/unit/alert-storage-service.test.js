@@ -62,12 +62,14 @@ describe('AlertStorageService', () => {
 		// Reset the Firestore db singleton between tests
 		AlertStorageService._resetForTesting();
 		delete process.env.ENABLE_FIRESTORE_ALERT_STORAGE;
+		delete process.env.ENABLE_SIGNAL_OUTCOME_TRACKING;
 	});
 
 	afterEach(() => {
 		delete process.env.ENABLE_FIRESTORE_ALERT_STORAGE;
 		delete process.env.ENABLE_FIRESTORE_JOB_STORAGE;
 		delete process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING;
+		delete process.env.ENABLE_SIGNAL_OUTCOME_TRACKING;
 		delete process.env.FIREBASE_PROJECT_ID;
 		delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
 	});
@@ -97,6 +99,14 @@ describe('AlertStorageService', () => {
 
 		it('initializes Firestore when only ENABLE_SHADOW_MODE_OUTCOME_TRACKING is true', () => {
 			process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING = 'true';
+			const result = AlertStorageService.getFirestore();
+			expect(mockInitializeApp).toHaveBeenCalledTimes(1);
+			expect(result).not.toBeNull();
+			expect(result.collection).toBeDefined();
+		});
+
+		it('initializes Firestore when only ENABLE_SIGNAL_OUTCOME_TRACKING is true', () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
 			const result = AlertStorageService.getFirestore();
 			expect(mockInitializeApp).toHaveBeenCalledTimes(1);
 			expect(result).not.toBeNull();
@@ -177,6 +187,15 @@ describe('AlertStorageService', () => {
 
 		it('returns null without calling Firestore when storage is disabled', async () => {
 			const result = await AlertStorageService.saveAlert(buildParams());
+			expect(result).toBeNull();
+			expect(mockAdd).not.toHaveBeenCalled();
+		});
+
+		it('does not save alerts when only signal outcome tracking is enabled', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+
+			const result = await AlertStorageService.saveAlert(buildParams());
+
 			expect(result).toBeNull();
 			expect(mockAdd).not.toHaveBeenCalled();
 		});
