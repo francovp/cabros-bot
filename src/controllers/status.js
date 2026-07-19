@@ -197,6 +197,8 @@ function getStatus() {
 	const tradingViewVolumeConfirmationEnabled = tradingViewVolumeConfirmationFlagEnabled && tradingViewMcpEnrichmentEnabled;
 	const tradingViewMcpEnabled = tradingViewMcpEnrichmentEnabled || marketScannerEnabled;
 	const firestoreEnabled = isEnabled(process.env.ENABLE_FIRESTORE_ALERT_STORAGE);
+	const firestoreJobStorageEnabled = isEnabled(process.env.ENABLE_FIRESTORE_JOB_STORAGE)
+		|| firestoreEnabled;
 	const sentryEnabled = isEnabled(process.env.ENABLE_SENTRY);
 	const langfusePromptsEnabled = isEnabled(process.env.ENABLE_LANGFUSE_PROMPTS);
 	const binancePriceCheckEnabled = isEnabled(process.env.ENABLE_BINANCE_PRICE_CHECK);
@@ -237,6 +239,10 @@ function getStatus() {
 			hasValidInlineFirestoreCredentials(process.env.FIREBASE_SERVICE_ACCOUNT_JSON)
 			|| hasReadableFile(process.env.GOOGLE_APPLICATION_CREDENTIALS)
 			|| isGoogleManagedRuntime(),
+	});
+	const firestoreJobStorage = dependencyStatus({
+		enabled: firestoreJobStorageEnabled,
+		configured: firestore.configured,
 	});
 	const sentryProfilingEnabled = sentryEnabled
 		&& hasValue(process.env.SENTRY_DSN)
@@ -304,6 +310,7 @@ function getStatus() {
 			tradingViewConfluenceEnrichment: process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT !== 'false',
 			tradingViewConfluenceMultiTimeframe: isEnabled(process.env.ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME),
 			firestoreAlertStorage: firestoreEnabled,
+			firestoreJobStorage: firestoreJobStorageEnabled,
 			sentryMonitoring: sentryEnabled,
 			sentryProfiling: sentryService.isProfilingEnabled(),
 			langfusePrompts: langfusePromptsEnabled,
@@ -334,6 +341,7 @@ function getStatus() {
 			tradingViewMcp,
 			tradingViewVolumeConfirmation,
 			firestore,
+			firestoreJobStorage,
 			sentry,
 			langfuse,
 			braveSearch,
