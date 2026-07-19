@@ -193,6 +193,7 @@ function getStatus() {
 	const geminiEnabled = geminiGroundingEnabled || newsMonitorUsesGeminiSearch || newsMonitorUsesGeminiLlm;
 	const marketScannerEnabled = isEnabled(process.env.ENABLE_MARKET_SCANNER);
 	const tradingViewMcpEnrichmentEnabled = isEnabled(process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT);
+	const tradingViewVolumeConfirmationEnabled = isEnabled(process.env.ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION);
 	const tradingViewMcpEnabled = tradingViewMcpEnrichmentEnabled || marketScannerEnabled;
 	const firestoreEnabled = isEnabled(process.env.ENABLE_FIRESTORE_ALERT_STORAGE);
 	const sentryEnabled = isEnabled(process.env.ENABLE_SENTRY);
@@ -223,6 +224,10 @@ function getStatus() {
 	});
 	const tradingViewMcp = dependencyStatus({
 		enabled: tradingViewMcpEnabled,
+		configured: hasValue(process.env.TRADINGVIEW_MCP_URL || DEFAULT_TRADINGVIEW_MCP_URL),
+	});
+	const tradingViewVolumeConfirmation = dependencyStatus({
+		enabled: tradingViewVolumeConfirmationEnabled,
 		configured: hasValue(process.env.TRADINGVIEW_MCP_URL || DEFAULT_TRADINGVIEW_MCP_URL),
 	});
 	const firestore = dependencyStatus({
@@ -294,6 +299,7 @@ function getStatus() {
 			geminiGrounding: geminiGroundingEnabled,
 			newsMonitor: newsMonitorEnabled,
 			tradingViewMcpEnrichment: tradingViewMcpEnrichmentEnabled,
+			tradingViewVolumeConfirmation: tradingViewVolumeConfirmationEnabled,
 			tradingViewConfluenceEnrichment: process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT !== 'false',
 			tradingViewConfluenceMultiTimeframe: isEnabled(process.env.ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME),
 			firestoreAlertStorage: firestoreEnabled,
@@ -325,6 +331,7 @@ function getStatus() {
 			discord,
 			gemini,
 			tradingViewMcp,
+			tradingViewVolumeConfirmation,
 			firestore,
 			sentry,
 			langfuse,
