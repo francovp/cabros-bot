@@ -111,6 +111,35 @@ describe('Status endpoints', () => {
 		expect(response.body.dependencies.sentry.status).toBe('ready');
 	});
 
+	it('reports Cloudflare AI Gateway as disabled by default', async () => {
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.cloudflareAig).toBe(false);
+		expect(response.body.dependencies.cloudflareAig.enabled).toBe(false);
+	});
+
+	it('reports Cloudflare AI Gateway when enabled', async () => {
+		process.env.ENABLE_CLOUDFLARE_AIG = 'true';
+		process.env.CF_AIG_TOKEN = 'cloudflare-token';
+		process.env.CF_AIG_BASE_URL = 'https://gateway.ai.cloudflare.com/v1/xyz/default/compat';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.cloudflareAig).toBe(true);
+		expect(response.body.dependencies.cloudflareAig).toEqual({
+			enabled: true,
+			configured: true,
+			ready: true,
+			status: 'ready',
+		});
+	});
+
 	it('reports TradingView volume confirmation as disabled by default', async () => {
 		const response = await request(app)
 			.get('/api/capabilities')

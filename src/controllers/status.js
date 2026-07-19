@@ -204,6 +204,7 @@ function getStatus() {
 	const langfusePromptsEnabled = isEnabled(process.env.ENABLE_LANGFUSE_PROMPTS);
 	const binancePriceCheckEnabled = isEnabled(process.env.ENABLE_BINANCE_PRICE_CHECK);
 	const llmAlertEnrichmentEnabled = isEnabled(process.env.ENABLE_LLM_ALERT_ENRICHMENT);
+	const cloudflareAigEnabled = isEnabled(process.env.ENABLE_CLOUDFLARE_AIG);
 	const messageFooterMetadataEnabled = process.env.ENABLE_MESSAGE_FOOTER_METADATA !== 'false';
 	const llmAlertEnrichmentDependencyEnabled = llmAlertEnrichmentEnabled && newsMonitorEnabled;
 
@@ -320,6 +321,7 @@ function getStatus() {
 			marketScanner: marketScannerEnabled,
 			binancePriceCheck: binancePriceCheckEnabled,
 			llmAlertEnrichment: llmAlertEnrichmentEnabled,
+			cloudflareAig: cloudflareAigEnabled,
 			messageFooterMetadata: messageFooterMetadataEnabled,
 			signalOutcomeTracking: isEnabled(process.env.ENABLE_SIGNAL_OUTCOME_TRACKING),
 		},
