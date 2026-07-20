@@ -33,7 +33,8 @@ const PRICING_PER_1M = {
 
 /**
  * Normalize usage metadata from various providers into a common shape.
- * Supports Gemini usageMetadata ({ promptTokenCount, candidatesTokenCount, totalTokenCount })
+ * Supports Gemini usageMetadata ({ promptTokenCount, candidatesTokenCount, totalTokenCount }),
+ * OpenAI-compatible usage ({ prompt_tokens, completion_tokens, total_tokens }),
  * and generic { inputTokens, outputTokens, totalTokens } objects.
  * @param {Object} usageMetadata
  * @returns {{ inputTokens: number, outputTokens: number, totalTokens: number }|null}
@@ -42,10 +43,10 @@ function normalizeUsageMetadata(usageMetadata) {
 	if (!usageMetadata) return null;
 
 	const meta = usageMetadata.usageMetadata || usageMetadata;
-	const inputTokens = toNumber(firstDefined(meta.promptTokenCount, meta.inputTokens, meta.promptTokens)) || 0;
-	const outputTokens = toNumber(firstDefined(meta.candidatesTokenCount, meta.outputTokens, meta.completionTokens)) || 0;
+	const inputTokens = toNumber(firstDefined(meta.promptTokenCount, meta.inputTokens, meta.promptTokens, meta.prompt_tokens)) || 0;
+	const outputTokens = toNumber(firstDefined(meta.candidatesTokenCount, meta.outputTokens, meta.completionTokens, meta.completion_tokens)) || 0;
 
-	const explicitTotal = toNumber(firstDefined(meta.totalTokenCount, meta.totalTokens));
+	const explicitTotal = toNumber(firstDefined(meta.totalTokenCount, meta.totalTokens, meta.total_tokens));
 	const totalTokens = explicitTotal != null ? explicitTotal : inputTokens + outputTokens;
 
 	return {
