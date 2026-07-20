@@ -126,6 +126,7 @@ describe('Jobs API Integration Tests', () => {
 			type: 'expanded-analysis',
 			status: 'completed',
 		}));
+		expect(response.body.jobs[0].progress).toEqual({ total: 1, current: 1 });
 		expect(response.body.jobs[0]).not.toHaveProperty('payload');
 		expect(response.body.jobs[0]).not.toHaveProperty('bot');
 	});
@@ -144,7 +145,7 @@ describe('Jobs API Integration Tests', () => {
 		resetJobRepository();
 
 		const response = await request(app)
-			.get('/api/jobs?status=failed&type=market-scanner')
+			.get('/api/jobs?status=failed&type=market-scanner&limit=1')
 			.set('x-api-key', 'test-key')
 			.expect(200);
 
@@ -155,6 +156,8 @@ describe('Jobs API Integration Tests', () => {
 				status: 'failed',
 			}),
 		]);
+		expect(admin.__mockOrderBy).toHaveBeenCalledWith('createdAt', 'desc');
+		expect(admin.__mockLimit).toHaveBeenCalledWith(1);
 	});
 
 	it('rejects invalid job list filters', async () => {

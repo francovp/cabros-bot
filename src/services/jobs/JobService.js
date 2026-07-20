@@ -298,10 +298,10 @@ class JobService {
 
 	async listJobs({ status, type, limit = DEFAULT_JOB_LIST_LIMIT } = {}) {
 		await this._cleanExpiredJobs();
-		const jobs = await this.repository.list();
 		const safeLimit = Number.isInteger(limit) && limit > 0
 			? Math.min(limit, MAX_JOB_LIST_LIMIT)
 			: DEFAULT_JOB_LIST_LIMIT;
+		const jobs = await this.repository.list({ status, type, limit: safeLimit });
 		const activeJobs = [];
 
 		for (const job of jobs) {
@@ -326,7 +326,9 @@ class JobService {
 			jobId: job.jobId,
 			type: job.type,
 			status: job.status,
-			progress: job.progress,
+			progress: job.progress
+				? { total: job.progress.total, current: job.progress.current }
+				: undefined,
 			createdAt: job.createdAt,
 			updatedAt: job.updatedAt,
 			totalDurationMs: TERMINAL_JOB_STATUSES.has(job.status) && job.totalDurationMs !== undefined
