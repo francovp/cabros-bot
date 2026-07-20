@@ -73,6 +73,24 @@ describe('Gemini Service', () => {
 			// sources are not returned by generateEnrichedAlert
 		});
 
+		it('adds provider usage returned by llmCallv2 to the token tracker', async () => {
+			const tokenUsage = { addUsage: jest.fn() };
+			const usage = { inputTokens: 11, outputTokens: 22, totalTokens: 33 };
+			genaiClient.llmCallv2.mockResolvedValue({
+				text: JSON.stringify(mockEnrichedResponse),
+				usage,
+				modelUsed: 'gpt-4o-mini',
+			});
+
+			await generateEnrichedAlert({
+				text: 'Bitcoin breaks 83k after a volatile session',
+				searchResults: mockSearchResults,
+				options: { tokenUsage },
+			});
+
+			expect(tokenUsage.addUsage).toHaveBeenCalledWith(usage, 'gpt-4o-mini');
+		});
+
 		it('retries with the fallback Gemini model on transient 500 INTERNAL errors', async () => {
 			genaiClient.llmCallv2
 				.mockRejectedValueOnce(Object.assign(

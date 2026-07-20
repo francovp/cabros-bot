@@ -400,6 +400,7 @@ class GenaiClient {
 					return {
 						text,
 						citations: context.citations || [],
+						usage: usageNorm,
 						modelUsed: AZURE_LLM_MODEL || 'azure-llm',
 					};
 				} else {
@@ -425,6 +426,7 @@ class GenaiClient {
 					return {
 						text,
 						citations: context.citations || [],
+						usage: usageNorm,
 						modelUsed: OPENROUTER_MODEL || 'openrouter-model',
 					};
 				} else {
@@ -450,6 +452,7 @@ class GenaiClient {
 					return {
 						text,
 						citations: context.citations || [],
+						usage: usageNorm,
 						modelUsed: CF_AIG_MODEL || 'cloudflare-aig',
 					};
 				} else {
