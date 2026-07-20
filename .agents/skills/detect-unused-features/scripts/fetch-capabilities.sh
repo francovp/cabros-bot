@@ -6,7 +6,7 @@ if [[ -z "${WEBHOOK_API_KEY:-}" ]]; then
 	exit 78
 fi
 
-curl --fail-with-body --silent --show-error \
+printf 'x-api-key: %s\n' "$WEBHOOK_API_KEY" | curl --fail-with-body --silent --show-error \
 	-H 'accept: application/json' \
-	-H "x-api-key: ${WEBHOOK_API_KEY}" \
+	-H @- \
 	"${CAPABILITIES_URL:-https://cabros-crypto-bot-telegram.onrender.com/api/capabilities}"
