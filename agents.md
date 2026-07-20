@@ -734,6 +734,7 @@ See `/specs/TERMINOLOGY_GUIDE.md` for extended discussion and examples.
 - GH-182 / CB-77: malformed or no-domain grounding sources count toward the declared UNKNOWN `0.5` quality tier instead of contributing zero; regression coverage lives in `tests/unit/event-detection.test.js`.
 - GH-187 / CB-79: added authenticated `GET /api/jobs` with bounded `status`, `type`, and `limit` filters; `JobRepository.list()` merges Firestore and memory records, while `JobService.listJobs()` omits expired terminal jobs and returns metadata-only summaries.
 - GH-183 / CB-78: Azure, OpenRouter, and Cloudflare `llmCallv2()` results now return normalized token usage for downstream `tokenUsage` aggregation; the shared normalizer accepts OpenAI-compatible `prompt_tokens`, `completion_tokens`, and `total_tokens` fields.
+- GH-199 / CB-83: `detect-unused-features` derives disabled flags, status mappings, indirect env lookups, `.env.example` gaps, and Sentry profiling findings from the fresh protected capabilities response and current repository files; dated snapshots are guidance-free and a healthy-data dry run guards against stale issues.
 
 ## Architectural Patterns & Extension Guide
 
