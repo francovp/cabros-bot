@@ -1648,6 +1648,7 @@
                   "mode": "raw",
                   "raw": "{\n  \"type\": \"expanded-analysis\",\n  \"symbols\": [\"BINANCE:BTCUSDT\"],\n  \"callbackUrl\": \"https://example.com/api/callback\",\n  \"callbackSecret\": \"my-signature-secret\",\n  \"callbackEvents\": [\"processing\", \"completed\"]\n}"
                 },
+                "description": "Callback verification: reject stale x-callback-timestamp values, deduplicate x-callback-delivery-id, and verify x-callback-signature as HMAC-SHA256(secret, timestamp + \\\"\\n\\\" + event + \\\"\\n\\\" + delivery-id + \\\"\\n\\\" + raw JSON body). Retries use a new delivery ID and signature.",
                 "url": {
                   "raw": "{{baseUrl}}/api/jobs/tradingview-analysis",
                   "host": [
@@ -1791,6 +1792,7 @@
                   "mode": "raw",
                   "raw": "{\n  \"type\": \"expanded-analysis\",\n  \"symbols\": [\"BINANCE:BTCUSDT\"],\n  \"callbackUrl\": \"https://example.com/api/callback\",\n  \"callbackSecret\": \"my-signature-secret\",\n  \"callbackEvents\": [\"processing\", \"completed\"]\n}"
                 },
+                "description": "Callback verification: reject stale x-callback-timestamp values, deduplicate x-callback-delivery-id, and verify x-callback-signature as HMAC-SHA256(secret, timestamp + \\\"\\n\\\" + event + \\\"\\n\\\" + delivery-id + \\\"\\n\\\" + raw JSON body). Retries use a new delivery ID and signature.",
                 "url": {
                   "raw": "{{baseUrl}}/api/jobs/tradingview-analysis",
                   "host": [

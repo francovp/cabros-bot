@@ -294,6 +294,7 @@
       "ScannerPresetRequest": { "type": "object", "required": ["name"], "properties": { "name": { "type": "string", "minLength": 1 }, "exchange": { "type": "string" }, "timeframe": { "type": "string" }, "scans": { "type": "array", "items": { "type": "string" } }, "limit": { "type": "integer", "minimum": 1, "maximum": 20 }, "bbw_threshold": { "type": "number" } } },
       "CallbackFields": {
         "type": "object",
+        "description": "When callbackUrl is configured, each callback POST includes x-callback-timestamp (ISO-8601), x-callback-event, and a UUID x-callback-delivery-id. If a callback secret is configured, x-callback-signature is HMAC-SHA256 over the newline-delimited timestamp, event, delivery ID, and raw JSON body. Receivers should reject stale timestamps and deduplicate delivery IDs; retries use new IDs and signatures.",
         "properties": {
           "callbackUrl": {
             "type": "string",
@@ -302,7 +303,7 @@
           },
           "callbackSecret": {
             "type": "string",
-            "description": "Optional shared secret sent in the X-Callback-Secret header when delivering callbacks, for request authenticity verification."
+            "description": "Optional shared secret used to generate the x-callback-signature HMAC-SHA256 header."
           },
           "callbackEvents": {
             "type": "array",

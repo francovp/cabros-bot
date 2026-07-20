@@ -122,6 +122,8 @@ describe('OpenAPI contract', () => {
 			expect(callbackFields.properties).toHaveProperty('callbackSecret');
 			expect(callbackFields.properties).toHaveProperty('callbackEvents');
 			expect(callbackFields.properties).toHaveProperty('timeoutMs');
+			expect(callbackFields.description).toContain('x-callback-delivery-id');
+			expect(callbackFields.description).toContain('raw JSON body');
 		});
 
 		it('callbackEvents enum in CallbackFields matches runtime validEvents exactly', () => {
