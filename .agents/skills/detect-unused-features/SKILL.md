@@ -117,9 +117,16 @@ Compare current source usage against the current template on every run:
 
 ```bash
 PLATFORM_ENV_VARS='^(NODE_ENV|K_SERVICE|K_REVISION|FUNCTION_TARGET|FUNCTION_NAME|GAE_SERVICE|RENDER_GIT_COMMIT|RENDER_GIT_REPO_SLUG|GIT_COMMIT|COMMIT_SHA|GITHUB_SHA|SOURCE_VERSION)$'
+source_env_vars() {
+  rg -o --no-filename 'process\.env\.[A-Z][A-Z0-9_]*' src | sed 's/^process\.env\.//'
+  while IFS= read -r file; do
+    rg -o --no-filename "['\"][A-Z][A-Z0-9]*_[A-Z0-9_]*['\"]" "$file" \
+      | sed -E "s/^['\"]//; s/['\"]$//"
+  done < <(rg -l 'process\.env\[' src)
+}
+
 comm -23 \
-  <(rg -o --no-filename 'process\.env\.[A-Z][A-Z0-9_]*' src \
-    | sed 's/^process\.env\.//' | grep -Ev "$PLATFORM_ENV_VARS" | sort -u) \
+  <(source_env_vars | grep -Ev "$PLATFORM_ENV_VARS" | sort -u) \
   <(rg -o --no-filename '^[[:space:]]*#?[[:space:]]*[A-Z][A-Z0-9_]*=' .env.example \
     | sed -E 's/^[[:space:]]*#?[[:space:]]*([A-Z][A-Z0-9_]*)=.*/\1/' | sort -u)
 ```

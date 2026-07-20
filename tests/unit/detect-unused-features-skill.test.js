@@ -72,6 +72,7 @@ describe('detect-unused-features capabilities fetch', () => {
 		expect(skill).toContain('comm -23');
 		expect(skill).toContain('K_SERVICE|K_REVISION');
 		expect(skill).toContain('#?[[:space:]]*[A-Z]');
+		expect(skill).toContain("rg -l 'process\\.env\\[' src");
 		expect(skill).not.toContain('Reference: Production featureFlags (as of June 2026)');
 		expect(skill).not.toContain('### Known gaps (env vars used in code but NOT in status.js featureFlags)');
 		expect(skill).not.toContain('The production response shows:');
