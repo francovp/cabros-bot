@@ -116,11 +116,12 @@ Include:
 Compare current source usage against the current template on every run:
 
 ```bash
+PLATFORM_ENV_VARS='^(NODE_ENV|K_SERVICE|K_REVISION|FUNCTION_TARGET|FUNCTION_NAME|GAE_SERVICE|RENDER_GIT_COMMIT|RENDER_GIT_REPO_SLUG|GIT_COMMIT|COMMIT_SHA|GITHUB_SHA|SOURCE_VERSION)$'
 comm -23 \
   <(rg -o --no-filename 'process\.env\.[A-Z][A-Z0-9_]*' src \
-    | sed 's/^process\.env\.//' | sort -u) \
-  <(rg -o --no-filename '^[A-Z][A-Z0-9_]*=' .env.example \
-    | sed 's/=$//' | sort -u)
+    | sed 's/^process\.env\.//' | grep -Ev "$PLATFORM_ENV_VARS" | sort -u) \
+  <(rg -o --no-filename '^[[:space:]]*#?[[:space:]]*[A-Z][A-Z0-9_]*=' .env.example \
+    | sed -E 's/^[[:space:]]*#?[[:space:]]*([A-Z][A-Z0-9_]*)=.*/\1/' | sort -u)
 ```
 
 Report this delta to the user. Offer to create issues or directly update `.env.example`.
@@ -134,10 +135,12 @@ fresh response and template are healthy:
 FIXTURE_CAPABILITIES='{"featureFlags":{"discordAlerts":true},"dependencies":{"sentry":{"profiling":{"status":"ready"}}}}'
 ! jq -e '.featureFlags | to_entries[] | select(.value == false)' <<<"$FIXTURE_CAPABILITIES" >/dev/null
 test "$(jq -r '.dependencies.sentry.profiling.status' <<<"$FIXTURE_CAPABILITIES")" = ready
-FIXTURE_ENV_EXAMPLE=$'ENABLE_DISCORD_ALERTS=true\nSENTRY_PROFILE_SESSION_SAMPLE_RATE=0.1'
+PLATFORM_ENV_VARS='^(NODE_ENV|K_SERVICE|K_REVISION|FUNCTION_TARGET|FUNCTION_NAME|GAE_SERVICE|RENDER_GIT_COMMIT|RENDER_GIT_REPO_SLUG|GIT_COMMIT|COMMIT_SHA|GITHUB_SHA|SOURCE_VERSION)$'
+! printf '%s\n' K_SERVICE | grep -Ev "$PLATFORM_ENV_VARS" | grep -q .
+FIXTURE_ENV_EXAMPLE=$'# WEBHOOK_API_KEY=your_webhook_api_key_here\nSENTRY_PROFILE_SESSION_SAMPLE_RATE=0.1'
 ! comm -23 \
-  <(printf '%s\n' ENABLE_DISCORD_ALERTS SENTRY_PROFILE_SESSION_SAMPLE_RATE | sort) \
-  <(sed -n 's/^\([A-Z][A-Z0-9_]*\)=.*/\1/p' <<<"$FIXTURE_ENV_EXAMPLE" | sort) \
+  <(printf '%s\n' WEBHOOK_API_KEY SENTRY_PROFILE_SESSION_SAMPLE_RATE | sort) \
+  <(sed -E 's/^[[:space:]]*#?[[:space:]]*([A-Z][A-Z0-9_]*)=.*/\1/p' <<<"$FIXTURE_ENV_EXAMPLE" | sort) \
   | grep -q .
 ```
 
