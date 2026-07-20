@@ -385,12 +385,14 @@ The system provides a `POST /api/webhook/market-scanner-alert` endpoint that run
   - `scans` — array of scan types from `top_gainers`, `top_losers`, `volume_breakout_scanner`, `smart_volume_scanner`, `bollinger_scan`. Defaults to `['top_gainers', 'top_losers', 'volume_breakout_scanner']`.
   - `limit` — integer limit of items per scan, clamped to `[1, 20]`, default 5.
   - `bbw_threshold` — number representing Bollinger Band Width threshold for Bollinger squeeze scan, default 0.05.
+  - `ranked` — boolean, default `false`; when `true`, reports and structured `scanResults[].scores[]` use the same filtered items and include numeric `score` plus non-empty `reason` fields.
 - The feature is gated by `ENABLE_MARKET_SCANNER=true`.
 - Endpoint-level deadline is controlled by `MARKET_SCANNER_TIMEOUT_MS` (default 90s, capped at 120s).
 
 **Core Components**:
 - `src/controllers/webhooks/handlers/marketScanner/marketScanner.js` — request handler, sequential scan executor, deadline manager, and notification dispatcher.
 - `src/services/tradingview/marketScannerReport.js` — request parsing and validation, section/item formatter, and report builder.
+- Ranked output shares `prepareMarketScannerItems()` between report rendering and response compaction so structured scores cannot diverge from the displayed ranking.
 - `src/services/tradingview/TradingViewMcpService.js` — uses `callScanTool` method to invoke scanner tools on the TradingView MCP server.
 
 **Failure behavior**:
