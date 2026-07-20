@@ -149,6 +149,14 @@
         "security": [{ "ApiKeyHeader": [] }, { "ApiKeyQuery": [] }]
       }
     },
+    "/api/jobs": {
+      "get": {
+        "tags": ["Jobs"], "summary": "List recent asynchronous jobs", "operationId": "listJobs",
+        "parameters": [{ "$ref": "#/components/parameters/JobListLimit" }, { "$ref": "#/components/parameters/JobStatusFilter" }, { "$ref": "#/components/parameters/JobTypeFilter" }],
+        "responses": { "200": { "$ref": "#/components/responses/JobList" }, "400": { "$ref": "#/components/responses/Error" }, "500": { "$ref": "#/components/responses/Error" } },
+        "security": [{ "ApiKeyHeader": [] }, { "ApiKeyQuery": [] }]
+      }
+    },
     "/api/jobs/{jobId}": {
       "get": {
         "tags": ["Jobs"], "summary": "Get asynchronous job status", "operationId": "getJobStatus",
@@ -222,6 +230,9 @@
       "DryRun": { "name": "dryRun", "in": "query", "schema": { "type": "boolean", "default": false } },
       "UseTradingViewData": { "name": "useTradingViewData", "in": "query", "schema": { "type": "boolean", "default": false } },
       "AlertListLimit": { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 50 } },
+      "JobListLimit": { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 50 } },
+      "JobStatusFilter": { "name": "status", "in": "query", "schema": { "type": "string", "enum": ["pending", "processing", "completed", "failed", "cancelled", "timed_out"] } },
+      "JobTypeFilter": { "name": "type", "in": "query", "schema": { "type": "string", "enum": ["expanded-analysis", "market-scanner"] } },
       "SummaryLimit": { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 1000, "default": 500 } },
       "ExportLimit": { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 1000, "default": 500 } },
       "Cursor": { "name": "cursor", "in": "query", "schema": { "type": "string" }, "description": "Opaque pagination cursor returned by the previous page." },
@@ -256,6 +267,7 @@
       "NewsMonitorAnalysisResult": { "description": "News monitor analysis and delivery result", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/NewsMonitorResponse" } } } },
       "AlertList": { "description": "Stored alert page", "content": { "application/json": { "schema": { "type": "object", "properties": { "alerts": { "type": "array", "items": { "$ref": "#/components/schemas/JsonObject" } }, "nextCursor": { "type": ["string", "null"] } } } } } },
       "JobResult": { "description": "Asynchronous job state", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Job" } } } },
+      "JobList": { "description": "Bounded list of sanitized asynchronous job summaries", "content": { "application/json": { "schema": { "type": "object", "required": ["success", "jobs"], "properties": { "success": { "type": "boolean" }, "jobs": { "type": "array", "items": { "$ref": "#/components/schemas/Job" } } } }, "example": { "success": true, "jobs": [{ "jobId": "8f8ef192-349f-4318-8547-0e6d628bf739", "type": "expanded-analysis", "status": "processing", "progress": { "total": 2, "current": 1 }, "createdAt": "2026-05-25T01:30:00.000Z", "updatedAt": "2026-05-25T01:30:05.000Z", "totalDurationMs": 5123 }] } } } },
       "StatusResult": { "description": "Non-sensitive runtime readiness", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Status" } } } }
     },
     "schemas": {

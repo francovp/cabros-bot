@@ -71,6 +71,61 @@ class JobRepository {
 		return cloneJob(memoryJobs.get(jobId));
 	}
 
+	async list({ status, type, limit = 50 } = {}) {
+		const firestore = this._getFirestore();
+		const jobs = new Map();
+		const safeLimit = Number.isInteger(limit) && limit > 0 ? limit : 50;
+		const matches = (job) => (!status || job.status === status) && (!type || job.type === type);
+
+		if (firestore) {
+			try {
+				let lastDoc;
+				let lastDocId;
+				let matchingJobs = 0;
+
+				while (true) {
+					let query = firestore
+						.collection(COLLECTION_NAME)
+						.orderBy('createdAt', 'desc')
+						.limit(safeLimit);
+					if (lastDoc) {
+						query = query.startAfter(lastDoc);
+					}
+
+					const snapshot = await query.get();
+					const docs = snapshot?.docs || [];
+					for (const doc of docs) {
+						const data = doc.data() || {};
+						const job = sanitizeJob({ ...data, jobId: data.jobId || doc.id });
+						if (job?.jobId) {
+							jobs.set(job.jobId, job);
+							if (matches(job)) matchingJobs += 1;
+						}
+					}
+
+					if (docs.length < safeLimit || matchingJobs >= safeLimit) {
+						break;
+					}
+
+					const nextDoc = docs[docs.length - 1];
+					if (!nextDoc || !nextDoc.id || nextDoc.id === lastDocId) {
+						break;
+					}
+					lastDoc = nextDoc;
+					lastDocId = nextDoc.id;
+				}
+			} catch (error) {
+				console.warn('[JobRepository] Failed to list jobs from Firestore:', error.message);
+			}
+		}
+
+		for (const [jobId, job] of memoryJobs.entries()) {
+			jobs.set(jobId, cloneJob(job));
+		}
+
+		return [...jobs.values()];
+	}
+
 	async delete(jobId) {
 		if (!jobId) {
 			return false;

@@ -29,6 +29,10 @@ const {
 const EXPIRATION_MS = 3600000; // 1 hour
 const DEFAULT_JOB_TIMEOUT_MS = 300000; // 5 minutes
 const TERMINAL_JOB_STATUSES = new Set(['completed', 'failed', 'cancelled', 'timed_out']);
+const JOB_STATUSES = new Set(['pending', 'processing', 'completed', 'failed', 'cancelled', 'timed_out']);
+const JOB_TYPES = new Set(['expanded-analysis', 'market-scanner']);
+const DEFAULT_JOB_LIST_LIMIT = 50;
+const MAX_JOB_LIST_LIMIT = 100;
 
 function expandIPv6(ip) {
 	let fullIp = ip;
@@ -290,6 +294,59 @@ class JobService {
 		}
 
 		return formatted;
+	}
+
+	async listJobs({ status, type, limit = DEFAULT_JOB_LIST_LIMIT } = {}) {
+		await this._cleanExpiredJobs();
+		const safeLimit = Number.isInteger(limit) && limit > 0
+			? Math.min(limit, MAX_JOB_LIST_LIMIT)
+			: DEFAULT_JOB_LIST_LIMIT;
+		const jobs = await this.repository.list({ status, type, limit: safeLimit });
+		const activeJobs = [];
+
+		for (const job of jobs) {
+			if (this._isExpiredTerminalJob(job)) {
+				await this.repository.delete(job.jobId);
+				continue;
+			}
+
+			if ((!status || job.status === status) && (!type || job.type === type)) {
+				activeJobs.push(job);
+			}
+		}
+
+		return activeJobs
+			.sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime())
+			.slice(0, safeLimit)
+			.map((job) => this._formatJobSummary(job));
+	}
+
+	_formatJobSummary(job) {
+		const summary = {
+			jobId: job.jobId,
+			type: job.type,
+			status: job.status,
+			progress: job.progress
+				? { total: job.progress.total, current: job.progress.current }
+				: undefined,
+			createdAt: job.createdAt,
+			updatedAt: job.updatedAt,
+			totalDurationMs: TERMINAL_JOB_STATUSES.has(job.status) && job.totalDurationMs !== undefined
+				? job.totalDurationMs
+				: (Date.now() - new Date(job.createdAt).getTime()),
+		};
+
+		if (Array.isArray(job.requestedChannels)) {
+			summary.requestedChannels = job.requestedChannels;
+		} else if (job.requestMetadata && Array.isArray(job.requestMetadata.channels)) {
+			summary.requestedChannels = job.requestMetadata.channels;
+		}
+
+		if (job.callbackStatus && typeof job.callbackStatus.status === 'string') {
+			summary.callbackStatus = { status: job.callbackStatus.status };
+		}
+
+		return summary;
 	}
 
 	/**
@@ -1222,4 +1279,8 @@ const jobService = new JobService();
 module.exports = {
 	jobService,
 	JobService,
+	JOB_STATUSES,
+	JOB_TYPES,
+	DEFAULT_JOB_LIST_LIMIT,
+	MAX_JOB_LIST_LIMIT,
 };

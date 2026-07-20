@@ -2,9 +2,12 @@
 
 const request = require('supertest');
 const app = require('../../app');
+const admin = require('firebase-admin');
 const { getRoutes } = require('../../src/routes');
 const { initializeNotificationServices } = require('../../src/controllers/webhooks/handlers/alert/alert');
 const { tradingViewMcpService } = require('../../src/services/tradingview/TradingViewMcpService');
+const { jobRepository, _resetForTesting: resetJobRepository } = require('../../src/services/jobs/JobRepository');
+const alertStorageService = require('../../src/services/storage/AlertStorageService');
 
 jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
 	tradingViewMcpService: {
@@ -31,6 +34,9 @@ describe('Jobs API Integration Tests', () => {
 		};
 
 		jest.clearAllMocks();
+		admin.__resetCollectionState();
+		alertStorageService._resetForTesting();
+		resetJobRepository();
 
 		mockTelegramSendMessage = jest.fn().mockResolvedValue({ message_id: 'job-msg-id' });
 		mockBot = {
@@ -69,6 +75,101 @@ describe('Jobs API Integration Tests', () => {
 		await request(app)
 			.get('/api/jobs/some-job-id')
 			.expect(401);
+	});
+
+	it('returns 401 when GET /api/jobs lacks valid api key', async () => {
+		await request(app)
+			.get('/api/jobs')
+			.expect(401);
+	});
+
+	it('lists bounded sanitized in-memory jobs with status and type filters', async () => {
+		resetJobRepository();
+		const now = Date.now();
+		await jobRepository.save({
+			jobId: 'completed-expanded',
+			type: 'expanded-analysis',
+			status: 'completed',
+			progress: { total: 1, current: 1, status: 'Completed' },
+			createdAt: new Date(now - 1000).toISOString(),
+			updatedAt: new Date(now - 500).toISOString(),
+			payload: { callbackSecret: 'must-not-leak' },
+			bot: { token: 'must-not-leak' },
+		});
+		await jobRepository.save({
+			jobId: 'processing-scanner',
+			type: 'market-scanner',
+			status: 'processing',
+			progress: { total: 1, current: 0, status: 'Pending' },
+			createdAt: new Date(now).toISOString(),
+			updatedAt: new Date(now).toISOString(),
+		});
+		await jobRepository.save({
+			jobId: 'expired-completed',
+			type: 'expanded-analysis',
+			status: 'completed',
+			progress: { total: 1, current: 1, status: 'Completed' },
+			createdAt: new Date(now - 7200000).toISOString(),
+			updatedAt: new Date(now - 7200000).toISOString(),
+			totalDurationMs: 1000,
+		});
+
+		const response = await request(app)
+			.get('/api/jobs?status=completed&type=expanded-analysis&limit=1')
+			.set('x-api-key', 'test-key')
+			.expect(200);
+
+		expect(response.body.success).toBe(true);
+		expect(response.body.jobs).toHaveLength(1);
+		expect(response.body.jobs[0]).toEqual(expect.objectContaining({
+			jobId: 'completed-expanded',
+			type: 'expanded-analysis',
+			status: 'completed',
+		}));
+		expect(response.body.jobs[0].progress).toEqual({ total: 1, current: 1 });
+		expect(response.body.jobs[0]).not.toHaveProperty('payload');
+		expect(response.body.jobs[0]).not.toHaveProperty('bot');
+	});
+
+	it('lists Firestore-backed jobs after the in-memory repository is reset', async () => {
+		process.env.ENABLE_FIRESTORE_JOB_STORAGE = 'true';
+		await jobRepository.save({
+			jobId: 'persisted-failed',
+			type: 'market-scanner',
+			status: 'failed',
+			progress: { total: 1, current: 1, status: 'Failed' },
+			createdAt: new Date().toISOString(),
+			updatedAt: new Date().toISOString(),
+			error: 'MCP failed',
+		});
+		resetJobRepository();
+
+		const response = await request(app)
+			.get('/api/jobs?status=failed&type=market-scanner&limit=1')
+			.set('x-api-key', 'test-key')
+			.expect(200);
+
+		expect(response.body.jobs).toEqual([
+			expect.objectContaining({
+				jobId: 'persisted-failed',
+				type: 'market-scanner',
+				status: 'failed',
+			}),
+		]);
+		expect(admin.__mockOrderBy).toHaveBeenCalledWith('createdAt', 'desc');
+		expect(admin.__mockLimit).toHaveBeenCalledWith(1);
+	});
+
+	it('rejects invalid job list filters', async () => {
+		await request(app)
+			.get('/api/jobs?status=unknown')
+			.set('x-api-key', 'test-key')
+			.expect(400);
+
+		await request(app)
+			.get('/api/jobs?limit=0')
+			.set('x-api-key', 'test-key')
+			.expect(400);
 	});
 
 	it('runs end-to-end expanded-analysis job lifecycle with progress polling and completion', async () => {
