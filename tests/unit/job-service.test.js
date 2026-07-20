@@ -781,6 +781,9 @@ describe('JobService Unit Tests', () => {
 			expect(url).toBe('https://example.com/callback');
 			expect(options.method).toBe('POST');
 			expect(options.headers['Content-Type']).toBe('application/json');
+			expect(options.headers['x-callback-timestamp']).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+			expect(options.headers['x-callback-event']).toBe('completed');
+			expect(options.headers['x-callback-delivery-id']).toMatch(/^[0-9a-f-]{36}$/);
 			expect(options.redirect).toBe('error');
 
 			const body = JSON.parse(options.body);
@@ -793,6 +796,8 @@ describe('JobService Unit Tests', () => {
 			expect(freshJob.callbackStatus.status).toBe('success');
 			expect(freshJob.callbackStatus.attempts).toHaveLength(1);
 			expect(freshJob.callbackStatus.attempts[0].statusCode).toBe(200);
+			expect(freshJob.callbackStatus.attempts[0].deliveryId)
+				.toBe(options.headers['x-callback-delivery-id']);
 		});
 
 		it('sanitizes blocked callback URLs before logging delivery failures', async () => {
@@ -970,7 +975,12 @@ describe('JobService Unit Tests', () => {
 			const crypto = require('crypto');
 			const expectedSignature = crypto
 				.createHmac('sha256', 'super-secret')
-				.update(options.body)
+				.update([
+					options.headers['x-callback-timestamp'],
+					options.headers['x-callback-event'],
+					options.headers['x-callback-delivery-id'],
+					options.body,
+				].join('\n'))
 				.digest('hex');
 			expect(signature).toBe(expectedSignature);
 		});
@@ -1010,7 +1020,12 @@ describe('JobService Unit Tests', () => {
 				const crypto = require('crypto');
 				const expectedSignature = crypto
 					.createHmac('sha256', 'server-secret')
-					.update(options.body)
+					.update([
+						options.headers['x-callback-timestamp'],
+						options.headers['x-callback-event'],
+						options.headers['x-callback-delivery-id'],
+						options.body,
+					].join('\n'))
 					.digest('hex');
 				expect(signature).toBe(expectedSignature);
 			} finally {
@@ -1059,6 +1074,11 @@ describe('JobService Unit Tests', () => {
 				}
 
 				expect(fetchMock).toHaveBeenCalledTimes(4);
+				const deliveryIds = fetchMock.mock.calls.map(([, options]) => options.headers['x-callback-delivery-id']);
+				expect(deliveryIds).toHaveLength(4);
+				expect(new Set(deliveryIds).size).toBe(4);
+				expect(fetchMock.mock.calls.every(([, options]) => options.headers['x-callback-event'] === 'completed'))
+					.toBe(true);
 
 				expect(freshJob.callbackStatus.status).toBe('failed');
 				expect(freshJob.callbackStatus.attempts).toHaveLength(4);

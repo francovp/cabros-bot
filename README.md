@@ -714,6 +714,21 @@ Start a background analysis or scanner job.
 }
 ```
 
+When `callbackUrl` is configured, each callback POST includes:
+
+- `x-callback-timestamp` - ISO-8601 delivery timestamp; reject stale values outside your freshness window.
+- `x-callback-event` - job event (`processing`, `completed`, `failed`, `cancelled`, or `timed_out`).
+- `x-callback-delivery-id` - UUID unique to this HTTP delivery attempt; use it for deduplication.
+- `x-callback-signature` - included when `callbackSecret` or `JOB_CALLBACK_SIGNING_SECRET` is configured.
+
+Verify the signature with HMAC-SHA256 over this exact canonical string, using the shared secret and the raw JSON request body:
+
+```text
+x-callback-timestamp + "\n" + x-callback-event + "\n" + x-callback-delivery-id + "\n" + raw-request-body
+```
+
+Retries generate a new delivery ID and signature for every attempt. The `callbackStatus.attempts` records include the same `deliveryId` for audit and deduplication.
+
 #### GET /api/jobs
 
 List recent sanitized jobs. The endpoint includes jobs from the in-memory repository and, when Firestore job storage is enabled, jobs persisted in `tradingviewJobs`. Expired terminal jobs are excluded.

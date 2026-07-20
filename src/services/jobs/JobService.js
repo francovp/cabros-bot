@@ -1168,12 +1168,9 @@ class JobService {
 		const payload = this._formatJobResponse(job);
 		const payloadStr = JSON.stringify(payload);
 
-		const headers = {
+		const baseHeaders = {
 			'Content-Type': 'application/json',
 		};
-		if (secret) {
-			headers['x-callback-signature'] = crypto.createHmac('sha256', secret).update(payloadStr).digest('hex');
-		}
 
 		const attempts = [];
 		let success = false;
@@ -1182,6 +1179,19 @@ class JobService {
 
 		for (let attempt = 1; attempt <= maxAttempts; attempt++) {
 			const timestamp = new Date().toISOString();
+			const deliveryId = uuidv4();
+			const canonicalSignatureInput = [timestamp, callbackEvent, deliveryId, payloadStr].join('\n');
+			const headers = {
+				...baseHeaders,
+				'x-callback-timestamp': timestamp,
+				'x-callback-event': callbackEvent,
+				'x-callback-delivery-id': deliveryId,
+			};
+			if (secret) {
+				headers['x-callback-signature'] = crypto.createHmac('sha256', secret)
+					.update(canonicalSignatureInput)
+					.digest('hex');
+			}
 
 			const callbackUrlValidation = await validateCallbackUrl(callbackUrl);
 			if (!callbackUrlValidation.valid) {
@@ -1193,6 +1203,7 @@ class JobService {
 				attempts.push({
 					attempt,
 					event: callbackEvent,
+					deliveryId,
 					timestamp,
 					error: isRetryableValidationFailure
 						? 'Callback URL validation failed'
@@ -1225,6 +1236,7 @@ class JobService {
 				const attemptInfo = {
 					attempt,
 					event: callbackEvent,
+					deliveryId,
 					timestamp,
 					statusCode: response.status,
 				};
@@ -1242,6 +1254,7 @@ class JobService {
 				attempts.push({
 					attempt,
 					event: callbackEvent,
+					deliveryId,
 					timestamp,
 					error: err.name === 'AbortError' ? 'Timeout' : err.message,
 				});
