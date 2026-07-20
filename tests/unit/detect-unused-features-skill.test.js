@@ -41,6 +41,7 @@ describe('detect-unused-features capabilities fetch', () => {
 		expect(result.stdout).not.toContain('test-key');
 		expect(result.stderr).not.toContain('test-key');
 		expect(result.curlArgs).toContain('x-api-key: test-key');
+		expect(result.curlArgs).not.toContain('--location');
 	});
 
 	it('stops before curl when WEBHOOK_API_KEY is missing', () => {
