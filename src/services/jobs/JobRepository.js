@@ -71,6 +71,32 @@ class JobRepository {
 		return cloneJob(memoryJobs.get(jobId));
 	}
 
+	async list() {
+		const firestore = this._getFirestore();
+		const jobs = new Map();
+
+		if (firestore) {
+			try {
+				const snapshot = await firestore.collection(COLLECTION_NAME).get();
+				for (const doc of snapshot?.docs || []) {
+					const data = doc.data() || {};
+					const job = sanitizeJob({ ...data, jobId: data.jobId || doc.id });
+					if (job?.jobId) {
+						jobs.set(job.jobId, job);
+					}
+				}
+			} catch (error) {
+				console.warn('[JobRepository] Failed to list jobs from Firestore:', error.message);
+			}
+		}
+
+		for (const [jobId, job] of memoryJobs.entries()) {
+			jobs.set(jobId, cloneJob(job));
+		}
+
+		return [...jobs.values()];
+	}
+
 	async delete(jobId) {
 		if (!jobId) {
 			return false;

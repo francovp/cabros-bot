@@ -677,7 +677,7 @@ BTC price is at $45,000 - breakout detected!
 
 ### Asynchronous Jobs API
 
-To run long-running technical analysis or market scans without hitting HTTP request limits or gateway timeouts (502/504), you can use the asynchronous jobs API. Both endpoints require the `x-api-key` header to be configured.
+To run long-running technical analysis or market scans without hitting HTTP request limits or gateway timeouts (502/504), you can use the asynchronous jobs API. All endpoints require the `x-api-key` header to be configured.
 
 #### POST /api/jobs/tradingview-analysis
 
@@ -711,6 +711,33 @@ Start a background analysis or scanner job.
   "jobId": "8f8ef192-349f-4318-8547-0e6d628bf739",
   "status": "processing",
   "createdAt": "2026-05-25T01:30:00.000Z"
+}
+```
+
+#### GET /api/jobs
+
+List recent sanitized jobs. The endpoint includes jobs from the in-memory repository and, when Firestore job storage is enabled, jobs persisted in `tradingviewJobs`. Expired terminal jobs are excluded.
+
+**Query Parameters:**
+- `status` - Optional: `pending`, `processing`, `completed`, `failed`, `cancelled`, or `timed_out`
+- `type` - Optional: `expanded-analysis` or `market-scanner`
+- `limit` - Integer between `1` and `100` (default: `50`)
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "jobs": [
+    {
+      "jobId": "8f8ef192-349f-4318-8547-0e6d628bf739",
+      "type": "expanded-analysis",
+      "status": "completed",
+      "progress": { "total": 1, "current": 1 },
+      "createdAt": "2026-05-25T01:30:00.000Z",
+      "updatedAt": "2026-05-25T01:30:12.000Z",
+      "totalDurationMs": 12053
+    }
+  ]
 }
 ```
 

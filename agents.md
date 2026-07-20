@@ -37,7 +37,7 @@ This project is a small Express + Telegraf (Telegram) bot service that exposes a
 - `src/controllers/webhooks/handlers/alert/alert.js` — Webhook handler that forwards alert text to a Telegram chat.
 - `src/controllers/webhooks/handlers/expandedAnalysisAlert/expandedAnalysisAlert.js` — `POST /api/webhook/expanded-analysis-alert` handler that builds TradingView MCP analysis reports and sends them through notification channels.
 - `src/controllers/webhooks/handlers/volumeConfirmation/volumeConfirmation.js` — `POST /api/webhook/volume-confirmation` handler that returns structured TradingView MCP volume-confirmation data.
-- `src/controllers/webhooks/handlers/jobs/jobs.js` — Job creation (`POST /api/jobs/tradingview-analysis`) and status polling (`GET /api/jobs/:jobId`) handler.
+- `src/controllers/webhooks/handlers/jobs/jobs.js` — Job creation (`POST /api/jobs/tradingview-analysis`), listing (`GET /api/jobs`), and status polling (`GET /api/jobs/:jobId`) handlers.
 - `src/services/notification/requestRouting.js` — Shared optional channel-routing validator/dispatcher for alert-producing routes (`channels`, `telegramChatId`, `whatsappChatId`) that preserves legacy broadcast behavior when `channels` is omitted.
 - `src/controllers/alerts/alerts.js` — Stored alert read, export, analytics, and replay handlers for `GET /api/alerts`, `GET /api/alerts/export`, `GET /api/alerts/summary`, `GET /api/alerts/:alertId`, and `POST /api/alerts/:alertId/replay`.
 - `src/controllers/status.js` — Status handler that computes capabilities, feature flags, notification channels, and active dependencies status.
@@ -412,12 +412,13 @@ The system provides asynchronous job endpoints to support executing both `expand
 
 **Endpoints**:
 - `POST /api/jobs/tradingview-analysis` — Validates request payloads synchronously, returns `201 Created` with a `jobId`, and starts background execution.
+- `GET /api/jobs` — Returns a bounded list of sanitized recent jobs, with optional `status`, `type`, and `limit` filters. It merges Firestore-backed records with the in-memory fallback and excludes expired terminal jobs.
 - `GET /api/jobs/:jobId` — Returns the current job status (`pending`, `processing`, `completed`, `failed`), progress, and final analysis/delivery outcomes.
 
 **Core Components**:
 - `src/services/jobs/JobService.js` — Coordinates job state tracking, background worker execution, progress reports, durable persistence checkpoints, and job eviction (jobs older than 1 hour).
-- `src/services/jobs/JobRepository.js` — Stores sanitized job records in memory and, when `ENABLE_FIRESTORE_JOB_STORAGE=true`, in Firestore collection `tradingviewJobs`.
-- `src/controllers/webhooks/handlers/jobs/jobs.js` — HTTP route controller handlers (`postCreateJob`, `getJobStatus`).
+- `src/services/jobs/JobRepository.js` — Stores and lists sanitized job records in memory and, when `ENABLE_FIRESTORE_JOB_STORAGE=true`, in Firestore collection `tradingviewJobs`.
+- `src/controllers/webhooks/handlers/jobs/jobs.js` — HTTP route controller handlers (`postCreateJob`, `getJobList`, `getJobStatus`).
 - `src/controllers/commands.js` — Telegram `/analisis` and `/scanner` commands create these jobs and must `await jobService.createJob()` before replying or handling validation/storage errors.
 
 **Failure and Edge Case Behavior**:
@@ -729,6 +730,7 @@ See `/specs/TERMINOLOGY_GUIDE.md` for extended discussion and examples.
 - shadow-mode-outcome-tracking (CB-42 / Issue #129): Added shadow-mode outcome tracking for alert-producing surfaces (webhook alerts, market scanner breakouts/gains/losses, expanded-analysis, news alerts). Normalizes signal metadata (requestId, source, symbol, exchange, timeframe, setupType, score, side, price, etc.) and periodically evaluates outcomes over +1h, +4h, +1D, and +1W windows using Binance historical candlestick data. Exposes aggregated metrics under `shadowModeMetrics` inside `GET /api/alerts/summary` and in custom header `X-Shadow-Mode-Metrics` inside `GET /api/alerts/export`.
 - GH-178 / CB-74: `ENABLE_SIGNAL_OUTCOME_TRACKING` is the canonical signal-outcome gate; `ENABLE_SHADOW_MODE_OUTCOME_TRACKING` remains a one-release compatibility alias, and `/api/capabilities` reports the effective gate.
 - GH-182 / CB-77: malformed or no-domain grounding sources count toward the declared UNKNOWN `0.5` quality tier instead of contributing zero; regression coverage lives in `tests/unit/event-detection.test.js`.
+- GH-187 / CB-79: added authenticated `GET /api/jobs` with bounded `status`, `type`, and `limit` filters; `JobRepository.list()` merges Firestore and memory records, while `JobService.listJobs()` omits expired terminal jobs and returns metadata-only summaries.
 - GH-183 / CB-78: Azure, OpenRouter, and Cloudflare `llmCallv2()` results now return normalized token usage for downstream `tokenUsage` aggregation; the shared normalizer accepts OpenAI-compatible `prompt_tokens`, `completion_tokens`, and `total_tokens` fields.
 
 ## Architectural Patterns & Extension Guide

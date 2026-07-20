@@ -1,6 +1,12 @@
 'use strict';
 
-const { jobService } = require('../../../../services/jobs/JobService');
+const {
+	jobService,
+	JOB_STATUSES,
+	JOB_TYPES,
+	DEFAULT_JOB_LIST_LIMIT,
+	MAX_JOB_LIST_LIMIT,
+} = require('../../../../services/jobs/JobService');
 const sentryService = require('../../../../services/monitoring/SentryService');
 
 function postCreateJob(botOrGetter) {
@@ -46,6 +52,63 @@ function postCreateJob(botOrGetter) {
 			});
 		}
 	};
+}
+
+async function getJobList(req, res) {
+	const { status, type, limit: rawLimit } = req.query;
+	const limit = rawLimit === undefined ? DEFAULT_JOB_LIST_LIMIT : Number(rawLimit);
+
+	if (rawLimit !== undefined && typeof rawLimit !== 'string') {
+		return res.status(400).json({
+			error: 'Invalid limit. Use a single integer query parameter.',
+			code: 'INVALID_REQUEST',
+		});
+	}
+
+	if (!Number.isInteger(limit) || limit < 1 || limit > MAX_JOB_LIST_LIMIT) {
+		return res.status(400).json({
+			error: `Invalid limit. Use an integer between 1 and ${MAX_JOB_LIST_LIMIT}.`,
+			code: 'INVALID_REQUEST',
+		});
+	}
+
+	if (status !== undefined && (!JOB_STATUSES.has(status) || typeof status !== 'string')) {
+		return res.status(400).json({
+			error: 'Invalid status filter.',
+			code: 'INVALID_REQUEST',
+		});
+	}
+
+	if (type !== undefined && (!JOB_TYPES.has(type) || typeof type !== 'string')) {
+		return res.status(400).json({
+			error: 'Invalid type filter.',
+			code: 'INVALID_REQUEST',
+		});
+	}
+
+	try {
+		const jobs = await jobService.listJobs({ status, type, limit });
+		return res.status(200).json({
+			success: true,
+			jobs,
+		});
+	} catch (error) {
+		console.error('[JobsController] Failed to list jobs:', error.message);
+		sentryService.captureRuntimeError({
+			channel: 'jobs-controller',
+			error,
+			http: {
+				endpoint: '/api/jobs',
+				method: 'GET',
+				statusCode: 500,
+			},
+		});
+
+		return res.status(500).json({
+			error: 'Internal server error',
+			code: 'INTERNAL_ERROR',
+		});
+	}
 }
 
 async function getJobStatus(req, res) {
@@ -243,6 +306,7 @@ function postRetryFailedJob(botOrGetter) {
 
 module.exports = {
 	postCreateJob,
+	getJobList,
 	getJobStatus,
 	postCancelJob,
 	postRetryJob,

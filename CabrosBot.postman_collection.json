@@ -1518,6 +1518,84 @@
       "name": "Async Jobs",
       "item": [
         {
+          "name": "GET List Jobs",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Lists recent sanitized jobs. Optional filters: status, type, and limit (1-100).",
+            "url": {
+              "raw": "{{baseUrl}}/api/jobs?status=completed&type=expanded-analysis&limit=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "jobs"
+              ],
+              "query": [
+                {
+                  "key": "status",
+                  "value": "completed"
+                },
+                {
+                  "key": "type",
+                  "value": "expanded-analysis"
+                },
+                {
+                  "key": "limit",
+                  "value": "20"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"jobs\": [\n    {\n      \"jobId\": \"8f8ef192-349f-4318-8547-0e6d628bf739\",\n      \"type\": \"expanded-analysis\",\n      \"status\": \"completed\",\n      \"progress\": {\"total\": 1, \"current\": 1},\n      \"createdAt\": \"2026-05-25T01:30:00.000Z\",\n      \"updatedAt\": \"2026-05-25T01:30:12.000Z\",\n      \"totalDurationMs\": 12053\n    }\n  ]\n}"
+            },
+            {
+              "name": "Invalid limit",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "x-api-key",
+                    "value": "{{apiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/jobs?limit=0",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "jobs"
+                  ],
+                  "query": [
+                    {
+                      "key": "limit",
+                      "value": "0"
+                    }
+                  ]
+                }
+              },
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"Invalid limit. Use an integer between 1 and 100.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
+        },
+        {
           "name": "POST Create TradingView Analysis Job",
           "request": {
             "method": "POST",

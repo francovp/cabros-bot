@@ -14,6 +14,7 @@ const {
 const { postVolumeConfirmation } = require('../controllers/webhooks/handlers/volumeConfirmation/volumeConfirmation');
 const {
 	postCreateJob,
+	getJobList,
 	getJobStatus,
 	postCancelJob,
 	postRetryJob,
@@ -45,6 +46,7 @@ function getRoutes(botOrGetter) {
 
 	// Async job endpoints
 	router.post('/jobs/tradingview-analysis', validateApiKey, postCreateJob(botOrGetter));
+	router.get('/jobs', validateApiKey, getJobList);
 	router.get('/jobs/:jobId', validateApiKey, getJobStatus);
 	router.post('/jobs/:jobId/cancel', validateApiKey, postCancelJob);
 	router.post('/jobs/:jobId/retry', validateApiKey, postRetryJob(botOrGetter));
