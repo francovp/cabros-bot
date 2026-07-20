@@ -224,22 +224,7 @@ function buildMarketScannerReport(scanResults = [], options = {}) {
 			return;
 		}
 
-		let itemsToRender = scanResult.items || [];
-		if (scanResult.scan === 'top_gainers') {
-			itemsToRender = itemsToRender.filter((item) => typeof item.changePercent === 'number' && item.changePercent > 0);
-		} else if (scanResult.scan === 'top_losers') {
-			itemsToRender = itemsToRender.map((item) => {
-				if (typeof item.changePercent === 'number') {
-					return { ...item, changePercent: -Math.abs(item.changePercent) };
-				}
-				return item;
-			});
-			itemsToRender = itemsToRender.filter((item) => typeof item.changePercent === 'number' && item.changePercent < 0);
-		}
-
-		if (ranked) {
-			itemsToRender = rankScannerItems(itemsToRender, scanResult.scan);
-		}
+		const itemsToRender = prepareMarketScannerItems(scanResult, ranked);
 
 		if (itemsToRender.length === 0) {
 			lines.push('No hay.');
@@ -252,6 +237,27 @@ function buildMarketScannerReport(scanResults = [], options = {}) {
 	});
 
 	return lines.join('\n');
+}
+
+function prepareMarketScannerItems(scanResult = {}, ranked = false) {
+	let itemsToRender = scanResult.items || [];
+	if (scanResult.scan === 'top_gainers') {
+		itemsToRender = itemsToRender.filter((item) => typeof item.changePercent === 'number' && item.changePercent > 0);
+	} else if (scanResult.scan === 'top_losers') {
+		itemsToRender = itemsToRender.map((item) => {
+			if (typeof item.changePercent === 'number') {
+				return { ...item, changePercent: -Math.abs(item.changePercent) };
+			}
+			return item;
+		});
+		itemsToRender = itemsToRender.filter((item) => typeof item.changePercent === 'number' && item.changePercent < 0);
+	}
+
+	if (ranked) {
+		itemsToRender = rankScannerItems(itemsToRender, scanResult.scan);
+	}
+
+	return itemsToRender;
 }
 
 function getInvalidationDistance(price, stopLoss) {
@@ -538,5 +544,6 @@ module.exports = {
 	MarketScannerRequestError,
 	parseMarketScannerRequest,
 	buildMarketScannerReport,
+	prepareMarketScannerItems,
 	SUPPORTED_SCAN_TYPES,
 };

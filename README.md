@@ -578,7 +578,8 @@ Execute multiple market scanner tools on the TradingView MCP server (such as top
     "bollinger_scan"
   ],
   "limit": 5,
-  "bbw_threshold": 0.05
+  "bbw_threshold": 0.05,
+  "ranked": true
 }
 ```
 
@@ -587,6 +588,7 @@ Execute multiple market scanner tools on the TradingView MCP server (such as top
 - `scans`: (Optional) Array of scan types to execute sequentially. Defaults to `['top_gainers', 'top_losers', 'volume_breakout_scanner']`.
 - `limit`: (Optional) Max number of results per section (clamped to `[1, 20]`, default: `5`).
 - `bbw_threshold`: (Optional) Bollinger Band Width threshold for the Bollinger squeeze scan (default: `0.05`).
+- `ranked`: (Optional) Sort results by actionable trade quality and include numeric `score` plus non-empty `reason` in each `scanResults[].scores[]` entry (default: `false`).
 
 **Response (JSON):**
 ```json
@@ -619,6 +621,17 @@ Execute multiple market scanner tools on the TradingView MCP server (such as top
   "timeoutMs": 90000,
   "requestId": "req-xyz789",
   "totalDurationMs": 1450
+}
+```
+
+When `ranked` is `true`, each successful scan also includes structured scores:
+
+```json
+{
+  "scan": "top_gainers",
+  "status": "success",
+  "itemCount": 1,
+  "scores": [{ "symbol": "BTCUSDT", "score": 82, "reason": "+3.5% · RSI 62.0 · Vol 1.8x" }]
 }
 ```
 

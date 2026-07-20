@@ -6,6 +6,7 @@ const {
 	MarketScannerRequestError,
 	parseMarketScannerRequest,
 	buildMarketScannerReport,
+	prepareMarketScannerItems,
 } = require('../../../../services/tradingview/marketScannerReport');
 const {
 	getNotificationManager,
@@ -288,7 +289,7 @@ function compactScanResults(results, includeScores = false) {
 		};
 
 		if (includeScores && Array.isArray(result.items) && result.items.length > 0) {
-			compact.scores = result.items.map((item) => ({
+			compact.scores = prepareMarketScannerItems(result, true).map((item) => ({
 				symbol: item.symbol,
 				score: item._score,
 				reason: item._scoreReason,

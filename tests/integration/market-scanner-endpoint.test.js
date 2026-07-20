@@ -218,6 +218,11 @@ describe('Market Scanner Alert endpoint', () => {
 		// Scores array should be present in scan results
 		expect(res.body.scanResults[0].scores).toBeDefined();
 		expect(res.body.scanResults[0].scores).toHaveLength(2);
+		for (const score of res.body.scanResults[0].scores) {
+			expect(typeof score.score).toBe('number');
+			expect(score.reason).toEqual(expect.any(String));
+			expect(score.reason).not.toHaveLength(0);
+		}
 		expect(mockTelegramSendMessage).not.toHaveBeenCalled();
 	});
 
