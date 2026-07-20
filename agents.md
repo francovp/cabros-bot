@@ -728,6 +728,7 @@ See `/specs/TERMINOLOGY_GUIDE.md` for extended discussion and examples.
 - news-monitor-persistent-dedup (CB-38 / Issue #120): Added optional Firestore-backed persistent deduplication store for news monitor alerts; converted cache operations to asynchronous; added fail-open fallback to in-memory mode; exposed active dedup mode/backend readiness in `/api/status`.
 - shadow-mode-outcome-tracking (CB-42 / Issue #129): Added shadow-mode outcome tracking for alert-producing surfaces (webhook alerts, market scanner breakouts/gains/losses, expanded-analysis, news alerts). Normalizes signal metadata (requestId, source, symbol, exchange, timeframe, setupType, score, side, price, etc.) and periodically evaluates outcomes over +1h, +4h, +1D, and +1W windows using Binance historical candlestick data. Exposes aggregated metrics under `shadowModeMetrics` inside `GET /api/alerts/summary` and in custom header `X-Shadow-Mode-Metrics` inside `GET /api/alerts/export`.
 - GH-178 / CB-74: `ENABLE_SIGNAL_OUTCOME_TRACKING` is the canonical signal-outcome gate; `ENABLE_SHADOW_MODE_OUTCOME_TRACKING` remains a one-release compatibility alias, and `/api/capabilities` reports the effective gate.
+- GH-182 / CB-77: malformed or no-domain grounding sources count toward the declared UNKNOWN `0.5` quality tier instead of contributing zero; regression coverage lives in `tests/unit/event-detection.test.js`.
 
 ## Architectural Patterns & Extension Guide
 

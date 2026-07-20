@@ -811,6 +811,13 @@ Some text after...`;
 			expect(result.calibration.grounding_used).toBe(true);
 		});
 
+		it('should score no-domain grounding sources as unknown quality', () => {
+			const result = calibrateNewsConfidence(baseAnalysis(), [{}]);
+
+			expect(result.calibration.actual_quality_tiers.unknown).toBe(1);
+			expect(result.calibration.actual_source_quality).toBe(0.5);
+		});
+
 		it('should return a structured calibration block for downstream debug/dry-run surfaces', () => {
 			const sources = [
 				makeSource({ sourceDomain: 'reuters.com' }),

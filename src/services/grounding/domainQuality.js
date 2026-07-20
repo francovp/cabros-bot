@@ -133,6 +133,7 @@ function scoreQuality(sources) {
 		if (!domain) {
 			tierCounts[SourceQualityTier.UNKNOWN] += 1;
 			unknownDomains += 1;
+			scoreSum += tierToScore(SourceQualityTier.UNKNOWN);
 			continue;
 		}
 		domains.push(domain);
