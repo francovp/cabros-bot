@@ -7,6 +7,10 @@ const fetchCapabilities = join(
 	__dirname,
 	'../../.agents/skills/detect-unused-features/scripts/fetch-capabilities.sh',
 );
+const skillPath = join(
+	__dirname,
+	'../../.agents/skills/detect-unused-features/SKILL.md',
+);
 
 function runFetch(apiKey) {
 	const tempDir = mkdtempSync(join(tmpdir(), 'detect-unused-features-'));
@@ -58,5 +62,16 @@ describe('detect-unused-features capabilities fetch', () => {
 		expect(result.stderr).toContain('WEBHOOK_API_KEY is not set');
 		expect(result.curlArgs).toBe('');
 		expect(result.curlStdin).toBe('');
+	});
+
+	it('derives audit findings from fresh capabilities and repository files', () => {
+		const skill = readFileSync(skillPath, 'utf8');
+
+		expect(skill).toContain('select(.value == false)');
+		expect(skill).toContain('.dependencies.sentry.profiling');
+		expect(skill).toContain('comm -23');
+		expect(skill).not.toContain('Reference: Production featureFlags (as of June 2026)');
+		expect(skill).not.toContain('### Known gaps (env vars used in code but NOT in status.js featureFlags)');
+		expect(skill).not.toContain('The production response shows:');
 	});
 });

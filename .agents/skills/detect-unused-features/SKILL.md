@@ -47,28 +47,20 @@ Extract these sections:
 
 ## Step 2: Identify Disabled Features
 
-Parse every `false` entry in `.featureFlags`. For each one, determine:
+Parse every `false` entry in the fresh `.featureFlags` object. Do not copy the
+result into this skill or rely on a dated example:
 
-**Reference: Production featureFlags (as of June 2026):**
-```json
-{
-  "telegramBot": true,
-  "whatsappAlerts": true,
-  "discordAlerts": false,
-  "geminiGrounding": true,
-  "newsMonitor": true,
-  "tradingViewMcpEnrichment": true,
-  "tradingViewConfluenceEnrichment": false,
-  "tradingViewConfluenceMultiTimeframe": false,
-  "firestoreAlertStorage": true,
-  "sentryMonitoring": true,
-  "sentryProfiling": false,
-  "langfusePrompts": false,
-  "marketScanner": true,
-  "binancePriceCheck": false,
-  "llmAlertEnrichment": false,
-  "signalOutcomeTracking": false
-}
+```bash
+jq -r '.featureFlags | to_entries[] | select(.value == false) | .key' <<<"$CAPABILITIES"
+```
+
+For each returned flag, inspect the matching fresh dependency data and the
+current source before making a finding:
+
+```bash
+while IFS= read -r flag; do
+  jq --arg flag "$flag" '{flag: .featureFlags[$flag], dependencies: .dependencies}' <<<"$CAPABILITIES"
+done < <(jq -r '.featureFlags | to_entries[] | select(.value == false) | .key' <<<"$CAPABILITIES")
 ```
 
 Check `.dependencies` for the same dependency to understand why it's disabled:
@@ -92,19 +84,23 @@ For each disabled flag, include the enablement action and reference:
 | `llmAlertEnrichment` | `ENABLE_LLM_ALERT_ENRICHMENT=true` | `AZURE_LLM_ENDPOINT`, `AZURE_LLM_KEY`, `AZURE_LLM_MODEL` (already configured) | `src/services/inference/enrichmentService.js` |
 | `signalOutcomeTracking` | `ENABLE_SIGNAL_OUTCOME_TRACKING=true` | Firestore configured (already configured) | `src/services/outcomes/OutcomeTrackerService.js` |
 
+This table is enablement guidance only; it is not evidence that any listed
+flag is currently disabled. If a fresh flag is not listed, inspect its runtime
+gate and dependency path instead of guessing.
+
 ## Step 3: Detect Unexposed Capabilities
 
-Cross-reference all `ENABLE_*` environment variables used in `src/` against what `src/controllers/status.js` exposes in `featureFlags`.
+Cross-reference the current source against the current `featureFlags` object;
+never use a maintained list of known gaps:
 
-### Known gaps (env vars used in code but NOT in status.js featureFlags):
+```bash
+rg -n 'process\.env\.ENABLE_[A-Z0-9_]+' src
+rg -n 'featureFlags|dependencies' src/controllers/status.js
+```
 
-| Env Var | Used In | Not In status.js |
-|---|---|---|
-| `ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION` | `src/services/tradingview/TradingViewMcpService.js:105` | Not in `featureFlags` or `dependencies` |
-| `ENABLE_FIRESTORE_JOB_STORAGE` | `src/services/jobs/JobRepository.js:14`, `src/services/storage/AlertStorageService.js:52` | Not in `featureFlags` or `dependencies` |
-| `ENABLE_NEWS_MONITOR_TEST_MODE` | `src/services/grounding/config.js:12`, multiple sites | Not in `featureFlags` or `dependencies` |
-| `ENABLE_MESSAGE_FOOTER_METADATA` | `src/controllers/webhooks/handlers/alert/grounding.js:88` | Not in `featureFlags` or `dependencies` |
-| `ENABLE_CLOUDFLARE_AIG` | `src/controllers/status.js:309` | In `dependencies` only, NOT in `featureFlags` |
+For each code gate that lacks a corresponding status capability, capture the
+exact file and line from the command output, then inspect open issues and PRs
+before filing it.
 
 For each gap, file a GitHub issue titled e.g.:
 > `Expose ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION in /api/capabilities`
@@ -117,54 +113,48 @@ Include:
 
 ## Step 4: Audit .env.example Completeness
 
-Compare `src/controllers/status.js` (all env vars it reads) + `src/` usage against `.env.example`.
+Compare current source usage against the current template on every run:
 
-### Env vars read by status.js and/or used in code but MISSING from .env.example:
-
-| Env Var | In status.js | In Code | In .env.example |
-|---|---|---|---|
-| `GEMINI_MODEL_NAME` | Yes (line ~174) | Yes (`src/services/grounding/config.js`) | ❌ Missing |
-| `BRAVE_SEARCH_API_KEY` | Yes (line ~238) | Yes | ❌ Missing |
-| `FORCE_BRAVE_SEARCH` | Yes (line ~187) | Yes | ❌ Missing |
-| `OPENROUTER_API_KEY` | Yes (line ~144) | Yes | ❌ Missing |
-| `OPENROUTER_MODEL` | Yes (line ~144) | Yes | ❌ Missing |
-| `ENABLE_DISCORD_ALERTS` | Yes (master) | Yes | ❌ Missing |
-| `DISCORD_WEBHOOK_URL` | Yes (master) | Yes | ❌ Missing |
-| `ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT` | Yes (master) | Yes | ❌ Missing |
-| `ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME` | Yes (master) | Yes | ❌ Missing |
-| `ENABLE_SIGNAL_OUTCOME_TRACKING` | Yes (master) | Yes | ❌ Missing |
-| `SENTRY_PROFILE_SESSION_SAMPLE_RATE` | Yes (master) | Yes | ❌ Missing |
-| `ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP` | Yes (master) | Yes | ❌ Missing |
-| `CF_AIG_TOKEN` | Yes (master) | Yes | ❌ Commented out |
-| `CF_AIG_BASE_URL` | Yes (master) | Yes | ❌ Commented out |
-| `CF_AIG_MODEL` | Yes (master) | Yes | ❌ Commented out |
-| `ENABLE_CLOUDFLARE_AIG` | Yes (master) | Yes | ❌ Commented out |
-| `ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION` | ❌ Missing | Yes | ✅ Present |
-| `ENABLE_FIRESTORE_JOB_STORAGE` | ❌ Missing | Yes | ✅ Present |
-| `ENABLE_NEWS_MONITOR_TEST_MODE` | ❌ Missing | Yes | ✅ Present |
-| `ENABLE_MESSAGE_FOOTER_METADATA` | ❌ Missing | Yes | ✅ Present |
+```bash
+comm -23 \
+  <(rg -o --no-filename 'process\.env\.[A-Z][A-Z0-9_]*' src \
+    | sed 's/^process\.env\.//' | sort -u) \
+  <(rg -o --no-filename '^[A-Z][A-Z0-9_]*=' .env.example \
+    | sed 's/=$//' | sort -u)
+```
 
 Report this delta to the user. Offer to create issues or directly update `.env.example`.
 
-## Step 5: Check Sentry Profiling Misconfiguration
+### Healthy-data dry run
 
-The production response shows:
-```json
-"sentry": {
-  "enabled": true,
-  "configured": true,
-  "ready": true,
-  "status": "ready",
-  "profiling": {
-    "enabled": true,
-    "configured": false,
-    "ready": false,
-    "status": "misconfigured"
-  }
-}
+Use a small fixture to prove that stale snapshot findings are ignored when the
+fresh response and template are healthy:
+
+```bash
+FIXTURE_CAPABILITIES='{"featureFlags":{"discordAlerts":true},"dependencies":{"sentry":{"profiling":{"status":"ready"}}}}'
+! jq -e '.featureFlags | to_entries[] | select(.value == false)' <<<"$FIXTURE_CAPABILITIES" >/dev/null
+test "$(jq -r '.dependencies.sentry.profiling.status' <<<"$FIXTURE_CAPABILITIES")" = ready
+FIXTURE_ENV_EXAMPLE=$'ENABLE_DISCORD_ALERTS=true\nSENTRY_PROFILE_SESSION_SAMPLE_RATE=0.1'
+! comm -23 \
+  <(printf '%s\n' ENABLE_DISCORD_ALERTS SENTRY_PROFILE_SESSION_SAMPLE_RATE | sort) \
+  <(sed -n 's/^\([A-Z][A-Z0-9_]*\)=.*/\1/p' <<<"$FIXTURE_ENV_EXAMPLE" | sort) \
+  | grep -q .
 ```
 
-This means Sentry profiling is **half-set-up**: `SENTRY_TRACES_SAMPLE_RATE` is set (which enables the profiling feature flag) but `SENTRY_PROFILE_SESSION_SAMPLE_RATE` is missing (which marks it as unconfigured). File a targeted issue:
+## Step 5: Check Sentry Profiling Misconfiguration
+
+Read the current response instead of assuming a configuration state:
+
+```bash
+PROFILING_STATUS=$(jq -r '.dependencies.sentry.profiling.status // "unknown"' <<<"$CAPABILITIES")
+if [ "$PROFILING_STATUS" = misconfigured ]; then
+  echo "Sentry profiling requires a targeted issue; cite the fresh .dependencies.sentry.profiling response."
+else
+  echo "Sentry profiling status: $PROFILING_STATUS; do not file the stale-snapshot issue."
+fi
+```
+
+Only when the fresh status is `misconfigured`, file a targeted issue:
 
 > **Fix Sentry profiling misconfiguration** — Set `SENTRY_PROFILE_SESSION_SAMPLE_RATE` to a value (e.g. 0.1) in Render env vars to enable profiling.
 
@@ -210,20 +200,17 @@ Return a compact summary of:
 ### Production Commit: <sha>
 
 ### Disabled Features (<count>):
-- discordAlerts — [issue #N | already in progress | skip reason]
-- ... (each disabled flag)
+- <fresh `.featureFlags` key> — [issue #N | already in progress | skip reason]
 
 ### Unexposed Capabilities in status.js (<count>):
-- ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION — [issue #N | skip]
-- ...
+- <fresh source/status comparison> — [issue #N | skip]
 
 ### .env.example Gaps (<count>):
-- GEMINI_MODEL_NAME — [issue #N | skip]
-- ...
+- <fresh `comm -23` result> — [issue #N | skip]
 
 ### Sentry Profiling:
 - [issue #N | skip]
-- DBG: profiling.enabled=true (SENTRY_TRACES_SAMPLE_RATE set), but SENTRY_PROFILE_SESSION_SAMPLE_RATE missing
+- DBG: cite the fresh `.dependencies.sentry.profiling` object
 
 ### Production vs Master:
 - <N> commits behind — [expected | deploy needed]
@@ -234,9 +221,10 @@ Return a compact summary of:
 Before completing, collect:
 - [ ] Fresh curl output from production `/api/capabilities`
 - [ ] List of all `false` feature flags
-- [ ] `src/controllers/status.js` featureFlags array
+- [ ] Current `src/controllers/status.js` featureFlags/dependencies mapping
 - [ ] Grep results for all `ENABLE_*` vars used in `src/`
-- [ ] `.env.example` current content
+- [ ] Current `.env.example` delta from `comm -23`
+- [ ] Healthy-data dry run passes without stale findings
 - [ ] GH issue search confirming no duplicates
 - [ ] Production commit vs master commit comparison
 
