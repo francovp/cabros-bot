@@ -30,12 +30,13 @@ gh auth status 2>/dev/null || echo "NOT_AUTHENTICATED"
 
 ## Step 1: Fetch Production Capabilities
 
-Call the unauthenticated capabilities endpoint and store the result.
+Load `WEBHOOK_API_KEY` from the operator's approved secret mechanism. The key is sent only as the protected `x-api-key` header and is never printed. If it is unavailable, stop before parsing downstream data.
 
 ```bash
-CAPABILITIES=$(curl -s -X 'GET' \
-  'https://cabros-crypto-bot-telegram.onrender.com/api/capabilities' \
-  -H 'accept: application/json')
+if ! CAPABILITIES="$(.agents/skills/detect-unused-features/scripts/fetch-capabilities.sh)"; then
+  echo 'Capability audit stopped: authenticated /api/capabilities evidence is unavailable.' >&2
+  exit 78
+fi
 echo "$CAPABILITIES" | jq '.'
 ```
 
