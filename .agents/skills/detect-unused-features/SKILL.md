@@ -95,12 +95,25 @@ never use a maintained list of known gaps:
 
 ```bash
 rg -n 'process\.env\.ENABLE_[A-Z0-9_]+' src
-rg -n 'featureFlags|dependencies' src/controllers/status.js
+print_status_object() {
+  awk -v key="$1" '
+    $0 ~ "^[[:space:]]*" key ":[[:space:]]*{" { in_object=1 }
+    in_object {
+      print
+      line = $0
+      depth += gsub(/\{/, "", line) - gsub(/\}/, "", line)
+      if (depth == 0) exit
+    }
+  ' src/controllers/status.js
+}
+print_status_object featureFlags
+print_status_object dependencies
 ```
 
-For each code gate that lacks a corresponding status capability, capture the
-exact file and line from the command output, then inspect open issues and PRs
-before filing it.
+For each code gate that lacks a corresponding status capability, compare the
+fresh object output rather than just the object headers. Capture the exact file
+and line from the command output, then inspect open issues and PRs before filing
+it.
 
 For each gap, file a GitHub issue titled e.g.:
 > `Expose ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION in /api/capabilities`
@@ -123,6 +136,8 @@ source_env_vars() {
     rg -o --no-filename "['\"][A-Z][A-Z0-9]*_[A-Z0-9_]*['\"]" "$file" \
       | sed -E "s/^['\"]//; s/['\"]$//"
   done < <(rg -l 'process\.env\[' src)
+  rg -o --no-filename "envVar:[[:space:]]*['\"][A-Z][A-Z0-9_]*['\"]" src \
+    | sed -E "s/^envVar:[[:space:]]*['\"]//; s/['\"]$//"
 }
 
 comm -23 \
