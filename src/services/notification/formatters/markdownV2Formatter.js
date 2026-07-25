@@ -96,7 +96,9 @@ function escapeRiskFieldValue(value) {
 	// to preserve italic formatting in regular text). Then escape underscores explicitly, since
 	// raw data values like `mean_reversion` or `trend_continuation` must not trigger Telegram
 	// italic parsing when used in plain-text label contexts.
-	return smartEscapeMarkdownV2(value).replace(/_/g, '\\_');
+	return smartEscapeMarkdownV2(value)
+		.replace(/_/g, '\\_')
+		.replace(/\*/g, '\\*');
 }
 
 /**

@@ -155,6 +155,19 @@ describe('News Alert Source Formatting', () => {
 			expect(messageContinuation).toContain('Setup: trend\\_continuation');
 			expect(messageContinuation).not.toMatch(/Setup: trend_continuation(?!\\)/);
 		});
+
+		it('should escape asterisks in raw risk field values for Telegram MarkdownV2', () => {
+			const message = formatter.formatEnriched({
+				original_text: 'BTC invalidation',
+				sentiment: 'NEUTRAL',
+				sentiment_score: 0,
+				insights: [],
+				risk_reward_ratio: '1.5*ATR below entry',
+			});
+
+			expect(message).toContain('Risk/Reward: 1\\.5\\*ATR below entry');
+			expect(message).not.toMatch(/Risk\/Reward: 1\\.5\*ATR below entry/);
+		});
 	});
 
 	describe('MarkdownV2Formatter.formatNewsAlert (Backward Compatibility)', () => {
