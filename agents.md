@@ -239,8 +239,8 @@ The system provides optional enrichment of webhook alerts using Google Gemini AP
 1. Webhook receives alert text (plain or JSON body with `text` property)
 2. If `ENABLE_GEMINI_GROUNDING=true`, call grounding service to fetch context
 3. Grounding service queries Gemini with alert text + system prompt + GoogleSearch results
-4. Gemini returns structured insights (sentiment, key insights, technical levels) plus extracted sources (URLs + titles)
-5. Enriched alert stored as `alert.enriched` object with structure: `{ original_text, sentiment, sentiment_score, insights, technical_levels, sources, truncated }`
+4. Gemini returns structured insights (sentiment, key insights, technical levels, and optional risk parameters) plus extracted sources (URLs + titles)
+5. Enriched alert stored as `alert.enriched` object with structure: `{ original_text, sentiment, sentiment_score, insights, technical_levels, invalidation_level, target_level, setup_type, risk_reward_ratio, sources, truncated }`
 6. Original `alert.text` preserved for fallback
 7. Enhanced alert sent to all enabled notification channels
 8. Webhook response includes `enriched: true/false`, per-channel delivery `results`, and a `tokenUsage` object (with a formatted summary) when grounding runs
@@ -293,6 +293,8 @@ Runtime LLM prompts are centrally managed through `src/services/prompts/`.
 - Resolve prompts via `getPromptService()` from `src/services/prompts/`.
 - Keep provider routing (`genaiClient.llmCallv2`, Azure/OpenRouter clients) separate from prompt ownership.
 - Add or update unit tests in `tests/unit/prompt-service.test.js` and the affected feature tests whenever a prompt contract changes.
+- Keep Langfuse `alert-enrichment` versions aligned with the local fallback's optional risk metadata schema.
+- Keep Langfuse `alert-enrichment` versions aligned with the local fallback's optional risk metadata schema.
 
 **Current managed prompts**:
 - search-query derivation
@@ -308,7 +310,7 @@ Runtime LLM prompts are centrally managed through `src/services/prompts/`.
 The `/api/webhook/alert` flow can produce **structured enrichment** (in addition to sources) so alerts become actionable without leaving chat.
 
 **What changes for developers**:
-- When grounding is enabled, handlers attach an object at `alert.enriched` (see `src/controllers/webhooks/handlers/alert/grounding.js`) with fields like `sentiment`, `sentiment_score`, `insights`, `technical_levels`, and `sources`.
+- When grounding is enabled, handlers attach an object at `alert.enriched` (see `src/controllers/webhooks/handlers/alert/grounding.js`) with fields like `sentiment`, `sentiment_score`, `insights`, `technical_levels`, optional risk parameters, and `sources`.
 - Telegram uses `MarkdownV2Formatter.formatEnriched()` when `alert.enriched` is an object (see `src/services/notification/TelegramService.js`). WhatsApp follows its own formatter rules.
 - Webhook responses include per-channel `results` plus a `tokenUsage` summary to help track LLM cost/usage.
 
@@ -716,7 +718,7 @@ See `/specs/TERMINOLOGY_GUIDE.md` for extended discussion and examples.
 - 002-whatsapp-alerts: Added multi-channel notification system with TelegramService, WhatsAppService, NotificationManager; exponential backoff retry logic; MarkdownV2 and WhatsApp markdown formatters; comprehensive integration tests for parallel delivery, config validation, graceful degradation.
 - issue #91 / branch `codex/fix-91-whatsapp-truncation`: WhatsApp delivery now splits GreenAPI payloads above the provider limit into sequential chunks instead of silently truncating with an ellipsis; regression coverage added for long alert payloads.
 - 003-news-monitor (improvement with PR #18; CB-34): Added `/api/news-monitor` endpoint for financial news analysis and sentiment-based alerts; Gemini GoogleSearch integration for market context; optional secondary LLM enrichment via Azure AI Inference (migrated to `@azure-rest/ai-inference`); in-memory deduplication cache; optional Binance price integration; parallel symbol analysis with timeout management; configurable Gemini concurrency and quota-exhaustion retries; configurable event detection; URL shortening for WhatsApp citations.
-- 004-enrich-alert-output: Enriched `/api/webhook/alert` output with structured fields (sentiment, insights, technical levels) using the existing grounding pipeline; Telegram/WhatsApp formatters render structured enrichment when present.
+- 004-enrich-alert-output: Enriched `/api/webhook/alert` output with structured fields (sentiment, insights, technical levels, and optional risk parameters) using the existing grounding pipeline; Telegram/WhatsApp formatters render structured enrichment when present.
 - 005-sentry-runtime-errors (PR #16): Added runtime error monitoring via `SentryService` + early initialization in `instrument.js`, plus Express error handler wiring; monitoring is gated by `ENABLE_SENTRY` + `SENTRY_DSN`.
 - 006-firestore-alert-storage: Added Cloud Firestore persistence for every `/api/webhook/alert` payload; `firebase-admin` singleton initialized from `FIREBASE_SERVICE_ACCOUNT_JSON` or `GOOGLE_APPLICATION_CREDENTIALS`; fire-and-forget after `res.json()` so storage never blocks delivery (fail-open).
 - 007-volume-breakout-alerts: Added TradingView volume confirmation check to the webhook alert enrichment flow (POST /api/webhook/alert?useTradingViewData=true) using the `volume_confirmation_analysis` tool from the TradingView MCP server. Configured via `ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION`.

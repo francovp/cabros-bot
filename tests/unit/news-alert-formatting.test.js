@@ -110,6 +110,25 @@ describe('News Alert Source Formatting', () => {
 			expect(message).not.toContain('*Technical Levels*');
 			expect(message).not.toContain('*Sources*');
 		});
+
+		it('should format optional risk parameters when present', () => {
+			const message = formatter.formatEnriched({
+				original_text: 'Bitcoin breaks 83k',
+				sentiment: 'BULLISH',
+				sentiment_score: 0.9,
+				insights: [],
+				invalidation_level: '$80,000',
+				target_level: 90000,
+				setup_type: 'breakout',
+				risk_reward_ratio: '2.5:1',
+			});
+
+			expect(message).toContain('*Risk Parameters*');
+			expect(message).toContain('Setup: breakout');
+			expect(message).toContain('Invalidation: $80,000');
+			expect(message).toContain('Target: 90000');
+			expect(message).toContain('Risk/Reward: 2\\.5:1');
+		});
 	});
 
 	describe('MarkdownV2Formatter.formatNewsAlert (Backward Compatibility)', () => {

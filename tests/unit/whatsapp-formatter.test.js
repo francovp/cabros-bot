@@ -156,6 +156,26 @@ describe('WhatsAppMarkdownFormatter - T028 URL Shortening Integration', () => {
 			expect(result).not.toContain('*Technical Levels*');
 			expect(result).not.toContain('*Sources*');
 		});
+
+		it('should format optional risk parameters when present', async () => {
+			const formatter = new WhatsAppMarkdownFormatter();
+			const result = await formatter.formatEnriched({
+				original_text: 'Bitcoin breaks 83k',
+				sentiment: 'BULLISH',
+				sentiment_score: 0.9,
+				insights: [],
+				invalidation_level: '$80,000',
+				target_level: 90000,
+				setup_type: 'breakout',
+				risk_reward_ratio: '2.5:1',
+			});
+
+			expect(result).toContain('*Risk Parameters*');
+			expect(result).toContain('Setup: breakout');
+			expect(result).toContain('Invalidation: $80,000');
+			expect(result).toContain('Target: 90000');
+			expect(result).toContain('Risk/Reward: 2.5:1');
+		});
 	});
 
 	describe('formatEnriched() async - URL Shortening', () => {

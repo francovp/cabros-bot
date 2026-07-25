@@ -60,6 +60,10 @@ describe('Alert Grounding Integration', () => {
 				sentiment: 'BULLISH',
 				sentiment_score: 0.9,
 				insights: ['Insight 1', 'Insight 2'],
+				invalidation_level: '$48000',
+				target_level: '$55000',
+				setup_type: 'breakout',
+				risk_reward_ratio: '2:1',
 			}),
 			citations: mockSearchResults,
 		});
@@ -125,6 +129,11 @@ describe('Alert Grounding Integration', () => {
 				expect(messageText).toContain('Sentiment: BULLISH');
 				expect(messageText).toContain('*Key Insights*');
 				expect(messageText).toContain('Insight 1');
+				expect(messageText).toContain('Risk Parameters');
+				expect(messageText).toContain('Setup: breakout');
+				expect(messageText).toContain('Invalidation: $48000');
+				expect(messageText).toContain('Target: $55000');
+				expect(messageText).toContain('Risk/Reward: 2:1');
 				expect(messageText).not.toContain('*Technical Levels*');
 				expect(messageText).toContain('*Sources*');
 				expect(messageText).toContain('[Test Result 1](https://test1.com)');

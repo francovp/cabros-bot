@@ -71,6 +71,18 @@ function formatTokenUsageMarkdown(tokenUsage) {
 	return smartEscapeMarkdownV2(normalizeBackslashes(line));
 }
 
+function formatRiskValue(value) {
+	if (typeof value === 'number' && Number.isFinite(value)) {
+		return String(value);
+	}
+
+	if (typeof value === 'string' && value.trim()) {
+		return value.trim();
+	}
+
+	return '';
+}
+
 /**
  * MarkdownV2Formatter - Formats text for Telegram MarkdownV2 parse mode
  */
@@ -119,6 +131,10 @@ class MarkdownV2Formatter {
 			sentiment_score = 0,
 			insights = [],
 			technical_levels = { supports: [], resistances: [] },
+			invalidation_level,
+			target_level,
+			setup_type,
+			risk_reward_ratio,
 			sources = [],
 			truncated = false,
 			extraText = '',
@@ -163,6 +179,22 @@ class MarkdownV2Formatter {
 				const resistances = technical_levels.resistances.map(r => smartEscapeMarkdownV2(r)).join(', ');
 				message += `\nResistances: ${resistances}`;
 			}
+		}
+
+		const riskParameters = [
+			['Setup', setup_type],
+			['Invalidation', invalidation_level],
+			['Target', target_level],
+			['Risk/Reward', risk_reward_ratio],
+		]
+			.map(([label, value]) => [label, formatRiskValue(value)])
+			.filter(([, value]) => value);
+
+		if (riskParameters.length > 0) {
+			message += '\n\n*Risk Parameters*';
+			riskParameters.forEach(([label, value]) => {
+				message += `\n${label}: ${smartEscapeMarkdownV2(value)}`;
+			});
 		}
 
 		// Sources

@@ -280,6 +280,7 @@ When `ENABLE_GEMINI_GROUNDING=true`:
 - **Sentiment Analysis**: Determines market sentiment (BULLISH/BEARISH/NEUTRAL) with confidence score
 - **Key Insights**: Extracts bullet points of critical information
 - **Technical Levels**: Identifies support and resistance levels mentioned in context
+- **Risk Parameters**: Optionally reports invalidation level, target level, setup type, and estimated risk/reward ratio
 - **Verified Sources**: Extracts URLs and titles from GoogleSearch results
 - **Language Support**: Respects original language of alert text
 - **Graceful Fallback**: If enrichment fails, original alert is sent without delays
@@ -311,6 +312,7 @@ Behavior notes:
 - **Label-based rollout**: use `LANGFUSE_PROMPT_LABEL` (for example `latest`, `staging`, or `production`) to switch prompt versions without code changes.
 - **SDK caching**: prompt fetches use the Langfuse SDK cache and can be tuned with `LANGFUSE_PROMPT_CACHE_TTL_SECONDS`.
 - **Current architecture contract**: prompts are compiled into the existing `systemPrompt` / `userPrompt` flow, so provider routing for Gemini, Azure, and OpenRouter remains unchanged.
+- **Alert enrichment schema**: Langfuse `alert-enrichment` versions should mirror the local fallback's optional `invalidation_level`, `target_level`, `setup_type`, and `risk_reward_ratio` fields.
 
 ## TradingView Signal Enrichment with MCP
 
@@ -372,6 +374,12 @@ Content-Type: application/json
 • Volume indicates strong momentum.
 
 Sentiment: BULLISH 🚀 (0.85)
+
+*Risk Parameters*
+Setup: breakout
+Invalidation: $80,000
+Target: $90,000
+Risk/Reward: 2.5:1
 
 *Technical Levels*
 Supports: $80,000
