@@ -126,6 +126,35 @@ describe('OpenAPI contract', () => {
 			expect(callbackFields.description).toContain('raw JSON body');
 		});
 
+		it('CallbackFields and callbackSecret schema document HMAC signature header and state raw secret is not transmitted', () => {
+			if (!fs.existsSync(contractPath)) return;
+			const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+
+			const callbackFields = contract.components.schemas.CallbackFields;
+			expect(callbackFields.description).toContain('x-callback-signature');
+			expect(callbackFields.description).toContain('HMAC-SHA256');
+			expect(callbackFields.description).toContain('The secret itself is never transmitted');
+			expect(callbackFields.properties.callbackSecret.description).toContain('x-callback-signature');
+			expect(callbackFields.properties.callbackSecret.description).toContain('never transmitted');
+		});
+
+		it('CallbackFields description header names match JobService runtime callback headers without stale X-Callback-Secret claims', () => {
+			if (!fs.existsSync(contractPath)) return;
+			const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+
+			const desc = contract.components.schemas.CallbackFields.description;
+			const requiredHeaders = [
+				'x-callback-timestamp',
+				'x-callback-event',
+				'x-callback-delivery-id',
+				'x-callback-signature',
+			];
+			for (const header of requiredHeaders) {
+				expect(desc).toContain(header);
+			}
+			expect(desc).not.toContain('X-Callback-Secret');
+		});
+
 		it('callbackEvents enum in CallbackFields matches runtime validEvents exactly', () => {
 			if (!fs.existsSync(contractPath)) return;
 			const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
