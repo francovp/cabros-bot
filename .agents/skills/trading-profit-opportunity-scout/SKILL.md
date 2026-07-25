@@ -15,7 +15,7 @@ Use this skill to turn a repo review and production alert analysis into concrete
 - Check open pull requests before proposing anything new.
 - If a live issue already covers the opportunity, update or comment there instead of opening a duplicate.
 - If a PR already implements the opportunity, skip it and report the overlap.
-- Check stored production Firebase alerts from the target window (e.g. last 2 weeks) using Render deployment endpoints when available (`GET /api/alerts/summary`, `GET /api/alerts/export`, `GET /api/alerts`) with `WEBHOOK_API_KEY`.
+- Check stored production Firebase alerts from the target window (e.g. last 2 weeks) using Render deployment endpoints when available (`GET /api/alerts/summary?from=<ISO>&to=<ISO>`, `GET /api/alerts/export?from=<ISO>&to=<ISO>&includeText=true`, `GET /api/alerts`) with `WEBHOOK_API_KEY`.
 - Do not claim or imply guaranteed profits.
 - Do not file speculative trading ideas without repo/telemetry evidence, measurable hypothesis, and validation path.
 - Prefer improvements that can be tested with historical replay, paper-trading, shadow mode, production telemetry, or deterministic fixtures.
@@ -28,7 +28,7 @@ Use this skill to turn a repo review and production alert analysis into concrete
 - Read `README.md`, `agents.md`, `src/routes/index.js`, and the relevant TradingView/prompt files.
 - Fetch and analyze stored production Firebase alerts from the last 2 weeks (or requested window):
   - Base URL: Render deployment (`NOTIFY_WEBHOOK_URL` host, e.g. `https://cabros-crypto-bot-telegram.onrender.com`).
-  - Request `GET /api/alerts/summary`, `GET /api/alerts/export?includeText=true`, and `GET /api/alerts?limit=100` with header `x-api-key: <WEBHOOK_API_KEY>`.
+  - Request `GET /api/alerts/summary?from=<FROM_ISO>&to=<TO_ISO>`, `GET /api/alerts/export?from=<FROM_ISO>&to=<TO_ISO>&includeText=true&limit=500`, and `GET /api/alerts?limit=100` with header `x-api-key: <WEBHOOK_API_KEY>`. Compute explicit `from` (e.g. 14 days ago) and `to` (now) ISO-8601 timestamps, as `export` requires both bounded timestamps and `summary` defaults to 24 hours when `from` is omitted.
   - Audit recent alert texts, ticker patterns (`BATS:`, `BINANCE:`), symbol indexing (`bySymbol`), enrichment insights, grounding sources, token usage, delivery results, and errors.
   - Scan for entity hallucinations (e.g. `BATS:` exchange prefix confused with `BAT` crypto or `LSE:BATS` stock), unparsed tickers (`bySymbol: { unknown: ... }`), or missing risk parameters.
 - Identify active trading surfaces:
