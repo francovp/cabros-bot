@@ -84,6 +84,22 @@ function formatRiskValue(value) {
 }
 
 /**
+ * Escape a raw data value (e.g. setup_type from the LLM) for Telegram MarkdownV2.
+ * Unlike smartEscapeMarkdownV2, this also escapes underscores because raw values
+ * like `mean_reversion` or `trend_continuation` must not trigger Telegram italic
+ * parsing when used in plain text contexts.
+ * @param {string} value - Raw string from LLM output (already normalised by formatRiskValue)
+ * @returns {string} Fully escaped value safe for MarkdownV2 delivery
+ */
+function escapeRiskFieldValue(value) {
+	// Apply standard MarkdownV2 escaping first (smartEscapeMarkdownV2 intentionally omits `_`
+	// to preserve italic formatting in regular text). Then escape underscores explicitly, since
+	// raw data values like `mean_reversion` or `trend_continuation` must not trigger Telegram
+	// italic parsing when used in plain-text label contexts.
+	return smartEscapeMarkdownV2(value).replace(/_/g, '\\_');
+}
+
+/**
  * MarkdownV2Formatter - Formats text for Telegram MarkdownV2 parse mode
  */
 class MarkdownV2Formatter {
@@ -193,7 +209,7 @@ class MarkdownV2Formatter {
 		if (riskParameters.length > 0) {
 			message += '\n\n*Risk Parameters*';
 			riskParameters.forEach(([label, value]) => {
-				message += `\n${label}: ${smartEscapeMarkdownV2(value)}`;
+				message += `\n${label}: ${escapeRiskFieldValue(value)}`;
 			});
 		}
 
