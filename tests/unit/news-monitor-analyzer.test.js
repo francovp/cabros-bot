@@ -1,0 +1,139 @@
+const {
+	calculateVolumeRatio,
+	calculateRSI,
+	calculateAdjustedConfidence,
+	NewsAnalyzer,
+} = require('../../src/controllers/webhooks/handlers/newsMonitor/analyzer');
+
+describe('News Monitor Analyzer - Volume & RSI Filtering', () => {
+	describe('calculateVolumeRatio', () => {
+		it('should calculate volume ratio accurately when volume expands', () => {
+			// 10 candles with volume 100, latest candle volume 180 -> 180 / 100 = 1.80
+			const klines = Array.from({ length: 10 }, () => ({ volume: '100' }));
+			klines.push({ volume: '180' });
+
+			const ratio = calculateVolumeRatio(klines);
+			expect(ratio).toBe(1.8);
+		});
+
+		it('should calculate volume ratio when volume contracts', () => {
+			// 10 candles with volume 100, latest candle volume 70 -> 70 / 100 = 0.70
+			const klines = Array.from({ length: 10 }, () => ({ volume: '100' }));
+			klines.push({ volume: '70' });
+
+			const ratio = calculateVolumeRatio(klines);
+			expect(ratio).toBe(0.7);
+		});
+
+		it('should handle array format klines [openTime, open, high, low, close, volume]', () => {
+			const klines = Array.from({ length: 10 }, () => [0, '10', '12', '9', '11', '100']);
+			klines.push([0, '10', '12', '9', '11', '200']);
+
+			const ratio = calculateVolumeRatio(klines);
+			expect(ratio).toBe(2.0);
+		});
+
+		it('should return null for insufficient kline data or zero average volume', () => {
+			expect(calculateVolumeRatio([])).toBeNull();
+			expect(calculateVolumeRatio([{ volume: '100' }])).toBeNull();
+			expect(calculateVolumeRatio(null)).toBeNull();
+
+			const zeroKlines = [{ volume: '0' }, { volume: '0' }];
+			expect(calculateVolumeRatio(zeroKlines)).toBeNull();
+		});
+	});
+
+	describe('calculateRSI', () => {
+		it('should return null when price data has 14 or fewer candles', () => {
+			const shortPrices = Array.from({ length: 14 }, (_, i) => 100 + i);
+			expect(calculateRSI(shortPrices)).toBeNull();
+		});
+
+		it('should calculate 14-period RSI correctly for a price series', () => {
+			// 20 price points with alternating up/down movements
+			const prices = [
+				44.34, 44.09, 44.15, 43.61, 44.33, 44.83, 45.10, 45.42, 45.84, 46.08,
+				45.89, 46.03, 45.61, 46.28, 46.28, 46.00, 46.03, 46.41, 46.22, 46.25,
+			];
+			const rsi = calculateRSI(prices);
+			expect(typeof rsi).toBe('number');
+			expect(rsi).toBeGreaterThan(0);
+			expect(rsi).toBeLessThan(100);
+		});
+
+		it('should return 100 for monotonically increasing prices', () => {
+			const prices = Array.from({ length: 20 }, (_, i) => 100 + i * 2);
+			expect(calculateRSI(prices)).toBe(100);
+		});
+	});
+
+	describe('calculateAdjustedConfidence', () => {
+		it('should return unchanged confidence when marketContext or indicators are missing', () => {
+			const analyzer = new NewsAnalyzer();
+
+			expect(analyzer.calculateAdjustedConfidence(0.8, null)).toBe(0.8);
+			expect(analyzer.calculateAdjustedConfidence(0.8, {})).toBe(0.8);
+			expect(analyzer.calculateAdjustedConfidence(0.8, { price: 100 })).toBe(0.8);
+		});
+
+		it('should boost confidence when volume ratio > 1.5 and RSI is in healthy range (40-65)', () => {
+			const analyzer = new NewsAnalyzer();
+			const context = { volumeRatio: 1.8, rsi: 52 };
+
+			// Base 0.75 + 0.10 (volume boost) + 0.05 (RSI boost) = 0.90
+			const adjusted = analyzer.calculateAdjustedConfidence(0.75, context);
+			expect(adjusted).toBe(0.9);
+		});
+
+		it('should reduce confidence when volume ratio < 1.0 or RSI > 75 (overbought trap)', () => {
+			const analyzer = new NewsAnalyzer();
+
+			// Volume penalty (-0.10)
+			expect(analyzer.calculateAdjustedConfidence(0.8, { volumeRatio: 0.8 })).toBe(0.7);
+
+			// Overbought RSI penalty (-0.15)
+			expect(analyzer.calculateAdjustedConfidence(0.8, { rsi: 80 })).toBe(0.65);
+
+			// Combined penalty: 0.8 - 0.10 - 0.15 = 0.55
+			expect(analyzer.calculateAdjustedConfidence(0.8, { volumeRatio: 0.7, rsi: 82 })).toBe(0.55);
+		});
+
+		it('should clamp confidence within [0.0, 1.0] bounds', () => {
+			const analyzer = new NewsAnalyzer();
+
+			expect(analyzer.calculateAdjustedConfidence(0.95, { volumeRatio: 2.0, rsi: 50 })).toBe(1.0);
+			expect(analyzer.calculateAdjustedConfidence(0.1, { volumeRatio: 0.5, rsi: 85 })).toBe(0.0);
+		});
+	});
+
+	describe('Alert formatting with Volume & RSI', () => {
+		it('should include Volume Ratio and RSI in buildAlert and formatAlertMessage', () => {
+			const analyzer = new NewsAnalyzer();
+			const geminiAnalysis = {
+				headline: 'Partnership Announcement',
+				event_category: 'price_surge',
+				sentiment_score: 0.8,
+				confidence: 0.85,
+			};
+			const marketContext = {
+				price: 150.5,
+				change24h: 3.2,
+				volumeRatio: 1.75,
+				rsi: 58.4,
+				source: 'binance',
+			};
+
+			const alert = analyzer.buildAlert('BTCUSDT', geminiAnalysis, marketContext);
+			expect(alert.marketContext.volumeRatio).toBe(1.75);
+			expect(alert.marketContext.rsi).toBe(58.4);
+			expect(alert.volumeRatio).toBe(1.75);
+			expect(alert.rsi).toBe(58.4);
+			expect(alert.enriched.summary).toContain('Volume Ratio:* 1.75x');
+			expect(alert.enriched.summary).toContain('RSI (14):* 58.4');
+
+			const message = analyzer.formatAlertMessage('BTCUSDT', geminiAnalysis, marketContext);
+			expect(message).toContain('Volume Ratio: 1.75x');
+			expect(message).toContain('RSI (14): 58.4');
+		});
+	});
+});
