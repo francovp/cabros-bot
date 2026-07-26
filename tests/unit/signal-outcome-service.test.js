@@ -263,7 +263,7 @@ describe('SignalOutcomeService', () => {
 	});
 
 	describe('getMetricsSummary()', () => {
-		it('returns "No measurements found" when no evaluated outcomes exist', async () => {
+		it('returns "No measurements found" when snapshot is empty', async () => {
 			process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING = 'true';
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 
@@ -271,7 +271,7 @@ describe('SignalOutcomeService', () => {
 			expect(res).toBe('No measurements found');
 		});
 
-		it('computes correct aggregate metrics when evaluated outcomes exist', async () => {
+		it('computes correct aggregate metrics and coverage metadata when evaluated outcomes exist', async () => {
 			process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING = 'true';
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 
@@ -306,6 +306,8 @@ describe('SignalOutcomeService', () => {
 
 			const res = await SignalOutcomeService.getMetricsSummary();
 			expect(res).not.toBe('No measurements found');
+			expect(res.totalSignalsReceived).toBe(1);
+			expect(res.totalSignalsEligible).toBe(1);
 			expect(res.totalSignalsEvaluated).toBe(1);
 			expect(res.windows['1h']).toBeDefined();
 			expect(res.windows['1h'].hitRatePercent).toBe(100);
@@ -313,6 +315,185 @@ describe('SignalOutcomeService', () => {
 			expect(res.windows['1h'].averageMfePercent).toBe(3);
 			expect(res.windows['1h'].averageMaePercent).toBe(-1);
 			expect(res.drawdownProxy.averageMaxAdverseExcursionPercent).toBe(-1);
+			expect(res.exchangeBreakdown.BINANCE).toBeDefined();
+			expect(res.exchangeBreakdown.BINANCE.received).toBe(1);
+			expect(res.exchangeBreakdown.BINANCE.evaluated).toBe(1);
+		});
+
+		it('reports non-Binance and missing-entry signals with explicit coverage metadata instead of "No measurements found"', async () => {
+			process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			const now = new Date();
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, new Map([
+				['doc-bats', {
+					receivedAt: admin.firestore.Timestamp.fromDate(now),
+					requestId: 'req-bats',
+					source: 'alert',
+					symbol: 'AAPL',
+					exchange: 'BATS',
+					side: 'BUY',
+					price: 150,
+					eligibilityState: 'unsupported_exchange',
+					outcomeEvaluated: true,
+					outcomes: {
+						'1h': { status: 'unavailable', reason: 'unsupported_exchange' },
+					},
+				}],
+				['doc-spcfd', {
+					receivedAt: admin.firestore.Timestamp.fromDate(now),
+					requestId: 'req-spcfd',
+					source: 'alert',
+					symbol: 'SPX',
+					exchange: 'SPCFD',
+					side: 'BUY',
+					price: 4500,
+					eligibilityState: 'unsupported_exchange',
+					outcomeEvaluated: true,
+					outcomes: {
+						'1h': { status: 'unavailable', reason: 'unsupported_exchange' },
+					},
+				}],
+				['doc-noprice', {
+					receivedAt: admin.firestore.Timestamp.fromDate(now),
+					requestId: 'req-noprice',
+					source: 'alert',
+					symbol: 'ETHUSDT',
+					exchange: 'BINANCE',
+					side: 'BUY',
+					price: null,
+					eligibilityState: 'missing_entry_price',
+					outcomeEvaluated: true,
+					outcomes: {
+						'1h': { status: 'unavailable', reason: 'missing_entry_price' },
+					},
+				}],
+			]));
+
+			const res = await SignalOutcomeService.getMetricsSummary();
+			expect(res).not.toBe('No measurements found');
+			expect(res.totalSignalsReceived).toBe(3);
+			expect(res.totalSignalsEvaluated).toBe(0);
+			expect(res.totalSignalsUnavailable).toBe(3);
+			expect(res.coveragePercent).toBe(0);
+			expect(res.exchangeBreakdown.BATS.received).toBe(1);
+			expect(res.exchangeBreakdown.SPCFD.received).toBe(1);
+			expect(res.exchangeBreakdown.BINANCE.received).toBe(1);
+			expect(res.eligibilityBreakdown.unsupported_exchange).toBe(2);
+			expect(res.eligibilityBreakdown.missing_entry_price).toBe(1);
+		});
+
+		it('reconciles observed 54-alert mix fixture with exact exchange breakdown', async () => {
+			process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			const now = new Date();
+			const map = new Map();
+
+			// 18 Binance signals
+			for (let i = 1; i <= 18; i++) {
+				map.set(`binance-${i}`, {
+					receivedAt: admin.firestore.Timestamp.fromDate(now),
+					requestId: `req-binance-${i}`,
+					source: 'alert',
+					symbol: `CRYPTO${i}USDT`,
+					exchange: 'BINANCE',
+					side: 'BUY',
+					price: 100 + i,
+					eligibilityState: 'supported_provider',
+					outcomeEvaluated: true,
+					outcomes: {
+						'1h': {
+							status: 'evaluated',
+							targetTime: now.toISOString(),
+							price: 105 + i,
+							return: 5.0,
+							maxFavorableExcursion: 6.0,
+							maxAdverseExcursion: -1.0,
+						},
+					},
+				});
+			}
+
+			// 33 BATS signals
+			for (let i = 1; i <= 33; i++) {
+				map.set(`bats-${i}`, {
+					receivedAt: admin.firestore.Timestamp.fromDate(now),
+					requestId: `req-bats-${i}`,
+					source: 'alert',
+					symbol: `STOCK${i}`,
+					exchange: 'BATS',
+					side: 'BUY',
+					price: 50 + i,
+					eligibilityState: 'unsupported_exchange',
+					outcomeEvaluated: true,
+					outcomes: {
+						'1h': { status: 'unavailable', reason: 'unsupported_exchange' },
+					},
+				});
+			}
+
+			// 1 SPCFD signal
+			map.set('spcfd-1', {
+				receivedAt: admin.firestore.Timestamp.fromDate(now),
+				requestId: 'req-spcfd-1',
+				source: 'alert',
+				symbol: 'SPX',
+				exchange: 'SPCFD',
+				side: 'BUY',
+				price: 5000,
+				eligibilityState: 'unsupported_exchange',
+				outcomeEvaluated: true,
+				outcomes: {
+					'1h': { status: 'unavailable', reason: 'unsupported_exchange' },
+				},
+			});
+
+			// 2 UNKNOWN / unparseable signals
+			for (let i = 1; i <= 2; i++) {
+				map.set(`unknown-${i}`, {
+					receivedAt: admin.firestore.Timestamp.fromDate(now),
+					requestId: `req-unknown-${i}`,
+					source: 'alert',
+					symbol: 'UNKNOWN',
+					exchange: 'UNKNOWN',
+					side: 'BUY',
+					price: null,
+					eligibilityState: 'unparseable_symbol',
+					outcomeEvaluated: true,
+					outcomes: {
+						'1h': { status: 'unavailable', reason: 'unparseable_symbol' },
+					},
+				});
+			}
+
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, map);
+
+			const res = await SignalOutcomeService.getMetricsSummary();
+			expect(res).not.toBe('No measurements found');
+			expect(res.totalSignalsReceived).toBe(54);
+			expect(res.totalSignalsEligible).toBe(18);
+			expect(res.totalSignalsEvaluated).toBe(18);
+			expect(res.totalSignalsUnavailable).toBe(36);
+			expect(res.coveragePercent).toBe(33.33);
+
+			expect(res.exchangeBreakdown.BINANCE.received).toBe(18);
+			expect(res.exchangeBreakdown.BINANCE.eligible).toBe(18);
+			expect(res.exchangeBreakdown.BINANCE.evaluated).toBe(18);
+
+			expect(res.exchangeBreakdown.BATS.received).toBe(33);
+			expect(res.exchangeBreakdown.BATS.eligible).toBe(0);
+			expect(res.exchangeBreakdown.BATS.unavailable).toBe(33);
+
+			expect(res.exchangeBreakdown.SPCFD.received).toBe(1);
+			expect(res.exchangeBreakdown.SPCFD.eligible).toBe(0);
+
+			expect(res.exchangeBreakdown.UNKNOWN.received).toBe(2);
+			expect(res.exchangeBreakdown.UNKNOWN.eligible).toBe(0);
+
+			expect(res.eligibilityBreakdown.supported_provider).toBe(18);
+			expect(res.eligibilityBreakdown.unsupported_exchange).toBe(34); // 33 BATS + 1 SPCFD
+			expect(res.eligibilityBreakdown.unparseable_symbol).toBe(2);
 		});
 	});
 });
