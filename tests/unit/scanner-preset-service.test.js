@@ -174,4 +174,18 @@ describe('ScannerPresetService', () => {
 		]);
 		expect(service.getStorageStatus().mode).toBe('ephemeral');
 	});
+
+	it('does not resurrect a queued write after deleting during a Firestore outage', async () => {
+		process.env.ENABLE_FIRESTORE_SCANNER_PRESETS = 'true';
+
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const firestoreAdmin = require('firebase-admin');
+		firestoreAdmin.__mockDocSet.mockRejectedValueOnce(new Error('Temporary Firestore write outage'));
+		firestoreAdmin.__mockDocGet.mockRejectedValueOnce(new Error('Temporary Firestore read outage'));
+		const service = new ScannerPresetService();
+
+		const created = await service.createPreset({ name: 'Deleted queued preset' });
+		expect(await service.deletePreset(created.id)).toBe(true);
+		expect(await service.listPresets()).toEqual([]);
+	});
 });
