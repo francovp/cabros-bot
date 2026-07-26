@@ -808,6 +808,31 @@ describe('Status endpoints', () => {
 		});
 	});
 
+	it('treats a valid authorized-user ADC file as configured', async () => {
+		delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+		tempDir = mkdtempSync(join(tmpdir(), 'cabros-firestore-'));
+		const credentialsPath = join(tempDir, 'authorized-user.json');
+		writeFileSync(credentialsPath, JSON.stringify({
+			type: 'authorized_user',
+			client_id: 'client-id.apps.googleusercontent.com',
+			client_secret: 'client-secret',
+			refresh_token: 'refresh-token',
+		}));
+		process.env.GOOGLE_APPLICATION_CREDENTIALS = credentialsPath;
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.firestore).toEqual({
+			enabled: true,
+			configured: true,
+			ready: true,
+			status: 'ready',
+		});
+	});
+
 	it('treats malformed inline Firestore credentials as misconfigured', async () => {
 		process.env.FIREBASE_SERVICE_ACCOUNT_JSON = '{"project_id":';
 

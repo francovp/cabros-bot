@@ -152,6 +152,33 @@ describe('Scanner presets API integration tests', () => {
 			.expect(404);
 	});
 
+	it('includes storage metadata on not-found responses', async () => {
+		const missingId = 'missing-preset-id';
+		const expectedStorage = expect.objectContaining({
+			enabled: true,
+			mode: 'durable',
+			backend: 'firestore',
+		});
+
+		const getResponse = await request(app)
+			.get(`/api/scanner-presets/${missingId}`)
+			.set('x-api-key', 'test-key')
+			.expect(404);
+		const updateResponse = await request(app)
+			.put(`/api/scanner-presets/${missingId}`)
+			.set('x-api-key', 'test-key')
+			.send({ name: 'Missing update' })
+			.expect(404);
+		const deleteResponse = await request(app)
+			.delete(`/api/scanner-presets/${missingId}`)
+			.set('x-api-key', 'test-key')
+			.expect(404);
+
+		expect(getResponse.body.storage).toEqual(expectedStorage);
+		expect(updateResponse.body.storage).toEqual(expectedStorage);
+		expect(deleteResponse.body.storage).toEqual(expectedStorage);
+	});
+
 	it('reports ephemeral storage when durable scanner persistence is enabled but unavailable', async () => {
 		delete process.env.ENABLE_FIRESTORE_ALERT_STORAGE;
 		process.env.ENABLE_FIRESTORE_SCANNER_PRESETS = 'true';

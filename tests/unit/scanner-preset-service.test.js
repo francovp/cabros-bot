@@ -230,4 +230,20 @@ describe('ScannerPresetService', () => {
 		await Promise.all([triggerPromise, updatePromise]);
 		expect(newWriteStarted).toBe(true);
 	});
+
+	it('keeps a deletion tombstone when deleting an updated preset during an outage', async () => {
+		process.env.ENABLE_FIRESTORE_SCANNER_PRESETS = 'true';
+
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const firestoreAdmin = require('firebase-admin');
+		const service = new ScannerPresetService();
+		const created = await service.createPreset({ name: 'Original value' });
+
+		firestoreAdmin.__mockDocSet.mockRejectedValueOnce(new Error('Temporary Firestore write outage'));
+		await service.updatePreset(created.id, { name: 'Updated value' });
+		firestoreAdmin.__mockDocGet.mockRejectedValueOnce(new Error('Temporary Firestore read outage'));
+
+		expect(await service.deletePreset(created.id)).toBe(true);
+		expect(await service.listPresets()).toEqual([]);
+	});
 });

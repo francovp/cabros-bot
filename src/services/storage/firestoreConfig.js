@@ -39,6 +39,32 @@ function hasValidInlineCredentials(value) {
 	}
 }
 
+function hasValidApplicationDefaultCredentials(value) {
+	if (!hasValue(value)) {
+		return false;
+	}
+
+	try {
+		const parsed = JSON.parse(value);
+		if (parsed.type === 'authorized_user') {
+			return hasValue(parsed.client_id)
+				&& hasValue(parsed.client_secret)
+				&& hasValue(parsed.refresh_token);
+		}
+
+		if (parsed.type === 'external_account') {
+			return hasValue(parsed.audience)
+				&& hasValue(parsed.subject_token_type)
+				&& hasValue(parsed.token_url)
+				&& parsed.credential_source != null;
+		}
+
+		return hasValidInlineCredentials(value);
+	} catch (error) {
+		return false;
+	}
+}
+
 function hasReadableCredentialsFile(path) {
 	if (!hasValue(path)) {
 		return false;
@@ -50,7 +76,7 @@ function hasReadableCredentialsFile(path) {
 			return false;
 		}
 
-		return hasValidInlineCredentials(readFileSync(path, 'utf8'));
+		return hasValidApplicationDefaultCredentials(readFileSync(path, 'utf8'));
 	} catch (error) {
 		return false;
 	}

@@ -163,6 +163,7 @@ function getPreset(req, res) {
 				return res.status(404).json({
 					success: false,
 					error: 'Preset not found',
+					storage: getStorageMetadata(),
 				});
 			}
 
@@ -195,6 +196,7 @@ function deletePreset(req, res) {
 				return res.status(404).json({
 					success: false,
 					error: 'Preset not found',
+					storage: getStorageMetadata(),
 				});
 			}
 
@@ -226,6 +228,7 @@ function updatePreset(req, res) {
 				return res.status(404).json({
 					success: false,
 					error: 'Preset not found',
+					storage: getStorageMetadata(),
 				});
 			}
 
