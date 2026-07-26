@@ -2,6 +2,8 @@
 
 const { createPrivateKey } = require('crypto');
 const { accessSync, constants, readFileSync, statSync } = require('fs');
+const { homedir } = require('os');
+const { join } = require('path');
 
 function hasValue(value) {
 	return typeof value === 'string' ? value.trim().length > 0 : value != null;
@@ -20,7 +22,13 @@ function isGoogleManagedRuntime() {
 		|| hasValue(process.env.FUNCTION_TARGET)
 		|| hasValue(process.env.FUNCTION_NAME)
 		|| hasValue(process.env.GAE_SERVICE)
+		|| ((hasValue(process.env.GCE_METADATA_HOST) || hasValue(process.env.GCE_METADATA_IP)) && hasProjectId())
 	);
+}
+
+function getWellKnownCredentialsPath() {
+	const configDirectory = process.env.CLOUDSDK_CONFIG || join(homedir(), '.config', 'gcloud');
+	return join(configDirectory, 'application_default_credentials.json');
 }
 
 function hasValidInlineCredentials(value) {
@@ -86,6 +94,7 @@ function isFirestoreConfigured() {
 	return (
 		hasValidInlineCredentials(process.env.FIREBASE_SERVICE_ACCOUNT_JSON)
 		|| hasReadableCredentialsFile(process.env.GOOGLE_APPLICATION_CREDENTIALS)
+		|| hasReadableCredentialsFile(getWellKnownCredentialsPath())
 		|| isGoogleManagedRuntime()
 	);
 }

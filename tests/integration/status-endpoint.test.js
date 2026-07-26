@@ -719,6 +719,8 @@ describe('Status endpoints', () => {
 		delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
 		delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
 		process.env.GOOGLE_CLOUD_PROJECT = 'cabros-project';
+		tempDir = mkdtempSync(join(tmpdir(), 'cabros-gcloud-empty-'));
+		process.env.CLOUDSDK_CONFIG = tempDir;
 
 		const response = await request(app)
 			.get('/api/status')
@@ -885,6 +887,47 @@ describe('Status endpoints', () => {
 			configured: false,
 			ready: false,
 			status: 'misconfigured',
+		});
+	});
+
+	it('treats well-known ADC files as configured', async () => {
+		delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+		delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
+		process.env.GOOGLE_CLOUD_PROJECT = 'well-known-project';
+		tempDir = mkdtempSync(join(tmpdir(), 'cabros-gcloud-'));
+		const credentialsPath = join(tempDir, 'application_default_credentials.json');
+		writeFileSync(credentialsPath, validFirestoreServiceAccountJson);
+		process.env.CLOUDSDK_CONFIG = tempDir;
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.firestore).toEqual({
+			enabled: true,
+			configured: true,
+			ready: true,
+			status: 'ready',
+		});
+	});
+
+	it('treats Compute Engine metadata credentials as configured with a project id', async () => {
+		delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+		delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
+		process.env.GCE_METADATA_HOST = 'metadata.google.internal';
+		process.env.GOOGLE_CLOUD_PROJECT = 'metadata-project';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.firestore).toEqual({
+			enabled: true,
+			configured: true,
+			ready: true,
+			status: 'ready',
 		});
 	});
 

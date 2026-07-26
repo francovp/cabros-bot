@@ -322,4 +322,31 @@ describe('ScannerPresetService', () => {
 		expect(await service.deletePreset(created.id)).toBe(true);
 		expect(await service.listPresets()).toEqual([]);
 	});
+
+	it('keeps a tombstone when a queued delete fails after an in-flight update', async () => {
+		process.env.ENABLE_FIRESTORE_SCANNER_PRESETS = 'true';
+
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const firestoreAdmin = require('firebase-admin');
+		const service = new ScannerPresetService();
+		const created = await service.createPreset({ name: 'Original value' });
+		let releaseUpdate;
+		const updateGate = new Promise((resolve) => {
+			releaseUpdate = resolve;
+		});
+		firestoreAdmin.__mockDocSet.mockImplementation((data) => (
+			data.name === 'Updated value' ? updateGate : Promise.resolve()
+		));
+
+		const updatePromise = service.updatePreset(created.id, { name: 'Updated value' });
+		await new Promise((resolve) => setImmediate(resolve));
+		firestoreAdmin.__mockDocGet.mockResolvedValueOnce({ exists: true });
+		firestoreAdmin.__mockDocDelete.mockRejectedValueOnce(new Error('Temporary Firestore delete outage'));
+		const deletePromise = service.deletePreset(created.id);
+		releaseUpdate();
+
+		expect(await deletePromise).toBe(true);
+		await updatePromise;
+		expect(await service.listPresets()).toEqual([]);
+	});
 });

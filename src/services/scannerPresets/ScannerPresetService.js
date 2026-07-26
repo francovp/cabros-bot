@@ -28,6 +28,7 @@ const SUPPORTED_TIMEFRAME_ALIASES = new Set([
 const memoryPresets = new Map();
 const pendingFirestorePresets = new Map();
 const pendingFirestoreDeletes = new Set();
+const firestoreDeleteGenerations = new Map();
 const firestoreWriteQueues = new Map();
 
 function clonePreset(preset) {
@@ -44,6 +45,11 @@ function compareByCreatedAtDesc(a, b) {
 
 function isFirestoreEnabled() {
 	return process.env.ENABLE_FIRESTORE_SCANNER_PRESETS === 'true';
+}
+
+function markPendingFirestoreDelete(id) {
+	pendingFirestoreDeletes.add(id);
+	firestoreDeleteGenerations.set(id, (firestoreDeleteGenerations.get(id) || 0) + 1);
 }
 
 function normalizeScanList(scans) {
@@ -225,15 +231,15 @@ class ScannerPresetService {
 		const hadLocalPreset = memoryPresets.has(id) || pendingFirestorePresets.has(id);
 		pendingFirestorePresets.delete(id);
 		if (isFirestoreEnabled() && hadLocalPreset) {
-			pendingFirestoreDeletes.add(id);
+			markPendingFirestoreDelete(id);
 		}
 		if (firestore) {
 			try {
 				const snapshot = await firestore.collection(COLLECTION_NAME).doc(id).get();
 				if ((snapshot && snapshot.exists) || hadLocalPreset) {
 					deleted = Boolean(snapshot && snapshot.exists) || hadLocalPreset;
-					if (snapshot && snapshot.exists && isFirestoreEnabled()) {
-						pendingFirestoreDeletes.add(id);
+					if (snapshot && snapshot.exists && isFirestoreEnabled() && !pendingFirestoreDeletes.has(id)) {
+						markPendingFirestoreDelete(id);
 					}
 					await this._deleteFirestorePreset(firestore, id);
 					pendingFirestoreDeletes.delete(id);
@@ -328,6 +334,8 @@ class ScannerPresetService {
 
 	async _persistPreset(preset) {
 		memoryPresets.set(preset.id, clonePreset(preset));
+		const deleteGenerationAtStart = firestoreDeleteGenerations.get(preset.id) || 0;
+		pendingFirestoreDeletes.delete(preset.id);
 
 		const firestore = this._getFirestore();
 		if (!firestore) {
@@ -340,7 +348,9 @@ class ScannerPresetService {
 		try {
 			await this._writeFirestorePreset(firestore, preset);
 			pendingFirestorePresets.delete(preset.id);
-			pendingFirestoreDeletes.delete(preset.id);
+			if ((firestoreDeleteGenerations.get(preset.id) || 0) === deleteGenerationAtStart) {
+				pendingFirestoreDeletes.delete(preset.id);
+			}
 			await this._flushPendingDeletes(firestore);
 			await this._flushPendingPresets(firestore);
 			this.firestoreUnavailable = pendingFirestorePresets.size > 0 || pendingFirestoreDeletes.size > 0;
@@ -453,6 +463,7 @@ module.exports = {
 		memoryPresets.clear();
 		pendingFirestorePresets.clear();
 		pendingFirestoreDeletes.clear();
+		firestoreDeleteGenerations.clear();
 		firestoreWriteQueues.clear();
 		scannerPresetService.firestoreUnavailable = false;
 	},
