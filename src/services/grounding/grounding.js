@@ -55,6 +55,8 @@ async function deriveSearchQuery(alertText, opts = {}) {
  */
 const metrics = require('./metrics');
 
+const { deriveAssetContext, deriveCleanSearchQuery } = require('../tradingview/parseTradingViewSignal');
+
 async function groundAlert({ text, options = {} }) {
 	const {
 		maxSources = GROUNDING_MAX_SOURCES,
@@ -87,17 +89,19 @@ async function groundAlert({ text, options = {} }) {
 	}
 
 	try {
+		const assetContext = deriveAssetContext(text);
+		const searchQuery = deriveCleanSearchQuery(text) || text;
 
-		// 1. Search for evidence
+		// 1. Search for evidence using clean query
 		const { results: searchResults, totalResults, searchResultText, usage: searchUsage } = await genaiClient.search({
-			query: text,
+			query: searchQuery,
 			model: GROUNDING_MODEL_NAME,
 			maxResults: maxSources,
 		});
 		if (tokenUsage && searchUsage) {
 			tokenUsage.addUsage(searchUsage, GROUNDING_MODEL_NAME);
 		}
-		console.debug(`[Grounding] Retrieved ${searchResults.length}/${totalResults} search results`);
+		console.debug(`[Grounding] Retrieved ${searchResults.length}/${totalResults} search results for query: ${searchQuery}`);
 
 		// 2. Generate enriched alert with timeout
 		const [timeoutPromise, cleanupTimeout] = createTimeout();
@@ -106,7 +110,7 @@ async function groundAlert({ text, options = {} }) {
 				text: text,
 				searchResults,
 				searchResultText,
-				options: { preserveLanguage, maxLength, systemPrompt: systemPromptOverride, tokenUsage },
+				options: { preserveLanguage, maxLength, systemPrompt: systemPromptOverride, tokenUsage, assetContext },
 			}),
 			timeoutPromise,
 		]).finally(cleanupTimeout);
@@ -115,6 +119,11 @@ async function groundAlert({ text, options = {} }) {
 			...result,
 			sources: searchResults,
 			truncated: text.length > 4000,
+			...(assetContext ? {
+				symbol: assetContext.symbol,
+				exchange: assetContext.exchange,
+				assetClass: assetContext.assetClass,
+			} : {}),
 		};
 
 		metrics.recordSuccess(Date.now() - startTime, promptType);
@@ -128,6 +137,7 @@ async function groundAlert({ text, options = {} }) {
 		throw new Error(`Grounding failed: ${error.message}`);
 	}
 }
+
 
 module.exports = {
 	groundAlert,

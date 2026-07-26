@@ -131,5 +131,51 @@ describe('Grounding Service', () => {
 				}),
 			}));
 		});
+
+		it('should normalize BATS: exchange prefix in search queries to prevent BAT crypto and British American Tobacco hallucinations', async () => {
+			genaiClient.search.mockResolvedValueOnce({ results: [], totalResults: 0 });
+			generateEnrichedAlert.mockResolvedValueOnce({
+				sentiment: 'BEARISH',
+				sentiment_score: 0.8,
+				insights: ['TSM stock signal'],
+				sources: [],
+			});
+
+			const result = await groundAlert({
+				text: 'BATS:TSM(D) cambió a señal de VENTA',
+			});
+
+			expect(genaiClient.search).toHaveBeenCalledWith(expect.objectContaining({
+				query: expect.stringContaining('TSM stock'),
+			}));
+			const searchQuery = genaiClient.search.mock.calls[0][0].query;
+			expect(searchQuery).not.toContain('BATS:');
+			expect(result.symbol).toBe('TSM');
+			expect(result.exchange).toBe('BATS');
+			expect(result.assetClass).toBe('stock');
+		});
+
+		it('should normalize BINANCE: exchange prefix in search queries', async () => {
+			genaiClient.search.mockResolvedValueOnce({ results: [], totalResults: 0 });
+			generateEnrichedAlert.mockResolvedValueOnce({
+				sentiment: 'BULLISH',
+				sentiment_score: 0.85,
+				insights: ['BTCUSDT crypto signal'],
+				sources: [],
+			});
+
+			const result = await groundAlert({
+				text: 'BINANCE:BTCUSDT(1H) cambió a señal de COMPRA',
+			});
+
+			expect(genaiClient.search).toHaveBeenCalledWith(expect.objectContaining({
+				query: expect.stringContaining('BTCUSDT crypto'),
+			}));
+			const searchQuery = genaiClient.search.mock.calls[0][0].query;
+			expect(searchQuery).not.toContain('BINANCE:');
+			expect(result.symbol).toBe('BTCUSDT');
+			expect(result.exchange).toBe('BINANCE');
+			expect(result.assetClass).toBe('crypto');
+		});
 	});
 });

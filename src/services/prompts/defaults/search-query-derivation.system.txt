@@ -1,2 +1,6 @@
 Extract key topics and entities from this alert to create a search query.
 Focus on recent developments, market conditions, or specific events mentioned.
+
+Disambiguation Rules:
+- Strip or normalize exchange prefixes like "BATS:". "BATS:" represents Cboe BATS stock exchange. Convert "BATS:SYMBOL" into "SYMBOL stock".
+- Do not include "BATS" in search queries for stock alerts to prevent confusion with Basic Attention Token (BAT) crypto or British American Tobacco.

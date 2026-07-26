@@ -329,5 +329,24 @@ describe('Alert Grounding Integration', () => {
 			expect(mockTelegramSendMessage).not.toHaveBeenCalled();
 			expect(mockFetch).not.toHaveBeenCalled();
 		});
+
+		it('should pass sanitized search query and asset context for BATS exchange alerts', async () => {
+			const alertText = 'BATS:TSM(D) cambió a señal de VENTA';
+
+			const response = await request(app)
+				.post('/api/webhook/alert')
+				.set('x-api-key', 'test-key')
+				.send({ text: alertText })
+				.expect(200);
+
+			expect(response.body.success).toBe(true);
+			expect(response.body.enriched).toBe(true);
+			expect(genaiClient.search).toHaveBeenCalledWith(expect.objectContaining({
+				query: expect.stringContaining('TSM stock'),
+			}));
+			const searchQuery = genaiClient.search.mock.calls[0][0].query;
+			expect(searchQuery).not.toContain('BATS:');
+		});
 	});
 });
+

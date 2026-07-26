@@ -94,9 +94,90 @@ function parseTradingViewSignal(text, options = {}) {
 	};
 }
 
+const STOCK_EXCHANGES = new Set(['BATS', 'NASDAQ', 'NYSE', 'AMEX', 'SPCFD', 'CBOE']);
+const CRYPTO_EXCHANGES = new Set(['BINANCE', 'BYBIT', 'COINBASE', 'OKX', 'KRAKEN', 'BITFINEX', 'KUCOIN']);
+const CRYPTO_SUFFIXES = ['USDT', 'BUSD', 'USDC', 'BTC', 'ETH', 'SOL', 'PERP'];
+
+function deriveAssetContext(text) {
+	if (!text || typeof text !== 'string') {
+		return null;
+	}
+
+	const parsed = parseTradingViewSignal(text);
+	if (parsed && parsed.symbol) {
+		const exchange = parsed.exchange || (parsed.symbol.endsWith('USDT') ? 'BINANCE' : null);
+		let assetClass = 'stock';
+		if (exchange && CRYPTO_EXCHANGES.has(exchange)) {
+			assetClass = 'crypto';
+		} else if (exchange && STOCK_EXCHANGES.has(exchange)) {
+			assetClass = 'stock';
+		} else if (CRYPTO_SUFFIXES.some(s => parsed.symbol.endsWith(s))) {
+			assetClass = 'crypto';
+		}
+
+		return {
+			symbol: parsed.symbol,
+			exchange,
+			assetClass,
+			side: parsed.side,
+			timeframe: parsed.timeframe,
+		};
+	}
+
+	const match = text.match(/(?:^|\s)(?:(?<exchange>[A-Z]+):)?(?<symbol>[A-Z0-9._-]{2,20})/i);
+	if (match && match.groups && match.groups.symbol) {
+		const symbol = match.groups.symbol.toUpperCase();
+		const exchange = match.groups.exchange ? match.groups.exchange.toUpperCase() : null;
+
+		let assetClass = 'stock';
+		if (exchange && CRYPTO_EXCHANGES.has(exchange)) {
+			assetClass = 'crypto';
+		} else if (exchange && STOCK_EXCHANGES.has(exchange)) {
+			assetClass = 'stock';
+		} else if (CRYPTO_SUFFIXES.some(s => symbol.endsWith(s))) {
+			assetClass = 'crypto';
+		}
+
+		return {
+			symbol,
+			exchange,
+			assetClass,
+		};
+	}
+
+	return null;
+}
+
+function deriveCleanSearchQuery(text) {
+	if (!text || typeof text !== 'string') {
+		return '';
+	}
+
+	const context = deriveAssetContext(text);
+	if (context && context.symbol) {
+		if (context.assetClass === 'stock') {
+			return `${context.symbol} stock price news market analyst`;
+		}
+		if (context.assetClass === 'crypto') {
+			return `${context.symbol} crypto price news market analyst`;
+		}
+		return `${context.symbol} market news analyst`;
+	}
+
+	const cleanText = text
+		.replace(/\bBATS:(?<sym>[A-Z0-9._-]+)/gi, '$<sym> stock')
+		.replace(/\bBINANCE:(?<sym>[A-Z0-9._-]+)/gi, '$<sym> crypto')
+		.replace(/\b[A-Z]+:(?<sym>[A-Z0-9._-]+)/gi, '$<sym>');
+
+	return cleanText.trim();
+}
+
 module.exports = {
 	parseTradingViewSignal,
 	normalizeTradingViewTimeframe,
 	normalizeSignalSide,
+	deriveAssetContext,
+	deriveCleanSearchQuery,
 	SUPPORTED_MCP_TIMEFRAMES,
 };
+
