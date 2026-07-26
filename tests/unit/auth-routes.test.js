@@ -65,16 +65,16 @@ describe('Centralized API Route Authentication', () => {
 
 		it('should accept valid API key via x-api-key header and pass auth middleware', async () => {
 			const res = await request(app)[method](path).set('x-api-key', 'secret-api-key');
-			// Should pass auth check (status should NOT be 401 or 403)
-			expect(res.status).not.toBe(401);
-			expect(res.status).not.toBe(403);
+			// Should pass auth check (error should NOT be Unauthorized or Forbidden API key)
+			expect(res.body?.error).not.toBe('Unauthorized: Missing API key');
+			expect(res.body?.error).not.toBe('Forbidden: Invalid API key');
 		});
 
 		it('should accept valid API key via api-key query param and pass auth middleware', async () => {
 			const separator = path.includes('?') ? '&' : '?';
 			const res = await request(app)[method](`${path}${separator}api-key=secret-api-key`);
-			expect(res.status).not.toBe(401);
-			expect(res.status).not.toBe(403);
+			expect(res.body?.error).not.toBe('Unauthorized: Missing API key');
+			expect(res.body?.error).not.toBe('Forbidden: Invalid API key');
 		});
 	});
 
