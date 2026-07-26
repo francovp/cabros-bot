@@ -13,13 +13,6 @@ const {
 const { isFirestoreConfigured } = require('../storage/firestoreConfig');
 
 const COLLECTION_NAME = 'scannerPresets';
-const FIRESTORE_GATE_ENV_VARS = [
-	'ENABLE_FIRESTORE_SCANNER_PRESETS',
-	'ENABLE_FIRESTORE_ALERT_STORAGE',
-	'ENABLE_FIRESTORE_JOB_STORAGE',
-	'ENABLE_SIGNAL_OUTCOME_TRACKING',
-	'ENABLE_SHADOW_MODE_OUTCOME_TRACKING',
-];
 const DEFAULT_SCAN_LIMIT = 5;
 const MAX_SCAN_LIMIT = 20;
 const DEFAULT_EXCHANGE = 'BINANCE';
@@ -44,6 +37,10 @@ function clonePreset(preset) {
 
 function compareByCreatedAtDesc(a, b) {
 	return String(b.createdAt || '').localeCompare(String(a.createdAt || ''));
+}
+
+function isFirestoreEnabled() {
+	return process.env.ENABLE_FIRESTORE_SCANNER_PRESETS === 'true';
 }
 
 function normalizeScanList(scans) {
@@ -105,7 +102,7 @@ class ScannerPresetService {
 	}
 
 	getStorageStatus() {
-		const firestoreEnabled = FIRESTORE_GATE_ENV_VARS.some((envVar) => process.env[envVar] === 'true');
+		const firestoreEnabled = isFirestoreEnabled();
 		const firestore = this._getFirestore();
 		const durable = Boolean(firestore) && !this.firestoreUnavailable && isFirestoreConfigured();
 
@@ -310,7 +307,7 @@ class ScannerPresetService {
 	}
 
 	_getFirestore() {
-		return alertStorageService.getFirestore();
+		return isFirestoreEnabled() ? alertStorageService.getFirestore() : null;
 	}
 
 	_formatFirestoreDoc(doc) {

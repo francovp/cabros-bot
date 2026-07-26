@@ -36,6 +36,7 @@ describe('Scanner presets API integration tests', () => {
 			...originalEnv,
 			WEBHOOK_API_KEY: 'test-key',
 			ENABLE_FIRESTORE_ALERT_STORAGE: 'true',
+			ENABLE_FIRESTORE_SCANNER_PRESETS: 'true',
 			ENABLE_MARKET_SCANNER: 'true',
 			ENABLE_NEWS_MONITOR: 'false',
 			MARKET_SCANNER_TIMEOUT_MS: '1000',

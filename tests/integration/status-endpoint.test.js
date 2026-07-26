@@ -161,6 +161,26 @@ describe('Status endpoints', () => {
 		});
 	});
 
+	it('does not report durable scanner presets from the alert storage gate', async () => {
+		process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+		delete process.env.ENABLE_FIRESTORE_SCANNER_PRESETS;
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.firestoreScannerPresets).toBe(false);
+		expect(response.body.dependencies.scannerPresetStorage).toEqual({
+			enabled: false,
+			configured: false,
+			ready: false,
+			status: 'disabled',
+			mode: 'ephemeral',
+			backend: 'memory',
+		});
+	});
+
 	it('reports scanner preset storage as misconfigured without usable credentials', async () => {
 		delete process.env.ENABLE_FIRESTORE_ALERT_STORAGE;
 		process.env.ENABLE_FIRESTORE_SCANNER_PRESETS = 'true';

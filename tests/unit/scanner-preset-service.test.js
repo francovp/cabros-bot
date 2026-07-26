@@ -29,34 +29,21 @@ describe('ScannerPresetService', () => {
 		delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
 	});
 
-	it('persists a created preset across service instances when Firestore storage is enabled', async () => {
+	it('does not use alert storage as an implicit scanner preset persistence gate', async () => {
 		process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 
 		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
-		const serviceA = new ScannerPresetService();
-		const created = await serviceA.createPreset({
-			name: 'Momentum preset',
-			exchange: 'binance',
-			timeframe: '1h',
-			scans: ['top_gainers', 'volume_breakout_scanner'],
-			limit: 7,
-			bbwThreshold: 0.08,
-		});
+		const service = new ScannerPresetService();
 
-		jest.resetModules();
-		const {
-			ScannerPresetService: ReloadedScannerPresetService,
-		} = require('../../src/services/scannerPresets/ScannerPresetService');
-		const fetched = await new ReloadedScannerPresetService().getPreset(created.id);
+		await service.createPreset({ name: 'Memory-only preset' });
 
-		expect(fetched).toMatchObject({
-			id: created.id,
-			name: 'Momentum preset',
-			exchange: 'BINANCE',
-			timeframe: '1h',
-			scans: ['top_gainers', 'volume_breakout_scanner'],
-			limit: 7,
-			bbwThreshold: 0.08,
+		expect(service.getStorageStatus()).toEqual({
+			enabled: false,
+			configured: false,
+			ready: false,
+			status: 'disabled',
+			mode: 'ephemeral',
+			backend: 'memory',
 		});
 	});
 
