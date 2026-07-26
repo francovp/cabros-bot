@@ -33,7 +33,7 @@ function normalizeSide(side) {
 }
 
 function normalizeSymbolAndExchange(rawSymbol, rawExchange) {
-	if (!rawSymbol || typeof rawSymbol !== 'string') {
+	if (!rawSymbol || typeof rawSymbol !== 'string' || rawSymbol.trim().toUpperCase() === 'UNKNOWN') {
 		return { symbol: 'UNKNOWN', exchange: 'UNKNOWN' };
 	}
 	const parts = rawSymbol.trim().toUpperCase().split(':');
@@ -42,6 +42,31 @@ function normalizeSymbolAndExchange(rawSymbol, rawExchange) {
 	}
 	const exchange = rawExchange ? String(rawExchange).trim().toUpperCase() : 'BINANCE';
 	return { exchange, symbol: parts[0] };
+}
+
+function determineEligibility(normSymbolInfo, entryPrice) {
+	if (normSymbolInfo.symbol === 'UNKNOWN' || normSymbolInfo.exchange === 'UNKNOWN') {
+		return {
+			state: 'unparseable_symbol',
+			reason: 'Symbol or exchange unparseable or unknown',
+		};
+	}
+	if (normSymbolInfo.exchange !== 'BINANCE') {
+		return {
+			state: 'unsupported_exchange',
+			reason: `Exchange ${normSymbolInfo.exchange} not supported by Binance market-data evaluator`,
+		};
+	}
+	if (entryPrice === null || entryPrice === undefined) {
+		return {
+			state: 'missing_entry_price',
+			reason: 'Entry price unavailable for symbol',
+		};
+	}
+	return {
+		state: 'supported_provider',
+		reason: 'Binance market data supported',
+	};
 }
 
 const WINDOW_CONFIGS = {
@@ -97,10 +122,14 @@ async function recordSignal({
 			}
 		}
 
+		const eligibility = determineEligibility(normSymbolInfo, entryPrice);
+		const isEligible = eligibility.state === 'supported_provider';
+
 		const outcomes = {};
 		for (const [winKey, config] of Object.entries(WINDOW_CONFIGS)) {
 			outcomes[winKey] = {
-				status: 'pending',
+				status: isEligible ? 'pending' : 'unavailable',
+				reason: isEligible ? undefined : eligibility.state,
 				targetTime: new Date(now.getTime() + config.durationMs).toISOString(),
 				price: null,
 				return: null,
@@ -125,7 +154,9 @@ async function recordSignal({
 			sources: Array.isArray(sources) ? sources : [],
 			tokenUsage: tokenUsage || null,
 			processingTimeMs: typeof processingTimeMs === 'number' ? processingTimeMs : null,
-			outcomeEvaluated: false,
+			eligibilityState: eligibility.state,
+			eligibilityReason: eligibility.reason,
+			outcomeEvaluated: !isEligible,
 			outcomes,
 		};
 
@@ -172,7 +203,37 @@ async function evaluatePendingOutcomes() {
 
 			if (!entryPrice || typeof entryPrice !== 'number') {
 				// Mark evaluated if entry price is invalid/missing
-				await doc.ref.update({ outcomeEvaluated: true });
+				const outcomes = { ...data.outcomes };
+				for (const winKey of Object.keys(outcomes)) {
+					if (outcomes[winKey].status === 'pending') {
+						outcomes[winKey].status = 'unavailable';
+						outcomes[winKey].reason = 'missing_entry_price';
+					}
+				}
+				await doc.ref.update({
+					outcomeEvaluated: true,
+					eligibilityState: 'missing_entry_price',
+					eligibilityReason: 'Entry price unavailable for symbol',
+					outcomes,
+				});
+				continue;
+			}
+
+			if (data.exchange !== 'BINANCE') {
+				const state = (data.exchange === 'UNKNOWN' || data.symbol === 'UNKNOWN') ? 'unparseable_symbol' : 'unsupported_exchange';
+				const outcomes = { ...data.outcomes };
+				for (const winKey of Object.keys(outcomes)) {
+					if (outcomes[winKey].status === 'pending') {
+						outcomes[winKey].status = 'unavailable';
+						outcomes[winKey].reason = state;
+					}
+				}
+				await doc.ref.update({
+					outcomeEvaluated: true,
+					eligibilityState: state,
+					eligibilityReason: state === 'unparseable_symbol' ? 'Symbol or exchange unparseable or unknown' : `Exchange ${data.exchange} not supported by Binance market-data evaluator`,
+					outcomes,
+				});
 				continue;
 			}
 
@@ -192,12 +253,6 @@ async function evaluatePendingOutcomes() {
 				}
 
 				const config = WINDOW_CONFIGS[winKey];
-				// For non-Binance symbols, we treat historical price data as unavailable
-				if (data.exchange !== 'BINANCE') {
-					outcome.status = 'unavailable';
-					docUpdated = true;
-					continue;
-				}
 
 				try {
 					const klines = await client.getKlines({
@@ -210,6 +265,7 @@ async function evaluatePendingOutcomes() {
 
 					if (!Array.isArray(klines) || klines.length === 0) {
 						outcome.status = 'unavailable';
+						outcome.reason = 'market_data_unavailable';
 						docUpdated = true;
 						continue;
 					}
@@ -248,9 +304,9 @@ async function evaluatePendingOutcomes() {
 					docUpdated = true;
 				} catch (error) {
 					console.warn(`[SignalOutcomeService] Error evaluating window ${winKey} for ${data.symbol}:`, error.message);
-					// Mark as failed or let it retry? If it's a code/network failure, let it retry, otherwise unavailable
 					if (error.message.includes('400') || error.message.includes('Invalid symbol') || error.message.includes('UNKNOWN_SYMBOL')) {
 						outcome.status = 'unavailable';
+						outcome.reason = 'market_data_unavailable';
 						docUpdated = true;
 					} else {
 						allResolved = false; // retry on network/rate-limit error
@@ -304,52 +360,110 @@ async function getMetricsSummary({ from, to, limit } = {}) {
 			return 'No measurements found';
 		}
 
-		// Filter for evaluated signals
 		const docs = snapshot.docs.map(doc => doc.data());
-		const evaluatedSignals = docs.filter(doc =>
-			Object.values(doc.outcomes).some(o => o.status === 'evaluated')
-		);
 
-		if (evaluatedSignals.length === 0) {
-			return 'No measurements found';
-		}
+		let totalSignalsReceived = docs.length;
+		let totalSignalsEligible = 0;
+		let totalSignalsEvaluated = 0;
+		let totalSignalsPending = 0;
+		let totalSignalsUnavailable = 0;
 
-		const totalEvaluated = evaluatedSignals.length;
-		const windowStats = {};
+		const exchangeBreakdown = {};
+		const eligibilityBreakdown = {};
 
-		for (const winKey of Object.keys(WINDOW_CONFIGS)) {
-			let totalWinsEvaluated = 0;
-			let hits = 0;
-			let totalReturn = 0;
-			let totalMfe = 0;
-			let totalMae = 0;
-			let maxMae = 0; // absolute maximum drawdown seen
+		const evaluatedSignals = [];
 
-			for (const signal of evaluatedSignals) {
-				const outcome = signal.outcomes[winKey];
-				if (outcome && outcome.status === 'evaluated') {
-					totalWinsEvaluated++;
-					if (outcome.return > 0) {
-						hits++;
-					}
-					totalReturn += outcome.return;
-					totalMfe += outcome.maxFavorableExcursion;
-					totalMae += outcome.maxAdverseExcursion;
-					if (outcome.maxAdverseExcursion < maxMae) {
-						maxMae = outcome.maxAdverseExcursion;
-					}
+		for (const doc of docs) {
+			const exchange = doc.exchange || 'UNKNOWN';
+			const symbol = doc.symbol || 'UNKNOWN';
+
+			let eligibilityState = doc.eligibilityState;
+			if (!eligibilityState) {
+				if (symbol === 'UNKNOWN' || exchange === 'UNKNOWN') {
+					eligibilityState = 'unparseable_symbol';
+				} else if (exchange !== 'BINANCE') {
+					eligibilityState = 'unsupported_exchange';
+				} else if (doc.price === null || doc.price === undefined) {
+					eligibilityState = 'missing_entry_price';
+				} else {
+					eligibilityState = 'supported_provider';
 				}
 			}
 
-			if (totalWinsEvaluated > 0) {
-				windowStats[winKey] = {
-					totalSignals: totalWinsEvaluated,
-					hitRatePercent: parseFloat(((hits / totalWinsEvaluated) * 100).toFixed(2)),
-					averageReturnPercent: parseFloat((totalReturn / totalWinsEvaluated).toFixed(4)),
-					averageMfePercent: parseFloat((totalMfe / totalWinsEvaluated).toFixed(4)),
-					averageMaePercent: parseFloat((totalMae / totalWinsEvaluated).toFixed(4)),
-					maxAdverseExcursionPercent: parseFloat(maxMae.toFixed(4)), // drawdown proxy
+			const isEligible = eligibilityState === 'supported_provider';
+			if (isEligible) {
+				totalSignalsEligible++;
+			}
+
+			eligibilityBreakdown[eligibilityState] = (eligibilityBreakdown[eligibilityState] || 0) + 1;
+
+			if (!exchangeBreakdown[exchange]) {
+				exchangeBreakdown[exchange] = {
+					received: 0,
+					eligible: 0,
+					evaluated: 0,
+					pending: 0,
+					unavailable: 0,
 				};
+			}
+			exchangeBreakdown[exchange].received++;
+			if (isEligible) {
+				exchangeBreakdown[exchange].eligible++;
+			}
+
+			const outcomesValues = doc.outcomes ? Object.values(doc.outcomes) : [];
+			const hasEvaluated = outcomesValues.some(o => o.status === 'evaluated');
+			const hasPending = doc.outcomeEvaluated === false && outcomesValues.some(o => o.status === 'pending');
+
+			if (hasEvaluated) {
+				totalSignalsEvaluated++;
+				exchangeBreakdown[exchange].evaluated++;
+				evaluatedSignals.push(doc);
+			} else if (hasPending) {
+				totalSignalsPending++;
+				exchangeBreakdown[exchange].pending++;
+			} else {
+				totalSignalsUnavailable++;
+				exchangeBreakdown[exchange].unavailable++;
+			}
+		}
+
+		const windowStats = {};
+		if (evaluatedSignals.length > 0) {
+			for (const winKey of Object.keys(WINDOW_CONFIGS)) {
+				let totalWinsEvaluated = 0;
+				let hits = 0;
+				let totalReturn = 0;
+				let totalMfe = 0;
+				let totalMae = 0;
+				let maxMae = 0; // absolute maximum drawdown seen
+
+				for (const signal of evaluatedSignals) {
+					const outcome = signal.outcomes[winKey];
+					if (outcome && outcome.status === 'evaluated') {
+						totalWinsEvaluated++;
+						if (outcome.return > 0) {
+							hits++;
+						}
+						totalReturn += outcome.return;
+						totalMfe += outcome.maxFavorableExcursion;
+						totalMae += outcome.maxAdverseExcursion;
+						if (outcome.maxAdverseExcursion < maxMae) {
+							maxMae = outcome.maxAdverseExcursion;
+						}
+					}
+				}
+
+				if (totalWinsEvaluated > 0) {
+					windowStats[winKey] = {
+						totalSignals: totalWinsEvaluated,
+						hitRatePercent: parseFloat(((hits / totalWinsEvaluated) * 100).toFixed(2)),
+						averageReturnPercent: parseFloat((totalReturn / totalWinsEvaluated).toFixed(4)),
+						averageMfePercent: parseFloat((totalMfe / totalWinsEvaluated).toFixed(4)),
+						averageMaePercent: parseFloat((totalMae / totalWinsEvaluated).toFixed(4)),
+						maxAdverseExcursionPercent: parseFloat(maxMae.toFixed(4)), // drawdown proxy
+					};
+				}
 			}
 		}
 
@@ -416,9 +530,22 @@ async function getMetricsSummary({ from, to, limit } = {}) {
 
 		const averageWorstMae = maeCount > 0 ? parseFloat((totalAllMae / maeCount).toFixed(4)) : 0;
 		const averageProcessingTimeMs = processingTimeCount > 0 ? Math.round(totalProcessingTime / processingTimeCount) : null;
+		const coveragePercent = totalSignalsReceived > 0 ? parseFloat(((totalSignalsEvaluated / totalSignalsReceived) * 100).toFixed(2)) : 0;
+		const isCoverageComplete = totalSignalsEvaluated === totalSignalsReceived;
 
 		return {
-			totalSignalsEvaluated: totalEvaluated,
+			totalSignalsReceived,
+			totalSignalsEligible,
+			totalSignalsEvaluated,
+			totalSignalsPending,
+			totalSignalsUnavailable,
+			coveragePercent,
+			isCoverageComplete,
+			populationNote: !isCoverageComplete
+				? `Metrics represent ${totalSignalsEvaluated} evaluated Binance signals out of ${totalSignalsReceived} total received signals (${coveragePercent}% coverage).`
+				: 'Metrics represent 100% of received signals.',
+			exchangeBreakdown,
+			eligibilityBreakdown,
 			windows: windowStats,
 			drawdownProxy: {
 				averageMaxAdverseExcursionPercent: averageWorstMae,
