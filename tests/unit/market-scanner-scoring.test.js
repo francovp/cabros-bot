@@ -318,6 +318,23 @@ describe('Market Scanner Scoring', () => {
 				direction: 'bullish',
 			}));
 		});
+
+		it('does not treat negated alignment labels as aligned', () => {
+			const result = scoreScannerItem({
+				symbol: 'BINANCE:BTCUSDT',
+				changePercent: 4,
+				trendConfluence: {
+					alignment: { status: 'not aligned', confidence: 70 },
+				},
+			}, 'top_gainers');
+
+			expect(result.reason).not.toContain('HTF aligned');
+			expect(result.trendConfluence).toEqual({
+				status: 'unknown',
+				direction: null,
+				confidence: 70,
+			});
+		});
 	});
 
 	describe('rankScannerItems', () => {

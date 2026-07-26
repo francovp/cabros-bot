@@ -363,6 +363,9 @@ function normalizeConfluenceStatus(value) {
 	}
 
 	const normalized = value.trim().toLowerCase();
+	if (/(not\s+aligned|misaligned|unaligned)/.test(normalized)) {
+		return 'unknown';
+	}
 	if (/(counter.?trend|oppos|divergen|contra.?tend)/.test(normalized)) {
 		return 'counter-trend';
 	}
