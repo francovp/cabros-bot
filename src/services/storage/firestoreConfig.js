@@ -1,7 +1,7 @@
 'use strict';
 
 const { createPrivateKey } = require('crypto');
-const { accessSync, constants } = require('fs');
+const { accessSync, constants, readFileSync, statSync } = require('fs');
 
 function hasValue(value) {
 	return typeof value === 'string' ? value.trim().length > 0 : value != null;
@@ -46,7 +46,11 @@ function hasReadableCredentialsFile(path) {
 
 	try {
 		accessSync(path, constants.R_OK);
-		return true;
+		if (!statSync(path).isFile()) {
+			return false;
+		}
+
+		return hasValidInlineCredentials(readFileSync(path, 'utf8'));
 	} catch (error) {
 		return false;
 	}

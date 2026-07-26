@@ -770,6 +770,44 @@ describe('Status endpoints', () => {
 		});
 	});
 
+	it('does not treat a readable credential directory as configured', async () => {
+		delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+		tempDir = mkdtempSync(join(tmpdir(), 'cabros-firestore-'));
+		process.env.GOOGLE_APPLICATION_CREDENTIALS = tempDir;
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.firestore).toEqual({
+			enabled: true,
+			configured: false,
+			ready: false,
+			status: 'misconfigured',
+		});
+	});
+
+	it('does not treat malformed credential file JSON as configured', async () => {
+		delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+		tempDir = mkdtempSync(join(tmpdir(), 'cabros-firestore-'));
+		const credentialsPath = join(tempDir, 'service-account.json');
+		writeFileSync(credentialsPath, '{"project_id":');
+		process.env.GOOGLE_APPLICATION_CREDENTIALS = credentialsPath;
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.firestore).toEqual({
+			enabled: true,
+			configured: false,
+			ready: false,
+			status: 'misconfigured',
+		});
+	});
+
 	it('treats malformed inline Firestore credentials as misconfigured', async () => {
 		process.env.FIREBASE_SERVICE_ACCOUNT_JSON = '{"project_id":';
 
