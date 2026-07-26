@@ -194,10 +194,26 @@ describe('Market Scanner Scoring', () => {
 
 			expect(result.score).toBeGreaterThanOrEqual(0);
 			expect(result.trendConfluence).toEqual({
-			status: 'unknown',
-			direction: 'bullish',
-			confidence: 65,
+				status: 'unknown',
+				direction: 'bullish',
+				confidence: 65,
+			});
 		});
+
+		it('retains neutral higher-timeframe metadata as unknown without score adjustment', () => {
+			const result = scoreScannerItem({
+				symbol: 'BINANCE:AVAXUSDT',
+				trendConfluence: {
+					alignment: { status: 'MIXED' },
+					recommendation: { action: 'HOLD' },
+				},
+			}, 'smart_volume_scanner');
+
+			expect(result.trendConfluence).toEqual({
+				status: 'unknown',
+				direction: null,
+				confidence: null,
+			});
 		});
 	});
 

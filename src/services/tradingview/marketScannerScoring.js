@@ -253,7 +253,11 @@ function resolveTrendConfluence(item = {}, scanType, options = {}) {
 		return null;
 	}
 
-	const explicitStatus = normalizeConfluenceStatus(raw.status);
+	const explicitStatus = normalizeConfluenceStatus(
+		raw.status
+		|| raw.alignment?.status
+		|| raw.recommendation?.action,
+	);
 	const direction = normalizeTrendDirection(
 		raw.direction
 		|| raw.trend
@@ -339,6 +343,9 @@ function normalizeConfluenceStatus(value) {
 	}
 	if (/(^|\s)(aligned|confluence|confluent)(\s|$)/.test(normalized)) {
 		return 'aligned';
+	}
+	if (/(mixed|neutral|hold|sideways|range|indecisive)/.test(normalized)) {
+		return 'unknown';
 	}
 
 	return null;
