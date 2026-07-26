@@ -41,6 +41,68 @@ describe('News Monitor Analyzer - Volume & RSI Filtering', () => {
 			const zeroKlines = [{ volume: '0' }, { volume: '0' }];
 			expect(calculateVolumeRatio(zeroKlines)).toBeNull();
 		});
+
+		it('should exclude currently open candle when calculating volume ratio', () => {
+			const now = 1722000000000;
+			const completedKlines = Array.from({ length: 10 }, (_, i) => ({
+				openTime: now - (11 - i) * 3600000,
+				closeTime: now - (10 - i) * 3600000 - 1,
+				volume: '100',
+			}));
+			// Partial open candle with low volume '10' currently forming
+			const openKline = {
+				openTime: now - 1800000,
+				closeTime: now + 1800000,
+				volume: '10',
+			};
+			const klines = [...completedKlines, openKline];
+
+			const ratio = calculateVolumeRatio(klines, { now });
+			expect(ratio).toBe(1.0);
+		});
+
+		it('should exclude open candle in array format klines [openTime, open, high, low, close, volume, closeTime]', () => {
+			const now = 1722000000000;
+			const completedKlines = Array.from({ length: 10 }, (_, i) => [
+				now - (11 - i) * 3600000,
+				'10',
+				'12',
+				'9',
+				'11',
+				'100',
+				now - (10 - i) * 3600000 - 1,
+			]);
+			const openKline = [
+				now - 1800000,
+				'10',
+				'12',
+				'9',
+				'11',
+				'15',
+				now + 1800000,
+			];
+			const klines = [...completedKlines, openKline];
+
+			const ratio = calculateVolumeRatio(klines, { now });
+			expect(ratio).toBe(1.0);
+		});
+
+		it('should return null if excluding open candle leaves fewer than 2 completed candles', () => {
+			const now = 1722000000000;
+			const singleCompleted = [
+				{
+					openTime: now - 3600000,
+					closeTime: now - 1,
+					volume: '100',
+				},
+				{
+					openTime: now - 1800000,
+					closeTime: now + 1800000,
+					volume: '10',
+				},
+			];
+			expect(calculateVolumeRatio(singleCompleted, { now })).toBeNull();
+		});
 	});
 
 	describe('calculateRSI', () => {
