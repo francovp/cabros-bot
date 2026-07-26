@@ -22,6 +22,10 @@ function validateApiKey(req, res, next) {
 	// Ensure apiKey is a string (in case of multiple headers)
 	const keyToCheck = Array.isArray(apiKey) ? apiKey[0] : apiKey;
 
+	if (typeof keyToCheck !== 'string' || keyToCheck.trim() === '') {
+		return res.status(401).json({ error: 'Unauthorized: Missing API key' });
+	}
+
 	// Use timingSafeEqual to prevent timing attacks
 	// Both buffers must be of the same length
 	const bufferApiKey = Buffer.from(keyToCheck);

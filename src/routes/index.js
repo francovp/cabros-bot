@@ -27,38 +27,42 @@ const { idempotencyMiddleware } = require('../lib/idempotency');
 
 function getRoutes(botOrGetter) {
 	const router = express.Router();
-	router.post('/webhook/alert', validateApiKey, idempotencyMiddleware, postAlert(botOrGetter));
-	router.post('/webhook/message', validateApiKey, postMessage(botOrGetter));
-	router.post('/webhook/expanded-analysis-alert', validateApiKey, idempotencyMiddleware, postExpandedAnalysisAlert(botOrGetter));
-	router.post('/webhook/market-scanner-alert', validateApiKey, idempotencyMiddleware, postMarketScannerAlert(botOrGetter));
-	router.post('/webhook/volume-confirmation', validateApiKey, postVolumeConfirmation());
-	router.get('/alerts', validateApiKey, listAlerts);
-	router.get('/alerts/summary', validateApiKey, summarizeAlerts);
-	router.get('/alerts/export', validateApiKey, exportAlerts);
-	router.post('/alerts/:alertId/replay', validateApiKey, idempotencyMiddleware, replayAlert(botOrGetter));
-	router.get('/alerts/:alertId', validateApiKey, getAlertById);
-	router.post('/scanner-presets', validateApiKey, postPreset);
-	router.get('/scanner-presets', validateApiKey, listPresets);
-	router.get('/scanner-presets/:id', validateApiKey, getPreset);
-	router.put('/scanner-presets/:id', validateApiKey, updatePreset);
-	router.delete('/scanner-presets/:id', validateApiKey, deletePreset);
-	router.post('/scanner-presets/:id/run', validateApiKey, postRunPreset(botOrGetter));
+
+	// Centralized API key authentication middleware for all routes
+	router.use(validateApiKey);
+
+	router.post('/webhook/alert', idempotencyMiddleware, postAlert(botOrGetter));
+	router.post('/webhook/message', postMessage(botOrGetter));
+	router.post('/webhook/expanded-analysis-alert', idempotencyMiddleware, postExpandedAnalysisAlert(botOrGetter));
+	router.post('/webhook/market-scanner-alert', idempotencyMiddleware, postMarketScannerAlert(botOrGetter));
+	router.post('/webhook/volume-confirmation', postVolumeConfirmation());
+	router.get('/alerts', listAlerts);
+	router.get('/alerts/summary', summarizeAlerts);
+	router.get('/alerts/export', exportAlerts);
+	router.post('/alerts/:alertId/replay', idempotencyMiddleware, replayAlert(botOrGetter));
+	router.get('/alerts/:alertId', getAlertById);
+	router.post('/scanner-presets', postPreset);
+	router.get('/scanner-presets', listPresets);
+	router.get('/scanner-presets/:id', getPreset);
+	router.put('/scanner-presets/:id', updatePreset);
+	router.delete('/scanner-presets/:id', deletePreset);
+	router.post('/scanner-presets/:id/run', postRunPreset(botOrGetter));
 
 	// Async job endpoints
-	router.post('/jobs/tradingview-analysis', validateApiKey, postCreateJob(botOrGetter));
-	router.get('/jobs', validateApiKey, getJobList);
-	router.get('/jobs/:jobId', validateApiKey, getJobStatus);
-	router.post('/jobs/:jobId/cancel', validateApiKey, postCancelJob);
-	router.post('/jobs/:jobId/retry', validateApiKey, postRetryJob(botOrGetter));
-	router.post('/jobs/:jobId/retry-failed', validateApiKey, postRetryFailedJob(botOrGetter));
+	router.post('/jobs/tradingview-analysis', postCreateJob(botOrGetter));
+	router.get('/jobs', getJobList);
+	router.get('/jobs/:jobId', getJobStatus);
+	router.post('/jobs/:jobId/cancel', postCancelJob);
+	router.post('/jobs/:jobId/retry', postRetryJob(botOrGetter));
+	router.post('/jobs/:jobId/retry-failed', postRetryFailedJob(botOrGetter));
 
 	const { getNewsMonitor } = require('../controllers/webhooks/handlers/newsMonitor/newsMonitor');
 	const newsMonitor = getNewsMonitor();
-	router.post('/news-monitor', validateApiKey, newsMonitor.handleRequest.bind(newsMonitor));
-	router.get('/news-monitor', validateApiKey, newsMonitor.handleRequest.bind(newsMonitor));
+	router.post('/news-monitor', newsMonitor.handleRequest.bind(newsMonitor));
+	router.get('/news-monitor', newsMonitor.handleRequest.bind(newsMonitor));
 
-	router.get('/status', validateApiKey, getApiStatus);
-	router.get('/capabilities', validateApiKey, getApiStatus);
+	router.get('/status', getApiStatus);
+	router.get('/capabilities', getApiStatus);
 
 	return router;
 }
