@@ -129,6 +129,63 @@ describe('Market Scanner Scoring', () => {
 			const result = scoreScannerItem(item, 'top_gainers');
 			expect(Number.isInteger(result.score)).toBe(true);
 		});
+
+		it('applies boost for aligned higher-timeframe trend (bullish HTF on top gainer)', () => {
+			const item = {
+				symbol: 'BINANCE:BTCUSDT',
+				changePercent: 4.0,
+				indicators: { close: 60000, RSI: 60 },
+				volume_ratio: 1.5,
+			};
+			const unaligned = scoreScannerItem(item, 'top_gainers');
+			const aligned = scoreScannerItem(item, 'top_gainers', { htfTrend: 'bullish' });
+
+			expect(aligned.score).toBeGreaterThan(unaligned.score);
+			expect(aligned.reason).toContain('HTF aligned');
+		});
+
+		it('applies penalty for counter-trend higher-timeframe trend (bearish HTF on top gainer)', () => {
+			const item = {
+				symbol: 'BINANCE:ETHUSDT',
+				changePercent: 4.0,
+				indicators: { close: 3000, RSI: 60 },
+				volume_ratio: 1.5,
+			};
+			const unaligned = scoreScannerItem(item, 'top_gainers');
+			const counterTrend = scoreScannerItem(item, 'top_gainers', { htfTrend: 'bearish' });
+
+			expect(counterTrend.score).toBeLessThan(unaligned.score);
+			expect(counterTrend.reason).toContain('HTF counter-trend');
+		});
+
+		it('applies boost for aligned higher-timeframe trend (bearish HTF on top loser)', () => {
+			const item = {
+				symbol: 'BINANCE:SOLUSDT',
+				changePercent: -4.0,
+				indicators: { close: 140, RSI: 35 },
+				volume_ratio: 1.5,
+			};
+			const aligned = scoreScannerItem(item, 'top_losers', { htfTrend: 'bearish' });
+			const counterTrend = scoreScannerItem(item, 'top_losers', { htfTrend: 'bullish' });
+
+			expect(aligned.score).toBeGreaterThan(counterTrend.score);
+			expect(aligned.reason).toContain('HTF aligned');
+			expect(counterTrend.reason).toContain('HTF counter-trend');
+		});
+
+		it('preserves fail-open behavior when HTF trend is omitted or neutral', () => {
+			const item = {
+				symbol: 'BINANCE:ADAUSDT',
+				changePercent: 3.0,
+				indicators: { close: 0.5, RSI: 55 },
+				volume_ratio: 1.2,
+			};
+			const base = scoreScannerItem(item, 'top_gainers');
+			const neutral = scoreScannerItem(item, 'top_gainers', { htfTrend: 'neutral' });
+
+			expect(base.score).toEqual(neutral.score);
+			expect(base.reason).not.toContain('HTF');
+		});
 	});
 
 	describe('rankScannerItems', () => {

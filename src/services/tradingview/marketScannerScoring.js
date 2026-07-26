@@ -31,7 +31,19 @@ function scoreScannerItem(item, scanType, options = {}) {
 	const {
 		rsiOversold = 30,
 		rsiOverbought = 70,
+		htfBoost = 10,
+		htfPenalty = 10,
 	} = options;
+
+	const rawHtf = options.htfTrend
+		?? item?.htfTrend
+		?? item?.htf_trend
+		?? item?.higherTimeframeTrend
+		?? item?.indicators?.htfTrend
+		?? item?.indicators?.htf_trend
+		?? null;
+
+	const htfTrend = normalizeHtfTrend(rawHtf);
 
 	const change = numberOrNull(item.changePercent);
 	const rsi = numberOrNull(item.indicators?.RSI ?? null);
@@ -143,6 +155,25 @@ function scoreScannerItem(item, scanType, options = {}) {
 		volatilityScore = 5; // Neutral for non-BB scans
 	}
 
+	// --- Higher-Timeframe Trend Confluence (Boost or Penalty) ---
+	let htfConfluence = 0;
+	if (htfTrend) {
+		const setupDirection = getSetupDirection(scanType, item);
+		if (setupDirection === 'BULLISH') {
+			if (htfTrend === 'BULLISH') {
+				htfConfluence = htfBoost;
+			} else if (htfTrend === 'BEARISH') {
+				htfConfluence = -htfPenalty;
+			}
+		} else if (setupDirection === 'BEARISH') {
+			if (htfTrend === 'BEARISH') {
+				htfConfluence = htfBoost;
+			} else if (htfTrend === 'BULLISH') {
+				htfConfluence = -htfPenalty;
+			}
+		}
+	}
+
 	// --- Chase-entry penalty ---
 	let chasePenalty = 0;
 	if (rsi !== null && volRatio !== null) {
@@ -158,7 +189,7 @@ function scoreScannerItem(item, scanType, options = {}) {
 	}
 
 	// --- Composite score (0-100) ---
-	const rawScore = trendScore + momentumScore + volumeScore + breakoutScore + volatilityScore;
+	const rawScore = trendScore + momentumScore + volumeScore + breakoutScore + volatilityScore + htfConfluence;
 	const finalScore = Math.max(0, Math.min(100, rawScore - chasePenalty));
 
 	// --- Reason text ---
@@ -171,6 +202,11 @@ function scoreScannerItem(item, scanType, options = {}) {
 	}
 	if (volRatio !== null) {
 		parts.push(`Vol ${volRatio.toFixed(1)}x`);
+	}
+	if (htfConfluence > 0) {
+		parts.push(`HTF aligned (+${htfConfluence})`);
+	} else if (htfConfluence < 0) {
+		parts.push(`⚠️ HTF counter-trend (${htfConfluence})`);
 	}
 	if (chasePenalty > 0) {
 		parts.push(`⚠️ chase penalty -${chasePenalty}`);
@@ -207,6 +243,55 @@ function rankScannerItems(items, scanType, options = {}) {
 	});
 
 	return scored.sort((a, b) => b._score - a._score);
+}
+
+function normalizeHtfTrend(value) {
+	if (typeof value !== 'string' || !value.trim()) {
+		return null;
+	}
+	const norm = value.trim().toLowerCase();
+	if (norm === 'bullish' || norm === 'up' || norm === 'long' || norm === 'buy') {
+		return 'BULLISH';
+	}
+	if (norm === 'bearish' || norm === 'down' || norm === 'short' || norm === 'sell') {
+		return 'BEARISH';
+	}
+	if (norm === 'neutral' || norm === 'sideways') {
+		return 'NEUTRAL';
+	}
+	return null;
+}
+
+function getSetupDirection(scanType, item = {}) {
+	if (scanType === 'top_gainers') {
+		return 'BULLISH';
+	}
+	if (scanType === 'top_losers') {
+		return 'BEARISH';
+	}
+	if (typeof item.breakout_type === 'string') {
+		const breakout = item.breakout_type.trim().toLowerCase();
+		if (breakout === 'bullish' || breakout === 'buy') {
+			return 'BULLISH';
+		}
+		if (breakout === 'bearish' || breakout === 'sell') {
+			return 'BEARISH';
+		}
+	}
+	if (typeof item.trading_recommendation === 'string') {
+		const rec = item.trading_recommendation.trim().toLowerCase();
+		if (/\bbuy\b/.test(rec)) {
+			return 'BULLISH';
+		}
+		if (/\bsell\b/.test(rec)) {
+			return 'BEARISH';
+		}
+	}
+	const change = numberOrNull(item.changePercent);
+	if (change !== null) {
+		return change >= 0 ? 'BULLISH' : 'BEARISH';
+	}
+	return 'BULLISH';
 }
 
 function numberOrNull(value) {

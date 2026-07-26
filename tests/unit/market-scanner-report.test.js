@@ -28,6 +28,7 @@ describe('Market Scanner Report', () => {
 				limit: 5,
 				bbwThreshold: 0.05,
 				ranked: false,
+				htfTrend: null,
 			});
 		});
 
@@ -58,7 +59,19 @@ describe('Market Scanner Report', () => {
 				limit: 15,
 				bbwThreshold: 0.02,
 				ranked: false,
+				htfTrend: null,
 			});
+		});
+
+		it('parses and validates htfTrend parameter', () => {
+			const parsedBullish = parseMarketScannerRequest({ body: { htfTrend: ' BULLISH ' } });
+			expect(parsedBullish.htfTrend).toBe('bullish');
+
+			const parsedAlias = parseMarketScannerRequest({ body: { htf_trend: 'bearish' } });
+			expect(parsedAlias.htfTrend).toBe('bearish');
+
+			expect(() => parseMarketScannerRequest({ body: { htfTrend: 123 } })).toThrow('htfTrend must be a string');
+			expect(() => parseMarketScannerRequest({ body: { htfTrend: 'invalid' } })).toThrow('Unsupported htfTrend: invalid');
 		});
 
 		it('clamps limit to [1, 20]', () => {

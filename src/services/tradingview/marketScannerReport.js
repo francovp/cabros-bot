@@ -62,8 +62,28 @@ function parseMarketScannerRequest(req = {}) {
 	const limit = parseLimit(body);
 	const bbwThreshold = parseBbwThreshold(body);
 	const ranked = parseRanked(body);
+	const htfTrend = parseHtfTrend(body);
 
-	return { exchange, timeframe, scans, limit, bbwThreshold, ranked };
+	return { exchange, timeframe, scans, limit, bbwThreshold, ranked, htfTrend };
+}
+
+function parseHtfTrend(body = {}) {
+	const val = body.htfTrend ?? body.htf_trend ?? body.higherTimeframeTrend ?? body.htf;
+	if (val === undefined || val === null) {
+		return null;
+	}
+	if (typeof val !== 'string') {
+		throw new MarketScannerRequestError('htfTrend must be a string');
+	}
+	const trimmed = val.trim().toLowerCase();
+	if (!trimmed) {
+		return null;
+	}
+	const validTrends = new Set(['bullish', 'bearish', 'neutral', 'up', 'down', 'sideways']);
+	if (!validTrends.has(trimmed)) {
+		throw new MarketScannerRequestError(`Unsupported htfTrend: ${val}`);
+	}
+	return trimmed;
 }
 
 function getRequestBody(req = {}) {
@@ -224,7 +244,7 @@ function buildMarketScannerReport(scanResults = [], options = {}) {
 			return;
 		}
 
-		const itemsToRender = prepareMarketScannerItems(scanResult, ranked);
+		const itemsToRender = prepareMarketScannerItems(scanResult, ranked, options);
 
 		if (itemsToRender.length === 0) {
 			lines.push('No hay.');
@@ -232,14 +252,14 @@ function buildMarketScannerReport(scanResults = [], options = {}) {
 		}
 
 		itemsToRender.forEach((item, index) => {
-			lines.push(formatScanItem(item, index + 1, scanResult.scan, ranked));
+			lines.push(formatScanItem(item, index + 1, scanResult.scan, ranked, options));
 		});
 	});
 
 	return lines.join('\n');
 }
 
-function prepareMarketScannerItems(scanResult = {}, ranked = false) {
+function prepareMarketScannerItems(scanResult = {}, ranked = false, options = {}) {
 	let itemsToRender = scanResult.items || [];
 	if (scanResult.scan === 'top_gainers') {
 		itemsToRender = itemsToRender.filter((item) => typeof item.changePercent === 'number' && item.changePercent > 0);
@@ -254,7 +274,11 @@ function prepareMarketScannerItems(scanResult = {}, ranked = false) {
 	}
 
 	if (ranked) {
-		itemsToRender = rankScannerItems(itemsToRender, scanResult.scan);
+		const rankOpts = {
+			...options,
+			htfTrend: scanResult.htfTrend ?? options.htfTrend ?? null,
+		};
+		itemsToRender = rankScannerItems(itemsToRender, scanResult.scan, rankOpts);
 	}
 
 	return itemsToRender;
@@ -294,7 +318,7 @@ function classifyRiskReward(ratio) {
 	return 'poor';
 }
 
-function formatScanItem(item, rank, scanType, ranked = false) {
+function formatScanItem(item, rank, scanType, ranked = false, options = {}) {
 	const symbol = stripExchange(item.symbol);
 	const priceVal = numberOrNull(item.indicators?.close ?? null);
 	const price = formatCurrency(priceVal);
@@ -317,6 +341,18 @@ function formatScanItem(item, rank, scanType, ranked = false) {
 	} else if (scanType === 'bollinger_scan') {
 		const bbw = numberOrNull(item.bbw ?? null);
 		suffix = ` | BBW ${formatNumber(bbw, 2)}`;
+	}
+
+	const itemHtf = item.htfTrend ?? item.htf_trend ?? item.higherTimeframeTrend ?? options.htfTrend ?? null;
+	if (itemHtf && (!ranked || !item._scoreReason || !item._scoreReason.includes('HTF'))) {
+		const normHtf = String(itemHtf).toLowerCase();
+		if (normHtf === 'bullish' || normHtf === 'up') {
+			suffix += ' | HTF: 🟢 Bullish';
+		} else if (normHtf === 'bearish' || normHtf === 'down') {
+			suffix += ' | HTF: 🔴 Bearish';
+		} else if (normHtf === 'neutral' || normHtf === 'sideways') {
+			suffix += ' | HTF: ⚪ Neutral';
+		}
 	}
 
 	if (ranked && item._score !== undefined) {

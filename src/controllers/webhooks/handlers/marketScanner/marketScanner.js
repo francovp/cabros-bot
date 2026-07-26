@@ -90,6 +90,7 @@ function postMarketScannerAlert(botOrGetter) {
 				timeframe: parsed.timeframe,
 				now: new Date(),
 				ranked: parsed.ranked === true,
+				htfTrend: parsed.htfTrend,
 			});
 
 			const dryRun = resolveDryRun(req);
@@ -99,8 +100,9 @@ function postMarketScannerAlert(botOrGetter) {
 					success: true,
 					dryRun: true,
 					ranked: parsed.ranked === true,
+					htfTrend: parsed.htfTrend || null,
 					payload: { alertText },
-					scanResults: compactScanResults(scanResults, parsed.ranked === true),
+					scanResults: compactScanResults(scanResults, parsed.ranked === true, parsed.htfTrend),
 					summary: buildSummary(scanResults, []),
 					timedOut,
 					timeoutMs,
@@ -158,8 +160,9 @@ function postMarketScannerAlert(botOrGetter) {
 			return res.status(200).json({
 				success: true,
 				ranked: parsed.ranked === true,
+				htfTrend: parsed.htfTrend || null,
 				alertText,
-				scanResults: compactScanResults(scanResults, parsed.ranked === true),
+				scanResults: compactScanResults(scanResults, parsed.ranked === true, parsed.htfTrend),
 				deliveryResults,
 				requestedChannels,
 				deliveredChannels,
@@ -272,7 +275,7 @@ function buildScanArgs(parsed, scanType) {
 	return args;
 }
 
-function compactScanResults(results, includeScores = false) {
+function compactScanResults(results, includeScores = false, htfTrend = null) {
 	return results.map((result) => {
 		if (result.status === 'error' || result.status === 'timeout') {
 			return {
@@ -289,7 +292,7 @@ function compactScanResults(results, includeScores = false) {
 		};
 
 		if (includeScores && Array.isArray(result.items) && result.items.length > 0) {
-			compact.scores = prepareMarketScannerItems(result, true).map((item) => ({
+			compact.scores = prepareMarketScannerItems(result, true, { htfTrend }).map((item) => ({
 				symbol: item.symbol,
 				score: item._score,
 				reason: item._scoreReason,

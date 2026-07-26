@@ -247,4 +247,27 @@ describe('Market Scanner Alert endpoint', () => {
 		expect(res.body.scanResults[0].scores).toBeUndefined();
 		expect(res.body.payload.alertText).not.toContain('/100');
 	});
+
+	it('supports htfTrend parameter and applies higher-timeframe trend confluence in ranking scores', async () => {
+		tradingViewMcpService.callScanTool.mockResolvedValueOnce([
+			{
+				symbol: 'BINANCE:BTCUSDT',
+				changePercent: 4.0,
+				indicators: { close: 65000, RSI: 60 },
+				volume_ratio: 1.5,
+			},
+		]);
+
+		const res = await request(app)
+			.post('/api/webhook/market-scanner-alert')
+			.set('x-api-key', 'test-key')
+			.query({ dryRun: 'true' })
+			.send({ scans: ['top_gainers'], ranked: true, htfTrend: 'bullish' })
+			.expect(200);
+
+		expect(res.body.ranked).toBe(true);
+		expect(res.body.htfTrend).toBe('bullish');
+		expect(res.body.scanResults[0].scores[0].reason).toContain('HTF aligned');
+		expect(res.body.payload.alertText).toContain('HTF aligned');
+	});
 });
