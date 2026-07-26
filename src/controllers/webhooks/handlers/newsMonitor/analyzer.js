@@ -640,23 +640,45 @@ class NewsAnalyzer {
 	 */
 	async fetchBinancePrice(symbol) {
 		try {
-			// Wrapper with timeout (~5s)
-			const timeoutMs = 5000;
-			const timeoutPromise = new Promise((_, reject) =>
-				setTimeout(() => reject(new Error('Binance fetch timeout')), timeoutMs),
+			const timeoutMs = parseInt(process.env.BINANCE_FETCH_TIMEOUT_MS, 10) || 5000;
+			const client = getBinanceClient();
+
+			const withTimeout = (promise, ms, fallbackValue, isReject = false) => {
+				let timerId;
+				const timeoutPromise = new Promise((resolve, reject) => {
+					timerId = setTimeout(() => {
+						if (isReject) {
+							reject(new Error('Binance fetch timeout'));
+						} else {
+							resolve(fallbackValue);
+						}
+					}, ms);
+				});
+
+				return Promise.race([promise, timeoutPromise]).finally(() => {
+					if (timerId) {
+						clearTimeout(timerId);
+					}
+				});
+			};
+
+			const pricePromise = withTimeout(
+				client.getAvgPrice({ symbol }),
+				timeoutMs,
+				null,
+				true,
 			);
 
-			const client = getBinanceClient();
-			const pricePromise = client.getAvgPrice({ symbol });
 			const klinesPromise = (typeof client.getKlines === 'function')
-				? client.getKlines({ symbol, interval: '1h', limit: 30 }).catch(() => null)
+				? withTimeout(
+					client.getKlines({ symbol, interval: '1h', limit: 30 }).catch(() => null),
+					timeoutMs,
+					null,
+					false,
+				)
 				: Promise.resolve(null);
 
-			// Race between the fetch and timeout
-			const [data, klines] = await Promise.race([
-				Promise.all([pricePromise, klinesPromise]),
-				timeoutPromise,
-			]);
+			const [data, klines] = await Promise.all([pricePromise, klinesPromise]);
 
 			console.debug(`[Analyzer] Binance price for ${symbol}: $${data.price}`);
 
