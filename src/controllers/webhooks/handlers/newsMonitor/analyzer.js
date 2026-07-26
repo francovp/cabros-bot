@@ -134,6 +134,87 @@ function sleep(ms) {
 	return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+function getKlineClose(kline) {
+	if (typeof kline === 'object' && kline !== null && !Array.isArray(kline)) {
+		return parseFloat(kline.close);
+	}
+	if (Array.isArray(kline)) {
+		return parseFloat(kline[4]);
+	}
+	return 0;
+}
+
+function getKlineVolume(kline) {
+	if (typeof kline === 'object' && kline !== null && !Array.isArray(kline)) {
+		return parseFloat(kline.volume);
+	}
+	if (Array.isArray(kline)) {
+		return parseFloat(kline[5]);
+	}
+	return 0;
+}
+
+function calculateVolumeRatio(klines) {
+	if (!Array.isArray(klines) || klines.length < 2) {
+		return null;
+	}
+
+	const latestVolume = getKlineVolume(klines[klines.length - 1]);
+	const previousKlines = klines.slice(0, klines.length - 1);
+	const sumPreviousVolume = previousKlines.reduce((sum, k) => sum + getKlineVolume(k), 0);
+	const avgPreviousVolume = sumPreviousVolume / previousKlines.length;
+
+	if (avgPreviousVolume <= 0) {
+		return null;
+	}
+
+	const ratio = latestVolume / avgPreviousVolume;
+	return Math.round(ratio * 100) / 100;
+}
+
+function calculateRSI(closes, period = 14) {
+	if (!Array.isArray(closes) || closes.length <= period) {
+		return null;
+	}
+
+	const changes = [];
+	for (let i = 1; i < closes.length; i++) {
+		changes.push(closes[i] - closes[i - 1]);
+	}
+
+	let gainSum = 0;
+	let lossSum = 0;
+
+	for (let i = 0; i < period; i++) {
+		const change = changes[i];
+		if (change > 0) {
+			gainSum += change;
+		} else {
+			lossSum += Math.abs(change);
+		}
+	}
+
+	let avgGain = gainSum / period;
+	let avgLoss = lossSum / period;
+
+	for (let i = period; i < changes.length; i++) {
+		const change = changes[i];
+		const gain = change > 0 ? change : 0;
+		const loss = change < 0 ? Math.abs(change) : 0;
+
+		avgGain = (avgGain * (period - 1) + gain) / period;
+		avgLoss = (avgLoss * (period - 1) + loss) / period;
+	}
+
+	if (avgLoss === 0) {
+		return 100;
+	}
+
+	const rs = avgGain / avgLoss;
+	const rsi = 100 - (100 / (1 + rs));
+	return Math.round(rsi * 10) / 10;
+}
+
 class NewsAnalyzer {
 	constructor() {
 		this.cache = getCacheInstance();
@@ -147,6 +228,34 @@ class NewsAnalyzer {
 		this.geminiConcurrency = parsePositiveInteger(process.env.NEWS_GEMINI_CONCURRENCY, Infinity);
 		this.geminiQuotaMaxRetries = parsePositiveInteger(process.env.NEWS_GEMINI_QUOTA_MAX_RETRIES, 2);
 		this.geminiQuotaRetryBaseMs = parsePositiveInteger(process.env.NEWS_GEMINI_QUOTA_RETRY_BASE_MS, 1000);
+	}
+
+	calculateAdjustedConfidence(baseConfidence, marketContext) {
+		if (!marketContext || (typeof marketContext.volumeRatio !== 'number' && typeof marketContext.rsi !== 'number')) {
+			return baseConfidence;
+		}
+
+		let confidence = baseConfidence;
+
+		if (typeof marketContext.volumeRatio === 'number') {
+			if (marketContext.volumeRatio > 1.5) {
+				confidence += 0.10;
+			} else if (marketContext.volumeRatio < 1.0) {
+				confidence -= 0.10;
+			}
+		}
+
+		if (typeof marketContext.rsi === 'number') {
+			if (marketContext.rsi >= 40 && marketContext.rsi <= 65) {
+				confidence += 0.05;
+			} else if (marketContext.rsi > 75) {
+				confidence -= 0.15;
+			} else if (marketContext.rsi < 25) {
+				confidence -= 0.15;
+			}
+		}
+
+		return Math.min(1.0, Math.max(0.0, Math.round(confidence * 100) / 100));
 	}
 
 	/**
@@ -319,6 +428,9 @@ class NewsAnalyzer {
 		// Call Gemini for sentiment analysis
 		const geminiAnalysis = await analyzeNewsForSymbol(symbol, analysisContext, { tokenUsage });
 
+		// Adjust confidence score with volume expansion & RSI filters if marketContext contains them
+		geminiAnalysis.confidence = this.calculateAdjustedConfidence(geminiAnalysis.confidence, marketContext);
+
 		// If no event detected, cache and return
 		if (geminiAnalysis.event_category === EventCategory.NONE) {
 			await this.cache.set(symbol, EventCategory.NONE, {
@@ -484,14 +596,32 @@ class NewsAnalyzer {
 
 			const client = getBinanceClient();
 			const pricePromise = client.getAvgPrice({ symbol });
+			const klinesPromise = (typeof client.getKlines === 'function')
+				? client.getKlines({ symbol, interval: '1h', limit: 30 }).catch(() => null)
+				: Promise.resolve(null);
 
 			// Race between the fetch and timeout
-			const data = await Promise.race([pricePromise, timeoutPromise]);
+			const [data, klines] = await Promise.race([
+				Promise.all([pricePromise, klinesPromise]),
+				timeoutPromise,
+			]);
 
 			console.debug(`[Analyzer] Binance price for ${symbol}: $${data.price}`);
+
+			let volumeRatio = null;
+			let rsi = null;
+
+			if (Array.isArray(klines) && klines.length > 0) {
+				volumeRatio = calculateVolumeRatio(klines);
+				const closes = klines.map(getKlineClose);
+				rsi = calculateRSI(closes);
+			}
+
 			return {
 				price: parseFloat(data.price),
 				change24h: null, // Binance getAvgPrice doesn't return 24h change, would need additional call
+				volumeRatio,
+				rsi,
 				source: 'binance',
 				timestamp: Date.now(),
 			};
@@ -671,9 +801,17 @@ class NewsAnalyzer {
 
 		context += `*Sentiment:* ${this.sentimentLabel(sentimentScore)} (${sentimentScore.toFixed(2)})`;
 
-		if (marketContext && marketContext.price) {
-			const change = marketContext.change24h ?? 0;
-			context += `\n*Price:* $${marketContext.price} (${change > 0 ? '+' : ''}${change.toFixed(1)}%)`;
+		if (marketContext) {
+			if (marketContext.price) {
+				const change = marketContext.change24h ?? 0;
+				context += `\n*Price:* $${marketContext.price} (${change > 0 ? '+' : ''}${change.toFixed(1)}%)`;
+			}
+			if (typeof marketContext.volumeRatio === 'number') {
+				context += `\n*Volume Ratio:* ${marketContext.volumeRatio.toFixed(2)}x`;
+			}
+			if (typeof marketContext.rsi === 'number') {
+				context += `\n*RSI (14):* ${marketContext.rsi.toFixed(1)}`;
+			}
 		}
 
 		// Build citations from sources
@@ -717,6 +855,8 @@ class NewsAnalyzer {
 			sources: geminiAnalysis.sources,
 			text: alertTitle,
 			enriched,
+			volumeRatio: (marketContext && typeof marketContext.volumeRatio === 'number') ? marketContext.volumeRatio : undefined,
+			rsi: (marketContext && typeof marketContext.rsi === 'number') ? marketContext.rsi : undefined,
 			// Include calibration fields at top level for backward compatibility
 			source_count: geminiAnalysis.source_count,
 			source_freshness: geminiAnalysis.source_freshness,
@@ -764,9 +904,17 @@ class NewsAnalyzer {
 			message += `Reason: ${reason}\n`;
 		}
 
-		if (marketContext && marketContext.price) {
-			const change = marketContext.change24h ?? 0;
-			message += `Price: $${marketContext.price} (${change > 0 ? '+' : ''}${change.toFixed(1)}%)\n`;
+		if (marketContext) {
+			if (marketContext.price) {
+				const change = marketContext.change24h ?? 0;
+				message += `Price: $${marketContext.price} (${change > 0 ? '+' : ''}${change.toFixed(1)}%)\n`;
+			}
+			if (typeof marketContext.volumeRatio === 'number') {
+				message += `Volume Ratio: ${marketContext.volumeRatio.toFixed(2)}x\n`;
+			}
+			if (typeof marketContext.rsi === 'number') {
+				message += `RSI (14): ${marketContext.rsi.toFixed(1)}\n`;
+			}
 		}
 
 		if (analysis.sources && Array.isArray(analysis.sources) && analysis.sources.length > 0) {
@@ -844,4 +992,6 @@ module.exports = {
 	getAnalyzer,
 	NewsAnalyzer,
 	setNotificationManager,
+	calculateVolumeRatio,
+	calculateRSI,
 };
