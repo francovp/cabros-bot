@@ -283,5 +283,38 @@ describe('Market Scanner Handler', () => {
 				items: [item],
 			});
 		});
+
+		it('preserves completed scan items when higher-timeframe enrichment times out', async () => {
+			const controller = new AbortController();
+			const parsed = {
+				exchange: 'BINANCE',
+				timeframe: '1h',
+				scans: ['top_gainers', 'top_losers'],
+				limit: 3,
+				includeMultiTimeframe: true,
+			};
+			const item = { symbol: 'BINANCE:BTCUSDT', changePercent: 3.5 };
+			tradingViewMcpService.callScanTool
+				.mockResolvedValueOnce([item])
+				.mockResolvedValueOnce([]);
+			tradingViewMcpService.callMultiTimeframeAnalysis.mockImplementationOnce(async () => {
+				const error = new Error('AbortError');
+				error.name = 'AbortError';
+				controller.abort(new Error('Market scanner timeout after 1ms'));
+				throw error;
+			});
+
+			const results = await runScans(parsed, { signal: controller.signal });
+
+			expect(results[0]).toEqual({
+				scan: 'top_gainers',
+				status: 'success',
+				items: [item],
+			});
+			expect(results[1]).toEqual(expect.objectContaining({
+				scan: 'top_losers',
+				status: 'timeout',
+			}));
+		});
 	});
 });

@@ -20,6 +20,7 @@ const {
 	getRequestedChannels,
 	getDeliveredChannels,
 } = require('../../../../services/notification/requestRouting');
+const { enrichScannerItemsWithTrendConfluence } = require('../../../../services/tradingview/marketScannerConfluence');
 
 const DEFAULT_SCANNER_TIMEOUT_MS = 90000;
 const MAX_SCANNER_TIMEOUT_MS = 120000;
@@ -231,9 +232,20 @@ async function runScans(parsed, options = {}) {
 
 			const result = await tradingViewMcpService.callScanTool(scanType, args, scanOptions);
 			const items = Array.isArray(result) ? result : (result && Array.isArray(result.result) ? result.result : []);
-			const enrichedItems = parsed.includeMultiTimeframe === true
-				? await enrichScannerItemsWithTrendConfluence(items, parsed, signal)
-				: items;
+			let enrichedItems = items;
+			if (parsed.includeMultiTimeframe === true) {
+				try {
+					enrichedItems = await enrichScannerItemsWithTrendConfluence(items, parsed, signal);
+				} catch (error) {
+					if (isAbortTriggered(signal, error)) {
+						const timeoutMessage = getAbortMessage(signal, error.message);
+						results.push({ scan: scanType, status: 'success', items });
+						appendTimeoutResults(results, parsed.scans.slice(index + 1), timeoutMessage);
+						break;
+					}
+					throw error;
+				}
+			}
 
 			results.push({
 				scan: scanType,
@@ -264,63 +276,6 @@ async function runScans(parsed, options = {}) {
 	}
 
 	return results;
-}
-
-async function enrichScannerItemsWithTrendConfluence(items, parsed, signal) {
-	if (!Array.isArray(items) || items.length === 0) {
-		return items;
-	}
-
-	const enrichedItems = [];
-	for (const item of items) {
-		const parsedSymbol = parseScannerSymbol(item?.symbol, parsed.exchange);
-		if (!parsedSymbol) {
-			enrichedItems.push(item);
-			continue;
-		}
-
-		try {
-			const trendConfluence = await tradingViewMcpService.callMultiTimeframeAnalysis({
-				symbol: parsedSymbol.symbol,
-				exchange: parsedSymbol.exchange,
-				signal,
-			});
-			enrichedItems.push(
-				trendConfluence && typeof trendConfluence === 'object'
-					? { ...item, trendConfluence }
-					: item,
-			);
-		} catch (error) {
-			if (isAbortTriggered(signal, error)) {
-				throw error;
-			}
-
-			console.warn('[MarketScanner] Higher-timeframe enrichment failed:', parsedSymbol.symbol, error.message);
-			enrichedItems.push(item);
-		}
-	}
-
-	return enrichedItems;
-}
-
-function parseScannerSymbol(value, defaultExchange) {
-	if (typeof value !== 'string' || !value.trim()) {
-		return null;
-	}
-
-	const raw = value.trim().toUpperCase();
-	const separatorIndex = raw.indexOf(':');
-	if (separatorIndex === -1) {
-		return { exchange: defaultExchange, symbol: raw };
-	}
-
-	const exchange = raw.slice(0, separatorIndex).trim();
-	const symbol = raw.slice(separatorIndex + 1).trim();
-	if (!exchange || !symbol) {
-		return null;
-	}
-
-	return { exchange, symbol };
 }
 
 function buildScanArgs(parsed, scanType) {

@@ -13,6 +13,7 @@ const {
 	parseMarketScannerRequest,
 	buildMarketScannerReport,
 } = require('../tradingview/marketScannerReport');
+const { enrichScannerItemsWithTrendConfluence } = require('../tradingview/marketScannerConfluence');
 const {
 	getNotificationManager,
 	initializeNotificationServices,
@@ -476,6 +477,8 @@ class JobService {
 				scans: parsed.scans,
 				limit: parsed.limit,
 				bbwThreshold: parsed.bbwThreshold,
+				ranked: parsed.ranked,
+				includeMultiTimeframe: parsed.includeMultiTimeframe,
 			}),
 		};
 
@@ -763,10 +766,29 @@ class JobService {
 				const result = await tradingViewMcpService.callScanTool(scanType, args, scanOptions);
 				const items = Array.isArray(result) ? result : (result && Array.isArray(result.result) ? result.result : []);
 
+				let enrichedItems = items;
+				if (parsed.includeMultiTimeframe === true) {
+					try {
+						enrichedItems = await enrichScannerItemsWithTrendConfluence(items, parsed, signal);
+					} catch (error) {
+						if (this._isAbortTriggered(signal, error)) {
+							const timeoutMessage = this._getAbortMessage(signal, error.message);
+							job.fullScanResults.push({
+								scan: scanType,
+								status: 'success',
+								items,
+							});
+							this._appendScannerTimeoutResults(job.fullScanResults, scans.slice(index + 1), timeoutMessage);
+							break;
+						}
+						throw error;
+					}
+				}
+
 				job.fullScanResults.push({
 					scan: scanType,
 					status: 'success',
-					items,
+					items: enrichedItems,
 				});
 			} catch (error) {
 				if (this._isAbortTriggered(signal, error)) {
@@ -818,6 +840,7 @@ class JobService {
 			exchange,
 			timeframe,
 			now: new Date(),
+			ranked: parsed.ranked === true,
 		});
 		job.alertText = alertText;
 

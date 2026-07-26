@@ -1928,7 +1928,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"type\": \"market-scanner\",\n  \"exchange\": \"BINANCE\",\n  \"timeframe\": \"4h\",\n  \"scans\": [\"top_gainers\", \"top_losers\"],\n  \"limit\": 5,\n  \"channels\": [\"telegram\"]\n}"
+              "raw": "{\n  \"type\": \"market-scanner\",\n  \"exchange\": \"BINANCE\",\n  \"timeframe\": \"4h\",\n  \"scans\": [\"top_gainers\", \"top_losers\"],\n  \"limit\": 5,\n  \"ranked\": true,\n  \"includeMultiTimeframe\": true,\n  \"channels\": [\"telegram\"]\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/api/jobs/tradingview-analysis",

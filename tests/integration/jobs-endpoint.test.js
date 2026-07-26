@@ -13,6 +13,7 @@ jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
 	tradingViewMcpService: {
 		analyzeSymbolIdentifier: jest.fn(),
 		callScanTool: jest.fn(),
+		callMultiTimeframeAnalysis: jest.fn(),
 	},
 }));
 
@@ -230,6 +231,54 @@ describe('Jobs API Integration Tests', () => {
 		expect(statusRes.body.deliveryResults).toEqual([
 			expect.objectContaining({ success: true, channel: 'telegram', messageId: 'job-msg-id' }),
 		]);
+	});
+
+	it('runs market-scanner higher-timeframe enrichment in the background job path', async () => {
+		tradingViewMcpService.callScanTool.mockResolvedValueOnce([
+			{
+				symbol: 'BINANCE:BTCUSDT',
+				changePercent: 3.5,
+				indicators: { close: 65000, RSI: 62 },
+				volume_ratio: 1.8,
+				breakout_type: 'bullish',
+			},
+		]);
+		tradingViewMcpService.callMultiTimeframeAnalysis.mockResolvedValueOnce({
+			alignment: { status: 'bullish', confidence: 82 },
+		});
+
+		const createRes = await request(app)
+			.post('/api/jobs/tradingview-analysis')
+			.set('x-api-key', 'test-key')
+			.send({
+				type: 'market-scanner',
+				scans: ['top_gainers'],
+				ranked: true,
+				includeMultiTimeframe: true,
+			})
+			.expect(201);
+
+		let statusRes = await request(app)
+			.get(`/api/jobs/${createRes.body.jobId}`)
+			.set('x-api-key', 'test-key')
+			.expect(200);
+		let attempts = 0;
+		while (statusRes.body.status !== 'completed' && attempts < 10) {
+			await new Promise((resolve) => setTimeout(resolve, 30));
+			statusRes = await request(app)
+				.get(`/api/jobs/${createRes.body.jobId}`)
+				.set('x-api-key', 'test-key')
+				.expect(200);
+			attempts++;
+		}
+
+		expect(statusRes.body.status).toBe('completed');
+		expect(statusRes.body.alertText).toContain('🔥 HTF ALIGNED 82%');
+		expect(tradingViewMcpService.callMultiTimeframeAnalysis).toHaveBeenCalledWith({
+			symbol: 'BTCUSDT',
+			exchange: 'BINANCE',
+			signal: expect.any(AbortSignal),
+		});
 	});
 
 	it('routes async job delivery to requested channels only', async () => {

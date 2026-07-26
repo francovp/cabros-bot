@@ -703,9 +703,13 @@ Start a background analysis or scanner job.
   "exchange": "BINANCE",
   "timeframe": "4h",
   "scans": ["top_gainers", "top_losers"],
-  "limit": 5
+  "limit": 5,
+  "ranked": true,
+  "includeMultiTimeframe": true
 }
 ```
+
+For market-scanner jobs, `ranked` and `includeMultiTimeframe` use the same scoring and fail-open higher-timeframe enrichment as the synchronous scanner endpoint. If the job deadline aborts enrichment after a scan completes, that scan is retained and only remaining scans are marked as timed out.
 
 **Response (201 Created):**
 ```json
