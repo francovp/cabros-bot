@@ -274,13 +274,11 @@ function resolveTrendConfluence(item = {}, scanType, options = {}) {
 	const expectedDirection = getExpectedTrendDirection(item, scanType);
 
 	let status = explicitStatus;
-	if (!status && typeof raw.aligned === 'boolean') {
-		status = raw.aligned ? 'aligned' : 'counter-trend';
-	}
-	if (!status && direction && expectedDirection) {
+	if (direction && expectedDirection) {
 		status = direction === expectedDirection ? 'aligned' : 'counter-trend';
-	}
-	if (!status && direction) {
+	} else if (!status && typeof raw.aligned === 'boolean') {
+		status = raw.aligned ? 'aligned' : 'counter-trend';
+	} else if (!status && direction) {
 		status = 'unknown';
 	}
 	if (!status) {
