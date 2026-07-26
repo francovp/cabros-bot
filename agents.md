@@ -1105,3 +1105,11 @@ Scanner presets support an independent `ENABLE_FIRESTORE_SCANNER_PRESETS=true` g
 - `src/controllers/status.js` and `src/controllers/webhooks/handlers/scannerPresets/scannerPresets.js` — Expose storage capability metadata without credentials.
 - `tests/unit/scanner-preset-service.test.js`, `tests/integration/scanner-presets-endpoint.test.js`, and `tests/integration/status-endpoint.test.js` — Cover independent persistence, restart simulation, disabled fallback, and Firestore write failure.
 - `README.md`, `.env.example`, `src/openapi/openapi.json`, and `CabrosBot.postman_collection.json` — Document configuration and response contracts.
+
+## Binance Kline Timeout Isolation (CB-94 / Issue #236)
+
+`NewsAnalyzer.fetchBinancePrice` gives the required Binance price and optional 1h kline enrichment independent five-second lifecycles. A successful `getAvgPrice` result is preserved when `getKlines` hangs, times out, or rejects; optional `volumeRatio` and `rsi` values remain `null`, and Gemini fallback is not triggered. Timer cleanup prevents completed requests from leaving timeout handles active.
+
+**Core Components**:
+- `src/controllers/webhooks/handlers/newsMonitor/analyzer.js` — Independent timeout races and fail-open kline handling.
+- `tests/unit/news-monitor-binance-timeout.test.js` — Regression coverage for a successful price with a never-resolving kline request.
