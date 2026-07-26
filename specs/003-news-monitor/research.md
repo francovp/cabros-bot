@@ -331,66 +331,70 @@ async function getMarketContext(symbol, isCrypto) {
 **Implementation Pattern**:
 
 ```javascript
-const prettylink = require('prettylink');
-
 class URLShortener {
   constructor() {
-    this.cache = new Map(); // originalUrl -> shortUrl
-    this.service = process.env.URL_SHORTENER_SERVICE || 'bitly';
+    this.cache = new URLShortenerCache(); // originalUrl -> shortUrl with TTL
+    this.primaryService = (process.env.URL_SHORTENER_SERVICE || 'picsee').toLowerCase();
+    this.validServices = ['test', 'tinyurl', 'picsee', 'cuttly'];
   }
 
-  async shorten(url) {
+  async shortenUrl(url) {
     // Check cache first
-    if (this.cache.has(url)) {
-      return this.cache.get(url);
-    }
+    const cached = this.cache.get(url);
+    if (cached) return cached;
 
-    try {
-      // Try prettylink for supported services
-      if (this.isSupportedByPrettylink(this.service)) {
-        const shortUrl = await prettylink.shorten(url, { service: this.service, apiKey: this.getApiKey() });
-        this.cache.set(url, shortUrl);
-        return shortUrl;
-      } else {
-        // Fallback to direct API call
-        const shortUrl = await this.shortenWithDirectAPI(url);
-        this.cache.set(url, shortUrl);
-        return shortUrl;
+    for (const service of this.configuredServices) {
+      try {
+        const shortUrl = await this.callShortenerAPI(url, service);
+        if (shortUrl) {
+          this.cache.set(url, shortUrl);
+          return shortUrl;
+        }
+      } catch (error) {
+        console.warn(`URL shortening failed with ${service}:`, error.message);
       }
-    } catch (error) {
-      console.warn(`URL shortening failed for ${url}:`, error.message);
-      return null; // Fallback to title-only
     }
+    return null; // Graceful fallback to title-only citations
   }
 
-  isSupportedByPrettylink(service) {
-    return ['bitly', 'tinyurl', 'picsee', 'reurl', 'cuttly', 'pixnet0rz.tw'].includes(service);
-  }
-
-  async shortenWithDirectAPI(url) {
-    // Implement direct API calls for unsupported services
-    // Example for a hypothetical service
-    const response = await fetch(`https://api.${this.service}.com/shorten`, {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${this.getApiKey()}` },
-      body: JSON.stringify({ url })
-    });
-    const data = await response.json();
-    return data.shortUrl;
+  async callShortenerAPI(longUrl, service) {
+    const apiKey = this.getAPIKey(service);
+    switch (service) {
+      case 'tinyurl': {
+        const res = await fetch(`https://tinyurl.com/api-create.php?url=${encodeURIComponent(longUrl)}`);
+        return await res.text();
+      }
+      case 'picsee': {
+        const res = await fetch(`https://api.picsee.co/v1/links?access_token=${apiKey}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url: longUrl })
+        });
+        const body = await res.json();
+        return body?.data?.picseeUrl;
+      }
+      case 'cuttly': {
+        const res = await fetch(`https://cutt.ly/api/api.php?key=${apiKey}&short=${encodeURIComponent(longUrl)}`);
+        const body = await res.json();
+        return body?.url?.shortLink;
+      }
+      default:
+        throw new Error(`Unsupported service: ${service}`);
+    }
   }
 }
 ```
 
 **Configuration**:
 
-- `URL_SHORTENER_SERVICE`: Service name (default: 'bitly')
-- Service-specific tokens: `BITLY_ACCESS_TOKEN`, `TINYURL_API_KEY`, etc.
-- Services without tokens (TinyURL, Pixnet0rz.tw) enabled by setting service name
+- `URL_SHORTENER_SERVICE`: Service name (default: 'picsee')
+- Service-specific tokens: `PICSEE_API_KEY`, `CUTTLY_API_KEY`, etc.
+- Free services (TinyURL) enabled by setting service name
 
 **Alternatives Considered**:
 
 - **Single service only**: Too limiting, users may prefer different services
-- **No prettylink**: Would require custom wrappers for each service, more maintenance
+- **Third-party shortener library**: Avoid adding external NPM packages to keep dependencies clean and leverage native `fetch`.
 - **External URL shortener service**: Adds dependency, not needed for MVP
 
 **Integration Points**:

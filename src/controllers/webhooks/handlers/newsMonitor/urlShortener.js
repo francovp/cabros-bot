@@ -46,7 +46,7 @@ class URLShortenerCache {
 
 /**
  * URLShortener - Handles URL shortening via multiple services
- * Supports: Bitly, TinyURL, PicSee, reurl, Cutt.ly, Pixnet0rz.tw (via prettylink)
+ * Supports: Bitly, TinyURL, PicSee, reurl, Cutt.ly, Pixnet0rz.tw
  */
 class URLShortener {
 	constructor() {

@@ -47,8 +47,8 @@ describe('Documentation Alignment Policy', () => {
       const fullPath = path.join(repoRoot, relPath);
       if (fs.existsSync(fullPath)) {
         const content = fs.readFileSync(fullPath, 'utf8');
-        expect(content.includes('prettylink npm package')).toBe(false);
-        expect(content.includes('package.json to add Azure dependencies + prettylink')).toBe(false);
+        expect({ file: relPath, match: content.match(/prettylink/i) })
+          .toEqual({ file: relPath, match: null });
       }
     }
   });
