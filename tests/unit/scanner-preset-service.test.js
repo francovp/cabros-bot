@@ -246,4 +246,34 @@ describe('ScannerPresetService', () => {
 		expect(await service.deletePreset(created.id)).toBe(true);
 		expect(await service.listPresets()).toEqual([]);
 	});
+
+	it('queues deletes behind in-flight Firestore writes', async () => {
+		process.env.ENABLE_FIRESTORE_SCANNER_PRESETS = 'true';
+
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const firestoreAdmin = require('firebase-admin');
+		const service = new ScannerPresetService();
+		const created = await service.createPreset({ name: 'Original value' });
+
+		firestoreAdmin.__mockDocSet.mockRejectedValueOnce(new Error('Temporary Firestore write outage'));
+		await service.updatePreset(created.id, { name: 'Updated value' });
+
+		let releaseFlush;
+		const flushGate = new Promise((resolve) => {
+			releaseFlush = resolve;
+		});
+		firestoreAdmin.__mockDocSet.mockImplementation((data) => (
+			data.name === 'Trigger flush' ? Promise.resolve() : flushGate
+		));
+		const triggerPromise = service.createPreset({ name: 'Trigger flush' });
+		await new Promise((resolve) => setImmediate(resolve));
+		firestoreAdmin.__mockDocGet.mockResolvedValueOnce({ exists: false });
+		const deletePromise = service.deletePreset(created.id);
+		await new Promise((resolve) => setImmediate(resolve));
+		expect(firestoreAdmin.__mockDocDelete).not.toHaveBeenCalled();
+
+		releaseFlush();
+		await Promise.all([triggerPromise, deletePromise]);
+		expect(firestoreAdmin.__mockDocDelete).toHaveBeenCalled();
+	});
 });

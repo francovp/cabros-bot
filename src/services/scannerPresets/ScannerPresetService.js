@@ -230,9 +230,9 @@ class ScannerPresetService {
 		if (firestore) {
 			try {
 				const snapshot = await firestore.collection(COLLECTION_NAME).doc(id).get();
-				if (snapshot && snapshot.exists) {
+				if ((snapshot && snapshot.exists) || hadLocalPreset) {
 					await this._deleteFirestorePreset(firestore, id);
-					deleted = true;
+					deleted = Boolean(snapshot && snapshot.exists) || hadLocalPreset;
 				}
 				pendingFirestoreDeletes.delete(id);
 				this.firestoreUnavailable = pendingFirestorePresets.size > 0 || pendingFirestoreDeletes.size > 0;

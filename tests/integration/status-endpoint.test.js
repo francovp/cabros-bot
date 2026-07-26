@@ -833,6 +833,32 @@ describe('Status endpoints', () => {
 		});
 	});
 
+	it('rejects external-account ADC files without a usable credential source', async () => {
+		delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+		tempDir = mkdtempSync(join(tmpdir(), 'cabros-firestore-'));
+		const credentialsPath = join(tempDir, 'external-account.json');
+		writeFileSync(credentialsPath, JSON.stringify({
+			type: 'external_account',
+			audience: '//iam.googleapis.com/projects/123/locations/global/workloadIdentityPools/pool/providers/provider',
+			subject_token_type: 'urn:ietf:params:oauth:token-type:jwt',
+			token_url: 'https://sts.googleapis.com/v1/token',
+			credential_source: {},
+		}));
+		process.env.GOOGLE_APPLICATION_CREDENTIALS = credentialsPath;
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.firestore).toEqual({
+			enabled: true,
+			configured: false,
+			ready: false,
+			status: 'misconfigured',
+		});
+	});
+
 	it('treats malformed inline Firestore credentials as misconfigured', async () => {
 		process.env.FIREBASE_SERVICE_ACCOUNT_JSON = '{"project_id":';
 
