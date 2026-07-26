@@ -372,7 +372,7 @@
           "requestedChannels": { "type": "array", "items": { "type": "string" } },
           "deliveredChannels": { "type": "array", "items": { "type": "string" } },
           "results": { "$ref": "#/components/schemas/JsonObject", "description": "Per-symbol analysis results (expanded-analysis jobs only, when completed)." },
-          "scanResults": { "$ref": "#/components/schemas/JsonObject", "description": "Per-scan results (market-scanner jobs only, when completed)." },
+          "scanResults": { "$ref": "#/components/schemas/JsonObject", "description": "Per-scan results (market-scanner jobs only, when completed). Ranked jobs include scores with symbol, score, reason, and optional trendConfluence entries." },
           "summary": { "$ref": "#/components/schemas/JsonObject" },
           "alertText": { "type": "string", "description": "Formatted alert text delivered to notification channels (completed jobs only)." },
           "deliveryResults": { "type": "array", "items": { "$ref": "#/components/schemas/JsonObject" } },

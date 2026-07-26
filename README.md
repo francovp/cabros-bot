@@ -768,6 +768,8 @@ List recent sanitized jobs. The endpoint includes jobs from the in-memory reposi
 Retrieve status, partial progress, final report, and delivery state of a job.
 Jobs are retained in memory and, when Firestore job storage is enabled, persisted to the `tradingviewJobs` collection so status survives process restarts. Completed and failed jobs are automatically evicted after 1 hour.
 
+For completed ranked market-scanner jobs, `scanResults[].scores[]` contains the structured `symbol`, numeric `score`, non-empty `reason`, and optional `trendConfluence` fields used by the alert report. This is also included in configured terminal callback payloads.
+
 Set `ENABLE_FIRESTORE_JOB_STORAGE=true` plus the normal Firebase Admin credentials (`FIREBASE_SERVICE_ACCOUNT_JSON` or `GOOGLE_APPLICATION_CREDENTIALS`) to enable durable job storage. The legacy in-memory path remains the fallback when Firestore is disabled or unavailable.
 
 **Response (200 OK - Processing):**

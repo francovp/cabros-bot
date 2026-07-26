@@ -274,6 +274,12 @@ describe('Jobs API Integration Tests', () => {
 
 		expect(statusRes.body.status).toBe('completed');
 		expect(statusRes.body.alertText).toContain('🔥 HTF ALIGNED 82%');
+		expect(statusRes.body.scanResults[0].scores[0]).toEqual(expect.objectContaining({
+			symbol: 'BINANCE:BTCUSDT',
+			score: expect.any(Number),
+			reason: expect.stringContaining('HTF aligned +10'),
+			trendConfluence: expect.objectContaining({ status: 'aligned', confidence: 82 }),
+		}));
 		expect(tradingViewMcpService.callMultiTimeframeAnalysis).toHaveBeenCalledWith({
 			symbol: 'BTCUSDT',
 			exchange: 'BINANCE',

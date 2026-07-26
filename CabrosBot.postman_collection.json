@@ -1998,7 +1998,16 @@
                 "{{jobId}}"
               ]
             }
-          }
+          },
+          "response": [
+            {
+              "name": "Completed ranked market scanner job",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"success\": true,\n  \"jobId\": \"job-uuid-123\",\n  \"type\": \"market-scanner\",\n  \"status\": \"completed\",\n  \"scanResults\": [{\n    \"scan\": \"top_gainers\",\n    \"status\": \"success\",\n    \"itemCount\": 1,\n    \"scores\": [{ \"symbol\": \"BINANCE:BTCUSDT\", \"score\": 80, \"reason\": \"+3.5% · RSI 62.0 · Vol 1.8x · HTF aligned +10\", \"trendConfluence\": { \"status\": \"aligned\", \"direction\": \"bullish\", \"confidence\": 82, \"adjustment\": 10 } }]\n  }]\n}"
+            }
+          ]
         },
         {
           "name": "POST Cancel Job",

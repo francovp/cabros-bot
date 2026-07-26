@@ -12,6 +12,7 @@ const {
 const {
 	parseMarketScannerRequest,
 	buildMarketScannerReport,
+	prepareMarketScannerItems,
 } = require('../tradingview/marketScannerReport');
 const { enrichScannerItemsWithTrendConfluence } = require('../tradingview/marketScannerConfluence');
 const {
@@ -270,7 +271,10 @@ class JobService {
 		if (job.type === 'expanded-analysis') {
 			formatted.results = this._compactResults(job.fullResults);
 		} else if (job.type === 'market-scanner') {
-			formatted.scanResults = this._compactScanResults(job.fullScanResults);
+			formatted.scanResults = this._compactScanResults(
+				job.fullScanResults,
+				job.requestMetadata?.ranked === true,
+			);
 		}
 
 		if (Array.isArray(job.requestedChannels)) {
@@ -913,7 +917,7 @@ class JobService {
 		});
 	}
 
-	_compactScanResults(results) {
+	_compactScanResults(results, includeScores = false) {
 		return results.map((result) => {
 			if (result.status === 'error' || result.status === 'timeout') {
 				return {
@@ -923,11 +927,22 @@ class JobService {
 				};
 			}
 
-			return {
+			const compact = {
 				scan: result.scan,
 				status: result.status,
 				itemCount: result.items.length,
 			};
+
+			if (includeScores && Array.isArray(result.items) && result.items.length > 0) {
+				compact.scores = prepareMarketScannerItems(result, true).map((item) => ({
+					symbol: item.symbol,
+					score: item._score,
+					reason: item._scoreReason,
+					...(item._trendConfluence ? { trendConfluence: item._trendConfluence } : {}),
+				}));
+			}
+
+			return compact;
 		});
 	}
 

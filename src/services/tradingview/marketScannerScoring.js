@@ -276,6 +276,9 @@ function resolveTrendConfluence(item = {}, scanType, options = {}) {
 	if (!status && direction && expectedDirection) {
 		status = direction === expectedDirection ? 'aligned' : 'counter-trend';
 	}
+	if (!status && direction) {
+		status = 'unknown';
+	}
 	if (!status) {
 		return null;
 	}

@@ -235,6 +235,12 @@ describe('JobService Unit Tests', () => {
 				signal: expect.any(AbortSignal),
 			});
 			expect(job.alertText).toContain('🔥 HTF ALIGNED 82%');
+			expect(job.scanResults[0].scores[0]).toEqual(expect.objectContaining({
+				symbol: 'BINANCE:BTCUSDT',
+				score: expect.any(Number),
+				reason: expect.stringContaining('HTF aligned +10'),
+				trendConfluence: expect.objectContaining({ status: 'aligned', confidence: 82 }),
+			}));
 		});
 	});
 
