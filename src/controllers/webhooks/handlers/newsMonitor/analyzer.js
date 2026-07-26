@@ -154,13 +154,65 @@ function getKlineVolume(kline) {
 	return 0;
 }
 
-function calculateVolumeRatio(klines) {
+function isKlineOpen(kline, now = Date.now()) {
+	if (!kline) {
+		return false;
+	}
+
+	if (typeof kline === 'object' && !Array.isArray(kline)) {
+		if (typeof kline.isClosed === 'boolean') return !kline.isClosed;
+		if (typeof kline.closed === 'boolean') return !kline.closed;
+		if (typeof kline.open === 'boolean') return kline.open;
+		if (typeof kline.isComplete === 'boolean') return !kline.isComplete;
+
+		const closeTime = Number(kline.closeTime);
+		if (Number.isFinite(closeTime) && closeTime > 0) {
+			return now <= closeTime;
+		}
+
+		const openTime = Number(kline.openTime);
+		if (Number.isFinite(openTime) && openTime > 0) {
+			return now < openTime + 3600000;
+		}
+
+		return false;
+	}
+
+	if (Array.isArray(kline)) {
+		const closeTime = Number(kline[6]);
+		if (Number.isFinite(closeTime) && closeTime > 0) {
+			return now <= closeTime;
+		}
+
+		const openTime = Number(kline[0]);
+		if (Number.isFinite(openTime) && openTime > 0) {
+			return now < openTime + 3600000;
+		}
+
+		return false;
+	}
+
+	return false;
+}
+
+function calculateVolumeRatio(klines, options = {}) {
 	if (!Array.isArray(klines) || klines.length < 2) {
 		return null;
 	}
 
-	const latestVolume = getKlineVolume(klines[klines.length - 1]);
-	const previousKlines = klines.slice(0, klines.length - 1);
+	const now = typeof options === 'number' ? options : (options && options.now) || Date.now();
+
+	let completedKlines = klines;
+	while (completedKlines.length > 0 && isKlineOpen(completedKlines[completedKlines.length - 1], now)) {
+		completedKlines = completedKlines.slice(0, completedKlines.length - 1);
+	}
+
+	if (completedKlines.length < 2) {
+		return null;
+	}
+
+	const latestVolume = getKlineVolume(completedKlines[completedKlines.length - 1]);
+	const previousKlines = completedKlines.slice(0, completedKlines.length - 1);
 	const sumPreviousVolume = previousKlines.reduce((sum, k) => sum + getKlineVolume(k), 0);
 	const avgPreviousVolume = sumPreviousVolume / previousKlines.length;
 
@@ -994,4 +1046,5 @@ module.exports = {
 	setNotificationManager,
 	calculateVolumeRatio,
 	calculateRSI,
+	isKlineOpen,
 };
