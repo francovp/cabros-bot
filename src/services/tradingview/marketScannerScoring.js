@@ -265,6 +265,9 @@ function resolveTrendConfluence(item = {}, scanType, options = {}) {
 	} else if (!status && direction) {
 		status = 'unknown';
 	}
+	if (!expectedDirection && (status === 'aligned' || status === 'counter-trend')) {
+		status = 'unknown';
+	}
 	if (!status) {
 		return null;
 	}
@@ -305,10 +308,10 @@ function resolveDirectionFromRaw(raw = {}) {
 		raw.bias,
 		raw.alignment?.direction,
 		raw.alignment?.trend,
+		raw.alignment?.status,
+		raw.status,
 		raw.recommendation?.direction,
 		raw.recommendation?.action,
-		raw.status,
-		raw.alignment?.status,
 		raw.alignment,
 		raw.recommendation,
 	];
