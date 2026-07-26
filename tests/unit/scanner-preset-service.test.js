@@ -461,4 +461,33 @@ describe('ScannerPresetService', () => {
 		expect(created.id).toMatch(/^[0-9a-f-]{36}$/);
 		expect(service.getStorageStatus().mode).toBe('durable');
 	});
+
+	it('keeps a claimed pending preset visible during recovery', async () => {
+		process.env.ENABLE_FIRESTORE_SCANNER_PRESETS = 'true';
+
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const firestoreAdmin = require('firebase-admin');
+		const service = new ScannerPresetService();
+		firestoreAdmin.__mockDocSet.mockRejectedValueOnce(new Error('Temporary Firestore write outage'));
+		const queued = await service.createPreset({ name: 'Queued recovery value' });
+
+		let releaseFlush;
+		const flushGate = new Promise((resolve) => {
+			releaseFlush = resolve;
+		});
+		firestoreAdmin.__mockDocSet.mockImplementation((data) => (
+			data.name === 'Queued recovery value' ? flushGate : Promise.resolve()
+		));
+
+		const triggerPromise = service.createPreset({ name: 'Trigger recovery' });
+		await new Promise((resolve) => setImmediate(resolve));
+
+		expect(await service.listPresets()).toEqual(expect.arrayContaining([
+			expect.objectContaining({ id: queued.id, name: 'Queued recovery value' }),
+		]));
+		expect(service.getStorageStatus().mode).toBe('ephemeral');
+
+		releaseFlush();
+		await triggerPromise;
+	});
 });

@@ -27,6 +27,7 @@ const SUPPORTED_TIMEFRAME_ALIASES = new Set([
 // In-memory fallback used when Firestore is unavailable.
 const memoryPresets = new Map();
 const pendingFirestorePresets = new Map();
+const inFlightFirestorePresets = new Map();
 const pendingFirestoreDeletes = new Set();
 const firestoreDeleteGenerations = new Map();
 const firestoreWriteQueues = new Map();
@@ -116,6 +117,7 @@ class ScannerPresetService {
 		const durable = Boolean(firestore)
 			&& !this.firestoreUnavailable
 			&& pendingFirestorePresets.size === 0
+			&& inFlightFirestorePresets.size === 0
 			&& pendingFirestoreDeletes.size === 0
 			&& isFirestoreConfigured();
 
@@ -147,13 +149,20 @@ class ScannerPresetService {
 					? snapshot.docs.map((doc) => this._formatFirestoreDoc(doc))
 					: [];
 
-				if (pendingFirestorePresets.size > 0 || pendingFirestoreDeletes.size > 0) {
+				if (pendingFirestorePresets.size > 0
+					|| inFlightFirestorePresets.size > 0
+					|| pendingFirestoreDeletes.size > 0) {
 					this.firestoreUnavailable = true;
 					const mergedPresets = new Map(
 						firestorePresets
 							.filter((preset) => !pendingFirestoreDeletes.has(preset.id))
 							.map((preset) => [preset.id, preset]),
 					);
+					for (const [id, operation] of inFlightFirestorePresets.entries()) {
+						if (!pendingFirestoreDeletes.has(id)) {
+							mergedPresets.set(id, clonePreset(operation.preset));
+						}
+					}
 					for (const preset of pendingFirestorePresets.values()) {
 						mergedPresets.set(preset.id, clonePreset(preset));
 					}
@@ -185,11 +194,16 @@ class ScannerPresetService {
 		if (pendingFirestoreDeletes.has(id)) {
 			return null;
 		}
+		if (inFlightFirestorePresets.has(id)) {
+			return clonePreset(inFlightFirestorePresets.get(id).preset);
+		}
 
 		if (firestore) {
 			try {
 				const snapshot = await firestore.collection(COLLECTION_NAME).doc(id).get();
-				this.firestoreUnavailable = pendingFirestorePresets.size > 0 || pendingFirestoreDeletes.size > 0;
+				this.firestoreUnavailable = pendingFirestorePresets.size > 0
+					|| inFlightFirestorePresets.size > 0
+					|| pendingFirestoreDeletes.size > 0;
 				if (snapshot && snapshot.exists) {
 					return this._formatFirestoreDoc(snapshot);
 				}
@@ -346,6 +360,8 @@ class ScannerPresetService {
 		}
 
 		pendingFirestorePresets.delete(preset.id);
+		const inFlightWrite = { preset: clonePreset(preset) };
+		inFlightFirestorePresets.set(preset.id, inFlightWrite);
 		try {
 			await this._writeFirestorePreset(firestore, preset);
 			pendingFirestorePresets.delete(preset.id);
@@ -363,6 +379,10 @@ class ScannerPresetService {
 			}
 			this.firestoreUnavailable = true;
 			console.warn('[ScannerPresetService] Failed to persist preset to Firestore:', error.message);
+		} finally {
+			if (inFlightFirestorePresets.get(preset.id) === inFlightWrite) {
+				inFlightFirestorePresets.delete(preset.id);
+			}
 		}
 	}
 
@@ -386,6 +406,8 @@ class ScannerPresetService {
 			}
 			const deleteGenerationAtStart = firestoreDeleteGenerations.get(id) || 0;
 			pendingFirestorePresets.delete(id);
+			const inFlightWrite = { preset: clonePreset(preset) };
+			inFlightFirestorePresets.set(id, inFlightWrite);
 			try {
 				await this._writeFirestorePreset(firestore, preset);
 			} catch (error) {
@@ -395,6 +417,10 @@ class ScannerPresetService {
 				}
 				this.firestoreUnavailable = true;
 				console.warn('[ScannerPresetService] Failed to flush pending preset to Firestore:', error.message);
+			} finally {
+				if (inFlightFirestorePresets.get(id) === inFlightWrite) {
+					inFlightFirestorePresets.delete(id);
+				}
 			}
 		}
 	}
@@ -469,6 +495,7 @@ module.exports = {
 	_resetForTesting() {
 		memoryPresets.clear();
 		pendingFirestorePresets.clear();
+		inFlightFirestorePresets.clear();
 		pendingFirestoreDeletes.clear();
 		firestoreDeleteGenerations.clear();
 		firestoreWriteQueues.clear();
