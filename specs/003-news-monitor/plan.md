@@ -20,7 +20,7 @@ This feature implements an HTTP endpoint (`/api/news-monitor`) that analyzes new
 - `binance` ^2.10.2 - Binance API client (existing, for crypto price fetching)
 - `express` ^4.17.1 - HTTP server (existing)
 - `telegraf` ^4.3.0 - Telegram bot framework (existing)
-- `prettylink` ^1.1.0 - URL shortening wrapper for multiple services (Bitly, TinyURL, PicSee, reurl, Cutt.ly, Pixnet0rz.tw) with fallback to direct API calls for unsupported services
+- Native fetch URL shortener for multiple services (Bitly, TinyURL, PicSee, Cutt.ly) with fallback to title-only citations if service is unavailable
 
 **Storage**: In-memory cache for news deduplication (Map-based, TTL-aware, no persistence required) + in-memory URL shortening cache (session-scoped)
 **Testing**: Jest ^30.2.0 with supertest ^7.1.4 for integration tests; minimal test coverage per constitution (critical paths + regressions)  
@@ -38,7 +38,7 @@ This feature implements an HTTP endpoint (`/api/news-monitor`) that analyzes new
 - Aggressive timeouts: Binance ~5s, Gemini ~20s, optional LLM enrichment ~10s, URL shortening ~5s per symbol
 - Graceful degradation: notification channel failures and URL shortening failures do not block HTTP response or alert delivery
 - Conservative confidence selection when enrichment is enabled (min of Gemini + LLM scores)
-- URL shortening supports multiple services via `URL_SHORTENER_SERVICE` env var (default: 'bitly'); uses prettylink for supported services, direct API calls for unsupported; falls back to title-only citations if service unavailable
+- URL shortening supports multiple services via `URL_SHORTENER_SERVICE` env var (default: 'picsee'); uses native fetch for supported services; falls back to title-only citations if service unavailable
 
 **Scale/Scope**: 
 - Extensible: No hard limits on symbol count (30s timeout applies to entire batch)
@@ -248,7 +248,7 @@ All constitution principles remain met after design phase. Architecture is simpl
   - Parallel processing approach selected
   - Multi-channel notification strategy (reuse existing)
   - Binance integration approach (reuse with fallback)
-  - Technology choices finalized (Gemini GoogleSearch, Azure AI Inference, Binance, Bitly/prettylink)
+  - Technology choices finalized (Gemini GoogleSearch, Azure AI Inference, Binance, native fetch urlShortener)
   - Open questions: None remaining
 
 ### Phase 1: Design & Contracts ✅
@@ -264,7 +264,7 @@ All constitution principles remain met after design phase. Architecture is simpl
   - Error responses (400, 403, 500)
   - Response includes URL shortening metadata (applied, service, successCount, failureCount)
 - **quickstart.md**: Implementation guide complete
-  - Installation instructions (includes prettylink)
+  - Installation instructions (native fetch urlShortener, no extra packages)
   - Environment configuration (includes URL_SHORTENER_SERVICE and tokens for multiple services)
   - 4 usage examples (basic, default symbols, GET, cached)
   - Advanced configuration (Binance, LLM enrichment, threshold tuning, URL shortening)
@@ -332,7 +332,7 @@ specs/003-news-monitor/
 
 7. **Feature flags**: Three independent toggles (ENABLE_NEWS_MONITOR, ENABLE_BINANCE_PRICE_CHECK, ENABLE_LLM_ALERT_ENRICHMENT)
    - Feature gating remains: `ENABLE_NEWS_MONITOR`, `ENABLE_BINANCE_PRICE_CHECK`, `ENABLE_LLM_ALERT_ENRICHMENT` control the major flows
-   - URL shortening is optional and enabled only when a valid `BITLY_API_KEY` (or equivalent Bitly credential used by `prettylink`) is present.
+   - URL shortening is optional and enabled when supported provider API keys (such as `PICSEE_API_KEY` or `CUTTLY_API_KEY`) or free providers (TinyURL) are configured.
 
 8. **Timeout strategy**: Aggressive budgets (Binance ~5s, Gemini ~30s, LLM ~20s, Bitly ~5s, batch total 60s)
    - Overall per-symbol/batch analysis budget is 60s. 
@@ -340,13 +340,13 @@ specs/003-news-monitor/
 
 7. **URL Shortening** (NEW for User Story 2b): 
   - Optional feature controlled by `URL_SHORTENER_SERVICE` env var (default: 'bitly')
-  - Uses `prettylink` npm package for supported services (Bitly, TinyURL, PicSee, reurl, Cutt.ly, Pixnet0rz.tw)
+  - Uses native fetch for supported services (Bitly, TinyURL, PicSee, Cutt.ly)
   - Falls back to direct API calls for unsupported services
   - Session-scoped in-memory cache prevents redundant API calls for duplicate sources (originalUrl → shortUrl map; in-memory only, resets on process restart)
   - Graceful fallback to title-only citations if shortening fails (shortening failures logged at INFO; alert delivery proceeds)
   - Reduces WhatsApp message size for enriched alerts (typical enriched payloads drop from ~25K chars to under ~10K chars when citations are shortened)
   - Per-symbol 30s timeout budget accounts for shortening latency (shortening typically <1s per citation; API calls use a ~5s timeout and 3 retries with backoff)
-  - Implementation notes (for engineers): validate `prettylink` responses, de-duplicate source URLs before calling shortening service, and include shortening metadata (applied flag, service, successCount, failureCount) in alert response payload for observability
+  - Implementation notes (for engineers): validate URL shortener responses, de-duplicate source URLs before calling shortening service, and include shortening metadata (applied flag, service, successCount, failureCount) in alert response payload for observability
 
 ### Ready for Implementation (Phase 2)
 
@@ -358,7 +358,7 @@ specs/003-news-monitor/
 - Update services: `src/services/notification/WhatsAppService.js` (URL shortening integration)
 - New routes: Register `/api/news-monitor` in `src/routes/index.js`
 - New tests: Integration tests for endpoint, enrichment, cache, URL shortening
-- Update: `package.json` to add Azure dependencies + prettylink
+- Update: `package.json` to add Azure dependencies
 
 **Feature Flags**:
 - `ENABLE_NEWS_MONITOR=false` (default, safe rollout)

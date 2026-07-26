@@ -55,7 +55,7 @@ This document contains **24 actionable implementation tasks** organized into **4
 
 **Objective**: Build core abstractions and utilities that all user stories depend on  
 **Blocking For**: All Phase 3 user story tasks  
-**Independent Tests**: Run `npm test -- unit/retry-helper.test.js unit/notification-channel.test.js` to verify
+**Independent Tests**: Run `pnpm test -- tests/unit/retry-helper.test.js tests/unit/notification-channel.test.js` to verify
 
 ### Foundational Tasks
 
@@ -229,8 +229,8 @@ User stories executed in priority order (P1 → P2a → P2b → P3). Each story 
   - Verify all JSDoc comments are present in new service classes
 
 - [ ] T024 Final validation:
-  - Run full test suite: `npm test` (verify all 20+ tests pass)
-  - Run linter: `npm run lint` (verify no eslint errors)
+  - Run full test suite: `pnpm test` (verify all 20+ tests pass)
+  - Run linter: `pnpm run lint` (verify no eslint errors)
   - Run manual integration test with real GreenAPI account (if available) or mock server
   - Generate test coverage report: verify >80% coverage for new code
   - Merge PR to `main` branch after approval
@@ -318,21 +318,21 @@ Phase 4 (Polish)
 ### Unit Tests (T008, T012, T021)
 - **Files**: `tests/unit/notification-channel.test.js`, `tests/unit/retry-helper.test.js`, `tests/unit/whatsapp-service.test.js`
 - **Focus**: Individual method behavior, error handling, formatting
-- **Run**: `npm test -- unit/`
+- **Run**: `pnpm test -- unit/`
 - **Expected**: ~12 test cases, >90% line coverage
 
 ### Integration Tests (T013, T018, T021)
 
 - **Files**: `tests/integration/alert-whatsapp.test.js`, `tests/integration/alert-dual-channel.test.js`, `tests/integration/config-validation.test.js`
 - **Focus**: Webhook → service → external API flow, dual-channel coordination, configuration validation
-- **Run**: `npm test -- integration/`
+- **Run**: `pnpm test -- integration/`
 - **Expected**: ~8 test cases, verify HTTP 200 responses, payload correctness
 
 ### End-to-End Test (T022)
 
 - **Files**: `tests/integration/graceful-degradation.test.js`
 - **Focus**: Backward compatibility, missing configuration handling
-- **Run**: `npm test -- integration/graceful-degradation.test.js`
+- **Run**: `pnpm test -- integration/graceful-degradation.test.js`
 - **Expected**: ~3 test cases, verify no errors on degraded configs
 
 ---
@@ -438,18 +438,14 @@ package.json (no new dependencies; native fetch only)
 - [ ] Verify Node.js 20.x environment: `node --version`
 - [ ] Review existing Telegram alert implementation: `src/controllers/webhooks/handlers/alert/alert.js`
 - [ ] Check current grounding service: `src/services/grounding/grounding.js` (for reuse)
-- [ ] Verify test framework: jest is installed (`npm test --version`)
-- [ ] Confirm environment variable availability in test: check `setup.js`
-- [ ] After each phase: run tests, verify no regressions, commit with clear message
+- [ ] Verify test framework: jest is installed (`pnpm test --version`)
+- [ ] Verify environment variables configured: `ENABLE_WHATSAPP_ALERTS=true`, `WHATSAPP_API_URL`, `WHATSAPP_API_KEY`, `WHATSAPP_CHAT_ID`
 
----
+## Definition of Done
 
-## Success Definition (End of Phase 4)
-
-✅ **Feature Complete** when:
-1. All 24 tasks marked as completed
-2. `npm test` runs successfully with >80% coverage on new code
-3. `npm run lint` reports no errors
+1. All tasks T001-T040 completed and checked off
+2. `pnpm test` runs successfully with >80% coverage on new code
+3. `pnpm run lint` reports no errors
 4. Integration test `tests/integration/graceful-degradation.test.js` passes
 5. README.md updated with WhatsApp configuration section
 6. Pull request reviewed and merged to `main` branch

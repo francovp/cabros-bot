@@ -512,7 +512,7 @@ The system provides an HTTP endpoint (`/api/news-monitor`) that analyzes financi
 - `analyzer.js` — Symbol analysis orchestrator; handles parallel processing and timeouts
 - `enrichment.js` — Optional secondary LLM enrichment service (via Azure AI Inference)
 - `cache.js` — In-memory deduplication cache with TTL (default: 6 hours per symbol/event-category pair)
-- `urlShortener.js` — URL shortening utility for WhatsApp citations (uses prettylink for supported services, direct API calls for unsupported)
+- `urlShortener.js` — URL shortening utility for WhatsApp citations (uses native fetch for supported services with fallback to direct API calls)
 
 **Grounding Service Integration** (`src/services/grounding/`):
 - Reuses existing Gemini GoogleSearch grounding for **both** market sentiment analysis (`analyzeNewsForSymbol`) and price fetching (`fetchGeminiPrice`)
@@ -533,7 +533,7 @@ The system provides an HTTP endpoint (`/api/news-monitor`) that analyzes financi
 4. Optional LLM enrichment (if `ENABLE_LLM_ALERT_ENRICHMENT=true`) refines confidence using conservative strategy: `min(gemini_confidence, llm_confidence)`
 5. Alerts filtered by `NEWS_ALERT_THRESHOLD` (default: 0.7)
 6. Deduplicated: cache key is `(symbol, event_category)`. Same category within TTL prevents duplicate alerts; different categories generate separate alerts
-7. **URL shortening applied to WhatsApp citations** (if `URL_SHORTENER_SERVICE` configured): Uses prettylink for supported services, direct API calls for unsupported; falls back to title-only if shortening fails
+7. **URL shortening applied to WhatsApp citations** (if `URL_SHORTENER_SERVICE` configured): Uses native fetch for supported services (Bitly, TinyURL, PicSee, Cutt.ly); falls back to title-only if shortening fails
 8. Filtered alerts sent to all enabled channels (Telegram, WhatsApp) via existing NotificationManager in parallel
 9. Returns 200 OK with per-symbol results: status (analyzed/cached/timeout/error), detected alerts, delivery results, metadata (totalDurationMs, cached, requestId), and summary counters including `quota_exhausted` for exhausted Gemini 429 retries.
 
@@ -578,7 +578,7 @@ The system provides an HTTP endpoint (`/api/news-monitor`) that analyzes financi
 **Extending**:
 - Add new event category: Update Gemini prompt in `analyzer.js` to detect and tag new category
 - Add new LLM model for enrichment: Create new service in `src/services/inference/` extending pattern from `enrichmentService.js`
-- Add new URL shortening service: Extend `urlShortener.js` to support new service via prettylink or direct API calls
+- Add new URL shortening service: Extend `urlShortener.js` to support new service via native fetch
 - Add new notification channel: Extend NotificationChannel in `src/services/notification/` and register in NotificationManager (existing pattern)
 
 **Where to look first when extending or debugging**:
@@ -596,7 +596,7 @@ The system provides an HTTP endpoint (`/api/news-monitor`) that analyzes financi
 - GreenAPI for WhatsApp (REST API integration via native fetch with AbortController timeout)
 - Google Gemini for optional alert enrichment (existing integration in grounding service) and news sentiment analysis (003-news-monitor)
 - Azure AI Inference REST client for optional secondary LLM enrichment (003-news-monitor, disabled by default)
-- prettylink npm package for URL shortening in WhatsApp citations (003-news-monitor, with fallback to direct API calls)
+- Native fetch for URL shortening in WhatsApp citations (003-news-monitor, with fallback to title-only citations)
 - In-memory Map cache for news deduplication with TTL (003-news-monitor, no external storage)
 - Binance API client for precise crypto prices (003-news-monitor, optional fallback to Gemini GoogleSearch)
 - TradingView MCP remote Streamable HTTP server for technical `coin_analysis` report generation (`POST /api/webhook/expanded-analysis-alert`)

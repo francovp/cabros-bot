@@ -59,13 +59,13 @@ ENABLE_GROUNDING=true
 
 ```bash
 # Install dependencies (no new packages for native fetch)
-npm install
+pnpm install --frozen-lockfile
 
 # Start development server (with auto-reload)
-npm run start-dev
+pnpm run start-dev
 
 # In another terminal, run tests (optional)
-npm test
+pnpm test
 
 # Expected output:
 #   ✓ WhatsApp service initialized
@@ -129,7 +129,7 @@ Test alert: BTC/USDT Price alert 🚀
 ### Disable WhatsApp Temporarily
 
 ```bash
-ENABLE_WHATSAPP_ALERTS=false npm run start-dev
+ENABLE_WHATSAPP_ALERTS=false pnpm run start-dev
 ```
 
 Send alert again:
@@ -140,7 +140,7 @@ Send alert again:
 
 Set an invalid `WHATSAPP_API_KEY` in env:
 ```bash
-WHATSAPP_API_KEY=invalid-key npm run start-dev
+WHATSAPP_API_KEY=invalid-key pnpm run start-dev
 ```
 
 Send alert:
@@ -236,11 +236,11 @@ Watch for key log entries:
 **Expected**: One channel working doesn't mean the other is broken. Test each independently:
 ```bash
 # Disable WhatsApp
-ENABLE_WHATSAPP_ALERTS=false npm run start-dev
+ENABLE_WHATSAPP_ALERTS=false pnpm run start-dev
 # Send alert → should appear in Telegram only
 
 # Disable Telegram
-ENABLE_TELEGRAM_BOT=false npm run start-dev
+ENABLE_TELEGRAM_BOT=false pnpm run start-dev
 # Send alert → should appear in WhatsApp only
 ```
 
@@ -326,7 +326,7 @@ See `contracts/alert-webhook.openapi.yml` for full OpenAPI specification.
 ## Support
 
 For issues or questions:
-1. Check logs: `npm run start-dev` shows real-time debug output
+1. Check logs: `pnpm run start-dev` shows real-time debug output
 2. Review plan: `specs/002-whatsapp-alerts/plan.md`
 3. Review research: `specs/002-whatsapp-alerts/research.md`
 4. Check data model: `specs/002-whatsapp-alerts/data-model.md`

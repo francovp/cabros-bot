@@ -318,12 +318,12 @@ async function getMarketContext(symbol, isCrypto) {
 
 ### 7. URL Shortening for WhatsApp Citations
 
-**Decision**: Use `prettylink` npm package for supported URL shortening services (Bitly, TinyURL, PicSee, reurl, Cutt.ly, Pixnet0rz.tw), with fallback to direct API calls for unsupported services, and title-only citations if all fail
+**Decision**: Use native fetch URL shortener utility for supported URL shortening services (TinyURL, PicSee, Cutt.ly), with fallback to title-only citations if all fail
 
 **Rationale**:
 
-- **Multi-service support**: `prettylink` provides unified interface for multiple shortening services
-- **Graceful fallback**: If prettylink fails or service unsupported, fall back to direct API calls using native fetch
+- **Multi-service support**: Native fetch implementation provides unified interface for multiple shortening services
+- **Graceful fallback**: If shortener fails or service is unsupported, fall back gracefully
 - **Fail-open pattern**: If shortening fails, use title-only citations (e.g., "Reuters / CoinDesk") without blocking alert delivery
 - **In-memory cache**: Session-scoped cache prevents redundant API calls for duplicate sources
 - **Performance**: Shortening typically <1s per citation, fits within 30s per-symbol budget
@@ -331,66 +331,70 @@ async function getMarketContext(symbol, isCrypto) {
 **Implementation Pattern**:
 
 ```javascript
-const prettylink = require('prettylink');
-
 class URLShortener {
   constructor() {
-    this.cache = new Map(); // originalUrl -> shortUrl
-    this.service = process.env.URL_SHORTENER_SERVICE || 'bitly';
+    this.cache = new URLShortenerCache(); // originalUrl -> shortUrl with TTL
+    this.primaryService = (process.env.URL_SHORTENER_SERVICE || 'picsee').toLowerCase();
+    this.validServices = ['test', 'tinyurl', 'picsee', 'cuttly'];
   }
 
-  async shorten(url) {
+  async shortenUrl(url) {
     // Check cache first
-    if (this.cache.has(url)) {
-      return this.cache.get(url);
-    }
+    const cached = this.cache.get(url);
+    if (cached) return cached;
 
-    try {
-      // Try prettylink for supported services
-      if (this.isSupportedByPrettylink(this.service)) {
-        const shortUrl = await prettylink.shorten(url, { service: this.service, apiKey: this.getApiKey() });
-        this.cache.set(url, shortUrl);
-        return shortUrl;
-      } else {
-        // Fallback to direct API call
-        const shortUrl = await this.shortenWithDirectAPI(url);
-        this.cache.set(url, shortUrl);
-        return shortUrl;
+    for (const service of this.configuredServices) {
+      try {
+        const shortUrl = await this.callShortenerAPI(url, service);
+        if (shortUrl) {
+          this.cache.set(url, shortUrl);
+          return shortUrl;
+        }
+      } catch (error) {
+        console.warn(`URL shortening failed with ${service}:`, error.message);
       }
-    } catch (error) {
-      console.warn(`URL shortening failed for ${url}:`, error.message);
-      return null; // Fallback to title-only
     }
+    return null; // Graceful fallback to title-only citations
   }
 
-  isSupportedByPrettylink(service) {
-    return ['bitly', 'tinyurl', 'picsee', 'reurl', 'cuttly', 'pixnet0rz.tw'].includes(service);
-  }
-
-  async shortenWithDirectAPI(url) {
-    // Implement direct API calls for unsupported services
-    // Example for a hypothetical service
-    const response = await fetch(`https://api.${this.service}.com/shorten`, {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${this.getApiKey()}` },
-      body: JSON.stringify({ url })
-    });
-    const data = await response.json();
-    return data.shortUrl;
+  async callShortenerAPI(longUrl, service) {
+    const apiKey = this.getAPIKey(service);
+    switch (service) {
+      case 'tinyurl': {
+        const res = await fetch(`https://tinyurl.com/api-create.php?url=${encodeURIComponent(longUrl)}`);
+        return await res.text();
+      }
+      case 'picsee': {
+        const res = await fetch(`https://api.picsee.co/v1/links?access_token=${apiKey}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url: longUrl })
+        });
+        const body = await res.json();
+        return body?.data?.picseeUrl;
+      }
+      case 'cuttly': {
+        const res = await fetch(`https://cutt.ly/api/api.php?key=${apiKey}&short=${encodeURIComponent(longUrl)}`);
+        const body = await res.json();
+        return body?.url?.shortLink;
+      }
+      default:
+        throw new Error(`Unsupported service: ${service}`);
+    }
   }
 }
 ```
 
 **Configuration**:
 
-- `URL_SHORTENER_SERVICE`: Service name (default: 'bitly')
-- Service-specific tokens: `BITLY_ACCESS_TOKEN`, `TINYURL_API_KEY`, etc.
-- Services without tokens (TinyURL, Pixnet0rz.tw) enabled by setting service name
+- `URL_SHORTENER_SERVICE`: Service name (default: 'picsee')
+- Service-specific tokens: `PICSEE_API_KEY`, `CUTTLY_API_KEY`, etc.
+- Free services (TinyURL) enabled by setting service name
 
 **Alternatives Considered**:
 
 - **Single service only**: Too limiting, users may prefer different services
-- **No prettylink**: Would require custom wrappers for each service, more maintenance
+- **Third-party shortener library**: Avoid adding external NPM packages to keep dependencies clean and leverage native `fetch`.
 - **External URL shortener service**: Adds dependency, not needed for MVP
 
 **Integration Points**:
@@ -411,7 +415,7 @@ class URLShortener {
 | **Parallel Processing** | `Promise.allSettled()` | Non-blocking, returns partial results, native Node.js (no library needed) |
 | **Notification Delivery** | Existing `NotificationManager` (from 002-whatsapp-alerts) | Already supports Telegram + WhatsApp, retry logic, graceful degradation |
 | **Crypto Price Fetching** | Existing `binance` client with Gemini fallback | Already integrated, accurate real-time prices, fallback ensures reliability |
-| **URL Shortening** | `prettylink` npm package with direct API fallback | Multi-service support, graceful degradation, in-memory cache, fail-open pattern |
+| **URL Shortening** | Native fetch URL shortener utility | Multi-service support (TinyURL, PicSee, Cutt.ly), graceful degradation, in-memory cache, fail-open pattern |
 | **Testing** | Jest + supertest | Existing test infrastructure, supports integration tests for HTTP endpoints |
 
 ---
@@ -427,6 +431,6 @@ All NEEDS CLARIFICATION items from Technical Context have been resolved:
 - ✅ Parallel processing approach selected
 - ✅ Multi-channel notification strategy (reuse existing)
 - ✅ Binance integration approach (reuse with fallback)
-- ✅ URL shortening strategy documented (prettylink + direct API fallback)
+- ✅ URL shortening strategy documented (native fetch shortener + fallback)
 
 **Ready for Phase 1: Design & Contracts**
