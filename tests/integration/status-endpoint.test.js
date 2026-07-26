@@ -912,6 +912,28 @@ describe('Status endpoints', () => {
 		});
 	});
 
+	it('does not fall back to well-known ADC when the explicit path is invalid', async () => {
+		delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+		process.env.GOOGLE_CLOUD_PROJECT = 'well-known-project';
+		tempDir = mkdtempSync(join(tmpdir(), 'cabros-gcloud-'));
+		const wellKnownPath = join(tempDir, 'application_default_credentials.json');
+		writeFileSync(wellKnownPath, validFirestoreServiceAccountJson);
+		process.env.CLOUDSDK_CONFIG = tempDir;
+		process.env.GOOGLE_APPLICATION_CREDENTIALS = join(tempDir, 'missing-explicit.json');
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.firestore).toEqual({
+			enabled: true,
+			configured: false,
+			ready: false,
+			status: 'misconfigured',
+		});
+	});
+
 	it('treats Compute Engine metadata credentials as configured with a project id', async () => {
 		delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
 		delete process.env.GOOGLE_APPLICATION_CREDENTIALS;

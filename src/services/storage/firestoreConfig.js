@@ -91,12 +91,15 @@ function hasReadableCredentialsFile(path) {
 }
 
 function isFirestoreConfigured() {
-	return (
-		hasValidInlineCredentials(process.env.FIREBASE_SERVICE_ACCOUNT_JSON)
-		|| hasReadableCredentialsFile(process.env.GOOGLE_APPLICATION_CREDENTIALS)
-		|| hasReadableCredentialsFile(getWellKnownCredentialsPath())
-		|| isGoogleManagedRuntime()
-	);
+	if (hasValue(process.env.FIREBASE_SERVICE_ACCOUNT_JSON)) {
+		return hasValidInlineCredentials(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
+	}
+
+	if (hasValue(process.env.GOOGLE_APPLICATION_CREDENTIALS)) {
+		return hasReadableCredentialsFile(process.env.GOOGLE_APPLICATION_CREDENTIALS);
+	}
+
+	return hasReadableCredentialsFile(getWellKnownCredentialsPath()) || isGoogleManagedRuntime();
 }
 
 module.exports = {
