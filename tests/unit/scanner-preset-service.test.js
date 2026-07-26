@@ -252,6 +252,42 @@ describe('ScannerPresetService', () => {
 		expect(await originalGetPreset(created.id)).toBeNull();
 	});
 
+	it('preserves a newer failed write when an older write finishes', async () => {
+		process.env.ENABLE_FIRESTORE_SCANNER_PRESETS = 'true';
+
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const service = new ScannerPresetService();
+		const created = await service.createPreset({ name: 'Original value' });
+		let rejectNewWrite;
+		let releaseOldWrite;
+		const newWrite = new Promise((resolve, reject) => {
+			rejectNewWrite = reject;
+		});
+		const oldWrite = new Promise((resolve) => {
+			releaseOldWrite = resolve;
+		});
+		jest.spyOn(service, 'getPreset').mockResolvedValue(created);
+		jest.spyOn(service, '_writeFirestorePreset')
+			.mockImplementationOnce(() => oldWrite)
+			.mockImplementationOnce(() => newWrite)
+			.mockImplementation(() => Promise.reject(new Error('Recovery write still unavailable')));
+
+		const olderUpdate = service.updatePreset(created.id, { name: 'Older value' });
+		await new Promise((resolve) => setImmediate(resolve));
+		const newerUpdate = service.updatePreset(created.id, { name: 'Newer value' });
+		await new Promise((resolve) => setImmediate(resolve));
+
+		rejectNewWrite(new Error('Temporary Firestore update outage'));
+		await newerUpdate;
+		releaseOldWrite();
+		await olderUpdate;
+
+		expect(await service.listPresets()).toEqual([
+			expect.objectContaining({ id: created.id, name: 'Newer value' }),
+		]);
+		expect(service.getStorageStatus().mode).toBe('ephemeral');
+	});
+
 	it('keeps a deletion tombstone when deleting an updated preset during an outage', async () => {
 		process.env.ENABLE_FIRESTORE_SCANNER_PRESETS = 'true';
 
