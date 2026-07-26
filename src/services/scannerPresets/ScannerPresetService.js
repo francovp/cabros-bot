@@ -130,7 +130,7 @@ class ScannerPresetService {
 	}
 
 	async createPreset(params = {}) {
-		const preset = this._buildPreset(params);
+		const preset = this._buildPreset({ ...params, id: undefined });
 		await this._persistPreset(preset);
 		return clonePreset(preset);
 	}

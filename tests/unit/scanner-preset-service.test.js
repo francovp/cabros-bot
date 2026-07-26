@@ -448,4 +448,17 @@ describe('ScannerPresetService', () => {
 		expect(writes.filter((name) => name === 'Old value')).toEqual([]);
 		expect(writes.filter((name) => name === 'New value')).toEqual(['New value']);
 	});
+
+	it('does not accept caller-supplied create IDs', async () => {
+		process.env.ENABLE_FIRESTORE_SCANNER_PRESETS = 'true';
+
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const service = new ScannerPresetService();
+
+		const created = await service.createPreset({ id: 'unsafe/path', name: 'Generated ID preset' });
+
+		expect(created.id).not.toBe('unsafe/path');
+		expect(created.id).toMatch(/^[0-9a-f-]{36}$/);
+		expect(service.getStorageStatus().mode).toBe('durable');
+	});
 });
