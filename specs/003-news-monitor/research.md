@@ -318,7 +318,7 @@ async function getMarketContext(symbol, isCrypto) {
 
 ### 7. URL Shortening for WhatsApp Citations
 
-**Decision**: Use native fetch URL shortener utility for supported URL shortening services (Bitly, TinyURL, PicSee, Cutt.ly), with fallback to title-only citations if all fail
+**Decision**: Use native fetch URL shortener utility for supported URL shortening services (TinyURL, PicSee, Cutt.ly), with fallback to title-only citations if all fail
 
 **Rationale**:
 
@@ -415,7 +415,7 @@ class URLShortener {
 | **Parallel Processing** | `Promise.allSettled()` | Non-blocking, returns partial results, native Node.js (no library needed) |
 | **Notification Delivery** | Existing `NotificationManager` (from 002-whatsapp-alerts) | Already supports Telegram + WhatsApp, retry logic, graceful degradation |
 | **Crypto Price Fetching** | Existing `binance` client with Gemini fallback | Already integrated, accurate real-time prices, fallback ensures reliability |
-| **URL Shortening** | Native fetch URL shortener utility | Multi-service support (Bitly, TinyURL, PicSee, Cutt.ly), graceful degradation, in-memory cache, fail-open pattern |
+| **URL Shortening** | Native fetch URL shortener utility | Multi-service support (TinyURL, PicSee, Cutt.ly), graceful degradation, in-memory cache, fail-open pattern |
 | **Testing** | Jest + supertest | Existing test infrastructure, supports integration tests for HTTP endpoints |
 
 ---

@@ -1,20 +1,24 @@
 const fs = require('fs');
 const path = require('path');
 
+function getAllFiles(dirPath, arrayOfFiles = []) {
+  const files = fs.readdirSync(dirPath);
+  files.forEach((file) => {
+    const fullPath = path.join(dirPath, file);
+    if (fs.statSync(fullPath).isDirectory()) {
+      arrayOfFiles = getAllFiles(fullPath, arrayOfFiles);
+    } else if (file.endsWith('.md')) {
+      arrayOfFiles.push(fullPath);
+    }
+  });
+  return arrayOfFiles;
+}
+
 describe('Documentation Alignment Policy', () => {
   const repoRoot = path.resolve(__dirname, '../../');
-  
-  test('maintained quickstarts and tasks should not use npm commands', () => {
-    const specFiles = [
-      'specs/001-gemini-grounding-alert/quickstart.md',
-      'specs/001-gemini-grounding-alert/tasks.md',
-      'specs/002-whatsapp-alerts/quickstart.md',
-      'specs/002-whatsapp-alerts/tasks.md',
-      'specs/003-news-monitor/quickstart.md',
-      'specs/003-news-monitor/tasks.md',
-      'specs/004-enrich-alert-output/tasks.md',
-    ];
 
+  test('maintained quickstarts and tasks should not use npm commands', () => {
+    const specFiles = getAllFiles(path.join(repoRoot, 'specs'));
     const forbiddenPatterns = [
       /\bnpm install\b/i,
       /\bnpm run\b/i,
@@ -22,29 +26,24 @@ describe('Documentation Alignment Policy', () => {
       /\bnpm start\b/i,
     ];
 
-    for (const relPath of specFiles) {
-      const fullPath = path.join(repoRoot, relPath);
-      if (fs.existsSync(fullPath)) {
-        const content = fs.readFileSync(fullPath, 'utf8');
-        for (const pattern of forbiddenPatterns) {
-          expect({ file: relPath, match: content.match(pattern) })
-            .toEqual({ file: relPath, match: null });
-        }
+    for (const fullPath of specFiles) {
+      const relPath = path.relative(repoRoot, fullPath);
+      const content = fs.readFileSync(fullPath, 'utf8');
+      for (const pattern of forbiddenPatterns) {
+        expect({ file: relPath, match: content.match(pattern) })
+          .toEqual({ file: relPath, match: null });
       }
     }
   });
 
-  test('documentation should not claim prettylink is installed', () => {
+  test('documentation should not claim prettylink is installed or required', () => {
     const docFiles = [
-      'AGENTS.md',
-      'specs/003-news-monitor/plan.md',
-      'specs/003-news-monitor/spec.md',
-      'specs/003-news-monitor/research.md',
-      'specs/003-news-monitor/tasks.md',
+      path.join(repoRoot, 'AGENTS.md'),
+      ...getAllFiles(path.join(repoRoot, 'specs')),
     ];
 
-    for (const relPath of docFiles) {
-      const fullPath = path.join(repoRoot, relPath);
+    for (const fullPath of docFiles) {
+      const relPath = path.relative(repoRoot, fullPath);
       if (fs.existsSync(fullPath)) {
         const content = fs.readFileSync(fullPath, 'utf8');
         expect({ file: relPath, match: content.match(/prettylink/i) })
@@ -53,3 +52,4 @@ describe('Documentation Alignment Policy', () => {
     }
   });
 });
+
