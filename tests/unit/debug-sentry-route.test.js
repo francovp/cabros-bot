@@ -20,6 +20,7 @@ describe('registerDebugSentryRoute', () => {
 
 	beforeEach(() => {
 		process.env = { ...originalEnv };
+		delete process.env.WEBHOOK_API_KEY;
 	});
 
 	afterEach(() => {
