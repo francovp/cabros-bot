@@ -231,6 +231,27 @@ describe('ScannerPresetService', () => {
 		expect(newWriteStarted).toBe(true);
 	});
 
+	it('does not resurrect a preset deleted during the update read phase', async () => {
+		process.env.ENABLE_FIRESTORE_SCANNER_PRESETS = 'true';
+
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const firestoreAdmin = require('firebase-admin');
+		const service = new ScannerPresetService();
+		const created = await service.createPreset({ name: 'Original value' });
+		const originalGetPreset = service.getPreset.bind(service);
+
+		service.getPreset = jest.fn(async () => {
+			await service.deletePreset(created.id);
+			return created;
+		});
+
+		const updated = await service.updatePreset(created.id, { name: 'Resurrected value' });
+
+		expect(updated).toBeNull();
+		expect(firestoreAdmin.__mockDocSet).toHaveBeenCalledTimes(1);
+		expect(await originalGetPreset(created.id)).toBeNull();
+	});
+
 	it('keeps a deletion tombstone when deleting an updated preset during an outage', async () => {
 		process.env.ENABLE_FIRESTORE_SCANNER_PRESETS = 'true';
 

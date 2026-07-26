@@ -216,8 +216,11 @@ class ScannerPresetService {
 	}
 
 	async updatePreset(id, params = {}) {
+		const deleteGenerationAtReadStart = firestoreDeleteGenerations.get(id) || 0;
 		const existing = await this.getPreset(id);
-		if (!existing) {
+		if (!existing
+			|| (firestoreDeleteGenerations.get(id) || 0) !== deleteGenerationAtReadStart
+			|| pendingFirestoreDeletes.has(id)) {
 			return null;
 		}
 
@@ -230,8 +233,8 @@ class ScannerPresetService {
 		preset.updatedAt = new Date().toISOString();
 		preset.createdAt = existing.createdAt;
 
-		await this._persistPreset(preset);
-		return clonePreset(preset);
+		const persisted = await this._persistPreset(preset, deleteGenerationAtReadStart);
+		return persisted ? clonePreset(preset) : null;
 	}
 
 	async deletePreset(id) {
@@ -345,9 +348,17 @@ class ScannerPresetService {
 		return normalizeTradingViewTimeframe(raw, '4h');
 	}
 
-	async _persistPreset(preset) {
+	async _persistPreset(preset, expectedDeleteGeneration = null) {
+		const currentDeleteGeneration = firestoreDeleteGenerations.get(preset.id) || 0;
+		if (expectedDeleteGeneration !== null
+			&& (currentDeleteGeneration !== expectedDeleteGeneration || pendingFirestoreDeletes.has(preset.id))) {
+			return false;
+		}
+
 		memoryPresets.set(preset.id, clonePreset(preset));
-		const deleteGenerationAtStart = firestoreDeleteGenerations.get(preset.id) || 0;
+		const deleteGenerationAtStart = expectedDeleteGeneration === null
+			? currentDeleteGeneration
+			: expectedDeleteGeneration;
 		pendingFirestoreDeletes.delete(preset.id);
 
 		const firestore = this._getFirestore();
@@ -355,7 +366,7 @@ class ScannerPresetService {
 			if (isFirestoreEnabled()) {
 				pendingFirestorePresets.set(preset.id, clonePreset(preset));
 			}
-			return;
+			return true;
 		}
 
 		pendingFirestorePresets.delete(preset.id);
@@ -383,6 +394,8 @@ class ScannerPresetService {
 				inFlightFirestorePresets.delete(preset.id);
 			}
 		}
+
+		return true;
 	}
 
 	async _flushPendingDeletes(firestore) {
