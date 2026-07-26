@@ -27,8 +27,8 @@ function isGoogleManagedRuntime() {
 }
 
 function getWellKnownCredentialsPath() {
-	const configDirectory = process.env.CLOUDSDK_CONFIG || join(homedir(), '.config', 'gcloud');
-	return join(configDirectory, 'application_default_credentials.json');
+	const homeDirectory = hasValue(process.env.HOME) ? process.env.HOME : homedir();
+	return join(homeDirectory, '.config', 'gcloud', 'application_default_credentials.json');
 }
 
 function hasValidInlineCredentials(value) {
@@ -67,7 +67,7 @@ function hasValidApplicationDefaultCredentials(value) {
 				&& hasProjectId();
 		}
 
-		return hasValidInlineCredentials(value);
+		return parsed.type === 'service_account' && hasValidInlineCredentials(value);
 	} catch (error) {
 		return false;
 	}

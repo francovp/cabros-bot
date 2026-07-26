@@ -1,4 +1,4 @@
-const { mkdtempSync, rmSync, writeFileSync } = require('fs');
+const { mkdirSync, mkdtempSync, rmSync, writeFileSync } = require('fs');
 const request = require('supertest');
 const express = require('express');
 const { generateKeyPairSync } = require('crypto');
@@ -14,6 +14,7 @@ const testPrivateKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).priva
 	format: 'pem',
 });
 const validFirestoreServiceAccountJson = JSON.stringify({
+	type: 'service_account',
 	project_id: 'x',
 	client_email: 'firebase-adminsdk@test-project.iam.gserviceaccount.com',
 	private_key: testPrivateKey,
@@ -720,7 +721,7 @@ describe('Status endpoints', () => {
 		delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
 		process.env.GOOGLE_CLOUD_PROJECT = 'cabros-project';
 		tempDir = mkdtempSync(join(tmpdir(), 'cabros-gcloud-empty-'));
-		process.env.CLOUDSDK_CONFIG = tempDir;
+		process.env.HOME = tempDir;
 
 		const response = await request(app)
 			.get('/api/status')
@@ -769,6 +770,30 @@ describe('Status endpoints', () => {
 			configured: true,
 			ready: true,
 			status: 'ready',
+		});
+	});
+
+	it('does not treat a service-account file without its type as configured', async () => {
+		delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+		tempDir = mkdtempSync(join(tmpdir(), 'cabros-firestore-'));
+		const credentialsPath = join(tempDir, 'service-account-without-type.json');
+		writeFileSync(credentialsPath, JSON.stringify({
+			project_id: 'x',
+			client_email: 'firebase-adminsdk@test-project.iam.gserviceaccount.com',
+			private_key: testPrivateKey,
+		}));
+		process.env.GOOGLE_APPLICATION_CREDENTIALS = credentialsPath;
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.firestore).toEqual({
+			enabled: true,
+			configured: false,
+			ready: false,
+			status: 'misconfigured',
 		});
 	});
 
@@ -895,9 +920,11 @@ describe('Status endpoints', () => {
 		delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
 		process.env.GOOGLE_CLOUD_PROJECT = 'well-known-project';
 		tempDir = mkdtempSync(join(tmpdir(), 'cabros-gcloud-'));
-		const credentialsPath = join(tempDir, 'application_default_credentials.json');
+		const credentialsDirectory = join(tempDir, '.config', 'gcloud');
+		mkdirSync(credentialsDirectory, { recursive: true });
+		const credentialsPath = join(credentialsDirectory, 'application_default_credentials.json');
 		writeFileSync(credentialsPath, validFirestoreServiceAccountJson);
-		process.env.CLOUDSDK_CONFIG = tempDir;
+		process.env.HOME = tempDir;
 
 		const response = await request(app)
 			.get('/api/status')
@@ -912,13 +939,39 @@ describe('Status endpoints', () => {
 		});
 	});
 
+	it('does not treat CLOUDSDK_CONFIG as Firebase ADC discovery', async () => {
+		delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+		delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
+		process.env.GOOGLE_CLOUD_PROJECT = 'cloudsdk-config-project';
+		tempDir = mkdtempSync(join(tmpdir(), 'cabros-gcloud-config-'));
+		writeFileSync(join(tempDir, 'application_default_credentials.json'), validFirestoreServiceAccountJson);
+		process.env.CLOUDSDK_CONFIG = tempDir;
+		const homeDirectory = join(tempDir, 'home-without-adc');
+		mkdirSync(homeDirectory, { recursive: true });
+		process.env.HOME = homeDirectory;
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.firestore).toEqual({
+			enabled: true,
+			configured: false,
+			ready: false,
+			status: 'misconfigured',
+		});
+	});
+
 	it('does not fall back to well-known ADC when the explicit path is invalid', async () => {
 		delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
 		process.env.GOOGLE_CLOUD_PROJECT = 'well-known-project';
 		tempDir = mkdtempSync(join(tmpdir(), 'cabros-gcloud-'));
-		const wellKnownPath = join(tempDir, 'application_default_credentials.json');
+		const credentialsDirectory = join(tempDir, '.config', 'gcloud');
+		mkdirSync(credentialsDirectory, { recursive: true });
+		const wellKnownPath = join(credentialsDirectory, 'application_default_credentials.json');
 		writeFileSync(wellKnownPath, validFirestoreServiceAccountJson);
-		process.env.CLOUDSDK_CONFIG = tempDir;
+		process.env.HOME = tempDir;
 		process.env.GOOGLE_APPLICATION_CREDENTIALS = join(tempDir, 'missing-explicit.json');
 
 		const response = await request(app)
