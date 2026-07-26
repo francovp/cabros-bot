@@ -355,7 +355,11 @@ class ScannerPresetService {
 			await this._flushPendingPresets(firestore);
 			this.firestoreUnavailable = pendingFirestorePresets.size > 0 || pendingFirestoreDeletes.size > 0;
 		} catch (error) {
-			pendingFirestorePresets.set(preset.id, clonePreset(preset));
+			if ((firestoreDeleteGenerations.get(preset.id) || 0) === deleteGenerationAtStart) {
+				pendingFirestorePresets.set(preset.id, clonePreset(preset));
+			} else {
+				pendingFirestorePresets.delete(preset.id);
+			}
 			this.firestoreUnavailable = true;
 			console.warn('[ScannerPresetService] Failed to persist preset to Firestore:', error.message);
 		}
