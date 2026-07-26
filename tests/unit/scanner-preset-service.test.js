@@ -408,9 +408,7 @@ describe('ScannerPresetService', () => {
 		expect(await deletePromise).toBe(true);
 		await triggerPromise;
 
-		expect(await service.listPresets()).toEqual([
-			expect.objectContaining({ name: 'Trigger flush' }),
-	]);
+		expect(await service.listPresets()).toEqual([]);
 		expect(await service.getPreset(queued.id)).toBeNull();
 		expect(service.getStorageStatus().mode).toBe('durable');
 	});
@@ -489,5 +487,19 @@ describe('ScannerPresetService', () => {
 
 		releaseFlush();
 		await triggerPromise;
+	});
+
+	it('treats successful empty Firestore reads as authoritative', async () => {
+		process.env.ENABLE_FIRESTORE_SCANNER_PRESETS = 'true';
+
+		const scannerPresetModule = require('../../src/services/scannerPresets/ScannerPresetService');
+		const { ScannerPresetService } = scannerPresetModule;
+		const firestoreAdmin = require('firebase-admin');
+		const service = new ScannerPresetService();
+		const created = await service.createPreset({ name: 'Externally deleted preset' });
+		firestoreAdmin.__resetCollectionState();
+
+		expect(await service.listPresets()).toEqual([]);
+		expect(await service.getPreset(created.id)).toBeNull();
 	});
 });

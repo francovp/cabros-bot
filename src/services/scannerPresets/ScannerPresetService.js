@@ -170,9 +170,7 @@ class ScannerPresetService {
 				}
 
 				this.firestoreUnavailable = false;
-				if (firestorePresets.length > 0) {
-					return firestorePresets;
-				}
+				return firestorePresets;
 			} catch (error) {
 				this.firestoreUnavailable = true;
 				console.warn('[ScannerPresetService] Failed to list presets from Firestore:', error.message);
@@ -207,6 +205,7 @@ class ScannerPresetService {
 				if (snapshot && snapshot.exists) {
 					return this._formatFirestoreDoc(snapshot);
 				}
+				return null;
 			} catch (error) {
 				this.firestoreUnavailable = true;
 				console.warn('[ScannerPresetService] Failed to read preset from Firestore:', error.message);

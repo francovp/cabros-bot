@@ -2,7 +2,6 @@
 
 const { createPrivateKey } = require('crypto');
 const { accessSync, constants, readFileSync, statSync } = require('fs');
-const { homedir } = require('os');
 const { join } = require('path');
 
 function hasValue(value) {
@@ -27,8 +26,17 @@ function isGoogleManagedRuntime() {
 }
 
 function getWellKnownCredentialsPath() {
-	const homeDirectory = hasValue(process.env.HOME) ? process.env.HOME : homedir();
-	return join(homeDirectory, '.config', 'gcloud', 'application_default_credentials.json');
+	const configRoot = process.platform === 'win32'
+		? process.env.APPDATA
+		: process.env.HOME;
+	if (!hasValue(configRoot)) {
+		return null;
+	}
+
+	const configDirectory = process.platform === 'win32'
+		? configRoot
+		: join(configRoot, '.config');
+	return join(configDirectory, 'gcloud', 'application_default_credentials.json');
 }
 
 function hasValidInlineCredentials(value) {

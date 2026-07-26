@@ -939,6 +939,27 @@ describe('Status endpoints', () => {
 		});
 	});
 
+	it('does not use os.homedir when HOME is unset for ADC discovery', async () => {
+		delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+		delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
+		delete process.env.HOME;
+		delete process.env.APPDATA;
+		delete process.env.CLOUDSDK_CONFIG;
+		process.env.GOOGLE_CLOUD_PROJECT = 'home-unset-project';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.firestore).toEqual({
+			enabled: true,
+			configured: false,
+			ready: false,
+			status: 'misconfigured',
+		});
+	});
+
 	it('does not treat CLOUDSDK_CONFIG as Firebase ADC discovery', async () => {
 		delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
 		delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
