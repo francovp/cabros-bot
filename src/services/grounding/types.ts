@@ -22,6 +22,10 @@ export interface EnrichedAlert {
   sentiment_score: number;
   insights: string[];
   technical_levels?: TechnicalLevels;
+  invalidation_level?: string | number;
+  target_level?: string | number;
+  setup_type?: 'breakout' | 'mean_reversion' | 'trend_continuation' | 'reversal';
+  risk_reward_ratio?: string | number;
   sources: Source[];
 }
 

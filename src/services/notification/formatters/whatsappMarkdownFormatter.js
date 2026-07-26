@@ -133,6 +133,10 @@ class WhatsAppMarkdownFormatter {
 			sentiment_score = 0,
 			insights = [],
 			technical_levels = { supports: [], resistances: [] },
+			invalidation_level,
+			target_level,
+			setup_type,
+			risk_reward_ratio,
 			sources = [],
 			truncated = false,
 			extraText = '',
@@ -180,6 +184,28 @@ class WhatsAppMarkdownFormatter {
 				const resistances = technical_levels.resistances.join(', ');
 				message += `\nResistances: ${resistances}`;
 			}
+		}
+
+		const riskParameters = [
+			['Setup', setup_type],
+			['Invalidation', invalidation_level],
+			['Target', target_level],
+			['Risk/Reward', risk_reward_ratio],
+		]
+			.map(([label, value]) => [
+				label,
+				typeof value === 'number' && Number.isFinite(value)
+					? String(value)
+					: typeof value === 'string' ? value.trim() : '',
+			])
+			.filter(([, value]) => value);
+
+		if (riskParameters.length > 0) {
+			message += '\n\n*Risk Parameters*';
+			riskParameters.forEach(([label, value]) => {
+				const cleanValue = value.replace(/\\([_*[\]()~`>#+\-=|{}.!])/g, '$1');
+				message += `\n${label}: ${cleanValue}`;
+			});
 		}
 
 		// Sources

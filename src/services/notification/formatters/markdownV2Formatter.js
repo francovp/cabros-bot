@@ -71,6 +71,36 @@ function formatTokenUsageMarkdown(tokenUsage) {
 	return smartEscapeMarkdownV2(normalizeBackslashes(line));
 }
 
+function formatRiskValue(value) {
+	if (typeof value === 'number' && Number.isFinite(value)) {
+		return String(value);
+	}
+
+	if (typeof value === 'string' && value.trim()) {
+		return value.trim();
+	}
+
+	return '';
+}
+
+/**
+ * Escape a raw data value (e.g. setup_type from the LLM) for Telegram MarkdownV2.
+ * Unlike smartEscapeMarkdownV2, this also escapes underscores because raw values
+ * like `mean_reversion` or `trend_continuation` must not trigger Telegram italic
+ * parsing when used in plain text contexts.
+ * @param {string} value - Raw string from LLM output (already normalised by formatRiskValue)
+ * @returns {string} Fully escaped value safe for MarkdownV2 delivery
+ */
+function escapeRiskFieldValue(value) {
+	// Apply standard MarkdownV2 escaping first (smartEscapeMarkdownV2 intentionally omits `_`
+	// to preserve italic formatting in regular text). Then escape underscores explicitly, since
+	// raw data values like `mean_reversion` or `trend_continuation` must not trigger Telegram
+	// italic parsing when used in plain-text label contexts.
+	return smartEscapeMarkdownV2(value)
+		.replace(/_/g, '\\_')
+		.replace(/\*/g, '\\*');
+}
+
 /**
  * MarkdownV2Formatter - Formats text for Telegram MarkdownV2 parse mode
  */
@@ -119,6 +149,10 @@ class MarkdownV2Formatter {
 			sentiment_score = 0,
 			insights = [],
 			technical_levels = { supports: [], resistances: [] },
+			invalidation_level,
+			target_level,
+			setup_type,
+			risk_reward_ratio,
 			sources = [],
 			truncated = false,
 			extraText = '',
@@ -163,6 +197,22 @@ class MarkdownV2Formatter {
 				const resistances = technical_levels.resistances.map(r => smartEscapeMarkdownV2(r)).join(', ');
 				message += `\nResistances: ${resistances}`;
 			}
+		}
+
+		const riskParameters = [
+			['Setup', setup_type],
+			['Invalidation', invalidation_level],
+			['Target', target_level],
+			['Risk/Reward', risk_reward_ratio],
+		]
+			.map(([label, value]) => [label, formatRiskValue(value)])
+			.filter(([, value]) => value);
+
+		if (riskParameters.length > 0) {
+			message += '\n\n*Risk Parameters*';
+			riskParameters.forEach(([label, value]) => {
+				message += `\n${label}: ${escapeRiskFieldValue(value)}`;
+			});
 		}
 
 		// Sources

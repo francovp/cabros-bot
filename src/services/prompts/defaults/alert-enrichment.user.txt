@@ -12,5 +12,11 @@ Instructions:
   "technical_levels": {
     "supports": string[],
     "resistances": string[]
-  }
+  },
+  "invalidation_level": string | number (optional),
+  "target_level": string | number (optional),
+  "setup_type": "breakout" | "mean_reversion" | "trend_continuation" | "reversal" (optional),
+  "risk_reward_ratio": string | number (optional)
 }
+
+Risk metadata must be omitted when it cannot be inferred reliably. Never invent a price level or risk-reward estimate.

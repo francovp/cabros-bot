@@ -210,6 +210,53 @@
           ]
         },
         {
+          "name": "POST Send Alert Dry Run (risk metadata)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"text\": \"Bitcoin breaks above $83,000 with strong volume\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/webhook/alert?dryRun=true",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "webhook",
+                "alert"
+              ],
+              "query": [
+                {
+                  "key": "dryRun",
+                  "value": "true"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Enriched payload",
+              "status": "OK",
+              "code": 200,
+              "body": "{\"success\":true,\"dryRun\":true,\"enriched\":true,\"payload\":{\"text\":\"Bitcoin breaks above $83,000 with strong volume\",\"enrichedData\":{\"original_text\":\"Bitcoin breaks above $83,000 with strong volume\",\"sentiment\":\"BULLISH\",\"sentiment_score\":0.85,\"insights\":[\"Volume confirms momentum\"],\"invalidation_level\":\"$80,000\",\"target_level\":\"$90,000\",\"setup_type\":\"breakout\",\"risk_reward_ratio\":\"2.5:1\",\"sources\":[]}},\"tokenUsage\":{}}"
+            }
+          ]
+        },
+        {
           "name": "POST Send Alert (with TradingView data)",
           "request": {
             "method": "POST",

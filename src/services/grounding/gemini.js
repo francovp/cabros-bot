@@ -27,6 +27,35 @@ function buildContextSnippet(searchResultText = '') {
 		: '';
 }
 
+const SETUP_TYPES = new Set([
+	'breakout',
+	'mean_reversion',
+	'trend_continuation',
+	'reversal',
+]);
+
+function parseOptionalRiskValue(value) {
+	if (typeof value === 'number' && Number.isFinite(value)) {
+		return value;
+	}
+
+	if (typeof value === 'string') {
+		const trimmed = value.trim();
+		return trimmed ? trimmed : undefined;
+	}
+
+	return undefined;
+}
+
+function parseOptionalSetupType(value) {
+	if (typeof value !== 'string') {
+		return undefined;
+	}
+
+	const normalized = value.trim().toLowerCase();
+	return SETUP_TYPES.has(normalized) ? normalized : undefined;
+}
+
 const domainQuality = require('./domainQuality');
 
 function shouldRetryGeminiWithFallback(error) {
@@ -631,10 +660,20 @@ function parseEnrichedAlertResponse(response) {
 			parsed.sentiment = 'NEUTRAL';
 		}
 
+		const optionalRiskMetadata = {
+			invalidation_level: parseOptionalRiskValue(parsed.invalidation_level),
+			target_level: parseOptionalRiskValue(parsed.target_level),
+			setup_type: parseOptionalSetupType(parsed.setup_type),
+			risk_reward_ratio: parseOptionalRiskValue(parsed.risk_reward_ratio),
+		};
+
 		return {
 			sentiment: parsed.sentiment,
 			sentiment_score: Math.max(0, Math.min(1, parsed.sentiment_score || 0.5)),
 			insights: Array.isArray(parsed.insights) ? parsed.insights : [],
+			...Object.fromEntries(
+				Object.entries(optionalRiskMetadata).filter(([, value]) => value !== undefined),
+			),
 		};
 	} catch (error) {
 		console.warn(`[Gemini] Response parsing failed, using safe defaults: ${error.message}`);

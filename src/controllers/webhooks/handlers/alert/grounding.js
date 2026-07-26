@@ -43,6 +43,22 @@ function buildTechnicalLevels(levels = {}) {
 	return { supports, resistances };
 }
 
+function isOptionalRiskValue(value) {
+	return (typeof value === 'number' && Number.isFinite(value))
+		|| (typeof value === 'string' && value.trim().length > 0);
+}
+
+function pickOptionalRiskValue(...values) {
+	return values.find(isOptionalRiskValue);
+}
+
+function pickSetupType(...values) {
+	return values.find(value => (
+		typeof value === 'string'
+		&& ['breakout', 'mean_reversion', 'trend_continuation', 'reversal'].includes(value)
+	));
+}
+
 function extractPriorityMcpInsights(mcp = {}) {
 	if (!mcp.confluenceData || !Array.isArray(mcp.insights)) {
 		return [];
@@ -93,6 +109,12 @@ function mergeEnrichmentData(text, geminiEnriched, mcpEnriched) {
 		priorityMcpInsights,
 		mergeUnique(gemini.insights || [], remainingMcpInsights),
 	);
+	const optionalRiskMetadata = {
+		invalidation_level: pickOptionalRiskValue(gemini.invalidation_level, mcp.invalidation_level),
+		target_level: pickOptionalRiskValue(gemini.target_level, mcp.target_level),
+		setup_type: pickSetupType(gemini.setup_type, mcp.setup_type),
+		risk_reward_ratio: pickOptionalRiskValue(gemini.risk_reward_ratio, mcp.risk_reward_ratio),
+	};
 
 	return {
 		original_text: text,
@@ -105,11 +127,25 @@ function mergeEnrichmentData(text, geminiEnriched, mcpEnriched) {
 		extraText,
 		confluenceData: mcp.confluenceData || null,
 		multiTimeframeData: mcp.multiTimeframeData || null,
+		...Object.fromEntries(
+			Object.entries(optionalRiskMetadata).filter(([, value]) => value !== undefined),
+		),
 	};
 }
 
 async function enrichWithGemini(text, tokenUsage) {
-	const { sentiment, sentiment_score, insights, sources, truncated, modelUsed } = await groundAlert({
+	const {
+		sentiment,
+		sentiment_score,
+		insights,
+		sources,
+		truncated,
+		modelUsed,
+		invalidation_level,
+		target_level,
+		setup_type,
+		risk_reward_ratio,
+	} = await groundAlert({
 		text,
 		options: {
 			preserveLanguage: true,
@@ -132,6 +168,10 @@ async function enrichWithGemini(text, tokenUsage) {
 		sources,
 		truncated,
 		extraText,
+		...Object.fromEntries(
+			Object.entries({ invalidation_level, target_level, setup_type, risk_reward_ratio })
+				.filter(([, value]) => value !== undefined),
+		),
 	};
 }
 

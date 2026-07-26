@@ -32,7 +32,11 @@
     "technical_levels": {
       "supports": ["$80k", "$78k"],
       "resistances": ["$85k"]
-    }
+    },
+    "invalidation_level": "$80k",
+    "target_level": "$90k",
+    "setup_type": "breakout",
+    "risk_reward_ratio": "2.5:1"
   }
   ```
 
@@ -69,4 +73,3 @@
   - Pros: Complete isolation.
   - Cons: Code duplication for Gemini client wrapping.
   - Decision: Rejected in favor of parameter-driven prompt selection in the existing service.
-

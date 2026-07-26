@@ -37,6 +37,19 @@ describe('PromptService', () => {
 		expect(logger.warn).not.toHaveBeenCalled();
 	});
 
+	it('should include optional risk metadata in the local alert enrichment prompt', async () => {
+		const service = new PromptService({ logger });
+
+		const prompt = await service.getChatPrompt(PromptKeys.ALERT_ENRICHMENT, {
+			alertContext: 'Bitcoin breaks resistance',
+		});
+
+		expect(prompt.userPrompt).toEqual(expect.stringContaining('invalidation_level'));
+		expect(prompt.userPrompt).toEqual(expect.stringContaining('target_level'));
+		expect(prompt.userPrompt).toEqual(expect.stringContaining('setup_type'));
+		expect(prompt.userPrompt).toEqual(expect.stringContaining('risk_reward_ratio'));
+	});
+
 	it('should fetch and compile remote Langfuse chat prompts', async () => {
 		process.env.ENABLE_LANGFUSE_PROMPTS = 'true';
 

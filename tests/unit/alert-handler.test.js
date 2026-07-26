@@ -145,6 +145,10 @@ describe('Alert Handler', () => {
 			sentiment: 'BULLISH',
 			sentiment_score: 0.8,
 			insights: ['Gemini insight'],
+			invalidation_level: '$65000',
+			target_level: '$70000',
+			setup_type: 'trend_continuation',
+			risk_reward_ratio: 2,
 			sources: [{ title: 'Source 1', url: 'https://example.com' }],
 			truncated: false,
 			modelUsed: 'gemini-2.5-flash',
@@ -159,6 +163,10 @@ describe('Alert Handler', () => {
 		expect(result.insights).toEqual(expect.arrayContaining(['Gemini insight', 'MCP insight']));
 		expect(result.technical_levels.supports).toEqual(['65000']);
 		expect(result.technical_levels.resistances).toEqual(['68000']);
+		expect(result.invalidation_level).toBe('$65000');
+		expect(result.target_level).toBe('$70000');
+		expect(result.setup_type).toBe('trend_continuation');
+		expect(result.risk_reward_ratio).toBe(2);
 		expect(result.sources).toEqual([{ title: 'Source 1', url: 'https://example.com' }]);
 		expect(result.extraText).toContain('*Model used*: `gemini-2.5-flash`');
 		expect(result.extraText).toContain(`*Grounding*: \`${GROUNDING_MODEL_NAME}\`, \`tradingview-mcp\``);

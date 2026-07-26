@@ -1,6 +1,10 @@
 /* global jest, describe, it, expect, beforeEach, afterEach */
 
-const { generateGroundedSummary, generateEnrichedAlert } = require('../../src/services/grounding/gemini');
+const {
+	generateGroundedSummary,
+	generateEnrichedAlert,
+	parseEnrichedAlertResponse,
+} = require('../../src/services/grounding/gemini');
 
 // Use jest.requireActual to preserve NonRetryableProviderError class,
 // but mock the key methods (llmCallv2, search) so tests control responses.
@@ -71,6 +75,46 @@ describe('Gemini Service', () => {
 			expect(result.insights).toHaveLength(2);
 			expect(result).not.toHaveProperty('technical_levels');
 			// sources are not returned by generateEnrichedAlert
+		});
+
+		it('should preserve valid optional risk metadata from the model response', async () => {
+			genaiClient.llmCallv2.mockResolvedValue({
+				text: JSON.stringify({
+					...mockEnrichedResponse,
+					invalidation_level: '$80,000',
+					target_level: 90000,
+					setup_type: 'breakout',
+					risk_reward_ratio: '2.5:1',
+				}),
+			});
+
+			const result = await generateEnrichedAlert({
+				text: 'Bitcoin breaks 83k after a volatile session',
+				searchResults: [],
+			});
+
+			expect(result).toEqual(expect.objectContaining({
+				invalidation_level: '$80,000',
+				target_level: 90000,
+				setup_type: 'breakout',
+				risk_reward_ratio: '2.5:1',
+			}));
+		});
+
+		it('should omit invalid optional risk metadata without degrading the enrichment', () => {
+			const result = parseEnrichedAlertResponse(JSON.stringify({
+				...mockEnrichedResponse,
+				invalidation_level: { price: 80000 },
+				target_level: '   ',
+				setup_type: 'scalp',
+				risk_reward_ratio: Number.NaN,
+			}));
+
+			expect(result.sentiment).toBe('BULLISH');
+			expect(result).not.toHaveProperty('invalidation_level');
+			expect(result).not.toHaveProperty('target_level');
+			expect(result).not.toHaveProperty('setup_type');
+			expect(result).not.toHaveProperty('risk_reward_ratio');
 		});
 
 		it('adds provider usage returned by llmCallv2 to the token tracker', async () => {

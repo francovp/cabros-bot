@@ -110,6 +110,64 @@ describe('News Alert Source Formatting', () => {
 			expect(message).not.toContain('*Technical Levels*');
 			expect(message).not.toContain('*Sources*');
 		});
+
+		it('should format optional risk parameters when present', () => {
+			const message = formatter.formatEnriched({
+				original_text: 'Bitcoin breaks 83k',
+				sentiment: 'BULLISH',
+				sentiment_score: 0.9,
+				insights: [],
+				invalidation_level: '$80,000',
+				target_level: 90000,
+				setup_type: 'breakout',
+				risk_reward_ratio: '2.5:1',
+			});
+
+			expect(message).toContain('*Risk Parameters*');
+			expect(message).toContain('Setup: breakout');
+			expect(message).toContain('Invalidation: $80,000');
+			expect(message).toContain('Target: 90000');
+			expect(message).toContain('Risk/Reward: 2\\.5:1');
+		});
+
+		it('should escape underscores in setup_type values for Telegram MarkdownV2', () => {
+			const messageReversion = formatter.formatEnriched({
+				original_text: 'ETH pullback',
+				sentiment: 'BEARISH',
+				sentiment_score: -0.5,
+				insights: [],
+				setup_type: 'mean_reversion',
+				risk_reward_ratio: 3,
+			});
+
+			// mean_reversion must not contain bare underscores — Telegram would treat them as italic markers
+			expect(messageReversion).toContain('Setup: mean\\_reversion');
+			expect(messageReversion).not.toMatch(/Setup: mean_reversion(?!\\)/);
+
+			const messageContinuation = formatter.formatEnriched({
+				original_text: 'BTC rally',
+				sentiment: 'BULLISH',
+				sentiment_score: 0.7,
+				insights: [],
+				setup_type: 'trend_continuation',
+			});
+
+			expect(messageContinuation).toContain('Setup: trend\\_continuation');
+			expect(messageContinuation).not.toMatch(/Setup: trend_continuation(?!\\)/);
+		});
+
+		it('should escape asterisks in raw risk field values for Telegram MarkdownV2', () => {
+			const message = formatter.formatEnriched({
+				original_text: 'BTC invalidation',
+				sentiment: 'NEUTRAL',
+				sentiment_score: 0,
+				insights: [],
+				risk_reward_ratio: '1.5*ATR below entry',
+			});
+
+			expect(message).toContain('Risk/Reward: 1\\.5\\*ATR below entry');
+			expect(message).not.toMatch(/Risk\/Reward: 1\\.5\*ATR below entry/);
+		});
 	});
 
 	describe('MarkdownV2Formatter.formatNewsAlert (Backward Compatibility)', () => {

@@ -22,6 +22,10 @@ The `alert.enriched` object passed to formatters will have the following structu
     "supports": ["$80,000"],
     "resistances": ["$85,000"]
   },
+  "invalidation_level": "$80,000",
+  "target_level": "$90,000",
+  "setup_type": "breakout",
+  "risk_reward_ratio": "2.5:1",
   "sources": [
     {
       "title": "CoinDesk",
@@ -31,3 +35,7 @@ The `alert.enriched` object passed to formatters will have the following structu
   ]
 }
 ```
+
+Risk metadata is optional. `invalidation_level`, `target_level`, and `risk_reward_ratio`
+accept a non-empty string or finite number; `setup_type` is one of `breakout`,
+`mean_reversion`, `trend_continuation`, or `reversal`.
