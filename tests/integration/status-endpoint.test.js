@@ -1,9 +1,12 @@
-const { mkdtempSync, rmSync, writeFileSync } = require('fs');
+const { mkdirSync, mkdtempSync, rmSync, writeFileSync } = require('fs');
 const request = require('supertest');
 const express = require('express');
 const { generateKeyPairSync } = require('crypto');
 const { tmpdir } = require('os');
 const { join } = require('path');
+jest.mock('firebase-admin');
+const admin = require('firebase-admin');
+const alertStorageService = require('../../src/services/storage/AlertStorageService');
 const { getRoutes } = require('../../src/routes');
 
 const testPrivateKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({
@@ -11,6 +14,7 @@ const testPrivateKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).priva
 	format: 'pem',
 });
 const validFirestoreServiceAccountJson = JSON.stringify({
+	type: 'service_account',
 	project_id: 'x',
 	client_email: 'firebase-adminsdk@test-project.iam.gserviceaccount.com',
 	private_key: testPrivateKey,
@@ -22,6 +26,9 @@ describe('Status endpoints', () => {
 	let tempDir;
 
 	beforeEach(() => {
+		admin.__resetApps();
+		admin.__resetCollectionState();
+		alertStorageService._resetForTesting();
 		Object.keys(process.env).forEach((key) => {
 			delete process.env[key];
 		});
@@ -111,6 +118,89 @@ describe('Status endpoints', () => {
 			status: 'disabled',
 		});
 		expect(response.body.dependencies.sentry.status).toBe('ready');
+	});
+
+	it('reports scanner presets as ephemeral when no Firestore gate is enabled', async () => {
+		delete process.env.ENABLE_FIRESTORE_ALERT_STORAGE;
+		delete process.env.ENABLE_FIRESTORE_SCANNER_PRESETS;
+		delete process.env.ENABLE_FIRESTORE_JOB_STORAGE;
+		delete process.env.ENABLE_SIGNAL_OUTCOME_TRACKING;
+		delete process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING;
+
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.firestoreScannerPresets).toBe(false);
+		expect(response.body.dependencies.scannerPresetStorage).toEqual({
+			enabled: false,
+			configured: false,
+			ready: false,
+			status: 'disabled',
+			mode: 'ephemeral',
+			backend: 'memory',
+		});
+	});
+
+	it('reports durable scanner preset storage from its dedicated Firestore gate', async () => {
+		delete process.env.ENABLE_FIRESTORE_ALERT_STORAGE;
+		process.env.ENABLE_FIRESTORE_SCANNER_PRESETS = 'true';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.firestoreScannerPresets).toBe(true);
+		expect(response.body.dependencies.scannerPresetStorage).toEqual({
+			enabled: true,
+			configured: true,
+			ready: true,
+			status: 'ready',
+			mode: 'durable',
+			backend: 'firestore',
+		});
+	});
+
+	it('does not report durable scanner presets from the alert storage gate', async () => {
+		process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+		delete process.env.ENABLE_FIRESTORE_SCANNER_PRESETS;
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.firestoreScannerPresets).toBe(false);
+		expect(response.body.dependencies.scannerPresetStorage).toEqual({
+			enabled: false,
+			configured: false,
+			ready: false,
+			status: 'disabled',
+			mode: 'ephemeral',
+			backend: 'memory',
+		});
+	});
+
+	it('reports scanner preset storage as misconfigured without usable credentials', async () => {
+		delete process.env.ENABLE_FIRESTORE_ALERT_STORAGE;
+		process.env.ENABLE_FIRESTORE_SCANNER_PRESETS = 'true';
+		delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+		delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
+
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.scannerPresetStorage).toEqual({
+			enabled: true,
+			configured: false,
+			ready: false,
+			status: 'misconfigured',
+			mode: 'ephemeral',
+			backend: 'memory',
+		});
 	});
 
 	it('reports Cloudflare AI Gateway as disabled by default', async () => {
@@ -630,6 +720,8 @@ describe('Status endpoints', () => {
 		delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
 		delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
 		process.env.GOOGLE_CLOUD_PROJECT = 'cabros-project';
+		tempDir = mkdtempSync(join(tmpdir(), 'cabros-gcloud-empty-'));
+		process.env.HOME = tempDir;
 
 		const response = await request(app)
 			.get('/api/status')
@@ -667,6 +759,260 @@ describe('Status endpoints', () => {
 		const credentialsPath = join(tempDir, 'service-account.json');
 		writeFileSync(credentialsPath, validFirestoreServiceAccountJson);
 		process.env.GOOGLE_APPLICATION_CREDENTIALS = credentialsPath;
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.firestore).toEqual({
+			enabled: true,
+			configured: true,
+			ready: true,
+			status: 'ready',
+		});
+	});
+
+	it('does not treat a service-account file without its type as configured', async () => {
+		delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+		tempDir = mkdtempSync(join(tmpdir(), 'cabros-firestore-'));
+		const credentialsPath = join(tempDir, 'service-account-without-type.json');
+		writeFileSync(credentialsPath, JSON.stringify({
+			project_id: 'x',
+			client_email: 'firebase-adminsdk@test-project.iam.gserviceaccount.com',
+			private_key: testPrivateKey,
+		}));
+		process.env.GOOGLE_APPLICATION_CREDENTIALS = credentialsPath;
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.firestore).toEqual({
+			enabled: true,
+			configured: false,
+			ready: false,
+			status: 'misconfigured',
+		});
+	});
+
+	it('does not treat a readable credential directory as configured', async () => {
+		delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+		tempDir = mkdtempSync(join(tmpdir(), 'cabros-firestore-'));
+		process.env.GOOGLE_APPLICATION_CREDENTIALS = tempDir;
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.firestore).toEqual({
+			enabled: true,
+			configured: false,
+			ready: false,
+			status: 'misconfigured',
+		});
+	});
+
+	it('does not treat malformed credential file JSON as configured', async () => {
+		delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+		tempDir = mkdtempSync(join(tmpdir(), 'cabros-firestore-'));
+		const credentialsPath = join(tempDir, 'service-account.json');
+		writeFileSync(credentialsPath, '{"project_id":');
+		process.env.GOOGLE_APPLICATION_CREDENTIALS = credentialsPath;
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.firestore).toEqual({
+			enabled: true,
+			configured: false,
+			ready: false,
+			status: 'misconfigured',
+		});
+	});
+
+	it('treats a valid authorized-user ADC file as configured', async () => {
+		delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+		process.env.FIREBASE_PROJECT_ID = 'authorized-user-project';
+		tempDir = mkdtempSync(join(tmpdir(), 'cabros-firestore-'));
+		const credentialsPath = join(tempDir, 'authorized-user.json');
+		writeFileSync(credentialsPath, JSON.stringify({
+			type: 'authorized_user',
+			client_id: 'client-id.apps.googleusercontent.com',
+			client_secret: 'client-secret',
+			refresh_token: 'refresh-token',
+		}));
+		process.env.GOOGLE_APPLICATION_CREDENTIALS = credentialsPath;
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.firestore).toEqual({
+			enabled: true,
+			configured: true,
+			ready: true,
+			status: 'ready',
+		});
+	});
+
+	it('rejects authorized-user ADC files without a project id', async () => {
+		delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+		delete process.env.FIREBASE_PROJECT_ID;
+		delete process.env.GOOGLE_CLOUD_PROJECT;
+		delete process.env.GCLOUD_PROJECT;
+		tempDir = mkdtempSync(join(tmpdir(), 'cabros-firestore-'));
+		const credentialsPath = join(tempDir, 'authorized-user.json');
+		writeFileSync(credentialsPath, JSON.stringify({
+			type: 'authorized_user',
+			client_id: 'client-id.apps.googleusercontent.com',
+			client_secret: 'client-secret',
+			refresh_token: 'refresh-token',
+		}));
+		process.env.GOOGLE_APPLICATION_CREDENTIALS = credentialsPath;
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.firestore).toEqual({
+			enabled: true,
+			configured: false,
+			ready: false,
+			status: 'misconfigured',
+		});
+	});
+
+	it('rejects external-account ADC files unsupported by Firebase Admin', async () => {
+		delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+		tempDir = mkdtempSync(join(tmpdir(), 'cabros-firestore-'));
+		const credentialsPath = join(tempDir, 'external-account.json');
+		writeFileSync(credentialsPath, JSON.stringify({
+			type: 'external_account',
+			audience: '//iam.googleapis.com/projects/123/locations/global/workloadIdentityPools/pool/providers/provider',
+			subject_token_type: 'urn:ietf:params:oauth:token-type:jwt',
+			token_url: 'https://sts.googleapis.com/v1/token',
+			credential_source: { file: '/tmp/subject-token.txt' },
+		}));
+		process.env.GOOGLE_APPLICATION_CREDENTIALS = credentialsPath;
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.firestore).toEqual({
+			enabled: true,
+			configured: false,
+			ready: false,
+			status: 'misconfigured',
+		});
+	});
+
+	it('treats well-known ADC files as configured', async () => {
+		delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+		delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
+		process.env.GOOGLE_CLOUD_PROJECT = 'well-known-project';
+		tempDir = mkdtempSync(join(tmpdir(), 'cabros-gcloud-'));
+		const credentialsDirectory = join(tempDir, '.config', 'gcloud');
+		mkdirSync(credentialsDirectory, { recursive: true });
+		const credentialsPath = join(credentialsDirectory, 'application_default_credentials.json');
+		writeFileSync(credentialsPath, validFirestoreServiceAccountJson);
+		process.env.HOME = tempDir;
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.firestore).toEqual({
+			enabled: true,
+			configured: true,
+			ready: true,
+			status: 'ready',
+		});
+	});
+
+	it('does not use os.homedir when HOME is unset for ADC discovery', async () => {
+		delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+		delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
+		delete process.env.HOME;
+		delete process.env.APPDATA;
+		delete process.env.CLOUDSDK_CONFIG;
+		process.env.GOOGLE_CLOUD_PROJECT = 'home-unset-project';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.firestore).toEqual({
+			enabled: true,
+			configured: false,
+			ready: false,
+			status: 'misconfigured',
+		});
+	});
+
+	it('does not treat CLOUDSDK_CONFIG as Firebase ADC discovery', async () => {
+		delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+		delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
+		process.env.GOOGLE_CLOUD_PROJECT = 'cloudsdk-config-project';
+		tempDir = mkdtempSync(join(tmpdir(), 'cabros-gcloud-config-'));
+		writeFileSync(join(tempDir, 'application_default_credentials.json'), validFirestoreServiceAccountJson);
+		process.env.CLOUDSDK_CONFIG = tempDir;
+		const homeDirectory = join(tempDir, 'home-without-adc');
+		mkdirSync(homeDirectory, { recursive: true });
+		process.env.HOME = homeDirectory;
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.firestore).toEqual({
+			enabled: true,
+			configured: false,
+			ready: false,
+			status: 'misconfigured',
+		});
+	});
+
+	it('does not fall back to well-known ADC when the explicit path is invalid', async () => {
+		delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+		process.env.GOOGLE_CLOUD_PROJECT = 'well-known-project';
+		tempDir = mkdtempSync(join(tmpdir(), 'cabros-gcloud-'));
+		const credentialsDirectory = join(tempDir, '.config', 'gcloud');
+		mkdirSync(credentialsDirectory, { recursive: true });
+		const wellKnownPath = join(credentialsDirectory, 'application_default_credentials.json');
+		writeFileSync(wellKnownPath, validFirestoreServiceAccountJson);
+		process.env.HOME = tempDir;
+		process.env.GOOGLE_APPLICATION_CREDENTIALS = join(tempDir, 'missing-explicit.json');
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.firestore).toEqual({
+			enabled: true,
+			configured: false,
+			ready: false,
+			status: 'misconfigured',
+		});
+	});
+
+	it('treats Compute Engine metadata credentials as configured with a project id', async () => {
+		delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+		delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
+		process.env.GCE_METADATA_HOST = 'metadata.google.internal';
+		process.env.GOOGLE_CLOUD_PROJECT = 'metadata-project';
 
 		const response = await request(app)
 			.get('/api/status')

@@ -10,6 +10,7 @@ const {
 	normalizeTradingViewTimeframe,
 	SUPPORTED_MCP_TIMEFRAMES,
 } = require('../tradingview/parseTradingViewSignal');
+const { isFirestoreConfigured } = require('../storage/firestoreConfig');
 
 const COLLECTION_NAME = 'scannerPresets';
 const DEFAULT_SCAN_LIMIT = 5;
@@ -25,6 +26,12 @@ const SUPPORTED_TIMEFRAME_ALIASES = new Set([
 
 // In-memory fallback used when Firestore is unavailable.
 const memoryPresets = new Map();
+const pendingFirestorePresets = new Map();
+const inFlightFirestorePresets = new Map();
+const pendingFirestoreDeletes = new Set();
+const firestoreDeleteGenerations = new Map();
+const pendingFirestoreWriteTokens = new Map();
+const firestoreWriteQueues = new Map();
 
 function clonePreset(preset) {
 	if (!preset) return null;
@@ -36,6 +43,15 @@ function clonePreset(preset) {
 
 function compareByCreatedAtDesc(a, b) {
 	return String(b.createdAt || '').localeCompare(String(a.createdAt || ''));
+}
+
+function isFirestoreEnabled() {
+	return process.env.ENABLE_FIRESTORE_SCANNER_PRESETS === 'true';
+}
+
+function markPendingFirestoreDelete(id) {
+	pendingFirestoreDeletes.add(id);
+	firestoreDeleteGenerations.set(id, (firestoreDeleteGenerations.get(id) || 0) + 1);
 }
 
 function normalizeScanList(scans) {
@@ -92,8 +108,32 @@ function normalizeBbwThreshold(bbwThreshold) {
 }
 
 class ScannerPresetService {
+	constructor() {
+		this.firestoreUnavailable = false;
+	}
+
+	getStorageStatus() {
+		const firestoreEnabled = isFirestoreEnabled();
+		const firestore = this._getFirestore();
+		const durable = Boolean(firestore)
+			&& !this.firestoreUnavailable
+			&& pendingFirestorePresets.size === 0
+			&& inFlightFirestorePresets.size === 0
+			&& pendingFirestoreDeletes.size === 0
+			&& isFirestoreConfigured();
+
+		return {
+			enabled: firestoreEnabled,
+			configured: durable,
+			ready: durable,
+			status: durable ? 'ready' : firestoreEnabled ? 'misconfigured' : 'disabled',
+			mode: durable ? 'durable' : 'ephemeral',
+			backend: durable ? 'firestore' : 'memory',
+		};
+	}
+
 	async createPreset(params = {}) {
-		const preset = this._buildPreset(params);
+		const preset = this._buildPreset({ ...params, id: undefined });
 		await this._persistPreset(preset);
 		return clonePreset(preset);
 	}
@@ -106,11 +146,34 @@ class ScannerPresetService {
 					.collection(COLLECTION_NAME)
 					.orderBy('createdAt', 'desc')
 					.get();
+				const firestorePresets = snapshot && Array.isArray(snapshot.docs)
+					? snapshot.docs.map((doc) => this._formatFirestoreDoc(doc))
+					: [];
 
-				if (snapshot && Array.isArray(snapshot.docs) && snapshot.docs.length > 0) {
-					return snapshot.docs.map((doc) => this._formatFirestoreDoc(doc));
+				if (pendingFirestorePresets.size > 0
+					|| inFlightFirestorePresets.size > 0
+					|| pendingFirestoreDeletes.size > 0) {
+					this.firestoreUnavailable = true;
+					const mergedPresets = new Map(
+						firestorePresets
+							.filter((preset) => !pendingFirestoreDeletes.has(preset.id))
+							.map((preset) => [preset.id, preset]),
+					);
+					for (const [id, operation] of inFlightFirestorePresets.entries()) {
+						if (!pendingFirestoreDeletes.has(id)) {
+							mergedPresets.set(id, clonePreset(operation.preset));
+						}
+					}
+					for (const preset of pendingFirestorePresets.values()) {
+						mergedPresets.set(preset.id, clonePreset(preset));
+					}
+					return [...mergedPresets.values()].sort(compareByCreatedAtDesc);
 				}
+
+				this.firestoreUnavailable = false;
+				return firestorePresets;
 			} catch (error) {
+				this.firestoreUnavailable = true;
 				console.warn('[ScannerPresetService] Failed to list presets from Firestore:', error.message);
 			}
 		}
@@ -124,13 +187,28 @@ class ScannerPresetService {
 		}
 
 		const firestore = this._getFirestore();
+		if (pendingFirestorePresets.has(id)) {
+			return clonePreset(pendingFirestorePresets.get(id));
+		}
+		if (pendingFirestoreDeletes.has(id)) {
+			return null;
+		}
+		if (inFlightFirestorePresets.has(id)) {
+			return clonePreset(inFlightFirestorePresets.get(id).preset);
+		}
+
 		if (firestore) {
 			try {
 				const snapshot = await firestore.collection(COLLECTION_NAME).doc(id).get();
+				this.firestoreUnavailable = pendingFirestorePresets.size > 0
+					|| inFlightFirestorePresets.size > 0
+					|| pendingFirestoreDeletes.size > 0;
 				if (snapshot && snapshot.exists) {
 					return this._formatFirestoreDoc(snapshot);
 				}
+				return null;
 			} catch (error) {
+				this.firestoreUnavailable = true;
 				console.warn('[ScannerPresetService] Failed to read preset from Firestore:', error.message);
 			}
 		}
@@ -139,8 +217,11 @@ class ScannerPresetService {
 	}
 
 	async updatePreset(id, params = {}) {
+		const deleteGenerationAtReadStart = firestoreDeleteGenerations.get(id) || 0;
 		const existing = await this.getPreset(id);
-		if (!existing) {
+		if (!existing
+			|| (firestoreDeleteGenerations.get(id) || 0) !== deleteGenerationAtReadStart
+			|| pendingFirestoreDeletes.has(id)) {
 			return null;
 		}
 
@@ -153,8 +234,8 @@ class ScannerPresetService {
 		preset.updatedAt = new Date().toISOString();
 		preset.createdAt = existing.createdAt;
 
-		await this._persistPreset(preset);
-		return clonePreset(preset);
+		const persisted = await this._persistPreset(preset, deleteGenerationAtReadStart);
+		return persisted ? clonePreset(preset) : null;
 	}
 
 	async deletePreset(id) {
@@ -164,14 +245,25 @@ class ScannerPresetService {
 
 		let deleted = false;
 		const firestore = this._getFirestore();
+		const hadLocalPreset = memoryPresets.has(id) || pendingFirestorePresets.has(id);
+		pendingFirestorePresets.delete(id);
+		if (isFirestoreEnabled() && hadLocalPreset) {
+			markPendingFirestoreDelete(id);
+		}
 		if (firestore) {
 			try {
 				const snapshot = await firestore.collection(COLLECTION_NAME).doc(id).get();
-				if (snapshot && snapshot.exists) {
-					await firestore.collection(COLLECTION_NAME).doc(id).delete();
-					deleted = true;
+				if ((snapshot && snapshot.exists) || hadLocalPreset) {
+					deleted = Boolean(snapshot && snapshot.exists) || hadLocalPreset;
+					if (snapshot && snapshot.exists && isFirestoreEnabled() && !pendingFirestoreDeletes.has(id)) {
+						markPendingFirestoreDelete(id);
+					}
+					await this._deleteFirestorePreset(firestore, id);
+					pendingFirestoreDeletes.delete(id);
 				}
+				this.firestoreUnavailable = pendingFirestorePresets.size > 0 || pendingFirestoreDeletes.size > 0;
 			} catch (error) {
+				this.firestoreUnavailable = true;
 				console.warn('[ScannerPresetService] Failed to delete preset from Firestore:', error.message);
 			}
 		}
@@ -257,25 +349,147 @@ class ScannerPresetService {
 		return normalizeTradingViewTimeframe(raw, '4h');
 	}
 
-	async _persistPreset(preset) {
+	async _persistPreset(preset, expectedDeleteGeneration = null) {
+		const currentDeleteGeneration = firestoreDeleteGenerations.get(preset.id) || 0;
+		if (expectedDeleteGeneration !== null
+			&& (currentDeleteGeneration !== expectedDeleteGeneration || pendingFirestoreDeletes.has(preset.id))) {
+			return false;
+		}
+
 		memoryPresets.set(preset.id, clonePreset(preset));
+		const deleteGenerationAtStart = expectedDeleteGeneration === null
+			? currentDeleteGeneration
+			: expectedDeleteGeneration;
+		pendingFirestoreDeletes.delete(preset.id);
 
 		const firestore = this._getFirestore();
 		if (!firestore) {
-			return;
+			if (isFirestoreEnabled()) {
+				pendingFirestoreWriteTokens.set(preset.id, {});
+				pendingFirestorePresets.set(preset.id, clonePreset(preset));
+			} else {
+				pendingFirestoreWriteTokens.delete(preset.id);
+			}
+			return true;
 		}
 
+		const pendingWriteToken = {};
+		pendingFirestoreWriteTokens.set(preset.id, pendingWriteToken);
+		pendingFirestorePresets.delete(preset.id);
+		const inFlightWrite = { preset: clonePreset(preset) };
+		inFlightFirestorePresets.set(preset.id, inFlightWrite);
 		try {
-			await firestore.collection(COLLECTION_NAME).doc(preset.id).set({
-				...clonePreset(preset),
-			});
+			await this._writeFirestorePreset(firestore, preset);
+			if (pendingFirestoreWriteTokens.get(preset.id) === pendingWriteToken) {
+				pendingFirestorePresets.delete(preset.id);
+				pendingFirestoreWriteTokens.delete(preset.id);
+			}
+			if ((firestoreDeleteGenerations.get(preset.id) || 0) === deleteGenerationAtStart) {
+				pendingFirestoreDeletes.delete(preset.id);
+			}
+			await this._flushPendingDeletes(firestore);
+			await this._flushPendingPresets(firestore);
+			this.firestoreUnavailable = pendingFirestorePresets.size > 0 || pendingFirestoreDeletes.size > 0;
 		} catch (error) {
+			if (pendingFirestoreWriteTokens.get(preset.id) === pendingWriteToken) {
+				if ((firestoreDeleteGenerations.get(preset.id) || 0) === deleteGenerationAtStart) {
+					pendingFirestorePresets.set(preset.id, clonePreset(preset));
+				} else {
+					pendingFirestorePresets.delete(preset.id);
+					pendingFirestoreWriteTokens.delete(preset.id);
+				}
+			}
+			this.firestoreUnavailable = true;
 			console.warn('[ScannerPresetService] Failed to persist preset to Firestore:', error.message);
+		} finally {
+			if (inFlightFirestorePresets.get(preset.id) === inFlightWrite) {
+				inFlightFirestorePresets.delete(preset.id);
+			}
+		}
+
+		return true;
+	}
+
+	async _flushPendingDeletes(firestore) {
+		for (const id of [...pendingFirestoreDeletes]) {
+			try {
+				await this._deleteFirestorePreset(firestore, id);
+				pendingFirestoreDeletes.delete(id);
+			} catch (error) {
+				this.firestoreUnavailable = true;
+				console.warn('[ScannerPresetService] Failed to flush pending preset deletion to Firestore:', error.message);
+			}
+		}
+	}
+
+	async _flushPendingPresets(firestore) {
+		for (const id of [...pendingFirestorePresets.keys()]) {
+			const preset = pendingFirestorePresets.get(id);
+			if (!preset) {
+				continue;
+			}
+			const deleteGenerationAtStart = firestoreDeleteGenerations.get(id) || 0;
+			const pendingWriteToken = pendingFirestoreWriteTokens.get(id);
+			pendingFirestorePresets.delete(id);
+			const inFlightWrite = { preset: clonePreset(preset) };
+			inFlightFirestorePresets.set(id, inFlightWrite);
+			try {
+				await this._writeFirestorePreset(firestore, preset);
+				if (pendingFirestoreWriteTokens.get(id) === pendingWriteToken) {
+					pendingFirestoreWriteTokens.delete(id);
+				}
+			} catch (error) {
+				if (pendingFirestoreWriteTokens.get(id) === pendingWriteToken
+					&& (firestoreDeleteGenerations.get(id) || 0) === deleteGenerationAtStart
+					&& !pendingFirestorePresets.has(id)) {
+					pendingFirestorePresets.set(id, preset);
+				}
+				this.firestoreUnavailable = true;
+				console.warn('[ScannerPresetService] Failed to flush pending preset to Firestore:', error.message);
+			} finally {
+				if (inFlightFirestorePresets.get(id) === inFlightWrite) {
+					inFlightFirestorePresets.delete(id);
+				}
+			}
+		}
+	}
+
+	async _writeFirestorePreset(firestore, preset) {
+		const previousWrite = firestoreWriteQueues.get(preset.id) || Promise.resolve();
+		const currentWrite = previousWrite
+			.catch(() => undefined)
+			.then(() => firestore.collection(COLLECTION_NAME).doc(preset.id).set({
+				...clonePreset(preset),
+			}));
+		firestoreWriteQueues.set(preset.id, currentWrite);
+
+		try {
+			await currentWrite;
+		} finally {
+			if (firestoreWriteQueues.get(preset.id) === currentWrite) {
+				firestoreWriteQueues.delete(preset.id);
+			}
+		}
+	}
+
+	async _deleteFirestorePreset(firestore, id) {
+		const previousWrite = firestoreWriteQueues.get(id) || Promise.resolve();
+		const currentWrite = previousWrite
+			.catch(() => undefined)
+			.then(() => firestore.collection(COLLECTION_NAME).doc(id).delete());
+		firestoreWriteQueues.set(id, currentWrite);
+
+		try {
+			await currentWrite;
+		} finally {
+			if (firestoreWriteQueues.get(id) === currentWrite) {
+				firestoreWriteQueues.delete(id);
+			}
 		}
 	}
 
 	_getFirestore() {
-		return alertStorageService.getFirestore();
+		return isFirestoreEnabled() ? alertStorageService.getFirestore() : null;
 	}
 
 	_formatFirestoreDoc(doc) {
@@ -309,5 +523,12 @@ module.exports = {
 	// Test helper
 	_resetForTesting() {
 		memoryPresets.clear();
+		pendingFirestorePresets.clear();
+		inFlightFirestorePresets.clear();
+		pendingFirestoreDeletes.clear();
+		firestoreDeleteGenerations.clear();
+		pendingFirestoreWriteTokens.clear();
+		firestoreWriteQueues.clear();
+		scannerPresetService.firestoreUnavailable = false;
 	},
 };

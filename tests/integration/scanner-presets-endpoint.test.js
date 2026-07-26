@@ -7,12 +7,23 @@ jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
 }));
 
 const admin = require('firebase-admin');
+const { generateKeyPairSync } = require('crypto');
 const request = require('supertest');
 const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
 const { initializeNotificationServices } = require('../../src/controllers/webhooks/handlers/alert/alert');
 const { tradingViewMcpService } = require('../../src/services/tradingview/TradingViewMcpService');
 const { _resetForTesting: resetScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+
+const testPrivateKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({
+	type: 'pkcs1',
+	format: 'pem',
+});
+const validFirestoreServiceAccountJson = JSON.stringify({
+	project_id: 'scanner-preset-test',
+	client_email: 'firebase-adminsdk@test-project.iam.gserviceaccount.com',
+	private_key: testPrivateKey,
+});
 
 describe('Scanner presets API integration tests', () => {
 	const originalEnv = process.env;
@@ -25,10 +36,12 @@ describe('Scanner presets API integration tests', () => {
 			...originalEnv,
 			WEBHOOK_API_KEY: 'test-key',
 			ENABLE_FIRESTORE_ALERT_STORAGE: 'true',
+			ENABLE_FIRESTORE_SCANNER_PRESETS: 'true',
 			ENABLE_MARKET_SCANNER: 'true',
 			ENABLE_NEWS_MONITOR: 'false',
 			MARKET_SCANNER_TIMEOUT_MS: '1000',
 			TRADINGVIEW_MCP_DEFAULT_TIMEFRAME: '4h',
+			FIREBASE_SERVICE_ACCOUNT_JSON: validFirestoreServiceAccountJson,
 			ENABLE_TELEGRAM_BOT: 'true',
 			BOT_TOKEN: 'test-bot-token',
 			TELEGRAM_CHAT_ID: '123456789',
@@ -81,6 +94,10 @@ describe('Scanner presets API integration tests', () => {
 
 		expect(createResponse.body).toEqual(expect.objectContaining({
 			success: true,
+			storage: expect.objectContaining({
+				mode: 'durable',
+				backend: 'firestore',
+			}),
 			preset: expect.objectContaining({
 				id: presetId,
 				name: 'Momentum preset',
@@ -133,6 +150,55 @@ describe('Scanner presets API integration tests', () => {
 			.get(`/api/scanner-presets/${presetId}`)
 			.set('x-api-key', 'test-key')
 			.expect(404);
+	});
+
+	it('includes storage metadata on not-found responses', async () => {
+		const missingId = 'missing-preset-id';
+		const expectedStorage = expect.objectContaining({
+			enabled: true,
+			mode: 'durable',
+			backend: 'firestore',
+		});
+
+		const getResponse = await request(app)
+			.get(`/api/scanner-presets/${missingId}`)
+			.set('x-api-key', 'test-key')
+			.expect(404);
+		const updateResponse = await request(app)
+			.put(`/api/scanner-presets/${missingId}`)
+			.set('x-api-key', 'test-key')
+			.send({ name: 'Missing update' })
+			.expect(404);
+		const deleteResponse = await request(app)
+			.delete(`/api/scanner-presets/${missingId}`)
+			.set('x-api-key', 'test-key')
+			.expect(404);
+
+		expect(getResponse.body.storage).toEqual(expectedStorage);
+		expect(updateResponse.body.storage).toEqual(expectedStorage);
+		expect(deleteResponse.body.storage).toEqual(expectedStorage);
+	});
+
+	it('reports ephemeral storage when durable scanner persistence is enabled but unavailable', async () => {
+		delete process.env.ENABLE_FIRESTORE_ALERT_STORAGE;
+		process.env.ENABLE_FIRESTORE_SCANNER_PRESETS = 'true';
+		const firestoreAdmin = require('firebase-admin');
+		firestoreAdmin.__mockDocSet.mockRejectedValueOnce(new Error('Firestore unavailable'));
+
+		const response = await request(app)
+			.post('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.send({ name: 'Ephemeral preset' })
+			.expect(201);
+
+		expect(response.body.storage).toEqual({
+			enabled: true,
+			configured: false,
+			ready: false,
+			status: 'misconfigured',
+			mode: 'ephemeral',
+			backend: 'memory',
+		});
 	});
 
 	it('runs a saved preset in dry-run mode with the market scanner report', async () => {

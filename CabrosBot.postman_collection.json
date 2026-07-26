@@ -702,6 +702,18 @@
           },
           "response": [
             {
+              "name": "Storage mode contract",
+              "status": "OK",
+              "code": 201,
+              "body": "{\n  \"success\": true,\n  \"storage\": {\n    \"enabled\": true,\n    \"configured\": true,\n    \"ready\": true,\n    \"status\": \"ready\",\n    \"mode\": \"durable\",\n    \"backend\": \"firestore\"\n  },\n  \"preset\": {\n    \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n    \"name\": \"Daily Scan\"\n  }\n}"
+            },
+            {
+              "name": "Error (invalid name)",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"name must be a string\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            },
+            {
               "name": "Created",
               "status": "Created",
               "code": 201,
@@ -732,6 +744,12 @@
             }
           },
           "response": [
+            {
+              "name": "Storage mode contract",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"storage\": {\n    \"enabled\": true,\n    \"configured\": true,\n    \"ready\": true,\n    \"status\": \"ready\",\n    \"mode\": \"durable\",\n    \"backend\": \"firestore\"\n  },\n  \"presets\": []\n}"
+            },
             {
               "name": "Success",
               "status": "OK",
@@ -764,6 +782,12 @@
             }
           },
           "response": [
+            {
+              "name": "Storage mode contract",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"storage\": {\n    \"enabled\": true,\n    \"configured\": true,\n    \"ready\": true,\n    \"status\": \"ready\",\n    \"mode\": \"durable\",\n    \"backend\": \"firestore\"\n  },\n  \"preset\": {\n    \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\"\n  }\n}"
+            },
             {
               "name": "Success",
               "status": "OK",
@@ -806,6 +830,12 @@
           },
           "response": [
             {
+              "name": "Storage mode contract",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"storage\": {\n    \"enabled\": true,\n    \"configured\": true,\n    \"ready\": true,\n    \"status\": \"ready\",\n    \"mode\": \"durable\",\n    \"backend\": \"firestore\"\n  },\n  \"preset\": {\n    \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\"\n  }\n}"
+            },
+            {
               "name": "Success",
               "status": "OK",
               "code": 200,
@@ -837,6 +867,12 @@
             }
           },
           "response": [
+            {
+              "name": "Storage mode contract",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"storage\": {\n    \"enabled\": true,\n    \"configured\": true,\n    \"ready\": true,\n    \"status\": \"ready\",\n    \"mode\": \"durable\",\n    \"backend\": \"firestore\"\n  }\n}"
+            },
             {
               "name": "Success",
               "status": "OK",
@@ -925,6 +961,33 @@
               "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"presetId\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n  \"payload\": {\n    \"alertText\": \"\ud83d\udce1 *SCANNER DE MERCADO \u2014 ...\"\n  },\n  \"scanResults\": [],\n  \"summary\": {\n    \"totalScans\": 1,\n    \"success\": 1,\n    \"error\": 0,\n    \"timeout\": 0,\n    \"totalItems\": 3,\n    \"delivered\": 0\n  },\n  \"timedOut\": false,\n  \"timeoutMs\": 90000,\n  \"requestId\": \"req-dryrun-abc\",\n  \"totalDurationMs\": 1200\n}"
             }
           ]
+        }
+      ]
+    },
+    {
+      "name": "POST Create Scanner Preset (invalid name)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json", "type": "text" },
+          { "key": "x-api-key", "value": "{{apiKey}}", "type": "text" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": 123\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/scanner-presets",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "scanner-presets"]
+        }
+      },
+      "response": [
+        {
+          "name": "Bad Request",
+          "status": "Bad Request",
+          "code": 400,
+          "body": "{\n  \"error\": \"name must be a string\",\n  \"code\": \"INVALID_REQUEST\"\n}"
         }
       ]
     },
