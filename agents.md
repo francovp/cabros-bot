@@ -387,6 +387,7 @@ The system provides a `POST /api/webhook/market-scanner-alert` endpoint that run
   - `limit` — integer limit of items per scan, clamped to `[1, 20]`, default 5.
   - `bbw_threshold` — number representing Bollinger Band Width threshold for Bollinger squeeze scan, default 0.05.
   - `ranked` — boolean, default `false`; when `true`, reports and structured `scanResults[].scores[]` use the same filtered items and include numeric `score` plus non-empty `reason` fields.
+  - `includeMultiTimeframe` (or `include_multi_timeframe`) — optional boolean, default `false`; when `true`, fetches fail-open TradingView `multi_timeframe_analysis` data for scanner candidates. Ranked scores apply a default `+10` aligned or `-10` counter-trend modifier and expose normalized `trendConfluence` metadata; reports highlight high-confidence alignment.
 - The feature is gated by `ENABLE_MARKET_SCANNER=true`.
 - Endpoint-level deadline is controlled by `MARKET_SCANNER_TIMEOUT_MS` (default 90s, capped at 120s).
 
@@ -1076,3 +1077,13 @@ This feature introduces validation of callback URLs to prevent Server-Side Reque
 - `src/controllers/webhooks/handlers/alert/grounding.js` and `src/services/tradingview/TradingViewMcpService.js` — Apply the flag to Gemini, combined, and MCP-only enrichment footers.
 - `tests/integration/status-endpoint.test.js`, `tests/unit/alert-handler.test.js`, and `tests/unit/tradingview-mcp-service.test.js` — Cover the default-enabled and explicit-disabled states.
 - `README.md`, `src/openapi/openapi.json`, and `CabrosBot.postman_collection.json` — Document the response field and default.
+
+## Higher-Timeframe Market Scanner Alignment (CB-86 / Issue #217)
+
+The market scanner accepts optional `includeMultiTimeframe` enrichment. When enabled, each valid scanner candidate is queried through the existing TradingView MCP `multi_timeframe_analysis` tool; failures remain fail-open and preserve the base scan result. Ranked scoring normalizes bullish/bearish alignment against the candidate direction, applies configurable `+10` aligned or `-10` counter-trend modifiers by default, and exposes `trendConfluence` in structured scores. Reports render `🔥 HTF ALIGNED` for confidence at or above 70% and `⚠️ HTF COUNTER-TREND` for opposing alignment.
+
+**Core Components**:
+- `src/controllers/webhooks/handlers/marketScanner/marketScanner.js` — Opt-in candidate enrichment and fail-open orchestration.
+- `src/services/tradingview/marketScannerScoring.js` — Direction normalization and configurable confluence scoring.
+- `src/services/tradingview/marketScannerReport.js` — Request parsing and Telegram/WhatsApp report markers.
+- `tests/unit/market-scanner-scoring.test.js`, `tests/unit/market-scanner-report.test.js`, `tests/unit/market-scanner.test.js`, and `tests/integration/market-scanner-endpoint.test.js` — Scoring, rendering, fail-open, and endpoint coverage.

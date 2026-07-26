@@ -5,6 +5,7 @@ const { getNotificationManager, initializeNotificationServices } = require('../.
 jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
 	tradingViewMcpService: {
 		callScanTool: jest.fn(),
+		callMultiTimeframeAnalysis: jest.fn(),
 	},
 }));
 
@@ -227,6 +228,59 @@ describe('Market Scanner Handler', () => {
 				scan: 'top_losers',
 				status: 'success',
 				items: [],
+			});
+		});
+
+		it('enriches scanner items with higher-timeframe data when requested', async () => {
+			const parsed = {
+				exchange: 'BINANCE',
+				timeframe: '1h',
+				scans: ['top_gainers'],
+				limit: 3,
+				includeMultiTimeframe: true,
+			};
+			const item = {
+				symbol: 'BINANCE:BTCUSDT',
+				changePercent: 3.5,
+				indicators: { RSI: 62 },
+			};
+			tradingViewMcpService.callScanTool.mockResolvedValueOnce([item]);
+			tradingViewMcpService.callMultiTimeframeAnalysis.mockResolvedValueOnce({
+				alignment: { status: 'bullish', confidence: 82 },
+			});
+
+			const results = await runScans(parsed);
+
+			expect(tradingViewMcpService.callMultiTimeframeAnalysis).toHaveBeenCalledWith({
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+				signal: undefined,
+			});
+			expect(results[0].items[0]).toEqual(expect.objectContaining({
+				trendConfluence: {
+					alignment: { status: 'bullish', confidence: 82 },
+				},
+			}));
+		});
+
+		it('keeps scanner items when higher-timeframe enrichment fails', async () => {
+			const parsed = {
+				exchange: 'BINANCE',
+				timeframe: '1h',
+				scans: ['top_gainers'],
+				limit: 3,
+				includeMultiTimeframe: true,
+			};
+			const item = { symbol: 'BINANCE:ETHUSDT', changePercent: 2.2 };
+			tradingViewMcpService.callScanTool.mockResolvedValueOnce([item]);
+			tradingViewMcpService.callMultiTimeframeAnalysis.mockRejectedValueOnce(new Error('MCP unavailable'));
+
+			const results = await runScans(parsed);
+
+			expect(results[0]).toEqual({
+				scan: 'top_gainers',
+				status: 'success',
+				items: [item],
 			});
 		});
 	});

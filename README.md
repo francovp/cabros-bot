@@ -579,7 +579,8 @@ Execute multiple market scanner tools on the TradingView MCP server (such as top
   ],
   "limit": 5,
   "bbw_threshold": 0.05,
-  "ranked": true
+  "ranked": true,
+  "includeMultiTimeframe": true
 }
 ```
 
@@ -589,6 +590,7 @@ Execute multiple market scanner tools on the TradingView MCP server (such as top
 - `limit`: (Optional) Max number of results per section (clamped to `[1, 20]`, default: `5`).
 - `bbw_threshold`: (Optional) Bollinger Band Width threshold for the Bollinger squeeze scan (default: `0.05`).
 - `ranked`: (Optional) Sort results by actionable trade quality and include numeric `score` plus non-empty `reason` in each `scanResults[].scores[]` entry (default: `false`).
+- `includeMultiTimeframe`: (Optional) Fetch higher-timeframe alignment for each scanner candidate through TradingView MCP. Aligned candidates receive a default `+10` score modifier, counter-trend candidates receive a default `-10` modifier, and upstream failures leave the original scanner item unchanged (default: `false`). The alias `include_multi_timeframe` is also accepted.
 
 **Response (JSON):**
 ```json
@@ -618,6 +620,7 @@ Execute multiple market scanner tools on the TradingView MCP server (such as top
     "delivered": 1
   },
   "timedOut": false,
+  "includeMultiTimeframe": true,
   "timeoutMs": 90000,
   "requestId": "req-xyz789",
   "totalDurationMs": 1450
@@ -631,7 +634,7 @@ When `ranked` is `true`, each successful scan also includes structured scores:
   "scan": "top_gainers",
   "status": "success",
   "itemCount": 1,
-  "scores": [{ "symbol": "BTCUSDT", "score": 82, "reason": "+3.5% · RSI 62.0 · Vol 1.8x" }]
+  "scores": [{ "symbol": "BTCUSDT", "score": 83, "reason": "+3.5% · RSI 62.0 · Vol 1.8x · HTF aligned +10", "trendConfluence": { "status": "aligned", "direction": "bullish", "confidence": 82, "adjustment": 10 } }]
 }
 ```
 

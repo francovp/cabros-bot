@@ -129,6 +129,60 @@ describe('Market Scanner Scoring', () => {
 			const result = scoreScannerItem(item, 'top_gainers');
 			expect(Number.isInteger(result.score)).toBe(true);
 		});
+
+		it('adds a configurable bonus when higher-timeframe trend aligns with a gainer', () => {
+			const item = {
+				symbol: 'BINANCE:BTCUSDT',
+				changePercent: 4,
+				indicators: { RSI: 62 },
+				volume_ratio: 1.8,
+				breakout_type: 'bullish',
+				trendConfluence: {
+					alignment: { status: 'bullish', confidence: 82 },
+				},
+			};
+			const baseline = scoreScannerItem({ ...item, trendConfluence: undefined }, 'top_gainers');
+
+			const result = scoreScannerItem(item, 'top_gainers', {
+				trendConfluenceAlignedBonus: 12,
+			});
+
+			expect(result.score).toBe(baseline.score + 12);
+			expect(result.reason).toContain('HTF aligned +12');
+			expect(result.trendConfluence).toEqual(expect.objectContaining({
+				status: 'aligned',
+				direction: 'bullish',
+				confidence: 82,
+				adjustment: 12,
+			}));
+		});
+
+		it('applies a configurable penalty when higher-timeframe trend opposes a gainer', () => {
+			const item = {
+				symbol: 'BINANCE:ETHUSDT',
+				changePercent: 4,
+				indicators: { RSI: 62 },
+				volume_ratio: 1.8,
+				breakout_type: 'bullish',
+				trendConfluence: {
+					alignment: { status: 'bearish', confidence: 76 },
+				},
+			};
+			const baseline = scoreScannerItem({ ...item, trendConfluence: undefined }, 'top_gainers');
+
+			const result = scoreScannerItem(item, 'top_gainers', {
+				trendConfluenceCounterTrendPenalty: 7,
+			});
+
+			expect(result.score).toBe(baseline.score - 7);
+			expect(result.reason).toContain('HTF counter-trend -7');
+			expect(result.trendConfluence).toEqual(expect.objectContaining({
+				status: 'counter-trend',
+				direction: 'bearish',
+				confidence: 76,
+				adjustment: -7,
+			}));
+		});
 	});
 
 	describe('rankScannerItems', () => {
@@ -167,6 +221,21 @@ describe('Market Scanner Scoring', () => {
 			const itemsCopy = gainerItems.map((item) => ({ ...item }));
 			rankScannerItems(gainerItems, 'top_gainers');
 			expect(gainerItems).toEqual(itemsCopy);
+		});
+
+		it('does not mutate nested higher-timeframe metadata', () => {
+			const item = {
+				symbol: 'BINANCE:BTCUSDT',
+				changePercent: 4,
+				trendConfluence: {
+					alignment: { status: 'bullish', confidence: 82 },
+				},
+			};
+			const original = JSON.parse(JSON.stringify(item));
+
+			rankScannerItems([item], 'top_gainers');
+
+			expect(item).toEqual(original);
 		});
 	});
 });

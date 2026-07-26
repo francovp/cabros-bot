@@ -72,6 +72,7 @@ function postMarketScannerAlert(botOrGetter) {
 				return res.status(timeoutError ? 504 : 502).json({
 					success: false,
 					ranked: parsed.ranked === true,
+					includeMultiTimeframe: parsed.includeMultiTimeframe === true,
 					code: timeoutError ? 'MARKET_SCANNER_TIMEOUT' : 'ALL_SCANS_FAILED',
 					error: timeoutError
 						? `Market scanner timed out after ${timeoutMs}ms.`
@@ -99,6 +100,7 @@ function postMarketScannerAlert(botOrGetter) {
 					success: true,
 					dryRun: true,
 					ranked: parsed.ranked === true,
+					includeMultiTimeframe: parsed.includeMultiTimeframe === true,
 					payload: { alertText },
 					scanResults: compactScanResults(scanResults, parsed.ranked === true),
 					summary: buildSummary(scanResults, []),
@@ -158,6 +160,7 @@ function postMarketScannerAlert(botOrGetter) {
 			return res.status(200).json({
 				success: true,
 				ranked: parsed.ranked === true,
+				includeMultiTimeframe: parsed.includeMultiTimeframe === true,
 				alertText,
 				scanResults: compactScanResults(scanResults, parsed.ranked === true),
 				deliveryResults,
@@ -228,11 +231,14 @@ async function runScans(parsed, options = {}) {
 
 			const result = await tradingViewMcpService.callScanTool(scanType, args, scanOptions);
 			const items = Array.isArray(result) ? result : (result && Array.isArray(result.result) ? result.result : []);
+			const enrichedItems = parsed.includeMultiTimeframe === true
+				? await enrichScannerItemsWithTrendConfluence(items, parsed, signal)
+				: items;
 
 			results.push({
 				scan: scanType,
 				status: 'success',
-				items,
+				items: enrichedItems,
 			});
 		} catch (error) {
 			if (isAbortTriggered(signal, error)) {
@@ -258,6 +264,63 @@ async function runScans(parsed, options = {}) {
 	}
 
 	return results;
+}
+
+async function enrichScannerItemsWithTrendConfluence(items, parsed, signal) {
+	if (!Array.isArray(items) || items.length === 0) {
+		return items;
+	}
+
+	const enrichedItems = [];
+	for (const item of items) {
+		const parsedSymbol = parseScannerSymbol(item?.symbol, parsed.exchange);
+		if (!parsedSymbol) {
+			enrichedItems.push(item);
+			continue;
+		}
+
+		try {
+			const trendConfluence = await tradingViewMcpService.callMultiTimeframeAnalysis({
+				symbol: parsedSymbol.symbol,
+				exchange: parsedSymbol.exchange,
+				signal,
+			});
+			enrichedItems.push(
+				trendConfluence && typeof trendConfluence === 'object'
+					? { ...item, trendConfluence }
+					: item,
+			);
+		} catch (error) {
+			if (isAbortTriggered(signal, error)) {
+				throw error;
+			}
+
+			console.warn('[MarketScanner] Higher-timeframe enrichment failed:', parsedSymbol.symbol, error.message);
+			enrichedItems.push(item);
+		}
+	}
+
+	return enrichedItems;
+}
+
+function parseScannerSymbol(value, defaultExchange) {
+	if (typeof value !== 'string' || !value.trim()) {
+		return null;
+	}
+
+	const raw = value.trim().toUpperCase();
+	const separatorIndex = raw.indexOf(':');
+	if (separatorIndex === -1) {
+		return { exchange: defaultExchange, symbol: raw };
+	}
+
+	const exchange = raw.slice(0, separatorIndex).trim();
+	const symbol = raw.slice(separatorIndex + 1).trim();
+	if (!exchange || !symbol) {
+		return null;
+	}
+
+	return { exchange, symbol };
 }
 
 function buildScanArgs(parsed, scanType) {
@@ -293,6 +356,7 @@ function compactScanResults(results, includeScores = false) {
 				symbol: item.symbol,
 				score: item._score,
 				reason: item._scoreReason,
+				...(item._trendConfluence ? { trendConfluence: item._trendConfluence } : {}),
 			}));
 		}
 
