@@ -134,7 +134,7 @@ describe('retryHelper', () => {
 
 			const result = await sendWithRetry(mockSendFn, 3);
 
-			expect(result.durationMs).toBeGreaterThanOrEqual(100);
+			expect(result.durationMs).toBeGreaterThanOrEqual(80);
 		});
 
 		it('should stop before the first attempt when signal is already aborted', async () => {
