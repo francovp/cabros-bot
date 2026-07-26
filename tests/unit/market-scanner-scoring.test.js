@@ -216,6 +216,23 @@ describe('Market Scanner Scoring', () => {
 			});
 		});
 
+		it('does not award alignment to directionless scans without a candidate direction', () => {
+			const result = scoreScannerItem({
+				symbol: 'BINANCE:AVAXUSDT',
+				trendConfluence: {
+					status: 'aligned',
+					confidence: 82,
+				},
+			}, 'bollinger_scan');
+
+			expect(result.reason).not.toContain('HTF aligned');
+			expect(result.trendConfluence).toEqual({
+				status: 'unknown',
+				direction: null,
+				confidence: 82,
+			});
+		});
+
 		it('uses candidate direction to override a contradictory explicit alignment label', () => {
 			const result = scoreScannerItem({
 				symbol: 'BINANCE:BTCUSDT',
@@ -279,6 +296,23 @@ describe('Market Scanner Scoring', () => {
 				},
 			}, 'top_gainers');
 
+			expect(result.trendConfluence).toEqual(expect.objectContaining({
+				status: 'aligned',
+				direction: 'bullish',
+			}));
+		});
+
+		it('prefers alignment direction over a contradictory recommendation action', () => {
+			const result = scoreScannerItem({
+				symbol: 'BINANCE:BTCUSDT',
+				changePercent: 4,
+				trendConfluence: {
+					alignment: { status: 'bullish', confidence: 82 },
+					recommendation: { action: 'SELL' },
+				},
+			}, 'top_gainers');
+
+			expect(result.reason).toContain('HTF aligned +10');
 			expect(result.trendConfluence).toEqual(expect.objectContaining({
 				status: 'aligned',
 				direction: 'bullish',
