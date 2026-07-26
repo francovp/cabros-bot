@@ -1,0 +1,4 @@
+interface:
+  display_name: "Cabros Skill Optimizer"
+  short_description: "Tighten repo skills using live evidence"
+  default_prompt: "Use $cabros-skill-optimizer to improve this repository skill from recent PR and session evidence."
