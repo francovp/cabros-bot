@@ -862,7 +862,7 @@ describe('Status endpoints', () => {
 		});
 	});
 
-	it('rejects external-account ADC files without a usable credential source', async () => {
+	it('rejects external-account ADC files unsupported by Firebase Admin', async () => {
 		delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
 		tempDir = mkdtempSync(join(tmpdir(), 'cabros-firestore-'));
 		const credentialsPath = join(tempDir, 'external-account.json');
@@ -871,7 +871,7 @@ describe('Status endpoints', () => {
 			audience: '//iam.googleapis.com/projects/123/locations/global/workloadIdentityPools/pool/providers/provider',
 			subject_token_type: 'urn:ietf:params:oauth:token-type:jwt',
 			token_url: 'https://sts.googleapis.com/v1/token',
-			credential_source: {},
+			credential_source: { file: '/tmp/subject-token.txt' },
 		}));
 		process.env.GOOGLE_APPLICATION_CREDENTIALS = credentialsPath;
 

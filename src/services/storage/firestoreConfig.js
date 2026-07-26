@@ -59,24 +59,6 @@ function hasValidApplicationDefaultCredentials(value) {
 				&& hasProjectId();
 		}
 
-		if (parsed.type === 'external_account') {
-			const credentialSource = parsed.credential_source;
-			const hasFileOrUrlSource = credentialSource
-				&& (hasValue(credentialSource.file) || hasValue(credentialSource.url));
-			const hasExecutableSource = credentialSource
-				&& credentialSource.executable
-				&& hasValue(credentialSource.executable.command);
-			const hasAwsSource = credentialSource
-				&& hasValue(credentialSource.environment_id)
-				&& hasValue(credentialSource.region_url)
-				&& hasValue(credentialSource.regional_cred_verification_url);
-
-			return hasValue(parsed.audience)
-				&& hasValue(parsed.subject_token_type)
-				&& hasValue(parsed.token_url)
-				&& (hasFileOrUrlSource || hasExecutableSource || hasAwsSource);
-		}
-
 		return hasValidInlineCredentials(value);
 	} catch (error) {
 		return false;
