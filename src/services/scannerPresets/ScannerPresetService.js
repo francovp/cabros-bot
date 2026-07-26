@@ -26,6 +26,7 @@ const SUPPORTED_TIMEFRAME_ALIASES = new Set([
 
 // In-memory fallback used when Firestore is unavailable.
 const memoryPresets = new Map();
+const pendingFirestorePresets = new Map();
 
 function clonePreset(preset) {
 	if (!preset) return null;
@@ -130,10 +131,22 @@ class ScannerPresetService {
 					.collection(COLLECTION_NAME)
 					.orderBy('createdAt', 'desc')
 					.get();
-				this.firestoreUnavailable = false;
+				const firestorePresets = snapshot && Array.isArray(snapshot.docs)
+					? snapshot.docs.map((doc) => this._formatFirestoreDoc(doc))
+					: [];
 
-				if (snapshot && Array.isArray(snapshot.docs) && snapshot.docs.length > 0) {
-					return snapshot.docs.map((doc) => this._formatFirestoreDoc(doc));
+				if (pendingFirestorePresets.size > 0) {
+					this.firestoreUnavailable = true;
+					const mergedPresets = new Map(firestorePresets.map((preset) => [preset.id, preset]));
+					for (const preset of pendingFirestorePresets.values()) {
+						mergedPresets.set(preset.id, clonePreset(preset));
+					}
+					return [...mergedPresets.values()].sort(compareByCreatedAtDesc);
+				}
+
+				this.firestoreUnavailable = false;
+				if (firestorePresets.length > 0) {
+					return firestorePresets;
 				}
 			} catch (error) {
 				this.firestoreUnavailable = true;
@@ -150,10 +163,14 @@ class ScannerPresetService {
 		}
 
 		const firestore = this._getFirestore();
+		if (pendingFirestorePresets.has(id)) {
+			return clonePreset(pendingFirestorePresets.get(id));
+		}
+
 		if (firestore) {
 			try {
 				const snapshot = await firestore.collection(COLLECTION_NAME).doc(id).get();
-				this.firestoreUnavailable = false;
+				this.firestoreUnavailable = pendingFirestorePresets.size > 0;
 				if (snapshot && snapshot.exists) {
 					return this._formatFirestoreDoc(snapshot);
 				}
@@ -199,7 +216,8 @@ class ScannerPresetService {
 					await firestore.collection(COLLECTION_NAME).doc(id).delete();
 					deleted = true;
 				}
-				this.firestoreUnavailable = false;
+				pendingFirestorePresets.delete(id);
+				this.firestoreUnavailable = pendingFirestorePresets.size > 0;
 			} catch (error) {
 				this.firestoreUnavailable = true;
 				console.warn('[ScannerPresetService] Failed to delete preset from Firestore:', error.message);
@@ -292,6 +310,9 @@ class ScannerPresetService {
 
 		const firestore = this._getFirestore();
 		if (!firestore) {
+			if (isFirestoreEnabled()) {
+				pendingFirestorePresets.set(preset.id, clonePreset(preset));
+			}
 			return;
 		}
 
@@ -299,10 +320,27 @@ class ScannerPresetService {
 			await firestore.collection(COLLECTION_NAME).doc(preset.id).set({
 				...clonePreset(preset),
 			});
-			this.firestoreUnavailable = false;
+			pendingFirestorePresets.delete(preset.id);
+			await this._flushPendingPresets(firestore);
+			this.firestoreUnavailable = pendingFirestorePresets.size > 0;
 		} catch (error) {
+			pendingFirestorePresets.set(preset.id, clonePreset(preset));
 			this.firestoreUnavailable = true;
 			console.warn('[ScannerPresetService] Failed to persist preset to Firestore:', error.message);
+		}
+	}
+
+	async _flushPendingPresets(firestore) {
+		for (const preset of [...pendingFirestorePresets.values()]) {
+			try {
+				await firestore.collection(COLLECTION_NAME).doc(preset.id).set({
+					...clonePreset(preset),
+				});
+				pendingFirestorePresets.delete(preset.id);
+			} catch (error) {
+				this.firestoreUnavailable = true;
+				console.warn('[ScannerPresetService] Failed to flush pending preset to Firestore:', error.message);
+			}
 		}
 	}
 
@@ -341,6 +379,7 @@ module.exports = {
 	// Test helper
 	_resetForTesting() {
 		memoryPresets.clear();
+		pendingFirestorePresets.clear();
 		scannerPresetService.firestoreUnavailable = false;
 	},
 };

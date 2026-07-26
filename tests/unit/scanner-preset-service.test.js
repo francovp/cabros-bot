@@ -157,4 +157,21 @@ describe('ScannerPresetService', () => {
 			backend: 'firestore',
 		});
 	});
+
+	it('keeps presets from failed writes visible and ephemeral after reads recover', async () => {
+		process.env.ENABLE_FIRESTORE_SCANNER_PRESETS = 'true';
+
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const firestoreAdmin = require('firebase-admin');
+		firestoreAdmin.__mockDocSet.mockRejectedValueOnce(new Error('Temporary Firestore write outage'));
+		const service = new ScannerPresetService();
+
+		const created = await service.createPreset({ name: 'Unsynced preset' });
+		const presets = await service.listPresets();
+
+		expect(presets).toEqual([
+			expect.objectContaining({ id: created.id, name: 'Unsynced preset' }),
+		]);
+		expect(service.getStorageStatus().mode).toBe('ephemeral');
+	});
 });
