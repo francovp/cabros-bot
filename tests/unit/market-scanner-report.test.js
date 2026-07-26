@@ -358,6 +358,27 @@ describe('Market Scanner Report', () => {
 			expect(report).toContain('🔥 HTF ALIGNED 74%');
 		});
 
+		it('renders textual high higher-timeframe confidence as a high-confidence marker', () => {
+			const report = buildMarketScannerReport([{
+				scan: 'top_gainers',
+				status: 'success',
+				items: [{
+					symbol: 'BINANCE:BTCUSDT',
+					changePercent: 2.1,
+					trendConfluence: {
+						alignment: { status: 'bullish', confidence: 'High' },
+					},
+				}],
+			}], {
+				exchange: 'BINANCE',
+				timeframe: '4h',
+				ranked: true,
+				now: mockDate,
+			});
+
+			expect(report).toContain('🔥 HTF ALIGNED 85%');
+		});
+
 		it('covers ATR-based risk/reward formatting when close and ATR are present', () => {
 			const results = [
 				{

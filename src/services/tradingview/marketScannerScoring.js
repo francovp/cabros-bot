@@ -350,6 +350,19 @@ function normalizeConfluenceStatus(value) {
 }
 
 function normalizeConfidence(value) {
+	if (typeof value === 'string') {
+		const normalized = value.trim().toLowerCase().replace(/[_-]+/g, ' ');
+		const textualLevels = [
+			{ pattern: /very\s*high|high/, confidence: 85 },
+			{ pattern: /medium|moderate|neutral/, confidence: 60 },
+			{ pattern: /very\s*low|low/, confidence: 35 },
+		];
+		const level = textualLevels.find(({ pattern }) => pattern.test(normalized));
+		if (level) {
+			return level.confidence;
+		}
+	}
+
 	const numeric = numberOrNull(value);
 	if (numeric === null) {
 		return null;
