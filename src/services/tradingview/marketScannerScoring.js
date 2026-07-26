@@ -253,24 +253,8 @@ function resolveTrendConfluence(item = {}, scanType, options = {}) {
 		return null;
 	}
 
-	const explicitStatus = normalizeConfluenceStatus(
-		raw.status
-		|| raw.alignment?.status
-		|| raw.recommendation?.action,
-	);
-	const direction = normalizeTrendDirection(
-		raw.direction
-		|| raw.trend
-		|| raw.bias
-		|| raw.alignment?.direction
-		|| raw.alignment?.trend
-		|| raw.recommendation?.direction
-		|| raw.recommendation?.action
-		|| raw.status
-		|| raw.alignment?.status
-		|| raw.alignment
-		|| raw.recommendation,
-	);
+	const explicitStatus = resolveExplicitStatusFromRaw(raw);
+	const direction = resolveDirectionFromRaw(raw);
 	const expectedDirection = getExpectedTrendDirection(item, scanType);
 
 	let status = explicitStatus;
@@ -296,6 +280,46 @@ function resolveTrendConfluence(item = {}, scanType, options = {}) {
 		direction: direction || null,
 		confidence,
 	};
+}
+
+function resolveExplicitStatusFromRaw(raw = {}) {
+	const candidates = [
+		raw.status,
+		raw.alignment?.status,
+		raw.recommendation?.action,
+	];
+
+	for (const candidate of candidates) {
+		const normalized = normalizeConfluenceStatus(candidate);
+		if (normalized) {
+			return normalized;
+		}
+	}
+	return null;
+}
+
+function resolveDirectionFromRaw(raw = {}) {
+	const candidates = [
+		raw.direction,
+		raw.trend,
+		raw.bias,
+		raw.alignment?.direction,
+		raw.alignment?.trend,
+		raw.recommendation?.direction,
+		raw.recommendation?.action,
+		raw.status,
+		raw.alignment?.status,
+		raw.alignment,
+		raw.recommendation,
+	];
+
+	for (const candidate of candidates) {
+		const normalized = normalizeTrendDirection(candidate);
+		if (normalized) {
+			return normalized;
+		}
+	}
+	return null;
 }
 
 function getExpectedTrendDirection(item = {}, scanType) {

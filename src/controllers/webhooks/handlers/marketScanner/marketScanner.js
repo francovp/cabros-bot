@@ -235,7 +235,7 @@ async function runScans(parsed, options = {}) {
 			let enrichedItems = items;
 			if (parsed.includeMultiTimeframe === true) {
 				try {
-					enrichedItems = await enrichScannerItemsWithTrendConfluence(items, parsed, signal);
+					enrichedItems = await enrichScannerItemsWithTrendConfluence(items, { ...parsed, scanType }, signal);
 				} catch (error) {
 					if (isAbortTriggered(signal, error)) {
 						const timeoutMessage = getAbortMessage(signal, error.message);

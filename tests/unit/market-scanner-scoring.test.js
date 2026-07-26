@@ -268,6 +268,22 @@ describe('Market Scanner Scoring', () => {
 				confidence: 85,
 			}));
 		});
+
+		it('normalizes each direction candidate independently past non-direction action fields', () => {
+			const result = scoreScannerItem({
+				symbol: 'BINANCE:BTCUSDT',
+				changePercent: 4,
+				trendConfluence: {
+					alignment: { status: 'bullish' },
+					recommendation: { action: 'HOLD' },
+				},
+			}, 'top_gainers');
+
+			expect(result.trendConfluence).toEqual(expect.objectContaining({
+				status: 'aligned',
+				direction: 'bullish',
+			}));
+		});
 	});
 
 	describe('rankScannerItems', () => {

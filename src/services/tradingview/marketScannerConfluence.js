@@ -30,13 +30,42 @@ function isAbortTriggered(signal, error) {
 	);
 }
 
+function filterScannerCandidates(items, scanType) {
+	if (!Array.isArray(items)) {
+		return [];
+	}
+
+	if (scanType === 'top_gainers') {
+		return items.filter((item) => typeof item?.changePercent === 'number' && item.changePercent > 0);
+	}
+
+	if (scanType === 'top_losers') {
+		return items
+			.map((item) => {
+				if (typeof item?.changePercent === 'number') {
+					return { ...item, changePercent: -Math.abs(item.changePercent) };
+				}
+				return item;
+			})
+			.filter((item) => typeof item?.changePercent === 'number' && item.changePercent < 0);
+	}
+
+	return items;
+}
+
 async function enrichScannerItemsWithTrendConfluence(items, parsed, signal) {
 	if (!Array.isArray(items) || items.length === 0) {
 		return items;
 	}
 
+	const scanType = parsed?.scanType || parsed?.scan;
+	const candidateItems = filterScannerCandidates(items, scanType);
+	if (candidateItems.length === 0) {
+		return [];
+	}
+
 	const enrichedItems = [];
-	for (const item of items) {
+	for (const item of candidateItems) {
 		const parsedSymbol = parseScannerSymbol(item?.symbol, parsed.exchange);
 		if (!parsedSymbol) {
 			enrichedItems.push(item);
@@ -69,5 +98,7 @@ async function enrichScannerItemsWithTrendConfluence(items, parsed, signal) {
 
 module.exports = {
 	enrichScannerItemsWithTrendConfluence,
+	filterScannerCandidates,
 	isAbortTriggered,
 };
+

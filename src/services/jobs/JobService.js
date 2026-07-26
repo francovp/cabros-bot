@@ -773,7 +773,7 @@ class JobService {
 				let enrichedItems = items;
 				if (parsed.includeMultiTimeframe === true) {
 					try {
-						enrichedItems = await enrichScannerItemsWithTrendConfluence(items, parsed, signal);
+						enrichedItems = await enrichScannerItemsWithTrendConfluence(items, { ...parsed, scanType }, signal);
 					} catch (error) {
 						if (this._isAbortTriggered(signal, error)) {
 							const timeoutMessage = this._getAbortMessage(signal, error.message);
