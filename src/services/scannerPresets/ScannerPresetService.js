@@ -231,10 +231,13 @@ class ScannerPresetService {
 			try {
 				const snapshot = await firestore.collection(COLLECTION_NAME).doc(id).get();
 				if ((snapshot && snapshot.exists) || hadLocalPreset) {
-					await this._deleteFirestorePreset(firestore, id);
 					deleted = Boolean(snapshot && snapshot.exists) || hadLocalPreset;
+					if (snapshot && snapshot.exists && isFirestoreEnabled()) {
+						pendingFirestoreDeletes.add(id);
+					}
+					await this._deleteFirestorePreset(firestore, id);
+					pendingFirestoreDeletes.delete(id);
 				}
-				pendingFirestoreDeletes.delete(id);
 				this.firestoreUnavailable = pendingFirestorePresets.size > 0 || pendingFirestoreDeletes.size > 0;
 			} catch (error) {
 				this.firestoreUnavailable = true;
@@ -361,11 +364,18 @@ class ScannerPresetService {
 	}
 
 	async _flushPendingPresets(firestore) {
-		for (const preset of [...pendingFirestorePresets.values()]) {
+		for (const id of [...pendingFirestorePresets.keys()]) {
+			const preset = pendingFirestorePresets.get(id);
+			if (!preset) {
+				continue;
+			}
+			pendingFirestorePresets.delete(id);
 			try {
 				await this._writeFirestorePreset(firestore, preset);
-				pendingFirestorePresets.delete(preset.id);
 			} catch (error) {
+				if (!pendingFirestorePresets.has(id)) {
+					pendingFirestorePresets.set(id, preset);
+				}
 				this.firestoreUnavailable = true;
 				console.warn('[ScannerPresetService] Failed to flush pending preset to Firestore:', error.message);
 			}

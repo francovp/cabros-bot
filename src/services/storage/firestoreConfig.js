@@ -7,6 +7,12 @@ function hasValue(value) {
 	return typeof value === 'string' ? value.trim().length > 0 : value != null;
 }
 
+function hasProjectId() {
+	return hasValue(process.env.FIREBASE_PROJECT_ID)
+		|| hasValue(process.env.GOOGLE_CLOUD_PROJECT)
+		|| hasValue(process.env.GCLOUD_PROJECT);
+}
+
 function isGoogleManagedRuntime() {
 	return (
 		hasValue(process.env.K_SERVICE)
@@ -49,7 +55,8 @@ function hasValidApplicationDefaultCredentials(value) {
 		if (parsed.type === 'authorized_user') {
 			return hasValue(parsed.client_id)
 				&& hasValue(parsed.client_secret)
-				&& hasValue(parsed.refresh_token);
+				&& hasValue(parsed.refresh_token)
+				&& hasProjectId();
 		}
 
 		if (parsed.type === 'external_account') {

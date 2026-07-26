@@ -276,4 +276,50 @@ describe('ScannerPresetService', () => {
 		await Promise.all([triggerPromise, deletePromise]);
 		expect(firestoreAdmin.__mockDocDelete).toHaveBeenCalled();
 	});
+
+	it('does not flush the same pending preset twice concurrently', async () => {
+		process.env.ENABLE_FIRESTORE_SCANNER_PRESETS = 'true';
+
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const firestoreAdmin = require('firebase-admin');
+		const service = new ScannerPresetService();
+		firestoreAdmin.__mockDocSet.mockRejectedValueOnce(new Error('Temporary Firestore write outage'));
+		await service.createPreset({ name: 'Queued value' });
+
+		let releaseFlush;
+		let queuedWrites = 0;
+		const flushGate = new Promise((resolve) => {
+			releaseFlush = resolve;
+		});
+		firestoreAdmin.__mockDocSet.mockImplementation((data) => {
+			if (data.name === 'Trigger one' || data.name === 'Trigger two') {
+				return Promise.resolve();
+			}
+			queuedWrites += 1;
+			return flushGate;
+		});
+
+		const firstTrigger = service.createPreset({ name: 'Trigger one' });
+		await new Promise((resolve) => setImmediate(resolve));
+		const secondTrigger = service.createPreset({ name: 'Trigger two' });
+		await new Promise((resolve) => setImmediate(resolve));
+		releaseFlush();
+		await Promise.all([firstTrigger, secondTrigger]);
+
+		expect(queuedWrites).toBe(1);
+	});
+
+	it('tombstones a remote-only preset when its delete fails', async () => {
+		process.env.ENABLE_FIRESTORE_SCANNER_PRESETS = 'true';
+
+		const scannerPresetModule = require('../../src/services/scannerPresets/ScannerPresetService');
+		const firestoreAdmin = require('firebase-admin');
+		const service = new scannerPresetModule.ScannerPresetService();
+		const created = await service.createPreset({ name: 'Remote-only preset' });
+		scannerPresetModule._resetForTesting();
+		firestoreAdmin.__mockDocDelete.mockRejectedValueOnce(new Error('Temporary Firestore delete outage'));
+
+		expect(await service.deletePreset(created.id)).toBe(true);
+		expect(await service.listPresets()).toEqual([]);
+	});
 });
