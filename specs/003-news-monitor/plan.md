@@ -20,7 +20,7 @@ This feature implements an HTTP endpoint (`/api/news-monitor`) that analyzes new
 - `binance` ^2.10.2 - Binance API client (existing, for crypto price fetching)
 - `express` ^4.17.1 - HTTP server (existing)
 - `telegraf` ^4.3.0 - Telegram bot framework (existing)
-- `prettylink` ^1.1.0 - URL shortening wrapper for multiple services (Bitly, TinyURL, PicSee, reurl, Cutt.ly, Pixnet0rz.tw) with fallback to direct API calls for unsupported services
+- Native fetch URL shortener for multiple services (Bitly, TinyURL, PicSee, Cutt.ly) with fallback to title-only citations if service is unavailable
 
 **Storage**: In-memory cache for news deduplication (Map-based, TTL-aware, no persistence required) + in-memory URL shortening cache (session-scoped)
 **Testing**: Jest ^30.2.0 with supertest ^7.1.4 for integration tests; minimal test coverage per constitution (critical paths + regressions)  
@@ -38,7 +38,7 @@ This feature implements an HTTP endpoint (`/api/news-monitor`) that analyzes new
 - Aggressive timeouts: Binance ~5s, Gemini ~20s, optional LLM enrichment ~10s, URL shortening ~5s per symbol
 - Graceful degradation: notification channel failures and URL shortening failures do not block HTTP response or alert delivery
 - Conservative confidence selection when enrichment is enabled (min of Gemini + LLM scores)
-- URL shortening supports multiple services via `URL_SHORTENER_SERVICE` env var (default: 'bitly'); uses prettylink for supported services, direct API calls for unsupported; falls back to title-only citations if service unavailable
+- URL shortening supports multiple services via `URL_SHORTENER_SERVICE` env var (default: 'picsee'); uses native fetch for supported services; falls back to title-only citations if service unavailable
 
 **Scale/Scope**: 
 - Extensible: No hard limits on symbol count (30s timeout applies to entire batch)
@@ -340,7 +340,7 @@ specs/003-news-monitor/
 
 7. **URL Shortening** (NEW for User Story 2b): 
   - Optional feature controlled by `URL_SHORTENER_SERVICE` env var (default: 'bitly')
-  - Uses `prettylink` npm package for supported services (Bitly, TinyURL, PicSee, reurl, Cutt.ly, Pixnet0rz.tw)
+  - Uses native fetch for supported services (Bitly, TinyURL, PicSee, Cutt.ly)
   - Falls back to direct API calls for unsupported services
   - Session-scoped in-memory cache prevents redundant API calls for duplicate sources (originalUrl → shortUrl map; in-memory only, resets on process restart)
   - Graceful fallback to title-only citations if shortening fails (shortening failures logged at INFO; alert delivery proceeds)

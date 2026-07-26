@@ -114,7 +114,7 @@ This repository is already initialized and wired for `/api/webhook/alert`, Gemin
 - [x] T023 [P] Run focused Jest suites for enrichment code paths using scripts in `package.json` against `tests/unit/gemini-client.test.js`, `tests/unit/alert-handler.test.js`, `tests/unit/news-alert-formatting.test.js`, `tests/unit/whatsapp-formatter.test.js`, and `tests/integration/alert-grounding.test.js`, fixing any regressions surfaced.
 - [x] T024 [P] Update enriched alert examples in `specs/004-enrich-alert-output/quickstart.md` to match the final Telegram and WhatsApp message structure produced by `MarkdownV2Formatter` and `WhatsAppMarkdownFormatter`.
 - [x] T025 [P] Update the root `README.md` features section to describe the `EnrichedAlert` fields and how `/api/webhook/alert` uses Gemini Grounding to produce Sentiment, Key Insights, Technical Levels, and Sources.
-- [x] T026 Execute the full test suite (`npm test` via `package.json`) to confirm `001-gemini-grounding-alert`, `002-whatsapp-alerts`, `003-news-monitor`, and `004-enrich-alert-output` features all pass unit and integration tests after enrichment changes.
+- [x] T026 Execute the full test suite (`pnpm test` via `package.json`) to confirm `001-gemini-grounding-alert`, `002-whatsapp-alerts`, `003-news-monitor`, and `004-enrich-alert-output` features all pass unit and integration tests after enrichment changes.
 
 ---
 

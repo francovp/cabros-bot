@@ -110,8 +110,8 @@ Monitor the feature using:
 
 ```bash
 # Run all tests
-npm test
+pnpm test
 
 # Run specific test suite
-npm test -- --grep "Alert Grounding"
+pnpm test -- --testNamePattern="Alert Grounding"
 ```

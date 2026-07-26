@@ -318,12 +318,12 @@ async function getMarketContext(symbol, isCrypto) {
 
 ### 7. URL Shortening for WhatsApp Citations
 
-**Decision**: Use `prettylink` npm package for supported URL shortening services (Bitly, TinyURL, PicSee, reurl, Cutt.ly, Pixnet0rz.tw), with fallback to direct API calls for unsupported services, and title-only citations if all fail
+**Decision**: Use native fetch URL shortener utility for supported URL shortening services (Bitly, TinyURL, PicSee, Cutt.ly), with fallback to title-only citations if all fail
 
 **Rationale**:
 
-- **Multi-service support**: `prettylink` provides unified interface for multiple shortening services
-- **Graceful fallback**: If prettylink fails or service unsupported, fall back to direct API calls using native fetch
+- **Multi-service support**: Native fetch implementation provides unified interface for multiple shortening services
+- **Graceful fallback**: If shortener fails or service is unsupported, fall back gracefully
 - **Fail-open pattern**: If shortening fails, use title-only citations (e.g., "Reuters / CoinDesk") without blocking alert delivery
 - **In-memory cache**: Session-scoped cache prevents redundant API calls for duplicate sources
 - **Performance**: Shortening typically <1s per citation, fits within 30s per-symbol budget
@@ -411,7 +411,7 @@ class URLShortener {
 | **Parallel Processing** | `Promise.allSettled()` | Non-blocking, returns partial results, native Node.js (no library needed) |
 | **Notification Delivery** | Existing `NotificationManager` (from 002-whatsapp-alerts) | Already supports Telegram + WhatsApp, retry logic, graceful degradation |
 | **Crypto Price Fetching** | Existing `binance` client with Gemini fallback | Already integrated, accurate real-time prices, fallback ensures reliability |
-| **URL Shortening** | `prettylink` npm package with direct API fallback | Multi-service support, graceful degradation, in-memory cache, fail-open pattern |
+| **URL Shortening** | Native fetch URL shortener utility | Multi-service support (Bitly, TinyURL, PicSee, Cutt.ly), graceful degradation, in-memory cache, fail-open pattern |
 | **Testing** | Jest + supertest | Existing test infrastructure, supports integration tests for HTTP endpoints |
 
 ---
@@ -427,6 +427,6 @@ All NEEDS CLARIFICATION items from Technical Context have been resolved:
 - ✅ Parallel processing approach selected
 - ✅ Multi-channel notification strategy (reuse existing)
 - ✅ Binance integration approach (reuse with fallback)
-- ✅ URL shortening strategy documented (prettylink + direct API fallback)
+- ✅ URL shortening strategy documented (native fetch shortener + fallback)
 
 **Ready for Phase 1: Design & Contracts**

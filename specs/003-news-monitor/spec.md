@@ -214,7 +214,7 @@ When `ENABLE_LLM_ALERT_ENRICHMENT=true`, the system can invoke an optional secon
 
 ### Session 2025-11-01 (URL Shortening Feature)
 
-- **Q1: URL Shortening Library & API** → A: Use `prettylink` npm package with Bitly API. Configuration via `BITLY_API_KEY` environment variable. When key is provided, all citations in WhatsApp enriched alerts are shortened. If Bitly unavailable or rate-limited, gracefully fall back to title-only citations without blocking delivery.
+- **Q1: URL Shortening Library & API** → A: Use native fetch with configured URL shortening APIs (Bitly, TinyURL, PicSee, Cutt.ly). Configuration via service API key environment variables. When key is provided, all citations in WhatsApp enriched alerts are shortened. If service unavailable or rate-limited, gracefully fall back to title-only citations without blocking delivery.
 - **Q2: URL Extraction & Caching Strategy** → A: Do NOT attempt to extract destination domain from Google's redirect wrapper URLs. Use full redirect URL as-is (Bitly handles extraction). Maintain in-memory session-scoped cache keyed by original URL, value is shortened URL. Cache resets on bot restart. Prevents redundant Bitly calls for duplicate sources.
 - **Q3: Cache Storage & Persistence** → A: In-memory only (session-scoped). No Redis or persistent storage in MVP. Cache stored in simple Map or object in WhatsAppService or URL shortener utility. Acceptable for MVP; Phase 2 can add Redis if needed for distributed bot instances or longer-running processes.
 
@@ -269,4 +269,4 @@ When `ENABLE_LLM_ALERT_ENRICHMENT=true`, the system can invoke an optional secon
 - **Format validation is lenient**: Invalid symbols are detected by external APIs, not rejected upfront; entire request is never rejected at HTTP level (format errors return per-symbol status "error")
 - **Configured URL shortening service is available** when the required token is configured; graceful fallback to title-only citations if unavailable
 - **URL shortening cache is session-scoped**: In-memory only, resets on bot restart. No persistence across deployments. Acceptable for MVP; Phase 2 can add Redis backing if distributed bot instances need shared cache
-- **prettylink npm package** correctly wraps the configured URL shortening service API and returns the shortened URL; error handling gracefully falls back to original behavior
+- **URL shortener utility** correctly wraps the configured URL shortening service API using native fetch and returns the shortened URL; error handling gracefully falls back to original behavior

@@ -34,14 +34,13 @@ The News Monitor API analyzes news and market sentiment for crypto and stock sym
 ### 1. Install Dependencies
 
 ```bash
-# Core Azure AI Inference packages (for optional LLM enrichment)
-npm install @azure-rest/ai-inference @azure/core-auth @azure/core-sse
+# Verify dependencies in manifest and install frozen lockfile
+pnpm install --frozen-lockfile
 
-# Existing dependencies (already installed)
-# - @google/genai (Gemini)
-# - binance (crypto prices)
-# - express (HTTP server)
-# - telegraf (Telegram bot)
+# Core Azure AI Inference packages (already declared in package.json)
+# - @azure-rest/ai-inference
+# - @azure/core-auth
+# - @azure/core-sse
 ```
 
 ### 2. Environment Configuration
@@ -89,10 +88,10 @@ BITLY_ACCESS_TOKEN=your-bitly-token          # Required for Bitly
 
 ```bash
 # Development mode (with auto-reload)
-npm run start-dev
+pnpm run start-dev
 
 # Production mode
-npm start
+pnpm start
 ```
 
 Server will start on `http://localhost:3000` (or `PORT` env variable).
@@ -385,13 +384,13 @@ if confidence >= NEWS_ALERT_THRESHOLD:
 
 ```bash
 # Unit + integration tests
-npm test
+pnpm test
 
 # Watch mode (auto-rerun on changes)
-npm run test:watch
+pnpm run test:watch
 
 # Coverage report
-npm run test:coverage
+pnpm run test:coverage
 ```
 
 ### Manual Testing with curl
@@ -434,7 +433,7 @@ curl -X POST http://localhost:3000/api/news-monitor \
 ENABLE_NEWS_MONITOR=true
 
 # Restart server
-npm start
+pnpm start
 ```
 
 ---
