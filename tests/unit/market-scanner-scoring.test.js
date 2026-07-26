@@ -284,6 +284,21 @@ describe('Market Scanner Scoring', () => {
 				direction: 'bullish',
 			}));
 		});
+
+		it('treats negated alignment labels as counter-trend', () => {
+			const result = scoreScannerItem({
+				symbol: 'BINANCE:BTCUSDT',
+				changePercent: 4,
+				trendConfluence: {
+					alignment: { status: 'not aligned', confidence: 76 },
+				},
+			}, 'top_gainers');
+
+			expect(result.reason).toContain('HTF counter-trend -10');
+			expect(result.trendConfluence).toEqual(expect.objectContaining({
+				status: 'counter-trend',
+			}));
+		});
 	});
 
 	describe('rankScannerItems', () => {

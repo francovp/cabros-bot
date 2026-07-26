@@ -363,6 +363,9 @@ function normalizeConfluenceStatus(value) {
 	if (/(counter.?trend|oppos|divergen|contra.?tend)/.test(normalized)) {
 		return 'counter-trend';
 	}
+	if (/(not\s+aligned|misaligned|unaligned|not\s+confluent)/.test(normalized)) {
+		return 'counter-trend';
+	}
 	if (/(^|\s)(aligned|confluence|confluent)(\s|$)/.test(normalized)) {
 		return 'aligned';
 	}
