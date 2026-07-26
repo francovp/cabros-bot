@@ -378,4 +378,40 @@ describe('ScannerPresetService', () => {
 		expect(await service.listPresets()).toEqual([]);
 		expect(service.getStorageStatus().mode).toBe('durable');
 	});
+
+	it('does not restore a failed pending flush after a queued delete succeeds', async () => {
+		process.env.ENABLE_FIRESTORE_SCANNER_PRESETS = 'true';
+
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const firestoreAdmin = require('firebase-admin');
+		const service = new ScannerPresetService();
+		firestoreAdmin.__mockDocSet.mockRejectedValueOnce(new Error('Temporary Firestore write outage'));
+		const queued = await service.createPreset({ name: 'Queued value' });
+
+		let rejectFlush;
+		const flushGate = new Promise((resolve, reject) => {
+			rejectFlush = reject;
+		});
+		firestoreAdmin.__mockDocSet.mockImplementation((data) => {
+			if (data.name === 'Queued value') {
+				return flushGate;
+			}
+			return Promise.resolve();
+		});
+
+		const triggerPromise = service.createPreset({ name: 'Trigger flush' });
+		await new Promise((resolve) => setImmediate(resolve));
+		const deletePromise = service.deletePreset(queued.id);
+		await new Promise((resolve) => setImmediate(resolve));
+
+		rejectFlush(new Error('Temporary Firestore flush outage'));
+		expect(await deletePromise).toBe(true);
+		await triggerPromise;
+
+		expect(await service.listPresets()).toEqual([
+			expect.objectContaining({ name: 'Trigger flush' }),
+	]);
+		expect(await service.getPreset(queued.id)).toBeNull();
+		expect(service.getStorageStatus().mode).toBe('durable');
+	});
 });

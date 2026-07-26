@@ -383,11 +383,13 @@ class ScannerPresetService {
 			if (!preset) {
 				continue;
 			}
+			const deleteGenerationAtStart = firestoreDeleteGenerations.get(id) || 0;
 			pendingFirestorePresets.delete(id);
 			try {
 				await this._writeFirestorePreset(firestore, preset);
 			} catch (error) {
-				if (!pendingFirestorePresets.has(id)) {
+				if ((firestoreDeleteGenerations.get(id) || 0) === deleteGenerationAtStart
+					&& !pendingFirestorePresets.has(id)) {
 					pendingFirestorePresets.set(id, preset);
 				}
 				this.firestoreUnavailable = true;
