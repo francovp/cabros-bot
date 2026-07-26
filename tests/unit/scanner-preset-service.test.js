@@ -188,4 +188,46 @@ describe('ScannerPresetService', () => {
 		expect(await service.deletePreset(created.id)).toBe(true);
 		expect(await service.listPresets()).toEqual([]);
 	});
+
+	it('serializes pending writes before concurrent updates for the same preset', async () => {
+		process.env.ENABLE_FIRESTORE_SCANNER_PRESETS = 'true';
+
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const firestoreAdmin = require('firebase-admin');
+		firestoreAdmin.__mockDocSet.mockRejectedValueOnce(new Error('Temporary Firestore write outage'));
+		const service = new ScannerPresetService();
+		const created = await service.createPreset({ name: 'Queued old value' });
+
+		let releaseOldWrite;
+		let oldWriteStarted = false;
+		let newWriteStarted = false;
+		const oldWriteGate = new Promise((resolve) => {
+			releaseOldWrite = resolve;
+		});
+		firestoreAdmin.__mockDocSet.mockImplementation((data) => {
+			if (data.name === 'Trigger flush') {
+				return Promise.resolve();
+			}
+			if (data.name === 'Queued old value') {
+				oldWriteStarted = true;
+				return oldWriteGate;
+			}
+			if (data.name === 'New value') {
+				newWriteStarted = true;
+			}
+			return Promise.resolve();
+		});
+
+		const triggerPromise = service.createPreset({ name: 'Trigger flush' });
+		await new Promise((resolve) => setImmediate(resolve));
+		const updatePromise = service.updatePreset(created.id, { name: 'New value' });
+		await new Promise((resolve) => setImmediate(resolve));
+
+		expect(oldWriteStarted).toBe(true);
+		expect(newWriteStarted).toBe(false);
+
+		releaseOldWrite();
+		await Promise.all([triggerPromise, updatePromise]);
+		expect(newWriteStarted).toBe(true);
+	});
 });

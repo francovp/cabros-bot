@@ -27,6 +27,7 @@ const SUPPORTED_TIMEFRAME_ALIASES = new Set([
 // In-memory fallback used when Firestore is unavailable.
 const memoryPresets = new Map();
 const pendingFirestorePresets = new Map();
+const firestoreWriteQueues = new Map();
 
 function clonePreset(preset) {
 	if (!preset) return null;
@@ -317,9 +318,7 @@ class ScannerPresetService {
 		}
 
 		try {
-			await firestore.collection(COLLECTION_NAME).doc(preset.id).set({
-				...clonePreset(preset),
-			});
+			await this._writeFirestorePreset(firestore, preset);
 			pendingFirestorePresets.delete(preset.id);
 			await this._flushPendingPresets(firestore);
 			this.firestoreUnavailable = pendingFirestorePresets.size > 0;
@@ -333,13 +332,29 @@ class ScannerPresetService {
 	async _flushPendingPresets(firestore) {
 		for (const preset of [...pendingFirestorePresets.values()]) {
 			try {
-				await firestore.collection(COLLECTION_NAME).doc(preset.id).set({
-					...clonePreset(preset),
-				});
+				await this._writeFirestorePreset(firestore, preset);
 				pendingFirestorePresets.delete(preset.id);
 			} catch (error) {
 				this.firestoreUnavailable = true;
 				console.warn('[ScannerPresetService] Failed to flush pending preset to Firestore:', error.message);
+			}
+		}
+	}
+
+	async _writeFirestorePreset(firestore, preset) {
+		const previousWrite = firestoreWriteQueues.get(preset.id) || Promise.resolve();
+		const currentWrite = previousWrite
+			.catch(() => undefined)
+			.then(() => firestore.collection(COLLECTION_NAME).doc(preset.id).set({
+				...clonePreset(preset),
+			}));
+		firestoreWriteQueues.set(preset.id, currentWrite);
+
+		try {
+			await currentWrite;
+		} finally {
+			if (firestoreWriteQueues.get(preset.id) === currentWrite) {
+				firestoreWriteQueues.delete(preset.id);
 			}
 		}
 	}
@@ -380,6 +395,7 @@ module.exports = {
 	_resetForTesting() {
 		memoryPresets.clear();
 		pendingFirestorePresets.clear();
+		firestoreWriteQueues.clear();
 		scannerPresetService.firestoreUnavailable = false;
 	},
 };
