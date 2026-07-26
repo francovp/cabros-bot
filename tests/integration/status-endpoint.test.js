@@ -4,6 +4,9 @@ const express = require('express');
 const { generateKeyPairSync } = require('crypto');
 const { tmpdir } = require('os');
 const { join } = require('path');
+jest.mock('firebase-admin');
+const admin = require('firebase-admin');
+const alertStorageService = require('../../src/services/storage/AlertStorageService');
 const { getRoutes } = require('../../src/routes');
 
 const testPrivateKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({
@@ -22,6 +25,9 @@ describe('Status endpoints', () => {
 	let tempDir;
 
 	beforeEach(() => {
+		admin.__resetApps();
+		admin.__resetCollectionState();
+		alertStorageService._resetForTesting();
 		Object.keys(process.env).forEach((key) => {
 			delete process.env[key];
 		});
@@ -111,6 +117,48 @@ describe('Status endpoints', () => {
 			status: 'disabled',
 		});
 		expect(response.body.dependencies.sentry.status).toBe('ready');
+	});
+
+	it('reports scanner presets as ephemeral when no Firestore gate is enabled', async () => {
+		delete process.env.ENABLE_FIRESTORE_ALERT_STORAGE;
+		delete process.env.ENABLE_FIRESTORE_SCANNER_PRESETS;
+		delete process.env.ENABLE_FIRESTORE_JOB_STORAGE;
+		delete process.env.ENABLE_SIGNAL_OUTCOME_TRACKING;
+		delete process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING;
+
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.firestoreScannerPresets).toBe(false);
+		expect(response.body.dependencies.scannerPresetStorage).toEqual({
+			enabled: false,
+			configured: false,
+			ready: false,
+			status: 'disabled',
+			mode: 'ephemeral',
+			backend: 'memory',
+		});
+	});
+
+	it('reports durable scanner preset storage from its dedicated Firestore gate', async () => {
+		delete process.env.ENABLE_FIRESTORE_ALERT_STORAGE;
+		process.env.ENABLE_FIRESTORE_SCANNER_PRESETS = 'true';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.firestoreScannerPresets).toBe(true);
+		expect(response.body.dependencies.scannerPresetStorage).toEqual({
+			enabled: true,
+			configured: true,
+			ready: true,
+			status: 'ready',
+			mode: 'durable',
+			backend: 'firestore',
+		});
 	});
 
 	it('reports Cloudflare AI Gateway as disabled by default', async () => {

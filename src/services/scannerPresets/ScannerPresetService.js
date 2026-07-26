@@ -12,6 +12,13 @@ const {
 } = require('../tradingview/parseTradingViewSignal');
 
 const COLLECTION_NAME = 'scannerPresets';
+const FIRESTORE_GATE_ENV_VARS = [
+	'ENABLE_FIRESTORE_SCANNER_PRESETS',
+	'ENABLE_FIRESTORE_ALERT_STORAGE',
+	'ENABLE_FIRESTORE_JOB_STORAGE',
+	'ENABLE_SIGNAL_OUTCOME_TRACKING',
+	'ENABLE_SHADOW_MODE_OUTCOME_TRACKING',
+];
 const DEFAULT_SCAN_LIMIT = 5;
 const MAX_SCAN_LIMIT = 20;
 const DEFAULT_EXCHANGE = 'BINANCE';
@@ -92,6 +99,25 @@ function normalizeBbwThreshold(bbwThreshold) {
 }
 
 class ScannerPresetService {
+	constructor() {
+		this.firestoreUnavailable = false;
+	}
+
+	getStorageStatus() {
+		const firestoreEnabled = FIRESTORE_GATE_ENV_VARS.some((envVar) => process.env[envVar] === 'true');
+		const firestore = this._getFirestore();
+		const durable = Boolean(firestore);
+
+		return {
+			enabled: firestoreEnabled,
+			configured: durable,
+			ready: durable,
+			status: durable ? 'ready' : firestoreEnabled ? 'misconfigured' : 'disabled',
+			mode: durable ? 'durable' : 'ephemeral',
+			backend: durable ? 'firestore' : 'memory',
+		};
+	}
+
 	async createPreset(params = {}) {
 		const preset = this._buildPreset(params);
 		await this._persistPreset(preset);
@@ -111,6 +137,7 @@ class ScannerPresetService {
 					return snapshot.docs.map((doc) => this._formatFirestoreDoc(doc));
 				}
 			} catch (error) {
+				this.firestoreUnavailable = true;
 				console.warn('[ScannerPresetService] Failed to list presets from Firestore:', error.message);
 			}
 		}
@@ -131,6 +158,7 @@ class ScannerPresetService {
 					return this._formatFirestoreDoc(snapshot);
 				}
 			} catch (error) {
+				this.firestoreUnavailable = true;
 				console.warn('[ScannerPresetService] Failed to read preset from Firestore:', error.message);
 			}
 		}
@@ -172,6 +200,7 @@ class ScannerPresetService {
 					deleted = true;
 				}
 			} catch (error) {
+				this.firestoreUnavailable = true;
 				console.warn('[ScannerPresetService] Failed to delete preset from Firestore:', error.message);
 			}
 		}
@@ -269,12 +298,18 @@ class ScannerPresetService {
 			await firestore.collection(COLLECTION_NAME).doc(preset.id).set({
 				...clonePreset(preset),
 			});
+			this.firestoreUnavailable = false;
 		} catch (error) {
+			this.firestoreUnavailable = true;
 			console.warn('[ScannerPresetService] Failed to persist preset to Firestore:', error.message);
 		}
 	}
 
 	_getFirestore() {
+		if (this.firestoreUnavailable) {
+			return null;
+		}
+
 		return alertStorageService.getFirestore();
 	}
 
@@ -309,5 +344,6 @@ module.exports = {
 	// Test helper
 	_resetForTesting() {
 		memoryPresets.clear();
+		scannerPresetService.firestoreUnavailable = false;
 	},
 };

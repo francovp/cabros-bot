@@ -25,6 +25,10 @@ const {
 const DEFAULT_SCANNER_TIMEOUT_MS = 90000;
 const MAX_SCANNER_TIMEOUT_MS = 120000;
 
+function getStorageMetadata() {
+	return scannerPresetService.getStorageStatus();
+}
+
 function resolveBot(botOrGetter) {
 	if (typeof botOrGetter === 'function') {
 		return botOrGetter();
@@ -99,6 +103,7 @@ function postPreset(req, res) {
 			const preset = await scannerPresetService.createPreset(req.body || {});
 			return res.status(201).json({
 				success: true,
+				storage: getStorageMetadata(),
 				preset,
 			});
 		} catch (error) {
@@ -130,6 +135,7 @@ function listPresets(req, res) {
 			const presets = await scannerPresetService.listPresets();
 			return res.status(200).json({
 				success: true,
+				storage: getStorageMetadata(),
 				presets,
 			});
 		} catch (error) {
@@ -162,6 +168,7 @@ function getPreset(req, res) {
 
 			return res.status(200).json({
 				success: true,
+				storage: getStorageMetadata(),
 				preset,
 			});
 		} catch (error) {
@@ -193,6 +200,7 @@ function deletePreset(req, res) {
 
 			return res.status(200).json({
 				success: true,
+				storage: getStorageMetadata(),
 			});
 		} catch (error) {
 			console.error('[ScannerPresets] Delete failed:', error.message);
@@ -223,6 +231,7 @@ function updatePreset(req, res) {
 
 			return res.status(200).json({
 				success: true,
+				storage: getStorageMetadata(),
 				preset,
 			});
 		} catch (error) {

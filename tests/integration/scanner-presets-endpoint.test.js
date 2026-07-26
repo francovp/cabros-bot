@@ -81,6 +81,10 @@ describe('Scanner presets API integration tests', () => {
 
 		expect(createResponse.body).toEqual(expect.objectContaining({
 			success: true,
+			storage: expect.objectContaining({
+				mode: 'durable',
+				backend: 'firestore',
+			}),
 			preset: expect.objectContaining({
 				id: presetId,
 				name: 'Momentum preset',
@@ -133,6 +137,28 @@ describe('Scanner presets API integration tests', () => {
 			.get(`/api/scanner-presets/${presetId}`)
 			.set('x-api-key', 'test-key')
 			.expect(404);
+	});
+
+	it('reports ephemeral storage when durable scanner persistence is enabled but unavailable', async () => {
+		delete process.env.ENABLE_FIRESTORE_ALERT_STORAGE;
+		process.env.ENABLE_FIRESTORE_SCANNER_PRESETS = 'true';
+		const firestoreAdmin = require('firebase-admin');
+		firestoreAdmin.__mockDocSet.mockRejectedValueOnce(new Error('Firestore unavailable'));
+
+		const response = await request(app)
+			.post('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.send({ name: 'Ephemeral preset' })
+			.expect(201);
+
+		expect(response.body.storage).toEqual({
+			enabled: true,
+			configured: false,
+			ready: false,
+			status: 'misconfigured',
+			mode: 'ephemeral',
+			backend: 'memory',
+		});
 	});
 
 	it('runs a saved preset in dry-run mode with the market scanner report', async () => {

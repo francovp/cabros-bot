@@ -2,6 +2,7 @@ const { createPrivateKey } = require('crypto');
 const { accessSync, constants } = require('fs');
 const packageJson = require('../../package.json');
 const sentryService = require('../services/monitoring/SentryService');
+const { scannerPresetService } = require('../services/scannerPresets/ScannerPresetService');
 
 const DEFAULT_TRADINGVIEW_MCP_URL = 'https://tradingview-mcp.onrender.com/mcp';
 const DEFAULT_AZURE_LLM_ENDPOINT = 'https://models.github.ai/inference';
@@ -198,6 +199,7 @@ function getStatus() {
 	const tradingViewVolumeConfirmationEnabled = tradingViewVolumeConfirmationFlagEnabled && tradingViewMcpEnrichmentEnabled;
 	const tradingViewMcpEnabled = tradingViewMcpEnrichmentEnabled || marketScannerEnabled;
 	const firestoreEnabled = isEnabled(process.env.ENABLE_FIRESTORE_ALERT_STORAGE);
+	const firestoreScannerPresetsEnabled = isEnabled(process.env.ENABLE_FIRESTORE_SCANNER_PRESETS);
 	const firestoreJobStorageEnabled = isEnabled(process.env.ENABLE_FIRESTORE_JOB_STORAGE)
 		|| firestoreEnabled;
 	const sentryEnabled = isEnabled(process.env.ENABLE_SENTRY);
@@ -316,6 +318,7 @@ function getStatus() {
 			tradingViewConfluenceEnrichment: process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT !== 'false',
 			tradingViewConfluenceMultiTimeframe: isEnabled(process.env.ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME),
 			firestoreAlertStorage: firestoreEnabled,
+			firestoreScannerPresets: firestoreScannerPresetsEnabled,
 			firestoreJobStorage: firestoreJobStorageEnabled,
 			sentryMonitoring: sentryEnabled,
 			sentryProfiling: sentryService.isProfilingEnabled(),
@@ -362,7 +365,8 @@ function getStatus() {
 				&& hasValue(process.env.CF_AIG_BASE_URL)
 				&& hasValue(process.env.CF_AIG_MODEL || DEFAULT_CF_AIG_MODEL),
 		}),
-		newsMonitorDedup,
+			newsMonitorDedup,
+			scannerPresetStorage: scannerPresetService.getStorageStatus(),
 		},
 	};
 }

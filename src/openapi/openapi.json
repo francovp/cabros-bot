@@ -102,13 +102,13 @@
     "/api/scanner-presets": {
       "get": {
         "tags": ["Scanner presets"], "summary": "List scanner presets", "operationId": "listScannerPresets",
-        "responses": { "200": { "$ref": "#/components/responses/JsonResult" }, "500": { "$ref": "#/components/responses/Error" } },
+        "responses": { "200": { "$ref": "#/components/responses/ScannerPresetResult" }, "500": { "$ref": "#/components/responses/Error" } },
         "security": [{ "ApiKeyHeader": [] }, { "ApiKeyQuery": [] }]
       },
       "post": {
         "tags": ["Scanner presets"], "summary": "Create a scanner preset", "operationId": "createScannerPreset",
         "requestBody": { "$ref": "#/components/requestBodies/ScannerPreset" },
-        "responses": { "201": { "$ref": "#/components/responses/JsonResult" }, "400": { "$ref": "#/components/responses/Error" }, "500": { "$ref": "#/components/responses/Error" } },
+        "responses": { "201": { "$ref": "#/components/responses/ScannerPresetResult" }, "400": { "$ref": "#/components/responses/Error" }, "500": { "$ref": "#/components/responses/Error" } },
         "security": [{ "ApiKeyHeader": [] }, { "ApiKeyQuery": [] }]
       }
     },
@@ -116,20 +116,20 @@
       "get": {
         "tags": ["Scanner presets"], "summary": "Get a scanner preset", "operationId": "getScannerPreset",
         "parameters": [{ "$ref": "#/components/parameters/PresetId" }],
-        "responses": { "200": { "$ref": "#/components/responses/JsonResult" }, "404": { "$ref": "#/components/responses/Error" }, "500": { "$ref": "#/components/responses/Error" } },
+        "responses": { "200": { "$ref": "#/components/responses/ScannerPresetResult" }, "404": { "$ref": "#/components/responses/Error" }, "500": { "$ref": "#/components/responses/Error" } },
         "security": [{ "ApiKeyHeader": [] }, { "ApiKeyQuery": [] }]
       },
       "put": {
         "tags": ["Scanner presets"], "summary": "Update a scanner preset", "operationId": "updateScannerPreset",
         "parameters": [{ "$ref": "#/components/parameters/PresetId" }],
         "requestBody": { "$ref": "#/components/requestBodies/ScannerPreset" },
-        "responses": { "200": { "$ref": "#/components/responses/JsonResult" }, "400": { "$ref": "#/components/responses/Error" }, "404": { "$ref": "#/components/responses/Error" }, "500": { "$ref": "#/components/responses/Error" } },
+        "responses": { "200": { "$ref": "#/components/responses/ScannerPresetResult" }, "400": { "$ref": "#/components/responses/Error" }, "404": { "$ref": "#/components/responses/Error" }, "500": { "$ref": "#/components/responses/Error" } },
         "security": [{ "ApiKeyHeader": [] }, { "ApiKeyQuery": [] }]
       },
       "delete": {
         "tags": ["Scanner presets"], "summary": "Delete a scanner preset", "operationId": "deleteScannerPreset",
         "parameters": [{ "$ref": "#/components/parameters/PresetId" }],
-        "responses": { "200": { "$ref": "#/components/responses/JsonResult" }, "404": { "$ref": "#/components/responses/Error" }, "500": { "$ref": "#/components/responses/Error" } },
+        "responses": { "200": { "$ref": "#/components/responses/ScannerPresetResult" }, "404": { "$ref": "#/components/responses/Error" }, "500": { "$ref": "#/components/responses/Error" } },
         "security": [{ "ApiKeyHeader": [] }, { "ApiKeyQuery": [] }]
       }
     },
@@ -262,6 +262,7 @@
       "Unauthorized": { "description": "API key rejected", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }, "example": { "error": "Unauthorized", "code": "UNAUTHORIZED" } } } },
       "Error": { "description": "Request or service error", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }, "example": { "error": "Invalid request", "code": "INVALID_REQUEST" } } } },
       "JsonResult": { "description": "Successful JSON response", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/JsonObject" } } } },
+      "ScannerPresetResult": { "description": "Scanner preset response including the effective durable or ephemeral storage mode", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ScannerPresetResponse" }, "examples": { "durable": { "value": { "success": true, "storage": { "enabled": true, "configured": true, "ready": true, "status": "ready", "mode": "durable", "backend": "firestore" }, "preset": { "id": "83d1a85e-d433-4aa1-96b9-e62468bf0397", "name": "Daily Scan", "exchange": "BINANCE", "timeframe": "4h", "scans": ["top_gainers"], "limit": 5, "bbwThreshold": 0.05 } } }, "ephemeral": { "value": { "success": true, "storage": { "enabled": true, "configured": false, "ready": false, "status": "misconfigured", "mode": "ephemeral", "backend": "memory" }, "preset": { "id": "83d1a85e-d433-4aa1-96b9-e62468bf0397", "name": "Fallback scan" } } } } } } },
       "DeliveryResult": { "description": "Per-channel delivery result", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DeliveryResult" }, "example": { "success": true, "results": [{ "channel": "telegram", "success": true }] } } } },
       "AnalysisResult": { "description": "Analysis and delivery result", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/JsonObject" } } } },
       "NewsMonitorAnalysisResult": { "description": "News monitor analysis and delivery result", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/NewsMonitorResponse" } } } },
@@ -292,7 +293,10 @@
         }
       },
       "VolumeConfirmationRequest": { "type": "object", "required": ["symbol"], "properties": { "symbol": { "type": "string", "pattern": "^[A-Z0-9_]+:[A-Z0-9._-]+$" }, "timeframe": { "type": "string" } } },
-      "ScannerPresetRequest": { "type": "object", "required": ["name"], "properties": { "name": { "type": "string", "minLength": 1 }, "exchange": { "type": "string" }, "timeframe": { "type": "string" }, "scans": { "type": "array", "items": { "type": "string" } }, "limit": { "type": "integer", "minimum": 1, "maximum": 20 }, "bbw_threshold": { "type": "number" } } },
+      "ScannerPresetRequest": { "type": "object", "required": ["name"], "properties": { "name": { "type": "string", "minLength": 1 }, "exchange": { "type": "string" }, "timeframe": { "type": "string" }, "scans": { "type": "array", "items": { "type": "string" } }, "limit": { "type": "integer", "minimum": 1, "maximum": 20 }, "bbwThreshold": { "type": "number" } } },
+      "ScannerPresetStorage": { "type": "object", "required": ["enabled", "configured", "ready", "status", "mode", "backend"], "properties": { "enabled": { "type": "boolean", "description": "Whether any configured Firestore persistence gate is active." }, "configured": { "type": "boolean", "description": "Whether the Firestore client is available for scanner presets." }, "ready": { "type": "boolean" }, "status": { "type": "string", "enum": ["ready", "disabled", "misconfigured"] }, "mode": { "type": "string", "enum": ["durable", "ephemeral"], "description": "durable means Firestore-backed; ephemeral means in-memory fallback and may be lost on restart." }, "backend": { "type": "string", "enum": ["firestore", "memory"] } } },
+      "ScannerPreset": { "type": "object", "properties": { "id": { "type": "string" }, "name": { "type": "string" }, "exchange": { "type": "string" }, "timeframe": { "type": "string" }, "scans": { "type": "array", "items": { "type": "string" } }, "limit": { "type": "integer" }, "bbwThreshold": { "type": "number" }, "createdAt": { "type": "string", "format": "date-time" }, "updatedAt": { "type": "string", "format": "date-time" } } },
+      "ScannerPresetResponse": { "type": "object", "required": ["success", "storage"], "properties": { "success": { "type": "boolean" }, "storage": { "$ref": "#/components/schemas/ScannerPresetStorage" }, "preset": { "$ref": "#/components/schemas/ScannerPreset" }, "presets": { "type": "array", "items": { "$ref": "#/components/schemas/ScannerPreset" } } } },
       "CallbackFields": {
         "type": "object",
         "description": "When callbackUrl is configured, each callback POST includes x-callback-timestamp (ISO-8601), x-callback-event, and a UUID x-callback-delivery-id. If a callback secret is configured (via callbackSecret or JOB_CALLBACK_SIGNING_SECRET), x-callback-signature is sent containing an HMAC-SHA256 hex digest over the newline-delimited timestamp, event, delivery ID, and raw JSON body. The secret itself is never transmitted. Receivers should reject stale timestamps and deduplicate delivery IDs; retries use new IDs and signatures.",
@@ -380,7 +384,7 @@
           "code": { "type": "string", "description": "Machine-readable error code (failed or timed_out jobs only)." }
         }
       },
-      "Status": { "type": "object", "description": "Runtime status. featureFlags.firestoreJobStorage reports the ENABLE_FIRESTORE_JOB_STORAGE gate or the legacy ENABLE_FIRESTORE_ALERT_STORAGE gate; dependencies.firestoreJobStorage reports Firestore credential readiness for that runtime path; featureFlags.newsMonitorTestMode reports ENABLE_NEWS_MONITOR_TEST_MODE without changing news monitor behavior; featureFlags.messageFooterMetadata reports ENABLE_MESSAGE_FOOTER_METADATA and defaults to true unless explicitly set to false; featureFlags.cloudflareAig reports ENABLE_CLOUDFLARE_AIG and dependencies.cloudflareAig reports Cloudflare AI Gateway credential readiness.", "properties": { "service": { "$ref": "#/components/schemas/JsonObject" }, "featureFlags": { "$ref": "#/components/schemas/JsonObject" }, "deliveryChannels": { "$ref": "#/components/schemas/JsonObject" }, "dependencies": { "$ref": "#/components/schemas/JsonObject" } } }
+      "Status": { "type": "object", "description": "Runtime status. featureFlags.firestoreJobStorage reports the ENABLE_FIRESTORE_JOB_STORAGE gate or the legacy ENABLE_FIRESTORE_ALERT_STORAGE gate; featureFlags.firestoreScannerPresets reports ENABLE_FIRESTORE_SCANNER_PRESETS; dependencies.scannerPresetStorage reports the effective durable or ephemeral scanner-preset backend and readiness; dependencies.firestoreJobStorage reports Firestore credential readiness for that runtime path; featureFlags.newsMonitorTestMode reports ENABLE_NEWS_MONITOR_TEST_MODE without changing news monitor behavior; featureFlags.messageFooterMetadata reports ENABLE_MESSAGE_FOOTER_METADATA and defaults to true unless explicitly set to false; featureFlags.cloudflareAig reports ENABLE_CLOUDFLARE_AIG and dependencies.cloudflareAig reports Cloudflare AI Gateway credential readiness.", "properties": { "service": { "$ref": "#/components/schemas/JsonObject" }, "featureFlags": { "$ref": "#/components/schemas/JsonObject" }, "deliveryChannels": { "$ref": "#/components/schemas/JsonObject" }, "dependencies": { "$ref": "#/components/schemas/JsonObject" } } }
     }
   }
 }
