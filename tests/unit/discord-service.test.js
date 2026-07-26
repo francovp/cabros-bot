@@ -86,7 +86,7 @@ describe('DiscordService', () => {
 			);
 		});
 
-		it('returns a failed result when the webhook responds with an error', async () => {
+		it('returns a failed result when the webhook responds with a non-429 error', async () => {
 			global.fetch.mockResolvedValue({
 				ok: false,
 				status: 400,
@@ -98,6 +98,156 @@ describe('DiscordService', () => {
 			expect(result.success).toBe(false);
 			expect(result.channel).toBe('discord');
 			expect(result.error).toContain('Discord webhook 400');
+			expect(global.fetch).toHaveBeenCalledTimes(1);
+		});
+
+		it('retries on HTTP 429 when Retry-After header is provided and succeeds on subsequent attempt', async () => {
+			service = new DiscordService({
+				logger: mockLogger,
+				maxRetries: 2,
+				maxRetryDelayMs: 1000,
+				maxTotalRetryWaitMs: 2000,
+			});
+			await service.validate();
+
+			const headers = new Map([['retry-after', '0.01']]);
+			global.fetch = jest.fn()
+				.mockResolvedValueOnce({
+					ok: false,
+					status: 429,
+					headers,
+					text: async () => 'rate limited header',
+				})
+				.mockResolvedValueOnce({
+					ok: true,
+					json: async () => ({ id: 'discord-msg-retried' }),
+				});
+
+			const result = await service.send({ text: 'Discord alert' });
+
+			expect(result).toEqual({
+				success: true,
+				channel: 'discord',
+				messageId: 'discord-msg-retried',
+				messageIds: ['discord-msg-retried'],
+				messageCount: 1,
+			});
+			expect(global.fetch).toHaveBeenCalledTimes(2);
+			expect(mockLogger.warn).toHaveBeenCalledWith(
+				expect.stringContaining('429'),
+			);
+		});
+
+		it('retries on HTTP 429 when retry_after JSON body is provided', async () => {
+			service = new DiscordService({
+				logger: mockLogger,
+				maxRetries: 2,
+				maxRetryDelayMs: 1000,
+				maxTotalRetryWaitMs: 2000,
+			});
+			await service.validate();
+
+			global.fetch = jest.fn()
+				.mockResolvedValueOnce({
+					ok: false,
+					status: 429,
+					headers: new Map(),
+					text: async () => JSON.stringify({ message: 'You are being rate limited.', retry_after: 0.01 }),
+				})
+				.mockResolvedValueOnce({
+					ok: true,
+					json: async () => ({ id: 'discord-msg-body-retried' }),
+				});
+
+			const result = await service.send({ text: 'Discord alert' });
+
+			expect(result).toEqual({
+				success: true,
+				channel: 'discord',
+				messageId: 'discord-msg-body-retried',
+				messageIds: ['discord-msg-body-retried'],
+				messageCount: 1,
+			});
+			expect(global.fetch).toHaveBeenCalledTimes(2);
+		});
+
+		it('fails gracefully when HTTP 429 retries are exhausted', async () => {
+			service = new DiscordService({
+				logger: mockLogger,
+				maxRetries: 2,
+				maxRetryDelayMs: 1000,
+				maxTotalRetryWaitMs: 2000,
+			});
+			await service.validate();
+
+			global.fetch = jest.fn().mockResolvedValue({
+				ok: false,
+				status: 429,
+				headers: new Map([['retry-after', '0.01']]),
+				text: async () => 'rate limited repeatedly',
+			});
+
+			const result = await service.send({ text: 'Discord alert' });
+
+			expect(result.success).toBe(false);
+			expect(result.channel).toBe('discord');
+			expect(result.statusCode).toBe(429);
+			expect(result.error).toContain('Discord webhook 429');
+			// Initial attempt + 2 retries = 3 total fetch calls
+			expect(global.fetch).toHaveBeenCalledTimes(3);
+		});
+
+		it('uses fallback delay when 429 retry hints are missing or malformed', async () => {
+			service = new DiscordService({
+				logger: mockLogger,
+				maxRetries: 1,
+				fallbackRetryDelayMs: 10,
+				maxRetryDelayMs: 1000,
+				maxTotalRetryWaitMs: 2000,
+			});
+			await service.validate();
+
+			global.fetch = jest.fn()
+				.mockResolvedValueOnce({
+					ok: false,
+					status: 429,
+					headers: new Map(),
+					text: async () => 'not json',
+				})
+				.mockResolvedValueOnce({
+					ok: true,
+					json: async () => ({ id: 'discord-msg-fallback-ok' }),
+				});
+
+			const result = await service.send({ text: 'Discord alert' });
+
+			expect(result.success).toBe(true);
+			expect(result.messageId).toBe('discord-msg-fallback-ok');
+			expect(global.fetch).toHaveBeenCalledTimes(2);
+		});
+
+		it('aborts retry loop if retry delay exceeds max total wait budget', async () => {
+			service = new DiscordService({
+				logger: mockLogger,
+				maxRetries: 3,
+				maxRetryDelayMs: 10000,
+				maxTotalRetryWaitMs: 50,
+			});
+			await service.validate();
+
+			const headers = new Map([['retry-after', '5']]); // 5 seconds = 5000ms > maxTotalRetryWaitMs (50ms)
+			global.fetch = jest.fn().mockResolvedValue({
+				ok: false,
+				status: 429,
+				headers,
+				text: async () => 'huge delay rate limit',
+			});
+
+			const result = await service.send({ text: 'Discord alert' });
+
+			expect(result.success).toBe(false);
+			expect(result.statusCode).toBe(429);
+			expect(global.fetch).toHaveBeenCalledTimes(1);
 		});
 
 		it('returns a failed result when the webhook request times out', async () => {

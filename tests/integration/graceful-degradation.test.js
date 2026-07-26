@@ -5,6 +5,7 @@
 
 const TelegramService = require('../../src/services/notification/TelegramService');
 const WhatsAppService = require('../../src/services/notification/WhatsAppService');
+const DiscordService = require('../../src/services/notification/DiscordService');
 const NotificationManager = require('../../src/services/notification/NotificationManager');
 
 describe('Graceful Degradation & Fallback', () => {
@@ -207,6 +208,47 @@ describe('Graceful Degradation & Fallback', () => {
 			results.forEach((r) => {
 				expect(r.success).toBe(true);
 			});
+		});
+	});
+
+	describe('Test 7: Discord 429 rate limit retries in multi-channel setup', () => {
+		it('should retry Discord 429 while Telegram succeeds, completing fail-open multi-channel delivery', async () => {
+			process.env.ENABLE_DISCORD_ALERTS = 'true';
+			process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/test/token';
+
+			const telegramService = new TelegramService({ bot: mockBot });
+			const whatsappService = new WhatsAppService();
+			const discordService = new DiscordService({
+				maxRetries: 2,
+				maxRetryDelayMs: 500,
+				maxTotalRetryWaitMs: 1000,
+			});
+			const notificationManager = new NotificationManager(telegramService, whatsappService, discordService);
+
+			await notificationManager.validateAll();
+
+			global.fetch = jest.fn()
+				.mockResolvedValueOnce({
+					ok: false,
+					status: 429,
+					headers: new Map([['retry-after', '0.01']]),
+					text: async () => 'rate limited',
+				})
+				.mockResolvedValueOnce({
+					ok: true,
+					json: async () => ({ id: 'discord-multichannel-ok' }),
+				});
+
+			const results = await notificationManager.sendToAll({ text: 'Multi-channel alert' });
+
+			expect(results).toHaveLength(2);
+			const tgResult = results.find((r) => r.channel === 'telegram');
+			const discordResult = results.find((r) => r.channel === 'discord');
+
+			expect(tgResult.success).toBe(true);
+			expect(discordResult.success).toBe(true);
+			expect(discordResult.messageId).toBe('discord-multichannel-ok');
+			expect(global.fetch).toHaveBeenCalledTimes(2);
 		});
 	});
 });
