@@ -262,13 +262,13 @@ function resolveTrendConfluence(item = {}, scanType, options = {}) {
 		raw.direction
 		|| raw.trend
 		|| raw.bias
-		|| raw.status
-		|| raw.alignment?.trend
-		|| raw.alignment?.status
 		|| raw.alignment?.direction
-		|| raw.alignment
-		|| raw.recommendation?.action
+		|| raw.alignment?.trend
 		|| raw.recommendation?.direction
+		|| raw.recommendation?.action
+		|| raw.status
+		|| raw.alignment?.status
+		|| raw.alignment
 		|| raw.recommendation,
 	);
 	const expectedDirection = getExpectedTrendDirection(item, scanType);
