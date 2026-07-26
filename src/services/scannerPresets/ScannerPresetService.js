@@ -133,6 +133,7 @@ class ScannerPresetService {
 					.collection(COLLECTION_NAME)
 					.orderBy('createdAt', 'desc')
 					.get();
+				this.firestoreUnavailable = false;
 
 				if (snapshot && Array.isArray(snapshot.docs) && snapshot.docs.length > 0) {
 					return snapshot.docs.map((doc) => this._formatFirestoreDoc(doc));
@@ -155,6 +156,7 @@ class ScannerPresetService {
 		if (firestore) {
 			try {
 				const snapshot = await firestore.collection(COLLECTION_NAME).doc(id).get();
+				this.firestoreUnavailable = false;
 				if (snapshot && snapshot.exists) {
 					return this._formatFirestoreDoc(snapshot);
 				}
@@ -200,6 +202,7 @@ class ScannerPresetService {
 					await firestore.collection(COLLECTION_NAME).doc(id).delete();
 					deleted = true;
 				}
+				this.firestoreUnavailable = false;
 			} catch (error) {
 				this.firestoreUnavailable = true;
 				console.warn('[ScannerPresetService] Failed to delete preset from Firestore:', error.message);

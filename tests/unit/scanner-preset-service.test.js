@@ -148,4 +148,26 @@ describe('ScannerPresetService', () => {
 			backend: 'memory',
 		});
 	});
+
+	it('clears the unavailable state after a successful Firestore read recovery', async () => {
+		process.env.ENABLE_FIRESTORE_SCANNER_PRESETS = 'true';
+
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const firestoreAdmin = require('firebase-admin');
+		firestoreAdmin.__mockGet.mockRejectedValueOnce(new Error('Temporary Firestore read outage'));
+		const service = new ScannerPresetService();
+
+		await service.listPresets();
+		expect(service.getStorageStatus().mode).toBe('ephemeral');
+
+		await service.listPresets();
+		expect(service.getStorageStatus()).toEqual({
+			enabled: true,
+			configured: true,
+			ready: true,
+			status: 'ready',
+			mode: 'durable',
+			backend: 'firestore',
+		});
+	});
 });
