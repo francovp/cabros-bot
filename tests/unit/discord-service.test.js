@@ -100,6 +100,158 @@ describe('DiscordService', () => {
 			expect(result.error).toContain('Discord webhook 400');
 		});
 
+		it('retries a rate-limited chunk using the Retry-After header', async () => {
+			const sleep = jest.fn().mockResolvedValue(undefined);
+			service = new DiscordService({
+				logger: mockLogger,
+				maxRetries: 2,
+				sleep,
+			});
+			await service.validate();
+			global.fetch
+				.mockResolvedValueOnce({
+					ok: false,
+					status: 429,
+					headers: { get: () => '0.25' },
+					text: async () => JSON.stringify({ retry_after: 0.25 }),
+				})
+				.mockResolvedValueOnce({
+					ok: true,
+					json: async () => ({ id: 'discord-msg-retried' }),
+				});
+
+			const result = await service.send({ text: 'Discord alert' });
+
+			expect(result).toEqual({
+				success: true,
+				channel: 'discord',
+				messageId: 'discord-msg-retried',
+				messageIds: ['discord-msg-retried'],
+				messageCount: 1,
+			});
+			expect(sleep).toHaveBeenCalledWith(250);
+			expect(global.fetch).toHaveBeenCalledTimes(2);
+		});
+
+		it('uses the JSON retry_after delay when the header is absent', async () => {
+			const sleep = jest.fn().mockResolvedValue(undefined);
+			service = new DiscordService({
+				logger: mockLogger,
+				maxRetries: 1,
+				sleep,
+			});
+			await service.validate();
+			global.fetch
+				.mockResolvedValueOnce({
+					ok: false,
+					status: 429,
+					headers: { get: () => null },
+					text: async () => JSON.stringify({ retry_after: 0.4 }),
+				})
+				.mockResolvedValueOnce({
+					ok: true,
+					json: async () => ({ id: 'discord-msg-body-retried' }),
+				});
+
+			const result = await service.send({ text: 'Discord alert' });
+
+			expect(result.success).toBe(true);
+			expect(result.messageId).toBe('discord-msg-body-retried');
+			expect(sleep).toHaveBeenCalledWith(400);
+			expect(global.fetch).toHaveBeenCalledTimes(2);
+		});
+
+		it('returns a structured rate-limit failure after bounded retries are exhausted', async () => {
+			const sleep = jest.fn().mockResolvedValue(undefined);
+			service = new DiscordService({
+				logger: mockLogger,
+				maxRetries: 2,
+				sleep,
+			});
+			await service.validate();
+			global.fetch.mockResolvedValue({
+				ok: false,
+				status: 429,
+				headers: { get: () => '0.1' },
+				text: async () => JSON.stringify({ retry_after: 0.1 }),
+			});
+
+			const result = await service.send({ text: 'Discord alert' });
+
+			expect(result).toMatchObject({
+				success: false,
+				channel: 'discord',
+				statusCode: 429,
+				errorCode: 'DISCORD_RATE_LIMITED',
+				attemptCount: 3,
+			});
+			expect(global.fetch).toHaveBeenCalledTimes(3);
+			expect(sleep).toHaveBeenCalledTimes(2);
+		});
+
+		it('stops retrying when the total provider wait budget is exhausted', async () => {
+			const sleep = jest.fn().mockResolvedValue(undefined);
+			service = new DiscordService({
+				logger: mockLogger,
+				maxRetries: 2,
+				maxRetryDelayMs: 1000,
+				maxTotalRetryWaitMs: 1000,
+				sleep,
+			});
+			await service.validate();
+			global.fetch.mockResolvedValue({
+				ok: false,
+				status: 429,
+				headers: { get: () => '0.8' },
+				text: async () => JSON.stringify({ retry_after: 0.8 }),
+			});
+
+			const result = await service.send({ text: 'Discord alert' });
+
+			expect(result).toMatchObject({
+				success: false,
+				statusCode: 429,
+				errorCode: 'DISCORD_RATE_LIMITED',
+				attemptCount: 2,
+			});
+			expect(global.fetch).toHaveBeenCalledTimes(2);
+			expect(sleep).toHaveBeenCalledTimes(1);
+		});
+
+		it.each([
+			['malformed JSON', 'not-json'],
+			['missing delay', JSON.stringify({ message: 'rate limited' })],
+			['invalid delay type', JSON.stringify({ retry_after: true })],
+			['excessive delay', JSON.stringify({ retry_after: 10 })],
+		])('does not retry when the Discord delay is %s', async (_caseName, body) => {
+			const sleep = jest.fn().mockResolvedValue(undefined);
+			service = new DiscordService({
+				logger: mockLogger,
+				maxRetries: 2,
+				maxRetryDelayMs: 1000,
+				sleep,
+			});
+			await service.validate();
+			global.fetch.mockResolvedValue({
+				ok: false,
+				status: 429,
+				headers: { get: () => null },
+				text: async () => body,
+			});
+
+			const result = await service.send({ text: 'Discord alert' });
+
+			expect(result).toMatchObject({
+				success: false,
+				channel: 'discord',
+				statusCode: 429,
+				errorCode: 'DISCORD_RATE_LIMITED',
+				attemptCount: 1,
+			});
+			expect(global.fetch).toHaveBeenCalledTimes(1);
+			expect(sleep).not.toHaveBeenCalled();
+		});
+
 		it('returns a failed result when the webhook request times out', async () => {
 			global.fetch.mockImplementation(async (_url, options) => {
 				options.signal.dispatchEvent(new Event('abort'));

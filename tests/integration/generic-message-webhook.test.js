@@ -166,6 +166,48 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 		expect(global.fetch).toHaveBeenCalledTimes(2);
 	});
 
+	it('keeps the other channel successful when Discord exhausts a 429 retry budget', async () => {
+		process.env.ENABLE_DISCORD_ALERTS = 'true';
+		process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/123/token';
+		let discordAttempts = 0;
+		global.fetch = jest.fn((url) => {
+			if (url.includes('discord.com')) {
+				discordAttempts += 1;
+				return Promise.resolve({
+					ok: false,
+					status: 429,
+					headers: { get: () => '10' },
+					text: async () => JSON.stringify({ retry_after: 10 }),
+				});
+			}
+
+			return Promise.resolve({
+				ok: true,
+				json: async () => ({ idMessage: 'wa-msg-429-isolated' }),
+			});
+		});
+
+		await initializeNotificationServices(mockBot);
+
+		const res = await request(app)
+			.post('/api/webhook/message')
+			.set('x-api-key', 'test-key')
+			.send({ message: 'Keep WhatsApp flowing', channels: ['whatsapp', 'discord'] })
+			.expect(200);
+
+		expect(res.body.success).toBe(true);
+		expect(res.body.results).toEqual([
+			expect.objectContaining({ channel: 'whatsapp', success: true }),
+			expect.objectContaining({
+				channel: 'discord',
+				success: false,
+				statusCode: 429,
+				errorCode: 'DISCORD_RATE_LIMITED',
+			}),
+		]);
+		expect(discordAttempts).toBe(1);
+	});
+
 	// ---------------------------------------------------------------------------
 	// Validation error cases
 	// ---------------------------------------------------------------------------

@@ -657,6 +657,12 @@
               "body": "{\n  \"success\": true,\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"tg-msg-789\",\n      \"attemptCount\": 1,\n      \"durationMs\": 450\n    },\n    {\n      \"channel\": \"whatsapp\",\n      \"success\": false,\n      \"error\": \"GreenAPI request timeout\",\n      \"attemptCount\": 3,\n      \"durationMs\": 7800\n    }\n  ]\n}"
             },
             {
+              "name": "Partial Failure (Discord rate limited)",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"results\": [\n    {\n      \"channel\": \"whatsapp\",\n      \"success\": true,\n      \"messageId\": \"wa-msg-456\"\n    },\n    {\n      \"channel\": \"discord\",\n      \"success\": false,\n      \"error\": \"Discord webhook 429: {\\\"retry_after\\\":10}\",\n      \"errorCode\": \"DISCORD_RATE_LIMITED\",\n      \"statusCode\": 429,\n      \"attemptCount\": 1\n    }\n  ]\n}"
+            },
+            {
               "name": "Unauthorized (missing API key)",
               "status": "Unauthorized",
               "code": 401,
