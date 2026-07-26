@@ -463,7 +463,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"exchange\": \"BINANCE\",\n  \"timeframe\": \"1h\",\n  \"scans\": [\"bollinger_scan\", \"smart_volume_scanner\"],\n  \"limit\": 3,\n  \"ranked\": true\n}"
+              "raw": "{\n  \"exchange\": \"BINANCE\",\n  \"timeframe\": \"1h\",\n  \"scans\": [\"bollinger_scan\", \"smart_volume_scanner\"],\n  \"limit\": 3,\n  \"ranked\": true,\n  \"includeMultiTimeframe\": true\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/api/webhook/market-scanner-alert?dryRun=true",
@@ -489,7 +489,7 @@
                 "code": 200,
                 "_postman_previewlanguage": "json",
                 "header": [{ "key": "Content-Type", "value": "application/json" }],
-                "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"ranked\": true,\n  \"scanResults\": [{\n    \"scan\": \"top_gainers\",\n    \"status\": \"success\",\n    \"itemCount\": 1,\n    \"scores\": [{ \"symbol\": \"BTCUSDT\", \"score\": 82, \"reason\": \"+3.5% · RSI 62.0 · Vol 1.8x\" }]\n  }]\n}"
+                "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"ranked\": true,\n  \"includeMultiTimeframe\": true,\n  \"scanResults\": [{\n    \"scan\": \"top_gainers\",\n    \"status\": \"success\",\n    \"itemCount\": 1,\n    \"scores\": [{ \"symbol\": \"BTCUSDT\", \"score\": 83, \"reason\": \"+3.5% · RSI 62.0 · Vol 1.8x · HTF aligned +10\", \"trendConfluence\": { \"status\": \"aligned\", \"direction\": \"bullish\", \"confidence\": 82, \"adjustment\": 10 } }]\n  }]\n}"
               }
             ]
           }
@@ -518,6 +518,33 @@
               "_postman_previewlanguage": "json",
               "header": [{ "key": "Content-Type", "value": "application/json" }],
               "body": "{\n  \"error\": \"ranked must be a boolean\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST Market Scanner Alert (invalid multi-timeframe flag)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json", "type": "text" },
+              { "key": "x-api-key", "value": "{{apiKey}}", "type": "text" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"scans\": [\"top_gainers\"],\n  \"includeMultiTimeframe\": \"sometimes\"\n}" },
+            "url": {
+              "raw": "{{baseUrl}}/api/webhook/market-scanner-alert?dryRun=true",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "webhook", "market-scanner-alert"],
+              "query": [{ "key": "dryRun", "value": "true" }]
+            }
+          },
+          "response": [
+            {
+              "name": "400 Invalid multi-timeframe flag",
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"error\": \"includeMultiTimeframe must be a boolean\",\n  \"code\": \"INVALID_REQUEST\"\n}"
             }
           ]
         },
@@ -1948,7 +1975,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"type\": \"market-scanner\",\n  \"exchange\": \"BINANCE\",\n  \"timeframe\": \"4h\",\n  \"scans\": [\"top_gainers\", \"top_losers\"],\n  \"limit\": 5,\n  \"channels\": [\"telegram\"]\n}"
+              "raw": "{\n  \"type\": \"market-scanner\",\n  \"exchange\": \"BINANCE\",\n  \"timeframe\": \"4h\",\n  \"scans\": [\"top_gainers\", \"top_losers\"],\n  \"limit\": 5,\n  \"ranked\": true,\n  \"includeMultiTimeframe\": true,\n  \"channels\": [\"telegram\"]\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/api/jobs/tradingview-analysis",
@@ -2018,7 +2045,16 @@
                 "{{jobId}}"
               ]
             }
-          }
+          },
+          "response": [
+            {
+              "name": "Completed ranked market scanner job",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"success\": true,\n  \"jobId\": \"job-uuid-123\",\n  \"type\": \"market-scanner\",\n  \"status\": \"completed\",\n  \"scanResults\": [{\n    \"scan\": \"top_gainers\",\n    \"status\": \"success\",\n    \"itemCount\": 1,\n    \"scores\": [{ \"symbol\": \"BINANCE:BTCUSDT\", \"score\": 80, \"reason\": \"+3.5% · RSI 62.0 · Vol 1.8x · HTF aligned +10\", \"trendConfluence\": { \"status\": \"aligned\", \"direction\": \"bullish\", \"confidence\": 82, \"adjustment\": 10 } }]\n  }]\n}"
+            }
+          ]
         },
         {
           "name": "POST Cancel Job",

@@ -12,7 +12,9 @@ const {
 const {
 	parseMarketScannerRequest,
 	buildMarketScannerReport,
+	prepareMarketScannerItems,
 } = require('../tradingview/marketScannerReport');
+const { enrichScannerItemsWithTrendConfluence } = require('../tradingview/marketScannerConfluence');
 const {
 	getNotificationManager,
 	initializeNotificationServices,
@@ -269,7 +271,10 @@ class JobService {
 		if (job.type === 'expanded-analysis') {
 			formatted.results = this._compactResults(job.fullResults);
 		} else if (job.type === 'market-scanner') {
-			formatted.scanResults = this._compactScanResults(job.fullScanResults);
+			formatted.scanResults = this._compactScanResults(
+				job.fullScanResults,
+				job.requestMetadata?.ranked === true,
+			);
 		}
 
 		if (Array.isArray(job.requestedChannels)) {
@@ -476,6 +481,8 @@ class JobService {
 				scans: parsed.scans,
 				limit: parsed.limit,
 				bbwThreshold: parsed.bbwThreshold,
+				ranked: parsed.ranked,
+				includeMultiTimeframe: parsed.includeMultiTimeframe,
 			}),
 		};
 
@@ -763,10 +770,29 @@ class JobService {
 				const result = await tradingViewMcpService.callScanTool(scanType, args, scanOptions);
 				const items = Array.isArray(result) ? result : (result && Array.isArray(result.result) ? result.result : []);
 
+				let enrichedItems = items;
+				if (parsed.includeMultiTimeframe === true) {
+					try {
+						enrichedItems = await enrichScannerItemsWithTrendConfluence(items, { ...parsed, scanType }, signal);
+					} catch (error) {
+						if (this._isAbortTriggered(signal, error)) {
+							const timeoutMessage = this._getAbortMessage(signal, error.message);
+							job.fullScanResults.push({
+								scan: scanType,
+								status: 'success',
+								items,
+							});
+							this._appendScannerTimeoutResults(job.fullScanResults, scans.slice(index + 1), timeoutMessage);
+							break;
+						}
+						throw error;
+					}
+				}
+
 				job.fullScanResults.push({
 					scan: scanType,
 					status: 'success',
-					items,
+					items: enrichedItems,
 				});
 			} catch (error) {
 				if (this._isAbortTriggered(signal, error)) {
@@ -818,6 +844,7 @@ class JobService {
 			exchange,
 			timeframe,
 			now: new Date(),
+			ranked: parsed.ranked === true,
 		});
 		job.alertText = alertText;
 
@@ -890,7 +917,7 @@ class JobService {
 		});
 	}
 
-	_compactScanResults(results) {
+	_compactScanResults(results, includeScores = false) {
 		return results.map((result) => {
 			if (result.status === 'error' || result.status === 'timeout') {
 				return {
@@ -900,11 +927,22 @@ class JobService {
 				};
 			}
 
-			return {
+			const compact = {
 				scan: result.scan,
 				status: result.status,
 				itemCount: result.items.length,
 			};
+
+			if (includeScores && Array.isArray(result.items) && result.items.length > 0) {
+				compact.scores = prepareMarketScannerItems(result, true).map((item) => ({
+					symbol: item.symbol,
+					score: item._score,
+					reason: item._scoreReason,
+					...(item._trendConfluence ? { trendConfluence: item._trendConfluence } : {}),
+				}));
+			}
+
+			return compact;
 		});
 	}
 

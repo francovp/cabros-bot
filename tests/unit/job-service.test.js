@@ -194,6 +194,54 @@ describe('JobService Unit Tests', () => {
 			});
 			expect(job.deliveryResults).toBeDefined();
 		});
+
+		it('preserves market-scanner enrichment options for background execution', async () => {
+			tradingViewMcpService.callScanTool.mockResolvedValueOnce([
+				{
+					symbol: 'BINANCE:BTCUSDT',
+					changePercent: 3.5,
+					indicators: { close: 65000, RSI: 62 },
+					volume_ratio: 1.8,
+					breakout_type: 'bullish',
+				},
+			]);
+			tradingViewMcpService.callMultiTimeframeAnalysis.mockResolvedValueOnce({
+				alignment: { status: 'bullish', confidence: 82 },
+			});
+
+			const metadata = await jobService.createJob('market-scanner', {
+				scans: ['top_gainers'],
+				ranked: true,
+				includeMultiTimeframe: true,
+			});
+
+			let job = await jobService.getJob(metadata.jobId);
+			let attempts = 0;
+			while (job.status !== 'completed' && attempts < 10) {
+				await delay(20);
+				job = await jobService.getJob(metadata.jobId);
+				attempts++;
+			}
+
+			const rawJob = await jobService.repository.get(metadata.jobId);
+			expect(job.status).toBe('completed');
+			expect(rawJob.requestMetadata).toEqual(expect.objectContaining({
+				ranked: true,
+				includeMultiTimeframe: true,
+			}));
+			expect(tradingViewMcpService.callMultiTimeframeAnalysis).toHaveBeenCalledWith({
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+				signal: expect.any(AbortSignal),
+			});
+			expect(job.alertText).toContain('🔥 HTF ALIGNED 82%');
+			expect(job.scanResults[0].scores[0]).toEqual(expect.objectContaining({
+				symbol: 'BINANCE:BTCUSDT',
+				score: expect.any(Number),
+				reason: expect.stringContaining('HTF aligned +10'),
+				trendConfluence: expect.objectContaining({ status: 'aligned', confidence: 82 }),
+			}));
+		});
 	});
 
 	describe('Job eviction / cleanup', () => {

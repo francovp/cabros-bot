@@ -5,6 +5,7 @@ const { getNotificationManager, initializeNotificationServices } = require('../.
 jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
 	tradingViewMcpService: {
 		callScanTool: jest.fn(),
+		callMultiTimeframeAnalysis: jest.fn(),
 	},
 }));
 
@@ -228,6 +229,92 @@ describe('Market Scanner Handler', () => {
 				status: 'success',
 				items: [],
 			});
+		});
+
+		it('enriches scanner items with higher-timeframe data when requested', async () => {
+			const parsed = {
+				exchange: 'BINANCE',
+				timeframe: '1h',
+				scans: ['top_gainers'],
+				limit: 3,
+				includeMultiTimeframe: true,
+			};
+			const item = {
+				symbol: 'BINANCE:BTCUSDT',
+				changePercent: 3.5,
+				indicators: { RSI: 62 },
+			};
+			tradingViewMcpService.callScanTool.mockResolvedValueOnce([item]);
+			tradingViewMcpService.callMultiTimeframeAnalysis.mockResolvedValueOnce({
+				alignment: { status: 'bullish', confidence: 82 },
+			});
+
+			const results = await runScans(parsed);
+
+			expect(tradingViewMcpService.callMultiTimeframeAnalysis).toHaveBeenCalledWith({
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+				signal: undefined,
+			});
+			expect(results[0].items[0]).toEqual(expect.objectContaining({
+				trendConfluence: {
+					alignment: { status: 'bullish', confidence: 82 },
+				},
+			}));
+		});
+
+		it('keeps scanner items when higher-timeframe enrichment fails', async () => {
+			const parsed = {
+				exchange: 'BINANCE',
+				timeframe: '1h',
+				scans: ['top_gainers'],
+				limit: 3,
+				includeMultiTimeframe: true,
+			};
+			const item = { symbol: 'BINANCE:ETHUSDT', changePercent: 2.2 };
+			tradingViewMcpService.callScanTool.mockResolvedValueOnce([item]);
+			tradingViewMcpService.callMultiTimeframeAnalysis.mockRejectedValueOnce(new Error('MCP unavailable'));
+
+			const results = await runScans(parsed);
+
+			expect(results[0]).toEqual({
+				scan: 'top_gainers',
+				status: 'success',
+				items: [item],
+			});
+		});
+
+		it('preserves completed scan items when higher-timeframe enrichment times out', async () => {
+			const controller = new AbortController();
+			const parsed = {
+				exchange: 'BINANCE',
+				timeframe: '1h',
+				scans: ['top_gainers', 'top_losers'],
+				limit: 3,
+				includeMultiTimeframe: true,
+			};
+			const item = { symbol: 'BINANCE:BTCUSDT', changePercent: 3.5 };
+			tradingViewMcpService.callScanTool
+				.mockResolvedValueOnce([item])
+				.mockResolvedValueOnce([]);
+			tradingViewMcpService.callMultiTimeframeAnalysis.mockImplementationOnce(async () => {
+				const error = new Error('AbortError');
+				error.name = 'AbortError';
+				controller.abort(new Error('Market scanner timeout after 1ms'));
+				throw error;
+			});
+
+			const results = await runScans(parsed, { signal: controller.signal });
+
+			expect(results[0]).toEqual({
+				scan: 'top_gainers',
+				status: 'success',
+				items: [item],
+			});
+			expect(results[1]).toEqual(expect.objectContaining({
+				scan: 'top_losers',
+				status: 'timeout',
+			}));
 		});
 	});
 });

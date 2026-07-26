@@ -2,7 +2,7 @@ const {
 	normalizeTradingViewTimeframe,
 	SUPPORTED_MCP_TIMEFRAMES,
 } = require('./parseTradingViewSignal');
-const { rankScannerItems } = require('./marketScannerScoring');
+const { rankScannerItems, resolveTrendConfluence } = require('./marketScannerScoring');
 
 const SUPPORTED_SCAN_TYPES = new Set([
 	'top_gainers',
@@ -62,8 +62,9 @@ function parseMarketScannerRequest(req = {}) {
 	const limit = parseLimit(body);
 	const bbwThreshold = parseBbwThreshold(body);
 	const ranked = parseRanked(body);
+	const includeMultiTimeframe = parseIncludeMultiTimeframe(body);
 
-	return { exchange, timeframe, scans, limit, bbwThreshold, ranked };
+	return { exchange, timeframe, scans, limit, bbwThreshold, ranked, includeMultiTimeframe };
 }
 
 function getRequestBody(req = {}) {
@@ -199,6 +200,22 @@ function parseRanked(body = {}) {
 	throw new MarketScannerRequestError('ranked must be a boolean');
 }
 
+function parseIncludeMultiTimeframe(body = {}) {
+	const value = body.includeMultiTimeframe !== undefined
+		? body.includeMultiTimeframe
+		: body.include_multi_timeframe;
+
+	if (value === undefined || value === null || value === true || value === 'true') {
+		return value === true || value === 'true';
+	}
+
+	if (value === false || value === 'false') {
+		return false;
+	}
+
+	throw new MarketScannerRequestError('includeMultiTimeframe must be a boolean');
+}
+
 function buildMarketScannerReport(scanResults = [], options = {}) {
 	const now = options.now || new Date();
 	const exchange = options.exchange || DEFAULT_EXCHANGE;
@@ -326,6 +343,11 @@ function formatScanItem(item, rank, scanType, ranked = false) {
 		}
 	}
 
+	const trendConfluence = item._trendConfluence || resolveTrendConfluence(item, scanType);
+	if (trendConfluence) {
+		suffix += ` | ${formatTrendConfluence(trendConfluence)}`;
+	}
+
 	let itemLine = `${rank}. ${symbol} ${price} (${change})${suffix}`;
 
 	if (priceVal !== null) {
@@ -363,6 +385,22 @@ function formatScanItem(item, rank, scanType, ranked = false) {
 	}
 
 	return itemLine;
+}
+
+function formatTrendConfluence(trendConfluence = {}) {
+	const status = trendConfluence.status;
+	const confidence = numberOrNull(trendConfluence.confidence);
+	const confidenceText = confidence === null ? '' : ` ${confidence}%`;
+
+	if (status === 'aligned') {
+		return `${confidence !== null && confidence >= 70 ? '🔥' : '🧭'} HTF ALIGNED${confidenceText}`;
+	}
+
+	if (status === 'counter-trend') {
+		return `⚠️ HTF COUNTER-TREND${confidenceText}`;
+	}
+
+	return '🧭 HTF UNKNOWN';
 }
 
 function getScanItemSide(scanType, item = {}) {

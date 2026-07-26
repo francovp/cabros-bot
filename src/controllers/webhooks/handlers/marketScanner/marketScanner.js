@@ -20,6 +20,7 @@ const {
 	getRequestedChannels,
 	getDeliveredChannels,
 } = require('../../../../services/notification/requestRouting');
+const { enrichScannerItemsWithTrendConfluence } = require('../../../../services/tradingview/marketScannerConfluence');
 
 const DEFAULT_SCANNER_TIMEOUT_MS = 90000;
 const MAX_SCANNER_TIMEOUT_MS = 120000;
@@ -72,6 +73,7 @@ function postMarketScannerAlert(botOrGetter) {
 				return res.status(timeoutError ? 504 : 502).json({
 					success: false,
 					ranked: parsed.ranked === true,
+					includeMultiTimeframe: parsed.includeMultiTimeframe === true,
 					code: timeoutError ? 'MARKET_SCANNER_TIMEOUT' : 'ALL_SCANS_FAILED',
 					error: timeoutError
 						? `Market scanner timed out after ${timeoutMs}ms.`
@@ -99,6 +101,7 @@ function postMarketScannerAlert(botOrGetter) {
 					success: true,
 					dryRun: true,
 					ranked: parsed.ranked === true,
+					includeMultiTimeframe: parsed.includeMultiTimeframe === true,
 					payload: { alertText },
 					scanResults: compactScanResults(scanResults, parsed.ranked === true),
 					summary: buildSummary(scanResults, []),
@@ -158,6 +161,7 @@ function postMarketScannerAlert(botOrGetter) {
 			return res.status(200).json({
 				success: true,
 				ranked: parsed.ranked === true,
+				includeMultiTimeframe: parsed.includeMultiTimeframe === true,
 				alertText,
 				scanResults: compactScanResults(scanResults, parsed.ranked === true),
 				deliveryResults,
@@ -228,11 +232,25 @@ async function runScans(parsed, options = {}) {
 
 			const result = await tradingViewMcpService.callScanTool(scanType, args, scanOptions);
 			const items = Array.isArray(result) ? result : (result && Array.isArray(result.result) ? result.result : []);
+			let enrichedItems = items;
+			if (parsed.includeMultiTimeframe === true) {
+				try {
+					enrichedItems = await enrichScannerItemsWithTrendConfluence(items, { ...parsed, scanType }, signal);
+				} catch (error) {
+					if (isAbortTriggered(signal, error)) {
+						const timeoutMessage = getAbortMessage(signal, error.message);
+						results.push({ scan: scanType, status: 'success', items });
+						appendTimeoutResults(results, parsed.scans.slice(index + 1), timeoutMessage);
+						break;
+					}
+					throw error;
+				}
+			}
 
 			results.push({
 				scan: scanType,
 				status: 'success',
-				items,
+				items: enrichedItems,
 			});
 		} catch (error) {
 			if (isAbortTriggered(signal, error)) {
@@ -293,6 +311,7 @@ function compactScanResults(results, includeScores = false) {
 				symbol: item.symbol,
 				score: item._score,
 				reason: item._scoreReason,
+				...(item._trendConfluence ? { trendConfluence: item._trendConfluence } : {}),
 			}));
 		}
 

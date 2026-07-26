@@ -28,7 +28,22 @@ describe('Market Scanner Report', () => {
 				limit: 5,
 				bbwThreshold: 0.05,
 				ranked: false,
+				includeMultiTimeframe: false,
 			});
+		});
+
+		it('accepts opt-in multi-timeframe enrichment', () => {
+			const parsed = parseMarketScannerRequest({
+				body: { includeMultiTimeframe: true },
+			});
+
+			expect(parsed.includeMultiTimeframe).toBe(true);
+		});
+
+		it('rejects an invalid multi-timeframe flag', () => {
+			expect(() => parseMarketScannerRequest({
+				body: { includeMultiTimeframe: 'sometimes' },
+			})).toThrow('includeMultiTimeframe must be a boolean');
 		});
 
 		it('uses env overrides for default exchange and timeframe', () => {
@@ -58,6 +73,7 @@ describe('Market Scanner Report', () => {
 				limit: 15,
 				bbwThreshold: 0.02,
 				ranked: false,
+				includeMultiTimeframe: false,
 			});
 		});
 
@@ -285,6 +301,82 @@ describe('Market Scanner Report', () => {
 
 			expect(report).toContain('*🟢 TOP GANADORES*');
 			expect(report).toContain('⚠️ Error: MCP server connection refused');
+		});
+
+		it('highlights high-confidence higher-timeframe alignment in ranked reports', () => {
+			const results = [
+				{
+					scan: 'top_gainers',
+					status: 'success',
+					items: [
+						{
+							symbol: 'BINANCE:BTCUSDT',
+							changePercent: 4.5,
+							indicators: { close: 65000, RSI: 62 },
+							volume_ratio: 1.8,
+							breakout_type: 'bullish',
+							trendConfluence: {
+								alignment: { status: 'bullish', confidence: 82 },
+							},
+						},
+					],
+				},
+			];
+
+			const report = buildMarketScannerReport(results, {
+				exchange: 'BINANCE',
+				timeframe: '4h',
+				ranked: true,
+				now: mockDate,
+			});
+
+			expect(report).toContain('🔥 HTF ALIGNED 82%');
+			expect(report).toContain('/100');
+		});
+
+		it('shows available higher-timeframe alignment in normal reports', () => {
+			const results = [
+				{
+					scan: 'top_gainers',
+					status: 'success',
+					items: [{
+						symbol: 'BINANCE:ETHUSDT',
+						changePercent: 2.1,
+						trendConfluence: {
+							alignment: { status: 'bullish', confidence: 74 },
+						},
+					}],
+				},
+			];
+
+			const report = buildMarketScannerReport(results, {
+				exchange: 'BINANCE',
+				timeframe: '4h',
+				now: mockDate,
+			});
+
+			expect(report).toContain('🔥 HTF ALIGNED 74%');
+		});
+
+		it('renders textual high higher-timeframe confidence as a high-confidence marker', () => {
+			const report = buildMarketScannerReport([{
+				scan: 'top_gainers',
+				status: 'success',
+				items: [{
+					symbol: 'BINANCE:BTCUSDT',
+					changePercent: 2.1,
+					trendConfluence: {
+						alignment: { status: 'bullish', confidence: 'High' },
+					},
+				}],
+			}], {
+				exchange: 'BINANCE',
+				timeframe: '4h',
+				ranked: true,
+				now: mockDate,
+			});
+
+			expect(report).toContain('🔥 HTF ALIGNED 85%');
 		});
 
 		it('covers ATR-based risk/reward formatting when close and ATR are present', () => {

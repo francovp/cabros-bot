@@ -389,6 +389,7 @@ The system provides a `POST /api/webhook/market-scanner-alert` endpoint that run
   - `limit` — integer limit of items per scan, clamped to `[1, 20]`, default 5.
   - `bbw_threshold` — number representing Bollinger Band Width threshold for Bollinger squeeze scan, default 0.05.
   - `ranked` — boolean, default `false`; when `true`, reports and structured `scanResults[].scores[]` use the same filtered items and include numeric `score` plus non-empty `reason` fields.
+  - `includeMultiTimeframe` (or `include_multi_timeframe`) — optional boolean, default `false`; when `true`, fetches fail-open TradingView `multi_timeframe_analysis` data for scanner candidates. Ranked scores apply a default `+10` aligned or `-10` counter-trend modifier and expose normalized `trendConfluence` metadata; reports highlight high-confidence alignment.
 - The feature is gated by `ENABLE_MARKET_SCANNER=true`.
 - Endpoint-level deadline is controlled by `MARKET_SCANNER_TIMEOUT_MS` (default 90s, capped at 120s).
 
@@ -431,6 +432,8 @@ The system provides asynchronous job endpoints to support executing both `expand
 - Telegram commands: async `createJob()` rejections must stay inside the command `try/catch` so `replyValidationError()` can return clear command feedback instead of producing unhandled promise rejections.
 - Eviction: terminal jobs (`completed`, `failed`, `cancelled`, `timed_out`) older than 1 hour are deleted from memory/Firestore and return `404 Not Found`; active jobs are preserved.
 - Background failures: if the worker runs into unexpected exceptions or timeouts, the job is marked `failed` and reported to Sentry.
+- Market-scanner jobs preserve `ranked` and `includeMultiTimeframe` in request metadata and apply the same higher-timeframe confluence enrichment as the synchronous scanner endpoint. Enrichment is fail-open; if the job deadline aborts after a scan completes, that scan is retained and only remaining scans are marked `timeout`.
+- Completed ranked market-scanner job status and terminal callback payloads expose `scanResults[].scores[]` with the same score, reason, and optional `trendConfluence` fields as the synchronous endpoint.
 - Async Callbacks: If `callbackUrl` is provided, callbacks are dispatched for configured `callbackEvents` (`processing`, `completed`, `failed`, `cancelled`, `timed_out`). Each HTTP delivery includes `x-callback-timestamp`, `x-callback-event`, and a UUID `x-callback-delivery-id`; when a secret is configured, `x-callback-signature` is HMAC-SHA256 over those headers plus the raw JSON body joined with newlines. Retries generate a new delivery ID and signature per attempt. Transient network failures are retried up to 3 times (4 total attempts) with exponential backoff (starting at 1s, configurable via `JOB_CALLBACK_RETRY_DELAY_MS`). The callback process fails open, writing log events and updating job metadata (`callbackStatus`) without affecting the core job status. `callbackStatus.attempts` remains the compatibility log, and `callbackStatus.events[event]` tracks per-event success/failure so a successful `processing` callback does not suppress a later terminal callback.
 
 **Where to look first when extending or debugging**:
@@ -1078,3 +1081,13 @@ This feature introduces validation of callback URLs to prevent Server-Side Reque
 - `src/controllers/webhooks/handlers/alert/grounding.js` and `src/services/tradingview/TradingViewMcpService.js` — Apply the flag to Gemini, combined, and MCP-only enrichment footers.
 - `tests/integration/status-endpoint.test.js`, `tests/unit/alert-handler.test.js`, and `tests/unit/tradingview-mcp-service.test.js` — Cover the default-enabled and explicit-disabled states.
 - `README.md`, `src/openapi/openapi.json`, and `CabrosBot.postman_collection.json` — Document the response field and default.
+
+## Higher-Timeframe Market Scanner Alignment (CB-86 / Issue #217)
+
+The market scanner accepts optional `includeMultiTimeframe` enrichment. When enabled, each valid scanner candidate is queried through the existing TradingView MCP `multi_timeframe_analysis` tool; failures remain fail-open and preserve the base scan result. Ranked scoring normalizes bullish/bearish alignment against the candidate direction, applies configurable `+10` aligned or `-10` counter-trend modifiers by default, and exposes `trendConfluence` in structured scores. Reports render `🔥 HTF ALIGNED` for confidence at or above 70% and `⚠️ HTF COUNTER-TREND` for opposing alignment.
+
+**Core Components**:
+- `src/controllers/webhooks/handlers/marketScanner/marketScanner.js` — Opt-in candidate enrichment and fail-open orchestration.
+- `src/services/tradingview/marketScannerScoring.js` — Direction normalization and configurable confluence scoring.
+- `src/services/tradingview/marketScannerReport.js` — Request parsing and Telegram/WhatsApp report markers.
+- `tests/unit/market-scanner-scoring.test.js`, `tests/unit/market-scanner-report.test.js`, `tests/unit/market-scanner.test.js`, and `tests/integration/market-scanner-endpoint.test.js` — Scoring, rendering, fail-open, and endpoint coverage.

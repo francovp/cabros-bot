@@ -7,6 +7,7 @@ const { tradingViewMcpService } = require('../../src/services/tradingview/Tradin
 jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
 	tradingViewMcpService: {
 		callScanTool: jest.fn(),
+		callMultiTimeframeAnalysis: jest.fn(),
 	},
 }));
 
@@ -246,5 +247,33 @@ describe('Market Scanner Alert endpoint', () => {
 		expect(res.body.ranked).toBe(false);
 		expect(res.body.scanResults[0].scores).toBeUndefined();
 		expect(res.body.payload.alertText).not.toContain('/100');
+	});
+
+	it('includes opt-in higher-timeframe confluence in ranked output', async () => {
+		tradingViewMcpService.callScanTool.mockResolvedValueOnce([
+			{
+				symbol: 'BINANCE:BTCUSDT',
+				changePercent: 3.5,
+				indicators: { close: 65000, RSI: 62 },
+				volume_ratio: 1.8,
+				breakout_type: 'bullish',
+			},
+		]);
+		tradingViewMcpService.callMultiTimeframeAnalysis.mockResolvedValueOnce({
+			alignment: { status: 'bullish', confidence: 82 },
+		});
+
+		const res = await request(app)
+			.post('/api/webhook/market-scanner-alert')
+			.set('x-api-key', 'test-key')
+			.query({ dryRun: 'true' })
+			.send({ scans: ['top_gainers'], ranked: true, includeMultiTimeframe: true })
+			.expect(200);
+
+		expect(res.body.includeMultiTimeframe).toBe(true);
+		expect(res.body.payload.alertText).toContain('🔥 HTF ALIGNED 82%');
+		expect(res.body.scanResults[0].scores[0]).toEqual(expect.objectContaining({
+			trendConfluence: expect.objectContaining({ status: 'aligned', confidence: 82 }),
+		}));
 	});
 });

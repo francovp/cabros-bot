@@ -587,7 +587,8 @@ Execute multiple market scanner tools on the TradingView MCP server (such as top
   ],
   "limit": 5,
   "bbw_threshold": 0.05,
-  "ranked": true
+  "ranked": true,
+  "includeMultiTimeframe": true
 }
 ```
 
@@ -597,6 +598,7 @@ Execute multiple market scanner tools on the TradingView MCP server (such as top
 - `limit`: (Optional) Max number of results per section (clamped to `[1, 20]`, default: `5`).
 - `bbw_threshold`: (Optional) Bollinger Band Width threshold for the Bollinger squeeze scan (default: `0.05`).
 - `ranked`: (Optional) Sort results by actionable trade quality and include numeric `score` plus non-empty `reason` in each `scanResults[].scores[]` entry (default: `false`).
+- `includeMultiTimeframe`: (Optional) Fetch higher-timeframe alignment for each scanner candidate through TradingView MCP. Aligned candidates receive a default `+10` score modifier, counter-trend candidates receive a default `-10` modifier, and upstream failures leave the original scanner item unchanged (default: `false`). The alias `include_multi_timeframe` is also accepted.
 
 **Response (JSON):**
 ```json
@@ -626,6 +628,7 @@ Execute multiple market scanner tools on the TradingView MCP server (such as top
     "delivered": 1
   },
   "timedOut": false,
+  "includeMultiTimeframe": true,
   "timeoutMs": 90000,
   "requestId": "req-xyz789",
   "totalDurationMs": 1450
@@ -639,7 +642,7 @@ When `ranked` is `true`, each successful scan also includes structured scores:
   "scan": "top_gainers",
   "status": "success",
   "itemCount": 1,
-  "scores": [{ "symbol": "BTCUSDT", "score": 82, "reason": "+3.5% · RSI 62.0 · Vol 1.8x" }]
+  "scores": [{ "symbol": "BTCUSDT", "score": 83, "reason": "+3.5% · RSI 62.0 · Vol 1.8x · HTF aligned +10", "trendConfluence": { "status": "aligned", "direction": "bullish", "confidence": 82, "adjustment": 10 } }]
 }
 ```
 
@@ -708,9 +711,13 @@ Start a background analysis or scanner job.
   "exchange": "BINANCE",
   "timeframe": "4h",
   "scans": ["top_gainers", "top_losers"],
-  "limit": 5
+  "limit": 5,
+  "ranked": true,
+  "includeMultiTimeframe": true
 }
 ```
+
+For market-scanner jobs, `ranked` and `includeMultiTimeframe` use the same scoring and fail-open higher-timeframe enrichment as the synchronous scanner endpoint. If the job deadline aborts enrichment after a scan completes, that scan is retained and only remaining scans are marked as timed out.
 
 **Response (201 Created):**
 ```json
@@ -768,6 +775,8 @@ List recent sanitized jobs. The endpoint includes jobs from the in-memory reposi
 
 Retrieve status, partial progress, final report, and delivery state of a job.
 Jobs are retained in memory and, when Firestore job storage is enabled, persisted to the `tradingviewJobs` collection so status survives process restarts. Completed and failed jobs are automatically evicted after 1 hour.
+
+For completed ranked market-scanner jobs, `scanResults[].scores[]` contains the structured `symbol`, numeric `score`, non-empty `reason`, and optional `trendConfluence` fields used by the alert report. This is also included in configured terminal callback payloads.
 
 Set `ENABLE_FIRESTORE_JOB_STORAGE=true` plus the normal Firebase Admin credentials (`FIREBASE_SERVICE_ACCOUNT_JSON` or `GOOGLE_APPLICATION_CREDENTIALS`) to enable durable job storage. The legacy in-memory path remains the fallback when Firestore is disabled or unavailable.
 
