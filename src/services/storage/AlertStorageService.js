@@ -75,7 +75,8 @@ function getDocTimestamp(document) {
 
 function formatAlertDocument(doc) {
 	const data = doc.data() || {};
-	return {
+	const extracted = extractSymbolAndExchange(data);
+	const docObj = {
 		id: doc.id,
 		receivedAt: getDocTimestamp(data),
 		text: typeof data.text === 'string' ? data.text : '',
@@ -87,6 +88,13 @@ function formatAlertDocument(doc) {
 		source: typeof data.source === 'string' ? data.source : null,
 		useTradingViewData: Boolean(data.useTradingViewData),
 	};
+	if (extracted.symbol !== 'unknown') {
+		docObj.symbol = extracted.symbol;
+	}
+	if (extracted.exchange) {
+		docObj.exchange = extracted.exchange;
+	}
+	return docObj;
 }
 
 function getNumericValue(value) {
@@ -101,18 +109,95 @@ function incrementCounter(target, key) {
 	target[normalizedKey] = (target[normalizedKey] || 0) + 1;
 }
 
-function extractAlertSymbol(data) {
-	const candidates = [
-		data.symbol,
-		data.ticker,
-		data.enrichmentData && data.enrichmentData.symbol,
-		data.enrichmentData && data.enrichmentData.ticker,
-		data.enrichmentData && data.enrichmentData.asset,
-		data.enrichmentData && data.enrichmentData.original_symbol,
-	];
+function parseSymbolFromText(text) {
+	if (!text || typeof text !== 'string') {
+		return null;
+	}
 
-	const symbol = candidates.find((candidate) => typeof candidate === 'string' && candidate.trim());
-	return symbol ? symbol.trim().toUpperCase() : 'unknown';
+	const cleaned = text.trim();
+	if (!cleaned) {
+		return null;
+	}
+
+	const exchangeMatch = cleaned.match(/(?:^|\b)(?<exchange>[A-Z0-9]{2,10}):(?<symbol>[A-Z0-9._-]{2,20})(?:\s*\(\s*(?<timeframe>[A-Za-z0-9]+)\s*\))?/i);
+	if (exchangeMatch && exchangeMatch.groups && exchangeMatch.groups.symbol) {
+		const symbol = exchangeMatch.groups.symbol.toUpperCase();
+		const exchange = exchangeMatch.groups.exchange ? exchangeMatch.groups.exchange.toUpperCase() : null;
+		return { symbol, exchange };
+	}
+
+	const timeframeMatch = cleaned.match(/(?:^|\s)(?<symbol>[A-Z0-9._-]{2,20})\s*\(\s*(?<timeframe>[A-Za-z0-9]+)\s*\)/i);
+	if (timeframeMatch && timeframeMatch.groups && timeframeMatch.groups.symbol) {
+		const symbol = timeframeMatch.groups.symbol.toUpperCase();
+		return { symbol, exchange: null };
+	}
+
+	return null;
+}
+
+function extractSymbolAndExchange(data) {
+	if (!data || typeof data !== 'object') {
+		return { symbol: 'unknown', exchange: null };
+	}
+
+	if (typeof data.symbol === 'string' && data.symbol.trim()) {
+		const sym = data.symbol.trim().toUpperCase();
+		if (sym.includes(':')) {
+			const parts = sym.split(':');
+			return { symbol: parts[1], exchange: parts[0] };
+		}
+		return {
+			symbol: sym,
+			exchange: typeof data.exchange === 'string' && data.exchange.trim() ? data.exchange.trim().toUpperCase() : null,
+		};
+	}
+
+	if (typeof data.ticker === 'string' && data.ticker.trim()) {
+		const ticker = data.ticker.trim().toUpperCase();
+		if (ticker.includes(':')) {
+			const parts = ticker.split(':');
+			return { symbol: parts[1], exchange: parts[0] };
+		}
+		return {
+			symbol: ticker,
+			exchange: typeof data.exchange === 'string' && data.exchange.trim() ? data.exchange.trim().toUpperCase() : null,
+		};
+	}
+
+	if (data.enrichmentData && typeof data.enrichmentData === 'object') {
+		const candidates = [
+			data.enrichmentData.symbol,
+			data.enrichmentData.ticker,
+			data.enrichmentData.asset,
+			data.enrichmentData.original_symbol,
+		];
+		const found = candidates.find((c) => typeof c === 'string' && c.trim());
+		if (found) {
+			const sym = found.trim().toUpperCase();
+			if (sym.includes(':')) {
+				const parts = sym.split(':');
+				return { symbol: parts[1], exchange: parts[0] };
+			}
+			const exchange = typeof data.enrichmentData.exchange === 'string' && data.enrichmentData.exchange.trim()
+				? data.enrichmentData.exchange.trim().toUpperCase()
+				: (typeof data.exchange === 'string' && data.exchange.trim() ? data.exchange.trim().toUpperCase() : null);
+			return { symbol: sym, exchange };
+		}
+	}
+
+	if (typeof data.text === 'string' && data.text.trim()) {
+		const parsed = parseSymbolFromText(data.text);
+		if (parsed) {
+			return parsed;
+		}
+	}
+
+	return { symbol: 'unknown', exchange: null };
+}
+
+function extractAlertSymbol(data) {
+	const result = extractSymbolAndExchange(data);
+	return result.symbol;
 }
 
 function addTokenUsage(totals, tokenUsage) {
@@ -412,7 +497,7 @@ function getFirestore() {
  * @param {boolean} params.useTradingViewData - Whether ?useTradingViewData=true was set on the request
  * @returns {Promise<string|null>} The new Firestore document ID, or null on failure/disabled
  */
-async function saveAlert({ text, enriched, enrichmentData, tokenUsage, channels, deliveryResults, useTradingViewData }) {
+async function saveAlert({ text, symbol, exchange, enriched, enrichmentData, tokenUsage, channels, deliveryResults, useTradingViewData }) {
 	if (!isEnabled()) {
 		return null;
 	}
@@ -423,6 +508,7 @@ async function saveAlert({ text, enriched, enrichmentData, tokenUsage, channels,
 	}
 
 	try {
+		const extracted = extractSymbolAndExchange({ text, symbol, exchange, enrichmentData });
 		const document = {
 			receivedAt: admin.firestore.FieldValue.serverTimestamp(),
 			text: typeof text === 'string' ? text.substring(0, 20000) : '',
@@ -434,6 +520,13 @@ async function saveAlert({ text, enriched, enrichmentData, tokenUsage, channels,
 			source: 'webhook',
 			useTradingViewData: Boolean(useTradingViewData),
 		};
+
+		if (extracted.symbol !== 'unknown') {
+			document.symbol = extracted.symbol;
+		}
+		if (extracted.exchange) {
+			document.exchange = extracted.exchange;
+		}
 
 		const docRef = await firestore.collection(COLLECTION_NAME).add(document);
 		console.debug(`[AlertStorageService] Alert stored with ID: ${docRef.id}`);
@@ -777,6 +870,9 @@ module.exports = {
 	summarizeAlerts,
 	exportAlerts,
 	saveReplayAttempt,
+	parseSymbolFromText,
+	extractSymbolAndExchange,
+	extractAlertSymbol,
 	STORAGE_UNAVAILABLE_CODE,
 	INVALID_CURSOR_MESSAGE,
 	parseAlertPaginationCursor,

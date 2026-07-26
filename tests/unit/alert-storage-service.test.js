@@ -876,5 +876,122 @@ describe('AlertStorageService', () => {
 			});
 			expect(JSON.stringify(result)).not.toContain('raw alert text');
 		});
+
+		it('populates bySymbol metrics from plain alert text strings when candidate object properties are missing', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('alert-1', {
+						receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+						text: 'BINANCE:ETHUSDT(D) alert triggered',
+						enriched: false,
+						deliveryResults: [],
+						source: 'webhook',
+					}),
+					buildQueryDoc('alert-2', {
+						receivedAt: buildTimestamp('2026-06-06T11:00:00.000Z'),
+						text: 'BATS:TSM(D) cambió a señal de VENTA',
+						enriched: false,
+						deliveryResults: [],
+						source: 'webhook',
+					}),
+					buildQueryDoc('alert-3', {
+						receivedAt: buildTimestamp('2026-06-06T10:00:00.000Z'),
+						text: 'SPCFD:SPX(D) alert triggered',
+						enriched: false,
+						deliveryResults: [],
+						source: 'webhook',
+					}),
+					buildQueryDoc('alert-4', {
+						receivedAt: buildTimestamp('2026-06-06T09:00:00.000Z'),
+						text: 'Alerta sin simbolo',
+						enriched: false,
+						deliveryResults: [],
+						source: 'webhook',
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.summarizeAlerts({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+			});
+
+			expect(result.bySymbol).toEqual({
+				ETHUSDT: 1,
+				TSM: 1,
+				SPX: 1,
+				unknown: 1,
+			});
+		});
+	});
+
+	describe('symbol extraction helpers', () => {
+		describe('parseSymbolFromText()', () => {
+			it('extracts symbol and exchange from deterministic TradingView alert formats', () => {
+				expect(AlertStorageService.parseSymbolFromText('BINANCE:ETHUSDT(D)')).toEqual({
+					symbol: 'ETHUSDT',
+					exchange: 'BINANCE',
+				});
+				expect(AlertStorageService.parseSymbolFromText('BATS:TSM(D)')).toEqual({
+					symbol: 'TSM',
+					exchange: 'BATS',
+				});
+				expect(AlertStorageService.parseSymbolFromText('SPCFD:SPX(D)')).toEqual({
+					symbol: 'SPX',
+					exchange: 'SPCFD',
+				});
+				expect(AlertStorageService.parseSymbolFromText('BATS:TSM(D) cambió a señal de VENTA')).toEqual({
+					symbol: 'TSM',
+					exchange: 'BATS',
+				});
+				expect(AlertStorageService.parseSymbolFromText('BINANCE:BTCUSDT')).toEqual({
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+				});
+				expect(AlertStorageService.parseSymbolFromText('BTCUSDT(1h)')).toEqual({
+					symbol: 'BTCUSDT',
+					exchange: null,
+				});
+			});
+
+			it('returns null for unmatched text and safely falls back to unknown', () => {
+				expect(AlertStorageService.parseSymbolFromText('Alerta de prueba sin simbolo')).toBeNull();
+				expect(AlertStorageService.parseSymbolFromText('')).toBeNull();
+				expect(AlertStorageService.parseSymbolFromText(null)).toBeNull();
+			});
+		});
+
+		describe('extractSymbolAndExchange()', () => {
+			it('prefers candidate object properties when available', () => {
+				expect(AlertStorageService.extractSymbolAndExchange({ symbol: 'BATS:AAPL' })).toEqual({
+					symbol: 'AAPL',
+					exchange: 'BATS',
+				});
+				expect(AlertStorageService.extractSymbolAndExchange({
+					enrichmentData: { symbol: 'ETHUSDT', exchange: 'BINANCE' },
+				})).toEqual({
+					symbol: 'ETHUSDT',
+					exchange: 'BINANCE',
+				});
+			});
+
+			it('parses from raw alert text when candidate object properties are absent', () => {
+				expect(AlertStorageService.extractSymbolAndExchange({
+					text: 'BATS:TSM(D) cambió a señal de VENTA',
+				})).toEqual({
+					symbol: 'TSM',
+					exchange: 'BATS',
+				});
+			});
+
+			it('returns unknown symbol and null exchange when no symbol pattern matches', () => {
+				expect(AlertStorageService.extractSymbolAndExchange({ text: 'Not a symbol alert' })).toEqual({
+					symbol: 'unknown',
+					exchange: null,
+				});
+			});
+		});
 	});
 });

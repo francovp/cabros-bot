@@ -185,10 +185,26 @@ function postAlert(botOrGetter) {
 				deliveredChannels,
 			});
 
+			const extracted = alertStorageService.extractSymbolAndExchange({
+				text: alert.text,
+				enrichmentData: alert.enriched || null,
+			});
+
+			if (alert.enriched && typeof alert.enriched === 'object') {
+				if (!alert.enriched.symbol && extracted.symbol !== 'unknown') {
+					alert.enriched.symbol = extracted.symbol;
+				}
+				if (!alert.enriched.exchange && extracted.exchange) {
+					alert.enriched.exchange = extracted.exchange;
+				}
+			}
+
 			// Fire-and-forget: persist alert to Firestore after responding to the caller.
 			// Errors are caught inside saveAlert — delivery is never blocked by storage.
 			alertStorageService.saveAlert({
 				text: alert.text,
+				symbol: extracted.symbol !== 'unknown' ? extracted.symbol : null,
+				exchange: extracted.exchange || null,
 				enriched,
 				enrichmentData: alert.enriched || null,
 				tokenUsage: tokenUsageJSON,
