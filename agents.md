@@ -1100,6 +1100,7 @@ Scanner presets support an independent `ENABLE_FIRESTORE_SCANNER_PRESETS=true` g
 
 **Core Components**:
 - `src/services/storage/AlertStorageService.js` — Allows scanner-preset initialization without enabling alert, job, or outcome storage.
+- `src/services/storage/firestoreConfig.js` — Centralizes non-secret Firestore credential/runtime readiness checks used by status and scanner-preset storage reporting.
 - `src/services/scannerPresets/ScannerPresetService.js` — Tracks effective storage health and reports the fail-open fallback accurately.
 - `src/controllers/status.js` and `src/controllers/webhooks/handlers/scannerPresets/scannerPresets.js` — Expose storage capability metadata without credentials.
 - `tests/unit/scanner-preset-service.test.js`, `tests/integration/scanner-presets-endpoint.test.js`, and `tests/integration/status-endpoint.test.js` — Cover independent persistence, restart simulation, disabled fallback, and Firestore write failure.

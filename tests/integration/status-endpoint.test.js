@@ -161,6 +161,27 @@ describe('Status endpoints', () => {
 		});
 	});
 
+	it('reports scanner preset storage as misconfigured without usable credentials', async () => {
+		delete process.env.ENABLE_FIRESTORE_ALERT_STORAGE;
+		process.env.ENABLE_FIRESTORE_SCANNER_PRESETS = 'true';
+		delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+		delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
+
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.scannerPresetStorage).toEqual({
+			enabled: true,
+			configured: false,
+			ready: false,
+			status: 'misconfigured',
+			mode: 'ephemeral',
+			backend: 'memory',
+		});
+	});
+
 	it('reports Cloudflare AI Gateway as disabled by default', async () => {
 		const response = await request(app)
 			.get('/api/capabilities')

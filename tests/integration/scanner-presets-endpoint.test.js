@@ -7,12 +7,23 @@ jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
 }));
 
 const admin = require('firebase-admin');
+const { generateKeyPairSync } = require('crypto');
 const request = require('supertest');
 const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
 const { initializeNotificationServices } = require('../../src/controllers/webhooks/handlers/alert/alert');
 const { tradingViewMcpService } = require('../../src/services/tradingview/TradingViewMcpService');
 const { _resetForTesting: resetScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+
+const testPrivateKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({
+	type: 'pkcs1',
+	format: 'pem',
+});
+const validFirestoreServiceAccountJson = JSON.stringify({
+	project_id: 'scanner-preset-test',
+	client_email: 'firebase-adminsdk@test-project.iam.gserviceaccount.com',
+	private_key: testPrivateKey,
+});
 
 describe('Scanner presets API integration tests', () => {
 	const originalEnv = process.env;
@@ -29,6 +40,7 @@ describe('Scanner presets API integration tests', () => {
 			ENABLE_NEWS_MONITOR: 'false',
 			MARKET_SCANNER_TIMEOUT_MS: '1000',
 			TRADINGVIEW_MCP_DEFAULT_TIMEFRAME: '4h',
+			FIREBASE_SERVICE_ACCOUNT_JSON: validFirestoreServiceAccountJson,
 			ENABLE_TELEGRAM_BOT: 'true',
 			BOT_TOKEN: 'test-bot-token',
 			TELEGRAM_CHAT_ID: '123456789',

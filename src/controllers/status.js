@@ -1,8 +1,7 @@
-const { createPrivateKey } = require('crypto');
-const { accessSync, constants } = require('fs');
 const packageJson = require('../../package.json');
 const sentryService = require('../services/monitoring/SentryService');
 const { scannerPresetService } = require('../services/scannerPresets/ScannerPresetService');
+const { isFirestoreConfigured } = require('../services/storage/firestoreConfig');
 
 const DEFAULT_TRADINGVIEW_MCP_URL = 'https://tradingview-mcp.onrender.com/mcp';
 const DEFAULT_AZURE_LLM_ENDPOINT = 'https://models.github.ai/inference';
@@ -15,51 +14,6 @@ function isEnabled(value) {
 
 function hasValue(value) {
 	return typeof value === 'string' ? value.trim().length > 0 : value != null;
-}
-
-function isGoogleManagedRuntime() {
-	return (
-		hasValue(process.env.K_SERVICE)
-		|| hasValue(process.env.K_REVISION)
-		|| hasValue(process.env.FUNCTION_TARGET)
-		|| hasValue(process.env.FUNCTION_NAME)
-		|| hasValue(process.env.GAE_SERVICE)
-	);
-}
-
-function hasValidInlineFirestoreCredentials(value) {
-	if (!hasValue(value)) {
-		return false;
-	}
-
-	try {
-		const parsed = JSON.parse(value);
-		const projectId = parsed.projectId || parsed.project_id;
-		const clientEmail = parsed.clientEmail || parsed.client_email;
-		const privateKey = parsed.privateKey || parsed.private_key;
-
-		if (!hasValue(projectId) || !hasValue(clientEmail) || !hasValue(privateKey)) {
-			return false;
-		}
-
-		createPrivateKey({ key: privateKey, format: 'pem' });
-		return true;
-	} catch (error) {
-		return false;
-	}
-}
-
-function hasReadableFile(path) {
-	if (!hasValue(path)) {
-		return false;
-	}
-
-	try {
-		accessSync(path, constants.R_OK);
-		return true;
-	} catch (error) {
-		return false;
-	}
 }
 
 function getModelProvider() {
@@ -242,10 +196,7 @@ function getStatus() {
 	});
 	const firestore = dependencyStatus({
 		enabled: firestoreEnabled,
-		configured:
-			hasValidInlineFirestoreCredentials(process.env.FIREBASE_SERVICE_ACCOUNT_JSON)
-			|| hasReadableFile(process.env.GOOGLE_APPLICATION_CREDENTIALS)
-			|| isGoogleManagedRuntime(),
+		configured: isFirestoreConfigured(),
 	});
 	const firestoreJobStorage = dependencyStatus({
 		enabled: firestoreJobStorageEnabled,

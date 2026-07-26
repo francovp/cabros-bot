@@ -10,6 +10,7 @@ const {
 	normalizeTradingViewTimeframe,
 	SUPPORTED_MCP_TIMEFRAMES,
 } = require('../tradingview/parseTradingViewSignal');
+const { isFirestoreConfigured } = require('../storage/firestoreConfig');
 
 const COLLECTION_NAME = 'scannerPresets';
 const FIRESTORE_GATE_ENV_VARS = [
@@ -106,7 +107,7 @@ class ScannerPresetService {
 	getStorageStatus() {
 		const firestoreEnabled = FIRESTORE_GATE_ENV_VARS.some((envVar) => process.env[envVar] === 'true');
 		const firestore = this._getFirestore();
-		const durable = Boolean(firestore);
+		const durable = Boolean(firestore) && !this.firestoreUnavailable && isFirestoreConfigured();
 
 		return {
 			enabled: firestoreEnabled,
@@ -306,10 +307,6 @@ class ScannerPresetService {
 	}
 
 	_getFirestore() {
-		if (this.firestoreUnavailable) {
-			return null;
-		}
-
 		return alertStorageService.getFirestore();
 	}
 

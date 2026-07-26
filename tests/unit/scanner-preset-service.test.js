@@ -1,6 +1,17 @@
 'use strict';
 
+const { generateKeyPairSync } = require('crypto');
 const admin = require('firebase-admin');
+
+const testPrivateKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({
+	type: 'pkcs1',
+	format: 'pem',
+});
+const validFirestoreServiceAccountJson = JSON.stringify({
+	project_id: 'scanner-preset-test',
+	client_email: 'firebase-adminsdk@test-project.iam.gserviceaccount.com',
+	private_key: testPrivateKey,
+});
 
 describe('ScannerPresetService', () => {
 	beforeEach(() => {
@@ -14,7 +25,8 @@ describe('ScannerPresetService', () => {
 		delete process.env.ENABLE_SIGNAL_OUTCOME_TRACKING;
 		delete process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING;
 		delete process.env.FIREBASE_PROJECT_ID;
-		delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+		process.env.FIREBASE_SERVICE_ACCOUNT_JSON = validFirestoreServiceAccountJson;
+		delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
 	});
 
 	it('persists a created preset across service instances when Firestore storage is enabled', async () => {
@@ -90,6 +102,44 @@ describe('ScannerPresetService', () => {
 
 		expect(created.name).toBe('Fallback preset');
 		expect(service.getStorageStatus()).toEqual({
+			enabled: true,
+			configured: false,
+			ready: false,
+			status: 'misconfigured',
+			mode: 'ephemeral',
+			backend: 'memory',
+		});
+	});
+
+	it('retries Firestore after a transient write failure and reports recovery', async () => {
+		process.env.ENABLE_FIRESTORE_SCANNER_PRESETS = 'true';
+
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const firestoreAdmin = require('firebase-admin');
+		firestoreAdmin.__mockDocSet.mockRejectedValueOnce(new Error('Temporary Firestore outage'));
+		const service = new ScannerPresetService();
+
+		await service.createPreset({ name: 'First attempt' });
+		expect(service.getStorageStatus().mode).toBe('ephemeral');
+
+		await service.createPreset({ name: 'Recovered attempt' });
+		expect(service.getStorageStatus()).toEqual({
+			enabled: true,
+			configured: true,
+			ready: true,
+			status: 'ready',
+			mode: 'durable',
+			backend: 'firestore',
+		});
+	});
+
+	it('does not report durable storage without usable Firestore credentials', () => {
+		process.env.ENABLE_FIRESTORE_SCANNER_PRESETS = 'true';
+		delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+
+		expect(new ScannerPresetService().getStorageStatus()).toEqual({
 			enabled: true,
 			configured: false,
 			ready: false,
