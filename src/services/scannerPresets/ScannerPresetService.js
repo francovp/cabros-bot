@@ -345,6 +345,7 @@ class ScannerPresetService {
 			return;
 		}
 
+		pendingFirestorePresets.delete(preset.id);
 		try {
 			await this._writeFirestorePreset(firestore, preset);
 			pendingFirestorePresets.delete(preset.id);
