@@ -6,7 +6,7 @@
  * Initialization pattern is copied from branch 006-csv-gemini-signals
  * (src/services/csvSignals/firestoreRepository.js):
  *   - Lazy singleton via admin.initializeApp() / admin.firestore()
- *   - Feature-gated: ENABLE_FIRESTORE_ALERT_STORAGE=true required
+ *   - Feature-gated: an enabled storage consumer must be configured
  *   - Fail-open: any Firestore error is caught and logged as a warning;
  *     the alert delivery flow is never blocked or failed by storage errors.
  *
