@@ -1298,6 +1298,53 @@
               ]
             }
           }
+        },
+        {
+          "name": "POST News Monitor (dry run)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"crypto\": [\"BTCUSDT\"],\n  \"channels\": [\"telegram\", \"whatsapp\", \"discord\"]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/news-monitor?dryRun=true",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "news-monitor"
+              ],
+              "query": [
+                {
+                  "key": "dryRun",
+                  "value": "true"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 OK - Dry run",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"results\": [{\n    \"symbol\": \"BTCUSDT\",\n    \"status\": \"analyzed\",\n    \"alert\": {\n      \"eventCategory\": \"price_surge\",\n      \"headline\": \"Bitcoin breaks resistance\"\n    },\n    \"deliveryResults\": [],\n    \"cached\": false\n  }],\n  \"summary\": {\n    \"total\": 1,\n    \"analyzed\": 1,\n    \"cached\": 0,\n    \"timeout\": 0,\n    \"error\": 0,\n    \"quota_exhausted\": 0,\n    \"alerts_sent\": 1\n  },\n  \"requestedChannels\": [\"telegram\", \"whatsapp\", \"discord\"],\n  \"deliveredChannels\": [],\n  \"requestId\": \"req-dryrun123\"\n}"
+            }
+          ]
         }
       ]
     },

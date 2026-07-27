@@ -101,18 +101,26 @@ async function sendWithNotificationRouting(notificationManager, alert, routing =
 	};
 
 	if (routing.channels) {
-		const enabledChannels = getRequestedChannels(notificationManager);
-		const unavailableChannels = routing.channels.filter((channel) => !enabledChannels.includes(channel));
-		if (unavailableChannels.length > 0) {
-			throw new NotificationRoutingValidationError(
-				`Requested channel(s) disabled or misconfigured: ${unavailableChannels.join(', ')}`,
-				{ field: 'channels', unavailableChannels },
-			);
-		}
+		validateNotificationRouting(notificationManager, routing);
 		return notificationManager.sendToChannels(alertPayload, routing.channels, options);
 	}
 
 	return notificationManager.sendToAll(alertPayload, options);
+}
+
+function validateNotificationRouting(notificationManager, routing = {}) {
+	if (!routing.channels) {
+		return;
+	}
+
+	const enabledChannels = getRequestedChannels(notificationManager);
+	const unavailableChannels = routing.channels.filter((channel) => !enabledChannels.includes(channel));
+	if (unavailableChannels.length > 0) {
+		throw new NotificationRoutingValidationError(
+			`Requested channel(s) disabled or misconfigured: ${unavailableChannels.join(', ')}`,
+			{ field: 'channels', unavailableChannels },
+		);
+	}
 }
 
 function getRequestedChannels(notificationManager, routing = {}) {
@@ -137,6 +145,7 @@ module.exports = {
 	VALID_CHANNELS,
 	NotificationRoutingValidationError,
 	parseNotificationRouting,
+	validateNotificationRouting,
 	sendWithNotificationRouting,
 	getRequestedChannels,
 	getDeliveredChannels,

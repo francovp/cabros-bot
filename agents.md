@@ -539,6 +539,8 @@ The system provides an HTTP endpoint (`/api/news-monitor`) that analyzes financi
 8. Filtered alerts sent to all enabled channels (Telegram, WhatsApp) via existing NotificationManager in parallel
 9. Returns 200 OK with per-symbol results: status (analyzed/cached/timeout/error), detected alerts, delivery results, metadata (totalDurationMs, cached, requestId), and summary counters including `quota_exhausted` for exhausted Gemini 429 retries.
 
+**Dry-run request mode:** Add `dryRun=true` to GET or POST `/api/news-monitor` (query parameter; POST also accepts the boolean body field) to run validation and analysis without notification delivery, deduplication cache reads/claims/writes, or signal-outcome persistence. The response includes `dryRun: true`, generated alerts, intended `requestedChannels`, and an empty `deliveredChannels` array. Dry runs bypass cached results so operators inspect fresh analysis output.
+
 **Configuration**:
 - `ENABLE_NEWS_MONITOR` — Feature flag (default: false for safe rollout)
 - `ENABLE_NEWS_MONITOR_TEST_MODE` — Expose news monitor test-mode state in `/api/status` and `/api/capabilities` (default: false)
@@ -742,6 +744,7 @@ See `/specs/TERMINOLOGY_GUIDE.md` for extended discussion and examples.
 - GH-182 / CB-77: malformed or no-domain grounding sources count toward the declared UNKNOWN `0.5` quality tier instead of contributing zero; regression coverage lives in `tests/unit/event-detection.test.js`.
 - GH-187 / CB-79: added authenticated `GET /api/jobs` with bounded `status`, `type`, and `limit` filters; `JobRepository.list()` merges Firestore and memory records, while `JobService.listJobs()` omits expired terminal jobs and returns metadata-only summaries.
 - GH-239 / CB-96: job creation, retry, and retry-failed endpoints now use the shared bounded in-memory idempotency middleware, replay matching responses, and reject fingerprint conflicts with `409 IDEMPOTENCY_CONFLICT`; OpenAPI, README, Postman, and integration coverage were updated.
+- GH-241 / CB-98: `/api/news-monitor` supports opt-in dry-run analysis for GET and POST requests; it returns generated alerts and intended routing while skipping notification delivery, deduplication cache mutation, and signal-outcome persistence. OpenAPI, README, Postman, and integration coverage were updated.
 - GH-183 / CB-78: Azure, OpenRouter, and Cloudflare `llmCallv2()` results now return normalized token usage for downstream `tokenUsage` aggregation; the shared normalizer accepts OpenAI-compatible `prompt_tokens`, `completion_tokens`, and `total_tokens` fields.
 - GH-199 / CB-83: `detect-unused-features` derives disabled flags, status mappings, indirect env lookups, `.env.example` gaps, and Sentry profiling findings from the fresh protected capabilities response and current repository files; dated snapshots are guidance-free and a healthy-data dry run guards against stale issues.
 

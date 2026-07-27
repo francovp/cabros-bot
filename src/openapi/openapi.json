@@ -194,12 +194,13 @@
     "/api/news-monitor": {
       "get": {
         "tags": ["News"], "summary": "Analyze configured or queried market symbols", "operationId": "getNewsMonitor",
-        "parameters": [{ "$ref": "#/components/parameters/CryptoSymbols" }, { "$ref": "#/components/parameters/StockSymbols" }],
+        "parameters": [{ "$ref": "#/components/parameters/CryptoSymbols" }, { "$ref": "#/components/parameters/StockSymbols" }, { "$ref": "#/components/parameters/DryRun" }],
         "responses": { "200": { "$ref": "#/components/responses/NewsMonitorAnalysisResult" }, "400": { "$ref": "#/components/responses/Error" }, "403": { "$ref": "#/components/responses/Error" } },
         "security": [{ "ApiKeyHeader": [] }, { "ApiKeyQuery": [] }]
       },
       "post": {
         "tags": ["News"], "summary": "Analyze market symbols from a JSON request", "operationId": "postNewsMonitor",
+        "parameters": [{ "$ref": "#/components/parameters/DryRun" }],
         "requestBody": { "$ref": "#/components/requestBodies/NewsMonitor" },
         "responses": { "200": { "$ref": "#/components/responses/NewsMonitorAnalysisResult" }, "400": { "$ref": "#/components/responses/Error" }, "403": { "$ref": "#/components/responses/Error" } },
         "security": [{ "ApiKeyHeader": [] }, { "ApiKeyQuery": [] }]
@@ -233,7 +234,7 @@
       "IdempotencyKeyHeader": { "name": "idempotency-key", "in": "header", "schema": { "type": "string", "minLength": 1 }, "description": "Optional replay key. Header form is recommended." },
       "IdempotencyKeyQueryCamel": { "name": "idempotencyKey", "in": "query", "schema": { "type": "string", "minLength": 1 }, "description": "Optional legacy-compatible replay key query parameter." },
       "IdempotencyKeyQuerySnake": { "name": "idempotency_key", "in": "query", "schema": { "type": "string", "minLength": 1 }, "description": "Optional legacy-compatible replay key query parameter." },
-      "DryRun": { "name": "dryRun", "in": "query", "schema": { "type": "boolean", "default": false } },
+      "DryRun": { "name": "dryRun", "in": "query", "description": "When true, analyze and return alerts without notification delivery, deduplication cache claims/writes, or signal-outcome persistence.", "schema": { "type": "boolean", "default": false } },
       "UseTradingViewData": { "name": "useTradingViewData", "in": "query", "schema": { "type": "boolean", "default": false } },
       "AlertListLimit": { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 50 } },
       "JobListLimit": { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 50 } },
@@ -262,7 +263,7 @@
       "Replay": { "content": { "application/json": { "schema": { "type": "object", "properties": { "channels": { "type": "array", "items": { "type": "string", "enum": ["telegram", "whatsapp", "discord"] } } } }, "example": { "channels": ["telegram"] } } } },
       "ScannerPreset": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ScannerPresetRequest" }, "example": { "name": "Daily Scan", "exchange": "BINANCE", "timeframe": "4h", "scans": ["top_gainers"], "limit": 5 } } } },
       "TradingViewJob": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TradingViewJobRequest" }, "examples": { "expandedAnalysis": { "value": { "type": "expanded-analysis", "symbols": ["BINANCE:BTCUSDT"], "timeframe": "1D", "channels": ["telegram"], "telegramChatId": "-1001234567890" } }, "expandedAnalysisWithCallback": { "value": { "type": "expanded-analysis", "symbols": ["BINANCE:BTCUSDT", "NASDAQ:NVDA"], "timeframe": "4h", "callbackUrl": "https://myapp.example.com/job-done", "callbackSecret": "my-shared-secret", "callbackEvents": ["completed", "failed"], "timeoutMs": 120000 } }, "marketScanner": { "value": { "type": "market-scanner", "exchange": "BINANCE", "timeframe": "4h", "ranked": true, "includeMultiTimeframe": true, "channels": ["telegram"] } }, "marketScannerWithCallback": { "value": { "type": "market-scanner", "exchange": "BINANCE", "timeframe": "4h", "scans": ["top_gainers", "volume_breakout_scanner"], "ranked": true, "includeMultiTimeframe": true, "callbackUrl": "https://myapp.example.com/scan-done", "callbackEvents": ["completed", "failed", "timed_out"] } } } } } },
-      "NewsMonitor": { "content": { "application/json": { "schema": { "$ref": "#/components/schemas/NewsMonitorRequest" }, "example": { "crypto": ["BTCUSDT", "ETHUSD"], "stocks": ["NVDA"], "channels": ["telegram"] } } } }
+      "NewsMonitor": { "content": { "application/json": { "schema": { "$ref": "#/components/schemas/NewsMonitorRequest" }, "example": { "crypto": ["BTCUSDT", "ETHUSD"], "stocks": ["NVDA"], "channels": ["telegram"], "dryRun": false } } } }
     },
     "responses": {
       "Unauthorized": { "description": "API key rejected", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }, "example": { "error": "Unauthorized", "code": "UNAUTHORIZED" } } } },
@@ -275,7 +276,7 @@
       "MessageIdempotencyConflict": { "description": "The generic-message idempotency key was already used with a different message or routing payload.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }, "example": { "error": "Idempotency key was reused with a different payload", "code": "IDEMPOTENCY_CONFLICT" } } } },
       "DeliveryResult": { "description": "Per-channel delivery result", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DeliveryResult" }, "example": { "success": true, "results": [{ "channel": "telegram", "success": true }] } } } },
       "AnalysisResult": { "description": "Analysis and delivery result", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/JsonObject" } } } },
-      "NewsMonitorAnalysisResult": { "description": "News monitor analysis and delivery result", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/NewsMonitorResponse" } } } },
+      "NewsMonitorAnalysisResult": { "description": "News monitor analysis and delivery result", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/NewsMonitorResponse" }, "examples": { "dryRun": { "summary": "Side-effect-free analysis", "value": { "success": true, "dryRun": true, "results": [{ "symbol": "BTCUSDT", "status": "analyzed", "alert": { "eventCategory": "price_surge", "headline": "Bitcoin breaks resistance", "confidence": 0.85 }, "deliveryResults": [], "cached": false, "requestId": "req-dryrun123" }], "summary": { "total": 1, "analyzed": 1, "cached": 0, "timeout": 0, "error": 0, "quota_exhausted": 0, "alerts_sent": 1 }, "requestedChannels": ["telegram", "whatsapp"], "deliveredChannels": [], "totalDurationMs": 850, "requestId": "req-dryrun123", "tokenUsage": {} } } } } } },
       "AlertList": { "description": "Stored alert page", "content": { "application/json": { "schema": { "type": "object", "properties": { "alerts": { "type": "array", "items": { "$ref": "#/components/schemas/JsonObject" } }, "nextCursor": { "type": ["string", "null"] } } } } } },
       "JobResult": { "description": "Asynchronous job state", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Job" } } } },
       "JobList": { "description": "Bounded list of sanitized asynchronous job summaries", "content": { "application/json": { "schema": { "type": "object", "required": ["success", "jobs"], "properties": { "success": { "type": "boolean" }, "jobs": { "type": "array", "items": { "$ref": "#/components/schemas/Job" } } } }, "example": { "success": true, "jobs": [{ "jobId": "8f8ef192-349f-4318-8547-0e6d628bf739", "type": "expanded-analysis", "status": "processing", "progress": { "total": 2, "current": 1 }, "createdAt": "2026-05-25T01:30:00.000Z", "updatedAt": "2026-05-25T01:30:05.000Z", "totalDurationMs": 5123 }] } } } },
@@ -339,12 +340,13 @@
         }
       },
       "TradingViewJobRequest": { "oneOf": [{ "allOf": [{ "type": "object", "required": ["type"], "properties": { "type": { "const": "expanded-analysis" } } }, { "$ref": "#/components/schemas/ExpandedAnalysisRequest" }, { "$ref": "#/components/schemas/CallbackFields" }] }, { "allOf": [{ "type": "object", "required": ["type"], "properties": { "type": { "const": "market-scanner" } } }, { "$ref": "#/components/schemas/MarketScannerRequest" }, { "$ref": "#/components/schemas/CallbackFields" }] }] },
-      "NewsMonitorRequest": { "type": "object", "properties": { "crypto": { "type": "array", "items": { "type": "string" } }, "stocks": { "type": "array", "items": { "type": "string" } }, "channels": { "type": "array", "minItems": 1, "items": { "type": "string", "enum": ["telegram", "whatsapp", "discord"] } }, "telegramChatId": { "type": "string", "minLength": 1 }, "whatsappChatId": { "type": "string", "minLength": 1 } } },
+      "NewsMonitorRequest": { "type": "object", "properties": { "crypto": { "type": "array", "items": { "type": "string" } }, "stocks": { "type": "array", "items": { "type": "string" } }, "dryRun": { "type": "boolean", "default": false, "description": "When true, analyze without notification delivery or persistence. The query parameter form is supported for GET and POST." }, "channels": { "type": "array", "minItems": 1, "items": { "type": "string", "enum": ["telegram", "whatsapp", "discord"] } }, "telegramChatId": { "type": "string", "minLength": 1 }, "whatsappChatId": { "type": "string", "minLength": 1 } } },
       "NewsMonitorResponse": {
         "type": "object",
         "required": ["success", "results", "summary", "requestId"],
         "properties": {
           "success": { "type": "boolean" },
+          "dryRun": { "type": "boolean", "description": "Present and true when analysis generated alerts without dispatching or persisting them." },
           "partial_success": { "type": "boolean" },
           "results": { "type": "array", "items": { "$ref": "#/components/schemas/JsonObject" } },
           "summary": {
@@ -359,8 +361,8 @@
               "alerts_sent": { "type": "integer" }
             }
           },
-          "requestedChannels": { "type": "array", "items": { "type": "string" } },
-          "deliveredChannels": { "type": "array", "items": { "type": "string" } },
+          "requestedChannels": { "type": "array", "items": { "type": "string" }, "description": "Channels selected for delivery; in dry-run mode these are intended channels." },
+          "deliveredChannels": { "type": "array", "items": { "type": "string" }, "description": "Channels that actually received alerts; empty in dry-run mode." },
           "totalDurationMs": { "type": "integer" },
           "requestId": { "type": "string" },
           "tokenUsage": { "$ref": "#/components/schemas/JsonObject" }
