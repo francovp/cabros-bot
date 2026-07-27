@@ -1746,6 +1746,12 @@
                 "key": "x-api-key",
                 "value": "{{apiKey}}",
                 "type": "text"
+              },
+              {
+                "key": "idempotency-key",
+                "value": "{{jobIdempotencyKey}}",
+                "type": "text",
+                "disabled": true
               }
             ],
             "body": {

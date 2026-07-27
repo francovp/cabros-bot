@@ -45,12 +45,12 @@ function getRoutes(botOrGetter) {
 	router.post('/scanner-presets/:id/run', validateApiKey, postRunPreset(botOrGetter));
 
 	// Async job endpoints
-	router.post('/jobs/tradingview-analysis', validateApiKey, postCreateJob(botOrGetter));
+	router.post('/jobs/tradingview-analysis', validateApiKey, idempotencyMiddleware, postCreateJob(botOrGetter));
 	router.get('/jobs', validateApiKey, getJobList);
 	router.get('/jobs/:jobId', validateApiKey, getJobStatus);
 	router.post('/jobs/:jobId/cancel', validateApiKey, postCancelJob);
-	router.post('/jobs/:jobId/retry', validateApiKey, postRetryJob(botOrGetter));
-	router.post('/jobs/:jobId/retry-failed', validateApiKey, postRetryFailedJob(botOrGetter));
+	router.post('/jobs/:jobId/retry', validateApiKey, idempotencyMiddleware, postRetryJob(botOrGetter));
+	router.post('/jobs/:jobId/retry-failed', validateApiKey, idempotencyMiddleware, postRetryFailedJob(botOrGetter));
 
 	const { getNewsMonitor } = require('../controllers/webhooks/handlers/newsMonitor/newsMonitor');
 	const newsMonitor = getNewsMonitor();

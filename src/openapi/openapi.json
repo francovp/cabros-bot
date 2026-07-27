@@ -144,8 +144,9 @@
     "/api/jobs/tradingview-analysis": {
       "post": {
         "tags": ["Jobs"], "summary": "Create an asynchronous TradingView job", "operationId": "createTradingViewJob",
+        "parameters": [{ "$ref": "#/components/parameters/IdempotencyKey" }],
         "requestBody": { "$ref": "#/components/requestBodies/TradingViewJob" },
-        "responses": { "201": { "$ref": "#/components/responses/JobResult" }, "400": { "$ref": "#/components/responses/Error" }, "500": { "$ref": "#/components/responses/Error" } },
+        "responses": { "201": { "$ref": "#/components/responses/JobResult" }, "400": { "$ref": "#/components/responses/Error" }, "409": { "$ref": "#/components/responses/Error" }, "500": { "$ref": "#/components/responses/Error" } },
         "security": [{ "ApiKeyHeader": [] }, { "ApiKeyQuery": [] }]
       }
     },
@@ -176,7 +177,7 @@
     "/api/jobs/{jobId}/retry": {
       "post": {
         "tags": ["Jobs"], "summary": "Retry a failed job", "operationId": "retryJob",
-        "parameters": [{ "$ref": "#/components/parameters/JobId" }],
+        "parameters": [{ "$ref": "#/components/parameters/JobId" }, { "$ref": "#/components/parameters/IdempotencyKey" }],
         "responses": { "201": { "$ref": "#/components/responses/JobResult" }, "404": { "$ref": "#/components/responses/Error" }, "409": { "$ref": "#/components/responses/Error" }, "500": { "$ref": "#/components/responses/Error" } },
         "security": [{ "ApiKeyHeader": [] }, { "ApiKeyQuery": [] }]
       }
@@ -184,7 +185,7 @@
     "/api/jobs/{jobId}/retry-failed": {
       "post": {
         "tags": ["Jobs"], "summary": "Retry failed items in a completed job", "operationId": "retryFailedJobItems",
-        "parameters": [{ "$ref": "#/components/parameters/JobId" }],
+        "parameters": [{ "$ref": "#/components/parameters/JobId" }, { "$ref": "#/components/parameters/IdempotencyKey" }],
         "responses": { "201": { "$ref": "#/components/responses/JobResult" }, "400": { "$ref": "#/components/responses/Error" }, "404": { "$ref": "#/components/responses/Error" }, "409": { "$ref": "#/components/responses/Error" }, "500": { "$ref": "#/components/responses/Error" } },
         "security": [{ "ApiKeyHeader": [] }, { "ApiKeyQuery": [] }]
       }
@@ -224,6 +225,7 @@
       "ApiKeyQuery": { "type": "apiKey", "in": "query", "name": "api-key", "description": "Legacy compatibility only. Prefer x-api-key because query strings may be logged." }
     },
     "parameters": {
+      "IdempotencyKey": { "name": "idempotency-key", "in": "header", "schema": { "type": "string" }, "description": "Optional idempotency key to prevent duplicate processing on retries." },
       "AlertId": { "name": "alertId", "in": "path", "required": true, "schema": { "type": "string" }, "example": "alert-123" },
       "PresetId": { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
       "JobId": { "name": "jobId", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },

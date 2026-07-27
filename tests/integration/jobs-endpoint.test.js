@@ -8,6 +8,7 @@ const { initializeNotificationServices } = require('../../src/controllers/webhoo
 const { tradingViewMcpService } = require('../../src/services/tradingview/TradingViewMcpService');
 const { jobRepository, _resetForTesting: resetJobRepository } = require('../../src/services/jobs/JobRepository');
 const alertStorageService = require('../../src/services/storage/AlertStorageService');
+const { idempotencyService } = require('../../src/services/storage/IdempotencyService');
 
 jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
 	tradingViewMcpService: {
@@ -35,6 +36,7 @@ describe('Jobs API Integration Tests', () => {
 		};
 
 		jest.clearAllMocks();
+		idempotencyService.clear();
 		admin.__resetCollectionState();
 		alertStorageService._resetForTesting();
 		resetJobRepository();
@@ -555,6 +557,160 @@ describe('Jobs API Integration Tests', () => {
 					delete process.env.ALLOW_PRIVATE_CALLBACKS;
 				}
 			}
+		});
+	});
+
+	describe('Idempotent job start contract', () => {
+		it('replays job creation response with stable jobId on sequential retries with same idempotency key', async () => {
+			tradingViewMcpService.analyzeSymbolIdentifier.mockResolvedValue({
+				symbol: 'BINANCE:BTCUSDT',
+				price_data: { close: 65000 },
+			});
+
+			const key = 'job-creation-key-1';
+			const jobBody = {
+				type: 'expanded-analysis',
+				symbols: ['BINANCE:BTCUSDT'],
+			};
+
+			// Initial creation
+			const res1 = await request(app)
+				.post('/api/jobs/tradingview-analysis')
+				.set('x-api-key', 'test-key')
+				.set('idempotency-key', key)
+				.send(jobBody)
+				.expect(201);
+
+			expect(res1.headers['idempotency-replay']).toBe('false');
+			expect(res1.body.success).toBe(true);
+			const originalJobId = res1.body.jobId;
+			expect(originalJobId).toBeDefined();
+
+			// Sequential retry with same key and body
+			const res2 = await request(app)
+				.post('/api/jobs/tradingview-analysis')
+				.set('x-api-key', 'test-key')
+				.set('idempotency-key', key)
+				.send(jobBody)
+				.expect(201);
+
+			expect(res2.headers['idempotency-replay']).toBe('true');
+			expect(res2.body.success).toBe(true);
+			expect(res2.body.jobId).toBe(originalJobId);
+			expect(res2.body.idempotencyReplayed).toBe(true);
+		});
+
+		it('deduplicates concurrent in-flight job creation requests with same idempotency key', async () => {
+			tradingViewMcpService.analyzeSymbolIdentifier.mockImplementation(
+				() => new Promise((resolve) => setTimeout(() => resolve({ symbol: 'BINANCE:BTCUSDT' }), 50)),
+			);
+
+			const key = 'job-concurrent-key';
+			const jobBody = { type: 'expanded-analysis', symbols: ['BINANCE:BTCUSDT'] };
+
+			const [res1, res2] = await Promise.all([
+				request(app)
+					.post('/api/jobs/tradingview-analysis')
+					.set('x-api-key', 'test-key')
+					.set('idempotency-key', key)
+					.send(jobBody),
+				request(app)
+					.post('/api/jobs/tradingview-analysis')
+					.set('x-api-key', 'test-key')
+					.set('idempotency-key', key)
+					.send(jobBody),
+			]);
+
+			expect(res1.status).toBe(201);
+			expect(res2.status).toBe(201);
+			expect(res1.body.jobId).toBe(res2.body.jobId);
+
+			const replayFlags = [res1.headers['idempotency-replay'], res2.headers['idempotency-replay']];
+			expect(replayFlags).toContain('false');
+			expect(replayFlags).toContain('true');
+		});
+
+		it('returns 409 IDEMPOTENCY_CONFLICT when key is reused with a different request fingerprint', async () => {
+			const key = 'job-conflict-key';
+
+			await request(app)
+				.post('/api/jobs/tradingview-analysis')
+				.set('x-api-key', 'test-key')
+				.set('idempotency-key', key)
+				.send({ type: 'expanded-analysis', symbols: ['BINANCE:BTCUSDT'] })
+				.expect(201);
+
+			const conflictRes = await request(app)
+				.post('/api/jobs/tradingview-analysis')
+				.set('x-api-key', 'test-key')
+				.set('idempotency-key', key)
+				.send({ type: 'expanded-analysis', symbols: ['BINANCE:ETHUSDT'] })
+				.expect(409);
+
+			expect(conflictRes.body.code).toBe('IDEMPOTENCY_CONFLICT');
+			expect(conflictRes.body.error).toContain('reused with a different payload');
+		});
+
+		it('replays job retry and retry-failed responses on matching idempotency keys', async () => {
+			tradingViewMcpService.analyzeSymbolIdentifier.mockImplementation(
+				() => new Promise((resolve) => setTimeout(resolve, 200)),
+			);
+
+			// Create job and cancel it to make it retryable
+			const createRes = await request(app)
+				.post('/api/jobs/tradingview-analysis')
+				.set('x-api-key', 'test-key')
+				.send({ type: 'expanded-analysis', symbols: ['BINANCE:BTCUSDT'] })
+				.expect(201);
+
+			const jobId = createRes.body.jobId;
+			await request(app)
+				.post(`/api/jobs/${jobId}/cancel`)
+				.set('x-api-key', 'test-key')
+				.expect(200);
+
+			// Retry with idempotency key
+			const retryKey = 'retry-idem-key';
+			const retry1 = await request(app)
+				.post(`/api/jobs/${jobId}/retry`)
+				.set('x-api-key', 'test-key')
+				.set('idempotency-key', retryKey)
+				.expect(201);
+
+			expect(retry1.headers['idempotency-replay']).toBe('false');
+			expect(retry1.body.oldJobId).toBe(jobId);
+			const newJobId = retry1.body.newJobId;
+
+			// Repeat retry with same key
+			const retry2 = await request(app)
+				.post(`/api/jobs/${jobId}/retry`)
+				.set('x-api-key', 'test-key')
+				.set('idempotency-key', retryKey)
+				.expect(201);
+
+			expect(retry2.headers['idempotency-replay']).toBe('true');
+			expect(retry2.body.newJobId).toBe(newJobId);
+			expect(retry2.body.idempotencyReplayed).toBe(true);
+		});
+
+		it('retains default behavior for requests without an idempotency key', async () => {
+			tradingViewMcpService.analyzeSymbolIdentifier.mockResolvedValue({ symbol: 'BINANCE:BTCUSDT' });
+
+			const res1 = await request(app)
+				.post('/api/jobs/tradingview-analysis')
+				.set('x-api-key', 'test-key')
+				.send({ type: 'expanded-analysis', symbols: ['BINANCE:BTCUSDT'] })
+				.expect(201);
+
+			const res2 = await request(app)
+				.post('/api/jobs/tradingview-analysis')
+				.set('x-api-key', 'test-key')
+				.send({ type: 'expanded-analysis', symbols: ['BINANCE:BTCUSDT'] })
+				.expect(201);
+
+			expect(res1.body.jobId).not.toBe(res2.body.jobId);
+			expect(res1.headers['idempotency-replay']).toBeUndefined();
+			expect(res2.headers['idempotency-replay']).toBeUndefined();
 		});
 	});
 });
