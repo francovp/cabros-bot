@@ -69,32 +69,57 @@ function sendCachedResponse(res, cachedRecord) {
 	return res.send(finalBody);
 }
 
+function getIdempotencyKey(req) {
+	const headers = req.headers || {};
+	if (headers['idempotency-key'] !== undefined) {
+		return headers['idempotency-key'];
+	}
+
+	const body = req.body;
+	if (body && typeof body === 'object') {
+		if (body.idempotencyKey !== undefined) return body.idempotencyKey;
+		if (body.idempotency_key !== undefined) return body.idempotency_key;
+	}
+
+	const query = req.query;
+	if (query && typeof query === 'object') {
+		if (query.idempotencyKey !== undefined) return query.idempotencyKey;
+		if (query.idempotency_key !== undefined) return query.idempotency_key;
+	}
+
+	return undefined;
+}
+
 /**
  * Express middleware to handle idempotency key checks and response caching.
  */
 function idempotencyMiddleware(req, res, next) {
 	// 1. Get the key from headers (recommended), request body, or query params
-	const key = req.headers['idempotency-key']
-		|| (req.body && (req.body.idempotencyKey || req.body.idempotency_key))
-		|| (req.query && (req.query.idempotencyKey || req.query.idempotency_key));
+	const key = getIdempotencyKey(req);
 
-	if (!key) {
+	if (key === undefined) {
 		return next();
 	}
 
-	// Ensure the key is a string (e.g., if array of headers received)
-	const keyToCheck = Array.isArray(key) ? key[0] : key;
+	// Reject non-string values instead of allowing object/array identity keys.
+	if (typeof key !== 'string' || !key.trim()) {
+		return res.status(400).json({
+			error: 'Idempotency key must be a non-empty string',
+			code: 'INVALID_REQUEST',
+		});
+	}
+
 	const requestFingerprint = buildRequestFingerprint(req);
 
 	try {
-		const reservation = idempotencyService.reserve(keyToCheck, requestFingerprint);
+		const reservation = idempotencyService.reserve(key, requestFingerprint);
 		if (reservation.state === 'completed') {
-			console.debug(`[Idempotency] Replaying cached response for key: ${keyToCheck}`);
+			console.debug(`[Idempotency] Replaying cached response for key: ${key}`);
 			return sendCachedResponse(res, reservation.record);
 		}
 
 		if (reservation.state === 'pending') {
-			console.debug(`[Idempotency] Waiting for in-flight response for key: ${keyToCheck}`);
+			console.debug(`[Idempotency] Waiting for in-flight response for key: ${key}`);
 			return reservation.promise
 				.then((cachedRecord) => sendCachedResponse(res, cachedRecord))
 				.catch((error) => {
@@ -109,14 +134,14 @@ function idempotencyMiddleware(req, res, next) {
 		}
 	} catch (error) {
 		if (error.code === 'IDEMPOTENCY_CONFLICT') {
-			console.warn(`[Idempotency] Conflict detected for key: ${keyToCheck}`);
+			console.warn(`[Idempotency] Conflict detected for key: ${key}`);
 			return res.status(409).json({
 				error: error.message,
 				code: error.code,
 			});
 		}
 		if (error.code === 'IDEMPOTENCY_LIMIT_EXCEEDED') {
-			console.warn(`[Idempotency] Limit exceeded for key: ${keyToCheck}`);
+			console.warn(`[Idempotency] Limit exceeded for key: ${key}`);
 			return res.status(429).json({
 				error: error.message,
 				code: error.code,
@@ -153,7 +178,7 @@ function idempotencyMiddleware(req, res, next) {
 			}
 		}
 
-		idempotencyService.set(keyToCheck, requestFingerprint, {
+		idempotencyService.set(key, requestFingerprint, {
 			statusCode: res.statusCode,
 			body: responseBody,
 			headers: {
@@ -177,7 +202,7 @@ function idempotencyMiddleware(req, res, next) {
 			const releaseError = new Error('Initial idempotent request failed before a replayable response was available');
 			releaseError.code = 'IDEMPOTENCY_RELEASED';
 			releaseError.statusCode = 409;
-			idempotencyService.release(keyToCheck, requestFingerprint, releaseError);
+			idempotencyService.release(key, requestFingerprint, releaseError);
 		}
 	});
 
