@@ -124,15 +124,15 @@ function deriveAssetContext(text) {
 		};
 	}
 
-	const match = text.match(/(?:^|\s)(?:(?<exchange>[A-Z]+):)?(?<symbol>[A-Z0-9._-]{2,20})/i);
-	if (match && match.groups && match.groups.symbol) {
-		const symbol = match.groups.symbol.toUpperCase();
-		const exchange = match.groups.exchange ? match.groups.exchange.toUpperCase() : null;
+	const explicitExchangeMatch = text.match(/(?:^|\s)(?<exchange>[A-Z]+):(?<symbol>[A-Z0-9._-]{2,20})/i);
+	if (explicitExchangeMatch && explicitExchangeMatch.groups && explicitExchangeMatch.groups.symbol) {
+		const symbol = explicitExchangeMatch.groups.symbol.toUpperCase();
+		const exchange = explicitExchangeMatch.groups.exchange.toUpperCase();
 
 		let assetClass = 'stock';
-		if (exchange && CRYPTO_EXCHANGES.has(exchange)) {
+		if (CRYPTO_EXCHANGES.has(exchange)) {
 			assetClass = 'crypto';
-		} else if (exchange && STOCK_EXCHANGES.has(exchange)) {
+		} else if (STOCK_EXCHANGES.has(exchange)) {
 			assetClass = 'stock';
 		} else if (CRYPTO_SUFFIXES.some(s => symbol.endsWith(s))) {
 			assetClass = 'crypto';
@@ -142,6 +142,17 @@ function deriveAssetContext(text) {
 			symbol,
 			exchange,
 			assetClass,
+		};
+	}
+
+	const cryptoSuffixPattern = new RegExp(`(?:^|\\s)(?<symbol>[A-Z0-9._-]{2,20}(?:${CRYPTO_SUFFIXES.join('|')}))\\b`, 'i');
+	const cryptoSuffixMatch = text.match(cryptoSuffixPattern);
+	if (cryptoSuffixMatch && cryptoSuffixMatch.groups && cryptoSuffixMatch.groups.symbol) {
+		const symbol = cryptoSuffixMatch.groups.symbol.toUpperCase();
+		return {
+			symbol,
+			exchange: null,
+			assetClass: 'crypto',
 		};
 	}
 
