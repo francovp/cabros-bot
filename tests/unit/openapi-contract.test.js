@@ -76,6 +76,17 @@ describe('OpenAPI contract', () => {
 		});
 	});
 
+	it('documents the summary shadow metrics object and no-measurements string forms', () => {
+		if (!fs.existsSync(contractPath)) return;
+		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+		const shadowModeMetrics = contract.components.schemas.AlertSummary.properties.shadowModeMetrics;
+
+		expect(shadowModeMetrics.oneOf).toEqual(expect.arrayContaining([
+			{ type: 'string' },
+			{ $ref: '#/components/schemas/JsonObject' },
+		]));
+	});
+
 	it('documents generic-message idempotency key locations and replay conflicts', () => {
 		if (!fs.existsSync(contractPath)) return;
 		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));

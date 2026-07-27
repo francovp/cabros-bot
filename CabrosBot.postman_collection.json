@@ -1412,6 +1412,38 @@
           }
         },
         {
+          "name": "GET Alert Analytics Summary (risk coverage)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/summary?from=2026-06-06T00:00:00.000Z&to=2026-06-07T00:00:00.000Z&limit=500",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "alerts", "summary"],
+              "query": [
+                { "key": "from", "value": "2026-06-06T00:00:00.000Z" },
+                { "key": "to", "value": "2026-06-07T00:00:00.000Z" },
+                { "key": "limit", "value": "500" }
+              ]
+            },
+            "description": "Protected summary response showing zero-safe risk metadata coverage grouped by non-sensitive Langfuse/local prompt provenance."
+          },
+          "response": [
+            {
+              "name": "200 OK - Risk metadata coverage",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"summary\": {\n    \"enrichment\": {\n      \"enrichedAlerts\": 2,\n      \"plainAlerts\": 0,\n      \"riskMetadataCoverage\": {\n        \"denominator\": 2,\n        \"fields\": {\n          \"invalidation_level\": {\n            \"populated\": 1,\n            \"percentage\": 50\n          },\n          \"target_level\": {\n            \"populated\": 1,\n            \"percentage\": 50\n          },\n          \"setup_type\": {\n            \"populated\": 1,\n            \"percentage\": 50\n          },\n          \"risk_reward_ratio\": {\n            \"populated\": 1,\n            \"percentage\": 50\n          }\n        },\n        \"byPromptProvenance\": [\n          {\n            \"provenance\": {\n              \"name\": \"alert-enrichment\",\n              \"source\": \"langfuse\",\n              \"label\": \"production\",\n              \"version\": 12\n            },\n            \"denominator\": 1,\n            \"fields\": {\n              \"invalidation_level\": {\n                \"populated\": 1,\n                \"percentage\": 100\n              },\n              \"target_level\": {\n                \"populated\": 1,\n                \"percentage\": 100\n              },\n              \"setup_type\": {\n                \"populated\": 1,\n                \"percentage\": 100\n              },\n              \"risk_reward_ratio\": {\n                \"populated\": 1,\n                \"percentage\": 100\n              }\n            }\n          },\n          {\n            \"provenance\": {\n              \"name\": \"alert-enrichment\",\n              \"source\": \"local\",\n              \"label\": null,\n              \"version\": null\n            },\n            \"denominator\": 1,\n            \"fields\": {\n              \"invalidation_level\": {\n                \"populated\": 0,\n                \"percentage\": 0\n              },\n              \"target_level\": {\n                \"populated\": 0,\n                \"percentage\": 0\n              },\n              \"setup_type\": {\n                \"populated\": 0,\n                \"percentage\": 0\n              },\n              \"risk_reward_ratio\": {\n                \"populated\": 0,\n                \"percentage\": 0\n              }\n            }\n          }\n        ]\n      }\n    },\n    \"shadowModeMetrics\": \"No measurements found\"\n  }\n}"
+            }
+          ]
+        },
+        {
           "name": "GET Alert Analytics Summary",
           "request": {
             "method": "GET",

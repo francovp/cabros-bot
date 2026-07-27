@@ -80,6 +80,12 @@ describe('Gemini Service', () => {
 				version: null,
 			});
 			expect(result).not.toHaveProperty('technical_levels');
+			expect(result.promptProvenance).toEqual({
+				name: 'alert-enrichment',
+				source: 'local',
+				label: null,
+				version: null,
+			});
 			// sources are not returned by generateEnrichedAlert
 		});
 

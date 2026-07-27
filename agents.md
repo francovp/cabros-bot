@@ -1124,3 +1124,14 @@ Scanner presets support an independent `ENABLE_FIRESTORE_SCANNER_PRESETS=true` g
 **Coverage and contracts**:
 - `tests/integration/generic-message-webhook.test.js` covers sequential and concurrent replay, single dispatch across Telegram/WhatsApp/Discord, message/channel/destination conflicts, and legacy no-key behavior.
 - `src/openapi/openapi.json` and `CabrosBot.postman_collection.json` document key locations, replay output, invalid key handling, and the message-specific conflict response without overriding the shared async-job conflict component.
+
+## Alert Risk-Metadata Coverage and Prompt Provenance (CB-100 / Issue #243)
+
+Stored enriched alerts now carry sanitized `promptProvenance` metadata when the alert-enrichment prompt resolves: `name`, `source` (`langfuse` or `local`), `label`, and numeric `version`; prompt content and unknown provenance fields are not persisted. `GET /api/alerts/summary` exposes `enrichment.riskMetadataCoverage` with the enriched-alert denominator, populated counts/percentages for each optional risk field, and provenance-grouped coverage. Legacy enriched records without provenance are grouped under `provenance: null`. Invalid or absent optional risk values count as unavailable data, and the existing fail-open delivery/authentication/feature gates are unchanged.
+
+**Rollout check**: validate provenance and zero-safe coverage in preview, align the remote production `alert-enrichment` prompt with the local optional-risk schema, then observe a bounded shadow window before using risk metadata in downstream triage. No trading outcome or risk value is inferred from zero coverage.
+
+**Coverage**:
+- `tests/unit/gemini-client.test.js`, `tests/unit/prompt-service.test.js`, and `tests/unit/alert-storage-service.test.js` cover local/Langfuse provenance, safe persistence, missing/invalid values, and mixed coverage.
+- `tests/integration/alerts-endpoint.test.js` covers the protected summary response contract.
+- `README.md`, `src/openapi/openapi.json`, and `CabrosBot.postman_collection.json` document the response and bounded rollout check.

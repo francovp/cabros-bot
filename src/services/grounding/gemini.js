@@ -56,6 +56,26 @@ function parseOptionalSetupType(value) {
 	return SETUP_TYPES.has(normalized) ? normalized : undefined;
 }
 
+function getPromptProvenance(prompt) {
+	const name = typeof prompt?.name === 'string' && prompt.name.trim()
+		? prompt.name.trim()
+		: null;
+	const source = ['langfuse', 'local'].includes(prompt?.source)
+		? prompt.source
+		: null;
+
+	if (!name || !source) {
+		return null;
+	}
+
+	return {
+		name,
+		source,
+		label: typeof prompt.label === 'string' && prompt.label.trim() ? prompt.label.trim() : null,
+		version: Number.isInteger(prompt.version) ? prompt.version : null,
+	};
+}
+
 const domainQuality = require('./domainQuality');
 
 function shouldRetryGeminiWithFallback(error) {
@@ -589,12 +609,7 @@ async function generateEnrichedAlert({ text, searchResults = [], searchResultTex
 		{ systemPromptOverride },
 	);
 	const { systemPrompt, userPrompt } = prompt;
-	const promptProvenance = {
-		name: prompt.name || PromptKeys.ALERT_ENRICHMENT,
-		source: prompt.source || 'local',
-		label: prompt.label ?? null,
-		version: prompt.version ?? null,
-	};
+	const promptProvenance = getPromptProvenance(prompt);
 
 	try {
 		const llmParams = {
@@ -615,7 +630,7 @@ async function generateEnrichedAlert({ text, searchResults = [], searchResultTex
 				sentiment_score: 0.5,
 				insights: [],
 				modelUsed: GEMINI_MODEL_NAME || 'unknown',
-				prompt_provenance: promptProvenance,
+				...(promptProvenance ? { promptProvenance } : {}),
 			};
 		}
 
@@ -643,7 +658,7 @@ async function generateEnrichedAlert({ text, searchResults = [], searchResultTex
 		return {
 			...parseEnrichedAlertResponse(responseText),
 			modelUsed: modelUsed || GEMINI_MODEL_NAME,
-			prompt_provenance: promptProvenance,
+			...(promptProvenance ? { promptProvenance } : {}),
 		};
 	} catch (error) {
 		throw new Error(`Enriched alert generation failed: ${error.message}`);

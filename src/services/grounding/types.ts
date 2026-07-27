@@ -16,11 +16,19 @@ export interface TechnicalLevels {
   resistances: string[];
 }
 
+export interface PromptProvenance {
+  name: string;
+  source: 'langfuse' | 'local';
+  label: string | null;
+  version: number | null;
+}
+
 export interface EnrichedAlert {
   original_text: string;
   sentiment: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
   sentiment_score: number;
   insights: string[];
+  promptProvenance?: PromptProvenance;
   technical_levels?: TechnicalLevels;
   invalidation_level?: string | number;
   target_level?: string | number;

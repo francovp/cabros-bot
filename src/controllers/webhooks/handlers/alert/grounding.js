@@ -115,7 +115,6 @@ function mergeEnrichmentData(text, geminiEnriched, mcpEnriched) {
 		setup_type: pickSetupType(gemini.setup_type, mcp.setup_type),
 		risk_reward_ratio: pickOptionalRiskValue(gemini.risk_reward_ratio, mcp.risk_reward_ratio),
 	};
-	const promptProvenance = gemini.prompt_provenance || mcp.prompt_provenance || null;
 
 	return {
 		original_text: text,
@@ -128,7 +127,7 @@ function mergeEnrichmentData(text, geminiEnriched, mcpEnriched) {
 		extraText,
 		confluenceData: mcp.confluenceData || null,
 		multiTimeframeData: mcp.multiTimeframeData || null,
-		...(promptProvenance ? { prompt_provenance: promptProvenance } : {}),
+		...(gemini.promptProvenance ? { promptProvenance: gemini.promptProvenance } : {}),
 		...Object.fromEntries(
 			Object.entries(optionalRiskMetadata).filter(([, value]) => value !== undefined),
 		),
@@ -143,11 +142,11 @@ async function enrichWithGemini(text, tokenUsage) {
 		sources,
 		truncated,
 		modelUsed,
+		promptProvenance,
 		invalidation_level,
 		target_level,
 		setup_type,
 		risk_reward_ratio,
-		prompt_provenance,
 	} = await groundAlert({
 		text,
 		options: {
@@ -171,7 +170,7 @@ async function enrichWithGemini(text, tokenUsage) {
 		sources,
 		truncated,
 		extraText,
-		...(prompt_provenance ? { prompt_provenance } : {}),
+		...(promptProvenance ? { promptProvenance } : {}),
 		...Object.fromEntries(
 			Object.entries({ invalidation_level, target_level, setup_type, risk_reward_ratio })
 				.filter(([, value]) => value !== undefined),
