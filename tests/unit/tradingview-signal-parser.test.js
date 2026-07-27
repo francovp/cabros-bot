@@ -63,10 +63,23 @@ describe('TradingView signal parser', () => {
 		}));
 	});
 
+	it('returns null asset context for generic prose alerts without explicit symbols', () => {
+		expect(deriveAssetContext('The SEC approved a new filing for a listed company')).toBeNull();
+		expect(deriveAssetContext('Bitcoin ETF inflows accelerated after the market opened')).toBeNull();
+	});
+
 	it('derives clean search query for BATS and BINANCE signals', () => {
 		expect(deriveCleanSearchQuery('BATS:TSM(D) cambió a señal de VENTA')).toBe('TSM stock price news market analyst');
 		expect(deriveCleanSearchQuery('BATS:AAPL(D) cambió a señal de COMPRA')).toBe('AAPL stock price news market analyst');
 		expect(deriveCleanSearchQuery('BINANCE:BTCUSDT(1H) cambió a señal de COMPRA')).toBe('BTCUSDT crypto price news market analyst');
 	});
+
+	it('preserves generic alert text in search query without replacing with first word', () => {
+		expect(deriveCleanSearchQuery('The SEC approved a new filing for a listed company'))
+			.toBe('The SEC approved a new filing for a listed company');
+		expect(deriveCleanSearchQuery('Bitcoin ETF inflows accelerated after the market opened'))
+			.toBe('Bitcoin ETF inflows accelerated after the market opened');
+	});
 });
+
 
