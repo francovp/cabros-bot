@@ -681,6 +681,12 @@
               "body": "{\n  \"error\": \"Idempotency key was reused with a different payload\",\n  \"code\": \"IDEMPOTENCY_CONFLICT\"\n}"
             },
             {
+              "name": "Error (invalid idempotency key type)",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"Idempotency key must be a non-empty string\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            },
+            {
               "name": "Error (empty message)",
               "status": "Bad Request",
               "code": 400,

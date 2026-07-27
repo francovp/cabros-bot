@@ -90,13 +90,15 @@ describe('OpenAPI contract', () => {
 			$ref: '#/components/responses/MessageDeliveryResult',
 		});
 		expect(operation.responses['409']).toEqual({
-			$ref: '#/components/responses/IdempotencyConflict',
+			$ref: '#/components/responses/MessageIdempotencyConflict',
 		});
 		expect(contract.components.schemas.MessageRequest.properties.idempotencyKey).toBeDefined();
 		expect(contract.components.schemas.MessageRequest.properties.idempotency_key).toBeDefined();
 		expect(contract.components.responses.MessageDeliveryResult.content['application/json'].examples.replay.value)
 			.toMatchObject({ success: true, idempotencyReplayed: true });
-		expect(contract.components.responses.IdempotencyConflict.content['application/json'].example).toEqual({
+		expect(contract.components.responses.IdempotencyConflict.description)
+			.toBe('The idempotency key was reused with a different request fingerprint');
+		expect(contract.components.responses.MessageIdempotencyConflict.content['application/json'].example).toEqual({
 			error: 'Idempotency key was reused with a different payload',
 			code: 'IDEMPOTENCY_CONFLICT',
 		});

@@ -1111,7 +1111,7 @@ Scanner presets support an independent `ENABLE_FIRESTORE_SCANNER_PRESETS=true` g
 
 ## Generic Message Idempotency (CB-97 / Issue #240)
 
-`POST /api/webhook/message` now uses the shared `idempotencyMiddleware` before dispatching notifications. Requests with the same key and identical message/routing payload replay the cached response, including `idempotencyReplayed: true` and the `Idempotency-Replay: true` header, while payload changes return `409 IDEMPOTENCY_CONFLICT`. Requests without a key retain the existing delivery behavior.
+`POST /api/webhook/message` now uses the shared `idempotencyMiddleware` before dispatching notifications. Requests with the same key and identical message/routing payload replay the cached response, including `idempotencyReplayed: true` and the `Idempotency-Replay: true` header, while payload changes return `409 IDEMPOTENCY_CONFLICT`. Supplied idempotency keys must be non-empty strings; invalid key types return `400 INVALID_REQUEST`. Requests without a key retain the existing delivery behavior.
 
 **Accepted key forms**:
 - `idempotency-key` header (recommended)
@@ -1120,4 +1120,4 @@ Scanner presets support an independent `ENABLE_FIRESTORE_SCANNER_PRESETS=true` g
 
 **Coverage and contracts**:
 - `tests/integration/generic-message-webhook.test.js` covers sequential and concurrent replay, single dispatch across Telegram/WhatsApp/Discord, message/channel/destination conflicts, and legacy no-key behavior.
-- `src/openapi/openapi.json` and `CabrosBot.postman_collection.json` document key locations, replay output, and the conflict response.
+- `src/openapi/openapi.json` and `CabrosBot.postman_collection.json` document key locations, replay output, invalid key handling, and the message-specific conflict response without overriding the shared async-job conflict component.

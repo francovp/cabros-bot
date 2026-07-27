@@ -69,21 +69,47 @@ function sendCachedResponse(res, cachedRecord) {
 	return res.send(finalBody);
 }
 
+function getIdempotencyKey(req) {
+	const headers = req.headers || {};
+	if (headers['idempotency-key'] !== undefined) {
+		return headers['idempotency-key'];
+	}
+
+	const body = req.body;
+	if (body && typeof body === 'object') {
+		if (body.idempotencyKey !== undefined) return body.idempotencyKey;
+		if (body.idempotency_key !== undefined) return body.idempotency_key;
+	}
+
+	const query = req.query;
+	if (query && typeof query === 'object') {
+		if (query.idempotencyKey !== undefined) return query.idempotencyKey;
+		if (query.idempotency_key !== undefined) return query.idempotency_key;
+	}
+
+	return undefined;
+}
+
 /**
  * Express middleware to handle idempotency key checks and response caching.
  */
 function idempotencyMiddleware(req, res, next) {
 	// 1. Get the key from headers (recommended), request body, or query params
-	const key = req.headers['idempotency-key']
-		|| (req.body && (req.body.idempotencyKey || req.body.idempotency_key))
-		|| (req.query && (req.query.idempotencyKey || req.query.idempotency_key));
+	const key = getIdempotencyKey(req);
 
-	if (!key) {
+	if (key === undefined || key === null) {
 		return next();
 	}
 
 	// Ensure the key is a string (e.g., if array of headers received)
 	const keyToCheck = Array.isArray(key) ? key[0] : key;
+	if (typeof keyToCheck !== 'string' || !keyToCheck.trim()) {
+		return res.status(400).json({
+			error: 'Idempotency key must be a non-empty string',
+			code: 'INVALID_REQUEST',
+		});
+	}
+
 	const requestFingerprint = buildRequestFingerprint(req);
 
 	try {
