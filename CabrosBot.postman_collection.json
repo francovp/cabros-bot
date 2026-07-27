@@ -16,8 +16,33 @@
       "type": "string"
     },
     {
-      "key": "jobIdempotencyKey",
-      "value": "job-request-001",
+      "key": "jobCreateIdempotencyKey",
+      "value": "job-create-001",
+      "type": "string"
+    },
+    {
+      "key": "jobCreateCallbackIdempotencyKey",
+      "value": "job-create-callback-001",
+      "type": "string"
+    },
+    {
+      "key": "jobScannerIdempotencyKey",
+      "value": "job-scanner-001",
+      "type": "string"
+    },
+    {
+      "key": "jobScannerCallbackIdempotencyKey",
+      "value": "job-scanner-callback-001",
+      "type": "string"
+    },
+    {
+      "key": "jobRetryIdempotencyKey",
+      "value": "job-retry-001",
+      "type": "string"
+    },
+    {
+      "key": "jobRetryFailedIdempotencyKey",
+      "value": "job-retry-failed-001",
       "type": "string"
     }
   ],
@@ -1754,7 +1779,7 @@
               },
               {
                 "key": "idempotency-key",
-                "value": "{{jobIdempotencyKey}}",
+                "value": "{{jobCreateIdempotencyKey}}",
                 "type": "text"
               }
             ],
@@ -1921,7 +1946,7 @@
               },
               {
                 "key": "idempotency-key",
-                "value": "{{jobIdempotencyKey}}",
+                "value": "{{jobCreateCallbackIdempotencyKey}}",
                 "type": "text"
               }
             ],
@@ -2070,7 +2095,7 @@
               },
               {
                 "key": "idempotency-key",
-                "value": "{{jobIdempotencyKey}}",
+                "value": "{{jobScannerIdempotencyKey}}",
                 "type": "text"
               }
             ],
@@ -2108,7 +2133,7 @@
               },
               {
                 "key": "idempotency-key",
-                "value": "{{jobIdempotencyKey}}",
+                "value": "{{jobScannerCallbackIdempotencyKey}}",
                 "type": "text"
               }
             ],
@@ -2199,7 +2224,7 @@
               },
               {
                 "key": "idempotency-key",
-                "value": "{{jobIdempotencyKey}}",
+                "value": "{{jobRetryIdempotencyKey}}",
                 "type": "text"
               }
             ],
@@ -2244,7 +2269,7 @@
               },
               {
                 "key": "idempotency-key",
-                "value": "{{jobIdempotencyKey}}",
+                "value": "{{jobRetryFailedIdempotencyKey}}",
                 "type": "text"
               }
             ],
