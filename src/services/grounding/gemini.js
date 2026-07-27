@@ -630,7 +630,7 @@ async function generateEnrichedAlert({ text, searchResults = [], searchResultTex
 				sentiment_score: 0.5,
 				insights: [],
 				modelUsed: GEMINI_MODEL_NAME || 'unknown',
-				...(promptProvenance ? { promptProvenance } : {}),
+				...(promptProvenance ? { promptProvenance, prompt_provenance: promptProvenance } : {}),
 			};
 		}
 
@@ -658,7 +658,7 @@ async function generateEnrichedAlert({ text, searchResults = [], searchResultTex
 		return {
 			...parseEnrichedAlertResponse(responseText),
 			modelUsed: modelUsed || GEMINI_MODEL_NAME,
-			...(promptProvenance ? { promptProvenance } : {}),
+			...(promptProvenance ? { promptProvenance, prompt_provenance: promptProvenance } : {}),
 		};
 	} catch (error) {
 		throw new Error(`Enriched alert generation failed: ${error.message}`);

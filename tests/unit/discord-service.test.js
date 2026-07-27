@@ -193,6 +193,7 @@ describe('DiscordService', () => {
 			expect(result.channel).toBe('discord');
 			expect(result.statusCode).toBe(429);
 			expect(result.error).toContain('Discord webhook 429');
+			expect(result.attemptCount).toBe(3);
 			// Initial attempt + 2 retries = 3 total fetch calls
 			expect(global.fetch).toHaveBeenCalledTimes(3);
 		});
@@ -247,7 +248,37 @@ describe('DiscordService', () => {
 
 			expect(result.success).toBe(false);
 			expect(result.statusCode).toBe(429);
+			expect(result.attemptCount).toBe(1);
 			expect(global.fetch).toHaveBeenCalledTimes(1);
+		});
+
+		it('returns cumulative attempts when a later message chunk exhausts 429 retries', async () => {
+			service = new DiscordService({
+				logger: mockLogger,
+				maxRetries: 2,
+				maxRetryDelayMs: 1000,
+				maxTotalRetryWaitMs: 2000,
+			});
+			await service.validate();
+
+			global.fetch = jest.fn()
+				.mockResolvedValueOnce({
+					ok: true,
+					json: async () => ({ id: 'discord-first-chunk' }),
+				})
+				.mockResolvedValue({
+					ok: false,
+					status: 429,
+					headers: new Map([['retry-after', '0.01']]),
+					text: async () => 'rate limited later chunk',
+				});
+
+			const result = await service.send({ text: `${'A'.repeat(1995)} ${'B'.repeat(1995)}` });
+
+			expect(result.success).toBe(false);
+			expect(result.statusCode).toBe(429);
+			expect(result.attemptCount).toBe(4);
+			expect(global.fetch).toHaveBeenCalledTimes(4);
 		});
 
 		it('aborts retry loop without retrying early if retry delay exceeds maxRetryDelayMs budget', async () => {
