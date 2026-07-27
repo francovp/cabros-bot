@@ -138,6 +138,48 @@ describe('DiscordService', () => {
 			);
 		});
 
+		it('returns a bounded 429 without retrying when Retry-After exceeds the per-delay budget', async () => {
+			const realSetTimeout = global.setTimeout;
+			const realClearTimeout = global.clearTimeout;
+			const scheduledTimers = [];
+			global.setTimeout = jest.fn((callback, delay) => {
+				scheduledTimers.push({ callback, delay });
+				return scheduledTimers.length;
+			});
+			global.clearTimeout = jest.fn();
+
+			try {
+				service = new DiscordService({
+					logger: mockLogger,
+					maxRetries: 1,
+					maxRetryDelayMs: 5000,
+					maxTotalRetryWaitMs: 60000,
+				});
+				await service.validate();
+
+				global.fetch = jest.fn()
+					.mockResolvedValueOnce({
+						ok: false,
+						status: 429,
+						headers: new Map([['retry-after', '30']]),
+						text: async () => 'long header delay',
+					});
+
+				const sendPromise = service.send({ text: 'Discord alert' });
+
+				await new Promise((resolve) => realSetTimeout(resolve, 0));
+				if (scheduledTimers[1]) scheduledTimers[1].callback();
+
+				const result = await sendPromise;
+				expect(result.success).toBe(false);
+				expect(result.statusCode).toBe(429);
+				expect(global.fetch).toHaveBeenCalledTimes(1);
+			} finally {
+				global.setTimeout = realSetTimeout;
+				global.clearTimeout = realClearTimeout;
+			}
+		});
+
 		it('retries on HTTP 429 when retry_after JSON body is provided', async () => {
 			service = new DiscordService({
 				logger: mockLogger,
@@ -169,6 +211,47 @@ describe('DiscordService', () => {
 				messageCount: 1,
 			});
 			expect(global.fetch).toHaveBeenCalledTimes(2);
+		});
+
+		it('returns a bounded 429 without retrying when body Retry-After exceeds the per-delay budget', async () => {
+			const realSetTimeout = global.setTimeout;
+			const realClearTimeout = global.clearTimeout;
+			const scheduledTimers = [];
+			global.setTimeout = jest.fn((callback, delay) => {
+				scheduledTimers.push({ callback, delay });
+				return scheduledTimers.length;
+			});
+			global.clearTimeout = jest.fn();
+
+			try {
+				service = new DiscordService({
+					logger: mockLogger,
+					maxRetries: 1,
+					maxRetryDelayMs: 5000,
+					maxTotalRetryWaitMs: 60000,
+				});
+				await service.validate();
+
+				global.fetch = jest.fn().mockResolvedValueOnce({
+					ok: false,
+					status: 429,
+					headers: new Map(),
+					text: async () => JSON.stringify({ retry_after: 30 }),
+				});
+
+				const sendPromise = service.send({ text: 'Discord alert' });
+
+				await new Promise((resolve) => realSetTimeout(resolve, 0));
+				if (scheduledTimers[1]) scheduledTimers[1].callback();
+
+				const result = await sendPromise;
+				expect(result.success).toBe(false);
+				expect(result.statusCode).toBe(429);
+				expect(global.fetch).toHaveBeenCalledTimes(1);
+			} finally {
+				global.setTimeout = realSetTimeout;
+				global.clearTimeout = realClearTimeout;
+			}
 		});
 
 		it('fails gracefully when HTTP 429 retries are exhausted', async () => {

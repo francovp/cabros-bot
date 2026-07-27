@@ -1037,7 +1037,7 @@ The alert webhook system supports simultaneous delivery to multiple channels (Te
 - **Enabled by**: `ENABLE_DISCORD_ALERTS=true` + valid `DISCORD_WEBHOOK_URL`
 - **Format**: Plain Discord webhook content with Markdown-friendly text
 - **Timeout**: ~10 seconds per delivery
-- **Retry**: Single request per delivery
+- **Retry**: Bounded HTTP 429 retries honoring `Retry-After`; over-budget delays fail without an early retry
 - **Provider**: Discord webhook execute endpoint via native `fetch`
 
 ### Channel-Specific Formatting

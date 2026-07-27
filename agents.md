@@ -1121,3 +1121,11 @@ Scanner presets support an independent `ENABLE_FIRESTORE_SCANNER_PRESETS=true` g
 **Coverage and contracts**:
 - `tests/integration/generic-message-webhook.test.js` covers sequential and concurrent replay, single dispatch across Telegram/WhatsApp/Discord, message/channel/destination conflicts, and legacy no-key behavior.
 - `src/openapi/openapi.json` and `CabrosBot.postman_collection.json` document key locations, replay output, invalid key handling, and the message-specific conflict response without overriding the shared async-job conflict component.
+
+## Discord Retry-After Budget Safety (CB-101 / Issue #253)
+
+`DiscordService.sendChunk()` now preserves the provider-parsed `Retry-After` delay when it is within both the configured per-delay limit (`DISCORD_MAX_RETRY_DELAY_MS`) and the remaining total-wait budget (`DISCORD_MAX_TOTAL_RETRY_WAIT_MS`). Delays that exceed either bound return a structured HTTP 429 failure without an early retry, preserving fail-open isolation for other notification channels.
+
+**Core Components**:
+- `src/services/notification/DiscordService.js` — Rejects over-budget parsed delays and sleeps for the full accepted delay.
+- `tests/unit/discord-service.test.js` — Covers excessive header/body delays, bounded 429 responses, and successful retries within budget.

@@ -190,11 +190,11 @@ class DiscordService extends NotificationChannel {
 				}
 
 				const rawDelayMs = this.extractRetryAfterMs(response, errorText);
-				const effectiveDelayMs = Math.min(rawDelayMs, this.maxRetryDelayMs);
+				const remainingWaitMs = this.maxTotalRetryWaitMs - totalWaitMs;
 
-				if (totalWaitMs + effectiveDelayMs > this.maxTotalRetryWaitMs) {
+				if (rawDelayMs > this.maxRetryDelayMs || rawDelayMs > remainingWaitMs) {
 					this.logger?.warn?.(
-						`Discord 429 retry delay (${effectiveDelayMs}ms) exceeds remaining total wait budget (${this.maxTotalRetryWaitMs - totalWaitMs}ms). Aborting retries.`,
+						`Discord 429 retry delay (${rawDelayMs}ms) exceeds retry budget (per-delay ${this.maxRetryDelayMs}ms, remaining total ${remainingWaitMs}ms). Aborting retries.`,
 					);
 					return {
 						success: false,
@@ -205,11 +205,11 @@ class DiscordService extends NotificationChannel {
 				}
 
 				this.logger?.warn?.(
-					`Discord webhook rate limited (429). Retrying in ${effectiveDelayMs}ms (attempt ${attempt}/${this.maxRetries + 1})...`,
+					`Discord webhook rate limited (429). Retrying in ${rawDelayMs}ms (attempt ${attempt}/${this.maxRetries + 1})...`,
 				);
 
-				await sleep(effectiveDelayMs);
-				totalWaitMs += effectiveDelayMs;
+				await sleep(rawDelayMs);
+				totalWaitMs += rawDelayMs;
 			} catch (error) {
 				if (error && error.name === 'AbortError') {
 					return {
