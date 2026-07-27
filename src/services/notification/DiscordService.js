@@ -58,10 +58,15 @@ class DiscordService extends NotificationChannel {
 			const content = await this.formatAlert(alert);
 			const chunks = splitMessageIntoChunks(content, DISCORD_MESSAGE_LIMIT);
 			const messageIds = [];
+			let totalAttempts = 0;
 
 			for (const chunk of chunks) {
 				const result = await this.sendChunk(chunk);
+				totalAttempts += result.attemptCount || 0;
 				if (!result.success) {
+					if (result.statusCode === 429) {
+						return { ...result, attemptCount: totalAttempts };
+					}
 					return result;
 				}
 				messageIds.push(result.messageId);
@@ -166,6 +171,7 @@ class DiscordService extends NotificationChannel {
 						success: true,
 						channel: 'discord',
 						messageId: data.id || 'discord-webhook',
+						attemptCount: attempt,
 					};
 				}
 

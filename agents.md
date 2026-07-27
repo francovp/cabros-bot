@@ -1124,8 +1124,8 @@ Scanner presets support an independent `ENABLE_FIRESTORE_SCANNER_PRESETS=true` g
 
 ## Discord 429 Attempt Telemetry (CB-102 / Issue #254)
 
-Terminal Discord HTTP 429 results preserve the number of webhook requests actually made in `attemptCount`, including retry exhaustion and retry-budget aborts. `NotificationManager` forwards that value to Sentry and the Telegram admin failure message through both `sendToAll` and `sendToChannels`, while retaining fail-open channel isolation.
+Terminal Discord HTTP 429 results preserve the cumulative number of webhook requests actually made in `attemptCount`, including requests for earlier successful message chunks, retry exhaustion, and retry-budget aborts. `NotificationManager` forwards that value to Sentry and the Telegram admin failure message through both `sendToAll` and `sendToChannels`, while retaining fail-open channel isolation.
 
 **Coverage**:
-- `tests/unit/discord-service.test.js` verifies exhausted retries return `attemptCount: 3` and budget-aborted retries return the count actually made.
+- `tests/unit/discord-service.test.js` verifies exhausted retries return `attemptCount: 3`, budget-aborted retries return the count actually made, and later chunk failures include earlier chunk requests.
 - `tests/unit/notification-manager.test.js` verifies Sentry and admin failure telemetry for both notification dispatch paths.
