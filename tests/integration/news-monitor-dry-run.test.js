@@ -1,7 +1,7 @@
 const request = require('supertest');
 const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
-const { initializeNotificationServices } = require('../../src/controllers/webhooks/handlers/alert/alert');
+const { initializeNotificationServices, getNotificationManager } = require('../../src/controllers/webhooks/handlers/alert/alert');
 const { getCacheInstance } = require('../../src/controllers/webhooks/handlers/newsMonitor/cache');
 const signalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
 
@@ -20,6 +20,7 @@ describe('News Monitor dry-run mode', () => {
 	let cache;
 	let cacheSetSpy;
 	let cacheClaimSpy;
+	let originalDiscordEnabled;
 
 	beforeEach(async () => {
 		process.env = {
@@ -77,6 +78,7 @@ describe('News Monitor dry-run mode', () => {
 
 		await initializeNotificationServices(mockBot);
 		app.use('/api', getRoutes(mockBot));
+		originalDiscordEnabled = getNotificationManager().channels.get('discord').enabled;
 
 		cache = getCacheInstance();
 		cache.clear();
@@ -85,6 +87,7 @@ describe('News Monitor dry-run mode', () => {
 	});
 
 	afterEach(() => {
+		getNotificationManager().channels.get('discord').enabled = originalDiscordEnabled;
 		cacheSetSpy?.mockRestore();
 		cacheClaimSpy?.mockRestore();
 		process.env = originalEnv;
@@ -140,5 +143,21 @@ describe('News Monitor dry-run mode', () => {
 		expect(cacheClaimSpy).not.toHaveBeenCalled();
 		expect(cacheSetSpy).not.toHaveBeenCalled();
 		expect(signalOutcomeService.recordSignal).not.toHaveBeenCalled();
+	});
+
+	it('rejects dry-run requests for disabled explicitly requested channels', async () => {
+		getNotificationManager().channels.get('discord').enabled = false;
+
+		const response = await request(app)
+			.get('/api/news-monitor?dryRun=true')
+			.set('x-api-key', 'test-key')
+			.query({ crypto: 'DRYBTC', channels: 'telegram,discord' })
+			.expect(400);
+
+		expect(response.body).toEqual(expect.objectContaining({
+			code: 'INVALID_REQUEST',
+			error: 'Requested channel(s) disabled or misconfigured: discord',
+		}));
+		expect(require('../../src/services/grounding/gemini').analyzeNewsForSymbol).not.toHaveBeenCalled();
 	});
 });

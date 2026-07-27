@@ -15,6 +15,7 @@ const { TokenUsageTracker } = require('../../../../lib/tokenUsage');
 const {
 	NotificationRoutingValidationError,
 	parseNotificationRouting,
+	validateNotificationRouting,
 	getRequestedChannels,
 	getDeliveredChannels,
 } = require('../../../../services/notification/requestRouting');
@@ -74,6 +75,9 @@ class NewsMonitorHandler {
 			const routing = req.method === 'GET'
 				? parseNotificationRouting(req.query, { allowQueryChannels: true })
 				: parseNotificationRouting(req.body);
+			if (dryRun) {
+				validateNotificationRouting(notificationManager, routing);
+			}
 			const { crypto, stocks } = this.parseRequest(req);
 			const allSymbols = [...(crypto || []), ...(stocks || [])];
 			const validationError = this.validateRequest(allSymbols);
