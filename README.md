@@ -420,6 +420,30 @@ Analyze financial news and market sentiment for crypto and stock symbols. Detect
 GET /api/news-monitor?crypto=BTCUSDT,ETHUSD&stocks=NVDA,MSFT
 ```
 
+Add `dryRun=true` to either GET or POST to run the same validation and analysis without sending Telegram, WhatsApp, or Discord notifications, claiming or writing news-dedup cache entries, or recording signal outcomes. The response includes `dryRun: true`, the generated alerts, the intended `requestedChannels`, and an empty `deliveredChannels` array. POST also accepts `dryRun: true` in the JSON body.
+
+```text
+GET /api/news-monitor?crypto=BTCUSDT&channels=telegram,whatsapp&dryRun=true
+POST /api/news-monitor?dryRun=true
+```
+
+Dry-run response excerpt:
+```json
+{
+  "success": true,
+  "dryRun": true,
+  "requestedChannels": ["telegram", "whatsapp"],
+  "deliveredChannels": [],
+  "results": [{
+    "symbol": "BTCUSDT",
+    "status": "analyzed",
+    "alert": { "eventCategory": "price_surge", "headline": "Bitcoin breaks resistance" },
+    "deliveryResults": [],
+    "cached": false
+  }]
+}
+```
+
 **Response:**
 ```json
 {

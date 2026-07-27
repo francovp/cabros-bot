@@ -19,6 +19,12 @@ const {
 	getDeliveredChannels,
 } = require('../../../../services/notification/requestRouting');
 
+function resolveDryRun(req) {
+	const queryFlag = req.query && (req.query.dryRun === 'true' || req.query.dryRun === true);
+	const bodyFlag = req.body && typeof req.body === 'object' && (req.body.dryRun === true || req.body.dryRun === 'true');
+	return queryFlag || bodyFlag;
+}
+
 class NewsMonitorHandler {
 	constructor() {
 		this.analyzer = getAnalyzer();
@@ -47,6 +53,7 @@ class NewsMonitorHandler {
 
 		try {
 			const requestSpan = sentryService.getActiveSpan();
+			const dryRun = resolveDryRun(req);
 
 			// Inject notification manager into analyzer (set once before analysis)
 			const notificationManager = getNotificationManager();
@@ -106,7 +113,7 @@ class NewsMonitorHandler {
 			let results;
 			let summary;
 			try {
-				results = await this.analyzer.analyzeSymbols(symbolsToAnalyze, requestId, tokenUsage, routing);
+				results = await this.analyzer.analyzeSymbols(symbolsToAnalyze, requestId, tokenUsage, routing, { dryRun });
 				summary = this.generateSummary(results);
 				if (analysisSpan && typeof analysisSpan.setAttribute === 'function') {
 					analysisSpan.setAttribute('news.quota_exhausted', summary.quota_exhausted);
@@ -128,6 +135,10 @@ class NewsMonitorHandler {
 				requestId,
 				tokenUsage: tokenUsage.toJSON(),
 			};
+
+			if (dryRun) {
+				response.dryRun = true;
+			}
 
 			if (!response.partial_success) {
 				delete response.partial_success;
