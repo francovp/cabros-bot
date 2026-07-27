@@ -744,6 +744,7 @@ See `/specs/TERMINOLOGY_GUIDE.md` for extended discussion and examples.
 - GH-239 / CB-96: job creation, retry, and retry-failed endpoints now use the shared bounded in-memory idempotency middleware, replay matching responses, and reject fingerprint conflicts with `409 IDEMPOTENCY_CONFLICT`; OpenAPI, README, Postman, and integration coverage were updated.
 - GH-183 / CB-78: Azure, OpenRouter, and Cloudflare `llmCallv2()` results now return normalized token usage for downstream `tokenUsage` aggregation; the shared normalizer accepts OpenAI-compatible `prompt_tokens`, `completion_tokens`, and `total_tokens` fields.
 - GH-199 / CB-83: `detect-unused-features` derives disabled flags, status mappings, indirect env lookups, `.env.example` gaps, and Sentry profiling findings from the fresh protected capabilities response and current repository files; dated snapshots are guidance-free and a healthy-data dry run guards against stale issues.
+- GH-242 / CB-99: Generic grounding alerts now retain their full text unless the strict TradingView signal parser validates a symbol; this prevents ordinary first words such as `THE` or `BITCOIN` from becoming unrelated stock queries. Regression coverage lives in `tests/unit/tradingview-signal-parser.test.js` and `tests/unit/grounding.test.js`.
 
 ## Architectural Patterns & Extension Guide
 

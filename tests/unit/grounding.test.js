@@ -111,6 +111,23 @@ describe('Grounding Service', () => {
 			expect(call.options.systemPrompt).toBeUndefined();
 		});
 
+		it('should preserve generic alert text in the grounding search query', async () => {
+			const alert = 'The SEC approved a new filing for a listed company';
+			genaiClient.search.mockResolvedValueOnce({ results: [], totalResults: 0 });
+			generateEnrichedAlert.mockResolvedValueOnce({
+				sentiment: 'NEUTRAL',
+				sentiment_score: 0.5,
+				insights: [],
+				sources: [],
+			});
+
+			await groundAlert({ text: alert });
+
+			expect(genaiClient.search).toHaveBeenCalledWith(expect.objectContaining({
+				query: alert,
+			}));
+		});
+
 		it('should use NEWS_ANALYSIS prompt when requested', async () => {
 			genaiClient.search.mockResolvedValueOnce({ results: [], totalResults: 0 });
 			generateEnrichedAlert.mockResolvedValueOnce({

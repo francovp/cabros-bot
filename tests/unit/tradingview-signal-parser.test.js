@@ -68,5 +68,16 @@ describe('TradingView signal parser', () => {
 		expect(deriveCleanSearchQuery('BATS:AAPL(D) cambió a señal de COMPRA')).toBe('AAPL stock price news market analyst');
 		expect(deriveCleanSearchQuery('BINANCE:BTCUSDT(1H) cambió a señal de COMPRA')).toBe('BTCUSDT crypto price news market analyst');
 	});
-});
 
+	it('preserves generic prose instead of inferring its first word as a stock symbol', () => {
+		const alerts = [
+			'The SEC approved a new filing for a listed company',
+			'Bitcoin ETF inflows accelerated after the market opened',
+		];
+
+		for (const alert of alerts) {
+			expect(deriveAssetContext(alert)).toBeNull();
+			expect(deriveCleanSearchQuery(alert)).toBe(alert);
+		}
+	});
+});

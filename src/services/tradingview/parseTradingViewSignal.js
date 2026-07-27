@@ -124,27 +124,9 @@ function deriveAssetContext(text) {
 		};
 	}
 
-	const match = text.match(/(?:^|\s)(?:(?<exchange>[A-Z]+):)?(?<symbol>[A-Z0-9._-]{2,20})/i);
-	if (match && match.groups && match.groups.symbol) {
-		const symbol = match.groups.symbol.toUpperCase();
-		const exchange = match.groups.exchange ? match.groups.exchange.toUpperCase() : null;
-
-		let assetClass = 'stock';
-		if (exchange && CRYPTO_EXCHANGES.has(exchange)) {
-			assetClass = 'crypto';
-		} else if (exchange && STOCK_EXCHANGES.has(exchange)) {
-			assetClass = 'stock';
-		} else if (CRYPTO_SUFFIXES.some(s => symbol.endsWith(s))) {
-			assetClass = 'crypto';
-		}
-
-		return {
-			symbol,
-			exchange,
-			assetClass,
-		};
-	}
-
+	// Do not infer an asset from the first word of ordinary prose. Only the
+	// validated TradingView signal shape above is strong enough to replace the
+	// full alert with a symbol-focused query.
 	return null;
 }
 
@@ -180,4 +162,3 @@ module.exports = {
 	deriveCleanSearchQuery,
 	SUPPORTED_MCP_TIMEFRAMES,
 };
-
