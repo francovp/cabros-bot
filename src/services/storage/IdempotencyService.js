@@ -67,6 +67,29 @@ class IdempotencyService {
 	}
 
 	/**
+	 * Canonicalize JSON-compatible payloads so object member order does not
+	 * change the idempotency fingerprint while array order remains significant.
+	 * @param {any} payload
+	 * @returns {any}
+	 */
+	canonicalizePayload(payload) {
+		if (Array.isArray(payload)) {
+			return payload.map((item) => this.canonicalizePayload(item));
+		}
+
+		if (payload && typeof payload === 'object') {
+			return Object.keys(payload)
+				.sort()
+				.reduce((canonical, key) => {
+					canonical[key] = this.canonicalizePayload(payload[key]);
+					return canonical;
+				}, {});
+		}
+
+		return payload;
+	}
+
+	/**
 	 * Hash the request body/payload to verify it hasn't changed on retry
 	 * @param {any} payload
 	 * @returns {string} SHA-256 hash of serialized payload
@@ -74,7 +97,7 @@ class IdempotencyService {
 	hashPayload(payload) {
 		const serialized = typeof payload === 'string'
 			? payload
-			: JSON.stringify(payload || {});
+			: JSON.stringify(this.canonicalizePayload(payload || {}));
 		return crypto.createHash('sha256').update(serialized).digest('hex');
 	}
 

@@ -144,8 +144,9 @@
     "/api/jobs/tradingview-analysis": {
       "post": {
         "tags": ["Jobs"], "summary": "Create an asynchronous TradingView job", "operationId": "createTradingViewJob",
+        "parameters": [{ "$ref": "#/components/parameters/IdempotencyKey" }],
         "requestBody": { "$ref": "#/components/requestBodies/TradingViewJob" },
-        "responses": { "201": { "$ref": "#/components/responses/JobResult" }, "400": { "$ref": "#/components/responses/Error" }, "500": { "$ref": "#/components/responses/Error" } },
+        "responses": { "201": { "$ref": "#/components/responses/JobResult" }, "400": { "$ref": "#/components/responses/Error" }, "409": { "$ref": "#/components/responses/IdempotencyConflict" }, "500": { "$ref": "#/components/responses/Error" } },
         "security": [{ "ApiKeyHeader": [] }, { "ApiKeyQuery": [] }]
       }
     },
@@ -176,16 +177,16 @@
     "/api/jobs/{jobId}/retry": {
       "post": {
         "tags": ["Jobs"], "summary": "Retry a failed job", "operationId": "retryJob",
-        "parameters": [{ "$ref": "#/components/parameters/JobId" }],
-        "responses": { "201": { "$ref": "#/components/responses/JobResult" }, "404": { "$ref": "#/components/responses/Error" }, "409": { "$ref": "#/components/responses/Error" }, "500": { "$ref": "#/components/responses/Error" } },
+        "parameters": [{ "$ref": "#/components/parameters/JobId" }, { "$ref": "#/components/parameters/IdempotencyKey" }],
+        "responses": { "201": { "$ref": "#/components/responses/JobResult" }, "404": { "$ref": "#/components/responses/Error" }, "409": { "$ref": "#/components/responses/JobConflict" }, "500": { "$ref": "#/components/responses/Error" } },
         "security": [{ "ApiKeyHeader": [] }, { "ApiKeyQuery": [] }]
       }
     },
     "/api/jobs/{jobId}/retry-failed": {
       "post": {
         "tags": ["Jobs"], "summary": "Retry failed items in a completed job", "operationId": "retryFailedJobItems",
-        "parameters": [{ "$ref": "#/components/parameters/JobId" }],
-        "responses": { "201": { "$ref": "#/components/responses/JobResult" }, "400": { "$ref": "#/components/responses/Error" }, "404": { "$ref": "#/components/responses/Error" }, "409": { "$ref": "#/components/responses/Error" }, "500": { "$ref": "#/components/responses/Error" } },
+        "parameters": [{ "$ref": "#/components/parameters/JobId" }, { "$ref": "#/components/parameters/IdempotencyKey" }],
+        "responses": { "201": { "$ref": "#/components/responses/JobResult" }, "400": { "$ref": "#/components/responses/Error" }, "404": { "$ref": "#/components/responses/Error" }, "409": { "$ref": "#/components/responses/JobConflict" }, "500": { "$ref": "#/components/responses/Error" } },
         "security": [{ "ApiKeyHeader": [] }, { "ApiKeyQuery": [] }]
       }
     },
@@ -227,6 +228,7 @@
       "AlertId": { "name": "alertId", "in": "path", "required": true, "schema": { "type": "string" }, "example": "alert-123" },
       "PresetId": { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
       "JobId": { "name": "jobId", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+      "IdempotencyKey": { "name": "idempotency-key", "in": "header", "required": false, "schema": { "type": "string", "minLength": 1 }, "description": "Optional client-generated key. Matching concurrent or sequential requests replay the original response and jobId; reuse with a different request fingerprint returns 409 IDEMPOTENCY_CONFLICT. The response includes Idempotency-Replay: false for the first request and true for a replay." },
       "DryRun": { "name": "dryRun", "in": "query", "schema": { "type": "boolean", "default": false } },
       "UseTradingViewData": { "name": "useTradingViewData", "in": "query", "schema": { "type": "boolean", "default": false } },
       "AlertListLimit": { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 50 } },
@@ -261,6 +263,8 @@
     "responses": {
       "Unauthorized": { "description": "API key rejected", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }, "example": { "error": "Unauthorized", "code": "UNAUTHORIZED" } } } },
       "Error": { "description": "Request or service error", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }, "example": { "error": "Invalid request", "code": "INVALID_REQUEST" } } } },
+      "IdempotencyConflict": { "description": "The idempotency key was reused with a different request fingerprint", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }, "example": { "error": "Idempotency key was reused with a different payload", "code": "IDEMPOTENCY_CONFLICT" } } } },
+      "JobConflict": { "description": "A job retry conflict, either because the job is not retryable or because the idempotency key conflicts with an earlier request", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }, "examples": { "idempotency": { "summary": "Idempotency key conflict", "value": { "error": "Idempotency key was reused with a different payload", "code": "IDEMPOTENCY_CONFLICT" } }, "notRetryable": { "summary": "Job is not retryable", "value": { "success": false, "error": "Job cannot be retried. Current status: completed", "code": "NOT_RETRYABLE" } }, "jobActive": { "summary": "Job is still processing", "value": { "success": false, "error": "Cannot retry a currently processing job.", "code": "JOB_ACTIVE" } }, "missingMetadata": { "summary": "Job metadata is unavailable", "value": { "success": false, "error": "Missing job request metadata for retry.", "code": "MISSING_METADATA" } } } } } },
       "JsonResult": { "description": "Successful JSON response", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/JsonObject" } } } },
       "ScannerPresetResult": { "description": "Scanner preset response including the effective durable or ephemeral storage mode", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ScannerPresetResponse" }, "examples": { "durable": { "value": { "success": true, "storage": { "enabled": true, "configured": true, "ready": true, "status": "ready", "mode": "durable", "backend": "firestore" }, "preset": { "id": "83d1a85e-d433-4aa1-96b9-e62468bf0397", "name": "Daily Scan", "exchange": "BINANCE", "timeframe": "4h", "scans": ["top_gainers"], "limit": 5, "bbwThreshold": 0.05 } } }, "ephemeral": { "value": { "success": true, "storage": { "enabled": true, "configured": false, "ready": false, "status": "misconfigured", "mode": "ephemeral", "backend": "memory" }, "preset": { "id": "83d1a85e-d433-4aa1-96b9-e62468bf0397", "name": "Fallback scan" } } } } } } },
       "DeliveryResult": { "description": "Per-channel delivery result", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DeliveryResult" }, "example": { "success": true, "results": [{ "channel": "telegram", "success": true }] } } } },
@@ -361,6 +365,7 @@
         "type": "object",
         "properties": {
           "success": { "type": "boolean" },
+          "idempotencyReplayed": { "type": "boolean", "description": "Present and true when the response was replayed from a matching idempotency key." },
           "jobId": { "type": "string", "format": "uuid" },
           "type": { "type": "string", "enum": ["expanded-analysis", "market-scanner"] },
           "status": {
