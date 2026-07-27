@@ -86,6 +86,8 @@ describe('PromptService', () => {
 			languageDirective: 'Respond in Spanish.',
 		});
 		expect(prompt.source).toBe('langfuse');
+		expect(prompt.name).toBe('alert-enrichment');
+		expect(prompt.label).toBe('staging');
 		expect(prompt.version).toBe(7);
 		expect(prompt.systemPrompt).toBe('Remote system prompt');
 		expect(prompt.userPrompt).toBe('Remote user prompt');

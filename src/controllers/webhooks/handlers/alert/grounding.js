@@ -127,6 +127,7 @@ function mergeEnrichmentData(text, geminiEnriched, mcpEnriched) {
 		extraText,
 		confluenceData: mcp.confluenceData || null,
 		multiTimeframeData: mcp.multiTimeframeData || null,
+		...(gemini.promptProvenance ? { promptProvenance: gemini.promptProvenance } : {}),
 		...Object.fromEntries(
 			Object.entries(optionalRiskMetadata).filter(([, value]) => value !== undefined),
 		),
@@ -141,6 +142,7 @@ async function enrichWithGemini(text, tokenUsage) {
 		sources,
 		truncated,
 		modelUsed,
+		promptProvenance,
 		invalidation_level,
 		target_level,
 		setup_type,
@@ -168,6 +170,7 @@ async function enrichWithGemini(text, tokenUsage) {
 		sources,
 		truncated,
 		extraText,
+		...(promptProvenance ? { promptProvenance } : {}),
 		...Object.fromEntries(
 			Object.entries({ invalidation_level, target_level, setup_type, risk_reward_ratio })
 				.filter(([, value]) => value !== undefined),

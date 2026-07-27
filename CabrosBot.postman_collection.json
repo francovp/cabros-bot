@@ -1298,6 +1298,53 @@
               ]
             }
           }
+        },
+        {
+          "name": "POST News Monitor (dry run)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"crypto\": [\"BTCUSDT\"],\n  \"channels\": [\"telegram\", \"whatsapp\", \"discord\"]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/news-monitor?dryRun=true",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "news-monitor"
+              ],
+              "query": [
+                {
+                  "key": "dryRun",
+                  "value": "true"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 OK - Dry run",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"results\": [{\n    \"symbol\": \"BTCUSDT\",\n    \"status\": \"analyzed\",\n    \"alert\": {\n      \"eventCategory\": \"price_surge\",\n      \"headline\": \"Bitcoin breaks resistance\"\n    },\n    \"deliveryResults\": [],\n    \"cached\": false\n  }],\n  \"summary\": {\n    \"total\": 1,\n    \"analyzed\": 1,\n    \"cached\": 0,\n    \"timeout\": 0,\n    \"error\": 0,\n    \"quota_exhausted\": 0,\n    \"alerts_sent\": 1\n  },\n  \"requestedChannels\": [\"telegram\", \"whatsapp\", \"discord\"],\n  \"deliveredChannels\": [],\n  \"requestId\": \"req-dryrun123\"\n}"
+            }
+          ]
         }
       ]
     },
@@ -1365,6 +1412,38 @@
           }
         },
         {
+          "name": "GET Alert Analytics Summary (risk coverage)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/summary?from=2026-06-06T00:00:00.000Z&to=2026-06-07T00:00:00.000Z&limit=500",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "alerts", "summary"],
+              "query": [
+                { "key": "from", "value": "2026-06-06T00:00:00.000Z" },
+                { "key": "to", "value": "2026-06-07T00:00:00.000Z" },
+                { "key": "limit", "value": "500" }
+              ]
+            },
+            "description": "Protected summary response showing zero-safe risk metadata coverage grouped by non-sensitive Langfuse/local prompt provenance."
+          },
+          "response": [
+            {
+              "name": "200 OK - Risk metadata coverage",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"summary\": {\n    \"enrichment\": {\n      \"enrichedAlerts\": 2,\n      \"plainAlerts\": 0,\n      \"riskMetadataCoverage\": {\n        \"denominator\": 2,\n        \"fields\": {\n          \"invalidation_level\": {\n            \"populated\": 1,\n            \"percentage\": 50\n          },\n          \"target_level\": {\n            \"populated\": 1,\n            \"percentage\": 50\n          },\n          \"setup_type\": {\n            \"populated\": 1,\n            \"percentage\": 50\n          },\n          \"risk_reward_ratio\": {\n            \"populated\": 1,\n            \"percentage\": 50\n          }\n        },\n        \"byPromptProvenance\": [\n          {\n            \"provenance\": {\n              \"name\": \"alert-enrichment\",\n              \"source\": \"langfuse\",\n              \"label\": \"production\",\n              \"version\": 12\n            },\n            \"denominator\": 1,\n            \"fields\": {\n              \"invalidation_level\": {\n                \"populated\": 1,\n                \"percentage\": 100\n              },\n              \"target_level\": {\n                \"populated\": 1,\n                \"percentage\": 100\n              },\n              \"setup_type\": {\n                \"populated\": 1,\n                \"percentage\": 100\n              },\n              \"risk_reward_ratio\": {\n                \"populated\": 1,\n                \"percentage\": 100\n              }\n            }\n          },\n          {\n            \"provenance\": {\n              \"name\": \"alert-enrichment\",\n              \"source\": \"local\",\n              \"label\": null,\n              \"version\": null\n            },\n            \"denominator\": 1,\n            \"fields\": {\n              \"invalidation_level\": {\n                \"populated\": 0,\n                \"percentage\": 0\n              },\n              \"target_level\": {\n                \"populated\": 0,\n                \"percentage\": 0\n              },\n              \"setup_type\": {\n                \"populated\": 0,\n                \"percentage\": 0\n              },\n              \"risk_reward_ratio\": {\n                \"populated\": 0,\n                \"percentage\": 0\n              }\n            }\n          }\n        ]\n      }\n    },\n    \"shadowModeMetrics\": \"No measurements found\"\n  }\n}"
+            }
+          ]
+        },
+        {
           "name": "GET Alert Analytics Summary",
           "request": {
             "method": "GET",
@@ -1407,7 +1486,7 @@
               "name": "200 OK - Analytics summary",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"summary\": {\n    \"window\": {\n      \"from\": \"2026-06-06T00:00:00.000Z\",\n      \"to\": \"2026-06-07T00:00:00.000Z\",\n      \"limit\": 500,\n      \"maxDays\": 31\n    },\n    \"totalAlerts\": 2,\n    \"bySource\": { \"webhook\": 2 },\n    \"bySymbol\": { \"BTCUSDT\": 1, \"ETHUSDT\": 1 },\n    \"byFeatureFlag\": {\n      \"enriched\": 1,\n      \"plain\": 1,\n      \"tradingViewData\": 1,\n      \"withoutTradingViewData\": 1\n    },\n    \"enrichment\": {\n      \"enrichedAlerts\": 1,\n      \"plainAlerts\": 1,\n      \"tokenUsage\": {\n        \"inputTokens\": 10,\n        \"outputTokens\": 20,\n        \"totalTokens\": 30,\n        \"totalCost\": 0.001\n      }\n    },\n    \"delivery\": {\n      \"totalSuccess\": 2,\n      \"totalFailure\": 1,\n      \"byChannel\": {\n        \"telegram\": { \"total\": 2, \"success\": 1, \"failure\": 1 },\n        \"whatsapp\": { \"total\": 1, \"success\": 1, \"failure\": 0 }\n      }\n    },\n    \"latency\": {\n      \"averageProcessingMs\": 250,\n      \"averageDeliveryMs\": 150\n    },\n    \"shadowModeMetrics\": {\n      \"totalSignalsEvaluated\": 1,\n      \"windows\": {\n        \"1h\": {\n          \"totalSignals\": 1,\n          \"hitRatePercent\": 100,\n          \"averageReturnPercent\": 0.7353,\n          \"averageMfePercent\": 0.7353,\n          \"averageMaePercent\": 0.0,\n          \"maxAdverseExcursionPercent\": 0.0\n        }\n      },\n      \"drawdownProxy\": {\n        \"averageMaxAdverseExcursionPercent\": 0.0,\n        \"absoluteMaxAdverseExcursionPercent\": 0.0\n      },\n      \"falsePositiveCandidatesCount\": 0,\n      \"falsePositiveCandidates\": [],\n      \"latencyCostMetadata\": {\n        \"averageProcessingTimeMs\": 250,\n        \"tokenUsage\": {\n          \"inputTokens\": 10,\n          \"outputTokens\": 20,\n          \"totalCost\": 0.001\n        }\n      }\n    }\n  }\n}"
+              "body": "{\n  \"success\": true,\n  \"summary\": {\n    \"window\": {\n      \"from\": \"2026-06-06T00:00:00.000Z\",\n      \"to\": \"2026-06-07T00:00:00.000Z\",\n      \"limit\": 500,\n      \"maxDays\": 31\n    },\n    \"totalAlerts\": 2,\n    \"bySource\": { \"webhook\": 2 },\n    \"bySymbol\": { \"BTCUSDT\": 1, \"ETHUSDT\": 1 },\n    \"byFeatureFlag\": {\n      \"enriched\": 1,\n      \"plain\": 1,\n      \"tradingViewData\": 1,\n      \"withoutTradingViewData\": 1\n    },\n    \"enrichment\": {\n      \"enrichedAlerts\": 1,\n      \"plainAlerts\": 1,\n      \"riskMetadataCoverage\": {\n        \"denominator\": 1,\n        \"fields\": {\n          \"invalidation_level\": {\n            \"populatedCount\": 1,\n            \"percentage\": 100\n          },\n          \"target_level\": {\n            \"populatedCount\": 1,\n            \"percentage\": 100\n          },\n          \"setup_type\": {\n            \"populatedCount\": 1,\n            \"percentage\": 100\n          },\n          \"risk_reward_ratio\": {\n            \"populatedCount\": 1,\n            \"percentage\": 100\n          }\n        },\n        \"byPromptProvenance\": {\n          \"alert-enrichment:langfuse:production:1\": {\n            \"name\": \"alert-enrichment\",\n            \"source\": \"langfuse\",\n            \"label\": \"production\",\n            \"version\": 1,\n            \"denominator\": 1,\n            \"fields\": {\n              \"invalidation_level\": {\n                \"populatedCount\": 1,\n                \"percentage\": 100\n              },\n              \"target_level\": {\n                \"populatedCount\": 1,\n                \"percentage\": 100\n              },\n              \"setup_type\": {\n                \"populatedCount\": 1,\n                \"percentage\": 100\n              },\n              \"risk_reward_ratio\": {\n                \"populatedCount\": 1,\n                \"percentage\": 100\n              }\n            }\n          }\n        }\n      },\n      \"tokenUsage\": {\n        \"inputTokens\": 10,\n        \"outputTokens\": 20,\n        \"totalTokens\": 30,\n        \"totalCost\": 0.001\n      }\n    },\n    \"delivery\": {\n      \"totalSuccess\": 2,\n      \"totalFailure\": 1,\n      \"byChannel\": {\n        \"telegram\": { \"total\": 2, \"success\": 1, \"failure\": 1 },\n        \"whatsapp\": { \"total\": 1, \"success\": 1, \"failure\": 0 }\n      }\n    },\n    \"latency\": {\n      \"averageProcessingMs\": 250,\n      \"averageDeliveryMs\": 150\n    },\n    \"shadowModeMetrics\": {\n      \"totalSignalsEvaluated\": 1,\n      \"windows\": {\n        \"1h\": {\n          \"totalSignals\": 1,\n          \"hitRatePercent\": 100,\n          \"averageReturnPercent\": 0.7353,\n          \"averageMfePercent\": 0.7353,\n          \"averageMaePercent\": 0.0,\n          \"maxAdverseExcursionPercent\": 0.0\n        }\n      },\n      \"drawdownProxy\": {\n        \"averageMaxAdverseExcursionPercent\": 0.0,\n        \"absoluteMaxAdverseExcursionPercent\": 0.0\n      },\n      \"falsePositiveCandidatesCount\": 0,\n      \"falsePositiveCandidates\": [],\n      \"latencyCostMetadata\": {\n        \"averageProcessingTimeMs\": 250,\n        \"tokenUsage\": {\n          \"inputTokens\": 10,\n          \"outputTokens\": 20,\n          \"totalCost\": 0.001\n        }\n      }\n    }\n  }\n}"
             }
           ]
         },

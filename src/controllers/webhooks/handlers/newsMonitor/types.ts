@@ -111,9 +111,12 @@ export interface AnalysisSummary {
  */
 export interface NewsMonitorResponse {
   success: boolean;
+  dryRun?: boolean;
   partial_success?: boolean;
   results: AnalysisResult[];
   summary: AnalysisSummary;
+  requestedChannels?: string[];
+  deliveredChannels?: string[];
   totalDurationMs: number;
   requestId: string;
 }
@@ -124,6 +127,10 @@ export interface NewsMonitorResponse {
 export interface NewsMonitorRequest {
   crypto?: string[];
   stocks?: string[];
+  dryRun?: boolean;
+  channels?: Array<'telegram' | 'whatsapp' | 'discord'>;
+  telegramChatId?: string;
+  whatsappChatId?: string;
 }
 
 /**

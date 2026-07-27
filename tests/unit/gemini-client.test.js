@@ -73,7 +73,19 @@ describe('Gemini Service', () => {
 			expect(result.sentiment).toBe('BULLISH');
 			expect(result.sentiment_score).toBe(0.9);
 			expect(result.insights).toHaveLength(2);
+			expect(result.prompt_provenance).toEqual({
+				name: 'alert-enrichment',
+				source: 'local',
+				label: null,
+				version: null,
+			});
 			expect(result).not.toHaveProperty('technical_levels');
+			expect(result.promptProvenance).toEqual({
+				name: 'alert-enrichment',
+				source: 'local',
+				label: null,
+				version: null,
+			});
 			// sources are not returned by generateEnrichedAlert
 		});
 

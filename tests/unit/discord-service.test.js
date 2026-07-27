@@ -281,6 +281,57 @@ describe('DiscordService', () => {
 			expect(global.fetch).toHaveBeenCalledTimes(4);
 		});
 
+		it('aborts retry loop without retrying early if retry delay exceeds maxRetryDelayMs budget', async () => {
+			service = new DiscordService({
+				logger: mockLogger,
+				maxRetries: 3,
+				maxRetryDelayMs: 5000,
+				maxTotalRetryWaitMs: 60000,
+			});
+			await service.validate();
+
+			const headers = new Map([['retry-after', '30']]); // 30 seconds = 30000ms > maxRetryDelayMs (5000ms)
+			global.fetch = jest.fn().mockResolvedValue({
+				ok: false,
+				status: 429,
+				headers,
+				text: async () => JSON.stringify({ message: 'You are being rate limited.', retry_after: 30 }),
+			});
+
+			const result = await service.send({ text: 'Discord alert' });
+
+			expect(result.success).toBe(false);
+			expect(result.statusCode).toBe(429);
+			expect(result.error).toContain('Discord webhook 429');
+			expect(global.fetch).toHaveBeenCalledTimes(1);
+			expect(mockLogger.warn).toHaveBeenCalledWith(
+				expect.stringContaining('exceeds max retry delay limit'),
+			);
+		});
+
+		it('aborts retry loop without retrying early if retry_after in JSON body exceeds maxRetryDelayMs budget', async () => {
+			service = new DiscordService({
+				logger: mockLogger,
+				maxRetries: 3,
+				maxRetryDelayMs: 2000,
+				maxTotalRetryWaitMs: 60000,
+			});
+			await service.validate();
+
+			global.fetch = jest.fn().mockResolvedValue({
+				ok: false,
+				status: 429,
+				headers: new Map(),
+				text: async () => JSON.stringify({ message: 'Rate limited', retry_after: 10 }),
+			});
+
+			const result = await service.send({ text: 'Discord alert' });
+
+			expect(result.success).toBe(false);
+			expect(result.statusCode).toBe(429);
+			expect(global.fetch).toHaveBeenCalledTimes(1);
+		});
+
 		it('returns a failed result when the webhook request times out', async () => {
 			global.fetch.mockImplementation(async (_url, options) => {
 				options.signal.dispatchEvent(new Event('abort'));

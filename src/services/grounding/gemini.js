@@ -56,6 +56,26 @@ function parseOptionalSetupType(value) {
 	return SETUP_TYPES.has(normalized) ? normalized : undefined;
 }
 
+function getPromptProvenance(prompt) {
+	const name = typeof prompt?.name === 'string' && prompt.name.trim()
+		? prompt.name.trim()
+		: null;
+	const source = ['langfuse', 'local'].includes(prompt?.source)
+		? prompt.source
+		: null;
+
+	if (!name || !source) {
+		return null;
+	}
+
+	return {
+		name,
+		source,
+		label: typeof prompt.label === 'string' && prompt.label.trim() ? prompt.label.trim() : null,
+		version: Number.isInteger(prompt.version) ? prompt.version : null,
+	};
+}
+
 const domainQuality = require('./domainQuality');
 
 function shouldRetryGeminiWithFallback(error) {
@@ -580,7 +600,7 @@ async function generateEnrichedAlert({ text, searchResults = [], searchResultTex
 	const contextSnippet = buildContextSnippet(searchResultText);
 	const alertContext = `${text}${contextPrompt}${contextSnippet}`;
 	console.debug('[Gemini] Generating enriched alert with context:', alertContext);
-	const { systemPrompt, userPrompt } = await promptService.getChatPrompt(
+	const prompt = await promptService.getChatPrompt(
 		PromptKeys.ALERT_ENRICHMENT,
 		{
 			alertContext,
@@ -588,6 +608,8 @@ async function generateEnrichedAlert({ text, searchResults = [], searchResultTex
 		},
 		{ systemPromptOverride },
 	);
+	const { systemPrompt, userPrompt } = prompt;
+	const promptProvenance = getPromptProvenance(prompt);
 
 	try {
 		const llmParams = {
@@ -608,6 +630,7 @@ async function generateEnrichedAlert({ text, searchResults = [], searchResultTex
 				sentiment_score: 0.5,
 				insights: [],
 				modelUsed: GEMINI_MODEL_NAME || 'unknown',
+				...(promptProvenance ? { promptProvenance } : {}),
 			};
 		}
 
@@ -635,6 +658,7 @@ async function generateEnrichedAlert({ text, searchResults = [], searchResultTex
 		return {
 			...parseEnrichedAlertResponse(responseText),
 			modelUsed: modelUsed || GEMINI_MODEL_NAME,
+			...(promptProvenance ? { promptProvenance } : {}),
 		};
 	} catch (error) {
 		throw new Error(`Enriched alert generation failed: ${error.message}`);

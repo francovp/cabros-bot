@@ -317,7 +317,7 @@ class NewsAnalyzer {
    * @param {string} requestId - Correlation ID for tracing
    * @returns {Promise<Object[]>} Array of AnalysisResult objects
    */
-	async analyzeSymbols(symbols, requestId, tokenUsage, routing = {}) {
+	async analyzeSymbols(symbols, requestId, tokenUsage, routing = {}, options = {}) {
 		const limit = Math.min(this.geminiConcurrency, symbols.length);
 		const results = [];
 		let nextIndex = 0;
@@ -328,7 +328,7 @@ class NewsAnalyzer {
 				const currentIndex = nextIndex;
 				nextIndex += 1;
 				const symbol = symbols[currentIndex];
-				results[currentIndex] = await this.analyzeSymbol(symbol, requestId, tokenUsage, routing, batchStartedAt).catch(error => ({
+				results[currentIndex] = await this.analyzeSymbol(symbol, requestId, tokenUsage, routing, batchStartedAt, options).catch(error => ({
 					symbol,
 					status: AnalysisStatus.ERROR,
 					error: {
@@ -347,7 +347,7 @@ class NewsAnalyzer {
 		return results;
 	}
 
-	async runSymbolAnalysisWithRetry(symbol, requestId, tokenUsage, routing, startedAt) {
+	async runSymbolAnalysisWithRetry(symbol, requestId, tokenUsage, routing, startedAt, options = {}) {
 		let attempt = 0;
 		let lastQuotaError = null;
 
@@ -364,7 +364,7 @@ class NewsAnalyzer {
 					timeoutHandle = setTimeout(() => reject(new Error('TIMEOUT')), remainingMs);
 				});
 				return await Promise.race([
-					this.analyzeSymbolInternal(symbol, requestId, tokenUsage, routing),
+					this.analyzeSymbolInternal(symbol, requestId, tokenUsage, routing, options),
 					timeoutPromise,
 				]);
 			} catch (error) {
@@ -403,7 +403,7 @@ class NewsAnalyzer {
    * @param {string} requestId - Correlation ID
    * @returns {Promise<Object>} AnalysisResult object
    */
-	async analyzeSymbol(symbol, requestId, tokenUsage, routing = {}, startedAt = Date.now()) {
+	async analyzeSymbol(symbol, requestId, tokenUsage, routing = {}, startedAt = Date.now(), options = {}) {
 		const startTime = startedAt;
 		const analysis = {
 			symbol,
@@ -415,7 +415,7 @@ class NewsAnalyzer {
 
 		try {
 			// Attempt to run analysis with timeout
-			const result = await this.runSymbolAnalysisWithRetry(symbol, requestId, tokenUsage, routing, startTime);
+			const result = await this.runSymbolAnalysisWithRetry(symbol, requestId, tokenUsage, routing, startTime, options);
 
 			return {
 				...analysis,
@@ -445,29 +445,33 @@ class NewsAnalyzer {
    * @param {string} requestId - Correlation ID
    * @returns {Promise<Object>} Partial AnalysisResult (status, alert, etc.)
    */
-	async analyzeSymbolInternal(symbol, requestId, tokenUsage, routing = {}) {
-		// Try cache first
-		for (const category of Object.values(EventCategory)) {
-			if (category === EventCategory.NONE) continue;
+	async analyzeSymbolInternal(symbol, requestId, tokenUsage, routing = {}, options = {}) {
+		const { dryRun = false } = options;
 
-			const cached = await this.cache.get(symbol, category);
-			if (cached) {
-				console.debug('[Analyzer] Returning cached result:', symbol, category);
-				let deliveryResults = cached.deliveryResults;
-				if (cached.alert) {
-					const notificationMgr = getNotificationManager();
-					if (shouldRedeliverCachedAlertForRequest(notificationMgr, cached, routing)) {
-						deliveryResults = await sendWithNotificationRouting(notificationMgr, cached.alert, routing);
-					} else if (!notificationMgr) {
-						deliveryResults = [];
+		// Try cache first
+		if (!dryRun) {
+			for (const category of Object.values(EventCategory)) {
+				if (category === EventCategory.NONE) continue;
+
+				const cached = await this.cache.get(symbol, category);
+				if (cached) {
+					console.debug('[Analyzer] Returning cached result:', symbol, category);
+					let deliveryResults = cached.deliveryResults;
+					if (cached.alert) {
+						const notificationMgr = getNotificationManager();
+						if (shouldRedeliverCachedAlertForRequest(notificationMgr, cached, routing)) {
+							deliveryResults = await sendWithNotificationRouting(notificationMgr, cached.alert, routing);
+						} else if (!notificationMgr) {
+							deliveryResults = [];
+						}
 					}
+					return {
+						status: AnalysisStatus.CACHED,
+						alert: cached.alert,
+						deliveryResults,
+						cached: true,
+					};
 				}
-				return {
-					status: AnalysisStatus.CACHED,
-					alert: cached.alert,
-					deliveryResults,
-					cached: true,
-				};
 			}
 		}
 
@@ -485,15 +489,17 @@ class NewsAnalyzer {
 
 		// If no event detected, cache and return
 		if (geminiAnalysis.event_category === EventCategory.NONE) {
-			await this.cache.set(symbol, EventCategory.NONE, {
-				alert: null,
-				analysisResult: {
-					symbol,
-					status: AnalysisStatus.ANALYZED,
-					cached: false,
-					requestId,
-				},
-			});
+			if (!dryRun) {
+				await this.cache.set(symbol, EventCategory.NONE, {
+					alert: null,
+					analysisResult: {
+						symbol,
+						status: AnalysisStatus.ANALYZED,
+						cached: false,
+						requestId,
+					},
+				});
+			}
 			return {
 				status: AnalysisStatus.ANALYZED,
 				alert: null,
@@ -504,15 +510,17 @@ class NewsAnalyzer {
 		// Check confidence threshold
 		if (geminiAnalysis.confidence < this.alertThreshold) {
 			console.info('[Analyzer] Confidence below threshold for', symbol, '-', geminiAnalysis.confidence.toFixed(2), '<', this.alertThreshold);
-			await this.cache.set(symbol, geminiAnalysis.event_category, {
-				alert: null,
-				analysisResult: {
-					symbol,
-					status: AnalysisStatus.ANALYZED,
-					cached: false,
-					requestId,
-				},
-			});
+			if (!dryRun) {
+				await this.cache.set(symbol, geminiAnalysis.event_category, {
+					alert: null,
+					analysisResult: {
+						symbol,
+						status: AnalysisStatus.ANALYZED,
+						cached: false,
+						requestId,
+					},
+				});
+			}
 			return {
 				status: AnalysisStatus.ANALYZED,
 				alert: null,
@@ -537,6 +545,16 @@ class NewsAnalyzer {
 		// Build alert object
 		const tokenUsageSummary = tokenUsage ? tokenUsage.toJSON() : null;
 		const alert = this.buildAlert(symbol, geminiAnalysis, marketContext, enrichmentMetadata, tokenUsageSummary);
+
+		if (dryRun) {
+			console.debug('[Analyzer] Dry-run mode: skipping delivery, signal outcome, and cache persistence');
+			return {
+				status: AnalysisStatus.ANALYZED,
+				alert,
+				deliveryResults: [],
+				cached: false,
+			};
+		}
 
 		// Claim the cache key atomically before delivering the alert to prevent race conditions
 		const claimed = await this.cache.claim(symbol, geminiAnalysis.event_category);
