@@ -247,6 +247,33 @@ describe('AlertStorageService', () => {
 			});
 		});
 
+		it('persists only safe prompt provenance fields with enriched alerts', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockAdd.mockResolvedValueOnce({ id: 'id-provenance' });
+
+			await AlertStorageService.saveAlert(buildParams({
+				enriched: true,
+				enrichmentData: {
+					promptProvenance: {
+						name: 'alert-enrichment',
+						source: 'langfuse',
+						label: 'production',
+						version: 12,
+						content: 'private prompt content must not persist',
+					},
+				},
+			}));
+
+			expect(mockAdd.mock.calls[0][0].enrichmentData).toEqual({
+				promptProvenance: {
+					name: 'alert-enrichment',
+					source: 'langfuse',
+					label: 'production',
+					version: 12,
+				},
+			});
+		});
+
 		it('persists requested channels for stored alert exports and replays', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 			mockAdd.mockResolvedValueOnce({ id: 'id-channels' });
@@ -854,6 +881,27 @@ describe('AlertStorageService', () => {
 				enrichment: {
 					enrichedAlerts: 1,
 					plainAlerts: 1,
+					riskMetadataCoverage: {
+						denominator: 1,
+						fields: {
+							invalidation_level: { populated: 0, percentage: 0 },
+							target_level: { populated: 0, percentage: 0 },
+							setup_type: { populated: 0, percentage: 0 },
+							risk_reward_ratio: { populated: 0, percentage: 0 },
+						},
+						byPromptProvenance: [
+							{
+								provenance: null,
+								denominator: 1,
+								fields: {
+									invalidation_level: { populated: 0, percentage: 0 },
+									target_level: { populated: 0, percentage: 0 },
+									setup_type: { populated: 0, percentage: 0 },
+									risk_reward_ratio: { populated: 0, percentage: 0 },
+								},
+							},
+						],
+					},
 					tokenUsage: {
 						inputTokens: 10,
 						outputTokens: 20,
@@ -875,6 +923,97 @@ describe('AlertStorageService', () => {
 				},
 			});
 			expect(JSON.stringify(result)).not.toContain('raw alert text');
+		});
+
+		it('measures risk metadata coverage by safe prompt provenance and ignores invalid values', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('alert-langfuse', {
+						receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+						enriched: true,
+						enrichmentData: {
+							promptProvenance: {
+								name: 'alert-enrichment',
+								source: 'langfuse',
+								label: 'production',
+								version: 12,
+							},
+							invalidation_level: '$80,000',
+							target_level: 90000,
+							setup_type: 'breakout',
+							risk_reward_ratio: '2:1',
+						},
+						source: 'webhook',
+					}),
+					buildQueryDoc('alert-local', {
+						receivedAt: buildTimestamp('2026-06-06T11:00:00.000Z'),
+						enriched: true,
+						enrichmentData: {
+							promptProvenance: {
+								name: 'alert-enrichment',
+								source: 'local',
+								label: null,
+								version: null,
+							},
+							invalidation_level: { price: 80000 },
+							target_level: '   ',
+							setup_type: 'scalp',
+							risk_reward_ratio: Number.NaN,
+						},
+						source: 'webhook',
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.summarizeAlerts({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+				limit: 200,
+			});
+
+			expect(result.enrichment.riskMetadataCoverage).toEqual({
+				denominator: 2,
+				fields: {
+					invalidation_level: { populated: 1, percentage: 50 },
+					target_level: { populated: 1, percentage: 50 },
+					setup_type: { populated: 1, percentage: 50 },
+					risk_reward_ratio: { populated: 1, percentage: 50 },
+				},
+				byPromptProvenance: [
+					{
+						provenance: {
+							name: 'alert-enrichment',
+							source: 'langfuse',
+							label: 'production',
+							version: 12,
+						},
+						denominator: 1,
+						fields: {
+							invalidation_level: { populated: 1, percentage: 100 },
+							target_level: { populated: 1, percentage: 100 },
+							setup_type: { populated: 1, percentage: 100 },
+							risk_reward_ratio: { populated: 1, percentage: 100 },
+						},
+					},
+					{
+						provenance: {
+							name: 'alert-enrichment',
+							source: 'local',
+							label: null,
+							version: null,
+						},
+						denominator: 1,
+						fields: {
+							invalidation_level: { populated: 0, percentage: 0 },
+							target_level: { populated: 0, percentage: 0 },
+							setup_type: { populated: 0, percentage: 0 },
+							risk_reward_ratio: { populated: 0, percentage: 0 },
+						},
+					},
+				],
+			});
 		});
 
 		it('populates bySymbol metrics from plain alert text strings when candidate object properties are missing', async () => {
