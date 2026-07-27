@@ -1121,3 +1121,11 @@ Scanner presets support an independent `ENABLE_FIRESTORE_SCANNER_PRESETS=true` g
 **Coverage and contracts**:
 - `tests/integration/generic-message-webhook.test.js` covers sequential and concurrent replay, single dispatch across Telegram/WhatsApp/Discord, message/channel/destination conflicts, and legacy no-key behavior.
 - `src/openapi/openapi.json` and `CabrosBot.postman_collection.json` document key locations, replay output, invalid key handling, and the message-specific conflict response without overriding the shared async-job conflict component.
+
+## Discord 429 Attempt Telemetry (CB-102 / Issue #254)
+
+Terminal Discord HTTP 429 results preserve the number of webhook requests actually made in `attemptCount`, including retry exhaustion and retry-budget aborts. `NotificationManager` forwards that value to Sentry and the Telegram admin failure message through both `sendToAll` and `sendToChannels`, while retaining fail-open channel isolation.
+
+**Coverage**:
+- `tests/unit/discord-service.test.js` verifies exhausted retries return `attemptCount: 3` and budget-aborted retries return the count actually made.
+- `tests/unit/notification-manager.test.js` verifies Sentry and admin failure telemetry for both notification dispatch paths.

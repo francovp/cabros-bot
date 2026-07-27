@@ -1,10 +1,30 @@
 const NotificationManager = require('../../src/services/notification/NotificationManager');
+const DiscordService = require('../../src/services/notification/DiscordService');
+const sentryService = require('../../src/services/monitoring/SentryService');
 
 describe('NotificationManager admin failure notifications', () => {
 	const originalAdminChatId = process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID;
+	const originalDiscordEnabled = process.env.ENABLE_DISCORD_ALERTS;
+	const originalDiscordWebhookUrl = process.env.DISCORD_WEBHOOK_URL;
+	const originalFetch = global.fetch;
 
 	afterEach(() => {
 		jest.restoreAllMocks();
+		if (originalFetch === undefined) {
+			delete global.fetch;
+		} else {
+			global.fetch = originalFetch;
+		}
+		if (originalDiscordEnabled === undefined) {
+			delete process.env.ENABLE_DISCORD_ALERTS;
+		} else {
+			process.env.ENABLE_DISCORD_ALERTS = originalDiscordEnabled;
+		}
+		if (originalDiscordWebhookUrl === undefined) {
+			delete process.env.DISCORD_WEBHOOK_URL;
+		} else {
+			process.env.DISCORD_WEBHOOK_URL = originalDiscordWebhookUrl;
+		}
 		if (originalAdminChatId === undefined) {
 			delete process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID;
 		} else {
@@ -147,5 +167,52 @@ describe('NotificationManager admin failure notifications', () => {
 		await delivery;
 
 		expect(settledBeforeAdmin).toBe(true);
+	});
+
+	it.each([
+		['sendToAll', (manager, alert) => manager.sendToAll(alert)],
+		['sendToChannels', (manager, alert) => manager.sendToChannels(alert, ['discord'])],
+	])('preserves Discord attemptCount through %s and admin failure alerting', async (_dispatchName, dispatch) => {
+		process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '-100-admin';
+		process.env.ENABLE_DISCORD_ALERTS = 'true';
+		process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/test/token';
+		const captureExternalFailure = jest.spyOn(sentryService, 'captureExternalFailure').mockImplementation(() => ({ success: true }));
+		const discordService = new DiscordService({
+			logger: { warn: jest.fn() },
+			maxRetries: 2,
+			maxRetryDelayMs: 100,
+			maxTotalRetryWaitMs: 1000,
+		});
+		await discordService.validate();
+		global.fetch = jest.fn().mockResolvedValue({
+			ok: false,
+			status: 429,
+			headers: new Map([['retry-after', '0.001']]),
+			text: async () => 'rate limited',
+		});
+		const telegramService = {
+			name: 'telegram',
+			isEnabled: jest.fn(() => true),
+			send: jest.fn().mockResolvedValue({ success: true, channel: 'telegram', messageId: 'telegram-1' }),
+		};
+		const manager = new NotificationManager(telegramService, null, discordService);
+
+		const results = await dispatch(manager, { text: 'BTC alert', requestId: 'req-discord-429' });
+
+		expect(results).toContainEqual(expect.objectContaining({
+			success: false,
+			channel: 'discord',
+			attemptCount: 3,
+		}));
+		expect(captureExternalFailure).toHaveBeenCalledWith(expect.objectContaining({
+			external: expect.objectContaining({
+				provider: 'discord-webhook',
+				attemptCount: 3,
+			}),
+		}));
+		expect(telegramService.send).toHaveBeenLastCalledWith(expect.objectContaining({
+			telegramChatId: '-100-admin',
+			text: expect.stringContaining('attempts 3'),
+		}));
 	});
 });

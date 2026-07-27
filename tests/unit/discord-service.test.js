@@ -193,6 +193,7 @@ describe('DiscordService', () => {
 			expect(result.channel).toBe('discord');
 			expect(result.statusCode).toBe(429);
 			expect(result.error).toContain('Discord webhook 429');
+			expect(result.attemptCount).toBe(3);
 			// Initial attempt + 2 retries = 3 total fetch calls
 			expect(global.fetch).toHaveBeenCalledTimes(3);
 		});
@@ -247,6 +248,7 @@ describe('DiscordService', () => {
 
 			expect(result.success).toBe(false);
 			expect(result.statusCode).toBe(429);
+			expect(result.attemptCount).toBe(1);
 			expect(global.fetch).toHaveBeenCalledTimes(1);
 		});
 
