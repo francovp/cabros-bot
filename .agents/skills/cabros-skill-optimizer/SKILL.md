@@ -75,10 +75,15 @@ Run both after an update:
 
 ```bash
 rtk proxy bash -n .agents/skills/cabros-skill-optimizer/scripts/collect-skill-evidence.sh
-rtk proxy python3 /Users/fgvaleriop/.codex/skills/.system/skill-creator/scripts/quick_validate.py .agents/skills/cabros-skill-optimizer
+validator_path="${CODEX_HOME:-$HOME/.codex}/skills/.system/skill-creator/scripts/quick_validate.py"
+if [ -f "$validator_path" ]; then
+  rtk proxy python3 "$validator_path" .agents/skills/cabros-skill-optimizer
+else
+  rtk proxy ruby -e 'require "yaml"; skill = YAML.load_file(ARGV.fetch(0) + "/SKILL.md"); abort("invalid frontmatter") unless skill["name"] == "cabros-skill-optimizer" && skill["description"].is_a?(String); puts "fallback YAML validation: passed"' .agents/skills/cabros-skill-optimizer
+fi
 ```
 
-If the validator fails only because `PyYAML` is unavailable, do not install global packages. Validate the frontmatter with the locally available Ruby YAML parser, report that the official validator was environment-blocked, and continue with the script checks. Run the collector with `--help`; run its live mode only when GitHub read access is available. For an edited existing script, run its narrow regression or safe dry-run as well.
+If the discovered validator fails only because `PyYAML` is unavailable, do not install global packages. Run the same Ruby fallback, report that the official validator was environment-blocked, and continue with the script checks. Run the collector with `--help`; run its live mode only when GitHub read access is available. For an edited existing script, run its narrow regression or safe dry-run as well.
 
 ## Final Report
 
