@@ -148,4 +148,45 @@ describe('NotificationManager admin failure notifications', () => {
 
 		expect(settledBeforeAdmin).toBe(true);
 	});
+
+	it('notifies the Telegram admin with correct attempt count when Discord 429 retries fail', async () => {
+		process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '-100-admin';
+		const telegramService = {
+			name: 'telegram',
+			isEnabled: jest.fn(() => true),
+			send: jest.fn()
+				.mockResolvedValueOnce({ success: true, channel: 'telegram', messageId: 'alert-1' })
+				.mockResolvedValueOnce({ success: true, channel: 'telegram', messageId: 'admin-1' }),
+		};
+		const discordService = {
+			name: 'discord',
+			isEnabled: jest.fn(() => true),
+			send: jest.fn().mockResolvedValue({
+				success: false,
+				channel: 'discord',
+				error: 'Discord webhook 429: rate limited repeatedly',
+				statusCode: 429,
+				attemptCount: 3,
+			}),
+		};
+		const manager = new NotificationManager(telegramService, null, discordService);
+
+		const results = await manager.sendToAll({ text: 'BTC alert', requestId: 'req-254' });
+
+		expect(results).toEqual([
+			{ success: true, channel: 'telegram', messageId: 'alert-1' },
+			{
+				success: false,
+				channel: 'discord',
+				error: 'Discord webhook 429: rate limited repeatedly',
+				statusCode: 429,
+				attemptCount: 3,
+			},
+		]);
+		expect(telegramService.send).toHaveBeenCalledTimes(2);
+		expect(telegramService.send).toHaveBeenLastCalledWith(expect.objectContaining({
+			telegramChatId: '-100-admin',
+			text: expect.stringContaining('status 429, attempts 3'),
+		}));
+	});
 });

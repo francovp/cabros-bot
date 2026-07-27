@@ -74,6 +74,7 @@ describe('DiscordService', () => {
 				messageId: 'discord-msg-123',
 				messageIds: ['discord-msg-123'],
 				messageCount: 1,
+				attemptCount: 1,
 			});
 			expect(global.fetch).toHaveBeenCalledWith(
 				'https://discord.com/api/webhooks/123/token?wait=true',
@@ -98,6 +99,7 @@ describe('DiscordService', () => {
 			expect(result.success).toBe(false);
 			expect(result.channel).toBe('discord');
 			expect(result.error).toContain('Discord webhook 400');
+			expect(result.attemptCount).toBe(1);
 			expect(global.fetch).toHaveBeenCalledTimes(1);
 		});
 
@@ -131,6 +133,7 @@ describe('DiscordService', () => {
 				messageId: 'discord-msg-retried',
 				messageIds: ['discord-msg-retried'],
 				messageCount: 1,
+				attemptCount: 2,
 			});
 			expect(global.fetch).toHaveBeenCalledTimes(2);
 			expect(mockLogger.warn).toHaveBeenCalledWith(
@@ -167,6 +170,7 @@ describe('DiscordService', () => {
 				messageId: 'discord-msg-body-retried',
 				messageIds: ['discord-msg-body-retried'],
 				messageCount: 1,
+				attemptCount: 2,
 			});
 			expect(global.fetch).toHaveBeenCalledTimes(2);
 		});
@@ -193,6 +197,7 @@ describe('DiscordService', () => {
 			expect(result.channel).toBe('discord');
 			expect(result.statusCode).toBe(429);
 			expect(result.error).toContain('Discord webhook 429');
+			expect(result.attemptCount).toBe(3);
 			// Initial attempt + 2 retries = 3 total fetch calls
 			expect(global.fetch).toHaveBeenCalledTimes(3);
 		});
@@ -247,6 +252,7 @@ describe('DiscordService', () => {
 
 			expect(result.success).toBe(false);
 			expect(result.statusCode).toBe(429);
+			expect(result.attemptCount).toBe(1);
 			expect(global.fetch).toHaveBeenCalledTimes(1);
 		});
 
@@ -272,6 +278,7 @@ describe('DiscordService', () => {
 			expect(result.success).toBe(false);
 			expect(result.statusCode).toBe(429);
 			expect(result.error).toContain('Discord webhook 429');
+			expect(result.attemptCount).toBe(1);
 			expect(global.fetch).toHaveBeenCalledTimes(1);
 			expect(mockLogger.warn).toHaveBeenCalledWith(
 				expect.stringContaining('exceeds max retry delay limit'),
@@ -341,6 +348,7 @@ describe('DiscordService', () => {
 				messageId: 'discord-msg-1,discord-msg-2',
 				messageIds: ['discord-msg-1', 'discord-msg-2'],
 				messageCount: 2,
+				attemptCount: 2,
 			});
 			expect(global.fetch).toHaveBeenCalledTimes(2);
 			global.fetch.mock.calls.forEach((call) => {

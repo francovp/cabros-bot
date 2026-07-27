@@ -58,11 +58,16 @@ class DiscordService extends NotificationChannel {
 			const content = await this.formatAlert(alert);
 			const chunks = splitMessageIntoChunks(content, DISCORD_MESSAGE_LIMIT);
 			const messageIds = [];
+			let totalAttempts = 0;
 
 			for (const chunk of chunks) {
 				const result = await this.sendChunk(chunk);
+				totalAttempts += (result.attemptCount || 1);
 				if (!result.success) {
-					return result;
+					return {
+						...result,
+						attemptCount: totalAttempts,
+					};
 				}
 				messageIds.push(result.messageId);
 			}
@@ -73,6 +78,7 @@ class DiscordService extends NotificationChannel {
 				messageId: messageIds.join(','),
 				messageIds,
 				messageCount: messageIds.length,
+				attemptCount: totalAttempts,
 			};
 		} catch (error) {
 			this.logger?.error?.(`Failed to send to Discord: ${error.message}`);
@@ -166,6 +172,7 @@ class DiscordService extends NotificationChannel {
 						success: true,
 						channel: 'discord',
 						messageId: data.id || 'discord-webhook',
+						attemptCount: attempt,
 					};
 				}
 
@@ -177,6 +184,7 @@ class DiscordService extends NotificationChannel {
 						channel: 'discord',
 						error: `Discord webhook ${response.status}: ${errorText}`,
 						statusCode: response.status,
+						attemptCount: attempt,
 					};
 				}
 
@@ -186,6 +194,7 @@ class DiscordService extends NotificationChannel {
 						channel: 'discord',
 						error: `Discord webhook 429: ${errorText}`,
 						statusCode: 429,
+						attemptCount: attempt,
 					};
 				}
 
@@ -200,6 +209,7 @@ class DiscordService extends NotificationChannel {
 						channel: 'discord',
 						error: `Discord webhook 429: ${errorText}`,
 						statusCode: 429,
+						attemptCount: attempt,
 					};
 				}
 
@@ -212,6 +222,7 @@ class DiscordService extends NotificationChannel {
 						channel: 'discord',
 						error: `Discord webhook 429: ${errorText}`,
 						statusCode: 429,
+						attemptCount: attempt,
 					};
 				}
 
@@ -227,6 +238,7 @@ class DiscordService extends NotificationChannel {
 						success: false,
 						channel: 'discord',
 						error: 'Discord webhook request timeout',
+						attemptCount: attempt,
 					};
 				}
 
@@ -241,6 +253,7 @@ class DiscordService extends NotificationChannel {
 			channel: 'discord',
 			error: 'Discord webhook 429 retries exhausted',
 			statusCode: 429,
+			attemptCount: attempt,
 		};
 	}
 }
