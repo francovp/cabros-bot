@@ -434,4 +434,61 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 
 		expect(res.body.error).toContain('Forbidden');
 	});
+
+	// ---------------------------------------------------------------------------
+	// Idempotency protection
+	// ---------------------------------------------------------------------------
+	describe('Idempotency protection', () => {
+		it('replays response and dispatches provider only once when sending identical request with same idempotency key', async () => {
+			const idempotencyKey = 'msg-key-123';
+			const payload = { message: 'Idempotent message test', channels: ['telegram'] };
+
+			// First call
+			const res1 = await request(app)
+				.post('/api/webhook/message')
+				.set('x-api-key', 'test-key')
+				.set('idempotency-key', idempotencyKey)
+				.send(payload)
+				.expect(200);
+
+			expect(res1.headers['idempotency-replay']).toBe('false');
+			expect(res1.body.success).toBe(true);
+			expect(mockBot.telegram.sendMessage).toHaveBeenCalledTimes(1);
+
+			// Second call (replay)
+			const res2 = await request(app)
+				.post('/api/webhook/message')
+				.set('x-api-key', 'test-key')
+				.set('idempotency-key', idempotencyKey)
+				.send(payload)
+				.expect(200);
+
+			expect(res2.headers['idempotency-replay']).toBe('true');
+			expect(res2.body.idempotencyReplayed).toBe(true);
+			expect(res2.body.success).toBe(true);
+			// Provider must still have been called only once
+			expect(mockBot.telegram.sendMessage).toHaveBeenCalledTimes(1);
+		});
+
+		it('returns 409 IDEMPOTENCY_CONFLICT when reusing key with different payload', async () => {
+			const idempotencyKey = 'msg-key-conflict';
+
+			await request(app)
+				.post('/api/webhook/message')
+				.set('x-api-key', 'test-key')
+				.set('idempotency-key', idempotencyKey)
+				.send({ message: 'First message', channels: ['telegram'] })
+				.expect(200);
+
+			const res = await request(app)
+				.post('/api/webhook/message')
+				.set('x-api-key', 'test-key')
+				.set('idempotency-key', idempotencyKey)
+				.send({ message: 'Different message', channels: ['telegram'] })
+				.expect(409);
+
+			expect(res.body.code).toBe('IDEMPOTENCY_CONFLICT');
+		});
+	});
 });
+

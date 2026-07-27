@@ -691,6 +691,24 @@
               "status": "Unauthorized",
               "code": 401,
               "body": "{\n  \"error\": \"Unauthorized: Missing API key\"\n}"
+            },
+            {
+              "name": "Success (replayed response)",
+              "status": "OK",
+              "code": 200,
+              "header": [
+                {
+                  "key": "Idempotency-Replay",
+                  "value": "true"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"tg-msg-123\",\n      \"attemptCount\": 1,\n      \"durationMs\": 450\n    }\n  ],\n  \"idempotencyReplayed\": true\n}"
+            },
+            {
+              "name": "Conflict (idempotency key reused)",
+              "status": "Conflict",
+              "code": 409,
+              "body": "{\n  \"error\": \"Idempotency key was reused with a different payload\",\n  \"code\": \"IDEMPOTENCY_CONFLICT\"\n}"
             }
           ]
         }

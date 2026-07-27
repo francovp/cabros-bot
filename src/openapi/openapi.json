@@ -27,8 +27,9 @@
     "/api/webhook/message": {
       "post": {
         "tags": ["Webhooks"], "summary": "Deliver a generic message", "operationId": "postMessage",
+        "parameters": [{ "$ref": "#/components/parameters/IdempotencyKey" }],
         "requestBody": { "$ref": "#/components/requestBodies/Message" },
-        "responses": { "200": { "$ref": "#/components/responses/DeliveryResult" }, "400": { "$ref": "#/components/responses/Error" }, "401": { "$ref": "#/components/responses/Unauthorized" } },
+        "responses": { "200": { "$ref": "#/components/responses/DeliveryResult" }, "400": { "$ref": "#/components/responses/Error" }, "401": { "$ref": "#/components/responses/Unauthorized" }, "409": { "$ref": "#/components/responses/IdempotencyConflict" } },
         "security": [{ "ApiKeyHeader": [] }, { "ApiKeyQuery": [] }]
       }
     },
