@@ -297,6 +297,30 @@ describe('Alerts API Integration Tests', () => {
 		});
 	});
 
+	it('returns risk metadata coverage from the protected summary endpoint', async () => {
+		const riskMetadataCoverage = {
+			denominator: 2,
+			fields: {
+				invalidation_level: { populated: 1, percentage: 50 },
+				target_level: { populated: 0, percentage: 0 },
+				setup_type: { populated: 1, percentage: 50 },
+				risk_reward_ratio: { populated: 1, percentage: 50 },
+			},
+			byPromptProvenance: [],
+		};
+		alertStorageService.summarizeAlerts.mockResolvedValue({
+			enrichment: { riskMetadataCoverage },
+		});
+
+		const res = await request(app)
+			.get('/api/alerts/summary')
+			.set('x-api-key', 'test-key')
+			.expect(200);
+
+		expect(res.body.summary.enrichment.riskMetadataCoverage).toEqual(riskMetadataCoverage);
+		expect(res.body.summary.shadowModeMetrics).toBe('No measurements found');
+	});
+
 	it('returns 400 when the summary window is invalid', async () => {
 		const res = await request(app)
 			.get('/api/alerts/summary?from=not-a-date')

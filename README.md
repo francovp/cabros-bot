@@ -906,6 +906,8 @@ List stored alerts ordered by `receivedAt` descending.
 
 Return bounded JSON-only analytics for stored alerts without exposing raw alert text or credentials.
 
+Each enriched alert records only safe prompt provenance (`name`, `source`, `label`, and `version`) when a prompt was resolved. The `enrichment.riskMetadataCoverage` block uses enriched alerts as its denominator and reports populated counts/percentages for `invalidation_level`, `target_level`, `setup_type`, and `risk_reward_ratio`. `byPromptProvenance` groups the same metrics by Langfuse/local provenance; legacy records without provenance use `null`. Missing or invalid optional values remain zero coverage and are never synthesized.
+
 **Query Parameters:**
 - `from` - Optional ISO-8601 lower bound; defaults to 24 hours before `to`
 - `to` - Optional ISO-8601 upper bound; defaults to request time
@@ -941,6 +943,27 @@ The service caps the queried window at 31 days to keep routine operator usage ch
     "enrichment": {
       "enrichedAlerts": 1,
       "plainAlerts": 1,
+      "riskMetadataCoverage": {
+        "denominator": 1,
+        "fields": {
+          "invalidation_level": { "populated": 0, "percentage": 0 },
+          "target_level": { "populated": 0, "percentage": 0 },
+          "setup_type": { "populated": 0, "percentage": 0 },
+          "risk_reward_ratio": { "populated": 0, "percentage": 0 }
+        },
+        "byPromptProvenance": [
+          {
+            "provenance": null,
+            "denominator": 1,
+            "fields": {
+              "invalidation_level": { "populated": 0, "percentage": 0 },
+              "target_level": { "populated": 0, "percentage": 0 },
+              "setup_type": { "populated": 0, "percentage": 0 },
+              "risk_reward_ratio": { "populated": 0, "percentage": 0 }
+            }
+          }
+        ]
+      },
       "tokenUsage": {
         "inputTokens": 10,
         "outputTokens": 20,
@@ -971,6 +994,8 @@ The service caps the queried window at 31 days to keep routine operator usage ch
   }
 }
 ```
+
+For rollout validation, first verify the active prompt provenance and coverage in preview, then observe a bounded production/shadow window after aligning the remote `alert-enrichment` prompt with the local optional-risk schema. Treat missing fields as unavailable data; do not use zero coverage as a trading outcome or fabricate stops, targets, setup types, or R:R values.
 
 #### GET /api/alerts/:alertId
 

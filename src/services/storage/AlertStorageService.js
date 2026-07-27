@@ -41,6 +41,18 @@ const MAX_EXPORT_WINDOW_DAYS = 31;
 const MAX_EXPORT_TEXT_LENGTH = 1000;
 const STORAGE_UNAVAILABLE_CODE = 'STORAGE_UNAVAILABLE';
 const INVALID_CURSOR_MESSAGE = 'Invalid before cursor. Use an ISO-8601 timestamp or the nextBefore cursor from a previous response.';
+const RISK_METADATA_FIELDS = [
+	'invalidation_level',
+	'target_level',
+	'setup_type',
+	'risk_reward_ratio',
+];
+const VALID_SETUP_TYPES = new Set([
+	'breakout',
+	'mean_reversion',
+	'trend_continuation',
+	'reversal',
+]);
 
 // Lazy Firestore singleton
 let db = null;
@@ -100,6 +112,114 @@ function formatAlertDocument(doc) {
 function getNumericValue(value) {
 	const numeric = Number(value);
 	return Number.isFinite(numeric) ? numeric : 0;
+}
+
+function normalizePromptProvenance(provenance) {
+	if (!provenance || typeof provenance !== 'object') {
+		return null;
+	}
+
+	const name = typeof provenance.name === 'string' && provenance.name.trim()
+		? provenance.name.trim()
+		: null;
+	const source = ['langfuse', 'local'].includes(provenance.source)
+		? provenance.source
+		: null;
+
+	if (!name || !source) {
+		return null;
+	}
+
+	return {
+		name,
+		source,
+		label: typeof provenance.label === 'string' && provenance.label.trim()
+			? provenance.label.trim()
+			: null,
+		version: Number.isInteger(provenance.version) ? provenance.version : null,
+	};
+}
+
+function sanitizeEnrichmentData(enrichmentData) {
+	if (!enrichmentData || typeof enrichmentData !== 'object' || Array.isArray(enrichmentData)) {
+		return null;
+	}
+
+	const sanitized = { ...enrichmentData };
+	if (Object.prototype.hasOwnProperty.call(sanitized, 'promptProvenance')) {
+		const promptProvenance = normalizePromptProvenance(sanitized.promptProvenance);
+		if (promptProvenance) {
+			sanitized.promptProvenance = promptProvenance;
+		} else {
+			delete sanitized.promptProvenance;
+		}
+	}
+
+	return sanitized;
+}
+
+function createRiskMetadataCoverageBucket() {
+	return {
+		denominator: 0,
+		fields: Object.fromEntries(
+			RISK_METADATA_FIELDS.map(field => [field, { populated: 0, percentage: 0 }]),
+		),
+	};
+}
+
+function isRiskMetadataPopulated(field, value) {
+	if (field === 'setup_type') {
+		return typeof value === 'string' && VALID_SETUP_TYPES.has(value.trim().toLowerCase());
+	}
+
+	return (typeof value === 'number' && Number.isFinite(value))
+		|| (typeof value === 'string' && value.trim().length > 0);
+}
+
+function recordRiskMetadataCoverage(bucket, enrichmentData) {
+	const data = enrichmentData && typeof enrichmentData === 'object' ? enrichmentData : {};
+	bucket.denominator += 1;
+
+	for (const field of RISK_METADATA_FIELDS) {
+		if (isRiskMetadataPopulated(field, data[field])) {
+			bucket.fields[field].populated += 1;
+		}
+	}
+}
+
+function finalizeRiskMetadataCoverage(bucket) {
+	for (const field of RISK_METADATA_FIELDS) {
+		const metric = bucket.fields[field];
+		metric.percentage = bucket.denominator === 0
+			? 0
+			: Number(((metric.populated / bucket.denominator) * 100).toFixed(2));
+	}
+}
+
+function getPromptProvenanceGroup(coverage, provenance) {
+	const key = JSON.stringify(provenance);
+	let group = coverage.byPromptProvenance.find(item => JSON.stringify(item.provenance) === key);
+	if (!group) {
+		group = {
+			provenance,
+			...createRiskMetadataCoverageBucket(),
+		};
+		coverage.byPromptProvenance.push(group);
+	}
+
+	return group;
+}
+
+function recordRiskMetadataCoverageByProvenance(coverage, enrichmentData) {
+	recordRiskMetadataCoverage(coverage, enrichmentData);
+	const provenance = normalizePromptProvenance(enrichmentData && enrichmentData.promptProvenance);
+	const group = getPromptProvenanceGroup(coverage, provenance);
+	recordRiskMetadataCoverage(group, enrichmentData);
+}
+
+function finalizeRiskMetadataCoverageByProvenance(coverage) {
+	finalizeRiskMetadataCoverage(coverage);
+	coverage.byPromptProvenance.forEach(finalizeRiskMetadataCoverage);
 }
 
 function incrementCounter(target, key) {
@@ -513,7 +633,7 @@ async function saveAlert({ text, symbol, exchange, enriched, enrichmentData, tok
 			receivedAt: admin.firestore.FieldValue.serverTimestamp(),
 			text: typeof text === 'string' ? text.substring(0, 20000) : '',
 			enriched: Boolean(enriched),
-			enrichmentData: enrichmentData || null,
+			enrichmentData: sanitizeEnrichmentData(enrichmentData),
 			tokenUsage: tokenUsage || null,
 			channels: Array.isArray(channels) ? channels : [],
 			deliveryResults: Array.isArray(deliveryResults) ? deliveryResults : [],
@@ -800,6 +920,10 @@ async function summarizeAlerts({ from, to, limit } = {}) {
 		enrichment: {
 			enrichedAlerts: 0,
 			plainAlerts: 0,
+			riskMetadataCoverage: {
+				...createRiskMetadataCoverageBucket(),
+				byPromptProvenance: [],
+			},
 			tokenUsage: {
 				inputTokens: 0,
 				outputTokens: 0,
@@ -833,6 +957,7 @@ async function summarizeAlerts({ from, to, limit } = {}) {
 		if (enriched) {
 			summary.byFeatureFlag.enriched += 1;
 			summary.enrichment.enrichedAlerts += 1;
+			recordRiskMetadataCoverageByProvenance(summary.enrichment.riskMetadataCoverage, data.enrichmentData);
 		} else {
 			summary.byFeatureFlag.plain += 1;
 			summary.enrichment.plainAlerts += 1;
@@ -855,6 +980,7 @@ async function summarizeAlerts({ from, to, limit } = {}) {
 		}
 	}
 
+	finalizeRiskMetadataCoverageByProvenance(summary.enrichment.riskMetadataCoverage);
 	summary.enrichment.tokenUsage.totalCost = Number(summary.enrichment.tokenUsage.totalCost.toFixed(6));
 	summary.latency.averageProcessingMs = averageLatency(processingLatencySamples);
 	summary.latency.averageDeliveryMs = averageLatency(deliveryLatencySamples);

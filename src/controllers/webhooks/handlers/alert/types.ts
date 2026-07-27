@@ -1,4 +1,4 @@
-import type { SearchResult } from '../../../../services/grounding/types';
+import type { PromptProvenance, SearchResult } from '../../../../services/grounding/types';
 
 export interface Alert {
 	text: string;
@@ -22,6 +22,7 @@ export interface EnrichedAlert {
 	sentiment: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
 	sentiment_score: number;
 	insights: string[];
+	promptProvenance?: PromptProvenance;
 	technical_levels: TechnicalLevels;
 	invalidation_level?: string | number;
 	target_level?: string | number;
