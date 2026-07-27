@@ -241,7 +241,7 @@ The system provides optional enrichment of webhook alerts using Google Gemini AP
 2. If `ENABLE_GEMINI_GROUNDING=true`, call grounding service to fetch context
 3. Grounding service queries Gemini with alert text + system prompt + GoogleSearch results
 4. Gemini returns structured insights (sentiment, key insights, technical levels, and optional risk parameters) plus extracted sources (URLs + titles)
-5. Enriched alert stored as `alert.enriched` object with structure: `{ original_text, sentiment, sentiment_score, insights, technical_levels, invalidation_level, target_level, setup_type, risk_reward_ratio, sources, truncated }`
+5. Enriched alert stored as `alert.enriched` object with structure: `{ original_text, sentiment, sentiment_score, insights, technical_levels, invalidation_level, target_level, setup_type, risk_reward_ratio, prompt_provenance, sources, truncated }`
 6. Original `alert.text` preserved for fallback
 7. Enhanced alert sent to all enabled notification channels
 8. Webhook response includes `enriched: true/false`, per-channel delivery `results`, and a `tokenUsage` object (with a formatted summary) when grounding runs
