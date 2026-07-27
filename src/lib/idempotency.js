@@ -97,7 +97,7 @@ function idempotencyMiddleware(req, res, next) {
 	// 1. Get the key from headers (recommended), request body, or query params
 	const key = getIdempotencyKey(req);
 
-	if (key === undefined || key === null) {
+	if (key === undefined) {
 		return next();
 	}
 
