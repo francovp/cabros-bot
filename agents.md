@@ -416,9 +416,10 @@ The system provides a `POST /api/webhook/market-scanner-alert` endpoint that run
 The system provides asynchronous job endpoints to support executing both `expanded-analysis` and `market-scanner` workflows in the background, avoiding HTTP gateway timeouts.
 
 **Endpoints**:
-- `POST /api/jobs/tradingview-analysis` — Validates request payloads synchronously, returns `201 Created` with a `jobId`, and starts background execution.
+- `POST /api/jobs/tradingview-analysis` — Validates request payloads synchronously, returns `201 Created` with a `jobId`, and starts background execution. An optional `idempotency-key` header deduplicates concurrent/sequential starts for five minutes.
 - `GET /api/jobs` — Returns a bounded list of sanitized recent jobs, with optional `status`, `type`, and `limit` filters. It merges Firestore-backed records with the in-memory fallback and excludes expired terminal jobs.
 - `GET /api/jobs/:jobId` — Returns the current job status (`pending`, `processing`, `completed`, `failed`), progress, and final analysis/delivery outcomes.
+- `POST /api/jobs/:jobId/retry` and `POST /api/jobs/:jobId/retry-failed` — Recreate a retryable job or only failed items; the same optional `idempotency-key` replay contract returns the original `newJobId` without a second worker.
 
 **Core Components**:
 - `src/services/jobs/JobService.js` — Coordinates job state tracking, background worker execution, progress reports, durable persistence checkpoints, and job eviction (jobs older than 1 hour).
@@ -428,6 +429,7 @@ The system provides asynchronous job endpoints to support executing both `expand
 
 **Failure and Edge Case Behavior**:
 - Sync validation: throws `400` synchronously on invalid inputs before job registration.
+- Idempotency: job-starting POST endpoints reserve the optional `idempotency-key` before validation/worker launch, replay matching responses with `Idempotency-Replay: true` and `idempotencyReplayed: true`, and return `409 IDEMPOTENCY_CONFLICT` when a key is reused with a different request fingerprint. Requests without a key are unchanged.
 - Feature checks: returns `404 FEATURE_DISABLED` if market scanner jobs are created but `ENABLE_MARKET_SCANNER` is not `'true'`.
 - Persistence: `createJob()` and `getJob()` are async because job metadata/results may be written to or read from Firestore.
 - Telegram commands: async `createJob()` rejections must stay inside the command `try/catch` so `replyValidationError()` can return clear command feedback instead of producing unhandled promise rejections.
@@ -739,6 +741,7 @@ See `/specs/TERMINOLOGY_GUIDE.md` for extended discussion and examples.
 - GH-178 / CB-74: `ENABLE_SIGNAL_OUTCOME_TRACKING` is the canonical signal-outcome gate; `ENABLE_SHADOW_MODE_OUTCOME_TRACKING` remains a one-release compatibility alias, and `/api/capabilities` reports the effective gate.
 - GH-182 / CB-77: malformed or no-domain grounding sources count toward the declared UNKNOWN `0.5` quality tier instead of contributing zero; regression coverage lives in `tests/unit/event-detection.test.js`.
 - GH-187 / CB-79: added authenticated `GET /api/jobs` with bounded `status`, `type`, and `limit` filters; `JobRepository.list()` merges Firestore and memory records, while `JobService.listJobs()` omits expired terminal jobs and returns metadata-only summaries.
+- GH-239 / CB-96: job creation, retry, and retry-failed endpoints now use the shared bounded in-memory idempotency middleware, replay matching responses, and reject fingerprint conflicts with `409 IDEMPOTENCY_CONFLICT`; OpenAPI, README, Postman, and integration coverage were updated.
 - GH-183 / CB-78: Azure, OpenRouter, and Cloudflare `llmCallv2()` results now return normalized token usage for downstream `tokenUsage` aggregation; the shared normalizer accepts OpenAI-compatible `prompt_tokens`, `completion_tokens`, and `total_tokens` fields.
 - GH-199 / CB-83: `detect-unused-features` derives disabled flags, status mappings, indirect env lookups, `.env.example` gaps, and Sentry profiling findings from the fresh protected capabilities response and current repository files; dated snapshots are guidance-free and a healthy-data dry run guards against stale issues.
 

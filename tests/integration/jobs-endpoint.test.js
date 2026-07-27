@@ -8,6 +8,7 @@ const { initializeNotificationServices } = require('../../src/controllers/webhoo
 const { tradingViewMcpService } = require('../../src/services/tradingview/TradingViewMcpService');
 const { jobRepository, _resetForTesting: resetJobRepository } = require('../../src/services/jobs/JobRepository');
 const alertStorageService = require('../../src/services/storage/AlertStorageService');
+const { idempotencyService } = require('../../src/services/storage/IdempotencyService');
 
 jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
 	tradingViewMcpService: {
@@ -38,6 +39,7 @@ describe('Jobs API Integration Tests', () => {
 		admin.__resetCollectionState();
 		alertStorageService._resetForTesting();
 		resetJobRepository();
+		idempotencyService.clear();
 
 		mockTelegramSendMessage = jest.fn().mockResolvedValue({ message_id: 'job-msg-id' });
 		mockBot = {
@@ -70,6 +72,172 @@ describe('Jobs API Integration Tests', () => {
 			.post('/api/jobs/tradingview-analysis')
 			.send({ type: 'expanded-analysis', symbols: ['BINANCE:BTCUSDT'] })
 			.expect(401);
+	});
+
+	it('deduplicates concurrent job creation with one idempotency key', async () => {
+		tradingViewMcpService.analyzeSymbolIdentifier.mockImplementation(async () => {
+			await new Promise((resolve) => setTimeout(resolve, 50));
+			return {
+				symbol: 'BINANCE:BTCUSDT',
+				price_data: { close: 65000, change_percent: 1.5 },
+				rsi: { value: 45 },
+			};
+		});
+
+		const payload = { type: 'expanded-analysis', symbols: ['BINANCE:BTCUSDT'] };
+		const [firstResponse, replayResponse] = await Promise.all([
+			request(app)
+				.post('/api/jobs/tradingview-analysis')
+				.set('x-api-key', 'test-key')
+				.set('idempotency-key', 'job-create-concurrent-key')
+				.send(payload),
+			request(app)
+				.post('/api/jobs/tradingview-analysis')
+				.set('x-api-key', 'test-key')
+				.set('idempotency-key', 'job-create-concurrent-key')
+				.send(payload),
+		]);
+
+		expect(firstResponse.status).toBe(201);
+		expect(replayResponse.status).toBe(201);
+		expect(firstResponse.body.jobId).toBe(replayResponse.body.jobId);
+		expect([firstResponse.headers['idempotency-replay'], replayResponse.headers['idempotency-replay']].sort()).toEqual(['false', 'true']);
+
+		await new Promise((resolve) => setTimeout(resolve, 75));
+		expect(tradingViewMcpService.analyzeSymbolIdentifier).toHaveBeenCalledTimes(1);
+	});
+
+	it('replays sequential job creation instead of starting a second job', async () => {
+		tradingViewMcpService.analyzeSymbolIdentifier.mockResolvedValue({
+			symbol: 'BINANCE:BTCUSDT',
+			price_data: { close: 65000, change_percent: 1.5 },
+			rsi: { value: 45 },
+		});
+
+		const payload = { type: 'expanded-analysis', symbols: ['BINANCE:BTCUSDT'] };
+		const firstResponse = await request(app)
+			.post('/api/jobs/tradingview-analysis')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'job-create-sequential-key')
+			.send(payload)
+			.expect(201);
+		const replayResponse = await request(app)
+			.post('/api/jobs/tradingview-analysis')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'job-create-sequential-key')
+			.send(payload)
+			.expect(201);
+
+		expect(replayResponse.body.jobId).toBe(firstResponse.body.jobId);
+		expect(replayResponse.body.idempotencyReplayed).toBe(true);
+	});
+
+	it('deduplicates concurrent retries of the same cancelled job', async () => {
+		const timestamp = new Date().toISOString();
+		await jobRepository.save({
+			jobId: 'cancelled-job-for-retry',
+			type: 'expanded-analysis',
+			status: 'cancelled',
+			requestMetadata: {
+				type: 'expanded-analysis',
+				symbols: ['BINANCE:BTCUSDT'],
+				timeframe: '1D',
+				includeMultiTimeframe: false,
+				analysisMode: 'standard',
+				timeoutMs: 120000,
+				callbackUrl: null,
+				callbackSecret: null,
+				callbackEvents: ['completed', 'failed', 'cancelled', 'timed_out'],
+			},
+			progress: { total: 1, current: 1, status: 'Cancelled' },
+			fullResults: [],
+			fullScanResults: [],
+			createdAt: timestamp,
+			updatedAt: timestamp,
+		});
+
+		tradingViewMcpService.analyzeSymbolIdentifier.mockResolvedValue({
+			symbol: 'BINANCE:BTCUSDT',
+			price_data: { close: 65000, change_percent: 1.5 },
+			rsi: { value: 45 },
+		});
+
+		const retryRequest = () => request(app)
+			.post('/api/jobs/cancelled-job-for-retry/retry')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'job-retry-concurrent-key');
+		const [firstResponse, replayResponse] = await Promise.all([retryRequest(), retryRequest()]);
+
+		expect(firstResponse.status).toBe(201);
+		expect(replayResponse.status).toBe(201);
+		expect(firstResponse.body.newJobId).toBe(replayResponse.body.newJobId);
+		expect([firstResponse.headers['idempotency-replay'], replayResponse.headers['idempotency-replay']].sort()).toEqual(['false', 'true']);
+	});
+
+	it('deduplicates concurrent retries of failed items', async () => {
+		const timestamp = new Date().toISOString();
+		await jobRepository.save({
+			jobId: 'failed-job-for-item-retry',
+			type: 'expanded-analysis',
+			status: 'failed',
+			requestMetadata: {
+				type: 'expanded-analysis',
+				symbols: ['BINANCE:BTCUSDT', 'BINANCE:ETHUSDT'],
+				timeframe: '1D',
+				includeMultiTimeframe: false,
+				analysisMode: 'standard',
+				timeoutMs: 120000,
+				callbackUrl: null,
+				callbackSecret: null,
+				callbackEvents: ['completed', 'failed', 'cancelled', 'timed_out'],
+			},
+			progress: { total: 2, current: 2, status: 'Failed' },
+			fullResults: [{ symbol: 'BINANCE:BTCUSDT', status: 'analyzed' }],
+			fullScanResults: [],
+			createdAt: timestamp,
+			updatedAt: timestamp,
+		});
+
+		tradingViewMcpService.analyzeSymbolIdentifier.mockResolvedValue({
+			symbol: 'BINANCE:ETHUSDT',
+			price_data: { close: 3500, change_percent: 1.5 },
+			rsi: { value: 45 },
+		});
+
+		const retryRequest = () => request(app)
+			.post('/api/jobs/failed-job-for-item-retry/retry-failed')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'job-retry-failed-concurrent-key');
+		const [firstResponse, replayResponse] = await Promise.all([retryRequest(), retryRequest()]);
+
+		expect(firstResponse.status).toBe(201);
+		expect(replayResponse.status).toBe(201);
+		expect(firstResponse.body.newJobId).toBe(replayResponse.body.newJobId);
+		expect([firstResponse.headers['idempotency-replay'], replayResponse.headers['idempotency-replay']].sort()).toEqual(['false', 'true']);
+	});
+
+	it('rejects an idempotency key reused with a different job request', async () => {
+		tradingViewMcpService.analyzeSymbolIdentifier.mockResolvedValue({
+			symbol: 'BINANCE:BTCUSDT',
+			price_data: { close: 65000, change_percent: 1.5 },
+			rsi: { value: 45 },
+		});
+
+		await request(app)
+			.post('/api/jobs/tradingview-analysis')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'job-conflict-key')
+			.send({ type: 'expanded-analysis', symbols: ['BINANCE:BTCUSDT'] })
+			.expect(201);
+
+		const conflictResponse = await request(app)
+			.post('/api/jobs/tradingview-analysis')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'job-conflict-key')
+			.send({ type: 'expanded-analysis', symbols: ['BINANCE:ETHUSDT'] })
+			.expect(409);
+
+		expect(conflictResponse.body.code).toBe('IDEMPOTENCY_CONFLICT');
 	});
 
 	it('returns 401 when GET /api/jobs/:jobId lacks valid api key', async () => {
