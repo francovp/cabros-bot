@@ -235,6 +235,20 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 		expect(mockBot.telegram.sendMessage).not.toHaveBeenCalled();
 	});
 
+	it('rejects an array-valued body idempotency key before dispatch', async () => {
+		const response = await request(app)
+			.post('/api/webhook/message')
+			.set('x-api-key', 'test-key')
+			.send({ message: 'Invalid array key', channels: ['telegram'], idempotencyKey: ['key-a'] })
+			.expect(400);
+
+		expect(response.body).toEqual({
+			error: 'Idempotency key must be a non-empty string',
+			code: 'INVALID_REQUEST',
+		});
+		expect(mockBot.telegram.sendMessage).not.toHaveBeenCalled();
+	});
+
 	it('sends a message to discord only', async () => {
 		process.env.ENABLE_DISCORD_ALERTS = 'true';
 		process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/123/token';

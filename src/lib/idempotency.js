@@ -101,9 +101,8 @@ function idempotencyMiddleware(req, res, next) {
 		return next();
 	}
 
-	// Ensure the key is a string (e.g., if array of headers received)
-	const keyToCheck = Array.isArray(key) ? key[0] : key;
-	if (typeof keyToCheck !== 'string' || !keyToCheck.trim()) {
+	// Reject non-string values instead of allowing object/array identity keys.
+	if (typeof key !== 'string' || !key.trim()) {
 		return res.status(400).json({
 			error: 'Idempotency key must be a non-empty string',
 			code: 'INVALID_REQUEST',
@@ -113,14 +112,14 @@ function idempotencyMiddleware(req, res, next) {
 	const requestFingerprint = buildRequestFingerprint(req);
 
 	try {
-		const reservation = idempotencyService.reserve(keyToCheck, requestFingerprint);
+		const reservation = idempotencyService.reserve(key, requestFingerprint);
 		if (reservation.state === 'completed') {
-			console.debug(`[Idempotency] Replaying cached response for key: ${keyToCheck}`);
+			console.debug(`[Idempotency] Replaying cached response for key: ${key}`);
 			return sendCachedResponse(res, reservation.record);
 		}
 
 		if (reservation.state === 'pending') {
-			console.debug(`[Idempotency] Waiting for in-flight response for key: ${keyToCheck}`);
+			console.debug(`[Idempotency] Waiting for in-flight response for key: ${key}`);
 			return reservation.promise
 				.then((cachedRecord) => sendCachedResponse(res, cachedRecord))
 				.catch((error) => {
@@ -135,14 +134,14 @@ function idempotencyMiddleware(req, res, next) {
 		}
 	} catch (error) {
 		if (error.code === 'IDEMPOTENCY_CONFLICT') {
-			console.warn(`[Idempotency] Conflict detected for key: ${keyToCheck}`);
+			console.warn(`[Idempotency] Conflict detected for key: ${key}`);
 			return res.status(409).json({
 				error: error.message,
 				code: error.code,
 			});
 		}
 		if (error.code === 'IDEMPOTENCY_LIMIT_EXCEEDED') {
-			console.warn(`[Idempotency] Limit exceeded for key: ${keyToCheck}`);
+			console.warn(`[Idempotency] Limit exceeded for key: ${key}`);
 			return res.status(429).json({
 				error: error.message,
 				code: error.code,
@@ -179,7 +178,7 @@ function idempotencyMiddleware(req, res, next) {
 			}
 		}
 
-		idempotencyService.set(keyToCheck, requestFingerprint, {
+		idempotencyService.set(key, requestFingerprint, {
 			statusCode: res.statusCode,
 			body: responseBody,
 			headers: {
@@ -203,7 +202,7 @@ function idempotencyMiddleware(req, res, next) {
 			const releaseError = new Error('Initial idempotent request failed before a replayable response was available');
 			releaseError.code = 'IDEMPOTENCY_RELEASED';
 			releaseError.statusCode = 409;
-			idempotencyService.release(keyToCheck, requestFingerprint, releaseError);
+			idempotencyService.release(key, requestFingerprint, releaseError);
 		}
 	});
 
