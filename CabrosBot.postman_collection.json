@@ -615,6 +615,7 @@
           "name": "POST Send Message",
           "request": {
             "method": "POST",
+            "description": "Idempotency accepts the recommended idempotency-key header, idempotencyKey or idempotency_key in the JSON body, and idempotencyKey or idempotency_key in the query string. Replays return the cached response with idempotencyReplayed=true; conflicting payload reuse returns 409.",
             "header": [
               {
                 "key": "Content-Type",
@@ -625,11 +626,16 @@
                 "key": "x-api-key",
                 "value": "{{apiKey}}",
                 "type": "text"
+              },
+              {
+                "key": "idempotency-key",
+                "value": "generic-message-demo-1",
+                "type": "text"
               }
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"message\": \"Custom notification from automation\",\n  \"channels\": [\"telegram\", \"whatsapp\", \"discord\"],\n  \"telegramChatId\": \"-1001234567890\",\n  \"whatsappChatId\": \"120363000000000000@g.us\"\n}"
+              "raw": "{\n  \"message\": \"Custom notification from automation\",\n  \"channels\": [\"telegram\", \"whatsapp\", \"discord\"],\n  \"telegramChatId\": \"-1001234567890\",\n  \"whatsappChatId\": \"120363000000000000@g.us\",\n  \"idempotencyKey\": \"generic-message-demo-1\"\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/api/webhook/message",
@@ -655,6 +661,24 @@
               "status": "OK",
               "code": 200,
               "body": "{\n  \"success\": true,\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"tg-msg-789\",\n      \"attemptCount\": 1,\n      \"durationMs\": 410\n    }\n  ]\n}"
+            },
+            {
+              "name": "Success (idempotent replay)",
+              "status": "OK",
+              "code": 200,
+              "header": [
+                {
+                  "key": "Idempotency-Replay",
+                  "value": "true"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"idempotencyReplayed\": true,\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"tg-msg-123\"\n    }\n  ]\n}"
+            },
+            {
+              "name": "Error (idempotency conflict)",
+              "status": "Conflict",
+              "code": 409,
+              "body": "{\n  \"error\": \"Idempotency key was reused with a different payload\",\n  \"code\": \"IDEMPOTENCY_CONFLICT\"\n}"
             },
             {
               "name": "Error (empty message)",
@@ -691,6 +715,96 @@
               "status": "Unauthorized",
               "code": 401,
               "body": "{\n  \"error\": \"Unauthorized: Missing API key\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST Send Message (query idempotency key)",
+          "request": {
+            "method": "POST",
+            "description": "Uses the legacy-compatible idempotencyKey query parameter. The idempotency_key snake_case query alias is also accepted.",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"message\": \"Query-key notification\",\n  \"channels\": [\"telegram\"]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/webhook/message?idempotencyKey=generic-message-query-1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "webhook",
+                "message"
+              ],
+              "query": [
+                {
+                  "key": "idempotencyKey",
+                  "value": "generic-message-query-1"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"results\": [{\n    \"channel\": \"telegram\",\n    \"success\": true,\n    \"messageId\": \"tg-msg-123\"\n  }]\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST Send Message (snake_case body key)",
+          "request": {
+            "method": "POST",
+            "description": "Uses the idempotency_key snake_case JSON body field without a header or query key.",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"message\": \"Body-key notification\",\n  \"channels\": [\"telegram\"],\n  \"idempotency_key\": \"generic-message-body-1\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/webhook/message",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "webhook",
+                "message"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"results\": [{\n    \"channel\": \"telegram\",\n    \"success\": true,\n    \"messageId\": \"tg-msg-123\"\n  }]\n}"
             }
           ]
         }

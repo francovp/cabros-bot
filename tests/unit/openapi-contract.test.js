@@ -76,6 +76,32 @@ describe('OpenAPI contract', () => {
 		});
 	});
 
+	it('documents generic-message idempotency key locations and replay conflicts', () => {
+		if (!fs.existsSync(contractPath)) return;
+		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+		const operation = contract.paths['/api/webhook/message'].post;
+
+		expect(operation.parameters).toEqual(expect.arrayContaining([
+			{ $ref: '#/components/parameters/IdempotencyKeyHeader' },
+			{ $ref: '#/components/parameters/IdempotencyKeyQueryCamel' },
+			{ $ref: '#/components/parameters/IdempotencyKeyQuerySnake' },
+		]));
+		expect(operation.responses['200']).toEqual({
+			$ref: '#/components/responses/MessageDeliveryResult',
+		});
+		expect(operation.responses['409']).toEqual({
+			$ref: '#/components/responses/IdempotencyConflict',
+		});
+		expect(contract.components.schemas.MessageRequest.properties.idempotencyKey).toBeDefined();
+		expect(contract.components.schemas.MessageRequest.properties.idempotency_key).toBeDefined();
+		expect(contract.components.responses.MessageDeliveryResult.content['application/json'].examples.replay.value)
+			.toMatchObject({ success: true, idempotencyReplayed: true });
+		expect(contract.components.responses.IdempotencyConflict.content['application/json'].example).toEqual({
+			error: 'Idempotency key was reused with a different payload',
+			code: 'IDEMPOTENCY_CONFLICT',
+		});
+	});
+
 	describe('Job schema alignment with JobService runtime', () => {
 		// The runtime terminal statuses are defined in JobService as:
 		// TERMINAL_JOB_STATUSES = new Set(['completed', 'failed', 'cancelled', 'timed_out'])

@@ -4,6 +4,7 @@ const request = require('supertest');
 const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
 const { initializeNotificationServices } = require('../../src/controllers/webhooks/handlers/alert/alert');
+const { idempotencyService } = require('../../src/services/storage/IdempotencyService');
 
 describe('POST /api/webhook/message - Generic message webhook', () => {
 	const originalEnv = process.env;
@@ -25,6 +26,7 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 		};
 
 		jest.clearAllMocks();
+		idempotencyService.clear();
 
 		mockBot = {
 			telegram: {
@@ -100,6 +102,123 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 		expect(res.body.results[1].success).toBe(true);
 		expect(mockBot.telegram.sendMessage).toHaveBeenCalledTimes(1);
 		expect(global.fetch).toHaveBeenCalledTimes(1);
+	});
+
+	it('replays a sequential request without redispatching selected Telegram, WhatsApp, and Discord channels', async () => {
+		process.env.ENABLE_DISCORD_ALERTS = 'true';
+		process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/123/token';
+		global.fetch = jest.fn().mockResolvedValue({
+			ok: true,
+			json: async () => ({ idMessage: 'provider-message-123', id: 'provider-message-123' }),
+		});
+		await initializeNotificationServices(mockBot);
+
+		const payload = {
+			message: 'Replay this notification once',
+			channels: ['telegram', 'whatsapp', 'discord'],
+		};
+		const first = await request(app)
+			.post('/api/webhook/message')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'generic-message-replay-1')
+			.send(payload)
+			.expect(200);
+		const second = await request(app)
+			.post('/api/webhook/message')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'generic-message-replay-1')
+			.send(payload)
+			.expect(200);
+
+		expect(first.body.success).toBe(true);
+		expect(second.body).toEqual({ ...first.body, idempotencyReplayed: true });
+		expect(second.headers['idempotency-replay']).toBe('true');
+		expect(mockBot.telegram.sendMessage).toHaveBeenCalledTimes(1);
+		expect(global.fetch).toHaveBeenCalledTimes(2);
+	});
+
+	it('deduplicates concurrent generic-message requests while the first delivery is in flight', async () => {
+		process.env.ENABLE_DISCORD_ALERTS = 'true';
+		process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/123/token';
+		let signalDeliveryStarted;
+		let releaseDelivery;
+		const deliveryStarted = new Promise((resolve) => {
+			signalDeliveryStarted = resolve;
+		});
+		const deliveryReleased = new Promise((resolve) => {
+			releaseDelivery = resolve;
+		});
+		mockBot.telegram.sendMessage.mockImplementation(async () => {
+			signalDeliveryStarted();
+			await deliveryReleased;
+			return { message_id: 'tg-concurrent-123' };
+		});
+		global.fetch = jest.fn().mockResolvedValue({
+			ok: true,
+			json: async () => ({ idMessage: 'provider-validation-123', id: 'provider-validation-123' }),
+		});
+		await initializeNotificationServices(mockBot);
+
+		global.fetch = jest.fn().mockImplementation(async () => {
+			await deliveryReleased;
+			return {
+				ok: true,
+				json: async () => ({ idMessage: 'provider-concurrent-123', id: 'provider-concurrent-123' }),
+			};
+		});
+
+		const payload = {
+			message: 'Concurrent notification once',
+			channels: ['telegram', 'whatsapp', 'discord'],
+		};
+		const firstRequest = request(app)
+			.post('/api/webhook/message')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'generic-message-concurrent-1')
+			.send(payload);
+		const firstResponse = firstRequest.then((response) => response);
+		await deliveryStarted;
+		const secondRequest = request(app)
+			.post('/api/webhook/message')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'generic-message-concurrent-1')
+			.send(payload);
+		await new Promise((resolve) => setImmediate(resolve));
+		releaseDelivery();
+
+		const [first, second] = await Promise.all([firstResponse, secondRequest]);
+		expect(first.status).toBe(200);
+		expect(second.status).toBe(200);
+		expect([first.body.idempotencyReplayed, second.body.idempotencyReplayed]).toContain(true);
+		expect(mockBot.telegram.sendMessage).toHaveBeenCalledTimes(1);
+		expect(global.fetch).toHaveBeenCalledTimes(2);
+	});
+
+	it.each([
+		['message', { message: 'Different notification', channels: ['telegram'] }],
+		['channel selection', { message: 'Same notification', channels: ['whatsapp'] }],
+		['destination override', { message: 'Same notification', channels: ['telegram'], telegramChatId: '-100999888777' }],
+	])('rejects a replay key reused with a different %s', async (_difference, conflictingPayload) => {
+		const key = 'generic-message-conflict-1';
+		const originalPayload = { message: 'Same notification', channels: ['telegram'] };
+		await request(app)
+			.post('/api/webhook/message')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', key)
+			.send(originalPayload)
+			.expect(200);
+
+		const conflict = await request(app)
+			.post('/api/webhook/message')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', key)
+			.send(conflictingPayload)
+			.expect(409);
+
+		expect(conflict.body).toEqual({
+			error: expect.stringContaining('different payload'),
+			code: 'IDEMPOTENCY_CONFLICT',
+		});
 	});
 
 	it('sends a message to discord only', async () => {
