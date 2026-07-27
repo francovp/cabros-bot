@@ -45,6 +45,24 @@ describe('Idempotency Service & Middleware', () => {
 			}).toThrow('Idempotency key was reused with a different payload');
 		});
 
+		test('should canonicalize nested object keys while preserving array order', () => {
+			const firstPayload = {
+				body: { type: 'expanded-analysis', options: { timeframe: '1D', mode: 'standard' }, symbols: ['BINANCE:BTCUSDT', 'BINANCE:ETHUSDT'] },
+				query: {},
+			};
+			const equivalentPayload = {
+				query: {},
+				body: { symbols: ['BINANCE:BTCUSDT', 'BINANCE:ETHUSDT'], options: { mode: 'standard', timeframe: '1D' }, type: 'expanded-analysis' },
+			};
+			const reorderedArrayPayload = {
+				body: { type: 'expanded-analysis', options: { timeframe: '1D', mode: 'standard' }, symbols: ['BINANCE:ETHUSDT', 'BINANCE:BTCUSDT'] },
+				query: {},
+			};
+
+			expect(idempotencyService.hashPayload(firstPayload)).toBe(idempotencyService.hashPayload(equivalentPayload));
+			expect(idempotencyService.hashPayload(firstPayload)).not.toBe(idempotencyService.hashPayload(reorderedArrayPayload));
+		});
+
 		test('should honor custom TTL from environment', () => {
 			process.env.WEBHOOK_IDEMPOTENCY_TTL_MS = '1000';
 			expect(idempotencyService.getTtlMs()).toBe(1000);

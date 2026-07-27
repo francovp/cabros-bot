@@ -132,6 +132,30 @@ describe('Jobs API Integration Tests', () => {
 		expect(replayResponse.body.idempotencyReplayed).toBe(true);
 	});
 
+	it('replays a job request when equivalent object keys arrive in a different order', async () => {
+		tradingViewMcpService.analyzeSymbolIdentifier.mockResolvedValue({
+			symbol: 'BINANCE:BTCUSDT',
+			price_data: { close: 65000, change_percent: 1.5 },
+			rsi: { value: 45 },
+		});
+
+		const firstResponse = await request(app)
+			.post('/api/jobs/tradingview-analysis')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'job-create-reordered-key')
+			.send({ type: 'expanded-analysis', symbols: ['BINANCE:BTCUSDT'] })
+			.expect(201);
+		const replayResponse = await request(app)
+			.post('/api/jobs/tradingview-analysis')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'job-create-reordered-key')
+			.send({ symbols: ['BINANCE:BTCUSDT'], type: 'expanded-analysis' })
+			.expect(201);
+
+		expect(replayResponse.body.jobId).toBe(firstResponse.body.jobId);
+		expect(replayResponse.body.idempotencyReplayed).toBe(true);
+	});
+
 	it('deduplicates concurrent retries of the same cancelled job', async () => {
 		const timestamp = new Date().toISOString();
 		await jobRepository.save({

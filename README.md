@@ -744,7 +744,7 @@ POST /api/jobs/tradingview-analysis
 idempotency-key: job-create-2026-07-26-001
 ```
 
-The idempotency cache is in-memory, bounded, and retained for five minutes by default (`WEBHOOK_IDEMPOTENCY_TTL_MS` can override the TTL).
+The idempotency cache is in-memory, bounded, and retained for five minutes by default (`WEBHOOK_IDEMPOTENCY_TTL_MS` can override the TTL). Request fingerprints canonicalize nested object key order while preserving array order.
 
 #### POST /api/jobs/:jobId/retry and /api/jobs/:jobId/retry-failed
 
