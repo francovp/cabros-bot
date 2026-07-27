@@ -854,6 +854,16 @@ describe('AlertStorageService', () => {
 				enrichment: {
 					enrichedAlerts: 1,
 					plainAlerts: 1,
+					riskMetadataCoverage: {
+						denominator: 1,
+						fields: {
+							invalidation_level: { populatedCount: 0, percentage: 0 },
+							target_level: { populatedCount: 0, percentage: 0 },
+							setup_type: { populatedCount: 0, percentage: 0 },
+							risk_reward_ratio: { populatedCount: 0, percentage: 0 },
+						},
+						byPromptProvenance: {},
+					},
 					tokenUsage: {
 						inputTokens: 10,
 						outputTokens: 20,
@@ -875,6 +885,132 @@ describe('AlertStorageService', () => {
 				},
 			});
 			expect(JSON.stringify(result)).not.toContain('raw alert text');
+		});
+
+		it('computes riskMetadataCoverage denominator, populated counts, percentages, and prompt provenance groups', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('alert-1', {
+						receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+						text: 'BTC alert',
+						enriched: true,
+						enrichmentData: {
+							symbol: 'BTCUSDT',
+							invalidation_level: 80000,
+							target_level: 90000,
+							setup_type: 'breakout',
+							risk_reward_ratio: '2.5:1',
+							prompt_provenance: {
+								name: 'alert-enrichment',
+								source: 'langfuse',
+								label: 'production',
+								version: 1,
+							},
+						},
+						source: 'webhook',
+					}),
+					buildQueryDoc('alert-2', {
+						receivedAt: buildTimestamp('2026-06-06T11:30:00.000Z'),
+						text: 'ETH alert',
+						enriched: true,
+						enrichmentData: {
+							symbol: 'ETHUSDT',
+							invalidation_level: 2500,
+							prompt_provenance: {
+								name: 'alert-enrichment',
+								source: 'local',
+								label: null,
+								version: null,
+							},
+						},
+						source: 'webhook',
+					}),
+					buildQueryDoc('alert-3', {
+						receivedAt: buildTimestamp('2026-06-06T11:00:00.000Z'),
+						text: 'SOL alert',
+						enriched: false,
+						enrichmentData: null,
+						source: 'webhook',
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.summarizeAlerts({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+			});
+
+			expect(result.enrichment.riskMetadataCoverage).toEqual({
+				denominator: 2,
+				fields: {
+					invalidation_level: { populatedCount: 2, percentage: 100 },
+					target_level: { populatedCount: 1, percentage: 50 },
+					setup_type: { populatedCount: 1, percentage: 50 },
+					risk_reward_ratio: { populatedCount: 1, percentage: 50 },
+				},
+				byPromptProvenance: {
+					'alert-enrichment:langfuse:production:1': {
+						name: 'alert-enrichment',
+						source: 'langfuse',
+						label: 'production',
+						version: 1,
+						denominator: 1,
+						fields: {
+							invalidation_level: { populatedCount: 1, percentage: 100 },
+							target_level: { populatedCount: 1, percentage: 100 },
+							setup_type: { populatedCount: 1, percentage: 100 },
+							risk_reward_ratio: { populatedCount: 1, percentage: 100 },
+						},
+					},
+					'alert-enrichment:local:none:none': {
+						name: 'alert-enrichment',
+						source: 'local',
+						label: null,
+						version: null,
+						denominator: 1,
+						fields: {
+							invalidation_level: { populatedCount: 1, percentage: 100 },
+							target_level: { populatedCount: 0, percentage: 0 },
+							setup_type: { populatedCount: 0, percentage: 0 },
+							risk_reward_ratio: { populatedCount: 0, percentage: 0 },
+						},
+					},
+				},
+			});
+		});
+
+		it('returns zero coverage metrics when denominator is 0', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('alert-1', {
+						receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+						text: 'Plain alert',
+						enriched: false,
+						enrichmentData: null,
+						source: 'webhook',
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.summarizeAlerts({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+			});
+
+			expect(result.enrichment.riskMetadataCoverage).toEqual({
+				denominator: 0,
+				fields: {
+					invalidation_level: { populatedCount: 0, percentage: 0 },
+					target_level: { populatedCount: 0, percentage: 0 },
+					setup_type: { populatedCount: 0, percentage: 0 },
+					risk_reward_ratio: { populatedCount: 0, percentage: 0 },
+				},
+				byPromptProvenance: {},
+			});
 		});
 
 		it('populates bySymbol metrics from plain alert text strings when candidate object properties are missing', async () => {

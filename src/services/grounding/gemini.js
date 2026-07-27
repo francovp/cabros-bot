@@ -580,7 +580,7 @@ async function generateEnrichedAlert({ text, searchResults = [], searchResultTex
 	const contextSnippet = buildContextSnippet(searchResultText);
 	const alertContext = `${text}${contextPrompt}${contextSnippet}`;
 	console.debug('[Gemini] Generating enriched alert with context:', alertContext);
-	const { systemPrompt, userPrompt } = await promptService.getChatPrompt(
+	const prompt = await promptService.getChatPrompt(
 		PromptKeys.ALERT_ENRICHMENT,
 		{
 			alertContext,
@@ -588,6 +588,13 @@ async function generateEnrichedAlert({ text, searchResults = [], searchResultTex
 		},
 		{ systemPromptOverride },
 	);
+	const { systemPrompt, userPrompt } = prompt;
+	const promptProvenance = {
+		name: prompt.name || PromptKeys.ALERT_ENRICHMENT,
+		source: prompt.source || 'local',
+		label: prompt.label ?? null,
+		version: prompt.version ?? null,
+	};
 
 	try {
 		const llmParams = {
@@ -608,6 +615,7 @@ async function generateEnrichedAlert({ text, searchResults = [], searchResultTex
 				sentiment_score: 0.5,
 				insights: [],
 				modelUsed: GEMINI_MODEL_NAME || 'unknown',
+				prompt_provenance: promptProvenance,
 			};
 		}
 
@@ -635,6 +643,7 @@ async function generateEnrichedAlert({ text, searchResults = [], searchResultTex
 		return {
 			...parseEnrichedAlertResponse(responseText),
 			modelUsed: modelUsed || GEMINI_MODEL_NAME,
+			prompt_provenance: promptProvenance,
 		};
 	} catch (error) {
 		throw new Error(`Enriched alert generation failed: ${error.message}`);

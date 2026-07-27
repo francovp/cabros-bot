@@ -749,6 +749,44 @@ async function exportAlerts({ from, to, limit, source, enriched, includeText = f
 	};
 }
 
+const RISK_FIELDS = ['invalidation_level', 'target_level', 'setup_type', 'risk_reward_ratio'];
+
+function isRiskFieldPopulated(enrichmentData, fieldName) {
+	if (!enrichmentData || typeof enrichmentData !== 'object') {
+		return false;
+	}
+	const val = enrichmentData[fieldName];
+	if (val === undefined || val === null || val === '') {
+		return false;
+	}
+	if (fieldName === 'setup_type') {
+		return typeof val === 'string' && ['breakout', 'mean_reversion', 'trend_continuation', 'reversal'].includes(val.trim().toLowerCase());
+	}
+	if (typeof val === 'number') {
+		return Number.isFinite(val);
+	}
+	if (typeof val === 'string') {
+		return val.trim().length > 0;
+	}
+	return false;
+}
+
+function extractPromptProvenance(data) {
+	const ed = data && data.enrichmentData;
+	if (ed && typeof ed === 'object') {
+		const prov = ed.prompt_provenance || ed.promptProvenance;
+		if (prov && typeof prov === 'object') {
+			return {
+				name: prov.name || 'unknown',
+				source: prov.source || 'unknown',
+				label: prov.label ?? null,
+				version: prov.version ?? null,
+			};
+		}
+	}
+	return null;
+}
+
 /**
  * Build bounded aggregate metrics for stored alerts.
  *
@@ -819,6 +857,13 @@ async function summarizeAlerts({ from, to, limit } = {}) {
 	};
 	const processingLatencySamples = [];
 	const deliveryLatencySamples = [];
+	const riskFieldPopulatedTotals = {
+		invalidation_level: 0,
+		target_level: 0,
+		setup_type: 0,
+		risk_reward_ratio: 0,
+	};
+	const provenanceMap = {};
 
 	const docs = snapshot && Array.isArray(snapshot.docs) ? snapshot.docs : [];
 	for (const doc of docs) {
@@ -833,6 +878,38 @@ async function summarizeAlerts({ from, to, limit } = {}) {
 		if (enriched) {
 			summary.byFeatureFlag.enriched += 1;
 			summary.enrichment.enrichedAlerts += 1;
+
+			for (const field of RISK_FIELDS) {
+				if (isRiskFieldPopulated(data.enrichmentData, field)) {
+					riskFieldPopulatedTotals[field] += 1;
+				}
+			}
+
+			const prov = extractPromptProvenance(data);
+			if (prov) {
+				const provKey = `${prov.name}:${prov.source}:${prov.label ?? 'none'}:${prov.version ?? 'none'}`;
+				if (!provenanceMap[provKey]) {
+					provenanceMap[provKey] = {
+						name: prov.name,
+						source: prov.source,
+						label: prov.label,
+						version: prov.version,
+						denominator: 0,
+						fields: {
+							invalidation_level: { populatedCount: 0, percentage: 0 },
+							target_level: { populatedCount: 0, percentage: 0 },
+							setup_type: { populatedCount: 0, percentage: 0 },
+							risk_reward_ratio: { populatedCount: 0, percentage: 0 },
+						},
+					};
+				}
+				provenanceMap[provKey].denominator += 1;
+				for (const field of RISK_FIELDS) {
+					if (isRiskFieldPopulated(data.enrichmentData, field)) {
+						provenanceMap[provKey].fields[field].populatedCount += 1;
+					}
+				}
+			}
 		} else {
 			summary.byFeatureFlag.plain += 1;
 			summary.enrichment.plainAlerts += 1;
@@ -854,6 +931,49 @@ async function summarizeAlerts({ from, to, limit } = {}) {
 			}
 		}
 	}
+
+	const denominator = summary.enrichment.enrichedAlerts;
+	const fieldsCoverage = {};
+	for (const field of RISK_FIELDS) {
+		const populatedCount = riskFieldPopulatedTotals[field] || 0;
+		const percentage = denominator > 0
+			? Number(((populatedCount / denominator) * 100).toFixed(2))
+			: 0;
+		fieldsCoverage[field] = {
+			populatedCount,
+			percentage,
+		};
+	}
+
+	const byPromptProvenance = {};
+	for (const [key, group] of Object.entries(provenanceMap)) {
+		const groupDenom = group.denominator;
+		const groupFieldsCoverage = {};
+		for (const field of RISK_FIELDS) {
+			const count = group.fields[field].populatedCount;
+			const pct = groupDenom > 0
+				? Number(((count / groupDenom) * 100).toFixed(2))
+				: 0;
+			groupFieldsCoverage[field] = {
+				populatedCount: count,
+				percentage: pct,
+			};
+		}
+		byPromptProvenance[key] = {
+			name: group.name,
+			source: group.source,
+			label: group.label,
+			version: group.version,
+			denominator: groupDenom,
+			fields: groupFieldsCoverage,
+		};
+	}
+
+	summary.enrichment.riskMetadataCoverage = {
+		denominator,
+		fields: fieldsCoverage,
+		byPromptProvenance,
+	};
 
 	summary.enrichment.tokenUsage.totalCost = Number(summary.enrichment.tokenUsage.totalCost.toFixed(6));
 	summary.latency.averageProcessingMs = averageLatency(processingLatencySamples);
