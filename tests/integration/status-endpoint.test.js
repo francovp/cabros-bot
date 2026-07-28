@@ -296,6 +296,7 @@ describe('Status endpoints', () => {
 
 		expect(response.status).toBe(200);
 		expect(response.body.featureFlags.signalOutcomeTracking).toBe(true);
+		expect(response.body.dependencies.signalOutcomeWorker.enabled).toBe(true);
 	});
 
 	it('reports signal outcome tracking from the legacy environment variable', async () => {
@@ -307,6 +308,7 @@ describe('Status endpoints', () => {
 
 		expect(response.status).toBe(200);
 		expect(response.body.featureFlags.signalOutcomeTracking).toBe(true);
+		expect(response.body.dependencies.signalOutcomeWorker.enabled).toBe(true);
 	});
 
 	it('reports Firestore job storage as disabled by default', async () => {

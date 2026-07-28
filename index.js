@@ -15,6 +15,7 @@ const { getRoutes } = require('./src/routes');
 const { initializeNotificationServices } = require('./src/controllers/webhooks/handlers/alert/alert');
 const { registerDebugSentryRoute } = require('./src/lib/debugSentryRoute');
 const { getTelegramBootstrapConfig } = require('./src/lib/telegramBootstrap');
+const SignalOutcomeService = require('./src/services/storage/SignalOutcomeService');
 const Sentry = require('@sentry/node');
 
 const { token } = getTelegramBootstrapConfig();
@@ -43,6 +44,9 @@ app.use(function onError(err, req, res, next) {
 app.listen(port, async () => {
 	console.log(now + ' - Running server on port ' + port);
 
+	// Start background signal outcome evaluation worker if enabled
+	SignalOutcomeService.startWorker();
+
 	const { telegramBotIsEnabled, isPreviewEnv, shouldStartTelegramBot } = getTelegramBootstrapConfig();
 	console.debug('telegramBotIsEnabled:', telegramBotIsEnabled);
 	console.debug('isPreviewEnv:', isPreviewEnv);
@@ -60,8 +64,14 @@ app.listen(port, async () => {
 		await initializeNotificationServices(bot);
 
 		// Enable graceful stop
-		process.once('SIGINT', () => bot.stop('SIGINT'));
-		process.once('SIGTERM', () => bot.stop('SIGTERM'));
+		process.once('SIGINT', () => {
+			SignalOutcomeService.stopWorker();
+			bot.stop('SIGINT');
+		});
+		process.once('SIGTERM', () => {
+			SignalOutcomeService.stopWorker();
+			bot.stop('SIGTERM');
+		});
 
 		// Start polling without blocking the rest of bootstrap.
 		void bot.launch().catch((error) => {
@@ -85,6 +95,13 @@ app.listen(port, async () => {
 		console.log('Telegram Bot is disabled');
 		// Initialize notification services
 		await initializeNotificationServices(null);
+
+		process.once('SIGINT', () => {
+			SignalOutcomeService.stopWorker();
+		});
+		process.once('SIGTERM', () => {
+			SignalOutcomeService.stopWorker();
+		});
 	}
 });
 
