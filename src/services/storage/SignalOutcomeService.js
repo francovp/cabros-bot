@@ -1,13 +1,14 @@
 'use strict';
 
 const admin = require('firebase-admin');
-const { getFirestore } = require('./AlertStorageService');
+const AlertStorageService = require('./AlertStorageService');
 const { MainClient } = require('binance');
 
 const COLLECTION_NAME = 'tradingSignalOutcomes';
 let binanceClient = null;
 let isEvaluating = false;
 let workerTimer = null;
+let activeIntervalMs = null;
 let lastRunAt = null;
 let lastRunDurationMs = null;
 let lastRunEvaluatedCount = 0;
@@ -104,7 +105,7 @@ async function recordSignal({
 		return null;
 	}
 
-	const firestore = getFirestore();
+	const firestore = AlertStorageService.getFirestore();
 	if (!firestore) {
 		return null;
 	}
@@ -187,25 +188,25 @@ async function evaluatePendingOutcomes(options = {}) {
 		return { scannedCount: 0, evaluatedCount: 0, skipped: true, reason: 'already_evaluating' };
 	}
 
-	const firestore = getFirestore();
-	if (!firestore) {
-		return { scannedCount: 0, evaluatedCount: 0, skipped: true, reason: 'no_firestore' };
-	}
-
 	isEvaluating = true;
 	const startTime = Date.now();
 	let scannedCount = 0;
 	let evaluatedCount = 0;
 
-	const effectiveLimit = options.limit || (process.env.SIGNAL_OUTCOME_EVALUATION_BATCH_LIMIT
-		? parseInt(process.env.SIGNAL_OUTCOME_EVALUATION_BATCH_LIMIT, 10)
-		: 50);
-
-	const effectiveMaxDurationMs = options.maxDurationMs || (process.env.SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS
-		? parseInt(process.env.SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS, 10)
-		: 30000);
-
 	try {
+		const firestore = AlertStorageService.getFirestore();
+		if (!firestore) {
+			return { scannedCount: 0, evaluatedCount: 0, skipped: true, reason: 'no_firestore' };
+		}
+
+		const effectiveLimit = options.limit || (process.env.SIGNAL_OUTCOME_EVALUATION_BATCH_LIMIT
+			? parseInt(process.env.SIGNAL_OUTCOME_EVALUATION_BATCH_LIMIT, 10)
+			: 50);
+
+		const effectiveMaxDurationMs = options.maxDurationMs || (process.env.SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS
+			? parseInt(process.env.SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS, 10)
+			: 30000);
+
 		let query = firestore.collection(COLLECTION_NAME).where('outcomeEvaluated', '==', false);
 		if (effectiveLimit && typeof effectiveLimit === 'number' && effectiveLimit > 0) {
 			query = query.limit(effectiveLimit);
@@ -387,6 +388,8 @@ function startWorker(options = {}) {
 			? parseInt(process.env.SIGNAL_OUTCOME_EVALUATION_CADENCE_MS, 10)
 			: 300000));
 
+	activeIntervalMs = intervalMs;
+
 	// Trigger initial sweep non-blockingly after server readiness
 	Promise.resolve().then(() => {
 		evaluatePendingOutcomes().catch((err) => {
@@ -415,6 +418,7 @@ function stopWorker() {
 		clearInterval(workerTimer);
 		workerTimer = null;
 	}
+	activeIntervalMs = null;
 	isEvaluating = false;
 }
 
@@ -422,11 +426,11 @@ function stopWorker() {
  * Get operational status of the evaluation worker.
  */
 function getWorkerStatus() {
-	const intervalMs = process.env.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS
+	const intervalMs = activeIntervalMs || (process.env.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS
 		? parseInt(process.env.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS, 10)
 		: (process.env.SIGNAL_OUTCOME_EVALUATION_CADENCE_MS
 			? parseInt(process.env.SIGNAL_OUTCOME_EVALUATION_CADENCE_MS, 10)
-			: 300000);
+			: 300000));
 
 	const batchLimit = process.env.SIGNAL_OUTCOME_EVALUATION_BATCH_LIMIT
 		? parseInt(process.env.SIGNAL_OUTCOME_EVALUATION_BATCH_LIMIT, 10)
@@ -458,17 +462,12 @@ async function getMetricsSummary({ from, to, limit } = {}) {
 		return 'No measurements found';
 	}
 
-	const firestore = getFirestore();
+	const firestore = AlertStorageService.getFirestore();
 	if (!firestore) {
 		return 'No measurements found';
 	}
 
 	try {
-		// Trigger evaluation in the background without blocking the query response
-		void evaluatePendingOutcomes().catch(error => {
-			console.warn('[SignalOutcomeService] Background pending outcomes evaluation failed:', error.message);
-		});
-
 		const parsedFrom = from ? new Date(from) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 		const parsedTo = to ? new Date(to) : new Date();
 

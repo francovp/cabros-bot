@@ -496,4 +496,159 @@ describe('SignalOutcomeService', () => {
 			expect(res.eligibilityBreakdown.unparseable_symbol).toBe(2);
 		});
 	});
+
+	describe('worker lifecycle and scheduling', () => {
+		afterEach(() => {
+			SignalOutcomeService.stopWorker();
+		});
+
+		it('does not start worker when feature is disabled', () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'false';
+			process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING = 'false';
+
+			const started = SignalOutcomeService.startWorker();
+			expect(started).toBe(false);
+
+			const status = SignalOutcomeService.getWorkerStatus();
+			expect(status.enabled).toBe(false);
+			expect(status.running).toBe(false);
+			expect(status.timerId).toBeNull();
+		});
+
+		it('starts worker, executes initial sweep and periodic ticks, and reports status', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			const receivedAtDate = new Date(Date.now() - 2 * 60 * 60 * 1000);
+			const mockDocId = 'worker-doc-1';
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, new Map([
+				[mockDocId, {
+					receivedAt: admin.firestore.Timestamp.fromDate(receivedAtDate),
+					requestId: 'req-worker',
+					source: 'alert',
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					side: 'BUY',
+					price: 50000,
+					outcomeEvaluated: false,
+					outcomes: {
+						'1h': {
+							status: 'pending',
+							targetTime: new Date(receivedAtDate.getTime() + 1 * 60 * 60 * 1000).toISOString(),
+						},
+					},
+				}],
+			]));
+
+			mockGetKlines.mockResolvedValue([
+				[receivedAtDate.getTime(), "50000", "52000", "49000", "51000"],
+			]);
+
+			const started = SignalOutcomeService.startWorker({ intervalMs: 60000 });
+			expect(started).toBe(true);
+
+			let status = SignalOutcomeService.getWorkerStatus();
+			expect(status.enabled).toBe(true);
+			expect(status.running).toBe(true);
+			expect(status.intervalMs).toBe(60000);
+
+			// Await the evaluation sweep explicitly
+			await SignalOutcomeService.evaluatePendingOutcomes();
+
+			const updated = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(mockDocId);
+			expect(updated).toBeDefined();
+			expect(updated.outcomes['1h'].status).toBe('evaluated');
+
+			status = SignalOutcomeService.getWorkerStatus();
+			expect(status.lastRunEvaluatedCount).toBe(1);
+
+			// Clean stop
+			SignalOutcomeService.stopWorker();
+			status = SignalOutcomeService.getWorkerStatus();
+			expect(status.running).toBe(false);
+			expect(status.timerId).toBeNull();
+		});
+
+		it('prevents overlapping sweeps when an evaluation is in progress', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			// Trigger a sweep with a slow mocked Firestore call to keep isEvaluating true
+			const slowDocRef = {
+				ref: { update: jest.fn() },
+				data: () => ({
+					receivedAt: admin.firestore.Timestamp.fromDate(new Date(Date.now() - 7200000)),
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					side: 'BUY',
+					price: 50000,
+					outcomes: {
+						'1h': { status: 'pending', targetTime: new Date(Date.now() - 3600000).toISOString() },
+					},
+				}),
+			};
+
+			let resolveGet;
+			const slowPromise = new Promise((resolve) => { resolveGet = resolve; });
+
+			const firestoreMock = {
+				collection: () => ({
+					where: () => ({
+						limit: () => ({
+							get: () => slowPromise,
+						}),
+					}),
+				}),
+			};
+
+			const alertStorageService = require('../../src/services/storage/AlertStorageService');
+			const origGetFirestore = alertStorageService.getFirestore;
+			alertStorageService.getFirestore = () => firestoreMock;
+
+			try {
+				// Start first sweep
+				const sweep1 = SignalOutcomeService.evaluatePendingOutcomes();
+
+				// Second concurrent sweep should be skipped
+				const sweep2 = await SignalOutcomeService.evaluatePendingOutcomes();
+				expect(sweep2).toEqual({
+					scannedCount: 0,
+					evaluatedCount: 0,
+					skipped: true,
+					reason: 'already_evaluating',
+				});
+
+				// Complete first sweep
+				resolveGet({ empty: true, docs: [] });
+				await sweep1;
+			} finally {
+				alertStorageService.getFirestore = origGetFirestore;
+			}
+		});
+
+		it('isolates errors during worker sweep without throwing', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+
+			const alertStorageService = require('../../src/services/storage/AlertStorageService');
+			const origGetFirestore = alertStorageService.getFirestore;
+
+			alertStorageService.getFirestore = () => {
+				throw new Error('Firestore connection failure');
+			};
+
+			const consoleWarnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+			try {
+				const res = await SignalOutcomeService.evaluatePendingOutcomes();
+				expect(res.error).toBe('Firestore connection failure');
+				expect(consoleWarnSpy).toHaveBeenCalledWith(
+					'[SignalOutcomeService] Failed to evaluate pending outcomes:',
+					'Firestore connection failure'
+				);
+			} finally {
+				consoleWarnSpy.mockRestore();
+				alertStorageService.getFirestore = origGetFirestore;
+			}
+		});
+	});
 });
