@@ -614,5 +614,47 @@ describe('Idempotency Service & Middleware', () => {
 				code: 'IDEMPOTENCY_CONFLICT',
 			});
 		});
+
+		test('should capture content-type correctly when res.json is called', async () => {
+			const key = 'test-header-capture';
+			req.headers['idempotency-key'] = key;
+			req.body = { text: 'header test' };
+
+			await idempotencyMiddleware(req, res, next);
+			res.json({ success: true });
+
+			const cached = await idempotencyService.get(key, {
+				method: req.method,
+				path: req.path || '/api/webhook/alert',
+				body: req.body,
+				query: req.query || {},
+			});
+
+			expect(cached).not.toBeNull();
+			expect(cached.headers).not.toHaveProperty('undefined');
+			expect(cached.headers['content-type']).toBeDefined();
+		});
+
+		test('should throw IDEMPOTENCY_LIMIT_EXCEEDED when durable pending claim cannot evict completed keys', async () => {
+			const idempotencyStorageService = require('../../src/services/storage/IdempotencyStorageService');
+			jest.spyOn(idempotencyStorageService, 'isEnabled').mockReturnValue(true);
+			jest.spyOn(idempotencyStorageService, 'reserveEntry').mockResolvedValue({ state: 'pending' });
+			jest.spyOn(idempotencyStorageService, 'waitForPendingCompletion').mockReturnValue(new Promise(() => {}));
+
+			const originalMaxKeys = idempotencyService.maxKeys;
+			idempotencyService.maxKeys = 1;
+
+			try {
+				await idempotencyService.reserve('pending-durable-1', { text: '1' });
+				await expect(
+					idempotencyService.reserve('pending-durable-2', { text: '2' })
+				).rejects.toThrow(expect.objectContaining({
+					code: 'IDEMPOTENCY_LIMIT_EXCEEDED',
+					statusCode: 429,
+				}));
+			} finally {
+				idempotencyService.maxKeys = originalMaxKeys;
+			}
+		});
 	});
 });

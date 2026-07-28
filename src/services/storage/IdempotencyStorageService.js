@@ -7,7 +7,7 @@
  * Fail-open: all Firestore operations catch errors and log warnings using hashed keys.
  *   API endpoints and alert delivery will fail-open to in-memory idempotency.
  *
- * Collection: idempotency-keys
+ * Collection: idempotency_keys
  * Document ID: SHA-256 hash of "idempotency:<rawKey>" (raw caller keys are never stored as document IDs or logged).
  *
  * Document Schema:
@@ -26,8 +26,8 @@ const crypto = require('crypto');
 const admin = require('firebase-admin');
 const { isFirestoreConfigured } = require('./firestoreConfig');
 
-const COLLECTION_NAME = 'idempotency-keys';
-const PENDING_STALE_TIMEOUT_MS = 60000; // 1 minute max pending claim lifetime before treated as stale
+const COLLECTION_NAME = 'idempotency_keys';
+const PENDING_STALE_TIMEOUT_MS = 180000; // 3 minutes max pending claim lifetime to cover 120s webhook limits
 
 let db = null;
 
@@ -269,13 +269,22 @@ async function setEntry(key, payloadHash, { statusCode, body, headers }, ttlMs) 
 		const now = admin.firestore.Timestamp.fromMillis(nowMs);
 		const expiresAt = admin.firestore.Timestamp.fromMillis(nowMs + ttlMs);
 
+		const cleanHeaders = {};
+		if (headers && typeof headers === 'object') {
+			for (const [k, v] of Object.entries(headers)) {
+				if (v !== undefined) {
+					cleanHeaders[k] = v;
+				}
+			}
+		}
+
 		await docRef.set({
 			docId,
 			payloadHash,
 			state: 'completed',
 			statusCode,
 			responseBody: body !== undefined ? body : null,
-			headers: headers || {},
+			headers: cleanHeaders,
 			createdAt: now,
 			expiresAt,
 			updatedAt: now,

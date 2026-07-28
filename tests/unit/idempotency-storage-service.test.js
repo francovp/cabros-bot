@@ -98,4 +98,39 @@ describe('IdempotencyStorageService', () => {
 		const res = await waitForPendingCompletion('test-key', 'hash123', 500, 100);
 		expect(res).toEqual({ state: 'released' });
 	});
+
+	test('COLLECTION_NAME should be idempotency_keys matching documented collection name', () => {
+		const storageModule = require('../../src/services/storage/IdempotencyStorageService');
+		expect(storageModule.COLLECTION_NAME).toBe('idempotency_keys');
+	});
+
+	test('setEntry should strip undefined header values when writing to Firestore', async () => {
+		_resetForTesting();
+		process.env.ENABLE_FIRESTORE_IDEMPOTENCY = 'true';
+		process.env.FIREBASE_SERVICE_ACCOUNT_JSON = JSON.stringify({
+			project_id: 'test-project',
+			client_email: 'test@example.com',
+			private_key: '-----BEGIN PRIVATE KEY-----\nkey\n-----END PRIVATE KEY-----\n',
+		});
+		const setMock = jest.fn().mockResolvedValue({});
+		const docMock = jest.fn().mockReturnValue({ set: setMock });
+		const collectionMock = jest.fn().mockReturnValue({ doc: docMock });
+		const firestoreMock = { collection: collectionMock };
+		const firestoreFn = jest.fn().mockReturnValue(firestoreMock);
+		jest.spyOn(admin, 'firestore').mockImplementation(firestoreFn);
+		admin.firestore.Timestamp = { fromMillis: (ms) => ms };
+		jest.spyOn(admin.credential, 'cert').mockReturnValue({});
+		jest.spyOn(admin, 'initializeApp').mockReturnValue({});
+
+		await setEntry('test-key', 'hash123', {
+			statusCode: 200,
+			body: { ok: true },
+			headers: { 'content-type': 'application/json', undefinedHeader: undefined },
+		}, 300000);
+
+		expect(collectionMock).toHaveBeenCalledWith('idempotency_keys');
+		expect(setMock).toHaveBeenCalledWith(expect.objectContaining({
+			headers: { 'content-type': 'application/json' },
+		}));
+	});
 });

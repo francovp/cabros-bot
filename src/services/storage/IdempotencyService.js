@@ -234,6 +234,16 @@ class IdempotencyService {
 				}
 
 				if (durableRes.state === 'pending') {
+					if (this.cache.size >= this.maxKeys) {
+						const evicted = this.evictOldestCompletedRecord();
+						if (!evicted) {
+							const error = new Error('Server is currently processing too many requests with idempotency keys');
+							error.code = 'IDEMPOTENCY_LIMIT_EXCEEDED';
+							error.statusCode = 429;
+							throw error;
+						}
+					}
+
 					let resolveCompletion;
 					let rejectCompletion;
 					const completionPromise = new Promise((resolve, reject) => {
@@ -253,8 +263,9 @@ class IdempotencyService {
 					};
 					this.cache.set(key, pendingRecord);
 
-					// Poll Firestore for completion across replicas
-					idempotencyStorageService.waitForPendingCompletion(key, payloadHash, ttl)
+					// Poll Firestore for completion across replicas with a bounded wait timeout
+					const pendingWaitMs = Math.min(ttl, 15000);
+					idempotencyStorageService.waitForPendingCompletion(key, payloadHash, pendingWaitMs)
 						.then((pollResult) => {
 							if (pollResult.state === 'completed' && pollResult.record) {
 								this.cache.set(key, pollResult.record);
@@ -284,7 +295,13 @@ class IdempotencyService {
 				// Fresh reservation claimed in Firestore
 				if (durableRes.state === 'fresh') {
 					if (this.cache.size >= this.maxKeys) {
-						this.evictOldestCompletedRecord();
+						const evicted = this.evictOldestCompletedRecord();
+						if (!evicted) {
+							const error = new Error('Server is currently processing too many requests with idempotency keys');
+							error.code = 'IDEMPOTENCY_LIMIT_EXCEEDED';
+							error.statusCode = 429;
+							throw error;
+						}
 					}
 
 					let resolveCompletion;

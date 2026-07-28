@@ -163,23 +163,29 @@ function idempotencyMiddleware(req, res, next) {
 				}
 			}
 
+			const contentType = res.get('content-type');
+			const headers = {};
+			if (contentType !== undefined && contentType !== null) {
+				headers['content-type'] = contentType;
+			}
+
 			idempotencyService.set(key, requestFingerprint, {
 				statusCode: res.statusCode,
 				body: responseBody,
-				headers: {
-					'content-type': res.get('content-type'),
-				},
+				headers,
 			});
 		};
 
 		res.send = function (body) {
+			const result = originalSend.apply(this, arguments);
 			cacheResponse(body);
-			return originalSend.apply(this, arguments);
+			return result;
 		};
 
 		res.json = function (obj) {
+			const result = originalJson.apply(this, arguments);
 			cacheResponse(obj);
-			return originalJson.apply(this, arguments);
+			return result;
 		};
 
 		res.on('finish', () => {
