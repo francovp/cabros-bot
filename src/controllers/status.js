@@ -2,6 +2,7 @@ const packageJson = require('../../package.json');
 const sentryService = require('../services/monitoring/SentryService');
 const { scannerPresetService } = require('../services/scannerPresets/ScannerPresetService');
 const { isFirestoreConfigured } = require('../services/storage/firestoreConfig');
+const SignalOutcomeService = require('../services/storage/SignalOutcomeService');
 
 const DEFAULT_TRADINGVIEW_MCP_URL = 'https://tradingview-mcp.onrender.com/mcp';
 const DEFAULT_AZURE_LLM_ENDPOINT = 'https://models.github.ai/inference';
@@ -250,6 +251,8 @@ function getStatus() {
 		backend: cache.dedupMode.backend,
 	};
 
+	const signalOutcomeWorkerStatus = SignalOutcomeService.getWorkerStatus();
+
 	return {
 		service: {
 			name: process.env.SERVICE_NAME || packageJson.name || 'cabros-bot',
@@ -308,16 +311,30 @@ function getStatus() {
 			langfuse,
 			braveSearch,
 			newsMonitorLlm,
-		llmAlertEnrichment,
-		cloudflareAig: dependencyStatus({
-			enabled: isEnabled(process.env.ENABLE_CLOUDFLARE_AIG),
-			configured:
-				hasValue(process.env.CF_AIG_TOKEN)
-				&& hasValue(process.env.CF_AIG_BASE_URL)
-				&& hasValue(process.env.CF_AIG_MODEL || DEFAULT_CF_AIG_MODEL),
-		}),
+			llmAlertEnrichment,
+			cloudflareAig: dependencyStatus({
+				enabled: isEnabled(process.env.ENABLE_CLOUDFLARE_AIG),
+				configured:
+					hasValue(process.env.CF_AIG_TOKEN)
+					&& hasValue(process.env.CF_AIG_BASE_URL)
+					&& hasValue(process.env.CF_AIG_MODEL || DEFAULT_CF_AIG_MODEL),
+			}),
 			newsMonitorDedup,
 			scannerPresetStorage: scannerPresetService.getStorageStatus(),
+			signalOutcomeWorker: {
+				...dependencyStatus({
+					enabled: signalOutcomeWorkerStatus.enabled,
+					configured: firestore.configured,
+				}),
+				running: signalOutcomeWorkerStatus.running,
+				intervalMs: signalOutcomeWorkerStatus.intervalMs,
+				batchLimit: signalOutcomeWorkerStatus.batchLimit,
+				maxDurationMs: signalOutcomeWorkerStatus.maxDurationMs,
+				isEvaluating: signalOutcomeWorkerStatus.isEvaluating,
+				lastRunAt: signalOutcomeWorkerStatus.lastRunAt,
+				lastRunDurationMs: signalOutcomeWorkerStatus.lastRunDurationMs,
+				lastRunEvaluatedCount: signalOutcomeWorkerStatus.lastRunEvaluatedCount,
+			},
 		},
 	};
 }

@@ -1,11 +1,17 @@
 'use strict';
 
 const admin = require('firebase-admin');
-const { getFirestore } = require('./AlertStorageService');
+const AlertStorageService = require('./AlertStorageService');
 const { MainClient } = require('binance');
 
 const COLLECTION_NAME = 'tradingSignalOutcomes';
 let binanceClient = null;
+let isEvaluating = false;
+let workerTimer = null;
+let activeIntervalMs = null;
+let lastRunAt = null;
+let lastRunDurationMs = null;
+let lastRunEvaluatedCount = 0;
 
 function getBinanceClient() {
 	if (!binanceClient) {
@@ -99,7 +105,7 @@ async function recordSignal({
 		return null;
 	}
 
-	const firestore = getFirestore();
+	const firestore = AlertStorageService.getFirestore();
 	if (!firestore) {
 		return null;
 	}
@@ -171,31 +177,57 @@ async function recordSignal({
 
 /**
  * Scan for pending signals and evaluate outcomes that have passed their target time.
+ * Accepts optional options to control batch limit and duration budget.
  */
-async function evaluatePendingOutcomes() {
+async function evaluatePendingOutcomes(options = {}) {
 	if (!isEnabled()) {
-		return;
+		return { scannedCount: 0, evaluatedCount: 0, skipped: true, reason: 'disabled' };
 	}
 
-	const firestore = getFirestore();
-	if (!firestore) {
-		return;
+	if (isEvaluating) {
+		return { scannedCount: 0, evaluatedCount: 0, skipped: true, reason: 'already_evaluating' };
 	}
+
+	isEvaluating = true;
+	const startTime = Date.now();
+	let scannedCount = 0;
+	let evaluatedCount = 0;
 
 	try {
-		const snapshot = await firestore
-			.collection(COLLECTION_NAME)
-			.where('outcomeEvaluated', '==', false)
-			.get();
+		const firestore = AlertStorageService.getFirestore();
+		if (!firestore) {
+			return { scannedCount: 0, evaluatedCount: 0, skipped: true, reason: 'no_firestore' };
+		}
+
+		const effectiveLimit = options.limit || (process.env.SIGNAL_OUTCOME_EVALUATION_BATCH_LIMIT
+			? parseInt(process.env.SIGNAL_OUTCOME_EVALUATION_BATCH_LIMIT, 10)
+			: 50);
+
+		const effectiveMaxDurationMs = options.maxDurationMs || (process.env.SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS
+			? parseInt(process.env.SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS, 10)
+			: 30000);
+
+		let query = firestore.collection(COLLECTION_NAME).where('outcomeEvaluated', '==', false);
+		if (effectiveLimit && typeof effectiveLimit === 'number' && effectiveLimit > 0) {
+			query = query.limit(effectiveLimit);
+		}
+
+		const snapshot = await query.get();
 
 		if (snapshot.empty) {
-			return;
+			return { scannedCount: 0, evaluatedCount: 0 };
 		}
 
 		const now = Date.now();
 		const client = getBinanceClient();
 
 		for (const doc of snapshot.docs) {
+			if (Date.now() - startTime >= effectiveMaxDurationMs) {
+				console.warn(`[SignalOutcomeService] Outcome evaluation sweep max duration budget (${effectiveMaxDurationMs}ms) exceeded. Halting sweep.`);
+				break;
+			}
+
+			scannedCount++;
 			const data = doc.data();
 			const entryPrice = data.price;
 			const side = data.side;
@@ -216,6 +248,7 @@ async function evaluatePendingOutcomes() {
 					eligibilityReason: 'Entry price unavailable for symbol',
 					outcomes,
 				});
+				evaluatedCount++;
 				continue;
 			}
 
@@ -234,6 +267,7 @@ async function evaluatePendingOutcomes() {
 					eligibilityReason: state === 'unparseable_symbol' ? 'Symbol or exchange unparseable or unknown' : `Exchange ${data.exchange} not supported by Binance market-data evaluator`,
 					outcomes,
 				});
+				evaluatedCount++;
 				continue;
 			}
 
@@ -320,11 +354,104 @@ async function evaluatePendingOutcomes() {
 					updateFields.outcomeEvaluated = true;
 				}
 				await doc.ref.update(updateFields);
+				evaluatedCount++;
 			}
 		}
+
+		return { scannedCount, evaluatedCount, durationMs: Date.now() - startTime };
 	} catch (error) {
 		console.warn('[SignalOutcomeService] Failed to evaluate pending outcomes:', error.message);
+		return { scannedCount, evaluatedCount, error: error.message };
+	} finally {
+		isEvaluating = false;
+		lastRunAt = new Date();
+		lastRunDurationMs = Date.now() - startTime;
+		lastRunEvaluatedCount = evaluatedCount;
 	}
+}
+
+/**
+ * Start background autonomous evaluation worker if signal outcome tracking is enabled.
+ */
+function startWorker(options = {}) {
+	if (!isEnabled()) {
+		return false;
+	}
+
+	if (workerTimer) {
+		return true;
+	}
+
+	const intervalMs = options.intervalMs || (process.env.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS
+		? parseInt(process.env.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS, 10)
+		: (process.env.SIGNAL_OUTCOME_EVALUATION_CADENCE_MS
+			? parseInt(process.env.SIGNAL_OUTCOME_EVALUATION_CADENCE_MS, 10)
+			: 300000));
+
+	activeIntervalMs = intervalMs;
+
+	// Trigger initial sweep non-blockingly after server readiness
+	Promise.resolve().then(() => {
+		evaluatePendingOutcomes().catch((err) => {
+			console.warn('[SignalOutcomeService] Initial worker sweep failed:', err.message);
+		});
+	});
+
+	workerTimer = setInterval(() => {
+		evaluatePendingOutcomes().catch((err) => {
+			console.warn('[SignalOutcomeService] Periodic worker sweep failed:', err.message);
+		});
+	}, intervalMs);
+
+	if (workerTimer && typeof workerTimer.unref === 'function') {
+		workerTimer.unref();
+	}
+
+	return true;
+}
+
+/**
+ * Stop background autonomous evaluation worker and clear timers.
+ */
+function stopWorker() {
+	if (workerTimer) {
+		clearInterval(workerTimer);
+		workerTimer = null;
+	}
+	activeIntervalMs = null;
+	isEvaluating = false;
+}
+
+/**
+ * Get operational status of the evaluation worker.
+ */
+function getWorkerStatus() {
+	const intervalMs = activeIntervalMs || (process.env.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS
+		? parseInt(process.env.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS, 10)
+		: (process.env.SIGNAL_OUTCOME_EVALUATION_CADENCE_MS
+			? parseInt(process.env.SIGNAL_OUTCOME_EVALUATION_CADENCE_MS, 10)
+			: 300000));
+
+	const batchLimit = process.env.SIGNAL_OUTCOME_EVALUATION_BATCH_LIMIT
+		? parseInt(process.env.SIGNAL_OUTCOME_EVALUATION_BATCH_LIMIT, 10)
+		: 50;
+
+	const maxDurationMs = process.env.SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS
+		? parseInt(process.env.SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS, 10)
+		: 30000;
+
+	return {
+		enabled: isEnabled(),
+		running: workerTimer !== null,
+		intervalMs,
+		batchLimit,
+		maxDurationMs,
+		isEvaluating,
+		lastRunAt,
+		lastRunDurationMs,
+		lastRunEvaluatedCount,
+		timerId: workerTimer ? true : null,
+	};
 }
 
 /**
@@ -335,17 +462,12 @@ async function getMetricsSummary({ from, to, limit } = {}) {
 		return 'No measurements found';
 	}
 
-	const firestore = getFirestore();
+	const firestore = AlertStorageService.getFirestore();
 	if (!firestore) {
 		return 'No measurements found';
 	}
 
 	try {
-		// Trigger evaluation in the background without blocking the query response
-		void evaluatePendingOutcomes().catch(error => {
-			console.warn('[SignalOutcomeService] Background pending outcomes evaluation failed:', error.message);
-		});
-
 		const parsedFrom = from ? new Date(from) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 		const parsedTo = to ? new Date(to) : new Date();
 
@@ -575,5 +697,8 @@ module.exports = {
 	getMetricsSummary,
 	normalizeSide,
 	normalizeSymbolAndExchange,
+	startWorker,
+	stopWorker,
+	getWorkerStatus,
 	COLLECTION_NAME,
 };
