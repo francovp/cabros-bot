@@ -5,7 +5,13 @@ const httpMocks = require('node-mocks-http');
 describe('Rate Limiter Middleware', () => {
 	let req, res, next;
 
+	let originalEnable;
+
 	beforeEach(() => {
+		originalEnable = process.env.ENABLE_TEST_RATE_LIMITER;
+		process.env.ENABLE_TEST_RATE_LIMITER = 'true';
+		rateLimiter.reset();
+
 		req = httpMocks.createRequest({
 			method: 'GET',
 			url: '/api/test',
@@ -13,10 +19,15 @@ describe('Rate Limiter Middleware', () => {
 		});
 		res = httpMocks.createResponse();
 		next = jest.fn();
+	});
 
-		// Reset process.env for each test (though we can't easily reset the module-level consts)
-		// Since the module is already loaded, we can't easily change the constants inside it.
-		// We will test the logic based on default values or values assumed by the module.
+	afterEach(() => {
+		if (originalEnable !== undefined) {
+			process.env.ENABLE_TEST_RATE_LIMITER = originalEnable;
+		} else {
+			delete process.env.ENABLE_TEST_RATE_LIMITER;
+		}
+		rateLimiter.reset();
 	});
 
 	test('should allow requests under the limit', () => {

@@ -9,6 +9,15 @@ const NotificationManager = require('../../src/services/notification/Notificatio
 
 describe('Configuration Validation', () => {
 	let mockBot;
+	let initialEnv;
+
+	beforeAll(() => {
+		initialEnv = { ...process.env };
+	});
+
+	afterAll(() => {
+		process.env = initialEnv;
+	});
 
 	beforeEach(() => {
 		mockBot = {

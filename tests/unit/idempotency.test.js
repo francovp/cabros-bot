@@ -12,7 +12,7 @@ describe('Idempotency Service & Middleware', () => {
 	});
 
 	describe('IdempotencyService', () => {
-		test('should store and retrieve cached response details', () => {
+		test('should store and retrieve cached response details', async () => {
 			const key = 'test-key-1';
 			const payload = { body: { text: 'alert-1' }, query: {} };
 			const response = {
@@ -23,7 +23,7 @@ describe('Idempotency Service & Middleware', () => {
 
 			idempotencyService.set(key, payload, response);
 
-			const cached = idempotencyService.get(key, payload);
+			const cached = await idempotencyService.get(key, payload);
 			expect(cached).not.toBeNull();
 			expect(cached.statusCode).toBe(200);
 			expect(cached.responseBody).toEqual({ success: true, results: [] });
@@ -40,9 +40,9 @@ describe('Idempotency Service & Middleware', () => {
 
 			idempotencyService.set(key, { body: { text: 'alert-2' }, query: {} }, response);
 
-			expect(() => {
-				idempotencyService.reserve(key, { body: { text: 'different-alert' }, query: {} });
-			}).toThrow('Idempotency key was reused with a different payload');
+			expect(
+				() => idempotencyService.reserve(key, { body: { text: 'different-alert' }, query: {} })
+			).toThrow('Idempotency key was reused with a different payload');
 		});
 
 		test('should canonicalize nested object keys while preserving array order', () => {
@@ -63,7 +63,7 @@ describe('Idempotency Service & Middleware', () => {
 			expect(idempotencyService.hashPayload(firstPayload)).not.toBe(idempotencyService.hashPayload(reorderedArrayPayload));
 		});
 
-		test('should honor custom TTL from environment', () => {
+		test('should honor custom TTL from environment', async () => {
 			process.env.WEBHOOK_IDEMPOTENCY_TTL_MS = '1000';
 			expect(idempotencyService.getTtlMs()).toBe(1000);
 
@@ -77,12 +77,12 @@ describe('Idempotency Service & Middleware', () => {
 			const now = Date.now();
 			const dateSpy = jest.spyOn(Date, 'now').mockReturnValue(now + 1001);
 
-			const cached = idempotencyService.get(key, payload);
+			const cached = await idempotencyService.get(key, payload);
 			expect(cached).toBeNull();
 			dateSpy.mockRestore();
 		});
 
-		test('should evict oldest key when cache size exceeds limit', () => {
+		test('should evict oldest key when cache size exceeds limit', async () => {
 			// Mock max keys to a smaller number for testing eviction
 			const originalMaxKeys = idempotencyService.maxKeys;
 			idempotencyService.maxKeys = 3;
@@ -92,14 +92,14 @@ describe('Idempotency Service & Middleware', () => {
 				idempotencyService.set('key-2', { body: 'body-2', query: {} }, { statusCode: 200, body: '2' });
 				idempotencyService.set('key-3', { body: 'body-3', query: {} }, { statusCode: 200, body: '3' });
 
-				expect(idempotencyService.get('key-1', { body: 'body-1', query: {} })).not.toBeNull();
+				expect(await idempotencyService.get('key-1', { body: 'body-1', query: {} })).not.toBeNull();
 
 				// Adding 4th key should evict 'key-1' (as it was the oldest inserted)
 				idempotencyService.set('key-4', { body: 'body-4', query: {} }, { statusCode: 200, body: '4' });
 
-				expect(idempotencyService.get('key-1', { body: 'body-1', query: {} })).toBeNull();
-				expect(idempotencyService.get('key-2', { body: 'body-2', query: {} })).not.toBeNull();
-				expect(idempotencyService.get('key-4', { body: 'body-4', query: {} })).not.toBeNull();
+				expect(await idempotencyService.get('key-1', { body: 'body-1', query: {} })).toBeNull();
+				expect(await idempotencyService.get('key-2', { body: 'body-2', query: {} })).not.toBeNull();
+				expect(await idempotencyService.get('key-4', { body: 'body-4', query: {} })).not.toBeNull();
 			} finally {
 				idempotencyService.maxKeys = originalMaxKeys;
 			}
@@ -109,9 +109,9 @@ describe('Idempotency Service & Middleware', () => {
 			const key = 'pending-key';
 			const payload = { method: 'POST', path: '/api/webhook/alert', body: { text: 'alert-1' }, query: { useTradingViewData: 'true' } };
 
-			expect(idempotencyService.reserve(key, payload)).toEqual({ state: 'fresh' });
+			expect(await idempotencyService.reserve(key, payload)).toEqual({ state: 'fresh' });
 
-			const pendingRetry = idempotencyService.reserve(key, payload);
+			const pendingRetry = await idempotencyService.reserve(key, payload);
 			expect(pendingRetry.state).toBe('pending');
 
 			idempotencyService.set(key, payload, { statusCode: 200, body: { success: true }, headers: {} });
@@ -123,18 +123,18 @@ describe('Idempotency Service & Middleware', () => {
 			});
 		});
 
-		test('should release failed reservations without rejecting when nobody is waiting', () => {
+		test('should release failed reservations without rejecting when nobody is waiting', async () => {
 			const key = 'released-without-waiters';
 			const payload = { method: 'POST', path: '/api/webhook/alert', body: { text: 'alert-1' }, query: {} };
 
-			expect(idempotencyService.reserve(key, payload)).toEqual({ state: 'fresh' });
+			expect(await idempotencyService.reserve(key, payload)).toEqual({ state: 'fresh' });
 
 			expect(() => {
 				idempotencyService.release(key, payload, new Error('boom'));
 			}).not.toThrow();
 
-			expect(idempotencyService.get(key, payload)).toBeNull();
-			expect(idempotencyService.reserve(key, payload)).toEqual({ state: 'fresh' });
+			expect(await idempotencyService.get(key, payload)).toBeNull();
+			expect(await idempotencyService.reserve(key, payload)).toEqual({ state: 'fresh' });
 		});
 
 		test('should preserve pending reservations during cleanup and after ttl expiry', async () => {
@@ -143,14 +143,14 @@ describe('Idempotency Service & Middleware', () => {
 			const key = 'pending-cleanup-key';
 			const payload = { method: 'POST', path: '/api/webhook/alert', body: { text: 'alert-1' }, query: {} };
 
-			expect(idempotencyService.reserve(key, payload)).toEqual({ state: 'fresh' });
+			expect(await idempotencyService.reserve(key, payload)).toEqual({ state: 'fresh' });
 
 			const now = Date.now();
 			const dateSpy = jest.spyOn(Date, 'now').mockReturnValue(now + 10);
 
 			idempotencyService.cleanup();
 
-			const pendingRetry = idempotencyService.reserve(key, payload);
+			const pendingRetry = await idempotencyService.reserve(key, payload);
 			expect(pendingRetry.state).toBe('pending');
 
 			idempotencyService.set(key, payload, { statusCode: 200, body: { success: true }, headers: {} });
@@ -172,7 +172,7 @@ describe('Idempotency Service & Middleware', () => {
 				const pendingKey = 'pending-eviction-key';
 				const pendingPayload = { method: 'POST', path: '/api/webhook/alert', body: { text: 'alert-1' }, query: {} };
 
-				expect(idempotencyService.reserve(pendingKey, pendingPayload)).toEqual({ state: 'fresh' });
+				expect(await idempotencyService.reserve(pendingKey, pendingPayload)).toEqual({ state: 'fresh' });
 
 				idempotencyService.set('completed-key', { method: 'POST', path: '/api/webhook/alert', body: { text: 'done' }, query: {} }, {
 					statusCode: 200,
@@ -180,10 +180,10 @@ describe('Idempotency Service & Middleware', () => {
 					headers: {},
 				});
 
-				const pendingRetry = idempotencyService.reserve(pendingKey, pendingPayload);
+				const pendingRetry = await idempotencyService.reserve(pendingKey, pendingPayload);
 				expect(pendingRetry.state).toBe('pending');
 
-				expect(idempotencyService.reserve('new-key', {
+				expect(await idempotencyService.reserve('new-key', {
 					method: 'POST',
 					path: '/api/webhook/market-scanner-alert',
 					body: { text: 'fresh' },
@@ -210,15 +210,12 @@ describe('Idempotency Service & Middleware', () => {
 				idempotencyService.reserve('pending-1', { text: '1' });
 				idempotencyService.reserve('pending-2', { text: '2' });
 
-				let errorThrown;
-				try {
-					idempotencyService.reserve('pending-3', { text: '3' });
-				} catch (err) {
-					errorThrown = err;
-				}
-				expect(errorThrown).toBeDefined();
-				expect(errorThrown.code).toBe('IDEMPOTENCY_LIMIT_EXCEEDED');
-				expect(errorThrown.statusCode).toBe(429);
+				expect(
+					() => idempotencyService.reserve('pending-3', { text: '3' })
+				).toThrow(expect.objectContaining({
+					code: 'IDEMPOTENCY_LIMIT_EXCEEDED',
+					statusCode: 429,
+				}));
 			} finally {
 				idempotencyService.maxKeys = originalMaxKeys;
 			}
@@ -238,38 +235,38 @@ describe('Idempotency Service & Middleware', () => {
 			next = jest.fn();
 		});
 
-		test('should call next() directly if no idempotency key is present', () => {
-			idempotencyMiddleware(req, res, next);
+		test('should call next() directly if no idempotency key is present', async () => {
+			await idempotencyMiddleware(req, res, next);
 			expect(next).toHaveBeenCalled();
 			expect(res.getHeader('Idempotency-Replay')).toBeUndefined();
 		});
 
-		test('should set Idempotency-Replay to false for fresh request with header key', () => {
+		test('should set Idempotency-Replay to false for fresh request with header key', async () => {
 			req.headers['idempotency-key'] = 'unique-key-header';
 
-			idempotencyMiddleware(req, res, next);
+			await idempotencyMiddleware(req, res, next);
 
 			expect(next).toHaveBeenCalled();
 			expect(res.getHeader('Idempotency-Replay')).toBe('false');
 		});
 
-		test('should set Idempotency-Replay to false for fresh request with body key', () => {
+		test('should set Idempotency-Replay to false for fresh request with body key', async () => {
 			delete req.body.text;
 			req.body.idempotencyKey = 'unique-key-body';
 
-			idempotencyMiddleware(req, res, next);
+			await idempotencyMiddleware(req, res, next);
 
 			expect(next).toHaveBeenCalled();
 			expect(res.getHeader('Idempotency-Replay')).toBe('false');
 		});
 
-		test('should cache and replay a response on second call with same key', () => {
+		test('should cache and replay a response on second call with same key', async () => {
 			const key = 'test-replay-key';
 			req.headers['idempotency-key'] = key;
 			req.body = { text: 'replay-alert' };
 
 			// First request processes
-			idempotencyMiddleware(req, res, next);
+			await idempotencyMiddleware(req, res, next);
 			expect(next).toHaveBeenCalled();
 			expect(res.getHeader('Idempotency-Replay')).toBe('false');
 
@@ -286,7 +283,7 @@ describe('Idempotency Service & Middleware', () => {
 			const res2 = httpMocks.createResponse();
 			const next2 = jest.fn();
 
-			idempotencyMiddleware(req2, res2, next2);
+			await idempotencyMiddleware(req2, res2, next2);
 
 			expect(next2).not.toHaveBeenCalled();
 			expect(res2.statusCode).toBe(202);
@@ -297,12 +294,12 @@ describe('Idempotency Service & Middleware', () => {
 			expect(responseBody.idempotencyReplayed).toBe(true);
 		});
 
-		test('should return 409 Conflict if payload changes for the same key', () => {
+		test('should return 409 Conflict if payload changes for the same key', async () => {
 			const key = 'conflict-key';
 			req.headers['idempotency-key'] = key;
 			req.body = { text: 'alert-a' };
 
-			idempotencyMiddleware(req, res, next);
+			await idempotencyMiddleware(req, res, next);
 			res.status(200).json({ success: true });
 
 			const req2 = httpMocks.createRequest({
@@ -314,7 +311,7 @@ describe('Idempotency Service & Middleware', () => {
 			const res2 = httpMocks.createResponse();
 			const next2 = jest.fn();
 
-			idempotencyMiddleware(req2, res2, next2);
+			await idempotencyMiddleware(req2, res2, next2);
 
 			expect(next2).not.toHaveBeenCalled();
 			expect(res2.statusCode).toBe(409);
@@ -323,15 +320,15 @@ describe('Idempotency Service & Middleware', () => {
 			expect(responseBody.code).toBe('IDEMPOTENCY_CONFLICT');
 		});
 
-		test('should NOT cache error responses with status code >= 500', () => {
+		test('should NOT cache error responses with status code >= 500', async () => {
 			const key = 'transient-error-key';
 			req.headers['idempotency-key'] = key;
 
-			idempotencyMiddleware(req, res, next);
+			await idempotencyMiddleware(req, res, next);
 			res.status(503).json({ error: 'Service Unavailable' });
 
 			// Check that key is not in cache
-			const record = idempotencyService.get(key, {
+			const record = await idempotencyService.get(key, {
 				method: req.method,
 				path: req.url,
 				body: req.body,
@@ -340,15 +337,15 @@ describe('Idempotency Service & Middleware', () => {
 			expect(record).toBeNull();
 		});
 
-		test('should cache successful error responses with status code < 500 (e.g. 400)', () => {
+		test('should cache successful error responses with status code < 500 (e.g. 400)', async () => {
 			const key = 'client-error-key';
 			req.headers['idempotency-key'] = key;
 
-			idempotencyMiddleware(req, res, next);
+			await idempotencyMiddleware(req, res, next);
 			res.status(400).json({ error: 'Bad Request' });
 
 			// Check that key is in cache
-			const record = idempotencyService.get(key, {
+			const record = await idempotencyService.get(key, {
 				method: req.method,
 				path: req.url,
 				body: req.body,
@@ -362,7 +359,7 @@ describe('Idempotency Service & Middleware', () => {
 			const key = 'in-flight-key';
 			req.headers['idempotency-key'] = key;
 
-			idempotencyMiddleware(req, res, next);
+			await idempotencyMiddleware(req, res, next);
 			expect(next).toHaveBeenCalledTimes(1);
 
 			const req2 = httpMocks.createRequest({
@@ -374,13 +371,13 @@ describe('Idempotency Service & Middleware', () => {
 			const res2 = httpMocks.createResponse();
 			const next2 = jest.fn();
 
-			idempotencyMiddleware(req2, res2, next2);
+			const p2 = idempotencyMiddleware(req2, res2, next2);
 			expect(next2).not.toHaveBeenCalled();
 			expect(res2._isEndCalled()).toBe(false);
 
 			res.status(202).json({ success: true, details: 'alert sent' });
 
-			await new Promise(setImmediate);
+			await p2;
 
 			expect(res2.statusCode).toBe(202);
 			expect(res2.getHeader('Idempotency-Replay')).toBe('true');
@@ -391,12 +388,12 @@ describe('Idempotency Service & Middleware', () => {
 			});
 		});
 
-		test('should treat request query as part of the idempotency fingerprint', () => {
+		test('should treat request query as part of the idempotency fingerprint', async () => {
 			const key = 'query-sensitive-key';
 			req.headers['idempotency-key'] = key;
 			req.query = { useTradingViewData: 'true' };
 
-			idempotencyMiddleware(req, res, next);
+			await idempotencyMiddleware(req, res, next);
 			res.status(200).json({ enriched: true });
 
 			const req2 = httpMocks.createRequest({
@@ -409,7 +406,7 @@ describe('Idempotency Service & Middleware', () => {
 			const res2 = httpMocks.createResponse();
 			const next2 = jest.fn();
 
-			idempotencyMiddleware(req2, res2, next2);
+			await idempotencyMiddleware(req2, res2, next2);
 
 			expect(next2).not.toHaveBeenCalled();
 			expect(res2.statusCode).toBe(409);
@@ -419,12 +416,12 @@ describe('Idempotency Service & Middleware', () => {
 			});
 		});
 
-		test('should treat the endpoint path as part of the idempotency fingerprint', () => {
+		test('should treat the endpoint path as part of the idempotency fingerprint', async () => {
 			const key = 'path-sensitive-key';
 			req.headers['idempotency-key'] = key;
 			req.url = '/api/webhook/alert';
 
-			idempotencyMiddleware(req, res, next);
+			await idempotencyMiddleware(req, res, next);
 			res.status(200).json({ endpoint: 'alert' });
 
 			const req2 = httpMocks.createRequest({
@@ -437,7 +434,7 @@ describe('Idempotency Service & Middleware', () => {
 			const res2 = httpMocks.createResponse();
 			const next2 = jest.fn();
 
-			idempotencyMiddleware(req2, res2, next2);
+			await idempotencyMiddleware(req2, res2, next2);
 
 			expect(next2).not.toHaveBeenCalled();
 			expect(res2.statusCode).toBe(409);
@@ -447,13 +444,13 @@ describe('Idempotency Service & Middleware', () => {
 			});
 		});
 
-		test('should return 429 Too Many Requests in middleware when cache size is exceeded', () => {
+		test('should return 429 Too Many Requests in middleware when cache size is exceeded', async () => {
 			const originalMaxKeys = idempotencyService.maxKeys;
 			idempotencyService.maxKeys = 1;
 
 			try {
 				req.headers['idempotency-key'] = 'key-1';
-				idempotencyMiddleware(req, res, next);
+				await idempotencyMiddleware(req, res, next);
 
 				const req2 = httpMocks.createRequest({
 					method: 'POST',
@@ -464,7 +461,7 @@ describe('Idempotency Service & Middleware', () => {
 				const res2 = httpMocks.createResponse();
 				const next2 = jest.fn();
 
-				idempotencyMiddleware(req2, res2, next2);
+				await idempotencyMiddleware(req2, res2, next2);
 
 				expect(next2).not.toHaveBeenCalled();
 				expect(res2.statusCode).toBe(429);
@@ -477,12 +474,12 @@ describe('Idempotency Service & Middleware', () => {
 			}
 		});
 
-		test('should normalize fingerprint and succeed for header-to-body location transition', () => {
+		test('should normalize fingerprint and succeed for header-to-body location transition', async () => {
 			const key = 'test-header-to-body';
 			req.headers['idempotency-key'] = key;
 			req.body = { text: 'my business alert' };
 
-			idempotencyMiddleware(req, res, next);
+			await idempotencyMiddleware(req, res, next);
 			res.status(200).json({ success: true, details: 'header request processed' });
 
 			const req2 = httpMocks.createRequest({
@@ -493,7 +490,7 @@ describe('Idempotency Service & Middleware', () => {
 			const res2 = httpMocks.createResponse();
 			const next2 = jest.fn();
 
-			idempotencyMiddleware(req2, res2, next2);
+			await idempotencyMiddleware(req2, res2, next2);
 
 			expect(next2).not.toHaveBeenCalled();
 			expect(res2.statusCode).toBe(200);
@@ -505,11 +502,11 @@ describe('Idempotency Service & Middleware', () => {
 			});
 		});
 
-		test('should normalize fingerprint and succeed for body-to-header location transition', () => {
+		test('should normalize fingerprint and succeed for body-to-header location transition', async () => {
 			const key = 'test-body-to-header';
 			req.body = { text: 'my business alert', idempotencyKey: key };
 
-			idempotencyMiddleware(req, res, next);
+			await idempotencyMiddleware(req, res, next);
 			res.status(200).json({ success: true, details: 'body request processed' });
 
 			const req2 = httpMocks.createRequest({
@@ -521,7 +518,7 @@ describe('Idempotency Service & Middleware', () => {
 			const res2 = httpMocks.createResponse();
 			const next2 = jest.fn();
 
-			idempotencyMiddleware(req2, res2, next2);
+			await idempotencyMiddleware(req2, res2, next2);
 
 			expect(next2).not.toHaveBeenCalled();
 			expect(res2.statusCode).toBe(200);
@@ -533,12 +530,12 @@ describe('Idempotency Service & Middleware', () => {
 			});
 		});
 
-		test('should normalize fingerprint and succeed for query-to-header location transition', () => {
+		test('should normalize fingerprint and succeed for query-to-header location transition', async () => {
 			const key = 'test-query-to-header';
 			req.query = { idempotency_key: key };
 			req.body = { text: 'my business alert' };
 
-			idempotencyMiddleware(req, res, next);
+			await idempotencyMiddleware(req, res, next);
 			res.status(200).json({ success: true, details: 'query request processed' });
 
 			const req2 = httpMocks.createRequest({
@@ -550,7 +547,7 @@ describe('Idempotency Service & Middleware', () => {
 			const res2 = httpMocks.createResponse();
 			const next2 = jest.fn();
 
-			idempotencyMiddleware(req2, res2, next2);
+			await idempotencyMiddleware(req2, res2, next2);
 
 			expect(next2).not.toHaveBeenCalled();
 			expect(res2.statusCode).toBe(200);
@@ -562,12 +559,12 @@ describe('Idempotency Service & Middleware', () => {
 			});
 		});
 
-		test('should return 409 Conflict if business text payload changes for the same key', () => {
+		test('should return 409 Conflict if business text payload changes for the same key', async () => {
 			const key = 'test-payload-mismatch';
 			req.headers['idempotency-key'] = key;
 			req.body = { text: 'alert-a' };
 
-			idempotencyMiddleware(req, res, next);
+			await idempotencyMiddleware(req, res, next);
 			res.status(200).json({ success: true });
 
 			const req2 = httpMocks.createRequest({
@@ -579,7 +576,7 @@ describe('Idempotency Service & Middleware', () => {
 			const res2 = httpMocks.createResponse();
 			const next2 = jest.fn();
 
-			idempotencyMiddleware(req2, res2, next2);
+			await idempotencyMiddleware(req2, res2, next2);
 
 			expect(next2).not.toHaveBeenCalled();
 			expect(res2.statusCode).toBe(409);
@@ -589,13 +586,13 @@ describe('Idempotency Service & Middleware', () => {
 			});
 		});
 
-		test('should return 409 Conflict if business query flags change for the same key', () => {
+		test('should return 409 Conflict if business query flags change for the same key', async () => {
 			const key = 'test-query-mismatch';
 			req.headers['idempotency-key'] = key;
 			req.body = { text: 'alert-same' };
 			req.query = { useTradingViewData: 'true' };
 
-			idempotencyMiddleware(req, res, next);
+			await idempotencyMiddleware(req, res, next);
 			res.status(200).json({ success: true });
 
 			const req2 = httpMocks.createRequest({
@@ -608,7 +605,7 @@ describe('Idempotency Service & Middleware', () => {
 			const res2 = httpMocks.createResponse();
 			const next2 = jest.fn();
 
-			idempotencyMiddleware(req2, res2, next2);
+			await idempotencyMiddleware(req2, res2, next2);
 
 			expect(next2).not.toHaveBeenCalled();
 			expect(res2.statusCode).toBe(409);

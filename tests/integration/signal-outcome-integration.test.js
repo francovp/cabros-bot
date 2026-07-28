@@ -31,6 +31,7 @@ describe('Shadow-Mode Outcome Tracking Integration Tests', () => {
 			WEBHOOK_API_KEY: 'test-key',
 			ENABLE_FIRESTORE_ALERT_STORAGE: 'true',
 			ENABLE_SIGNAL_OUTCOME_TRACKING: 'true',
+			ENABLE_GEMINI_GROUNDING: 'false',
 		};
 
 		app.use('/api', getRoutes(null));

@@ -1,6 +1,7 @@
 const packageJson = require('../../package.json');
 const sentryService = require('../services/monitoring/SentryService');
 const { scannerPresetService } = require('../services/scannerPresets/ScannerPresetService');
+const idempotencyStorageService = require('../services/storage/IdempotencyStorageService');
 const { isFirestoreConfigured } = require('../services/storage/firestoreConfig');
 const SignalOutcomeService = require('../services/storage/SignalOutcomeService');
 
@@ -283,6 +284,7 @@ function getStatus() {
 			cloudflareAig: cloudflareAigEnabled,
 			messageFooterMetadata: messageFooterMetadataEnabled,
 			signalOutcomeTracking: signalOutcomeTrackingEnabled,
+			firestoreIdempotency: idempotencyStorageService.isEnabled(),
 		},
 		deliveryChannels: {
 			telegram: {
@@ -320,6 +322,7 @@ function getStatus() {
 					&& hasValue(process.env.CF_AIG_MODEL || DEFAULT_CF_AIG_MODEL),
 			}),
 			newsMonitorDedup,
+			idempotencyStorage: idempotencyStorageService.getStorageStatus(),
 			scannerPresetStorage: scannerPresetService.getStorageStatus(),
 			signalOutcomeWorker: {
 				...dependencyStatus({
@@ -340,7 +343,12 @@ function getStatus() {
 }
 
 function getApiStatus(req, res) {
-	return res.status(200).json(getStatus());
+	try {
+		return res.status(200).json(getStatus());
+	} catch (error) {
+		console.error('[StatusController] getStatus failed:', error);
+		return res.status(500).json({ error: error.message, code: 'INTERNAL_ERROR' });
+	}
 }
 
 module.exports = {

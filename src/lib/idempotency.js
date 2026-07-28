@@ -74,6 +74,9 @@ function getIdempotencyKey(req) {
 	if (headers['idempotency-key'] !== undefined) {
 		return headers['idempotency-key'];
 	}
+	if (headers['x-idempotency-key'] !== undefined) {
+		return headers['x-idempotency-key'];
+	}
 
 	const body = req.body;
 	if (body && typeof body === 'object') {
@@ -111,20 +114,102 @@ function idempotencyMiddleware(req, res, next) {
 
 	const requestFingerprint = buildRequestFingerprint(req);
 
-	try {
-		const reservation = idempotencyService.reserve(key, requestFingerprint);
+	const handleReservation = (reservation) => {
 		if (reservation.state === 'completed') {
-			console.debug(`[Idempotency] Replaying cached response for key: ${key}`);
+			console.debug('[Idempotency] Replaying cached response');
 			return sendCachedResponse(res, reservation.record);
 		}
 
 		if (reservation.state === 'pending') {
-			console.debug(`[Idempotency] Waiting for in-flight response for key: ${key}`);
+			console.debug('[Idempotency] Waiting for in-flight response');
 			return reservation.promise
 				.then((cachedRecord) => sendCachedResponse(res, cachedRecord))
 				.catch((error) => {
-					if (error && error.code === 'IDEMPOTENCY_RELEASED') {
+					if (error && (error.code === 'IDEMPOTENCY_RELEASED' || error.code === 'IDEMPOTENCY_CONFLICT')) {
 						return res.status(409).json({
+							error: error.message,
+							code: error.code || 'IDEMPOTENCY_CONFLICT',
+						});
+					}
+					return next(error);
+				});
+		}
+
+		// First-time request: intercept the response methods to cache the output on completion
+		res.set('Idempotency-Replay', 'false');
+
+		const originalSend = res.send;
+		const originalJson = res.json;
+		let responseCached = false;
+
+		const cacheResponse = (body) => {
+			if (responseCached || res.statusCode >= 500) {
+				return;
+			}
+			responseCached = true;
+
+			let responseBody = body;
+			if (typeof body === 'string') {
+				try {
+					responseBody = JSON.parse(body);
+				} catch (e) {
+					// Keep as string
+				}
+			} else if (Buffer.isBuffer(body)) {
+				try {
+					responseBody = JSON.parse(body.toString('utf8'));
+				} catch (e) {
+					responseBody = body.toString('utf8');
+				}
+			}
+
+			idempotencyService.set(key, requestFingerprint, {
+				statusCode: res.statusCode,
+				body: responseBody,
+				headers: {
+					'content-type': res.get('content-type'),
+				},
+			});
+		};
+
+		res.send = function (body) {
+			cacheResponse(body);
+			return originalSend.apply(this, arguments);
+		};
+
+		res.json = function (obj) {
+			cacheResponse(obj);
+			return originalJson.apply(this, arguments);
+		};
+
+		res.on('finish', () => {
+			if (!responseCached && res.statusCode >= 500) {
+				const releaseError = new Error('Initial idempotent request failed before a replayable response was available');
+				releaseError.code = 'IDEMPOTENCY_RELEASED';
+				releaseError.statusCode = 409;
+				idempotencyService.release(key, requestFingerprint, releaseError);
+			}
+		});
+
+		return next();
+	};
+
+	try {
+		const reservation = idempotencyService.reserve(key, requestFingerprint);
+		if (reservation && typeof reservation.then === 'function') {
+			return reservation
+				.then(handleReservation)
+				.catch((error) => {
+					if (error.code === 'IDEMPOTENCY_CONFLICT') {
+						console.warn('[Idempotency] Conflict detected');
+						return res.status(409).json({
+							error: error.message,
+							code: error.code,
+						});
+					}
+					if (error.code === 'IDEMPOTENCY_LIMIT_EXCEEDED') {
+						console.warn('[Idempotency] Limit exceeded');
+						return res.status(429).json({
 							error: error.message,
 							code: error.code,
 						});
@@ -132,16 +217,17 @@ function idempotencyMiddleware(req, res, next) {
 					return next(error);
 				});
 		}
+		return handleReservation(reservation);
 	} catch (error) {
 		if (error.code === 'IDEMPOTENCY_CONFLICT') {
-			console.warn(`[Idempotency] Conflict detected for key: ${key}`);
+			console.warn('[Idempotency] Conflict detected');
 			return res.status(409).json({
 				error: error.message,
 				code: error.code,
 			});
 		}
 		if (error.code === 'IDEMPOTENCY_LIMIT_EXCEEDED') {
-			console.warn(`[Idempotency] Limit exceeded for key: ${key}`);
+			console.warn('[Idempotency] Limit exceeded');
 			return res.status(429).json({
 				error: error.message,
 				code: error.code,
@@ -149,64 +235,6 @@ function idempotencyMiddleware(req, res, next) {
 		}
 		return next(error);
 	}
-
-	// First-time request: intercept the response methods to cache the output on completion
-	res.set('Idempotency-Replay', 'false');
-
-	const originalSend = res.send;
-	const originalJson = res.json;
-	let responseCached = false;
-
-	const cacheResponse = (body) => {
-		if (responseCached || res.statusCode >= 500) {
-			return;
-		}
-		responseCached = true;
-
-		let responseBody = body;
-		if (typeof body === 'string') {
-			try {
-				responseBody = JSON.parse(body);
-			} catch (e) {
-				// Keep as string
-			}
-		} else if (Buffer.isBuffer(body)) {
-			try {
-				responseBody = JSON.parse(body.toString('utf8'));
-			} catch (e) {
-				responseBody = body.toString('utf8');
-			}
-		}
-
-		idempotencyService.set(key, requestFingerprint, {
-			statusCode: res.statusCode,
-			body: responseBody,
-			headers: {
-				'content-type': res.get('content-type'),
-			},
-		});
-	};
-
-	res.send = function (body) {
-		cacheResponse(body);
-		return originalSend.apply(this, arguments);
-	};
-
-	res.json = function (obj) {
-		cacheResponse(obj);
-		return originalJson.apply(this, arguments);
-	};
-
-	res.on('finish', () => {
-		if (!responseCached && res.statusCode >= 500) {
-			const releaseError = new Error('Initial idempotent request failed before a replayable response was available');
-			releaseError.code = 'IDEMPOTENCY_RELEASED';
-			releaseError.statusCode = 409;
-			idempotencyService.release(key, requestFingerprint, releaseError);
-		}
-	});
-
-	next();
 }
 
 module.exports = {
