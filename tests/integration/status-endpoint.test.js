@@ -908,6 +908,7 @@ describe('Status endpoints', () => {
 			.get('/api/status')
 			.set('x-api-key', 'status-key');
 
+		console.log('DEBUG status test line 911:', response.status, response.body);
 		expect(response.status).toBe(200);
 		expect(response.body.dependencies.firestore).toEqual({
 			enabled: true,

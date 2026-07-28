@@ -1,10 +1,11 @@
 'use strict';
 
 const crypto = require('crypto');
+const idempotencyStorageService = require('./IdempotencyStorageService');
 
 class IdempotencyService {
 	constructor() {
-		this.cache = new Map(); // key -> { payloadHash, state, waiterCount, statusCode, responseBody, headers, createdAt, expiresAt }
+		this.cache = new Map(); // key -> { payloadHash, state, waiterCount, statusCode, responseBody, headers, createdAt, expiresAt, completionPromise, resolveCompletion, rejectCompletion }
 		this.defaultTtlMs = 300000; // 5 minutes default
 		this.maxKeys = 10000; // Protect against memory exhaustion
 
@@ -106,48 +107,64 @@ class IdempotencyService {
 	 * Throws a conflict error (409) if the key is reused with a different payload.
 	 * @param {string} key - Idempotency key
 	 * @param {any} currentPayload - Current request payload
-	 * @returns {Object|null} Cached record details, or null if not found/expired
+	 * @returns {Promise<Object|null>} Cached record details, or null if not found/expired
+	 */
+	/**
+	 * Retrieve a cached response.
+	 * Throws a conflict error (409) if the key is reused with a different payload.
+	 * @param {string} key - Idempotency key
+	 * @param {any} currentPayload - Current request payload
+	 * @returns {Object|Promise<Object|null>|null} Cached record details, or null if not found/expired
 	 */
 	get(key, currentPayload) {
 		this.cleanup();
-		const record = this.cache.get(key);
-		if (!record) {
-			return null;
-		}
-
-		if (this.shouldDeleteExpiredRecord(record)) {
-			this.cache.delete(key);
-			return null;
-		}
-
-		// Verify payload matches
 		const currentHash = this.hashPayload(currentPayload);
-		if (record.payloadHash !== currentHash) {
-			const error = new Error('Idempotency key was reused with a different payload');
-			error.code = 'IDEMPOTENCY_CONFLICT';
-			error.statusCode = 409;
-			throw error;
+
+		const record = this.cache.get(key);
+		if (record) {
+			if (this.shouldDeleteExpiredRecord(record)) {
+				this.cache.delete(key);
+			} else {
+				if (record.payloadHash !== currentHash) {
+					const error = new Error('Idempotency key was reused with a different payload');
+					error.code = 'IDEMPOTENCY_CONFLICT';
+					error.statusCode = 409;
+					throw error;
+				}
+				return record.state === 'completed' ? record : null;
+			}
 		}
 
-		return record.state === 'completed' ? record : null;
+		if (idempotencyStorageService.isEnabled()) {
+			return idempotencyStorageService.getEntry(key, currentHash).then((durableRecord) => {
+				if (durableRecord) {
+					this.cache.set(key, durableRecord);
+					return durableRecord;
+				}
+				return null;
+			});
+		}
+
+		return null;
 	}
 
 	/**
 	 * Reserve a key before request processing begins so retries cannot duplicate side effects.
 	 * @param {string} key
 	 * @param {any} payload
-	 * @returns {{state: 'fresh'} | {state: 'pending', promise: Promise<Object>} | {state: 'completed', record: Object}}
+	 * @returns {{state: 'fresh'} | {state: 'pending', promise: Promise<Object>} | {state: 'completed', record: Object} | Promise<any>}
 	 */
 	reserve(key, payload) {
 		this.cleanup();
+		const payloadHash = this.hashPayload(payload);
+		const ttl = this.getTtlMs();
 
 		const existing = this.cache.get(key);
 		if (existing) {
 			if (this.shouldDeleteExpiredRecord(existing)) {
 				this.cache.delete(key);
 			} else {
-				const currentHash = this.hashPayload(payload);
-				if (existing.payloadHash !== currentHash) {
+				if (existing.payloadHash !== payloadHash) {
 					const error = new Error('Idempotency key was reused with a different payload');
 					error.code = 'IDEMPOTENCY_CONFLICT';
 					error.statusCode = 409;
@@ -163,6 +180,11 @@ class IdempotencyService {
 			}
 		}
 
+		if (idempotencyStorageService.isEnabled()) {
+			return this._reserveDurable(key, payloadHash, ttl);
+		}
+
+		// Fast memory-only path (or fallback when Firestore is disabled)
 		if (this.cache.size >= this.maxKeys) {
 			const evicted = this.evictOldestCompletedRecord();
 			if (!evicted) {
@@ -173,9 +195,155 @@ class IdempotencyService {
 			}
 		}
 
-		const payloadHash = this.hashPayload(payload);
 		const now = Date.now();
-		const ttl = this.getTtlMs();
+		let resolveCompletion;
+		let rejectCompletion;
+		const completionPromise = new Promise((resolve, reject) => {
+			resolveCompletion = resolve;
+			rejectCompletion = reject;
+		});
+
+		this.cache.set(key, {
+			payloadHash,
+			state: 'pending',
+			waiterCount: 0,
+			createdAt: now,
+			expiresAt: now + ttl,
+			completionPromise,
+			resolveCompletion,
+			rejectCompletion,
+		});
+
+		return { state: 'fresh' };
+	}
+
+	async _reserveDurable(key, payloadHash, ttl) {
+		try {
+			const durableRes = await idempotencyStorageService.reserveEntry(key, payloadHash, ttl);
+			if (durableRes) {
+				if (durableRes.state === 'conflict') {
+					const error = new Error('Idempotency key was reused with a different payload');
+					error.code = 'IDEMPOTENCY_CONFLICT';
+					error.statusCode = 409;
+					throw error;
+				}
+
+				if (durableRes.state === 'completed' && durableRes.record) {
+					this.cache.set(key, durableRes.record);
+					return { state: 'completed', record: durableRes.record };
+				}
+
+				if (durableRes.state === 'pending') {
+					if (this.cache.size >= this.maxKeys) {
+						const evicted = this.evictOldestCompletedRecord();
+						if (!evicted) {
+							const error = new Error('Server is currently processing too many requests with idempotency keys');
+							error.code = 'IDEMPOTENCY_LIMIT_EXCEEDED';
+							error.statusCode = 429;
+							throw error;
+						}
+					}
+
+					let resolveCompletion;
+					let rejectCompletion;
+					const completionPromise = new Promise((resolve, reject) => {
+						resolveCompletion = resolve;
+						rejectCompletion = reject;
+					});
+
+					const pendingRecord = {
+						payloadHash,
+						state: 'pending',
+						waiterCount: 1,
+						createdAt: Date.now(),
+						expiresAt: Date.now() + ttl,
+						completionPromise,
+						resolveCompletion,
+						rejectCompletion,
+					};
+					this.cache.set(key, pendingRecord);
+
+					// Poll Firestore for completion across replicas with a bounded wait timeout
+					const pendingWaitMs = Math.min(ttl, 15000);
+					idempotencyStorageService.waitForPendingCompletion(key, payloadHash, pendingWaitMs)
+						.then((pollResult) => {
+							if (pollResult.state === 'completed' && pollResult.record) {
+								this.cache.set(key, pollResult.record);
+								resolveCompletion(pollResult.record);
+							} else if (pollResult.state === 'conflict') {
+								const err = new Error('Idempotency key was reused with a different payload');
+								err.code = 'IDEMPOTENCY_CONFLICT';
+								err.statusCode = 409;
+								this.cache.delete(key);
+								rejectCompletion(err);
+							} else {
+								const err = new Error('Initial idempotent request failed before a replayable response was available');
+								err.code = 'IDEMPOTENCY_RELEASED';
+								err.statusCode = 409;
+								this.cache.delete(key);
+								rejectCompletion(err);
+							}
+						})
+						.catch((pollErr) => {
+							this.cache.delete(key);
+							rejectCompletion(pollErr);
+						});
+
+					return { state: 'pending', promise: completionPromise };
+				}
+
+				// Fresh reservation claimed in Firestore
+				if (durableRes.state === 'fresh') {
+					if (this.cache.size >= this.maxKeys) {
+						const evicted = this.evictOldestCompletedRecord();
+						if (!evicted) {
+							const error = new Error('Server is currently processing too many requests with idempotency keys');
+							error.code = 'IDEMPOTENCY_LIMIT_EXCEEDED';
+							error.statusCode = 429;
+							throw error;
+						}
+					}
+
+					let resolveCompletion;
+					let rejectCompletion;
+					const completionPromise = new Promise((resolve, reject) => {
+						resolveCompletion = resolve;
+						rejectCompletion = reject;
+					});
+
+					this.cache.set(key, {
+						payloadHash,
+						state: 'pending',
+						waiterCount: 0,
+						createdAt: Date.now(),
+						expiresAt: Date.now() + ttl,
+						completionPromise,
+						resolveCompletion,
+						rejectCompletion,
+					});
+
+					return { state: 'fresh' };
+				}
+			}
+		} catch (err) {
+			if (err.code === 'IDEMPOTENCY_CONFLICT' || err.code === 'IDEMPOTENCY_LIMIT_EXCEEDED') {
+				throw err;
+			}
+			console.warn('[IdempotencyService] Error during durable reserve (fail-open to memory):', err.message);
+		}
+
+		// Fallback to in-memory path if Firestore fails or returns null
+		if (this.cache.size >= this.maxKeys) {
+			const evicted = this.evictOldestCompletedRecord();
+			if (!evicted) {
+				const error = new Error('Server is currently processing too many requests with idempotency keys');
+				error.code = 'IDEMPOTENCY_LIMIT_EXCEEDED';
+				error.statusCode = 429;
+				throw error;
+			}
+		}
+
+		const now = Date.now();
 		let resolveCompletion;
 		let rejectCompletion;
 		const completionPromise = new Promise((resolve, reject) => {
@@ -230,7 +398,13 @@ class IdempotencyService {
 		if (existing && existing.state === 'pending' && typeof existing.resolveCompletion === 'function') {
 			existing.resolveCompletion(completedRecord);
 		}
-		console.debug(`[IdempotencyService] Cached result for key: ${key} (TTL: ${ttl}ms)`);
+
+		if (idempotencyStorageService.isEnabled()) {
+			idempotencyStorageService.setEntry(key, payloadHash, { statusCode, body, headers }, ttl)
+				.catch((err) => console.warn('[IdempotencyService] Error saving durable entry:', err.message));
+		}
+
+		console.debug(`[IdempotencyService] Cached result for key: ${idempotencyStorageService.hashKey(key)} (TTL: ${ttl}ms)`);
 	}
 
 	/**
@@ -241,19 +415,18 @@ class IdempotencyService {
 	 */
 	release(key, payload, error) {
 		const existing = this.cache.get(key);
-		if (!existing || existing.state !== 'pending') {
-			return;
-		}
-
 		const payloadHash = this.hashPayload(payload);
-		if (existing.payloadHash !== payloadHash) {
-			return;
+
+		if (existing && existing.state === 'pending' && existing.payloadHash === payloadHash) {
+			this.cache.delete(key);
+			if ((existing.waiterCount || 0) > 0 && typeof existing.rejectCompletion === 'function') {
+				existing.rejectCompletion(error || new Error('Idempotency reservation released'));
+			}
 		}
 
-		this.cache.delete(key);
-
-		if ((existing.waiterCount || 0) > 0 && typeof existing.rejectCompletion === 'function') {
-			existing.rejectCompletion(error || new Error('Idempotency reservation released'));
+		if (idempotencyStorageService.isEnabled()) {
+			idempotencyStorageService.releaseEntry(key, payloadHash)
+				.catch((err) => console.warn('[IdempotencyService] Error releasing durable entry:', err.message));
 		}
 	}
 

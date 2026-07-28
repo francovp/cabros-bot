@@ -27,6 +27,21 @@ function parseAlertPaginationCursor(rawCursor) {
 	}
 
 	const cursor = rawCursor.trim();
+
+	try {
+		const payload = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
+		const decodedReceivedAt = normalizeReceivedAt(payload && payload.receivedAt);
+		if (payload && payload.v === CURSOR_VERSION && decodedReceivedAt && typeof payload.id === 'string' && payload.id) {
+			return {
+				type: 'composite',
+				receivedAt: decodedReceivedAt,
+				documentId: payload.id,
+			};
+		}
+	} catch {
+		// Not a base64url JSON composite cursor, fallback to timestamp cursor
+	}
+
 	const normalizedReceivedAt = normalizeReceivedAt(cursor);
 	if (normalizedReceivedAt) {
 		return {
@@ -36,21 +51,7 @@ function parseAlertPaginationCursor(rawCursor) {
 		};
 	}
 
-	try {
-		const payload = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
-		const decodedReceivedAt = normalizeReceivedAt(payload && payload.receivedAt);
-		if (!payload || payload.v !== CURSOR_VERSION || !decodedReceivedAt || typeof payload.id !== 'string' || !payload.id) {
-			return null;
-		}
-
-		return {
-			type: 'composite',
-			receivedAt: decodedReceivedAt,
-			documentId: payload.id,
-		};
-	} catch {
-		return null;
-	}
+	return null;
 }
 
 module.exports = {

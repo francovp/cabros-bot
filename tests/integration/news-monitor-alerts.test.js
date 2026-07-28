@@ -10,17 +10,20 @@ const { getRoutes } = require('../../src/routes');
 
 describe('News Monitor - Alert Delivery Response Structure (US2)', () => {
 	let mockBot;
+	const originalEnv = process.env;
 
 	beforeEach(() => {
-		// Setup environment
-		process.env.ENABLE_NEWS_MONITOR = 'true';
-		process.env.ENABLE_TELEGRAM_BOT = 'true';
-		process.env.BOT_TOKEN = 'test-token';
-		process.env.TELEGRAM_CHAT_ID = '123456789';
-		process.env.NEWS_SYMBOLS_CRYPTO = 'BTCUSDT,ETHUSD';
-		process.env.NEWS_SYMBOLS_STOCKS = 'AAPL,MSFT';
-		process.env.NEWS_ALERT_THRESHOLD = '0.7';
-		process.env.WEBHOOK_API_KEY = 'test-key';
+		process.env = {
+			...originalEnv,
+			ENABLE_NEWS_MONITOR: 'true',
+			ENABLE_TELEGRAM_BOT: 'true',
+			BOT_TOKEN: 'test-token',
+			TELEGRAM_CHAT_ID: '123456789',
+			NEWS_SYMBOLS_CRYPTO: 'BTCUSDT,ETHUSD',
+			NEWS_SYMBOLS_STOCKS: 'AAPL,MSFT',
+			NEWS_ALERT_THRESHOLD: '0.7',
+			WEBHOOK_API_KEY: 'test-key',
+		};
 
 		// Mock bot
 		mockBot = {
@@ -69,14 +72,10 @@ describe('News Monitor - Alert Delivery Response Structure (US2)', () => {
 		jest.clearAllMocks();
 		jest.dontMock('../../src/services/grounding/gemini');
 		jest.dontMock('../../src/services/grounding/genaiClient');
-		delete process.env.ENABLE_NEWS_MONITOR;
-		delete process.env.ENABLE_TELEGRAM_BOT;
-		delete process.env.BOT_TOKEN;
-		delete process.env.TELEGRAM_CHAT_ID;
-		delete process.env.NEWS_SYMBOLS_CRYPTO;
-		delete process.env.NEWS_SYMBOLS_STOCKS;
-		delete process.env.NEWS_ALERT_THRESHOLD;
-		delete process.env.WEBHOOK_API_KEY;
+		process.env = originalEnv;
+		if (app._router && app._router.stack && app._router.stack.length > 0) {
+			app._router.stack.pop();
+		}
 	});
 
 	describe('Alert delivery response structure validation', () => {

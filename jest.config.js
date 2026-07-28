@@ -17,4 +17,5 @@ module.exports = {
 	moduleNameMapper: {
 		'^firebase-admin$': '<rootDir>/__mocks__/firebase-admin.js',
 	},
+	maxWorkers: 1,
 };

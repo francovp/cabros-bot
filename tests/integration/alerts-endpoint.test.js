@@ -25,11 +25,14 @@ const alertStorageService = require('../../src/services/storage/AlertStorageServ
 const alertHandler = require('../../src/controllers/webhooks/handlers/alert/alert');
 const { encodeAlertPaginationCursor } = require('../../src/services/storage/alertPaginationCursor');
 
+const { idempotencyService } = require('../../src/services/storage/IdempotencyService');
+
 describe('Alerts API Integration Tests', () => {
 	const originalEnv = process.env;
 	let mockNotificationManager;
 
 	beforeEach(() => {
+		idempotencyService.clear();
 		process.env = {
 			...originalEnv,
 			WEBHOOK_API_KEY: 'test-key',
@@ -44,22 +47,8 @@ describe('Alerts API Integration Tests', () => {
 		alertHandler.initializeNotificationServices.mockResolvedValue(mockNotificationManager);
 		alertStorageService.isEnabled.mockReturnValue(true);
 		alertStorageService.saveReplayAttempt.mockResolvedValue('replay-1');
-		alertStorageService.parseAlertPaginationCursor.mockImplementation((cursor) => {
-			if (!cursor) {
-				return null;
-			}
-
-			if (!Number.isNaN(Date.parse(cursor))) {
-				return { type: 'timestamp', receivedAt: new Date(cursor).toISOString(), documentId: null };
-			}
-
-			return encodeAlertPaginationCursor({
-				receivedAt: '2026-06-06T12:00:00.000Z',
-				id: 'alert-1',
-			}) === cursor
-				? { type: 'composite', receivedAt: '2026-06-06T12:00:00.000Z', documentId: 'alert-1' }
-				: null;
-		});
+		const { parseAlertPaginationCursor: actualParseCursor } = jest.requireActual('../../src/services/storage/alertPaginationCursor');
+		alertStorageService.parseAlertPaginationCursor.mockImplementation(actualParseCursor);
 		app.use('/api', getRoutes(null));
 	});
 
