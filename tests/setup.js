@@ -88,3 +88,9 @@ jest.mock('@sentry/profiling-node', () => ({
 
 // Increase timeout for all tests
 jest.setTimeout(15000);
+
+const rateLimiter = require('../src/lib/rateLimiter');
+afterEach(() => {
+	rateLimiter.disableTestMode();
+	rateLimiter.reset();
+});
