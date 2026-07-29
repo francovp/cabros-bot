@@ -28,6 +28,17 @@ function isEnabled() {
 		|| process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING === 'true';
 }
 
+function parsePositiveInteger(val, defaultVal) {
+	if (val === undefined || val === null || val === '') {
+		return defaultVal;
+	}
+	const parsed = typeof val === 'number' ? val : parseInt(val, 10);
+	if (Number.isFinite(parsed) && parsed > 0) {
+		return parsed;
+	}
+	return defaultVal;
+}
+
 function normalizeSide(side) {
 	if (!side || typeof side !== 'string') {
 		return 'BUY';
@@ -200,13 +211,15 @@ async function evaluatePendingOutcomes(options = {}) {
 			return { scannedCount: 0, evaluatedCount: 0, skipped: true, reason: 'no_firestore' };
 		}
 
-		const effectiveLimit = options.limit || (process.env.SIGNAL_OUTCOME_EVALUATION_BATCH_LIMIT
-			? parseInt(process.env.SIGNAL_OUTCOME_EVALUATION_BATCH_LIMIT, 10)
-			: 50);
+		const effectiveLimit = parsePositiveInteger(
+			options.limit !== undefined ? options.limit : process.env.SIGNAL_OUTCOME_EVALUATION_BATCH_LIMIT,
+			50
+		);
 
-		const effectiveMaxDurationMs = options.maxDurationMs || (process.env.SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS
-			? parseInt(process.env.SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS, 10)
-			: 30000);
+		const effectiveMaxDurationMs = parsePositiveInteger(
+			options.maxDurationMs !== undefined ? options.maxDurationMs : process.env.SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS,
+			30000
+		);
 
 		let query = firestore.collection(COLLECTION_NAME).where('outcomeEvaluated', '==', false);
 		if (lastEvaluatedDoc) {
@@ -439,11 +452,17 @@ function startWorker(options = {}) {
 		return true;
 	}
 
-	const intervalMs = options.intervalMs || (process.env.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS
-		? parseInt(process.env.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS, 10)
-		: (process.env.SIGNAL_OUTCOME_EVALUATION_CADENCE_MS
-			? parseInt(process.env.SIGNAL_OUTCOME_EVALUATION_CADENCE_MS, 10)
-			: 300000));
+	const DEFAULT_INTERVAL_MS = 300000;
+	let intervalMs;
+	if (options.intervalMs !== undefined && options.intervalMs !== null) {
+		intervalMs = parsePositiveInteger(options.intervalMs, DEFAULT_INTERVAL_MS);
+	} else if (process.env.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS) {
+		intervalMs = parsePositiveInteger(process.env.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS, DEFAULT_INTERVAL_MS);
+	} else if (process.env.SIGNAL_OUTCOME_EVALUATION_CADENCE_MS) {
+		intervalMs = parsePositiveInteger(process.env.SIGNAL_OUTCOME_EVALUATION_CADENCE_MS, DEFAULT_INTERVAL_MS);
+	} else {
+		intervalMs = DEFAULT_INTERVAL_MS;
+	}
 
 	activeIntervalMs = intervalMs;
 
@@ -484,19 +503,18 @@ function stopWorker() {
  * Get operational status of the evaluation worker.
  */
 function getWorkerStatus() {
-	const intervalMs = activeIntervalMs || (process.env.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS
-		? parseInt(process.env.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS, 10)
-		: (process.env.SIGNAL_OUTCOME_EVALUATION_CADENCE_MS
-			? parseInt(process.env.SIGNAL_OUTCOME_EVALUATION_CADENCE_MS, 10)
-			: 300000));
+	const DEFAULT_INTERVAL_MS = 300000;
+	const intervalMs = activeIntervalMs || (
+		process.env.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS
+			? parsePositiveInteger(process.env.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS, DEFAULT_INTERVAL_MS)
+			: (process.env.SIGNAL_OUTCOME_EVALUATION_CADENCE_MS
+				? parsePositiveInteger(process.env.SIGNAL_OUTCOME_EVALUATION_CADENCE_MS, DEFAULT_INTERVAL_MS)
+				: DEFAULT_INTERVAL_MS)
+	);
 
-	const batchLimit = process.env.SIGNAL_OUTCOME_EVALUATION_BATCH_LIMIT
-		? parseInt(process.env.SIGNAL_OUTCOME_EVALUATION_BATCH_LIMIT, 10)
-		: 50;
+	const batchLimit = parsePositiveInteger(process.env.SIGNAL_OUTCOME_EVALUATION_BATCH_LIMIT, 50);
 
-	const maxDurationMs = process.env.SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS
-		? parseInt(process.env.SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS, 10)
-		: 30000;
+	const maxDurationMs = parsePositiveInteger(process.env.SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS, 30000);
 
 	return {
 		enabled: isEnabled(),
