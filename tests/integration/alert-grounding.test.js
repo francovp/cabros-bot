@@ -99,7 +99,6 @@ describe('Alert Grounding Integration', () => {
 		if (app._router.stack.length > 0) {
 			app._router.stack.pop();
 		}
-		jest.resetModules();
 	});
 
 	describe('POST /api/webhook/alert', () => {

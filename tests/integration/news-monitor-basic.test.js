@@ -82,7 +82,6 @@ describe('News Monitor - Basic Endpoint Integration', () => {
 		if (app._router.stack.length > 0) {
 			app._router.stack.pop();
 		}
-		jest.resetModules();
 	});
 
 	describe('GET /api/news-monitor', () => {
