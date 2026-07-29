@@ -418,6 +418,45 @@ async function evaluatePendingOutcomes(options = {}) {
 	}
 }
 
+const DEFAULT_EVALUATION_INTERVAL_MS = 300000;
+
+function parsePositiveInteger(value) {
+	if (value === undefined || value === null || value === '') {
+		return null;
+	}
+	const num = typeof value === 'number' ? value : parseInt(value, 10);
+	if (Number.isFinite(num) && num > 0) {
+		return Math.floor(num);
+	}
+	return null;
+}
+
+function resolveWorkerInterval(options = {}) {
+	if (options && options.intervalMs !== undefined && options.intervalMs !== null) {
+		const parsedOpt = parsePositiveInteger(options.intervalMs);
+		if (parsedOpt !== null) {
+			return parsedOpt;
+		}
+		return DEFAULT_EVALUATION_INTERVAL_MS;
+	}
+
+	if (process.env.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS) {
+		const parsedEnv = parsePositiveInteger(process.env.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS);
+		if (parsedEnv !== null) {
+			return parsedEnv;
+		}
+	}
+
+	if (process.env.SIGNAL_OUTCOME_EVALUATION_CADENCE_MS) {
+		const parsedCadence = parsePositiveInteger(process.env.SIGNAL_OUTCOME_EVALUATION_CADENCE_MS);
+		if (parsedCadence !== null) {
+			return parsedCadence;
+		}
+	}
+
+	return DEFAULT_EVALUATION_INTERVAL_MS;
+}
+
 /**
  * Start background autonomous evaluation worker if signal outcome tracking is enabled.
  */
@@ -430,12 +469,7 @@ function startWorker(options = {}) {
 		return true;
 	}
 
-	const intervalMs = options.intervalMs || (process.env.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS
-		? parseInt(process.env.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS, 10)
-		: (process.env.SIGNAL_OUTCOME_EVALUATION_CADENCE_MS
-			? parseInt(process.env.SIGNAL_OUTCOME_EVALUATION_CADENCE_MS, 10)
-			: 300000));
-
+	const intervalMs = resolveWorkerInterval(options);
 	activeIntervalMs = intervalMs;
 
 	// Trigger initial sweep non-blockingly after server readiness
@@ -475,19 +509,10 @@ function stopWorker() {
  * Get operational status of the evaluation worker.
  */
 function getWorkerStatus() {
-	const intervalMs = activeIntervalMs || (process.env.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS
-		? parseInt(process.env.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS, 10)
-		: (process.env.SIGNAL_OUTCOME_EVALUATION_CADENCE_MS
-			? parseInt(process.env.SIGNAL_OUTCOME_EVALUATION_CADENCE_MS, 10)
-			: 300000));
+	const intervalMs = activeIntervalMs !== null ? activeIntervalMs : resolveWorkerInterval();
 
-	const batchLimit = process.env.SIGNAL_OUTCOME_EVALUATION_BATCH_LIMIT
-		? parseInt(process.env.SIGNAL_OUTCOME_EVALUATION_BATCH_LIMIT, 10)
-		: 50;
-
-	const maxDurationMs = process.env.SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS
-		? parseInt(process.env.SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS, 10)
-		: 30000;
+	const batchLimit = parsePositiveInteger(process.env.SIGNAL_OUTCOME_EVALUATION_BATCH_LIMIT) || 50;
+	const maxDurationMs = parsePositiveInteger(process.env.SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS) || 30000;
 
 	return {
 		enabled: isEnabled(),
@@ -502,6 +527,7 @@ function getWorkerStatus() {
 		timerId: workerTimer ? true : null,
 	};
 }
+
 
 /**
  * Compute aggregated metrics.

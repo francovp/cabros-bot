@@ -306,5 +306,59 @@ describe('SignalOutcomeService Worker & Bounded Evaluation', () => {
 			expect(status.running).toBe(false);
 			expect(status.timerId).toBeNull();
 		});
+
+		describe('Worker Interval Validation', () => {
+			it('falls back to default 300000ms for malformed, zero, or negative interval options', () => {
+				process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+
+				// Test malformed string
+				SignalOutcomeService.startWorker({ intervalMs: 'invalid' });
+				expect(SignalOutcomeService.getWorkerStatus().intervalMs).toBe(300000);
+				SignalOutcomeService.stopWorker();
+
+				// Test zero
+				SignalOutcomeService.startWorker({ intervalMs: 0 });
+				expect(SignalOutcomeService.getWorkerStatus().intervalMs).toBe(300000);
+				SignalOutcomeService.stopWorker();
+
+				// Test negative
+				SignalOutcomeService.startWorker({ intervalMs: -5000 });
+				expect(SignalOutcomeService.getWorkerStatus().intervalMs).toBe(300000);
+				SignalOutcomeService.stopWorker();
+			});
+
+			it('falls back to default 300000ms for malformed, zero, or negative env var intervals', () => {
+				process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+
+				process.env.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS = 'not-a-number';
+				SignalOutcomeService.startWorker();
+				expect(SignalOutcomeService.getWorkerStatus().intervalMs).toBe(300000);
+				SignalOutcomeService.stopWorker();
+
+				process.env.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS = '0';
+				SignalOutcomeService.startWorker();
+				expect(SignalOutcomeService.getWorkerStatus().intervalMs).toBe(300000);
+				SignalOutcomeService.stopWorker();
+
+				process.env.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS = '-60000';
+				SignalOutcomeService.startWorker();
+				expect(SignalOutcomeService.getWorkerStatus().intervalMs).toBe(300000);
+				SignalOutcomeService.stopWorker();
+			});
+
+			it('accepts valid positive intervals from options or environment', () => {
+				process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+
+				SignalOutcomeService.startWorker({ intervalMs: 60000 });
+				expect(SignalOutcomeService.getWorkerStatus().intervalMs).toBe(60000);
+				SignalOutcomeService.stopWorker();
+
+				process.env.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS = '120000';
+				SignalOutcomeService.startWorker();
+				expect(SignalOutcomeService.getWorkerStatus().intervalMs).toBe(120000);
+				SignalOutcomeService.stopWorker();
+			});
+		});
 	});
 });
+
