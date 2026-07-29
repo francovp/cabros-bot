@@ -7,12 +7,12 @@ const { initializeNotificationServices } = require('../../src/controllers/webhoo
 const { idempotencyService } = require('../../src/services/storage/IdempotencyService');
 
 describe('POST /api/webhook/message - Generic message webhook', () => {
-	const originalEnv = process.env;
+	let savedEnv;
 	let mockBot;
 
 	beforeEach(async () => {
-		process.env = {
-			...originalEnv,
+		savedEnv = saveEnv();
+		Object.assign(process.env, {
 			WEBHOOK_API_KEY: 'test-key',
 			ENABLE_TELEGRAM_BOT: 'true',
 			ENABLE_WHATSAPP_ALERTS: 'true',
@@ -23,7 +23,7 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 			WHATSAPP_API_KEY: 'test-whatsapp-key',
 			WHATSAPP_CHAT_ID: '120363000000000000@g.us',
 			ENABLE_GEMINI_GROUNDING: 'false',
-		};
+		});
 
 		jest.clearAllMocks();
 		idempotencyService.clear();
@@ -46,7 +46,7 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 	});
 
 	afterEach(() => {
-		process.env = originalEnv;
+		restoreEnv(savedEnv);
 		if (app._router && app._router.stack && app._router.stack.length > 0) {
 			app._router.stack.pop();
 		}

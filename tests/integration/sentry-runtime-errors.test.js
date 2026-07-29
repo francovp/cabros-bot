@@ -53,12 +53,13 @@ function createTestApp() {
 }
 
 describe('Sentry Runtime Errors Integration (T011, T017, T024)', () => {
-	const originalEnv = process.env;
+	let savedEnv;
 	let app;
 
 	beforeEach(() => {
+		savedEnv = saveEnv();
 		// Reset env and mocks
-		process.env = { ...originalEnv, WEBHOOK_API_KEY: 'test-key' };
+		process.env.WEBHOOK_API_KEY = 'test-key';
 		jest.clearAllMocks();
 		sentryService._reset();
 
@@ -67,7 +68,7 @@ describe('Sentry Runtime Errors Integration (T011, T017, T024)', () => {
 	});
 
 	afterEach(() => {
-		process.env = originalEnv;
+		restoreEnv(savedEnv);
 	});
 
 	describe('News Monitor Monitoring', () => {

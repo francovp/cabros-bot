@@ -2,14 +2,16 @@ const request = require('supertest');
 
 describe('public OpenAPI documentation', () => {
 	let app;
+	let savedEnv;
 
 	beforeAll(() => {
+		savedEnv = saveEnv();
 		process.env.WEBHOOK_API_KEY = 'must-not-appear-in-docs';
 		app = require('../../app');
 	});
 
 	afterAll(() => {
-		delete process.env.WEBHOOK_API_KEY;
+		restoreEnv(savedEnv);
 	});
 
 	it('serves the raw contract without API-key authentication', async () => {

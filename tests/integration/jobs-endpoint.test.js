@@ -19,21 +19,21 @@ jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
 }));
 
 describe('Jobs API Integration Tests', () => {
-	const originalEnv = process.env;
+	let savedEnv;
 	let mockTelegramSendMessage;
 	let mockBot;
 	let mockFetch;
 
 	beforeEach(async () => {
-		process.env = {
-			...originalEnv,
+		savedEnv = saveEnv();
+		Object.assign(process.env, {
 			WEBHOOK_API_KEY: 'test-key',
 			ENABLE_TELEGRAM_BOT: 'true',
 			ENABLE_WHATSAPP_ALERTS: 'false',
 			BOT_TOKEN: 'test-bot-token',
 			TELEGRAM_CHAT_ID: '123456789',
 			ENABLE_MARKET_SCANNER: 'true',
-		};
+		});
 
 		jest.clearAllMocks();
 		admin.__resetCollectionState();
@@ -60,7 +60,7 @@ describe('Jobs API Integration Tests', () => {
 	});
 
 	afterEach(() => {
-		process.env = originalEnv;
+		restoreEnv(savedEnv);
 		if (app._router && app._router.stack && app._router.stack.length > 0) {
 			app._router.stack.pop();
 		}

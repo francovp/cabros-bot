@@ -13,7 +13,7 @@ jest.mock('../../src/services/storage/SignalOutcomeService', () => ({
 }));
 
 describe('News Monitor dry-run mode', () => {
-	const originalEnv = process.env;
+	let savedEnv;
 	let mockTelegramSendMessage;
 	let mockBot;
 	let mockFetch;
@@ -23,8 +23,8 @@ describe('News Monitor dry-run mode', () => {
 	let originalDiscordEnabled;
 
 	beforeEach(async () => {
-		process.env = {
-			...originalEnv,
+		savedEnv = saveEnv();
+		Object.assign(process.env, {
 			WEBHOOK_API_KEY: 'test-key',
 			ENABLE_NEWS_MONITOR: 'true',
 			ENABLE_NEWS_MONITOR_TEST_MODE: 'true',
@@ -40,7 +40,7 @@ describe('News Monitor dry-run mode', () => {
 			DISCORD_WEBHOOK_URL: 'https://discord.example/webhook',
 			NEWS_ALERT_THRESHOLD: '0.7',
 			ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP: 'false',
-		};
+		});
 
 		jest.clearAllMocks();
 		signalOutcomeService.isEnabled.mockReturnValue(true);
@@ -90,7 +90,7 @@ describe('News Monitor dry-run mode', () => {
 		getNotificationManager().channels.get('discord').enabled = originalDiscordEnabled;
 		cacheSetSpy?.mockRestore();
 		cacheClaimSpy?.mockRestore();
-		process.env = originalEnv;
+		restoreEnv(savedEnv);
 		if (app._router && app._router.stack && app._router.stack.length > 0) {
 			app._router.stack.pop();
 		}

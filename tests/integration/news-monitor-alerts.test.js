@@ -10,11 +10,11 @@ const { getRoutes } = require('../../src/routes');
 
 describe('News Monitor - Alert Delivery Response Structure (US2)', () => {
 	let mockBot;
-	const originalEnv = process.env;
+	let savedEnv;
 
 	beforeEach(() => {
-		process.env = {
-			...originalEnv,
+		savedEnv = saveEnv();
+		Object.assign(process.env, {
 			ENABLE_NEWS_MONITOR: 'true',
 			ENABLE_TELEGRAM_BOT: 'true',
 			BOT_TOKEN: 'test-token',
@@ -23,7 +23,7 @@ describe('News Monitor - Alert Delivery Response Structure (US2)', () => {
 			NEWS_SYMBOLS_STOCKS: 'AAPL,MSFT',
 			NEWS_ALERT_THRESHOLD: '0.7',
 			WEBHOOK_API_KEY: 'test-key',
-		};
+		});
 
 		// Mock bot
 		mockBot = {
@@ -72,7 +72,7 @@ describe('News Monitor - Alert Delivery Response Structure (US2)', () => {
 		jest.clearAllMocks();
 		jest.dontMock('../../src/services/grounding/gemini');
 		jest.dontMock('../../src/services/grounding/genaiClient');
-		process.env = originalEnv;
+		restoreEnv(savedEnv);
 		if (app._router && app._router.stack && app._router.stack.length > 0) {
 			app._router.stack.pop();
 		}

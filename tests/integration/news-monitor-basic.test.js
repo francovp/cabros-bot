@@ -8,13 +8,13 @@ jest.mock('../../src/services/grounding/gemini');
 jest.mock('../../src/services/grounding/genaiClient');
 
 describe('News Monitor - Basic Endpoint Integration', () => {
-	const originalEnv = process.env;
+	let savedEnv;
 	let mockTelegramSendMessage;
 	let mockBot;
 
 	beforeEach(async () => {
-		process.env = {
-			...originalEnv,
+		savedEnv = saveEnv();
+		Object.assign(process.env, {
 			WEBHOOK_API_KEY: 'test-key',
 			ENABLE_NEWS_MONITOR: 'true',
 			NODE_ENV: 'test',
@@ -30,7 +30,7 @@ describe('News Monitor - Basic Endpoint Integration', () => {
 			GEMINI_API_KEY: 'test-key',
 			NEWS_SYMBOLS_CRYPTO: 'BTCUSDT,ETHUSD',
 			NEWS_SYMBOLS_STOCKS: 'AAPL,MSFT',
-		};
+		});
 
 		jest.clearAllMocks();
 		getCacheInstance().clear();
@@ -78,7 +78,7 @@ describe('News Monitor - Basic Endpoint Integration', () => {
 	});
 
 	afterEach(() => {
-		process.env = originalEnv;
+		restoreEnv(savedEnv);
 		if (app._router.stack.length > 0) {
 			app._router.stack.pop();
 		}
@@ -235,9 +235,12 @@ describe('News Monitor - Basic Endpoint Integration', () => {
 	describe('Response Structure', () => {
 		it('should return consistent requestId across requests', async () => {
 			const res = await request(app)
-				.get('/api/news-monitor?crypto=BTCUSDT').set('x-api-key', 'test-key')
-				.expect(200);
+				.get('/api/news-monitor?crypto=BTCUSDT').set('x-api-key', 'test-key');
 
+			if (res.status !== 200) {
+				console.log('DEBUG NEWS MONITOR FAILURE LINE 239:', res.status, res.body);
+			}
+			expect(res.status).toBe(200);
 			expect(res.body).toHaveProperty('requestId');
 			expect(typeof res.body.requestId).toBe('string');
 			expect(res.body.requestId.length).toBeGreaterThan(0);

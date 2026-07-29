@@ -28,16 +28,16 @@ const { encodeAlertPaginationCursor } = require('../../src/services/storage/aler
 const { idempotencyService } = require('../../src/services/storage/IdempotencyService');
 
 describe('Alerts API Integration Tests', () => {
-	const originalEnv = process.env;
+	let savedEnv;
 	let mockNotificationManager;
 
 	beforeEach(() => {
+		savedEnv = saveEnv();
 		idempotencyService.clear();
-		process.env = {
-			...originalEnv,
+		Object.assign(process.env, {
 			WEBHOOK_API_KEY: 'test-key',
 			ENABLE_FIRESTORE_ALERT_STORAGE: 'true',
-		};
+		});
 
 		jest.clearAllMocks();
 		mockNotificationManager = {
@@ -53,7 +53,7 @@ describe('Alerts API Integration Tests', () => {
 	});
 
 	afterEach(() => {
-		process.env = originalEnv;
+		restoreEnv(savedEnv);
 		if (app._router && app._router.stack && app._router.stack.length > 0) {
 			app._router.stack.pop();
 		}

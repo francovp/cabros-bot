@@ -26,14 +26,14 @@ const validFirestoreServiceAccountJson = JSON.stringify({
 });
 
 describe('Scanner presets API integration tests', () => {
-	const originalEnv = process.env;
+	let savedEnv;
 	let mockBot;
 	let mockTelegramSendMessage;
 	let mockFetch;
 
 	beforeEach(async () => {
-		process.env = {
-			...originalEnv,
+		savedEnv = saveEnv();
+		Object.assign(process.env, {
 			WEBHOOK_API_KEY: 'test-key',
 			ENABLE_FIRESTORE_ALERT_STORAGE: 'true',
 			ENABLE_FIRESTORE_SCANNER_PRESETS: 'true',
@@ -46,7 +46,7 @@ describe('Scanner presets API integration tests', () => {
 			BOT_TOKEN: 'test-bot-token',
 			TELEGRAM_CHAT_ID: '123456789',
 			ENABLE_WHATSAPP_ALERTS: 'false',
-		};
+		});
 
 		jest.clearAllMocks();
 		admin.__resetCollectionState();
@@ -69,7 +69,7 @@ describe('Scanner presets API integration tests', () => {
 	});
 
 	afterEach(() => {
-		process.env = originalEnv;
+		restoreEnv(savedEnv);
 		if (app._router && app._router.stack && app._router.stack.length > 0) {
 			app._router.stack.pop();
 		}

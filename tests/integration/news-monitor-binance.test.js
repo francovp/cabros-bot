@@ -13,12 +13,12 @@ jest.mock('../../src/services/grounding/gemini');
 jest.mock('../../src/services/grounding/genaiClient');
 
 describe('News Monitor - Binance Integration (US4)', () => {
-	const originalEnv = process.env;
+	let savedEnv;
 	let mockBot;
 
 	beforeEach(async () => {
-		process.env = {
-			...originalEnv,
+		savedEnv = saveEnv();
+		Object.assign(process.env, {
 			WEBHOOK_API_KEY: 'test-key',
 			ENABLE_NEWS_MONITOR: 'true',
 			NODE_ENV: 'test',
@@ -33,7 +33,7 @@ describe('News Monitor - Binance Integration (US4)', () => {
 			NEWS_ALERT_THRESHOLD: '0.7',
 			NEWS_CACHE_TTL_HOURS: '6',
 			ENABLE_BINANCE_PRICE_CHECK: 'true', // Enable Binance for this test suite
-		};
+		});
 
 		jest.clearAllMocks();
 
@@ -69,7 +69,7 @@ describe('News Monitor - Binance Integration (US4)', () => {
 	});
 
 	afterEach((done) => {
-		process.env = originalEnv;
+		restoreEnv(savedEnv);
 		if (app._router.stack.length > 0) {
 			app._router.stack.pop();
 		}

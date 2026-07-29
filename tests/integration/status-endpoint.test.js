@@ -1019,9 +1019,8 @@ describe('Status endpoints', () => {
 
 		const response = await request(app)
 			.get('/api/status')
-			.set('x-api-key', 'status-key');
-
-		expect(response.status).toBe(200);
+			.set('x-api-key', 'status-key')
+			.expect(200);
 		expect(response.body.dependencies.firestore).toEqual({
 			enabled: true,
 			configured: true,
