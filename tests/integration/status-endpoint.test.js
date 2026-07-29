@@ -21,11 +21,12 @@ const validFirestoreServiceAccountJson = JSON.stringify({
 });
 
 describe('Status endpoints', () => {
-	const originalEnv = { ...process.env };
+	let savedEnv;
 	let app;
 	let tempDir;
 
 	beforeEach(() => {
+		savedEnv = saveEnv();
 		admin.__resetApps();
 		admin.__resetCollectionState();
 		alertStorageService._resetForTesting();
@@ -65,13 +66,7 @@ describe('Status endpoints', () => {
 	});
 
 	afterEach(() => {
-		Object.keys(process.env).forEach((key) => {
-			if (!Object.prototype.hasOwnProperty.call(originalEnv, key)) {
-				delete process.env[key];
-			}
-		});
-		Object.assign(process.env, originalEnv);
-
+		restoreEnv(savedEnv);
 		if (tempDir) {
 			rmSync(tempDir, { recursive: true, force: true });
 		}
