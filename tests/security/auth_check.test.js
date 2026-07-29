@@ -4,11 +4,11 @@ const { validateApiKey } = require('../../src/lib/auth');
 
 describe('Security: API Key Validation', () => {
 	let app;
-	const originalEnv = process.env;
+	let savedEnv;
 
 	beforeEach(() => {
+		savedEnv = saveEnv();
 		app = express();
-		process.env = { ...originalEnv };
 		process.env.WEBHOOK_API_KEY = 'valid-api-key';
 		app.use(express.json());
 		app.post('/protected', validateApiKey, (req, res) => {
@@ -17,7 +17,7 @@ describe('Security: API Key Validation', () => {
 	});
 
 	afterEach(() => {
-		process.env = originalEnv;
+		restoreEnv(savedEnv);
 	});
 
 	it('should reject requests without x-api-key header', async () => {
