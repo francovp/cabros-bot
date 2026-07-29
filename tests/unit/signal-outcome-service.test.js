@@ -739,5 +739,53 @@ describe('SignalOutcomeService', () => {
 				alertStorageService.getFirestore = origGetFirestore;
 			}
 		});
+
+		it('aborts Binance request and halts sweep when sweep deadline is exceeded during getKlines', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			const receivedAtDate = new Date(Date.now() - 2 * 60 * 60 * 1000);
+			const mockDocId = 'timeout-doc-1';
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, new Map([
+				[mockDocId, {
+					receivedAt: admin.firestore.Timestamp.fromDate(receivedAtDate),
+					requestId: 'req-timeout-1',
+					source: 'alert',
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					side: 'BUY',
+					price: 50000,
+					outcomeEvaluated: false,
+					outcomes: {
+						'1h': {
+							status: 'pending',
+							targetTime: new Date(receivedAtDate.getTime() + 1 * 60 * 60 * 1000).toISOString(),
+						},
+					},
+				}],
+			]));
+
+			// Simulate getKlines hanging indefinitely until aborted
+			mockGetKlines.mockImplementation(() => new Promise((_, reject) => {
+				const timer = setTimeout(() => {}, 10000);
+				if (typeof timer.unref === 'function') timer.unref();
+			}));
+
+			const consoleWarnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+			try {
+				const sweepPromise = SignalOutcomeService.evaluatePendingOutcomes({ maxDurationMs: 50 });
+				const res = await sweepPromise;
+
+				expect(res.scannedCount).toBe(1);
+				expect(res.evaluatedCount).toBe(0);
+				expect(consoleWarnSpy).toHaveBeenCalledWith(
+					expect.stringContaining('[SignalOutcomeService] Error evaluating window 1h for BTCUSDT:'),
+					expect.stringContaining('Signal outcome sweep deadline exceeded (50ms)')
+				);
+			} finally {
+				consoleWarnSpy.mockRestore();
+			}
+		});
 	});
 });

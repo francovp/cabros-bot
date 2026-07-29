@@ -14,11 +14,11 @@ let lastRunDurationMs = null;
 let lastRunEvaluatedCount = 0;
 let lastEvaluatedDoc = null;
 
-function getBinanceClient() {
-	if (!binanceClient) {
-		binanceClient = new MainClient({
+function getBinanceClient(requestOptions = {}) {
+	if (!binanceClient || (requestOptions && Object.keys(requestOptions).length > 0)) {
+		return new MainClient({
 			beautifyResponses: true,
-		});
+		}, requestOptions);
 	}
 	return binanceClient;
 }
@@ -312,8 +312,15 @@ async function evaluatePendingOutcomes(options = {}) {
 
 				const config = WINDOW_CONFIGS[winKey];
 
+				const abortController = new AbortController();
+				const requestOptions = {
+					timeout: Math.max(1, remainingMs),
+					signal: abortController.signal,
+				};
+
 				try {
-					const klinesPromise = client.getKlines({
+					const sweepClient = getBinanceClient(requestOptions);
+					const klinesPromise = sweepClient.getKlines({
 						symbol: data.symbol,
 						interval: config.interval,
 						startTime: receivedAtMs,
@@ -324,6 +331,7 @@ async function evaluatePendingOutcomes(options = {}) {
 					let timerId;
 					const timeoutPromise = new Promise((_, reject) => {
 						timerId = setTimeout(() => {
+							abortController.abort();
 							reject(new Error(`Signal outcome sweep deadline exceeded (${effectiveMaxDurationMs}ms)`));
 						}, remainingMs);
 					});
@@ -377,8 +385,9 @@ async function evaluatePendingOutcomes(options = {}) {
 					outcome.maxAdverseExcursion = parseFloat(Math.min(0, mae).toFixed(4));
 					docUpdated = true;
 				} catch (error) {
+					abortController.abort();
 					console.warn(`[SignalOutcomeService] Error evaluating window ${winKey} for ${data.symbol}:`, error.message);
-					if (error.message.includes('deadline exceeded')) {
+					if (error.message.includes('deadline exceeded') || error.name === 'AbortError') {
 						allResolved = false;
 						sweepDeadlineExceeded = true;
 						break;
