@@ -12,6 +12,7 @@ let activeIntervalMs = null;
 let lastRunAt = null;
 let lastRunDurationMs = null;
 let lastRunEvaluatedCount = 0;
+let lastEvaluatedDoc = null;
 
 function getBinanceClient() {
 	if (!binanceClient) {
@@ -208,15 +209,29 @@ async function evaluatePendingOutcomes(options = {}) {
 			: 30000);
 
 		let query = firestore.collection(COLLECTION_NAME).where('outcomeEvaluated', '==', false);
+		if (lastEvaluatedDoc) {
+			query = query.startAfter(lastEvaluatedDoc);
+		}
 		if (effectiveLimit && typeof effectiveLimit === 'number' && effectiveLimit > 0) {
 			query = query.limit(effectiveLimit);
 		}
 
-		const snapshot = await query.get();
+		let snapshot = await query.get();
+
+		if (snapshot.empty && lastEvaluatedDoc) {
+			lastEvaluatedDoc = null;
+			query = firestore.collection(COLLECTION_NAME).where('outcomeEvaluated', '==', false);
+			if (effectiveLimit && typeof effectiveLimit === 'number' && effectiveLimit > 0) {
+				query = query.limit(effectiveLimit);
+			}
+			snapshot = await query.get();
+		}
 
 		if (snapshot.empty) {
 			return { scannedCount: 0, evaluatedCount: 0 };
 		}
+
+		lastEvaluatedDoc = snapshot.docs[snapshot.docs.length - 1];
 
 		const now = Date.now();
 		const client = getBinanceClient();
@@ -420,6 +435,7 @@ function stopWorker() {
 	}
 	activeIntervalMs = null;
 	isEvaluating = false;
+	lastEvaluatedDoc = null;
 }
 
 /**

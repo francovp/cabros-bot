@@ -66,10 +66,30 @@ function sortDocs(docs, field, direction) {
 }
 
 function buildQuerySnapshot(collectionName, queryState = {}) {
-	const docs = [...getCollectionState(collectionName).entries()].map(([id, data]) => buildDocSnapshot(id, data, collectionName));
+	let docs = [...getCollectionState(collectionName).entries()].map(([id, data]) => buildDocSnapshot(id, data, collectionName));
 
 	if (queryState.orderByField) {
 		sortDocs(docs, queryState.orderByField, queryState.orderByDirection || 'asc');
+	}
+
+	if (queryState.startAfter && queryState.startAfter.length > 0) {
+		const arg = queryState.startAfter[0];
+		let startIdx = -1;
+		if (arg && typeof arg === 'object' && arg.id) {
+			startIdx = docs.findIndex(d => d.id === arg.id);
+		} else if (typeof arg === 'string') {
+			startIdx = docs.findIndex(d => d.id === arg);
+		}
+		if (startIdx !== -1) {
+			docs = docs.slice(startIdx + 1);
+		}
+	}
+
+	if (queryState.where && Array.isArray(queryState.where)) {
+		const [field, op, val] = queryState.where;
+		if (op === '==') {
+			docs = docs.filter(d => d.data() && d.data()[field] === val);
+		}
 	}
 
 	const limitedDocs = typeof queryState.limitCount === 'number'

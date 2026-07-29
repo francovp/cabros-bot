@@ -204,6 +204,58 @@ describe('SignalOutcomeService Worker & Bounded Evaluation', () => {
 			expect(mockGetKlines).toHaveBeenCalledTimes(3);
 		});
 
+		it('rotates signal outcome batches across successive worker sweeps when pending exceeds batch limit', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+
+			const docsMap = new Map();
+			// 5 pending documents.
+			// Doc 1 & 2 have a 4h window that is NOT mature yet (targetTime in future), so outcomeEvaluated remains false.
+			// Doc 3, 4 & 5 have a 1h window that IS mature (targetTime in past).
+			for (let i = 1; i <= 5; i++) {
+				const isImmature = i <= 2;
+				docsMap.set(`doc_${i}`, {
+					receivedAt: admin.firestore.Timestamp.fromDate(new Date(Date.now() - 3600000)),
+					symbol: `CRYPTO${i}USDT`,
+					exchange: 'BINANCE',
+					side: 'BUY',
+					price: 50000,
+					outcomeEvaluated: false,
+					outcomes: {
+						'1h': {
+							status: 'pending',
+							targetTime: isImmature
+								? new Date(Date.now() + 3600000).toISOString()
+								: new Date(Date.now() - 1000).toISOString(),
+						},
+					},
+				});
+			}
+
+			global.__firebaseAdminMockState.collections.set(
+				SignalOutcomeService.COLLECTION_NAME,
+				docsMap
+			);
+
+			mockGetKlines.mockResolvedValue([
+				[1600000000000, '50000', '51000', '49500', '50500', '100'],
+			]);
+
+			// Sweep 1 with limit 2: scans doc_1 and doc_2 (immature, 0 klines calls)
+			const sweep1 = await SignalOutcomeService.evaluatePendingOutcomes({ limit: 2 });
+			expect(sweep1.scannedCount).toBe(2);
+			const klinesCountAfterSweep1 = mockGetKlines.mock.calls.length;
+
+			// Sweep 2 with limit 2: rotates past doc_2 and scans doc_3 and doc_4 (mature!)
+			const sweep2 = await SignalOutcomeService.evaluatePendingOutcomes({ limit: 2 });
+			expect(sweep2.scannedCount).toBe(2);
+			const klinesCountAfterSweep2 = mockGetKlines.mock.calls.length;
+			expect(klinesCountAfterSweep2 - klinesCountAfterSweep1).toBe(2);
+
+			// Sweep 3 with limit 2: scans doc_5
+			const sweep3 = await SignalOutcomeService.evaluatePendingOutcomes({ limit: 2 });
+			expect(sweep3.scannedCount).toBe(1);
+		});
+
 		it('isolates errors fail-open when provider or firestore fails', async () => {
 			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
 			const consoleSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
