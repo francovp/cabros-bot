@@ -1,9 +1,13 @@
 const express = require('express');
+const { setupTrustProxy } = require('./src/lib/trustProxy');
 
 const app = express();
 const cors = require('cors');
 const helmet = require('helmet');
 const { getOpenApiDocsRouter } = require('./src/openapi/docs');
+
+// Configure trusted proxies (e.g. Render reverse proxy or TRUST_PROXY setting)
+setupTrustProxy(app);
 
 // Tell express to use body-parser's urlencoded parsing
 app.use(express.urlencoded({ extended: false }));

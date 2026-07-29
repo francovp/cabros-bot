@@ -26,6 +26,20 @@ process.env = {
 	LOG_LEVEL: process.env.LOG_LEVEL || 'error',
 };
 
+global.saveEnv = function saveEnv() {
+	return { ...process.env };
+};
+
+global.restoreEnv = function restoreEnv(savedEnv) {
+	if (!savedEnv || typeof savedEnv !== 'object') return;
+	for (const key of Object.keys(process.env)) {
+		if (!Object.prototype.hasOwnProperty.call(savedEnv, key)) {
+			delete process.env[key];
+		}
+	}
+	Object.assign(process.env, savedEnv);
+};
+
 // Configure logging early to apply level filtering in tests
 const { configureLogging } = require('../src/lib/logging');
 configureLogging();

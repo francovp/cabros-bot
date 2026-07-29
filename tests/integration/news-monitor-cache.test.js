@@ -13,13 +13,13 @@ jest.mock('../../src/services/grounding/gemini');
 jest.mock('../../src/services/grounding/genaiClient');
 
 describe('News Monitor - Cache Deduplication (US3)', () => {
-	const originalEnv = process.env;
+	let savedEnv;
 	let mockBot;
 	let mockFetch;
 
 	beforeEach(async () => {
-		process.env = {
-			...originalEnv,
+		savedEnv = saveEnv();
+		Object.assign(process.env, {
 			WEBHOOK_API_KEY: 'test-key',
 			ENABLE_NEWS_MONITOR: 'true',
 			NODE_ENV: 'test',
@@ -37,7 +37,7 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 			NEWS_SYMBOLS_STOCKS: 'AAPL',
 			NEWS_ALERT_THRESHOLD: '0.7',
 			NEWS_CACHE_TTL_HOURS: '6', // 6 hour TTL in production, but tests run fast
-		};
+		});
 
 		jest.clearAllMocks();
 
@@ -80,7 +80,7 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 	});
 
 	afterEach((done) => {
-		process.env = originalEnv;
+		restoreEnv(savedEnv);
 		if (app._router.stack.length > 0) {
 			app._router.stack.pop();
 		}

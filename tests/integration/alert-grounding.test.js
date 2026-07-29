@@ -30,12 +30,12 @@ jest.mock('../../src/services/grounding/genaiClient');
 describe('Alert Grounding Integration', () => {
 	let mockTelegramSendMessage;
 	let mockFetch;
-	const originalEnv = process.env;
+	let savedEnv;
 
 	beforeEach(async () => {
+		savedEnv = saveEnv();
 		// Mock environment variables
-		process.env = {
-			...originalEnv,
+		Object.assign(process.env, {
 			WEBHOOK_API_KEY: 'test-key',
 			ENABLE_GEMINI_GROUNDING: 'true',
 			GEMINI_API_KEY: 'test-gemini-key',
@@ -43,9 +43,11 @@ describe('Alert Grounding Integration', () => {
 			TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID: '987654321',
 			BOT_TOKEN: 'test-bot-token',
 			ENABLE_TELEGRAM_BOT: 'true',
-			GROUNDING_MAX_SOURCES: '3',
-			GROUNDING_TIMEOUT_MS: '8000',
-		};
+			ENABLE_WHATSAPP_ALERTS: 'true',
+			WHATSAPP_API_URL: 'https://api.greenapi.com/waInstance123/',
+			WHATSAPP_API_KEY: 'test-whatsapp-key',
+			WHATSAPP_CHAT_ID: '120363000000000000@g.us',
+		});
 
 		// Reset all mocks
 		jest.clearAllMocks();
@@ -92,7 +94,7 @@ describe('Alert Grounding Integration', () => {
 	});
 
 	afterEach(() => {
-		process.env = originalEnv;
+		restoreEnv(savedEnv);
 		// Remove mounted routes
 		if (app._router.stack.length > 0) {
 			app._router.stack.pop();

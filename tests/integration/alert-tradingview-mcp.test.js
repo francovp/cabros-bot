@@ -13,18 +13,18 @@ jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
 
 describe('Alert TradingView MCP Integration', () => {
 	let mockTelegramSendMessage;
-	const originalEnv = process.env;
+	let savedEnv;
 
 	beforeEach(async () => {
-		process.env = {
-			...originalEnv,
+		savedEnv = saveEnv();
+		Object.assign(process.env, {
 			WEBHOOK_API_KEY: 'test-key',
 			ENABLE_TRADINGVIEW_MCP_ENRICHMENT: 'true',
 			ENABLE_GEMINI_GROUNDING: 'false',
 			TELEGRAM_CHAT_ID: '123456789',
 			BOT_TOKEN: 'test-bot-token',
 			ENABLE_TELEGRAM_BOT: 'true',
-		};
+		});
 
 		jest.clearAllMocks();
 
@@ -46,7 +46,7 @@ describe('Alert TradingView MCP Integration', () => {
 	});
 
 	afterEach(() => {
-		process.env = originalEnv;
+		restoreEnv(savedEnv);
 		if (app._router && app._router.stack && app._router.stack.length > 0) {
 			app._router.stack.pop();
 		}

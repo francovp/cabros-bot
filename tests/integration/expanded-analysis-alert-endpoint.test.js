@@ -13,14 +13,14 @@ jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
 }));
 
 describe('Expanded Analysis Alert endpoint', () => {
-	const originalEnv = process.env;
+	let savedEnv;
 	let mockTelegramSendMessage;
 	let mockBot;
 	let mockFetch;
 
 	beforeEach(async () => {
-		process.env = {
-			...originalEnv,
+		savedEnv = saveEnv();
+		Object.assign(process.env, {
 			WEBHOOK_API_KEY: 'test-key',
 			ENABLE_TELEGRAM_BOT: 'true',
 			ENABLE_WHATSAPP_ALERTS: 'false',
@@ -28,7 +28,7 @@ describe('Expanded Analysis Alert endpoint', () => {
 			TELEGRAM_CHAT_ID: '123456789',
 			EXPANDED_ANALYSIS_ALERT_SYMBOLS: '',
 			TRADINGVIEW_MCP_DEFAULT_TIMEFRAME: '1D',
-		};
+		});
 
 		jest.clearAllMocks();
 
@@ -51,7 +51,7 @@ describe('Expanded Analysis Alert endpoint', () => {
 	});
 
 	afterEach(() => {
-		process.env = originalEnv;
+		restoreEnv(savedEnv);
 		if (app._router && app._router.stack && app._router.stack.length > 0) {
 			app._router.stack.pop();
 		}
