@@ -6,22 +6,10 @@ const rateLimiter = require('../../src/lib/rateLimiter');
 
 describe('Trust Proxy and Rate Limiter Integration', () => {
 	let app;
-	let originalMax;
-
-	beforeAll(() => {
-		originalMax = process.env.RATE_LIMIT_MAX;
-	});
-
-	afterAll(() => {
-		if (originalMax !== undefined) {
-			process.env.RATE_LIMIT_MAX = originalMax;
-		} else {
-			delete process.env.RATE_LIMIT_MAX;
-		}
-		rateLimiter.disableTestMode();
-	});
+	let savedEnv;
 
 	beforeEach(() => {
+		savedEnv = saveEnv();
 		rateLimiter.enableTestMode();
 		process.env.RATE_LIMIT_MAX = '5';
 		rateLimiter.reset();
@@ -32,6 +20,7 @@ describe('Trust Proxy and Rate Limiter Integration', () => {
 
 	afterEach(() => {
 		rateLimiter.disableTestMode();
+		restoreEnv(savedEnv);
 	});
 
 	describe('When TRUST_PROXY is enabled (1 hop / Render)', () => {

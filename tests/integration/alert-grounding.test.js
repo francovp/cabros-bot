@@ -1,7 +1,7 @@
 /* global jest, describe, it, beforeEach, afterEach, expect */
 
 const request = require('supertest');
-const app = require('../../app');
+const express = require('express');
 const { getRoutes } = require('../../src/routes');
 const genaiClient = require('../../src/services/grounding/genaiClient');
 const gemini = require('../../src/services/grounding/gemini');
@@ -28,6 +28,7 @@ const mockSearchResults = [
 jest.mock('../../src/services/grounding/genaiClient');
 
 describe('Alert Grounding Integration', () => {
+	let app;
 	let mockTelegramSendMessage;
 	let mockFetch;
 	let savedEnv;
@@ -52,12 +53,12 @@ describe('Alert Grounding Integration', () => {
 		// Reset all mocks
 		jest.clearAllMocks();
 
-		// Mock Gemini client responses
-		genaiClient.search.mockResolvedValue({
+		// Default mock implementations for genaiClient
+		genaiClient.search = jest.fn().mockResolvedValue({
 			results: mockSearchResults,
 		});
 
-		genaiClient.llmCallv2.mockResolvedValue({
+		genaiClient.llmCallv2 = jest.fn().mockResolvedValue({
 			text: JSON.stringify({
 				sentiment: 'BULLISH',
 				sentiment_score: 0.9,
@@ -89,16 +90,15 @@ describe('Alert Grounding Integration', () => {
 		// Initialize notification services
 		await initializeNotificationServices(bot);
 
-		// Mount routes
-		app.use('/api', getRoutes());
+		// Mount routes on fresh isolated express app
+		app = express();
+		app.use(express.json());
+		app.use('/api', getRoutes(bot));
 	});
 
 	afterEach(() => {
 		restoreEnv(savedEnv);
-		// Remove mounted routes
-		if (app._router.stack.length > 0) {
-			app._router.stack.pop();
-		}
+		delete global.fetch;
 	});
 
 	describe('POST /api/webhook/alert', () => {
