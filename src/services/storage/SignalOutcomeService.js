@@ -14,11 +14,11 @@ let lastRunDurationMs = null;
 let lastRunEvaluatedCount = 0;
 let lastEvaluatedDoc = null;
 
-function getBinanceClient() {
-	if (!binanceClient) {
-		binanceClient = new MainClient({
+function getBinanceClient(requestOptions = {}) {
+	if (!binanceClient || (requestOptions && Object.keys(requestOptions).length > 0)) {
+		return new MainClient({
 			beautifyResponses: true,
-		});
+		}, requestOptions);
 	}
 	return binanceClient;
 }
@@ -235,9 +235,10 @@ async function evaluatePendingOutcomes(options = {}) {
 
 		const now = Date.now();
 		const client = getBinanceClient();
+		let sweepDeadlineExceeded = false;
 
 		for (const doc of snapshot.docs) {
-			if (Date.now() - startTime >= effectiveMaxDurationMs) {
+			if (Date.now() - startTime >= effectiveMaxDurationMs || sweepDeadlineExceeded) {
 				console.warn(`[SignalOutcomeService] Outcome evaluation sweep max duration budget (${effectiveMaxDurationMs}ms) exceeded. Halting sweep.`);
 				break;
 			}
@@ -301,16 +302,48 @@ async function evaluatePendingOutcomes(options = {}) {
 					continue;
 				}
 
+				const remainingMs = effectiveMaxDurationMs - (Date.now() - startTime);
+				if (remainingMs <= 0) {
+					console.warn(`[SignalOutcomeService] Outcome evaluation sweep max duration budget (${effectiveMaxDurationMs}ms) exceeded before window ${winKey} for ${data.symbol}. Halting sweep.`);
+					allResolved = false;
+					sweepDeadlineExceeded = true;
+					break;
+				}
+
 				const config = WINDOW_CONFIGS[winKey];
 
+				const abortController = new AbortController();
+				const requestOptions = {
+					timeout: Math.max(1, remainingMs),
+					signal: abortController.signal,
+				};
+
 				try {
-					const klines = await client.getKlines({
+					const sweepClient = getBinanceClient(requestOptions);
+					const klinesPromise = sweepClient.getKlines({
 						symbol: data.symbol,
 						interval: config.interval,
 						startTime: receivedAtMs,
 						endTime: targetTimeMs,
 						limit: 1000,
 					});
+
+					let timerId;
+					const timeoutPromise = new Promise((_, reject) => {
+						timerId = setTimeout(() => {
+							abortController.abort();
+							reject(new Error(`Signal outcome sweep deadline exceeded (${effectiveMaxDurationMs}ms)`));
+						}, remainingMs);
+					});
+
+					let klines;
+					try {
+						klines = await Promise.race([klinesPromise, timeoutPromise]);
+					} finally {
+						if (timerId) {
+							clearTimeout(timerId);
+						}
+					}
 
 					if (!Array.isArray(klines) || klines.length === 0) {
 						outcome.status = 'unavailable';
@@ -352,8 +385,13 @@ async function evaluatePendingOutcomes(options = {}) {
 					outcome.maxAdverseExcursion = parseFloat(Math.min(0, mae).toFixed(4));
 					docUpdated = true;
 				} catch (error) {
+					abortController.abort();
 					console.warn(`[SignalOutcomeService] Error evaluating window ${winKey} for ${data.symbol}:`, error.message);
-					if (error.message.includes('400') || error.message.includes('Invalid symbol') || error.message.includes('UNKNOWN_SYMBOL')) {
+					if (error.message.includes('deadline exceeded') || error.name === 'AbortError') {
+						allResolved = false;
+						sweepDeadlineExceeded = true;
+						break;
+					} else if (error.message.includes('400') || error.message.includes('Invalid symbol') || error.message.includes('UNKNOWN_SYMBOL')) {
 						outcome.status = 'unavailable';
 						outcome.reason = 'market_data_unavailable';
 						docUpdated = true;
@@ -370,6 +408,10 @@ async function evaluatePendingOutcomes(options = {}) {
 				}
 				await doc.ref.update(updateFields);
 				evaluatedCount++;
+			}
+
+			if (sweepDeadlineExceeded) {
+				break;
 			}
 		}
 

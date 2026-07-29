@@ -260,6 +260,95 @@ describe('SignalOutcomeService', () => {
 			expect(updated.outcomes['1h'].status).toBe('unavailable');
 			expect(updated.outcomeEvaluated).toBe(true); // only 1 window and it's resolved/unavailable
 		});
+
+		it('enforces sweep max duration budget on slow or hanging getKlines requests', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			const receivedAtDate = new Date(Date.now() - 2 * 60 * 60 * 1000);
+			const outcomes = {
+				'1h': {
+					status: 'pending',
+					targetTime: new Date(receivedAtDate.getTime() + 1 * 60 * 60 * 1000).toISOString(),
+				},
+			};
+
+			const mockDocId = 'test-doc-slow-kline';
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, new Map([
+				[mockDocId, {
+					receivedAt: admin.firestore.Timestamp.fromDate(receivedAtDate),
+					requestId: 'req-slow',
+					source: 'news-monitor',
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					side: 'BUY',
+					price: 50000,
+					outcomeEvaluated: false,
+					outcomes,
+				}],
+			]));
+
+			// Mock getKlines to hang / take 500ms
+			mockGetKlines.mockImplementation(() => new Promise((resolve) => setTimeout(resolve, 500)));
+
+			const startTime = Date.now();
+			await SignalOutcomeService.evaluatePendingOutcomes({ maxDurationMs: 50 });
+			const duration = Date.now() - startTime;
+
+			// Should finish rapidly (bounded by 50ms budget), NOT waiting 500ms
+			expect(duration).toBeLessThan(300);
+
+			const updated = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(mockDocId);
+			// Outcome should remain pending (fail-open state preserved)
+			expect(updated.outcomes['1h'].status).toBe('pending');
+			expect(updated.outcomeEvaluated).toBe(false);
+		});
+
+		it('re-checks deadline before each window request and halts without starting further requests', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			const receivedAtDate = new Date(Date.now() - 5 * 60 * 60 * 1000);
+			const outcomes = {
+				'1h': {
+					status: 'pending',
+					targetTime: new Date(receivedAtDate.getTime() + 1 * 60 * 60 * 1000).toISOString(),
+				},
+				'4h': {
+					status: 'pending',
+					targetTime: new Date(receivedAtDate.getTime() + 4 * 60 * 60 * 1000).toISOString(),
+				},
+			};
+
+			const mockDocId = 'test-doc-multi-win';
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, new Map([
+				[mockDocId, {
+					receivedAt: admin.firestore.Timestamp.fromDate(receivedAtDate),
+					requestId: 'req-multi-win',
+					source: 'news-monitor',
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					side: 'BUY',
+					price: 50000,
+					outcomeEvaluated: false,
+					outcomes,
+				}],
+			]));
+
+			// Mock getKlines to take 80ms for 1h window
+			mockGetKlines.mockImplementation(() => new Promise((resolve) => setTimeout(() => {
+				resolve([[receivedAtDate.getTime(), "50000", "52000", "49000", "51000"]]);
+			}, 80)));
+
+			await SignalOutcomeService.evaluatePendingOutcomes({ maxDurationMs: 50 });
+
+			// Because maxDurationMs is 50ms, before or during 1h window processing, budget is exhausted
+			// getKlines should not be called more than once (or 0 times if budget expired before call)
+			expect(mockGetKlines.mock.calls.length).toBeLessThanOrEqual(1);
+
+			const updated = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(mockDocId);
+			expect(updated.outcomes['4h'].status).toBe('pending');
+		});
 	});
 
 	describe('getMetricsSummary()', () => {
@@ -648,6 +737,54 @@ describe('SignalOutcomeService', () => {
 			} finally {
 				consoleWarnSpy.mockRestore();
 				alertStorageService.getFirestore = origGetFirestore;
+			}
+		});
+
+		it('aborts Binance request and halts sweep when sweep deadline is exceeded during getKlines', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			const receivedAtDate = new Date(Date.now() - 2 * 60 * 60 * 1000);
+			const mockDocId = 'timeout-doc-1';
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, new Map([
+				[mockDocId, {
+					receivedAt: admin.firestore.Timestamp.fromDate(receivedAtDate),
+					requestId: 'req-timeout-1',
+					source: 'alert',
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					side: 'BUY',
+					price: 50000,
+					outcomeEvaluated: false,
+					outcomes: {
+						'1h': {
+							status: 'pending',
+							targetTime: new Date(receivedAtDate.getTime() + 1 * 60 * 60 * 1000).toISOString(),
+						},
+					},
+				}],
+			]));
+
+			// Simulate getKlines hanging indefinitely until aborted
+			mockGetKlines.mockImplementation(() => new Promise((_, reject) => {
+				const timer = setTimeout(() => {}, 10000);
+				if (typeof timer.unref === 'function') timer.unref();
+			}));
+
+			const consoleWarnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+			try {
+				const sweepPromise = SignalOutcomeService.evaluatePendingOutcomes({ maxDurationMs: 50 });
+				const res = await sweepPromise;
+
+				expect(res.scannedCount).toBe(1);
+				expect(res.evaluatedCount).toBe(0);
+				expect(consoleWarnSpy).toHaveBeenCalledWith(
+					expect.stringContaining('[SignalOutcomeService] Error evaluating window 1h for BTCUSDT:'),
+					expect.stringContaining('Signal outcome sweep deadline exceeded (50ms)')
+				);
+			} finally {
+				consoleWarnSpy.mockRestore();
 			}
 		});
 	});
