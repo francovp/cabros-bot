@@ -50,6 +50,7 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 		if (app._router && app._router.stack && app._router.stack.length > 0) {
 			app._router.stack.pop();
 		}
+		delete global.fetch;
 	});
 
 	// ---------------------------------------------------------------------------
