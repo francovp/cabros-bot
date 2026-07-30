@@ -101,5 +101,15 @@ describe('TradingView signal parser', () => {
 			assetClass: 'crypto',
 		}));
 	});
-});
 
+	it('does not classify lowercase bare symbols used as prose words', () => {
+		const text = 'El sol salió después del anuncio';
+
+		expect(deriveAssetContext(text)).toBeNull();
+		expect(deriveCleanSearchQuery(text)).toBe(text);
+		expect(deriveAssetContext('SOL price rose after the announcement')).toEqual(expect.objectContaining({
+			symbol: 'SOL',
+			assetClass: 'crypto',
+		}));
+	});
+});

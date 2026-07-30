@@ -153,7 +153,11 @@ function deriveAssetContext(text) {
 	);
 	const cryptoSuffixMatch = text.match(cryptoSuffixPattern);
 	if (cryptoSuffixMatch && cryptoSuffixMatch.groups && cryptoSuffixMatch.groups.symbol) {
-		const symbol = cryptoSuffixMatch.groups.symbol.toUpperCase();
+		const rawSymbol = cryptoSuffixMatch.groups.symbol;
+		const symbol = rawSymbol.toUpperCase();
+		if (BARE_CRYPTO_SYMBOLS.includes(symbol) && rawSymbol !== symbol) {
+			return null;
+		}
 		return {
 			symbol,
 			exchange: null,
