@@ -148,8 +148,8 @@ function deriveAssetContext(text) {
 	}
 
 	const cryptoSuffixPattern = new RegExp(
-		`(?:^|\\s)(?<symbol>(?:[A-Z0-9._-]{2,20}(?:${CRYPTO_PAIR_QUOTE_SUFFIXES.join('|')})|(?:${BARE_CRYPTO_SYMBOLS.join('|')})))\\b`,
-		'gi',
+		`(?:^|\\s)(?<symbol>(?:[A-Z0-9._-]{2,20}(?:${CRYPTO_PAIR_QUOTE_SUFFIXES.join('|')})|(?:${BARE_CRYPTO_SYMBOLS.join('|')})))(?=[^\\p{L}\\p{N}\\p{M}_]|$)`,
+		'giu',
 	);
 	for (const cryptoSuffixMatch of text.matchAll(cryptoSuffixPattern)) {
 		if (!cryptoSuffixMatch.groups || !cryptoSuffixMatch.groups.symbol) {

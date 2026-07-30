@@ -115,5 +115,8 @@ describe('TradingView signal parser', () => {
 			symbol: 'BTCUSDT',
 			assetClass: 'crypto',
 		}));
+		const unicodeWord = 'SOLÍA subir después del anuncio';
+		expect(deriveAssetContext(unicodeWord)).toBeNull();
+		expect(deriveCleanSearchQuery(unicodeWord)).toBe(unicodeWord);
 	});
 });
