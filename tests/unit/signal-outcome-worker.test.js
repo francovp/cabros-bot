@@ -367,6 +367,38 @@ describe('SignalOutcomeService Worker & Bounded Evaluation', () => {
 				expect(status.intervalMs).toBe(120000);
 				SignalOutcomeService.stopWorker();
 			});
+
+			it('falls back when interval is fractional or outside Node timer bounds', () => {
+				process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+
+				process.env.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS = '1500.5';
+				SignalOutcomeService.startWorker();
+				let status = SignalOutcomeService.getWorkerStatus();
+				expect(status.intervalMs).toBe(300000);
+				SignalOutcomeService.stopWorker();
+
+				process.env.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS = '2147483648';
+				SignalOutcomeService.startWorker();
+				status = SignalOutcomeService.getWorkerStatus();
+				expect(status.intervalMs).toBe(300000);
+				SignalOutcomeService.stopWorker();
+
+				delete process.env.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS;
+				SignalOutcomeService.startWorker({ intervalMs: 1500.5 });
+				status = SignalOutcomeService.getWorkerStatus();
+				expect(status.intervalMs).toBe(300000);
+				SignalOutcomeService.stopWorker();
+
+				SignalOutcomeService.startWorker({ intervalMs: 2147483648 });
+				status = SignalOutcomeService.getWorkerStatus();
+				expect(status.intervalMs).toBe(300000);
+				SignalOutcomeService.stopWorker();
+
+				SignalOutcomeService.startWorker({ intervalMs: 2147483647 });
+				status = SignalOutcomeService.getWorkerStatus();
+				expect(status.intervalMs).toBe(2147483647);
+				SignalOutcomeService.stopWorker();
+			});
 		});
 	});
 });

@@ -5,6 +5,7 @@ const AlertStorageService = require('./AlertStorageService');
 const { MainClient } = require('binance');
 
 const COLLECTION_NAME = 'tradingSignalOutcomes';
+const MAX_TIMER_DELAY_MS = 2147483647;
 let binanceClient = null;
 let isEvaluating = false;
 let workerTimer = null;
@@ -32,11 +33,16 @@ function parsePositiveInteger(val, defaultVal) {
 	if (val === undefined || val === null || val === '') {
 		return defaultVal;
 	}
-	const parsed = typeof val === 'number' ? val : parseInt(val, 10);
-	if (Number.isFinite(parsed) && parsed > 0) {
+	const parsed = typeof val === 'number' ? val : Number(String(val).trim());
+	if (Number.isSafeInteger(parsed) && parsed > 0) {
 		return parsed;
 	}
 	return defaultVal;
+}
+
+function parseTimerInterval(val, defaultVal) {
+	const parsed = parsePositiveInteger(val, defaultVal);
+	return parsed <= MAX_TIMER_DELAY_MS ? parsed : defaultVal;
 }
 
 function normalizeSide(side) {
@@ -455,11 +461,11 @@ function startWorker(options = {}) {
 	const DEFAULT_INTERVAL_MS = 300000;
 	let intervalMs;
 	if (options.intervalMs !== undefined && options.intervalMs !== null) {
-		intervalMs = parsePositiveInteger(options.intervalMs, DEFAULT_INTERVAL_MS);
+		intervalMs = parseTimerInterval(options.intervalMs, DEFAULT_INTERVAL_MS);
 	} else if (process.env.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS) {
-		intervalMs = parsePositiveInteger(process.env.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS, DEFAULT_INTERVAL_MS);
+		intervalMs = parseTimerInterval(process.env.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS, DEFAULT_INTERVAL_MS);
 	} else if (process.env.SIGNAL_OUTCOME_EVALUATION_CADENCE_MS) {
-		intervalMs = parsePositiveInteger(process.env.SIGNAL_OUTCOME_EVALUATION_CADENCE_MS, DEFAULT_INTERVAL_MS);
+		intervalMs = parseTimerInterval(process.env.SIGNAL_OUTCOME_EVALUATION_CADENCE_MS, DEFAULT_INTERVAL_MS);
 	} else {
 		intervalMs = DEFAULT_INTERVAL_MS;
 	}
@@ -506,9 +512,9 @@ function getWorkerStatus() {
 	const DEFAULT_INTERVAL_MS = 300000;
 	const intervalMs = activeIntervalMs || (
 		process.env.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS
-			? parsePositiveInteger(process.env.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS, DEFAULT_INTERVAL_MS)
+			? parseTimerInterval(process.env.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS, DEFAULT_INTERVAL_MS)
 			: (process.env.SIGNAL_OUTCOME_EVALUATION_CADENCE_MS
-				? parsePositiveInteger(process.env.SIGNAL_OUTCOME_EVALUATION_CADENCE_MS, DEFAULT_INTERVAL_MS)
+				? parseTimerInterval(process.env.SIGNAL_OUTCOME_EVALUATION_CADENCE_MS, DEFAULT_INTERVAL_MS)
 				: DEFAULT_INTERVAL_MS)
 	);
 
