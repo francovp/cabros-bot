@@ -222,7 +222,7 @@ async function evaluatePendingOutcomes(options = {}) {
 			50
 		);
 
-		const effectiveMaxDurationMs = parsePositiveInteger(
+		const effectiveMaxDurationMs = parseTimerInterval(
 			options.maxDurationMs !== undefined ? options.maxDurationMs : process.env.SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS,
 			30000
 		);
@@ -520,7 +520,7 @@ function getWorkerStatus() {
 
 	const batchLimit = parsePositiveInteger(process.env.SIGNAL_OUTCOME_EVALUATION_BATCH_LIMIT, 50);
 
-	const maxDurationMs = parsePositiveInteger(process.env.SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS, 30000);
+	const maxDurationMs = parseTimerInterval(process.env.SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS, 30000);
 
 	return {
 		enabled: isEnabled(),

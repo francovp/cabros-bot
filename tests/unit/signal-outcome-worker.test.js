@@ -399,6 +399,15 @@ describe('SignalOutcomeService Worker & Bounded Evaluation', () => {
 				expect(status.intervalMs).toBe(2147483647);
 				SignalOutcomeService.stopWorker();
 			});
+
+			it('falls back when the sweep duration exceeds Node timer bounds', () => {
+				process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+				process.env.SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS = '2147483648';
+
+				const status = SignalOutcomeService.getWorkerStatus();
+
+				expect(status.maxDurationMs).toBe(30000);
+			});
 		});
 	});
 });
