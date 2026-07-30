@@ -80,6 +80,26 @@ describe('TradingView signal parser', () => {
 		expect(deriveCleanSearchQuery('Bitcoin ETF inflows accelerated after the market opened'))
 			.toBe('Bitcoin ETF inflows accelerated after the market opened');
 	});
-});
 
+	it('preserves prose words that collide with ambiguous crypto suffixes', () => {
+		for (const text of [
+			'aerosol prices rose after the announcement',
+			'teeth broke resistance',
+		]) {
+			expect(deriveAssetContext(text)).toBeNull();
+			expect(deriveCleanSearchQuery(text)).toBe(text);
+		}
+	});
+
+	it('retains unqualified crypto pairs and exact bare crypto symbols', () => {
+		expect(deriveAssetContext('BTCUSDT price rose after the announcement')).toEqual(expect.objectContaining({
+			symbol: 'BTCUSDT',
+			assetClass: 'crypto',
+		}));
+		expect(deriveAssetContext('ETH price rose after the announcement')).toEqual(expect.objectContaining({
+			symbol: 'ETH',
+			assetClass: 'crypto',
+		}));
+	});
+});
 

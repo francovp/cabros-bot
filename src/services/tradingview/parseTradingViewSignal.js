@@ -97,6 +97,8 @@ function parseTradingViewSignal(text, options = {}) {
 const STOCK_EXCHANGES = new Set(['BATS', 'NASDAQ', 'NYSE', 'AMEX', 'SPCFD', 'CBOE']);
 const CRYPTO_EXCHANGES = new Set(['BINANCE', 'BYBIT', 'COINBASE', 'OKX', 'KRAKEN', 'BITFINEX', 'KUCOIN']);
 const CRYPTO_SUFFIXES = ['USDT', 'BUSD', 'USDC', 'BTC', 'ETH', 'SOL', 'PERP'];
+const CRYPTO_PAIR_QUOTE_SUFFIXES = ['USDT', 'BUSD', 'USDC'];
+const BARE_CRYPTO_SYMBOLS = ['BTC', 'ETH', 'SOL', 'PERP'];
 
 function deriveAssetContext(text) {
 	if (!text || typeof text !== 'string') {
@@ -145,7 +147,10 @@ function deriveAssetContext(text) {
 		};
 	}
 
-	const cryptoSuffixPattern = new RegExp(`(?:^|\\s)(?<symbol>[A-Z0-9._-]{2,20}(?:${CRYPTO_SUFFIXES.join('|')}))\\b`, 'i');
+	const cryptoSuffixPattern = new RegExp(
+		`(?:^|\\s)(?<symbol>(?:[A-Z0-9._-]{2,20}(?:${CRYPTO_PAIR_QUOTE_SUFFIXES.join('|')})|(?:${BARE_CRYPTO_SYMBOLS.join('|')})))\\b`,
+		'i',
+	);
 	const cryptoSuffixMatch = text.match(cryptoSuffixPattern);
 	if (cryptoSuffixMatch && cryptoSuffixMatch.groups && cryptoSuffixMatch.groups.symbol) {
 		const symbol = cryptoSuffixMatch.groups.symbol.toUpperCase();
@@ -191,4 +196,3 @@ module.exports = {
 	deriveCleanSearchQuery,
 	SUPPORTED_MCP_TIMEFRAMES,
 };
-
