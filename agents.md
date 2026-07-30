@@ -1092,6 +1092,16 @@ This feature introduces validation of callback URLs to prevent Server-Side Reque
 - `tests/integration/status-endpoint.test.js`, `tests/unit/alert-handler.test.js`, and `tests/unit/tradingview-mcp-service.test.js` — Cover the default-enabled and explicit-disabled states.
 - `README.md`, `src/openapi/openapi.json`, and `CabrosBot.postman_collection.json` — Document the response field and default.
 
+## Callback DNS Pinning Against Rebinding (CB-110 / Issue #278)
+
+Async job callback delivery now retains the complete DNS answer set that passed private-address validation and supplies it to an Undici dispatcher lookup. The callback URL hostname remains unchanged for HTTP Host and HTTPS TLS/SNI validation, while the socket can connect only to one of the addresses validated for that attempt. `ALLOW_PRIVATE_CALLBACKS=true` still permits private answers but pins delivery to the current validated set; redirects remain rejected and each retry revalidates DNS.
+
+**Core Components**:
+- `src/services/jobs/JobService.js` — Returns validated address records, creates the per-attempt pinned dispatcher, uses the Fetch API with `AbortController`, and closes the dispatcher after response-body cancellation.
+- `tests/unit/job-service.test.js` — Covers real local callback delivery through the pinned lookup and preserves existing private-network, retry, HMAC, timeout, and redirect coverage.
+- `undici@6.28.0` — Official Fetch-compatible dispatcher dependency selected for the Node 20 runtime range; it is used only to control native Fetch connection lookup, not as a separate application HTTP client.
+- `README.md`, `src/openapi/openapi.json`, and `CabrosBot.postman_collection.json` — Document the connection-time DNS pinning guarantee and explicit private-callback override.
+
 ## Higher-Timeframe Market Scanner Alignment (CB-86 / Issue #217)
 
 The market scanner accepts optional `includeMultiTimeframe` enrichment. When enabled, each valid scanner candidate is queried through the existing TradingView MCP `multi_timeframe_analysis` tool; failures remain fail-open and preserve the base scan result. Ranked scoring normalizes bullish/bearish alignment against the candidate direction, applies configurable `+10` aligned or `-10` counter-trend modifiers by default, and exposes `trendConfluence` in structured scores. Reports render `🔥 HTF ALIGNED` for confidence at or above 70% and `⚠️ HTF COUNTER-TREND` for opposing alignment.

@@ -1,11 +1,13 @@
 'use strict';
 
 const admin = require('firebase-admin');
+const http = require('http');
 const { JobService } = require('../../src/services/jobs/JobService');
 const { tradingViewMcpService } = require('../../src/services/tradingview/TradingViewMcpService');
 const JobRepository = require('../../src/services/jobs/JobRepository');
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const nativeFetch = globalThis.fetch;
 
 jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
 	tradingViewMcpService: {
@@ -943,6 +945,71 @@ describe('JobService Unit Tests', () => {
 				expect(freshJob.callbackStatus.attempts).toHaveLength(2);
 				expect(freshJob.callbackStatus.attempts[1].error).toBe('Callback URL is blocked (private network)');
 			} finally {
+				lookupSpy.mockRestore();
+			}
+		});
+
+		it('pins native callback delivery to the DNS answer validated for that attempt', async () => {
+			const lookupSpy = jest.spyOn(require('dns').promises, 'lookup')
+				.mockResolvedValue([{ address: '127.0.0.1', family: 4 }]);
+			const receivedRequests = [];
+			const server = http.createServer((request, response) => {
+				let body = '';
+				request.setEncoding('utf8');
+				request.on('data', (chunk) => {
+					body += chunk;
+				});
+				request.on('end', () => {
+					receivedRequests.push({ headers: request.headers, body });
+					response.writeHead(200);
+					response.end();
+				});
+			});
+			const previousEnv = process.env.NODE_ENV;
+			const previousDelay = process.env.JOB_CALLBACK_RETRY_DELAY_MS;
+			process.env.NODE_ENV = 'test';
+			process.env.JOB_CALLBACK_RETRY_DELAY_MS = '1';
+
+			await new Promise((resolve, reject) => {
+				server.once('error', reject);
+				server.listen(0, '127.0.0.1', resolve);
+			});
+
+			try {
+				const { port } = server.address();
+				const job = {
+					jobId: 'job-dns-pinned-delivery',
+					type: 'expanded-analysis',
+					status: 'completed',
+					callbackUrl: `http://rebind.test:${port}/callback`,
+					callbackStatus: { status: 'pending', attempts: [] },
+					fullResults: [],
+					fullScanResults: [],
+					deliveryResults: [],
+					createdAt: new Date().toISOString(),
+					updatedAt: new Date().toISOString(),
+				};
+				await jobService.repository.save(job);
+				globalThis.fetch = nativeFetch;
+
+				await jobService._sendCallbackWithRetry(job);
+
+				const freshJob = await jobService.repository.get(job.jobId);
+				expect(lookupSpy).toHaveBeenCalledTimes(1);
+				expect(lookupSpy).toHaveBeenCalledWith('rebind.test', { all: true, verbatim: true });
+				expect(receivedRequests).toHaveLength(1);
+				expect(receivedRequests[0].headers.host).toBe(`rebind.test:${port}`);
+				expect(JSON.parse(receivedRequests[0].body).jobId).toBe(job.jobId);
+				expect(freshJob.callbackStatus.status).toBe('success');
+			} finally {
+				globalThis.fetch = fetchMock;
+				await new Promise((resolve) => server.close(resolve));
+				process.env.NODE_ENV = previousEnv;
+				if (previousDelay === undefined) {
+					delete process.env.JOB_CALLBACK_RETRY_DELAY_MS;
+				} else {
+					process.env.JOB_CALLBACK_RETRY_DELAY_MS = previousDelay;
+				}
 				lookupSpy.mockRestore();
 			}
 		});
