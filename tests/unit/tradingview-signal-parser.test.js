@@ -111,5 +111,9 @@ describe('TradingView signal parser', () => {
 			symbol: 'SOL',
 			assetClass: 'crypto',
 		}));
+		expect(deriveAssetContext('El sol salió; BTCUSDT price rose')).toEqual(expect.objectContaining({
+			symbol: 'BTCUSDT',
+			assetClass: 'crypto',
+		}));
 	});
 });

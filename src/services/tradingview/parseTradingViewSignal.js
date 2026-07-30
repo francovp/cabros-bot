@@ -149,14 +149,16 @@ function deriveAssetContext(text) {
 
 	const cryptoSuffixPattern = new RegExp(
 		`(?:^|\\s)(?<symbol>(?:[A-Z0-9._-]{2,20}(?:${CRYPTO_PAIR_QUOTE_SUFFIXES.join('|')})|(?:${BARE_CRYPTO_SYMBOLS.join('|')})))\\b`,
-		'i',
+		'gi',
 	);
-	const cryptoSuffixMatch = text.match(cryptoSuffixPattern);
-	if (cryptoSuffixMatch && cryptoSuffixMatch.groups && cryptoSuffixMatch.groups.symbol) {
+	for (const cryptoSuffixMatch of text.matchAll(cryptoSuffixPattern)) {
+		if (!cryptoSuffixMatch.groups || !cryptoSuffixMatch.groups.symbol) {
+			continue;
+		}
 		const rawSymbol = cryptoSuffixMatch.groups.symbol;
 		const symbol = rawSymbol.toUpperCase();
 		if (BARE_CRYPTO_SYMBOLS.includes(symbol) && rawSymbol !== symbol) {
-			return null;
+			continue;
 		}
 		return {
 			symbol,
