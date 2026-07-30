@@ -96,6 +96,10 @@ describe('TradingView signal parser', () => {
 			symbol: 'BTCUSDT',
 			assetClass: 'crypto',
 		}));
+		expect(deriveAssetContext('ETHBTC price rose after the announcement')).toEqual(expect.objectContaining({
+			symbol: 'ETHBTC',
+			assetClass: 'crypto',
+		}));
 		expect(deriveAssetContext('ETH price rose after the announcement')).toEqual(expect.objectContaining({
 			symbol: 'ETH',
 			assetClass: 'crypto',

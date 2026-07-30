@@ -1148,7 +1148,7 @@ Stored enriched alerts now carry sanitized `promptProvenance` metadata when the 
 
 ## Crypto Suffix Grounding Guard (CB-109 / Issue #271)
 
-The grounding asset-context fallback no longer classifies ordinary prose words that merely end in ambiguous crypto suffixes, such as `aerosol` (`SOL`) or `teeth` (`ETH`), as crypto symbols. Unqualified crypto pairs with `USDT`, `BUSD`, or `USDC` quote suffixes and exact uppercase bare `BTC`, `ETH`, `SOL`, or `PERP` symbols remain supported; lowercase bare words are preserved as prose while later valid candidates are still scanned, Unicode letters/marks cannot terminate a bare symbol match, and explicit exchange-prefixed and TradingView signal forms retain their existing normalization.
+The grounding asset-context fallback no longer classifies lowercase ordinary prose words that merely end in ambiguous crypto suffixes, such as `aerosol` (`SOL`) or `teeth` (`ETH`), as crypto symbols. Unqualified pairs with `USDT`, `BUSD`, or `USDC` remain case-insensitive, while pairs quoted in ambiguous `BTC`, `ETH`, `SOL`, or `PERP` suffixes and exact bare symbols require uppercase evidence; lowercase bare words are preserved as prose while later valid candidates are still scanned, Unicode letters/marks cannot terminate a symbol match, and explicit exchange-prefixed and TradingView signal forms retain their existing normalization.
 
 **Core Components**:
 - `src/services/tradingview/parseTradingViewSignal.js` — Restricts the unqualified suffix fallback while preserving explicit exchange and TradingView parsing.
