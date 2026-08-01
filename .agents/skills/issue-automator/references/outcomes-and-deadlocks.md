@@ -15,7 +15,7 @@ Every processed issue must end with exactly one of these outcomes:
 7. `NEEDS_USER`: Safe progress requires user input.
 8. `AMBIGUOUS`: Safe progress requires resolving ambiguity.
 
-`LOCAL_DEADLOCK`, `GLOBAL_BLOCKED` with no agent writes (still blocked after an unblock attempt), and `IN_REVIEW` with no agent writes are **skip outcomes** — the agent produced no code changes, PR, or Linear writes for this issue. They permit advancing to the next oldest issue in a skip loop until a non-skip outcome (`IN_REVIEW` with writes, `DONE`, `SHIPPED`, `SYNCED`, write-producing `GLOBAL_BLOCKED`, etc.) or no issues remain. A `GLOBAL_BLOCKED` raised after the iteration already changed code or created/updated a PR is write-producing and is NOT a skip outcome.
+`LOCAL_DEADLOCK`, `GLOBAL_BLOCKED` with no agent writes (still blocked after an unblock attempt), and `IN_REVIEW` with no agent writes are **skip outcomes** — the agent produced no code changes, PR, or Linear writes for this issue. They permit advancing to the next oldest issue in a skip loop until a non-skip outcome (`IN_REVIEW` with writes, `DONE`, `SHIPPED`, `SYNCED`, write-producing `GLOBAL_BLOCKED`, etc.) or no issues remain. A `GLOBAL_BLOCKED` raised after the iteration already produced agent writes (code changes, PR creation/update, or Linear issue creation/update) is write-producing and is NOT a skip outcome; the run releases `agent-working` from the issue/PR, notifies humans, and stops.
 
 Use `SHIPPED` for direct merges. Use `IN_REVIEW` only when the PR is intentionally paused for human review.
 

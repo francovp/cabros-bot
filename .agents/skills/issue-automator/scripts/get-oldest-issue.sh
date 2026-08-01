@@ -48,23 +48,42 @@ if ! gh auth status &> /dev/null; then
   exit 1
 fi
 
-# Fetch the complete open-issue set in one call so the skip list cannot
-# starve issues beyond a small first batch. GitHub search caps results at
-# 1000, so the query is bounded by design (Hard Rule #6).
-issue_json=$(gh issue list --state open --search "is:open is:issue sort:created-asc" --limit 1000 --json number,title,createdAt,labels,url 2>/dev/null)
+# Walk open issues oldest-first with a creation-time cursor. A single GitHub
+# search query is capped at 1000 results, so when the whole batch is excluded
+# by the skip list the cursor advances to the newest createdAt seen and the
+# query repeats (created:>=cursor) until a non-excluded issue is found, no
+# more open issues exist, or MAX_PAGES bounds the walk (Hard Rule #6).
+MAX_PAGES=10
+page=0
+cursor=""
+while [ "$page" -lt "$MAX_PAGES" ]; do
+  page=$((page + 1))
 
-if [ -z "$issue_json" ] || [ "$issue_json" == "[]" ]; then
-  echo "No open issues found."
-  exit 0
-fi
+  if [ -n "$cursor" ]; then
+    query="is:open is:issue sort:created-asc created:>=$cursor"
+  else
+    query="is:open is:issue sort:created-asc"
+  fi
 
-if [ -n "$SKIP_LIST" ]; then
-  issue_json=$(echo "$issue_json" | jq -c "map(select(.number as \$n | [$SKIP_LIST] | index(\$n) | not))")
-  if [ "$issue_json" == "[]" ]; then
+  batch=$(gh issue list --state open --search "$query" --limit 1000 --json number,title,createdAt,labels,url 2>/dev/null)
+
+  if [ -z "$batch" ] || [ "$batch" == "[]" ]; then
     echo "No open issues found."
     exit 0
   fi
-fi
 
-# Keep only the oldest remaining issue (single-element array, same contract as before)
-echo "$issue_json" | jq -c '.[0:1]'
+  cursor=$(echo "$batch" | jq -r 'map(.createdAt) | max')
+
+  if [ -n "$SKIP_LIST" ]; then
+    batch=$(echo "$batch" | jq -c "map(select(.number as \$n | [$SKIP_LIST] | index(\$n) | not))")
+  fi
+
+  if [ "$batch" != "[]" ]; then
+    # Keep only the oldest remaining issue (single-element array, same contract as before)
+    echo "$batch" | jq -c '.[0:1]'
+    exit 0
+  fi
+done
+
+echo "No open issues found."
+exit 0
