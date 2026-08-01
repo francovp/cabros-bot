@@ -48,8 +48,10 @@ if ! gh auth status &> /dev/null; then
   exit 1
 fi
 
-# Fetch the oldest open issues (bounded batch so the cursor can advance past the skip list)
-issue_json=$(gh issue list --state open --search "is:open is:issue sort:created-asc" --limit 50 --json number,title,createdAt,labels,url 2>/dev/null)
+# Fetch the complete open-issue set in one call so the skip list cannot
+# starve issues beyond a small first batch. GitHub search caps results at
+# 1000, so the query is bounded by design (Hard Rule #6).
+issue_json=$(gh issue list --state open --search "is:open is:issue sort:created-asc" --limit 1000 --json number,title,createdAt,labels,url 2>/dev/null)
 
 if [ -z "$issue_json" ] || [ "$issue_json" == "[]" ]; then
   echo "No open issues found."
