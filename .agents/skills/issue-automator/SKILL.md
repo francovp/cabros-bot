@@ -8,18 +8,18 @@ description: >-
 
 1. If the user explicitly provides a GitHub issue number (e.g. `#42`, `issue 42`, `GH-42`), use that specific issue. Otherwise, work on the oldest open GitHub issue.
 2. Process only one issue by default.
-3. Process a further issue only after a skip outcome (`LOCAL_DEADLOCK` or `IN_REVIEW` with no agent writes). Non-skip outcomes stop the run — do not touch further issues.
+3. Process a further issue only after a skip outcome (`LOCAL_DEADLOCK`, `GLOBAL_BLOCKED` still blocked after an unblock attempt, or `IN_REVIEW` with no agent writes). Non-skip outcomes stop the run — do not touch further issues.
 4. Never process more than 2 GitHub issues that require agent writes in one run. Issues already `IN_REVIEW` with no agent writes (skips) are zero-work — they do not consume this budget and only advance the cursor to the next oldest issue.
 5. Never inspect deeply, plan, or create TODOs for issues beyond the current cursor in the skip loop — only the issue currently being processed is touched at a time.
 6. Never build an unbounded work queue.
-7. Never continue to another issue after `DONE`, `SHIPPED`, `SYNCED`, `GLOBAL_BLOCKED`, `NEEDS_USER`, or `AMBIGUOUS`. For `IN_REVIEW`, stop only if the agent actively produced a PR or made changes; if the issue was already in review with no code/PR/Linear writes needed, skip it — keep fetching the next oldest open issue until a non-skip outcome or no issues remain (see Step 6 skip loop).
+7. Never continue to another issue after `DONE`, `SHIPPED`, `SYNCED`, `NEEDS_USER`, or `AMBIGUOUS`. For `IN_REVIEW`, stop only if the agent actively produced a PR or made changes; if the issue was already in review with no code/PR/Linear writes needed, skip it — keep fetching the next oldest open issue until a non-skip outcome or no issues remain (see Step 6 skip loop). `GLOBAL_BLOCKED` is a **skip outcome**: when an iteration encounters a `GLOBAL_BLOCKED` PR/issue, attempt to unblock it once with a bounded retry; if it still cannot be unblocked, record the outcome, notify humans, and continue with the next oldest open issue — keep advancing until an unblockable PR is `SHIPPED` or `IN_REVIEW`, or no issues remain (see Step 6).
 8. Never create duplicate Linear issues or duplicate PRs.
 9. Treat `agent-working` as an ownership claim with a strict lifecycle: **add it when work starts (issue and PR), remove it when work ends (merged or handed off for review).** Never leave `agent-working` on closed/merged issues or PRs.
 10. Use the GitHub issue number as the dedupe key for Linear.
 11. Prefer live repo state over assumptions.
 12. Prefer `gh` and `linear` CLIs over MCP tools when available.
 13. Distinguish local blockers from global blockers.
-14. Stop cleanly on global blockers, ambiguity, or missing ownership.
+14. On global blockers: notify humans, then attempt to unblock the PR once; only if it still cannot be unblocked, record `GLOBAL_BLOCKED` and advance to the next oldest issue (see Step 6). Stop cleanly on ambiguity or missing ownership (`AMBIGUOUS`/`NEEDS_USER`).
 15. **GitHub user switching**: Before any `gh` CLI command, always switch to the `francovp` user with `gh auth switch --user francovp`. After all `gh` commands are complete, restore the original user with `gh auth switch --user <original_user>`. The helper script `scripts/gh-auth-utils.sh` provides `save_gh_user`, `switch_to_francovp`, and `restore_gh_user` functions for this pattern. All script-based `gh` calls (in `get-oldest-issue.sh`, `verify-preview.sh`) already source this helper — just call them as-is. For inline `gh` commands in the workflow below, execute the switch pattern manually or use the helper.
 16. Always use the `create-pr` skill to create or update PRs. Do not hand-roll PR creation with raw `gh pr create` or `gh pr edit` calls from this skill. The PR body must come from `context/<git-branch-name>.md` and follow the repository PR summary format enforced by `create-pr`.
 17. When creating or updating a Linear issue, write a readable ticket body with `Summary`, `Context`, `Acceptance Criteria`, and `References` sections so the tracker stays self-contained.
@@ -51,7 +51,7 @@ curl --location "${NOTIFY_WEBHOOK_URL:-https://cabros-crypto-bot-telegram.onrend
 ```
 
 **Events that trigger a notification:**
-1. **Global deadlock** — when `GLOBAL_BLOCKED` outcome is set, alerting humans that tooling/auth/infra prevents safe work.
+1. **Global deadlock** — when a PR/issue is `GLOBAL_BLOCKED` and still cannot be unblocked after the unblock attempt, alerting humans that tooling/auth/infra prevents safe work on that item. The run then continues with the next oldest issue (see Step 6).
 2. **PR in review** — when a PR is intentionally handed off for human review in Step 7, notifying that human review is needed.
 
 ## Render Service Env Vars
@@ -171,20 +171,24 @@ Follow these steps in strict chronological order to automate issue resolution:
 7. If human review is still needed, continue to Step 7 instead. If the verification fails repeatedly with issue-specific errors, end with outcome `LOCAL_DEADLOCK`.
 ### Step 6: Skip Loop — Advance Past Blocked or Already-Handled Issues
 
-Both `LOCAL_DEADLOCK` and `IN_REVIEW` with no agent writes are **skip outcomes** — the agent did not produce a PR or make changes for this issue. Keep advancing until a non-skip outcome or no issues remain.
+`LOCAL_DEADLOCK`, `GLOBAL_BLOCKED` (still blocked after an unblock attempt), and `IN_REVIEW` with no agent writes are **skip outcomes** — the agent did not produce a PR or make changes for this issue. Keep advancing until a non-skip outcome or no issues remain.
 
 1. If `LOCAL_DEADLOCK`: Write a concise blocker summary on the issue or PR. Sync GitHub, Linear, and PR states.
 2. **If the issue has a merged PR**: Clean up stale `agent-working` labels (issue + PR), sync Linear to `Shipped`, and end with outcome `SHIPPED` (same handling as Step 1).
 3. If `IN_REVIEW` with no agent writes: Do not modify the issue, PR, or Linear state — everything is already correct.
-4. Re-run `scripts/get-oldest-issue.sh` to fetch the next oldest open issue.
-5. If no more open issues exist, stop execution.
-6. Process this next issue from Steps 1–5 (treat it as the new primary).
-7. If it again ends with a skip outcome (`IN_REVIEW` no-writes or `LOCAL_DEADLOCK`), repeat from step 1.
-8. If it ends with any other outcome, proceed to Step 7 with that outcome.
+4. **If the issue or its linked PR is `GLOBAL_BLOCKED`** (the label is present or the iteration set the outcome):
+   - **Attempt to unblock first**: re-run the failing action(s) once with a bounded retry budget (e.g., `gh`/`linear` auth check, CI status, Render preview verification). If the retry succeeds, resolve the blocker — remove the `GLOBAL_BLOCKED` label from issue/PR if it was applied — and continue the normal flow from the point of failure.
+   - **If the PR still cannot be unblocked**: write a concise blocker summary on the issue/PR stating the exact missing capability and the smallest human action needed, keep the `GLOBAL_BLOCKED` label, and send the global-deadlock notification (see Notification Webhook).
+   - **Do not halt the run**: re-run `scripts/get-oldest-issue.sh` and continue with the next oldest open issue until an unblockable PR is `SHIPPED` or `IN_REVIEW`, or no open issues remain.
+5. Re-run `scripts/get-oldest-issue.sh` to fetch the next oldest open issue.
+6. If no more open issues exist, stop execution.
+7. Process this next issue from Steps 1–5 (treat it as the new primary).
+8. If it again ends with a skip outcome (`IN_REVIEW` no-writes, `LOCAL_DEADLOCK`, or `GLOBAL_BLOCKED` still blocked), repeat from step 1.
+9. If it ends with any other outcome, proceed to Step 7 with that outcome.
 
 Skip outcomes do not count toward the max-2 issues-that-require-writes limit (Hard Rule #4).
 
-If the primary issue ends with any other outcome (including `IN_REVIEW` with agent writes), stop execution immediately.
+If the primary issue ends with any other (non-skip) outcome, including `IN_REVIEW` with agent writes, stop execution immediately.
 
 ### Step 7: Human Review Handoff & Sync
 1. Use this path only when human review is needed and the PR should not be merged directly.
@@ -232,7 +236,7 @@ Always include a final summary of execution containing:
 1. Primary issue processed and its outcome.
 2. Outcome of the first non-skip issue, if any (issues with skip outcomes `LOCAL_DEADLOCK` or `IN_REVIEW` no-writes are counted as skipped and listed).
 3. Tools utilized (`gh`, `linear`, MCP, or scripts).
-4. Details of any global blockers.
+4. Details of any global blockers, including each `GLOBAL_BLOCKED` issue skipped, the unblock attempt made, and the next issue advanced to.
 5. Performed verification steps (CI, reviews, Render preview ping, and E2E).
 6. **Linear issue ID** associated with each processed issue (e.g., `CB-42`).
 7. **`agent-working` lifecycle confirmation**: For each issue confirm: label was added at start, and removed at end (merged or `In review`).
@@ -247,7 +251,7 @@ Refer to this section when encountering execution issues:
   - As last resort, check if `GITHUB_TOKEN` or `LINEAR_API_KEY` env vars are loaded. If CLI is unavailable, fallback to MCP commands. If both fail:
   - Send a global-deadlock notification:
     ```bash
-    NOTIFY_MESSAGE="[GLOBAL_BLOCKED] Issue automator halted: CLI + MCP auth both failed for $repo/$issue. Human intervention required." \
+    NOTIFY_MESSAGE="[GLOBAL_BLOCKED] CLI + MCP auth both failed for $repo/$issue. Human intervention required. Skipping to next open issue." \
       curl --location "${NOTIFY_WEBHOOK_URL:-https://cabros-crypto-bot-telegram.onrender.com/api/webhook/message}" \
       --header 'Content-Type: application/json' \
       --header "x-api-key: ${NOTIFY_API_KEY}" \
@@ -258,7 +262,7 @@ Refer to this section when encountering execution issues:
         "whatsappChatId": "'"${NOTIFY_WHATSAPP_CHAT_ID:-120363422033474991@g.us}"'"
       }'
     ```
-  - Then end with outcome `GLOBAL_BLOCKED`.
+  - Then record outcome `GLOBAL_BLOCKED` and advance to the next oldest open issue (see Step 6) — do not halt the run. Keep advancing until an unblockable PR is `SHIPPED` or `IN_REVIEW`, or no open issues remain.
 - **Merge Conflicts**: If branch checkout or pushes fail due to conflicts, pull from `master`, resolve conflicts locally, and re-run tests. If resolving conflicts introduces ambiguity, end with `AMBIGUOUS`.
 - **Render Preview deployment timeout**: If `scripts/verify-preview.sh` fails after 3 attempts, inspect the Render logs via the Render dashboard. If it is an infrastructure timeout, wait and retry. If it is an application error/crash, treat it as a `LOCAL_DEADLOCK`.
 - **Takeover Conflict**: Do not force-remove the `agent-working` label of an active run. Wait or exit with `NEEDS_USER` to allow coordination.

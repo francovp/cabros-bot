@@ -15,14 +15,14 @@ Every processed issue must end with exactly one of these outcomes:
 7. `NEEDS_USER`: Safe progress requires user input.
 8. `AMBIGUOUS`: Safe progress requires resolving ambiguity.
 
-`LOCAL_DEADLOCK` and `IN_REVIEW` with no agent writes are both **skip outcomes** — the agent produced no PR or changes for this issue. Both permit advancing to the next oldest issue in a skip loop until a non-skip outcome (`IN_REVIEW` with writes, `DONE`, `SHIPPED`, `SYNCED`, etc.) or no issues remain.
+`LOCAL_DEADLOCK`, `GLOBAL_BLOCKED` (still blocked after an unblock attempt), and `IN_REVIEW` with no agent writes are **skip outcomes** — the agent produced no PR or changes for this issue. They permit advancing to the next oldest issue in a skip loop until a non-skip outcome (`IN_REVIEW` with writes, `DONE`, `SHIPPED`, `SYNCED`, etc.) or no issues remain.
 
 Use `SHIPPED` for direct merges. Use `IN_REVIEW` only when the PR is intentionally paused for human review.
 
 ## Deadlock Policy
 
 1. **Local Deadlock Definition**: `LOCAL_DEADLOCK` means the issue is blocked by an issue-specific blocker that does not prevent safe work on a different issue.
-2. **Skip Loop Allowance**: Both `LOCAL_DEADLOCK` and `IN_REVIEW` with no agent writes are **skip outcomes** — they do not consume the issue-processing budget. The agent keeps fetching the next oldest issue in a skip loop until a non-skip outcome or no issues remain.
+2. **Skip Loop Allowance**: `LOCAL_DEADLOCK`, `GLOBAL_BLOCKED` (still blocked after an unblock attempt), and `IN_REVIEW` with no agent writes are **skip outcomes** — they do not consume the issue-processing budget. The agent keeps fetching the next oldest issue in a skip loop until a non-skip outcome or no issues remain.
 3. **Local Blocker Examples**:
    - Failed checks that do not converge after the retry budget.
    - Preview deploy failures after retry budget.
@@ -38,5 +38,5 @@ Use `SHIPPED` for direct merges. Use `IN_REVIEW` only when the PR is intentional
    - Broken local workspace.
    - Missing repository access.
    - Failures that prevent safe work in general.
-7. **Resolution**: If a global blocker is encountered, end the run with outcome `GLOBAL_BLOCKED`.
-8. **Limits**: Never retry indefinitely. After a non-skip outcome (`IN_REVIEW` with writes, `DONE`, `SHIPPED`, `SYNCED`), stop the run — do not process further issues. `LOCAL_DEADLOCK` and `IN_REVIEW` no-writes loop freely in a skip loop until a non-skip outcome or no issues remain.
+7. **Resolution**: If a global blocker is encountered on an issue/PR (e.g., a `GLOBAL_BLOCKED` label), first attempt to unblock it with a bounded retry of the failing action. If the PR still cannot be unblocked, write a concise blocker summary (exact missing capability + smallest human action needed), send the global-deadlock notification, keep the `GLOBAL_BLOCKED` label, and treat the issue as a skip outcome — advance to the next oldest issue instead of halting the run.
+8. **Limits**: Never retry indefinitely. After a non-skip outcome (`IN_REVIEW` with writes, `DONE`, `SHIPPED`, `SYNCED`), stop the run — do not process further issues. `LOCAL_DEADLOCK`, `GLOBAL_BLOCKED` (still blocked), and `IN_REVIEW` no-writes loop freely in a skip loop until a non-skip outcome — an unblocked PR `SHIPPED` or `IN_REVIEW` — or no issues remain.
