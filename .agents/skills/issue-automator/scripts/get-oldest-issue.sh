@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
-# get-oldest-issue.sh [EXCLUDE_NUMBER]
+# get-oldest-issue.sh [EXCLUDE_NUMBERS]
 # Uses the GitHub CLI (gh) to fetch the oldest open issue for the repository.
-# Optional EXCLUDE_NUMBER advances the cursor past that issue number (used by
-# the Step 6 skip loop so a blocked issue is not selected again).
+# Optional EXCLUDE_NUMBERS advances the cursor past those issue numbers
+# (comma- or space-separated, e.g. "270,271" or "270 271"). Used by the
+# Step 6 skip loop so already-skipped issues are never selected again.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/gh-auth-utils.sh"
 
-EXCLUDE_NUMBER="${1:-}"
+EXCLUDE="${1:-}"
 
 # Ensure gh CLI is installed
 if ! command -v gh &> /dev/null; then
@@ -23,9 +24,18 @@ if ! command -v jq &> /dev/null; then
   exit 127
 fi
 
-if [ -n "$EXCLUDE_NUMBER" ] && [[ ! "$EXCLUDE_NUMBER" =~ ^[0-9]+$ ]]; then
-  echo "Error: EXCLUDE_NUMBER must be a positive integer, got '$EXCLUDE_NUMBER'." >&2
-  exit 1
+# Normalize and validate the optional skip list (comma- or space-separated issue numbers)
+SKIP_LIST=""
+if [ -n "$EXCLUDE" ]; then
+  SKIP_LIST=$(echo "$EXCLUDE" | tr ' ' ',' | sed 's/,,*/,/g; s/^,//; s/,$//')
+  if [ -n "$SKIP_LIST" ]; then
+    for n in $(echo "$SKIP_LIST" | tr ',' ' '); do
+      if [[ ! "$n" =~ ^[0-9]+$ ]]; then
+        echo "Error: EXCLUDE_NUMBERS must contain only positive integers, got '$n'." >&2
+        exit 1
+      fi
+    done
+  fi
 fi
 
 # Switch to francovp user for all gh commands; restore on exit
@@ -38,7 +48,7 @@ if ! gh auth status &> /dev/null; then
   exit 1
 fi
 
-# Fetch the oldest open issues (bounded batch so the cursor can advance past EXCLUDE_NUMBER)
+# Fetch the oldest open issues (bounded batch so the cursor can advance past the skip list)
 issue_json=$(gh issue list --state open --search "is:open is:issue sort:created-asc" --limit 50 --json number,title,createdAt,labels,url 2>/dev/null)
 
 if [ -z "$issue_json" ] || [ "$issue_json" == "[]" ]; then
@@ -46,8 +56,8 @@ if [ -z "$issue_json" ] || [ "$issue_json" == "[]" ]; then
   exit 0
 fi
 
-if [ -n "$EXCLUDE_NUMBER" ]; then
-  issue_json=$(echo "$issue_json" | jq -c "map(select(.number != $EXCLUDE_NUMBER))")
+if [ -n "$SKIP_LIST" ]; then
+  issue_json=$(echo "$issue_json" | jq -c "map(select(.number as \$n | [$SKIP_LIST] | index(\$n) | not))")
   if [ "$issue_json" == "[]" ]; then
     echo "No open issues found."
     exit 0
