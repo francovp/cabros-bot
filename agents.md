@@ -1155,3 +1155,16 @@ Stored enriched alerts now carry sanitized `promptProvenance` metadata when the 
 - `tests/unit/gemini-client.test.js`, `tests/unit/prompt-service.test.js`, and `tests/unit/alert-storage-service.test.js` cover local/Langfuse provenance, safe persistence, missing/invalid values, and mixed coverage.
 - `tests/integration/alerts-endpoint.test.js` covers the protected summary response contract.
 - `README.md`, `src/openapi/openapi.json`, and `CabrosBot.postman_collection.json` document the response and bounded rollout check.
+
+## Crypto Suffix Grounding Guard (CB-109 / Issue #271)
+
+The grounding asset-context fallback no longer classifies lowercase ordinary prose words that merely end in ambiguous crypto suffixes, such as `aerosol` (`SOL`) or `teeth` (`ETH`), as crypto symbols. Unqualified pairs with `USDT`, `BUSD`, or `USDC` remain case-insensitive, while pairs quoted in ambiguous `BTC`, `ETH`, `SOL`, or `PERP` suffixes and exact bare symbols require uppercase evidence; lowercase bare words are preserved as prose while later valid candidates are still scanned, Unicode letters/marks cannot terminate a symbol match, and explicit exchange-prefixed and TradingView signal forms retain their existing normalization.
+
+**Core Components**:
+- `src/services/tradingview/parseTradingViewSignal.js` — Restricts the unqualified suffix fallback while preserving explicit exchange and TradingView parsing.
+- `tests/unit/tradingview-signal-parser.test.js` — Covers suffix collisions, generic-query preservation, unqualified pairs, and exact bare symbols.
+
+**Testing**:
+- `pnpm test -- tests/unit/tradingview-signal-parser.test.js`
+- `pnpm test -- tests/unit/grounding.test.js`
+- `pnpm test -- tests/unit/ --testTimeout=5000`
