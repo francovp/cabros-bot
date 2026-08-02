@@ -10,6 +10,7 @@
   "scripts": {
     "preinstall": "npx only-allow pnpm",
     "start": "node index.js",
+    "start:signal-outcome-worker": "node src/workers/signalOutcomeWorker.js",
     "start-dev": "nodemon index.js",
     "test": "jest --detectOpenHandles",
     "test:watch": "jest --watch",

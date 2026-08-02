@@ -30,6 +30,7 @@ describe('SignalOutcomeService Worker & Bounded Evaluation', () => {
 		delete process.env.SIGNAL_OUTCOME_EVALUATION_CADENCE_MS;
 		delete process.env.SIGNAL_OUTCOME_EVALUATION_BATCH_LIMIT;
 		delete process.env.SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS;
+		delete process.env.SIGNAL_OUTCOME_WORKER_ROLE;
 	});
 
 	afterEach(() => {
@@ -42,6 +43,7 @@ describe('SignalOutcomeService Worker & Bounded Evaluation', () => {
 		delete process.env.SIGNAL_OUTCOME_EVALUATION_CADENCE_MS;
 		delete process.env.SIGNAL_OUTCOME_EVALUATION_BATCH_LIMIT;
 		delete process.env.SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS;
+		delete process.env.SIGNAL_OUTCOME_WORKER_ROLE;
 	});
 
 	describe('Disabled Tracking Behavior', () => {
@@ -124,6 +126,20 @@ describe('SignalOutcomeService Worker & Bounded Evaluation', () => {
 			await jest.advanceTimersByTimeAsync(300000);
 
 			expect(mockGetKlines).toHaveBeenCalledTimes(2);
+		});
+
+		it('starts the scheduler only for the configured process role', () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.SIGNAL_OUTCOME_WORKER_ROLE = 'worker';
+
+			expect(SignalOutcomeService.startWorker()).toBe(false);
+			expect(SignalOutcomeService.getWorkerStatus()).toMatchObject({
+				role: 'worker',
+				running: false,
+			});
+
+			expect(SignalOutcomeService.startWorker({ source: 'worker' })).toBe(true);
+			expect(SignalOutcomeService.getWorkerStatus().running).toBe(true);
 		});
 
 		it('prevents overlapping sweeps (single-flight execution)', async () => {
@@ -338,8 +354,78 @@ describe('SignalOutcomeService Worker & Bounded Evaluation', () => {
 
 			const status = SignalOutcomeService.getWorkerStatus();
 			expect(status.running).toBe(true); // worker stays active
+			expect(status.lastRunErrorCount).toBe(1);
 
 			consoleSpy.mockRestore();
+		});
+
+		it('drains an active sweep before a dedicated worker stops', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			process.env.SIGNAL_OUTCOME_WORKER_ROLE = 'worker';
+
+			const receivedAt = new Date(Date.now() - 2 * 60 * 60 * 1000);
+			global.__firebaseAdminMockState.collections.set(
+				SignalOutcomeService.COLLECTION_NAME,
+				new Map([[
+					'drain-doc',
+					{
+						receivedAt: admin.firestore.Timestamp.fromDate(receivedAt),
+						symbol: 'BTCUSDT',
+						exchange: 'BINANCE',
+						side: 'BUY',
+						price: 50000,
+						outcomeEvaluated: false,
+						outcomes: {
+							'1h': { status: 'pending', targetTime: new Date(Date.now() - 1000).toISOString() },
+						},
+					},
+				]]),
+			);
+
+			let resolveKlines;
+			mockGetKlines.mockImplementation(() => new Promise((resolve) => {
+				resolveKlines = resolve;
+			}));
+
+			SignalOutcomeService.startWorker({ source: 'worker', intervalMs: 300000, unref: false });
+			await jest.advanceTimersByTimeAsync(0);
+			expect(SignalOutcomeService.getWorkerStatus().isEvaluating).toBe(true);
+
+			const stopPromise = SignalOutcomeService.stopWorker({ drain: true });
+			expect(SignalOutcomeService.getWorkerStatus()).toMatchObject({
+				shutdownRequested: true,
+				running: false,
+			});
+
+			resolveKlines([[1600000000000, '50000', '51000', '49500', '50500', '100']]);
+			await stopPromise;
+			expect(SignalOutcomeService.getWorkerStatus().isEvaluating).toBe(false);
+			const callsAfterDrain = mockGetKlines.mock.calls.length;
+			await jest.advanceTimersByTimeAsync(300000);
+			expect(mockGetKlines).toHaveBeenCalledTimes(callsAfterDrain);
+		});
+
+		it('persists safe worker heartbeat counters for cross-process inspection', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			process.env.SIGNAL_OUTCOME_WORKER_ROLE = 'worker';
+
+			SignalOutcomeService.startWorker({ source: 'worker', intervalMs: 300000, unref: false });
+			await jest.advanceTimersByTimeAsync(0);
+
+			const heartbeat = global.__firebaseAdminMockState.collections
+				.get('workerHeartbeats')
+				.get('signal-outcome');
+			expect(heartbeat).toMatchObject({
+				worker: 'signal-outcome',
+				role: 'worker',
+				enabled: true,
+				running: true,
+				lastRunScannedCount: 0,
+				lastRunPendingCount: 0,
+				lastRunErrorCount: 0,
+			});
 		});
 
 		it('clears worker cleanly on stopWorker() without active timers', () => {
