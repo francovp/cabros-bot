@@ -591,6 +591,9 @@ class NewsAnalyzer {
 				requestId,
 				source: 'news-monitor',
 				symbol: alert.symbol,
+				assetClass: options.assetClassBySymbol
+					? options.assetClassBySymbol[String(alert.symbol).trim().toUpperCase()]
+					: null,
 				exchange: alert.marketContext && alert.marketContext.source === 'binance' ? 'BINANCE' : 'UNKNOWN',
 				timeframe: null,
 				setupType: 'news-alert',

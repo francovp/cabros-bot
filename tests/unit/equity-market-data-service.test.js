@@ -90,6 +90,7 @@ describe('EquityMarketDataService', () => {
 		expect(parsedUrl.pathname).toBe('/time_series');
 		expect(parsedUrl.searchParams.get('interval')).toBe('1h');
 		expect(parsedUrl.searchParams.get('exchange')).toBe('BATS');
+		expect(parsedUrl.searchParams.get('adjust')).toBe('none');
 	});
 
 	it('classifies provider rate limits without leaking the response', async () => {

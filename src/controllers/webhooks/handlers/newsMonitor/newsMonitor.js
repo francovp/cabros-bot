@@ -90,9 +90,11 @@ class NewsMonitorHandler {
 			}
 
 			// Get default symbols if not provided
-			const symbolsToAnalyze = allSymbols.length > 0
+			const useDefaultSymbols = allSymbols.length === 0;
+			const symbolsToAnalyze = !useDefaultSymbols
 				? allSymbols
 				: this.getDefaultSymbols();
+			const assetClassBySymbol = this.getAssetClassBySymbol(crypto, stocks, useDefaultSymbols);
 
 			console.info('[NewsMonitor] Analyzing symbols:', symbolsToAnalyze);
 			if (symbolsToAnalyze.length === 0) {
@@ -119,7 +121,10 @@ class NewsMonitorHandler {
 			try {
 				results = await sentryService.withActiveSpan(
 					analysisSpan,
-					() => this.analyzer.analyzeSymbols(symbolsToAnalyze, requestId, tokenUsage, routing, { dryRun }),
+					() => this.analyzer.analyzeSymbols(symbolsToAnalyze, requestId, tokenUsage, routing, {
+						dryRun,
+						assetClassBySymbol,
+					}),
 				);
 				summary = this.generateSummary(results);
 				if (analysisSpan && typeof analysisSpan.setAttribute === 'function') {
@@ -266,13 +271,29 @@ class NewsMonitorHandler {
    * @returns {string[]} Array of default symbols
    */
 	getDefaultSymbols() {
-		const cryptoStr = process.env.NEWS_SYMBOLS_CRYPTO || '';
-		const stocksStr = process.env.NEWS_SYMBOLS_STOCKS || '';
-
-		const crypto = cryptoStr.split(',').map(s => s.trim()).filter(s => s.length > 0);
-		const stocks = stocksStr.split(',').map(s => s.trim()).filter(s => s.length > 0);
+		const crypto = this.getSymbolsFromEnv('NEWS_SYMBOLS_CRYPTO');
+		const stocks = this.getSymbolsFromEnv('NEWS_SYMBOLS_STOCKS');
 
 		return [...crypto, ...stocks];
+	}
+
+	getSymbolsFromEnv(name) {
+		return (process.env[name] || '').split(',').map(s => s.trim()).filter(Boolean);
+	}
+
+	getAssetClassBySymbol(crypto, stocks, useDefaults) {
+		const cryptoSymbols = useDefaults ? this.getSymbolsFromEnv('NEWS_SYMBOLS_CRYPTO') : (crypto || []);
+		const stockSymbols = useDefaults ? this.getSymbolsFromEnv('NEWS_SYMBOLS_STOCKS') : (stocks || []);
+		const assetClassBySymbol = {};
+
+		for (const symbol of cryptoSymbols) {
+			assetClassBySymbol[String(symbol).trim().toUpperCase()] = 'crypto';
+		}
+		for (const symbol of stockSymbols) {
+			assetClassBySymbol[String(symbol).trim().toUpperCase()] = 'stock';
+		}
+
+		return assetClassBySymbol;
 	}
 
 	/**

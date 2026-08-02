@@ -69,14 +69,22 @@ function normalizeSymbolAndExchange(rawSymbol, rawExchange) {
 	return { exchange, symbol: parts[0] };
 }
 
-function determineEligibility(normSymbolInfo, entryPrice, equityProviderName = null, entryPriceReason = null) {
-	if (normSymbolInfo.symbol === 'UNKNOWN' || normSymbolInfo.exchange === 'UNKNOWN') {
+function normalizeAssetClass(rawAssetClass) {
+	const assetClass = String(rawAssetClass || '').trim().toLowerCase();
+	return ['crypto', 'stock'].includes(assetClass) ? assetClass : null;
+}
+
+function determineEligibility(normSymbolInfo, assetClass, entryPrice, equityProviderName = null, entryPriceReason = null) {
+	const isClassifiedBareStock = normSymbolInfo.exchange === 'UNKNOWN' && assetClass === 'stock';
+	if (normSymbolInfo.symbol === 'UNKNOWN' || (normSymbolInfo.exchange === 'UNKNOWN' && !isClassifiedBareStock)) {
 		return {
 			state: 'unparseable_symbol',
 			reason: 'Symbol or exchange unparseable or unknown',
 		};
 	}
-	if (normSymbolInfo.exchange !== 'BINANCE' && !equityMarketDataService.isSupportedExchange(normSymbolInfo.exchange)) {
+	if (normSymbolInfo.exchange !== 'BINANCE'
+		&& !isClassifiedBareStock
+		&& !equityMarketDataService.isSupportedExchange(normSymbolInfo.exchange)) {
 		return {
 			state: 'unsupported_exchange',
 			reason: `Exchange ${normSymbolInfo.exchange} not supported by Binance market-data evaluator`,
@@ -127,6 +135,7 @@ async function recordSignal({
 	sources,
 	tokenUsage,
 	processingTimeMs,
+	assetClass,
 } = {}) {
 	if (!isEnabled()) {
 		return null;
@@ -139,9 +148,10 @@ async function recordSignal({
 
 	try {
 		const normSymbolInfo = normalizeSymbolAndExchange(symbol, exchange);
+		const normAssetClass = normalizeAssetClass(assetClass);
 		const normSide = normalizeSide(side);
 		const now = new Date();
-		const equityProviderName = equityMarketDataService.getProviderName(normSymbolInfo.exchange);
+		const equityProviderName = equityMarketDataService.getProviderName(normSymbolInfo.exchange, normAssetClass);
 
 		let entryPrice = typeof price === 'number' ? price : null;
 		let entryPriceReason = null;
@@ -159,7 +169,7 @@ async function recordSignal({
 			try {
 				entryPrice = await equityMarketDataService.getEntryPrice({
 					symbol: normSymbolInfo.symbol,
-					exchange: normSymbolInfo.exchange,
+					exchange: normSymbolInfo.exchange === 'UNKNOWN' ? undefined : normSymbolInfo.exchange,
 				});
 			} catch (err) {
 				entryPriceReason = err.reason || equityMarketDataService.REASONS.UNAVAILABLE;
@@ -167,7 +177,7 @@ async function recordSignal({
 			}
 		}
 
-		const eligibility = determineEligibility(normSymbolInfo, entryPrice, equityProviderName, entryPriceReason);
+		const eligibility = determineEligibility(normSymbolInfo, normAssetClass, entryPrice, equityProviderName, entryPriceReason);
 		const isEligible = eligibility.state === 'supported_provider';
 
 		const outcomes = {};
@@ -189,6 +199,7 @@ async function recordSignal({
 			source: typeof source === 'string' ? source : 'unknown',
 			symbol: normSymbolInfo.symbol,
 			exchange: normSymbolInfo.exchange,
+			assetClass: normAssetClass,
 			timeframe: timeframe ? String(timeframe).toLowerCase() : null,
 			setupType: setupType ? String(setupType).toLowerCase() : null,
 			score: typeof score === 'number' ? score : null,
@@ -288,7 +299,7 @@ async function evaluatePendingOutcomes(options = {}) {
 			const receivedAtMs = data.receivedAt.toDate().getTime();
 			const equityProviderName = data.exchange === 'BINANCE'
 				? null
-				: equityMarketDataService.getProviderName(data.exchange);
+				: equityMarketDataService.getProviderName(data.exchange, data.assetClass);
 
 			if (!entryPrice || typeof entryPrice !== 'number') {
 				// Mark evaluated if entry price is invalid/missing
@@ -311,9 +322,10 @@ async function evaluatePendingOutcomes(options = {}) {
 			}
 
 			if (data.exchange !== 'BINANCE' && !equityProviderName) {
-				const state = (data.exchange === 'UNKNOWN' || data.symbol === 'UNKNOWN')
+				const isClassifiedBareStock = data.exchange === 'UNKNOWN' && data.assetClass === 'stock';
+				const state = (data.symbol === 'UNKNOWN' || (data.exchange === 'UNKNOWN' && !isClassifiedBareStock))
 					? 'unparseable_symbol'
-					: (equityMarketDataService.isSupportedExchange(data.exchange) && !equityProviderName
+					: ((equityMarketDataService.isSupportedExchange(data.exchange) || isClassifiedBareStock) && !equityProviderName
 						? equityMarketDataService.REASONS.NOT_CONFIGURED
 						: 'unsupported_exchange');
 				const outcomes = { ...data.outcomes };
@@ -393,7 +405,7 @@ async function evaluatePendingOutcomes(options = {}) {
 					} else {
 						klines = await equityMarketDataService.getHistoricalBars({
 							symbol: data.symbol,
-							exchange: data.exchange,
+							exchange: data.exchange === 'UNKNOWN' ? undefined : data.exchange,
 							interval: config.interval,
 							startTime: receivedAtMs,
 							endTime: targetTimeMs,

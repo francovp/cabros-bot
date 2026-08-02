@@ -82,8 +82,13 @@ function isSupportedExchange(exchange) {
 	return SUPPORTED_EXCHANGES.includes(String(exchange || '').trim().toUpperCase());
 }
 
-function getProviderName(exchange) {
-	return isSupportedExchange(exchange) && getConfig().configured ? PROVIDER_NAME : null;
+function getProviderName(exchange, assetClass) {
+	const normalizedExchange = String(exchange || '').trim().toUpperCase();
+	const normalizedAssetClass = String(assetClass || '').trim().toLowerCase();
+	const isClassifiedBareStock = normalizedExchange === 'UNKNOWN' && normalizedAssetClass === 'stock';
+	return (isSupportedExchange(normalizedExchange) || isClassifiedBareStock) && getConfig().configured
+		? PROVIDER_NAME
+		: null;
 }
 
 function buildUrl(path, params) {
@@ -202,7 +207,7 @@ async function getHistoricalBars({ symbol, exchange, interval, startTime, endTim
 		end_date: new Date(endTime).toISOString(),
 		outputsize: 5000,
 		timezone: 'UTC',
-		adjust: 'all',
+		adjust: 'none',
 		prepost: 'false',
 	}, timeoutMs);
 

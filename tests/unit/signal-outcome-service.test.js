@@ -210,6 +210,38 @@ describe('SignalOutcomeService', () => {
 				global.fetch = originalFetch;
 			}
 		});
+
+		it('uses the configured provider for a classified bare stock without inventing an exchange', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_EQUITY_MARKET_DATA = 'true';
+			process.env.EQUITY_MARKET_DATA_PROVIDER = 'twelve-data';
+			process.env.TWELVE_DATA_API_KEY = 'test-twelve-data-key';
+			const originalFetch = global.fetch;
+			const mockFetch = jest.fn().mockResolvedValue({
+				ok: true,
+				status: 200,
+				json: async () => ({ status: 'ok', close: '150.25' }),
+			});
+			global.fetch = mockFetch;
+
+			try {
+				const resId = await SignalOutcomeService.recordSignal({
+					symbol: 'AAPL',
+					exchange: 'UNKNOWN',
+					assetClass: 'stock',
+					price: null,
+				});
+
+				const saved = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(resId);
+				expect(saved.exchange).toBe('UNKNOWN');
+				expect(saved.assetClass).toBe('stock');
+				expect(saved.marketDataProvider).toBe('twelve-data');
+				expect(saved.eligibilityState).toBe('supported_provider');
+				expect(new URL(mockFetch.mock.calls[0][0]).searchParams.has('exchange')).toBe(false);
+			} finally {
+				global.fetch = originalFetch;
+			}
+		});
 	});
 
 	describe('evaluatePendingOutcomes()', () => {
