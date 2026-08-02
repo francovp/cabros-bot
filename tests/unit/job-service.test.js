@@ -653,6 +653,26 @@ describe('JobService Unit Tests', () => {
 			expect(service._sendCallbackWithRetry).not.toHaveBeenCalled();
 		});
 
+		it('propagates callback status persistence failures when delivery is awaited', async () => {
+			const statusError = Object.assign(new Error('Firestore unavailable'), {
+				code: 'JOB_CALLBACK_STATUS_UNAVAILABLE',
+			});
+			const service = new JobService({
+				isDurable: () => true,
+				claimCallbackDelivery: jest.fn().mockResolvedValue(true),
+				updateCallbackStatus: jest.fn().mockRejectedValue(statusError),
+			});
+			fetchMock.mockResolvedValue({ ok: true, status: 200 });
+
+			await expect(service._triggerCallbackIfConfigured({
+				jobId: 'status-unavailable-callback',
+				status: 'completed',
+				callbackUrl: 'https://example.com/callback',
+				callbackEvents: ['completed'],
+				callbackStatus: { status: 'pending', attempts: [] },
+			}, { awaitDelivery: true })).rejects.toBe(statusError);
+		});
+
 		it('validates callbackUrl protocol and format', async () => {
 			const prevEnv = process.env.NODE_ENV;
 			const prevAllow = process.env.ALLOW_HTTP_CALLBACKS;

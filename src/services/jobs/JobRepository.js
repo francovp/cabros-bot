@@ -13,6 +13,20 @@ function cloneJob(job) {
 	return JSON.parse(JSON.stringify(job));
 }
 
+function mergeCallbackStatus(currentStatus, incomingStatus) {
+	if (!currentStatus) return incomingStatus;
+	if (!incomingStatus) return currentStatus;
+
+	return {
+		...incomingStatus,
+		...currentStatus,
+		events: {
+			...(incomingStatus.events || {}),
+			...(currentStatus.events || {}),
+		},
+	};
+}
+
 function isFirestoreEnabled() {
 	return process.env.ENABLE_FIRESTORE_JOB_STORAGE === 'true'
 		|| process.env.ENABLE_FIRESTORE_ALERT_STORAGE === 'true';
@@ -41,6 +55,13 @@ function createCallbackClaimUnavailableError(cause) {
 	return error;
 }
 
+function createCallbackStatusUnavailableError(cause) {
+	const error = new Error('Durable callback status storage is unavailable.');
+	error.code = 'JOB_CALLBACK_STATUS_UNAVAILABLE';
+	error.cause = cause;
+	return error;
+}
+
 class JobRepository {
 	async save(job, { required = false } = {}) {
 		const sanitized = sanitizeJob(job);
@@ -54,14 +75,16 @@ class JobRepository {
 			return sanitized.jobId;
 		}
 
+		let persistedJob = sanitized;
 		try {
 			if (typeof firestore.runTransaction === 'function') {
 				const docRef = firestore.collection(COLLECTION_NAME).doc(sanitized.jobId);
 				const saved = await firestore.runTransaction(async (transaction) => {
 					const snapshot = await transaction.get(docRef);
+					const incomingWorkerId = sanitized.execution && sanitized.execution.workerId;
+					let current = null;
 					if (snapshot && snapshot.exists) {
-						const current = sanitizeJob({ ...(snapshot.data() || {}), jobId: snapshot.id || sanitized.jobId });
-						const incomingWorkerId = sanitized.execution && sanitized.execution.workerId;
+						current = sanitizeJob({ ...(snapshot.data() || {}), jobId: snapshot.id || sanitized.jobId });
 						const currentExecution = current && current.execution ? current.execution : {};
 						const currentClaimIsActive = currentExecution.workerId
 							&& ['claimed', 'running'].includes(currentExecution.status);
@@ -84,7 +107,13 @@ class JobRepository {
 						}
 					}
 
-					transaction.set(docRef, sanitized);
+					persistedJob = incomingWorkerId && current
+						? {
+							...sanitized,
+							callbackStatus: mergeCallbackStatus(current.callbackStatus, sanitized.callbackStatus),
+						}
+						: sanitized;
+					transaction.set(docRef, persistedJob);
 					return true;
 				});
 				if (saved === false) {
@@ -103,7 +132,7 @@ class JobRepository {
 			}
 		}
 
-		memoryJobs.set(sanitized.jobId, cloneJob(sanitized));
+		memoryJobs.set(sanitized.jobId, cloneJob(persistedJob));
 		return sanitized.jobId;
 	}
 
@@ -149,7 +178,7 @@ class JobRepository {
 		const firestore = this._getFirestore();
 		if (firestore) {
 			if (typeof firestore.runTransaction !== 'function') {
-				return false;
+				throw createCallbackStatusUnavailableError();
 			}
 
 			const docRef = firestore.collection(COLLECTION_NAME).doc(jobId);
@@ -171,7 +200,7 @@ class JobRepository {
 				});
 			} catch (error) {
 				console.warn('[JobRepository] Failed to persist callback status:', error.message);
-				return false;
+				throw createCallbackStatusUnavailableError(error);
 			}
 		}
 
@@ -184,8 +213,8 @@ class JobRepository {
 		if (!nextJob) {
 			return false;
 		}
-		await this.save(nextJob);
-		return true;
+		const saved = await this.save(nextJob);
+		return saved !== null;
 	}
 
 	async claimCallbackDelivery(jobId, event, deliveryId, leaseMs = DEFAULT_CALLBACK_CLAIM_LEASE_MS) {

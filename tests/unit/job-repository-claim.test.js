@@ -437,6 +437,65 @@ describe('JobRepository durable claims', () => {
 		);
 	});
 
+	it('preserves current callback metadata during worker saves', async () => {
+		const docRef = {};
+		const callbackStatus = {
+			status: 'success',
+			attempts: [{ attempt: 1, statusCode: 200 }],
+			events: {
+				processing: {
+					status: 'success',
+					attempts: [{ attempt: 1, statusCode: 200 }],
+				},
+			},
+		};
+		const transaction = {
+			get: jest.fn().mockResolvedValue({
+				exists: true,
+				id: 'job-123',
+				data: () => ({
+					jobId: 'job-123',
+					status: 'processing',
+					execution: { mode: 'render-worker', status: 'running', workerId: 'worker-1', attempt: 2 },
+					callbackStatus,
+				}),
+			}),
+			set: jest.fn(),
+		};
+		const firestore = {
+			collection: jest.fn(() => ({ doc: jest.fn(() => docRef) })),
+			runTransaction: jest.fn(async callback => callback(transaction)),
+		};
+		const repository = new JobRepository();
+		repository._getFirestore = jest.fn(() => firestore);
+
+		await expect(repository.save({
+			jobId: 'job-123',
+			status: 'processing',
+			execution: { mode: 'render-worker', status: 'running', workerId: 'worker-1', attempt: 2 },
+			callbackStatus: { status: 'pending', attempts: [] },
+		}, { required: true })).resolves.toBe('job-123');
+
+		expect(transaction.set).toHaveBeenCalledWith(
+			docRef,
+			expect.objectContaining({ callbackStatus }),
+		);
+	});
+
+	it('propagates callback status persistence failures', async () => {
+		const firestore = {
+			collection: jest.fn(() => ({ doc: jest.fn(() => ({})) })),
+			runTransaction: jest.fn().mockRejectedValue(new Error('Firestore unavailable')),
+		};
+		const repository = new JobRepository();
+		repository._getFirestore = jest.fn(() => firestore);
+
+		await expect(repository.updateCallbackStatus('job-123', 'completed', {
+			status: 'success',
+			attempts: [{ attempt: 1, statusCode: 200 }],
+		})).rejects.toMatchObject({ code: 'JOB_CALLBACK_STATUS_UNAVAILABLE' });
+	});
+
 	it('claims callback events transactionally and only takes over expired reservations', async () => {
 		const docRef = {};
 		const pendingJob = {

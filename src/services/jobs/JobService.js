@@ -1669,10 +1669,14 @@ class JobService {
 		// Execute the callback in the background
 		const callbackPromise = this._sendCallbackWithRetry(job, callbackClaim.deliveryId).catch((err) => {
 			console.error(`[JobService] Callback for job ${job.jobId} failed:`, err.message);
+			if (awaitDelivery) {
+				throw err;
+			}
 		});
-		this.pendingCallbacks.add(callbackPromise);
-		callbackPromise.then(() => {
-			this.pendingCallbacks.delete(callbackPromise);
+		const trackedCallback = callbackPromise.catch(() => {});
+		this.pendingCallbacks.add(trackedCallback);
+		trackedCallback.then(() => {
+			this.pendingCallbacks.delete(trackedCallback);
 			if (callbackClaim.localKey) {
 				this.pendingCallbackEvents.delete(callbackClaim.localKey);
 			}
