@@ -331,6 +331,244 @@ describe('admin browser client', () => {
 		expect(runForm.elements.query.value).toContain('"dryRun": false');
 	});
 
+	it('loads recent jobs with bounded status, type, and limit filters', async () => {
+		const requests = [];
+		const browser = createBrowser({
+			fetchImpl: async (url, options) => {
+				if (url === '/openapi.json') return response(contract);
+				requests.push([url, options]);
+				return response({ success: true, jobs: [] });
+			},
+		});
+		await flush();
+		await selectView(browser, 'jobs');
+
+		const listForm = findForm(browser.elementsById.view, 'Load recent jobs');
+		listForm.elements.limit.value = '7';
+		listForm.elements.status.value = 'failed';
+		listForm.elements.type.value = 'market-scanner';
+		browser.elementsById['api-key'].value = 'session-secret';
+		await listForm.dispatch('submit');
+		await flush();
+
+		expect(requests.at(-1)[0]).toBe('/api/jobs?limit=7&status=failed&type=market-scanner');
+		expect(requests.at(-1)[1].headers['x-api-key']).toBe('session-secret');
+	});
+
+	it('renders only safe recent-job summary fields', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				return response({
+					success: true,
+					jobs: [{
+						jobId: 'job-safe',
+						type: 'expanded-analysis',
+						status: 'failed',
+						progress: { current: 1, total: 2, status: 'hidden-progress-detail' },
+						createdAt: '2026-07-30T04:55:09.000Z',
+						updatedAt: '2026-07-30T04:56:09.000Z',
+						totalDurationMs: 60000,
+						error: 'hidden internal error',
+						payload: { callbackSecret: 'hidden-secret' },
+					}],
+				});
+			},
+		});
+		await flush();
+		await selectView(browser, 'jobs');
+
+		const listForm = findForm(browser.elementsById.view, 'Load recent jobs');
+		await listForm.dispatch('submit');
+		await flush();
+
+		expect(listForm.textContent).toContain('job-safe');
+		expect(listForm.textContent).toContain('expanded-analysis');
+		expect(listForm.textContent).toContain('failed');
+		expect(listForm.textContent).toContain('1 / 2');
+		expect(listForm.textContent).toContain('60000 ms');
+		expect(listForm.textContent).not.toContain('hidden internal error');
+		expect(listForm.textContent).not.toContain('hidden-secret');
+	});
+
+	it('clears stale recent jobs when a refresh fails', async () => {
+		let listAttempts = 0;
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				listAttempts++;
+				if (listAttempts === 1) {
+					return response({ success: true, jobs: [{
+						jobId: 'stale-job', type: 'expanded-analysis', status: 'completed', progress: {},
+					}] });
+				}
+				return response({ error: 'refresh failed' }, 500);
+			},
+		});
+		await flush();
+		await selectView(browser, 'jobs');
+
+		const listForm = findForm(browser.elementsById.view, 'Load recent jobs');
+		await listForm.dispatch('submit');
+		await flush();
+		expect(listForm.textContent).toContain('stale-job');
+
+		await listForm.dispatch('submit');
+		await flush();
+		expect(listForm.textContent).not.toContain('stale-job');
+	});
+
+	it('ignores a pending list response after its filters change', async () => {
+		let resolveList;
+		const pendingList = new Promise((resolve) => { resolveList = resolve; });
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.includes('status=processing')) return pendingList;
+				return response({ success: true, jobs: [] });
+			},
+		});
+		await flush();
+		await selectView(browser, 'jobs');
+
+		const listForm = findForm(browser.elementsById.view, 'Load recent jobs');
+		listForm.elements.status.value = 'processing';
+		const pendingSubmit = listForm.dispatch('submit');
+		await flush();
+		listForm.elements.status.value = 'failed';
+		await listForm.elements.status.dispatch('change');
+		expect(listForm.textContent).toContain('Filters changed. Submit to load recent jobs.');
+		resolveList(response({ success: true, jobs: [{
+			jobId: 'old-filter-job', type: 'expanded-analysis', status: 'processing', progress: {},
+		}] }));
+		await pendingSubmit;
+		await flush();
+
+		expect(findButton(listForm, 'Load recent jobs').disabled).toBe(false);
+		expect(listForm.textContent).not.toContain('old-filter-job');
+	});
+
+	it('pre-fills the existing job status workflow when a recent job is selected', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				return response({ success: true, jobs: [{
+					jobId: 'selected-job', type: 'market-scanner', status: 'processing', progress: {},
+				}] });
+			},
+		});
+		await flush();
+		await selectView(browser, 'jobs');
+
+		const listForm = findForm(browser.elementsById.view, 'Load recent jobs');
+		await listForm.dispatch('submit');
+		await flush();
+		await findButton(listForm, 'Open status').dispatch('click');
+
+		const statusForm = findForm(browser.elementsById.view, 'GET /api/jobs/{jobId}');
+		expect(statusForm.elements['path-jobId'].value).toBe('selected-job');
+	});
+
+	it('ignores a pending status response after selecting another recent job', async () => {
+		let resolveStatus;
+		const pendingStatus = new Promise((resolve) => { resolveStatus = resolve; });
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/jobs?')) return response({ success: true, jobs: [{
+					jobId: 'job-b', type: 'market-scanner', status: 'processing', progress: {},
+				}] });
+				if (url === '/api/jobs/job-a') return pendingStatus;
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'jobs');
+
+		const listForm = findForm(browser.elementsById.view, 'Load recent jobs');
+		await listForm.dispatch('submit');
+		await flush();
+		const statusForm = findForm(browser.elementsById.view, 'GET /api/jobs/{jobId}');
+		statusForm.elements['path-jobId'].value = 'job-a';
+		const pendingSubmit = statusForm.dispatch('submit');
+		await flush();
+		await findButton(listForm, 'Open status').dispatch('click');
+		expect(findButton(statusForm, 'Get job status').disabled).toBe(false);
+		expect(statusForm.textContent).toContain('Job selected. Submit to load its status.');
+		resolveStatus(response({ jobId: 'job-a', status: 'processing', results: [] }));
+		await pendingSubmit;
+		await flush();
+
+		expect(statusForm.elements['path-jobId'].value).toBe('job-b');
+		expect(findButton(statusForm, 'Cancel job')).toBeUndefined();
+		expect(statusForm.textContent).toContain('Job selected. Submit to load its status.');
+		expect(statusForm.textContent).not.toContain('"job-a"');
+	});
+
+	it('re-enables status lookup after a manual job-ID edit invalidates a request', async () => {
+		let resolveStatus;
+		const pendingStatus = new Promise((resolve) => { resolveStatus = resolve; });
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/jobs/job-a') return pendingStatus;
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'jobs');
+
+		const statusForm = findForm(browser.elementsById.view, 'GET /api/jobs/{jobId}');
+		const jobIdInput = statusForm.elements['path-jobId'];
+		jobIdInput.value = 'job-a';
+		const pendingSubmit = statusForm.dispatch('submit');
+		await flush();
+		jobIdInput.value = 'job-b';
+		await jobIdInput.dispatch('input');
+		resolveStatus(response({ jobId: 'job-a', status: 'processing', results: [] }));
+		await pendingSubmit;
+		await flush();
+
+		expect(findButton(statusForm, 'Get job status').disabled).toBe(false);
+		expect(statusForm.textContent).not.toContain('"job-a"');
+	});
+
+	it('ignores a pending job action after selecting another recent job', async () => {
+		let resolveAction;
+		const pendingAction = new Promise((resolve) => { resolveAction = resolve; });
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/jobs?')) return response({ success: true, jobs: [{
+					jobId: 'job-b', type: 'market-scanner', status: 'processing', progress: {},
+				}] });
+				if (url === '/api/jobs/job-a') return response({ jobId: 'job-a', status: 'processing', results: [] });
+				if (url === '/api/jobs/job-a/cancel') return pendingAction;
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'jobs');
+
+		const listForm = findForm(browser.elementsById.view, 'Load recent jobs');
+		await listForm.dispatch('submit');
+		await flush();
+		const statusForm = findForm(browser.elementsById.view, 'GET /api/jobs/{jobId}');
+		statusForm.elements['path-jobId'].value = 'job-a';
+		await statusForm.dispatch('submit');
+		await flush();
+		const pendingRequest = findButton(statusForm, 'Cancel job').dispatch('click');
+		await flush();
+		await findButton(listForm, 'Open status').dispatch('click');
+		resolveAction(response({ success: true, jobId: 'job-a', status: 'cancelled' }));
+		await pendingRequest;
+		await flush();
+
+		expect(statusForm.elements['path-jobId'].value).toBe('job-b');
+		expect(statusForm.textContent).toContain('Job selected. Submit to load its status.');
+		expect(statusForm.textContent).not.toContain('"job-a"');
+	});
+
 	it('shows cancel only for a fetched active job', async () => {
 		const job = { jobId: 'job-1', status: 'processing', results: [] };
 		const browser = createBrowser({

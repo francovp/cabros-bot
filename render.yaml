@@ -25,6 +25,9 @@ services:
   - key: ENABLE_TELEGRAM_BOT
     value: true
     previewValue: false
+  - key: NEWS_GEMINI_CONCURRENCY
+    value: 3
+    previewValue: 3
   - key: JOB_EXECUTION_MODE
     value: local
     previewValue: local

@@ -161,7 +161,8 @@ const showError = (output, message) => {
 	output.textContent = message;
 };
 
-const sendRequest = async ({ definition, path, query, body, button, output }) => {
+const sendRequest = async ({ definition, path, query, body, button, output, formatResponse, isCurrent }) => {
+	const requestIsCurrent = typeof isCurrent === 'function' ? isCurrent : () => true;
 	const apiKey = document.getElementById('api-key').value;
 	const summary = window.CabrosAdminRequest.redactSecret(`${definition.method} ${path}`, apiKey);
 	let request;
@@ -180,6 +181,7 @@ const sendRequest = async ({ definition, path, query, body, button, output }) =>
 
 	if (!window.CabrosAdminRequest.confirmRequest(definition, (message) => window.confirm(message))) return;
 
+	if (!requestIsCurrent()) return;
 	button.disabled = true;
 	output.className = 'response-block request-state';
 	output.textContent = `${summary}\nRequest in progress…`;
@@ -196,14 +198,18 @@ const sendRequest = async ({ definition, path, query, body, button, output }) =>
 		} catch (_) {
 			// Non-JSON responses stay readable as text.
 		}
+		if (!requestIsCurrent()) return data;
 		output.className = `response-block${response.ok ? '' : ' response-error'}`;
-		output.textContent = `${summary}\nHTTP ${response.status} · ${elapsed} ms\n\n${window.CabrosAdminRequest.redactSecret(formatted, apiKey)}`;
+		output.textContent = response.ok && formatResponse
+			? formatResponse({ summary, status: response.status, elapsed, data })
+			: `${summary}\nHTTP ${response.status} · ${elapsed} ms\n\n${window.CabrosAdminRequest.redactSecret(formatted, apiKey)}`;
 		return data;
 	} catch (error) {
 		const elapsed = Math.round(performance.now() - started);
+		if (!requestIsCurrent()) return;
 		showError(output, `${summary}\nNetwork error · ${elapsed} ms\n\n${window.CabrosAdminRequest.redactSecret(error.message, apiKey)}`);
 	} finally {
-		button.disabled = false;
+		if (requestIsCurrent()) button.disabled = false;
 	}
 };
 
@@ -256,6 +262,124 @@ const createAlertListForm = () => {
 	return form;
 };
 
+const getQueryEnum = (contract, definition, name) => {
+	const operation = getOperation(contract, definition);
+	const parameter = getParameters(contract, operation).find((item) => item.name === name);
+	return parameter && parameter.schema && parameter.schema.enum || [];
+};
+
+const formatJobValue = (value) => value === undefined || value === null || value === '' ? '—' : String(value);
+
+const formatJobProgress = (progress) => {
+	if (!progress || typeof progress !== 'object') return '—';
+	return `${formatJobValue(progress.current)} / ${formatJobValue(progress.total)}`;
+};
+
+const createJobSummary = (job, onSelect) => {
+	const card = element('article', { className: 'operation-card' });
+	const jobId = formatJobValue(job && job.jobId);
+	card.append(element('h3', { text: jobId }));
+
+	const details = element('dl');
+	[
+		['Type', job && job.type],
+		['Status', job && job.status],
+		['Progress', formatJobProgress(job && job.progress)],
+		['Created', job && job.createdAt],
+		['Updated', job && job.updatedAt],
+		['Duration', job && job.totalDurationMs !== undefined && job.totalDurationMs !== null
+			? `${job.totalDurationMs} ms` : undefined],
+	].forEach(([label, value]) => {
+		details.append(element('dt', { text: label }), element('dd', { text: formatJobValue(value) }));
+	});
+	card.append(details);
+
+	const select = element('button', { text: 'Open status' });
+	select.type = 'button';
+	select.disabled = jobId === '—';
+	select.addEventListener('click', () => onSelect(jobId));
+	card.append(select);
+	return card;
+};
+
+const createJobListForm = (contract, onSelect) => {
+	const definition = { method: 'GET', path: '/api/jobs', label: 'Load recent jobs' };
+	const operation = getOperation(contract, definition);
+	const form = element('form', { className: 'operation-card' });
+	form.append(
+		element('h3', { text: definition.label }),
+		element('code', { text: `${definition.method} ${definition.path}` }),
+	);
+	const queryExample = getQueryExample(contract, operation);
+	const limit = addField(form, 'Limit', 'limit', {
+		type: 'number', min: 1, max: 100, value: queryExample.limit || 50,
+	});
+	const status = addField(form, 'Status', 'status', { tag: 'select' });
+	const type = addField(form, 'Type', 'type', { tag: 'select' });
+	[
+		[status, 'All statuses', getQueryEnum(contract, definition, 'status')],
+		[type, 'All types', getQueryEnum(contract, definition, 'type')],
+	].forEach(([select, allLabel, values]) => {
+		const all = element('option', { text: allLabel });
+		all.value = '';
+		select.append(all);
+		values.forEach((value) => {
+			const option = element('option', { text: value });
+			option.value = value;
+			select.append(option);
+		});
+	});
+
+	const button = element('button', { text: definition.label });
+	button.type = 'submit';
+	const list = element('div', { className: 'form-fields' });
+	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
+	form.append(button, list, output);
+	let listRequestVersion = 0;
+	const invalidateListRequest = () => {
+		listRequestVersion += 1;
+		list.replaceChildren();
+		button.disabled = false;
+		output.className = 'response-block request-state';
+		output.textContent = 'Filters changed. Submit to load recent jobs.';
+	};
+	limit.addEventListener('input', invalidateListRequest);
+	[status, type].forEach((filter) => filter.addEventListener('change', invalidateListRequest));
+
+	const renderJobs = (jobs) => {
+		list.replaceChildren();
+		if (!jobs.length) {
+			list.append(element('p', { className: 'request-state', text: 'No recent jobs found.' }));
+			return;
+		}
+		jobs.forEach((job) => list.append(createJobSummary(job, onSelect)));
+	};
+
+	form.addEventListener('submit', async (event) => {
+		event.preventDefault();
+		list.replaceChildren();
+		const requestVersion = ++listRequestVersion;
+		const query = Object.fromEntries(Object.entries({
+			limit: limit.value,
+			status: status.value,
+			type: type.value,
+		}).filter(([, value]) => value !== ''));
+		const data = await sendRequest({
+			definition,
+			path: definition.path,
+			query,
+			button,
+			output,
+			isCurrent: () => requestVersion === listRequestVersion,
+			formatResponse: ({ summary, status: responseStatus, elapsed }) => (
+				`${summary}\nHTTP ${responseStatus} · ${elapsed} ms`
+			),
+		});
+		if (requestVersion === listRequestVersion && data && Array.isArray(data.jobs)) renderJobs(data.jobs);
+	});
+	return form;
+};
+
 const createJobStatusForm = () => {
 	const definition = { method: 'GET', path: '/api/jobs/{jobId}', label: 'Get job status' };
 	const form = element('form', { className: 'operation-card' });
@@ -264,11 +388,18 @@ const createJobStatusForm = () => {
 		element('code', { text: `${definition.method} ${definition.path}` }),
 	);
 	const pathNames = addPathFields(form, definition.path);
+	const jobIdInput = form.elements['path-jobId'];
 	const button = element('button', { text: definition.label });
 	button.type = 'submit';
 	const actions = element('div', { className: 'form-actions' });
 	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
 	form.append(button, actions, output);
+	let statusRequestVersion = 0;
+	jobIdInput.addEventListener('input', () => {
+		statusRequestVersion += 1;
+		button.disabled = false;
+		actions.replaceChildren();
+	});
 
 	const renderActions = (job, jobId) => {
 		actions.replaceChildren();
@@ -291,6 +422,7 @@ const createJobStatusForm = () => {
 				confirm: 'Retry failed items for this job?',
 			});
 		}
+		const actionVersion = statusRequestVersion;
 		definitions.forEach((action) => {
 			const actionButton = element('button', { text: action.label });
 			actionButton.type = 'button';
@@ -300,6 +432,8 @@ const createJobStatusForm = () => {
 				path: action.path.replace('{jobId}', encodeURIComponent(jobId)),
 				button: actionButton,
 				output,
+				isCurrent: () => actionVersion === statusRequestVersion
+					&& form.elements['path-jobId'].value === jobId,
 			}));
 			actions.append(actionButton);
 		});
@@ -308,16 +442,30 @@ const createJobStatusForm = () => {
 	form.addEventListener('submit', async (event) => {
 		event.preventDefault();
 		const jobId = form.elements['path-jobId'].value;
+		const requestVersion = ++statusRequestVersion;
 		const data = await sendRequest({
 			definition,
 			path: fillPath(definition.path, pathNames, form),
 			button,
 			output,
+			isCurrent: () => requestVersion === statusRequestVersion
+				&& form.elements['path-jobId'].value === jobId,
 		});
+		if (requestVersion !== statusRequestVersion || form.elements['path-jobId'].value !== jobId) return;
 		if (data && data.status) renderActions(data, jobId);
 		else actions.replaceChildren();
 	});
-	return form;
+	return {
+		form,
+		selectJob: (jobId) => {
+			statusRequestVersion += 1;
+			jobIdInput.value = jobId;
+			button.disabled = false;
+			actions.replaceChildren();
+			output.textContent = 'Job selected. Submit to load its status.';
+			if (typeof jobIdInput.focus === 'function') jobIdInput.focus();
+		},
+	};
 };
 
 const createOperationForm = (contract, definition) => {
@@ -429,8 +577,10 @@ const renderView = async (name) => {
 			return;
 		}
 		if (name === 'jobs') {
+			const status = createJobStatusForm();
+			view.append(createJobListForm(contract, status.selectJob));
 			VIEWS.jobs.forEach((definition) => view.append(createOperationForm(contract, definition)));
-			view.append(createJobStatusForm());
+			view.append(status.form);
 			return;
 		}
 		[...(VIEWS[name] || []), ...(VIEW_ACTIONS[name] || [])]
