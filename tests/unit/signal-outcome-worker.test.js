@@ -256,6 +256,55 @@ describe('SignalOutcomeService Worker & Bounded Evaluation', () => {
 			expect(sweep3.scannedCount).toBe(1);
 		});
 
+		it('resumes after the last processed document when a sweep deadline interrupts a page', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+
+			const docsMap = new Map();
+			for (let i = 1; i <= 6; i++) {
+				docsMap.set(`doc_${i}`, {
+					receivedAt: admin.firestore.Timestamp.fromDate(new Date(Date.now() - 3600000)),
+					symbol: `CRYPTO${i}USDT`,
+					exchange: 'BINANCE',
+					side: 'BUY',
+					price: 50000,
+					outcomeEvaluated: false,
+					outcomes: {
+						'1h': { status: 'pending', targetTime: new Date(Date.now() - 1000).toISOString() },
+					},
+				});
+			}
+			global.__firebaseAdminMockState.collections.set(
+				SignalOutcomeService.COLLECTION_NAME,
+				docsMap
+			);
+
+			const klines = [[1600000000000, '50000', '51000', '49500', '50500', '100']];
+			let clock = Date.now();
+			let interruptPage = false;
+			jest.spyOn(Date, 'now').mockImplementation(() => clock);
+			mockGetKlines.mockImplementation(async () => {
+				if (interruptPage) {
+					clock += 100;
+				}
+				return klines;
+			});
+
+			await SignalOutcomeService.evaluatePendingOutcomes({ limit: 2, maxDurationMs: 1000 });
+			interruptPage = true;
+			const interrupted = await SignalOutcomeService.evaluatePendingOutcomes({ limit: 3, maxDurationMs: 50 });
+
+			expect(interrupted.scannedCount).toBe(1);
+			expect(interrupted.evaluatedCount).toBe(1);
+
+			interruptPage = false;
+			const resumed = await SignalOutcomeService.evaluatePendingOutcomes({ limit: 3, maxDurationMs: 1000 });
+
+			expect(resumed.scannedCount).toBe(3);
+			expect(docsMap.get('doc_4').outcomeEvaluated).toBe(true);
+			expect(docsMap.get('doc_5').outcomeEvaluated).toBe(true);
+			expect(docsMap.get('doc_6').outcomeEvaluated).toBe(true);
+		});
+
 		it('isolates errors fail-open when provider or firestore fails', async () => {
 			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
 			const consoleSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
