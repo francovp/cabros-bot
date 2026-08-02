@@ -221,15 +221,18 @@ function summarizeAlerts(req, res) {
 			enriched,
 		});
 
-		let shadowModeMetrics = 'No measurements found';
-		if (signalOutcomeService.isEnabled()) {
-			shadowModeMetrics = await signalOutcomeService.getMetricsSummary({
-				from: from.value,
-				to: to.value,
-				limit,
-			});
+		const hasReportFilters = Boolean(source) || typeof enriched === 'boolean';
+		if (!hasReportFilters) {
+			let shadowModeMetrics = 'No measurements found';
+			if (signalOutcomeService.isEnabled()) {
+				shadowModeMetrics = await signalOutcomeService.getMetricsSummary({
+					from: from.value,
+					to: to.value,
+					limit,
+				});
+			}
+			summary.shadowModeMetrics = shadowModeMetrics;
 		}
-		summary.shadowModeMetrics = shadowModeMetrics;
 
 		return res.status(200).json({
 			success: true,
@@ -333,15 +336,18 @@ function exportAlerts(req, res) {
 			includeText,
 		});
 
-		let shadowModeMetrics = 'No measurements found';
-		if (signalOutcomeService.isEnabled()) {
-			shadowModeMetrics = await signalOutcomeService.getMetricsSummary({
-				from: from.value,
-				to: to.value,
-				limit,
-			});
+		const hasReportFilters = Boolean(source) || typeof enriched === 'boolean';
+		if (!hasReportFilters) {
+			let shadowModeMetrics = 'No measurements found';
+			if (signalOutcomeService.isEnabled()) {
+				shadowModeMetrics = await signalOutcomeService.getMetricsSummary({
+					from: from.value,
+					to: to.value,
+					limit,
+				});
+			}
+			res.set('X-Shadow-Mode-Metrics', JSON.stringify(shadowModeMetrics));
 		}
-		res.set('X-Shadow-Mode-Metrics', JSON.stringify(shadowModeMetrics));
 
 		const filename = `alerts-${from.value.substring(0, 10)}-${to.value.substring(0, 10)}.${format === 'csv' ? 'csv' : 'jsonl'}`;
 		res.set('Content-Disposition', `attachment; filename="${filename}"`);

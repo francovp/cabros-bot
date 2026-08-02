@@ -1186,9 +1186,9 @@ This is a UI-only consumer change: job persistence, lifecycle semantics, OpenAPI
 
 ## Admin Alert Analytics and Export Workflows (CB-120 / Issue #288)
 
-The in-app `/admin` Alerts view now consumes the existing protected `GET /api/alerts/summary` and `GET /api/alerts/export` operations through dedicated bounded report forms. Summary windows default to the latest 24 hours and render returned aggregate data readably; exports require `from`/`to`, support JSONL and CSV, and download the response blob using its content type.
+The in-app `/admin` Alerts view now consumes the existing protected `GET /api/alerts/summary` and `GET /api/alerts/export` operations through dedicated bounded report forms. Summary windows default to the latest 24 hours and render returned aggregate data readably; exports require `from`/`to`, support JSONL and CSV, and download the response blob using its content type. Source/enriched filters are applied before bounded summary aggregation with raw Firestore cursors; filtered reports omit shadow-mode metrics because that service has no matching filters.
 
-Raw alert text remains disabled by default and requires an explicit checkbox. The API key stays in session storage and the `x-api-key` header; filenames and query strings never contain it. No backend, Firestore, OpenAPI, or Playground behavior changed.
+Raw alert text remains disabled by default and requires an explicit checkbox. The API key stays in session storage and the `x-api-key` header; filenames and query strings never contain it. No route, request, OpenAPI, Postman, or Playground contract changed.
 
 **Coverage**:
 - `src/admin/admin.js` — Report filters, summary rendering, safe export downloads, and protected error handling.

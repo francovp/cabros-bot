@@ -968,11 +968,12 @@ describe('AlertStorageService', () => {
 
 		it('pages through bounded alerts until filtered summaries reach the limit', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			const newerTimestamp = buildTimestamp('2026-06-06T12:00:00.000Z');
 			mockGet
 				.mockResolvedValueOnce({
 					empty: false,
 					docs: [buildQueryDoc('newer-scanner', {
-						receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+						receivedAt: newerTimestamp,
 						enriched: true,
 						source: 'scanner',
 					})],
@@ -996,7 +997,7 @@ describe('AlertStorageService', () => {
 			});
 
 			expect(mockGet).toHaveBeenCalledTimes(2);
-			expect(mockStartAfter).toHaveBeenCalledWith(expect.anything(), 'newer-scanner');
+			expect(mockStartAfter).toHaveBeenCalledWith(newerTimestamp, 'newer-scanner');
 			expect(result.totalAlerts).toBe(1);
 			expect(result.bySource).toEqual({ webhook: 1 });
 		});

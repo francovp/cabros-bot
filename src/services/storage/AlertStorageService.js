@@ -549,6 +549,23 @@ function getDocCursorValues(doc) {
 	};
 }
 
+function getRawDocCursorValues(doc) {
+	if (!doc || typeof doc.data !== 'function') {
+		return null;
+	}
+
+	const data = doc.data() || {};
+	if (!data.receivedAt || typeof data.receivedAt.toDate !== 'function'
+		|| typeof doc.id !== 'string' || !doc.id) {
+		return null;
+	}
+
+	return {
+		receivedAt: data.receivedAt,
+		documentId: doc.id,
+	};
+}
+
 /**
  * Initialize Firebase Admin (idempotent) and return Firestore client.
  * Returns null when the feature is disabled or initialization fails.
@@ -907,10 +924,7 @@ async function summarizeAlerts({ from, to, limit, source, enriched } = {}) {
 		if (hasFilters) {
 			query = query.orderBy(admin.firestore.FieldPath.documentId(), 'desc');
 			if (pageCursor) {
-				query = query.startAfter(
-					buildParsedCursorTimestamp(pageCursor),
-					pageCursor.documentId,
-				);
+				query = query.startAfter(pageCursor.receivedAt, pageCursor.documentId);
 			}
 		}
 		query = query.limit(window.limit);
@@ -944,7 +958,7 @@ async function summarizeAlerts({ from, to, limit, source, enriched } = {}) {
 			break;
 		}
 
-		pageCursor = getDocCursorValues(snapshot.docs[snapshot.docs.length - 1]);
+		pageCursor = getRawDocCursorValues(snapshot.docs[snapshot.docs.length - 1]);
 		if (!pageCursor) {
 			break;
 		}
