@@ -99,7 +99,11 @@ if [ -n "${CLAIM_SESSION_ID:-}" ]; then
 else
   REUSE_MINUTES="${CLAIM_SESSION_REUSE_MINUTES:-30}"
   STATE_DIR="${CLAIM_SESSION_STATE_DIR:-${TMPDIR:-/tmp}}"
-  STATE_FILE="${STATE_DIR}/cabros-claim-session-$(printf '%s' "$REPO" | tr '/:' '-')-${AGENT_ID}"
+  # Scope the persisted session ID to the run when the parent workflow supplies
+  # one; otherwise two distinct runs of the same agent on one host would share
+  # the ID within the reuse window and treat each other's claims as their own.
+  RUN_NS="${CLAIM_RUN_ID:-}"
+  STATE_FILE="${STATE_DIR}/cabros-claim-session-$(printf '%s' "$REPO" | tr '/:' '-')-${AGENT_ID}${RUN_NS:+-${RUN_NS}}"
   if [ -f "$STATE_FILE" ]; then
     # Portable mtime: macOS `stat -f %m`, GNU `stat -c %Y`.
     saved_epoch="$(stat -f %m "$STATE_FILE" 2>/dev/null || stat -c %Y "$STATE_FILE" 2>/dev/null || echo 0)"
@@ -141,9 +145,10 @@ has_agent_working() {
 }
 
 # claim_comments_rest -> TSV "id<TAB>body" for ALL claim comments via the REST
-# API (numeric ids, creation order). Empty when none exist.
+# API (numeric ids, creation order). Empty when none exist. Paginated so
+# claim comments past the first REST page still participate in arbitration.
 claim_comments_rest() {
-  gh api "repos/${REPO}/issues/${ISSUE_NUMBER}/comments" --jq '
+  gh api --paginate "repos/${REPO}/issues/${ISSUE_NUMBER}/comments" --jq '
     [.[] | select(.body | startswith("**agent-claim**"))]
     | .[] | "\(.id)\t\(.body)"' 2>/dev/null || true
 }
@@ -165,7 +170,7 @@ newest_claim() {
 # last_labeled_event_ts -> timestamp of the most recent agent-working labeled
 # event (fallback for legacy claims made before claim comments existed).
 last_labeled_event_ts() {
-  gh api "repos/${REPO}/issues/${ISSUE_NUMBER}/events" --jq '
+  gh api --paginate "repos/${REPO}/issues/${ISSUE_NUMBER}/events" --jq '
     [.[] | select(.event == "labeled" and .label.name == "agent-working") | .created_at]
     | max // empty' 2>/dev/null || true
 }
@@ -205,6 +210,15 @@ arbitrate_race() {
   done
   echo "$winner"
 }
+
+# ---------------------------------------------------------------------------
+# Snapshot the newest claim comment BEFORE the label check: if another session
+# completes its claim between our label observation and our own post, its
+# comment must participate in arbitration instead of being dismissed as
+# "historical".
+# ---------------------------------------------------------------------------
+SNAPSHOT_ID="$(newest_claim | cut -f1)"
+SNAPSHOT_ID="${SNAPSHOT_ID:-0}"
 
 # ---------------------------------------------------------------------------
 # 1) Issue already carries the agent-working label -> resolve the claim.
@@ -286,12 +300,10 @@ if [ "$(has_agent_working)" == "true" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 2) Unclaimed -> race to claim. Historical claim comments from already
-#    released issues are ignored (snapshot id) so they cannot block us.
+# 2) Unclaimed -> race to claim. SNAPSHOT_ID was captured before the label
+#    check (above) and historical claim comments from already-released issues
+#    are ignored by arbitration (only ids newer than the snapshot participate).
 # ---------------------------------------------------------------------------
-SNAPSHOT_ID="$(newest_claim | cut -f1)"
-SNAPSHOT_ID="${SNAPSHOT_ID:-0}"
-
 gh issue edit "$ISSUE_NUMBER" --add-label "agent-working" &> /dev/null || {
   echo "RESULT=ERROR"
   echo "Error: failed to add the agent-working label to issue #${ISSUE_NUMBER}." >&2
@@ -301,9 +313,9 @@ gh issue edit "$ISSUE_NUMBER" --add-label "agent-working" &> /dev/null || {
 OUR_ID="$(post_claim_comment "${CLAIM_PREFIX} ${AGENT_ID} ${SESSION_ID} ${NOW_TS}")"
 if [ -z "$OUR_ID" ]; then
   # Partial failure: the label is on but our claim comment never landed. Remove
-  # the label unless another session's claim comment appeared in the meantime
-  # (then the label is legitimately theirs and must stay).
-  if [ -z "$(newest_claim)" ]; then
+  # the label unless a NEWER claim comment (past the snapshot) appeared in the
+  # meantime — a historical comment alone must not keep the label we added.
+  if [ -z "$(claim_comments_rest | awk -F '\t' -v snap="$SNAPSHOT_ID" '$1+0 > snap+0 { print $1 }')" ]; then
     remove_agent_working
   fi
   echo "RESULT=ERROR"
