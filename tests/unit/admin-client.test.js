@@ -418,6 +418,36 @@ describe('admin browser client', () => {
 		expect(listForm.textContent).not.toContain('stale-job');
 	});
 
+	it('ignores a pending list response after its filters change', async () => {
+		let resolveList;
+		const pendingList = new Promise((resolve) => { resolveList = resolve; });
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.includes('status=processing')) return pendingList;
+				return response({ success: true, jobs: [] });
+			},
+		});
+		await flush();
+		await selectView(browser, 'jobs');
+
+		const listForm = findForm(browser.elementsById.view, 'Load recent jobs');
+		listForm.elements.status.value = 'processing';
+		const pendingSubmit = listForm.dispatch('submit');
+		await flush();
+		listForm.elements.status.value = 'failed';
+		await listForm.elements.status.dispatch('change');
+		expect(listForm.textContent).toContain('Filters changed. Submit to load recent jobs.');
+		resolveList(response({ success: true, jobs: [{
+			jobId: 'old-filter-job', type: 'expanded-analysis', status: 'processing', progress: {},
+		}] }));
+		await pendingSubmit;
+		await flush();
+
+		expect(findButton(listForm, 'Load recent jobs').disabled).toBe(false);
+		expect(listForm.textContent).not.toContain('old-filter-job');
+	});
+
 	it('pre-fills the existing job status workflow when a recent job is selected', async () => {
 		const browser = createBrowser({
 			fetchImpl: async (url) => {

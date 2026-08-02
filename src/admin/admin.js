@@ -335,6 +335,16 @@ const createJobListForm = (contract, onSelect) => {
 	const list = element('div', { className: 'form-fields' });
 	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
 	form.append(button, list, output);
+	let listRequestVersion = 0;
+	const invalidateListRequest = () => {
+		listRequestVersion += 1;
+		list.replaceChildren();
+		button.disabled = false;
+		output.className = 'response-block request-state';
+		output.textContent = 'Filters changed. Submit to load recent jobs.';
+	};
+	limit.addEventListener('input', invalidateListRequest);
+	[status, type].forEach((filter) => filter.addEventListener('change', invalidateListRequest));
 
 	const renderJobs = (jobs) => {
 		list.replaceChildren();
@@ -348,6 +358,7 @@ const createJobListForm = (contract, onSelect) => {
 	form.addEventListener('submit', async (event) => {
 		event.preventDefault();
 		list.replaceChildren();
+		const requestVersion = ++listRequestVersion;
 		const query = Object.fromEntries(Object.entries({
 			limit: limit.value,
 			status: status.value,
@@ -359,11 +370,12 @@ const createJobListForm = (contract, onSelect) => {
 			query,
 			button,
 			output,
+			isCurrent: () => requestVersion === listRequestVersion,
 			formatResponse: ({ summary, status: responseStatus, elapsed }) => (
 				`${summary}\nHTTP ${responseStatus} · ${elapsed} ms`
 			),
 		});
-		if (data && Array.isArray(data.jobs)) renderJobs(data.jobs);
+		if (requestVersion === listRequestVersion && data && Array.isArray(data.jobs)) renderJobs(data.jobs);
 	});
 	return form;
 };
