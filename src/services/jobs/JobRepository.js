@@ -150,7 +150,9 @@ class JobRepository {
 
 		const firestore = this._getFirestore();
 		if (!firestore || typeof firestore.runTransaction !== 'function') {
-			return false;
+			const error = new Error('Durable job claim storage is unavailable.');
+			error.code = 'JOB_CLAIM_RENEWAL_UNAVAILABLE';
+			throw error;
 		}
 
 		const docRef = firestore.collection(COLLECTION_NAME).doc(jobId);
@@ -189,7 +191,8 @@ class JobRepository {
 			});
 		} catch (error) {
 			console.warn('[JobRepository] Failed to renew job claim:', error.message);
-			return false;
+			error.code = error.code || 'JOB_CLAIM_RENEWAL_UNAVAILABLE';
+			throw error;
 		}
 	}
 

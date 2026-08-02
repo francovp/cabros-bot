@@ -145,4 +145,52 @@ describe('queued job execution', () => {
 			else process.env.JOB_QUEUE_CLAIM_LEASE_MS = previousLeaseMs;
 		}
 	});
+
+	it('rejects queued execution when claim renewal storage fails', async () => {
+		const previousLeaseMs = process.env.JOB_QUEUE_CLAIM_LEASE_MS;
+		process.env.JOB_QUEUE_CLAIM_LEASE_MS = '20';
+		const job = {
+			jobId: 'job-123',
+			type: 'expanded-analysis',
+			status: 'processing',
+			execution: { mode: 'render-worker', status: 'claimed', workerId: 'worker-1' },
+			createdAt: new Date().toISOString(),
+		};
+		const renewalError = Object.assign(new Error('Firestore unavailable'), {
+			code: 'JOB_CLAIM_RENEWAL_UNAVAILABLE',
+		});
+		const repository = {
+			get: jest.fn().mockResolvedValue(job),
+			save: jest.fn().mockResolvedValue('job-123'),
+			renewClaim: jest.fn().mockRejectedValue(renewalError),
+		};
+		const service = new JobService(repository);
+		const execution = new Promise((resolve) => {
+			service._executeExpandedAnalysis = jest.fn((currentJob, parsed, signal) => {
+				signal.addEventListener('abort', resolve, { once: true });
+				return execution;
+			});
+		});
+
+		try {
+			const run = service._runBackgroundJob(
+				'job-123',
+				{ symbols: [{ raw: 'BINANCE:BTCUSDT' }] },
+				job.requestMetadata,
+				null,
+				'worker-1',
+			);
+			const runOutcome = run.then(
+				() => ({ code: 'UNEXPECTED_SUCCESS' }),
+				(error) => error,
+			);
+			await delay(30);
+			await execution;
+			await expect(runOutcome).resolves.toMatchObject({ code: 'JOB_CLAIM_RENEWAL_UNAVAILABLE' });
+			expect(repository.save).toHaveBeenCalledTimes(1);
+		} finally {
+			if (previousLeaseMs === undefined) delete process.env.JOB_QUEUE_CLAIM_LEASE_MS;
+			else process.env.JOB_QUEUE_CLAIM_LEASE_MS = previousLeaseMs;
+		}
+	});
 });

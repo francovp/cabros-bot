@@ -170,4 +170,13 @@ describe('JobRepository durable claims', () => {
 
 		expect(transaction.set).not.toHaveBeenCalled();
 	});
+
+	it('rejects claim renewal when durable storage is unavailable', async () => {
+		const repository = new JobRepository();
+		repository._getFirestore = jest.fn(() => null);
+
+		await expect(repository.renewClaim('job-123', 'worker-1')).rejects.toMatchObject({
+			code: 'JOB_CLAIM_RENEWAL_UNAVAILABLE',
+		});
+	});
 });

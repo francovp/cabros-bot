@@ -722,6 +722,7 @@ class JobService {
 		const controller = new AbortController();
 		this.activeControllers.set(jobId, controller);
 		let claimLost = false;
+		let claimRenewalError = null;
 		let claimHeartbeat = null;
 		const markClaimLost = () => {
 			if (claimLost) return;
@@ -751,6 +752,7 @@ class JobService {
 					})
 					.catch((error) => {
 						console.warn('[JobService] Failed to renew job claim:', error.message);
+						claimRenewalError = error;
 						markClaimLost();
 					});
 			}, heartbeatMs);
@@ -807,7 +809,11 @@ class JobService {
 				globalThis.clearInterval(claimHeartbeat);
 			}
 			this.activeControllers.delete(jobId);
-			if (!claimLost) {
+			if (claimLost) {
+				if (claimRenewalError) {
+					throw claimRenewalError;
+				}
+			} else {
 				const finalJob = await this.repository.get(jobId);
 				if (finalJob && finalJob.status === 'cancelled') {
 					finalJob.totalDurationMs = Date.now() - startTime;
