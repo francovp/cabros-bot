@@ -261,6 +261,54 @@ describe('JobRepository durable claims', () => {
 		expect(transaction.set).not.toHaveBeenCalled();
 	});
 
+	it('merges callback metadata without replaying a claimed job snapshot', async () => {
+		const docRef = {};
+		const currentJob = {
+			jobId: 'job-123',
+			status: 'processing',
+			progress: { current: 3 },
+			execution: { mode: 'render-worker', status: 'running', workerId: 'worker-1', attempt: 2 },
+			callbackStatus: { status: 'pending', attempts: [] },
+		};
+		const transaction = {
+			get: jest.fn().mockResolvedValue({
+				exists: true,
+				id: 'job-123',
+				data: () => currentJob,
+			}),
+			set: jest.fn(),
+		};
+		const firestore = {
+			collection: jest.fn(() => ({ doc: jest.fn(() => docRef) })),
+			runTransaction: jest.fn(async callback => callback(transaction)),
+		};
+		const repository = new JobRepository();
+		repository._getFirestore = jest.fn(() => firestore);
+
+		await expect(repository.updateCallbackStatus('job-123', 'completed', {
+			status: 'success',
+			attempts: [{ attempt: 1, statusCode: 200 }],
+		})).resolves.toBe(true);
+
+		expect(transaction.set).toHaveBeenCalledWith(
+			docRef,
+			expect.objectContaining({
+				progress: { current: 3 },
+				execution: currentJob.execution,
+				callbackStatus: {
+					status: 'success',
+					attempts: [{ attempt: 1, statusCode: 200 }],
+					events: {
+						completed: {
+							status: 'success',
+							attempts: [{ attempt: 1, statusCode: 200 }],
+						},
+					},
+				},
+			}),
+		);
+	});
+
 	it('rejects claim renewal when durable storage is unavailable', async () => {
 		const repository = new JobRepository();
 		repository._getFirestore = jest.fn(() => null);

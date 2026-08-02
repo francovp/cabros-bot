@@ -1626,7 +1626,15 @@ class JobService {
 			}
 		}
 
-		// Update job state in repository
+		// Update callback metadata from the transaction's current job snapshot.
+		if (typeof this.repository.updateCallbackStatus === 'function') {
+			await this.repository.updateCallbackStatus(job.jobId, callbackEvent, {
+				status: success ? 'success' : 'failed',
+				attempts,
+			});
+			return;
+		}
+
 		const freshJob = await this.repository.get(job.jobId);
 		if (freshJob) {
 			const existingEvents = freshJob.callbackStatus?.events || {};

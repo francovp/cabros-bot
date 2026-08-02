@@ -91,6 +91,69 @@ class JobRepository {
 		return sanitized.jobId;
 	}
 
+	async updateCallbackStatus(jobId, event, callbackUpdate = {}) {
+		if (!jobId || !event) {
+			return false;
+		}
+
+		const merge = (job) => {
+			const existingStatus = job.callbackStatus || {};
+			const attempts = Array.isArray(callbackUpdate.attempts) ? callbackUpdate.attempts : [];
+			return {
+				...job,
+				callbackStatus: {
+					status: callbackUpdate.status,
+					attempts: [
+						...(Array.isArray(existingStatus.attempts) ? existingStatus.attempts : []),
+						...attempts,
+					],
+					events: {
+						...(existingStatus.events || {}),
+						[event]: {
+							status: callbackUpdate.status,
+							attempts,
+						},
+					},
+				},
+				updatedAt: new Date().toISOString(),
+			};
+		};
+
+		const firestore = this._getFirestore();
+		if (firestore) {
+			if (typeof firestore.runTransaction !== 'function') {
+				return false;
+			}
+
+			const docRef = firestore.collection(COLLECTION_NAME).doc(jobId);
+			try {
+				return await firestore.runTransaction(async (transaction) => {
+					const snapshot = await transaction.get(docRef);
+					if (!snapshot || !snapshot.exists) {
+						return false;
+					}
+
+					const current = sanitizeJob({ ...(snapshot.data() || {}), jobId: snapshot.id || jobId });
+					const nextJob = merge(current);
+					transaction.set(docRef, nextJob);
+					memoryJobs.set(jobId, cloneJob(nextJob));
+					return true;
+				});
+			} catch (error) {
+				console.warn('[JobRepository] Failed to persist callback status:', error.message);
+				return false;
+			}
+		}
+
+		const current = await this.get(jobId);
+		if (!current) {
+			return false;
+		}
+
+		await this.save(merge(current));
+		return true;
+	}
+
 	isDurable() {
 		return Boolean(this._getFirestore());
 	}
