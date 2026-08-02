@@ -115,6 +115,23 @@ describe('OpenAPI contract', () => {
 		});
 	});
 
+	it('documents idempotency conflicts for header-backed alert operations', () => {
+		if (!fs.existsSync(contractPath)) return;
+		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+		const expectedResponses = {
+			'/api/webhook/alert': 'IdempotencyConflict',
+			'/api/webhook/expanded-analysis-alert': 'IdempotencyConflict',
+			'/api/webhook/market-scanner-alert': 'IdempotencyConflict',
+			'/api/alerts/{alertId}/replay': 'IdempotencyConflict',
+		};
+
+		for (const [routePath, responseName] of Object.entries(expectedResponses)) {
+			expect(contract.paths[routePath].post.responses['409']).toEqual({
+				$ref: `#/components/responses/${responseName}`,
+			});
+		}
+	});
+
 	describe('Job schema alignment with JobService runtime', () => {
 		// The runtime terminal statuses are defined in JobService as:
 		// TERMINAL_JOB_STATUSES = new Set(['completed', 'failed', 'cancelled', 'timed_out'])

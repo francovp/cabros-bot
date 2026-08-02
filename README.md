@@ -796,6 +796,8 @@ When `callbackUrl` is configured, each callback POST includes:
 - `x-callback-delivery-id` - UUID unique to this HTTP delivery attempt; use it for deduplication.
 - `x-callback-signature` - included when `callbackSecret` or `JOB_CALLBACK_SIGNING_SECRET` is configured.
 
+Before each delivery attempt, hostname callback URLs are resolved with all current DNS answers. Any private answer blocks the callback (unless `ALLOW_PRIVATE_CALLBACKS=true`), and the connection is pinned to the validated answers so the subsequent fetch cannot perform a second hostname lookup and bypass the SSRF check. Redirects remain disabled with `redirect: 'error'`.
+
 Verify the signature with HMAC-SHA256 over this exact canonical string, using the shared secret and the raw JSON request body:
 
 ```text

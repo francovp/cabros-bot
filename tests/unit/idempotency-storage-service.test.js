@@ -133,4 +133,90 @@ describe('IdempotencyStorageService', () => {
 			headers: { 'content-type': 'application/json' },
 		}));
 	});
+
+	test('reserveEntry should protect live pending claims even when replay TTL has expired', async () => {
+		_resetForTesting();
+		process.env.ENABLE_FIRESTORE_IDEMPOTENCY = 'true';
+		process.env.FIREBASE_SERVICE_ACCOUNT_JSON = JSON.stringify({
+			project_id: 'test-project',
+			client_email: 'test@example.com',
+			private_key: '-----BEGIN PRIVATE KEY-----\nkey\n-----END PRIVATE KEY-----\n',
+		});
+
+		const nowMs = Date.now();
+		const mockData = {
+			state: 'pending',
+			payloadHash: 'hash123',
+			createdAt: { toMillis: () => nowMs - 5000 },
+			expiresAt: { toMillis: () => nowMs - 1000 }, // Expired replay TTL
+		};
+
+		const transactionMock = {
+			get: jest.fn().mockResolvedValue({
+				exists: true,
+				data: () => mockData,
+			}),
+			set: jest.fn(),
+		};
+
+		const docMock = jest.fn().mockReturnValue({});
+		const collectionMock = jest.fn().mockReturnValue({ doc: docMock });
+		const firestoreMock = {
+			collection: collectionMock,
+			runTransaction: jest.fn(async (cb) => cb(transactionMock)),
+		};
+
+		jest.spyOn(admin, 'firestore').mockReturnValue(firestoreMock);
+		admin.firestore.Timestamp = { fromMillis: (ms) => ({ toMillis: () => ms }) };
+		jest.spyOn(admin.credential, 'cert').mockReturnValue({});
+		jest.spyOn(admin, 'initializeApp').mockReturnValue({});
+
+		const result = await reserveEntry('test-key', 'hash123', 2000);
+
+		expect(result).toEqual({ state: 'pending', record: mockData });
+		expect(transactionMock.set).not.toHaveBeenCalled();
+	});
+
+	test('reserveEntry should overwrite expired completed records and stale pending claims', async () => {
+		_resetForTesting();
+		process.env.ENABLE_FIRESTORE_IDEMPOTENCY = 'true';
+		process.env.FIREBASE_SERVICE_ACCOUNT_JSON = JSON.stringify({
+			project_id: 'test-project',
+			client_email: 'test@example.com',
+			private_key: '-----BEGIN PRIVATE KEY-----\nkey\n-----END PRIVATE KEY-----\n',
+		});
+
+		const nowMs = Date.now();
+		const stalePendingData = {
+			state: 'pending',
+			payloadHash: 'hash123',
+			createdAt: { toMillis: () => nowMs - 200000 }, // Stale (> 180000ms)
+			expiresAt: { toMillis: () => nowMs + 10000 },
+		};
+
+		const transactionMock = {
+			get: jest.fn().mockResolvedValue({
+				exists: true,
+				data: () => stalePendingData,
+			}),
+			set: jest.fn(),
+		};
+
+		const docMock = jest.fn().mockReturnValue({});
+		const collectionMock = jest.fn().mockReturnValue({ doc: docMock });
+		const firestoreMock = {
+			collection: collectionMock,
+			runTransaction: jest.fn(async (cb) => cb(transactionMock)),
+		};
+
+		jest.spyOn(admin, 'firestore').mockReturnValue(firestoreMock);
+		admin.firestore.Timestamp = { fromMillis: (ms) => ({ toMillis: () => ms }) };
+		jest.spyOn(admin.credential, 'cert').mockReturnValue({});
+		jest.spyOn(admin, 'initializeApp').mockReturnValue({});
+
+		const result = await reserveEntry('test-key', 'hash123', 5000);
+
+		expect(result).toEqual({ state: 'fresh' });
+		expect(transactionMock.set).toHaveBeenCalled();
+	});
 });
