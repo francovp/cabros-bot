@@ -178,7 +178,7 @@ When `ENABLE_LLM_ALERT_ENRICHMENT=true`, the system can invoke an optional secon
 
 ### Key Entities
 
-- **NewsAlert**: Represents a detected market event with symbol, headline, sentiment score, confidence, sources, and formatted message. Includes event_category (price_surge, price_decline, public_figure, regulatory). When enrichment is applied, includes original_confidence, enriched_confidence, reasoning_excerpt, and recommended_action. For WhatsApp delivery, sources include shortened URLs (if a supported provider is available) or titles only (fallback).
+- **NewsAlert**: Represents a detected market event with symbol, headline, sentiment score, confidence, sources, and formatted message. Includes event_category (price_surge, price_decline, public_figure, regulatory). When enrichment is applied, includes original_confidence, enriched_confidence, reasoning_excerpt, and recommended_action. For WhatsApp delivery, sources include shortened URLs (if a supported provider is available) or original URLs when shortening fails.
 - **MarketContext**: Encapsulates price data (current, 24h change, volume) sourced from Binance or Gemini.
 - **CacheEntry**: In-memory record of analyzed news with timestamp and TTL for deduplication. Key is (symbol, event_category). When enrichment is enabled, also caches enrichment results to prevent redundant secondary LLM calls.
 - **AnalysisResult**: Container for per-symbol analysis output including alert, status, delivery results, totalDurationMs, cached flag, requestId, and optional enrichment metadata (when enrichment is enabled).
