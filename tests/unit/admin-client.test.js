@@ -391,6 +391,33 @@ describe('admin browser client', () => {
 		expect(listForm.textContent).not.toContain('hidden-secret');
 	});
 
+	it('clears stale recent jobs when a refresh fails', async () => {
+		let listAttempts = 0;
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				listAttempts++;
+				if (listAttempts === 1) {
+					return response({ success: true, jobs: [{
+						jobId: 'stale-job', type: 'expanded-analysis', status: 'completed', progress: {},
+					}] });
+				}
+				return response({ error: 'refresh failed' }, 500);
+			},
+		});
+		await flush();
+		await selectView(browser, 'jobs');
+
+		const listForm = findForm(browser.elementsById.view, 'Load recent jobs');
+		await listForm.dispatch('submit');
+		await flush();
+		expect(listForm.textContent).toContain('stale-job');
+
+		await listForm.dispatch('submit');
+		await flush();
+		expect(listForm.textContent).not.toContain('stale-job');
+	});
+
 	it('pre-fills the existing job status workflow when a recent job is selected', async () => {
 		const browser = createBrowser({
 			fetchImpl: async (url) => {

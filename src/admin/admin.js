@@ -343,6 +343,7 @@ const createJobListForm = (contract, onSelect) => {
 
 	form.addEventListener('submit', async (event) => {
 		event.preventDefault();
+		list.replaceChildren();
 		const query = Object.fromEntries(Object.entries({
 			limit: limit.value,
 			status: status.value,
