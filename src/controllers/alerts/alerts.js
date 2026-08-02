@@ -201,10 +201,24 @@ function summarizeAlerts(req, res) {
 			return res.status(400).json(to.error);
 		}
 
+		const enriched = parseEnriched(req.query.enriched);
+		if (enriched === null) {
+			return res.status(400).json({
+				error: 'Invalid enriched filter. Use true or false.',
+				code: 'INVALID_REQUEST',
+			});
+		}
+
+		const source = typeof req.query.source === 'string' && req.query.source.trim()
+			? req.query.source.trim()
+			: undefined;
+
 		const summary = await alertStorageService.summarizeAlerts({
 			from: from.value,
 			limit,
 			to: to.value,
+			source,
+			enriched,
 		});
 
 		let shadowModeMetrics = 'No measurements found';

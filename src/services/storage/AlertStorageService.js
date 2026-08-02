@@ -879,9 +879,11 @@ async function exportAlerts({ from, to, limit, source, enriched, includeText = f
  * @param {string|undefined} params.from ISO timestamp, defaults to 24h before to
  * @param {string|undefined} params.to ISO timestamp, defaults to now
  * @param {number|undefined} params.limit Maximum documents scanned, capped at 1000
+ * @param {string|undefined} params.source Optional exact source filter
+ * @param {boolean|undefined} params.enriched Optional enriched/plain filter
  * @returns {Promise<Object|null>}
  */
-async function summarizeAlerts({ from, to, limit } = {}) {
+async function summarizeAlerts({ from, to, limit, source, enriched } = {}) {
 	if (!isEnabled()) {
 		return null;
 	}
@@ -947,14 +949,20 @@ async function summarizeAlerts({ from, to, limit } = {}) {
 	const docs = snapshot && Array.isArray(snapshot.docs) ? snapshot.docs : [];
 	for (const doc of docs) {
 		const data = doc.data() || {};
-		const enriched = Boolean(data.enriched);
+		const alertEnriched = Boolean(data.enriched);
 		const useTradingViewData = Boolean(data.useTradingViewData);
+		if (!matchesFilters({
+			source: typeof data.source === 'string' ? data.source : null,
+			enriched: alertEnriched,
+		}, { source, enriched })) {
+			continue;
+		}
 
 		summary.totalAlerts += 1;
 		incrementCounter(summary.bySource, data.source);
 		incrementCounter(summary.bySymbol, extractAlertSymbol(data));
 
-		if (enriched) {
+		if (alertEnriched) {
 			summary.byFeatureFlag.enriched += 1;
 			summary.enrichment.enrichedAlerts += 1;
 			recordRiskMetadataCoverageByProvenance(summary.enrichment.riskMetadataCoverage, data.enrichmentData);

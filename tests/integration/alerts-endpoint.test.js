@@ -232,7 +232,7 @@ describe('Alerts API Integration Tests', () => {
 		});
 
 		const res = await request(app)
-			.get('/api/alerts/summary?from=2026-06-06T00:00:00.000Z&to=2026-06-07T00:00:00.000Z&limit=200')
+			.get('/api/alerts/summary?from=2026-06-06T00:00:00.000Z&to=2026-06-07T00:00:00.000Z&limit=200&source=webhook&enriched=true')
 			.set('x-api-key', 'test-key')
 			.expect(200);
 
@@ -240,6 +240,8 @@ describe('Alerts API Integration Tests', () => {
 			from: '2026-06-06T00:00:00.000Z',
 			limit: 200,
 			to: '2026-06-07T00:00:00.000Z',
+			source: 'webhook',
+			enriched: true,
 		});
 		expect(res.body).toEqual({
 			success: true,
