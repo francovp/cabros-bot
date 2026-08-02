@@ -2,6 +2,8 @@
 
 const { JobService } = require('../../src/services/jobs/JobService');
 
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 describe('queued job execution', () => {
 	it('claims a durable job before starting its domain work', async () => {
 		const job = {
@@ -32,6 +34,7 @@ describe('queued job execution', () => {
 			}),
 			job.requestMetadata,
 			null,
+			'worker-1',
 		);
 	});
 
@@ -61,5 +64,43 @@ describe('queued job execution', () => {
 		expect(service._triggerCallbackIfConfigured).toHaveBeenCalledWith(
 			expect.objectContaining({ jobId: 'job-123', status: 'failed' }),
 		);
+	});
+
+	it('renews a render-worker claim while processing a job', async () => {
+		const previousLeaseMs = process.env.JOB_QUEUE_CLAIM_LEASE_MS;
+		process.env.JOB_QUEUE_CLAIM_LEASE_MS = '20';
+		const job = {
+			jobId: 'job-123',
+			type: 'expanded-analysis',
+			status: 'processing',
+			execution: { mode: 'render-worker', status: 'claimed', workerId: 'worker-1' },
+			createdAt: new Date().toISOString(),
+		};
+		const repository = {
+			get: jest.fn().mockResolvedValue(job),
+			save: jest.fn().mockResolvedValue('job-123'),
+			renewClaim: jest.fn().mockResolvedValue(true),
+		};
+		const service = new JobService(repository);
+		let finishExecution;
+		service._executeExpandedAnalysis = jest.fn().mockReturnValue(new Promise((resolve) => {
+			finishExecution = resolve;
+		}));
+		service._triggerCallbackIfConfigured = jest.fn().mockResolvedValue(undefined);
+
+		try {
+			const runPromise = service._runBackgroundJob('job-123', {}, null, null, 'worker-1');
+			await delay(30);
+			expect(service._executeExpandedAnalysis).toHaveBeenCalled();
+			expect(repository.renewClaim).toHaveBeenCalledWith('job-123', 'worker-1');
+			finishExecution();
+			await runPromise;
+		} finally {
+			if (previousLeaseMs === undefined) {
+				delete process.env.JOB_QUEUE_CLAIM_LEASE_MS;
+			} else {
+				process.env.JOB_QUEUE_CLAIM_LEASE_MS = previousLeaseMs;
+			}
+		}
 	});
 });

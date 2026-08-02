@@ -378,6 +378,27 @@ describe('JobService Unit Tests', () => {
 			expect(job.status).toBe('cancelled');
 		});
 
+		it('does not overwrite a cancellation with stale worker completion', async () => {
+			const cancelledJob = {
+				jobId: 'cancelled-job',
+				status: 'cancelled',
+				execution: { mode: 'render-worker', status: 'cancelled' },
+			};
+			const repository = {
+				get: jest.fn().mockResolvedValue(cancelledJob),
+				save: jest.fn(),
+			};
+			const service = new JobService(repository);
+
+			await service._persistJob({
+				...cancelledJob,
+				status: 'completed',
+				execution: { mode: 'render-worker', status: 'completed' },
+			});
+
+			expect(repository.save).not.toHaveBeenCalled();
+		});
+
 		it('retries a failed/cancelled job and creates a new one with requestMetadata', async () => {
 			const metadata = await jobService.createJob('expanded-analysis', {
 				symbols: ['BINANCE:BTCUSDT'],
@@ -495,6 +516,32 @@ describe('JobService Unit Tests', () => {
 
 		afterEach(() => {
 			delete globalThis.fetch;
+		});
+
+		it('waits for callback deliveries already in flight', async () => {
+			let resolveCallback;
+			jobService._sendCallbackWithRetry = jest.fn(() => new Promise((resolve) => {
+				resolveCallback = resolve;
+			}));
+			const job = {
+				jobId: 'pending-callback',
+				status: 'completed',
+				callbackUrl: 'https://example.com/callback',
+				callbackEvents: ['completed'],
+				callbackStatus: { status: 'pending', attempts: [] },
+			};
+
+			await jobService._triggerCallbackIfConfigured(job);
+			let settled = false;
+			const wait = jobService.waitForCallbacks().then(() => {
+				settled = true;
+			});
+
+			await Promise.resolve();
+			expect(settled).toBe(false);
+			resolveCallback();
+			await wait;
+			expect(settled).toBe(true);
 		});
 
 		it('validates callbackUrl protocol and format', async () => {

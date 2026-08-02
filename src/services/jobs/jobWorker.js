@@ -59,6 +59,9 @@ async function startJobWorker({
 			}
 			stopped = true;
 			await queue.closeWorker(worker);
+			if (service && typeof service.waitForCallbacks === 'function') {
+				await service.waitForCallbacks();
+			}
 		},
 	};
 }

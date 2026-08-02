@@ -124,6 +124,56 @@ class JobRepository {
 		}
 	}
 
+	async renewClaim(jobId, workerId) {
+		if (!jobId || !workerId) {
+			return false;
+		}
+
+		const firestore = this._getFirestore();
+		if (!firestore || typeof firestore.runTransaction !== 'function') {
+			return false;
+		}
+
+		const docRef = firestore.collection(COLLECTION_NAME).doc(jobId);
+		const nowMs = Date.now();
+		const leaseMs = getClaimLeaseMs();
+
+		try {
+			return await firestore.runTransaction(async (transaction) => {
+				const snapshot = await transaction.get(docRef);
+				if (!snapshot || !snapshot.exists) {
+					return false;
+				}
+
+				const current = sanitizeJob({ ...(snapshot.data() || {}), jobId: snapshot.id || jobId });
+				const execution = current && current.execution ? current.execution : {};
+				if (
+					!current
+					|| TERMINAL_STATUSES.has(current.status)
+					|| !['claimed', 'running'].includes(execution.status)
+					|| execution.workerId !== workerId
+				) {
+					return false;
+				}
+
+				const nextJob = {
+					...current,
+					execution: {
+						...execution,
+						leaseUntil: new Date(nowMs + leaseMs).toISOString(),
+					},
+					updatedAt: new Date(nowMs).toISOString(),
+				};
+				transaction.set(docRef, nextJob);
+				memoryJobs.set(jobId, cloneJob(nextJob));
+				return true;
+			});
+		} catch (error) {
+			console.warn('[JobRepository] Failed to renew job claim:', error.message);
+			return false;
+		}
+	}
+
 	async releaseClaim(jobId, workerId, error) {
 		const job = await this.get(jobId);
 		if (!job || TERMINAL_STATUSES.has(job.status)) {

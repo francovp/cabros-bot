@@ -86,4 +86,36 @@ describe('JobRepository durable claims', () => {
 			{ required: true },
 		);
 	});
+
+	it('renews an active claim for its owning worker', async () => {
+		const oldLeaseUntil = new Date(Date.now() + 1000).toISOString();
+		const job = {
+			jobId: 'job-123',
+			status: 'processing',
+			execution: {
+				mode: 'render-worker',
+				status: 'running',
+				workerId: 'worker-1',
+				claimedAt: new Date().toISOString(),
+				leaseUntil: oldLeaseUntil,
+			},
+		};
+		const docRef = {};
+		const transaction = {
+			get: jest.fn().mockResolvedValue({ exists: true, id: job.jobId, data: () => job }),
+			set: jest.fn(),
+		};
+		const firestore = {
+			collection: jest.fn(() => ({ doc: jest.fn(() => docRef) })),
+			runTransaction: jest.fn(async callback => callback(transaction)),
+		};
+		const repository = new JobRepository();
+		repository._getFirestore = jest.fn(() => firestore);
+
+		await expect(repository.renewClaim('job-123', 'worker-1')).resolves.toBe(true);
+
+		const renewed = transaction.set.mock.calls[0][1];
+		expect(renewed.execution).toEqual(expect.objectContaining({ workerId: 'worker-1', status: 'running' }));
+		expect(Date.parse(renewed.execution.leaseUntil)).toBeGreaterThan(Date.parse(oldLeaseUntil));
+	});
 });

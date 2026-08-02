@@ -57,4 +57,23 @@ describe('job worker runtime', () => {
 		expect(service.releaseQueuedJob).toHaveBeenCalledWith('job-123', 'worker-1', retryError);
 		expect(service.failQueuedJob).toHaveBeenCalledWith('job-456', 'worker-1', finalError);
 	});
+
+	it('waits for pending callback deliveries before stopping', async () => {
+		const queue = {
+			isEnabled: () => true,
+			createWorker: jest.fn(() => ({ id: 'worker-1' })),
+			closeWorker: jest.fn().mockResolvedValue(undefined),
+		};
+		const service = {
+			processQueuedJob: jest.fn(),
+			releaseQueuedJob: jest.fn(),
+			waitForCallbacks: jest.fn().mockResolvedValue(undefined),
+		};
+
+		const runtime = await startJobWorker({ queue, service, workerId: 'worker-1' });
+		await runtime.stop();
+
+		expect(queue.closeWorker).toHaveBeenCalledTimes(1);
+		expect(service.waitForCallbacks).toHaveBeenCalledTimes(1);
+	});
 });

@@ -236,6 +236,7 @@ class JobService {
 		this.jobs = repository;
 		this.queue = queue;
 		this.activeControllers = new Map();
+		this.pendingCallbacks = new Set();
 	}
 
 	/**
@@ -656,7 +657,7 @@ class JobService {
 
 		const job = claim.job;
 		const parsed = this._parseQueuedJob(job);
-		await this._runBackgroundJob(jobId, parsed, job.requestMetadata, botOrGetter);
+		await this._runBackgroundJob(jobId, parsed, job.requestMetadata, botOrGetter, workerId);
 		return { skipped: false, jobId };
 	}
 
@@ -706,7 +707,7 @@ class JobService {
 	/**
 	 * Run the job in the background.
 	 */
-	async _runBackgroundJob(jobId, parsed, payload, botOrGetter) {
+	async _runBackgroundJob(jobId, parsed, payload, botOrGetter, workerId = null) {
 		const startTime = Date.now();
 		const job = await this.repository.get(jobId);
 		if (!job) return;
@@ -717,6 +718,25 @@ class JobService {
 		}
 		job.updatedAt = new Date().toISOString();
 		await this._persistJob(job);
+
+		let claimHeartbeat = null;
+		if (
+			workerId
+			&& job.execution
+			&& job.execution.mode === 'render-worker'
+			&& typeof this.repository.renewClaim === 'function'
+		) {
+			const configuredLeaseMs = Number(process.env.JOB_QUEUE_CLAIM_LEASE_MS);
+			const leaseMs = Number.isInteger(configuredLeaseMs) && configuredLeaseMs > 0
+				? configuredLeaseMs
+				: 60000;
+			const heartbeatMs = Math.max(1, Math.floor(leaseMs / 2));
+			claimHeartbeat = globalThis.setInterval(() => {
+				Promise.resolve(this.repository.renewClaim(jobId, workerId)).catch((error) => {
+					console.warn('[JobService] Failed to renew job claim:', error.message);
+				});
+			}, heartbeatMs);
+		}
 
 		// Setup Timeout AbortController
 		const timeoutMs = job.timeoutMs || DEFAULT_JOB_TIMEOUT_MS;
@@ -765,6 +785,9 @@ class JobService {
 			});
 		} finally {
 			clearTimeout(timeoutId);
+			if (claimHeartbeat) {
+				globalThis.clearInterval(claimHeartbeat);
+			}
 			this.activeControllers.delete(jobId);
 
 			const finalJob = await this.repository.get(jobId);
@@ -1036,7 +1059,7 @@ class JobService {
 	async _persistJob(job) {
 		const current = await this.repository.get(job.jobId);
 		if (current) {
-			if (TERMINAL_JOB_STATUSES.has(current.status) && job.status === 'processing') {
+			if (TERMINAL_JOB_STATUSES.has(current.status) && current.status !== job.status) {
 				return;
 			}
 		}
@@ -1360,9 +1383,17 @@ class JobService {
 		}
 
 		// Execute the callback in the background
-		this._sendCallbackWithRetry(job).catch((err) => {
+		const callbackPromise = this._sendCallbackWithRetry(job).catch((err) => {
 			console.error(`[JobService] Callback for job ${job.jobId} failed:`, err.message);
 		});
+		this.pendingCallbacks.add(callbackPromise);
+		callbackPromise.then(() => this.pendingCallbacks.delete(callbackPromise));
+	}
+
+	async waitForCallbacks() {
+		while (this.pendingCallbacks.size > 0) {
+			await Promise.all([...this.pendingCallbacks]);
+		}
 	}
 
 	_hasSuccessfulCallbackForEvent(job, event) {
