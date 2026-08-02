@@ -2167,7 +2167,7 @@
             "$ref": "#/components/schemas/JsonObject"
           },
           "shadowModeMetrics": {
-            "description": "When an object, includes exchangeBreakdown and providerBreakdown coverage buckets with received, eligible, evaluated, pending, and unavailable counts. Equity providers remain opt-in and fail open.",
+            "description": "When an object, includes exchangeBreakdown and providerBreakdown coverage buckets with received, eligible, evaluated, pending, and unavailable counts. Equity providers remain opt-in and fail open. This field is omitted when source or enriched filters are supplied because shadow-mode metrics do not support those filters.",
             "oneOf": [
               {
                 "$ref": "#/components/schemas/JsonObject"

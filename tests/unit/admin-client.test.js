@@ -109,9 +109,14 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '' }) {
 	});
 
 	const documentListeners = {};
+	const downloads = [];
 	const document = {
 		body,
-		createElement: (tag) => new FakeElement(tag),
+		createElement: (tag) => {
+			const node = new FakeElement(tag);
+			if (tag === 'a') node.click = () => downloads.push({ href: node.href, download: node.download });
+			return node;
+		},
 		getElementById: (id) => elementsById[id],
 		querySelectorAll: (selector) => body.querySelectorAll(selector),
 		addEventListener: (type, listener) => { documentListeners[type] = listener; },
@@ -134,7 +139,14 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '' }) {
 			setItem: (key, value) => storage.set(key, value),
 			removeItem: (key) => storage.delete(key),
 		},
-		window: { CabrosAdminRequest: helper, confirm },
+		window: {
+			CabrosAdminRequest: helper,
+			confirm,
+			URL: {
+				createObjectURL: jest.fn((blob) => `blob:${blob.type}`),
+				revokeObjectURL: jest.fn(),
+			},
+		},
 	};
 	vm.runInNewContext(
 		fs.readFileSync(path.join(__dirname, '../../src/admin/admin.js'), 'utf8'),
@@ -142,7 +154,7 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '' }) {
 	);
 	documentListeners.DOMContentLoaded();
 
-	return { body, context, elementsById, helperCalls, storage };
+	return { body, context, elementsById, helperCalls, storage, downloads };
 }
 
 async function selectView(browser, name) {
@@ -296,6 +308,137 @@ describe('admin browser client', () => {
 		await findButton(listForm, 'Next page').dispatch('click');
 		await flush();
 		expect(requests.at(-1)[0]).toBe('/api/alerts?limit=10&before=cursor-2&source=webhook');
+	});
+
+	it('renders dedicated alert analytics and export forms with safe defaults', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {}),
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const summaryForm = findForm(browser.elementsById.view, 'GET /api/alerts/summary');
+		const exportForm = findForm(browser.elementsById.view, 'GET /api/alerts/export');
+		expect(summaryForm).toBeDefined();
+		expect(exportForm).toBeDefined();
+		expect(exportForm.elements.from.required).toBe(true);
+		expect(exportForm.elements.to.required).toBe(true);
+		expect(exportForm.elements.includeText.checked).toBe(false);
+	});
+
+	it('builds the analytics query and renders summary data from the API response', async () => {
+		const requests = [];
+		const browser = createBrowser({
+			fetchImpl: async (url, options) => {
+				if (url === '/openapi.json') return response(contract);
+				requests.push([url, options]);
+				return response({
+					success: true,
+					summary: { totalAlerts: 3, totalSuccess: 2, byChannel: { telegram: 3 } },
+				});
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const summaryForm = findForm(browser.elementsById.view, 'GET /api/alerts/summary');
+		summaryForm.elements.from.value = '2026-08-01T00:00:00Z';
+		summaryForm.elements.to.value = '2026-08-02T00:00:00Z';
+		summaryForm.elements.limit.value = '25';
+		summaryForm.elements.source.value = 'webhook';
+		summaryForm.elements.enriched.value = 'true';
+		await summaryForm.dispatch('submit');
+		await flush();
+
+		const query = new URLSearchParams(requests[0][0].split('?')[1]);
+		expect(query.get('from')).toBe('2026-08-01T00:00:00.000Z');
+		expect(query.get('to')).toBe('2026-08-02T00:00:00.000Z');
+		expect(query.get('limit')).toBe('25');
+		expect(query.get('source')).toBe('webhook');
+		expect(query.get('enriched')).toBe('true');
+		expect(summaryForm.textContent).toContain('totalAlerts: 3');
+		expect(summaryForm.textContent).toContain('totalSuccess: 2');
+		expect(summaryForm.textContent).toContain('telegram: 3');
+	});
+
+	it.each([
+		['jsonl', 'application/x-ndjson'],
+		['csv', 'text/csv'],
+	])('downloads %s exports with the response content type and no raw text by default', async (format, contentType) => {
+		const requests = [];
+		const browser = createBrowser({
+			fetchImpl: async (url, options) => {
+				if (url === '/openapi.json') return response(contract);
+				requests.push([url, options]);
+				return {
+					ok: true,
+					status: 200,
+					headers: { get: (name) => name === 'content-type' ? contentType : null },
+					blob: async () => ({ type: contentType }),
+					text: async () => 'unused export body',
+				};
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		browser.elementsById['api-key'].value = 'session-secret';
+		const exportForm = findForm(browser.elementsById.view, 'GET /api/alerts/export');
+		exportForm.elements.from.value = '2026-08-01T00:00:00Z';
+		exportForm.elements.to.value = '2026-08-02T00:00:00Z';
+		exportForm.elements.format.value = format;
+		await exportForm.dispatch('submit');
+		await flush();
+
+		const query = new URLSearchParams(requests[0][0].split('?')[1]);
+		expect(query.get('from')).toBe('2026-08-01T00:00:00.000Z');
+		expect(query.get('to')).toBe('2026-08-02T00:00:00.000Z');
+		expect(query.get('format')).toBe(format);
+		expect(query.get('includeText')).toBe('false');
+		expect(requests[0][1].headers['x-api-key']).toBe('session-secret');
+		expect(requests[0][0]).not.toContain('session-secret');
+		expect(browser.downloads[0].download).toBe(`alerts-export.${format}`);
+		expect(browser.downloads[0].download).not.toContain('session-secret');
+		expect(browser.context.window.URL.createObjectURL).toHaveBeenCalledWith({ type: contentType });
+		expect(exportForm.textContent).toContain(contentType);
+		expect(exportForm.textContent).not.toContain('session-secret');
+
+		exportForm.elements.includeText.checked = true;
+		await exportForm.dispatch('submit');
+		await flush();
+		const optInQuery = new URLSearchParams(requests.at(-1)[0].split('?')[1]);
+		expect(optInQuery.get('includeText')).toBe('true');
+	});
+
+	it('shows bounded-export validation and protected API errors without downloading', async () => {
+		const requests = [];
+		const browser = createBrowser({
+			fetchImpl: async (url, options) => {
+				if (url === '/openapi.json') return response(contract);
+				requests.push([url, options]);
+				return response({ error: 'storage unavailable', code: 'STORAGE_UNAVAILABLE' }, 503);
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const exportForm = findForm(browser.elementsById.view, 'GET /api/alerts/export');
+		exportForm.elements.from.value = '';
+		await exportForm.dispatch('submit');
+		await flush();
+		expect(requests).toHaveLength(0);
+		const exportOutput = find(exportForm, (node) => node.tagName === 'PRE');
+		expect(exportOutput.className).toContain('response-error');
+		expect(exportOutput.textContent).toContain('From and To are required');
+
+		const summaryForm = findForm(browser.elementsById.view, 'GET /api/alerts/summary');
+		await summaryForm.dispatch('submit');
+		await flush();
+		expect(requests).toHaveLength(1);
+		const summaryOutput = find(summaryForm, (node) => node.tagName === 'PRE');
+		expect(summaryOutput.className).toContain('response-error');
+		expect(summaryOutput.textContent).toContain('HTTP 503');
+		expect(summaryOutput.textContent).toContain('STORAGE_UNAVAILABLE');
 	});
 
 	it('renders dedicated alert detail lookup', async () => {
