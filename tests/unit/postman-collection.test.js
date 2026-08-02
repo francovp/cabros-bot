@@ -41,6 +41,25 @@ describe('Postman collection contract', () => {
 		expect(findHeader(marketScanner, 'x-idempotency-key').value).toBe('market-scanner-key-1');
 	});
 
+	it('uses distinct demo keys for async-job x-header requests', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const requestNames = [
+			'POST Create TradingView Analysis Job',
+			'POST Create Market Scanner Job',
+			'POST Retry Job',
+			'POST Retry Failed Job',
+		];
+		const values = requestNames.map((name) => findHeader(findItem(collection.item, name), 'x-idempotency-key').value);
+
+		expect(values).toEqual([
+			'job-create-key-1',
+			'job-scanner-key-1',
+			'job-retry-key-1',
+			'job-retry-failed-key-1',
+		]);
+		expect(new Set(values).size).toBe(values.length);
+	});
+
 	it('keeps cached delivery metrics in the x-header replay example', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const sendMessage = findItem(collection.item, 'POST Send Message (x-idempotency-key header)');
