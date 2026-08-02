@@ -45,6 +45,12 @@
           },
           {
             "$ref": "#/components/parameters/UseTradingViewData"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKeyHeader"
+          },
+          {
+            "$ref": "#/components/parameters/XIdempotencyKeyHeader"
           }
         ],
         "requestBody": {
