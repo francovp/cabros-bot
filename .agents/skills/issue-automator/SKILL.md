@@ -73,10 +73,9 @@ A claimed issue is a **zero-work skip**: outcome `CLAIMED`, the issue number is 
 **Required environment variables** (set them in the session prompt / cron invocation):
 - `CLAIM_AGENT_ID` — the agent identity (e.g., `codex`, `antigravity`, `opencode`). REQUIRED for meaningful coordination; without it claims cannot be attributed to a session.
 - `CLAIM_SESSION_ID` — the session identity. Optional: export it explicitly (`export CLAIM_SESSION_ID="$(uuidgen)"` or similar) when the same session continues across separate shells; the script uses it verbatim.
-- `CLAIM_RUN_ID` — per-run identity, optional. When set (and `CLAIM_SESSION_ID` is not), the script generates a session ID once, persists it to a run-scoped file (see `CLAIM_SESSION_REUSE_MINUTES` / `CLAIM_SESSION_STATE_DIR`), and reuses it so the Step 1 claim and the Step 2 re-check of the SAME run share the identity. When neither is set, each invocation gets a fresh per-invocation session ID with no shared persistence — concurrent unnamespaced runs must not share a claim.
+- `CLAIM_RUN_ID` — per-run identity, optional. When set (and `CLAIM_SESSION_ID` is not), the script generates a session ID once, persists it to a run-scoped file (see `CLAIM_SESSION_STATE_DIR`), and reuses it **for the whole run — with no wall-clock expiry** so the Step 1 claim and every Step 2/Nth re-check of the SAME run share the identity even when the run outlives 30 minutes (an expiry would mint a fresh ID on the re-check, see that Step 1 claim as a foreign session, and `RESULT=SKIP`, abandoning the run to its TTL). Use a **fresh** `CLAIM_RUN_ID` per run (e.g. the run/cron timestamp) because it is the run's coordination namespace. When neither is set, each invocation gets a fresh per-invocation session ID with no shared persistence — concurrent unnamespaced runs must not share a claim.
 - `CLAIM_TTL_MINUTES` — claim freshness window in minutes (default `180`). A claim older than this may be taken over by any agent.
-- `CLAIM_SESSION_REUSE_MINUTES` — reuse window in minutes (default `30`) for the persisted run-scoped session ID; past it, a fresh session ID is generated.
-- `CLAIM_SESSION_STATE_DIR` — directory for the persisted run-scoped session ID (default `${TMPDIR:-/tmp}`; one file per repository+agent+run).
+- `CLAIM_SESSION_STATE_DIR` — directory for the persisted run-scoped session ID (default `${TMPDIR:-/tmp}`; one file per repository+agent+run; the file persists until overwritten by a fresh `CLAIM_RUN_ID`; it is never expiry-pruned).
 
 **Rules**
 - Never start code, Linear, or PR work on an issue this session does not own (claim script exit `0` required).
@@ -210,11 +209,18 @@ Follow these steps in strict chronological order to automate issue resolution:
 
 Track a `SKIPPED_ISSUES` list (comma-separated issue numbers) across the skip loop: every skip outcome appends the processed issue number so the cursor never revisits it. A single-exclusion cursor is not enough — if only the last issue is excluded, two adjacent skipped issues alternate forever.
 
-**Release a claim on a no-write terminal exit**: The Step 1/Step 2 `claim-issue.sh` call adds an `agent-working` label to the issue. If this session then ends the issue through a no-write terminal outcome (`IN_REVIEW` with no agent writes, `LOCAL_DEADLOCK`, `NEEDS_USER`, `AMBIGUOUS`, or `SYNCED` for Canceled/Duplicate issues), that freshly-acquired label is now stale and would hold the issue claimed until `CLAIM_TTL_MINUTES` expires — blocking later automator runs from picking it up. Therefore, when this session routed to any of those no-write terminal paths *and* it acquired the claim for the issue (the Step 1 or Step 2 call returned `RESULT=CLAIMED` or `RESULT=TAKEOVER`), it MUST remove the `agent-working` label it added:
+**Release a claim on a no-write terminal exit**: The Step 1/Step 2 `claim-issue.sh` call adds an `agent-working` label to the issue. If this session then ends the issue through a no-write terminal outcome (`IN_REVIEW` with no agent writes, `LOCAL_DEADLOCK`, `NEEDS_USER`, `AMBIGUOUS`, or `SYNCED` for Canceled/Duplicate issues), the `agent-working` label would otherwise hold the issue claimed until `CLAIM_TTL_MINUTES` expires — blocking later automator runs from picking it up. Before removing the label this session MUST **reconfirm ownership at the moment of release**, because a run can outlive the TTL since its earlier claim: another session may have taken over the stale claim in between, and removing the label would delete that new owner's live claim and cause duplicate work. Reconfirm by re-running the claim script with the **same session identity** this run used:
 ```bash
-gh issue edit <ISSUE_NUMBER> --remove-label "agent-working"
+scripts/claim-issue.sh <ISSUE_NUMBER>
 ```
-Only remove the label when the session itself owns the claim for this run. The queue's own `RESULT=SKIP` path (another session's active claim) never triggers this removal and its label is always left untouched — releasing another session's live claim would cause duplicate work.
+- If it returns exit `0` / `RESULT=CLAIMED` (or `RESULT=TAKEOVER`), this session still owns a fresh claim — remove the `agent-working` label it added:
+  ```bash
+  gh issue edit <ISSUE_NUMBER> --remove-label "agent-working"
+  ```
+- If it returns `RESULT=SKIP` (exit `2`), another session now owns a fresh claim — **do NOT remove the label** (releasing another session's live claim would cause duplicate work; the re-claim renewed the other owner, never ours).
+- If `RESULT=ERROR` (exit `1`), do not remove the label and treat it like a tooling failure (see Error Handling).
+
+Never remove the label when this session does not own the claim for this run. The queue's own zero-work `RESULT=SKIP` path (a foreign `agent-working` claim at Step 1) never triggers this release and left it untouched.
 
 1. If `LOCAL_DEADLOCK`: Write a concise blocker summary on the issue or PR. Append the issue number to `SKIPPED_ISSUES`. Sync GitHub, Linear, and PR states.
 2. **If the issue has a merged PR**: Clean up stale `agent-working` labels (issue + PR), sync Linear to `Shipped`, and end with outcome `SHIPPED` (same handling as Step 1).

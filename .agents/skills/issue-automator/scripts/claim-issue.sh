@@ -35,17 +35,20 @@
 #   CLAIM_RUN_ID       per-run identity; optional. When set (and
 #                      CLAIM_SESSION_ID is not), the script generates a session
 #                      ID once, persists it to a run-scoped file, and reuses it
-#                      within CLAIM_SESSION_REUSE_MINUTES so the Step 1 claim
-#                      and the Step 2 re-check of the SAME run share the
-#                      identity (e.g. set it to the run/cron timestamp).
-#                      When neither is set, a fresh per-invocation session ID is
-#                      used with NO shared persistence — concurrent unnamespaced
-#                      runs must not share a claim (duplicate-work risk).
+#                      verbatim for the WHOLE run — there is NO wall-clock reuse
+#                      window because the Step 1 claim and any later Step 2 / Nth
+#                      re-check of the SAME run must share the identity even when
+#                      the run outlives 30 minutes (an expiry would make the
+#                      re-check mint a fresh ID, see its own Step 1 claim as a
+#                      foreign session, and RESULT=SKIP, abandoning the issue to
+#                      its TTL). Each run MUST use a fresh CLAIM_RUN_ID (e.g. set
+#                      it to the run/cron timestamp) because it is the run's
+#                      coordination namespace. When neither is set, a fresh
+#                      per-invocation session ID is used with NO shared
+#                      persistence — concurrent unnamespaced runs must not share
+#                      a claim (duplicate-work risk).
 #   CLAIM_TTL_MINUTES  claim freshness window (default: 180). A claim older
 #                      than this may be taken over by any agent.
-#   CLAIM_SESSION_REUSE_MINUTES  how long the persisted run-scoped session ID
-#                      stays reusable (default: 30; must be shorter than the
-#                      typical gap between runs so fresh runs get fresh IDs).
 #   CLAIM_SESSION_STATE_DIR  directory for the persisted run-scoped session ID
 #                      (default: ${TMPDIR:-/tmp}).
 #
@@ -95,10 +98,15 @@ fi
 
 # Resolve the session identity. Three modes:
 #   - CLAIM_SESSION_ID set      -> use it verbatim (caller owns reuse across steps).
-#   - CLAIM_RUN_ID set          -> reuse a persisted auto-generated ID within the
-#                                  reuse window so the Step 1 claim and Step 2
-#                                  re-check of the SAME run share it; the ID file
-#                                  is namespaced by the run id.
+#   - CLAIM_RUN_ID set          -> reuse a persisted auto-generated ID for the WHOLE
+#                                  run (no expiry) so the Step 1 claim and every Step 2
+#                                  / Nth re-check of the SAME run share it; the ID file
+#                                  is namespaced by the run id. Treating a shared
+#                                  CLAIM_RUN_ID as shared ownership is deliberate: a
+#                                  stale persisted ID that outlives any reuse window must
+#                                  still be reused or a long running Step 2 would mint a
+#                                  fresh ID, see its own Step 1 claim as foreign, and
+#                                  RESULT=SKIP (abandoning the run to the TTL).
 #   - neither set               -> fresh per-invocation ID, no shared persistence,
 #                                  because without a caller-supplied namespace we
 #                                  cannot tell two concurrent runs of the same
@@ -127,16 +135,14 @@ SESSION_ID=""
 if [ -n "${CLAIM_SESSION_ID:-}" ]; then
   SESSION_ID="$CLAIM_SESSION_ID"
 elif [ -n "${CLAIM_RUN_ID:-}" ]; then
-  REUSE_MINUTES="${CLAIM_SESSION_REUSE_MINUTES:-30}"
   STATE_DIR="${CLAIM_SESSION_STATE_DIR:-${TMPDIR:-/tmp}}"
   STATE_FILE="${STATE_DIR}/cabros-claim-session-$(printf '%s' "$REPO" | tr '/:' '-')-${AGENT_ID}-${CLAIM_RUN_ID}"
+  # The run-scoped ID is stable for the WHOLE run, no expiry. A time-based reuse
+  # window would mint a fresh ID for a Step 2 re-check that outlives ~30 min, which
+  # would then see the Step 1 claim as a foreign session and RESULT=SKIP (the bug
+  # the mtime window introduced). Only a genuinely missing/empty file gets a mint.
   if [ -f "$STATE_FILE" ]; then
-    # Portable mtime: macOS `stat -f %m`, GNU `stat -c %Y`.
-    saved_epoch="$(stat -f %m "$STATE_FILE" 2>/dev/null || stat -c %Y "$STATE_FILE" 2>/dev/null || echo 0)"
-    now_epoch="$(date +%s)"
-    if [ -n "$saved_epoch" ] && [ $(( now_epoch - saved_epoch )) -lt $(( REUSE_MINUTES * 60 )) ]; then
-      SESSION_ID="$(cat "$STATE_FILE" 2>/dev/null || true)"
-    fi
+    SESSION_ID="$(cat "$STATE_FILE" 2>/dev/null || true)"
   fi
   if [ -z "$SESSION_ID" ]; then
     SESSION_ID="$(gen_session_id)"
