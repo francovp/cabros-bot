@@ -549,6 +549,23 @@ function getDocCursorValues(doc) {
 	};
 }
 
+function getRawDocCursorValues(doc) {
+	if (!doc || typeof doc.data !== 'function') {
+		return null;
+	}
+
+	const data = doc.data() || {};
+	if (!data.receivedAt || typeof data.receivedAt.toDate !== 'function'
+		|| typeof doc.id !== 'string' || !doc.id) {
+		return null;
+	}
+
+	return {
+		receivedAt: data.receivedAt,
+		documentId: doc.id,
+	};
+}
+
 /**
  * Initialize Firebase Admin (idempotent) and return Firestore client.
  * Returns null when the feature is disabled or initialization fails.
@@ -844,24 +861,58 @@ async function exportAlerts({ from, to, limit, source, enriched, includeText = f
 	}
 
 	const window = buildExportWindow({ from, to, limit });
-	let snapshot;
-	try {
-		snapshot = await firestore
+	const hasFilters = typeof source === 'string' || typeof enriched === 'boolean';
+	const docs = [];
+	let pageCursor = null;
+	while (true) {
+		let query = firestore
 			.collection(COLLECTION_NAME)
 			.where('receivedAt', '>=', admin.firestore.Timestamp.fromDate(new Date(window.from)))
 			.where('receivedAt', '<=', admin.firestore.Timestamp.fromDate(new Date(window.to)))
-			.orderBy('receivedAt', 'desc')
-			.limit(window.limit)
-			.get();
-	} catch (error) {
-		console.warn('[AlertStorageService] Failed to export alerts from Firestore:', error.message);
-		throw createStorageUnavailableError(error);
+			.orderBy('receivedAt', 'desc');
+
+		if (hasFilters) {
+			query = query.orderBy(admin.firestore.FieldPath.documentId(), 'desc');
+			if (pageCursor) {
+				query = query.startAfter(pageCursor.receivedAt, pageCursor.documentId);
+			}
+		}
+		query = query.limit(window.limit);
+
+		let snapshot;
+		try {
+			snapshot = await query.get();
+		} catch (error) {
+			console.warn('[AlertStorageService] Failed to export alerts from Firestore:', error.message);
+			throw createStorageUnavailableError(error);
+		}
+
+		if (!snapshot || !Array.isArray(snapshot.docs) || snapshot.docs.length === 0) {
+			break;
+		}
+
+		const matchingDocs = hasFilters
+			? snapshot.docs.filter((doc) => {
+				const data = doc.data() || {};
+				return matchesFilters({
+					source: typeof data.source === 'string' ? data.source : null,
+					enriched: Boolean(data.enriched),
+				}, { source, enriched });
+			})
+			: snapshot.docs;
+		docs.push(...matchingDocs.slice(0, window.limit - docs.length));
+
+		if (!hasFilters || docs.length >= window.limit || snapshot.docs.length < window.limit) {
+			break;
+		}
+
+		pageCursor = getRawDocCursorValues(snapshot.docs[snapshot.docs.length - 1]);
+		if (!pageCursor) {
+			break;
+		}
 	}
 
-	const docs = snapshot && Array.isArray(snapshot.docs) ? snapshot.docs : [];
-	const alerts = docs
-		.map(doc => formatExportRecord(doc, { includeText }))
-		.filter(alert => matchesFilters(alert, { source, enriched }));
+	const alerts = docs.map(doc => formatExportRecord(doc, { includeText }));
 
 	return {
 		window,
@@ -878,10 +929,12 @@ async function exportAlerts({ from, to, limit, source, enriched, includeText = f
  * @param {Object} params
  * @param {string|undefined} params.from ISO timestamp, defaults to 24h before to
  * @param {string|undefined} params.to ISO timestamp, defaults to now
- * @param {number|undefined} params.limit Maximum documents scanned, capped at 1000
+ * @param {number|undefined} params.limit Maximum matching documents aggregated, capped at 1000
+ * @param {string|undefined} params.source Optional exact source filter
+ * @param {boolean|undefined} params.enriched Optional enriched/plain filter
  * @returns {Promise<Object|null>}
  */
-async function summarizeAlerts({ from, to, limit } = {}) {
+async function summarizeAlerts({ from, to, limit, source, enriched } = {}) {
 	if (!isEnabled()) {
 		return null;
 	}
@@ -892,18 +945,57 @@ async function summarizeAlerts({ from, to, limit } = {}) {
 	}
 
 	const window = buildSummaryWindow({ from, to, limit });
-	let snapshot;
-	try {
-		snapshot = await firestore
+	const hasFilters = typeof source === 'string' || typeof enriched === 'boolean';
+	const docs = [];
+	let pageCursor = null;
+	while (true) {
+		let query = firestore
 			.collection(COLLECTION_NAME)
 			.where('receivedAt', '>=', admin.firestore.Timestamp.fromDate(new Date(window.from)))
 			.where('receivedAt', '<=', admin.firestore.Timestamp.fromDate(new Date(window.to)))
-			.orderBy('receivedAt', 'desc')
-			.limit(window.limit)
-			.get();
-	} catch (error) {
-		console.warn('[AlertStorageService] Failed to summarize alerts from Firestore:', error.message);
-		throw createStorageUnavailableError(error);
+			.orderBy('receivedAt', 'desc');
+
+		if (hasFilters) {
+			query = query.orderBy(admin.firestore.FieldPath.documentId(), 'desc');
+			if (pageCursor) {
+				query = query.startAfter(pageCursor.receivedAt, pageCursor.documentId);
+			}
+		}
+		query = query.limit(window.limit);
+
+		let snapshot;
+		try {
+			snapshot = await query.get();
+		} catch (error) {
+			console.warn('[AlertStorageService] Failed to summarize alerts from Firestore:', error.message);
+			throw createStorageUnavailableError(error);
+		}
+
+		if (!snapshot || !Array.isArray(snapshot.docs) || snapshot.docs.length === 0) {
+			break;
+		}
+
+		if (hasFilters) {
+			const matchingDocs = snapshot.docs.filter((doc) => {
+				const data = doc.data() || {};
+				return matchesFilters({
+					source: typeof data.source === 'string' ? data.source : null,
+					enriched: Boolean(data.enriched),
+				}, { source, enriched });
+			});
+			docs.push(...matchingDocs.slice(0, window.limit - docs.length));
+		} else {
+			docs.push(...snapshot.docs);
+		}
+
+		if (!hasFilters || docs.length >= window.limit || snapshot.docs.length < window.limit) {
+			break;
+		}
+
+		pageCursor = getRawDocCursorValues(snapshot.docs[snapshot.docs.length - 1]);
+		if (!pageCursor) {
+			break;
+		}
 	}
 
 	const summary = {
@@ -944,17 +1036,16 @@ async function summarizeAlerts({ from, to, limit } = {}) {
 	const processingLatencySamples = [];
 	const deliveryLatencySamples = [];
 
-	const docs = snapshot && Array.isArray(snapshot.docs) ? snapshot.docs : [];
 	for (const doc of docs) {
 		const data = doc.data() || {};
-		const enriched = Boolean(data.enriched);
+		const alertEnriched = Boolean(data.enriched);
 		const useTradingViewData = Boolean(data.useTradingViewData);
 
 		summary.totalAlerts += 1;
 		incrementCounter(summary.bySource, data.source);
 		incrementCounter(summary.bySymbol, extractAlertSymbol(data));
 
-		if (enriched) {
+		if (alertEnriched) {
 			summary.byFeatureFlag.enriched += 1;
 			summary.enrichment.enrichedAlerts += 1;
 			recordRiskMetadataCoverageByProvenance(summary.enrichment.riskMetadataCoverage, data.enrichmentData);

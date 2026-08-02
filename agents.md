@@ -41,6 +41,8 @@ This project is a small Express + Telegraf (Telegram) bot service that exposes a
 - `src/services/notification/requestRouting.js` — Shared optional channel-routing validator/dispatcher for alert-producing routes (`channels`, `telegramChatId`, `whatsappChatId`) that preserves legacy broadcast behavior when `channels` is omitted.
 - `src/controllers/alerts/alerts.js` — Stored alert read, export, analytics, and replay handlers for `GET /api/alerts`, `GET /api/alerts/export`, `GET /api/alerts/summary`, `GET /api/alerts/:alertId`, and `POST /api/alerts/:alertId/replay`.
 - `src/controllers/status.js` — Status handler that computes capabilities, feature flags, notification channels, and active dependencies status.
+- `src/services/storage/SignalOutcomeService.js` — Records and evaluates signal outcomes, schedules the role-gated evaluator, and persists safe worker heartbeats.
+- `src/workers/signalOutcomeWorker.js` — Dedicated Render worker bootstrap with SIGTERM drain handling.
 - `src/controllers/webhooks/handlers/marketScanner/marketScanner.js` — Scanner webhook handler executing sequential gainers, losers, and breakouts scanner runs on TradingView MCP.
 - `src/services/jobs/JobService.js` — Manages job state, executes background TradingView analysis runs, and performs periodic expiration cleanup.
 - `src/services/jobs/JobQueue.js` / `src/services/jobs/jobWorker.js` — BullMQ producer/worker integration for the optional Render worker execution mode.
@@ -145,7 +147,7 @@ Implement the following security practices to safeguard endpoints and credential
 ## Environment and runtime behavior (discoverable)
 - NODE version: `20.x` (see `package.json` engines).
 - Required env vars: `BOT_TOKEN` (throws if missing; even when Telegram bot is disabled).
-- Optional but relevant (non-exhaustive; see feature sections below for full config): `ENABLE_TELEGRAM_BOT`, `PORT`, `TELEGRAM_CHAT_ID`, `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID`, `ENABLE_WHATSAPP_ALERTS`, `ENABLE_GEMINI_GROUNDING`, `GEMINI_API_KEY`, `ENABLE_LANGFUSE_PROMPTS`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL`, `LANGFUSE_PROMPT_LABEL`, `LANGFUSE_PROMPT_CACHE_TTL_SECONDS`, `BRAVE_SEARCH_API_KEY`, `BRAVE_SEARCH_ENDPOINT`, `FORCE_BRAVE_SEARCH`, `MODEL_PROVIDER`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `ENABLE_NEWS_MONITOR`, `EXPANDED_ANALYSIS_ALERT_SYMBOLS`, `EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS`, `TRADINGVIEW_MCP_URL`, `TRADINGVIEW_MCP_TIMEOUT_MS`, `TRADINGVIEW_MCP_MAX_RETRIES`, `TRADINGVIEW_MCP_DEFAULT_TIMEFRAME`, `ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION`, `ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT`, `ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME`, `ENABLE_SENTRY`, `SENTRY_DSN`, `SENTRY_TRACES_SAMPLE_RATE`, `SENTRY_PROFILE_SESSION_SAMPLE_RATE`, `SENTRY_CONSOLE_LOG_LEVELS`, `ENABLE_SENTRY_DEBUG_ROUTE`, `LOG_LEVEL`, `SERVICE_NAME`, `TRUST_PROXY`, `RATE_LIMIT_WINDOW_MS`, `RATE_LIMIT_MAX`, `ENABLE_FIRESTORE_ALERT_STORAGE`, `ENABLE_FIRESTORE_SCANNER_PRESETS`, `ENABLE_FIRESTORE_IDEMPOTENCY`, `ENABLE_SIGNAL_OUTCOME_TRACKING`, `ENABLE_SHADOW_MODE_OUTCOME_TRACKING` (legacy alias), `SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS`, `SIGNAL_OUTCOME_EVALUATION_BATCH_LIMIT`, `SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS`, `ENABLE_MARKET_SCANNER`, `ENABLE_MESSAGE_FOOTER_METADATA`, `FIREBASE_PROJECT_ID`, `FIREBASE_SERVICE_ACCOUNT_JSON`, `GOOGLE_APPLICATION_CREDENTIALS`, `GEMINI_MODEL_NAME_FALLBACK`, `RENDER`, `IS_PULL_REQUEST`, `RENDER_GIT_COMMIT`, `RENDER_GIT_REPO_SLUG`.
+- Optional but relevant (non-exhaustive; see feature sections below for full config): `ENABLE_TELEGRAM_BOT`, `PORT`, `TELEGRAM_CHAT_ID`, `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID`, `ENABLE_WHATSAPP_ALERTS`, `ENABLE_GEMINI_GROUNDING`, `GEMINI_API_KEY`, `ENABLE_LANGFUSE_PROMPTS`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL`, `LANGFUSE_PROMPT_LABEL`, `LANGFUSE_PROMPT_CACHE_TTL_SECONDS`, `BRAVE_SEARCH_API_KEY`, `BRAVE_SEARCH_ENDPOINT`, `FORCE_BRAVE_SEARCH`, `MODEL_PROVIDER`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `ENABLE_NEWS_MONITOR`, `EXPANDED_ANALYSIS_ALERT_SYMBOLS`, `EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS`, `TRADINGVIEW_MCP_URL`, `TRADINGVIEW_MCP_TIMEOUT_MS`, `TRADINGVIEW_MCP_MAX_RETRIES`, `TRADINGVIEW_MCP_DEFAULT_TIMEFRAME`, `ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION`, `ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT`, `ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME`, `ENABLE_SENTRY`, `SENTRY_DSN`, `SENTRY_TRACES_SAMPLE_RATE`, `SENTRY_PROFILE_SESSION_SAMPLE_RATE`, `SENTRY_CONSOLE_LOG_LEVELS`, `ENABLE_SENTRY_DEBUG_ROUTE`, `LOG_LEVEL`, `SERVICE_NAME`, `TRUST_PROXY`, `RATE_LIMIT_WINDOW_MS`, `RATE_LIMIT_MAX`, `ENABLE_FIRESTORE_ALERT_STORAGE`, `ENABLE_FIRESTORE_SCANNER_PRESETS`, `ENABLE_FIRESTORE_IDEMPOTENCY`, `ENABLE_SIGNAL_OUTCOME_TRACKING`, `ENABLE_SHADOW_MODE_OUTCOME_TRACKING` (legacy alias), `ENABLE_EQUITY_MARKET_DATA`, `EQUITY_MARKET_DATA_PROVIDER`, `TWELVE_DATA_API_KEY`, `TWELVE_DATA_BASE_URL`, `EQUITY_MARKET_DATA_TIMEOUT_MS`, `SIGNAL_OUTCOME_WORKER_ROLE`, `SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS`, `SIGNAL_OUTCOME_EVALUATION_BATCH_LIMIT`, `SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS`, `ENABLE_MARKET_SCANNER`, `ENABLE_MESSAGE_FOOTER_METADATA`, `FIREBASE_PROJECT_ID`, `FIREBASE_SERVICE_ACCOUNT_JSON`, `GOOGLE_APPLICATION_CREDENTIALS`, `GEMINI_MODEL_NAME_FALLBACK`, `RENDER`, `IS_PULL_REQUEST`, `RENDER_GIT_COMMIT`, `RENDER_GIT_REPO_SLUG`.
 
 - Bot startup is gated: bot is launched only when `ENABLE_TELEGRAM_BOT === 'true'` and not a preview environment (`RENDER==='true' && IS_PULL_REQUEST==='true'` disables it).
 - Routes under `/api` (e.g. `/api/webhook/alert`) are mounted regardless of bot launch; individual features and notification channels are gated via env flags and per-channel validation.
@@ -157,7 +159,8 @@ Implement the following security practices to safeguard endpoints and credential
 - Stored alert read, export, analytics, and replay routes (`GET /api/alerts`, `GET /api/alerts/export`, `GET /api/alerts/summary`, `GET /api/alerts/:alertId`, `POST /api/alerts/:alertId/replay`) are also mounted under `/api`; they require `WEBHOOK_API_KEY` when configured, return `403 FEATURE_DISABLED` unless `ENABLE_FIRESTORE_ALERT_STORAGE=true`, and return `503 STORAGE_UNAVAILABLE` when Firestore is enabled but unreadable.
 - Webhook idempotency (`IdempotencyService`) stores reservations and cached responses in Cloud Firestore `idempotency_keys` collection when `ENABLE_FIRESTORE_IDEMPOTENCY=true`. All storage interactions fail open to in-memory caching upon Firestore errors, ensuring webhooks remain responsive across process restarts and horizontal scaling. `/api/status` exposes `featureFlags.firestoreIdempotency` and `dependencies.idempotencyStorage`.
 - Scanner preset CRUD responses include a non-sensitive `storage` object with the effective `mode` (`durable` or `ephemeral`) and `backend` (`firestore` or `memory`). `ENABLE_FIRESTORE_SCANNER_PRESETS=true` enables Firestore independently; `/api/status` and `/api/capabilities` expose the same state under `dependencies.scannerPresetStorage`.
-- Signal Outcome Tracking includes an autonomous background evaluation worker (`SignalOutcomeService.startWorker()`) that runs on a configurable cadence (default: 5 minutes / `SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS=300000`). Sweeps are single-flight and bounded by `SIGNAL_OUTCOME_EVALUATION_BATCH_LIMIT` (default: 50) and `SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS` (default: 30000). `/api/status` exposes worker operational metrics under `dependencies.signalOutcomeWorker`.
+- Signal Outcome Tracking includes an autonomous background evaluation worker (`SignalOutcomeService.startWorker()`) that runs on a configurable cadence (default: 5 minutes / `SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS=300000`). `SIGNAL_OUTCOME_WORKER_ROLE=web` preserves the existing web timer; `worker` starts only `src/workers/signalOutcomeWorker.js`; `disabled` prevents scheduler startup. Sweeps are single-flight, drain active work on dedicated-worker shutdown, and remain bounded by `SIGNAL_OUTCOME_EVALUATION_BATCH_LIMIT` (default: 50) and `SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS` (default: 30000). `/api/status` exposes role, heartbeat, scanned/pending/evaluated/error counters under `dependencies.signalOutcomeWorker`; a disabled local scheduler reports `ready: false` and `status: "disabled"`; the dedicated process also persists those safe counters to `workerHeartbeats/signal-outcome` for cross-process inspection.
+- Equity outcome evaluation is opt-in via `ENABLE_EQUITY_MARKET_DATA=true` with `EQUITY_MARKET_DATA_PROVIDER=twelve-data` and `TWELVE_DATA_API_KEY`. `EquityMarketDataService` supports `BATS` and `NASDAQ`, uses native `fetch` with bounded AbortController timeouts for `/quote` and `/time_series`, maps provider/quota/malformed-data failures to unavailable outcomes, and never blocks alert delivery. `/api/status` exposes non-sensitive readiness under `featureFlags.equityMarketData` and `dependencies.equityMarketData`.
 
 ---
 
@@ -544,7 +547,7 @@ The system provides an HTTP endpoint (`/api/news-monitor`) that analyzes financi
 4. Optional LLM enrichment (if `ENABLE_LLM_ALERT_ENRICHMENT=true`) refines confidence using conservative strategy: `min(gemini_confidence, llm_confidence)`
 5. Alerts filtered by `NEWS_ALERT_THRESHOLD` (default: 0.7)
 6. Deduplicated: cache key is `(symbol, event_category)`. Same category within TTL prevents duplicate alerts; different categories generate separate alerts
-7. **URL shortening applied to WhatsApp citations** (if `URL_SHORTENER_SERVICE` configured): Uses native fetch for supported services (Bitly, TinyURL, PicSee, Cutt.ly); falls back to title-only if shortening fails
+7. **URL shortening applied to WhatsApp citations** (if `URL_SHORTENER_SERVICE` configured): Uses native fetch for supported services (`picsee`, `tinyurl`, `cuttly`); preserves original URLs if shortening fails
 8. Filtered alerts sent to all enabled channels (Telegram, WhatsApp) via existing NotificationManager in parallel
 9. Returns 200 OK with per-symbol results: status (analyzed/cached/timeout/error), detected alerts, delivery results, metadata (totalDurationMs, cached, requestId), and summary counters including `quota_exhausted` for exhausted Gemini 429 retries.
 
@@ -563,8 +566,8 @@ The system provides an HTTP endpoint (`/api/news-monitor`) that analyzes financi
 - `NEWS_GEMINI_QUOTA_RETRY_BASE_MS` — Base exponential backoff in milliseconds when provider retry metadata is absent (default: 1000)
 - `ENABLE_BINANCE_PRICE_CHECK` — Enable Binance crypto price fetching (default: false)
 - `ENABLE_LLM_ALERT_ENRICHMENT` — Enable optional secondary LLM enrichment (default: false)
-- `URL_SHORTENER_SERVICE` — URL shortening service for WhatsApp citations (default: 'bitly', options: 'bitly', 'tinyurl', 'picsee', 'reurl', 'cuttly', 'pixnet0rz.tw')
-- Service-specific tokens: `BITLY_ACCESS_TOKEN`, `TINYURL_API_KEY`, etc. (some services don't require tokens)
+- `URL_SHORTENER_SERVICE` — URL shortening service for WhatsApp citations (default: `picsee`; options: `picsee`, `tinyurl`, `cuttly`)
+- Service-specific tokens: `PICSEE_API_KEY` and `CUTTLY_API_KEY`; TinyURL requires no token. Bitly, reurl, and Pixnet0rz.tw are unavailable.
 - Azure AI Inference (if enrichment enabled): `AZURE_LLM_ENDPOINT`, `AZURE_LLM_KEY`, `AZURE_LLM_MODEL`
 
 **Timeout Strategy**:
@@ -579,7 +582,7 @@ The system provides an HTTP endpoint (`/api/news-monitor`) that analyzes financi
 - Binance: 3 retries with exponential backoff (1s, 2s, 4s) + ±10% jitter
 - Gemini news analysis: retries `429 RESOURCE_EXHAUSTED` per symbol inside `NEWS_TIMEOUT_MS`, honoring provider retry delay metadata when present and returning `GEMINI_QUOTA_EXHAUSTED` when exhausted
 - Optional LLM enrichment: 3 retries (independent from analysis; failure doesn't block alert)
-- URL shortening: 3 retries with exponential backoff (independent; failure falls back to title-only)
+- URL shortening: 3 retries with exponential backoff (independent; failure preserves original URLs)
 - Telegram/WhatsApp: 3 retries (reuse existing notification retry logic)
 
 **Cache Deduplication**:
@@ -609,7 +612,7 @@ The system provides an HTTP endpoint (`/api/news-monitor`) that analyzes financi
 - GreenAPI for WhatsApp (REST API integration via native fetch with AbortController timeout)
 - Google Gemini for optional alert enrichment (existing integration in grounding service) and news sentiment analysis (003-news-monitor)
 - Azure AI Inference REST client for optional secondary LLM enrichment (003-news-monitor, disabled by default)
-- Native fetch for URL shortening in WhatsApp citations (003-news-monitor, with fallback to title-only citations)
+- Native fetch for URL shortening in WhatsApp citations (003-news-monitor, with fallback to original URLs)
 - In-memory Map cache for news deduplication with TTL (003-news-monitor, no external storage)
 - Binance API client for precise crypto prices (003-news-monitor, optional fallback to Gemini GoogleSearch)
 - TradingView MCP remote Streamable HTTP server for technical `coin_analysis` report generation (`POST /api/webhook/expanded-analysis-alert`)
@@ -732,6 +735,8 @@ See `/specs/TERMINOLOGY_GUIDE.md` for extended discussion and examples.
 
 ## Recent Changes (by spec-kit)
 - GH-284 / CB-118: Production Gemini quota recurrence was traced to an unset `NEWS_GEMINI_CONCURRENCY` with a Sentry `POST /api/news-monitor` dry-run carrying 28 symbols. Production uses the existing scheduler with `NEWS_GEMINI_CONCURRENCY=3`; analysis now runs inside the Sentry span so `summary.quota_exhausted` plus the `news.quota_exhausted` and `news.error_count` attributes remain correlated operational signals. Sentry measured 61 quota events through 2026-07-28T13:44:03Z against a Gemini free-tier limit of 15 requests/minute for the affected model; no current percentile or complete request-count measurement is inferred from that error window.
+- GH-287 / CB-119: Added opt-in Twelve Data equity market-data evaluation for `BATS` and `NASDAQ` signals. Entry prices use `/quote`; bounded historical `/time_series` bars calculate return, MFE, and MAE across existing windows. Provider failures remain unavailable/fail-open, metrics expose exchange/provider coverage, and `/api/status`, README, OpenAPI, Postman, and `.env.example` document readiness without secrets. Production remains disabled until plan/licensing and live-provider validation are completed.
+- GH-292 / CB-122: added an opt-in Render Background Worker entrypoint for signal-outcome evaluation, role-gated web/worker scheduling, graceful dedicated-worker drain, safe heartbeat counters, and paid-worker Blueprint wiring. Production cutover remains explicit: enable tracking and disable the web scheduler only after the worker plan and Firestore credentials are confirmed.
 - 001-gemini-grounding-alert (improvements with PR #21, #20, #19): Added Gemini GoogleSearch grounding integration for alert enrichment; added Brave Search fallback/override; introduced provider routing (Gemini/Azure/OpenRouter); added token usage + cost estimation surfaced in notifications; graceful degradation on API failure; single grounding call reused across channels.
 - 002-whatsapp-alerts: Added multi-channel notification system with TelegramService, WhatsAppService, NotificationManager; exponential backoff retry logic; MarkdownV2 and WhatsApp markdown formatters; comprehensive integration tests for parallel delivery, config validation, graceful degradation.
 - issue #91 / branch `codex/fix-91-whatsapp-truncation`: WhatsApp delivery now splits GreenAPI payloads above the provider limit into sequential chunks instead of silently truncating with an ellipsis; regression coverage added for long alert payloads.
@@ -1188,3 +1193,13 @@ The in-app `/admin` Jobs view consumes the existing protected `GET /api/jobs` en
 Job-list, status, and cancel/retry responses use monotonic request versions and pass activity guards into `sendRequest`, so responses from obsolete filters or job IDs cannot overwrite current state, hold shared forms disabled, or render stale actions.
 
 This is a UI-only consumer change: job persistence, lifecycle semantics, OpenAPI, and Postman contracts remain unchanged.
+
+## Admin Alert Analytics and Export Workflows (CB-120 / Issue #288)
+
+The in-app `/admin` Alerts view now consumes the existing protected `GET /api/alerts/summary` and `GET /api/alerts/export` operations through dedicated bounded report forms. Summary windows default to the latest 24 hours and render returned aggregate data readably; exports require `from`/`to`, support JSONL and CSV, and download the response blob using its content type. Source/enriched filters are applied before bounded summary aggregation with raw Firestore cursors; filtered reports omit shadow-mode metrics because that service has no matching filters.
+
+Raw alert text remains disabled by default and requires an explicit checkbox. The API key stays in session storage and the `x-api-key` header; filenames and query strings never contain it. No route, request, OpenAPI, Postman, or Playground contract changed.
+
+**Coverage**:
+- `src/admin/admin.js` — Report filters, summary rendering, safe export downloads, and protected error handling.
+- `tests/unit/admin-client.test.js` — Safe defaults, query construction, readable analytics, JSONL/CSV downloads, content types, API-key placement, validation, and errors.

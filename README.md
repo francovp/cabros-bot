@@ -43,9 +43,12 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 - `ENABLE_DISCORD_ALERTS` - Enable Discord alerts (`true` or `false`, default: `false`)
 - `DISCORD_WEBHOOK_URL` - Discord webhook URL (e.g., `https://discord.com/api/webhooks/<id>/<token>`)
 
-#### URL Shortening (004-url-shortening)
+#### URL Shortening (003-news-monitor)
 
-- `BITLY_API_KEY` - Bitly API key for URL shortening (optional; when provided, long URLs in WhatsApp alerts are automatically shortened)
+- `URL_SHORTENER_SERVICE` - URL-shortening provider for WhatsApp citations (optional; defaults to `picsee`; supported values: `picsee`, `tinyurl`, `cuttly`)
+- `PICSEE_API_KEY` - PicSee API key, required when PicSee is selected
+- `CUTTLY_API_KEY` - Cuttly API key, required when Cuttly is selected
+- TinyURL uses its free endpoint and requires no credential. Bitly, reurl, and Pixnet0rz.tw are unavailable in the runtime.
 
 #### AI Grounding
 
@@ -84,6 +87,12 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 - `ENABLE_FIRESTORE_IDEMPOTENCY` - Enable durable webhook idempotency persistence in Cloud Firestore (`true` or `false`, default: `false`)
 - `ENABLE_SIGNAL_OUTCOME_TRACKING` - Enable shadow-mode signal outcome recording and evaluation (`true` or `false`, default: `false`)
 - `ENABLE_SHADOW_MODE_OUTCOME_TRACKING` - Legacy alias for signal outcome tracking, retained for one release
+- `ENABLE_EQUITY_MARKET_DATA` - Opt in to equity outcome evaluation for `NASDAQ` and `BATS` signals (`true` or `false`, default: `false`)
+- `EQUITY_MARKET_DATA_PROVIDER` - Equity provider name; currently `twelve-data`
+- `TWELVE_DATA_API_KEY` - Twelve Data API key; sent in the `Authorization` header and never returned by status endpoints
+- `TWELVE_DATA_BASE_URL` - Optional Twelve Data base URL override (default: `https://api.twelvedata.com`)
+- `EQUITY_MARKET_DATA_TIMEOUT_MS` - Per-request equity market-data timeout, capped at 30 seconds (default: `5000`)
+- `SIGNAL_OUTCOME_WORKER_ROLE` - Scheduler role: `web` preserves the local/web timer, `worker` enables only the dedicated worker entrypoint, and `disabled` prevents scheduler startup (default: `web`)
 - `FIREBASE_SERVICE_ACCOUNT_JSON` - Inline Firebase service account JSON for server-side Firestore access
 - `FIREBASE_PROJECT_ID` - Optional Firebase project override for Admin SDK initialization
 - `GOOGLE_APPLICATION_CREDENTIALS` - Optional path to a service account JSON file for local development
@@ -98,6 +107,8 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 - `JOB_QUEUE_CONNECT_TIMEOUT_MS` - Redis connection timeout (default: `5000` ms)
 
 `render.yaml` provisions a starter Background Worker and Key Value store. The web service remains on `JOB_EXECUTION_MODE=local` by default; switching it to `render-worker` requires the worker, Redis, and Firestore credentials to be available. The API returns `503 JOB_QUEUE_UNAVAILABLE` instead of accepting a job when the durable queue is unavailable.
+
+Unfiltered signal outcome summaries include `shadowModeMetrics.exchangeBreakdown` and `shadowModeMetrics.providerBreakdown` coverage buckets (`received`, `eligible`, `evaluated`, `pending`, `unavailable`). Filtered alert summaries/exports omit shadow-mode metrics because that service has no matching source/enrichment filters. Equity signals only enter the eligible/evaluated population when the opt-in Twelve Data provider is configured; otherwise they remain explicitly unavailable.
 
 #### Admin Notifications
 
@@ -233,6 +244,11 @@ When `ENABLE_FIRESTORE_JOB_STORAGE=true`, `featureFlags.firestoreJobStorage` rep
 
 `featureFlags.cloudflareAig` reports `ENABLE_CLOUDFLARE_AIG`, while `dependencies.cloudflareAig` reports whether the Cloudflare AI Gateway credentials are configured and ready.
 
+When `ENABLE_EQUITY_MARKET_DATA=true`, `dependencies.equityMarketData` reports Twelve Data readiness and the supported `BATS`/`NASDAQ` exchanges without exposing the API key. Signal outcome tracking uses `/quote` for missing entry prices and `/time_series` for bounded historical bars; provider, timeout, malformed-data, and quota failures mark equity outcomes unavailable without blocking alert delivery. Extended-hours data is excluded by default. Confirm current Twelve Data plan limits and licensing before production use: [pricing](https://twelvedata.com/pricing), [US equities coverage](https://support.twelvedata.com/en/articles/9935903-us-equities-market-data), and [commercial usage](https://support.twelvedata.com/en/articles/5332349-commercial-and-personal-usage).
+`dependencies.signalOutcomeWorker` reports the scheduler role, shutdown state, cadence/budgets, and the last-sweep heartbeat counters (`lastRunAt`, scanned, pending, evaluated, and error counts). The `worker` role is intended for the dedicated Render service; set the web service role to `disabled` during cutover so only one scheduler is active. A disabled local scheduler reports `ready: false` and `status: "disabled"` because it is not the process evaluating outcomes.
+
+The dedicated worker also persists the same non-sensitive heartbeat to `workerHeartbeats/signal-outcome` in Firestore. Heartbeat writes fail open and never block alert delivery.
+
 `GET /api/capabilities` is an alias for the same payload.
 
 **Response:**
@@ -260,7 +276,8 @@ When `ENABLE_FIRESTORE_JOB_STORAGE=true`, `featureFlags.firestoreJobStorage` rep
     "binancePriceCheck": false,
     "llmAlertEnrichment": false,
     "cloudflareAig": false,
-    "messageFooterMetadata": true
+    "messageFooterMetadata": true,
+    "equityMarketData": false
   },
   "deliveryChannels": {
     "telegram": { "enabled": true, "status": "ready" },
@@ -274,12 +291,26 @@ When `ENABLE_FIRESTORE_JOB_STORAGE=true`, `featureFlags.firestoreJobStorage` rep
     "tradingViewVolumeConfirmation": { "enabled": false, "configured": true, "ready": false, "status": "disabled" },
     "firestore": { "enabled": true, "configured": true, "ready": true, "status": "ready" },
     "firestoreJobStorage": { "enabled": false, "configured": true, "ready": false, "status": "disabled" },
+    "signalOutcomeWorker": {
+      "enabled": false,
+      "configured": true,
+      "ready": false,
+      "status": "disabled",
+      "role": "web",
+      "running": false,
+      "shutdownRequested": false,
+      "lastRunScannedCount": 0,
+      "lastRunPendingCount": 0,
+      "lastRunEvaluatedCount": 0,
+      "lastRunErrorCount": 0
+    },
     "sentry": { "enabled": true, "configured": true, "ready": true, "status": "ready" },
     "langfuse": { "enabled": false, "configured": false, "ready": false, "status": "disabled" },
     "braveSearch": { "enabled": false, "configured": false, "ready": false, "status": "disabled" },
     "newsMonitorLlm": { "provider": "gemini", "enabled": true, "configured": true, "ready": true, "status": "ready" },
     "llmAlertEnrichment": { "enabled": false, "configured": false, "ready": false, "status": "disabled" },
-    "cloudflareAig": { "enabled": false, "configured": false, "ready": false, "status": "disabled" }
+    "cloudflareAig": { "enabled": false, "configured": false, "ready": false, "status": "disabled" },
+    "equityMarketData": { "provider": null, "enabled": false, "configured": false, "ready": false, "status": "disabled", "supportedExchanges": ["BATS", "NASDAQ"], "timeoutMs": 5000 }
   }
 }
 ```
@@ -1131,11 +1162,11 @@ The alert webhook system supports simultaneous delivery to multiple channels (Te
 
 ### URL Shortening for WhatsApp
 
-When `BITLY_API_KEY` is configured, URLs in WhatsApp alerts are automatically shortened to reduce character count and improve readability.
+When a supported URL-shortening service is configured, URLs in WhatsApp alerts are automatically shortened to reduce character count and improve readability.
 
 **Features**:
 - **Automatic Detection**: Identifies HTTP/HTTPS URLs in alert text
-- **Shortened URLs**: Converts long URLs (e.g., `https://example.com/very/long/path?param=value`) to short Bitly links (e.g., `https://bit.ly/abc123`)
+- **Shortened URLs**: Converts long URLs (e.g., `https://example.com/very/long/path?param=value`) to a provider link
 - **Session-Scoped Cache**: Caches shortenings during request processing to avoid redundant API calls (1-hour TTL per session)
 - **Parallel Shortening**: Multiple URLs shortened concurrently
 - **Fallback Behavior**: If shortening fails or is disabled, original URLs are preserved
@@ -1143,14 +1174,14 @@ When `BITLY_API_KEY` is configured, URLs in WhatsApp alerts are automatically sh
 
 **How It Works**:
 1. Alert received with one or more URLs
-2. URLShortener detects and extracts URLs (if `BITLY_API_KEY` configured)
+2. URLShortener detects and extracts URLs when a supported provider is configured
 3. Checks session cache for previously shortened URLs
-4. Calls Bitly API for new URLs (with 3-retry exponential backoff)
+4. Calls the selected provider for new URLs
 5. Replaces original URLs with shortened versions in alert text
 6. Alert delivered to WhatsApp (and other channels) with shortened URLs
 
 **Configuration**:
-- Set `BITLY_API_KEY` environment variable with your Bitly API key
+- Set `URL_SHORTENER_SERVICE=picsee` with `PICSEE_API_KEY`, `URL_SHORTENER_SERVICE=cuttly` with `CUTTLY_API_KEY`, or select `tinyurl` without a credential
 - Optional: URLs only shortened for WhatsApp; other channels receive original URLs
 - Cache per session: TTL 1 hour; cleared after request completes or session ends
 
@@ -1162,10 +1193,10 @@ Sources:
 - https://example.com/research/crypto/bitcoin/technical-analysis?date=2024-01-15&symbol=BTCUSDT&period=4h&includeIndicators=true
 ```
 
-**After** (with Bitly):
+**After** (with URL shortening):
 ```
 Sources: 
-- https://bit.ly/crypto-analysis
+- https://short.url/crypto-analysis
 ```
 
 ### Delivery Behavior
@@ -1535,7 +1566,8 @@ WHATSAPP_API_KEY=your_whatsapp_api_key
 WHATSAPP_CHAT_ID=120363xxxxx@g.us
 
 # Optional: Enable URL shortening for WhatsApp
-BITLY_API_KEY=your_bitly_api_key
+URL_SHORTENER_SERVICE=picsee
+PICSEE_API_KEY=your_picsee_api_key
 ```
 
 ### With WhatsApp + URL Shortening
@@ -1550,8 +1582,9 @@ WHATSAPP_API_URL=your_whatsapp_api_url
 WHATSAPP_API_KEY=your_whatsapp_api_key
 WHATSAPP_CHAT_ID=120363xxxxx@g.us
 
-# URL shortening for WhatsApp (long URLs automatically shortened via Bitly)
-BITLY_API_KEY=your_bitly_api_key
+# URL shortening for WhatsApp (long URLs automatically shortened via PicSee)
+URL_SHORTENER_SERVICE=picsee
+PICSEE_API_KEY=your_picsee_api_key
 
 # Alerts sent to both channels; WhatsApp receives shortened URLs
 ```
@@ -1633,6 +1666,8 @@ The application includes support for Render.com deployment:
 - Respects `RENDER` environment variable
 - Skips bot launch in preview environments (`IS_PULL_REQUEST=true`)
 - Sends deployment notification to admin chat on startup
+- `render.yaml` defines an opt-in paid `starter` Background Worker using `pnpm run start:signal-outcome-worker`. It is configured with `SIGNAL_OUTCOME_WORKER_ROLE=worker` and `ENABLE_SIGNAL_OUTCOME_TRACKING` as a manual value so the paid worker and Firestore credential decision are explicit.
+- To cut over production, enable signal tracking on both services, set the web service's `SIGNAL_OUTCOME_WORKER_ROLE=disabled`, and keep the worker role as `worker`. Leave the default web role as `web` when the dedicated worker is not enabled.
 
 ### Local Development
 
@@ -1737,14 +1772,14 @@ The application logs to stdout:
 ### URL Shortening
 
 **URLs not being shortened**:
-1. Verify `BITLY_API_KEY` is set in environment
+1. Verify `URL_SHORTENER_SERVICE` is set to `picsee`, `tinyurl`, or `cuttly`
 2. Check that alert text contains valid HTTP/HTTPS URLs
-3. Verify Bitly API key has sufficient quota (check Bitly dashboard)
+3. Verify `PICSEE_API_KEY` or `CUTTLY_API_KEY` is set when the selected service requires it
 4. Check application logs for "URLShortener" error messages
 
 **Shortening timeout errors**:
 - Default timeout: 5 seconds per URL batch
-- If Bitly API is slow, increase timeout or reduce parallel URLs
+- If the selected provider is slow, increase timeout or reduce parallel URLs
 - URLs gracefully fallback to original if shortening fails
 - Alert still sends with original URLs
 

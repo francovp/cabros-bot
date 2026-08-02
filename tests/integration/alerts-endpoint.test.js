@@ -18,11 +18,17 @@ jest.mock('../../src/controllers/webhooks/handlers/alert/alert', () => ({
 	getNotificationManager: jest.fn(),
 }));
 
+jest.mock('../../src/services/storage/SignalOutcomeService', () => ({
+	isEnabled: jest.fn(),
+	getMetricsSummary: jest.fn(),
+}));
+
 const request = require('supertest');
 const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
 const alertStorageService = require('../../src/services/storage/AlertStorageService');
 const alertHandler = require('../../src/controllers/webhooks/handlers/alert/alert');
+const signalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
 const { encodeAlertPaginationCursor } = require('../../src/services/storage/alertPaginationCursor');
 
 const { idempotencyService } = require('../../src/services/storage/IdempotencyService');
@@ -47,6 +53,8 @@ describe('Alerts API Integration Tests', () => {
 		alertHandler.initializeNotificationServices.mockResolvedValue(mockNotificationManager);
 		alertStorageService.isEnabled.mockReturnValue(true);
 		alertStorageService.saveReplayAttempt.mockResolvedValue('replay-1');
+		signalOutcomeService.isEnabled.mockReturnValue(false);
+		signalOutcomeService.getMetricsSummary.mockResolvedValue('No measurements found');
 		const { parseAlertPaginationCursor: actualParseCursor } = jest.requireActual('../../src/services/storage/alertPaginationCursor');
 		alertStorageService.parseAlertPaginationCursor.mockImplementation(actualParseCursor);
 		app.use('/api', getRoutes(null));
@@ -232,7 +240,7 @@ describe('Alerts API Integration Tests', () => {
 		});
 
 		const res = await request(app)
-			.get('/api/alerts/summary?from=2026-06-06T00:00:00.000Z&to=2026-06-07T00:00:00.000Z&limit=200')
+			.get('/api/alerts/summary?from=2026-06-06T00:00:00.000Z&to=2026-06-07T00:00:00.000Z&limit=200&source=webhook&enriched=true')
 			.set('x-api-key', 'test-key')
 			.expect(200);
 
@@ -240,6 +248,8 @@ describe('Alerts API Integration Tests', () => {
 			from: '2026-06-06T00:00:00.000Z',
 			limit: 200,
 			to: '2026-06-07T00:00:00.000Z',
+			source: 'webhook',
+			enriched: true,
 		});
 		expect(res.body).toEqual({
 			success: true,
@@ -281,7 +291,6 @@ describe('Alerts API Integration Tests', () => {
 					averageProcessingMs: null,
 					averageDeliveryMs: 125,
 				},
-				shadowModeMetrics: 'No measurements found',
 			},
 		});
 	});
@@ -308,6 +317,20 @@ describe('Alerts API Integration Tests', () => {
 
 		expect(res.body.summary.enrichment.riskMetadataCoverage).toEqual(riskMetadataCoverage);
 		expect(res.body.summary.shadowModeMetrics).toBe('No measurements found');
+	});
+
+	it('omits unfiltered shadow metrics from filtered summaries', async () => {
+		signalOutcomeService.isEnabled.mockReturnValue(true);
+		signalOutcomeService.getMetricsSummary.mockResolvedValue({ totalSignalsReceived: 99 });
+		alertStorageService.summarizeAlerts.mockResolvedValue({ totalAlerts: 1 });
+
+		const res = await request(app)
+			.get('/api/alerts/summary?source=webhook&enriched=true')
+			.set('x-api-key', 'test-key')
+			.expect(200);
+
+		expect(res.body.summary.shadowModeMetrics).toBeUndefined();
+		expect(signalOutcomeService.getMetricsSummary).not.toHaveBeenCalled();
 	});
 
 	it('returns 400 when the summary window is invalid', async () => {
@@ -374,6 +397,7 @@ describe('Alerts API Integration Tests', () => {
 			includeText: false,
 		});
 		expect(res.headers['content-type']).toContain('application/x-ndjson');
+		expect(res.headers['x-shadow-mode-metrics']).toBeUndefined();
 		expect(res.text.trim().split('\n').map(line => JSON.parse(line))).toEqual([
 			{
 				id: 'alert-1',

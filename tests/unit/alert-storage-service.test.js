@@ -669,6 +669,7 @@ describe('AlertStorageService', () => {
 				code: 'STORAGE_UNAVAILABLE',
 			});
 		});
+
 	});
 
 	describe('exportAlerts()', () => {
@@ -798,6 +799,54 @@ describe('AlertStorageService', () => {
 			expect(JSON.stringify(result)).not.toContain('rawProviderResponse');
 		});
 
+		it('pages filtered exports through the full window and caps the result', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			const firstPageLastTimestamp = buildTimestamp('2026-06-06T11:00:00.000Z');
+			mockGet
+				.mockResolvedValueOnce({
+					empty: false,
+					docs: [
+						buildQueryDoc('newer-scanner', {
+							receivedAt: firstPageLastTimestamp,
+							enriched: true,
+							source: 'scanner',
+						}),
+						buildQueryDoc('webhook-btc', {
+							receivedAt: firstPageLastTimestamp,
+							enriched: true,
+							source: 'webhook',
+						}),
+					],
+				})
+				.mockResolvedValueOnce({
+					empty: false,
+					docs: [
+						buildQueryDoc('webhook-eth', {
+							receivedAt: buildTimestamp('2026-06-06T10:00:00.000Z'),
+							enriched: true,
+							source: 'webhook',
+						}),
+						buildQueryDoc('webhook-sol', {
+							receivedAt: buildTimestamp('2026-06-06T09:00:00.000Z'),
+							enriched: true,
+							source: 'webhook',
+						}),
+					],
+				});
+
+			const result = await AlertStorageService.exportAlerts({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+				limit: 2,
+				source: 'webhook',
+				enriched: true,
+			});
+
+			expect(mockGet).toHaveBeenCalledTimes(2);
+			expect(mockStartAfter).toHaveBeenCalledWith(firstPageLastTimestamp, 'webhook-btc');
+			expect(result.alerts.map(alert => alert.id)).toEqual(['webhook-btc', 'webhook-eth']);
+		});
+
 		it('throws STORAGE_UNAVAILABLE when Firestore export reads fail', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 			mockGet.mockRejectedValueOnce(new Error('Permission denied'));
@@ -811,7 +860,7 @@ describe('AlertStorageService', () => {
 		});
 	});
 
-	describe('summarizeAlerts()', () => {
+		describe('summarizeAlerts()', () => {
 		it('aggregates bounded alert analytics without exposing raw alert text', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 			mockGet.mockResolvedValueOnce({
@@ -923,6 +972,132 @@ describe('AlertStorageService', () => {
 				},
 			});
 			expect(JSON.stringify(result)).not.toContain('raw alert text');
+		});
+
+		it('applies source and enriched filters before aggregating', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('matching-alert', {
+						receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+						enriched: true,
+						source: 'webhook',
+						text: 'BINANCE:BTCUSDT',
+					}),
+					buildQueryDoc('wrong-source', {
+						receivedAt: buildTimestamp('2026-06-06T11:00:00.000Z'),
+						enriched: true,
+						source: 'scanner',
+						text: 'BINANCE:ETHUSDT',
+					}),
+					buildQueryDoc('wrong-enrichment', {
+						receivedAt: buildTimestamp('2026-06-06T10:00:00.000Z'),
+						enriched: false,
+						source: 'webhook',
+						text: 'BINANCE:SOLUSDT',
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.summarizeAlerts({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+				limit: 200,
+				source: 'webhook',
+				enriched: true,
+			});
+
+			expect(result.totalAlerts).toBe(1);
+			expect(result.bySource).toEqual({ webhook: 1 });
+			expect(result.bySymbol).toEqual({ BTCUSDT: 1 });
+			expect(result.byFeatureFlag.enriched).toBe(1);
+			expect(result.byFeatureFlag.plain).toBe(0);
+		});
+
+		it('pages through bounded alerts until filtered summaries reach the limit', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			const newerTimestamp = buildTimestamp('2026-06-06T12:00:00.000Z');
+			mockGet
+				.mockResolvedValueOnce({
+					empty: false,
+					docs: [buildQueryDoc('newer-scanner', {
+						receivedAt: newerTimestamp,
+						enriched: true,
+						source: 'scanner',
+					})],
+				})
+				.mockResolvedValueOnce({
+					empty: false,
+					docs: [buildQueryDoc('older-webhook', {
+						receivedAt: buildTimestamp('2026-06-06T11:00:00.000Z'),
+						enriched: true,
+						source: 'webhook',
+						text: 'BINANCE:BTCUSDT',
+					})],
+				});
+
+			const result = await AlertStorageService.summarizeAlerts({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+				limit: 1,
+				source: 'webhook',
+				enriched: true,
+			});
+
+			expect(mockGet).toHaveBeenCalledTimes(2);
+			expect(mockStartAfter).toHaveBeenCalledWith(newerTimestamp, 'newer-scanner');
+			expect(result.totalAlerts).toBe(1);
+			expect(result.bySource).toEqual({ webhook: 1 });
+		});
+
+		it('caps filtered summary pages at the remaining limit', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet
+				.mockResolvedValueOnce({
+					empty: false,
+					docs: [
+						buildQueryDoc('newer-scanner', {
+							receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+							enriched: true,
+							source: 'scanner',
+						}),
+						buildQueryDoc('webhook-btc', {
+							receivedAt: buildTimestamp('2026-06-06T11:00:00.000Z'),
+							enriched: true,
+							source: 'webhook',
+							text: 'BINANCE:BTCUSDT',
+						}),
+					],
+				})
+				.mockResolvedValueOnce({
+					empty: false,
+					docs: [
+						buildQueryDoc('webhook-eth', {
+							receivedAt: buildTimestamp('2026-06-06T10:00:00.000Z'),
+							enriched: true,
+							source: 'webhook',
+							text: 'BINANCE:ETHUSDT',
+						}),
+						buildQueryDoc('webhook-sol', {
+							receivedAt: buildTimestamp('2026-06-06T09:00:00.000Z'),
+							enriched: true,
+							source: 'webhook',
+							text: 'BINANCE:SOLUSDT',
+						}),
+					],
+				});
+
+			const result = await AlertStorageService.summarizeAlerts({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+				limit: 2,
+				source: 'webhook',
+				enriched: true,
+			});
+
+			expect(result.totalAlerts).toBe(2);
+			expect(result.bySymbol).toEqual({ BTCUSDT: 1, ETHUSDT: 1 });
 		});
 
 		it('measures risk metadata coverage by safe prompt provenance and ignores invalid values', async () => {

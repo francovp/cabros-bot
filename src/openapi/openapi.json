@@ -1986,6 +1986,25 @@
           "application/json": {
             "schema": {
               "$ref": "#/components/schemas/Status"
+            },
+            "example": {
+              "featureFlags": {
+                "equityMarketData": false
+              },
+              "dependencies": {
+                "equityMarketData": {
+                  "provider": null,
+                  "enabled": false,
+                  "configured": false,
+                  "ready": false,
+                  "status": "disabled",
+                  "supportedExchanges": [
+                    "BATS",
+                    "NASDAQ"
+                  ],
+                  "timeoutMs": 5000
+                }
+              }
             }
           }
         }
@@ -2168,6 +2187,7 @@
             "$ref": "#/components/schemas/JsonObject"
           },
           "shadowModeMetrics": {
+            "description": "When an object, includes exchangeBreakdown and providerBreakdown coverage buckets with received, eligible, evaluated, pending, and unavailable counts. Equity providers remain opt-in and fail open. This field is omitted when source or enriched filters are supplied because shadow-mode metrics do not support those filters.",
             "oneOf": [
               {
                 "$ref": "#/components/schemas/JsonObject"
@@ -2958,7 +2978,7 @@
       },
       "Status": {
         "type": "object",
-        "description": "Runtime status. featureFlags.firestoreJobStorage reports the ENABLE_FIRESTORE_JOB_STORAGE gate or the legacy ENABLE_FIRESTORE_ALERT_STORAGE gate; featureFlags.jobExecutionWorker reports JOB_EXECUTION_MODE=render-worker; dependencies.jobExecutionQueue reports queue readiness and safe operational counters without broker credentials; featureFlags.firestoreScannerPresets reports ENABLE_FIRESTORE_SCANNER_PRESETS; dependencies.scannerPresetStorage reports the effective durable or ephemeral scanner-preset backend and readiness; dependencies.signalOutcomeWorker reports the autonomous evaluation worker readiness and cadence; dependencies.firestoreJobStorage reports Firestore credential readiness for that runtime path; featureFlags.newsMonitorTestMode reports ENABLE_NEWS_MONITOR_TEST_MODE without changing news monitor behavior; featureFlags.messageFooterMetadata reports ENABLE_MESSAGE_FOOTER_METADATA and defaults to true unless explicitly set to false; featureFlags.cloudflareAig reports ENABLE_CLOUDFLARE_AIG and dependencies.cloudflareAig reports Cloudflare AI Gateway credential readiness.",
+        "description": "Runtime status. featureFlags.firestoreJobStorage reports the ENABLE_FIRESTORE_JOB_STORAGE gate or the legacy ENABLE_FIRESTORE_ALERT_STORAGE gate; featureFlags.jobExecutionWorker reports JOB_EXECUTION_MODE=render-worker; dependencies.jobExecutionQueue reports queue readiness and safe operational counters without broker credentials; featureFlags.firestoreScannerPresets reports ENABLE_FIRESTORE_SCANNER_PRESETS; dependencies.scannerPresetStorage reports the effective durable or ephemeral scanner-preset backend and readiness; dependencies.signalOutcomeWorker reports the scheduler role (web, worker, or disabled), graceful-shutdown state, cadence, heartbeat, and scanned/pending/evaluated/error counters; a disabled local scheduler reports ready false and status disabled because it is not the process evaluating outcomes; dependencies.firestoreJobStorage reports Firestore credential readiness for that runtime path; featureFlags.newsMonitorTestMode reports ENABLE_NEWS_MONITOR_TEST_MODE without changing news monitor behavior; featureFlags.messageFooterMetadata reports ENABLE_MESSAGE_FOOTER_METADATA and defaults to true unless explicitly set to false; featureFlags.cloudflareAig reports ENABLE_CLOUDFLARE_AIG and dependencies.cloudflareAig reports Cloudflare AI Gateway credential readiness; featureFlags.equityMarketData reports ENABLE_EQUITY_MARKET_DATA and dependencies.equityMarketData reports non-sensitive Twelve Data readiness for BATS/NASDAQ outcome evaluation.",
         "properties": {
           "service": {
             "$ref": "#/components/schemas/JsonObject"

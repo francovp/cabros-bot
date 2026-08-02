@@ -5,6 +5,7 @@ const idempotencyStorageService = require('../services/storage/IdempotencyStorag
 const { isFirestoreConfigured } = require('../services/storage/firestoreConfig');
 const SignalOutcomeService = require('../services/storage/SignalOutcomeService');
 const { jobQueue } = require('../services/jobs/JobQueue');
+const equityMarketDataService = require('../services/storage/EquityMarketDataService');
 
 const DEFAULT_TRADINGVIEW_MCP_URL = 'https://tradingview-mcp.onrender.com/mcp';
 const DEFAULT_AZURE_LLM_ENDPOINT = 'https://models.github.ai/inference';
@@ -167,6 +168,7 @@ function getStatus() {
 	const messageFooterMetadataEnabled = process.env.ENABLE_MESSAGE_FOOTER_METADATA !== 'false';
 	const signalOutcomeTrackingEnabled = isEnabled(process.env.ENABLE_SIGNAL_OUTCOME_TRACKING)
 		|| isEnabled(process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING);
+	const equityMarketDataStatus = equityMarketDataService.getStatus();
 	const llmAlertEnrichmentDependencyEnabled = llmAlertEnrichmentEnabled && newsMonitorEnabled;
 
 	const telegram = dependencyStatus({
@@ -255,6 +257,14 @@ function getStatus() {
 
 	const signalOutcomeWorkerStatus = SignalOutcomeService.getWorkerStatus();
 	const jobExecutionQueueStatus = jobQueue.getStatus();
+	const signalOutcomeWorkerDependency = dependencyStatus({
+		enabled: signalOutcomeWorkerStatus.enabled,
+		configured: firestore.configured,
+	});
+	if (signalOutcomeWorkerStatus.role === 'disabled') {
+		signalOutcomeWorkerDependency.ready = false;
+		signalOutcomeWorkerDependency.status = 'disabled';
+	}
 
 	return {
 		service: {
@@ -286,6 +296,7 @@ function getStatus() {
 			cloudflareAig: cloudflareAigEnabled,
 			messageFooterMetadata: messageFooterMetadataEnabled,
 			signalOutcomeTracking: signalOutcomeTrackingEnabled,
+			equityMarketData: equityMarketDataStatus.enabled,
 			firestoreIdempotency: idempotencyStorageService.isEnabled(),
 			jobExecutionWorker: jobExecutionQueueStatus.enabled,
 		},
@@ -327,19 +338,22 @@ function getStatus() {
 			newsMonitorDedup,
 			idempotencyStorage: idempotencyStorageService.getStorageStatus(),
 			scannerPresetStorage: scannerPresetService.getStorageStatus(),
+			equityMarketData: equityMarketDataStatus,
 			signalOutcomeWorker: {
-				...dependencyStatus({
-					enabled: signalOutcomeWorkerStatus.enabled,
-					configured: firestore.configured,
-				}),
+					...signalOutcomeWorkerDependency,
+				role: signalOutcomeWorkerStatus.role,
 				running: signalOutcomeWorkerStatus.running,
+				shutdownRequested: signalOutcomeWorkerStatus.shutdownRequested,
 				intervalMs: signalOutcomeWorkerStatus.intervalMs,
 				batchLimit: signalOutcomeWorkerStatus.batchLimit,
 				maxDurationMs: signalOutcomeWorkerStatus.maxDurationMs,
 				isEvaluating: signalOutcomeWorkerStatus.isEvaluating,
 				lastRunAt: signalOutcomeWorkerStatus.lastRunAt,
 				lastRunDurationMs: signalOutcomeWorkerStatus.lastRunDurationMs,
+				lastRunScannedCount: signalOutcomeWorkerStatus.lastRunScannedCount,
 				lastRunEvaluatedCount: signalOutcomeWorkerStatus.lastRunEvaluatedCount,
+				lastRunPendingCount: signalOutcomeWorkerStatus.lastRunPendingCount,
+				lastRunErrorCount: signalOutcomeWorkerStatus.lastRunErrorCount,
 			},
 			jobExecutionQueue: jobExecutionQueueStatus,
 		},

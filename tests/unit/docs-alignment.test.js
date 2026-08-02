@@ -7,7 +7,7 @@ function getAllFiles(dirPath, arrayOfFiles = []) {
     const fullPath = path.join(dirPath, file);
     if (fs.statSync(fullPath).isDirectory()) {
       arrayOfFiles = getAllFiles(fullPath, arrayOfFiles);
-    } else if (file.endsWith('.md')) {
+    } else if (['.md', '.yml', '.yaml'].some(extension => file.endsWith(extension))) {
       arrayOfFiles.push(fullPath);
     }
   });
@@ -51,5 +51,35 @@ describe('Documentation Alignment Policy', () => {
       }
     }
   });
-});
 
+  test('news-monitor documentation matches runtime configuration', () => {
+    const maintainedFiles = [
+      path.join(repoRoot, '.env.example'),
+      path.join(repoRoot, 'README.md'),
+      path.join(repoRoot, 'agents.md'),
+      ...getAllFiles(path.join(repoRoot, 'specs', '003-news-monitor')),
+    ];
+    const staleConfigurationPatterns = [
+      /\bAZURE_AI_(?:ENDPOINT|API_KEY|MODEL)\s*=/i,
+      /^\s*URL_SHORTENER_SERVICE\s*=\s*(?:bitly|reurl|pixnet0rz\.tw)\b/im,
+      /^\s*(?:BITLY_(?:API_KEY|ACCESS_TOKEN)|REURL_(?:API_KEY|ACCESS_TOKEN)|PIXNET0RZ(?:_TW)?_(?:API_KEY|ACCESS_TOKEN))\s*=/im,
+      /https?:\/\/bit\.ly\//i,
+      /\btitles?[- ]only\b/i,
+    ];
+
+    for (const fullPath of maintainedFiles) {
+      const relPath = path.relative(repoRoot, fullPath);
+      const content = fs.readFileSync(fullPath, 'utf8');
+      for (const pattern of staleConfigurationPatterns) {
+        expect({ file: relPath, match: content.match(pattern) })
+          .toEqual({ file: relPath, match: null });
+      }
+    }
+
+    const envExample = fs.readFileSync(path.join(repoRoot, '.env.example'), 'utf8');
+    expect(envExample).toContain('URL_SHORTENER_SERVICE=picsee');
+    expect(envExample).toContain('PICSEE_API_KEY=');
+    expect(envExample).toContain('CUTTLY_API_KEY=');
+    expect(envExample).toContain('AZURE_LLM_ENDPOINT=');
+  });
+});
