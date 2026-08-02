@@ -111,7 +111,7 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 - `NEWS_ALERT_THRESHOLD` - Confidence score threshold for sending alerts (default: `0.7`, range 0.0-1.0)
 - `NEWS_CACHE_TTL_HOURS` - Cache time-to-live for deduplication (default: `6` hours)
 - `NEWS_TIMEOUT_MS` - Per-symbol analysis timeout (default: `30000` ms)
-- `NEWS_GEMINI_CONCURRENCY` - Optional max concurrent Gemini-backed symbol analyses. Unset keeps legacy parallel fan-out.
+- `NEWS_GEMINI_CONCURRENCY` - Max concurrent Gemini-backed symbol analyses. Production policy is `3`; unset keeps legacy parallel fan-out for backward compatibility.
 - `NEWS_GEMINI_QUOTA_MAX_RETRIES` - Max per-symbol retries for Gemini `429 RESOURCE_EXHAUSTED` errors (default: `2`)
 - `NEWS_GEMINI_QUOTA_RETRY_BASE_MS` - Base exponential backoff when Gemini does not provide retry delay metadata (default: `1000` ms)
 - `ENABLE_BINANCE_PRICE_CHECK` - Enable Binance crypto price fetching (`true` or `false`, default: `false`)
@@ -518,6 +518,8 @@ Dry-run response excerpt:
 - `cached` - Result returned from cache (within TTL for same event category)
 - `timeout` - Analysis exceeded per-symbol timeout (30s default)
 - `error` - API failure (Binance, Gemini, or other service error). Gemini quota exhaustion is reported as `error.code = "GEMINI_QUOTA_EXHAUSTED"` and counted in `summary.quota_exhausted`.
+
+When Sentry tracing is enabled, symbol analysis runs inside the `news_monitor.analyze_symbols` span, which records `news.symbol_count`, `news.quota_exhausted`, and `news.error_count` for quota correlation. Keep production `NEWS_GEMINI_CONCURRENCY=3` to bound provider bursts.
 
 ### POST /api/webhook/expanded-analysis-alert
 
