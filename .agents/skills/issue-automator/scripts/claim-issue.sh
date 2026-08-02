@@ -256,9 +256,40 @@ post_claim_comment() {
   gh api "repos/${REPO}/issues/${ISSUE_NUMBER}/comments" -f body="$1" --jq .id 2>/dev/null || echo ""
 }
 
-# delete_claim_comment <comment_id> — best-effort cleanup of a lost race comment.
+# delete_claim_comment <comment_id> — authoritative cleanup of a lost race comment.
+# Returns 0 only when the DELETE actually succeeded (after bounded retries).
+# When we lose a race we MUST be able to remove our comment: a higher-ID loser left
+# in place becomes `newest_claim`, so a later ownership check treats the session
+# that already exited RESULT=SKIP as the active owner and the real winner stays
+# blocked until the TTL expires. On failure the caller must fail closed
+# (RESULT=ERROR) rather than a clean RESULT=SKIP.
 delete_claim_comment() {
-  gh api -X DELETE "repos/${REPO}/issues/comments/$1" &> /dev/null || true
+  local cid="$1" attempt=0
+  while [ "$attempt" -lt 3 ]; do
+    if gh api -X DELETE "repos/${REPO}/issues/comments/${cid}" &> /dev/null; then
+      return 0
+    fi
+    attempt=$((attempt + 1))
+    sleep 1
+  done
+  return 1
+}
+
+# lose_race <comment_id> <reason...> — handle a lost race: remove our comment
+# authoritatively and exit RESULT=SKIP (2). If the loser comment cannot be
+# removed after retries, fail closed to RESULT=ERROR (1): leaving the higher-ID
+# loser as `newest_claim` would make a later ownership check treat this exited
+# SKIP session as the active owner and block the real winner until the TTL.
+lose_race() {
+  local cid="$1"; shift
+  if ! delete_claim_comment "$cid"; then
+    echo "RESULT=ERROR"
+    echo "Error: lost the race but could not remove our claim comment ${cid} (cleanup fail-closed)." >&2
+    exit 1
+  fi
+  echo "RESULT=SKIP"
+  echo "$*"
+  exit 2
 }
 
 # remove_agent_working — best-effort label removal (used only when this script
@@ -369,10 +400,7 @@ if [ "$LABELED" == "true" ]; then
         exit 1
       fi
       if [ "$WINNER" != "$RENEWAL_ID" ]; then
-        delete_claim_comment "$RENEWAL_ID"
-        echo "RESULT=SKIP"
-        echo "Issue #${ISSUE_NUMBER}: renewal raced by a concurrent takeover (comment ${WINNER} won). Skipping — zero-work, no budget consumed."
-        exit 2
+        lose_race "$RENEWAL_ID" "Issue #${ISSUE_NUMBER}: renewal raced by a concurrent takeover (comment ${WINNER} won). Skipping — zero-work, no budget consumed."
       fi
       echo "RESULT=CLAIMED"
       echo "Issue #${ISSUE_NUMBER} already claimed by this session (${AGENT_ID}/${SESSION_ID}); renewed."
@@ -401,10 +429,7 @@ if [ "$LABELED" == "true" ]; then
       exit 1
     fi
     if [ "$WINNER" != "$OUR_TAKEOVER_ID" ]; then
-      delete_claim_comment "$OUR_TAKEOVER_ID"
-      echo "RESULT=SKIP"
-      echo "Issue #${ISSUE_NUMBER}: takeover raced by another session (comment ${WINNER} won). Skipping — zero-work, no budget consumed."
-      exit 2
+      lose_race "$OUR_TAKEOVER_ID" "Issue #${ISSUE_NUMBER}: takeover raced by another session (comment ${WINNER} won). Skipping — zero-work, no budget consumed."
     fi
     echo "RESULT=TAKEOVER"
     echo "Issue #${ISSUE_NUMBER}: stale claim (${AGE} min) by ${NEWEST_AGENT}/${NEWEST_SESSION} taken over."
@@ -440,10 +465,7 @@ if [ "$LABELED" == "true" ]; then
     exit 1
   fi
   if [ "$WINNER" != "$OUR_LEGACY_ID" ]; then
-    delete_claim_comment "$OUR_LEGACY_ID"
-    echo "RESULT=SKIP"
-    echo "Issue #${ISSUE_NUMBER}: legacy takeover raced by another session (comment ${WINNER} won). Skipping — zero-work, no budget consumed."
-    exit 2
+    lose_race "$OUR_LEGACY_ID" "Issue #${ISSUE_NUMBER}: legacy takeover raced by another session (comment ${WINNER} won). Skipping — zero-work, no budget consumed."
   fi
   echo "RESULT=TAKEOVER"
   echo "Issue #${ISSUE_NUMBER}: legacy agent-working claim taken over."
@@ -463,18 +485,21 @@ gh issue edit "$ISSUE_NUMBER" --add-label "agent-working" &> /dev/null || {
 
 OUR_ID="$(post_claim_comment "${CLAIM_PREFIX} ${AGENT_ID} ${SESSION_ID} ${NOW_TS}")"
 if [ -z "$OUR_ID" ]; then
-  # Partial failure: the label is on but our claim comment never landed. Remove
-  # the label unless a NEWER claim comment (past the snapshot) appeared in the
-  # meantime — a historical comment alone must not keep the label we added.
-  # When the read fails we cannot prove no rival claimed, so we keep the label
-  # and fail closed instead of silently removing a concurrent claim.
-  NEWER_COUNT="$(claim_comments_rest | awk -F '\t' -v snap="$SNAPSHOT_ID" '$1+0 > snap+0 { print $1 }')" || READ_FAILED="1"
-  if [ "$READ_FAILED" == "1" ]; then
-    echo "RESULT=ERROR"
-    echo "Error: failed to post the claim comment and could not re-read comments to roll back safely (fail-closed)." >&2
-    exit 1
-  fi
-  if [ -z "$NEWER_COUNT" ]; then
+  # Partial failure: the label is on but our claim comment never landed. Re-read
+  # comments up to 3 times (mirroring arbitrate_race's grace window) so a
+  # concurrent claimant that is between adding the shared label and posting its
+  # own comment surfaces; removing the label during that pre-comment window would
+  # delete the other claimant's in-progress label and let a third session treat
+  # the issue as unclaimed. A historical comment must not keep the label we added.
+  NEWER_COUNT=""
+  for _ in 1 2 3; do
+    NEWER_COUNT="$(claim_comments_rest | awk -F '\t' -v snap="$SNAPSHOT_ID" '$1+0 > snap+0 { print $1 }')" || READ_FAILED="1"
+    if [ "$READ_FAILED" != "1" ] && [ -n "$NEWER_COUNT" ]; then
+      break
+    fi
+    sleep 1
+  done
+  if [ "$READ_FAILED" != "1" ] && [ -z "$NEWER_COUNT" ]; then
     remove_agent_working
   fi
   echo "RESULT=ERROR"
@@ -496,8 +521,6 @@ if [ "$WINNER_ID" == "$OUR_ID" ]; then
   exit 0
 fi
 
-# Lost the race: another session claimed first. Remove our comment and skip.
-delete_claim_comment "$OUR_ID"
-echo "RESULT=SKIP"
-echo "Issue #${ISSUE_NUMBER} was claimed first by another session (comment ${WINNER_ID}). Skipping — zero-work, no budget consumed."
-exit 2
+# Lost the race: another session claimed first. Remove our comment authoritatively
+# and skip; if the loser comment cannot be removed, fail closed to ERROR.
+lose_race "$OUR_ID" "Issue #${ISSUE_NUMBER} was claimed first by another session (comment ${WINNER_ID}). Skipping — zero-work, no budget consumed."
