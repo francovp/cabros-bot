@@ -1183,3 +1183,13 @@ The in-app `/admin` Jobs view consumes the existing protected `GET /api/jobs` en
 Job-list, status, and cancel/retry responses use monotonic request versions and pass activity guards into `sendRequest`, so responses from obsolete filters or job IDs cannot overwrite current state, hold shared forms disabled, or render stale actions.
 
 This is a UI-only consumer change: job persistence, lifecycle semantics, OpenAPI, and Postman contracts remain unchanged.
+
+## Admin Alert Analytics and Export Workflows (CB-120 / Issue #288)
+
+The in-app `/admin` Alerts view now consumes the existing protected `GET /api/alerts/summary` and `GET /api/alerts/export` operations through dedicated bounded report forms. Summary windows default to the latest 24 hours and render returned aggregate data readably; exports require `from`/`to`, support JSONL and CSV, and download the response blob using its content type.
+
+Raw alert text remains disabled by default and requires an explicit checkbox. The API key stays in session storage and the `x-api-key` header; filenames and query strings never contain it. No backend, Firestore, OpenAPI, or Playground behavior changed.
+
+**Coverage**:
+- `src/admin/admin.js` — Report filters, summary rendering, safe export downloads, and protected error handling.
+- `tests/unit/admin-client.test.js` — Safe defaults, query construction, readable analytics, JSONL/CSV downloads, content types, API-key placement, validation, and errors.

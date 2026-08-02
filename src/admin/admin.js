@@ -161,7 +161,9 @@ const showError = (output, message) => {
 	output.textContent = message;
 };
 
-const sendRequest = async ({ definition, path, query, body, button, output, formatResponse, isCurrent }) => {
+const sendRequest = async ({
+	definition, path, query, body, button, output, formatResponse, parseSuccessResponse, isCurrent,
+}) => {
 	const requestIsCurrent = typeof isCurrent === 'function' ? isCurrent : () => true;
 	const apiKey = document.getElementById('api-key').value;
 	const summary = window.CabrosAdminRequest.redactSecret(`${definition.method} ${path}`, apiKey);
@@ -189,20 +191,26 @@ const sendRequest = async ({ definition, path, query, body, button, output, form
 	try {
 		const response = await fetch(request.url, request.options);
 		const elapsed = Math.round(performance.now() - started);
-		const text = await response.text();
 		let data;
-		let formatted = text || '(empty response)';
-		try {
-			data = JSON.parse(text);
-			formatted = JSON.stringify(data, null, 2);
-		} catch (_) {
-			// Non-JSON responses stay readable as text.
+		let formatted;
+		if (response.ok && typeof parseSuccessResponse === 'function') {
+			({ data, formatted } = await parseSuccessResponse(response));
+		} else {
+			const text = await response.text();
+			formatted = text || '(empty response)';
+			try {
+				data = JSON.parse(text);
+				formatted = JSON.stringify(data, null, 2);
+			} catch (_) {
+				// Non-JSON responses stay readable as text.
+			}
 		}
 		if (!requestIsCurrent()) return data;
 		output.className = `response-block${response.ok ? '' : ' response-error'}`;
-		output.textContent = response.ok && formatResponse
+		const responseText = response.ok && formatResponse
 			? formatResponse({ summary, status: response.status, elapsed, data })
 			: `${summary}\nHTTP ${response.status} · ${elapsed} ms\n\n${window.CabrosAdminRequest.redactSecret(formatted, apiKey)}`;
+		output.textContent = window.CabrosAdminRequest.redactSecret(responseText, apiKey);
 		return data;
 	} catch (error) {
 		const elapsed = Math.round(performance.now() - started);
@@ -259,6 +267,170 @@ const createAlertListForm = () => {
 		return requestPage(before.value);
 	});
 	next.addEventListener('click', () => requestPage(nextBefore));
+	return form;
+};
+
+const toDateTimeLocal = (date) => {
+	const offset = date.getTimezoneOffset();
+	return new Date(date.getTime() - offset * 60 * 1000).toISOString().slice(0, 16);
+};
+
+const reportWindowDefaults = () => {
+	const to = new Date();
+	return {
+		from: toDateTimeLocal(new Date(to.getTime() - 24 * 60 * 60 * 1000)),
+		to: toDateTimeLocal(to),
+	};
+};
+
+const addAlertReportFilters = (form, { requiredWindow = false } = {}) => {
+	const defaults = reportWindowDefaults();
+	const from = addField(form, 'From', 'from', {
+		type: 'datetime-local', value: defaults.from, required: requiredWindow,
+	});
+	const to = addField(form, 'To', 'to', {
+		type: 'datetime-local', value: defaults.to, required: requiredWindow,
+	});
+	const limit = addField(form, 'Limit', 'limit', { type: 'number', min: 1, max: 1000, value: 500 });
+	const source = addField(form, 'Source', 'source', { placeholder: 'webhook' });
+	const enriched = addField(form, 'Enriched', 'enriched', { tag: 'select' });
+	[
+		['', 'All alerts'],
+		['true', 'Enriched only'],
+		['false', 'Not enriched'],
+	].forEach(([value, text]) => {
+		const option = element('option', { text });
+		option.value = value;
+		enriched.append(option);
+	});
+	return { from, to, limit, source, enriched };
+};
+
+const toIsoTimestamp = (value, label) => {
+	if (!value) return undefined;
+	const date = new Date(value);
+	if (Number.isNaN(date.getTime())) throw new Error(`${label} must be a valid date and time.`);
+	return date.toISOString();
+};
+
+const getAlertReportQuery = (fields, { format, includeText } = {}) => Object.fromEntries(
+	Object.entries({
+		from: toIsoTimestamp(fields.from.value, 'From'),
+		to: toIsoTimestamp(fields.to.value, 'To'),
+		limit: fields.limit.value,
+		source: fields.source.value,
+		enriched: fields.enriched.value,
+		format,
+		includeText,
+	}).filter(([, value]) => value !== undefined && value !== ''),
+);
+
+const formatSummaryValue = (value) => {
+	if (Array.isArray(value)) return `[${value.map(formatSummaryValue).join(', ')}]`;
+	if (value && typeof value === 'object') {
+		return `{ ${Object.entries(value).map(([key, nested]) => `${key}: ${formatSummaryValue(nested)}`).join(', ')} }`;
+	}
+	return String(value);
+};
+
+const formatAlertSummary = ({ summary, status, elapsed, data }) => {
+	const values = data && data.summary && typeof data.summary === 'object' ? data.summary : {};
+	const lines = Object.entries(values).map(([key, value]) => `${key}: ${formatSummaryValue(value)}`);
+	return `${summary}\nHTTP ${status} · ${elapsed} ms\n\n${lines.length
+		? lines.join('\n') : 'No summary data returned.'}`;
+};
+
+const parseAlertExportResponse = (format) => async (response) => {
+	const blob = await response.blob();
+	const contentType = response.headers && typeof response.headers.get === 'function'
+		? response.headers.get('content-type') || blob.type
+		: blob.type;
+	const filename = `alerts-export.${format}`;
+	const url = window.URL.createObjectURL(blob);
+	const link = element('a');
+	link.href = url;
+	link.download = filename;
+	if (typeof link.click === 'function') link.click();
+	window.URL.revokeObjectURL(url);
+	return {
+		data: { contentType, filename },
+		formatted: `Downloaded ${filename} (${contentType || 'unknown content type'}).`,
+	};
+};
+
+const createAlertSummaryForm = () => {
+	const definition = { method: 'GET', path: '/api/alerts/summary', label: 'Load alert analytics' };
+	const form = element('form', { className: 'operation-card' });
+	form.append(
+		element('h3', { text: definition.label }),
+		element('code', { text: `${definition.method} ${definition.path}` }),
+	);
+	const fields = addAlertReportFilters(form);
+	const button = element('button', { text: definition.label });
+	button.type = 'submit';
+	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
+	form.append(button, output);
+	form.addEventListener('submit', (event) => {
+		event.preventDefault();
+		try {
+			sendRequest({
+				definition,
+				path: definition.path,
+				query: getAlertReportQuery(fields),
+				button,
+				output,
+				formatResponse: formatAlertSummary,
+			});
+		} catch (error) {
+			showError(output, error.message);
+		}
+	});
+	return form;
+};
+
+const createAlertExportForm = () => {
+	const definition = { method: 'GET', path: '/api/alerts/export', label: 'Export alerts' };
+	const form = element('form', { className: 'operation-card' });
+	form.append(
+		element('h3', { text: definition.label }),
+		element('code', { text: `${definition.method} ${definition.path}` }),
+	);
+	const fields = addAlertReportFilters(form, { requiredWindow: true });
+	const format = addField(form, 'Format', 'format', { tag: 'select' });
+	[['jsonl', 'JSONL'], ['csv', 'CSV']].forEach(([value, text]) => {
+		const option = element('option', { text });
+		option.value = value;
+		format.append(option);
+	});
+	const includeText = addField(form, 'Include raw alert text (explicit opt-in)', 'includeText', {
+		type: 'checkbox', checked: false,
+	});
+	const button = element('button', { text: definition.label });
+	button.type = 'submit';
+	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
+	form.append(button, output);
+	form.addEventListener('submit', (event) => {
+		event.preventDefault();
+		if (!fields.from.value || !fields.to.value) {
+			showError(output, 'From and To are required for a bounded export.');
+			return;
+		}
+		try {
+			sendRequest({
+				definition,
+				path: definition.path,
+				query: getAlertReportQuery(fields, { format: format.value, includeText: includeText.checked }),
+				button,
+				output,
+				parseSuccessResponse: parseAlertExportResponse(format.value),
+				formatResponse: ({ summary, status, elapsed, data }) => (
+					`${summary}\nHTTP ${status} · ${elapsed} ms\n\nDownloaded ${data.filename} (${data.contentType || 'unknown content type'}).`
+				),
+			});
+		} catch (error) {
+			showError(output, error.message);
+		}
+	});
 	return form;
 };
 
@@ -573,6 +745,7 @@ const renderView = async (name) => {
 		view.append(element('h2', { text: name[0].toUpperCase() + name.slice(1) }));
 		if (name === 'alerts') {
 			view.append(createAlertListForm());
+			view.append(createAlertSummaryForm(), createAlertExportForm());
 			VIEW_ACTIONS.alerts.forEach((definition) => view.append(createOperationForm(contract, definition)));
 			return;
 		}
