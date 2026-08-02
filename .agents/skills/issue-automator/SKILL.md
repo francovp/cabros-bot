@@ -149,6 +149,7 @@ Follow these steps in strict chronological order to automate issue resolution:
 3. If a Linear issue exists:
    - Evaluate status: if `Blocked`, end the issue with `LOCAL_DEADLOCK`. If `Needs info`, end with `NEEDS_USER`. If `Canceled`/`Duplicate`, sync GitHub and end with `SYNCED`.
    - If multiple Linear issues remain ambiguous, end with `AMBIGUOUS`.
+   - When routing to a no-write terminal (`LOCAL_DEADLOCK`, `NEEDS_USER`, `AMBIGUOUS`, or `SYNCED` for Canceled/Duplicate) on an issue this session claimed (Step 1/Step 2 returned `CLAIMED` or `TAKEOVER`), release the freshly-acquired claim tag first — remove the `agent-working` label added by this session — so the issue is not held claimed until `CLAIM_TTL_MINUTES` expires (see the **Release a claim on a no-write terminal exit** rule in Step 6 and Hard Rule 9).
    - **Extract the Linear issue ID** from the existing issue and store it as `LINEAR_ISSUE_ID`.
    - **Ensure the GitHub issue description** includes the Linear ID reference. If missing, add `**Linear**: [CB-XX](...)` to the issue body.
 
@@ -209,9 +210,15 @@ Follow these steps in strict chronological order to automate issue resolution:
 
 Track a `SKIPPED_ISSUES` list (comma-separated issue numbers) across the skip loop: every skip outcome appends the processed issue number so the cursor never revisits it. A single-exclusion cursor is not enough — if only the last issue is excluded, two adjacent skipped issues alternate forever.
 
+**Release a claim on a no-write terminal exit**: The Step 1/Step 2 `claim-issue.sh` call adds an `agent-working` label to the issue. If this session then ends the issue through a no-write terminal outcome (`IN_REVIEW` with no agent writes, `LOCAL_DEADLOCK`, `NEEDS_USER`, `AMBIGUOUS`, or `SYNCED` for Canceled/Duplicate issues), that freshly-acquired label is now stale and would hold the issue claimed until `CLAIM_TTL_MINUTES` expires — blocking later automator runs from picking it up. Therefore, when this session routed to any of those no-write terminal paths *and* it acquired the claim for the issue (the Step 1 or Step 2 call returned `RESULT=CLAIMED` or `RESULT=TAKEOVER`), it MUST remove the `agent-working` label it added:
+```bash
+gh issue edit <ISSUE_NUMBER> --remove-label "agent-working"
+```
+Only remove the label when the session itself owns the claim for this run. The queue's own `RESULT=SKIP` path (another session's active claim) never triggers this removal and its label is always left untouched — releasing another session's live claim would cause duplicate work.
+
 1. If `LOCAL_DEADLOCK`: Write a concise blocker summary on the issue or PR. Append the issue number to `SKIPPED_ISSUES`. Sync GitHub, Linear, and PR states.
 2. **If the issue has a merged PR**: Clean up stale `agent-working` labels (issue + PR), sync Linear to `Shipped`, and end with outcome `SHIPPED` (same handling as Step 1).
-3. If `IN_REVIEW` with no agent writes: Do not modify the issue, PR, or Linear state — everything is already correct. Append the issue number to `SKIPPED_ISSUES`.
+3. **If `IN_REVIEW` with no agent writes**: The PR/issue state is already correct and must not be changed further — except that, if this session claimed the issue this run (Step 1/Step 2 returned `RESULT=CLAIMED` or `RESULT=TAKEOVER`), the one remaining cleanup is to release the freshly-acquired claim it added: remove the `agent-working` label so the issue is not held claimed until `CLAIM_TTL_MINUTES` (see the **Release a claim on a no-write terminal exit** rule). Do not make any other issue, PR, or Linear state change. Append the issue number to `SKIPPED_ISSUES`.
 4. **If the issue is claimed by another agent session** (claim script exit `2` / `RESULT=SKIP`): Do not modify the issue, PR, or Linear state. Append the issue number to `SKIPPED_ISSUES`.
 5. **If the issue or its linked PR is `GLOBAL_BLOCKED`** (the label is present or the iteration set the outcome):
    - **Write-producing check first**: if this iteration already produced agent writes (code changes, PR creation/update, or Linear issue creation/update — Step 3) before the blocker was hit, do NOT skip — record `GLOBAL_BLOCKED`, count it against the max-2 write budget (Hard Rule #4), then clean up before stopping: remove the `agent-working` label from the issue and PR (work on this item has ended — see Hard Rule 9) and send the global-deadlock notification (see Notification Webhook). Neither Step 7 nor the zero-work branch cleanup runs on this exit, so ownership release and the human notification must happen here. Then stop the run.
