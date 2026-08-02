@@ -74,6 +74,23 @@ describe('Jobs API Integration Tests', () => {
 			.expect(401);
 	});
 
+	it('returns 503 instead of accepting work when render-worker mode is unavailable', async () => {
+		process.env.JOB_EXECUTION_MODE = 'render-worker';
+		delete process.env.REDIS_URL;
+
+		const response = await request(app)
+			.post('/api/jobs/tradingview-analysis')
+			.set('x-api-key', 'test-key')
+			.send({ type: 'expanded-analysis', symbols: ['BINANCE:BTCUSDT'] })
+			.expect(503);
+
+		expect(response.body).toMatchObject({
+			code: 'JOB_QUEUE_UNAVAILABLE',
+			error: expect.any(String),
+		});
+		expect(tradingViewMcpService.analyzeSymbolIdentifier).not.toHaveBeenCalled();
+	});
+
 	it('deduplicates concurrent job creation with one idempotency key', async () => {
 		tradingViewMcpService.analyzeSymbolIdentifier.mockImplementation(async () => {
 			await new Promise((resolve) => setTimeout(resolve, 50));

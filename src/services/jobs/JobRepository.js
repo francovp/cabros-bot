@@ -4,6 +4,8 @@ const alertStorageService = require('../storage/AlertStorageService');
 
 const COLLECTION_NAME = 'tradingviewJobs';
 const memoryJobs = new Map();
+const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled', 'timed_out']);
+const DEFAULT_CLAIM_LEASE_MS = 60000;
 
 function cloneJob(job) {
 	if (!job) return null;
@@ -25,8 +27,13 @@ function sanitizeJob(job) {
 	return copy;
 }
 
+function getClaimLeaseMs() {
+	const configured = Number(process.env.JOB_QUEUE_CLAIM_LEASE_MS);
+	return Number.isInteger(configured) && configured > 0 ? configured : DEFAULT_CLAIM_LEASE_MS;
+}
+
 class JobRepository {
-	async save(job) {
+	async save(job, { required = false } = {}) {
 		const sanitized = sanitizeJob(job);
 		if (!sanitized || !sanitized.jobId) {
 			return null;
@@ -43,9 +50,102 @@ class JobRepository {
 			await firestore.collection(COLLECTION_NAME).doc(sanitized.jobId).set(sanitized);
 		} catch (error) {
 			console.warn('[JobRepository] Failed to persist job:', error.message);
+			if (required) {
+				memoryJobs.delete(sanitized.jobId);
+				const storageError = new Error('Durable job storage is unavailable.');
+				storageError.code = 'JOB_STORAGE_UNAVAILABLE';
+				throw storageError;
+			}
 		}
 
 		return sanitized.jobId;
+	}
+
+	isDurable() {
+		return Boolean(this._getFirestore());
+	}
+
+	async claim(jobId, workerId) {
+		if (!jobId || !workerId) {
+			return { claimed: false, reason: 'invalid' };
+		}
+
+		const firestore = this._getFirestore();
+		if (!firestore || typeof firestore.runTransaction !== 'function') {
+			return { claimed: false, reason: 'unavailable' };
+		}
+
+		const docRef = firestore.collection(COLLECTION_NAME).doc(jobId);
+		const nowMs = Date.now();
+		const leaseMs = getClaimLeaseMs();
+
+		try {
+			return await firestore.runTransaction(async (transaction) => {
+				const snapshot = await transaction.get(docRef);
+				if (!snapshot || !snapshot.exists) {
+					return { claimed: false, reason: 'missing' };
+				}
+
+				const current = sanitizeJob({ ...(snapshot.data() || {}), jobId: snapshot.id || jobId });
+				if (!current || TERMINAL_STATUSES.has(current.status)) {
+					return { claimed: false, reason: 'terminal' };
+				}
+
+				const execution = current.execution || {};
+				const claimedAtMs = Date.parse(execution.claimedAt || '');
+				const leaseUntilMs = Number.isFinite(Date.parse(execution.leaseUntil || ''))
+					? Date.parse(execution.leaseUntil)
+					: claimedAtMs + leaseMs;
+				if (['claimed', 'running'].includes(execution.status) && Number.isFinite(leaseUntilMs) && leaseUntilMs > nowMs) {
+					return { claimed: false, reason: 'active' };
+				}
+
+				const nextJob = {
+					...current,
+					execution: {
+						...execution,
+						mode: 'render-worker',
+						status: 'claimed',
+						workerId,
+						attempt: Number(execution.attempt || 0) + 1,
+						claimedAt: new Date(nowMs).toISOString(),
+						leaseUntil: new Date(nowMs + leaseMs).toISOString(),
+					},
+					updatedAt: new Date(nowMs).toISOString(),
+				};
+
+				transaction.set(docRef, nextJob);
+				memoryJobs.set(jobId, cloneJob(nextJob));
+				return { claimed: true, job: cloneJob(nextJob) };
+			});
+		} catch (error) {
+			console.warn('[JobRepository] Failed to claim job:', error.message);
+			return { claimed: false, reason: 'unavailable' };
+		}
+	}
+
+	async releaseClaim(jobId, workerId, error) {
+		const job = await this.get(jobId);
+		if (!job || TERMINAL_STATUSES.has(job.status)) {
+			return false;
+		}
+
+		const execution = job.execution || {};
+		if (workerId && execution.workerId && execution.workerId !== workerId) {
+			return false;
+		}
+
+		job.execution = {
+			...execution,
+			status: 'queued',
+			workerId: null,
+			claimedAt: null,
+			leaseUntil: null,
+			lastErrorCode: error && error.code ? error.code : 'JOB_WORKER_FAILED',
+		};
+		job.updatedAt = new Date().toISOString();
+		await this.save(job, { required: true });
+		return true;
 	}
 
 	async get(jobId) {

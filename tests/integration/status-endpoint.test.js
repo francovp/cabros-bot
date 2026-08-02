@@ -323,6 +323,26 @@ describe('Status endpoints', () => {
 		});
 	});
 
+	it('reports render-worker queue readiness without exposing broker details', async () => {
+		process.env.JOB_EXECUTION_MODE = 'render-worker';
+		delete process.env.REDIS_URL;
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.jobExecutionWorker).toBe(true);
+		expect(response.body.dependencies.jobExecutionQueue).toMatchObject({
+			mode: 'render-worker',
+			enabled: true,
+			configured: false,
+			ready: false,
+			status: 'misconfigured',
+		});
+		expect(JSON.stringify(response.body.dependencies.jobExecutionQueue)).not.toContain('redis://');
+	});
+
 	it('reports Firestore job storage through the legacy alert-storage gate', async () => {
 		delete process.env.ENABLE_FIRESTORE_JOB_STORAGE;
 

@@ -22,6 +22,11 @@ const {
 const sentryService = require('../monitoring/SentryService');
 const { jobRepository } = require('./JobRepository');
 const {
+	jobQueue,
+	JobQueueUnavailableError,
+	isQueueExecutionEnabled,
+} = require('./JobQueue');
+const {
 	parseNotificationRouting,
 	sendWithNotificationRouting,
 	getRequestedChannels,
@@ -190,9 +195,10 @@ async function isValidCallbackUrl(urlStr) {
 }
 
 class JobService {
-	constructor(repository = jobRepository) {
+	constructor(repository = jobRepository, queue = jobQueue) {
 		this.repository = repository;
 		this.jobs = repository;
+		this.queue = queue;
 		this.activeControllers = new Map();
 	}
 
@@ -364,6 +370,7 @@ class JobService {
 	async createJob(type, payload, botOrGetter) {
 		await this._cleanExpiredJobs();
 		const routing = parseNotificationRouting(payload);
+		const queueMode = this._isQueueMode();
 
 		// Synchronous validation based on job type
 		let parsed;
@@ -461,6 +468,10 @@ class JobService {
 			}
 		}
 
+		if (queueMode && typeof this.repository.isDurable === 'function' && !this.repository.isDurable()) {
+			throw new JobQueueUnavailableError('Render-worker mode requires durable Firestore job storage.');
+		}
+
 		const requestMetadata = {
 			type,
 			timeoutMs: validatedTimeoutMs,
@@ -508,6 +519,13 @@ class JobService {
 			updatedAt: new Date().toISOString(),
 			totalDurationMs: 0,
 			timeoutMs: validatedTimeoutMs,
+			...(queueMode ? {
+				execution: {
+					mode: 'render-worker',
+					status: 'queued',
+					attempt: 0,
+				},
+			} : {}),
 			...(callbackUrl ? {
 				callbackUrl,
 				callbackSecret,
@@ -519,15 +537,43 @@ class JobService {
 			} : {}),
 		};
 
-		await this.repository.save(job);
+		try {
+			await this.repository.save(job, { required: queueMode });
+		} catch (error) {
+			if (queueMode) {
+				throw new JobQueueUnavailableError('The job could not be durably stored.');
+			}
+			throw error;
+		}
+
+		if (queueMode) {
+			try {
+				await this.queue.enqueue(jobId);
+			} catch (error) {
+				job.status = 'failed';
+				job.error = 'The asynchronous job queue is unavailable.';
+				job.code = error.code || 'JOB_QUEUE_UNAVAILABLE';
+				job.execution = {
+					...job.execution,
+					status: 'failed',
+				};
+				await this.repository.save(job).catch(() => {});
+				if (error.statusCode === 503) {
+					throw error;
+				}
+				throw new JobQueueUnavailableError();
+			}
+		}
 
 		// Trigger callback for 'processing' if configured
 		await this._triggerCallbackIfConfigured(job);
 
-		// Execute background job (fire-and-forget)
-		this._runBackgroundJob(jobId, parsed, payload, botOrGetter).catch((error) => {
-			console.error(`[JobService] Background job ${jobId} failed with unhandled error:`, error.message);
-		});
+		if (!queueMode) {
+			// Execute background job (fire-and-forget)
+			this._runBackgroundJob(jobId, parsed, payload, botOrGetter).catch((error) => {
+				console.error(`[JobService] Background job ${jobId} failed with unhandled error:`, error.message);
+			});
+		}
 
 		return {
 			success: true,
@@ -535,6 +581,74 @@ class JobService {
 			status: job.status,
 			createdAt: job.createdAt,
 		};
+	}
+
+	_isQueueMode() {
+		return typeof this.queue?.isEnabled === 'function'
+			? this.queue.isEnabled()
+			: isQueueExecutionEnabled();
+	}
+
+	_getWorkerId() {
+		return process.env.RENDER_INSTANCE_ID
+			|| process.env.RENDER_SERVICE_ID
+			|| `worker-${process.pid}`;
+	}
+
+	async processQueuedJob(jobId, botOrGetter = null, workerId = this._getWorkerId()) {
+		if (!this.repository || typeof this.repository.claim !== 'function') {
+			const error = new Error('Durable job claims are unavailable.');
+			error.code = 'JOB_CLAIM_UNAVAILABLE';
+			throw error;
+		}
+
+		const claim = await this.repository.claim(jobId, workerId);
+		if (!claim || claim.reason === 'unavailable') {
+			const error = new Error('Durable job claims are unavailable.');
+			error.code = 'JOB_CLAIM_UNAVAILABLE';
+			throw error;
+		}
+
+		if (!claim.claimed) {
+			if (claim.reason === 'active') {
+				const error = new Error('Another worker currently owns this job claim.');
+				error.code = 'JOB_CLAIM_ACTIVE';
+				throw error;
+			}
+			return { skipped: true, reason: claim.reason || 'not_claimable' };
+		}
+
+		const job = claim.job;
+		const parsed = this._parseQueuedJob(job);
+		await this._runBackgroundJob(jobId, parsed, job.requestMetadata, botOrGetter);
+		return { skipped: false, jobId };
+	}
+
+	_parseQueuedJob(job) {
+		if (!job || !job.requestMetadata) {
+			const error = new Error('Queued job metadata is missing.');
+			error.code = 'JOB_METADATA_UNAVAILABLE';
+			throw error;
+		}
+
+		if (job.type === 'expanded-analysis') {
+			return parseExpandedAnalysisAlertRequest({ body: job.requestMetadata });
+		}
+		if (job.type === 'market-scanner') {
+			return parseMarketScannerRequest({ body: job.requestMetadata });
+		}
+
+		const error = new Error(`Unsupported queued job type: ${job.type}`);
+		error.code = 'UNSUPPORTED_TYPE';
+		throw error;
+	}
+
+	async releaseQueuedJob(jobId, workerId, error) {
+		if (!this.repository || typeof this.repository.releaseClaim !== 'function') {
+			return false;
+		}
+
+		return this.repository.releaseClaim(jobId, workerId, error);
 	}
 
 	/**
@@ -546,6 +660,9 @@ class JobService {
 		if (!job) return;
 
 		job.status = 'processing';
+		if (job.execution && job.execution.mode === 'render-worker') {
+			job.execution.status = 'running';
+		}
 		job.updatedAt = new Date().toISOString();
 		await this._persistJob(job);
 
@@ -601,6 +718,7 @@ class JobService {
 			const finalJob = await this.repository.get(jobId);
 			if (finalJob && finalJob.status === 'cancelled') {
 				finalJob.totalDurationMs = Date.now() - startTime;
+				this._finishQueuedExecution(finalJob);
 				finalJob.updatedAt = new Date().toISOString();
 				await this._persistJob(finalJob);
 				await this._triggerCallbackIfConfigured(finalJob);
@@ -608,6 +726,7 @@ class JobService {
 			}
 
 			job.totalDurationMs = Date.now() - startTime;
+			this._finishQueuedExecution(job);
 			job.updatedAt = new Date().toISOString();
 			await this._persistJob(job);
 			await this._triggerCallbackIfConfigured(job);
@@ -869,7 +988,26 @@ class JobService {
 				return;
 			}
 		}
-		await this.repository.save(job);
+		if (job.execution && job.execution.mode === 'render-worker') {
+			const leaseMs = Number(process.env.JOB_QUEUE_CLAIM_LEASE_MS);
+			const effectiveLeaseMs = Number.isInteger(leaseMs) && leaseMs > 0 ? leaseMs : 60000;
+			if (job.execution.status === 'claimed' || job.execution.status === 'running') {
+				job.execution.leaseUntil = new Date(Date.now() + effectiveLeaseMs).toISOString();
+			}
+		}
+		await this.repository.save(job, {
+			required: job.execution && job.execution.mode === 'render-worker',
+		});
+	}
+
+	_finishQueuedExecution(job) {
+		if (!job.execution || job.execution.mode !== 'render-worker') {
+			return;
+		}
+
+		job.execution.status = job.status;
+		job.execution.completedAt = new Date().toISOString();
+		job.execution.leaseUntil = null;
 	}
 
 	_getRoutingFromJob(job) {

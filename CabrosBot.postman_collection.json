@@ -2018,6 +2018,12 @@
               "body": "{\n  \"error\": \"Idempotency key was reused with a different payload\",\n  \"code\": \"IDEMPOTENCY_CONFLICT\"\n}"
             },
             {
+              "name": "Render Worker Queue Unavailable",
+              "status": "Service Unavailable",
+              "code": 503,
+              "body": "{\n  \"error\": \"The asynchronous job queue is unavailable.\",\n  \"code\": \"JOB_QUEUE_UNAVAILABLE\"\n}"
+            },
+            {
               "name": "Create Job with Callback",
               "originalRequest": {
                 "method": "POST",

@@ -42,7 +42,9 @@ This project is a small Express + Telegraf (Telegram) bot service that exposes a
 - `src/controllers/alerts/alerts.js` — Stored alert read, export, analytics, and replay handlers for `GET /api/alerts`, `GET /api/alerts/export`, `GET /api/alerts/summary`, `GET /api/alerts/:alertId`, and `POST /api/alerts/:alertId/replay`.
 - `src/controllers/status.js` — Status handler that computes capabilities, feature flags, notification channels, and active dependencies status.
 - `src/controllers/webhooks/handlers/marketScanner/marketScanner.js` — Scanner webhook handler executing sequential gainers, losers, and breakouts scanner runs on TradingView MCP.
-- `src/services/jobs/JobService.js` — Manages in-memory job state, executes background TradingView analysis runs, and performs periodic expiration cleanup.
+- `src/services/jobs/JobService.js` — Manages job state, executes background TradingView analysis runs, and performs periodic expiration cleanup.
+- `src/services/jobs/JobQueue.js` / `src/services/jobs/jobWorker.js` — BullMQ producer/worker integration for the optional Render worker execution mode.
+- `worker.js` — Dedicated Render worker entry point with graceful BullMQ shutdown.
 - `src/services/tradingview/expandedAnalysisAlertReport.js` — Parses `EXCHANGE:SYMBOL` requests and formats grouped Spanish technical-analysis reports.
 - `src/services/monitoring/SentryService.js` — Wraps `@sentry/node` for runtime error monitoring (005).
 - `src/services/prompts/` — Langfuse-backed PromptService that resolves prompts with file-backed local defaults.
@@ -426,6 +428,8 @@ The system provides asynchronous job endpoints to support executing both `expand
 **Core Components**:
 - `src/services/jobs/JobService.js` — Coordinates job state tracking, background worker execution, progress reports, durable persistence checkpoints, and job eviction (jobs older than 1 hour).
 - `src/services/jobs/JobRepository.js` — Stores and lists sanitized job records in memory and, when `ENABLE_FIRESTORE_JOB_STORAGE=true`, in Firestore collection `tradingviewJobs`.
+- `src/services/jobs/JobQueue.js` — Enqueues only durable `jobId` references in Redis/BullMQ and reports queue readiness without exposing `REDIS_URL`.
+- `src/services/jobs/jobWorker.js` / `worker.js` — Claims queued jobs through Firestore transactions, runs the existing `JobService` flow, and drains the worker on `SIGTERM`.
 - `src/controllers/webhooks/handlers/jobs/jobs.js` — HTTP route controller handlers (`postCreateJob`, `getJobList`, `getJobStatus`).
 - `src/controllers/commands.js` — Telegram `/analisis` and `/scanner` commands create these jobs and must `await jobService.createJob()` before replying or handling validation/storage errors.
 
@@ -434,6 +438,7 @@ The system provides asynchronous job endpoints to support executing both `expand
 - Idempotency: job-starting POST endpoints reserve the optional `idempotency-key` before validation/worker launch, replay matching responses with `Idempotency-Replay: true` and `idempotencyReplayed: true`, and return `409 IDEMPOTENCY_CONFLICT` when a key is reused with a different request fingerprint. Nested object keys are canonicalized for the fingerprint while array order remains significant. Requests without a key are unchanged.
 - Feature checks: returns `404 FEATURE_DISABLED` if market scanner jobs are created but `ENABLE_MARKET_SCANNER` is not `'true'`.
 - Persistence: `createJob()` and `getJob()` are async because job metadata/results may be written to or read from Firestore.
+- Render worker mode: set `JOB_EXECUTION_MODE=render-worker` with `REDIS_URL` and durable Firestore credentials. The web process returns `503 JOB_QUEUE_UNAVAILABLE` when the queue cannot accept work; `JOB_QUEUE_*` settings control attempts, backoff, concurrency, leases, and connection timeout. The default `local` mode is unchanged.
 - Telegram commands: async `createJob()` rejections must stay inside the command `try/catch` so `replyValidationError()` can return clear command feedback instead of producing unhandled promise rejections.
 - Eviction: terminal jobs (`completed`, `failed`, `cancelled`, `timed_out`) older than 1 hour are deleted from memory/Firestore and return `404 Not Found`; active jobs are preserved.
 - Background failures: if the worker runs into unexpected exceptions or timeouts, the job is marked `failed` and reported to Sentry.

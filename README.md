@@ -88,6 +88,17 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 - `FIREBASE_PROJECT_ID` - Optional Firebase project override for Admin SDK initialization
 - `GOOGLE_APPLICATION_CREDENTIALS` - Optional path to a service account JSON file for local development
 
+#### Render Worker Queue
+
+- `JOB_EXECUTION_MODE` - Use `local` for the in-process fallback or `render-worker` to enqueue TradingView jobs in BullMQ (`local` by default)
+- `REDIS_URL` - Render Key Value connection string required by `render-worker`
+- `JOB_QUEUE_ATTEMPTS` / `JOB_QUEUE_BACKOFF_MS` - BullMQ retry count and exponential backoff delay (defaults: `5` / `30000` ms)
+- `JOB_QUEUE_CONCURRENCY` - Worker concurrency (default: `1`)
+- `JOB_QUEUE_CLAIM_LEASE_MS` - Firestore claim lease and heartbeat interval (default: `60000` ms)
+- `JOB_QUEUE_CONNECT_TIMEOUT_MS` - Redis connection timeout (default: `5000` ms)
+
+`render.yaml` provisions a starter Background Worker and Key Value store. The web service remains on `JOB_EXECUTION_MODE=local` by default; switching it to `render-worker` requires the worker, Redis, and Firestore credentials to be available. The API returns `503 JOB_QUEUE_UNAVAILABLE` instead of accepting a job when the durable queue is unavailable.
+
 #### Admin Notifications
 
 - `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID` - Chat ID for deployment alerts and fail-open notification-channel failure pages
@@ -828,6 +839,8 @@ Jobs are retained in memory and, when Firestore job storage is enabled, persiste
 For completed ranked market-scanner jobs, `scanResults[].scores[]` contains the structured `symbol`, numeric `score`, non-empty `reason`, and optional `trendConfluence` fields used by the alert report. This is also included in configured terminal callback payloads.
 
 Set `ENABLE_FIRESTORE_JOB_STORAGE=true` plus the normal Firebase Admin credentials (`FIREBASE_SERVICE_ACCOUNT_JSON` or `GOOGLE_APPLICATION_CREDENTIALS`) to enable durable job storage. The legacy in-memory path remains the fallback when Firestore is disabled or unavailable.
+
+By default, jobs still execute in-process. With `JOB_EXECUTION_MODE=render-worker`, the web service stores sanitized job metadata in Firestore and enqueues only the `jobId` in Redis; the dedicated `pnpm run start-worker` process claims the job transactionally, renews its lease at persistence checkpoints, and drains BullMQ work on `SIGTERM`. Missing Redis or durable Firestore storage fails the create request with `503 JOB_QUEUE_UNAVAILABLE`.
 
 **Response (200 OK - Processing):**
 ```json

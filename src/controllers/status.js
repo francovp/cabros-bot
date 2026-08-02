@@ -4,6 +4,7 @@ const { scannerPresetService } = require('../services/scannerPresets/ScannerPres
 const idempotencyStorageService = require('../services/storage/IdempotencyStorageService');
 const { isFirestoreConfigured } = require('../services/storage/firestoreConfig');
 const SignalOutcomeService = require('../services/storage/SignalOutcomeService');
+const { jobQueue } = require('../services/jobs/JobQueue');
 
 const DEFAULT_TRADINGVIEW_MCP_URL = 'https://tradingview-mcp.onrender.com/mcp';
 const DEFAULT_AZURE_LLM_ENDPOINT = 'https://models.github.ai/inference';
@@ -253,6 +254,7 @@ function getStatus() {
 	};
 
 	const signalOutcomeWorkerStatus = SignalOutcomeService.getWorkerStatus();
+	const jobExecutionQueueStatus = jobQueue.getStatus();
 
 	return {
 		service: {
@@ -285,6 +287,7 @@ function getStatus() {
 			messageFooterMetadata: messageFooterMetadataEnabled,
 			signalOutcomeTracking: signalOutcomeTrackingEnabled,
 			firestoreIdempotency: idempotencyStorageService.isEnabled(),
+			jobExecutionWorker: jobExecutionQueueStatus.enabled,
 		},
 		deliveryChannels: {
 			telegram: {
@@ -338,6 +341,7 @@ function getStatus() {
 				lastRunDurationMs: signalOutcomeWorkerStatus.lastRunDurationMs,
 				lastRunEvaluatedCount: signalOutcomeWorkerStatus.lastRunEvaluatedCount,
 			},
+			jobExecutionQueue: jobExecutionQueueStatus,
 		},
 	};
 }
