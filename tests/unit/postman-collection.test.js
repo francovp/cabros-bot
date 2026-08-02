@@ -60,6 +60,25 @@ describe('Postman collection contract', () => {
 		expect(new Set(values).size).toBe(values.length);
 	});
 
+	it('includes the required type in every x-header job example', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const job = findItem(collection.item, 'POST Create TradingView Analysis Job (x-idempotency-key header)');
+		const requests = [job.request, ...job.response.map((response) => response.originalRequest).filter(Boolean)];
+
+		for (const request of requests) {
+			expect(JSON.parse(request.body.raw).type).toBe('expanded-analysis');
+		}
+	});
+
+	it('uses distinct keys for message and replay alternatives', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const message = findItem(collection.item, 'POST Send Message');
+		const replay = findItem(collection.item, 'POST Replay Alert (telegram)');
+
+		expect(findHeader(message, 'x-idempotency-key').value).toBe('generic-message-key-1');
+		expect(findHeader(replay, 'x-idempotency-key').value).toBe('alert-replay-key-1');
+	});
+
 	it('keeps cached delivery metrics in the x-header replay example', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const sendMessage = findItem(collection.item, 'POST Send Message (x-idempotency-key header)');

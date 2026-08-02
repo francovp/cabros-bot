@@ -721,7 +721,7 @@
               },
               {
                 "key": "x-idempotency-key",
-                "value": "demo-key-1",
+                "value": "generic-message-key-1",
                 "type": "text",
                 "description": "Alternative x-prefixed idempotency header variant",
                 "disabled": true
@@ -2030,7 +2030,7 @@
               },
               {
                 "key": "x-idempotency-key",
-                "value": "demo-key-1",
+                "value": "alert-replay-key-1",
                 "type": "text",
                 "description": "Alternative x-prefixed idempotency header variant",
                 "disabled": true
@@ -3036,7 +3036,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"symbols\": [\"BINANCE:BTCUSDT\"]\n}"
+              "raw": "{\n  \"type\": \"expanded-analysis\",\n  \"symbols\": [\"BINANCE:BTCUSDT\"]\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/api/jobs/tradingview-analysis",
@@ -3077,7 +3077,7 @@
                 ],
                 "body": {
                   "mode": "raw",
-                  "raw": "{\n  \"symbols\": [\"BINANCE:BTCUSDT\"]\n}"
+                  "raw": "{\n  \"type\": \"expanded-analysis\",\n  \"symbols\": [\"BINANCE:BTCUSDT\"]\n}"
                 },
                 "url": {
                   "raw": "{{baseUrl}}/api/jobs/tradingview-analysis",
@@ -3124,7 +3124,7 @@
                 ],
                 "body": {
                   "mode": "raw",
-                  "raw": "{\n  \"symbols\": [\"BINANCE:BTCUSDT\"]\n}"
+                  "raw": "{\n  \"type\": \"expanded-analysis\",\n  \"symbols\": [\"BINANCE:BTCUSDT\"]\n}"
                 },
                 "url": {
                   "raw": "{{baseUrl}}/api/jobs/tradingview-analysis",
@@ -3165,7 +3165,7 @@
                 ],
                 "body": {
                   "mode": "raw",
-                  "raw": "{\n  \"symbols\": [\"BINANCE:ETHUSDT\"]\n}"
+                  "raw": "{\n  \"type\": \"expanded-analysis\",\n  \"symbols\": [\"BINANCE:ETHUSDT\"]\n}"
                 },
                 "url": {
                   "raw": "{{baseUrl}}/api/jobs/tradingview-analysis",
