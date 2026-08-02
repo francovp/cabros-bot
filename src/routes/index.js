@@ -24,41 +24,49 @@ const { listAlerts, getAlertById, replayAlert, summarizeAlerts, exportAlerts } =
 const { validateApiKey } = require('../lib/auth');
 const { getApiStatus } = require('../controllers/status');
 const { idempotencyMiddleware } = require('../lib/idempotency');
+const {
+	ADMIN_OPERATOR,
+	ADMIN_VIEWER,
+	requireAdminRole,
+	validateAdminAccess,
+} = require('../lib/adminAuth');
 
 function getRoutes(botOrGetter) {
 	const router = express.Router();
+	const adminRead = [validateAdminAccess, requireAdminRole(ADMIN_VIEWER)];
+	const adminWrite = [validateAdminAccess, requireAdminRole(ADMIN_OPERATOR)];
 	router.post('/webhook/alert', validateApiKey, idempotencyMiddleware, postAlert(botOrGetter));
 	router.post('/webhook/message', validateApiKey, idempotencyMiddleware, postMessage(botOrGetter));
 	router.post('/webhook/expanded-analysis-alert', validateApiKey, idempotencyMiddleware, postExpandedAnalysisAlert(botOrGetter));
 	router.post('/webhook/market-scanner-alert', validateApiKey, idempotencyMiddleware, postMarketScannerAlert(botOrGetter));
 	router.post('/webhook/volume-confirmation', validateApiKey, postVolumeConfirmation());
-	router.get('/alerts', validateApiKey, listAlerts);
-	router.get('/alerts/summary', validateApiKey, summarizeAlerts);
-	router.get('/alerts/export', validateApiKey, exportAlerts);
-	router.post('/alerts/:alertId/replay', validateApiKey, idempotencyMiddleware, replayAlert(botOrGetter));
-	router.get('/alerts/:alertId', validateApiKey, getAlertById);
-	router.post('/scanner-presets', validateApiKey, postPreset);
-	router.get('/scanner-presets', validateApiKey, listPresets);
-	router.get('/scanner-presets/:id', validateApiKey, getPreset);
-	router.put('/scanner-presets/:id', validateApiKey, updatePreset);
-	router.delete('/scanner-presets/:id', validateApiKey, deletePreset);
-	router.post('/scanner-presets/:id/run', validateApiKey, postRunPreset(botOrGetter));
+	router.get('/alerts', ...adminRead, listAlerts);
+	router.get('/alerts/summary', ...adminRead, summarizeAlerts);
+	router.get('/alerts/export', ...adminRead, exportAlerts);
+	router.post('/alerts/:alertId/replay', ...adminWrite, idempotencyMiddleware, replayAlert(botOrGetter));
+	router.get('/alerts/:alertId', ...adminRead, getAlertById);
+	router.post('/scanner-presets', ...adminWrite, postPreset);
+	router.get('/scanner-presets', ...adminRead, listPresets);
+	router.get('/scanner-presets/:id', ...adminRead, getPreset);
+	router.put('/scanner-presets/:id', ...adminWrite, updatePreset);
+	router.delete('/scanner-presets/:id', ...adminWrite, deletePreset);
+	router.post('/scanner-presets/:id/run', ...adminWrite, postRunPreset(botOrGetter));
 
 	// Async job endpoints
-	router.post('/jobs/tradingview-analysis', validateApiKey, idempotencyMiddleware, postCreateJob(botOrGetter));
-	router.get('/jobs', validateApiKey, getJobList);
-	router.get('/jobs/:jobId', validateApiKey, getJobStatus);
-	router.post('/jobs/:jobId/cancel', validateApiKey, postCancelJob);
-	router.post('/jobs/:jobId/retry', validateApiKey, idempotencyMiddleware, postRetryJob(botOrGetter));
-	router.post('/jobs/:jobId/retry-failed', validateApiKey, idempotencyMiddleware, postRetryFailedJob(botOrGetter));
+	router.post('/jobs/tradingview-analysis', ...adminWrite, idempotencyMiddleware, postCreateJob(botOrGetter));
+	router.get('/jobs', ...adminRead, getJobList);
+	router.get('/jobs/:jobId', ...adminRead, getJobStatus);
+	router.post('/jobs/:jobId/cancel', ...adminWrite, postCancelJob);
+	router.post('/jobs/:jobId/retry', ...adminWrite, idempotencyMiddleware, postRetryJob(botOrGetter));
+	router.post('/jobs/:jobId/retry-failed', ...adminWrite, idempotencyMiddleware, postRetryFailedJob(botOrGetter));
 
 	const { getNewsMonitor } = require('../controllers/webhooks/handlers/newsMonitor/newsMonitor');
 	const newsMonitor = getNewsMonitor();
 	router.post('/news-monitor', validateApiKey, newsMonitor.handleRequest.bind(newsMonitor));
 	router.get('/news-monitor', validateApiKey, newsMonitor.handleRequest.bind(newsMonitor));
 
-	router.get('/status', validateApiKey, getApiStatus);
-	router.get('/capabilities', validateApiKey, getApiStatus);
+	router.get('/status', ...adminRead, getApiStatus);
+	router.get('/capabilities', ...adminRead, getApiStatus);
 
 	return router;
 }

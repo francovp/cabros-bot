@@ -53,13 +53,14 @@
 					path,
 					label: operation.summary || `${upperMethod} ${path}`,
 					confirm: confirmations[`${upperMethod} ${path}`],
+					requiredRole: operation['x-admin-role'] || (upperMethod === 'GET' ? 'admin.viewer' : 'admin.operator'),
 				};
 			}))
 		.sort((left, right) => left.path.localeCompare(right.path) || left.method.localeCompare(right.method));
 
 	const confirmRequest = (definition, confirm) => !definition.confirm || confirm(definition.confirm);
 
-	const createRequest = ({ path, method, query, body, apiKey }) => {
+	const createRequest = ({ path, method, query, body, apiKey, authToken }) => {
 		if (typeof path !== 'string' || !path.startsWith('/api/') || path.includes('?') || path.includes('#')) {
 			throw new Error('API path must start with /api/');
 		}
@@ -77,14 +78,32 @@
 			options.body = JSON.stringify(body);
 		}
 		if (apiKey) headers['x-api-key'] = apiKey;
+		if (authToken) headers.Authorization = `Bearer ${authToken}`;
 
 		const search = params.toString();
 		return { url: search ? `${path}?${search}` : path, options };
 	};
 
+	const getAdminRole = (claims = {}) => {
+		const roles = Array.isArray(claims.roles) ? claims.roles : [];
+		if (claims['admin.operator'] === true || claims.adminRole === 'admin.operator'
+			|| claims.role === 'admin.operator' || roles.includes('admin.operator')
+			|| claims.admin && claims.admin.operator === true) return 'admin.operator';
+		if (claims['admin.viewer'] === true || claims.adminRole === 'admin.viewer'
+			|| claims.role === 'admin.viewer' || roles.includes('admin.viewer')
+			|| claims.admin && claims.admin.viewer === true) return 'admin.viewer';
+		return null;
+	};
+
+	const canAccess = (definition, role) => !definition.requiredRole
+		|| role === 'admin.operator'
+		|| role === definition.requiredRole;
+
 	return {
+		canAccess,
 		confirmRequest,
 		createRequest,
+		getAdminRole,
 		operationDefinitions,
 		redactSecret,
 		validateQuery,

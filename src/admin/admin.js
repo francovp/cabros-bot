@@ -39,6 +39,9 @@ const VIEW_ACTIONS = {
 };
 
 let contractPromise;
+let authConfigPromise;
+let firebaseSdkPromise;
+let authState = { enabled: false, auth: null, user: null, role: null };
 const loadContract = () => {
 	if (!contractPromise) {
 		contractPromise = fetch('/openapi.json')
@@ -59,6 +62,126 @@ const element = (tag, options = {}) => {
 	if (options.className) node.className = options.className;
 	if (options.text) node.textContent = options.text;
 	return node;
+};
+
+const getElement = (id) => document.getElementById(id);
+
+const setHidden = (id, hidden) => {
+	const node = getElement(id);
+	if (node) node.hidden = hidden;
+};
+
+const loadAuthConfig = () => {
+	if (!authConfigPromise) {
+		authConfigPromise = fetch('/admin/auth-config')
+			.then((response) => {
+				if (!response.ok) throw new Error('Authentication configuration unavailable');
+				return response.json();
+			})
+			.catch(() => ({ enabled: true, configured: false }));
+	}
+	return authConfigPromise;
+};
+
+const loadFirebaseSdk = () => {
+	if (window.firebase && typeof window.firebase.initializeApp === 'function'
+		&& typeof window.firebase.auth === 'function') return Promise.resolve();
+	if (!firebaseSdkPromise) {
+		firebaseSdkPromise = [
+			'https://www.gstatic.com/firebasejs/10.13.2/firebase-app-compat.js',
+			'https://www.gstatic.com/firebasejs/10.13.2/firebase-auth-compat.js',
+		].reduce((chain, src) => chain.then(() => new Promise((resolve, reject) => {
+			const script = document.createElement('script');
+			script.src = src;
+			script.onload = resolve;
+			script.onerror = () => reject(new Error('Firebase SDK failed to load'));
+			document.head.append(script);
+		})), Promise.resolve());
+	}
+	return firebaseSdkPromise;
+};
+
+const showAuthState = (message, isError = false) => {
+	const state = getElement('auth-state');
+	if (state) {
+		state.className = isError ? 'response-error' : 'request-state';
+		state.textContent = message;
+	}
+};
+
+const showSignedOutState = () => {
+	setHidden('auth-form', false);
+	setHidden('sign-out', true);
+	showAuthState('Sign in to continue.');
+	const view = getElement('view');
+	if (view) view.replaceChildren(element('p', { className: 'request-state', text: 'Sign in required.' }));
+};
+
+const showSignedInState = () => {
+	setHidden('auth-form', true);
+	setHidden('sign-out', false);
+	showAuthState(`Signed in as ${authState.user.email || 'admin'}.`);
+};
+
+const setupFirebaseAuth = async (config) => {
+	setHidden('legacy-connection', true);
+	setHidden('firebase-auth', false);
+	if (!config.configured) {
+		showAuthState('Firebase sign-in is unavailable. Ask an administrator to configure it.', true);
+		return;
+	}
+
+	try {
+		await loadFirebaseSdk();
+		if (!window.firebase || typeof window.firebase.initializeApp !== 'function'
+			|| typeof window.firebase.auth !== 'function') throw new Error('Firebase SDK unavailable');
+		window.firebase.initializeApp(config.config);
+		const auth = window.firebase.auth();
+		authState = { enabled: true, auth, user: null, role: null };
+		setHidden('legacy-connection', false);
+		setupLegacyConsole({ persist: false });
+		const persistence = window.firebase.auth.Auth
+			&& window.firebase.auth.Auth.Persistence
+			&& window.firebase.auth.Auth.Persistence.NONE;
+		if (persistence && typeof auth.setPersistence === 'function') await auth.setPersistence(persistence);
+
+		getElement('sign-in')?.addEventListener('click', async () => {
+			try {
+				await auth.signInWithEmailAndPassword(
+					getElement('auth-email')?.value || '',
+					getElement('auth-password')?.value || '',
+				);
+			} catch (error) {
+				showAuthState('Sign-in failed. Check the account and try again.', true);
+			}
+		});
+		getElement('sign-out')?.addEventListener('click', () => {
+			if (getElement('api-key')) getElement('api-key').value = '';
+			return auth.signOut();
+		});
+		auth.onAuthStateChanged(async (user) => {
+			authState.user = user;
+			if (!user) {
+				authState.role = null;
+				showSignedOutState();
+				return;
+			}
+			try {
+				const tokenResult = await user.getIdTokenResult();
+				authState.role = window.CabrosAdminRequest.getAdminRole(tokenResult.claims);
+				if (!authState.role) {
+					showAuthState('This account is not authorized for the admin console.', true);
+					return;
+				}
+				showSignedInState();
+				renderView('status');
+			} catch (error) {
+				showAuthState('Unable to verify the signed-in account.', true);
+			}
+		});
+	} catch (error) {
+		showAuthState('Firebase sign-in is unavailable. Ask an administrator to configure it.', true);
+	}
 };
 
 const parseJson = (value, label) => {
@@ -165,7 +288,21 @@ const sendRequest = async ({
 	definition, path, query, body, button, output, formatResponse, parseSuccessResponse, isCurrent,
 }) => {
 	const requestIsCurrent = typeof isCurrent === 'function' ? isCurrent : () => true;
-	const apiKey = document.getElementById('api-key').value;
+	const apiKey = getElement('api-key')?.value || '';
+	const requiredRole = definition.requiredRole || (definition.method === 'GET' ? 'admin.viewer' : 'admin.operator');
+	if (authState.enabled && (!authState.user || !window.CabrosAdminRequest.canAccess({ requiredRole }, authState.role))) {
+		showError(output, authState.user ? 'Your admin role cannot perform this operation.' : 'Sign in is required.');
+		return;
+	}
+	let authToken;
+	if (authState.enabled) {
+		try {
+			authToken = await authState.user.getIdToken();
+		} catch (error) {
+			showError(output, 'Unable to refresh the admin sign-in. Please sign in again.');
+			return;
+		}
+	}
 	const summary = window.CabrosAdminRequest.redactSecret(`${definition.method} ${path}`, apiKey);
 	let request;
 	try {
@@ -175,6 +312,7 @@ const sendRequest = async ({
 			query,
 			body,
 			apiKey,
+			authToken,
 		});
 	} catch (error) {
 		showError(output, error.message);
@@ -763,16 +901,25 @@ const renderView = async (name) => {
 	}
 };
 
-document.addEventListener('DOMContentLoaded', () => {
-	const apiKey = document.getElementById('api-key');
-	const keyState = document.getElementById('key-state');
-	try {
-		apiKey.value = sessionStorage.getItem('cabros-admin-api-key') || '';
-	} catch (_) {
-		keyState.textContent = 'Session storage is unavailable; the key will remain in this tab only.';
+const setupLegacyConsole = ({ persist = true } = {}) => {
+	const apiKey = getElement('api-key');
+	const keyState = getElement('key-state');
+	if (!apiKey || !keyState) return;
+	if (persist) {
+		try {
+			apiKey.value = sessionStorage.getItem('cabros-admin-api-key') || '';
+		} catch (_) {
+			keyState.textContent = 'Session storage is unavailable; the key will remain in this tab only.';
+		}
+	} else {
+		keyState.textContent = 'API key is used only for webhook operations and is not stored.';
 	}
 
-	document.getElementById('save-key').addEventListener('click', () => {
+	getElement('save-key')?.addEventListener('click', () => {
+		if (!persist) {
+			keyState.textContent = 'API key kept only in memory for webhook operations.';
+			return;
+		}
 		try {
 			sessionStorage.setItem('cabros-admin-api-key', apiKey.value);
 			keyState.textContent = 'API key saved for this browser session.';
@@ -781,8 +928,12 @@ document.addEventListener('DOMContentLoaded', () => {
 		}
 	});
 
-	document.getElementById('clear-key').addEventListener('click', () => {
+	getElement('clear-key')?.addEventListener('click', () => {
 		apiKey.value = '';
+		if (!persist) {
+			keyState.textContent = 'API key cleared from the form.';
+			return;
+		}
 		try {
 			sessionStorage.removeItem('cabros-admin-api-key');
 			keyState.textContent = 'API key cleared.';
@@ -790,12 +941,27 @@ document.addEventListener('DOMContentLoaded', () => {
 			keyState.textContent = `API key cleared from the form; session storage failed: ${error.message}`;
 		}
 	});
+};
 
+document.addEventListener('DOMContentLoaded', async () => {
+	const view = getElement('view');
+	if (view) view.replaceChildren(element('p', { className: 'request-state', text: 'Checking authentication…' }));
 	document.querySelectorAll('[data-view]').forEach((button) => button.addEventListener('click', () => {
+		if (authState.enabled && !authState.user) return showSignedOutState();
 		document.querySelectorAll('[data-view]').forEach((item) => item.removeAttribute('aria-current'));
 		button.setAttribute('aria-current', 'page');
 		renderView(button.dataset.view);
 	}));
 
+	const config = await loadAuthConfig();
+	if (config.enabled) {
+		await setupFirebaseAuth(config);
+		return;
+	}
+
+	authState = { enabled: false, auth: null, user: null, role: 'admin.operator' };
+	setHidden('firebase-auth', true);
+	setHidden('legacy-connection', false);
+	setupLegacyConsole();
 	renderView('status');
 });

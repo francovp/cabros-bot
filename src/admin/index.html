@@ -8,11 +8,22 @@
 </head>
 <body>
   <main class="console-shell">
-    <header><h1>Cabros Bot Console</h1><button id="clear-key" type="button">Clear key</button></header>
-    <section aria-labelledby="connection-title">
+    <header><h1>Cabros Bot Console</h1></header>
+    <section id="firebase-auth" aria-labelledby="firebase-auth-title">
+      <h2 id="firebase-auth-title">Admin sign-in</h2>
+      <div id="auth-form">
+        <label>Email <input id="auth-email" type="email" autocomplete="username"></label>
+        <label>Password <input id="auth-password" type="password" autocomplete="current-password"></label>
+        <button id="sign-in" type="button">Sign in</button>
+      </div>
+      <button id="sign-out" type="button" hidden>Sign out</button>
+      <p id="auth-state" class="request-state" aria-live="polite">Checking sign-in configuration…</p>
+    </section>
+    <section id="legacy-connection" aria-labelledby="connection-title" hidden>
       <h2 id="connection-title">Connection</h2>
       <label>API key <input id="api-key" type="password" autocomplete="off"></label>
       <button id="save-key" type="button">Use key for this session</button>
+      <button id="clear-key" type="button">Clear key</button>
       <p id="key-state" class="request-state" aria-live="polite"></p>
     </section>
     <nav aria-label="Console sections">

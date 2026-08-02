@@ -59,6 +59,24 @@ describe('createRequest', () => {
 			options: { method: 'GET', headers: {} },
 		});
 	});
+
+	it('uses a Firebase bearer token without replacing legacy API-key headers', () => {
+		expect(createRequest({
+			path: '/api/status',
+			method: 'GET',
+			apiKey: 'legacy-key',
+			authToken: 'firebase-token',
+		})).toEqual({
+			url: '/api/status',
+			options: {
+				method: 'GET',
+				headers: {
+					'x-api-key': 'legacy-key',
+					Authorization: 'Bearer firebase-token',
+				},
+			},
+		});
+	});
 });
 
 it('exposes a working helper on a browser-like window global', () => {
@@ -132,5 +150,17 @@ describe('admin client safety', () => {
 			return false;
 		})).toBe(false);
 		expect(promptedWith).toBe(replay.confirm);
+	});
+
+	it('exposes the role metadata needed for viewer controls', () => {
+		const definitions = operationDefinitions({
+			paths: {
+				'/api/status': { get: { summary: 'Status', 'x-admin-role': 'admin.viewer' } },
+				'/api/jobs': { post: { summary: 'Create job', 'x-admin-role': 'admin.operator' } },
+			},
+		});
+
+		expect(definitions.find(({ path }) => path === '/api/status').requiredRole).toBe('admin.viewer');
+		expect(definitions.find(({ path }) => path === '/api/jobs').requiredRole).toBe('admin.operator');
 	});
 });

@@ -19,6 +19,24 @@ function findHeader(item, key) {
 }
 
 describe('Postman collection contract', () => {
+	it('documents Firebase admin configuration and bearer-auth status access', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const config = findItem(collection.item, 'GET Firebase Admin Auth Config');
+		const status = findItem(collection.item, 'GET Status (Firebase bearer)');
+
+		expect(config).toBeDefined();
+		expect(config.request.url.raw).toBe('{{baseUrl}}/admin/auth-config');
+		expect(config.response[0].code).toBe(200);
+		expect(status).toBeDefined();
+		expect(status.request.header).toEqual(expect.arrayContaining([
+			expect.objectContaining({ key: 'Authorization', value: 'Bearer {{firebaseIdToken}}' }),
+		]));
+		expect(status.response[0].body).toContain('"service"');
+		expect(collection.variable).toEqual(expect.arrayContaining([
+			expect.objectContaining({ key: 'firebaseIdToken' }),
+		]));
+	});
+
 	it('documents x-idempotency-key on the alert webhook request', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const sendAlert = findItem(collection.item, 'POST Send Alert');

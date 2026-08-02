@@ -48,11 +48,22 @@ describe('public OpenAPI documentation', () => {
 		expect(page.status).toBe(200);
 		expect(page.text).toContain('Cabros Bot Console');
 		expect(page.text).toContain('/admin/admin.js');
+		expect(page.text).not.toContain('https://www.gstatic.com/firebasejs/');
 		expect(page.text).not.toMatch(/admin\.(?:js|css)\?v=/);
 		expect(page.text).not.toContain(process.env.WEBHOOK_API_KEY);
 		expect(script.status).toBe(200);
 		expect(script.headers['content-type']).toMatch(/javascript/);
 		expect(script.headers['cache-control']).toBe('no-cache');
+	});
+
+	it('allows only the pinned Firebase Auth browser origins in the admin CSP', async () => {
+		const page = await request(app).get('/admin');
+		const policy = page.headers['content-security-policy'];
+
+		expect(policy).toContain("script-src 'self' https://www.gstatic.com");
+		expect(policy).toContain('https://identitytoolkit.googleapis.com');
+		expect(policy).toContain('https://securetoken.googleapis.com');
+		expect(policy).not.toContain("script-src 'self' https:;");
 	});
 
 	it('keeps the admin client contract-driven without exposing the configured API key', async () => {

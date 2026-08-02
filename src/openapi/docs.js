@@ -4,6 +4,7 @@ const path = require('path');
 const express = require('express');
 const swaggerUiDist = require('swagger-ui-dist');
 const contract = require('./openapi.json');
+const { getAdminAuthConfig } = require('../lib/adminAuth');
 
 const docsHtmlPath = path.join(__dirname, 'index.html');
 const initializerPath = path.join(__dirname, 'swagger-initializer.js');
@@ -33,6 +34,8 @@ function getOpenApiDocsRouter() {
 		res.set('Cache-Control', 'no-cache');
 		return res.sendFile(path.join(adminDir, 'index.html'));
 	});
+
+	router.get('/admin/auth-config', (req, res) => res.json(getAdminAuthConfig()));
 
 	router.use('/admin', express.static(adminDir, {
 		index: false,

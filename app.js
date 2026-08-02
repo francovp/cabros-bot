@@ -19,7 +19,15 @@ app.use(express.json());
 app.use(cors());
 
 // Use helmet for improved security
-app.use(helmet());
+const contentSecurityPolicy = helmet.contentSecurityPolicy.getDefaultDirectives();
+contentSecurityPolicy['script-src'] = ["'self'", 'https://www.gstatic.com'];
+contentSecurityPolicy['connect-src'] = [
+	"'self'",
+	'https://identitytoolkit.googleapis.com',
+	'https://securetoken.googleapis.com',
+	'https://www.googleapis.com',
+];
+app.use(helmet({ contentSecurityPolicy: { directives: contentSecurityPolicy } }));
 
 app.use('/healthcheck', require('express-healthcheck')());
 

@@ -49,6 +49,11 @@
       "key": "jobRetryFailedIdempotencyKey",
       "value": "job-retry-failed-001",
       "type": "string"
+    },
+    {
+      "key": "firebaseIdToken",
+      "value": "paste-firebase-id-token-here",
+      "type": "string"
     }
   ],
   "item": [
@@ -3192,6 +3197,70 @@
               }
             }
           ]
+        }
+      ]
+    },
+    {
+      "name": "GET Firebase Admin Auth Config",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "description": "Public browser configuration. Returns only non-secret Firebase Web Auth settings; ENABLE_FIREBASE_ADMIN_AUTH controls whether sign-in is required.",
+        "url": {
+          "raw": "{{baseUrl}}/admin/auth-config",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "admin",
+            "auth-config"
+          ]
+        }
+      },
+      "response": [
+        {
+          "name": "Success (disabled)",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"enabled\":false,\"configured\":false}"
+        }
+      ]
+    },
+    {
+      "name": "GET Status (Firebase bearer)",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{firebaseIdToken}}",
+            "type": "text"
+          }
+        ],
+        "description": "Admin-console read example. Use a Firebase ID token whose custom claims include admin.viewer or admin.operator. Protected webhook operations remain API-key-only.",
+        "url": {
+          "raw": "{{baseUrl}}/api/status",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "status"
+          ]
+        }
+      },
+      "response": [
+        {
+          "name": "Success",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"service\":{\"name\":\"cabros-bot\"},\"featureFlags\":{},\"dependencies\":{}}"
+        },
+        {
+          "name": "Unauthorized or missing role",
+          "status": "Unauthorized",
+          "code": 401,
+          "body": "{\"error\":\"Unauthorized\",\"code\":\"ADMIN_AUTH_REQUIRED\"}"
         }
       ]
     }
