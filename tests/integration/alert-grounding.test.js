@@ -29,6 +29,7 @@ jest.mock('../../src/services/grounding/genaiClient');
 
 describe('Alert Grounding Integration', () => {
 	let app;
+	let bot;
 	let mockTelegramSendMessage;
 	let mockFetch;
 	let savedEnv;
@@ -44,7 +45,7 @@ describe('Alert Grounding Integration', () => {
 			TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID: '987654321',
 			BOT_TOKEN: 'test-bot-token',
 			ENABLE_TELEGRAM_BOT: 'true',
-			ENABLE_WHATSAPP_ALERTS: 'true',
+			ENABLE_WHATSAPP_ALERTS: 'false',
 			WHATSAPP_API_URL: 'https://api.greenapi.com/waInstance123/',
 			WHATSAPP_API_KEY: 'test-whatsapp-key',
 			WHATSAPP_CHAT_ID: '120363000000000000@g.us',
@@ -73,17 +74,17 @@ describe('Alert Grounding Integration', () => {
 
 		// Mock Telegram bot
 		mockTelegramSendMessage = jest.fn().mockResolvedValue({ message_id: 'test-message-id' });
-		const bot = {
+		bot = {
 			telegram: {
 				sendMessage: mockTelegramSendMessage,
 				getMe: jest.fn().mockResolvedValue({ id: 123456789, username: 'TestBot' }),
 			},
 		};
 
-		// Mock fetch for WhatsApp (will be disabled anyway)
+		// Mock fetch for WhatsApp (will be disabled anyway in baseline)
 		mockFetch = jest.fn().mockResolvedValue({
 			ok: true,
-			json: async () => ({ success: true }),
+			json: async () => ({ success: true, idMessage: 'test-wa-message-id' }),
 		});
 		global.fetch = mockFetch;
 
@@ -288,6 +289,7 @@ describe('Alert Grounding Integration', () => {
 			process.env.WHATSAPP_API_URL = 'https://api.greenapi.com/waInstance123/';
 			process.env.WHATSAPP_API_KEY = 'test-whatsapp-key';
 			process.env.WHATSAPP_CHAT_ID = '120363000000000000@g.us';
+			await initializeNotificationServices(bot);
 
 			const response = await request(app)
 				.post('/api/webhook/alert').set('x-api-key', 'test-key')
@@ -312,6 +314,36 @@ describe('Alert Grounding Integration', () => {
 				expect.any(Object),
 			);
 			expect(mockFetch).not.toHaveBeenCalled();
+		});
+
+		it('routes alert delivery to whatsapp when requested and handles successful idMessage response', async () => {
+			process.env.ENABLE_GEMINI_GROUNDING = 'false';
+			process.env.ENABLE_WHATSAPP_ALERTS = 'true';
+			process.env.WHATSAPP_API_URL = 'https://api.greenapi.com/waInstance123/';
+			process.env.WHATSAPP_API_KEY = 'test-whatsapp-key';
+			process.env.WHATSAPP_CHAT_ID = '120363000000000000@g.us';
+			await initializeNotificationServices(bot);
+
+			const response = await request(app)
+				.post('/api/webhook/alert').set('x-api-key', 'test-key')
+				.send({
+					text: 'Route this to whatsapp',
+					channels: ['whatsapp'],
+					whatsappChatId: '120363999999999999@g.us',
+				})
+				.expect(200);
+
+			expect(response.body.success).toBe(true);
+			expect(response.body.requestedChannels).toEqual(['whatsapp']);
+			expect(response.body.deliveredChannels).toEqual(['whatsapp']);
+			expect(response.body.results).toHaveLength(1);
+			expect(response.body.results[0]).toEqual(expect.objectContaining({
+				channel: 'whatsapp',
+				success: true,
+				messageId: 'test-wa-message-id',
+			}));
+			expect(mockTelegramSendMessage).not.toHaveBeenCalled();
+			expect(mockFetch).toHaveBeenCalled();
 		});
 
 		it('returns 400 when alert webhook receives an unsupported channel name', async () => {

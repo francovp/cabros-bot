@@ -256,6 +256,55 @@ describe('SignalOutcomeService Worker & Bounded Evaluation', () => {
 			expect(sweep3.scannedCount).toBe(1);
 		});
 
+		it('resumes from the last processed document when a sweep is aborted by deadline', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+
+			const docsMap = new Map();
+			for (let i = 1; i <= 5; i++) {
+				docsMap.set(`doc_${i}`, {
+					receivedAt: admin.firestore.Timestamp.fromDate(new Date(Date.now() - 3600000)),
+					symbol: `CRYPTO${i}USDT`,
+					exchange: 'BINANCE',
+					side: 'BUY',
+					price: 50000,
+					outcomeEvaluated: false,
+					outcomes: {
+						'1h': {
+							status: 'pending',
+							targetTime: new Date(Date.now() - 1000).toISOString(),
+						},
+					},
+				});
+			}
+
+			global.__firebaseAdminMockState.collections.set(
+				SignalOutcomeService.COLLECTION_NAME,
+				docsMap
+			);
+
+			let callCount = 0;
+			mockGetKlines.mockImplementation(() => {
+				callCount++;
+				if (callCount === 1) {
+					return Promise.resolve([[1600000000000, '50000', '51000', '49500', '50500', '100']]);
+				} else if (callCount === 2) {
+					const err = new Error('Signal outcome sweep deadline exceeded (50ms)');
+					err.name = 'AbortError';
+					return Promise.reject(err);
+				}
+				return Promise.resolve([[1600000000000, '50000', '51000', '49500', '50500', '100']]);
+			});
+
+			const sweep1 = await SignalOutcomeService.evaluatePendingOutcomes({ limit: 4, maxDurationMs: 50 });
+			expect(sweep1.scannedCount).toBe(2);
+
+			mockGetKlines.mockResolvedValue([
+				[1600000000000, '50000', '51000', '49500', '50500', '100'],
+			]);
+			const sweep2 = await SignalOutcomeService.evaluatePendingOutcomes({ limit: 4 });
+			expect(sweep2.scannedCount).toBe(4);
+		});
+
 		it('isolates errors fail-open when provider or firestore fails', async () => {
 			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
 			const consoleSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
