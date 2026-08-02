@@ -14,6 +14,10 @@ function findItem(items, name) {
 	return undefined;
 }
 
+function findHeader(item, key) {
+	return item.request.header.find((header) => header.key === key);
+}
+
 describe('Postman collection contract', () => {
 	it('documents x-idempotency-key on the alert webhook request', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
@@ -26,5 +30,26 @@ describe('Postman collection contract', () => {
 				disabled: true,
 			}),
 		]));
+	});
+
+	it('uses distinct demo keys for middleware-backed scanner requests', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const expandedAnalysis = findItem(collection.item, 'POST Expanded Analysis Alert');
+		const marketScanner = findItem(collection.item, 'POST Market Scanner Alert');
+
+		expect(findHeader(expandedAnalysis, 'x-idempotency-key').value).toBe('expanded-analysis-key-1');
+		expect(findHeader(marketScanner, 'x-idempotency-key').value).toBe('market-scanner-key-1');
+	});
+
+	it('keeps cached delivery metrics in the x-header replay example', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const sendMessage = findItem(collection.item, 'POST Send Message (x-idempotency-key header)');
+		const replay = sendMessage.response.find((response) => response.name === 'Success (idempotent replay)');
+		const replayBody = JSON.parse(replay.body);
+
+		expect(replayBody.results[0]).toEqual(expect.objectContaining({
+			attemptCount: 1,
+			durationMs: 450,
+		}));
 	});
 });
