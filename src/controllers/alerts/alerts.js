@@ -398,6 +398,7 @@ function parseReplayChannels(rawChannels) {
 
 function getIdempotencyKey(req) {
 	return req.headers['idempotency-key']
+		|| req.headers['x-idempotency-key']
 		|| (req.body && (req.body.idempotencyKey || req.body.idempotency_key))
 		|| (req.query && (req.query.idempotencyKey || req.query.idempotency_key));
 }
@@ -423,7 +424,7 @@ function replayAlert(botOrGetter) {
 			const idempotencyKey = getIdempotencyKey(req);
 			if (!idempotencyKey || typeof idempotencyKey !== 'string' || !idempotencyKey.trim()) {
 				return res.status(400).json({
-					error: 'Replay requests require an idempotency-key header or idempotencyKey body field.',
+					error: 'Replay requests require an idempotency-key or x-idempotency-key header or idempotencyKey body field.',
 					code: 'INVALID_REQUEST',
 				});
 			}

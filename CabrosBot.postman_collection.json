@@ -665,13 +665,6 @@
                 "key": "x-api-key",
                 "value": "{{apiKey}}",
                 "type": "text"
-              },
-              {
-                "key": "x-idempotency-key",
-                "value": "demo-key-1",
-                "type": "text",
-                "description": "Alternative x-prefixed idempotency header variant",
-                "disabled": true
               }
             ],
             "body": {
@@ -2124,7 +2117,7 @@
               },
               "status": "Bad Request",
               "code": 400,
-              "body": "{\n  \"error\": \"Replay requests require an idempotency-key header or idempotencyKey body field.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+              "body": "{\n  \"error\": \"Replay requests require an idempotency-key or x-idempotency-key header or idempotencyKey body field.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
             },
             {
               "name": "Invalid channel",
@@ -3046,8 +3039,8 @@
           "response": [
             {
               "name": "Success (x-idempotency-key header)",
-              "status": "Accepted",
-              "code": 202,
+              "status": "Created",
+              "code": 201,
               "body": "{\n  \"success\": true,\n  \"jobId\": \"job-uuid-123\",\n  \"status\": \"processing\"\n}",
               "originalRequest": {
                 "method": "POST",
@@ -3087,8 +3080,8 @@
             },
             {
               "name": "Success (idempotent replay)",
-              "status": "OK",
-              "code": 200,
+              "status": "Created",
+              "code": 201,
               "header": [
                 {
                   "key": "Idempotency-Replay",

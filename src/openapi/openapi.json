@@ -83,6 +83,9 @@
             "$ref": "#/components/parameters/IdempotencyKeyHeader"
           },
           {
+            "$ref": "#/components/parameters/XIdempotencyKeyHeader"
+          },
+          {
             "$ref": "#/components/parameters/IdempotencyKeyQueryCamel"
           },
           {
@@ -126,6 +129,12 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/DryRun"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKeyHeader"
+          },
+          {
+            "$ref": "#/components/parameters/XIdempotencyKeyHeader"
           }
         ],
         "requestBody": {
@@ -165,6 +174,12 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/DryRun"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKeyHeader"
+          },
+          {
+            "$ref": "#/components/parameters/XIdempotencyKeyHeader"
           }
         ],
         "requestBody": {
@@ -430,6 +445,12 @@
           },
           {
             "$ref": "#/components/parameters/DryRun"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKeyHeader"
+          },
+          {
+            "$ref": "#/components/parameters/XIdempotencyKeyHeader"
           }
         ],
         "requestBody": {
@@ -663,6 +684,9 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/XIdempotencyKeyHeader"
           }
         ],
         "requestBody": {
@@ -813,6 +837,9 @@
           },
           {
             "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/XIdempotencyKeyHeader"
           }
         ],
         "responses": {
@@ -852,6 +879,9 @@
           },
           {
             "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/XIdempotencyKeyHeader"
           }
         ],
         "responses": {
@@ -1049,7 +1079,7 @@
           "type": "string",
           "minLength": 1
         },
-        "description": "Optional client-generated key. Matching concurrent or sequential requests replay the original response and jobId; reuse with a different request fingerprint returns 409 IDEMPOTENCY_CONFLICT. The response includes Idempotency-Replay: false for the first request and true for a replay."
+        "description": "Optional client-generated key. Matching concurrent or sequential requests replay the original response and jobId; reuse with a different request fingerprint returns 409 IDEMPOTENCY_CONFLICT. The response includes Idempotency-Replay: false for the first request and true for a replay. The x-idempotency-key header is also supported."
       },
       "IdempotencyKeyHeader": {
         "name": "idempotency-key",
