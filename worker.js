@@ -14,6 +14,12 @@ function buildNotificationBot() {
 	return new Telegraf(process.env.BOT_TOKEN);
 }
 
+function stopNotificationBot(bot, signal) {
+	if (bot && typeof bot.stop === 'function' && (bot.polling || bot.webhookServer)) {
+		bot.stop(signal);
+	}
+}
+
 async function main() {
 	if (process.env.JOB_EXECUTION_MODE !== 'render-worker') {
 		const error = new Error('The worker requires JOB_EXECUTION_MODE=render-worker.');
@@ -34,9 +40,7 @@ async function main() {
 		console.log(`[worker] ${signal} received; draining TradingView jobs.`);
 		try {
 			await runtime.stop();
-			if (bot && typeof bot.stop === 'function') {
-				bot.stop(signal);
-			}
+			stopNotificationBot(bot, signal);
 			process.exit(0);
 		} catch (error) {
 			console.error('[worker] Graceful shutdown failed:', error.message);
@@ -58,5 +62,6 @@ if (require.main === module) {
 
 module.exports = {
 	buildNotificationBot,
+	stopNotificationBot,
 	main,
 };
