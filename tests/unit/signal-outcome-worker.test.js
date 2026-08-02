@@ -428,6 +428,65 @@ describe('SignalOutcomeService Worker & Bounded Evaluation', () => {
 			});
 		});
 
+		it('does not overwrite the shared heartbeat from a disabled scheduler process', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			process.env.SIGNAL_OUTCOME_WORKER_ROLE = 'disabled';
+			const existingHeartbeat = {
+				worker: 'signal-outcome',
+				role: 'worker',
+				running: true,
+				lastRunScannedCount: 4,
+			};
+			global.__firebaseAdminMockState.collections.set(
+				'workerHeartbeats',
+				new Map([['signal-outcome', existingHeartbeat]]),
+			);
+
+			expect(SignalOutcomeService.startWorker({ source: 'web' })).toBe(false);
+			await SignalOutcomeService.stopWorker();
+
+			expect(global.__firebaseAdminMockState.collections.get('workerHeartbeats').get('signal-outcome'))
+				.toEqual(existingHeartbeat);
+		});
+
+		it('bounds dedicated-worker drain when an in-flight Firestore update stalls', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			process.env.SIGNAL_OUTCOME_WORKER_ROLE = 'worker';
+			process.env.SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS = '50';
+			const receivedAt = new Date(Date.now() - 2 * 60 * 60 * 1000);
+			global.__firebaseAdminMockState.collections.set(
+				SignalOutcomeService.COLLECTION_NAME,
+				new Map([[
+					'drain-timeout-doc',
+					{
+						receivedAt: admin.firestore.Timestamp.fromDate(receivedAt),
+						symbol: 'BTCUSDT',
+						exchange: 'BINANCE',
+						side: 'BUY',
+						price: 50000,
+						outcomeEvaluated: false,
+						outcomes: {
+							'1h': { status: 'pending', targetTime: new Date(Date.now() - 1000).toISOString() },
+						},
+					},
+				]]),
+			);
+			admin.__mockDocUpdate.mockImplementationOnce(() => new Promise(() => {}));
+			mockGetKlines.mockResolvedValue([[1600000000000, '50000', '51000', '49500', '50500', '100']]);
+
+			SignalOutcomeService.startWorker({ source: 'worker', intervalMs: 300000, unref: false });
+			await jest.advanceTimersByTimeAsync(0);
+			expect(SignalOutcomeService.getWorkerStatus().isEvaluating).toBe(true);
+
+			const stopPromise = SignalOutcomeService.stopWorker({ drain: true });
+			await jest.advanceTimersByTimeAsync(50);
+			await stopPromise;
+
+			expect(SignalOutcomeService.getWorkerStatus().isEvaluating).toBe(false);
+		});
+
 		it('clears worker cleanly on stopWorker() without active timers', () => {
 			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
 			SignalOutcomeService.startWorker();

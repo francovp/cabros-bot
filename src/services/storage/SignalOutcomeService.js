@@ -8,6 +8,8 @@ const { MainClient } = require('binance');
 const COLLECTION_NAME = 'tradingSignalOutcomes';
 const HEARTBEAT_COLLECTION_NAME = 'workerHeartbeats';
 const HEARTBEAT_DOCUMENT_ID = 'signal-outcome';
+const HEARTBEAT_WRITE_TIMEOUT_MS = 5000;
+const MAX_WORKER_DRAIN_TIMEOUT_MS = 30000;
 const MAX_TIMER_DELAY_MS = 2147483647;
 const WORKER_ROLES = new Set(['web', 'worker', 'disabled']);
 let binanceClient = null;
@@ -23,6 +25,28 @@ let lastRunEvaluatedCount = 0;
 let lastRunPendingCount = 0;
 let lastRunErrorCount = 0;
 let lastEvaluatedDoc = null;
+
+function awaitWithTimeout(promise, timeoutMs, message) {
+	return new Promise((resolve, reject) => {
+		let settled = false;
+		const timerId = setTimeout(() => {
+			settled = true;
+			reject(new Error(message));
+		}, timeoutMs);
+
+		Promise.resolve(promise).then((value) => {
+			if (settled) return;
+			settled = true;
+			globalThis.clearTimeout?.(timerId);
+			resolve(value);
+		}, (error) => {
+			if (settled) return;
+			settled = true;
+			globalThis.clearTimeout?.(timerId);
+			reject(error);
+		});
+	});
+}
 
 function getBinanceClient(requestOptions = {}) {
 	if (!binanceClient || (requestOptions && Object.keys(requestOptions).length > 0)) {
@@ -44,6 +68,10 @@ function getWorkerRole() {
 }
 
 async function persistWorkerHeartbeat() {
+	if (getWorkerRole() === 'disabled') {
+		return;
+	}
+
 	try {
 		const firestore = AlertStorageService.getFirestore();
 		if (!firestore) {
@@ -51,7 +79,7 @@ async function persistWorkerHeartbeat() {
 		}
 
 		const status = getWorkerStatus();
-		await firestore.collection(HEARTBEAT_COLLECTION_NAME).doc(HEARTBEAT_DOCUMENT_ID).set({
+		await awaitWithTimeout(firestore.collection(HEARTBEAT_COLLECTION_NAME).doc(HEARTBEAT_DOCUMENT_ID).set({
 			worker: 'signal-outcome',
 			role: status.role,
 			enabled: status.enabled,
@@ -70,7 +98,7 @@ async function persistWorkerHeartbeat() {
 			lastRunPendingCount: status.lastRunPendingCount,
 			lastRunErrorCount: status.lastRunErrorCount,
 			updatedAt: admin.firestore.Timestamp.fromDate(new Date()),
-		}, { merge: true });
+		}, { merge: true }), HEARTBEAT_WRITE_TIMEOUT_MS, `Heartbeat write timed out after ${HEARTBEAT_WRITE_TIMEOUT_MS}ms`);
 	} catch (error) {
 		console.warn('[SignalOutcomeService] Failed to persist worker heartbeat:', error.message);
 	}
@@ -655,11 +683,15 @@ function stopWorker(options = {}) {
 
 	if (options.drain !== true || !activeEvaluationPromise) {
 		isEvaluating = false;
-		void persistWorkerHeartbeat();
-		return Promise.resolve();
+		return persistWorkerHeartbeat();
 	}
 
-	return activeEvaluationPromise
+	const drainTimeoutMs = Math.min(getWorkerStatus().maxDurationMs, MAX_WORKER_DRAIN_TIMEOUT_MS);
+	return awaitWithTimeout(
+		activeEvaluationPromise,
+		drainTimeoutMs,
+		`Dedicated worker drain timed out after ${drainTimeoutMs}ms`,
+	)
 		.catch((error) => {
 			console.warn('[SignalOutcomeService] Dedicated worker drain failed:', error.message);
 		})
