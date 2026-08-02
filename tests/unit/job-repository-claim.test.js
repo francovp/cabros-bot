@@ -1,8 +1,38 @@
 'use strict';
 
-const { JobRepository } = require('../../src/services/jobs/JobRepository');
+const { JobRepository, _resetForTesting } = require('../../src/services/jobs/JobRepository');
 
 describe('JobRepository durable claims', () => {
+	it('prefers a fresh durable row over a stale web-process cache entry', async () => {
+		const jobId = 'job-list-123';
+		const durableJob = {
+			jobId,
+			type: 'expanded-analysis',
+			status: 'completed',
+			createdAt: new Date().toISOString(),
+		};
+		const query = {
+			orderBy: jest.fn().mockReturnThis(),
+			limit: jest.fn().mockReturnThis(),
+			get: jest.fn().mockResolvedValue({
+				docs: [{ id: jobId, data: () => durableJob }],
+			}),
+		};
+		const repository = new JobRepository();
+		repository._getFirestore = jest.fn(() => ({
+			collection: jest.fn(() => query),
+		}));
+		repository.setMemory(jobId, { ...durableJob, status: 'processing' });
+
+		try {
+			await expect(repository.list({ limit: 1 })).resolves.toEqual([
+				expect.objectContaining({ jobId, status: 'completed' }),
+			]);
+		} finally {
+			_resetForTesting();
+		}
+	});
+
 	it('atomically claims a queued job and rejects an active duplicate claim', async () => {
 		const job = {
 			jobId: 'job-123',

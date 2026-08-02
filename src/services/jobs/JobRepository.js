@@ -445,7 +445,9 @@ class JobRepository {
 		}
 
 		for (const [jobId, job] of memoryJobs.entries()) {
-			jobs.set(jobId, cloneJob(job));
+			if (!jobs.has(jobId)) {
+				jobs.set(jobId, cloneJob(job));
+			}
 		}
 
 		return [...jobs.values()];
