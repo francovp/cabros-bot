@@ -861,24 +861,58 @@ async function exportAlerts({ from, to, limit, source, enriched, includeText = f
 	}
 
 	const window = buildExportWindow({ from, to, limit });
-	let snapshot;
-	try {
-		snapshot = await firestore
+	const hasFilters = typeof source === 'string' || typeof enriched === 'boolean';
+	const docs = [];
+	let pageCursor = null;
+	while (true) {
+		let query = firestore
 			.collection(COLLECTION_NAME)
 			.where('receivedAt', '>=', admin.firestore.Timestamp.fromDate(new Date(window.from)))
 			.where('receivedAt', '<=', admin.firestore.Timestamp.fromDate(new Date(window.to)))
-			.orderBy('receivedAt', 'desc')
-			.limit(window.limit)
-			.get();
-	} catch (error) {
-		console.warn('[AlertStorageService] Failed to export alerts from Firestore:', error.message);
-		throw createStorageUnavailableError(error);
+			.orderBy('receivedAt', 'desc');
+
+		if (hasFilters) {
+			query = query.orderBy(admin.firestore.FieldPath.documentId(), 'desc');
+			if (pageCursor) {
+				query = query.startAfter(pageCursor.receivedAt, pageCursor.documentId);
+			}
+		}
+		query = query.limit(window.limit);
+
+		let snapshot;
+		try {
+			snapshot = await query.get();
+		} catch (error) {
+			console.warn('[AlertStorageService] Failed to export alerts from Firestore:', error.message);
+			throw createStorageUnavailableError(error);
+		}
+
+		if (!snapshot || !Array.isArray(snapshot.docs) || snapshot.docs.length === 0) {
+			break;
+		}
+
+		const matchingDocs = hasFilters
+			? snapshot.docs.filter((doc) => {
+				const data = doc.data() || {};
+				return matchesFilters({
+					source: typeof data.source === 'string' ? data.source : null,
+					enriched: Boolean(data.enriched),
+				}, { source, enriched });
+			})
+			: snapshot.docs;
+		docs.push(...matchingDocs.slice(0, window.limit - docs.length));
+
+		if (!hasFilters || docs.length >= window.limit || snapshot.docs.length < window.limit) {
+			break;
+		}
+
+		pageCursor = getRawDocCursorValues(snapshot.docs[snapshot.docs.length - 1]);
+		if (!pageCursor) {
+			break;
+		}
 	}
 
-	const docs = snapshot && Array.isArray(snapshot.docs) ? snapshot.docs : [];
-	const alerts = docs
-		.map(doc => formatExportRecord(doc, { includeText }))
-		.filter(alert => matchesFilters(alert, { source, enriched }));
+	const alerts = docs.map(doc => formatExportRecord(doc, { includeText }));
 
 	return {
 		window,
