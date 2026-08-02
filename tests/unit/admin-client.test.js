@@ -475,6 +475,34 @@ describe('admin browser client', () => {
 		expect(statusForm.textContent).not.toContain('"job-a"');
 	});
 
+	it('re-enables status lookup after a manual job-ID edit invalidates a request', async () => {
+		let resolveStatus;
+		const pendingStatus = new Promise((resolve) => { resolveStatus = resolve; });
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/jobs/job-a') return pendingStatus;
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'jobs');
+
+		const statusForm = findForm(browser.elementsById.view, 'GET /api/jobs/{jobId}');
+		const jobIdInput = statusForm.elements['path-jobId'];
+		jobIdInput.value = 'job-a';
+		const pendingSubmit = statusForm.dispatch('submit');
+		await flush();
+		jobIdInput.value = 'job-b';
+		await jobIdInput.dispatch('input');
+		resolveStatus(response({ jobId: 'job-a', status: 'processing', results: [] }));
+		await pendingSubmit;
+		await flush();
+
+		expect(findButton(statusForm, 'Get job status').disabled).toBe(false);
+		expect(statusForm.textContent).not.toContain('"job-a"');
+	});
+
 	it('shows cancel only for a fetched active job', async () => {
 		const job = { jobId: 'job-1', status: 'processing', results: [] };
 		const browser = createBrowser({

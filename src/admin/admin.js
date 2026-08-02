@@ -383,6 +383,11 @@ const createJobStatusForm = () => {
 	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
 	form.append(button, actions, output);
 	let statusRequestVersion = 0;
+	jobIdInput.addEventListener('input', () => {
+		statusRequestVersion += 1;
+		button.disabled = false;
+		actions.replaceChildren();
+	});
 
 	const renderActions = (job, jobId) => {
 		actions.replaceChildren();
