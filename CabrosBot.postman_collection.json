@@ -304,7 +304,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"text\": \"BTCUSDT(240) pas\u00f3 a se\u00f1al de VENTA\"\n}"
+              "raw": "{\n  \"text\": \"BTCUSDT(240) pasó a señal de VENTA\"\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/api/webhook/alert?useTradingViewData=true",
@@ -343,7 +343,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"text\": \"BTCUSDT(240) pas\u00f3 a se\u00f1al de COMPRA\"\n}"
+              "raw": "{\n  \"text\": \"BTCUSDT(240) pasó a señal de COMPRA\"\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/api/webhook/alert?useTradingViewData=true&dryRun=true",
@@ -372,7 +372,7 @@
               "name": "Dry run with confluence metadata",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"enriched\": true,\n  \"payload\": {\n    \"text\": \"BTCUSDT(240) pas\u00f3 a se\u00f1al de COMPRA\",\n    \"enrichedData\": {\n      \"sentiment\": \"NEUTRAL\",\n      \"insights\": [\"Confluencia contradictoria: SELL - Senales Mixtas - Confianza: 81\"],\n      \"confluenceData\": { \"confluence\": { \"recommendation\": \"SELL\", \"confidence\": 81, \"signals_agree\": false } },\n      \"multiTimeframeData\": { \"alignment\": \"bearish\" }\n    }\n  }\n}"
+              "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"enriched\": true,\n  \"payload\": {\n    \"text\": \"BTCUSDT(240) pasó a señal de COMPRA\",\n    \"enrichedData\": {\n      \"sentiment\": \"NEUTRAL\",\n      \"insights\": [\"Confluencia contradictoria: SELL - Senales Mixtas - Confianza: 81\"],\n      \"confluenceData\": { \"confluence\": { \"recommendation\": \"SELL\", \"confidence\": 81, \"signals_agree\": false } },\n      \"multiTimeframeData\": { \"alignment\": \"bearish\" }\n    }\n  }\n}"
             }
           ]
         },
@@ -390,6 +390,13 @@
                 "key": "x-api-key",
                 "value": "{{apiKey}}",
                 "type": "text"
+              },
+              {
+                "key": "x-idempotency-key",
+                "value": "demo-key-1",
+                "type": "text",
+                "description": "Alternative x-prefixed idempotency header variant",
+                "disabled": true
               }
             ],
             "body": {
@@ -456,6 +463,13 @@
                 "key": "x-api-key",
                 "value": "{{apiKey}}",
                 "type": "text"
+              },
+              {
+                "key": "x-idempotency-key",
+                "value": "demo-key-1",
+                "type": "text",
+                "description": "Alternative x-prefixed idempotency header variant",
+                "disabled": true
               }
             ],
             "body": {
@@ -518,7 +532,12 @@
                 "status": "OK",
                 "code": 200,
                 "_postman_previewlanguage": "json",
-                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
                 "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"ranked\": true,\n  \"includeMultiTimeframe\": true,\n  \"scanResults\": [{\n    \"scan\": \"top_gainers\",\n    \"status\": \"success\",\n    \"itemCount\": 1,\n    \"scores\": [{ \"symbol\": \"BTCUSDT\", \"score\": 83, \"reason\": \"+3.5% · RSI 62.0 · Vol 1.8x · HTF aligned +10\", \"trendConfluence\": { \"status\": \"aligned\", \"direction\": \"bullish\", \"confidence\": 82, \"adjustment\": 10 } }]\n  }]\n}"
               }
             ]
@@ -529,15 +548,37 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Content-Type", "value": "application/json", "type": "text" },
-              { "key": "x-api-key", "value": "{{apiKey}}", "type": "text" }
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
             ],
-            "body": { "mode": "raw", "raw": "{\n  \"scans\": [\"top_gainers\"],\n  \"ranked\": \"sometimes\"\n}" },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"scans\": [\"top_gainers\"],\n  \"ranked\": \"sometimes\"\n}"
+            },
             "url": {
               "raw": "{{baseUrl}}/api/webhook/market-scanner-alert?dryRun=true",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "webhook", "market-scanner-alert"],
-              "query": [{ "key": "dryRun", "value": "true" }]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "webhook",
+                "market-scanner-alert"
+              ],
+              "query": [
+                {
+                  "key": "dryRun",
+                  "value": "true"
+                }
+              ]
             }
           },
           "response": [
@@ -546,7 +587,12 @@
               "status": "Bad Request",
               "code": 400,
               "_postman_previewlanguage": "json",
-              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
               "body": "{\n  \"error\": \"ranked must be a boolean\",\n  \"code\": \"INVALID_REQUEST\"\n}"
             }
           ]
@@ -556,15 +602,37 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Content-Type", "value": "application/json", "type": "text" },
-              { "key": "x-api-key", "value": "{{apiKey}}", "type": "text" }
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
             ],
-            "body": { "mode": "raw", "raw": "{\n  \"scans\": [\"top_gainers\"],\n  \"includeMultiTimeframe\": \"sometimes\"\n}" },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"scans\": [\"top_gainers\"],\n  \"includeMultiTimeframe\": \"sometimes\"\n}"
+            },
             "url": {
               "raw": "{{baseUrl}}/api/webhook/market-scanner-alert?dryRun=true",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "webhook", "market-scanner-alert"],
-              "query": [{ "key": "dryRun", "value": "true" }]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "webhook",
+                "market-scanner-alert"
+              ],
+              "query": [
+                {
+                  "key": "dryRun",
+                  "value": "true"
+                }
+              ]
             }
           },
           "response": [
@@ -573,7 +641,12 @@
               "status": "Bad Request",
               "code": 400,
               "_postman_previewlanguage": "json",
-              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
               "body": "{\n  \"error\": \"includeMultiTimeframe must be a boolean\",\n  \"code\": \"INVALID_REQUEST\"\n}"
             }
           ]
@@ -592,6 +665,13 @@
                 "key": "x-api-key",
                 "value": "{{apiKey}}",
                 "type": "text"
+              },
+              {
+                "key": "x-idempotency-key",
+                "value": "demo-key-1",
+                "type": "text",
+                "description": "Alternative x-prefixed idempotency header variant",
+                "disabled": true
               }
             ],
             "body": {
@@ -615,7 +695,7 @@
           "name": "POST Send Message",
           "request": {
             "method": "POST",
-            "description": "Idempotency accepts the recommended idempotency-key header, idempotencyKey or idempotency_key in the JSON body, and idempotencyKey or idempotency_key in the query string. Replays return the cached response with idempotencyReplayed=true; conflicting payload reuse returns 409.",
+            "description": "Idempotency accepts the recommended idempotency-key header, x-idempotency-key header, idempotencyKey or idempotency_key in the JSON body, and idempotencyKey or idempotency_key in the query string. Replays return the cached response with idempotencyReplayed=true; conflicting payload reuse returns 409.",
             "header": [
               {
                 "key": "Content-Type",
@@ -631,6 +711,13 @@
                 "key": "idempotency-key",
                 "value": "generic-message-demo-1",
                 "type": "text"
+              },
+              {
+                "key": "x-idempotency-key",
+                "value": "demo-key-1",
+                "type": "text",
+                "description": "Alternative x-prefixed idempotency header variant",
+                "disabled": true
               }
             ],
             "body": {
@@ -811,6 +898,176 @@
               "status": "OK",
               "code": 200,
               "body": "{\n  \"success\": true,\n  \"results\": [{\n    \"channel\": \"telegram\",\n    \"success\": true,\n    \"messageId\": \"tg-msg-123\"\n  }]\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST Send Message (x-idempotency-key header)",
+          "request": {
+            "method": "POST",
+            "description": "Uses the x-idempotency-key header variant supported by the idempotency middleware.",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "x-idempotency-key",
+                "value": "generic-message-xheader-1",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"message\": \"X-Header notification\",\n  \"channels\": [\"telegram\"]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/webhook/message",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "webhook",
+                "message"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Success (x-idempotency-key header)",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"tg-msg-123\",\n      \"attemptCount\": 1,\n      \"durationMs\": 450\n    }\n  ]\n}",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-api-key",
+                    "value": "{{apiKey}}",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-idempotency-key",
+                    "value": "generic-message-xheader-1",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"message\": \"X-Header notification\",\n  \"channels\": [\"telegram\"]\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/webhook/message",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "webhook",
+                    "message"
+                  ]
+                }
+              }
+            },
+            {
+              "name": "Success (idempotent replay)",
+              "status": "OK",
+              "code": 200,
+              "header": [
+                {
+                  "key": "Idempotency-Replay",
+                  "value": "true"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"idempotencyReplayed\": true,\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"tg-msg-123\"\n    }\n  ]\n}",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-api-key",
+                    "value": "{{apiKey}}",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-idempotency-key",
+                    "value": "generic-message-xheader-1",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"message\": \"X-Header notification\",\n  \"channels\": [\"telegram\"]\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/webhook/message",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "webhook",
+                    "message"
+                  ]
+                }
+              }
+            },
+            {
+              "name": "Error (idempotency conflict)",
+              "status": "Conflict",
+              "code": 409,
+              "body": "{\n  \"error\": \"Idempotency key was reused with a different payload\",\n  \"code\": \"IDEMPOTENCY_CONFLICT\"\n}",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-api-key",
+                    "value": "{{apiKey}}",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-idempotency-key",
+                    "value": "generic-message-xheader-1",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"message\": \"Conflicting notification text\",\n  \"channels\": [\"telegram\"]\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/webhook/message",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "webhook",
+                    "message"
+                  ]
+                }
+              }
             }
           ]
         }
@@ -1069,7 +1326,7 @@
               "name": "Success",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"presetId\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n  \"alertText\": \"\ud83d\udce1 *SCANNER DE MERCADO \u2014 ...\",\n  \"scanResults\": [\n    {\n      \"scan\": \"top_gainers\",\n      \"status\": \"success\",\n      \"itemCount\": 3\n    }\n  ],\n  \"summary\": {\n    \"totalScans\": 1,\n    \"success\": 1,\n    \"error\": 0,\n    \"timeout\": 0,\n    \"totalItems\": 3,\n    \"delivered\": 1\n  },\n  \"timedOut\": false,\n  \"timeoutMs\": 90000,\n  \"requestId\": \"req-xyz789\",\n  \"totalDurationMs\": 1450\n}"
+              "body": "{\n  \"success\": true,\n  \"presetId\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n  \"alertText\": \"📡 *SCANNER DE MERCADO — ...\",\n  \"scanResults\": [\n    {\n      \"scan\": \"top_gainers\",\n      \"status\": \"success\",\n      \"itemCount\": 3\n    }\n  ],\n  \"summary\": {\n    \"totalScans\": 1,\n    \"success\": 1,\n    \"error\": 0,\n    \"timeout\": 0,\n    \"totalItems\": 3,\n    \"delivered\": 1\n  },\n  \"timedOut\": false,\n  \"timeoutMs\": 90000,\n  \"requestId\": \"req-xyz789\",\n  \"totalDurationMs\": 1450\n}"
             }
           ]
         },
@@ -1108,7 +1365,7 @@
               "name": "Success",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"presetId\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n  \"payload\": {\n    \"alertText\": \"\ud83d\udce1 *SCANNER DE MERCADO \u2014 ...\"\n  },\n  \"scanResults\": [],\n  \"summary\": {\n    \"totalScans\": 1,\n    \"success\": 1,\n    \"error\": 0,\n    \"timeout\": 0,\n    \"totalItems\": 3,\n    \"delivered\": 0\n  },\n  \"timedOut\": false,\n  \"timeoutMs\": 90000,\n  \"requestId\": \"req-dryrun-abc\",\n  \"totalDurationMs\": 1200\n}"
+              "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"presetId\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n  \"payload\": {\n    \"alertText\": \"📡 *SCANNER DE MERCADO — ...\"\n  },\n  \"scanResults\": [],\n  \"summary\": {\n    \"totalScans\": 1,\n    \"success\": 1,\n    \"error\": 0,\n    \"timeout\": 0,\n    \"totalItems\": 3,\n    \"delivered\": 0\n  },\n  \"timedOut\": false,\n  \"timeoutMs\": 90000,\n  \"requestId\": \"req-dryrun-abc\",\n  \"totalDurationMs\": 1200\n}"
             }
           ]
         }
@@ -1119,8 +1376,16 @@
       "request": {
         "method": "POST",
         "header": [
-          { "key": "Content-Type", "value": "application/json", "type": "text" },
-          { "key": "x-api-key", "value": "{{apiKey}}", "type": "text" }
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          },
+          {
+            "key": "x-api-key",
+            "value": "{{apiKey}}",
+            "type": "text"
+          }
         ],
         "body": {
           "mode": "raw",
@@ -1128,8 +1393,13 @@
         },
         "url": {
           "raw": "{{baseUrl}}/api/scanner-presets",
-          "host": ["{{baseUrl}}"],
-          "path": ["api", "scanner-presets"]
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "scanner-presets"
+          ]
         }
       },
       "response": [
@@ -1424,12 +1694,27 @@
             ],
             "url": {
               "raw": "{{baseUrl}}/api/alerts/summary?from=2026-06-06T00:00:00.000Z&to=2026-06-07T00:00:00.000Z&limit=500",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "alerts", "summary"],
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "summary"
+              ],
               "query": [
-                { "key": "from", "value": "2026-06-06T00:00:00.000Z" },
-                { "key": "to", "value": "2026-06-07T00:00:00.000Z" },
-                { "key": "limit", "value": "500" }
+                {
+                  "key": "from",
+                  "value": "2026-06-06T00:00:00.000Z"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-06-07T00:00:00.000Z"
+                },
+                {
+                  "key": "limit",
+                  "value": "500"
+                }
               ]
             },
             "description": "Protected summary response showing zero-safe risk metadata coverage grouped by non-sensitive Langfuse/local prompt provenance."
@@ -1735,6 +2020,13 @@
                 "key": "idempotency-key",
                 "value": "{{replayIdempotencyKey}}",
                 "type": "text"
+              },
+              {
+                "key": "x-idempotency-key",
+                "value": "demo-key-1",
+                "type": "text",
+                "description": "Alternative x-prefixed idempotency header variant",
+                "disabled": true
               }
             ],
             "body": {
@@ -1877,6 +2169,180 @@
               "body": "{\n  \"error\": \"Unknown channel(s): slack. Valid channels: telegram, whatsapp, discord.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
             }
           ]
+        },
+        {
+          "name": "POST Replay Alert (x-idempotency-key header)",
+          "request": {
+            "method": "POST",
+            "description": "Replays a stored alert using the x-idempotency-key header variant.",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "x-idempotency-key",
+                "value": "{{replayIdempotencyKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"channels\": [\"telegram\"]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/{{alertId}}/replay",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "{{alertId}}",
+                "replay"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Success (x-idempotency-key header)",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"alertId\": \"alert-123\",\n  \"replayId\": \"alert-123_replay-key-1\",\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"123\"\n    }\n  ]\n}",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-api-key",
+                    "value": "{{apiKey}}",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-idempotency-key",
+                    "value": "{{replayIdempotencyKey}}",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"channels\": [\"telegram\"]\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/alerts/{{alertId}}/replay",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "alerts",
+                    "{{alertId}}",
+                    "replay"
+                  ]
+                }
+              }
+            },
+            {
+              "name": "Success (idempotent replay)",
+              "status": "OK",
+              "code": 200,
+              "header": [
+                {
+                  "key": "Idempotency-Replay",
+                  "value": "true"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"alertId\": \"alert-123\",\n  \"replayId\": \"alert-123_replay-key-1\",\n  \"idempotencyReplayed\": true,\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"123\"\n    }\n  ]\n}",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-api-key",
+                    "value": "{{apiKey}}",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-idempotency-key",
+                    "value": "{{replayIdempotencyKey}}",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"channels\": [\"telegram\"]\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/alerts/{{alertId}}/replay",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "alerts",
+                    "{{alertId}}",
+                    "replay"
+                  ]
+                }
+              }
+            },
+            {
+              "name": "Error (idempotency conflict)",
+              "status": "Conflict",
+              "code": 409,
+              "body": "{\n  \"error\": \"Idempotency key was reused with a different payload\",\n  \"code\": \"IDEMPOTENCY_CONFLICT\"\n}",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-api-key",
+                    "value": "{{apiKey}}",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-idempotency-key",
+                    "value": "{{replayIdempotencyKey}}",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"channels\": [\"telegram\", \"whatsapp\"]\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/alerts/{{alertId}}/replay",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "alerts",
+                    "{{alertId}}",
+                    "replay"
+                  ]
+                }
+              }
+            }
+          ]
         }
       ]
     },
@@ -1980,6 +2446,13 @@
                 "key": "idempotency-key",
                 "value": "{{jobCreateIdempotencyKey}}",
                 "type": "text"
+              },
+              {
+                "key": "x-idempotency-key",
+                "value": "demo-key-1",
+                "type": "text",
+                "description": "Alternative x-prefixed idempotency header variant",
+                "disabled": true
               }
             ],
             "body": {
@@ -2296,6 +2769,13 @@
                 "key": "idempotency-key",
                 "value": "{{jobScannerIdempotencyKey}}",
                 "type": "text"
+              },
+              {
+                "key": "x-idempotency-key",
+                "value": "demo-key-1",
+                "type": "text",
+                "description": "Alternative x-prefixed idempotency header variant",
+                "disabled": true
               }
             ],
             "body": {
@@ -2425,6 +2905,13 @@
                 "key": "idempotency-key",
                 "value": "{{jobRetryIdempotencyKey}}",
                 "type": "text"
+              },
+              {
+                "key": "x-idempotency-key",
+                "value": "demo-key-1",
+                "type": "text",
+                "description": "Alternative x-prefixed idempotency header variant",
+                "disabled": true
               }
             ],
             "url": {
@@ -2445,7 +2932,12 @@
               "name": "Retry Replay",
               "status": "Created",
               "code": 201,
-              "header": [{ "key": "Idempotency-Replay", "value": "true" }],
+              "header": [
+                {
+                  "key": "Idempotency-Replay",
+                  "value": "true"
+                }
+              ],
               "body": "{\n  \"success\": true,\n  \"oldJobId\": \"job-uuid-123\",\n  \"newJobId\": \"job-uuid-456\",\n  \"status\": \"processing\",\n  \"idempotencyReplayed\": true\n}"
             },
             {
@@ -2470,6 +2962,13 @@
                 "key": "idempotency-key",
                 "value": "{{jobRetryFailedIdempotencyKey}}",
                 "type": "text"
+              },
+              {
+                "key": "x-idempotency-key",
+                "value": "demo-key-1",
+                "type": "text",
+                "description": "Alternative x-prefixed idempotency header variant",
+                "disabled": true
               }
             ],
             "url": {
@@ -2490,7 +2989,12 @@
               "name": "Retry Failed Replay",
               "status": "Created",
               "code": 201,
-              "header": [{ "key": "Idempotency-Replay", "value": "true" }],
+              "header": [
+                {
+                  "key": "Idempotency-Replay",
+                  "value": "true"
+                }
+              ],
               "body": "{\n  \"success\": true,\n  \"oldJobId\": \"job-uuid-123\",\n  \"newJobId\": \"job-uuid-789\",\n  \"status\": \"processing\",\n  \"idempotencyReplayed\": true\n}"
             },
             {
@@ -2498,6 +3002,176 @@
               "status": "Conflict",
               "code": 409,
               "body": "{\n  \"error\": \"Idempotency key was reused with a different payload\",\n  \"code\": \"IDEMPOTENCY_CONFLICT\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST Create TradingView Analysis Job (x-idempotency-key header)",
+          "request": {
+            "method": "POST",
+            "description": "Creates an async job using the x-idempotency-key header variant.",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "x-idempotency-key",
+                "value": "job-xheader-key-1",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"symbols\": [\"BINANCE:BTCUSDT\"]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/jobs/tradingview-analysis",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "jobs",
+                "tradingview-analysis"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Success (x-idempotency-key header)",
+              "status": "Accepted",
+              "code": 202,
+              "body": "{\n  \"success\": true,\n  \"jobId\": \"job-uuid-123\",\n  \"status\": \"processing\"\n}",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-api-key",
+                    "value": "{{apiKey}}",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-idempotency-key",
+                    "value": "job-xheader-key-1",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"symbols\": [\"BINANCE:BTCUSDT\"]\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/jobs/tradingview-analysis",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "jobs",
+                    "tradingview-analysis"
+                  ]
+                }
+              }
+            },
+            {
+              "name": "Success (idempotent replay)",
+              "status": "OK",
+              "code": 200,
+              "header": [
+                {
+                  "key": "Idempotency-Replay",
+                  "value": "true"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"jobId\": \"job-uuid-123\",\n  \"status\": \"processing\",\n  \"idempotencyReplayed\": true\n}",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-api-key",
+                    "value": "{{apiKey}}",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-idempotency-key",
+                    "value": "job-xheader-key-1",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"symbols\": [\"BINANCE:BTCUSDT\"]\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/jobs/tradingview-analysis",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "jobs",
+                    "tradingview-analysis"
+                  ]
+                }
+              }
+            },
+            {
+              "name": "Error (idempotency conflict)",
+              "status": "Conflict",
+              "code": 409,
+              "body": "{\n  \"error\": \"Idempotency key was reused with a different payload\",\n  \"code\": \"IDEMPOTENCY_CONFLICT\"\n}",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-api-key",
+                    "value": "{{apiKey}}",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-idempotency-key",
+                    "value": "job-xheader-key-1",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"symbols\": [\"BINANCE:ETHUSDT\"]\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/jobs/tradingview-analysis",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "jobs",
+                    "tradingview-analysis"
+                  ]
+                }
+              }
             }
           ]
         }
