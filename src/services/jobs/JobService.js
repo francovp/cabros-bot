@@ -862,16 +862,32 @@ class JobService {
 				return;
 			}
 
-			const isTimeout =
-				error.message.includes('timed out') ||
-				error.name === 'TimeoutError' ||
-				error.name === 'AbortError' ||
-				(job.fullResults && job.fullResults.some((r) => r.status === 'timeout')) ||
-				(job.fullScanResults && job.fullScanResults.some((r) => r.status === 'timeout'));
+			const deliveryCompleted = job.deliveryCheckpoint?.status === 'completed';
+			if (deliveryCompleted) {
+				console.warn(
+					`[JobService] Delivery completed but final persistence failed for ${jobId}:`,
+					error.message,
+				);
+				job.deliveryResults = job.deliveryResults || job.deliveryCheckpoint.results || [];
+				job.requestedChannels = job.requestedChannels || job.deliveryCheckpoint.requestedChannels;
+				job.summary = job.summary || (job.type === 'market-scanner'
+					? this._buildScannerSummary(job.fullScanResults || [], job.deliveryResults)
+					: this._buildExpandedSummary(job.fullResults || [], job.deliveryResults));
+				job.status = 'completed';
+				job.error = null;
+				job.code = null;
+			} else {
+				const isTimeout =
+					error.message.includes('timed out') ||
+					error.name === 'TimeoutError' ||
+					error.name === 'AbortError' ||
+					(job.fullResults && job.fullResults.some((r) => r.status === 'timeout')) ||
+					(job.fullScanResults && job.fullScanResults.some((r) => r.status === 'timeout'));
 
-			job.status = isTimeout ? 'timed_out' : 'failed';
-			job.error = error.message;
-			job.code = error.code || (isTimeout ? 'JOB_TIMEOUT' : 'INTERNAL_ERROR');
+				job.status = isTimeout ? 'timed_out' : 'failed';
+				job.error = error.message;
+				job.code = error.code || (isTimeout ? 'JOB_TIMEOUT' : 'INTERNAL_ERROR');
+			}
 
 			sentryService.captureRuntimeError({
 				channel: 'job-service',

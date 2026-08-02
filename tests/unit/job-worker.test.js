@@ -259,6 +259,60 @@ describe('queued job execution', () => {
 		);
 	});
 
+	it('preserves a completed delivery when checkpoint persistence fails after sending', async () => {
+		const job = {
+			jobId: 'job-123',
+			type: 'expanded-analysis',
+			status: 'processing',
+			execution: {
+				mode: 'render-worker',
+				status: 'claimed',
+				workerId: 'worker-1',
+				attempt: 2,
+			},
+			_workerId: 'worker-1',
+			fullResults: [{ status: 'analyzed' }],
+			fullScanResults: [],
+		};
+		const savedJobs = [];
+		const checkpointError = new Error('Firestore checkpoint unavailable');
+		const repository = {
+			get: jest.fn().mockResolvedValue(job),
+			save: jest.fn().mockImplementation(async currentJob => {
+				savedJobs.push(JSON.parse(JSON.stringify(currentJob)));
+				return currentJob.jobId;
+			}),
+		};
+		const service = new JobService(repository);
+		const results = [{ success: true, channel: 'telegram', messageId: 'message-1' }];
+		service._executeExpandedAnalysis = jest.fn(async currentJob => {
+			currentJob.deliveryResults = results;
+			currentJob.deliveryCheckpoint = {
+				status: 'completed',
+				results,
+			};
+			throw checkpointError;
+		});
+		service._triggerCallbackIfConfigured = jest.fn().mockResolvedValue(undefined);
+
+		await expect(service._runBackgroundJob(
+			job.jobId,
+			{},
+			null,
+			null,
+			'worker-1',
+		)).resolves.toBeUndefined();
+
+		expect(savedJobs.at(-1)).toEqual(expect.objectContaining({
+			status: 'completed',
+			deliveryCheckpoint: expect.objectContaining({ status: 'completed', results }),
+		}));
+		expect(service._triggerCallbackIfConfigured).toHaveBeenCalledWith(
+			expect.objectContaining({ status: 'completed' }),
+			{ awaitDelivery: true },
+		);
+	});
+
 	it('binds processor failures to the Firestore claim attempt', async () => {
 		const job = {
 			jobId: 'job-123',

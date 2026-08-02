@@ -224,7 +224,9 @@ class JobRepository {
 				if (existingEvent && existingEvent.status === 'in_flight') {
 					const startedAtMs = Date.parse(existingEvent.startedAt || '');
 					if (Number.isFinite(startedAtMs) && startedAtMs + effectiveLeaseMs > nowMs) {
-						return false;
+						const error = new Error('Callback delivery is already in flight.');
+						error.code = 'JOB_CALLBACK_DELIVERY_IN_FLIGHT';
+						throw error;
 					}
 				}
 
@@ -251,6 +253,9 @@ class JobRepository {
 			});
 		} catch (error) {
 			console.warn('[JobRepository] Failed to claim callback delivery:', error.message);
+			if (error && error.code === 'JOB_CALLBACK_DELIVERY_IN_FLIGHT') {
+				throw error;
+			}
 			throw createCallbackClaimUnavailableError(error);
 		}
 	}

@@ -495,7 +495,7 @@ describe('JobRepository durable claims', () => {
 			}),
 		});
 		await expect(repository.claimCallbackDelivery('job-123', 'completed', 'delivery-2'))
-			.resolves.toBe(false);
+			.rejects.toMatchObject({ code: 'JOB_CALLBACK_DELIVERY_IN_FLIGHT' });
 		expect(transaction.set).not.toHaveBeenCalled();
 
 		transaction.get.mockResolvedValue({
@@ -553,6 +553,39 @@ describe('JobRepository durable claims', () => {
 
 		await expect(repository.claimCallbackDelivery('job-123', 'processing', 'delivery-1'))
 			.resolves.toBe(false);
+		expect(transaction.set).not.toHaveBeenCalled();
+	});
+
+	it('rejects an active callback claim so terminal redelivery remains retryable', async () => {
+		const transaction = {
+			get: jest.fn().mockResolvedValue({
+				exists: true,
+				id: 'job-123',
+				data: () => ({
+					jobId: 'job-123',
+					status: 'completed',
+					callbackStatus: {
+						status: 'in_flight',
+						events: {
+							completed: {
+								status: 'in_flight',
+								startedAt: new Date().toISOString(),
+							},
+						},
+					},
+				}),
+			}),
+			set: jest.fn(),
+		};
+		const firestore = {
+			collection: jest.fn(() => ({ doc: jest.fn(() => ({})) })),
+			runTransaction: jest.fn(async callback => callback(transaction)),
+		};
+		const repository = new JobRepository();
+		repository._getFirestore = jest.fn(() => firestore);
+
+		await expect(repository.claimCallbackDelivery('job-123', 'completed', 'delivery-2'))
+			.rejects.toMatchObject({ code: 'JOB_CALLBACK_DELIVERY_IN_FLIGHT' });
 		expect(transaction.set).not.toHaveBeenCalled();
 	});
 

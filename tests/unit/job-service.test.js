@@ -633,6 +633,26 @@ describe('JobService Unit Tests', () => {
 			expect(service._sendCallbackWithRetry).not.toHaveBeenCalled();
 		});
 
+		it('propagates active callback claims when delivery is awaited', async () => {
+			const claimError = Object.assign(new Error('Callback delivery is still in flight'), {
+				code: 'JOB_CALLBACK_DELIVERY_IN_FLIGHT',
+			});
+			const service = new JobService({
+				isDurable: () => true,
+				claimCallbackDelivery: jest.fn().mockRejectedValue(claimError),
+			});
+			service._sendCallbackWithRetry = jest.fn().mockResolvedValue(undefined);
+
+			await expect(service._triggerCallbackIfConfigured({
+				jobId: 'active-callback',
+				status: 'completed',
+				callbackUrl: 'https://example.com/callback',
+				callbackEvents: ['completed'],
+				callbackStatus: { status: 'in_flight', attempts: [] },
+			}, { awaitDelivery: true })).rejects.toBe(claimError);
+			expect(service._sendCallbackWithRetry).not.toHaveBeenCalled();
+		});
+
 		it('validates callbackUrl protocol and format', async () => {
 			const prevEnv = process.env.NODE_ENV;
 			const prevAllow = process.env.ALLOW_HTTP_CALLBACKS;
