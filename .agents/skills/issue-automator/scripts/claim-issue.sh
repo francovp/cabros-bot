@@ -144,20 +144,36 @@ has_agent_working() {
     --jq '[.labels[].name] | index("agent-working") != null' 2>/dev/null
 }
 
+# Read failures must never be mistaken for "no claims" (fail-closed): this
+# global records the latest read failure so callers can return RESULT=ERROR
+# instead of claiming based on a phantom-empty comment set.
+READ_FAILED=""
+
 # claim_comments_rest -> TSV "id<TAB>body" for ALL claim comments via the REST
-# API (numeric ids, creation order). Empty when none exist. Paginated so
-# claim comments past the first REST page still participate in arbitration.
+# API (numeric ids, creation order). Empty (clean exit, status 0) when no claims
+# exist. Paginated so comment pages past the first still reach arbitration. On a
+# read failure (nonzero gh exit) it prints nothing and returns 1; callers MUST
+# wrap the invocation with `|| READ_FAILED="1"` because the command substitution
+# runs in a subshell and cannot rely on the parent global being set inside it.
 claim_comments_rest() {
-  gh api --paginate "repos/${REPO}/issues/${ISSUE_NUMBER}/comments" --jq '
+  local out rc=0
+  out="$(gh api --paginate "repos/${REPO}/issues/${ISSUE_NUMBER}/comments" --jq '
     [.[] | select(.body | startswith("**agent-claim**"))]
-    | .[] | "\(.id)\t\(.body)"' 2>/dev/null || true
+    | .[] | "\(.id)\t\(.body)"' 2>/dev/null)" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    return 1
+  fi
+  [ -n "$out" ] && printf '%s\n' "$out"
+  return 0
 }
 
 # newest_claim -> single line "id<TAB>agent<TAB>session<TAB>ts" for the newest
 # claim comment (largest numeric id), or empty when no claim comments exist.
+# Returns 1 when the read fails so callers can fail closed via `|| READ_FAILED=1`.
 newest_claim() {
   local newest
-  newest="$(claim_comments_rest | awk -F '\t' '{ if (max == "" || $1+0 > max+0) { max=$1; line=$0 } } END { print line }')"
+  newest="$(claim_comments_rest | awk -F '\t' '{ if (max == "" || $1+0 > max+0) { max=$1; line=$0 } } END { print line }')" || READ_FAILED="1"
+  if [ "$READ_FAILED" == "1" ]; then return 1; fi
   if [ -z "$newest" ]; then return 0; fi
   local rest agent session ts
   rest="$(echo "$newest" | cut -f2 | sed 's/^\*\*agent-claim\*\*:[[:space:]]*//')"
@@ -165,14 +181,22 @@ newest_claim() {
   session="$(echo "$rest" | awk '{print $2}')"
   ts="$(echo "$rest" | awk '{print $3}')"
   printf '%s\t%s\t%s\t%s\n' "$(echo "$newest" | cut -f1)" "$agent" "$session" "$ts"
+  return 0
 }
 
 # last_labeled_event_ts -> timestamp of the most recent agent-working labeled
-# event (fallback for legacy claims made before claim comments existed).
+# event (fallback for legacy claims made before claim comments existed). Returns
+# 1 when the read fails so legacy handling can fail closed.
 last_labeled_event_ts() {
-  gh api --paginate "repos/${REPO}/issues/${ISSUE_NUMBER}/events" --jq '
+  local out rc=0
+  out="$(gh api --paginate "repos/${REPO}/issues/${ISSUE_NUMBER}/events" --jq '
     [.[] | select(.event == "labeled" and .label.name == "agent-working") | .created_at]
-    | max // empty' 2>/dev/null || true
+    | max // empty' 2>/dev/null)" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    return 1
+  fi
+  [ -n "$out" ] && printf '%s\n' "$out"
+  return 0
 }
 
 # post_claim_comment <body> -> new numeric comment id (empty on failure)
@@ -193,12 +217,18 @@ remove_agent_working() {
 
 # arbitrate_race <snapshot_id> <our_id> -> echoes the winning numeric comment id
 # among claim comments newer than the snapshot; echoes <our_id> when we win.
-# Reads back up to 3 times so concurrent claims surface despite API lag.
+# Echoes "FAIL_CLOSED" when a read-back fails, so a transient read outage never
+# turns into a phantom win. Reads back up to 3 times so concurrent claims
+# surface despite API lag.
 arbitrate_race() {
   local snapshot_id="$1" our_id="$2"
-  local winner="$our_id" newer min_id
+  local winner="$our_id" newer min_id rc
   for _ in 1 2 3; do
-    newer="$(claim_comments_rest | awk -F '\t' -v snap="$snapshot_id" '$1+0 > snap+0 { print $1 }')"
+    newer="$(claim_comments_rest | awk -F '\t' -v snap="$snapshot_id" '$1+0 > snap+0 { print $1 }')" || READ_FAILED="1"
+    if [ "$READ_FAILED" == "1" ]; then
+      echo "FAIL_CLOSED"
+      return 0
+    fi
     if [ -n "$newer" ]; then
       min_id="$(echo "$newer" | awk '{ if (min == "" || $1+0 < min+0) min = $1 } END { print min }')"
       if [ -n "$min_id" ] && [ "$min_id" != "$our_id" ] && [ "$min_id" -lt "$our_id" ]; then
@@ -217,14 +247,24 @@ arbitrate_race() {
 # comment must participate in arbitration instead of being dismissed as
 # "historical".
 # ---------------------------------------------------------------------------
-SNAPSHOT_ID="$(newest_claim | cut -f1)"
+SNAPSHOT_ID="$(newest_claim | cut -f1)" || READ_FAILED="1"
+if [ "$READ_FAILED" == "1" ]; then
+  echo "RESULT=ERROR"
+  echo "Error: could not read claim comments to snapshot the claim state (fail-closed)." >&2
+  exit 1
+fi
 SNAPSHOT_ID="${SNAPSHOT_ID:-0}"
 
 # ---------------------------------------------------------------------------
 # 1) Issue already carries the agent-working label -> resolve the claim.
 # ---------------------------------------------------------------------------
 if [ "$(has_agent_working)" == "true" ]; then
-  NEWEST="$(newest_claim)"
+  NEWEST="$(newest_claim)" || READ_FAILED="1"
+  if [ "$READ_FAILED" == "1" ]; then
+    echo "RESULT=ERROR"
+    echo "Error: issue #${ISSUE_NUMBER} is labeled agent-working but claim comments could not be read (fail-closed)." >&2
+    exit 1
+  fi
 
   if [ -n "$NEWEST" ]; then
     NEWEST_ID="$(echo "$NEWEST" | cut -f1)"
@@ -233,8 +273,27 @@ if [ "$(has_agent_working)" == "true" ]; then
     NEWEST_TS="$(echo "$NEWEST" | cut -f4)"
 
     if [ "$NEWEST_AGENT" == "$AGENT_ID" ] && [ "$NEWEST_SESSION" == "$SESSION_ID" ]; then
-      # Our own claim: renew the timestamp and confirm ownership.
-      post_claim_comment "${CLAIM_PREFIX} ${AGENT_ID} ${SESSION_ID} ${NOW_TS}" > /dev/null
+      # Our own claim: renew, then arbitrate the renewal against any concurrent
+      # takeover. Post-and-arbitrate keeps the protocol uniform: if a taker
+      # lands its comment first (lower id), the renewal loses and we skip.
+      RENEWAL_ID="$(post_claim_comment "${CLAIM_PREFIX} ${AGENT_ID} ${SESSION_ID} ${NOW_TS}")"
+      if [ -z "$RENEWAL_ID" ]; then
+        echo "RESULT=ERROR"
+        echo "Error: failed to post the renewal claim comment on issue #${ISSUE_NUMBER}." >&2
+        exit 1
+      fi
+      WINNER="$(arbitrate_race "$NEWEST_ID" "$RENEWAL_ID")"
+      if [ "$WINNER" == "FAIL_CLOSED" ]; then
+        echo "RESULT=ERROR"
+        echo "Error: could not re-read claim comments to confirm the renewal (fail-closed)." >&2
+        exit 1
+      fi
+      if [ "$WINNER" != "$RENEWAL_ID" ]; then
+        delete_claim_comment "$RENEWAL_ID"
+        echo "RESULT=SKIP"
+        echo "Issue #${ISSUE_NUMBER}: renewal raced by a concurrent takeover (comment ${WINNER} won). Skipping — zero-work, no budget consumed."
+        exit 2
+      fi
       echo "RESULT=CLAIMED"
       echo "Issue #${ISSUE_NUMBER} already claimed by this session (${AGENT_ID}/${SESSION_ID}); renewed."
       exit 0
@@ -256,6 +315,11 @@ if [ "$(has_agent_working)" == "true" ]; then
       exit 1
     fi
     WINNER="$(arbitrate_race "$NEWEST_ID" "$OUR_TAKEOVER_ID")"
+    if [ "$WINNER" == "FAIL_CLOSED" ]; then
+      echo "RESULT=ERROR"
+      echo "Error: could not re-read claim comments to arbitrate the takeover (fail-closed)." >&2
+      exit 1
+    fi
     if [ "$WINNER" != "$OUR_TAKEOVER_ID" ]; then
       delete_claim_comment "$OUR_TAKEOVER_ID"
       echo "RESULT=SKIP"
@@ -269,7 +333,12 @@ if [ "$(has_agent_working)" == "true" ]; then
 
   # Label present but no claim comment (legacy claim): fall back to the most
   # recent labeled event timestamp.
-  LEGACY_TS="$(last_labeled_event_ts)"
+  LEGACY_TS="$(last_labeled_event_ts)" || READ_FAILED="1"
+  if [ "$READ_FAILED" == "1" ]; then
+    echo "RESULT=ERROR"
+    echo "Error: could not read the labeled-event history for the legacy claim (fail-closed)." >&2
+    exit 1
+  fi
   if [ -n "$LEGACY_TS" ]; then
     AGE="$(age_minutes "$LEGACY_TS")"
     if [ "$AGE" -le "$TTL_MINUTES" ]; then
@@ -288,6 +357,11 @@ if [ "$(has_agent_working)" == "true" ]; then
     exit 1
   fi
   WINNER="$(arbitrate_race 0 "$OUR_LEGACY_ID")"
+  if [ "$WINNER" == "FAIL_CLOSED" ]; then
+    echo "RESULT=ERROR"
+    echo "Error: could not re-read claim comments to arbitrate the legacy takeover (fail-closed)." >&2
+    exit 1
+  fi
   if [ "$WINNER" != "$OUR_LEGACY_ID" ]; then
     delete_claim_comment "$OUR_LEGACY_ID"
     echo "RESULT=SKIP"
@@ -315,7 +389,15 @@ if [ -z "$OUR_ID" ]; then
   # Partial failure: the label is on but our claim comment never landed. Remove
   # the label unless a NEWER claim comment (past the snapshot) appeared in the
   # meantime — a historical comment alone must not keep the label we added.
-  if [ -z "$(claim_comments_rest | awk -F '\t' -v snap="$SNAPSHOT_ID" '$1+0 > snap+0 { print $1 }')" ]; then
+  # When the read fails we cannot prove no rival claimed, so we keep the label
+  # and fail closed instead of silently removing a concurrent claim.
+  NEWER_COUNT="$(claim_comments_rest | awk -F '\t' -v snap="$SNAPSHOT_ID" '$1+0 > snap+0 { print $1 }')" || READ_FAILED="1"
+  if [ "$READ_FAILED" == "1" ]; then
+    echo "RESULT=ERROR"
+    echo "Error: failed to post the claim comment and could not re-read comments to roll back safely (fail-closed)." >&2
+    exit 1
+  fi
+  if [ -z "$NEWER_COUNT" ]; then
     remove_agent_working
   fi
   echo "RESULT=ERROR"
@@ -324,6 +406,12 @@ if [ -z "$OUR_ID" ]; then
 fi
 
 WINNER_ID="$(arbitrate_race "$SNAPSHOT_ID" "$OUR_ID")"
+
+if [ "$WINNER_ID" == "FAIL_CLOSED" ]; then
+  echo "RESULT=ERROR"
+  echo "Error: could not re-read claim comments to arbitrate the claim (fail-closed)." >&2
+  exit 1
+fi
 
 if [ "$WINNER_ID" == "$OUR_ID" ]; then
   echo "RESULT=CLAIMED"
