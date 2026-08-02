@@ -615,7 +615,7 @@
           "name": "POST Send Message",
           "request": {
             "method": "POST",
-            "description": "Idempotency accepts the recommended idempotency-key header, idempotencyKey or idempotency_key in the JSON body, and idempotencyKey or idempotency_key in the query string. Replays return the cached response with idempotencyReplayed=true; conflicting payload reuse returns 409.",
+            "description": "Idempotency accepts the recommended idempotency-key or x-idempotency-key header, idempotencyKey or idempotency_key in the JSON body, and idempotencyKey or idempotency_key in the query string. Replays return the cached response with idempotencyReplayed=true; conflicting payload reuse returns 409.",
             "header": [
               {
                 "key": "Content-Type",
@@ -721,6 +721,71 @@
               "status": "Unauthorized",
               "code": 401,
               "body": "{\n  \"error\": \"Unauthorized: Missing API key\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST Send Message (x-idempotency-key header)",
+          "request": {
+            "method": "POST",
+            "description": "Uses the supported x-idempotency-key header variant. The request body intentionally omits an idempotency key so the header is the only key source.",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "x-idempotency-key",
+                "value": "generic-message-x-header-1",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"message\": \"Notification using the x-idempotency-key header\",\n  \"channels\": [\"telegram\"],\n  \"telegramChatId\": \"-1001234567890\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/webhook/message",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "webhook",
+                "message"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Success (x-idempotency-key)",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"tg-msg-x-123\"\n    }\n  ]\n}"
+            },
+            {
+              "name": "Success (x-idempotency-key replay)",
+              "status": "OK",
+              "code": 200,
+              "header": [
+                {
+                  "key": "Idempotency-Replay",
+                  "value": "true"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"idempotencyReplayed\": true,\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"tg-msg-x-123\"\n    }\n  ]\n}"
+            },
+            {
+              "name": "Error (x-idempotency-key conflict)",
+              "status": "Conflict",
+              "code": 409,
+              "body": "{\n  \"error\": \"Idempotency key was reused with a different payload\",\n  \"code\": \"IDEMPOTENCY_CONFLICT\"\n}"
             }
           ]
         },
