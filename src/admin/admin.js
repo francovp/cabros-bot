@@ -422,6 +422,7 @@ const createJobStatusForm = () => {
 				confirm: 'Retry failed items for this job?',
 			});
 		}
+		const actionVersion = statusRequestVersion;
 		definitions.forEach((action) => {
 			const actionButton = element('button', { text: action.label });
 			actionButton.type = 'button';
@@ -431,6 +432,8 @@ const createJobStatusForm = () => {
 				path: action.path.replace('{jobId}', encodeURIComponent(jobId)),
 				button: actionButton,
 				output,
+				isCurrent: () => actionVersion === statusRequestVersion
+					&& form.elements['path-jobId'].value === jobId,
 			}));
 			actions.append(actionButton);
 		});
