@@ -28,21 +28,25 @@
 # Env:
 #   CLAIM_AGENT_ID     agent identity (e.g. codex, antigravity) — set per
 #                      session; REQUIRED for meaningful coordination.
-#   CLAIM_SESSION_ID   session identity; auto-generated unless set. Set it once
-#                      per session (e.g. `export CLAIM_SESSION_ID="$(uuidgen)"`
-#                      in the parent workflow) so every claim check in the same
-#                      run shares the identity. When omitted, the script
-#                      persists its generated ID per agent+repo and reuses it
-#                      within CLAIM_SESSION_REUSE_MINUTES (default 30) so the
-#                      Step 1 claim and the Step 2 re-check stay the same
-#                      session; a new session (e.g. the next hourly run) gets a
-#                      fresh ID once the reuse window passes.
+#   CLAIM_SESSION_ID   session identity; optional. When set, it is used verbatim
+#                      — the caller owns reuse, e.g.
+#                      `export CLAIM_SESSION_ID="$(uuidgen)"` in the workflow so
+#                      every invocation of the same session shares the identity.
+#   CLAIM_RUN_ID       per-run identity; optional. When set (and
+#                      CLAIM_SESSION_ID is not), the script generates a session
+#                      ID once, persists it to a run-scoped file, and reuses it
+#                      within CLAIM_SESSION_REUSE_MINUTES so the Step 1 claim
+#                      and the Step 2 re-check of the SAME run share the
+#                      identity (e.g. set it to the run/cron timestamp).
+#                      When neither is set, a fresh per-invocation session ID is
+#                      used with NO shared persistence — concurrent unnamespaced
+#                      runs must not share a claim (duplicate-work risk).
 #   CLAIM_TTL_MINUTES  claim freshness window (default: 180). A claim older
 #                      than this may be taken over by any agent.
-#   CLAIM_SESSION_REUSE_MINUTES  how long a persisted auto-generated session ID
+#   CLAIM_SESSION_REUSE_MINUTES  how long the persisted run-scoped session ID
 #                      stays reusable (default: 30; must be shorter than the
-#                      typical gap between sessions so fresh runs get fresh IDs).
-#   CLAIM_SESSION_STATE_DIR  directory for the persisted session ID
+#                      typical gap between runs so fresh runs get fresh IDs).
+#   CLAIM_SESSION_STATE_DIR  directory for the persisted run-scoped session ID
 #                      (default: ${TMPDIR:-/tmp}).
 #
 # Exit codes:
@@ -89,21 +93,25 @@ if [ -z "$REPO" ]; then
   exit 1
 fi
 
-# Resolve the session identity. Prefer an explicit CLAIM_SESSION_ID; otherwise
-# reuse a persisted auto-generated ID within the reuse window so consecutive
-# invocations of the same run (Step 1 claim -> Step 2 re-check) share it, while
-# a new session (past the window) generates and persists a fresh one.
+# Resolve the session identity. Three modes:
+#   - CLAIM_SESSION_ID set      -> use it verbatim (caller owns reuse across steps).
+#   - CLAIM_RUN_ID set          -> reuse a persisted auto-generated ID within the
+#                                  reuse window so the Step 1 claim and Step 2
+#                                  re-check of the SAME run share it; the ID file
+#                                  is namespaced by the run id.
+#   - neither set               -> fresh per-invocation ID, no shared persistence,
+#                                  because without a caller-supplied namespace we
+#                                  cannot tell two concurrent runs of the same
+#                                  agent apart; an unnamespaced shared file would
+#                                  let the second run treat the first run's claim
+#                                  as its own (duplicate work).
 SESSION_ID=""
 if [ -n "${CLAIM_SESSION_ID:-}" ]; then
   SESSION_ID="$CLAIM_SESSION_ID"
-else
+elif [ -n "${CLAIM_RUN_ID:-}" ]; then
   REUSE_MINUTES="${CLAIM_SESSION_REUSE_MINUTES:-30}"
   STATE_DIR="${CLAIM_SESSION_STATE_DIR:-${TMPDIR:-/tmp}}"
-  # Scope the persisted session ID to the run when the parent workflow supplies
-  # one; otherwise two distinct runs of the same agent on one host would share
-  # the ID within the reuse window and treat each other's claims as their own.
-  RUN_NS="${CLAIM_RUN_ID:-}"
-  STATE_FILE="${STATE_DIR}/cabros-claim-session-$(printf '%s' "$REPO" | tr '/:' '-')-${AGENT_ID}${RUN_NS:+-${RUN_NS}}"
+  STATE_FILE="${STATE_DIR}/cabros-claim-session-$(printf '%s' "$REPO" | tr '/:' '-')-${AGENT_ID}-${CLAIM_RUN_ID}"
   if [ -f "$STATE_FILE" ]; then
     # Portable mtime: macOS `stat -f %m`, GNU `stat -c %Y`.
     saved_epoch="$(stat -f %m "$STATE_FILE" 2>/dev/null || stat -c %Y "$STATE_FILE" 2>/dev/null || echo 0)"
@@ -117,6 +125,8 @@ else
     mkdir -p "$STATE_DIR" 2>/dev/null || true
     printf '%s' "$SESSION_ID" > "$STATE_FILE" 2>/dev/null || true
   fi
+else
+  SESSION_ID="session-$$-$(date +%s)"
 fi
 
 # epoch_of: portable ISO-8601 UTC -> epoch seconds (GNU date first, BSD fallback).
@@ -138,10 +148,18 @@ age_minutes() {
   echo $(( (now - e) / 60 ))
 }
 
-# has_agent_working -> "true" | "false"
+# has_agent_working -> prints "true" | "false". Returns 1 when the label lookup
+# fails so callers can fail closed (a transient `gh issue view` failure must not
+# be interpreted as a missing label — that would let a session "claim" an issue
+# that is actually owned by another active session).
 has_agent_working() {
-  gh issue view "$ISSUE_NUMBER" --json labels \
-    --jq '[.labels[].name] | index("agent-working") != null' 2>/dev/null
+  local out rc=0
+  out="$(gh issue view "$ISSUE_NUMBER" --json labels \
+    --jq '[.labels[].name] | index("agent-working") != null' 2>/dev/null)" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    return 1
+  fi
+  printf '%s\n' "$out"
 }
 
 # Read failures must never be mistaken for "no claims" (fail-closed): this
@@ -260,7 +278,14 @@ SNAPSHOT_ID="${SNAPSHOT_ID:-0}"
 # ---------------------------------------------------------------------------
 # 1) Issue already carries the agent-working label -> resolve the claim.
 # ---------------------------------------------------------------------------
-if [ "$(has_agent_working)" == "true" ]; then
+LABELED=""
+LABELED="$(has_agent_working)" || READ_FAILED="1"
+if [ "$READ_FAILED" == "1" ]; then
+  echo "RESULT=ERROR"
+  echo "Error: could not read the labels of issue #${ISSUE_NUMBER} to check for an active agent-working claim (fail-closed)." >&2
+  exit 1
+fi
+if [ "$LABELED" == "true" ]; then
   NEWEST="$(newest_claim)" || READ_FAILED="1"
   if [ "$READ_FAILED" == "1" ]; then
     echo "RESULT=ERROR"
@@ -268,7 +293,28 @@ if [ "$(has_agent_working)" == "true" ]; then
     exit 1
   fi
 
-  if [ -n "$NEWEST" ]; then
+  # The label may have been re-attached AFTER the newest claim comment (a
+  # legacy lifecycle re-claims by re-labeling without a new comment). When the
+  # newest labeled event post-dates the newest comment, the comment belongs to
+  # an earlier lifecycle and the labeled event is the authoritative freshness
+  # source; otherwise a stale historical comment would trigger a premature
+  # takeover of a fresh legacy claim.
+  LEGACY_TS="$(last_labeled_event_ts)" || READ_FAILED="1"
+  if [ "$READ_FAILED" == "1" ]; then
+    echo "RESULT=ERROR"
+    echo "Error: could not read the labeled-event history for issue #${ISSUE_NUMBER} (fail-closed)." >&2
+    exit 1
+  fi
+  LEGACY_DECIDES=""
+  if [ -n "$NEWEST" ] && [ -n "$LEGACY_TS" ]; then
+    NEWEST_E="$(epoch_of "$(echo "$NEWEST" | cut -f4)")"
+    LEGACY_E="$(epoch_of "$LEGACY_TS")"
+    if [ -n "$NEWEST_E" ] && [ -n "$LEGACY_E" ] && [ "$LEGACY_E" -gt "$NEWEST_E" ]; then
+      LEGACY_DECIDES="1"
+    fi
+  fi
+
+  if [ -n "$NEWEST" ] && [ -z "$LEGACY_DECIDES" ]; then
     NEWEST_ID="$(echo "$NEWEST" | cut -f1)"
     NEWEST_AGENT="$(echo "$NEWEST" | cut -f2)"
     NEWEST_SESSION="$(echo "$NEWEST" | cut -f3)"
@@ -333,14 +379,9 @@ if [ "$(has_agent_working)" == "true" ]; then
     exit 0
   fi
 
-  # Label present but no claim comment (legacy claim): fall back to the most
-  # recent labeled event timestamp.
-  LEGACY_TS="$(last_labeled_event_ts)" || READ_FAILED="1"
-  if [ "$READ_FAILED" == "1" ]; then
-    echo "RESULT=ERROR"
-    echo "Error: could not read the labeled-event history for the legacy claim (fail-closed)." >&2
-    exit 1
-  fi
+  # Legacy lifecycle: no claim comments OR the newest labeled event post-dates
+  # the newest claim comment (LEGACY_DECIDES above). The labeled event is the
+  # authoritative freshness source for both cases.
   if [ -n "$LEGACY_TS" ]; then
     AGE="$(age_minutes "$LEGACY_TS")"
     if [ "$AGE" -le "$TTL_MINUTES" ]; then
@@ -350,15 +391,17 @@ if [ "$(has_agent_working)" == "true" ]; then
     fi
   fi
 
-  # Legacy takeover: snapshot is 0 (no claim comments exist) so any claim
-  # comment that appears during the race participates in arbitration.
+  # Legacy takeover: arbitrate from SNAPSHOT_ID (the newest claim id at the
+  # start, 0 when none existed) so a stale historical comment from an earlier
+  # lifecycle can never win the race that follows; only comments posted DURING
+  # this takeover participate.
   OUR_LEGACY_ID="$(post_claim_comment "${CLAIM_PREFIX} ${AGENT_ID} ${SESSION_ID} ${NOW_TS} (takeover of legacy agent-working)")"
   if [ -z "$OUR_LEGACY_ID" ]; then
     echo "RESULT=ERROR"
     echo "Error: failed to post the takeover claim comment on issue #${ISSUE_NUMBER}." >&2
     exit 1
   fi
-  WINNER="$(arbitrate_race 0 "$OUR_LEGACY_ID")"
+  WINNER="$(arbitrate_race "$SNAPSHOT_ID" "$OUR_LEGACY_ID")"
   if [ "$WINNER" == "FAIL_CLOSED" ]; then
     echo "RESULT=ERROR"
     echo "Error: could not re-read claim comments to arbitrate the legacy takeover (fail-closed)." >&2

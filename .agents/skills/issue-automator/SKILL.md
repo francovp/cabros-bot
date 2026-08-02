@@ -72,10 +72,11 @@ A claimed issue is a **zero-work skip**: outcome `CLAIMED`, the issue number is 
 
 **Required environment variables** (set them in the session prompt / cron invocation):
 - `CLAIM_AGENT_ID` — the agent identity (e.g., `codex`, `antigravity`, `opencode`). REQUIRED for meaningful coordination; without it claims cannot be attributed to a session.
-- `CLAIM_SESSION_ID` — the session identity. Optional: when omitted, the script generates one and persists it per agent+repository (see `CLAIM_SESSION_REUSE_MINUTES`), so consecutive invocations of the same run share it automatically. Export it explicitly (`export CLAIM_SESSION_ID="$(uuidgen)"` or similar) only when the same session continues across separate shells.
+- `CLAIM_SESSION_ID` — the session identity. Optional: export it explicitly (`export CLAIM_SESSION_ID="$(uuidgen)"` or similar) when the same session continues across separate shells; the script uses it verbatim.
+- `CLAIM_RUN_ID` — per-run identity, optional. When set (and `CLAIM_SESSION_ID` is not), the script generates a session ID once, persists it to a run-scoped file (see `CLAIM_SESSION_REUSE_MINUTES` / `CLAIM_SESSION_STATE_DIR`), and reuses it so the Step 1 claim and the Step 2 re-check of the SAME run share the identity. When neither is set, each invocation gets a fresh per-invocation session ID with no shared persistence — concurrent unnamespaced runs must not share a claim.
 - `CLAIM_TTL_MINUTES` — claim freshness window in minutes (default `180`). A claim older than this may be taken over by any agent.
-- `CLAIM_SESSION_REUSE_MINUTES` — reuse window in minutes (default `30`) for the persisted auto-generated session ID; past it, a fresh session ID is generated.
-- `CLAIM_SESSION_STATE_DIR` — directory for the persisted session ID (default `${TMPDIR:-/tmp}`; one file per repository+agent).
+- `CLAIM_SESSION_REUSE_MINUTES` — reuse window in minutes (default `30`) for the persisted run-scoped session ID; past it, a fresh session ID is generated.
+- `CLAIM_SESSION_STATE_DIR` — directory for the persisted run-scoped session ID (default `${TMPDIR:-/tmp}`; one file per repository+agent+run).
 
 **Rules**
 - Never start code, Linear, or PR work on an issue this session does not own (claim script exit `0` required).
@@ -111,7 +112,7 @@ Follow these steps in strict chronological order to automate issue resolution:
 4. Do not fetch, inspect, select, plan, or create TODOs for any second issue at this stage.
 5. If no open GitHub issues exist (and none was specified), stop execution immediately.
 6. For the primary issue:
-   - **Claim the issue immediately** — before any further analysis, run `scripts/claim-issue.sh <ISSUE_NUMBER>` so other concurrent sessions see this issue is being handled. When `CLAIM_SESSION_ID` is omitted, the script auto-generates and persists one per agent+repository so the Step 2 re-check shares the same session identity:
+   - **Claim the issue immediately** — before any further analysis, run `scripts/claim-issue.sh <ISSUE_NUMBER>` so other concurrent sessions see this issue is being handled. Set `CLAIM_RUN_ID` (preferred, e.g. the run/cron timestamp) or `CLAIM_SESSION_ID` so the Step 2 re-check shares the session identity; when both are omitted the script uses a fresh per-invocation session ID with no shared persistence:
      - `RESULT=CLAIMED` or `RESULT=TAKEOVER` (exit `0`): this session owns the issue — proceed with the checks below.
      - `RESULT=SKIP` (exit `2`): another agent session owns this issue with a fresh claim. Record outcome `CLAIMED`, append the issue number to `SKIPPED_ISSUES`, and advance via the Step 6 skip loop. This is a **zero-work skip**: it does NOT count toward the session's issue budget (e.g., 3 issues per session) or the max-2 write budget (Hard Rule #4). If the issue was user-specified, end the run with outcome `CLAIMED` — never advance past a user-specified issue.
      - `RESULT=ERROR` (exit `1`): handle like a tooling failure (see Error Handling).
