@@ -686,7 +686,12 @@ class JobService {
 			}
 
 			try {
-				await this.queue.enqueue(job.jobId);
+				const retried = typeof this.queue.retryFailed === 'function'
+					? await this.queue.retryFailed(job.jobId)
+					: false;
+				if (!retried) {
+					await this.queue.enqueue(job.jobId);
+				}
 				reconciled += 1;
 			} catch (error) {
 				console.warn(`[JobService] Failed to re-enqueue queued job ${job.jobId}:`, error.message);

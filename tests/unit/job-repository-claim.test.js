@@ -41,6 +41,7 @@ describe('JobRepository durable claims', () => {
 		};
 		const query = {
 			where: jest.fn().mockReturnThis(),
+			orderBy: jest.fn().mockReturnThis(),
 			limit: jest.fn().mockReturnThis(),
 			get: jest.fn().mockResolvedValue({
 				docs: [{ id: processingJob.jobId, data: () => processingJob }],
@@ -56,6 +57,7 @@ describe('JobRepository durable claims', () => {
 				expect.objectContaining({ jobId: processingJob.jobId }),
 			]);
 			expect(query.where).toHaveBeenCalledWith('status', '==', 'processing');
+			expect(query.orderBy).toHaveBeenCalledWith('createdAt', 'desc');
 		} finally {
 			_resetForTesting();
 		}

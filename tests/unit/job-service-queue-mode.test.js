@@ -124,6 +124,7 @@ describe('JobService Render worker mode', () => {
 		const queue = {
 			isEnabled: () => true,
 			enqueue: jest.fn().mockResolvedValue({ queued: true }),
+			retryFailed: jest.fn().mockImplementation(async (jobId) => jobId === 'expired-claim-job'),
 		};
 		const service = new JobService(repository, queue);
 
@@ -131,7 +132,8 @@ describe('JobService Render worker mode', () => {
 
 		expect(repository.list).toHaveBeenCalledWith({ status: 'processing', limit: expect.any(Number) });
 		expect(queue.enqueue).toHaveBeenCalledWith('lost-queue-job');
-		expect(queue.enqueue).toHaveBeenCalledWith('expired-claim-job');
+		expect(queue.retryFailed).toHaveBeenCalledWith('expired-claim-job');
+		expect(queue.enqueue).not.toHaveBeenCalledWith('expired-claim-job');
 		expect(queue.enqueue).not.toHaveBeenCalledWith('active-job');
 	});
 

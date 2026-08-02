@@ -543,7 +543,9 @@ class JobRepository {
 					let query = firestore.collection(COLLECTION_NAME);
 					if (status && typeof query.where === 'function') {
 						const statusQuery = query.where('status', '==', status);
-						if (statusQuery && typeof statusQuery.limit === 'function') {
+						if (statusQuery && typeof statusQuery.orderBy === 'function') {
+							query = statusQuery.orderBy('createdAt', 'desc');
+						} else if (statusQuery && typeof statusQuery.limit === 'function') {
 							query = statusQuery;
 						} else {
 							query = query.orderBy('createdAt', 'desc');

@@ -119,6 +119,36 @@ class JobQueue {
 		}
 	}
 
+	async retryFailed(jobId) {
+		if (!this.isEnabled()) {
+			return false;
+		}
+
+		this._assertAvailable();
+		if (typeof jobId !== 'string' || !jobId) {
+			throw new JobQueueUnavailableError('A jobId is required to retry an asynchronous job.');
+		}
+
+		const queue = await this._getQueue();
+		if (typeof queue.getJob !== 'function') {
+			return false;
+		}
+
+		const job = await queue.getJob(jobId);
+		if (!job || typeof job.getState !== 'function' || typeof job.retry !== 'function') {
+			return false;
+		}
+
+		if (await job.getState() !== 'failed') {
+			return false;
+		}
+
+		await job.retry('failed');
+		this.metrics.enqueued += 1;
+		this.metrics.lastEnqueuedAt = new Date().toISOString();
+		return true;
+	}
+
 	createWorker(processor, { onFailed } = {}) {
 		this._assertAvailable();
 		if (typeof processor !== 'function') {
