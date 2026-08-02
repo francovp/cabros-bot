@@ -97,4 +97,42 @@ describe('JobQueue', () => {
 
 		expect(close).toHaveBeenCalledTimes(1);
 	});
+
+	it('waits for failed-event finalization before closing a worker', async () => {
+		let failedHandler;
+		let resolveFailure;
+		const close = jest.fn().mockResolvedValue(undefined);
+		const worker = {
+			on: jest.fn((event, handler) => {
+				if (event === 'failed') failedHandler = handler;
+			}),
+			close,
+		};
+		const WorkerClass = jest.fn(() => worker);
+		const RedisClass = jest.fn(() => ({ disconnect: jest.fn() }));
+		const onFailed = jest.fn(() => new Promise((resolve) => {
+			resolveFailure = resolve;
+		}));
+
+		process.env = {
+			...savedEnv,
+			JOB_EXECUTION_MODE: 'render-worker',
+			REDIS_URL: 'redis://queue.example:6379',
+		};
+
+		const queue = new JobQueue({ WorkerClass, RedisClass });
+		const created = queue.createWorker(jest.fn(), { onFailed });
+		failedHandler({ data: { jobId: 'job-123' } }, new Error('worker failure'));
+
+		let settled = false;
+		const closing = queue.closeWorker(created).then(() => {
+			settled = true;
+		});
+		await Promise.resolve();
+		expect(settled).toBe(false);
+		resolveFailure();
+		await closing;
+		expect(onFailed).toHaveBeenCalledTimes(1);
+		expect(close).toHaveBeenCalledTimes(1);
+	});
 });

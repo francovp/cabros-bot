@@ -719,7 +719,18 @@ class JobService {
 		job.updatedAt = new Date().toISOString();
 		await this._persistJob(job);
 
+		const controller = new AbortController();
+		this.activeControllers.set(jobId, controller);
+		let claimLost = false;
 		let claimHeartbeat = null;
+		const markClaimLost = () => {
+			if (claimLost) return;
+			claimLost = true;
+			job._claimLost = true;
+			const error = new Error('Job claim lost.');
+			error.code = 'JOB_CLAIM_LOST';
+			controller.abort(error);
+		};
 		if (
 			workerId
 			&& job.execution
@@ -732,17 +743,21 @@ class JobService {
 				: 60000;
 			const heartbeatMs = Math.max(1, Math.floor(leaseMs / 2));
 			claimHeartbeat = globalThis.setInterval(() => {
-				Promise.resolve(this.repository.renewClaim(jobId, workerId)).catch((error) => {
-					console.warn('[JobService] Failed to renew job claim:', error.message);
-				});
+				Promise.resolve(this.repository.renewClaim(jobId, workerId))
+					.then((renewed) => {
+						if (!renewed) {
+							markClaimLost();
+						}
+					})
+					.catch((error) => {
+						console.warn('[JobService] Failed to renew job claim:', error.message);
+						markClaimLost();
+					});
 			}, heartbeatMs);
 		}
 
 		// Setup Timeout AbortController
 		const timeoutMs = job.timeoutMs || DEFAULT_JOB_TIMEOUT_MS;
-
-		const controller = new AbortController();
-		this.activeControllers.set(jobId, controller);
 
 		const timeoutId = setTimeout(() => {
 			controller.abort(new Error(`Job timed out after ${timeoutMs}ms`));
@@ -757,6 +772,9 @@ class JobService {
 				await this._executeMarketScanner(job, parsed, signal, botOrGetter);
 			}
 		} catch (error) {
+			if (claimLost) {
+				return;
+			}
 			console.error(`[JobService] Job ${jobId} failed:`, error.message);
 
 			const currentJob = await this.repository.get(jobId);
@@ -789,22 +807,23 @@ class JobService {
 				globalThis.clearInterval(claimHeartbeat);
 			}
 			this.activeControllers.delete(jobId);
+			if (!claimLost) {
+				const finalJob = await this.repository.get(jobId);
+				if (finalJob && finalJob.status === 'cancelled') {
+					finalJob.totalDurationMs = Date.now() - startTime;
+					this._finishQueuedExecution(finalJob);
+					finalJob.updatedAt = new Date().toISOString();
+					await this._persistJob(finalJob);
+					await this._triggerCallbackIfConfigured(finalJob);
+					return;
+				}
 
-			const finalJob = await this.repository.get(jobId);
-			if (finalJob && finalJob.status === 'cancelled') {
-				finalJob.totalDurationMs = Date.now() - startTime;
-				this._finishQueuedExecution(finalJob);
-				finalJob.updatedAt = new Date().toISOString();
-				await this._persistJob(finalJob);
-				await this._triggerCallbackIfConfigured(finalJob);
-				return;
+				job.totalDurationMs = Date.now() - startTime;
+				this._finishQueuedExecution(job);
+				job.updatedAt = new Date().toISOString();
+				await this._persistJob(job);
+				await this._triggerCallbackIfConfigured(job);
 			}
-
-			job.totalDurationMs = Date.now() - startTime;
-			this._finishQueuedExecution(job);
-			job.updatedAt = new Date().toISOString();
-			await this._persistJob(job);
-			await this._triggerCallbackIfConfigured(job);
 		}
 	}
 
@@ -813,6 +832,9 @@ class JobService {
 
 		for (let index = 0; index < symbols.length; index++) {
 			const input = symbols[index];
+			if (this._isClaimLost(signal)) {
+				return;
+			}
 
 			const currentJob = await this.repository.get(job.jobId);
 			if (currentJob && currentJob.status === 'cancelled') {
@@ -865,6 +887,9 @@ class JobService {
 					multiTimeframe,
 				});
 			} catch (error) {
+				if (this._isClaimLost(signal)) {
+					return;
+				}
 				if (this._isAbortTriggered(signal, error)) {
 					const timeoutMessage = this._getAbortMessage(signal, error.message);
 					job.fullResults.push({
@@ -888,6 +913,9 @@ class JobService {
 		}
 
 		const currentJob = await this.repository.get(job.jobId);
+		if (this._isClaimLost(signal)) {
+			return;
+		}
 		if (currentJob && currentJob.status === 'cancelled') {
 			return;
 		}
@@ -926,6 +954,9 @@ class JobService {
 
 		const routing = this._getRoutingFromJob(job);
 		const deliveryResults = await sendWithNotificationRouting(notificationManager, { text: alertText }, routing);
+		if (this._isClaimLost(signal)) {
+			return;
+		}
 		job.deliveryResults = deliveryResults;
 		job.requestedChannels = getRequestedChannels(notificationManager, routing);
 		job.summary = this._buildExpandedSummary(job.fullResults, deliveryResults);
@@ -938,6 +969,9 @@ class JobService {
 
 		for (let index = 0; index < scans.length; index++) {
 			const scanType = scans[index];
+			if (this._isClaimLost(signal)) {
+				return;
+			}
 
 			const currentJob = await this.repository.get(job.jobId);
 			if (currentJob && currentJob.status === 'cancelled') {
@@ -989,6 +1023,9 @@ class JobService {
 					items: enrichedItems,
 				});
 			} catch (error) {
+				if (this._isClaimLost(signal)) {
+					return;
+				}
 				if (this._isAbortTriggered(signal, error)) {
 					const timeoutMessage = this._getAbortMessage(signal, error.message);
 					job.fullScanResults.push({
@@ -1012,6 +1049,9 @@ class JobService {
 		}
 
 		const currentJob = await this.repository.get(job.jobId);
+		if (this._isClaimLost(signal)) {
+			return;
+		}
 		if (currentJob && currentJob.status === 'cancelled') {
 			return;
 		}
@@ -1049,6 +1089,9 @@ class JobService {
 
 		const routing = this._getRoutingFromJob(job);
 		const deliveryResults = await sendWithNotificationRouting(notificationManager, { text: alertText }, routing);
+		if (this._isClaimLost(signal)) {
+			return;
+		}
 		job.deliveryResults = deliveryResults;
 		job.requestedChannels = getRequestedChannels(notificationManager, routing);
 		job.summary = this._buildScannerSummary(job.fullScanResults, deliveryResults);
@@ -1057,6 +1100,9 @@ class JobService {
 	}
 
 	async _persistJob(job) {
+		if (job && job._claimLost) {
+			return;
+		}
 		const current = await this.repository.get(job.jobId);
 		if (current) {
 			if (TERMINAL_JOB_STATUSES.has(current.status) && current.status !== job.status) {
@@ -1214,6 +1260,10 @@ class JobService {
 			|| (error && error.name === 'AbortError')
 			|| (error && error.name === 'AbortSignalError'),
 		);
+	}
+
+	_isClaimLost(signal) {
+		return Boolean(signal && signal.reason && signal.reason.code === 'JOB_CLAIM_LOST');
 	}
 
 	_getAbortMessage(signal, fallback = 'Job timed out') {

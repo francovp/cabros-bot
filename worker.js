@@ -1,6 +1,7 @@
 'use strict';
 
 require('dotenv').config();
+require('./instrument.js');
 
 const { Telegraf } = require('telegraf');
 const { initializeNotificationServices } = require('./src/controllers/webhooks/handlers/alert/alert');

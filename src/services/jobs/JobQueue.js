@@ -41,6 +41,7 @@ class JobQueue {
 		this.queueConnection = null;
 		this.worker = null;
 		this.workerConnections = new Map();
+		this.pendingFailureHandlers = new Set();
 		this.queueReady = false;
 		this.accepting = true;
 		this.readyPromise = null;
@@ -130,9 +131,13 @@ class JobQueue {
 			worker.on('failed', (job, error) => {
 				this.metrics.failed += 1;
 				if (typeof onFailed === 'function') {
-					Promise.resolve(onFailed(job, error)).catch((failure) => {
-						console.warn('[JobQueue] Failed to release a queue claim:', failure.message);
-					});
+					const failurePromise = Promise.resolve()
+						.then(() => onFailed(job, error))
+						.catch((failure) => {
+							console.warn('[JobQueue] Failed to release a queue claim:', failure.message);
+						});
+					this.pendingFailureHandlers.add(failurePromise);
+					failurePromise.then(() => this.pendingFailureHandlers.delete(failurePromise));
 				}
 			});
 			worker.on('error', (error) => this._recordError(error));
@@ -154,6 +159,9 @@ class JobQueue {
 				await worker.close();
 			}
 		} finally {
+			while (this.pendingFailureHandlers.size > 0) {
+				await Promise.all([...this.pendingFailureHandlers]);
+			}
 			await this._closeConnection(this.workerConnections.get(worker));
 			this.workerConnections.delete(worker);
 			if (this.worker === worker) {
