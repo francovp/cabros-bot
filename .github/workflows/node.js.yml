@@ -26,5 +26,17 @@ jobs:
         node-version: 20
         cache: pnpm
     - run: pnpm install --frozen-lockfile
+    - name: Setup Java for Firebase Firestore emulator
+      uses: actions/setup-java@v4
+      with:
+        distribution: temurin
+        java-version: '21'
+    - name: Cache Firebase emulator binaries
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/firebase/emulators
+        key: firebase-tools-15.25.1-${{ runner.os }}
+    - name: Run Firestore emulator integration tests
+      run: pnpm test:firebase
     # - run: pnpm run build --if-present # No build step needed for this project, yet.
     - run: pnpm test
