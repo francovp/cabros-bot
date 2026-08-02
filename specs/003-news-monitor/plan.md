@@ -20,7 +20,7 @@ This feature implements an HTTP endpoint (`/api/news-monitor`) that analyzes new
 - `binance` ^2.10.2 - Binance API client (existing, for crypto price fetching)
 - `express` ^4.17.1 - HTTP server (existing)
 - `telegraf` ^4.3.0 - Telegram bot framework (existing)
-- Native fetch URL shortener for the supported services (TinyURL, PicSee, Cutt.ly) with fallback to title-only citations if service is unavailable
+- Native fetch URL shortener for the supported services (TinyURL, PicSee, Cutt.ly) with fallback to original URLs if service is unavailable
 
 **Storage**: In-memory cache for news deduplication (Map-based, TTL-aware, no persistence required) + in-memory URL shortening cache (session-scoped)
 **Testing**: Jest ^30.2.0 with supertest ^7.1.4 for integration tests; minimal test coverage per constitution (critical paths + regressions)  
@@ -38,7 +38,7 @@ This feature implements an HTTP endpoint (`/api/news-monitor`) that analyzes new
 - Aggressive timeouts: Binance ~5s, Gemini ~20s, optional LLM enrichment ~10s, URL shortening ~5s per symbol
 - Graceful degradation: notification channel failures and URL shortening failures do not block HTTP response or alert delivery
 - Conservative confidence selection when enrichment is enabled (min of Gemini + LLM scores)
-- URL shortening supports multiple services via `URL_SHORTENER_SERVICE` env var (default: 'picsee'); uses native fetch for supported services; falls back to title-only citations if service unavailable
+- URL shortening supports multiple services via `URL_SHORTENER_SERVICE` env var (default: 'picsee'); uses native fetch for supported services; falls back to original URLs if service unavailable
 
 **Scale/Scope**: 
 - Extensible: No hard limits on symbol count (30s timeout applies to entire batch)
@@ -70,7 +70,7 @@ This feature implements an HTTP endpoint (`/api/news-monitor`) that analyzes new
   - Core analysis flow (Gemini response parsing, confidence scoring)
   - Deduplication logic (cache key generation, TTL enforcement)
   - Optional enrichment (fallback when disabled/unavailable)
-  - URL shortening logic (supported-provider integration, cache hits, fallback to title-only)
+  - URL shortening logic (supported-provider integration, cache hits, fallback to original URLs)
   - Integration tests for multi-channel delivery with URL shortening
   - No TDD mandate; tests can be written after implementation
 
@@ -196,7 +196,7 @@ index.js                                              # Update to register /api/
   - Reuses existing services (grounding, notification manager, retry helper)
   - Optional enrichment disabled by default (backward compatible)
   - URL shortening optional and disabled if no supported provider is configured (graceful degradation)
-  - No premature abstraction (direct API calls, graceful fallback to title-only citations)
+  - No premature abstraction (direct API calls, graceful fallback to original URLs)
   - No violations introduced
 
 ### III. Testing Policy (No TDD Mandate) ✅
@@ -328,7 +328,7 @@ specs/003-news-monitor/
 
 6. **Graceful degradation**: Enrichment failures and URL shortening failures do NOT block alert delivery (fail-open)
    - Any failure in Gemini grounding, optional LLM enrichment, external APIs (Binance/URL shortening), or notification channels is logged and degrades gracefully
-  -  Alerts still get delivered using best-effort data (original text or title-only citations), and errors are surfaced to admin channels when configured.
+  -  Alerts still get delivered using best-effort data (original text or original-URL citations), and errors are surfaced to admin channels when configured.
 
 7. **Feature flags**: Three independent toggles (ENABLE_NEWS_MONITOR, ENABLE_BINANCE_PRICE_CHECK, ENABLE_LLM_ALERT_ENRICHMENT)
    - Feature gating remains: `ENABLE_NEWS_MONITOR`, `ENABLE_BINANCE_PRICE_CHECK`, `ENABLE_LLM_ALERT_ENRICHMENT` control the major flows
@@ -343,7 +343,7 @@ specs/003-news-monitor/
   - Uses native fetch for supported services (TinyURL, PicSee, Cutt.ly)
   - Invalid or unavailable service names fall back to PicSee validation at runtime
   - Session-scoped in-memory cache prevents redundant API calls for duplicate sources (originalUrl → shortUrl map; in-memory only, resets on process restart)
-  - Graceful fallback to title-only citations if shortening fails (shortening failures logged at INFO; alert delivery proceeds)
+  - Graceful fallback to original URLs if shortening fails (shortening failures logged at INFO; alert delivery proceeds)
   - Reduces WhatsApp message size for enriched alerts (typical enriched payloads drop from ~25K chars to under ~10K chars when citations are shortened)
   - Per-symbol 30s timeout budget accounts for shortening latency (shortening typically <1s per citation; API calls use a ~5s timeout and 3 retries with backoff)
   - Implementation notes (for engineers): validate URL shortener responses, de-duplicate source URLs before calling shortening service, and include shortening metadata (applied flag, service, successCount, failureCount) in alert response payload for observability

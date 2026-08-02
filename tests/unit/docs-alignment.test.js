@@ -7,7 +7,7 @@ function getAllFiles(dirPath, arrayOfFiles = []) {
     const fullPath = path.join(dirPath, file);
     if (fs.statSync(fullPath).isDirectory()) {
       arrayOfFiles = getAllFiles(fullPath, arrayOfFiles);
-    } else if (file.endsWith('.md')) {
+    } else if (['.md', '.yml', '.yaml'].some(extension => file.endsWith(extension))) {
       arrayOfFiles.push(fullPath);
     }
   });
@@ -64,6 +64,7 @@ describe('Documentation Alignment Policy', () => {
       /^\s*URL_SHORTENER_SERVICE\s*=\s*(?:bitly|reurl|pixnet0rz\.tw)\b/im,
       /^\s*(?:BITLY_(?:API_KEY|ACCESS_TOKEN)|REURL_(?:API_KEY|ACCESS_TOKEN)|PIXNET0RZ(?:_TW)?_(?:API_KEY|ACCESS_TOKEN))\s*=/im,
       /https?:\/\/bit\.ly\//i,
+      /\btitle[- ]only\b/i,
     ];
 
     for (const fullPath of maintainedFiles) {

@@ -537,7 +537,7 @@ The system provides an HTTP endpoint (`/api/news-monitor`) that analyzes financi
 4. Optional LLM enrichment (if `ENABLE_LLM_ALERT_ENRICHMENT=true`) refines confidence using conservative strategy: `min(gemini_confidence, llm_confidence)`
 5. Alerts filtered by `NEWS_ALERT_THRESHOLD` (default: 0.7)
 6. Deduplicated: cache key is `(symbol, event_category)`. Same category within TTL prevents duplicate alerts; different categories generate separate alerts
-7. **URL shortening applied to WhatsApp citations** (if `URL_SHORTENER_SERVICE` configured): Uses native fetch for supported services (`picsee`, `tinyurl`, `cuttly`); falls back to title-only if shortening fails
+7. **URL shortening applied to WhatsApp citations** (if `URL_SHORTENER_SERVICE` configured): Uses native fetch for supported services (`picsee`, `tinyurl`, `cuttly`); preserves original URLs if shortening fails
 8. Filtered alerts sent to all enabled channels (Telegram, WhatsApp) via existing NotificationManager in parallel
 9. Returns 200 OK with per-symbol results: status (analyzed/cached/timeout/error), detected alerts, delivery results, metadata (totalDurationMs, cached, requestId), and summary counters including `quota_exhausted` for exhausted Gemini 429 retries.
 
@@ -572,7 +572,7 @@ The system provides an HTTP endpoint (`/api/news-monitor`) that analyzes financi
 - Binance: 3 retries with exponential backoff (1s, 2s, 4s) + ±10% jitter
 - Gemini news analysis: retries `429 RESOURCE_EXHAUSTED` per symbol inside `NEWS_TIMEOUT_MS`, honoring provider retry delay metadata when present and returning `GEMINI_QUOTA_EXHAUSTED` when exhausted
 - Optional LLM enrichment: 3 retries (independent from analysis; failure doesn't block alert)
-- URL shortening: 3 retries with exponential backoff (independent; failure falls back to title-only)
+- URL shortening: 3 retries with exponential backoff (independent; failure preserves original URLs)
 - Telegram/WhatsApp: 3 retries (reuse existing notification retry logic)
 
 **Cache Deduplication**:
@@ -602,7 +602,7 @@ The system provides an HTTP endpoint (`/api/news-monitor`) that analyzes financi
 - GreenAPI for WhatsApp (REST API integration via native fetch with AbortController timeout)
 - Google Gemini for optional alert enrichment (existing integration in grounding service) and news sentiment analysis (003-news-monitor)
 - Azure AI Inference REST client for optional secondary LLM enrichment (003-news-monitor, disabled by default)
-- Native fetch for URL shortening in WhatsApp citations (003-news-monitor, with fallback to title-only citations)
+- Native fetch for URL shortening in WhatsApp citations (003-news-monitor, with fallback to original URLs)
 - In-memory Map cache for news deduplication with TTL (003-news-monitor, no external storage)
 - Binance API client for precise crypto prices (003-news-monitor, optional fallback to Gemini GoogleSearch)
 - TradingView MCP remote Streamable HTTP server for technical `coin_analysis` report generation (`POST /api/webhook/expanded-analysis-alert`)

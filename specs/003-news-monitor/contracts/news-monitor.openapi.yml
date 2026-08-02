@@ -685,6 +685,6 @@ components:
           example: 2
         failureCount:
           type: integer
-          description: Number of URLs that failed to shorten (fell back to title-only)
+          description: Number of URLs that failed to shorten (original URLs preserved)
           minimum: 0
           example: 0

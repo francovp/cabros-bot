@@ -318,13 +318,13 @@ async function getMarketContext(symbol, isCrypto) {
 
 ### 7. URL Shortening for WhatsApp Citations
 
-**Decision**: Use native fetch URL shortener utility for supported URL shortening services (TinyURL, PicSee, Cutt.ly), with fallback to title-only citations if all fail
+**Decision**: Use native fetch URL shortener utility for supported URL shortening services (TinyURL, PicSee, Cutt.ly), with fallback to original URLs if all fail
 
 **Rationale**:
 
 - **Multi-service support**: Native fetch implementation provides unified interface for multiple shortening services
 - **Graceful fallback**: If shortener fails or service is unsupported, fall back gracefully
-- **Fail-open pattern**: If shortening fails, use title-only citations (e.g., "Reuters / CoinDesk") without blocking alert delivery
+- **Fail-open pattern**: If shortening fails, preserve original URLs without blocking alert delivery
 - **In-memory cache**: Session-scoped cache prevents redundant API calls for duplicate sources
 - **Performance**: Shortening typically <1s per citation, fits within 30s per-symbol budget
 
@@ -354,7 +354,7 @@ class URLShortener {
         console.warn(`URL shortening failed with ${service}:`, error.message);
       }
     }
-    return null; // Graceful fallback to title-only citations
+    return null; // Graceful fallback to original URLs in the formatter
   }
 
   async callShortenerAPI(longUrl, service) {

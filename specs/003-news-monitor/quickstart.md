@@ -332,7 +332,7 @@ PICSEE_API_KEY=your-picsee-api-key
 - System shortens source URLs in WhatsApp alerts using configured service
 - Reduces message size from ~25K chars to <10K chars for enriched alerts
 - In-memory cache prevents redundant API calls for duplicate sources
-- Falls back to title-only citations if shortening fails (e.g., "Reuters / CoinDesk" instead of long URLs)
+- Preserves original URLs if shortening fails, so source links remain available
 - Supported services: `picsee`, `tinyurl`, and `cuttly`. TinyURL requires no credential; Bitly, reurl, and Pixnet0rz.tw are unavailable.
 
 **Response includes shortening metadata:**
