@@ -146,6 +146,41 @@ services:
       name: cabros-crypto-bot-telegram-iac
       type: web
       envVarKey: SENTRY_DSN
+  - key: SENTRY_SEND_ALERT_CONTENT
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: SENTRY_SEND_ALERT_CONTENT
+  - key: SENTRY_SAMPLE_RATE_ERRORS
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: SENTRY_SAMPLE_RATE_ERRORS
+  - key: SENTRY_TRACES_SAMPLE_RATE
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: SENTRY_TRACES_SAMPLE_RATE
+  - key: SENTRY_PROFILE_SESSION_SAMPLE_RATE
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: SENTRY_PROFILE_SESSION_SAMPLE_RATE
+  - key: SENTRY_CONSOLE_LOG_LEVELS
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: SENTRY_CONSOLE_LOG_LEVELS
+  - key: SENTRY_ENVIRONMENT
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: SENTRY_ENVIRONMENT
+  - key: SENTRY_RELEASE
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: SENTRY_RELEASE
   - key: ENABLE_MARKET_SCANNER
     fromService:
       name: cabros-crypto-bot-telegram-iac

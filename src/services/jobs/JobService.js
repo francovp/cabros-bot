@@ -723,6 +723,9 @@ class JobService {
 		const startTime = Date.now();
 		const job = await this.repository.get(jobId);
 		if (!job) return;
+		if (workerId && job.execution && job.execution.mode === 'render-worker') {
+			job._workerId = workerId;
+		}
 
 		job.status = 'processing';
 		if (job.execution && job.execution.mode === 'render-worker') {
@@ -786,7 +789,10 @@ class JobService {
 				await this._executeMarketScanner(job, parsed, signal, botOrGetter);
 			}
 		} catch (error) {
-			if (claimLost) {
+			if (claimLost || (error && error.code === 'JOB_CLAIM_LOST')) {
+				if (!claimLost) {
+					markClaimLost();
+				}
 				return;
 			}
 			console.error(`[JobService] Job ${jobId} failed:`, error.message);
@@ -828,6 +834,9 @@ class JobService {
 			} else {
 				const finalJob = await this.repository.get(jobId);
 				if (finalJob && finalJob.status === 'cancelled') {
+					if (job._workerId) {
+						finalJob._workerId = job._workerId;
+					}
 					finalJob.totalDurationMs = Date.now() - startTime;
 					this._finishQueuedExecution(finalJob);
 					finalJob.updatedAt = new Date().toISOString();
@@ -1134,9 +1143,14 @@ class JobService {
 				job.execution.leaseUntil = new Date(Date.now() + effectiveLeaseMs).toISOString();
 			}
 		}
-		await this.repository.save(job, {
+		const saved = await this.repository.save(job, {
 			required: job.execution && job.execution.mode === 'render-worker',
 		});
+		if (saved === null && job._workerId) {
+			const error = new Error('Job claim is no longer owned by this worker.');
+			error.code = 'JOB_CLAIM_LOST';
+			throw error;
+		}
 	}
 
 	_finishQueuedExecution(job) {

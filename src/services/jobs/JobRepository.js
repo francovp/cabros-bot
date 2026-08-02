@@ -24,6 +24,7 @@ function sanitizeJob(job) {
 	delete copy.bot;
 	delete copy.botOrGetter;
 	delete copy.signal;
+	delete copy._workerId;
 	return copy;
 }
 

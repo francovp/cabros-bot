@@ -89,6 +89,22 @@ describe('queued job execution', () => {
 		);
 	});
 
+	it('rejects worker persistence when the durable save loses ownership', async () => {
+		const repository = {
+			get: jest.fn().mockResolvedValue({ jobId: 'job-123' }),
+			save: jest.fn().mockResolvedValue(null),
+		};
+		const service = new JobService(repository);
+		const job = {
+			jobId: 'job-123',
+			status: 'processing',
+			execution: { mode: 'render-worker', status: 'running', workerId: 'worker-1' },
+			_workerId: 'worker-1',
+		};
+
+		await expect(service._persistJob(job)).rejects.toMatchObject({ code: 'JOB_CLAIM_LOST' });
+	});
+
 	it('renews a render-worker claim while processing a job', async () => {
 		const previousLeaseMs = process.env.JOB_QUEUE_CLAIM_LEASE_MS;
 		process.env.JOB_QUEUE_CLAIM_LEASE_MS = '20';
