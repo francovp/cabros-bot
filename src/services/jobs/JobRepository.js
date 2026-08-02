@@ -52,6 +52,10 @@ class JobRepository {
 					const snapshot = await transaction.get(docRef);
 					if (snapshot && snapshot.exists) {
 						const current = sanitizeJob({ ...(snapshot.data() || {}), jobId: snapshot.id || sanitized.jobId });
+						const incomingWorkerId = sanitized.execution && sanitized.execution.workerId;
+						if (incomingWorkerId && (!current || (current.execution || {}).workerId !== incomingWorkerId)) {
+							return false;
+						}
 						if (current && TERMINAL_STATUSES.has(current.status) && current.status !== sanitized.status) {
 							return false;
 						}

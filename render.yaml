@@ -126,6 +126,26 @@ services:
       name: cabros-crypto-bot-telegram-iac
       type: web
       envVarKey: JOB_CALLBACK_SIGNING_SECRET
+  - key: ALLOW_HTTP_CALLBACKS
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: ALLOW_HTTP_CALLBACKS
+  - key: ALLOW_PRIVATE_CALLBACKS
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: ALLOW_PRIVATE_CALLBACKS
+  - key: ENABLE_SENTRY
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: ENABLE_SENTRY
+  - key: SENTRY_DSN
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: SENTRY_DSN
   - key: ENABLE_MARKET_SCANNER
     fromService:
       name: cabros-crypto-bot-telegram-iac
