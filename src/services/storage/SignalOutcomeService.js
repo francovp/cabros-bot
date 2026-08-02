@@ -250,8 +250,6 @@ async function evaluatePendingOutcomes(options = {}) {
 			return { scannedCount: 0, evaluatedCount: 0 };
 		}
 
-		lastEvaluatedDoc = snapshot.docs[snapshot.docs.length - 1];
-
 		const now = Date.now();
 		const client = getBinanceClient();
 		let sweepDeadlineExceeded = false;
@@ -284,6 +282,7 @@ async function evaluatePendingOutcomes(options = {}) {
 					outcomes,
 				});
 				evaluatedCount++;
+				lastEvaluatedDoc = doc;
 				continue;
 			}
 
@@ -303,6 +302,7 @@ async function evaluatePendingOutcomes(options = {}) {
 					outcomes,
 				});
 				evaluatedCount++;
+				lastEvaluatedDoc = doc;
 				continue;
 			}
 
@@ -427,6 +427,10 @@ async function evaluatePendingOutcomes(options = {}) {
 				}
 				await doc.ref.update(updateFields);
 				evaluatedCount++;
+			}
+
+			if (!sweepDeadlineExceeded) {
+				lastEvaluatedDoc = doc;
 			}
 
 			if (sweepDeadlineExceeded) {

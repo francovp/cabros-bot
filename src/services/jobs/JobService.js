@@ -2,6 +2,7 @@
 
 const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
+const { Agent, fetch: undiciFetch } = require('undici');
 const dns = require('dns');
 const net = require('net');
 const { tradingViewMcpService } = require('../tradingview/TradingViewMcpService');
@@ -35,6 +36,11 @@ const JOB_STATUSES = new Set(['pending', 'processing', 'completed', 'failed', 'c
 const JOB_TYPES = new Set(['expanded-analysis', 'market-scanner']);
 const DEFAULT_JOB_LIST_LIMIT = 50;
 const MAX_JOB_LIST_LIMIT = 100;
+const nativeFetch = globalThis.fetch;
+
+function getCallbackFetch() {
+	return globalThis.fetch === nativeFetch ? undiciFetch : globalThis.fetch;
+}
 
 function expandIPv6(ip) {
 	let fullIp = ip;
@@ -159,13 +165,9 @@ async function validateCallbackUrl(urlStr) {
 		const allowPrivate = process.env.ALLOW_PRIVATE_CALLBACKS === 'true' ||
 			process.env.NODE_ENV === 'test';
 
-		if (allowPrivate) {
-			return { valid: true };
-		}
-
 		let addresses;
 		if (net.isIP(hostname)) {
-			addresses = [{ address: hostname }];
+			addresses = [{ address: hostname, family: net.isIP(hostname) }];
 		} else {
 			try {
 				addresses = await dns.promises.lookup(hostname, { all: true, verbatim: true });
@@ -174,14 +176,48 @@ async function validateCallbackUrl(urlStr) {
 			}
 		}
 
-		if (!addresses.length || addresses.some(({ address }) => isPrivateIp(address))) {
+		if (!addresses.length || (!allowPrivate && addresses.some(({ address }) => isPrivateIp(address)))) {
 			return { valid: false, reason: 'private' };
 		}
 
-		return { valid: true };
+		return { valid: true, addresses };
 	} catch (err) {
 		return { valid: false, reason: 'format' };
 	}
+}
+
+function createPinnedLookup(addresses) {
+	const pinnedAddresses = addresses.map(({ address, family }) => ({
+		address,
+		family: family || net.isIP(address),
+	}));
+
+	return (hostname, options, callback) => {
+		const requestedFamily = options?.family || 0;
+		const matchingAddresses = pinnedAddresses.filter(({ family }) => !requestedFamily || family === requestedFamily);
+		if (!matchingAddresses.length) {
+			const error = new Error(`No validated DNS answer for ${hostname}`);
+			error.code = 'ENOTFOUND';
+			callback(error);
+			return;
+		}
+
+		if (options?.all) {
+			callback(null, matchingAddresses);
+			return;
+		}
+
+		const [{ address, family }] = matchingAddresses;
+		callback(null, address, family);
+	};
+}
+
+function createPinnedCallbackDispatcher(addresses) {
+	return new Agent({
+		connect: {
+			lookup: createPinnedLookup(addresses),
+		},
+	});
 }
 
 async function isValidCallbackUrl(urlStr) {
@@ -1259,17 +1295,21 @@ class JobService {
 
 			const controller = new AbortController();
 			const timeoutId = setTimeout(() => controller.abort(), 5000);
+			const dispatcher = createPinnedCallbackDispatcher(callbackUrlValidation.addresses);
 
 			try {
-				const response = await fetch(callbackUrl, {
+				const response = await getCallbackFetch()(callbackUrl, {
 					method: 'POST',
 					headers,
 					body: payloadStr,
 					signal: controller.signal,
 					redirect: 'error',
+					dispatcher,
 				});
 
-				clearTimeout(timeoutId);
+				if (response.body) {
+					await response.body.cancel();
+				}
 
 				const attemptInfo = {
 					attempt,
@@ -1288,7 +1328,6 @@ class JobService {
 					attempts.push(attemptInfo);
 				}
 			} catch (err) {
-				clearTimeout(timeoutId);
 				attempts.push({
 					attempt,
 					event: callbackEvent,
@@ -1296,6 +1335,9 @@ class JobService {
 					timestamp,
 					error: err.name === 'AbortError' ? 'Timeout' : err.message,
 				});
+			} finally {
+				clearTimeout(timeoutId);
+				await dispatcher.close().catch(() => dispatcher.destroy());
 			}
 
 			if (attempt < maxAttempts) {
