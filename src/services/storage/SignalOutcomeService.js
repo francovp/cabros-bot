@@ -2,6 +2,7 @@
 
 const admin = require('firebase-admin');
 const AlertStorageService = require('./AlertStorageService');
+const equityMarketDataService = require('./EquityMarketDataService');
 const { MainClient } = require('binance');
 
 const COLLECTION_NAME = 'tradingSignalOutcomes';
@@ -68,28 +69,44 @@ function normalizeSymbolAndExchange(rawSymbol, rawExchange) {
 	return { exchange, symbol: parts[0] };
 }
 
-function determineEligibility(normSymbolInfo, entryPrice) {
-	if (normSymbolInfo.symbol === 'UNKNOWN' || normSymbolInfo.exchange === 'UNKNOWN') {
+function normalizeAssetClass(rawAssetClass) {
+	const assetClass = String(rawAssetClass || '').trim().toLowerCase();
+	return ['crypto', 'stock'].includes(assetClass) ? assetClass : null;
+}
+
+function determineEligibility(normSymbolInfo, assetClass, entryPrice, equityProviderName = null, entryPriceReason = null) {
+	const isClassifiedBareStock = normSymbolInfo.exchange === 'UNKNOWN' && assetClass === 'stock';
+	if (normSymbolInfo.symbol === 'UNKNOWN' || (normSymbolInfo.exchange === 'UNKNOWN' && !isClassifiedBareStock)) {
 		return {
 			state: 'unparseable_symbol',
 			reason: 'Symbol or exchange unparseable or unknown',
 		};
 	}
-	if (normSymbolInfo.exchange !== 'BINANCE') {
+	if (normSymbolInfo.exchange !== 'BINANCE'
+		&& !isClassifiedBareStock
+		&& !equityMarketDataService.isSupportedExchange(normSymbolInfo.exchange)) {
 		return {
 			state: 'unsupported_exchange',
 			reason: `Exchange ${normSymbolInfo.exchange} not supported by Binance market-data evaluator`,
 		};
 	}
+	if (normSymbolInfo.exchange !== 'BINANCE' && !equityProviderName) {
+		return {
+			state: equityMarketDataService.REASONS.NOT_CONFIGURED,
+			reason: 'Twelve Data equity market-data provider is not configured',
+		};
+	}
 	if (entryPrice === null || entryPrice === undefined) {
 		return {
-			state: 'missing_entry_price',
-			reason: 'Entry price unavailable for symbol',
+			state: equityProviderName ? 'equity_provider_unavailable' : 'missing_entry_price',
+			reason: entryPriceReason || (equityProviderName
+				? `${equityProviderName} entry price unavailable for symbol`
+				: 'Entry price unavailable for symbol'),
 		};
 	}
 	return {
 		state: 'supported_provider',
-		reason: 'Binance market data supported',
+		reason: equityProviderName ? `${equityProviderName} market data supported` : 'Binance market data supported',
 	};
 }
 
@@ -118,6 +135,7 @@ async function recordSignal({
 	sources,
 	tokenUsage,
 	processingTimeMs,
+	assetClass,
 } = {}) {
 	if (!isEnabled()) {
 		return null;
@@ -130,10 +148,13 @@ async function recordSignal({
 
 	try {
 		const normSymbolInfo = normalizeSymbolAndExchange(symbol, exchange);
+		const normAssetClass = normalizeAssetClass(assetClass);
 		const normSide = normalizeSide(side);
 		const now = new Date();
+		const equityProviderName = equityMarketDataService.getProviderName(normSymbolInfo.exchange, normAssetClass);
 
 		let entryPrice = typeof price === 'number' ? price : null;
+		let entryPriceReason = null;
 		if (entryPrice === null && normSymbolInfo.exchange === 'BINANCE') {
 			try {
 				const client = getBinanceClient();
@@ -144,9 +165,19 @@ async function recordSignal({
 			} catch (err) {
 				console.warn('[SignalOutcomeService] Failed to fetch entry price from Binance:', err.message);
 			}
+		} else if (entryPrice === null && equityProviderName) {
+			try {
+				entryPrice = await equityMarketDataService.getEntryPrice({
+					symbol: normSymbolInfo.symbol,
+					exchange: normSymbolInfo.exchange === 'UNKNOWN' ? undefined : normSymbolInfo.exchange,
+				});
+			} catch (err) {
+				entryPriceReason = err.reason || equityMarketDataService.REASONS.UNAVAILABLE;
+				console.warn('[SignalOutcomeService] Failed to fetch equity entry price:', entryPriceReason);
+			}
 		}
 
-		const eligibility = determineEligibility(normSymbolInfo, entryPrice);
+		const eligibility = determineEligibility(normSymbolInfo, normAssetClass, entryPrice, equityProviderName, entryPriceReason);
 		const isEligible = eligibility.state === 'supported_provider';
 
 		const outcomes = {};
@@ -168,6 +199,7 @@ async function recordSignal({
 			source: typeof source === 'string' ? source : 'unknown',
 			symbol: normSymbolInfo.symbol,
 			exchange: normSymbolInfo.exchange,
+			assetClass: normAssetClass,
 			timeframe: timeframe ? String(timeframe).toLowerCase() : null,
 			setupType: setupType ? String(setupType).toLowerCase() : null,
 			score: typeof score === 'number' ? score : null,
@@ -178,6 +210,7 @@ async function recordSignal({
 			sources: Array.isArray(sources) ? sources : [],
 			tokenUsage: tokenUsage || null,
 			processingTimeMs: typeof processingTimeMs === 'number' ? processingTimeMs : null,
+			marketDataProvider: normSymbolInfo.exchange === 'BINANCE' ? 'binance' : equityProviderName,
 			eligibilityState: eligibility.state,
 			eligibilityReason: eligibility.reason,
 			outcomeEvaluated: !isEligible,
@@ -251,7 +284,6 @@ async function evaluatePendingOutcomes(options = {}) {
 		}
 
 		const now = Date.now();
-		const client = getBinanceClient();
 		let sweepDeadlineExceeded = false;
 
 		for (const doc of snapshot.docs) {
@@ -265,6 +297,9 @@ async function evaluatePendingOutcomes(options = {}) {
 			const entryPrice = data.price;
 			const side = data.side;
 			const receivedAtMs = data.receivedAt.toDate().getTime();
+			const equityProviderName = data.exchange === 'BINANCE'
+				? null
+				: equityMarketDataService.getProviderName(data.exchange, data.assetClass);
 
 			if (!entryPrice || typeof entryPrice !== 'number') {
 				// Mark evaluated if entry price is invalid/missing
@@ -286,8 +321,13 @@ async function evaluatePendingOutcomes(options = {}) {
 				continue;
 			}
 
-			if (data.exchange !== 'BINANCE') {
-				const state = (data.exchange === 'UNKNOWN' || data.symbol === 'UNKNOWN') ? 'unparseable_symbol' : 'unsupported_exchange';
+			if (data.exchange !== 'BINANCE' && !equityProviderName) {
+				const isClassifiedBareStock = data.exchange === 'UNKNOWN' && data.assetClass === 'stock';
+				const state = (data.symbol === 'UNKNOWN' || (data.exchange === 'UNKNOWN' && !isClassifiedBareStock))
+					? 'unparseable_symbol'
+					: ((equityMarketDataService.isSupportedExchange(data.exchange) || isClassifiedBareStock) && !equityProviderName
+						? equityMarketDataService.REASONS.NOT_CONFIGURED
+						: 'unsupported_exchange');
 				const outcomes = { ...data.outcomes };
 				for (const winKey of Object.keys(outcomes)) {
 					if (outcomes[winKey].status === 'pending') {
@@ -298,7 +338,12 @@ async function evaluatePendingOutcomes(options = {}) {
 				await doc.ref.update({
 					outcomeEvaluated: true,
 					eligibilityState: state,
-					eligibilityReason: state === 'unparseable_symbol' ? 'Symbol or exchange unparseable or unknown' : `Exchange ${data.exchange} not supported by Binance market-data evaluator`,
+					eligibilityReason: state === 'unparseable_symbol'
+						? 'Symbol or exchange unparseable or unknown'
+						: state === equityMarketDataService.REASONS.NOT_CONFIGURED
+							? 'Twelve Data equity market-data provider is not configured'
+							: `Exchange ${data.exchange} not supported by Binance market-data evaluator`,
+					marketDataProvider: data.marketDataProvider || equityProviderName,
 					outcomes,
 				});
 				evaluatedCount++;
@@ -331,37 +376,41 @@ async function evaluatePendingOutcomes(options = {}) {
 
 				const config = WINDOW_CONFIGS[winKey];
 
-				const abortController = new AbortController();
-				const requestOptions = {
-					timeout: Math.max(1, remainingMs),
-					signal: abortController.signal,
-				};
+				let abortController = null;
+				let timerId = null;
 
 				try {
-					const sweepClient = getBinanceClient(requestOptions);
-					const klinesPromise = sweepClient.getKlines({
-						symbol: data.symbol,
-						interval: config.interval,
-						startTime: receivedAtMs,
-						endTime: targetTimeMs,
-						limit: 1000,
-					});
-
-					let timerId;
-					const timeoutPromise = new Promise((_, reject) => {
-						timerId = setTimeout(() => {
-							abortController.abort();
-							reject(new Error(`Signal outcome sweep deadline exceeded (${effectiveMaxDurationMs}ms)`));
-						}, remainingMs);
-					});
-
 					let klines;
-					try {
+					if (data.exchange === 'BINANCE') {
+						abortController = new AbortController();
+						const requestOptions = {
+							timeout: Math.max(1, remainingMs),
+							signal: abortController.signal,
+						};
+						const sweepClient = getBinanceClient(requestOptions);
+						const klinesPromise = sweepClient.getKlines({
+							symbol: data.symbol,
+							interval: config.interval,
+							startTime: receivedAtMs,
+							endTime: targetTimeMs,
+							limit: 1000,
+						});
+						const timeoutPromise = new Promise((_, reject) => {
+							timerId = setTimeout(() => {
+								abortController.abort();
+								reject(new Error(`Signal outcome sweep deadline exceeded (${effectiveMaxDurationMs}ms)`));
+							}, remainingMs);
+						});
 						klines = await Promise.race([klinesPromise, timeoutPromise]);
-					} finally {
-						if (timerId) {
-							clearTimeout(timerId);
-						}
+					} else {
+						klines = await equityMarketDataService.getHistoricalBars({
+							symbol: data.symbol,
+							exchange: data.exchange === 'UNKNOWN' ? undefined : data.exchange,
+							interval: config.interval,
+							startTime: receivedAtMs,
+							endTime: targetTimeMs,
+							timeoutMs: remainingMs,
+						});
 					}
 
 					if (!Array.isArray(klines) || klines.length === 0) {
@@ -404,9 +453,15 @@ async function evaluatePendingOutcomes(options = {}) {
 					outcome.maxAdverseExcursion = parseFloat(Math.min(0, mae).toFixed(4));
 					docUpdated = true;
 				} catch (error) {
-					abortController.abort();
+					if (abortController) {
+						abortController.abort();
+					}
 					console.warn(`[SignalOutcomeService] Error evaluating window ${winKey} for ${data.symbol}:`, error.message);
-					if (error.message.includes('deadline exceeded') || error.name === 'AbortError') {
+					if (error instanceof equityMarketDataService.EquityMarketDataError) {
+						outcome.status = 'unavailable';
+						outcome.reason = error.reason;
+						docUpdated = true;
+					} else if (error.message.includes('deadline exceeded') || error.name === 'AbortError') {
 						allResolved = false;
 						sweepDeadlineExceeded = true;
 						break;
@@ -416,6 +471,10 @@ async function evaluatePendingOutcomes(options = {}) {
 						docUpdated = true;
 					} else {
 						allResolved = false; // retry on network/rate-limit error
+					}
+				} finally {
+					if (timerId) {
+						clearTimeout(timerId);
 					}
 				}
 			}
@@ -540,6 +599,16 @@ function getWorkerStatus() {
 	};
 }
 
+function createCoverageBucket() {
+	return {
+		received: 0,
+		eligible: 0,
+		evaluated: 0,
+		pending: 0,
+		unavailable: 0,
+	};
+}
+
 /**
  * Compute aggregated metrics.
  */
@@ -577,6 +646,7 @@ async function getMetricsSummary({ from, to, limit } = {}) {
 		let totalSignalsUnavailable = 0;
 
 		const exchangeBreakdown = {};
+		const providerBreakdown = {};
 		const eligibilityBreakdown = {};
 
 		const evaluatedSignals = [];
@@ -584,6 +654,7 @@ async function getMetricsSummary({ from, to, limit } = {}) {
 		for (const doc of docs) {
 			const exchange = doc.exchange || 'UNKNOWN';
 			const symbol = doc.symbol || 'UNKNOWN';
+			const marketDataProvider = doc.marketDataProvider || (exchange === 'BINANCE' ? 'binance' : 'none');
 
 			let eligibilityState = doc.eligibilityState;
 			if (!eligibilityState) {
@@ -606,17 +677,16 @@ async function getMetricsSummary({ from, to, limit } = {}) {
 			eligibilityBreakdown[eligibilityState] = (eligibilityBreakdown[eligibilityState] || 0) + 1;
 
 			if (!exchangeBreakdown[exchange]) {
-				exchangeBreakdown[exchange] = {
-					received: 0,
-					eligible: 0,
-					evaluated: 0,
-					pending: 0,
-					unavailable: 0,
-				};
+				exchangeBreakdown[exchange] = createCoverageBucket();
+			}
+			if (!providerBreakdown[marketDataProvider]) {
+				providerBreakdown[marketDataProvider] = createCoverageBucket();
 			}
 			exchangeBreakdown[exchange].received++;
+			providerBreakdown[marketDataProvider].received++;
 			if (isEligible) {
 				exchangeBreakdown[exchange].eligible++;
+				providerBreakdown[marketDataProvider].eligible++;
 			}
 
 			const outcomesValues = doc.outcomes ? Object.values(doc.outcomes) : [];
@@ -626,13 +696,16 @@ async function getMetricsSummary({ from, to, limit } = {}) {
 			if (hasEvaluated) {
 				totalSignalsEvaluated++;
 				exchangeBreakdown[exchange].evaluated++;
+				providerBreakdown[marketDataProvider].evaluated++;
 				evaluatedSignals.push(doc);
 			} else if (hasPending) {
 				totalSignalsPending++;
 				exchangeBreakdown[exchange].pending++;
+				providerBreakdown[marketDataProvider].pending++;
 			} else {
 				totalSignalsUnavailable++;
 				exchangeBreakdown[exchange].unavailable++;
+				providerBreakdown[marketDataProvider].unavailable++;
 			}
 		}
 
@@ -750,9 +823,10 @@ async function getMetricsSummary({ from, to, limit } = {}) {
 			coveragePercent,
 			isCoverageComplete,
 			populationNote: !isCoverageComplete
-				? `Metrics represent ${totalSignalsEvaluated} evaluated Binance signals out of ${totalSignalsReceived} total received signals (${coveragePercent}% coverage).`
+				? `Metrics represent ${totalSignalsEvaluated} evaluated signals out of ${totalSignalsReceived} total received signals (${coveragePercent}% coverage).`
 				: 'Metrics represent 100% of received signals.',
 			exchangeBreakdown,
+			providerBreakdown,
 			eligibilityBreakdown,
 			windows: windowStats,
 			drawdownProxy: {

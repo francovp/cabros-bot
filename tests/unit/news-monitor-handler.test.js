@@ -13,6 +13,7 @@ describe('NewsMonitorHandler', () => {
 		const analyzer = {
 			analyzeSymbols: jest.fn().mockResolvedValue([
 				{ status: 'analyzed', alert: null, deliveryResults: [] },
+				{ status: 'analyzed', alert: null, deliveryResults: [] },
 			]),
 		};
 		const handler = new NewsMonitorHandler();
@@ -20,7 +21,7 @@ describe('NewsMonitorHandler', () => {
 		const req = {
 			method: 'POST',
 			query: {},
-			body: { crypto: ['BTCUSDT'], stocks: [] },
+			body: { crypto: ['BTCUSDT'], stocks: ['AAPL'] },
 		};
 		const res = {
 			status: jest.fn().mockReturnThis(),
@@ -36,6 +37,12 @@ describe('NewsMonitorHandler', () => {
 
 			expect(withActiveSpan).toHaveBeenCalledWith(analysisSpan, expect.any(Function));
 			expect(analyzer.analyzeSymbols).toHaveBeenCalledTimes(1);
+			expect(analyzer.analyzeSymbols.mock.calls[0][4]).toEqual(expect.objectContaining({
+				assetClassBySymbol: {
+					BTCUSDT: 'crypto',
+					AAPL: 'stock',
+				},
+			}));
 		} finally {
 			jest.restoreAllMocks();
 			if (previousFlag === undefined) delete process.env.ENABLE_NEWS_MONITOR;
