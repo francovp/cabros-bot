@@ -331,6 +331,87 @@ describe('admin browser client', () => {
 		expect(runForm.elements.query.value).toContain('"dryRun": false');
 	});
 
+	it('loads recent jobs with bounded status, type, and limit filters', async () => {
+		const requests = [];
+		const browser = createBrowser({
+			fetchImpl: async (url, options) => {
+				if (url === '/openapi.json') return response(contract);
+				requests.push([url, options]);
+				return response({ success: true, jobs: [] });
+			},
+		});
+		await flush();
+		await selectView(browser, 'jobs');
+
+		const listForm = findForm(browser.elementsById.view, 'Load recent jobs');
+		listForm.elements.limit.value = '7';
+		listForm.elements.status.value = 'failed';
+		listForm.elements.type.value = 'market-scanner';
+		browser.elementsById['api-key'].value = 'session-secret';
+		await listForm.dispatch('submit');
+		await flush();
+
+		expect(requests.at(-1)[0]).toBe('/api/jobs?limit=7&status=failed&type=market-scanner');
+		expect(requests.at(-1)[1].headers['x-api-key']).toBe('session-secret');
+	});
+
+	it('renders only safe recent-job summary fields', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				return response({
+					success: true,
+					jobs: [{
+						jobId: 'job-safe',
+						type: 'expanded-analysis',
+						status: 'failed',
+						progress: { current: 1, total: 2, status: 'hidden-progress-detail' },
+						createdAt: '2026-07-30T04:55:09.000Z',
+						updatedAt: '2026-07-30T04:56:09.000Z',
+						totalDurationMs: 60000,
+						error: 'hidden internal error',
+						payload: { callbackSecret: 'hidden-secret' },
+					}],
+				});
+			},
+		});
+		await flush();
+		await selectView(browser, 'jobs');
+
+		const listForm = findForm(browser.elementsById.view, 'Load recent jobs');
+		await listForm.dispatch('submit');
+		await flush();
+
+		expect(listForm.textContent).toContain('job-safe');
+		expect(listForm.textContent).toContain('expanded-analysis');
+		expect(listForm.textContent).toContain('failed');
+		expect(listForm.textContent).toContain('1 / 2');
+		expect(listForm.textContent).toContain('60000 ms');
+		expect(listForm.textContent).not.toContain('hidden internal error');
+		expect(listForm.textContent).not.toContain('hidden-secret');
+	});
+
+	it('pre-fills the existing job status workflow when a recent job is selected', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				return response({ success: true, jobs: [{
+					jobId: 'selected-job', type: 'market-scanner', status: 'processing', progress: {},
+				}] });
+			},
+		});
+		await flush();
+		await selectView(browser, 'jobs');
+
+		const listForm = findForm(browser.elementsById.view, 'Load recent jobs');
+		await listForm.dispatch('submit');
+		await flush();
+		await findButton(listForm, 'Open status').dispatch('click');
+
+		const statusForm = findForm(browser.elementsById.view, 'GET /api/jobs/{jobId}');
+		expect(statusForm.elements['path-jobId'].value).toBe('selected-job');
+	});
+
 	it('shows cancel only for a fetched active job', async () => {
 		const job = { jobId: 'job-1', status: 'processing', results: [] };
 		const browser = createBrowser({

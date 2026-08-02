@@ -1168,3 +1168,13 @@ The grounding asset-context fallback no longer classifies lowercase ordinary pro
 - `pnpm test -- tests/unit/tradingview-signal-parser.test.js`
 - `pnpm test -- tests/unit/grounding.test.js`
 - `pnpm test -- tests/unit/ --testTimeout=5000`
+
+## Admin Recent Job Discovery (CB-117 / Issue #283)
+
+The in-app `/admin` Jobs view consumes the existing protected `GET /api/jobs` endpoint with contract-derived status/type filters and the bounded `limit` range. It renders only safe summary fields with DOM text nodes, keeps the API key in the existing `x-api-key` header path, and lets operators pre-fill the existing job-status workflow without bypassing its cancel/retry confirmations.
+
+**Core Components**:
+- `src/admin/admin.js` — Recent-job list form, safe summary rendering, and selected-job handoff to the status form.
+- `tests/unit/admin-client.test.js` — Covers query construction, header-only authentication, safe rendering, and status navigation.
+
+This is a UI-only consumer change: job persistence, lifecycle semantics, OpenAPI, and Postman contracts remain unchanged.
