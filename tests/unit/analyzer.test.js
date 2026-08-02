@@ -12,6 +12,10 @@ jest.mock('../../src/services/grounding/genaiClient', () => ({
 	llmCall: jest.fn(),
 }));
 
+function getRemoteConfigService() {
+	return require('../../src/services/remoteConfig/RemoteConfigService');
+}
+
 describe('Analyzer - Unit Tests', () => {
 	beforeEach(() => {
 		jest.clearAllMocks();
@@ -30,6 +34,8 @@ describe('Analyzer - Unit Tests', () => {
 		delete process.env.NEWS_GEMINI_CONCURRENCY;
 		delete process.env.NEWS_GEMINI_QUOTA_MAX_RETRIES;
 		delete process.env.NEWS_GEMINI_QUOTA_RETRY_BASE_MS;
+		delete process.env.ENABLE_FIREBASE_REMOTE_CONFIG;
+		getRemoteConfigService()._resetForTesting();
 		jest.resetModules();
 	});
 
@@ -50,6 +56,25 @@ describe('Analyzer - Unit Tests', () => {
 		const analyzer1 = getAnalyzer();
 		const analyzer2 = getAnalyzer();
 		expect(analyzer1).toBe(analyzer2);
+	});
+
+	it('should use cached Remote Config values for runtime tuning', () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		getRemoteConfigService()._setRemoteOverridesForTesting({
+			NEWS_ALERT_THRESHOLD: 0.91,
+			NEWS_GEMINI_CONCURRENCY: 2,
+			NEWS_GEMINI_QUOTA_MAX_RETRIES: 4,
+			NEWS_GEMINI_QUOTA_RETRY_BASE_MS: 25,
+			NEWS_TIMEOUT_MS: 45000,
+		});
+		const { NewsAnalyzer } = require('../../src/controllers/webhooks/handlers/newsMonitor/analyzer');
+		const analyzer = new NewsAnalyzer();
+
+		expect(analyzer.alertThreshold).toBe(0.91);
+		expect(analyzer.geminiConcurrency).toBe(2);
+		expect(analyzer.geminiQuotaMaxRetries).toBe(4);
+		expect(analyzer.geminiQuotaRetryBaseMs).toBe(25);
+		expect(analyzer.timeout).toBe(45000);
 	});
 
 	it('analyzer should have analyzeSymbols method', () => {

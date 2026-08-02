@@ -8,6 +8,7 @@
 const { analyzeNewsForSymbol } = require('../../../../services/grounding/gemini');
 const { getCacheInstance } = require('./cache');
 const { getEnrichmentService } = require('../../../../services/inference/enrichmentService');
+const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteConfigService');
 const { AnalysisStatus, EventCategory } = require('./constants');
 const { GROUNDING_MODEL_NAME, ENABLE_NEWS_MONITOR_TEST_MODE } = require('../../../../services/grounding/config');
 const { getPromptService, PromptKeys } = require('../../../../services/prompts');
@@ -87,11 +88,6 @@ function shouldRedeliverCachedAlertForRequest(notificationMgr, cachedEntry = {},
 	}
 
 	return shouldRedeliverCachedAlert(notificationMgr, cachedEntry.deliveryResults, routing);
-}
-
-function parsePositiveInteger(value, fallback) {
-	const parsed = Number.parseInt(value, 10);
-	return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 function isGeminiQuotaError(error) {
@@ -273,13 +269,35 @@ class NewsAnalyzer {
 		this.enrichmentService = getEnrichmentService();
 		// Do NOT store notificationManager in constructor - get it dynamically
 		// to handle delayed initialization in tests and app startup
-		// Per-symbol timeout
-		this.timeout = parseInt(process.env.NEWS_TIMEOUT_MS || 60000);
-		this.alertThreshold = parseFloat(process.env.NEWS_ALERT_THRESHOLD || 0.7);
 		this.enableBinance = process.env.ENABLE_BINANCE_PRICE_CHECK === 'true';
-		this.geminiConcurrency = parsePositiveInteger(process.env.NEWS_GEMINI_CONCURRENCY, Infinity);
-		this.geminiQuotaMaxRetries = parsePositiveInteger(process.env.NEWS_GEMINI_QUOTA_MAX_RETRIES, 2);
-		this.geminiQuotaRetryBaseMs = parsePositiveInteger(process.env.NEWS_GEMINI_QUOTA_RETRY_BASE_MS, 1000);
+	}
+
+	get timeout() {
+		return this._timeoutOverride ?? getRuntimeConfig().NEWS_TIMEOUT_MS;
+	}
+
+	set timeout(value) {
+		this._timeoutOverride = value;
+	}
+
+	get alertThreshold() {
+		return this._alertThresholdOverride ?? getRuntimeConfig().NEWS_ALERT_THRESHOLD;
+	}
+
+	set alertThreshold(value) {
+		this._alertThresholdOverride = value;
+	}
+
+	get geminiConcurrency() {
+		return getRuntimeConfig().NEWS_GEMINI_CONCURRENCY;
+	}
+
+	get geminiQuotaMaxRetries() {
+		return getRuntimeConfig().NEWS_GEMINI_QUOTA_MAX_RETRIES;
+	}
+
+	get geminiQuotaRetryBaseMs() {
+		return getRuntimeConfig().NEWS_GEMINI_QUOTA_RETRY_BASE_MS;
 	}
 
 	calculateAdjustedConfidence(baseConfidence, marketContext) {

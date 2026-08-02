@@ -2043,7 +2043,7 @@
         }
       },
       "StatusResult": {
-        "description": "Non-sensitive runtime readiness",
+        "description": "Non-sensitive runtime readiness. When Firebase Remote Config is enabled, dependencies.firebaseRemoteConfig reports loader metadata only; it never exposes remote parameter values or credentials.",
         "content": {
           "application/json": {
             "schema": {
@@ -2051,7 +2051,8 @@
             },
             "example": {
               "featureFlags": {
-                "equityMarketData": false
+                "equityMarketData": false,
+                "firebaseRemoteConfig": false
               },
               "dependencies": {
                 "equityMarketData": {
@@ -2065,6 +2066,18 @@
                     "NASDAQ"
                   ],
                   "timeoutMs": 5000
+                },
+                "firebaseRemoteConfig": {
+                  "enabled": false,
+                  "configured": false,
+                  "ready": false,
+                  "status": "disabled",
+                  "source": "disabled",
+                  "templateVersion": null,
+                  "lastSuccessfulLoad": null,
+                  "lastErrorCategory": null,
+                  "refreshIntervalMs": 900000,
+                  "maxAgeMs": 3600000
                 }
               }
             }
@@ -3040,7 +3053,7 @@
       },
       "Status": {
         "type": "object",
-        "description": "Runtime status. featureFlags.firestoreJobStorage reports the ENABLE_FIRESTORE_JOB_STORAGE gate or the legacy ENABLE_FIRESTORE_ALERT_STORAGE gate; featureFlags.firestoreScannerPresets reports ENABLE_FIRESTORE_SCANNER_PRESETS; dependencies.scannerPresetStorage reports the effective durable or ephemeral scanner-preset backend and readiness; dependencies.signalOutcomeWorker reports the scheduler role (web, worker, or disabled), graceful-shutdown state, cadence, heartbeat, and scanned/pending/evaluated/error counters; a disabled local scheduler reports ready false and status disabled because it is not the process evaluating outcomes; dependencies.firestoreJobStorage reports Firestore credential readiness for that runtime path; featureFlags.newsMonitorTestMode reports ENABLE_NEWS_MONITOR_TEST_MODE without changing news monitor behavior; featureFlags.messageFooterMetadata reports ENABLE_MESSAGE_FOOTER_METADATA and defaults to true unless explicitly set to false; featureFlags.cloudflareAig reports ENABLE_CLOUDFLARE_AIG and dependencies.cloudflareAig reports Cloudflare AI Gateway credential readiness; featureFlags.equityMarketData reports ENABLE_EQUITY_MARKET_DATA and dependencies.equityMarketData reports non-sensitive Twelve Data readiness for BATS/NASDAQ outcome evaluation.",
+        "description": "Runtime status. featureFlags.firestoreJobStorage reports the ENABLE_FIRESTORE_JOB_STORAGE gate or the legacy ENABLE_FIRESTORE_ALERT_STORAGE gate; featureFlags.firestoreScannerPresets reports ENABLE_FIRESTORE_SCANNER_PRESETS; dependencies.scannerPresetStorage reports the effective durable or ephemeral scanner-preset backend and readiness; dependencies.signalOutcomeWorker reports the scheduler role (web, worker, or disabled), graceful-shutdown state, cadence, heartbeat, and scanned/pending/evaluated/error counters; a disabled local scheduler reports ready false and status disabled because it is not the process evaluating outcomes; dependencies.firestoreJobStorage reports Firestore credential readiness for that runtime path; featureFlags.newsMonitorTestMode reports ENABLE_NEWS_MONITOR_TEST_MODE without changing news monitor behavior; featureFlags.messageFooterMetadata reports ENABLE_MESSAGE_FOOTER_METADATA and defaults to true unless explicitly set to false; featureFlags.cloudflareAig reports ENABLE_CLOUDFLARE_AIG and dependencies.cloudflareAig reports Cloudflare AI Gateway credential readiness; featureFlags.equityMarketData reports ENABLE_EQUITY_MARKET_DATA and dependencies.equityMarketData reports non-sensitive Twelve Data readiness for BATS/NASDAQ outcome evaluation; featureFlags.firebaseRemoteConfig reports ENABLE_FIREBASE_REMOTE_CONFIG and dependencies.firebaseRemoteConfig reports only bounded loader metadata, source, template version, last successful load, and last error category without remote values or credentials.",
         "properties": {
           "service": {
             "$ref": "#/components/schemas/JsonObject"
