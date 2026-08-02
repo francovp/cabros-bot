@@ -355,5 +355,108 @@ describe('SignalOutcomeService Worker & Bounded Evaluation', () => {
 			expect(status.running).toBe(false);
 			expect(status.timerId).toBeNull();
 		});
+
+		describe('Interval Validation', () => {
+			it('falls back to default 300000ms cadence when interval configuration is malformed, zero, or negative', () => {
+				process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+
+				// 1. Malformed string env var
+				process.env.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS = 'invalid_abc';
+				SignalOutcomeService.startWorker();
+				let status = SignalOutcomeService.getWorkerStatus();
+				expect(status.intervalMs).toBe(300000);
+				SignalOutcomeService.stopWorker();
+
+				// 2. Zero string env var
+				process.env.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS = '0';
+				SignalOutcomeService.startWorker();
+				status = SignalOutcomeService.getWorkerStatus();
+				expect(status.intervalMs).toBe(300000);
+				SignalOutcomeService.stopWorker();
+
+				// 3. Negative string env var
+				process.env.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS = '-5000';
+				SignalOutcomeService.startWorker();
+				status = SignalOutcomeService.getWorkerStatus();
+				expect(status.intervalMs).toBe(300000);
+				SignalOutcomeService.stopWorker();
+
+				// 4. Invalid options.intervalMs (0, negative, malformed)
+				delete process.env.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS;
+				SignalOutcomeService.startWorker({ intervalMs: 0 });
+				status = SignalOutcomeService.getWorkerStatus();
+				expect(status.intervalMs).toBe(300000);
+				SignalOutcomeService.stopWorker();
+
+				SignalOutcomeService.startWorker({ intervalMs: -6000 });
+				status = SignalOutcomeService.getWorkerStatus();
+				expect(status.intervalMs).toBe(300000);
+				SignalOutcomeService.stopWorker();
+
+				SignalOutcomeService.startWorker({ intervalMs: 'invalid' });
+				status = SignalOutcomeService.getWorkerStatus();
+				expect(status.intervalMs).toBe(300000);
+				SignalOutcomeService.stopWorker();
+			});
+
+			it('uses valid positive interval values when provided via options or env vars', () => {
+				process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+
+				// Valid positive env var
+				process.env.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS = '60000';
+				SignalOutcomeService.startWorker();
+				let status = SignalOutcomeService.getWorkerStatus();
+				expect(status.intervalMs).toBe(60000);
+				SignalOutcomeService.stopWorker();
+
+				// Valid positive options override
+				delete process.env.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS;
+				SignalOutcomeService.startWorker({ intervalMs: 120000 });
+				status = SignalOutcomeService.getWorkerStatus();
+				expect(status.intervalMs).toBe(120000);
+				SignalOutcomeService.stopWorker();
+			});
+
+			it('falls back when interval is fractional or outside Node timer bounds', () => {
+				process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+
+				process.env.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS = '1500.5';
+				SignalOutcomeService.startWorker();
+				let status = SignalOutcomeService.getWorkerStatus();
+				expect(status.intervalMs).toBe(300000);
+				SignalOutcomeService.stopWorker();
+
+				process.env.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS = '2147483648';
+				SignalOutcomeService.startWorker();
+				status = SignalOutcomeService.getWorkerStatus();
+				expect(status.intervalMs).toBe(300000);
+				SignalOutcomeService.stopWorker();
+
+				delete process.env.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS;
+				SignalOutcomeService.startWorker({ intervalMs: 1500.5 });
+				status = SignalOutcomeService.getWorkerStatus();
+				expect(status.intervalMs).toBe(300000);
+				SignalOutcomeService.stopWorker();
+
+				SignalOutcomeService.startWorker({ intervalMs: 2147483648 });
+				status = SignalOutcomeService.getWorkerStatus();
+				expect(status.intervalMs).toBe(300000);
+				SignalOutcomeService.stopWorker();
+
+				SignalOutcomeService.startWorker({ intervalMs: 2147483647 });
+				status = SignalOutcomeService.getWorkerStatus();
+				expect(status.intervalMs).toBe(2147483647);
+				SignalOutcomeService.stopWorker();
+			});
+
+			it('falls back when the sweep duration exceeds Node timer bounds', () => {
+				process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+				process.env.SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS = '2147483648';
+
+				const status = SignalOutcomeService.getWorkerStatus();
+
+				expect(status.maxDurationMs).toBe(30000);
+			});
+		});
 	});
 });
