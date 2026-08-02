@@ -878,7 +878,7 @@ async function exportAlerts({ from, to, limit, source, enriched, includeText = f
  * @param {Object} params
  * @param {string|undefined} params.from ISO timestamp, defaults to 24h before to
  * @param {string|undefined} params.to ISO timestamp, defaults to now
- * @param {number|undefined} params.limit Maximum documents scanned, capped at 1000
+ * @param {number|undefined} params.limit Maximum matching documents aggregated, capped at 1000
  * @param {string|undefined} params.source Optional exact source filter
  * @param {boolean|undefined} params.enriched Optional enriched/plain filter
  * @returns {Promise<Object|null>}
@@ -894,18 +894,59 @@ async function summarizeAlerts({ from, to, limit, source, enriched } = {}) {
 	}
 
 	const window = buildSummaryWindow({ from, to, limit });
-	let snapshot;
-	try {
-		snapshot = await firestore
+	const hasFilters = typeof source === 'string' || typeof enriched === 'boolean';
+	const docs = [];
+	let pageCursor = null;
+	while (true) {
+		let query = firestore
 			.collection(COLLECTION_NAME)
 			.where('receivedAt', '>=', admin.firestore.Timestamp.fromDate(new Date(window.from)))
 			.where('receivedAt', '<=', admin.firestore.Timestamp.fromDate(new Date(window.to)))
-			.orderBy('receivedAt', 'desc')
-			.limit(window.limit)
-			.get();
-	} catch (error) {
-		console.warn('[AlertStorageService] Failed to summarize alerts from Firestore:', error.message);
-		throw createStorageUnavailableError(error);
+			.orderBy('receivedAt', 'desc');
+
+		if (hasFilters) {
+			query = query.orderBy(admin.firestore.FieldPath.documentId(), 'desc');
+			if (pageCursor) {
+				query = query.startAfter(
+					buildParsedCursorTimestamp(pageCursor),
+					pageCursor.documentId,
+				);
+			}
+		}
+		query = query.limit(window.limit);
+
+		let snapshot;
+		try {
+			snapshot = await query.get();
+		} catch (error) {
+			console.warn('[AlertStorageService] Failed to summarize alerts from Firestore:', error.message);
+			throw createStorageUnavailableError(error);
+		}
+
+		if (!snapshot || !Array.isArray(snapshot.docs) || snapshot.docs.length === 0) {
+			break;
+		}
+
+		if (hasFilters) {
+			docs.push(...snapshot.docs.filter((doc) => {
+				const data = doc.data() || {};
+				return matchesFilters({
+					source: typeof data.source === 'string' ? data.source : null,
+					enriched: Boolean(data.enriched),
+				}, { source, enriched });
+			}));
+		} else {
+			docs.push(...snapshot.docs);
+		}
+
+		if (!hasFilters || docs.length >= window.limit || snapshot.docs.length < window.limit) {
+			break;
+		}
+
+		pageCursor = getDocCursorValues(snapshot.docs[snapshot.docs.length - 1]);
+		if (!pageCursor) {
+			break;
+		}
 	}
 
 	const summary = {
@@ -946,17 +987,10 @@ async function summarizeAlerts({ from, to, limit, source, enriched } = {}) {
 	const processingLatencySamples = [];
 	const deliveryLatencySamples = [];
 
-	const docs = snapshot && Array.isArray(snapshot.docs) ? snapshot.docs : [];
 	for (const doc of docs) {
 		const data = doc.data() || {};
 		const alertEnriched = Boolean(data.enriched);
 		const useTradingViewData = Boolean(data.useTradingViewData);
-		if (!matchesFilters({
-			source: typeof data.source === 'string' ? data.source : null,
-			enriched: alertEnriched,
-		}, { source, enriched })) {
-			continue;
-		}
 
 		summary.totalAlerts += 1;
 		incrementCounter(summary.bySource, data.source);

@@ -966,6 +966,41 @@ describe('AlertStorageService', () => {
 			expect(result.byFeatureFlag.plain).toBe(0);
 		});
 
+		it('pages through bounded alerts until filtered summaries reach the limit', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet
+				.mockResolvedValueOnce({
+					empty: false,
+					docs: [buildQueryDoc('newer-scanner', {
+						receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+						enriched: true,
+						source: 'scanner',
+					})],
+				})
+				.mockResolvedValueOnce({
+					empty: false,
+					docs: [buildQueryDoc('older-webhook', {
+						receivedAt: buildTimestamp('2026-06-06T11:00:00.000Z'),
+						enriched: true,
+						source: 'webhook',
+						text: 'BINANCE:BTCUSDT',
+					})],
+				});
+
+			const result = await AlertStorageService.summarizeAlerts({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+				limit: 1,
+				source: 'webhook',
+				enriched: true,
+			});
+
+			expect(mockGet).toHaveBeenCalledTimes(2);
+			expect(mockStartAfter).toHaveBeenCalledWith(expect.anything(), 'newer-scanner');
+			expect(result.totalAlerts).toBe(1);
+			expect(result.bySource).toEqual({ webhook: 1 });
+		});
+
 		it('measures risk metadata coverage by safe prompt provenance and ignores invalid values', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 			mockGet.mockResolvedValueOnce({
