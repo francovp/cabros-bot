@@ -65,6 +65,9 @@
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
+          },
+          "409": {
+            "$ref": "#/components/responses/IdempotencyConflict"
           }
         },
         "security": [
@@ -153,6 +156,9 @@
           "400": {
             "$ref": "#/components/responses/Error"
           },
+          "409": {
+            "$ref": "#/components/responses/IdempotencyConflict"
+          },
           "502": {
             "$ref": "#/components/responses/Error"
           },
@@ -197,6 +203,9 @@
           },
           "400": {
             "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/IdempotencyConflict"
           },
           "403": {
             "$ref": "#/components/responses/Error"
@@ -471,6 +480,9 @@
           },
           "404": {
             "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/IdempotencyConflict"
           },
           "503": {
             "$ref": "#/components/responses/Error"
