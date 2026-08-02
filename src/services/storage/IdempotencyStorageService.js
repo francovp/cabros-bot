@@ -138,14 +138,25 @@ async function reserveEntry(key, payloadHash, ttlMs) {
 				const expiresAtMs = data.expiresAt && typeof data.expiresAt.toMillis === 'function'
 					? data.expiresAt.toMillis()
 					: 0;
+				const createdAtMs = data.createdAt && typeof data.createdAt.toMillis === 'function'
+					? data.createdAt.toMillis()
+					: 0;
 
-				// Check if non-expired existing claim exists
-				if (expiresAtMs > nowMs) {
-					if (data.payloadHash !== payloadHash) {
-						return { state: 'conflict' };
+				if (data.state === 'pending') {
+					// Pending claims are kept alive for PENDING_STALE_TIMEOUT_MS regardless of replay TTL
+					if (nowMs - createdAtMs < PENDING_STALE_TIMEOUT_MS) {
+						if (data.payloadHash !== payloadHash) {
+							return { state: 'conflict' };
+						}
+						return { state: 'pending', record: data };
 					}
-
-					if (data.state === 'completed') {
+					// Stale pending claim: overwrite below
+				} else if (data.state === 'completed') {
+					// Completed records are valid until replay TTL expires
+					if (expiresAtMs > nowMs) {
+						if (data.payloadHash !== payloadHash) {
+							return { state: 'conflict' };
+						}
 						return {
 							state: 'completed',
 							record: {
@@ -154,20 +165,12 @@ async function reserveEntry(key, payloadHash, ttlMs) {
 								statusCode: data.statusCode,
 								responseBody: data.responseBody,
 								headers: data.headers || {},
-								createdAt: data.createdAt ? data.createdAt.toMillis() : nowMs,
+								createdAt: createdAtMs || nowMs,
 								expiresAt: expiresAtMs,
 							},
 						};
 					}
-
-					// Check if pending claim is active vs stale
-					const createdAtMs = data.createdAt && typeof data.createdAt.toMillis === 'function'
-						? data.createdAt.toMillis()
-						: 0;
-					if (nowMs - createdAtMs < PENDING_STALE_TIMEOUT_MS) {
-						return { state: 'pending', record: data };
-					}
-					// Stale pending claim: overwrite below
+					// Expired completed record: overwrite below
 				}
 			}
 
