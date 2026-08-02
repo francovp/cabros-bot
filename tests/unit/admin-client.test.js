@@ -228,6 +228,10 @@ describe('admin browser client', () => {
 		await statusForm.dispatch('submit');
 		await flush();
 		expect(requests.at(-1)[1].headers.Authorization).toBe('Bearer firebase-token');
+
+		await browser.elementsById['sign-out'].dispatch('click');
+		expect(auth.signOut).toHaveBeenCalled();
+		expect(browser.elementsById['api-key'].value).toBe('');
 	});
 
 	it('uses the current session key, redacts output, and cancels before dispatch', async () => {

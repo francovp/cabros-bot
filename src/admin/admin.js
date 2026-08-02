@@ -155,7 +155,10 @@ const setupFirebaseAuth = async (config) => {
 				showAuthState('Sign-in failed. Check the account and try again.', true);
 			}
 		});
-		getElement('sign-out')?.addEventListener('click', () => auth.signOut());
+		getElement('sign-out')?.addEventListener('click', () => {
+			if (getElement('api-key')) getElement('api-key').value = '';
+			return auth.signOut();
+		});
 		auth.onAuthStateChanged(async (user) => {
 			authState.user = user;
 			if (!user) {
