@@ -1177,6 +1177,6 @@ The in-app `/admin` Jobs view consumes the existing protected `GET /api/jobs` en
 - `src/admin/admin.js` — Recent-job list form, safe summary rendering, and selected-job handoff to the status form.
 - `tests/unit/admin-client.test.js` — Covers query construction, header-only authentication, safe rendering, status navigation, stale-list clearing, and pending-response invalidation.
 
-Status responses use a monotonic request version so a response for a previously selected job cannot render cancel/retry actions after the operator selects another job.
+Status responses use a monotonic request version and pass an activity guard into `sendRequest`, so a response for a previously selected job cannot overwrite the selected-job state, hold the shared form disabled, or render cancel/retry actions after the operator selects another job.
 
 This is a UI-only consumer change: job persistence, lifecycle semantics, OpenAPI, and Postman contracts remain unchanged.

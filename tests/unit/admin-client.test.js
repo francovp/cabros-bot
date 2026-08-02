@@ -463,12 +463,16 @@ describe('admin browser client', () => {
 		const pendingSubmit = statusForm.dispatch('submit');
 		await flush();
 		await findButton(listForm, 'Open status').dispatch('click');
+		expect(findButton(statusForm, 'Get job status').disabled).toBe(false);
+		expect(statusForm.textContent).toContain('Job selected. Submit to load its status.');
 		resolveStatus(response({ jobId: 'job-a', status: 'processing', results: [] }));
 		await pendingSubmit;
 		await flush();
 
 		expect(statusForm.elements['path-jobId'].value).toBe('job-b');
 		expect(findButton(statusForm, 'Cancel job')).toBeUndefined();
+		expect(statusForm.textContent).toContain('Job selected. Submit to load its status.');
+		expect(statusForm.textContent).not.toContain('"job-a"');
 	});
 
 	it('shows cancel only for a fetched active job', async () => {

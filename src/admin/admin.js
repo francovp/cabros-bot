@@ -161,7 +161,8 @@ const showError = (output, message) => {
 	output.textContent = message;
 };
 
-const sendRequest = async ({ definition, path, query, body, button, output, formatResponse }) => {
+const sendRequest = async ({ definition, path, query, body, button, output, formatResponse, isCurrent }) => {
+	const requestIsCurrent = typeof isCurrent === 'function' ? isCurrent : () => true;
 	const apiKey = document.getElementById('api-key').value;
 	const summary = window.CabrosAdminRequest.redactSecret(`${definition.method} ${path}`, apiKey);
 	let request;
@@ -180,6 +181,7 @@ const sendRequest = async ({ definition, path, query, body, button, output, form
 
 	if (!window.CabrosAdminRequest.confirmRequest(definition, (message) => window.confirm(message))) return;
 
+	if (!requestIsCurrent()) return;
 	button.disabled = true;
 	output.className = 'response-block request-state';
 	output.textContent = `${summary}\nRequest in progress…`;
@@ -196,6 +198,7 @@ const sendRequest = async ({ definition, path, query, body, button, output, form
 		} catch (_) {
 			// Non-JSON responses stay readable as text.
 		}
+		if (!requestIsCurrent()) return data;
 		output.className = `response-block${response.ok ? '' : ' response-error'}`;
 		output.textContent = response.ok && formatResponse
 			? formatResponse({ summary, status: response.status, elapsed, data })
@@ -203,9 +206,10 @@ const sendRequest = async ({ definition, path, query, body, button, output, form
 		return data;
 	} catch (error) {
 		const elapsed = Math.round(performance.now() - started);
+		if (!requestIsCurrent()) return;
 		showError(output, `${summary}\nNetwork error · ${elapsed} ms\n\n${window.CabrosAdminRequest.redactSecret(error.message, apiKey)}`);
 	} finally {
-		button.disabled = false;
+		if (requestIsCurrent()) button.disabled = false;
 	}
 };
 
@@ -424,6 +428,8 @@ const createJobStatusForm = () => {
 			path: fillPath(definition.path, pathNames, form),
 			button,
 			output,
+			isCurrent: () => requestVersion === statusRequestVersion
+				&& form.elements['path-jobId'].value === jobId,
 		});
 		if (requestVersion !== statusRequestVersion || form.elements['path-jobId'].value !== jobId) return;
 		if (data && data.status) renderActions(data, jobId);
@@ -434,6 +440,7 @@ const createJobStatusForm = () => {
 		selectJob: (jobId) => {
 			statusRequestVersion += 1;
 			jobIdInput.value = jobId;
+			button.disabled = false;
 			actions.replaceChildren();
 			output.textContent = 'Job selected. Submit to load its status.';
 			if (typeof jobIdInput.focus === 'function') jobIdInput.focus();
