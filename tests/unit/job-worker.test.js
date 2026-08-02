@@ -49,6 +49,29 @@ describe('queued job execution', () => {
 		});
 	});
 
+	it('reconciles callbacks when a terminal job is redelivered', async () => {
+		const terminalJob = {
+			jobId: 'job-123',
+			status: 'completed',
+			callbackUrl: 'https://example.com/callback',
+			callbackEvents: ['completed'],
+			callbackStatus: { status: 'pending', attempts: [] },
+		};
+		const repository = {
+			claim: jest.fn().mockResolvedValue({ claimed: false, reason: 'terminal' }),
+			get: jest.fn().mockResolvedValue(terminalJob),
+		};
+		const service = new JobService(repository);
+		service._triggerCallbackIfConfigured = jest.fn().mockResolvedValue(undefined);
+
+		await expect(service.processQueuedJob('job-123', null, 'worker-1')).resolves.toEqual({
+			skipped: true,
+			reason: 'terminal',
+		});
+
+		expect(service._triggerCallbackIfConfigured).toHaveBeenCalledWith(terminalJob);
+	});
+
 	it('binds processor failures to the Firestore claim attempt', async () => {
 		const job = {
 			jobId: 'job-123',

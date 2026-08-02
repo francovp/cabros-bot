@@ -64,6 +64,9 @@ async function startJobWorker({
 				}
 
 				if (hasAttemptsRemaining(job)) {
+					if (attempt === null) {
+						return undefined;
+					}
 					return service.releaseQueuedJob(jobId, workerId, error, attempt);
 				}
 

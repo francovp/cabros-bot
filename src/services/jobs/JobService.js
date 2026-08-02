@@ -652,6 +652,12 @@ class JobService {
 				error.code = 'JOB_CLAIM_ACTIVE';
 				throw error;
 			}
+			if (claim.reason === 'terminal') {
+				const terminalJob = await this.repository.get(jobId);
+				if (terminalJob) {
+					await this._triggerCallbackIfConfigured(terminalJob);
+				}
+			}
 			return { skipped: true, reason: claim.reason || 'not_claimable' };
 		}
 

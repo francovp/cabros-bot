@@ -67,6 +67,32 @@ describe('job worker runtime', () => {
 		expect(service.failQueuedJob).toHaveBeenCalledWith('job-456', 'worker-1', finalError, 3);
 	});
 
+	it('does not release a claim for a failure before claim acquisition', async () => {
+		let onFailed;
+		const queue = {
+			isEnabled: () => true,
+			createWorker: jest.fn((handler, options) => {
+				onFailed = options.onFailed;
+				return { id: 'worker-1' };
+			}),
+			closeWorker: jest.fn().mockResolvedValue(undefined),
+		};
+		const service = {
+			processQueuedJob: jest.fn(),
+			releaseQueuedJob: jest.fn().mockResolvedValue(true),
+		};
+		await startJobWorker({ queue, service, workerId: 'worker-1' });
+
+		const retryableJob = { data: { jobId: 'job-123' }, attemptsMade: 1, opts: { attempts: 3 } };
+		const preClaimError = Object.assign(new Error('claim unavailable'), {
+			code: 'JOB_CLAIM_UNAVAILABLE',
+		});
+
+		expect(onFailed(retryableJob, preClaimError)).toBeUndefined();
+
+		expect(service.releaseQueuedJob).not.toHaveBeenCalled();
+	});
+
 	it('retries final failure persistence after a transient storage error', async () => {
 		jest.useFakeTimers();
 		try {
