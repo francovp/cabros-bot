@@ -106,7 +106,7 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 - `JOB_QUEUE_CLAIM_LEASE_MS` - Firestore claim lease and heartbeat interval (default: `60000` ms)
 - `JOB_QUEUE_CONNECT_TIMEOUT_MS` - Redis connection timeout (default: `5000` ms)
 
-`render.yaml` provisions a starter Background Worker and Key Value store. The web service remains on `JOB_EXECUTION_MODE=local` by default; switching it to `render-worker` requires the worker, Redis, and Firestore credentials to be available. The API returns `503 JOB_QUEUE_UNAVAILABLE` instead of accepting a job when the durable queue is unavailable.
+`render.yaml` provisions a starter Background Worker and Key Value store. The web service remains on `JOB_EXECUTION_MODE=local` by default; switching it to `render-worker` requires the worker, Redis, and Firestore credentials to be available. The API returns `503 JOB_QUEUE_UNAVAILABLE` instead of accepting a job when the durable queue is unavailable. If enqueue acknowledgement and deterministic Redis reconciliation both fail, it returns `503 JOB_QUEUE_ACCEPTANCE_UNKNOWN` with the durably stored `jobId`; the worker periodically re-enqueues durable queued rows after Redis recovers.
 
 Unfiltered signal outcome summaries include `shadowModeMetrics.exchangeBreakdown` and `shadowModeMetrics.providerBreakdown` coverage buckets (`received`, `eligible`, `evaluated`, `pending`, `unavailable`). Filtered alert summaries/exports omit shadow-mode metrics because that service has no matching source/enrichment filters. Equity signals only enter the eligible/evaluated population when the opt-in Twelve Data provider is configured; otherwise they remain explicitly unavailable.
 
@@ -808,7 +808,7 @@ For market-scanner jobs, `ranked` and `includeMultiTimeframe` use the same scori
 }
 ```
 
-**Idempotency:** `POST /api/jobs/tradingview-analysis`, `POST /api/jobs/:jobId/retry`, and `POST /api/jobs/:jobId/retry-failed` accept an optional client-generated `idempotency-key` header. Matching concurrent or sequential requests replay the original response and `jobId`/`newJobId` without starting another worker. The first response sends `Idempotency-Replay: false`; a replay sends `Idempotency-Replay: true` and includes `"idempotencyReplayed": true` in the JSON response. Reusing a key with a different request fingerprint returns `409 IDEMPOTENCY_CONFLICT`. Requests without the header retain current behavior.
+**Idempotency:** `POST /api/jobs/tradingview-analysis`, `POST /api/jobs/:jobId/retry`, and `POST /api/jobs/:jobId/retry-failed` accept an optional client-generated `idempotency-key` header. Matching concurrent or sequential requests replay the original response and `jobId`/`newJobId` without starting another worker. The first response sends `Idempotency-Replay: false`; a replay sends `Idempotency-Replay: true` and includes `"idempotencyReplayed": true` in the JSON response. `JOB_QUEUE_ACCEPTANCE_UNKNOWN` responses are also replayable and include the durable `jobId`, preventing a retry from creating a second queue item. Reusing a key with a different request fingerprint returns `409 IDEMPOTENCY_CONFLICT`. Requests without the header retain current behavior.
 
 Example:
 ```http
@@ -875,7 +875,7 @@ For completed ranked market-scanner jobs, `scanResults[].scores[]` contains the 
 
 Set `ENABLE_FIRESTORE_JOB_STORAGE=true` plus the normal Firebase Admin credentials (`FIREBASE_SERVICE_ACCOUNT_JSON` or `GOOGLE_APPLICATION_CREDENTIALS`) to enable durable job storage. The legacy in-memory path remains the fallback when Firestore is disabled or unavailable.
 
-By default, jobs still execute in-process. With `JOB_EXECUTION_MODE=render-worker`, the web service stores sanitized job metadata in Firestore and enqueues only the `jobId` in Redis; the dedicated `pnpm run start-worker` process claims the job transactionally, renews its lease at persistence checkpoints, and drains BullMQ work on `SIGTERM`. Notification delivery is checkpointed durably before and after the external send; a redelivery with an unknown outcome fails closed as `JOB_DELIVERY_RECONCILIATION_REQUIRED` rather than sending the same alert twice. Missing Redis or durable Firestore storage fails the create request with `503 JOB_QUEUE_UNAVAILABLE`.
+By default, jobs still execute in-process. With `JOB_EXECUTION_MODE=render-worker`, the web service stores sanitized job metadata in Firestore and enqueues only the `jobId` in Redis; the dedicated `pnpm run start-worker` process claims the job transactionally, periodically reconciles durable rows still marked `processing`/`queued`, renews its lease at persistence checkpoints, and drains BullMQ work on `SIGTERM`. Notification delivery is checkpointed durably before and after the external send; a redelivery with an unknown outcome fails closed as `JOB_DELIVERY_RECONCILIATION_REQUIRED` rather than sending the same alert twice. Missing Redis or durable Firestore storage fails the create request with `503 JOB_QUEUE_UNAVAILABLE`.
 
 **Response (200 OK - Processing):**
 ```json

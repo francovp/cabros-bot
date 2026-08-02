@@ -17,6 +17,7 @@ function hasAttemptsRemaining(job) {
 
 const FINAL_FAILURE_RETRY_DELAY_MS = 1000;
 const FINAL_FAILURE_MAX_ATTEMPTS = 5;
+const JOB_QUEUE_RECONCILIATION_INTERVAL_MS = 30000;
 
 async function finalizeFailedJob(service, job, workerId, error, attempt) {
 	if (attempt === null) {
@@ -95,6 +96,25 @@ async function startJobWorker({
 		await worker.waitUntilReady();
 	}
 
+	let reconciliationTimer = null;
+	if (service && typeof service.reconcileQueuedJobs === 'function') {
+		const reconcileQueuedJobs = async () => {
+			try {
+				await service.reconcileQueuedJobs();
+			} catch (error) {
+				console.warn('[JobWorker] Queued-job reconciliation failed:', error.message);
+			}
+		};
+
+		void reconcileQueuedJobs();
+		reconciliationTimer = globalThis.setInterval(() => {
+			void reconcileQueuedJobs();
+		}, JOB_QUEUE_RECONCILIATION_INTERVAL_MS);
+		if (typeof reconciliationTimer.unref === 'function') {
+			reconciliationTimer.unref();
+		}
+	}
+
 	return {
 		worker,
 		workerId,
@@ -103,6 +123,9 @@ async function startJobWorker({
 				return;
 			}
 			stopped = true;
+			if (reconciliationTimer) {
+				globalThis.clearInterval(reconciliationTimer);
+			}
 			await queue.closeWorker(worker);
 			if (service && typeof service.waitForCallbacks === 'function') {
 				await service.waitForCallbacks();
@@ -115,5 +138,6 @@ module.exports = {
 	FINAL_FAILURE_MAX_ATTEMPTS,
 	getWorkerId,
 	FINAL_FAILURE_RETRY_DELAY_MS,
+	JOB_QUEUE_RECONCILIATION_INTERVAL_MS,
 	startJobWorker,
 };

@@ -354,6 +354,30 @@ describe('queued job execution', () => {
 		);
 	});
 
+	it('reconciles a pending callback when terminal failure was already persisted', async () => {
+		const terminalJob = {
+			jobId: 'job-123',
+			status: 'failed',
+			callbackUrl: 'https://example.com/callback',
+			callbackEvents: ['failed'],
+			callbackStatus: { status: 'pending', attempts: [] },
+		};
+		const repository = {
+			failClaim: jest.fn().mockResolvedValue(false),
+			get: jest.fn().mockResolvedValue(terminalJob),
+		};
+		const service = new JobService(repository);
+		service._triggerCallbackIfConfigured = jest.fn().mockResolvedValue(undefined);
+		const error = Object.assign(new Error('permanent failure'), { code: 'PERMANENT_FAILURE' });
+
+		await expect(service.failQueuedJob('job-123', 'worker-1', error, 3)).resolves.toBe(true);
+
+		expect(service._triggerCallbackIfConfigured).toHaveBeenCalledWith(
+			terminalJob,
+			{ awaitDelivery: true },
+		);
+	});
+
 	it('rejects worker persistence when the durable save loses ownership', async () => {
 		const repository = {
 			get: jest.fn().mockResolvedValue({ jobId: 'job-123' }),

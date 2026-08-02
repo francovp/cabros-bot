@@ -92,6 +92,35 @@ describe('JobService Render worker mode', () => {
 		expect(repository.delete).not.toHaveBeenCalled();
 	});
 
+	it('re-enqueues durable queued jobs during reconciliation', async () => {
+		const repository = {
+			entries: () => [],
+			list: jest.fn().mockResolvedValue([
+				{
+					jobId: 'lost-queue-job',
+					status: 'processing',
+					execution: { mode: 'render-worker', status: 'queued' },
+				},
+				{
+					jobId: 'active-job',
+					status: 'processing',
+					execution: { mode: 'render-worker', status: 'running' },
+				},
+			]),
+		};
+		const queue = {
+			isEnabled: () => true,
+			enqueue: jest.fn().mockResolvedValue({ queued: true }),
+		};
+		const service = new JobService(repository, queue);
+
+		await expect(service.reconcileQueuedJobs()).resolves.toBe(1);
+
+		expect(repository.list).toHaveBeenCalledWith({ status: 'processing', limit: expect.any(Number) });
+		expect(queue.enqueue).toHaveBeenCalledWith('lost-queue-job');
+		expect(queue.enqueue).not.toHaveBeenCalledWith('active-job');
+	});
+
 	it('removes the durable record when queue-failure reconciliation cannot be persisted', async () => {
 		const persistenceError = Object.assign(new Error('Firestore unavailable'), {
 			code: 'JOB_STORAGE_UNAVAILABLE',

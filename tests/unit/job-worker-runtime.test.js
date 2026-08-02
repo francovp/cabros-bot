@@ -3,6 +3,7 @@
 const {
 	FINAL_FAILURE_MAX_ATTEMPTS,
 	FINAL_FAILURE_RETRY_DELAY_MS,
+	JOB_QUEUE_RECONCILIATION_INTERVAL_MS,
 	startJobWorker,
 } = require('../../src/services/jobs/jobWorker');
 
@@ -31,6 +32,33 @@ describe('job worker runtime', () => {
 
 		expect(service.processQueuedJob).toHaveBeenCalledWith('job-123', null, 'worker-1');
 		expect(closeWorker).toHaveBeenCalledTimes(1);
+	});
+
+	it('schedules durable queued-job reconciliation while the worker is running', async () => {
+		jest.useFakeTimers();
+		try {
+			const queue = {
+				isEnabled: () => true,
+				createWorker: jest.fn(() => ({ id: 'worker-1' })),
+				closeWorker: jest.fn().mockResolvedValue(undefined),
+			};
+			const service = {
+				processQueuedJob: jest.fn(),
+				reconcileQueuedJobs: jest.fn().mockResolvedValue(1),
+			};
+
+			const runtime = await startJobWorker({ queue, service, workerId: 'worker-1' });
+			expect(service.reconcileQueuedJobs).toHaveBeenCalledTimes(1);
+
+			await jest.advanceTimersByTimeAsync(JOB_QUEUE_RECONCILIATION_INTERVAL_MS);
+			expect(service.reconcileQueuedJobs).toHaveBeenCalledTimes(2);
+
+			await runtime.stop();
+			await jest.advanceTimersByTimeAsync(JOB_QUEUE_RECONCILIATION_INTERVAL_MS);
+			expect(service.reconcileQueuedJobs).toHaveBeenCalledTimes(2);
+		} finally {
+			jest.useRealTimers();
+		}
 	});
 
 	it('releases retryable claims and fails the job after the final attempt', async () => {

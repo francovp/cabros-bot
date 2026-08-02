@@ -650,6 +650,48 @@ class JobService {
 		};
 	}
 
+	async reconcileQueuedJobs() {
+		if (
+			!this.queue
+			|| (typeof this.queue.isEnabled === 'function' && !this.queue.isEnabled())
+			|| !this.repository
+			|| typeof this.repository.list !== 'function'
+			|| typeof this.queue.enqueue !== 'function'
+		) {
+			return 0;
+		}
+
+		let jobs;
+		try {
+			jobs = await this.repository.list({ status: 'processing', limit: MAX_JOB_LIST_LIMIT });
+		} catch (error) {
+			console.warn('[JobService] Failed to list queued jobs for reconciliation:', error.message);
+			return 0;
+		}
+
+		let reconciled = 0;
+		for (const job of jobs || []) {
+			if (
+				!job
+				|| typeof job.jobId !== 'string'
+				|| job.execution?.mode !== 'render-worker'
+				|| job.execution?.status !== 'queued'
+			) {
+				continue;
+			}
+
+			try {
+				await this.queue.enqueue(job.jobId);
+				reconciled += 1;
+			} catch (error) {
+				console.warn(`[JobService] Failed to re-enqueue queued job ${job.jobId}:`, error.message);
+				break;
+			}
+		}
+
+		return reconciled;
+	}
+
 	_isQueueMode() {
 		return typeof this.queue?.isEnabled === 'function'
 			? this.queue.isEnabled()
@@ -749,6 +791,16 @@ class JobService {
 			const job = await this.repository.get(jobId);
 			if (job) {
 				await this._triggerCallbackIfConfigured(job, { awaitDelivery: true });
+			}
+		} else if (
+			attempt !== null
+			&& attempt !== undefined
+			&& typeof this.repository.get === 'function'
+		) {
+			const job = await this.repository.get(jobId);
+			if (job && TERMINAL_JOB_STATUSES.has(job.status)) {
+				await this._triggerCallbackIfConfigured(job, { awaitDelivery: true });
+				return true;
 			}
 		}
 

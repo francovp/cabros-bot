@@ -1664,15 +1664,28 @@
         }
       },
       "JobQueueUnavailable": {
-        "description": "Render-worker mode is enabled but durable Firestore or Redis queue storage is unavailable; the job was not accepted.",
+        "description": "Render-worker mode is enabled but durable Firestore or Redis queue storage is unavailable. JOB_QUEUE_UNAVAILABLE means the job was not accepted; JOB_QUEUE_ACCEPTANCE_UNKNOWN means the response includes the durable jobId and must be replayed or polled while the worker reconciles the queue.",
         "content": {
           "application/json": {
             "schema": {
               "$ref": "#/components/schemas/Error"
             },
-            "example": {
-              "error": "The asynchronous job queue is unavailable.",
-              "code": "JOB_QUEUE_UNAVAILABLE"
+            "examples": {
+              "unavailable": {
+                "summary": "Queue unavailable before acceptance",
+                "value": {
+                  "error": "The asynchronous job queue is unavailable.",
+                  "code": "JOB_QUEUE_UNAVAILABLE"
+                }
+              },
+              "acceptanceUnknown": {
+                "summary": "Queue acceptance is indeterminate",
+                "value": {
+                  "error": "The queue acceptance state could not be determined.",
+                  "code": "JOB_QUEUE_ACCEPTANCE_UNKNOWN",
+                  "jobId": "8f8ef192-349f-4318-8547-0e6d628bf739"
+                }
+              }
             }
           }
         }
@@ -2026,6 +2039,10 @@
           },
           "code": {
             "type": "string"
+          },
+          "jobId": {
+            "type": "string",
+            "description": "Durably stored job identifier returned when queue acceptance is indeterminate."
           }
         }
       },
