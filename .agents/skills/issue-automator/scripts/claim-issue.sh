@@ -105,6 +105,24 @@ fi
 #                                  agent apart; an unnamespaced shared file would
 #                                  let the second run treat the first run's claim
 #                                  as its own (duplicate work).
+# gen_session_id -> a collision-resistant random session identifier. `$$` + epoch
+# is NOT unique: two sessions with the same agent that start in separate
+# containers during the same second can share a PID (both often 1 inside a
+# container) and an identical epoch, producing the same id. A random UUID avoids
+# matching another session's claim as our own (duplicate work).
+gen_session_id() {
+  local id
+  if command -v uuidgen >/dev/null 2>&1; then
+    id="$(uuidgen)"
+  elif [ -r /proc/sys/kernel/random/uuid ]; then
+    id="$(< /proc/sys/kernel/random/uuid)"
+  else
+    id="$(od -An -N16 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')"
+  fi
+  [ -n "$id" ] || id="session-$$-$(date +%s%N)"
+  printf 'session-%s' "$id"
+}
+
 SESSION_ID=""
 if [ -n "${CLAIM_SESSION_ID:-}" ]; then
   SESSION_ID="$CLAIM_SESSION_ID"
@@ -121,12 +139,12 @@ elif [ -n "${CLAIM_RUN_ID:-}" ]; then
     fi
   fi
   if [ -z "$SESSION_ID" ]; then
-    SESSION_ID="session-$$-$(date +%s)"
+    SESSION_ID="$(gen_session_id)"
     mkdir -p "$STATE_DIR" 2>/dev/null || true
     printf '%s' "$SESSION_ID" > "$STATE_FILE" 2>/dev/null || true
   fi
 else
-  SESSION_ID="session-$$-$(date +%s)"
+  SESSION_ID="$(gen_session_id)"
 fi
 
 # epoch_of: portable ISO-8601 UTC -> epoch seconds (GNU date first, BSD fallback).
@@ -167,17 +185,21 @@ has_agent_working() {
 # instead of claiming based on a phantom-empty comment set.
 READ_FAILED=""
 
-# claim_comments_rest -> TSV "id<TAB>body" for ALL claim comments via the REST
-# API (numeric ids, creation order). Empty (clean exit, status 0) when no claims
-# exist. Paginated so comment pages past the first still reach arbitration. On a
-# read failure (nonzero gh exit) it prints nothing and returns 1; callers MUST
-# wrap the invocation with `|| READ_FAILED="1"` because the command substitution
-# runs in a subshell and cannot rely on the parent global being set inside it.
+# claim_comments_rest -> TSV "id<TAB>created_at<TAB>body" for ALL claim comments
+# via the REST API (numeric ids, creation order). `created_at` is the comment's
+# SERVER-side timestamp (authoritative for legacy/label ordering); the body still
+# carries the client's startup NOW_TS but that is NOT used for freshness/ordering
+# decisions because it can predate the label event by a second (which would
+# corrupt LEGACY_DECIDES). Empty (clean exit, status 0) when no claims exist.
+# Paginated so comment pages past the first still reach arbitration. On a read
+# failure (nonzero gh exit) it prints nothing and returns 1; callers MUST wrap
+# the invocation with `|| READ_FAILED="1"` because the command substitution runs
+# in a subshell and cannot rely on the parent global being set inside it.
 claim_comments_rest() {
   local out rc=0
   out="$(gh api --paginate "repos/${REPO}/issues/${ISSUE_NUMBER}/comments" --jq '
     [.[] | select(.body | startswith("**agent-claim**"))]
-    | .[] | "\(.id)\t\(.body)"' 2>/dev/null)" || rc=$?
+    | .[] | "\(.id)\t\(.created_at)\t\(.body)"' 2>/dev/null)" || rc=$?
   if [ "$rc" -ne 0 ]; then
     return 1
   fi
@@ -185,20 +207,24 @@ claim_comments_rest() {
   return 0
 }
 
-# newest_claim -> single line "id<TAB>agent<TAB>session<TAB>ts" for the newest
-# claim comment (largest numeric id), or empty when no claim comments exist.
-# Returns 1 when the read fails so callers can fail closed via `|| READ_FAILED=1`.
+# newest_claim -> single line "id<TAB>agent<TAB>session<TAB>created_at" for the
+# newest claim comment (largest numeric id), or empty when no claim comments
+# exist. The returned timestamp is the comment's SERVER-side `created_at`, which
+# is the authoritative lifecycle source for the LEGACY_DECIDES comparison —
+# comparing against the client-supplied body NOW_TS would falsely mark a normal
+# claim as a fresh legacy owner when the claim took >1s. Returns 1 when the
+# read fails so callers can fail closed via `|| READ_FAILED=1`.
 newest_claim() {
   local newest
   newest="$(claim_comments_rest | awk -F '\t' '{ if (max == "" || $1+0 > max+0) { max=$1; line=$0 } } END { print line }')" || READ_FAILED="1"
   if [ "$READ_FAILED" == "1" ]; then return 1; fi
   if [ -z "$newest" ]; then return 0; fi
-  local rest agent session ts
-  rest="$(echo "$newest" | cut -f2 | sed 's/^\*\*agent-claim\*\*:[[:space:]]*//')"
+  local created_at rest agent session
+  created_at="$(echo "$newest" | cut -f2)"
+  rest="$(echo "$newest" | cut -f3 | sed 's/^\*\*agent-claim\*\*:[[:space:]]*//')"
   agent="$(echo "$rest" | awk '{print $1}')"
   session="$(echo "$rest" | awk '{print $2}')"
-  ts="$(echo "$rest" | awk '{print $3}')"
-  printf '%s\t%s\t%s\t%s\n' "$(echo "$newest" | cut -f1)" "$agent" "$session" "$ts"
+  printf '%s\t%s\t%s\t%s\n' "$(echo "$newest" | cut -f1)" "$agent" "$session" "$created_at"
   return 0
 }
 
