@@ -255,6 +255,14 @@ function getStatus() {
 	};
 
 	const signalOutcomeWorkerStatus = SignalOutcomeService.getWorkerStatus();
+	const signalOutcomeWorkerDependency = dependencyStatus({
+		enabled: signalOutcomeWorkerStatus.enabled,
+		configured: firestore.configured,
+	});
+	if (signalOutcomeWorkerStatus.role === 'disabled') {
+		signalOutcomeWorkerDependency.ready = false;
+		signalOutcomeWorkerDependency.status = 'disabled';
+	}
 
 	return {
 		service: {
@@ -329,10 +337,7 @@ function getStatus() {
 			scannerPresetStorage: scannerPresetService.getStorageStatus(),
 			equityMarketData: equityMarketDataStatus,
 			signalOutcomeWorker: {
-				...dependencyStatus({
-					enabled: signalOutcomeWorkerStatus.enabled,
-					configured: firestore.configured,
-				}),
+					...signalOutcomeWorkerDependency,
 				role: signalOutcomeWorkerStatus.role,
 				running: signalOutcomeWorkerStatus.running,
 				shutdownRequested: signalOutcomeWorkerStatus.shutdownRequested,
