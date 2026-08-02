@@ -676,8 +676,8 @@ components:
           example: true
         service:
           type: string
-          description: URL shortening service used (e.g., 'bitly', 'tinyurl')
-          example: "bitly"
+          description: URL shortening service used (`picsee`, `tinyurl`, or `cuttly`)
+          example: "picsee"
         successCount:
           type: integer
           description: Number of URLs successfully shortened

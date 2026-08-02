@@ -23,11 +23,11 @@
 import ModelClient from "@azure-rest/ai-inference";
 import { AzureKeyCredential } from "@azure/core-auth";
 
-const model = process.env.AZURE_AI_MODEL | | "openai/gpt-5-mini";
+const model = process.env.AZURE_LLM_MODEL;
 
 const client = ModelClient(
-  process.env.AZURE_AI_ENDPOINT,
-  new AzureKeyCredential(process.env.AZURE_AI_API_KEY)
+  process.env.AZURE_LLM_ENDPOINT,
+  new AzureKeyCredential(process.env.AZURE_LLM_KEY)
 );
 
 const response = await client.path("/chat/completions").post({
@@ -388,8 +388,8 @@ class URLShortener {
 **Configuration**:
 
 - `URL_SHORTENER_SERVICE`: Service name (default: 'picsee')
-- Service-specific tokens: `PICSEE_API_KEY`, `CUTTLY_API_KEY`, etc.
-- Free services (TinyURL) enabled by setting service name
+- Service-specific tokens: `PICSEE_API_KEY` and `CUTTLY_API_KEY`.
+- TinyURL is enabled by setting the service name and requires no credential.
 
 **Alternatives Considered**:
 

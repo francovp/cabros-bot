@@ -43,9 +43,12 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 - `ENABLE_DISCORD_ALERTS` - Enable Discord alerts (`true` or `false`, default: `false`)
 - `DISCORD_WEBHOOK_URL` - Discord webhook URL (e.g., `https://discord.com/api/webhooks/<id>/<token>`)
 
-#### URL Shortening (004-url-shortening)
+#### URL Shortening (003-news-monitor)
 
-- `BITLY_API_KEY` - Bitly API key for URL shortening (optional; when provided, long URLs in WhatsApp alerts are automatically shortened)
+- `URL_SHORTENER_SERVICE` - URL-shortening provider for WhatsApp citations (optional; defaults to `picsee`; supported values: `picsee`, `tinyurl`, `cuttly`)
+- `PICSEE_API_KEY` - PicSee API key, required when PicSee is selected
+- `CUTTLY_API_KEY` - Cuttly API key, required when Cuttly is selected
+- TinyURL uses its free endpoint and requires no credential. Bitly, reurl, and Pixnet0rz.tw are unavailable in the runtime.
 
 #### AI Grounding
 
@@ -1116,11 +1119,11 @@ The alert webhook system supports simultaneous delivery to multiple channels (Te
 
 ### URL Shortening for WhatsApp
 
-When `BITLY_API_KEY` is configured, URLs in WhatsApp alerts are automatically shortened to reduce character count and improve readability.
+When a supported URL-shortening service is configured, URLs in WhatsApp alerts are automatically shortened to reduce character count and improve readability.
 
 **Features**:
 - **Automatic Detection**: Identifies HTTP/HTTPS URLs in alert text
-- **Shortened URLs**: Converts long URLs (e.g., `https://example.com/very/long/path?param=value`) to short Bitly links (e.g., `https://bit.ly/abc123`)
+- **Shortened URLs**: Converts long URLs (e.g., `https://example.com/very/long/path?param=value`) to a provider link
 - **Session-Scoped Cache**: Caches shortenings during request processing to avoid redundant API calls (1-hour TTL per session)
 - **Parallel Shortening**: Multiple URLs shortened concurrently
 - **Fallback Behavior**: If shortening fails or is disabled, original URLs are preserved
@@ -1128,14 +1131,14 @@ When `BITLY_API_KEY` is configured, URLs in WhatsApp alerts are automatically sh
 
 **How It Works**:
 1. Alert received with one or more URLs
-2. URLShortener detects and extracts URLs (if `BITLY_API_KEY` configured)
+2. URLShortener detects and extracts URLs when a supported provider is configured
 3. Checks session cache for previously shortened URLs
-4. Calls Bitly API for new URLs (with 3-retry exponential backoff)
+4. Calls the selected provider for new URLs
 5. Replaces original URLs with shortened versions in alert text
 6. Alert delivered to WhatsApp (and other channels) with shortened URLs
 
 **Configuration**:
-- Set `BITLY_API_KEY` environment variable with your Bitly API key
+- Set `URL_SHORTENER_SERVICE=picsee` with `PICSEE_API_KEY`, `URL_SHORTENER_SERVICE=cuttly` with `CUTTLY_API_KEY`, or select `tinyurl` without a credential
 - Optional: URLs only shortened for WhatsApp; other channels receive original URLs
 - Cache per session: TTL 1 hour; cleared after request completes or session ends
 
@@ -1147,10 +1150,10 @@ Sources:
 - https://example.com/research/crypto/bitcoin/technical-analysis?date=2024-01-15&symbol=BTCUSDT&period=4h&includeIndicators=true
 ```
 
-**After** (with Bitly):
+**After** (with URL shortening):
 ```
 Sources: 
-- https://bit.ly/crypto-analysis
+- https://short.url/crypto-analysis
 ```
 
 ### Delivery Behavior
@@ -1520,7 +1523,8 @@ WHATSAPP_API_KEY=your_whatsapp_api_key
 WHATSAPP_CHAT_ID=120363xxxxx@g.us
 
 # Optional: Enable URL shortening for WhatsApp
-BITLY_API_KEY=your_bitly_api_key
+URL_SHORTENER_SERVICE=picsee
+PICSEE_API_KEY=your_picsee_api_key
 ```
 
 ### With WhatsApp + URL Shortening
@@ -1535,8 +1539,9 @@ WHATSAPP_API_URL=your_whatsapp_api_url
 WHATSAPP_API_KEY=your_whatsapp_api_key
 WHATSAPP_CHAT_ID=120363xxxxx@g.us
 
-# URL shortening for WhatsApp (long URLs automatically shortened via Bitly)
-BITLY_API_KEY=your_bitly_api_key
+# URL shortening for WhatsApp (long URLs automatically shortened via PicSee)
+URL_SHORTENER_SERVICE=picsee
+PICSEE_API_KEY=your_picsee_api_key
 
 # Alerts sent to both channels; WhatsApp receives shortened URLs
 ```
@@ -1722,14 +1727,14 @@ The application logs to stdout:
 ### URL Shortening
 
 **URLs not being shortened**:
-1. Verify `BITLY_API_KEY` is set in environment
+1. Verify `URL_SHORTENER_SERVICE` is set to `picsee`, `tinyurl`, or `cuttly`
 2. Check that alert text contains valid HTTP/HTTPS URLs
-3. Verify Bitly API key has sufficient quota (check Bitly dashboard)
+3. Verify `PICSEE_API_KEY` or `CUTTLY_API_KEY` is set when the selected service requires it
 4. Check application logs for "URLShortener" error messages
 
 **Shortening timeout errors**:
 - Default timeout: 5 seconds per URL batch
-- If Bitly API is slow, increase timeout or reduce parallel URLs
+- If the selected provider is slow, increase timeout or reduce parallel URLs
 - URLs gracefully fallback to original if shortening fails
 - Alert still sends with original URLs
 
