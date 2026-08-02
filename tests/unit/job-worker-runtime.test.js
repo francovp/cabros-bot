@@ -1,6 +1,7 @@
 'use strict';
 
 const {
+	FINAL_FAILURE_MAX_ATTEMPTS,
 	FINAL_FAILURE_RETRY_DELAY_MS,
 	startJobWorker,
 } = require('../../src/services/jobs/jobWorker');
@@ -123,6 +124,41 @@ describe('job worker runtime', () => {
 			await jest.advanceTimersByTimeAsync(FINAL_FAILURE_RETRY_DELAY_MS);
 			await expect(finalization).resolves.toBe(true);
 			expect(service.failQueuedJob).toHaveBeenCalledTimes(2);
+		} finally {
+			jest.useRealTimers();
+		}
+	});
+
+	it('bounds terminal failure persistence retries', async () => {
+		jest.useFakeTimers();
+		try {
+			let onFailed;
+			const queue = {
+				isEnabled: () => true,
+				createWorker: jest.fn((handler, options) => {
+					onFailed = options.onFailed;
+					return { id: 'worker-1' };
+				}),
+				closeWorker: jest.fn().mockResolvedValue(undefined),
+			};
+			const service = {
+				processQueuedJob: jest.fn(),
+				failQueuedJob: jest.fn().mockRejectedValue(new Error('Firestore unavailable')),
+			};
+			await startJobWorker({ queue, service, workerId: 'worker-1' });
+			const finalJob = { data: { jobId: 'job-123' }, attemptsMade: 3, opts: { attempts: 3 } };
+			const finalError = Object.assign(new Error('permanent failure'), {
+				code: 'PERMANENT_FAILURE',
+				claimAttempt: 3,
+			});
+			const finalization = onFailed(finalJob, finalError);
+
+			for (let retry = 1; retry < FINAL_FAILURE_MAX_ATTEMPTS; retry++) {
+				await jest.advanceTimersByTimeAsync(FINAL_FAILURE_RETRY_DELAY_MS);
+			}
+
+			await expect(finalization).resolves.toBe(false);
+			expect(service.failQueuedJob).toHaveBeenCalledTimes(FINAL_FAILURE_MAX_ATTEMPTS);
 		} finally {
 			jest.useRealTimers();
 		}

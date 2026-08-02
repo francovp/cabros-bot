@@ -16,10 +16,11 @@ function hasAttemptsRemaining(job) {
 }
 
 const FINAL_FAILURE_RETRY_DELAY_MS = 1000;
+const FINAL_FAILURE_MAX_ATTEMPTS = 5;
 
 async function finalizeFailedJob(service, job, workerId, error, attempt) {
 	const jobId = job && job.data && job.data.jobId;
-	while (true) {
+	for (let failureAttempt = 1; failureAttempt <= FINAL_FAILURE_MAX_ATTEMPTS; failureAttempt++) {
 		try {
 			const failed = await service.failQueuedJob(jobId, workerId, error, attempt);
 			if (failed || attempt !== null) {
@@ -33,10 +34,16 @@ async function finalizeFailedJob(service, job, workerId, error, attempt) {
 
 			return false;
 		} catch (failure) {
+			if (failureAttempt === FINAL_FAILURE_MAX_ATTEMPTS) {
+				console.error('[JobWorker] Could not persist terminal queue failure after bounded retries:', failure.message);
+				return false;
+			}
 			console.warn('[JobWorker] Failed to persist terminal queue failure; retrying:', failure.message);
 			await new Promise((resolve) => setTimeout(resolve, FINAL_FAILURE_RETRY_DELAY_MS));
 		}
 	}
+
+	return false;
 }
 
 async function startJobWorker({
@@ -96,6 +103,7 @@ async function startJobWorker({
 }
 
 module.exports = {
+	FINAL_FAILURE_MAX_ATTEMPTS,
 	getWorkerId,
 	FINAL_FAILURE_RETRY_DELAY_MS,
 	startJobWorker,

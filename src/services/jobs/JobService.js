@@ -594,7 +594,14 @@ class JobService {
 					...job.execution,
 					status: 'failed',
 				};
-				await this.repository.save(job).catch(() => {});
+				try {
+					await this.repository.save(job, { required: true });
+				} catch (persistenceError) {
+					console.error(
+						`[JobService] Failed to durably reconcile queue failure for ${jobId}:`,
+						persistenceError.message,
+					);
+				}
 				if (error.statusCode === 503) {
 					throw error;
 				}
