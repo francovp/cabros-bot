@@ -66,6 +66,32 @@ describe('JobService Render worker mode', () => {
 		);
 	});
 
+	it('preserves the queued record when enqueue acceptance is indeterminate', async () => {
+		const repository = {
+			entries: () => [],
+			isDurable: jest.fn(() => true),
+			save: jest.fn().mockResolvedValue('job-123'),
+			delete: jest.fn().mockResolvedValue(true),
+		};
+		const queueError = Object.assign(new Error('Redis acceptance unknown'), {
+			code: 'JOB_QUEUE_ACCEPTANCE_UNKNOWN',
+			statusCode: 503,
+		});
+		const queue = {
+			isEnabled: () => true,
+			enqueue: jest.fn().mockRejectedValue(queueError),
+		};
+		const service = new JobService(repository, queue);
+
+		await expect(service.createJob('expanded-analysis', {
+			type: 'expanded-analysis',
+			symbols: ['BINANCE:BTCUSDT'],
+		})).rejects.toBe(queueError);
+
+		expect(repository.save).toHaveBeenCalledTimes(1);
+		expect(repository.delete).not.toHaveBeenCalled();
+	});
+
 	it('removes the durable record when queue-failure reconciliation cannot be persisted', async () => {
 		const persistenceError = Object.assign(new Error('Firestore unavailable'), {
 			code: 'JOB_STORAGE_UNAVAILABLE',

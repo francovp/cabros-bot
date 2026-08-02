@@ -588,6 +588,10 @@ class JobService {
 			try {
 				await this.queue.enqueue(jobId);
 			} catch (error) {
+				if (error && error.code === 'JOB_QUEUE_ACCEPTANCE_UNKNOWN') {
+					error.jobId = jobId;
+					throw error;
+				}
 				job.status = 'failed';
 				job.error = 'The asynchronous job queue is unavailable.';
 				job.code = error.code || 'JOB_QUEUE_UNAVAILABLE';
@@ -1607,14 +1611,9 @@ class JobService {
 		const deliveryId = uuidv4();
 		const isDurable = typeof this.repository.isDurable === 'function' && this.repository.isDurable();
 		if (isDurable && typeof this.repository.claimCallbackDelivery === 'function') {
-			try {
-				return await this.repository.claimCallbackDelivery(job.jobId, event, deliveryId)
-					? { deliveryId }
-					: null;
-			} catch (error) {
-				console.warn('[JobService] Failed to claim callback delivery:', error.message);
-				return null;
-			}
+			return await this.repository.claimCallbackDelivery(job.jobId, event, deliveryId)
+				? { deliveryId }
+				: null;
 		}
 
 		const localKey = `${job.jobId}:${event}`;
@@ -1637,7 +1636,16 @@ class JobService {
 			return;
 		}
 
-		const callbackClaim = await this._claimCallbackDelivery(job, job.status);
+		let callbackClaim;
+		try {
+			callbackClaim = await this._claimCallbackDelivery(job, job.status);
+		} catch (error) {
+			console.warn('[JobService] Failed to claim callback delivery:', error.message);
+			if (awaitDelivery) {
+				throw error;
+			}
+			return;
+		}
 		if (!callbackClaim) {
 			return;
 		}

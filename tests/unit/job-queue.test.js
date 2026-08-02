@@ -65,6 +65,28 @@ describe('JobQueue', () => {
 		expect(getJob).toHaveBeenCalledWith('job-123');
 	});
 
+	it('reports an indeterminate acceptance when queue reconciliation is unavailable', async () => {
+		const add = jest.fn().mockRejectedValue(new Error('Redis connection lost after write'));
+		const getJob = jest.fn().mockRejectedValue(new Error('Redis still unavailable'));
+		const waitUntilReady = jest.fn().mockResolvedValue(undefined);
+		const queueClient = { add, getJob, waitUntilReady, close: jest.fn() };
+		const QueueClass = jest.fn(() => queueClient);
+		const RedisClass = jest.fn(() => ({ disconnect: jest.fn() }));
+
+		process.env = {
+			...savedEnv,
+			JOB_EXECUTION_MODE: 'render-worker',
+			REDIS_URL: 'redis://queue.example:6379',
+		};
+
+		const queue = new JobQueue({ QueueClass, RedisClass });
+
+		await expect(queue.enqueue('job-123')).rejects.toMatchObject({
+			code: 'JOB_QUEUE_ACCEPTANCE_UNKNOWN',
+			statusCode: 503,
+		});
+	});
+
 	it('can retry enqueue after an initial queue readiness failure', async () => {
 		const firstClose = jest.fn().mockResolvedValue(undefined);
 		const firstQueue = {

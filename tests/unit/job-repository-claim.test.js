@@ -530,6 +530,44 @@ describe('JobRepository durable claims', () => {
 		);
 	});
 
+	it('does not claim a processing callback after terminal status advances', async () => {
+		const docRef = {};
+		const transaction = {
+			get: jest.fn().mockResolvedValue({
+				exists: true,
+				id: 'job-123',
+				data: () => ({
+					jobId: 'job-123',
+					status: 'completed',
+					callbackStatus: { status: 'pending', attempts: [] },
+				}),
+			}),
+			set: jest.fn(),
+		};
+		const firestore = {
+			collection: jest.fn(() => ({ doc: jest.fn(() => docRef) })),
+			runTransaction: jest.fn(async callback => callback(transaction)),
+		};
+		const repository = new JobRepository();
+		repository._getFirestore = jest.fn(() => firestore);
+
+		await expect(repository.claimCallbackDelivery('job-123', 'processing', 'delivery-1'))
+			.resolves.toBe(false);
+		expect(transaction.set).not.toHaveBeenCalled();
+	});
+
+	it('propagates callback claim storage failures', async () => {
+		const firestore = {
+			collection: jest.fn(() => ({ doc: jest.fn(() => ({})) })),
+			runTransaction: jest.fn().mockRejectedValue(new Error('Firestore unavailable')),
+		};
+		const repository = new JobRepository();
+		repository._getFirestore = jest.fn(() => firestore);
+
+		await expect(repository.claimCallbackDelivery('job-123', 'completed', 'delivery-1'))
+			.rejects.toMatchObject({ code: 'JOB_CALLBACK_CLAIM_UNAVAILABLE' });
+	});
+
 	it('rejects claim renewal when durable storage is unavailable', async () => {
 		const repository = new JobRepository();
 		repository._getFirestore = jest.fn(() => null);

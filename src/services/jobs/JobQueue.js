@@ -32,6 +32,15 @@ class JobQueueUnavailableError extends Error {
 	}
 }
 
+class JobQueueAcceptanceUnknownError extends JobQueueUnavailableError {
+	constructor(cause) {
+		super('The queue acceptance state could not be determined.');
+		this.name = 'JobQueueAcceptanceUnknownError';
+		this.code = 'JOB_QUEUE_ACCEPTANCE_UNKNOWN';
+		this.cause = cause;
+	}
+}
+
 class JobQueue {
 	constructor({ QueueClass, WorkerClass, RedisClass } = {}) {
 		this.QueueClass = QueueClass;
@@ -103,6 +112,7 @@ class JobQueue {
 					}
 				} catch (reconciliationError) {
 					this._recordError(reconciliationError);
+					throw new JobQueueAcceptanceUnknownError(reconciliationError);
 				}
 			}
 			throw new JobQueueUnavailableError();
@@ -307,6 +317,7 @@ const jobQueue = new JobQueue();
 module.exports = {
 	JobQueue,
 	JobQueueUnavailableError,
+	JobQueueAcceptanceUnknownError,
 	QUEUE_NAME,
 	JOB_NAME,
 	isQueueExecutionEnabled,

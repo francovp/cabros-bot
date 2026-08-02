@@ -34,6 +34,13 @@ function getClaimLeaseMs() {
 	return Number.isInteger(configured) && configured > 0 ? configured : DEFAULT_CLAIM_LEASE_MS;
 }
 
+function createCallbackClaimUnavailableError(cause) {
+	const error = new Error('Durable callback claim storage is unavailable.');
+	error.code = 'JOB_CALLBACK_CLAIM_UNAVAILABLE';
+	error.cause = cause;
+	return error;
+}
+
 class JobRepository {
 	async save(job, { required = false } = {}) {
 		const sanitized = sanitizeJob(job);
@@ -188,7 +195,7 @@ class JobRepository {
 
 		const firestore = this._getFirestore();
 		if (!firestore || typeof firestore.runTransaction !== 'function') {
-			return false;
+			throw createCallbackClaimUnavailableError();
 		}
 
 		const effectiveLeaseMs = Number.isInteger(leaseMs) && leaseMs > 0
@@ -206,6 +213,9 @@ class JobRepository {
 				}
 
 				const current = sanitizeJob({ ...(snapshot.data() || {}), jobId: snapshot.id || jobId });
+				if (event === 'processing' && current.status !== 'processing') {
+					return false;
+				}
 				const callbackStatus = current.callbackStatus || {};
 				const existingEvent = callbackStatus.events && callbackStatus.events[event];
 				if (existingEvent && existingEvent.status === 'success') {
@@ -241,7 +251,7 @@ class JobRepository {
 			});
 		} catch (error) {
 			console.warn('[JobRepository] Failed to claim callback delivery:', error.message);
-			return false;
+			throw createCallbackClaimUnavailableError(error);
 		}
 	}
 
