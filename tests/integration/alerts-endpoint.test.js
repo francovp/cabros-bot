@@ -562,6 +562,35 @@ describe('Alerts API Integration Tests', () => {
 		});
 	});
 
+	it('accepts x-idempotency-key when replaying a stored alert', async () => {
+		alertStorageService.getAlertById.mockResolvedValue({
+			id: 'alert-123',
+			receivedAt: '2026-06-06T12:34:56.000Z',
+			text: 'Replay me',
+			enriched: false,
+			enrichmentData: null,
+			tokenUsage: null,
+			deliveryResults: [],
+			source: 'webhook',
+			useTradingViewData: false,
+		});
+
+		const res = await request(app)
+			.post('/api/alerts/alert-123/replay')
+			.set('x-api-key', 'test-key')
+			.set('x-idempotency-key', 'replay-x-key-1')
+			.send({ channels: ['telegram'] })
+			.expect(200);
+
+		expect(alertStorageService.saveReplayAttempt).toHaveBeenCalledWith({
+			alertId: 'alert-123',
+			idempotencyKey: 'replay-x-key-1',
+			channels: ['telegram'],
+			deliveryResults: [{ channel: 'telegram', success: true, messageId: 'tg-1' }],
+		});
+		expect(res.body.success).toBe(true);
+	});
+
 	it('returns 400 when replay is missing an idempotency key', async () => {
 		const res = await request(app)
 			.post('/api/alerts/alert-123/replay')
@@ -570,7 +599,7 @@ describe('Alerts API Integration Tests', () => {
 			.expect(400);
 
 		expect(res.body).toEqual({
-			error: 'Replay requests require an idempotency-key header or idempotencyKey body field.',
+			error: 'Replay requests require an idempotency-key or x-idempotency-key header or idempotencyKey body field.',
 			code: 'INVALID_REQUEST',
 		});
 	});
