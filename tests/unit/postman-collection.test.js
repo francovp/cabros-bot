@@ -79,6 +79,25 @@ describe('Postman collection contract', () => {
 		expect(findHeader(replay, 'x-idempotency-key').value).toBe('alert-replay-key-1');
 	});
 
+	it('defines the replay key used by hashed replay examples', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const replayKey = collection.variable.find((variable) => variable.key === 'replayIdempotencyKey');
+
+		expect(replayKey).toEqual(expect.objectContaining({
+			value: 'replay-key-1',
+		}));
+	});
+
+	it('includes createdAt in both x-header job success examples', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const job = findItem(collection.item, 'POST Create TradingView Analysis Job (x-idempotency-key header)');
+		const success = job.response.find((response) => response.name === 'Success (x-idempotency-key header)');
+		const replay = job.response.find((response) => response.name === 'Success (idempotent replay)');
+
+		expect(JSON.parse(success.body).createdAt).toBe('2026-06-19T12:00:00.000Z');
+		expect(JSON.parse(replay.body).createdAt).toBe('2026-06-19T12:00:00.000Z');
+	});
+
 	it('keeps cached delivery metrics in the x-header replay example', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const sendMessage = findItem(collection.item, 'POST Send Message (x-idempotency-key header)');

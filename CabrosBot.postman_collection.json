@@ -16,6 +16,11 @@
       "type": "string"
     },
     {
+      "key": "replayIdempotencyKey",
+      "value": "replay-key-1",
+      "type": "string"
+    },
+    {
       "key": "jobCreateIdempotencyKey",
       "value": "job-create-001",
       "type": "string"
@@ -3055,7 +3060,7 @@
               "name": "Success (x-idempotency-key header)",
               "status": "Created",
               "code": 201,
-              "body": "{\n  \"success\": true,\n  \"jobId\": \"job-uuid-123\",\n  \"status\": \"processing\"\n}",
+              "body": "{\n  \"success\": true,\n  \"jobId\": \"job-uuid-123\",\n  \"status\": \"processing\",\n  \"createdAt\": \"2026-06-19T12:00:00.000Z\"\n}",
               "originalRequest": {
                 "method": "POST",
                 "header": [
@@ -3102,7 +3107,7 @@
                   "value": "true"
                 }
               ],
-              "body": "{\n  \"success\": true,\n  \"jobId\": \"job-uuid-123\",\n  \"status\": \"processing\",\n  \"idempotencyReplayed\": true\n}",
+              "body": "{\n  \"success\": true,\n  \"jobId\": \"job-uuid-123\",\n  \"status\": \"processing\",\n  \"createdAt\": \"2026-06-19T12:00:00.000Z\",\n  \"idempotencyReplayed\": true\n}",
               "originalRequest": {
                 "method": "POST",
                 "header": [
