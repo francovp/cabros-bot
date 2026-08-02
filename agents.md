@@ -551,7 +551,7 @@ The system provides an HTTP endpoint (`/api/news-monitor`) that analyzes financi
 - `NEWS_ALERT_THRESHOLD` — Confidence score threshold (default: 0.7, range 0.0-1.0)
 - `NEWS_CACHE_TTL_HOURS` — Cache time-to-live (default: 6 hours)
 - `NEWS_TIMEOUT_MS` — Per-symbol analysis timeout (default: 30000 ms)
-- `NEWS_GEMINI_CONCURRENCY` — Optional max concurrent Gemini-backed symbol analyses. Leave unset to preserve legacy full fan-out.
+- `NEWS_GEMINI_CONCURRENCY` — Max concurrent Gemini-backed symbol analyses. Production policy is `3`; leave unset only for backward-compatible legacy full fan-out.
 - `NEWS_GEMINI_QUOTA_MAX_RETRIES` — Per-symbol retry count for Gemini `429 RESOURCE_EXHAUSTED` errors (default: 2)
 - `NEWS_GEMINI_QUOTA_RETRY_BASE_MS` — Base exponential backoff in milliseconds when provider retry metadata is absent (default: 1000)
 - `ENABLE_BINANCE_PRICE_CHECK` — Enable Binance crypto price fetching (default: false)
@@ -724,6 +724,7 @@ See `/specs/TERMINOLOGY_GUIDE.md` for extended discussion and examples.
 
 
 ## Recent Changes (by spec-kit)
+- GH-284 / CB-118: Production Gemini quota recurrence was traced to an unset `NEWS_GEMINI_CONCURRENCY` with a Sentry `POST /api/news-monitor` dry-run carrying 28 symbols. Production uses the existing scheduler with `NEWS_GEMINI_CONCURRENCY=3`; analysis now runs inside the Sentry span so `summary.quota_exhausted` plus the `news.quota_exhausted` and `news.error_count` attributes remain correlated operational signals. Sentry measured 61 quota events through 2026-07-28T13:44:03Z against a Gemini free-tier limit of 15 requests/minute for the affected model; no current percentile or complete request-count measurement is inferred from that error window.
 - 001-gemini-grounding-alert (improvements with PR #21, #20, #19): Added Gemini GoogleSearch grounding integration for alert enrichment; added Brave Search fallback/override; introduced provider routing (Gemini/Azure/OpenRouter); added token usage + cost estimation surfaced in notifications; graceful degradation on API failure; single grounding call reused across channels.
 - 002-whatsapp-alerts: Added multi-channel notification system with TelegramService, WhatsAppService, NotificationManager; exponential backoff retry logic; MarkdownV2 and WhatsApp markdown formatters; comprehensive integration tests for parallel delivery, config validation, graceful degradation.
 - issue #91 / branch `codex/fix-91-whatsapp-truncation`: WhatsApp delivery now splits GreenAPI payloads above the provider limit into sequential chunks instead of silently truncating with an ellipsis; regression coverage added for long alert payloads.

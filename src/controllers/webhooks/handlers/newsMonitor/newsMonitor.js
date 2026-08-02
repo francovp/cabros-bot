@@ -117,7 +117,10 @@ class NewsMonitorHandler {
 			let results;
 			let summary;
 			try {
-				results = await this.analyzer.analyzeSymbols(symbolsToAnalyze, requestId, tokenUsage, routing, { dryRun });
+				results = await sentryService.withActiveSpan(
+					analysisSpan,
+					() => this.analyzer.analyzeSymbols(symbolsToAnalyze, requestId, tokenUsage, routing, { dryRun }),
+				);
 				summary = this.generateSummary(results);
 				if (analysisSpan && typeof analysisSpan.setAttribute === 'function') {
 					analysisSpan.setAttribute('news.quota_exhausted', summary.quota_exhausted);
