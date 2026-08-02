@@ -1,6 +1,7 @@
 'use strict';
 
 require('dotenv').config();
+require('../../instrument.js');
 
 const SignalOutcomeService = require('../services/storage/SignalOutcomeService');
 
