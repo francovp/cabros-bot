@@ -148,4 +148,26 @@ describe('JobRepository durable claims', () => {
 		expect(firestore.runTransaction).toHaveBeenCalledTimes(2);
 		expect(transaction.set).not.toHaveBeenCalled();
 	});
+
+	it('does not overwrite a terminal job during a save transaction', async () => {
+		const docRef = {};
+		const transaction = {
+			get: jest.fn().mockResolvedValue({
+				exists: true,
+				id: 'job-123',
+				data: () => ({ jobId: 'job-123', status: 'cancelled' }),
+			}),
+			set: jest.fn(),
+		};
+		const firestore = {
+			collection: jest.fn(() => ({ doc: jest.fn(() => docRef) })),
+			runTransaction: jest.fn(async callback => callback(transaction)),
+		};
+		const repository = new JobRepository();
+		repository._getFirestore = jest.fn(() => firestore);
+
+		await expect(repository.save({ jobId: 'job-123', status: 'completed' }, { required: true })).resolves.toBeNull();
+
+		expect(transaction.set).not.toHaveBeenCalled();
+	});
 });

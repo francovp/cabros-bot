@@ -439,6 +439,7 @@ The system provides asynchronous job endpoints to support executing both `expand
 - Feature checks: returns `404 FEATURE_DISABLED` if market scanner jobs are created but `ENABLE_MARKET_SCANNER` is not `'true'`.
 - Persistence: `createJob()` and `getJob()` are async because job metadata/results may be written to or read from Firestore.
 - Render worker mode: set `JOB_EXECUTION_MODE=render-worker` with `REDIS_URL` and durable Firestore credentials. The web process returns `503 JOB_QUEUE_UNAVAILABLE` when the queue cannot accept work; `JOB_QUEUE_*` settings control attempts, backoff, concurrency, leases, and connection timeout. Final BullMQ failures become terminal `failed` jobs and trigger configured failure callbacks. The default `local` mode is unchanged.
+- Durable worker saves reject stale writes that would replace a terminal Firestore job state; claim release and failure transitions also verify ownership transactionally.
 - Telegram commands: async `createJob()` rejections must stay inside the command `try/catch` so `replyValidationError()` can return clear command feedback instead of producing unhandled promise rejections.
 - Eviction: terminal jobs (`completed`, `failed`, `cancelled`, `timed_out`) older than 1 hour are deleted from memory/Firestore and return `404 Not Found`; active jobs are preserved.
 - Background failures: if the worker runs into unexpected exceptions or timeouts, the job is marked `failed` and reported to Sentry.

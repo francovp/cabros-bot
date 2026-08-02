@@ -39,15 +39,33 @@ class JobRepository {
 			return null;
 		}
 
-		memoryJobs.set(sanitized.jobId, cloneJob(sanitized));
-
 		const firestore = this._getFirestore();
 		if (!firestore) {
+			memoryJobs.set(sanitized.jobId, cloneJob(sanitized));
 			return sanitized.jobId;
 		}
 
 		try {
-			await firestore.collection(COLLECTION_NAME).doc(sanitized.jobId).set(sanitized);
+			if (typeof firestore.runTransaction === 'function') {
+				const docRef = firestore.collection(COLLECTION_NAME).doc(sanitized.jobId);
+				const saved = await firestore.runTransaction(async (transaction) => {
+					const snapshot = await transaction.get(docRef);
+					if (snapshot && snapshot.exists) {
+						const current = sanitizeJob({ ...(snapshot.data() || {}), jobId: snapshot.id || sanitized.jobId });
+						if (current && TERMINAL_STATUSES.has(current.status) && current.status !== sanitized.status) {
+							return false;
+						}
+					}
+
+					transaction.set(docRef, sanitized);
+					return true;
+				});
+				if (saved === false) {
+					return null;
+				}
+			} else {
+				await firestore.collection(COLLECTION_NAME).doc(sanitized.jobId).set(sanitized);
+			}
 		} catch (error) {
 			console.warn('[JobRepository] Failed to persist job:', error.message);
 			if (required) {
@@ -58,6 +76,7 @@ class JobRepository {
 			}
 		}
 
+		memoryJobs.set(sanitized.jobId, cloneJob(sanitized));
 		return sanitized.jobId;
 	}
 
