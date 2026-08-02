@@ -186,11 +186,13 @@ newest_claim() {
 
 # last_labeled_event_ts -> timestamp of the most recent agent-working labeled
 # event (fallback for legacy claims made before claim comments existed). Returns
-# 1 when the read fails so legacy handling can fail closed.
+# 1 when the read fails so legacy handling can fail closed. Uses --slurp so the
+# max is computed across ALL paginated pages, never `max`-per-page (which would
+# yield multi-line output and make age_minutes return 99999 on fresh claims).
 last_labeled_event_ts() {
   local out rc=0
-  out="$(gh api --paginate "repos/${REPO}/issues/${ISSUE_NUMBER}/events" --jq '
-    [.[] | select(.event == "labeled" and .label.name == "agent-working") | .created_at]
+  out="$(gh api --paginate --slurp "repos/${REPO}/issues/${ISSUE_NUMBER}/events" --jq '
+    [.[] | .[] | select(.event == "labeled" and .label.name == "agent-working") | .created_at]
     | max // empty' 2>/dev/null)" || rc=$?
   if [ "$rc" -ne 0 ]; then
     return 1
