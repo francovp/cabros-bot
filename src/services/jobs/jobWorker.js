@@ -17,10 +17,21 @@ function hasAttemptsRemaining(job) {
 
 const FINAL_FAILURE_RETRY_DELAY_MS = 1000;
 
-async function finalizeFailedJob(service, jobId, workerId, error, attempt) {
+async function finalizeFailedJob(service, job, workerId, error, attempt) {
+	const jobId = job && job.data && job.data.jobId;
 	while (true) {
 		try {
-			return await service.failQueuedJob(jobId, workerId, error, attempt);
+			const failed = await service.failQueuedJob(jobId, workerId, error, attempt);
+			if (failed || attempt !== null) {
+				return failed;
+			}
+
+			if (typeof job.retry === 'function') {
+				await job.retry('failed');
+				return { requeued: true };
+			}
+
+			return false;
 		} catch (failure) {
 			console.warn('[JobWorker] Failed to persist terminal queue failure; retrying:', failure.message);
 			await new Promise((resolve) => setTimeout(resolve, FINAL_FAILURE_RETRY_DELAY_MS));
@@ -46,8 +57,8 @@ async function startJobWorker({
 		{
 			onFailed: (job, error) => {
 				const jobId = job && job.data && job.data.jobId;
-				const attemptsMade = Number(job && job.attemptsMade);
-				const attempt = Number.isFinite(attemptsMade) ? attemptsMade : null;
+				const claimAttempt = Number(error && error.claimAttempt);
+				const attempt = Number.isFinite(claimAttempt) ? claimAttempt : null;
 				if (!jobId) {
 					return undefined;
 				}
@@ -56,7 +67,7 @@ async function startJobWorker({
 					return service.releaseQueuedJob(jobId, workerId, error, attempt);
 				}
 
-				return finalizeFailedJob(service, jobId, workerId, error, attempt);
+				return finalizeFailedJob(service, job, workerId, error, attempt);
 			},
 		},
 	);

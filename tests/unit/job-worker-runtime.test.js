@@ -50,8 +50,14 @@ describe('job worker runtime', () => {
 		const runtime = await startJobWorker({ queue, service, workerId: 'worker-1' });
 		const retryableJob = { data: { jobId: 'job-123' }, attemptsMade: 1, opts: { attempts: 3 } };
 		const finalJob = { data: { jobId: 'job-456' }, attemptsMade: 3, opts: { attempts: 3 } };
-		const retryError = Object.assign(new Error('transient failure'), { code: 'TEMPORARY_FAILURE' });
-		const finalError = Object.assign(new Error('permanent failure'), { code: 'PERMANENT_FAILURE' });
+		const retryError = Object.assign(new Error('transient failure'), {
+			code: 'TEMPORARY_FAILURE',
+			claimAttempt: 1,
+		});
+		const finalError = Object.assign(new Error('permanent failure'), {
+			code: 'PERMANENT_FAILURE',
+			claimAttempt: 3,
+		});
 
 		await onFailed(retryableJob, retryError);
 		await onFailed(finalJob, finalError);
@@ -82,7 +88,10 @@ describe('job worker runtime', () => {
 			};
 			await startJobWorker({ queue, service, workerId: 'worker-1' });
 			const finalJob = { data: { jobId: 'job-123' }, attemptsMade: 3, opts: { attempts: 3 } };
-			const finalError = Object.assign(new Error('permanent failure'), { code: 'PERMANENT_FAILURE' });
+			const finalError = Object.assign(new Error('permanent failure'), {
+				code: 'PERMANENT_FAILURE',
+				claimAttempt: 3,
+			});
 			const finalization = onFailed(finalJob, finalError);
 
 			await jest.advanceTimersByTimeAsync(FINAL_FAILURE_RETRY_DELAY_MS);
@@ -91,6 +100,37 @@ describe('job worker runtime', () => {
 		} finally {
 			jest.useRealTimers();
 		}
+	});
+
+	it('requeues final failures that never acquired a Firestore claim', async () => {
+		let onFailed;
+		const queue = {
+			isEnabled: () => true,
+			createWorker: jest.fn((handler, options) => {
+				onFailed = options.onFailed;
+				return { id: 'worker-1' };
+			}),
+			closeWorker: jest.fn().mockResolvedValue(undefined),
+		};
+		const service = {
+			processQueuedJob: jest.fn(),
+			failQueuedJob: jest.fn().mockResolvedValue(false),
+		};
+		await startJobWorker({ queue, service, workerId: 'worker-1' });
+		const retry = jest.fn().mockResolvedValue(undefined);
+		const finalJob = {
+			data: { jobId: 'job-123' },
+			attemptsMade: 3,
+			opts: { attempts: 3 },
+			retry,
+		};
+		const finalError = Object.assign(new Error('Firestore unavailable'), {
+			code: 'JOB_CLAIM_UNAVAILABLE',
+		});
+
+		await expect(onFailed(finalJob, finalError)).resolves.toEqual({ requeued: true });
+		expect(service.failQueuedJob).toHaveBeenCalledWith('job-123', 'worker-1', finalError, null);
+		expect(retry).toHaveBeenCalledWith('failed');
 	});
 
 	it('waits for pending callback deliveries before stopping', async () => {

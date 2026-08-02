@@ -656,8 +656,16 @@ class JobService {
 		}
 
 		const job = claim.job;
-		const parsed = this._parseQueuedJob(job);
-		await this._runBackgroundJob(jobId, parsed, job.requestMetadata, botOrGetter, workerId);
+		const claimAttempt = job && job.execution ? job.execution.attempt : null;
+		try {
+			const parsed = this._parseQueuedJob(job);
+			await this._runBackgroundJob(jobId, parsed, job.requestMetadata, botOrGetter, workerId);
+		} catch (error) {
+			if (claimAttempt !== null && claimAttempt !== undefined && error && typeof error === 'object') {
+				error.claimAttempt = claimAttempt;
+			}
+			throw error;
+		}
 		return { skipped: false, jobId };
 	}
 

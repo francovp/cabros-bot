@@ -49,6 +49,29 @@ describe('queued job execution', () => {
 		});
 	});
 
+	it('binds processor failures to the Firestore claim attempt', async () => {
+		const job = {
+			jobId: 'job-123',
+			type: 'expanded-analysis',
+			status: 'processing',
+			execution: { mode: 'render-worker', status: 'claimed', workerId: 'worker-1', attempt: 4 },
+			requestMetadata: {
+				type: 'expanded-analysis',
+				symbols: ['BINANCE:BTCUSDT'],
+			},
+		};
+		const repository = {
+			claim: jest.fn().mockResolvedValue({ claimed: true, job }),
+		};
+		const service = new JobService(repository);
+		const error = new Error('worker failed');
+		service._runBackgroundJob = jest.fn().mockRejectedValue(error);
+
+		await expect(service.processQueuedJob('job-123', null, 'worker-1')).rejects.toMatchObject({
+			claimAttempt: 4,
+		});
+	});
+
 	it('persists a terminal failure for a final worker attempt', async () => {
 		const repository = {
 			failClaim: jest.fn().mockResolvedValue(true),
