@@ -91,6 +91,12 @@ async function validateAdminAccess(req, res, next) {
 		});
 	}
 
+	const suppliedApiKey = req.headers['x-api-key'] || req.query['api-key'];
+	if (suppliedApiKey !== undefined && isValidApiKey(req)) {
+		req.adminRole = ADMIN_OPERATOR;
+		return next();
+	}
+
 	const authorization = req.headers.authorization;
 	const match = typeof authorization === 'string' && authorization.match(/^Bearer\s+(\S+)$/i);
 	if (match) {
@@ -108,12 +114,7 @@ async function validateAdminAccess(req, res, next) {
 		}
 	}
 
-	const suppliedApiKey = req.headers['x-api-key'] || req.query['api-key'];
 	if (suppliedApiKey !== undefined) {
-		if (isValidApiKey(req)) {
-			req.adminRole = ADMIN_OPERATOR;
-			return next();
-		}
 		return res.status(403).json({ error: 'Forbidden: Invalid API key' });
 	}
 

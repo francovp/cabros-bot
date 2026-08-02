@@ -116,6 +116,21 @@ describe('Firebase admin authorization', () => {
 		expect(response.body).toEqual({ error: 'Forbidden: Invalid API key' });
 	});
 
+	it('accepts a valid API key when an invalid Firebase bearer token is also supplied', async () => {
+		process.env.WEBHOOK_API_KEY = 'legacy-key';
+		admin.auth = jest.fn(() => ({
+			verifyIdToken: jest.fn().mockRejectedValue(new Error('expired token')),
+		}));
+
+		const response = await request(createApp())
+			.get('/read')
+			.set('Authorization', 'Bearer expired-token')
+			.set('x-api-key', 'legacy-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body).toEqual({ role: 'admin.operator' });
+	});
+
 	it('preserves the existing API-key middleware behavior when Firebase auth is disabled', async () => {
 		delete process.env.ENABLE_FIREBASE_ADMIN_AUTH;
 
