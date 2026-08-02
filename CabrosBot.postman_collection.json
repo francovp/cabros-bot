@@ -212,6 +212,20 @@
                 "key": "x-api-key",
                 "value": "{{apiKey}}",
                 "type": "text"
+              },
+              {
+                "key": "idempotency-key",
+                "value": "alert-key-1",
+                "type": "text",
+                "description": "Canonical idempotency header",
+                "disabled": true
+              },
+              {
+                "key": "x-idempotency-key",
+                "value": "alert-key-1",
+                "type": "text",
+                "description": "Alternative x-prefixed idempotency header variant",
+                "disabled": true
               }
             ],
             "body": {
