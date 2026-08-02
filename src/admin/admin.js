@@ -378,6 +378,7 @@ const createJobStatusForm = () => {
 	const actions = element('div', { className: 'form-actions' });
 	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
 	form.append(button, actions, output);
+	let statusRequestVersion = 0;
 
 	const renderActions = (job, jobId) => {
 		actions.replaceChildren();
@@ -417,18 +418,21 @@ const createJobStatusForm = () => {
 	form.addEventListener('submit', async (event) => {
 		event.preventDefault();
 		const jobId = form.elements['path-jobId'].value;
+		const requestVersion = ++statusRequestVersion;
 		const data = await sendRequest({
 			definition,
 			path: fillPath(definition.path, pathNames, form),
 			button,
 			output,
 		});
+		if (requestVersion !== statusRequestVersion || form.elements['path-jobId'].value !== jobId) return;
 		if (data && data.status) renderActions(data, jobId);
 		else actions.replaceChildren();
 	});
 	return {
 		form,
 		selectJob: (jobId) => {
+			statusRequestVersion += 1;
 			jobIdInput.value = jobId;
 			actions.replaceChildren();
 			output.textContent = 'Job selected. Submit to load its status.';

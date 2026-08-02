@@ -439,6 +439,38 @@ describe('admin browser client', () => {
 		expect(statusForm.elements['path-jobId'].value).toBe('selected-job');
 	});
 
+	it('ignores a pending status response after selecting another recent job', async () => {
+		let resolveStatus;
+		const pendingStatus = new Promise((resolve) => { resolveStatus = resolve; });
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/jobs?')) return response({ success: true, jobs: [{
+					jobId: 'job-b', type: 'market-scanner', status: 'processing', progress: {},
+				}] });
+				if (url === '/api/jobs/job-a') return pendingStatus;
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'jobs');
+
+		const listForm = findForm(browser.elementsById.view, 'Load recent jobs');
+		await listForm.dispatch('submit');
+		await flush();
+		const statusForm = findForm(browser.elementsById.view, 'GET /api/jobs/{jobId}');
+		statusForm.elements['path-jobId'].value = 'job-a';
+		const pendingSubmit = statusForm.dispatch('submit');
+		await flush();
+		await findButton(listForm, 'Open status').dispatch('click');
+		resolveStatus(response({ jobId: 'job-a', status: 'processing', results: [] }));
+		await pendingSubmit;
+		await flush();
+
+		expect(statusForm.elements['path-jobId'].value).toBe('job-b');
+		expect(findButton(statusForm, 'Cancel job')).toBeUndefined();
+	});
+
 	it('shows cancel only for a fetched active job', async () => {
 		const job = { jobId: 'job-1', status: 'processing', results: [] };
 		const browser = createBrowser({
