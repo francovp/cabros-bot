@@ -94,6 +94,17 @@ class JobQueue {
 			return { queued: true, jobId };
 		} catch (error) {
 			this._recordError(error);
+			if (typeof this.queue?.getJob === 'function') {
+				try {
+					if (await this.queue.getJob(jobId)) {
+						this.metrics.enqueued += 1;
+						this.metrics.lastEnqueuedAt = new Date().toISOString();
+						return { queued: true, jobId };
+					}
+				} catch (reconciliationError) {
+					this._recordError(reconciliationError);
+				}
+			}
 			throw new JobQueueUnavailableError();
 		}
 	}

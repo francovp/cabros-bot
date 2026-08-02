@@ -1215,10 +1215,13 @@ class JobService {
 		const saved = await this.repository.save(job, {
 			required: job.execution && job.execution.mode === 'render-worker',
 		});
-		if (saved === null && job._workerId) {
-			const error = new Error('Job claim is no longer owned by this worker.');
-			error.code = 'JOB_CLAIM_LOST';
-			throw error;
+		if (saved === null) {
+			if (job._workerId) {
+				const error = new Error('Job claim is no longer owned by this worker.');
+				error.code = 'JOB_CLAIM_LOST';
+				throw error;
+			}
+			return false;
 		}
 		return true;
 	}

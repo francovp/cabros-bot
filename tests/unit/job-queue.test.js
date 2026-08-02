@@ -45,6 +45,26 @@ describe('JobQueue', () => {
 		expect(add.mock.calls[0][1]).toEqual({ jobId: 'job-123' });
 	});
 
+	it('treats an enqueue acknowledgement loss as accepted when BullMQ has the job', async () => {
+		const add = jest.fn().mockRejectedValue(new Error('Redis connection lost after write'));
+		const getJob = jest.fn().mockResolvedValue({ id: 'job-123', data: { jobId: 'job-123' } });
+		const waitUntilReady = jest.fn().mockResolvedValue(undefined);
+		const queueClient = { add, getJob, waitUntilReady, close: jest.fn() };
+		const QueueClass = jest.fn(() => queueClient);
+		const RedisClass = jest.fn(() => ({ disconnect: jest.fn() }));
+
+		process.env = {
+			...savedEnv,
+			JOB_EXECUTION_MODE: 'render-worker',
+			REDIS_URL: 'redis://queue.example:6379',
+		};
+
+		const queue = new JobQueue({ QueueClass, RedisClass });
+
+		await expect(queue.enqueue('job-123')).resolves.toEqual({ queued: true, jobId: 'job-123' });
+		expect(getJob).toHaveBeenCalledWith('job-123');
+	});
+
 	it('can retry enqueue after an initial queue readiness failure', async () => {
 		const firstClose = jest.fn().mockResolvedValue(undefined);
 		const firstQueue = {

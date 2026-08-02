@@ -423,7 +423,26 @@ describe('JobService Unit Tests', () => {
 				code: 'TERMINAL_JOB',
 				status: 'completed',
 			});
-	});
+		});
+
+		it('rejects cancellation when its durable save is rejected without a worker claim', async () => {
+			const processingJob = {
+				jobId: 'cancel-save-rejected-job',
+				status: 'processing',
+				createdAt: new Date().toISOString(),
+			};
+			const repository = {
+				get: jest.fn().mockImplementation(() => Promise.resolve({ ...processingJob })),
+				save: jest.fn().mockResolvedValue(null),
+			};
+			const service = new JobService(repository);
+
+			await expect(service.cancelJob(processingJob.jobId)).resolves.toMatchObject({
+				success: false,
+				code: 'CANCEL_REJECTED',
+				status: 'processing',
+			});
+		});
 
 		it('retries a failed/cancelled job and creates a new one with requestMetadata', async () => {
 			const metadata = await jobService.createJob('expanded-analysis', {
