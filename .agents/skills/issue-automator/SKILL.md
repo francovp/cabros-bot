@@ -63,7 +63,7 @@ Multiple agents (Codex, Antigravity, OpenCode) may run hourly sessions against t
 
 1. It re-fetches the issue. If it already carries the `agent-working` label, it inspects the newest claim comment:
    - Owned by another session and fresh (younger than `CLAIM_TTL_MINUTES`) → prints `RESULT=SKIP`, exits `2`. The issue must NOT be touched.
-   - Stale (older than `CLAIM_TTL_MINUTES`) → takes over: posts a new claim comment and exits `0` with `RESULT=TAKEOVER`.
+   - Stale (older than `CLAIM_TTL_MINUTES`) → takes over: posts a new claim comment and exits `0` with `RESULT=TAKEOVER`. Takeover posts arbitrate the race with the same earliest-claim-comment-wins rule, so simultaneous takeovers leave exactly one owner.
    - Owned by this session (same agent + session id) → renews the claim timestamp and exits `0` with `RESULT=CLAIMED`.
    - Label present but no claim comment (legacy claim) → falls back to the most recent `agent-working` labeled event timestamp, applying the same TTL freshness rule.
 2. If the issue is unclaimed, it adds the `agent-working` label and posts a claim comment (`**agent-claim**: <agent> <session> <ISO-8601 timestamp>`), then re-reads the comments and arbitrates concurrent races by comment ID — the earliest new claim wins, the loser deletes its comment and exits `2` (`RESULT=SKIP`). Historical claim comments from already-released issues are ignored.
@@ -72,8 +72,10 @@ A claimed issue is a **zero-work skip**: outcome `CLAIMED`, the issue number is 
 
 **Required environment variables** (set them in the session prompt / cron invocation):
 - `CLAIM_AGENT_ID` — the agent identity (e.g., `codex`, `antigravity`, `opencode`). REQUIRED for meaningful coordination; without it claims cannot be attributed to a session.
-- `CLAIM_SESSION_ID` — the session identity (auto-generated when omitted). Reuse the same value to continue work across sessions of the same agent.
+- `CLAIM_SESSION_ID` — the session identity. Optional: when omitted, the script generates one and persists it per agent+repository (see `CLAIM_SESSION_REUSE_MINUTES`), so consecutive invocations of the same run share it automatically. Export it explicitly (`export CLAIM_SESSION_ID="$(uuidgen)"` or similar) only when the same session continues across separate shells.
 - `CLAIM_TTL_MINUTES` — claim freshness window in minutes (default `180`). A claim older than this may be taken over by any agent.
+- `CLAIM_SESSION_REUSE_MINUTES` — reuse window in minutes (default `30`) for the persisted auto-generated session ID; past it, a fresh session ID is generated.
+- `CLAIM_SESSION_STATE_DIR` — directory for the persisted session ID (default `${TMPDIR:-/tmp}`; one file per repository+agent).
 
 **Rules**
 - Never start code, Linear, or PR work on an issue this session does not own (claim script exit `0` required).
@@ -109,7 +111,7 @@ Follow these steps in strict chronological order to automate issue resolution:
 4. Do not fetch, inspect, select, plan, or create TODOs for any second issue at this stage.
 5. If no open GitHub issues exist (and none was specified), stop execution immediately.
 6. For the primary issue:
-   - **Claim the issue immediately** — before any further analysis, run `scripts/claim-issue.sh <ISSUE_NUMBER>` so other concurrent sessions see this issue is being handled:
+   - **Claim the issue immediately** — before any further analysis, run `scripts/claim-issue.sh <ISSUE_NUMBER>` so other concurrent sessions see this issue is being handled. When `CLAIM_SESSION_ID` is omitted, the script auto-generates and persists one per agent+repository so the Step 2 re-check shares the same session identity:
      - `RESULT=CLAIMED` or `RESULT=TAKEOVER` (exit `0`): this session owns the issue — proceed with the checks below.
      - `RESULT=SKIP` (exit `2`): another agent session owns this issue with a fresh claim. Record outcome `CLAIMED`, append the issue number to `SKIPPED_ISSUES`, and advance via the Step 6 skip loop. This is a **zero-work skip**: it does NOT count toward the session's issue budget (e.g., 3 issues per session) or the max-2 write budget (Hard Rule #4). If the issue was user-specified, end the run with outcome `CLAIMED` — never advance past a user-specified issue.
      - `RESULT=ERROR` (exit `1`): handle like a tooling failure (see Error Handling).
