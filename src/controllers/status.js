@@ -4,6 +4,7 @@ const { scannerPresetService } = require('../services/scannerPresets/ScannerPres
 const idempotencyStorageService = require('../services/storage/IdempotencyStorageService');
 const { isFirestoreConfigured } = require('../services/storage/firestoreConfig');
 const SignalOutcomeService = require('../services/storage/SignalOutcomeService');
+const equityMarketDataService = require('../services/storage/EquityMarketDataService');
 
 const DEFAULT_TRADINGVIEW_MCP_URL = 'https://tradingview-mcp.onrender.com/mcp';
 const DEFAULT_AZURE_LLM_ENDPOINT = 'https://models.github.ai/inference';
@@ -166,6 +167,7 @@ function getStatus() {
 	const messageFooterMetadataEnabled = process.env.ENABLE_MESSAGE_FOOTER_METADATA !== 'false';
 	const signalOutcomeTrackingEnabled = isEnabled(process.env.ENABLE_SIGNAL_OUTCOME_TRACKING)
 		|| isEnabled(process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING);
+	const equityMarketDataStatus = equityMarketDataService.getStatus();
 	const llmAlertEnrichmentDependencyEnabled = llmAlertEnrichmentEnabled && newsMonitorEnabled;
 
 	const telegram = dependencyStatus({
@@ -284,6 +286,7 @@ function getStatus() {
 			cloudflareAig: cloudflareAigEnabled,
 			messageFooterMetadata: messageFooterMetadataEnabled,
 			signalOutcomeTracking: signalOutcomeTrackingEnabled,
+			equityMarketData: equityMarketDataStatus.enabled,
 			firestoreIdempotency: idempotencyStorageService.isEnabled(),
 		},
 		deliveryChannels: {
@@ -324,6 +327,7 @@ function getStatus() {
 			newsMonitorDedup,
 			idempotencyStorage: idempotencyStorageService.getStorageStatus(),
 			scannerPresetStorage: scannerPresetService.getStorageStatus(),
+			equityMarketData: equityMarketDataStatus,
 			signalOutcomeWorker: {
 				...dependencyStatus({
 					enabled: signalOutcomeWorkerStatus.enabled,

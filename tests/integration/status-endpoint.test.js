@@ -306,6 +306,29 @@ describe('Status endpoints', () => {
 		expect(response.body.dependencies.signalOutcomeWorker.enabled).toBe(true);
 	});
 
+	it('reports equity market-data readiness without exposing provider credentials', async () => {
+		process.env.ENABLE_EQUITY_MARKET_DATA = 'true';
+		process.env.EQUITY_MARKET_DATA_PROVIDER = 'twelve-data';
+		process.env.TWELVE_DATA_API_KEY = 'secret-equity-key';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.equityMarketData).toBe(true);
+		expect(response.body.dependencies.equityMarketData).toEqual({
+			provider: 'twelve-data',
+			enabled: true,
+			configured: true,
+			ready: true,
+			status: 'ready',
+			supportedExchanges: ['BATS', 'NASDAQ'],
+			timeoutMs: 5000,
+		});
+		expect(JSON.stringify(response.body)).not.toContain('secret-equity-key');
+	});
+
 	it('reports Firestore job storage as disabled by default', async () => {
 		delete process.env.ENABLE_FIRESTORE_ALERT_STORAGE;
 

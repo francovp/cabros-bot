@@ -131,4 +131,35 @@ describe('Shadow-Mode Outcome Tracking Integration Tests', () => {
 
 		expect(JSON.parse(exportRes.headers['x-shadow-mode-metrics'])).toBe('No measurements found');
 	});
+
+	it('keeps alert delivery fail-open when the equity provider is rate limited', async () => {
+		process.env.ENABLE_EQUITY_MARKET_DATA = 'true';
+		process.env.EQUITY_MARKET_DATA_PROVIDER = 'twelve-data';
+		process.env.TWELVE_DATA_API_KEY = 'test-twelve-data-key';
+		const originalFetch = global.fetch;
+		global.fetch = jest.fn().mockResolvedValue({
+			ok: false,
+			status: 429,
+			json: async () => ({ status: 'error', code: 429, message: 'quota exceeded' }),
+		});
+
+		try {
+			const postRes = await request(app)
+				.post('/api/webhook/alert')
+				.set('x-api-key', 'test-key')
+				.send({ text: 'NASDAQ:AAPL (1h) BUY' });
+
+			expect(postRes.status).toBe(200);
+			expect(postRes.body.success).toBe(true);
+			await new Promise((resolve) => setImmediate(resolve));
+
+			const outcomesMap = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME);
+			const [, docData] = [...outcomesMap.entries()][0];
+			expect(docData.eligibilityState).toBe('equity_provider_unavailable');
+			expect(docData.eligibilityReason).toBe('twelve_data_rate_limited');
+			expect(docData.outcomeEvaluated).toBe(true);
+		} finally {
+			global.fetch = originalFetch;
+		}
+	});
 });
