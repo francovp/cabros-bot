@@ -106,6 +106,138 @@ describe('queued job execution', () => {
 		await expect(run).resolves.toEqual({ skipped: true, reason: 'terminal' });
 	});
 
+	it('does not replay a delivery with a completed durable checkpoint', async () => {
+		const job = {
+			jobId: 'job-123',
+			type: 'expanded-analysis',
+			status: 'processing',
+			createdAt: new Date().toISOString(),
+			execution: {
+				mode: 'render-worker',
+				status: 'claimed',
+				workerId: 'worker-1',
+				attempt: 2,
+			},
+			requestMetadata: {
+				type: 'expanded-analysis',
+				symbols: ['BINANCE:BTCUSDT'],
+			},
+			fullResults: [{ symbol: 'BINANCE:BTCUSDT', status: 'analyzed' }],
+			fullScanResults: [],
+			deliveryCheckpoint: {
+				status: 'completed',
+				results: [{ success: true, channel: 'telegram', messageId: 'message-1' }],
+			},
+		};
+		const repository = {
+			get: jest.fn().mockResolvedValue(job),
+			save: jest.fn().mockResolvedValue(job.jobId),
+		};
+		const service = new JobService(repository);
+		service._executeExpandedAnalysis = jest.fn();
+		service._triggerCallbackIfConfigured = jest.fn().mockResolvedValue(undefined);
+
+		await service._runBackgroundJob(
+			job.jobId,
+			{ symbols: [{ raw: 'BINANCE:BTCUSDT' }] },
+			job.requestMetadata,
+			null,
+			'worker-1',
+		);
+
+		expect(service._executeExpandedAnalysis).not.toHaveBeenCalled();
+		expect(service._triggerCallbackIfConfigured).toHaveBeenCalledWith(
+			expect.objectContaining({ status: 'completed' }),
+			{ awaitDelivery: true },
+		);
+	});
+
+	it('stops a redelivered job when the prior notification outcome is unknown', async () => {
+		const job = {
+			jobId: 'job-123',
+			type: 'expanded-analysis',
+			status: 'processing',
+			createdAt: new Date().toISOString(),
+			execution: {
+				mode: 'render-worker',
+				status: 'claimed',
+				workerId: 'worker-1',
+				attempt: 2,
+			},
+			requestMetadata: {
+				type: 'expanded-analysis',
+			symbols: ['BINANCE:BTCUSDT'],
+			},
+			deliveryCheckpoint: { status: 'in_flight', deliveryId: 'delivery-1' },
+		};
+		const repository = {
+			get: jest.fn().mockResolvedValue(job),
+			save: jest.fn().mockResolvedValue(job.jobId),
+		};
+		const service = new JobService(repository);
+		service._executeExpandedAnalysis = jest.fn();
+
+		await expect(service._runBackgroundJob(
+			job.jobId,
+			{ symbols: [{ raw: 'BINANCE:BTCUSDT' }] },
+			job.requestMetadata,
+			null,
+			'worker-1',
+		)).rejects.toMatchObject({ code: 'JOB_DELIVERY_RECONCILIATION_REQUIRED' });
+
+		expect(service._executeExpandedAnalysis).not.toHaveBeenCalled();
+	});
+
+	it('persists a durable delivery checkpoint around notification sending', async () => {
+		const job = {
+			jobId: 'job-123',
+			status: 'processing',
+			execution: {
+				mode: 'render-worker',
+				status: 'running',
+				workerId: 'worker-1',
+				attempt: 2,
+			},
+			_workerId: 'worker-1',
+		};
+		const savedJobs = [];
+		const repository = {
+			get: jest.fn().mockResolvedValue(job),
+			save: jest.fn().mockImplementation(async (currentJob) => {
+				savedJobs.push(JSON.parse(JSON.stringify(currentJob)));
+				return currentJob.jobId;
+			}),
+		};
+		const service = new JobService(repository);
+		const results = [{ success: true, channel: 'telegram', messageId: 'message-1' }];
+		const notificationManager = {
+			sendToAll: jest.fn().mockResolvedValue(results),
+			getEnabledChannels: () => ['telegram'],
+		};
+
+		await expect(service._sendQueuedNotification(
+			job,
+			notificationManager,
+			{ text: 'BTC alert' },
+			{},
+		)).resolves.toEqual(results);
+
+		expect(savedJobs[0]).toEqual(
+			expect.objectContaining({
+				deliveryCheckpoint: expect.objectContaining({ status: 'in_flight' }),
+			}),
+		);
+		expect(notificationManager.sendToAll).toHaveBeenCalledTimes(1);
+		expect(savedJobs[1]).toEqual(
+			expect.objectContaining({
+				deliveryCheckpoint: expect.objectContaining({
+					status: 'completed',
+					results,
+				}),
+			}),
+		);
+	});
+
 	it('binds processor failures to the Firestore claim attempt', async () => {
 		const job = {
 			jobId: 'job-123',
@@ -143,6 +275,7 @@ describe('queued job execution', () => {
 		expect(repository.failClaim).toHaveBeenCalledWith('job-123', 'worker-1', error);
 		expect(service._triggerCallbackIfConfigured).toHaveBeenCalledWith(
 			expect.objectContaining({ jobId: 'job-123', status: 'failed' }),
+			{ awaitDelivery: true },
 		);
 	});
 

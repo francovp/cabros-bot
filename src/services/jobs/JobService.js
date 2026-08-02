@@ -740,7 +740,7 @@ class JobService {
 		if (failed) {
 			const job = await this.repository.get(jobId);
 			if (job) {
-				await this._triggerCallbackIfConfigured(job);
+				await this._triggerCallbackIfConfigured(job, { awaitDelivery: true });
 			}
 		}
 
@@ -757,8 +757,20 @@ class JobService {
 		const claimAttempt = job.execution && job.execution.mode === 'render-worker'
 			? job.execution.attempt
 			: null;
-		if (workerId && job.execution && job.execution.mode === 'render-worker') {
+		const queuedExecution = Boolean(
+			workerId
+			&& job.execution
+			&& job.execution.mode === 'render-worker',
+		);
+		if (queuedExecution) {
 			job._workerId = workerId;
+		}
+		if (queuedExecution && job.deliveryCheckpoint?.status === 'in_flight') {
+			const error = new Error(
+				'Notification delivery was interrupted before its durable outcome was recorded.',
+			);
+			error.code = 'JOB_DELIVERY_RECONCILIATION_REQUIRED';
+			throw error;
 		}
 
 		job.status = 'processing';
@@ -817,7 +829,13 @@ class JobService {
 		const signal = controller.signal;
 
 		try {
-			if (job.type === 'expanded-analysis') {
+			if (queuedExecution && job.deliveryCheckpoint?.status === 'completed') {
+				job.deliveryResults = job.deliveryCheckpoint.results || [];
+				job.summary = job.type === 'market-scanner'
+					? this._buildScannerSummary(job.fullScanResults || [], job.deliveryResults)
+					: this._buildExpandedSummary(job.fullResults || [], job.deliveryResults);
+				job.status = 'completed';
+			} else if (job.type === 'expanded-analysis') {
 				await this._executeExpandedAnalysis(job, parsed, signal, botOrGetter);
 			} else if (job.type === 'market-scanner') {
 				await this._executeMarketScanner(job, parsed, signal, botOrGetter);
@@ -875,7 +893,9 @@ class JobService {
 					this._finishQueuedExecution(finalJob);
 					finalJob.updatedAt = new Date().toISOString();
 					await this._persistJob(finalJob);
-					await this._triggerCallbackIfConfigured(finalJob);
+					await this._triggerCallbackIfConfigured(finalJob, {
+						awaitDelivery: queuedExecution,
+					});
 					return;
 				}
 
@@ -883,7 +903,9 @@ class JobService {
 				this._finishQueuedExecution(job);
 				job.updatedAt = new Date().toISOString();
 				await this._persistJob(job);
-				await this._triggerCallbackIfConfigured(job);
+				await this._triggerCallbackIfConfigured(job, {
+					awaitDelivery: queuedExecution,
+				});
 			}
 		}
 	}
@@ -1014,7 +1036,12 @@ class JobService {
 		}
 
 		const routing = this._getRoutingFromJob(job);
-		const deliveryResults = await sendWithNotificationRouting(notificationManager, { text: alertText }, routing);
+		const deliveryResults = await this._sendQueuedNotification(
+			job,
+			notificationManager,
+			{ text: alertText },
+			routing,
+		);
 		if (this._isClaimLost(signal)) {
 			return;
 		}
@@ -1149,7 +1176,12 @@ class JobService {
 		}
 
 		const routing = this._getRoutingFromJob(job);
-		const deliveryResults = await sendWithNotificationRouting(notificationManager, { text: alertText }, routing);
+		const deliveryResults = await this._sendQueuedNotification(
+			job,
+			notificationManager,
+			{ text: alertText },
+			routing,
+		);
 		if (this._isClaimLost(signal)) {
 			return;
 		}
@@ -1186,6 +1218,63 @@ class JobService {
 			throw error;
 		}
 		return true;
+	}
+
+	_isQueuedExecution(job) {
+		return Boolean(
+			job
+			&& job._workerId
+			&& job.execution
+			&& job.execution.mode === 'render-worker',
+		);
+	}
+
+	async _sendQueuedNotification(job, notificationManager, alert, routing = {}, options = {}) {
+		if (!this._isQueuedExecution(job)) {
+			return sendWithNotificationRouting(notificationManager, alert, routing, options);
+		}
+
+		const existingCheckpoint = job.deliveryCheckpoint;
+		if (existingCheckpoint?.status === 'in_flight') {
+			const error = new Error(
+				'Notification delivery was interrupted before its durable outcome was recorded.',
+			);
+			error.code = 'JOB_DELIVERY_RECONCILIATION_REQUIRED';
+			throw error;
+		}
+		if (existingCheckpoint?.status === 'completed') {
+			return existingCheckpoint.results || job.deliveryResults || [];
+		}
+
+		// ponytail: providers have no shared exactly-once API; fail closed on an unknown delivery and require reconciliation before replay.
+		const deliveryId = uuidv4();
+		job.deliveryCheckpoint = {
+			status: 'in_flight',
+			deliveryId,
+			requestedChannels: getRequestedChannels(notificationManager, routing),
+			startedAt: new Date().toISOString(),
+		};
+		await this._persistJob(job);
+
+		const deliveryResults = await sendWithNotificationRouting(
+			notificationManager,
+			{
+				...alert,
+				requestId: deliveryId,
+				deliveryId,
+			},
+			routing,
+			options,
+		);
+		job.deliveryResults = deliveryResults;
+		job.deliveryCheckpoint = {
+			...job.deliveryCheckpoint,
+			status: 'completed',
+			results: deliveryResults,
+			completedAt: new Date().toISOString(),
+		};
+		await this._persistJob(job);
+		return deliveryResults;
 	}
 
 	_finishQueuedExecution(job) {

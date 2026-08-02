@@ -844,7 +844,7 @@ For completed ranked market-scanner jobs, `scanResults[].scores[]` contains the 
 
 Set `ENABLE_FIRESTORE_JOB_STORAGE=true` plus the normal Firebase Admin credentials (`FIREBASE_SERVICE_ACCOUNT_JSON` or `GOOGLE_APPLICATION_CREDENTIALS`) to enable durable job storage. The legacy in-memory path remains the fallback when Firestore is disabled or unavailable.
 
-By default, jobs still execute in-process. With `JOB_EXECUTION_MODE=render-worker`, the web service stores sanitized job metadata in Firestore and enqueues only the `jobId` in Redis; the dedicated `pnpm run start-worker` process claims the job transactionally, renews its lease at persistence checkpoints, and drains BullMQ work on `SIGTERM`. Missing Redis or durable Firestore storage fails the create request with `503 JOB_QUEUE_UNAVAILABLE`.
+By default, jobs still execute in-process. With `JOB_EXECUTION_MODE=render-worker`, the web service stores sanitized job metadata in Firestore and enqueues only the `jobId` in Redis; the dedicated `pnpm run start-worker` process claims the job transactionally, renews its lease at persistence checkpoints, and drains BullMQ work on `SIGTERM`. Notification delivery is checkpointed durably before and after the external send; a redelivery with an unknown outcome fails closed as `JOB_DELIVERY_RECONCILIATION_REQUIRED` rather than sending the same alert twice. Missing Redis or durable Firestore storage fails the create request with `503 JOB_QUEUE_UNAVAILABLE`.
 
 **Response (200 OK - Processing):**
 ```json
