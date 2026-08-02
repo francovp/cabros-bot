@@ -294,6 +294,42 @@ describe('Status endpoints', () => {
 		expect(response.body.dependencies.signalOutcomeWorker.enabled).toBe(true);
 	});
 
+	it('reports dedicated worker role and heartbeat counters', async () => {
+		process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+		process.env.SIGNAL_OUTCOME_WORKER_ROLE = 'worker';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.signalOutcomeWorker).toMatchObject({
+			role: 'worker',
+			running: false,
+			lastRunScannedCount: 0,
+			lastRunPendingCount: 0,
+			lastRunErrorCount: 0,
+			shutdownRequested: false,
+		});
+	});
+
+	it('does not report a disabled local scheduler as ready', async () => {
+		process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+		process.env.SIGNAL_OUTCOME_WORKER_ROLE = 'disabled';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.signalOutcomeWorker).toMatchObject({
+			enabled: true,
+			role: 'disabled',
+			ready: false,
+			status: 'disabled',
+		});
+	});
+
 	it('reports signal outcome tracking from the legacy environment variable', async () => {
 		process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING = 'true';
 

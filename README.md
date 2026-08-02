@@ -89,6 +89,7 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 - `TWELVE_DATA_API_KEY` - Twelve Data API key; sent in the `Authorization` header and never returned by status endpoints
 - `TWELVE_DATA_BASE_URL` - Optional Twelve Data base URL override (default: `https://api.twelvedata.com`)
 - `EQUITY_MARKET_DATA_TIMEOUT_MS` - Per-request equity market-data timeout, capped at 30 seconds (default: `5000`)
+- `SIGNAL_OUTCOME_WORKER_ROLE` - Scheduler role: `web` preserves the local/web timer, `worker` enables only the dedicated worker entrypoint, and `disabled` prevents scheduler startup (default: `web`)
 - `FIREBASE_SERVICE_ACCOUNT_JSON` - Inline Firebase service account JSON for server-side Firestore access
 - `FIREBASE_PROJECT_ID` - Optional Firebase project override for Admin SDK initialization
 - `GOOGLE_APPLICATION_CREDENTIALS` - Optional path to a service account JSON file for local development
@@ -230,6 +231,9 @@ When `ENABLE_FIRESTORE_JOB_STORAGE=true`, `featureFlags.firestoreJobStorage` rep
 `featureFlags.cloudflareAig` reports `ENABLE_CLOUDFLARE_AIG`, while `dependencies.cloudflareAig` reports whether the Cloudflare AI Gateway credentials are configured and ready.
 
 When `ENABLE_EQUITY_MARKET_DATA=true`, `dependencies.equityMarketData` reports Twelve Data readiness and the supported `BATS`/`NASDAQ` exchanges without exposing the API key. Signal outcome tracking uses `/quote` for missing entry prices and `/time_series` for bounded historical bars; provider, timeout, malformed-data, and quota failures mark equity outcomes unavailable without blocking alert delivery. Extended-hours data is excluded by default. Confirm current Twelve Data plan limits and licensing before production use: [pricing](https://twelvedata.com/pricing), [US equities coverage](https://support.twelvedata.com/en/articles/9935903-us-equities-market-data), and [commercial usage](https://support.twelvedata.com/en/articles/5332349-commercial-and-personal-usage).
+`dependencies.signalOutcomeWorker` reports the scheduler role, shutdown state, cadence/budgets, and the last-sweep heartbeat counters (`lastRunAt`, scanned, pending, evaluated, and error counts). The `worker` role is intended for the dedicated Render service; set the web service role to `disabled` during cutover so only one scheduler is active. A disabled local scheduler reports `ready: false` and `status: "disabled"` because it is not the process evaluating outcomes.
+
+The dedicated worker also persists the same non-sensitive heartbeat to `workerHeartbeats/signal-outcome` in Firestore. Heartbeat writes fail open and never block alert delivery.
 
 `GET /api/capabilities` is an alias for the same payload.
 
@@ -273,6 +277,19 @@ When `ENABLE_EQUITY_MARKET_DATA=true`, `dependencies.equityMarketData` reports T
     "tradingViewVolumeConfirmation": { "enabled": false, "configured": true, "ready": false, "status": "disabled" },
     "firestore": { "enabled": true, "configured": true, "ready": true, "status": "ready" },
     "firestoreJobStorage": { "enabled": false, "configured": true, "ready": false, "status": "disabled" },
+    "signalOutcomeWorker": {
+      "enabled": false,
+      "configured": true,
+      "ready": false,
+      "status": "disabled",
+      "role": "web",
+      "running": false,
+      "shutdownRequested": false,
+      "lastRunScannedCount": 0,
+      "lastRunPendingCount": 0,
+      "lastRunEvaluatedCount": 0,
+      "lastRunErrorCount": 0
+    },
     "sentry": { "enabled": true, "configured": true, "ready": true, "status": "ready" },
     "langfuse": { "enabled": false, "configured": false, "ready": false, "status": "disabled" },
     "braveSearch": { "enabled": false, "configured": false, "ready": false, "status": "disabled" },
@@ -1631,6 +1648,8 @@ The application includes support for Render.com deployment:
 - Respects `RENDER` environment variable
 - Skips bot launch in preview environments (`IS_PULL_REQUEST=true`)
 - Sends deployment notification to admin chat on startup
+- `render.yaml` defines an opt-in paid `starter` Background Worker using `pnpm run start:signal-outcome-worker`. It is configured with `SIGNAL_OUTCOME_WORKER_ROLE=worker` and `ENABLE_SIGNAL_OUTCOME_TRACKING` as a manual value so the paid worker and Firestore credential decision are explicit.
+- To cut over production, enable signal tracking on both services, set the web service's `SIGNAL_OUTCOME_WORKER_ROLE=disabled`, and keep the worker role as `worker`. Leave the default web role as `web` when the dedicated worker is not enabled.
 
 ### Local Development
 

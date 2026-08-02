@@ -6,15 +6,47 @@ const equityMarketDataService = require('./EquityMarketDataService');
 const { MainClient } = require('binance');
 
 const COLLECTION_NAME = 'tradingSignalOutcomes';
+const HEARTBEAT_COLLECTION_NAME = 'workerHeartbeats';
+const HEARTBEAT_DOCUMENT_ID = 'signal-outcome';
+const HEARTBEAT_WRITE_TIMEOUT_MS = 5000;
+const MAX_WORKER_DRAIN_TIMEOUT_MS = 30000;
 const MAX_TIMER_DELAY_MS = 2147483647;
+const WORKER_ROLES = new Set(['web', 'worker', 'disabled']);
 let binanceClient = null;
 let isEvaluating = false;
 let workerTimer = null;
+let activeEvaluationPromise = null;
+let shutdownRequested = false;
 let activeIntervalMs = null;
 let lastRunAt = null;
 let lastRunDurationMs = null;
+let lastRunScannedCount = 0;
 let lastRunEvaluatedCount = 0;
+let lastRunPendingCount = 0;
+let lastRunErrorCount = 0;
 let lastEvaluatedDoc = null;
+
+function awaitWithTimeout(promise, timeoutMs, message) {
+	return new Promise((resolve, reject) => {
+		let settled = false;
+		const timerId = setTimeout(() => {
+			settled = true;
+			reject(new Error(message));
+		}, timeoutMs);
+
+		Promise.resolve(promise).then((value) => {
+			if (settled) return;
+			settled = true;
+			globalThis.clearTimeout?.(timerId);
+			resolve(value);
+		}, (error) => {
+			if (settled) return;
+			settled = true;
+			globalThis.clearTimeout?.(timerId);
+			reject(error);
+		});
+	});
+}
 
 function getBinanceClient(requestOptions = {}) {
 	if (!binanceClient || (requestOptions && Object.keys(requestOptions).length > 0)) {
@@ -28,6 +60,48 @@ function getBinanceClient(requestOptions = {}) {
 function isEnabled() {
 	return process.env.ENABLE_SIGNAL_OUTCOME_TRACKING === 'true'
 		|| process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING === 'true';
+}
+
+function getWorkerRole() {
+	const configuredRole = String(process.env.SIGNAL_OUTCOME_WORKER_ROLE || 'web').trim().toLowerCase();
+	return WORKER_ROLES.has(configuredRole) ? configuredRole : 'web';
+}
+
+async function persistWorkerHeartbeat() {
+	if (getWorkerRole() === 'disabled') {
+		return;
+	}
+
+	try {
+		const firestore = AlertStorageService.getFirestore();
+		if (!firestore) {
+			return;
+		}
+
+		const status = getWorkerStatus();
+		await awaitWithTimeout(firestore.collection(HEARTBEAT_COLLECTION_NAME).doc(HEARTBEAT_DOCUMENT_ID).set({
+			worker: 'signal-outcome',
+			role: status.role,
+			enabled: status.enabled,
+			running: status.running,
+			shutdownRequested: status.shutdownRequested,
+			intervalMs: status.intervalMs,
+			batchLimit: status.batchLimit,
+			maxDurationMs: status.maxDurationMs,
+			isEvaluating: status.isEvaluating,
+			lastRunAt: status.lastRunAt
+				? admin.firestore.Timestamp.fromDate(status.lastRunAt)
+				: null,
+			lastRunDurationMs: status.lastRunDurationMs,
+			lastRunScannedCount: status.lastRunScannedCount,
+			lastRunEvaluatedCount: status.lastRunEvaluatedCount,
+			lastRunPendingCount: status.lastRunPendingCount,
+			lastRunErrorCount: status.lastRunErrorCount,
+			updatedAt: admin.firestore.Timestamp.fromDate(new Date()),
+		}, { merge: true }), HEARTBEAT_WRITE_TIMEOUT_MS, `Heartbeat write timed out after ${HEARTBEAT_WRITE_TIMEOUT_MS}ms`);
+	} catch (error) {
+		console.warn('[SignalOutcomeService] Failed to persist worker heartbeat:', error.message);
+	}
 }
 
 function parsePositiveInteger(val, defaultVal) {
@@ -230,7 +304,7 @@ async function recordSignal({
  * Scan for pending signals and evaluate outcomes that have passed their target time.
  * Accepts optional options to control batch limit and duration budget.
  */
-async function evaluatePendingOutcomes(options = {}) {
+async function evaluatePendingOutcomesInternal(options = {}) {
 	if (!isEnabled()) {
 		return { scannedCount: 0, evaluatedCount: 0, skipped: true, reason: 'disabled' };
 	}
@@ -243,6 +317,8 @@ async function evaluatePendingOutcomes(options = {}) {
 	const startTime = Date.now();
 	let scannedCount = 0;
 	let evaluatedCount = 0;
+	let pendingCount = 0;
+	let errorCount = 0;
 
 	try {
 		const firestore = AlertStorageService.getFirestore();
@@ -456,6 +532,7 @@ async function evaluatePendingOutcomes(options = {}) {
 					if (abortController) {
 						abortController.abort();
 					}
+					errorCount++;
 					console.warn(`[SignalOutcomeService] Error evaluating window ${winKey} for ${data.symbol}:`, error.message);
 					if (error instanceof equityMarketDataService.EquityMarketDataError) {
 						outcome.status = 'unavailable';
@@ -488,6 +565,10 @@ async function evaluatePendingOutcomes(options = {}) {
 				evaluatedCount++;
 			}
 
+			if (!allResolved) {
+				pendingCount++;
+			}
+
 			if (!sweepDeadlineExceeded) {
 				lastEvaluatedDoc = doc;
 			}
@@ -499,14 +580,45 @@ async function evaluatePendingOutcomes(options = {}) {
 
 		return { scannedCount, evaluatedCount, durationMs: Date.now() - startTime };
 	} catch (error) {
+		errorCount++;
 		console.warn('[SignalOutcomeService] Failed to evaluate pending outcomes:', error.message);
 		return { scannedCount, evaluatedCount, error: error.message };
 	} finally {
 		isEvaluating = false;
 		lastRunAt = new Date();
 		lastRunDurationMs = Date.now() - startTime;
+		lastRunScannedCount = scannedCount;
 		lastRunEvaluatedCount = evaluatedCount;
+		lastRunPendingCount = pendingCount;
+		lastRunErrorCount = errorCount;
 	}
+}
+
+function evaluatePendingOutcomes(options = {}) {
+	if (isEvaluating) {
+		return Promise.resolve({ scannedCount: 0, evaluatedCount: 0, skipped: true, reason: 'already_evaluating' });
+	}
+
+	const evaluationPromise = evaluatePendingOutcomesInternal(options);
+	const trackedPromise = evaluationPromise.finally(() => {
+		if (activeEvaluationPromise === trackedPromise) {
+			activeEvaluationPromise = null;
+		}
+	});
+	activeEvaluationPromise = trackedPromise;
+	return trackedPromise;
+}
+
+function runScheduledSweep() {
+	if (shutdownRequested) {
+		return;
+	}
+
+	evaluatePendingOutcomes()
+		.then(() => persistWorkerHeartbeat())
+		.catch((err) => {
+			console.warn('[SignalOutcomeService] Scheduled worker sweep failed:', err.message);
+		});
 }
 
 /**
@@ -517,9 +629,16 @@ function startWorker(options = {}) {
 		return false;
 	}
 
+	const source = options.source === 'worker' ? 'worker' : 'web';
+	if (getWorkerRole() !== source) {
+		return false;
+	}
+
 	if (workerTimer) {
 		return true;
 	}
+
+	shutdownRequested = false;
 
 	const DEFAULT_INTERVAL_MS = 300000;
 	let intervalMs;
@@ -537,20 +656,15 @@ function startWorker(options = {}) {
 
 	// Trigger initial sweep non-blockingly after server readiness
 	Promise.resolve().then(() => {
-		evaluatePendingOutcomes().catch((err) => {
-			console.warn('[SignalOutcomeService] Initial worker sweep failed:', err.message);
-		});
+		runScheduledSweep();
 	});
 
-	workerTimer = setInterval(() => {
-		evaluatePendingOutcomes().catch((err) => {
-			console.warn('[SignalOutcomeService] Periodic worker sweep failed:', err.message);
-		});
-	}, intervalMs);
+	workerTimer = setInterval(runScheduledSweep, intervalMs);
 
-	if (workerTimer && typeof workerTimer.unref === 'function') {
+	if (workerTimer && options.unref !== false && typeof workerTimer.unref === 'function') {
 		workerTimer.unref();
 	}
+	void persistWorkerHeartbeat();
 
 	return true;
 }
@@ -558,14 +672,33 @@ function startWorker(options = {}) {
 /**
  * Stop background autonomous evaluation worker and clear timers.
  */
-function stopWorker() {
+function stopWorker(options = {}) {
+	shutdownRequested = true;
 	if (workerTimer) {
 		clearInterval(workerTimer);
 		workerTimer = null;
 	}
 	activeIntervalMs = null;
-	isEvaluating = false;
 	lastEvaluatedDoc = null;
+
+	if (options.drain !== true || !activeEvaluationPromise) {
+		isEvaluating = false;
+		return persistWorkerHeartbeat();
+	}
+
+	const drainTimeoutMs = Math.min(getWorkerStatus().maxDurationMs, MAX_WORKER_DRAIN_TIMEOUT_MS);
+	return awaitWithTimeout(
+		activeEvaluationPromise,
+		drainTimeoutMs,
+		`Dedicated worker drain timed out after ${drainTimeoutMs}ms`,
+	)
+		.catch((error) => {
+			console.warn('[SignalOutcomeService] Dedicated worker drain failed:', error.message);
+		})
+		.then(() => {
+			isEvaluating = false;
+			return persistWorkerHeartbeat();
+		});
 }
 
 /**
@@ -587,14 +720,19 @@ function getWorkerStatus() {
 
 	return {
 		enabled: isEnabled(),
+		role: getWorkerRole(),
 		running: workerTimer !== null,
+		shutdownRequested,
 		intervalMs,
 		batchLimit,
 		maxDurationMs,
 		isEvaluating,
 		lastRunAt,
 		lastRunDurationMs,
+		lastRunScannedCount,
 		lastRunEvaluatedCount,
+		lastRunPendingCount,
+		lastRunErrorCount,
 		timerId: workerTimer ? true : null,
 	};
 }
@@ -860,5 +998,7 @@ module.exports = {
 	startWorker,
 	stopWorker,
 	getWorkerStatus,
+	getWorkerRole,
 	COLLECTION_NAME,
+	HEARTBEAT_COLLECTION_NAME,
 };

@@ -33,6 +33,7 @@ describe('SignalOutcomeService', () => {
 		admin.__resetCollectionState();
 		AlertStorageService._resetForTesting();
 		delete process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING;
+		delete process.env.SIGNAL_OUTCOME_WORKER_ROLE;
 		delete process.env.ENABLE_SIGNAL_OUTCOME_TRACKING;
 		delete process.env.ENABLE_FIRESTORE_ALERT_STORAGE;
 		delete process.env.ENABLE_EQUITY_MARKET_DATA;
@@ -44,6 +45,7 @@ describe('SignalOutcomeService', () => {
 
 	afterEach(() => {
 		delete process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING;
+		delete process.env.SIGNAL_OUTCOME_WORKER_ROLE;
 		delete process.env.ENABLE_SIGNAL_OUTCOME_TRACKING;
 		delete process.env.ENABLE_FIRESTORE_ALERT_STORAGE;
 		delete process.env.ENABLE_EQUITY_MARKET_DATA;
@@ -794,6 +796,9 @@ describe('SignalOutcomeService', () => {
 
 			status = SignalOutcomeService.getWorkerStatus();
 			expect(status.lastRunEvaluatedCount).toBe(1);
+			expect(status.lastRunScannedCount).toBe(1);
+			expect(status.lastRunPendingCount).toBe(0);
+			expect(status.lastRunErrorCount).toBe(0);
 
 			// Clean stop
 			SignalOutcomeService.stopWorker();
