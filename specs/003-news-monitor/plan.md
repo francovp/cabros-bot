@@ -7,7 +7,7 @@
 
 ## Summary
 
-This feature implements an HTTP endpoint (`/api/news-monitor`) that analyzes news and market sentiment for crypto and stock symbols using Gemini GoogleSearch grounding service. The system detects significant market events (price movements, public figure mentions, regulatory announcements), assigns confidence scores, and sends filtered alerts simultaneously to Telegram and WhatsApp channels. Optional secondary LLM enrichment (using Azure AI Inference with Gemini models) can refine confidence scores when enabled. The system includes intelligent deduplication via in-memory cache (6hr TTL), optional Binance integration for precise crypto prices, WhatsApp URL shortening via Bitly for enriched citations, and parallel symbol analysis with aggressive timeout handling.
+This feature implements an HTTP endpoint (`/api/news-monitor`) that analyzes news and market sentiment for crypto and stock symbols using Gemini GoogleSearch grounding service. The system detects significant market events (price movements, public figure mentions, regulatory announcements), assigns confidence scores, and sends filtered alerts simultaneously to Telegram and WhatsApp channels. Optional secondary LLM enrichment (using Azure AI Inference with Gemini models) can refine confidence scores when enabled. The system includes intelligent deduplication via in-memory cache (6hr TTL), optional Binance integration for precise crypto prices, WhatsApp URL shortening via supported native-fetch providers for enriched citations, and parallel symbol analysis with aggressive timeout handling.
 
 ## Technical Context
 
@@ -20,7 +20,7 @@ This feature implements an HTTP endpoint (`/api/news-monitor`) that analyzes new
 - `binance` ^2.10.2 - Binance API client (existing, for crypto price fetching)
 - `express` ^4.17.1 - HTTP server (existing)
 - `telegraf` ^4.3.0 - Telegram bot framework (existing)
-- Native fetch URL shortener for multiple services (Bitly, TinyURL, PicSee, Cutt.ly) with fallback to title-only citations if service is unavailable
+- Native fetch URL shortener for the supported services (TinyURL, PicSee, Cutt.ly) with fallback to original URLs if service is unavailable
 
 **Storage**: In-memory cache for news deduplication (Map-based, TTL-aware, no persistence required) + in-memory URL shortening cache (session-scoped)
 **Testing**: Jest ^30.2.0 with supertest ^7.1.4 for integration tests; minimal test coverage per constitution (critical paths + regressions)  
@@ -38,7 +38,7 @@ This feature implements an HTTP endpoint (`/api/news-monitor`) that analyzes new
 - Aggressive timeouts: Binance ~5s, Gemini ~20s, optional LLM enrichment ~10s, URL shortening ~5s per symbol
 - Graceful degradation: notification channel failures and URL shortening failures do not block HTTP response or alert delivery
 - Conservative confidence selection when enrichment is enabled (min of Gemini + LLM scores)
-- URL shortening supports multiple services via `URL_SHORTENER_SERVICE` env var (default: 'picsee'); uses native fetch for supported services; falls back to title-only citations if service unavailable
+- URL shortening supports multiple services via `URL_SHORTENER_SERVICE` env var (default: 'picsee'); uses native fetch for supported services; falls back to original URLs if service unavailable
 
 **Scale/Scope**: 
 - Extensible: No hard limits on symbol count (30s timeout applies to entire batch)
@@ -61,8 +61,8 @@ This feature implements an HTTP endpoint (`/api/news-monitor`) that analyzes new
   - Reuses existing services (grounding, notification manager, retry helper)
   - In-memory cache for both news deduplication and URL shortening (no external storage dependency)
   - Optional LLM enrichment disabled by default (backward compatible)
-  - URL shortening optional (disabled if `BITLY_API_KEY` not configured)
-  - No premature abstraction (direct Gemini + + optional Azure AI calls, Bitly calls, graceful fallback)
+- URL shortening optional (disabled if no supported provider is configured)
+- No premature abstraction (direct Gemini + optional Azure AI calls, native-fetch shortener calls, graceful fallback)
 
 ### III. Testing Policy (No TDD Mandate) ✅
 - **Status**: COMPLIANT
@@ -70,7 +70,7 @@ This feature implements an HTTP endpoint (`/api/news-monitor`) that analyzes new
   - Core analysis flow (Gemini response parsing, confidence scoring)
   - Deduplication logic (cache key generation, TTL enforcement)
   - Optional enrichment (fallback when disabled/unavailable)
-  - URL shortening logic (Bitly integration, cache hits, fallback to title-only)
+  - URL shortening logic (supported-provider integration, cache hits, fallback to original URLs)
   - Integration tests for multi-channel delivery with URL shortening
   - No TDD mandate; tests can be written after implementation
 
@@ -86,7 +86,7 @@ This feature implements an HTTP endpoint (`/api/news-monitor`) that analyzes new
 - **Rationale**: Feature is feature-gated (`ENABLE_NEWS_MONITOR=false` by default):
   - Can be enabled incrementally in production
   - Optional enrichment is additional layer (`ENABLE_LLM_ALERT_ENRICHMENT=false` by default)
-  - URL shortening is optional (`BITLY_API_KEY` must be configured)
+  - URL shortening is optional (`PICSEE_API_KEY` or `CUTTLY_API_KEY` is required for those providers; TinyURL requires no key)
   - No breaking changes to existing bot or alert webhook
   - Follows semantic versioning for API contracts (v1 endpoint)
 
@@ -126,7 +126,7 @@ src/
 │           ├── analyzer.js                           # Symbol analysis orchestrator
 │           ├── enrichment.js                         # Optional LLM enrichment service
 │           ├── cache.js                              # In-memory deduplication cache
-│           └── urlShortener.js                       # NEW: Bitly URL shortening utility (User Story 2b)
+│           └── urlShortener.js                       # NEW: native-fetch URL shortening utility (User Story 2b)
 ├── services/
 │   ├── grounding/                                    # Existing Gemini grounding service
 │   │   ├── gemini.js                                 # Reuse for news sentiment analysis
@@ -195,8 +195,8 @@ index.js                                              # Update to register /api/
   - In-memory Map caches (news dedup + URL shortening) are simplest solutions (no external dependencies)
   - Reuses existing services (grounding, notification manager, retry helper)
   - Optional enrichment disabled by default (backward compatible)
-  - URL shortening optional and disabled if `BITLY_API_KEY` not configured (graceful degradation)
-  - No premature abstraction (direct API calls, graceful fallback to title-only citations)
+  - URL shortening optional and disabled if no supported provider is configured (graceful degradation)
+  - No premature abstraction (direct API calls, graceful fallback to original URLs)
   - No violations introduced
 
 ### III. Testing Policy (No TDD Mandate) ✅
@@ -205,7 +205,7 @@ index.js                                              # Update to register /api/
   - Test strategy defined in quickstart.md (unit + integration)
   - Critical paths identified: confidence scoring, deduplication, enrichment fallback, URL shortening with cache hits and fallback
   - Integration tests reuse existing pattern from 002-whatsapp-alerts
-  - URL shortening tests verify cache hits, Bitly failures, and fallback behavior
+  - URL shortening tests verify cache hits, supported-provider failures, and fallback behavior
   - No TDD mandate imposed
   - No violations introduced
 
@@ -223,7 +223,7 @@ index.js                                              # Update to register /api/
 - **Design Review**: 
   - Feature-gated with `ENABLE_NEWS_MONITOR=false` default
   - Optional enrichment is additional layer (can be enabled independently)
-  - URL shortening is optional (disabled if `BITLY_API_KEY` not configured)
+  - URL shortening is optional (disabled if no supported provider is configured)
   - API versioned as v1 (/api/news-monitor)
   - No breaking changes to existing endpoints
   - No violations introduced
@@ -293,7 +293,7 @@ specs/003-news-monitor/
 ### Agent Context Updated
 - **`.github/copilot-instructions.md`**: Updated to include User Story 2b guidance
   - URL shortening feature documented in 003-news-monitor section
-  - Bitly integration patterns explained
+  - Supported URL-shortening provider patterns explained
   - URL shortening cache pattern described
   - Error handling for URL shortening failures explained
   - Where to look first for URL shortening debugging
@@ -327,23 +327,23 @@ specs/003-news-monitor/
    - Results (summary, extracted sources, insight snippets) are attached to the alert object (e.g., `alert.enriched`) and reused for all notification channels (Telegram, WhatsApp) to keep cost and context consistent.
 
 6. **Graceful degradation**: Enrichment failures and URL shortening failures do NOT block alert delivery (fail-open)
-   - Any failure in Gemini grounding, optional LLM enrichment, external APIs (Binance/Bitly), or notification channels is logged and degrades gracefully
-  -  Alerts still get delivered using best-effort data (original text or title-only citations), and errors are surfaced to admin channels when configured.
+   - Any failure in Gemini grounding, optional LLM enrichment, external APIs (Binance/URL shortening), or notification channels is logged and degrades gracefully
+  -  Alerts still get delivered using best-effort data (original text or original-URL citations), and errors are surfaced to admin channels when configured.
 
 7. **Feature flags**: Three independent toggles (ENABLE_NEWS_MONITOR, ENABLE_BINANCE_PRICE_CHECK, ENABLE_LLM_ALERT_ENRICHMENT)
    - Feature gating remains: `ENABLE_NEWS_MONITOR`, `ENABLE_BINANCE_PRICE_CHECK`, `ENABLE_LLM_ALERT_ENRICHMENT` control the major flows
    - URL shortening is optional and enabled when supported provider API keys (such as `PICSEE_API_KEY` or `CUTTLY_API_KEY`) or free providers (TinyURL) are configured.
 
-8. **Timeout strategy**: Aggressive budgets (Binance ~5s, Gemini ~30s, LLM ~20s, Bitly ~5s, batch total 60s)
+8. **Timeout strategy**: Aggressive budgets (Binance ~5s, Gemini ~30s, LLM ~20s, URL shortening ~5s, batch total 60s)
    - Overall per-symbol/batch analysis budget is 60s. 
    - External calls use retry with exponential backoff (default 3 attempts) but must still respect the overall timeout budget.
 
 7. **URL Shortening** (NEW for User Story 2b): 
-  - Optional feature controlled by `URL_SHORTENER_SERVICE` env var (default: 'bitly')
-  - Uses native fetch for supported services (Bitly, TinyURL, PicSee, Cutt.ly)
-  - Falls back to direct API calls for unsupported services
+  - Optional feature controlled by `URL_SHORTENER_SERVICE` env var (default: 'picsee')
+  - Uses native fetch for supported services (TinyURL, PicSee, Cutt.ly)
+  - Invalid or unavailable service names fall back to PicSee validation at runtime
   - Session-scoped in-memory cache prevents redundant API calls for duplicate sources (originalUrl → shortUrl map; in-memory only, resets on process restart)
-  - Graceful fallback to title-only citations if shortening fails (shortening failures logged at INFO; alert delivery proceeds)
+  - Graceful fallback to original URLs if shortening fails (shortening failures logged at INFO; alert delivery proceeds)
   - Reduces WhatsApp message size for enriched alerts (typical enriched payloads drop from ~25K chars to under ~10K chars when citations are shortened)
   - Per-symbol 30s timeout budget accounts for shortening latency (shortening typically <1s per citation; API calls use a ~5s timeout and 3 retries with backoff)
   - Implementation notes (for engineers): validate URL shortener responses, de-duplicate source URLs before calling shortening service, and include shortening metadata (applied flag, service, successCount, failureCount) in alert response payload for observability
@@ -364,7 +364,7 @@ specs/003-news-monitor/
 - `ENABLE_NEWS_MONITOR=false` (default, safe rollout)
 - `ENABLE_BINANCE_PRICE_CHECK=false` (default, Gemini-only prices)
 - `ENABLE_LLM_ALERT_ENRICHMENT=false` (default, backward compatible)
-- `BITLY_API_KEY` (optional, if provided enables URL shortening for WhatsApp)
+- `PICSEE_API_KEY` / `CUTTLY_API_KEY` (optional provider credentials; TinyURL requires no credential)
 
 ---
 

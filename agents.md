@@ -540,7 +540,7 @@ The system provides an HTTP endpoint (`/api/news-monitor`) that analyzes financi
 4. Optional LLM enrichment (if `ENABLE_LLM_ALERT_ENRICHMENT=true`) refines confidence using conservative strategy: `min(gemini_confidence, llm_confidence)`
 5. Alerts filtered by `NEWS_ALERT_THRESHOLD` (default: 0.7)
 6. Deduplicated: cache key is `(symbol, event_category)`. Same category within TTL prevents duplicate alerts; different categories generate separate alerts
-7. **URL shortening applied to WhatsApp citations** (if `URL_SHORTENER_SERVICE` configured): Uses native fetch for supported services (Bitly, TinyURL, PicSee, Cutt.ly); falls back to title-only if shortening fails
+7. **URL shortening applied to WhatsApp citations** (if `URL_SHORTENER_SERVICE` configured): Uses native fetch for supported services (`picsee`, `tinyurl`, `cuttly`); preserves original URLs if shortening fails
 8. Filtered alerts sent to all enabled channels (Telegram, WhatsApp) via existing NotificationManager in parallel
 9. Returns 200 OK with per-symbol results: status (analyzed/cached/timeout/error), detected alerts, delivery results, metadata (totalDurationMs, cached, requestId), and summary counters including `quota_exhausted` for exhausted Gemini 429 retries.
 
@@ -559,8 +559,8 @@ The system provides an HTTP endpoint (`/api/news-monitor`) that analyzes financi
 - `NEWS_GEMINI_QUOTA_RETRY_BASE_MS` — Base exponential backoff in milliseconds when provider retry metadata is absent (default: 1000)
 - `ENABLE_BINANCE_PRICE_CHECK` — Enable Binance crypto price fetching (default: false)
 - `ENABLE_LLM_ALERT_ENRICHMENT` — Enable optional secondary LLM enrichment (default: false)
-- `URL_SHORTENER_SERVICE` — URL shortening service for WhatsApp citations (default: 'bitly', options: 'bitly', 'tinyurl', 'picsee', 'reurl', 'cuttly', 'pixnet0rz.tw')
-- Service-specific tokens: `BITLY_ACCESS_TOKEN`, `TINYURL_API_KEY`, etc. (some services don't require tokens)
+- `URL_SHORTENER_SERVICE` — URL shortening service for WhatsApp citations (default: `picsee`; options: `picsee`, `tinyurl`, `cuttly`)
+- Service-specific tokens: `PICSEE_API_KEY` and `CUTTLY_API_KEY`; TinyURL requires no token. Bitly, reurl, and Pixnet0rz.tw are unavailable.
 - Azure AI Inference (if enrichment enabled): `AZURE_LLM_ENDPOINT`, `AZURE_LLM_KEY`, `AZURE_LLM_MODEL`
 
 **Timeout Strategy**:
@@ -575,7 +575,7 @@ The system provides an HTTP endpoint (`/api/news-monitor`) that analyzes financi
 - Binance: 3 retries with exponential backoff (1s, 2s, 4s) + ±10% jitter
 - Gemini news analysis: retries `429 RESOURCE_EXHAUSTED` per symbol inside `NEWS_TIMEOUT_MS`, honoring provider retry delay metadata when present and returning `GEMINI_QUOTA_EXHAUSTED` when exhausted
 - Optional LLM enrichment: 3 retries (independent from analysis; failure doesn't block alert)
-- URL shortening: 3 retries with exponential backoff (independent; failure falls back to title-only)
+- URL shortening: 3 retries with exponential backoff (independent; failure preserves original URLs)
 - Telegram/WhatsApp: 3 retries (reuse existing notification retry logic)
 
 **Cache Deduplication**:
@@ -605,7 +605,7 @@ The system provides an HTTP endpoint (`/api/news-monitor`) that analyzes financi
 - GreenAPI for WhatsApp (REST API integration via native fetch with AbortController timeout)
 - Google Gemini for optional alert enrichment (existing integration in grounding service) and news sentiment analysis (003-news-monitor)
 - Azure AI Inference REST client for optional secondary LLM enrichment (003-news-monitor, disabled by default)
-- Native fetch for URL shortening in WhatsApp citations (003-news-monitor, with fallback to title-only citations)
+- Native fetch for URL shortening in WhatsApp citations (003-news-monitor, with fallback to original URLs)
 - In-memory Map cache for news deduplication with TTL (003-news-monitor, no external storage)
 - Binance API client for precise crypto prices (003-news-monitor, optional fallback to Gemini GoogleSearch)
 - TradingView MCP remote Streamable HTTP server for technical `coin_analysis` report generation (`POST /api/webhook/expanded-analysis-alert`)

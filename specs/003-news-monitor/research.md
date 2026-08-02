@@ -23,11 +23,11 @@
 import ModelClient from "@azure-rest/ai-inference";
 import { AzureKeyCredential } from "@azure/core-auth";
 
-const model = process.env.AZURE_AI_MODEL | | "openai/gpt-5-mini";
+const model = process.env.AZURE_LLM_MODEL;
 
 const client = ModelClient(
-  process.env.AZURE_AI_ENDPOINT,
-  new AzureKeyCredential(process.env.AZURE_AI_API_KEY)
+  process.env.AZURE_LLM_ENDPOINT,
+  new AzureKeyCredential(process.env.AZURE_LLM_KEY)
 );
 
 const response = await client.path("/chat/completions").post({
@@ -318,13 +318,13 @@ async function getMarketContext(symbol, isCrypto) {
 
 ### 7. URL Shortening for WhatsApp Citations
 
-**Decision**: Use native fetch URL shortener utility for supported URL shortening services (TinyURL, PicSee, Cutt.ly), with fallback to title-only citations if all fail
+**Decision**: Use native fetch URL shortener utility for supported URL shortening services (TinyURL, PicSee, Cutt.ly), with fallback to original URLs if all fail
 
 **Rationale**:
 
 - **Multi-service support**: Native fetch implementation provides unified interface for multiple shortening services
 - **Graceful fallback**: If shortener fails or service is unsupported, fall back gracefully
-- **Fail-open pattern**: If shortening fails, use title-only citations (e.g., "Reuters / CoinDesk") without blocking alert delivery
+- **Fail-open pattern**: If shortening fails, preserve original URLs without blocking alert delivery
 - **In-memory cache**: Session-scoped cache prevents redundant API calls for duplicate sources
 - **Performance**: Shortening typically <1s per citation, fits within 30s per-symbol budget
 
@@ -354,7 +354,7 @@ class URLShortener {
         console.warn(`URL shortening failed with ${service}:`, error.message);
       }
     }
-    return null; // Graceful fallback to title-only citations
+    return null; // Graceful fallback to original URLs in the formatter
   }
 
   async callShortenerAPI(longUrl, service) {
@@ -388,8 +388,8 @@ class URLShortener {
 **Configuration**:
 
 - `URL_SHORTENER_SERVICE`: Service name (default: 'picsee')
-- Service-specific tokens: `PICSEE_API_KEY`, `CUTTLY_API_KEY`, etc.
-- Free services (TinyURL) enabled by setting service name
+- Service-specific tokens: `PICSEE_API_KEY` and `CUTTLY_API_KEY`.
+- TinyURL is enabled by setting the service name and requires no credential.
 
 **Alternatives Considered**:
 

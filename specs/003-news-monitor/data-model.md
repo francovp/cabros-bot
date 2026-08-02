@@ -258,7 +258,7 @@ In-memory session-scoped cache for shortened URLs to prevent redundant API calls
 ```typescript
 interface URLShortenerCache {
   originalUrl: string;               // Original long URL from news source
-  shortUrl: string;                  // Shortened URL (e.g., "https://bit.ly/abc123")
+  shortUrl: string;                  // Shortened URL (e.g., "https://short.url/abc123")
   timestamp: number;                 // Unix timestamp (ms) when shortened
   attempts: number;                  // Number of shortening attempts (for debugging)
 }
@@ -523,9 +523,9 @@ NEWS_SYMBOLS_CRYPTO=BTCUSDT,ETHUSD,BNBUSDT
 NEWS_SYMBOLS_STOCKS=NVDA,MSFT,TSLA
 
 # Azure AI Inference (required if ENABLE_LLM_ALERT_ENRICHMENT=true)
-AZURE_AI_ENDPOINT=https://your-endpoint.inference.ai.azure.com
-AZURE_AI_API_KEY=your-api-key
-AZURE_AI_MODEL=gpt-4o                       # Model deployment name
+AZURE_LLM_ENDPOINT=https://your-endpoint.inference.ai.azure.com
+AZURE_LLM_KEY=your-api-key
+AZURE_LLM_MODEL=gpt-4o                       # Model deployment name
 
 # Existing config (reused)
 TELEGRAM_CHAT_ID=...
