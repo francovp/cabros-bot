@@ -120,6 +120,7 @@ describe('queued job execution', () => {
 		});
 		await Promise.resolve();
 		await Promise.resolve();
+		await new Promise((resolve) => setImmediate(resolve));
 
 		expect(settled).toBe(false);
 		resolveCallback();

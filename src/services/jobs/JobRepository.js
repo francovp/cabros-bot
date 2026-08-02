@@ -6,6 +6,7 @@ const COLLECTION_NAME = 'tradingviewJobs';
 const memoryJobs = new Map();
 const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled', 'timed_out']);
 const DEFAULT_CLAIM_LEASE_MS = 60000;
+const DEFAULT_CALLBACK_CLAIM_LEASE_MS = 60000;
 
 function cloneJob(job) {
 	if (!job) return null;
@@ -106,6 +107,15 @@ class JobRepository {
 
 		const merge = (job) => {
 			const existingStatus = job.callbackStatus || {};
+			const existingEvent = existingStatus.events && existingStatus.events[event];
+			if (
+				callbackUpdate.deliveryId
+				&& existingEvent
+				&& existingEvent.deliveryId
+				&& existingEvent.deliveryId !== callbackUpdate.deliveryId
+			) {
+				return null;
+			}
 			const attempts = Array.isArray(callbackUpdate.attempts) ? callbackUpdate.attempts : [];
 			return {
 				...job,
@@ -118,8 +128,10 @@ class JobRepository {
 					events: {
 						...(existingStatus.events || {}),
 						[event]: {
+							...(existingEvent || {}),
 							status: callbackUpdate.status,
 							attempts,
+							...(callbackUpdate.deliveryId ? { deliveryId: callbackUpdate.deliveryId } : {}),
 						},
 					},
 				},
@@ -143,6 +155,9 @@ class JobRepository {
 
 					const current = sanitizeJob({ ...(snapshot.data() || {}), jobId: snapshot.id || jobId });
 					const nextJob = merge(current);
+					if (!nextJob) {
+						return false;
+					}
 					transaction.set(docRef, nextJob);
 					memoryJobs.set(jobId, cloneJob(nextJob));
 					return true;
@@ -158,8 +173,76 @@ class JobRepository {
 			return false;
 		}
 
-		await this.save(merge(current));
+		const nextJob = merge(current);
+		if (!nextJob) {
+			return false;
+		}
+		await this.save(nextJob);
 		return true;
+	}
+
+	async claimCallbackDelivery(jobId, event, deliveryId, leaseMs = DEFAULT_CALLBACK_CLAIM_LEASE_MS) {
+		if (!jobId || !event || !deliveryId) {
+			return false;
+		}
+
+		const firestore = this._getFirestore();
+		if (!firestore || typeof firestore.runTransaction !== 'function') {
+			return false;
+		}
+
+		const effectiveLeaseMs = Number.isInteger(leaseMs) && leaseMs > 0
+			? leaseMs
+			: DEFAULT_CALLBACK_CLAIM_LEASE_MS;
+		const nowMs = Date.now();
+		const now = new Date(nowMs).toISOString();
+		const docRef = firestore.collection(COLLECTION_NAME).doc(jobId);
+
+		try {
+			return await firestore.runTransaction(async (transaction) => {
+				const snapshot = await transaction.get(docRef);
+				if (!snapshot || !snapshot.exists) {
+					return false;
+				}
+
+				const current = sanitizeJob({ ...(snapshot.data() || {}), jobId: snapshot.id || jobId });
+				const callbackStatus = current.callbackStatus || {};
+				const existingEvent = callbackStatus.events && callbackStatus.events[event];
+				if (existingEvent && existingEvent.status === 'success') {
+					return false;
+				}
+				if (existingEvent && existingEvent.status === 'in_flight') {
+					const startedAtMs = Date.parse(existingEvent.startedAt || '');
+					if (Number.isFinite(startedAtMs) && startedAtMs + effectiveLeaseMs > nowMs) {
+						return false;
+					}
+				}
+
+				const nextJob = {
+					...current,
+					callbackStatus: {
+						...callbackStatus,
+						status: 'in_flight',
+						events: {
+							...(callbackStatus.events || {}),
+							[event]: {
+								...(existingEvent || {}),
+								status: 'in_flight',
+								deliveryId,
+								startedAt: now,
+							},
+						},
+					},
+					updatedAt: now,
+				};
+				transaction.set(docRef, nextJob);
+				memoryJobs.set(jobId, cloneJob(nextJob));
+				return true;
+			});
+		} catch (error) {
+			console.warn('[JobRepository] Failed to claim callback delivery:', error.message);
+			return false;
+		}
 	}
 
 	isDurable() {
@@ -252,11 +335,15 @@ class JobRepository {
 				const execution = current && current.execution ? current.execution : {};
 				if (
 					!current
-					|| TERMINAL_STATUSES.has(current.status)
-					|| !['claimed', 'running'].includes(execution.status)
 					|| execution.workerId !== workerId
 					|| (attempt !== null && attempt !== undefined && Number(execution.attempt) !== Number(attempt))
 				) {
+					return false;
+				}
+				if (TERMINAL_STATUSES.has(current.status)) {
+					return true;
+				}
+				if (!['claimed', 'running'].includes(execution.status)) {
 					return false;
 				}
 

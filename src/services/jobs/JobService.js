@@ -237,6 +237,7 @@ class JobService {
 		this.queue = queue;
 		this.activeControllers = new Map();
 		this.pendingCallbacks = new Set();
+		this.pendingCallbackEvents = new Set();
 	}
 
 	/**
@@ -1602,6 +1603,28 @@ class JobService {
 		return botOrGetter || null;
 	}
 
+	async _claimCallbackDelivery(job, event) {
+		const deliveryId = uuidv4();
+		const isDurable = typeof this.repository.isDurable === 'function' && this.repository.isDurable();
+		if (isDurable && typeof this.repository.claimCallbackDelivery === 'function') {
+			try {
+				return await this.repository.claimCallbackDelivery(job.jobId, event, deliveryId)
+					? { deliveryId }
+					: null;
+			} catch (error) {
+				console.warn('[JobService] Failed to claim callback delivery:', error.message);
+				return null;
+			}
+		}
+
+		const localKey = `${job.jobId}:${event}`;
+		if (this.pendingCallbackEvents.has(localKey)) {
+			return null;
+		}
+		this.pendingCallbackEvents.add(localKey);
+		return { deliveryId, localKey };
+	}
+
 	async _triggerCallbackIfConfigured(job, { awaitDelivery = false } = {}) {
 		if (!job.callbackUrl) return;
 
@@ -1614,12 +1637,22 @@ class JobService {
 			return;
 		}
 
+		const callbackClaim = await this._claimCallbackDelivery(job, job.status);
+		if (!callbackClaim) {
+			return;
+		}
+
 		// Execute the callback in the background
-		const callbackPromise = this._sendCallbackWithRetry(job).catch((err) => {
+		const callbackPromise = this._sendCallbackWithRetry(job, callbackClaim.deliveryId).catch((err) => {
 			console.error(`[JobService] Callback for job ${job.jobId} failed:`, err.message);
 		});
 		this.pendingCallbacks.add(callbackPromise);
-		callbackPromise.then(() => this.pendingCallbacks.delete(callbackPromise));
+		callbackPromise.then(() => {
+			this.pendingCallbacks.delete(callbackPromise);
+			if (callbackClaim.localKey) {
+				this.pendingCallbackEvents.delete(callbackClaim.localKey);
+			}
+		});
 		if (awaitDelivery) {
 			await callbackPromise;
 		}
@@ -1654,7 +1687,7 @@ class JobService {
 		return TERMINAL_JOB_STATUSES.has(event);
 	}
 
-	async _sendCallbackWithRetry(job) {
+	async _sendCallbackWithRetry(job, callbackClaimId = null) {
 		const callbackUrl = job.callbackUrl;
 
 		const callbackEvent = job.status;
@@ -1673,7 +1706,7 @@ class JobService {
 
 		for (let attempt = 1; attempt <= maxAttempts; attempt++) {
 			const timestamp = new Date().toISOString();
-			const deliveryId = uuidv4();
+			const deliveryId = attempt === 1 && callbackClaimId ? callbackClaimId : uuidv4();
 			const canonicalSignatureInput = [timestamp, callbackEvent, deliveryId, payloadStr].join('\n');
 			const headers = {
 				...baseHeaders,
@@ -1771,6 +1804,7 @@ class JobService {
 			await this.repository.updateCallbackStatus(job.jobId, callbackEvent, {
 				status: success ? 'success' : 'failed',
 				attempts,
+				deliveryId: callbackClaimId,
 			});
 			return;
 		}

@@ -149,6 +149,34 @@ describe('JobRepository durable claims', () => {
 		expect(Date.parse(renewed.execution.leaseUntil)).toBeGreaterThan(Date.parse(oldLeaseUntil));
 	});
 
+	it('accepts a same-attempt renewal after terminal finalization', async () => {
+		const job = {
+			jobId: 'job-123',
+			status: 'completed',
+			execution: {
+				mode: 'render-worker',
+				status: 'completed',
+				workerId: 'worker-1',
+				attempt: 3,
+				leaseUntil: null,
+			},
+		};
+		const docRef = {};
+		const transaction = {
+			get: jest.fn().mockResolvedValue({ exists: true, id: job.jobId, data: () => job }),
+			set: jest.fn(),
+		};
+		const firestore = {
+			collection: jest.fn(() => ({ doc: jest.fn(() => docRef) })),
+			runTransaction: jest.fn(async callback => callback(transaction)),
+		};
+		const repository = new JobRepository();
+		repository._getFirestore = jest.fn(() => firestore);
+
+		await expect(repository.renewClaim('job-123', 'worker-1', 3)).resolves.toBe(true);
+		expect(transaction.set).not.toHaveBeenCalled();
+	});
+
 	it('updates claims transactionally only for the current worker owner', async () => {
 		const job = {
 			jobId: 'job-123',
@@ -405,6 +433,99 @@ describe('JobRepository durable claims', () => {
 						},
 					},
 				},
+			}),
+		);
+	});
+
+	it('claims callback events transactionally and only takes over expired reservations', async () => {
+		const docRef = {};
+		const pendingJob = {
+			jobId: 'job-123',
+			status: 'completed',
+			callbackStatus: { status: 'pending', attempts: [] },
+		};
+		const transaction = {
+			get: jest.fn().mockResolvedValue({
+				exists: true,
+				id: 'job-123',
+				data: () => pendingJob,
+			}),
+			set: jest.fn(),
+		};
+		const firestore = {
+			collection: jest.fn(() => ({ doc: jest.fn(() => docRef) })),
+			runTransaction: jest.fn(async callback => callback(transaction)),
+		};
+		const repository = new JobRepository();
+		repository._getFirestore = jest.fn(() => firestore);
+
+		await expect(repository.claimCallbackDelivery('job-123', 'completed', 'delivery-1'))
+			.resolves.toBe(true);
+		expect(transaction.set).toHaveBeenCalledWith(
+			docRef,
+			expect.objectContaining({
+				callbackStatus: expect.objectContaining({
+					events: expect.objectContaining({
+						completed: expect.objectContaining({
+							status: 'in_flight',
+							deliveryId: 'delivery-1',
+						}),
+					}),
+				}),
+			}),
+		);
+
+		transaction.set.mockClear();
+		transaction.get.mockResolvedValue({
+			exists: true,
+			id: 'job-123',
+			data: () => ({
+				...pendingJob,
+				callbackStatus: {
+					status: 'in_flight',
+					attempts: [],
+					events: {
+						completed: {
+							status: 'in_flight',
+							deliveryId: 'delivery-1',
+							startedAt: new Date().toISOString(),
+						},
+					},
+				},
+			}),
+		});
+		await expect(repository.claimCallbackDelivery('job-123', 'completed', 'delivery-2'))
+			.resolves.toBe(false);
+		expect(transaction.set).not.toHaveBeenCalled();
+
+		transaction.get.mockResolvedValue({
+			exists: true,
+			id: 'job-123',
+			data: () => ({
+				...pendingJob,
+				callbackStatus: {
+					status: 'in_flight',
+					attempts: [],
+					events: {
+						completed: {
+							status: 'in_flight',
+							deliveryId: 'delivery-1',
+							startedAt: new Date(Date.now() - 120000).toISOString(),
+						},
+					},
+				},
+			}),
+		});
+		await expect(repository.claimCallbackDelivery('job-123', 'completed', 'delivery-2'))
+			.resolves.toBe(true);
+		expect(transaction.set).toHaveBeenCalledWith(
+			docRef,
+			expect.objectContaining({
+				callbackStatus: expect.objectContaining({
+					events: expect.objectContaining({
+						completed: expect.objectContaining({ deliveryId: 'delivery-2' }),
+					}),
+				}),
 			}),
 		);
 	});
