@@ -92,13 +92,17 @@ const response = (body, status = 200) => ({
 	text: async () => JSON.stringify(body),
 });
 
-function createBrowser({ fetchImpl, confirm = () => true, storedKey = '' }) {
+function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', firebase }) {
 	const body = new FakeElement('body');
 	const elementsById = {};
-	['api-key', 'key-state', 'save-key', 'clear-key', 'view'].forEach((id) => {
+	[
+		'legacy-connection', 'firebase-auth', 'auth-email', 'auth-password', 'sign-in', 'sign-out',
+		'auth-state', 'api-key', 'key-state', 'save-key', 'clear-key', 'view',
+	].forEach((id) => {
 		const tag = id === 'api-key' ? 'input' : id === 'view' ? 'section' : id.endsWith('key') ? 'button' : 'p';
 		const node = new FakeElement(tag);
 		node.id = id;
+		node.hidden = false;
 		elementsById[id] = node;
 		body.append(node);
 	});
@@ -132,7 +136,10 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '' }) {
 	};
 	const context = {
 		document,
-		fetch: jest.fn(fetchImpl),
+		fetch: jest.fn(async (url, options) => {
+			if (url === '/admin/auth-config' && !firebase) return response({ enabled: false, configured: false });
+			return fetchImpl(url, options);
+		}),
 		performance: { now: jest.fn().mockReturnValueOnce(10).mockReturnValue(20) },
 		sessionStorage: {
 			getItem: (key) => storage.get(key) || null,
@@ -142,6 +149,7 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '' }) {
 		window: {
 			CabrosAdminRequest: helper,
 			confirm,
+			firebase,
 			URL: {
 				createObjectURL: jest.fn((blob) => `blob:${blob.type}`),
 				revokeObjectURL: jest.fn(),
@@ -163,6 +171,65 @@ async function selectView(browser, name) {
 }
 
 describe('admin browser client', () => {
+	it('shows Firebase sign-in state and sends a verified token after sign-in', async () => {
+		let authStateChanged;
+		const user = {
+			getIdToken: jest.fn().mockResolvedValue('firebase-token'),
+			getIdTokenResult: jest.fn().mockResolvedValue({ claims: { roles: ['admin.viewer'] } }),
+		};
+		const auth = {
+			setPersistence: jest.fn().mockResolvedValue(undefined),
+			onAuthStateChanged: jest.fn((listener) => {
+				authStateChanged = listener;
+				listener(null);
+				return jest.fn();
+			}),
+			signInWithEmailAndPassword: jest.fn(async () => {
+				await authStateChanged(user);
+				return { user };
+			}),
+			signOut: jest.fn().mockResolvedValue(undefined),
+		};
+		const firebase = {
+			initializeApp: jest.fn(),
+			auth: jest.fn(() => auth),
+		};
+		const requests = [];
+		const browser = createBrowser({
+			firebase,
+			fetchImpl: async (url, options) => {
+				if (url === '/admin/auth-config') {
+					return response({ enabled: true, configured: true, config: {
+						apiKey: 'public-key', authDomain: 'cabros.firebaseapp.com', projectId: 'cabros',
+					} });
+				}
+				if (url === '/openapi.json') return response(contract);
+				requests.push([url, options]);
+				return response({});
+			},
+		});
+		await flush();
+
+		expect(browser.elementsById['firebase-auth'].hidden).toBe(false);
+		expect(browser.elementsById['legacy-connection'].hidden).toBe(false);
+		expect(browser.elementsById.view.textContent).toContain('Sign in');
+	browser.elementsById['api-key'].value = 'webhook-key';
+	await browser.elementsById['save-key'].dispatch('click');
+	expect(browser.storage.has('cabros-admin-api-key')).toBe(false);
+	expect(browser.elementsById['key-state'].textContent).toContain('in memory');
+
+		browser.elementsById['auth-email'].value = 'operator@example.com';
+		browser.elementsById['auth-password'].value = 'password';
+		await browser.elementsById['sign-in'].dispatch('click');
+		await flush();
+
+		const statusForm = findForm(browser.elementsById.view, 'GET /api/status');
+		expect(statusForm).toBeDefined();
+		await statusForm.dispatch('submit');
+		await flush();
+		expect(requests.at(-1)[1].headers.Authorization).toBe('Bearer firebase-token');
+	});
+
 	it('uses the current session key, redacts output, and cancels before dispatch', async () => {
 		const events = [];
 		const browser = createBrowser({

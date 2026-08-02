@@ -22,20 +22,26 @@ function validateApiKey(req, res, next) {
 	// Ensure apiKey is a string (in case of multiple headers)
 	const keyToCheck = Array.isArray(apiKey) ? apiKey[0] : apiKey;
 
-	// Use timingSafeEqual to prevent timing attacks
-	// Both buffers must be of the same length
-	const bufferApiKey = Buffer.from(keyToCheck);
-	const bufferValidApiKey = Buffer.from(validApiKey);
-
-	if (bufferApiKey.length !== bufferValidApiKey.length) {
-		return res.status(403).json({ error: 'Forbidden: Invalid API key' });
-	}
-
-	if (!crypto.timingSafeEqual(bufferApiKey, bufferValidApiKey)) {
+	if (!isValidApiKey(req)) {
 		return res.status(403).json({ error: 'Forbidden: Invalid API key' });
 	}
 
 	next();
 }
 
-module.exports = { validateApiKey };
+function isValidApiKey(req) {
+	const validApiKey = process.env.WEBHOOK_API_KEY;
+	if (!validApiKey) return false;
+
+	const apiKey = req && req.headers && (req.headers['x-api-key'] || req.headers['X-API-Key'])
+		|| req && req.query && req.query['api-key'];
+	const keyToCheck = Array.isArray(apiKey) ? apiKey[0] : apiKey;
+	if (typeof keyToCheck !== 'string') return false;
+
+	const bufferApiKey = Buffer.from(keyToCheck);
+	const bufferValidApiKey = Buffer.from(validApiKey);
+	return bufferApiKey.length === bufferValidApiKey.length
+		&& crypto.timingSafeEqual(bufferApiKey, bufferValidApiKey);
+}
+
+module.exports = { isValidApiKey, validateApiKey };

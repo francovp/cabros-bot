@@ -50,14 +50,45 @@ describe('OpenAPI contract', () => {
 		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
 		const operations = Object.entries(contract.paths)
 			.filter(([routePath]) => routePath.startsWith('/api/'))
-			.flatMap(([, pathItem]) => Object.values(pathItem))
+			.flatMap(([path, pathItem]) => Object.entries(pathItem)
+				.filter(([method]) => ['get', 'post', 'put', 'patch', 'delete'].includes(method))
+				.map(([method, operation]) => ({ ...operation, method: method.toUpperCase(), path })))
 			.filter((operation) => operation && operation.responses);
 
+		const firebaseAdminOperations = new Set([
+			'GET /api/alerts', 'GET /api/alerts/summary', 'GET /api/alerts/export',
+			'GET /api/alerts/{alertId}', 'POST /api/alerts/{alertId}/replay',
+			'GET /api/scanner-presets', 'POST /api/scanner-presets',
+			'GET /api/scanner-presets/{id}', 'PUT /api/scanner-presets/{id}',
+			'DELETE /api/scanner-presets/{id}', 'POST /api/scanner-presets/{id}/run',
+			'POST /api/jobs/tradingview-analysis', 'GET /api/jobs', 'GET /api/jobs/{jobId}',
+			'POST /api/jobs/{jobId}/cancel', 'POST /api/jobs/{jobId}/retry',
+			'POST /api/jobs/{jobId}/retry-failed', 'GET /api/status', 'GET /api/capabilities',
+		]);
+
 		for (const operation of operations) {
-			expect(operation.security).toEqual([
-				{ ApiKeyHeader: [] },
-				{ ApiKeyQuery: [] },
-			]);
+			const operationKey = `${operation.method || 'UNKNOWN'} ${operation.path || ''}`;
+			const expected = [{ ApiKeyHeader: [] }, { ApiKeyQuery: [] }];
+			if (firebaseAdminOperations.has(operationKey)) expected.push({ FirebaseBearerAuth: [] });
+			expect(operation.security).toEqual(expected);
+		}
+	});
+
+	it('marks Firebase-backed admin operations with viewer or operator roles', () => {
+		if (!fs.existsSync(contractPath)) return;
+		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+		const expectedRoles = {
+			'GET /api/status': 'admin.viewer',
+			'GET /api/alerts': 'admin.viewer',
+			'GET /api/jobs': 'admin.viewer',
+			'POST /api/alerts/{alertId}/replay': 'admin.operator',
+			'POST /api/scanner-presets': 'admin.operator',
+			'POST /api/jobs/{jobId}/cancel': 'admin.operator',
+		};
+
+		for (const [key, role] of Object.entries(expectedRoles)) {
+			const [method, path] = key.split(' ');
+			expect(contract.paths[path][method.toLowerCase()]['x-admin-role']).toBe(role);
 		}
 	});
 

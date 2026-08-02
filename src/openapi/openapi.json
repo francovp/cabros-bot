@@ -3,7 +3,7 @@
   "info": {
     "title": "Cabros Bot API",
     "version": "0.1.0",
-    "description": "Protected alerting and market-analysis APIs. Use the x-api-key header; the api-key query parameter exists only for legacy client compatibility and may leak through logs."
+    "description": "Protected alerting and market-analysis APIs. Machine clients use the x-api-key header; the api-key query parameter exists only for legacy compatibility and may leak through logs. The browser admin console can use Firebase ID tokens on documented admin operations when ENABLE_FIREBASE_ADMIN_AUTH=true."
   },
   "servers": [
     {
@@ -204,11 +204,11 @@
           "400": {
             "$ref": "#/components/responses/Error"
           },
-          "409": {
-            "$ref": "#/components/responses/IdempotencyConflict"
-          },
           "403": {
             "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/IdempotencyConflict"
           },
           "502": {
             "$ref": "#/components/responses/Error"
@@ -296,8 +296,12 @@
           },
           {
             "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
           }
-        ]
+        ],
+        "x-admin-role": "admin.viewer"
       }
     },
     "/api/alerts/summary": {
@@ -344,8 +348,12 @@
           },
           {
             "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
           }
-        ]
+        ],
+        "x-admin-role": "admin.viewer"
       }
     },
     "/api/alerts/export": {
@@ -410,8 +418,12 @@
           },
           {
             "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
           }
-        ]
+        ],
+        "x-admin-role": "admin.viewer"
       }
     },
     "/api/alerts/{alertId}": {
@@ -443,8 +455,12 @@
           },
           {
             "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
           }
-        ]
+        ],
+        "x-admin-role": "admin.viewer"
       }
     },
     "/api/alerts/{alertId}/replay": {
@@ -494,8 +510,12 @@
           },
           {
             "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
           }
-        ]
+        ],
+        "x-admin-role": "admin.operator"
       }
     },
     "/api/scanner-presets": {
@@ -519,8 +539,12 @@
           },
           {
             "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
           }
-        ]
+        ],
+        "x-admin-role": "admin.viewer"
       },
       "post": {
         "tags": [
@@ -548,8 +572,12 @@
           },
           {
             "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
           }
-        ]
+        ],
+        "x-admin-role": "admin.operator"
       }
     },
     "/api/scanner-presets/{id}": {
@@ -581,8 +609,12 @@
           },
           {
             "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
           }
-        ]
+        ],
+        "x-admin-role": "admin.viewer"
       },
       "put": {
         "tags": [
@@ -618,8 +650,12 @@
           },
           {
             "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
           }
-        ]
+        ],
+        "x-admin-role": "admin.operator"
       },
       "delete": {
         "tags": [
@@ -649,8 +685,12 @@
           },
           {
             "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
           }
-        ]
+        ],
+        "x-admin-role": "admin.operator"
       }
     },
     "/api/scanner-presets/{id}/run": {
@@ -688,8 +728,12 @@
           },
           {
             "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
           }
-        ]
+        ],
+        "x-admin-role": "admin.operator"
       }
     },
     "/api/jobs/tradingview-analysis": {
@@ -730,8 +774,12 @@
           },
           {
             "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
           }
-        ]
+        ],
+        "x-admin-role": "admin.operator"
       }
     },
     "/api/jobs": {
@@ -769,8 +817,12 @@
           },
           {
             "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
           }
-        ]
+        ],
+        "x-admin-role": "admin.viewer"
       }
     },
     "/api/jobs/{jobId}": {
@@ -802,8 +854,12 @@
           },
           {
             "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
           }
-        ]
+        ],
+        "x-admin-role": "admin.viewer"
       }
     },
     "/api/jobs/{jobId}/cancel": {
@@ -838,8 +894,12 @@
           },
           {
             "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
           }
-        ]
+        ],
+        "x-admin-role": "admin.operator"
       }
     },
     "/api/jobs/{jobId}/retry": {
@@ -880,8 +940,12 @@
           },
           {
             "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
           }
-        ]
+        ],
+        "x-admin-role": "admin.operator"
       }
     },
     "/api/jobs/{jobId}/retry-failed": {
@@ -925,8 +989,12 @@
           },
           {
             "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
           }
-        ]
+        ],
+        "x-admin-role": "admin.operator"
       }
     },
     "/api/news-monitor": {
@@ -1020,8 +1088,12 @@
           },
           {
             "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
           }
-        ]
+        ],
+        "x-admin-role": "admin.viewer"
       }
     },
     "/api/capabilities": {
@@ -1042,8 +1114,12 @@
           },
           {
             "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
           }
-        ]
+        ],
+        "x-admin-role": "admin.viewer"
       }
     }
   },
@@ -1059,6 +1135,12 @@
         "in": "query",
         "name": "api-key",
         "description": "Legacy compatibility only. Prefer x-api-key because query strings may be logged."
+      },
+      "FirebaseBearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "Firebase ID token for the browser admin console. Requires an admin.viewer or admin.operator custom claim; webhook operations remain API-key-only."
       }
     },
     "parameters": {
