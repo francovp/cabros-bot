@@ -928,13 +928,14 @@ async function summarizeAlerts({ from, to, limit, source, enriched } = {}) {
 		}
 
 		if (hasFilters) {
-			docs.push(...snapshot.docs.filter((doc) => {
+			const matchingDocs = snapshot.docs.filter((doc) => {
 				const data = doc.data() || {};
 				return matchesFilters({
 					source: typeof data.source === 'string' ? data.source : null,
 					enriched: Boolean(data.enriched),
 				}, { source, enriched });
-			}));
+			});
+			docs.push(...matchingDocs.slice(0, window.limit - docs.length));
 		} else {
 			docs.push(...snapshot.docs);
 		}
