@@ -191,7 +191,7 @@ describe('job worker runtime', () => {
 		});
 
 		await expect(onFailed(finalJob, finalError)).resolves.toEqual({ requeued: true });
-		expect(service.failQueuedJob).toHaveBeenCalledWith('job-123', 'worker-1', finalError, null);
+		expect(service.failQueuedJob).not.toHaveBeenCalled();
 		expect(retry).toHaveBeenCalledWith('failed');
 	});
 

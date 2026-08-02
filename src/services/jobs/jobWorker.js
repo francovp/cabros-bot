@@ -19,6 +19,15 @@ const FINAL_FAILURE_RETRY_DELAY_MS = 1000;
 const FINAL_FAILURE_MAX_ATTEMPTS = 5;
 
 async function finalizeFailedJob(service, job, workerId, error, attempt) {
+	if (attempt === null) {
+		if (typeof job.retry === 'function') {
+			await job.retry('failed');
+			return { requeued: true };
+		}
+
+		return false;
+	}
+
 	const jobId = job && job.data && job.data.jobId;
 	for (let failureAttempt = 1; failureAttempt <= FINAL_FAILURE_MAX_ATTEMPTS; failureAttempt++) {
 		try {
