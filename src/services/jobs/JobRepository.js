@@ -200,10 +200,11 @@ class JobRepository {
 		}
 	}
 
-	async _updateClaim(jobId, workerId, update) {
+	async _updateClaim(jobId, workerId, update, attempt = null) {
 		if (!jobId || !workerId) {
 			return false;
 		}
+		const hasAttempt = attempt !== null && attempt !== undefined;
 
 		const firestore = this._getFirestore();
 		if (firestore) {
@@ -224,6 +225,7 @@ class JobRepository {
 					!current
 					|| TERMINAL_STATUSES.has(current.status)
 					|| execution.workerId !== workerId
+					|| (hasAttempt && Number(execution.attempt) !== Number(attempt))
 				) {
 					return false;
 				}
@@ -239,7 +241,12 @@ class JobRepository {
 		}
 
 		const job = await this.get(jobId);
-		if (!job || TERMINAL_STATUSES.has(job.status) || (job.execution || {}).workerId !== workerId) {
+		if (
+			!job
+			|| TERMINAL_STATUSES.has(job.status)
+			|| (job.execution || {}).workerId !== workerId
+			|| (hasAttempt && Number((job.execution || {}).attempt) !== Number(attempt))
+		) {
 			return false;
 		}
 
@@ -251,7 +258,7 @@ class JobRepository {
 		return true;
 	}
 
-	async releaseClaim(jobId, workerId, error) {
+	async releaseClaim(jobId, workerId, error, attempt = null) {
 		return this._updateClaim(jobId, workerId, (job) => {
 			const execution = job.execution || {};
 			job.execution = {
@@ -264,10 +271,10 @@ class JobRepository {
 			};
 			job.updatedAt = new Date().toISOString();
 			return job;
-		});
+		}, attempt);
 	}
 
-	async failClaim(jobId, workerId, error) {
+	async failClaim(jobId, workerId, error, attempt = null) {
 		return this._updateClaim(jobId, workerId, (job) => {
 			const execution = job.execution || {};
 			job.status = 'failed';
@@ -284,7 +291,7 @@ class JobRepository {
 			};
 			job.updatedAt = new Date().toISOString();
 			return job;
-		});
+		}, attempt);
 	}
 
 	async get(jobId) {

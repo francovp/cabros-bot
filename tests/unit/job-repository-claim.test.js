@@ -149,6 +149,36 @@ describe('JobRepository durable claims', () => {
 		expect(transaction.set).not.toHaveBeenCalled();
 	});
 
+	it('rejects claim updates from an older processing attempt', async () => {
+		const job = {
+			jobId: 'job-123',
+			status: 'processing',
+			execution: {
+				mode: 'render-worker',
+				status: 'running',
+				workerId: 'worker-1',
+				attempt: 2,
+			},
+		};
+		const docRef = {};
+		const transaction = {
+			get: jest.fn().mockResolvedValue({ exists: true, id: job.jobId, data: () => job }),
+			set: jest.fn(),
+		};
+		const firestore = {
+			collection: jest.fn(() => ({ doc: jest.fn(() => docRef) })),
+			runTransaction: jest.fn(async callback => callback(transaction)),
+		};
+		const repository = new JobRepository();
+		repository._getFirestore = jest.fn(() => firestore);
+		const error = Object.assign(new Error('stale attempt'), { code: 'STALE_ATTEMPT' });
+
+		await expect(repository.releaseClaim('job-123', 'worker-1', error, 1)).resolves.toBe(false);
+		await expect(repository.failClaim('job-123', 'worker-1', error, 1)).resolves.toBe(false);
+
+		expect(transaction.set).not.toHaveBeenCalled();
+	});
+
 	it('does not overwrite a terminal job during a save transaction', async () => {
 		const docRef = {};
 		const transaction = {

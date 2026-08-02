@@ -680,20 +680,24 @@ class JobService {
 		throw error;
 	}
 
-	async releaseQueuedJob(jobId, workerId, error) {
+	async releaseQueuedJob(jobId, workerId, error, attempt = null) {
 		if (!this.repository || typeof this.repository.releaseClaim !== 'function') {
 			return false;
 		}
 
-		return this.repository.releaseClaim(jobId, workerId, error);
+		return attempt === null || attempt === undefined
+			? this.repository.releaseClaim(jobId, workerId, error)
+			: this.repository.releaseClaim(jobId, workerId, error, attempt);
 	}
 
-	async failQueuedJob(jobId, workerId, error) {
+	async failQueuedJob(jobId, workerId, error, attempt = null) {
 		if (!this.repository || typeof this.repository.failClaim !== 'function') {
 			return false;
 		}
 
-		const failed = await this.repository.failClaim(jobId, workerId, error);
+		const failed = await (attempt === null || attempt === undefined
+			? this.repository.failClaim(jobId, workerId, error)
+			: this.repository.failClaim(jobId, workerId, error, attempt));
 		if (failed) {
 			const job = await this.repository.get(jobId);
 			if (job) {

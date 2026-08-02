@@ -427,7 +427,7 @@ The system provides asynchronous job endpoints to support executing both `expand
 
 **Core Components**:
 - `src/services/jobs/JobService.js` — Coordinates job state tracking, background worker execution, progress reports, durable persistence checkpoints, and job eviction (jobs older than 1 hour).
-- `src/services/jobs/JobRepository.js` — Stores and lists sanitized job records in memory and, when `ENABLE_FIRESTORE_JOB_STORAGE=true`, in Firestore collection `tradingviewJobs`; claims, renewals, retry releases, terminal failures, and worker saves use Firestore transactions to preserve worker ownership.
+- `src/services/jobs/JobRepository.js` — Stores and lists sanitized job records in memory and, when `ENABLE_FIRESTORE_JOB_STORAGE=true`, in Firestore collection `tradingviewJobs`; claims, renewals, retry releases, terminal failures, and worker saves use Firestore transactions keyed by worker and processing attempt to preserve ownership.
 - `src/services/jobs/JobQueue.js` — Enqueues only durable `jobId` references in Redis/BullMQ, reports queue readiness without exposing `REDIS_URL`, and recreates failed producer connections without disabling later submissions.
 - `src/services/jobs/jobWorker.js` / `worker.js` — Claims queued jobs through Firestore transactions, renews active claims while external work is in flight, releases claims only when BullMQ has another attempt, persists final worker failures, tracks terminal callback delivery during shutdown, and drains the worker on `SIGTERM` without stopping an unlaunched Telegraf transport.
 - `src/controllers/webhooks/handlers/jobs/jobs.js` — HTTP route controller handlers (`postCreateJob`, `getJobList`, `getJobStatus`).
@@ -439,7 +439,7 @@ The system provides asynchronous job endpoints to support executing both `expand
 - Feature checks: returns `404 FEATURE_DISABLED` if market scanner jobs are created but `ENABLE_MARKET_SCANNER` is not `'true'`.
 - Persistence: `createJob()` and `getJob()` are async because job metadata/results may be written to or read from Firestore.
 - Render worker mode: set `JOB_EXECUTION_MODE=render-worker` with `REDIS_URL` and durable Firestore credentials. The web process returns `503 JOB_QUEUE_UNAVAILABLE` when the queue cannot accept work; `JOB_QUEUE_*` settings control attempts, backoff, concurrency, leases, and connection timeout. Final BullMQ failures become terminal `failed` jobs and trigger configured failure callbacks. The default `local` mode is unchanged.
-- Durable worker saves reject stale writes that would replace a terminal Firestore job state; claim release and failure transitions also verify ownership transactionally.
+- Durable worker saves reject stale writes that would replace a terminal Firestore job state; claim release and failure transitions also verify worker ownership and processing attempt transactionally, retrying terminal failure persistence while storage recovers.
 - Telegram commands: async `createJob()` rejections must stay inside the command `try/catch` so `replyValidationError()` can return clear command feedback instead of producing unhandled promise rejections.
 - Eviction: terminal jobs (`completed`, `failed`, `cancelled`, `timed_out`) older than 1 hour are deleted from memory/Firestore and return `404 Not Found`; active jobs are preserved.
 - Background failures: if the worker runs into unexpected exceptions or timeouts, the job is marked `failed` and reported to Sentry.

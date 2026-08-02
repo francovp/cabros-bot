@@ -1,6 +1,9 @@
 'use strict';
 
-const { startJobWorker } = require('../../src/services/jobs/jobWorker');
+const {
+	FINAL_FAILURE_RETRY_DELAY_MS,
+	startJobWorker,
+} = require('../../src/services/jobs/jobWorker');
 
 describe('job worker runtime', () => {
 	it('routes queue jobs through JobService and drains the worker once', async () => {
@@ -54,8 +57,40 @@ describe('job worker runtime', () => {
 		await onFailed(finalJob, finalError);
 		await runtime.stop();
 
-		expect(service.releaseQueuedJob).toHaveBeenCalledWith('job-123', 'worker-1', retryError);
-		expect(service.failQueuedJob).toHaveBeenCalledWith('job-456', 'worker-1', finalError);
+		expect(service.releaseQueuedJob).toHaveBeenCalledWith('job-123', 'worker-1', retryError, 1);
+		expect(service.failQueuedJob).toHaveBeenCalledWith('job-456', 'worker-1', finalError, 3);
+	});
+
+	it('retries final failure persistence after a transient storage error', async () => {
+		jest.useFakeTimers();
+		try {
+			let onFailed;
+			const queue = {
+				isEnabled: () => true,
+				createWorker: jest.fn((handler, options) => {
+					onFailed = options.onFailed;
+					return { id: 'worker-1' };
+				}),
+				closeWorker: jest.fn().mockResolvedValue(undefined),
+			};
+			const service = {
+				processQueuedJob: jest.fn(),
+				releaseQueuedJob: jest.fn(),
+				failQueuedJob: jest.fn()
+					.mockRejectedValueOnce(new Error('Firestore unavailable'))
+					.mockResolvedValueOnce(true),
+			};
+			await startJobWorker({ queue, service, workerId: 'worker-1' });
+			const finalJob = { data: { jobId: 'job-123' }, attemptsMade: 3, opts: { attempts: 3 } };
+			const finalError = Object.assign(new Error('permanent failure'), { code: 'PERMANENT_FAILURE' });
+			const finalization = onFailed(finalJob, finalError);
+
+			await jest.advanceTimersByTimeAsync(FINAL_FAILURE_RETRY_DELAY_MS);
+			await expect(finalization).resolves.toBe(true);
+			expect(service.failQueuedJob).toHaveBeenCalledTimes(2);
+		} finally {
+			jest.useRealTimers();
+		}
 	});
 
 	it('waits for pending callback deliveries before stopping', async () => {
