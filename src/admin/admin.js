@@ -38,6 +38,30 @@ const VIEW_ACTIONS = {
 	],
 };
 
+const STATUS_DEFINITION = { method: 'GET', path: '/api/status', label: 'Refresh status' };
+const STATUS_LABELS = {
+	ready: 'Ready',
+	disabled: 'Disabled',
+	misconfigured: 'Needs attention',
+};
+const DISPLAY_LABELS = {
+	telegram: 'Telegram',
+	whatsapp: 'WhatsApp',
+	discord: 'Discord',
+	tradingViewMcp: 'TradingView MCP',
+	tradingViewMcpEnrichment: 'TradingView MCP enrichment',
+	tradingViewVolumeConfirmation: 'TradingView volume confirmation',
+	tradingViewConfluenceEnrichment: 'TradingView confluence enrichment',
+	tradingViewConfluenceMultiTimeframe: 'TradingView multi-timeframe confluence',
+	newsMonitorLlm: 'News monitor LLM',
+	llmAlertEnrichment: 'LLM alert enrichment',
+	newsMonitorDedup: 'News monitor deduplication',
+	signalOutcomeWorker: 'Signal outcome worker',
+	idempotencyStorage: 'Idempotency storage',
+	scannerPresetStorage: 'Scanner preset storage',
+	cloudflareAig: 'Cloudflare AI Gateway',
+};
+
 let contractPromise;
 const loadContract = () => {
 	if (!contractPromise) {
@@ -159,6 +183,146 @@ const fillPath = (path, names, form) => names.reduce((resolved, name) => resolve
 const showError = (output, message) => {
 	output.className = 'response-block response-error';
 	output.textContent = message;
+};
+
+const asObject = (value) => value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+
+const displayLabel = (value) => DISPLAY_LABELS[value] || String(value)
+	.replace(/([a-z])([A-Z])/g, '$1 $2')
+	.replace(/[-_]/g, ' ')
+	.replace(/\b\w/g, (letter) => letter.toUpperCase());
+
+const displayStatus = (value) => STATUS_LABELS[value] || displayLabel(value || 'unknown');
+
+const statusTone = (value) => ['ready', 'disabled', 'misconfigured'].includes(value) ? value : 'unknown';
+
+const statusEntries = (value) => Object.entries(asObject(value))
+	.filter(([, detail]) => detail && typeof detail === 'object' && typeof detail.status === 'string');
+
+const statusCounts = (entries) => entries.reduce((counts, [, detail]) => {
+	counts[detail.status] = (counts[detail.status] || 0) + 1;
+	return counts;
+}, {});
+
+const createMetricCard = (label, value, meta) => {
+	const card = element('article', { className: 'metric-card' });
+	card.append(
+		element('p', { className: 'metric-label', text: label }),
+		element('strong', { className: 'metric-value', text: String(value) }),
+		element('p', { className: 'metric-meta', text: meta || '' }),
+	);
+	return card;
+};
+
+const renderStatusCards = (container, entries, emptyText) => {
+	container.replaceChildren();
+	if (!entries.length) {
+		container.append(element('p', { className: 'request-state', text: emptyText }));
+		return;
+	}
+	entries.forEach(([name, detail]) => {
+		const card = element('article', { className: 'status-card' });
+		const copy = element('div');
+		copy.append(
+			element('strong', { text: displayLabel(name) }),
+			element('small', { text: detail.provider ? `Provider: ${detail.provider}` : displayStatus(detail.status) }),
+		);
+		const badge = element('span', {
+			className: `status-badge status-${statusTone(detail.status)}`,
+			text: displayStatus(detail.status),
+		});
+		card.append(copy, badge);
+		container.append(card);
+	});
+};
+
+const renderStatusDashboard = ({ metrics, channelGrid, dependencyGrid, featureGrid, lastChecked }, status) => {
+	const service = asObject(status.service);
+	const features = Object.entries(asObject(status.featureFlags)).filter(([, enabled]) => enabled === true);
+	const channels = statusEntries(status.deliveryChannels);
+	const dependencies = statusEntries(status.dependencies);
+	const dependencyCounts = statusCounts(dependencies);
+	const attentionCount = dependencies.filter(([, detail]) => !['ready', 'disabled'].includes(detail.status)).length;
+
+	metrics.replaceChildren(
+		createMetricCard('Service', service.name || 'Unknown service', service.version ? `Version ${service.version}` : 'Version unavailable'),
+		createMetricCard('Environment', service.environment || 'Unknown', service.commit ? `Commit ${String(service.commit).slice(0, 8)}` : 'Commit unavailable'),
+		createMetricCard('Features', `${features.length} enabled`, `${Object.keys(asObject(status.featureFlags)).length} configured flags`),
+		createMetricCard('Dependencies', `${dependencyCounts.ready || 0} ready`, `${attentionCount} need attention · ${dependencyCounts.disabled || 0} disabled`),
+	);
+	lastChecked.textContent = `Last checked ${new Date().toLocaleTimeString()}`;
+
+	renderStatusCards(channelGrid, channels, 'No delivery channels reported.');
+	renderStatusCards(dependencyGrid, dependencies, 'No dependencies reported.');
+	featureGrid.replaceChildren();
+	if (!features.length) {
+		featureGrid.append(element('p', { className: 'request-state', text: 'No feature flags are enabled.' }));
+		return;
+	}
+	features.forEach(([name]) => featureGrid.append(element('span', {
+		className: 'capability-chip',
+		text: displayLabel(name),
+	})));
+};
+
+const createOverviewDashboard = () => {
+	const dashboard = element('div', { className: 'dashboard' });
+	const hero = element('section', { className: 'dashboard-hero' });
+	const heroCopy = element('div');
+	const lastChecked = element('p', { className: 'request-state', text: 'Waiting for live status…' });
+	heroCopy.append(
+		element('p', { className: 'eyebrow', text: 'Live control plane' }),
+		element('h2', { text: 'Operational overview' }),
+		element('p', { text: 'A quick read on service readiness, enabled capabilities and delivery health.' }),
+		lastChecked,
+	);
+	const refreshButton = element('button', { className: 'button-primary', text: 'Refresh dashboard' });
+	refreshButton.type = 'button';
+	hero.append(heroCopy, refreshButton);
+
+	const metrics = element('div', { className: 'metric-grid' });
+	metrics.append(element('p', { className: 'request-state', text: 'Loading live status…' }));
+	const channelGrid = element('div', { className: 'status-grid' });
+	const dependencyGrid = element('div', { className: 'status-grid' });
+	const featureGrid = element('div', { className: 'chip-grid' });
+	const statusOutput = element('pre', { className: 'response-block', text: 'No status response yet.' });
+	const rawStatus = element('details', { className: 'raw-status' });
+	rawStatus.append(element('summary', { text: 'Show raw status response' }), statusOutput);
+
+	const section = (title, content) => {
+		const node = element('section', { className: 'dashboard-section' });
+		node.append(element('h3', { text: title }), content);
+		return node;
+	};
+	dashboard.append(
+		hero,
+		metrics,
+		section('Delivery channels', channelGrid),
+		section('Dependency health', dependencyGrid),
+		section('Enabled capabilities', featureGrid),
+		rawStatus,
+	);
+
+	const loadStatus = async () => {
+		const status = await sendRequest({
+			definition: STATUS_DEFINITION,
+			path: STATUS_DEFINITION.path,
+			button: refreshButton,
+			output: statusOutput,
+		});
+		if (status && typeof status === 'object') {
+			renderStatusDashboard({ metrics, channelGrid, dependencyGrid, featureGrid, lastChecked }, status);
+		} else {
+			metrics.replaceChildren(element('p', { className: 'request-state', text: 'Status unavailable. Check the API key and service logs.' }));
+		}
+	};
+	refreshButton.addEventListener('click', loadStatus);
+	if (document.getElementById('api-key').value) {
+		loadStatus();
+	} else {
+		metrics.replaceChildren(element('p', { className: 'request-state', text: 'Enter an API key to load live status.' }));
+	}
+	return dashboard;
 };
 
 const sendRequest = async ({ definition, path, query, body, button, output }) => {
@@ -422,6 +586,10 @@ const renderView = async (name) => {
 			renderPlayground(contract, view);
 			return;
 		}
+		if (name === 'overview') {
+			view.append(createOverviewDashboard());
+			return;
+		}
 		view.append(element('h2', { text: name[0].toUpperCase() + name.slice(1) }));
 		if (name === 'alerts') {
 			view.append(createAlertListForm());
@@ -443,6 +611,10 @@ const renderView = async (name) => {
 document.addEventListener('DOMContentLoaded', () => {
 	const apiKey = document.getElementById('api-key');
 	const keyState = document.getElementById('key-state');
+	document.getElementById('connection-form').addEventListener('submit', (event) => {
+		event.preventDefault();
+		document.getElementById('save-key').click();
+	});
 	try {
 		apiKey.value = sessionStorage.getItem('cabros-admin-api-key') || '';
 	} catch (_) {
@@ -474,5 +646,5 @@ document.addEventListener('DOMContentLoaded', () => {
 		renderView(button.dataset.view);
 	}));
 
-	renderView('status');
+	renderView('overview');
 });

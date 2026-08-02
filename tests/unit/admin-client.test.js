@@ -95,14 +95,15 @@ const response = (body, status = 200) => ({
 function createBrowser({ fetchImpl, confirm = () => true, storedKey = '' }) {
 	const body = new FakeElement('body');
 	const elementsById = {};
-	['api-key', 'key-state', 'save-key', 'clear-key', 'view'].forEach((id) => {
-		const tag = id === 'api-key' ? 'input' : id === 'view' ? 'section' : id.endsWith('key') ? 'button' : 'p';
+	['api-key', 'key-state', 'save-key', 'clear-key', 'connection-form', 'view'].forEach((id) => {
+		const tag = id === 'api-key' ? 'input' : id === 'connection-form' ? 'form'
+			: id === 'view' ? 'section' : id.endsWith('key') ? 'button' : 'p';
 		const node = new FakeElement(tag);
 		node.id = id;
 		elementsById[id] = node;
 		body.append(node);
 	});
-	['status', 'alerts', 'presets', 'jobs', 'analysis', 'playground'].forEach((view) => {
+	['overview', 'status', 'alerts', 'presets', 'jobs', 'analysis', 'playground'].forEach((view) => {
 		const button = new FakeElement('button');
 		button.dataset.view = view;
 		body.append(button);
@@ -151,6 +152,65 @@ async function selectView(browser, name) {
 }
 
 describe('admin browser client', () => {
+	it('renders an operational overview from the status response', async () => {
+		const status = {
+			service: {
+				name: 'cabros-bot',
+				version: '0.1.0',
+				environment: 'production',
+				commit: 'abc123',
+			},
+			featureFlags: {
+				telegramBot: true,
+				marketScanner: false,
+				signalOutcomeTracking: true,
+			},
+			deliveryChannels: {
+				telegram: { enabled: true, status: 'ready' },
+				whatsapp: { enabled: false, status: 'disabled' },
+			},
+			dependencies: {
+				telegram: { enabled: true, configured: true, ready: true, status: 'ready' },
+				tradingViewMcp: { enabled: true, configured: false, ready: false, status: 'misconfigured' },
+				sentry: { enabled: false, configured: false, ready: false, status: 'disabled' },
+			},
+		};
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/status') return response(status);
+				return response({});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'overview');
+		await flush();
+
+		const overview = browser.elementsById.view;
+		expect(overview.textContent).toContain('Operational overview');
+		expect(overview.textContent).toContain('production');
+		expect(overview.textContent).toContain('2 enabled');
+		expect(overview.textContent).toContain('1 ready');
+		expect(overview.textContent).toContain('TradingView MCP');
+		expect(overview.textContent).not.toContain('undefined');
+	});
+
+	it('waits for an API key before loading protected overview status', async () => {
+		const requests = [];
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				requests.push(url);
+				if (url === '/openapi.json') return response(contract);
+				return response({});
+			},
+		});
+		await flush();
+
+		expect(requests).toEqual(['/openapi.json']);
+		expect(browser.elementsById.view.textContent).toContain('Enter an API key');
+	});
+
 	it('uses the current session key, redacts output, and cancels before dispatch', async () => {
 		const events = [];
 		const browser = createBrowser({
@@ -168,6 +228,7 @@ describe('admin browser client', () => {
 		browser.elementsById['api-key'].value = 'current-secret';
 		await browser.elementsById['save-key'].dispatch('click');
 
+		await selectView(browser, 'status');
 		const statusForm = findForm(browser.elementsById.view, 'GET /api/status');
 		await statusForm.dispatch('submit');
 		await flush();
