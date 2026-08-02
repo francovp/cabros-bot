@@ -5,6 +5,26 @@ const { JobService } = require('../../src/services/jobs/JobService');
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 describe('queued job execution', () => {
+	it('preserves the custom Bollinger threshold from queued metadata', () => {
+		const service = new JobService({});
+
+		const parsed = service._parseQueuedJob({
+			type: 'market-scanner',
+			requestMetadata: {
+				type: 'market-scanner',
+				exchange: 'BINANCE',
+				timeframe: '4h',
+				scans: ['bollinger_scan'],
+				limit: 5,
+				bbwThreshold: 0.12,
+				ranked: false,
+				includeMultiTimeframe: false,
+			},
+		});
+
+		expect(parsed.bbwThreshold).toBe(0.12);
+	});
+
 	it('claims a durable job before starting its domain work', async () => {
 		const job = {
 			jobId: 'job-123',

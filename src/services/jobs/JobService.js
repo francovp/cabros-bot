@@ -711,7 +711,10 @@ class JobService {
 			return parseExpandedAnalysisAlertRequest({ body: job.requestMetadata });
 		}
 		if (job.type === 'market-scanner') {
-			return parseMarketScannerRequest({ body: job.requestMetadata });
+			const requestMetadata = job.requestMetadata.bbwThreshold === undefined
+				? job.requestMetadata
+				: { ...job.requestMetadata, bbw_threshold: job.requestMetadata.bbwThreshold };
+			return parseMarketScannerRequest({ body: requestMetadata });
 		}
 
 		const error = new Error(`Unsupported queued job type: ${job.type}`);
