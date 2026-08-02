@@ -118,4 +118,34 @@ describe('JobRepository durable claims', () => {
 		expect(renewed.execution).toEqual(expect.objectContaining({ workerId: 'worker-1', status: 'running' }));
 		expect(Date.parse(renewed.execution.leaseUntil)).toBeGreaterThan(Date.parse(oldLeaseUntil));
 	});
+
+	it('updates claims transactionally only for the current worker owner', async () => {
+		const job = {
+			jobId: 'job-123',
+			status: 'processing',
+			execution: {
+				mode: 'render-worker',
+				status: 'running',
+				workerId: 'worker-2',
+			},
+		};
+		const docRef = {};
+		const transaction = {
+			get: jest.fn().mockResolvedValue({ exists: true, id: job.jobId, data: () => job }),
+			set: jest.fn(),
+		};
+		const firestore = {
+			collection: jest.fn(() => ({ doc: jest.fn(() => docRef) })),
+			runTransaction: jest.fn(async callback => callback(transaction)),
+		};
+		const repository = new JobRepository();
+		repository._getFirestore = jest.fn(() => firestore);
+		const error = Object.assign(new Error('stale worker'), { code: 'STALE_WORKER' });
+
+		await expect(repository.releaseClaim('job-123', 'worker-1', error)).resolves.toBe(false);
+		await expect(repository.failClaim('job-123', 'worker-1', error)).resolves.toBe(false);
+
+		expect(firestore.runTransaction).toHaveBeenCalledTimes(2);
+		expect(transaction.set).not.toHaveBeenCalled();
+	});
 });

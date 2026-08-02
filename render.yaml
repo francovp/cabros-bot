@@ -28,6 +28,9 @@ services:
   - key: JOB_EXECUTION_MODE
     value: local
     previewValue: local
+  - key: ENABLE_FIRESTORE_JOB_STORAGE
+    value: true
+    previewValue: false
   - key: REDIS_URL
     fromService:
       name: cabros-crypto-bot-telegram-queue

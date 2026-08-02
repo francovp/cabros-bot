@@ -427,7 +427,7 @@ The system provides asynchronous job endpoints to support executing both `expand
 
 **Core Components**:
 - `src/services/jobs/JobService.js` — Coordinates job state tracking, background worker execution, progress reports, durable persistence checkpoints, and job eviction (jobs older than 1 hour).
-- `src/services/jobs/JobRepository.js` — Stores and lists sanitized job records in memory and, when `ENABLE_FIRESTORE_JOB_STORAGE=true`, in Firestore collection `tradingviewJobs`.
+- `src/services/jobs/JobRepository.js` — Stores and lists sanitized job records in memory and, when `ENABLE_FIRESTORE_JOB_STORAGE=true`, in Firestore collection `tradingviewJobs`; claims, renewals, retry releases, and terminal failures use Firestore transactions to preserve worker ownership.
 - `src/services/jobs/JobQueue.js` — Enqueues only durable `jobId` references in Redis/BullMQ, reports queue readiness without exposing `REDIS_URL`, and recreates failed producer connections without disabling later submissions.
 - `src/services/jobs/jobWorker.js` / `worker.js` — Claims queued jobs through Firestore transactions, renews active claims while external work is in flight, releases claims only when BullMQ has another attempt, persists final worker failures, tracks terminal callback delivery during shutdown, and drains the worker on `SIGTERM` without stopping an unlaunched Telegraf transport.
 - `src/controllers/webhooks/handlers/jobs/jobs.js` — HTTP route controller handlers (`postCreateJob`, `getJobList`, `getJobStatus`).

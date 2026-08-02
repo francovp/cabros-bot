@@ -174,56 +174,91 @@ class JobRepository {
 		}
 	}
 
-	async releaseClaim(jobId, workerId, error) {
+	async _updateClaim(jobId, workerId, update) {
+		if (!jobId || !workerId) {
+			return false;
+		}
+
+		const firestore = this._getFirestore();
+		if (firestore) {
+			if (typeof firestore.runTransaction !== 'function') {
+				return false;
+			}
+
+			const docRef = firestore.collection(COLLECTION_NAME).doc(jobId);
+			return firestore.runTransaction(async (transaction) => {
+				const snapshot = await transaction.get(docRef);
+				if (!snapshot || !snapshot.exists) {
+					return false;
+				}
+
+				const current = sanitizeJob({ ...(snapshot.data() || {}), jobId: snapshot.id || jobId });
+				const execution = current && current.execution ? current.execution : {};
+				if (
+					!current
+					|| TERMINAL_STATUSES.has(current.status)
+					|| execution.workerId !== workerId
+				) {
+					return false;
+				}
+
+				const nextJob = update(current);
+				if (!nextJob) {
+					return false;
+				}
+				transaction.set(docRef, nextJob);
+				memoryJobs.set(jobId, cloneJob(nextJob));
+				return true;
+			});
+		}
+
 		const job = await this.get(jobId);
-		if (!job || TERMINAL_STATUSES.has(job.status)) {
+		if (!job || TERMINAL_STATUSES.has(job.status) || (job.execution || {}).workerId !== workerId) {
 			return false;
 		}
 
-		const execution = job.execution || {};
-		if (workerId && execution.workerId && execution.workerId !== workerId) {
+		const nextJob = update(job);
+		if (!nextJob) {
 			return false;
 		}
-
-		job.execution = {
-			...execution,
-			status: 'queued',
-			workerId: null,
-			claimedAt: null,
-			leaseUntil: null,
-			lastErrorCode: error && error.code ? error.code : 'JOB_WORKER_FAILED',
-		};
-		job.updatedAt = new Date().toISOString();
-		await this.save(job, { required: true });
+		await this.save(nextJob, { required: true });
 		return true;
 	}
 
+	async releaseClaim(jobId, workerId, error) {
+		return this._updateClaim(jobId, workerId, (job) => {
+			const execution = job.execution || {};
+			job.execution = {
+				...execution,
+				status: 'queued',
+				workerId: null,
+				claimedAt: null,
+				leaseUntil: null,
+				lastErrorCode: error && error.code ? error.code : 'JOB_WORKER_FAILED',
+			};
+			job.updatedAt = new Date().toISOString();
+			return job;
+		});
+	}
+
 	async failClaim(jobId, workerId, error) {
-		const job = await this.get(jobId);
-		if (!job || TERMINAL_STATUSES.has(job.status)) {
-			return false;
-		}
-
-		const execution = job.execution || {};
-		if (workerId && execution.workerId && execution.workerId !== workerId) {
-			return false;
-		}
-
-		job.status = 'failed';
-		job.error = error && error.message ? error.message : 'Queue worker failed.';
-		job.code = error && error.code ? error.code : 'JOB_WORKER_FAILED';
-		job.execution = {
-			...execution,
-			status: 'failed',
-			workerId: null,
-			claimedAt: null,
-			leaseUntil: null,
-			completedAt: new Date().toISOString(),
-			lastErrorCode: job.code,
-		};
-		job.updatedAt = new Date().toISOString();
-		await this.save(job, { required: true });
-		return true;
+		return this._updateClaim(jobId, workerId, (job) => {
+			const execution = job.execution || {};
+			job.status = 'failed';
+			job.error = error && error.message ? error.message : 'Queue worker failed.';
+			job.code = error && error.code ? error.code : 'JOB_WORKER_FAILED';
+			job.execution = {
+				...execution,
+				status: 'failed',
+				workerId: null,
+				claimedAt: null,
+				leaseUntil: null,
+				completedAt: new Date().toISOString(),
+				lastErrorCode: job.code,
+			};
+			job.updatedAt = new Date().toISOString();
+			return job;
+		});
 	}
 
 	async get(jobId) {
