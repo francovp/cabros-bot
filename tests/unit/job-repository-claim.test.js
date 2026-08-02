@@ -53,4 +53,37 @@ describe('JobRepository durable claims', () => {
 		expect(duplicateClaim).toEqual({ claimed: false, reason: 'active' });
 		expect(transaction.set).not.toHaveBeenCalled();
 	});
+
+	it('marks a claimed job as failed after the final worker attempt', async () => {
+		const job = {
+			jobId: 'job-123',
+			status: 'processing',
+			execution: {
+				mode: 'render-worker',
+				status: 'running',
+				workerId: 'worker-1',
+				claimedAt: new Date().toISOString(),
+				leaseUntil: new Date(Date.now() + 60000).toISOString(),
+			},
+		};
+		const repository = new JobRepository();
+		repository.get = jest.fn().mockResolvedValue(job);
+		repository.save = jest.fn().mockResolvedValue('job-123');
+		const error = Object.assign(new Error('permanent failure'), { code: 'PERMANENT_FAILURE' });
+
+		await expect(repository.failClaim('job-123', 'worker-1', error)).resolves.toBe(true);
+		expect(repository.save).toHaveBeenCalledWith(
+			expect.objectContaining({
+				status: 'failed',
+				error: 'permanent failure',
+				code: 'PERMANENT_FAILURE',
+				execution: expect.objectContaining({
+					status: 'failed',
+					workerId: null,
+					leaseUntil: null,
+				}),
+			}),
+			{ required: true },
+		);
+	});
 });

@@ -28,4 +28,33 @@ describe('job worker runtime', () => {
 		expect(service.processQueuedJob).toHaveBeenCalledWith('job-123', null, 'worker-1');
 		expect(closeWorker).toHaveBeenCalledTimes(1);
 	});
+
+	it('releases retryable claims and fails the job after the final attempt', async () => {
+		let onFailed;
+		const queue = {
+			isEnabled: () => true,
+			createWorker: jest.fn((handler, options) => {
+				onFailed = options.onFailed;
+				return { id: 'worker-1' };
+			}),
+			closeWorker: jest.fn().mockResolvedValue(undefined),
+		};
+		const service = {
+			processQueuedJob: jest.fn(),
+			releaseQueuedJob: jest.fn().mockResolvedValue(true),
+			failQueuedJob: jest.fn().mockResolvedValue(true),
+		};
+		const runtime = await startJobWorker({ queue, service, workerId: 'worker-1' });
+		const retryableJob = { data: { jobId: 'job-123' }, attemptsMade: 1, opts: { attempts: 3 } };
+		const finalJob = { data: { jobId: 'job-456' }, attemptsMade: 3, opts: { attempts: 3 } };
+		const retryError = Object.assign(new Error('transient failure'), { code: 'TEMPORARY_FAILURE' });
+		const finalError = Object.assign(new Error('permanent failure'), { code: 'PERMANENT_FAILURE' });
+
+		await onFailed(retryableJob, retryError);
+		await onFailed(finalJob, finalError);
+		await runtime.stop();
+
+		expect(service.releaseQueuedJob).toHaveBeenCalledWith('job-123', 'worker-1', retryError);
+		expect(service.failQueuedJob).toHaveBeenCalledWith('job-456', 'worker-1', finalError);
+	});
 });

@@ -45,4 +45,21 @@ describe('queued job execution', () => {
 			code: 'JOB_CLAIM_ACTIVE',
 		});
 	});
+
+	it('persists a terminal failure for a final worker attempt', async () => {
+		const repository = {
+			failClaim: jest.fn().mockResolvedValue(true),
+			get: jest.fn().mockResolvedValue({ jobId: 'job-123', status: 'failed' }),
+		};
+		const service = new JobService(repository);
+		service._triggerCallbackIfConfigured = jest.fn().mockResolvedValue(undefined);
+		const error = Object.assign(new Error('permanent failure'), { code: 'PERMANENT_FAILURE' });
+
+		await expect(service.failQueuedJob('job-123', 'worker-1', error)).resolves.toBe(true);
+
+		expect(repository.failClaim).toHaveBeenCalledWith('job-123', 'worker-1', error);
+		expect(service._triggerCallbackIfConfigured).toHaveBeenCalledWith(
+			expect.objectContaining({ jobId: 'job-123', status: 'failed' }),
+		);
+	});
 });

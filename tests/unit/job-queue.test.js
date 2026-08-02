@@ -45,6 +45,40 @@ describe('JobQueue', () => {
 		expect(add.mock.calls[0][1]).toEqual({ jobId: 'job-123' });
 	});
 
+	it('can retry enqueue after an initial queue readiness failure', async () => {
+		const firstClose = jest.fn().mockResolvedValue(undefined);
+		const firstQueue = {
+			waitUntilReady: jest.fn().mockRejectedValue(new Error('Redis unavailable')),
+			close: firstClose,
+		};
+		const secondAdd = jest.fn().mockResolvedValue({ id: 'job-456' });
+		const secondQueue = {
+			add: secondAdd,
+			waitUntilReady: jest.fn().mockResolvedValue(undefined),
+		};
+		const QueueClass = jest.fn()
+			.mockImplementationOnce(() => firstQueue)
+			.mockImplementationOnce(() => secondQueue);
+		const RedisClass = jest.fn(() => ({ disconnect: jest.fn() }));
+
+		process.env = {
+			...savedEnv,
+			JOB_EXECUTION_MODE: 'render-worker',
+			REDIS_URL: 'redis://queue.example:6379',
+		};
+
+		const queue = new JobQueue({ QueueClass, RedisClass });
+
+		await expect(queue.enqueue('job-123')).rejects.toMatchObject({
+			code: 'JOB_QUEUE_UNAVAILABLE',
+		});
+		expect(queue.accepting).toBe(true);
+
+		await expect(queue.enqueue('job-456')).resolves.toEqual({ queued: true, jobId: 'job-456' });
+		expect(secondAdd).toHaveBeenCalled();
+		expect(firstClose).toHaveBeenCalledTimes(1);
+	});
+
 	it('stops accepting work before closing a worker', async () => {
 		const close = jest.fn().mockResolvedValue(undefined);
 		const worker = { close };

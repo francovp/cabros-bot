@@ -98,6 +98,16 @@ services:
       name: cabros-crypto-bot-telegram-iac
       type: web
       envVarKey: WHATSAPP_PREVIEW_CHAT_ID
+  - key: ENABLE_DISCORD_ALERTS
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: ENABLE_DISCORD_ALERTS
+  - key: DISCORD_WEBHOOK_URL
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: DISCORD_WEBHOOK_URL
   - key: FIREBASE_PROJECT_ID
     fromService:
       name: cabros-crypto-bot-telegram-iac
@@ -108,6 +118,11 @@ services:
       name: cabros-crypto-bot-telegram-iac
       type: web
       envVarKey: FIREBASE_SERVICE_ACCOUNT_JSON
+  - key: JOB_CALLBACK_SIGNING_SECRET
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: JOB_CALLBACK_SIGNING_SECRET
   - key: ENABLE_MARKET_SCANNER
     fromService:
       name: cabros-crypto-bot-telegram-iac

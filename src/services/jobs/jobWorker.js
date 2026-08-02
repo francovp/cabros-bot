@@ -9,6 +9,12 @@ function getWorkerId() {
 		|| `worker-${process.pid}`;
 }
 
+function hasAttemptsRemaining(job) {
+	const attemptsMade = Number(job && job.attemptsMade);
+	const attempts = Number(job && job.opts && job.opts.attempts);
+	return Number.isFinite(attemptsMade) && Number.isFinite(attempts) && attemptsMade < attempts;
+}
+
 async function startJobWorker({
 	queue = jobQueue,
 	service = new JobService(),
@@ -27,7 +33,15 @@ async function startJobWorker({
 		{
 			onFailed: (job, error) => {
 				const jobId = job && job.data && job.data.jobId;
-				return jobId ? service.releaseQueuedJob(jobId, workerId, error) : undefined;
+				if (!jobId) {
+					return undefined;
+				}
+
+				if (hasAttemptsRemaining(job)) {
+					return service.releaseQueuedJob(jobId, workerId, error);
+				}
+
+				return service.failQueuedJob(jobId, workerId, error);
 			},
 		},
 	);

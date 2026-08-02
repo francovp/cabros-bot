@@ -233,7 +233,20 @@ class JobQueue {
 			return this.queue;
 		} catch (error) {
 			this._recordError(error);
-			await this.close();
+			const failedQueue = this.queue;
+			const failedConnection = this.queueConnection;
+			this.queue = null;
+			this.queueConnection = null;
+			this.queueReady = false;
+			this.readyPromise = null;
+			try {
+				if (failedQueue && typeof failedQueue.close === 'function') {
+					await failedQueue.close();
+				}
+			} catch (closeError) {
+				this._recordError(closeError);
+			}
+			await this._closeConnection(failedConnection);
 			throw new JobQueueUnavailableError();
 		}
 	}

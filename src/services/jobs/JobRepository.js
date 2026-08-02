@@ -148,6 +148,34 @@ class JobRepository {
 		return true;
 	}
 
+	async failClaim(jobId, workerId, error) {
+		const job = await this.get(jobId);
+		if (!job || TERMINAL_STATUSES.has(job.status)) {
+			return false;
+		}
+
+		const execution = job.execution || {};
+		if (workerId && execution.workerId && execution.workerId !== workerId) {
+			return false;
+		}
+
+		job.status = 'failed';
+		job.error = error && error.message ? error.message : 'Queue worker failed.';
+		job.code = error && error.code ? error.code : 'JOB_WORKER_FAILED';
+		job.execution = {
+			...execution,
+			status: 'failed',
+			workerId: null,
+			claimedAt: null,
+			leaseUntil: null,
+			completedAt: new Date().toISOString(),
+			lastErrorCode: job.code,
+		};
+		job.updatedAt = new Date().toISOString();
+		await this.save(job, { required: true });
+		return true;
+	}
+
 	async get(jobId) {
 		if (!jobId) {
 			return null;

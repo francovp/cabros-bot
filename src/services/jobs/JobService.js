@@ -651,6 +651,22 @@ class JobService {
 		return this.repository.releaseClaim(jobId, workerId, error);
 	}
 
+	async failQueuedJob(jobId, workerId, error) {
+		if (!this.repository || typeof this.repository.failClaim !== 'function') {
+			return false;
+		}
+
+		const failed = await this.repository.failClaim(jobId, workerId, error);
+		if (failed) {
+			const job = await this.repository.get(jobId);
+			if (job) {
+				await this._triggerCallbackIfConfigured(job);
+			}
+		}
+
+		return failed;
+	}
+
 	/**
 	 * Run the job in the background.
 	 */
