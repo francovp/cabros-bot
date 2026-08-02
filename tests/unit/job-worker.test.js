@@ -259,6 +259,39 @@ describe('queued job execution', () => {
 		);
 	});
 
+	it('aborts queued delivery when a terminal state wins before the checkpoint', async () => {
+		const job = {
+			jobId: 'job-123',
+			status: 'processing',
+			execution: {
+				mode: 'render-worker',
+				status: 'running',
+				workerId: 'worker-1',
+				attempt: 2,
+			},
+			_workerId: 'worker-1',
+		};
+		const repository = {
+			get: jest.fn().mockResolvedValue({ ...job, status: 'cancelled' }),
+			save: jest.fn(),
+		};
+		const service = new JobService(repository);
+		const notificationManager = {
+			sendToAll: jest.fn().mockResolvedValue([]),
+			getEnabledChannels: () => ['telegram'],
+		};
+
+		await expect(service._sendQueuedNotification(
+			job,
+			notificationManager,
+			{ text: 'BTC alert' },
+			{},
+		)).rejects.toMatchObject({ code: 'JOB_CLAIM_LOST' });
+
+		expect(notificationManager.sendToAll).not.toHaveBeenCalled();
+		expect(repository.save).not.toHaveBeenCalled();
+	});
+
 	it('preserves a completed delivery when checkpoint persistence fails after sending', async () => {
 		const job = {
 			jobId: 'job-123',

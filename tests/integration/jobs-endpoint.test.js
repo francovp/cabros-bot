@@ -366,7 +366,7 @@ describe('Jobs API Integration Tests', () => {
 				status: 'failed',
 			}),
 		]);
-		expect(admin.__mockOrderBy).toHaveBeenCalledWith('createdAt', 'desc');
+		expect(admin.__mockWhere).toHaveBeenCalledWith('status', '==', 'failed');
 		expect(admin.__mockLimit).toHaveBeenCalledWith(1);
 	});
 

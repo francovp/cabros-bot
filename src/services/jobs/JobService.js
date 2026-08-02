@@ -671,11 +671,16 @@ class JobService {
 
 		let reconciled = 0;
 		for (const job of jobs || []) {
+			const execution = job && job.execution ? job.execution : {};
+			const leaseUntilMs = Date.parse(execution.leaseUntil || '');
+			const expiredClaim = ['claimed', 'running'].includes(execution.status)
+				&& Number.isFinite(leaseUntilMs)
+				&& leaseUntilMs <= Date.now();
 			if (
 				!job
 				|| typeof job.jobId !== 'string'
-				|| job.execution?.mode !== 'render-worker'
-				|| job.execution?.status !== 'queued'
+				|| execution.mode !== 'render-worker'
+				|| (execution.status !== 'queued' && !expiredClaim)
 			) {
 				continue;
 			}
@@ -1275,6 +1280,11 @@ class JobService {
 		const current = await this.repository.get(job.jobId);
 		if (current) {
 			if (TERMINAL_JOB_STATUSES.has(current.status) && current.status !== job.status) {
+				if (job._workerId) {
+					const error = new Error('Job reached a terminal state before this worker checkpoint.');
+					error.code = 'JOB_CLAIM_LOST';
+					throw error;
+				}
 				return false;
 			}
 		}

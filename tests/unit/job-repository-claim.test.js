@@ -33,6 +33,34 @@ describe('JobRepository durable claims', () => {
 		}
 	});
 
+	it('pushes a status filter into the Firestore reconciliation query', async () => {
+		const processingJob = {
+			jobId: 'job-processing-123',
+			status: 'processing',
+			createdAt: new Date().toISOString(),
+		};
+		const query = {
+			where: jest.fn().mockReturnThis(),
+			limit: jest.fn().mockReturnThis(),
+			get: jest.fn().mockResolvedValue({
+				docs: [{ id: processingJob.jobId, data: () => processingJob }],
+			}),
+		};
+		const repository = new JobRepository();
+		repository._getFirestore = jest.fn(() => ({
+			collection: jest.fn(() => query),
+		}));
+
+		try {
+			await expect(repository.list({ status: 'processing', limit: 1 })).resolves.toEqual([
+				expect.objectContaining({ jobId: processingJob.jobId }),
+			]);
+			expect(query.where).toHaveBeenCalledWith('status', '==', 'processing');
+		} finally {
+			_resetForTesting();
+		}
+	});
+
 	it('atomically claims a queued job and rejects an active duplicate claim', async () => {
 		const job = {
 			jobId: 'job-123',

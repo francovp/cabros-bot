@@ -104,7 +104,20 @@ describe('JobService Render worker mode', () => {
 				{
 					jobId: 'active-job',
 					status: 'processing',
-					execution: { mode: 'render-worker', status: 'running' },
+					execution: {
+						mode: 'render-worker',
+						status: 'running',
+						leaseUntil: new Date(Date.now() + 60000).toISOString(),
+					},
+				},
+				{
+					jobId: 'expired-claim-job',
+					status: 'processing',
+					execution: {
+						mode: 'render-worker',
+						status: 'running',
+						leaseUntil: new Date(Date.now() - 1000).toISOString(),
+					},
 				},
 			]),
 		};
@@ -114,10 +127,11 @@ describe('JobService Render worker mode', () => {
 		};
 		const service = new JobService(repository, queue);
 
-		await expect(service.reconcileQueuedJobs()).resolves.toBe(1);
+		await expect(service.reconcileQueuedJobs()).resolves.toBe(2);
 
 		expect(repository.list).toHaveBeenCalledWith({ status: 'processing', limit: expect.any(Number) });
 		expect(queue.enqueue).toHaveBeenCalledWith('lost-queue-job');
+		expect(queue.enqueue).toHaveBeenCalledWith('expired-claim-job');
 		expect(queue.enqueue).not.toHaveBeenCalledWith('active-job');
 	});
 

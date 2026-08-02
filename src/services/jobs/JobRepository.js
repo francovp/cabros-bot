@@ -540,10 +540,18 @@ class JobRepository {
 				let matchingJobs = 0;
 
 				while (true) {
-					let query = firestore
-						.collection(COLLECTION_NAME)
-						.orderBy('createdAt', 'desc')
-						.limit(safeLimit);
+					let query = firestore.collection(COLLECTION_NAME);
+					if (status && typeof query.where === 'function') {
+						const statusQuery = query.where('status', '==', status);
+						if (statusQuery && typeof statusQuery.limit === 'function') {
+							query = statusQuery;
+						} else {
+							query = query.orderBy('createdAt', 'desc');
+						}
+					} else {
+						query = query.orderBy('createdAt', 'desc');
+					}
+					query = query.limit(safeLimit);
 					if (lastDoc) {
 						query = query.startAfter(lastDoc);
 					}
