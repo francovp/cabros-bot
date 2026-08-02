@@ -231,6 +231,36 @@ describe('JobRepository durable claims', () => {
 		expect(transaction.set).not.toHaveBeenCalled();
 	});
 
+	it('rejects an ownerless nonterminal save during an active claim', async () => {
+		const docRef = {};
+		const transaction = {
+			get: jest.fn().mockResolvedValue({
+				exists: true,
+				id: 'job-123',
+				data: () => ({
+					jobId: 'job-123',
+					status: 'processing',
+					execution: { mode: 'render-worker', status: 'running', workerId: 'worker-1' },
+				}),
+			}),
+			set: jest.fn(),
+		};
+		const firestore = {
+			collection: jest.fn(() => ({ doc: jest.fn(() => docRef) })),
+			runTransaction: jest.fn(async callback => callback(transaction)),
+		};
+		const repository = new JobRepository();
+		repository._getFirestore = jest.fn(() => firestore);
+
+		await expect(repository.save({
+			jobId: 'job-123',
+			status: 'processing',
+			execution: { mode: 'render-worker', status: 'queued' },
+		}, { required: true })).resolves.toBeNull();
+
+		expect(transaction.set).not.toHaveBeenCalled();
+	});
+
 	it('rejects claim renewal when durable storage is unavailable', async () => {
 		const repository = new JobRepository();
 		repository._getFirestore = jest.fn(() => null);

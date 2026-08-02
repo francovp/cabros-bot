@@ -53,6 +53,12 @@ class JobRepository {
 					if (snapshot && snapshot.exists) {
 						const current = sanitizeJob({ ...(snapshot.data() || {}), jobId: snapshot.id || sanitized.jobId });
 						const incomingWorkerId = sanitized.execution && sanitized.execution.workerId;
+						const currentExecution = current && current.execution ? current.execution : {};
+						const currentClaimIsActive = currentExecution.workerId
+							&& ['claimed', 'running'].includes(currentExecution.status);
+						if (currentClaimIsActive && !incomingWorkerId && !TERMINAL_STATUSES.has(sanitized.status)) {
+							return false;
+						}
 						if (incomingWorkerId && (!current || (current.execution || {}).workerId !== incomingWorkerId)) {
 							return false;
 						}
