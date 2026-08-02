@@ -69,7 +69,41 @@ describe('queued job execution', () => {
 			reason: 'terminal',
 		});
 
-		expect(service._triggerCallbackIfConfigured).toHaveBeenCalledWith(terminalJob);
+		expect(service._triggerCallbackIfConfigured).toHaveBeenCalledWith(
+			terminalJob,
+			{ awaitDelivery: true },
+		);
+	});
+
+	it('waits for callback reconciliation before acknowledging terminal redelivery', async () => {
+		const terminalJob = {
+			jobId: 'job-123',
+			status: 'completed',
+			callbackUrl: 'https://example.com/callback',
+			callbackEvents: ['completed'],
+			callbackStatus: { status: 'pending', attempts: [] },
+		};
+		const repository = {
+			claim: jest.fn().mockResolvedValue({ claimed: false, reason: 'terminal' }),
+			get: jest.fn().mockResolvedValue(terminalJob),
+		};
+		const service = new JobService(repository);
+		let resolveCallback;
+		service._sendCallbackWithRetry = jest.fn(() => new Promise((resolve) => {
+			resolveCallback = resolve;
+		}));
+
+		let settled = false;
+		const run = service.processQueuedJob('job-123', null, 'worker-1').then((result) => {
+			settled = true;
+			return result;
+		});
+		await Promise.resolve();
+		await Promise.resolve();
+
+		expect(settled).toBe(false);
+		resolveCallback();
+		await expect(run).resolves.toEqual({ skipped: true, reason: 'terminal' });
 	});
 
 	it('binds processor failures to the Firestore claim attempt', async () => {
@@ -135,7 +169,7 @@ describe('queued job execution', () => {
 			jobId: 'job-123',
 			type: 'expanded-analysis',
 			status: 'processing',
-			execution: { mode: 'render-worker', status: 'claimed', workerId: 'worker-1' },
+			execution: { mode: 'render-worker', status: 'claimed', workerId: 'worker-1', attempt: 3 },
 			createdAt: new Date().toISOString(),
 		};
 		const repository = {
@@ -154,7 +188,7 @@ describe('queued job execution', () => {
 			const runPromise = service._runBackgroundJob('job-123', {}, null, null, 'worker-1');
 			await delay(30);
 			expect(service._executeExpandedAnalysis).toHaveBeenCalled();
-			expect(repository.renewClaim).toHaveBeenCalledWith('job-123', 'worker-1');
+		expect(repository.renewClaim).toHaveBeenCalledWith('job-123', 'worker-1', 3);
 			finishExecution();
 			await runPromise;
 		} finally {

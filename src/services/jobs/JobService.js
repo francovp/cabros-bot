@@ -601,6 +601,24 @@ class JobService {
 						`[JobService] Failed to durably reconcile queue failure for ${jobId}:`,
 						persistenceError.message,
 					);
+					let deleted = false;
+					try {
+						deleted = typeof this.repository.delete === 'function'
+							&& await this.repository.delete(jobId);
+					} catch (cleanupError) {
+						console.error(
+							`[JobService] Failed to remove unreconciled queue job ${jobId}:`,
+							cleanupError.message,
+						);
+					}
+					if (!deleted) {
+						const queueFailure = error.statusCode === 503
+							? error
+							: new JobQueueUnavailableError();
+						queueFailure.cause = persistenceError;
+						queueFailure.jobId = jobId;
+						throw queueFailure;
+					}
 				}
 				if (error.statusCode === 503) {
 					throw error;
@@ -662,7 +680,7 @@ class JobService {
 			if (claim.reason === 'terminal') {
 				const terminalJob = await this.repository.get(jobId);
 				if (terminalJob) {
-					await this._triggerCallbackIfConfigured(terminalJob);
+					await this._triggerCallbackIfConfigured(terminalJob, { awaitDelivery: true });
 				}
 			}
 			return { skipped: true, reason: claim.reason || 'not_claimable' };
@@ -736,6 +754,9 @@ class JobService {
 		const startTime = Date.now();
 		const job = await this.repository.get(jobId);
 		if (!job) return;
+		const claimAttempt = job.execution && job.execution.mode === 'render-worker'
+			? job.execution.attempt
+			: null;
 		if (workerId && job.execution && job.execution.mode === 'render-worker') {
 			job._workerId = workerId;
 		}
@@ -772,7 +793,7 @@ class JobService {
 				: 60000;
 			const heartbeatMs = Math.max(1, Math.floor(leaseMs / 2));
 			claimHeartbeat = globalThis.setInterval(() => {
-				Promise.resolve(this.repository.renewClaim(jobId, workerId))
+				Promise.resolve(this.repository.renewClaim(jobId, workerId, claimAttempt))
 					.then((renewed) => {
 						if (!renewed) {
 							markClaimLost();
@@ -1141,12 +1162,12 @@ class JobService {
 
 	async _persistJob(job) {
 		if (job && job._claimLost) {
-			return;
+			return false;
 		}
 		const current = await this.repository.get(job.jobId);
 		if (current) {
 			if (TERMINAL_JOB_STATUSES.has(current.status) && current.status !== job.status) {
-				return;
+				return false;
 			}
 		}
 		if (job.execution && job.execution.mode === 'render-worker') {
@@ -1164,6 +1185,7 @@ class JobService {
 			error.code = 'JOB_CLAIM_LOST';
 			throw error;
 		}
+		return true;
 	}
 
 	_finishQueuedExecution(job) {
@@ -1343,7 +1365,27 @@ class JobService {
 		job.error = 'Job cancelled by user';
 		job.code = 'USER_CANCELLED';
 		job.updatedAt = new Date().toISOString();
-		await this._persistJob(job);
+		const persisted = await this._persistJob(job);
+		if (persisted === false) {
+			const currentJob = await this._getUnexpiredJob(jobId);
+			if (!currentJob) {
+				return null;
+			}
+			if (TERMINAL_JOB_STATUSES.has(currentJob.status)) {
+				return {
+					success: false,
+					code: 'TERMINAL_JOB',
+					message: 'Job is already in a terminal state.',
+					status: currentJob.status,
+				};
+			}
+			return {
+				success: false,
+				code: 'CANCEL_REJECTED',
+				message: 'Job cancellation could not be persisted.',
+				status: currentJob.status,
+			};
+		}
 
 		const controller = this.activeControllers.get(jobId);
 		if (controller) {
@@ -1465,7 +1507,7 @@ class JobService {
 		return botOrGetter || null;
 	}
 
-	async _triggerCallbackIfConfigured(job) {
+	async _triggerCallbackIfConfigured(job, { awaitDelivery = false } = {}) {
 		if (!job.callbackUrl) return;
 
 		const events = job.callbackEvents || ['completed', 'failed', 'cancelled', 'timed_out'];
@@ -1483,6 +1525,9 @@ class JobService {
 		});
 		this.pendingCallbacks.add(callbackPromise);
 		callbackPromise.then(() => this.pendingCallbacks.delete(callbackPromise));
+		if (awaitDelivery) {
+			await callbackPromise;
+		}
 	}
 
 	async waitForCallbacks() {

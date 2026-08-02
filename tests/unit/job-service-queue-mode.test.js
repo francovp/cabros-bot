@@ -65,4 +65,34 @@ describe('JobService Render worker mode', () => {
 			{ required: true },
 		);
 	});
+
+	it('removes the durable record when queue-failure reconciliation cannot be persisted', async () => {
+		const persistenceError = Object.assign(new Error('Firestore unavailable'), {
+			code: 'JOB_STORAGE_UNAVAILABLE',
+		});
+		const repository = {
+			entries: () => [],
+			isDurable: jest.fn(() => true),
+			save: jest.fn()
+				.mockResolvedValueOnce('job-123')
+				.mockRejectedValueOnce(persistenceError),
+			delete: jest.fn().mockResolvedValue(true),
+		};
+		const queueError = Object.assign(new Error('Redis unavailable'), {
+			code: 'JOB_QUEUE_UNAVAILABLE',
+			statusCode: 503,
+		});
+		const queue = {
+			isEnabled: () => true,
+			enqueue: jest.fn().mockRejectedValue(queueError),
+		};
+		const service = new JobService(repository, queue);
+
+		await expect(service.createJob('expanded-analysis', {
+			type: 'expanded-analysis',
+			symbols: ['BINANCE:BTCUSDT'],
+		})).rejects.toBe(queueError);
+
+		expect(repository.delete).toHaveBeenCalledWith(expect.any(String));
+	});
 });

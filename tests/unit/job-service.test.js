@@ -399,6 +399,32 @@ describe('JobService Unit Tests', () => {
 			expect(repository.save).not.toHaveBeenCalled();
 		});
 
+		it('reports the terminal state when cancellation loses a durable write race', async () => {
+			const processingJob = {
+				jobId: 'race-job',
+				status: 'processing',
+				createdAt: new Date().toISOString(),
+			};
+			const terminalJob = {
+				jobId: 'race-job',
+				status: 'completed',
+				createdAt: new Date().toISOString(),
+			};
+			const repository = {
+				get: jest.fn()
+					.mockResolvedValueOnce(processingJob)
+					.mockResolvedValue(terminalJob),
+				save: jest.fn().mockResolvedValue(null),
+			};
+			const service = new JobService(repository);
+
+			await expect(service.cancelJob('race-job')).resolves.toMatchObject({
+				success: false,
+				code: 'TERMINAL_JOB',
+				status: 'completed',
+			});
+	});
+
 		it('retries a failed/cancelled job and creates a new one with requestMetadata', async () => {
 			const metadata = await jobService.createJob('expanded-analysis', {
 				symbols: ['BINANCE:BTCUSDT'],

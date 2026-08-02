@@ -179,6 +179,76 @@ describe('JobRepository durable claims', () => {
 		expect(transaction.set).not.toHaveBeenCalled();
 	});
 
+	it('rejects durable worker saves from an older processing attempt', async () => {
+		const docRef = {};
+		const transaction = {
+			get: jest.fn().mockResolvedValue({
+				exists: true,
+				id: 'job-123',
+				data: () => ({
+					jobId: 'job-123',
+					status: 'processing',
+					execution: {
+						mode: 'render-worker',
+						status: 'running',
+						workerId: 'worker-1',
+						attempt: 2,
+					},
+				}),
+			}),
+			set: jest.fn(),
+		};
+		const firestore = {
+			collection: jest.fn(() => ({ doc: jest.fn(() => docRef) })),
+			runTransaction: jest.fn(async callback => callback(transaction)),
+		};
+		const repository = new JobRepository();
+		repository._getFirestore = jest.fn(() => firestore);
+
+		await expect(repository.save({
+			jobId: 'job-123',
+			status: 'processing',
+			execution: {
+				mode: 'render-worker',
+				status: 'running',
+				workerId: 'worker-1',
+				attempt: 1,
+			},
+		}, { required: true })).resolves.toBeNull();
+
+		expect(transaction.set).not.toHaveBeenCalled();
+	});
+
+	it('rejects claim renewal from an older processing attempt', async () => {
+		const docRef = {};
+		const transaction = {
+			get: jest.fn().mockResolvedValue({
+				exists: true,
+				id: 'job-123',
+				data: () => ({
+					jobId: 'job-123',
+					status: 'processing',
+					execution: {
+						mode: 'render-worker',
+						status: 'running',
+						workerId: 'worker-1',
+						attempt: 2,
+					},
+				}),
+			}),
+			set: jest.fn(),
+		};
+		const firestore = {
+			collection: jest.fn(() => ({ doc: jest.fn(() => docRef) })),
+			runTransaction: jest.fn(async callback => callback(transaction)),
+		};
+		const repository = new JobRepository();
+		repository._getFirestore = jest.fn(() => firestore);
+
+		await expect(repository.renewClaim('job-123', 'worker-1', 1)).resolves.toBe(false);
+		expect(transaction.set).not.toHaveBeenCalled();
+	});
+
 	it('does not overwrite a terminal job during a save transaction', async () => {
 		const docRef = {};
 		const transaction = {

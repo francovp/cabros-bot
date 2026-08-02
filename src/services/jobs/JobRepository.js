@@ -63,6 +63,14 @@ class JobRepository {
 						if (incomingWorkerId && (!current || (current.execution || {}).workerId !== incomingWorkerId)) {
 							return false;
 						}
+						if (
+							incomingWorkerId
+							&& currentExecution.workerId === incomingWorkerId
+							&& currentExecution.attempt !== undefined
+							&& Number(currentExecution.attempt) !== Number(sanitized.execution.attempt)
+						) {
+							return false;
+						}
 						if (current && TERMINAL_STATUSES.has(current.status) && current.status !== sanitized.status) {
 							return false;
 						}
@@ -217,7 +225,7 @@ class JobRepository {
 		}
 	}
 
-	async renewClaim(jobId, workerId) {
+	async renewClaim(jobId, workerId, attempt = null) {
 		if (!jobId || !workerId) {
 			return false;
 		}
@@ -247,6 +255,7 @@ class JobRepository {
 					|| TERMINAL_STATUSES.has(current.status)
 					|| !['claimed', 'running'].includes(execution.status)
 					|| execution.workerId !== workerId
+					|| (attempt !== null && attempt !== undefined && Number(execution.attempt) !== Number(attempt))
 				) {
 					return false;
 				}
