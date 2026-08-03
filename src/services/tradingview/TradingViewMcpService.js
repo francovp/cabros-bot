@@ -18,20 +18,25 @@ function getAbortMessage(signal, fallback) {
 	return fallback;
 }
 
+function createRuntimeStatus() {
+	return {
+		status: 'unknown',
+		lastCheckedAt: null,
+		lastSuccessAt: null,
+		lastFailureAt: null,
+		lastErrorCategory: null,
+		successCount: 0,
+		failureCount: 0,
+	};
+}
+
 class TradingViewMcpService {
 	constructor(config = {}) {
 		this.config = config;
 		this.logger = config.logger || console;
 		this.requestCounter = 0;
-		this.runtimeStatus = {
-			status: 'unknown',
-			lastCheckedAt: null,
-			lastSuccessAt: null,
-			lastFailureAt: null,
-			lastErrorCategory: null,
-			successCount: 0,
-			failureCount: 0,
-		};
+		this.runtimeStatus = createRuntimeStatus();
+		this.volumeRuntimeStatus = createRuntimeStatus();
 	}
 
 	isEnabled() {
@@ -61,18 +66,22 @@ class TradingViewMcpService {
 		};
 	}
 
-	getStatus({ enabled = this.isEnabled() } = {}) {
+	getStatus({ enabled = this.isEnabled(), runtimeStatus = this.runtimeStatus } = {}) {
 		const { url } = this.getConfig();
 		const configured = typeof url === 'string' && url.trim().length > 0;
-		const status = !enabled ? 'disabled' : !configured ? 'misconfigured' : this.runtimeStatus.status;
+		const status = !enabled ? 'disabled' : !configured ? 'misconfigured' : runtimeStatus.status;
 
 		return {
 			enabled,
 			configured,
-			...this.runtimeStatus,
+			...runtimeStatus,
 			ready: enabled && configured && status === 'ready',
 			status,
 		};
+	}
+
+	getVolumeConfirmationStatus({ enabled = this.isEnabled() } = {}) {
+		return this.getStatus({ enabled, runtimeStatus: this.volumeRuntimeStatus });
 	}
 
 	async enrichFromAlertText(alertText, options = {}) {
@@ -305,7 +314,7 @@ class TradingViewMcpService {
 			}
 
 			return normalizedResult;
-		}, { signal });
+		}, { signal, runtimeStatusKey: 'volumeRuntimeStatus' });
 	}
 
 	async callScanTool(toolName, args = {}, options = {}) {
@@ -800,18 +809,22 @@ class TradingViewMcpService {
 		return `${prefix}-${Date.now()}-${this.requestCounter}`;
 	}
 
-	async _withRuntimeStatus(operation, { signal } = {}) {
+	async _withRuntimeStatus(operation, { signal, runtimeStatusKey } = {}) {
+		const runtimeStatusKeys = runtimeStatusKey ? ['runtimeStatus', runtimeStatusKey] : ['runtimeStatus'];
+
 		try {
 			const result = await operation();
 			const timestamp = new Date().toISOString();
-			this.runtimeStatus = {
-				...this.runtimeStatus,
-				status: 'ready',
-				lastCheckedAt: timestamp,
-				lastSuccessAt: timestamp,
-				lastErrorCategory: null,
-				successCount: this.runtimeStatus.successCount + 1,
-			};
+			runtimeStatusKeys.forEach((key) => {
+				this[key] = {
+					...this[key],
+					status: 'ready',
+					lastCheckedAt: timestamp,
+					lastSuccessAt: timestamp,
+					lastErrorCategory: null,
+					successCount: this[key].successCount + 1,
+				};
+			});
 			return result;
 		} catch (error) {
 			if (signal && signal.aborted && getAbortMessage(signal, '') === 'Job cancelled by user') {
@@ -819,14 +832,16 @@ class TradingViewMcpService {
 			}
 
 			const timestamp = new Date().toISOString();
-			this.runtimeStatus = {
-				...this.runtimeStatus,
-				status: 'degraded',
-				lastCheckedAt: timestamp,
-				lastFailureAt: timestamp,
-				lastErrorCategory: this._getErrorCategory(error),
-				failureCount: this.runtimeStatus.failureCount + 1,
-			};
+			runtimeStatusKeys.forEach((key) => {
+				this[key] = {
+					...this[key],
+					status: 'degraded',
+					lastCheckedAt: timestamp,
+					lastFailureAt: timestamp,
+					lastErrorCategory: this._getErrorCategory(error),
+					failureCount: this[key].failureCount + 1,
+				};
+			});
 			throw error;
 		}
 	}

@@ -24,13 +24,24 @@ const validFirestoreServiceAccountJson = JSON.stringify({
 describe('Status endpoints', () => {
 	let savedEnv;
 	let savedTradingViewRuntimeStatus;
+	let savedTradingViewVolumeRuntimeStatus;
 	let app;
 	let tempDir;
 
 	beforeEach(() => {
 		savedEnv = saveEnv();
 		savedTradingViewRuntimeStatus = tradingViewMcpService.runtimeStatus;
+		savedTradingViewVolumeRuntimeStatus = tradingViewMcpService.volumeRuntimeStatus;
 		tradingViewMcpService.runtimeStatus = {
+			status: 'unknown',
+			lastCheckedAt: null,
+			lastSuccessAt: null,
+			lastFailureAt: null,
+			lastErrorCategory: null,
+			successCount: 0,
+			failureCount: 0,
+		};
+		tradingViewMcpService.volumeRuntimeStatus = {
 			status: 'unknown',
 			lastCheckedAt: null,
 			lastSuccessAt: null,
@@ -79,6 +90,7 @@ describe('Status endpoints', () => {
 
 	afterEach(() => {
 		tradingViewMcpService.runtimeStatus = savedTradingViewRuntimeStatus;
+		tradingViewMcpService.volumeRuntimeStatus = savedTradingViewVolumeRuntimeStatus;
 		restoreEnv(savedEnv);
 		if (tempDir) {
 			rmSync(tempDir, { recursive: true, force: true });
@@ -819,6 +831,59 @@ describe('Status endpoints', () => {
 			expect(response.body.dependencies.tradingViewMcp).toEqual(expect.objectContaining({
 				enabled: true,
 				configured: true,
+				ready: true,
+				status: 'ready',
+				successCount: 1,
+			}));
+		} finally {
+			tradingViewMcpService._callTool = originalCallTool;
+		}
+	});
+
+	it('tracks volume-confirmation readiness independently from generic MCP calls', async () => {
+		process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT = 'true';
+		process.env.ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION = 'true';
+		const originalCallTool = tradingViewMcpService._callTool;
+		tradingViewMcpService._callTool = jest.fn().mockResolvedValue({
+			price_data: { current_price: 70000 },
+		});
+
+		try {
+			await tradingViewMcpService.callCoinAnalysis({
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+				timeframe: '1D',
+			});
+
+			const response = await request(app)
+				.get('/api/status')
+				.set('x-api-key', 'status-key');
+
+			expect(response.status).toBe(200);
+			expect(response.body.dependencies.tradingViewMcp).toEqual(expect.objectContaining({
+				ready: true,
+				status: 'ready',
+				successCount: 1,
+			}));
+			expect(response.body.dependencies.tradingViewVolumeConfirmation).toEqual(expect.objectContaining({
+				enabled: true,
+				configured: true,
+				ready: false,
+				status: 'unknown',
+				successCount: 0,
+				failureCount: 0,
+			}));
+
+			await tradingViewMcpService.callVolumeConfirmation({
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+				timeframe: '1D',
+			});
+
+			const volumeResponse = await request(app)
+				.get('/api/status')
+				.set('x-api-key', 'status-key');
+			expect(volumeResponse.body.dependencies.tradingViewVolumeConfirmation).toEqual(expect.objectContaining({
 				ready: true,
 				status: 'ready',
 				successCount: 1,

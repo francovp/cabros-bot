@@ -195,22 +195,9 @@ function getStatus() {
 	});
 	const tradingViewRuntimeStatus = tradingViewMcpService.getStatus({ enabled: tradingViewMcpEnabled });
 	const tradingViewMcp = tradingViewRuntimeStatus;
-	const tradingViewVolumeConfirmation = {
-		...dependencyStatus({
-			enabled: tradingViewVolumeConfirmationEnabled,
-			configured: tradingViewRuntimeStatus.configured,
-		}),
-		ready: tradingViewVolumeConfirmationEnabled && tradingViewRuntimeStatus.status === 'ready',
-		status: tradingViewVolumeConfirmationEnabled
-			? tradingViewRuntimeStatus.status
-			: 'disabled',
-		lastCheckedAt: tradingViewRuntimeStatus.lastCheckedAt,
-		lastSuccessAt: tradingViewRuntimeStatus.lastSuccessAt,
-		lastFailureAt: tradingViewRuntimeStatus.lastFailureAt,
-		lastErrorCategory: tradingViewRuntimeStatus.lastErrorCategory,
-		successCount: tradingViewRuntimeStatus.successCount,
-		failureCount: tradingViewRuntimeStatus.failureCount,
-	};
+	const tradingViewVolumeConfirmation = tradingViewMcpService.getVolumeConfirmationStatus({
+		enabled: tradingViewVolumeConfirmationEnabled,
+	});
 	const firestore = dependencyStatus({
 		enabled: firestoreEnabled,
 		configured: isFirestoreConfigured(),
