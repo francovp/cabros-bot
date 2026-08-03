@@ -214,7 +214,7 @@ class TradingViewMcpService {
 			}
 
 			return normalizedResult;
-		});
+		}, { signal });
 	}
 
 	async analyzeSymbolIdentifier({ raw, exchange, symbol, timeframe, analysisMode, signal }) {
@@ -263,7 +263,7 @@ class TradingViewMcpService {
 			}
 
 			return normalizedResult;
-		});
+		}, { signal });
 	}
 
 	async callMultiTimeframeAnalysis({ symbol, exchange, signal }) {
@@ -283,7 +283,7 @@ class TradingViewMcpService {
 			}
 
 			return normalizedResult;
-		});
+		}, { signal });
 	}
 
 	async callVolumeConfirmation({ symbol, exchange, timeframe, signal }) {
@@ -305,7 +305,7 @@ class TradingViewMcpService {
 			}
 
 			return normalizedResult;
-		});
+		}, { signal });
 	}
 
 	async callScanTool(toolName, args = {}, options = {}) {
@@ -327,7 +327,7 @@ class TradingViewMcpService {
 			}
 
 			return this._normalizeScanResult(result.data);
-		});
+		}, { signal });
 	}
 
 	_normalizeScanResult(data) {
@@ -800,7 +800,7 @@ class TradingViewMcpService {
 		return `${prefix}-${Date.now()}-${this.requestCounter}`;
 	}
 
-	async _withRuntimeStatus(operation) {
+	async _withRuntimeStatus(operation, { signal } = {}) {
 		try {
 			const result = await operation();
 			const timestamp = new Date().toISOString();
@@ -814,6 +814,10 @@ class TradingViewMcpService {
 			};
 			return result;
 		} catch (error) {
+			if (signal && signal.aborted && getAbortMessage(signal, '') === 'Job cancelled by user') {
+				throw error;
+			}
+
 			const timestamp = new Date().toISOString();
 			this.runtimeStatus = {
 				...this.runtimeStatus,

@@ -153,7 +153,11 @@ function getStatus() {
 	const tradingViewMcpEnrichmentEnabled = isEnabled(process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT);
 	const tradingViewVolumeConfirmationFlagEnabled = isEnabled(process.env.ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION);
 	const tradingViewVolumeConfirmationEnabled = tradingViewVolumeConfirmationFlagEnabled && tradingViewMcpEnrichmentEnabled;
-	const tradingViewMcpEnabled = tradingViewMcpEnrichmentEnabled || marketScannerEnabled;
+	const observedTradingViewMcpStatus = tradingViewMcpService.getStatus({ enabled: true });
+	const tradingViewMcpEnabled =
+		tradingViewMcpEnrichmentEnabled
+		|| marketScannerEnabled
+		|| observedTradingViewMcpStatus.lastCheckedAt !== null;
 	const firestoreEnabled = isEnabled(process.env.ENABLE_FIRESTORE_ALERT_STORAGE);
 	const firestoreScannerPresetsEnabled = isEnabled(process.env.ENABLE_FIRESTORE_SCANNER_PRESETS);
 	const firestoreJobStorageEnabled = isEnabled(process.env.ENABLE_FIRESTORE_JOB_STORAGE)

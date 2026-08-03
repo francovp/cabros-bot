@@ -66,6 +66,31 @@ describe('TradingViewMcpService', () => {
 		}));
 	});
 
+	it('does not degrade runtime readiness for caller-cancelled MCP requests', async () => {
+		process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT = 'true';
+		const service = new TradingViewMcpService({
+			logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
+		});
+		const cancellation = new Error('Job cancelled by user');
+		const controller = new AbortController();
+		controller.abort(cancellation);
+		service._callTool = jest.fn().mockRejectedValue(cancellation);
+
+		await expect(service.callCoinAnalysis({
+			symbol: 'BTCUSDT',
+			exchange: 'BINANCE',
+			timeframe: '1D',
+			signal: controller.signal,
+		})).rejects.toThrow('Job cancelled by user');
+
+		expect(service.getStatus()).toEqual(expect.objectContaining({
+			ready: false,
+			status: 'unknown',
+			successCount: 0,
+			failureCount: 0,
+		}));
+	});
+
 	it('returns null when alert text is not a TradingView signal', async () => {
 		const service = new TradingViewMcpService({ maxRetries: 1, logger: { warn: jest.fn(), error: jest.fn() } });
 		const result = await service.enrichFromAlertText('Mensaje sin patrón');

@@ -7,6 +7,7 @@ const { join } = require('path');
 jest.mock('firebase-admin');
 const admin = require('firebase-admin');
 const alertStorageService = require('../../src/services/storage/AlertStorageService');
+const { tradingViewMcpService } = require('../../src/services/tradingview/TradingViewMcpService');
 const { getRoutes } = require('../../src/routes');
 
 const testPrivateKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({
@@ -22,11 +23,22 @@ const validFirestoreServiceAccountJson = JSON.stringify({
 
 describe('Status endpoints', () => {
 	let savedEnv;
+	let savedTradingViewRuntimeStatus;
 	let app;
 	let tempDir;
 
 	beforeEach(() => {
 		savedEnv = saveEnv();
+		savedTradingViewRuntimeStatus = tradingViewMcpService.runtimeStatus;
+		tradingViewMcpService.runtimeStatus = {
+			status: 'unknown',
+			lastCheckedAt: null,
+			lastSuccessAt: null,
+			lastFailureAt: null,
+			lastErrorCategory: null,
+			successCount: 0,
+			failureCount: 0,
+		};
 		admin.__resetApps();
 		admin.__resetCollectionState();
 		alertStorageService._resetForTesting();
@@ -66,6 +78,7 @@ describe('Status endpoints', () => {
 	});
 
 	afterEach(() => {
+		tradingViewMcpService.runtimeStatus = savedTradingViewRuntimeStatus;
 		restoreEnv(savedEnv);
 		if (tempDir) {
 			rmSync(tempDir, { recursive: true, force: true });
@@ -781,6 +794,38 @@ describe('Status endpoints', () => {
 			successCount: 0,
 			failureCount: 0,
 		});
+	});
+
+	it('keeps observed MCP readiness visible after an always-mounted consumer uses it', async () => {
+		process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT = 'false';
+		delete process.env.ENABLE_MARKET_SCANNER;
+		const originalCallTool = tradingViewMcpService._callTool;
+		tradingViewMcpService._callTool = jest.fn().mockResolvedValue({
+			price_data: { current_price: 70000 },
+		});
+
+		try {
+			await tradingViewMcpService.callCoinAnalysis({
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+				timeframe: '1D',
+			});
+
+			const response = await request(app)
+				.get('/api/status')
+				.set('x-api-key', 'status-key');
+
+			expect(response.status).toBe(200);
+			expect(response.body.dependencies.tradingViewMcp).toEqual(expect.objectContaining({
+				enabled: true,
+				configured: true,
+				ready: true,
+				status: 'ready',
+				successCount: 1,
+			}));
+		} finally {
+			tradingViewMcpService._callTool = originalCallTool;
+		}
 	});
 
 	it('treats Firestore ADC on Google-managed runtimes as configured', async () => {
