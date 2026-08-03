@@ -314,6 +314,7 @@ class IdempotencyService {
 					this.cache.set(key, {
 						payloadHash,
 						state: 'pending',
+						claimToken: durableRes.claimToken,
 						waiterCount: 0,
 						createdAt: Date.now(),
 						expiresAt: Date.now() + ttl,
@@ -400,7 +401,8 @@ class IdempotencyService {
 		}
 
 		if (idempotencyStorageService.isEnabled()) {
-			idempotencyStorageService.setEntry(key, payloadHash, { statusCode, body, headers }, ttl)
+			const claimToken = existing && existing.state === 'pending' ? existing.claimToken : undefined;
+			idempotencyStorageService.setEntry(key, payloadHash, { statusCode, body, headers }, ttl, claimToken)
 				.catch((err) => console.warn('[IdempotencyService] Error saving durable entry:', err.message));
 		}
 
@@ -425,7 +427,8 @@ class IdempotencyService {
 		}
 
 		if (idempotencyStorageService.isEnabled()) {
-			idempotencyStorageService.releaseEntry(key, payloadHash)
+			const claimToken = existing && existing.state === 'pending' ? existing.claimToken : undefined;
+			idempotencyStorageService.releaseEntry(key, payloadHash, claimToken)
 				.catch((err) => console.warn('[IdempotencyService] Error releasing durable entry:', err.message));
 		}
 	}

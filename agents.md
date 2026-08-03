@@ -1147,6 +1147,12 @@ Scanner presets support an independent `ENABLE_FIRESTORE_SCANNER_PRESETS=true` g
 - `tests/integration/generic-message-webhook.test.js` covers sequential and concurrent replay, single dispatch across Telegram/WhatsApp/Discord, message/channel/destination conflicts, and legacy no-key behavior.
 - `src/openapi/openapi.json` and `CabrosBot.postman_collection.json` document key locations, replay output, invalid key handling, and the message-specific conflict response without overriding the shared async-job conflict component.
 
+## Durable Idempotency Claim Tokens (CB-127 / Issue #311)
+
+Firestore-backed idempotency reservations carry a unique `claimToken` for the current pending owner. `reserveEntry()` returns the token for fresh claims; `IdempotencyService` retains it only for that owner and passes it to completion/release operations. `setEntry()` and `releaseEntry()` use Firestore transactions that require the stored token, payload hash, and pending state to match, so a stale replica cannot overwrite or delete a newer reservation after stale-claim recovery. Records without a token fail closed, while disabled/unavailable Firestore continues to use the existing in-memory fallback.
+
+`tests/unit/idempotency-storage-service.test.js` covers token issuance, transactional completion, and late completion/release after reclaim. `tests/unit/idempotency.test.js` verifies token propagation from the service; no public API, OpenAPI, or Postman contract changed.
+
 ## Discord 429 Attempt Telemetry (CB-102 / Issue #254)
 
 Terminal Discord HTTP 429 results preserve the cumulative number of webhook requests actually made in `attemptCount`, including requests for earlier successful message chunks, retry exhaustion, and retry-budget aborts. `NotificationManager` forwards that value to Sentry and the Telegram admin failure message through both `sendToAll` and `sendToChannels`, while retaining fail-open channel isolation.

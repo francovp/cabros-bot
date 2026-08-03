@@ -656,5 +656,29 @@ describe('Idempotency Service & Middleware', () => {
 				idempotencyService.maxKeys = originalMaxKeys;
 			}
 		});
+
+		test('should pass the durable claim token when completing a reservation', async () => {
+			const idempotencyStorageService = require('../../src/services/storage/IdempotencyStorageService');
+			const setEntryMock = jest.spyOn(idempotencyStorageService, 'setEntry').mockResolvedValue();
+			jest.spyOn(idempotencyStorageService, 'isEnabled').mockReturnValue(true);
+			jest.spyOn(idempotencyStorageService, 'reserveEntry').mockResolvedValue({
+				state: 'fresh',
+				claimToken: 'claim-token',
+			});
+
+			const key = 'durable-claim-token';
+			const payload = { method: 'POST', path: '/api/webhook/alert', body: { text: 'alert' }, query: {} };
+			await expect(idempotencyService.reserve(key, payload)).resolves.toEqual({ state: 'fresh' });
+
+			idempotencyService.set(key, payload, { statusCode: 200, body: { ok: true }, headers: {} });
+
+			expect(setEntryMock).toHaveBeenCalledWith(
+				key,
+				expect.any(String),
+				expect.objectContaining({ statusCode: 200 }),
+				expect.any(Number),
+				'claim-token',
+			);
+		});
 	});
 });
