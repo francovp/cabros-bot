@@ -53,6 +53,31 @@ class IdempotencyService {
 	}
 
 	/**
+	 * Reuse a same-payload local reservation instead of replacing it during a
+	 * concurrent durable pending response or fail-open fallback.
+	 * @param {string} key
+	 * @param {string} payloadHash
+	 * @returns {{state: 'completed', record: Object} | {state: 'pending', promise: Promise<Object>} | null}
+	 */
+	getExistingLocalReservation(key, payloadHash) {
+		const existing = this.cache.get(key);
+		if (!existing || existing.payloadHash !== payloadHash) {
+			return null;
+		}
+
+		if (existing.state === 'completed') {
+			return { state: 'completed', record: existing };
+		}
+
+		if (existing.state === 'pending') {
+			existing.waiterCount = (existing.waiterCount || 0) + 1;
+			return { state: 'pending', promise: existing.completionPromise };
+		}
+
+		return null;
+	}
+
+	/**
 	 * Prefer evicting completed records only; pending reservations must remain replayable.
 	 * @returns {boolean}
 	 */
@@ -234,15 +259,9 @@ class IdempotencyService {
 				}
 
 				if (durableRes.state === 'pending') {
-					const existingLocal = this.cache.get(key);
-					if (existingLocal && existingLocal.payloadHash === payloadHash) {
-						if (existingLocal.state === 'completed') {
-							return { state: 'completed', record: existingLocal };
-						}
-						if (existingLocal.state === 'pending') {
-							existingLocal.waiterCount = (existingLocal.waiterCount || 0) + 1;
-							return { state: 'pending', promise: existingLocal.completionPromise };
-						}
+					const existingLocal = this.getExistingLocalReservation(key, payloadHash);
+					if (existingLocal) {
+						return existingLocal;
 					}
 
 					if (this.cache.size >= this.maxKeys) {
@@ -345,6 +364,11 @@ class IdempotencyService {
 		}
 
 		// Fallback to in-memory path if Firestore fails or returns null
+		const existingLocal = this.getExistingLocalReservation(key, payloadHash);
+		if (existingLocal) {
+			return existingLocal;
+		}
+
 		if (this.cache.size >= this.maxKeys) {
 			const evicted = this.evictOldestCompletedRecord();
 			if (!evicted) {

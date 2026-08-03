@@ -742,5 +742,33 @@ describe('Idempotency Service & Middleware', () => {
 			expect(waitForPendingCompletionMock).not.toHaveBeenCalled();
 			expect(setEntryMock).toHaveBeenCalledTimes(1);
 		});
+
+		test('should preserve the local owner when durable reservation falls back later', async () => {
+			const idempotencyStorageService = require('../../src/services/storage/IdempotencyStorageService');
+			const setEntryMock = jest.spyOn(idempotencyStorageService, 'setEntry').mockResolvedValue();
+			jest.spyOn(idempotencyStorageService, 'isEnabled').mockReturnValue(true);
+			const reserveEntryMock = jest.spyOn(idempotencyStorageService, 'reserveEntry')
+				.mockResolvedValueOnce({ state: 'fresh', claimToken: 'owner-token' })
+				.mockResolvedValueOnce(null);
+
+			const key = 'durable-fallback-race';
+			const payload = { method: 'POST', path: '/api/webhook/alert', body: { text: 'alert' }, query: {} };
+			const firstReservation = idempotencyService.reserve(key, payload);
+			const fallbackReservation = idempotencyService.reserve(key, payload);
+
+			await expect(firstReservation).resolves.toEqual({ state: 'fresh' });
+			await expect(fallbackReservation).resolves.toMatchObject({ state: 'pending' });
+			expect(reserveEntryMock).toHaveBeenCalledTimes(2);
+			expect(idempotencyService.cache.get(key).claimToken).toBe('owner-token');
+
+			idempotencyService.set(key, payload, { statusCode: 200, body: { ok: true }, headers: {} });
+			expect(setEntryMock).toHaveBeenCalledWith(
+				key,
+				expect.any(String),
+				expect.objectContaining({ statusCode: 200 }),
+				expect.any(Number),
+				'owner-token',
+			);
+		});
 	});
 });
