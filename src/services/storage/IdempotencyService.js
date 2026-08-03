@@ -254,15 +254,25 @@ class IdempotencyService {
 	async _reserveDurableSerialized(key, payloadHash, ttl) {
 		const inFlight = this.durableReservationsInFlight.get(key);
 		if (inFlight) {
-			const result = await inFlight;
-			const existing = this.cache.get(key);
-			if (existing && existing.payloadHash !== payloadHash) {
-				const error = new Error('Idempotency key was reused with a different payload');
-				error.code = 'IDEMPOTENCY_CONFLICT';
-				error.statusCode = 409;
-				throw error;
+			try {
+				const result = await inFlight;
+				const existing = this.cache.get(key);
+				if (existing && existing.payloadHash !== payloadHash) {
+					const error = new Error('Idempotency key was reused with a different payload');
+					error.code = 'IDEMPOTENCY_CONFLICT';
+					error.statusCode = 409;
+					throw error;
+				}
+				return this.getExistingLocalReservation(key, payloadHash) || result;
+			} catch (error) {
+				if (error.code !== 'IDEMPOTENCY_CONFLICT') {
+					throw error;
+				}
+				if (this.durableReservationsInFlight.get(key) === inFlight) {
+					this.durableReservationsInFlight.delete(key);
+				}
+				return this._reserveDurableSerialized(key, payloadHash, ttl);
 			}
-			return this.getExistingLocalReservation(key, payloadHash) || result;
 		}
 
 		const reservation = this._reserveDurable(key, payloadHash, ttl);

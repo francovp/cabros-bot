@@ -772,5 +772,35 @@ describe('Idempotency Service & Middleware', () => {
 			await Promise.resolve();
 			await expect(firstResult.promise).rejects.toMatchObject({ code: 'IDEMPOTENCY_RELEASED' });
 		});
+
+		test('should retry the durable lookup after a predecessor payload conflict', async () => {
+			const idempotencyStorageService = require('../../src/services/storage/IdempotencyStorageService');
+			jest.spyOn(idempotencyStorageService, 'isEnabled').mockReturnValue(true);
+			const reserveEntryMock = jest.spyOn(idempotencyStorageService, 'reserveEntry')
+				.mockResolvedValueOnce({ state: 'conflict' })
+				.mockResolvedValueOnce({
+					state: 'completed',
+					record: {
+						payloadHash: 'payload-b-hash',
+						state: 'completed',
+						statusCode: 200,
+						responseBody: { ok: 'b' },
+						headers: {},
+					},
+				});
+
+			const key = 'durable-payload-conflict-race';
+			const payloadA = { method: 'POST', path: '/api/webhook/alert', body: { text: 'a' }, query: {} };
+			const payloadB = { method: 'POST', path: '/api/webhook/alert', body: { text: 'b' }, query: {} };
+			const firstReservation = idempotencyService.reserve(key, payloadA);
+			const secondReservation = idempotencyService.reserve(key, payloadB);
+
+			await expect(firstReservation).rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
+			await expect(secondReservation).resolves.toMatchObject({
+				state: 'completed',
+				record: { responseBody: { ok: 'b' } },
+			});
+			expect(reserveEntryMock).toHaveBeenCalledTimes(2);
+		});
 	});
 });
