@@ -1151,7 +1151,7 @@ Scanner presets support an independent `ENABLE_FIRESTORE_SCANNER_PRESETS=true` g
 
 Firestore-backed idempotency reservations carry a unique `claimToken` for the current pending owner. `reserveEntry()` returns the token for fresh claims; `IdempotencyService` retains it only for that owner and passes it to completion/release operations. `setEntry()` and `releaseEntry()` use Firestore transactions that require the stored token, payload hash, and pending state to match, so a stale replica cannot overwrite or delete a newer reservation after stale-claim recovery. Records without a token fail closed, while disabled/unavailable Firestore continues to use the existing in-memory fallback.
 
-`tests/unit/idempotency-storage-service.test.js` covers token issuance, transactional completion, and late completion/release after reclaim. `tests/unit/idempotency.test.js` verifies token propagation and preserves local fresh/completed results when concurrent pending or fail-open fallback responses resolve later; no public API, OpenAPI, or Postman contract changed.
+`tests/unit/idempotency-storage-service.test.js` covers token issuance, transactional completion, and late completion/release after reclaim. `tests/unit/idempotency.test.js` verifies token propagation and preserves local fresh/completed results when concurrent pending, fail-open fallback, or poller responses resolve later; no public API, OpenAPI, or Postman contract changed.
 
 ## Discord 429 Attempt Telemetry (CB-102 / Issue #254)
 

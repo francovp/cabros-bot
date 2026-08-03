@@ -770,5 +770,45 @@ describe('Idempotency Service & Middleware', () => {
 				'owner-token',
 			);
 		});
+
+		test('should rebind an earlier local poller when the fresh owner resolves later', async () => {
+			const idempotencyStorageService = require('../../src/services/storage/IdempotencyStorageService');
+			const setEntryMock = jest.spyOn(idempotencyStorageService, 'setEntry').mockResolvedValue();
+			const pollResolvers = [];
+			jest.spyOn(idempotencyStorageService, 'waitForPendingCompletion').mockImplementation(() => new Promise((resolve) => {
+				pollResolvers.push(resolve);
+			}));
+			jest.spyOn(idempotencyStorageService, 'isEnabled').mockReturnValue(true);
+			jest.spyOn(idempotencyStorageService, 'reserveEntry')
+				.mockResolvedValueOnce({ state: 'pending' })
+				.mockResolvedValueOnce({ state: 'fresh', claimToken: 'owner-token' });
+
+			const key = 'durable-rebind-race';
+			const payload = { method: 'POST', path: '/api/webhook/alert', body: { text: 'alert' }, query: {} };
+			const pendingReservationPromise = idempotencyService.reserve(key, payload);
+			const freshReservationPromise = idempotencyService.reserve(key, payload);
+			const pendingReservation = await pendingReservationPromise;
+			pendingReservation.promise.catch(() => {});
+			await expect(freshReservationPromise).resolves.toEqual({ state: 'fresh' });
+
+			expect(pollResolvers).toHaveLength(1);
+			expect(idempotencyService.cache.get(key).claimToken).toBe('owner-token');
+			pollResolvers[0]({ state: 'released' });
+			await Promise.resolve();
+			expect(idempotencyService.cache.get(key).claimToken).toBe('owner-token');
+
+			idempotencyService.set(key, payload, { statusCode: 200, body: { ok: true }, headers: {} });
+			await expect(pendingReservation.promise).resolves.toMatchObject({
+				state: 'completed',
+				responseBody: { ok: true },
+			});
+			expect(setEntryMock).toHaveBeenCalledWith(
+				key,
+				expect.any(String),
+				expect.objectContaining({ statusCode: 200 }),
+				expect.any(Number),
+				'owner-token',
+			);
+		});
 	});
 });

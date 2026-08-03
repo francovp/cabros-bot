@@ -297,6 +297,9 @@ class IdempotencyService {
 					const pendingWaitMs = Math.min(ttl, 15000);
 					idempotencyStorageService.waitForPendingCompletion(key, payloadHash, pendingWaitMs)
 						.then((pollResult) => {
+							if (this.cache.get(key) !== pendingRecord || pendingRecord.claimToken) {
+								return;
+							}
 							if (pollResult.state === 'completed' && pollResult.record) {
 								this.cache.set(key, pollResult.record);
 								resolveCompletion(pollResult.record);
@@ -315,6 +318,9 @@ class IdempotencyService {
 							}
 						})
 						.catch((pollErr) => {
+							if (this.cache.get(key) !== pendingRecord || pendingRecord.claimToken) {
+								return;
+							}
 							this.cache.delete(key);
 							rejectCompletion(pollErr);
 						});
@@ -324,6 +330,12 @@ class IdempotencyService {
 
 				// Fresh reservation claimed in Firestore
 				if (durableRes.state === 'fresh') {
+					const existingLocal = this.cache.get(key);
+					if (existingLocal && existingLocal.payloadHash === payloadHash && existingLocal.state === 'pending') {
+						existingLocal.claimToken = durableRes.claimToken;
+						return { state: 'fresh' };
+					}
+
 					if (this.cache.size >= this.maxKeys) {
 						const evicted = this.evictOldestCompletedRecord();
 						if (!evicted) {
