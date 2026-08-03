@@ -833,16 +833,16 @@ class TradingViewMcpService {
 
 	_getErrorCategory(error) {
 		const message = error && typeof error.message === 'string' ? error.message : '';
-		if (/timeout|aborted/i.test(message)) {
-			return 'timeout';
-		}
 		if (/HTTP 5\d\d/i.test(message)) {
 			return 'http_5xx';
 		}
 		if (/HTTP 4\d\d/i.test(message)) {
 			return 'http_4xx';
 		}
-		if (/invalid|empty|non-JSON|payload|RPC/i.test(message)) {
+		if (/timeout|aborted/i.test(message)) {
+			return 'timeout';
+		}
+		if (/invalid|empty|non-JSON|non-SSE|mcp-session-id|payload|RPC/i.test(message)) {
 			return 'invalid_response';
 		}
 		return 'request_failed';

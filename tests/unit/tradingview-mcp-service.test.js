@@ -338,6 +338,29 @@ describe('TradingViewMcpService', () => {
 		expect(service._getErrorCategory(error)).toBe('invalid_response');
 	});
 
+	it('classifies MCP protocol violations as invalid responses', () => {
+		const service = new TradingViewMcpService();
+
+		let nonSseError;
+		try {
+			service._decodeRpcBody('maintenance text', 'text/plain', 'abc');
+		} catch (error) {
+			nonSseError = error;
+		}
+
+		expect(service._getErrorCategory(nonSseError)).toBe('invalid_response');
+		expect(service._getErrorCategory(new Error('TradingView MCP did not return mcp-session-id header')))
+			.toBe('invalid_response');
+	});
+
+	it('classifies HTTP errors before timeout text in provider responses', () => {
+		const service = new TradingViewMcpService();
+
+		expect(service._getErrorCategory(new Error('TradingView MCP HTTP 504: Gateway Timeout'))).toBe('http_5xx');
+		expect(service._getErrorCategory(new Error('TradingView MCP HTTP 503: provider timeout'))).toBe('http_5xx');
+		expect(service._getErrorCategory(new Error('TradingView MCP HTTP 408: request timeout'))).toBe('http_4xx');
+	});
+
 	it('calls combined_analysis tool and unwraps result in callCombinedAnalysis', async () => {
 		const service = new TradingViewMcpService({ logger: { warn: jest.fn(), error: jest.fn() } });
 		service._callTool = jest.fn().mockResolvedValue({
