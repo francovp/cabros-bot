@@ -1,4 +1,5 @@
 previewsEnabled: true
+# Native Render services read the repository-level .node-version file.
 services:
 - type: web
   plan: free

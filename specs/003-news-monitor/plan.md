@@ -11,7 +11,7 @@ This feature implements an HTTP endpoint (`/api/news-monitor`) that analyzes new
 
 ## Technical Context
 
-**Language/Version**: Node.js 20.x (matches existing codebase)  
+**Language/Version**: Node.js 24.x (matches the repository runtime contract)
 **Primary Dependencies**: 
 - `@azure-rest/ai-inference` - Azure AI Inference REST client for optional secondary LLM enrichment
 - `@azure/core-auth` - Authentication (AzureKeyCredential, TokenCredential)
@@ -271,7 +271,7 @@ All constitution principles remain met after design phase. Architecture is simpl
   - Troubleshooting guide (including URL shortening fallback scenarios)
   - Scheduled monitoring examples (GitHub Actions, Render cron)
 - **Agent context updated**: .github/copilot-instructions.md
-  - Added Node.js 20.x
+  - Added Node.js 24.x
   - Added in-memory cache pattern
   - Added single-project structure context
 
