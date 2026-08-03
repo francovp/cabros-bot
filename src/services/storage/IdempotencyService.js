@@ -234,6 +234,17 @@ class IdempotencyService {
 				}
 
 				if (durableRes.state === 'pending') {
+					const existingLocal = this.cache.get(key);
+					if (existingLocal && existingLocal.payloadHash === payloadHash) {
+						if (existingLocal.state === 'completed') {
+							return { state: 'completed', record: existingLocal };
+						}
+						if (existingLocal.state === 'pending') {
+							existingLocal.waiterCount = (existingLocal.waiterCount || 0) + 1;
+							return { state: 'pending', promise: existingLocal.completionPromise };
+						}
+					}
+
 					if (this.cache.size >= this.maxKeys) {
 						const evicted = this.evictOldestCompletedRecord();
 						if (!evicted) {

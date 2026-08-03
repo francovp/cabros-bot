@@ -680,5 +680,67 @@ describe('Idempotency Service & Middleware', () => {
 				'claim-token',
 			);
 		});
+
+		test('should preserve the local owner when a concurrent pending result resolves later', async () => {
+			const idempotencyStorageService = require('../../src/services/storage/IdempotencyStorageService');
+			const setEntryMock = jest.spyOn(idempotencyStorageService, 'setEntry').mockResolvedValue();
+			const waitForPendingCompletionMock = jest.spyOn(idempotencyStorageService, 'waitForPendingCompletion').mockReturnValue(new Promise(() => {}));
+			jest.spyOn(idempotencyStorageService, 'isEnabled').mockReturnValue(true);
+			const reserveResolvers = [];
+			jest.spyOn(idempotencyStorageService, 'reserveEntry').mockImplementation(() => new Promise((resolve) => {
+				reserveResolvers.push(resolve);
+			}));
+
+			const key = 'durable-claim-race';
+			const payload = { method: 'POST', path: '/api/webhook/alert', body: { text: 'alert' }, query: {} };
+			const firstReservation = idempotencyService.reserve(key, payload);
+			const concurrentReservation = idempotencyService.reserve(key, payload);
+
+			expect(reserveResolvers).toHaveLength(2);
+			reserveResolvers[0]({ state: 'fresh', claimToken: 'owner-token' });
+			await expect(firstReservation).resolves.toEqual({ state: 'fresh' });
+
+			reserveResolvers[1]({ state: 'pending' });
+			await expect(concurrentReservation).resolves.toMatchObject({ state: 'pending' });
+			expect(idempotencyService.cache.get(key).claimToken).toBe('owner-token');
+			expect(waitForPendingCompletionMock).not.toHaveBeenCalled();
+
+			idempotencyService.set(key, payload, { statusCode: 200, body: { ok: true }, headers: {} });
+			expect(setEntryMock).toHaveBeenCalledWith(
+				key,
+				expect.any(String),
+				expect.objectContaining({ statusCode: 200 }),
+				expect.any(Number),
+				'owner-token',
+			);
+		});
+
+		test('should preserve a completed local result when a stale pending result resolves later', async () => {
+			const idempotencyStorageService = require('../../src/services/storage/IdempotencyStorageService');
+			const setEntryMock = jest.spyOn(idempotencyStorageService, 'setEntry').mockResolvedValue();
+			const waitForPendingCompletionMock = jest.spyOn(idempotencyStorageService, 'waitForPendingCompletion').mockReturnValue(new Promise(() => {}));
+			jest.spyOn(idempotencyStorageService, 'isEnabled').mockReturnValue(true);
+			const reserveResolvers = [];
+			jest.spyOn(idempotencyStorageService, 'reserveEntry').mockImplementation(() => new Promise((resolve) => {
+				reserveResolvers.push(resolve);
+			}));
+
+			const key = 'durable-completed-race';
+			const payload = { method: 'POST', path: '/api/webhook/alert', body: { text: 'alert' }, query: {} };
+			const firstReservation = idempotencyService.reserve(key, payload);
+			const concurrentReservation = idempotencyService.reserve(key, payload);
+
+			reserveResolvers[0]({ state: 'fresh', claimToken: 'owner-token' });
+			await expect(firstReservation).resolves.toEqual({ state: 'fresh' });
+			idempotencyService.set(key, payload, { statusCode: 200, body: { ok: true }, headers: {} });
+
+			reserveResolvers[1]({ state: 'pending' });
+			await expect(concurrentReservation).resolves.toMatchObject({
+				state: 'completed',
+				record: { statusCode: 200, responseBody: { ok: true } },
+			});
+			expect(waitForPendingCompletionMock).not.toHaveBeenCalled();
+			expect(setEntryMock).toHaveBeenCalledTimes(1);
+		});
 	});
 });
