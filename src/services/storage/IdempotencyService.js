@@ -6,6 +6,7 @@ const idempotencyStorageService = require('./IdempotencyStorageService');
 class IdempotencyService {
 	constructor() {
 		this.cache = new Map(); // key -> { payloadHash, state, waiterCount, statusCode, responseBody, headers, createdAt, expiresAt, completionPromise, resolveCompletion, rejectCompletion }
+		this.durableReservationsInFlight = new Map(); // key -> Promise<{state: string}>
 		this.defaultTtlMs = 300000; // 5 minutes default
 		this.maxKeys = 10000; // Protect against memory exhaustion
 
@@ -206,7 +207,7 @@ class IdempotencyService {
 		}
 
 		if (idempotencyStorageService.isEnabled()) {
-			return this._reserveDurable(key, payloadHash, ttl);
+			return this._reserveDurableSerialized(key, payloadHash, ttl);
 		}
 
 		// Fast memory-only path (or fallback when Firestore is disabled)
@@ -240,6 +241,39 @@ class IdempotencyService {
 		});
 
 		return { state: 'fresh' };
+	}
+
+	/**
+	 * Serialize local durable reservations for one key so a fail-open fallback
+	 * cannot race a later Firestore claimant with the same cache record.
+	 * @param {string} key
+	 * @param {string} payloadHash
+	 * @param {number} ttl
+	 * @returns {Promise<Object>}
+	 */
+	async _reserveDurableSerialized(key, payloadHash, ttl) {
+		const inFlight = this.durableReservationsInFlight.get(key);
+		if (inFlight) {
+			const result = await inFlight;
+			const existing = this.cache.get(key);
+			if (existing && existing.payloadHash !== payloadHash) {
+				const error = new Error('Idempotency key was reused with a different payload');
+				error.code = 'IDEMPOTENCY_CONFLICT';
+				error.statusCode = 409;
+				throw error;
+			}
+			return this.getExistingLocalReservation(key, payloadHash) || result;
+		}
+
+		const reservation = this._reserveDurable(key, payloadHash, ttl);
+		this.durableReservationsInFlight.set(key, reservation);
+		try {
+			return await reservation;
+		} finally {
+			if (this.durableReservationsInFlight.get(key) === reservation) {
+				this.durableReservationsInFlight.delete(key);
+			}
+		}
 	}
 
 	async _reserveDurable(key, payloadHash, ttl) {
@@ -330,12 +364,6 @@ class IdempotencyService {
 
 				// Fresh reservation claimed in Firestore
 				if (durableRes.state === 'fresh') {
-					const existingLocal = this.cache.get(key);
-					if (existingLocal && existingLocal.payloadHash === payloadHash && existingLocal.state === 'pending') {
-						existingLocal.claimToken = durableRes.claimToken;
-						return { state: 'fresh' };
-					}
-
 					if (this.cache.size >= this.maxKeys) {
 						const evicted = this.evictOldestCompletedRecord();
 						if (!evicted) {
@@ -485,6 +513,7 @@ class IdempotencyService {
 	 */
 	clear() {
 		this.cache.clear();
+		this.durableReservationsInFlight.clear();
 	}
 }
 
