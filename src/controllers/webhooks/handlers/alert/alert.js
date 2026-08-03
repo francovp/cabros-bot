@@ -211,6 +211,7 @@ function postAlert(botOrGetter) {
 				deliveryResults: results,
 				channels: requestedChannels,
 				useTradingViewData,
+				tradingViewEnrichmentApplied: Boolean(alert.enriched && alert.enriched.tradingViewEnrichmentApplied === true),
 			}).catch(() => {}); // errors already logged inside AlertStorageService
 
 			if (signalOutcomeService.isEnabled()) {

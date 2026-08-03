@@ -2,9 +2,68 @@ const { TradingViewMcpService } = require('../../src/services/tradingview/Tradin
 
 describe('TradingViewMcpService', () => {
 	afterEach(() => {
+		delete process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT;
 		delete process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT;
 		delete process.env.ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME;
 		delete process.env.ENABLE_MESSAGE_FOOTER_METADATA;
+		delete process.env.TRADINGVIEW_MCP_URL;
+	});
+
+	it('uses the active TradingView MCP host when no URL is configured', () => {
+		delete process.env.TRADINGVIEW_MCP_URL;
+
+		const service = new TradingViewMcpService();
+
+		expect(service.getConfig().url).toBe('https://tradingview-mcp-yp6b.onrender.com/mcp');
+	});
+
+	it('reports unknown, ready, and degraded runtime state without exposing provider errors', async () => {
+		process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT = 'true';
+		const service = new TradingViewMcpService({
+			maxRetries: 1,
+			logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
+		});
+
+		expect(service.getStatus()).toEqual(expect.objectContaining({
+			configured: true,
+			ready: false,
+			status: 'unknown',
+			lastCheckedAt: null,
+			lastErrorCategory: null,
+			successCount: 0,
+			failureCount: 0,
+		}));
+
+		service._callTool = jest.fn().mockRejectedValueOnce(new Error('TradingView MCP HTTP 503: Service Suspended: provider body omitted'));
+		await expect(service.callCoinAnalysis({
+			symbol: 'BTCUSDT',
+			exchange: 'BINANCE',
+			timeframe: '1D',
+		})).rejects.toThrow('HTTP 503');
+
+		expect(service.getStatus()).toEqual(expect.objectContaining({
+			ready: false,
+			status: 'degraded',
+			lastErrorCategory: 'http_5xx',
+			successCount: 0,
+			failureCount: 1,
+		}));
+		expect(JSON.stringify(service.getStatus())).not.toContain('Service Suspended');
+
+		service._callTool = jest.fn().mockResolvedValueOnce({ price_data: { current_price: 70000 } });
+		await service.callCoinAnalysis({
+			symbol: 'BTCUSDT',
+			exchange: 'BINANCE',
+			timeframe: '1D',
+		});
+
+		expect(service.getStatus()).toEqual(expect.objectContaining({
+			ready: true,
+			status: 'ready',
+			lastErrorCategory: null,
+			successCount: 1,
+			failureCount: 1,
+		}));
 	});
 
 	it('returns null when alert text is not a TradingView signal', async () => {

@@ -58,7 +58,7 @@ This project is a small Express + Telegraf (Telegram) bot service that exposes a
 ### External Integrations
 - **Binance**: Uses `binance` package `MainClient` and `getAvgPrice({ symbol })` with `beautifyResponses: true`.
 - **Telegram**: Uses `telegraf` package. Commands are wired in `index.js`, and direct `bot.telegram.sendMessage` is used for alerts.
-- **TradingView MCP**: Remote MCP Streamable HTTP endpoint defaults to `https://tradingview-mcp.onrender.com/mcp`. Tool `coin_analysis` expects complete symbols split from `EXCHANGE:SYMBOL` values.
+- **TradingView MCP**: Remote MCP Streamable HTTP endpoint defaults to `https://tradingview-mcp-yp6b.onrender.com/mcp`. Tool `coin_analysis` expects complete symbols split from `EXCHANGE:SYMBOL` values.
 
 ---
 
@@ -636,6 +636,7 @@ Every successful `POST /api/webhook/alert` request is persisted as a document in
 | `deliveryResults` | array | Per-channel `SendResult` objects from `notificationManager.sendToAll()` |
 | `source` | string | Always `"webhook"` |
 | `useTradingViewData` | boolean | Whether `?useTradingViewData=true` was set on the request |
+| `tradingViewEnrichmentApplied` | boolean | Whether a TradingView MCP result was successfully applied |
 
 **Credential Configuration** (choose one):
 - **Option A** — `GOOGLE_APPLICATION_CREDENTIALS=/path/to/serviceAccountKey.json` (file path, good for local dev)
@@ -667,6 +668,7 @@ Every successful `POST /api/webhook/alert` request is persisted as a document in
   - `deliveryResults`
   - `source`
   - `useTradingViewData`
+  - `tradingViewEnrichmentApplied`
 - Read filtering for `source` and `enriched` is applied in memory after `receivedAt`-ordered batches to avoid introducing new composite Firestore index requirements.
 - Read endpoints must map Firestore initialization/read failures to `503 STORAGE_UNAVAILABLE` instead of a generic `500`.
 - Replay attempts must not mutate the original `alerts` document. Use `saveReplayAttempt()` to write an audit document with ID `${alertId}_${idempotencyKey}` in `alertReplays`.
@@ -747,6 +749,7 @@ See `/specs/TERMINOLOGY_GUIDE.md` for extended discussion and examples.
 - GH-176 / CB-72: `/api/status` and `/api/capabilities` expose `featureFlags.newsMonitorTestMode` from `ENABLE_NEWS_MONITOR_TEST_MODE`, without changing existing test-mode behavior.
 - GH-177 / CB-73: `/api/status` and `/api/capabilities` expose `featureFlags.cloudflareAig` from `ENABLE_CLOUDFLARE_AIG`, alongside the existing Cloudflare AI Gateway dependency readiness.
 - 009-tradingview-confluence-alerts (CB-44 / Issue #131): Added optional confluence enrichment for POST /api/webhook/alert?useTradingViewData=true. `ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT=true` calls `combined_analysis` within the same enrichment budget, annotates/downgrades contradictory confluence, and returns `confluenceData` in dry-run/stored enrichment payloads. `ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME=true` also calls `multi_timeframe_analysis` and returns `multiTimeframeData`.
+- GH-293 / CB-125: Repointed the default TradingView MCP endpoint to the active Render host, added process-local runtime readiness (`unknown`/`ready`/`degraded`) with sanitized error categories and counters, and exposed `tradingViewEnrichmentApplied` plus `byFeatureFlag.tradingViewDataApplied` so requested and successfully applied MCP data are distinguishable.
 - 008-async-job-callbacks (CB-28, CB-52 / Issue #150 follow-up): Added support for asynchronous job completion callbacks in TradingView analysis and market scanner jobs. Clients can specify callbackUrl, callbackSecret, and callbackEvents in POST /api/jobs/tradingview-analysis requests. The server signs the payloads with an HMAC-SHA256 signature, validates parameters (with node-only URL validation), and executes retries with exponential backoff on transient network failures, failing open without affecting the core job status. Callback delivery is tracked per event in `callbackStatus.events` while preserving the aggregate `callbackStatus.attempts` log.
 - GH-188 / CB-80: Added timestamp, event, and per-delivery UUID headers to async callbacks. HMAC signatures now bind the anti-replay metadata and raw body; retries receive unique delivery IDs, and callback attempt records retain each ID.
 - async-job-terminal-eviction (CB-54 / Issue #151): `JobService` now uses one terminal-status set for cleanup and terminal checks, so expired `cancelled` and `timed_out` jobs are evicted like `completed` and `failed` jobs while `processing` jobs remain available.

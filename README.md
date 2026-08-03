@@ -74,7 +74,7 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 - `ENABLE_TRADINGVIEW_MCP_ENRICHMENT` - Enable TradingView MCP enrichment for TradingView-like webhook messages (`true` or `false`, default: `false`)
 - `EXPANDED_ANALYSIS_ALERT_SYMBOLS` - Comma-separated fallback symbols for `/api/webhook/expanded-analysis-alert` using `EXCHANGE:SYMBOL` format (for example `BINANCE:BTCUSDT,NASDAQ:NVDA`)
 - `EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS` - Total analysis deadline for `/api/webhook/expanded-analysis-alert` in milliseconds (default: `60000`, capped at `120000`)
-- `TRADINGVIEW_MCP_URL` - MCP server HTTP endpoint (default: `https://tradingview-mcp.onrender.com/mcp`)
+- `TRADINGVIEW_MCP_URL` - MCP server HTTP endpoint (default: `https://tradingview-mcp-yp6b.onrender.com/mcp`)
 - `TRADINGVIEW_MCP_TIMEOUT_MS` - Timeout per MCP request in milliseconds (default: `12000`)
 - `TRADINGVIEW_MCP_MAX_RETRIES` - Retries for MCP failures (default: `3`)
 - `TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS` - Total budget envelope for the synchronous webhook enrichment flow (default: `12000`). When exceeded, all in-flight MCP calls are aborted and the enrichment fails open, preventing the alert webhook from being blocked for too long.
@@ -230,6 +230,8 @@ For `ENABLE_NEWS_MONITOR=true`, the payload also reports the primary LLM depende
 
 When `ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION=true`, `featureFlags.tradingViewVolumeConfirmation` reports the gate value and `dependencies.tradingViewVolumeConfirmation` reports readiness only when the configured TradingView MCP endpoint and its parent MCP enrichment gate are active.
 
+TradingView dependency readiness is runtime-derived and fail-open: `configured` reflects the effective endpoint, while `status` starts as `unknown` and changes to `ready` or `degraded` after an MCP operation. `lastErrorCategory` is sanitized to categories such as `timeout`, `http_5xx`, `http_4xx`, `invalid_response`, or `request_failed`; provider response bodies and URLs are never returned by `/api/status`.
+
 When `ENABLE_FIRESTORE_JOB_STORAGE=true`, `featureFlags.firestoreJobStorage` reports the async-job persistence gate and `dependencies.firestoreJobStorage` reports readiness using the configured Firestore credentials. The legacy `ENABLE_FIRESTORE_ALERT_STORAGE=true` gate also reports job storage as enabled because it activates the same runtime persistence path.
 
 `featureFlags.newsMonitorTestMode` reports `ENABLE_NEWS_MONITOR_TEST_MODE` without changing the news monitor's existing test-mode behavior.
@@ -289,8 +291,8 @@ When Firebase auth is enabled, configure `FIREBASE_SERVICE_ACCOUNT_JSON` or `GOO
     "telegram": { "enabled": true, "configured": true, "ready": true, "status": "ready" },
     "whatsapp": { "enabled": false, "configured": false, "ready": false, "status": "disabled" },
     "gemini": { "enabled": true, "configured": true, "ready": true, "status": "ready" },
-    "tradingViewMcp": { "enabled": true, "configured": true, "ready": true, "status": "ready" },
-    "tradingViewVolumeConfirmation": { "enabled": false, "configured": true, "ready": false, "status": "disabled" },
+    "tradingViewMcp": { "enabled": true, "configured": true, "ready": false, "status": "unknown", "lastCheckedAt": null, "lastSuccessAt": null, "lastFailureAt": null, "lastErrorCategory": null, "successCount": 0, "failureCount": 0 },
+    "tradingViewVolumeConfirmation": { "enabled": false, "configured": true, "ready": false, "status": "disabled", "lastCheckedAt": null, "lastSuccessAt": null, "lastFailureAt": null, "lastErrorCategory": null, "successCount": 0, "failureCount": 0 },
     "firestore": { "enabled": true, "configured": true, "ready": true, "status": "ready" },
     "firestoreJobStorage": { "enabled": false, "configured": true, "ready": false, "status": "disabled" },
     "signalOutcomeWorker": {
@@ -382,6 +384,8 @@ When `ENABLE_TRADINGVIEW_MCP_ENRICHMENT=true`, webhook alerts matching TradingVi
 5. If `ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME=true`, it also calls `multi_timeframe_analysis` and returns the raw multi-timeframe metadata in dry-run/stored enrichment data.
 6. Gemini/Brave grounding still runs when enabled, and the final `alert.enriched` merges grounding context + MCP technical data.
 7. If either provider fails, the flow degrades gracefully to the other provider (or original text if none succeed).
+
+When TradingView data is requested, `alert.enriched.tradingViewEnrichmentApplied` is `true` only when the MCP result was successfully applied. This marker is persisted separately from `useTradingViewData`, so analytics can distinguish requested from delivered technical data.
 
 ### Timeframe Mapping
 
@@ -943,7 +947,8 @@ List stored alerts ordered by `receivedAt` descending.
         }
       ],
       "source": "webhook",
-      "useTradingViewData": false
+      "useTradingViewData": false,
+      "tradingViewEnrichmentApplied": false
     }
   ],
   "pagination": {
@@ -990,6 +995,7 @@ The service caps the queried window at 31 days to keep routine operator usage ch
       "enriched": 1,
       "plain": 1,
       "tradingViewData": 1,
+      "tradingViewDataApplied": 1,
       "withoutTradingViewData": 1
     },
     "enrichment": {
@@ -1066,7 +1072,8 @@ Retrieve a single stored alert by Firestore document ID.
     "tokenUsage": null,
     "deliveryResults": [],
     "source": "webhook",
-    "useTradingViewData": true
+    "useTradingViewData": true,
+    "tradingViewEnrichmentApplied": false
   }
 }
 ```

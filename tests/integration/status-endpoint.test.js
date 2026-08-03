@@ -103,8 +103,14 @@ describe('Status endpoints', () => {
 		expect(response.body.dependencies.tradingViewMcp).toEqual({
 			enabled: true,
 			configured: true,
-			ready: true,
-			status: 'ready',
+			ready: false,
+			status: 'unknown',
+			lastCheckedAt: null,
+			lastSuccessAt: null,
+			lastFailureAt: null,
+			lastErrorCategory: null,
+			successCount: 0,
+			failureCount: 0,
 		});
 		expect(response.body.dependencies.braveSearch).toEqual({
 			enabled: false,
@@ -239,6 +245,12 @@ describe('Status endpoints', () => {
 			configured: true,
 			ready: false,
 			status: 'disabled',
+			lastCheckedAt: null,
+			lastSuccessAt: null,
+			lastFailureAt: null,
+			lastErrorCategory: null,
+			successCount: 0,
+			failureCount: 0,
 		});
 	});
 
@@ -429,8 +441,14 @@ describe('Status endpoints', () => {
 		expect(response.body.dependencies.tradingViewVolumeConfirmation).toEqual({
 			enabled: true,
 			configured: true,
-			ready: true,
-			status: 'ready',
+			ready: false,
+			status: 'unknown',
+			lastCheckedAt: null,
+			lastSuccessAt: null,
+			lastFailureAt: null,
+			lastErrorCategory: null,
+			successCount: 0,
+			failureCount: 0,
 		});
 	});
 
@@ -449,6 +467,12 @@ describe('Status endpoints', () => {
 			configured: true,
 			ready: false,
 			status: 'disabled',
+			lastCheckedAt: null,
+			lastSuccessAt: null,
+			lastFailureAt: null,
+			lastErrorCategory: null,
+			successCount: 0,
+			failureCount: 0,
 		});
 	});
 
@@ -748,8 +772,14 @@ describe('Status endpoints', () => {
 		expect(response.body.dependencies.tradingViewMcp).toEqual({
 			enabled: true,
 			configured: true,
-			ready: true,
-			status: 'ready',
+			ready: false,
+			status: 'unknown',
+			lastCheckedAt: null,
+			lastSuccessAt: null,
+			lastFailureAt: null,
+			lastErrorCategory: null,
+			successCount: 0,
+			failureCount: 0,
 		});
 	});
 
