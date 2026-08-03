@@ -527,7 +527,11 @@ class TradingViewMcpService {
 		}
 
 		if (contentType && contentType.includes('application/json')) {
-			return JSON.parse(bodyText);
+			try {
+				return JSON.parse(bodyText);
+			} catch {
+				throw new Error('TradingView MCP returned invalid JSON response');
+			}
 		}
 
 		const dataLines = bodyText

@@ -297,6 +297,22 @@ describe('TradingViewMcpService', () => {
 		expect(rpc).toEqual({ jsonrpc: '2.0', id: 'abc', result: { ok: true } });
 	});
 
+	it('classifies malformed JSON MCP responses as invalid responses', () => {
+		const service = new TradingViewMcpService();
+
+		let error;
+		try {
+			service._decodeRpcBody('{"jsonrpc":', 'application/json', 'abc');
+		} catch (caught) {
+			error = caught;
+		}
+
+		expect(error).toEqual(expect.objectContaining({
+			message: 'TradingView MCP returned invalid JSON response',
+		}));
+		expect(service._getErrorCategory(error)).toBe('invalid_response');
+	});
+
 	it('calls combined_analysis tool and unwraps result in callCombinedAnalysis', async () => {
 		const service = new TradingViewMcpService({ logger: { warn: jest.fn(), error: jest.fn() } });
 		service._callTool = jest.fn().mockResolvedValue({
