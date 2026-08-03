@@ -70,10 +70,22 @@ function parseValue(value, schema, fallback) {
 }
 
 function getEnvironmentConfig() {
-	return Object.entries(PARAMETER_SCHEMA).reduce((config, [key, schema]) => {
-		config[key] = parseValue(process.env[key], schema, schema.defaultValue);
-		return config;
-	}, {});
+	const parseLegacyPositiveInteger = (value, fallback) => {
+		const parsed = Number.parseInt(value, 10);
+		return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+	};
+
+	return {
+		NEWS_ALERT_THRESHOLD: Number.parseFloat(process.env.NEWS_ALERT_THRESHOLD || 0.7),
+		NEWS_TIMEOUT_MS: Number.parseInt(process.env.NEWS_TIMEOUT_MS || 60000, 10),
+		NEWS_GEMINI_CONCURRENCY: parseLegacyPositiveInteger(process.env.NEWS_GEMINI_CONCURRENCY, Infinity),
+		NEWS_GEMINI_QUOTA_MAX_RETRIES: parseLegacyPositiveInteger(process.env.NEWS_GEMINI_QUOTA_MAX_RETRIES, 2),
+		NEWS_GEMINI_QUOTA_RETRY_BASE_MS: parseLegacyPositiveInteger(process.env.NEWS_GEMINI_QUOTA_RETRY_BASE_MS, 1000),
+		TRADINGVIEW_MCP_TIMEOUT_MS: Number.parseInt(process.env.TRADINGVIEW_MCP_TIMEOUT_MS || 12000, 10),
+		TRADINGVIEW_MCP_MAX_RETRIES: Number.parseInt(process.env.TRADINGVIEW_MCP_MAX_RETRIES || 3, 10),
+		TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS: Number.parseInt(process.env.TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS || 12000, 10),
+		ENABLE_MESSAGE_FOOTER_METADATA: process.env.ENABLE_MESSAGE_FOOTER_METADATA !== 'false',
+	};
 }
 
 function buildDefaultConfig() {
@@ -152,17 +164,19 @@ function getStatus() {
 }
 
 function getRemoteValue(config, key, schema) {
-	const getterName = schema.type === 'boolean' ? 'getBoolean' : 'getNumber';
-	if (!config || typeof config[getterName] !== 'function') {
+	if (!config || typeof config.getValue !== 'function') {
 		return { present: false };
 	}
 
 	try {
-		const value = config[getterName](key);
-		if (value === undefined || value === null) {
+		const value = config.getValue(key);
+		if (!value || typeof value.getSource !== 'function' || value.getSource() !== 'remote') {
 			return { present: false };
 		}
-		const parsed = parseValue(value, schema, undefined);
+		if (typeof value.asString !== 'function') {
+			return { present: false };
+		}
+		const parsed = parseValue(value.asString(), schema, undefined);
 		return parsed === undefined ? { present: true, valid: false } : { present: true, value: parsed };
 	} catch (error) {
 		return { present: true, valid: false };

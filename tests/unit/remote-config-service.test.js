@@ -35,6 +35,10 @@ describe('RemoteConfigService', () => {
 			evaluate: jest.fn(() => ({
 				getNumber: jest.fn((key) => values[key]),
 				getBoolean: jest.fn((key) => values[key]),
+				getValue: jest.fn((key) => ({
+					getSource: jest.fn(() => Object.prototype.hasOwnProperty.call(values, key) ? 'remote' : 'default'),
+					asString: jest.fn(() => String(values[key] ?? '')),
+				})),
 			})),
 			toJSON: jest.fn(() => ({ version: { versionNumber } })),
 		};
@@ -49,6 +53,24 @@ describe('RemoteConfigService', () => {
 		expect(remoteConfigService.getRuntimeConfig().NEWS_ALERT_THRESHOLD).toBe(0.7);
 		expect(remoteConfigService.getRuntimeConfig().TRADINGVIEW_MCP_TIMEOUT_MS).toBe(12000);
 		expect(admin.remoteConfig).not.toHaveBeenCalled();
+	});
+
+	it('preserves legacy environment values when Remote Config is disabled', async () => {
+		process.env.NEWS_ALERT_THRESHOLD = '1.5';
+		process.env.NEWS_TIMEOUT_MS = '180000';
+		process.env.NEWS_GEMINI_CONCURRENCY = '9';
+		process.env.TRADINGVIEW_MCP_TIMEOUT_MS = '500';
+		process.env.TRADINGVIEW_MCP_MAX_RETRIES = '8';
+
+		await remoteConfigService.start();
+
+		expect(remoteConfigService.getRuntimeConfig()).toEqual(expect.objectContaining({
+			NEWS_ALERT_THRESHOLD: 1.5,
+			NEWS_TIMEOUT_MS: 180000,
+			NEWS_GEMINI_CONCURRENCY: 9,
+			TRADINGVIEW_MCP_TIMEOUT_MS: 500,
+			TRADINGVIEW_MCP_MAX_RETRIES: 8,
+		}));
 	});
 
 	it('applies validated allow-listed values and records safe template metadata', async () => {
@@ -104,6 +126,42 @@ describe('RemoteConfigService', () => {
 		expect(remoteConfigService.getRuntimeConfig()).toEqual(expect.objectContaining({
 			NEWS_ALERT_THRESHOLD: 0.65,
 			TRADINGVIEW_MCP_TIMEOUT_MS: 9000,
+		}));
+		expect(remoteConfigService.getStatus().lastErrorCategory).toBe('invalid_value');
+	});
+
+	it('validates raw remote values before typed coercion', async () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		process.env.NEWS_ALERT_THRESHOLD = '0.65';
+		process.env.ENABLE_MESSAGE_FOOTER_METADATA = 'true';
+		const template = {
+			load: jest.fn().mockResolvedValue(undefined),
+			evaluate: jest.fn(() => ({
+				getNumber: jest.fn(() => 0),
+				getBoolean: jest.fn(() => false),
+				getValue: jest.fn((key) => {
+					const rawValues = {
+						NEWS_ALERT_THRESHOLD: 'not-a-number',
+						ENABLE_MESSAGE_FOOTER_METADATA: 'not-a-boolean',
+					};
+					const rawValue = rawValues[key];
+					return {
+						getSource: jest.fn(() => rawValue === undefined ? 'default' : 'remote'),
+						asString: jest.fn(() => rawValue ?? ''),
+					};
+				}),
+			})),
+			toJSON: jest.fn(() => ({ version: { versionNumber: '8' } })),
+		};
+		admin.remoteConfig.mockReturnValue({ initServerTemplate: jest.fn(() => template) });
+		alertStorageService.getFirestore.mockReturnValue({});
+
+		await remoteConfigService.loadNow();
+
+		expect(remoteConfigService.getRuntimeConfig()).toEqual(expect.objectContaining({
+			NEWS_ALERT_THRESHOLD: 0.65,
+			ENABLE_MESSAGE_FOOTER_METADATA: true,
+			NEWS_GEMINI_CONCURRENCY: Infinity,
 		}));
 		expect(remoteConfigService.getStatus().lastErrorCategory).toBe('invalid_value');
 	});
