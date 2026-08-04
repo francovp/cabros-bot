@@ -174,6 +174,7 @@ function postAlert(botOrGetter) {
 			const results = await sendWithNotificationRouting(notificationManager, alert, routing, { parentSpan: requestSpan });
 			const requestedChannels = getRequestedChannels(notificationManager, routing);
 			const deliveredChannels = getDeliveredChannels(results);
+			const processingTimeMs = Math.max(0, Date.now() - startTime);
 
 			// Return 200 OK regardless of delivery success (fail-open pattern)
 			res.json({
@@ -211,6 +212,7 @@ function postAlert(botOrGetter) {
 				deliveryResults: results,
 				channels: requestedChannels,
 				useTradingViewData,
+				processingTimeMs,
 			}).catch(() => {}); // errors already logged inside AlertStorageService
 
 			if (signalOutcomeService.isEnabled()) {

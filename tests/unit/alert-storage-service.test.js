@@ -247,6 +247,20 @@ describe('AlertStorageService', () => {
 			});
 		});
 
+		it('persists only bounded non-negative integer processing latency', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockAdd.mockResolvedValue({ id: 'latency-id' });
+
+			await AlertStorageService.saveAlert(buildParams({ processingTimeMs: 250 }));
+
+			expect(mockAdd.mock.calls[0][0].processingTimeMs).toBe(250);
+
+			for (const processingTimeMs of [-1, 12.5, '250', Infinity, 24 * 60 * 60 * 1000 + 1, null, undefined]) {
+				await AlertStorageService.saveAlert(buildParams({ processingTimeMs }));
+				expect(mockAdd.mock.calls.at(-1)[0]).not.toHaveProperty('processingTimeMs');
+			}
+		});
+
 		it('persists only safe prompt provenance fields with enriched alerts', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 			mockAdd.mockResolvedValueOnce({ id: 'id-provenance' });
@@ -861,6 +875,40 @@ describe('AlertStorageService', () => {
 	});
 
 		describe('summarizeAlerts()', () => {
+		it('preserves zero latency, accepts legacy latency, and ignores invalid values', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('zero-latency', {
+						receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+						processingTimeMs: 0,
+						processing_time_ms: 900,
+					}),
+					buildQueryDoc('new-latency', {
+						receivedAt: buildTimestamp('2026-06-06T11:00:00.000Z'),
+						processingTimeMs: 100,
+					}),
+					buildQueryDoc('legacy-latency', {
+						receivedAt: buildTimestamp('2026-06-06T10:00:00.000Z'),
+						processing_time_ms: 200,
+					}),
+					buildQueryDoc('invalid-latency', {
+						receivedAt: buildTimestamp('2026-06-06T09:00:00.000Z'),
+						processingTimeMs: -1,
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.summarizeAlerts({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+				limit: 200,
+			});
+
+			expect(result.latency.averageProcessingMs).toBe(100);
+		});
+
 		it('aggregates bounded alert analytics without exposing raw alert text', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 			mockGet.mockResolvedValueOnce({
