@@ -2,6 +2,7 @@
 
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 10000;
 const MAX_SHUTDOWN_TIMEOUT_MS = 30000;
+const DEFAULT_FORCED_FINALIZATION_TIMEOUT_MS = 2000;
 
 function parseShutdownTimeout(value) {
 	const parsed = Number(value);
@@ -21,6 +22,29 @@ function safelyRun(logger, resource, callback) {
 		.catch((error) => {
 			logFailure(logger, resource, error);
 		});
+}
+
+function parseFinalizationTimeout(value) {
+	const parsed = Number(value);
+	if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+		return DEFAULT_FORCED_FINALIZATION_TIMEOUT_MS;
+	}
+	return Math.min(parsed, MAX_SHUTDOWN_TIMEOUT_MS);
+}
+
+async function safelyRunWithinTimeout(logger, resource, callback, timeoutMs) {
+	let timer;
+	const timedOut = await Promise.race([
+		safelyRun(logger, resource, callback).then(() => false),
+		new Promise((resolve) => {
+			timer = setTimeout(() => resolve(true), timeoutMs);
+		}),
+	]);
+	clearTimeout(timer);
+
+	if (timedOut) {
+		logger.warn(`[ProcessLifecycle] ${resource} finalization budget exceeded`, { timeoutMs });
+	}
 }
 
 function closeServer(server, logger) {
@@ -51,6 +75,7 @@ function createProcessLifecycle(options = {}) {
 		getBotLaunchPromise = () => null,
 		waitForBackgroundJobs = () => undefined,
 		finalizeBackgroundJobs = () => undefined,
+		finalizationTimeoutMs = DEFAULT_FORCED_FINALIZATION_TIMEOUT_MS,
 		stopSignalOutcomeWorker = () => undefined,
 		shutdownNewsMonitor = () => undefined,
 		flushSentry = () => undefined,
@@ -59,6 +84,7 @@ function createProcessLifecycle(options = {}) {
 		forceExit = (code) => process.exit(code),
 	} = options;
 	const shutdownTimeoutMs = parseShutdownTimeout(timeoutMs);
+	const forcedFinalizationTimeoutMs = parseFinalizationTimeout(finalizationTimeoutMs);
 	let shutdownPromise = null;
 	let shuttingDown = false;
 
@@ -113,7 +139,12 @@ function createProcessLifecycle(options = {}) {
 
 			if (timedOut) {
 				logger.warn('[ProcessLifecycle] Shutdown deadline exceeded', { timeoutMs: shutdownTimeoutMs });
-				await safelyRun(logger, 'unfinished background jobs', finalizeBackgroundJobs);
+				await safelyRunWithinTimeout(
+					logger,
+					'unfinished background jobs',
+					finalizeBackgroundJobs,
+					forcedFinalizationTimeoutMs,
+				);
 				try {
 					server?.closeAllConnections?.();
 				} catch (error) {

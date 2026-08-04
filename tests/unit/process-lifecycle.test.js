@@ -63,6 +63,24 @@ describe('process lifecycle coordinator', () => {
 		expect(forceExit).toHaveBeenCalledWith(1);
 	});
 
+	it('bounds unfinished-job finalization before forced exit', async () => {
+		const server = { close: jest.fn() };
+		const finalizeBackgroundJobs = jest.fn(() => new Promise(() => {}));
+		const forceExit = jest.fn();
+		const lifecycle = createProcessLifecycle({
+			getServer: () => server,
+			finalizeBackgroundJobs,
+			timeoutMs: 5,
+			finalizationTimeoutMs: 5,
+			forceExit,
+		});
+
+		await lifecycle.handleSignal('SIGTERM');
+
+		expect(finalizeBackgroundJobs).toHaveBeenCalledTimes(1);
+		expect(forceExit).toHaveBeenCalledWith(1);
+	});
+
 	it('waits for background jobs and Telegram polling before flushing Sentry', async () => {
 		const events = [];
 		let releaseJobs;

@@ -123,8 +123,11 @@ describe('JobService Unit Tests', () => {
 		it('does not block job creation on processing callbacks while tracking them', async () => {
 			process.env.NODE_ENV = 'test';
 			let releaseCallback;
+			let callbackStartedResolve;
+			const callbackStarted = new Promise((resolve) => { callbackStartedResolve = resolve; });
 			jobService._runBackgroundJob = jest.fn().mockResolvedValue(undefined);
 			jobService._sendCallbackWithRetry = jest.fn(() => new Promise((resolve) => {
+				callbackStartedResolve();
 				releaseCallback = resolve;
 			}));
 
@@ -133,7 +136,8 @@ describe('JobService Unit Tests', () => {
 				callbackUrl: 'http://localhost:8080/callback',
 				callbackEvents: ['processing'],
 			});
-			const result = await Promise.race([creation, delay(20).then(() => null)]);
+			await callbackStarted;
+			const result = await creation;
 
 			expect(result).toEqual(expect.objectContaining({ success: true }));
 			expect(jobService.activeCallbacks.size).toBe(1);
@@ -151,10 +155,12 @@ describe('JobService Unit Tests', () => {
 
 		it('persists active jobs as cancelled before forced shutdown', async () => {
 			let releaseJob;
+			let releaseCallback;
 			const runningJob = new Promise((resolve) => { releaseJob = resolve; });
+			const callbackPromise = new Promise((resolve) => { releaseCallback = resolve; });
 			const abort = jest.fn();
 			jobService._runBackgroundJob = jest.fn(() => runningJob);
-			jobService._sendCallbackWithRetry = jest.fn().mockResolvedValue(undefined);
+			jobService._sendCallbackWithRetry = jest.fn(() => callbackPromise);
 
 			const result = await jobService.createJob('expanded-analysis', {
 				symbols: ['BINANCE:BTCUSDT'],
@@ -163,7 +169,13 @@ describe('JobService Unit Tests', () => {
 			});
 			jobService.activeControllers.set(result.jobId, { abort });
 
-			await jobService.finalizeActiveJobsForShutdown();
+			const finalization = jobService.finalizeActiveJobsForShutdown();
+			let finalized = false;
+			finalization.then(() => { finalized = true; });
+			await Promise.resolve();
+			expect(finalized).toBe(false);
+			releaseCallback();
+			await finalization;
 
 			const persistedJob = await jobService.repository.get(result.jobId);
 			expect(persistedJob).toEqual(expect.objectContaining({

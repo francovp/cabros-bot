@@ -274,7 +274,7 @@ class JobService {
 				controller.abort(new Error(errorMessage));
 				this.activeControllers.delete(jobId);
 			}
-			await this._triggerCallbackIfConfigured(job, { background: true });
+			await this._triggerCallbackIfConfigured(job);
 		}));
 	}
 

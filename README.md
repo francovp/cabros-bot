@@ -111,7 +111,7 @@ Unfiltered signal outcome summaries include `shadowModeMetrics.exchangeBreakdown
 #### Server Configuration
 
 - `PORT` - HTTP server port (default: `80`)
-- `SHUTDOWN_TIMEOUT_MS` - Maximum graceful shutdown budget in milliseconds (default: `10000`, hard cap: `30000`); after the deadline active jobs are persisted as retryable cancellations, remaining HTTP connections are force-closed, and the process exits
+- `SHUTDOWN_TIMEOUT_MS` - Maximum graceful shutdown budget in milliseconds (default: `10000`, hard cap: `30000`); after the deadline active jobs receive a bounded finalization attempt and are persisted as retryable cancellations, remaining HTTP connections are force-closed, and the process exits
 - `RENDER` - Render.com deployment flag (used internally)
 - `IS_PULL_REQUEST` - Render preview environment flag (disables bot in PRs)
 - `TRUST_PROXY` - Express trusted proxy setting for reverse-proxy deployments (`true`, `false`, `1` hop, or subnet string; defaults to `1` when `RENDER=true`, and `false` for direct deployments)
