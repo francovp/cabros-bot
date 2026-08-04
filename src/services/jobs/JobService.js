@@ -1099,8 +1099,8 @@ class JobService {
 				job.callbackStatus = mergeCallbackStatus(current.callbackStatus, job.callbackStatus);
 			}
 		}
-		await this.repository.save(job);
-		return true;
+		const persisted = await this.repository.save(job);
+		return persisted !== false;
 	}
 
 	_getRoutingFromJob(job) {

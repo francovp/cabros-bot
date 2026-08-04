@@ -35,15 +35,12 @@ async function getLocalTerminalJob(jobId) {
 			return null;
 		}
 
-		const pendingSave = pendingSaves.get(jobId);
-		if (!pendingSave) {
+		const pending = pendingSaves.get(jobId);
+		if (!pending?.size) {
 			return cloneJob(localJob);
 		}
 
-		await pendingSave.catch(() => undefined);
-		if (pendingSaves.get(jobId) === pendingSave) {
-			return cloneJob(saveVersions.get(jobId)?.job || memoryJobs.get(jobId));
-		}
+		await Promise.allSettled([...pending]);
 	}
 }
 
@@ -68,7 +65,7 @@ class JobRepository {
 			candidate && TERMINAL_JOB_STATUSES.has(candidate.status)
 		));
 		if (terminalJob && terminalJob.status !== sanitized.status) {
-			return sanitized.jobId;
+			return false;
 		}
 
 		memoryJobs.set(sanitized.jobId, cloneJob(sanitized));
@@ -91,10 +88,16 @@ class JobRepository {
 				latest = saveVersions.get(sanitized.jobId);
 			}
 		})();
-		pendingSaves.set(sanitized.jobId, persistencePromise);
-		await persistencePromise;
-		if (pendingSaves.get(sanitized.jobId) === persistencePromise) {
-			pendingSaves.delete(sanitized.jobId);
+		const pending = pendingSaves.get(sanitized.jobId) || new Set();
+		pending.add(persistencePromise);
+		pendingSaves.set(sanitized.jobId, pending);
+		try {
+			await persistencePromise;
+		} finally {
+			pending.delete(persistencePromise);
+			if (!pending.size) {
+				pendingSaves.delete(sanitized.jobId);
+			}
 		}
 
 		return sanitized.jobId;

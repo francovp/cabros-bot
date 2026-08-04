@@ -324,6 +324,79 @@ describe('JobService Unit Tests', () => {
 			expect(jobService._triggerCallbackIfConfigured).not.toHaveBeenCalled();
 		});
 
+		it('waits for superseded Firestore saves before reading a terminal job', async () => {
+			process.env.ENABLE_FIRESTORE_JOB_STORAGE = 'true';
+			let releaseInitialSave;
+			const initialSave = new Promise((resolve) => { releaseInitialSave = resolve; });
+			admin.__mockDocSet.mockImplementationOnce(() => initialSave);
+
+			const processingJob = {
+				jobId: 'superseded-firestore-save-job',
+				type: 'expanded-analysis',
+				status: 'processing',
+				createdAt: new Date().toISOString(),
+				updatedAt: new Date().toISOString(),
+				progress: { total: 1, current: 0, status: 'pending' },
+				fullResults: [],
+				fullScanResults: [],
+			};
+			const cancellationJob = {
+				...processingJob,
+				status: 'cancelled',
+				shutdownFinalized: true,
+			};
+
+			const firstSave = jobService.repository.save(processingJob);
+			const cancellationSave = jobService.repository.save(cancellationJob);
+			await cancellationSave;
+
+			let readResolved = false;
+			const terminalRead = jobService.repository.get(processingJob.jobId).then((job) => {
+				readResolved = true;
+				return job;
+			});
+			await delay(10);
+			expect(readResolved).toBe(false);
+
+			releaseInitialSave();
+			await expect(terminalRead).resolves.toEqual(expect.objectContaining({ status: 'cancelled' }));
+			await firstSave;
+		});
+
+		it('does not send a cancellation callback when the terminal save is rejected', async () => {
+			const jobId = 'terminal-save-rejection-job';
+			const processingJob = {
+				jobId,
+				type: 'expanded-analysis',
+				status: 'processing',
+				callbackUrl: 'http://localhost:8080/callback',
+				callbackEvents: ['cancelled'],
+				createdAt: new Date().toISOString(),
+				updatedAt: new Date().toISOString(),
+				progress: { total: 1, current: 0, status: 'pending' },
+				fullResults: [],
+				fullScanResults: [],
+			};
+			await jobService.repository.save(processingJob);
+
+			const realSave = jobService.repository.save.bind(jobService.repository);
+			const saveSpy = jest.spyOn(jobService.repository, 'save').mockImplementation(async (job) => {
+				if (job.status === 'cancelled') {
+					await realSave({ ...job, status: 'completed' });
+				}
+				return realSave(job);
+			});
+			jobService._triggerCallbackIfConfigured = jest.fn();
+
+			try {
+				await jobService._finalizeActiveJobForShutdown(jobId);
+				expect(jobService._triggerCallbackIfConfigured).not.toHaveBeenCalled();
+				expect((await jobService.repository.get(jobId)).status).toBe('completed');
+			} finally {
+				saveSpy.mockRestore();
+			}
+		});
+
 		it('reapplies a newer cancellation after a stale Firestore save settles', async () => {
 			process.env.ENABLE_FIRESTORE_JOB_STORAGE = 'true';
 			let releaseInitialSave;
@@ -351,14 +424,14 @@ describe('JobService Unit Tests', () => {
 			const firstSave = jobService.repository.save(processingJob);
 			const cancellationSave = jobService.repository.save(cancellationJob);
 			await cancellationSave;
+			releaseInitialSave();
+			await firstSave;
 			admin.__mockDocGet.mockResolvedValueOnce({
 				exists: true,
 				id: processingJob.jobId,
 				data: () => processingJob,
 			});
 			expect((await jobService.repository.get(processingJob.jobId)).status).toBe('cancelled');
-			releaseInitialSave();
-			await firstSave;
 
 			expect(admin.__mockDocSet).toHaveBeenCalledTimes(3);
 			expect(admin.__mockDocSet.mock.calls[2][0]).toEqual(expect.objectContaining({
