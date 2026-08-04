@@ -54,6 +54,37 @@ const ENVIRONMENT_CLASSIFICATIONS = {
 	SOURCE_VERSION: 'platform-injected release metadata',
 };
 
+function getEnvironmentReadsFromContent(content) {
+	const names = new Set();
+	const patterns = [
+		/\bprocess\.env\.([A-Z][A-Z0-9_]*)\b/g,
+		/\bprocess\.env\[['"]([A-Z][A-Z0-9_]*)['"]\]/g,
+	];
+	const processEnvAliasPattern = /\b([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*process\.env\b/g;
+	const dynamicReadArgumentPatterns = [
+		/\bparseEnvInt\(\s*['"]([A-Z][A-Z0-9_]*)['"]/g,
+		/\bgetSymbolsFromEnv\(\s*['"]([A-Z][A-Z0-9_]*)['"]/g,
+		/\benvVar\s*:\s*['"]([A-Z][A-Z0-9_]*)['"]/g,
+	];
+	const dynamicReadMapPattern = /\bgetRequiredEnvVars\(\)\s*\{[\s\S]*?\breturn envVarMap;/g;
+
+	for (const pattern of patterns) {
+		for (const match of content.matchAll(pattern)) names.add(match[1]);
+	}
+	for (const [, alias] of content.matchAll(processEnvAliasPattern)) {
+		const aliasPropertyPattern = new RegExp(`\\b${alias}\\.([A-Z][A-Z0-9_]*)\\b`, 'g');
+		for (const match of content.matchAll(aliasPropertyPattern)) names.add(match[1]);
+	}
+	for (const pattern of dynamicReadArgumentPatterns) {
+		for (const match of content.matchAll(pattern)) names.add(match[1]);
+	}
+	for (const mapMatch of content.matchAll(dynamicReadMapPattern)) {
+		for (const match of mapMatch[0].matchAll(/['"]([A-Z][A-Z0-9_]*)['"]/g)) names.add(match[1]);
+	}
+
+	return names;
+}
+
 function getStaticEnvironmentReads(repoRoot) {
 	const sourceFiles = [
 		path.join(repoRoot, 'index.js'),
@@ -63,27 +94,9 @@ function getStaticEnvironmentReads(repoRoot) {
 	].filter(fullPath => fs.existsSync(fullPath));
 
 	const names = new Set();
-	const patterns = [
-		/\bprocess\.env\.([A-Z][A-Z0-9_]*)\b/g,
-		/\bprocess\.env\[['"]([A-Z][A-Z0-9_]*)['"]\]/g,
-	];
-	const dynamicReadArgumentPatterns = [
-		/\bparseEnvInt\(\s*['"]([A-Z][A-Z0-9_]*)['"]/g,
-		/\bgetSymbolsFromEnv\(\s*['"]([A-Z][A-Z0-9_]*)['"]/g,
-		/\benvVar\s*:\s*['"]([A-Z][A-Z0-9_]*)['"]/g,
-	];
-	const dynamicReadMapPattern = /\bgetRequiredEnvVars\(\)\s*\{[\s\S]*?\breturn envVarMap;/g;
-
 	for (const fullPath of sourceFiles) {
-		const content = fs.readFileSync(fullPath, 'utf8');
-		for (const pattern of patterns) {
-			for (const match of content.matchAll(pattern)) names.add(match[1]);
-		}
-		for (const pattern of dynamicReadArgumentPatterns) {
-			for (const match of content.matchAll(pattern)) names.add(match[1]);
-		}
-		for (const mapMatch of content.matchAll(dynamicReadMapPattern)) {
-			for (const match of mapMatch[0].matchAll(/['"]([A-Z][A-Z0-9_]*)['"]/g)) names.add(match[1]);
+		for (const name of getEnvironmentReadsFromContent(fs.readFileSync(fullPath, 'utf8'))) {
+			names.add(name);
 		}
 	}
 
@@ -174,6 +187,11 @@ describe('Documentation Alignment Policy', () => {
 		);
 		expect(readme).toContain('`MODEL_PROVIDER=cloudflare` selects Cloudflare runtime routing');
 		expect(readme).toContain('`ENABLE_CLOUDFLARE_AIG` only exposes Cloudflare readiness in status/capabilities');
+	});
+
+	test('aliased process.env reads are included in the parity scan', () => {
+		const source = 'function setup(env = process.env) { return env.TRUST_PROXY; }';
+		expect([...getEnvironmentReadsFromContent(source)]).toContain('TRUST_PROXY');
 	});
 
 	test('application-owned environment reads are documented or explicitly classified', () => {
