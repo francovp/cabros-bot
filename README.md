@@ -111,6 +111,7 @@ Unfiltered signal outcome summaries include `shadowModeMetrics.exchangeBreakdown
 #### Server Configuration
 
 - `PORT` - HTTP server port (default: `80`)
+- `SHUTDOWN_TIMEOUT_MS` - Maximum graceful shutdown budget in milliseconds (default: `10000`, hard cap: `30000`); after the deadline remaining HTTP connections are force-closed and the process exits
 - `RENDER` - Render.com deployment flag (used internally)
 - `IS_PULL_REQUEST` - Render preview environment flag (disables bot in PRs)
 - `TRUST_PROXY` - Express trusted proxy setting for reverse-proxy deployments (`true`, `false`, `1` hop, or subnet string; defaults to `1` when `RENDER=true`, and `false` for direct deployments)
@@ -1708,7 +1709,7 @@ The application logs to stdout:
 
 1. Verify `ENABLE_NEWS_MONITOR=true` in environment
 2. Verify `GEMINI_API_KEY` is set (required for Gemini analysis)
-3. Check application logs for "initializeNewsMonitor" message on startup
+3. Check application logs for `[NewsMonitor] Handler initialized` when news monitoring is enabled
 4. Verify `/api/news-monitor` route is registered (check logs for route mounting)
 
 #### News Alerts Not Sending

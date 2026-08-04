@@ -38,6 +38,10 @@ class NewsCache {
    * Initialize cache with periodic cleanup
    */
 	initialize() {
+		if (this.cleanupInterval) {
+			return;
+		}
+
 		// Cleanup every 1 hour
 		this.cleanupInterval = setInterval(() => {
 			this.cleanup();

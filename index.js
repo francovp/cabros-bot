@@ -13,14 +13,19 @@ const app = require('./app.js');
 const { Telegraf, Markup } = require('telegraf');
 const { getRoutes } = require('./src/routes');
 const { initializeNotificationServices } = require('./src/controllers/webhooks/handlers/alert/alert');
+const { getNewsMonitor } = require('./src/controllers/webhooks/handlers/newsMonitor/newsMonitor');
+const { getCacheInstance } = require('./src/controllers/webhooks/handlers/newsMonitor/cache');
 const { registerDebugSentryRoute } = require('./src/lib/debugSentryRoute');
+const { createProcessLifecycle } = require('./src/lib/processLifecycle');
 const { getTelegramBootstrapConfig } = require('./src/lib/telegramBootstrap');
 const SignalOutcomeService = require('./src/services/storage/SignalOutcomeService');
+const sentryService = require('./src/services/monitoring/SentryService');
 const Sentry = require('@sentry/node');
 
 const { token } = getTelegramBootstrapConfig();
 
 let bot;
+let server;
 
 const port = process.env.PORT || 80;
 const now = new Date();
@@ -41,11 +46,25 @@ app.use(function onError(err, req, res, next) {
 	res.end(res.sentry + '\n');
 });
 
-app.listen(port, async () => {
+const lifecycle = createProcessLifecycle({
+	getServer: () => server,
+	getBot: () => bot,
+	stopSignalOutcomeWorker: (options) => SignalOutcomeService.stopWorker(options),
+	shutdownNewsMonitor: () => getCacheInstance().shutdown(),
+	flushSentry: (timeout) => sentryService.flush(timeout),
+	timeoutMs: process.env.SHUTDOWN_TIMEOUT_MS,
+});
+lifecycle.register();
+
+server = app.listen(port, async () => {
 	console.log(now + ' - Running server on port ' + port);
+	if (lifecycle.isShuttingDown()) return;
 
 	// Start background signal outcome evaluation worker if enabled
 	SignalOutcomeService.startWorker();
+	if (process.env.ENABLE_NEWS_MONITOR === 'true') {
+		getNewsMonitor().initialize();
+	}
 
 	const { telegramBotIsEnabled, isPreviewEnv, shouldStartTelegramBot } = getTelegramBootstrapConfig();
 	console.debug('telegramBotIsEnabled:', telegramBotIsEnabled);
@@ -62,23 +81,14 @@ app.listen(port, async () => {
 
 		// Initialize notification services
 		await initializeNotificationServices(bot);
-
-		// Enable graceful stop
-		process.once('SIGINT', () => {
-			SignalOutcomeService.stopWorker();
-			bot.stop('SIGINT');
-		});
-		process.once('SIGTERM', () => {
-			SignalOutcomeService.stopWorker();
-			bot.stop('SIGTERM');
-		});
+		if (lifecycle.isShuttingDown()) return;
 
 		// Start polling without blocking the rest of bootstrap.
 		void bot.launch().catch((error) => {
 			console.error('[index] Failed to launch Telegram bot:', error.message);
 		});
 
-		if (process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID !== undefined) {
+		if (!lifecycle.isShuttingDown() && process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID !== undefined) {
 			console.log('Telegram Admin Notifications Chat ID:', process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID);
 			let text, commitHash, gitCommitUrl;
 			if (process.env.RENDER) {
@@ -95,13 +105,6 @@ app.listen(port, async () => {
 		console.log('Telegram Bot is disabled');
 		// Initialize notification services
 		await initializeNotificationServices(null);
-
-		process.once('SIGINT', () => {
-			SignalOutcomeService.stopWorker();
-		});
-		process.once('SIGTERM', () => {
-			SignalOutcomeService.stopWorker();
-		});
 	}
 });
 
