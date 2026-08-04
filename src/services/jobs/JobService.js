@@ -376,6 +376,11 @@ class JobService {
 				if (typeof this.repository.waitForPendingSaves === 'function') {
 					await this.repository.waitForPendingSaves();
 				}
+				const hasNewActiveWork = [
+					...this.activeJobs.keys(),
+					...this.activeCreations.keys(),
+				].some((jobId) => !finalizedJobIds.has(jobId));
+				if (hasNewActiveWork) continue;
 				return;
 			}
 

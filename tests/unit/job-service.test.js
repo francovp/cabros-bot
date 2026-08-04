@@ -439,6 +439,50 @@ describe('JobService Unit Tests', () => {
 			}
 		});
 
+		it('rescans active creations added during the pending-save drain', async () => {
+			process.env.ENABLE_FIRESTORE_JOB_STORAGE = 'true';
+			let releaseInitialSave;
+			const initialSave = new Promise((resolve) => { releaseInitialSave = resolve; });
+			admin.__mockDocSet.mockImplementationOnce(() => initialSave);
+
+			const processingJob = {
+				jobId: 'late-forced-shutdown-job',
+				type: 'expanded-analysis',
+				status: 'processing',
+				createdAt: new Date().toISOString(),
+				updatedAt: new Date().toISOString(),
+				progress: { total: 1, current: 0, status: 'pending' },
+				fullResults: [],
+				fullScanResults: [],
+			};
+			const cancellationJob = { ...processingJob, status: 'cancelled' };
+			const firstSave = jobService.repository.save(processingJob);
+			const cancellationSave = jobService.repository.save(cancellationJob);
+			await cancellationSave;
+
+			const lateCreation = {
+				job: { ...processingJob, jobId: 'late-active-creation-job' },
+				persistencePromise: Promise.resolve(),
+				finalizationPromise: null,
+			};
+			const finalization = jobService.finalizeActiveJobsForShutdown();
+			await delay(10);
+			jobService.activeCreations.set(lateCreation.job.jobId, lateCreation);
+			releaseInitialSave();
+
+			try {
+				await finalization;
+				expect(lateCreation.job).toEqual(expect.objectContaining({
+					status: 'cancelled',
+					shutdownFinalized: true,
+				}));
+				expect((await jobService.repository.get(lateCreation.job.jobId)).status).toBe('cancelled');
+			} finally {
+				jobService.activeCreations.delete(lateCreation.job.jobId);
+				await firstSave;
+			}
+		});
+
 		it('does not send a cancellation callback when the terminal save is rejected', async () => {
 			const jobId = 'terminal-save-rejection-job';
 			const processingJob = {
