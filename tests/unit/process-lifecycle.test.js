@@ -47,9 +47,11 @@ describe('process lifecycle coordinator', () => {
 			closeAllConnections: jest.fn(),
 		};
 		const forceExit = jest.fn();
+		const finalizeBackgroundJobs = jest.fn().mockResolvedValue(undefined);
 
 		const lifecycle = createProcessLifecycle({
 			getServer: () => server,
+			finalizeBackgroundJobs,
 			timeoutMs: 5,
 			forceExit,
 		});
@@ -57,6 +59,7 @@ describe('process lifecycle coordinator', () => {
 		await expect(lifecycle.handleSignal('SIGTERM')).resolves.toEqual({ timedOut: true });
 
 		expect(server.closeAllConnections).toHaveBeenCalledTimes(1);
+		expect(finalizeBackgroundJobs).toHaveBeenCalledTimes(1);
 		expect(forceExit).toHaveBeenCalledWith(1);
 	});
 

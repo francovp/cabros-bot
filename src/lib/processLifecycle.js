@@ -50,6 +50,7 @@ function createProcessLifecycle(options = {}) {
 		getBot = () => null,
 		getBotLaunchPromise = () => null,
 		waitForBackgroundJobs = () => undefined,
+		finalizeBackgroundJobs = () => undefined,
 		stopSignalOutcomeWorker = () => undefined,
 		shutdownNewsMonitor = () => undefined,
 		flushSentry = () => undefined,
@@ -112,6 +113,7 @@ function createProcessLifecycle(options = {}) {
 
 			if (timedOut) {
 				logger.warn('[ProcessLifecycle] Shutdown deadline exceeded', { timeoutMs: shutdownTimeoutMs });
+				await safelyRun(logger, 'unfinished background jobs', finalizeBackgroundJobs);
 				try {
 					server?.closeAllConnections?.();
 				} catch (error) {

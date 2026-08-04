@@ -53,6 +53,7 @@ const lifecycle = createProcessLifecycle({
 	getBot: () => bot,
 	getBotLaunchPromise: () => botLaunchPromise,
 	waitForBackgroundJobs: () => jobService.waitForActiveJobs(),
+	finalizeBackgroundJobs: () => jobService.finalizeActiveJobsForShutdown(),
 	stopSignalOutcomeWorker: (options) => SignalOutcomeService.stopWorker(options),
 	shutdownNewsMonitor: () => getCacheInstance().shutdown(),
 	flushSentry: (timeout) => sentryService.flush(timeout),

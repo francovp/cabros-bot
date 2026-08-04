@@ -148,6 +148,43 @@ describe('JobService Unit Tests', () => {
 			await drain;
 			expect(jobService.activeCallbacks.size).toBe(0);
 		});
+
+		it('persists active jobs as cancelled before forced shutdown', async () => {
+			let releaseJob;
+			const runningJob = new Promise((resolve) => { releaseJob = resolve; });
+			const abort = jest.fn();
+			jobService._runBackgroundJob = jest.fn(() => runningJob);
+			jobService._sendCallbackWithRetry = jest.fn().mockResolvedValue(undefined);
+
+			const result = await jobService.createJob('expanded-analysis', {
+				symbols: ['BINANCE:BTCUSDT'],
+				callbackUrl: 'http://localhost:8080/callback',
+				callbackEvents: ['cancelled'],
+			});
+			jobService.activeControllers.set(result.jobId, { abort });
+
+			await jobService.finalizeActiveJobsForShutdown();
+
+			const persistedJob = await jobService.repository.get(result.jobId);
+			expect(persistedJob).toEqual(expect.objectContaining({
+				status: 'cancelled',
+				code: 'PROCESS_SHUTDOWN_TIMEOUT',
+				error: expect.stringContaining('shutdown'),
+			}));
+			expect(abort).toHaveBeenCalledTimes(1);
+			expect(jobService._sendCallbackWithRetry).toHaveBeenCalledWith(
+				expect.objectContaining({ jobId: result.jobId, status: 'cancelled' }),
+			);
+
+			await jobService._persistJob({
+				...persistedJob,
+				status: 'completed',
+			});
+			expect((await jobService.repository.get(result.jobId)).status).toBe('cancelled');
+
+			releaseJob();
+			await jobService.waitForActiveJobs();
+		});
 	});
 
 	describe('Background execution and retrieval', () => {
