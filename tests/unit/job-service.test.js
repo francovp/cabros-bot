@@ -324,7 +324,7 @@ describe('JobService Unit Tests', () => {
 			expect(jobService._triggerCallbackIfConfigured).not.toHaveBeenCalled();
 		});
 
-		it('waits for superseded Firestore saves before reading a terminal job', async () => {
+		it('does not block terminal reads on superseded Firestore saves', async () => {
 			process.env.ENABLE_FIRESTORE_JOB_STORAGE = 'true';
 			let releaseInitialSave;
 			const initialSave = new Promise((resolve) => { releaseInitialSave = resolve; });
@@ -355,12 +355,51 @@ describe('JobService Unit Tests', () => {
 				readResolved = true;
 				return job;
 			});
-			await delay(10);
-			expect(readResolved).toBe(false);
+			try {
+				await delay(10);
+				expect(readResolved).toBe(true);
+				await expect(terminalRead).resolves.toEqual(expect.objectContaining({ status: 'cancelled' }));
+			} finally {
+				releaseInitialSave();
+				await firstSave;
+				await terminalRead;
+			}
+		});
 
-			releaseInitialSave();
-			await expect(terminalRead).resolves.toEqual(expect.objectContaining({ status: 'cancelled' }));
-			await firstSave;
+		it('drains superseded Firestore saves during shutdown wait', async () => {
+			process.env.ENABLE_FIRESTORE_JOB_STORAGE = 'true';
+			let releaseInitialSave;
+			const initialSave = new Promise((resolve) => { releaseInitialSave = resolve; });
+			admin.__mockDocSet.mockImplementationOnce(() => initialSave);
+
+			const processingJob = {
+				jobId: 'explicit-firestore-save-drain-job',
+				type: 'expanded-analysis',
+				status: 'processing',
+				createdAt: new Date().toISOString(),
+				updatedAt: new Date().toISOString(),
+				progress: { total: 1, current: 0, status: 'pending' },
+				fullResults: [],
+				fullScanResults: [],
+			};
+			const cancellationJob = { ...processingJob, status: 'cancelled' };
+
+			const firstSave = jobService.repository.save(processingJob);
+			const cancellationSave = jobService.repository.save(cancellationJob);
+			await cancellationSave;
+
+			let drainResolved = false;
+			const drain = jobService.waitForActiveJobs().then(() => {
+				drainResolved = true;
+			});
+			try {
+				await delay(10);
+				expect(drainResolved).toBe(false);
+			} finally {
+				releaseInitialSave();
+				await drain;
+				await firstSave;
+			}
 		});
 
 		it('does not send a cancellation callback when the terminal save is rejected', async () => {

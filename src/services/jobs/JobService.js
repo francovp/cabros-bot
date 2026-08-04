@@ -282,6 +282,9 @@ class JobService {
 				...this.activeCallbacks,
 			]);
 		}
+		if (typeof this.repository.waitForPendingSaves === 'function') {
+			await this.repository.waitForPendingSaves();
+		}
 	}
 
 	_markJobForShutdown(job) {
@@ -380,6 +383,10 @@ class JobService {
 					? this._finalizeCreationForShutdown(creation)
 					: this._finalizeActiveJobForShutdown(jobId);
 			}));
+		}
+
+		if (typeof this.repository.waitForPendingSaves === 'function') {
+			await this.repository.waitForPendingSaves();
 		}
 	}
 

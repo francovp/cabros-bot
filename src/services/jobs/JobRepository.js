@@ -28,20 +28,14 @@ function sanitizeJob(job) {
 	return copy;
 }
 
-async function getLocalTerminalJob(jobId) {
-	while (true) {
-		const localJob = saveVersions.get(jobId)?.job || memoryJobs.get(jobId);
-		if (!localJob || !TERMINAL_JOB_STATUSES.has(localJob.status)) {
-			return null;
-		}
 
-		const pending = pendingSaves.get(jobId);
-		if (!pending?.size) {
-			return cloneJob(localJob);
-		}
-
-		await Promise.allSettled([...pending]);
+function getLocalTerminalJob(jobId) {
+	const localJob = saveVersions.get(jobId)?.job || memoryJobs.get(jobId);
+	if (!localJob || !TERMINAL_JOB_STATUSES.has(localJob.status)) {
+		return null;
 	}
+
+	return cloneJob(localJob);
 }
 
 class JobRepository {
@@ -133,6 +127,19 @@ class JobRepository {
 		}
 
 		return cloneJob(memoryJobs.get(jobId));
+	}
+
+	async waitForPendingSaves(jobId) {
+		while (true) {
+			const pendingSets = jobId ? [pendingSaves.get(jobId)] : [...pendingSaves.values()];
+			const pending = [];
+			for (const saves of pendingSets) {
+				if (saves) pending.push(...saves);
+			}
+
+			if (!pending.length) return;
+			await Promise.allSettled(pending);
+		}
 	}
 
 	async list({ status, type, limit = 50 } = {}) {
