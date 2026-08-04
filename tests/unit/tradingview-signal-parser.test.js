@@ -62,6 +62,15 @@ describe('TradingView signal parser', () => {
 		}
 	});
 
+	it('keeps known futures venues neutral', () => {
+		for (const exchange of ['CME_MINI', 'CBOT_MINI']) {
+			expect(deriveAssetContext(`${exchange}:ESU2026(D) cambió a señal de COMPRA`)).toEqual(expect.objectContaining({
+				exchange,
+				assetClass: null,
+			}));
+		}
+	});
+
 	it('returns null when side is missing', () => {
 		const result = parseTradingViewSignal('BTCUSDT(240) sin señal definida');
 		expect(result).toBeNull();
