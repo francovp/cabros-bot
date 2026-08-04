@@ -156,11 +156,6 @@ function deriveAssetContext(text) {
 		}
 		const rawSymbol = cryptoPairMatch.groups.symbol;
 		const symbol = rawSymbol.toUpperCase();
-		const quote = symbol.split('/').pop();
-		const hasAmbiguousQuote = BARE_CRYPTO_SYMBOLS.includes(quote);
-		if (hasAmbiguousQuote && rawSymbol !== symbol) {
-			continue;
-		}
 		return {
 			symbol,
 			exchange: null,
