@@ -17,6 +17,7 @@ const { getNewsMonitor } = require('./src/controllers/webhooks/handlers/newsMoni
 const { getCacheInstance } = require('./src/controllers/webhooks/handlers/newsMonitor/cache');
 const { registerDebugSentryRoute } = require('./src/lib/debugSentryRoute');
 const { createProcessLifecycle } = require('./src/lib/processLifecycle');
+const { waitForBackgroundTasks } = require('./src/lib/backgroundTaskTracker');
 const { getTelegramBootstrapConfig } = require('./src/lib/telegramBootstrap');
 const { jobService } = require('./src/services/jobs/JobService');
 const SignalOutcomeService = require('./src/services/storage/SignalOutcomeService');
@@ -53,6 +54,7 @@ const lifecycle = createProcessLifecycle({
 	getBot: () => bot,
 	getBotLaunchPromise: () => botLaunchPromise,
 	waitForBackgroundJobs: () => jobService.waitForActiveJobs(),
+	waitForBackgroundTasks,
 	finalizeBackgroundJobs: () => jobService.finalizeActiveJobsForShutdown(),
 	stopSignalOutcomeWorker: (options) => SignalOutcomeService.stopWorker(options),
 	shutdownNewsMonitor: () => getCacheInstance().shutdown(),

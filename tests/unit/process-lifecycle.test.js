@@ -175,4 +175,33 @@ describe('process lifecycle coordinator', () => {
 
 		expect(events).toEqual(['server', 'bot', 'jobs', 'worker', 'news', 'sentry', 'exit:0']);
 	});
+
+	it('waits for post-response persistence before flushing Sentry', async () => {
+		const events = [];
+		let releasePersistence;
+		const persistence = new Promise((resolve) => { releasePersistence = resolve; });
+		const server = { close: jest.fn((callback) => { events.push('server'); callback(); }) };
+		const forceExit = jest.fn((code) => events.push(`exit:${code}`));
+
+		const lifecycle = createProcessLifecycle({
+			getServer: () => server,
+			waitForBackgroundTasks: () => {
+				events.push('persistence');
+				return persistence;
+			},
+			flushSentry: () => events.push('sentry'),
+			forceExit,
+		});
+
+		const shutdown = lifecycle.handleSignal('SIGTERM');
+		await new Promise((resolve) => setImmediate(resolve));
+
+		expect(events).toEqual(['server', 'persistence']);
+		expect(forceExit).not.toHaveBeenCalled();
+
+		releasePersistence();
+		await shutdown;
+
+		expect(events).toEqual(['server', 'persistence', 'sentry', 'exit:0']);
+	});
 });

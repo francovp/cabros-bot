@@ -232,6 +232,45 @@ describe('JobService Unit Tests', () => {
 			expect((await jobService.repository.get(result.jobId)).status).toBe('cancelled');
 		});
 
+		it('starts cancellation persistence without waiting for the initial save', async () => {
+			let releaseInitialSave;
+			let saveStartedResolve;
+			let initialSaveStarted = false;
+			const saveStarted = new Promise((resolve) => { saveStartedResolve = resolve; });
+			const initialSave = new Promise((resolve) => { releaseInitialSave = resolve; });
+			const realSave = JobRepository.JobRepository.prototype.save.bind(jobService.repository);
+			const save = jest.fn((job) => {
+				if (!initialSaveStarted) {
+					initialSaveStarted = true;
+					saveStartedResolve();
+					return initialSave;
+				}
+				return realSave(job);
+			});
+			jobService.repository.save = save;
+
+			const creation = jobService.createJob('expanded-analysis', {
+				symbols: ['BINANCE:BTCUSDT'],
+			});
+			await saveStarted;
+
+			const finalization = jobService.finalizeActiveJobsForShutdown();
+			await Promise.resolve();
+
+			expect(save).toHaveBeenCalledTimes(2);
+			expect(save.mock.calls[1][0]).toEqual(expect.objectContaining({
+				status: 'cancelled',
+				shutdownFinalized: true,
+			}));
+
+			releaseInitialSave();
+			await finalization;
+			const result = await creation;
+			expect(result.status).toBe('cancelled');
+			expect((await jobService.repository.get(result.jobId)).status).toBe('cancelled');
+			jobService.repository.save = JobRepository.JobRepository.prototype.save;
+		});
+
 		it('does not resend a shutdown-owned cancellation callback from job finalization', async () => {
 			const jobId = 'shutdown-owned-callback-job';
 			await jobService.repository.save({

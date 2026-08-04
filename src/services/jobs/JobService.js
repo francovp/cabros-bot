@@ -331,13 +331,11 @@ class JobService {
 				return;
 			}
 
-			try {
-				await creation.persistencePromise;
-			} catch (error) {
+			const cancellationPersistence = this.repository.save(job);
+			void creation.persistencePromise.catch((error) => {
 				console.warn(`[JobService] Initial persistence for ${job.jobId} failed during shutdown:`, error.message);
-			}
-
-			await this.repository.save(job);
+			});
+			await cancellationPersistence;
 			this._abortActiveJob(job.jobId, job.error);
 			await this._triggerCallbackIfConfigured(job);
 		})();
