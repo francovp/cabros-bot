@@ -63,7 +63,7 @@ function parseTradingViewSignal(text, options = {}) {
 	const defaultTimeframe = options.defaultTimeframe || '1h';
 	const cleaned = text.trim();
 
-	const symbolMatch = cleaned.match(/(?:^|\s)(?:(?<exchange>[A-Z]+):)?(?<symbol>[A-Z0-9._-]{3,20})\s*\(\s*(?<timeframe>[A-Za-z0-9]+)\s*\)/i);
+	const symbolMatch = cleaned.match(/(?:^|\s)(?:(?<exchange>[A-Z_]+):)?(?<symbol>[A-Z0-9._-]{3,20})\s*\(\s*(?<timeframe>[A-Za-z0-9]+)\s*\)/i);
 	if (!symbolMatch || !symbolMatch.groups) {
 		return null;
 	}

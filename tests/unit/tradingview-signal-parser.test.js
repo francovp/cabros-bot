@@ -30,6 +30,18 @@ describe('TradingView signal parser', () => {
 		}));
 	});
 
+	it('parses underscore-delimited exchange prefixes', () => {
+		const result = parseTradingViewSignal('FX_IDC:USDCLP(D) cambió a señal de VENTA');
+
+		expect(result).toEqual(expect.objectContaining({
+			symbol: 'USDCLP',
+			exchange: 'FX_IDC',
+			rawTimeframe: 'D',
+			timeframe: '1D',
+			side: 'SELL',
+		}));
+	});
+
 	it('returns null when side is missing', () => {
 		const result = parseTradingViewSignal('BTCUSDT(240) sin señal definida');
 		expect(result).toBeNull();

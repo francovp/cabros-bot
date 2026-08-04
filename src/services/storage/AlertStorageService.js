@@ -239,7 +239,7 @@ function parseSymbolFromText(text) {
 		return null;
 	}
 
-	const exchangeMatch = cleaned.match(/(?:^|\b)(?<exchange>[A-Z0-9]{2,10}):(?<symbol>[A-Z0-9._-]{2,20})(?:\s*\(\s*(?<timeframe>[A-Za-z0-9]+)\s*\))?/i);
+	const exchangeMatch = cleaned.match(/(?:^|\b)(?<exchange>[A-Z0-9_]{2,10}):(?<symbol>[A-Z0-9._-]{2,20})(?:\s*\(\s*(?<timeframe>[A-Za-z0-9]+)\s*\))?/i);
 	if (exchangeMatch && exchangeMatch.groups && exchangeMatch.groups.symbol) {
 		const symbol = exchangeMatch.groups.symbol.toUpperCase();
 		const exchange = exchangeMatch.groups.exchange ? exchangeMatch.groups.exchange.toUpperCase() : null;
