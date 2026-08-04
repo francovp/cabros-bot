@@ -373,6 +373,9 @@ class JobService {
 			const pendingJobIds = [...activeJobIds]
 				.filter((jobId) => !finalizedJobIds.has(jobId));
 			if (!pendingJobIds.length) {
+				if (typeof this.repository.waitForPendingSaves === 'function') {
+					await this.repository.waitForPendingSaves();
+				}
 				return;
 			}
 
@@ -383,10 +386,6 @@ class JobService {
 					? this._finalizeCreationForShutdown(creation)
 					: this._finalizeActiveJobForShutdown(jobId);
 			}));
-		}
-
-		if (typeof this.repository.waitForPendingSaves === 'function') {
-			await this.repository.waitForPendingSaves();
 		}
 	}
 

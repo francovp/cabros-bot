@@ -402,6 +402,43 @@ describe('JobService Unit Tests', () => {
 			}
 		});
 
+		it('drains pending saves before forced shutdown finalization returns', async () => {
+			process.env.ENABLE_FIRESTORE_JOB_STORAGE = 'true';
+			let releaseInitialSave;
+			const initialSave = new Promise((resolve) => { releaseInitialSave = resolve; });
+			admin.__mockDocSet.mockImplementationOnce(() => initialSave);
+
+			const processingJob = {
+				jobId: 'forced-shutdown-save-drain-job',
+				type: 'expanded-analysis',
+				status: 'processing',
+				createdAt: new Date().toISOString(),
+				updatedAt: new Date().toISOString(),
+				progress: { total: 1, current: 0, status: 'pending' },
+				fullResults: [],
+				fullScanResults: [],
+			};
+			const cancellationJob = { ...processingJob, status: 'cancelled' };
+			const firstSave = jobService.repository.save(processingJob);
+			const cancellationSave = jobService.repository.save(cancellationJob);
+			await cancellationSave;
+			jobService.activeJobs.set(processingJob.jobId, new Promise(() => {}));
+
+			let finalized = false;
+			const finalization = jobService.finalizeActiveJobsForShutdown().then(() => {
+				finalized = true;
+			});
+			try {
+				await delay(10);
+				expect(finalized).toBe(false);
+			} finally {
+				releaseInitialSave();
+				await finalization;
+				await firstSave;
+				jobService.activeJobs.delete(processingJob.jobId);
+			}
+		});
+
 		it('does not send a cancellation callback when the terminal save is rejected', async () => {
 			const jobId = 'terminal-save-rejection-job';
 			const processingJob = {
