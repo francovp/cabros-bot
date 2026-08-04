@@ -42,7 +42,7 @@ describe('TradingView signal parser', () => {
 		}));
 	});
 
-	it('keeps unknown exchange asset context neutral', () => {
+	it('keeps known forex exchange context neutral', () => {
 		const text = 'FX_IDC:USDCLP(D) cambió a señal de VENTA';
 
 		expect(deriveAssetContext(text)).toEqual(expect.objectContaining({
@@ -51,6 +51,15 @@ describe('TradingView signal parser', () => {
 			assetClass: null,
 		}));
 		expect(deriveCleanSearchQuery(text)).toBe('USDCLP market news analyst');
+	});
+
+	it('keeps unlisted equity exchanges classified as stocks', () => {
+		for (const exchange of ['LSE', 'TSX']) {
+			expect(deriveAssetContext(`${exchange}:VOD(D) cambió a señal de COMPRA`)).toEqual(expect.objectContaining({
+				exchange,
+				assetClass: 'stock',
+			}));
+		}
 	});
 
 	it('returns null when side is missing', () => {
