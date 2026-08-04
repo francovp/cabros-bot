@@ -940,6 +940,37 @@ describe('JobService Unit Tests', () => {
 			expect(job.status).toBe('cancelled');
 		});
 
+		it('reports the terminal state when cancellation persistence is rejected', async () => {
+			const jobId = 'cancel-persistence-conflict-job';
+			const processingJob = {
+				jobId,
+				status: 'processing',
+				createdAt: new Date().toISOString(),
+				updatedAt: new Date().toISOString(),
+			};
+			const completedJob = { ...processingJob, status: 'completed' };
+			const getSpy = jest.spyOn(jobService.repository, 'get')
+				.mockResolvedValueOnce(processingJob)
+				.mockResolvedValue(completedJob);
+			const abort = jest.fn();
+			jobService.activeControllers.set(jobId, { abort });
+			jobService._triggerCallbackIfConfigured = jest.fn();
+
+			try {
+				const result = await jobService.cancelJob(jobId);
+
+				expect(result).toEqual(expect.objectContaining({
+					success: false,
+					code: 'TERMINAL_JOB',
+					status: 'completed',
+				}));
+				expect(abort).not.toHaveBeenCalled();
+				expect(jobService._triggerCallbackIfConfigured).not.toHaveBeenCalled();
+			} finally {
+				getSpy.mockRestore();
+			}
+		});
+
 		it('retries a failed/cancelled job and creates a new one with requestMetadata', async () => {
 			const metadata = await jobService.createJob('expanded-analysis', {
 				symbols: ['BINANCE:BTCUSDT'],

@@ -1277,7 +1277,16 @@ class JobService {
 		job.error = 'Job cancelled by user';
 		job.code = 'USER_CANCELLED';
 		job.updatedAt = new Date().toISOString();
-		await this._persistJob(job);
+		const persisted = await this._persistJob(job);
+		if (!persisted) {
+			const currentJob = await this.repository.get(jobId);
+			return {
+				success: false,
+				code: 'TERMINAL_JOB',
+				message: 'Job is already in a terminal state.',
+				status: currentJob?.status || 'completed',
+			};
+		}
 
 		const controller = this.activeControllers.get(jobId);
 		if (controller) {
