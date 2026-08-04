@@ -2,13 +2,39 @@
 
 const httpMocks = require('node-mocks-http');
 const { idempotencyService } = require('../../src/services/storage/IdempotencyService');
+const idempotencyStorageService = require('../../src/services/storage/IdempotencyStorageService');
 const { idempotencyMiddleware } = require('../../src/lib/idempotency');
+const { waitForBackgroundTasks, resetForTesting } = require('../../src/lib/backgroundTaskTracker');
 
 describe('Idempotency Service & Middleware', () => {
 	beforeEach(() => {
 		idempotencyService.clear();
+		resetForTesting();
 		jest.restoreAllMocks();
 		delete process.env.WEBHOOK_IDEMPOTENCY_TTL_MS;
+	});
+
+	it('tracks durable completion writes until shutdown drain observes them', async () => {
+		let releaseWrite;
+		const durableWrite = new Promise((resolve) => { releaseWrite = resolve; });
+		jest.spyOn(idempotencyStorageService, 'isEnabled').mockReturnValue(true);
+		jest.spyOn(idempotencyStorageService, 'setEntry').mockReturnValue(durableWrite);
+
+		idempotencyService.set('durable-key', { body: 'body' }, {
+			statusCode: 200,
+			body: { success: true },
+			headers: {},
+		});
+
+		const drain = waitForBackgroundTasks();
+		let drained = false;
+		drain.then(() => { drained = true; });
+		await Promise.resolve();
+		expect(drained).toBe(false);
+
+		releaseWrite();
+		await drain;
+		expect(drained).toBe(true);
 	});
 
 	describe('IdempotencyService', () => {

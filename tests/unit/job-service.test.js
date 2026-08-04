@@ -268,6 +268,11 @@ describe('JobService Unit Tests', () => {
 			const result = await creation;
 			expect(result.status).toBe('cancelled');
 			expect((await jobService.repository.get(result.jobId)).status).toBe('cancelled');
+			expect(save).toHaveBeenCalledTimes(3);
+			expect(save.mock.calls[2][0]).toEqual(expect.objectContaining({
+				status: 'cancelled',
+				shutdownFinalized: true,
+			}));
 			jobService.repository.save = JobRepository.JobRepository.prototype.save;
 		});
 
@@ -289,6 +294,29 @@ describe('JobService Unit Tests', () => {
 			jobService._triggerCallbackIfConfigured = jest.fn();
 
 			await jobService._runBackgroundJob(jobId, { symbols: [] }, null, null);
+
+			expect(jobService._triggerCallbackIfConfigured).not.toHaveBeenCalled();
+		});
+
+		it('does not send a cancellation callback when persistence rejects the stale shutdown claim', async () => {
+			const jobId = 'stale-shutdown-claim-job';
+			await jobService.repository.save({
+				jobId,
+				type: 'expanded-analysis',
+				status: 'processing',
+				callbackUrl: 'http://localhost:8080/callback',
+				callbackEvents: ['cancelled'],
+				createdAt: new Date().toISOString(),
+				updatedAt: new Date().toISOString(),
+				progress: { total: 1, current: 0, status: 'pending' },
+				fullResults: [],
+				fullScanResults: [],
+				totalDurationMs: 0,
+			});
+			jobService._persistJob = jest.fn().mockResolvedValue(false);
+			jobService._triggerCallbackIfConfigured = jest.fn();
+
+			await jobService._finalizeActiveJobForShutdown(jobId);
 
 			expect(jobService._triggerCallbackIfConfigured).not.toHaveBeenCalled();
 		});

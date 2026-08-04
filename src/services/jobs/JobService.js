@@ -22,6 +22,7 @@ const {
 } = require('../../controllers/webhooks/handlers/alert/alert');
 const sentryService = require('../monitoring/SentryService');
 const { jobRepository } = require('./JobRepository');
+const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
 const {
 	parseNotificationRouting,
 	sendWithNotificationRouting,
@@ -315,7 +316,10 @@ class JobService {
 			return;
 		}
 
-		await this._persistJob(job);
+		const persisted = await this._persistJob(job);
+		if (!persisted) {
+			return;
+		}
 		this._abortActiveJob(jobId, job.error);
 		await this._triggerCallbackIfConfigured(job);
 	}
@@ -332,9 +336,17 @@ class JobService {
 			}
 
 			const cancellationPersistence = this.repository.save(job);
-			void creation.persistencePromise.catch((error) => {
-				console.warn(`[JobService] Initial persistence for ${job.jobId} failed during shutdown:`, error.message);
-			});
+			trackBackgroundTask(Promise.resolve(creation.persistencePromise)
+				.then(() => {
+					if (job.shutdownFinalized) {
+						return this.repository.save(job);
+					}
+					return null;
+				})
+				.catch((error) => {
+					console.warn(`[JobService] Initial persistence for ${job.jobId} failed during shutdown:`, error.message);
+					return null;
+				}));
 			await cancellationPersistence;
 			this._abortActiveJob(job.jobId, job.error);
 			await this._triggerCallbackIfConfigured(job);
@@ -1079,13 +1091,14 @@ class JobService {
 		const current = await this.repository.get(job.jobId);
 		if (current) {
 			if (TERMINAL_JOB_STATUSES.has(current.status) && current.status !== job.status) {
-				return;
+				return false;
 			}
 			if (current.callbackStatus || job.callbackStatus) {
 				job.callbackStatus = mergeCallbackStatus(current.callbackStatus, job.callbackStatus);
 			}
 		}
 		await this.repository.save(job);
+		return true;
 	}
 
 	_getRoutingFromJob(job) {

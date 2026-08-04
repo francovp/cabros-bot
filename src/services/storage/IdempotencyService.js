@@ -2,6 +2,7 @@
 
 const crypto = require('crypto');
 const idempotencyStorageService = require('./IdempotencyStorageService');
+const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
 
 class IdempotencyService {
 	constructor() {
@@ -400,7 +401,7 @@ class IdempotencyService {
 		}
 
 		if (idempotencyStorageService.isEnabled()) {
-			idempotencyStorageService.setEntry(key, payloadHash, { statusCode, body, headers }, ttl)
+			trackBackgroundTask(idempotencyStorageService.setEntry(key, payloadHash, { statusCode, body, headers }, ttl))
 				.catch((err) => console.warn('[IdempotencyService] Error saving durable entry:', err.message));
 		}
 
@@ -425,7 +426,7 @@ class IdempotencyService {
 		}
 
 		if (idempotencyStorageService.isEnabled()) {
-			idempotencyStorageService.releaseEntry(key, payloadHash)
+			trackBackgroundTask(idempotencyStorageService.releaseEntry(key, payloadHash))
 				.catch((err) => console.warn('[IdempotencyService] Error releasing durable entry:', err.message));
 		}
 	}
