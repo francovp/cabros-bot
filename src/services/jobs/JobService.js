@@ -231,6 +231,7 @@ class JobService {
 		this.jobs = repository;
 		this.activeControllers = new Map();
 		this.activeJobs = new Map();
+		this.activeCreations = new Map();
 		this.activeCallbacks = new Set();
 	}
 
@@ -246,43 +247,91 @@ class JobService {
 		}
 	}
 
+	_markJobForShutdown(job) {
+		if (!job || TERMINAL_JOB_STATUSES.has(job.status)) {
+			return false;
+		}
+
+		const errorMessage = 'Job cancelled because the process exceeded its shutdown deadline';
+		job.status = 'cancelled';
+		job.error = errorMessage;
+		job.code = 'PROCESS_SHUTDOWN_TIMEOUT';
+		job.shutdownFinalized = true;
+		job.updatedAt = new Date().toISOString();
+		job.totalDurationMs = Date.now() - new Date(job.createdAt).getTime();
+		if (job.progress) {
+			job.progress.status = 'Cancelled during process shutdown';
+		}
+
+		return true;
+	}
+
+	_abortActiveJob(jobId, errorMessage) {
+		const controller = this.activeControllers.get(jobId);
+		if (controller && typeof controller.abort === 'function') {
+			controller.abort(new Error(errorMessage));
+			this.activeControllers.delete(jobId);
+		}
+	}
+
+	async _finalizeActiveJobForShutdown(jobId) {
+		const job = await this.repository.get(jobId);
+		if (!this._markJobForShutdown(job)) {
+			return;
+		}
+
+		await this._persistJob(job);
+		this._abortActiveJob(jobId, job.error);
+		await this._triggerCallbackIfConfigured(job);
+	}
+
+	_finalizeCreationForShutdown(creation) {
+		if (creation.finalizationPromise) {
+			return creation.finalizationPromise;
+		}
+
+		creation.finalizationPromise = (async () => {
+			const { job } = creation;
+			if (!this._markJobForShutdown(job)) {
+				return;
+			}
+
+			try {
+				await creation.persistencePromise;
+			} catch (error) {
+				console.warn(`[JobService] Initial persistence for ${job.jobId} failed during shutdown:`, error.message);
+			}
+
+			await this.repository.save(job);
+			this._abortActiveJob(job.jobId, job.error);
+			await this._triggerCallbackIfConfigured(job);
+		})();
+
+		return creation.finalizationPromise;
+	}
+
 	/**
 	 * Persist jobs that cannot finish before the process is forcibly stopped.
 	 */
 	async finalizeActiveJobsForShutdown() {
 		const finalizedJobIds = new Set();
 		while (true) {
-			const activeJobIds = [...this.activeJobs.keys()]
+			const activeJobIds = new Set([
+				...this.activeJobs.keys(),
+				...this.activeCreations.keys(),
+			]);
+			const pendingJobIds = [...activeJobIds]
 				.filter((jobId) => !finalizedJobIds.has(jobId));
-			if (!activeJobIds.length) {
+			if (!pendingJobIds.length) {
 				return;
 			}
 
-			activeJobIds.forEach((jobId) => finalizedJobIds.add(jobId));
-			await Promise.allSettled(activeJobIds.map(async (jobId) => {
-				const job = await this.repository.get(jobId);
-				if (!job || TERMINAL_JOB_STATUSES.has(job.status)) {
-					return;
-				}
-
-				const errorMessage = 'Job cancelled because the process exceeded its shutdown deadline';
-				job.status = 'cancelled';
-				job.error = errorMessage;
-				job.code = 'PROCESS_SHUTDOWN_TIMEOUT';
-				job.updatedAt = new Date().toISOString();
-				job.totalDurationMs = Date.now() - new Date(job.createdAt).getTime();
-				if (job.progress) {
-					job.progress.status = 'Cancelled during process shutdown';
-				}
-
-				await this._persistJob(job);
-
-				const controller = this.activeControllers.get(jobId);
-				if (controller && typeof controller.abort === 'function') {
-					controller.abort(new Error(errorMessage));
-					this.activeControllers.delete(jobId);
-				}
-				await this._triggerCallbackIfConfigured(job);
+			pendingJobIds.forEach((jobId) => finalizedJobIds.add(jobId));
+			await Promise.allSettled(pendingJobIds.map((jobId) => {
+				const creation = this.activeCreations.get(jobId);
+				return creation
+					? this._finalizeCreationForShutdown(creation)
+					: this._finalizeActiveJobForShutdown(jobId);
 			}));
 		}
 	}
@@ -610,30 +659,60 @@ class JobService {
 			} : {}),
 		};
 
-		await this.repository.save(job);
-
-		// Trigger callback for 'processing' if configured
-		await this._triggerCallbackIfConfigured(job, { background: true });
-
-		// Execute background job while retaining its promise for graceful shutdown.
-		const runPromise = this._runBackgroundJob(jobId, parsed, payload, botOrGetter);
-		this.activeJobs.set(jobId, runPromise);
-		void runPromise
-			.catch((error) => {
-				console.error(`[JobService] Background job ${jobId} failed with unhandled error:`, error.message);
-			})
-			.finally(() => {
-				if (this.activeJobs.get(jobId) === runPromise) {
-					this.activeJobs.delete(jobId);
-				}
-			});
-
-		return {
-			success: true,
-			jobId,
-			status: job.status,
-			createdAt: job.createdAt,
+		const creation = {
+			job,
+			persistencePromise: null,
+			finalizationPromise: null,
 		};
+		this.activeCreations.set(jobId, creation);
+
+		try {
+			creation.persistencePromise = this.repository.save(job);
+			await creation.persistencePromise;
+
+			if (job.shutdownFinalized) {
+				return {
+					success: true,
+					jobId,
+					status: job.status,
+					createdAt: job.createdAt,
+				};
+			}
+
+			// Trigger callback for 'processing' if configured
+			await this._triggerCallbackIfConfigured(job, { background: true });
+
+			if (job.shutdownFinalized) {
+				return {
+					success: true,
+					jobId,
+					status: job.status,
+					createdAt: job.createdAt,
+				};
+			}
+
+			// Execute background job while retaining its promise for graceful shutdown.
+			const runPromise = this._runBackgroundJob(jobId, parsed, payload, botOrGetter);
+			this.activeJobs.set(jobId, runPromise);
+			void runPromise
+				.catch((error) => {
+					console.error(`[JobService] Background job ${jobId} failed with unhandled error:`, error.message);
+				})
+				.finally(() => {
+					if (this.activeJobs.get(jobId) === runPromise) {
+						this.activeJobs.delete(jobId);
+					}
+				});
+
+			return {
+				success: true,
+				jobId,
+				status: job.status,
+				createdAt: job.createdAt,
+			};
+		} finally {
+			this.activeCreations.delete(jobId);
+		}
 	}
 
 	/**
@@ -702,7 +781,9 @@ class JobService {
 				finalJob.totalDurationMs = Date.now() - startTime;
 				finalJob.updatedAt = new Date().toISOString();
 				await this._persistJob(finalJob);
-				await this._triggerCallbackIfConfigured(finalJob);
+				if (!finalJob.shutdownFinalized) {
+					await this._triggerCallbackIfConfigured(finalJob);
+				}
 				return;
 			}
 

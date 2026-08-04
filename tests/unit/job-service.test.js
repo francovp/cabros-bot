@@ -182,6 +182,7 @@ describe('JobService Unit Tests', () => {
 				status: 'cancelled',
 				code: 'PROCESS_SHUTDOWN_TIMEOUT',
 				error: expect.stringContaining('shutdown'),
+				shutdownFinalized: true,
 			}));
 			expect(abort).toHaveBeenCalledTimes(1);
 			expect(jobService._sendCallbackWithRetry).toHaveBeenCalledWith(
@@ -196,6 +197,61 @@ describe('JobService Unit Tests', () => {
 
 			releaseJob();
 			await jobService.waitForActiveJobs();
+		});
+
+		it('tracks job creation before its initial persistence completes', async () => {
+			let releaseInitialSave;
+			let saveStartedResolve;
+			let initialSaveStarted = false;
+			const saveStarted = new Promise((resolve) => { saveStartedResolve = resolve; });
+			const initialSave = new Promise((resolve) => { releaseInitialSave = resolve; });
+			const realSave = jobService.repository.save.bind(jobService.repository);
+			jest.spyOn(jobService.repository, 'save').mockImplementation((job) => {
+				if (!initialSaveStarted) {
+					initialSaveStarted = true;
+					saveStartedResolve();
+					return initialSave.then(() => realSave(job));
+				}
+				return realSave(job);
+			});
+
+			const creation = jobService.createJob('expanded-analysis', {
+				symbols: ['BINANCE:BTCUSDT'],
+			});
+			await saveStarted;
+			expect(jobService.activeCreations.size).toBe(1);
+
+			const finalization = jobService.finalizeActiveJobsForShutdown();
+			await Promise.resolve();
+			expect([...jobService.activeCreations.values()][0].job.status).toBe('cancelled');
+
+			releaseInitialSave();
+			await finalization;
+			const result = await creation;
+			expect(result.status).toBe('cancelled');
+			expect((await jobService.repository.get(result.jobId)).status).toBe('cancelled');
+		});
+
+		it('does not resend a shutdown-owned cancellation callback from job finalization', async () => {
+			const jobId = 'shutdown-owned-callback-job';
+			await jobService.repository.save({
+				jobId,
+				type: 'expanded-analysis',
+				status: 'cancelled',
+				shutdownFinalized: true,
+				createdAt: new Date().toISOString(),
+				updatedAt: new Date().toISOString(),
+				progress: { total: 0, current: 0, status: 'Cancelled during process shutdown' },
+				fullResults: [],
+				fullScanResults: [],
+				totalDurationMs: 0,
+			});
+			jobService._executeExpandedAnalysis = jest.fn().mockResolvedValue(undefined);
+			jobService._triggerCallbackIfConfigured = jest.fn();
+
+			await jobService._runBackgroundJob(jobId, { symbols: [] }, null, null);
+
+			expect(jobService._triggerCallbackIfConfigured).not.toHaveBeenCalled();
 		});
 
 		it('finalizes jobs that become active during shutdown finalization', async () => {
