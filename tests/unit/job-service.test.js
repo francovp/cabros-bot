@@ -367,6 +367,36 @@ describe('JobService Unit Tests', () => {
 			}));
 		});
 
+		it('does not regress a terminal job from a stale callback snapshot', async () => {
+			process.env.ENABLE_FIRESTORE_JOB_STORAGE = 'true';
+			const terminalJob = {
+				jobId: 'terminal-callback-merge-job',
+				type: 'expanded-analysis',
+				status: 'completed',
+				createdAt: new Date().toISOString(),
+				updatedAt: new Date().toISOString(),
+				progress: { total: 1, current: 1, status: 'completed' },
+				fullResults: [],
+				fullScanResults: [],
+				totalDurationMs: 1,
+			};
+			const staleJob = { ...terminalJob, status: 'processing' };
+
+			await jobService.repository.save(terminalJob);
+			admin.__mockDocGet.mockResolvedValueOnce({
+				exists: true,
+				id: terminalJob.jobId,
+				data: () => staleJob,
+			});
+
+			expect((await jobService.repository.get(terminalJob.jobId)).status).toBe('completed');
+			const writesBeforeStaleSave = admin.__mockDocSet.mock.calls.length;
+			await jobService.repository.save(staleJob);
+
+			expect(admin.__mockDocSet).toHaveBeenCalledTimes(writesBeforeStaleSave);
+			expect((await jobService.repository.get(terminalJob.jobId)).status).toBe('completed');
+		});
+
 		it('preserves callback delivery state when a stale job snapshot is persisted', async () => {
 			const job = {
 				jobId: 'callback-state-merge-job',
@@ -445,7 +475,6 @@ describe('JobService Unit Tests', () => {
 				price_data: { close: 65000, change_percent: 1.5 },
 				rsi: { value: 45 },
 			});
-
 			const metadata = await jobService.createJob('expanded-analysis', {
 				symbols: ['BINANCE:BTCUSDT'],
 			});
@@ -670,7 +699,6 @@ describe('JobService Unit Tests', () => {
 				price_data: { close: 65000, change_percent: 1.5 },
 				rsi: { value: 45 },
 			});
-
 			const metadata = await jobService.createJob('expanded-analysis', {
 				symbols: ['BINANCE:BTCUSDT'],
 			});
@@ -1139,6 +1167,54 @@ describe('JobService Unit Tests', () => {
 			expect(fetchMock).toHaveBeenCalledTimes(2);
 			const statuses = fetchMock.mock.calls.map(([, options]) => JSON.parse(options.body).status);
 			expect(statuses).toEqual(['processing', 'completed']);
+		});
+
+		it('delivers terminal callbacks after a background processing callback', async () => {
+			let releaseProcessing;
+			let processingStartedResolve;
+			const processingStarted = new Promise((resolve) => { processingStartedResolve = resolve; });
+			const callbackEvents = [];
+			jobService._sendCallbackWithRetry = jest.fn((callbackJob) => {
+				callbackEvents.push(callbackJob.status);
+				if (callbackJob.status === 'processing') {
+					processingStartedResolve();
+					return new Promise((resolve) => { releaseProcessing = resolve; });
+				}
+				return Promise.resolve();
+			});
+
+			const job = {
+				jobId: 'job-callback-ordering',
+				type: 'expanded-analysis',
+				status: 'processing',
+				createdAt: new Date().toISOString(),
+				updatedAt: new Date().toISOString(),
+				callbackUrl: 'https://example.com/callback',
+				callbackEvents: ['processing', 'completed'],
+				callbackStatus: { status: 'pending', attempts: [] },
+				progress: { total: 1, current: 0, status: 'pending' },
+				fullResults: [],
+				fullScanResults: [],
+			};
+
+			await jobService.repository.save(job);
+			await jobService._triggerCallbackIfConfigured(job, { background: true });
+			await processingStarted;
+
+			const completedJob = {
+				...job,
+				status: 'completed',
+				updatedAt: new Date().toISOString(),
+			};
+			await jobService.repository.save(completedJob);
+			const terminalCallback = jobService._triggerCallbackIfConfigured(completedJob);
+			await new Promise((resolve) => setImmediate(resolve));
+			expect(callbackEvents).toEqual(['processing']);
+
+			releaseProcessing();
+			await terminalCallback;
+
+			expect(callbackEvents).toEqual(['processing', 'completed']);
 		});
 
 		it('sends callback when job reaches terminal state and records success', async () => {

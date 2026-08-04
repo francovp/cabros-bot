@@ -269,6 +269,7 @@ class JobService {
 		this.activeJobs = new Map();
 		this.activeCreations = new Map();
 		this.activeCallbacks = new Set();
+		this.callbackChains = new Map();
 	}
 
 	/**
@@ -1407,9 +1408,20 @@ class JobService {
 			return;
 		}
 
-		const callbackPromise = this._sendCallbackWithRetry(job).catch((err) => {
-			console.error(`[JobService] Callback for job ${job.jobId} failed:`, err.message);
-		});
+		const previousCallback = this.callbackChains.get(job.jobId);
+		let callbackPromise;
+		callbackPromise = Promise.resolve(previousCallback)
+			.catch(() => undefined)
+			.then(() => this._sendCallbackWithRetry(job))
+			.catch((err) => {
+				console.error(`[JobService] Callback for job ${job.jobId} failed:`, err.message);
+			})
+			.finally(() => {
+				if (this.callbackChains.get(job.jobId) === callbackPromise) {
+					this.callbackChains.delete(job.jobId);
+				}
+			});
+		this.callbackChains.set(job.jobId, callbackPromise);
 		if (background) {
 			this._trackCallback(callbackPromise);
 			return;
@@ -1567,7 +1579,7 @@ class JobService {
 					},
 				},
 			};
-			await this.repository.save(freshJob);
+			await this._persistJob(freshJob);
 		}
 	}
 }

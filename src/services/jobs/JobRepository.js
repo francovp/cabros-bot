@@ -3,8 +3,10 @@
 const alertStorageService = require('../storage/AlertStorageService');
 
 const COLLECTION_NAME = 'tradingviewJobs';
+const TERMINAL_JOB_STATUSES = new Set(['completed', 'failed', 'cancelled', 'timed_out']);
 const memoryJobs = new Map();
 const saveVersions = new Map();
+const pendingSaves = new Map();
 
 function cloneJob(job) {
 	if (!job) return null;
@@ -26,6 +28,25 @@ function sanitizeJob(job) {
 	return copy;
 }
 
+async function getLocalTerminalJob(jobId) {
+	while (true) {
+		const localJob = saveVersions.get(jobId)?.job || memoryJobs.get(jobId);
+		if (!localJob || !TERMINAL_JOB_STATUSES.has(localJob.status)) {
+			return null;
+		}
+
+		const pendingSave = pendingSaves.get(jobId);
+		if (!pendingSave) {
+			return cloneJob(localJob);
+		}
+
+		await pendingSave.catch(() => undefined);
+		if (pendingSaves.get(jobId) === pendingSave) {
+			return cloneJob(saveVersions.get(jobId)?.job || memoryJobs.get(jobId));
+		}
+	}
+}
+
 class JobRepository {
 	async _writeToFirestore(firestore, job) {
 		try {
@@ -42,7 +63,11 @@ class JobRepository {
 		}
 
 		const current = memoryJobs.get(sanitized.jobId);
-		if (current?.shutdownFinalized && !sanitized.shutdownFinalized) {
+		const latestJob = saveVersions.get(sanitized.jobId)?.job;
+		const terminalJob = [latestJob, current].find((candidate) => (
+			candidate && TERMINAL_JOB_STATUSES.has(candidate.status)
+		));
+		if (terminalJob && terminalJob.status !== sanitized.status) {
 			return sanitized.jobId;
 		}
 
@@ -55,14 +80,21 @@ class JobRepository {
 
 		const version = (saveVersions.get(sanitized.jobId)?.version || 0) + 1;
 		saveVersions.set(sanitized.jobId, { version, job: cloneJob(sanitized) });
-		await this._writeToFirestore(firestore, sanitized);
+		const persistencePromise = (async () => {
+			await this._writeToFirestore(firestore, sanitized);
 
-		let persistedVersion = version;
-		let latest = saveVersions.get(sanitized.jobId);
-		while (latest && latest.version > persistedVersion) {
-			persistedVersion = latest.version;
-			await this._writeToFirestore(firestore, latest.job);
-			latest = saveVersions.get(sanitized.jobId);
+			let persistedVersion = version;
+			let latest = saveVersions.get(sanitized.jobId);
+			while (latest && latest.version > persistedVersion) {
+				persistedVersion = latest.version;
+				await this._writeToFirestore(firestore, latest.job);
+				latest = saveVersions.get(sanitized.jobId);
+			}
+		})();
+		pendingSaves.set(sanitized.jobId, persistencePromise);
+		await persistencePromise;
+		if (pendingSaves.get(sanitized.jobId) === persistencePromise) {
+			pendingSaves.delete(sanitized.jobId);
 		}
 
 		return sanitized.jobId;
@@ -73,6 +105,11 @@ class JobRepository {
 			return null;
 		}
 
+		const localJob = saveVersions.get(jobId)?.job || memoryJobs.get(jobId);
+		if (localJob && TERMINAL_JOB_STATUSES.has(localJob.status) && pendingSaves.has(jobId)) {
+			await getLocalTerminalJob(jobId);
+		}
+
 		const firestore = this._getFirestore();
 		if (firestore) {
 			try {
@@ -80,9 +117,9 @@ class JobRepository {
 				if (snapshot && snapshot.exists) {
 					const data = snapshot.data() || {};
 					const job = { ...data, jobId: data.jobId || snapshot.id };
-					const localJob = saveVersions.get(jobId)?.job || memoryJobs.get(jobId);
-					if (localJob?.shutdownFinalized && !job.shutdownFinalized) {
-						return cloneJob(localJob);
+					const latestLocalTerminalJob = await getLocalTerminalJob(jobId);
+					if (latestLocalTerminalJob) {
+						return latestLocalTerminalJob;
 					}
 					memoryJobs.set(job.jobId, cloneJob(job));
 					return cloneJob(job);
@@ -157,6 +194,7 @@ class JobRepository {
 
 		let deleted = memoryJobs.delete(jobId);
 		saveVersions.delete(jobId);
+		pendingSaves.delete(jobId);
 		const firestore = this._getFirestore();
 		if (firestore) {
 			try {
@@ -203,5 +241,6 @@ module.exports = {
 	_resetForTesting() {
 		memoryJobs.clear();
 		saveVersions.clear();
+		pendingSaves.clear();
 	},
 };
