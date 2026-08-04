@@ -63,6 +63,32 @@ describe('process lifecycle coordinator', () => {
 		expect(forceExit).toHaveBeenCalledWith(1);
 	});
 
+	it('starts Telegram shutdown while HTTP connections drain', async () => {
+		const events = [];
+		let releaseServerClose;
+		const server = {
+			close: jest.fn((callback) => {
+				events.push('server-start');
+				releaseServerClose = callback;
+			}),
+		};
+		const bot = { stop: jest.fn(() => events.push('bot')) };
+		const forceExit = jest.fn();
+		const lifecycle = createProcessLifecycle({
+			getServer: () => server,
+			getBot: () => bot,
+			forceExit,
+		});
+
+		const shutdown = lifecycle.handleSignal('SIGTERM');
+		await new Promise((resolve) => setImmediate(resolve));
+
+		expect(events).toEqual(['server-start', 'bot']);
+		releaseServerClose();
+		await shutdown;
+		expect(forceExit).toHaveBeenCalledWith(0);
+	});
+
 	it('bounds unfinished-job finalization before forced exit', async () => {
 		const server = { close: jest.fn() };
 		const finalizeBackgroundJobs = jest.fn(() => new Promise(() => {}));

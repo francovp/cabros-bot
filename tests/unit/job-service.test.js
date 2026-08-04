@@ -197,6 +197,36 @@ describe('JobService Unit Tests', () => {
 			releaseJob();
 			await jobService.waitForActiveJobs();
 		});
+
+		it('finalizes jobs that become active during shutdown finalization', async () => {
+			const releaseJobs = [];
+			jobService._runBackgroundJob = jest.fn(() => new Promise((resolve) => {
+				releaseJobs.push(resolve);
+			}));
+
+			const first = await jobService.createJob('expanded-analysis', {
+				symbols: ['BINANCE:BTCUSDT'],
+			});
+			const persistJob = jobService._persistJob.bind(jobService);
+			let second;
+			jobService._persistJob = jest.fn(async (job) => {
+				await persistJob(job);
+				if (!second) {
+					second = await jobService.createJob('expanded-analysis', {
+						symbols: ['BINANCE:ETHUSDT'],
+					});
+				}
+			});
+
+			await jobService.finalizeActiveJobsForShutdown();
+
+			expect((await jobService.repository.get(first.jobId)).status).toBe('cancelled');
+			expect(second).toBeDefined();
+			expect((await jobService.repository.get(second.jobId)).status).toBe('cancelled');
+
+			releaseJobs.forEach((release) => release());
+			await jobService.waitForActiveJobs();
+		});
 	});
 
 	describe('Background execution and retrieval', () => {

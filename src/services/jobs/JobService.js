@@ -250,32 +250,41 @@ class JobService {
 	 * Persist jobs that cannot finish before the process is forcibly stopped.
 	 */
 	async finalizeActiveJobsForShutdown() {
-		const activeJobIds = [...this.activeJobs.keys()];
-		await Promise.allSettled(activeJobIds.map(async (jobId) => {
-			const job = await this.repository.get(jobId);
-			if (!job || TERMINAL_JOB_STATUSES.has(job.status)) {
+		const finalizedJobIds = new Set();
+		while (true) {
+			const activeJobIds = [...this.activeJobs.keys()]
+				.filter((jobId) => !finalizedJobIds.has(jobId));
+			if (!activeJobIds.length) {
 				return;
 			}
 
-			const errorMessage = 'Job cancelled because the process exceeded its shutdown deadline';
-			job.status = 'cancelled';
-			job.error = errorMessage;
-			job.code = 'PROCESS_SHUTDOWN_TIMEOUT';
-			job.updatedAt = new Date().toISOString();
-			job.totalDurationMs = Date.now() - new Date(job.createdAt).getTime();
-			if (job.progress) {
-				job.progress.status = 'Cancelled during process shutdown';
-			}
+			activeJobIds.forEach((jobId) => finalizedJobIds.add(jobId));
+			await Promise.allSettled(activeJobIds.map(async (jobId) => {
+				const job = await this.repository.get(jobId);
+				if (!job || TERMINAL_JOB_STATUSES.has(job.status)) {
+					return;
+				}
 
-			await this._persistJob(job);
+				const errorMessage = 'Job cancelled because the process exceeded its shutdown deadline';
+				job.status = 'cancelled';
+				job.error = errorMessage;
+				job.code = 'PROCESS_SHUTDOWN_TIMEOUT';
+				job.updatedAt = new Date().toISOString();
+				job.totalDurationMs = Date.now() - new Date(job.createdAt).getTime();
+				if (job.progress) {
+					job.progress.status = 'Cancelled during process shutdown';
+				}
 
-			const controller = this.activeControllers.get(jobId);
-			if (controller && typeof controller.abort === 'function') {
-				controller.abort(new Error(errorMessage));
-				this.activeControllers.delete(jobId);
-			}
-			await this._triggerCallbackIfConfigured(job);
-		}));
+				await this._persistJob(job);
+
+				const controller = this.activeControllers.get(jobId);
+				if (controller && typeof controller.abort === 'function') {
+					controller.abort(new Error(errorMessage));
+					this.activeControllers.delete(jobId);
+				}
+				await this._triggerCallbackIfConfigured(job);
+			}));
+		}
 	}
 
 	/**

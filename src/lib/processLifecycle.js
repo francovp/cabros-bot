@@ -119,8 +119,9 @@ function createProcessLifecycle(options = {}) {
 			};
 
 			const cleanup = async () => {
+				const telegramCleanup = safelyRun(logger, 'Telegram bot', stopBot);
 				await closeServer(server, logger);
-				await safelyRun(logger, 'Telegram bot', stopBot);
+				await telegramCleanup;
 				await safelyRun(logger, 'background jobs', waitForBackgroundJobs);
 				await Promise.allSettled([
 					safelyRun(logger, 'signal-outcome worker', () => stopSignalOutcomeWorker({ drain: true })),
