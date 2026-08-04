@@ -14,6 +14,7 @@
  */
 
 const newsDedupStorageService = require('../../../../services/storage/NewsDedupStorageService');
+const { trackBackgroundTask } = require('../../../../lib/backgroundTaskTracker');
 
 class NewsCache {
 	constructor() {
@@ -135,7 +136,7 @@ class NewsCache {
 
 		// Persistent dedup: write to Firestore (fail-open)
 		if (newsDedupStorageService.isEnabled() && newsDedupStorageService.isReady()) {
-			newsDedupStorageService.setEntry(key, this.ttlMs, data).catch(err => {
+			trackBackgroundTask(newsDedupStorageService.setEntry(key, this.ttlMs, data)).catch(err => {
 				console.warn('[NewsCache] Firestore setEntry failed (fail-open):', err.message);
 			});
 		}

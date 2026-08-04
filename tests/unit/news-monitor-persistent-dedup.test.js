@@ -29,12 +29,14 @@ jest.mock('../../src/services/storage/NewsDedupStorageService', () => ({
 
 const { NewsCache } = require('../../src/controllers/webhooks/handlers/newsMonitor/cache');
 const { EventCategory } = require('../../src/controllers/webhooks/handlers/newsMonitor/constants');
+const { waitForBackgroundTasks, resetForTesting } = require('../../src/lib/backgroundTaskTracker');
 
 describe('NewsCache — Persistent Dedup Backend (Issue #120)', () => {
 	let cache;
 
 	beforeEach(() => {
 		jest.clearAllMocks();
+		resetForTesting();
 		mockIsEnabled.mockReturnValue(false);
 		mockIsReady.mockReturnValue(true);
 		mockHasEntry.mockResolvedValue(false);
@@ -191,6 +193,23 @@ describe('NewsCache — Persistent Dedup Backend (Issue #120)', () => {
 			// Firestore write should have been called (fire-and-forget)
 			await new Promise(resolve => setImmediate(resolve));
 			expect(mockSetEntry).toHaveBeenCalledWith('BTCUSDT:price_surge', cache.ttlMs, data);
+		});
+
+		it('tracks persistent cache writes until shutdown drain observes them', async () => {
+			let releaseWrite;
+			mockSetEntry.mockReturnValue(new Promise((resolve) => { releaseWrite = resolve; }));
+
+			await cache.set('BTCUSDT', EventCategory.PRICE_SURGE, { alert: { symbol: 'BTCUSDT' } });
+			const drain = waitForBackgroundTasks();
+			let drained = false;
+			drain.then(() => { drained = true; });
+			await Promise.resolve();
+
+			expect(drained).toBe(false);
+
+			releaseWrite();
+			await drain;
+			expect(drained).toBe(true);
 		});
 
 		it('returns in-memory hit immediately without checking Firestore', async () => {
