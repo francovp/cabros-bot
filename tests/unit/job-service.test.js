@@ -254,6 +254,46 @@ describe('JobService Unit Tests', () => {
 			expect(jobService._triggerCallbackIfConfigured).not.toHaveBeenCalled();
 		});
 
+		it('preserves callback delivery state when a stale job snapshot is persisted', async () => {
+			const job = {
+				jobId: 'callback-state-merge-job',
+				type: 'expanded-analysis',
+				status: 'processing',
+				callbackStatus: { status: 'pending', attempts: [] },
+				createdAt: new Date().toISOString(),
+				updatedAt: new Date().toISOString(),
+				progress: { total: 1, current: 0, status: 'pending' },
+				fullResults: [],
+				fullScanResults: [],
+				totalDurationMs: 0,
+			};
+			await jobService.repository.save(job);
+
+			const delivered = {
+				...job,
+				callbackStatus: {
+					status: 'success',
+					attempts: [{ event: 'processing', deliveryId: 'delivery-1', statusCode: 200 }],
+					events: {
+						processing: { status: 'success', attempts: [] },
+					},
+				},
+			};
+			await jobService.repository.save(delivered);
+
+			await jobService._persistJob({
+				...job,
+				progress: { total: 1, current: 1, status: 'Completed analysis' },
+			});
+
+			const persisted = await jobService.repository.get(job.jobId);
+			expect(persisted.callbackStatus.status).toBe('success');
+			expect(persisted.callbackStatus.events.processing.status).toBe('success');
+			expect(persisted.callbackStatus.attempts).toEqual([
+				expect.objectContaining({ deliveryId: 'delivery-1' }),
+			]);
+		});
+
 		it('finalizes jobs that become active during shutdown finalization', async () => {
 			const releaseJobs = [];
 			jobService._runBackgroundJob = jest.fn(() => new Promise((resolve) => {

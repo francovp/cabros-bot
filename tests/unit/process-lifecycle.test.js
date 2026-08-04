@@ -89,6 +89,34 @@ describe('process lifecycle coordinator', () => {
 		expect(forceExit).toHaveBeenCalledWith(0);
 	});
 
+	it('retries Telegram stop if polling starts after shutdown begins', async () => {
+		let releaseLaunch;
+		let stopAttempts = 0;
+		const launchPromise = new Promise((resolve) => { releaseLaunch = resolve; });
+		const bot = {
+			stop: jest.fn(() => {
+				stopAttempts += 1;
+				if (stopAttempts === 1) {
+					throw new Error('Bot is not running!');
+				}
+				releaseLaunch();
+			}),
+		};
+		const server = { close: jest.fn((callback) => callback()) };
+		const forceExit = jest.fn();
+		const lifecycle = createProcessLifecycle({
+			getServer: () => server,
+			getBot: () => bot,
+			getBotLaunchPromise: () => launchPromise,
+			forceExit,
+		});
+
+		await lifecycle.handleSignal('SIGTERM');
+
+		expect(stopAttempts).toBeGreaterThanOrEqual(2);
+		expect(forceExit).toHaveBeenCalledWith(0);
+	});
+
 	it('bounds unfinished-job finalization before forced exit', async () => {
 		const server = { close: jest.fn() };
 		const finalizeBackgroundJobs = jest.fn(() => new Promise(() => {}));

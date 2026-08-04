@@ -98,24 +98,67 @@ function createProcessLifecycle(options = {}) {
 		shutdownPromise = (async () => {
 			const server = getServer();
 			const stopBot = async () => {
-				let stopError;
-				try {
-					const bot = getBot();
-					if (bot && typeof bot.stop === 'function') {
-						await bot.stop(signal);
-					}
-				} catch (error) {
-					stopError = error;
-				}
-
 				const launchPromise = getBotLaunchPromise();
-				if (launchPromise && typeof launchPromise.then === 'function') {
-					await launchPromise;
+				const bot = getBot();
+				if (!bot || typeof bot.stop !== 'function') {
+					return;
 				}
 
-				if (stopError) {
-					throw stopError;
+				if (!launchPromise || typeof launchPromise.then !== 'function') {
+					try {
+						await bot.stop(signal);
+					} catch (error) {
+						if (error.message !== 'Bot is not running!') {
+							throw error;
+						}
+					}
+					return;
 				}
+
+				let stopError;
+				let retryTimer;
+				let retryFinished = false;
+				let finishRetry;
+				const retryPromise = new Promise((resolve) => {
+					finishRetry = () => {
+						if (retryFinished) return;
+						retryFinished = true;
+						clearTimeout(retryTimer);
+						resolve();
+					};
+				});
+				const retryStop = () => {
+					if (retryFinished) return;
+					try {
+						Promise.resolve(bot.stop(signal)).then(
+							() => finishRetry(),
+							(error) => {
+								if (error.message !== 'Bot is not running!') {
+									stopError = error;
+									finishRetry();
+									return;
+								}
+								retryTimer = setTimeout(retryStop, 10);
+							},
+						);
+					} catch (error) {
+						if (error.message !== 'Bot is not running!') {
+							stopError = error;
+							finishRetry();
+							return;
+						}
+						retryTimer = setTimeout(retryStop, 10);
+					}
+				};
+
+				retryStop();
+				try {
+					await launchPromise;
+				} finally {
+					finishRetry();
+				}
+				await retryPromise;
+				if (stopError) throw stopError;
 			};
 
 			const cleanup = async () => {

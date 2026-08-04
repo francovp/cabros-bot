@@ -42,6 +42,41 @@ function getCallbackFetch() {
 	return globalThis.fetch === nativeFetch ? undiciFetch : globalThis.fetch;
 }
 
+function mergeCallbackStatus(current, next) {
+	if (!current) return next;
+	if (!next) return current;
+
+	const events = { ...(current.events || {}) };
+	for (const [event, value] of Object.entries(next.events || {})) {
+		const existing = events[event];
+		if (!existing || existing.status !== 'success' || value.status === 'success') {
+			events[event] = value;
+		}
+	}
+
+	const attempts = [];
+	const seenAttempts = new Set();
+	for (const attempt of [...(current.attempts || []), ...(next.attempts || [])]) {
+		const key = attempt.deliveryId
+			|| `${attempt.event || ''}:${attempt.timestamp || ''}:${attempt.statusCode || ''}:${attempt.error || ''}`;
+		if (!seenAttempts.has(key)) {
+			seenAttempts.add(key);
+			attempts.push(attempt);
+		}
+	}
+
+	const merged = {
+		...current,
+		...next,
+		status: next.status === 'pending' && current.status ? current.status : (next.status || current.status),
+		attempts,
+	};
+	if (Object.keys(events).length || current.events || next.events) {
+		merged.events = events;
+	}
+	return merged;
+}
+
 function expandIPv6(ip) {
 	let fullIp = ip;
 	if (ip.includes('::')) {
@@ -1047,6 +1082,9 @@ class JobService {
 		if (current) {
 			if (TERMINAL_JOB_STATUSES.has(current.status) && current.status !== job.status) {
 				return;
+			}
+			if (current.callbackStatus || job.callbackStatus) {
+				job.callbackStatus = mergeCallbackStatus(current.callbackStatus, job.callbackStatus);
 			}
 		}
 		await this.repository.save(job);
