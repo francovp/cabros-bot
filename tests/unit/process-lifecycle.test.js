@@ -87,17 +87,17 @@ describe('process lifecycle coordinator', () => {
 		const shutdown = lifecycle.handleSignal('SIGTERM');
 		await new Promise((resolve) => setImmediate(resolve));
 
-		expect(events).toEqual(['server', 'jobs']);
+		expect(events).toEqual(['server', 'bot']);
 		expect(forceExit).not.toHaveBeenCalled();
 
-		releaseJobs();
+		releasePolling();
 		await new Promise((resolve) => setImmediate(resolve));
-		expect(events.slice(0, 5)).toEqual(['server', 'jobs', 'worker', 'news', 'bot']);
+		expect(events.slice(0, 3)).toEqual(['server', 'bot', 'jobs']);
 		expect(events).not.toContain('sentry');
 
-		releasePolling();
+		releaseJobs();
 		await shutdown;
 
-		expect(events).toEqual(['server', 'jobs', 'worker', 'news', 'bot', 'sentry', 'exit:0']);
+		expect(events).toEqual(['server', 'bot', 'jobs', 'worker', 'news', 'sentry', 'exit:0']);
 	});
 });

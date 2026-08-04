@@ -93,11 +93,11 @@ function createProcessLifecycle(options = {}) {
 
 			const cleanup = async () => {
 				await closeServer(server, logger);
+				await safelyRun(logger, 'Telegram bot', stopBot);
 				await safelyRun(logger, 'background jobs', waitForBackgroundJobs);
 				await Promise.allSettled([
 					safelyRun(logger, 'signal-outcome worker', () => stopSignalOutcomeWorker({ drain: true })),
 					safelyRun(logger, 'news monitor cache', shutdownNewsMonitor),
-					safelyRun(logger, 'Telegram bot', stopBot),
 				]);
 				await safelyRun(logger, 'Sentry', () => flushSentry(Math.min(shutdownTimeoutMs, 2000)));
 			};
