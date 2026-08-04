@@ -40,6 +40,10 @@ services:
   envVars:
   - key: ENABLE_SIGNAL_OUTCOME_TRACKING
     sync: false
+  - key: ENABLE_SENTRY
+    sync: false
+  - key: SENTRY_DSN
+    sync: false
   - key: SIGNAL_OUTCOME_WORKER_ROLE
     value: worker
   - key: SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS
