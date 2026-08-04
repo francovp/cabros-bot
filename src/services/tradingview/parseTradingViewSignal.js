@@ -146,8 +146,30 @@ function deriveAssetContext(text) {
 		};
 	}
 
+	const cryptoPairPattern = new RegExp(
+		`(?:^|\\s)(?<symbol>[A-Z0-9._-]{2,20}/(?:${CRYPTO_SUFFIXES.join('|')}))(?=[^\\p{L}\\p{N}\\p{M}_]|$)`,
+		'giu',
+	);
+	for (const cryptoPairMatch of text.matchAll(cryptoPairPattern)) {
+		if (!cryptoPairMatch.groups || !cryptoPairMatch.groups.symbol) {
+			continue;
+		}
+		const rawSymbol = cryptoPairMatch.groups.symbol;
+		const symbol = rawSymbol.toUpperCase();
+		const quote = symbol.split('/').pop();
+		const hasAmbiguousQuote = BARE_CRYPTO_SYMBOLS.includes(quote);
+		if (hasAmbiguousQuote && rawSymbol !== symbol) {
+			continue;
+		}
+		return {
+			symbol,
+			exchange: null,
+			assetClass: 'crypto',
+		};
+	}
+
 	const cryptoSuffixPattern = new RegExp(
-		`(?:^|\\s)(?<symbol>(?:[A-Z0-9._-]{2,20}(?:${CRYPTO_SUFFIXES.join('|')})|(?:${BARE_CRYPTO_SYMBOLS.join('|')})))(?=[^\\p{L}\\p{N}\\p{M}_]|$)`,
+		`(?:^|\\s)(?<symbol>(?:[A-Z0-9._-]{2,20}(?:${CRYPTO_SUFFIXES.join('|')})|(?:${BARE_CRYPTO_SYMBOLS.join('|')})))(?=[^\\p{L}\\p{N}\\p{M}_/]|$)`,
 		'giu',
 	);
 	for (const cryptoSuffixMatch of text.matchAll(cryptoSuffixPattern)) {

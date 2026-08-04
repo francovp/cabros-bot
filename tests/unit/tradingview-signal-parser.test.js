@@ -106,6 +106,16 @@ describe('TradingView signal parser', () => {
 		}));
 	});
 
+	it('preserves slash-delimited crypto pairs in grounding context and queries', () => {
+		const text = 'BTC/USDT price rose after the announcement';
+
+		expect(deriveAssetContext(text)).toEqual(expect.objectContaining({
+			symbol: 'BTC/USDT',
+			assetClass: 'crypto',
+		}));
+		expect(deriveCleanSearchQuery(text)).toBe('BTC/USDT crypto price news market analyst');
+	});
+
 	it('does not classify lowercase bare symbols used as prose words', () => {
 		const text = 'El sol salió después del anuncio';
 
