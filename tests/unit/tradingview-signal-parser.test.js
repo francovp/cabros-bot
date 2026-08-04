@@ -69,6 +69,12 @@ describe('TradingView signal parser', () => {
 				assetClass: null,
 			}));
 		}
+
+		expect(deriveAssetContext('CME_MINI:ETH(D) cambió a señal de COMPRA')).toEqual(expect.objectContaining({
+			exchange: 'CME_MINI',
+			assetClass: null,
+		}));
+		expect(deriveCleanSearchQuery('CME_MINI:ETH(D) cambió a señal de COMPRA')).toBe('ETH market news analyst');
 	});
 
 	it('returns null when side is missing', () => {

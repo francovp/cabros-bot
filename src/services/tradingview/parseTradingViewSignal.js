@@ -113,7 +113,8 @@ function deriveAssetContext(text) {
 			assetClass = 'crypto';
 		} else if (exchange && STOCK_EXCHANGES.has(exchange)) {
 			assetClass = 'stock';
-		} else if (CRYPTO_SUFFIXES.some(s => parsed.symbol.endsWith(s))) {
+		} else if (!NON_EQUITY_EXCHANGES.has(exchange)
+			&& CRYPTO_SUFFIXES.some(s => parsed.symbol.endsWith(s))) {
 			assetClass = 'crypto';
 		}
 
