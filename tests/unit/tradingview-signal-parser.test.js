@@ -42,6 +42,17 @@ describe('TradingView signal parser', () => {
 		}));
 	});
 
+	it('keeps unknown exchange asset context neutral', () => {
+		const text = 'FX_IDC:USDCLP(D) cambió a señal de VENTA';
+
+		expect(deriveAssetContext(text)).toEqual(expect.objectContaining({
+			symbol: 'USDCLP',
+			exchange: 'FX_IDC',
+			assetClass: null,
+		}));
+		expect(deriveCleanSearchQuery(text)).toBe('USDCLP market news analyst');
+	});
+
 	it('returns null when side is missing', () => {
 		const result = parseTradingViewSignal('BTCUSDT(240) sin señal definida');
 		expect(result).toBeNull();

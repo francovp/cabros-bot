@@ -107,7 +107,7 @@ function deriveAssetContext(text) {
 	const parsed = parseTradingViewSignal(text);
 	if (parsed && parsed.symbol) {
 		const exchange = parsed.exchange || (parsed.symbol.endsWith('USDT') ? 'BINANCE' : null);
-		let assetClass = 'stock';
+		let assetClass = exchange ? null : 'stock';
 		if (exchange && CRYPTO_EXCHANGES.has(exchange)) {
 			assetClass = 'crypto';
 		} else if (exchange && STOCK_EXCHANGES.has(exchange)) {
