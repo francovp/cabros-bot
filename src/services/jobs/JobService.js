@@ -231,14 +231,18 @@ class JobService {
 		this.jobs = repository;
 		this.activeControllers = new Map();
 		this.activeJobs = new Map();
+		this.activeCallbacks = new Set();
 	}
 
 	/**
 	 * Wait for background jobs already accepted by this process to finish.
 	 */
 	async waitForActiveJobs() {
-		while (this.activeJobs.size > 0) {
-			await Promise.allSettled([...this.activeJobs.values()]);
+		while (this.activeJobs.size > 0 || this.activeCallbacks.size > 0) {
+			await Promise.allSettled([
+				...this.activeJobs.values(),
+				...this.activeCallbacks,
+			]);
 		}
 	}
 
@@ -568,7 +572,7 @@ class JobService {
 		await this.repository.save(job);
 
 		// Trigger callback for 'processing' if configured
-		await this._triggerCallbackIfConfigured(job);
+		await this._triggerCallbackIfConfigured(job, { background: true });
 
 		// Execute background job while retaining its promise for graceful shutdown.
 		const runPromise = this._runBackgroundJob(jobId, parsed, payload, botOrGetter);
@@ -1211,7 +1215,15 @@ class JobService {
 		return botOrGetter || null;
 	}
 
-	async _triggerCallbackIfConfigured(job) {
+	_trackCallback(callbackPromise) {
+		this.activeCallbacks.add(callbackPromise);
+		void callbackPromise.then(
+			() => this.activeCallbacks.delete(callbackPromise),
+			() => this.activeCallbacks.delete(callbackPromise),
+		);
+	}
+
+	async _triggerCallbackIfConfigured(job, { background = false } = {}) {
 		if (!job.callbackUrl) return;
 
 		const events = job.callbackEvents || ['completed', 'failed', 'cancelled', 'timed_out'];
@@ -1223,9 +1235,14 @@ class JobService {
 			return;
 		}
 
-		return this._sendCallbackWithRetry(job).catch((err) => {
+		const callbackPromise = this._sendCallbackWithRetry(job).catch((err) => {
 			console.error(`[JobService] Callback for job ${job.jobId} failed:`, err.message);
 		});
+		if (background) {
+			this._trackCallback(callbackPromise);
+			return;
+		}
+		return callbackPromise;
 	}
 
 	_hasSuccessfulCallbackForEvent(job, event) {

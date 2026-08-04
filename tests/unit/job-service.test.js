@@ -119,6 +119,35 @@ describe('JobService Unit Tests', () => {
 
 			expect(jobService.activeJobs.size).toBe(0);
 		});
+
+		it('does not block job creation on processing callbacks while tracking them', async () => {
+			process.env.NODE_ENV = 'test';
+			let releaseCallback;
+			jobService._runBackgroundJob = jest.fn().mockResolvedValue(undefined);
+			jobService._sendCallbackWithRetry = jest.fn(() => new Promise((resolve) => {
+				releaseCallback = resolve;
+			}));
+
+			const creation = jobService.createJob('expanded-analysis', {
+				symbols: ['BINANCE:BTCUSDT'],
+				callbackUrl: 'http://localhost:8080/callback',
+				callbackEvents: ['processing'],
+			});
+			const result = await Promise.race([creation, delay(20).then(() => null)]);
+
+			expect(result).toEqual(expect.objectContaining({ success: true }));
+			expect(jobService.activeCallbacks.size).toBe(1);
+
+			const drain = jobService.waitForActiveJobs();
+			let drained = false;
+			drain.then(() => { drained = true; });
+			await Promise.resolve();
+			expect(drained).toBe(false);
+
+			releaseCallback();
+			await drain;
+			expect(jobService.activeCallbacks.size).toBe(0);
+		});
 	});
 
 	describe('Background execution and retrieval', () => {
