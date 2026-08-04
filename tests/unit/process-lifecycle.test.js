@@ -205,6 +205,27 @@ describe('process lifecycle coordinator', () => {
 		expect(events).toEqual(['server', 'persistence', 'sentry', 'exit:0']);
 	});
 
+	it('waits for asynchronous bootstrap before exiting', async () => {
+		let releaseBootstrap;
+		const bootstrap = new Promise((resolve) => { releaseBootstrap = resolve; });
+		const server = { close: jest.fn((callback) => callback()) };
+		const forceExit = jest.fn();
+		const lifecycle = createProcessLifecycle({
+			getServer: () => server,
+			getBootstrapPromise: () => bootstrap,
+			forceExit,
+		});
+
+		const shutdown = lifecycle.handleSignal('SIGTERM');
+		await new Promise((resolve) => setImmediate(resolve));
+
+		expect(forceExit).not.toHaveBeenCalled();
+		releaseBootstrap();
+		await shutdown;
+
+		expect(forceExit).toHaveBeenCalledWith(0);
+	});
+
 	it('waits for background jobs before draining tracked persistence tasks', async () => {
 		const events = [];
 		let releaseJobs;

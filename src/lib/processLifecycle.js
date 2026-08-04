@@ -73,6 +73,7 @@ function createProcessLifecycle(options = {}) {
 		getServer = () => null,
 		getBot = () => null,
 		getBotLaunchPromise = () => null,
+		getBootstrapPromise = () => undefined,
 		waitForBackgroundJobs = () => undefined,
 		waitForBackgroundTasks = () => undefined,
 		finalizeBackgroundJobs = () => undefined,
@@ -164,8 +165,10 @@ function createProcessLifecycle(options = {}) {
 
 			const cleanup = async () => {
 				const telegramCleanup = safelyRun(logger, 'Telegram bot', stopBot);
+				const bootstrapCleanup = safelyRun(logger, 'application bootstrap', getBootstrapPromise);
 				await closeServer(server, logger);
 				await telegramCleanup;
+				await bootstrapCleanup;
 				await safelyRun(logger, 'background jobs', waitForBackgroundJobs);
 				await safelyRun(logger, 'background persistence tasks', waitForBackgroundTasks);
 				await Promise.allSettled([

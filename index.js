@@ -28,6 +28,7 @@ const { token } = getTelegramBootstrapConfig();
 
 let bot;
 let botLaunchPromise;
+let bootstrapPromise;
 let server;
 
 const port = process.env.PORT || 80;
@@ -53,6 +54,7 @@ const lifecycle = createProcessLifecycle({
 	getServer: () => server,
 	getBot: () => bot,
 	getBotLaunchPromise: () => botLaunchPromise,
+	getBootstrapPromise: () => bootstrapPromise,
 	waitForBackgroundJobs: () => jobService.waitForActiveJobs(),
 	waitForBackgroundTasks,
 	finalizeBackgroundJobs: () => jobService.finalizeActiveJobsForShutdown(),
@@ -63,7 +65,7 @@ const lifecycle = createProcessLifecycle({
 });
 lifecycle.register();
 
-server = app.listen(port, async () => {
+async function bootstrapApplication() {
 	console.log(now + ' - Running server on port ' + port);
 	if (lifecycle.isShuttingDown()) return;
 
@@ -114,6 +116,13 @@ server = app.listen(port, async () => {
 		// Initialize notification services
 		await initializeNotificationServices(null);
 	}
+}
+
+server = app.listen(port, () => {
+	bootstrapPromise = bootstrapApplication();
+	void bootstrapPromise.catch((error) => {
+		console.error('[index] Application bootstrap failed:', error.message);
+	});
 });
 
 module.exports = { bot };
