@@ -59,4 +59,45 @@ describe('process lifecycle coordinator', () => {
 		expect(server.closeAllConnections).toHaveBeenCalledTimes(1);
 		expect(forceExit).toHaveBeenCalledWith(1);
 	});
+
+	it('waits for background jobs and Telegram polling before flushing Sentry', async () => {
+		const events = [];
+		let releaseJobs;
+		let releasePolling;
+		const jobsPromise = new Promise((resolve) => { releaseJobs = resolve; });
+		const pollingPromise = new Promise((resolve) => { releasePolling = resolve; });
+		const server = { close: jest.fn((callback) => { events.push('server'); callback(); }) };
+		const bot = { stop: jest.fn(() => events.push('bot')) };
+		const forceExit = jest.fn((code) => events.push(`exit:${code}`));
+
+		const lifecycle = createProcessLifecycle({
+			getServer: () => server,
+			getBot: () => bot,
+			getBotLaunchPromise: () => pollingPromise,
+			waitForBackgroundJobs: () => {
+				events.push('jobs');
+				return jobsPromise;
+			},
+			stopSignalOutcomeWorker: () => events.push('worker'),
+			shutdownNewsMonitor: () => events.push('news'),
+			flushSentry: () => events.push('sentry'),
+			forceExit,
+		});
+
+		const shutdown = lifecycle.handleSignal('SIGTERM');
+		await new Promise((resolve) => setImmediate(resolve));
+
+		expect(events).toEqual(['server', 'jobs']);
+		expect(forceExit).not.toHaveBeenCalled();
+
+		releaseJobs();
+		await new Promise((resolve) => setImmediate(resolve));
+		expect(events.slice(0, 5)).toEqual(['server', 'jobs', 'worker', 'news', 'bot']);
+		expect(events).not.toContain('sentry');
+
+		releasePolling();
+		await shutdown;
+
+		expect(events).toEqual(['server', 'jobs', 'worker', 'news', 'bot', 'sentry', 'exit:0']);
+	});
 });

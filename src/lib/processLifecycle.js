@@ -48,6 +48,8 @@ function createProcessLifecycle(options = {}) {
 	const {
 		getServer = () => null,
 		getBot = () => null,
+		getBotLaunchPromise = () => null,
+		waitForBackgroundJobs = () => undefined,
 		stopSignalOutcomeWorker = () => undefined,
 		shutdownNewsMonitor = () => undefined,
 		flushSentry = () => undefined,
@@ -68,22 +70,43 @@ function createProcessLifecycle(options = {}) {
 		logger.info('[ProcessLifecycle] Shutdown requested', { signal });
 		shutdownPromise = (async () => {
 			const server = getServer();
-			const cleanupTasks = [
-				closeServer(server, logger),
-				safelyRun(logger, 'signal-outcome worker', () => stopSignalOutcomeWorker({ drain: true })),
-				safelyRun(logger, 'news monitor cache', shutdownNewsMonitor),
-				safelyRun(logger, 'Telegram bot', () => {
+			const stopBot = async () => {
+				let stopError;
+				try {
 					const bot = getBot();
-					return bot && typeof bot.stop === 'function' ? bot.stop(signal) : undefined;
-				}),
-				safelyRun(logger, 'Sentry', () => flushSentry(Math.min(shutdownTimeoutMs, 2000))),
-			];
+					if (bot && typeof bot.stop === 'function') {
+						await bot.stop(signal);
+					}
+				} catch (error) {
+					stopError = error;
+				}
+
+				const launchPromise = getBotLaunchPromise();
+				if (launchPromise && typeof launchPromise.then === 'function') {
+					await launchPromise;
+				}
+
+				if (stopError) {
+					throw stopError;
+				}
+			};
+
+			const cleanup = async () => {
+				await closeServer(server, logger);
+				await safelyRun(logger, 'background jobs', waitForBackgroundJobs);
+				await Promise.allSettled([
+					safelyRun(logger, 'signal-outcome worker', () => stopSignalOutcomeWorker({ drain: true })),
+					safelyRun(logger, 'news monitor cache', shutdownNewsMonitor),
+					safelyRun(logger, 'Telegram bot', stopBot),
+				]);
+				await safelyRun(logger, 'Sentry', () => flushSentry(Math.min(shutdownTimeoutMs, 2000)));
+			};
 
 			let deadlineTimer;
 			const deadline = new Promise((resolve) => {
 				deadlineTimer = setTimeout(() => resolve(true), shutdownTimeoutMs);
 			});
-			const completed = Promise.allSettled(cleanupTasks).then(() => false);
+			const completed = cleanup().then(() => false);
 			const timedOut = await Promise.race([completed, deadline]);
 			clearTimeout(deadlineTimer);
 

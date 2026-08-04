@@ -18,6 +18,7 @@ const { getCacheInstance } = require('./src/controllers/webhooks/handlers/newsMo
 const { registerDebugSentryRoute } = require('./src/lib/debugSentryRoute');
 const { createProcessLifecycle } = require('./src/lib/processLifecycle');
 const { getTelegramBootstrapConfig } = require('./src/lib/telegramBootstrap');
+const { jobService } = require('./src/services/jobs/JobService');
 const SignalOutcomeService = require('./src/services/storage/SignalOutcomeService');
 const sentryService = require('./src/services/monitoring/SentryService');
 const Sentry = require('@sentry/node');
@@ -25,6 +26,7 @@ const Sentry = require('@sentry/node');
 const { token } = getTelegramBootstrapConfig();
 
 let bot;
+let botLaunchPromise;
 let server;
 
 const port = process.env.PORT || 80;
@@ -49,6 +51,8 @@ app.use(function onError(err, req, res, next) {
 const lifecycle = createProcessLifecycle({
 	getServer: () => server,
 	getBot: () => bot,
+	getBotLaunchPromise: () => botLaunchPromise,
+	waitForBackgroundJobs: () => jobService.waitForActiveJobs(),
 	stopSignalOutcomeWorker: (options) => SignalOutcomeService.stopWorker(options),
 	shutdownNewsMonitor: () => getCacheInstance().shutdown(),
 	flushSentry: (timeout) => sentryService.flush(timeout),
@@ -84,7 +88,8 @@ server = app.listen(port, async () => {
 		if (lifecycle.isShuttingDown()) return;
 
 		// Start polling without blocking the rest of bootstrap.
-		void bot.launch().catch((error) => {
+		botLaunchPromise = bot.launch();
+		void botLaunchPromise.catch((error) => {
 			console.error('[index] Failed to launch Telegram bot:', error.message);
 		});
 

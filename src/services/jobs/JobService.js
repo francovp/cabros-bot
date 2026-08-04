@@ -230,6 +230,16 @@ class JobService {
 		this.repository = repository;
 		this.jobs = repository;
 		this.activeControllers = new Map();
+		this.activeJobs = new Map();
+	}
+
+	/**
+	 * Wait for background jobs already accepted by this process to finish.
+	 */
+	async waitForActiveJobs() {
+		while (this.activeJobs.size > 0) {
+			await Promise.allSettled([...this.activeJobs.values()]);
+		}
 	}
 
 	/**
@@ -560,10 +570,18 @@ class JobService {
 		// Trigger callback for 'processing' if configured
 		await this._triggerCallbackIfConfigured(job);
 
-		// Execute background job (fire-and-forget)
-		this._runBackgroundJob(jobId, parsed, payload, botOrGetter).catch((error) => {
-			console.error(`[JobService] Background job ${jobId} failed with unhandled error:`, error.message);
-		});
+		// Execute background job while retaining its promise for graceful shutdown.
+		const runPromise = this._runBackgroundJob(jobId, parsed, payload, botOrGetter);
+		this.activeJobs.set(jobId, runPromise);
+		void runPromise
+			.catch((error) => {
+				console.error(`[JobService] Background job ${jobId} failed with unhandled error:`, error.message);
+			})
+			.finally(() => {
+				if (this.activeJobs.get(jobId) === runPromise) {
+					this.activeJobs.delete(jobId);
+				}
+			});
 
 		return {
 			success: true,
@@ -1205,8 +1223,7 @@ class JobService {
 			return;
 		}
 
-		// Execute the callback in the background
-		this._sendCallbackWithRetry(job).catch((err) => {
+		return this._sendCallbackWithRetry(job).catch((err) => {
 			console.error(`[JobService] Callback for job ${job.jobId} failed:`, err.message);
 		});
 	}

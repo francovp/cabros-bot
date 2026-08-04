@@ -97,6 +97,30 @@ describe('JobService Unit Tests', () => {
 		});
 	});
 
+	describe('Shutdown draining', () => {
+		it('tracks background jobs until they finish', async () => {
+			let releaseJob;
+			const runningJob = new Promise((resolve) => { releaseJob = resolve; });
+			jobService._runBackgroundJob = jest.fn(() => runningJob);
+
+			const result = await jobService.createJob('expanded-analysis', {
+				symbols: ['BINANCE:BTCUSDT'],
+			});
+
+			expect(jobService.activeJobs.has(result.jobId)).toBe(true);
+			const drain = jobService.waitForActiveJobs();
+			let drained = false;
+			drain.then(() => { drained = true; });
+			await Promise.resolve();
+			expect(drained).toBe(false);
+
+			releaseJob();
+			await drain;
+
+			expect(jobService.activeJobs.size).toBe(0);
+		});
+	});
+
 	describe('Background execution and retrieval', () => {
 		it('completes expanded-analysis job successfully', async () => {
 			tradingViewMcpService.analyzeSymbolIdentifier.mockResolvedValueOnce({
