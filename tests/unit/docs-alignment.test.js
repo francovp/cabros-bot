@@ -67,11 +67,23 @@ function getStaticEnvironmentReads(repoRoot) {
 		/\bprocess\.env\.([A-Z][A-Z0-9_]*)\b/g,
 		/\bprocess\.env\[['"]([A-Z][A-Z0-9_]*)['"]\]/g,
 	];
+	const dynamicReadArgumentPatterns = [
+		/\bparseEnvInt\(\s*['"]([A-Z][A-Z0-9_]*)['"]/g,
+		/\bgetSymbolsFromEnv\(\s*['"]([A-Z][A-Z0-9_]*)['"]/g,
+		/\benvVar\s*:\s*['"]([A-Z][A-Z0-9_]*)['"]/g,
+	];
+	const dynamicReadMapPattern = /\bgetRequiredEnvVars\(\)\s*\{[\s\S]*?\breturn envVarMap;/g;
 
 	for (const fullPath of sourceFiles) {
 		const content = fs.readFileSync(fullPath, 'utf8');
 		for (const pattern of patterns) {
 			for (const match of content.matchAll(pattern)) names.add(match[1]);
+		}
+		for (const pattern of dynamicReadArgumentPatterns) {
+			for (const match of content.matchAll(pattern)) names.add(match[1]);
+		}
+		for (const mapMatch of content.matchAll(dynamicReadMapPattern)) {
+			for (const match of mapMatch[0].matchAll(/['"]([A-Z][A-Z0-9_]*)['"]/g)) names.add(match[1]);
 		}
 	}
 

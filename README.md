@@ -47,6 +47,10 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 
 - `ENABLE_DISCORD_ALERTS` - Enable Discord alerts (`true` or `false`, default: `false`)
 - `DISCORD_WEBHOOK_URL` - Discord webhook URL (e.g., `https://discord.com/api/webhooks/<id>/<token>`)
+- `DISCORD_MAX_RETRIES` - Additional Discord attempts after the first request (default: `2`)
+- `DISCORD_FALLBACK_RETRY_DELAY_MS` - Fallback delay for Discord 429 retries (default: `500` ms)
+- `DISCORD_MAX_RETRY_DELAY_MS` - Maximum individual Discord retry delay (default: `5000` ms)
+- `DISCORD_MAX_TOTAL_RETRY_WAIT_MS` - Maximum cumulative Discord retry wait (default: `10000` ms)
 
 #### URL Shortening (003-news-monitor)
 
@@ -79,6 +83,7 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 - `LANGFUSE_BASE_URL` - Langfuse base URL (default: `https://cloud.langfuse.com`)
 - `LANGFUSE_PROMPT_LABEL` - Prompt label to fetch (default: `latest` in local/dev/test, `production` in production-like environments)
 - `LANGFUSE_PROMPT_CACHE_TTL_SECONDS` - Prompt cache TTL in seconds (default: `0` for `latest`, `60` for `production`)
+- Optional local prompt overrides: `SEARCH_QUERY_PROMPT`, `GEMINI_SYSTEM_PROMPT`, `ALERT_ENRICHMENT_SYSTEM_PROMPT`, `NEWS_ANALYSIS_SYSTEM_PROMPT`, and `CONFIDENCE_ENRICHMENT_SYSTEM_PROMPT`. Unset values use the versioned local fallback files.
 
 #### TradingView MCP Analysis
 
