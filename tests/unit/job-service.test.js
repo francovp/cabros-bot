@@ -255,9 +255,12 @@ describe('JobService Unit Tests', () => {
 			await saveStarted;
 
 			const finalization = jobService.finalizeActiveJobsForShutdown();
+			let finalized = false;
+			finalization.then(() => { finalized = true; });
 			await Promise.resolve();
 
 			expect(save).toHaveBeenCalledTimes(2);
+			expect(finalized).toBe(false);
 			expect(save.mock.calls[1][0]).toEqual(expect.objectContaining({
 				status: 'cancelled',
 				shutdownFinalized: true,
@@ -319,6 +322,49 @@ describe('JobService Unit Tests', () => {
 			await jobService._finalizeActiveJobForShutdown(jobId);
 
 			expect(jobService._triggerCallbackIfConfigured).not.toHaveBeenCalled();
+		});
+
+		it('reapplies a newer cancellation after a stale Firestore save settles', async () => {
+			process.env.ENABLE_FIRESTORE_JOB_STORAGE = 'true';
+			let releaseInitialSave;
+			const initialSave = new Promise((resolve) => { releaseInitialSave = resolve; });
+			admin.__mockDocSet.mockImplementationOnce(() => initialSave);
+
+			const processingJob = {
+				jobId: 'stale-firestore-save-job',
+				type: 'expanded-analysis',
+				status: 'processing',
+				createdAt: new Date().toISOString(),
+				updatedAt: new Date().toISOString(),
+				progress: { total: 1, current: 0, status: 'pending' },
+				fullResults: [],
+				fullScanResults: [],
+				totalDurationMs: 0,
+			};
+			const cancellationJob = {
+				...processingJob,
+				status: 'cancelled',
+				shutdownFinalized: true,
+				code: 'PROCESS_SHUTDOWN_TIMEOUT',
+			};
+
+			const firstSave = jobService.repository.save(processingJob);
+			const cancellationSave = jobService.repository.save(cancellationJob);
+			await cancellationSave;
+			admin.__mockDocGet.mockResolvedValueOnce({
+				exists: true,
+				id: processingJob.jobId,
+				data: () => processingJob,
+			});
+			expect((await jobService.repository.get(processingJob.jobId)).status).toBe('cancelled');
+			releaseInitialSave();
+			await firstSave;
+
+			expect(admin.__mockDocSet).toHaveBeenCalledTimes(3);
+			expect(admin.__mockDocSet.mock.calls[2][0]).toEqual(expect.objectContaining({
+				status: 'cancelled',
+				shutdownFinalized: true,
+			}));
 		});
 
 		it('preserves callback delivery state when a stale job snapshot is persisted', async () => {

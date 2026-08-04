@@ -204,4 +204,37 @@ describe('process lifecycle coordinator', () => {
 
 		expect(events).toEqual(['server', 'persistence', 'sentry', 'exit:0']);
 	});
+
+	it('waits for background jobs before draining tracked persistence tasks', async () => {
+		const events = [];
+		let releaseJobs;
+		const jobs = new Promise((resolve) => { releaseJobs = resolve; });
+		const server = { close: jest.fn((callback) => callback()) };
+		const forceExit = jest.fn();
+
+		const lifecycle = createProcessLifecycle({
+			getServer: () => server,
+			waitForBackgroundJobs: () => {
+				events.push('jobs');
+				return jobs;
+			},
+			waitForBackgroundTasks: () => {
+				events.push('persistence');
+				return undefined;
+			},
+			forceExit,
+		});
+
+		const shutdown = lifecycle.handleSignal('SIGTERM');
+		await new Promise((resolve) => setImmediate(resolve));
+
+		expect(events).toEqual(['jobs']);
+		expect(forceExit).not.toHaveBeenCalled();
+
+		releaseJobs();
+		await shutdown;
+
+		expect(events).toEqual(['jobs', 'persistence']);
+		expect(forceExit).toHaveBeenCalledWith(0);
+	});
 });

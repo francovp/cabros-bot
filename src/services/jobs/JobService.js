@@ -336,7 +336,7 @@ class JobService {
 			}
 
 			const cancellationPersistence = this.repository.save(job);
-			trackBackgroundTask(Promise.resolve(creation.persistencePromise)
+			const lastCancellationPersistence = trackBackgroundTask(Promise.resolve(creation.persistencePromise)
 				.then(() => {
 					if (job.shutdownFinalized) {
 						return this.repository.save(job);
@@ -348,6 +348,7 @@ class JobService {
 					return null;
 				}));
 			await cancellationPersistence;
+			await lastCancellationPersistence;
 			this._abortActiveJob(job.jobId, job.error);
 			await this._triggerCallbackIfConfigured(job);
 		})();

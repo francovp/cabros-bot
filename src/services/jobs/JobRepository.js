@@ -4,6 +4,7 @@ const alertStorageService = require('../storage/AlertStorageService');
 
 const COLLECTION_NAME = 'tradingviewJobs';
 const memoryJobs = new Map();
+const saveVersions = new Map();
 
 function cloneJob(job) {
 	if (!job) return null;
@@ -26,10 +27,23 @@ function sanitizeJob(job) {
 }
 
 class JobRepository {
+	async _writeToFirestore(firestore, job) {
+		try {
+			await firestore.collection(COLLECTION_NAME).doc(job.jobId).set(job);
+		} catch (error) {
+			console.warn('[JobRepository] Failed to persist job:', error.message);
+		}
+	}
+
 	async save(job) {
 		const sanitized = sanitizeJob(job);
 		if (!sanitized || !sanitized.jobId) {
 			return null;
+		}
+
+		const current = memoryJobs.get(sanitized.jobId);
+		if (current?.shutdownFinalized && !sanitized.shutdownFinalized) {
+			return sanitized.jobId;
 		}
 
 		memoryJobs.set(sanitized.jobId, cloneJob(sanitized));
@@ -39,10 +53,16 @@ class JobRepository {
 			return sanitized.jobId;
 		}
 
-		try {
-			await firestore.collection(COLLECTION_NAME).doc(sanitized.jobId).set(sanitized);
-		} catch (error) {
-			console.warn('[JobRepository] Failed to persist job:', error.message);
+		const version = (saveVersions.get(sanitized.jobId)?.version || 0) + 1;
+		saveVersions.set(sanitized.jobId, { version, job: cloneJob(sanitized) });
+		await this._writeToFirestore(firestore, sanitized);
+
+		let persistedVersion = version;
+		let latest = saveVersions.get(sanitized.jobId);
+		while (latest && latest.version > persistedVersion) {
+			persistedVersion = latest.version;
+			await this._writeToFirestore(firestore, latest.job);
+			latest = saveVersions.get(sanitized.jobId);
 		}
 
 		return sanitized.jobId;
@@ -60,6 +80,10 @@ class JobRepository {
 				if (snapshot && snapshot.exists) {
 					const data = snapshot.data() || {};
 					const job = { ...data, jobId: data.jobId || snapshot.id };
+					const localJob = saveVersions.get(jobId)?.job || memoryJobs.get(jobId);
+					if (localJob?.shutdownFinalized && !job.shutdownFinalized) {
+						return cloneJob(localJob);
+					}
 					memoryJobs.set(job.jobId, cloneJob(job));
 					return cloneJob(job);
 				}
@@ -132,6 +156,7 @@ class JobRepository {
 		}
 
 		let deleted = memoryJobs.delete(jobId);
+		saveVersions.delete(jobId);
 		const firestore = this._getFirestore();
 		if (firestore) {
 			try {
@@ -177,5 +202,6 @@ module.exports = {
 	COLLECTION_NAME,
 	_resetForTesting() {
 		memoryJobs.clear();
+		saveVersions.clear();
 	},
 };
