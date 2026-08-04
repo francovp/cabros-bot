@@ -134,7 +134,7 @@ describe('Documentation Alignment Policy', () => {
     }
   });
 
-  test('news-monitor documentation matches runtime configuration', () => {
+	test('news-monitor documentation matches runtime configuration', () => {
     const maintainedFiles = [
       path.join(repoRoot, '.env.example'),
       path.join(repoRoot, 'README.md'),
@@ -162,8 +162,19 @@ describe('Documentation Alignment Policy', () => {
     expect(envExample).toContain('URL_SHORTENER_SERVICE=picsee');
     expect(envExample).toContain('PICSEE_API_KEY=');
     expect(envExample).toContain('CUTTLY_API_KEY=');
-    expect(envExample).toContain('AZURE_LLM_ENDPOINT=');
-  });
+		expect(envExample).toContain('AZURE_LLM_ENDPOINT=');
+	});
+
+	test('Cloudflare documentation separates provider routing from status exposure', () => {
+		const envExample = fs.readFileSync(path.join(repoRoot, '.env.example'), 'utf8');
+		const readme = fs.readFileSync(path.join(repoRoot, 'README.md'), 'utf8');
+
+		expect(envExample).toContain(
+			'# Expose Cloudflare AI Gateway readiness in status/capabilities only; set MODEL_PROVIDER=cloudflare for runtime routing.',
+		);
+		expect(readme).toContain('`MODEL_PROVIDER=cloudflare` selects Cloudflare runtime routing');
+		expect(readme).toContain('`ENABLE_CLOUDFLARE_AIG` only exposes Cloudflare readiness in status/capabilities');
+	});
 
 	test('application-owned environment reads are documented or explicitly classified', () => {
 		const envExample = fs.readFileSync(path.join(repoRoot, '.env.example'), 'utf8');

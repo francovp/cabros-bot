@@ -1074,7 +1074,8 @@ This feature introduces integration of the official `openai` SDK to interact wit
 - `src/controllers/status.js` — Exposes the configuration status for `cloudflareAig` and `newsMonitorLlm` via `/api/status`, correctly supporting fallback to the default model `google-ai-studio/gemini-2.5-flash` when the `CF_AIG_MODEL` env var is omitted.
 
 **Configuration**:
-- `ENABLE_CLOUDFLARE_AIG` — Set to `'true'` to enable/expose the integration.
+- `MODEL_PROVIDER=cloudflare` — Selects Cloudflare AI Gateway for runtime LLM routing when credentials validate.
+- `ENABLE_CLOUDFLARE_AIG` — Set to `'true'` only to expose Cloudflare readiness in `/api/status` and `/api/capabilities`; it does not select the runtime provider.
 - `CF_AIG_TOKEN` — Cloudflare API Gateway access token.
 - `CF_AIG_BASE_URL` — Cloudflare gateway compatibility base URL.
 - `CF_AIG_MODEL` — The gateway target model (e.g., `google-ai-studio/gemini-2.5-flash`). Falls back to `google-ai-studio/gemini-2.5-flash` for status reporting and runtime configuration checks.
