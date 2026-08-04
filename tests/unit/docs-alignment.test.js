@@ -14,6 +14,76 @@ function getAllFiles(dirPath, arrayOfFiles = []) {
   return arrayOfFiles;
 }
 
+function getJavaScriptFiles(dirPath, arrayOfFiles = []) {
+	if (!fs.existsSync(dirPath)) return arrayOfFiles;
+
+	for (const file of fs.readdirSync(dirPath)) {
+		const fullPath = path.join(dirPath, file);
+		if (fs.statSync(fullPath).isDirectory()) {
+			getJavaScriptFiles(fullPath, arrayOfFiles);
+		} else if (file.endsWith('.js')) {
+			arrayOfFiles.push(fullPath);
+		}
+	}
+
+	return arrayOfFiles;
+}
+
+const ENVIRONMENT_CLASSIFICATIONS = {
+	APPDATA: 'platform-injected credential path',
+	COMMIT_SHA: 'platform-injected release metadata',
+	ENABLE_FIRESTORE_IDEMPOTENCY_STORAGE: 'deprecated compatibility alias',
+	ENABLE_TEST_RATE_LIMITER: 'test-only override',
+	FUNCTION_NAME: 'platform-injected runtime metadata',
+	FUNCTION_TARGET: 'platform-injected runtime metadata',
+	GAE_SERVICE: 'platform-injected runtime metadata',
+	GCE_METADATA_HOST: 'platform-injected runtime metadata',
+	GCE_METADATA_IP: 'platform-injected runtime metadata',
+	GCLOUD_PROJECT: 'platform-injected project metadata',
+	GITHUB_SHA: 'platform-injected release metadata',
+	GIT_COMMIT: 'platform-injected release metadata',
+	GOOGLE_CLOUD_PROJECT: 'platform-injected project metadata',
+	HOME: 'platform-injected credential path',
+	JEST_WORKER_ID: 'test-only runtime metadata',
+	K_REVISION: 'platform-injected runtime metadata',
+	K_SERVICE: 'platform-injected runtime metadata',
+	NODE_ENV: 'platform-injected runtime mode',
+	RENDER_GIT_COMMIT: 'platform-injected release metadata',
+	RENDER_GIT_REPO_SLUG: 'platform-injected release metadata',
+	SIGNAL_OUTCOME_EVALUATION_CADENCE_MS: 'deprecated compatibility alias',
+	SOURCE_VERSION: 'platform-injected release metadata',
+};
+
+function getStaticEnvironmentReads(repoRoot) {
+	const sourceFiles = [
+		path.join(repoRoot, 'index.js'),
+		path.join(repoRoot, 'app.js'),
+		path.join(repoRoot, 'instrument.js'),
+		...getJavaScriptFiles(path.join(repoRoot, 'src')),
+	].filter(fullPath => fs.existsSync(fullPath));
+
+	const names = new Set();
+	const patterns = [
+		/\bprocess\.env\.([A-Z][A-Z0-9_]*)\b/g,
+		/\bprocess\.env\[['"]([A-Z][A-Z0-9_]*)['"]\]/g,
+	];
+
+	for (const fullPath of sourceFiles) {
+		const content = fs.readFileSync(fullPath, 'utf8');
+		for (const pattern of patterns) {
+			for (const match of content.matchAll(pattern)) names.add(match[1]);
+		}
+	}
+
+	return names;
+}
+
+function getEnvironmentTemplateKeys(content) {
+	return new Set(
+		[...content.matchAll(/^\s*#?\s*([A-Z][A-Z0-9_]*)\s*=/gm)].map(match => match[1]),
+	);
+}
+
 describe('Documentation Alignment Policy', () => {
   const repoRoot = path.resolve(__dirname, '../../');
 
@@ -82,4 +152,14 @@ describe('Documentation Alignment Policy', () => {
     expect(envExample).toContain('CUTTLY_API_KEY=');
     expect(envExample).toContain('AZURE_LLM_ENDPOINT=');
   });
+
+	test('application-owned environment reads are documented or explicitly classified', () => {
+		const envExample = fs.readFileSync(path.join(repoRoot, '.env.example'), 'utf8');
+		const documentedKeys = getEnvironmentTemplateKeys(envExample);
+		const undocumentedKeys = [...getStaticEnvironmentReads(repoRoot)]
+			.filter(key => !documentedKeys.has(key) && !ENVIRONMENT_CLASSIFICATIONS[key])
+			.sort();
+
+		expect(undocumentedKeys).toEqual([]);
+	});
 });

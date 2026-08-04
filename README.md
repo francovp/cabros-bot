@@ -59,6 +59,17 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 
 - `ENABLE_GEMINI_GROUNDING` - Enable Gemini-based alert enrichment (`true` or `false`)
 - `GEMINI_API_KEY` - Google API key for Gemini access
+- `GROUNDING_MODEL_NAME` - Grounding model when Brave Search is not forced (default: `gemini-2.5-flash`)
+- `GROUNDING_MAX_SOURCES` - Maximum grounded sources per alert (default: `3`)
+- `GROUNDING_TIMEOUT_MS` - Grounding request timeout (default: `30000` ms)
+- `GROUNDING_MAX_LENGTH` - Maximum alert text length used in grounding prompts (default: `2000` characters)
+
+#### Cloudflare AI Gateway
+
+- `ENABLE_CLOUDFLARE_AIG` - Enable the Cloudflare AI Gateway integration (`true` or `false`, default: `false`)
+- `CF_AIG_TOKEN` - Cloudflare AI Gateway token; keep it in a secret store
+- `CF_AIG_BASE_URL` - OpenAI-compatible Cloudflare gateway base URL
+- `CF_AIG_MODEL` - Gateway target model (default: `google-ai-studio/gemini-2.5-flash`)
 
 #### Langfuse Prompt Management
 
@@ -126,11 +137,13 @@ Unfiltered signal outcome summaries include `shadowModeMetrics.exchangeBreakdown
 - `NEWS_SYMBOLS_STOCKS` - Default stock symbols if not provided in request (comma-separated)
 - `NEWS_ALERT_THRESHOLD` - Confidence score threshold for sending alerts (default: `0.7`, range 0.0-1.0)
 - `NEWS_CACHE_TTL_HOURS` - Cache time-to-live for deduplication (default: `6` hours)
+- `ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP` - Enable Firestore-backed news deduplication (`true` or `false`, default: `false`; failures fall back to memory)
 - `NEWS_TIMEOUT_MS` - Per-symbol analysis timeout (default: `30000` ms)
 - `NEWS_GEMINI_CONCURRENCY` - Max concurrent Gemini-backed symbol analyses. Production policy is `3`; unset keeps legacy parallel fan-out for backward compatibility.
 - `NEWS_GEMINI_QUOTA_MAX_RETRIES` - Max per-symbol retries for Gemini `429 RESOURCE_EXHAUSTED` errors (default: `2`)
 - `NEWS_GEMINI_QUOTA_RETRY_BASE_MS` - Base exponential backoff when Gemini does not provide retry delay metadata (default: `1000` ms)
 - `ENABLE_BINANCE_PRICE_CHECK` - Enable Binance crypto price fetching (`true` or `false`, default: `false`)
+- `BINANCE_FETCH_TIMEOUT_MS` - Binance price request timeout (default: `5000` ms)
 - `ENABLE_LLM_ALERT_ENRICHMENT` - Enable optional secondary LLM enrichment (`true` or `false`, default: `false`)
 - `AZURE_LLM_ENDPOINT` - Azure AI Inference endpoint URL (required if enrichment enabled)
 - `AZURE_LLM_KEY` - Azure AI Inference API key (required if enrichment enabled)
@@ -252,6 +265,10 @@ The dedicated worker also persists the same non-sensitive heartbeat to `workerHe
 The server verifies Firebase ID tokens with revoked-token checks enabled. Custom claims may use `roles: ["admin.viewer"]`, `roles: ["admin.operator"]`, `adminRole`, `role`, or the equivalent `admin.viewer`/`admin.operator` boolean claims. Viewers can read status, alerts, analytics, exports, scanner presets, and job metadata; operators can perform the existing preset, replay, and job actions. The legacy API-key path remains available for machine clients. Protected webhook and news-monitor routes remain API-key-only.
 
 When Firebase auth is enabled, configure `FIREBASE_SERVICE_ACCOUNT_JSON` or `GOOGLE_APPLICATION_CREDENTIALS` for server-side Admin SDK token verification, plus the public browser settings listed above. Do not put service-account JSON or ID tokens in browser config, Postman variables, logs, or client error messages.
+
+The public browser configuration may also include `FIREBASE_STORAGE_BUCKET`, `FIREBASE_MESSAGING_SENDER_ID`, and `FIREBASE_MEASUREMENT_ID`; these values are not service-account credentials.
+
+`.env.example` is the canonical operator template. The documentation-alignment test checks static application-owned `process.env` reads against that template; platform-injected values, test-only controls, and deprecated compatibility aliases are explicitly classified instead of being copied into production configuration.
 
 **Response:**
 ```json
@@ -832,6 +849,8 @@ When `callbackUrl` is configured, each callback POST includes:
 - `x-callback-signature` - included when `callbackSecret` or `JOB_CALLBACK_SIGNING_SECRET` is configured.
 
 Before each delivery attempt, hostname callback URLs are resolved with all current DNS answers. Any private answer blocks the callback (unless `ALLOW_PRIVATE_CALLBACKS=true`), and the connection is pinned to the validated answers so the subsequent fetch cannot perform a second hostname lookup and bypass the SSRF check. Redirects remain disabled with `redirect: 'error'`.
+
+`ALLOW_HTTP_CALLBACKS` and `ALLOW_PRIVATE_CALLBACKS` are local/testing security overrides and should remain `false` in production. `JOB_CALLBACK_RETRY_DELAY_MS` defaults to `1000` ms; `JOB_CALLBACK_SIGNING_SECRET` is an optional server-side HMAC secret and must never be committed.
 
 Verify the signature with HMAC-SHA256 over this exact canonical string, using the shared secret and the raw JSON request body:
 
