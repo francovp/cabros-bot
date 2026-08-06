@@ -827,6 +827,12 @@ describe('profiling configuration', () => {
 		process.env.SENTRY_PROFILE_SESSION_SAMPLE_RATE = '1';
 		service.init();
 
+		const initCall = Sentry.init.mock.calls[0][0];
+		expect(initCall.profileSessionSampleRate).toBeUndefined();
+		expect(initCall.profileLifecycle).toBeUndefined();
+	});
+});
+
 	describe('Sanitization and Tag Enrichment (GH-340)', () => {
 		it('should sanitize sensitive tokens, bot tokens, GreenAPI URLs, and chat IDs from strings', () => {
 			const rawMessage = 'Error sending to bot123456:ABC-DEF1234ghIkl-zyx57 via https://api.green-api.com/waInstance1101/sendMessage/secret-token for chat 56912345678@c.us with token=secret123';
@@ -868,6 +874,7 @@ describe('profiling configuration', () => {
 		it('should enrich tags with endpoint, status_code, provider, and trace_id when available', () => {
 			process.env.ENABLE_SENTRY = 'true';
 			process.env.SENTRY_DSN = 'https://key@sentry.io/123';
+			process.env.SENTRY_TRACES_SAMPLE_RATE = '1.0';
 			service.init();
 
 			const activeSpanMock = {

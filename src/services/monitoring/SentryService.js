@@ -558,7 +558,7 @@ class SentryService {
 			.replace(/bot\d+:[A-Za-z0-9_-]+/g, 'bot[REDACTED]')
 			.replace(/(waInstance\d+\/[^/]+\/)[A-Za-z0-9_-]+/g, '$1[REDACTED]')
 			.replace(/(api\/webhooks\/\d+\/)[A-Za-z0-9_-]+/g, '$1[REDACTED]')
-			.replace(/([?&](?:api[-_]?key|token|secret|password|access_token|authorization)=)[^&]+/gi, '$1[REDACTED]')
+			.replace(/((?:[?&]|\b)(?:api[-_]?key|token|secret|password|access_token|authorization)=)[^&\s]+/gi, '$1[REDACTED]')
 			.replace(/\b\d{8,15}@(c|g)\.us\b/g, '[REDACTED_CHAT_ID]')
 			.replace(/(chat[_-]?id["']?\s*[:=]\s*["']?)\d+/gi, '$1[REDACTED]');
 	}
