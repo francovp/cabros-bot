@@ -6,7 +6,7 @@ This reference defines the verification rules, readiness criteria, and quiet win
 
 A PR is ready to merge directly only if all of these are true and the agent is confident no human review is needed:
 
-1. **No Unresolved Discussions**: No open discussions or review threads remain, especially from `@francovp` and `@codex`.
+1. **No Unresolved Discussions**: No open discussions or review threads remain, especially from `@francovp` and Codex. Establish this with paginated GraphQL `reviewThreads`; flat PR comments and collector counts are context only, not proof. Match automated review authors by their actual login, including `chatgpt-codex-connector` when present, before applying the Codex rate-limit fallback below.
 2. **All Checks Green**: All required checks are green or conclusively non-blocking.
 3. **Preview Live**: The preview deploy is live and operational.
 4. **Direct Verification**: Direct `curl` verification against the Render preview succeeds.

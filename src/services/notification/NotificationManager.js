@@ -178,20 +178,32 @@ class NotificationManager {
 			sentryService.endSpan(dispatchSpan);
 		}
 
-		const formattedResults = results.map((r, idx) =>
-			r.status === 'fulfilled'
-				? r.value
-				: {
+		const formattedResults = results.map((r, idx) => {
+			const chName = channels[idx] ? channels[idx].name : 'unknown';
+			if (r.status === 'fulfilled') {
+				if (r.value && typeof r.value === 'object') {
+					return {
+						channel: chName,
+						...r.value,
+					};
+				}
+				return {
 					success: false,
-					channel: channels[idx].name,
-					error: (r.reason && r.reason.message) || 'Unknown error',
-				},
-		);
+					channel: chName,
+					error: 'Channel returned empty response',
+				};
+			}
+			return {
+				success: false,
+				channel: chName,
+				error: (r.reason && (r.reason.message || String(r.reason))) || 'Unknown error',
+			};
+		});
 
 		// Report external failures to Sentry
 		const totalDurationMs = Date.now() - startTime;
 		for (const result of formattedResults) {
-			if (!result.success && result.error) {
+			if (result && !result.success && result.error) {
 				const providerMap = {
 					telegram: 'telegram-api',
 					whatsapp: 'whatsapp-greenapi',
@@ -217,10 +229,10 @@ class NotificationManager {
 		});
 
 		console.info('[NotificationManager] Delivery results:', JSON.stringify(formattedResults.map(r => ({
-			channel: r.channel,
-			success: r.success,
-			messageId: r.messageId,
-			error: r.error,
+			channel: r ? r.channel : 'unknown',
+			success: r ? r.success : false,
+			messageId: r ? r.messageId : undefined,
+			error: r ? r.error : undefined,
 		}))));
 
 		return formattedResults;
@@ -281,20 +293,32 @@ class NotificationManager {
 			sentryService.endSpan(dispatchSpan);
 		}
 
-		const formattedResults = results.map((r, idx) =>
-			r.status === 'fulfilled'
-				? r.value
-				: {
+		const formattedResults = results.map((r, idx) => {
+			const chName = enabledChannels[idx] ? enabledChannels[idx].name : 'unknown';
+			if (r.status === 'fulfilled') {
+				if (r.value && typeof r.value === 'object') {
+					return {
+						channel: chName,
+						...r.value,
+					};
+				}
+				return {
 					success: false,
-					channel: enabledChannels[idx].name,
-					error: (r.reason && r.reason.message) || 'Unknown error',
-				},
-		);
+					channel: chName,
+					error: 'Channel returned empty response',
+				};
+			}
+			return {
+				success: false,
+				channel: chName,
+				error: (r.reason && (r.reason.message || String(r.reason))) || 'Unknown error',
+			};
+		});
 
 		// Report external failures to Sentry (T014)
 		const totalDurationMs = Date.now() - startTime;
 		for (const result of formattedResults) {
-			if (!result.success && result.error) {
+			if (result && !result.success && result.error) {
 				const providerMap = {
 					telegram: 'telegram-api',
 					whatsapp: 'whatsapp-greenapi',
@@ -320,10 +344,10 @@ class NotificationManager {
 		});
 
 		console.info('[NotificationManager] Delivery results:', JSON.stringify(formattedResults.map(r => ({
-			channel: r.channel,
-			success: r.success,
-			messageId: r.messageId,
-			error: r.error,
+			channel: r ? r.channel : 'unknown',
+			success: r ? r.success : false,
+			messageId: r ? r.messageId : undefined,
+			error: r ? r.error : undefined,
 		}))));
 
 		return formattedResults;

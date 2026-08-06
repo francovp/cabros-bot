@@ -4,6 +4,7 @@ const { scannerPresetService } = require('../services/scannerPresets/ScannerPres
 const idempotencyStorageService = require('../services/storage/IdempotencyStorageService');
 const { isFirestoreConfigured } = require('../services/storage/firestoreConfig');
 const SignalOutcomeService = require('../services/storage/SignalOutcomeService');
+const { jobQueue } = require('../services/jobs/JobQueue');
 const equityMarketDataService = require('../services/storage/EquityMarketDataService');
 const { tradingViewMcpService } = require('../services/tradingview/TradingViewMcpService');
 const DEFAULT_AZURE_LLM_ENDPOINT = 'https://models.github.ai/inference';
@@ -255,6 +256,7 @@ function getStatus() {
 	};
 
 	const signalOutcomeWorkerStatus = SignalOutcomeService.getWorkerStatus();
+	const jobExecutionQueueStatus = jobQueue.getStatus();
 	const signalOutcomeWorkerDependency = dependencyStatus({
 		enabled: signalOutcomeWorkerStatus.enabled,
 		configured: firestore.configured,
@@ -296,6 +298,7 @@ function getStatus() {
 			signalOutcomeTracking: signalOutcomeTrackingEnabled,
 			equityMarketData: equityMarketDataStatus.enabled,
 			firestoreIdempotency: idempotencyStorageService.isEnabled(),
+			jobExecutionWorker: jobExecutionQueueStatus.enabled,
 		},
 		deliveryChannels: {
 			telegram: {
@@ -352,6 +355,7 @@ function getStatus() {
 				lastRunPendingCount: signalOutcomeWorkerStatus.lastRunPendingCount,
 				lastRunErrorCount: signalOutcomeWorkerStatus.lastRunErrorCount,
 			},
+			jobExecutionQueue: jobExecutionQueueStatus,
 		},
 	};
 }

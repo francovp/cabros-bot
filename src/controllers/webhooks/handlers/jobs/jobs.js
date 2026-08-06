@@ -32,6 +32,7 @@ function postCreateJob(botOrGetter) {
 				return res.status(error.statusCode || 400).json({
 					error: error.message,
 					code: error.code || 'INVALID_REQUEST',
+					...(typeof error.jobId === 'string' ? { jobId: error.jobId } : {}),
 				});
 			}
 
