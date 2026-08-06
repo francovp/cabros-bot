@@ -622,6 +622,7 @@ The system provides an HTTP endpoint (`/api/news-monitor`) that analyzes financi
 - TradingView MCP remote Streamable HTTP server for technical `coin_analysis` report generation (`POST /api/webhook/expanded-analysis-alert`)
 - Sentry SDK for Node (`@sentry/node` v10.53.1) for backend runtime error monitoring and warn/error console log capture (005-sentry-runtime-errors; no tracing by default)
 - Cloud Firestore via `firebase-admin` v9.x for server-side alert document persistence (006-firestore-alert-storage; fire-and-forget, never blocks delivery)
+- Firebase Local Emulator Suite via pinned `firebase-tools` for opt-in Firestore integration tests (CB-124 / Issue #302; never used by the default test command)
 
 ## Firestore Alert Storage (006-firestore-alert-storage)
 
@@ -695,6 +696,19 @@ Storage happens **after** the HTTP response; the caller is never blocked.
 - Tests in `tests/unit/alert-storage-service.test.js` and `tests/integration/alerts-endpoint.test.js`
 - Firebase Console → Firestore → `alerts` collection for live document inspection
 
+## Firestore Emulator Integration Tests (CB-124 / Issue #302)
+
+The opt-in `pnpm test:firebase` command runs a separate Jest configuration against the Firestore emulator using the `demo-cabros` project ID. It removes production Firebase credential variables, sets `FIRESTORE_EMULATOR_HOST`, `GCLOUD_PROJECT`, and `FIREBASE_PROJECT_ID`, and delegates lifecycle cleanup to `firebase emulators:exec`.
+
+**Coverage**:
+- `tests/firebase/firestore-emulator.test.js` uses the real Admin SDK for alert storage, idempotency transactions, async job persistence, scanner presets, and signal-outcome reads/writes.
+- The same suite uses `@firebase/rules-unit-testing` to assert unauthenticated client reads and writes remain denied by `firestore.rules`.
+- Emulator data is cleared before each test; the default `pnpm test` stays mock-based and does not require Java, Firebase CLI downloads, or network access.
+
+**Tooling**:
+- `firebase-tools` and `firebase` are pinned in `package.json` for reproducible local/CI setup.
+- `.github/workflows/node.js.yml` installs JDK 21, caches emulator binaries, runs `pnpm test:firebase`, then runs the existing full Jest suite.
+
 ## Terminology Guide: Grounding vs Enrichment
 
 The system uses two complementary terms with specific meanings:
@@ -752,6 +766,7 @@ See `/specs/TERMINOLOGY_GUIDE.md` for extended discussion and examples.
 - 004-enrich-alert-output: Enriched `/api/webhook/alert` output with structured fields (sentiment, insights, technical levels, and optional risk parameters) using the existing grounding pipeline; Telegram/WhatsApp formatters render structured enrichment when present.
 - 005-sentry-runtime-errors (PR #16): Added runtime error monitoring via `SentryService` + early initialization in `instrument.js`, plus Express error handler wiring; monitoring is gated by `ENABLE_SENTRY` + `SENTRY_DSN`.
 - 006-firestore-alert-storage: Added Cloud Firestore persistence for every `/api/webhook/alert` payload; `firebase-admin` singleton initialized from `FIREBASE_SERVICE_ACCOUNT_JSON` or `GOOGLE_APPLICATION_CREDENTIALS`; fire-and-forget after `res.json()` so storage never blocks delivery (fail-open).
+- GH-302 / CB-124: Added the opt-in Firestore emulator integration suite and CI gate with a pinned Firebase CLI, demo project isolation, Admin SDK coverage for existing Firestore-backed services, and deny-by-default client rules assertions.
 - 007-volume-breakout-alerts: Added TradingView volume confirmation check to the webhook alert enrichment flow (POST /api/webhook/alert?useTradingViewData=true) using the `volume_confirmation_analysis` tool from the TradingView MCP server. Configured via `ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION`.
 - GH-173 / CB-69: `/api/status` and `/api/capabilities` expose `featureFlags.tradingViewVolumeConfirmation` plus `dependencies.tradingViewVolumeConfirmation` readiness, including the parent MCP enrichment gate, without changing the existing volume-confirmation gate.
 - GH-174 / CB-70: `/api/status` and `/api/capabilities` expose `featureFlags.firestoreJobStorage` plus `dependencies.firestoreJobStorage` readiness for the dedicated job-storage gate and the legacy alert-storage gate, without changing runtime persistence behavior.

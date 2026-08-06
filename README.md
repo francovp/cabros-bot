@@ -115,6 +115,16 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 
 Unfiltered signal outcome summaries include `shadowModeMetrics.exchangeBreakdown` and `shadowModeMetrics.providerBreakdown` coverage buckets (`received`, `eligible`, `evaluated`, `pending`, `unavailable`). Filtered alert summaries/exports omit shadow-mode metrics because that service has no matching source/enrichment filters. Equity signals only enter the eligible/evaluated population when the opt-in Twelve Data provider is configured; otherwise they remain explicitly unavailable.
 
+#### Firestore Emulator Integration Tests
+
+The optional `pnpm test:firebase` command runs the Firestore-backed integration suite against the local Firebase emulator using the `demo-cabros` project ID. It covers the Admin SDK storage paths, idempotency transactions, async jobs, scanner presets, signal outcomes, and deny-by-default client rules.
+
+Prerequisites: Node.js 20+, Java/JDK 11+, and network access for the pinned Firebase CLI and emulator binary on the first run. The command uses `firebase emulators:exec`, clears emulator data between tests, unsets production Firebase credential variables, and stops the emulator on completion or failure. It never connects to a real Firebase project. The default `pnpm test` remains mock-based and does not require Java, the CLI, or external network access.
+
+```bash
+pnpm test:firebase
+```
+
 #### Admin Notifications
 
 - `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID` - Chat ID for deployment alerts and fail-open notification-channel failure pages
@@ -1510,6 +1520,9 @@ pnpm test:watch
 
 # Generate coverage report
 pnpm test:coverage
+
+# Run the opt-in Firestore emulator integration suite
+pnpm test:firebase
 ```
 
 ## Architecture
