@@ -545,6 +545,66 @@ class SentryService {
 	}
 
 	/**
+	 * Sanitize sensitive tokens, chat IDs, API keys, and auth headers from strings
+	 * @param {string} str
+	 * @returns {string}
+	 */
+	_sanitizeString(str) {
+		if (typeof str !== 'string' || !str) {
+			return str;
+		}
+
+		return str
+			.replace(/bot\d+:[A-Za-z0-9_-]+/g, 'bot[REDACTED]')
+			.replace(/(waInstance\d+\/[^/]+\/)[A-Za-z0-9_-]+/g, '$1[REDACTED]')
+			.replace(/(api\/webhooks\/\d+\/)[A-Za-z0-9_-]+/g, '$1[REDACTED]')
+			.replace(/([?&](?:api[-_]?key|token|secret|password|access_token|authorization)=)[^&]+/gi, '$1[REDACTED]')
+			.replace(/\b\d{8,15}@(c|g)\.us\b/g, '[REDACTED_CHAT_ID]')
+			.replace(/(chat[_-]?id["']?\s*[:=]\s*["']?)\d+/gi, '$1[REDACTED]');
+	}
+
+	/**
+	 * Recursively sanitize objects to redact sensitive keys and strings
+	 * @param {unknown} value
+	 * @param {WeakSet} [seen]
+	 * @returns {unknown}
+	 */
+	_sanitizeObject(value, seen = new WeakSet()) {
+		if (value === null || value === undefined) {
+			return value;
+		}
+
+		if (typeof value === 'string') {
+			return this._sanitizeString(value);
+		}
+
+		if (typeof value !== 'object') {
+			return value;
+		}
+
+		if (seen.has(value)) {
+			return '[Circular]';
+		}
+		seen.add(value);
+
+		if (Array.isArray(value)) {
+			return value.map((item) => this._sanitizeObject(item, seen));
+		}
+
+		const sensitiveKeyPattern = /(password|secret|token|api[-_]?key|authorization|cookie|dsn|discordWebhookUrl|webhookUrl|chatId|telegramChatId|whatsappChatId)/i;
+
+		const result = {};
+		for (const [key, val] of Object.entries(value)) {
+			if (sensitiveKeyPattern.test(key)) {
+				result[key] = '[REDACTED]';
+			} else {
+				result[key] = this._sanitizeObject(val, seen);
+			}
+		}
+		return result;
+	}
+
+	/**
 	 * Capture a generic error event
 	 * @param {MonitoringCaptureRequest} request
 	 * @returns {MonitoringCaptureResult}
@@ -560,30 +620,73 @@ class SentryService {
 
 			const { event } = request;
 
+			const sanitizedMessage = this._sanitizeString(event.message);
+			const sanitizedErrorName = event.errorName ? this._sanitizeString(event.errorName) : undefined;
+			const sanitizedStack = event.stack ? this._sanitizeString(event.stack) : undefined;
+
+			// Extract active span and trace context if tracing is active
+			const activeSpan = this.getActiveSpan();
+			const spanContext = activeSpan && typeof activeSpan.spanContext === 'function' ? activeSpan.spanContext() : null;
+
+			let exceptionObj;
+			if (sanitizedErrorName) {
+				exceptionObj = new Error(sanitizedMessage);
+				exceptionObj.name = sanitizedErrorName;
+				if (sanitizedStack) {
+					exceptionObj.stack = sanitizedStack;
+				}
+			} else {
+				exceptionObj = sanitizedMessage;
+			}
+
+			const tags = {
+				channel: event.channel,
+				feature: event.feature || FEATURE_NAMES[event.channel] || 'unknown',
+				environment: event.environment,
+				error_type: event.type,
+				is_process_level: String(event.isProcessLevel),
+				...(event.http && {
+					endpoint: event.http.endpoint,
+					http_method: event.http.method,
+					status_code: String(event.http.statusCode),
+					http_category: `${Math.floor(event.http.statusCode / 100)}xx`,
+				}),
+				...(event.external && {
+					provider: event.external.provider,
+					...(event.external.lastErrorCode && { provider_status_code: String(event.external.lastErrorCode) }),
+				}),
+				...(event.extra && event.extra.category && { category: String(event.extra.category) }),
+				...(spanContext && {
+					trace_id: spanContext.traceId,
+					span_id: spanContext.spanId,
+				}),
+			};
+
+			const contexts = {
+				...(event.http && { http: this._sanitizeObject(event.http) }),
+				...(event.external && { external: this._sanitizeObject(event.external) }),
+				...(event.alert && this._buildAlertContext(event.alert)),
+				...(event.news && this._buildNewsContext(event.news)),
+				...(spanContext && {
+					trace: {
+						trace_id: spanContext.traceId,
+						span_id: spanContext.spanId,
+					},
+				}),
+			};
+
+			const extra = this._sanitizeObject({
+				...event.extra,
+				timestamp: event.timestamp,
+				errorName: sanitizedErrorName,
+			});
+
 			// Build Sentry scope with tags and contexts
-			const eventId = Sentry.captureException(
-				event.errorName ? new Error(event.message) : event.message,
-				{
-					tags: {
-						channel: event.channel,
-						feature: event.feature || FEATURE_NAMES[event.channel] || 'unknown',
-						environment: event.environment,
-						error_type: event.type,
-						is_process_level: String(event.isProcessLevel),
-					},
-					contexts: {
-						...(event.http && { http: event.http }),
-						...(event.external && { external: event.external }),
-						...(event.alert && this._buildAlertContext(event.alert)),
-						...(event.news && this._buildNewsContext(event.news)),
-					},
-					extra: {
-						...event.extra,
-						timestamp: event.timestamp,
-						errorName: event.errorName,
-					},
-				},
-			);
+			const eventId = Sentry.captureException(exceptionObj, {
+				tags,
+				contexts,
+				extra,
+			});
 
 			console.debug(`[SentryService] Event captured: ${eventId} (channel=${event.channel}, type=${event.type})`);
 
@@ -677,11 +780,18 @@ class SentryService {
 	 * @param {RuntimeChannelId} params.channel
 	 * @param {ExternalFailureContext} params.external
 	 * @param {string} [params.feature]
+	 * @param {HttpErrorContext} [params.http]
 	 * @param {Object<string, unknown>} [params.extra]
 	 * @returns {MonitoringCaptureResult}
 	 */
-	captureExternalFailure({ channel, external, feature, extra }) {
-		const message = `External failure: ${external.provider} after ${external.attemptCount} attempt(s)`;
+	captureExternalFailure({ channel, external, feature, http, extra }) {
+		const sanitizedLastErrorMessage = external.lastErrorMessage
+			? this._sanitizeString(external.lastErrorMessage)
+			: undefined;
+
+		const message = sanitizedLastErrorMessage
+			? `External failure: ${external.provider} after ${external.attemptCount} attempt(s) - ${sanitizedLastErrorMessage}`
+			: `External failure: ${external.provider} after ${external.attemptCount} attempt(s)`;
 
 		/** @type {ErrorEvent} */
 		const event = {
@@ -694,10 +804,14 @@ class SentryService {
 			release: this.config && this.config.release,
 			isProcessLevel: false,
 			timestamp: Date.now(),
-			external,
+			http,
+			external: {
+				...external,
+				lastErrorMessage: sanitizedLastErrorMessage,
+			},
 			extra: {
 				...extra,
-				lastErrorMessage: external.lastErrorMessage,
+				lastErrorMessage: sanitizedLastErrorMessage,
 			},
 		};
 

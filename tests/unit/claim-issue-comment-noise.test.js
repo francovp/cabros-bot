@@ -432,5 +432,75 @@ describe('claim-issue.sh renewal comment behavior', () => {
 		expect(result.stdout).toContain('COUNT_F6=3');
 		expect(result.stdout).toContain('COUNT_CORRECT=3');
 	});
+
+	/**
+	 * Verify issue #338 fix: if a takeover session attempts to take over a stale claim,
+	 * but the target claim comment was renewed via PATCH during/right before takeover,
+	 * the takeover session detects the target renewal, rolls back its takeover comment,
+	 * and yields RESULT=SKIP.
+	 */
+	it('yields when target claim comment was renewed during takeover', () => {
+		const staleTs = '2026-08-01T10:00:00Z';
+		const nowTs = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
+		const deleteLog = join(tempDir, 'delete.log');
+
+		const ghScript = [
+			'#!/usr/bin/env bash',
+			'echo "$*" >> ' + join(tempDir, 'calls.log'),
+			'ARGS="$*"',
+			'if echo "$ARGS" | grep -q "auth status"; then exit 0; fi',
+			'if echo "$ARGS" | grep -q "auth switch"; then exit 0; fi',
+			'if echo "$ARGS" | grep -q "repo view"; then echo "francovp/cabros-bot"; exit 0; fi',
+			'if [ "$1" = "api" ] && [ "$2" = "user" ]; then',
+			'  if [ "${3:-}" = "--jq" ]; then echo "francovp"; else echo \'{"login":"francovp"}\'; fi',
+			'  exit 0',
+			'fi',
+			'if echo "$ARGS" | grep -q "issue view.*labels"; then echo "true"; exit 0; fi',
+			// paginated comments — before POST: stale claim 100; after POST (arbitration/verification): comment 100 renewed!
+			'if echo "$ARGS" | grep -q "api --paginate.*issues.*338.*comments"; then',
+			'  POST_FLAG=' + join(tempDir, 'post_done'),
+			'  if [ ! -f "$POST_FLAG" ]; then',
+			// Before POST: only stale claim 100 by original owner
+			'    printf "%s\\t%s\\t%s\\n" "100" "' + staleTs + '" "**agent-claim**: other-agent other-session ' + staleTs + '"',
+			'  else',
+			// After POST: comment 100 was renewed with last: nowTs, plus our takeover comment 200
+			'    printf "%s\\t%s\\t%s\\n" "100" "' + staleTs + '" "**agent-claim**: other-agent other-session ' + staleTs + ' (renewed 1 time(s), last: ' + nowTs + ')"',
+			'    printf "%s\\t%s\\t%s\\n" "200" "' + nowTs + '" "**agent-claim**: antigravity session-test-takeover ' + nowTs + ' (takeover of stale claim by other-agent/other-session)"',
+			'  fi',
+			'  exit 0',
+			'fi',
+			'if echo "$ARGS" | grep -q "api --paginate.*events"; then echo "[]"; exit 0; fi',
+			// POST takeover comment — returns comment ID 200 and marks POST_FLAG
+			'if echo "$ARGS" | grep -q "api.*issues.*338.*comments -f body="; then',
+			'  touch ' + join(tempDir, 'post_done'),
+			'  echo "200"',
+			'  exit 0',
+			'fi',
+			// DELETE takeover comment when yielding
+			'if echo "$ARGS" | grep -q "api -X DELETE.*comments"; then',
+			'  echo "DELETE_200" >> ' + deleteLog,
+			'  exit 0',
+			'fi',
+			'exit 0',
+		].join('\n');
+
+		buildFakeGh(tempDir, ghScript);
+
+		const result = runClaimScript(tempDir, 338, {
+			CLAIM_AGENT_ID: 'antigravity',
+			CLAIM_SESSION_ID: 'session-test-takeover',
+		});
+		const stdout = result.stdout || '';
+		const deleteContent = existsSync(deleteLog) ? readFileSync(deleteLog, 'utf8') : '';
+
+		// Should have deleted the takeover comment (rolled back)
+		expect(deleteContent).toContain('DELETE_200');
+
+		// Should exit RESULT=SKIP (status 2)
+		expect(stdout).toContain('RESULT=SKIP');
+		expect(stdout).toContain('target claim comment 100 was renewed during takeover');
+		expect(result.status).toBe(2);
+	});
 });
+
 

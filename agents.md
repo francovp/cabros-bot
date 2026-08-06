@@ -49,7 +49,7 @@ This project is a small Express + Telegraf (Telegram) bot service that exposes a
 - `src/services/jobs/JobQueue.js` / `src/services/jobs/jobWorker.js` — BullMQ producer/worker integration for the optional Render worker execution mode.
 - `worker.js` — Dedicated Render worker entry point with graceful BullMQ shutdown.
 - `src/services/tradingview/expandedAnalysisAlertReport.js` — Parses `EXCHANGE:SYMBOL` requests and formats grouped Spanish technical-analysis reports.
-- `src/services/monitoring/SentryService.js` — Wraps `@sentry/node` for runtime error monitoring (005).
+- `src/services/monitoring/SentryService.js` — Wraps `@sentry/node` for runtime error and external failure monitoring with tag enrichment (endpoint, provider, status_code, trace_id), automatic PII sanitization, and actionable 500 error grouping.
 - `src/services/prompts/` — Langfuse-backed PromptService that resolves prompts with file-backed local defaults.
 - `src/controllers/helpers.js` — Small numeric helper (`round10`) used by price formatting.
 - `src/lib/logging.js` — Configures `console.*` levels via `LOG_LEVEL` and emits one-line structured JSON logs.

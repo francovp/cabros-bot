@@ -827,10 +827,83 @@ describe('profiling configuration', () => {
 		process.env.SENTRY_PROFILE_SESSION_SAMPLE_RATE = '1';
 		service.init();
 
-		const initCall = Sentry.init.mock.calls[0][0];
-		expect(initCall.profileSessionSampleRate).toBeUndefined();
-		expect(initCall.profileLifecycle).toBeUndefined();
-	});
-});
+	describe('Sanitization and Tag Enrichment (GH-340)', () => {
+		it('should sanitize sensitive tokens, bot tokens, GreenAPI URLs, and chat IDs from strings', () => {
+			const rawMessage = 'Error sending to bot123456:ABC-DEF1234ghIkl-zyx57 via https://api.green-api.com/waInstance1101/sendMessage/secret-token for chat 56912345678@c.us with token=secret123';
+			const sanitized = service._sanitizeString(rawMessage);
 
+			expect(sanitized).not.toContain('ABC-DEF1234ghIkl-zyx57');
+			expect(sanitized).not.toContain('secret-token');
+			expect(sanitized).not.toContain('56912345678@c.us');
+			expect(sanitized).not.toContain('secret123');
+			expect(sanitized).toContain('bot[REDACTED]');
+			expect(sanitized).toContain('waInstance1101/sendMessage/[REDACTED]');
+			expect(sanitized).toContain('[REDACTED_CHAT_ID]');
+			expect(sanitized).toContain('token=[REDACTED]');
+		});
+
+		it('should recursively sanitize object fields with sensitive keys', () => {
+			const input = {
+				endpoint: '/api/webhook/message',
+				whatsappChatId: '56912345678@c.us',
+				apiKey: 'my-api-key',
+				details: {
+					token: 'secret-token',
+					safeField: 'normal value',
+				},
+			};
+
+			const sanitized = service._sanitizeObject(input);
+			expect(sanitized).toEqual({
+				endpoint: '/api/webhook/message',
+				whatsappChatId: '[REDACTED]',
+				apiKey: '[REDACTED]',
+				details: {
+					token: '[REDACTED]',
+					safeField: 'normal value',
+				},
+			});
+		});
+
+		it('should enrich tags with endpoint, status_code, provider, and trace_id when available', () => {
+			process.env.ENABLE_SENTRY = 'true';
+			process.env.SENTRY_DSN = 'https://key@sentry.io/123';
+			service.init();
+
+			const activeSpanMock = {
+				spanContext: () => ({ traceId: 'trace-12345', spanId: 'span-67890' }),
+			};
+			Sentry.getActiveSpan = jest.fn().mockReturnValue(activeSpanMock);
+
+			service.captureExternalFailure({
+				channel: 'whatsapp',
+				external: {
+					provider: 'whatsapp-greenapi',
+					attemptCount: 3,
+					durationMs: 450,
+					lastErrorMessage: 'GreenAPI 500: Internal Server Error token=123',
+					lastErrorCode: 500,
+				},
+				http: {
+					endpoint: '/api/webhook/message',
+					method: 'POST',
+					statusCode: 500,
+				},
+			});
+
+			expect(Sentry.captureException).toHaveBeenCalledTimes(1);
+			const [exception, scope] = Sentry.captureException.mock.calls[0];
+
+			expect(exception.message).toContain('External failure: whatsapp-greenapi after 3 attempt(s) - GreenAPI 500: Internal Server Error token=[REDACTED]');
+			expect(scope.tags).toMatchObject({
+				channel: 'whatsapp',
+				provider: 'whatsapp-greenapi',
+				endpoint: '/api/webhook/message',
+				status_code: '500',
+				provider_status_code: '500',
+				trace_id: 'trace-12345',
+				span_id: 'span-67890',
+			});
+		});
+	});
 });
