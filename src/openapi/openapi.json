@@ -2395,7 +2395,7 @@
           "discordWebhookUrl": {
             "type": "string",
             "format": "uri",
-            "pattern": "^https://([a-zA-Z0-9-]+\\.)?(discord\\.com|discordapp\\.com)/api/webhooks/",
+            "pattern": "^https://([a-zA-Z0-9-]+\\.)?(discord\\.com|discordapp\\.com)/api/webhooks/\\d+/[a-zA-Z0-9_-]+",
             "description": "Optional HTTPS Discord webhook URL override."
           },
           "idempotencyKey": {

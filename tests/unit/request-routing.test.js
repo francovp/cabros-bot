@@ -52,6 +52,28 @@ describe('requestRouting - discordWebhookUrl validation', () => {
 		})).toThrow(NotificationRoutingValidationError);
 	});
 
+	it('throws NotificationRoutingValidationError for malformed Discord webhook paths without ID and token', () => {
+		expect(() => parseNotificationRouting({
+			discordWebhookUrl: 'https://discord.com/api/webhooks/',
+		})).toThrow(NotificationRoutingValidationError);
+
+		expect(() => parseNotificationRouting({
+			discordWebhookUrl: 'https://discord.com/api/webhooks/123456',
+		})).toThrow(NotificationRoutingValidationError);
+
+		expect(() => parseNotificationRouting({
+			discordWebhookUrl: 'https://discord.com/api/webhooks/123456/',
+		})).toThrow(NotificationRoutingValidationError);
+
+		expect(() => parseNotificationRouting({
+			discordWebhookUrl: 'https://discord.com/api/webhooks/abc/token',
+		})).toThrow(NotificationRoutingValidationError);
+
+		expect(() => parseNotificationRouting({
+			discordWebhookUrl: 'https://discord.com/foo/api/webhooks/123456/token',
+		})).toThrow(NotificationRoutingValidationError);
+	});
+
 	it('includes discordWebhookUrl in sendWithNotificationRouting alert payload', async () => {
 		const notificationManager = {
 			getEnabledChannels: jest.fn().mockReturnValue(['discord']),

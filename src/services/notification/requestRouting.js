@@ -99,7 +99,9 @@ function validateDiscordWebhookOverride(field, value) {
 		hostname === 'discordapp.com' ||
 		hostname.endsWith('.discordapp.com');
 
-	if (!isValidDiscordHost || !parsedUrl.pathname.includes('/api/webhooks/')) {
+	const DISCORD_WEBHOOK_PATH_PATTERN = /^\/api\/webhooks\/\d+\/[A-Za-z0-9_-]+(?:\/.*)?$/;
+
+	if (!isValidDiscordHost || !DISCORD_WEBHOOK_PATH_PATTERN.test(parsedUrl.pathname)) {
 		throw new NotificationRoutingValidationError(`"${field}" must be a valid HTTPS Discord webhook URL`, {
 			field,
 		});
