@@ -380,13 +380,11 @@ remove_agent_working() {
 # rollback_abandoned_claim <comment_id> <label_was_ours> <snapshot_id> <context...>
 # Removes a claim comment we JUST posted when arbitration could not complete
 # (FAIL_CLOSED), then safely reconciles the shared agent-working label:
-#   - label_was_ours=true  (unclaimed-issue claim: WE added the label this run)
-#     -> remove it UNLESS a concurrent claimant's comment (newer than the
-#        snapshot) has landed; then the label belongs to that in-progress
-#        claimant and stays.
-#   - label_was_ours=false (renewal / takeover paths: label pre-existed) -> the
-#     label is left untouched; removing it could destroy a claim characteristic
-#     of another session. Only the unconfirmed comment is rolled back.
+#   - We retain the shared agent-working label (fail-closed); an empty REST
+#     comment read cannot prove that no rival claimant is in flight between
+#     label creation and comment POST. Retaining the label fail-closed prevents
+#     stripping an in-flight claimant's label, and genuine abandoned claims
+#     remain recoverable after CLAIM_TTL_MINUTES via the legacy takeover path.
 # Best-effort cleanup: the caller still exits RESULT=ERROR (fail-closed), because
 # the arbitration read failed and we cannot safely claim ownership.
 rollback_abandoned_claim() {
@@ -396,17 +394,12 @@ rollback_abandoned_claim() {
     echo "Error: arbitration failed (${context}); could not remove our claim comment ${cid} (rollback fail-closed)." >&2
     return 0
   fi
-  if [ "$label_ours" == "true" ]; then
-    # Best-effort final read: if a concurrent claimant's comment landed after our
-    # snapshot, the shared label is theirs — keep it. Otherwise the label is
-    # stale evidence of our abandoned claim; remove it so the issue stays claimable.
-    local remaining rc=0
-    remaining="$(claim_comments_rest | awk -F '\t' -v snap="$snap" '$1+0 > snap+0 { print $1 }')" || rc=$?
-    if [ "$rc" -eq 0 ] && [ -z "$remaining" ]; then
-      remove_agent_working
-    fi
-  fi
-  echo "Rolled back abandoned claim comment ${cid} (${context} fail-closed)." >&2
+  # Retain agent-working fail-closed in all rollback cases.
+  # An empty REST comment read cannot prove that no rival claimant is between label
+  # creation and comment POST. Retaining the label prevents stripping an in-flight
+  # claimant's label, while genuine abandoned claims remain recoverable after
+  # CLAIM_TTL_MINUTES via the legacy takeover path.
+  echo "Rolled back abandoned claim comment ${cid} (${context} fail-closed; agent-working label retained)." >&2
   return 0
 }
 
