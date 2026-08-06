@@ -331,4 +331,106 @@ describe('claim-issue.sh renewal comment behavior', () => {
 		// The last renewal timestamp should be in the body
 		expect(stdout).toContain('R3_HAS_LAST=1');
 	});
+
+	/**
+	 * Verify P1 fix: if a concurrent takeover comment lands between our
+	 * agent/session ownership check and the PATCH, the post-PATCH re-read
+	 * detects the newer comment and returns RESULT=SKIP.
+	 */
+	it('detects concurrent takeover after PATCH and returns SKIP', () => {
+		const originalTs = '2026-08-01T10:00:00Z';
+		const nowTs = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
+		const patchLog = join(tempDir, 'patch.log');
+
+		// paginate call count to simulate the takeover comment appearing on the 2nd read
+		const ghScript = [
+			'#!/usr/bin/env bash',
+			'echo "$*" >> ' + join(tempDir, 'calls.log'),
+			'ARGS="$*"',
+			'if echo "$ARGS" | grep -q "auth status"; then exit 0; fi',
+			'if echo "$ARGS" | grep -q "auth switch"; then exit 0; fi',
+			'if echo "$ARGS" | grep -q "repo view"; then echo "francovp/cabros-bot"; exit 0; fi',
+			'if [ "$1" = "api" ] && [ "$2" = "user" ]; then echo \'{"login":"francovp"}\'; exit 0; fi',
+			'if echo "$ARGS" | grep -q "issue view.*labels"; then echo "true"; exit 0; fi',
+			// paginated comments — 1st read: just our claim; 2nd read (post-PATCH): includes takeover
+			'if echo "$ARGS" | grep -q "api --paginate.*issues.*42.*comments"; then',
+			'  COUNT_FILE=' + join(tempDir, 'read_count'),
+			'  COUNT=0; [ -f "$COUNT_FILE" ] && COUNT=$(cat "$COUNT_FILE")',
+			'  COUNT=$((COUNT+1))',
+			'  echo "$COUNT" > "$COUNT_FILE"',
+			'  if [ "$COUNT" -le 2 ]; then',
+			// First reads: only our owned claim
+			'    printf "%s\\t%s\\t%s\\n" "100" "' + originalTs + '" "**agent-claim**: antigravity session-test-001 ' + originalTs + '"',
+			'  else',
+			// Post-PATCH re-read: takeover comment (ID 200 > 100) appeared
+			'    printf "%s\\t%s\\t%s\\n" "100" "' + originalTs + '" "**agent-claim**: antigravity session-test-001 ' + originalTs + '"',
+			'    printf "%s\\t%s\\t%s\\n" "200" "' + nowTs + '" "**agent-claim**: codex session-other ' + nowTs + ' (takeover of stale claim by antigravity/session-test-001)"',
+			'  fi',
+			'  exit 0',
+			'fi',
+			'if echo "$ARGS" | grep -q "api --paginate.*events"; then echo "[]"; exit 0; fi',
+			// PATCH succeeds
+			'if echo "$ARGS" | grep -q "api -X PATCH.*comments/100"; then',
+			'  echo "PATCH_CALLED" >> ' + patchLog,
+			'  exit 0',
+			'fi',
+			'exit 0',
+		].join('\n');
+
+		buildFakeGh(tempDir, ghScript);
+
+		const result = runClaimScript(tempDir, 42, {});
+		const stdout = result.stdout || '';
+
+		// PATCH should have been called
+		const patchContent = existsSync(patchLog) ? readFileSync(patchLog, 'utf8') : '';
+		expect(patchContent).toContain('PATCH_CALLED');
+
+		// But the result should be SKIP because the takeover was detected post-PATCH
+		expect(stdout).toContain('RESULT=SKIP');
+		expect(result.status).toBe(2);
+	});
+
+	/**
+	 * Verify P2 fix: newest_claim outputs the raw body as the 6th tab field,
+	 * allowing extract_renewal_count to correctly read the renewal counter.
+	 */
+	it('newest_claim 6th field contains the raw body for renewal count extraction', () => {
+		const helperScriptPath = join(tempDir, 'test-6th-field.sh');
+		const helperScript = [
+			'#!/usr/bin/env bash',
+			'set -euo pipefail',
+			'',
+			'extract_renewal_count() {',
+			'  local body="$1" count',
+			'  count="$(printf \'%s\' "$body" | sed -n \'s/.*renewed \\([0-9]*\\) time.*/\\1/p\' | head -1)"',
+			'  echo "${count:-0}"',
+			'}',
+			'',
+			// Simulate what newest_claim emits (6 tab-separated fields)
+			'CLAIM_BODY="**agent-claim**: antigravity session-001 2026-08-01T10:00:00Z (renewed 3 time(s), last: 2026-08-05T22:00:00Z)"',
+			'NEWEST="100\\tantigravity\\tsession-001\\t2026-08-01T10:00:00Z\\t2026-08-05T22:00:00Z\\t$CLAIM_BODY"',
+			'',
+			// Correct extraction: use cut -f6 for the raw body
+			'BODY_FROM_F6="$(echo "$NEWEST" | cut -f6)"',
+			'COUNT_F6=$(extract_renewal_count "$BODY_FROM_F6")',
+			'echo "COUNT_F6=$COUNT_F6"',
+			'',
+			// Wrong extraction (old bug): cut -f3- gives session<TAB>created_at<TAB>freshness_ts<TAB>body — count is still 3 here
+			// but in the old code without body field it would be wrong
+			'BODY_FROM_F3="$(echo "$NEWEST" | cut -f6)"',
+			'COUNT_CORRECT=$(extract_renewal_count "$BODY_FROM_F3")',
+			'echo "COUNT_CORRECT=$COUNT_CORRECT"',
+		].join('\n');
+
+		writeFileSync(helperScriptPath, helperScript);
+		chmodSync(helperScriptPath, 0o755);
+
+		const result = spawnSync('bash', [helperScriptPath], { encoding: 'utf8', timeout: 5000 });
+		expect(result.status).toBe(0);
+		// Both should extract 3 correctly from the body
+		expect(result.stdout).toContain('COUNT_F6=3');
+		expect(result.stdout).toContain('COUNT_CORRECT=3');
+	});
 });
+
