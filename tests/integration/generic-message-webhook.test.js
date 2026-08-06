@@ -154,6 +154,25 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 		expect(res.body.error).toContain('discordWebhookUrl');
 	});
 
+	it('returns 400 when discordWebhookUrl path lacks webhook ID and token', async () => {
+		process.env.ENABLE_DISCORD_ALERTS = 'true';
+		process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/123/token';
+		await initializeNotificationServices(mockBot);
+
+		const res = await request(app)
+			.post('/api/webhook/message')
+			.set('x-api-key', 'test-key')
+			.send({
+				message: 'Hello malformed path',
+				channels: ['discord'],
+				discordWebhookUrl: 'https://discord.com/api/webhooks/',
+			})
+			.expect(400);
+
+		expect(res.body.success).toBe(false);
+		expect(res.body.error).toContain('discordWebhookUrl');
+	});
+
 	it('returns 409 IDEMPOTENCY_CONFLICT when reusing key with different discordWebhookUrl', async () => {
 		process.env.ENABLE_DISCORD_ALERTS = 'true';
 		process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/default/token';
