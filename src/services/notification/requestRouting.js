@@ -66,6 +66,48 @@ function validateChatOverride(field, value) {
 	return value;
 }
 
+function validateDiscordWebhookOverride(field, value) {
+	if (value === undefined) {
+		return undefined;
+	}
+
+	if (typeof value !== 'string' || value.length === 0) {
+		throw new NotificationRoutingValidationError(`"${field}" must be a non-empty string if provided`, {
+			field,
+		});
+	}
+
+	let parsedUrl;
+	try {
+		parsedUrl = new URL(value);
+	} catch (_) {
+		throw new NotificationRoutingValidationError(`"${field}" must be a valid HTTPS Discord webhook URL`, {
+			field,
+		});
+	}
+
+	if (parsedUrl.protocol !== 'https:') {
+		throw new NotificationRoutingValidationError(`"${field}" must be a valid HTTPS Discord webhook URL`, {
+			field,
+		});
+	}
+
+	const hostname = parsedUrl.hostname.toLowerCase();
+	const isValidDiscordHost =
+		hostname === 'discord.com' ||
+		hostname.endsWith('.discord.com') ||
+		hostname === 'discordapp.com' ||
+		hostname.endsWith('.discordapp.com');
+
+	if (!isValidDiscordHost || !parsedUrl.pathname.includes('/api/webhooks/')) {
+		throw new NotificationRoutingValidationError(`"${field}" must be a valid HTTPS Discord webhook URL`, {
+			field,
+		});
+	}
+
+	return value;
+}
+
 function parseNotificationRouting(raw = {}, options = {}) {
 	const {
 		requiredChannels = false,
@@ -80,6 +122,7 @@ function parseNotificationRouting(raw = {}, options = {}) {
 			channels: undefined,
 			telegramChatId: undefined,
 			whatsappChatId: undefined,
+			discordWebhookUrl: undefined,
 		};
 	}
 
@@ -90,6 +133,7 @@ function parseNotificationRouting(raw = {}, options = {}) {
 		}),
 		telegramChatId: validateChatOverride('telegramChatId', raw.telegramChatId),
 		whatsappChatId: validateChatOverride('whatsappChatId', raw.whatsappChatId),
+		discordWebhookUrl: validateDiscordWebhookOverride('discordWebhookUrl', raw.discordWebhookUrl),
 	};
 }
 
@@ -98,6 +142,7 @@ async function sendWithNotificationRouting(notificationManager, alert, routing =
 		...alert,
 		telegramChatId: routing.telegramChatId,
 		whatsappChatId: routing.whatsappChatId,
+		discordWebhookUrl: routing.discordWebhookUrl,
 	};
 
 	if (routing.channels) {

@@ -2392,6 +2392,12 @@
             "type": "string",
             "minLength": 1
           },
+          "discordWebhookUrl": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https://([a-zA-Z0-9-]+\\.)?(discord\\.com|discordapp\\.com)/api/webhooks/",
+            "description": "Optional HTTPS Discord webhook URL override."
+          },
           "idempotencyKey": {
             "type": "string",
             "minLength": 1,
