@@ -19,6 +19,17 @@
 #      and arbitrate concurrent races by comment ID — the earliest new claim
 #      wins, the loser deletes its comment and exits 2 (RESULT=SKIP).
 #
+# Renewal behavior (reducing comment noise):
+#   When a session re-checks its own claim (periodic renewal, Step 2 re-check,
+#   etc.), the existing claim comment is edited **in-place** via REST PATCH
+#   rather than posting a new comment. The original comment ID is preserved so
+#   the lower-ID-wins arbitration semantic is unaffected. The comment body gains
+#   a "(renewed N times, last: ISO-8601)" suffix to retain the audit trail.
+#   If the in-place PATCH fails transiently, a new fallback comment is posted
+#   and arbitrated normally (same as before) so the run is never blocked on a
+#   transient API error. Takeover paths always post new comments (needed for race
+#   arbitration against concurrent sessions).
+#
 # All claim-comment reads go through the REST API (`gh api
 # repos/<owner>/<repo>/issues/<n>/comments`), which returns numeric comment IDs
 # in creation order. The GraphQL `gh issue view --json comments` endpoint is
@@ -248,17 +259,41 @@ claim_comments_rest() {
 # comparing against the client-supplied body NOW_TS would falsely mark a normal
 # claim as a fresh legacy owner when the claim took >1s. Returns 1 when the
 # read fails so callers can fail closed via `|| READ_FAILED=1`.
+# newest_claim -> single line "id<TAB>agent<TAB>session<TAB>created_at<TAB>freshness_ts<TAB>body" for the
+# newest claim comment (largest numeric id), or empty when no claim comments
+# exist. `freshness_ts` is the most recent of created_at and the body's
+# "last: ISO-8601" renewal timestamp — used for TTL staleness checks so a
+# PATCH-renewed claim is not incorrectly treated as stale. The returned
+# created_at is the server-side creation time (authoritative for the
+# LEGACY_DECIDES comparison). `body` is the raw comment body (tab-escaped),
+# used by extract_renewal_count to read the renewal counter. Returns 1 on error.
 newest_claim() {
   local newest
   newest="$(claim_comments_rest | awk -F '\t' '{ if (max == "" || $1+0 > max+0) { max=$1; line=$0 } } END { print line }')" || READ_FAILED="1"
   if [ "$READ_FAILED" == "1" ]; then return 1; fi
   if [ -z "$newest" ]; then return 0; fi
-  local created_at rest agent session
+  local created_at rest agent session body_ts freshness_ts raw_body
   created_at="$(echo "$newest" | cut -f2)"
-  rest="$(echo "$newest" | cut -f3 | sed 's/^\*\*agent-claim\*\*:[[:space:]]*//')"
+  raw_body="$(echo "$newest" | cut -f3)"
+  rest="$(printf '%s' "$raw_body" | sed 's/^\*\*agent-claim\*\*:[[:space:]]*//')"
   agent="$(echo "$rest" | awk '{print $1}')"
   session="$(echo "$rest" | awk '{print $2}')"
-  printf '%s\t%s\t%s\t%s\n' "$(echo "$newest" | cut -f1)" "$agent" "$session" "$created_at"
+  # Extract the "last: ISO-8601" renewal timestamp from the body, if present.
+  body_ts="$(printf '%s' "$rest" | sed -n 's/.*last: \([0-9T:Z-]*\).*/\1/p' | head -1)"
+  # Use the more recent of created_at and body_ts as the freshness timestamp.
+  if [ -n "$body_ts" ]; then
+    local ca_e bt_e
+    ca_e="$(epoch_of "$created_at")"
+    bt_e="$(epoch_of "$body_ts")"
+    if [ -n "$ca_e" ] && [ -n "$bt_e" ] && [ "$bt_e" -gt "$ca_e" ]; then
+      freshness_ts="$body_ts"
+    else
+      freshness_ts="$created_at"
+    fi
+  else
+    freshness_ts="$created_at"
+  fi
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$(echo "$newest" | cut -f1)" "$agent" "$session" "$created_at" "$freshness_ts" "$raw_body"
   return 0
 }
 
@@ -282,6 +317,22 @@ last_labeled_event_ts() {
 # post_claim_comment <body> -> new numeric comment id (empty on failure)
 post_claim_comment() {
   gh api "repos/${REPO}/issues/${ISSUE_NUMBER}/comments" -f body="$1" --jq .id 2>/dev/null || echo ""
+}
+
+# update_claim_comment <comment_id> <new_body> -> 0 on success, 1 on failure.
+# Edits an existing claim comment in-place via PATCH so renewals do not post new
+# comments. The comment ID stays the same, so arbitration order is preserved.
+update_claim_comment() {
+  local cid="$1" new_body="$2"
+  gh api -X PATCH "repos/${REPO}/issues/comments/${cid}" -f body="$new_body" &>/dev/null
+}
+
+# extract_renewal_count <comment_body> -> integer count of prior renewals (0 if none)
+extract_renewal_count() {
+  local body="$1" count
+  # Match "(renewed N times, ...)"
+  count="$(printf '%s' "$body" | sed -n 's/.*renewed \([0-9]*\) time.*/\1/p' | head -1)"
+  echo "${count:-0}"
 }
 
 # delete_claim_comment <comment_id> — authoritative cleanup of a lost race comment.
@@ -442,34 +493,80 @@ if [ "$LABELED" == "true" ]; then
     NEWEST_ID="$(echo "$NEWEST" | cut -f1)"
     NEWEST_AGENT="$(echo "$NEWEST" | cut -f2)"
     NEWEST_SESSION="$(echo "$NEWEST" | cut -f3)"
-    NEWEST_TS="$(echo "$NEWEST" | cut -f4)"
+    NEWEST_TS="$(echo "$NEWEST" | cut -f4)"       # server-side created_at
+    FRESHNESS_TS="$(echo "$NEWEST" | cut -f5)"    # most recent of created_at and body last-renewal ts
+    # Fall back to created_at when the 5th field is absent (older claim format).
+    : "${FRESHNESS_TS:=$NEWEST_TS}"
 
     if [ "$NEWEST_AGENT" == "$AGENT_ID" ] && [ "$NEWEST_SESSION" == "$SESSION_ID" ]; then
-      # Our own claim: renew, then arbitrate the renewal against any concurrent
-      # takeover. Post-and-arbitrate keeps the protocol uniform: if a taker
-      # lands its comment first (lower id), the renewal loses and we skip.
-      RENEWAL_ID="$(post_claim_comment "${CLAIM_PREFIX} ${AGENT_ID} ${SESSION_ID} ${NOW_TS}")"
-      if [ -z "$RENEWAL_ID" ]; then
-        echo "RESULT=ERROR"
-        echo "Error: failed to post the renewal claim comment on issue #${ISSUE_NUMBER}." >&2
-        exit 1
-      fi
-      WINNER="$(arbitrate_race "$NEWEST_ID" "$RENEWAL_ID")"
-      if [ "$WINNER" == "FAIL_CLOSED" ]; then
-        rollback_abandoned_claim "$RENEWAL_ID" "false" "$NEWEST_ID" "renewal"
-        echo "RESULT=ERROR"
-        echo "Error: could not re-read claim comments to confirm the renewal; our renewal comment was rolled back (fail-closed)." >&2
-        exit 1
-      fi
-      if [ "$WINNER" != "$RENEWAL_ID" ]; then
-        lose_race "$RENEWAL_ID" "Issue #${ISSUE_NUMBER}: renewal raced by a concurrent takeover (comment ${WINNER} won). Skipping — zero-work, no budget consumed."
+      # Our own claim: renew by editing the existing comment in-place (PATCH).
+      # This avoids posting a new comment per renewal, reducing history noise.
+      # The original comment ID (NEWEST_ID) is preserved, so arbitration order
+      # and the lower-ID-wins semantic are unaffected.
+      #
+      # Concurrent takeover race (P1): a taker may read the stale comment
+      # (FRESHNESS_TS >= TTL), post a new comment with ID > NEWEST_ID, and win
+      # arbitration — all while we are between the agent/session match and the
+      # PATCH. After a successful PATCH we therefore re-read comments and verify
+      # no newer claim comment landed. If one did, the taker won; we exit
+      # RESULT=SKIP so the real owner continues without a duplicate claimant.
+      NEWEST_BODY="$(echo "$NEWEST" | cut -f6)"
+      PRIOR_RENEWALS="$(extract_renewal_count "$NEWEST_BODY")"
+      NEW_RENEWAL_COUNT=$(( PRIOR_RENEWALS + 1 ))
+      RENEWAL_BODY="${CLAIM_PREFIX} ${AGENT_ID} ${SESSION_ID} ${NEWEST_TS} (renewed ${NEW_RENEWAL_COUNT} time(s), last: ${NOW_TS})"
+      if ! update_claim_comment "$NEWEST_ID" "$RENEWAL_BODY"; then
+        # In-place update failed (e.g. rate limit, transient API error). Fall
+        # back to posting a new comment so the run is not blocked on a transient
+        # failure. This is the only path that can still add a new comment during
+        # renewal — kept deliberately to ensure the run survives transient errors.
+        RENEWAL_ID="$(post_claim_comment "${CLAIM_PREFIX} ${AGENT_ID} ${SESSION_ID} ${NOW_TS} (renewal fallback)")"
+        if [ -z "$RENEWAL_ID" ]; then
+          echo "RESULT=ERROR"
+          echo "Error: failed to renew the claim comment on issue #${ISSUE_NUMBER} (both PATCH and POST failed)." >&2
+          exit 1
+        fi
+        WINNER="$(arbitrate_race "$NEWEST_ID" "$RENEWAL_ID")"
+        if [ "$WINNER" == "FAIL_CLOSED" ]; then
+          rollback_abandoned_claim "$RENEWAL_ID" "false" "$NEWEST_ID" "renewal-fallback"
+          echo "RESULT=ERROR"
+          echo "Error: could not confirm the renewal fallback comment; rolled back (fail-closed)." >&2
+          exit 1
+        fi
+        if [ "$WINNER" != "$RENEWAL_ID" ]; then
+          lose_race "$RENEWAL_ID" "Issue #${ISSUE_NUMBER}: renewal-fallback raced by a concurrent takeover (comment ${WINNER} won). Skipping — zero-work, no budget consumed."
+        fi
+      else
+        # PATCH succeeded. Re-read comments to detect any concurrent takeover
+        # comment that landed after our agent/session match (P1 race). If a
+        # comment with ID > NEWEST_ID appeared and belongs to another session,
+        # the taker has won — exit RESULT=SKIP so the real owner continues.
+        post_patch_newer=""
+        rc_pp=0
+        post_patch_newer="$(claim_comments_rest | awk -F '\t' -v snap="$NEWEST_ID" '$1+0 > snap+0 { print $1 }')" || rc_pp=1
+        if [ "$rc_pp" -ne 0 ]; then
+          # Cannot verify — fail closed; the PATCH edit is already applied but
+          # we cannot confirm ownership. Exit ERROR so the caller retries.
+          echo "RESULT=ERROR"
+          echo "Error: PATCH renewal succeeded but post-PATCH comment re-read failed (fail-closed)." >&2
+          exit 1
+        fi
+        if [ -n "$post_patch_newer" ]; then
+          # A newer claim comment appeared: a concurrent takeover beat us.
+          # The PATCH only updated the body; the taker's higher-ID comment is
+          # now the authoritative claim. Yield to the taker.
+          echo "RESULT=SKIP"
+          echo "Issue #${ISSUE_NUMBER}: concurrent takeover comment appeared during PATCH renewal (comment IDs: ${post_patch_newer}). Skipping — zero-work, no budget consumed."
+          exit 2
+        fi
       fi
       echo "RESULT=CLAIMED"
       echo "Issue #${ISSUE_NUMBER} already claimed by this session (${AGENT_ID}/${SESSION_ID}); renewed."
       exit 0
     fi
 
-    AGE="$(age_minutes "$NEWEST_TS")"
+    # Use freshness_ts (body renewal ts or created_at, whichever is newer) for
+    # the TTL staleness check so PATCH-renewed claims are not wrongly taken over.
+    AGE="$(age_minutes "$FRESHNESS_TS")"
     if [ "$AGE" -le "$TTL_MINUTES" ]; then
       echo "RESULT=SKIP"
       echo "Issue #${ISSUE_NUMBER} is claimed by ${NEWEST_AGENT}/${NEWEST_SESSION} (${AGE} min ago, TTL ${TTL_MINUTES} min). Skipping — zero-work, no budget consumed."
