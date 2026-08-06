@@ -94,6 +94,47 @@ function parsePositiveInteger(value, fallback) {
 	return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+function parseNewsTimeoutMs(value, fallback = 30000) {
+	if (value === undefined) {
+		return fallback;
+	}
+	const str = String(value).trim();
+	if (str === '') {
+		return fallback;
+	}
+	if (!/^\d+$/.test(str)) {
+		console.warn('[Analyzer] Invalid NEWS_TIMEOUT_MS configuration, using default');
+		return fallback;
+	}
+	const parsed = Number(str);
+	if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed <= 0) {
+		console.warn('[Analyzer] Invalid NEWS_TIMEOUT_MS configuration, using default');
+		return fallback;
+	}
+	return parsed;
+}
+
+function parseNewsAlertThreshold(value, fallback = 0.7) {
+	if (value === undefined) {
+		return fallback;
+	}
+	const str = String(value).trim();
+	if (str === '') {
+		return fallback;
+	}
+	if (!/^[+-]?(\d+(\.\d+)?|\.\d+)$/.test(str)) {
+		console.warn('[Analyzer] Invalid NEWS_ALERT_THRESHOLD configuration, using default');
+		return fallback;
+	}
+	const parsed = Number(str);
+	if (!Number.isFinite(parsed) || parsed < 0 || parsed > 1) {
+		console.warn('[Analyzer] Invalid NEWS_ALERT_THRESHOLD configuration, using default');
+		return fallback;
+	}
+	return parsed;
+}
+
+
 function isGeminiQuotaError(error) {
 	const status = Number(error && (error.status || error.statusCode || error.code));
 	if (status === 429) {
@@ -274,8 +315,8 @@ class NewsAnalyzer {
 		// Do NOT store notificationManager in constructor - get it dynamically
 		// to handle delayed initialization in tests and app startup
 		// Per-symbol timeout
-		this.timeout = parseInt(process.env.NEWS_TIMEOUT_MS || 60000);
-		this.alertThreshold = parseFloat(process.env.NEWS_ALERT_THRESHOLD || 0.7);
+		this.timeout = parseNewsTimeoutMs(process.env.NEWS_TIMEOUT_MS, 30000);
+		this.alertThreshold = parseNewsAlertThreshold(process.env.NEWS_ALERT_THRESHOLD, 0.7);
 		this.enableBinance = process.env.ENABLE_BINANCE_PRICE_CHECK === 'true';
 		this.geminiConcurrency = parsePositiveInteger(process.env.NEWS_GEMINI_CONCURRENCY, Infinity);
 		this.geminiQuotaMaxRetries = parsePositiveInteger(process.env.NEWS_GEMINI_QUOTA_MAX_RETRIES, 2);
@@ -1090,4 +1131,6 @@ module.exports = {
 	calculateVolumeRatio,
 	calculateRSI,
 	isKlineOpen,
+	parseNewsTimeoutMs,
+	parseNewsAlertThreshold,
 };

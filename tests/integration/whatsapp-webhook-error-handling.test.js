@@ -186,4 +186,43 @@ describe('WhatsApp Webhook Error Handling & Resiliency (GH-337 / CB-136)', () =>
 		expect(res2.body.idempotencyReplayed).toBe(true);
 		expect(fetchMock).toHaveBeenCalledTimes(3); // No new network calls made on replay
 	});
+
+	it('should capture actionable Sentry error event with endpoint, channel, provider, and sanitized error context on WhatsApp 500', async () => {
+		const sentryService = require('../../src/services/monitoring/SentryService');
+		const captureSpy = jest.spyOn(sentryService, 'captureExternalFailure');
+
+		global.fetch = jest.fn().mockResolvedValue({
+			ok: false,
+			status: 500,
+			text: jest.fn().mockResolvedValue('GreenAPI Server Error secret_token_abc123'),
+		});
+
+		await initializeNotificationServices(null);
+
+		const res = await request(app)
+			.post('/api/webhook/message')
+			.set('x-api-key', API_KEY)
+			.send({
+				message: 'Test Sentry reporting',
+				channels: ['whatsapp'],
+				whatsappChatId: '56912345678@c.us',
+			});
+
+		expect(res.status).toBe(200);
+		expect(captureSpy).toHaveBeenCalledWith(
+			expect.objectContaining({
+				channel: 'whatsapp',
+				external: expect.objectContaining({
+					provider: 'whatsapp-greenapi',
+					lastErrorCode: 500,
+				}),
+				http: expect.objectContaining({
+					endpoint: '/api/webhook/message',
+					method: 'POST',
+				}),
+			}),
+		);
+
+		captureSpy.mockRestore();
+	});
 });

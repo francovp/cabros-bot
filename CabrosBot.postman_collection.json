@@ -831,6 +831,12 @@
               "status": "Unauthorized",
               "code": 401,
               "body": "{\n  \"error\": \"Unauthorized: Missing API key\"\n}"
+            },
+            {
+              "name": "Internal Server Error (500)",
+              "status": "Internal Server Error",
+              "code": 500,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Internal server error\"\n}"
             }
           ]
         },
