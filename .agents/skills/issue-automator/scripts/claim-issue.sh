@@ -96,6 +96,21 @@ if [ -z "$REPO" ]; then
   exit 1
 fi
 
+# Resolve the authenticated automation user ("francovp" after switching). Claim
+# comments MUST be recognized by this author: a body-prefix-only filter would
+# let any user who can comment on issues post a forged "**agent-claim**" comment
+# that becomes the newest claim, blocking the real owner and every later session
+# until the TTL expires (P2 finding: authenticate claim comments). Fail closed
+# when the login cannot be resolved — accepting every commenter's claims would
+# let human comments derail arbitration.
+AUTHOR_LOGIN="$(gh api user --jq .login 2>/dev/null || true)"
+if [ -z "$AUTHOR_LOGIN" ]; then
+  echo "RESULT=ERROR"
+  echo "Error: could not resolve the authenticated gh login to authenticate claim comments (fail-closed)." >&2
+  exit 1
+fi
+export CLAIM_AUTHOR_LOGIN="$AUTHOR_LOGIN"
+
 # Resolve the session identity. Three modes:
 #   - CLAIM_SESSION_ID set      -> use it verbatim (caller owns reuse across steps).
 #   - CLAIM_RUN_ID set          -> reuse a persisted auto-generated ID for the WHOLE
@@ -146,8 +161,25 @@ elif [ -n "${CLAIM_RUN_ID:-}" ]; then
   fi
   if [ -z "$SESSION_ID" ]; then
     SESSION_ID="$(gen_session_id)"
-    mkdir -p "$STATE_DIR" 2>/dev/null || true
-    printf '%s' "$SESSION_ID" > "$STATE_FILE" 2>/dev/null || true
+    # The run-scoped session id MUST survive across every Step N invocation of
+    # the same run; otherwise the next call would mint a fresh id, see this Step 1
+    # claim as a foreign session, and RESULT=SKIP (abandoning the run to the TTL).
+    # Fail closed when the id cannot be durably persisted and read back.
+    if ! mkdir -p "$STATE_DIR" 2>/dev/null; then
+      echo "RESULT=ERROR"
+      echo "Error: could not create the run-scoped session state dir ${STATE_DIR} (fail-closed)." >&2
+      exit 1
+    fi
+    if ! printf '%s' "$SESSION_ID" > "$STATE_FILE" 2>/dev/null; then
+      echo "RESULT=ERROR"
+      echo "Error: could not persist the run-scoped session id to ${STATE_FILE} (fail-closed)." >&2
+      exit 1
+    fi
+    if [ "$(cat "$STATE_FILE" 2>/dev/null || true)" != "$SESSION_ID" ]; then
+      echo "RESULT=ERROR"
+      echo "Error: run-scoped session id not readable back after persist at ${STATE_FILE} (fail-closed)." >&2
+      exit 1
+    fi
   fi
 else
   SESSION_ID="$(gen_session_id)"
@@ -192,20 +224,16 @@ has_agent_working() {
 READ_FAILED=""
 
 # claim_comments_rest -> TSV "id<TAB>created_at<TAB>body" for ALL claim comments
-# via the REST API (numeric ids, creation order). `created_at` is the comment's
-# SERVER-side timestamp (authoritative for legacy/label ordering); the body still
-# carries the client's startup NOW_TS but that is NOT used for freshness/ordering
-# decisions because it can predate the label event by a second (which would
-# corrupt LEGACY_DECIDES). Empty (clean exit, status 0) when no claims exist.
-# Paginated so comment pages past the first still reach arbitration. On a read
-# failure (nonzero gh exit) it prints nothing and returns 1; callers MUST wrap
-# the invocation with `|| READ_FAILED="1"` because the command substitution runs
-# in a subshell and cannot rely on the parent global being set inside it.
+# authored by the automation user (CLAIM_AUTHOR_LOGIN). Only comments whose
+# .user.login matches the actor count as claims — a body-prefix-only filter
+# would let any issue commenter forge a "**agent-claim**" comment and become
+# the newest claim. Enabled via the exported CLAIM_AUTHOR_LOGIN (resolved from
+# `gh api user`).
 claim_comments_rest() {
   local out rc=0
-  out="$(gh api --paginate "repos/${REPO}/issues/${ISSUE_NUMBER}/comments" --jq '
-    [.[] | select(.body | startswith("**agent-claim**"))]
-    | .[] | "\(.id)\t\(.created_at)\t\(.body)"' 2>/dev/null)" || rc=$?
+  out="$(gh api --paginate "repos/${REPO}/issues/${ISSUE_NUMBER}/comments" --jq "
+    [.[] | select(.body | startswith(\"**agent-claim**\")) | select(.user.login == \"${CLAIM_AUTHOR_LOGIN}\")]
+    | .[] | \"\(.id)\t\(.created_at)\t\(.body)\"" 2>/dev/null)" || rc=$?
   if [ "$rc" -ne 0 ]; then
     return 1
   fi
@@ -241,9 +269,9 @@ newest_claim() {
 # yield multi-line output and make age_minutes return 99999 on fresh claims).
 last_labeled_event_ts() {
   local out rc=0
-  out="$(gh api --paginate --slurp "repos/${REPO}/issues/${ISSUE_NUMBER}/events" --jq '
-    [.[] | .[] | select(.event == "labeled" and .label.name == "agent-working") | .created_at]
-    | max // empty' 2>/dev/null)" || rc=$?
+  out="$(gh api --paginate "repos/${REPO}/issues/${ISSUE_NUMBER}/events" 2>/dev/null |
+    jq -r -s '[.[][] | select(.event == "labeled" and .label.name == "agent-working") | .created_at]
+      | max // empty')" || rc=$?
   if [ "$rc" -ne 0 ]; then
     return 1
   fi
@@ -296,6 +324,39 @@ lose_race() {
 # knows no other session holds a valid claim).
 remove_agent_working() {
   gh issue edit "$ISSUE_NUMBER" --remove-label "agent-working" &> /dev/null || true
+}
+
+# rollback_abandoned_claim <comment_id> <label_was_ours> <snapshot_id> <context...>
+# Removes a claim comment we JUST posted when arbitration could not complete
+# (FAIL_CLOSED), then safely reconciles the shared agent-working label:
+#   - label_was_ours=true  (unclaimed-issue claim: WE added the label this run)
+#     -> remove it UNLESS a concurrent claimant's comment (newer than the
+#        snapshot) has landed; then the label belongs to that in-progress
+#        claimant and stays.
+#   - label_was_ours=false (renewal / takeover paths: label pre-existed) -> the
+#     label is left untouched; removing it could destroy a claim characteristic
+#     of another session. Only the unconfirmed comment is rolled back.
+# Best-effort cleanup: the caller still exits RESULT=ERROR (fail-closed), because
+# the arbitration read failed and we cannot safely claim ownership.
+rollback_abandoned_claim() {
+  local cid="$1" label_ours="$2" snap="$3"; shift 3
+  local context="$*"
+  if ! delete_claim_comment "$cid"; then
+    echo "Error: arbitration failed (${context}); could not remove our claim comment ${cid} (rollback fail-closed)." >&2
+    return 0
+  fi
+  if [ "$label_ours" == "true" ]; then
+    # Best-effort final read: if a concurrent claimant's comment landed after our
+    # snapshot, the shared label is theirs — keep it. Otherwise the label is
+    # stale evidence of our abandoned claim; remove it so the issue stays claimable.
+    local remaining rc=0
+    remaining="$(claim_comments_rest | awk -F '\t' -v snap="$snap" '$1+0 > snap+0 { print $1 }')" || rc=$?
+    if [ "$rc" -eq 0 ] && [ -z "$remaining" ]; then
+      remove_agent_working
+    fi
+  fi
+  echo "Rolled back abandoned claim comment ${cid} (${context} fail-closed)." >&2
+  return 0
 }
 
 # arbitrate_race <snapshot_id> <our_id> -> echoes the winning numeric comment id
@@ -395,8 +456,9 @@ if [ "$LABELED" == "true" ]; then
       fi
       WINNER="$(arbitrate_race "$NEWEST_ID" "$RENEWAL_ID")"
       if [ "$WINNER" == "FAIL_CLOSED" ]; then
+        rollback_abandoned_claim "$RENEWAL_ID" "false" "$NEWEST_ID" "renewal"
         echo "RESULT=ERROR"
-        echo "Error: could not re-read claim comments to confirm the renewal (fail-closed)." >&2
+        echo "Error: could not re-read claim comments to confirm the renewal; our renewal comment was rolled back (fail-closed)." >&2
         exit 1
       fi
       if [ "$WINNER" != "$RENEWAL_ID" ]; then
@@ -424,8 +486,9 @@ if [ "$LABELED" == "true" ]; then
     fi
     WINNER="$(arbitrate_race "$NEWEST_ID" "$OUR_TAKEOVER_ID")"
     if [ "$WINNER" == "FAIL_CLOSED" ]; then
+      rollback_abandoned_claim "$OUR_TAKEOVER_ID" "false" "$NEWEST_ID" "takeover"
       echo "RESULT=ERROR"
-      echo "Error: could not re-read claim comments to arbitrate the takeover (fail-closed)." >&2
+      echo "Error: could not re-read claim comments to arbitrate the takeover; our takeover comment was rolled back (fail-closed)." >&2
       exit 1
     fi
     if [ "$WINNER" != "$OUR_TAKEOVER_ID" ]; then
@@ -460,8 +523,9 @@ if [ "$LABELED" == "true" ]; then
   fi
   WINNER="$(arbitrate_race "$SNAPSHOT_ID" "$OUR_LEGACY_ID")"
   if [ "$WINNER" == "FAIL_CLOSED" ]; then
+    rollback_abandoned_claim "$OUR_LEGACY_ID" "false" "$SNAPSHOT_ID" "legacy takeover"
     echo "RESULT=ERROR"
-    echo "Error: could not re-read claim comments to arbitrate the legacy takeover (fail-closed)." >&2
+    echo "Error: could not re-read claim comments to arbitrate the legacy takeover; our takeover comment was rolled back (fail-closed)." >&2
     exit 1
   fi
   if [ "$WINNER" != "$OUR_LEGACY_ID" ]; then
@@ -485,13 +549,15 @@ gh issue edit "$ISSUE_NUMBER" --add-label "agent-working" &> /dev/null || {
 
 OUR_ID="$(post_claim_comment "${CLAIM_PREFIX} ${AGENT_ID} ${SESSION_ID} ${NOW_TS}")"
 if [ -z "$OUR_ID" ]; then
-  # Partial failure: the label is on but our claim comment never landed. Re-read
-  # comments up to 3 times (mirroring arbitrate_race's grace window) so a
-  # concurrent claimant that is between adding the shared label and posting its
-  # own comment surfaces; removing the label during that pre-comment window would
-  # delete the other claimant's in-progress label and let a third session treat
-  # the issue as unclaimed. A historical comment must not keep the label we added.
-  NEWER_COUNT=""
+  # Comment failure: the label is already on the issue but our claim comment never
+  # landed. We re-read comments up to 3 times (mirroring arbitrate_race's grace
+  # window) so a concurrent claimant that is between adding the shared label and
+  # posting its own comment surfaces. We then RETAIN the shared agent-working label
+  # regardless: a bounded grace window cannot conclusively exclude an in-progress
+  # claimant (its comment may land after our window closes), so removing the label
+  # could delete that claimant's in-progress claim and let a third session treat
+  # the issue as unclaimed. A shared label is the authoritative pending-ownership
+  # marker and is reclaimed via the TTL takeover path if it is genuinely abandoned.
   for _ in 1 2 3; do
     NEWER_COUNT="$(claim_comments_rest | awk -F '\t' -v snap="$SNAPSHOT_ID" '$1+0 > snap+0 { print $1 }')" || READ_FAILED="1"
     if [ "$READ_FAILED" != "1" ] && [ -n "$NEWER_COUNT" ]; then
@@ -499,19 +565,17 @@ if [ -z "$OUR_ID" ]; then
     fi
     sleep 1
   done
-  if [ "$READ_FAILED" != "1" ] && [ -z "$NEWER_COUNT" ]; then
-    remove_agent_working
-  fi
   echo "RESULT=ERROR"
-  echo "Error: failed to post the claim comment on issue #${ISSUE_NUMBER}." >&2
+  echo "Error: failed to post the claim comment on issue #${ISSUE_NUMBER}; agent-working label retained because a concurrent claimant may be in progress (fail-closed)." >&2
   exit 1
 fi
 
 WINNER_ID="$(arbitrate_race "$SNAPSHOT_ID" "$OUR_ID")"
 
 if [ "$WINNER_ID" == "FAIL_CLOSED" ]; then
+  rollback_abandoned_claim "$OUR_ID" "true" "$SNAPSHOT_ID" "claim"
   echo "RESULT=ERROR"
-  echo "Error: could not re-read claim comments to arbitrate the claim (fail-closed)." >&2
+  echo "Error: could not re-read claim comments to arbitrate the claim; our claim comment was rolled back (fail-closed)." >&2
   exit 1
 fi
 
