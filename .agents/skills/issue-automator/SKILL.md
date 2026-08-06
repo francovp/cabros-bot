@@ -1,29 +1,30 @@
 ---
 name: issue-automator
 description: >-
-  Automates the end-to-end processing of open GitHub issues for the current repository. Use when the user requests automating issue resolution, synchronizing Linear tracker states, verifying Render preview deployments, merging ready PRs without human review, or resolving review threads. Do not use for repositories other than the current repository or for general Git operations unrelated to issue lifecycle automation.
+  Automates the end-to-end processing of open GitHub issues for the current repository. Use when the user requests automating issue resolution, synchronizing Linear tracker states, verifying Render preview deployments, merging ready PRs without human review, or resolving review threads. Claims issues atomically so concurrent agent sessions (Codex, Antigravity, hourly cron) never work the same issue twice. Do not use for repositories other than the current repository or for general Git operations unrelated to issue lifecycle automation.
 ---
 
 ## Hard Rules
 
 1. If the user explicitly provides a GitHub issue number (e.g. `#42`, `issue 42`, `GH-42`), use that specific issue. Otherwise, work on the oldest open GitHub issue.
 2. Process only one issue by default.
-3. Process a further issue only after a skip outcome (`LOCAL_DEADLOCK`, `GLOBAL_BLOCKED` with no agent writes still blocked after an unblock attempt, or `IN_REVIEW` with no agent writes). Non-skip outcomes stop the run — do not touch further issues. A `GLOBAL_BLOCKED` raised after agent writes (code changes, PR creation/update, or Linear issue creation/update) is a non-skip outcome.
-4. Never process more than 2 GitHub issues that require agent writes in one run. Issues already `IN_REVIEW` with no agent writes (skips) are zero-work — they do not consume this budget and only advance the cursor to the next oldest issue. Write-producing `GLOBAL_BLOCKED` outcomes (blocker hit after code changes, PR creation/update, or Linear issue creation/update) count toward this budget like any other write-producing issue.
+3. Process a further issue only after a skip outcome (`CLAIMED`, `LOCAL_DEADLOCK`, `GLOBAL_BLOCKED` with no agent writes still blocked after an unblock attempt, or `IN_REVIEW` with no agent writes). Non-skip outcomes stop the run — do not touch further issues. A `GLOBAL_BLOCKED` raised after agent writes (code changes, PR creation/update, or Linear issue creation/update) is a non-skip outcome.
+4. Never process more than 2 GitHub issues that require agent writes in one run. Issues already `IN_REVIEW` with no agent writes (skips) are zero-work — they do not consume this budget and only advance the cursor to the next oldest issue. `CLAIMED` skips (issue owned by another agent session) are also zero-work and never consume this budget. Write-producing `GLOBAL_BLOCKED` outcomes (blocker hit after code changes, PR creation/update, or Linear issue creation/update) count toward this budget like any other write-producing issue.
 5. Never inspect deeply, plan, or create TODOs for issues beyond the current cursor in the skip loop — only the issue currently being processed is touched at a time.
 6. Never build an unbounded work queue.
-7. Never continue to another issue after `DONE`, `SHIPPED`, `SYNCED`, `NEEDS_USER`, or `AMBIGUOUS`. For `IN_REVIEW`, stop only if the agent actively produced a PR or made changes; if the issue was already in review with no code/PR/Linear writes needed, skip it — keep fetching the next oldest open issue until a non-skip outcome or no issues remain (see Step 6 skip loop). `GLOBAL_BLOCKED` with no agent writes is a **skip outcome** while tooling is functional: when an iteration encounters a `GLOBAL_BLOCKED` PR/issue, attempt to unblock it once with a bounded retry; if it still cannot be unblocked, record the outcome, release `agent-working`, notify humans, and continue with the next oldest open issue — keep advancing past every issue already skipped in this run until an unblockable PR is `SHIPPED` or `IN_REVIEW`, or no issues remain (see Step 6). If the iteration already produced agent writes (code changes, PR creation/update, or Linear issue creation/update) before the blocker, it is a write-producing outcome that stops the run (Hard Rule #4). If the blocker is a total tooling/access failure (e.g., CLI + MCP auth both fail), stop the run with `GLOBAL_BLOCKED` instead — advancing is impossible without a working `gh`/`linear` path (see Error Handling).
+7. Never continue to another issue after `DONE`, `SHIPPED`, `SYNCED`, `NEEDS_USER`, or `AMBIGUOUS`. For `IN_REVIEW`, stop only if the agent actively produced a PR or made changes; if the issue was already in review with no code/PR/Linear writes needed, skip it — keep fetching the next oldest open issue until a non-skip outcome or no issues remain (see Step 6 skip loop). For `CLAIMED` (issue owned by another agent session), skip it the same way — never work an issue this session does not own. `GLOBAL_BLOCKED` with no agent writes is a **skip outcome** while tooling is functional: when an iteration encounters a `GLOBAL_BLOCKED` PR/issue, attempt to unblock it once with a bounded retry; if it still cannot be unblocked, record the outcome, release `agent-working`, notify humans, and continue with the next oldest open issue — keep advancing past every issue already skipped in this run until an unblockable PR is `SHIPPED` or `IN_REVIEW`, or no issues remain (see Step 6). If the iteration already produced agent writes (code changes, PR creation/update, or Linear issue creation/update) before the blocker, it is a write-producing outcome that stops the run (Hard Rule #4). If the blocker is a total tooling/access failure (e.g., CLI + MCP auth both fail), stop the run with `GLOBAL_BLOCKED` instead — advancing is impossible without a working `gh`/`linear` path (see Error Handling).
 8. Never create duplicate Linear issues or duplicate PRs.
-9. Treat `agent-working` as an ownership claim with a strict lifecycle: **add it when work starts (issue and PR), remove it when work ends (merged or handed off for review).** Never leave `agent-working` on closed/merged issues or PRs.
+9. Treat `agent-working` as an ownership claim with a strict lifecycle: **add it when work starts** — atomically via `scripts/claim-issue.sh`, which also posts a claim comment identifying the agent session and timestamp — **remove it when work ends** (merged or handed off for review). Never leave `agent-working` on closed/merged issues or PRs.
 10. Use the GitHub issue number as the dedupe key for Linear.
 11. Prefer live repo state over assumptions.
 12. Prefer `gh` and `linear` CLIs over MCP tools when available.
 13. Distinguish local blockers from global blockers.
 14. On global blockers: attempt to unblock the PR once (bounded retry of the failing action); only if it still cannot be unblocked, notify humans, record `GLOBAL_BLOCKED`, release `agent-working` (issue + PR), and advance to the next oldest issue (see Step 6). Never notify before the unblock attempt — a transient blocker that recovers on retry must not produce a false global-deadlock alert. If the blocker is a total tooling/access failure (no working `gh`/`linear`/MCP path), stop the run instead of advancing. Stop cleanly on ambiguity or missing ownership (`AMBIGUOUS`/`NEEDS_USER`).
-15. **GitHub user switching**: Before any `gh` CLI command, always switch to the `francovp` user with `gh auth switch --user francovp`. After all `gh` commands are complete, restore the original user with `gh auth switch --user <original_user>`. The helper script `scripts/gh-auth-utils.sh` provides `save_gh_user`, `switch_to_francovp`, and `restore_gh_user` functions for this pattern. All script-based `gh` calls (in `get-oldest-issue.sh`, `verify-preview.sh`) already source this helper — just call them as-is. For inline `gh` commands in the workflow below, execute the switch pattern manually or use the helper.
+15. **GitHub user switching**: Before any `gh` CLI command, always switch to the `francovp` user with `gh auth switch --user francovp`. After all `gh` commands are complete, restore the original user with `gh auth switch --user <original_user>`. The helper script `scripts/gh-auth-utils.sh` provides `save_gh_user`, `switch_to_francovp`, and `restore_gh_user` functions for this pattern. All script-based `gh` calls (in `get-oldest-issue.sh`, `claim-issue.sh`, `verify-preview.sh`) already source this helper — just call them as-is. For inline `gh` commands in the workflow below, execute the switch pattern manually or use the helper.
 16. Always use the `create-pr` skill to create or update PRs. Do not hand-roll PR creation with raw `gh pr create` or `gh pr edit` calls from this skill. The PR body must come from `context/<git-branch-name>.md` and follow the repository PR summary format enforced by `create-pr`.
 17. When creating or updating a Linear issue, write a readable ticket body with `Summary`, `Context`, `Acceptance Criteria`, and `References` sections so the tracker stays self-contained.
 18. **Always include the Linear issue ID (e.g., `CB-01`) in the PR title in parentheses at the end.** Example: `feat: my awesome feature (CB-01)`. Also include the Linear issue ID in the description/body of both the GitHub issue and the PR.
+19. **Claim every issue before working on it.** Run `scripts/claim-issue.sh <ISSUE_NUMBER>` immediately after selecting the issue (Step 1) and re-run it before producing any writes (Step 2). A fresh claim by another agent session means the issue must be skipped with outcome `CLAIMED` — a zero-work skip that never counts toward the session's issue budget (e.g., 3 issues per session) nor the max-2 write budget. Never start code, Linear, or PR work on an issue this session does not own — that is how duplicate PRs happen.
 
 ## Notification Webhook
 
@@ -54,6 +55,34 @@ curl --location "${NOTIFY_WEBHOOK_URL:-https://cabros-crypto-bot-telegram.onrend
 1. **Global deadlock** — when a PR/issue is `GLOBAL_BLOCKED` and still cannot be unblocked after the unblock attempt, alerting humans that tooling/auth/infra prevents safe work on that item. The run then continues with the next oldest issue (see Step 6), unless the blocker is a total tooling/access failure, in which case the run stops with `GLOBAL_BLOCKED`.
 2. **PR in review** — when a PR is intentionally handed off for human review in Step 7, notifying that human review is needed.
 
+## Concurrent Agent Coordination (Issue Claiming)
+
+Multiple agents (Codex, Antigravity, OpenCode) may run hourly sessions against the same repository. Without coordination, two sessions can select the same oldest issue and both create a PR — duplicate PRs and wasted work. The skill prevents this with an atomic claim protocol built on the existing `agent-working` label plus a machine-readable claim comment.
+
+**How claiming works** — `scripts/claim-issue.sh <ISSUE_NUMBER>` claims an issue for the current session:
+
+1. It re-fetches the issue. If it already carries the `agent-working` label, it inspects the newest claim comment:
+   - Owned by another session and fresh (younger than `CLAIM_TTL_MINUTES`) → prints `RESULT=SKIP`, exits `2`. The issue must NOT be touched.
+   - Stale (older than `CLAIM_TTL_MINUTES`) → takes over: posts a new claim comment and exits `0` with `RESULT=TAKEOVER`. Takeover posts arbitrate the race with the same earliest-claim-comment-wins rule, so simultaneous takeovers leave exactly one owner.
+   - Owned by this session (same agent + session id) → renews the claim timestamp and exits `0` with `RESULT=CLAIMED`.
+   - Label present but no claim comment (legacy claim) → falls back to the most recent `agent-working` labeled event timestamp, applying the same TTL freshness rule.
+2. If the issue is unclaimed, it adds the `agent-working` label and posts a claim comment (`**agent-claim**: <agent> <session> <ISO-8601 timestamp>`), then re-reads the comments and arbitrates concurrent races by comment ID — the earliest new claim wins, the loser deletes its comment and exits `2` (`RESULT=SKIP`). Historical claim comments from already-released issues are ignored.
+
+A claimed issue is a **zero-work skip**: outcome `CLAIMED`, the issue number is appended to `SKIPPED_ISSUES`, and it never counts toward the session's issue budget (e.g., 3 issues per session) nor the max-2 agent-write budget (Hard Rule #4). `get-oldest-issue.sh` does not pre-filter claimed issues on purpose: the claim script evaluates freshness, which lets stale claims be taken over and re-checked each session.
+
+**Required environment variables** (set them in the session prompt / cron invocation):
+- `CLAIM_AGENT_ID` — the agent identity (e.g., `codex`, `antigravity`, `opencode`). REQUIRED for meaningful coordination; without it claims cannot be attributed to a session.
+- `CLAIM_SESSION_ID` — the session identity. Optional: export it explicitly (`export CLAIM_SESSION_ID="$(uuidgen)"` or similar) when the same session continues across separate shells; the script uses it verbatim.
+- `CLAIM_RUN_ID` — per-run identity, optional. When set (and `CLAIM_SESSION_ID` is not), the script generates a session ID once, persists it to a run-scoped file (see `CLAIM_SESSION_STATE_DIR`), and reuses it **for the whole run — with no wall-clock expiry** so the Step 1 claim and every Step 2/Nth re-check of the SAME run share the identity even when the run outlives 30 minutes (an expiry would mint a fresh ID on the re-check, see that Step 1 claim as a foreign session, and `RESULT=SKIP`, abandoning the run to its TTL). Use a **fresh** `CLAIM_RUN_ID` per run (e.g. the run/cron timestamp) because it is the run's coordination namespace. When neither is set, each invocation gets a fresh per-invocation session ID with no shared persistence — concurrent unnamespaced runs must not share a claim.
+- `CLAIM_TTL_MINUTES` — claim freshness window in minutes (default `180`). A claim older than this may be taken over by any agent.
+- `CLAIM_SESSION_STATE_DIR` — directory for the persisted run-scoped session ID (default `${TMPDIR:-/tmp}`; one file per repository+agent+run; the file persists until overwritten by a fresh `CLAIM_RUN_ID`; it is never expiry-pruned).
+
+**Rules**
+- Never start code, Linear, or PR work on an issue this session does not own (claim script exit `0` required).
+- Never remove another session's fresh `agent-working` claim — only stale claims (older than `CLAIM_TTL_MINUTES`) may be taken over.
+- If two sessions race on the same issue, the earliest claim comment wins; the loser skips the issue without touching it.
+- Claim comments are historical records and are not deleted on release (the label removal is the release signal).
+
 ## Render Service Env Vars
 
 When an issue requires updating Render service environment variables, use the live `cabros-bot` service state instead of treating it like a code-only change.
@@ -82,20 +111,23 @@ Follow these steps in strict chronological order to automate issue resolution:
 4. Do not fetch, inspect, select, plan, or create TODOs for any second issue at this stage.
 5. If no open GitHub issues exist (and none was specified), stop execution immediately.
 6. For the primary issue:
+   - **Claim the issue immediately** — before any further analysis, run `scripts/claim-issue.sh <ISSUE_NUMBER>` so other concurrent sessions see this issue is being handled. Set `CLAIM_RUN_ID` (preferred, e.g. the run/cron timestamp) or `CLAIM_SESSION_ID` so the Step 2 re-check shares the session identity; when both are omitted the script uses a fresh per-invocation session ID with no shared persistence:
+     - `RESULT=CLAIMED` or `RESULT=TAKEOVER` (exit `0`): this session owns the issue — proceed with the checks below.
+     - `RESULT=SKIP` (exit `2`): another agent session owns this issue with a fresh claim. Record outcome `CLAIMED`, append the issue number to `SKIPPED_ISSUES`, and advance via the Step 6 skip loop. This is a **zero-work skip**: it does NOT count toward the session's issue budget (e.g., 3 issues per session) or the max-2 write budget (Hard Rule #4). If the issue was user-specified, end the run with outcome `CLAIMED` — never advance past a user-specified issue.
+     - `RESULT=ERROR` (exit `1`): handle like a tooling failure (see Error Handling).
    - Check any linked or related Linear issue.
    - Check all open, closed, merged, and draft PRs that reference the issue.
    - Check unresolved review threads and CI status if a PR exists.
    - **Check if any linked PR is already merged**: If a PR that references this issue was already merged into `master`/`main`, clean up the `agent-working` label if present (issue + PR), sync Linear to `Shipped`, and end with outcome `SHIPPED`.
-   - **Check for a pre-existing `GLOBAL_BLOCKED` label (pre-flight)**: if the issue or any linked PR already carries `GLOBAL_BLOCKED`, do NOT proceed to Linear alignment (Step 3), implementation (Step 4), or verification (Step 5). Route directly to Step 6.4: attempt the bounded unblock first; if it still cannot be unblocked and this iteration is zero-work, write the blocker summary, keep the `GLOBAL_BLOCKED` label, remove `agent-working` (issue + PR), send the global-deadlock notification, append the issue number to `SKIPPED_ISSUES`, and advance via `get-oldest-issue.sh`. This pre-flight prevents the automator from producing Linear or code writes for an issue that was already known-blocked — which would otherwise trip the write-producing stop instead of the intended unblock-and-skip.
-   - **Claim ownership immediately**: Add the `agent-working` label to the GitHub issue **right now**, before any further analysis, so other agents see this issue is being handled. If the label already exists (stale takeover), note the takeover in an issue comment.
+   - **Check for a pre-existing `GLOBAL_BLOCKED` label (pre-flight)**: if the issue or any linked PR already carries `GLOBAL_BLOCKED`, do NOT proceed to Linear alignment (Step 3), implementation (Step 4), or verification (Step 5). Route directly to Step 6.5: attempt the bounded unblock first; if it still cannot be unblocked and this iteration is zero-work, write the blocker summary, keep the `GLOBAL_BLOCKED` label, remove `agent-working` (issue + PR), send the global-deadlock notification, append the issue number to `SKIPPED_ISSUES`, and advance via `get-oldest-issue.sh`. This pre-flight prevents the automator from producing Linear or code writes for an issue that was already known-blocked — which would otherwise trip the write-producing stop instead of the intended unblock-and-skip.
    - **Extract any existing Linear ID** from the issue body (scan for patterns like `CB-XX` or `(CB-XX)`) and store it as `LINEAR_ISSUE_ID` for use in later steps. If no ID is found, set `LINEAR_ISSUE_ID=""`.
 
 ### Step 2: Ownership & Takeover Check
-1. Inspect the issue and PR for an active `agent-working` label.
-2. Do not duplicate work if the label was recently updated by another active agent.
-3. If ownership is unclear or takeover is unsafe, stop and end the issue with outcome `NEEDS_USER`.
-4. If the ownership claim is stale, note the takeover in the issue/PR thread and reclaim it by updating the label.
-5. **If the `agent-working` label is not already on the issue** (e.g., a fresh issue with no prior agent work), add it now. Ownership is mandatory before any real work begins.
+1. **Re-run `scripts/claim-issue.sh <ISSUE_NUMBER>`** to re-verify ownership before any real work (this catches claim races that happened between Step 1 and now):
+   - `RESULT=CLAIMED`/`TAKEOVER` (exit `0`): this session still owns the issue — proceed.
+   - `RESULT=SKIP` (exit `2`): another session won the claim race or posted a fresh claim. Do NOT proceed: record outcome `CLAIMED`, append the issue number to `SKIPPED_ISSUES`, and advance via the Step 6 skip loop (zero-work, no budget consumed). For a user-specified issue, end the run with `CLAIMED`.
+2. Never work on an issue whose claim is owned by another session — duplicate PRs are the failure this protocol prevents.
+3. Never force-remove the `agent-working` label of an active claim (see Error Handling — Takeover Conflict). Wait for the claim to expire (`CLAIM_TTL_MINUTES`) or exit with `CLAIMED`/`NEEDS_USER` to allow coordination.
 
 ### Step 3: Align with Linear Tracker
 1. Check if a linked Linear issue exists. Refer to `references/outcomes-and-deadlocks.md` for specific tracker sync rules.
@@ -116,6 +148,7 @@ Follow these steps in strict chronological order to automate issue resolution:
 3. If a Linear issue exists:
    - Evaluate status: if `Blocked`, end the issue with `LOCAL_DEADLOCK`. If `Needs info`, end with `NEEDS_USER`. If `Canceled`/`Duplicate`, sync GitHub and end with `SYNCED`.
    - If multiple Linear issues remain ambiguous, end with `AMBIGUOUS`.
+   - When routing to a no-write terminal (`LOCAL_DEADLOCK`, `NEEDS_USER`, `AMBIGUOUS`, or `SYNCED` for Canceled/Duplicate) on an issue this session claimed (Step 1/Step 2 returned `CLAIMED` or `TAKEOVER`), release the freshly-acquired claim tag first — remove the `agent-working` label added by this session — so the issue is not held claimed until `CLAIM_TTL_MINUTES` expires (see the **Release a claim on a no-write terminal exit** rule in Step 6 and Hard Rule 9).
    - **Extract the Linear issue ID** from the existing issue and store it as `LINEAR_ISSUE_ID`.
    - **Ensure the GitHub issue description** includes the Linear ID reference. If missing, add `**Linear**: [CB-XX](...)` to the issue body.
 
@@ -172,26 +205,44 @@ Follow these steps in strict chronological order to automate issue resolution:
 7. If human review is still needed, continue to Step 7 instead. If the verification fails repeatedly with issue-specific errors, end with outcome `LOCAL_DEADLOCK`.
 ### Step 6: Skip Loop — Advance Past Blocked or Already-Handled Issues
 
-`LOCAL_DEADLOCK`, `GLOBAL_BLOCKED` with no agent writes (still blocked after an unblock attempt), and `IN_REVIEW` with no agent writes are **skip outcomes** — the agent did not produce code changes, a PR, or Linear writes for this issue. Keep advancing until a non-skip outcome or no issues remain. **Write-producing `GLOBAL_BLOCKED`**: if the blocker is raised **after** the iteration already produced agent writes — changed code, created/updated a PR, or created/updated a Linear issue (Step 3) — the iteration produced work: it is NOT a skip, it consumes the max-2 agent-write budget (Hard Rule #4), and it stops the run exactly like `IN_REVIEW` with agent writes.
+`CLAIMED`, `LOCAL_DEADLOCK`, `GLOBAL_BLOCKED` with no agent writes (still blocked after an unblock attempt), and `IN_REVIEW` with no agent writes are **skip outcomes** — the agent did not produce code changes, a PR, or Linear writes for this issue. Keep advancing until a non-skip outcome or no issues remain. **Write-producing `GLOBAL_BLOCKED`**: if the blocker is raised **after** the iteration already produced agent writes — changed code, created/updated a PR, or created/updated a Linear issue (Step 3) — the iteration produced work: it is NOT a skip, it consumes the max-2 agent-write budget (Hard Rule #4), and it stops the run exactly like `IN_REVIEW` with agent writes.
 
 Track a `SKIPPED_ISSUES` list (comma-separated issue numbers) across the skip loop: every skip outcome appends the processed issue number so the cursor never revisits it. A single-exclusion cursor is not enough — if only the last issue is excluded, two adjacent skipped issues alternate forever.
 
+**Release a claim on a no-write terminal exit**: The Step 1/Step 2 `claim-issue.sh` call adds an `agent-working` label to the issue. If this session then ends the issue through a no-write terminal outcome (`IN_REVIEW` with no agent writes, `LOCAL_DEADLOCK`, `NEEDS_USER`, `AMBIGUOUS`, or `SYNCED` for Canceled/Duplicate issues), the `agent-working` label would otherwise hold the issue claimed until `CLAIM_TTL_MINUTES` expires — blocking later automator runs from picking it up. Before removing the label this session MUST **reconfirm ownership at the moment of release**, because a run can outlive the TTL since its earlier claim: another session may have taken over the stale claim in between, and removing the label would delete that new owner's live claim and cause duplicate work. Reconfirm by re-running the claim script with the **same session identity** this run used:
+```bash
+scripts/claim-issue.sh <ISSUE_NUMBER>
+```
+- If it returns exit `0` / `RESULT=CLAIMED` (or `RESULT=TAKEOVER`), this session still owns a fresh claim — remove the `agent-working` label it added:
+  ```bash
+  gh issue edit <ISSUE_NUMBER> --remove-label "agent-working"
+  ```
+- If it returns `RESULT=SKIP` (exit `2`), another session now owns a fresh claim — **do NOT remove the label** (releasing another session's live claim would cause duplicate work; the re-claim renewed the other owner, never ours).
+- If `RESULT=ERROR` (exit `1`), do not remove the label and treat it like a tooling failure (see Error Handling).
+
+Never remove the label when this session does not own the claim for this run. The queue's own zero-work `RESULT=SKIP` path (a foreign `agent-working` claim at Step 1) never triggers this release and left it untouched.
+
+**Renew ownership periodically and before consequential writes**: Promoting and shipping an issue is a long-running, multi-write flow, so a single claim at Step 1 can outlive `CLAIM_TTL_MINUTES` and go stale while this session is still working. A stale claim lets another session take over mid-run, which would make this session's later PR create/update, handoff, or merge writes collide with (or be interpreted as owned by) the new owner. Therefore:
+- **Re-check ownership immediately before every consequential write**, especially PR creation/update, `@codex review` re-trigger, handoff, and merge. Re-run `scripts/claim-issue.sh <ISSUE_NUMBER>` with the same session identity; only proceed with the write on `RESULT=CLAIMED`/`RESULT=TAKEOVER` (exit `0`). A `RESULT=SKIP` (exit `2`) means another session now owns a fresh claim — stop writing to this issue/PR and treat it as claimed-elsewhere. A `RESULT=ERROR` (exit `1`) is a tooling failure to handle per Error Handling, and must not be treated as ownership.
+- If the run is about to do no more writes, the periodic renewal also serves as the final reconfirmation before any label removal.
+
 1. If `LOCAL_DEADLOCK`: Write a concise blocker summary on the issue or PR. Append the issue number to `SKIPPED_ISSUES`. Sync GitHub, Linear, and PR states.
 2. **If the issue has a merged PR**: Clean up stale `agent-working` labels (issue + PR), sync Linear to `Shipped`, and end with outcome `SHIPPED` (same handling as Step 1).
-3. If `IN_REVIEW` with no agent writes: Do not modify the issue, PR, or Linear state — everything is already correct. Append the issue number to `SKIPPED_ISSUES`.
-4. **If the issue or its linked PR is `GLOBAL_BLOCKED`** (the label is present or the iteration set the outcome):
+3. **If `IN_REVIEW` with no agent writes**: The PR/issue state is already correct and must not be changed further — except that, if this session claimed the issue this run (Step 1/Step 2 returned `RESULT=CLAIMED` or `RESULT=TAKEOVER`), the one remaining cleanup is to release the freshly-acquired claim it added: remove the `agent-working` label so the issue is not held claimed until `CLAIM_TTL_MINUTES` (see the **Release a claim on a no-write terminal exit** rule). Do not make any other issue, PR, or Linear state change. Append the issue number to `SKIPPED_ISSUES`.
+4. **If the issue is claimed by another agent session** (claim script exit `2` / `RESULT=SKIP`): Do not modify the issue, PR, or Linear state. Append the issue number to `SKIPPED_ISSUES`.
+5. **If the issue or its linked PR is `GLOBAL_BLOCKED`** (the label is present or the iteration set the outcome):
    - **Write-producing check first**: if this iteration already produced agent writes (code changes, PR creation/update, or Linear issue creation/update — Step 3) before the blocker was hit, do NOT skip — record `GLOBAL_BLOCKED`, count it against the max-2 write budget (Hard Rule #4), then clean up before stopping: remove the `agent-working` label from the issue and PR (work on this item has ended — see Hard Rule 9) and send the global-deadlock notification (see Notification Webhook). Neither Step 7 nor the zero-work branch cleanup runs on this exit, so ownership release and the human notification must happen here. Then stop the run.
    - **Attempt to unblock first** (zero-work iterations only): re-run the failing action(s) once with a bounded retry budget (e.g., `gh`/`linear` auth check, CI status, Render preview verification). If the retry succeeds, resolve the blocker — remove the `GLOBAL_BLOCKED` label from issue/PR if it was applied — and continue the normal flow from the point of failure.
    - **If the PR still cannot be unblocked**: write a concise blocker summary on the issue/PR stating the exact missing capability and the smallest human action needed, keep the `GLOBAL_BLOCKED` label, remove the `agent-working` label from the issue and PR (work on this item has ended — see Hard Rule 9), send the global-deadlock notification (see Notification Webhook), and append the issue number to `SKIPPED_ISSUES`.
    - **Do not halt the run**: continue with the next oldest open issue until an unblockable PR is `SHIPPED` or `IN_REVIEW`, or no open issues remain.
    - **Total tooling/access failure**: advancing requires a working `gh`/`linear` path. If the blocker is a total tooling/access failure (e.g., CLI + MCP auth both fail), stop the run with `GLOBAL_BLOCKED` instead — `get-oldest-issue.sh` cannot run without authenticated `gh` (see Error Handling).
-5. Re-run `scripts/get-oldest-issue.sh "$SKIPPED_ISSUES"` (pass the accumulated comma-separated skip list) to fetch the next oldest open issue not yet processed in this run.
-6. If no more open issues exist, stop execution.
-7. Process this next issue from Steps 1–5 (treat it as the new primary).
-8. If it again ends with a skip outcome (`IN_REVIEW` no-writes, `LOCAL_DEADLOCK`, or `GLOBAL_BLOCKED` still blocked), repeat from step 1.
-9. If it ends with any other outcome, proceed to Step 7 with that outcome.
+6. Re-run `scripts/get-oldest-issue.sh "$SKIPPED_ISSUES"` (pass the accumulated comma-separated skip list) to fetch the next oldest open issue not yet processed in this run.
+7. If no more open issues exist, stop execution.
+8. Process this next issue from Steps 1–5 (treat it as the new primary).
+9. If it again ends with a skip outcome (`CLAIMED`, `IN_REVIEW` no-writes, `LOCAL_DEADLOCK`, or `GLOBAL_BLOCKED` still blocked), repeat from step 1.
+10. If it ends with any other outcome, proceed to Step 7 with that outcome.
 
-Skip outcomes do not count toward the max-2 issues-that-require-writes limit (Hard Rule #4).
+Skip outcomes (`CLAIMED`, `LOCAL_DEADLOCK`, `GLOBAL_BLOCKED` no-writes, `IN_REVIEW` no-writes) do not count toward the max-2 issues-that-require-writes limit (Hard Rule #4) and never count toward any session-level issue budget (e.g., 3 issues per session).
 
 If the primary issue ends with any other (non-skip) outcome, including `IN_REVIEW` with agent writes, stop execution immediately.
 
@@ -239,12 +290,12 @@ If the primary issue ends with any other (non-skip) outcome, including `IN_REVIE
 
 Always include a final summary of execution containing:
 1. Primary issue processed and its outcome.
-2. Outcome of the first non-skip issue, if any (issues with skip outcomes `LOCAL_DEADLOCK`, `GLOBAL_BLOCKED` with no agent writes, or `IN_REVIEW` no-writes are counted as skipped and listed). Write-producing `GLOBAL_BLOCKED` issues are non-skip outcomes and are listed as such.
+2. Outcome of the first non-skip issue, if any (issues with skip outcomes `CLAIMED`, `LOCAL_DEADLOCK`, `GLOBAL_BLOCKED` with no agent writes, or `IN_REVIEW` no-writes are counted as skipped and listed). Write-producing `GLOBAL_BLOCKED` issues are non-skip outcomes and are listed as such.
 3. Tools utilized (`gh`, `linear`, MCP, or scripts).
 4. Details of any global blockers, including each `GLOBAL_BLOCKED` issue skipped, the unblock attempt made, and the next issue advanced to.
 5. Performed verification steps (CI, reviews, Render preview ping, and E2E).
 6. **Linear issue ID** associated with each processed issue (e.g., `CB-42`).
-7. **`agent-working` lifecycle confirmation**: For each issue confirm: label was added at start, and removed at end (merged or `In review`).
+7. **`agent-working` lifecycle confirmation**: For each issue confirm: the claim was acquired at start via `scripts/claim-issue.sh` (label + claim comment with agent/session/timestamp), and released at end (merged or `In review`).
 
 ## Error Handling & Troubleshooting
 
@@ -270,4 +321,5 @@ Refer to this section when encountering execution issues:
   - Then end the run with outcome `GLOBAL_BLOCKED`. Do not attempt to advance: with CLI + MCP both unavailable there is no working `gh`/`linear` path to fetch the next issue — `get-oldest-issue.sh` fails its auth check. The Step 6 skip loop applies only to issue-specific `GLOBAL_BLOCKED` PRs where tooling remains functional.
 - **Merge Conflicts**: If branch checkout or pushes fail due to conflicts, pull from `master`, resolve conflicts locally, and re-run tests. If resolving conflicts introduces ambiguity, end with `AMBIGUOUS`.
 - **Render Preview deployment timeout**: If `scripts/verify-preview.sh` fails after 3 attempts, inspect the Render logs via the Render dashboard. If it is an infrastructure timeout, wait and retry. If it is an application error/crash, treat it as a `LOCAL_DEADLOCK`.
-- **Takeover Conflict**: Do not force-remove the `agent-working` label of an active run. Wait or exit with `NEEDS_USER` to allow coordination.
+- **Claim script errors** (`RESULT=ERROR`, exit `1`): verify `gh` is authenticated as `francovp` and that you run the script from the repo root (it resolves the repo via `gh repo view`). Retry once; if it keeps failing, treat it as a tooling failure — stop the run with `GLOBAL_BLOCKED` (see CLI Authentication Failures).
+- **Takeover Conflict**: Do not force-remove the `agent-working` label of an active run. A claim is active while its newest claim comment (or legacy labeled event) is younger than `CLAIM_TTL_MINUTES`. Wait for the claim to expire, or exit with `CLAIMED` (zero-work skip) / `NEEDS_USER` to allow coordination. Only stale claims may be taken over — `scripts/claim-issue.sh` handles this automatically.
