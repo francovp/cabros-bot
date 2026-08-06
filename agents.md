@@ -621,7 +621,7 @@ The system provides an HTTP endpoint (`/api/news-monitor`) that analyzes financi
 - Binance API client for precise crypto prices (003-news-monitor, optional fallback to Gemini GoogleSearch)
 - TradingView MCP remote Streamable HTTP server for technical `coin_analysis` report generation (`POST /api/webhook/expanded-analysis-alert`)
 - Sentry SDK for Node (`@sentry/node` v10.53.1) for backend runtime error monitoring and warn/error console log capture (005-sentry-runtime-errors; no tracing by default)
-- Cloud Firestore via `firebase-admin` v9.x for server-side alert document persistence (006-firestore-alert-storage; fire-and-forget, never blocks delivery)
+- Cloud Firestore via `firebase-admin` v12.x for server-side alert document persistence and optional server-side Remote Config loading (006-firestore-alert-storage; fail-open)
 - Firebase Local Emulator Suite via pinned `firebase-tools` for opt-in Firestore integration tests (CB-124 / Issue #302; never used by the default test command)
 
 ## Firestore Alert Storage (006-firestore-alert-storage)
@@ -1160,6 +1160,21 @@ Scanner presets support an independent `ENABLE_FIRESTORE_SCANNER_PRESETS=true` g
 - `src/controllers/status.js` and `src/controllers/webhooks/handlers/scannerPresets/scannerPresets.js` — Expose storage capability metadata without credentials.
 - `tests/unit/scanner-preset-service.test.js`, `tests/integration/scanner-presets-endpoint.test.js`, and `tests/integration/status-endpoint.test.js` — Cover independent persistence, restart simulation, disabled fallback, and Firestore write failure.
 - `README.md`, `.env.example`, `src/openapi/openapi.json`, and `CabrosBot.postman_collection.json` — Document configuration and response contracts.
+
+## Firebase Remote Config Safe Runtime Tuning (CB-116 / Issue #303)
+
+`ENABLE_FIREBASE_REMOTE_CONFIG=true` enables the Firebase Admin server-side Remote Config Preview loader. `RemoteConfigService` reuses the existing lazy Firebase Admin/Firestore initialization, loads once after startup, and refreshes on a bounded interval; alert paths only read the in-process cache and never fetch per alert.
+
+The allow-list is limited to news thresholds/concurrency/retries, TradingView timeouts/retries, and `ENABLE_MESSAGE_FOOTER_METADATA`. Values are validated against finite, integer, positive, boolean, and range constraints. Credentials, API keys, webhook authentication, route/security gates, and notification destinations are excluded. Disabled, unavailable, timed-out, stale, malformed, or invalid values fall back to environment/default values without blocking startup or alert delivery.
+
+`/api/status` and `/api/capabilities` expose only `enabled`, `configured`, `ready`, `status`, `source`, template version, last successful load, last error category, and bounded loader settings under `dependencies.firebaseRemoteConfig`; remote values and secrets are never returned.
+
+**Core Components**:
+- `src/services/remoteConfig/RemoteConfigService.js` — Bounded loader, allow-list validation, cache expiry, and safe status metadata.
+- `src/services/storage/AlertStorageService.js` — Reuses the existing Firebase Admin singleton for the independent Remote Config gate.
+- `src/controllers/status.js` and `index.js` — Expose status metadata and start/stop the background refresh lifecycle.
+- `tests/unit/remote-config-service.test.js`, `tests/unit/analyzer.test.js`, `tests/unit/tradingview-mcp-service.test.js`, and `tests/integration/status-endpoint.test.js` — Cover disabled behavior, valid/invalid values, timeout, stale cache, runtime consumers, and redacted status metadata.
+- `README.md`, `.env.example`, `src/openapi/openapi.json`, and `CabrosBot.postman_collection.json` — Document the Preview rollout, quota/error monitoring, configuration, and response contract.
 
 ## Generic Message Idempotency (CB-97 / Issue #240)
 

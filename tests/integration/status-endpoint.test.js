@@ -319,6 +319,26 @@ describe('Status endpoints', () => {
 		expect(response.body.featureFlags.messageFooterMetadata).toBe(false);
 	});
 
+	it('reports safe Firebase Remote Config load metadata without values', async () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.firebaseRemoteConfig).toBe(true);
+		expect(response.body.dependencies.firebaseRemoteConfig).toEqual(expect.objectContaining({
+			enabled: true,
+			configured: true,
+			source: 'default',
+			templateVersion: null,
+			lastSuccessfulLoad: null,
+			lastErrorCategory: null,
+		}));
+		expect(JSON.stringify(response.body.dependencies.firebaseRemoteConfig)).not.toContain('gemini-key');
+	});
+
 	it('reports signal outcome tracking from the canonical environment variable', async () => {
 		process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
 

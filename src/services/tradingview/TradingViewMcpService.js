@@ -2,6 +2,7 @@
 
 const { sendWithRetry } = require('../../lib/retryHelper');
 const { parseTradingViewSignal, normalizeTradingViewTimeframe } = require('./parseTradingViewSignal');
+const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 
 const DEFAULT_TRADINGVIEW_MCP_URL = 'https://tradingview-mcp-yp6b.onrender.com/mcp';
 
@@ -44,15 +45,16 @@ class TradingViewMcpService {
 	}
 
 	getConfig() {
-		const timeoutMs = parseInt(this.config.timeoutMs || process.env.TRADINGVIEW_MCP_TIMEOUT_MS || '12000', 10);
-		const maxRetries = parseInt(this.config.maxRetries || process.env.TRADINGVIEW_MCP_MAX_RETRIES || '3', 10);
+		const runtimeConfig = getRuntimeConfig();
+		const timeoutMs = parseInt(this.config.timeoutMs || runtimeConfig.TRADINGVIEW_MCP_TIMEOUT_MS, 10);
+		const maxRetries = parseInt(this.config.maxRetries || runtimeConfig.TRADINGVIEW_MCP_MAX_RETRIES, 10);
 		const defaultExchange = (this.config.defaultExchange || process.env.TRADINGVIEW_MCP_DEFAULT_EXCHANGE || 'BINANCE').toUpperCase();
 		const defaultTimeframe = normalizeTradingViewTimeframe(
 			this.config.defaultTimeframe || process.env.TRADINGVIEW_MCP_DEFAULT_TIMEFRAME || '1h',
 			'1h',
 		);
 		const enrichmentBudgetMs = parseInt(
-			this.config.enrichmentBudgetMs || process.env.TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS || '12000',
+			this.config.enrichmentBudgetMs || runtimeConfig.TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS,
 			10,
 		);
 
@@ -677,7 +679,7 @@ class TradingViewMcpService {
 		}
 
 		const sentiment = sentimentScore > 0.15 ? 'BULLISH' : sentimentScore < -0.15 ? 'BEARISH' : 'NEUTRAL';
-		const extraText = process.env.ENABLE_MESSAGE_FOOTER_METADATA !== 'false'
+		const extraText = getRuntimeConfig().ENABLE_MESSAGE_FOOTER_METADATA
 			? '*Grounding*: `tradingview-mcp`'
 			: '';
 

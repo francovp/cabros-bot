@@ -1,4 +1,5 @@
 const { TradingViewMcpService } = require('../../src/services/tradingview/TradingViewMcpService');
+const remoteConfigService = require('../../src/services/remoteConfig/RemoteConfigService');
 
 describe('TradingViewMcpService', () => {
 	afterEach(() => {
@@ -6,7 +7,9 @@ describe('TradingViewMcpService', () => {
 		delete process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT;
 		delete process.env.ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME;
 		delete process.env.ENABLE_MESSAGE_FOOTER_METADATA;
+		delete process.env.ENABLE_FIREBASE_REMOTE_CONFIG;
 		delete process.env.TRADINGVIEW_MCP_URL;
+		remoteConfigService._resetForTesting();
 	});
 
 	it('uses the active TradingView MCP host when no URL is configured', () => {
@@ -89,6 +92,7 @@ describe('TradingViewMcpService', () => {
 			successCount: 0,
 			failureCount: 0,
 		}));
+>>>>>>> origin/master
 	});
 
 	it('returns null when alert text is not a TradingView signal', async () => {
@@ -172,6 +176,21 @@ describe('TradingViewMcpService', () => {
 		const result = await service.enrichFromAlertText('BTCUSDT(240) pasó a señal de VENTA');
 
 		expect(result.extraText).toBe('');
+	});
+
+	it('uses cached Remote Config values for runtime timeout and retry settings', () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		remoteConfigService._setRemoteOverridesForTesting({
+			TRADINGVIEW_MCP_TIMEOUT_MS: 5000,
+			TRADINGVIEW_MCP_MAX_RETRIES: 1,
+		});
+
+		const service = new TradingViewMcpService();
+
+		expect(service.getConfig()).toEqual(expect.objectContaining({
+			timeoutMs: 5000,
+			maxRetries: 1,
+		}));
 	});
 
 	it('prefers structuredContent when MCP server returns schema-native tool results', async () => {

@@ -6,6 +6,7 @@ const { isFirestoreConfigured } = require('../services/storage/firestoreConfig')
 const SignalOutcomeService = require('../services/storage/SignalOutcomeService');
 const { jobQueue } = require('../services/jobs/JobQueue');
 const equityMarketDataService = require('../services/storage/EquityMarketDataService');
+const remoteConfigService = require('../services/remoteConfig/RemoteConfigService');
 const { tradingViewMcpService } = require('../services/tradingview/TradingViewMcpService');
 const DEFAULT_AZURE_LLM_ENDPOINT = 'https://models.github.ai/inference';
 const DEFAULT_OPENROUTER_MODEL = 'google/gemini-2.0-flash-001';
@@ -168,7 +169,9 @@ function getStatus() {
 	const binancePriceCheckEnabled = isEnabled(process.env.ENABLE_BINANCE_PRICE_CHECK);
 	const llmAlertEnrichmentEnabled = isEnabled(process.env.ENABLE_LLM_ALERT_ENRICHMENT);
 	const cloudflareAigEnabled = isEnabled(process.env.ENABLE_CLOUDFLARE_AIG);
-	const messageFooterMetadataEnabled = process.env.ENABLE_MESSAGE_FOOTER_METADATA !== 'false';
+	const runtimeConfig = remoteConfigService.getRuntimeConfig();
+	const messageFooterMetadataEnabled = runtimeConfig.ENABLE_MESSAGE_FOOTER_METADATA;
+	const remoteConfigStatus = remoteConfigService.getStatus();
 	const signalOutcomeTrackingEnabled = isEnabled(process.env.ENABLE_SIGNAL_OUTCOME_TRACKING)
 		|| isEnabled(process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING);
 	const equityMarketDataStatus = equityMarketDataService.getStatus();
@@ -298,6 +301,7 @@ function getStatus() {
 			signalOutcomeTracking: signalOutcomeTrackingEnabled,
 			equityMarketData: equityMarketDataStatus.enabled,
 			firestoreIdempotency: idempotencyStorageService.isEnabled(),
+			firebaseRemoteConfig: remoteConfigStatus.enabled,
 			jobExecutionWorker: jobExecutionQueueStatus.enabled,
 		},
 		deliveryChannels: {
@@ -337,6 +341,7 @@ function getStatus() {
 			}),
 			newsMonitorDedup,
 			idempotencyStorage: idempotencyStorageService.getStorageStatus(),
+			firebaseRemoteConfig: remoteConfigStatus,
 			scannerPresetStorage: scannerPresetService.getStorageStatus(),
 			equityMarketData: equityMarketDataStatus,
 			signalOutcomeWorker: {
