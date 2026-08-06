@@ -105,6 +105,111 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 		expect(global.fetch).toHaveBeenCalledTimes(1);
 	});
 
+	it('sends a message to discord using per-request discordWebhookUrl override', async () => {
+		process.env.ENABLE_DISCORD_ALERTS = 'true';
+		process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/default/token';
+		global.fetch = jest.fn().mockResolvedValue({
+			ok: true,
+			json: async () => ({ id: 'discord-msg-789' }),
+		});
+		await initializeNotificationServices(mockBot);
+
+		const res = await request(app)
+			.post('/api/webhook/message')
+			.set('x-api-key', 'test-key')
+			.send({
+				message: 'Hello Discord override',
+				channels: ['discord'],
+				discordWebhookUrl: 'https://discord.com/api/webhooks/9999/override-token',
+			})
+			.expect(200);
+
+		expect(res.body.success).toBe(true);
+		expect(res.body.results).toHaveLength(1);
+		expect(res.body.results[0].channel).toBe('discord');
+		expect(res.body.results[0].success).toBe(true);
+		expect(res.body.results[0].messageId).toBe('discord-msg-789');
+		expect(global.fetch).toHaveBeenCalledWith(
+			'https://discord.com/api/webhooks/9999/override-token?wait=true',
+			expect.any(Object),
+		);
+	});
+
+	it('returns 400 when discordWebhookUrl is invalid (non-HTTPS or non-Discord)', async () => {
+		process.env.ENABLE_DISCORD_ALERTS = 'true';
+		process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/default/token';
+		await initializeNotificationServices(mockBot);
+
+		const res = await request(app)
+			.post('/api/webhook/message')
+			.set('x-api-key', 'test-key')
+			.send({
+				message: 'Hello invalid discord URL',
+				channels: ['discord'],
+				discordWebhookUrl: 'https://invalid-host.com/api/webhooks/123/token',
+			})
+			.expect(400);
+
+		expect(res.body.success).toBe(false);
+		expect(res.body.error).toContain('discordWebhookUrl');
+	});
+
+	it('returns 400 when discordWebhookUrl path lacks webhook ID and token', async () => {
+		process.env.ENABLE_DISCORD_ALERTS = 'true';
+		process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/123/token';
+		await initializeNotificationServices(mockBot);
+
+		const res = await request(app)
+			.post('/api/webhook/message')
+			.set('x-api-key', 'test-key')
+			.send({
+				message: 'Hello malformed path',
+				channels: ['discord'],
+				discordWebhookUrl: 'https://discord.com/api/webhooks/',
+			})
+			.expect(400);
+
+		expect(res.body.success).toBe(false);
+		expect(res.body.error).toContain('discordWebhookUrl');
+	});
+
+	it('returns 409 IDEMPOTENCY_CONFLICT when reusing key with different discordWebhookUrl', async () => {
+		process.env.ENABLE_DISCORD_ALERTS = 'true';
+		process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/default/token';
+		global.fetch = jest.fn().mockResolvedValue({
+			ok: true,
+			json: async () => ({ id: 'discord-msg-1' }),
+		});
+		await initializeNotificationServices(mockBot);
+
+		await request(app)
+			.post('/api/webhook/message')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'key-discord-conflict')
+			.send({
+				message: 'Message',
+				channels: ['discord'],
+				discordWebhookUrl: 'https://discord.com/api/webhooks/111/token',
+			})
+			.expect(200);
+
+		const conflictRes = await request(app)
+			.post('/api/webhook/message')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'key-discord-conflict')
+			.send({
+				message: 'Message',
+				channels: ['discord'],
+				discordWebhookUrl: 'https://discord.com/api/webhooks/222/token',
+			})
+			.expect(409);
+
+		expect(conflictRes.body).toEqual({
+			error: expect.stringContaining('different payload'),
+			code: 'IDEMPOTENCY_CONFLICT',
+		});
+	});
+
 	it('replays a sequential request without redispatching selected Telegram, WhatsApp, and Discord channels', async () => {
 		process.env.ENABLE_DISCORD_ALERTS = 'true';
 		process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/123/token';

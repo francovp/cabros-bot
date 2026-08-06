@@ -254,7 +254,25 @@ describe('AlertStorageService', () => {
 				channels: ['telegram'],
 				source: 'webhook',
 				useTradingViewData: true,
+				tradingViewEnrichmentApplied: false,
 			});
+		});
+
+		it('persists requested and successfully applied TradingView enrichment separately', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockAdd.mockResolvedValueOnce({ id: 'id-tradingview' });
+
+			await AlertStorageService.saveAlert(buildParams({
+				useTradingViewData: true,
+				tradingViewEnrichmentApplied: true,
+				enriched: true,
+				enrichmentData: { tradingViewEnrichmentApplied: true },
+			}));
+
+			expect(mockAdd).toHaveBeenCalledWith(expect.objectContaining({
+				useTradingViewData: true,
+				tradingViewEnrichmentApplied: true,
+			}));
 		});
 
 		it('persists only safe prompt provenance fields with enriched alerts', async () => {
@@ -432,6 +450,7 @@ describe('AlertStorageService', () => {
 					deliveryResults: [{ channel: 'telegram', success: true }],
 					source: 'webhook',
 					useTradingViewData: false,
+					tradingViewEnrichmentApplied: false,
 				},
 			]);
 			expect(result.hasMore).toBe(true);
@@ -613,6 +632,7 @@ describe('AlertStorageService', () => {
 				deliveryResults: [{ channel: 'telegram', success: true }],
 				source: 'webhook',
 				useTradingViewData: true,
+				tradingViewEnrichmentApplied: false,
 			});
 		});
 
@@ -791,6 +811,7 @@ describe('AlertStorageService', () => {
 				source: 'webhook',
 				enriched: true,
 				useTradingViewData: true,
+				tradingViewEnrichmentApplied: false,
 				deliveryResults: [
 					{ channel: 'telegram', success: true, messageId: 'tg-1', errorCode: null, statusCode: null },
 					{ channel: 'whatsapp', success: false, messageId: null, errorCode: 'PROVIDER_LIMIT', statusCode: 429 },
@@ -893,6 +914,7 @@ describe('AlertStorageService', () => {
 						],
 						source: 'webhook',
 						useTradingViewData: true,
+						tradingViewEnrichmentApplied: true,
 						processingTimeMs: 250,
 					}),
 					buildQueryDoc('alert-2', {
@@ -935,6 +957,7 @@ describe('AlertStorageService', () => {
 					enriched: 1,
 					plain: 1,
 					tradingViewData: 1,
+					tradingViewDataApplied: 1,
 					withoutTradingViewData: 1,
 				},
 				enrichment: {

@@ -119,6 +119,7 @@ function mergeEnrichmentData(text, geminiEnriched, mcpEnriched) {
 
 	return {
 		original_text: text,
+		tradingViewEnrichmentApplied: mcp.tradingViewEnrichmentApplied === true,
 		sentiment: useMcpSentiment ? (mcp.sentiment || 'NEUTRAL') : (gemini.sentiment || mcp.sentiment || 'NEUTRAL'),
 		sentiment_score: useMcpSentiment && mcpScore !== null ? mcpScore : (geminiScore !== null ? geminiScore : (mcpScore !== null ? mcpScore : 0)),
 		insights,

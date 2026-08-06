@@ -45,9 +45,11 @@ This project is a small Express + Telegraf (Telegram) bot service that exposes a
 - `src/workers/signalOutcomeWorker.js` — Dedicated Render worker bootstrap with SIGTERM drain handling.
 - `src/lib/adminAuth.js` — Opt-in Firebase ID-token verification and `admin.viewer`/`admin.operator` authorization for browser admin workflows; legacy API keys remain supported.
 - `src/controllers/webhooks/handlers/marketScanner/marketScanner.js` — Scanner webhook handler executing sequential gainers, losers, and breakouts scanner runs on TradingView MCP.
-- `src/services/jobs/JobService.js` — Manages in-memory job state, executes background TradingView analysis runs, and performs periodic expiration cleanup.
+- `src/services/jobs/JobService.js` — Manages job state, executes background TradingView analysis runs, and performs periodic expiration cleanup.
+- `src/services/jobs/JobQueue.js` / `src/services/jobs/jobWorker.js` — BullMQ producer/worker integration for the optional Render worker execution mode.
+- `worker.js` — Dedicated Render worker entry point with graceful BullMQ shutdown.
 - `src/services/tradingview/expandedAnalysisAlertReport.js` — Parses `EXCHANGE:SYMBOL` requests and formats grouped Spanish technical-analysis reports.
-- `src/services/monitoring/SentryService.js` — Wraps `@sentry/node` for runtime error monitoring (005).
+- `src/services/monitoring/SentryService.js` — Wraps `@sentry/node` for runtime error and external failure monitoring with tag enrichment (endpoint, provider, status_code, trace_id), automatic PII sanitization, and actionable 500 error grouping.
 - `src/services/prompts/` — Langfuse-backed PromptService that resolves prompts with file-backed local defaults.
 - `src/controllers/helpers.js` — Small numeric helper (`round10`) used by price formatting.
 - `src/lib/logging.js` — Configures `console.*` levels via `LOG_LEVEL` and emits one-line structured JSON logs.
@@ -58,7 +60,7 @@ This project is a small Express + Telegraf (Telegram) bot service that exposes a
 ### External Integrations
 - **Binance**: Uses `binance` package `MainClient` and `getAvgPrice({ symbol })` with `beautifyResponses: true`.
 - **Telegram**: Uses `telegraf` package. Commands are wired in `index.js`, and direct `bot.telegram.sendMessage` is used for alerts.
-- **TradingView MCP**: Remote MCP Streamable HTTP endpoint defaults to `https://tradingview-mcp.onrender.com/mcp`. Tool `coin_analysis` expects complete symbols split from `EXCHANGE:SYMBOL` values.
+- **TradingView MCP**: Remote MCP Streamable HTTP endpoint defaults to `https://tradingview-mcp-yp6b.onrender.com/mcp`. Tool `coin_analysis` expects complete symbols split from `EXCHANGE:SYMBOL` values.
 
 ---
 
@@ -155,8 +157,8 @@ Implement the following security practices to safeguard endpoints and credential
 - Routes under `/api` (e.g. `/api/webhook/alert`) are mounted regardless of bot launch; individual features and notification channels are gated via env flags and per-channel validation.
 - API documentation is public and read-only at `/docs` and `/openapi.json`; webhook and news-monitor operations remain guarded by `validateApiKey`, while documented admin read/action routes also accept verified Firebase bearer tokens when enabled. `/admin/auth-config` exposes only public browser configuration.
 - Alert-producing routes now accept optional per-request notification routing:
-  - `channels` — non-empty array limited to `telegram` and/or `whatsapp`
-  - `telegramChatId` / `whatsappChatId` — optional per-channel destination overrides
+  - `channels` — non-empty array limited to `telegram`, `whatsapp`, and/or `discord`
+  - `telegramChatId` / `whatsappChatId` / `discordWebhookUrl` — optional per-channel destination overrides (`discordWebhookUrl` must be a valid HTTPS Discord webhook URL)
   - If `channels` is omitted, delivery still uses the existing broadcast-to-all-enabled-channels behavior.
 - Stored alert read, export, analytics, and replay routes (`GET /api/alerts`, `GET /api/alerts/export`, `GET /api/alerts/summary`, `GET /api/alerts/:alertId`, `POST /api/alerts/:alertId/replay`) are also mounted under `/api`; they require `WEBHOOK_API_KEY` when configured, return `403 FEATURE_DISABLED` unless `ENABLE_FIRESTORE_ALERT_STORAGE=true`, and return `503 STORAGE_UNAVAILABLE` when Firestore is enabled but unreadable.
 - Webhook idempotency (`IdempotencyService`) stores reservations and cached responses in Cloud Firestore `idempotency_keys` collection when `ENABLE_FIRESTORE_IDEMPOTENCY=true`. All storage interactions fail open to in-memory caching upon Firestore errors, ensuring webhooks remain responsive across process restarts and horizontal scaling. `/api/status` exposes `featureFlags.firestoreIdempotency` and `dependencies.idempotencyStorage`.
@@ -432,21 +434,26 @@ The system provides asynchronous job endpoints to support executing both `expand
 
 **Core Components**:
 - `src/services/jobs/JobService.js` — Coordinates job state tracking, background worker execution, progress reports, durable persistence checkpoints, and job eviction (jobs older than 1 hour).
-- `src/services/jobs/JobRepository.js` — Stores and lists sanitized job records in memory and, when `ENABLE_FIRESTORE_JOB_STORAGE=true`, in Firestore collection `tradingviewJobs`.
+- `src/services/jobs/JobRepository.js` — Stores and lists sanitized job records in memory and, when `ENABLE_FIRESTORE_JOB_STORAGE=true`, in Firestore collection `tradingviewJobs`; claims, renewals, retry releases, terminal failures, and worker saves use Firestore transactions keyed by worker and processing attempt to preserve ownership.
+- `src/services/jobs/JobQueue.js` — Enqueues only durable `jobId` references in Redis/BullMQ, reports queue readiness without exposing `REDIS_URL`, and recreates failed producer connections without disabling later submissions.
+- `src/services/jobs/jobWorker.js` / `worker.js` — Claims queued jobs through Firestore transactions, periodically re-enqueues durable rows still marked `processing`/`queued` or holding expired `claimed`/`running` leases, renews active claims while external work is in flight, releases claims only when BullMQ has another attempt, persists final worker failures, tracks terminal callback delivery during shutdown, and drains the worker on `SIGTERM` without stopping an unlaunched Telegraf transport.
 - `src/controllers/webhooks/handlers/jobs/jobs.js` — HTTP route controller handlers (`postCreateJob`, `getJobList`, `getJobStatus`).
 - `src/controllers/commands.js` — Telegram `/analisis` and `/scanner` commands create these jobs and must `await jobService.createJob()` before replying or handling validation/storage errors.
 
 **Failure and Edge Case Behavior**:
 - Sync validation: throws `400` synchronously on invalid inputs before job registration.
-- Idempotency: job-starting POST endpoints reserve the optional `idempotency-key` before validation/worker launch, replay matching responses with `Idempotency-Replay: true` and `idempotencyReplayed: true`, and return `409 IDEMPOTENCY_CONFLICT` when a key is reused with a different request fingerprint. Nested object keys are canonicalized for the fingerprint while array order remains significant. Requests without a key are unchanged.
+- Idempotency: job-starting POST endpoints reserve the optional `idempotency-key` before validation/worker launch, replay matching responses with `Idempotency-Replay: true` and `idempotencyReplayed: true`, and return `409 IDEMPOTENCY_CONFLICT` when a key is reused with a different request fingerprint. `JOB_QUEUE_ACCEPTANCE_UNKNOWN` 503 responses remain replayable and include the durable `jobId`, so retries do not create a second UUID or queue item. Nested object keys are canonicalized for the fingerprint while array order remains significant. Requests without a key are unchanged.
 - Feature checks: returns `404 FEATURE_DISABLED` if market scanner jobs are created but `ENABLE_MARKET_SCANNER` is not `'true'`.
 - Persistence: `createJob()` and `getJob()` are async because job metadata/results may be written to or read from Firestore.
+- Render worker mode: set `JOB_EXECUTION_MODE=render-worker` with `REDIS_URL` and durable Firestore credentials. The web process returns `503 JOB_QUEUE_UNAVAILABLE` when the queue cannot accept work; if enqueue acknowledgement and deterministic reconciliation both fail, it returns `503 JOB_QUEUE_ACCEPTANCE_UNKNOWN` with the durable `jobId`, preserves the queued durable record, and keeps the idempotency response replayable. The worker periodically scans durable `processing`/`queued` rows and expired `claimed`/`running` leases, retries retained failed BullMQ jobs before adding a duplicate stable ID, and recovers queue work after Redis or worker persistence outages. `JOB_QUEUE_*` settings control attempts, backoff, concurrency, leases, and connection timeout. Final BullMQ failures become terminal `failed` jobs and trigger configured failure callbacks; if the terminal transition was already committed, later failure handling still reconciles the configured callback before acknowledgement. Notification delivery writes a durable pre-send/completed checkpoint; a redelivery with an unknown outcome fails closed as `JOB_DELIVERY_RECONCILIATION_REQUIRED` instead of replaying an external side effect, while a post-delivery checkpoint persistence failure preserves the completed outcome and retries the final durable write. The default `local` mode is unchanged.
+- Durable worker saves reject stale writes that would replace a terminal Firestore job state, and ownerless nonterminal saves cannot replace an active claim; claim release and failure transitions verify the worker's actual Firestore claim attempt transactionally, retrying or requeueing terminal failure persistence while storage recovers. Same-worker, same-attempt renewals that observe the worker's terminal finalization are accepted without changing terminal state. A worker checkpoint that discovers a terminal cancellation raises `JOB_CLAIM_LOST` before notification delivery, pre-claim redeliveries do not release or fail another attempt's claim, and terminal redeliveries reconcile unsent callbacks before acknowledgement. Status-filtered Firestore list queries are bounded server-side before the worker reconciliation scan.
 - Telegram commands: async `createJob()` rejections must stay inside the command `try/catch` so `replyValidationError()` can return clear command feedback instead of producing unhandled promise rejections.
 - Eviction: terminal jobs (`completed`, `failed`, `cancelled`, `timed_out`) older than 1 hour are deleted from memory/Firestore and return `404 Not Found`; active jobs are preserved.
 - Background failures: if the worker runs into unexpected exceptions or timeouts, the job is marked `failed` and reported to Sentry.
 - Market-scanner jobs preserve `ranked` and `includeMultiTimeframe` in request metadata and apply the same higher-timeframe confluence enrichment as the synchronous scanner endpoint. Enrichment is fail-open; if the job deadline aborts after a scan completes, that scan is retained and only remaining scans are marked `timeout`.
 - Completed ranked market-scanner job status and terminal callback payloads expose `scanResults[].scores[]` with the same score, reason, and optional `trendConfluence` fields as the synchronous endpoint.
-- Async Callbacks: If `callbackUrl` is provided, callbacks are dispatched for configured `callbackEvents` (`processing`, `completed`, `failed`, `cancelled`, `timed_out`). Each HTTP delivery includes `x-callback-timestamp`, `x-callback-event`, and a UUID `x-callback-delivery-id`; when a secret is configured, `x-callback-signature` is HMAC-SHA256 over those headers plus the raw JSON body joined with newlines. Retries generate a new delivery ID and signature per attempt. Transient network failures are retried up to 3 times (4 total attempts) with exponential backoff (starting at 1s, configurable via `JOB_CALLBACK_RETRY_DELAY_MS`). The callback process fails open, writing log events and updating job metadata (`callbackStatus`) without affecting the core job status. `callbackStatus.attempts` remains the compatibility log, and `callbackStatus.events[event]` tracks per-event success/failure so a successful `processing` callback does not suppress a later terminal callback.
+- Async Callbacks: If `callbackUrl` is provided, callbacks are dispatched for configured `callbackEvents` (`processing`, `completed`, `failed`, `cancelled`, `timed_out`). Each HTTP delivery includes `x-callback-timestamp`, `x-callback-event`, and a UUID `x-callback-delivery-id`; when a secret is configured, `x-callback-signature` is HMAC-SHA256 over those headers plus the raw JSON body joined with newlines. Retries generate a new delivery ID and signature per attempt. Durable callback events are claimed transactionally as `in_flight` before sending; active claims suppress non-awaited duplicate redeliveries, awaited terminal redeliveries surface `JOB_CALLBACK_DELIVERY_IN_FLIGHT` so BullMQ retries after the 60-second lease, processing claims are suppressed after the durable job reaches a terminal state, and expired claims can be taken over. Worker-owned saves merge current durable callback metadata instead of replacing it with a stale snapshot. Callback-claim/status storage failures fail open for non-awaited web callbacks but propagate from awaited worker terminal callbacks so BullMQ can retry; stale delivery-token updates remain confirmed no-ops. The callback process otherwise fails open, writing log events and updating job metadata (`callbackStatus`) without affecting the core job status. `callbackStatus.attempts` remains the compatibility log, and `callbackStatus.events[event]` tracks per-event in-flight/success/failure state so a successful `processing` callback does not suppress a later terminal callback. Durable callback metadata is merged transactionally from the current job snapshot so it cannot replay a claimed worker document.
+- Render Blueprint worker wiring mirrors Telegram, WhatsApp, Discord, Firebase, TradingView, callback signing/validation overrides, and all Sentry controls from the web service so queued deliveries, callback policy, and monitoring work in worker mode.
 
 **Where to look first when extending or debugging**:
 - `src/services/jobs/JobService.js` for background processing and state transitions.
@@ -615,6 +622,7 @@ The system provides an HTTP endpoint (`/api/news-monitor`) that analyzes financi
 - TradingView MCP remote Streamable HTTP server for technical `coin_analysis` report generation (`POST /api/webhook/expanded-analysis-alert`)
 - Sentry SDK for Node (`@sentry/node` v10.53.1) for backend runtime error monitoring and warn/error console log capture (005-sentry-runtime-errors; no tracing by default)
 - Cloud Firestore via `firebase-admin` v12.x for server-side alert document persistence and optional server-side Remote Config loading (006-firestore-alert-storage; fail-open)
+- Firebase Local Emulator Suite via pinned `firebase-tools` for opt-in Firestore integration tests (CB-124 / Issue #302; never used by the default test command)
 
 ## Firestore Alert Storage (006-firestore-alert-storage)
 
@@ -636,6 +644,7 @@ Every successful `POST /api/webhook/alert` request is persisted as a document in
 | `deliveryResults` | array | Per-channel `SendResult` objects from `notificationManager.sendToAll()` |
 | `source` | string | Always `"webhook"` |
 | `useTradingViewData` | boolean | Whether `?useTradingViewData=true` was set on the request |
+| `tradingViewEnrichmentApplied` | boolean | Whether a TradingView MCP result was successfully applied |
 
 **Credential Configuration** (choose one):
 - **Option A** — `GOOGLE_APPLICATION_CREDENTIALS=/path/to/serviceAccountKey.json` (file path, good for local dev)
@@ -667,6 +676,7 @@ Every successful `POST /api/webhook/alert` request is persisted as a document in
   - `deliveryResults`
   - `source`
   - `useTradingViewData`
+  - `tradingViewEnrichmentApplied`
 - Read filtering for `source` and `enriched` is applied in memory after `receivedAt`-ordered batches to avoid introducing new composite Firestore index requirements.
 - Read endpoints must map Firestore initialization/read failures to `503 STORAGE_UNAVAILABLE` instead of a generic `500`.
 - Replay attempts must not mutate the original `alerts` document. Use `saveReplayAttempt()` to write an audit document with ID `${alertId}_${idempotencyKey}` in `alertReplays`.
@@ -685,6 +695,19 @@ Storage happens **after** the HTTP response; the caller is never blocked.
 - `src/controllers/webhooks/handlers/alert/alert.js` — fire-and-forget call site (after `res.json()`)
 - Tests in `tests/unit/alert-storage-service.test.js` and `tests/integration/alerts-endpoint.test.js`
 - Firebase Console → Firestore → `alerts` collection for live document inspection
+
+## Firestore Emulator Integration Tests (CB-124 / Issue #302)
+
+The opt-in `pnpm test:firebase` command runs a separate Jest configuration against the Firestore emulator using the `demo-cabros` project ID. It removes production Firebase credential variables, sets `FIRESTORE_EMULATOR_HOST`, `GCLOUD_PROJECT`, and `FIREBASE_PROJECT_ID`, and delegates lifecycle cleanup to `firebase emulators:exec`.
+
+**Coverage**:
+- `tests/firebase/firestore-emulator.test.js` uses the real Admin SDK for alert storage, idempotency transactions, async job persistence, scanner presets, and signal-outcome reads/writes.
+- The same suite uses `@firebase/rules-unit-testing` to assert unauthenticated client reads and writes remain denied by `firestore.rules`.
+- Emulator data is cleared before each test; the default `pnpm test` stays mock-based and does not require Java, Firebase CLI downloads, or network access.
+
+**Tooling**:
+- `firebase-tools` and `firebase` are pinned in `package.json` for reproducible local/CI setup.
+- `.github/workflows/node.js.yml` installs JDK 21, caches emulator binaries, runs `pnpm test:firebase`, then runs the existing full Jest suite.
 
 ## Terminology Guide: Grounding vs Enrichment
 
@@ -731,9 +754,11 @@ See `/specs/TERMINOLOGY_GUIDE.md` for extended discussion and examples.
 
 
 ## Recent Changes (by spec-kit)
+- GH-291 / CB-112: hardened Render-worker job acceptance and recovery. Indeterminate enqueue responses preserve a replayable idempotency result with the durable `jobId`; the worker periodically reconciles durable queued rows and expired claims after Redis recovery, retries retained failed BullMQ jobs, terminal checkpoint races abort before notification delivery, status-filtered list queries preserve recent-first ordering while bounding Firestore scans, and terminal BullMQ failure handling retries pending callbacks even after the terminal job state was already committed. Production worker/Key Value provisioning remains payment-gated.
 - GH-284 / CB-118: Production Gemini quota recurrence was traced to an unset `NEWS_GEMINI_CONCURRENCY` with a Sentry `POST /api/news-monitor` dry-run carrying 28 symbols. Production uses the existing scheduler with `NEWS_GEMINI_CONCURRENCY=3`; analysis now runs inside the Sentry span so `summary.quota_exhausted` plus the `news.quota_exhausted` and `news.error_count` attributes remain correlated operational signals. Sentry measured 61 quota events through 2026-07-28T13:44:03Z against a Gemini free-tier limit of 15 requests/minute for the affected model; no current percentile or complete request-count measurement is inferred from that error window.
 - GH-287 / CB-119: Added opt-in Twelve Data equity market-data evaluation for `BATS` and `NASDAQ` signals. Entry prices use `/quote`; bounded historical `/time_series` bars calculate return, MFE, and MAE across existing windows. Provider failures remain unavailable/fail-open, metrics expose exchange/provider coverage, and `/api/status`, README, OpenAPI, Postman, and `.env.example` document readiness without secrets. Production remains disabled until plan/licensing and live-provider validation are completed.
 - GH-292 / CB-122: added an opt-in Render Background Worker entrypoint for signal-outcome evaluation, role-gated web/worker scheduling, graceful dedicated-worker drain, safe heartbeat counters, and paid-worker Blueprint wiring. Production cutover remains explicit: enable tracking and disable the web scheduler only after the worker plan and Firestore credentials are confirmed.
+- GH-318 / CB-130: propagated the existing opt-in `ENABLE_SENTRY` and `SENTRY_DSN` settings to the signal-outcome worker Blueprint as manual values; the worker stays monitoring-disabled when either value is absent.
 - 001-gemini-grounding-alert (improvements with PR #21, #20, #19): Added Gemini GoogleSearch grounding integration for alert enrichment; added Brave Search fallback/override; introduced provider routing (Gemini/Azure/OpenRouter); added token usage + cost estimation surfaced in notifications; graceful degradation on API failure; single grounding call reused across channels.
 - 002-whatsapp-alerts: Added multi-channel notification system with TelegramService, WhatsAppService, NotificationManager; exponential backoff retry logic; MarkdownV2 and WhatsApp markdown formatters; comprehensive integration tests for parallel delivery, config validation, graceful degradation.
 - issue #91 / branch `codex/fix-91-whatsapp-truncation`: WhatsApp delivery now splits GreenAPI payloads above the provider limit into sequential chunks instead of silently truncating with an ellipsis; regression coverage added for long alert payloads.
@@ -741,12 +766,14 @@ See `/specs/TERMINOLOGY_GUIDE.md` for extended discussion and examples.
 - 004-enrich-alert-output: Enriched `/api/webhook/alert` output with structured fields (sentiment, insights, technical levels, and optional risk parameters) using the existing grounding pipeline; Telegram/WhatsApp formatters render structured enrichment when present.
 - 005-sentry-runtime-errors (PR #16): Added runtime error monitoring via `SentryService` + early initialization in `instrument.js`, plus Express error handler wiring; monitoring is gated by `ENABLE_SENTRY` + `SENTRY_DSN`.
 - 006-firestore-alert-storage: Added Cloud Firestore persistence for every `/api/webhook/alert` payload; `firebase-admin` singleton initialized from `FIREBASE_SERVICE_ACCOUNT_JSON` or `GOOGLE_APPLICATION_CREDENTIALS`; fire-and-forget after `res.json()` so storage never blocks delivery (fail-open).
+- GH-302 / CB-124: Added the opt-in Firestore emulator integration suite and CI gate with a pinned Firebase CLI, demo project isolation, Admin SDK coverage for existing Firestore-backed services, and deny-by-default client rules assertions.
 - 007-volume-breakout-alerts: Added TradingView volume confirmation check to the webhook alert enrichment flow (POST /api/webhook/alert?useTradingViewData=true) using the `volume_confirmation_analysis` tool from the TradingView MCP server. Configured via `ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION`.
 - GH-173 / CB-69: `/api/status` and `/api/capabilities` expose `featureFlags.tradingViewVolumeConfirmation` plus `dependencies.tradingViewVolumeConfirmation` readiness, including the parent MCP enrichment gate, without changing the existing volume-confirmation gate.
 - GH-174 / CB-70: `/api/status` and `/api/capabilities` expose `featureFlags.firestoreJobStorage` plus `dependencies.firestoreJobStorage` readiness for the dedicated job-storage gate and the legacy alert-storage gate, without changing runtime persistence behavior.
 - GH-176 / CB-72: `/api/status` and `/api/capabilities` expose `featureFlags.newsMonitorTestMode` from `ENABLE_NEWS_MONITOR_TEST_MODE`, without changing existing test-mode behavior.
 - GH-177 / CB-73: `/api/status` and `/api/capabilities` expose `featureFlags.cloudflareAig` from `ENABLE_CLOUDFLARE_AIG`, alongside the existing Cloudflare AI Gateway dependency readiness.
 - 009-tradingview-confluence-alerts (CB-44 / Issue #131): Added optional confluence enrichment for POST /api/webhook/alert?useTradingViewData=true. `ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT=true` calls `combined_analysis` within the same enrichment budget, annotates/downgrades contradictory confluence, and returns `confluenceData` in dry-run/stored enrichment payloads. `ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME=true` also calls `multi_timeframe_analysis` and returns `multiTimeframeData`.
+- GH-293 / CB-125: Repointed the default TradingView MCP endpoint to the active Render host, added process-local runtime readiness (`unknown`/`ready`/`degraded`) with sanitized error categories and counters, and exposed `tradingViewEnrichmentApplied` plus `byFeatureFlag.tradingViewDataApplied` so requested and successfully applied MCP data are distinguishable.
 - 008-async-job-callbacks (CB-28, CB-52 / Issue #150 follow-up): Added support for asynchronous job completion callbacks in TradingView analysis and market scanner jobs. Clients can specify callbackUrl, callbackSecret, and callbackEvents in POST /api/jobs/tradingview-analysis requests. The server signs the payloads with an HMAC-SHA256 signature, validates parameters (with node-only URL validation), and executes retries with exponential backoff on transient network failures, failing open without affecting the core job status. Callback delivery is tracked per event in `callbackStatus.events` while preserving the aggregate `callbackStatus.attempts` log.
 - GH-188 / CB-80: Added timestamp, event, and per-delivery UUID headers to async callbacks. HMAC signatures now bind the anti-replay metadata and raw body; retries receive unique delivery IDs, and callback attempt records retain each ID.
 - async-job-terminal-eviction (CB-54 / Issue #151): `JobService` now uses one terminal-status set for cleanup and terminal checks, so expired `cancelled` and `timed_out` jobs are evicted like `completed` and `failed` jobs while `processing` jobs remain available.
