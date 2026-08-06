@@ -739,7 +739,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"message\": \"Custom notification from automation\",\n  \"channels\": [\"telegram\", \"whatsapp\", \"discord\"],\n  \"telegramChatId\": \"-1001234567890\",\n  \"whatsappChatId\": \"120363000000000000@g.us\",\n  \"idempotencyKey\": \"generic-message-demo-1\"\n}"
+              "raw": "{\n  \"message\": \"Custom notification from automation\",\n  \"channels\": [\"telegram\", \"whatsapp\", \"discord\"],\n  \"telegramChatId\": \"-1001234567890\",\n  \"whatsappChatId\": \"120363000000000000@g.us\",\n  \"discordWebhookUrl\": \"https://discord.com/api/webhooks/123456789/abc-xyz-token\",\n  \"idempotencyKey\": \"generic-message-demo-1\"\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/api/webhook/message",
@@ -807,6 +807,12 @@
               "status": "Bad Request",
               "code": 400,
               "body": "{\n  \"success\": false,\n  \"error\": \"\\\"whatsappChatId\\\" must be a non-empty string if provided\",\n  \"details\": {\n    \"field\": \"whatsappChatId\"\n  }\n}"
+            },
+            {
+              "name": "Error (invalid discordWebhookUrl)",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"success\": false,\n  \"error\": \"\\\"discordWebhookUrl\\\" must be a valid HTTPS Discord webhook URL\",\n  \"details\": {\n    \"field\": \"discordWebhookUrl\"\n  }\n}"
             },
             {
               "name": "Error (unknown channel)",

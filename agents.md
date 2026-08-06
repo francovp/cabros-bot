@@ -157,8 +157,8 @@ Implement the following security practices to safeguard endpoints and credential
 - Routes under `/api` (e.g. `/api/webhook/alert`) are mounted regardless of bot launch; individual features and notification channels are gated via env flags and per-channel validation.
 - API documentation is public and read-only at `/docs` and `/openapi.json`; webhook and news-monitor operations remain guarded by `validateApiKey`, while documented admin read/action routes also accept verified Firebase bearer tokens when enabled. `/admin/auth-config` exposes only public browser configuration.
 - Alert-producing routes now accept optional per-request notification routing:
-  - `channels` — non-empty array limited to `telegram` and/or `whatsapp`
-  - `telegramChatId` / `whatsappChatId` — optional per-channel destination overrides
+  - `channels` — non-empty array limited to `telegram`, `whatsapp`, and/or `discord`
+  - `telegramChatId` / `whatsappChatId` / `discordWebhookUrl` — optional per-channel destination overrides (`discordWebhookUrl` must be a valid HTTPS Discord webhook URL)
   - If `channels` is omitted, delivery still uses the existing broadcast-to-all-enabled-channels behavior.
 - Stored alert read, export, analytics, and replay routes (`GET /api/alerts`, `GET /api/alerts/export`, `GET /api/alerts/summary`, `GET /api/alerts/:alertId`, `POST /api/alerts/:alertId/replay`) are also mounted under `/api`; they require `WEBHOOK_API_KEY` when configured, return `403 FEATURE_DISABLED` unless `ENABLE_FIRESTORE_ALERT_STORAGE=true`, and return `503 STORAGE_UNAVAILABLE` when Firestore is enabled but unreadable.
 - Webhook idempotency (`IdempotencyService`) stores reservations and cached responses in Cloud Firestore `idempotency_keys` collection when `ENABLE_FIRESTORE_IDEMPOTENCY=true`. All storage interactions fail open to in-memory caching upon Firestore errors, ensuring webhooks remain responsive across process restarts and horizontal scaling. `/api/status` exposes `featureFlags.firestoreIdempotency` and `dependencies.idempotencyStorage`.
