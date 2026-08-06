@@ -531,6 +531,9 @@
           },
           "500": {
             "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
           }
         },
         "security": [
@@ -766,6 +769,9 @@
           },
           "500": {
             "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/JobQueueUnavailable"
           }
         },
         "security": [
@@ -1739,6 +1745,33 @@
           }
         }
       },
+      "JobQueueUnavailable": {
+        "description": "Render-worker mode is enabled but durable Firestore or Redis queue storage is unavailable. JOB_QUEUE_UNAVAILABLE means the job was not accepted; JOB_QUEUE_ACCEPTANCE_UNKNOWN means the response includes the durable jobId and must be replayed or polled while the worker reconciles the queue.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "examples": {
+              "unavailable": {
+                "summary": "Queue unavailable before acceptance",
+                "value": {
+                  "error": "The asynchronous job queue is unavailable.",
+                  "code": "JOB_QUEUE_UNAVAILABLE"
+                }
+              },
+              "acceptanceUnknown": {
+                "summary": "Queue acceptance is indeterminate",
+                "value": {
+                  "error": "The queue acceptance state could not be determined.",
+                  "code": "JOB_QUEUE_ACCEPTANCE_UNKNOWN",
+                  "jobId": "8f8ef192-349f-4318-8547-0e6d628bf739"
+                }
+              }
+            }
+          }
+        }
+      },
       "JsonResult": {
         "description": "Successful JSON response",
         "content": {
@@ -2088,6 +2121,10 @@
           },
           "code": {
             "type": "string"
+          },
+          "jobId": {
+            "type": "string",
+            "description": "Durably stored job identifier returned when queue acceptance is indeterminate."
           }
         }
       },
@@ -3040,7 +3077,7 @@
       },
       "Status": {
         "type": "object",
-        "description": "Runtime status. featureFlags.firestoreJobStorage reports the ENABLE_FIRESTORE_JOB_STORAGE gate or the legacy ENABLE_FIRESTORE_ALERT_STORAGE gate; featureFlags.firestoreScannerPresets reports ENABLE_FIRESTORE_SCANNER_PRESETS; dependencies.scannerPresetStorage reports the effective durable or ephemeral scanner-preset backend and readiness; dependencies.signalOutcomeWorker reports the scheduler role (web, worker, or disabled), graceful-shutdown state, cadence, heartbeat, and scanned/pending/evaluated/error counters; a disabled local scheduler reports ready false and status disabled because it is not the process evaluating outcomes; dependencies.firestoreJobStorage reports Firestore credential readiness for that runtime path; featureFlags.newsMonitorTestMode reports ENABLE_NEWS_MONITOR_TEST_MODE without changing news monitor behavior; featureFlags.messageFooterMetadata reports ENABLE_MESSAGE_FOOTER_METADATA and defaults to true unless explicitly set to false; featureFlags.cloudflareAig reports ENABLE_CLOUDFLARE_AIG and dependencies.cloudflareAig reports Cloudflare AI Gateway credential readiness; featureFlags.equityMarketData reports ENABLE_EQUITY_MARKET_DATA and dependencies.equityMarketData reports non-sensitive Twelve Data readiness for BATS/NASDAQ outcome evaluation.",
+        "description": "Runtime status. featureFlags.firestoreJobStorage reports the ENABLE_FIRESTORE_JOB_STORAGE gate or the legacy ENABLE_FIRESTORE_ALERT_STORAGE gate; featureFlags.jobExecutionWorker reports JOB_EXECUTION_MODE=render-worker; dependencies.jobExecutionQueue reports queue readiness and safe operational counters without broker credentials; featureFlags.firestoreScannerPresets reports ENABLE_FIRESTORE_SCANNER_PRESETS; dependencies.scannerPresetStorage reports the effective durable or ephemeral scanner-preset backend and readiness; dependencies.signalOutcomeWorker reports the scheduler role (web, worker, or disabled), graceful-shutdown state, cadence, heartbeat, and scanned/pending/evaluated/error counters; a disabled local scheduler reports ready false and status disabled because it is not the process evaluating outcomes; dependencies.firestoreJobStorage reports Firestore credential readiness for that runtime path; featureFlags.newsMonitorTestMode reports ENABLE_NEWS_MONITOR_TEST_MODE without changing news monitor behavior; featureFlags.messageFooterMetadata reports ENABLE_MESSAGE_FOOTER_METADATA and defaults to true unless explicitly set to false; featureFlags.cloudflareAig reports ENABLE_CLOUDFLARE_AIG and dependencies.cloudflareAig reports Cloudflare AI Gateway credential readiness; featureFlags.equityMarketData reports ENABLE_EQUITY_MARKET_DATA and dependencies.equityMarketData reports non-sensitive Twelve Data readiness for BATS/NASDAQ outcome evaluation.",
         "properties": {
           "service": {
             "$ref": "#/components/schemas/JsonObject"

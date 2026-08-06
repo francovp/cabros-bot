@@ -378,6 +378,72 @@ describe('JobService Unit Tests', () => {
 			expect(job.status).toBe('cancelled');
 		});
 
+		it('does not overwrite a cancellation with stale worker completion', async () => {
+			const cancelledJob = {
+				jobId: 'cancelled-job',
+				status: 'cancelled',
+				execution: { mode: 'render-worker', status: 'cancelled' },
+			};
+			const repository = {
+				get: jest.fn().mockResolvedValue(cancelledJob),
+				save: jest.fn(),
+			};
+			const service = new JobService(repository);
+
+			await service._persistJob({
+				...cancelledJob,
+				status: 'completed',
+				execution: { mode: 'render-worker', status: 'completed' },
+			});
+
+			expect(repository.save).not.toHaveBeenCalled();
+		});
+
+		it('reports the terminal state when cancellation loses a durable write race', async () => {
+			const processingJob = {
+				jobId: 'race-job',
+				status: 'processing',
+				createdAt: new Date().toISOString(),
+			};
+			const terminalJob = {
+				jobId: 'race-job',
+				status: 'completed',
+				createdAt: new Date().toISOString(),
+			};
+			const repository = {
+				get: jest.fn()
+					.mockResolvedValueOnce(processingJob)
+					.mockResolvedValue(terminalJob),
+				save: jest.fn().mockResolvedValue(null),
+			};
+			const service = new JobService(repository);
+
+			await expect(service.cancelJob('race-job')).resolves.toMatchObject({
+				success: false,
+				code: 'TERMINAL_JOB',
+				status: 'completed',
+			});
+		});
+
+		it('rejects cancellation when its durable save is rejected without a worker claim', async () => {
+			const processingJob = {
+				jobId: 'cancel-save-rejected-job',
+				status: 'processing',
+				createdAt: new Date().toISOString(),
+			};
+			const repository = {
+				get: jest.fn().mockImplementation(() => Promise.resolve({ ...processingJob })),
+				save: jest.fn().mockResolvedValue(null),
+			};
+			const service = new JobService(repository);
+
+			await expect(service.cancelJob(processingJob.jobId)).resolves.toMatchObject({
+				success: false,
+				code: 'CANCEL_REJECTED',
+				status: 'processing',
+			});
+		});
+
 		it('retries a failed/cancelled job and creates a new one with requestMetadata', async () => {
 			const metadata = await jobService.createJob('expanded-analysis', {
 				symbols: ['BINANCE:BTCUSDT'],
@@ -495,6 +561,116 @@ describe('JobService Unit Tests', () => {
 
 		afterEach(() => {
 			delete globalThis.fetch;
+		});
+
+		it('waits for callback deliveries already in flight', async () => {
+			let resolveCallback;
+			jobService._sendCallbackWithRetry = jest.fn(() => new Promise((resolve) => {
+				resolveCallback = resolve;
+			}));
+			const job = {
+				jobId: 'pending-callback',
+				status: 'completed',
+				callbackUrl: 'https://example.com/callback',
+				callbackEvents: ['completed'],
+				callbackStatus: { status: 'pending', attempts: [] },
+			};
+
+			await jobService._triggerCallbackIfConfigured(job);
+			let settled = false;
+			const wait = jobService.waitForCallbacks().then(() => {
+				settled = true;
+			});
+
+			await Promise.resolve();
+			expect(settled).toBe(false);
+			resolveCallback();
+			await wait;
+			expect(settled).toBe(true);
+		});
+
+		it('skips a callback event reserved by another durable worker', async () => {
+			const claimCallbackDelivery = jest.fn().mockResolvedValue(false);
+			const service = new JobService({
+				isDurable: () => true,
+				claimCallbackDelivery,
+			});
+			service._sendCallbackWithRetry = jest.fn().mockResolvedValue(undefined);
+
+			await service._triggerCallbackIfConfigured({
+				jobId: 'claimed-callback',
+				status: 'completed',
+				callbackUrl: 'https://example.com/callback',
+				callbackEvents: ['completed'],
+				callbackStatus: { status: 'pending', attempts: [] },
+			});
+
+			expect(claimCallbackDelivery).toHaveBeenCalledWith(
+				'claimed-callback',
+				'completed',
+				expect.any(String),
+			);
+			expect(service._sendCallbackWithRetry).not.toHaveBeenCalled();
+		});
+
+		it('propagates callback claim storage failures when delivery is awaited', async () => {
+			const claimError = Object.assign(new Error('Firestore unavailable'), {
+				code: 'JOB_CALLBACK_CLAIM_UNAVAILABLE',
+			});
+			const service = new JobService({
+				isDurable: () => true,
+				claimCallbackDelivery: jest.fn().mockRejectedValue(claimError),
+			});
+			service._sendCallbackWithRetry = jest.fn().mockResolvedValue(undefined);
+
+			await expect(service._triggerCallbackIfConfigured({
+				jobId: 'unavailable-callback',
+				status: 'completed',
+				callbackUrl: 'https://example.com/callback',
+				callbackEvents: ['completed'],
+				callbackStatus: { status: 'pending', attempts: [] },
+			}, { awaitDelivery: true })).rejects.toBe(claimError);
+			expect(service._sendCallbackWithRetry).not.toHaveBeenCalled();
+		});
+
+		it('propagates active callback claims when delivery is awaited', async () => {
+			const claimError = Object.assign(new Error('Callback delivery is still in flight'), {
+				code: 'JOB_CALLBACK_DELIVERY_IN_FLIGHT',
+			});
+			const service = new JobService({
+				isDurable: () => true,
+				claimCallbackDelivery: jest.fn().mockRejectedValue(claimError),
+			});
+			service._sendCallbackWithRetry = jest.fn().mockResolvedValue(undefined);
+
+			await expect(service._triggerCallbackIfConfigured({
+				jobId: 'active-callback',
+				status: 'completed',
+				callbackUrl: 'https://example.com/callback',
+				callbackEvents: ['completed'],
+				callbackStatus: { status: 'in_flight', attempts: [] },
+			}, { awaitDelivery: true })).rejects.toBe(claimError);
+			expect(service._sendCallbackWithRetry).not.toHaveBeenCalled();
+		});
+
+		it('propagates callback status persistence failures when delivery is awaited', async () => {
+			const statusError = Object.assign(new Error('Firestore unavailable'), {
+				code: 'JOB_CALLBACK_STATUS_UNAVAILABLE',
+			});
+			const service = new JobService({
+				isDurable: () => true,
+				claimCallbackDelivery: jest.fn().mockResolvedValue(true),
+				updateCallbackStatus: jest.fn().mockRejectedValue(statusError),
+			});
+			fetchMock.mockResolvedValue({ ok: true, status: 200 });
+
+			await expect(service._triggerCallbackIfConfigured({
+				jobId: 'status-unavailable-callback',
+				status: 'completed',
+				callbackUrl: 'https://example.com/callback',
+				callbackEvents: ['completed'],
+				callbackStatus: { status: 'pending', attempts: [] },
+			}, { awaitDelivery: true })).rejects.toBe(statusError);
 		});
 
 		it('validates callbackUrl protocol and format', async () => {

@@ -2514,6 +2514,18 @@
               "body": "{\n  \"error\": \"Idempotency key was reused with a different payload\",\n  \"code\": \"IDEMPOTENCY_CONFLICT\"\n}"
             },
             {
+              "name": "Render Worker Queue Unavailable",
+              "status": "Service Unavailable",
+              "code": 503,
+              "body": "{\n  \"error\": \"The asynchronous job queue is unavailable.\",\n  \"code\": \"JOB_QUEUE_UNAVAILABLE\"\n}"
+            },
+            {
+              "name": "Render Worker Queue Acceptance Unknown",
+              "status": "Service Unavailable",
+              "code": 503,
+              "body": "{\n  \"error\": \"The queue acceptance state could not be determined.\",\n  \"code\": \"JOB_QUEUE_ACCEPTANCE_UNKNOWN\",\n  \"jobId\": \"8f8ef192-349f-4318-8547-0e6d628bf739\"\n}"
+            },
+            {
               "name": "Create Job with Callback",
               "originalRequest": {
                 "method": "POST",
