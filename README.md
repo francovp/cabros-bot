@@ -74,7 +74,7 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 - `ENABLE_TRADINGVIEW_MCP_ENRICHMENT` - Enable TradingView MCP enrichment for TradingView-like webhook messages (`true` or `false`, default: `false`)
 - `EXPANDED_ANALYSIS_ALERT_SYMBOLS` - Comma-separated fallback symbols for `/api/webhook/expanded-analysis-alert` using `EXCHANGE:SYMBOL` format (for example `BINANCE:BTCUSDT,NASDAQ:NVDA`)
 - `EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS` - Total analysis deadline for `/api/webhook/expanded-analysis-alert` in milliseconds (default: `60000`, capped at `120000`)
-- `TRADINGVIEW_MCP_URL` - MCP server HTTP endpoint (default: `https://tradingview-mcp.onrender.com/mcp`)
+- `TRADINGVIEW_MCP_URL` - MCP server HTTP endpoint (default: `https://tradingview-mcp-yp6b.onrender.com/mcp`)
 - `TRADINGVIEW_MCP_TIMEOUT_MS` - Timeout per MCP request in milliseconds (default: `12000`)
 - `TRADINGVIEW_MCP_MAX_RETRIES` - Retries for MCP failures (default: `3`)
 - `TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS` - Total budget envelope for the synchronous webhook enrichment flow (default: `12000`). When exceeded, all in-flight MCP calls are aborted and the enrichment fails open, preventing the alert webhook from being blocked for too long.
@@ -101,6 +101,17 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 - `FIREBASE_SERVICE_ACCOUNT_JSON` - Inline Firebase service account JSON for server-side Firestore access
 - `FIREBASE_PROJECT_ID` - Optional Firebase project override for Admin SDK initialization
 - `GOOGLE_APPLICATION_CREDENTIALS` - Optional path to a service account JSON file for local development
+
+#### Render Worker Queue
+
+- `JOB_EXECUTION_MODE` - Use `local` for the in-process fallback or `render-worker` to enqueue TradingView jobs in BullMQ (`local` by default)
+- `REDIS_URL` - Render Key Value connection string required by `render-worker`
+- `JOB_QUEUE_ATTEMPTS` / `JOB_QUEUE_BACKOFF_MS` - BullMQ retry count and exponential backoff delay (defaults: `5` / `30000` ms)
+- `JOB_QUEUE_CONCURRENCY` - Worker concurrency (default: `1`)
+- `JOB_QUEUE_CLAIM_LEASE_MS` - Firestore claim lease and heartbeat interval (default: `60000` ms)
+- `JOB_QUEUE_CONNECT_TIMEOUT_MS` - Redis connection timeout (default: `5000` ms)
+
+`render.yaml` provisions a starter Background Worker and Key Value store. The web service remains on `JOB_EXECUTION_MODE=local` by default; switching it to `render-worker` requires the worker, Redis, and Firestore credentials to be available. The API returns `503 JOB_QUEUE_UNAVAILABLE` instead of accepting a job when the durable queue is unavailable. If enqueue acknowledgement and deterministic Redis reconciliation both fail, it returns `503 JOB_QUEUE_ACCEPTANCE_UNKNOWN` with the durably stored `jobId`; the worker periodically re-enqueues durable queued rows, retries retained failed BullMQ jobs, and recovers expired claims after Redis recovers.
 
 Unfiltered signal outcome summaries include `shadowModeMetrics.exchangeBreakdown` and `shadowModeMetrics.providerBreakdown` coverage buckets (`received`, `eligible`, `evaluated`, `pending`, `unavailable`). Filtered alert summaries/exports omit shadow-mode metrics because that service has no matching source/enrichment filters. Equity signals only enter the eligible/evaluated population when the opt-in Twelve Data provider is configured; otherwise they remain explicitly unavailable.
 
@@ -240,6 +251,8 @@ For `ENABLE_NEWS_MONITOR=true`, the payload also reports the primary LLM depende
 
 When `ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION=true`, `featureFlags.tradingViewVolumeConfirmation` reports the gate value and `dependencies.tradingViewVolumeConfirmation` reports readiness only when the configured TradingView MCP endpoint and its parent MCP enrichment gate are active.
 
+TradingView dependency readiness is runtime-derived and fail-open: `configured` reflects the effective endpoint, while `status` starts as `unknown` and changes to `ready` or `degraded` after an MCP operation. `lastErrorCategory` is sanitized to categories such as `timeout`, `http_5xx`, `http_4xx`, `invalid_response`, or `request_failed`; provider response bodies and URLs are never returned by `/api/status`.
+
 When `ENABLE_FIRESTORE_JOB_STORAGE=true`, `featureFlags.firestoreJobStorage` reports the async-job persistence gate and `dependencies.firestoreJobStorage` reports readiness using the configured Firestore credentials. The legacy `ENABLE_FIRESTORE_ALERT_STORAGE=true` gate also reports job storage as enabled because it activates the same runtime persistence path.
 
 `featureFlags.newsMonitorTestMode` reports `ENABLE_NEWS_MONITOR_TEST_MODE` without changing the news monitor's existing test-mode behavior.
@@ -299,8 +312,8 @@ When Firebase auth is enabled, configure `FIREBASE_SERVICE_ACCOUNT_JSON` or `GOO
     "telegram": { "enabled": true, "configured": true, "ready": true, "status": "ready" },
     "whatsapp": { "enabled": false, "configured": false, "ready": false, "status": "disabled" },
     "gemini": { "enabled": true, "configured": true, "ready": true, "status": "ready" },
-    "tradingViewMcp": { "enabled": true, "configured": true, "ready": true, "status": "ready" },
-    "tradingViewVolumeConfirmation": { "enabled": false, "configured": true, "ready": false, "status": "disabled" },
+    "tradingViewMcp": { "enabled": true, "configured": true, "ready": false, "status": "unknown", "lastCheckedAt": null, "lastSuccessAt": null, "lastFailureAt": null, "lastErrorCategory": null, "successCount": 0, "failureCount": 0 },
+    "tradingViewVolumeConfirmation": { "enabled": false, "configured": true, "ready": false, "status": "disabled", "lastCheckedAt": null, "lastSuccessAt": null, "lastFailureAt": null, "lastErrorCategory": null, "successCount": 0, "failureCount": 0 },
     "firestore": { "enabled": true, "configured": true, "ready": true, "status": "ready" },
     "firestoreJobStorage": { "enabled": false, "configured": true, "ready": false, "status": "disabled" },
     "signalOutcomeWorker": {
@@ -392,6 +405,8 @@ When `ENABLE_TRADINGVIEW_MCP_ENRICHMENT=true`, webhook alerts matching TradingVi
 5. If `ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME=true`, it also calls `multi_timeframe_analysis` and returns the raw multi-timeframe metadata in dry-run/stored enrichment data.
 6. Gemini/Brave grounding still runs when enabled, and the final `alert.enriched` merges grounding context + MCP technical data.
 7. If either provider fails, the flow degrades gracefully to the other provider (or original text if none succeed).
+
+When TradingView data is requested, `alert.enriched.tradingViewEnrichmentApplied` is `true` only when the MCP result was successfully applied. This marker is persisted separately from `useTradingViewData`, so analytics can distinguish requested from delivered technical data.
 
 ### Timeframe Mapping
 
@@ -820,7 +835,7 @@ For market-scanner jobs, `ranked` and `includeMultiTimeframe` use the same scori
 }
 ```
 
-**Idempotency:** `POST /api/jobs/tradingview-analysis`, `POST /api/jobs/:jobId/retry`, and `POST /api/jobs/:jobId/retry-failed` accept an optional client-generated `idempotency-key` header. Matching concurrent or sequential requests replay the original response and `jobId`/`newJobId` without starting another worker. The first response sends `Idempotency-Replay: false`; a replay sends `Idempotency-Replay: true` and includes `"idempotencyReplayed": true` in the JSON response. Reusing a key with a different request fingerprint returns `409 IDEMPOTENCY_CONFLICT`. Requests without the header retain current behavior.
+**Idempotency:** `POST /api/jobs/tradingview-analysis`, `POST /api/jobs/:jobId/retry`, and `POST /api/jobs/:jobId/retry-failed` accept an optional client-generated `idempotency-key` header. Matching concurrent or sequential requests replay the original response and `jobId`/`newJobId` without starting another worker. The first response sends `Idempotency-Replay: false`; a replay sends `Idempotency-Replay: true` and includes `"idempotencyReplayed": true` in the JSON response. `JOB_QUEUE_ACCEPTANCE_UNKNOWN` responses are also replayable and include the durable `jobId`, preventing a retry from creating a second queue item. Reusing a key with a different request fingerprint returns `409 IDEMPOTENCY_CONFLICT`. Requests without the header retain current behavior.
 
 Example:
 ```http
@@ -886,6 +901,8 @@ Jobs are retained in memory and, when Firestore job storage is enabled, persiste
 For completed ranked market-scanner jobs, `scanResults[].scores[]` contains the structured `symbol`, numeric `score`, non-empty `reason`, and optional `trendConfluence` fields used by the alert report. This is also included in configured terminal callback payloads.
 
 Set `ENABLE_FIRESTORE_JOB_STORAGE=true` plus the normal Firebase Admin credentials (`FIREBASE_SERVICE_ACCOUNT_JSON` or `GOOGLE_APPLICATION_CREDENTIALS`) to enable durable job storage. The legacy in-memory path remains the fallback when Firestore is disabled or unavailable.
+
+By default, jobs still execute in-process. With `JOB_EXECUTION_MODE=render-worker`, the web service stores sanitized job metadata in Firestore and enqueues only the `jobId` in Redis; the dedicated `pnpm run start-worker` process claims the job transactionally, periodically reconciles durable rows still marked `processing`/`queued` plus expired `claimed`/`running` leases, retries retained failed BullMQ jobs before adding a duplicate queue ID, renews its lease at persistence checkpoints, and drains BullMQ work on `SIGTERM`. Notification delivery is checkpointed durably before and after the external send; a redelivery with an unknown outcome fails closed as `JOB_DELIVERY_RECONCILIATION_REQUIRED` rather than sending the same alert twice. Missing Redis or durable Firestore storage fails the create request with `503 JOB_QUEUE_UNAVAILABLE`.
 
 **Response (200 OK - Processing):**
 ```json
@@ -953,7 +970,8 @@ List stored alerts ordered by `receivedAt` descending.
         }
       ],
       "source": "webhook",
-      "useTradingViewData": false
+      "useTradingViewData": false,
+      "tradingViewEnrichmentApplied": false
     }
   ],
   "pagination": {
@@ -1000,6 +1018,7 @@ The service caps the queried window at 31 days to keep routine operator usage ch
       "enriched": 1,
       "plain": 1,
       "tradingViewData": 1,
+      "tradingViewDataApplied": 1,
       "withoutTradingViewData": 1
     },
     "enrichment": {
@@ -1076,7 +1095,8 @@ Retrieve a single stored alert by Firestore document ID.
     "tokenUsage": null,
     "deliveryResults": [],
     "source": "webhook",
-    "useTradingViewData": true
+    "useTradingViewData": true,
+    "tradingViewEnrichmentApplied": false
   }
 }
 ```
@@ -1680,6 +1700,7 @@ The application includes support for Render.com deployment:
 - Skips bot launch in preview environments (`IS_PULL_REQUEST=true`)
 - Sends deployment notification to admin chat on startup
 - `render.yaml` defines an opt-in paid `starter` Background Worker using `pnpm run start:signal-outcome-worker`. It is configured with `SIGNAL_OUTCOME_WORKER_ROLE=worker` and `ENABLE_SIGNAL_OUTCOME_TRACKING` as a manual value so the paid worker and Firestore credential decision are explicit.
+- The worker also declares `ENABLE_SENTRY` and `SENTRY_DSN` as manual values; monitoring remains disabled when either value is absent.
 - To cut over production, enable signal tracking on both services, set the web service's `SIGNAL_OUTCOME_WORKER_ROLE=disabled`, and keep the worker role as `worker`. Leave the default web role as `web` when the dedicated worker is not enabled.
 
 ### Local Development

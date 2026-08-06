@@ -21,4 +21,13 @@ describe('Render signal outcome worker blueprint', () => {
 		expect(blueprint).toContain('- key: TWELVE_DATA_BASE_URL');
 		expect(blueprint).toContain('- key: EQUITY_MARKET_DATA_TIMEOUT_MS');
 	});
+
+	it('passes Sentry opt-in settings to the worker without enabling them by default', () => {
+		const blueprint = fs.readFileSync(path.join(__dirname, '../../render.yaml'), 'utf8');
+		const workerBlueprint = blueprint.slice(blueprint.indexOf('- type: worker'));
+
+		expect(workerBlueprint).toContain('- key: ENABLE_SENTRY\n    sync: false');
+		expect(workerBlueprint).toContain('- key: SENTRY_DSN\n    sync: false');
+		expect(workerBlueprint).not.toContain('- key: ENABLE_SENTRY\n    value: true');
+	});
 });

@@ -294,6 +294,38 @@ describe('Idempotency Service & Middleware', () => {
 			expect(responseBody.idempotencyReplayed).toBe(true);
 		});
 
+		test('should replay an indeterminate queue acceptance response instead of releasing the key', async () => {
+			const key = 'queue-acceptance-unknown-key';
+			req.headers['idempotency-key'] = key;
+			req.body = { type: 'expanded-analysis', symbols: ['BINANCE:BTCUSDT'] };
+
+			await idempotencyMiddleware(req, res, next);
+			res.status(503).json({
+				error: 'The queue acceptance state could not be determined.',
+				code: 'JOB_QUEUE_ACCEPTANCE_UNKNOWN',
+				jobId: 'job-123',
+			});
+
+			const req2 = httpMocks.createRequest({
+				method: 'POST',
+				url: '/api/webhook/alert',
+				headers: { 'idempotency-key': key },
+				body: { type: 'expanded-analysis', symbols: ['BINANCE:BTCUSDT'] },
+			});
+			const res2 = httpMocks.createResponse();
+			const next2 = jest.fn();
+
+			await idempotencyMiddleware(req2, res2, next2);
+
+			expect(next2).not.toHaveBeenCalled();
+			expect(res2.statusCode).toBe(503);
+			expect(JSON.parse(res2._getData())).toEqual(expect.objectContaining({
+				code: 'JOB_QUEUE_ACCEPTANCE_UNKNOWN',
+				jobId: 'job-123',
+				idempotencyReplayed: true,
+			}));
+		});
+
 		test('should return 409 Conflict if payload changes for the same key', async () => {
 			const key = 'conflict-key';
 			req.headers['idempotency-key'] = key;
