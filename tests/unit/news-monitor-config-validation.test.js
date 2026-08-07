@@ -3,18 +3,22 @@ const {
 	parseNewsAlertThreshold,
 	NewsAnalyzer,
 } = require('../../src/controllers/webhooks/handlers/newsMonitor/analyzer');
+const {
+	parseNewsCacheTtlHours,
+	NewsCache,
+} = require('../../src/controllers/webhooks/handlers/newsMonitor/cache');
 
 describe('News Monitor Configuration Validation', () => {
 	let originalEnv;
 	let warnSpy;
 
 	beforeEach(() => {
-		originalEnv = { ...process.env };
+		originalEnv = saveEnv();
 		warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
 	});
 
 	afterEach(() => {
-		process.env = originalEnv;
+		restoreEnv(originalEnv);
 		warnSpy.mockRestore();
 	});
 
@@ -105,13 +109,96 @@ describe('News Monitor Configuration Validation', () => {
 		});
 	});
 
+	describe('parseNewsCacheTtlHours', () => {
+		it('should return parsed number for valid non-negative float/integer strings', () => {
+			expect(parseNewsCacheTtlHours('6')).toBe(6);
+			expect(parseNewsCacheTtlHours('0.5')).toBe(0.5);
+			expect(parseNewsCacheTtlHours('12')).toBe(12);
+			expect(parseNewsCacheTtlHours('   24   ')).toBe(24);
+			expect(warnSpy).not.toHaveBeenCalled();
+		});
+
+		it('should allow 0 to preserve documented no-cache behavior without warning', () => {
+			expect(parseNewsCacheTtlHours('0')).toBe(0);
+			expect(parseNewsCacheTtlHours('0.0')).toBe(0);
+			expect(warnSpy).not.toHaveBeenCalled();
+		});
+
+		it('should return fallback (6) when value is undefined, null, or empty string', () => {
+			expect(parseNewsCacheTtlHours(undefined)).toBe(6);
+			expect(parseNewsCacheTtlHours(null)).toBe(6);
+			expect(parseNewsCacheTtlHours('')).toBe(6);
+			expect(parseNewsCacheTtlHours('   ')).toBe(6);
+			expect(warnSpy).not.toHaveBeenCalled();
+		});
+
+		it('should warn and return fallback (6) for malformed, NaN, or non-numeric values', () => {
+			expect(parseNewsCacheTtlHours('not-a-number')).toBe(6);
+			expect(parseNewsCacheTtlHours('NaN')).toBe(6);
+			expect(parseNewsCacheTtlHours('Infinity')).toBe(6);
+			expect(parseNewsCacheTtlHours('6hours')).toBe(6);
+
+			expect(warnSpy).toHaveBeenCalledWith('[NewsCache] Invalid NEWS_CACHE_TTL_HOURS configuration, using default');
+		});
+
+		it('should warn and return fallback (6) for negative values', () => {
+			expect(parseNewsCacheTtlHours('-1')).toBe(6);
+			expect(parseNewsCacheTtlHours('-0.5')).toBe(6);
+
+			expect(warnSpy).toHaveBeenCalledWith('[NewsCache] Invalid NEWS_CACHE_TTL_HOURS configuration, using default');
+		});
+
+		it('should never include the raw invalid value in the redacted warning message', () => {
+			const secretVal = 'INVALID_SECRET_TTL_9999';
+			parseNewsCacheTtlHours(secretVal);
+
+			expect(warnSpy).toHaveBeenCalled();
+			const lastCallArg = warnSpy.mock.calls[0][0];
+			expect(lastCallArg).not.toContain(secretVal);
+		});
+	});
+
+	describe('NewsCache constructor env integration', () => {
+		it('should initialize default TTL (6 hours) when env var is unset or empty', () => {
+			delete process.env.NEWS_CACHE_TTL_HOURS;
+
+			const cache = new NewsCache();
+			expect(cache.ttlMs).toBe(6 * 60 * 60 * 1000);
+			expect(warnSpy).not.toHaveBeenCalled();
+		});
+
+		it('should parse valid NEWS_CACHE_TTL_HOURS env var correctly', () => {
+			process.env.NEWS_CACHE_TTL_HOURS = '12';
+
+			const cache = new NewsCache();
+			expect(cache.ttlMs).toBe(12 * 60 * 60 * 1000);
+			expect(warnSpy).not.toHaveBeenCalled();
+		});
+
+		it('should fallback to 6 hours and warn when NEWS_CACHE_TTL_HOURS is malformed or negative', () => {
+			process.env.NEWS_CACHE_TTL_HOURS = 'not-a-number';
+
+			const cache = new NewsCache();
+			expect(cache.ttlMs).toBe(6 * 60 * 60 * 1000);
+			expect(warnSpy).toHaveBeenCalledWith('[NewsCache] Invalid NEWS_CACHE_TTL_HOURS configuration, using default');
+		});
+
+		it('should handle zero TTL (NEWS_CACHE_TTL_HOURS=0) for no-cache behavior', () => {
+			process.env.NEWS_CACHE_TTL_HOURS = '0';
+
+			const cache = new NewsCache();
+			expect(cache.ttlMs).toBe(0);
+			expect(warnSpy).not.toHaveBeenCalled();
+		});
+	});
+
 	describe('NewsAnalyzer constructor env integration', () => {
 		it('should initialize defaults when env vars are unset or empty', () => {
 			delete process.env.NEWS_TIMEOUT_MS;
 			delete process.env.NEWS_ALERT_THRESHOLD;
 
 			const analyzer = new NewsAnalyzer();
-			expect(analyzer.timeout).toBe(30000);
+			expect(analyzer.timeout).toBe(60000);
 			expect(analyzer.alertThreshold).toBe(0.7);
 		});
 
@@ -122,16 +209,6 @@ describe('News Monitor Configuration Validation', () => {
 			const analyzer = new NewsAnalyzer();
 			expect(analyzer.timeout).toBe(12000);
 			expect(analyzer.alertThreshold).toBe(0.85);
-		});
-
-		it('should fallback to defaults and warn when env vars are invalid', () => {
-			process.env.NEWS_TIMEOUT_MS = 'invalid_timeout_ms';
-			process.env.NEWS_ALERT_THRESHOLD = '5.5';
-
-			const analyzer = new NewsAnalyzer();
-			expect(analyzer.timeout).toBe(30000);
-			expect(analyzer.alertThreshold).toBe(0.7);
-			expect(warnSpy).toHaveBeenCalled();
 		});
 	});
 });

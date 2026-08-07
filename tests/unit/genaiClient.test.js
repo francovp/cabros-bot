@@ -132,6 +132,52 @@ describe('GenaiClient robustness', () => {
 		});
 	});
 
+	describe('AbortSignal & Timeout handling', () => {
+		it('rethrows abort error when search receives an aborted signal', async () => {
+			const controller = new AbortController();
+			controller.abort(new Error('Grounding timeout'));
+
+			await expect(genaiClient.search({ query: 'test', signal: controller.signal }))
+				.rejects
+				.toThrow('Grounding timeout');
+		});
+
+		it('aborts hanging Google Search SDK call when signal aborts', async () => {
+			const controller = new AbortController();
+			genaiClient.genAI.models.generateContent.mockImplementationOnce(() => new Promise(() => {}));
+
+			const searchPromise = genaiClient.search({ query: 'test', signal: controller.signal });
+			setTimeout(() => controller.abort(new Error('Grounding timeout')), 20);
+
+			await expect(searchPromise).rejects.toThrow('Grounding timeout');
+		});
+
+		it('passes signal to Brave fetch call', async () => {
+			const controller = new AbortController();
+			genaiClient.genAI.models.generateContent.mockRejectedValueOnce(new Error('Google API Error'));
+			global.fetch.mockImplementationOnce((url, opts) => {
+				expect(opts.signal).toBe(controller.signal);
+				return Promise.resolve({
+					ok: true,
+					json: async () => ({ web: { results: [] } }),
+				});
+			});
+
+			await genaiClient.search({ query: 'test', signal: controller.signal });
+			expect(global.fetch).toHaveBeenCalledTimes(1);
+		});
+
+		it('aborts hanging llmCall when signal aborts', async () => {
+			const controller = new AbortController();
+			genaiClient.genAI.models.generateContent.mockImplementationOnce(() => new Promise(() => {}));
+
+			const llmPromise = genaiClient.llmCall({ prompt: 'test', opts: { signal: controller.signal } });
+			setTimeout(() => controller.abort(new Error('Grounding timeout')), 20);
+
+			await expect(llmPromise).rejects.toThrow('Grounding timeout');
+		});
+	});
+
 	describe('Forced Brave Search', () => {
 		it('uses Brave Search directly when FORCE_BRAVE_SEARCH is true', async () => {
 			jest.resetModules();
