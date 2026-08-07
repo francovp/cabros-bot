@@ -15,12 +15,14 @@ jest.mock('../../src/services/grounding/config', () => ({
 
 const genaiClient = require('../../src/services/grounding/genaiClient');
 const sentryService = require('../../src/services/monitoring/SentryService');
+const geminiQuotaManager = require('../../src/services/grounding/geminiQuotaManager');
 
 // Mock fetch globally
 global.fetch = jest.fn();
 
 describe('GenaiClient robustness', () => {
 	beforeEach(() => {
+		geminiQuotaManager.resetForTesting();
 		// Reset genAI to avoid using the real SDK in tests
 		genaiClient.genAI = { models: { generateContent: jest.fn().mockResolvedValue({}) } };
 		jest.resetAllMocks();

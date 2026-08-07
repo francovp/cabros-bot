@@ -19,17 +19,10 @@ const { getOpenRouterClient } = require('../inference/openRouterClient');
 const { getCloudflareAiClient } = require('../inference/cloudflareAiClient');
 const { normalizeUsageMetadata } = require('../../lib/tokenUsage');
 const sentryService = require('../monitoring/SentryService');
+const geminiQuotaManager = require('./geminiQuotaManager');
 
 function isGeminiQuotaError(error) {
-	const status = Number(error && (error.status || error.statusCode || error.code));
-	if (status === 429) {
-		return true;
-	}
-
-	const message = String((error && error.message) || '').toUpperCase();
-	return message.includes('429') ||
-		message.includes('RESOURCE_EXHAUSTED') ||
-		message.includes('QUOTA');
+	return geminiQuotaManager.isQuotaError(error);
 }
 
 /**
@@ -267,6 +260,13 @@ class GenaiClient {
 			return this._executeBraveSearch(query, maxResults, signal);
 		}
 
+		if (geminiQuotaManager.isCooldownActive()) {
+			if (!rethrowQuotaErrors) {
+				console.warn('[genaiClient] Gemini process quota cooldown active. Falling back immediately to Brave Search.');
+				return this._executeBraveSearch(query, maxResults);
+			}
+		}
+
 		try {
 			const googleResult = await this._executeGoogleSearch(query, model, maxResults, textWithCitations, signal);
 			if (googleResult.results && googleResult.results.length > 0) {
@@ -276,6 +276,9 @@ class GenaiClient {
 		} catch (error) {
 			if (signal?.aborted || error.name === 'AbortError' || error.message === 'Grounding timeout' || (typeof error.message === 'string' && error.message.includes('timeout'))) {
 				throw error;
+			}
+			if (isGeminiQuotaError(error)) {
+				geminiQuotaManager.triggerQuotaCooldown(error);
 			}
 			if (rethrowQuotaErrors && isGeminiQuotaError(error)) {
 				throw error;
@@ -388,6 +391,9 @@ class GenaiClient {
 			if (abortCleanup) abortCleanup();
 			if (signal?.aborted || error.name === 'AbortError' || error.message === 'Grounding timeout' || (typeof error.message === 'string' && error.message.includes('timeout'))) {
 				throw error;
+			}
+			if (isGeminiQuotaError(error)) {
+				geminiQuotaManager.triggerQuotaCooldown(error);
 			}
 			if (this._isNonRetryableGeminiError(error)) {
 				throw new NonRetryableProviderError(

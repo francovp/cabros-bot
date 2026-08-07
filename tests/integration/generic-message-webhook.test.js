@@ -408,15 +408,12 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 	it('sends to all enabled channels when channels is omitted', async () => {
 		process.env.ENABLE_DISCORD_ALERTS = 'true';
 		process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/123/token';
-		global.fetch = jest.fn()
-			.mockResolvedValueOnce({
-				ok: true,
-				json: async () => ({ idMessage: 'wa-msg-456' }),
-			})
-			.mockResolvedValueOnce({
-				ok: true,
-				json: async () => ({ id: 'discord-msg-456' }),
-			});
+		global.fetch = jest.fn(async (url) => {
+			if (typeof url === 'string' && url.includes('discord')) {
+				return { ok: true, json: async () => ({ id: 'discord-msg-456' }) };
+			}
+			return { ok: true, json: async () => ({ idMessage: 'wa-msg-456' }) };
+		});
 
 		await initializeNotificationServices(mockBot);
 
