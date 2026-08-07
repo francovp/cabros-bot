@@ -13,7 +13,7 @@ const MAX_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 const PARAMETER_SCHEMA = Object.freeze({
 	NEWS_ALERT_THRESHOLD: { type: 'number', defaultValue: 0.7, min: 0, max: 1 },
-	NEWS_TIMEOUT_MS: { type: 'number', defaultValue: 60000, integer: true, min: 1000, max: 120000 },
+	NEWS_TIMEOUT_MS: { type: 'number', defaultValue: 30000, integer: true, min: 1000, max: 120000 },
 	NEWS_GEMINI_CONCURRENCY: { type: 'number', defaultValue: Infinity, integer: true, min: 1, max: 50 },
 	NEWS_GEMINI_QUOTA_MAX_RETRIES: { type: 'number', defaultValue: 2, integer: true, min: 1, max: 5 },
 	NEWS_GEMINI_QUOTA_RETRY_BASE_MS: { type: 'number', defaultValue: 1000, integer: true, min: 1, max: 60000 },
@@ -77,7 +77,7 @@ function getEnvironmentConfig() {
 
 	return {
 		NEWS_ALERT_THRESHOLD: Number.parseFloat(process.env.NEWS_ALERT_THRESHOLD || 0.7),
-		NEWS_TIMEOUT_MS: Number.parseInt(process.env.NEWS_TIMEOUT_MS || 60000, 10),
+		NEWS_TIMEOUT_MS: parseLegacyPositiveInteger(process.env.NEWS_TIMEOUT_MS, 30000),
 		NEWS_GEMINI_CONCURRENCY: parseLegacyPositiveInteger(process.env.NEWS_GEMINI_CONCURRENCY, Infinity),
 		NEWS_GEMINI_QUOTA_MAX_RETRIES: parseLegacyPositiveInteger(process.env.NEWS_GEMINI_QUOTA_MAX_RETRIES, 2),
 		NEWS_GEMINI_QUOTA_RETRY_BASE_MS: parseLegacyPositiveInteger(process.env.NEWS_GEMINI_QUOTA_RETRY_BASE_MS, 1000),

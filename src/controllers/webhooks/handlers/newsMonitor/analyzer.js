@@ -11,6 +11,7 @@ const { getEnrichmentService } = require('../../../../services/inference/enrichm
 const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteConfigService');
 const { AnalysisStatus, EventCategory } = require('./constants');
 const { GROUNDING_MODEL_NAME, ENABLE_NEWS_MONITOR_TEST_MODE } = require('../../../../services/grounding/config');
+const geminiQuotaManager = require('../../../../services/grounding/geminiQuotaManager');
 const { getPromptService, PromptKeys } = require('../../../../services/prompts');
 const { MainClient } = require('binance');
 const {
@@ -131,39 +132,11 @@ function parseNewsAlertThreshold(value, fallback = 0.7) {
 }
 
 function isGeminiQuotaError(error) {
-	const status = Number(error && (error.status || error.statusCode || error.code));
-	if (status === 429) {
-		return true;
-	}
-
-	const message = String((error && error.message) || '').toUpperCase();
-	return message.includes('429') ||
-		message.includes('RESOURCE_EXHAUSTED') ||
-		message.includes('QUOTA');
+	return geminiQuotaManager.isQuotaError(error);
 }
 
 function getQuotaRetryDelayMs(error, attempt, baseDelayMs) {
-	const retryDelay = error && (error.retryDelay || error.retryAfter || error.retryDelayMs);
-	if (typeof retryDelay === 'number' && retryDelay >= 0) {
-		return retryDelay;
-	}
-
-	const message = String((error && error.message) || '');
-	const retryDelayMatch = message.match(/"?retry(?:\s|-)?delay"?\s*[:=]?\s*"?(\d+(?:\.\d+)?)(ms|s)?"?/i);
-	if (retryDelayMatch) {
-		const value = Number.parseFloat(retryDelayMatch[1]);
-		const unit = (retryDelayMatch[2] || 'ms').toLowerCase();
-		return unit === 's' ? value * 1000 : value;
-	}
-
-	const retryAfterMatch = message.match(/"?retry-after"?\s*[:=]?\s*"?(\d+(?:\.\d+)?)(ms|s)?"?/i);
-	if (retryAfterMatch) {
-		const value = Number.parseFloat(retryAfterMatch[1]);
-		const unit = (retryAfterMatch[2] || 's').toLowerCase();
-		return unit === 'ms' ? value : value * 1000;
-	}
-
-	return baseDelayMs * (2 ** Math.max(0, attempt - 1));
+	return geminiQuotaManager.extractRetryDelayMs(error, attempt, baseDelayMs);
 }
 
 function sleep(ms) {
@@ -314,7 +287,7 @@ class NewsAnalyzer {
 	}
 
 	get timeout() {
-		return this._timeoutOverride ?? getRuntimeConfig().NEWS_TIMEOUT_MS;
+		return this._timeoutOverride ?? parseNewsTimeoutMs(getRuntimeConfig().NEWS_TIMEOUT_MS);
 	}
 
 	set timeout(value) {
@@ -322,7 +295,7 @@ class NewsAnalyzer {
 	}
 
 	get alertThreshold() {
-		return this._alertThresholdOverride ?? getRuntimeConfig().NEWS_ALERT_THRESHOLD;
+		return this._alertThresholdOverride ?? parseNewsAlertThreshold(getRuntimeConfig().NEWS_ALERT_THRESHOLD);
 	}
 
 	set alertThreshold(value) {
@@ -418,6 +391,8 @@ class NewsAnalyzer {
 				throw new Error('TIMEOUT');
 			}
 
+			await geminiQuotaManager.waitForCooldownIfNeeded({ maxWaitMs: remainingMs, throwOnExceeded: true });
+
 			try {
 				const timeoutPromise = new Promise((_, reject) => {
 					timeoutHandle = setTimeout(() => reject(new Error('TIMEOUT')), remainingMs);
@@ -433,7 +408,7 @@ class NewsAnalyzer {
 
 				lastQuotaError = error;
 				attempt += 1;
-				const delayMs = getQuotaRetryDelayMs(error, attempt, this.geminiQuotaRetryBaseMs);
+				const delayMs = geminiQuotaManager.triggerQuotaCooldown(error, attempt, this.geminiQuotaRetryBaseMs);
 				const remainingAfterAttemptMs = this.timeout - (Date.now() - startedAt);
 				if (delayMs >= remainingAfterAttemptMs) {
 					console.warn('[Analyzer] Gemini quota retry skipped; delay exceeds remaining budget:', symbol);
@@ -446,7 +421,7 @@ class NewsAnalyzer {
 					delayMs,
 					remainingMs: remainingAfterAttemptMs,
 				});
-				await sleep(delayMs);
+				await geminiQuotaManager.waitForCooldownIfNeeded({ maxWaitMs: remainingAfterAttemptMs, throwOnExceeded: true });
 			} finally {
 				clearTimeout(timeoutHandle);
 			}
