@@ -285,7 +285,7 @@ function getStatus() {
 			newsMonitorTestMode: newsMonitorTestModeEnabled,
 			tradingViewMcpEnrichment: tradingViewMcpEnrichmentEnabled,
 			tradingViewVolumeConfirmation: tradingViewVolumeConfirmationFlagEnabled,
-			tradingViewConfluenceEnrichment: process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT !== 'false',
+			tradingViewConfluenceEnrichment: isEnabled(process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT),
 			tradingViewConfluenceMultiTimeframe: isEnabled(process.env.ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME),
 			firestoreAlertStorage: firestoreEnabled,
 			firestoreScannerPresets: firestoreScannerPresetsEnabled,
