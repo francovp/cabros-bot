@@ -198,7 +198,7 @@ describe('News Monitor Configuration Validation', () => {
 			delete process.env.NEWS_ALERT_THRESHOLD;
 
 			const analyzer = new NewsAnalyzer();
-			expect(analyzer.timeout).toBe(60000);
+			expect(analyzer.timeout).toBe(30000);
 			expect(analyzer.alertThreshold).toBe(0.7);
 		});
 
