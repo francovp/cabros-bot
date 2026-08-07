@@ -93,6 +93,31 @@ describe('Jobs Controller Unit Tests', () => {
 			expect(data.code).toBe('FEATURE_DISABLED');
 		});
 
+		it('includes the jobId when queue acceptance is indeterminate', async () => {
+			const req = httpMocks.createRequest({
+				method: 'POST',
+				url: '/api/jobs/tradingview-analysis',
+				body: { type: 'expanded-analysis', symbols: ['BINANCE:BTCUSDT'] },
+			});
+			const res = httpMocks.createResponse();
+
+			const error = Object.assign(new Error('Queue acceptance is unknown'), {
+				code: 'JOB_QUEUE_ACCEPTANCE_UNKNOWN',
+				statusCode: 503,
+				jobId: 'job-123',
+			});
+			jobService.createJob.mockRejectedValueOnce(error);
+
+			await postCreateJob(null)(req, res);
+
+			expect(res.statusCode).toBe(503);
+			expect(res._getJSONData()).toEqual({
+				error: 'Queue acceptance is unknown',
+				code: 'JOB_QUEUE_ACCEPTANCE_UNKNOWN',
+				jobId: 'job-123',
+			});
+		});
+
 		it('returns 500 and records error to Sentry on unexpected throw', async () => {
 			const req = httpMocks.createRequest({
 				method: 'POST',

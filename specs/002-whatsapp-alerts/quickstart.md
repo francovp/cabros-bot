@@ -7,7 +7,7 @@
 
 ## Prerequisites
 
-- Node.js 20.x
+- Node.js 24.x
 - Telegram bot token (existing setup)
 - GreenAPI account with WhatsApp instance
 - Active Telegram chat ID for alerts

@@ -1,4 +1,5 @@
 previewsEnabled: true
+# Native Render services read the repository-level .node-version file.
 services:
 - type: web
   plan: free
@@ -18,6 +19,10 @@ services:
     sync: false
   - key: TELEGRAM_CHAT_ID
     sync: false
+  - key: FIREBASE_PROJECT_ID
+    sync: false
+  - key: FIREBASE_SERVICE_ACCOUNT_JSON
+    sync: false
   - key: ENABLE_TELEGRAM_BOT
     value: true
     previewValue: false
@@ -26,6 +31,213 @@ services:
     previewValue: 3
   - key: SIGNAL_OUTCOME_WORKER_ROLE
     value: web
+  - key: JOB_EXECUTION_MODE
+    value: local
+    previewValue: local
+  - key: ENABLE_FIRESTORE_JOB_STORAGE
+    value: true
+    previewValue: false
+  - key: REDIS_URL
+    fromService:
+      name: cabros-crypto-bot-telegram-queue
+      type: keyvalue
+      property: connectionString
+- type: worker
+  plan: starter
+  region: frankfurt
+  name: cabros-crypto-bot-telegram-worker
+  runtime: node
+  repo: https://github.com/francovp/cabros-bot
+  branch: master
+  buildCommand: corepack enable && pnpm install --frozen-lockfile
+  startCommand: corepack enable && pnpm run start-worker
+  maxShutdownDelaySeconds: 120
+  envVars:
+  - key: JOB_EXECUTION_MODE
+    value: render-worker
+  - key: ENABLE_FIRESTORE_JOB_STORAGE
+    value: true
+  - key: REDIS_URL
+    fromService:
+      name: cabros-crypto-bot-telegram-queue
+      type: keyvalue
+      property: connectionString
+  - key: BOT_TOKEN
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: BOT_TOKEN
+  - key: TELEGRAM_CHAT_ID
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: TELEGRAM_CHAT_ID
+  - key: TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID
+  - key: ENABLE_TELEGRAM_BOT
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: ENABLE_TELEGRAM_BOT
+  - key: ENABLE_WHATSAPP_ALERTS
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: ENABLE_WHATSAPP_ALERTS
+  - key: WHATSAPP_API_URL
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: WHATSAPP_API_URL
+  - key: WHATSAPP_API_KEY
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: WHATSAPP_API_KEY
+  - key: WHATSAPP_CHAT_ID
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: WHATSAPP_CHAT_ID
+  - key: WHATSAPP_PREVIEW_CHAT_ID
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: WHATSAPP_PREVIEW_CHAT_ID
+  - key: ENABLE_DISCORD_ALERTS
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: ENABLE_DISCORD_ALERTS
+  - key: DISCORD_WEBHOOK_URL
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: DISCORD_WEBHOOK_URL
+  - key: FIREBASE_PROJECT_ID
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: FIREBASE_PROJECT_ID
+  - key: FIREBASE_SERVICE_ACCOUNT_JSON
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: FIREBASE_SERVICE_ACCOUNT_JSON
+  - key: JOB_CALLBACK_SIGNING_SECRET
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: JOB_CALLBACK_SIGNING_SECRET
+  - key: ALLOW_HTTP_CALLBACKS
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: ALLOW_HTTP_CALLBACKS
+  - key: ALLOW_PRIVATE_CALLBACKS
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: ALLOW_PRIVATE_CALLBACKS
+  - key: ENABLE_SENTRY
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: ENABLE_SENTRY
+  - key: SENTRY_DSN
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: SENTRY_DSN
+  - key: SENTRY_SEND_ALERT_CONTENT
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: SENTRY_SEND_ALERT_CONTENT
+  - key: SENTRY_SAMPLE_RATE_ERRORS
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: SENTRY_SAMPLE_RATE_ERRORS
+  - key: SENTRY_TRACES_SAMPLE_RATE
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: SENTRY_TRACES_SAMPLE_RATE
+  - key: SENTRY_PROFILE_SESSION_SAMPLE_RATE
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: SENTRY_PROFILE_SESSION_SAMPLE_RATE
+  - key: SENTRY_CONSOLE_LOG_LEVELS
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: SENTRY_CONSOLE_LOG_LEVELS
+  - key: SENTRY_ENVIRONMENT
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: SENTRY_ENVIRONMENT
+  - key: SENTRY_RELEASE
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: SENTRY_RELEASE
+  - key: ENABLE_MARKET_SCANNER
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: ENABLE_MARKET_SCANNER
+  - key: TRADINGVIEW_MCP_URL
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: TRADINGVIEW_MCP_URL
+  - key: TRADINGVIEW_MCP_TIMEOUT_MS
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: TRADINGVIEW_MCP_TIMEOUT_MS
+  - key: TRADINGVIEW_MCP_MAX_RETRIES
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: TRADINGVIEW_MCP_MAX_RETRIES
+  - key: TRADINGVIEW_MCP_DEFAULT_TIMEFRAME
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: TRADINGVIEW_MCP_DEFAULT_TIMEFRAME
+  - key: ENABLE_TRADINGVIEW_MCP_ENRICHMENT
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: ENABLE_TRADINGVIEW_MCP_ENRICHMENT
+  - key: ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT
+  - key: ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME
+  - key: ENABLE_MESSAGE_FOOTER_METADATA
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: ENABLE_MESSAGE_FOOTER_METADATA
+- type: keyvalue
+  plan: starter
+  region: frankfurt
+  name: cabros-crypto-bot-telegram-queue
+  maxmemoryPolicy: noeviction
+  ipAllowList: []
 - type: worker
   plan: starter
   region: frankfurt
@@ -39,6 +251,10 @@ services:
   maxShutdownDelaySeconds: 60
   envVars:
   - key: ENABLE_SIGNAL_OUTCOME_TRACKING
+    sync: false
+  - key: ENABLE_SENTRY
+    sync: false
+  - key: SENTRY_DSN
     sync: false
   - key: SIGNAL_OUTCOME_WORKER_ROLE
     value: worker

@@ -16,6 +16,7 @@ const { initializeNotificationServices } = require('./src/controllers/webhooks/h
 const { registerDebugSentryRoute } = require('./src/lib/debugSentryRoute');
 const { getTelegramBootstrapConfig } = require('./src/lib/telegramBootstrap');
 const SignalOutcomeService = require('./src/services/storage/SignalOutcomeService');
+const remoteConfigService = require('./src/services/remoteConfig/RemoteConfigService');
 const Sentry = require('@sentry/node');
 
 const { token } = getTelegramBootstrapConfig();
@@ -44,6 +45,8 @@ app.use(function onError(err, req, res, next) {
 app.listen(port, async () => {
 	console.log(now + ' - Running server on port ' + port);
 
+	void remoteConfigService.start();
+
 	// Start background signal outcome evaluation worker if enabled
 	SignalOutcomeService.startWorker();
 
@@ -66,10 +69,12 @@ app.listen(port, async () => {
 		// Enable graceful stop
 		process.once('SIGINT', () => {
 			SignalOutcomeService.stopWorker();
+			remoteConfigService.stop();
 			bot.stop('SIGINT');
 		});
 		process.once('SIGTERM', () => {
 			SignalOutcomeService.stopWorker();
+			remoteConfigService.stop();
 			bot.stop('SIGTERM');
 		});
 
@@ -98,9 +103,11 @@ app.listen(port, async () => {
 
 		process.once('SIGINT', () => {
 			SignalOutcomeService.stopWorker();
+			remoteConfigService.stop();
 		});
 		process.once('SIGTERM', () => {
 			SignalOutcomeService.stopWorker();
+			remoteConfigService.stop();
 		});
 	}
 });
