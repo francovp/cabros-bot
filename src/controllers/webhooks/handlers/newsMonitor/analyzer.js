@@ -44,19 +44,9 @@ function getNotificationManager() {
 	return notificationManager;
 }
 
-function hasExplicitRouting(routing = {}) {
-	return Array.isArray(routing.channels) ||
-		typeof routing.telegramChatId === 'string' ||
-		typeof routing.whatsappChatId === 'string';
-}
-
 function shouldRedeliverCachedAlert(notificationMgr, cachedDeliveryResults, routing = {}) {
 	if (!notificationMgr) {
 		return false;
-	}
-
-	if (hasExplicitRouting(routing)) {
-		return true;
 	}
 
 	const requestedChannels = getRequestedChannels(notificationMgr, routing);
@@ -74,16 +64,47 @@ function getCachedRoutingMetadata(routing = {}) {
 		channels: Array.isArray(routing.channels) ? [...routing.channels] : undefined,
 		telegramChatId: typeof routing.telegramChatId === 'string' ? routing.telegramChatId : undefined,
 		whatsappChatId: typeof routing.whatsappChatId === 'string' ? routing.whatsappChatId : undefined,
+		discordWebhookUrl: typeof routing.discordWebhookUrl === 'string' ? routing.discordWebhookUrl : undefined,
 	};
 }
 
-function cachedOverridesDiffer(cachedRouting = {}, routing = {}) {
-	return cachedRouting.telegramChatId !== (typeof routing.telegramChatId === 'string' ? routing.telegramChatId : undefined)
-		|| cachedRouting.whatsappChatId !== (typeof routing.whatsappChatId === 'string' ? routing.whatsappChatId : undefined);
+function arraysEqual(a, b) {
+	if (a === b) return true;
+	if (!Array.isArray(a) || !Array.isArray(b)) return false;
+	if (a.length !== b.length) return false;
+	return a.every((val, index) => val === b[index]);
+}
+
+function cachedRoutingDiffers(cachedRouting = {}, routing = {}) {
+	const currentChannels = Array.isArray(routing.channels) ? routing.channels : undefined;
+	if (!arraysEqual(cachedRouting.channels, currentChannels)) {
+		return true;
+	}
+
+	const currentTelegram = typeof routing.telegramChatId === 'string' ? routing.telegramChatId : undefined;
+	if (cachedRouting.telegramChatId !== currentTelegram) {
+		return true;
+	}
+
+	const currentWhatsapp = typeof routing.whatsappChatId === 'string' ? routing.whatsappChatId : undefined;
+	if (cachedRouting.whatsappChatId !== currentWhatsapp) {
+		return true;
+	}
+
+	const currentDiscord = typeof routing.discordWebhookUrl === 'string' ? routing.discordWebhookUrl : undefined;
+	if (cachedRouting.discordWebhookUrl !== currentDiscord) {
+		return true;
+	}
+
+	return false;
 }
 
 function shouldRedeliverCachedAlertForRequest(notificationMgr, cachedEntry = {}, routing = {}) {
-	if (cachedOverridesDiffer(cachedEntry.routing, routing)) {
+	if (!notificationMgr) {
+		return false;
+	}
+
+	if (cachedRoutingDiffers(cachedEntry.routing, routing)) {
 		return true;
 	}
 
