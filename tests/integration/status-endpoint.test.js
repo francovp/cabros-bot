@@ -84,6 +84,7 @@ describe('Status endpoints', () => {
 		process.env.SENTRY_DSN = 'https://dsn.example';
 		delete process.env.BRAVE_SEARCH_API_KEY;
 		delete process.env.ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION;
+		delete process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT;
 		delete process.env.ENABLE_SIGNAL_OUTCOME_TRACKING;
 		delete process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING;
 	});
@@ -143,7 +144,18 @@ describe('Status endpoints', () => {
 			ready: false,
 			status: 'disabled',
 		});
+		expect(response.body.featureFlags.tradingViewConfluenceEnrichment).toBe(false);
 		expect(response.body.dependencies.sentry.status).toBe('ready');
+	});
+
+	it('reports tradingViewConfluenceEnrichment as true only when explicitly configured to true', async () => {
+		process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT = 'true';
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.tradingViewConfluenceEnrichment).toBe(true);
 	});
 
 	it('reports scanner presets as ephemeral when no Firestore gate is enabled', async () => {
