@@ -92,7 +92,6 @@ describe('TradingViewMcpService', () => {
 			successCount: 0,
 			failureCount: 0,
 		}));
->>>>>>> origin/master
 	});
 
 	it('returns null when alert text is not a TradingView signal', async () => {
