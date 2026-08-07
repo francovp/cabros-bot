@@ -83,3 +83,38 @@ describe('Documentation Alignment Policy', () => {
     expect(envExample).toContain('AZURE_LLM_ENDPOINT=');
   });
 });
+
+describe('Node.js runtime contract', () => {
+  const repoRoot = path.resolve(__dirname, '../../');
+  const nodeVersion = '24.18.0';
+
+  test('pins the same Node.js 24 version across runtime tooling', () => {
+    const nodeVersionPath = path.join(repoRoot, '.node-version');
+    const packageJson = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
+    const workflow = fs.readFileSync(path.join(repoRoot, '.github/workflows/node.js.yml'), 'utf8');
+    const devcontainer = fs.readFileSync(path.join(repoRoot, '.devcontainer/Dockerfile'), 'utf8');
+
+    expect(fs.existsSync(nodeVersionPath)).toBe(true);
+    expect(fs.readFileSync(nodeVersionPath, 'utf8').trim()).toBe(nodeVersion);
+    expect(packageJson.engines.node).toBe(`>=${nodeVersion} <25`);
+    expect(workflow).toContain('node-version-file: .node-version');
+    expect(workflow).not.toMatch(/node-version:\s*20\b/i);
+    expect(devcontainer).toContain(`FROM node:${nodeVersion}`);
+  });
+
+  test('maintained documentation does not advertise Node.js 20', () => {
+    const maintainedFiles = [
+      path.join(repoRoot, 'README.md'),
+      path.join(repoRoot, 'agents.md'),
+      ...getAllFiles(path.join(repoRoot, 'specs')),
+    ];
+    const staleNode20Pattern = /\bNode(?:\.js)?\s*20(?:\.x)?\b|\bnode:20\b/i;
+
+    for (const fullPath of maintainedFiles) {
+      const relPath = path.relative(repoRoot, fullPath);
+      const content = fs.readFileSync(fullPath, 'utf8');
+      expect({ file: relPath, match: content.match(staleNode20Pattern) })
+        .toEqual({ file: relPath, match: null });
+    }
+  });
+});

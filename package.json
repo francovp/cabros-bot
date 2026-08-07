@@ -5,7 +5,7 @@
   "main": "index.js",
   "packageManager": "pnpm@10.34.1",
   "engines": {
-    "node": ">=20.x"
+    "node": ">=24.18.0 <25"
   },
   "scripts": {
     "preinstall": "npx only-allow pnpm",

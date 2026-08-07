@@ -17,7 +17,7 @@ Enrich webhook alerts with sentiment analysis, key insights, technical levels, a
   the iteration process.
 -->
 
-**Language/Version**: Node.js 20.x
+**Language/Version**: Node.js 24.x
 **Primary Dependencies**: Express, Telegraf, GreenAPI, Google Generative AI (Gemini)
 **Storage**: N/A (Stateless processing)
 **Testing**: Jest (Unit & Integration)
