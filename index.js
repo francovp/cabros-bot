@@ -13,15 +13,24 @@ const app = require('./app.js');
 const { Telegraf, Markup } = require('telegraf');
 const { getRoutes } = require('./src/routes');
 const { initializeNotificationServices } = require('./src/controllers/webhooks/handlers/alert/alert');
+const { getNewsMonitor } = require('./src/controllers/webhooks/handlers/newsMonitor/newsMonitor');
+const { getCacheInstance } = require('./src/controllers/webhooks/handlers/newsMonitor/cache');
 const { registerDebugSentryRoute } = require('./src/lib/debugSentryRoute');
+const { createProcessLifecycle } = require('./src/lib/processLifecycle');
+const { waitForBackgroundTasks } = require('./src/lib/backgroundTaskTracker');
 const { getTelegramBootstrapConfig } = require('./src/lib/telegramBootstrap');
+const { jobService } = require('./src/services/jobs/JobService');
 const SignalOutcomeService = require('./src/services/storage/SignalOutcomeService');
+const sentryService = require('./src/services/monitoring/SentryService');
 const remoteConfigService = require('./src/services/remoteConfig/RemoteConfigService');
 const Sentry = require('@sentry/node');
 
 const { token } = getTelegramBootstrapConfig();
 
 let bot;
+let botLaunchPromise;
+let bootstrapPromise;
+let server;
 
 const port = process.env.PORT || 80;
 const now = new Date();
@@ -42,13 +51,33 @@ app.use(function onError(err, req, res, next) {
 	res.end(res.sentry + '\n');
 });
 
-app.listen(port, async () => {
+const lifecycle = createProcessLifecycle({
+	getServer: () => server,
+	getBot: () => bot,
+	getBotLaunchPromise: () => botLaunchPromise,
+	getBootstrapPromise: () => bootstrapPromise,
+	waitForBackgroundJobs: () => jobService.waitForActiveJobs(),
+	waitForBackgroundTasks,
+	finalizeBackgroundJobs: () => jobService.finalizeActiveJobsForShutdown(),
+	stopSignalOutcomeWorker: (options) => SignalOutcomeService.stopWorker(options),
+	stopRemoteConfig: () => remoteConfigService.stop(),
+	shutdownNewsMonitor: () => getCacheInstance().shutdown(),
+	flushSentry: (timeout) => sentryService.flush(timeout),
+	timeoutMs: process.env.SHUTDOWN_TIMEOUT_MS,
+});
+lifecycle.register();
+
+async function bootstrapApplication() {
 	console.log(now + ' - Running server on port ' + port);
+	if (lifecycle.isShuttingDown()) return;
 
 	void remoteConfigService.start();
 
 	// Start background signal outcome evaluation worker if enabled
 	SignalOutcomeService.startWorker();
+	if (process.env.ENABLE_NEWS_MONITOR === 'true') {
+		getNewsMonitor().initialize();
+	}
 
 	const { telegramBotIsEnabled, isPreviewEnv, shouldStartTelegramBot } = getTelegramBootstrapConfig();
 	console.debug('telegramBotIsEnabled:', telegramBotIsEnabled);
@@ -65,25 +94,15 @@ app.listen(port, async () => {
 
 		// Initialize notification services
 		await initializeNotificationServices(bot);
-
-		// Enable graceful stop
-		process.once('SIGINT', () => {
-			SignalOutcomeService.stopWorker();
-			remoteConfigService.stop();
-			bot.stop('SIGINT');
-		});
-		process.once('SIGTERM', () => {
-			SignalOutcomeService.stopWorker();
-			remoteConfigService.stop();
-			bot.stop('SIGTERM');
-		});
+		if (lifecycle.isShuttingDown()) return;
 
 		// Start polling without blocking the rest of bootstrap.
-		void bot.launch().catch((error) => {
+		botLaunchPromise = bot.launch();
+		void botLaunchPromise.catch((error) => {
 			console.error('[index] Failed to launch Telegram bot:', error.message);
 		});
 
-		if (process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID !== undefined) {
+		if (!lifecycle.isShuttingDown() && process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID !== undefined) {
 			console.log('Telegram Admin Notifications Chat ID:', process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID);
 			let text, commitHash, gitCommitUrl;
 			if (process.env.RENDER) {
@@ -100,16 +119,14 @@ app.listen(port, async () => {
 		console.log('Telegram Bot is disabled');
 		// Initialize notification services
 		await initializeNotificationServices(null);
-
-		process.once('SIGINT', () => {
-			SignalOutcomeService.stopWorker();
-			remoteConfigService.stop();
-		});
-		process.once('SIGTERM', () => {
-			SignalOutcomeService.stopWorker();
-			remoteConfigService.stop();
-		});
 	}
+}
+
+server = app.listen(port, () => {
+	bootstrapPromise = bootstrapApplication();
+	void bootstrapPromise.catch((error) => {
+		console.error('[index] Application bootstrap failed:', error.message);
+	});
 });
 
 module.exports = { bot };

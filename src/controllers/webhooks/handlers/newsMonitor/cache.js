@@ -14,6 +14,7 @@
  */
 
 const newsDedupStorageService = require('../../../../services/storage/NewsDedupStorageService');
+const { trackBackgroundTask } = require('../../../../lib/backgroundTaskTracker');
 
 /**
  * Parse and validate NEWS_CACHE_TTL_HOURS configuration.
@@ -73,6 +74,10 @@ class NewsCache {
    * Initialize cache with periodic cleanup
    */
 	initialize() {
+		if (this.cleanupInterval) {
+			return;
+		}
+
 		// Cleanup every 1 hour
 		this.cleanupInterval = setInterval(() => {
 			this.cleanup();
@@ -166,7 +171,7 @@ class NewsCache {
 
 		// Persistent dedup: write to Firestore (fail-open)
 		if (newsDedupStorageService.isEnabled() && newsDedupStorageService.isReady()) {
-			newsDedupStorageService.setEntry(key, this.ttlMs, data).catch(err => {
+			trackBackgroundTask(newsDedupStorageService.setEntry(key, this.ttlMs, data)).catch(err => {
 				console.warn('[NewsCache] Firestore setEntry failed (fail-open):', err.message);
 			});
 		}

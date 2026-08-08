@@ -4,6 +4,7 @@
  */
 
 const sentryService = require('../monitoring/SentryService');
+const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
 
 class NotificationManager {
 	/**
@@ -231,7 +232,7 @@ class NotificationManager {
 			}
 		}
 
-		void this.notifyAdminOfFailures(alert, formattedResults).catch((error) => {
+		trackBackgroundTask(this.notifyAdminOfFailures(alert, formattedResults)).catch((error) => {
 			console.error('[NotificationManager] Unexpected admin notification failure:', error.message);
 		});
 
@@ -353,7 +354,7 @@ class NotificationManager {
 			}
 		}
 
-		void this.notifyAdminOfFailures(alert, formattedResults).catch((error) => {
+		trackBackgroundTask(this.notifyAdminOfFailures(alert, formattedResults)).catch((error) => {
 			console.error('[NotificationManager] Unexpected admin notification failure:', error.message);
 		});
 

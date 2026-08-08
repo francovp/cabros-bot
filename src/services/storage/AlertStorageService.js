@@ -27,6 +27,7 @@
 const admin = require('firebase-admin');
 const crypto = require('crypto');
 const { encodeAlertPaginationCursor, parseAlertPaginationCursor } = require('./alertPaginationCursor');
+const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
 
 const COLLECTION_NAME = 'alerts';
 const REPLAY_COLLECTION_NAME = 'alertReplays';
@@ -637,7 +638,7 @@ function getFirestore() {
  * @param {boolean} params.useTradingViewData - Whether ?useTradingViewData=true was set on the request
  * @returns {Promise<string|null>} The new Firestore document ID, or null on failure/disabled
  */
-async function saveAlert({ text, symbol, exchange, enriched, enrichmentData, tokenUsage, channels, deliveryResults, useTradingViewData, tradingViewEnrichmentApplied }) {
+async function saveAlertInternal({ text, symbol, exchange, enriched, enrichmentData, tokenUsage, channels, deliveryResults, useTradingViewData, tradingViewEnrichmentApplied }) {
 	if (!isEnabled()) {
 		return null;
 	}
@@ -676,6 +677,10 @@ async function saveAlert({ text, symbol, exchange, enriched, enrichmentData, tok
 		console.warn('[AlertStorageService] Failed to store alert in Firestore:', error.message);
 		return null;
 	}
+}
+
+function saveAlert(params) {
+	return trackBackgroundTask(saveAlertInternal(params));
 }
 
 /**
