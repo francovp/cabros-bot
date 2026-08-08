@@ -47,6 +47,10 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 
 - `ENABLE_DISCORD_ALERTS` - Enable Discord alerts (`true` or `false`, default: `false`)
 - `DISCORD_WEBHOOK_URL` - Discord webhook URL (e.g., `https://discord.com/api/webhooks/<id>/<token>`)
+- `DISCORD_MAX_RETRIES` - Additional Discord attempts after the first request (default: `2`)
+- `DISCORD_FALLBACK_RETRY_DELAY_MS` - Fallback delay for Discord 429 retries (default: `500` ms)
+- `DISCORD_MAX_RETRY_DELAY_MS` - Maximum individual Discord retry delay (default: `5000` ms)
+- `DISCORD_MAX_TOTAL_RETRY_WAIT_MS` - Maximum cumulative Discord retry wait (default: `10000` ms)
 
 #### URL Shortening (003-news-monitor)
 
@@ -59,6 +63,18 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 
 - `ENABLE_GEMINI_GROUNDING` - Enable Gemini-based alert enrichment (`true` or `false`)
 - `GEMINI_API_KEY` - Google API key for Gemini access
+- `GROUNDING_MODEL_NAME` - Grounding model when Brave Search is not forced (default: `gemini-2.5-flash`)
+- `GROUNDING_MAX_SOURCES` - Maximum grounded sources per alert (default: `3`)
+- `GROUNDING_TIMEOUT_MS` - Grounding request timeout (default: `30000` ms)
+- `GROUNDING_MAX_LENGTH` - Maximum alert text length used in grounding prompts (default: `2000` characters)
+
+#### Cloudflare AI Gateway
+
+- `MODEL_PROVIDER=cloudflare` selects Cloudflare runtime routing when the gateway credentials are configured
+- `ENABLE_CLOUDFLARE_AIG` only exposes Cloudflare readiness in status/capabilities (`true` or `false`, default: `false`); it does not select the runtime provider
+- `CF_AIG_TOKEN` - Cloudflare AI Gateway token; keep it in a secret store
+- `CF_AIG_BASE_URL` - OpenAI-compatible Cloudflare gateway base URL
+- `CF_AIG_MODEL` - Gateway target model (default: `google-ai-studio/gemini-2.5-flash`)
 
 #### Langfuse Prompt Management
 
@@ -68,6 +84,7 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 - `LANGFUSE_BASE_URL` - Langfuse base URL (default: `https://cloud.langfuse.com`)
 - `LANGFUSE_PROMPT_LABEL` - Prompt label to fetch (default: `latest` in local/dev/test, `production` in production-like environments)
 - `LANGFUSE_PROMPT_CACHE_TTL_SECONDS` - Prompt cache TTL in seconds (default: `0` for `latest`, `60` for `production`)
+- Optional local prompt overrides: `SEARCH_QUERY_PROMPT`, `GEMINI_SYSTEM_PROMPT`, `ALERT_ENRICHMENT_SYSTEM_PROMPT`, `NEWS_ANALYSIS_SYSTEM_PROMPT`, and `CONFIDENCE_ENRICHMENT_SYSTEM_PROMPT`. Unset values use the versioned local fallback files.
 
 #### TradingView MCP Analysis
 
@@ -159,11 +176,13 @@ pnpm test:firebase
 - `NEWS_SYMBOLS_STOCKS` - Default stock symbols if not provided in request (comma-separated)
 - `NEWS_ALERT_THRESHOLD` - Confidence score threshold for sending alerts (default: `0.7`, range 0.0-1.0)
 - `NEWS_CACHE_TTL_HOURS` - Cache time-to-live for deduplication (default: `6` hours)
+- `ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP` - Enable Firestore-backed news deduplication (`true` or `false`, default: `false`; failures fall back to memory)
 - `NEWS_TIMEOUT_MS` - Per-symbol analysis timeout (default: `30000` ms)
 - `NEWS_GEMINI_CONCURRENCY` - Max concurrent Gemini-backed symbol analyses. Production policy is `3`; unset keeps legacy parallel fan-out for backward compatibility.
 - `NEWS_GEMINI_QUOTA_MAX_RETRIES` - Max per-symbol retries for Gemini `429 RESOURCE_EXHAUSTED` errors (default: `2`)
 - `NEWS_GEMINI_QUOTA_RETRY_BASE_MS` - Base exponential backoff when Gemini does not provide retry delay metadata (default: `1000` ms)
 - `ENABLE_BINANCE_PRICE_CHECK` - Enable Binance crypto price fetching (`true` or `false`, default: `false`)
+- `BINANCE_FETCH_TIMEOUT_MS` - Binance price request timeout (default: `5000` ms)
 - `ENABLE_LLM_ALERT_ENRICHMENT` - Enable optional secondary LLM enrichment (`true` or `false`, default: `false`)
 - `AZURE_LLM_ENDPOINT` - Azure AI Inference endpoint URL (required if enrichment enabled)
 - `AZURE_LLM_KEY` - Azure AI Inference API key (required if enrichment enabled)
@@ -275,7 +294,7 @@ When `ENABLE_FIRESTORE_JOB_STORAGE=true`, `featureFlags.firestoreJobStorage` rep
 
 `featureFlags.messageFooterMetadata` reports the `ENABLE_MESSAGE_FOOTER_METADATA` setting. It defaults to `true` and is disabled only when the environment variable is explicitly set to `false`.
 
-`featureFlags.cloudflareAig` reports `ENABLE_CLOUDFLARE_AIG`, while `dependencies.cloudflareAig` reports whether the Cloudflare AI Gateway credentials are configured and ready.
+`featureFlags.cloudflareAig` reports `ENABLE_CLOUDFLARE_AIG`, while `dependencies.cloudflareAig` reports whether the Cloudflare AI Gateway credentials are configured and ready. Runtime provider selection is controlled separately by `MODEL_PROVIDER=cloudflare`; set both values when status/capability telemetry should match active Cloudflare routing.
 
 When `ENABLE_EQUITY_MARKET_DATA=true`, `dependencies.equityMarketData` reports Twelve Data readiness and the supported `BATS`/`NASDAQ` exchanges without exposing the API key. Signal outcome tracking uses `/quote` for missing entry prices and `/time_series` for bounded historical bars; provider, timeout, malformed-data, and quota failures mark equity outcomes unavailable without blocking alert delivery. Extended-hours data is excluded by default. Confirm current Twelve Data plan limits and licensing before production use: [pricing](https://twelvedata.com/pricing), [US equities coverage](https://support.twelvedata.com/en/articles/9935903-us-equities-market-data), and [commercial usage](https://support.twelvedata.com/en/articles/5332349-commercial-and-personal-usage).
 `dependencies.signalOutcomeWorker` reports the scheduler role, shutdown state, cadence/budgets, and the last-sweep heartbeat counters (`lastRunAt`, scanned, pending, evaluated, and error counts). The `worker` role is intended for the dedicated Render service; set the web service role to `disabled` during cutover so only one scheduler is active. A disabled local scheduler reports `ready: false` and `status: "disabled"` because it is not the process evaluating outcomes.
@@ -292,6 +311,10 @@ The dedicated worker also persists the same non-sensitive heartbeat to `workerHe
 The server verifies Firebase ID tokens with revoked-token checks enabled. Custom claims may use `roles: ["admin.viewer"]`, `roles: ["admin.operator"]`, `adminRole`, `role`, or the equivalent `admin.viewer`/`admin.operator` boolean claims. Viewers can read status, alerts, analytics, exports, scanner presets, and job metadata; operators can perform the existing preset, replay, and job actions. The legacy API-key path remains available for machine clients. Protected webhook and news-monitor routes remain API-key-only.
 
 When Firebase auth is enabled, configure `FIREBASE_SERVICE_ACCOUNT_JSON` or `GOOGLE_APPLICATION_CREDENTIALS` for server-side Admin SDK token verification, plus the public browser settings listed above. Do not put service-account JSON or ID tokens in browser config, Postman variables, logs, or client error messages.
+
+The public browser configuration may also include `FIREBASE_STORAGE_BUCKET`, `FIREBASE_MESSAGING_SENDER_ID`, and `FIREBASE_MEASUREMENT_ID`; these values are not service-account credentials.
+
+`.env.example` is the canonical operator template. The documentation-alignment test checks static application-owned `process.env` reads against that template; platform-injected values, test-only controls, and deprecated compatibility aliases are explicitly classified instead of being copied into production configuration.
 
 **Response:**
 ```json
@@ -874,6 +897,8 @@ When `callbackUrl` is configured, each callback POST includes:
 - `x-callback-signature` - included when `callbackSecret` or `JOB_CALLBACK_SIGNING_SECRET` is configured.
 
 Before each delivery attempt, hostname callback URLs are resolved with all current DNS answers. Any private answer blocks the callback (unless `ALLOW_PRIVATE_CALLBACKS=true`), and the connection is pinned to the validated answers so the subsequent fetch cannot perform a second hostname lookup and bypass the SSRF check. Redirects remain disabled with `redirect: 'error'`.
+
+`ALLOW_HTTP_CALLBACKS` and `ALLOW_PRIVATE_CALLBACKS` are local/testing security overrides and should remain `false` in production. `JOB_CALLBACK_RETRY_DELAY_MS` defaults to `1000` ms; `JOB_CALLBACK_SIGNING_SECRET` is an optional server-side HMAC secret and must never be committed.
 
 Verify the signature with HMAC-SHA256 over this exact canonical string, using the shared secret and the raw JSON request body:
 
