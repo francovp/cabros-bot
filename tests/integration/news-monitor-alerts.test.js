@@ -7,12 +7,14 @@
 const request = require('supertest');
 const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
+const geminiQuotaManager = require('../../src/services/grounding/geminiQuotaManager');
 
 describe('News Monitor - Alert Delivery Response Structure (US2)', () => {
 	let mockBot;
 	let savedEnv;
 
 	beforeEach(() => {
+		geminiQuotaManager.resetForTesting();
 		savedEnv = saveEnv();
 		Object.assign(process.env, {
 			ENABLE_NEWS_MONITOR: 'true',

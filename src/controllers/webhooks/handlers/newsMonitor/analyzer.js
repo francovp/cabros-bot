@@ -8,8 +8,10 @@
 const { analyzeNewsForSymbol } = require('../../../../services/grounding/gemini');
 const { getCacheInstance } = require('./cache');
 const { getEnrichmentService } = require('../../../../services/inference/enrichmentService');
+const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteConfigService');
 const { AnalysisStatus, EventCategory } = require('./constants');
 const { GROUNDING_MODEL_NAME, ENABLE_NEWS_MONITOR_TEST_MODE } = require('../../../../services/grounding/config');
+const geminiQuotaManager = require('../../../../services/grounding/geminiQuotaManager');
 const { getPromptService, PromptKeys } = require('../../../../services/prompts');
 const { MainClient } = require('binance');
 const {
@@ -89,45 +91,52 @@ function shouldRedeliverCachedAlertForRequest(notificationMgr, cachedEntry = {},
 	return shouldRedeliverCachedAlert(notificationMgr, cachedEntry.deliveryResults, routing);
 }
 
-function parsePositiveInteger(value, fallback) {
-	const parsed = Number.parseInt(value, 10);
-	return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+function parseNewsTimeoutMs(value, fallback = 30000) {
+	if (value === undefined) {
+		return fallback;
+	}
+	const str = String(value).trim();
+	if (str === '') {
+		return fallback;
+	}
+	if (!/^\d+$/.test(str)) {
+		console.warn('[Analyzer] Invalid NEWS_TIMEOUT_MS configuration, using default');
+		return fallback;
+	}
+	const parsed = Number(str);
+	if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed <= 0) {
+		console.warn('[Analyzer] Invalid NEWS_TIMEOUT_MS configuration, using default');
+		return fallback;
+	}
+	return parsed;
+}
+
+function parseNewsAlertThreshold(value, fallback = 0.7) {
+	if (value === undefined) {
+		return fallback;
+	}
+	const str = String(value).trim();
+	if (str === '') {
+		return fallback;
+	}
+	if (!/^[+-]?(\d+(\.\d+)?|\.\d+)$/.test(str)) {
+		console.warn('[Analyzer] Invalid NEWS_ALERT_THRESHOLD configuration, using default');
+		return fallback;
+	}
+	const parsed = Number(str);
+	if (!Number.isFinite(parsed) || parsed < 0 || parsed > 1) {
+		console.warn('[Analyzer] Invalid NEWS_ALERT_THRESHOLD configuration, using default');
+		return fallback;
+	}
+	return parsed;
 }
 
 function isGeminiQuotaError(error) {
-	const status = Number(error && (error.status || error.statusCode || error.code));
-	if (status === 429) {
-		return true;
-	}
-
-	const message = String((error && error.message) || '').toUpperCase();
-	return message.includes('429') ||
-		message.includes('RESOURCE_EXHAUSTED') ||
-		message.includes('QUOTA');
+	return geminiQuotaManager.isQuotaError(error);
 }
 
 function getQuotaRetryDelayMs(error, attempt, baseDelayMs) {
-	const retryDelay = error && (error.retryDelay || error.retryAfter || error.retryDelayMs);
-	if (typeof retryDelay === 'number' && retryDelay >= 0) {
-		return retryDelay;
-	}
-
-	const message = String((error && error.message) || '');
-	const retryDelayMatch = message.match(/"?retry(?:\s|-)?delay"?\s*[:=]?\s*"?(\d+(?:\.\d+)?)(ms|s)?"?/i);
-	if (retryDelayMatch) {
-		const value = Number.parseFloat(retryDelayMatch[1]);
-		const unit = (retryDelayMatch[2] || 'ms').toLowerCase();
-		return unit === 's' ? value * 1000 : value;
-	}
-
-	const retryAfterMatch = message.match(/"?retry-after"?\s*[:=]?\s*"?(\d+(?:\.\d+)?)(ms|s)?"?/i);
-	if (retryAfterMatch) {
-		const value = Number.parseFloat(retryAfterMatch[1]);
-		const unit = (retryAfterMatch[2] || 's').toLowerCase();
-		return unit === 'ms' ? value : value * 1000;
-	}
-
-	return baseDelayMs * (2 ** Math.max(0, attempt - 1));
+	return geminiQuotaManager.extractRetryDelayMs(error, attempt, baseDelayMs);
 }
 
 function sleep(ms) {
@@ -273,13 +282,36 @@ class NewsAnalyzer {
 		this.enrichmentService = getEnrichmentService();
 		// Do NOT store notificationManager in constructor - get it dynamically
 		// to handle delayed initialization in tests and app startup
-		// Per-symbol timeout
-		this.timeout = parseInt(process.env.NEWS_TIMEOUT_MS || 60000);
-		this.alertThreshold = parseFloat(process.env.NEWS_ALERT_THRESHOLD || 0.7);
+
 		this.enableBinance = process.env.ENABLE_BINANCE_PRICE_CHECK === 'true';
-		this.geminiConcurrency = parsePositiveInteger(process.env.NEWS_GEMINI_CONCURRENCY, Infinity);
-		this.geminiQuotaMaxRetries = parsePositiveInteger(process.env.NEWS_GEMINI_QUOTA_MAX_RETRIES, 2);
-		this.geminiQuotaRetryBaseMs = parsePositiveInteger(process.env.NEWS_GEMINI_QUOTA_RETRY_BASE_MS, 1000);
+	}
+
+	get timeout() {
+		return this._timeoutOverride ?? parseNewsTimeoutMs(getRuntimeConfig().NEWS_TIMEOUT_MS);
+	}
+
+	set timeout(value) {
+		this._timeoutOverride = value;
+	}
+
+	get alertThreshold() {
+		return this._alertThresholdOverride ?? parseNewsAlertThreshold(getRuntimeConfig().NEWS_ALERT_THRESHOLD);
+	}
+
+	set alertThreshold(value) {
+		this._alertThresholdOverride = value;
+	}
+
+	get geminiConcurrency() {
+		return getRuntimeConfig().NEWS_GEMINI_CONCURRENCY;
+	}
+
+	get geminiQuotaMaxRetries() {
+		return getRuntimeConfig().NEWS_GEMINI_QUOTA_MAX_RETRIES;
+	}
+
+	get geminiQuotaRetryBaseMs() {
+		return getRuntimeConfig().NEWS_GEMINI_QUOTA_RETRY_BASE_MS;
 	}
 
 	calculateAdjustedConfidence(baseConfidence, marketContext) {
@@ -359,6 +391,8 @@ class NewsAnalyzer {
 				throw new Error('TIMEOUT');
 			}
 
+			await geminiQuotaManager.waitForCooldownIfNeeded({ maxWaitMs: remainingMs, throwOnExceeded: true });
+
 			try {
 				const timeoutPromise = new Promise((_, reject) => {
 					timeoutHandle = setTimeout(() => reject(new Error('TIMEOUT')), remainingMs);
@@ -374,7 +408,7 @@ class NewsAnalyzer {
 
 				lastQuotaError = error;
 				attempt += 1;
-				const delayMs = getQuotaRetryDelayMs(error, attempt, this.geminiQuotaRetryBaseMs);
+				const delayMs = geminiQuotaManager.triggerQuotaCooldown(error, attempt, this.geminiQuotaRetryBaseMs);
 				const remainingAfterAttemptMs = this.timeout - (Date.now() - startedAt);
 				if (delayMs >= remainingAfterAttemptMs) {
 					console.warn('[Analyzer] Gemini quota retry skipped; delay exceeds remaining budget:', symbol);
@@ -387,7 +421,7 @@ class NewsAnalyzer {
 					delayMs,
 					remainingMs: remainingAfterAttemptMs,
 				});
-				await sleep(delayMs);
+				await geminiQuotaManager.waitForCooldownIfNeeded({ maxWaitMs: remainingAfterAttemptMs, throwOnExceeded: true });
 			} finally {
 				clearTimeout(timeoutHandle);
 			}
@@ -1090,4 +1124,6 @@ module.exports = {
 	calculateVolumeRatio,
 	calculateRSI,
 	isKlineOpen,
+	parseNewsTimeoutMs,
+	parseNewsAlertThreshold,
 };

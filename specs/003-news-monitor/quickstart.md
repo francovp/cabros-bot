@@ -21,7 +21,7 @@ The News Monitor API analyzes news and market sentiment for crypto and stock sym
 
 ## Prerequisites
 
-1. **Node.js 20.x** (matches existing codebase)
+1. **Node.js 24.x** (matches the repository runtime contract)
 2. **Active bot** with Telegram and WhatsApp configured (from 002-whatsapp-alerts)
 3. **Gemini API key** (already integrated via `@google/genai`)
 4. **(Optional)** Binance API access for crypto prices

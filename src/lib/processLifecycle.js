@@ -79,6 +79,7 @@ function createProcessLifecycle(options = {}) {
 		finalizeBackgroundJobs = () => undefined,
 		finalizationTimeoutMs = DEFAULT_FORCED_FINALIZATION_TIMEOUT_MS,
 		stopSignalOutcomeWorker = () => undefined,
+		stopRemoteConfig = () => undefined,
 		shutdownNewsMonitor = () => undefined,
 		flushSentry = () => undefined,
 		timeoutMs = DEFAULT_SHUTDOWN_TIMEOUT_MS,
@@ -173,6 +174,7 @@ function createProcessLifecycle(options = {}) {
 				await safelyRun(logger, 'background persistence tasks', waitForBackgroundTasks);
 				await Promise.allSettled([
 					safelyRun(logger, 'signal-outcome worker', () => stopSignalOutcomeWorker({ drain: true })),
+					safelyRun(logger, 'remote config service', stopRemoteConfig),
 					safelyRun(logger, 'news monitor cache', shutdownNewsMonitor),
 				]);
 				await safelyRun(logger, 'Sentry', () => flushSentry(Math.min(shutdownTimeoutMs, 2000)));

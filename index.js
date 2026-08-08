@@ -22,6 +22,7 @@ const { getTelegramBootstrapConfig } = require('./src/lib/telegramBootstrap');
 const { jobService } = require('./src/services/jobs/JobService');
 const SignalOutcomeService = require('./src/services/storage/SignalOutcomeService');
 const sentryService = require('./src/services/monitoring/SentryService');
+const remoteConfigService = require('./src/services/remoteConfig/RemoteConfigService');
 const Sentry = require('@sentry/node');
 
 const { token } = getTelegramBootstrapConfig();
@@ -59,6 +60,7 @@ const lifecycle = createProcessLifecycle({
 	waitForBackgroundTasks,
 	finalizeBackgroundJobs: () => jobService.finalizeActiveJobsForShutdown(),
 	stopSignalOutcomeWorker: (options) => SignalOutcomeService.stopWorker(options),
+	stopRemoteConfig: () => remoteConfigService.stop(),
 	shutdownNewsMonitor: () => getCacheInstance().shutdown(),
 	flushSentry: (timeout) => sentryService.flush(timeout),
 	timeoutMs: process.env.SHUTDOWN_TIMEOUT_MS,
@@ -68,6 +70,8 @@ lifecycle.register();
 async function bootstrapApplication() {
 	console.log(now + ' - Running server on port ' + port);
 	if (lifecycle.isShuttingDown()) return;
+
+	void remoteConfigService.start();
 
 	// Start background signal outcome evaluation worker if enabled
 	SignalOutcomeService.startWorker();
