@@ -187,6 +187,7 @@ describe('JobService Unit Tests', () => {
 			expect(abort).toHaveBeenCalledTimes(1);
 			expect(jobService._sendCallbackWithRetry).toHaveBeenCalledWith(
 				expect.objectContaining({ jobId: result.jobId, status: 'cancelled' }),
+				expect.any(String),
 			);
 
 			await jobService._persistJob({
@@ -553,8 +554,8 @@ describe('JobService Unit Tests', () => {
 			});
 			expect((await jobService.repository.get(processingJob.jobId)).status).toBe('cancelled');
 
-			expect(admin.__mockDocSet).toHaveBeenCalledTimes(3);
-			expect(admin.__mockDocSet.mock.calls[2][0]).toEqual(expect.objectContaining({
+			expect(admin.__mockDocSet).toHaveBeenCalledTimes(2);
+			expect(admin.__mockDocSet.mock.calls[1][0]).toEqual(expect.objectContaining({
 				status: 'cancelled',
 				shutdownFinalized: true,
 			}));
@@ -1169,7 +1170,7 @@ describe('JobService Unit Tests', () => {
 				callbackStatus: { status: 'pending', attempts: [] },
 			};
 
-			await jobService._triggerCallbackIfConfigured(job);
+			await jobService._triggerCallbackIfConfigured(job, { background: true });
 			let settled = false;
 			const wait = jobService.waitForCallbacks().then(() => {
 				settled = true;

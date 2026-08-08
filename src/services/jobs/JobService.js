@@ -841,7 +841,7 @@ class JobService {
 			};
 		} catch (error) {
 			if (queueMode) {
-				if (error instanceof JobQueueUnavailableError || error.code === 'JOB_STORAGE_UNAVAILABLE' || error.code === 'JOB_QUEUE_ACCEPTANCE_UNKNOWN') {
+				if (error instanceof JobQueueUnavailableError || error.code === 'JOB_QUEUE_UNAVAILABLE' || error.code === 'JOB_STORAGE_UNAVAILABLE' || error.code === 'JOB_QUEUE_ACCEPTANCE_UNKNOWN') {
 					throw error;
 				}
 				throw new JobQueueUnavailableError('The job could not be durably stored.');

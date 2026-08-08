@@ -378,13 +378,14 @@ describe('JobRepository durable claims', () => {
 			runTransaction: jest.fn(async callback => callback(transaction)),
 		};
 		const repository = new JobRepository();
+		repository.forceFirestoreForTests = true;
 		repository._getFirestore = jest.fn(() => firestore);
 
 		await expect(repository.save({
 			jobId: 'job-123',
 			status: 'processing',
 			execution: { mode: 'render-worker', status: 'running', workerId: 'worker-1' },
-		}, { required: true })).resolves.toBeNull();
+		}, { required: true })).resolves.toBe(false);
 
 		expect(transaction.set).not.toHaveBeenCalled();
 	});
@@ -408,13 +409,14 @@ describe('JobRepository durable claims', () => {
 			runTransaction: jest.fn(async callback => callback(transaction)),
 		};
 		const repository = new JobRepository();
+		repository.forceFirestoreForTests = true;
 		repository._getFirestore = jest.fn(() => firestore);
 
 		await expect(repository.save({
 			jobId: 'job-123',
 			status: 'processing',
 			execution: { mode: 'render-worker', status: 'queued' },
-		}, { required: true })).resolves.toBeNull();
+		}, { required: true })).resolves.toBe(false);
 
 		expect(transaction.set).not.toHaveBeenCalled();
 	});
@@ -482,9 +484,9 @@ describe('JobRepository durable claims', () => {
 		const transaction = {
 			get: jest.fn().mockResolvedValue({
 				exists: true,
-				id: 'job-123',
+				id: 'job-preserve-callback-123',
 				data: () => ({
-					jobId: 'job-123',
+					jobId: 'job-preserve-callback-123',
 					status: 'processing',
 					execution: { mode: 'render-worker', status: 'running', workerId: 'worker-1', attempt: 2 },
 					callbackStatus,
@@ -496,15 +498,17 @@ describe('JobRepository durable claims', () => {
 			collection: jest.fn(() => ({ doc: jest.fn(() => docRef) })),
 			runTransaction: jest.fn(async callback => callback(transaction)),
 		};
+		process.env.ENABLE_FIRESTORE_JOB_STORAGE = 'true';
 		const repository = new JobRepository();
+		repository.forceFirestoreForTests = true;
 		repository._getFirestore = jest.fn(() => firestore);
 
 		await expect(repository.save({
-			jobId: 'job-123',
+			jobId: 'job-preserve-callback-123',
 			status: 'processing',
 			execution: { mode: 'render-worker', status: 'running', workerId: 'worker-1', attempt: 2 },
 			callbackStatus: { status: 'pending', attempts: [] },
-		}, { required: true })).resolves.toBe('job-123');
+		}, { required: true })).resolves.toBe('job-preserve-callback-123');
 
 		expect(transaction.set).toHaveBeenCalledWith(
 			docRef,
