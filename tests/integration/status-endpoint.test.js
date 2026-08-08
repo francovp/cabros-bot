@@ -56,6 +56,7 @@ describe('Status endpoints', () => {
 		Object.keys(process.env).forEach((key) => {
 			delete process.env[key];
 		});
+		process.env.NODE_ENV = 'test';
 		tempDir = null;
 		app = express();
 		app.use(express.json());
