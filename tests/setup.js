@@ -3,6 +3,7 @@
 // Mock environment variables
 process.env = {
 	...process.env,
+	NODE_ENV: 'test',
 	ENABLE_GEMINI_GROUNDING: 'true',
 	SEARCH_API_KEY: 'test-search-key',
 	SEARCH_CX: 'test-search-cx',
