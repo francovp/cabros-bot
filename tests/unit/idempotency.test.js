@@ -2,13 +2,39 @@
 
 const httpMocks = require('node-mocks-http');
 const { idempotencyService } = require('../../src/services/storage/IdempotencyService');
+const idempotencyStorageService = require('../../src/services/storage/IdempotencyStorageService');
 const { idempotencyMiddleware } = require('../../src/lib/idempotency');
+const { waitForBackgroundTasks, resetForTesting } = require('../../src/lib/backgroundTaskTracker');
 
 describe('Idempotency Service & Middleware', () => {
 	beforeEach(() => {
 		idempotencyService.clear();
+		resetForTesting();
 		jest.restoreAllMocks();
 		delete process.env.WEBHOOK_IDEMPOTENCY_TTL_MS;
+	});
+
+	it('tracks durable completion writes until shutdown drain observes them', async () => {
+		let releaseWrite;
+		const durableWrite = new Promise((resolve) => { releaseWrite = resolve; });
+		jest.spyOn(idempotencyStorageService, 'isEnabled').mockReturnValue(true);
+		jest.spyOn(idempotencyStorageService, 'setEntry').mockReturnValue(durableWrite);
+
+		idempotencyService.set('durable-key', { body: 'body' }, {
+			statusCode: 200,
+			body: { success: true },
+			headers: {},
+		});
+
+		const drain = waitForBackgroundTasks();
+		let drained = false;
+		drain.then(() => { drained = true; });
+		await Promise.resolve();
+		expect(drained).toBe(false);
+
+		releaseWrite();
+		await drain;
+		expect(drained).toBe(true);
 	});
 
 	describe('IdempotencyService', () => {
@@ -292,6 +318,38 @@ describe('Idempotency Service & Middleware', () => {
 			const responseBody = JSON.parse(res2._getData());
 			expect(responseBody.success).toBe(true);
 			expect(responseBody.idempotencyReplayed).toBe(true);
+		});
+
+		test('should replay an indeterminate queue acceptance response instead of releasing the key', async () => {
+			const key = 'queue-acceptance-unknown-key';
+			req.headers['idempotency-key'] = key;
+			req.body = { type: 'expanded-analysis', symbols: ['BINANCE:BTCUSDT'] };
+
+			await idempotencyMiddleware(req, res, next);
+			res.status(503).json({
+				error: 'The queue acceptance state could not be determined.',
+				code: 'JOB_QUEUE_ACCEPTANCE_UNKNOWN',
+				jobId: 'job-123',
+			});
+
+			const req2 = httpMocks.createRequest({
+				method: 'POST',
+				url: '/api/webhook/alert',
+				headers: { 'idempotency-key': key },
+				body: { type: 'expanded-analysis', symbols: ['BINANCE:BTCUSDT'] },
+			});
+			const res2 = httpMocks.createResponse();
+			const next2 = jest.fn();
+
+			await idempotencyMiddleware(req2, res2, next2);
+
+			expect(next2).not.toHaveBeenCalled();
+			expect(res2.statusCode).toBe(503);
+			expect(JSON.parse(res2._getData())).toEqual(expect.objectContaining({
+				code: 'JOB_QUEUE_ACCEPTANCE_UNKNOWN',
+				jobId: 'job-123',
+				idempotencyReplayed: true,
+			}));
 		});
 
 		test('should return 409 Conflict if payload changes for the same key', async () => {
@@ -655,6 +713,152 @@ describe('Idempotency Service & Middleware', () => {
 			} finally {
 				idempotencyService.maxKeys = originalMaxKeys;
 			}
+		});
+
+		test('should pass the durable claim token when completing a reservation', async () => {
+			const idempotencyStorageService = require('../../src/services/storage/IdempotencyStorageService');
+			const setEntryMock = jest.spyOn(idempotencyStorageService, 'setEntry').mockResolvedValue();
+			jest.spyOn(idempotencyStorageService, 'isEnabled').mockReturnValue(true);
+			jest.spyOn(idempotencyStorageService, 'reserveEntry').mockResolvedValue({
+				state: 'fresh',
+				claimToken: 'claim-token',
+			});
+
+			const key = 'durable-claim-token';
+			const payload = { method: 'POST', path: '/api/webhook/alert', body: { text: 'alert' }, query: {} };
+			await expect(idempotencyService.reserve(key, payload)).resolves.toEqual({ state: 'fresh' });
+
+			idempotencyService.set(key, payload, { statusCode: 200, body: { ok: true }, headers: {} });
+
+			expect(setEntryMock).toHaveBeenCalledWith(
+				key,
+				expect.any(String),
+				expect.objectContaining({ statusCode: 200 }),
+				expect.any(Number),
+				'claim-token',
+			);
+		});
+
+		test('should serialize concurrent durable reservations behind a fresh owner', async () => {
+			const idempotencyStorageService = require('../../src/services/storage/IdempotencyStorageService');
+			const setEntryMock = jest.spyOn(idempotencyStorageService, 'setEntry').mockResolvedValue();
+			jest.spyOn(idempotencyStorageService, 'isEnabled').mockReturnValue(true);
+			const reserveEntryMock = jest.spyOn(idempotencyStorageService, 'reserveEntry').mockResolvedValue({
+				state: 'fresh',
+				claimToken: 'owner-token',
+			});
+
+			const key = 'durable-claim-race';
+			const payload = { method: 'POST', path: '/api/webhook/alert', body: { text: 'alert' }, query: {} };
+			const firstReservation = idempotencyService.reserve(key, payload);
+			const concurrentReservation = idempotencyService.reserve(key, payload);
+
+			await expect(firstReservation).resolves.toEqual({ state: 'fresh' });
+			const pendingResult = await concurrentReservation;
+			expect(pendingResult.state).toBe('pending');
+			expect(reserveEntryMock).toHaveBeenCalledTimes(1);
+			expect(idempotencyService.cache.get(key).claimToken).toBe('owner-token');
+
+			idempotencyService.set(key, payload, { statusCode: 200, body: { ok: true }, headers: {} });
+			await expect(pendingResult.promise).resolves.toMatchObject({
+				state: 'completed',
+				responseBody: { ok: true },
+			});
+			expect(setEntryMock).toHaveBeenCalledWith(
+				key,
+				expect.any(String),
+				expect.objectContaining({ statusCode: 200 }),
+				expect.any(Number),
+				'owner-token',
+			);
+		});
+
+		test('should serialize a fallback owner before allowing a durable claimant', async () => {
+			const idempotencyStorageService = require('../../src/services/storage/IdempotencyStorageService');
+			const setEntryMock = jest.spyOn(idempotencyStorageService, 'setEntry').mockResolvedValue();
+			jest.spyOn(idempotencyStorageService, 'isEnabled').mockReturnValue(true);
+			const reserveEntryMock = jest.spyOn(idempotencyStorageService, 'reserveEntry').mockResolvedValue(null);
+
+			const key = 'durable-fallback-first-race';
+			const payload = { method: 'POST', path: '/api/webhook/alert', body: { text: 'alert' }, query: {} };
+			const fallbackReservation = idempotencyService.reserve(key, payload);
+			const durableReservation = idempotencyService.reserve(key, payload);
+
+			await expect(fallbackReservation).resolves.toEqual({ state: 'fresh' });
+			const durableResult = await durableReservation;
+			expect(durableResult.state).toBe('pending');
+			expect(reserveEntryMock).toHaveBeenCalledTimes(1);
+			expect(idempotencyService.cache.get(key).claimToken).toBeUndefined();
+
+			idempotencyService.set(key, payload, { statusCode: 200, body: { ok: true }, headers: {} });
+			await expect(durableResult.promise).resolves.toMatchObject({
+				state: 'completed',
+				responseBody: { ok: true },
+			});
+			expect(setEntryMock).toHaveBeenCalledWith(
+				key,
+				expect.any(String),
+				expect.objectContaining({ statusCode: 200 }),
+				expect.any(Number),
+				undefined,
+			);
+		});
+
+		test('should serialize concurrent observers of an external pending reservation', async () => {
+			const idempotencyStorageService = require('../../src/services/storage/IdempotencyStorageService');
+			const pollResolvers = [];
+			jest.spyOn(idempotencyStorageService, 'waitForPendingCompletion').mockImplementation(() => new Promise((resolve) => {
+				pollResolvers.push(resolve);
+			}));
+			jest.spyOn(idempotencyStorageService, 'isEnabled').mockReturnValue(true);
+			const reserveEntryMock = jest.spyOn(idempotencyStorageService, 'reserveEntry').mockResolvedValue({ state: 'pending' });
+
+			const key = 'durable-pending-serialization';
+			const payload = { method: 'POST', path: '/api/webhook/alert', body: { text: 'alert' }, query: {} };
+			const firstReservation = idempotencyService.reserve(key, payload);
+			const secondReservation = idempotencyService.reserve(key, payload);
+			const firstResult = await firstReservation;
+			const secondResult = await secondReservation;
+
+			expect(pollResolvers).toHaveLength(1);
+			expect(reserveEntryMock).toHaveBeenCalledTimes(1);
+			expect(firstResult.state).toBe('pending');
+			expect(secondResult.state).toBe('pending');
+			expect(secondResult.promise).toBe(firstResult.promise);
+			firstResult.promise.catch(() => {});
+			pollResolvers[0]({ state: 'released' });
+			await Promise.resolve();
+			await expect(firstResult.promise).rejects.toMatchObject({ code: 'IDEMPOTENCY_RELEASED' });
+		});
+
+		test('should retry the durable lookup after a predecessor payload conflict', async () => {
+			const idempotencyStorageService = require('../../src/services/storage/IdempotencyStorageService');
+			jest.spyOn(idempotencyStorageService, 'isEnabled').mockReturnValue(true);
+			const reserveEntryMock = jest.spyOn(idempotencyStorageService, 'reserveEntry')
+				.mockResolvedValueOnce({ state: 'conflict' })
+				.mockResolvedValueOnce({
+					state: 'completed',
+					record: {
+						payloadHash: 'payload-b-hash',
+						state: 'completed',
+						statusCode: 200,
+						responseBody: { ok: 'b' },
+						headers: {},
+					},
+				});
+
+			const key = 'durable-payload-conflict-race';
+			const payloadA = { method: 'POST', path: '/api/webhook/alert', body: { text: 'a' }, query: {} };
+			const payloadB = { method: 'POST', path: '/api/webhook/alert', body: { text: 'b' }, query: {} };
+			const firstReservation = idempotencyService.reserve(key, payloadA);
+			const secondReservation = idempotencyService.reserve(key, payloadB);
+
+			await expect(firstReservation).rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
+			await expect(secondReservation).resolves.toMatchObject({
+				state: 'completed',
+				record: { responseBody: { ok: 'b' } },
+			});
+			expect(reserveEntryMock).toHaveBeenCalledTimes(2);
 		});
 	});
 });

@@ -63,6 +63,7 @@ describe('AlertStorageService', () => {
 		AlertStorageService._resetForTesting();
 		delete process.env.ENABLE_FIRESTORE_ALERT_STORAGE;
 		delete process.env.ENABLE_SIGNAL_OUTCOME_TRACKING;
+		delete process.env.ENABLE_FIREBASE_REMOTE_CONFIG;
 	});
 
 	afterEach(() => {
@@ -70,6 +71,7 @@ describe('AlertStorageService', () => {
 		delete process.env.ENABLE_FIRESTORE_JOB_STORAGE;
 		delete process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING;
 		delete process.env.ENABLE_SIGNAL_OUTCOME_TRACKING;
+		delete process.env.ENABLE_FIREBASE_REMOTE_CONFIG;
 		delete process.env.FIREBASE_PROJECT_ID;
 		delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
 	});
@@ -115,6 +117,14 @@ describe('AlertStorageService', () => {
 
 		it('initializes Firestore when only ENABLE_FIRESTORE_JOB_STORAGE is true', () => {
 			process.env.ENABLE_FIRESTORE_JOB_STORAGE = 'true';
+			const result = AlertStorageService.getFirestore();
+			expect(mockInitializeApp).toHaveBeenCalledTimes(1);
+			expect(result).not.toBeNull();
+			expect(result.collection).toBeDefined();
+		});
+
+		it('initializes Firestore when only Firebase Remote Config is enabled', () => {
+			process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
 			const result = AlertStorageService.getFirestore();
 			expect(mockInitializeApp).toHaveBeenCalledTimes(1);
 			expect(result).not.toBeNull();
@@ -244,7 +254,25 @@ describe('AlertStorageService', () => {
 				channels: ['telegram'],
 				source: 'webhook',
 				useTradingViewData: true,
+				tradingViewEnrichmentApplied: false,
 			});
+		});
+
+		it('persists requested and successfully applied TradingView enrichment separately', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockAdd.mockResolvedValueOnce({ id: 'id-tradingview' });
+
+			await AlertStorageService.saveAlert(buildParams({
+				useTradingViewData: true,
+				tradingViewEnrichmentApplied: true,
+				enriched: true,
+				enrichmentData: { tradingViewEnrichmentApplied: true },
+			}));
+
+			expect(mockAdd).toHaveBeenCalledWith(expect.objectContaining({
+				useTradingViewData: true,
+				tradingViewEnrichmentApplied: true,
+			}));
 		});
 
 		it('persists only safe prompt provenance fields with enriched alerts', async () => {
@@ -422,6 +450,7 @@ describe('AlertStorageService', () => {
 					deliveryResults: [{ channel: 'telegram', success: true }],
 					source: 'webhook',
 					useTradingViewData: false,
+					tradingViewEnrichmentApplied: false,
 				},
 			]);
 			expect(result.hasMore).toBe(true);
@@ -603,6 +632,7 @@ describe('AlertStorageService', () => {
 				deliveryResults: [{ channel: 'telegram', success: true }],
 				source: 'webhook',
 				useTradingViewData: true,
+				tradingViewEnrichmentApplied: false,
 			});
 		});
 
@@ -781,6 +811,7 @@ describe('AlertStorageService', () => {
 				source: 'webhook',
 				enriched: true,
 				useTradingViewData: true,
+				tradingViewEnrichmentApplied: false,
 				deliveryResults: [
 					{ channel: 'telegram', success: true, messageId: 'tg-1', errorCode: null, statusCode: null },
 					{ channel: 'whatsapp', success: false, messageId: null, errorCode: 'PROVIDER_LIMIT', statusCode: 429 },
@@ -883,6 +914,7 @@ describe('AlertStorageService', () => {
 						],
 						source: 'webhook',
 						useTradingViewData: true,
+						tradingViewEnrichmentApplied: true,
 						processingTimeMs: 250,
 					}),
 					buildQueryDoc('alert-2', {
@@ -925,6 +957,7 @@ describe('AlertStorageService', () => {
 					enriched: 1,
 					plain: 1,
 					tradingViewData: 1,
+					tradingViewDataApplied: 1,
 					withoutTradingViewData: 1,
 				},
 				enrichment: {

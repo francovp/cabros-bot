@@ -396,7 +396,7 @@ package.json (no new dependencies; native fetch only)
 
 ## Notes for Implementation
 
-1. **No New Dependencies**: Use native Node.js 20 fetch API. No external HTTP client needed.
+1. **No New Dependencies**: Use native Node.js 24 fetch API. No external HTTP client needed.
 
 2. **Formatting Conversion**: 
    - Telegram MarkdownV2 → WhatsApp markdown conversion happens in `WhatsAppMarkdownFormatter`
@@ -435,7 +435,7 @@ package.json (no new dependencies; native fetch only)
 ## Implementation Checklist
 
 - [ ] Read all design documents: plan.md, spec.md, data-model.md, research.md, contracts/, quickstart.md
-- [ ] Verify Node.js 20.x environment: `node --version`
+- [ ] Verify Node.js 24.x environment: `node --version`
 - [ ] Review existing Telegram alert implementation: `src/controllers/webhooks/handlers/alert/alert.js`
 - [ ] Check current grounding service: `src/services/grounding/grounding.js` (for reuse)
 - [ ] Verify test framework: jest is installed (`pnpm test --version`)

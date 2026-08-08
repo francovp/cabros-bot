@@ -3,6 +3,7 @@
 const admin = require('firebase-admin');
 const AlertStorageService = require('./AlertStorageService');
 const equityMarketDataService = require('./EquityMarketDataService');
+const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
 const { MainClient } = require('binance');
 
 const COLLECTION_NAME = 'tradingSignalOutcomes';
@@ -194,7 +195,7 @@ const WINDOW_CONFIGS = {
 /**
  * Persist signal metadata to Firestore.
  */
-async function recordSignal({
+async function recordSignalInternal({
 	requestId,
 	source,
 	symbol,
@@ -298,6 +299,10 @@ async function recordSignal({
 		console.warn('[SignalOutcomeService] Failed to record signal outcome:', error.message);
 		return null;
 	}
+}
+
+function recordSignal(params) {
+	return trackBackgroundTask(recordSignalInternal(params));
 }
 
 /**

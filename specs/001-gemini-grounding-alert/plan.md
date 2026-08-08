@@ -9,7 +9,7 @@ Add enriched context to webhook alerts using Gemini AI with Google Search ground
 
 ## Technical Context
 
-**Language/Version**: Node.js 20.x (from package.json engines)
+**Language/Version**: Node.js 24.x (from `.node-version` and package.json engines)
 **Primary Dependencies**:
 
   - @google/genai (a.k.a. `genai`) - Gemini API client and googleSearch groundingTool Tools (use latest `@google/genai` package implementation)
