@@ -22,6 +22,7 @@
  *   deliveryResults  - array  — per-channel SendResult objects
  *   source           - string — always "webhook"
  *   useTradingViewData - boolean — query param from the request
+ *   processingTimeMs - integer — bounded handler processing duration
  */
 
 const admin = require('firebase-admin');
@@ -40,6 +41,8 @@ const DEFAULT_EXPORT_LIMIT = 500;
 const MAX_EXPORT_LIMIT = 1000;
 const MAX_EXPORT_WINDOW_DAYS = 31;
 const MAX_EXPORT_TEXT_LENGTH = 1000;
+// ponytail: 24h ceiling rejects stuck-request outliers; raise only with observed legitimate longer handlers.
+const MAX_PROCESSING_TIME_MS = 24 * 60 * 60 * 1000;
 const STORAGE_UNAVAILABLE_CODE = 'STORAGE_UNAVAILABLE';
 const INVALID_CURSOR_MESSAGE = 'Invalid before cursor. Use an ISO-8601 timestamp or the nextBefore cursor from a previous response.';
 const RISK_METADATA_FIELDS = [
@@ -426,6 +429,14 @@ function collectLatency(samples, value) {
 	}
 }
 
+function normalizeProcessingTimeMs(value) {
+	if (!Number.isSafeInteger(value) || value < 0 || value > MAX_PROCESSING_TIME_MS) {
+		return null;
+	}
+
+	return value;
+}
+
 function averageLatency(samples) {
 	if (samples.length === 0) {
 		return null;
@@ -636,9 +647,10 @@ function getFirestore() {
  * @param {Array<string>} params.channels    - Requested channels used for delivery
  * @param {Array}   params.deliveryResults   - Array of SendResult from notificationManager.sendToAll()
  * @param {boolean} params.useTradingViewData - Whether ?useTradingViewData=true was set on the request
+ * @param {number}  params.processingTimeMs  - Bounded handler processing duration in milliseconds
  * @returns {Promise<string|null>} The new Firestore document ID, or null on failure/disabled
  */
-async function saveAlertInternal({ text, symbol, exchange, enriched, enrichmentData, tokenUsage, channels, deliveryResults, useTradingViewData, tradingViewEnrichmentApplied }) {
+async function saveAlertInternal({ text, symbol, exchange, enriched, enrichmentData, tokenUsage, channels, deliveryResults, useTradingViewData, tradingViewEnrichmentApplied, processingTimeMs }) {
 	if (!isEnabled()) {
 		return null;
 	}
@@ -662,6 +674,10 @@ async function saveAlertInternal({ text, symbol, exchange, enriched, enrichmentD
 			useTradingViewData: Boolean(useTradingViewData),
 			tradingViewEnrichmentApplied: Boolean(tradingViewEnrichmentApplied),
 		};
+		const normalizedProcessingTimeMs = normalizeProcessingTimeMs(processingTimeMs);
+		if (normalizedProcessingTimeMs !== null) {
+			document.processingTimeMs = normalizedProcessingTimeMs;
+		}
 
 		if (extracted.symbol !== 'unknown') {
 			document.symbol = extracted.symbol;
@@ -1076,7 +1092,7 @@ async function summarizeAlerts({ from, to, limit, source, enriched } = {}) {
 
 		addTokenUsage(summary.enrichment.tokenUsage, data.tokenUsage);
 		addDeliverySummary(summary.delivery, data.deliveryResults);
-		collectLatency(processingLatencySamples, data.processingTimeMs || data.processing_time_ms);
+		collectLatency(processingLatencySamples, data.processingTimeMs ?? data.processing_time_ms);
 
 		if (Array.isArray(data.deliveryResults)) {
 			for (const result of data.deliveryResults) {
