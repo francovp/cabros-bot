@@ -1,6 +1,7 @@
 const NotificationManager = require('../../src/services/notification/NotificationManager');
 const DiscordService = require('../../src/services/notification/DiscordService');
 const sentryService = require('../../src/services/monitoring/SentryService');
+const { waitForBackgroundTasks, resetForTesting } = require('../../src/lib/backgroundTaskTracker');
 
 describe('NotificationManager admin failure notifications', () => {
 	const originalAdminChatId = process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID;
@@ -9,6 +10,7 @@ describe('NotificationManager admin failure notifications', () => {
 	const originalFetch = global.fetch;
 
 	afterEach(() => {
+		resetForTesting();
 		jest.restoreAllMocks();
 		if (originalFetch === undefined) {
 			delete global.fetch;
@@ -167,6 +169,37 @@ describe('NotificationManager admin failure notifications', () => {
 		await delivery;
 
 		expect(settledBeforeAdmin).toBe(true);
+	});
+
+	it('tracks admin failure notifications until shutdown drain observes them', async () => {
+		process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '-100-admin';
+		let releaseAdminNotification;
+		const adminNotification = new Promise((resolve) => { releaseAdminNotification = resolve; });
+		const telegramService = {
+			name: 'telegram',
+			isEnabled: jest.fn(() => true),
+			send: jest.fn()
+				.mockResolvedValueOnce({ success: true, channel: 'telegram', messageId: 'alert-1' })
+				.mockReturnValueOnce(adminNotification),
+		};
+		const whatsappService = {
+			name: 'whatsapp',
+			isEnabled: jest.fn(() => true),
+			send: jest.fn().mockResolvedValue({ success: false, channel: 'whatsapp', error: 'GreenAPI unavailable' }),
+		};
+		const manager = new NotificationManager(telegramService, whatsappService);
+
+		await manager.sendToAll({ text: 'BTC alert' });
+		const drain = waitForBackgroundTasks();
+		let drained = false;
+		drain.then(() => { drained = true; });
+		await Promise.resolve();
+
+		expect(drained).toBe(false);
+
+		releaseAdminNotification({ success: true, channel: 'telegram', messageId: 'admin-1' });
+		await drain;
+		expect(drained).toBe(true);
 	});
 
 	it.each([

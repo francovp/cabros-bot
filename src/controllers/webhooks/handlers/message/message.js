@@ -33,8 +33,8 @@ function validateMessageRequest(body) {
 function postMessage(botOrGetter) {
 	return async (req, res) => {
 		try {
-			const { text, channels, telegramChatId, whatsappChatId } = validateMessageRequest(req.body);
-			const alert = { text, telegramChatId, whatsappChatId };
+			const { text, channels, telegramChatId, whatsappChatId, discordWebhookUrl } = validateMessageRequest(req.body);
+			const alert = { text, telegramChatId, whatsappChatId, discordWebhookUrl };
 
 			let notificationManager = getNotificationManager();
 			if (!notificationManager) {
@@ -54,7 +54,17 @@ function postMessage(botOrGetter) {
 				}
 			}
 
-			const results = await sendWithNotificationRouting(notificationManager, alert, { channels, telegramChatId, whatsappChatId });
+			const httpContext = {
+				endpoint: '/api/webhook/message',
+				method: 'POST',
+			};
+
+			const results = await sendWithNotificationRouting(
+				notificationManager,
+				alert,
+				{ channels, telegramChatId, whatsappChatId, discordWebhookUrl },
+				{ http: httpContext },
+			);
 
 			res.json({ success: true, results });
 		} catch (error) {
@@ -67,13 +77,19 @@ function postMessage(botOrGetter) {
 			}
 
 			console.error('[MessageWebhook] Request failed:', error.message);
+			const requestedChannels = req.body && Array.isArray(req.body.channels) ? req.body.channels : [];
+			const channel = requestedChannels.length === 1 ? requestedChannels[0] : 'http-message';
+
 			sentryService.captureRuntimeError({
-				channel: 'http-message',
+				channel,
 				error,
 				http: {
 					endpoint: '/api/webhook/message',
 					method: 'POST',
 					statusCode: 500,
+				},
+				extra: {
+					category: 'http_webhook_error',
 				},
 			});
 

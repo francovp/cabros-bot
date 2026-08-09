@@ -143,10 +143,9 @@ function idempotencyMiddleware(req, res, next) {
 		let responseCached = false;
 
 		const cacheResponse = (body) => {
-			if (responseCached || res.statusCode >= 500) {
+			if (responseCached) {
 				return;
 			}
-			responseCached = true;
 
 			let responseBody = body;
 			if (typeof body === 'string') {
@@ -162,6 +161,17 @@ function idempotencyMiddleware(req, res, next) {
 					responseBody = body.toString('utf8');
 				}
 			}
+
+			const replayableIndeterminateQueueResponse = res.statusCode === 503
+				&& responseBody
+				&& typeof responseBody === 'object'
+				&& responseBody.code === 'JOB_QUEUE_ACCEPTANCE_UNKNOWN'
+				&& typeof responseBody.jobId === 'string'
+				&& responseBody.jobId.length > 0;
+			if (res.statusCode >= 500 && !replayableIndeterminateQueueResponse) {
+				return;
+			}
+			responseCached = true;
 
 			const contentType = res.get('content-type');
 			const headers = {};

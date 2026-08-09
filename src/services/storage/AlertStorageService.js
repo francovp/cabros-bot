@@ -28,6 +28,7 @@
 const admin = require('firebase-admin');
 const crypto = require('crypto');
 const { encodeAlertPaginationCursor, parseAlertPaginationCursor } = require('./alertPaginationCursor');
+const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
 
 const COLLECTION_NAME = 'alerts';
 const REPLAY_COLLECTION_NAME = 'alertReplays';
@@ -69,7 +70,8 @@ function canInitializeFirestore() {
 		|| process.env.ENABLE_FIRESTORE_SCANNER_PRESETS === 'true'
 		|| process.env.ENABLE_FIRESTORE_JOB_STORAGE === 'true'
 		|| process.env.ENABLE_SIGNAL_OUTCOME_TRACKING === 'true'
-		|| process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING === 'true';
+		|| process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING === 'true'
+		|| process.env.ENABLE_FIREBASE_REMOTE_CONFIG === 'true';
 }
 
 function clampLimit(limit) {
@@ -102,6 +104,7 @@ function formatAlertDocument(doc) {
 		deliveryResults: Array.isArray(data.deliveryResults) ? data.deliveryResults : [],
 		source: typeof data.source === 'string' ? data.source : null,
 		useTradingViewData: Boolean(data.useTradingViewData),
+		tradingViewEnrichmentApplied: Boolean(data.tradingViewEnrichmentApplied),
 	};
 	if (extracted.symbol !== 'unknown') {
 		docObj.symbol = extracted.symbol;
@@ -407,6 +410,7 @@ function formatExportRecord(doc, { includeText }) {
 		source: typeof data.source === 'string' ? data.source : null,
 		enriched: Boolean(data.enriched),
 		useTradingViewData: Boolean(data.useTradingViewData),
+		tradingViewEnrichmentApplied: Boolean(data.tradingViewEnrichmentApplied),
 		deliveryResults: summarizeDeliveryResults(data.deliveryResults),
 		tokenUsage: summarizeTokenUsage(data.tokenUsage),
 	};
@@ -646,7 +650,7 @@ function getFirestore() {
  * @param {number}  params.processingTimeMs  - Bounded handler processing duration in milliseconds
  * @returns {Promise<string|null>} The new Firestore document ID, or null on failure/disabled
  */
-async function saveAlert({ text, symbol, exchange, enriched, enrichmentData, tokenUsage, channels, deliveryResults, useTradingViewData, processingTimeMs }) {
+async function saveAlertInternal({ text, symbol, exchange, enriched, enrichmentData, tokenUsage, channels, deliveryResults, useTradingViewData, tradingViewEnrichmentApplied, processingTimeMs }) {
 	if (!isEnabled()) {
 		return null;
 	}
@@ -668,6 +672,7 @@ async function saveAlert({ text, symbol, exchange, enriched, enrichmentData, tok
 			deliveryResults: Array.isArray(deliveryResults) ? deliveryResults : [],
 			source: 'webhook',
 			useTradingViewData: Boolean(useTradingViewData),
+			tradingViewEnrichmentApplied: Boolean(tradingViewEnrichmentApplied),
 		};
 		const normalizedProcessingTimeMs = normalizeProcessingTimeMs(processingTimeMs);
 		if (normalizedProcessingTimeMs !== null) {
@@ -688,6 +693,10 @@ async function saveAlert({ text, symbol, exchange, enriched, enrichmentData, tok
 		console.warn('[AlertStorageService] Failed to store alert in Firestore:', error.message);
 		return null;
 	}
+}
+
+function saveAlert(params) {
+	return trackBackgroundTask(saveAlertInternal(params));
 }
 
 /**
@@ -1023,6 +1032,7 @@ async function summarizeAlerts({ from, to, limit, source, enriched } = {}) {
 			enriched: 0,
 			plain: 0,
 			tradingViewData: 0,
+			tradingViewDataApplied: 0,
 			withoutTradingViewData: 0,
 		},
 		enrichment: {
@@ -1056,6 +1066,7 @@ async function summarizeAlerts({ from, to, limit, source, enriched } = {}) {
 		const data = doc.data() || {};
 		const alertEnriched = Boolean(data.enriched);
 		const useTradingViewData = Boolean(data.useTradingViewData);
+		const tradingViewEnrichmentApplied = Boolean(data.tradingViewEnrichmentApplied);
 
 		summary.totalAlerts += 1;
 		incrementCounter(summary.bySource, data.source);
@@ -1072,6 +1083,9 @@ async function summarizeAlerts({ from, to, limit, source, enriched } = {}) {
 
 		if (useTradingViewData) {
 			summary.byFeatureFlag.tradingViewData += 1;
+			if (tradingViewEnrichmentApplied) {
+				summary.byFeatureFlag.tradingViewDataApplied += 1;
+			}
 		} else {
 			summary.byFeatureFlag.withoutTradingViewData += 1;
 		}
