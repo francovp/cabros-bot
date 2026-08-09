@@ -4,6 +4,7 @@
  */
 
 const sentryService = require('../monitoring/SentryService');
+const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
 
 class NotificationManager {
 	/**
@@ -202,6 +203,12 @@ class NotificationManager {
 
 		// Report external failures to Sentry
 		const totalDurationMs = Date.now() - startTime;
+		const httpContext = options.http || (options.endpoint ? {
+			endpoint: options.endpoint,
+			method: options.method || 'POST',
+			statusCode: 500,
+		} : undefined);
+
 		for (const result of formattedResults) {
 			if (result && !result.success && result.error) {
 				const providerMap = {
@@ -220,11 +227,12 @@ class NotificationManager {
 						lastErrorMessage: result.error,
 						lastErrorCode: result.statusCode,
 					},
+					http: httpContext,
 				});
 			}
 		}
 
-		void this.notifyAdminOfFailures(alert, formattedResults).catch((error) => {
+		trackBackgroundTask(this.notifyAdminOfFailures(alert, formattedResults)).catch((error) => {
 			console.error('[NotificationManager] Unexpected admin notification failure:', error.message);
 		});
 
@@ -317,6 +325,12 @@ class NotificationManager {
 
 		// Report external failures to Sentry (T014)
 		const totalDurationMs = Date.now() - startTime;
+		const httpContext = options.http || (options.endpoint ? {
+			endpoint: options.endpoint,
+			method: options.method || 'POST',
+			statusCode: 500,
+		} : undefined);
+
 		for (const result of formattedResults) {
 			if (result && !result.success && result.error) {
 				const providerMap = {
@@ -335,11 +349,12 @@ class NotificationManager {
 						lastErrorMessage: result.error,
 						lastErrorCode: result.statusCode,
 					},
+					http: httpContext,
 				});
 			}
 		}
 
-		void this.notifyAdminOfFailures(alert, formattedResults).catch((error) => {
+		trackBackgroundTask(this.notifyAdminOfFailures(alert, formattedResults)).catch((error) => {
 			console.error('[NotificationManager] Unexpected admin notification failure:', error.message);
 		});
 

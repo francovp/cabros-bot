@@ -11,7 +11,7 @@ Add WhatsApp alert channel integration alongside existing Telegram alerts. The s
 
 ## Technical Context
 
-**Language/Version**: Node.js 20.x (from package.json engines)  
+**Language/Version**: Node.js 24.x (from `.node-version` and package.json engines)
 **Primary Dependencies**: Express 4.17+, telegraf 4.3+ (existing); NO new HTTP client (use native fetch)  
 **Storage**: N/A (stateless webhook handler; uses env vars for config)  
 **Testing**: jest 30.2+ (existing); minimal tests for WhatsApp send + retry logic + formatting  
@@ -110,6 +110,4 @@ tests/
 - **Phase 0**: Research fetch API patterns, MarkdownV2 conversion, and error handling. Output: `research.md`
 - **Phase 1**: Create data models, API contracts, and quickstart. Output: `data-model.md`, `contracts/`, `quickstart.md`
 - **Phase 2** (via `/speckit.tasks`): Generate implementation tasks based on design
-
-
 

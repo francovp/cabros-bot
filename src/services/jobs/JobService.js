@@ -22,6 +22,7 @@ const {
 } = require('../../controllers/webhooks/handlers/alert/alert');
 const sentryService = require('../monitoring/SentryService');
 const { jobRepository } = require('./JobRepository');
+const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
 const {
 	jobQueue,
 	JobQueueUnavailableError,
@@ -45,6 +46,41 @@ const nativeFetch = globalThis.fetch;
 
 function getCallbackFetch() {
 	return globalThis.fetch === nativeFetch ? undiciFetch : globalThis.fetch;
+}
+
+function mergeCallbackStatus(current, next) {
+	if (!current) return next;
+	if (!next) return current;
+
+	const events = { ...(current.events || {}) };
+	for (const [event, value] of Object.entries(next.events || {})) {
+		const existing = events[event];
+		if (!existing || existing.status !== 'success' || value.status === 'success') {
+			events[event] = value;
+		}
+	}
+
+	const attempts = [];
+	const seenAttempts = new Set();
+	for (const attempt of [...(current.attempts || []), ...(next.attempts || [])]) {
+		const key = attempt.deliveryId
+			|| `${attempt.event || ''}:${attempt.timestamp || ''}:${attempt.statusCode || ''}:${attempt.error || ''}`;
+		if (!seenAttempts.has(key)) {
+			seenAttempts.add(key);
+			attempts.push(attempt);
+		}
+	}
+
+	const merged = {
+		...current,
+		...next,
+		status: next.status === 'pending' && current.status ? current.status : (next.status || current.status),
+		attempts,
+	};
+	if (Object.keys(events).length || current.events || next.events) {
+		merged.events = events;
+	}
+	return merged;
 }
 
 function expandIPv6(ip) {
@@ -236,8 +272,135 @@ class JobService {
 		this.jobs = repository;
 		this.queue = queue;
 		this.activeControllers = new Map();
+		this.activeJobs = new Map();
+		this.activeCreations = new Map();
+		this.activeCallbacks = new Set();
+		this.callbackChains = new Map();
 		this.pendingCallbacks = new Set();
 		this.pendingCallbackEvents = new Set();
+	}
+
+	/**
+	 * Wait for background jobs already accepted by this process to finish.
+	 */
+	async waitForActiveJobs() {
+		while (this.activeJobs.size > 0 || this.activeCallbacks.size > 0 || this.pendingCallbacks.size > 0) {
+			await Promise.allSettled([
+				...this.activeJobs.values(),
+				...this.activeCallbacks,
+				...this.pendingCallbacks,
+			]);
+		}
+		if (typeof this.repository.waitForPendingSaves === 'function') {
+			await this.repository.waitForPendingSaves();
+		}
+	}
+
+	_markJobForShutdown(job) {
+		if (!job || TERMINAL_JOB_STATUSES.has(job.status)) {
+			return false;
+		}
+
+		const errorMessage = 'Job cancelled because the process exceeded its shutdown deadline';
+		job.status = 'cancelled';
+		job.error = errorMessage;
+		job.code = 'PROCESS_SHUTDOWN_TIMEOUT';
+		job.shutdownFinalized = true;
+		job.updatedAt = new Date().toISOString();
+		job.totalDurationMs = Date.now() - new Date(job.createdAt).getTime();
+		if (job.progress) {
+			job.progress.status = 'Cancelled during process shutdown';
+		}
+
+		return true;
+	}
+
+	_abortActiveJob(jobId, errorMessage) {
+		const controller = this.activeControllers.get(jobId);
+		if (controller && typeof controller.abort === 'function') {
+			controller.abort(new Error(errorMessage));
+			this.activeControllers.delete(jobId);
+		}
+	}
+
+	async _finalizeActiveJobForShutdown(jobId) {
+		const job = await this.repository.get(jobId);
+		if (!this._markJobForShutdown(job)) {
+			return;
+		}
+
+		const persisted = await this._persistJob(job);
+		if (!persisted) {
+			return;
+		}
+		this._abortActiveJob(jobId, job.error);
+		await this._triggerCallbackIfConfigured(job);
+	}
+
+	_finalizeCreationForShutdown(creation) {
+		if (creation.finalizationPromise) {
+			return creation.finalizationPromise;
+		}
+
+		creation.finalizationPromise = (async () => {
+			const { job } = creation;
+			if (!this._markJobForShutdown(job)) {
+				return;
+			}
+
+			const cancellationPersistence = this.repository.save(job);
+			const lastCancellationPersistence = trackBackgroundTask(Promise.resolve(creation.persistencePromise)
+				.then(() => {
+					if (job.shutdownFinalized) {
+						return this.repository.save(job);
+					}
+					return null;
+				})
+				.catch((error) => {
+					console.warn(`[JobService] Initial persistence for ${job.jobId} failed during shutdown:`, error.message);
+					return null;
+				}));
+			await cancellationPersistence;
+			await lastCancellationPersistence;
+			this._abortActiveJob(job.jobId, job.error);
+			await this._triggerCallbackIfConfigured(job);
+		})();
+
+		return creation.finalizationPromise;
+	}
+
+	/**
+	 * Persist jobs that cannot finish before the process is forcibly stopped.
+	 */
+	async finalizeActiveJobsForShutdown() {
+		const finalizedJobIds = new Set();
+		while (true) {
+			const activeJobIds = new Set([
+				...this.activeJobs.keys(),
+				...this.activeCreations.keys(),
+			]);
+			const pendingJobIds = [...activeJobIds]
+				.filter((jobId) => !finalizedJobIds.has(jobId));
+			if (!pendingJobIds.length) {
+				if (typeof this.repository.waitForPendingSaves === 'function') {
+					await this.repository.waitForPendingSaves();
+				}
+				const hasNewActiveWork = [
+					...this.activeJobs.keys(),
+					...this.activeCreations.keys(),
+				].some((jobId) => !finalizedJobIds.has(jobId));
+				if (hasNewActiveWork) continue;
+				return;
+			}
+
+			pendingJobIds.forEach((jobId) => finalizedJobIds.add(jobId));
+			await Promise.allSettled(pendingJobIds.map((jobId) => {
+				const creation = this.activeCreations.get(jobId);
+				return creation
+					? this._finalizeCreationForShutdown(creation)
+					: this._finalizeActiveJobForShutdown(jobId);
+			}));
+		}
 	}
 
 	/**
@@ -575,79 +738,118 @@ class JobService {
 			} : {}),
 		};
 
+		const creation = {
+			job,
+			persistencePromise: null,
+			finalizationPromise: null,
+		};
+		this.activeCreations.set(jobId, creation);
+
 		try {
-			await this.repository.save(job, { required: queueMode });
+			creation.persistencePromise = this.repository.save(job, { required: queueMode });
+			await creation.persistencePromise;
+
+			if (job.shutdownFinalized) {
+				return {
+					success: true,
+					jobId,
+					status: job.status,
+					createdAt: job.createdAt,
+				};
+			}
+
+			if (queueMode) {
+				try {
+					await this.queue.enqueue(jobId);
+				} catch (error) {
+					if (error && error.code === 'JOB_QUEUE_ACCEPTANCE_UNKNOWN') {
+						error.jobId = jobId;
+						throw error;
+					}
+					job.status = 'failed';
+					job.error = 'The asynchronous job queue is unavailable.';
+					job.code = error.code || 'JOB_QUEUE_UNAVAILABLE';
+					job.execution = {
+						...job.execution,
+						status: 'failed',
+					};
+					try {
+						await this.repository.save(job, { required: true });
+					} catch (persistenceError) {
+						console.error(
+							`[JobService] Failed to durably reconcile queue failure for ${jobId}:`,
+							persistenceError.message,
+						);
+						let deleted = false;
+						try {
+							deleted = typeof this.repository.delete === 'function'
+								&& await this.repository.delete(jobId);
+						} catch (cleanupError) {
+							console.error(
+								`[JobService] Failed to remove unreconciled queue job ${jobId}:`,
+								cleanupError.message,
+							);
+						}
+						if (!deleted) {
+							const queueFailure = error.statusCode === 503
+								? error
+								: new JobQueueUnavailableError();
+							queueFailure.cause = persistenceError;
+							queueFailure.jobId = jobId;
+							throw queueFailure;
+						}
+					}
+					if (error.statusCode === 503) {
+						throw error;
+					}
+					throw new JobQueueUnavailableError();
+				}
+			}
+
+			// Trigger callback for 'processing' if configured
+			await this._triggerCallbackIfConfigured(job, { background: true });
+
+			if (job.shutdownFinalized) {
+				return {
+					success: true,
+					jobId,
+					status: job.status,
+					createdAt: job.createdAt,
+				};
+			}
+
+			if (!queueMode) {
+				// Execute background job while retaining its promise for graceful shutdown.
+				const runPromise = this._runBackgroundJob(jobId, parsed, payload, botOrGetter);
+				this.activeJobs.set(jobId, runPromise);
+				void runPromise
+					.catch((error) => {
+						console.error(`[JobService] Background job ${jobId} failed with unhandled error:`, error.message);
+					})
+					.finally(() => {
+						if (this.activeJobs.get(jobId) === runPromise) {
+							this.activeJobs.delete(jobId);
+						}
+					});
+			}
+
+			return {
+				success: true,
+				jobId,
+				status: job.status,
+				createdAt: job.createdAt,
+			};
 		} catch (error) {
 			if (queueMode) {
+				if (error instanceof JobQueueUnavailableError || error.code === 'JOB_QUEUE_UNAVAILABLE' || error.code === 'JOB_STORAGE_UNAVAILABLE' || error.code === 'JOB_QUEUE_ACCEPTANCE_UNKNOWN') {
+					throw error;
+				}
 				throw new JobQueueUnavailableError('The job could not be durably stored.');
 			}
 			throw error;
+		} finally {
+			this.activeCreations.delete(jobId);
 		}
-
-		if (queueMode) {
-			try {
-				await this.queue.enqueue(jobId);
-			} catch (error) {
-				if (error && error.code === 'JOB_QUEUE_ACCEPTANCE_UNKNOWN') {
-					error.jobId = jobId;
-					throw error;
-				}
-				job.status = 'failed';
-				job.error = 'The asynchronous job queue is unavailable.';
-				job.code = error.code || 'JOB_QUEUE_UNAVAILABLE';
-				job.execution = {
-					...job.execution,
-					status: 'failed',
-				};
-				try {
-					await this.repository.save(job, { required: true });
-				} catch (persistenceError) {
-					console.error(
-						`[JobService] Failed to durably reconcile queue failure for ${jobId}:`,
-						persistenceError.message,
-					);
-					let deleted = false;
-					try {
-						deleted = typeof this.repository.delete === 'function'
-							&& await this.repository.delete(jobId);
-					} catch (cleanupError) {
-						console.error(
-							`[JobService] Failed to remove unreconciled queue job ${jobId}:`,
-							cleanupError.message,
-						);
-					}
-					if (!deleted) {
-						const queueFailure = error.statusCode === 503
-							? error
-							: new JobQueueUnavailableError();
-						queueFailure.cause = persistenceError;
-						queueFailure.jobId = jobId;
-						throw queueFailure;
-					}
-				}
-				if (error.statusCode === 503) {
-					throw error;
-				}
-				throw new JobQueueUnavailableError();
-			}
-		}
-
-		// Trigger callback for 'processing' if configured
-		await this._triggerCallbackIfConfigured(job);
-
-		if (!queueMode) {
-			// Execute background job (fire-and-forget)
-			this._runBackgroundJob(jobId, parsed, payload, botOrGetter).catch((error) => {
-				console.error(`[JobService] Background job ${jobId} failed with unhandled error:`, error.message);
-			});
-		}
-
-		return {
-			success: true,
-			jobId,
-			status: job.status,
-			createdAt: job.createdAt,
-		};
 	}
 
 	async reconcileQueuedJobs() {
@@ -979,9 +1181,11 @@ class JobService {
 					this._finishQueuedExecution(finalJob);
 					finalJob.updatedAt = new Date().toISOString();
 					await this._persistJob(finalJob);
-					await this._triggerCallbackIfConfigured(finalJob, {
-						awaitDelivery: queuedExecution,
-					});
+					if (!finalJob.shutdownFinalized) {
+						await this._triggerCallbackIfConfigured(finalJob, {
+							awaitDelivery: queuedExecution,
+						});
+					}
 					return;
 				}
 
@@ -1292,6 +1496,9 @@ class JobService {
 				}
 				return false;
 			}
+			if (current.callbackStatus || job.callbackStatus) {
+				job.callbackStatus = mergeCallbackStatus(current.callbackStatus, job.callbackStatus);
+			}
 		}
 		if (job.execution && job.execution.mode === 'render-worker') {
 			const leaseMs = Number(process.env.JOB_QUEUE_CLAIM_LEASE_MS);
@@ -1303,7 +1510,7 @@ class JobService {
 		const saved = await this.repository.save(job, {
 			required: job.execution && job.execution.mode === 'render-worker',
 		});
-		if (saved === null) {
+		if (saved === null || saved === false) {
 			if (job._workerId) {
 				const error = new Error('Job claim is no longer owned by this worker.');
 				error.code = 'JOB_CLAIM_LOST';
@@ -1690,6 +1897,16 @@ class JobService {
 		return botOrGetter || null;
 	}
 
+	_trackCallback(callbackPromise) {
+		this.activeCallbacks.add(callbackPromise);
+		this.pendingCallbacks.add(callbackPromise);
+		const cleanup = () => {
+			this.activeCallbacks.delete(callbackPromise);
+			this.pendingCallbacks.delete(callbackPromise);
+		};
+		void callbackPromise.then(cleanup, cleanup);
+	}
+
 	async _claimCallbackDelivery(job, event) {
 		const deliveryId = uuidv4();
 		const isDurable = typeof this.repository.isDurable === 'function' && this.repository.isDurable();
@@ -1707,7 +1924,7 @@ class JobService {
 		return { deliveryId, localKey };
 	}
 
-	async _triggerCallbackIfConfigured(job, { awaitDelivery = false } = {}) {
+	async _triggerCallbackIfConfigured(job, { awaitDelivery = false, background = false } = {}) {
 		if (!job.callbackUrl) return;
 
 		const events = job.callbackEvents || ['completed', 'failed', 'cancelled', 'timed_out'];
@@ -1733,23 +1950,32 @@ class JobService {
 			return;
 		}
 
-		// Execute the callback in the background
-		const callbackPromise = this._sendCallbackWithRetry(job, callbackClaim.deliveryId).catch((err) => {
-			console.error(`[JobService] Callback for job ${job.jobId} failed:`, err.message);
-			if (awaitDelivery) {
-				throw err;
-			}
-		});
-		const trackedCallback = callbackPromise.catch(() => {});
-		this.pendingCallbacks.add(trackedCallback);
-		trackedCallback.then(() => {
-			this.pendingCallbacks.delete(trackedCallback);
-			if (callbackClaim.localKey) {
-				this.pendingCallbackEvents.delete(callbackClaim.localKey);
-			}
-		});
+		const previousCallback = this.callbackChains.get(job.jobId);
+		let callbackPromise;
+		callbackPromise = Promise.resolve(previousCallback)
+			.catch(() => undefined)
+			.then(() => this._sendCallbackWithRetry(job, callbackClaim.deliveryId))
+			.catch((err) => {
+				console.error(`[JobService] Callback for job ${job.jobId} failed:`, err.message);
+				if (awaitDelivery) {
+					throw err;
+				}
+			})
+			.finally(() => {
+				if (this.callbackChains.get(job.jobId) === callbackPromise) {
+					this.callbackChains.delete(job.jobId);
+				}
+				if (callbackClaim.localKey) {
+					this.pendingCallbackEvents.delete(callbackClaim.localKey);
+				}
+			});
+		this.callbackChains.set(job.jobId, callbackPromise);
+		this._trackCallback(callbackPromise);
+
 		if (awaitDelivery) {
 			await callbackPromise;
+		} else if (!background) {
+			return callbackPromise;
 		}
 	}
 
@@ -1918,7 +2144,7 @@ class JobService {
 					},
 				},
 			};
-			await this.repository.save(freshJob);
+			await this._persistJob(freshJob);
 		}
 	}
 }

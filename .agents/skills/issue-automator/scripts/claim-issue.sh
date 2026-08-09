@@ -297,6 +297,60 @@ newest_claim() {
   return 0
 }
 
+# claim_comment_by_id <comment_id> -> single line "id<TAB>agent<TAB>session<TAB>created_at<TAB>freshness_ts<TAB>body"
+# for the specified comment_id, or empty if not found.
+claim_comment_by_id() {
+  local target_id="$1"
+  if [ -z "$target_id" ]; then return 0; fi
+  local line
+  line="$(claim_comments_rest | awk -F '\t' -v tid="$target_id" '$1+0 == tid+0 { print $0 }')" || READ_FAILED="1"
+  if [ "$READ_FAILED" == "1" ] || [ -z "$line" ]; then return 0; fi
+  local created_at rest agent session body_ts freshness_ts raw_body
+  created_at="$(echo "$line" | cut -f2)"
+  raw_body="$(echo "$line" | cut -f3)"
+  rest="$(printf '%s' "$raw_body" | sed 's/^\*\*agent-claim\*\*:[[:space:]]*//')"
+  agent="$(echo "$rest" | awk '{print $1}')"
+  session="$(echo "$rest" | awk '{print $2}')"
+  body_ts="$(printf '%s' "$rest" | sed -n 's/.*last: \([0-9T:Z-]*\).*/\1/p' | head -1)"
+  if [ -n "$body_ts" ]; then
+    local ca_e bt_e
+    ca_e="$(epoch_of "$created_at")"
+    bt_e="$(epoch_of "$body_ts")"
+    if [ -n "$ca_e" ] && [ -n "$bt_e" ] && [ "$bt_e" -gt "$ca_e" ]; then
+      freshness_ts="$body_ts"
+    else
+      freshness_ts="$created_at"
+    fi
+  else
+    freshness_ts="$created_at"
+  fi
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$(echo "$line" | cut -f1)" "$agent" "$session" "$created_at" "$freshness_ts" "$raw_body"
+  return 0
+}
+
+# target_claim_renewed <target_comment_id> <takeover_comment_id>
+# -> returns 0 (true) if target comment was renewed by its owner and is now fresh (age <= TTL_MINUTES).
+# -> returns 1 (false) if target comment is still stale or missing.
+target_claim_renewed() {
+  local target_id="$1" takeover_id="$2"
+  if [ -z "$target_id" ] || [ "$target_id" -eq 0 ]; then
+    return 1
+  fi
+  local target_info
+  target_info="$(claim_comment_by_id "$target_id")" || READ_FAILED="1"
+  if [ "$READ_FAILED" == "1" ] || [ -z "$target_info" ]; then
+    return 1
+  fi
+
+  local target_freshness target_age
+  target_freshness="$(echo "$target_info" | cut -f5)"
+  target_age="$(age_minutes "$target_freshness")"
+  if [ "$target_age" -le "$TTL_MINUTES" ]; then
+    return 0
+  fi
+  return 1
+}
+
 # last_labeled_event_ts -> timestamp of the most recent agent-working labeled
 # event (fallback for legacy claims made before claim comments existed). Returns
 # 1 when the read fails so legacy handling can fail closed. Uses --slurp so the
@@ -583,6 +637,9 @@ if [ "$LABELED" == "true" ]; then
     fi
     if [ "$WINNER" != "$OUR_TAKEOVER_ID" ]; then
       lose_race "$OUR_TAKEOVER_ID" "Issue #${ISSUE_NUMBER}: takeover raced by another session (comment ${WINNER} won). Skipping — zero-work, no budget consumed."
+    fi
+    if target_claim_renewed "$NEWEST_ID" "$OUR_TAKEOVER_ID"; then
+      lose_race "$OUR_TAKEOVER_ID" "Issue #${ISSUE_NUMBER}: target claim comment ${NEWEST_ID} was renewed during takeover. Skipping — zero-work, no budget consumed."
     fi
     echo "RESULT=TAKEOVER"
     echo "Issue #${ISSUE_NUMBER}: stale claim (${AGE} min) by ${NEWEST_AGENT}/${NEWEST_SESSION} taken over."

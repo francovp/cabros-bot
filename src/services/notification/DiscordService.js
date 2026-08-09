@@ -53,15 +53,24 @@ class DiscordService extends NotificationChannel {
 		return this.enabled;
 	}
 
-	async send(alert) {
+	async send(alert = {}) {
 		try {
+			const webhookUrl = alert.discordWebhookUrl || this.webhookUrl;
+			if (!webhookUrl) {
+				return {
+					success: false,
+					channel: 'discord',
+					error: 'Missing DISCORD_WEBHOOK_URL',
+				};
+			}
+
 			const content = await this.formatAlert(alert);
 			const chunks = splitMessageIntoChunks(content, DISCORD_MESSAGE_LIMIT);
 			const messageIds = [];
 			let totalAttempts = 0;
 
 			for (const chunk of chunks) {
-				const result = await this.sendChunk(chunk);
+				const result = await this.sendChunk(chunk, webhookUrl);
 				totalAttempts += result.attemptCount || 0;
 				if (!result.success) {
 					if (result.statusCode === 429) {
@@ -89,10 +98,12 @@ class DiscordService extends NotificationChannel {
 		}
 	}
 
-	getExecutionUrl() {
-		return this.webhookUrl.includes('?')
-			? `${this.webhookUrl}&wait=true`
-			: `${this.webhookUrl}?wait=true`;
+	getExecutionUrl(webhookUrl = this.webhookUrl) {
+		const targetUrl = webhookUrl || this.webhookUrl;
+		if (!targetUrl) return '';
+		return targetUrl.includes('?')
+			? `${targetUrl}&wait=true`
+			: `${targetUrl}?wait=true`;
 	}
 
 	async formatAlert(alert = {}) {
@@ -148,7 +159,7 @@ class DiscordService extends NotificationChannel {
 		return this.fallbackRetryDelayMs;
 	}
 
-	async sendChunk(content) {
+	async sendChunk(content, webhookUrl = this.webhookUrl) {
 		let attempt = 0;
 		let totalWaitMs = 0;
 
@@ -158,7 +169,7 @@ class DiscordService extends NotificationChannel {
 			const timeoutId = setTimeout(() => controller.abort(), this.timeoutMs);
 
 			try {
-				const response = await fetch(this.getExecutionUrl(), {
+				const response = await fetch(this.getExecutionUrl(webhookUrl), {
 					method: 'POST',
 					headers: { 'Content-Type': 'application/json' },
 					body: JSON.stringify({ content }),

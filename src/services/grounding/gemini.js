@@ -113,6 +113,7 @@ async function generateGroundedSummary({ text, searchResults = [], searchResultT
 		preserveLanguage = true,
 		systemPrompt: systemPromptOverride,
 		tokenUsage,
+		signal,
 	} = options;
 
 	if (ENABLE_NEWS_MONITOR_TEST_MODE) {
@@ -145,7 +146,7 @@ async function generateGroundedSummary({ text, searchResults = [], searchResultT
 			systemPrompt,
 			userPrompt,
 			context: { citations: searchResults },
-			opts: { temperature: 0.2 },
+			opts: { temperature: 0.2, signal },
 		});
 
 		if (tokenUsage && usage) {
@@ -160,6 +161,9 @@ async function generateGroundedSummary({ text, searchResults = [], searchResultT
 
 		return validateGeminiResponse(response);
 	} catch (error) {
+		if (signal?.aborted || error.name === 'AbortError' || error.message === 'Grounding timeout' || (typeof error.message === 'string' && error.message.includes('timeout'))) {
+			throw error;
+		}
 		throw new Error(`Summary generation failed: ${error.message}`);
 	}
 }
@@ -584,6 +588,7 @@ async function generateEnrichedAlert({ text, searchResults = [], searchResultTex
 		preserveLanguage = true,
 		systemPrompt: systemPromptOverride,
 		tokenUsage,
+		signal,
 	} = options;
 
 	// Short alert check (< 15 chars or < 2 words)
@@ -616,36 +621,39 @@ async function generateEnrichedAlert({ text, searchResults = [], searchResultTex
 			systemPrompt,
 			userPrompt,
 			context: { citations: searchResults },
-			opts: { temperature: 0.2 },
+			opts: { temperature: 0.2, signal },
 		};
 		let llmResult;
 
 		try {
 			llmResult = await genaiClient.llmCallv2(llmParams);
-	} catch (error) {
-		if (error instanceof NonRetryableProviderError) {
-			console.warn('[Gemini] Non-retryable provider error, returning neutral enrichment:', error.message);
-			return {
-				sentiment: 'NEUTRAL',
-				sentiment_score: 0.5,
-				insights: [],
-				modelUsed: GEMINI_MODEL_NAME || 'unknown',
-				...(promptProvenance ? { promptProvenance, prompt_provenance: promptProvenance } : {}),
-			};
-		}
+		} catch (error) {
+			if (signal?.aborted || error.name === 'AbortError' || error.message === 'Grounding timeout' || (typeof error.message === 'string' && error.message.includes('timeout'))) {
+				throw error;
+			}
+			if (error instanceof NonRetryableProviderError) {
+				console.warn('[Gemini] Non-retryable provider error, returning neutral enrichment:', error.message);
+				return {
+					sentiment: 'NEUTRAL',
+					sentiment_score: 0.5,
+					insights: [],
+					modelUsed: GEMINI_MODEL_NAME || 'unknown',
+					...(promptProvenance ? { promptProvenance, prompt_provenance: promptProvenance } : {}),
+				};
+			}
 
-		if (!GEMINI_MODEL_NAME_FALLBACK || !shouldRetryGeminiWithFallback(error)) {
-			throw error;
-		}
+			if (!GEMINI_MODEL_NAME_FALLBACK || !shouldRetryGeminiWithFallback(error)) {
+				throw error;
+			}
 
-		console.warn('[Gemini] Primary enrichment model failed, attempting fallback model:', GEMINI_MODEL_NAME_FALLBACK);
-		llmResult = await genaiClient.llmCallv2({
-			...llmParams,
-			opts: {
-				...llmParams.opts,
-				model: GEMINI_MODEL_NAME_FALLBACK,
-			},
-		});
+			console.warn('[Gemini] Primary enrichment model failed, attempting fallback model:', GEMINI_MODEL_NAME_FALLBACK);
+			llmResult = await genaiClient.llmCallv2({
+				...llmParams,
+				opts: {
+					...llmParams.opts,
+					model: GEMINI_MODEL_NAME_FALLBACK,
+				},
+			});
 		}
 
 		const { text: responseText, usage, modelUsed } = llmResult;
@@ -661,6 +669,9 @@ async function generateEnrichedAlert({ text, searchResults = [], searchResultTex
 			...(promptProvenance ? { promptProvenance, prompt_provenance: promptProvenance } : {}),
 		};
 	} catch (error) {
+		if (signal?.aborted || error.name === 'AbortError' || error.message === 'Grounding timeout' || (typeof error.message === 'string' && error.message.includes('timeout'))) {
+			throw error;
+		}
 		throw new Error(`Enriched alert generation failed: ${error.message}`);
 	}
 }

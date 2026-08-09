@@ -3,8 +3,11 @@
 const alertStorageService = require('../storage/AlertStorageService');
 
 const COLLECTION_NAME = 'tradingviewJobs';
+const TERMINAL_JOB_STATUSES = new Set(['completed', 'failed', 'cancelled', 'timed_out']);
+const TERMINAL_STATUSES = TERMINAL_JOB_STATUSES;
 const memoryJobs = new Map();
-const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled', 'timed_out']);
+const saveVersions = new Map();
+const pendingSaves = new Map();
 const DEFAULT_CLAIM_LEASE_MS = 60000;
 const DEFAULT_CALLBACK_CLAIM_LEASE_MS = 60000;
 
@@ -43,6 +46,15 @@ function sanitizeJob(job) {
 	return copy;
 }
 
+function getLocalTerminalJob(jobId) {
+	const localJob = saveVersions.get(jobId)?.job || memoryJobs.get(jobId);
+	if (!localJob || !TERMINAL_JOB_STATUSES.has(localJob.status)) {
+		return null;
+	}
+
+	return cloneJob(localJob);
+}
+
 function getClaimLeaseMs() {
 	const configured = Number(process.env.JOB_QUEUE_CLAIM_LEASE_MS);
 	return Number.isInteger(configured) && configured > 0 ? configured : DEFAULT_CLAIM_LEASE_MS;
@@ -69,66 +81,94 @@ class JobRepository {
 			return null;
 		}
 
+		const current = memoryJobs.get(sanitized.jobId);
+		const latestJob = saveVersions.get(sanitized.jobId)?.job;
+		const terminalJob = [latestJob, current].find((candidate) => (
+			candidate && TERMINAL_JOB_STATUSES.has(candidate.status)
+		));
+		if (terminalJob && terminalJob.status !== sanitized.status) {
+			return false;
+		}
+
 		const firestore = this._getFirestore();
 		if (!firestore) {
 			memoryJobs.set(sanitized.jobId, cloneJob(sanitized));
 			return sanitized.jobId;
 		}
 
-		let persistedJob = sanitized;
-		try {
-			if (typeof firestore.runTransaction === 'function') {
-				const docRef = firestore.collection(COLLECTION_NAME).doc(sanitized.jobId);
-				const saved = await firestore.runTransaction(async (transaction) => {
-					const snapshot = await transaction.get(docRef);
-					const incomingWorkerId = sanitized.execution && sanitized.execution.workerId;
-					let current = null;
-					if (snapshot && snapshot.exists) {
-						current = sanitizeJob({ ...(snapshot.data() || {}), jobId: snapshot.id || sanitized.jobId });
-						const currentExecution = current && current.execution ? current.execution : {};
-						const currentClaimIsActive = currentExecution.workerId
-							&& ['claimed', 'running'].includes(currentExecution.status);
-						if (currentClaimIsActive && !incomingWorkerId && !TERMINAL_STATUSES.has(sanitized.status)) {
-							return false;
-						}
-						if (incomingWorkerId && (!current || (current.execution || {}).workerId !== incomingWorkerId)) {
-							return false;
-						}
-						if (
-							incomingWorkerId
-							&& currentExecution.workerId === incomingWorkerId
-							&& currentExecution.attempt !== undefined
-							&& Number(currentExecution.attempt) !== Number(sanitized.execution.attempt)
-						) {
-							return false;
-						}
-						if (current && TERMINAL_STATUSES.has(current.status) && current.status !== sanitized.status) {
-							return false;
-						}
-					}
+		const version = (saveVersions.get(sanitized.jobId)?.version || 0) + 1;
+		saveVersions.set(sanitized.jobId, { version, job: cloneJob(sanitized) });
 
-					persistedJob = incomingWorkerId && current
-						? {
-							...sanitized,
-							callbackStatus: mergeCallbackStatus(current.callbackStatus, sanitized.callbackStatus),
+		let persistedJob = sanitized;
+		const persistencePromise = (async () => {
+			try {
+				if (typeof firestore.runTransaction === 'function') {
+					const docRef = firestore.collection(COLLECTION_NAME).doc(sanitized.jobId);
+					const saved = await firestore.runTransaction(async (transaction) => {
+						const snapshot = await transaction.get(docRef);
+						const incomingWorkerId = sanitized.execution && sanitized.execution.workerId;
+						let currentDoc = null;
+						if (snapshot && snapshot.exists) {
+							currentDoc = sanitizeJob({ ...(snapshot.data() || {}), jobId: snapshot.id || sanitized.jobId });
+							const currentExecution = currentDoc && currentDoc.execution ? currentDoc.execution : {};
+							const currentClaimIsActive = currentExecution.workerId
+								&& ['claimed', 'running'].includes(currentExecution.status);
+							if (currentClaimIsActive && !incomingWorkerId && !TERMINAL_STATUSES.has(sanitized.status)) {
+								return false;
+							}
+							if (incomingWorkerId && (!currentDoc || (currentDoc.execution || {}).workerId !== incomingWorkerId)) {
+								return false;
+							}
+							if (
+								incomingWorkerId
+								&& currentExecution.workerId === incomingWorkerId
+								&& currentExecution.attempt !== undefined
+								&& Number(currentExecution.attempt) !== Number(sanitized.execution.attempt)
+							) {
+								return false;
+							}
+							if (currentDoc && TERMINAL_STATUSES.has(currentDoc.status) && currentDoc.status !== sanitized.status) {
+								return false;
+							}
 						}
-						: sanitized;
-					transaction.set(docRef, persistedJob);
-					return true;
-				});
-				if (saved === false) {
-					return null;
+
+						persistedJob = incomingWorkerId && currentDoc
+							? {
+								...sanitized,
+								callbackStatus: mergeCallbackStatus(currentDoc.callbackStatus, sanitized.callbackStatus),
+							}
+							: sanitized;
+						transaction.set(docRef, persistedJob);
+						return true;
+					});
+					if (saved === false) {
+						return false;
+					}
+				} else {
+					await firestore.collection(COLLECTION_NAME).doc(sanitized.jobId).set(sanitized);
 				}
-			} else {
-				await firestore.collection(COLLECTION_NAME).doc(sanitized.jobId).set(sanitized);
+			} catch (error) {
+				console.warn('[JobRepository] Failed to persist job:', error.message);
+				if (required) {
+					memoryJobs.delete(sanitized.jobId);
+					const storageError = new Error('Durable job storage is unavailable.');
+					storageError.code = 'JOB_STORAGE_UNAVAILABLE';
+					throw storageError;
+				}
 			}
-		} catch (error) {
-			console.warn('[JobRepository] Failed to persist job:', error.message);
-			if (required) {
-				memoryJobs.delete(sanitized.jobId);
-				const storageError = new Error('Durable job storage is unavailable.');
-				storageError.code = 'JOB_STORAGE_UNAVAILABLE';
-				throw storageError;
+		})();
+
+		const pending = pendingSaves.get(sanitized.jobId) || new Set();
+		pending.add(persistencePromise);
+		pendingSaves.set(sanitized.jobId, pending);
+
+		try {
+			const res = await persistencePromise;
+			if (res === false) return null;
+		} finally {
+			pending.delete(persistencePromise);
+			if (!pending.size) {
+				pendingSaves.delete(sanitized.jobId);
 			}
 		}
 
@@ -509,6 +549,11 @@ class JobRepository {
 			return null;
 		}
 
+		const localJob = saveVersions.get(jobId)?.job || memoryJobs.get(jobId);
+		if (localJob && TERMINAL_JOB_STATUSES.has(localJob.status) && pendingSaves.has(jobId)) {
+			await getLocalTerminalJob(jobId);
+		}
+
 		const firestore = this._getFirestore();
 		if (firestore) {
 			try {
@@ -516,6 +561,10 @@ class JobRepository {
 				if (snapshot && snapshot.exists) {
 					const data = snapshot.data() || {};
 					const job = { ...data, jobId: data.jobId || snapshot.id };
+					const latestLocalTerminalJob = await getLocalTerminalJob(jobId);
+					if (latestLocalTerminalJob) {
+						return latestLocalTerminalJob;
+					}
 					memoryJobs.set(job.jobId, cloneJob(job));
 					return cloneJob(job);
 				}
@@ -525,6 +574,19 @@ class JobRepository {
 		}
 
 		return cloneJob(memoryJobs.get(jobId));
+	}
+
+	async waitForPendingSaves(jobId) {
+		while (true) {
+			const pendingSets = jobId ? [pendingSaves.get(jobId)] : [...pendingSaves.values()];
+			const pending = [];
+			for (const saves of pendingSets) {
+				if (saves) pending.push(...saves);
+			}
+
+			if (!pending.length) return;
+			await Promise.allSettled(pending);
+		}
 	}
 
 	async list({ status, type, limit = 50 } = {}) {
@@ -600,6 +662,8 @@ class JobRepository {
 		}
 
 		let deleted = memoryJobs.delete(jobId);
+		saveVersions.delete(jobId);
+		pendingSaves.delete(jobId);
 		const firestore = this._getFirestore();
 		if (firestore) {
 			try {
@@ -645,5 +709,7 @@ module.exports = {
 	COLLECTION_NAME,
 	_resetForTesting() {
 		memoryJobs.clear();
+		saveVersions.clear();
+		pendingSaves.clear();
 	},
 };
