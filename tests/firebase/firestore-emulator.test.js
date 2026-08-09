@@ -101,7 +101,8 @@ describe('Firestore emulator integration', () => {
 	});
 
 	it('keeps idempotency reservations transactional and persists completed responses', async () => {
-		expect(await idempotencyStorageService.reserveEntry('firebase-key', 'payload-a', 60000)).toMatchObject({
+		const freshReservation = await idempotencyStorageService.reserveEntry('firebase-key', 'payload-a', 60000);
+		expect(freshReservation).toMatchObject({
 			state: 'fresh',
 		});
 		expect(await idempotencyStorageService.reserveEntry('firebase-key', 'payload-b', 60000)).toMatchObject({
@@ -113,6 +114,7 @@ describe('Firestore emulator integration', () => {
 			'payload-a',
 			{ statusCode: 202, body: { accepted: true }, headers: { 'x-test': 'ok' } },
 			60000,
+			freshReservation.claimToken,
 		);
 		expect(await idempotencyStorageService.getEntry('firebase-key', 'payload-a')).toMatchObject({
 			state: 'completed',
@@ -120,8 +122,8 @@ describe('Firestore emulator integration', () => {
 			responseBody: { accepted: true },
 		});
 
-		await idempotencyStorageService.reserveEntry('released-key', 'payload', 60000);
-		await idempotencyStorageService.releaseEntry('released-key', 'payload');
+		const releaseReservation = await idempotencyStorageService.reserveEntry('released-key', 'payload', 60000);
+		await idempotencyStorageService.releaseEntry('released-key', 'payload', releaseReservation.claimToken);
 		expect((await firestore.collection('idempotency_keys').get()).docs).toHaveLength(1);
 	});
 
