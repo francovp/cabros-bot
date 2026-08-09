@@ -54,7 +54,7 @@ try {
 }
 ```
 
-**Fallback for Older Node**: Project already requires Node 20.x; fetch is native and stable.
+**Fallback for Older Node**: Project already requires Node 24.x; fetch is native and stable.
 
 ---
 

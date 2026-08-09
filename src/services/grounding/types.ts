@@ -25,6 +25,7 @@ export interface PromptProvenance {
 
 export interface EnrichedAlert {
   original_text: string;
+  tradingViewEnrichmentApplied?: boolean;
   sentiment: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
   sentiment_score: number;
   insights: string[];

@@ -61,6 +61,7 @@ describe('Alert TradingView MCP Integration', () => {
 			technical_levels: { supports: ['65,664.12'], resistances: ['69,468.88'] },
 			sources: [],
 			truncated: false,
+			tradingViewEnrichmentApplied: true,
 			extraText: '*Model used*: `tradingview-mcp`',
 		});
 
@@ -112,6 +113,7 @@ describe('Alert TradingView MCP Integration', () => {
 			},
 			sources: [],
 			truncated: false,
+			tradingViewEnrichmentApplied: true,
 			extraText: '*Model used*: `tradingview-mcp`',
 		});
 
@@ -124,6 +126,7 @@ describe('Alert TradingView MCP Integration', () => {
 		expect(response.body.success).toBe(true);
 		expect(response.body.dryRun).toBe(true);
 		expect(response.body.enriched).toBe(true);
+		expect(response.body.payload.enrichedData.tradingViewEnrichmentApplied).toBe(true);
 		expect(response.body.payload.enrichedData.confluenceData.confluence.recommendation).toBe('SELL');
 		expect(response.body.payload.enrichedData.multiTimeframeData.alignment).toBe('bearish');
 		expect(mockTelegramSendMessage).not.toHaveBeenCalled();
