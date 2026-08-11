@@ -107,7 +107,7 @@ async function bootstrapApplication() {
 			console.log('Telegram Admin Notifications Chat ID:', process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID);
 			let text, commitHash, gitCommitUrl;
 			const deploymentCommit = getDeploymentCommit();
-			if ((process.env.RENDER || process.env.VERCEL) && deploymentCommit) {
+			if ((process.env.RENDER || process.env.VERCEL || process.env.RAILWAY_ENVIRONMENT_NAME) && deploymentCommit) {
 				commitHash = deploymentCommit.substring(0, 6);
 				gitCommitUrl = `https://github.com/${getDeploymentRepoSlug()}/commit/${commitHash}`;
 				console.log(`Telegram bot deployed from commit ${gitCommitUrl} is running`);

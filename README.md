@@ -165,7 +165,9 @@ pnpm test:firebase
 - `IS_PULL_REQUEST` - Render preview environment flag (disables bot in PRs)
 - `VERCEL` / `VERCEL_ENV` - Vercel system deployment markers; `VERCEL_ENV=preview` disables the bot
 - `VERCEL_GIT_COMMIT_SHA` / `VERCEL_GIT_REPO_OWNER` / `VERCEL_GIT_REPO_SLUG` - Vercel deployment metadata used for release and deployment notifications
-- `TRUST_PROXY` - Express trusted proxy setting for reverse-proxy deployments (`true`, `false`, `1` hop, or subnet string; defaults to `1` on Render/Vercel, and `false` for direct deployments)
+- `RAILWAY_ENVIRONMENT_NAME` - Railway system environment marker; PR environment names beginning with `pr-` disable the bot
+- `RAILWAY_GIT_COMMIT_SHA` / `RAILWAY_GIT_REPO_OWNER` / `RAILWAY_GIT_REPO_NAME` - Railway GitHub deployment metadata used for release and deployment notifications
+- `TRUST_PROXY` - Express trusted proxy setting for reverse-proxy deployments (`true`, `false`, `1` hop, or subnet string; defaults to `1` on Render/Vercel/Railway, and `false` for direct deployments)
 - `RATE_LIMIT_WINDOW_MS` - Global API rate limiter window in milliseconds (default: `900000` / 15 minutes)
 - `RATE_LIMIT_MAX` - Global API rate limiter max requests per window (default: `100`)
 - `LOG_LEVEL` - Structured JSON log verbosity (`debug`, `info`, `warn`, `error`, `silent`; defaults to `debug` in development and `info` in production)
@@ -1443,7 +1445,7 @@ When enabled, it also forwards configured console levels to Sentry Logs using th
 ### Features
 
 - **Non-Intrusive**: Monitoring failures never affect HTTP responses or message delivery
-- **Environment Gating**: Auto-derives environment from Render.com and Vercel system variables (`production`, `preview`, `development`)
+- **Environment Gating**: Auto-derives environment from Render.com, Vercel, and Railway system variables (`production`, `preview`, `development`)
 - **Privacy Controls**: Optional exclusion of alert content from error events
 - **Structured Console Logs**: All `console.*` output is emitted as one-line JSON with `timestamp`, `level`, `message`, `service`, `environment`, and optional `attributes`, `parameters`, and `error`
 - **Console Log Capture**: Configured console levels are captured as searchable Sentry Logs
@@ -1481,8 +1483,8 @@ SENTRY_CONSOLE_LOG_LEVELS=warn,error
 | Condition | Environment |
 |-----------|-------------|
 | `SENTRY_ENVIRONMENT` set | Uses explicit value |
-| `RENDER=true` + `IS_PULL_REQUEST=true` or `VERCEL_ENV=preview` | `preview` |
-| `RENDER=true` or `VERCEL_ENV=production` (no preview) | `production` |
+| `RENDER=true` + `IS_PULL_REQUEST=true`, `VERCEL_ENV=preview`, or Railway `RAILWAY_ENVIRONMENT_NAME=pr-*` | `preview` |
+| `RENDER=true`, `VERCEL_ENV=production`, or any Railway deployment (no preview) | `production` |
 | `NODE_ENV=production` | `production` |
 | Default | `development` |
 

@@ -19,6 +19,15 @@ describe('deployment environment helpers', () => {
 		expect(isPreviewEnvironment({ RENDER: 'true', IS_PULL_REQUEST: 'true' })).toBe(true);
 	});
 
+	it('recognizes Railway pull-request environments by their generated name', () => {
+		expect(isPreviewEnvironment({ RAILWAY_ENVIRONMENT_NAME: 'pr-123' })).toBe(true);
+		expect(isPreviewEnvironment({ RAILWAY_ENVIRONMENT_NAME: 'staging' })).toBe(false);
+	});
+
+	it('recognizes Railway deployments as production-like', () => {
+		expect(isProductionLikeEnvironment({ RAILWAY_ENVIRONMENT_NAME: 'production' })).toBe(true);
+	});
+
 	it('reads Vercel deployment metadata', () => {
 		const env = {
 			VERCEL_GIT_COMMIT_SHA: 'abcdef1234567890',
@@ -35,5 +44,16 @@ describe('deployment environment helpers', () => {
 			VERCEL_GIT_REPO_OWNER_NAME: 'francovp',
 			VERCEL_GIT_REPO_SLUG: 'cabros-bot',
 		})).toBe('francovp/cabros-bot');
+	});
+
+	it('reads Railway deployment metadata', () => {
+		const env = {
+			RAILWAY_GIT_COMMIT_SHA: 'fedcba9876543210',
+			RAILWAY_GIT_REPO_OWNER: 'francovp',
+			RAILWAY_GIT_REPO_NAME: 'cabros-bot',
+		};
+
+		expect(getDeploymentCommit(env)).toBe('fedcba9876543210');
+		expect(getDeploymentRepoSlug(env)).toBe('francovp/cabros-bot');
 	});
 });

@@ -41,6 +41,10 @@ describe('Trust Proxy Configuration', () => {
 		test('should default to 1 hop for Vercel deployments', () => {
 			expect(parseTrustProxy(undefined, undefined, '1')).toBe(1);
 		});
+
+		test('should default to 1 hop for Railway deployments', () => {
+			expect(parseTrustProxy(undefined, undefined, undefined, 'production')).toBe(1);
+		});
 	});
 
 	describe('setupTrustProxy', () => {
