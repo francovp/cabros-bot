@@ -20,6 +20,11 @@ describe('SentryService', () => {
 		service = new SentryService();
 		// Reset env vars
 		process.env = { ...originalEnv };
+		delete process.env.VERCEL_ENV;
+		delete process.env.VERCEL_GIT_COMMIT_SHA;
+		delete process.env.VERCEL_GIT_REPO_OWNER;
+		delete process.env.VERCEL_GIT_REPO_OWNER_NAME;
+		delete process.env.VERCEL_GIT_REPO_SLUG;
 		// Clear all mocks
 		jest.clearAllMocks();
 	});
