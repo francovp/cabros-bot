@@ -22,6 +22,7 @@ const { getTelegramBootstrapConfig } = require('./src/lib/telegramBootstrap');
 const { jobService } = require('./src/services/jobs/JobService');
 const SignalOutcomeService = require('./src/services/storage/SignalOutcomeService');
 const sentryService = require('./src/services/monitoring/SentryService');
+const { getDeploymentCommit, getDeploymentRepoSlug } = require('./src/lib/deploymentEnvironment');
 const remoteConfigService = require('./src/services/remoteConfig/RemoteConfigService');
 const Sentry = require('@sentry/node');
 
@@ -105,9 +106,10 @@ async function bootstrapApplication() {
 		if (!lifecycle.isShuttingDown() && process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID !== undefined) {
 			console.log('Telegram Admin Notifications Chat ID:', process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID);
 			let text, commitHash, gitCommitUrl;
-			if (process.env.RENDER) {
-				commitHash = process.env.RENDER_GIT_COMMIT.substring(0, 6);
-				gitCommitUrl = `https://github.com/${process.env.RENDER_GIT_REPO_SLUG}/commit/${commitHash}`;
+			const deploymentCommit = getDeploymentCommit();
+			if ((process.env.RENDER || process.env.VERCEL) && deploymentCommit) {
+				commitHash = deploymentCommit.substring(0, 6);
+				gitCommitUrl = `https://github.com/${getDeploymentRepoSlug()}/commit/${commitHash}`;
 				console.log(`Telegram bot deployed from commit ${gitCommitUrl} is running`);
 				text = `*Telegram bot deployed from commit [${commitHash}](${gitCommitUrl}) is running*`;
 				await bot.telegram.sendMessage(

@@ -25,6 +25,20 @@ describe('WhatsAppService', () => {
 	});
 
 	describe('validate', () => {
+		it('prefers the preview chat ID on Vercel preview deployments', () => {
+			const originalEnv = { ...process.env };
+			process.env.VERCEL_ENV = 'preview';
+			process.env.WHATSAPP_CHAT_ID = 'production-chat@g.us';
+			process.env.WHATSAPP_PREVIEW_CHAT_ID = 'preview-chat@g.us';
+
+			try {
+				service = new WhatsAppService();
+				expect(service.chatId).toBe('preview-chat@g.us');
+			} finally {
+				process.env = originalEnv;
+			}
+		});
+
 		it('should return disabled when ENABLE_WHATSAPP_ALERTS is not true', async () => {
 			delete process.env.ENABLE_WHATSAPP_ALERTS;
 			const result = await service.validate();

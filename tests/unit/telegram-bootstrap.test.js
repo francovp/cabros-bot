@@ -39,6 +39,19 @@ describe('getTelegramBootstrapConfig', () => {
 		});
 	});
 
+	it('does not require BOT_TOKEN in Vercel preview deployments', () => {
+		process.env.ENABLE_TELEGRAM_BOT = 'true';
+		process.env.VERCEL_ENV = 'preview';
+		delete process.env.BOT_TOKEN;
+
+		expect(getTelegramBootstrapConfig()).toEqual({
+			isPreviewEnv: true,
+			shouldStartTelegramBot: false,
+			telegramBotIsEnabled: true,
+			token: undefined,
+		});
+	});
+
 	it('fails fast when Telegram is enabled for runtime use but BOT_TOKEN is missing', () => {
 		process.env.ENABLE_TELEGRAM_BOT = 'true';
 		delete process.env.RENDER;

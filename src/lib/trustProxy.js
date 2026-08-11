@@ -1,13 +1,14 @@
 // src/lib/trustProxy.js
 
 /**
- * Parses TRUST_PROXY and RENDER environment configuration into an Express-compatible 'trust proxy' setting.
+ * Parses TRUST_PROXY and platform environment configuration into an Express-compatible 'trust proxy' setting.
  *
  * @param {string|undefined} trustProxyEnv Value of process.env.TRUST_PROXY
  * @param {string|undefined} renderEnv Value of process.env.RENDER
+ * @param {string|undefined} vercelEnv Value of process.env.VERCEL
  * @returns {boolean|number|string|Array<string>} Express trust proxy setting
  */
-function parseTrustProxy(trustProxyEnv, renderEnv) {
+function parseTrustProxy(trustProxyEnv, renderEnv, vercelEnv) {
 	if (trustProxyEnv !== undefined && trustProxyEnv !== null && trustProxyEnv.trim() !== '') {
 		const val = trustProxyEnv.trim();
 		const lower = val.toLowerCase();
@@ -20,8 +21,8 @@ function parseTrustProxy(trustProxyEnv, renderEnv) {
 		return val;
 	}
 
-	// Default for Render reverse proxy deployments when TRUST_PROXY is not explicitly configured
-	if (renderEnv === 'true') {
+	// Default for managed reverse proxy deployments when TRUST_PROXY is not explicitly configured
+	if (renderEnv === 'true' || vercelEnv === '1') {
 		return 1;
 	}
 
@@ -36,7 +37,7 @@ function parseTrustProxy(trustProxyEnv, renderEnv) {
  * @param {object} [env=process.env] Environment variables map
  */
 function setupTrustProxy(app, env = process.env) {
-	const setting = parseTrustProxy(env.TRUST_PROXY, env.RENDER);
+	const setting = parseTrustProxy(env.TRUST_PROXY, env.RENDER, env.VERCEL);
 	app.set('trust proxy', setting);
 }
 

@@ -163,7 +163,9 @@ pnpm test:firebase
 - `SHUTDOWN_TIMEOUT_MS` - Maximum graceful shutdown budget in milliseconds (default: `10000`, hard cap: `30000`); after the deadline active jobs receive a bounded finalization attempt and are persisted as retryable cancellations, remaining HTTP connections are force-closed, and the process exits
 - `RENDER` - Render.com deployment flag (used internally)
 - `IS_PULL_REQUEST` - Render preview environment flag (disables bot in PRs)
-- `TRUST_PROXY` - Express trusted proxy setting for reverse-proxy deployments (`true`, `false`, `1` hop, or subnet string; defaults to `1` when `RENDER=true`, and `false` for direct deployments)
+- `VERCEL` / `VERCEL_ENV` - Vercel system deployment markers; `VERCEL_ENV=preview` disables the bot
+- `VERCEL_GIT_COMMIT_SHA` / `VERCEL_GIT_REPO_SLUG` - Vercel deployment metadata used for release and deployment notifications
+- `TRUST_PROXY` - Express trusted proxy setting for reverse-proxy deployments (`true`, `false`, `1` hop, or subnet string; defaults to `1` on Render/Vercel, and `false` for direct deployments)
 - `RATE_LIMIT_WINDOW_MS` - Global API rate limiter window in milliseconds (default: `900000` / 15 minutes)
 - `RATE_LIMIT_MAX` - Global API rate limiter max requests per window (default: `100`)
 - `LOG_LEVEL` - Structured JSON log verbosity (`debug`, `info`, `warn`, `error`, `silent`; defaults to `debug` in development and `info` in production)
@@ -1441,7 +1443,7 @@ When enabled, it also forwards configured console levels to Sentry Logs using th
 ### Features
 
 - **Non-Intrusive**: Monitoring failures never affect HTTP responses or message delivery
-- **Environment Gating**: Auto-derives environment from Render.com variables (`production`, `preview`, `development`)
+- **Environment Gating**: Auto-derives environment from Render.com and Vercel system variables (`production`, `preview`, `development`)
 - **Privacy Controls**: Optional exclusion of alert content from error events
 - **Structured Console Logs**: All `console.*` output is emitted as one-line JSON with `timestamp`, `level`, `message`, `service`, `environment`, and optional `attributes`, `parameters`, and `error`
 - **Console Log Capture**: Configured console levels are captured as searchable Sentry Logs
@@ -1458,7 +1460,7 @@ SENTRY_DSN=https://key@o123.ingest.sentry.io/456
 # Optional: Explicit environment (auto-derived if not set)
 SENTRY_ENVIRONMENT=production
 
-# Optional: Explicit release (derived from RENDER_GIT_COMMIT if not set)
+# Optional: Explicit release (derived from RENDER_GIT_COMMIT or VERCEL_GIT_COMMIT_SHA if not set)
 SENTRY_RELEASE=v1.2.3
 
 # Optional: Privacy control (default: true = include alert text)
@@ -1479,8 +1481,8 @@ SENTRY_CONSOLE_LOG_LEVELS=warn,error
 | Condition | Environment |
 |-----------|-------------|
 | `SENTRY_ENVIRONMENT` set | Uses explicit value |
-| `RENDER=true` + `IS_PULL_REQUEST=true` | `preview` |
-| `RENDER=true` (no PR) | `production` |
+| `RENDER=true` + `IS_PULL_REQUEST=true` or `VERCEL_ENV=preview` | `preview` |
+| `RENDER=true` or `VERCEL_ENV=production` (no preview) | `production` |
 | `NODE_ENV=production` | `production` |
 | Default | `development` |
 
@@ -1736,10 +1738,10 @@ AZURE_LLM_MODEL=openai/gpt-5-mini
 
 ### Render.com
 
-The application includes support for Render.com deployment:
+The application includes support for Render.com and Vercel deployments:
 
-- Respects `RENDER` environment variable
-- Skips bot launch in preview environments (`IS_PULL_REQUEST=true`)
+- Respects Render and Vercel deployment environment variables
+- Skips bot launch in preview environments (`IS_PULL_REQUEST=true` or `VERCEL_ENV=preview`)
 - Sends deployment notification to admin chat on startup
 - `render.yaml` defines an opt-in paid `starter` Background Worker using `pnpm run start:signal-outcome-worker`. It is configured with `SIGNAL_OUTCOME_WORKER_ROLE=worker` and `ENABLE_SIGNAL_OUTCOME_TRACKING` as a manual value so the paid worker and Firestore credential decision are explicit.
 - The worker also declares `ENABLE_SENTRY` and `SENTRY_DSN` as manual values; monitoring remains disabled when either value is absent.

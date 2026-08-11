@@ -8,6 +8,11 @@ const { jobQueue } = require('../services/jobs/JobQueue');
 const equityMarketDataService = require('../services/storage/EquityMarketDataService');
 const remoteConfigService = require('../services/remoteConfig/RemoteConfigService');
 const { tradingViewMcpService } = require('../services/tradingview/TradingViewMcpService');
+const {
+	getDeploymentCommit,
+	isPreviewEnvironment,
+	isProductionLikeEnvironment,
+} = require('../lib/deploymentEnvironment');
 const DEFAULT_AZURE_LLM_ENDPOINT = 'https://models.github.ai/inference';
 const DEFAULT_OPENROUTER_MODEL = 'google/gemini-2.0-flash-001';
 const DEFAULT_CF_AIG_MODEL = 'google-ai-studio/gemini-2.5-flash';
@@ -27,16 +32,11 @@ function getModelProvider() {
 }
 
 function getCommit() {
-	return process.env.RENDER_GIT_COMMIT
-		|| process.env.GIT_COMMIT
-		|| process.env.COMMIT_SHA
-		|| process.env.GITHUB_SHA
-		|| process.env.SOURCE_VERSION
-		|| null;
+	return getDeploymentCommit();
 }
 
-function isRenderPreview() {
-	return process.env.RENDER === 'true' && process.env.IS_PULL_REQUEST === 'true';
+function isPreview() {
+	return isPreviewEnvironment();
 }
 
 function getEnvironment() {
@@ -44,11 +44,11 @@ function getEnvironment() {
 		return process.env.SENTRY_ENVIRONMENT;
 	}
 
-	if (isRenderPreview()) {
+	if (isPreview()) {
 		return 'preview';
 	}
 
-	if (process.env.NODE_ENV === 'production' || process.env.RENDER === 'true') {
+	if (isProductionLikeEnvironment()) {
 		return 'production';
 	}
 
@@ -138,7 +138,7 @@ function getGeminiDependency({
 }
 
 function getStatus() {
-	const previewEnvironment = isRenderPreview();
+	const previewEnvironment = isPreview();
 	const modelProvider = getModelProvider();
 	const telegramFlagEnabled = isEnabled(process.env.ENABLE_TELEGRAM_BOT);
 	const telegramEnabled = telegramFlagEnabled && !previewEnvironment;
@@ -345,7 +345,7 @@ function getStatus() {
 			scannerPresetStorage: scannerPresetService.getStorageStatus(),
 			equityMarketData: equityMarketDataStatus,
 			signalOutcomeWorker: {
-					...signalOutcomeWorkerDependency,
+				...signalOutcomeWorkerDependency,
 				role: signalOutcomeWorkerStatus.role,
 				running: signalOutcomeWorkerStatus.running,
 				shutdownRequested: signalOutcomeWorkerStatus.shutdownRequested,

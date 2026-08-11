@@ -1339,6 +1339,19 @@ describe('Status endpoints', () => {
 		expect(response.body.dependencies.telegram.ready).toBe(false);
 	});
 
+	it('reports Vercel preview deployments consistently', async () => {
+		process.env.VERCEL_ENV = 'preview';
+		process.env.NODE_ENV = 'production';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.service.environment).toBe('preview');
+		expect(response.body.deliveryChannels.telegram).toEqual({ enabled: false, status: 'disabled' });
+	});
+
 	it('reports news monitor deduplication as process-local (in-memory) by default', async () => {
 		process.env.ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP = 'false';
 

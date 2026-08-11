@@ -1,6 +1,8 @@
+const { isPreviewEnvironment } = require('./deploymentEnvironment');
+
 function getTelegramBootstrapConfig() {
 	const telegramBotIsEnabled = process.env.ENABLE_TELEGRAM_BOT === 'true';
-	const isPreviewEnv = process.env.RENDER === 'true' && process.env.IS_PULL_REQUEST === 'true';
+	const isPreviewEnv = isPreviewEnvironment();
 	const shouldStartTelegramBot = telegramBotIsEnabled && !isPreviewEnv;
 	const token = process.env.BOT_TOKEN;
 

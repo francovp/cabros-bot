@@ -49,6 +49,14 @@ describe('SentryService', () => {
 				expect(env).toBe('preview');
 			});
 
+			it('should return preview when VERCEL_ENV=preview', () => {
+				process.env.VERCEL_ENV = 'preview';
+				delete process.env.SENTRY_ENVIRONMENT;
+
+				const env = service._deriveEnvironment();
+				expect(env).toBe('preview');
+			});
+
 			it('should return production when NODE_ENV=production', () => {
 				process.env.NODE_ENV = 'production';
 				delete process.env.SENTRY_ENVIRONMENT;

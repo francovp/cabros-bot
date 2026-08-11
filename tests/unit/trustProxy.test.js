@@ -37,12 +37,16 @@ describe('Trust Proxy Configuration', () => {
 			expect(parseTrustProxy(undefined, undefined)).toBe(false);
 			expect(parseTrustProxy('', 'false')).toBe(false);
 		});
+
+		test('should default to 1 hop for Vercel deployments', () => {
+			expect(parseTrustProxy(undefined, undefined, '1')).toBe(1);
+		});
 	});
 
 	describe('setupTrustProxy', () => {
 		test('should set trust proxy on an Express app instance', () => {
 			const app = express();
-			setupTrustProxy(app, { TRUST_PROXY: '1', RENDER: 'false' });
+			setupTrustProxy(app, { TRUST_PROXY: '1', RENDER: 'false', VERCEL: '1' });
 			expect(app.get('trust proxy')).toBe(1);
 		});
 	});
