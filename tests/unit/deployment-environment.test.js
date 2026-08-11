@@ -22,10 +22,18 @@ describe('deployment environment helpers', () => {
 	it('reads Vercel deployment metadata', () => {
 		const env = {
 			VERCEL_GIT_COMMIT_SHA: 'abcdef1234567890',
-			VERCEL_GIT_REPO_SLUG: 'francovp/cabros-bot',
+			VERCEL_GIT_REPO_OWNER: 'francovp',
+			VERCEL_GIT_REPO_SLUG: 'cabros-bot',
 		};
 
 		expect(getDeploymentCommit(env)).toBe('abcdef1234567890');
 		expect(getDeploymentRepoSlug(env)).toBe('francovp/cabros-bot');
+	});
+
+	it('supports the legacy Vercel repository owner variable', () => {
+		expect(getDeploymentRepoSlug({
+			VERCEL_GIT_REPO_OWNER_NAME: 'francovp',
+			VERCEL_GIT_REPO_SLUG: 'cabros-bot',
+		})).toBe('francovp/cabros-bot');
 	});
 });

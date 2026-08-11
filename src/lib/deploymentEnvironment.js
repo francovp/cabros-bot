@@ -20,7 +20,13 @@ function getDeploymentCommit(env = process.env) {
 }
 
 function getDeploymentRepoSlug(env = process.env) {
-	return env.RENDER_GIT_REPO_SLUG || env.VERCEL_GIT_REPO_SLUG || 'cabros-bot';
+	if (env.RENDER_GIT_REPO_SLUG) return env.RENDER_GIT_REPO_SLUG;
+
+	const vercelRepoSlug = env.VERCEL_GIT_REPO_SLUG;
+	const vercelRepoOwner = env.VERCEL_GIT_REPO_OWNER || env.VERCEL_GIT_REPO_OWNER_NAME;
+	if (vercelRepoSlug && vercelRepoOwner) return `${vercelRepoOwner}/${vercelRepoSlug}`;
+
+	return vercelRepoSlug || 'cabros-bot';
 }
 
 module.exports = {

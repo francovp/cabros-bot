@@ -5,6 +5,7 @@ describe('getTelegramBootstrapConfig', () => {
 
 	beforeEach(() => {
 		process.env = { ...originalEnv };
+		delete process.env.VERCEL_ENV;
 	});
 
 	afterEach(() => {
