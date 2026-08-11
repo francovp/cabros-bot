@@ -21,6 +21,7 @@ describe('deployment environment helpers', () => {
 
 	it('recognizes Railway pull-request environments by their generated name', () => {
 		expect(isPreviewEnvironment({ RAILWAY_ENVIRONMENT_NAME: 'pr-123' })).toBe(true);
+		expect(isPreviewEnvironment({ RAILWAY_ENVIRONMENT_NAME: 'cabros-bot-pr-359' })).toBe(true);
 		expect(isPreviewEnvironment({ RAILWAY_ENVIRONMENT_NAME: 'staging' })).toBe(false);
 	});
 
