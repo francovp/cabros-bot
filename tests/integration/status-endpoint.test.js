@@ -1352,6 +1352,24 @@ describe('Status endpoints', () => {
 		expect(response.body.deliveryChannels.telegram).toEqual({ enabled: false, status: 'disabled' });
 	});
 
+	it('reports preview WhatsApp readiness from the preview destination', async () => {
+		process.env.VERCEL_ENV = 'preview';
+		delete process.env.WHATSAPP_CHAT_ID;
+		process.env.WHATSAPP_PREVIEW_CHAT_ID = 'preview-chat';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.whatsapp).toEqual({
+			enabled: true,
+			configured: true,
+			ready: true,
+			status: 'ready',
+		});
+	});
+
 	it('reports news monitor deduplication as process-local (in-memory) by default', async () => {
 		process.env.ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP = 'false';
 

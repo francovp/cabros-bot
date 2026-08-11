@@ -52,6 +52,7 @@ const ENVIRONMENT_CLASSIFICATIONS = {
 	RENDER_GIT_REPO_SLUG: 'platform-injected release metadata',
 	RAILWAY_ENVIRONMENT_NAME: 'platform-injected deployment metadata',
 	RAILWAY_GIT_COMMIT_SHA: 'platform-injected release metadata',
+	RAILWAY_GIT_PULL_REQUEST_NUMBER: 'platform-injected deployment metadata',
 	RAILWAY_GIT_REPO_NAME: 'platform-injected release metadata',
 	RAILWAY_GIT_REPO_OWNER: 'platform-injected release metadata',
 	RENDER_INSTANCE_ID: 'platform-injected runtime metadata',

@@ -181,12 +181,15 @@ function getStatus() {
 		enabled: telegramEnabled,
 		configured: hasValue(process.env.BOT_TOKEN) && hasValue(process.env.TELEGRAM_CHAT_ID),
 	});
+	const whatsappChatId = previewEnvironment
+		? process.env.WHATSAPP_PREVIEW_CHAT_ID || process.env.WHATSAPP_CHAT_ID
+		: process.env.WHATSAPP_CHAT_ID;
 	const whatsapp = dependencyStatus({
 		enabled: whatsappEnabled,
 		configured:
 			hasValue(process.env.WHATSAPP_API_URL)
 			&& hasValue(process.env.WHATSAPP_API_KEY)
-			&& hasValue(process.env.WHATSAPP_CHAT_ID),
+			&& hasValue(whatsappChatId),
 	});
 	const discord = dependencyStatus({
 		enabled: discordEnabled,

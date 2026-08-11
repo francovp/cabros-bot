@@ -25,6 +25,13 @@ describe('deployment environment helpers', () => {
 		expect(isPreviewEnvironment({ RAILWAY_ENVIRONMENT_NAME: 'staging' })).toBe(false);
 	});
 
+	it('recognizes Railway pull-request metadata when provided', () => {
+		expect(isPreviewEnvironment({
+			RAILWAY_ENVIRONMENT_NAME: 'staging',
+			RAILWAY_GIT_PULL_REQUEST_NUMBER: '359',
+		})).toBe(true);
+	});
+
 	it('recognizes Railway deployments as production-like', () => {
 		expect(isProductionLikeEnvironment({ RAILWAY_ENVIRONMENT_NAME: 'production' })).toBe(true);
 	});

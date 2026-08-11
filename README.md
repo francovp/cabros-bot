@@ -165,7 +165,7 @@ pnpm test:firebase
 - `IS_PULL_REQUEST` - Render preview environment flag (disables bot in PRs)
 - `VERCEL` / `VERCEL_ENV` - Vercel system deployment markers; `VERCEL_ENV=preview` disables the bot
 - `VERCEL_GIT_COMMIT_SHA` / `VERCEL_GIT_REPO_OWNER` / `VERCEL_GIT_REPO_SLUG` - Vercel deployment metadata used for release and deployment notifications
-- `RAILWAY_ENVIRONMENT_NAME` - Railway system environment marker; names containing a hyphen-delimited `pr` segment disable the bot
+- `RAILWAY_ENVIRONMENT_NAME` / `RAILWAY_GIT_PULL_REQUEST_NUMBER` - Railway preview markers; a PR number or environment name containing a hyphen-delimited `pr` segment disables the bot
 - `RAILWAY_GIT_COMMIT_SHA` / `RAILWAY_GIT_REPO_OWNER` / `RAILWAY_GIT_REPO_NAME` - Railway GitHub deployment metadata used for release and deployment notifications
 - `TRUST_PROXY` - Express trusted proxy setting for reverse-proxy deployments (`true`, `false`, `1` hop, or subnet string; defaults to `1` on Render/Vercel/Railway, and `false` for direct deployments)
 - `RATE_LIMIT_WINDOW_MS` - Global API rate limiter window in milliseconds (default: `900000` / 15 minutes)
@@ -1483,7 +1483,7 @@ SENTRY_CONSOLE_LOG_LEVELS=warn,error
 | Condition | Environment |
 |-----------|-------------|
 | `SENTRY_ENVIRONMENT` set | Uses explicit value |
-| `RENDER=true` + `IS_PULL_REQUEST=true`, `VERCEL_ENV=preview`, or Railway `RAILWAY_ENVIRONMENT_NAME` containing a hyphen-delimited `pr` segment | `preview` |
+| `RENDER=true` + `IS_PULL_REQUEST=true`, `VERCEL_ENV=preview`, or Railway PR metadata/name | `preview` |
 | `RENDER=true`, `VERCEL_ENV=production`, or any Railway deployment (no preview) | `production` |
 | `NODE_ENV=production` | `production` |
 | Default | `development` |

@@ -1,5 +1,6 @@
 function isRailwayPreviewEnvironment(env) {
-	return /(?:^|[-_ ])pr(?:[-_ ]|$)/i.test(env.RAILWAY_ENVIRONMENT_NAME || '');
+	return Boolean(env.RAILWAY_GIT_PULL_REQUEST_NUMBER)
+		|| /(?:^|[-_ ])pr(?:[-_ ]|$)/i.test(env.RAILWAY_ENVIRONMENT_NAME || '');
 }
 
 function isPreviewEnvironment(env = process.env) {
