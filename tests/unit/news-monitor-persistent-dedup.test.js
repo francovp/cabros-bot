@@ -261,13 +261,82 @@ describe('NewsCache — Persistent Dedup Backend (Issue #120)', () => {
 			);
 		});
 
+		it('merges only claimed channel data in memory during a cached retry', async () => {
+			const firstData = {
+				alert: { symbol: 'BTCUSDT' },
+				routing: {
+					channels: ['telegram', 'whatsapp'],
+					telegramChatId: 'telegram-a',
+					whatsappChatId: 'whatsapp-a',
+				},
+				deliveryResults: [
+					{ channel: 'telegram', success: true },
+					{ channel: 'whatsapp', success: false },
+				],
+			};
+			const retryData = {
+				...firstData,
+				routing: {
+					channels: ['whatsapp'],
+					whatsappChatId: 'whatsapp-b',
+				},
+				deliveryResults: [
+					{ channel: 'telegram', success: false },
+					{ channel: 'whatsapp', success: true },
+				],
+			};
+
+			await cache.set('BTCUSDT', EventCategory.PRICE_SURGE, firstData);
+			await cache.set('BTCUSDT', EventCategory.PRICE_SURGE, retryData, {
+				preserveTtl: true,
+				deliveryChannels: ['whatsapp'],
+			});
+
+			expect(cache.cache.get('BTCUSDT:price_surge').data).toEqual(expect.objectContaining({
+				routing: {
+					channels: ['whatsapp'],
+					telegramChatId: 'telegram-a',
+					whatsappChatId: 'whatsapp-b',
+				},
+				deliveryResults: [
+					{ channel: 'telegram', success: true },
+					{ channel: 'whatsapp', success: true },
+				],
+			}));
+		});
+
+		it('does not recreate a retry entry after local cache eviction', async () => {
+			const data = {
+				alert: { symbol: 'BTCUSDT' },
+				deliveryResults: [{ channel: 'whatsapp', success: false }],
+			};
+			await cache.set('BTCUSDT', EventCategory.PRICE_SURGE, data);
+			cache.cache.delete('BTCUSDT:price_surge');
+			mockUpdateEntry.mockClear();
+
+			await cache.set('BTCUSDT', EventCategory.PRICE_SURGE, {
+				...data,
+				deliveryResults: [{ channel: 'whatsapp', success: true }],
+			}, {
+				preserveTtl: true,
+				deliveryChannels: ['whatsapp'],
+			});
+
+			expect(cache.cache.has('BTCUSDT:price_surge')).toBe(false);
+			expect(mockUpdateEntry).not.toHaveBeenCalled();
+		});
+
 		it('uses an atomic persistent lease for concurrent channel retries', async () => {
 			const first = await cache.claimDelivery('BTCUSDT', EventCategory.PRICE_SURGE, 'whatsapp');
 			const concurrent = await cache.claimDelivery('BTCUSDT', EventCategory.PRICE_SURGE, 'whatsapp');
 
 			expect(first).toBe(true);
 			expect(concurrent).toBe(false);
-			expect(mockClaimEntry).toHaveBeenCalledWith('BTCUSDT:price_surge:delivery:whatsapp', 30_000);
+			expect(mockClaimEntry).toHaveBeenCalledWith(
+				'BTCUSDT:price_surge:delivery:whatsapp',
+				30_000,
+				expect.any(String),
+			);
 
 			cache.releaseDelivery('BTCUSDT', EventCategory.PRICE_SURGE, 'whatsapp');
 			await expect(cache.claimDelivery('BTCUSDT', EventCategory.PRICE_SURGE, 'whatsapp')).resolves.toBe(true);
@@ -278,7 +347,11 @@ describe('NewsCache — Persistent Dedup Backend (Issue #120)', () => {
 			await cache.claimDelivery('BTCUSDT', EventCategory.PRICE_SURGE, 'whatsapp');
 
 			await expect(cache.renewDelivery('BTCUSDT', EventCategory.PRICE_SURGE, 'whatsapp')).resolves.toBe(true);
-			expect(mockRenewEntry).toHaveBeenCalledWith('BTCUSDT:price_surge:delivery:whatsapp', 30_000);
+			expect(mockRenewEntry).toHaveBeenCalledWith(
+				'BTCUSDT:price_surge:delivery:whatsapp',
+				30_000,
+				expect.any(String),
+			);
 		});
 
 		it('tracks persistent cache writes until shutdown drain observes them', async () => {
@@ -483,6 +556,63 @@ describe('NewsDedupStorageService — claimEntry()', () => {
 		realService._resetForTesting();
 
 		await expect(realService.claimEntry('BTCUSDT:price_surge', 5_000)).resolves.toBe(false);
+		expect(transaction.set).not.toHaveBeenCalled();
+	});
+
+	it('stores a claim token for persistent lease ownership', async () => {
+		process.env.ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP = 'true';
+		const now = { toMillis: () => 10_000 };
+		const expiresAt = { toMillis: () => 15_000 };
+		const docRef = {};
+		const transaction = {
+			get: jest.fn().mockResolvedValue({ exists: false }),
+			set: jest.fn(),
+		};
+		const runTransaction = jest.fn(async callback => callback(transaction));
+
+		admin.firestore.mockReturnValue({
+			collection: () => ({ doc: () => docRef }),
+			runTransaction,
+		});
+		admin.firestore.Timestamp.now = jest.fn(() => now);
+		admin.firestore.Timestamp.fromMillis = jest.fn(() => expiresAt);
+
+		const realService = jest.requireActual('../../src/services/storage/NewsDedupStorageService');
+		realService._resetForTesting();
+
+		await expect(realService.claimEntry('BTCUSDT:price_surge:delivery:whatsapp', 5_000, 'owner-a')).resolves.toBe(true);
+		expect(transaction.set).toHaveBeenCalledWith(docRef, expect.objectContaining({
+			data: { status: 'claiming', claimToken: 'owner-a' },
+		}));
+	});
+
+	it('rejects renewal from a different persistent lease owner', async () => {
+		process.env.ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP = 'true';
+		const now = { toMillis: () => 10_000 };
+		const docRef = {};
+		const transaction = {
+			get: jest.fn().mockResolvedValue({
+				exists: true,
+				data: () => ({
+					expiresAt: { toMillis: () => 15_000 },
+					data: { status: 'claiming', claimToken: 'owner-b' },
+				}),
+			}),
+			set: jest.fn(),
+		};
+		const runTransaction = jest.fn(async callback => callback(transaction));
+
+		admin.firestore.mockReturnValue({
+			collection: () => ({ doc: () => docRef }),
+			runTransaction,
+		});
+		admin.firestore.Timestamp.now = jest.fn(() => now);
+		admin.firestore.Timestamp.fromMillis = jest.fn(() => ({ toMillis: () => 40_000 }));
+
+		const realService = jest.requireActual('../../src/services/storage/NewsDedupStorageService');
+		realService._resetForTesting();
+
+		await expect(realService.renewEntry('BTCUSDT:price_surge:delivery:whatsapp', 30_000, 'owner-a')).resolves.toBe(false);
 		expect(transaction.set).not.toHaveBeenCalled();
 	});
 });

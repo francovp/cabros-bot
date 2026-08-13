@@ -15,6 +15,7 @@
 
 const newsDedupStorageService = require('../../../../services/storage/NewsDedupStorageService');
 const { trackBackgroundTask } = require('../../../../lib/backgroundTaskTracker');
+const { randomUUID } = require('node:crypto');
 
 const DELIVERY_LOCK_TTL_MS = 30_000;
 const DELIVERY_LOCK_RENEW_INTERVAL_MS = 10_000;
@@ -24,22 +25,54 @@ const DELIVERY_ROUTING_FIELDS = {
 	discord: 'discordWebhookUrl',
 };
 
-function mergeDeliveryData(existingData = {}, updatedData = {}) {
-	if (!Array.isArray(existingData.deliveryResults) || !Array.isArray(updatedData.deliveryResults)) {
-		return updatedData;
+function mergeRoutingData(existingRouting = {}, updatedRouting = {}, channels) {
+	if (!Array.isArray(channels)) {
+		return updatedRouting;
 	}
 
-	const resultByChannel = new Map();
-	for (const result of [...existingData.deliveryResults, ...updatedData.deliveryResults]) {
-		if (result && result.channel) {
-			resultByChannel.set(result.channel, result);
+	const mergedRouting = { ...existingRouting };
+	if (Object.prototype.hasOwnProperty.call(updatedRouting, 'channels')) {
+		mergedRouting.channels = updatedRouting.channels;
+	}
+	for (const channel of channels) {
+		const field = DELIVERY_ROUTING_FIELDS[channel];
+		if (field && Object.prototype.hasOwnProperty.call(updatedRouting, field)) {
+			mergedRouting[field] = updatedRouting[field];
 		}
 	}
-	return {
+	return mergedRouting;
+}
+
+function mergeDeliveryData(existingData = {}, updatedData = {}, channels) {
+	const deliveryChannels = Array.isArray(channels) ? channels : null;
+	if (!deliveryChannels
+		&& (!Array.isArray(existingData.deliveryResults) || !Array.isArray(updatedData.deliveryResults))) {
+		return updatedData;
+	}
+	const updatedResults = deliveryChannels
+		? (Array.isArray(updatedData.deliveryResults) ? updatedData.deliveryResults : [])
+			.filter((result) => result && deliveryChannels.includes(result.channel))
+		: updatedData.deliveryResults;
+	const mergedData = {
 		...existingData,
 		...updatedData,
-		deliveryResults: Array.from(resultByChannel.values()),
 	};
+
+	if (Array.isArray(existingData.deliveryResults) && Array.isArray(updatedResults)) {
+		const resultByChannel = new Map();
+		for (const result of [...existingData.deliveryResults, ...updatedResults]) {
+			if (result && result.channel) {
+				resultByChannel.set(result.channel, result);
+			}
+		}
+		mergedData.deliveryResults = Array.from(resultByChannel.values());
+	}
+
+	if (deliveryChannels && (existingData.routing || updatedData.routing)) {
+		mergedData.routing = mergeRoutingData(existingData.routing, updatedData.routing, deliveryChannels);
+	}
+
+	return mergedData;
 }
 
 function getDeliveryDelta(data = {}, channels = []) {
@@ -211,7 +244,10 @@ class NewsCache {
 	async set(symbol, eventCategory, data, options = {}) {
 		const key = this.generateKey(symbol, eventCategory);
 		const existingEntry = options.preserveTtl ? this.cache.get(key) : null;
-		const dataToStore = existingEntry ? mergeDeliveryData(existingEntry.data, data) : data;
+		if (options.preserveTtl && (!existingEntry || this.isExpired(existingEntry))) {
+			return;
+		}
+		const dataToStore = existingEntry ? mergeDeliveryData(existingEntry.data, data, options.deliveryChannels) : data;
 		this.cache.set(key, {
 			key,
 			timestamp: existingEntry ? existingEntry.timestamp : Date.now(),
@@ -259,8 +295,12 @@ class NewsCache {
 		}
 
 		const persistentLeaseActive = existingLease && existingLease.persistentUntil > now;
+		const claimToken = persistentLeaseActive && existingLease.claimToken
+			? existingLease.claimToken
+			: randomUUID();
 		this.deliveryLocks.set(key, {
 			active: true,
+			claimToken,
 			persistentUntil: persistentLeaseActive ? existingLease.persistentUntil : 0,
 		});
 
@@ -269,13 +309,14 @@ class NewsCache {
 		}
 
 		try {
-			const claimed = await newsDedupStorageService.claimEntry(key, DELIVERY_LOCK_TTL_MS);
+			const claimed = await newsDedupStorageService.claimEntry(key, DELIVERY_LOCK_TTL_MS, claimToken);
 			if (!claimed) {
 				this.deliveryLocks.delete(key);
 				return false;
 			}
 			this.deliveryLocks.set(key, {
 				active: true,
+				claimToken,
 				persistentUntil: Date.now() + DELIVERY_LOCK_TTL_MS,
 			});
 		} catch (error) {
@@ -299,7 +340,7 @@ class NewsCache {
 		}
 
 		try {
-			const renewed = await newsDedupStorageService.renewEntry(key, DELIVERY_LOCK_TTL_MS);
+			const renewed = await newsDedupStorageService.renewEntry(key, DELIVERY_LOCK_TTL_MS, lease.claimToken);
 			if (renewed) {
 				lease.persistentUntil = Date.now() + DELIVERY_LOCK_TTL_MS;
 			}

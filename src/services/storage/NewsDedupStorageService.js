@@ -45,6 +45,10 @@ function mergeRoutingData(existingRouting = {}, updatedRouting = {}, channels) {
 
 function mergeDeliveryData(existingData = {}, updatedData = {}, options = {}) {
 	const deliveryChannels = Array.isArray(options.deliveryChannels) ? options.deliveryChannels : null;
+	if (!deliveryChannels
+		&& (!Array.isArray(existingData.deliveryResults) || !Array.isArray(updatedData.deliveryResults))) {
+		return updatedData;
+	}
 	const updatedResults = deliveryChannels
 		? (Array.isArray(updatedData.deliveryResults) ? updatedData.deliveryResults : [])
 			.filter((result) => result && deliveryChannels.includes(result.channel))
@@ -186,9 +190,10 @@ async function getEntry(key) {
  *
  * @param {string} key - Dedup key
  * @param {number} ttlMs - TTL in milliseconds
+ * @param {string} [claimToken] - Optional owner token for a delivery lease
  * @returns {Promise<boolean>} true if claim succeeded, false if already claimed/exists
  */
-async function claimEntry(key, ttlMs) {
+async function claimEntry(key, ttlMs, claimToken) {
 	const firestore = getFirestore();
 	if (!firestore) {
 		return false;
@@ -212,7 +217,7 @@ async function claimEntry(key, ttlMs) {
 				key,
 				createdAt: now,
 				expiresAt,
-				data: { status: 'claiming' },
+				data: claimToken ? { status: 'claiming', claimToken } : { status: 'claiming' },
 			});
 			return true;
 		});
@@ -307,9 +312,10 @@ async function updateEntry(key, data, options = {}) {
  *
  * @param {string} key - Lease key
  * @param {number} ttlMs - Lease duration in milliseconds
+ * @param {string} [claimToken] - Optional owner token that must match the active lease
  * @returns {Promise<boolean>} true when the active lease was renewed
  */
-async function renewEntry(key, ttlMs) {
+async function renewEntry(key, ttlMs, claimToken) {
 	const firestore = getFirestore();
 	if (!firestore) {
 		return false;
@@ -325,6 +331,9 @@ async function renewEntry(key, ttlMs) {
 			if (!existing.exists || !existingData?.expiresAt
 				|| typeof existingData.expiresAt.toMillis !== 'function'
 				|| existingData.expiresAt.toMillis() <= now.toMillis()) {
+				return false;
+			}
+			if (claimToken && existingData.data?.claimToken !== claimToken) {
 				return false;
 			}
 
