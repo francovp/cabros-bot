@@ -328,7 +328,7 @@ async function updateEntry(key, data, options = {}) {
  * @param {string} key - Lease key
  * @param {number} ttlMs - Lease duration in milliseconds
  * @param {string} [claimToken] - Optional owner token that must match the active lease
- * @returns {Promise<boolean>} true when the active lease was renewed
+ * @returns {Promise<boolean|null>} true when renewed, false when ownership loss is proven, null when storage state is indeterminate
  */
 async function renewEntry(key, ttlMs, claimToken) {
 	const firestore = getFirestore();
@@ -362,7 +362,7 @@ async function renewEntry(key, ttlMs, claimToken) {
 		});
 	} catch (error) {
 		console.warn('[NewsDedupStorageService] renewEntry error (fail-open):', error.message);
-		return false;
+		return null;
 	}
 }
 

@@ -355,7 +355,7 @@ class NewsCache {
 			return renewed;
 		} catch (error) {
 			console.warn('[NewsCache] Delivery lease renewal failed (fail-open):', error.message);
-			return false;
+			return null;
 		}
 	}
 

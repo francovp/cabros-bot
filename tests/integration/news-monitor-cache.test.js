@@ -333,6 +333,36 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 			}
 		});
 
+		it('should keep a successful retry when lease renewal is indeterminate', async () => {
+			process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '';
+			const cache = getCacheInstance();
+			const intervalSpy = jest.spyOn(cache, 'getDeliveryLeaseRenewIntervalMs').mockReturnValue(1);
+			const renewSpy = jest.spyOn(cache, 'renewDelivery').mockResolvedValue(null);
+			const { getNotificationManager } = require('../../src/controllers/webhooks/handlers/alert/alert');
+			const telegramSend = jest.spyOn(getNotificationManager().channels.get('telegram'), 'send')
+				.mockResolvedValueOnce({ success: false, channel: 'telegram', error: 'temporary failure' })
+				.mockResolvedValueOnce({ success: true, channel: 'telegram', messageId: 'telegram-after-storage-error' });
+
+			try {
+				await request(app)
+					.get('/api/news-monitor?crypto=BTCUSDT&channels=telegram').set('x-api-key', 'test-key')
+					.expect(200);
+
+				const retry = await request(app)
+					.get('/api/news-monitor?crypto=BTCUSDT&channels=telegram').set('x-api-key', 'test-key')
+					.expect(200);
+
+				expect(retry.body.results[0].deliveryResults).toEqual([
+					expect.objectContaining({ channel: 'telegram', success: true, messageId: 'telegram-after-storage-error' }),
+				]);
+				expect(telegramSend).toHaveBeenCalledTimes(2);
+				expect(renewSpy).toHaveBeenCalled();
+			} finally {
+				intervalSpy.mockRestore();
+				renewSpy.mockRestore();
+			}
+		});
+
 		it('should drop the old destination success when a claimed retry loses its lease', async () => {
 			process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '';
 			const cache = getCacheInstance();

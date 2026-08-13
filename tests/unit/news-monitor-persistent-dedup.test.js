@@ -357,6 +357,13 @@ describe('NewsCache — Persistent Dedup Backend (Issue #120)', () => {
 			);
 		});
 
+		it('returns an indeterminate result when persistent lease renewal fails', async () => {
+			mockRenewEntry.mockResolvedValue(null);
+			await cache.claimDelivery('BTCUSDT', EventCategory.PRICE_SURGE, 'whatsapp');
+
+			await expect(cache.renewDelivery('BTCUSDT', EventCategory.PRICE_SURGE, 'whatsapp')).resolves.toBeNull();
+		});
+
 		it('tracks persistent cache writes until shutdown drain observes them', async () => {
 			let releaseWrite;
 			mockSetEntry.mockReturnValue(new Promise((resolve) => { releaseWrite = resolve; }));
@@ -638,6 +645,22 @@ describe('NewsDedupStorageService — claimEntry()', () => {
 
 		await expect(realService.renewEntry('BTCUSDT:price_surge:delivery:whatsapp', 30_000, 'owner-a')).resolves.toBe(false);
 		expect(transaction.set).not.toHaveBeenCalled();
+	});
+
+	it('returns an indeterminate result when Firestore renewal fails', async () => {
+		process.env.ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP = 'true';
+		const docRef = {};
+		const runTransaction = jest.fn().mockRejectedValue(new Error('Firestore unavailable'));
+
+		admin.firestore.mockReturnValue({
+			collection: () => ({ doc: () => docRef }),
+			runTransaction,
+		});
+
+		const realService = jest.requireActual('../../src/services/storage/NewsDedupStorageService');
+		realService._resetForTesting();
+
+		await expect(realService.renewEntry('BTCUSDT:price_surge:delivery:whatsapp', 30_000, 'owner-a')).resolves.toBeNull();
 	});
 });
 

@@ -592,12 +592,16 @@ class NewsAnalyzer {
 									}
 								};
 								const renewLease = async (channel) => {
-									if (!await this.cache.renewDelivery(symbol, category, channel)) {
-										markLeaseOwnershipLost(channel);
+									try {
+										if (await this.cache.renewDelivery(symbol, category, channel) === false) {
+											markLeaseOwnershipLost(channel);
+										}
+									} catch (error) {
+										console.warn('[Analyzer] Cached delivery lease renewal indeterminate:', error.message);
 									}
 								};
 								const leaseRenewalIntervals = claimedRetryChannels.map((channel) => setInterval(
-									() => renewLease(channel).catch(() => markLeaseOwnershipLost(channel)),
+									() => renewLease(channel),
 									this.cache.getDeliveryLeaseRenewIntervalMs(),
 								));
 								try {
