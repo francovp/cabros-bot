@@ -480,7 +480,7 @@ describe('AlertStorageService', () => {
 			expect(mockOrderBy).toHaveBeenNthCalledWith(1, 'receivedAt', 'desc');
 			expect(mockDocumentId).toHaveBeenCalledTimes(1);
 			expect(mockOrderBy).toHaveBeenNthCalledWith(2, '__name__', 'desc');
-			expect(mockLimit).toHaveBeenCalledWith(2);
+			expect(mockLimit).toHaveBeenCalledWith(100);
 			expect(result.alerts).toEqual([
 				{
 					id: 'alert-1',
@@ -532,33 +532,46 @@ describe('AlertStorageService', () => {
 			expect(result.alerts.map(alert => alert.id)).toEqual(['active-alert', 'legacy-active-alert']);
 		});
 
+		it('uses bounded scan batches for small retention-filtered pages', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			jest.useFakeTimers().setSystemTime(new Date('2026-08-13T00:00:00.000Z'));
+			const expiredBatch = Array.from({ length: 100 }, (_, index) => buildQueryDoc(`expired-${index}`, {
+				receivedAt: buildTimestamp('2026-08-12T12:00:00.000Z'),
+				expiresAt: buildTimestamp('2026-08-12T23:59:59.000Z'),
+			}));
+			mockGet
+				.mockResolvedValueOnce({ empty: false, docs: expiredBatch })
+				.mockResolvedValueOnce({
+					empty: false,
+					docs: [buildQueryDoc('active-alert', {
+						receivedAt: buildTimestamp('2026-08-12T11:00:00.000Z'),
+						expiresAt: buildTimestamp('2026-11-11T00:00:00.000Z'),
+					})],
+				});
+
+			const result = await AlertStorageService.listAlerts({ limit: 1 });
+
+			expect(mockLimit).toHaveBeenCalledWith(100);
+			expect(mockGet).toHaveBeenCalledTimes(2);
+			expect(result.alerts.map(alert => alert.id)).toEqual(['active-alert']);
+		});
+
 		it('keeps scanning batches until it finds enough filtered alerts', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			const mismatchBatch = Array.from({ length: 100 }, (_, index) => buildQueryDoc(`alert-${index}`, {
+				receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+				text: `Mismatch ${index}`,
+				enriched: false,
+				enrichmentData: null,
+				tokenUsage: null,
+				deliveryResults: [],
+				source: 'webhook',
+				useTradingViewData: false,
+			}));
 			mockGet
 				.mockResolvedValueOnce({
 					empty: false,
-					docs: [
-						buildQueryDoc('alert-1', {
-							receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
-							text: 'Mismatch',
-							enriched: false,
-							enrichmentData: null,
-							tokenUsage: null,
-							deliveryResults: [],
-							source: 'webhook',
-							useTradingViewData: false,
-						}),
-						buildQueryDoc('alert-1b', {
-							receivedAt: buildTimestamp('2026-06-06T11:30:00.000Z'),
-							text: 'Second mismatch',
-							enriched: false,
-							enrichmentData: null,
-							tokenUsage: null,
-							deliveryResults: [],
-							source: 'webhook',
-							useTradingViewData: false,
-						}),
-					],
+					docs: mismatchBatch,
 				})
 				.mockResolvedValueOnce({
 					empty: false,
@@ -982,21 +995,27 @@ describe('AlertStorageService', () => {
 		it('pages filtered exports through the full window and caps the result', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 			const firstPageLastTimestamp = buildTimestamp('2026-06-06T11:00:00.000Z');
+			const firstPageDocs = [
+				...Array.from({ length: 98 }, (_, index) => buildQueryDoc(`scanner-${index}`, {
+					receivedAt: firstPageLastTimestamp,
+					enriched: true,
+					source: 'scanner',
+				})),
+				buildQueryDoc('newer-scanner', {
+					receivedAt: firstPageLastTimestamp,
+					enriched: true,
+					source: 'scanner',
+				}),
+				buildQueryDoc('webhook-btc', {
+					receivedAt: firstPageLastTimestamp,
+					enriched: true,
+					source: 'webhook',
+				}),
+			];
 			mockGet
 				.mockResolvedValueOnce({
 					empty: false,
-					docs: [
-						buildQueryDoc('newer-scanner', {
-							receivedAt: firstPageLastTimestamp,
-							enriched: true,
-							source: 'scanner',
-						}),
-						buildQueryDoc('webhook-btc', {
-							receivedAt: firstPageLastTimestamp,
-							enriched: true,
-							source: 'webhook',
-						}),
-					],
+					docs: firstPageDocs,
 				})
 				.mockResolvedValueOnce({
 					empty: false,
@@ -1023,6 +1042,7 @@ describe('AlertStorageService', () => {
 			});
 
 			expect(mockGet).toHaveBeenCalledTimes(2);
+			expect(mockLimit).toHaveBeenCalledWith(100);
 			expect(mockStartAfter).toHaveBeenCalledWith(firstPageLastTimestamp, 'webhook-btc');
 			expect(result.alerts.map(alert => alert.id)).toEqual(['webhook-btc', 'webhook-eth']);
 		});
@@ -1299,14 +1319,22 @@ describe('AlertStorageService', () => {
 		it('pages through bounded alerts until filtered summaries reach the limit', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 			const newerTimestamp = buildTimestamp('2026-06-06T12:00:00.000Z');
+			const firstPageDocs = [
+				...Array.from({ length: 99 }, (_, index) => buildQueryDoc(`newer-scanner-${index}`, {
+					receivedAt: newerTimestamp,
+					enriched: true,
+					source: 'scanner',
+				})),
+				buildQueryDoc('newer-scanner', {
+					receivedAt: newerTimestamp,
+					enriched: true,
+					source: 'scanner',
+				}),
+			];
 			mockGet
 				.mockResolvedValueOnce({
 					empty: false,
-					docs: [buildQueryDoc('newer-scanner', {
-						receivedAt: newerTimestamp,
-						enriched: true,
-						source: 'scanner',
-					})],
+					docs: firstPageDocs,
 				})
 				.mockResolvedValueOnce({
 					empty: false,
@@ -1327,6 +1355,7 @@ describe('AlertStorageService', () => {
 			});
 
 			expect(mockGet).toHaveBeenCalledTimes(2);
+			expect(mockLimit).toHaveBeenCalledWith(100);
 			expect(mockStartAfter).toHaveBeenCalledWith(newerTimestamp, 'newer-scanner');
 			expect(result.totalAlerts).toBe(1);
 			expect(result.bySource).toEqual({ webhook: 1 });
@@ -1334,22 +1363,28 @@ describe('AlertStorageService', () => {
 
 		it('caps filtered summary pages at the remaining limit', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			const firstPageDocs = [
+				...Array.from({ length: 98 }, (_, index) => buildQueryDoc(`newer-scanner-${index}`, {
+					receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+					enriched: true,
+					source: 'scanner',
+				})),
+				buildQueryDoc('newer-scanner', {
+					receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+					enriched: true,
+					source: 'scanner',
+				}),
+				buildQueryDoc('webhook-btc', {
+					receivedAt: buildTimestamp('2026-06-06T11:00:00.000Z'),
+					enriched: true,
+					source: 'webhook',
+					text: 'BINANCE:BTCUSDT',
+				}),
+			];
 			mockGet
 				.mockResolvedValueOnce({
 					empty: false,
-					docs: [
-						buildQueryDoc('newer-scanner', {
-							receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
-							enriched: true,
-							source: 'scanner',
-						}),
-						buildQueryDoc('webhook-btc', {
-							receivedAt: buildTimestamp('2026-06-06T11:00:00.000Z'),
-							enriched: true,
-							source: 'webhook',
-							text: 'BINANCE:BTCUSDT',
-						}),
-					],
+					docs: firstPageDocs,
 				})
 				.mockResolvedValueOnce({
 					empty: false,
@@ -1377,6 +1412,7 @@ describe('AlertStorageService', () => {
 				enriched: true,
 			});
 
+			expect(mockLimit).toHaveBeenCalledWith(100);
 			expect(result.totalAlerts).toBe(2);
 			expect(result.bySymbol).toEqual({ BTCUSDT: 1, ETHUSDT: 1 });
 		});

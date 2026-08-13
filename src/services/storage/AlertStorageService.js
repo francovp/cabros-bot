@@ -790,6 +790,7 @@ async function listAlerts({ limit = DEFAULT_PAGE_SIZE, before, source, enriched 
 
 	const pageSize = clampLimit(limit);
 	const targetCount = pageSize + 1;
+	const scanLimit = Math.max(targetCount, MAX_PAGE_SIZE);
 	const matches = [];
 	const parsedBeforeCursor = before
 		? parseAlertPaginationCursor(before)
@@ -810,7 +811,7 @@ async function listAlerts({ limit = DEFAULT_PAGE_SIZE, before, source, enriched 
 			.collection(COLLECTION_NAME)
 			.orderBy('receivedAt', 'desc')
 			.orderBy(admin.firestore.FieldPath.documentId(), 'desc')
-			.limit(targetCount);
+			.limit(scanLimit);
 		if (pageCursor) {
 			const cursorTimestamp = buildParsedCursorTimestamp(pageCursor);
 			if (pageCursor.documentId) {
@@ -852,7 +853,7 @@ async function listAlerts({ limit = DEFAULT_PAGE_SIZE, before, source, enriched 
 		}
 
 		pageCursor = lastDocCursor;
-		if (snapshot.docs.length < targetCount) {
+		if (snapshot.docs.length < scanLimit) {
 			break;
 		}
 	}
@@ -961,7 +962,7 @@ async function exportAlerts({ from, to, limit, source, enriched, includeText = f
 
 	const window = buildExportWindow({ from, to, limit });
 	const hasFilters = typeof source === 'string' || typeof enriched === 'boolean';
-	const scanLimit = hasFilters ? window.limit : Math.max(window.limit, MAX_PAGE_SIZE);
+	const scanLimit = Math.max(window.limit, MAX_PAGE_SIZE);
 	const docs = [];
 	let pageCursor = null;
 	while (true) {
@@ -1044,7 +1045,7 @@ async function summarizeAlerts({ from, to, limit, source, enriched } = {}) {
 
 	const window = buildSummaryWindow({ from, to, limit });
 	const hasFilters = typeof source === 'string' || typeof enriched === 'boolean';
-	const scanLimit = hasFilters ? window.limit : Math.max(window.limit, MAX_PAGE_SIZE);
+	const scanLimit = Math.max(window.limit, MAX_PAGE_SIZE);
 	const docs = [];
 	let pageCursor = null;
 	while (true) {
