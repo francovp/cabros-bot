@@ -127,20 +127,18 @@ function getActiveCachedDeliveryResults(
 	cachedEntry = {},
 	requestedChannels = [],
 	retryChannels = [],
-	claimedRetryChannels = [],
 	routing = {},
 	notificationMgr,
 ) {
 	const requestedSet = new Set(requestedChannels);
 	const retrySet = new Set(retryChannels);
-	const claimedSet = new Set(claimedRetryChannels);
 
 	return (Array.isArray(cachedEntry.deliveryResults) ? cachedEntry.deliveryResults : [])
 		.filter((result) => {
 			if (!result || !requestedSet.has(result.channel)) {
 				return false;
 			}
-			if (!retrySet.has(result.channel) || claimedSet.has(result.channel)) {
+			if (!retrySet.has(result.channel)) {
 				return true;
 			}
 			return getRoutingDestination(notificationMgr, cachedEntry.routing, result.channel)
@@ -577,7 +575,6 @@ class NewsAnalyzer {
 								cached,
 								requestedChannels,
 								retryChannels,
-								claimedRetryChannels,
 								routing,
 								notificationMgr,
 							);

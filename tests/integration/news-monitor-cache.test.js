@@ -333,6 +333,47 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 			}
 		});
 
+		it('should drop the old destination success when a claimed retry loses its lease', async () => {
+			process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '';
+			const cache = getCacheInstance();
+			const intervalSpy = jest.spyOn(cache, 'getDeliveryLeaseRenewIntervalMs').mockReturnValue(1);
+			const renewSpy = jest.spyOn(cache, 'renewDelivery').mockResolvedValue(false);
+			const { getNotificationManager } = require('../../src/controllers/webhooks/handlers/alert/alert');
+			const telegramSend = jest.spyOn(getNotificationManager().channels.get('telegram'), 'send')
+				.mockResolvedValueOnce({ success: true, channel: 'telegram', messageId: 'telegram-destination-a' })
+				.mockImplementationOnce(() => new Promise((resolve) => {
+					setTimeout(() => resolve({ success: true, channel: 'telegram', messageId: 'telegram-destination-b' }), 10);
+				}));
+
+			try {
+				await request(app)
+					.post('/api/news-monitor').set('x-api-key', 'test-key')
+					.send({
+						crypto: ['BTCUSDT'],
+						channels: ['telegram'],
+						telegramChatId: 'destination-a',
+					})
+					.expect(200);
+
+				const retry = await request(app)
+					.post('/api/news-monitor').set('x-api-key', 'test-key')
+					.send({
+						crypto: ['BTCUSDT'],
+						channels: ['telegram'],
+						telegramChatId: 'destination-b',
+					})
+					.expect(200);
+
+				expect(retry.body.results[0].deliveryResults).toEqual([]);
+				expect(retry.body.deliveredChannels).toEqual([]);
+				expect(telegramSend).toHaveBeenCalledTimes(2);
+				expect(renewSpy).toHaveBeenCalled();
+			} finally {
+				intervalSpy.mockRestore();
+				renewSpy.mockRestore();
+			}
+		});
+
 		it('should preserve an independently owned channel when another lease is lost', async () => {
 			process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '';
 			const cache = getCacheInstance();
