@@ -22,7 +22,7 @@ const COLLECTION_NAME = 'news-monitor-dedup';
 const DELIVERY_ROUTING_FIELDS = {
 	telegram: 'telegramChatId',
 	whatsapp: 'whatsappChatId',
-	discord: 'discordWebhookUrl',
+	discord: 'discordWebhookFingerprint',
 };
 
 function mergeRoutingData(existingRouting = {}, updatedRouting = {}, channels) {

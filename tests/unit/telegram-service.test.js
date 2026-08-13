@@ -98,4 +98,35 @@ describe('TelegramService', () => {
 		expect(result.error).toContain('Telegram error');
 		expect(otherErrorBot.telegram.sendMessage).toHaveBeenCalledTimes(1);
 	});
+
+	it('passes an external abort signal to Telegraf callApi', async () => {
+		const signal = new AbortController().signal;
+		const callApi = jest.fn().mockResolvedValue({ message_id: 301 });
+		const signalBot = {
+			telegram: {
+				sendMessage: jest.fn(),
+				callApi,
+			},
+		};
+		const signalService = new TelegramService({
+			bot: signalBot,
+			chatId: 'chat-1',
+			formatter: { format: (text) => text },
+		});
+
+		await expect(signalService.send({ text: 'lease-aware alert' }, { signal })).resolves.toEqual(
+			expect.objectContaining({ success: true, messageId: '301' }),
+		);
+		expect(callApi).toHaveBeenCalledWith(
+			'sendMessage',
+			{
+				chat_id: 'chat-1',
+				parse_mode: 'MarkdownV2',
+				disable_web_page_preview: false,
+				text: 'lease-aware alert',
+			},
+			{ signal },
+		);
+		expect(signalBot.telegram.sendMessage).not.toHaveBeenCalled();
+	});
 });

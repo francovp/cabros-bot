@@ -756,4 +756,57 @@ describe('NewsDedupStorageService — updateEntry()', () => {
 			},
 		}));
 	});
+
+	it('persists a claimed Discord fingerprint in the routing delta', async () => {
+		process.env.ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP = 'true';
+		const now = { toMillis: () => 10_000 };
+		const createdAt = { toMillis: () => 1_000 };
+		const expiresAt = { toMillis: () => 15_000 };
+		const docRef = {};
+		const transaction = {
+			get: jest.fn().mockResolvedValue({
+				exists: true,
+				data: () => ({
+					createdAt,
+					expiresAt,
+					data: {
+						deliveryResults: [{ channel: 'discord', success: false }],
+						routing: {
+							channels: ['discord'],
+							discordWebhookFingerprint: 'old-fingerprint',
+						},
+					},
+				}),
+			}),
+			set: jest.fn(),
+		};
+		const runTransaction = jest.fn(async callback => callback(transaction));
+
+		admin.firestore.mockReturnValue({
+			collection: () => ({ doc: () => docRef }),
+			runTransaction,
+		});
+		admin.firestore.Timestamp.now = jest.fn(() => now);
+
+		const realService = jest.requireActual('../../src/services/storage/NewsDedupStorageService');
+		realService._resetForTesting();
+
+		await expect(realService.updateEntry('BTCUSDT:price_surge', {
+			deliveryResults: [{ channel: 'discord', success: true }],
+			routing: {
+				channels: ['discord'],
+				discordWebhookFingerprint: 'new-fingerprint',
+			},
+		}, { deliveryChannels: ['discord'] })).resolves.toBe(true);
+
+		expect(transaction.set).toHaveBeenCalledWith(docRef, expect.objectContaining({
+			data: {
+				deliveryResults: [{ channel: 'discord', success: true }],
+				routing: {
+					channels: ['discord'],
+					discordWebhookFingerprint: 'new-fingerprint',
+				},
+			},
+		}));
+	});
 });
