@@ -7,6 +7,7 @@
 const request = require('supertest');
 const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
+const { getNewsMonitor } = require('../../src/controllers/webhooks/handlers/newsMonitor/newsMonitor');
 const geminiQuotaManager = require('../../src/services/grounding/geminiQuotaManager');
 
 describe('News Monitor - Alert Delivery Response Structure (US2)', () => {
@@ -277,6 +278,59 @@ describe('News Monitor - Alert Delivery Response Structure (US2)', () => {
 	});
 
 	describe('Error handling in responses', () => {
+		it('should reject invalid configured defaults before analysis', async () => {
+			process.env.NEWS_SYMBOLS_CRYPTO = 'BAD-SYMBOL';
+			process.env.NEWS_SYMBOLS_STOCKS = 'AAPL';
+			const analyzeSymbols = jest.spyOn(getNewsMonitor().analyzer, 'analyzeSymbols').mockResolvedValue([]);
+
+			const response = await request(app)
+				.post('/api/news-monitor').set('x-api-key', 'test-key')
+				.send({});
+
+			expect(response.status).toBe(400);
+			expect(response.body.code).toBe('INVALID_REQUEST');
+			expect(response.body.error).toContain('BAD-SYMBOL');
+			expect(analyzeSymbols).not.toHaveBeenCalled();
+			analyzeSymbols.mockRestore();
+		});
+
+		it('should reject oversized configured defaults before analysis', async () => {
+			process.env.NEWS_SYMBOLS_CRYPTO = Array.from({ length: 101 }, (_, index) => `COIN${index}`).join(',');
+			process.env.NEWS_SYMBOLS_STOCKS = '';
+			const analyzeSymbols = jest.spyOn(getNewsMonitor().analyzer, 'analyzeSymbols').mockResolvedValue([]);
+
+			const response = await request(app)
+				.post('/api/news-monitor').set('x-api-key', 'test-key')
+				.send({});
+
+			expect(response.status).toBe(400);
+			expect(response.body.code).toBe('INVALID_REQUEST');
+			expect(response.body.error).toContain('max: 100');
+			expect(analyzeSymbols).not.toHaveBeenCalled();
+			analyzeSymbols.mockRestore();
+		});
+
+		it('should analyze valid configured defaults with their asset classes', async () => {
+			process.env.NEWS_SYMBOLS_CRYPTO = 'BTCUSDT';
+			process.env.NEWS_SYMBOLS_STOCKS = 'AAPL';
+			const analyzeSymbols = jest.spyOn(getNewsMonitor().analyzer, 'analyzeSymbols').mockResolvedValue([]);
+
+			const response = await request(app)
+				.post('/api/news-monitor').set('x-api-key', 'test-key')
+				.send({});
+
+			expect(response.status).toBe(200);
+			expect(analyzeSymbols).toHaveBeenCalledTimes(1);
+			expect(analyzeSymbols.mock.calls[0][0]).toEqual(['BTCUSDT', 'AAPL']);
+			expect(analyzeSymbols.mock.calls[0][4]).toEqual(expect.objectContaining({
+				assetClassBySymbol: {
+					BTCUSDT: 'crypto',
+					AAPL: 'stock',
+				},
+			}));
+			analyzeSymbols.mockRestore();
+		});
+
 		it('should return 200 even with partial failures', async () => {
 			const response = await request(app)
 				.post('/api/news-monitor').set('x-api-key', 'test-key')
