@@ -1351,6 +1351,13 @@ describe('AlertStorageService', () => {
 				});
 			});
 
+			it('extracts underscore-delimited exchange prefixes', () => {
+				expect(AlertStorageService.parseSymbolFromText('FX_IDC:USDCLP(D) cambió a señal de VENTA')).toEqual({
+					symbol: 'USDCLP',
+					exchange: 'FX_IDC',
+				});
+			});
+
 			it('returns null for unmatched text and safely falls back to unknown', () => {
 				expect(AlertStorageService.parseSymbolFromText('Alerta de prueba sin simbolo')).toBeNull();
 				expect(AlertStorageService.parseSymbolFromText('')).toBeNull();
