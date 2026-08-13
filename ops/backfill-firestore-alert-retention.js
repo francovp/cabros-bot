@@ -1,6 +1,7 @@
 'use strict';
 
 const admin = require('firebase-admin');
+const crypto = require('crypto');
 
 const DEFAULT_RETENTION_DAYS = 90;
 const MAX_RETENTION_DAYS = 3650;
@@ -85,18 +86,35 @@ async function backfillCollection(firestore, collectionName, timestampField, opt
 		for (const document of snapshot.docs) {
 			result.scanned += 1;
 			const data = document.data() || {};
-			if (getTimestampMillis(data.expiresAt) !== null) {
-				result.existing += 1;
-				continue;
-			}
-
+			const currentExpiryMillis = getTimestampMillis(data.expiresAt);
 			const expiresAt = buildRetentionExpiry(data, timestampField, retentionDays, document.createTime);
-			if (!expiresAt) {
+			const update = {};
+			if (expiresAt) {
+				const nextExpiryMillis = getTimestampMillis(expiresAt);
+				if (currentExpiryMillis === null || nextExpiryMillis < currentExpiryMillis) {
+					update.expiresAt = expiresAt;
+				}
+			} else if (currentExpiryMillis === null) {
 				result.skipped += 1;
+			}
+
+			if (collectionName === 'alertReplays'
+				&& Object.prototype.hasOwnProperty.call(data, 'idempotencyKey')) {
+				if (typeof data.idempotencyKey === 'string'
+					&& typeof data.idempotencyKeyHash !== 'string') {
+					update.idempotencyKeyHash = crypto.createHash('sha256').update(data.idempotencyKey).digest('hex');
+				}
+				update.idempotencyKey = admin.firestore.FieldValue.delete();
+			}
+
+			if (Object.keys(update).length === 0) {
+				if (currentExpiryMillis !== null) {
+					result.existing += 1;
+				}
 				continue;
 			}
 
-			batch.update(document.ref, { expiresAt });
+			batch.update(document.ref, update);
 			batchUpdates += 1;
 			result.updated += 1;
 		}
