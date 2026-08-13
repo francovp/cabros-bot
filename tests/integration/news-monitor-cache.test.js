@@ -290,6 +290,50 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 			expect(whatsappSend).toHaveBeenCalledTimes(3);
 		});
 
+		it('should serialize concurrent retries for the same failed channel', async () => {
+			process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '';
+			const { getNotificationManager } = require('../../src/controllers/webhooks/handlers/alert/alert');
+			const manager = getNotificationManager();
+			const telegramSend = jest.spyOn(manager.channels.get('telegram'), 'send').mockResolvedValue({
+				success: true,
+				channel: 'telegram',
+				messageId: 'telegram-1',
+			});
+			let releaseRetry;
+			let retryStarted;
+			const retryStartedPromise = new Promise((resolve) => { retryStarted = resolve; });
+			const whatsappSend = jest.spyOn(manager.channels.get('whatsapp'), 'send')
+				.mockResolvedValueOnce({ success: false, channel: 'whatsapp', error: 'temporary failure' })
+				.mockImplementationOnce(() => new Promise((resolve) => {
+					releaseRetry = resolve;
+					retryStarted();
+				}));
+
+			await request(app)
+				.get('/api/news-monitor?crypto=BTCUSDT').set('x-api-key', 'test-key')
+				.expect(200);
+
+			const firstRetry = request(app)
+				.get('/api/news-monitor?crypto=BTCUSDT').set('x-api-key', 'test-key')
+				.expect(200);
+			const firstRetryPromise = firstRetry.then((response) => response);
+			await retryStartedPromise;
+
+			const concurrentRetry = await request(app)
+				.get('/api/news-monitor?crypto=BTCUSDT').set('x-api-key', 'test-key')
+				.expect(200);
+
+			expect(concurrentRetry.body.results[0].deliveryResults).toEqual(expect.arrayContaining([
+				expect.objectContaining({ channel: 'whatsapp', success: false }),
+			]));
+			expect(whatsappSend).toHaveBeenCalledTimes(2);
+
+			releaseRetry({ success: true, channel: 'whatsapp', messageId: 'whatsapp-2' });
+			await firstRetryPromise;
+			expect(telegramSend).toHaveBeenCalledTimes(1);
+			expect(whatsappSend).toHaveBeenCalledTimes(2);
+		});
+
 		it('should re-deliver cached alerts when a later request asks for different channels', async () => {
 			const response1 = await request(app)
 				.post('/api/news-monitor').set('x-api-key', 'test-key')

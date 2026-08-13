@@ -602,7 +602,7 @@ The system provides an HTTP endpoint (`/api/news-monitor`) that analyzes financi
 - Value: `{ alert, timestamp, enrichment_data (if applicable) }`
 - TTL enforced on read; expired entries evicted automatically
 - Different event categories for same symbol bypass cache (separate alerts per category)
-- Cached partial delivery replays only missing or failed channels, merges retry results back into the cached entry, and preserves explicit channel/destination changes as targeted redelivery.
+- Cached partial delivery replays only missing or failed channels, serializes per-channel retries, merges results back without extending the original TTL, and preserves explicit channel/destination changes as targeted redelivery.
 
 **Extending**:
 - Add new event category: Update Gemini prompt in `analyzer.js` to detect and tag new category

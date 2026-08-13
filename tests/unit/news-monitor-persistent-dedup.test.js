@@ -12,6 +12,7 @@ const mockHasEntry = jest.fn().mockResolvedValue(false);
 const mockGetEntry = jest.fn().mockResolvedValue(null);
 const mockClaimEntry = jest.fn().mockResolvedValue(true);
 const mockSetEntry = jest.fn().mockResolvedValue(undefined);
+const mockUpdateEntry = jest.fn().mockResolvedValue(true);
 const mockDeleteEntry = jest.fn().mockResolvedValue(undefined);
 const admin = require('firebase-admin');
 
@@ -22,6 +23,7 @@ jest.mock('../../src/services/storage/NewsDedupStorageService', () => ({
 	getEntry: mockGetEntry,
 	claimEntry: mockClaimEntry,
 	setEntry: mockSetEntry,
+	updateEntry: mockUpdateEntry,
 	deleteEntry: mockDeleteEntry,
 	_resetForTesting: jest.fn(),
 	COLLECTION_NAME: 'news-monitor-dedup',
@@ -43,6 +45,7 @@ describe('NewsCache — Persistent Dedup Backend (Issue #120)', () => {
 		mockGetEntry.mockResolvedValue(null);
 		mockClaimEntry.mockResolvedValue(true);
 		mockSetEntry.mockResolvedValue(undefined);
+		mockUpdateEntry.mockResolvedValue(true);
 		cache = new NewsCache();
 		cache.ttlMs = 1000; // 1 second for fast tests
 	});
@@ -193,6 +196,32 @@ describe('NewsCache — Persistent Dedup Backend (Issue #120)', () => {
 			// Firestore write should have been called (fire-and-forget)
 			await new Promise(resolve => setImmediate(resolve));
 			expect(mockSetEntry).toHaveBeenCalledWith('BTCUSDT:price_surge', cache.ttlMs, data);
+		});
+
+		it('preserves the cache TTL when updating cached delivery results', async () => {
+			const firstData = { alert: { symbol: 'BTCUSDT' }, deliveryResults: [{ channel: 'telegram', success: true }] };
+			const retryData = { ...firstData, deliveryResults: [{ channel: 'telegram', success: true }, { channel: 'whatsapp', success: true }] };
+			await cache.set('BTCUSDT', EventCategory.PRICE_SURGE, firstData);
+			const originalTimestamp = cache.cache.get('BTCUSDT:price_surge').timestamp;
+
+			await cache.set('BTCUSDT', EventCategory.PRICE_SURGE, retryData, { preserveTtl: true });
+
+			expect(cache.cache.get('BTCUSDT:price_surge').timestamp).toBe(originalTimestamp);
+			expect(mockSetEntry).toHaveBeenCalledTimes(1);
+			expect(mockUpdateEntry).toHaveBeenCalledWith('BTCUSDT:price_surge', retryData);
+		});
+
+		it('uses an atomic persistent lease for concurrent channel retries', async () => {
+			const first = await cache.claimDelivery('BTCUSDT', EventCategory.PRICE_SURGE, 'whatsapp');
+			const concurrent = await cache.claimDelivery('BTCUSDT', EventCategory.PRICE_SURGE, 'whatsapp');
+
+			expect(first).toBe(true);
+			expect(concurrent).toBe(false);
+			expect(mockClaimEntry).toHaveBeenCalledWith('BTCUSDT:price_surge:delivery:whatsapp', 30_000);
+
+			cache.releaseDelivery('BTCUSDT', EventCategory.PRICE_SURGE, 'whatsapp');
+			await expect(cache.claimDelivery('BTCUSDT', EventCategory.PRICE_SURGE, 'whatsapp')).resolves.toBe(true);
+			expect(mockClaimEntry).toHaveBeenCalledTimes(1);
 		});
 
 		it('tracks persistent cache writes until shutdown drain observes them', async () => {
@@ -398,5 +427,50 @@ describe('NewsDedupStorageService — claimEntry()', () => {
 
 		await expect(realService.claimEntry('BTCUSDT:price_surge', 5_000)).resolves.toBe(false);
 		expect(transaction.set).not.toHaveBeenCalled();
+	});
+});
+
+describe('NewsDedupStorageService — updateEntry()', () => {
+	const originalNow = admin.firestore.Timestamp.now;
+
+	afterEach(() => {
+		jest.clearAllMocks();
+		admin.firestore.mockClear();
+		admin.firestore.Timestamp.now = originalNow;
+		delete process.env.ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP;
+	});
+
+	it('updates data while preserving the existing TTL timestamps', async () => {
+		process.env.ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP = 'true';
+		const now = { toMillis: () => 10_000 };
+		const createdAt = { toMillis: () => 1_000 };
+		const expiresAt = { toMillis: () => 15_000 };
+		const docRef = {};
+		const transaction = {
+			get: jest.fn().mockResolvedValue({
+				exists: true,
+				data: () => ({ createdAt, expiresAt, data: { old: true } }),
+			}),
+			set: jest.fn(),
+		};
+		const runTransaction = jest.fn(async callback => callback(transaction));
+
+		admin.firestore.mockReturnValue({
+			collection: () => ({ doc: () => docRef }),
+			runTransaction,
+		});
+		admin.firestore.Timestamp.now = jest.fn(() => now);
+
+		const realService = jest.requireActual('../../src/services/storage/NewsDedupStorageService');
+		realService._resetForTesting();
+
+		await expect(realService.updateEntry('BTCUSDT:price_surge', { deliveryResults: [{ success: true }] }))
+			.resolves.toBe(true);
+		expect(transaction.set).toHaveBeenCalledWith(docRef, {
+			key: 'BTCUSDT:price_surge',
+			createdAt,
+			expiresAt,
+			data: { deliveryResults: [{ success: true }] },
+		});
 	});
 });

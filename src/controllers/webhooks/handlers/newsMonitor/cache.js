@@ -16,6 +16,8 @@
 const newsDedupStorageService = require('../../../../services/storage/NewsDedupStorageService');
 const { trackBackgroundTask } = require('../../../../lib/backgroundTaskTracker');
 
+const DELIVERY_LOCK_TTL_MS = 30_000;
+
 /**
  * Parse and validate NEWS_CACHE_TTL_HOURS configuration.
  *
@@ -56,6 +58,7 @@ class NewsCache {
 		);
 		this.ttlMs = hours * 60 * 60 * 1000;
 		this.cleanupInterval = null;
+		this.deliveryLocks = new Map();
 	}
 
 	/**
@@ -159,21 +162,90 @@ class NewsCache {
    * @param {string} symbol - Financial symbol
    * @param {string} eventCategory - Event category
    * @param {Object} data - Analysis data to cache
+   * @param {{preserveTtl?: boolean}} options - Preserve the existing entry TTL when updating data
    * @returns {Promise<void>}
    */
-	async set(symbol, eventCategory, data) {
+	async set(symbol, eventCategory, data, options = {}) {
 		const key = this.generateKey(symbol, eventCategory);
+		const existingEntry = options.preserveTtl ? this.cache.get(key) : null;
 		this.cache.set(key, {
 			key,
-			timestamp: Date.now(),
+			timestamp: existingEntry ? existingEntry.timestamp : Date.now(),
 			data,
 		});
 
 		// Persistent dedup: write to Firestore (fail-open)
 		if (newsDedupStorageService.isEnabled() && newsDedupStorageService.isReady()) {
-			trackBackgroundTask(newsDedupStorageService.setEntry(key, this.ttlMs, data)).catch(err => {
-				console.warn('[NewsCache] Firestore setEntry failed (fail-open):', err.message);
+			const write = options.preserveTtl
+				? newsDedupStorageService.updateEntry(key, data)
+				: newsDedupStorageService.setEntry(key, this.ttlMs, data);
+			trackBackgroundTask(write).catch(err => {
+				console.warn('[NewsCache] Firestore cache write failed (fail-open):', err.message);
 			});
+		}
+	}
+
+	/**
+	 * Claim a channel-specific cached redelivery lease.
+	 *
+	 * Local leases suppress same-process races. Persistent leases use the same
+	 * atomic Firestore claim primitive so separate replicas cannot retry the
+	 * same channel concurrently.
+	 *
+	 * @param {string} symbol
+	 * @param {string} eventCategory
+	 * @param {string} channel
+	 * @returns {Promise<boolean>} true when this process may deliver
+	 */
+	async claimDelivery(symbol, eventCategory, channel) {
+		const key = `${this.generateKey(symbol, eventCategory)}:delivery:${channel}`;
+		const existingLease = this.deliveryLocks.get(key);
+		const now = Date.now();
+		if (existingLease?.active) {
+			return false;
+		}
+
+		const persistentLeaseActive = existingLease && existingLease.persistentUntil > now;
+		this.deliveryLocks.set(key, {
+			active: true,
+			persistentUntil: persistentLeaseActive ? existingLease.persistentUntil : 0,
+		});
+
+		if (persistentLeaseActive || !(newsDedupStorageService.isEnabled() && newsDedupStorageService.isReady())) {
+			return true;
+		}
+
+		try {
+			const claimed = await newsDedupStorageService.claimEntry(key, DELIVERY_LOCK_TTL_MS);
+			if (!claimed) {
+				this.deliveryLocks.delete(key);
+				return false;
+			}
+			this.deliveryLocks.set(key, {
+				active: true,
+				persistentUntil: Date.now() + DELIVERY_LOCK_TTL_MS,
+			});
+		} catch (error) {
+			console.warn('[NewsCache] Delivery claim failed (fail-open):', error.message);
+		}
+
+		return true;
+	}
+
+	/**
+	 * Release the local portion of a channel-specific cached redelivery lease.
+	 * Persistent leases expire automatically so another replica cannot race the
+	 * cache update immediately after delivery.
+	 */
+	releaseDelivery(symbol, eventCategory, channel) {
+		const key = `${this.generateKey(symbol, eventCategory)}:delivery:${channel}`;
+		const lease = this.deliveryLocks.get(key);
+		if (!lease) {
+			return;
+		}
+		lease.active = false;
+		if (lease.persistentUntil <= Date.now()) {
+			this.deliveryLocks.delete(key);
 		}
 	}
 
@@ -243,6 +315,7 @@ class NewsCache {
    */
 	clear() {
 		this.cache.clear();
+		this.deliveryLocks.clear();
 	}
 
 	/**
@@ -267,6 +340,7 @@ class NewsCache {
 			this.cleanupInterval = null;
 			console.debug('[NewsCache] Shutdown complete');
 		}
+		this.deliveryLocks.clear();
 	}
 }
 

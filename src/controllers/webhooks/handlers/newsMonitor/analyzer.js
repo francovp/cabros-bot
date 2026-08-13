@@ -524,22 +524,32 @@ class NewsAnalyzer {
 						if (notificationMgr) {
 							const requestedChannels = getRequestedChannels(notificationMgr, routing);
 							const retryChannels = getCachedRedeliveryChannels(notificationMgr, cached, routing);
-							if (retryChannels.length > 0) {
-								const retryResults = await sendWithNotificationRouting(
-									notificationMgr,
-									cached.alert,
-									{ ...routing, channels: retryChannels },
-								);
-								deliveryResults = mergeDeliveryResults(
-									cached.deliveryResults,
-									retryResults,
-									requestedChannels,
-								);
-								await this.cache.set(symbol, category, {
-									...cached,
-									routing: getCachedRoutingMetadata(routing),
-									deliveryResults,
-								});
+							const claimedRetryChannels = [];
+							for (const channel of retryChannels) {
+								if (await this.cache.claimDelivery(symbol, category, channel)) {
+									claimedRetryChannels.push(channel);
+								}
+							}
+							if (claimedRetryChannels.length > 0) {
+								try {
+									const retryResults = await sendWithNotificationRouting(
+										notificationMgr,
+										cached.alert,
+										{ ...routing, channels: claimedRetryChannels },
+									);
+									deliveryResults = mergeDeliveryResults(
+										cached.deliveryResults,
+										retryResults,
+										requestedChannels,
+									);
+									await this.cache.set(symbol, category, {
+										...cached,
+										routing: getCachedRoutingMetadata(routing),
+										deliveryResults,
+									}, { preserveTtl: true });
+								} finally {
+									claimedRetryChannels.forEach((channel) => this.cache.releaseDelivery(symbol, category, channel));
+								}
 							}
 						} else {
 							deliveryResults = [];

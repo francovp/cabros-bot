@@ -212,6 +212,45 @@ async function setEntry(key, ttlMs, data) {
 }
 
 /**
+ * Update an existing dedup entry without extending its original TTL.
+ *
+ * @param {string} key - Dedup key
+ * @param {Object} data - Updated cache payload
+ * @returns {Promise<boolean>} true when an active entry was updated
+ */
+async function updateEntry(key, data) {
+	const firestore = getFirestore();
+	if (!firestore) {
+		return false;
+	}
+
+	try {
+		const now = admin.firestore.Timestamp.now();
+		const docRef = firestore.collection(COLLECTION_NAME).doc(key);
+		return await firestore.runTransaction(async transaction => {
+			const existing = await transaction.get(docRef);
+			const existingData = existing.exists && existing.data();
+			if (!existing.exists || !existingData?.expiresAt
+				|| typeof existingData.expiresAt.toMillis !== 'function'
+				|| existingData.expiresAt.toMillis() <= now.toMillis()) {
+				return false;
+			}
+
+			transaction.set(docRef, {
+				key,
+				createdAt: existingData.createdAt,
+				expiresAt: existingData.expiresAt,
+				data: data || null,
+			});
+			return true;
+		});
+	} catch (error) {
+		console.warn('[NewsDedupStorageService] updateEntry error (fail-open):', error.message);
+		return false;
+	}
+}
+
+/**
  * Delete a dedup entry (mainly for testing / manual invalidation).
  *
  * @param {string} key - Dedup key
@@ -248,6 +287,7 @@ module.exports = {
 	getEntry,
 	claimEntry,
 	setEntry,
+	updateEntry,
 	deleteEntry,
 	COLLECTION_NAME,
 	// Exported for testing — reset the cached db singleton between tests
