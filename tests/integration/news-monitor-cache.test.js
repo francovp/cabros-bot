@@ -333,6 +333,56 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 			}
 		});
 
+		it('should preserve an independently owned channel when another lease is lost', async () => {
+			process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '';
+			const cache = getCacheInstance();
+			const manager = getNotificationManager();
+			const intervalSpy = jest.spyOn(cache, 'getDeliveryLeaseRenewIntervalMs').mockReturnValue(1);
+			const renewSpy = jest.spyOn(cache, 'renewDelivery').mockImplementation(async (_symbol, _category, channel) => channel !== 'telegram');
+			const telegramSend = jest.spyOn(manager.channels.get('telegram'), 'send')
+				.mockResolvedValueOnce({ success: false, channel: 'telegram', error: 'temporary telegram failure' })
+				.mockImplementationOnce(() => new Promise((resolve) => {
+					setTimeout(() => resolve({ success: true, channel: 'telegram', messageId: 'telegram-retry' }), 10);
+				}))
+				.mockResolvedValueOnce({ success: true, channel: 'telegram', messageId: 'telegram-after-loss' });
+			const whatsappSend = jest.spyOn(manager.channels.get('whatsapp'), 'send')
+				.mockResolvedValueOnce({ success: false, channel: 'whatsapp', error: 'temporary whatsapp failure' })
+				.mockResolvedValueOnce({ success: true, channel: 'whatsapp', messageId: 'whatsapp-retry' });
+
+			try {
+				await request(app)
+					.post('/api/news-monitor').set('x-api-key', 'test-key')
+					.send({ crypto: ['BTCUSDT'], channels: ['telegram', 'whatsapp'] })
+					.expect(200);
+
+				const retry = await request(app)
+					.post('/api/news-monitor').set('x-api-key', 'test-key')
+					.send({ crypto: ['BTCUSDT'], channels: ['telegram', 'whatsapp'] })
+					.expect(200);
+
+				expect(retry.body.results[0].deliveryResults).toEqual([
+					expect.objectContaining({ channel: 'telegram', success: false }),
+					expect.objectContaining({ channel: 'whatsapp', success: true, messageId: 'whatsapp-retry' }),
+				]);
+
+				renewSpy.mockResolvedValue(true);
+				const afterLoss = await request(app)
+					.post('/api/news-monitor').set('x-api-key', 'test-key')
+					.send({ crypto: ['BTCUSDT'], channels: ['telegram', 'whatsapp'] })
+					.expect(200);
+
+				expect(afterLoss.body.results[0].deliveryResults).toEqual([
+					expect.objectContaining({ channel: 'telegram', success: true, messageId: 'telegram-after-loss' }),
+					expect.objectContaining({ channel: 'whatsapp', success: true, messageId: 'whatsapp-retry' }),
+				]);
+				expect(telegramSend).toHaveBeenCalledTimes(3);
+				expect(whatsappSend).toHaveBeenCalledTimes(2);
+			} finally {
+				intervalSpy.mockRestore();
+				renewSpy.mockRestore();
+			}
+		});
+
 		it('should serialize concurrent retries for the same failed channel', async () => {
 			process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '';
 			const { getNotificationManager } = require('../../src/controllers/webhooks/handlers/alert/alert');
@@ -484,6 +534,29 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 				expect.objectContaining({ channel: 'telegram', success: true }),
 			]);
 			expect(mockBot.telegram.sendMessage).toHaveBeenCalledTimes(1);
+		});
+
+		it('should retry cached success when an effective default destination changes', async () => {
+			const telegramService = getNotificationManager().channels.get('telegram');
+			await request(app)
+				.post('/api/news-monitor').set('x-api-key', 'test-key')
+				.send({ crypto: ['BTCUSDT'], channels: ['telegram'] })
+				.expect(200);
+
+			telegramService.chatId = '987654321';
+			const response = await request(app)
+				.post('/api/news-monitor').set('x-api-key', 'test-key')
+				.send({ crypto: ['BTCUSDT'], channels: ['telegram'] })
+				.expect(200);
+
+			expect(response.body.results[0].cached).toBe(true);
+			expect(response.body.deliveredChannels).toEqual(['telegram']);
+			expect(mockBot.telegram.sendMessage).toHaveBeenLastCalledWith(
+				'987654321',
+				expect.any(String),
+				expect.any(Object),
+			);
+			expect(mockBot.telegram.sendMessage).toHaveBeenCalledTimes(2);
 		});
 
 		it('should retry only newly requested channels when an explicit channel set expands', async () => {

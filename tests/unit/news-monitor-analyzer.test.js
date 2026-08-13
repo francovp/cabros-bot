@@ -3,9 +3,43 @@ const {
 	calculateRSI,
 	calculateAdjustedConfidence,
 	NewsAnalyzer,
+	getCachedRoutingMetadata,
+	hashDiscordWebhook,
 } = require('../../src/controllers/webhooks/handlers/newsMonitor/analyzer');
 
 describe('News Monitor Analyzer - Volume & RSI Filtering', () => {
+	describe('cached routing identities', () => {
+		it('stores effective defaults and only a hash for Discord webhook destinations', () => {
+			const discordWebhookUrl = 'https://discord.com/api/webhooks/123/secret-token';
+			const notificationManager = {
+				channels: new Map([
+					['telegram', { chatId: 'telegram-default' }],
+					['whatsapp', { chatId: 'whatsapp-default' }],
+					['discord', { webhookUrl: discordWebhookUrl }],
+				]),
+			};
+
+			const metadata = getCachedRoutingMetadata({}, {}, notificationManager);
+
+			expect(metadata.telegramChatId).toBe('telegram-default');
+			expect(metadata.whatsappChatId).toBe('whatsapp-default');
+			expect(metadata.discordWebhookFingerprint).toBe(hashDiscordWebhook(discordWebhookUrl));
+			expect(metadata.discordWebhookUrl).toBeUndefined();
+		});
+
+		it('uses a new effective default as a different cached destination', () => {
+			const notificationManager = {
+				channels: new Map([
+					['telegram', { chatId: 'telegram-new' }],
+				]),
+			};
+
+			const metadata = getCachedRoutingMetadata({}, { telegramChatId: 'telegram-old' }, notificationManager);
+
+			expect(metadata.telegramChatId).toBe('telegram-new');
+		});
+	});
+
 	describe('calculateVolumeRatio', () => {
 		it('should calculate volume ratio accurately when volume expands', () => {
 			// 10 candles with volume 100, latest candle volume 180 -> 180 / 100 = 1.80

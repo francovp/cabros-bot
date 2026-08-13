@@ -22,7 +22,7 @@ const DELIVERY_LOCK_RENEW_INTERVAL_MS = 10_000;
 const DELIVERY_ROUTING_FIELDS = {
 	telegram: 'telegramChatId',
 	whatsapp: 'whatsappChatId',
-	discord: 'discordWebhookUrl',
+	discord: 'discordWebhookFingerprint',
 };
 
 function mergeRoutingData(existingRouting = {}, updatedRouting = {}, channels) {
@@ -38,6 +38,9 @@ function mergeRoutingData(existingRouting = {}, updatedRouting = {}, channels) {
 		const field = DELIVERY_ROUTING_FIELDS[channel];
 		if (field && Object.prototype.hasOwnProperty.call(updatedRouting, field)) {
 			mergedRouting[field] = updatedRouting[field];
+			if (channel === 'discord') {
+				delete mergedRouting.discordWebhookUrl;
+			}
 		}
 	}
 	return mergedRouting;

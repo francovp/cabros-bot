@@ -203,7 +203,7 @@ class WhatsAppService extends NotificationChannel {
    * @param {boolean} options.includePreview - Whether to include the custom preview payload
    * @returns {Promise<{success: boolean, channel: string, messageId?: string, messageIds?: string[], messageCount?: number, error?: string, category?: string, ambiguous?: boolean}>}
    */
-	async _sendMessageChunk(message, { chatId = this.chatId, includePreview = false } = {}) {
+	async _sendMessageChunk(message, { chatId = this.chatId, includePreview = false, signal } = {}) {
 		try {
 			const payload = {
 				chatId,
@@ -222,6 +222,8 @@ class WhatsAppService extends NotificationChannel {
 			// Use native fetch with timeout
 			const controller = new AbortController();
 			const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
+			const forwardAbort = () => controller.abort(signal.reason);
+			signal?.addEventListener('abort', forwardAbort, { once: true });
 
 			try {
 				const response = await fetch(`${this.apiUrl}${this.apiKey}`, {
@@ -292,6 +294,14 @@ class WhatsAppService extends NotificationChannel {
 					ambiguous: true,
 				};
 			} catch (error) {
+				if (signal?.aborted) {
+					return {
+						success: false,
+						channel: 'whatsapp',
+						error: signal.reason?.message || signal.reason || 'Operation aborted',
+						aborted: true,
+					};
+				}
 				if (error.name === 'AbortError') {
 					this.logger?.error?.('GreenAPI request timeout (10s)');
 					return {
@@ -305,6 +315,7 @@ class WhatsAppService extends NotificationChannel {
 				throw error;
 			} finally {
 				clearTimeout(timeoutId);
+				signal?.removeEventListener('abort', forwardAbort);
 			}
 		} catch (error) {
 			const errorMsg = this._sanitizeText((error && error.message) || String(error));

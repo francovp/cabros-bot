@@ -14,6 +14,7 @@ const { GROUNDING_MODEL_NAME, ENABLE_NEWS_MONITOR_TEST_MODE } = require('../../.
 const geminiQuotaManager = require('../../../../services/grounding/geminiQuotaManager');
 const { getPromptService, PromptKeys } = require('../../../../services/prompts');
 const { MainClient } = require('binance');
+const { createHash } = require('node:crypto');
 const {
 	sendWithNotificationRouting,
 	getRequestedChannels,
@@ -45,22 +46,57 @@ function getNotificationManager() {
 	return notificationManager;
 }
 
-function getCachedRoutingMetadata(routing = {}, previousRouting = {}) {
+const ROUTING_IDENTITY_FIELDS = {
+	telegram: 'telegramChatId',
+	whatsapp: 'whatsappChatId',
+	discord: 'discordWebhookFingerprint',
+};
+
+function hashDiscordWebhook(webhookUrl) {
+	if (typeof webhookUrl !== 'string' || webhookUrl.length === 0) {
+		return undefined;
+	}
+	return createHash('sha256').update(webhookUrl).digest('hex');
+}
+
+function getChannelDefaultDestination(notificationMgr, channel) {
+	const service = notificationMgr?.channels?.get(channel);
+	if (channel === 'telegram') return service?.chatId;
+	if (channel === 'whatsapp') return service?.chatId;
+	if (channel === 'discord') return service?.webhookUrl;
+	return undefined;
+}
+
+function getRoutingDestination(notificationMgr, routing = {}, channel) {
+	if (channel === 'discord') {
+		if (typeof routing.discordWebhookFingerprint === 'string') return routing.discordWebhookFingerprint;
+		return hashDiscordWebhook(routing.discordWebhookUrl || getChannelDefaultDestination(notificationMgr, channel));
+	}
+
+	const field = ROUTING_IDENTITY_FIELDS[channel];
+	if (field && typeof routing[field] === 'string') return routing[field];
+	return getChannelDefaultDestination(notificationMgr, channel);
+}
+
+function getStoredRoutingIdentity(routing = {}, channel) {
+	if (channel === 'discord') {
+		return routing.discordWebhookFingerprint || hashDiscordWebhook(routing.discordWebhookUrl);
+	}
+	return routing[ROUTING_IDENTITY_FIELDS[channel]];
+}
+
+function getCachedRoutingMetadata(routing = {}, previousRouting = {}, notificationMgr) {
 	const isRequestedChannel = (channel) => !Array.isArray(routing.channels) || routing.channels.includes(channel);
+	const getIdentity = (channel) => isRequestedChannel(channel)
+		? getRoutingDestination(notificationMgr, routing, channel)
+		: getStoredRoutingIdentity(previousRouting, channel);
 
 	return {
 		channels: Array.isArray(routing.channels) ? [...routing.channels] : undefined,
-		telegramChatId: isRequestedChannel('telegram') ? routing.telegramChatId : previousRouting.telegramChatId,
-		whatsappChatId: isRequestedChannel('whatsapp') ? routing.whatsappChatId : previousRouting.whatsappChatId,
-		discordWebhookUrl: isRequestedChannel('discord') ? routing.discordWebhookUrl : previousRouting.discordWebhookUrl,
+		telegramChatId: getIdentity('telegram'),
+		whatsappChatId: getIdentity('whatsapp'),
+		discordWebhookFingerprint: getIdentity('discord'),
 	};
-}
-
-function getRoutingDestination(routing = {}, channel) {
-	if (channel === 'telegram') return typeof routing.telegramChatId === 'string' ? routing.telegramChatId : undefined;
-	if (channel === 'whatsapp') return typeof routing.whatsappChatId === 'string' ? routing.whatsappChatId : undefined;
-	if (channel === 'discord') return typeof routing.discordWebhookUrl === 'string' ? routing.discordWebhookUrl : undefined;
-	return undefined;
 }
 
 function getCachedRedeliveryChannels(notificationMgr, cachedEntry = {}, routing = {}) {
@@ -77,8 +113,8 @@ function getCachedRedeliveryChannels(notificationMgr, cachedEntry = {}, routing 
 
 	return requestedChannels.filter((channel) => {
 		const cachedResult = cachedResults.get(channel);
-		const destinationDiffers = getRoutingDestination(cachedEntry.routing, channel)
-			!== getRoutingDestination(routing, channel);
+		const destinationDiffers = getRoutingDestination(notificationMgr, cachedEntry.routing, channel)
+			!== getRoutingDestination(notificationMgr, routing, channel);
 		return !cachedResult || !cachedResult.success || destinationDiffers;
 	});
 }
@@ -89,6 +125,7 @@ function getActiveCachedDeliveryResults(
 	retryChannels = [],
 	claimedRetryChannels = [],
 	routing = {},
+	notificationMgr,
 ) {
 	const requestedSet = new Set(requestedChannels);
 	const retrySet = new Set(retryChannels);
@@ -102,8 +139,8 @@ function getActiveCachedDeliveryResults(
 			if (!retrySet.has(result.channel) || claimedSet.has(result.channel)) {
 				return true;
 			}
-			return getRoutingDestination(cachedEntry.routing, result.channel)
-				=== getRoutingDestination(routing, result.channel);
+			return getRoutingDestination(notificationMgr, cachedEntry.routing, result.channel)
+				=== getRoutingDestination(notificationMgr, routing, result.channel);
 		});
 }
 
@@ -538,48 +575,55 @@ class NewsAnalyzer {
 								retryChannels,
 								claimedRetryChannels,
 								routing,
+								notificationMgr,
 							);
 							if (claimedRetryChannels.length > 0) {
-								const leaseAbortController = new AbortController();
-								let leaseOwnershipLost = false;
-								const markLeaseOwnershipLost = () => {
-									if (!leaseOwnershipLost) {
-										leaseOwnershipLost = true;
-										leaseAbortController.abort('Cached delivery lease ownership lost');
+								const leaseAbortControllers = new Map(
+									claimedRetryChannels.map((channel) => [channel, new AbortController()]),
+								);
+								const leaseOwnership = new Map(
+									claimedRetryChannels.map((channel) => [channel, true]),
+								);
+								const markLeaseOwnershipLost = (channel) => {
+									if (leaseOwnership.get(channel)) {
+										leaseOwnership.set(channel, false);
+										leaseAbortControllers.get(channel)?.abort('Cached delivery lease ownership lost');
 									}
 								};
 								const renewLease = async (channel) => {
 									if (!await this.cache.renewDelivery(symbol, category, channel)) {
-										markLeaseOwnershipLost();
+										markLeaseOwnershipLost(channel);
 									}
 								};
 								const leaseRenewalIntervals = claimedRetryChannels.map((channel) => setInterval(
-									() => renewLease(channel).catch(() => markLeaseOwnershipLost()),
+									() => renewLease(channel).catch(() => markLeaseOwnershipLost(channel)),
 									this.cache.getDeliveryLeaseRenewIntervalMs(),
 								));
 								try {
+									const signalByChannel = Object.fromEntries(
+										claimedRetryChannels.map((channel) => [channel, leaseAbortControllers.get(channel).signal]),
+									);
 									const retryResults = await sendWithNotificationRouting(
 										notificationMgr,
 										cached.alert,
 										{ ...routing, channels: claimedRetryChannels },
-										{ signal: leaseAbortController.signal },
+										{ signalByChannel },
 									);
 									await Promise.all(claimedRetryChannels.map(renewLease));
-									if (leaseOwnershipLost) {
-										deliveryResults = activeCachedDeliveryResults;
-									} else {
-										deliveryResults = mergeDeliveryResults(
-											activeCachedDeliveryResults,
-											retryResults,
-											requestedChannels,
-										);
+									const ownedRetryChannels = claimedRetryChannels.filter((channel) => leaseOwnership.get(channel));
+									deliveryResults = mergeDeliveryResults(
+										activeCachedDeliveryResults,
+										retryResults.filter((result) => ownedRetryChannels.includes(result.channel)),
+										requestedChannels,
+									);
+									if (ownedRetryChannels.length > 0) {
 										await this.cache.set(symbol, category, {
 											...cached,
-											routing: getCachedRoutingMetadata(routing, cached.routing),
+											routing: getCachedRoutingMetadata(routing, cached.routing, notificationMgr),
 											deliveryResults,
 										}, {
 											preserveTtl: true,
-											deliveryChannels: claimedRetryChannels,
+											deliveryChannels: ownedRetryChannels,
 										});
 									}
 								} finally {
@@ -742,7 +786,7 @@ class NewsAnalyzer {
 				cached: false,
 				requestId,
 			},
-			routing: getCachedRoutingMetadata(routing),
+			routing: getCachedRoutingMetadata(routing, {}, notificationMgr),
 			deliveryResults,
 		});
 
@@ -1220,4 +1264,6 @@ module.exports = {
 	isKlineOpen,
 	parseNewsTimeoutMs,
 	parseNewsAlertThreshold,
+	getCachedRoutingMetadata,
+	hashDiscordWebhook,
 };
