@@ -90,13 +90,17 @@ function getCachedRoutingMetadata(routing = {}, previousRouting = {}, notificati
 	const getIdentity = (channel) => isRequestedChannel(channel)
 		? getRoutingDestination(notificationMgr, routing, channel)
 		: getStoredRoutingIdentity(previousRouting, channel);
-
-	return {
-		channels: Array.isArray(routing.channels) ? [...routing.channels] : undefined,
-		telegramChatId: getIdentity('telegram'),
-		whatsappChatId: getIdentity('whatsapp'),
-		discordWebhookFingerprint: getIdentity('discord'),
-	};
+	const metadata = {};
+	if (Array.isArray(routing.channels)) {
+		metadata.channels = [...routing.channels];
+	}
+	for (const [channel, field] of Object.entries(ROUTING_IDENTITY_FIELDS)) {
+		const identity = getIdentity(channel);
+		if (identity !== undefined) {
+			metadata[field] = identity;
+		}
+	}
+	return metadata;
 }
 
 function getCachedRedeliveryChannels(notificationMgr, cachedEntry = {}, routing = {}) {
