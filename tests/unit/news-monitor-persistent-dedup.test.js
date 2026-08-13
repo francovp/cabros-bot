@@ -433,6 +433,21 @@ describe('NewsCache — Persistent Dedup Backend (Issue #120)', () => {
 			expect(cache.cache.get('BTCUSDT:price_surge').data).toEqual(freshData);
 		});
 
+		it('preserves finalized local data over a stale claiming record', async () => {
+			const finalizedData = {
+				alert: { symbol: 'BTCUSDT' },
+				deliveryResults: [{ channel: 'whatsapp', success: true }],
+			};
+			await cache.set('BTCUSDT', EventCategory.PRICE_SURGE, finalizedData);
+			mockGetEntryRecord.mockResolvedValue({
+				data: { status: 'claiming', claimToken: 'stale-claim' },
+				expiresAtMs: Date.now() + cache.ttlMs,
+			});
+
+			await expect(cache.get('BTCUSDT', EventCategory.PRICE_SURGE)).resolves.toEqual(finalizedData);
+			expect(cache.cache.get('BTCUSDT:price_surge').data).toEqual(finalizedData);
+		});
+
 		it('falls back to Firestore when local cache misses (cross-replica scenario)', async () => {
 			const data = { alert: { symbol: 'BTCUSDT' }, deliveryResults: [] };
 			mockGetEntryRecord.mockResolvedValue({ data, expiresAtMs: Date.now() + cache.ttlMs });
