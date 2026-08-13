@@ -461,6 +461,43 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 			expect(mockFetch).toHaveBeenCalledTimes(1);
 		});
 
+		it('should preserve untouched channel destinations across partial retries', async () => {
+			process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '';
+			const { getNotificationManager } = require('../../src/controllers/webhooks/handlers/alert/alert');
+			const manager = getNotificationManager();
+			const telegramSend = jest.spyOn(manager.channels.get('telegram'), 'send').mockResolvedValue({
+				success: true,
+				channel: 'telegram',
+				messageId: 'telegram-1',
+			});
+			const whatsappSend = jest.spyOn(manager.channels.get('whatsapp'), 'send')
+				.mockResolvedValueOnce({ success: false, channel: 'whatsapp', error: 'temporary failure' })
+				.mockResolvedValueOnce({ success: true, channel: 'whatsapp', messageId: 'whatsapp-2' });
+
+			await request(app)
+				.post('/api/news-monitor').set('x-api-key', 'test-key')
+				.send({
+					crypto: ['BTCUSDT'],
+					channels: ['telegram', 'whatsapp'],
+					telegramChatId: '-100000000001',
+				})
+				.expect(200);
+
+			await request(app)
+				.post('/api/news-monitor').set('x-api-key', 'test-key')
+				.send({ crypto: ['BTCUSDT'], channels: ['whatsapp'] })
+				.expect(200);
+
+			await request(app)
+				.post('/api/news-monitor').set('x-api-key', 'test-key')
+				.send({ crypto: ['BTCUSDT'] })
+				.expect(200);
+
+			expect(telegramSend).toHaveBeenCalledTimes(2);
+			expect(telegramSend.mock.calls[1][0].telegramChatId).toBeUndefined();
+			expect(whatsappSend).toHaveBeenCalledTimes(2);
+		});
+
 		it('should not report a destination retry as delivered while another request owns its lease', async () => {
 			await request(app)
 				.post('/api/news-monitor').set('x-api-key', 'test-key')

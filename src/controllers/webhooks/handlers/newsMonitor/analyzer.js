@@ -44,12 +44,14 @@ function getNotificationManager() {
 	return notificationManager;
 }
 
-function getCachedRoutingMetadata(routing = {}) {
+function getCachedRoutingMetadata(routing = {}, previousRouting = {}) {
+	const isRequestedChannel = (channel) => !Array.isArray(routing.channels) || routing.channels.includes(channel);
+
 	return {
 		channels: Array.isArray(routing.channels) ? [...routing.channels] : undefined,
-		telegramChatId: typeof routing.telegramChatId === 'string' ? routing.telegramChatId : undefined,
-		whatsappChatId: typeof routing.whatsappChatId === 'string' ? routing.whatsappChatId : undefined,
-		discordWebhookUrl: typeof routing.discordWebhookUrl === 'string' ? routing.discordWebhookUrl : undefined,
+		telegramChatId: isRequestedChannel('telegram') ? routing.telegramChatId : previousRouting.telegramChatId,
+		whatsappChatId: isRequestedChannel('whatsapp') ? routing.whatsappChatId : previousRouting.whatsappChatId,
+		discordWebhookUrl: isRequestedChannel('discord') ? routing.discordWebhookUrl : previousRouting.discordWebhookUrl,
 	};
 }
 
@@ -553,7 +555,7 @@ class NewsAnalyzer {
 									);
 									await this.cache.set(symbol, category, {
 										...cached,
-										routing: getCachedRoutingMetadata(routing),
+										routing: getCachedRoutingMetadata(routing, cached.routing),
 									deliveryResults,
 									}, { preserveTtl: true });
 								} finally {
