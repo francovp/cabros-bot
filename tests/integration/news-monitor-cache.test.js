@@ -290,6 +290,49 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 			expect(whatsappSend).toHaveBeenCalledTimes(3);
 		});
 
+		it('should not persist a cached retry after its lease ownership is lost', async () => {
+			process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '';
+			const cache = getCacheInstance();
+			const intervalSpy = jest.spyOn(cache, 'getDeliveryLeaseRenewIntervalMs').mockReturnValue(1);
+			const renewSpy = jest.spyOn(cache, 'renewDelivery').mockResolvedValue(false);
+			const { getNotificationManager } = require('../../src/controllers/webhooks/handlers/alert/alert');
+			const telegramSend = jest.spyOn(getNotificationManager().channels.get('telegram'), 'send')
+				.mockResolvedValueOnce({ success: false, channel: 'telegram', error: 'temporary failure' })
+				.mockImplementationOnce(() => new Promise((resolve) => {
+					setTimeout(() => resolve({ success: true, channel: 'telegram', messageId: 'telegram-retry' }), 10);
+				}))
+				.mockResolvedValueOnce({ success: true, channel: 'telegram', messageId: 'telegram-after-loss' });
+
+			try {
+				await request(app)
+					.get('/api/news-monitor?crypto=BTCUSDT&channels=telegram').set('x-api-key', 'test-key')
+					.expect(200);
+
+				const retry = await request(app)
+					.get('/api/news-monitor?crypto=BTCUSDT&channels=telegram').set('x-api-key', 'test-key')
+					.expect(200);
+
+				expect(retry.body.results[0].deliveryResults).toEqual([
+					expect.objectContaining({ channel: 'telegram', success: false }),
+				]);
+
+				renewSpy.mockResolvedValue(true);
+				const afterLoss = await request(app)
+					.get('/api/news-monitor?crypto=BTCUSDT&channels=telegram').set('x-api-key', 'test-key')
+					.expect(200);
+
+				expect(afterLoss.body.results[0].cached).toBe(true);
+				expect(afterLoss.body.results[0].deliveryResults).toEqual([
+					expect.objectContaining({ channel: 'telegram', success: true, messageId: 'telegram-after-loss' }),
+				]);
+				expect(telegramSend).toHaveBeenCalledTimes(3);
+				expect(renewSpy).toHaveBeenCalled();
+			} finally {
+				intervalSpy.mockRestore();
+				renewSpy.mockRestore();
+			}
+		});
+
 		it('should serialize concurrent retries for the same failed channel', async () => {
 			process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '';
 			const { getNotificationManager } = require('../../src/controllers/webhooks/handlers/alert/alert');

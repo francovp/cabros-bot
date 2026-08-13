@@ -143,14 +143,12 @@ async function hasEntry(key) {
 }
 
 /**
- * Retrieve cached entry data from Firestore if valid and not expired.
- *
- * Fail-open: returns null on any Firestore error.
+ * Retrieve cached entry data and its absolute Firestore expiry.
  *
  * @param {string} key - Dedup key (e.g. "BTCUSDT:price_surge")
- * @returns {Promise<Object|null>} Stored data object or null if not found/expired
+ * @returns {Promise<{data: Object, expiresAtMs: number}|null>}
  */
-async function getEntry(key) {
+async function getEntryRecord(key) {
 	const firestore = getFirestore();
 	if (!firestore) {
 		return null;
@@ -165,12 +163,13 @@ async function getEntry(key) {
 		}
 
 		const data = doc.data();
-		if (!data || !data.expiresAt) {
+		if (!data || !data.expiresAt || typeof data.expiresAt.toMillis !== 'function') {
 			return null;
 		}
 
+		const expiresAtMs = data.expiresAt.toMillis();
 		const now = admin.firestore.Timestamp.now();
-		if (data.expiresAt.toMillis() <= now.toMillis()) {
+		if (expiresAtMs <= now.toMillis()) {
 			// Expired — delete it asynchronously (fire-and-forget)
 			docRef.delete().catch(err => {
 				console.debug('[NewsDedupStorageService] Failed to delete expired entry:', err.message);
@@ -178,11 +177,27 @@ async function getEntry(key) {
 			return null;
 		}
 
-		return data.data || {};
+		return {
+			data: data.data || {},
+			expiresAtMs,
+		};
 	} catch (error) {
-		console.warn('[NewsDedupStorageService] getEntry error (fail-open):', error.message);
+		console.warn('[NewsDedupStorageService] getEntryRecord error (fail-open):', error.message);
 		return null;
 	}
+}
+
+/**
+ * Retrieve cached entry data from Firestore if valid and not expired.
+ *
+ * Fail-open: returns null on any Firestore error.
+ *
+ * @param {string} key - Dedup key (e.g. "BTCUSDT:price_surge")
+ * @returns {Promise<Object|null>} Stored data object or null if not found/expired
+ */
+async function getEntry(key) {
+	const record = await getEntryRecord(key);
+	return record ? record.data : null;
 }
 
 /**
@@ -385,6 +400,7 @@ module.exports = {
 	isEnabled,
 	isReady,
 	hasEntry,
+	getEntryRecord,
 	getEntry,
 	claimEntry,
 	setEntry,

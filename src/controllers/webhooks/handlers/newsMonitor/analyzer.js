@@ -540,8 +540,21 @@ class NewsAnalyzer {
 								routing,
 							);
 							if (claimedRetryChannels.length > 0) {
+								const leaseAbortController = new AbortController();
+								let leaseOwnershipLost = false;
+								const markLeaseOwnershipLost = () => {
+									if (!leaseOwnershipLost) {
+										leaseOwnershipLost = true;
+										leaseAbortController.abort('Cached delivery lease ownership lost');
+									}
+								};
+								const renewLease = async (channel) => {
+									if (!await this.cache.renewDelivery(symbol, category, channel)) {
+										markLeaseOwnershipLost();
+									}
+								};
 								const leaseRenewalIntervals = claimedRetryChannels.map((channel) => setInterval(
-									() => this.cache.renewDelivery(symbol, category, channel).catch(() => {}),
+									() => renewLease(channel).catch(() => markLeaseOwnershipLost()),
 									this.cache.getDeliveryLeaseRenewIntervalMs(),
 								));
 								try {
@@ -549,20 +562,26 @@ class NewsAnalyzer {
 										notificationMgr,
 										cached.alert,
 										{ ...routing, channels: claimedRetryChannels },
+										{ signal: leaseAbortController.signal },
 									);
-									deliveryResults = mergeDeliveryResults(
-										activeCachedDeliveryResults,
-										retryResults,
-										requestedChannels,
-									);
-									await this.cache.set(symbol, category, {
-										...cached,
-										routing: getCachedRoutingMetadata(routing, cached.routing),
-										deliveryResults,
-									}, {
-										preserveTtl: true,
-										deliveryChannels: claimedRetryChannels,
-									});
+									await Promise.all(claimedRetryChannels.map(renewLease));
+									if (leaseOwnershipLost) {
+										deliveryResults = activeCachedDeliveryResults;
+									} else {
+										deliveryResults = mergeDeliveryResults(
+											activeCachedDeliveryResults,
+											retryResults,
+											requestedChannels,
+										);
+										await this.cache.set(symbol, category, {
+											...cached,
+											routing: getCachedRoutingMetadata(routing, cached.routing),
+											deliveryResults,
+										}, {
+											preserveTtl: true,
+											deliveryChannels: claimedRetryChannels,
+										});
+									}
 								} finally {
 									leaseRenewalIntervals.forEach(clearInterval);
 									claimedRetryChannels.forEach((channel) => this.cache.releaseDelivery(symbol, category, channel));

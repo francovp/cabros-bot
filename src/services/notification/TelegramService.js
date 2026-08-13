@@ -76,8 +76,17 @@ class TelegramService extends NotificationChannel {
    * @param {Object} alert - Alert object with text and optional enriched content
    * @returns {Promise<{success: boolean, channel: string, messageId?: string, error?: string}>}
    */
-	async send(alert) {
+	async send(alert, options = {}) {
+		const signal = options.signal;
 		try {
+			if (signal?.aborted) {
+				return {
+					success: false,
+					channel: 'telegram',
+					error: signal.reason?.message || signal.reason || 'Operation aborted',
+					aborted: true,
+				};
+			}
 			if (!this.bot) {
 				return {
 					success: false,
@@ -104,6 +113,14 @@ class TelegramService extends NotificationChannel {
 			// Send to Telegram with MarkdownV2 first, fallback to plain text on parse errors
 			const messageIds = [];
 			for (const messagePart of messageParts) {
+				if (signal?.aborted) {
+					return {
+						success: false,
+						channel: 'telegram',
+						error: signal.reason?.message || signal.reason || 'Operation aborted',
+						aborted: true,
+					};
+				}
 				const result = await this.bot.telegram.sendMessage(chatId, messagePart, {
 					parse_mode: 'MarkdownV2',
 					disable_web_page_preview: !!alert.enriched,

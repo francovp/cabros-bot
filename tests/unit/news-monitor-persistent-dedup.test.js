@@ -10,6 +10,7 @@ const mockIsEnabled = jest.fn().mockReturnValue(false);
 const mockIsReady = jest.fn().mockReturnValue(true);
 const mockHasEntry = jest.fn().mockResolvedValue(false);
 const mockGetEntry = jest.fn().mockResolvedValue(null);
+const mockGetEntryRecord = jest.fn().mockResolvedValue(null);
 const mockClaimEntry = jest.fn().mockResolvedValue(true);
 const mockSetEntry = jest.fn().mockResolvedValue(undefined);
 const mockUpdateEntry = jest.fn().mockResolvedValue(true);
@@ -22,6 +23,7 @@ jest.mock('../../src/services/storage/NewsDedupStorageService', () => ({
 	isReady: mockIsReady,
 	hasEntry: mockHasEntry,
 	getEntry: mockGetEntry,
+	getEntryRecord: mockGetEntryRecord,
 	claimEntry: mockClaimEntry,
 	setEntry: mockSetEntry,
 	updateEntry: mockUpdateEntry,
@@ -45,6 +47,7 @@ describe('NewsCache — Persistent Dedup Backend (Issue #120)', () => {
 		mockIsReady.mockReturnValue(true);
 		mockHasEntry.mockResolvedValue(false);
 		mockGetEntry.mockResolvedValue(null);
+		mockGetEntryRecord.mockResolvedValue(null);
 		mockClaimEntry.mockResolvedValue(true);
 		mockSetEntry.mockResolvedValue(undefined);
 		mockUpdateEntry.mockResolvedValue(true);
@@ -383,17 +386,17 @@ describe('NewsCache — Persistent Dedup Backend (Issue #120)', () => {
 
 		it('falls back to Firestore when local cache misses (cross-replica scenario)', async () => {
 			const data = { alert: { symbol: 'BTCUSDT' }, deliveryResults: [] };
-			mockGetEntry.mockResolvedValue(data);
+			mockGetEntryRecord.mockResolvedValue({ data, expiresAtMs: Date.now() + cache.ttlMs });
 
 			const result = await cache.get('BTCUSDT', EventCategory.PRICE_SURGE);
 
-			expect(mockGetEntry).toHaveBeenCalledWith('BTCUSDT:price_surge');
+			expect(mockGetEntryRecord).toHaveBeenCalledWith('BTCUSDT:price_surge');
 			expect(result).toEqual(data);
 		});
 
 		it('warms local in-memory cache after a Firestore hit to avoid repeated lookups', async () => {
 			const data = { alert: { symbol: 'BTCUSDT' } };
-			mockGetEntry.mockResolvedValue(data);
+			mockGetEntryRecord.mockResolvedValue({ data, expiresAtMs: Date.now() + cache.ttlMs });
 
 			const result = await cache.get('BTCUSDT', EventCategory.PRICE_SURGE);
 			expect(result).toEqual(data);
@@ -402,14 +405,35 @@ describe('NewsCache — Persistent Dedup Backend (Issue #120)', () => {
 			expect(cache.cache.get('BTCUSDT:price_surge').data).toEqual(data);
 		});
 
+		it('caps a warmed local entry at the persistent Firestore expiry', async () => {
+			const now = 100_000;
+			const expiresAtMs = now + 500;
+			const data = { alert: { symbol: 'BTCUSDT' } };
+			mockGetEntryRecord
+				.mockResolvedValueOnce({ data, expiresAtMs })
+				.mockResolvedValueOnce(null);
+			const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(now);
+
+			try {
+				expect(await cache.get('BTCUSDT', EventCategory.PRICE_SURGE)).toEqual(data);
+				expect(cache.cache.get('BTCUSDT:price_surge').expiresAt).toBe(expiresAtMs);
+
+				nowSpy.mockReturnValue(expiresAtMs + 1);
+				expect(await cache.get('BTCUSDT', EventCategory.PRICE_SURGE)).toBeNull();
+				expect(mockGetEntryRecord).toHaveBeenCalledTimes(2);
+			} finally {
+				nowSpy.mockRestore();
+			}
+		});
+
 		it('returns null and allows the alert when both local and Firestore miss', async () => {
-			mockGetEntry.mockResolvedValue(null);
+			mockGetEntryRecord.mockResolvedValue(null);
 			const result = await cache.get('BTCUSDT', EventCategory.PRICE_SURGE);
 			expect(result).toBeNull();
 		});
 
 		it('falls back gracefully when Firestore getEntry throws (fail-open)', async () => {
-			mockGetEntry.mockRejectedValue(new Error('Firestore timeout'));
+			mockGetEntryRecord.mockRejectedValue(new Error('Firestore timeout'));
 
 			// Should resolve to null (fail-open), not throw
 			const result = await cache.get('BTCUSDT', EventCategory.PRICE_SURGE);
@@ -438,11 +462,11 @@ describe('NewsCache — Persistent Dedup Backend (Issue #120)', () => {
 			await new Promise(resolve => setTimeout(resolve, 1100));
 
 			const firestoreData = { alert: { symbol: 'BTCUSDT' }, _dedupSource: 'firestore' };
-			mockGetEntry.mockResolvedValue(firestoreData);
-			mockGetEntry.mockClear();
+			mockGetEntryRecord.mockResolvedValue({ data: firestoreData, expiresAtMs: Date.now() + cache.ttlMs });
+			mockGetEntryRecord.mockClear();
 
 			const result = await cache.get('BTCUSDT', EventCategory.PRICE_SURGE);
-			expect(mockGetEntry).toHaveBeenCalledWith('BTCUSDT:price_surge');
+			expect(mockGetEntryRecord).toHaveBeenCalledWith('BTCUSDT:price_surge');
 			expect(result).toEqual(firestoreData);
 		});
 	});

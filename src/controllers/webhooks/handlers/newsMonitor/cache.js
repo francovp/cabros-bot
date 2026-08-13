@@ -181,7 +181,9 @@ class NewsCache {
    * @returns {boolean} True if expired
    */
 	isExpired(entry) {
-		return Date.now() - entry.timestamp >= this.ttlMs;
+		return Number.isFinite(entry.expiresAt)
+			? Date.now() >= entry.expiresAt
+			: Date.now() - entry.timestamp >= this.ttlMs;
 	}
 
 	/**
@@ -211,15 +213,16 @@ class NewsCache {
 		// Persistent dedup: check Firestore for cross-replica hits
 		if (newsDedupStorageService.isEnabled() && newsDedupStorageService.isReady()) {
 			try {
-				const entryData = await newsDedupStorageService.getEntry(key);
-				if (entryData) {
+				const entryRecord = await newsDedupStorageService.getEntryRecord(key);
+				if (entryRecord) {
 					// Warm the local cache to avoid repeated Firestore lookups
 					this.cache.set(key, {
 						key,
 						timestamp: Date.now(),
-						data: entryData,
+						expiresAt: entryRecord.expiresAtMs,
+						data: entryRecord.data,
 					});
-					return entryData;
+					return entryRecord.data;
 				}
 			} catch (error) {
 				console.warn('[NewsCache] Firestore getEntry failed (fail-open):', error.message);
@@ -248,9 +251,11 @@ class NewsCache {
 			return;
 		}
 		const dataToStore = existingEntry ? mergeDeliveryData(existingEntry.data, data, options.deliveryChannels) : data;
+		const timestamp = existingEntry?.timestamp ?? Date.now();
 		this.cache.set(key, {
 			key,
-			timestamp: existingEntry ? existingEntry.timestamp : Date.now(),
+			timestamp,
+			expiresAt: existingEntry?.expiresAt ?? timestamp + this.ttlMs,
 			data: dataToStore,
 		});
 
@@ -332,11 +337,11 @@ class NewsCache {
 	async renewDelivery(symbol, eventCategory, channel) {
 		const key = `${this.generateKey(symbol, eventCategory)}:delivery:${channel}`;
 		const lease = this.deliveryLocks.get(key);
-		if (!lease?.active || lease.persistentUntil <= Date.now()) {
-			return false;
-		}
 		if (!(newsDedupStorageService.isEnabled() && newsDedupStorageService.isReady())) {
 			return true;
+		}
+		if (!lease?.active || lease.persistentUntil <= Date.now()) {
+			return false;
 		}
 
 		try {
@@ -433,6 +438,11 @@ class NewsCache {
 		}
 		if (removed > 0) {
 			console.debug('[NewsCache] Cleanup removed', removed, 'expired entries. Cache size:', this.cache.size);
+		}
+		for (const [key, lease] of this.deliveryLocks.entries()) {
+			if (!lease.active && lease.persistentUntil <= Date.now()) {
+				this.deliveryLocks.delete(key);
+			}
 		}
 	}
 
