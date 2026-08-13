@@ -556,8 +556,11 @@ class NewsAnalyzer {
 									await this.cache.set(symbol, category, {
 										...cached,
 										routing: getCachedRoutingMetadata(routing, cached.routing),
-									deliveryResults,
-									}, { preserveTtl: true });
+										deliveryResults,
+									}, {
+										preserveTtl: true,
+										deliveryChannels: claimedRetryChannels,
+									});
 								} finally {
 									leaseRenewalIntervals.forEach(clearInterval);
 									claimedRetryChannels.forEach((channel) => this.cache.releaseDelivery(symbol, category, channel));

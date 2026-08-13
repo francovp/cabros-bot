@@ -19,23 +19,56 @@
 const admin = require('firebase-admin');
 
 const COLLECTION_NAME = 'news-monitor-dedup';
+const DELIVERY_ROUTING_FIELDS = {
+	telegram: 'telegramChatId',
+	whatsapp: 'whatsappChatId',
+	discord: 'discordWebhookUrl',
+};
 
-function mergeDeliveryData(existingData = {}, updatedData = {}) {
-	if (!Array.isArray(existingData.deliveryResults) || !Array.isArray(updatedData.deliveryResults)) {
-		return updatedData;
+function mergeRoutingData(existingRouting = {}, updatedRouting = {}, channels) {
+	if (!Array.isArray(channels)) {
+		return updatedRouting;
 	}
 
-	const resultByChannel = new Map();
-	for (const result of [...existingData.deliveryResults, ...updatedData.deliveryResults]) {
-		if (result && result.channel) {
-			resultByChannel.set(result.channel, result);
+	const mergedRouting = { ...existingRouting };
+	if (Object.prototype.hasOwnProperty.call(updatedRouting, 'channels')) {
+		mergedRouting.channels = updatedRouting.channels;
+	}
+	for (const channel of channels) {
+		const field = DELIVERY_ROUTING_FIELDS[channel];
+		if (field && Object.prototype.hasOwnProperty.call(updatedRouting, field)) {
+			mergedRouting[field] = updatedRouting[field];
 		}
 	}
-	return {
+	return mergedRouting;
+}
+
+function mergeDeliveryData(existingData = {}, updatedData = {}, options = {}) {
+	const deliveryChannels = Array.isArray(options.deliveryChannels) ? options.deliveryChannels : null;
+	const updatedResults = deliveryChannels
+		? (Array.isArray(updatedData.deliveryResults) ? updatedData.deliveryResults : [])
+			.filter((result) => result && deliveryChannels.includes(result.channel))
+		: updatedData.deliveryResults;
+	const mergedData = {
 		...existingData,
 		...updatedData,
-		deliveryResults: Array.from(resultByChannel.values()),
 	};
+
+	if (Array.isArray(existingData.deliveryResults) && Array.isArray(updatedResults)) {
+		const resultByChannel = new Map();
+		for (const result of [...existingData.deliveryResults, ...updatedResults]) {
+			if (result && result.channel) {
+				resultByChannel.set(result.channel, result);
+			}
+		}
+		mergedData.deliveryResults = Array.from(resultByChannel.values());
+	}
+
+	if (deliveryChannels && (existingData.routing || updatedData.routing)) {
+		mergedData.routing = mergeRoutingData(existingData.routing, updatedData.routing, deliveryChannels);
+	}
+
+	return mergedData;
 }
 
 // Lazy Firestore singleton (shared with AlertStorageService via firebase-admin)
@@ -234,9 +267,10 @@ async function setEntry(key, ttlMs, data) {
  *
  * @param {string} key - Dedup key
  * @param {Object} data - Updated cache payload
+ * @param {{deliveryChannels?: string[]}} options - Optional claimed-channel delta scope
  * @returns {Promise<boolean>} true when an active entry was updated
  */
-async function updateEntry(key, data) {
+async function updateEntry(key, data, options = {}) {
 	const firestore = getFirestore();
 	if (!firestore) {
 		return false;
@@ -258,7 +292,7 @@ async function updateEntry(key, data) {
 				key,
 				createdAt: existingData.createdAt,
 				expiresAt: existingData.expiresAt,
-				data: mergeDeliveryData(existingData.data, data) || null,
+				data: mergeDeliveryData(existingData.data, data, options) || null,
 			});
 			return true;
 		});

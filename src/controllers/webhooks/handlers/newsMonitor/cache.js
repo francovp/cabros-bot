@@ -18,6 +18,11 @@ const { trackBackgroundTask } = require('../../../../lib/backgroundTaskTracker')
 
 const DELIVERY_LOCK_TTL_MS = 30_000;
 const DELIVERY_LOCK_RENEW_INTERVAL_MS = 10_000;
+const DELIVERY_ROUTING_FIELDS = {
+	telegram: 'telegramChatId',
+	whatsapp: 'whatsappChatId',
+	discord: 'discordWebhookUrl',
+};
 
 function mergeDeliveryData(existingData = {}, updatedData = {}) {
 	if (!Array.isArray(existingData.deliveryResults) || !Array.isArray(updatedData.deliveryResults)) {
@@ -34,6 +39,25 @@ function mergeDeliveryData(existingData = {}, updatedData = {}) {
 		...existingData,
 		...updatedData,
 		deliveryResults: Array.from(resultByChannel.values()),
+	};
+}
+
+function getDeliveryDelta(data = {}, channels = []) {
+	const channelSet = new Set(channels);
+	const routing = {
+		channels: Array.isArray(data.routing?.channels) ? [...data.routing.channels] : null,
+	};
+
+	for (const channel of channelSet) {
+		const field = DELIVERY_ROUTING_FIELDS[channel];
+		if (!field) continue;
+		routing[field] = typeof data.routing?.[field] === 'string' ? data.routing[field] : null;
+	}
+
+	return {
+		deliveryResults: (Array.isArray(data.deliveryResults) ? data.deliveryResults : [])
+			.filter((result) => result && channelSet.has(result.channel)),
+		routing,
 	};
 }
 
@@ -181,7 +205,7 @@ class NewsCache {
    * @param {string} symbol - Financial symbol
    * @param {string} eventCategory - Event category
    * @param {Object} data - Analysis data to cache
-   * @param {{preserveTtl?: boolean}} options - Preserve the existing entry TTL when updating data
+   * @param {{preserveTtl?: boolean, deliveryChannels?: string[]}} options - Preserve TTL and optionally persist only claimed channel deltas
    * @returns {Promise<void>}
    */
 	async set(symbol, eventCategory, data, options = {}) {
@@ -196,9 +220,18 @@ class NewsCache {
 
 		// Persistent dedup: write to Firestore (fail-open)
 		if (newsDedupStorageService.isEnabled() && newsDedupStorageService.isReady()) {
-			const write = options.preserveTtl
-				? newsDedupStorageService.updateEntry(key, dataToStore)
-				: newsDedupStorageService.setEntry(key, this.ttlMs, dataToStore);
+			let write;
+			if (options.preserveTtl) {
+				write = Array.isArray(options.deliveryChannels)
+					? newsDedupStorageService.updateEntry(
+						key,
+						getDeliveryDelta(data, options.deliveryChannels),
+						{ deliveryChannels: options.deliveryChannels },
+					)
+					: newsDedupStorageService.updateEntry(key, dataToStore);
+			} else {
+				write = newsDedupStorageService.setEntry(key, this.ttlMs, dataToStore);
+			}
 			trackBackgroundTask(write).catch(err => {
 				console.warn('[NewsCache] Firestore cache write failed (fail-open):', err.message);
 			});
