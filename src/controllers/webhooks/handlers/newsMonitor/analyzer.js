@@ -629,6 +629,7 @@ class NewsAnalyzer {
 										}, {
 											preserveTtl: true,
 											deliveryChannels: ownedRetryChannels,
+											awaitPersistence: true,
 										});
 									}
 								} finally {

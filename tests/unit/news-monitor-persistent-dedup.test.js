@@ -264,6 +264,32 @@ describe('NewsCache — Persistent Dedup Backend (Issue #120)', () => {
 			);
 		});
 
+		it('waits for persistent delivery updates when explicitly requested', async () => {
+			await cache.set('BTCUSDT', EventCategory.PRICE_SURGE, {
+				alert: { symbol: 'BTCUSDT' },
+				deliveryResults: [{ channel: 'whatsapp', success: false }],
+			});
+
+			let resolveUpdate;
+			mockUpdateEntry.mockReturnValue(new Promise((resolve) => { resolveUpdate = resolve; }));
+			let settled = false;
+			const persistence = cache.set('BTCUSDT', EventCategory.PRICE_SURGE, {
+				alert: { symbol: 'BTCUSDT' },
+				deliveryResults: [{ channel: 'whatsapp', success: true }],
+			}, {
+				preserveTtl: true,
+				deliveryChannels: ['whatsapp'],
+				awaitPersistence: true,
+			}).then(() => { settled = true; });
+
+			await new Promise(resolve => setImmediate(resolve));
+			expect(settled).toBe(false);
+
+			resolveUpdate(true);
+			await persistence;
+			expect(settled).toBe(true);
+		});
+
 		it('merges only claimed channel data in memory during a cached retry', async () => {
 			const firstData = {
 				alert: { symbol: 'BTCUSDT' },

@@ -245,7 +245,7 @@ class NewsCache {
    * @param {string} symbol - Financial symbol
    * @param {string} eventCategory - Event category
    * @param {Object} data - Analysis data to cache
-   * @param {{preserveTtl?: boolean, deliveryChannels?: string[]}} options - Preserve TTL and optionally persist only claimed channel deltas
+	 * @param {{preserveTtl?: boolean, deliveryChannels?: string[], awaitPersistence?: boolean}} options - Preserve TTL, optionally persist only claimed channel deltas, and optionally wait for that write
    * @returns {Promise<void>}
    */
 	async set(symbol, eventCategory, data, options = {}) {
@@ -277,9 +277,12 @@ class NewsCache {
 			} else {
 				write = newsDedupStorageService.setEntry(key, this.ttlMs, dataToStore);
 			}
-			trackBackgroundTask(write).catch(err => {
+			const trackedWrite = trackBackgroundTask(write).catch(err => {
 				console.warn('[NewsCache] Firestore cache write failed (fail-open):', err.message);
 			});
+			if (options.awaitPersistence) {
+				await trackedWrite;
+			}
 		}
 	}
 
