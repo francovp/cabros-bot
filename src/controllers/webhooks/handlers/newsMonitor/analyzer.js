@@ -17,6 +17,7 @@ const { MainClient } = require('binance');
 const {
 	sendWithNotificationRouting,
 	getRequestedChannels,
+	validateNotificationRouting,
 } = require('../../../../services/notification/requestRouting');
 
 const promptService = getPromptService();
@@ -522,6 +523,7 @@ class NewsAnalyzer {
 					if (cached.alert) {
 						const notificationMgr = getNotificationManager();
 						if (notificationMgr) {
+							validateNotificationRouting(notificationMgr, routing);
 							const requestedChannels = getRequestedChannels(notificationMgr, routing);
 							const retryChannels = getCachedRedeliveryChannels(notificationMgr, cached, routing);
 							const claimedRetryChannels = [];

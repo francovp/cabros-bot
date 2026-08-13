@@ -6,7 +6,7 @@
 const request = require('supertest');
 const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
-const { initializeNotificationServices } = require('../../src/controllers/webhooks/handlers/alert/alert');
+const { initializeNotificationServices, getNotificationManager } = require('../../src/controllers/webhooks/handlers/alert/alert');
 const { getCacheInstance } = require('../../src/controllers/webhooks/handlers/newsMonitor/cache');
 
 jest.mock('../../src/services/grounding/gemini');
@@ -459,6 +459,25 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 			expect(response.body.deliveredChannels).toEqual(['telegram', 'whatsapp']);
 			expect(telegramSend).toHaveBeenCalledTimes(1);
 			expect(mockFetch).toHaveBeenCalledTimes(1);
+		});
+
+		it('should reject a cached success when its explicit channel is no longer enabled', async () => {
+			await request(app)
+				.post('/api/news-monitor').set('x-api-key', 'test-key')
+				.send({ crypto: ['BTCUSDT'], channels: ['telegram'] })
+				.expect(200);
+
+			getNotificationManager().channels.get('telegram').enabled = false;
+
+			const response = await request(app)
+				.post('/api/news-monitor').set('x-api-key', 'test-key')
+				.send({ crypto: ['BTCUSDT'], channels: ['telegram'] })
+				.expect(400);
+
+			expect(response.body).toEqual(expect.objectContaining({
+				code: 'INVALID_REQUEST',
+				error: 'Requested channel(s) disabled or misconfigured: telegram',
+			}));
 		});
 
 		it('should preserve untouched channel destinations across partial retries', async () => {
