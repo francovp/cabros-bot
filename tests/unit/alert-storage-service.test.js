@@ -67,11 +67,13 @@ describe('AlertStorageService', () => {
 	});
 
 	afterEach(() => {
+		jest.useRealTimers();
 		delete process.env.ENABLE_FIRESTORE_ALERT_STORAGE;
 		delete process.env.ENABLE_FIRESTORE_JOB_STORAGE;
 		delete process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING;
 		delete process.env.ENABLE_SIGNAL_OUTCOME_TRACKING;
 		delete process.env.ENABLE_FIREBASE_REMOTE_CONFIG;
+		delete process.env.ALERT_STORAGE_RETENTION_DAYS;
 		delete process.env.FIREBASE_PROJECT_ID;
 		delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
 	});
@@ -243,6 +245,7 @@ describe('AlertStorageService', () => {
 			expect(mockCollection).toHaveBeenCalledWith('alerts');
 			expect(mockAdd).toHaveBeenCalledWith({
 				receivedAt: expect.anything(), // serverTimestamp sentinel
+				expiresAt: expect.anything(),
 				text: 'ETH breakout',
 				enriched: true,
 				enrichmentData: { sentiment: 'bullish', insights: ['RSI > 70'] },
@@ -256,6 +259,32 @@ describe('AlertStorageService', () => {
 				useTradingViewData: true,
 				tradingViewEnrichmentApplied: false,
 			});
+		});
+
+		it('adds the default retention expiry to new alert documents', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			jest.useFakeTimers().setSystemTime(new Date('2026-08-13T00:00:00.000Z'));
+			mockAdd.mockResolvedValueOnce({ id: 'retained-alert' });
+
+			await AlertStorageService.saveAlert(buildParams());
+
+			expect(mockAdd.mock.calls[0][0].expiresAt.toDate()).toEqual(new Date('2026-11-11T00:00:00.000Z'));
+		});
+
+		it('falls back to the default retention when the setting is invalid', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			process.env.ALERT_STORAGE_RETENTION_DAYS = 'not-a-number';
+			jest.useFakeTimers().setSystemTime(new Date('2026-08-13T00:00:00.000Z'));
+			mockAdd.mockResolvedValueOnce({ id: 'retained-alert' });
+			const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+			await AlertStorageService.saveAlert(buildParams());
+
+			expect(mockAdd.mock.calls[0][0].expiresAt.toDate()).toEqual(new Date('2026-11-11T00:00:00.000Z'));
+			expect(warnSpy).toHaveBeenCalledWith(
+				'[AlertStorageService] Invalid ALERT_STORAGE_RETENTION_DAYS configuration, using default',
+			);
+			warnSpy.mockRestore();
 		});
 
 		it('persists only bounded non-negative integer processing latency', async () => {
@@ -475,6 +504,34 @@ describe('AlertStorageService', () => {
 			});
 		});
 
+		it('hides expired alerts and ages legacy records from receivedAt', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			jest.useFakeTimers().setSystemTime(new Date('2026-08-13T00:00:00.000Z'));
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('expired-alert', {
+						receivedAt: buildTimestamp('2026-08-12T00:00:00.000Z'),
+						expiresAt: buildTimestamp('2026-08-12T23:59:59.000Z'),
+					}),
+					buildQueryDoc('active-alert', {
+						receivedAt: buildTimestamp('2026-08-12T00:00:00.000Z'),
+						expiresAt: buildTimestamp('2026-11-11T00:00:00.000Z'),
+					}),
+					buildQueryDoc('legacy-expired-alert', {
+						receivedAt: buildTimestamp('2026-05-01T00:00:00.000Z'),
+					}),
+					buildQueryDoc('legacy-active-alert', {
+						receivedAt: buildTimestamp('2026-08-12T00:00:00.000Z'),
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.listAlerts({ limit: 10 });
+
+			expect(result.alerts.map(alert => alert.id)).toEqual(['active-alert', 'legacy-active-alert']);
+		});
+
 		it('keeps scanning batches until it finds enough filtered alerts', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 			mockGet
@@ -650,6 +707,17 @@ describe('AlertStorageService', () => {
 			});
 		});
 
+		it('returns null for an expired alert document', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			jest.useFakeTimers().setSystemTime(new Date('2026-08-13T00:00:00.000Z'));
+			mockDocGet.mockResolvedValueOnce(buildDocSnapshot('expired-alert', {
+				receivedAt: buildTimestamp('2026-08-12T00:00:00.000Z'),
+				expiresAt: buildTimestamp('2026-08-12T23:59:59.000Z'),
+			}));
+
+			await expect(AlertStorageService.getAlertById('expired-alert')).resolves.toBeNull();
+		});
+
 		it('throws STORAGE_UNAVAILABLE when Firestore detail reads fail', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 			mockDocGet.mockRejectedValueOnce(new Error('Permission denied'));
@@ -677,12 +745,14 @@ describe('AlertStorageService', () => {
 			expect(mockCollection).toHaveBeenCalledWith('alertReplays');
 			expect(mockDocSet).toHaveBeenCalledWith({
 				alertId: 'alert-123',
-				idempotencyKey,
+				idempotencyKeyHash,
 				channels: ['telegram'],
 				deliveryResults: [{ channel: 'telegram', success: true }],
 				replayedAt: expect.anything(),
+				expiresAt: expect.anything(),
 				source: 'alert-replay',
 			});
+			expect(JSON.stringify(mockDocSet.mock.calls[0][0])).not.toContain(idempotencyKey);
 		});
 
 		it('uses a bounded replay document ID for long idempotency keys', async () => {
@@ -842,6 +912,34 @@ describe('AlertStorageService', () => {
 			expect(JSON.stringify(result)).not.toContain('must-not-export');
 			expect(JSON.stringify(result)).not.toContain('authorization');
 			expect(JSON.stringify(result)).not.toContain('rawProviderResponse');
+		});
+
+		it('excludes expired alerts from exports', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			jest.useFakeTimers().setSystemTime(new Date('2026-08-13T00:00:00.000Z'));
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('expired-alert', {
+						receivedAt: buildTimestamp('2026-08-12T00:00:00.000Z'),
+						expiresAt: buildTimestamp('2026-08-12T23:59:59.000Z'),
+						source: 'webhook',
+					}),
+					buildQueryDoc('active-alert', {
+						receivedAt: buildTimestamp('2026-08-12T00:00:00.000Z'),
+						expiresAt: buildTimestamp('2026-11-11T00:00:00.000Z'),
+						source: 'webhook',
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.exportAlerts({
+				from: '2026-08-01T00:00:00.000Z',
+				to: '2026-08-14T00:00:00.000Z',
+				limit: 10,
+			});
+
+			expect(result.alerts.map(alert => alert.id)).toEqual(['active-alert']);
 		});
 
 		it('pages filtered exports through the full window and caps the result', async () => {
@@ -1053,6 +1151,34 @@ describe('AlertStorageService', () => {
 				},
 			});
 			expect(JSON.stringify(result)).not.toContain('raw alert text');
+		});
+
+		it('excludes expired alerts from summaries', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			jest.useFakeTimers().setSystemTime(new Date('2026-08-13T00:00:00.000Z'));
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('expired-alert', {
+						receivedAt: buildTimestamp('2026-08-12T00:00:00.000Z'),
+						expiresAt: buildTimestamp('2026-08-12T23:59:59.000Z'),
+						source: 'webhook',
+					}),
+					buildQueryDoc('active-alert', {
+						receivedAt: buildTimestamp('2026-08-12T00:00:00.000Z'),
+						expiresAt: buildTimestamp('2026-11-11T00:00:00.000Z'),
+						source: 'webhook',
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.summarizeAlerts({
+				from: '2026-08-01T00:00:00.000Z',
+				to: '2026-08-14T00:00:00.000Z',
+				limit: 10,
+			});
+
+			expect(result.totalAlerts).toBe(1);
 		});
 
 		it('applies source and enriched filters before aggregating', async () => {

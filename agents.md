@@ -653,6 +653,7 @@ Every successful `POST /api/webhook/alert` request is persisted as a document in
 | `source` | string | Always `"webhook"` |
 | `useTradingViewData` | boolean | Whether `?useTradingViewData=true` was set on the request |
 | `tradingViewEnrichmentApplied` | boolean | Whether a TradingView MCP result was successfully applied |
+| `expiresAt` | timestamp | `receivedAt` plus `ALERT_STORAGE_RETENTION_DAYS`; configured as a Firestore TTL field |
 
 **Credential Configuration** (choose one):
 - **Option A** — `GOOGLE_APPLICATION_CREDENTIALS=/path/to/serviceAccountKey.json` (file path, good for local dev)
@@ -660,6 +661,7 @@ Every successful `POST /api/webhook/alert` request is persisted as a document in
 
 **Configuration**:
 - `ENABLE_FIRESTORE_ALERT_STORAGE` — Feature flag (default: false)
+- `ALERT_STORAGE_RETENTION_DAYS` — Validated alert/replay retention window in days (`1`-`3650`, default: `90`); expired records are filtered before reads and new records carry `expiresAt`
 - `FIREBASE_PROJECT_ID` — Optional project ID override (usually embedded in the service account JSON)
 
 **Failure Behavior** (fail-open):
@@ -686,8 +688,9 @@ Every successful `POST /api/webhook/alert` request is persisted as a document in
   - `useTradingViewData`
   - `tradingViewEnrichmentApplied`
 - Read filtering for `source` and `enriched` is applied in memory after `receivedAt`-ordered batches to avoid introducing new composite Firestore index requirements.
+- Retention filtering is also applied in memory because Firestore TTL deletion is eventual. Legacy documents without `expiresAt` are aged from `receivedAt` or `replayedAt`; run `bash ops/configure-firestore-alert-retention.sh` to enable TTL deletion for both collection groups.
 - Read endpoints must map Firestore initialization/read failures to `503 STORAGE_UNAVAILABLE` instead of a generic `500`.
-- Replay attempts must not mutate the original `alerts` document. Use `saveReplayAttempt()` to write an audit document with ID `${alertId}_${idempotencyKey}` in `alertReplays`.
+- Replay attempts must not mutate the original `alerts` document. Use `saveReplayAttempt()` to write an audit document with ID `${alertId}_${sha256(idempotencyKey)}` in `alertReplays`; only the hash is stored, alongside the same `expiresAt` retention policy.
 - Export responses must not expose API keys, service-account data, webhook secrets, raw provider credentials, full `enrichmentData`, or raw provider responses. Keep delivery status compact (`channel`, `success`, `messageId`, `errorCode`, `statusCode`) and token usage numeric-only.
 - When extending the alerts read API, preserve `receivedAt` as the primary sort key but encode `nextBefore` with a deterministic tie-breaker (document ID) so paginated reads do not skip same-timestamp alerts, and preserve API-key protection on both list and detail routes.
 
