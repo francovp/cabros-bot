@@ -63,7 +63,7 @@ function parseTradingViewSignal(text, options = {}) {
 	const defaultTimeframe = options.defaultTimeframe || '1h';
 	const cleaned = text.trim();
 
-	const symbolMatch = cleaned.match(/(?:^|\s)(?:(?<exchange>[A-Z]+):)?(?<symbol>[A-Z0-9._-]{3,20})\s*\(\s*(?<timeframe>[A-Za-z0-9]+)\s*\)/i);
+	const symbolMatch = cleaned.match(/(?:^|\s)(?:(?<exchange>[A-Z_]+):)?(?<symbol>[A-Z0-9._-]{3,20})\s*\(\s*(?<timeframe>[A-Za-z0-9]+)\s*\)/i);
 	if (!symbolMatch || !symbolMatch.groups) {
 		return null;
 	}
@@ -95,6 +95,7 @@ function parseTradingViewSignal(text, options = {}) {
 }
 
 const STOCK_EXCHANGES = new Set(['BATS', 'NASDAQ', 'NYSE', 'AMEX', 'SPCFD', 'CBOE']);
+const NON_EQUITY_EXCHANGES = new Set(['FX_IDC', 'CME_MINI', 'CBOT_MINI']);
 const CRYPTO_EXCHANGES = new Set(['BINANCE', 'BYBIT', 'COINBASE', 'OKX', 'KRAKEN', 'BITFINEX', 'KUCOIN']);
 const CRYPTO_SUFFIXES = ['USDT', 'BUSD', 'USDC', 'BTC', 'ETH', 'SOL', 'PERP'];
 const BARE_CRYPTO_SYMBOLS = ['BTC', 'ETH', 'SOL', 'PERP'];
@@ -107,12 +108,13 @@ function deriveAssetContext(text) {
 	const parsed = parseTradingViewSignal(text);
 	if (parsed && parsed.symbol) {
 		const exchange = parsed.exchange || (parsed.symbol.endsWith('USDT') ? 'BINANCE' : null);
-		let assetClass = 'stock';
+		let assetClass = exchange && NON_EQUITY_EXCHANGES.has(exchange) ? null : 'stock';
 		if (exchange && CRYPTO_EXCHANGES.has(exchange)) {
 			assetClass = 'crypto';
 		} else if (exchange && STOCK_EXCHANGES.has(exchange)) {
 			assetClass = 'stock';
-		} else if (CRYPTO_SUFFIXES.some(s => parsed.symbol.endsWith(s))) {
+		} else if (!NON_EQUITY_EXCHANGES.has(exchange)
+			&& CRYPTO_SUFFIXES.some(s => parsed.symbol.endsWith(s))) {
 			assetClass = 'crypto';
 		}
 
