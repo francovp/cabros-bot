@@ -17,6 +17,25 @@ const newsDedupStorageService = require('../../../../services/storage/NewsDedupS
 const { trackBackgroundTask } = require('../../../../lib/backgroundTaskTracker');
 
 const DELIVERY_LOCK_TTL_MS = 30_000;
+const DELIVERY_LOCK_RENEW_INTERVAL_MS = 10_000;
+
+function mergeDeliveryData(existingData = {}, updatedData = {}) {
+	if (!Array.isArray(existingData.deliveryResults) || !Array.isArray(updatedData.deliveryResults)) {
+		return updatedData;
+	}
+
+	const resultByChannel = new Map();
+	for (const result of [...existingData.deliveryResults, ...updatedData.deliveryResults]) {
+		if (result && result.channel) {
+			resultByChannel.set(result.channel, result);
+		}
+	}
+	return {
+		...existingData,
+		...updatedData,
+		deliveryResults: Array.from(resultByChannel.values()),
+	};
+}
 
 /**
  * Parse and validate NEWS_CACHE_TTL_HOURS configuration.
@@ -168,17 +187,18 @@ class NewsCache {
 	async set(symbol, eventCategory, data, options = {}) {
 		const key = this.generateKey(symbol, eventCategory);
 		const existingEntry = options.preserveTtl ? this.cache.get(key) : null;
+		const dataToStore = existingEntry ? mergeDeliveryData(existingEntry.data, data) : data;
 		this.cache.set(key, {
 			key,
 			timestamp: existingEntry ? existingEntry.timestamp : Date.now(),
-			data,
+			data: dataToStore,
 		});
 
 		// Persistent dedup: write to Firestore (fail-open)
 		if (newsDedupStorageService.isEnabled() && newsDedupStorageService.isReady()) {
 			const write = options.preserveTtl
-				? newsDedupStorageService.updateEntry(key, data)
-				: newsDedupStorageService.setEntry(key, this.ttlMs, data);
+				? newsDedupStorageService.updateEntry(key, dataToStore)
+				: newsDedupStorageService.setEntry(key, this.ttlMs, dataToStore);
 			trackBackgroundTask(write).catch(err => {
 				console.warn('[NewsCache] Firestore cache write failed (fail-open):', err.message);
 			});
@@ -230,6 +250,38 @@ class NewsCache {
 		}
 
 		return true;
+	}
+
+	/**
+	 * Renew a persistent channel retry lease while delivery is in progress.
+	 */
+	async renewDelivery(symbol, eventCategory, channel) {
+		const key = `${this.generateKey(symbol, eventCategory)}:delivery:${channel}`;
+		const lease = this.deliveryLocks.get(key);
+		if (!lease?.active || lease.persistentUntil <= Date.now()) {
+			return false;
+		}
+		if (!(newsDedupStorageService.isEnabled() && newsDedupStorageService.isReady())) {
+			return true;
+		}
+
+		try {
+			const renewed = await newsDedupStorageService.renewEntry(key, DELIVERY_LOCK_TTL_MS);
+			if (renewed) {
+				lease.persistentUntil = Date.now() + DELIVERY_LOCK_TTL_MS;
+			}
+			return renewed;
+		} catch (error) {
+			console.warn('[NewsCache] Delivery lease renewal failed (fail-open):', error.message);
+			return false;
+		}
+	}
+
+	/**
+	 * Return the interval used by callers to keep a delivery lease alive.
+	 */
+	getDeliveryLeaseRenewIntervalMs() {
+		return DELIVERY_LOCK_RENEW_INTERVAL_MS;
 	}
 
 	/**

@@ -531,6 +531,10 @@ class NewsAnalyzer {
 								}
 							}
 							if (claimedRetryChannels.length > 0) {
+								const leaseRenewalIntervals = claimedRetryChannels.map((channel) => setInterval(
+									() => this.cache.renewDelivery(symbol, category, channel).catch(() => {}),
+									this.cache.getDeliveryLeaseRenewIntervalMs(),
+								));
 								try {
 									const retryResults = await sendWithNotificationRouting(
 										notificationMgr,
@@ -548,6 +552,7 @@ class NewsAnalyzer {
 										deliveryResults,
 									}, { preserveTtl: true });
 								} finally {
+									leaseRenewalIntervals.forEach(clearInterval);
 									claimedRetryChannels.forEach((channel) => this.cache.releaseDelivery(symbol, category, channel));
 								}
 							}

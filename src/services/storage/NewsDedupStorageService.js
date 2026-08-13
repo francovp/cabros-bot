@@ -20,6 +20,24 @@ const admin = require('firebase-admin');
 
 const COLLECTION_NAME = 'news-monitor-dedup';
 
+function mergeDeliveryData(existingData = {}, updatedData = {}) {
+	if (!Array.isArray(existingData.deliveryResults) || !Array.isArray(updatedData.deliveryResults)) {
+		return updatedData;
+	}
+
+	const resultByChannel = new Map();
+	for (const result of [...existingData.deliveryResults, ...updatedData.deliveryResults]) {
+		if (result && result.channel) {
+			resultByChannel.set(result.channel, result);
+		}
+	}
+	return {
+		...existingData,
+		...updatedData,
+		deliveryResults: Array.from(resultByChannel.values()),
+	};
+}
+
 // Lazy Firestore singleton (shared with AlertStorageService via firebase-admin)
 let db = null;
 
@@ -240,12 +258,52 @@ async function updateEntry(key, data) {
 				key,
 				createdAt: existingData.createdAt,
 				expiresAt: existingData.expiresAt,
-				data: data || null,
+				data: mergeDeliveryData(existingData.data, data) || null,
 			});
 			return true;
 		});
 	} catch (error) {
 		console.warn('[NewsDedupStorageService] updateEntry error (fail-open):', error.message);
+		return false;
+	}
+}
+
+/**
+ * Renew an active delivery lease without changing its payload.
+ *
+ * @param {string} key - Lease key
+ * @param {number} ttlMs - Lease duration in milliseconds
+ * @returns {Promise<boolean>} true when the active lease was renewed
+ */
+async function renewEntry(key, ttlMs) {
+	const firestore = getFirestore();
+	if (!firestore) {
+		return false;
+	}
+
+	try {
+		const now = admin.firestore.Timestamp.now();
+		const expiresAt = admin.firestore.Timestamp.fromMillis(now.toMillis() + ttlMs);
+		const docRef = firestore.collection(COLLECTION_NAME).doc(key);
+		return await firestore.runTransaction(async transaction => {
+			const existing = await transaction.get(docRef);
+			const existingData = existing.exists && existing.data();
+			if (!existing.exists || !existingData?.expiresAt
+				|| typeof existingData.expiresAt.toMillis !== 'function'
+				|| existingData.expiresAt.toMillis() <= now.toMillis()) {
+				return false;
+			}
+
+			transaction.set(docRef, {
+				key,
+				createdAt: existingData.createdAt,
+				expiresAt,
+				data: existingData.data || null,
+			});
+			return true;
+		});
+	} catch (error) {
+		console.warn('[NewsDedupStorageService] renewEntry error (fail-open):', error.message);
 		return false;
 	}
 }
@@ -288,6 +346,7 @@ module.exports = {
 	claimEntry,
 	setEntry,
 	updateEntry,
+	renewEntry,
 	deleteEntry,
 	COLLECTION_NAME,
 	// Exported for testing — reset the cached db singleton between tests

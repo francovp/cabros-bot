@@ -13,6 +13,7 @@ const mockGetEntry = jest.fn().mockResolvedValue(null);
 const mockClaimEntry = jest.fn().mockResolvedValue(true);
 const mockSetEntry = jest.fn().mockResolvedValue(undefined);
 const mockUpdateEntry = jest.fn().mockResolvedValue(true);
+const mockRenewEntry = jest.fn().mockResolvedValue(true);
 const mockDeleteEntry = jest.fn().mockResolvedValue(undefined);
 const admin = require('firebase-admin');
 
@@ -24,6 +25,7 @@ jest.mock('../../src/services/storage/NewsDedupStorageService', () => ({
 	claimEntry: mockClaimEntry,
 	setEntry: mockSetEntry,
 	updateEntry: mockUpdateEntry,
+	renewEntry: mockRenewEntry,
 	deleteEntry: mockDeleteEntry,
 	_resetForTesting: jest.fn(),
 	COLLECTION_NAME: 'news-monitor-dedup',
@@ -46,6 +48,7 @@ describe('NewsCache — Persistent Dedup Backend (Issue #120)', () => {
 		mockClaimEntry.mockResolvedValue(true);
 		mockSetEntry.mockResolvedValue(undefined);
 		mockUpdateEntry.mockResolvedValue(true);
+		mockRenewEntry.mockResolvedValue(true);
 		cache = new NewsCache();
 		cache.ttlMs = 1000; // 1 second for fast tests
 	});
@@ -222,6 +225,13 @@ describe('NewsCache — Persistent Dedup Backend (Issue #120)', () => {
 			cache.releaseDelivery('BTCUSDT', EventCategory.PRICE_SURGE, 'whatsapp');
 			await expect(cache.claimDelivery('BTCUSDT', EventCategory.PRICE_SURGE, 'whatsapp')).resolves.toBe(true);
 			expect(mockClaimEntry).toHaveBeenCalledTimes(1);
+		});
+
+		it('renews an active persistent channel lease', async () => {
+			await cache.claimDelivery('BTCUSDT', EventCategory.PRICE_SURGE, 'whatsapp');
+
+			await expect(cache.renewDelivery('BTCUSDT', EventCategory.PRICE_SURGE, 'whatsapp')).resolves.toBe(true);
+			expect(mockRenewEntry).toHaveBeenCalledWith('BTCUSDT:price_surge:delivery:whatsapp', 30_000);
 		});
 
 		it('tracks persistent cache writes until shutdown drain observes them', async () => {
@@ -449,7 +459,11 @@ describe('NewsDedupStorageService — updateEntry()', () => {
 		const transaction = {
 			get: jest.fn().mockResolvedValue({
 				exists: true,
-				data: () => ({ createdAt, expiresAt, data: { old: true } }),
+				data: () => ({
+					createdAt,
+					expiresAt,
+					data: { deliveryResults: [{ channel: 'telegram', success: false }] },
+				}),
 			}),
 			set: jest.fn(),
 		};
@@ -464,13 +478,20 @@ describe('NewsDedupStorageService — updateEntry()', () => {
 		const realService = jest.requireActual('../../src/services/storage/NewsDedupStorageService');
 		realService._resetForTesting();
 
-		await expect(realService.updateEntry('BTCUSDT:price_surge', { deliveryResults: [{ success: true }] }))
+		await expect(realService.updateEntry('BTCUSDT:price_surge', {
+			deliveryResults: [{ channel: 'whatsapp', success: true }],
+		}))
 			.resolves.toBe(true);
 		expect(transaction.set).toHaveBeenCalledWith(docRef, {
 			key: 'BTCUSDT:price_surge',
 			createdAt,
 			expiresAt,
-			data: { deliveryResults: [{ success: true }] },
+			data: {
+				deliveryResults: [
+					{ channel: 'telegram', success: false },
+					{ channel: 'whatsapp', success: true },
+				],
+			},
 		});
 	});
 });
