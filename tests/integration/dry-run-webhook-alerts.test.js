@@ -32,6 +32,7 @@ describe('Dry-run mode for webhook alert endpoints', () => {
 		});
 
 		jest.clearAllMocks();
+		tradingViewMcpService.callScanTool.mockResolvedValue({ items: [] });
 
 		mockTelegramSendMessage = jest.fn().mockResolvedValue({ message_id: 'test-msg-id' });
 		mockBot = {

@@ -29,7 +29,7 @@ const BASE_CONSOLE_METHODS = {
 	error: console.error.bind(console),
 };
 
-const SENSITIVE_KEY_PATTERN = /(password|secret|token|api[-_]?key|authorization|cookie|dsn)/i;
+const SENSITIVE_KEY_PATTERN = /(password|secret|token|api[-_]?key|authorization|cookie|dsn|discordWebhookUrl|webhookUrl)/i;
 
 function resolveLogLevel() {
 	const raw = process.env.LOG_LEVEL || (process.env.NODE_ENV === 'production' ? 'info' : 'debug');

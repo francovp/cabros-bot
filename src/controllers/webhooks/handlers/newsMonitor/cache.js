@@ -14,11 +14,47 @@
  */
 
 const newsDedupStorageService = require('../../../../services/storage/NewsDedupStorageService');
+const { trackBackgroundTask } = require('../../../../lib/backgroundTaskTracker');
+
+/**
+ * Parse and validate NEWS_CACHE_TTL_HOURS configuration.
+ *
+ * Rules:
+ * - undefined, null, or empty/whitespace string -> fallback (default: 6)
+ * - valid non-negative finite number (including 0 and decimals) -> parsed number
+ * - malformed, NaN, Infinite, negative -> warn and fallback (default: 6)
+ *
+ * @param {any} value - Input value to parse
+ * @param {number} fallback - Fallback TTL in hours (default: 6)
+ * @returns {number} Validated TTL in hours
+ */
+function parseNewsCacheTtlHours(value, fallback = 6) {
+	if (value === undefined || value === null) {
+		return fallback;
+	}
+	const str = String(value).trim();
+	if (str === '') {
+		return fallback;
+	}
+	if (!/^[+-]?(\d+(\.\d+)?|\.\d+)$/.test(str)) {
+		console.warn('[NewsCache] Invalid NEWS_CACHE_TTL_HOURS configuration, using default');
+		return fallback;
+	}
+	const parsed = Number(str);
+	if (!Number.isFinite(parsed) || parsed < 0) {
+		console.warn('[NewsCache] Invalid NEWS_CACHE_TTL_HOURS configuration, using default');
+		return fallback;
+	}
+	return parsed;
+}
 
 class NewsCache {
-	constructor() {
+	constructor(ttlHours) {
 		this.cache = new Map();
-		this.ttlMs = (process.env.NEWS_CACHE_TTL_HOURS || 6) * 60 * 60 * 1000;
+		const hours = parseNewsCacheTtlHours(
+			ttlHours !== undefined ? ttlHours : process.env.NEWS_CACHE_TTL_HOURS
+		);
+		this.ttlMs = hours * 60 * 60 * 1000;
 		this.cleanupInterval = null;
 	}
 
@@ -38,6 +74,10 @@ class NewsCache {
    * Initialize cache with periodic cleanup
    */
 	initialize() {
+		if (this.cleanupInterval) {
+			return;
+		}
+
 		// Cleanup every 1 hour
 		this.cleanupInterval = setInterval(() => {
 			this.cleanup();
@@ -62,7 +102,7 @@ class NewsCache {
    * @returns {boolean} True if expired
    */
 	isExpired(entry) {
-		return Date.now() - entry.timestamp > this.ttlMs;
+		return Date.now() - entry.timestamp >= this.ttlMs;
 	}
 
 	/**
@@ -131,7 +171,7 @@ class NewsCache {
 
 		// Persistent dedup: write to Firestore (fail-open)
 		if (newsDedupStorageService.isEnabled() && newsDedupStorageService.isReady()) {
-			newsDedupStorageService.setEntry(key, this.ttlMs, data).catch(err => {
+			trackBackgroundTask(newsDedupStorageService.setEntry(key, this.ttlMs, data)).catch(err => {
 				console.warn('[NewsCache] Firestore setEntry failed (fail-open):', err.message);
 			});
 		}
@@ -243,4 +283,5 @@ function getCacheInstance() {
 module.exports = {
 	getCacheInstance,
 	NewsCache,
+	parseNewsCacheTtlHours,
 };

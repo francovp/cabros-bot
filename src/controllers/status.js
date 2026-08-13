@@ -4,9 +4,10 @@ const { scannerPresetService } = require('../services/scannerPresets/ScannerPres
 const idempotencyStorageService = require('../services/storage/IdempotencyStorageService');
 const { isFirestoreConfigured } = require('../services/storage/firestoreConfig');
 const SignalOutcomeService = require('../services/storage/SignalOutcomeService');
+const { jobQueue } = require('../services/jobs/JobQueue');
 const equityMarketDataService = require('../services/storage/EquityMarketDataService');
-
-const DEFAULT_TRADINGVIEW_MCP_URL = 'https://tradingview-mcp.onrender.com/mcp';
+const remoteConfigService = require('../services/remoteConfig/RemoteConfigService');
+const { tradingViewMcpService } = require('../services/tradingview/TradingViewMcpService');
 const DEFAULT_AZURE_LLM_ENDPOINT = 'https://models.github.ai/inference';
 const DEFAULT_OPENROUTER_MODEL = 'google/gemini-2.0-flash-001';
 const DEFAULT_CF_AIG_MODEL = 'google-ai-studio/gemini-2.5-flash';
@@ -154,7 +155,11 @@ function getStatus() {
 	const tradingViewMcpEnrichmentEnabled = isEnabled(process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT);
 	const tradingViewVolumeConfirmationFlagEnabled = isEnabled(process.env.ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION);
 	const tradingViewVolumeConfirmationEnabled = tradingViewVolumeConfirmationFlagEnabled && tradingViewMcpEnrichmentEnabled;
-	const tradingViewMcpEnabled = tradingViewMcpEnrichmentEnabled || marketScannerEnabled;
+	const observedTradingViewMcpStatus = tradingViewMcpService.getStatus({ enabled: true });
+	const tradingViewMcpEnabled =
+		tradingViewMcpEnrichmentEnabled
+		|| marketScannerEnabled
+		|| observedTradingViewMcpStatus.lastCheckedAt !== null;
 	const firestoreEnabled = isEnabled(process.env.ENABLE_FIRESTORE_ALERT_STORAGE);
 	const firestoreScannerPresetsEnabled = isEnabled(process.env.ENABLE_FIRESTORE_SCANNER_PRESETS);
 	const firestoreJobStorageEnabled = isEnabled(process.env.ENABLE_FIRESTORE_JOB_STORAGE)
@@ -164,7 +169,9 @@ function getStatus() {
 	const binancePriceCheckEnabled = isEnabled(process.env.ENABLE_BINANCE_PRICE_CHECK);
 	const llmAlertEnrichmentEnabled = isEnabled(process.env.ENABLE_LLM_ALERT_ENRICHMENT);
 	const cloudflareAigEnabled = isEnabled(process.env.ENABLE_CLOUDFLARE_AIG);
-	const messageFooterMetadataEnabled = process.env.ENABLE_MESSAGE_FOOTER_METADATA !== 'false';
+	const runtimeConfig = remoteConfigService.getRuntimeConfig();
+	const messageFooterMetadataEnabled = runtimeConfig.ENABLE_MESSAGE_FOOTER_METADATA;
+	const remoteConfigStatus = remoteConfigService.getStatus();
 	const signalOutcomeTrackingEnabled = isEnabled(process.env.ENABLE_SIGNAL_OUTCOME_TRACKING)
 		|| isEnabled(process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING);
 	const equityMarketDataStatus = equityMarketDataService.getStatus();
@@ -190,13 +197,10 @@ function getStatus() {
 		geminiGroundingEnabled,
 		modelProvider,
 	});
-	const tradingViewMcp = dependencyStatus({
-		enabled: tradingViewMcpEnabled,
-		configured: hasValue(process.env.TRADINGVIEW_MCP_URL || DEFAULT_TRADINGVIEW_MCP_URL),
-	});
-	const tradingViewVolumeConfirmation = dependencyStatus({
+	const tradingViewRuntimeStatus = tradingViewMcpService.getStatus({ enabled: tradingViewMcpEnabled });
+	const tradingViewMcp = tradingViewRuntimeStatus;
+	const tradingViewVolumeConfirmation = tradingViewMcpService.getVolumeConfirmationStatus({
 		enabled: tradingViewVolumeConfirmationEnabled,
-		configured: hasValue(process.env.TRADINGVIEW_MCP_URL || DEFAULT_TRADINGVIEW_MCP_URL),
 	});
 	const firestore = dependencyStatus({
 		enabled: firestoreEnabled,
@@ -255,6 +259,7 @@ function getStatus() {
 	};
 
 	const signalOutcomeWorkerStatus = SignalOutcomeService.getWorkerStatus();
+	const jobExecutionQueueStatus = jobQueue.getStatus();
 	const signalOutcomeWorkerDependency = dependencyStatus({
 		enabled: signalOutcomeWorkerStatus.enabled,
 		configured: firestore.configured,
@@ -280,7 +285,7 @@ function getStatus() {
 			newsMonitorTestMode: newsMonitorTestModeEnabled,
 			tradingViewMcpEnrichment: tradingViewMcpEnrichmentEnabled,
 			tradingViewVolumeConfirmation: tradingViewVolumeConfirmationFlagEnabled,
-			tradingViewConfluenceEnrichment: process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT !== 'false',
+			tradingViewConfluenceEnrichment: isEnabled(process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT),
 			tradingViewConfluenceMultiTimeframe: isEnabled(process.env.ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME),
 			firestoreAlertStorage: firestoreEnabled,
 			firestoreScannerPresets: firestoreScannerPresetsEnabled,
@@ -296,6 +301,8 @@ function getStatus() {
 			signalOutcomeTracking: signalOutcomeTrackingEnabled,
 			equityMarketData: equityMarketDataStatus.enabled,
 			firestoreIdempotency: idempotencyStorageService.isEnabled(),
+			firebaseRemoteConfig: remoteConfigStatus.enabled,
+			jobExecutionWorker: jobExecutionQueueStatus.enabled,
 		},
 		deliveryChannels: {
 			telegram: {
@@ -334,6 +341,7 @@ function getStatus() {
 			}),
 			newsMonitorDedup,
 			idempotencyStorage: idempotencyStorageService.getStorageStatus(),
+			firebaseRemoteConfig: remoteConfigStatus,
 			scannerPresetStorage: scannerPresetService.getStorageStatus(),
 			equityMarketData: equityMarketDataStatus,
 			signalOutcomeWorker: {
@@ -352,6 +360,7 @@ function getStatus() {
 				lastRunPendingCount: signalOutcomeWorkerStatus.lastRunPendingCount,
 				lastRunErrorCount: signalOutcomeWorkerStatus.lastRunErrorCount,
 			},
+			jobExecutionQueue: jobExecutionQueueStatus,
 		},
 	};
 }

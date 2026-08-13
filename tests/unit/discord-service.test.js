@@ -86,6 +86,33 @@ describe('DiscordService', () => {
 			);
 		});
 
+		it('posts message content to per-request webhook override when discordWebhookUrl is provided in alert', async () => {
+			global.fetch.mockResolvedValue({
+				ok: true,
+				json: async () => ({ id: 'discord-msg-override' }),
+			});
+
+			const customWebhook = 'https://discord.com/api/webhooks/999/override-token';
+			const result = await service.send({ text: 'Custom Discord alert', discordWebhookUrl: customWebhook });
+
+			expect(result).toEqual({
+				success: true,
+				channel: 'discord',
+				messageId: 'discord-msg-override',
+				messageIds: ['discord-msg-override'],
+				messageCount: 1,
+			});
+			expect(global.fetch).toHaveBeenCalledWith(
+				'https://discord.com/api/webhooks/999/override-token?wait=true',
+				expect.objectContaining({
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ content: 'Custom Discord alert' }),
+					signal: expect.any(AbortSignal),
+				}),
+			);
+		});
+
 		it('returns a failed result when the webhook responds with a non-429 error', async () => {
 			global.fetch.mockResolvedValue({
 				ok: false,

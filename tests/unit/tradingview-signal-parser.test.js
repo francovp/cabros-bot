@@ -30,6 +30,53 @@ describe('TradingView signal parser', () => {
 		}));
 	});
 
+	it('parses underscore-delimited exchange prefixes', () => {
+		const result = parseTradingViewSignal('FX_IDC:USDCLP(D) cambió a señal de VENTA');
+
+		expect(result).toEqual(expect.objectContaining({
+			symbol: 'USDCLP',
+			exchange: 'FX_IDC',
+			rawTimeframe: 'D',
+			timeframe: '1D',
+			side: 'SELL',
+		}));
+	});
+
+	it('keeps known forex exchange context neutral', () => {
+		const text = 'FX_IDC:USDCLP(D) cambió a señal de VENTA';
+
+		expect(deriveAssetContext(text)).toEqual(expect.objectContaining({
+			symbol: 'USDCLP',
+			exchange: 'FX_IDC',
+			assetClass: null,
+		}));
+		expect(deriveCleanSearchQuery(text)).toBe('USDCLP market news analyst');
+	});
+
+	it('keeps unlisted equity exchanges classified as stocks', () => {
+		for (const exchange of ['LSE', 'TSX']) {
+			expect(deriveAssetContext(`${exchange}:VOD(D) cambió a señal de COMPRA`)).toEqual(expect.objectContaining({
+				exchange,
+				assetClass: 'stock',
+			}));
+		}
+	});
+
+	it('keeps known futures venues neutral', () => {
+		for (const exchange of ['CME_MINI', 'CBOT_MINI']) {
+			expect(deriveAssetContext(`${exchange}:ESU2026(D) cambió a señal de COMPRA`)).toEqual(expect.objectContaining({
+				exchange,
+				assetClass: null,
+			}));
+		}
+
+		expect(deriveAssetContext('CME_MINI:ETH(D) cambió a señal de COMPRA')).toEqual(expect.objectContaining({
+			exchange: 'CME_MINI',
+			assetClass: null,
+		}));
+		expect(deriveCleanSearchQuery('CME_MINI:ETH(D) cambió a señal de COMPRA')).toBe('ETH market news analyst');
+	});
+
 	it('returns null when side is missing', () => {
 		const result = parseTradingViewSignal('BTCUSDT(240) sin señal definida');
 		expect(result).toBeNull();
@@ -104,6 +151,22 @@ describe('TradingView signal parser', () => {
 			symbol: 'ETH',
 			assetClass: 'crypto',
 		}));
+	});
+
+	it('preserves slash-delimited crypto pairs in grounding context and queries', () => {
+		const text = 'BTC/USDT price rose after the announcement';
+		const ambiguousQuoteText = 'eth/btc price rose after the announcement';
+
+		expect(deriveAssetContext(text)).toEqual(expect.objectContaining({
+			symbol: 'BTC/USDT',
+			assetClass: 'crypto',
+		}));
+		expect(deriveCleanSearchQuery(text)).toBe('BTC/USDT crypto price news market analyst');
+		expect(deriveAssetContext(ambiguousQuoteText)).toEqual(expect.objectContaining({
+			symbol: 'ETH/BTC',
+			assetClass: 'crypto',
+		}));
+		expect(deriveCleanSearchQuery(ambiguousQuoteText)).toBe('ETH/BTC crypto price news market analyst');
 	});
 
 	it('does not classify lowercase bare symbols used as prose words', () => {
