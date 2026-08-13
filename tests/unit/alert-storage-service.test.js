@@ -945,26 +945,27 @@ describe('AlertStorageService', () => {
 		it('keeps paging unfiltered exports after retention filtering', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 			jest.useFakeTimers().setSystemTime(new Date('2026-08-13T00:00:00.000Z'));
+			const expiredBatch = Array.from({ length: 100 }, (_, index) => buildQueryDoc(`expired-${index}`, {
+				receivedAt: buildTimestamp('2026-08-12T12:00:00.000Z'),
+				expiresAt: buildTimestamp('2026-08-12T23:59:59.000Z'),
+			}));
 			mockGet
 				.mockResolvedValueOnce({
 					empty: false,
+					docs: expiredBatch,
+				})
+				.mockResolvedValueOnce({
+					empty: false,
 					docs: [
-						buildQueryDoc('expired-alert', {
-							receivedAt: buildTimestamp('2026-08-12T12:00:00.000Z'),
-							expiresAt: buildTimestamp('2026-08-12T23:59:59.000Z'),
-						}),
 						buildQueryDoc('active-first', {
 							receivedAt: buildTimestamp('2026-08-12T11:00:00.000Z'),
 							expiresAt: buildTimestamp('2026-11-11T00:00:00.000Z'),
 						}),
+						buildQueryDoc('active-second', {
+							receivedAt: buildTimestamp('2026-08-12T10:00:00.000Z'),
+							expiresAt: buildTimestamp('2026-11-11T00:00:00.000Z'),
+						}),
 					],
-				})
-				.mockResolvedValueOnce({
-					empty: false,
-					docs: [buildQueryDoc('active-second', {
-						receivedAt: buildTimestamp('2026-08-12T10:00:00.000Z'),
-						expiresAt: buildTimestamp('2026-11-11T00:00:00.000Z'),
-				})],
 				});
 
 			const result = await AlertStorageService.exportAlerts({
@@ -974,6 +975,7 @@ describe('AlertStorageService', () => {
 			});
 
 			expect(mockGet).toHaveBeenCalledTimes(2);
+			expect(mockLimit).toHaveBeenCalledWith(100);
 			expect(result.alerts.map(alert => alert.id)).toEqual(['active-first', 'active-second']);
 		});
 
@@ -1219,26 +1221,27 @@ describe('AlertStorageService', () => {
 		it('keeps paging unfiltered summaries after retention filtering', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 			jest.useFakeTimers().setSystemTime(new Date('2026-08-13T00:00:00.000Z'));
+			const expiredBatch = Array.from({ length: 100 }, (_, index) => buildQueryDoc(`expired-${index}`, {
+				receivedAt: buildTimestamp('2026-08-12T12:00:00.000Z'),
+				expiresAt: buildTimestamp('2026-08-12T23:59:59.000Z'),
+			}));
 			mockGet
 				.mockResolvedValueOnce({
 					empty: false,
+					docs: expiredBatch,
+				})
+				.mockResolvedValueOnce({
+					empty: false,
 					docs: [
-						buildQueryDoc('expired-alert', {
-							receivedAt: buildTimestamp('2026-08-12T12:00:00.000Z'),
-							expiresAt: buildTimestamp('2026-08-12T23:59:59.000Z'),
-						}),
 						buildQueryDoc('active-first', {
 							receivedAt: buildTimestamp('2026-08-12T11:00:00.000Z'),
 							expiresAt: buildTimestamp('2026-11-11T00:00:00.000Z'),
 						}),
+						buildQueryDoc('active-second', {
+							receivedAt: buildTimestamp('2026-08-12T10:00:00.000Z'),
+							expiresAt: buildTimestamp('2026-11-11T00:00:00.000Z'),
+						}),
 					],
-				})
-				.mockResolvedValueOnce({
-					empty: false,
-					docs: [buildQueryDoc('active-second', {
-						receivedAt: buildTimestamp('2026-08-12T10:00:00.000Z'),
-						expiresAt: buildTimestamp('2026-11-11T00:00:00.000Z'),
-				})],
 				});
 
 			const result = await AlertStorageService.summarizeAlerts({
@@ -1248,6 +1251,7 @@ describe('AlertStorageService', () => {
 			});
 
 			expect(mockGet).toHaveBeenCalledTimes(2);
+			expect(mockLimit).toHaveBeenCalledWith(100);
 			expect(result.totalAlerts).toBe(2);
 		});
 

@@ -961,6 +961,7 @@ async function exportAlerts({ from, to, limit, source, enriched, includeText = f
 
 	const window = buildExportWindow({ from, to, limit });
 	const hasFilters = typeof source === 'string' || typeof enriched === 'boolean';
+	const scanLimit = hasFilters ? window.limit : Math.max(window.limit, MAX_PAGE_SIZE);
 	const docs = [];
 	let pageCursor = null;
 	while (true) {
@@ -973,7 +974,7 @@ async function exportAlerts({ from, to, limit, source, enriched, includeText = f
 		if (pageCursor) {
 			query = query.startAfter(pageCursor.receivedAt, pageCursor.documentId);
 		}
-		query = query.limit(window.limit);
+		query = query.limit(scanLimit);
 
 		let snapshot;
 		try {
@@ -999,7 +1000,7 @@ async function exportAlerts({ from, to, limit, source, enriched, includeText = f
 			: activeDocs;
 		docs.push(...matchingDocs.slice(0, window.limit - docs.length));
 
-		if (docs.length >= window.limit || snapshot.docs.length < window.limit) {
+		if (docs.length >= window.limit || snapshot.docs.length < scanLimit) {
 			break;
 		}
 
@@ -1043,6 +1044,7 @@ async function summarizeAlerts({ from, to, limit, source, enriched } = {}) {
 
 	const window = buildSummaryWindow({ from, to, limit });
 	const hasFilters = typeof source === 'string' || typeof enriched === 'boolean';
+	const scanLimit = hasFilters ? window.limit : Math.max(window.limit, MAX_PAGE_SIZE);
 	const docs = [];
 	let pageCursor = null;
 	while (true) {
@@ -1055,7 +1057,7 @@ async function summarizeAlerts({ from, to, limit, source, enriched } = {}) {
 		if (pageCursor) {
 			query = query.startAfter(pageCursor.receivedAt, pageCursor.documentId);
 		}
-		query = query.limit(window.limit);
+		query = query.limit(scanLimit);
 
 		let snapshot;
 		try {
@@ -1081,7 +1083,7 @@ async function summarizeAlerts({ from, to, limit, source, enriched } = {}) {
 			: activeDocs;
 		docs.push(...matchingDocs.slice(0, window.limit - docs.length));
 
-		if (docs.length >= window.limit || snapshot.docs.length < window.limit) {
+		if (docs.length >= window.limit || snapshot.docs.length < scanLimit) {
 			break;
 		}
 
