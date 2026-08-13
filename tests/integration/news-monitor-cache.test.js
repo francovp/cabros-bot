@@ -426,6 +426,75 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 				expect.any(Object),
 			);
 			expect(mockFetch).toHaveBeenCalledTimes(1);
+
+			const response3 = await request(app)
+				.post('/api/news-monitor').set('x-api-key', 'test-key')
+				.send({
+					crypto: ['BTCUSDT'],
+					channels: ['telegram'],
+					telegramChatId: '-100999888777',
+				})
+				.expect(200);
+
+			expect(response3.body.deliveredChannels).toEqual(['telegram']);
+			expect(response3.body.results[0].deliveryResults).toEqual([
+				expect.objectContaining({ channel: 'telegram', success: true }),
+			]);
+			expect(mockBot.telegram.sendMessage).toHaveBeenCalledTimes(1);
+		});
+
+		it('should retry only newly requested channels when an explicit channel set expands', async () => {
+			const telegramSend = jest.spyOn(mockBot.telegram, 'sendMessage');
+
+			await request(app)
+				.post('/api/news-monitor').set('x-api-key', 'test-key')
+				.send({ crypto: ['BTCUSDT'], channels: ['telegram'] })
+				.expect(200);
+
+			const response = await request(app)
+				.post('/api/news-monitor').set('x-api-key', 'test-key')
+				.send({ crypto: ['BTCUSDT'], channels: ['telegram', 'whatsapp'] })
+				.expect(200);
+
+			expect(response.body.deliveredChannels).toEqual(['telegram', 'whatsapp']);
+			expect(telegramSend).toHaveBeenCalledTimes(1);
+			expect(mockFetch).toHaveBeenCalledTimes(1);
+		});
+
+		it('should not report a destination retry as delivered while another request owns its lease', async () => {
+			await request(app)
+				.post('/api/news-monitor').set('x-api-key', 'test-key')
+				.send({ crypto: ['BTCUSDT'], channels: ['telegram'] })
+				.expect(200);
+
+			let releaseRetry;
+			let retryStarted;
+			const retryStartedPromise = new Promise((resolve) => { retryStarted = resolve; });
+			const { getNotificationManager } = require('../../src/controllers/webhooks/handlers/alert/alert');
+			const telegramSend = jest.spyOn(getNotificationManager().channels.get('telegram'), 'send')
+				.mockImplementationOnce(() => new Promise((resolve) => {
+					releaseRetry = resolve;
+					retryStarted();
+				}));
+
+			const retry = request(app)
+				.post('/api/news-monitor').set('x-api-key', 'test-key')
+				.send({ crypto: ['BTCUSDT'], channels: ['telegram'], telegramChatId: '-100000000002' })
+				.expect(200);
+			const retryPromise = retry.then((response) => response);
+			await retryStartedPromise;
+
+			const concurrent = await request(app)
+				.post('/api/news-monitor').set('x-api-key', 'test-key')
+				.send({ crypto: ['BTCUSDT'], channels: ['telegram'], telegramChatId: '-100000000002' })
+				.expect(200);
+
+			expect(concurrent.body.deliveredChannels).toEqual([]);
+			expect(concurrent.body.results[0].deliveryResults).toEqual([]);
+			expect(telegramSend).toHaveBeenCalledTimes(1);
+
+			releaseRetry({ message_id: 'telegram-retry' });
+			await retryPromise;
 		});
 
 		it('should re-deliver only missing enabled channels when a later request omits channels', async () => {

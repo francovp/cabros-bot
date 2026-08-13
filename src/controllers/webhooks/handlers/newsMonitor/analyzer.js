@@ -53,25 +53,6 @@ function getCachedRoutingMetadata(routing = {}) {
 	};
 }
 
-function sameChannelSet(left = [], right = []) {
-	const leftSet = new Set(Array.isArray(left) ? left : []);
-	const rightSet = new Set(Array.isArray(right) ? right : []);
-	if (leftSet.size !== rightSet.size) {
-		return false;
-	}
-	return Array.from(leftSet).every((channel) => rightSet.has(channel));
-}
-
-function getCachedChannels(cachedEntry = {}) {
-	if (Array.isArray(cachedEntry.routing?.channels)) {
-		return cachedEntry.routing.channels;
-	}
-
-	return (Array.isArray(cachedEntry.deliveryResults) ? cachedEntry.deliveryResults : [])
-		.map((result) => result && result.channel)
-		.filter(Boolean);
-}
-
 function getRoutingDestination(routing = {}, channel) {
 	if (channel === 'telegram') return typeof routing.telegramChatId === 'string' ? routing.telegramChatId : undefined;
 	if (channel === 'whatsapp') return typeof routing.whatsappChatId === 'string' ? routing.whatsappChatId : undefined;
@@ -85,18 +66,11 @@ function getCachedRedeliveryChannels(notificationMgr, cachedEntry = {}, routing 
 	}
 
 	const requestedChannels = getRequestedChannels(notificationMgr, routing);
-	const cachedChannels = getCachedChannels(cachedEntry);
 	const cachedResults = new Map(
 		(Array.isArray(cachedEntry.deliveryResults) ? cachedEntry.deliveryResults : [])
 			.filter((result) => result && result.channel)
 			.map((result) => [result.channel, result]),
 	);
-	const explicitChannelSetDiffers = Array.isArray(routing.channels)
-		&& !sameChannelSet(requestedChannels, cachedChannels);
-
-	if (explicitChannelSetDiffers) {
-		return requestedChannels;
-	}
 
 	return requestedChannels.filter((channel) => {
 		const cachedResult = cachedResults.get(channel);
@@ -104,6 +78,30 @@ function getCachedRedeliveryChannels(notificationMgr, cachedEntry = {}, routing 
 			!== getRoutingDestination(routing, channel);
 		return !cachedResult || !cachedResult.success || destinationDiffers;
 	});
+}
+
+function getActiveCachedDeliveryResults(
+	cachedEntry = {},
+	requestedChannels = [],
+	retryChannels = [],
+	claimedRetryChannels = [],
+	routing = {},
+) {
+	const requestedSet = new Set(requestedChannels);
+	const retrySet = new Set(retryChannels);
+	const claimedSet = new Set(claimedRetryChannels);
+
+	return (Array.isArray(cachedEntry.deliveryResults) ? cachedEntry.deliveryResults : [])
+		.filter((result) => {
+			if (!result || !requestedSet.has(result.channel)) {
+				return false;
+			}
+			if (!retrySet.has(result.channel) || claimedSet.has(result.channel)) {
+				return true;
+			}
+			return getRoutingDestination(cachedEntry.routing, result.channel)
+				=== getRoutingDestination(routing, result.channel);
+		});
 }
 
 function mergeDeliveryResults(cachedResults = [], retryResults = [], requestedChannels = []) {
@@ -530,6 +528,13 @@ class NewsAnalyzer {
 									claimedRetryChannels.push(channel);
 								}
 							}
+							const activeCachedDeliveryResults = getActiveCachedDeliveryResults(
+								cached,
+								requestedChannels,
+								retryChannels,
+								claimedRetryChannels,
+								routing,
+							);
 							if (claimedRetryChannels.length > 0) {
 								const leaseRenewalIntervals = claimedRetryChannels.map((channel) => setInterval(
 									() => this.cache.renewDelivery(symbol, category, channel).catch(() => {}),
@@ -542,19 +547,21 @@ class NewsAnalyzer {
 										{ ...routing, channels: claimedRetryChannels },
 									);
 									deliveryResults = mergeDeliveryResults(
-										cached.deliveryResults,
+										activeCachedDeliveryResults,
 										retryResults,
 										requestedChannels,
 									);
 									await this.cache.set(symbol, category, {
 										...cached,
 										routing: getCachedRoutingMetadata(routing),
-										deliveryResults,
+									deliveryResults,
 									}, { preserveTtl: true });
 								} finally {
 									leaseRenewalIntervals.forEach(clearInterval);
 									claimedRetryChannels.forEach((channel) => this.cache.releaseDelivery(symbol, category, channel));
 								}
+							} else {
+								deliveryResults = activeCachedDeliveryResults;
 							}
 						} else {
 							deliveryResults = [];
