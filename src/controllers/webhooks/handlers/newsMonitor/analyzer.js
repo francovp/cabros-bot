@@ -17,7 +17,6 @@ const { MainClient } = require('binance');
 const {
 	sendWithNotificationRouting,
 	getRequestedChannels,
-	getDeliveredChannels,
 } = require('../../../../services/notification/requestRouting');
 
 const promptService = getPromptService();
@@ -45,50 +44,79 @@ function getNotificationManager() {
 	return notificationManager;
 }
 
-function hasExplicitRouting(routing = {}) {
-	return Array.isArray(routing.channels) ||
-		typeof routing.telegramChatId === 'string' ||
-		typeof routing.whatsappChatId === 'string';
-}
-
-function shouldRedeliverCachedAlert(notificationMgr, cachedDeliveryResults, routing = {}) {
-	if (!notificationMgr) {
-		return false;
-	}
-
-	if (hasExplicitRouting(routing)) {
-		return true;
-	}
-
-	const requestedChannels = getRequestedChannels(notificationMgr, routing);
-	const deliveredChannels = getDeliveredChannels(cachedDeliveryResults);
-	if (requestedChannels.length !== deliveredChannels.length) {
-		return true;
-	}
-
-	const deliveredSet = new Set(deliveredChannels);
-	return requestedChannels.some((channel) => !deliveredSet.has(channel));
-}
-
 function getCachedRoutingMetadata(routing = {}) {
 	return {
 		channels: Array.isArray(routing.channels) ? [...routing.channels] : undefined,
 		telegramChatId: typeof routing.telegramChatId === 'string' ? routing.telegramChatId : undefined,
 		whatsappChatId: typeof routing.whatsappChatId === 'string' ? routing.whatsappChatId : undefined,
+		discordWebhookUrl: typeof routing.discordWebhookUrl === 'string' ? routing.discordWebhookUrl : undefined,
 	};
 }
 
-function cachedOverridesDiffer(cachedRouting = {}, routing = {}) {
-	return cachedRouting.telegramChatId !== (typeof routing.telegramChatId === 'string' ? routing.telegramChatId : undefined)
-		|| cachedRouting.whatsappChatId !== (typeof routing.whatsappChatId === 'string' ? routing.whatsappChatId : undefined);
+function sameChannelSet(left = [], right = []) {
+	const leftSet = new Set(Array.isArray(left) ? left : []);
+	const rightSet = new Set(Array.isArray(right) ? right : []);
+	if (leftSet.size !== rightSet.size) {
+		return false;
+	}
+	return Array.from(leftSet).every((channel) => rightSet.has(channel));
 }
 
-function shouldRedeliverCachedAlertForRequest(notificationMgr, cachedEntry = {}, routing = {}) {
-	if (cachedOverridesDiffer(cachedEntry.routing, routing)) {
-		return true;
+function getCachedChannels(cachedEntry = {}) {
+	if (Array.isArray(cachedEntry.routing?.channels)) {
+		return cachedEntry.routing.channels;
 	}
 
-	return shouldRedeliverCachedAlert(notificationMgr, cachedEntry.deliveryResults, routing);
+	return (Array.isArray(cachedEntry.deliveryResults) ? cachedEntry.deliveryResults : [])
+		.map((result) => result && result.channel)
+		.filter(Boolean);
+}
+
+function getRoutingDestination(routing = {}, channel) {
+	if (channel === 'telegram') return typeof routing.telegramChatId === 'string' ? routing.telegramChatId : undefined;
+	if (channel === 'whatsapp') return typeof routing.whatsappChatId === 'string' ? routing.whatsappChatId : undefined;
+	if (channel === 'discord') return typeof routing.discordWebhookUrl === 'string' ? routing.discordWebhookUrl : undefined;
+	return undefined;
+}
+
+function getCachedRedeliveryChannels(notificationMgr, cachedEntry = {}, routing = {}) {
+	if (!notificationMgr) {
+		return [];
+	}
+
+	const requestedChannels = getRequestedChannels(notificationMgr, routing);
+	const cachedChannels = getCachedChannels(cachedEntry);
+	const cachedResults = new Map(
+		(Array.isArray(cachedEntry.deliveryResults) ? cachedEntry.deliveryResults : [])
+			.filter((result) => result && result.channel)
+			.map((result) => [result.channel, result]),
+	);
+	const explicitChannelSetDiffers = Array.isArray(routing.channels)
+		&& !sameChannelSet(requestedChannels, cachedChannels);
+
+	if (explicitChannelSetDiffers) {
+		return requestedChannels;
+	}
+
+	return requestedChannels.filter((channel) => {
+		const cachedResult = cachedResults.get(channel);
+		const destinationDiffers = getRoutingDestination(cachedEntry.routing, channel)
+			!== getRoutingDestination(routing, channel);
+		return !cachedResult || !cachedResult.success || destinationDiffers;
+	});
+}
+
+function mergeDeliveryResults(cachedResults = [], retryResults = [], requestedChannels = []) {
+	const resultByChannel = new Map();
+	for (const result of [...cachedResults, ...retryResults]) {
+		if (result && result.channel) {
+			resultByChannel.set(result.channel, result);
+		}
+	}
+
+	return requestedChannels
+		.map((channel) => resultByChannel.get(channel))
+		.filter(Boolean);
 }
 
 function parseNewsTimeoutMs(value, fallback = 30000) {
@@ -493,9 +521,27 @@ class NewsAnalyzer {
 					let deliveryResults = cached.deliveryResults;
 					if (cached.alert) {
 						const notificationMgr = getNotificationManager();
-						if (shouldRedeliverCachedAlertForRequest(notificationMgr, cached, routing)) {
-							deliveryResults = await sendWithNotificationRouting(notificationMgr, cached.alert, routing);
-						} else if (!notificationMgr) {
+						if (notificationMgr) {
+							const requestedChannels = getRequestedChannels(notificationMgr, routing);
+							const retryChannels = getCachedRedeliveryChannels(notificationMgr, cached, routing);
+							if (retryChannels.length > 0) {
+								const retryResults = await sendWithNotificationRouting(
+									notificationMgr,
+									cached.alert,
+									{ ...routing, channels: retryChannels },
+								);
+								deliveryResults = mergeDeliveryResults(
+									cached.deliveryResults,
+									retryResults,
+									requestedChannels,
+								);
+								await this.cache.set(symbol, category, {
+									...cached,
+									routing: getCachedRoutingMetadata(routing),
+									deliveryResults,
+								});
+							}
+						} else {
 							deliveryResults = [];
 						}
 					}
