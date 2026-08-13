@@ -78,7 +78,11 @@ class NewsMonitorHandler {
 			validateNotificationRouting(notificationManager, routing);
 			const { crypto, stocks } = this.parseRequest(req);
 			const allSymbols = [...(crypto || []), ...(stocks || [])];
-			const validationError = this.validateRequest(allSymbols);
+			const useDefaultSymbols = allSymbols.length === 0;
+			const symbolsToAnalyze = useDefaultSymbols
+				? this.getDefaultSymbols()
+				: allSymbols;
+			const validationError = this.validateRequest(symbolsToAnalyze);
 			if (validationError) {
 				return res.status(400).json({
 					error: validationError,
@@ -87,11 +91,6 @@ class NewsMonitorHandler {
 				});
 			}
 
-			// Get default symbols if not provided
-			const useDefaultSymbols = allSymbols.length === 0;
-			const symbolsToAnalyze = !useDefaultSymbols
-				? allSymbols
-				: this.getDefaultSymbols();
 			const assetClassBySymbol = this.getAssetClassBySymbol(crypto, stocks, useDefaultSymbols);
 
 			console.info('[NewsMonitor] Analyzing symbols:', symbolsToAnalyze);

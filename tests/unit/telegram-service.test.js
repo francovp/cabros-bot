@@ -67,13 +67,49 @@ describe('TelegramService', () => {
 		}));
 		// First call with MarkdownV2, second call as plain text
 		expect(parseErrorBot.telegram.sendMessage).toHaveBeenCalledTimes(2);
+		expect(parseErrorBot.telegram.sendMessage.mock.calls[0][0]).toBe('chat-1');
 		expect(parseErrorBot.telegram.sendMessage.mock.calls[0][2]).toEqual({
 			parse_mode: 'MarkdownV2',
 			disable_web_page_preview: false,
 		});
+		expect(parseErrorBot.telegram.sendMessage.mock.calls[1][0]).toBe('chat-1');
 		expect(parseErrorBot.telegram.sendMessage.mock.calls[1][2]).toEqual({
 			disable_web_page_preview: false,
 		});
+	});
+
+	it('uses telegramChatId override for both MarkdownV2 attempt and plain-text fallback', async () => {
+		const parseErrorBot = {
+			telegram: {
+				sendMessage: jest.fn()
+					.mockRejectedValueOnce({
+						description: "Bad Request: can't parse entities: Can't find end of Bold entity at byte offset 10",
+					})
+					.mockResolvedValueOnce({ message_id: 202 }),
+			},
+		};
+		const fallbackService = new TelegramService({
+			bot: parseErrorBot,
+			chatId: 'chat-default',
+			formatter: {
+				format: (text) => text,
+			},
+			logger: { warn: jest.fn(), error: jest.fn() },
+		});
+
+		const result = await fallbackService.send({
+			text: '*unbalanced bold',
+			telegramChatId: 'chat-override-999',
+		});
+
+		expect(result).toEqual(expect.objectContaining({
+			success: true,
+			channel: 'telegram',
+			messageId: '202',
+		}));
+		expect(parseErrorBot.telegram.sendMessage).toHaveBeenCalledTimes(2);
+		expect(parseErrorBot.telegram.sendMessage.mock.calls[0][0]).toBe('chat-override-999');
+		expect(parseErrorBot.telegram.sendMessage.mock.calls[1][0]).toBe('chat-override-999');
 	});
 
 	it('does not fall back to plain text for non-parse Telegram errors', async () => {
