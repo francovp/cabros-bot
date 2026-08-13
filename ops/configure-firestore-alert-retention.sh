@@ -12,7 +12,7 @@ if ! command -v gcloud >/dev/null 2>&1; then
 	exit 1
 fi
 
-node ops/backfill-firestore-alert-retention.js
+FIREBASE_PROJECT_ID="$project" node ops/backfill-firestore-alert-retention.js
 
 for collection_group in alerts alertReplays; do
 	gcloud firestore fields ttls update expiresAt \

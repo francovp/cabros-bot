@@ -1,6 +1,8 @@
 'use strict';
 
 const admin = require('firebase-admin');
+const fs = require('fs');
+const path = require('path');
 
 const {
 	backfillCollection,
@@ -31,6 +33,15 @@ describe('Firestore alert retention backfill', () => {
 		process.env.ALERT_STORAGE_RETENTION_DAYS = 'invalid';
 
 		expect(getRetentionDays()).toBe(90);
+	});
+
+	it('passes the resolved project to the backfill process', () => {
+		const script = fs.readFileSync(
+			path.join(__dirname, '../../ops/configure-firestore-alert-retention.sh'),
+			'utf8',
+		);
+
+		expect(script).toContain('FIREBASE_PROJECT_ID="$project" node ops/backfill-firestore-alert-retention.js');
 	});
 
 	it('updates only legacy documents with a usable event timestamp', async () => {
