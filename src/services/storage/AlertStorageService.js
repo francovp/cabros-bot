@@ -968,13 +968,10 @@ async function exportAlerts({ from, to, limit, source, enriched, includeText = f
 			.collection(COLLECTION_NAME)
 			.where('receivedAt', '>=', admin.firestore.Timestamp.fromDate(new Date(window.from)))
 			.where('receivedAt', '<=', admin.firestore.Timestamp.fromDate(new Date(window.to)))
-			.orderBy('receivedAt', 'desc');
-
-		if (hasFilters) {
-			query = query.orderBy(admin.firestore.FieldPath.documentId(), 'desc');
-			if (pageCursor) {
-				query = query.startAfter(pageCursor.receivedAt, pageCursor.documentId);
-			}
+			.orderBy('receivedAt', 'desc')
+			.orderBy(admin.firestore.FieldPath.documentId(), 'desc');
+		if (pageCursor) {
+			query = query.startAfter(pageCursor.receivedAt, pageCursor.documentId);
 		}
 		query = query.limit(window.limit);
 
@@ -1002,7 +999,7 @@ async function exportAlerts({ from, to, limit, source, enriched, includeText = f
 			: activeDocs;
 		docs.push(...matchingDocs.slice(0, window.limit - docs.length));
 
-		if (!hasFilters || docs.length >= window.limit || snapshot.docs.length < window.limit) {
+		if (docs.length >= window.limit || snapshot.docs.length < window.limit) {
 			break;
 		}
 
@@ -1053,13 +1050,10 @@ async function summarizeAlerts({ from, to, limit, source, enriched } = {}) {
 			.collection(COLLECTION_NAME)
 			.where('receivedAt', '>=', admin.firestore.Timestamp.fromDate(new Date(window.from)))
 			.where('receivedAt', '<=', admin.firestore.Timestamp.fromDate(new Date(window.to)))
-			.orderBy('receivedAt', 'desc');
-
-		if (hasFilters) {
-			query = query.orderBy(admin.firestore.FieldPath.documentId(), 'desc');
-			if (pageCursor) {
-				query = query.startAfter(pageCursor.receivedAt, pageCursor.documentId);
-			}
+			.orderBy('receivedAt', 'desc')
+			.orderBy(admin.firestore.FieldPath.documentId(), 'desc');
+		if (pageCursor) {
+			query = query.startAfter(pageCursor.receivedAt, pageCursor.documentId);
 		}
 		query = query.limit(window.limit);
 
@@ -1076,20 +1070,18 @@ async function summarizeAlerts({ from, to, limit, source, enriched } = {}) {
 		}
 
 		const activeDocs = snapshot.docs.filter(doc => !isRetentionExpired(doc.data() || {}));
-		if (hasFilters) {
-			const matchingDocs = activeDocs.filter((doc) => {
+		const matchingDocs = hasFilters
+			? activeDocs.filter((doc) => {
 				const data = doc.data() || {};
 				return matchesFilters({
 					source: typeof data.source === 'string' ? data.source : null,
 					enriched: Boolean(data.enriched),
 				}, { source, enriched });
-			});
-			docs.push(...matchingDocs.slice(0, window.limit - docs.length));
-		} else {
-			docs.push(...activeDocs);
-		}
+			})
+			: activeDocs;
+		docs.push(...matchingDocs.slice(0, window.limit - docs.length));
 
-		if (!hasFilters || docs.length >= window.limit || snapshot.docs.length < window.limit) {
+		if (docs.length >= window.limit || snapshot.docs.length < window.limit) {
 			break;
 		}
 

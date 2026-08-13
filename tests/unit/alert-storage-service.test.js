@@ -942,6 +942,41 @@ describe('AlertStorageService', () => {
 			expect(result.alerts.map(alert => alert.id)).toEqual(['active-alert']);
 		});
 
+		it('keeps paging unfiltered exports after retention filtering', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			jest.useFakeTimers().setSystemTime(new Date('2026-08-13T00:00:00.000Z'));
+			mockGet
+				.mockResolvedValueOnce({
+					empty: false,
+					docs: [
+						buildQueryDoc('expired-alert', {
+							receivedAt: buildTimestamp('2026-08-12T12:00:00.000Z'),
+							expiresAt: buildTimestamp('2026-08-12T23:59:59.000Z'),
+						}),
+						buildQueryDoc('active-first', {
+							receivedAt: buildTimestamp('2026-08-12T11:00:00.000Z'),
+							expiresAt: buildTimestamp('2026-11-11T00:00:00.000Z'),
+						}),
+					],
+				})
+				.mockResolvedValueOnce({
+					empty: false,
+					docs: [buildQueryDoc('active-second', {
+						receivedAt: buildTimestamp('2026-08-12T10:00:00.000Z'),
+						expiresAt: buildTimestamp('2026-11-11T00:00:00.000Z'),
+				})],
+				});
+
+			const result = await AlertStorageService.exportAlerts({
+				from: '2026-08-01T00:00:00.000Z',
+				to: '2026-08-14T00:00:00.000Z',
+				limit: 2,
+			});
+
+			expect(mockGet).toHaveBeenCalledTimes(2);
+			expect(result.alerts.map(alert => alert.id)).toEqual(['active-first', 'active-second']);
+		});
+
 		it('pages filtered exports through the full window and caps the result', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 			const firstPageLastTimestamp = buildTimestamp('2026-06-06T11:00:00.000Z');
@@ -1179,6 +1214,41 @@ describe('AlertStorageService', () => {
 			});
 
 			expect(result.totalAlerts).toBe(1);
+		});
+
+		it('keeps paging unfiltered summaries after retention filtering', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			jest.useFakeTimers().setSystemTime(new Date('2026-08-13T00:00:00.000Z'));
+			mockGet
+				.mockResolvedValueOnce({
+					empty: false,
+					docs: [
+						buildQueryDoc('expired-alert', {
+							receivedAt: buildTimestamp('2026-08-12T12:00:00.000Z'),
+							expiresAt: buildTimestamp('2026-08-12T23:59:59.000Z'),
+						}),
+						buildQueryDoc('active-first', {
+							receivedAt: buildTimestamp('2026-08-12T11:00:00.000Z'),
+							expiresAt: buildTimestamp('2026-11-11T00:00:00.000Z'),
+						}),
+					],
+				})
+				.mockResolvedValueOnce({
+					empty: false,
+					docs: [buildQueryDoc('active-second', {
+						receivedAt: buildTimestamp('2026-08-12T10:00:00.000Z'),
+						expiresAt: buildTimestamp('2026-11-11T00:00:00.000Z'),
+				})],
+				});
+
+			const result = await AlertStorageService.summarizeAlerts({
+				from: '2026-08-01T00:00:00.000Z',
+				to: '2026-08-14T00:00:00.000Z',
+				limit: 2,
+			});
+
+			expect(mockGet).toHaveBeenCalledTimes(2);
+			expect(result.totalAlerts).toBe(2);
 		});
 
 		it('applies source and enriched filters before aggregating', async () => {
