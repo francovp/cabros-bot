@@ -381,14 +381,30 @@ describe('NewsCache — Persistent Dedup Backend (Issue #120)', () => {
 			expect(drained).toBe(true);
 		});
 
-		it('returns in-memory hit immediately without checking Firestore', async () => {
+		it('falls back to valid local data when Firestore has no entry', async () => {
 			const data = { alert: { symbol: 'BTCUSDT' } };
 			await cache.set('BTCUSDT', EventCategory.PRICE_SURGE, data);
-			mockGetEntry.mockClear();
 
 			const result = await cache.get('BTCUSDT', EventCategory.PRICE_SURGE);
 			expect(result).toEqual(data);
-			expect(mockGetEntry).not.toHaveBeenCalled();
+			expect(mockGetEntryRecord).toHaveBeenCalledWith('BTCUSDT:price_surge');
+		});
+
+		it('refreshes local delivery state from Firestore before returning a persistent hit', async () => {
+			const staleData = {
+				alert: { symbol: 'BTCUSDT' },
+				deliveryResults: [{ channel: 'whatsapp', success: false }],
+			};
+			const freshData = {
+				...staleData,
+				deliveryResults: [{ channel: 'whatsapp', success: true, messageId: 'remote-success' }],
+			};
+			await cache.set('BTCUSDT', EventCategory.PRICE_SURGE, staleData);
+			mockGetEntryRecord.mockResolvedValue({ data: freshData, expiresAtMs: Date.now() + cache.ttlMs });
+
+			await expect(cache.get('BTCUSDT', EventCategory.PRICE_SURGE)).resolves.toEqual(freshData);
+			expect(mockGetEntryRecord).toHaveBeenCalledWith('BTCUSDT:price_surge');
+			expect(cache.cache.get('BTCUSDT:price_surge').data).toEqual(freshData);
 		});
 
 		it('falls back to Firestore when local cache misses (cross-replica scenario)', async () => {

@@ -204,16 +204,17 @@ class NewsCache {
 		const key = this.generateKey(symbol, eventCategory);
 		const entry = this.cache.get(key);
 
+		let localData = null;
 		if (entry) {
 			if (this.isExpired(entry)) {
 				this.cache.delete(key);
-				// Fall through to Firestore check below
 			} else {
-				return entry.data;
+				localData = entry.data;
 			}
 		}
 
-		// Persistent dedup: check Firestore for cross-replica hits
+		// Persistent dedup: refresh Firestore state before reusing local data so
+		// another replica's delivery updates are visible before retry decisions.
 		if (newsDedupStorageService.isEnabled() && newsDedupStorageService.isReady()) {
 			try {
 				const entryRecord = await newsDedupStorageService.getEntryRecord(key);
@@ -232,7 +233,7 @@ class NewsCache {
 			}
 		}
 
-		return null;
+		return localData;
 	}
 
 	/**
