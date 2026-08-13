@@ -30,6 +30,11 @@ describe('SentryService', () => {
 		delete process.env.RAILWAY_GIT_PULL_REQUEST_NUMBER;
 		delete process.env.RAILWAY_GIT_REPO_OWNER;
 		delete process.env.RAILWAY_GIT_REPO_NAME;
+		delete process.env.RENDER_GIT_COMMIT;
+		delete process.env.GIT_COMMIT;
+		delete process.env.COMMIT_SHA;
+		delete process.env.GITHUB_SHA;
+		delete process.env.SOURCE_VERSION;
 		// Clear all mocks
 		jest.clearAllMocks();
 	});

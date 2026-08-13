@@ -17,6 +17,12 @@ describe('WhatsAppService', () => {
 			error: jest.fn(),
 			log: jest.fn(),
 		};
+		delete process.env.VERCEL_ENV;
+		delete process.env.RENDER;
+		delete process.env.IS_PULL_REQUEST;
+		delete process.env.RAILWAY_ENVIRONMENT_NAME;
+		delete process.env.RAILWAY_GIT_PULL_REQUEST_NUMBER;
+		delete process.env.WHATSAPP_PREVIEW_CHAT_ID;
 		service = new WhatsAppService({ logger: mockLogger });
 	});
 

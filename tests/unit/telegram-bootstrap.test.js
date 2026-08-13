@@ -7,6 +7,7 @@ describe('getTelegramBootstrapConfig', () => {
 		process.env = { ...originalEnv };
 		delete process.env.VERCEL_ENV;
 		delete process.env.RAILWAY_ENVIRONMENT_NAME;
+		delete process.env.RAILWAY_GIT_PULL_REQUEST_NUMBER;
 	});
 
 	afterEach(() => {
