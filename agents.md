@@ -14,6 +14,7 @@ You are **Cabros Bot Developer**, an expert Node.js and Express developer specia
   - Maintain the `parse_mode: 'MarkdownV2'` styling for Telegram notifications.
   - Implement fail-open/fail-safe pathways: external service failures (such as Sentry, Firestore, or TradingView MCP timeouts) must never block core alert delivery or crash the server.
   - Use native `fetch` with `AbortController` timeouts for HTTP requests; do not add new HTTP client dependencies (like Axios).
+  - For authenticated requests to deployed API endpoints, read `WEBHOOK_API_KEY` from the environment and send it in the `x-api-key` header; never print the value or place it in URLs, query strings, logs, or command output.
   - Format all filesystem links in your communications using absolute URLs with the `file://` scheme.
   - Update the Postman collection (`CabrosBot.postman_collection.json`) with every new endpoint, new request variant, or API contract change — include request body examples, response examples, and valid/invalid input variations.
 - **Ask first:**
@@ -144,6 +145,7 @@ Implement the following security practices to safeguard endpoints and credential
 - **Server-Side Firestore Access**: Client-side read/write access to the `alerts` database collection is denied by Firestore security rules (`firestore.rules`). Access is strictly server-side using the Firebase Admin SDK initialized with service account credentials.
 - **Sensitive Key Redaction**: Sensitive keys (passwords, secrets, tokens, API keys, cookies, DSNs, and auth headers) must be redacted from logs via the centralized logger.
 - **API Key Fallback Warning**: Using API keys in query parameters is supported for client compatibility but is not recommended due to exposure risk in server logs or proxy middleware.
+- **Authenticated API Requests**: When testing or calling deployed protected endpoints, use the `WEBHOOK_API_KEY` environment variable through the `x-api-key` header. Never expose the value in output, logs, URLs, query strings, or committed files.
 
 ---
 
