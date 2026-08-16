@@ -33,6 +33,7 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 - `ENABLE_FIREBASE_ADMIN_AUTH` - Enable opt-in Firebase email/password authentication for the browser admin console (`false` by default)
 - `FIREBASE_WEB_API_KEY` - Public Firebase Web API key used by the browser sign-in flow; not a service-account credential
 - `FIREBASE_AUTH_DOMAIN` - Public Firebase Auth domain used by the browser sign-in flow
+- `FIREBASE_DATABASE_URL` - Public Firebase Realtime Database URL used by the browser configuration
 - `FIREBASE_APP_ID` - Public Firebase Web app ID (optional for Auth, recommended)
 - `FIREBASE_WEB_CONFIG_JSON` - Optional JSON alternative containing the public Firebase Web config (`apiKey`, `authDomain`, `projectId`, and optional `appId`)
 

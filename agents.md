@@ -198,6 +198,16 @@ The audited controls include grounding limits/model/timeout, TradingView enrichm
 9. **Update this agents.md file** with the new context, recent PRs, and implementation details before creating a new PR
 10. **Final verification pass** before completion: run the exact relevant checks again, then do the full test suite `pnpm test` once per implementation to ensure no regressions
 
+### Post-merge production environment synchronization
+
+After a PR that adds or changes an environment variable is merged, wait for the merged commit's deployment to finish with a green/`SUCCESS` status before synchronizing runtime configuration. Then add the variable, with the exact corresponding value from the approved deployment configuration, to all production environments used by this project:
+
+- Render production services, using the Render CLI/API or configured deployment tooling.
+- Vercel production, using the Vercel CLI/API.
+- Railway production, using `railway-cli` with explicit project, environment, and service identifiers.
+
+Use the platform's secret mechanism for credentials and never print secret values, place them in URLs, commit them, or include them in command output. Public configuration values may be set directly, but still must match the approved `.env.example`, Blueprint, or PR configuration. Verify each platform with a redacted variable-name/readiness check and confirm any resulting deployment reaches green/`SUCCESS`. If a platform does not host the affected service, record that as an explicit no-op rather than silently skipping it. Do not claim the change is complete until the application deployment and environment synchronization checks pass.
+
 
 **Linting and Commits During Implementation**:
 - **Ignore linter issues during implementation**: Focus on feature functionality first; linter errors will be fixed in a dedicated final pass
