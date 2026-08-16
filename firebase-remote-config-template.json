@@ -14,6 +14,13 @@
       "description": "News analysis timeout in milliseconds",
       "valueType": "NUMBER"
     },
+    "NEWS_GEMINI_CONCURRENCY": {
+      "defaultValue": {
+        "value": "3"
+      },
+      "description": "Maximum concurrent Gemini-backed symbol analyses",
+      "valueType": "NUMBER"
+    },
     "NEWS_GEMINI_QUOTA_MAX_RETRIES": {
       "defaultValue": {
         "value": "2"

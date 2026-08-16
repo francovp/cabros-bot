@@ -13,6 +13,8 @@ jobs:
       FIREBASE_PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID || 'cabros-bot' }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: master
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
@@ -36,4 +38,4 @@ jobs:
           echo "GOOGLE_APPLICATION_CREDENTIALS=$RUNNER_TEMP/firebase-service-account.json" >> "$GITHUB_ENV"
 
       - name: Deploy server-side Remote Config template
-        run: pnpm exec firebase deploy --only remoteconfig --project "$FIREBASE_PROJECT_ID" --non-interactive
+        run: pnpm run deploy:firebase-remote-config:server
