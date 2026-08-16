@@ -27,12 +27,12 @@ If any criterion is uncertain, keep the same gate but hand the PR off through `I
 
 ## Retry and Livelock Control
 
-1. **Bounded Loops**: Re-check CI, preview, and review threads in a bounded loop.
-2. **Verification Limit**: Allow at most 3 full verification cycles unless a new concrete change lands.
-3. **Reset Trigger**: If a new concrete change is pushed, reset the verification cycle counter for that issue.
+1. **Bounded Checks**: Each quiet-window check is bounded; do not poll continuously outside the required midpoint and endpoint checks.
+2. **Verification Limit**: Allow at most 3 full verification cycles for an unchanged head SHA. A new concrete change or newly appeared discussion starts a fresh cycle.
+3. **Reset Trigger**: If a new concrete change is pushed or a new discussion appears, address it and reset the verification cycle counter and quiet window for that issue.
 4. **Repeated Blockers**: If the same blocker persists across cycles, end with outcome `LOCAL_DEADLOCK`.
 5. **Action Duplication**: Do not retry the same failed action unless there is a clear reason it may now succeed.
-6. **Polling Constraints**: Do not keep polling indefinitely during the same run.
+6. **Polling Constraints**: Do not poll indefinitely without review activity. When a discussion appears, address it and repeat the quiet-window cycle until one complete cycle finishes with no new discussions.
 
 ## Quiet Window
 

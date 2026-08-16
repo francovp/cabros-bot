@@ -183,13 +183,18 @@ Follow these steps in strict chronological order to automate issue resolution:
 ### Step 5: Verification & Deploy Check
 1. Ensure the PR meets all criteria in `references/readiness-and-verification.md`.
 2. Retrieve the PR number and run `scripts/verify-preview.sh <PR_NUMBER>` to verify the Render preview deployment is live and healthy.
-3. **Address any unresolved discussions**, especially review comments from `@francovp` or `@codex`.
+3. **Run the PR discussion loop after every PR creation or update**:
+   - Take a baseline snapshot of paginated GraphQL `reviewThreads` (thread ID, creation time, author, resolved/outdated state) and record the current head SHA. Flat PR comments and aggregate counts are not sufficient.
+   - Wait using the quiet-window policy in `references/readiness-and-verification.md`, checking around the midpoint and at the end. Do not merge or hand off while this loop is active.
+   - When a new discussion appears, triage and address every new unresolved thread before continuing. Use `github:gh-address-comments` for actionable review feedback; implement requested changes, reply when an explanation is sufficient, and resolve only when the discussion is actually handled.
+   - Re-run the relevant tests and verification after code changes, push/update the PR, record the new head SHA, and restart the quiet window from that change or discussion.
+   - Repeat the loop until a complete quiet window finishes with no new discussion and no unresolved thread remaining. A new thread count alone is insufficient: compare thread IDs/timestamps so a resolved thread and a newly created thread cannot cancel each other out.
    - **Codex review failure detection**: If a Codex review body text starts with `You have reached your Codex usage limits for code reviews`, the automated Codex review has failed due to rate limiting. Do NOT wait for Codex. Instead, immediately perform the code review yourself:
      - Use `caveman-review` skill (`task(load_skills=["caveman-review"], ...)`) for compressed review findings, OR
      - Deploy a `deep` subagent with explicit instructions to review the PR diff for correctness, edge cases, security concerns, type safety, and alignment with acceptance criteria.
-     - If the failed Codex review created a blocking review thread, resolve or address it after your self-review completes.
+     - If the failed Codex review created a blocking review thread, resolve or address it after your self-review completes, then continue the loop.
      - A passing self-review satisfies the "no unresolved discussions" criterion in the merge gate — do NOT reset the quiet window for a usage-limited Codex review.
-4. Observe the quiet window and retry policies specified in `references/readiness-and-verification.md`.
+4. Observe the retry and bounded verification policies specified in `references/readiness-and-verification.md`; the discussion loop itself ends only after the quiet-window condition above is met.
 5. **Verify the PR title has the Linear ID suffix**: If `LINEAR_ISSUE_ID` is set and the PR title is missing `(LINEAR_ISSUE_ID)` at the end, fix it:
    ```bash
    CURRENT_TITLE="$(gh pr view "$PR_NUMBER" --json title --jq .title)"
