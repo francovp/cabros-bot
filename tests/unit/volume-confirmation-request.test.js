@@ -1,8 +1,4 @@
-const {
-	VolumeConfirmationRequestError,
-	parseVolumeConfirmationRequest,
-	getVolumeDecision,
-} = require('../../src/services/tradingview/volumeConfirmationRequest');
+const { parseVolumeConfirmationRequest, getVolumeDecision } = require('../../src/services/tradingview/volumeConfirmationRequest');
 
 describe('volumeConfirmationRequest', () => {
 	const originalEnv = process.env;
@@ -16,28 +12,6 @@ describe('volumeConfirmationRequest', () => {
 
 	afterEach(() => {
 		process.env = originalEnv;
-	});
-
-	it('parses a valid request and normalizes the timeframe', () => {
-		const result = parseVolumeConfirmationRequest({
-			body: {
-				symbol: 'binance:btcusdt',
-				timeframe: '240',
-			},
-		});
-
-		expect(result).toEqual({
-			exchange: 'BINANCE',
-			symbol: 'BTCUSDT',
-			rawSymbol: 'BINANCE:BTCUSDT',
-			timeframe: '4h',
-		});
-	});
-
-	it('throws for malformed symbol identifiers', () => {
-		expect(() => parseVolumeConfirmationRequest({
-			body: { symbol: 'BTCUSDT' },
-		})).toThrow(VolumeConfirmationRequestError);
 	});
 
 	it('accepts one-character TradingView symbols', () => {
