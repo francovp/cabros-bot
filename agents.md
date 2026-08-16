@@ -169,9 +169,9 @@ For every pull request that adds or changes an application-owned environment var
 
 1. Classify the variable before implementation: `remote-config eligible` for non-secret runtime tuning or request-time behavior, or `environment-only` for secrets, credentials, authentication, security controls, notification destinations, external endpoints, process-startup gates, or other values that must remain deployment-controlled.
 2. For `remote-config eligible` variables, add the same key to `src/services/remoteConfig/RemoteConfigService.js` with its type, default, bounds/enum validation, fail-open fallback, and focused tests. Add the matching `key:value` entry to `firebase-remote-config-template.json` (the repository template of record) and document it in `.env.example`, README, and `agents.md` when applicable.
-3. Do not publish or synchronize a new Remote Config key while the PR is unmerged or its deployment is not healthy. After the PR merges, wait for the target deployment to reach a terminal green `SUCCESS`/`OK` state, then update `firebase-remote-config-template.json` with the merged key and its approved default/runtime value while preserving existing parameters. Publish the server-side template through the manual `.github/workflows/firebase-remote-config.yml` workflow, which runs `firebase deploy --only remoteconfig`.
-4. Verify the deployed service after the template update: `/api/status` or `/api/capabilities` must report Remote Config as enabled/ready with `source: "remote"` (or the documented equivalent), and no secret or protected value may appear in the template, logs, status response, or issue/PR output.
-5. If the deployment fails, the template is invalid, or Firebase Remote Config cannot load, stop the synchronization, report the exact failure, and preserve the existing environment/default behavior. Never claim the key was synchronized based only on a queued or building deployment.
+3. Do not publish or synchronize Remote Config manually from the agent. After the PR merges and the target deployment reaches a terminal green `SUCCESS`/`OK` state, the manual `.github/workflows/firebase-remote-config.yml` workflow publishes `firebase-remote-config-template.json` with `firebase deploy --only remoteconfig`.
+4. Verify the deployed service after the workflow succeeds: `/api/status` or `/api/capabilities` must report Remote Config as enabled/ready with `source: "remote"` (or the documented equivalent), and no secret or protected value may appear in the template, logs, status response, or issue/PR output.
+5. If the deployment fails, the template is invalid, or Firebase Remote Config cannot load, report the exact failure and preserve the existing environment/default behavior. Never claim the key was synchronized based only on a queued or building deployment.
 
 The Remote Config workflow publishes the server-side template consumed by Firebase Admin `initServerTemplate()`. It requires the `FIREBASE_SERVICE_ACCOUNT_JSON` GitHub Actions secret and uses the `FIREBASE_PROJECT_ID` repository variable when set (default: `cabros-bot`). Never commit credentials or publish environment-only values.
 
@@ -210,7 +210,7 @@ The Remote Config workflow publishes the server-side template consumed by Fireba
 8. **Update environment variables** section if adding new config
 9. **Evaluate Remote Config support** for every new environment variable and follow the parity workflow above; do not add secrets, credentials, authentication, security controls, destinations, or startup-only gates to Remote Config
 10. **Update `firebase-remote-config-template.json`** with every approved eligible key/value and keep it aligned with `RemoteConfigService.js`
-11. **After merge and green deployment**, publish the template through the Remote Config workflow and verify the deployed source/status
+11. **After merge and green deployment**, let the Remote Config workflow publish the template and verify the deployed source/status; do not run the Firebase publish command manually
 12. **Update this agents.md file** with the new context, recent PRs, and implementation details before creating a new PR
 13. **Final verification pass** before completion: run the exact relevant checks again, then do the full test suite `pnpm test` once per implementation to ensure no regressions
 
