@@ -93,6 +93,19 @@ describe('Binance orders API', () => {
 		expect(MainClient).not.toHaveBeenCalled();
 	});
 
+	it('fails closed when no operator authentication mechanism is configured', async () => {
+		delete process.env.WEBHOOK_API_KEY;
+		delete process.env.ENABLE_FIREBASE_ADMIN_AUTH;
+
+		const response = await request(app)
+			.post('/api/trading/binance/orders')
+			.send({ symbol: 'BTCUSDT', side: 'BUY', type: 'LIMIT', quantity: 0.1, price: 100, dryRun: true })
+			.expect(503);
+
+		expect(response.body.code).toBe('ADMIN_AUTH_UNAVAILABLE');
+		expect(MainClient).not.toHaveBeenCalled();
+	});
+
 	it('fails closed when the feature is disabled', async () => {
 		process.env.ENABLE_BINANCE_TRADING = 'false';
 
@@ -149,6 +162,35 @@ describe('Binance orders API', () => {
 		expect(first.body).toMatchObject({ success: true, dryRun: false, order: { orderId: 42 } });
 		expect(second.body).toMatchObject({ success: true, idempotencyReplayed: true });
 		expect(second.body.order.secret).toBeUndefined();
+		expect(client.submitNewOrder).toHaveBeenCalledTimes(1);
+	});
+
+	it('replays an indeterminate submission result instead of resubmitting an order', async () => {
+		client.submitNewOrder.mockRejectedValue(new Error('provider timeout'));
+		const payload = {
+			symbol: 'BTCUSDT',
+			side: 'SELL',
+			type: 'LIMIT',
+			quantity: 0.1,
+			price: 100,
+			dryRun: false,
+		};
+
+		const first = await request(app)
+			.post('/api/trading/binance/orders')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'order-375-timeout')
+			.send(payload)
+			.expect(503);
+		const second = await request(app)
+			.post('/api/trading/binance/orders')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'order-375-timeout')
+			.send(payload)
+			.expect(503);
+
+		expect(first.body).toMatchObject({ success: false, code: 'BINANCE_ORDER_STATUS_UNKNOWN' });
+		expect(second.body).toMatchObject({ success: false, code: 'BINANCE_ORDER_STATUS_UNKNOWN', idempotencyReplayed: true });
 		expect(client.submitNewOrder).toHaveBeenCalledTimes(1);
 	});
 

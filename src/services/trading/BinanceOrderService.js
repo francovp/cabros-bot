@@ -254,10 +254,19 @@ function validatePriceRange(value, filter) {
 	}
 }
 
-function validateNotional(notional, filters, maxNotional) {
-	const minNotional = filters.get('NOTIONAL')?.minNotional || filters.get('MIN_NOTIONAL')?.minNotional;
+function validateNotional(notional, filters, maxNotional, isMarketOrder = false) {
+	const notionalFilter = filters.get('NOTIONAL');
+	const minNotional = notionalFilter?.minNotional || filters.get('MIN_NOTIONAL')?.minNotional;
 	if (minNotional && compareDecimalParts(notional, decimalParts(minNotional)) < 0) {
 		throw new BinanceOrderRequestError('order notional is below Binance minimum');
+	}
+	if (
+		notionalFilter?.maxNotional
+		&& Number(notionalFilter.maxNotional) > 0
+		&& (!isMarketOrder || notionalFilter.applyMaxToMarket !== false)
+		&& compareDecimalParts(notional, decimalParts(notionalFilter.maxNotional)) > 0
+	) {
+		throw new BinanceOrderRequestError('order notional exceeds Binance maximum');
 	}
 	if (compareDecimalParts(notional, decimalParts(maxNotional)) > 0) {
 		throw new BinanceOrderRequestError('order notional exceeds configured maximum');
@@ -340,6 +349,12 @@ function createBinanceOrderService({ createClient = createBinanceClient } = {}) 
 			if (!config.allowedSymbols.includes(order.symbol)) {
 				throw new BinanceOrderRequestError('symbol is not allowed for Binance trading');
 			}
+			if (order.type === 'MARKET' && order.quantity !== undefined) {
+				throw new BinanceOrderRequestError(
+					'MARKET orders with quantity are unsupported when enforcing the notional cap; use quoteOrderQty',
+					'MARKET_QUANTITY_NOTIONAL_UNSUPPORTED',
+				);
+			}
 
 			let client;
 			try {
@@ -397,7 +412,7 @@ function createBinanceOrderService({ createClient = createBinanceClient } = {}) 
 					throw new BinanceOrderServiceError('Binance market price validation failed', 'BINANCE_VALIDATION_FAILED');
 				}
 			}
-			validateNotional(notional, filters, config.maxNotional);
+			validateNotional(notional, filters, config.maxNotional, order.type === 'MARKET');
 
 			const orderParams = buildOrderParams(order);
 			if (order.dryRun) {
@@ -418,7 +433,11 @@ function createBinanceOrderService({ createClient = createBinanceClient } = {}) 
 					order: sanitizeOrderResponse(response || {}),
 				};
 			} catch (error) {
-				throw new BinanceOrderServiceError('Binance order submission failed');
+				throw new BinanceOrderServiceError(
+					'Binance accepted or may have accepted the order, but its final status is unknown; do not resubmit with a new idempotency key',
+					'BINANCE_ORDER_STATUS_UNKNOWN',
+					503,
+				);
 			}
 		},
 	};

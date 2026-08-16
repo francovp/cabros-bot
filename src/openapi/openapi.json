@@ -1820,7 +1820,7 @@
         }
       },
       "BinanceOrderFailure": {
-        "description": "Binance rejected or could not confirm the order. No automatic retry is performed.",
+        "description": "Binance rejected or could not confirm the order. A 503 BINANCE_ORDER_STATUS_UNKNOWN response is replayed for the same idempotency key; do not resubmit with a new key until the order status is reconciled.",
         "content": {
           "application/json": {
             "schema": {
@@ -1828,8 +1828,8 @@
             },
             "example": {
               "success": false,
-              "error": "Binance order submission failed",
-              "code": "BINANCE_ORDER_FAILED"
+              "error": "Binance accepted or may have accepted the order, but its final status is unknown; do not resubmit with a new idempotency key",
+              "code": "BINANCE_ORDER_STATUS_UNKNOWN"
             }
           }
         }
@@ -3317,7 +3317,7 @@
               "number",
               "string"
             ],
-            "description": "Base-asset quantity. Required for LIMIT and mutually exclusive with quoteOrderQty for MARKET."
+            "description": "Base-asset quantity. Required for LIMIT. MARKET orders must use quoteOrderQty when the configured notional cap is enforced, because quantity-based market execution cannot be bounded safely."
           },
           "quoteOrderQty": {
             "type": [

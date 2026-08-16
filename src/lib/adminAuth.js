@@ -121,6 +121,16 @@ async function validateAdminAccess(req, res, next) {
 	return res.status(401).json({ error: 'Unauthorized', code: 'ADMIN_AUTH_REQUIRED' });
 }
 
+function requireConfiguredAdminAccess(req, res, next) {
+	if (!isFirebaseAdminAuthEnabled() && !String(process.env.WEBHOOK_API_KEY || '').trim()) {
+		return res.status(503).json({
+			error: 'Admin authentication is not configured',
+			code: 'ADMIN_AUTH_UNAVAILABLE',
+		});
+	}
+	return validateAdminAccess(req, res, next);
+}
+
 function requireAdminRole(requiredRole) {
 	return (req, res, next) => {
 		if (req.adminRole === ADMIN_OPERATOR || req.adminRole === requiredRole) return next();
@@ -136,5 +146,6 @@ module.exports = {
 	getFirebaseWebConfig,
 	isFirebaseAdminAuthEnabled,
 	requireAdminRole,
+	requireConfiguredAdminAccess,
 	validateAdminAccess,
 };

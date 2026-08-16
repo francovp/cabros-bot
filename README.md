@@ -198,9 +198,9 @@ pnpm test:firebase
 - `BINANCE_TRADING_MAX_NOTIONAL` - Maximum order notional in quote asset, enforced before submission
 - `BINANCE_TRADING_TIMEOUT_MS` - Signed request timeout (default `10000` ms, capped at `30000` ms)
 
-`POST /api/trading/binance/orders` requires `admin.operator` access through the existing API-key or Firebase admin authentication flow. It supports `MARKET` and `LIMIT` `BUY`/`SELL` orders, validates the live Binance symbol status and filters, and uses the existing `binance` `MainClient`.
+`POST /api/trading/binance/orders` requires `admin.operator` access through the existing API-key or Firebase admin authentication flow, and fails closed if neither mechanism is configured. It supports `MARKET` and `LIMIT` `BUY`/`SELL` orders, validates the live Binance symbol status and filters, and uses the existing `binance` `MainClient`. MARKET orders must use `quoteOrderQty`; quantity-based market orders are rejected because their execution price cannot be bounded against the configured notional cap.
 
-`dryRun` defaults to `true` and validates the request without submitting. Set `dryRun: false` only after enabling the feature and explicitly selecting the intended environment. The default environment is Spot Testnet; `live` is never selected implicitly. Send `idempotency-key` (or `x-idempotency-key`) for retries: a matching request is replayed and a changed payload returns `409 IDEMPOTENCY_CONFLICT`. Binance submission failures are not retried automatically because execution state may be unknown.
+`dryRun` defaults to `true` and validates the request without submitting. Set `dryRun: false` only after enabling the feature and explicitly selecting the intended environment. The default environment is Spot Testnet; `live` is never selected implicitly. Send `idempotency-key` (or `x-idempotency-key`) for retries: a matching request is replayed and a changed payload returns `409 IDEMPOTENCY_CONFLICT`. If Binance submission status is ambiguous, the API returns `503 BINANCE_ORDER_STATUS_UNKNOWN` and replays that result for the same key; reconcile the order before retrying with a new key.
 
 The response and audit logs include only sanitized order metadata. API credentials are never returned or logged.
 - `ENABLE_LLM_ALERT_ENRICHMENT` - Enable optional secondary LLM enrichment (`true` or `false`, default: `false`)

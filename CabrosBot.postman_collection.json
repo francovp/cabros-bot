@@ -3234,7 +3234,7 @@
     },
     {
       "name": "Binance Trading",
-      "description": "Operator-only Binance Spot order workflow. Feature is disabled by default, uses Spot Testnet by default, and never retries an order submission automatically.",
+      "description": "Operator-only Binance Spot order workflow. Feature is disabled by default, uses Spot Testnet by default, fails closed without API-key or Firebase admin authentication, and never retries an order submission automatically.",
       "item": [
         {
           "name": "POST Binance order (dry-run LIMIT)",
@@ -3334,6 +3334,18 @@
                 }
               ],
               "body": "{\n  \"success\": true,\n  \"dryRun\": false,\n  \"idempotencyReplayed\": true,\n  \"environment\": \"testnet\"\n}"
+            },
+            {
+              "name": "Indeterminate submission (replayed)",
+              "status": "Service Unavailable",
+              "code": 503,
+              "header": [
+                {
+                  "key": "Idempotency-Replay",
+                  "value": "true"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"error\": \"Binance accepted or may have accepted the order, but its final status is unknown; do not resubmit with a new idempotency key\",\n  \"code\": \"BINANCE_ORDER_STATUS_UNKNOWN\",\n  \"idempotencyReplayed\": true\n}"
             }
           ]
         },
@@ -3376,6 +3388,48 @@
               "status": "Bad Request",
               "code": 400,
               "body": "{\n  \"success\": false,\n  \"error\": \"quantity does not match Binance lot-size step\",\n  \"code\": \"INVALID_ORDER_REQUEST\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST Binance order (invalid MARKET quantity cap)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"symbol\": \"BTCUSDT\",\n  \"side\": \"BUY\",\n  \"type\": \"MARKET\",\n  \"quantity\": 0.001,\n  \"dryRun\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/orders",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "orders"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Bad Request",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"success\": false,\n  \"error\": \"MARKET orders with quantity are unsupported when enforcing the notional cap; use quoteOrderQty\",\n  \"code\": \"MARKET_QUANTITY_NOTIONAL_UNSUPPORTED\"\n}"
             }
           ]
         },

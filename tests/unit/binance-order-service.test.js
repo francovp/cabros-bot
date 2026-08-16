@@ -162,6 +162,58 @@ describe('BinanceOrderService', () => {
 		});
 	});
 
+	it('rejects quantity-based market orders when the notional cap cannot be enforced', async () => {
+		const client = {
+			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
+			getAvgPrice: jest.fn(),
+		};
+		const service = createBinanceOrderService({ createClient: () => client });
+
+		await expect(service.placeOrder({
+			symbol: 'BTCUSDT',
+			side: 'BUY',
+			type: 'MARKET',
+			quantity: 0.1,
+			dryRun: true,
+		})).rejects.toMatchObject({
+			code: 'MARKET_QUANTITY_NOTIONAL_UNSUPPORTED',
+		});
+
+		expect(client.getAvgPrice).not.toHaveBeenCalled();
+	});
+
+	it('honors Binance maximum notional and its market applicability flag', async () => {
+		const client = {
+			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo({
+				filters: [
+					{ filterType: 'PRICE_FILTER', minPrice: '0.01', maxPrice: '1000000', tickSize: '0.01' },
+					{ filterType: 'LOT_SIZE', minQty: '0.0001', maxQty: '100', stepSize: '0.0001' },
+					{ filterType: 'NOTIONAL', minNotional: '10', maxNotional: '75', applyMaxToMarket: false },
+				],
+			})),
+		};
+		const service = createBinanceOrderService({ createClient: () => client });
+
+		await expect(service.placeOrder({
+			symbol: 'BTCUSDT',
+			side: 'BUY',
+			type: 'LIMIT',
+			quantity: 0.2,
+			price: 500,
+			dryRun: true,
+		})).rejects.toMatchObject({
+			code: 'INVALID_ORDER_REQUEST',
+		});
+
+		await expect(service.placeOrder({
+			symbol: 'BTCUSDT',
+			side: 'BUY',
+			type: 'MARKET',
+			quoteOrderQty: 80,
+			dryRun: true,
+		})).resolves.toMatchObject({ success: true, dryRun: true });
+	});
+
 	it('does not retry an ambiguous Binance submission failure', async () => {
 		const client = {
 			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
@@ -176,7 +228,7 @@ describe('BinanceOrderService', () => {
 			quantity: 0.1,
 			price: 100,
 			dryRun: false,
-		})).rejects.toMatchObject({ code: 'BINANCE_ORDER_FAILED', statusCode: 502 });
+		})).rejects.toMatchObject({ code: 'BINANCE_ORDER_STATUS_UNKNOWN', statusCode: 503 });
 		expect(client.submitNewOrder).toHaveBeenCalledTimes(1);
 	});
 });

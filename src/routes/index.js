@@ -29,6 +29,7 @@ const {
 	ADMIN_OPERATOR,
 	ADMIN_VIEWER,
 	requireAdminRole,
+	requireConfiguredAdminAccess,
 	validateAdminAccess,
 } = require('../lib/adminAuth');
 
@@ -36,6 +37,7 @@ function getRoutes(botOrGetter) {
 	const router = express.Router();
 	const adminRead = [validateAdminAccess, requireAdminRole(ADMIN_VIEWER)];
 	const adminWrite = [validateAdminAccess, requireAdminRole(ADMIN_OPERATOR)];
+	const binanceOrderWrite = [requireConfiguredAdminAccess, requireAdminRole(ADMIN_OPERATOR)];
 	router.post('/webhook/alert', validateApiKey, idempotencyMiddleware, postAlert(botOrGetter));
 	router.post('/webhook/message', validateApiKey, idempotencyMiddleware, postMessage(botOrGetter));
 	router.post('/webhook/expanded-analysis-alert', validateApiKey, idempotencyMiddleware, postExpandedAnalysisAlert(botOrGetter));
@@ -60,7 +62,7 @@ function getRoutes(botOrGetter) {
 	router.post('/jobs/:jobId/cancel', ...adminWrite, postCancelJob);
 	router.post('/jobs/:jobId/retry', ...adminWrite, idempotencyMiddleware, postRetryJob(botOrGetter));
 	router.post('/jobs/:jobId/retry-failed', ...adminWrite, idempotencyMiddleware, postRetryFailedJob(botOrGetter));
-	router.post('/trading/binance/orders', ...adminWrite, idempotencyMiddleware, postBinanceOrder);
+	router.post('/trading/binance/orders', ...binanceOrderWrite, idempotencyMiddleware, postBinanceOrder);
 
 	const { getNewsMonitor } = require('../controllers/webhooks/handlers/newsMonitor/newsMonitor');
 	const newsMonitor = getNewsMonitor();
