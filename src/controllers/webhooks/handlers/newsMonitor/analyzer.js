@@ -485,8 +485,6 @@ class NewsAnalyzer {
 		// Try cache first
 		if (!dryRun) {
 			for (const category of Object.values(EventCategory)) {
-				if (category === EventCategory.NONE) continue;
-
 				const cached = await this.cache.get(symbol, category);
 				if (cached) {
 					console.debug('[Analyzer] Returning cached result:', symbol, category);
