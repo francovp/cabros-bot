@@ -253,15 +253,21 @@ describe('backfillCollection', () => {
 		expect(batchCommitMock).toHaveBeenCalledTimes(1);
 	});
 
-	test('protects active pending idempotency claims when protectActivePending=true', async () => {
+	test('extends active pending claim with short expiresAt to at least PENDING_STALE_TIMEOUT_MS', async () => {
 		const nowMs = Date.now();
-		// Active pending claim — created 30s ago, within 180s stale window
-		const doc = makeFakeDoc({
-			state: 'pending',
-			createdAt: makeFakeTimestamp(nowMs - 30_000),
-		});
+		const createdMs = nowMs - 30_000;
+		// Active pending claim — created 30s ago (< 180s), with an old expiresAt only 60s from creation
+		const doc = {
+			id: 'doc-id',
+			ref: { id: 'doc-id' },
+			data: () => ({
+				state: 'pending',
+				createdAt: makeFakeTimestamp(createdMs),
+				expiresAt: makeFakeTimestamp(createdMs + 60_000),
+			}),
+		};
 
-		const { firestoreMock, batchUpdateMock } = buildFirestoreMock([doc]);
+		const { firestoreMock, batchUpdateMock, batchCommitMock } = buildFirestoreMock([doc]);
 
 		const result = await backfillCollection(
 			firestoreMock,
@@ -270,9 +276,44 @@ describe('backfillCollection', () => {
 			{ protectActivePending: true },
 		);
 
-		expect(result.skipped).toBe(1);
+		expect(result.updated).toBe(1);
+		expect(result.existing).toBe(0);
+		expect(batchUpdateMock).toHaveBeenCalledWith(
+			doc.ref,
+			expect.objectContaining({
+				expiresAt: expect.objectContaining({ _ms: createdMs + PENDING_STALE_TIMEOUT_MS }),
+			}),
+		);
+		expect(batchCommitMock).toHaveBeenCalledTimes(1);
+	});
+
+	test('preserves active pending claim that already has expiresAt >= PENDING_STALE_TIMEOUT_MS', async () => {
+		const nowMs = Date.now();
+		const createdMs = nowMs - 30_000;
+		// Active pending claim — created 30s ago, with expiresAt >= 180s from creation
+		const doc = {
+			id: 'doc-id',
+			ref: { id: 'doc-id' },
+			data: () => ({
+				state: 'pending',
+				createdAt: makeFakeTimestamp(createdMs),
+				expiresAt: makeFakeTimestamp(createdMs + PENDING_STALE_TIMEOUT_MS + 10_000),
+			}),
+		};
+
+		const { firestoreMock, batchUpdateMock, batchCommitMock } = buildFirestoreMock([doc]);
+
+		const result = await backfillCollection(
+			firestoreMock,
+			'idempotency_keys',
+			300_000,
+			{ protectActivePending: true },
+		);
+
+		expect(result.existing).toBe(1);
 		expect(result.updated).toBe(0);
 		expect(batchUpdateMock).not.toHaveBeenCalled();
+		expect(batchCommitMock).not.toHaveBeenCalled();
 	});
 
 	test('does NOT protect stale pending claims (createdAt older than PENDING_STALE_TIMEOUT_MS)', async () => {

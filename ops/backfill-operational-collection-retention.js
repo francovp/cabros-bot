@@ -142,19 +142,42 @@ async function backfillCollection(firestore, collectionName, ttlMs, options = {}
 			const data = doc.data() || {};
 			const currentExpiryMs = getTimestampMillis(data.expiresAt);
 
+			// Handle active pending claims in idempotency_keys
+			if (protectActivePending && data.state === 'pending') {
+				const createdMs = getTimestampMillis(data.createdAt)
+					?? getTimestampMillis(doc.createTime)
+					?? nowMs;
+				const isFresh = (nowMs - createdMs < PENDING_STALE_TIMEOUT_MS);
+
+				if (isFresh) {
+					const requiredPendingExpiryMs = createdMs + PENDING_STALE_TIMEOUT_MS;
+					// If the legacy/active pending claim already has an expiresAt >= createdAt + PENDING_STALE_TIMEOUT_MS,
+					// leave it as-is.
+					if (currentExpiryMs !== null && currentExpiryMs >= requiredPendingExpiryMs) {
+						result.existing += 1;
+						continue;
+					}
+					// Otherwise, extend it to at least createdAt + PENDING_STALE_TIMEOUT_MS so native TTL
+					// does not delete it before reserveEntry considers it stale.
+					const newExpiresAt = admin.firestore.Timestamp.fromMillis(requiredPendingExpiryMs);
+					if (!dryRun) {
+						if (doc.updateTime) {
+							batch.update(doc.ref, { expiresAt: newExpiresAt }, { lastUpdateTime: doc.updateTime });
+						} else {
+							batch.update(doc.ref, { expiresAt: newExpiresAt });
+						}
+					}
+					batchUpdates += 1;
+					result.updated += 1;
+					continue;
+				}
+				// If the pending claim is stale (>= PENDING_STALE_TIMEOUT_MS), fall through to normal update
+			}
+
 			// Skip documents that already have a future expiresAt.
 			if (currentExpiryMs !== null && currentExpiryMs > nowMs) {
 				result.existing += 1;
 				continue;
-			}
-
-			// Protect active pending idempotency claims from being shortened.
-			if (protectActivePending && data.state === 'pending') {
-				const createdMs = getTimestampMillis(data.createdAt) ?? 0;
-				if (nowMs - createdMs < PENDING_STALE_TIMEOUT_MS) {
-					result.skipped += 1;
-					continue;
-				}
 			}
 
 			// Compute the baseline timestamp for the TTL offset.
