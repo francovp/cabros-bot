@@ -1,5 +1,6 @@
 'use strict';
 
+const crypto = require('crypto');
 const { MainClient } = require('binance');
 
 const TESTNET_BASE_URL = 'https://testnet.binance.vision';
@@ -30,6 +31,35 @@ class BinanceOrderServiceError extends Error {
 
 function hasValue(value) {
 	return typeof value === 'string' && value.trim().length > 0;
+}
+
+function deriveClientOrderId(idempotencyKey) {
+	if (!hasValue(idempotencyKey)) return undefined;
+	const digest = crypto.createHash('sha256')
+		.update(`cabros-binance-order:${idempotencyKey}`)
+		.digest('hex')
+		.slice(0, 32);
+	return `cb_${digest}`;
+}
+
+function isOrderNotFoundError(error) {
+	const code = error && (error.code ?? error.body?.code);
+	return Number(code) === -2013 || /unknown order/i.test(error?.message || '');
+}
+
+async function reconcileOrder(client, symbol, clientOrderId) {
+	if (!clientOrderId || typeof client.getOrder !== 'function') return null;
+
+	try {
+		return await client.getOrder({ symbol, origClientOrderId: clientOrderId });
+	} catch (error) {
+		if (isOrderNotFoundError(error)) return null;
+		throw new BinanceOrderServiceError(
+			'Binance order status could not be reconciled; do not resubmit with a new idempotency key',
+			'BINANCE_ORDER_STATUS_UNKNOWN',
+			503,
+		);
+	}
 }
 
 function parsePositiveNumber(value, field) {
@@ -256,8 +286,12 @@ function validatePriceRange(value, filter) {
 
 function validateNotional(notional, filters, maxNotional, isMarketOrder = false) {
 	const notionalFilter = filters.get('NOTIONAL');
-	const minNotional = notionalFilter?.minNotional || filters.get('MIN_NOTIONAL')?.minNotional;
-	if (minNotional && compareDecimalParts(notional, decimalParts(minNotional)) < 0) {
+	const minFilter = notionalFilter || filters.get('MIN_NOTIONAL');
+	const minNotional = minFilter?.minNotional;
+	const minAppliesToMarket = !isMarketOrder || (
+		notionalFilter ? notionalFilter.applyMinToMarket !== false : minFilter?.applyToMarket !== false
+	);
+	if (minNotional && minAppliesToMarket && compareDecimalParts(notional, decimalParts(minNotional)) < 0) {
 		throw new BinanceOrderRequestError('order notional is below Binance minimum');
 	}
 	if (
@@ -334,7 +368,7 @@ function createBinanceOrderService({ createClient = createBinanceClient } = {}) 
 			};
 		},
 
-		async placeOrder(body) {
+		async placeOrder(body, { idempotencyKey } = {}) {
 			const config = getConfig();
 			if (!config.enabled) throw new BinanceOrderRequestError('Binance trading is disabled', 'FEATURE_DISABLED', 403);
 			if (!config.configured) {
@@ -414,7 +448,9 @@ function createBinanceOrderService({ createClient = createBinanceClient } = {}) 
 			}
 			validateNotional(notional, filters, config.maxNotional, order.type === 'MARKET');
 
-			const orderParams = buildOrderParams(order);
+			const clientOrderId = order.clientOrderId
+				|| (!order.dryRun ? deriveClientOrderId(idempotencyKey) : undefined);
+			const orderParams = buildOrderParams({ ...order, clientOrderId });
 			if (order.dryRun) {
 				return {
 					success: true,
@@ -425,6 +461,15 @@ function createBinanceOrderService({ createClient = createBinanceClient } = {}) 
 			}
 
 			try {
+				const existingOrder = await reconcileOrder(client, order.symbol, clientOrderId);
+				if (existingOrder) {
+					return {
+						success: true,
+						dryRun: false,
+						environment: config.environment,
+						order: sanitizeOrderResponse(existingOrder),
+					};
+				}
 				const response = await client.submitNewOrder(orderParams);
 				return {
 					success: true,

@@ -1820,7 +1820,7 @@
         }
       },
       "BinanceOrderFailure": {
-        "description": "Binance rejected or could not confirm the order. A 503 BINANCE_ORDER_STATUS_UNKNOWN response is replayed for the same idempotency key; do not resubmit with a new key until the order status is reconciled.",
+        "description": "Binance rejected or could not confirm the order. A live request with an idempotency key derives a deterministic clientOrderId for reconciliation after cache expiration or process restart. A 503 BINANCE_ORDER_STATUS_UNKNOWN response is replayed for the same idempotency key; do not resubmit with a new key until the order status is reconciled.",
         "content": {
           "application/json": {
             "schema": {

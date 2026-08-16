@@ -214,6 +214,62 @@ describe('BinanceOrderService', () => {
 		})).resolves.toMatchObject({ success: true, dryRun: true });
 	});
 
+	it.each([
+		['MIN_NOTIONAL', { filterType: 'MIN_NOTIONAL', minNotional: '10', applyToMarket: false }],
+		['NOTIONAL', { filterType: 'NOTIONAL', minNotional: '10', maxNotional: '1000', applyMinToMarket: false }],
+	])('honors %s market minimum applicability', async (filterType, notionalFilter) => {
+		const client = {
+			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo({
+				filters: [
+					{ filterType: 'LOT_SIZE', minQty: '0.0001', maxQty: '100', stepSize: '0.0001' },
+					notionalFilter,
+				],
+			})),
+		};
+		const service = createBinanceOrderService({ createClient: () => client });
+
+		await expect(service.placeOrder({
+			symbol: 'BTCUSDT',
+			side: 'BUY',
+			type: 'MARKET',
+			quoteOrderQty: 5,
+			dryRun: true,
+		})).resolves.toMatchObject({ success: true, dryRun: true });
+	});
+
+	it('uses a deterministic client order id to reconcile an existing order', async () => {
+		const client = {
+			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
+			getOrder: jest.fn().mockResolvedValue({
+				symbol: 'BTCUSDT',
+				clientOrderId: 'cb_existing',
+				orderId: 99,
+				status: 'FILLED',
+			}),
+			submitNewOrder: jest.fn(),
+		};
+		const service = createBinanceOrderService({ createClient: () => client });
+
+		await expect(service.placeOrder({
+			symbol: 'BTCUSDT',
+			side: 'BUY',
+			type: 'LIMIT',
+			quantity: 0.1,
+			price: 100,
+			dryRun: false,
+		}, { idempotencyKey: 'restart-safe-order' })).resolves.toMatchObject({
+			success: true,
+			dryRun: false,
+			order: { orderId: 99, status: 'FILLED' },
+		});
+
+		expect(client.getOrder).toHaveBeenCalledWith({
+			symbol: 'BTCUSDT',
+			origClientOrderId: expect.stringMatching(/^cb_[a-f0-9]{32}$/),
+		});
+		expect(client.submitNewOrder).not.toHaveBeenCalled();
+	});
+
 	it('does not retry an ambiguous Binance submission failure', async () => {
 		const client = {
 			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),

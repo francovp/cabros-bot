@@ -62,6 +62,7 @@ describe('Binance orders API', () => {
 		client = {
 			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
 			getAvgPrice: jest.fn().mockResolvedValue({ price: '100' }),
+			getOrder: jest.fn().mockRejectedValue({ code: -2013, message: 'Unknown order sent.' }),
 			submitNewOrder: jest.fn().mockResolvedValue({
 				symbol: 'BTCUSDT',
 				orderId: 42,
@@ -192,6 +193,49 @@ describe('Binance orders API', () => {
 		expect(first.body).toMatchObject({ success: false, code: 'BINANCE_ORDER_STATUS_UNKNOWN' });
 		expect(second.body).toMatchObject({ success: false, code: 'BINANCE_ORDER_STATUS_UNKNOWN', idempotencyReplayed: true });
 		expect(client.submitNewOrder).toHaveBeenCalledTimes(1);
+	});
+
+	it('reconciles an ambiguous order after the idempotency cache is lost', async () => {
+		client.submitNewOrder.mockRejectedValueOnce(new Error('provider timeout'));
+		client.getOrder
+			.mockRejectedValueOnce({ code: -2013, message: 'Unknown order sent.' })
+			.mockResolvedValueOnce({
+				symbol: 'BTCUSDT',
+				orderId: 43,
+				clientOrderId: 'cb_reconciled',
+				status: 'FILLED',
+			});
+		const payload = {
+			symbol: 'BTCUSDT',
+			side: 'SELL',
+			type: 'LIMIT',
+			quantity: 0.1,
+			price: 100,
+			dryRun: false,
+		};
+
+		await request(app)
+			.post('/api/trading/binance/orders')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'order-375-reconcile')
+			.send(payload)
+			.expect(503);
+		idempotencyService.clear();
+
+		const reconciled = await request(app)
+			.post('/api/trading/binance/orders')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'order-375-reconcile')
+			.send(payload)
+			.expect(201);
+
+		expect(reconciled.body).toMatchObject({ success: true, dryRun: false, order: { orderId: 43 } });
+		expect(client.getOrder).toHaveBeenNthCalledWith(2, {
+			symbol: 'BTCUSDT',
+			origClientOrderId: expect.stringMatching(/^cb_[a-f0-9]{32}$/),
+		});
+		expect(client.submitNewOrder).toHaveBeenCalledTimes(1);
+		expect(client.submitNewOrder.mock.calls[0][0].newClientOrderId).toMatch(/^cb_[a-f0-9]{32}$/);
 	});
 
 	it('exposes Binance trading readiness in status and capabilities', async () => {

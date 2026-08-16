@@ -258,5 +258,6 @@ function idempotencyMiddleware(req, res, next) {
 }
 
 module.exports = {
+	getIdempotencyKey,
 	idempotencyMiddleware,
 };

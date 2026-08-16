@@ -6,10 +6,13 @@ const {
 	BinanceOrderServiceError,
 	binanceOrderService,
 } = require('../../services/trading/BinanceOrderService');
+const { getIdempotencyKey } = require('../../lib/idempotency');
 
 async function postBinanceOrder(req, res) {
 	try {
-		const result = await binanceOrderService.placeOrder(req.body);
+		const result = await binanceOrderService.placeOrder(req.body, {
+			idempotencyKey: getIdempotencyKey(req),
+		});
 		try {
 			console.log('[BinanceOrdersController] order processed', {
 				symbol: result.order?.symbol,
