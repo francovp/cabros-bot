@@ -199,7 +199,7 @@ function createBinanceClient(config) {
 		api_key: process.env.BINANCE_API_KEY,
 		api_secret: process.env.BINANCE_API_SECRET,
 		baseUrl: config.baseUrl,
-		beautifyResponses: true,
+		beautifyResponses: false,
 		disableTimeSync: true,
 	}, {
 		timeout: config.timeoutMs,

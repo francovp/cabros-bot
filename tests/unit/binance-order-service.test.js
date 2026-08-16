@@ -1,9 +1,13 @@
 'use strict';
 
+jest.mock('binance', () => ({ MainClient: jest.fn() }));
+
 const {
 	BinanceOrderRequestError,
 	createBinanceOrderService,
+	binanceOrderService,
 } = require('../../src/services/trading/BinanceOrderService');
+const { MainClient } = require('binance');
 
 function exchangeInfo(overrides = {}) {
 	return {
@@ -277,6 +281,63 @@ describe('BinanceOrderService', () => {
 			origClientOrderId: expect.stringMatching(/^cb_[a-f0-9]{32}$/),
 		});
 		expect(client.submitNewOrder).not.toHaveBeenCalled();
+	});
+
+	it('reconciles exact decimal strings returned by Binance', async () => {
+		const client = {
+			getOrder: jest.fn().mockResolvedValue({
+				symbol: 'BTCUSDT',
+				clientOrderId: 'cb_b07697a7210406a422c57a9ea9340bed',
+				orderId: 99,
+				status: 'NEW',
+				side: 'BUY',
+				type: 'LIMIT',
+				timeInForce: 'GTC',
+				origQty: '0.100000000000000005',
+				price: '100.000000000000000005',
+			}),
+			getExchangeInfo: jest.fn(),
+			submitNewOrder: jest.fn(),
+		};
+		const service = createBinanceOrderService({ createClient: () => client });
+
+		await expect(service.placeOrder({
+			symbol: 'BTCUSDT',
+			side: 'BUY',
+			type: 'LIMIT',
+			quantity: '0.100000000000000005',
+			price: '100.000000000000000005',
+			dryRun: false,
+		}, { idempotencyKey: 'restart-safe-order' })).resolves.toMatchObject({
+			success: true,
+			order: { orderId: 99, status: 'NEW' },
+		});
+
+		expect(client.getExchangeInfo).not.toHaveBeenCalled();
+		expect(client.submitNewOrder).not.toHaveBeenCalled();
+	});
+
+	it('disables Binance response beautification for order clients', async () => {
+		const client = {
+			getOrder: jest.fn().mockRejectedValue({ code: -2013, message: 'Unknown order sent.' }),
+			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
+			submitNewOrder: jest.fn().mockResolvedValue({ symbol: 'BTCUSDT', status: 'NEW' }),
+		};
+		MainClient.mockClear().mockImplementation(() => client);
+
+		await binanceOrderService.placeOrder({
+			symbol: 'BTCUSDT',
+			side: 'BUY',
+			type: 'LIMIT',
+			quantity: '0.1',
+			price: '100',
+			idempotencyKey: 'beautify-disabled',
+			dryRun: false,
+		});
+
+		expect(MainClient).toHaveBeenCalledWith(expect.objectContaining({
+			beautifyResponses: false,
+		}), expect.any(Object));
 	});
 
 	it('rejects a reconciled limit order with a mismatched time-in-force', async () => {
