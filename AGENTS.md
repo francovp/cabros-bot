@@ -17,6 +17,7 @@ You are **Cabros Bot Developer**, an expert Node.js and Express developer specia
   - For authenticated requests to deployed API endpoints, read `WEBHOOK_API_KEY` from the environment and send it in the `x-api-key` header; never print the value or place it in URLs, query strings, logs, or command output.
   - Format all filesystem links in your communications using absolute URLs with the `file://` scheme.
   - Update the Postman collection (`CabrosBot.postman_collection.json`) with every new endpoint, new request variant, or API contract change — include request body examples, response examples, and valid/invalid input variations.
+  - Evaluate every new application-owned environment variable for Firebase Remote Config support. Add eligible non-secret runtime settings to the Remote Config schema, validation tests, operator documentation, and `firebase-remote-config-template.json`; explicitly record why secrets, credentials, authentication, security controls, destinations, and process-startup gates are excluded.
 - **Ask first:**
   - Ask before deleting files or removing existing integration modules.
   - Ask before changing default environment variable fallback behaviors or route mounts.
@@ -165,6 +166,18 @@ Implement the following security practices to safeguard endpoints and credential
 
 The audited controls include grounding limits/model/timeout, TradingView enrichment budget, persistent news deduplication, Binance timeout, rate limiting, service identity, Discord retry controls, local prompt overrides, callback security/retry settings, idempotency TTL, Cloudflare enablement, Sentry debug-route gating, and public Firebase browser configuration fields. Defaults and security boundaries remain unchanged.
 
+### Firebase Remote Config parity workflow
+
+For every pull request that adds or changes an application-owned environment variable:
+
+1. Classify the variable before implementation: `remote-config eligible` for non-secret runtime tuning or request-time behavior, or `environment-only` for secrets, credentials, authentication, security controls, notification destinations, external endpoints, process-startup gates, or other values that must remain deployment-controlled.
+2. For `remote-config eligible` variables, add the same key to `src/services/remoteConfig/RemoteConfigService.js` with its type, default, bounds/enum validation, fail-open fallback, and focused tests. Add the matching `key:value` entry to `firebase-remote-config-template.json` (the repository template of record) and document it in `.env.example`, README, and `agents.md` when applicable.
+3. Do not publish or synchronize Remote Config manually from the agent. After the PR merges and the target deployment reaches a terminal green `SUCCESS`/`OK` state, the manual `.github/workflows/firebase-remote-config.yml` workflow publishes `firebase-remote-config-template.json` with the server publisher script.
+4. Verify the deployed service after the workflow succeeds: `/api/status` or `/api/capabilities` must report Remote Config as enabled/ready with `source: "remote"` (or the documented equivalent), and no secret or protected value may appear in the template, logs, status response, or issue/PR output.
+5. If the deployment fails, the template is invalid, or Firebase Remote Config cannot load, report the exact failure and preserve the existing environment/default behavior. Never claim the key was synchronized based only on a queued or building deployment.
+
+The Remote Config workflow publishes the server-side template consumed by Firebase Admin `initServerTemplate()`. It requires the `FIREBASE_SERVICE_ACCOUNT_JSON` GitHub Actions secret and uses the `FIREBASE_PROJECT_ID` repository variable when set (default: `cabros-bot`). Never commit credentials or publish environment-only values.
+
 - Bot startup is gated: bot is launched only when `ENABLE_TELEGRAM_BOT === 'true'` and not a preview environment (`RENDER==='true' && IS_PULL_REQUEST==='true'` or `VERCEL_ENV==='preview'` disables it).
 - Process shutdown is coordinated for `SIGINT`/`SIGTERM`: the HTTP server stops accepting new connections, active requests and accepted `JobService` work drain, the news-monitor cache and signal-outcome worker stop, Telegram polling and in-flight handlers drain, and Sentry is flushed last within `SHUTDOWN_TIMEOUT_MS` (default `10000`, hard cap `30000`). If the deadline is exceeded, active jobs receive an independent bounded finalization attempt and are persisted as retryable `cancelled` records before remaining connections are force-closed and the process exits non-zero.
 - Routes under `/api` (e.g. `/api/webhook/alert`) are mounted regardless of bot launch; individual features and notification channels are gated via env flags and per-channel validation.
@@ -198,8 +211,11 @@ The audited controls include grounding limits/model/timeout, TradingView enrichm
 6. **Run focused tests during development** (see Test Execution Strategy below)
 7. **Update Postman collection**: Add new endpoint requests, request variants (including error/invalid input examples), and response examples to `CabrosBot.postman_collection.json` for every API change
 8. **Update environment variables** section if adding new config
-9. **Update this agents.md file** with the new context, recent PRs, and implementation details before creating a new PR
-10. **Final verification pass** before completion: run the exact relevant checks again, then do the full test suite `pnpm test` once per implementation to ensure no regressions
+9. **Evaluate Remote Config support** for every new environment variable and follow the parity workflow above; do not add secrets, credentials, authentication, security controls, destinations, or startup-only gates to Remote Config
+10. **Update `firebase-remote-config-template.json`** with every approved eligible key/value and keep it aligned with `RemoteConfigService.js`
+11. **After merge and green deployment**, let the Remote Config workflow publish the template and verify the deployed source/status; do not run the Firebase publish command manually
+12. **Update this agents.md file** with the new context, recent PRs, and implementation details before creating a new PR
+13. **Final verification pass** before completion: run the exact relevant checks again, then do the full test suite `pnpm test` once per implementation to ensure no regressions
 
 ### Post-merge production environment synchronization
 
@@ -472,6 +488,7 @@ The system provides asynchronous job endpoints to support executing both `expand
 - Durable worker saves reject stale writes that would replace a terminal Firestore job state, and ownerless nonterminal saves cannot replace an active claim; claim release and failure transitions verify the worker's actual Firestore claim attempt transactionally, retrying or requeueing terminal failure persistence while storage recovers. Same-worker, same-attempt renewals that observe the worker's terminal finalization are accepted without changing terminal state. A worker checkpoint that discovers a terminal cancellation raises `JOB_CLAIM_LOST` before notification delivery, pre-claim redeliveries do not release or fail another attempt's claim, and terminal redeliveries reconcile unsent callbacks before acknowledgement. Status-filtered Firestore list queries are bounded server-side before the worker reconciliation scan.
 - Telegram commands: async `createJob()` rejections must stay inside the command `try/catch` so `replyValidationError()` can return clear command feedback instead of producing unhandled promise rejections.
 - Eviction: terminal jobs (`completed`, `failed`, `cancelled`, `timed_out`) older than 1 hour are deleted from memory/Firestore and return `404 Not Found`; active jobs are preserved.
+- Durable retention: `JobRepository.save()` writes `expiresAt = createdAt + 1 hour` only for terminal Firestore jobs. `ops/configure-firestore-alert-retention.sh` backfills legacy terminal `tradingviewJobs` records and enables the native Firestore TTL policy; active jobs are skipped and TTL deletion remains eventually consistent while API reads filter expired jobs.
 - Background failures: if the worker runs into unexpected exceptions or timeouts, the job is marked `failed` and reported to Sentry.
 - Market-scanner jobs preserve `ranked` and `includeMultiTimeframe` in request metadata and apply the same higher-timeframe confluence enrichment as the synchronous scanner endpoint. Enrichment is fail-open; if the job deadline aborts after a scan completes, that scan is retained and only remaining scans are marked `timeout`.
 - Completed ranked market-scanner job status and terminal callback payloads expose `scanResults[].scores[]` with the same score, reason, and optional `trendConfluence` fields as the synchronous endpoint.
@@ -781,6 +798,7 @@ See `/specs/TERMINOLOGY_GUIDE.md` for extended discussion and examples.
 
 
 ## Recent Changes (by spec-kit)
+- GH-366 / CB-150: durable TradingView jobs now receive a one-hour `expiresAt` on terminal Firestore writes; the shared Firestore retention backfill/configuration covers legacy terminal `tradingviewJobs` documents while leaving active jobs untouched. Unit and Firebase Emulator coverage verify terminal expiry and active-job preservation.
 - GH-313 / CB-128: grounding asset-context parsing now preserves slash-delimited crypto pairs such as `BTC/USDT`; the fallback no longer truncates a symbol before `/`, while explicit exchange and TradingView signal parsing remain unchanged. Regression coverage is in `tests/unit/tradingview-signal-parser.test.js`.
 - GH-291 / CB-112: hardened Render-worker job acceptance and recovery. Indeterminate enqueue responses preserve a replayable idempotency result with the durable `jobId`; the worker periodically reconciles durable queued rows and expired claims after Redis recovery, retries retained failed BullMQ jobs, terminal checkpoint races abort before notification delivery, status-filtered list queries preserve recent-first ordering while bounding Firestore scans, and terminal BullMQ failure handling retries pending callbacks even after the terminal job state was already committed. Production worker/Key Value provisioning remains payment-gated.
 - GH-284 / CB-118: Production Gemini quota recurrence was traced to an unset `NEWS_GEMINI_CONCURRENCY` with a Sentry `POST /api/news-monitor` dry-run carrying 28 symbols. Production uses the existing scheduler with `NEWS_GEMINI_CONCURRENCY=3`; analysis now runs inside the Sentry span so `summary.quota_exhausted` plus the `news.quota_exhausted` and `news.error_count` attributes remain correlated operational signals. Sentry measured 61 quota events through 2026-07-28T13:44:03Z against a Gemini free-tier limit of 15 requests/minute for the affected model; no current percentile or complete request-count measurement is inferred from that error window.
@@ -1198,7 +1216,7 @@ Scanner presets support an independent `ENABLE_FIRESTORE_SCANNER_PRESETS=true` g
 
 ## Firebase Remote Config Safe Runtime Tuning (CB-116 / Issue #303)
 
-`ENABLE_FIREBASE_REMOTE_CONFIG=true` enables the Firebase Admin server-side Remote Config Preview loader. `RemoteConfigService` reuses the existing lazy Firebase Admin/Firestore initialization, loads once after startup, and refreshes on a bounded interval; alert paths only read the in-process cache and never fetch per alert.
+`ENABLE_FIREBASE_REMOTE_CONFIG=true` enables the Firebase Admin server-side Remote Config Preview loader. The repository template is published by `scripts/deploy-server-remote-config.js` to the `firebase-server` namespace and loaded by `admin.remoteConfig().initServerTemplate()`; it is not a Firebase Web/Client SDK configuration. `RemoteConfigService` reuses the existing lazy Firebase Admin/Firestore initialization, loads once after startup, and refreshes on a bounded interval; alert paths only read the in-process cache and never fetch per alert.
 
 The allow-list is limited to news thresholds/concurrency/retries, TradingView timeouts/retries, and `ENABLE_MESSAGE_FOOTER_METADATA`. Values are validated against finite, integer, positive, boolean, and range constraints. TradingView MCP timeout and enrichment-budget values are bounded to `1000`-`120000` milliseconds, and retry counts to `1`-`5`; the environment fallback uses the same schema as Remote Config. Credentials, API keys, webhook authentication, route/security gates, and notification destinations are excluded. Disabled, unavailable, timed-out, stale, malformed, or invalid values fall back to environment/default values without blocking startup or alert delivery.
 
@@ -1309,4 +1327,3 @@ News monitor cache reads now include `EventCategory.NONE`, so a cached no-event 
 - `tests/integration/news-monitor-cache.test.js` — Verifies no-event cache hits return no alert and avoid repeated Gemini/market-context provider calls.
 
 No endpoint or response contract changed; Postman and OpenAPI remain unchanged.
-

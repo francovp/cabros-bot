@@ -96,17 +96,18 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 	const body = new FakeElement('body');
 	const elementsById = {};
 	[
-		'legacy-connection', 'firebase-auth', 'auth-email', 'auth-password', 'sign-in', 'sign-out',
-		'auth-state', 'api-key', 'key-state', 'save-key', 'clear-key', 'view',
+		'legacy-connection', 'firebase-auth', 'auth-form', 'auth-email', 'auth-password', 'sign-in', 'sign-out',
+		'auth-state', 'api-key', 'key-state', 'save-key', 'clear-key', 'connection-form', 'view',
 	].forEach((id) => {
-		const tag = id === 'api-key' ? 'input' : id === 'view' ? 'section' : id.endsWith('key') ? 'button' : 'p';
+		const tag = id === 'api-key' ? 'input' : id === 'connection-form' ? 'form'
+			: id === 'view' ? 'section' : id === 'auth-form' ? 'div' : id.endsWith('key') ? 'button' : 'p';
 		const node = new FakeElement(tag);
 		node.id = id;
 		node.hidden = false;
 		elementsById[id] = node;
 		body.append(node);
 	});
-	['status', 'alerts', 'presets', 'jobs', 'analysis', 'playground'].forEach((view) => {
+	['overview', 'status', 'alerts', 'presets', 'jobs', 'analysis', 'playground'].forEach((view) => {
 		const button = new FakeElement('button');
 		button.dataset.view = view;
 		body.append(button);
@@ -171,6 +172,83 @@ async function selectView(browser, name) {
 }
 
 describe('admin browser client', () => {
+	it('renders an operational overview from the status response', async () => {
+		const status = {
+			service: {
+				name: 'cabros-bot',
+				version: '0.1.0',
+				environment: 'production',
+				commit: 'abc123',
+			},
+			featureFlags: {
+				telegramBot: true,
+				marketScanner: false,
+				signalOutcomeTracking: true,
+			},
+			deliveryChannels: {
+				telegram: { enabled: true, status: 'ready' },
+				whatsapp: { enabled: false, status: 'disabled' },
+			},
+			dependencies: {
+				telegram: { enabled: true, configured: true, ready: true, status: 'ready' },
+				tradingViewMcp: { enabled: true, configured: false, ready: false, status: 'misconfigured' },
+				sentry: { enabled: false, configured: false, ready: false, status: 'disabled' },
+			},
+		};
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/status') return response(status);
+				return response({});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'overview');
+		await flush();
+
+		const overview = browser.elementsById.view;
+		expect(overview.textContent).toContain('Operational overview');
+		expect(overview.textContent).toContain('production');
+		expect(overview.textContent).toContain('2 enabled');
+		expect(overview.textContent).toContain('1 ready');
+		expect(overview.textContent).toContain('TradingView MCP');
+		expect(overview.textContent).not.toContain('undefined');
+	});
+
+	it('waits for an API key before loading protected overview status', async () => {
+		const requests = [];
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				requests.push(url);
+				if (url === '/openapi.json') return response(contract);
+				return response({});
+			},
+		});
+		await flush();
+
+		expect(requests).toEqual(['/openapi.json']);
+		expect(browser.elementsById.view.textContent).toContain('Enter an API key');
+	});
+
+	it('does not render an HTTP error payload as a healthy overview', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/status') return response({ error: 'Unauthorized' }, 401);
+				return response({});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'overview');
+
+		const overview = browser.elementsById.view;
+		expect(overview.textContent).toContain('Status unavailable. Check the API key and service logs.');
+		expect(overview.textContent).not.toContain('Last checked');
+		expect(overview.textContent).toContain('HTTP 401');
+	});
+
 	it('shows Firebase sign-in state and sends a verified token after sign-in', async () => {
 		let authStateChanged;
 		const user = {
@@ -213,21 +291,31 @@ describe('admin browser client', () => {
 		expect(browser.elementsById['firebase-auth'].hidden).toBe(false);
 		expect(browser.elementsById['legacy-connection'].hidden).toBe(false);
 		expect(browser.elementsById.view.textContent).toContain('Sign in');
-	browser.elementsById['api-key'].value = 'webhook-key';
-	await browser.elementsById['save-key'].dispatch('click');
-	expect(browser.storage.has('cabros-admin-api-key')).toBe(false);
-	expect(browser.elementsById['key-state'].textContent).toContain('in memory');
+		browser.elementsById['api-key'].value = 'webhook-key';
+		await browser.elementsById['save-key'].dispatch('click');
+		expect(browser.storage.has('cabros-admin-api-key')).toBe(false);
+		expect(browser.elementsById['key-state'].textContent).toContain('in memory');
 
 		browser.elementsById['auth-email'].value = 'operator@example.com';
 		browser.elementsById['auth-password'].value = 'password';
 		await browser.elementsById['sign-in'].dispatch('click');
 		await flush();
 
+		const statusViewButton = find(browser.body, (node) => node.dataset.view === 'status');
+		const overviewViewButton = find(browser.body, (node) => node.dataset.view === 'overview');
+		expect(statusViewButton.attributes['aria-current']).toBe('page');
+		expect(overviewViewButton.attributes['aria-current']).toBeUndefined();
 		const statusForm = findForm(browser.elementsById.view, 'GET /api/status');
 		expect(statusForm).toBeDefined();
 		await statusForm.dispatch('submit');
 		await flush();
 		expect(requests.at(-1)[1].headers.Authorization).toBe('Bearer firebase-token');
+
+		browser.elementsById['api-key'].value = '';
+		const statusRequestCount = requests.filter(([url]) => url === '/api/status').length;
+		await selectView(browser, 'overview');
+		expect(requests.filter(([url]) => url === '/api/status')).toHaveLength(statusRequestCount + 1);
+		expect(browser.elementsById.view.textContent).toContain('Operational overview');
 
 		await browser.elementsById['sign-out'].dispatch('click');
 		expect(auth.signOut).toHaveBeenCalled();
@@ -251,6 +339,7 @@ describe('admin browser client', () => {
 		browser.elementsById['api-key'].value = 'current-secret';
 		await browser.elementsById['save-key'].dispatch('click');
 
+		await selectView(browser, 'status');
 		const statusForm = findForm(browser.elementsById.view, 'GET /api/status');
 		await statusForm.dispatch('submit');
 		await flush();
@@ -689,9 +778,11 @@ describe('admin browser client', () => {
 		const browser = createBrowser({
 			fetchImpl: async (url) => {
 				if (url === '/openapi.json') return response(contract);
-				if (url.startsWith('/api/jobs?')) return response({ success: true, jobs: [{
-					jobId: 'job-b', type: 'market-scanner', status: 'processing', progress: {},
-				}] });
+				if (url.startsWith('/api/jobs?')) {
+					return response({ success: true, jobs: [{
+						jobId: 'job-b', type: 'market-scanner', status: 'processing', progress: {},
+					}] });
+				}
 				if (url === '/api/jobs/job-a') return pendingStatus;
 				return response({});
 			},
@@ -753,9 +844,11 @@ describe('admin browser client', () => {
 		const browser = createBrowser({
 			fetchImpl: async (url) => {
 				if (url === '/openapi.json') return response(contract);
-				if (url.startsWith('/api/jobs?')) return response({ success: true, jobs: [{
-					jobId: 'job-b', type: 'market-scanner', status: 'processing', progress: {},
-				}] });
+				if (url.startsWith('/api/jobs?')) {
+					return response({ success: true, jobs: [{
+						jobId: 'job-b', type: 'market-scanner', status: 'processing', progress: {},
+					}] });
+				}
 				if (url === '/api/jobs/job-a') return response({ jobId: 'job-a', status: 'processing', results: [] });
 				if (url === '/api/jobs/job-a/cancel') return pendingAction;
 				return response({});

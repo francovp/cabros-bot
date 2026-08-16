@@ -8,30 +8,66 @@
 </head>
 <body>
   <main class="console-shell">
-    <header><h1>Cabros Bot Console</h1></header>
-    <section id="firebase-auth" aria-labelledby="firebase-auth-title">
-      <h2 id="firebase-auth-title">Admin sign-in</h2>
-      <div id="auth-form">
-        <label>Email <input id="auth-email" type="email" autocomplete="username"></label>
-        <label>Password <input id="auth-password" type="password" autocomplete="current-password"></label>
-        <button id="sign-in" type="button">Sign in</button>
+    <aside class="console-sidebar">
+      <div class="brand-lockup">
+        <span class="brand-mark" aria-hidden="true">CB</span>
+        <div>
+          <p class="eyebrow">Operations</p>
+          <h1>Cabros Bot</h1>
+        </div>
       </div>
-      <button id="sign-out" type="button" hidden>Sign out</button>
-      <p id="auth-state" class="request-state" aria-live="polite">Checking sign-in configuration…</p>
+      <nav class="console-nav" aria-label="Console sections">
+        <p class="nav-label">Workspace</p>
+        <button data-view="overview" type="button" aria-current="page"><span aria-hidden="true">⌂</span>Overview</button>
+        <button data-view="status" type="button"><span aria-hidden="true">◈</span>Status</button>
+        <button data-view="alerts" type="button"><span aria-hidden="true">◉</span>Alerts</button>
+        <button data-view="presets" type="button"><span aria-hidden="true">◇</span>Presets</button>
+        <button data-view="jobs" type="button"><span aria-hidden="true">◌</span>Jobs</button>
+        <button data-view="analysis" type="button"><span aria-hidden="true">✦</span>Analysis</button>
+        <button data-view="playground" type="button"><span aria-hidden="true">▷</span>Playground</button>
+      </nav>
+      <p class="sidebar-note">Protected operator console</p>
+    </aside>
+    <section class="console-content">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Operator workspace</p>
+          <p class="topbar-title">Monitor, diagnose and trigger safely</p>
+        </div>
+        <button id="clear-key" class="button-ghost" type="button">Clear key</button>
+      </header>
+      <section id="firebase-auth" class="connection-card auth-card" aria-labelledby="firebase-auth-title" hidden>
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Authentication</p>
+            <h2 id="firebase-auth-title">Admin sign-in</h2>
+          </div>
+          <span class="security-chip">Firebase Auth</span>
+        </div>
+        <div id="auth-form" class="auth-form">
+          <label>Email <input id="auth-email" type="email" autocomplete="username"></label>
+          <label>Password <input id="auth-password" type="password" autocomplete="current-password"></label>
+          <button id="sign-in" class="button-primary" type="button">Sign in</button>
+        </div>
+        <button id="sign-out" class="button-ghost" type="button" hidden>Sign out</button>
+        <p id="auth-state" class="request-state" aria-live="polite">Checking sign-in configuration…</p>
+      </section>
+      <section id="legacy-connection" class="connection-card" aria-labelledby="connection-title" hidden>
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Authentication</p>
+            <h2 id="connection-title">Session access</h2>
+          </div>
+          <span class="security-chip">Session-only</span>
+        </div>
+        <form id="connection-form" class="connection-row" novalidate>
+          <label class="key-field">API key <input id="api-key" type="password" autocomplete="off"></label>
+          <button id="save-key" class="button-primary" type="button">Use key for this session</button>
+        </form>
+        <p id="key-state" class="request-state" aria-live="polite"></p>
+      </section>
+      <section id="view" aria-live="polite"></section>
     </section>
-    <section id="legacy-connection" aria-labelledby="connection-title" hidden>
-      <h2 id="connection-title">Connection</h2>
-      <label>API key <input id="api-key" type="password" autocomplete="off"></label>
-      <button id="save-key" type="button">Use key for this session</button>
-      <button id="clear-key" type="button">Clear key</button>
-      <p id="key-state" class="request-state" aria-live="polite"></p>
-    </section>
-    <nav aria-label="Console sections">
-      <button data-view="status" type="button">Status</button><button data-view="alerts" type="button">Alerts</button>
-      <button data-view="presets" type="button">Presets</button><button data-view="jobs" type="button">Jobs</button>
-      <button data-view="analysis" type="button">Analysis</button><button data-view="playground" type="button">Playground</button>
-    </nav>
-    <section id="view" aria-live="polite"></section>
   </main>
   <script src="/admin/admin-request.js" defer></script>
   <script src="/admin/admin.js" defer></script>

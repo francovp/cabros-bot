@@ -306,7 +306,7 @@ When `ENABLE_EQUITY_MARKET_DATA=true`, `dependencies.equityMarketData` reports T
 `dependencies.signalOutcomeWorker` reports the scheduler role, shutdown state, cadence/budgets, and the last-sweep heartbeat counters (`lastRunAt`, scanned, pending, evaluated, and error counts). The `worker` role is intended for the dedicated Render service; set the web service role to `disabled` during cutover so only one scheduler is active. A disabled local scheduler reports `ready: false` and `status: "disabled"` because it is not the process evaluating outcomes.
 
 The dedicated worker also persists the same non-sensitive heartbeat to `workerHeartbeats/signal-outcome` in Firestore. Heartbeat writes fail open and never block alert delivery.
-`featureFlags.firebaseRemoteConfig` reports `ENABLE_FIREBASE_REMOTE_CONFIG`. `dependencies.firebaseRemoteConfig` exposes only `enabled`, `configured`, `ready`, `status`, `source`, `templateVersion`, `lastSuccessfulLoad`, `lastErrorCategory`, and bounded loader settings; it never returns remote parameter values or credentials.
+`featureFlags.firebaseRemoteConfig` reports `ENABLE_FIREBASE_REMOTE_CONFIG`. This is server-side Remote Config: the Firebase Admin SDK loads the published template with `initServerTemplate()`, while no Firebase Web/Client SDK configuration is involved. `dependencies.firebaseRemoteConfig` exposes only `enabled`, `configured`, `ready`, `status`, `source`, `templateVersion`, `lastSuccessfulLoad`, `lastErrorCategory`, and bounded loader settings; it never returns remote parameter values or credentials.
 
 `GET /api/capabilities` is an alias for the same payload.
 
@@ -944,7 +944,7 @@ List recent sanitized jobs. The endpoint includes jobs from the in-memory reposi
 #### GET /api/jobs/:jobId
 
 Retrieve status, partial progress, final report, and delivery state of a job.
-Jobs are retained in memory and, when Firestore job storage is enabled, persisted to the `tradingviewJobs` collection so status survives process restarts. Completed and failed jobs are automatically evicted after 1 hour.
+Jobs are retained in memory and, when Firestore job storage is enabled, persisted to the `tradingviewJobs` collection so status survives process restarts. Completed, failed, cancelled, and timed-out jobs are automatically evicted after 1 hour. Durable terminal documents receive an `expiresAt` timestamp based on `createdAt`; run `bash ops/configure-firestore-alert-retention.sh` once per Firebase project to backfill legacy terminal jobs and enable native TTL deletion for `tradingviewJobs`. Firestore TTL deletion is eventually consistent, while the API still filters expired jobs on reads.
 
 For completed ranked market-scanner jobs, `scanResults[].scores[]` contains the structured `symbol`, numeric `score`, non-empty `reason`, and optional `trendConfluence` fields used by the alert report. This is also included in configured terminal callback payloads.
 
