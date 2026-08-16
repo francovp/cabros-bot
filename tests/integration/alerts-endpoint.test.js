@@ -466,7 +466,7 @@ describe('Alerts API Integration Tests', () => {
 		});
 
 		const res = await request(app)
-			.get('/api/alerts/export?format=csv&from=2026-06-06T00:00:00.000Z&to=2026-06-07T00:00:00.000Z')
+			.get('/api/alerts/export?format=csv&from=2026-06-06T00:00:00.000Z&to=2026-06-07T00:00:00.000Z&includeText=true')
 			.set('x-api-key', 'test-key')
 			.expect(200);
 
