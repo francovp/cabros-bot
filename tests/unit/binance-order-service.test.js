@@ -414,6 +414,34 @@ describe('BinanceOrderService', () => {
 		}));
 	});
 
+	it('uses Binance order-test validation for account-dependent filters', async () => {
+		const client = {
+			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo({
+				filters: [
+					{ filterType: 'LOT_SIZE', minQty: '0.0001', maxQty: '100', stepSize: '0.0001' },
+					{ filterType: 'MIN_NOTIONAL', minNotional: '10' },
+					{ filterType: 'MAX_POSITION', maxPosition: '1' },
+				],
+			})),
+			testNewOrder: jest.fn().mockResolvedValue({}),
+		};
+		const service = createBinanceOrderService({ createClient: () => client });
+
+		await expect(service.placeOrder({
+			symbol: 'BTCUSDT',
+			side: 'BUY',
+			type: 'MARKET',
+			quoteOrderQty: 50,
+			dryRun: true,
+		})).resolves.toMatchObject({ success: true, dryRun: true });
+
+		expect(client.testNewOrder).toHaveBeenCalledWith(expect.objectContaining({
+			symbol: 'BTCUSDT',
+			type: 'MARKET',
+			quoteOrderQty: 50,
+		}));
+	});
+
 	it('maps definitive Binance submission rejections separately from unknown outcomes', async () => {
 		const client = {
 			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
@@ -428,6 +456,29 @@ describe('BinanceOrderService', () => {
 			quantity: 0.1,
 			price: 100,
 			idempotencyKey: 'definitive-rejection',
+			dryRun: false,
+		})).rejects.toMatchObject({ code: 'BINANCE_ORDER_REJECTED', statusCode: 400 });
+	});
+
+	it.each([
+		[-1003, 429],
+		[-1015, 400],
+		[-1021, 400],
+		[-1034, 429],
+	])('treats Binance pre-execution error %s as a definitive rejection', async (code, statusCode) => {
+		const client = {
+			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
+			submitNewOrder: jest.fn().mockRejectedValue({ code, statusCode }),
+		};
+		const service = createBinanceOrderService({ createClient: () => client });
+
+		await expect(service.placeOrder({
+			symbol: 'BTCUSDT',
+			side: 'BUY',
+			type: 'LIMIT',
+			quantity: 0.1,
+			price: 100,
+			idempotencyKey: `definitive-rejection-${code}`,
 			dryRun: false,
 		})).rejects.toMatchObject({ code: 'BINANCE_ORDER_REJECTED', statusCode: 400 });
 	});

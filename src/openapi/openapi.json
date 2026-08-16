@@ -1085,7 +1085,7 @@
           "Trading"
         ],
         "summary": "Validate or submit a Binance Spot order",
-        "description": "Live requests require an idempotency key or clientOrderId. Decimal quantities, prices, and quote amounts may be strings to preserve precision. MARKET orders must omit timeInForce. LIMIT orders with Binance PERCENT_PRICE or PERCENT_PRICE_BY_SIDE filters use Binance order-test validation before acceptance. Definitive Binance rejections return 400 BINANCE_ORDER_REJECTED; a reconciled order mismatch returns 409 BINANCE_ORDER_CONFLICT; transient order-test failures return retryable 502 BINANCE_VALIDATION_FAILED. Binance execution-unknown code -1006 remains BINANCE_ORDER_STATUS_UNKNOWN.",
+        "description": "Live requests require an idempotency key or clientOrderId. Decimal quantities, prices, and quote amounts may be strings to preserve precision. MARKET orders must omit timeInForce. Binance PERCENT_PRICE, PERCENT_PRICE_BY_SIDE, and account-dependent filters such as MAX_POSITION or MAX_NUM_ORDERS use Binance order-test validation before acceptance. Definitive pre-execution or exchange rejections return 400 BINANCE_ORDER_REJECTED; a reconciled order mismatch returns 409 BINANCE_ORDER_CONFLICT; transient order-test failures return retryable 502 BINANCE_VALIDATION_FAILED. Binance execution-unknown code -1006 remains BINANCE_ORDER_STATUS_UNKNOWN.",
         "operationId": "postBinanceSpotOrder",
         "parameters": [
           {

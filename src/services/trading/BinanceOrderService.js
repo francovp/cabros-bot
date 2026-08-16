@@ -10,7 +10,14 @@ const MAX_TIMEOUT_MS = 30000;
 const ALLOWED_ORDER_TYPES = new Set(['MARKET', 'LIMIT']);
 const ALLOWED_SIDES = new Set(['BUY', 'SELL']);
 const ALLOWED_TIME_IN_FORCE = new Set(['GTC', 'IOC', 'FOK']);
-const RETRYABLE_BINANCE_ERROR_CODES = new Set([-1001, -1003, -1006, -1007, -1015, -1021, -1034]);
+const DEFINITIVE_BINANCE_ERROR_CODES = new Set([-1003, -1015, -1021, -1034]);
+const RETRYABLE_BINANCE_ERROR_CODES = new Set([-1001, -1006, -1007]);
+const ACCOUNT_DEPENDENT_FILTERS = new Set([
+	'MAX_POSITION',
+	'MAX_NUM_ORDERS',
+	'MAX_NUM_ALGO_ORDERS',
+	'MAX_NUM_ICEBERG_ORDERS',
+]);
 
 class BinanceOrderRequestError extends Error {
 	constructor(message, code = 'INVALID_ORDER_REQUEST', statusCode = 400) {
@@ -57,6 +64,7 @@ function getBinanceErrorCode(error) {
 
 function isDefinitiveBinanceRejection(error) {
 	const code = getBinanceErrorCode(error);
+	if (DEFINITIVE_BINANCE_ERROR_CODES.has(code)) return true;
 	if (code === null || RETRYABLE_BINANCE_ERROR_CODES.has(code)) return false;
 
 	const statusCode = Number(error?.statusCode ?? error?.status ?? error?.response?.status);
@@ -357,11 +365,14 @@ function reconciledOrderMatchesRequest(order, existingOrder, clientOrderId) {
 	return true;
 }
 
-async function validateDynamicPriceFilters(client, order, orderParams, filters) {
-	if (order.type !== 'LIMIT' || (!filters.has('PERCENT_PRICE') && !filters.has('PERCENT_PRICE_BY_SIDE'))) return;
+async function validateOrderTestFilters(client, order, orderParams, filters) {
+	const hasDynamicPriceFilters = order.type === 'LIMIT'
+		&& (filters.has('PERCENT_PRICE') || filters.has('PERCENT_PRICE_BY_SIDE'));
+	const hasAccountDependentFilters = [...ACCOUNT_DEPENDENT_FILTERS].some((filterType) => filters.has(filterType));
+	if (!hasDynamicPriceFilters && !hasAccountDependentFilters) return;
 	if (typeof client.testNewOrder !== 'function') {
 		throw new BinanceOrderServiceError(
-			'Binance dynamic price filters could not be validated',
+			'Binance order-test filters could not be validated',
 			'BINANCE_VALIDATION_FAILED',
 		);
 	}
@@ -370,7 +381,7 @@ async function validateDynamicPriceFilters(client, order, orderParams, filters) 
 		await client.testNewOrder(orderParams);
 	} catch (error) {
 		if (isDefinitiveBinanceRejection(error)) {
-			throw new BinanceOrderRequestError('price fails Binance dynamic price filters');
+			throw new BinanceOrderRequestError('order fails Binance order-test filters');
 		}
 		throw new BinanceOrderServiceError(
 			'Binance order-test validation failed; retry without changing the order identity',
@@ -538,7 +549,7 @@ function createBinanceOrderService({ createClient = createBinanceClient } = {}) 
 
 			const orderParams = buildOrderParams({ ...order, clientOrderId });
 			if (order.dryRun) {
-				await validateDynamicPriceFilters(client, order, orderParams, filters);
+				await validateOrderTestFilters(client, order, orderParams, filters);
 				return {
 					success: true,
 					dryRun: true,
@@ -547,7 +558,7 @@ function createBinanceOrderService({ createClient = createBinanceClient } = {}) 
 				};
 			}
 
-			await validateDynamicPriceFilters(client, order, orderParams, filters);
+			await validateOrderTestFilters(client, order, orderParams, filters);
 			try {
 				const response = await client.submitNewOrder(orderParams);
 				return {
