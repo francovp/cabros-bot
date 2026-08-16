@@ -158,7 +158,7 @@ describe('Documentation Alignment Policy', () => {
     const maintainedFiles = [
       path.join(repoRoot, '.env.example'),
       path.join(repoRoot, 'README.md'),
-      path.join(repoRoot, 'AGENTS.md'),
+		path.join(repoRoot, 'AGENTS.md'),
       ...getAllFiles(path.join(repoRoot, 'specs', '003-news-monitor')),
     ];
     const staleConfigurationPatterns = [
@@ -233,7 +233,7 @@ describe('Node.js runtime contract', () => {
   test('maintained documentation does not advertise Node.js 20', () => {
     const maintainedFiles = [
       path.join(repoRoot, 'README.md'),
-      path.join(repoRoot, 'AGENTS.md'),
+		path.join(repoRoot, 'AGENTS.md'),
       ...getAllFiles(path.join(repoRoot, 'specs')),
     ];
     const staleNode20Pattern = /\bNode(?:\.js)?\s*20(?:\.x)?\b|\bnode:20\b/i;

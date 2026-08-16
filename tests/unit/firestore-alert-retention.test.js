@@ -45,6 +45,52 @@ describe('Firestore alert retention backfill', () => {
 		expect(script).toContain('FIREBASE_PROJECT_ID="$project" node ops/backfill-firestore-alert-retention.js');
 	});
 
+	it('backfills only terminal TradingView jobs with the one-hour expiry', async () => {
+		const terminalRef = { id: 'terminal-job' };
+		const activeRef = { id: 'active-job' };
+		const createdAt = timestamp('2026-05-01T00:00:00.000Z');
+		const docs = [
+			{
+				id: terminalRef.id,
+				ref: terminalRef,
+				data: () => ({ status: 'completed', createdAt }),
+			},
+			{
+				id: activeRef.id,
+				ref: activeRef,
+				data: () => ({ status: 'processing', createdAt }),
+			},
+		];
+		const batch = {
+			update: jest.fn(),
+			commit: jest.fn().mockResolvedValue(undefined),
+		};
+		const query = {
+			orderBy: jest.fn().mockReturnThis(),
+			limit: jest.fn().mockReturnThis(),
+			get: jest.fn().mockResolvedValue({ docs }),
+		};
+		const firestore = {
+			collection: jest.fn().mockReturnValue(query),
+			batch: jest.fn().mockReturnValue(batch),
+		};
+
+		const result = await backfillCollection(firestore, 'tradingviewJobs', 'createdAt', {
+			retentionDays: 1 / 24,
+			shouldBackfill: (data) => ['completed', 'failed', 'cancelled', 'timed_out'].includes(data.status),
+		});
+
+		expect(batch.update).toHaveBeenCalledWith(
+			terminalRef,
+			expect.objectContaining({ expiresAt: expect.anything() }),
+		);
+		expect(batch.update).not.toHaveBeenCalledWith(activeRef, expect.anything());
+		expect(batch.update.mock.calls[0][1].expiresAt.toDate()).toEqual(
+			new Date('2026-05-01T01:00:00.000Z'),
+		);
+		expect(result).toEqual({ scanned: 2, updated: 1, skipped: 0, existing: 0 });
+	});
+
 	it('updates only legacy documents with a usable event timestamp', async () => {
 		const legacyRef = { id: 'legacy' };
 		const currentRef = { id: 'current' };
