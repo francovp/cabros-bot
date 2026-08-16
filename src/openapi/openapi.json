@@ -28,6 +28,9 @@
       "name": "News"
     },
     {
+      "name": "Trading"
+    },
+    {
       "name": "Operations"
     }
   ],
@@ -1076,6 +1079,61 @@
         ]
       }
     },
+    "/api/trading/binance/orders": {
+      "post": {
+        "tags": [
+          "Trading"
+        ],
+        "summary": "Validate or submit a Binance Spot order",
+        "operationId": "postBinanceSpotOrder",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKeyHeader"
+          },
+          {
+            "$ref": "#/components/parameters/XIdempotencyKeyHeader"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/BinanceOrder"
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BinanceOrderResult"
+          },
+          "201": {
+            "$ref": "#/components/responses/BinanceOrderResult"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/IdempotencyConflict"
+          },
+          "502": {
+            "$ref": "#/components/responses/BinanceOrderFailure"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.operator"
+      }
+    },
     "/api/status": {
       "get": {
         "tags": [
@@ -1657,9 +1715,125 @@
             }
           }
         }
+      },
+      "BinanceOrder": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/BinanceOrderRequest"
+            },
+            "examples": {
+              "dryRunLimit": {
+                "summary": "Safe validation without submission",
+                "value": {
+                  "symbol": "BTCUSDT",
+                  "side": "BUY",
+                  "type": "LIMIT",
+                  "quantity": 0.001,
+                  "price": 60000,
+                  "timeInForce": "GTC",
+                  "dryRun": true
+                }
+              },
+              "liveMarket": {
+                "summary": "Operator submission with idempotency",
+                "value": {
+                  "symbol": "BTCUSDT",
+                  "side": "BUY",
+                  "type": "MARKET",
+                  "quoteOrderQty": 50,
+                  "dryRun": false,
+                  "clientOrderId": "cabros-375-1"
+                }
+              },
+              "invalid": {
+                "summary": "Invalid quantity step",
+                "value": {
+                  "symbol": "BTCUSDT",
+                  "side": "BUY",
+                  "type": "LIMIT",
+                  "quantity": 0.00105,
+                  "price": 60000,
+                  "dryRun": true
+                }
+              }
+            }
+          }
+        }
       }
     },
     "responses": {
+      "BinanceOrderResult": {
+        "description": "Validated dry-run or confirmed Binance Spot order. A replay includes idempotencyReplayed=true.",
+        "headers": {
+          "Idempotency-Replay": {
+            "description": "false for the first request, true for a cached replay.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/BinanceOrderResult"
+            },
+            "examples": {
+              "dryRun": {
+                "value": {
+                  "success": true,
+                  "dryRun": true,
+                  "environment": "testnet",
+                  "order": {
+                    "symbol": "BTCUSDT",
+                    "side": "BUY",
+                    "type": "LIMIT",
+                    "quantity": 0.001,
+                    "price": 60000,
+                    "timeInForce": "GTC",
+                    "newOrderRespType": "FULL"
+                  }
+                }
+              },
+              "submitted": {
+                "value": {
+                  "success": true,
+                  "dryRun": false,
+                  "environment": "testnet",
+                  "order": {
+                    "symbol": "BTCUSDT",
+                    "orderId": 42,
+                    "clientOrderId": "cabros-375-1",
+                    "status": "FILLED",
+                    "type": "MARKET",
+                    "side": "BUY"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "BinanceOrderFailure": {
+        "description": "Binance rejected or could not confirm the order. No automatic retry is performed.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "example": {
+              "success": false,
+              "error": "Binance order submission failed",
+              "code": "BINANCE_ORDER_FAILED"
+            }
+          }
+        }
+      },
       "Unauthorized": {
         "description": "API key rejected",
         "content": {
@@ -3108,6 +3282,127 @@
           "code": {
             "type": "string",
             "description": "Machine-readable error code (failed or timed_out jobs only)."
+          }
+        }
+      },
+      "BinanceOrderRequest": {
+        "type": "object",
+        "required": [
+          "symbol",
+          "side",
+          "type"
+        ],
+        "properties": {
+          "symbol": {
+            "type": "string",
+            "pattern": "^[A-Z0-9]{5,20}$",
+            "description": "Allow-listed Binance Spot symbol, for example BTCUSDT."
+          },
+          "side": {
+            "type": "string",
+            "enum": [
+              "BUY",
+              "SELL"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "MARKET",
+              "LIMIT"
+            ]
+          },
+          "quantity": {
+            "type": [
+              "number",
+              "string"
+            ],
+            "description": "Base-asset quantity. Required for LIMIT and mutually exclusive with quoteOrderQty for MARKET."
+          },
+          "quoteOrderQty": {
+            "type": [
+              "number",
+              "string"
+            ],
+            "description": "Quote-asset amount for MARKET orders."
+          },
+          "price": {
+            "type": [
+              "number",
+              "string"
+            ],
+            "description": "Required for LIMIT orders."
+          },
+          "timeInForce": {
+            "type": "string",
+            "enum": [
+              "GTC",
+              "IOC",
+              "FOK"
+            ],
+            "default": "GTC"
+          },
+          "clientOrderId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,36}$"
+          },
+          "dryRun": {
+            "type": "boolean",
+            "default": true,
+            "description": "Validate filters and notional without submitting. Set false only for an enabled operator workflow."
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional body form of the idempotency key. Header form is preferred."
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional snake_case body form of the idempotency key."
+          }
+        },
+        "oneOf": [
+          {
+            "required": [
+              "quantity"
+            ]
+          },
+          {
+            "required": [
+              "quoteOrderQty"
+            ]
+          }
+        ],
+        "additionalProperties": false
+      },
+      "BinanceOrderResult": {
+        "type": "object",
+        "required": [
+          "success",
+          "dryRun",
+          "environment",
+          "order"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "dryRun": {
+            "type": "boolean"
+          },
+          "environment": {
+            "type": "string",
+            "enum": [
+              "testnet",
+              "live"
+            ]
+          },
+          "idempotencyReplayed": {
+            "type": "boolean"
+          },
+          "order": {
+            "$ref": "#/components/schemas/JsonObject"
           }
         }
       },
