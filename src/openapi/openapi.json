@@ -1085,7 +1085,7 @@
           "Trading"
         ],
         "summary": "Validate or submit a Binance Spot order",
-        "description": "Live requests require an idempotency key or clientOrderId. MARKET orders must omit timeInForce. LIMIT orders with Binance PERCENT_PRICE or PERCENT_PRICE_BY_SIDE filters use Binance order-test validation before acceptance.",
+        "description": "Live requests require an idempotency key or clientOrderId. Decimal quantities, prices, and quote amounts may be strings to preserve precision. MARKET orders must omit timeInForce. LIMIT orders with Binance PERCENT_PRICE or PERCENT_PRICE_BY_SIDE filters use Binance order-test validation before acceptance. Definitive Binance rejections return 400 BINANCE_ORDER_REJECTED; transient order-test failures return retryable 502 BINANCE_VALIDATION_FAILED.",
         "operationId": "postBinanceSpotOrder",
         "parameters": [
           {
@@ -1821,7 +1821,7 @@
         }
       },
       "BinanceOrderFailure": {
-        "description": "Binance rejected or could not confirm the order. A live request with an idempotency key derives a deterministic clientOrderId for reconciliation after cache expiration or process restart. A 503 BINANCE_ORDER_STATUS_UNKNOWN response is replayed for the same idempotency key; do not resubmit with a new key until the order status is reconciled.",
+        "description": "Binance rejected or could not confirm the order. Definitive exchange rejections return BINANCE_ORDER_REJECTED; transient order-test failures return BINANCE_VALIDATION_FAILED. A live request with an idempotency key derives a deterministic clientOrderId for reconciliation after cache expiration or process restart. A 503 BINANCE_ORDER_STATUS_UNKNOWN response is replayed for the same idempotency key; do not resubmit with a new key until the order status is reconciled.",
         "content": {
           "application/json": {
             "schema": {
@@ -3318,21 +3318,21 @@
               "number",
               "string"
             ],
-            "description": "Base-asset quantity. Required for LIMIT. MARKET orders must use quoteOrderQty when the configured notional cap is enforced, because quantity-based market execution cannot be bounded safely."
+            "description": "Base-asset quantity. Required for LIMIT. Send as a string when exact decimal precision matters. MARKET orders must use quoteOrderQty when the configured notional cap is enforced, because quantity-based market execution cannot be bounded safely."
           },
           "quoteOrderQty": {
             "type": [
               "number",
               "string"
             ],
-            "description": "Quote-asset amount for MARKET orders."
+            "description": "Quote-asset amount for MARKET orders. Send as a string when exact decimal precision matters."
           },
           "price": {
             "type": [
               "number",
               "string"
             ],
-            "description": "Required for LIMIT orders."
+            "description": "Required for LIMIT orders. Send as a string when exact decimal precision matters."
           },
           "timeInForce": {
             "type": "string",

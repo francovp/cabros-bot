@@ -3234,7 +3234,7 @@
     },
     {
       "name": "Binance Trading",
-      "description": "Operator-only Binance Spot order workflow. Feature is disabled by default, uses Spot Testnet by default, fails closed without API-key or Firebase admin authentication, derives a deterministic clientOrderId for idempotent live retries, and never retries an order submission automatically.",
+      "description": "Operator-only Binance Spot order workflow. Feature is disabled by default, uses Spot Testnet by default, fails closed without API-key or Firebase admin authentication, derives a deterministic clientOrderId for idempotent live retries, preserves decimal strings, distinguishes definitive Binance rejections from transient failures, and never retries an order submission automatically.",
       "item": [
         {
           "name": "POST Binance order (dry-run LIMIT)",
@@ -3346,6 +3346,18 @@
                 }
               ],
               "body": "{\n  \"success\": false,\n  \"error\": \"Binance accepted or may have accepted the order, but its final status is unknown; do not resubmit with a new idempotency key\",\n  \"code\": \"BINANCE_ORDER_STATUS_UNKNOWN\",\n  \"idempotencyReplayed\": true\n}"
+            },
+            {
+              "name": "Definitive Binance rejection",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Binance rejected the order\",\n  \"code\": \"BINANCE_ORDER_REJECTED\"\n}"
+            },
+            {
+              "name": "Transient order-test failure",
+              "status": "Bad Gateway",
+              "code": 502,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Binance order-test validation failed; retry without changing the order identity\",\n  \"code\": \"BINANCE_VALIDATION_FAILED\"\n}"
             }
           ]
         },

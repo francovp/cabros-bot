@@ -79,8 +79,8 @@ describe('BinanceOrderService', () => {
 				symbol: 'BTCUSDT',
 				side: 'BUY',
 				type: 'LIMIT',
-				quantity: 0.1,
-				price: 100,
+				quantity: '0.1',
+				price: '100',
 				timeInForce: 'GTC',
 			},
 		});
@@ -160,7 +160,7 @@ describe('BinanceOrderService', () => {
 			symbol: 'BTCUSDT',
 			side: 'BUY',
 			type: 'MARKET',
-			quoteOrderQty: 50,
+			quoteOrderQty: '50',
 			newClientOrderId: expect.stringMatching(/^cb_[a-f0-9]{32}$/),
 			newOrderRespType: 'FULL',
 		});
@@ -334,6 +334,77 @@ describe('BinanceOrderService', () => {
 			type: 'LIMIT',
 			price: 100,
 		}));
+	});
+
+	it('maps definitive Binance submission rejections separately from unknown outcomes', async () => {
+		const client = {
+			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
+			submitNewOrder: jest.fn().mockRejectedValue({ code: -2010, message: 'Account has insufficient balance' }),
+		};
+		const service = createBinanceOrderService({ createClient: () => client });
+
+		await expect(service.placeOrder({
+			symbol: 'BTCUSDT',
+			side: 'BUY',
+			type: 'LIMIT',
+			quantity: 0.1,
+			price: 100,
+			idempotencyKey: 'definitive-rejection',
+			dryRun: false,
+		})).rejects.toMatchObject({ code: 'BINANCE_ORDER_REJECTED', statusCode: 400 });
+	});
+
+	it('preserves exact decimal strings in submitted order parameters', async () => {
+		const client = {
+			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo({
+				filters: [
+					{ filterType: 'PRICE_FILTER', minPrice: '0.000000000000000001', maxPrice: '1000000', tickSize: '0.000000000000000001' },
+					{ filterType: 'LOT_SIZE', minQty: '0.000000000000000001', maxQty: '100', stepSize: '0.000000000000000001' },
+					{ filterType: 'MIN_NOTIONAL', minNotional: '10' },
+				],
+			})),
+			submitNewOrder: jest.fn().mockResolvedValue({ symbol: 'BTCUSDT', status: 'NEW' }),
+		};
+		const service = createBinanceOrderService({ createClient: () => client });
+
+		await service.placeOrder({
+			symbol: 'BTCUSDT',
+			side: 'BUY',
+			type: 'LIMIT',
+			quantity: '0.100000000000000005',
+			price: '100.000000000000000005',
+			idempotencyKey: 'decimal-preservation',
+			dryRun: false,
+		});
+
+		expect(client.submitNewOrder).toHaveBeenCalledWith(expect.objectContaining({
+			quantity: '0.100000000000000005',
+			price: '100.000000000000000005',
+		}));
+	});
+
+	it('maps transient Binance order-test failures to retryable service errors', async () => {
+		const client = {
+			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo({
+				filters: [
+					{ filterType: 'PRICE_FILTER', minPrice: '0.01', maxPrice: '1000000', tickSize: '0.01' },
+					{ filterType: 'LOT_SIZE', minQty: '0.0001', maxQty: '100', stepSize: '0.0001' },
+					{ filterType: 'MIN_NOTIONAL', minNotional: '10' },
+					{ filterType: 'PERCENT_PRICE', multiplierUp: '1.2', multiplierDown: '0.8', avgPriceMins: 5 },
+				],
+			})),
+			testNewOrder: jest.fn().mockRejectedValue(new Error('request timeout')),
+		};
+		const service = createBinanceOrderService({ createClient: () => client });
+
+		await expect(service.placeOrder({
+			symbol: 'BTCUSDT',
+			side: 'BUY',
+			type: 'LIMIT',
+			quantity: 0.1,
+			price: 100,
+			dryRun: true,
+		})).rejects.toMatchObject({ code: 'BINANCE_VALIDATION_FAILED', statusCode: 502 });
 	});
 
 	it('does not retry an ambiguous Binance submission failure', async () => {

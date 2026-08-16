@@ -10,6 +10,7 @@ const MAX_TIMEOUT_MS = 30000;
 const ALLOWED_ORDER_TYPES = new Set(['MARKET', 'LIMIT']);
 const ALLOWED_SIDES = new Set(['BUY', 'SELL']);
 const ALLOWED_TIME_IN_FORCE = new Set(['GTC', 'IOC', 'FOK']);
+const RETRYABLE_BINANCE_ERROR_CODES = new Set([-1001, -1003, -1007, -1015, -1021, -1034]);
 
 class BinanceOrderRequestError extends Error {
 	constructor(message, code = 'INVALID_ORDER_REQUEST', statusCode = 400) {
@@ -47,6 +48,21 @@ function isOrderNotFoundError(error) {
 	return Number(code) === -2013 || /unknown order/i.test(error?.message || '');
 }
 
+function getBinanceErrorCode(error) {
+	const value = error?.code ?? error?.body?.code;
+	if (typeof value === 'number' && Number.isFinite(value)) return value;
+	if (typeof value === 'string' && /^-?\d+$/.test(value.trim())) return Number(value);
+	return null;
+}
+
+function isDefinitiveBinanceRejection(error) {
+	const code = getBinanceErrorCode(error);
+	if (code === null || RETRYABLE_BINANCE_ERROR_CODES.has(code)) return false;
+
+	const statusCode = Number(error?.statusCode ?? error?.status ?? error?.response?.status);
+	return statusCode !== 408 && statusCode !== 429 && (statusCode < 500 || !Number.isFinite(statusCode));
+}
+
 async function reconcileOrder(client, symbol, clientOrderId) {
 	if (!clientOrderId || typeof client.getOrder !== 'function') return null;
 
@@ -67,19 +83,21 @@ function parsePositiveNumber(value, field) {
 		throw new BinanceOrderRequestError(`${field} must be a positive number`);
 	}
 
-	const parsed = Number(value);
-	if (!Number.isFinite(parsed) || parsed <= 0) {
+	const source = String(value).trim();
+	const parsed = Number(source);
+	if (!Number.isFinite(parsed) || parsed <= 0 || !decimalParts(source)) {
 		throw new BinanceOrderRequestError(`${field} must be a positive number`);
 	}
 
-	return parsed;
+	return typeof value === 'string' ? source : parsed;
 }
 
 function decimalParts(value) {
 	const source = String(value).trim().toLowerCase();
-	if (!/^\d+(?:\.\d+)?(?:e[+-]?\d+)?$/.test(source)) return null;
+	if (!/^\+?(?:(?:\d+(?:\.\d*)?)|(?:\.\d+))(?:e[+-]?\d+)?$/.test(source)) return null;
 
-	const [mantissa, exponentText] = source.split('e');
+	const normalizedSource = source.startsWith('+') ? source.slice(1) : source;
+	const [mantissa, exponentText] = normalizedSource.split('e');
 	const [whole, fraction = ''] = mantissa.split('.');
 	const digits = `${whole}${fraction}`.replace(/^0+(?=\d)/, '');
 	const exponent = exponentText ? Number(exponentText) : 0;
@@ -336,7 +354,13 @@ async function validateDynamicPriceFilters(client, order, orderParams, filters) 
 	try {
 		await client.testNewOrder(orderParams);
 	} catch (error) {
-		throw new BinanceOrderRequestError('price fails Binance dynamic price filters');
+		if (isDefinitiveBinanceRejection(error)) {
+			throw new BinanceOrderRequestError('price fails Binance dynamic price filters');
+		}
+		throw new BinanceOrderServiceError(
+			'Binance order-test validation failed; retry without changing the order identity',
+			'BINANCE_VALIDATION_FAILED',
+		);
 	}
 }
 
@@ -508,6 +532,9 @@ function createBinanceOrderService({ createClient = createBinanceClient } = {}) 
 					order: sanitizeOrderResponse(response || {}),
 				};
 			} catch (error) {
+				if (isDefinitiveBinanceRejection(error)) {
+					throw new BinanceOrderRequestError('Binance rejected the order', 'BINANCE_ORDER_REJECTED');
+				}
 				throw new BinanceOrderServiceError(
 					'Binance accepted or may have accepted the order, but its final status is unknown; do not resubmit with a new idempotency key',
 					'BINANCE_ORDER_STATUS_UNKNOWN',
