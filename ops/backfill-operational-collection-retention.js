@@ -7,7 +7,8 @@
  * collections that use Firestore TTL:
  *
  *   - idempotency_keys  — defaults to WEBHOOK_IDEMPOTENCY_TTL_MS (5 min) from createdAt
- *   - news-monitor-dedup — defaults to NEWS_CACHE_TTL_HOURS (6 h) from createdAt
+ *   - news-monitor-dedup — defaults to NEWS_CACHE_TTL_HOURS (6 h) from createdAt,
+ *                         or DELIVERY_LOCK_TTL_MS (30 s) for channel delivery leases
  *
  * Both collections write `expiresAt` on document creation, so legacy documents
  * only exist when the service was running an older version that did not set the
@@ -18,8 +19,12 @@
  * PENDING_STALE_TIMEOUT_MS) are left untouched — their current `expiresAt` is
  * already set by the reservation logic and must not be shortened.
  *
+ * Delivery lease documents in news-monitor-dedup (keys containing `:delivery:`)
+ * retain their 30-second TTL so expired leases remain immediately reclaimable
+ * rather than being locked out for hours.
+ *
  * Run via: ops/configure-operational-collection-retention.sh (with BACKFILL=true)
- * or directly: node ops/backfill-operational-collection-retention.js
+ * or directly: node ops/backfill-operational-collection-retention.js [--dry-run]
  */
 
 const admin = require('firebase-admin');
@@ -28,6 +33,7 @@ const admin = require('firebase-admin');
 
 const PAGE_SIZE = 400;
 const PENDING_STALE_TIMEOUT_MS = 180_000; // 3 min — mirrors IdempotencyStorageService
+const DELIVERY_LOCK_TTL_MS = 30_000; // 30s — mirrors NewsCache / cache.js
 
 // Defaults mirror service defaults; operators may override via env vars.
 const DEFAULT_IDEMPOTENCY_TTL_MS = 300_000; // 5 min  (WEBHOOK_IDEMPOTENCY_TTL_MS default)
@@ -47,11 +53,31 @@ function parseIdempotencyTtlMs(raw = process.env.WEBHOOK_IDEMPOTENCY_TTL_MS) {
 }
 
 function parseDedupTtlMs(raw = process.env.NEWS_CACHE_TTL_HOURS) {
-	const val = Number(raw);
-	if (!Number.isFinite(val) || val <= 0 || val > MAX_DEDUP_TTL_HOURS) {
+	if (raw === undefined || raw === null) {
+		return DEFAULT_DEDUP_TTL_HOURS * 60 * 60 * 1000;
+	}
+	const str = String(raw).trim();
+	if (str === '') {
+		return DEFAULT_DEDUP_TTL_HOURS * 60 * 60 * 1000;
+	}
+	if (!/^[+-]?(\d+(\.\d+)?|\.\d+)$/.test(str)) {
+		return DEFAULT_DEDUP_TTL_HOURS * 60 * 60 * 1000;
+	}
+	const val = Number(str);
+	if (!Number.isFinite(val) || val < 0 || val > MAX_DEDUP_TTL_HOURS) {
 		return DEFAULT_DEDUP_TTL_HOURS * 60 * 60 * 1000;
 	}
 	return Math.floor(val * 60 * 60 * 1000);
+}
+
+function isDeliveryLease(docId, data = {}) {
+	if (typeof docId === 'string' && docId.includes(':delivery:')) {
+		return true;
+	}
+	if (typeof data?.key === 'string' && data.key.includes(':delivery:')) {
+		return true;
+	}
+	return false;
 }
 
 function getTimestampMillis(value) {
@@ -80,10 +106,11 @@ function getTimestampMillis(value) {
  * @param {number} ttlMs  — expiry offset from `createdAt` (milliseconds)
  * @param {object} [options]
  * @param {boolean} [options.protectActivePending]  — skip active pending idempotency claims
+ * @param {boolean} [options.dryRun]  — calculate changes without performing writes
  * @returns {Promise<{scanned: number, updated: number, skipped: number, existing: number}>}
  */
 async function backfillCollection(firestore, collectionName, ttlMs, options = {}) {
-	const { protectActivePending = false } = options;
+	const { protectActivePending = false, dryRun = false } = options;
 	const result = { scanned: 0, updated: 0, skipped: 0, existing: 0 };
 	let lastDocument = null;
 	const nowMs = Date.now();
@@ -99,7 +126,7 @@ async function backfillCollection(firestore, collectionName, ttlMs, options = {}
 			break;
 		}
 
-		const batch = firestore.batch();
+		const batch = dryRun ? null : firestore.batch();
 		let batchUpdates = 0;
 
 		for (const doc of snapshot.docs) {
@@ -127,13 +154,20 @@ async function backfillCollection(firestore, collectionName, ttlMs, options = {}
 				?? getTimestampMillis(doc.createTime)
 				?? nowMs;
 
-			const newExpiresAt = admin.firestore.Timestamp.fromMillis(baseMs + ttlMs);
-			batch.update(doc.ref, { expiresAt: newExpiresAt });
+			// Delivery leases in news-monitor-dedup use 30s TTL, preserving short lease duration
+			const docTtlMs = (collectionName === 'news-monitor-dedup' && isDeliveryLease(doc.id, data))
+				? DELIVERY_LOCK_TTL_MS
+				: ttlMs;
+
+			const newExpiresAt = admin.firestore.Timestamp.fromMillis(baseMs + docTtlMs);
+			if (!dryRun) {
+				batch.update(doc.ref, { expiresAt: newExpiresAt });
+			}
 			batchUpdates += 1;
 			result.updated += 1;
 		}
 
-		if (batchUpdates > 0) {
+		if (!dryRun && batchUpdates > 0) {
 			await batch.commit();
 		}
 
@@ -172,6 +206,7 @@ function initializeFirestore() {
 // ─── Main ────────────────────────────────────────────────────────────────────
 
 async function main() {
+	const dryRun = process.argv.includes('--dry-run') || process.env.DRY_RUN === 'true';
 	const firestore = initializeFirestore();
 	const idempotencyTtlMs = parseIdempotencyTtlMs();
 	const dedupTtlMs = parseDedupTtlMs();
@@ -184,7 +219,7 @@ async function main() {
 			firestore,
 			'idempotency_keys',
 			idempotencyTtlMs,
-			{ protectActivePending: true },
+			{ protectActivePending: true, dryRun },
 		);
 	} catch (error) {
 		console.error(JSON.stringify({
@@ -195,12 +230,13 @@ async function main() {
 		throw error;
 	}
 
-	// news-monitor-dedup — no active-pending concept; all documents use createdAt
+	// news-monitor-dedup — no active-pending concept; delivery leases retain 30s TTL
 	try {
 		collections['news-monitor-dedup'] = await backfillCollection(
 			firestore,
 			'news-monitor-dedup',
 			dedupTtlMs,
+			{ dryRun },
 		);
 	} catch (error) {
 		console.error(JSON.stringify({
@@ -213,6 +249,7 @@ async function main() {
 
 	console.log(JSON.stringify({
 		event: 'operational_retention_backfill_completed',
+		dryRun,
 		idempotencyTtlMs,
 		dedupTtlMs,
 		collections,
@@ -233,4 +270,7 @@ module.exports = {
 	backfillCollection,
 	parseIdempotencyTtlMs,
 	parseDedupTtlMs,
+	isDeliveryLease,
+	DELIVERY_LOCK_TTL_MS,
+	PENDING_STALE_TIMEOUT_MS,
 };

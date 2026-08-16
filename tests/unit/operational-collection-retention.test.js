@@ -5,9 +5,17 @@
  *
  * Covers:
  *  - parseIdempotencyTtlMs: valid, invalid (NaN, negative, zero, too large)
- *  - parseDedupTtlMs: valid, invalid values
- *  - backfillCollection: expired, active-pending (protected), legacy docs,
- *    documents already having a future expiresAt (skipped)
+ *  - parseDedupTtlMs: valid, zero/zero-hour no-cache, decimal, invalid values
+ *  - isDeliveryLease: doc ID and data key pattern matching
+ *  - backfillCollection:
+ *      - delivery leases (30s TTL) vs general news entries (6h TTL)
+ *      - zero-hour retention (dedupTtlMs = 0)
+ *      - completed idempotency responses (active skipped, expired updated)
+ *      - legacy documents (Date object, missing timestamp fallback)
+ *      - dryRun mode
+ *      - active-pending claims protection
+ *      - documents already having a future expiresAt (skipped)
+ *      - empty collection
  */
 
 const admin = require('firebase-admin');
@@ -17,6 +25,9 @@ const {
 	backfillCollection,
 	parseIdempotencyTtlMs,
 	parseDedupTtlMs,
+	isDeliveryLease,
+	DELIVERY_LOCK_TTL_MS,
+	PENDING_STALE_TIMEOUT_MS,
 } = require('../../ops/backfill-operational-collection-retention');
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -38,7 +49,6 @@ function makeFakeDoc(overrides = {}) {
 		}),
 		ref: { id: 'doc-id' },
 	};
-	// Allow overrides of top-level doc properties
 	return base;
 }
 
@@ -55,7 +65,7 @@ function buildFirestoreMock(docs) {
 		limit: jest.fn().mockReturnThis(),
 		startAfter: jest.fn().mockReturnThis(),
 		get: jest.fn()
-			.mockResolvedValueOnce({ empty: false, docs })
+			.mockResolvedValueOnce({ empty: docs.length === 0, docs })
 			.mockResolvedValueOnce({ empty: true, docs: [] }),
 	};
 
@@ -107,12 +117,33 @@ describe('parseDedupTtlMs', () => {
 		expect(parseDedupTtlMs('12')).toBe(12 * 60 * 60 * 1000);
 	});
 
+	test('returns 0 for zero string (preserving no-cache behavior)', () => {
+		expect(parseDedupTtlMs('0')).toBe(0);
+		expect(parseDedupTtlMs('0.0')).toBe(0);
+	});
+
+	test('returns 0 for numeric 0', () => {
+		expect(parseDedupTtlMs(0)).toBe(0);
+	});
+
+	test('returns parsed ms for decimal hours', () => {
+		expect(parseDedupTtlMs('0.5')).toBe(30 * 60 * 1000);
+	});
+
+	test('returns 0 when NEWS_CACHE_TTL_HOURS is set to "0"', () => {
+		const originalEnv = process.env.NEWS_CACHE_TTL_HOURS;
+		process.env.NEWS_CACHE_TTL_HOURS = '0';
+		expect(parseDedupTtlMs()).toBe(0);
+		if (originalEnv !== undefined) process.env.NEWS_CACHE_TTL_HOURS = originalEnv;
+		else delete process.env.NEWS_CACHE_TTL_HOURS;
+	});
+
 	test('returns default for NaN', () => {
 		expect(parseDedupTtlMs('bad')).toBe(6 * 60 * 60 * 1000);
 	});
 
-	test('returns default for zero', () => {
-		expect(parseDedupTtlMs('0')).toBe(6 * 60 * 60 * 1000);
+	test('returns default for empty string', () => {
+		expect(parseDedupTtlMs('')).toBe(6 * 60 * 60 * 1000);
 	});
 
 	test('returns default for negative', () => {
@@ -121,6 +152,36 @@ describe('parseDedupTtlMs', () => {
 
 	test('returns default for value exceeding 720h hard cap', () => {
 		expect(parseDedupTtlMs('721')).toBe(6 * 60 * 60 * 1000);
+	});
+
+	test('returns default when no argument given (undefined)', () => {
+		const originalEnv = process.env.NEWS_CACHE_TTL_HOURS;
+		delete process.env.NEWS_CACHE_TTL_HOURS;
+		expect(parseDedupTtlMs(undefined)).toBe(6 * 60 * 60 * 1000);
+		if (originalEnv !== undefined) process.env.NEWS_CACHE_TTL_HOURS = originalEnv;
+	});
+});
+
+// ─── isDeliveryLease ─────────────────────────────────────────────────────────
+
+describe('isDeliveryLease', () => {
+	test('returns true when docId contains :delivery:', () => {
+		expect(isDeliveryLease('BTCUSDT:price_surge:delivery:whatsapp')).toBe(true);
+		expect(isDeliveryLease('ETHUSDT:breakout:delivery:telegram')).toBe(true);
+	});
+
+	test('returns true when data.key contains :delivery:', () => {
+		expect(isDeliveryLease('some-custom-doc-id', { key: 'SOLUSDT:news:delivery:discord' })).toBe(true);
+	});
+
+	test('returns false for standard dedup entries', () => {
+		expect(isDeliveryLease('BTCUSDT:price_surge')).toBe(false);
+		expect(isDeliveryLease('ETHUSDT:breakout', { key: 'ETHUSDT:breakout' })).toBe(false);
+	});
+
+	test('returns false for null/undefined inputs', () => {
+		expect(isDeliveryLease(null, null)).toBe(false);
+		expect(isDeliveryLease(undefined, undefined)).toBe(false);
 	});
 });
 
@@ -140,7 +201,6 @@ describe('backfillCollection', () => {
 
 	test('updates documents missing expiresAt', async () => {
 		const nowMs = Date.now();
-		// Document with no expiresAt
 		const doc = makeFakeDoc({ createdAt: makeFakeTimestamp(nowMs - 5000) });
 		doc.data = () => ({ createdAt: makeFakeTimestamp(nowMs - 5000) }); // no expiresAt
 
@@ -263,7 +323,6 @@ describe('backfillCollection', () => {
 		expect(batchUpdateMock).toHaveBeenCalledTimes(1);
 		expect(batchCommitMock).toHaveBeenCalledTimes(1);
 
-		// Verify the expiresAt timestamp was set approximately correctly
 		const call = batchUpdateMock.mock.calls[0];
 		const update = call[1];
 		expect(update).toHaveProperty('expiresAt');
@@ -286,5 +345,269 @@ describe('backfillCollection', () => {
 		expect(result.updated).toBe(0);
 		expect(result.skipped).toBe(0);
 		expect(result.existing).toBe(0);
+	});
+
+	// ── Delivery Leases vs General News Entries ───────────────────────────────
+
+	describe('delivery leases vs general news entries in news-monitor-dedup', () => {
+		test('applies 30-second TTL to delivery lease documents missing expiresAt', async () => {
+			const nowMs = 1_000_000;
+			const doc = {
+				id: 'BTCUSDT:price_surge:delivery:whatsapp',
+				ref: { id: 'BTCUSDT:price_surge:delivery:whatsapp' },
+				data: () => ({
+					key: 'BTCUSDT:price_surge:delivery:whatsapp',
+					createdAt: makeFakeTimestamp(nowMs - 5000),
+					data: { status: 'claiming', claimToken: 'token-123' },
+				}),
+			};
+
+			const { firestoreMock, batchUpdateMock } = buildFirestoreMock([doc]);
+			const result = await backfillCollection(firestoreMock, 'news-monitor-dedup', 6 * 3600_000);
+
+			expect(result.updated).toBe(1);
+			expect(batchUpdateMock).toHaveBeenCalledWith(
+				doc.ref,
+				expect.objectContaining({
+					expiresAt: expect.objectContaining({ _ms: nowMs - 5000 + DELIVERY_LOCK_TTL_MS }),
+				}),
+			);
+		});
+
+		test('applies 30-second TTL to expired delivery lease documents instead of 6 hours', async () => {
+			const nowMs = 1_000_000;
+			const doc = {
+				id: 'BTCUSDT:price_surge:delivery:telegram',
+				ref: { id: 'BTCUSDT:price_surge:delivery:telegram' },
+				data: () => ({
+					key: 'BTCUSDT:price_surge:delivery:telegram',
+					createdAt: makeFakeTimestamp(nowMs - 40_000),
+					expiresAt: makeFakeTimestamp(nowMs - 10_000),
+					data: { status: 'claiming', claimToken: 'token-456' },
+				}),
+			};
+
+			const { firestoreMock, batchUpdateMock } = buildFirestoreMock([doc]);
+			const result = await backfillCollection(firestoreMock, 'news-monitor-dedup', 6 * 3600_000);
+
+			expect(result.updated).toBe(1);
+			// Base (nowMs - 40_000) + 30_000 = nowMs - 10_000 (remains expired for TTL cleanup, not locked for 6 hours)
+			expect(batchUpdateMock).toHaveBeenCalledWith(
+				doc.ref,
+				expect.objectContaining({
+					expiresAt: expect.objectContaining({ _ms: nowMs - 40_000 + DELIVERY_LOCK_TTL_MS }),
+				}),
+			);
+		});
+
+		test('skips active delivery lease documents with future expiresAt', async () => {
+			const nowMs = Date.now();
+			const doc = {
+				id: 'BTCUSDT:price_surge:delivery:whatsapp',
+				ref: { id: 'BTCUSDT:price_surge:delivery:whatsapp' },
+				data: () => ({
+					key: 'BTCUSDT:price_surge:delivery:whatsapp',
+					createdAt: makeFakeTimestamp(nowMs - 5000),
+					expiresAt: makeFakeTimestamp(nowMs + 25_000),
+					data: { status: 'claiming', claimToken: 'token-789' },
+				}),
+			};
+
+			const { firestoreMock, batchUpdateMock } = buildFirestoreMock([doc]);
+			const result = await backfillCollection(firestoreMock, 'news-monitor-dedup', 6 * 3600_000);
+
+			expect(result.existing).toBe(1);
+			expect(result.updated).toBe(0);
+			expect(batchUpdateMock).not.toHaveBeenCalled();
+		});
+
+		test('applies general dedup TTL (6h) to standard news entries', async () => {
+			const nowMs = 1_000_000;
+			const doc = {
+				id: 'BTCUSDT:price_surge',
+				ref: { id: 'BTCUSDT:price_surge' },
+				data: () => ({
+					key: 'BTCUSDT:price_surge',
+					createdAt: makeFakeTimestamp(nowMs - 60_000),
+				}),
+			};
+
+			const { firestoreMock, batchUpdateMock } = buildFirestoreMock([doc]);
+			const result = await backfillCollection(firestoreMock, 'news-monitor-dedup', 6 * 3600_000);
+
+			expect(result.updated).toBe(1);
+			expect(batchUpdateMock).toHaveBeenCalledWith(
+				doc.ref,
+				expect.objectContaining({
+					expiresAt: expect.objectContaining({ _ms: nowMs - 60_000 + 6 * 3600_000 }),
+				}),
+			);
+		});
+	});
+
+	// ── Zero-Hour Retention ───────────────────────────────────────────────────
+
+	describe('zero-hour news retention (dedupTtlMs = 0)', () => {
+		test('sets expiresAt to baseMs + 0 when dedupTtlMs is 0', async () => {
+			const nowMs = 1_000_000;
+			const doc = {
+				id: 'BTCUSDT:price_surge',
+				ref: { id: 'BTCUSDT:price_surge' },
+				data: () => ({
+					key: 'BTCUSDT:price_surge',
+					createdAt: makeFakeTimestamp(nowMs - 10_000),
+				}),
+			};
+
+			const { firestoreMock, batchUpdateMock } = buildFirestoreMock([doc]);
+			const result = await backfillCollection(firestoreMock, 'news-monitor-dedup', 0);
+
+			expect(result.updated).toBe(1);
+			expect(batchUpdateMock).toHaveBeenCalledWith(
+				doc.ref,
+				expect.objectContaining({
+					expiresAt: expect.objectContaining({ _ms: nowMs - 10_000 }),
+				}),
+			);
+		});
+	});
+
+	// ── Completed Idempotency Responses ───────────────────────────────────────
+
+	describe('completed idempotency responses', () => {
+		test('skips active completed idempotency responses with a future expiresAt', async () => {
+			const nowMs = Date.now();
+			const doc = {
+				id: 'completed-active',
+				ref: { id: 'completed-active' },
+				data: () => ({
+					state: 'completed',
+					statusCode: 200,
+					responseBody: { success: true },
+					createdAt: makeFakeTimestamp(nowMs - 60_000),
+					expiresAt: makeFakeTimestamp(nowMs + 240_000),
+				}),
+			};
+
+			const { firestoreMock, batchUpdateMock } = buildFirestoreMock([doc]);
+			const result = await backfillCollection(
+				firestoreMock,
+				'idempotency_keys',
+				300_000,
+				{ protectActivePending: true },
+			);
+
+			expect(result.existing).toBe(1);
+			expect(result.updated).toBe(0);
+			expect(batchUpdateMock).not.toHaveBeenCalled();
+		});
+
+		test('updates expired completed idempotency responses', async () => {
+			const nowMs = 1_000_000;
+			const doc = {
+				id: 'completed-expired',
+				ref: { id: 'completed-expired' },
+				data: () => ({
+					state: 'completed',
+					statusCode: 200,
+					responseBody: { success: true },
+					createdAt: makeFakeTimestamp(nowMs - 400_000),
+					expiresAt: makeFakeTimestamp(nowMs - 100_000),
+				}),
+			};
+
+			const { firestoreMock, batchUpdateMock } = buildFirestoreMock([doc]);
+			const result = await backfillCollection(
+				firestoreMock,
+				'idempotency_keys',
+				300_000,
+				{ protectActivePending: true },
+			);
+
+			expect(result.updated).toBe(1);
+			expect(batchUpdateMock).toHaveBeenCalledWith(
+				doc.ref,
+				expect.objectContaining({
+					expiresAt: expect.objectContaining({ _ms: nowMs - 400_000 + 300_000 }),
+				}),
+			);
+		});
+	});
+
+	// ── Legacy Document Timestamp Parsing ─────────────────────────────────────
+
+	describe('legacy document timestamp parsing', () => {
+		test('parses createdAt as JavaScript Date object', async () => {
+			const nowMs = 1_000_000;
+			const doc = {
+				id: 'date-object-doc',
+				ref: { id: 'date-object-doc' },
+				data: () => ({
+					createdAt: new Date(nowMs - 5000),
+				}),
+			};
+
+			const { firestoreMock, batchUpdateMock } = buildFirestoreMock([doc]);
+			const result = await backfillCollection(firestoreMock, 'idempotency_keys', 300_000);
+
+			expect(result.updated).toBe(1);
+			expect(batchUpdateMock).toHaveBeenCalledWith(
+				doc.ref,
+				expect.objectContaining({
+					expiresAt: expect.objectContaining({ _ms: nowMs - 5000 + 300_000 }),
+				}),
+			);
+		});
+
+		test('falls back to nowMs when both createdAt and doc.createTime are missing', async () => {
+			const before = Date.now();
+			const doc = {
+				id: 'no-timestamps-doc',
+				data: () => ({}),
+				ref: { id: 'no-timestamps-doc' },
+			};
+
+			const { firestoreMock, batchUpdateMock } = buildFirestoreMock([doc]);
+			const result = await backfillCollection(firestoreMock, 'idempotency_keys', 300_000);
+			const after = Date.now();
+
+			expect(result.updated).toBe(1);
+			expect(batchUpdateMock).toHaveBeenCalled();
+			const call = batchUpdateMock.mock.calls[0];
+			const assignedMs = call[1].expiresAt._ms;
+			expect(assignedMs).toBeGreaterThanOrEqual(before + 300_000);
+			expect(assignedMs).toBeLessThanOrEqual(after + 300_000);
+		});
+	});
+
+	// ── Dry Run Mode ──────────────────────────────────────────────────────────
+
+	describe('dryRun mode', () => {
+		test('scans and calculates updates without executing batch writes or commits', async () => {
+			const nowMs = 1_000_000;
+			const doc = {
+				id: 'BTCUSDT:price_surge',
+				ref: { id: 'BTCUSDT:price_surge' },
+				data: () => ({
+					createdAt: makeFakeTimestamp(nowMs - 10_000),
+				}),
+			};
+
+			const { firestoreMock, batchUpdateMock, batchCommitMock } = buildFirestoreMock([doc]);
+			const result = await backfillCollection(
+				firestoreMock,
+				'news-monitor-dedup',
+				6 * 3600_000,
+				{ dryRun: true },
+			);
+
+			expect(result.scanned).toBe(1);
+			expect(result.updated).toBe(1);
+			expect(result.skipped).toBe(0);
+			expect(result.existing).toBe(0);
+			expect(firestoreMock.batch).not.toHaveBeenCalled();
+			expect(batchUpdateMock).not.toHaveBeenCalled();
+			expect(batchCommitMock).not.toHaveBeenCalled();
+		});
 	});
 });
