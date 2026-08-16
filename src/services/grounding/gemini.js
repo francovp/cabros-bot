@@ -1,11 +1,22 @@
 const genaiClient = require('./genaiClient');
 const { NonRetryableProviderError } = genaiClient;
 const { validateGeminiResponse } = require('../../lib/validation');
-const { GROUNDING_MODEL_NAME, GEMINI_MODEL_NAME, GEMINI_MODEL_NAME_FALLBACK, ENABLE_NEWS_MONITOR_TEST_MODE } = require('./config');
+const {
+	GROUNDING_MODEL_NAME,
+	GEMINI_MODEL_NAME,
+	GEMINI_MODEL_NAME_FALLBACK,
+	ENABLE_NEWS_MONITOR_TEST_MODE,
+	GROUNDING_MAX_LENGTH,
+} = require('./config');
 const { EventCategory } = require('../../controllers/webhooks/handlers/newsMonitor/constants');
 const { getPromptService, PromptKeys } = require('../prompts');
 
 const promptService = getPromptService();
+
+function getEffectiveGroundingMaxLength() {
+	const parsed = parseInt(process.env.GROUNDING_MAX_LENGTH, 10);
+	return Number.isFinite(parsed) && parsed > 0 ? parsed : GROUNDING_MAX_LENGTH;
+}
 
 function getLanguageDirective(preserveLanguage) {
 	return preserveLanguage
@@ -585,6 +596,7 @@ function calibrateNewsConfidence(analysisResult, groundingSources = null, option
  */
 async function generateEnrichedAlert({ text, searchResults = [], searchResultText = '', options = {} }) {
 	const {
+		maxLength = getEffectiveGroundingMaxLength(),
 		preserveLanguage = true,
 		systemPrompt: systemPromptOverride,
 		tokenUsage,
@@ -603,7 +615,10 @@ async function generateEnrichedAlert({ text, searchResults = [], searchResultTex
 	const languageDirective = getLanguageDirective(preserveLanguage);
 	const contextPrompt = buildContextPrompt(searchResults);
 	const contextSnippet = buildContextSnippet(searchResultText);
-	const alertContext = `${text}${contextPrompt}${contextSnippet}`;
+	const boundedAlertText = (typeof maxLength === 'number' && maxLength > 0 && typeof text === 'string' && text.length > maxLength)
+		? text.slice(0, maxLength)
+		: text;
+	const alertContext = `${boundedAlertText}${contextPrompt}${contextSnippet}`;
 	console.debug('[Gemini] Generating enriched alert with context:', alertContext);
 	const prompt = await promptService.getChatPrompt(
 		PromptKeys.ALERT_ENRICHMENT,

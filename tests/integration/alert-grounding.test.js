@@ -35,7 +35,7 @@ describe('Alert Grounding Integration', () => {
 	let savedEnv;
 
 	beforeEach(async () => {
-		savedEnv = saveEnv();
+		savedEnv = { ...process.env };
 		// Mock environment variables
 		Object.assign(process.env, {
 			WEBHOOK_API_KEY: 'test-key',
@@ -98,7 +98,7 @@ describe('Alert Grounding Integration', () => {
 	});
 
 	afterEach(() => {
-		restoreEnv(savedEnv);
+		process.env = savedEnv;
 		delete global.fetch;
 	});
 
@@ -380,6 +380,33 @@ describe('Alert Grounding Integration', () => {
 			const searchQuery = genaiClient.search.mock.calls[0][0].query;
 			expect(searchQuery).not.toContain('BATS:');
 		});
+
+		it('should enforce GROUNDING_MAX_LENGTH on the enrichment prompt while delivering full untruncated alert text', async () => {
+			process.env.GROUNDING_MAX_LENGTH = '60';
+
+			const fullText = 'Bitcoin surges past all-time highs as institutional demand accelerates across global crypto spot and futures markets with record trading volumes.';
+			expect(fullText.length).toBeGreaterThan(100);
+
+			const response = await request(app)
+				.post('/api/webhook/alert')
+				.set('x-api-key', 'test-key')
+				.send({ text: fullText })
+				.expect(200);
+
+			expect(response.body.success).toBe(true);
+			expect(response.body.enriched).toBe(true);
+
+			// Verify genaiClient.llmCallv2 received prompt containing only bounded alert text (60 chars)
+			expect(genaiClient.llmCallv2).toHaveBeenCalled();
+			const llmCallArgs = genaiClient.llmCallv2.mock.calls[0][0];
+			expect(llmCallArgs.userPrompt).toBeDefined();
+			expect(llmCallArgs.userPrompt).toContain(fullText.slice(0, 60));
+			expect(llmCallArgs.userPrompt).not.toContain(fullText);
+
+			// Verify Telegram received the FULL untruncated text in message header
+			expect(mockTelegramSendMessage).toHaveBeenCalled();
+			const sentMessage = mockTelegramSendMessage.mock.calls[0][1];
+			expect(sentMessage).toContain('Bitcoin surges past all\\-time highs as institutional demand accelerates across global crypto spot and futures markets with record trading volumes');
+		});
 	});
 });
-

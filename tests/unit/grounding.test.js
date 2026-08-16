@@ -162,6 +162,47 @@ describe('Grounding Service', () => {
 			}));
 		});
 
+		it('should pass configured maxLength to generateEnrichedAlert', async () => {
+			genaiClient.search.mockResolvedValueOnce({ results: [], totalResults: 0 });
+			generateEnrichedAlert.mockResolvedValueOnce({
+				sentiment: 'NEUTRAL',
+				sentiment_score: 0.5,
+				insights: [],
+				sources: [],
+			});
+
+			await groundAlert({
+				text: 'Test alert text',
+				options: { maxLength: 500 },
+			});
+
+			expect(generateEnrichedAlert).toHaveBeenCalledWith(expect.objectContaining({
+				options: expect.objectContaining({
+					maxLength: 500,
+				}),
+			}));
+		});
+
+		it('should default maxLength to GROUNDING_MAX_LENGTH (2000) when not provided', async () => {
+			genaiClient.search.mockResolvedValueOnce({ results: [], totalResults: 0 });
+			generateEnrichedAlert.mockResolvedValueOnce({
+				sentiment: 'NEUTRAL',
+				sentiment_score: 0.5,
+				insights: [],
+				sources: [],
+			});
+
+			await groundAlert({
+				text: 'Test alert text',
+			});
+
+			expect(generateEnrichedAlert).toHaveBeenCalledWith(expect.objectContaining({
+				options: expect.objectContaining({
+					maxLength: 2000,
+				}),
+			}));
+		});
+
 		it('should normalize BATS: exchange prefix in search queries to prevent BAT crypto and British American Tobacco hallucinations', async () => {
 			genaiClient.search.mockResolvedValueOnce({ results: [], totalResults: 0 });
 			generateEnrichedAlert.mockResolvedValueOnce({
