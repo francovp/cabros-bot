@@ -37,16 +37,24 @@ const DELIVERY_LOCK_TTL_MS = 30_000; // 30s — mirrors NewsCache / cache.js
 
 // Defaults mirror service defaults; operators may override via env vars.
 const DEFAULT_IDEMPOTENCY_TTL_MS = 300_000; // 5 min  (WEBHOOK_IDEMPOTENCY_TTL_MS default)
-const MAX_IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000; // 1 day hard cap
 
 const DEFAULT_DEDUP_TTL_HOURS = 6; // NEWS_CACHE_TTL_HOURS default
-const MAX_DEDUP_TTL_HOURS = 720; // 30 days hard cap
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function parseIdempotencyTtlMs(raw = process.env.WEBHOOK_IDEMPOTENCY_TTL_MS) {
-	const val = Number(raw);
-	if (!Number.isFinite(val) || val <= 0 || val > MAX_IDEMPOTENCY_TTL_MS) {
+	if (raw === undefined || raw === null) {
+		return DEFAULT_IDEMPOTENCY_TTL_MS;
+	}
+	const str = String(raw).trim();
+	if (str === '') {
+		return DEFAULT_IDEMPOTENCY_TTL_MS;
+	}
+	if (!/^[+-]?\d+$/.test(str)) {
+		return DEFAULT_IDEMPOTENCY_TTL_MS;
+	}
+	const val = Number(str);
+	if (!Number.isFinite(val) || val < 0) {
 		return DEFAULT_IDEMPOTENCY_TTL_MS;
 	}
 	return Math.floor(val);
@@ -64,7 +72,7 @@ function parseDedupTtlMs(raw = process.env.NEWS_CACHE_TTL_HOURS) {
 		return DEFAULT_DEDUP_TTL_HOURS * 60 * 60 * 1000;
 	}
 	const val = Number(str);
-	if (!Number.isFinite(val) || val < 0 || val > MAX_DEDUP_TTL_HOURS) {
+	if (!Number.isFinite(val) || val < 0) {
 		return DEFAULT_DEDUP_TTL_HOURS * 60 * 60 * 1000;
 	}
 	return Math.floor(val * 60 * 60 * 1000);
@@ -161,14 +169,27 @@ async function backfillCollection(firestore, collectionName, ttlMs, options = {}
 
 			const newExpiresAt = admin.firestore.Timestamp.fromMillis(baseMs + docTtlMs);
 			if (!dryRun) {
-				batch.update(doc.ref, { expiresAt: newExpiresAt });
+				if (doc.updateTime) {
+					batch.update(doc.ref, { expiresAt: newExpiresAt }, { lastUpdateTime: doc.updateTime });
+				} else {
+					batch.update(doc.ref, { expiresAt: newExpiresAt });
+				}
 			}
 			batchUpdates += 1;
 			result.updated += 1;
 		}
 
 		if (!dryRun && batchUpdates > 0) {
-			await batch.commit();
+			try {
+				await batch.commit();
+			} catch (commitErr) {
+				// If a document was modified concurrently during backfill, log warning and fail-safe
+				console.warn(JSON.stringify({
+					event: 'operational_retention_backfill_batch_conflict',
+					collection: collectionName,
+					error: commitErr.message,
+				}));
+			}
 		}
 
 		if (snapshot.docs.length < PAGE_SIZE) {

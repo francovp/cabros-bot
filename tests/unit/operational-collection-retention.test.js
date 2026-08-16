@@ -86,20 +86,28 @@ describe('parseIdempotencyTtlMs', () => {
 		expect(parseIdempotencyTtlMs('600000')).toBe(600_000);
 	});
 
+	test('returns 0 for zero string (honoring no-retention behavior)', () => {
+		expect(parseIdempotencyTtlMs('0')).toBe(0);
+	});
+
+	test('returns 0 for numeric 0', () => {
+		expect(parseIdempotencyTtlMs(0)).toBe(0);
+	});
+
 	test('returns default for NaN', () => {
 		expect(parseIdempotencyTtlMs('not-a-number')).toBe(300_000);
 	});
 
-	test('returns default for zero', () => {
-		expect(parseIdempotencyTtlMs('0')).toBe(300_000);
+	test('returns default for empty string', () => {
+		expect(parseIdempotencyTtlMs('')).toBe(300_000);
 	});
 
 	test('returns default for negative', () => {
 		expect(parseIdempotencyTtlMs('-1000')).toBe(300_000);
 	});
 
-	test('returns default for value exceeding 24h hard cap', () => {
-		expect(parseIdempotencyTtlMs(String(25 * 60 * 60 * 1000))).toBe(300_000);
+	test('returns parsed value for large TTL (matching IdempotencyService runtime)', () => {
+		expect(parseIdempotencyTtlMs(String(25 * 60 * 60 * 1000))).toBe(25 * 60 * 60 * 1000);
 	});
 
 	test('returns default when no argument given (undefined)', () => {
@@ -138,6 +146,10 @@ describe('parseDedupTtlMs', () => {
 		else delete process.env.NEWS_CACHE_TTL_HOURS;
 	});
 
+	test('returns parsed ms for value exceeding 720h (honoring runtime configuration > 30 days)', () => {
+		expect(parseDedupTtlMs('744')).toBe(744 * 60 * 60 * 1000);
+	});
+
 	test('returns default for NaN', () => {
 		expect(parseDedupTtlMs('bad')).toBe(6 * 60 * 60 * 1000);
 	});
@@ -148,10 +160,6 @@ describe('parseDedupTtlMs', () => {
 
 	test('returns default for negative', () => {
 		expect(parseDedupTtlMs('-1')).toBe(6 * 60 * 60 * 1000);
-	});
-
-	test('returns default for value exceeding 720h hard cap', () => {
-		expect(parseDedupTtlMs('721')).toBe(6 * 60 * 60 * 1000);
 	});
 
 	test('returns default when no argument given (undefined)', () => {
@@ -608,6 +616,39 @@ describe('backfillCollection', () => {
 			expect(firestoreMock.batch).not.toHaveBeenCalled();
 			expect(batchUpdateMock).not.toHaveBeenCalled();
 			expect(batchCommitMock).not.toHaveBeenCalled();
+		});
+	});
+
+	// ── Preconditions and Concurrency ──────────────────────────────────────────
+
+	describe('preconditions and concurrency', () => {
+		test('applies lastUpdateTime precondition when doc.updateTime is present', async () => {
+			const nowMs = 1_000_000;
+			const updateTime = makeFakeTimestamp(nowMs - 2000);
+			const doc = {
+				id: 'concurrent-doc',
+				ref: { id: 'concurrent-doc' },
+				updateTime,
+				data: () => ({
+					createdAt: makeFakeTimestamp(nowMs - 10_000),
+				}),
+			};
+
+			const { firestoreMock, batchUpdateMock } = buildFirestoreMock([doc]);
+			const result = await backfillCollection(
+				firestoreMock,
+				'idempotency_keys',
+				300_000,
+			);
+
+			expect(result.updated).toBe(1);
+			expect(batchUpdateMock).toHaveBeenCalledWith(
+				doc.ref,
+				expect.objectContaining({
+					expiresAt: expect.objectContaining({ _ms: nowMs - 10_000 + 300_000 }),
+				}),
+				{ lastUpdateTime: updateTime },
+			);
 		});
 	});
 });
