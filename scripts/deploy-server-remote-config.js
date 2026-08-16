@@ -20,8 +20,9 @@ function buildServerTemplate(template, currentTemplate) {
 }
 
 async function publishServerTemplate() {
-	const app = admin.initializeApp();
-	const projectId = app.options.projectId || process.env.GCLOUD_PROJECT || process.env.FIREBASE_PROJECT_ID;
+	const configuredProjectId = process.env.FIREBASE_PROJECT_ID || process.env.GCLOUD_PROJECT;
+	const app = admin.initializeApp(configuredProjectId ? { projectId: configuredProjectId } : undefined);
+	const projectId = app.options.projectId || configuredProjectId;
 	if (!projectId) {
 		throw new Error('Firebase project ID is not configured');
 	}
