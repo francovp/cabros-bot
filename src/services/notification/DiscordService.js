@@ -1,6 +1,7 @@
 const NotificationChannel = require('./NotificationChannel');
 const WhatsAppMarkdownFormatter = require('./formatters/whatsappMarkdownFormatter');
 const { splitMessageIntoChunks } = require('../../lib/messageHelper');
+const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 
 const DEFAULT_TIMEOUT_MS = 10000;
 const DISCORD_MESSAGE_LIMIT = 2000;
@@ -45,10 +46,50 @@ class DiscordService extends NotificationChannel {
 		this.logger = config.logger;
 		this.formatter = config.formatter || new WhatsAppMarkdownFormatter();
 		this.enabled = false;
-		this.maxRetries = config.maxRetries ?? parseEnvInt('DISCORD_MAX_RETRIES', DEFAULT_MAX_RETRIES);
-		this.fallbackRetryDelayMs = config.fallbackRetryDelayMs ?? parseEnvInt('DISCORD_FALLBACK_RETRY_DELAY_MS', DEFAULT_FALLBACK_RETRY_DELAY_MS);
-		this.maxRetryDelayMs = config.maxRetryDelayMs ?? parseEnvInt('DISCORD_MAX_RETRY_DELAY_MS', DEFAULT_MAX_RETRY_DELAY_MS);
-		this.maxTotalRetryWaitMs = config.maxTotalRetryWaitMs ?? parseEnvInt('DISCORD_MAX_TOTAL_RETRY_WAIT_MS', DEFAULT_MAX_TOTAL_RETRY_WAIT_MS);
+		this._configMaxRetries = config.maxRetries;
+		this._configFallbackRetryDelayMs = config.fallbackRetryDelayMs;
+		this._configMaxRetryDelayMs = config.maxRetryDelayMs;
+		this._configMaxTotalRetryWaitMs = config.maxTotalRetryWaitMs;
+	}
+
+	get maxRetries() {
+		if (this._maxRetries !== undefined) return this._maxRetries;
+		if (this._configMaxRetries !== undefined) return this._configMaxRetries;
+		return getRuntimeConfig().DISCORD_MAX_RETRIES;
+	}
+
+	set maxRetries(val) {
+		this._maxRetries = val;
+	}
+
+	get fallbackRetryDelayMs() {
+		if (this._fallbackRetryDelayMs !== undefined) return this._fallbackRetryDelayMs;
+		if (this._configFallbackRetryDelayMs !== undefined) return this._configFallbackRetryDelayMs;
+		return getRuntimeConfig().DISCORD_FALLBACK_RETRY_DELAY_MS;
+	}
+
+	set fallbackRetryDelayMs(val) {
+		this._fallbackRetryDelayMs = val;
+	}
+
+	get maxRetryDelayMs() {
+		if (this._maxRetryDelayMs !== undefined) return this._maxRetryDelayMs;
+		if (this._configMaxRetryDelayMs !== undefined) return this._configMaxRetryDelayMs;
+		return getRuntimeConfig().DISCORD_MAX_RETRY_DELAY_MS;
+	}
+
+	set maxRetryDelayMs(val) {
+		this._maxRetryDelayMs = val;
+	}
+
+	get maxTotalRetryWaitMs() {
+		if (this._maxTotalRetryWaitMs !== undefined) return this._maxTotalRetryWaitMs;
+		if (this._configMaxTotalRetryWaitMs !== undefined) return this._configMaxTotalRetryWaitMs;
+		return getRuntimeConfig().DISCORD_MAX_TOTAL_RETRY_WAIT_MS;
+	}
+
+	set maxTotalRetryWaitMs(val) {
+		this._maxTotalRetryWaitMs = val;
 	}
 
 	async validate() {

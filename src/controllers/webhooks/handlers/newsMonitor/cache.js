@@ -15,6 +15,7 @@
 
 const newsDedupStorageService = require('../../../../services/storage/NewsDedupStorageService');
 const { trackBackgroundTask } = require('../../../../lib/backgroundTaskTracker');
+const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteConfigService');
 const { randomUUID } = require('node:crypto');
 
 const DELIVERY_LOCK_TTL_MS = 30_000;
@@ -132,12 +133,30 @@ function parseNewsCacheTtlHours(value, fallback = 6) {
 class NewsCache {
 	constructor(ttlHours) {
 		this.cache = new Map();
-		const hours = parseNewsCacheTtlHours(
-			ttlHours !== undefined ? ttlHours : process.env.NEWS_CACHE_TTL_HOURS
-		);
-		this.ttlMs = hours * 60 * 60 * 1000;
+		this._explicitTtlHours = ttlHours;
+		if (ttlHours !== undefined) {
+			this._explicitTtlHours = parseNewsCacheTtlHours(ttlHours);
+		} else if (process.env.NEWS_CACHE_TTL_HOURS !== undefined) {
+			parseNewsCacheTtlHours(process.env.NEWS_CACHE_TTL_HOURS);
+		}
 		this.cleanupInterval = null;
 		this.deliveryLocks = new Map();
+	}
+
+	get ttlMs() {
+		if (this._ttlMs !== undefined) {
+			return this._ttlMs;
+		}
+		if (this._explicitTtlHours !== undefined) {
+			const hours = parseNewsCacheTtlHours(this._explicitTtlHours);
+			return hours * 60 * 60 * 1000;
+		}
+		const hours = getRuntimeConfig().NEWS_CACHE_TTL_HOURS;
+		return hours * 60 * 60 * 1000;
+	}
+
+	set ttlMs(val) {
+		this._ttlMs = val;
 	}
 
 	/**

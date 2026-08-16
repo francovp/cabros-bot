@@ -34,6 +34,7 @@ const {
 	getRequestedChannels,
 	getDeliveredChannels,
 } = require('../notification/requestRouting');
+const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 
 const EXPIRATION_MS = 3600000; // 1 hour
 const DEFAULT_JOB_TIMEOUT_MS = 300000; // 5 minutes
@@ -578,7 +579,7 @@ class JobService {
 		if (type === 'expanded-analysis') {
 			parsed = parseExpandedAnalysisAlertRequest({ body: payload });
 		} else if (type === 'market-scanner') {
-			if (process.env.ENABLE_MARKET_SCANNER !== 'true') {
+			if (!getRuntimeConfig().ENABLE_MARKET_SCANNER) {
 				const error = new Error('Market scanner is not enabled');
 				error.code = 'FEATURE_DISABLED';
 				error.statusCode = 404;
@@ -2023,7 +2024,7 @@ class JobService {
 		const attempts = [];
 		let success = false;
 		const maxAttempts = 4; // 1 initial + 3 retries
-		let delayMs = process.env.JOB_CALLBACK_RETRY_DELAY_MS ? parseInt(process.env.JOB_CALLBACK_RETRY_DELAY_MS, 10) : 1000;
+		let delayMs = getRuntimeConfig().JOB_CALLBACK_RETRY_DELAY_MS;
 
 		for (let attempt = 1; attempt <= maxAttempts; attempt++) {
 			const timestamp = new Date().toISOString();

@@ -17,6 +17,7 @@
  */
 
 const admin = require('firebase-admin');
+const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 
 const COLLECTION_NAME = 'news-monitor-dedup';
 const DELIVERY_ROUTING_FIELDS = {
@@ -79,7 +80,7 @@ function mergeDeliveryData(existingData = {}, updatedData = {}, options = {}) {
 let db = null;
 
 function isEnabled() {
-	return process.env.ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP === 'true';
+	return getRuntimeConfig().ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP;
 }
 
 /**

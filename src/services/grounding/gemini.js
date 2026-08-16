@@ -10,12 +10,12 @@ const {
 } = require('./config');
 const { EventCategory } = require('../../controllers/webhooks/handlers/newsMonitor/constants');
 const { getPromptService, PromptKeys } = require('../prompts');
+const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 
 const promptService = getPromptService();
 
 function getEffectiveGroundingMaxLength() {
-	const parsed = parseInt(process.env.GROUNDING_MAX_LENGTH, 10);
-	return Number.isFinite(parsed) && parsed > 0 ? parsed : GROUNDING_MAX_LENGTH;
+	return getRuntimeConfig().GROUNDING_MAX_LENGTH;
 }
 
 function getLanguageDirective(preserveLanguage) {

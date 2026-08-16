@@ -141,20 +141,21 @@ function getGeminiDependency({
 function getStatus() {
 	const previewEnvironment = isPreview();
 	const modelProvider = getModelProvider();
+	const runtimeConfig = remoteConfigService.getRuntimeConfig();
 	const telegramFlagEnabled = isEnabled(process.env.ENABLE_TELEGRAM_BOT);
 	const telegramEnabled = telegramFlagEnabled && !previewEnvironment;
 	const whatsappEnabled = isEnabled(process.env.ENABLE_WHATSAPP_ALERTS);
 	const discordEnabled = isEnabled(process.env.ENABLE_DISCORD_ALERTS);
-	const geminiGroundingEnabled = isEnabled(process.env.ENABLE_GEMINI_GROUNDING);
+	const geminiGroundingEnabled = runtimeConfig.ENABLE_GEMINI_GROUNDING;
 	const newsMonitorEnabled = isEnabled(process.env.ENABLE_NEWS_MONITOR);
 	const newsMonitorTestModeEnabled = isEnabled(process.env.ENABLE_NEWS_MONITOR_TEST_MODE);
 	const forceBraveSearch = isEnabled(process.env.FORCE_BRAVE_SEARCH);
 	const newsMonitorUsesGeminiSearch = newsMonitorEnabled && !forceBraveSearch;
 	const newsMonitorUsesGeminiLlm = newsMonitorEnabled && modelProvider === 'gemini';
 	const geminiEnabled = geminiGroundingEnabled || newsMonitorUsesGeminiSearch || newsMonitorUsesGeminiLlm;
-	const marketScannerEnabled = isEnabled(process.env.ENABLE_MARKET_SCANNER);
-	const tradingViewMcpEnrichmentEnabled = isEnabled(process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT);
-	const tradingViewVolumeConfirmationFlagEnabled = isEnabled(process.env.ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION);
+	const marketScannerEnabled = runtimeConfig.ENABLE_MARKET_SCANNER;
+	const tradingViewMcpEnrichmentEnabled = runtimeConfig.ENABLE_TRADINGVIEW_MCP_ENRICHMENT;
+	const tradingViewVolumeConfirmationFlagEnabled = runtimeConfig.ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION;
 	const tradingViewVolumeConfirmationEnabled = tradingViewVolumeConfirmationFlagEnabled && tradingViewMcpEnrichmentEnabled;
 	const observedTradingViewMcpStatus = tradingViewMcpService.getStatus({ enabled: true });
 	const tradingViewMcpEnabled =
@@ -172,7 +173,6 @@ function getStatus() {
 	const binanceTradingStatus = binanceOrderService.getStatus();
 	const llmAlertEnrichmentEnabled = isEnabled(process.env.ENABLE_LLM_ALERT_ENRICHMENT);
 	const cloudflareAigEnabled = isEnabled(process.env.ENABLE_CLOUDFLARE_AIG);
-	const runtimeConfig = remoteConfigService.getRuntimeConfig();
 	const messageFooterMetadataEnabled = runtimeConfig.ENABLE_MESSAGE_FOOTER_METADATA;
 	const remoteConfigStatus = remoteConfigService.getStatus();
 	const signalOutcomeTrackingEnabled = isEnabled(process.env.ENABLE_SIGNAL_OUTCOME_TRACKING)
