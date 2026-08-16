@@ -6,7 +6,7 @@ This reference defines the verification rules, readiness criteria, and quiet win
 
 A PR is ready to merge directly only if all of these are true and the agent is confident no human review is needed:
 
-1. **No Unresolved Discussions**: No open actionable inline discussions, review threads, or top-level PR conversation comments remain, especially from `@francovp` and Codex. Establish inline state with paginated GraphQL `reviewThreads` and track paginated top-level conversation comments by ID and timestamp; flat comments alone are not proof of inline resolution. Match automated review authors by their actual login, including `chatgpt-codex-connector` when present, before applying the Codex rate-limit fallback below. A thread requiring product authority or human clarification is an explicit `IN_REVIEW` handoff exception, not a merge-ready state.
+1. **No Unresolved Discussions**: No open actionable inline discussions, review threads, or top-level PR conversation comments remain, especially from `@francovp` and Codex. Establish inline state with paginated GraphQL `reviewThreads`, paginate and track every thread comment by ID and `createdAt`/`updatedAt`, and track paginated top-level conversation comments by ID and timestamp; flat comments alone are not proof of inline resolution. Match automated review authors by their actual login, including `chatgpt-codex-connector` when present, before applying the Codex rate-limit fallback below. A thread requiring product authority or human clarification is an explicit `IN_REVIEW` handoff exception, not a merge-ready state.
 2. **All Checks Green**: All required checks are green or conclusively non-blocking.
 3. **Preview Live**: The preview deploy is live and operational.
 4. **Direct Verification**: Direct `curl` verification against the Render preview succeeds.
@@ -27,7 +27,7 @@ If any criterion is uncertain, or a discussion requires human input, keep the sa
 
 ## Retry and Livelock Control
 
-1. **Bounded Checks**: Each quiet-window check is bounded; check both inline `reviewThreads` and paginated top-level PR conversation comments, and do not poll continuously outside the required midpoint and endpoint checks.
+1. **Bounded Checks**: Each quiet-window check is bounded; check paginated inline `reviewThreads` plus every paginated comment within each thread and paginated top-level PR conversation comments, and do not poll continuously outside the required midpoint and endpoint checks.
 2. **Verification Limit**: Allow at most 3 full verification cycles for an unchanged head SHA. Discussion-only activity does not reset this counter.
 3. **Reset Trigger**: A concrete new head commit resets the verification-cycle counter and quiet window. A new discussion resets only the quiet window; address it without resetting the cycle budget.
 4. **Baseline Discussions**: Before the quiet window starts, triage every unresolved inline thread and actionable top-level conversation comment in the baseline snapshot. Do not treat an existing item as already handled merely because it predates the snapshot.
@@ -39,7 +39,7 @@ If any criterion is uncertain, or a discussion requires human input, keep the sa
 ## Quiet Window
 
 1. **Window Duration**: After the latest commit, wait a quiet window of 10 minutes before calling the PR clean or ready.
-2. **Midpoint & Endpoint Checks**: During the quiet window, re-check reviews and threads once around the midpoint (5 minutes) and once at the end.
+2. **Midpoint & Endpoint Checks**: During the quiet window, re-check reviews, thread comments, and top-level comments once around the midpoint (5 minutes) and once at the end.
 3. **Reset Trigger**: If Codex posts a new review or a new thread appears, reset the quiet window from that event or from the new commit (whichever is later).
    - **Exception — rate‑limited review**: If the Codex review body text starts with `You have reached your Codex usage limits for code reviews`, this is a review failure, not a real review. Do NOT reset the quiet window. Instead, perform a self-review (see Codex Review Rate Limit Handling section below).
 4. **Instability Handling**: If the quiet window cannot complete due to repeated issue-specific instability, end with outcome `LOCAL_DEADLOCK`.
