@@ -3358,6 +3358,12 @@
               "status": "Bad Gateway",
               "code": 502,
               "body": "{\n  \"success\": false,\n  \"error\": \"Binance order-test validation failed; retry without changing the order identity\",\n  \"code\": \"BINANCE_VALIDATION_FAILED\"\n}"
+            },
+            {
+              "name": "Recovered order conflict",
+              "status": "Conflict",
+              "code": 409,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Reconciled Binance order does not match the request\",\n  \"code\": \"BINANCE_ORDER_CONFLICT\"\n}"
             }
           ]
         },

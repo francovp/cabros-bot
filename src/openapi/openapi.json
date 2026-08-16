@@ -1085,7 +1085,7 @@
           "Trading"
         ],
         "summary": "Validate or submit a Binance Spot order",
-        "description": "Live requests require an idempotency key or clientOrderId. Decimal quantities, prices, and quote amounts may be strings to preserve precision. MARKET orders must omit timeInForce. LIMIT orders with Binance PERCENT_PRICE or PERCENT_PRICE_BY_SIDE filters use Binance order-test validation before acceptance. Definitive Binance rejections return 400 BINANCE_ORDER_REJECTED; transient order-test failures return retryable 502 BINANCE_VALIDATION_FAILED.",
+        "description": "Live requests require an idempotency key or clientOrderId. Decimal quantities, prices, and quote amounts may be strings to preserve precision. MARKET orders must omit timeInForce. LIMIT orders with Binance PERCENT_PRICE or PERCENT_PRICE_BY_SIDE filters use Binance order-test validation before acceptance. Definitive Binance rejections return 400 BINANCE_ORDER_REJECTED; a reconciled order mismatch returns 409 BINANCE_ORDER_CONFLICT; transient order-test failures return retryable 502 BINANCE_VALIDATION_FAILED. Binance execution-unknown code -1006 remains BINANCE_ORDER_STATUS_UNKNOWN.",
         "operationId": "postBinanceSpotOrder",
         "parameters": [
           {
@@ -1112,7 +1112,29 @@
             "$ref": "#/components/responses/Error"
           },
           "409": {
-            "$ref": "#/components/responses/IdempotencyConflict"
+            "description": "The idempotency key conflicts with the request, or the recovered Binance order does not match the requested order.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "examples": {
+                  "idempotencyConflict": {
+                    "value": {
+                      "error": "Idempotency key was reused with a different payload",
+                      "code": "IDEMPOTENCY_CONFLICT"
+                    }
+                  },
+                  "reconciledOrderConflict": {
+                    "value": {
+                      "success": false,
+                      "error": "Reconciled Binance order does not match the request",
+                      "code": "BINANCE_ORDER_CONFLICT"
+                    }
+                  }
+                }
+              }
+            }
           },
           "502": {
             "$ref": "#/components/responses/BinanceOrderFailure"

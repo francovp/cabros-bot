@@ -246,9 +246,13 @@ describe('BinanceOrderService', () => {
 			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
 			getOrder: jest.fn().mockResolvedValue({
 				symbol: 'BTCUSDT',
-				clientOrderId: 'cb_existing',
+				clientOrderId: 'cb_b07697a7210406a422c57a9ea9340bed',
 				orderId: 99,
 				status: 'FILLED',
+				side: 'BUY',
+				type: 'LIMIT',
+				origQty: '0.1',
+				price: '100',
 			}),
 			submitNewOrder: jest.fn(),
 		};
@@ -405,6 +409,56 @@ describe('BinanceOrderService', () => {
 			price: 100,
 			dryRun: true,
 		})).rejects.toMatchObject({ code: 'BINANCE_VALIDATION_FAILED', statusCode: 502 });
+	});
+
+	it('keeps unknown execution responses indeterminate', async () => {
+		const client = {
+			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
+			submitNewOrder: jest.fn().mockRejectedValue({ code: -1006, message: 'Unexpected response' }),
+		};
+		const service = createBinanceOrderService({ createClient: () => client });
+
+		await expect(service.placeOrder({
+			symbol: 'BTCUSDT',
+			side: 'BUY',
+			type: 'LIMIT',
+			quantity: 0.1,
+			price: 100,
+			idempotencyKey: 'unknown-execution',
+			dryRun: false,
+		})).rejects.toMatchObject({ code: 'BINANCE_ORDER_STATUS_UNKNOWN', statusCode: 503 });
+	});
+
+	it('rejects a reconciled order that does not match the request', async () => {
+		const client = {
+			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
+			getOrder: jest.fn().mockResolvedValue({
+				symbol: 'BTCUSDT',
+				clientOrderId: 'cb_b07697a7210406a422c57a9ea9340bed',
+				orderId: 99,
+				status: 'FILLED',
+				side: 'SELL',
+				type: 'LIMIT',
+				origQty: '0.1',
+				price: '100',
+			}),
+			submitNewOrder: jest.fn(),
+		};
+		const service = createBinanceOrderService({ createClient: () => client });
+
+		await expect(service.placeOrder({
+			symbol: 'BTCUSDT',
+			side: 'BUY',
+			type: 'LIMIT',
+			quantity: 0.1,
+			price: 100,
+			dryRun: false,
+		}, { idempotencyKey: 'restart-safe-order' })).rejects.toMatchObject({
+			code: 'BINANCE_ORDER_CONFLICT',
+			statusCode: 409,
+		});
+
+		expect(client.submitNewOrder).not.toHaveBeenCalled();
 	});
 
 	it('does not retry an ambiguous Binance submission failure', async () => {

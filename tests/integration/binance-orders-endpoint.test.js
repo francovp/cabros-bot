@@ -220,8 +220,12 @@ describe('Binance orders API', () => {
 			.mockResolvedValueOnce({
 				symbol: 'BTCUSDT',
 				orderId: 43,
-				clientOrderId: 'cb_reconciled',
+				clientOrderId: 'cb_267ef7d4f4c1a898bffebf85a138d98b',
 				status: 'FILLED',
+				side: 'SELL',
+				type: 'LIMIT',
+				origQty: '0.1',
+				price: '100',
 			});
 		const payload = {
 			symbol: 'BTCUSDT',

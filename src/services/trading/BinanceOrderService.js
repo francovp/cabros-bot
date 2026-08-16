@@ -10,7 +10,7 @@ const MAX_TIMEOUT_MS = 30000;
 const ALLOWED_ORDER_TYPES = new Set(['MARKET', 'LIMIT']);
 const ALLOWED_SIDES = new Set(['BUY', 'SELL']);
 const ALLOWED_TIME_IN_FORCE = new Set(['GTC', 'IOC', 'FOK']);
-const RETRYABLE_BINANCE_ERROR_CODES = new Set([-1001, -1003, -1007, -1015, -1021, -1034]);
+const RETRYABLE_BINANCE_ERROR_CODES = new Set([-1001, -1003, -1006, -1007, -1015, -1021, -1034]);
 
 class BinanceOrderRequestError extends Error {
 	constructor(message, code = 'INVALID_ORDER_REQUEST', statusCode = 400) {
@@ -342,6 +342,20 @@ function buildOrderParams(order) {
 	}).filter(([, value]) => value !== undefined));
 }
 
+function reconciledOrderMatchesRequest(order, existingOrder, clientOrderId) {
+	if (existingOrder.symbol !== order.symbol || existingOrder.clientOrderId !== clientOrderId) return false;
+	if (String(existingOrder.side).toUpperCase() !== order.side) return false;
+	if (String(existingOrder.type).toUpperCase() !== order.type) return false;
+
+	const existingQuantity = existingOrder.origQty ?? existingOrder.quantity;
+	if (order.quantity !== undefined && compareDecimals(existingQuantity, order.quantity) !== 0) return false;
+
+	const existingQuoteOrderQty = existingOrder.origQuoteOrderQty ?? existingOrder.quoteOrderQty;
+	if (order.quoteOrderQty !== undefined && compareDecimals(existingQuoteOrderQty, order.quoteOrderQty) !== 0) return false;
+	if (order.price !== undefined && compareDecimals(existingOrder.price, order.price) !== 0) return false;
+	return true;
+}
+
 async function validateDynamicPriceFilters(client, order, orderParams, filters) {
 	if (order.type !== 'LIMIT' || (!filters.has('PERCENT_PRICE') && !filters.has('PERCENT_PRICE_BY_SIDE'))) return;
 	if (typeof client.testNewOrder !== 'function') {
@@ -515,6 +529,13 @@ function createBinanceOrderService({ createClient = createBinanceClient } = {}) 
 
 			const existingOrder = await reconcileOrder(client, order.symbol, clientOrderId);
 			if (existingOrder) {
+				if (!reconciledOrderMatchesRequest(order, existingOrder, clientOrderId)) {
+					throw new BinanceOrderRequestError(
+						'Reconciled Binance order does not match the request',
+						'BINANCE_ORDER_CONFLICT',
+						409,
+					);
+				}
 				return {
 					success: true,
 					dryRun: false,
