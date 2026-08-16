@@ -8,6 +8,7 @@
     "node": ">=24.18.0 <25"
   },
   "scripts": {
+    "build:hosting": "node scripts/build-hosting.js",
     "deploy:firebase-remote-config:server": "node scripts/deploy-server-remote-config.js",
     "preinstall": "npx only-allow pnpm",
     "start": "node index.js",

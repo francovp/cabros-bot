@@ -337,7 +337,18 @@ When Firebase auth is enabled, configure `FIREBASE_SERVICE_ACCOUNT_JSON` or `GOO
 
 The public browser configuration may also include `FIREBASE_STORAGE_BUCKET`, `FIREBASE_MESSAGING_SENDER_ID`, and `FIREBASE_MEASUREMENT_ID`; these values are not service-account credentials.
 
-`.env.example` is the canonical operator template. The documentation-alignment test checks static application-owned `process.env` reads against that template; platform-injected values, test-only controls, and deprecated compatibility aliases are explicitly classified instead of being copied into production configuration.
+### Firebase Hosting for Admin Console
+
+The `/admin` console is deployed as a static site on Firebase Hosting for the `cabros-bot` project (`https://cabros-bot.web.app/admin`):
+
+- **Build & Artifacts**: `pnpm run build:hosting` synchronizes static console assets from `src/admin/` to `public/admin/` and generates the root redirect `public/index.html`. `firebase.json` defines the hosting root (`public`), ignore patterns, rewrite rules (`/admin/**` -> `/admin/index.html`), and `no-cache` cache-control headers.
+- **Backend API Connectivity**: When hosted on Firebase Hosting (`*.web.app` / `*.firebaseapp.com`), the admin console resolves the HTTPS backend API origin (`https://cabros-bot-production.up.railway.app` by default, or overridden via `?backend=` query parameter or `cabros_backend_origin` in localStorage). All `/admin/auth-config`, `/openapi.json`, and `/api/*` requests connect securely over HTTPS.
+- **CORS & CSP Policy**: Backend CORS permits requests from the hosted console, and Helmet CSP allows `connect-src` to Google Auth, Firebase Hosting origins, and the backend origin.
+- **CI/CD Deployment**: `.github/workflows/firebase-hosting.yml` automatically deploys pull requests to ephemeral Firebase preview channels and deploys the `live` channel on releases merged to `master`.
+- **Local Testing**: Run `pnpm run build:hosting` then `firebase emulators:start --only hosting` to test the static hosting deployment locally on port 5000.
+- **Rollback**: In the Firebase Console (Hosting > Release history) or via Firebase CLI: `firebase hosting:rollback` / `firebase hosting:clone cabros-bot:previous_version cabros-bot:live`.
+
+.env.example is the canonical operator template. The documentation-alignment test checks static application-owned `process.env` reads against that template; platform-injected values, test-only controls, and deprecated compatibility aliases are explicitly classified instead of being copied into production configuration.
 
 **Response:**
 ```json

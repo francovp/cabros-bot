@@ -26,6 +26,9 @@ contentSecurityPolicy['connect-src'] = [
 	'https://identitytoolkit.googleapis.com',
 	'https://securetoken.googleapis.com',
 	'https://www.googleapis.com',
+	'https://*.web.app',
+	'https://*.firebaseapp.com',
+	'https://cabros-bot-production.up.railway.app',
 ];
 app.use(helmet({ contentSecurityPolicy: { directives: contentSecurityPolicy } }));
 
