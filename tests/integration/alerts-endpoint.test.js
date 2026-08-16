@@ -422,14 +422,14 @@ describe('Alerts API Integration Tests', () => {
 			},
 			alerts: [
 				{
-					id: 'alert-1',
-					receivedAt: '2026-06-06T12:00:00.000Z',
-					source: 'webhook',
+					id: '=alert-1',
+					receivedAt: '-42',
+					source: '@webhook',
 					enriched: false,
 					useTradingViewData: true,
 					deliveryResults: [{ channel: 'whatsapp', success: false, messageId: null, errorCode: 'PROVIDER_LIMIT', statusCode: 429 }],
 					tokenUsage: null,
-					text: 'BTC, breakout',
+					text: '=@SUM(1,1), "quoted"\r\n+next',
 				},
 			],
 		});
@@ -449,7 +449,9 @@ describe('Alerts API Integration Tests', () => {
 		});
 		expect(res.headers['content-type']).toContain('text/csv');
 		expect(res.text).toContain('id,receivedAt,source,enriched,useTradingViewData,tradingViewEnrichmentApplied,channels,deliveryResults,tokenUsage,text');
-		expect(res.text).toContain('"BTC, breakout"');
+		expect(res.text).toContain("'=alert-1,-42,'@webhook");
+		expect(res.text).toContain('"\'=@SUM(1,1), ""quoted""\r\n+next"');
+		expect(res.text).not.toContain('=alert-1,-42,@webhook');
 		expect(res.text).toContain('PROVIDER_LIMIT');
 	});
 
