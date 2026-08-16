@@ -11,7 +11,7 @@ Bound every external operation and prove that retries, deadlines, fairness, and 
 
 1. **One deadline.** Derive remaining time once per operation, pass it to the request via `AbortController`/native timeout, and keep response-body reads inside the same deadline. A wrapper timeout must not leave a zombie request running.
 2. **Recheck after waits.** After cooldown, backoff, or queue waits, recompute the remaining budget and re-read shared state. A concurrent 429 can extend a cooldown while another caller sleeps.
-3. **Retry only safe failures.** Retry transient transport/429 failures with the provider's full `Retry-After` value and bounded total delay. Do not retry or relabel definitive provider rejections as transient.
+3. **Retry only safe failures.** Retry transport failures only for idempotent operations or when stable idempotency/reconciliation makes an ambiguous outcome safe. Retry 429s with the provider's full `Retry-After` value and bounded total delay. Do not retry or relabel definitive provider rejections as transient.
 4. **Preserve accounting.** Every attempted request, failed chunk, status code, and retry delay must survive error paths so Sentry/admin notifications report reality.
 5. **Prevent starvation.** Paginate or rotate worker batches; advance cursors only past documents actually processed. Keep sweeps single-flight and check the deadline between items and sub-requests.
 6. **Validate scheduling inputs.** Reject malformed, fractional, exponent-form, zero, negative, or unbounded intervals/durations before passing them to timers. Use one fallback value for runtime behavior and status reporting.
