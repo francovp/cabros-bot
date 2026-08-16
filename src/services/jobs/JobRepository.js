@@ -253,8 +253,9 @@ class JobRepository {
 					if (!nextJob) {
 						return false;
 					}
-					transaction.set(docRef, nextJob);
-					memoryJobs.set(jobId, cloneJob(nextJob));
+					const persistedJob = addTerminalExpiry(nextJob);
+					transaction.set(docRef, persistedJob);
+					memoryJobs.set(jobId, cloneJob(persistedJob));
 					return true;
 				});
 			} catch (error) {
@@ -335,8 +336,9 @@ class JobRepository {
 					},
 					updatedAt: now,
 				};
-				transaction.set(docRef, nextJob);
-				memoryJobs.set(jobId, cloneJob(nextJob));
+				const persistedJob = addTerminalExpiry(nextJob);
+				transaction.set(docRef, persistedJob);
+				memoryJobs.set(jobId, cloneJob(persistedJob));
 				return true;
 			});
 		} catch (error) {
@@ -503,8 +505,9 @@ class JobRepository {
 				if (!nextJob) {
 					return false;
 				}
-				transaction.set(docRef, nextJob);
-				memoryJobs.set(jobId, cloneJob(nextJob));
+				const persistedJob = addTerminalExpiry(nextJob);
+				transaction.set(docRef, persistedJob);
+				memoryJobs.set(jobId, cloneJob(persistedJob));
 				return true;
 			});
 		}

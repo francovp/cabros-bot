@@ -44,6 +44,55 @@ describe('JobRepository durable claims', () => {
 		}
 	});
 
+	it('preserves terminal expiry during callback transactions', async () => {
+		const createdAt = new Date(Date.now() - 1000).toISOString();
+		const currentJob = {
+			jobId: 'job-callback-retention-123',
+			status: 'completed',
+			createdAt,
+			callbackStatus: { status: 'pending', attempts: [] },
+		};
+		const docRef = {};
+		const transaction = {
+			get: jest.fn().mockResolvedValue({
+				exists: true,
+				id: currentJob.jobId,
+				data: () => currentJob,
+			}),
+			set: jest.fn(),
+		};
+		const firestore = {
+			collection: jest.fn(() => ({ doc: jest.fn(() => docRef) })),
+			runTransaction: jest.fn(async callback => callback(transaction)),
+		};
+		const repository = new JobRepository();
+		repository._getFirestore = jest.fn(() => firestore);
+
+		try {
+			await expect(repository.updateCallbackStatus(currentJob.jobId, 'completed', {
+				status: 'success',
+				attempts: [{ attempt: 1, statusCode: 200 }],
+			})).resolves.toBe(true);
+			expect(transaction.set.mock.calls[0][1].expiresAt.toDate()).toEqual(
+			new Date(new Date(createdAt).getTime() + 3600000),
+		);
+
+			transaction.set.mockClear();
+			transaction.get.mockResolvedValue({
+				exists: true,
+				id: currentJob.jobId,
+				data: () => currentJob,
+			});
+			await expect(repository.claimCallbackDelivery(currentJob.jobId, 'completed', 'delivery-1'))
+				.resolves.toBe(true);
+			expect(transaction.set.mock.calls[0][1].expiresAt.toDate()).toEqual(
+				new Date(new Date(createdAt).getTime() + 3600000),
+			);
+		} finally {
+			_resetForTesting();
+		}
+	});
+
 	it('prefers a fresh durable row over a stale web-process cache entry', async () => {
 		const jobId = 'job-list-123';
 		const durableJob = {
