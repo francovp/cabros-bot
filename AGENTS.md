@@ -200,6 +200,9 @@ The Remote Config workflow publishes the server-side template consumed by Fireba
 
 - `issue-triage` (`.agents/skills/issue-triage/`): applies one ordered `priority/1-roi` through `priority/7-other` label to evidence-backed open issues, while preserving the existing operational `priority/p*` labels.
 - `detect-unused-features` (`.agents/skills/detect-unused-features/`): fetches protected production capabilities through `WEBHOOK_API_KEY`; `.agents/skills/detect-unused-features/scripts/fetch-capabilities.sh` exits with `AUTH_BLOCKED` before parsing when the key is unavailable, supplies the header through stdin instead of argv, never prints the key, and does not follow redirects.
+- `transaction-safety-review` (`.agents/skills/transaction-safety-review/`): reviews live order/auth boundaries, ambiguous provider outcomes, idempotency, Firestore type preservation, undefined sanitization, and TTL/claim retention before changing or reviewing transactional paths.
+- `async-integration-review` (`.agents/skills/async-integration-review/`): reviews deadlines, abortable external calls, retries, cooldowns, worker fairness, scheduling inputs, telemetry, and graceful shutdown for asynchronous integrations.
+- `contract-alignment-review` (`.agents/skills/contract-alignment-review/`): reviews runtime/API/config/deployment changes for alignment across OpenAPI, Postman, `.env.example`, README/specs, and repository agent skills.
 
 ### When implementing a feature:
 
