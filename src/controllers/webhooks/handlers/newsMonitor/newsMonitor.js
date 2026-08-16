@@ -75,9 +75,7 @@ class NewsMonitorHandler {
 			const routing = req.method === 'GET'
 				? parseNotificationRouting(req.query, { allowQueryChannels: true })
 				: parseNotificationRouting(req.body);
-			if (dryRun) {
-				validateNotificationRouting(notificationManager, routing);
-			}
+			validateNotificationRouting(notificationManager, routing);
 			const { crypto, stocks } = this.parseRequest(req);
 			const allSymbols = [...(crypto || []), ...(stocks || [])];
 			const useDefaultSymbols = allSymbols.length === 0;

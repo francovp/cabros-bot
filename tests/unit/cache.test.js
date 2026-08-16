@@ -152,6 +152,18 @@ describe('Cache Module - Unit Tests', () => {
 			const remaining = await cache.get('ETHUSD', EventCategory.PRICE_SURGE);
 			expect(remaining).not.toBeNull();
 		});
+
+		it('should remove released delivery locks after their persistent lease expires', () => {
+			const key = 'BTCUSDT:price_surge:delivery:whatsapp';
+			cache.deliveryLocks.set(key, {
+				active: false,
+				persistentUntil: Date.now() - 1,
+			});
+
+			cache.cleanup();
+
+			expect(cache.deliveryLocks.has(key)).toBe(false);
+		});
 	});
 
 	describe('Cache Statistics', () => {

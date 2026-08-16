@@ -166,6 +166,29 @@ describe('WhatsAppService', () => {
 			expect(global.fetch).toHaveBeenCalledTimes(3);
 		});
 
+		it('should forward an external abort signal to the GreenAPI request', async () => {
+			const leaseController = new AbortController();
+			global.fetch = jest.fn((_url, options) => new Promise((_, reject) => {
+				options.signal.addEventListener('abort', () => {
+					reject(new DOMException('The operation was aborted', 'AbortError'));
+				}, { once: true });
+			}));
+
+			const delivery = service.send({ text: 'Test alert' }, { signal: leaseController.signal });
+			await new Promise(setImmediate);
+			leaseController.abort('Cached delivery lease ownership lost');
+
+			await expect(delivery).resolves.toEqual(expect.objectContaining({
+				success: false,
+				channel: 'whatsapp',
+				aborted: true,
+			}));
+			expect(global.fetch).toHaveBeenCalledWith(
+				expect.any(String),
+				expect.objectContaining({ signal: expect.any(AbortSignal) }),
+			);
+		});
+
 		it('should respect 10s timeout', async () => {
 			global.fetch = jest.fn().mockImplementation(() => {
 				const controller = new AbortController();

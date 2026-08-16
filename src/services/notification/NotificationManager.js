@@ -168,7 +168,10 @@ class NotificationManager {
 				});
 
 				return Promise.resolve()
-					.then(() => ch.send(alert))
+					.then(() => ch.send(alert, {
+						...options,
+						signal: options.signalByChannel?.[ch.name] || options.signal,
+					}))
 					.finally(() => {
 						sentryService.endSpan(sendSpan);
 					});
@@ -290,7 +293,10 @@ class NotificationManager {
 				});
 
 				return Promise.resolve()
-					.then(() => ch.send(alert))
+					.then(() => ch.send(alert, {
+						...options,
+						signal: options.signalByChannel?.[ch.name] || options.signal,
+					}))
 					.finally(() => {
 						sentryService.endSpan(sendSpan);
 					});
