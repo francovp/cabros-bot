@@ -93,7 +93,7 @@
 ### Security
 - [ ] CHK052 - Are requirements specified for API key storage/rotation (currently env vars, should keys be encrypted/rotated)? [NFR, Security, Gap]
 - [ ] CHK053 - Are requirements specified for preventing alert text from leaking in logs (currently logging payload data)? [NFR, Security, Gap]
-- [ ] CHK054 - Is the data retention policy specified for message delivery audit logs? [NFR, Security, Gap]
+- [x] CHK054 - Is the data retention policy specified for message delivery audit logs? [NFR, Security, GH-358]
 - [ ] CHK055 - Are requirements specified for validating/sanitizing webhook source (currently no IP whitelist or signature verification specified)? [NFR, Security, Gap]
 
 ### Observability
@@ -213,4 +213,3 @@
    - CHK047: Concurrent alert limit
    - CHK052-CHK055: Enhanced security features
    - CHK056-CHK058: Observability infrastructure
-

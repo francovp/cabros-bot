@@ -54,7 +54,7 @@ This project is a small Express + Telegraf (Telegram) bot service that exposes a
 - `src/services/prompts/` — Langfuse-backed PromptService that resolves prompts with file-backed local defaults.
 - `src/controllers/helpers.js` — Small numeric helper (`round10`) used by price formatting.
 - `src/lib/logging.js` — Configures `console.*` levels via `LOG_LEVEL` and emits one-line structured JSON logs.
-- `src/lib/rateLimiter.js` — Global API rate limiting middleware (returns 429 when exceeded; configured via `RATE_LIMIT_WINDOW_MS`/`RATE_LIMIT_MAX`).
+- `src/lib/rateLimiter.js` — Global API rate limiting middleware (returns 429 when exceeded; configured via `RATE_LIMIT_WINDOW_MS`/`RATE_LIMIT_MAX`, with safe defaults for invalid values).
 - `src/openapi/openapi.json` — Canonical OpenAPI 3.1 contract for every mounted `/api` operation.
 - `src/openapi/docs.js` — Public, read-only `/openapi.json` and self-hosted Swagger UI `/docs` routes.
 
@@ -653,6 +653,7 @@ Every successful `POST /api/webhook/alert` request is persisted as a document in
 | `source` | string | Always `"webhook"` |
 | `useTradingViewData` | boolean | Whether `?useTradingViewData=true` was set on the request |
 | `tradingViewEnrichmentApplied` | boolean | Whether a TradingView MCP result was successfully applied |
+| `expiresAt` | timestamp | `receivedAt` plus `ALERT_STORAGE_RETENTION_DAYS`; configured as a Firestore TTL field |
 
 **Credential Configuration** (choose one):
 - **Option A** — `GOOGLE_APPLICATION_CREDENTIALS=/path/to/serviceAccountKey.json` (file path, good for local dev)
@@ -660,6 +661,7 @@ Every successful `POST /api/webhook/alert` request is persisted as a document in
 
 **Configuration**:
 - `ENABLE_FIRESTORE_ALERT_STORAGE` — Feature flag (default: false)
+- `ALERT_STORAGE_RETENTION_DAYS` — Validated alert/replay retention window in days (`1`-`3650`, default: `90`); expired records are filtered before reads and new records carry `expiresAt`
 - `FIREBASE_PROJECT_ID` — Optional project ID override (usually embedded in the service account JSON)
 
 **Failure Behavior** (fail-open):
@@ -686,8 +688,9 @@ Every successful `POST /api/webhook/alert` request is persisted as a document in
   - `useTradingViewData`
   - `tradingViewEnrichmentApplied`
 - Read filtering for `source` and `enriched` is applied in memory after `receivedAt`-ordered batches to avoid introducing new composite Firestore index requirements.
+- Retention filtering is also applied in memory because Firestore TTL deletion is eventual. Run `bash ops/configure-firestore-alert-retention.sh` to backfill legacy documents from `receivedAt` or `replayedAt` before enabling TTL deletion for both collection groups; the script shortens existing expiries when the configured deadline is earlier, hashes and removes legacy raw replay keys, reports counts, and fails on records without a usable timestamp.
 - Read endpoints must map Firestore initialization/read failures to `503 STORAGE_UNAVAILABLE` instead of a generic `500`.
-- Replay attempts must not mutate the original `alerts` document. Use `saveReplayAttempt()` to write an audit document with ID `${alertId}_${idempotencyKey}` in `alertReplays`.
+- Replay attempts must not mutate the original `alerts` document. Use `saveReplayAttempt()` to write an audit document with ID `${alertId}_${sha256(idempotencyKey)}` in `alertReplays`; only the hash is stored, alongside the same `expiresAt` retention policy.
 - Export responses must not expose API keys, service-account data, webhook secrets, raw provider credentials, full `enrichmentData`, or raw provider responses. Keep delivery status compact (`channel`, `success`, `messageId`, `errorCode`, `statusCode`) and token usage numeric-only.
 - When extending the alerts read API, preserve `receivedAt` as the primary sort key but encode `nextBefore` with a deterministic tie-breaker (document ID) so paginated reads do not skip same-timestamp alerts, and preserve API-key protection on both list and detail routes.
 
@@ -1264,3 +1267,21 @@ Raw alert text remains disabled by default and requires an explicit checkbox. Th
 **Coverage**:
 - `src/admin/admin.js` — Report filters, summary rendering, safe export downloads, and protected error handling.
 - `tests/unit/admin-client.test.js` — Safe defaults, query construction, readable analytics, JSONL/CSV downloads, content types, API-key placement, validation, and errors.
+
+## News Monitor Default Symbol Validation (CB-144 / Issue #361)
+
+`POST` and `GET /api/news-monitor` now resolve configured `NEWS_SYMBOLS_CRYPTO` and `NEWS_SYMBOLS_STOCKS` defaults before applying the existing symbol validator. Invalid syntax and lists over 100 symbols return the existing `400 INVALID_REQUEST` response before analysis; valid defaults retain their crypto/stock asset-class mapping. Explicit request symbols, notification routing, cache behavior, provider selection, and public contracts remain unchanged.
+
+**Coverage**:
+- `src/controllers/webhooks/handlers/newsMonitor/newsMonitor.js` — Resolves defaults before the shared validation boundary.
+- `tests/integration/news-monitor-alerts.test.js` — Covers invalid and oversized defaults before analysis and valid default asset-class propagation.
+
+## News Monitor Cached No-Event Analyses (CB-146 / Issue #363)
+
+News monitor cache reads now include `EventCategory.NONE`, so a cached no-event analysis returns `AnalysisStatus.CACHED` during its existing TTL without repeating market-context or Gemini provider calls. Event-category cache keys remain independent and the existing dry-run, routing, delivery, TTL, and fail-open behavior is unchanged.
+
+**Coverage**:
+- `src/controllers/webhooks/handlers/newsMonitor/analyzer.js` — Reads the existing no-event cache entry at the shared cache boundary.
+- `tests/integration/news-monitor-cache.test.js` — Verifies no-event cache hits return no alert and avoid repeated Gemini/market-context provider calls.
+
+No endpoint or response contract changed; Postman and OpenAPI remain unchanged.

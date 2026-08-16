@@ -195,11 +195,12 @@ function createQueryApi(collectionName) {
 const mockCollection = jest.fn((collectionName) => createQueryApi(collectionName));
 const mockInitializeApp = jest.fn();
 const mockCert = jest.fn((sa) => ({ type: 'service_account_credential', sa }));
+const mockDeleteFieldValue = jest.fn(() => ({ __deleteField: true }));
 
 let apps = [];
 
 const firestore = jest.fn(() => ({ collection: mockCollection }));
-firestore.FieldValue = { serverTimestamp: mockServerTimestamp };
+firestore.FieldValue = { serverTimestamp: mockServerTimestamp, delete: mockDeleteFieldValue };
 firestore.Timestamp = { fromDate: mockTimestampFromDate };
 firestore.FieldPath = { documentId: mockDocumentId };
 

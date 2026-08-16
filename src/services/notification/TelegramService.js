@@ -112,7 +112,7 @@ class TelegramService extends NotificationChannel {
 					// If MarkdownV2 parse fails (400 can't parse entities), retry as plain text
 					if (errMsg.includes("can't parse entities")) {
 						this.logger?.warn?.(`Telegram MarkdownV2 parse failed, retrying as plain text: ${errMsg}`);
-						return this.bot.telegram.sendMessage(this.chatId, messagePart, {
+						return this.bot.telegram.sendMessage(chatId, messagePart, {
 							disable_web_page_preview: !!alert.enriched,
 						});
 					}

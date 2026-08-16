@@ -15,6 +15,7 @@
  *
  * Document schema:
  *   receivedAt       - FieldValue.serverTimestamp()
+ *   expiresAt        - Timestamp — receivedAt + ALERT_STORAGE_RETENTION_DAYS
  *   text             - string  — original alert text
  *   enriched         - boolean — whether enrichment ran
  *   enrichmentData   - object | null — alert.enriched payload
@@ -41,6 +42,9 @@ const DEFAULT_EXPORT_LIMIT = 500;
 const MAX_EXPORT_LIMIT = 1000;
 const MAX_EXPORT_WINDOW_DAYS = 31;
 const MAX_EXPORT_TEXT_LENGTH = 1000;
+const DEFAULT_ALERT_STORAGE_RETENTION_DAYS = 90;
+const MAX_ALERT_STORAGE_RETENTION_DAYS = 3650;
+const DAY_MS = 24 * 60 * 60 * 1000;
 // ponytail: 24h ceiling rejects stuck-request outliers; raise only with observed legitimate longer handlers.
 const MAX_PROCESSING_TIME_MS = 24 * 60 * 60 * 1000;
 const STORAGE_UNAVAILABLE_CODE = 'STORAGE_UNAVAILABLE';
@@ -60,6 +64,7 @@ const VALID_SETUP_TYPES = new Set([
 
 // Lazy Firestore singleton
 let db = null;
+let lastRetentionWarningValue = null;
 
 function isEnabled() {
 	return process.env.ENABLE_FIRESTORE_ALERT_STORAGE === 'true';
@@ -72,6 +77,29 @@ function canInitializeFirestore() {
 		|| process.env.ENABLE_SIGNAL_OUTCOME_TRACKING === 'true'
 		|| process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING === 'true'
 		|| process.env.ENABLE_FIREBASE_REMOTE_CONFIG === 'true';
+}
+
+function getAlertStorageRetentionDays() {
+	const rawValue = process.env.ALERT_STORAGE_RETENTION_DAYS;
+	if (rawValue === undefined) {
+		return DEFAULT_ALERT_STORAGE_RETENTION_DAYS;
+	}
+
+	const normalizedValue = rawValue.trim();
+	const parsedValue = Number(normalizedValue);
+	if (!/^\d+$/.test(normalizedValue)
+		|| !Number.isSafeInteger(parsedValue)
+		|| parsedValue < 1
+		|| parsedValue > MAX_ALERT_STORAGE_RETENTION_DAYS) {
+		if (lastRetentionWarningValue !== rawValue) {
+			console.warn('[AlertStorageService] Invalid ALERT_STORAGE_RETENTION_DAYS configuration, using default');
+			lastRetentionWarningValue = rawValue;
+		}
+		return DEFAULT_ALERT_STORAGE_RETENTION_DAYS;
+	}
+
+	lastRetentionWarningValue = null;
+	return parsedValue;
 }
 
 function clampLimit(limit) {
@@ -88,6 +116,43 @@ function getDocTimestamp(document) {
 	}
 
 	return document.receivedAt.toDate().toISOString();
+}
+
+function getTimestampMillis(value) {
+	if (value && typeof value.toMillis === 'function') {
+		const millis = value.toMillis();
+		return Number.isFinite(millis) ? millis : null;
+	}
+
+	if (value && typeof value.toDate === 'function') {
+		const millis = value.toDate().getTime();
+		return Number.isFinite(millis) ? millis : null;
+	}
+
+	if (value instanceof Date) {
+		const millis = value.getTime();
+		return Number.isFinite(millis) ? millis : null;
+	}
+
+	return null;
+}
+
+function buildRetentionExpiryTimestamp() {
+	return admin.firestore.Timestamp.fromDate(
+		new Date(Date.now() + (getAlertStorageRetentionDays() * DAY_MS)),
+	);
+}
+
+function isRetentionExpired(data) {
+	const explicitExpiry = getTimestampMillis(data && data.expiresAt);
+	if (explicitExpiry !== null) {
+		return explicitExpiry <= Date.now();
+	}
+
+	// Legacy documents are aged from their existing event timestamp until a TTL backfill is run.
+	const eventTimestamp = getTimestampMillis(data && (data.receivedAt || data.replayedAt));
+	return eventTimestamp !== null
+		&& eventTimestamp + (getAlertStorageRetentionDays() * DAY_MS) <= Date.now();
 }
 
 function formatAlertDocument(doc) {
@@ -664,6 +729,7 @@ async function saveAlertInternal({ text, symbol, exchange, enriched, enrichmentD
 		const extracted = extractSymbolAndExchange({ text, symbol, exchange, enrichmentData });
 		const document = {
 			receivedAt: admin.firestore.FieldValue.serverTimestamp(),
+			expiresAt: buildRetentionExpiryTimestamp(),
 			text: typeof text === 'string' ? text.substring(0, 20000) : '',
 			enriched: Boolean(enriched),
 			enrichmentData: sanitizeEnrichmentData(enrichmentData),
@@ -724,6 +790,7 @@ async function listAlerts({ limit = DEFAULT_PAGE_SIZE, before, source, enriched 
 
 	const pageSize = clampLimit(limit);
 	const targetCount = pageSize + 1;
+	const scanLimit = Math.max(targetCount, MAX_PAGE_SIZE);
 	const matches = [];
 	const parsedBeforeCursor = before
 		? parseAlertPaginationCursor(before)
@@ -744,7 +811,7 @@ async function listAlerts({ limit = DEFAULT_PAGE_SIZE, before, source, enriched 
 			.collection(COLLECTION_NAME)
 			.orderBy('receivedAt', 'desc')
 			.orderBy(admin.firestore.FieldPath.documentId(), 'desc')
-			.limit(targetCount);
+			.limit(scanLimit);
 		if (pageCursor) {
 			const cursorTimestamp = buildParsedCursorTimestamp(pageCursor);
 			if (pageCursor.documentId) {
@@ -767,6 +834,10 @@ async function listAlerts({ limit = DEFAULT_PAGE_SIZE, before, source, enriched 
 		}
 
 		for (const doc of snapshot.docs) {
+			if (isRetentionExpired(doc.data() || {})) {
+				continue;
+			}
+
 			const formatted = formatAlertDocument(doc);
 			if (matchesFilters(formatted, { source, enriched })) {
 				matches.push(formatted);
@@ -782,7 +853,7 @@ async function listAlerts({ limit = DEFAULT_PAGE_SIZE, before, source, enriched 
 		}
 
 		pageCursor = lastDocCursor;
-		if (snapshot.docs.length < targetCount) {
+		if (snapshot.docs.length < scanLimit) {
 			break;
 		}
 	}
@@ -823,6 +894,9 @@ async function getAlertById(alertId) {
 	if (!snapshot || !snapshot.exists) {
 		return null;
 	}
+	if (isRetentionExpired(snapshot.data() || {})) {
+		return null;
+	}
 
 	return formatAlertDocument(snapshot);
 }
@@ -847,10 +921,11 @@ async function saveReplayAttempt({ alertId, idempotencyKey, channels, deliveryRe
 	const replayId = `${alertId}_${idempotencyKeyHash}`;
 	const document = {
 		alertId,
-		idempotencyKey,
+		idempotencyKeyHash,
 		channels: Array.isArray(channels) ? channels : [],
 		deliveryResults: Array.isArray(deliveryResults) ? deliveryResults : [],
 		replayedAt: admin.firestore.FieldValue.serverTimestamp(),
+		expiresAt: buildRetentionExpiryTimestamp(),
 		source: 'alert-replay',
 	};
 
@@ -887,6 +962,7 @@ async function exportAlerts({ from, to, limit, source, enriched, includeText = f
 
 	const window = buildExportWindow({ from, to, limit });
 	const hasFilters = typeof source === 'string' || typeof enriched === 'boolean';
+	const scanLimit = Math.max(window.limit, MAX_PAGE_SIZE);
 	const docs = [];
 	let pageCursor = null;
 	while (true) {
@@ -894,15 +970,12 @@ async function exportAlerts({ from, to, limit, source, enriched, includeText = f
 			.collection(COLLECTION_NAME)
 			.where('receivedAt', '>=', admin.firestore.Timestamp.fromDate(new Date(window.from)))
 			.where('receivedAt', '<=', admin.firestore.Timestamp.fromDate(new Date(window.to)))
-			.orderBy('receivedAt', 'desc');
-
-		if (hasFilters) {
-			query = query.orderBy(admin.firestore.FieldPath.documentId(), 'desc');
-			if (pageCursor) {
-				query = query.startAfter(pageCursor.receivedAt, pageCursor.documentId);
-			}
+			.orderBy('receivedAt', 'desc')
+			.orderBy(admin.firestore.FieldPath.documentId(), 'desc');
+		if (pageCursor) {
+			query = query.startAfter(pageCursor.receivedAt, pageCursor.documentId);
 		}
-		query = query.limit(window.limit);
+		query = query.limit(scanLimit);
 
 		let snapshot;
 		try {
@@ -916,18 +989,19 @@ async function exportAlerts({ from, to, limit, source, enriched, includeText = f
 			break;
 		}
 
+		const activeDocs = snapshot.docs.filter(doc => !isRetentionExpired(doc.data() || {}));
 		const matchingDocs = hasFilters
-			? snapshot.docs.filter((doc) => {
+			? activeDocs.filter((doc) => {
 				const data = doc.data() || {};
 				return matchesFilters({
 					source: typeof data.source === 'string' ? data.source : null,
 					enriched: Boolean(data.enriched),
 				}, { source, enriched });
 			})
-			: snapshot.docs;
+			: activeDocs;
 		docs.push(...matchingDocs.slice(0, window.limit - docs.length));
 
-		if (!hasFilters || docs.length >= window.limit || snapshot.docs.length < window.limit) {
+		if (docs.length >= window.limit || snapshot.docs.length < scanLimit) {
 			break;
 		}
 
@@ -971,6 +1045,7 @@ async function summarizeAlerts({ from, to, limit, source, enriched } = {}) {
 
 	const window = buildSummaryWindow({ from, to, limit });
 	const hasFilters = typeof source === 'string' || typeof enriched === 'boolean';
+	const scanLimit = Math.max(window.limit, MAX_PAGE_SIZE);
 	const docs = [];
 	let pageCursor = null;
 	while (true) {
@@ -978,15 +1053,12 @@ async function summarizeAlerts({ from, to, limit, source, enriched } = {}) {
 			.collection(COLLECTION_NAME)
 			.where('receivedAt', '>=', admin.firestore.Timestamp.fromDate(new Date(window.from)))
 			.where('receivedAt', '<=', admin.firestore.Timestamp.fromDate(new Date(window.to)))
-			.orderBy('receivedAt', 'desc');
-
-		if (hasFilters) {
-			query = query.orderBy(admin.firestore.FieldPath.documentId(), 'desc');
-			if (pageCursor) {
-				query = query.startAfter(pageCursor.receivedAt, pageCursor.documentId);
-			}
+			.orderBy('receivedAt', 'desc')
+			.orderBy(admin.firestore.FieldPath.documentId(), 'desc');
+		if (pageCursor) {
+			query = query.startAfter(pageCursor.receivedAt, pageCursor.documentId);
 		}
-		query = query.limit(window.limit);
+		query = query.limit(scanLimit);
 
 		let snapshot;
 		try {
@@ -1000,20 +1072,19 @@ async function summarizeAlerts({ from, to, limit, source, enriched } = {}) {
 			break;
 		}
 
-		if (hasFilters) {
-			const matchingDocs = snapshot.docs.filter((doc) => {
+		const activeDocs = snapshot.docs.filter(doc => !isRetentionExpired(doc.data() || {}));
+		const matchingDocs = hasFilters
+			? activeDocs.filter((doc) => {
 				const data = doc.data() || {};
 				return matchesFilters({
 					source: typeof data.source === 'string' ? data.source : null,
 					enriched: Boolean(data.enriched),
 				}, { source, enriched });
-			});
-			docs.push(...matchingDocs.slice(0, window.limit - docs.length));
-		} else {
-			docs.push(...snapshot.docs);
-		}
+			})
+			: activeDocs;
+		docs.push(...matchingDocs.slice(0, window.limit - docs.length));
 
-		if (!hasFilters || docs.length >= window.limit || snapshot.docs.length < window.limit) {
+		if (docs.length >= window.limit || snapshot.docs.length < scanLimit) {
 			break;
 		}
 
@@ -1130,5 +1201,6 @@ module.exports = {
 	// Reset the cached db singleton between tests without module reloading
 	_resetForTesting() {
 		db = null;
+		lastRetentionWarningValue = null;
 	},
 };

@@ -105,6 +105,7 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 #### Firestore Alert Storage
 
 - `ENABLE_FIRESTORE_ALERT_STORAGE` - Enable Firestore persistence and alert read API (`true` or `false`, default: `false`)
+- `ALERT_STORAGE_RETENTION_DAYS` - Retention for `alerts` and `alertReplays` records in days (`1`-`3650`, default: `90`). New records get `expiresAt`; run `bash ops/configure-firestore-alert-retention.sh` once per Firebase project to backfill legacy records and enable native Firestore TTL deletion.
 - `ENABLE_FIRESTORE_JOB_STORAGE` - Enable Firestore persistence for async TradingView jobs without enabling alert read APIs (`true` or `false`, default: `false`)
 - `ENABLE_FIRESTORE_IDEMPOTENCY` - Enable durable webhook idempotency persistence in Cloud Firestore (`true` or `false`, default: `false`)
 - `ENABLE_SIGNAL_OUTCOME_TRACKING` - Enable shadow-mode signal outcome recording and evaluation (`true` or `false`, default: `false`)
@@ -168,8 +169,8 @@ pnpm test:firebase
 - `RAILWAY_ENVIRONMENT_NAME` / `RAILWAY_GIT_PULL_REQUEST_NUMBER` - Railway preview markers; a PR number or environment name containing a hyphen-delimited `pr` segment disables the bot
 - `RAILWAY_GIT_COMMIT_SHA` / `RAILWAY_GIT_REPO_OWNER` / `RAILWAY_GIT_REPO_NAME` - Railway GitHub deployment metadata used for release and deployment notifications
 - `TRUST_PROXY` - Express trusted proxy setting for reverse-proxy deployments (`true`, `false`, `1` hop, or subnet string; defaults to `1` on Render/Vercel/Railway, and `false` for direct deployments)
-- `RATE_LIMIT_WINDOW_MS` - Global API rate limiter window in milliseconds (default: `900000` / 15 minutes)
-- `RATE_LIMIT_MAX` - Global API rate limiter max requests per window (default: `100`)
+- `RATE_LIMIT_WINDOW_MS` - Global API rate limiter window in milliseconds (default: `900000` / 15 minutes; invalid values use the default)
+- `RATE_LIMIT_MAX` - Global API rate limiter max requests per window (default: `100`; invalid values use the default)
 - `LOG_LEVEL` - Structured JSON log verbosity (`debug`, `info`, `warn`, `error`, `silent`; defaults to `debug` in development and `info` in production)
 - `SERVICE_NAME` - Optional service name included in JSON logs (default: package name or `cabros-bot`)
 
@@ -979,6 +980,8 @@ By default, jobs still execute in-process. With `JOB_EXECUTION_MODE=render-worke
 ### Stored Alerts API
 
 When `ENABLE_FIRESTORE_ALERT_STORAGE=true`, successful `POST /api/webhook/alert` requests are persisted to Firestore and can be inspected through the protected alerts read API.
+
+Stored `alerts` and `alertReplays` records default to 90 days of retention. The service filters expired records before list, detail, export, and summary responses while Firestore's native TTL deletion is eventual. New records carry an `expiresAt` timestamp; `bash ops/configure-firestore-alert-retention.sh` backfills legacy records from `receivedAt`/`replayedAt` before enabling both TTL policies, shortens existing expiries when the configured deadline is earlier, removes legacy raw replay idempotency keys after hashing them, reports scanned/updated/skipped counts, and fails if a record has no usable timestamp. Replay audit documents retain only a SHA-256 `idempotencyKeyHash`, never the raw key. Inspect the TTL policies with `gcloud firestore fields ttls list`.
 
 All endpoints below require the same `x-api-key` header used by the webhook routes.
 If alert storage is enabled but Firestore credentials/project access are unavailable, they return `503 STORAGE_UNAVAILABLE` instead of a generic `500`.
