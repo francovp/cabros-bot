@@ -224,6 +224,7 @@ describe('Binance orders API', () => {
 				status: 'FILLED',
 				side: 'SELL',
 				type: 'LIMIT',
+				timeInForce: 'GTC',
 				origQty: '0.1',
 				price: '100',
 			});

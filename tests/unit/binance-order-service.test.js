@@ -251,6 +251,7 @@ describe('BinanceOrderService', () => {
 				status: 'FILLED',
 				side: 'BUY',
 				type: 'LIMIT',
+				timeInForce: 'GTC',
 				origQty: '0.1',
 				price: '100',
 			}),
@@ -275,6 +276,79 @@ describe('BinanceOrderService', () => {
 			symbol: 'BTCUSDT',
 			origClientOrderId: expect.stringMatching(/^cb_[a-f0-9]{32}$/),
 		});
+		expect(client.submitNewOrder).not.toHaveBeenCalled();
+	});
+
+	it('rejects a reconciled limit order with a mismatched time-in-force', async () => {
+		const client = {
+			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
+			getOrder: jest.fn().mockResolvedValue({
+				symbol: 'BTCUSDT',
+				clientOrderId: 'cb_b07697a7210406a422c57a9ea9340bed',
+				orderId: 99,
+				status: 'NEW',
+				side: 'BUY',
+				type: 'LIMIT',
+				timeInForce: 'GTC',
+				origQty: '0.1',
+				price: '100',
+			}),
+			submitNewOrder: jest.fn(),
+		};
+		const service = createBinanceOrderService({ createClient: () => client });
+
+		await expect(service.placeOrder({
+			symbol: 'BTCUSDT',
+			side: 'BUY',
+			type: 'LIMIT',
+			quantity: 0.1,
+			price: 100,
+			timeInForce: 'FOK',
+			dryRun: false,
+		}, { idempotencyKey: 'restart-safe-order' })).rejects.toMatchObject({
+			code: 'BINANCE_ORDER_CONFLICT',
+			statusCode: 409,
+		});
+
+		expect(client.submitNewOrder).not.toHaveBeenCalled();
+	});
+
+	it('reconciles an existing order before current symbol status gates', async () => {
+		const client = {
+			getOrder: jest.fn().mockResolvedValue({
+				symbol: 'BTCUSDT',
+				clientOrderId: 'cb_b07697a7210406a422c57a9ea9340bed',
+				orderId: 99,
+				status: 'FILLED',
+				side: 'BUY',
+				type: 'LIMIT',
+				timeInForce: 'GTC',
+				origQty: '0.1',
+				price: '100',
+			}),
+			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo({ status: 'BREAK' })),
+			submitNewOrder: jest.fn(),
+		};
+		const service = createBinanceOrderService({ createClient: () => client });
+
+		await expect(service.placeOrder({
+			symbol: 'BTCUSDT',
+			side: 'BUY',
+			type: 'LIMIT',
+			quantity: 0.1,
+			price: 100,
+			dryRun: false,
+		}, { idempotencyKey: 'restart-safe-order' })).resolves.toMatchObject({
+			success: true,
+			dryRun: false,
+			order: { orderId: 99, status: 'FILLED' },
+		});
+
+		expect(client.getOrder).toHaveBeenCalledWith({
+			symbol: 'BTCUSDT',
+			origClientOrderId: expect.stringMatching(/^cb_[a-f0-9]{32}$/),
+		});
+		expect(client.getExchangeInfo).not.toHaveBeenCalled();
 		expect(client.submitNewOrder).not.toHaveBeenCalled();
 	});
 

@@ -147,6 +147,30 @@ describe('Firestore emulator integration', () => {
 		expect(await jobRepository.get('firebase-job')).toBeNull();
 	});
 
+	it('stores terminal job expiry without expiring active jobs', async () => {
+		const createdAt = new Date(Date.now() - 1000).toISOString();
+		await jobRepository.save({
+			jobId: 'terminal-retention-job',
+			type: 'expanded-analysis',
+			status: 'completed',
+			createdAt,
+		});
+		await jobRepository.save({
+			jobId: 'active-retention-job',
+			type: 'expanded-analysis',
+			status: 'processing',
+			createdAt,
+		});
+
+		const terminal = await firestore.collection('tradingviewJobs').doc('terminal-retention-job').get();
+		const active = await firestore.collection('tradingviewJobs').doc('active-retention-job').get();
+
+		expect(terminal.data().expiresAt.toDate()).toEqual(
+			new Date(new Date(createdAt).getTime() + 3600000),
+		);
+		expect(active.data()).not.toHaveProperty('expiresAt');
+	});
+
 	it('persists, lists, and deletes scanner presets', async () => {
 		const preset = await scannerPresetService.createPreset({
 			name: 'Emulator smoke test',

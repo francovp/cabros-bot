@@ -346,6 +346,7 @@ function reconciledOrderMatchesRequest(order, existingOrder, clientOrderId) {
 	if (existingOrder.symbol !== order.symbol || existingOrder.clientOrderId !== clientOrderId) return false;
 	if (String(existingOrder.side).toUpperCase() !== order.side) return false;
 	if (String(existingOrder.type).toUpperCase() !== order.type) return false;
+	if (order.type === 'LIMIT' && String(existingOrder.timeInForce || '').toUpperCase() !== order.timeInForce) return false;
 
 	const existingQuantity = existingOrder.origQty ?? existingOrder.quantity;
 	if (order.quantity !== undefined && compareDecimals(existingQuantity, order.quantity) !== 0) return false;
@@ -446,6 +447,34 @@ function createBinanceOrderService({ createClient = createBinanceClient } = {}) 
 					'LIVE_ORDER_ID_REQUIRED',
 				);
 			}
+			let client;
+			try {
+				client = createClient(config);
+			} catch (error) {
+				throw new BinanceOrderServiceError('Binance client could not be initialized', 'BINANCE_CLIENT_UNAVAILABLE', 503);
+			}
+
+			const clientOrderId = order.clientOrderId
+				|| (!order.dryRun ? deriveClientOrderId(requestIdempotencyKey) : undefined);
+			if (!order.dryRun) {
+				const existingOrder = await reconcileOrder(client, order.symbol, clientOrderId);
+				if (existingOrder) {
+					if (!reconciledOrderMatchesRequest(order, existingOrder, clientOrderId)) {
+						throw new BinanceOrderRequestError(
+							'Reconciled Binance order does not match the request',
+							'BINANCE_ORDER_CONFLICT',
+							409,
+						);
+					}
+					return {
+						success: true,
+						dryRun: false,
+						environment: config.environment,
+						order: sanitizeOrderResponse(existingOrder),
+					};
+				}
+			}
+
 			if (!config.allowedSymbols.includes(order.symbol)) {
 				throw new BinanceOrderRequestError('symbol is not allowed for Binance trading');
 			}
@@ -454,13 +483,6 @@ function createBinanceOrderService({ createClient = createBinanceClient } = {}) 
 					'MARKET orders with quantity are unsupported when enforcing the notional cap; use quoteOrderQty',
 					'MARKET_QUANTITY_NOTIONAL_UNSUPPORTED',
 				);
-			}
-
-			let client;
-			try {
-				client = createClient(config);
-			} catch (error) {
-				throw new BinanceOrderServiceError('Binance client could not be initialized', 'BINANCE_CLIENT_UNAVAILABLE', 503);
 			}
 
 			let symbolInfo;
@@ -514,8 +536,6 @@ function createBinanceOrderService({ createClient = createBinanceClient } = {}) 
 			}
 			validateNotional(notional, filters, config.maxNotional, order.type === 'MARKET');
 
-			const clientOrderId = order.clientOrderId
-				|| (!order.dryRun ? deriveClientOrderId(requestIdempotencyKey) : undefined);
 			const orderParams = buildOrderParams({ ...order, clientOrderId });
 			if (order.dryRun) {
 				await validateDynamicPriceFilters(client, order, orderParams, filters);
@@ -527,22 +547,6 @@ function createBinanceOrderService({ createClient = createBinanceClient } = {}) 
 				};
 			}
 
-			const existingOrder = await reconcileOrder(client, order.symbol, clientOrderId);
-			if (existingOrder) {
-				if (!reconciledOrderMatchesRequest(order, existingOrder, clientOrderId)) {
-					throw new BinanceOrderRequestError(
-						'Reconciled Binance order does not match the request',
-						'BINANCE_ORDER_CONFLICT',
-						409,
-					);
-				}
-				return {
-					success: true,
-					dryRun: false,
-					environment: config.environment,
-					order: sanitizeOrderResponse(existingOrder),
-				};
-			}
 			await validateDynamicPriceFilters(client, order, orderParams, filters);
 			try {
 				const response = await client.submitNewOrder(orderParams);

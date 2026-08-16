@@ -55,12 +55,27 @@ describe('RemoteConfigService', () => {
 		expect(admin.remoteConfig).not.toHaveBeenCalled();
 	});
 
-	it('preserves legacy environment values when Remote Config is disabled', async () => {
+	it('falls back to bounded defaults for invalid TradingView MCP environment values', () => {
+		[
+			['TRADINGVIEW_MCP_TIMEOUT_MS', 'not-a-number', 12000],
+			['TRADINGVIEW_MCP_MAX_RETRIES', '0', 3],
+			['TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS', 'Infinity', 12000],
+			['TRADINGVIEW_MCP_TIMEOUT_MS', '999', 12000],
+			['TRADINGVIEW_MCP_MAX_RETRIES', '6', 3],
+			['TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS', '-1', 12000],
+		].forEach(([key, value, expected]) => {
+			process.env[key] = value;
+			expect(remoteConfigService.getRuntimeConfig()[key]).toBe(expected);
+		});
+	});
+
+	it('preserves valid environment values when Remote Config is disabled', async () => {
 		process.env.NEWS_ALERT_THRESHOLD = '1.5';
 		process.env.NEWS_TIMEOUT_MS = '180000';
 		process.env.NEWS_GEMINI_CONCURRENCY = '9';
-		process.env.TRADINGVIEW_MCP_TIMEOUT_MS = '500';
-		process.env.TRADINGVIEW_MCP_MAX_RETRIES = '8';
+		process.env.TRADINGVIEW_MCP_TIMEOUT_MS = '15000';
+		process.env.TRADINGVIEW_MCP_MAX_RETRIES = '4';
+		process.env.TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS = '20000';
 
 		await remoteConfigService.start();
 
@@ -68,8 +83,21 @@ describe('RemoteConfigService', () => {
 			NEWS_ALERT_THRESHOLD: 1.5,
 			NEWS_TIMEOUT_MS: 180000,
 			NEWS_GEMINI_CONCURRENCY: 9,
-			TRADINGVIEW_MCP_TIMEOUT_MS: 500,
-			TRADINGVIEW_MCP_MAX_RETRIES: 8,
+			TRADINGVIEW_MCP_TIMEOUT_MS: 15000,
+			TRADINGVIEW_MCP_MAX_RETRIES: 4,
+			TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS: 20000,
+		}));
+	});
+
+	it('accepts the documented TradingView MCP environment boundaries', () => {
+		process.env.TRADINGVIEW_MCP_TIMEOUT_MS = '1000';
+		process.env.TRADINGVIEW_MCP_MAX_RETRIES = '5';
+		process.env.TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS = '120000';
+
+		expect(remoteConfigService.getRuntimeConfig()).toEqual(expect.objectContaining({
+			TRADINGVIEW_MCP_TIMEOUT_MS: 1000,
+			TRADINGVIEW_MCP_MAX_RETRIES: 5,
+			TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS: 120000,
 		}));
 	});
 

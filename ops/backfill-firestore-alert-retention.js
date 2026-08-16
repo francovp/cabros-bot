@@ -10,6 +10,12 @@ const PAGE_SIZE = 400;
 const COLLECTIONS = [
 	{ name: 'alerts', timestampField: 'receivedAt' },
 	{ name: 'alertReplays', timestampField: 'replayedAt' },
+	{
+		name: 'tradingviewJobs',
+		timestampField: 'createdAt',
+		retentionDays: 1 / 24,
+		shouldBackfill: (data) => ['completed', 'failed', 'cancelled', 'timed_out'].includes(data.status),
+	},
 ];
 
 function getRetentionDays(rawValue = process.env.ALERT_STORAGE_RETENTION_DAYS) {
@@ -66,6 +72,7 @@ function buildRetentionExpiry(data, timestampField, retentionDays = getRetention
 async function backfillCollection(firestore, collectionName, timestampField, options = {}) {
 	const retentionDays = options.retentionDays ?? getRetentionDays();
 	const pageSize = options.pageSize ?? PAGE_SIZE;
+	const shouldBackfill = options.shouldBackfill || (() => true);
 	const result = { scanned: 0, updated: 0, skipped: 0, existing: 0 };
 	let lastDocument = null;
 
@@ -86,6 +93,9 @@ async function backfillCollection(firestore, collectionName, timestampField, opt
 		for (const document of snapshot.docs) {
 			result.scanned += 1;
 			const data = document.data() || {};
+			if (!shouldBackfill(data)) {
+				continue;
+			}
 			const currentExpiryMillis = getTimestampMillis(data.expiresAt);
 			const expiresAt = buildRetentionExpiry(data, timestampField, retentionDays, document.createTime);
 			const update = {};
@@ -164,7 +174,10 @@ async function main() {
 				firestore,
 				collection.name,
 				collection.timestampField,
-				{ retentionDays },
+				{
+					retentionDays: collection.retentionDays ?? retentionDays,
+					shouldBackfill: collection.shouldBackfill,
+				},
 			);
 		} catch (error) {
 			console.error(JSON.stringify({
