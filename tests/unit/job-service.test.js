@@ -97,6 +97,571 @@ describe('JobService Unit Tests', () => {
 		});
 	});
 
+	describe('Shutdown draining', () => {
+		it('tracks background jobs until they finish', async () => {
+			let releaseJob;
+			const runningJob = new Promise((resolve) => { releaseJob = resolve; });
+			jobService._runBackgroundJob = jest.fn(() => runningJob);
+
+			const result = await jobService.createJob('expanded-analysis', {
+				symbols: ['BINANCE:BTCUSDT'],
+			});
+
+			expect(jobService.activeJobs.has(result.jobId)).toBe(true);
+			const drain = jobService.waitForActiveJobs();
+			let drained = false;
+			drain.then(() => { drained = true; });
+			await Promise.resolve();
+			expect(drained).toBe(false);
+
+			releaseJob();
+			await drain;
+
+			expect(jobService.activeJobs.size).toBe(0);
+		});
+
+		it('does not block job creation on processing callbacks while tracking them', async () => {
+			process.env.NODE_ENV = 'test';
+			let releaseCallback;
+			let callbackStartedResolve;
+			const callbackStarted = new Promise((resolve) => { callbackStartedResolve = resolve; });
+			jobService._runBackgroundJob = jest.fn().mockResolvedValue(undefined);
+			jobService._sendCallbackWithRetry = jest.fn(() => new Promise((resolve) => {
+				callbackStartedResolve();
+				releaseCallback = resolve;
+			}));
+
+			const creation = jobService.createJob('expanded-analysis', {
+				symbols: ['BINANCE:BTCUSDT'],
+				callbackUrl: 'http://localhost:8080/callback',
+				callbackEvents: ['processing'],
+			});
+			await callbackStarted;
+			const result = await creation;
+
+			expect(result).toEqual(expect.objectContaining({ success: true }));
+			expect(jobService.activeCallbacks.size).toBe(1);
+
+			const drain = jobService.waitForActiveJobs();
+			let drained = false;
+			drain.then(() => { drained = true; });
+			await Promise.resolve();
+			expect(drained).toBe(false);
+
+			releaseCallback();
+			await drain;
+			expect(jobService.activeCallbacks.size).toBe(0);
+		});
+
+		it('persists active jobs as cancelled before forced shutdown', async () => {
+			let releaseJob;
+			let releaseCallback;
+			const runningJob = new Promise((resolve) => { releaseJob = resolve; });
+			const callbackPromise = new Promise((resolve) => { releaseCallback = resolve; });
+			const abort = jest.fn();
+			jobService._runBackgroundJob = jest.fn(() => runningJob);
+			jobService._sendCallbackWithRetry = jest.fn(() => callbackPromise);
+
+			const result = await jobService.createJob('expanded-analysis', {
+				symbols: ['BINANCE:BTCUSDT'],
+				callbackUrl: 'http://localhost:8080/callback',
+				callbackEvents: ['cancelled'],
+			});
+			jobService.activeControllers.set(result.jobId, { abort });
+
+			const finalization = jobService.finalizeActiveJobsForShutdown();
+			let finalized = false;
+			finalization.then(() => { finalized = true; });
+			await Promise.resolve();
+			expect(finalized).toBe(false);
+			releaseCallback();
+			await finalization;
+
+			const persistedJob = await jobService.repository.get(result.jobId);
+			expect(persistedJob).toEqual(expect.objectContaining({
+				status: 'cancelled',
+				code: 'PROCESS_SHUTDOWN_TIMEOUT',
+				error: expect.stringContaining('shutdown'),
+				shutdownFinalized: true,
+			}));
+			expect(abort).toHaveBeenCalledTimes(1);
+			expect(jobService._sendCallbackWithRetry).toHaveBeenCalledWith(
+				expect.objectContaining({ jobId: result.jobId, status: 'cancelled' }),
+				expect.any(String),
+			);
+
+			await jobService._persistJob({
+				...persistedJob,
+				status: 'completed',
+			});
+			expect((await jobService.repository.get(result.jobId)).status).toBe('cancelled');
+
+			releaseJob();
+			await jobService.waitForActiveJobs();
+		});
+
+		it('tracks job creation before its initial persistence completes', async () => {
+			let releaseInitialSave;
+			let saveStartedResolve;
+			let initialSaveStarted = false;
+			const saveStarted = new Promise((resolve) => { saveStartedResolve = resolve; });
+			const initialSave = new Promise((resolve) => { releaseInitialSave = resolve; });
+			const realSave = jobService.repository.save.bind(jobService.repository);
+			jest.spyOn(jobService.repository, 'save').mockImplementation((job) => {
+				if (!initialSaveStarted) {
+					initialSaveStarted = true;
+					saveStartedResolve();
+					return initialSave.then(() => realSave(job));
+				}
+				return realSave(job);
+			});
+
+			const creation = jobService.createJob('expanded-analysis', {
+				symbols: ['BINANCE:BTCUSDT'],
+			});
+			await saveStarted;
+			expect(jobService.activeCreations.size).toBe(1);
+
+			const finalization = jobService.finalizeActiveJobsForShutdown();
+			await Promise.resolve();
+			expect([...jobService.activeCreations.values()][0].job.status).toBe('cancelled');
+
+			releaseInitialSave();
+			await finalization;
+			const result = await creation;
+			expect(result.status).toBe('cancelled');
+			expect((await jobService.repository.get(result.jobId)).status).toBe('cancelled');
+		});
+
+		it('starts cancellation persistence without waiting for the initial save', async () => {
+			let releaseInitialSave;
+			let saveStartedResolve;
+			let initialSaveStarted = false;
+			const saveStarted = new Promise((resolve) => { saveStartedResolve = resolve; });
+			const initialSave = new Promise((resolve) => { releaseInitialSave = resolve; });
+			const realSave = JobRepository.JobRepository.prototype.save.bind(jobService.repository);
+			const save = jest.fn((job) => {
+				if (!initialSaveStarted) {
+					initialSaveStarted = true;
+					saveStartedResolve();
+					return initialSave;
+				}
+				return realSave(job);
+			});
+			jobService.repository.save = save;
+
+			const creation = jobService.createJob('expanded-analysis', {
+				symbols: ['BINANCE:BTCUSDT'],
+			});
+			await saveStarted;
+
+			const finalization = jobService.finalizeActiveJobsForShutdown();
+			let finalized = false;
+			finalization.then(() => { finalized = true; });
+			await Promise.resolve();
+
+			expect(save).toHaveBeenCalledTimes(2);
+			expect(finalized).toBe(false);
+			expect(save.mock.calls[1][0]).toEqual(expect.objectContaining({
+				status: 'cancelled',
+				shutdownFinalized: true,
+			}));
+
+			releaseInitialSave();
+			await finalization;
+			const result = await creation;
+			expect(result.status).toBe('cancelled');
+			expect((await jobService.repository.get(result.jobId)).status).toBe('cancelled');
+			expect(save).toHaveBeenCalledTimes(3);
+			expect(save.mock.calls[2][0]).toEqual(expect.objectContaining({
+				status: 'cancelled',
+				shutdownFinalized: true,
+			}));
+			jobService.repository.save = JobRepository.JobRepository.prototype.save;
+		});
+
+		it('does not resend a shutdown-owned cancellation callback from job finalization', async () => {
+			const jobId = 'shutdown-owned-callback-job';
+			await jobService.repository.save({
+				jobId,
+				type: 'expanded-analysis',
+				status: 'cancelled',
+				shutdownFinalized: true,
+				createdAt: new Date().toISOString(),
+				updatedAt: new Date().toISOString(),
+				progress: { total: 0, current: 0, status: 'Cancelled during process shutdown' },
+				fullResults: [],
+				fullScanResults: [],
+				totalDurationMs: 0,
+			});
+			jobService._executeExpandedAnalysis = jest.fn().mockResolvedValue(undefined);
+			jobService._triggerCallbackIfConfigured = jest.fn();
+
+			await jobService._runBackgroundJob(jobId, { symbols: [] }, null, null);
+
+			expect(jobService._triggerCallbackIfConfigured).not.toHaveBeenCalled();
+		});
+
+		it('does not send a cancellation callback when persistence rejects the stale shutdown claim', async () => {
+			const jobId = 'stale-shutdown-claim-job';
+			await jobService.repository.save({
+				jobId,
+				type: 'expanded-analysis',
+				status: 'processing',
+				callbackUrl: 'http://localhost:8080/callback',
+				callbackEvents: ['cancelled'],
+				createdAt: new Date().toISOString(),
+				updatedAt: new Date().toISOString(),
+				progress: { total: 1, current: 0, status: 'pending' },
+				fullResults: [],
+				fullScanResults: [],
+				totalDurationMs: 0,
+			});
+			jobService._persistJob = jest.fn().mockResolvedValue(false);
+			jobService._triggerCallbackIfConfigured = jest.fn();
+
+			await jobService._finalizeActiveJobForShutdown(jobId);
+
+			expect(jobService._triggerCallbackIfConfigured).not.toHaveBeenCalled();
+		});
+
+		it('does not block terminal reads on superseded Firestore saves', async () => {
+			process.env.ENABLE_FIRESTORE_JOB_STORAGE = 'true';
+			let releaseInitialSave;
+			const initialSave = new Promise((resolve) => { releaseInitialSave = resolve; });
+			admin.__mockDocSet.mockImplementationOnce(() => initialSave);
+
+			const processingJob = {
+				jobId: 'superseded-firestore-save-job',
+				type: 'expanded-analysis',
+				status: 'processing',
+				createdAt: new Date().toISOString(),
+				updatedAt: new Date().toISOString(),
+				progress: { total: 1, current: 0, status: 'pending' },
+				fullResults: [],
+				fullScanResults: [],
+			};
+			const cancellationJob = {
+				...processingJob,
+				status: 'cancelled',
+				shutdownFinalized: true,
+			};
+
+			const firstSave = jobService.repository.save(processingJob);
+			const cancellationSave = jobService.repository.save(cancellationJob);
+			await cancellationSave;
+
+			let readResolved = false;
+			const terminalRead = jobService.repository.get(processingJob.jobId).then((job) => {
+				readResolved = true;
+				return job;
+			});
+			try {
+				await delay(10);
+				expect(readResolved).toBe(true);
+				await expect(terminalRead).resolves.toEqual(expect.objectContaining({ status: 'cancelled' }));
+			} finally {
+				releaseInitialSave();
+				await firstSave;
+				await terminalRead;
+			}
+		});
+
+		it('drains superseded Firestore saves during shutdown wait', async () => {
+			process.env.ENABLE_FIRESTORE_JOB_STORAGE = 'true';
+			let releaseInitialSave;
+			const initialSave = new Promise((resolve) => { releaseInitialSave = resolve; });
+			admin.__mockDocSet.mockImplementationOnce(() => initialSave);
+
+			const processingJob = {
+				jobId: 'explicit-firestore-save-drain-job',
+				type: 'expanded-analysis',
+				status: 'processing',
+				createdAt: new Date().toISOString(),
+				updatedAt: new Date().toISOString(),
+				progress: { total: 1, current: 0, status: 'pending' },
+				fullResults: [],
+				fullScanResults: [],
+			};
+			const cancellationJob = { ...processingJob, status: 'cancelled' };
+
+			const firstSave = jobService.repository.save(processingJob);
+			const cancellationSave = jobService.repository.save(cancellationJob);
+			await cancellationSave;
+
+			let drainResolved = false;
+			const drain = jobService.waitForActiveJobs().then(() => {
+				drainResolved = true;
+			});
+			try {
+				await delay(10);
+				expect(drainResolved).toBe(false);
+			} finally {
+				releaseInitialSave();
+				await drain;
+				await firstSave;
+			}
+		});
+
+		it('drains pending saves before forced shutdown finalization returns', async () => {
+			process.env.ENABLE_FIRESTORE_JOB_STORAGE = 'true';
+			let releaseInitialSave;
+			const initialSave = new Promise((resolve) => { releaseInitialSave = resolve; });
+			admin.__mockDocSet.mockImplementationOnce(() => initialSave);
+
+			const processingJob = {
+				jobId: 'forced-shutdown-save-drain-job',
+				type: 'expanded-analysis',
+				status: 'processing',
+				createdAt: new Date().toISOString(),
+				updatedAt: new Date().toISOString(),
+				progress: { total: 1, current: 0, status: 'pending' },
+				fullResults: [],
+				fullScanResults: [],
+			};
+			const cancellationJob = { ...processingJob, status: 'cancelled' };
+			const firstSave = jobService.repository.save(processingJob);
+			const cancellationSave = jobService.repository.save(cancellationJob);
+			await cancellationSave;
+			jobService.activeJobs.set(processingJob.jobId, new Promise(() => {}));
+
+			let finalized = false;
+			const finalization = jobService.finalizeActiveJobsForShutdown().then(() => {
+				finalized = true;
+			});
+			try {
+				await delay(10);
+				expect(finalized).toBe(false);
+			} finally {
+				releaseInitialSave();
+				await finalization;
+				await firstSave;
+				jobService.activeJobs.delete(processingJob.jobId);
+			}
+		});
+
+		it('rescans active creations added during the pending-save drain', async () => {
+			process.env.ENABLE_FIRESTORE_JOB_STORAGE = 'true';
+			let releaseInitialSave;
+			const initialSave = new Promise((resolve) => { releaseInitialSave = resolve; });
+			admin.__mockDocSet.mockImplementationOnce(() => initialSave);
+
+			const processingJob = {
+				jobId: 'late-forced-shutdown-job',
+				type: 'expanded-analysis',
+				status: 'processing',
+				createdAt: new Date().toISOString(),
+				updatedAt: new Date().toISOString(),
+				progress: { total: 1, current: 0, status: 'pending' },
+				fullResults: [],
+				fullScanResults: [],
+			};
+			const cancellationJob = { ...processingJob, status: 'cancelled' };
+			const firstSave = jobService.repository.save(processingJob);
+			const cancellationSave = jobService.repository.save(cancellationJob);
+			await cancellationSave;
+
+			const lateCreation = {
+				job: { ...processingJob, jobId: 'late-active-creation-job' },
+				persistencePromise: Promise.resolve(),
+				finalizationPromise: null,
+			};
+			const finalization = jobService.finalizeActiveJobsForShutdown();
+			await delay(10);
+			jobService.activeCreations.set(lateCreation.job.jobId, lateCreation);
+			releaseInitialSave();
+
+			try {
+				await finalization;
+				expect(lateCreation.job).toEqual(expect.objectContaining({
+					status: 'cancelled',
+					shutdownFinalized: true,
+				}));
+				expect((await jobService.repository.get(lateCreation.job.jobId)).status).toBe('cancelled');
+			} finally {
+				jobService.activeCreations.delete(lateCreation.job.jobId);
+				await firstSave;
+			}
+		});
+
+		it('does not send a cancellation callback when the terminal save is rejected', async () => {
+			const jobId = 'terminal-save-rejection-job';
+			const processingJob = {
+				jobId,
+				type: 'expanded-analysis',
+				status: 'processing',
+				callbackUrl: 'http://localhost:8080/callback',
+				callbackEvents: ['cancelled'],
+				createdAt: new Date().toISOString(),
+				updatedAt: new Date().toISOString(),
+				progress: { total: 1, current: 0, status: 'pending' },
+				fullResults: [],
+				fullScanResults: [],
+			};
+			await jobService.repository.save(processingJob);
+
+			const realSave = jobService.repository.save.bind(jobService.repository);
+			const saveSpy = jest.spyOn(jobService.repository, 'save').mockImplementation(async (job) => {
+				if (job.status === 'cancelled') {
+					await realSave({ ...job, status: 'completed' });
+				}
+				return realSave(job);
+			});
+			jobService._triggerCallbackIfConfigured = jest.fn();
+
+			try {
+				await jobService._finalizeActiveJobForShutdown(jobId);
+				expect(jobService._triggerCallbackIfConfigured).not.toHaveBeenCalled();
+				expect((await jobService.repository.get(jobId)).status).toBe('completed');
+			} finally {
+				saveSpy.mockRestore();
+			}
+		});
+
+		it('reapplies a newer cancellation after a stale Firestore save settles', async () => {
+			process.env.ENABLE_FIRESTORE_JOB_STORAGE = 'true';
+			let releaseInitialSave;
+			const initialSave = new Promise((resolve) => { releaseInitialSave = resolve; });
+			admin.__mockDocSet.mockImplementationOnce(() => initialSave);
+
+			const processingJob = {
+				jobId: 'stale-firestore-save-job',
+				type: 'expanded-analysis',
+				status: 'processing',
+				createdAt: new Date().toISOString(),
+				updatedAt: new Date().toISOString(),
+				progress: { total: 1, current: 0, status: 'pending' },
+				fullResults: [],
+				fullScanResults: [],
+				totalDurationMs: 0,
+			};
+			const cancellationJob = {
+				...processingJob,
+				status: 'cancelled',
+				shutdownFinalized: true,
+				code: 'PROCESS_SHUTDOWN_TIMEOUT',
+			};
+
+			const firstSave = jobService.repository.save(processingJob);
+			const cancellationSave = jobService.repository.save(cancellationJob);
+			await cancellationSave;
+			releaseInitialSave();
+			await firstSave;
+			admin.__mockDocGet.mockResolvedValueOnce({
+				exists: true,
+				id: processingJob.jobId,
+				data: () => processingJob,
+			});
+			expect((await jobService.repository.get(processingJob.jobId)).status).toBe('cancelled');
+
+			expect(admin.__mockDocSet).toHaveBeenCalledTimes(2);
+			expect(admin.__mockDocSet.mock.calls[1][0]).toEqual(expect.objectContaining({
+				status: 'cancelled',
+				shutdownFinalized: true,
+			}));
+		});
+
+		it('does not regress a terminal job from a stale callback snapshot', async () => {
+			process.env.ENABLE_FIRESTORE_JOB_STORAGE = 'true';
+			const terminalJob = {
+				jobId: 'terminal-callback-merge-job',
+				type: 'expanded-analysis',
+				status: 'completed',
+				createdAt: new Date().toISOString(),
+				updatedAt: new Date().toISOString(),
+				progress: { total: 1, current: 1, status: 'completed' },
+				fullResults: [],
+				fullScanResults: [],
+				totalDurationMs: 1,
+			};
+			const staleJob = { ...terminalJob, status: 'processing' };
+
+			await jobService.repository.save(terminalJob);
+			admin.__mockDocGet.mockResolvedValueOnce({
+				exists: true,
+				id: terminalJob.jobId,
+				data: () => staleJob,
+			});
+
+			expect((await jobService.repository.get(terminalJob.jobId)).status).toBe('completed');
+			const writesBeforeStaleSave = admin.__mockDocSet.mock.calls.length;
+			await jobService.repository.save(staleJob);
+
+			expect(admin.__mockDocSet).toHaveBeenCalledTimes(writesBeforeStaleSave);
+			expect((await jobService.repository.get(terminalJob.jobId)).status).toBe('completed');
+		});
+
+		it('preserves callback delivery state when a stale job snapshot is persisted', async () => {
+			const job = {
+				jobId: 'callback-state-merge-job',
+				type: 'expanded-analysis',
+				status: 'processing',
+				callbackStatus: { status: 'pending', attempts: [] },
+				createdAt: new Date().toISOString(),
+				updatedAt: new Date().toISOString(),
+				progress: { total: 1, current: 0, status: 'pending' },
+				fullResults: [],
+				fullScanResults: [],
+				totalDurationMs: 0,
+			};
+			await jobService.repository.save(job);
+
+			const delivered = {
+				...job,
+				callbackStatus: {
+					status: 'success',
+					attempts: [{ event: 'processing', deliveryId: 'delivery-1', statusCode: 200 }],
+					events: {
+						processing: { status: 'success', attempts: [] },
+					},
+				},
+			};
+			await jobService.repository.save(delivered);
+
+			await jobService._persistJob({
+				...job,
+				progress: { total: 1, current: 1, status: 'Completed analysis' },
+			});
+
+			const persisted = await jobService.repository.get(job.jobId);
+			expect(persisted.callbackStatus.status).toBe('success');
+			expect(persisted.callbackStatus.events.processing.status).toBe('success');
+			expect(persisted.callbackStatus.attempts).toEqual([
+				expect.objectContaining({ deliveryId: 'delivery-1' }),
+			]);
+		});
+
+		it('finalizes jobs that become active during shutdown finalization', async () => {
+			const releaseJobs = [];
+			jobService._runBackgroundJob = jest.fn(() => new Promise((resolve) => {
+				releaseJobs.push(resolve);
+			}));
+
+			const first = await jobService.createJob('expanded-analysis', {
+				symbols: ['BINANCE:BTCUSDT'],
+			});
+			const persistJob = jobService._persistJob.bind(jobService);
+			let second;
+			jobService._persistJob = jest.fn(async (job) => {
+				await persistJob(job);
+				if (!second) {
+					second = await jobService.createJob('expanded-analysis', {
+						symbols: ['BINANCE:ETHUSDT'],
+					});
+				}
+			});
+
+			await jobService.finalizeActiveJobsForShutdown();
+
+			expect((await jobService.repository.get(first.jobId)).status).toBe('cancelled');
+			expect(second).toBeDefined();
+			expect((await jobService.repository.get(second.jobId)).status).toBe('cancelled');
+
+			releaseJobs.forEach((release) => release());
+			await jobService.waitForActiveJobs();
+		});
+	});
+
 	describe('Background execution and retrieval', () => {
 		it('completes expanded-analysis job successfully', async () => {
 			tradingViewMcpService.analyzeSymbolIdentifier.mockResolvedValueOnce({
@@ -104,7 +669,6 @@ describe('JobService Unit Tests', () => {
 				price_data: { close: 65000, change_percent: 1.5 },
 				rsi: { value: 45 },
 			});
-
 			const metadata = await jobService.createJob('expanded-analysis', {
 				symbols: ['BINANCE:BTCUSDT'],
 			});
@@ -329,7 +893,6 @@ describe('JobService Unit Tests', () => {
 				price_data: { close: 65000, change_percent: 1.5 },
 				rsi: { value: 45 },
 			});
-
 			const metadata = await jobService.createJob('expanded-analysis', {
 				symbols: ['BINANCE:BTCUSDT'],
 			});
@@ -376,6 +939,103 @@ describe('JobService Unit Tests', () => {
 			// Check job state
 			const job = await jobService.getJob(jobId);
 			expect(job.status).toBe('cancelled');
+		});
+
+		it('reports the terminal state when cancellation persistence is rejected', async () => {
+			const jobId = 'cancel-persistence-conflict-job';
+			const processingJob = {
+				jobId,
+				status: 'processing',
+				createdAt: new Date().toISOString(),
+				updatedAt: new Date().toISOString(),
+			};
+			const completedJob = { ...processingJob, status: 'completed' };
+			const getSpy = jest.spyOn(jobService.repository, 'get')
+				.mockResolvedValueOnce(processingJob)
+				.mockResolvedValue(completedJob);
+			const abort = jest.fn();
+			jobService.activeControllers.set(jobId, { abort });
+			jobService._triggerCallbackIfConfigured = jest.fn();
+
+			try {
+				const result = await jobService.cancelJob(jobId);
+
+				expect(result).toEqual(expect.objectContaining({
+					success: false,
+					code: 'TERMINAL_JOB',
+					status: 'completed',
+				}));
+				expect(abort).not.toHaveBeenCalled();
+				expect(jobService._triggerCallbackIfConfigured).not.toHaveBeenCalled();
+			} finally {
+				getSpy.mockRestore();
+			}
+		});
+
+		it('does not overwrite a cancellation with stale worker completion', async () => {
+			const cancelledJob = {
+				jobId: 'cancelled-job',
+				status: 'cancelled',
+				execution: { mode: 'render-worker', status: 'cancelled' },
+			};
+			const repository = {
+				get: jest.fn().mockResolvedValue(cancelledJob),
+				save: jest.fn(),
+			};
+			const service = new JobService(repository);
+
+			await service._persistJob({
+				...cancelledJob,
+				status: 'completed',
+				execution: { mode: 'render-worker', status: 'completed' },
+			});
+
+			expect(repository.save).not.toHaveBeenCalled();
+		});
+
+		it('reports the terminal state when cancellation loses a durable write race', async () => {
+			const processingJob = {
+				jobId: 'race-job',
+				status: 'processing',
+				createdAt: new Date().toISOString(),
+			};
+			const terminalJob = {
+				jobId: 'race-job',
+				status: 'completed',
+				createdAt: new Date().toISOString(),
+			};
+			const repository = {
+				get: jest.fn()
+					.mockResolvedValueOnce(processingJob)
+					.mockResolvedValue(terminalJob),
+				save: jest.fn().mockResolvedValue(null),
+			};
+			const service = new JobService(repository);
+
+			await expect(service.cancelJob('race-job')).resolves.toMatchObject({
+				success: false,
+				code: 'TERMINAL_JOB',
+				status: 'completed',
+			});
+		});
+
+		it('rejects cancellation when its durable save is rejected without a worker claim', async () => {
+			const processingJob = {
+				jobId: 'cancel-save-rejected-job',
+				status: 'processing',
+				createdAt: new Date().toISOString(),
+			};
+			const repository = {
+				get: jest.fn().mockImplementation(() => Promise.resolve({ ...processingJob })),
+				save: jest.fn().mockResolvedValue(null),
+			};
+			const service = new JobService(repository);
+
+			await expect(service.cancelJob(processingJob.jobId)).resolves.toMatchObject({
+				success: false,
+				code: 'CANCEL_REJECTED',
+				status: 'processing',
+			});
 		});
 
 		it('retries a failed/cancelled job and creates a new one with requestMetadata', async () => {
@@ -495,6 +1155,116 @@ describe('JobService Unit Tests', () => {
 
 		afterEach(() => {
 			delete globalThis.fetch;
+		});
+
+		it('waits for callback deliveries already in flight', async () => {
+			let resolveCallback;
+			jobService._sendCallbackWithRetry = jest.fn(() => new Promise((resolve) => {
+				resolveCallback = resolve;
+			}));
+			const job = {
+				jobId: 'pending-callback',
+				status: 'completed',
+				callbackUrl: 'https://example.com/callback',
+				callbackEvents: ['completed'],
+				callbackStatus: { status: 'pending', attempts: [] },
+			};
+
+			await jobService._triggerCallbackIfConfigured(job, { background: true });
+			let settled = false;
+			const wait = jobService.waitForCallbacks().then(() => {
+				settled = true;
+			});
+
+			await Promise.resolve();
+			expect(settled).toBe(false);
+			resolveCallback();
+			await wait;
+			expect(settled).toBe(true);
+		});
+
+		it('skips a callback event reserved by another durable worker', async () => {
+			const claimCallbackDelivery = jest.fn().mockResolvedValue(false);
+			const service = new JobService({
+				isDurable: () => true,
+				claimCallbackDelivery,
+			});
+			service._sendCallbackWithRetry = jest.fn().mockResolvedValue(undefined);
+
+			await service._triggerCallbackIfConfigured({
+				jobId: 'claimed-callback',
+				status: 'completed',
+				callbackUrl: 'https://example.com/callback',
+				callbackEvents: ['completed'],
+				callbackStatus: { status: 'pending', attempts: [] },
+			});
+
+			expect(claimCallbackDelivery).toHaveBeenCalledWith(
+				'claimed-callback',
+				'completed',
+				expect.any(String),
+			);
+			expect(service._sendCallbackWithRetry).not.toHaveBeenCalled();
+		});
+
+		it('propagates callback claim storage failures when delivery is awaited', async () => {
+			const claimError = Object.assign(new Error('Firestore unavailable'), {
+				code: 'JOB_CALLBACK_CLAIM_UNAVAILABLE',
+			});
+			const service = new JobService({
+				isDurable: () => true,
+				claimCallbackDelivery: jest.fn().mockRejectedValue(claimError),
+			});
+			service._sendCallbackWithRetry = jest.fn().mockResolvedValue(undefined);
+
+			await expect(service._triggerCallbackIfConfigured({
+				jobId: 'unavailable-callback',
+				status: 'completed',
+				callbackUrl: 'https://example.com/callback',
+				callbackEvents: ['completed'],
+				callbackStatus: { status: 'pending', attempts: [] },
+			}, { awaitDelivery: true })).rejects.toBe(claimError);
+			expect(service._sendCallbackWithRetry).not.toHaveBeenCalled();
+		});
+
+		it('propagates active callback claims when delivery is awaited', async () => {
+			const claimError = Object.assign(new Error('Callback delivery is still in flight'), {
+				code: 'JOB_CALLBACK_DELIVERY_IN_FLIGHT',
+			});
+			const service = new JobService({
+				isDurable: () => true,
+				claimCallbackDelivery: jest.fn().mockRejectedValue(claimError),
+			});
+			service._sendCallbackWithRetry = jest.fn().mockResolvedValue(undefined);
+
+			await expect(service._triggerCallbackIfConfigured({
+				jobId: 'active-callback',
+				status: 'completed',
+				callbackUrl: 'https://example.com/callback',
+				callbackEvents: ['completed'],
+				callbackStatus: { status: 'in_flight', attempts: [] },
+			}, { awaitDelivery: true })).rejects.toBe(claimError);
+			expect(service._sendCallbackWithRetry).not.toHaveBeenCalled();
+		});
+
+		it('propagates callback status persistence failures when delivery is awaited', async () => {
+			const statusError = Object.assign(new Error('Firestore unavailable'), {
+				code: 'JOB_CALLBACK_STATUS_UNAVAILABLE',
+			});
+			const service = new JobService({
+				isDurable: () => true,
+				claimCallbackDelivery: jest.fn().mockResolvedValue(true),
+				updateCallbackStatus: jest.fn().mockRejectedValue(statusError),
+			});
+			fetchMock.mockResolvedValue({ ok: true, status: 200 });
+
+			await expect(service._triggerCallbackIfConfigured({
+				jobId: 'status-unavailable-callback',
+				status: 'completed',
+				callbackUrl: 'https://example.com/callback',
+				callbackEvents: ['completed'],
+				callbackStatus: { status: 'pending', attempts: [] },
+			}, { awaitDelivery: true })).rejects.toBe(statusError);
 		});
 
 		it('validates callbackUrl protocol and format', async () => {
@@ -798,6 +1568,54 @@ describe('JobService Unit Tests', () => {
 			expect(fetchMock).toHaveBeenCalledTimes(2);
 			const statuses = fetchMock.mock.calls.map(([, options]) => JSON.parse(options.body).status);
 			expect(statuses).toEqual(['processing', 'completed']);
+		});
+
+		it('delivers terminal callbacks after a background processing callback', async () => {
+			let releaseProcessing;
+			let processingStartedResolve;
+			const processingStarted = new Promise((resolve) => { processingStartedResolve = resolve; });
+			const callbackEvents = [];
+			jobService._sendCallbackWithRetry = jest.fn((callbackJob) => {
+				callbackEvents.push(callbackJob.status);
+				if (callbackJob.status === 'processing') {
+					processingStartedResolve();
+					return new Promise((resolve) => { releaseProcessing = resolve; });
+				}
+				return Promise.resolve();
+			});
+
+			const job = {
+				jobId: 'job-callback-ordering',
+				type: 'expanded-analysis',
+				status: 'processing',
+				createdAt: new Date().toISOString(),
+				updatedAt: new Date().toISOString(),
+				callbackUrl: 'https://example.com/callback',
+				callbackEvents: ['processing', 'completed'],
+				callbackStatus: { status: 'pending', attempts: [] },
+				progress: { total: 1, current: 0, status: 'pending' },
+				fullResults: [],
+				fullScanResults: [],
+			};
+
+			await jobService.repository.save(job);
+			await jobService._triggerCallbackIfConfigured(job, { background: true });
+			await processingStarted;
+
+			const completedJob = {
+				...job,
+				status: 'completed',
+				updatedAt: new Date().toISOString(),
+			};
+			await jobService.repository.save(completedJob);
+			const terminalCallback = jobService._triggerCallbackIfConfigured(completedJob);
+			await new Promise((resolve) => setImmediate(resolve));
+			expect(callbackEvents).toEqual(['processing']);
+
+			releaseProcessing();
+			await terminalCallback;
+
+			expect(callbackEvents).toEqual(['processing', 'completed']);
 		});
 
 		it('sends callback when job reaches terminal state and records success', async () => {

@@ -7,6 +7,7 @@ const { join } = require('path');
 jest.mock('firebase-admin');
 const admin = require('firebase-admin');
 const alertStorageService = require('../../src/services/storage/AlertStorageService');
+const { tradingViewMcpService } = require('../../src/services/tradingview/TradingViewMcpService');
 const { getRoutes } = require('../../src/routes');
 
 const testPrivateKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({
@@ -22,17 +23,40 @@ const validFirestoreServiceAccountJson = JSON.stringify({
 
 describe('Status endpoints', () => {
 	let savedEnv;
+	let savedTradingViewRuntimeStatus;
+	let savedTradingViewVolumeRuntimeStatus;
 	let app;
 	let tempDir;
 
 	beforeEach(() => {
 		savedEnv = saveEnv();
+		savedTradingViewRuntimeStatus = tradingViewMcpService.runtimeStatus;
+		savedTradingViewVolumeRuntimeStatus = tradingViewMcpService.volumeRuntimeStatus;
+		tradingViewMcpService.runtimeStatus = {
+			status: 'unknown',
+			lastCheckedAt: null,
+			lastSuccessAt: null,
+			lastFailureAt: null,
+			lastErrorCategory: null,
+			successCount: 0,
+			failureCount: 0,
+		};
+		tradingViewMcpService.volumeRuntimeStatus = {
+			status: 'unknown',
+			lastCheckedAt: null,
+			lastSuccessAt: null,
+			lastFailureAt: null,
+			lastErrorCategory: null,
+			successCount: 0,
+			failureCount: 0,
+		};
 		admin.__resetApps();
 		admin.__resetCollectionState();
 		alertStorageService._resetForTesting();
 		Object.keys(process.env).forEach((key) => {
 			delete process.env[key];
 		});
+		process.env.NODE_ENV = 'test';
 		tempDir = null;
 		app = express();
 		app.use(express.json());
@@ -61,11 +85,14 @@ describe('Status endpoints', () => {
 		process.env.SENTRY_DSN = 'https://dsn.example';
 		delete process.env.BRAVE_SEARCH_API_KEY;
 		delete process.env.ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION;
+		delete process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT;
 		delete process.env.ENABLE_SIGNAL_OUTCOME_TRACKING;
 		delete process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING;
 	});
 
 	afterEach(() => {
+		tradingViewMcpService.runtimeStatus = savedTradingViewRuntimeStatus;
+		tradingViewMcpService.volumeRuntimeStatus = savedTradingViewVolumeRuntimeStatus;
 		restoreEnv(savedEnv);
 		if (tempDir) {
 			rmSync(tempDir, { recursive: true, force: true });
@@ -103,8 +130,14 @@ describe('Status endpoints', () => {
 		expect(response.body.dependencies.tradingViewMcp).toEqual({
 			enabled: true,
 			configured: true,
-			ready: true,
-			status: 'ready',
+			ready: false,
+			status: 'unknown',
+			lastCheckedAt: null,
+			lastSuccessAt: null,
+			lastFailureAt: null,
+			lastErrorCategory: null,
+			successCount: 0,
+			failureCount: 0,
 		});
 		expect(response.body.dependencies.braveSearch).toEqual({
 			enabled: false,
@@ -112,7 +145,18 @@ describe('Status endpoints', () => {
 			ready: false,
 			status: 'disabled',
 		});
+		expect(response.body.featureFlags.tradingViewConfluenceEnrichment).toBe(false);
 		expect(response.body.dependencies.sentry.status).toBe('ready');
+	});
+
+	it('reports tradingViewConfluenceEnrichment as true only when explicitly configured to true', async () => {
+		process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT = 'true';
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.tradingViewConfluenceEnrichment).toBe(true);
 	});
 
 	it('reports scanner presets as ephemeral when no Firestore gate is enabled', async () => {
@@ -239,6 +283,12 @@ describe('Status endpoints', () => {
 			configured: true,
 			ready: false,
 			status: 'disabled',
+			lastCheckedAt: null,
+			lastSuccessAt: null,
+			lastFailureAt: null,
+			lastErrorCategory: null,
+			successCount: 0,
+			failureCount: 0,
 		});
 	});
 
@@ -282,6 +332,26 @@ describe('Status endpoints', () => {
 		expect(response.body.featureFlags.messageFooterMetadata).toBe(false);
 	});
 
+	it('reports safe Firebase Remote Config load metadata without values', async () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.firebaseRemoteConfig).toBe(true);
+		expect(response.body.dependencies.firebaseRemoteConfig).toEqual(expect.objectContaining({
+			enabled: true,
+			configured: true,
+			source: 'default',
+			templateVersion: null,
+			lastSuccessfulLoad: null,
+			lastErrorCategory: null,
+		}));
+		expect(JSON.stringify(response.body.dependencies.firebaseRemoteConfig)).not.toContain('gemini-key');
+	});
+
 	it('reports signal outcome tracking from the canonical environment variable', async () => {
 		process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
 
@@ -294,6 +364,42 @@ describe('Status endpoints', () => {
 		expect(response.body.dependencies.signalOutcomeWorker.enabled).toBe(true);
 	});
 
+	it('reports dedicated worker role and heartbeat counters', async () => {
+		process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+		process.env.SIGNAL_OUTCOME_WORKER_ROLE = 'worker';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.signalOutcomeWorker).toMatchObject({
+			role: 'worker',
+			running: false,
+			lastRunScannedCount: 0,
+			lastRunPendingCount: 0,
+			lastRunErrorCount: 0,
+			shutdownRequested: false,
+		});
+	});
+
+	it('does not report a disabled local scheduler as ready', async () => {
+		process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+		process.env.SIGNAL_OUTCOME_WORKER_ROLE = 'disabled';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.signalOutcomeWorker).toMatchObject({
+			enabled: true,
+			role: 'disabled',
+			ready: false,
+			status: 'disabled',
+		});
+	});
+
 	it('reports signal outcome tracking from the legacy environment variable', async () => {
 		process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING = 'true';
 
@@ -304,6 +410,29 @@ describe('Status endpoints', () => {
 		expect(response.status).toBe(200);
 		expect(response.body.featureFlags.signalOutcomeTracking).toBe(true);
 		expect(response.body.dependencies.signalOutcomeWorker.enabled).toBe(true);
+	});
+
+	it('reports equity market-data readiness without exposing provider credentials', async () => {
+		process.env.ENABLE_EQUITY_MARKET_DATA = 'true';
+		process.env.EQUITY_MARKET_DATA_PROVIDER = 'twelve-data';
+		process.env.TWELVE_DATA_API_KEY = 'secret-equity-key';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.equityMarketData).toBe(true);
+		expect(response.body.dependencies.equityMarketData).toEqual({
+			provider: 'twelve-data',
+			enabled: true,
+			configured: true,
+			ready: true,
+			status: 'ready',
+			supportedExchanges: ['BATS', 'NASDAQ'],
+			timeoutMs: 5000,
+		});
+		expect(JSON.stringify(response.body)).not.toContain('secret-equity-key');
 	});
 
 	it('reports Firestore job storage as disabled by default', async () => {
@@ -321,6 +450,26 @@ describe('Status endpoints', () => {
 			ready: false,
 			status: 'disabled',
 		});
+	});
+
+	it('reports render-worker queue readiness without exposing broker details', async () => {
+		process.env.JOB_EXECUTION_MODE = 'render-worker';
+		delete process.env.REDIS_URL;
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.jobExecutionWorker).toBe(true);
+		expect(response.body.dependencies.jobExecutionQueue).toMatchObject({
+			mode: 'render-worker',
+			enabled: true,
+			configured: false,
+			ready: false,
+			status: 'misconfigured',
+		});
+		expect(JSON.stringify(response.body.dependencies.jobExecutionQueue)).not.toContain('redis://');
 	});
 
 	it('reports Firestore job storage through the legacy alert-storage gate', async () => {
@@ -370,8 +519,14 @@ describe('Status endpoints', () => {
 		expect(response.body.dependencies.tradingViewVolumeConfirmation).toEqual({
 			enabled: true,
 			configured: true,
-			ready: true,
-			status: 'ready',
+			ready: false,
+			status: 'unknown',
+			lastCheckedAt: null,
+			lastSuccessAt: null,
+			lastFailureAt: null,
+			lastErrorCategory: null,
+			successCount: 0,
+			failureCount: 0,
 		});
 	});
 
@@ -390,6 +545,12 @@ describe('Status endpoints', () => {
 			configured: true,
 			ready: false,
 			status: 'disabled',
+			lastCheckedAt: null,
+			lastSuccessAt: null,
+			lastFailureAt: null,
+			lastErrorCategory: null,
+			successCount: 0,
+			failureCount: 0,
 		});
 	});
 
@@ -689,9 +850,100 @@ describe('Status endpoints', () => {
 		expect(response.body.dependencies.tradingViewMcp).toEqual({
 			enabled: true,
 			configured: true,
-			ready: true,
-			status: 'ready',
+			ready: false,
+			status: 'unknown',
+			lastCheckedAt: null,
+			lastSuccessAt: null,
+			lastFailureAt: null,
+			lastErrorCategory: null,
+			successCount: 0,
+			failureCount: 0,
 		});
+	});
+
+	it('keeps observed MCP readiness visible after an always-mounted consumer uses it', async () => {
+		process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT = 'false';
+		delete process.env.ENABLE_MARKET_SCANNER;
+		const originalCallTool = tradingViewMcpService._callTool;
+		tradingViewMcpService._callTool = jest.fn().mockResolvedValue({
+			price_data: { current_price: 70000 },
+		});
+
+		try {
+			await tradingViewMcpService.callCoinAnalysis({
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+				timeframe: '1D',
+			});
+
+			const response = await request(app)
+				.get('/api/status')
+				.set('x-api-key', 'status-key');
+
+			expect(response.status).toBe(200);
+			expect(response.body.dependencies.tradingViewMcp).toEqual(expect.objectContaining({
+				enabled: true,
+				configured: true,
+				ready: true,
+				status: 'ready',
+				successCount: 1,
+			}));
+		} finally {
+			tradingViewMcpService._callTool = originalCallTool;
+		}
+	});
+
+	it('tracks volume-confirmation readiness independently from generic MCP calls', async () => {
+		process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT = 'true';
+		process.env.ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION = 'true';
+		const originalCallTool = tradingViewMcpService._callTool;
+		tradingViewMcpService._callTool = jest.fn().mockResolvedValue({
+			price_data: { current_price: 70000 },
+		});
+
+		try {
+			await tradingViewMcpService.callCoinAnalysis({
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+				timeframe: '1D',
+			});
+
+			const response = await request(app)
+				.get('/api/status')
+				.set('x-api-key', 'status-key');
+
+			expect(response.status).toBe(200);
+			expect(response.body.dependencies.tradingViewMcp).toEqual(expect.objectContaining({
+				ready: true,
+				status: 'ready',
+				successCount: 1,
+			}));
+			expect(response.body.dependencies.tradingViewVolumeConfirmation).toEqual(expect.objectContaining({
+				enabled: true,
+				configured: true,
+				ready: false,
+				status: 'unknown',
+				successCount: 0,
+				failureCount: 0,
+			}));
+
+			await tradingViewMcpService.callVolumeConfirmation({
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+				timeframe: '1D',
+			});
+
+			const volumeResponse = await request(app)
+				.get('/api/status')
+				.set('x-api-key', 'status-key');
+			expect(volumeResponse.body.dependencies.tradingViewVolumeConfirmation).toEqual(expect.objectContaining({
+				ready: true,
+				status: 'ready',
+				successCount: 1,
+			}));
+		} finally {
+			tradingViewMcpService._callTool = originalCallTool;
+		}
 	});
 
 	it('treats Firestore ADC on Google-managed runtimes as configured', async () => {
@@ -1085,6 +1337,37 @@ describe('Status endpoints', () => {
 		expect(response.body.featureFlags.telegramBot).toBe(true);
 		expect(response.body.deliveryChannels.telegram).toEqual({ enabled: false, status: 'disabled' });
 		expect(response.body.dependencies.telegram.ready).toBe(false);
+	});
+
+	it('reports Vercel preview deployments consistently', async () => {
+		process.env.VERCEL_ENV = 'preview';
+		process.env.NODE_ENV = 'production';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.service.environment).toBe('preview');
+		expect(response.body.deliveryChannels.telegram).toEqual({ enabled: false, status: 'disabled' });
+	});
+
+	it('reports preview WhatsApp readiness from the preview destination', async () => {
+		process.env.VERCEL_ENV = 'preview';
+		delete process.env.WHATSAPP_CHAT_ID;
+		process.env.WHATSAPP_PREVIEW_CHAT_ID = 'preview-chat';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.whatsapp).toEqual({
+			enabled: true,
+			configured: true,
+			ready: true,
+			status: 'ready',
+		});
 	});
 
 	it('reports news monitor deduplication as process-local (in-memory) by default', async () => {

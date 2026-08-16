@@ -15,12 +15,14 @@ jest.mock('../../src/services/grounding/config', () => ({
 
 const genaiClient = require('../../src/services/grounding/genaiClient');
 const sentryService = require('../../src/services/monitoring/SentryService');
+const geminiQuotaManager = require('../../src/services/grounding/geminiQuotaManager');
 
 // Mock fetch globally
 global.fetch = jest.fn();
 
 describe('GenaiClient robustness', () => {
 	beforeEach(() => {
+		geminiQuotaManager.resetForTesting();
 		// Reset genAI to avoid using the real SDK in tests
 		genaiClient.genAI = { models: { generateContent: jest.fn().mockResolvedValue({}) } };
 		jest.resetAllMocks();
@@ -129,6 +131,52 @@ describe('GenaiClient robustness', () => {
 			expect(res.results).toHaveLength(1);
 			expect(res.results[0].title).toBe('Brave1');
 			expect(res.searchResultText).toContain('[1] Title: Brave1');
+		});
+	});
+
+	describe('AbortSignal & Timeout handling', () => {
+		it('rethrows abort error when search receives an aborted signal', async () => {
+			const controller = new AbortController();
+			controller.abort(new Error('Grounding timeout'));
+
+			await expect(genaiClient.search({ query: 'test', signal: controller.signal }))
+				.rejects
+				.toThrow('Grounding timeout');
+		});
+
+		it('aborts hanging Google Search SDK call when signal aborts', async () => {
+			const controller = new AbortController();
+			genaiClient.genAI.models.generateContent.mockImplementationOnce(() => new Promise(() => {}));
+
+			const searchPromise = genaiClient.search({ query: 'test', signal: controller.signal });
+			setTimeout(() => controller.abort(new Error('Grounding timeout')), 20);
+
+			await expect(searchPromise).rejects.toThrow('Grounding timeout');
+		});
+
+		it('passes signal to Brave fetch call', async () => {
+			const controller = new AbortController();
+			genaiClient.genAI.models.generateContent.mockRejectedValueOnce(new Error('Google API Error'));
+			global.fetch.mockImplementationOnce((url, opts) => {
+				expect(opts.signal).toBe(controller.signal);
+				return Promise.resolve({
+					ok: true,
+					json: async () => ({ web: { results: [] } }),
+				});
+			});
+
+			await genaiClient.search({ query: 'test', signal: controller.signal });
+			expect(global.fetch).toHaveBeenCalledTimes(1);
+		});
+
+		it('aborts hanging llmCall when signal aborts', async () => {
+			const controller = new AbortController();
+			genaiClient.genAI.models.generateContent.mockImplementationOnce(() => new Promise(() => {}));
+
+			const llmPromise = genaiClient.llmCall({ prompt: 'test', opts: { signal: controller.signal } });
+			setTimeout(() => controller.abort(new Error('Grounding timeout')), 20);
+
+			await expect(llmPromise).rejects.toThrow('Grounding timeout');
 		});
 	});
 

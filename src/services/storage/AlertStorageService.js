@@ -15,6 +15,7 @@
  *
  * Document schema:
  *   receivedAt       - FieldValue.serverTimestamp()
+ *   expiresAt        - Timestamp — receivedAt + ALERT_STORAGE_RETENTION_DAYS
  *   text             - string  — original alert text
  *   enriched         - boolean — whether enrichment ran
  *   enrichmentData   - object | null — alert.enriched payload
@@ -22,11 +23,13 @@
  *   deliveryResults  - array  — per-channel SendResult objects
  *   source           - string — always "webhook"
  *   useTradingViewData - boolean — query param from the request
+ *   processingTimeMs - integer — bounded handler processing duration
  */
 
 const admin = require('firebase-admin');
 const crypto = require('crypto');
 const { encodeAlertPaginationCursor, parseAlertPaginationCursor } = require('./alertPaginationCursor');
+const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
 
 const COLLECTION_NAME = 'alerts';
 const REPLAY_COLLECTION_NAME = 'alertReplays';
@@ -39,6 +42,11 @@ const DEFAULT_EXPORT_LIMIT = 500;
 const MAX_EXPORT_LIMIT = 1000;
 const MAX_EXPORT_WINDOW_DAYS = 31;
 const MAX_EXPORT_TEXT_LENGTH = 1000;
+const DEFAULT_ALERT_STORAGE_RETENTION_DAYS = 90;
+const MAX_ALERT_STORAGE_RETENTION_DAYS = 3650;
+const DAY_MS = 24 * 60 * 60 * 1000;
+// ponytail: 24h ceiling rejects stuck-request outliers; raise only with observed legitimate longer handlers.
+const MAX_PROCESSING_TIME_MS = 24 * 60 * 60 * 1000;
 const STORAGE_UNAVAILABLE_CODE = 'STORAGE_UNAVAILABLE';
 const INVALID_CURSOR_MESSAGE = 'Invalid before cursor. Use an ISO-8601 timestamp or the nextBefore cursor from a previous response.';
 const RISK_METADATA_FIELDS = [
@@ -56,6 +64,7 @@ const VALID_SETUP_TYPES = new Set([
 
 // Lazy Firestore singleton
 let db = null;
+let lastRetentionWarningValue = null;
 
 function isEnabled() {
 	return process.env.ENABLE_FIRESTORE_ALERT_STORAGE === 'true';
@@ -66,7 +75,31 @@ function canInitializeFirestore() {
 		|| process.env.ENABLE_FIRESTORE_SCANNER_PRESETS === 'true'
 		|| process.env.ENABLE_FIRESTORE_JOB_STORAGE === 'true'
 		|| process.env.ENABLE_SIGNAL_OUTCOME_TRACKING === 'true'
-		|| process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING === 'true';
+		|| process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING === 'true'
+		|| process.env.ENABLE_FIREBASE_REMOTE_CONFIG === 'true';
+}
+
+function getAlertStorageRetentionDays() {
+	const rawValue = process.env.ALERT_STORAGE_RETENTION_DAYS;
+	if (rawValue === undefined) {
+		return DEFAULT_ALERT_STORAGE_RETENTION_DAYS;
+	}
+
+	const normalizedValue = rawValue.trim();
+	const parsedValue = Number(normalizedValue);
+	if (!/^\d+$/.test(normalizedValue)
+		|| !Number.isSafeInteger(parsedValue)
+		|| parsedValue < 1
+		|| parsedValue > MAX_ALERT_STORAGE_RETENTION_DAYS) {
+		if (lastRetentionWarningValue !== rawValue) {
+			console.warn('[AlertStorageService] Invalid ALERT_STORAGE_RETENTION_DAYS configuration, using default');
+			lastRetentionWarningValue = rawValue;
+		}
+		return DEFAULT_ALERT_STORAGE_RETENTION_DAYS;
+	}
+
+	lastRetentionWarningValue = null;
+	return parsedValue;
 }
 
 function clampLimit(limit) {
@@ -85,6 +118,43 @@ function getDocTimestamp(document) {
 	return document.receivedAt.toDate().toISOString();
 }
 
+function getTimestampMillis(value) {
+	if (value && typeof value.toMillis === 'function') {
+		const millis = value.toMillis();
+		return Number.isFinite(millis) ? millis : null;
+	}
+
+	if (value && typeof value.toDate === 'function') {
+		const millis = value.toDate().getTime();
+		return Number.isFinite(millis) ? millis : null;
+	}
+
+	if (value instanceof Date) {
+		const millis = value.getTime();
+		return Number.isFinite(millis) ? millis : null;
+	}
+
+	return null;
+}
+
+function buildRetentionExpiryTimestamp() {
+	return admin.firestore.Timestamp.fromDate(
+		new Date(Date.now() + (getAlertStorageRetentionDays() * DAY_MS)),
+	);
+}
+
+function isRetentionExpired(data) {
+	const explicitExpiry = getTimestampMillis(data && data.expiresAt);
+	if (explicitExpiry !== null) {
+		return explicitExpiry <= Date.now();
+	}
+
+	// Legacy documents are aged from their existing event timestamp until a TTL backfill is run.
+	const eventTimestamp = getTimestampMillis(data && (data.receivedAt || data.replayedAt));
+	return eventTimestamp !== null
+		&& eventTimestamp + (getAlertStorageRetentionDays() * DAY_MS) <= Date.now();
+}
+
 function formatAlertDocument(doc) {
 	const data = doc.data() || {};
 	const extracted = extractSymbolAndExchange(data);
@@ -99,6 +169,7 @@ function formatAlertDocument(doc) {
 		deliveryResults: Array.isArray(data.deliveryResults) ? data.deliveryResults : [],
 		source: typeof data.source === 'string' ? data.source : null,
 		useTradingViewData: Boolean(data.useTradingViewData),
+		tradingViewEnrichmentApplied: Boolean(data.tradingViewEnrichmentApplied),
 	};
 	if (extracted.symbol !== 'unknown') {
 		docObj.symbol = extracted.symbol;
@@ -239,7 +310,7 @@ function parseSymbolFromText(text) {
 		return null;
 	}
 
-	const exchangeMatch = cleaned.match(/(?:^|\b)(?<exchange>[A-Z0-9]{2,10}):(?<symbol>[A-Z0-9._-]{2,20})(?:\s*\(\s*(?<timeframe>[A-Za-z0-9]+)\s*\))?/i);
+	const exchangeMatch = cleaned.match(/(?:^|\b)(?<exchange>[A-Z0-9_]{2,10}):(?<symbol>[A-Z0-9._-]{2,20})(?:\s*\(\s*(?<timeframe>[A-Za-z0-9]+)\s*\))?/i);
 	if (exchangeMatch && exchangeMatch.groups && exchangeMatch.groups.symbol) {
 		const symbol = exchangeMatch.groups.symbol.toUpperCase();
 		const exchange = exchangeMatch.groups.exchange ? exchangeMatch.groups.exchange.toUpperCase() : null;
@@ -404,6 +475,7 @@ function formatExportRecord(doc, { includeText }) {
 		source: typeof data.source === 'string' ? data.source : null,
 		enriched: Boolean(data.enriched),
 		useTradingViewData: Boolean(data.useTradingViewData),
+		tradingViewEnrichmentApplied: Boolean(data.tradingViewEnrichmentApplied),
 		deliveryResults: summarizeDeliveryResults(data.deliveryResults),
 		tokenUsage: summarizeTokenUsage(data.tokenUsage),
 	};
@@ -420,6 +492,14 @@ function collectLatency(samples, value) {
 	if (Number.isFinite(numeric) && numeric >= 0) {
 		samples.push(numeric);
 	}
+}
+
+function normalizeProcessingTimeMs(value) {
+	if (!Number.isSafeInteger(value) || value < 0 || value > MAX_PROCESSING_TIME_MS) {
+		return null;
+	}
+
+	return value;
 }
 
 function averageLatency(samples) {
@@ -549,6 +629,23 @@ function getDocCursorValues(doc) {
 	};
 }
 
+function getRawDocCursorValues(doc) {
+	if (!doc || typeof doc.data !== 'function') {
+		return null;
+	}
+
+	const data = doc.data() || {};
+	if (!data.receivedAt || typeof data.receivedAt.toDate !== 'function'
+		|| typeof doc.id !== 'string' || !doc.id) {
+		return null;
+	}
+
+	return {
+		receivedAt: data.receivedAt,
+		documentId: doc.id,
+	};
+}
+
 /**
  * Initialize Firebase Admin (idempotent) and return Firestore client.
  * Returns null when the feature is disabled or initialization fails.
@@ -615,9 +712,10 @@ function getFirestore() {
  * @param {Array<string>} params.channels    - Requested channels used for delivery
  * @param {Array}   params.deliveryResults   - Array of SendResult from notificationManager.sendToAll()
  * @param {boolean} params.useTradingViewData - Whether ?useTradingViewData=true was set on the request
+ * @param {number}  params.processingTimeMs  - Bounded handler processing duration in milliseconds
  * @returns {Promise<string|null>} The new Firestore document ID, or null on failure/disabled
  */
-async function saveAlert({ text, symbol, exchange, enriched, enrichmentData, tokenUsage, channels, deliveryResults, useTradingViewData }) {
+async function saveAlertInternal({ text, symbol, exchange, enriched, enrichmentData, tokenUsage, channels, deliveryResults, useTradingViewData, tradingViewEnrichmentApplied, processingTimeMs }) {
 	if (!isEnabled()) {
 		return null;
 	}
@@ -631,6 +729,7 @@ async function saveAlert({ text, symbol, exchange, enriched, enrichmentData, tok
 		const extracted = extractSymbolAndExchange({ text, symbol, exchange, enrichmentData });
 		const document = {
 			receivedAt: admin.firestore.FieldValue.serverTimestamp(),
+			expiresAt: buildRetentionExpiryTimestamp(),
 			text: typeof text === 'string' ? text.substring(0, 20000) : '',
 			enriched: Boolean(enriched),
 			enrichmentData: sanitizeEnrichmentData(enrichmentData),
@@ -639,7 +738,12 @@ async function saveAlert({ text, symbol, exchange, enriched, enrichmentData, tok
 			deliveryResults: Array.isArray(deliveryResults) ? deliveryResults : [],
 			source: 'webhook',
 			useTradingViewData: Boolean(useTradingViewData),
+			tradingViewEnrichmentApplied: Boolean(tradingViewEnrichmentApplied),
 		};
+		const normalizedProcessingTimeMs = normalizeProcessingTimeMs(processingTimeMs);
+		if (normalizedProcessingTimeMs !== null) {
+			document.processingTimeMs = normalizedProcessingTimeMs;
+		}
 
 		if (extracted.symbol !== 'unknown') {
 			document.symbol = extracted.symbol;
@@ -655,6 +759,10 @@ async function saveAlert({ text, symbol, exchange, enriched, enrichmentData, tok
 		console.warn('[AlertStorageService] Failed to store alert in Firestore:', error.message);
 		return null;
 	}
+}
+
+function saveAlert(params) {
+	return trackBackgroundTask(saveAlertInternal(params));
 }
 
 /**
@@ -682,6 +790,7 @@ async function listAlerts({ limit = DEFAULT_PAGE_SIZE, before, source, enriched 
 
 	const pageSize = clampLimit(limit);
 	const targetCount = pageSize + 1;
+	const scanLimit = Math.max(targetCount, MAX_PAGE_SIZE);
 	const matches = [];
 	const parsedBeforeCursor = before
 		? parseAlertPaginationCursor(before)
@@ -702,7 +811,7 @@ async function listAlerts({ limit = DEFAULT_PAGE_SIZE, before, source, enriched 
 			.collection(COLLECTION_NAME)
 			.orderBy('receivedAt', 'desc')
 			.orderBy(admin.firestore.FieldPath.documentId(), 'desc')
-			.limit(targetCount);
+			.limit(scanLimit);
 		if (pageCursor) {
 			const cursorTimestamp = buildParsedCursorTimestamp(pageCursor);
 			if (pageCursor.documentId) {
@@ -725,6 +834,10 @@ async function listAlerts({ limit = DEFAULT_PAGE_SIZE, before, source, enriched 
 		}
 
 		for (const doc of snapshot.docs) {
+			if (isRetentionExpired(doc.data() || {})) {
+				continue;
+			}
+
 			const formatted = formatAlertDocument(doc);
 			if (matchesFilters(formatted, { source, enriched })) {
 				matches.push(formatted);
@@ -740,7 +853,7 @@ async function listAlerts({ limit = DEFAULT_PAGE_SIZE, before, source, enriched 
 		}
 
 		pageCursor = lastDocCursor;
-		if (snapshot.docs.length < targetCount) {
+		if (snapshot.docs.length < scanLimit) {
 			break;
 		}
 	}
@@ -781,6 +894,9 @@ async function getAlertById(alertId) {
 	if (!snapshot || !snapshot.exists) {
 		return null;
 	}
+	if (isRetentionExpired(snapshot.data() || {})) {
+		return null;
+	}
 
 	return formatAlertDocument(snapshot);
 }
@@ -805,10 +921,11 @@ async function saveReplayAttempt({ alertId, idempotencyKey, channels, deliveryRe
 	const replayId = `${alertId}_${idempotencyKeyHash}`;
 	const document = {
 		alertId,
-		idempotencyKey,
+		idempotencyKeyHash,
 		channels: Array.isArray(channels) ? channels : [],
 		deliveryResults: Array.isArray(deliveryResults) ? deliveryResults : [],
 		replayedAt: admin.firestore.FieldValue.serverTimestamp(),
+		expiresAt: buildRetentionExpiryTimestamp(),
 		source: 'alert-replay',
 	};
 
@@ -844,24 +961,57 @@ async function exportAlerts({ from, to, limit, source, enriched, includeText = f
 	}
 
 	const window = buildExportWindow({ from, to, limit });
-	let snapshot;
-	try {
-		snapshot = await firestore
+	const hasFilters = typeof source === 'string' || typeof enriched === 'boolean';
+	const scanLimit = Math.max(window.limit, MAX_PAGE_SIZE);
+	const docs = [];
+	let pageCursor = null;
+	while (true) {
+		let query = firestore
 			.collection(COLLECTION_NAME)
 			.where('receivedAt', '>=', admin.firestore.Timestamp.fromDate(new Date(window.from)))
 			.where('receivedAt', '<=', admin.firestore.Timestamp.fromDate(new Date(window.to)))
 			.orderBy('receivedAt', 'desc')
-			.limit(window.limit)
-			.get();
-	} catch (error) {
-		console.warn('[AlertStorageService] Failed to export alerts from Firestore:', error.message);
-		throw createStorageUnavailableError(error);
+			.orderBy(admin.firestore.FieldPath.documentId(), 'desc');
+		if (pageCursor) {
+			query = query.startAfter(pageCursor.receivedAt, pageCursor.documentId);
+		}
+		query = query.limit(scanLimit);
+
+		let snapshot;
+		try {
+			snapshot = await query.get();
+		} catch (error) {
+			console.warn('[AlertStorageService] Failed to export alerts from Firestore:', error.message);
+			throw createStorageUnavailableError(error);
+		}
+
+		if (!snapshot || !Array.isArray(snapshot.docs) || snapshot.docs.length === 0) {
+			break;
+		}
+
+		const activeDocs = snapshot.docs.filter(doc => !isRetentionExpired(doc.data() || {}));
+		const matchingDocs = hasFilters
+			? activeDocs.filter((doc) => {
+				const data = doc.data() || {};
+				return matchesFilters({
+					source: typeof data.source === 'string' ? data.source : null,
+					enriched: Boolean(data.enriched),
+				}, { source, enriched });
+			})
+			: activeDocs;
+		docs.push(...matchingDocs.slice(0, window.limit - docs.length));
+
+		if (docs.length >= window.limit || snapshot.docs.length < scanLimit) {
+			break;
+		}
+
+		pageCursor = getRawDocCursorValues(snapshot.docs[snapshot.docs.length - 1]);
+		if (!pageCursor) {
+			break;
+		}
 	}
 
-	const docs = snapshot && Array.isArray(snapshot.docs) ? snapshot.docs : [];
-	const alerts = docs
-		.map(doc => formatExportRecord(doc, { includeText }))
-		.filter(alert => matchesFilters(alert, { source, enriched }));
+	const alerts = docs.map(doc => formatExportRecord(doc, { includeText }));
 
 	return {
 		window,
@@ -878,10 +1028,12 @@ async function exportAlerts({ from, to, limit, source, enriched, includeText = f
  * @param {Object} params
  * @param {string|undefined} params.from ISO timestamp, defaults to 24h before to
  * @param {string|undefined} params.to ISO timestamp, defaults to now
- * @param {number|undefined} params.limit Maximum documents scanned, capped at 1000
+ * @param {number|undefined} params.limit Maximum matching documents aggregated, capped at 1000
+ * @param {string|undefined} params.source Optional exact source filter
+ * @param {boolean|undefined} params.enriched Optional enriched/plain filter
  * @returns {Promise<Object|null>}
  */
-async function summarizeAlerts({ from, to, limit } = {}) {
+async function summarizeAlerts({ from, to, limit, source, enriched } = {}) {
 	if (!isEnabled()) {
 		return null;
 	}
@@ -892,18 +1044,54 @@ async function summarizeAlerts({ from, to, limit } = {}) {
 	}
 
 	const window = buildSummaryWindow({ from, to, limit });
-	let snapshot;
-	try {
-		snapshot = await firestore
+	const hasFilters = typeof source === 'string' || typeof enriched === 'boolean';
+	const scanLimit = Math.max(window.limit, MAX_PAGE_SIZE);
+	const docs = [];
+	let pageCursor = null;
+	while (true) {
+		let query = firestore
 			.collection(COLLECTION_NAME)
 			.where('receivedAt', '>=', admin.firestore.Timestamp.fromDate(new Date(window.from)))
 			.where('receivedAt', '<=', admin.firestore.Timestamp.fromDate(new Date(window.to)))
 			.orderBy('receivedAt', 'desc')
-			.limit(window.limit)
-			.get();
-	} catch (error) {
-		console.warn('[AlertStorageService] Failed to summarize alerts from Firestore:', error.message);
-		throw createStorageUnavailableError(error);
+			.orderBy(admin.firestore.FieldPath.documentId(), 'desc');
+		if (pageCursor) {
+			query = query.startAfter(pageCursor.receivedAt, pageCursor.documentId);
+		}
+		query = query.limit(scanLimit);
+
+		let snapshot;
+		try {
+			snapshot = await query.get();
+		} catch (error) {
+			console.warn('[AlertStorageService] Failed to summarize alerts from Firestore:', error.message);
+			throw createStorageUnavailableError(error);
+		}
+
+		if (!snapshot || !Array.isArray(snapshot.docs) || snapshot.docs.length === 0) {
+			break;
+		}
+
+		const activeDocs = snapshot.docs.filter(doc => !isRetentionExpired(doc.data() || {}));
+		const matchingDocs = hasFilters
+			? activeDocs.filter((doc) => {
+				const data = doc.data() || {};
+				return matchesFilters({
+					source: typeof data.source === 'string' ? data.source : null,
+					enriched: Boolean(data.enriched),
+				}, { source, enriched });
+			})
+			: activeDocs;
+		docs.push(...matchingDocs.slice(0, window.limit - docs.length));
+
+		if (docs.length >= window.limit || snapshot.docs.length < scanLimit) {
+			break;
+		}
+
+		pageCursor = getRawDocCursorValues(snapshot.docs[snapshot.docs.length - 1]);
+		if (!pageCursor) {
+			break;
+		}
 	}
 
 	const summary = {
@@ -915,6 +1103,7 @@ async function summarizeAlerts({ from, to, limit } = {}) {
 			enriched: 0,
 			plain: 0,
 			tradingViewData: 0,
+			tradingViewDataApplied: 0,
 			withoutTradingViewData: 0,
 		},
 		enrichment: {
@@ -944,17 +1133,17 @@ async function summarizeAlerts({ from, to, limit } = {}) {
 	const processingLatencySamples = [];
 	const deliveryLatencySamples = [];
 
-	const docs = snapshot && Array.isArray(snapshot.docs) ? snapshot.docs : [];
 	for (const doc of docs) {
 		const data = doc.data() || {};
-		const enriched = Boolean(data.enriched);
+		const alertEnriched = Boolean(data.enriched);
 		const useTradingViewData = Boolean(data.useTradingViewData);
+		const tradingViewEnrichmentApplied = Boolean(data.tradingViewEnrichmentApplied);
 
 		summary.totalAlerts += 1;
 		incrementCounter(summary.bySource, data.source);
 		incrementCounter(summary.bySymbol, extractAlertSymbol(data));
 
-		if (enriched) {
+		if (alertEnriched) {
 			summary.byFeatureFlag.enriched += 1;
 			summary.enrichment.enrichedAlerts += 1;
 			recordRiskMetadataCoverageByProvenance(summary.enrichment.riskMetadataCoverage, data.enrichmentData);
@@ -965,13 +1154,16 @@ async function summarizeAlerts({ from, to, limit } = {}) {
 
 		if (useTradingViewData) {
 			summary.byFeatureFlag.tradingViewData += 1;
+			if (tradingViewEnrichmentApplied) {
+				summary.byFeatureFlag.tradingViewDataApplied += 1;
+			}
 		} else {
 			summary.byFeatureFlag.withoutTradingViewData += 1;
 		}
 
 		addTokenUsage(summary.enrichment.tokenUsage, data.tokenUsage);
 		addDeliverySummary(summary.delivery, data.deliveryResults);
-		collectLatency(processingLatencySamples, data.processingTimeMs || data.processing_time_ms);
+		collectLatency(processingLatencySamples, data.processingTimeMs ?? data.processing_time_ms);
 
 		if (Array.isArray(data.deliveryResults)) {
 			for (const result of data.deliveryResults) {
@@ -1009,5 +1201,6 @@ module.exports = {
 	// Reset the cached db singleton between tests without module reloading
 	_resetForTesting() {
 		db = null;
+		lastRetentionWarningValue = null;
 	},
 };

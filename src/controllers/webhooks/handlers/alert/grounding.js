@@ -1,6 +1,7 @@
 const { validateAlert } = require('../../../../lib/validation');
 const { groundAlert } = require('../../../../services/grounding/grounding');
 const { GROUNDING_MODEL_NAME } = require('../../../../services/grounding/config');
+const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteConfigService');
 const { tradingViewMcpService } = require('../../../../services/tradingview/TradingViewMcpService');
 
 function mergeUnique(first = [], second = [], maxItems = 6) {
@@ -76,7 +77,7 @@ function hasContradictoryConfluenceInsight(mcp = {}) {
 }
 
 function isMessageFooterMetadataEnabled() {
-	return process.env.ENABLE_MESSAGE_FOOTER_METADATA !== 'false';
+	return getRuntimeConfig().ENABLE_MESSAGE_FOOTER_METADATA;
 }
 
 function mergeEnrichmentData(text, geminiEnriched, mcpEnriched) {
@@ -118,6 +119,7 @@ function mergeEnrichmentData(text, geminiEnriched, mcpEnriched) {
 
 	return {
 		original_text: text,
+		tradingViewEnrichmentApplied: mcp.tradingViewEnrichmentApplied === true,
 		sentiment: useMcpSentiment ? (mcp.sentiment || 'NEUTRAL') : (gemini.sentiment || mcp.sentiment || 'NEUTRAL'),
 		sentiment_score: useMcpSentiment && mcpScore !== null ? mcpScore : (geminiScore !== null ? geminiScore : (mcpScore !== null ? mcpScore : 0)),
 		insights,

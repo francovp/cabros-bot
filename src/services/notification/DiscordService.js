@@ -13,6 +13,23 @@ function sleep(ms) {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function sleepWithSignal(ms, signal) {
+	if (!signal) return sleep(ms);
+	if (signal.aborted) return Promise.reject(new Error(signal.reason?.message || signal.reason || 'Operation aborted'));
+	return new Promise((resolve, reject) => {
+		const timeoutId = setTimeout(() => {
+			signal.removeEventListener('abort', onAbort);
+			resolve();
+		}, ms);
+		const onAbort = () => {
+			clearTimeout(timeoutId);
+			signal.removeEventListener('abort', onAbort);
+			reject(new Error(signal.reason?.message || signal.reason || 'Operation aborted'));
+		};
+		signal.addEventListener('abort', onAbort, { once: true });
+	});
+}
+
 function parseEnvInt(envVar, defaultValue) {
 	if (!process.env[envVar]) return defaultValue;
 	const val = parseInt(process.env[envVar], 10);
@@ -53,15 +70,24 @@ class DiscordService extends NotificationChannel {
 		return this.enabled;
 	}
 
-	async send(alert) {
+	async send(alert = {}, options = {}) {
 		try {
+			const webhookUrl = alert.discordWebhookUrl || this.webhookUrl;
+			if (!webhookUrl) {
+				return {
+					success: false,
+					channel: 'discord',
+					error: 'Missing DISCORD_WEBHOOK_URL',
+				};
+			}
+
 			const content = await this.formatAlert(alert);
 			const chunks = splitMessageIntoChunks(content, DISCORD_MESSAGE_LIMIT);
 			const messageIds = [];
 			let totalAttempts = 0;
 
 			for (const chunk of chunks) {
-				const result = await this.sendChunk(chunk);
+				const result = await this.sendChunk(chunk, webhookUrl, options.signal);
 				totalAttempts += result.attemptCount || 0;
 				if (!result.success) {
 					if (result.statusCode === 429) {
@@ -89,10 +115,12 @@ class DiscordService extends NotificationChannel {
 		}
 	}
 
-	getExecutionUrl() {
-		return this.webhookUrl.includes('?')
-			? `${this.webhookUrl}&wait=true`
-			: `${this.webhookUrl}?wait=true`;
+	getExecutionUrl(webhookUrl = this.webhookUrl) {
+		const targetUrl = webhookUrl || this.webhookUrl;
+		if (!targetUrl) return '';
+		return targetUrl.includes('?')
+			? `${targetUrl}&wait=true`
+			: `${targetUrl}?wait=true`;
 	}
 
 	async formatAlert(alert = {}) {
@@ -148,17 +176,27 @@ class DiscordService extends NotificationChannel {
 		return this.fallbackRetryDelayMs;
 	}
 
-	async sendChunk(content) {
+	async sendChunk(content, webhookUrl = this.webhookUrl, signal) {
 		let attempt = 0;
 		let totalWaitMs = 0;
 
 		while (attempt <= this.maxRetries) {
+			if (signal?.aborted) {
+				return {
+					success: false,
+					channel: 'discord',
+					error: signal.reason?.message || signal.reason || 'Operation aborted',
+					aborted: true,
+				};
+			}
 			attempt++;
 			const controller = new AbortController();
 			const timeoutId = setTimeout(() => controller.abort(), this.timeoutMs);
+			const forwardAbort = () => controller.abort(signal.reason);
+			signal?.addEventListener('abort', forwardAbort, { once: true });
 
 			try {
-				const response = await fetch(this.getExecutionUrl(), {
+				const response = await fetch(this.getExecutionUrl(webhookUrl), {
 					method: 'POST',
 					headers: { 'Content-Type': 'application/json' },
 					body: JSON.stringify({ content }),
@@ -227,9 +265,17 @@ class DiscordService extends NotificationChannel {
 					`Discord webhook rate limited (429). Retrying in ${requiredDelayMs}ms (attempt ${attempt}/${this.maxRetries + 1})...`,
 				);
 
-				await sleep(requiredDelayMs);
+				await sleepWithSignal(requiredDelayMs, signal);
 				totalWaitMs += requiredDelayMs;
 			} catch (error) {
+				if (signal?.aborted) {
+					return {
+						success: false,
+						channel: 'discord',
+						error: signal.reason?.message || signal.reason || 'Operation aborted',
+						aborted: true,
+					};
+				}
 				if (error && error.name === 'AbortError') {
 					return {
 						success: false,
@@ -241,6 +287,7 @@ class DiscordService extends NotificationChannel {
 				throw error;
 			} finally {
 				clearTimeout(timeoutId);
+				signal?.removeEventListener('abort', forwardAbort);
 			}
 		}
 

@@ -3,6 +3,7 @@
 // Mock environment variables
 process.env = {
 	...process.env,
+	NODE_ENV: 'test',
 	ENABLE_GEMINI_GROUNDING: 'true',
 	SEARCH_API_KEY: 'test-search-key',
 	SEARCH_CX: 'test-search-cx',
@@ -90,7 +91,9 @@ jest.mock('@sentry/profiling-node', () => ({
 jest.setTimeout(15000);
 
 const rateLimiter = require('../src/lib/rateLimiter');
+const geminiQuotaManager = require('../src/services/grounding/geminiQuotaManager');
 afterEach(() => {
 	rateLimiter.disableTestMode();
 	rateLimiter.reset();
+	geminiQuotaManager.resetForTesting();
 });

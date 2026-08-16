@@ -17,6 +17,7 @@ const EXPORT_FIELDS = [
 	'source',
 	'enriched',
 	'useTradingViewData',
+	'tradingViewEnrichmentApplied',
 	'channels',
 	'deliveryResults',
 	'tokenUsage',
@@ -201,21 +202,38 @@ function summarizeAlerts(req, res) {
 			return res.status(400).json(to.error);
 		}
 
+		const enriched = parseEnriched(req.query.enriched);
+		if (enriched === null) {
+			return res.status(400).json({
+				error: 'Invalid enriched filter. Use true or false.',
+				code: 'INVALID_REQUEST',
+			});
+		}
+
+		const source = typeof req.query.source === 'string' && req.query.source.trim()
+			? req.query.source.trim()
+			: undefined;
+
 		const summary = await alertStorageService.summarizeAlerts({
 			from: from.value,
 			limit,
 			to: to.value,
+			source,
+			enriched,
 		});
 
-		let shadowModeMetrics = 'No measurements found';
-		if (signalOutcomeService.isEnabled()) {
-			shadowModeMetrics = await signalOutcomeService.getMetricsSummary({
-				from: from.value,
-				to: to.value,
-				limit,
-			});
+		const hasReportFilters = Boolean(source) || typeof enriched === 'boolean';
+		if (!hasReportFilters) {
+			let shadowModeMetrics = 'No measurements found';
+			if (signalOutcomeService.isEnabled()) {
+				shadowModeMetrics = await signalOutcomeService.getMetricsSummary({
+					from: from.value,
+					to: to.value,
+					limit,
+				});
+			}
+			summary.shadowModeMetrics = shadowModeMetrics;
 		}
-		summary.shadowModeMetrics = shadowModeMetrics;
 
 		return res.status(200).json({
 			success: true,
@@ -319,15 +337,18 @@ function exportAlerts(req, res) {
 			includeText,
 		});
 
-		let shadowModeMetrics = 'No measurements found';
-		if (signalOutcomeService.isEnabled()) {
-			shadowModeMetrics = await signalOutcomeService.getMetricsSummary({
-				from: from.value,
-				to: to.value,
-				limit,
-			});
+		const hasReportFilters = Boolean(source) || typeof enriched === 'boolean';
+		if (!hasReportFilters) {
+			let shadowModeMetrics = 'No measurements found';
+			if (signalOutcomeService.isEnabled()) {
+				shadowModeMetrics = await signalOutcomeService.getMetricsSummary({
+					from: from.value,
+					to: to.value,
+					limit,
+				});
+			}
+			res.set('X-Shadow-Mode-Metrics', JSON.stringify(shadowModeMetrics));
 		}
-		res.set('X-Shadow-Mode-Metrics', JSON.stringify(shadowModeMetrics));
 
 		const filename = `alerts-${from.value.substring(0, 10)}-${to.value.substring(0, 10)}.${format === 'csv' ? 'csv' : 'jsonl'}`;
 		res.set('Content-Disposition', `attachment; filename="${filename}"`);

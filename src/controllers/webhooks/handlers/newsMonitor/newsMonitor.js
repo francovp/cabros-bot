@@ -75,12 +75,14 @@ class NewsMonitorHandler {
 			const routing = req.method === 'GET'
 				? parseNotificationRouting(req.query, { allowQueryChannels: true })
 				: parseNotificationRouting(req.body);
-			if (dryRun) {
-				validateNotificationRouting(notificationManager, routing);
-			}
+			validateNotificationRouting(notificationManager, routing);
 			const { crypto, stocks } = this.parseRequest(req);
 			const allSymbols = [...(crypto || []), ...(stocks || [])];
-			const validationError = this.validateRequest(allSymbols);
+			const useDefaultSymbols = allSymbols.length === 0;
+			const symbolsToAnalyze = useDefaultSymbols
+				? this.getDefaultSymbols()
+				: allSymbols;
+			const validationError = this.validateRequest(symbolsToAnalyze);
 			if (validationError) {
 				return res.status(400).json({
 					error: validationError,
@@ -89,10 +91,7 @@ class NewsMonitorHandler {
 				});
 			}
 
-			// Get default symbols if not provided
-			const symbolsToAnalyze = allSymbols.length > 0
-				? allSymbols
-				: this.getDefaultSymbols();
+			const assetClassBySymbol = this.getAssetClassBySymbol(crypto, stocks, useDefaultSymbols);
 
 			console.info('[NewsMonitor] Analyzing symbols:', symbolsToAnalyze);
 			if (symbolsToAnalyze.length === 0) {
@@ -117,7 +116,13 @@ class NewsMonitorHandler {
 			let results;
 			let summary;
 			try {
-				results = await this.analyzer.analyzeSymbols(symbolsToAnalyze, requestId, tokenUsage, routing, { dryRun });
+				results = await sentryService.withActiveSpan(
+					analysisSpan,
+					() => this.analyzer.analyzeSymbols(symbolsToAnalyze, requestId, tokenUsage, routing, {
+						dryRun,
+						assetClassBySymbol,
+					}),
+				);
 				summary = this.generateSummary(results);
 				if (analysisSpan && typeof analysisSpan.setAttribute === 'function') {
 					analysisSpan.setAttribute('news.quota_exhausted', summary.quota_exhausted);
@@ -263,13 +268,29 @@ class NewsMonitorHandler {
    * @returns {string[]} Array of default symbols
    */
 	getDefaultSymbols() {
-		const cryptoStr = process.env.NEWS_SYMBOLS_CRYPTO || '';
-		const stocksStr = process.env.NEWS_SYMBOLS_STOCKS || '';
-
-		const crypto = cryptoStr.split(',').map(s => s.trim()).filter(s => s.length > 0);
-		const stocks = stocksStr.split(',').map(s => s.trim()).filter(s => s.length > 0);
+		const crypto = this.getSymbolsFromEnv('NEWS_SYMBOLS_CRYPTO');
+		const stocks = this.getSymbolsFromEnv('NEWS_SYMBOLS_STOCKS');
 
 		return [...crypto, ...stocks];
+	}
+
+	getSymbolsFromEnv(name) {
+		return (process.env[name] || '').split(',').map(s => s.trim()).filter(Boolean);
+	}
+
+	getAssetClassBySymbol(crypto, stocks, useDefaults) {
+		const cryptoSymbols = useDefaults ? this.getSymbolsFromEnv('NEWS_SYMBOLS_CRYPTO') : (crypto || []);
+		const stockSymbols = useDefaults ? this.getSymbolsFromEnv('NEWS_SYMBOLS_STOCKS') : (stocks || []);
+		const assetClassBySymbol = {};
+
+		for (const symbol of cryptoSymbols) {
+			assetClassBySymbol[String(symbol).trim().toUpperCase()] = 'crypto';
+		}
+		for (const symbol of stockSymbols) {
+			assetClassBySymbol[String(symbol).trim().toUpperCase()] = 'stock';
+		}
+
+		return assetClassBySymbol;
 	}
 
 	/**

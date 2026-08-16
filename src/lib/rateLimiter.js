@@ -5,8 +5,27 @@ const rateLimit = new Map();
 
 const MAX_KEYS = 10000;
 // Protection against memory exhaustion
+const DEFAULT_MAX_REQUESTS = 100;
+const DEFAULT_WINDOW_MS = 900000;
+const invalidConfigWarnings = new Set();
 
 let testModeEnabled = false;
+
+function readPositiveInteger(name, fallback) {
+	const rawValue = process.env[name];
+	if (rawValue === undefined) return fallback;
+
+	const value = Number(rawValue.trim());
+	if (!/^\d+$/.test(rawValue.trim()) || !Number.isSafeInteger(value) || value <= 0) {
+		if (!invalidConfigWarnings.has(name)) {
+			invalidConfigWarnings.add(name);
+			console.warn(`[RateLimiter] Invalid ${name}; using the safe default.`);
+		}
+		return fallback;
+	}
+
+	return value;
+}
 
 // Periodic cleanup
 setInterval(() => {
@@ -27,8 +46,8 @@ function rateLimiter(req, res, next) {
 		return next();
 	}
 
-	const maxRequests = parseInt(process.env.RATE_LIMIT_MAX || '100', 10);
-	const windowMs = parseInt(process.env.RATE_LIMIT_WINDOW_MS || '900000', 10);
+	const maxRequests = readPositiveInteger('RATE_LIMIT_MAX', DEFAULT_MAX_REQUESTS);
+	const windowMs = readPositiveInteger('RATE_LIMIT_WINDOW_MS', DEFAULT_WINDOW_MS);
 
 	const ip = req.ip || req.socket?.remoteAddress || '127.0.0.1';
 	const now = Date.now();

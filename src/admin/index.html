@@ -36,7 +36,23 @@
         </div>
         <button id="clear-key" class="button-ghost" type="button">Clear key</button>
       </header>
-      <section class="connection-card" aria-labelledby="connection-title">
+      <section id="firebase-auth" class="connection-card auth-card" aria-labelledby="firebase-auth-title" hidden>
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Authentication</p>
+            <h2 id="firebase-auth-title">Admin sign-in</h2>
+          </div>
+          <span class="security-chip">Firebase Auth</span>
+        </div>
+        <div id="auth-form" class="auth-form">
+          <label>Email <input id="auth-email" type="email" autocomplete="username"></label>
+          <label>Password <input id="auth-password" type="password" autocomplete="current-password"></label>
+          <button id="sign-in" class="button-primary" type="button">Sign in</button>
+        </div>
+        <button id="sign-out" class="button-ghost" type="button" hidden>Sign out</button>
+        <p id="auth-state" class="request-state" aria-live="polite">Checking sign-in configuration…</p>
+      </section>
+      <section id="legacy-connection" class="connection-card" aria-labelledby="connection-title" hidden>
         <div class="section-heading">
           <div>
             <p class="eyebrow">Authentication</p>

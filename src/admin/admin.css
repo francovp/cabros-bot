@@ -47,6 +47,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .section-heading h2 { margin: 0; font-size: 1rem; }
 .security-chip { padding: .3rem .55rem; border: 1px solid #2a6d62; border-radius: 999px; background: #103b3a; color: var(--success); font-size: .72rem; font-weight: 700; }
 .connection-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: .8rem; margin-top: .9rem; }
+.auth-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: end; gap: .8rem; margin-top: .9rem; }
+.auth-form button { justify-self: start; }
 h2, h3 { margin-top: 0; }
 label { display: grid; gap: .4rem; }
 input, select, textarea { width: 100%; border: 1px solid var(--border-bright); border-radius: .65rem; background: #091727; color: inherit; padding: .65rem .75rem; }
@@ -88,4 +90,4 @@ textarea { resize: vertical; font-family: ui-monospace, SFMono-Regular, Consolas
 .raw-status[open] summary { margin-bottom: .7rem; }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; } }
 @media (max-width: 58rem) { .console-shell { grid-template-columns: 1fr; } .console-sidebar { min-height: 0; position: static; } .console-nav { grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr)); } .console-nav .nav-label, .sidebar-note { display: none; } .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (max-width: 36rem) { .console-shell { width: min(100% - 1rem, 92rem); padding: .5rem 0; } .topbar, .connection-row, .dashboard-hero { align-items: stretch; grid-template-columns: 1fr; flex-direction: column; } .topbar button, .connection-row button { width: 100%; } .metric-grid { grid-template-columns: 1fr; } }
+@media (max-width: 36rem) { .console-shell { width: min(100% - 1rem, 92rem); padding: .5rem 0; } .topbar, .connection-row, .auth-form, .dashboard-hero { align-items: stretch; grid-template-columns: 1fr; flex-direction: column; } .topbar button, .connection-row button, .auth-form button { width: 100%; } .metric-grid { grid-template-columns: 1fr; } }

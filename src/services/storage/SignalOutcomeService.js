@@ -2,18 +2,52 @@
 
 const admin = require('firebase-admin');
 const AlertStorageService = require('./AlertStorageService');
+const equityMarketDataService = require('./EquityMarketDataService');
+const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
 const { MainClient } = require('binance');
 
 const COLLECTION_NAME = 'tradingSignalOutcomes';
+const HEARTBEAT_COLLECTION_NAME = 'workerHeartbeats';
+const HEARTBEAT_DOCUMENT_ID = 'signal-outcome';
+const HEARTBEAT_WRITE_TIMEOUT_MS = 5000;
+const MAX_WORKER_DRAIN_TIMEOUT_MS = 30000;
 const MAX_TIMER_DELAY_MS = 2147483647;
+const WORKER_ROLES = new Set(['web', 'worker', 'disabled']);
 let binanceClient = null;
 let isEvaluating = false;
 let workerTimer = null;
+let activeEvaluationPromise = null;
+let shutdownRequested = false;
 let activeIntervalMs = null;
 let lastRunAt = null;
 let lastRunDurationMs = null;
+let lastRunScannedCount = 0;
 let lastRunEvaluatedCount = 0;
+let lastRunPendingCount = 0;
+let lastRunErrorCount = 0;
 let lastEvaluatedDoc = null;
+
+function awaitWithTimeout(promise, timeoutMs, message) {
+	return new Promise((resolve, reject) => {
+		let settled = false;
+		const timerId = setTimeout(() => {
+			settled = true;
+			reject(new Error(message));
+		}, timeoutMs);
+
+		Promise.resolve(promise).then((value) => {
+			if (settled) return;
+			settled = true;
+			globalThis.clearTimeout?.(timerId);
+			resolve(value);
+		}, (error) => {
+			if (settled) return;
+			settled = true;
+			globalThis.clearTimeout?.(timerId);
+			reject(error);
+		});
+	});
+}
 
 function getBinanceClient(requestOptions = {}) {
 	if (!binanceClient || (requestOptions && Object.keys(requestOptions).length > 0)) {
@@ -27,6 +61,48 @@ function getBinanceClient(requestOptions = {}) {
 function isEnabled() {
 	return process.env.ENABLE_SIGNAL_OUTCOME_TRACKING === 'true'
 		|| process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING === 'true';
+}
+
+function getWorkerRole() {
+	const configuredRole = String(process.env.SIGNAL_OUTCOME_WORKER_ROLE || 'web').trim().toLowerCase();
+	return WORKER_ROLES.has(configuredRole) ? configuredRole : 'web';
+}
+
+async function persistWorkerHeartbeat() {
+	if (getWorkerRole() === 'disabled') {
+		return;
+	}
+
+	try {
+		const firestore = AlertStorageService.getFirestore();
+		if (!firestore) {
+			return;
+		}
+
+		const status = getWorkerStatus();
+		await awaitWithTimeout(firestore.collection(HEARTBEAT_COLLECTION_NAME).doc(HEARTBEAT_DOCUMENT_ID).set({
+			worker: 'signal-outcome',
+			role: status.role,
+			enabled: status.enabled,
+			running: status.running,
+			shutdownRequested: status.shutdownRequested,
+			intervalMs: status.intervalMs,
+			batchLimit: status.batchLimit,
+			maxDurationMs: status.maxDurationMs,
+			isEvaluating: status.isEvaluating,
+			lastRunAt: status.lastRunAt
+				? admin.firestore.Timestamp.fromDate(status.lastRunAt)
+				: null,
+			lastRunDurationMs: status.lastRunDurationMs,
+			lastRunScannedCount: status.lastRunScannedCount,
+			lastRunEvaluatedCount: status.lastRunEvaluatedCount,
+			lastRunPendingCount: status.lastRunPendingCount,
+			lastRunErrorCount: status.lastRunErrorCount,
+			updatedAt: admin.firestore.Timestamp.fromDate(new Date()),
+		}, { merge: true }), HEARTBEAT_WRITE_TIMEOUT_MS, `Heartbeat write timed out after ${HEARTBEAT_WRITE_TIMEOUT_MS}ms`);
+	} catch (error) {
+		console.warn('[SignalOutcomeService] Failed to persist worker heartbeat:', error.message);
+	}
 }
 
 function parsePositiveInteger(val, defaultVal) {
@@ -68,28 +144,44 @@ function normalizeSymbolAndExchange(rawSymbol, rawExchange) {
 	return { exchange, symbol: parts[0] };
 }
 
-function determineEligibility(normSymbolInfo, entryPrice) {
-	if (normSymbolInfo.symbol === 'UNKNOWN' || normSymbolInfo.exchange === 'UNKNOWN') {
+function normalizeAssetClass(rawAssetClass) {
+	const assetClass = String(rawAssetClass || '').trim().toLowerCase();
+	return ['crypto', 'stock'].includes(assetClass) ? assetClass : null;
+}
+
+function determineEligibility(normSymbolInfo, assetClass, entryPrice, equityProviderName = null, entryPriceReason = null) {
+	const isClassifiedBareStock = normSymbolInfo.exchange === 'UNKNOWN' && assetClass === 'stock';
+	if (normSymbolInfo.symbol === 'UNKNOWN' || (normSymbolInfo.exchange === 'UNKNOWN' && !isClassifiedBareStock)) {
 		return {
 			state: 'unparseable_symbol',
 			reason: 'Symbol or exchange unparseable or unknown',
 		};
 	}
-	if (normSymbolInfo.exchange !== 'BINANCE') {
+	if (normSymbolInfo.exchange !== 'BINANCE'
+		&& !isClassifiedBareStock
+		&& !equityMarketDataService.isSupportedExchange(normSymbolInfo.exchange)) {
 		return {
 			state: 'unsupported_exchange',
 			reason: `Exchange ${normSymbolInfo.exchange} not supported by Binance market-data evaluator`,
 		};
 	}
+	if (normSymbolInfo.exchange !== 'BINANCE' && !equityProviderName) {
+		return {
+			state: equityMarketDataService.REASONS.NOT_CONFIGURED,
+			reason: 'Twelve Data equity market-data provider is not configured',
+		};
+	}
 	if (entryPrice === null || entryPrice === undefined) {
 		return {
-			state: 'missing_entry_price',
-			reason: 'Entry price unavailable for symbol',
+			state: equityProviderName ? 'equity_provider_unavailable' : 'missing_entry_price',
+			reason: entryPriceReason || (equityProviderName
+				? `${equityProviderName} entry price unavailable for symbol`
+				: 'Entry price unavailable for symbol'),
 		};
 	}
 	return {
 		state: 'supported_provider',
-		reason: 'Binance market data supported',
+		reason: equityProviderName ? `${equityProviderName} market data supported` : 'Binance market data supported',
 	};
 }
 
@@ -103,7 +195,7 @@ const WINDOW_CONFIGS = {
 /**
  * Persist signal metadata to Firestore.
  */
-async function recordSignal({
+async function recordSignalInternal({
 	requestId,
 	source,
 	symbol,
@@ -118,6 +210,7 @@ async function recordSignal({
 	sources,
 	tokenUsage,
 	processingTimeMs,
+	assetClass,
 } = {}) {
 	if (!isEnabled()) {
 		return null;
@@ -130,10 +223,13 @@ async function recordSignal({
 
 	try {
 		const normSymbolInfo = normalizeSymbolAndExchange(symbol, exchange);
+		const normAssetClass = normalizeAssetClass(assetClass);
 		const normSide = normalizeSide(side);
 		const now = new Date();
+		const equityProviderName = equityMarketDataService.getProviderName(normSymbolInfo.exchange, normAssetClass);
 
 		let entryPrice = typeof price === 'number' ? price : null;
+		let entryPriceReason = null;
 		if (entryPrice === null && normSymbolInfo.exchange === 'BINANCE') {
 			try {
 				const client = getBinanceClient();
@@ -144,9 +240,19 @@ async function recordSignal({
 			} catch (err) {
 				console.warn('[SignalOutcomeService] Failed to fetch entry price from Binance:', err.message);
 			}
+		} else if (entryPrice === null && equityProviderName) {
+			try {
+				entryPrice = await equityMarketDataService.getEntryPrice({
+					symbol: normSymbolInfo.symbol,
+					exchange: normSymbolInfo.exchange === 'UNKNOWN' ? undefined : normSymbolInfo.exchange,
+				});
+			} catch (err) {
+				entryPriceReason = err.reason || equityMarketDataService.REASONS.UNAVAILABLE;
+				console.warn('[SignalOutcomeService] Failed to fetch equity entry price:', entryPriceReason);
+			}
 		}
 
-		const eligibility = determineEligibility(normSymbolInfo, entryPrice);
+		const eligibility = determineEligibility(normSymbolInfo, normAssetClass, entryPrice, equityProviderName, entryPriceReason);
 		const isEligible = eligibility.state === 'supported_provider';
 
 		const outcomes = {};
@@ -168,6 +274,7 @@ async function recordSignal({
 			source: typeof source === 'string' ? source : 'unknown',
 			symbol: normSymbolInfo.symbol,
 			exchange: normSymbolInfo.exchange,
+			assetClass: normAssetClass,
 			timeframe: timeframe ? String(timeframe).toLowerCase() : null,
 			setupType: setupType ? String(setupType).toLowerCase() : null,
 			score: typeof score === 'number' ? score : null,
@@ -178,6 +285,7 @@ async function recordSignal({
 			sources: Array.isArray(sources) ? sources : [],
 			tokenUsage: tokenUsage || null,
 			processingTimeMs: typeof processingTimeMs === 'number' ? processingTimeMs : null,
+			marketDataProvider: normSymbolInfo.exchange === 'BINANCE' ? 'binance' : equityProviderName,
 			eligibilityState: eligibility.state,
 			eligibilityReason: eligibility.reason,
 			outcomeEvaluated: !isEligible,
@@ -193,11 +301,15 @@ async function recordSignal({
 	}
 }
 
+function recordSignal(params) {
+	return trackBackgroundTask(recordSignalInternal(params));
+}
+
 /**
  * Scan for pending signals and evaluate outcomes that have passed their target time.
  * Accepts optional options to control batch limit and duration budget.
  */
-async function evaluatePendingOutcomes(options = {}) {
+async function evaluatePendingOutcomesInternal(options = {}) {
 	if (!isEnabled()) {
 		return { scannedCount: 0, evaluatedCount: 0, skipped: true, reason: 'disabled' };
 	}
@@ -210,6 +322,8 @@ async function evaluatePendingOutcomes(options = {}) {
 	const startTime = Date.now();
 	let scannedCount = 0;
 	let evaluatedCount = 0;
+	let pendingCount = 0;
+	let errorCount = 0;
 
 	try {
 		const firestore = AlertStorageService.getFirestore();
@@ -251,7 +365,6 @@ async function evaluatePendingOutcomes(options = {}) {
 		}
 
 		const now = Date.now();
-		const client = getBinanceClient();
 		let sweepDeadlineExceeded = false;
 
 		for (const doc of snapshot.docs) {
@@ -265,6 +378,9 @@ async function evaluatePendingOutcomes(options = {}) {
 			const entryPrice = data.price;
 			const side = data.side;
 			const receivedAtMs = data.receivedAt.toDate().getTime();
+			const equityProviderName = data.exchange === 'BINANCE'
+				? null
+				: equityMarketDataService.getProviderName(data.exchange, data.assetClass);
 
 			if (!entryPrice || typeof entryPrice !== 'number') {
 				// Mark evaluated if entry price is invalid/missing
@@ -286,8 +402,13 @@ async function evaluatePendingOutcomes(options = {}) {
 				continue;
 			}
 
-			if (data.exchange !== 'BINANCE') {
-				const state = (data.exchange === 'UNKNOWN' || data.symbol === 'UNKNOWN') ? 'unparseable_symbol' : 'unsupported_exchange';
+			if (data.exchange !== 'BINANCE' && !equityProviderName) {
+				const isClassifiedBareStock = data.exchange === 'UNKNOWN' && data.assetClass === 'stock';
+				const state = (data.symbol === 'UNKNOWN' || (data.exchange === 'UNKNOWN' && !isClassifiedBareStock))
+					? 'unparseable_symbol'
+					: ((equityMarketDataService.isSupportedExchange(data.exchange) || isClassifiedBareStock) && !equityProviderName
+						? equityMarketDataService.REASONS.NOT_CONFIGURED
+						: 'unsupported_exchange');
 				const outcomes = { ...data.outcomes };
 				for (const winKey of Object.keys(outcomes)) {
 					if (outcomes[winKey].status === 'pending') {
@@ -298,7 +419,12 @@ async function evaluatePendingOutcomes(options = {}) {
 				await doc.ref.update({
 					outcomeEvaluated: true,
 					eligibilityState: state,
-					eligibilityReason: state === 'unparseable_symbol' ? 'Symbol or exchange unparseable or unknown' : `Exchange ${data.exchange} not supported by Binance market-data evaluator`,
+					eligibilityReason: state === 'unparseable_symbol'
+						? 'Symbol or exchange unparseable or unknown'
+						: state === equityMarketDataService.REASONS.NOT_CONFIGURED
+							? 'Twelve Data equity market-data provider is not configured'
+							: `Exchange ${data.exchange} not supported by Binance market-data evaluator`,
+					marketDataProvider: data.marketDataProvider || equityProviderName,
 					outcomes,
 				});
 				evaluatedCount++;
@@ -331,37 +457,41 @@ async function evaluatePendingOutcomes(options = {}) {
 
 				const config = WINDOW_CONFIGS[winKey];
 
-				const abortController = new AbortController();
-				const requestOptions = {
-					timeout: Math.max(1, remainingMs),
-					signal: abortController.signal,
-				};
+				let abortController = null;
+				let timerId = null;
 
 				try {
-					const sweepClient = getBinanceClient(requestOptions);
-					const klinesPromise = sweepClient.getKlines({
-						symbol: data.symbol,
-						interval: config.interval,
-						startTime: receivedAtMs,
-						endTime: targetTimeMs,
-						limit: 1000,
-					});
-
-					let timerId;
-					const timeoutPromise = new Promise((_, reject) => {
-						timerId = setTimeout(() => {
-							abortController.abort();
-							reject(new Error(`Signal outcome sweep deadline exceeded (${effectiveMaxDurationMs}ms)`));
-						}, remainingMs);
-					});
-
 					let klines;
-					try {
+					if (data.exchange === 'BINANCE') {
+						abortController = new AbortController();
+						const requestOptions = {
+							timeout: Math.max(1, remainingMs),
+							signal: abortController.signal,
+						};
+						const sweepClient = getBinanceClient(requestOptions);
+						const klinesPromise = sweepClient.getKlines({
+							symbol: data.symbol,
+							interval: config.interval,
+							startTime: receivedAtMs,
+							endTime: targetTimeMs,
+							limit: 1000,
+						});
+						const timeoutPromise = new Promise((_, reject) => {
+							timerId = setTimeout(() => {
+								abortController.abort();
+								reject(new Error(`Signal outcome sweep deadline exceeded (${effectiveMaxDurationMs}ms)`));
+							}, remainingMs);
+						});
 						klines = await Promise.race([klinesPromise, timeoutPromise]);
-					} finally {
-						if (timerId) {
-							clearTimeout(timerId);
-						}
+					} else {
+						klines = await equityMarketDataService.getHistoricalBars({
+							symbol: data.symbol,
+							exchange: data.exchange === 'UNKNOWN' ? undefined : data.exchange,
+							interval: config.interval,
+							startTime: receivedAtMs,
+							endTime: targetTimeMs,
+							timeoutMs: remainingMs,
+						});
 					}
 
 					if (!Array.isArray(klines) || klines.length === 0) {
@@ -404,9 +534,16 @@ async function evaluatePendingOutcomes(options = {}) {
 					outcome.maxAdverseExcursion = parseFloat(Math.min(0, mae).toFixed(4));
 					docUpdated = true;
 				} catch (error) {
-					abortController.abort();
+					if (abortController) {
+						abortController.abort();
+					}
+					errorCount++;
 					console.warn(`[SignalOutcomeService] Error evaluating window ${winKey} for ${data.symbol}:`, error.message);
-					if (error.message.includes('deadline exceeded') || error.name === 'AbortError') {
+					if (error instanceof equityMarketDataService.EquityMarketDataError) {
+						outcome.status = 'unavailable';
+						outcome.reason = error.reason;
+						docUpdated = true;
+					} else if (error.message.includes('deadline exceeded') || error.name === 'AbortError') {
 						allResolved = false;
 						sweepDeadlineExceeded = true;
 						break;
@@ -416,6 +553,10 @@ async function evaluatePendingOutcomes(options = {}) {
 						docUpdated = true;
 					} else {
 						allResolved = false; // retry on network/rate-limit error
+					}
+				} finally {
+					if (timerId) {
+						clearTimeout(timerId);
 					}
 				}
 			}
@@ -429,6 +570,10 @@ async function evaluatePendingOutcomes(options = {}) {
 				evaluatedCount++;
 			}
 
+			if (!allResolved) {
+				pendingCount++;
+			}
+
 			if (!sweepDeadlineExceeded) {
 				lastEvaluatedDoc = doc;
 			}
@@ -440,14 +585,45 @@ async function evaluatePendingOutcomes(options = {}) {
 
 		return { scannedCount, evaluatedCount, durationMs: Date.now() - startTime };
 	} catch (error) {
+		errorCount++;
 		console.warn('[SignalOutcomeService] Failed to evaluate pending outcomes:', error.message);
 		return { scannedCount, evaluatedCount, error: error.message };
 	} finally {
 		isEvaluating = false;
 		lastRunAt = new Date();
 		lastRunDurationMs = Date.now() - startTime;
+		lastRunScannedCount = scannedCount;
 		lastRunEvaluatedCount = evaluatedCount;
+		lastRunPendingCount = pendingCount;
+		lastRunErrorCount = errorCount;
 	}
+}
+
+function evaluatePendingOutcomes(options = {}) {
+	if (isEvaluating) {
+		return Promise.resolve({ scannedCount: 0, evaluatedCount: 0, skipped: true, reason: 'already_evaluating' });
+	}
+
+	const evaluationPromise = evaluatePendingOutcomesInternal(options);
+	const trackedPromise = evaluationPromise.finally(() => {
+		if (activeEvaluationPromise === trackedPromise) {
+			activeEvaluationPromise = null;
+		}
+	});
+	activeEvaluationPromise = trackedPromise;
+	return trackedPromise;
+}
+
+function runScheduledSweep() {
+	if (shutdownRequested) {
+		return;
+	}
+
+	evaluatePendingOutcomes()
+		.then(() => persistWorkerHeartbeat())
+		.catch((err) => {
+			console.warn('[SignalOutcomeService] Scheduled worker sweep failed:', err.message);
+		});
 }
 
 /**
@@ -458,9 +634,16 @@ function startWorker(options = {}) {
 		return false;
 	}
 
+	const source = options.source === 'worker' ? 'worker' : 'web';
+	if (getWorkerRole() !== source) {
+		return false;
+	}
+
 	if (workerTimer) {
 		return true;
 	}
+
+	shutdownRequested = false;
 
 	const DEFAULT_INTERVAL_MS = 300000;
 	let intervalMs;
@@ -478,20 +661,15 @@ function startWorker(options = {}) {
 
 	// Trigger initial sweep non-blockingly after server readiness
 	Promise.resolve().then(() => {
-		evaluatePendingOutcomes().catch((err) => {
-			console.warn('[SignalOutcomeService] Initial worker sweep failed:', err.message);
-		});
+		runScheduledSweep();
 	});
 
-	workerTimer = setInterval(() => {
-		evaluatePendingOutcomes().catch((err) => {
-			console.warn('[SignalOutcomeService] Periodic worker sweep failed:', err.message);
-		});
-	}, intervalMs);
+	workerTimer = setInterval(runScheduledSweep, intervalMs);
 
-	if (workerTimer && typeof workerTimer.unref === 'function') {
+	if (workerTimer && options.unref !== false && typeof workerTimer.unref === 'function') {
 		workerTimer.unref();
 	}
+	void persistWorkerHeartbeat();
 
 	return true;
 }
@@ -499,14 +677,33 @@ function startWorker(options = {}) {
 /**
  * Stop background autonomous evaluation worker and clear timers.
  */
-function stopWorker() {
+function stopWorker(options = {}) {
+	shutdownRequested = true;
 	if (workerTimer) {
 		clearInterval(workerTimer);
 		workerTimer = null;
 	}
 	activeIntervalMs = null;
-	isEvaluating = false;
 	lastEvaluatedDoc = null;
+
+	if (options.drain !== true || !activeEvaluationPromise) {
+		isEvaluating = false;
+		return persistWorkerHeartbeat();
+	}
+
+	const drainTimeoutMs = Math.min(getWorkerStatus().maxDurationMs, MAX_WORKER_DRAIN_TIMEOUT_MS);
+	return awaitWithTimeout(
+		activeEvaluationPromise,
+		drainTimeoutMs,
+		`Dedicated worker drain timed out after ${drainTimeoutMs}ms`,
+	)
+		.catch((error) => {
+			console.warn('[SignalOutcomeService] Dedicated worker drain failed:', error.message);
+		})
+		.then(() => {
+			isEvaluating = false;
+			return persistWorkerHeartbeat();
+		});
 }
 
 /**
@@ -528,15 +725,30 @@ function getWorkerStatus() {
 
 	return {
 		enabled: isEnabled(),
+		role: getWorkerRole(),
 		running: workerTimer !== null,
+		shutdownRequested,
 		intervalMs,
 		batchLimit,
 		maxDurationMs,
 		isEvaluating,
 		lastRunAt,
 		lastRunDurationMs,
+		lastRunScannedCount,
 		lastRunEvaluatedCount,
+		lastRunPendingCount,
+		lastRunErrorCount,
 		timerId: workerTimer ? true : null,
+	};
+}
+
+function createCoverageBucket() {
+	return {
+		received: 0,
+		eligible: 0,
+		evaluated: 0,
+		pending: 0,
+		unavailable: 0,
 	};
 }
 
@@ -577,6 +789,7 @@ async function getMetricsSummary({ from, to, limit } = {}) {
 		let totalSignalsUnavailable = 0;
 
 		const exchangeBreakdown = {};
+		const providerBreakdown = {};
 		const eligibilityBreakdown = {};
 
 		const evaluatedSignals = [];
@@ -584,6 +797,7 @@ async function getMetricsSummary({ from, to, limit } = {}) {
 		for (const doc of docs) {
 			const exchange = doc.exchange || 'UNKNOWN';
 			const symbol = doc.symbol || 'UNKNOWN';
+			const marketDataProvider = doc.marketDataProvider || (exchange === 'BINANCE' ? 'binance' : 'none');
 
 			let eligibilityState = doc.eligibilityState;
 			if (!eligibilityState) {
@@ -606,17 +820,16 @@ async function getMetricsSummary({ from, to, limit } = {}) {
 			eligibilityBreakdown[eligibilityState] = (eligibilityBreakdown[eligibilityState] || 0) + 1;
 
 			if (!exchangeBreakdown[exchange]) {
-				exchangeBreakdown[exchange] = {
-					received: 0,
-					eligible: 0,
-					evaluated: 0,
-					pending: 0,
-					unavailable: 0,
-				};
+				exchangeBreakdown[exchange] = createCoverageBucket();
+			}
+			if (!providerBreakdown[marketDataProvider]) {
+				providerBreakdown[marketDataProvider] = createCoverageBucket();
 			}
 			exchangeBreakdown[exchange].received++;
+			providerBreakdown[marketDataProvider].received++;
 			if (isEligible) {
 				exchangeBreakdown[exchange].eligible++;
+				providerBreakdown[marketDataProvider].eligible++;
 			}
 
 			const outcomesValues = doc.outcomes ? Object.values(doc.outcomes) : [];
@@ -626,13 +839,16 @@ async function getMetricsSummary({ from, to, limit } = {}) {
 			if (hasEvaluated) {
 				totalSignalsEvaluated++;
 				exchangeBreakdown[exchange].evaluated++;
+				providerBreakdown[marketDataProvider].evaluated++;
 				evaluatedSignals.push(doc);
 			} else if (hasPending) {
 				totalSignalsPending++;
 				exchangeBreakdown[exchange].pending++;
+				providerBreakdown[marketDataProvider].pending++;
 			} else {
 				totalSignalsUnavailable++;
 				exchangeBreakdown[exchange].unavailable++;
+				providerBreakdown[marketDataProvider].unavailable++;
 			}
 		}
 
@@ -750,9 +966,10 @@ async function getMetricsSummary({ from, to, limit } = {}) {
 			coveragePercent,
 			isCoverageComplete,
 			populationNote: !isCoverageComplete
-				? `Metrics represent ${totalSignalsEvaluated} evaluated Binance signals out of ${totalSignalsReceived} total received signals (${coveragePercent}% coverage).`
+				? `Metrics represent ${totalSignalsEvaluated} evaluated signals out of ${totalSignalsReceived} total received signals (${coveragePercent}% coverage).`
 				: 'Metrics represent 100% of received signals.',
 			exchangeBreakdown,
+			providerBreakdown,
 			eligibilityBreakdown,
 			windows: windowStats,
 			drawdownProxy: {
@@ -786,5 +1003,7 @@ module.exports = {
 	startWorker,
 	stopWorker,
 	getWorkerStatus,
+	getWorkerRole,
 	COLLECTION_NAME,
+	HEARTBEAT_COLLECTION_NAME,
 };

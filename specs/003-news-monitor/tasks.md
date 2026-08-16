@@ -16,7 +16,7 @@
 
 ## Path Conventions
 
-- **Single project**: `src/`, `tests/` at repository root (Node.js 20.x, Express REST API)
+- **Single project**: `src/`, `tests/` at repository root (Node.js 24.x, Express REST API)
 
 ---
 
@@ -25,8 +25,8 @@
 **Purpose**: Project initialization and dependency setup
 
 - [X] T001 Install Azure AI Inference dependencies in package.json (@azure-rest/ai-inference, @azure/core-auth, @azure/core-sse)
-- [x] T002 [P] Update .env.example with NEWS_* environment variables (ENABLE_NEWS_MONITOR, NEWS_ALERT_THRESHOLD, NEWS_CACHE_TTL_HOURS, NEWS_TIMEOUT_MS, NEWS_SYMBOLS_CRYPTO, NEWS_SYMBOLS_STOCKS, URL_SHORTENER_SERVICE, BITLY_ACCESS_TOKEN, TINYURL_API_KEY, PICSEE_API_KEY, REURL_API_KEY, CUTTLY_API_KEY, PIXNET0RZ_API_KEY)
-- [X] T003 [P] Update .env.example with AZURE_AI_* environment variables (AZURE_AI_ENDPOINT, AZURE_AI_API_KEY, AZURE_AI_MODEL)
+- [x] T002 [P] Update .env.example with NEWS_* environment variables (ENABLE_NEWS_MONITOR, NEWS_ALERT_THRESHOLD, NEWS_CACHE_TTL_HOURS, NEWS_TIMEOUT_MS, NEWS_SYMBOLS_CRYPTO, NEWS_SYMBOLS_STOCKS, URL_SHORTENER_SERVICE, PICSEE_API_KEY, CUTTLY_API_KEY; TinyURL requires no credential)
+- [X] T003 [P] Update .env.example with AZURE_LLM_* environment variables (AZURE_LLM_ENDPOINT, AZURE_LLM_KEY, AZURE_LLM_MODEL)
 - [X] T004 [P] Create directory structure for news monitor feature (src/controllers/webhooks/handlers/newsMonitor/, src/services/inference/, tests/integration/)
 
 ---
@@ -100,7 +100,7 @@
 
 ## Phase 4b: User Story 2b - WhatsApp Source URL Shortening (Priority: P2)
 
-**Goal**: Shorten source URLs in WhatsApp alerts using configurable URL shortening service (Bitly, TinyURL, PicSee, reurl, Cutt.ly, Pixnet0rz.tw) to reduce message size from ~25K chars to <10K chars while preserving source attribution
+**Goal**: Shorten source URLs in WhatsApp alerts using the configurable runtime services (PicSee, TinyURL, or Cutt.ly) to reduce message size from ~25K chars to <10K chars while preserving source attribution
 
 **Why this story**: Current implementation strips URLs entirely from WhatsApp messages. URL shortening enables traders to verify alert sources while keeping messages readable and within transmission limits. Multiple service support via native fetch implementation provides flexibility and fallback options.
 
@@ -108,17 +108,17 @@
 
 ### Integration Tests for User Story 2b
 
-- [x] T025 [P] [US2b] Create integration test for URL shortening with fallback in tests/integration/news-monitor-url-shortening.test.js (test Bitly success, timeout fallback, cache hits, graceful degradation)
+- [x] T025 [P] [US2b] Create integration test for URL shortening with fallback in tests/integration/news-monitor-url-shortening.test.js (test supported-provider success, timeout fallback, cache hits, graceful degradation)
 
 ### Implementation for User Story 2b
 
 - [x] T026 [US2b] Create URL shortener utility module in src/controllers/webhooks/handlers/newsMonitor/urlShortener.js (implement shortenUrl, shortenUrlsParallel functions using native fetch for multiple services with fallback to direct API calls)
 - [x] T027 [US2b] Implement in-memory URL cache (session-scoped) in src/controllers/webhooks/handlers/newsMonitor/urlShortener.js (Map-based cache keyed by original URL, prevents redundant shortening service calls)
-- [x] T028 [US2b] Integrate URL shortening into WhatsAppService formatter in src/services/notification/formatters/whatsappMarkdownFormatter.js (use URL_SHORTENER_SERVICE env var to select service, call shortenUrlsParallel for enriched citations, fallback to title-only on failure)
+- [x] T028 [US2b] Integrate URL shortening into WhatsAppService formatter in src/services/notification/formatters/whatsappMarkdownFormatter.js (use URL_SHORTENER_SERVICE env var to select service, call shortenUrlsParallel for enriched citations, fallback to original URLs on failure)
 - [x] T029 [US2b] Add URL shortening configuration validation in index.js (validate URL_SHORTENER_SERVICE value, check service-specific API key presence, log if shortening disabled)
-- [x] T030 [US2b] Verify native fetch implementation for URL shortening (multi-service URL shortening wrapper supporting Bitly, TinyURL, PicSee, Cutt.ly with direct API fallback)
+- [x] T030 [US2b] Verify native fetch implementation for URL shortening (multi-service URL shortening wrapper supporting TinyURL, PicSee, and Cutt.ly with direct API fallback)
 
-**Checkpoint**: User Story 2b complete - WhatsApp messages now include shortened source URLs via configurable service; graceful fallback to title-only if shortening unavailable
+**Checkpoint**: User Story 2b complete - WhatsApp messages now include shortened source URLs via configurable service; graceful fallback to original URLs if shortening unavailable
 
 
 
@@ -363,7 +363,7 @@ With multiple developers (after Foundational phase completes):
 **Independent Test Criteria**:
 - ✅ US1: Call endpoint with symbols, verify per-symbol results
 - ✅ US2: Trigger alert, verify both Telegram + WhatsApp receive message
-- ✅ US2b: Send enriched alert to WhatsApp, verify URLs are shortened via Bitly; verify fallback when unavailable
+- ✅ US2b: Send enriched alert to WhatsApp, verify URLs are shortened via a supported provider; verify fallback when unavailable
 - ✅ US3: Call endpoint twice within TTL, verify cached result
 - ✅ US4: Enable Binance, verify source="binance"; force timeout, verify source="gemini"
 - ✅ US5: Inject known event types, verify correct category and confidence

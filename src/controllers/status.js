@@ -4,8 +4,15 @@ const { scannerPresetService } = require('../services/scannerPresets/ScannerPres
 const idempotencyStorageService = require('../services/storage/IdempotencyStorageService');
 const { isFirestoreConfigured } = require('../services/storage/firestoreConfig');
 const SignalOutcomeService = require('../services/storage/SignalOutcomeService');
-
-const DEFAULT_TRADINGVIEW_MCP_URL = 'https://tradingview-mcp.onrender.com/mcp';
+const { jobQueue } = require('../services/jobs/JobQueue');
+const equityMarketDataService = require('../services/storage/EquityMarketDataService');
+const remoteConfigService = require('../services/remoteConfig/RemoteConfigService');
+const { tradingViewMcpService } = require('../services/tradingview/TradingViewMcpService');
+const {
+	getDeploymentCommit,
+	isPreviewEnvironment,
+	isProductionLikeEnvironment,
+} = require('../lib/deploymentEnvironment');
 const DEFAULT_AZURE_LLM_ENDPOINT = 'https://models.github.ai/inference';
 const DEFAULT_OPENROUTER_MODEL = 'google/gemini-2.0-flash-001';
 const DEFAULT_CF_AIG_MODEL = 'google-ai-studio/gemini-2.5-flash';
@@ -25,16 +32,11 @@ function getModelProvider() {
 }
 
 function getCommit() {
-	return process.env.RENDER_GIT_COMMIT
-		|| process.env.GIT_COMMIT
-		|| process.env.COMMIT_SHA
-		|| process.env.GITHUB_SHA
-		|| process.env.SOURCE_VERSION
-		|| null;
+	return getDeploymentCommit();
 }
 
-function isRenderPreview() {
-	return process.env.RENDER === 'true' && process.env.IS_PULL_REQUEST === 'true';
+function isPreview() {
+	return isPreviewEnvironment();
 }
 
 function getEnvironment() {
@@ -42,11 +44,11 @@ function getEnvironment() {
 		return process.env.SENTRY_ENVIRONMENT;
 	}
 
-	if (isRenderPreview()) {
+	if (isPreview()) {
 		return 'preview';
 	}
 
-	if (process.env.NODE_ENV === 'production' || process.env.RENDER === 'true') {
+	if (isProductionLikeEnvironment()) {
 		return 'production';
 	}
 
@@ -136,7 +138,7 @@ function getGeminiDependency({
 }
 
 function getStatus() {
-	const previewEnvironment = isRenderPreview();
+	const previewEnvironment = isPreview();
 	const modelProvider = getModelProvider();
 	const telegramFlagEnabled = isEnabled(process.env.ENABLE_TELEGRAM_BOT);
 	const telegramEnabled = telegramFlagEnabled && !previewEnvironment;
@@ -153,7 +155,11 @@ function getStatus() {
 	const tradingViewMcpEnrichmentEnabled = isEnabled(process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT);
 	const tradingViewVolumeConfirmationFlagEnabled = isEnabled(process.env.ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION);
 	const tradingViewVolumeConfirmationEnabled = tradingViewVolumeConfirmationFlagEnabled && tradingViewMcpEnrichmentEnabled;
-	const tradingViewMcpEnabled = tradingViewMcpEnrichmentEnabled || marketScannerEnabled;
+	const observedTradingViewMcpStatus = tradingViewMcpService.getStatus({ enabled: true });
+	const tradingViewMcpEnabled =
+		tradingViewMcpEnrichmentEnabled
+		|| marketScannerEnabled
+		|| observedTradingViewMcpStatus.lastCheckedAt !== null;
 	const firestoreEnabled = isEnabled(process.env.ENABLE_FIRESTORE_ALERT_STORAGE);
 	const firestoreScannerPresetsEnabled = isEnabled(process.env.ENABLE_FIRESTORE_SCANNER_PRESETS);
 	const firestoreJobStorageEnabled = isEnabled(process.env.ENABLE_FIRESTORE_JOB_STORAGE)
@@ -163,21 +169,27 @@ function getStatus() {
 	const binancePriceCheckEnabled = isEnabled(process.env.ENABLE_BINANCE_PRICE_CHECK);
 	const llmAlertEnrichmentEnabled = isEnabled(process.env.ENABLE_LLM_ALERT_ENRICHMENT);
 	const cloudflareAigEnabled = isEnabled(process.env.ENABLE_CLOUDFLARE_AIG);
-	const messageFooterMetadataEnabled = process.env.ENABLE_MESSAGE_FOOTER_METADATA !== 'false';
+	const runtimeConfig = remoteConfigService.getRuntimeConfig();
+	const messageFooterMetadataEnabled = runtimeConfig.ENABLE_MESSAGE_FOOTER_METADATA;
+	const remoteConfigStatus = remoteConfigService.getStatus();
 	const signalOutcomeTrackingEnabled = isEnabled(process.env.ENABLE_SIGNAL_OUTCOME_TRACKING)
 		|| isEnabled(process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING);
+	const equityMarketDataStatus = equityMarketDataService.getStatus();
 	const llmAlertEnrichmentDependencyEnabled = llmAlertEnrichmentEnabled && newsMonitorEnabled;
 
 	const telegram = dependencyStatus({
 		enabled: telegramEnabled,
 		configured: hasValue(process.env.BOT_TOKEN) && hasValue(process.env.TELEGRAM_CHAT_ID),
 	});
+	const whatsappChatId = previewEnvironment
+		? process.env.WHATSAPP_PREVIEW_CHAT_ID || process.env.WHATSAPP_CHAT_ID
+		: process.env.WHATSAPP_CHAT_ID;
 	const whatsapp = dependencyStatus({
 		enabled: whatsappEnabled,
 		configured:
 			hasValue(process.env.WHATSAPP_API_URL)
 			&& hasValue(process.env.WHATSAPP_API_KEY)
-			&& hasValue(process.env.WHATSAPP_CHAT_ID),
+			&& hasValue(whatsappChatId),
 	});
 	const discord = dependencyStatus({
 		enabled: discordEnabled,
@@ -188,13 +200,10 @@ function getStatus() {
 		geminiGroundingEnabled,
 		modelProvider,
 	});
-	const tradingViewMcp = dependencyStatus({
-		enabled: tradingViewMcpEnabled,
-		configured: hasValue(process.env.TRADINGVIEW_MCP_URL || DEFAULT_TRADINGVIEW_MCP_URL),
-	});
-	const tradingViewVolumeConfirmation = dependencyStatus({
+	const tradingViewRuntimeStatus = tradingViewMcpService.getStatus({ enabled: tradingViewMcpEnabled });
+	const tradingViewMcp = tradingViewRuntimeStatus;
+	const tradingViewVolumeConfirmation = tradingViewMcpService.getVolumeConfirmationStatus({
 		enabled: tradingViewVolumeConfirmationEnabled,
-		configured: hasValue(process.env.TRADINGVIEW_MCP_URL || DEFAULT_TRADINGVIEW_MCP_URL),
 	});
 	const firestore = dependencyStatus({
 		enabled: firestoreEnabled,
@@ -253,6 +262,15 @@ function getStatus() {
 	};
 
 	const signalOutcomeWorkerStatus = SignalOutcomeService.getWorkerStatus();
+	const jobExecutionQueueStatus = jobQueue.getStatus();
+	const signalOutcomeWorkerDependency = dependencyStatus({
+		enabled: signalOutcomeWorkerStatus.enabled,
+		configured: firestore.configured,
+	});
+	if (signalOutcomeWorkerStatus.role === 'disabled') {
+		signalOutcomeWorkerDependency.ready = false;
+		signalOutcomeWorkerDependency.status = 'disabled';
+	}
 
 	return {
 		service: {
@@ -270,7 +288,7 @@ function getStatus() {
 			newsMonitorTestMode: newsMonitorTestModeEnabled,
 			tradingViewMcpEnrichment: tradingViewMcpEnrichmentEnabled,
 			tradingViewVolumeConfirmation: tradingViewVolumeConfirmationFlagEnabled,
-			tradingViewConfluenceEnrichment: process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT !== 'false',
+			tradingViewConfluenceEnrichment: isEnabled(process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT),
 			tradingViewConfluenceMultiTimeframe: isEnabled(process.env.ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME),
 			firestoreAlertStorage: firestoreEnabled,
 			firestoreScannerPresets: firestoreScannerPresetsEnabled,
@@ -284,7 +302,10 @@ function getStatus() {
 			cloudflareAig: cloudflareAigEnabled,
 			messageFooterMetadata: messageFooterMetadataEnabled,
 			signalOutcomeTracking: signalOutcomeTrackingEnabled,
+			equityMarketData: equityMarketDataStatus.enabled,
 			firestoreIdempotency: idempotencyStorageService.isEnabled(),
+			firebaseRemoteConfig: remoteConfigStatus.enabled,
+			jobExecutionWorker: jobExecutionQueueStatus.enabled,
 		},
 		deliveryChannels: {
 			telegram: {
@@ -323,21 +344,26 @@ function getStatus() {
 			}),
 			newsMonitorDedup,
 			idempotencyStorage: idempotencyStorageService.getStorageStatus(),
+			firebaseRemoteConfig: remoteConfigStatus,
 			scannerPresetStorage: scannerPresetService.getStorageStatus(),
+			equityMarketData: equityMarketDataStatus,
 			signalOutcomeWorker: {
-				...dependencyStatus({
-					enabled: signalOutcomeWorkerStatus.enabled,
-					configured: firestore.configured,
-				}),
+				...signalOutcomeWorkerDependency,
+				role: signalOutcomeWorkerStatus.role,
 				running: signalOutcomeWorkerStatus.running,
+				shutdownRequested: signalOutcomeWorkerStatus.shutdownRequested,
 				intervalMs: signalOutcomeWorkerStatus.intervalMs,
 				batchLimit: signalOutcomeWorkerStatus.batchLimit,
 				maxDurationMs: signalOutcomeWorkerStatus.maxDurationMs,
 				isEvaluating: signalOutcomeWorkerStatus.isEvaluating,
 				lastRunAt: signalOutcomeWorkerStatus.lastRunAt,
 				lastRunDurationMs: signalOutcomeWorkerStatus.lastRunDurationMs,
+				lastRunScannedCount: signalOutcomeWorkerStatus.lastRunScannedCount,
 				lastRunEvaluatedCount: signalOutcomeWorkerStatus.lastRunEvaluatedCount,
+				lastRunPendingCount: signalOutcomeWorkerStatus.lastRunPendingCount,
+				lastRunErrorCount: signalOutcomeWorkerStatus.lastRunErrorCount,
 			},
+			jobExecutionQueue: jobExecutionQueueStatus,
 		},
 	};
 }

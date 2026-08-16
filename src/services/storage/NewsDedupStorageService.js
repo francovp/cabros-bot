@@ -19,6 +19,61 @@
 const admin = require('firebase-admin');
 
 const COLLECTION_NAME = 'news-monitor-dedup';
+const DELIVERY_ROUTING_FIELDS = {
+	telegram: 'telegramChatId',
+	whatsapp: 'whatsappChatId',
+	discord: 'discordWebhookFingerprint',
+};
+
+function mergeRoutingData(existingRouting = {}, updatedRouting = {}, channels) {
+	if (!Array.isArray(channels)) {
+		return updatedRouting;
+	}
+
+	const mergedRouting = { ...existingRouting };
+	if (Object.prototype.hasOwnProperty.call(updatedRouting, 'channels')) {
+		mergedRouting.channels = updatedRouting.channels;
+	}
+	for (const channel of channels) {
+		const field = DELIVERY_ROUTING_FIELDS[channel];
+		if (field && Object.prototype.hasOwnProperty.call(updatedRouting, field)) {
+			mergedRouting[field] = updatedRouting[field];
+		}
+	}
+	return mergedRouting;
+}
+
+function mergeDeliveryData(existingData = {}, updatedData = {}, options = {}) {
+	const deliveryChannels = Array.isArray(options.deliveryChannels) ? options.deliveryChannels : null;
+	if (!deliveryChannels
+		&& (!Array.isArray(existingData.deliveryResults) || !Array.isArray(updatedData.deliveryResults))) {
+		return updatedData;
+	}
+	const updatedResults = deliveryChannels
+		? (Array.isArray(updatedData.deliveryResults) ? updatedData.deliveryResults : [])
+			.filter((result) => result && deliveryChannels.includes(result.channel))
+		: updatedData.deliveryResults;
+	const mergedData = {
+		...existingData,
+		...updatedData,
+	};
+
+	if (Array.isArray(existingData.deliveryResults) && Array.isArray(updatedResults)) {
+		const resultByChannel = new Map();
+		for (const result of [...existingData.deliveryResults, ...updatedResults]) {
+			if (result && result.channel) {
+				resultByChannel.set(result.channel, result);
+			}
+		}
+		mergedData.deliveryResults = Array.from(resultByChannel.values());
+	}
+
+	if (deliveryChannels && (existingData.routing || updatedData.routing)) {
+		mergedData.routing = mergeRoutingData(existingData.routing, updatedData.routing, deliveryChannels);
+	}
+
+	return mergedData;
+}
 
 // Lazy Firestore singleton (shared with AlertStorageService via firebase-admin)
 let db = null;
@@ -88,14 +143,12 @@ async function hasEntry(key) {
 }
 
 /**
- * Retrieve cached entry data from Firestore if valid and not expired.
- *
- * Fail-open: returns null on any Firestore error.
+ * Retrieve cached entry data and its absolute Firestore expiry.
  *
  * @param {string} key - Dedup key (e.g. "BTCUSDT:price_surge")
- * @returns {Promise<Object|null>} Stored data object or null if not found/expired
+ * @returns {Promise<{data: Object, expiresAtMs: number}|null>}
  */
-async function getEntry(key) {
+async function getEntryRecord(key) {
 	const firestore = getFirestore();
 	if (!firestore) {
 		return null;
@@ -110,12 +163,13 @@ async function getEntry(key) {
 		}
 
 		const data = doc.data();
-		if (!data || !data.expiresAt) {
+		if (!data || !data.expiresAt || typeof data.expiresAt.toMillis !== 'function') {
 			return null;
 		}
 
+		const expiresAtMs = data.expiresAt.toMillis();
 		const now = admin.firestore.Timestamp.now();
-		if (data.expiresAt.toMillis() <= now.toMillis()) {
+		if (expiresAtMs <= now.toMillis()) {
 			// Expired — delete it asynchronously (fire-and-forget)
 			docRef.delete().catch(err => {
 				console.debug('[NewsDedupStorageService] Failed to delete expired entry:', err.message);
@@ -123,11 +177,27 @@ async function getEntry(key) {
 			return null;
 		}
 
-		return data.data || {};
+		return {
+			data: data.data || {},
+			expiresAtMs,
+		};
 	} catch (error) {
-		console.warn('[NewsDedupStorageService] getEntry error (fail-open):', error.message);
+		console.warn('[NewsDedupStorageService] getEntryRecord error (fail-open):', error.message);
 		return null;
 	}
+}
+
+/**
+ * Retrieve cached entry data from Firestore if valid and not expired.
+ *
+ * Fail-open: returns null on any Firestore error.
+ *
+ * @param {string} key - Dedup key (e.g. "BTCUSDT:price_surge")
+ * @returns {Promise<Object|null>} Stored data object or null if not found/expired
+ */
+async function getEntry(key) {
+	const record = await getEntryRecord(key);
+	return record ? record.data : null;
 }
 
 /**
@@ -135,9 +205,10 @@ async function getEntry(key) {
  *
  * @param {string} key - Dedup key
  * @param {number} ttlMs - TTL in milliseconds
+ * @param {string} [claimToken] - Optional owner token for a delivery lease
  * @returns {Promise<boolean>} true if claim succeeded, false if already claimed/exists
  */
-async function claimEntry(key, ttlMs) {
+async function claimEntry(key, ttlMs, claimToken) {
 	const firestore = getFirestore();
 	if (!firestore) {
 		return false;
@@ -161,7 +232,7 @@ async function claimEntry(key, ttlMs) {
 				key,
 				createdAt: now,
 				expiresAt,
-				data: { status: 'claiming' },
+				data: claimToken ? { status: 'claiming', claimToken } : { status: 'claiming' },
 			});
 			return true;
 		});
@@ -212,6 +283,90 @@ async function setEntry(key, ttlMs, data) {
 }
 
 /**
+ * Update an existing dedup entry without extending its original TTL.
+ *
+ * @param {string} key - Dedup key
+ * @param {Object} data - Updated cache payload
+ * @param {{deliveryChannels?: string[]}} options - Optional claimed-channel delta scope
+ * @returns {Promise<boolean>} true when an active entry was updated
+ */
+async function updateEntry(key, data, options = {}) {
+	const firestore = getFirestore();
+	if (!firestore) {
+		return false;
+	}
+
+	try {
+		const now = admin.firestore.Timestamp.now();
+		const docRef = firestore.collection(COLLECTION_NAME).doc(key);
+		return await firestore.runTransaction(async transaction => {
+			const existing = await transaction.get(docRef);
+			const existingData = existing.exists && existing.data();
+			if (!existing.exists || !existingData?.expiresAt
+				|| typeof existingData.expiresAt.toMillis !== 'function'
+				|| existingData.expiresAt.toMillis() <= now.toMillis()) {
+				return false;
+			}
+
+			transaction.set(docRef, {
+				key,
+				createdAt: existingData.createdAt,
+				expiresAt: existingData.expiresAt,
+				data: mergeDeliveryData(existingData.data, data, options) || null,
+			});
+			return true;
+		});
+	} catch (error) {
+		console.warn('[NewsDedupStorageService] updateEntry error (fail-open):', error.message);
+		return false;
+	}
+}
+
+/**
+ * Renew an active delivery lease without changing its payload.
+ *
+ * @param {string} key - Lease key
+ * @param {number} ttlMs - Lease duration in milliseconds
+ * @param {string} [claimToken] - Optional owner token that must match the active lease
+ * @returns {Promise<boolean|null>} true when renewed, false when ownership loss is proven, null when storage state is indeterminate
+ */
+async function renewEntry(key, ttlMs, claimToken) {
+	const firestore = getFirestore();
+	if (!firestore) {
+		return false;
+	}
+
+	try {
+		const now = admin.firestore.Timestamp.now();
+		const expiresAt = admin.firestore.Timestamp.fromMillis(now.toMillis() + ttlMs);
+		const docRef = firestore.collection(COLLECTION_NAME).doc(key);
+		return await firestore.runTransaction(async transaction => {
+			const existing = await transaction.get(docRef);
+			const existingData = existing.exists && existing.data();
+			if (!existing.exists || !existingData?.expiresAt
+				|| typeof existingData.expiresAt.toMillis !== 'function'
+				|| existingData.expiresAt.toMillis() <= now.toMillis()) {
+				return false;
+			}
+			if (claimToken && existingData.data?.claimToken !== claimToken) {
+				return false;
+			}
+
+			transaction.set(docRef, {
+				key,
+				createdAt: existingData.createdAt,
+				expiresAt,
+				data: existingData.data || null,
+			});
+			return true;
+		});
+	} catch (error) {
+		console.warn('[NewsDedupStorageService] renewEntry error (fail-open):', error.message);
+		return null;
+	}
+}
+
+/**
  * Delete a dedup entry (mainly for testing / manual invalidation).
  *
  * @param {string} key - Dedup key
@@ -245,9 +400,12 @@ module.exports = {
 	isEnabled,
 	isReady,
 	hasEntry,
+	getEntryRecord,
 	getEntry,
 	claimEntry,
 	setEntry,
+	updateEntry,
+	renewEntry,
 	deleteEntry,
 	COLLECTION_NAME,
 	// Exported for testing — reset the cached db singleton between tests

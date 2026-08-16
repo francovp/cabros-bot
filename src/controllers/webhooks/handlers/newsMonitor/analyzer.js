@@ -8,14 +8,17 @@
 const { analyzeNewsForSymbol } = require('../../../../services/grounding/gemini');
 const { getCacheInstance } = require('./cache');
 const { getEnrichmentService } = require('../../../../services/inference/enrichmentService');
+const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteConfigService');
 const { AnalysisStatus, EventCategory } = require('./constants');
 const { GROUNDING_MODEL_NAME, ENABLE_NEWS_MONITOR_TEST_MODE } = require('../../../../services/grounding/config');
+const geminiQuotaManager = require('../../../../services/grounding/geminiQuotaManager');
 const { getPromptService, PromptKeys } = require('../../../../services/prompts');
 const { MainClient } = require('binance');
+const { createHash } = require('node:crypto');
 const {
 	sendWithNotificationRouting,
 	getRequestedChannels,
-	getDeliveredChannels,
+	validateNotificationRouting,
 } = require('../../../../services/notification/requestRouting');
 
 const promptService = getPromptService();
@@ -43,91 +46,165 @@ function getNotificationManager() {
 	return notificationManager;
 }
 
-function hasExplicitRouting(routing = {}) {
-	return Array.isArray(routing.channels) ||
-		typeof routing.telegramChatId === 'string' ||
-		typeof routing.whatsappChatId === 'string';
+const ROUTING_IDENTITY_FIELDS = {
+	telegram: 'telegramChatId',
+	whatsapp: 'whatsappChatId',
+	discord: 'discordWebhookFingerprint',
+};
+
+function hashDiscordWebhook(webhookUrl) {
+	if (typeof webhookUrl !== 'string' || webhookUrl.length === 0) {
+		return undefined;
+	}
+	return createHash('sha256').update(webhookUrl).digest('hex');
 }
 
-function shouldRedeliverCachedAlert(notificationMgr, cachedDeliveryResults, routing = {}) {
-	if (!notificationMgr) {
-		return false;
+function getChannelDefaultDestination(notificationMgr, channel) {
+	const service = notificationMgr?.channels?.get(channel);
+	if (channel === 'telegram') return service?.chatId;
+	if (channel === 'whatsapp') return service?.chatId;
+	if (channel === 'discord') return service?.webhookUrl;
+	return undefined;
+}
+
+function getRoutingDestination(notificationMgr, routing = {}, channel) {
+	if (channel === 'discord') {
+		if (typeof routing.discordWebhookFingerprint === 'string') return routing.discordWebhookFingerprint;
+		return hashDiscordWebhook(routing.discordWebhookUrl || getChannelDefaultDestination(notificationMgr, channel));
 	}
 
-	if (hasExplicitRouting(routing)) {
-		return true;
+	const field = ROUTING_IDENTITY_FIELDS[channel];
+	if (field && typeof routing[field] === 'string') return routing[field];
+	return getChannelDefaultDestination(notificationMgr, channel);
+}
+
+function getStoredRoutingIdentity(routing = {}, channel) {
+	if (channel === 'discord') {
+		return routing.discordWebhookFingerprint || hashDiscordWebhook(routing.discordWebhookUrl);
+	}
+	return routing[ROUTING_IDENTITY_FIELDS[channel]];
+}
+
+function getCachedRoutingMetadata(routing = {}, previousRouting = {}, notificationMgr) {
+	const isRequestedChannel = (channel) => !Array.isArray(routing.channels) || routing.channels.includes(channel);
+	const getIdentity = (channel) => isRequestedChannel(channel)
+		? getRoutingDestination(notificationMgr, routing, channel)
+		: getStoredRoutingIdentity(previousRouting, channel);
+	const metadata = {};
+	if (Array.isArray(routing.channels)) {
+		metadata.channels = [...routing.channels];
+	}
+	for (const [channel, field] of Object.entries(ROUTING_IDENTITY_FIELDS)) {
+		const identity = getIdentity(channel);
+		if (identity !== undefined) {
+			metadata[field] = identity;
+		}
+	}
+	return metadata;
+}
+
+function getCachedRedeliveryChannels(notificationMgr, cachedEntry = {}, routing = {}) {
+	if (!notificationMgr) {
+		return [];
 	}
 
 	const requestedChannels = getRequestedChannels(notificationMgr, routing);
-	const deliveredChannels = getDeliveredChannels(cachedDeliveryResults);
-	if (requestedChannels.length !== deliveredChannels.length) {
-		return true;
+	const cachedResults = new Map(
+		(Array.isArray(cachedEntry.deliveryResults) ? cachedEntry.deliveryResults : [])
+			.filter((result) => result && result.channel)
+			.map((result) => [result.channel, result]),
+	);
+
+	return requestedChannels.filter((channel) => {
+		const cachedResult = cachedResults.get(channel);
+		const destinationDiffers = getRoutingDestination(notificationMgr, cachedEntry.routing, channel)
+			!== getRoutingDestination(notificationMgr, routing, channel);
+		return !cachedResult || !cachedResult.success || destinationDiffers;
+	});
+}
+
+function getActiveCachedDeliveryResults(
+	cachedEntry = {},
+	requestedChannels = [],
+	retryChannels = [],
+	routing = {},
+	notificationMgr,
+) {
+	const requestedSet = new Set(requestedChannels);
+	const retrySet = new Set(retryChannels);
+
+	return (Array.isArray(cachedEntry.deliveryResults) ? cachedEntry.deliveryResults : [])
+		.filter((result) => {
+			if (!result || !requestedSet.has(result.channel)) {
+				return false;
+			}
+			if (!retrySet.has(result.channel)) {
+				return true;
+			}
+			return getRoutingDestination(notificationMgr, cachedEntry.routing, result.channel)
+				=== getRoutingDestination(notificationMgr, routing, result.channel);
+		});
+}
+
+function mergeDeliveryResults(cachedResults = [], retryResults = [], requestedChannels = []) {
+	const resultByChannel = new Map();
+	for (const result of [...cachedResults, ...retryResults]) {
+		if (result && result.channel) {
+			resultByChannel.set(result.channel, result);
+		}
 	}
 
-	const deliveredSet = new Set(deliveredChannels);
-	return requestedChannels.some((channel) => !deliveredSet.has(channel));
+	return requestedChannels
+		.map((channel) => resultByChannel.get(channel))
+		.filter(Boolean);
 }
 
-function getCachedRoutingMetadata(routing = {}) {
-	return {
-		channels: Array.isArray(routing.channels) ? [...routing.channels] : undefined,
-		telegramChatId: typeof routing.telegramChatId === 'string' ? routing.telegramChatId : undefined,
-		whatsappChatId: typeof routing.whatsappChatId === 'string' ? routing.whatsappChatId : undefined,
-	};
-}
-
-function cachedOverridesDiffer(cachedRouting = {}, routing = {}) {
-	return cachedRouting.telegramChatId !== (typeof routing.telegramChatId === 'string' ? routing.telegramChatId : undefined)
-		|| cachedRouting.whatsappChatId !== (typeof routing.whatsappChatId === 'string' ? routing.whatsappChatId : undefined);
-}
-
-function shouldRedeliverCachedAlertForRequest(notificationMgr, cachedEntry = {}, routing = {}) {
-	if (cachedOverridesDiffer(cachedEntry.routing, routing)) {
-		return true;
+function parseNewsTimeoutMs(value, fallback = 30000) {
+	if (value === undefined) {
+		return fallback;
 	}
-
-	return shouldRedeliverCachedAlert(notificationMgr, cachedEntry.deliveryResults, routing);
+	const str = String(value).trim();
+	if (str === '') {
+		return fallback;
+	}
+	if (!/^\d+$/.test(str)) {
+		console.warn('[Analyzer] Invalid NEWS_TIMEOUT_MS configuration, using default');
+		return fallback;
+	}
+	const parsed = Number(str);
+	if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed <= 0) {
+		console.warn('[Analyzer] Invalid NEWS_TIMEOUT_MS configuration, using default');
+		return fallback;
+	}
+	return parsed;
 }
 
-function parsePositiveInteger(value, fallback) {
-	const parsed = Number.parseInt(value, 10);
-	return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+function parseNewsAlertThreshold(value, fallback = 0.7) {
+	if (value === undefined) {
+		return fallback;
+	}
+	const str = String(value).trim();
+	if (str === '') {
+		return fallback;
+	}
+	if (!/^[+-]?(\d+(\.\d+)?|\.\d+)$/.test(str)) {
+		console.warn('[Analyzer] Invalid NEWS_ALERT_THRESHOLD configuration, using default');
+		return fallback;
+	}
+	const parsed = Number(str);
+	if (!Number.isFinite(parsed) || parsed < 0 || parsed > 1) {
+		console.warn('[Analyzer] Invalid NEWS_ALERT_THRESHOLD configuration, using default');
+		return fallback;
+	}
+	return parsed;
 }
 
 function isGeminiQuotaError(error) {
-	const status = Number(error && (error.status || error.statusCode || error.code));
-	if (status === 429) {
-		return true;
-	}
-
-	const message = String((error && error.message) || '').toUpperCase();
-	return message.includes('429') ||
-		message.includes('RESOURCE_EXHAUSTED') ||
-		message.includes('QUOTA');
+	return geminiQuotaManager.isQuotaError(error);
 }
 
 function getQuotaRetryDelayMs(error, attempt, baseDelayMs) {
-	const retryDelay = error && (error.retryDelay || error.retryAfter || error.retryDelayMs);
-	if (typeof retryDelay === 'number' && retryDelay >= 0) {
-		return retryDelay;
-	}
-
-	const message = String((error && error.message) || '');
-	const retryDelayMatch = message.match(/"?retry(?:\s|-)?delay"?\s*[:=]?\s*"?(\d+(?:\.\d+)?)(ms|s)?"?/i);
-	if (retryDelayMatch) {
-		const value = Number.parseFloat(retryDelayMatch[1]);
-		const unit = (retryDelayMatch[2] || 'ms').toLowerCase();
-		return unit === 's' ? value * 1000 : value;
-	}
-
-	const retryAfterMatch = message.match(/"?retry-after"?\s*[:=]?\s*"?(\d+(?:\.\d+)?)(ms|s)?"?/i);
-	if (retryAfterMatch) {
-		const value = Number.parseFloat(retryAfterMatch[1]);
-		const unit = (retryAfterMatch[2] || 's').toLowerCase();
-		return unit === 'ms' ? value : value * 1000;
-	}
-
-	return baseDelayMs * (2 ** Math.max(0, attempt - 1));
+	return geminiQuotaManager.extractRetryDelayMs(error, attempt, baseDelayMs);
 }
 
 function sleep(ms) {
@@ -273,13 +350,36 @@ class NewsAnalyzer {
 		this.enrichmentService = getEnrichmentService();
 		// Do NOT store notificationManager in constructor - get it dynamically
 		// to handle delayed initialization in tests and app startup
-		// Per-symbol timeout
-		this.timeout = parseInt(process.env.NEWS_TIMEOUT_MS || 60000);
-		this.alertThreshold = parseFloat(process.env.NEWS_ALERT_THRESHOLD || 0.7);
+
 		this.enableBinance = process.env.ENABLE_BINANCE_PRICE_CHECK === 'true';
-		this.geminiConcurrency = parsePositiveInteger(process.env.NEWS_GEMINI_CONCURRENCY, Infinity);
-		this.geminiQuotaMaxRetries = parsePositiveInteger(process.env.NEWS_GEMINI_QUOTA_MAX_RETRIES, 2);
-		this.geminiQuotaRetryBaseMs = parsePositiveInteger(process.env.NEWS_GEMINI_QUOTA_RETRY_BASE_MS, 1000);
+	}
+
+	get timeout() {
+		return this._timeoutOverride ?? parseNewsTimeoutMs(getRuntimeConfig().NEWS_TIMEOUT_MS);
+	}
+
+	set timeout(value) {
+		this._timeoutOverride = value;
+	}
+
+	get alertThreshold() {
+		return this._alertThresholdOverride ?? parseNewsAlertThreshold(getRuntimeConfig().NEWS_ALERT_THRESHOLD);
+	}
+
+	set alertThreshold(value) {
+		this._alertThresholdOverride = value;
+	}
+
+	get geminiConcurrency() {
+		return getRuntimeConfig().NEWS_GEMINI_CONCURRENCY;
+	}
+
+	get geminiQuotaMaxRetries() {
+		return getRuntimeConfig().NEWS_GEMINI_QUOTA_MAX_RETRIES;
+	}
+
+	get geminiQuotaRetryBaseMs() {
+		return getRuntimeConfig().NEWS_GEMINI_QUOTA_RETRY_BASE_MS;
 	}
 
 	calculateAdjustedConfidence(baseConfidence, marketContext) {
@@ -359,6 +459,8 @@ class NewsAnalyzer {
 				throw new Error('TIMEOUT');
 			}
 
+			await geminiQuotaManager.waitForCooldownIfNeeded({ maxWaitMs: remainingMs, throwOnExceeded: true });
+
 			try {
 				const timeoutPromise = new Promise((_, reject) => {
 					timeoutHandle = setTimeout(() => reject(new Error('TIMEOUT')), remainingMs);
@@ -374,7 +476,7 @@ class NewsAnalyzer {
 
 				lastQuotaError = error;
 				attempt += 1;
-				const delayMs = getQuotaRetryDelayMs(error, attempt, this.geminiQuotaRetryBaseMs);
+				const delayMs = geminiQuotaManager.triggerQuotaCooldown(error, attempt, this.geminiQuotaRetryBaseMs);
 				const remainingAfterAttemptMs = this.timeout - (Date.now() - startedAt);
 				if (delayMs >= remainingAfterAttemptMs) {
 					console.warn('[Analyzer] Gemini quota retry skipped; delay exceeds remaining budget:', symbol);
@@ -387,7 +489,7 @@ class NewsAnalyzer {
 					delayMs,
 					remainingMs: remainingAfterAttemptMs,
 				});
-				await sleep(delayMs);
+				await geminiQuotaManager.waitForCooldownIfNeeded({ maxWaitMs: remainingAfterAttemptMs, throwOnExceeded: true });
 			} finally {
 				clearTimeout(timeoutHandle);
 			}
@@ -451,17 +553,91 @@ class NewsAnalyzer {
 		// Try cache first
 		if (!dryRun) {
 			for (const category of Object.values(EventCategory)) {
-				if (category === EventCategory.NONE) continue;
-
 				const cached = await this.cache.get(symbol, category);
 				if (cached) {
 					console.debug('[Analyzer] Returning cached result:', symbol, category);
 					let deliveryResults = cached.deliveryResults;
 					if (cached.alert) {
 						const notificationMgr = getNotificationManager();
-						if (shouldRedeliverCachedAlertForRequest(notificationMgr, cached, routing)) {
-							deliveryResults = await sendWithNotificationRouting(notificationMgr, cached.alert, routing);
-						} else if (!notificationMgr) {
+						if (notificationMgr) {
+							validateNotificationRouting(notificationMgr, routing);
+							const requestedChannels = getRequestedChannels(notificationMgr, routing);
+							const retryChannels = getCachedRedeliveryChannels(notificationMgr, cached, routing);
+							const claimedRetryChannels = [];
+							for (const channel of retryChannels) {
+								if (await this.cache.claimDelivery(symbol, category, channel)) {
+									claimedRetryChannels.push(channel);
+								}
+							}
+							const activeCachedDeliveryResults = getActiveCachedDeliveryResults(
+								cached,
+								requestedChannels,
+								retryChannels,
+								routing,
+								notificationMgr,
+							);
+							if (claimedRetryChannels.length > 0) {
+								const leaseAbortControllers = new Map(
+									claimedRetryChannels.map((channel) => [channel, new AbortController()]),
+								);
+								const leaseOwnership = new Map(
+									claimedRetryChannels.map((channel) => [channel, true]),
+								);
+								const markLeaseOwnershipLost = (channel) => {
+									if (leaseOwnership.get(channel)) {
+										leaseOwnership.set(channel, false);
+										leaseAbortControllers.get(channel)?.abort('Cached delivery lease ownership lost');
+									}
+								};
+								const renewLease = async (channel) => {
+									try {
+										if (await this.cache.renewDelivery(symbol, category, channel) === false) {
+											markLeaseOwnershipLost(channel);
+										}
+									} catch (error) {
+										console.warn('[Analyzer] Cached delivery lease renewal indeterminate:', error.message);
+									}
+								};
+								const leaseRenewalIntervals = claimedRetryChannels.map((channel) => setInterval(
+									() => renewLease(channel),
+									this.cache.getDeliveryLeaseRenewIntervalMs(),
+								));
+								try {
+									const signalByChannel = Object.fromEntries(
+										claimedRetryChannels.map((channel) => [channel, leaseAbortControllers.get(channel).signal]),
+									);
+									const retryResults = await sendWithNotificationRouting(
+										notificationMgr,
+										cached.alert,
+										{ ...routing, channels: claimedRetryChannels },
+										{ signalByChannel },
+									);
+									await Promise.all(claimedRetryChannels.map(renewLease));
+									const ownedRetryChannels = claimedRetryChannels.filter((channel) => leaseOwnership.get(channel));
+									deliveryResults = mergeDeliveryResults(
+										activeCachedDeliveryResults,
+										retryResults.filter((result) => ownedRetryChannels.includes(result.channel)),
+										requestedChannels,
+									);
+									if (ownedRetryChannels.length > 0) {
+										await this.cache.set(symbol, category, {
+											...cached,
+											routing: getCachedRoutingMetadata(routing, cached.routing, notificationMgr),
+											deliveryResults,
+										}, {
+											preserveTtl: true,
+											deliveryChannels: ownedRetryChannels,
+											awaitPersistence: true,
+										});
+									}
+								} finally {
+									leaseRenewalIntervals.forEach(clearInterval);
+									claimedRetryChannels.forEach((channel) => this.cache.releaseDelivery(symbol, category, channel));
+								}
+							} else {
+								deliveryResults = activeCachedDeliveryResults;
+							}
+						} else {
 							deliveryResults = [];
 						}
 					}
@@ -591,6 +767,9 @@ class NewsAnalyzer {
 				requestId,
 				source: 'news-monitor',
 				symbol: alert.symbol,
+				assetClass: options.assetClassBySymbol
+					? options.assetClassBySymbol[String(alert.symbol).trim().toUpperCase()]
+					: null,
 				exchange: alert.marketContext && alert.marketContext.source === 'binance' ? 'BINANCE' : 'UNKNOWN',
 				timeframe: null,
 				setupType: 'news-alert',
@@ -611,7 +790,7 @@ class NewsAnalyzer {
 				cached: false,
 				requestId,
 			},
-			routing: getCachedRoutingMetadata(routing),
+			routing: getCachedRoutingMetadata(routing, {}, notificationMgr),
 			deliveryResults,
 		});
 
@@ -1087,4 +1266,8 @@ module.exports = {
 	calculateVolumeRatio,
 	calculateRSI,
 	isKlineOpen,
+	parseNewsTimeoutMs,
+	parseNewsAlertThreshold,
+	getCachedRoutingMetadata,
+	hashDiscordWebhook,
 };

@@ -30,6 +30,11 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 #### Security
 
 - `WEBHOOK_API_KEY` - API key used to secure `/api/*` endpoints. When configured, clients must provide the key via the `x-api-key` header (or the `api-key` query parameter)
+- `ENABLE_FIREBASE_ADMIN_AUTH` - Enable opt-in Firebase email/password authentication for the browser admin console (`false` by default)
+- `FIREBASE_WEB_API_KEY` - Public Firebase Web API key used by the browser sign-in flow; not a service-account credential
+- `FIREBASE_AUTH_DOMAIN` - Public Firebase Auth domain used by the browser sign-in flow
+- `FIREBASE_APP_ID` - Public Firebase Web app ID (optional for Auth, recommended)
+- `FIREBASE_WEB_CONFIG_JSON` - Optional JSON alternative containing the public Firebase Web config (`apiKey`, `authDomain`, `projectId`, and optional `appId`)
 
 #### WhatsApp Alerts (GreenAPI)
 
@@ -42,15 +47,34 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 
 - `ENABLE_DISCORD_ALERTS` - Enable Discord alerts (`true` or `false`, default: `false`)
 - `DISCORD_WEBHOOK_URL` - Discord webhook URL (e.g., `https://discord.com/api/webhooks/<id>/<token>`)
+- `DISCORD_MAX_RETRIES` - Additional Discord attempts after the first request (default: `2`)
+- `DISCORD_FALLBACK_RETRY_DELAY_MS` - Fallback delay for Discord 429 retries (default: `500` ms)
+- `DISCORD_MAX_RETRY_DELAY_MS` - Maximum individual Discord retry delay (default: `5000` ms)
+- `DISCORD_MAX_TOTAL_RETRY_WAIT_MS` - Maximum cumulative Discord retry wait (default: `10000` ms)
 
-#### URL Shortening (004-url-shortening)
+#### URL Shortening (003-news-monitor)
 
-- `BITLY_API_KEY` - Bitly API key for URL shortening (optional; when provided, long URLs in WhatsApp alerts are automatically shortened)
+- `URL_SHORTENER_SERVICE` - URL-shortening provider for WhatsApp citations (optional; defaults to `picsee`; supported values: `picsee`, `tinyurl`, `cuttly`)
+- `PICSEE_API_KEY` - PicSee API key, required when PicSee is selected
+- `CUTTLY_API_KEY` - Cuttly API key, required when Cuttly is selected
+- TinyURL uses its free endpoint and requires no credential. Bitly, reurl, and Pixnet0rz.tw are unavailable in the runtime.
 
 #### AI Grounding
 
 - `ENABLE_GEMINI_GROUNDING` - Enable Gemini-based alert enrichment (`true` or `false`)
 - `GEMINI_API_KEY` - Google API key for Gemini access
+- `GROUNDING_MODEL_NAME` - Grounding model when Brave Search is not forced (default: `gemini-2.5-flash`)
+- `GROUNDING_MAX_SOURCES` - Maximum grounded sources per alert (default: `3`)
+- `GROUNDING_TIMEOUT_MS` - Grounding request timeout (default: `30000` ms)
+- `GROUNDING_MAX_LENGTH` - Maximum alert text length used in grounding prompts (default: `2000` characters)
+
+#### Cloudflare AI Gateway
+
+- `MODEL_PROVIDER=cloudflare` selects Cloudflare runtime routing when the gateway credentials are configured
+- `ENABLE_CLOUDFLARE_AIG` only exposes Cloudflare readiness in status/capabilities (`true` or `false`, default: `false`); it does not select the runtime provider
+- `CF_AIG_TOKEN` - Cloudflare AI Gateway token; keep it in a secret store
+- `CF_AIG_BASE_URL` - OpenAI-compatible Cloudflare gateway base URL
+- `CF_AIG_MODEL` - Gateway target model (default: `google-ai-studio/gemini-2.5-flash`)
 
 #### Langfuse Prompt Management
 
@@ -60,13 +84,14 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 - `LANGFUSE_BASE_URL` - Langfuse base URL (default: `https://cloud.langfuse.com`)
 - `LANGFUSE_PROMPT_LABEL` - Prompt label to fetch (default: `latest` in local/dev/test, `production` in production-like environments)
 - `LANGFUSE_PROMPT_CACHE_TTL_SECONDS` - Prompt cache TTL in seconds (default: `0` for `latest`, `60` for `production`)
+- Optional local prompt overrides: `SEARCH_QUERY_PROMPT`, `GEMINI_SYSTEM_PROMPT`, `ALERT_ENRICHMENT_SYSTEM_PROMPT`, `NEWS_ANALYSIS_SYSTEM_PROMPT`, and `CONFIDENCE_ENRICHMENT_SYSTEM_PROMPT`. Unset values use the versioned local fallback files.
 
 #### TradingView MCP Analysis
 
 - `ENABLE_TRADINGVIEW_MCP_ENRICHMENT` - Enable TradingView MCP enrichment for TradingView-like webhook messages (`true` or `false`, default: `false`)
 - `EXPANDED_ANALYSIS_ALERT_SYMBOLS` - Comma-separated fallback symbols for `/api/webhook/expanded-analysis-alert` using `EXCHANGE:SYMBOL` format (for example `BINANCE:BTCUSDT,NASDAQ:NVDA`)
 - `EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS` - Total analysis deadline for `/api/webhook/expanded-analysis-alert` in milliseconds (default: `60000`, capped at `120000`)
-- `TRADINGVIEW_MCP_URL` - MCP server HTTP endpoint (default: `https://tradingview-mcp.onrender.com/mcp`)
+- `TRADINGVIEW_MCP_URL` - MCP server HTTP endpoint (default: `https://tradingview-mcp-yp6b.onrender.com/mcp`)
 - `TRADINGVIEW_MCP_TIMEOUT_MS` - Timeout per MCP request in milliseconds (default: `12000`)
 - `TRADINGVIEW_MCP_MAX_RETRIES` - Retries for MCP failures (default: `3`)
 - `TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS` - Total budget envelope for the synchronous webhook enrichment flow (default: `12000`). When exceeded, all in-flight MCP calls are aborted and the enrichment fails open, preventing the alert webhook from being blocked for too long.
@@ -80,13 +105,54 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 #### Firestore Alert Storage
 
 - `ENABLE_FIRESTORE_ALERT_STORAGE` - Enable Firestore persistence and alert read API (`true` or `false`, default: `false`)
+- `ALERT_STORAGE_RETENTION_DAYS` - Retention for `alerts` and `alertReplays` records in days (`1`-`3650`, default: `90`). New records get `expiresAt`; run `bash ops/configure-firestore-alert-retention.sh` once per Firebase project to backfill legacy records and enable native Firestore TTL deletion.
 - `ENABLE_FIRESTORE_JOB_STORAGE` - Enable Firestore persistence for async TradingView jobs without enabling alert read APIs (`true` or `false`, default: `false`)
 - `ENABLE_FIRESTORE_IDEMPOTENCY` - Enable durable webhook idempotency persistence in Cloud Firestore (`true` or `false`, default: `false`)
 - `ENABLE_SIGNAL_OUTCOME_TRACKING` - Enable shadow-mode signal outcome recording and evaluation (`true` or `false`, default: `false`)
 - `ENABLE_SHADOW_MODE_OUTCOME_TRACKING` - Legacy alias for signal outcome tracking, retained for one release
+- `ENABLE_EQUITY_MARKET_DATA` - Opt in to equity outcome evaluation for `NASDAQ` and `BATS` signals (`true` or `false`, default: `false`)
+- `EQUITY_MARKET_DATA_PROVIDER` - Equity provider name; currently `twelve-data`
+- `TWELVE_DATA_API_KEY` - Twelve Data API key; sent in the `Authorization` header and never returned by status endpoints
+- `TWELVE_DATA_BASE_URL` - Optional Twelve Data base URL override (default: `https://api.twelvedata.com`)
+- `EQUITY_MARKET_DATA_TIMEOUT_MS` - Per-request equity market-data timeout, capped at 30 seconds (default: `5000`)
+- `SIGNAL_OUTCOME_WORKER_ROLE` - Scheduler role: `web` preserves the local/web timer, `worker` enables only the dedicated worker entrypoint, and `disabled` prevents scheduler startup (default: `web`)
 - `FIREBASE_SERVICE_ACCOUNT_JSON` - Inline Firebase service account JSON for server-side Firestore access
 - `FIREBASE_PROJECT_ID` - Optional Firebase project override for Admin SDK initialization
 - `GOOGLE_APPLICATION_CREDENTIALS` - Optional path to a service account JSON file for local development
+
+#### Render Worker Queue
+
+- `JOB_EXECUTION_MODE` - Use `local` for the in-process fallback or `render-worker` to enqueue TradingView jobs in BullMQ (`local` by default)
+- `REDIS_URL` - Render Key Value connection string required by `render-worker`
+- `JOB_QUEUE_ATTEMPTS` / `JOB_QUEUE_BACKOFF_MS` - BullMQ retry count and exponential backoff delay (defaults: `5` / `30000` ms)
+- `JOB_QUEUE_CONCURRENCY` - Worker concurrency (default: `1`)
+- `JOB_QUEUE_CLAIM_LEASE_MS` - Firestore claim lease and heartbeat interval (default: `60000` ms)
+- `JOB_QUEUE_CONNECT_TIMEOUT_MS` - Redis connection timeout (default: `5000` ms)
+
+`render.yaml` provisions a starter Background Worker and Key Value store. The web service remains on `JOB_EXECUTION_MODE=local` by default; switching it to `render-worker` requires the worker, Redis, and Firestore credentials to be available. The API returns `503 JOB_QUEUE_UNAVAILABLE` instead of accepting a job when the durable queue is unavailable. If enqueue acknowledgement and deterministic Redis reconciliation both fail, it returns `503 JOB_QUEUE_ACCEPTANCE_UNKNOWN` with the durably stored `jobId`; the worker periodically re-enqueues durable queued rows, retries retained failed BullMQ jobs, and recovers expired claims after Redis recovers.
+
+Unfiltered signal outcome summaries include `shadowModeMetrics.exchangeBreakdown` and `shadowModeMetrics.providerBreakdown` coverage buckets (`received`, `eligible`, `evaluated`, `pending`, `unavailable`). Filtered alert summaries/exports omit shadow-mode metrics because that service has no matching source/enrichment filters. Equity signals only enter the eligible/evaluated population when the opt-in Twelve Data provider is configured; otherwise they remain explicitly unavailable.
+
+#### Firebase Remote Config (server-side Preview)
+
+- `ENABLE_FIREBASE_REMOTE_CONFIG` - Enable server-side Firebase Remote Config tuning (`true` or `false`, default: `false`)
+- `FIREBASE_REMOTE_CONFIG_REFRESH_INTERVAL_MS` - Bounded refresh cadence (default: `900000`, maximum: `86400000`)
+- `FIREBASE_REMOTE_CONFIG_LOAD_TIMEOUT_MS` - Maximum template-load wait (default: `10000`, maximum: `30000`)
+- `FIREBASE_REMOTE_CONFIG_MAX_AGE_MS` - Maximum age of a successful template before environment/default fallback (default: `3600000`, maximum: `604800000`)
+
+The initial allow-list contains news thresholds, timeouts, concurrency, quota retries, TradingView timeouts/retries, and `ENABLE_MESSAGE_FOOTER_METADATA`. Remote values are parsed as numbers/booleans and must satisfy the existing finite, integer, positive, and range constraints. Credentials, API keys, webhook authentication, route/security gates, and Telegram destinations are never read from Remote Config.
+
+The service loads once at startup and refreshes on the bounded cadence; it does not fetch Remote Config per alert. Disabled, unavailable, timed-out, stale, malformed, or invalid values fail open to the current environment/default behavior. The server-side Remote Config API is currently a Firebase Preview feature, so monitor its quota and error rate before enabling it in production. `firebase-admin` is upgraded to the Node 24-compatible 12.x line (`^12.1.0`, lockfile resolution `12.7.0`).
+
+#### Firestore Emulator Integration Tests
+
+The optional `pnpm test:firebase` command runs the Firestore-backed integration suite against the local Firebase emulator using the `demo-cabros` project ID. It covers the Admin SDK storage paths, idempotency transactions, async jobs, scanner presets, signal outcomes, and deny-by-default client rules.
+
+Prerequisites: Node.js 24+, Java/JDK 11+, and network access for the pinned Firebase CLI and emulator binary on the first run. The command uses `firebase emulators:exec`, clears emulator data between tests, unsets production Firebase credential variables, and stops the emulator on completion or failure. It never connects to a real Firebase project. The default `pnpm test` remains mock-based and does not require Java, the CLI, or external network access.
+
+```bash
+pnpm test:firebase
+```
 
 #### Admin Notifications
 
@@ -95,11 +161,16 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 #### Server Configuration
 
 - `PORT` - HTTP server port (default: `80`)
+- `SHUTDOWN_TIMEOUT_MS` - Maximum graceful shutdown budget in milliseconds (default: `10000`, hard cap: `30000`); after the deadline active jobs receive a bounded finalization attempt and are persisted as retryable cancellations, remaining HTTP connections are force-closed, and the process exits
 - `RENDER` - Render.com deployment flag (used internally)
 - `IS_PULL_REQUEST` - Render preview environment flag (disables bot in PRs)
-- `TRUST_PROXY` - Express trusted proxy setting for reverse-proxy deployments (`true`, `false`, `1` hop, or subnet string; defaults to `1` when `RENDER=true`, and `false` for direct deployments)
-- `RATE_LIMIT_WINDOW_MS` - Global API rate limiter window in milliseconds (default: `900000` / 15 minutes)
-- `RATE_LIMIT_MAX` - Global API rate limiter max requests per window (default: `100`)
+- `VERCEL` / `VERCEL_ENV` - Vercel system deployment markers; `VERCEL_ENV=preview` disables the bot
+- `VERCEL_GIT_COMMIT_SHA` / `VERCEL_GIT_REPO_OWNER` / `VERCEL_GIT_REPO_SLUG` - Vercel deployment metadata used for release and deployment notifications
+- `RAILWAY_ENVIRONMENT_NAME` / `RAILWAY_GIT_PULL_REQUEST_NUMBER` - Railway preview markers; a PR number or environment name containing a hyphen-delimited `pr` segment disables the bot
+- `RAILWAY_GIT_COMMIT_SHA` / `RAILWAY_GIT_REPO_OWNER` / `RAILWAY_GIT_REPO_NAME` - Railway GitHub deployment metadata used for release and deployment notifications
+- `TRUST_PROXY` - Express trusted proxy setting for reverse-proxy deployments (`true`, `false`, `1` hop, or subnet string; defaults to `1` on Render/Vercel/Railway, and `false` for direct deployments)
+- `RATE_LIMIT_WINDOW_MS` - Global API rate limiter window in milliseconds (default: `900000` / 15 minutes; invalid values use the default)
+- `RATE_LIMIT_MAX` - Global API rate limiter max requests per window (default: `100`; invalid values use the default)
 - `LOG_LEVEL` - Structured JSON log verbosity (`debug`, `info`, `warn`, `error`, `silent`; defaults to `debug` in development and `info` in production)
 - `SERVICE_NAME` - Optional service name included in JSON logs (default: package name or `cabros-bot`)
 
@@ -110,11 +181,13 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 - `NEWS_SYMBOLS_STOCKS` - Default stock symbols if not provided in request (comma-separated)
 - `NEWS_ALERT_THRESHOLD` - Confidence score threshold for sending alerts (default: `0.7`, range 0.0-1.0)
 - `NEWS_CACHE_TTL_HOURS` - Cache time-to-live for deduplication (default: `6` hours)
+- `ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP` - Enable Firestore-backed news deduplication (`true` or `false`, default: `false`; failures fall back to memory)
 - `NEWS_TIMEOUT_MS` - Per-symbol analysis timeout (default: `30000` ms)
-- `NEWS_GEMINI_CONCURRENCY` - Optional max concurrent Gemini-backed symbol analyses. Unset keeps legacy parallel fan-out.
+- `NEWS_GEMINI_CONCURRENCY` - Max concurrent Gemini-backed symbol analyses. Production policy is `3`; unset keeps legacy parallel fan-out for backward compatibility.
 - `NEWS_GEMINI_QUOTA_MAX_RETRIES` - Max per-symbol retries for Gemini `429 RESOURCE_EXHAUSTED` errors (default: `2`)
 - `NEWS_GEMINI_QUOTA_RETRY_BASE_MS` - Base exponential backoff when Gemini does not provide retry delay metadata (default: `1000` ms)
 - `ENABLE_BINANCE_PRICE_CHECK` - Enable Binance crypto price fetching (`true` or `false`, default: `false`)
+- `BINANCE_FETCH_TIMEOUT_MS` - Binance price request timeout (default: `5000` ms)
 - `ENABLE_LLM_ALERT_ENRICHMENT` - Enable optional secondary LLM enrichment (`true` or `false`, default: `false`)
 - `AZURE_LLM_ENDPOINT` - Azure AI Inference endpoint URL (required if enrichment enabled)
 - `AZURE_LLM_KEY` - Azure AI Inference API key (required if enrichment enabled)
@@ -148,6 +221,10 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 - `dependencies.scannerPresetStorage` in `/api/status` and `/api/capabilities` exposes `enabled`, `configured`, `ready`, `status`, `mode`, and `backend` without secrets. A `misconfigured` status means a Firestore gate is enabled but the client is unavailable.
 
 ## Setup
+
+### Supported Runtime
+
+The repository pins Node.js `24.18.0` in `.node-version` and bounds `package.json` to `>=24.18.0 <25`. GitHub Actions reads the same file, and Render native services consume the root `.node-version` file. Use that file with your local Node.js version manager.
 
 ### 1. Install Dependencies
 
@@ -214,15 +291,35 @@ For `ENABLE_NEWS_MONITOR=true`, the payload also reports the primary LLM depende
 
 When `ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION=true`, `featureFlags.tradingViewVolumeConfirmation` reports the gate value and `dependencies.tradingViewVolumeConfirmation` reports readiness only when the configured TradingView MCP endpoint and its parent MCP enrichment gate are active.
 
+TradingView dependency readiness is runtime-derived and fail-open: `configured` reflects the effective endpoint, while `status` starts as `unknown` and changes to `ready` or `degraded` after an MCP operation. `lastErrorCategory` is sanitized to categories such as `timeout`, `http_5xx`, `http_4xx`, `invalid_response`, or `request_failed`; provider response bodies and URLs are never returned by `/api/status`.
+
 When `ENABLE_FIRESTORE_JOB_STORAGE=true`, `featureFlags.firestoreJobStorage` reports the async-job persistence gate and `dependencies.firestoreJobStorage` reports readiness using the configured Firestore credentials. The legacy `ENABLE_FIRESTORE_ALERT_STORAGE=true` gate also reports job storage as enabled because it activates the same runtime persistence path.
 
 `featureFlags.newsMonitorTestMode` reports `ENABLE_NEWS_MONITOR_TEST_MODE` without changing the news monitor's existing test-mode behavior.
 
 `featureFlags.messageFooterMetadata` reports the `ENABLE_MESSAGE_FOOTER_METADATA` setting. It defaults to `true` and is disabled only when the environment variable is explicitly set to `false`.
 
-`featureFlags.cloudflareAig` reports `ENABLE_CLOUDFLARE_AIG`, while `dependencies.cloudflareAig` reports whether the Cloudflare AI Gateway credentials are configured and ready.
+`featureFlags.cloudflareAig` reports `ENABLE_CLOUDFLARE_AIG`, while `dependencies.cloudflareAig` reports whether the Cloudflare AI Gateway credentials are configured and ready. Runtime provider selection is controlled separately by `MODEL_PROVIDER=cloudflare`; set both values when status/capability telemetry should match active Cloudflare routing.
+
+When `ENABLE_EQUITY_MARKET_DATA=true`, `dependencies.equityMarketData` reports Twelve Data readiness and the supported `BATS`/`NASDAQ` exchanges without exposing the API key. Signal outcome tracking uses `/quote` for missing entry prices and `/time_series` for bounded historical bars; provider, timeout, malformed-data, and quota failures mark equity outcomes unavailable without blocking alert delivery. Extended-hours data is excluded by default. Confirm current Twelve Data plan limits and licensing before production use: [pricing](https://twelvedata.com/pricing), [US equities coverage](https://support.twelvedata.com/en/articles/9935903-us-equities-market-data), and [commercial usage](https://support.twelvedata.com/en/articles/5332349-commercial-and-personal-usage).
+`dependencies.signalOutcomeWorker` reports the scheduler role, shutdown state, cadence/budgets, and the last-sweep heartbeat counters (`lastRunAt`, scanned, pending, evaluated, and error counts). The `worker` role is intended for the dedicated Render service; set the web service role to `disabled` during cutover so only one scheduler is active. A disabled local scheduler reports `ready: false` and `status: "disabled"` because it is not the process evaluating outcomes.
+
+The dedicated worker also persists the same non-sensitive heartbeat to `workerHeartbeats/signal-outcome` in Firestore. Heartbeat writes fail open and never block alert delivery.
+`featureFlags.firebaseRemoteConfig` reports `ENABLE_FIREBASE_REMOTE_CONFIG`. `dependencies.firebaseRemoteConfig` exposes only `enabled`, `configured`, `ready`, `status`, `source`, `templateVersion`, `lastSuccessfulLoad`, `lastErrorCategory`, and bounded loader settings; it never returns remote parameter values or credentials.
 
 `GET /api/capabilities` is an alias for the same payload.
+
+### Browser admin authentication
+
+`/admin` is public shell content. With `ENABLE_FIREBASE_ADMIN_AUTH=false` (the default), it keeps the existing session-only `WEBHOOK_API_KEY` console flow. With the flag enabled, the shell shows Firebase email/password sign-in, keeps an API-key field only in memory for API-key-only webhook/news-monitor operations, and does not read or write that key to browser storage. `/admin/auth-config` returns only the public Firebase Web configuration needed by the client.
+
+The server verifies Firebase ID tokens with revoked-token checks enabled. Custom claims may use `roles: ["admin.viewer"]`, `roles: ["admin.operator"]`, `adminRole`, `role`, or the equivalent `admin.viewer`/`admin.operator` boolean claims. Viewers can read status, alerts, analytics, exports, scanner presets, and job metadata; operators can perform the existing preset, replay, and job actions. The legacy API-key path remains available for machine clients. Protected webhook and news-monitor routes remain API-key-only.
+
+When Firebase auth is enabled, configure `FIREBASE_SERVICE_ACCOUNT_JSON` or `GOOGLE_APPLICATION_CREDENTIALS` for server-side Admin SDK token verification, plus the public browser settings listed above. Do not put service-account JSON or ID tokens in browser config, Postman variables, logs, or client error messages.
+
+The public browser configuration may also include `FIREBASE_STORAGE_BUCKET`, `FIREBASE_MESSAGING_SENDER_ID`, and `FIREBASE_MEASUREMENT_ID`; these values are not service-account credentials.
+
+`.env.example` is the canonical operator template. The documentation-alignment test checks static application-owned `process.env` reads against that template; platform-injected values, test-only controls, and deprecated compatibility aliases are explicitly classified instead of being copied into production configuration.
 
 **Response:**
 ```json
@@ -249,7 +346,8 @@ When `ENABLE_FIRESTORE_JOB_STORAGE=true`, `featureFlags.firestoreJobStorage` rep
     "binancePriceCheck": false,
     "llmAlertEnrichment": false,
     "cloudflareAig": false,
-    "messageFooterMetadata": true
+    "messageFooterMetadata": true,
+    "equityMarketData": false
   },
   "deliveryChannels": {
     "telegram": { "enabled": true, "status": "ready" },
@@ -259,16 +357,30 @@ When `ENABLE_FIRESTORE_JOB_STORAGE=true`, `featureFlags.firestoreJobStorage` rep
     "telegram": { "enabled": true, "configured": true, "ready": true, "status": "ready" },
     "whatsapp": { "enabled": false, "configured": false, "ready": false, "status": "disabled" },
     "gemini": { "enabled": true, "configured": true, "ready": true, "status": "ready" },
-    "tradingViewMcp": { "enabled": true, "configured": true, "ready": true, "status": "ready" },
-    "tradingViewVolumeConfirmation": { "enabled": false, "configured": true, "ready": false, "status": "disabled" },
+    "tradingViewMcp": { "enabled": true, "configured": true, "ready": false, "status": "unknown", "lastCheckedAt": null, "lastSuccessAt": null, "lastFailureAt": null, "lastErrorCategory": null, "successCount": 0, "failureCount": 0 },
+    "tradingViewVolumeConfirmation": { "enabled": false, "configured": true, "ready": false, "status": "disabled", "lastCheckedAt": null, "lastSuccessAt": null, "lastFailureAt": null, "lastErrorCategory": null, "successCount": 0, "failureCount": 0 },
     "firestore": { "enabled": true, "configured": true, "ready": true, "status": "ready" },
     "firestoreJobStorage": { "enabled": false, "configured": true, "ready": false, "status": "disabled" },
+    "signalOutcomeWorker": {
+      "enabled": false,
+      "configured": true,
+      "ready": false,
+      "status": "disabled",
+      "role": "web",
+      "running": false,
+      "shutdownRequested": false,
+      "lastRunScannedCount": 0,
+      "lastRunPendingCount": 0,
+      "lastRunEvaluatedCount": 0,
+      "lastRunErrorCount": 0
+    },
     "sentry": { "enabled": true, "configured": true, "ready": true, "status": "ready" },
     "langfuse": { "enabled": false, "configured": false, "ready": false, "status": "disabled" },
     "braveSearch": { "enabled": false, "configured": false, "ready": false, "status": "disabled" },
     "newsMonitorLlm": { "provider": "gemini", "enabled": true, "configured": true, "ready": true, "status": "ready" },
     "llmAlertEnrichment": { "enabled": false, "configured": false, "ready": false, "status": "disabled" },
-    "cloudflareAig": { "enabled": false, "configured": false, "ready": false, "status": "disabled" }
+    "cloudflareAig": { "enabled": false, "configured": false, "ready": false, "status": "disabled" },
+    "equityMarketData": { "provider": null, "enabled": false, "configured": false, "ready": false, "status": "disabled", "supportedExchanges": ["BATS", "NASDAQ"], "timeoutMs": 5000 }
   }
 }
 ```
@@ -338,6 +450,8 @@ When `ENABLE_TRADINGVIEW_MCP_ENRICHMENT=true`, webhook alerts matching TradingVi
 5. If `ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME=true`, it also calls `multi_timeframe_analysis` and returns the raw multi-timeframe metadata in dry-run/stored enrichment data.
 6. Gemini/Brave grounding still runs when enabled, and the final `alert.enriched` merges grounding context + MCP technical data.
 7. If either provider fails, the flow degrades gracefully to the other provider (or original text if none succeed).
+
+When TradingView data is requested, `alert.enriched.tradingViewEnrichmentApplied` is `true` only when the MCP result was successfully applied. This marker is persisted separately from `useTradingViewData`, so analytics can distinguish requested from delivered technical data.
 
 ### Timeframe Mapping
 
@@ -518,6 +632,8 @@ Dry-run response excerpt:
 - `cached` - Result returned from cache (within TTL for same event category)
 - `timeout` - Analysis exceeded per-symbol timeout (30s default)
 - `error` - API failure (Binance, Gemini, or other service error). Gemini quota exhaustion is reported as `error.code = "GEMINI_QUOTA_EXHAUSTED"` and counted in `summary.quota_exhausted`.
+
+When Sentry tracing is enabled, symbol analysis runs inside the `news_monitor.analyze_symbols` span, which records `news.symbol_count`, `news.quota_exhausted`, and `news.error_count` for quota correlation. Keep production `NEWS_GEMINI_CONCURRENCY=3` to bound provider bursts.
 
 ### POST /api/webhook/expanded-analysis-alert
 
@@ -764,7 +880,7 @@ For market-scanner jobs, `ranked` and `includeMultiTimeframe` use the same scori
 }
 ```
 
-**Idempotency:** `POST /api/jobs/tradingview-analysis`, `POST /api/jobs/:jobId/retry`, and `POST /api/jobs/:jobId/retry-failed` accept an optional client-generated `idempotency-key` header. Matching concurrent or sequential requests replay the original response and `jobId`/`newJobId` without starting another worker. The first response sends `Idempotency-Replay: false`; a replay sends `Idempotency-Replay: true` and includes `"idempotencyReplayed": true` in the JSON response. Reusing a key with a different request fingerprint returns `409 IDEMPOTENCY_CONFLICT`. Requests without the header retain current behavior.
+**Idempotency:** `POST /api/jobs/tradingview-analysis`, `POST /api/jobs/:jobId/retry`, and `POST /api/jobs/:jobId/retry-failed` accept an optional client-generated `idempotency-key` header. Matching concurrent or sequential requests replay the original response and `jobId`/`newJobId` without starting another worker. The first response sends `Idempotency-Replay: false`; a replay sends `Idempotency-Replay: true` and includes `"idempotencyReplayed": true` in the JSON response. `JOB_QUEUE_ACCEPTANCE_UNKNOWN` responses are also replayable and include the durable `jobId`, preventing a retry from creating a second queue item. Reusing a key with a different request fingerprint returns `409 IDEMPOTENCY_CONFLICT`. Requests without the header retain current behavior.
 
 Example:
 ```http
@@ -786,6 +902,8 @@ When `callbackUrl` is configured, each callback POST includes:
 - `x-callback-signature` - included when `callbackSecret` or `JOB_CALLBACK_SIGNING_SECRET` is configured.
 
 Before each delivery attempt, hostname callback URLs are resolved with all current DNS answers. Any private answer blocks the callback (unless `ALLOW_PRIVATE_CALLBACKS=true`), and the connection is pinned to the validated answers so the subsequent fetch cannot perform a second hostname lookup and bypass the SSRF check. Redirects remain disabled with `redirect: 'error'`.
+
+`ALLOW_HTTP_CALLBACKS` and `ALLOW_PRIVATE_CALLBACKS` are local/testing security overrides and should remain `false` in production. `JOB_CALLBACK_RETRY_DELAY_MS` defaults to `1000` ms; `JOB_CALLBACK_SIGNING_SECRET` is an optional server-side HMAC secret and must never be committed.
 
 Verify the signature with HMAC-SHA256 over this exact canonical string, using the shared secret and the raw JSON request body:
 
@@ -831,6 +949,8 @@ For completed ranked market-scanner jobs, `scanResults[].scores[]` contains the 
 
 Set `ENABLE_FIRESTORE_JOB_STORAGE=true` plus the normal Firebase Admin credentials (`FIREBASE_SERVICE_ACCOUNT_JSON` or `GOOGLE_APPLICATION_CREDENTIALS`) to enable durable job storage. The legacy in-memory path remains the fallback when Firestore is disabled or unavailable.
 
+By default, jobs still execute in-process. With `JOB_EXECUTION_MODE=render-worker`, the web service stores sanitized job metadata in Firestore and enqueues only the `jobId` in Redis; the dedicated `pnpm run start-worker` process claims the job transactionally, periodically reconciles durable rows still marked `processing`/`queued` plus expired `claimed`/`running` leases, retries retained failed BullMQ jobs before adding a duplicate queue ID, renews its lease at persistence checkpoints, and drains BullMQ work on `SIGTERM`. Notification delivery is checkpointed durably before and after the external send; a redelivery with an unknown outcome fails closed as `JOB_DELIVERY_RECONCILIATION_REQUIRED` rather than sending the same alert twice. Missing Redis or durable Firestore storage fails the create request with `503 JOB_QUEUE_UNAVAILABLE`.
+
 **Response (200 OK - Processing):**
 ```json
 {
@@ -860,6 +980,8 @@ Set `ENABLE_FIRESTORE_JOB_STORAGE=true` plus the normal Firebase Admin credentia
 ### Stored Alerts API
 
 When `ENABLE_FIRESTORE_ALERT_STORAGE=true`, successful `POST /api/webhook/alert` requests are persisted to Firestore and can be inspected through the protected alerts read API.
+
+Stored `alerts` and `alertReplays` records default to 90 days of retention. The service filters expired records before list, detail, export, and summary responses while Firestore's native TTL deletion is eventual. New records carry an `expiresAt` timestamp; `bash ops/configure-firestore-alert-retention.sh` backfills legacy records from `receivedAt`/`replayedAt` before enabling both TTL policies, shortens existing expiries when the configured deadline is earlier, removes legacy raw replay idempotency keys after hashing them, reports scanned/updated/skipped counts, and fails if a record has no usable timestamp. Replay audit documents retain only a SHA-256 `idempotencyKeyHash`, never the raw key. Inspect the TTL policies with `gcloud firestore fields ttls list`.
 
 All endpoints below require the same `x-api-key` header used by the webhook routes.
 If alert storage is enabled but Firestore credentials/project access are unavailable, they return `503 STORAGE_UNAVAILABLE` instead of a generic `500`.
@@ -897,7 +1019,8 @@ List stored alerts ordered by `receivedAt` descending.
         }
       ],
       "source": "webhook",
-      "useTradingViewData": false
+      "useTradingViewData": false,
+      "tradingViewEnrichmentApplied": false
     }
   ],
   "pagination": {
@@ -944,6 +1067,7 @@ The service caps the queried window at 31 days to keep routine operator usage ch
       "enriched": 1,
       "plain": 1,
       "tradingViewData": 1,
+      "tradingViewDataApplied": 1,
       "withoutTradingViewData": 1
     },
     "enrichment": {
@@ -1020,7 +1144,8 @@ Retrieve a single stored alert by Firestore document ID.
     "tokenUsage": null,
     "deliveryResults": [],
     "source": "webhook",
-    "useTradingViewData": true
+    "useTradingViewData": true,
+    "tradingViewEnrichmentApplied": false
   }
 }
 ```
@@ -1116,11 +1241,11 @@ The alert webhook system supports simultaneous delivery to multiple channels (Te
 
 ### URL Shortening for WhatsApp
 
-When `BITLY_API_KEY` is configured, URLs in WhatsApp alerts are automatically shortened to reduce character count and improve readability.
+When a supported URL-shortening service is configured, URLs in WhatsApp alerts are automatically shortened to reduce character count and improve readability.
 
 **Features**:
 - **Automatic Detection**: Identifies HTTP/HTTPS URLs in alert text
-- **Shortened URLs**: Converts long URLs (e.g., `https://example.com/very/long/path?param=value`) to short Bitly links (e.g., `https://bit.ly/abc123`)
+- **Shortened URLs**: Converts long URLs (e.g., `https://example.com/very/long/path?param=value`) to a provider link
 - **Session-Scoped Cache**: Caches shortenings during request processing to avoid redundant API calls (1-hour TTL per session)
 - **Parallel Shortening**: Multiple URLs shortened concurrently
 - **Fallback Behavior**: If shortening fails or is disabled, original URLs are preserved
@@ -1128,14 +1253,14 @@ When `BITLY_API_KEY` is configured, URLs in WhatsApp alerts are automatically sh
 
 **How It Works**:
 1. Alert received with one or more URLs
-2. URLShortener detects and extracts URLs (if `BITLY_API_KEY` configured)
+2. URLShortener detects and extracts URLs when a supported provider is configured
 3. Checks session cache for previously shortened URLs
-4. Calls Bitly API for new URLs (with 3-retry exponential backoff)
+4. Calls the selected provider for new URLs
 5. Replaces original URLs with shortened versions in alert text
 6. Alert delivered to WhatsApp (and other channels) with shortened URLs
 
 **Configuration**:
-- Set `BITLY_API_KEY` environment variable with your Bitly API key
+- Set `URL_SHORTENER_SERVICE=picsee` with `PICSEE_API_KEY`, `URL_SHORTENER_SERVICE=cuttly` with `CUTTLY_API_KEY`, or select `tinyurl` without a credential
 - Optional: URLs only shortened for WhatsApp; other channels receive original URLs
 - Cache per session: TTL 1 hour; cleared after request completes or session ends
 
@@ -1147,10 +1272,10 @@ Sources:
 - https://example.com/research/crypto/bitcoin/technical-analysis?date=2024-01-15&symbol=BTCUSDT&period=4h&includeIndicators=true
 ```
 
-**After** (with Bitly):
+**After** (with URL shortening):
 ```
 Sources: 
-- https://bit.ly/crypto-analysis
+- https://short.url/crypto-analysis
 ```
 
 ### Delivery Behavior
@@ -1323,7 +1448,7 @@ When enabled, it also forwards configured console levels to Sentry Logs using th
 ### Features
 
 - **Non-Intrusive**: Monitoring failures never affect HTTP responses or message delivery
-- **Environment Gating**: Auto-derives environment from Render.com variables (`production`, `preview`, `development`)
+- **Environment Gating**: Auto-derives environment from Render.com, Vercel, and Railway system variables (`production`, `preview`, `development`)
 - **Privacy Controls**: Optional exclusion of alert content from error events
 - **Structured Console Logs**: All `console.*` output is emitted as one-line JSON with `timestamp`, `level`, `message`, `service`, `environment`, and optional `attributes`, `parameters`, and `error`
 - **Console Log Capture**: Configured console levels are captured as searchable Sentry Logs
@@ -1340,7 +1465,7 @@ SENTRY_DSN=https://key@o123.ingest.sentry.io/456
 # Optional: Explicit environment (auto-derived if not set)
 SENTRY_ENVIRONMENT=production
 
-# Optional: Explicit release (derived from RENDER_GIT_COMMIT if not set)
+# Optional: Explicit release (derived from RENDER_GIT_COMMIT or VERCEL_GIT_COMMIT_SHA if not set)
 SENTRY_RELEASE=v1.2.3
 
 # Optional: Privacy control (default: true = include alert text)
@@ -1361,8 +1486,8 @@ SENTRY_CONSOLE_LOG_LEVELS=warn,error
 | Condition | Environment |
 |-----------|-------------|
 | `SENTRY_ENVIRONMENT` set | Uses explicit value |
-| `RENDER=true` + `IS_PULL_REQUEST=true` | `preview` |
-| `RENDER=true` (no PR) | `production` |
+| `RENDER=true` + `IS_PULL_REQUEST=true`, `VERCEL_ENV=preview`, or Railway PR metadata/name | `preview` |
+| `RENDER=true`, `VERCEL_ENV=production`, or any Railway deployment (no preview) | `production` |
 | `NODE_ENV=production` | `production` |
 | Default | `development` |
 
@@ -1444,6 +1569,9 @@ pnpm test:watch
 
 # Generate coverage report
 pnpm test:coverage
+
+# Run the opt-in Firestore emulator integration suite
+pnpm test:firebase
 ```
 
 ## Architecture
@@ -1520,7 +1648,8 @@ WHATSAPP_API_KEY=your_whatsapp_api_key
 WHATSAPP_CHAT_ID=120363xxxxx@g.us
 
 # Optional: Enable URL shortening for WhatsApp
-BITLY_API_KEY=your_bitly_api_key
+URL_SHORTENER_SERVICE=picsee
+PICSEE_API_KEY=your_picsee_api_key
 ```
 
 ### With WhatsApp + URL Shortening
@@ -1535,8 +1664,9 @@ WHATSAPP_API_URL=your_whatsapp_api_url
 WHATSAPP_API_KEY=your_whatsapp_api_key
 WHATSAPP_CHAT_ID=120363xxxxx@g.us
 
-# URL shortening for WhatsApp (long URLs automatically shortened via Bitly)
-BITLY_API_KEY=your_bitly_api_key
+# URL shortening for WhatsApp (long URLs automatically shortened via PicSee)
+URL_SHORTENER_SERVICE=picsee
+PICSEE_API_KEY=your_picsee_api_key
 
 # Alerts sent to both channels; WhatsApp receives shortened URLs
 ```
@@ -1613,11 +1743,14 @@ AZURE_LLM_MODEL=openai/gpt-5-mini
 
 ### Render.com
 
-The application includes support for Render.com deployment:
+The application includes support for Render.com and Vercel deployments:
 
-- Respects `RENDER` environment variable
-- Skips bot launch in preview environments (`IS_PULL_REQUEST=true`)
+- Respects Render and Vercel deployment environment variables
+- Skips bot launch in preview environments (`IS_PULL_REQUEST=true` or `VERCEL_ENV=preview`)
 - Sends deployment notification to admin chat on startup
+- `render.yaml` defines an opt-in paid `starter` Background Worker using `pnpm run start:signal-outcome-worker`. It is configured with `SIGNAL_OUTCOME_WORKER_ROLE=worker` and `ENABLE_SIGNAL_OUTCOME_TRACKING` as a manual value so the paid worker and Firestore credential decision are explicit.
+- The worker also declares `ENABLE_SENTRY` and `SENTRY_DSN` as manual values; monitoring remains disabled when either value is absent.
+- To cut over production, enable signal tracking on both services, set the web service's `SIGNAL_OUTCOME_WORKER_ROLE=disabled`, and keep the worker role as `worker`. Leave the default web role as `web` when the dedicated worker is not enabled.
 
 ### Local Development
 
@@ -1657,7 +1790,7 @@ The application logs to stdout:
 
 1. Verify `ENABLE_NEWS_MONITOR=true` in environment
 2. Verify `GEMINI_API_KEY` is set (required for Gemini analysis)
-3. Check application logs for "initializeNewsMonitor" message on startup
+3. Check application logs for `[NewsMonitor] Handler initialized` when news monitoring is enabled
 4. Verify `/api/news-monitor` route is registered (check logs for route mounting)
 
 #### News Alerts Not Sending
@@ -1722,14 +1855,14 @@ The application logs to stdout:
 ### URL Shortening
 
 **URLs not being shortened**:
-1. Verify `BITLY_API_KEY` is set in environment
+1. Verify `URL_SHORTENER_SERVICE` is set to `picsee`, `tinyurl`, or `cuttly`
 2. Check that alert text contains valid HTTP/HTTPS URLs
-3. Verify Bitly API key has sufficient quota (check Bitly dashboard)
+3. Verify `PICSEE_API_KEY` or `CUTTLY_API_KEY` is set when the selected service requires it
 4. Check application logs for "URLShortener" error messages
 
 **Shortening timeout errors**:
 - Default timeout: 5 seconds per URL batch
-- If Bitly API is slow, increase timeout or reduce parallel URLs
+- If the selected provider is slow, increase timeout or reduce parallel URLs
 - URLs gracefully fallback to original if shortening fails
 - Alert still sends with original URLs
 

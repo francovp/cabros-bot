@@ -21,7 +21,7 @@ The News Monitor API analyzes news and market sentiment for crypto and stock sym
 
 ## Prerequisites
 
-1. **Node.js 20.x** (matches existing codebase)
+1. **Node.js 24.x** (matches the repository runtime contract)
 2. **Active bot** with Telegram and WhatsApp configured (from 002-whatsapp-alerts)
 3. **Gemini API key** (already integrated via `@google/genai`)
 4. **(Optional)** Binance API access for crypto prices
@@ -63,9 +63,9 @@ NEWS_SYMBOLS_CRYPTO=BTCUSDT,ETHUSD,BNBUSDT
 NEWS_SYMBOLS_STOCKS=NVDA,MSFT,TSLA
 
 # Azure AI Inference (required if ENABLE_LLM_ALERT_ENRICHMENT=true)
-AZURE_AI_ENDPOINT=https://your-endpoint.inference.ai.azure.com
-AZURE_AI_API_KEY=your-api-key-here
-AZURE_AI_MODEL=gpt-4o                       # Model deployment name
+AZURE_LLM_ENDPOINT=https://your-endpoint.inference.ai.azure.com
+AZURE_LLM_KEY=your-api-key-here
+AZURE_LLM_MODEL=gpt-4o                       # Model deployment name
 
 # Existing Configuration (reused)
 BOT_TOKEN=your-telegram-bot-token
@@ -75,13 +75,11 @@ WHATSAPP_API_URL=https://api.greenapi.com
 WHATSAPP_API_KEY=your-greenapi-key
 
 # URL Shortening (optional, for WhatsApp citations)
-URL_SHORTENER_SERVICE=bitly                  # Service: 'bitly', 'tinyurl', 'picsee', 'reurl', 'cuttly', 'pixnet0rz.tw'
-BITLY_ACCESS_TOKEN=your-bitly-token          # Required for Bitly
-# TINYURL_API_KEY=your-tinyurl-key           # Required for TinyURL (if not provided, uses free API)
-# PICSEE_ACCESS_TOKEN=your-picsee-token      # Required for PicSee
-# REURL_ACCESS_TOKEN=your-reurl-token        # Required for reurl
-# CUTTLY_ACCESS_TOKEN=your-cuttly-token      # Required for Cutt.ly
-# PIXNET0RZ_TW_ACCESS_TOKEN=your-pixnet-token # Required for Pixnet0rz.tw
+URL_SHORTENER_SERVICE=picsee                # Service: 'picsee', 'tinyurl', or 'cuttly'
+PICSEE_API_KEY=your-picsee-api-key           # Required for PicSee
+# CUTTLY_API_KEY=your-cuttly-api-key         # Required for Cuttly
+# TinyURL uses its free endpoint and requires no credential.
+# Bitly, reurl, and Pixnet0rz.tw are unavailable.
 ```
 
 ### 3. Start the Server
@@ -293,9 +291,9 @@ ENABLE_BINANCE_PRICE_CHECK=true
 
 ```bash
 ENABLE_LLM_ALERT_ENRICHMENT=true
-AZURE_AI_ENDPOINT=https://your-endpoint.inference.ai.azure.com
-AZURE_AI_API_KEY=your-api-key-here
-AZURE_AI_MODEL=gpt-4o
+AZURE_LLM_ENDPOINT=https://your-endpoint.inference.ai.azure.com
+AZURE_LLM_KEY=your-api-key-here
+AZURE_LLM_MODEL=gpt-4o
 ```
 
 **Behavior:**
@@ -326,16 +324,16 @@ AZURE_AI_MODEL=gpt-4o
 ### Enable URL Shortening for WhatsApp Citations
 
 ```bash
-URL_SHORTENER_SERVICE=bitly
-BITLY_ACCESS_TOKEN=your-bitly-access-token
+URL_SHORTENER_SERVICE=picsee
+PICSEE_API_KEY=your-picsee-api-key
 ```
 
 **Behavior:**
 - System shortens source URLs in WhatsApp alerts using configured service
 - Reduces message size from ~25K chars to <10K chars for enriched alerts
 - In-memory cache prevents redundant API calls for duplicate sources
-- Falls back to title-only citations if shortening fails (e.g., "Reuters / CoinDesk" instead of long URLs)
-- Supported services: `bitly`, `tinyurl`, `picsee`, `reurl`, `cuttly`, `pixnet0rz.tw`
+- Preserves original URLs if shortening fails, so source links remain available
+- Supported services: `picsee`, `tinyurl`, and `cuttly`. TinyURL requires no credential; Bitly, reurl, and Pixnet0rz.tw are unavailable.
 
 **Response includes shortening metadata:**
 ```json
@@ -343,7 +341,7 @@ BITLY_ACCESS_TOKEN=your-bitly-access-token
   "alert": {
     "urlShortening": {
       "applied": true,
-      "service": "bitly",
+      "service": "picsee",
       "successCount": 2,
       "failureCount": 0
     }
@@ -509,9 +507,9 @@ pnpm start
 1. Verify environment variables:
    ```bash
    ENABLE_LLM_ALERT_ENRICHMENT=true
-   AZURE_AI_ENDPOINT=https://your-endpoint.inference.ai.azure.com
-   AZURE_AI_API_KEY=your-api-key-here
-   AZURE_AI_MODEL=gpt-4o
+   AZURE_LLM_ENDPOINT=https://your-endpoint.inference.ai.azure.com
+   AZURE_LLM_KEY=your-api-key-here
+   AZURE_LLM_MODEL=gpt-4o
    ```
 2. Check response for enrichment metadata:
    ```json

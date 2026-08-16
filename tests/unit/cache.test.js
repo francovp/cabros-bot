@@ -152,6 +152,18 @@ describe('Cache Module - Unit Tests', () => {
 			const remaining = await cache.get('ETHUSD', EventCategory.PRICE_SURGE);
 			expect(remaining).not.toBeNull();
 		});
+
+		it('should remove released delivery locks after their persistent lease expires', () => {
+			const key = 'BTCUSDT:price_surge:delivery:whatsapp';
+			cache.deliveryLocks.set(key, {
+				active: false,
+				persistentUntil: Date.now() - 1,
+			});
+
+			cache.cleanup();
+
+			expect(cache.deliveryLocks.has(key)).toBe(false);
+		});
 	});
 
 	describe('Cache Statistics', () => {
@@ -213,6 +225,24 @@ describe('Cache Module - Unit Tests', () => {
 			const instance1 = getCacheInstance();
 			const instance2 = getCacheInstance();
 			expect(instance1).toBe(instance2);
+		});
+
+		it('should not create duplicate cleanup timers when initialized repeatedly', () => {
+			const setIntervalSpy = jest.spyOn(global, 'setInterval');
+			let firstTimer;
+			try {
+				cache.initialize();
+				firstTimer = cache.cleanupInterval;
+
+				cache.initialize();
+
+				expect(setIntervalSpy).toHaveBeenCalledTimes(1);
+				expect(cache.cleanupInterval).toBe(firstTimer);
+			} finally {
+				if (firstTimer) clearInterval(firstTimer);
+				cache.shutdown();
+				setIntervalSpy.mockRestore();
+			}
 		});
 	});
 

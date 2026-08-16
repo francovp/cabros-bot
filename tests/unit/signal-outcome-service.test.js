@@ -33,14 +33,26 @@ describe('SignalOutcomeService', () => {
 		admin.__resetCollectionState();
 		AlertStorageService._resetForTesting();
 		delete process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING;
+		delete process.env.SIGNAL_OUTCOME_WORKER_ROLE;
 		delete process.env.ENABLE_SIGNAL_OUTCOME_TRACKING;
 		delete process.env.ENABLE_FIRESTORE_ALERT_STORAGE;
+		delete process.env.ENABLE_EQUITY_MARKET_DATA;
+		delete process.env.EQUITY_MARKET_DATA_PROVIDER;
+		delete process.env.TWELVE_DATA_API_KEY;
+		delete process.env.TWELVE_DATA_BASE_URL;
+		delete process.env.EQUITY_MARKET_DATA_TIMEOUT_MS;
 	});
 
 	afterEach(() => {
 		delete process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING;
+		delete process.env.SIGNAL_OUTCOME_WORKER_ROLE;
 		delete process.env.ENABLE_SIGNAL_OUTCOME_TRACKING;
 		delete process.env.ENABLE_FIRESTORE_ALERT_STORAGE;
+		delete process.env.ENABLE_EQUITY_MARKET_DATA;
+		delete process.env.EQUITY_MARKET_DATA_PROVIDER;
+		delete process.env.TWELVE_DATA_API_KEY;
+		delete process.env.TWELVE_DATA_BASE_URL;
+		delete process.env.EQUITY_MARKET_DATA_TIMEOUT_MS;
 	});
 
 	describe('isEnabled()', () => {
@@ -166,6 +178,72 @@ describe('SignalOutcomeService', () => {
 			expect(saved.outcomes['1h']).toBeDefined();
 			expect(saved.outcomes['1h'].status).toBe('pending');
 		});
+
+		it('resolves a configured equity entry price without using Binance', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_EQUITY_MARKET_DATA = 'true';
+			process.env.EQUITY_MARKET_DATA_PROVIDER = 'twelve-data';
+			process.env.TWELVE_DATA_API_KEY = 'test-twelve-data-key';
+			const originalFetch = global.fetch;
+			const mockFetch = jest.fn().mockResolvedValue({
+				ok: true,
+				json: async () => ({
+					status: 'ok',
+					symbol: 'AAPL',
+					exchange: 'NASDAQ',
+					close: '150.25',
+				}),
+			});
+			global.fetch = mockFetch;
+
+			try {
+				const resId = await SignalOutcomeService.recordSignal({
+					symbol: 'NASDAQ:AAPL',
+					price: null,
+				});
+
+				const saved = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(resId);
+				expect(saved.price).toBe(150.25);
+				expect(saved.marketDataProvider).toBe('twelve-data');
+				expect(saved.eligibilityState).toBe('supported_provider');
+				expect(saved.outcomeEvaluated).toBe(false);
+				expect(global.fetch).toHaveBeenCalledTimes(1);
+			} finally {
+				global.fetch = originalFetch;
+			}
+		});
+
+		it('uses the configured provider for a classified bare stock without inventing an exchange', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_EQUITY_MARKET_DATA = 'true';
+			process.env.EQUITY_MARKET_DATA_PROVIDER = 'twelve-data';
+			process.env.TWELVE_DATA_API_KEY = 'test-twelve-data-key';
+			const originalFetch = global.fetch;
+			const mockFetch = jest.fn().mockResolvedValue({
+				ok: true,
+				status: 200,
+				json: async () => ({ status: 'ok', close: '150.25' }),
+			});
+			global.fetch = mockFetch;
+
+			try {
+				const resId = await SignalOutcomeService.recordSignal({
+					symbol: 'AAPL',
+					exchange: 'UNKNOWN',
+					assetClass: 'stock',
+					price: null,
+				});
+
+				const saved = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(resId);
+				expect(saved.exchange).toBe('UNKNOWN');
+				expect(saved.assetClass).toBe('stock');
+				expect(saved.marketDataProvider).toBe('twelve-data');
+				expect(saved.eligibilityState).toBe('supported_provider');
+				expect(new URL(mockFetch.mock.calls[0][0]).searchParams.has('exchange')).toBe(false);
+			} finally {
+				global.fetch = originalFetch;
+			}
+		});
 	});
 
 	describe('evaluatePendingOutcomes()', () => {
@@ -259,6 +337,74 @@ describe('SignalOutcomeService', () => {
 			expect(updated).toBeDefined();
 			expect(updated.outcomes['1h'].status).toBe('unavailable');
 			expect(updated.outcomeEvaluated).toBe(true); // only 1 window and it's resolved/unavailable
+		});
+
+		it('evaluates configured equity outcomes through the provider adapter', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			process.env.ENABLE_EQUITY_MARKET_DATA = 'true';
+			process.env.EQUITY_MARKET_DATA_PROVIDER = 'twelve-data';
+			process.env.TWELVE_DATA_API_KEY = 'test-twelve-data-key';
+
+			const receivedAtDate = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+			const mockDocId = 'test-doc-equity';
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, new Map([
+				[mockDocId, {
+					receivedAt: admin.firestore.Timestamp.fromDate(receivedAtDate),
+					requestId: 'req-equity',
+					source: 'expanded-analysis',
+					symbol: 'TSM',
+					exchange: 'BATS',
+					timeframe: '1D',
+					side: 'BUY',
+					price: 100,
+					marketDataProvider: 'twelve-data',
+					outcomeEvaluated: false,
+					outcomes: {
+						'1D': {
+							status: 'pending',
+							targetTime: new Date(receivedAtDate.getTime() + 24 * 60 * 60 * 1000).toISOString(),
+						},
+					},
+				}],
+			]));
+
+			const originalFetch = global.fetch;
+			const mockFetch = jest.fn().mockResolvedValue({
+				ok: true,
+				status: 200,
+				json: async () => ({
+					status: 'ok',
+					values: [{
+						datetime: new Date(receivedAtDate.getTime() + 12 * 60 * 60 * 1000).toISOString(),
+						open: '100',
+						high: '110',
+						low: '95',
+						close: '105',
+					}],
+				}),
+			});
+			global.fetch = mockFetch;
+
+			try {
+				await SignalOutcomeService.evaluatePendingOutcomes();
+			} finally {
+				global.fetch = originalFetch;
+			}
+
+			const updated = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(mockDocId);
+			expect(updated.outcomes['1D'].status).toBe('evaluated');
+			expect(updated.outcomes['1D'].price).toBe(105);
+			expect(updated.outcomes['1D'].return).toBe(5);
+			expect(updated.outcomes['1D'].maxFavorableExcursion).toBe(10);
+			expect(updated.outcomes['1D'].maxAdverseExcursion).toBe(-5);
+			expect(mockGetKlines).not.toHaveBeenCalled();
+			const [requestUrl] = mockFetch.mock.calls[0];
+			expect(new URL(requestUrl).searchParams.get('interval')).toBe('1h');
+
+			const metrics = await SignalOutcomeService.getMetricsSummary();
+			expect(metrics.exchangeBreakdown.BATS.evaluated).toBe(1);
+			expect(metrics.providerBreakdown['twelve-data'].evaluated).toBe(1);
 		});
 
 		it('enforces sweep max duration budget on slow or hanging getKlines requests', async () => {
@@ -650,6 +796,9 @@ describe('SignalOutcomeService', () => {
 
 			status = SignalOutcomeService.getWorkerStatus();
 			expect(status.lastRunEvaluatedCount).toBe(1);
+			expect(status.lastRunScannedCount).toBe(1);
+			expect(status.lastRunPendingCount).toBe(0);
+			expect(status.lastRunErrorCount).toBe(0);
 
 			// Clean stop
 			SignalOutcomeService.stopWorker();

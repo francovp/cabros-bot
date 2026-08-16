@@ -92,14 +92,18 @@ const response = (body, status = 200) => ({
 	text: async () => JSON.stringify(body),
 });
 
-function createBrowser({ fetchImpl, confirm = () => true, storedKey = '' }) {
+function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', firebase }) {
 	const body = new FakeElement('body');
 	const elementsById = {};
-	['api-key', 'key-state', 'save-key', 'clear-key', 'connection-form', 'view'].forEach((id) => {
+	[
+		'legacy-connection', 'firebase-auth', 'auth-form', 'auth-email', 'auth-password', 'sign-in', 'sign-out',
+		'auth-state', 'api-key', 'key-state', 'save-key', 'clear-key', 'connection-form', 'view',
+	].forEach((id) => {
 		const tag = id === 'api-key' ? 'input' : id === 'connection-form' ? 'form'
-			: id === 'view' ? 'section' : id.endsWith('key') ? 'button' : 'p';
+			: id === 'view' ? 'section' : id === 'auth-form' ? 'div' : id.endsWith('key') ? 'button' : 'p';
 		const node = new FakeElement(tag);
 		node.id = id;
+		node.hidden = false;
 		elementsById[id] = node;
 		body.append(node);
 	});
@@ -110,9 +114,14 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '' }) {
 	});
 
 	const documentListeners = {};
+	const downloads = [];
 	const document = {
 		body,
-		createElement: (tag) => new FakeElement(tag),
+		createElement: (tag) => {
+			const node = new FakeElement(tag);
+			if (tag === 'a') node.click = () => downloads.push({ href: node.href, download: node.download });
+			return node;
+		},
 		getElementById: (id) => elementsById[id],
 		querySelectorAll: (selector) => body.querySelectorAll(selector),
 		addEventListener: (type, listener) => { documentListeners[type] = listener; },
@@ -128,14 +137,25 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '' }) {
 	};
 	const context = {
 		document,
-		fetch: jest.fn(fetchImpl),
+		fetch: jest.fn(async (url, options) => {
+			if (url === '/admin/auth-config' && !firebase) return response({ enabled: false, configured: false });
+			return fetchImpl(url, options);
+		}),
 		performance: { now: jest.fn().mockReturnValueOnce(10).mockReturnValue(20) },
 		sessionStorage: {
 			getItem: (key) => storage.get(key) || null,
 			setItem: (key, value) => storage.set(key, value),
 			removeItem: (key) => storage.delete(key),
 		},
-		window: { CabrosAdminRequest: helper, confirm },
+		window: {
+			CabrosAdminRequest: helper,
+			confirm,
+			firebase,
+			URL: {
+				createObjectURL: jest.fn((blob) => `blob:${blob.type}`),
+				revokeObjectURL: jest.fn(),
+			},
+		},
 	};
 	vm.runInNewContext(
 		fs.readFileSync(path.join(__dirname, '../../src/admin/admin.js'), 'utf8'),
@@ -143,7 +163,7 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '' }) {
 	);
 	documentListeners.DOMContentLoaded();
 
-	return { body, context, elementsById, helperCalls, storage };
+	return { body, context, elementsById, helperCalls, storage, downloads };
 }
 
 async function selectView(browser, name) {
@@ -209,6 +229,69 @@ describe('admin browser client', () => {
 
 		expect(requests).toEqual(['/openapi.json']);
 		expect(browser.elementsById.view.textContent).toContain('Enter an API key');
+	});
+
+	it('shows Firebase sign-in state and sends a verified token after sign-in', async () => {
+		let authStateChanged;
+		const user = {
+			getIdToken: jest.fn().mockResolvedValue('firebase-token'),
+			getIdTokenResult: jest.fn().mockResolvedValue({ claims: { roles: ['admin.viewer'] } }),
+		};
+		const auth = {
+			setPersistence: jest.fn().mockResolvedValue(undefined),
+			onAuthStateChanged: jest.fn((listener) => {
+				authStateChanged = listener;
+				listener(null);
+				return jest.fn();
+			}),
+			signInWithEmailAndPassword: jest.fn(async () => {
+				await authStateChanged(user);
+				return { user };
+			}),
+			signOut: jest.fn().mockResolvedValue(undefined),
+		};
+		const firebase = {
+			initializeApp: jest.fn(),
+			auth: jest.fn(() => auth),
+		};
+		const requests = [];
+		const browser = createBrowser({
+			firebase,
+			fetchImpl: async (url, options) => {
+				if (url === '/admin/auth-config') {
+					return response({ enabled: true, configured: true, config: {
+						apiKey: 'public-key', authDomain: 'cabros.firebaseapp.com', projectId: 'cabros',
+					} });
+				}
+				if (url === '/openapi.json') return response(contract);
+				requests.push([url, options]);
+				return response({});
+			},
+		});
+		await flush();
+
+		expect(browser.elementsById['firebase-auth'].hidden).toBe(false);
+		expect(browser.elementsById['legacy-connection'].hidden).toBe(false);
+		expect(browser.elementsById.view.textContent).toContain('Sign in');
+		browser.elementsById['api-key'].value = 'webhook-key';
+		await browser.elementsById['save-key'].dispatch('click');
+		expect(browser.storage.has('cabros-admin-api-key')).toBe(false);
+		expect(browser.elementsById['key-state'].textContent).toContain('in memory');
+
+		browser.elementsById['auth-email'].value = 'operator@example.com';
+		browser.elementsById['auth-password'].value = 'password';
+		await browser.elementsById['sign-in'].dispatch('click');
+		await flush();
+
+		const statusForm = findForm(browser.elementsById.view, 'GET /api/status');
+		expect(statusForm).toBeDefined();
+		await statusForm.dispatch('submit');
+		await flush();
+		expect(requests.at(-1)[1].headers.Authorization).toBe('Bearer firebase-token');
+
+		await browser.elementsById['sign-out'].dispatch('click');
+		expect(auth.signOut).toHaveBeenCalled();
+		expect(browser.elementsById['api-key'].value).toBe('');
 	});
 
 	it('uses the current session key, redacts output, and cancels before dispatch', async () => {
@@ -359,6 +442,137 @@ describe('admin browser client', () => {
 		expect(requests.at(-1)[0]).toBe('/api/alerts?limit=10&before=cursor-2&source=webhook');
 	});
 
+	it('renders dedicated alert analytics and export forms with safe defaults', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {}),
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const summaryForm = findForm(browser.elementsById.view, 'GET /api/alerts/summary');
+		const exportForm = findForm(browser.elementsById.view, 'GET /api/alerts/export');
+		expect(summaryForm).toBeDefined();
+		expect(exportForm).toBeDefined();
+		expect(exportForm.elements.from.required).toBe(true);
+		expect(exportForm.elements.to.required).toBe(true);
+		expect(exportForm.elements.includeText.checked).toBe(false);
+	});
+
+	it('builds the analytics query and renders summary data from the API response', async () => {
+		const requests = [];
+		const browser = createBrowser({
+			fetchImpl: async (url, options) => {
+				if (url === '/openapi.json') return response(contract);
+				requests.push([url, options]);
+				return response({
+					success: true,
+					summary: { totalAlerts: 3, totalSuccess: 2, byChannel: { telegram: 3 } },
+				});
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const summaryForm = findForm(browser.elementsById.view, 'GET /api/alerts/summary');
+		summaryForm.elements.from.value = '2026-08-01T00:00:00Z';
+		summaryForm.elements.to.value = '2026-08-02T00:00:00Z';
+		summaryForm.elements.limit.value = '25';
+		summaryForm.elements.source.value = 'webhook';
+		summaryForm.elements.enriched.value = 'true';
+		await summaryForm.dispatch('submit');
+		await flush();
+
+		const query = new URLSearchParams(requests[0][0].split('?')[1]);
+		expect(query.get('from')).toBe('2026-08-01T00:00:00.000Z');
+		expect(query.get('to')).toBe('2026-08-02T00:00:00.000Z');
+		expect(query.get('limit')).toBe('25');
+		expect(query.get('source')).toBe('webhook');
+		expect(query.get('enriched')).toBe('true');
+		expect(summaryForm.textContent).toContain('totalAlerts: 3');
+		expect(summaryForm.textContent).toContain('totalSuccess: 2');
+		expect(summaryForm.textContent).toContain('telegram: 3');
+	});
+
+	it.each([
+		['jsonl', 'application/x-ndjson'],
+		['csv', 'text/csv'],
+	])('downloads %s exports with the response content type and no raw text by default', async (format, contentType) => {
+		const requests = [];
+		const browser = createBrowser({
+			fetchImpl: async (url, options) => {
+				if (url === '/openapi.json') return response(contract);
+				requests.push([url, options]);
+				return {
+					ok: true,
+					status: 200,
+					headers: { get: (name) => name === 'content-type' ? contentType : null },
+					blob: async () => ({ type: contentType }),
+					text: async () => 'unused export body',
+				};
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		browser.elementsById['api-key'].value = 'session-secret';
+		const exportForm = findForm(browser.elementsById.view, 'GET /api/alerts/export');
+		exportForm.elements.from.value = '2026-08-01T00:00:00Z';
+		exportForm.elements.to.value = '2026-08-02T00:00:00Z';
+		exportForm.elements.format.value = format;
+		await exportForm.dispatch('submit');
+		await flush();
+
+		const query = new URLSearchParams(requests[0][0].split('?')[1]);
+		expect(query.get('from')).toBe('2026-08-01T00:00:00.000Z');
+		expect(query.get('to')).toBe('2026-08-02T00:00:00.000Z');
+		expect(query.get('format')).toBe(format);
+		expect(query.get('includeText')).toBe('false');
+		expect(requests[0][1].headers['x-api-key']).toBe('session-secret');
+		expect(requests[0][0]).not.toContain('session-secret');
+		expect(browser.downloads[0].download).toBe(`alerts-export.${format}`);
+		expect(browser.downloads[0].download).not.toContain('session-secret');
+		expect(browser.context.window.URL.createObjectURL).toHaveBeenCalledWith({ type: contentType });
+		expect(exportForm.textContent).toContain(contentType);
+		expect(exportForm.textContent).not.toContain('session-secret');
+
+		exportForm.elements.includeText.checked = true;
+		await exportForm.dispatch('submit');
+		await flush();
+		const optInQuery = new URLSearchParams(requests.at(-1)[0].split('?')[1]);
+		expect(optInQuery.get('includeText')).toBe('true');
+	});
+
+	it('shows bounded-export validation and protected API errors without downloading', async () => {
+		const requests = [];
+		const browser = createBrowser({
+			fetchImpl: async (url, options) => {
+				if (url === '/openapi.json') return response(contract);
+				requests.push([url, options]);
+				return response({ error: 'storage unavailable', code: 'STORAGE_UNAVAILABLE' }, 503);
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const exportForm = findForm(browser.elementsById.view, 'GET /api/alerts/export');
+		exportForm.elements.from.value = '';
+		await exportForm.dispatch('submit');
+		await flush();
+		expect(requests).toHaveLength(0);
+		const exportOutput = find(exportForm, (node) => node.tagName === 'PRE');
+		expect(exportOutput.className).toContain('response-error');
+		expect(exportOutput.textContent).toContain('From and To are required');
+
+		const summaryForm = findForm(browser.elementsById.view, 'GET /api/alerts/summary');
+		await summaryForm.dispatch('submit');
+		await flush();
+		expect(requests).toHaveLength(1);
+		const summaryOutput = find(summaryForm, (node) => node.tagName === 'PRE');
+		expect(summaryOutput.className).toContain('response-error');
+		expect(summaryOutput.textContent).toContain('HTTP 503');
+		expect(summaryOutput.textContent).toContain('STORAGE_UNAVAILABLE');
+	});
+
 	it('renders dedicated alert detail lookup', async () => {
 		const browser = createBrowser({
 			fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {}),
@@ -390,6 +604,248 @@ describe('admin browser client', () => {
 		const runForm = findForm(browser.elementsById.view, 'POST /api/scanner-presets/{id}/run');
 		expect(runForm.elements.query).toBeDefined();
 		expect(runForm.elements.query.value).toContain('"dryRun": false');
+	});
+
+	it('loads recent jobs with bounded status, type, and limit filters', async () => {
+		const requests = [];
+		const browser = createBrowser({
+			fetchImpl: async (url, options) => {
+				if (url === '/openapi.json') return response(contract);
+				requests.push([url, options]);
+				return response({ success: true, jobs: [] });
+			},
+		});
+		await flush();
+		await selectView(browser, 'jobs');
+
+		const listForm = findForm(browser.elementsById.view, 'Load recent jobs');
+		listForm.elements.limit.value = '7';
+		listForm.elements.status.value = 'failed';
+		listForm.elements.type.value = 'market-scanner';
+		browser.elementsById['api-key'].value = 'session-secret';
+		await listForm.dispatch('submit');
+		await flush();
+
+		expect(requests.at(-1)[0]).toBe('/api/jobs?limit=7&status=failed&type=market-scanner');
+		expect(requests.at(-1)[1].headers['x-api-key']).toBe('session-secret');
+	});
+
+	it('renders only safe recent-job summary fields', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				return response({
+					success: true,
+					jobs: [{
+						jobId: 'job-safe',
+						type: 'expanded-analysis',
+						status: 'failed',
+						progress: { current: 1, total: 2, status: 'hidden-progress-detail' },
+						createdAt: '2026-07-30T04:55:09.000Z',
+						updatedAt: '2026-07-30T04:56:09.000Z',
+						totalDurationMs: 60000,
+						error: 'hidden internal error',
+						payload: { callbackSecret: 'hidden-secret' },
+					}],
+				});
+			},
+		});
+		await flush();
+		await selectView(browser, 'jobs');
+
+		const listForm = findForm(browser.elementsById.view, 'Load recent jobs');
+		await listForm.dispatch('submit');
+		await flush();
+
+		expect(listForm.textContent).toContain('job-safe');
+		expect(listForm.textContent).toContain('expanded-analysis');
+		expect(listForm.textContent).toContain('failed');
+		expect(listForm.textContent).toContain('1 / 2');
+		expect(listForm.textContent).toContain('60000 ms');
+		expect(listForm.textContent).not.toContain('hidden internal error');
+		expect(listForm.textContent).not.toContain('hidden-secret');
+	});
+
+	it('clears stale recent jobs when a refresh fails', async () => {
+		let listAttempts = 0;
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				listAttempts++;
+				if (listAttempts === 1) {
+					return response({ success: true, jobs: [{
+						jobId: 'stale-job', type: 'expanded-analysis', status: 'completed', progress: {},
+					}] });
+				}
+				return response({ error: 'refresh failed' }, 500);
+			},
+		});
+		await flush();
+		await selectView(browser, 'jobs');
+
+		const listForm = findForm(browser.elementsById.view, 'Load recent jobs');
+		await listForm.dispatch('submit');
+		await flush();
+		expect(listForm.textContent).toContain('stale-job');
+
+		await listForm.dispatch('submit');
+		await flush();
+		expect(listForm.textContent).not.toContain('stale-job');
+	});
+
+	it('ignores a pending list response after its filters change', async () => {
+		let resolveList;
+		const pendingList = new Promise((resolve) => { resolveList = resolve; });
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.includes('status=processing')) return pendingList;
+				return response({ success: true, jobs: [] });
+			},
+		});
+		await flush();
+		await selectView(browser, 'jobs');
+
+		const listForm = findForm(browser.elementsById.view, 'Load recent jobs');
+		listForm.elements.status.value = 'processing';
+		const pendingSubmit = listForm.dispatch('submit');
+		await flush();
+		listForm.elements.status.value = 'failed';
+		await listForm.elements.status.dispatch('change');
+		expect(listForm.textContent).toContain('Filters changed. Submit to load recent jobs.');
+		resolveList(response({ success: true, jobs: [{
+			jobId: 'old-filter-job', type: 'expanded-analysis', status: 'processing', progress: {},
+		}] }));
+		await pendingSubmit;
+		await flush();
+
+		expect(findButton(listForm, 'Load recent jobs').disabled).toBe(false);
+		expect(listForm.textContent).not.toContain('old-filter-job');
+	});
+
+	it('pre-fills the existing job status workflow when a recent job is selected', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				return response({ success: true, jobs: [{
+					jobId: 'selected-job', type: 'market-scanner', status: 'processing', progress: {},
+				}] });
+			},
+		});
+		await flush();
+		await selectView(browser, 'jobs');
+
+		const listForm = findForm(browser.elementsById.view, 'Load recent jobs');
+		await listForm.dispatch('submit');
+		await flush();
+		await findButton(listForm, 'Open status').dispatch('click');
+
+		const statusForm = findForm(browser.elementsById.view, 'GET /api/jobs/{jobId}');
+		expect(statusForm.elements['path-jobId'].value).toBe('selected-job');
+	});
+
+	it('ignores a pending status response after selecting another recent job', async () => {
+		let resolveStatus;
+		const pendingStatus = new Promise((resolve) => { resolveStatus = resolve; });
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/jobs?')) {
+					return response({ success: true, jobs: [{
+						jobId: 'job-b', type: 'market-scanner', status: 'processing', progress: {},
+					}] });
+				}
+				if (url === '/api/jobs/job-a') return pendingStatus;
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'jobs');
+
+		const listForm = findForm(browser.elementsById.view, 'Load recent jobs');
+		await listForm.dispatch('submit');
+		await flush();
+		const statusForm = findForm(browser.elementsById.view, 'GET /api/jobs/{jobId}');
+		statusForm.elements['path-jobId'].value = 'job-a';
+		const pendingSubmit = statusForm.dispatch('submit');
+		await flush();
+		await findButton(listForm, 'Open status').dispatch('click');
+		expect(findButton(statusForm, 'Get job status').disabled).toBe(false);
+		expect(statusForm.textContent).toContain('Job selected. Submit to load its status.');
+		resolveStatus(response({ jobId: 'job-a', status: 'processing', results: [] }));
+		await pendingSubmit;
+		await flush();
+
+		expect(statusForm.elements['path-jobId'].value).toBe('job-b');
+		expect(findButton(statusForm, 'Cancel job')).toBeUndefined();
+		expect(statusForm.textContent).toContain('Job selected. Submit to load its status.');
+		expect(statusForm.textContent).not.toContain('"job-a"');
+	});
+
+	it('re-enables status lookup after a manual job-ID edit invalidates a request', async () => {
+		let resolveStatus;
+		const pendingStatus = new Promise((resolve) => { resolveStatus = resolve; });
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/jobs/job-a') return pendingStatus;
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'jobs');
+
+		const statusForm = findForm(browser.elementsById.view, 'GET /api/jobs/{jobId}');
+		const jobIdInput = statusForm.elements['path-jobId'];
+		jobIdInput.value = 'job-a';
+		const pendingSubmit = statusForm.dispatch('submit');
+		await flush();
+		jobIdInput.value = 'job-b';
+		await jobIdInput.dispatch('input');
+		resolveStatus(response({ jobId: 'job-a', status: 'processing', results: [] }));
+		await pendingSubmit;
+		await flush();
+
+		expect(findButton(statusForm, 'Get job status').disabled).toBe(false);
+		expect(statusForm.textContent).not.toContain('"job-a"');
+	});
+
+	it('ignores a pending job action after selecting another recent job', async () => {
+		let resolveAction;
+		const pendingAction = new Promise((resolve) => { resolveAction = resolve; });
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/jobs?')) {
+					return response({ success: true, jobs: [{
+						jobId: 'job-b', type: 'market-scanner', status: 'processing', progress: {},
+					}] });
+				}
+				if (url === '/api/jobs/job-a') return response({ jobId: 'job-a', status: 'processing', results: [] });
+				if (url === '/api/jobs/job-a/cancel') return pendingAction;
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'jobs');
+
+		const listForm = findForm(browser.elementsById.view, 'Load recent jobs');
+		await listForm.dispatch('submit');
+		await flush();
+		const statusForm = findForm(browser.elementsById.view, 'GET /api/jobs/{jobId}');
+		statusForm.elements['path-jobId'].value = 'job-a';
+		await statusForm.dispatch('submit');
+		await flush();
+		const pendingRequest = findButton(statusForm, 'Cancel job').dispatch('click');
+		await flush();
+		await findButton(listForm, 'Open status').dispatch('click');
+		resolveAction(response({ success: true, jobId: 'job-a', status: 'cancelled' }));
+		await pendingRequest;
+		await flush();
+
+		expect(statusForm.elements['path-jobId'].value).toBe('job-b');
+		expect(statusForm.textContent).toContain('Job selected. Submit to load its status.');
+		expect(statusForm.textContent).not.toContain('"job-a"');
 	});
 
 	it('shows cancel only for a fetched active job', async () => {
