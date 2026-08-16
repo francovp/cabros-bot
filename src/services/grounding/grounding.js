@@ -12,6 +12,7 @@ const { getPromptService, PromptKeys } = require('../prompts');
 const metrics = require('./metrics');
 const sentryService = require('../monitoring/SentryService');
 const { deriveAssetContext, deriveCleanSearchQuery } = require('../tradingview/parseTradingViewSignal');
+const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 
 const promptService = getPromptService();
 
@@ -51,8 +52,7 @@ async function deriveSearchQuery(alertText, opts = {}) {
 }
 
 function getEffectiveGroundingMaxLength() {
-	const parsed = parseInt(process.env.GROUNDING_MAX_LENGTH, 10);
-	return Number.isFinite(parsed) && parsed > 0 ? parsed : GROUNDING_MAX_LENGTH;
+	return getRuntimeConfig().GROUNDING_MAX_LENGTH;
 }
 
 /**
@@ -62,9 +62,10 @@ function getEffectiveGroundingMaxLength() {
  * @returns {Promise<GeminiResponse>} Summary with citations
  */
 async function groundAlert({ text, options = {} }) {
+	const runtimeConfig = getRuntimeConfig();
 	const {
-		maxSources = GROUNDING_MAX_SOURCES,
-		timeoutMs = GROUNDING_TIMEOUT_MS,
+		maxSources = runtimeConfig.GROUNDING_MAX_SOURCES,
+		timeoutMs = runtimeConfig.GROUNDING_TIMEOUT_MS,
 		preserveLanguage = true,
 		maxLength = getEffectiveGroundingMaxLength(),
 		promptType = 'ALERT_ENRICHMENT',

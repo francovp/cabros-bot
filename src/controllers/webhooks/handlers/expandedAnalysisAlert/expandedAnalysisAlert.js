@@ -19,6 +19,7 @@ const {
 	getRequestedChannels,
 	getDeliveredChannels,
 } = require('../../../../services/notification/requestRouting');
+const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteConfigService');
 
 const DEFAULT_ALERT_TIMEOUT_MS = 60000;
 const MAX_ALERT_TIMEOUT_MS = 120000;
@@ -309,7 +310,7 @@ function buildSummary(results, deliveryResults) {
 }
 
 function getAlertTimeoutMs() {
-	const parsedTimeout = parseInt(process.env.EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS || `${DEFAULT_ALERT_TIMEOUT_MS}`, 10);
+	const parsedTimeout = getRuntimeConfig().EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS;
 
 	if (!Number.isFinite(parsedTimeout) || parsedTimeout <= 0) {
 		return DEFAULT_ALERT_TIMEOUT_MS;

@@ -344,7 +344,7 @@ describe('Status endpoints', () => {
 		expect(response.body.dependencies.firebaseRemoteConfig).toEqual(expect.objectContaining({
 			enabled: true,
 			configured: true,
-			source: 'default',
+			source: 'environment',
 			templateVersion: null,
 			lastSuccessfulLoad: null,
 			lastErrorCategory: null,

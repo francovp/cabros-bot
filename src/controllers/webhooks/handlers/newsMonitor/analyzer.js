@@ -842,7 +842,7 @@ class NewsAnalyzer {
 	 */
 	async fetchBinancePrice(symbol) {
 		try {
-			const timeoutMs = parseInt(process.env.BINANCE_FETCH_TIMEOUT_MS, 10) || 5000;
+			const timeoutMs = getRuntimeConfig().BINANCE_FETCH_TIMEOUT_MS;
 			const client = getBinanceClient();
 
 			const withTimeout = (promise, ms, fallbackValue, isReject = false) => {

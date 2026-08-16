@@ -41,7 +41,7 @@ class TradingViewMcpService {
 	}
 
 	isEnabled() {
-		return process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT === 'true';
+		return getRuntimeConfig().ENABLE_TRADINGVIEW_MCP_ENRICHMENT;
 	}
 
 	getConfig() {
@@ -50,7 +50,7 @@ class TradingViewMcpService {
 		const maxRetries = parseInt(this.config.maxRetries || runtimeConfig.TRADINGVIEW_MCP_MAX_RETRIES, 10);
 		const defaultExchange = (this.config.defaultExchange || process.env.TRADINGVIEW_MCP_DEFAULT_EXCHANGE || 'BINANCE').toUpperCase();
 		const defaultTimeframe = normalizeTradingViewTimeframe(
-			this.config.defaultTimeframe || process.env.TRADINGVIEW_MCP_DEFAULT_TIMEFRAME || '1h',
+			this.config.defaultTimeframe || runtimeConfig.TRADINGVIEW_MCP_DEFAULT_TIMEFRAME || '1h',
 			'1h',
 		);
 		const enrichmentBudgetMs = parseInt(
@@ -138,7 +138,7 @@ class TradingViewMcpService {
 		}
 
 		let volumeAnalysis = null;
-		if (process.env.ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION === 'true') {
+		if (getRuntimeConfig().ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION) {
 			const volumeTimeoutMs = Math.min(5000, Math.max(1000, (budgetMs || 12000) / 4));
 			const controller = new AbortController();
 			const timeoutId = setTimeout(() => {

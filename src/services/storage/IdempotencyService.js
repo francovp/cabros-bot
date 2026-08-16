@@ -3,6 +3,7 @@
 const crypto = require('crypto');
 const idempotencyStorageService = require('./IdempotencyStorageService');
 const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
+const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 
 class IdempotencyService {
 	constructor() {
@@ -18,18 +19,11 @@ class IdempotencyService {
 	}
 
 	/**
-	 * Get the configurable TTL from environment
+	 * Get the configurable TTL from environment / remote config
 	 * @returns {number}
 	 */
 	getTtlMs() {
-		const envTtl = process.env.WEBHOOK_IDEMPOTENCY_TTL_MS;
-		if (envTtl !== undefined) {
-			const parsed = parseInt(envTtl, 10);
-			if (Number.isFinite(parsed) && parsed >= 0) {
-				return parsed;
-			}
-		}
-		return this.defaultTtlMs;
+		return getRuntimeConfig().WEBHOOK_IDEMPOTENCY_TTL_MS;
 	}
 
 	/**
