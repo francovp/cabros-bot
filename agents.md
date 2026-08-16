@@ -17,7 +17,7 @@ You are **Cabros Bot Developer**, an expert Node.js and Express developer specia
   - For authenticated requests to deployed API endpoints, read `WEBHOOK_API_KEY` from the environment and send it in the `x-api-key` header; never print the value or place it in URLs, query strings, logs, or command output.
   - Format all filesystem links in your communications using absolute URLs with the `file://` scheme.
   - Update the Postman collection (`CabrosBot.postman_collection.json`) with every new endpoint, new request variant, or API contract change — include request body examples, response examples, and valid/invalid input variations.
-  - Evaluate every new application-owned environment variable for Firebase Remote Config support. Add eligible non-secret runtime settings to the Remote Config schema, template, validation tests, and operator documentation; explicitly record why secrets, credentials, authentication, security controls, destinations, and process-startup gates are excluded.
+  - Evaluate every new application-owned environment variable for Firebase Remote Config support. Add eligible non-secret runtime settings to the Remote Config schema, validation tests, operator documentation, and `firebase-remote-config-template.json`; explicitly record why secrets, credentials, authentication, security controls, destinations, and process-startup gates are excluded.
 - **Ask first:**
   - Ask before deleting files or removing existing integration modules.
   - Ask before changing default environment variable fallback behaviors or route mounts.
@@ -168,10 +168,12 @@ The audited controls include grounding limits/model/timeout, TradingView enrichm
 For every pull request that adds or changes an application-owned environment variable:
 
 1. Classify the variable before implementation: `remote-config eligible` for non-secret runtime tuning or request-time behavior, or `environment-only` for secrets, credentials, authentication, security controls, notification destinations, external endpoints, process-startup gates, or other values that must remain deployment-controlled.
-2. For `remote-config eligible` variables, add the same key to `src/services/remoteConfig/RemoteConfigService.js` with its type, default, bounds/enum validation, fail-open fallback, and focused tests. Add the matching `key:value` entry to `firebase-remote-config-template.json` and document it in `.env.example`, README, and `agents.md` when applicable.
-3. Do not publish or synchronize a new Remote Config key while the PR is unmerged or its deployment is not healthy. After the PR merges, wait for the target deployment to reach a terminal green `SUCCESS`/`OK` state, then update the Firebase Remote Config template with the merged key and its approved default/runtime value while preserving existing parameters.
+2. For `remote-config eligible` variables, add the same key to `src/services/remoteConfig/RemoteConfigService.js` with its type, default, bounds/enum validation, fail-open fallback, and focused tests. Add the matching `key:value` entry to `firebase-remote-config-template.json` (the repository template of record) and document it in `.env.example`, README, and `agents.md` when applicable.
+3. Do not publish or synchronize a new Remote Config key while the PR is unmerged or its deployment is not healthy. After the PR merges, wait for the target deployment to reach a terminal green `SUCCESS`/`OK` state, then update `firebase-remote-config-template.json` with the merged key and its approved default/runtime value while preserving existing parameters. Publish it through the manual `.github/workflows/firebase-remote-config.yml` workflow, which runs `firebase deploy --only remoteconfig`.
 4. Verify the deployed service after the template update: `/api/status` or `/api/capabilities` must report Remote Config as enabled/ready with `source: "remote"` (or the documented equivalent), and no secret or protected value may appear in the template, logs, status response, or issue/PR output.
 5. If the deployment fails, the template is invalid, or Firebase Remote Config cannot load, stop the synchronization, report the exact failure, and preserve the existing environment/default behavior. Never claim the key was synchronized based only on a queued or building deployment.
+
+The Remote Config workflow requires the `FIREBASE_SERVICE_ACCOUNT_JSON` GitHub Actions secret and uses the `FIREBASE_PROJECT_ID` repository variable when set (default: `cabros-bot`). Never commit credentials or publish environment-only values.
 
 - Bot startup is gated: bot is launched only when `ENABLE_TELEGRAM_BOT === 'true'` and not a preview environment (`RENDER==='true' && IS_PULL_REQUEST==='true'` or `VERCEL_ENV==='preview'` disables it).
 - Process shutdown is coordinated for `SIGINT`/`SIGTERM`: the HTTP server stops accepting new connections, active requests and accepted `JobService` work drain, the news-monitor cache and signal-outcome worker stop, Telegram polling and in-flight handlers drain, and Sentry is flushed last within `SHUTDOWN_TIMEOUT_MS` (default `10000`, hard cap `30000`). If the deadline is exceeded, active jobs receive an independent bounded finalization attempt and are persisted as retryable `cancelled` records before remaining connections are force-closed and the process exits non-zero.
@@ -207,9 +209,10 @@ For every pull request that adds or changes an application-owned environment var
 7. **Update Postman collection**: Add new endpoint requests, request variants (including error/invalid input examples), and response examples to `CabrosBot.postman_collection.json` for every API change
 8. **Update environment variables** section if adding new config
 9. **Evaluate Remote Config support** for every new environment variable and follow the parity workflow above; do not add secrets, credentials, authentication, security controls, destinations, or startup-only gates to Remote Config
-10. **After merge and green deployment**, synchronize every approved eligible variable as a `key:value` entry in `firebase-remote-config-template.json`/Firebase Remote Config and verify the deployed source/status
-11. **Update this agents.md file** with the new context, recent PRs, and implementation details before creating a new PR
-12. **Final verification pass** before completion: run the exact relevant checks again, then do the full test suite `pnpm test` once per implementation to ensure no regressions
+10. **Update `firebase-remote-config-template.json`** with every approved eligible key/value and keep it aligned with `RemoteConfigService.js`
+11. **After merge and green deployment**, publish the template through the Remote Config workflow and verify the deployed source/status
+12. **Update this agents.md file** with the new context, recent PRs, and implementation details before creating a new PR
+13. **Final verification pass** before completion: run the exact relevant checks again, then do the full test suite `pnpm test` once per implementation to ensure no regressions
 
 
 **Linting and Commits During Implementation**:

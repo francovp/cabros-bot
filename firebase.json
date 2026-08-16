@@ -9,5 +9,8 @@
     "firestore": {
       "port": 8081
     }
+  },
+  "remoteconfig": {
+    "template": "firebase-remote-config-template.json"
   }
 }
