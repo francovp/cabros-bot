@@ -50,6 +50,11 @@ async function deriveSearchQuery(alertText, opts = {}) {
 	}
 }
 
+function getEffectiveGroundingMaxLength() {
+	const parsed = parseInt(process.env.GROUNDING_MAX_LENGTH, 10);
+	return Number.isFinite(parsed) && parsed > 0 ? parsed : GROUNDING_MAX_LENGTH;
+}
+
 /**
  * Main grounding flow: derive query, collect evidence, generate summary
  * @param {string} text - Alert text to ground
@@ -61,7 +66,7 @@ async function groundAlert({ text, options = {} }) {
 		maxSources = GROUNDING_MAX_SOURCES,
 		timeoutMs = GROUNDING_TIMEOUT_MS,
 		preserveLanguage = true,
-		maxLength = GROUNDING_MAX_LENGTH,
+		maxLength = getEffectiveGroundingMaxLength(),
 		promptType = 'ALERT_ENRICHMENT',
 		tokenUsage,
 	} = options;

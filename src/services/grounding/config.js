@@ -23,7 +23,10 @@ const FORCE_BRAVE_SEARCH = process.env.FORCE_BRAVE_SEARCH === 'true';
 // Performance and control parameters
 const GROUNDING_MAX_SOURCES = parseInt(process.env.GROUNDING_MAX_SOURCES || '3', 10);
 const GROUNDING_TIMEOUT_MS = parseInt(process.env.GROUNDING_TIMEOUT_MS || '30000', 10);
-const GROUNDING_MAX_LENGTH = parseInt(process.env.GROUNDING_MAX_LENGTH || '2000', 10);
+const parsedGroundingMaxLength = parseInt(process.env.GROUNDING_MAX_LENGTH, 10);
+const GROUNDING_MAX_LENGTH = Number.isFinite(parsedGroundingMaxLength) && parsedGroundingMaxLength > 0
+	? parsedGroundingMaxLength
+	: 2000;
 const MODEL_PROVIDER = typeof process.env.MODEL_PROVIDER === 'string' && process.env.MODEL_PROVIDER.trim().length > 0
 	? process.env.MODEL_PROVIDER.trim().toLowerCase()
 	: 'gemini';
@@ -66,6 +69,7 @@ module.exports = {
 	FORCE_BRAVE_SEARCH,
 	GROUNDING_MAX_SOURCES,
 	GROUNDING_TIMEOUT_MS,
+	GROUNDING_MAX_LENGTH,
 	GEMINI_SYSTEM_PROMPT,
 	ALERT_ENRICHMENT_SYSTEM_PROMPT,
 	NEWS_ANALYSIS_SYSTEM_PROMPT,
