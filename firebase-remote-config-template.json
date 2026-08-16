@@ -1,0 +1,71 @@
+{
+  "parameters": {
+    "NEWS_ALERT_THRESHOLD": {
+      "defaultValue": {
+        "value": "0.7"
+      },
+      "description": "Minimum confidence required for news alerts",
+      "valueType": "NUMBER"
+    },
+    "NEWS_TIMEOUT_MS": {
+      "defaultValue": {
+        "value": "30000"
+      },
+      "description": "News analysis timeout in milliseconds",
+      "valueType": "NUMBER"
+    },
+    "NEWS_GEMINI_CONCURRENCY": {
+      "defaultValue": {
+        "value": "3"
+      },
+      "description": "Maximum concurrent Gemini-backed symbol analyses",
+      "valueType": "NUMBER"
+    },
+    "NEWS_GEMINI_QUOTA_MAX_RETRIES": {
+      "defaultValue": {
+        "value": "2"
+      },
+      "description": "Maximum Gemini quota retries for news analysis",
+      "valueType": "NUMBER"
+    },
+    "NEWS_GEMINI_QUOTA_RETRY_BASE_MS": {
+      "defaultValue": {
+        "value": "1000"
+      },
+      "description": "Base delay for Gemini quota retries in milliseconds",
+      "valueType": "NUMBER"
+    },
+    "TRADINGVIEW_MCP_TIMEOUT_MS": {
+      "defaultValue": {
+        "value": "12000"
+      },
+      "description": "TradingView MCP request timeout in milliseconds",
+      "valueType": "NUMBER"
+    },
+    "TRADINGVIEW_MCP_MAX_RETRIES": {
+      "defaultValue": {
+        "value": "3"
+      },
+      "description": "Maximum TradingView MCP retries",
+      "valueType": "NUMBER"
+    },
+    "TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS": {
+      "defaultValue": {
+        "value": "12000"
+      },
+      "description": "Maximum TradingView enrichment budget in milliseconds",
+      "valueType": "NUMBER"
+    },
+    "ENABLE_MESSAGE_FOOTER_METADATA": {
+      "defaultValue": {
+        "value": "true"
+      },
+      "description": "Enable metadata footer on outgoing messages",
+      "valueType": "BOOLEAN"
+    }
+  },
+  "version": {
+    "versionNumber": "19",
+    "isLegacy": true
+  }
+}
