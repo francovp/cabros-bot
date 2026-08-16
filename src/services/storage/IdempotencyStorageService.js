@@ -133,6 +133,12 @@ async function reserveEntry(key, payloadHash, ttlMs) {
 			const snapshot = await transaction.get(docRef);
 			const nowMs = Date.now();
 			const nowTimestamp = admin.firestore.Timestamp.fromMillis(nowMs);
+			// Pending claims must remain alive for at least PENDING_STALE_TIMEOUT_MS so that
+			// Firestore native TTL cannot delete an active pending document before reserveEntry
+			// considers it stale. Without this guard a short WEBHOOK_IDEMPOTENCY_TTL_MS (< 180 s)
+			// would let another replica re-reserve the same key and produce a duplicate response.
+			const pendingExpiresAtMs = nowMs + Math.max(ttlMs, PENDING_STALE_TIMEOUT_MS);
+			const pendingExpiresAtTimestamp = admin.firestore.Timestamp.fromMillis(pendingExpiresAtMs);
 			const expiresAtTimestamp = admin.firestore.Timestamp.fromMillis(nowMs + ttlMs);
 
 			if (snapshot.exists) {
@@ -183,7 +189,7 @@ async function reserveEntry(key, payloadHash, ttlMs) {
 				state: 'pending',
 				claimToken,
 				createdAt: nowTimestamp,
-				expiresAt: expiresAtTimestamp,
+				expiresAt: pendingExpiresAtTimestamp,
 				updatedAt: nowTimestamp,
 			});
 
