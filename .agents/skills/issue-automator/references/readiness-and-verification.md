@@ -6,7 +6,7 @@ This reference defines the verification rules, readiness criteria, and quiet win
 
 A PR is ready to merge directly only if all of these are true and the agent is confident no human review is needed:
 
-1. **No Unresolved Discussions**: No open actionable discussions or review threads remain, especially from `@francovp` and Codex. Establish this with paginated GraphQL `reviewThreads`; flat PR comments and collector counts are context only, not proof. Match automated review authors by their actual login, including `chatgpt-codex-connector` when present, before applying the Codex rate-limit fallback below. A thread requiring product authority or human clarification is an explicit `IN_REVIEW` handoff exception, not a merge-ready state.
+1. **No Unresolved Discussions**: No open actionable inline discussions, review threads, or top-level PR conversation comments remain, especially from `@francovp` and Codex. Establish inline state with paginated GraphQL `reviewThreads` and track paginated top-level conversation comments by ID and timestamp; flat comments alone are not proof of inline resolution. Match automated review authors by their actual login, including `chatgpt-codex-connector` when present, before applying the Codex rate-limit fallback below. A thread requiring product authority or human clarification is an explicit `IN_REVIEW` handoff exception, not a merge-ready state.
 2. **All Checks Green**: All required checks are green or conclusively non-blocking.
 3. **Preview Live**: The preview deploy is live and operational.
 4. **Direct Verification**: Direct `curl` verification against the Render preview succeeds.
@@ -27,14 +27,14 @@ If any criterion is uncertain, or a discussion requires human input, keep the sa
 
 ## Retry and Livelock Control
 
-1. **Bounded Checks**: Each quiet-window check is bounded; do not poll continuously outside the required midpoint and endpoint checks.
-2. **Verification Limit**: Allow at most 3 full verification cycles for an unchanged head SHA. A new concrete change or newly appeared discussion starts a fresh cycle.
-3. **Reset Trigger**: If a new concrete change is pushed or a new discussion appears, address it and reset the verification cycle counter and quiet window for that issue.
-4. **Baseline Threads**: Before the quiet window starts, triage every unresolved thread in the baseline snapshot. Do not treat an existing thread as already handled merely because it predates the snapshot.
+1. **Bounded Checks**: Each quiet-window check is bounded; check both inline `reviewThreads` and paginated top-level PR conversation comments, and do not poll continuously outside the required midpoint and endpoint checks.
+2. **Verification Limit**: Allow at most 3 full verification cycles for an unchanged head SHA. Discussion-only activity does not reset this counter.
+3. **Reset Trigger**: A concrete new head commit resets the verification-cycle counter and quiet window. A new discussion resets only the quiet window; address it without resetting the cycle budget.
+4. **Baseline Discussions**: Before the quiet window starts, triage every unresolved inline thread and actionable top-level conversation comment in the baseline snapshot. Do not treat an existing item as already handled merely because it predates the snapshot.
 5. **Human Input**: If a thread needs product authority or missing requirements, stop the loop and use Step 7 for `IN_REVIEW`; do not force resolution or classify it as a polling blocker.
 6. **Repeated Blockers**: If the same blocker persists across cycles, end with outcome `LOCAL_DEADLOCK`.
 7. **Action Duplication**: Do not retry the same failed action unless there is a clear reason it may now succeed.
-8. **Polling Constraints**: Do not poll indefinitely without review activity. When a discussion appears, address it and repeat the quiet-window cycle until one complete cycle finishes with no new discussions or Step 7 is selected for human input.
+8. **Polling Constraints**: Do not poll indefinitely without review activity. Repeat the quiet-window cycle after new discussions, but if 3 unchanged-head cycles are exhausted with unresolved actionable feedback, end with `LOCAL_DEADLOCK` or use Step 7 when human input is required.
 
 ## Quiet Window
 
