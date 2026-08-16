@@ -22,6 +22,7 @@ process.env = {
 	// Sentry disabled by default in tests
 	ENABLE_SENTRY: 'false',
 	SENTRY_DSN: undefined,
+	WEBHOOK_API_KEY: undefined,
 	// Silence verbose logging in tests (only errors shown by default)
 	// Set LOG_LEVEL=debug to enable verbose test output when debugging
 	LOG_LEVEL: process.env.LOG_LEVEL || 'error',
