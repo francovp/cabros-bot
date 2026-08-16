@@ -1275,3 +1275,13 @@ Raw alert text remains disabled by default and requires an explicit checkbox. Th
 **Coverage**:
 - `src/controllers/webhooks/handlers/newsMonitor/newsMonitor.js` — Resolves defaults before the shared validation boundary.
 - `tests/integration/news-monitor-alerts.test.js` — Covers invalid and oversized defaults before analysis and valid default asset-class propagation.
+
+## News Monitor Cached No-Event Analyses (CB-146 / Issue #363)
+
+News monitor cache reads now include `EventCategory.NONE`, so a cached no-event analysis returns `AnalysisStatus.CACHED` during its existing TTL without repeating market-context or Gemini provider calls. Event-category cache keys remain independent and the existing dry-run, routing, delivery, TTL, and fail-open behavior is unchanged.
+
+**Coverage**:
+- `src/controllers/webhooks/handlers/newsMonitor/analyzer.js` — Reads the existing no-event cache entry at the shared cache boundary.
+- `tests/integration/news-monitor-cache.test.js` — Verifies no-event cache hits return no alert and avoid repeated Gemini/market-context provider calls.
+
+No endpoint or response contract changed; Postman and OpenAPI remain unchanged.
