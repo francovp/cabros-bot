@@ -8,6 +8,7 @@ const { jobQueue } = require('../services/jobs/JobQueue');
 const equityMarketDataService = require('../services/storage/EquityMarketDataService');
 const remoteConfigService = require('../services/remoteConfig/RemoteConfigService');
 const { tradingViewMcpService } = require('../services/tradingview/TradingViewMcpService');
+const { binanceOrderService } = require('../services/trading/BinanceOrderService');
 const {
 	getDeploymentCommit,
 	isPreviewEnvironment,
@@ -167,6 +168,8 @@ function getStatus() {
 	const sentryEnabled = isEnabled(process.env.ENABLE_SENTRY);
 	const langfusePromptsEnabled = isEnabled(process.env.ENABLE_LANGFUSE_PROMPTS);
 	const binancePriceCheckEnabled = isEnabled(process.env.ENABLE_BINANCE_PRICE_CHECK);
+	const binanceTradingEnabled = isEnabled(process.env.ENABLE_BINANCE_TRADING);
+	const binanceTradingStatus = binanceOrderService.getStatus();
 	const llmAlertEnrichmentEnabled = isEnabled(process.env.ENABLE_LLM_ALERT_ENRICHMENT);
 	const cloudflareAigEnabled = isEnabled(process.env.ENABLE_CLOUDFLARE_AIG);
 	const runtimeConfig = remoteConfigService.getRuntimeConfig();
@@ -298,6 +301,7 @@ function getStatus() {
 			langfusePrompts: langfusePromptsEnabled,
 			marketScanner: marketScannerEnabled,
 			binancePriceCheck: binancePriceCheckEnabled,
+			binanceTrading: binanceTradingEnabled,
 			llmAlertEnrichment: llmAlertEnrichmentEnabled,
 			cloudflareAig: cloudflareAigEnabled,
 			messageFooterMetadata: messageFooterMetadataEnabled,
@@ -364,6 +368,7 @@ function getStatus() {
 				lastRunErrorCount: signalOutcomeWorkerStatus.lastRunErrorCount,
 			},
 			jobExecutionQueue: jobExecutionQueueStatus,
+			binanceTrading: binanceTradingStatus,
 		},
 	};
 }

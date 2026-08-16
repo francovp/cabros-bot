@@ -189,6 +189,21 @@ pnpm test:firebase
 - `NEWS_GEMINI_QUOTA_RETRY_BASE_MS` - Base exponential backoff when Gemini does not provide retry delay metadata (default: `1000` ms)
 - `ENABLE_BINANCE_PRICE_CHECK` - Enable Binance crypto price fetching (`true` or `false`, default: `false`)
 - `BINANCE_FETCH_TIMEOUT_MS` - Binance price request timeout (default: `5000` ms)
+
+#### Binance Spot Order Execution
+
+- `ENABLE_BINANCE_TRADING` - Enable the operator-only Spot order endpoint (`true` or `false`, default: `false`)
+- `BINANCE_API_KEY` / `BINANCE_API_SECRET` - Server-side Binance credentials with Spot trading permission only; withdrawals must remain disabled and IP restrictions are recommended
+- `BINANCE_TRADING_ENV` - Binance environment: `testnet` (default) or explicit `live`
+- `BINANCE_TRADING_ALLOWED_SYMBOLS` - Comma-separated Spot symbol allow-list, for example `BTCUSDT,ETHUSDT`
+- `BINANCE_TRADING_MAX_NOTIONAL` - Maximum order notional in quote asset, enforced before submission
+- `BINANCE_TRADING_TIMEOUT_MS` - Signed request timeout (default `10000` ms, capped at `30000` ms)
+
+`POST /api/trading/binance/orders` requires `admin.operator` access through the existing API-key or Firebase admin authentication flow, and fails closed if neither mechanism is configured. It supports `MARKET` and `LIMIT` `BUY`/`SELL` orders, validates the live Binance symbol status and filters, and uses the existing `binance` `MainClient`. MARKET orders must use `quoteOrderQty`; quantity-based market orders are rejected because their execution price cannot be bounded against the configured notional cap.
+
+`dryRun` defaults to `true` and validates the request without submitting. Set `dryRun: false` only after enabling the feature and explicitly selecting the intended environment. The default environment is Spot Testnet; `live` is never selected implicitly. Live requests require `idempotency-key` (or `x-idempotency-key`) or an explicit `clientOrderId`; a matching request is replayed and a changed payload returns `409 IDEMPOTENCY_CONFLICT`. Send decimal quantities, prices, and quote amounts as strings when exact precision matters; the service preserves those values through validation, submission, and reconciliation by disabling Binance SDK response beautification. MARKET orders must omit `timeInForce`; Binance order-test validation runs for LIMIT dynamic price filters and account-dependent filters such as `MAX_POSITION` and `MAX_NUM_ORDERS`. Definitive Binance rejections, including pre-execution timestamp and throttling failures, return `400 BINANCE_ORDER_REJECTED`; a recovered Binance order that does not match the request returns `409 BINANCE_ORDER_CONFLICT`; transient order-test failures return retryable `502 BINANCE_VALIDATION_FAILED`. A live request with an idempotency key derives a deterministic Binance `clientOrderId`; after cache expiration or process restart, the service reconciles that ID before submitting again. If Binance submission status is ambiguous, including Binance execution-unknown code `-1006`, the API returns `503 BINANCE_ORDER_STATUS_UNKNOWN` and replays that result for the same key; reconcile the order before retrying with a new key.
+
+The response and audit logs include only sanitized order metadata. API credentials are never returned or logged.
 - `ENABLE_LLM_ALERT_ENRICHMENT` - Enable optional secondary LLM enrichment (`true` or `false`, default: `false`)
 - `AZURE_LLM_ENDPOINT` - Azure AI Inference endpoint URL (required if enrichment enabled)
 - `AZURE_LLM_KEY` - Azure AI Inference API key (required if enrichment enabled)
@@ -309,6 +324,8 @@ The dedicated worker also persists the same non-sensitive heartbeat to `workerHe
 `featureFlags.firebaseRemoteConfig` reports `ENABLE_FIREBASE_REMOTE_CONFIG`. This is server-side Remote Config: the Firebase Admin SDK loads the published template with `initServerTemplate()`, while no Firebase Web/Client SDK configuration is involved. `dependencies.firebaseRemoteConfig` exposes only `enabled`, `configured`, `ready`, `status`, `source`, `templateVersion`, `lastSuccessfulLoad`, `lastErrorCategory`, and bounded loader settings; it never returns remote parameter values or credentials.
 
 `GET /api/capabilities` is an alias for the same payload.
+
+When configured, `featureFlags.binanceTrading` and `dependencies.binanceTrading` expose only the non-sensitive execution gate, selected `testnet`/`live` environment, allow-listed symbols, and readiness state.
 
 ### Browser admin authentication
 

@@ -133,6 +133,7 @@ describe('Firebase admin authorization', () => {
 
 	it('preserves the existing API-key middleware behavior when Firebase auth is disabled', async () => {
 		delete process.env.ENABLE_FIREBASE_ADMIN_AUTH;
+		delete process.env.WEBHOOK_API_KEY;
 
 		const response = await request(createApp()).get('/read');
 

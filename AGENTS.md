@@ -36,6 +36,7 @@ This project is a small Express + Telegraf (Telegram) bot service that exposes a
 - `src/routes/index.js` — Registers HTTP API routes (mounted under `/api`; endpoints are feature-gated at runtime).
 - `src/controllers/commands.js` — Telegram command handlers wired in `index.js` (`/precio`, `/cryptobot`).
 - `src/controllers/commands/handlers/core/fetchPriceCryptoSymbol.js` — Calls Binance `MainClient.getAvgPrice` to fetch prices.
+- `src/controllers/trading/binanceOrders.js` — Operator-only `POST /api/trading/binance/orders` controller.
 - `src/controllers/webhooks/handlers/alert/alert.js` — Webhook handler that forwards alert text to a Telegram chat.
 - `src/controllers/webhooks/handlers/expandedAnalysisAlert/expandedAnalysisAlert.js` — `POST /api/webhook/expanded-analysis-alert` handler that builds TradingView MCP analysis reports and sends them through notification channels.
 - `src/controllers/webhooks/handlers/volumeConfirmation/volumeConfirmation.js` — `POST /api/webhook/volume-confirmation` handler that returns structured TradingView MCP volume-confirmation data.
@@ -61,7 +62,7 @@ This project is a small Express + Telegraf (Telegram) bot service that exposes a
 - `src/openapi/docs.js` — Public, read-only `/openapi.json` and self-hosted Swagger UI `/docs` routes.
 
 ### External Integrations
-- **Binance**: Uses `binance` package `MainClient` and `getAvgPrice({ symbol })` with `beautifyResponses: true`.
+- **Binance**: Uses `binance` package `MainClient` for prices and the gated Spot order workflow; order execution uses explicit Testnet/live base URLs, raw decimal response values (`beautifyResponses: false`), deterministic client-order reconciliation before current exchange gates, exact request matching (including LIMIT `timeInForce`), order-test validation for dynamic and account-dependent filters, exchange-info filter validation, and one `submitNewOrder` call without automatic retry.
 - **Telegram**: Uses `telegraf` package. Commands are wired in `index.js`, and direct `bot.telegram.sendMessage` is used for alerts.
 - **TradingView MCP**: Remote MCP Streamable HTTP endpoint defaults to `https://tradingview-mcp-yp6b.onrender.com/mcp`. Tool `coin_analysis` expects complete symbols split from `EXCHANGE:SYMBOL` values.
 
@@ -164,7 +165,7 @@ Implement the following security practices to safeguard endpoints and credential
 
 `.env.example` is the canonical operator template. Static application-owned environment reads must appear there with defaults and valid-value guidance. The documentation-alignment test also extracts audited literal arguments for dynamic environment helpers (`parseEnvInt`, `getSymbolsFromEnv`, prompt `envVar` overrides, URL-shortener maps, and aliases created from `process.env`), so computed or aliased reads do not evade the guard. It explicitly classifies platform-injected values (Render, GitHub, Google runtime metadata), test-only controls (`ENABLE_TEST_RATE_LIMITER`), and deprecated aliases (`ENABLE_FIRESTORE_IDEMPOTENCY_STORAGE`, `SIGNAL_OUTCOME_EVALUATION_CADENCE_MS`) so they are not mistaken for production configuration.
 
-The audited controls include grounding limits/model/timeout, TradingView enrichment budget, persistent news deduplication, Binance timeout, rate limiting, service identity, Discord retry controls, local prompt overrides, callback security/retry settings, idempotency TTL, Cloudflare enablement, Sentry debug-route gating, and public Firebase browser configuration fields. Defaults and security boundaries remain unchanged.
+The audited controls include grounding limits/model/timeout, TradingView enrichment budget, persistent news deduplication, Binance timeout, Binance Spot order execution settings (`ENABLE_BINANCE_TRADING`, `BINANCE_API_KEY`, `BINANCE_API_SECRET`, `BINANCE_TRADING_ENV`, `BINANCE_TRADING_ALLOWED_SYMBOLS`, `BINANCE_TRADING_MAX_NOTIONAL`, `BINANCE_TRADING_TIMEOUT_MS`), rate limiting, service identity, Discord retry controls, local prompt overrides, callback security/retry settings, idempotency TTL, Cloudflare enablement, Sentry debug-route gating, and public Firebase browser configuration fields. Defaults and security boundaries remain unchanged.
 
 ### Firebase Remote Config parity workflow
 
