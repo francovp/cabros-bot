@@ -231,6 +231,24 @@ describe('admin browser client', () => {
 		expect(browser.elementsById.view.textContent).toContain('Enter an API key');
 	});
 
+	it('does not render an HTTP error payload as a healthy overview', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/status') return response({ error: 'Unauthorized' }, 401);
+				return response({});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'overview');
+
+		const overview = browser.elementsById.view;
+		expect(overview.textContent).toContain('Status unavailable. Check the API key and service logs.');
+		expect(overview.textContent).not.toContain('Last checked');
+		expect(overview.textContent).toContain('HTTP 401');
+	});
+
 	it('shows Firebase sign-in state and sends a verified token after sign-in', async () => {
 		let authStateChanged;
 		const user = {
@@ -288,6 +306,12 @@ describe('admin browser client', () => {
 		await statusForm.dispatch('submit');
 		await flush();
 		expect(requests.at(-1)[1].headers.Authorization).toBe('Bearer firebase-token');
+
+		browser.elementsById['api-key'].value = '';
+		const statusRequestCount = requests.filter(([url]) => url === '/api/status').length;
+		await selectView(browser, 'overview');
+		expect(requests.filter(([url]) => url === '/api/status')).toHaveLength(statusRequestCount + 1);
+		expect(browser.elementsById.view.textContent).toContain('Operational overview');
 
 		await browser.elementsById['sign-out'].dispatch('click');
 		expect(auth.signOut).toHaveBeenCalled();

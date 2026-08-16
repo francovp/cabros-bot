@@ -440,7 +440,7 @@ const createOverviewDashboard = () => {
 		}
 	};
 	refreshButton.addEventListener('click', loadStatus);
-	if (document.getElementById('api-key').value) {
+	if (getElement('api-key')?.value || (authState.enabled && authState.user)) {
 		loadStatus();
 	} else {
 		metrics.replaceChildren(element('p', { className: 'request-state', text: 'Enter an API key to load live status.' }));
@@ -507,13 +507,13 @@ const sendRequest = async ({
 				// Non-JSON responses stay readable as text.
 			}
 		}
-		if (!requestIsCurrent()) return data;
+		if (!requestIsCurrent()) return response.ok ? data : undefined;
 		output.className = `response-block${response.ok ? '' : ' response-error'}`;
 		const responseText = response.ok && formatResponse
 			? formatResponse({ summary, status: response.status, elapsed, data })
 			: `${summary}\nHTTP ${response.status} · ${elapsed} ms\n\n${window.CabrosAdminRequest.redactSecret(formatted, apiKey)}`;
 		output.textContent = window.CabrosAdminRequest.redactSecret(responseText, apiKey);
-		return data;
+		return response.ok ? data : undefined;
 	} catch (error) {
 		const elapsed = Math.round(performance.now() - started);
 		if (!requestIsCurrent()) return;
