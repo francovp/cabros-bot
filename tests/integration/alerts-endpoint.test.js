@@ -461,6 +461,7 @@ describe('Alerts API Integration Tests', () => {
 				id: '\t=alert-1',
 				receivedAt: '\r@received-at',
 				source: 'webhook',
+				text: '\n=alert-text',
 			}],
 		});
 
@@ -471,6 +472,7 @@ describe('Alerts API Integration Tests', () => {
 
 		expect(res.text).toContain("'\t=alert-1");
 		expect(res.text).toContain('"\'\r@received-at"');
+		expect(res.text).toContain('"\'\n=alert-text"');
 	});
 
 	it('returns 400 when export bounds are missing', async () => {

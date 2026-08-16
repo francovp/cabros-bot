@@ -251,7 +251,7 @@ function escapeCsvValue(value) {
 		? JSON.stringify(value)
 		: String(value);
 	const safeSerialized = typeof value === 'string'
-		&& /^[\t\r]*[=+\-@]/.test(value)
+		&& /^[\t\r\n]*[=+\-@]/.test(value)
 		&& !Number.isFinite(Number(value))
 		? `'${serialized}`
 		: serialized;
