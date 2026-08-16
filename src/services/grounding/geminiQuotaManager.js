@@ -109,29 +109,35 @@ class GeminiQuotaManager {
 	 * @returns {Promise<boolean>} True if waited or no cooldown needed; false if wait exceeded budget (and throwOnExceeded=false)
 	 */
 	async waitForCooldownIfNeeded(options = {}) {
-		if (!this.isCooldownActive()) {
-			return true;
-		}
-
-		const remainingMs = this.getRemainingCooldownMs();
-		if (remainingMs <= 0) {
-			return true;
-		}
-
 		const { maxWaitMs, throwOnExceeded = false } = options;
-		if (typeof maxWaitMs === 'number' && remainingMs > maxWaitMs) {
-			if (throwOnExceeded) {
-				const error = new Error(`Gemini quota cooldown (${remainingMs}ms) exceeds remaining budget (${maxWaitMs}ms)`);
-				error.code = 'GEMINI_QUOTA_EXHAUSTED';
-				error.status = 429;
-				error.retryDelay = remainingMs;
-				throw error;
+		const startWaitTime = Date.now();
+
+		while (this.isCooldownActive()) {
+			const remainingCooldownMs = this.getRemainingCooldownMs();
+			if (remainingCooldownMs <= 0) {
+				break;
 			}
-			return false;
+
+			if (typeof maxWaitMs === 'number') {
+				const totalWaitTimeSoFar = Date.now() - startWaitTime;
+				const remainingBudgetMs = maxWaitMs - totalWaitTimeSoFar;
+
+				if (remainingCooldownMs > remainingBudgetMs || remainingBudgetMs <= 0) {
+					if (throwOnExceeded) {
+						const error = new Error(`Gemini quota cooldown (${remainingCooldownMs}ms) exceeds remaining budget (${Math.max(0, remainingBudgetMs)}ms)`);
+						error.code = 'GEMINI_QUOTA_EXHAUSTED';
+						error.status = 429;
+						error.retryDelay = remainingCooldownMs;
+						throw error;
+					}
+					return false;
+				}
+			}
+
+			console.info(`[GeminiQuotaManager] Pausing request for active Gemini quota cooldown (${remainingCooldownMs}ms)`);
+			await new Promise(resolve => setTimeout(resolve, remainingCooldownMs));
 		}
 
-		console.info(`[GeminiQuotaManager] Pausing request for active Gemini quota cooldown (${remainingMs}ms)`);
-		await new Promise(resolve => setTimeout(resolve, remainingMs));
 		return true;
 	}
 

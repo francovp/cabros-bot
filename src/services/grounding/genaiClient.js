@@ -261,10 +261,16 @@ class GenaiClient {
 		}
 
 		if (geminiQuotaManager.isCooldownActive()) {
-			if (!rethrowQuotaErrors) {
-				console.warn('[genaiClient] Gemini process quota cooldown active. Falling back immediately to Brave Search.');
-				return this._executeBraveSearch(query, maxResults);
+			if (rethrowQuotaErrors) {
+				const remainingMs = geminiQuotaManager.getRemainingCooldownMs();
+				const error = new Error(`Gemini quota cooldown active (${remainingMs}ms remaining)`);
+				error.code = 'GEMINI_QUOTA_EXHAUSTED';
+				error.status = 429;
+				error.retryDelay = remainingMs;
+				throw error;
 			}
+			console.warn('[genaiClient] Gemini process quota cooldown active. Falling back immediately to Brave Search.');
+			return this._executeBraveSearch(query, maxResults, signal);
 		}
 
 		try {
@@ -323,6 +329,15 @@ class GenaiClient {
 
 		if (signal?.aborted) {
 			throw signal.reason || new Error('Grounding timeout');
+		}
+
+		if (geminiQuotaManager.isCooldownActive()) {
+			const remainingMs = geminiQuotaManager.getRemainingCooldownMs();
+			const error = new Error(`Gemini quota cooldown active (${remainingMs}ms remaining)`);
+			error.code = 'GEMINI_QUOTA_EXHAUSTED';
+			error.status = 429;
+			error.retryDelay = remainingMs;
+			throw error;
 		}
 
 		let abortCleanup = null;

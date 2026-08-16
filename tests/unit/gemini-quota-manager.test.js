@@ -66,4 +66,55 @@ describe('GeminiQuotaManager', () => {
 			geminiQuotaManager.waitForCooldownIfNeeded({ maxWaitMs: 2000, throwOnExceeded: true })
 		).rejects.toThrow('Gemini quota cooldown');
 	});
+
+	it('rechecks shared deadline when concurrent 429 extends cooldown while waiting within budget', async () => {
+		jest.useFakeTimers();
+		geminiQuotaManager.triggerQuotaCooldown({ status: 429, retryDelay: 500 });
+
+		const waitPromise = geminiQuotaManager.waitForCooldownIfNeeded({ maxWaitMs: 2000 });
+		expect(geminiQuotaManager.isCooldownActive()).toBe(true);
+
+		// Advance past first cooldown, but trigger an extension before/at wake
+		jest.advanceTimersByTime(250);
+		geminiQuotaManager.triggerQuotaCooldown({ status: 429, retryDelay: 500 });
+
+		jest.advanceTimersByTime(255);
+		expect(geminiQuotaManager.isCooldownActive()).toBe(true);
+
+		jest.advanceTimersByTime(250);
+		await expect(waitPromise).resolves.toBe(true);
+		expect(geminiQuotaManager.isCooldownActive()).toBe(false);
+		jest.useRealTimers();
+	});
+
+	it('rechecks shared deadline and throws when concurrent 429 extends cooldown beyond maxWaitMs', async () => {
+		jest.useFakeTimers();
+		geminiQuotaManager.triggerQuotaCooldown({ status: 429, retryDelay: 500 });
+
+		const waitPromise = geminiQuotaManager.waitForCooldownIfNeeded({ maxWaitMs: 800, throwOnExceeded: true });
+		expect(geminiQuotaManager.isCooldownActive()).toBe(true);
+
+		// Trigger an extension that pushes cooldown beyond maxWaitMs
+		jest.advanceTimersByTime(250);
+		geminiQuotaManager.triggerQuotaCooldown({ status: 429, retryDelay: 1000 });
+
+		jest.advanceTimersByTime(255);
+		await expect(waitPromise).rejects.toThrow('Gemini quota cooldown');
+		jest.useRealTimers();
+	});
+
+	it('returns false when concurrent 429 extends cooldown beyond maxWaitMs and throwOnExceeded is false', async () => {
+		jest.useFakeTimers();
+		geminiQuotaManager.triggerQuotaCooldown({ status: 429, retryDelay: 500 });
+
+		const waitPromise = geminiQuotaManager.waitForCooldownIfNeeded({ maxWaitMs: 800, throwOnExceeded: false });
+		expect(geminiQuotaManager.isCooldownActive()).toBe(true);
+
+		jest.advanceTimersByTime(250);
+		geminiQuotaManager.triggerQuotaCooldown({ status: 429, retryDelay: 1000 });
+
+		jest.advanceTimersByTime(255);
+		await expect(waitPromise).resolves.toBe(false);
+		jest.useRealTimers();
+	});
 });
