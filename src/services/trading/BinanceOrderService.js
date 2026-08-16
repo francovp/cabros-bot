@@ -223,6 +223,9 @@ function normalizeRequest(body) {
 	if (timeInForce !== undefined && !ALLOWED_TIME_IN_FORCE.has(timeInForce)) {
 		throw new BinanceOrderRequestError('timeInForce must be GTC, IOC, or FOK');
 	}
+	if (type === 'MARKET' && timeInForce !== undefined) {
+		throw new BinanceOrderRequestError('MARKET orders do not accept timeInForce');
+	}
 
 	const clientOrderId = body.clientOrderId === undefined ? undefined : String(body.clientOrderId).trim();
 	if (clientOrderId !== undefined && !/^[A-Za-z0-9._:-]{1,36}$/.test(clientOrderId)) {
@@ -321,6 +324,22 @@ function buildOrderParams(order) {
 	}).filter(([, value]) => value !== undefined));
 }
 
+async function validateDynamicPriceFilters(client, order, orderParams, filters) {
+	if (order.type !== 'LIMIT' || (!filters.has('PERCENT_PRICE') && !filters.has('PERCENT_PRICE_BY_SIDE'))) return;
+	if (typeof client.testNewOrder !== 'function') {
+		throw new BinanceOrderServiceError(
+			'Binance dynamic price filters could not be validated',
+			'BINANCE_VALIDATION_FAILED',
+		);
+	}
+
+	try {
+		await client.testNewOrder(orderParams);
+	} catch (error) {
+		throw new BinanceOrderRequestError('price fails Binance dynamic price filters');
+	}
+}
+
 function sanitizeFill(fill) {
 	return Object.fromEntries(Object.entries({
 		price: fill.price,
@@ -380,6 +399,15 @@ function createBinanceOrderService({ createClient = createBinanceClient } = {}) 
 			}
 
 			const order = normalizeRequest(body);
+			const requestIdempotencyKey = hasValue(idempotencyKey)
+				? idempotencyKey
+				: [body.idempotencyKey, body.idempotency_key].find(hasValue);
+			if (!order.dryRun && !order.clientOrderId && !requestIdempotencyKey) {
+				throw new BinanceOrderRequestError(
+					'Live orders require idempotencyKey or clientOrderId',
+					'LIVE_ORDER_ID_REQUIRED',
+				);
+			}
 			if (!config.allowedSymbols.includes(order.symbol)) {
 				throw new BinanceOrderRequestError('symbol is not allowed for Binance trading');
 			}
@@ -449,9 +477,10 @@ function createBinanceOrderService({ createClient = createBinanceClient } = {}) 
 			validateNotional(notional, filters, config.maxNotional, order.type === 'MARKET');
 
 			const clientOrderId = order.clientOrderId
-				|| (!order.dryRun ? deriveClientOrderId(idempotencyKey) : undefined);
+				|| (!order.dryRun ? deriveClientOrderId(requestIdempotencyKey) : undefined);
 			const orderParams = buildOrderParams({ ...order, clientOrderId });
 			if (order.dryRun) {
+				await validateDynamicPriceFilters(client, order, orderParams, filters);
 				return {
 					success: true,
 					dryRun: true,
@@ -460,16 +489,17 @@ function createBinanceOrderService({ createClient = createBinanceClient } = {}) 
 				};
 			}
 
+			const existingOrder = await reconcileOrder(client, order.symbol, clientOrderId);
+			if (existingOrder) {
+				return {
+					success: true,
+					dryRun: false,
+					environment: config.environment,
+					order: sanitizeOrderResponse(existingOrder),
+				};
+			}
+			await validateDynamicPriceFilters(client, order, orderParams, filters);
 			try {
-				const existingOrder = await reconcileOrder(client, order.symbol, clientOrderId);
-				if (existingOrder) {
-					return {
-						success: true,
-						dryRun: false,
-						environment: config.environment,
-						order: sanitizeOrderResponse(existingOrder),
-					};
-				}
 				const response = await client.submitNewOrder(orderParams);
 				return {
 					success: true,

@@ -3434,6 +3434,90 @@
           ]
         },
         {
+          "name": "POST Binance order (live missing stable identifier)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"symbol\": \"BTCUSDT\",\n  \"side\": \"BUY\",\n  \"type\": \"LIMIT\",\n  \"quantity\": 0.001,\n  \"price\": 60000,\n  \"dryRun\": false\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/orders",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "orders"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Bad Request",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Live orders require idempotencyKey or clientOrderId\",\n  \"code\": \"LIVE_ORDER_ID_REQUIRED\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST Binance order (invalid MARKET timeInForce)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"symbol\": \"BTCUSDT\",\n  \"side\": \"BUY\",\n  \"type\": \"MARKET\",\n  \"quoteOrderQty\": 50,\n  \"timeInForce\": \"GTC\",\n  \"dryRun\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/orders",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "orders"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Bad Request",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"success\": false,\n  \"error\": \"MARKET orders do not accept timeInForce\",\n  \"code\": \"INVALID_ORDER_REQUEST\"\n}"
+            }
+          ]
+        },
+        {
           "name": "POST Binance order (feature disabled)",
           "request": {
             "method": "POST",

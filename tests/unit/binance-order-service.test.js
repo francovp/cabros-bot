@@ -99,6 +99,7 @@ describe('BinanceOrderService', () => {
 			quantity: '0.10005',
 			price: '100',
 			timeInForce: 'GTC',
+			idempotencyKey: 'lot-size-check',
 			dryRun: false,
 		})).rejects.toMatchObject({
 			code: 'INVALID_ORDER_REQUEST',
@@ -111,6 +112,7 @@ describe('BinanceOrderService', () => {
 			quantity: '0.10005',
 			price: '100',
 			timeInForce: 'GTC',
+			idempotencyKey: 'lot-size-check-repeat',
 			dryRun: false,
 		})).rejects.toBeInstanceOf(BinanceOrderRequestError);
 	});
@@ -136,6 +138,7 @@ describe('BinanceOrderService', () => {
 			side: 'BUY',
 			type: 'MARKET',
 			quoteOrderQty: '50',
+			idempotencyKey: 'market-order-check',
 			dryRun: false,
 		})).resolves.toEqual({
 			success: true,
@@ -158,6 +161,7 @@ describe('BinanceOrderService', () => {
 			side: 'BUY',
 			type: 'MARKET',
 			quoteOrderQty: 50,
+			newClientOrderId: expect.stringMatching(/^cb_[a-f0-9]{32}$/),
 			newOrderRespType: 'FULL',
 		});
 	});
@@ -270,6 +274,68 @@ describe('BinanceOrderService', () => {
 		expect(client.submitNewOrder).not.toHaveBeenCalled();
 	});
 
+	it('requires a stable order identifier for live requests', async () => {
+		const client = {
+			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
+			submitNewOrder: jest.fn(),
+		};
+		const service = createBinanceOrderService({ createClient: () => client });
+
+		await expect(service.placeOrder({
+			symbol: 'BTCUSDT',
+			side: 'BUY',
+			type: 'LIMIT',
+			quantity: 0.1,
+			price: 100,
+			dryRun: false,
+		})).rejects.toMatchObject({ code: 'LIVE_ORDER_ID_REQUIRED' });
+
+		expect(client.submitNewOrder).not.toHaveBeenCalled();
+	});
+
+	it('rejects timeInForce on market orders', async () => {
+		const service = createBinanceOrderService({ createClient: jest.fn() });
+
+		await expect(service.placeOrder({
+			symbol: 'BTCUSDT',
+			side: 'BUY',
+			type: 'MARKET',
+			quoteOrderQty: 50,
+			timeInForce: 'GTC',
+			dryRun: true,
+		})).rejects.toMatchObject({ code: 'INVALID_ORDER_REQUEST' });
+	});
+
+	it('uses Binance order-test validation for dynamic limit price filters', async () => {
+		const client = {
+			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo({
+				filters: [
+					{ filterType: 'PRICE_FILTER', minPrice: '0.01', maxPrice: '1000000', tickSize: '0.01' },
+					{ filterType: 'LOT_SIZE', minQty: '0.0001', maxQty: '100', stepSize: '0.0001' },
+					{ filterType: 'MIN_NOTIONAL', minNotional: '10' },
+					{ filterType: 'PERCENT_PRICE', multiplierUp: '1.2', multiplierDown: '0.8', avgPriceMins: 5 },
+				],
+			})),
+			testNewOrder: jest.fn().mockResolvedValue({}),
+		};
+		const service = createBinanceOrderService({ createClient: () => client });
+
+		await expect(service.placeOrder({
+			symbol: 'BTCUSDT',
+			side: 'BUY',
+			type: 'LIMIT',
+			quantity: 0.1,
+			price: 100,
+			dryRun: true,
+		})).resolves.toMatchObject({ success: true, dryRun: true });
+
+		expect(client.testNewOrder).toHaveBeenCalledWith(expect.objectContaining({
+			symbol: 'BTCUSDT',
+			type: 'LIMIT',
+			price: 100,
+		}));
+	});
+
 	it('does not retry an ambiguous Binance submission failure', async () => {
 		const client = {
 			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
@@ -283,6 +349,7 @@ describe('BinanceOrderService', () => {
 			type: 'LIMIT',
 			quantity: 0.1,
 			price: 100,
+			idempotencyKey: 'ambiguous-order-check',
 			dryRun: false,
 		})).rejects.toMatchObject({ code: 'BINANCE_ORDER_STATUS_UNKNOWN', statusCode: 503 });
 		expect(client.submitNewOrder).toHaveBeenCalledTimes(1);

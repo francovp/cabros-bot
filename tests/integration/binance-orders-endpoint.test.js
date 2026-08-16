@@ -195,6 +195,24 @@ describe('Binance orders API', () => {
 		expect(client.submitNewOrder).toHaveBeenCalledTimes(1);
 	});
 
+	it('requires a stable identifier before live submission', async () => {
+		const response = await request(app)
+			.post('/api/trading/binance/orders')
+			.set('x-api-key', 'test-key')
+			.send({
+				symbol: 'BTCUSDT',
+				side: 'BUY',
+				type: 'LIMIT',
+				quantity: 0.1,
+				price: 100,
+				dryRun: false,
+			})
+			.expect(400);
+
+		expect(response.body.code).toBe('LIVE_ORDER_ID_REQUIRED');
+		expect(client.submitNewOrder).not.toHaveBeenCalled();
+	});
+
 	it('reconciles an ambiguous order after the idempotency cache is lost', async () => {
 		client.submitNewOrder.mockRejectedValueOnce(new Error('provider timeout'));
 		client.getOrder
