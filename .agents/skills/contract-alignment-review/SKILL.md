@@ -1,6 +1,6 @@
 ---
 name: contract-alignment-review
-description: Use when changing an HTTP endpoint, request variant, response shape, environment variable, feature flag, Firebase/Render configuration, OpenAPI schema, Postman collection, README, spec, or agent skill.
+description: Use when changing or reviewing an HTTP endpoint, request variant, response shape, environment variable, feature flag, Firebase/Render configuration, OpenAPI schema, Postman collection, README, spec, or agent skill.
 ---
 
 # Contract Alignment Review

@@ -1,6 +1,6 @@
 ---
 name: transaction-safety-review
-description: Use when changing Binance order execution, webhook authentication, idempotency, Firestore persistence, TTL/retention, replay handling, or any path where a retry can duplicate a side effect or lose durable state.
+description: Use when changing or reviewing Binance order execution, webhook authentication, idempotency, Firestore persistence, TTL/retention, replay handling, or any path where a retry can duplicate a side effect or lose durable state.
 ---
 
 # Transaction Safety Review

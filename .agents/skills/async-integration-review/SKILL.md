@@ -1,6 +1,6 @@
 ---
 name: async-integration-review
-description: Use when changing workers, polling loops, native fetch calls, provider retries, rate-limit handling, notification delivery, shutdown, or telemetry around asynchronous external work.
+description: Use when changing or reviewing workers, polling loops, native fetch calls, provider retries, rate-limit handling, notification delivery, shutdown, or telemetry around asynchronous external work.
 ---
 
 # Async Integration Review

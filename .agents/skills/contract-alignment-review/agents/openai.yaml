@@ -1,4 +1,4 @@
 interface:
   display_name: "Contract Alignment Review"
   short_description: "Keep runtime and docs contracts aligned"
-  default_prompt: "Use $contract-alignment-review when changing endpoints, config, schemas, or operational docs."
+  default_prompt: "Use $contract-alignment-review when changing or reviewing endpoints, config, schemas, or operational docs."
