@@ -117,6 +117,13 @@ const FEATURE_NAMES = {
 	'process': 'process',
 };
 
+const {
+	getDeploymentCommit,
+	getDeploymentRepoSlug,
+	isPreviewEnvironment,
+	isProductionLikeEnvironment,
+} = require('../../lib/deploymentEnvironment');
+
 const DEFAULT_CONSOLE_LOG_LEVELS = ['warn', 'error'];
 const ALLOWED_CONSOLE_LOG_LEVELS = new Set(['debug', 'info', 'warn', 'error', 'log', 'assert', 'trace']);
 
@@ -147,13 +154,11 @@ class SentryService {
 			return process.env.SENTRY_ENVIRONMENT;
 		}
 
-		// If on Render and this is a PR preview
-		if (process.env.RENDER === 'true' && process.env.IS_PULL_REQUEST === 'true') {
+		if (isPreviewEnvironment()) {
 			return 'preview';
 		}
 
-		// If in production mode or on Render
-		if (process.env.NODE_ENV === 'production' || process.env.RENDER === 'true') {
+		if (isProductionLikeEnvironment()) {
 			return 'production';
 		}
 
@@ -171,10 +176,10 @@ class SentryService {
 			return process.env.SENTRY_RELEASE;
 		}
 
-		// If RENDER_GIT_COMMIT is available, use short commit hash
-		if (process.env.RENDER_GIT_COMMIT) {
-			const shortCommit = process.env.RENDER_GIT_COMMIT.substring(0, 7);
-			const repoSlug = process.env.RENDER_GIT_REPO_SLUG || 'cabros-bot';
+		const deploymentCommit = getDeploymentCommit();
+		if (deploymentCommit) {
+			const shortCommit = deploymentCommit.substring(0, 7);
+			const repoSlug = getDeploymentRepoSlug();
 			return `${repoSlug}@${shortCommit}`;
 		}
 

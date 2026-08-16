@@ -7,6 +7,7 @@ const NotificationChannel = require('./NotificationChannel');
 const { sendWithRetry } = require('../../lib/retryHelper');
 const { splitMessageIntoChunks } = require('../../lib/messageHelper');
 const WhatsAppMarkdownFormatter = require('./formatters/whatsappMarkdownFormatter');
+const { isPreviewEnvironment } = require('../../lib/deploymentEnvironment');
 
 const GREEN_API_MESSAGE_LIMIT = 20000;
 
@@ -26,7 +27,7 @@ class WhatsAppService extends NotificationChannel {
 		this.apiKey = config.apiKey || process.env.WHATSAPP_API_KEY;
 
 		// In preview environments (IS_PULL_REQUEST=true), prefer WHATSAPP_PREVIEW_CHAT_ID
-		const isPreview = process.env.IS_PULL_REQUEST === 'true';
+		const isPreview = isPreviewEnvironment() || process.env.IS_PULL_REQUEST === 'true';
 		this.chatId = config.chatId || (isPreview && process.env.WHATSAPP_PREVIEW_CHAT_ID) || process.env.WHATSAPP_CHAT_ID;
 		this.urlShortener = config.urlShortener || null;
 		this.formatter = config.formatter || new WhatsAppMarkdownFormatter({ urlShortener: this.urlShortener });
@@ -370,4 +371,3 @@ class WhatsAppService extends NotificationChannel {
 }
 
 module.exports = WhatsAppService;
-

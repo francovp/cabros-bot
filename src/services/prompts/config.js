@@ -1,5 +1,7 @@
+const { isProductionLikeEnvironment: isManagedProductionEnvironment } = require('../../lib/deploymentEnvironment');
+
 function isProductionLikeEnvironment() {
-	return process.env.NODE_ENV === 'production' || process.env.RENDER === 'true';
+	return isManagedProductionEnvironment();
 }
 
 function isLangfusePromptManagementEnabled() {
