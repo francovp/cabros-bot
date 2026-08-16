@@ -192,6 +192,22 @@ describe('TradingViewMcpService', () => {
 		}));
 	});
 
+	it('keeps environment-derived MCP timing values finite and positive', () => {
+		process.env.TRADINGVIEW_MCP_TIMEOUT_MS = 'not-a-number';
+		process.env.TRADINGVIEW_MCP_MAX_RETRIES = '0';
+		process.env.TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS = '-10';
+
+		const config = new TradingViewMcpService().getConfig();
+
+		expect(config).toEqual(expect.objectContaining({
+			timeoutMs: 12000,
+			maxRetries: 3,
+			enrichmentBudgetMs: 12000,
+		}));
+		expect([config.timeoutMs, config.maxRetries, config.enrichmentBudgetMs]
+			.every(value => Number.isFinite(value) && value > 0)).toBe(true);
+	});
+
 	it('prefers structuredContent when MCP server returns schema-native tool results', async () => {
 		const service = new TradingViewMcpService({ logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() } });
 
