@@ -43,7 +43,7 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 
 		// Mock Gemini for symbol analysis
 		const gemini = require('../../src/services/grounding/gemini');
-		gemini.analyzeNewsForSymbol = jest.fn().mockResolvedValue({
+		gemini.analyzeNewsForSymbol.mockReset().mockResolvedValue({
 			event_category: 'price_surge',
 			event_significance: 0.7,
 			sentiment_score: 0.8,
@@ -127,6 +127,39 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 
 			// Verify same alert data returned
 			expect(response2.body.results[0].alert).toEqual(response1.body.results[0].alert);
+		});
+
+		it('should reuse cached no-event analyses without calling providers again', async () => {
+			const gemini = require('../../src/services/grounding/gemini');
+			const genaiClient = require('../../src/services/grounding/genaiClient');
+			gemini.analyzeNewsForSymbol.mockResolvedValueOnce({
+				event_category: 'none',
+				event_significance: 0,
+				sentiment_score: 0,
+				headline: '',
+				confidence: 0,
+				sources: [],
+			});
+
+			const response1 = await request(app)
+				.get('/api/news-monitor?crypto=BTCUSDT').set('x-api-key', 'test-key')
+				.expect(200);
+			const response2 = await request(app)
+				.get('/api/news-monitor?crypto=BTCUSDT').set('x-api-key', 'test-key')
+				.expect(200);
+
+			expect(response1.body.results[0]).toEqual(expect.objectContaining({
+				status: 'analyzed',
+				alert: null,
+				cached: false,
+			}));
+			expect(response2.body.results[0]).toEqual(expect.objectContaining({
+				status: 'cached',
+				alert: null,
+				cached: true,
+			}));
+			expect(gemini.analyzeNewsForSymbol).toHaveBeenCalledTimes(1);
+			expect(genaiClient.search).toHaveBeenCalledTimes(1);
 		});
 
 		it('should bypass cache when different event categories detected', async () => {

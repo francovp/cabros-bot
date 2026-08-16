@@ -20,6 +20,21 @@ describe('SentryService', () => {
 		service = new SentryService();
 		// Reset env vars
 		process.env = { ...originalEnv };
+		delete process.env.VERCEL_ENV;
+		delete process.env.VERCEL_GIT_COMMIT_SHA;
+		delete process.env.VERCEL_GIT_REPO_OWNER;
+		delete process.env.VERCEL_GIT_REPO_OWNER_NAME;
+		delete process.env.VERCEL_GIT_REPO_SLUG;
+		delete process.env.RAILWAY_ENVIRONMENT_NAME;
+		delete process.env.RAILWAY_GIT_COMMIT_SHA;
+		delete process.env.RAILWAY_GIT_PULL_REQUEST_NUMBER;
+		delete process.env.RAILWAY_GIT_REPO_OWNER;
+		delete process.env.RAILWAY_GIT_REPO_NAME;
+		delete process.env.RENDER_GIT_COMMIT;
+		delete process.env.GIT_COMMIT;
+		delete process.env.COMMIT_SHA;
+		delete process.env.GITHUB_SHA;
+		delete process.env.SOURCE_VERSION;
 		// Clear all mocks
 		jest.clearAllMocks();
 	});
@@ -43,6 +58,14 @@ describe('SentryService', () => {
 			it('should return preview when RENDER=true and IS_PULL_REQUEST=true', () => {
 				process.env.RENDER = 'true';
 				process.env.IS_PULL_REQUEST = 'true';
+				delete process.env.SENTRY_ENVIRONMENT;
+
+				const env = service._deriveEnvironment();
+				expect(env).toBe('preview');
+			});
+
+			it('should return preview when VERCEL_ENV=preview', () => {
+				process.env.VERCEL_ENV = 'preview';
 				delete process.env.SENTRY_ENVIRONMENT;
 
 				const env = service._deriveEnvironment();

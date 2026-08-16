@@ -99,7 +99,7 @@ Maintain these patterns and rules in all contributions:
 
 ### Common Failure Modes
 - **Missing BOT_TOKEN**: Throws on startup (explicit check in `index.js`).
-- **Preview Environments**: Gated bot launch disabled in Render preview PR builds (`RENDER==='true' && IS_PULL_REQUEST==='true'`).
+- **Preview Environments**: Gated bot launch disabled in Render preview PR builds or Vercel preview deployments (`RENDER==='true' && IS_PULL_REQUEST==='true'` or `VERCEL_ENV==='preview'`).
 - **HTTP 429**: Requests rejected if rate limit window exceeded (`RATE_LIMIT_WINDOW_MS` / `RATE_LIMIT_MAX`).
 - **JSON Error Parsing**: Webhook error responses must not crash if `error.response` is missing or shaped unexpectedly.
 
@@ -160,7 +160,7 @@ Implement the following security practices to safeguard endpoints and credential
 
 The audited controls include grounding limits/model/timeout, TradingView enrichment budget, persistent news deduplication, Binance timeout, rate limiting, service identity, Discord retry controls, local prompt overrides, callback security/retry settings, idempotency TTL, Cloudflare enablement, Sentry debug-route gating, and public Firebase browser configuration fields. Defaults and security boundaries remain unchanged.
 
-- Bot startup is gated: bot is launched only when `ENABLE_TELEGRAM_BOT === 'true'` and not a preview environment (`RENDER==='true' && IS_PULL_REQUEST==='true'` disables it).
+- Bot startup is gated: bot is launched only when `ENABLE_TELEGRAM_BOT === 'true'` and not a preview environment (`RENDER==='true' && IS_PULL_REQUEST==='true'` or `VERCEL_ENV==='preview'` disables it).
 - Process shutdown is coordinated for `SIGINT`/`SIGTERM`: the HTTP server stops accepting new connections, active requests and accepted `JobService` work drain, the news-monitor cache and signal-outcome worker stop, Telegram polling and in-flight handlers drain, and Sentry is flushed last within `SHUTDOWN_TIMEOUT_MS` (default `10000`, hard cap `30000`). If the deadline is exceeded, active jobs receive an independent bounded finalization attempt and are persisted as retryable `cancelled` records before remaining connections are force-closed and the process exits non-zero.
 - Routes under `/api` (e.g. `/api/webhook/alert`) are mounted regardless of bot launch; individual features and notification channels are gated via env flags and per-channel validation.
 - API documentation is public and read-only at `/docs` and `/openapi.json`; webhook and news-monitor operations remain guarded by `validateApiKey`, while documented admin read/action routes also accept verified Firebase bearer tokens when enabled. `/admin/auth-config` exposes only public browser configuration.
@@ -1002,8 +1002,8 @@ This feature introduces backend runtime error monitoring using Sentry's Node SDK
   - `SENTRY_RELEASE` (e.g., `cabros-bot@1.2.3+<git-sha>`)
 - Derivation rules (conceptual, see spec for details):
   - If `SENTRY_ENVIRONMENT` is set, use it.
-  - Else if `RENDER==='true' && IS_PULL_REQUEST==='true'` → `environment='preview'`.
-  - Else if `NODE_ENV==='production'` or `RENDER==='true'` → `environment='production'`.
+  - Else if `RENDER==='true' && IS_PULL_REQUEST==='true'` or `VERCEL_ENV==='preview'` → `environment='preview'`.
+  - Else if `NODE_ENV==='production'`, `RENDER==='true'`, or `VERCEL_ENV==='production'` → `environment='production'`.
   - Else → `environment='development'`.
 
 **Instrumentation rules for AI agents**
@@ -1283,3 +1283,14 @@ Raw alert text remains disabled by default and requires an explicit checkbox. Th
 **Coverage**:
 - `tests/unit/remote-config-service.test.js` — Covers malformed, non-finite, negative, zero, out-of-range, valid, and boundary environment values.
 - `tests/unit/tradingview-mcp-service.test.js` — Verifies runtime MCP timing values remain finite and positive.
+
+## News Monitor Cached No-Event Analyses (CB-146 / Issue #363)
+
+News monitor cache reads now include `EventCategory.NONE`, so a cached no-event analysis returns `AnalysisStatus.CACHED` during its existing TTL without repeating market-context or Gemini provider calls. Event-category cache keys remain independent and the existing dry-run, routing, delivery, TTL, and fail-open behavior is unchanged.
+
+**Coverage**:
+- `src/controllers/webhooks/handlers/newsMonitor/analyzer.js` — Reads the existing no-event cache entry at the shared cache boundary.
+- `tests/integration/news-monitor-cache.test.js` — Verifies no-event cache hits return no alert and avoid repeated Gemini/market-context provider calls.
+
+No endpoint or response contract changed; Postman and OpenAPI remain unchanged.
+
