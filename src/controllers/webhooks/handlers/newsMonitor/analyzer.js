@@ -461,9 +461,14 @@ class NewsAnalyzer {
 
 			await geminiQuotaManager.waitForCooldownIfNeeded({ maxWaitMs: remainingMs, throwOnExceeded: true });
 
+			const remainingAfterWaitMs = this.timeout - (Date.now() - startedAt);
+			if (remainingAfterWaitMs <= 0) {
+				throw new Error('TIMEOUT');
+			}
+
 			try {
 				const timeoutPromise = new Promise((_, reject) => {
-					timeoutHandle = setTimeout(() => reject(new Error('TIMEOUT')), remainingMs);
+					timeoutHandle = setTimeout(() => reject(new Error('TIMEOUT')), remainingAfterWaitMs);
 				});
 				return await Promise.race([
 					this.analyzeSymbolInternal(symbol, requestId, tokenUsage, routing, options),
