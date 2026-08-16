@@ -61,6 +61,7 @@ function getFirebaseWebConfig() {
 	const config = {
 		apiKey: inlineConfig.apiKey || process.env.FIREBASE_WEB_API_KEY,
 		authDomain: inlineConfig.authDomain || process.env.FIREBASE_AUTH_DOMAIN,
+		databaseURL: inlineConfig.databaseURL || process.env.FIREBASE_DATABASE_URL,
 		projectId: inlineConfig.projectId || process.env.FIREBASE_PROJECT_ID,
 		appId: inlineConfig.appId || process.env.FIREBASE_APP_ID,
 		storageBucket: inlineConfig.storageBucket || process.env.FIREBASE_STORAGE_BUCKET,
