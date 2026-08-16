@@ -35,46 +35,6 @@ describe('Rate Limiter Middleware', () => {
 		}
 	});
 
-	test('should allow requests under the limit', () => {
-		rateLimiter(req, res, next);
-		expect(next).toHaveBeenCalled();
-		expect(res.statusCode).toBe(200);
-	});
-
-	test('should block requests over the limit and set Retry-After metadata', () => {
-		// Mock a new IP
-		req.ip = '10.0.0.1';
-
-		// Exhaust the limit (default 100)
-		for (let i = 0; i < 100; i++) {
-			rateLimiter(req, res, next);
-		}
-
-		// The 101st request should be blocked
-		const nextBlocked = jest.fn();
-		const resBlocked = httpMocks.createResponse();
-		rateLimiter(req, resBlocked, nextBlocked);
-
-		expect(nextBlocked).not.toHaveBeenCalled();
-		expect(resBlocked.statusCode).toBe(429);
-		const data = JSON.parse(resBlocked._getData());
-		expect(data.error).toBe('Too many requests, please try again later.');
-		expect(typeof data.retryAfterSeconds).toBe('number');
-		expect(data.retryAfterSeconds).toBeGreaterThan(0);
-		expect(resBlocked.getHeader('Retry-After')).toBe(String(data.retryAfterSeconds));
-	});
-
-	test('should track different IPs separately', () => {
-		req.ip = '10.0.0.2';
-		rateLimiter(req, res, next);
-		expect(next).toHaveBeenCalled();
-
-		req.ip = '10.0.0.3';
-		const next2 = jest.fn();
-		rateLimiter(req, res, next2);
-		expect(next2).toHaveBeenCalled();
-	});
-
 	test('should fallback to req.socket.remoteAddress if req.ip is undefined', () => {
 		delete req.ip;
 		req.socket = { remoteAddress: '192.168.1.50' };

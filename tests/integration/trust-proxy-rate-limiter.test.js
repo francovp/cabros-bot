@@ -47,7 +47,11 @@ describe('Trust Proxy and Rate Limiter Integration', () => {
 				.get('/api/test')
 				.set('X-Forwarded-For', clientA);
 			expect(resA.status).toBe(429);
-			expect(resA.headers['retry-after']).toBeDefined();
+			expect(resA.headers['retry-after']).toMatch(/^\d+$/);
+			expect(resA.body).toEqual({
+				error: 'Too many requests, please try again later.',
+			retryAfterSeconds: Number(resA.headers['retry-after']),
+		});
 
 			// Client B request 1 should be allowed (200) because it is in a separate bucket
 			const resB = await request(app)

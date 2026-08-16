@@ -1,6 +1,5 @@
 // tests/unit/trustProxy.test.js
-const { parseTrustProxy, setupTrustProxy } = require('../../src/lib/trustProxy');
-const express = require('express');
+const { parseTrustProxy } = require('../../src/lib/trustProxy');
 
 describe('Trust Proxy Configuration', () => {
 	describe('parseTrustProxy', () => {
@@ -47,11 +46,4 @@ describe('Trust Proxy Configuration', () => {
 		});
 	});
 
-	describe('setupTrustProxy', () => {
-		test('should set trust proxy on an Express app instance', () => {
-			const app = express();
-			setupTrustProxy(app, { TRUST_PROXY: '1', RENDER: 'false', VERCEL: '1' });
-			expect(app.get('trust proxy')).toBe(1);
-		});
-	});
 });
