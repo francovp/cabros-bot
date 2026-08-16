@@ -3,6 +3,47 @@
 const { JobRepository, _resetForTesting } = require('../../src/services/jobs/JobRepository');
 
 describe('JobRepository durable claims', () => {
+	it('stores a one-hour expiry for terminal durable jobs only', async () => {
+		const terminalCreatedAt = new Date(Date.now() - 1000).toISOString();
+		const activeCreatedAt = new Date(Date.now() - 1000).toISOString();
+		const transaction = {
+			get: jest.fn().mockResolvedValue({ exists: false }),
+			set: jest.fn(),
+		};
+		const firestore = {
+			collection: jest.fn(() => ({ doc: jest.fn((id) => ({ id })) })),
+			runTransaction: jest.fn(async (callback) => callback(transaction)),
+		};
+		const repository = new JobRepository();
+		repository._getFirestore = jest.fn(() => firestore);
+
+		try {
+			await repository.save({
+				jobId: 'terminal-retention-job',
+				type: 'expanded-analysis',
+				status: 'completed',
+				createdAt: terminalCreatedAt,
+			});
+
+			const terminalWrite = transaction.set.mock.calls[0][1];
+			expect(terminalWrite.expiresAt.toDate()).toEqual(
+				new Date(new Date(terminalCreatedAt).getTime() + 3600000),
+			);
+
+			transaction.set.mockClear();
+			await repository.save({
+				jobId: 'active-retention-job',
+				type: 'expanded-analysis',
+				status: 'processing',
+				createdAt: activeCreatedAt,
+			});
+
+			expect(transaction.set.mock.calls[0][1]).not.toHaveProperty('expiresAt');
+		} finally {
+			_resetForTesting();
+		}
+	});
+
 	it('prefers a fresh durable row over a stale web-process cache entry', async () => {
 		const jobId = 'job-list-123';
 		const durableJob = {

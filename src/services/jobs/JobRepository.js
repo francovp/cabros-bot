@@ -1,5 +1,6 @@
 'use strict';
 
+const admin = require('firebase-admin');
 const alertStorageService = require('../storage/AlertStorageService');
 
 const COLLECTION_NAME = 'tradingviewJobs';
@@ -10,6 +11,7 @@ const saveVersions = new Map();
 const pendingSaves = new Map();
 const DEFAULT_CLAIM_LEASE_MS = 60000;
 const DEFAULT_CALLBACK_CLAIM_LEASE_MS = 60000;
+const TERMINAL_JOB_RETENTION_MS = 3600000;
 
 function cloneJob(job) {
 	if (!job) return null;
@@ -44,6 +46,22 @@ function sanitizeJob(job) {
 	delete copy.signal;
 	delete copy._workerId;
 	return copy;
+}
+
+function addTerminalExpiry(job) {
+	if (!TERMINAL_JOB_STATUSES.has(job.status)) {
+		return job;
+	}
+
+	const createdAtMs = new Date(job.createdAt).getTime();
+	if (!Number.isFinite(createdAtMs)) {
+		return job;
+	}
+
+	return {
+		...job,
+		expiresAt: admin.firestore.Timestamp.fromDate(new Date(createdAtMs + TERMINAL_JOB_RETENTION_MS)),
+	};
 }
 
 function getLocalTerminalJob(jobId) {
@@ -100,6 +118,7 @@ class JobRepository {
 		saveVersions.set(sanitized.jobId, { version, job: cloneJob(sanitized) });
 
 		let persistedJob = sanitized;
+		const durableJob = addTerminalExpiry(sanitized);
 		const persistencePromise = (async () => {
 			try {
 				if (typeof firestore.runTransaction === 'function') {
@@ -134,10 +153,10 @@ class JobRepository {
 
 						persistedJob = incomingWorkerId && currentDoc
 							? {
-								...sanitized,
+								...durableJob,
 								callbackStatus: mergeCallbackStatus(currentDoc.callbackStatus, sanitized.callbackStatus),
 							}
-							: sanitized;
+							: durableJob;
 						transaction.set(docRef, persistedJob);
 						return true;
 					});
@@ -145,7 +164,7 @@ class JobRepository {
 						return false;
 					}
 				} else {
-					await firestore.collection(COLLECTION_NAME).doc(sanitized.jobId).set(sanitized);
+					await firestore.collection(COLLECTION_NAME).doc(sanitized.jobId).set(durableJob);
 				}
 			} catch (error) {
 				console.warn('[JobRepository] Failed to persist job:', error.message);
