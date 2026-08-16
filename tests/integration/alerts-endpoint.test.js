@@ -455,6 +455,24 @@ describe('Alerts API Integration Tests', () => {
 		expect(res.text).toContain('PROVIDER_LIMIT');
 	});
 
+	it('neutralizes tab- and carriage-return-prefixed formulas in CSV strings', async () => {
+		alertStorageService.exportAlerts.mockResolvedValue({
+			alerts: [{
+				id: '\t=alert-1',
+				receivedAt: '\r@received-at',
+				source: 'webhook',
+			}],
+		});
+
+		const res = await request(app)
+			.get('/api/alerts/export?format=csv&from=2026-06-06T00:00:00.000Z&to=2026-06-07T00:00:00.000Z')
+			.set('x-api-key', 'test-key')
+			.expect(200);
+
+		expect(res.text).toContain("'\t=alert-1");
+		expect(res.text).toContain('"\'\r@received-at"');
+	});
+
 	it('returns 400 when export bounds are missing', async () => {
 		const res = await request(app)
 			.get('/api/alerts/export?format=jsonl&from=2026-06-06T00:00:00.000Z')

@@ -1033,7 +1033,7 @@ List stored alerts ordered by `receivedAt` descending.
 
 #### GET /api/alerts/export
 
-Export bounded stored alerts as JSONL or CSV. CSV serialization prefixes string fields that begin with `=`, `+`, `-`, or `@` with an apostrophe so spreadsheet clients treat them as inert text; finite numeric strings such as `-42` remain unchanged. JSONL output is unchanged.
+Export bounded stored alerts as JSONL or CSV. CSV serialization prefixes string fields whose leading control characters (`tab`/`CR`) are followed by `=`, `+`, `-`, or `@`—or that begin directly with those markers—with an apostrophe so spreadsheet clients treat them as inert text; finite numeric strings such as `-42` remain unchanged. JSONL output is unchanged.
 
 **Query Parameters:**
 - `format` - `jsonl` or `csv` (default: `jsonl`)
