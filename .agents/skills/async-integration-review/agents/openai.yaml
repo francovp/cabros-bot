@@ -1,0 +1,4 @@
+interface:
+  display_name: "Async Integration Review"
+  short_description: "Catch timeout, retry, and worker gaps"
+  default_prompt: "Use $async-integration-review before changing workers, retries, timeouts, or external integrations."

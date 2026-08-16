@@ -1,0 +1,4 @@
+interface:
+  display_name: "Transaction Safety Review"
+  short_description: "Catch order and durable-state review gaps"
+  default_prompt: "Use $transaction-safety-review before changing money movement, auth, idempotency, or Firestore state."
