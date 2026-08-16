@@ -301,6 +301,10 @@ describe('admin browser client', () => {
 		await browser.elementsById['sign-in'].dispatch('click');
 		await flush();
 
+		const statusViewButton = find(browser.body, (node) => node.dataset.view === 'status');
+		const overviewViewButton = find(browser.body, (node) => node.dataset.view === 'overview');
+		expect(statusViewButton.attributes['aria-current']).toBe('page');
+		expect(overviewViewButton.attributes['aria-current']).toBeUndefined();
 		const statusForm = findForm(browser.elementsById.view, 'GET /api/status');
 		expect(statusForm).toBeDefined();
 		await statusForm.dispatch('submit');

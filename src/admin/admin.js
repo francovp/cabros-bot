@@ -198,7 +198,7 @@ const setupFirebaseAuth = async (config) => {
 					return;
 				}
 				showSignedInState();
-				renderView('status');
+				navigateToView('status');
 			} catch (error) {
 				showAuthState('Unable to verify the signed-in account.', true);
 			}
@@ -1069,6 +1069,14 @@ const renderView = async (name) => {
 	}
 };
 
+const navigateToView = (name) => {
+	if (authState.enabled && !authState.user) return showSignedOutState();
+	const buttons = document.querySelectorAll('[data-view]');
+	buttons.forEach((button) => button.removeAttribute('aria-current'));
+	[...buttons].find((button) => button.dataset.view === name)?.setAttribute('aria-current', 'page');
+	return renderView(name);
+};
+
 const setupLegacyConsole = ({ persist = true } = {}) => {
 	const apiKey = getElement('api-key');
 	const keyState = getElement('key-state');
@@ -1114,12 +1122,7 @@ const setupLegacyConsole = ({ persist = true } = {}) => {
 document.addEventListener('DOMContentLoaded', async () => {
 	const view = getElement('view');
 	if (view) view.replaceChildren(element('p', { className: 'request-state', text: 'Checking authentication…' }));
-	document.querySelectorAll('[data-view]').forEach((button) => button.addEventListener('click', () => {
-		if (authState.enabled && !authState.user) return showSignedOutState();
-		document.querySelectorAll('[data-view]').forEach((item) => item.removeAttribute('aria-current'));
-		button.setAttribute('aria-current', 'page');
-		renderView(button.dataset.view);
-	}));
+	document.querySelectorAll('[data-view]').forEach((button) => button.addEventListener('click', () => navigateToView(button.dataset.view)));
 
 	getElement('connection-form')?.addEventListener('submit', (event) => {
 		event.preventDefault();
