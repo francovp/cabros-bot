@@ -27,7 +27,7 @@ async function publishServerTemplate() {
 	}
 
 	const remoteConfig = admin.remoteConfig(app);
-	const currentTemplate = await remoteConfig.getServerTemplate();
+	const currentTemplate = (await remoteConfig.getServerTemplate()).toJSON();
 	const client = new AuthorizedHttpClient(app);
 	const response = await client.send({
 		method: 'PUT',
