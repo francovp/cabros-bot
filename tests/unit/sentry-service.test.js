@@ -854,7 +854,7 @@ describe('profiling configuration', () => {
 		expect(initCall.profileSessionSampleRate).toBeUndefined();
 		expect(initCall.profileLifecycle).toBeUndefined();
 	});
-});
+	});
 
 	describe('Sanitization and Tag Enrichment (GH-340)', () => {
 		it('should sanitize sensitive tokens, bot tokens, GreenAPI URLs, and chat IDs from strings', () => {
