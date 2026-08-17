@@ -349,7 +349,6 @@ Runtime LLM prompts are centrally managed through `src/services/prompts/`.
 - Keep provider routing (`genaiClient.llmCallv2`, Azure/OpenRouter clients) separate from prompt ownership.
 - Add or update unit tests in `tests/unit/prompt-service.test.js` and the affected feature tests whenever a prompt contract changes.
 - Keep Langfuse `alert-enrichment` versions aligned with the local fallback's optional risk metadata schema.
-- Keep Langfuse `alert-enrichment` versions aligned with the local fallback's optional risk metadata schema.
 
 **Current managed prompts**:
 - search-query derivation
