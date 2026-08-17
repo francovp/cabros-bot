@@ -1,4 +1,5 @@
 previewsEnabled: true
+# Native Render services read the repository-level .node-version file.
 services:
 - type: web
   plan: free
@@ -19,9 +20,33 @@ services:
   - key: TELEGRAM_CHAT_ID
     sync: false
   - key: FIREBASE_PROJECT_ID
-    sync: false
+    value: cabros-bot
   - key: FIREBASE_SERVICE_ACCOUNT_JSON
     sync: false
+  - key: ENABLE_FIREBASE_ADMIN_AUTH
+    value: true
+    previewValue: false
+  - key: FIREBASE_WEB_API_KEY
+    value: AIzaSyDskGc5b0hpVX6YIUW-IYqwuH7_ZIP07O0
+    previewValue: ''
+  - key: FIREBASE_AUTH_DOMAIN
+    value: cabros-bot.firebaseapp.com
+    previewValue: ''
+  - key: FIREBASE_DATABASE_URL
+    value: https://cabros-bot.firebaseio.com
+    previewValue: ''
+  - key: FIREBASE_APP_ID
+    value: 1:391894492002:web:6d2f9a8519c0632cf3c23b
+    previewValue: ''
+  - key: FIREBASE_STORAGE_BUCKET
+    value: cabros-bot.appspot.com
+    previewValue: ''
+  - key: FIREBASE_MESSAGING_SENDER_ID
+    value: 391894492002
+    previewValue: ''
+  - key: FIREBASE_MEASUREMENT_ID
+    value: G-392NYM9QFM
+    previewValue: ''
   - key: ENABLE_TELEGRAM_BOT
     value: true
     previewValue: false

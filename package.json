@@ -5,9 +5,11 @@
   "main": "index.js",
   "packageManager": "pnpm@10.34.1",
   "engines": {
-    "node": ">=20.x"
+    "node": ">=24.18.0 <25"
   },
   "scripts": {
+    "build:hosting": "node scripts/build-hosting.js",
+    "deploy:firebase-remote-config:server": "node scripts/deploy-server-remote-config.js",
     "preinstall": "npx only-allow pnpm",
     "start": "node index.js",
     "start-worker": "node worker.js",
@@ -33,7 +35,7 @@
     "dotenv": "^16.4.5",
     "express": "^4.17.1",
     "express-healthcheck": "^0.1.0",
-    "firebase-admin": "^9.8.0",
+    "firebase-admin": "^12.1.0",
     "helmet": "^7.1.0",
     "ioredis": "^5.11.1",
     "openai": "^4.104.0",

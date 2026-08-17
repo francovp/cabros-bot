@@ -21,6 +21,7 @@ const {
 	getRequestedChannels,
 	getDeliveredChannels,
 } = require('../../../../services/notification/requestRouting');
+const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteConfigService');
 
 const DEFAULT_SCANNER_TIMEOUT_MS = 90000;
 const MAX_SCANNER_TIMEOUT_MS = 120000;
@@ -266,7 +267,7 @@ function postRunPreset(botOrGetter) {
 		const startTime = Date.now();
 
 		try {
-			if (process.env.ENABLE_MARKET_SCANNER !== 'true') {
+			if (!getRuntimeConfig().ENABLE_MARKET_SCANNER) {
 				return res.status(404).json({
 					error: 'Market scanner is not enabled',
 					code: 'FEATURE_DISABLED',

@@ -19,6 +19,7 @@ const {
 	getRequestedChannels,
 	getDeliveredChannels,
 } = require('../../../../services/notification/requestRouting');
+const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteConfigService');
 
 // Initialize services
 let notificationManager = null;
@@ -74,8 +75,9 @@ function resolveBot(botOrGetter) {
 
 async function processEnrichment(alert, options) {
 	const { tokenUsage, useTradingViewData, parentSpan } = options;
-	const isGeminiEnabled = process.env.ENABLE_GEMINI_GROUNDING === 'true';
-	const isTradingViewMcpEnabled = process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT === 'true' && useTradingViewData;
+	const runtimeConfig = getRuntimeConfig();
+	const isGeminiEnabled = runtimeConfig.ENABLE_GEMINI_GROUNDING;
+	const isTradingViewMcpEnabled = runtimeConfig.ENABLE_TRADINGVIEW_MCP_ENRICHMENT && useTradingViewData;
 
 	let enriched = false;
 
@@ -174,6 +176,7 @@ function postAlert(botOrGetter) {
 			const results = await sendWithNotificationRouting(notificationManager, alert, routing, { parentSpan: requestSpan });
 			const requestedChannels = getRequestedChannels(notificationManager, routing);
 			const deliveredChannels = getDeliveredChannels(results);
+			const processingTimeMs = Math.max(0, Date.now() - startTime);
 
 			// Return 200 OK regardless of delivery success (fail-open pattern)
 			res.json({
@@ -211,6 +214,7 @@ function postAlert(botOrGetter) {
 				deliveryResults: results,
 				channels: requestedChannels,
 				useTradingViewData,
+				processingTimeMs,
 				tradingViewEnrichmentApplied: Boolean(alert.enriched && alert.enriched.tradingViewEnrichmentApplied === true),
 			}).catch(() => {}); // errors already logged inside AlertStorageService
 

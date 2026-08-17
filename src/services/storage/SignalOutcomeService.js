@@ -3,6 +3,8 @@
 const admin = require('firebase-admin');
 const AlertStorageService = require('./AlertStorageService');
 const equityMarketDataService = require('./EquityMarketDataService');
+const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
+const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 const { MainClient } = require('binance');
 
 const COLLECTION_NAME = 'tradingSignalOutcomes';
@@ -194,7 +196,7 @@ const WINDOW_CONFIGS = {
 /**
  * Persist signal metadata to Firestore.
  */
-async function recordSignal({
+async function recordSignalInternal({
 	requestId,
 	source,
 	symbol,
@@ -300,6 +302,10 @@ async function recordSignal({
 	}
 }
 
+function recordSignal(params) {
+	return trackBackgroundTask(recordSignalInternal(params));
+}
+
 /**
  * Scan for pending signals and evaluate outcomes that have passed their target time.
  * Accepts optional options to control batch limit and duration budget.
@@ -327,12 +333,12 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 		}
 
 		const effectiveLimit = parsePositiveInteger(
-			options.limit !== undefined ? options.limit : process.env.SIGNAL_OUTCOME_EVALUATION_BATCH_LIMIT,
+			options.limit !== undefined ? options.limit : getRuntimeConfig().SIGNAL_OUTCOME_EVALUATION_BATCH_LIMIT,
 			50
 		);
 
 		const effectiveMaxDurationMs = parseTimerInterval(
-			options.maxDurationMs !== undefined ? options.maxDurationMs : process.env.SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS,
+			options.maxDurationMs !== undefined ? options.maxDurationMs : getRuntimeConfig().SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS,
 			30000
 		);
 
@@ -644,12 +650,8 @@ function startWorker(options = {}) {
 	let intervalMs;
 	if (options.intervalMs !== undefined && options.intervalMs !== null) {
 		intervalMs = parseTimerInterval(options.intervalMs, DEFAULT_INTERVAL_MS);
-	} else if (process.env.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS) {
-		intervalMs = parseTimerInterval(process.env.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS, DEFAULT_INTERVAL_MS);
-	} else if (process.env.SIGNAL_OUTCOME_EVALUATION_CADENCE_MS) {
-		intervalMs = parseTimerInterval(process.env.SIGNAL_OUTCOME_EVALUATION_CADENCE_MS, DEFAULT_INTERVAL_MS);
 	} else {
-		intervalMs = DEFAULT_INTERVAL_MS;
+		intervalMs = parseTimerInterval(getRuntimeConfig().SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS, DEFAULT_INTERVAL_MS);
 	}
 
 	activeIntervalMs = intervalMs;
@@ -706,17 +708,12 @@ function stopWorker(options = {}) {
  */
 function getWorkerStatus() {
 	const DEFAULT_INTERVAL_MS = 300000;
-	const intervalMs = activeIntervalMs || (
-		process.env.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS
-			? parseTimerInterval(process.env.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS, DEFAULT_INTERVAL_MS)
-			: (process.env.SIGNAL_OUTCOME_EVALUATION_CADENCE_MS
-				? parseTimerInterval(process.env.SIGNAL_OUTCOME_EVALUATION_CADENCE_MS, DEFAULT_INTERVAL_MS)
-				: DEFAULT_INTERVAL_MS)
-	);
+	const runtimeConfig = getRuntimeConfig();
+	const intervalMs = activeIntervalMs || parseTimerInterval(runtimeConfig.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS, DEFAULT_INTERVAL_MS);
 
-	const batchLimit = parsePositiveInteger(process.env.SIGNAL_OUTCOME_EVALUATION_BATCH_LIMIT, 50);
+	const batchLimit = parsePositiveInteger(runtimeConfig.SIGNAL_OUTCOME_EVALUATION_BATCH_LIMIT, 50);
 
-	const maxDurationMs = parseTimerInterval(process.env.SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS, 30000);
+	const maxDurationMs = parseTimerInterval(runtimeConfig.SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS, 30000);
 
 	return {
 		enabled: isEnabled(),

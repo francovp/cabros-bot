@@ -17,6 +17,12 @@ describe('WhatsAppService', () => {
 			error: jest.fn(),
 			log: jest.fn(),
 		};
+		delete process.env.VERCEL_ENV;
+		delete process.env.RENDER;
+		delete process.env.IS_PULL_REQUEST;
+		delete process.env.RAILWAY_ENVIRONMENT_NAME;
+		delete process.env.RAILWAY_GIT_PULL_REQUEST_NUMBER;
+		delete process.env.WHATSAPP_PREVIEW_CHAT_ID;
 		service = new WhatsAppService({ logger: mockLogger });
 	});
 
@@ -25,6 +31,20 @@ describe('WhatsAppService', () => {
 	});
 
 	describe('validate', () => {
+		it('prefers the preview chat ID on Vercel preview deployments', () => {
+			const originalEnv = { ...process.env };
+			process.env.VERCEL_ENV = 'preview';
+			process.env.WHATSAPP_CHAT_ID = 'production-chat@g.us';
+			process.env.WHATSAPP_PREVIEW_CHAT_ID = 'preview-chat@g.us';
+
+			try {
+				service = new WhatsAppService();
+				expect(service.chatId).toBe('preview-chat@g.us');
+			} finally {
+				process.env = originalEnv;
+			}
+		});
+
 		it('should return disabled when ENABLE_WHATSAPP_ALERTS is not true', async () => {
 			delete process.env.ENABLE_WHATSAPP_ALERTS;
 			const result = await service.validate();
@@ -144,6 +164,29 @@ describe('WhatsAppService', () => {
 			expect(result.success).toBe(false);
 			expect(result.attemptCount).toBe(3);
 			expect(global.fetch).toHaveBeenCalledTimes(3);
+		});
+
+		it('should forward an external abort signal to the GreenAPI request', async () => {
+			const leaseController = new AbortController();
+			global.fetch = jest.fn((_url, options) => new Promise((_, reject) => {
+				options.signal.addEventListener('abort', () => {
+					reject(new DOMException('The operation was aborted', 'AbortError'));
+				}, { once: true });
+			}));
+
+			const delivery = service.send({ text: 'Test alert' }, { signal: leaseController.signal });
+			await new Promise(setImmediate);
+			leaseController.abort('Cached delivery lease ownership lost');
+
+			await expect(delivery).resolves.toEqual(expect.objectContaining({
+				success: false,
+				channel: 'whatsapp',
+				aborted: true,
+			}));
+			expect(global.fetch).toHaveBeenCalledWith(
+				expect.any(String),
+				expect.objectContaining({ signal: expect.any(AbortSignal) }),
+			);
 		});
 
 		it('should respect 10s timeout', async () => {

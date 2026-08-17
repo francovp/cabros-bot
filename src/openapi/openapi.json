@@ -28,6 +28,9 @@
       "name": "News"
     },
     {
+      "name": "Trading"
+    },
+    {
       "name": "Operations"
     }
   ],
@@ -1076,6 +1079,84 @@
         ]
       }
     },
+    "/api/trading/binance/orders": {
+      "post": {
+        "tags": [
+          "Trading"
+        ],
+        "summary": "Validate or submit a Binance Spot order",
+        "description": "Live requests require an idempotency key or clientOrderId. Decimal quantities, prices, and quote amounts may be strings to preserve precision. MARKET orders must omit timeInForce. Binance PERCENT_PRICE, PERCENT_PRICE_BY_SIDE, and account-dependent filters such as MAX_POSITION or MAX_NUM_ORDERS use Binance order-test validation before acceptance. Definitive pre-execution or exchange rejections return 400 BINANCE_ORDER_REJECTED; a reconciled order mismatch returns 409 BINANCE_ORDER_CONFLICT; transient order-test failures return retryable 502 BINANCE_VALIDATION_FAILED. Binance execution-unknown code -1006 remains BINANCE_ORDER_STATUS_UNKNOWN.",
+        "operationId": "postBinanceSpotOrder",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKeyHeader"
+          },
+          {
+            "$ref": "#/components/parameters/XIdempotencyKeyHeader"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/BinanceOrder"
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BinanceOrderResult"
+          },
+          "201": {
+            "$ref": "#/components/responses/BinanceOrderResult"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "description": "The idempotency key conflicts with the request, or the recovered Binance order does not match the requested order.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "examples": {
+                  "idempotencyConflict": {
+                    "value": {
+                      "error": "Idempotency key was reused with a different payload",
+                      "code": "IDEMPOTENCY_CONFLICT"
+                    }
+                  },
+                  "reconciledOrderConflict": {
+                    "value": {
+                      "success": false,
+                      "error": "Reconciled Binance order does not match the request",
+                      "code": "BINANCE_ORDER_CONFLICT"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "502": {
+            "$ref": "#/components/responses/BinanceOrderFailure"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.operator"
+      }
+    },
     "/api/status": {
       "get": {
         "tags": [
@@ -1657,9 +1738,125 @@
             }
           }
         }
+      },
+      "BinanceOrder": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/BinanceOrderRequest"
+            },
+            "examples": {
+              "dryRunLimit": {
+                "summary": "Safe validation without submission",
+                "value": {
+                  "symbol": "BTCUSDT",
+                  "side": "BUY",
+                  "type": "LIMIT",
+                  "quantity": 0.001,
+                  "price": 60000,
+                  "timeInForce": "GTC",
+                  "dryRun": true
+                }
+              },
+              "liveMarket": {
+                "summary": "Operator submission with idempotency",
+                "value": {
+                  "symbol": "BTCUSDT",
+                  "side": "BUY",
+                  "type": "MARKET",
+                  "quoteOrderQty": 50,
+                  "dryRun": false,
+                  "clientOrderId": "cabros-375-1"
+                }
+              },
+              "invalid": {
+                "summary": "Invalid quantity step",
+                "value": {
+                  "symbol": "BTCUSDT",
+                  "side": "BUY",
+                  "type": "LIMIT",
+                  "quantity": 0.00105,
+                  "price": 60000,
+                  "dryRun": true
+                }
+              }
+            }
+          }
+        }
       }
     },
     "responses": {
+      "BinanceOrderResult": {
+        "description": "Validated dry-run or confirmed Binance Spot order. A replay includes idempotencyReplayed=true.",
+        "headers": {
+          "Idempotency-Replay": {
+            "description": "false for the first request, true for a cached replay.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/BinanceOrderResult"
+            },
+            "examples": {
+              "dryRun": {
+                "value": {
+                  "success": true,
+                  "dryRun": true,
+                  "environment": "testnet",
+                  "order": {
+                    "symbol": "BTCUSDT",
+                    "side": "BUY",
+                    "type": "LIMIT",
+                    "quantity": 0.001,
+                    "price": 60000,
+                    "timeInForce": "GTC",
+                    "newOrderRespType": "FULL"
+                  }
+                }
+              },
+              "submitted": {
+                "value": {
+                  "success": true,
+                  "dryRun": false,
+                  "environment": "testnet",
+                  "order": {
+                    "symbol": "BTCUSDT",
+                    "orderId": 42,
+                    "clientOrderId": "cabros-375-1",
+                    "status": "FILLED",
+                    "type": "MARKET",
+                    "side": "BUY"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "BinanceOrderFailure": {
+        "description": "Binance rejected or could not confirm the order. Definitive exchange rejections return BINANCE_ORDER_REJECTED; transient order-test failures return BINANCE_VALIDATION_FAILED. A live request with an idempotency key derives a deterministic clientOrderId for reconciliation after cache expiration or process restart. A 503 BINANCE_ORDER_STATUS_UNKNOWN response is replayed for the same idempotency key; do not resubmit with a new key until the order status is reconciled.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "example": {
+              "success": false,
+              "error": "Binance accepted or may have accepted the order, but its final status is unknown; do not resubmit with a new idempotency key",
+              "code": "BINANCE_ORDER_STATUS_UNKNOWN"
+            }
+          }
+        }
+      },
       "Unauthorized": {
         "description": "API key rejected",
         "content": {
@@ -2076,7 +2273,7 @@
         }
       },
       "StatusResult": {
-        "description": "Non-sensitive runtime readiness",
+        "description": "Non-sensitive runtime readiness. When Firebase Remote Config is enabled, dependencies.firebaseRemoteConfig reports loader metadata only; it never exposes remote parameter values or credentials.",
         "content": {
           "application/json": {
             "schema": {
@@ -2084,7 +2281,8 @@
             },
             "example": {
               "featureFlags": {
-                "equityMarketData": false
+                "equityMarketData": false,
+                "firebaseRemoteConfig": false
               },
               "dependencies": {
                 "tradingViewMcp": {
@@ -2110,6 +2308,18 @@
                     "NASDAQ"
                   ],
                   "timeoutMs": 5000
+                },
+                "firebaseRemoteConfig": {
+                  "enabled": false,
+                  "configured": false,
+                  "ready": false,
+                  "status": "disabled",
+                  "source": "disabled",
+                  "templateVersion": null,
+                  "lastSuccessfulLoad": null,
+                  "lastErrorCategory": null,
+                  "refreshIntervalMs": 900000,
+                  "maxAgeMs": 3600000
                 }
               }
             }
@@ -2395,7 +2605,7 @@
           "discordWebhookUrl": {
             "type": "string",
             "format": "uri",
-            "pattern": "^https://([a-zA-Z0-9-]+\\.)?(discord\\.com|discordapp\\.com)/api/webhooks/",
+            "pattern": "^https://([a-zA-Z0-9-]+\\.)?(discord\\.com|discordapp\\.com)/api/webhooks/\\d+/[a-zA-Z0-9_-]+",
             "description": "Optional HTTPS Discord webhook URL override."
           },
           "idempotencyKey": {
@@ -3098,9 +3308,132 @@
           }
         }
       },
+      "BinanceOrderRequest": {
+        "type": "object",
+        "required": [
+          "symbol",
+          "side",
+          "type"
+        ],
+        "properties": {
+          "symbol": {
+            "type": "string",
+            "pattern": "^[A-Z0-9]{5,20}$",
+            "description": "Allow-listed Binance Spot symbol, for example BTCUSDT."
+          },
+          "side": {
+            "type": "string",
+            "enum": [
+              "BUY",
+              "SELL"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "MARKET",
+              "LIMIT"
+            ]
+          },
+          "quantity": {
+            "type": [
+              "number",
+              "string"
+            ],
+            "description": "Base-asset quantity. Required for LIMIT. Send as a string when exact decimal precision matters. MARKET orders must use quoteOrderQty when the configured notional cap is enforced, because quantity-based market execution cannot be bounded safely."
+          },
+          "quoteOrderQty": {
+            "type": [
+              "number",
+              "string"
+            ],
+            "description": "Quote-asset amount for MARKET orders. Send as a string when exact decimal precision matters."
+          },
+          "price": {
+            "type": [
+              "number",
+              "string"
+            ],
+            "description": "Required for LIMIT orders. Send as a string when exact decimal precision matters."
+          },
+          "timeInForce": {
+            "type": "string",
+            "enum": [
+              "GTC",
+              "IOC",
+              "FOK"
+            ],
+            "default": "GTC",
+            "description": "LIMIT-only. MARKET orders must omit this field."
+          },
+          "clientOrderId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,36}$",
+            "description": "Stable Binance order identity. Required for live requests unless an idempotency key is supplied."
+          },
+          "dryRun": {
+            "type": "boolean",
+            "default": true,
+            "description": "Validate filters and notional without submitting. Set false only for an enabled operator workflow."
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional body form of the idempotency key. Header form is preferred and required for live requests without clientOrderId."
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional snake_case body form of the idempotency key."
+          }
+        },
+        "oneOf": [
+          {
+            "required": [
+              "quantity"
+            ]
+          },
+          {
+            "required": [
+              "quoteOrderQty"
+            ]
+          }
+        ],
+        "additionalProperties": false
+      },
+      "BinanceOrderResult": {
+        "type": "object",
+        "required": [
+          "success",
+          "dryRun",
+          "environment",
+          "order"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "dryRun": {
+            "type": "boolean"
+          },
+          "environment": {
+            "type": "string",
+            "enum": [
+              "testnet",
+              "live"
+            ]
+          },
+          "idempotencyReplayed": {
+            "type": "boolean"
+          },
+          "order": {
+            "$ref": "#/components/schemas/JsonObject"
+          }
+        }
+      },
       "Status": {
         "type": "object",
-        "description": "Runtime status. TradingView dependencies expose configured endpoint metadata plus runtime status (unknown before an MCP operation, ready after success, degraded after failure), timestamps, sanitized error categories, and success/failure counters without provider response bodies. featureFlags.firestoreJobStorage reports the ENABLE_FIRESTORE_JOB_STORAGE gate or the legacy ENABLE_FIRESTORE_ALERT_STORAGE gate; featureFlags.jobExecutionWorker reports JOB_EXECUTION_MODE=render-worker; dependencies.jobExecutionQueue reports queue readiness and safe operational counters without broker credentials; featureFlags.firestoreScannerPresets reports ENABLE_FIRESTORE_SCANNER_PRESETS; dependencies.scannerPresetStorage reports the effective durable or ephemeral scanner-preset backend and readiness; dependencies.signalOutcomeWorker reports the scheduler role (web, worker, or disabled), graceful-shutdown state, cadence, heartbeat, and scanned/pending/evaluated/error counters; a disabled local scheduler reports ready false and status disabled because it is not the process evaluating outcomes; dependencies.firestoreJobStorage reports Firestore credential readiness for that runtime path; featureFlags.newsMonitorTestMode reports ENABLE_NEWS_MONITOR_TEST_MODE without changing news monitor behavior; featureFlags.messageFooterMetadata reports ENABLE_MESSAGE_FOOTER_METADATA and defaults to true unless explicitly set to false; featureFlags.cloudflareAig reports ENABLE_CLOUDFLARE_AIG and dependencies.cloudflareAig reports Cloudflare AI Gateway credential readiness; featureFlags.equityMarketData reports ENABLE_EQUITY_MARKET_DATA and dependencies.equityMarketData reports non-sensitive Twelve Data readiness for BATS/NASDAQ outcome evaluation.",
+        "description": "Runtime status. TradingView dependencies expose configured endpoint metadata plus runtime status (unknown before an MCP operation, ready after success, degraded after failure), timestamps, sanitized error categories, and success/failure counters without provider response bodies. featureFlags.firestoreJobStorage reports the ENABLE_FIRESTORE_JOB_STORAGE gate or the legacy ENABLE_FIRESTORE_ALERT_STORAGE gate; featureFlags.jobExecutionWorker reports JOB_EXECUTION_MODE=render-worker; dependencies.jobExecutionQueue reports queue readiness and safe operational counters without broker credentials; featureFlags.firestoreScannerPresets reports ENABLE_FIRESTORE_SCANNER_PRESETS; dependencies.scannerPresetStorage reports the effective durable or ephemeral scanner-preset backend and readiness; dependencies.signalOutcomeWorker reports the scheduler role (web, worker, or disabled), graceful-shutdown state, cadence, heartbeat, and scanned/pending/evaluated/error counters; a disabled local scheduler reports ready false and status disabled because it is not the process evaluating outcomes; dependencies.firestoreJobStorage reports Firestore credential readiness for that runtime path; featureFlags.newsMonitorTestMode reports ENABLE_NEWS_MONITOR_TEST_MODE without changing news monitor behavior; featureFlags.messageFooterMetadata reports ENABLE_MESSAGE_FOOTER_METADATA and defaults to true unless explicitly set to false; featureFlags.cloudflareAig reports ENABLE_CLOUDFLARE_AIG and dependencies.cloudflareAig reports Cloudflare AI Gateway credential readiness; featureFlags.equityMarketData reports ENABLE_EQUITY_MARKET_DATA and dependencies.equityMarketData reports non-sensitive Twelve Data readiness for BATS/NASDAQ outcome evaluation; featureFlags.firebaseRemoteConfig reports ENABLE_FIREBASE_REMOTE_CONFIG and dependencies.firebaseRemoteConfig reports only bounded loader metadata, source, template version, last successful load, and last error category without remote values or credentials.",
         "properties": {
           "service": {
             "$ref": "#/components/schemas/JsonObject"

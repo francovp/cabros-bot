@@ -6,7 +6,7 @@
 const request = require('supertest');
 const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
-const { initializeNotificationServices } = require('../../src/controllers/webhooks/handlers/alert/alert');
+const { initializeNotificationServices, getNotificationManager } = require('../../src/controllers/webhooks/handlers/alert/alert');
 const { getCacheInstance } = require('../../src/controllers/webhooks/handlers/newsMonitor/cache');
 
 jest.mock('../../src/services/grounding/gemini');
@@ -43,7 +43,7 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 
 		// Mock Gemini for symbol analysis
 		const gemini = require('../../src/services/grounding/gemini');
-		gemini.analyzeNewsForSymbol = jest.fn().mockResolvedValue({
+		gemini.analyzeNewsForSymbol.mockReset().mockResolvedValue({
 			event_category: 'price_surge',
 			event_significance: 0.7,
 			sentiment_score: 0.8,
@@ -129,6 +129,39 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 			expect(response2.body.results[0].alert).toEqual(response1.body.results[0].alert);
 		});
 
+		it('should reuse cached no-event analyses without calling providers again', async () => {
+			const gemini = require('../../src/services/grounding/gemini');
+			const genaiClient = require('../../src/services/grounding/genaiClient');
+			gemini.analyzeNewsForSymbol.mockResolvedValueOnce({
+				event_category: 'none',
+				event_significance: 0,
+				sentiment_score: 0,
+				headline: '',
+				confidence: 0,
+				sources: [],
+			});
+
+			const response1 = await request(app)
+				.get('/api/news-monitor?crypto=BTCUSDT').set('x-api-key', 'test-key')
+				.expect(200);
+			const response2 = await request(app)
+				.get('/api/news-monitor?crypto=BTCUSDT').set('x-api-key', 'test-key')
+				.expect(200);
+
+			expect(response1.body.results[0]).toEqual(expect.objectContaining({
+				status: 'analyzed',
+				alert: null,
+				cached: false,
+			}));
+			expect(response2.body.results[0]).toEqual(expect.objectContaining({
+				status: 'cached',
+				alert: null,
+				cached: true,
+			}));
+			expect(gemini.analyzeNewsForSymbol).toHaveBeenCalledTimes(1);
+			expect(genaiClient.search).toHaveBeenCalledTimes(1);
+		});
+
 		it('should bypass cache when different event categories detected', async () => {
 			// This test depends on Gemini returning different categories
 			// For now, both calls return same category from mock, so both would cache
@@ -198,6 +231,362 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 	});
 
 	describe('Cache Deduplication Impact', () => {
+		it('should retry only failed channels and persist recovered delivery results', async () => {
+			process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '';
+			const { getNotificationManager } = require('../../src/controllers/webhooks/handlers/alert/alert');
+			const manager = getNotificationManager();
+			const telegramSend = jest.spyOn(manager.channels.get('telegram'), 'send').mockResolvedValue({
+				success: true,
+				channel: 'telegram',
+				messageId: 'telegram-1',
+			});
+			const whatsappSend = jest.spyOn(manager.channels.get('whatsapp'), 'send')
+				.mockResolvedValueOnce({
+					success: false,
+					channel: 'whatsapp',
+					error: 'temporary failure',
+				})
+				.mockResolvedValueOnce({
+					success: true,
+					channel: 'whatsapp',
+					messageId: 'whatsapp-2',
+				});
+
+			const response1 = await request(app)
+				.get('/api/news-monitor?crypto=BTCUSDT').set('x-api-key', 'test-key')
+				.expect(200);
+
+			expect(response1.body.results[0].deliveryResults).toEqual([
+				expect.objectContaining({ channel: 'telegram', success: true }),
+				expect.objectContaining({ channel: 'whatsapp', success: false }),
+			]);
+			const telegramCallsAfterFirstDelivery = telegramSend.mock.calls.length;
+			const whatsappCallsAfterFirstDelivery = whatsappSend.mock.calls.length;
+
+			const response2 = await request(app)
+				.get('/api/news-monitor?crypto=BTCUSDT').set('x-api-key', 'test-key')
+				.expect(200);
+
+			expect(response2.body.results[0].deliveryResults).toEqual([
+				expect.objectContaining({ channel: 'telegram', success: true }),
+				expect.objectContaining({ channel: 'whatsapp', success: true }),
+			]);
+			expect(telegramSend).toHaveBeenCalledTimes(telegramCallsAfterFirstDelivery);
+			expect(whatsappSend).toHaveBeenCalledTimes(whatsappCallsAfterFirstDelivery + 1);
+
+			const response3 = await request(app)
+				.get('/api/news-monitor?crypto=BTCUSDT').set('x-api-key', 'test-key')
+				.expect(200);
+
+			expect(response3.body.results[0].deliveryResults).toEqual(response2.body.results[0].deliveryResults);
+			expect(telegramSend).toHaveBeenCalledTimes(telegramCallsAfterFirstDelivery);
+			expect(whatsappSend).toHaveBeenCalledTimes(whatsappCallsAfterFirstDelivery + 1);
+		});
+
+		it('should keep a failed channel retryable without retrying successful channels', async () => {
+			process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '';
+			const { getNotificationManager } = require('../../src/controllers/webhooks/handlers/alert/alert');
+			const manager = getNotificationManager();
+			const telegramSend = jest.spyOn(manager.channels.get('telegram'), 'send').mockResolvedValue({
+				success: true,
+				channel: 'telegram',
+				messageId: 'telegram-1',
+			});
+			const whatsappSend = jest.spyOn(manager.channels.get('whatsapp'), 'send')
+				.mockResolvedValueOnce({ success: false, channel: 'whatsapp', error: 'temporary failure 1' })
+				.mockResolvedValueOnce({ success: false, channel: 'whatsapp', error: 'temporary failure 2' })
+				.mockResolvedValueOnce({ success: true, channel: 'whatsapp', messageId: 'whatsapp-3' });
+
+			const response1 = await request(app)
+				.get('/api/news-monitor?crypto=BTCUSDT').set('x-api-key', 'test-key')
+				.expect(200);
+			const telegramCallsAfterFirstDelivery = telegramSend.mock.calls.length;
+
+			const response2 = await request(app)
+				.get('/api/news-monitor?crypto=BTCUSDT').set('x-api-key', 'test-key')
+				.expect(200);
+			const response3 = await request(app)
+				.get('/api/news-monitor?crypto=BTCUSDT').set('x-api-key', 'test-key')
+				.expect(200);
+
+			expect(response1.body.results[0].deliveryResults).toEqual(expect.arrayContaining([
+				expect.objectContaining({ channel: 'whatsapp', success: false }),
+			]));
+			expect(response2.body.results[0].deliveryResults).toEqual(expect.arrayContaining([
+				expect.objectContaining({ channel: 'whatsapp', success: false, error: 'temporary failure 2' }),
+			]));
+			expect(response3.body.results[0].deliveryResults).toEqual([
+				expect.objectContaining({ channel: 'telegram', success: true }),
+				expect.objectContaining({ channel: 'whatsapp', success: true }),
+			]);
+			expect(telegramSend).toHaveBeenCalledTimes(telegramCallsAfterFirstDelivery);
+			expect(whatsappSend).toHaveBeenCalledTimes(3);
+		});
+
+		it('should not persist a cached retry after its lease ownership is lost', async () => {
+			process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '';
+			const cache = getCacheInstance();
+			const intervalSpy = jest.spyOn(cache, 'getDeliveryLeaseRenewIntervalMs').mockReturnValue(1);
+			const renewSpy = jest.spyOn(cache, 'renewDelivery').mockResolvedValue(false);
+			const { getNotificationManager } = require('../../src/controllers/webhooks/handlers/alert/alert');
+			const telegramSend = jest.spyOn(getNotificationManager().channels.get('telegram'), 'send')
+				.mockResolvedValueOnce({ success: false, channel: 'telegram', error: 'temporary failure' })
+				.mockImplementationOnce(() => new Promise((resolve) => {
+					setTimeout(() => resolve({ success: true, channel: 'telegram', messageId: 'telegram-retry' }), 10);
+				}))
+				.mockResolvedValueOnce({ success: true, channel: 'telegram', messageId: 'telegram-after-loss' });
+
+			try {
+				await request(app)
+					.get('/api/news-monitor?crypto=BTCUSDT&channels=telegram').set('x-api-key', 'test-key')
+					.expect(200);
+
+				const retry = await request(app)
+					.get('/api/news-monitor?crypto=BTCUSDT&channels=telegram').set('x-api-key', 'test-key')
+					.expect(200);
+
+				expect(retry.body.results[0].deliveryResults).toEqual([
+					expect.objectContaining({ channel: 'telegram', success: false }),
+				]);
+
+				renewSpy.mockResolvedValue(true);
+				const afterLoss = await request(app)
+					.get('/api/news-monitor?crypto=BTCUSDT&channels=telegram').set('x-api-key', 'test-key')
+					.expect(200);
+
+				expect(afterLoss.body.results[0].cached).toBe(true);
+				expect(afterLoss.body.results[0].deliveryResults).toEqual([
+					expect.objectContaining({ channel: 'telegram', success: true, messageId: 'telegram-after-loss' }),
+				]);
+				expect(telegramSend).toHaveBeenCalledTimes(3);
+				expect(renewSpy).toHaveBeenCalled();
+			} finally {
+				intervalSpy.mockRestore();
+				renewSpy.mockRestore();
+			}
+		});
+
+		it('should keep a successful retry when lease renewal is indeterminate', async () => {
+			process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '';
+			const cache = getCacheInstance();
+			const intervalSpy = jest.spyOn(cache, 'getDeliveryLeaseRenewIntervalMs').mockReturnValue(1);
+			const renewSpy = jest.spyOn(cache, 'renewDelivery').mockResolvedValue(null);
+			const { getNotificationManager } = require('../../src/controllers/webhooks/handlers/alert/alert');
+			const telegramSend = jest.spyOn(getNotificationManager().channels.get('telegram'), 'send')
+				.mockResolvedValueOnce({ success: false, channel: 'telegram', error: 'temporary failure' })
+				.mockResolvedValueOnce({ success: true, channel: 'telegram', messageId: 'telegram-after-storage-error' });
+
+			try {
+				await request(app)
+					.get('/api/news-monitor?crypto=BTCUSDT&channels=telegram').set('x-api-key', 'test-key')
+					.expect(200);
+
+				const retry = await request(app)
+					.get('/api/news-monitor?crypto=BTCUSDT&channels=telegram').set('x-api-key', 'test-key')
+					.expect(200);
+
+				expect(retry.body.results[0].deliveryResults).toEqual([
+					expect.objectContaining({ channel: 'telegram', success: true, messageId: 'telegram-after-storage-error' }),
+				]);
+				expect(telegramSend).toHaveBeenCalledTimes(2);
+				expect(renewSpy).toHaveBeenCalled();
+			} finally {
+				intervalSpy.mockRestore();
+				renewSpy.mockRestore();
+			}
+		});
+
+		it('should drop the old destination success when a claimed retry loses its lease', async () => {
+			process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '';
+			const cache = getCacheInstance();
+			const intervalSpy = jest.spyOn(cache, 'getDeliveryLeaseRenewIntervalMs').mockReturnValue(1);
+			const renewSpy = jest.spyOn(cache, 'renewDelivery').mockResolvedValue(false);
+			const { getNotificationManager } = require('../../src/controllers/webhooks/handlers/alert/alert');
+			const telegramSend = jest.spyOn(getNotificationManager().channels.get('telegram'), 'send')
+				.mockResolvedValueOnce({ success: true, channel: 'telegram', messageId: 'telegram-destination-a' })
+				.mockImplementationOnce(() => new Promise((resolve) => {
+					setTimeout(() => resolve({ success: true, channel: 'telegram', messageId: 'telegram-destination-b' }), 10);
+				}));
+
+			try {
+				await request(app)
+					.post('/api/news-monitor').set('x-api-key', 'test-key')
+					.send({
+						crypto: ['BTCUSDT'],
+						channels: ['telegram'],
+						telegramChatId: 'destination-a',
+					})
+					.expect(200);
+
+				const retry = await request(app)
+					.post('/api/news-monitor').set('x-api-key', 'test-key')
+					.send({
+						crypto: ['BTCUSDT'],
+						channels: ['telegram'],
+						telegramChatId: 'destination-b',
+					})
+					.expect(200);
+
+				expect(retry.body.results[0].deliveryResults).toEqual([]);
+				expect(retry.body.deliveredChannels).toEqual([]);
+				expect(telegramSend).toHaveBeenCalledTimes(2);
+				expect(renewSpy).toHaveBeenCalled();
+			} finally {
+				intervalSpy.mockRestore();
+				renewSpy.mockRestore();
+			}
+		});
+
+		it('should preserve an independently owned channel when another lease is lost', async () => {
+			process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '';
+			const cache = getCacheInstance();
+			const manager = getNotificationManager();
+			const intervalSpy = jest.spyOn(cache, 'getDeliveryLeaseRenewIntervalMs').mockReturnValue(1);
+			const renewSpy = jest.spyOn(cache, 'renewDelivery').mockImplementation(async (_symbol, _category, channel) => channel !== 'telegram');
+			const telegramSend = jest.spyOn(manager.channels.get('telegram'), 'send')
+				.mockResolvedValueOnce({ success: false, channel: 'telegram', error: 'temporary telegram failure' })
+				.mockImplementationOnce(() => new Promise((resolve) => {
+					setTimeout(() => resolve({ success: true, channel: 'telegram', messageId: 'telegram-retry' }), 10);
+				}))
+				.mockResolvedValueOnce({ success: true, channel: 'telegram', messageId: 'telegram-after-loss' });
+			const whatsappSend = jest.spyOn(manager.channels.get('whatsapp'), 'send')
+				.mockResolvedValueOnce({ success: false, channel: 'whatsapp', error: 'temporary whatsapp failure' })
+				.mockResolvedValueOnce({ success: true, channel: 'whatsapp', messageId: 'whatsapp-retry' });
+
+			try {
+				await request(app)
+					.post('/api/news-monitor').set('x-api-key', 'test-key')
+					.send({ crypto: ['BTCUSDT'], channels: ['telegram', 'whatsapp'] })
+					.expect(200);
+
+				const retry = await request(app)
+					.post('/api/news-monitor').set('x-api-key', 'test-key')
+					.send({ crypto: ['BTCUSDT'], channels: ['telegram', 'whatsapp'] })
+					.expect(200);
+
+				expect(retry.body.results[0].deliveryResults).toEqual([
+					expect.objectContaining({ channel: 'telegram', success: false }),
+					expect.objectContaining({ channel: 'whatsapp', success: true, messageId: 'whatsapp-retry' }),
+				]);
+
+				renewSpy.mockResolvedValue(true);
+				const afterLoss = await request(app)
+					.post('/api/news-monitor').set('x-api-key', 'test-key')
+					.send({ crypto: ['BTCUSDT'], channels: ['telegram', 'whatsapp'] })
+					.expect(200);
+
+				expect(afterLoss.body.results[0].deliveryResults).toEqual([
+					expect.objectContaining({ channel: 'telegram', success: true, messageId: 'telegram-after-loss' }),
+					expect.objectContaining({ channel: 'whatsapp', success: true, messageId: 'whatsapp-retry' }),
+				]);
+				expect(telegramSend).toHaveBeenCalledTimes(3);
+				expect(whatsappSend).toHaveBeenCalledTimes(2);
+			} finally {
+				intervalSpy.mockRestore();
+				renewSpy.mockRestore();
+			}
+		});
+
+		it('should serialize concurrent retries for the same failed channel', async () => {
+			process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '';
+			const { getNotificationManager } = require('../../src/controllers/webhooks/handlers/alert/alert');
+			const manager = getNotificationManager();
+			const telegramSend = jest.spyOn(manager.channels.get('telegram'), 'send').mockResolvedValue({
+				success: true,
+				channel: 'telegram',
+				messageId: 'telegram-1',
+			});
+			let releaseRetry;
+			let retryStarted;
+			const retryStartedPromise = new Promise((resolve) => { retryStarted = resolve; });
+			const whatsappSend = jest.spyOn(manager.channels.get('whatsapp'), 'send')
+				.mockResolvedValueOnce({ success: false, channel: 'whatsapp', error: 'temporary failure' })
+				.mockImplementationOnce(() => new Promise((resolve) => {
+					releaseRetry = resolve;
+					retryStarted();
+				}));
+
+			await request(app)
+				.get('/api/news-monitor?crypto=BTCUSDT').set('x-api-key', 'test-key')
+				.expect(200);
+
+			const firstRetry = request(app)
+				.get('/api/news-monitor?crypto=BTCUSDT').set('x-api-key', 'test-key')
+				.expect(200);
+			const firstRetryPromise = firstRetry.then((response) => response);
+			await retryStartedPromise;
+
+			const concurrentRetry = await request(app)
+				.get('/api/news-monitor?crypto=BTCUSDT').set('x-api-key', 'test-key')
+				.expect(200);
+
+			expect(concurrentRetry.body.results[0].deliveryResults).toEqual(expect.arrayContaining([
+				expect.objectContaining({ channel: 'whatsapp', success: false }),
+			]));
+			expect(whatsappSend).toHaveBeenCalledTimes(2);
+
+			releaseRetry({ success: true, channel: 'whatsapp', messageId: 'whatsapp-2' });
+			await firstRetryPromise;
+			expect(telegramSend).toHaveBeenCalledTimes(1);
+			expect(whatsappSend).toHaveBeenCalledTimes(2);
+		});
+
+		it('should merge concurrent retries for different channels', async () => {
+			process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '';
+			const { getNotificationManager } = require('../../src/controllers/webhooks/handlers/alert/alert');
+			const manager = getNotificationManager();
+			let releaseTelegram;
+			let releaseWhatsApp;
+			let telegramStarted;
+			let whatsappStarted;
+			const telegramStartedPromise = new Promise((resolve) => { telegramStarted = resolve; });
+			const whatsappStartedPromise = new Promise((resolve) => { whatsappStarted = resolve; });
+			const telegramSend = jest.spyOn(manager.channels.get('telegram'), 'send')
+				.mockResolvedValueOnce({ success: false, channel: 'telegram', error: 'temporary telegram failure' })
+				.mockImplementationOnce(() => new Promise((resolve) => {
+					releaseTelegram = resolve;
+					telegramStarted();
+				}));
+			const whatsappSend = jest.spyOn(manager.channels.get('whatsapp'), 'send')
+				.mockResolvedValueOnce({ success: false, channel: 'whatsapp', error: 'temporary whatsapp failure' })
+				.mockImplementationOnce(() => new Promise((resolve) => {
+					releaseWhatsApp = resolve;
+					whatsappStarted();
+				}));
+
+			await request(app)
+				.post('/api/news-monitor').set('x-api-key', 'test-key')
+				.send({ crypto: ['BTCUSDT'], channels: ['telegram', 'whatsapp'] })
+				.expect(200);
+
+			const telegramRetry = request(app)
+				.post('/api/news-monitor').set('x-api-key', 'test-key')
+				.send({ crypto: ['BTCUSDT'], channels: ['telegram'] })
+				.expect(200);
+			const whatsappRetry = request(app)
+				.post('/api/news-monitor').set('x-api-key', 'test-key')
+				.send({ crypto: ['BTCUSDT'], channels: ['whatsapp'] })
+				.expect(200);
+			const telegramRetryPromise = telegramRetry.then((response) => response);
+			const whatsappRetryPromise = whatsappRetry.then((response) => response);
+			await Promise.all([telegramStartedPromise, whatsappStartedPromise]);
+
+			releaseTelegram({ success: true, channel: 'telegram', messageId: 'telegram-2' });
+			releaseWhatsApp({ success: true, channel: 'whatsapp', messageId: 'whatsapp-2' });
+			await Promise.all([telegramRetryPromise, whatsappRetryPromise]);
+
+			const finalResponse = await request(app)
+				.get('/api/news-monitor?crypto=BTCUSDT').set('x-api-key', 'test-key')
+				.expect(200);
+
+			expect(finalResponse.body.results[0].deliveryResults).toEqual([
+				expect.objectContaining({ channel: 'telegram', success: true }),
+				expect.objectContaining({ channel: 'whatsapp', success: true }),
+			]);
+			expect(telegramSend).toHaveBeenCalledTimes(2);
+			expect(whatsappSend).toHaveBeenCalledTimes(2);
+		});
+
 		it('should re-deliver cached alerts when a later request asks for different channels', async () => {
 			const response1 = await request(app)
 				.post('/api/news-monitor').set('x-api-key', 'test-key')
@@ -234,9 +623,157 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 				expect.any(Object),
 			);
 			expect(mockFetch).toHaveBeenCalledTimes(1);
+
+			const response3 = await request(app)
+				.post('/api/news-monitor').set('x-api-key', 'test-key')
+				.send({
+					crypto: ['BTCUSDT'],
+					channels: ['telegram'],
+					telegramChatId: '-100999888777',
+				})
+				.expect(200);
+
+			expect(response3.body.deliveredChannels).toEqual(['telegram']);
+			expect(response3.body.results[0].deliveryResults).toEqual([
+				expect.objectContaining({ channel: 'telegram', success: true }),
+			]);
+			expect(mockBot.telegram.sendMessage).toHaveBeenCalledTimes(1);
 		});
 
-		it('should re-deliver cached alerts to all enabled channels when a later request omits channels', async () => {
+		it('should retry cached success when an effective default destination changes', async () => {
+			const telegramService = getNotificationManager().channels.get('telegram');
+			await request(app)
+				.post('/api/news-monitor').set('x-api-key', 'test-key')
+				.send({ crypto: ['BTCUSDT'], channels: ['telegram'] })
+				.expect(200);
+
+			telegramService.chatId = '987654321';
+			const response = await request(app)
+				.post('/api/news-monitor').set('x-api-key', 'test-key')
+				.send({ crypto: ['BTCUSDT'], channels: ['telegram'] })
+				.expect(200);
+
+			expect(response.body.results[0].cached).toBe(true);
+			expect(response.body.deliveredChannels).toEqual(['telegram']);
+			expect(mockBot.telegram.sendMessage).toHaveBeenLastCalledWith(
+				'987654321',
+				expect.any(String),
+				expect.any(Object),
+			);
+			expect(mockBot.telegram.sendMessage).toHaveBeenCalledTimes(2);
+		});
+
+		it('should retry only newly requested channels when an explicit channel set expands', async () => {
+			const telegramSend = jest.spyOn(mockBot.telegram, 'sendMessage');
+
+			await request(app)
+				.post('/api/news-monitor').set('x-api-key', 'test-key')
+				.send({ crypto: ['BTCUSDT'], channels: ['telegram'] })
+				.expect(200);
+
+			const response = await request(app)
+				.post('/api/news-monitor').set('x-api-key', 'test-key')
+				.send({ crypto: ['BTCUSDT'], channels: ['telegram', 'whatsapp'] })
+				.expect(200);
+
+			expect(response.body.deliveredChannels).toEqual(['telegram', 'whatsapp']);
+			expect(telegramSend).toHaveBeenCalledTimes(1);
+			expect(mockFetch).toHaveBeenCalledTimes(1);
+		});
+
+		it('should reject a cached success when its explicit channel is no longer enabled', async () => {
+			await request(app)
+				.post('/api/news-monitor').set('x-api-key', 'test-key')
+				.send({ crypto: ['BTCUSDT'], channels: ['telegram'] })
+				.expect(200);
+
+			getNotificationManager().channels.get('telegram').enabled = false;
+
+			const response = await request(app)
+				.post('/api/news-monitor').set('x-api-key', 'test-key')
+				.send({ crypto: ['BTCUSDT'], channels: ['telegram'] })
+				.expect(400);
+
+			expect(response.body).toEqual(expect.objectContaining({
+				code: 'INVALID_REQUEST',
+				error: 'Requested channel(s) disabled or misconfigured: telegram',
+			}));
+		});
+
+		it('should preserve untouched channel destinations across partial retries', async () => {
+			process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '';
+			const { getNotificationManager } = require('../../src/controllers/webhooks/handlers/alert/alert');
+			const manager = getNotificationManager();
+			const telegramSend = jest.spyOn(manager.channels.get('telegram'), 'send').mockResolvedValue({
+				success: true,
+				channel: 'telegram',
+				messageId: 'telegram-1',
+			});
+			const whatsappSend = jest.spyOn(manager.channels.get('whatsapp'), 'send')
+				.mockResolvedValueOnce({ success: false, channel: 'whatsapp', error: 'temporary failure' })
+				.mockResolvedValueOnce({ success: true, channel: 'whatsapp', messageId: 'whatsapp-2' });
+
+			await request(app)
+				.post('/api/news-monitor').set('x-api-key', 'test-key')
+				.send({
+					crypto: ['BTCUSDT'],
+					channels: ['telegram', 'whatsapp'],
+					telegramChatId: '-100000000001',
+				})
+				.expect(200);
+
+			await request(app)
+				.post('/api/news-monitor').set('x-api-key', 'test-key')
+				.send({ crypto: ['BTCUSDT'], channels: ['whatsapp'] })
+				.expect(200);
+
+			await request(app)
+				.post('/api/news-monitor').set('x-api-key', 'test-key')
+				.send({ crypto: ['BTCUSDT'] })
+				.expect(200);
+
+			expect(telegramSend).toHaveBeenCalledTimes(2);
+			expect(telegramSend.mock.calls[1][0].telegramChatId).toBeUndefined();
+			expect(whatsappSend).toHaveBeenCalledTimes(2);
+		});
+
+		it('should not report a destination retry as delivered while another request owns its lease', async () => {
+			await request(app)
+				.post('/api/news-monitor').set('x-api-key', 'test-key')
+				.send({ crypto: ['BTCUSDT'], channels: ['telegram'] })
+				.expect(200);
+
+			let releaseRetry;
+			let retryStarted;
+			const retryStartedPromise = new Promise((resolve) => { retryStarted = resolve; });
+			const { getNotificationManager } = require('../../src/controllers/webhooks/handlers/alert/alert');
+			const telegramSend = jest.spyOn(getNotificationManager().channels.get('telegram'), 'send')
+				.mockImplementationOnce(() => new Promise((resolve) => {
+					releaseRetry = resolve;
+					retryStarted();
+				}));
+
+			const retry = request(app)
+				.post('/api/news-monitor').set('x-api-key', 'test-key')
+				.send({ crypto: ['BTCUSDT'], channels: ['telegram'], telegramChatId: '-100000000002' })
+				.expect(200);
+			const retryPromise = retry.then((response) => response);
+			await retryStartedPromise;
+
+			const concurrent = await request(app)
+				.post('/api/news-monitor').set('x-api-key', 'test-key')
+				.send({ crypto: ['BTCUSDT'], channels: ['telegram'], telegramChatId: '-100000000002' })
+				.expect(200);
+
+			expect(concurrent.body.deliveredChannels).toEqual([]);
+			expect(concurrent.body.results[0].deliveryResults).toEqual([]);
+			expect(telegramSend).toHaveBeenCalledTimes(1);
+
+			releaseRetry({ message_id: 'telegram-retry' });
+			await retryPromise;
+		});
+
+		it('should re-deliver only missing enabled channels when a later request omits channels', async () => {
 			const response1 = await request(app)
 				.post('/api/news-monitor').set('x-api-key', 'test-key')
 				.send({
@@ -268,7 +805,7 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 				]),
 			);
 			expect(mockBot.telegram.sendMessage).toHaveBeenCalledTimes(1);
-			expect(mockFetch).toHaveBeenCalledTimes(2);
+			expect(mockFetch).toHaveBeenCalledTimes(1);
 		});
 
 		it('should re-deliver cached alerts to the default destination when the cached send used a chat override', async () => {

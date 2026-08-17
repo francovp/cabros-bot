@@ -4,6 +4,7 @@
  */
 
 const sentryService = require('../monitoring/SentryService');
+const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
 
 class NotificationManager {
 	/**
@@ -167,7 +168,10 @@ class NotificationManager {
 				});
 
 				return Promise.resolve()
-					.then(() => ch.send(alert))
+					.then(() => ch.send(alert, {
+						...options,
+						signal: options.signalByChannel?.[ch.name] || options.signal,
+					}))
 					.finally(() => {
 						sentryService.endSpan(sendSpan);
 					});
@@ -231,7 +235,7 @@ class NotificationManager {
 			}
 		}
 
-		void this.notifyAdminOfFailures(alert, formattedResults).catch((error) => {
+		trackBackgroundTask(this.notifyAdminOfFailures(alert, formattedResults)).catch((error) => {
 			console.error('[NotificationManager] Unexpected admin notification failure:', error.message);
 		});
 
@@ -289,7 +293,10 @@ class NotificationManager {
 				});
 
 				return Promise.resolve()
-					.then(() => ch.send(alert))
+					.then(() => ch.send(alert, {
+						...options,
+						signal: options.signalByChannel?.[ch.name] || options.signal,
+					}))
 					.finally(() => {
 						sentryService.endSpan(sendSpan);
 					});
@@ -353,7 +360,7 @@ class NotificationManager {
 			}
 		}
 
-		void this.notifyAdminOfFailures(alert, formattedResults).catch((error) => {
+		trackBackgroundTask(this.notifyAdminOfFailures(alert, formattedResults)).catch((error) => {
 			console.error('[NotificationManager] Unexpected admin notification failure:', error.message);
 		});
 

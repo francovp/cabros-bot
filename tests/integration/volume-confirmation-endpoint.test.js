@@ -96,4 +96,43 @@ describe('Volume confirmation endpoint', () => {
 			error: 'MCP unavailable',
 		}));
 	});
+
+	it('normalizes lowercase symbols and denies low-volume confirmations', async () => {
+		tradingViewMcpService.callVolumeConfirmation.mockResolvedValueOnce({
+			volume_analysis: { volume_ratio: 0.95 },
+		});
+
+		const res = await request(app)
+			.post('/api/webhook/volume-confirmation')
+			.set('x-api-key', 'test-key')
+			.send({ symbol: 'binance:btcusdt', timeframe: '240' })
+			.expect(200);
+
+		expect(res.body).toEqual(expect.objectContaining({
+			symbol: 'BINANCE:BTCUSDT',
+			timeframe: '4h',
+			confirmed: false,
+			decision: 'deny',
+			volumeRatio: 0.95,
+		}));
+	});
+
+	it('returns an unknown decision when volume ratio is missing', async () => {
+		tradingViewMcpService.callVolumeConfirmation.mockResolvedValueOnce({
+			volume_analysis: {},
+		});
+
+		const res = await request(app)
+			.post('/api/webhook/volume-confirmation')
+			.set('x-api-key', 'test-key')
+			.send({ symbol: 'NYSE:F' })
+			.expect(200);
+
+		expect(res.body).toEqual(expect.objectContaining({
+			symbol: 'NYSE:F',
+			confirmed: null,
+			decision: 'unknown',
+			volumeRatio: null,
+		}));
+	});
 });

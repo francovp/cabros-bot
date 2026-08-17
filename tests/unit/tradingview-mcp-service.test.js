@@ -1,4 +1,5 @@
 const { TradingViewMcpService } = require('../../src/services/tradingview/TradingViewMcpService');
+const remoteConfigService = require('../../src/services/remoteConfig/RemoteConfigService');
 
 describe('TradingViewMcpService', () => {
 	afterEach(() => {
@@ -6,7 +7,9 @@ describe('TradingViewMcpService', () => {
 		delete process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT;
 		delete process.env.ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME;
 		delete process.env.ENABLE_MESSAGE_FOOTER_METADATA;
+		delete process.env.ENABLE_FIREBASE_REMOTE_CONFIG;
 		delete process.env.TRADINGVIEW_MCP_URL;
+		remoteConfigService._resetForTesting();
 	});
 
 	it('uses the active TradingView MCP host when no URL is configured', () => {
@@ -172,6 +175,37 @@ describe('TradingViewMcpService', () => {
 		const result = await service.enrichFromAlertText('BTCUSDT(240) pasó a señal de VENTA');
 
 		expect(result.extraText).toBe('');
+	});
+
+	it('uses cached Remote Config values for runtime timeout and retry settings', () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		remoteConfigService._setRemoteOverridesForTesting({
+			TRADINGVIEW_MCP_TIMEOUT_MS: 5000,
+			TRADINGVIEW_MCP_MAX_RETRIES: 1,
+		});
+
+		const service = new TradingViewMcpService();
+
+		expect(service.getConfig()).toEqual(expect.objectContaining({
+			timeoutMs: 5000,
+			maxRetries: 1,
+		}));
+	});
+
+	it('keeps environment-derived MCP timing values finite and positive', () => {
+		process.env.TRADINGVIEW_MCP_TIMEOUT_MS = 'not-a-number';
+		process.env.TRADINGVIEW_MCP_MAX_RETRIES = '0';
+		process.env.TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS = '-10';
+
+		const config = new TradingViewMcpService().getConfig();
+
+		expect(config).toEqual(expect.objectContaining({
+			timeoutMs: 12000,
+			maxRetries: 3,
+			enrichmentBudgetMs: 12000,
+		}));
+		expect([config.timeoutMs, config.maxRetries, config.enrichmentBudgetMs]
+			.every(value => Number.isFinite(value) && value > 0)).toBe(true);
 	});
 
 	it('prefers structuredContent when MCP server returns schema-native tool results', async () => {
@@ -419,6 +453,48 @@ describe('TradingViewMcpService', () => {
 			technical: { price_data: { current_price: 65000 } },
 			sentiment: { score: 0.8 },
 		}));
+	});
+
+	it('skips confluence enrichment by default when ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT is unset', async () => {
+		delete process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT;
+		const service = new TradingViewMcpService({
+			maxRetries: 1,
+			defaultExchange: 'BINANCE',
+			defaultTimeframe: '1h',
+			logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
+		});
+		service.callCoinAnalysis = jest.fn().mockResolvedValue({
+			price_data: { current_price: 65000 },
+			market_sentiment: { overall_rating: 4, momentum: 'Bullish' },
+			market_structure: { trend: 'Bullish', trend_score: 4 },
+		});
+		service.callCombinedAnalysis = jest.fn();
+
+		const result = await service.enrichFromAlertText('BTCUSDT(240) pasó a señal de COMPRA');
+
+		expect(service.callCombinedAnalysis).not.toHaveBeenCalled();
+		expect(result.confluenceData).toBeNull();
+	});
+
+	it('skips confluence enrichment when ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT is explicitly false', async () => {
+		process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT = 'false';
+		const service = new TradingViewMcpService({
+			maxRetries: 1,
+			defaultExchange: 'BINANCE',
+			defaultTimeframe: '1h',
+			logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
+		});
+		service.callCoinAnalysis = jest.fn().mockResolvedValue({
+			price_data: { current_price: 65000 },
+			market_sentiment: { overall_rating: 4, momentum: 'Bullish' },
+			market_structure: { trend: 'Bullish', trend_score: 4 },
+		});
+		service.callCombinedAnalysis = jest.fn();
+
+		const result = await service.enrichFromAlertText('BTCUSDT(240) pasó a señal de COMPRA');
+
+		expect(service.callCombinedAnalysis).not.toHaveBeenCalled();
+		expect(result.confluenceData).toBeNull();
 	});
 
 	it('downgrades bullish webhook enrichment when confluence contradicts the signal', async () => {

@@ -7,6 +7,7 @@ const NotificationChannel = require('./NotificationChannel');
 const { sendWithRetry } = require('../../lib/retryHelper');
 const { splitMessageIntoChunks } = require('../../lib/messageHelper');
 const WhatsAppMarkdownFormatter = require('./formatters/whatsappMarkdownFormatter');
+const { isPreviewEnvironment } = require('../../lib/deploymentEnvironment');
 
 const GREEN_API_MESSAGE_LIMIT = 20000;
 
@@ -26,7 +27,7 @@ class WhatsAppService extends NotificationChannel {
 		this.apiKey = config.apiKey || process.env.WHATSAPP_API_KEY;
 
 		// In preview environments (IS_PULL_REQUEST=true), prefer WHATSAPP_PREVIEW_CHAT_ID
-		const isPreview = process.env.IS_PULL_REQUEST === 'true';
+		const isPreview = isPreviewEnvironment() || process.env.IS_PULL_REQUEST === 'true';
 		this.chatId = config.chatId || (isPreview && process.env.WHATSAPP_PREVIEW_CHAT_ID) || process.env.WHATSAPP_CHAT_ID;
 		this.urlShortener = config.urlShortener || null;
 		this.formatter = config.formatter || new WhatsAppMarkdownFormatter({ urlShortener: this.urlShortener });
@@ -130,8 +131,16 @@ class WhatsAppService extends NotificationChannel {
    * @param {Object} alert - Alert object with text and optional enriched content
    * @returns {Promise<{success: boolean, channel: string, messageId?: string, error?: string, category?: string, attemptCount?: number, durationMs?: number}>}
    */
-	async send(alert) {
+	async send(alert, options = {}) {
 		try {
+			if (options.signal?.aborted) {
+				return {
+					success: false,
+					channel: 'whatsapp',
+					error: options.signal.reason?.message || options.signal.reason || 'Operation aborted',
+					aborted: true,
+				};
+			}
 			const formattedText = await this._formatAlert(alert);
 			const messageChunks = splitMessageIntoChunks(formattedText, GREEN_API_MESSAGE_LIMIT);
 			const chatId = alert.whatsappChatId || this.chatId;
@@ -140,7 +149,7 @@ class WhatsAppService extends NotificationChannel {
 				this.logger?.warn?.(
 					`WhatsApp message exceeded ${GREEN_API_MESSAGE_LIMIT} characters; sending ${messageChunks.length} parts instead of truncating`,
 				);
-				return this._sendChunkedMessage(messageChunks, chatId);
+				return this._sendChunkedMessage(messageChunks, chatId, options);
 			}
 
 			return sendWithRetry(
@@ -151,6 +160,7 @@ class WhatsAppService extends NotificationChannel {
 				}),
 				3,
 				this.logger,
+				{ signal: options.signal },
 			);
 		} catch (error) {
 			const errorMsg = this._sanitizeText((error && error.message) || String(error));
@@ -194,7 +204,7 @@ class WhatsAppService extends NotificationChannel {
    * @param {boolean} options.includePreview - Whether to include the custom preview payload
    * @returns {Promise<{success: boolean, channel: string, messageId?: string, messageIds?: string[], messageCount?: number, error?: string, category?: string, ambiguous?: boolean}>}
    */
-	async _sendMessageChunk(message, { chatId = this.chatId, includePreview = false } = {}) {
+	async _sendMessageChunk(message, { chatId = this.chatId, includePreview = false, signal } = {}) {
 		try {
 			const payload = {
 				chatId,
@@ -213,6 +223,8 @@ class WhatsAppService extends NotificationChannel {
 			// Use native fetch with timeout
 			const controller = new AbortController();
 			const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
+			const forwardAbort = () => controller.abort(signal.reason);
+			signal?.addEventListener('abort', forwardAbort, { once: true });
 
 			try {
 				const response = await fetch(`${this.apiUrl}${this.apiKey}`, {
@@ -283,6 +295,14 @@ class WhatsAppService extends NotificationChannel {
 					ambiguous: true,
 				};
 			} catch (error) {
+				if (signal?.aborted) {
+					return {
+						success: false,
+						channel: 'whatsapp',
+						error: signal.reason?.message || signal.reason || 'Operation aborted',
+						aborted: true,
+					};
+				}
 				if (error.name === 'AbortError') {
 					this.logger?.error?.('GreenAPI request timeout (10s)');
 					return {
@@ -296,6 +316,7 @@ class WhatsAppService extends NotificationChannel {
 				throw error;
 			} finally {
 				clearTimeout(timeoutId);
+				signal?.removeEventListener('abort', forwardAbort);
 			}
 		} catch (error) {
 			const errorMsg = this._sanitizeText((error && error.message) || String(error));
@@ -317,7 +338,7 @@ class WhatsAppService extends NotificationChannel {
 	 * @param {string} chatId - Destination WhatsApp chat/group ID
    * @returns {Promise<{success: boolean, channel: string, messageId?: string, messageIds?: string[], messageCount?: number, error?: string, category?: string}>}
    */
-	async _sendChunkedMessage(messageChunks, chatId) {
+	async _sendChunkedMessage(messageChunks, chatId, options = {}) {
 		const messageIds = [];
 		const startedAt = Date.now();
 		let totalAttempts = 0;
@@ -332,6 +353,7 @@ class WhatsAppService extends NotificationChannel {
 				}),
 				3,
 				this.logger,
+				{ signal: options.signal },
 			);
 			totalAttempts += result.attemptCount || 1;
 
@@ -370,4 +392,3 @@ class WhatsAppService extends NotificationChannel {
 }
 
 module.exports = WhatsAppService;
-

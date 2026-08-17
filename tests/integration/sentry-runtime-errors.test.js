@@ -58,6 +58,11 @@ describe('Sentry Runtime Errors Integration (T011, T017, T024)', () => {
 
 	beforeEach(() => {
 		savedEnv = saveEnv();
+		delete process.env.VERCEL_ENV;
+		delete process.env.RENDER;
+		delete process.env.IS_PULL_REQUEST;
+		delete process.env.RAILWAY_ENVIRONMENT_NAME;
+		delete process.env.RAILWAY_GIT_PULL_REQUEST_NUMBER;
 		// Reset env and mocks
 		process.env.WEBHOOK_API_KEY = 'test-key';
 		jest.clearAllMocks();

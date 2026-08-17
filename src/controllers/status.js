@@ -6,7 +6,14 @@ const { isFirestoreConfigured } = require('../services/storage/firestoreConfig')
 const SignalOutcomeService = require('../services/storage/SignalOutcomeService');
 const { jobQueue } = require('../services/jobs/JobQueue');
 const equityMarketDataService = require('../services/storage/EquityMarketDataService');
+const remoteConfigService = require('../services/remoteConfig/RemoteConfigService');
 const { tradingViewMcpService } = require('../services/tradingview/TradingViewMcpService');
+const { binanceOrderService } = require('../services/trading/BinanceOrderService');
+const {
+	getDeploymentCommit,
+	isPreviewEnvironment,
+	isProductionLikeEnvironment,
+} = require('../lib/deploymentEnvironment');
 const DEFAULT_AZURE_LLM_ENDPOINT = 'https://models.github.ai/inference';
 const DEFAULT_OPENROUTER_MODEL = 'google/gemini-2.0-flash-001';
 const DEFAULT_CF_AIG_MODEL = 'google-ai-studio/gemini-2.5-flash';
@@ -26,16 +33,11 @@ function getModelProvider() {
 }
 
 function getCommit() {
-	return process.env.RENDER_GIT_COMMIT
-		|| process.env.GIT_COMMIT
-		|| process.env.COMMIT_SHA
-		|| process.env.GITHUB_SHA
-		|| process.env.SOURCE_VERSION
-		|| null;
+	return getDeploymentCommit();
 }
 
-function isRenderPreview() {
-	return process.env.RENDER === 'true' && process.env.IS_PULL_REQUEST === 'true';
+function isPreview() {
+	return isPreviewEnvironment();
 }
 
 function getEnvironment() {
@@ -43,11 +45,11 @@ function getEnvironment() {
 		return process.env.SENTRY_ENVIRONMENT;
 	}
 
-	if (isRenderPreview()) {
+	if (isPreview()) {
 		return 'preview';
 	}
 
-	if (process.env.NODE_ENV === 'production' || process.env.RENDER === 'true') {
+	if (isProductionLikeEnvironment()) {
 		return 'production';
 	}
 
@@ -137,22 +139,23 @@ function getGeminiDependency({
 }
 
 function getStatus() {
-	const previewEnvironment = isRenderPreview();
+	const previewEnvironment = isPreview();
 	const modelProvider = getModelProvider();
+	const runtimeConfig = remoteConfigService.getRuntimeConfig();
 	const telegramFlagEnabled = isEnabled(process.env.ENABLE_TELEGRAM_BOT);
 	const telegramEnabled = telegramFlagEnabled && !previewEnvironment;
 	const whatsappEnabled = isEnabled(process.env.ENABLE_WHATSAPP_ALERTS);
 	const discordEnabled = isEnabled(process.env.ENABLE_DISCORD_ALERTS);
-	const geminiGroundingEnabled = isEnabled(process.env.ENABLE_GEMINI_GROUNDING);
+	const geminiGroundingEnabled = runtimeConfig.ENABLE_GEMINI_GROUNDING;
 	const newsMonitorEnabled = isEnabled(process.env.ENABLE_NEWS_MONITOR);
 	const newsMonitorTestModeEnabled = isEnabled(process.env.ENABLE_NEWS_MONITOR_TEST_MODE);
 	const forceBraveSearch = isEnabled(process.env.FORCE_BRAVE_SEARCH);
 	const newsMonitorUsesGeminiSearch = newsMonitorEnabled && !forceBraveSearch;
 	const newsMonitorUsesGeminiLlm = newsMonitorEnabled && modelProvider === 'gemini';
 	const geminiEnabled = geminiGroundingEnabled || newsMonitorUsesGeminiSearch || newsMonitorUsesGeminiLlm;
-	const marketScannerEnabled = isEnabled(process.env.ENABLE_MARKET_SCANNER);
-	const tradingViewMcpEnrichmentEnabled = isEnabled(process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT);
-	const tradingViewVolumeConfirmationFlagEnabled = isEnabled(process.env.ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION);
+	const marketScannerEnabled = runtimeConfig.ENABLE_MARKET_SCANNER;
+	const tradingViewMcpEnrichmentEnabled = runtimeConfig.ENABLE_TRADINGVIEW_MCP_ENRICHMENT;
+	const tradingViewVolumeConfirmationFlagEnabled = runtimeConfig.ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION;
 	const tradingViewVolumeConfirmationEnabled = tradingViewVolumeConfirmationFlagEnabled && tradingViewMcpEnrichmentEnabled;
 	const observedTradingViewMcpStatus = tradingViewMcpService.getStatus({ enabled: true });
 	const tradingViewMcpEnabled =
@@ -166,9 +169,12 @@ function getStatus() {
 	const sentryEnabled = isEnabled(process.env.ENABLE_SENTRY);
 	const langfusePromptsEnabled = isEnabled(process.env.ENABLE_LANGFUSE_PROMPTS);
 	const binancePriceCheckEnabled = isEnabled(process.env.ENABLE_BINANCE_PRICE_CHECK);
+	const binanceTradingEnabled = isEnabled(process.env.ENABLE_BINANCE_TRADING);
+	const binanceTradingStatus = binanceOrderService.getStatus();
 	const llmAlertEnrichmentEnabled = isEnabled(process.env.ENABLE_LLM_ALERT_ENRICHMENT);
 	const cloudflareAigEnabled = isEnabled(process.env.ENABLE_CLOUDFLARE_AIG);
-	const messageFooterMetadataEnabled = process.env.ENABLE_MESSAGE_FOOTER_METADATA !== 'false';
+	const messageFooterMetadataEnabled = runtimeConfig.ENABLE_MESSAGE_FOOTER_METADATA;
+	const remoteConfigStatus = remoteConfigService.getStatus();
 	const signalOutcomeTrackingEnabled = isEnabled(process.env.ENABLE_SIGNAL_OUTCOME_TRACKING)
 		|| isEnabled(process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING);
 	const equityMarketDataStatus = equityMarketDataService.getStatus();
@@ -178,12 +184,15 @@ function getStatus() {
 		enabled: telegramEnabled,
 		configured: hasValue(process.env.BOT_TOKEN) && hasValue(process.env.TELEGRAM_CHAT_ID),
 	});
+	const whatsappChatId = previewEnvironment
+		? process.env.WHATSAPP_PREVIEW_CHAT_ID || process.env.WHATSAPP_CHAT_ID
+		: process.env.WHATSAPP_CHAT_ID;
 	const whatsapp = dependencyStatus({
 		enabled: whatsappEnabled,
 		configured:
 			hasValue(process.env.WHATSAPP_API_URL)
 			&& hasValue(process.env.WHATSAPP_API_KEY)
-			&& hasValue(process.env.WHATSAPP_CHAT_ID),
+			&& hasValue(whatsappChatId),
 	});
 	const discord = dependencyStatus({
 		enabled: discordEnabled,
@@ -282,7 +291,7 @@ function getStatus() {
 			newsMonitorTestMode: newsMonitorTestModeEnabled,
 			tradingViewMcpEnrichment: tradingViewMcpEnrichmentEnabled,
 			tradingViewVolumeConfirmation: tradingViewVolumeConfirmationFlagEnabled,
-			tradingViewConfluenceEnrichment: process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT !== 'false',
+			tradingViewConfluenceEnrichment: isEnabled(process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT),
 			tradingViewConfluenceMultiTimeframe: isEnabled(process.env.ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME),
 			firestoreAlertStorage: firestoreEnabled,
 			firestoreScannerPresets: firestoreScannerPresetsEnabled,
@@ -292,12 +301,14 @@ function getStatus() {
 			langfusePrompts: langfusePromptsEnabled,
 			marketScanner: marketScannerEnabled,
 			binancePriceCheck: binancePriceCheckEnabled,
+			binanceTrading: binanceTradingEnabled,
 			llmAlertEnrichment: llmAlertEnrichmentEnabled,
 			cloudflareAig: cloudflareAigEnabled,
 			messageFooterMetadata: messageFooterMetadataEnabled,
 			signalOutcomeTracking: signalOutcomeTrackingEnabled,
 			equityMarketData: equityMarketDataStatus.enabled,
 			firestoreIdempotency: idempotencyStorageService.isEnabled(),
+			firebaseRemoteConfig: remoteConfigStatus.enabled,
 			jobExecutionWorker: jobExecutionQueueStatus.enabled,
 		},
 		deliveryChannels: {
@@ -337,10 +348,11 @@ function getStatus() {
 			}),
 			newsMonitorDedup,
 			idempotencyStorage: idempotencyStorageService.getStorageStatus(),
+			firebaseRemoteConfig: remoteConfigStatus,
 			scannerPresetStorage: scannerPresetService.getStorageStatus(),
 			equityMarketData: equityMarketDataStatus,
 			signalOutcomeWorker: {
-					...signalOutcomeWorkerDependency,
+				...signalOutcomeWorkerDependency,
 				role: signalOutcomeWorkerStatus.role,
 				running: signalOutcomeWorkerStatus.running,
 				shutdownRequested: signalOutcomeWorkerStatus.shutdownRequested,
@@ -356,6 +368,7 @@ function getStatus() {
 				lastRunErrorCount: signalOutcomeWorkerStatus.lastRunErrorCount,
 			},
 			jobExecutionQueue: jobExecutionQueueStatus,
+			binanceTrading: binanceTradingStatus,
 		},
 	};
 }

@@ -434,6 +434,76 @@ describe('claim-issue.sh renewal comment behavior', () => {
 	});
 
 	/**
+	 * Verify that rollback_abandoned_claim retains the agent-working label fail-closed
+	 * when arbitration fails, preventing label deletion out from under a rival in-flight claimant.
+	 */
+	it('retains agent-working label fail-closed during claim rollback when arbitration fails', () => {
+		const callsLog = join(tempDir, 'calls.log');
+		const deleteLog = join(tempDir, 'delete.log');
+
+		const ghScript = [
+			'#!/usr/bin/env bash',
+			'echo "$*" >> ' + callsLog,
+			'ARGS="$*"',
+			'if echo "$ARGS" | grep -q "auth status"; then exit 0; fi',
+			'if echo "$ARGS" | grep -q "auth switch"; then exit 0; fi',
+			'if echo "$ARGS" | grep -q "repo view"; then echo "francovp/cabros-bot"; exit 0; fi',
+			'if [ "$1" = "api" ] && [ "$2" = "user" ]; then echo \'{"login":"francovp"}\'; exit 0; fi',
+			// Issue has NO label initially
+			'if echo "$ARGS" | grep -q "issue view.*labels"; then echo ""; exit 0; fi',
+			// Add label succeeds
+			'if echo "$ARGS" | grep -q "issue edit.*--add-label"; then exit 0; fi',
+			// POST comment succeeds
+			'if echo "$ARGS" | grep -q "issues/42/comments" && ! echo "$ARGS" | grep -q "paginate" && ! echo "$ARGS" | grep -q "DELETE"; then',
+			'  echo "500"',
+			'  exit 0',
+			'fi',
+			// Initial snapshot succeeds (empty)
+			'if echo "$ARGS" | grep -q "api --paginate.*issues.*42.*comments"; then',
+			'  COUNT_FILE=' + join(tempDir, 'read_count'),
+			'  COUNT=0; [ -f "$COUNT_FILE" ] && COUNT=$(cat "$COUNT_FILE")',
+			'  COUNT=$((COUNT+1))',
+			'  echo "$COUNT" > "$COUNT_FILE"',
+			'  if [ "$COUNT" -eq 1 ]; then',
+			'    exit 0',
+			'  else',
+			// During arbitration read (2nd call), simulate API read failure
+			'    exit 1',
+			'  fi',
+			'fi',
+			'if echo "$ARGS" | grep -q "api --paginate.*events"; then echo "[]"; exit 0; fi',
+			// DELETE comment during rollback succeeds
+			'if echo "$ARGS" | grep -q "api -X DELETE.*comments/500"; then',
+			'  echo "DELETE_CALLED" >> ' + deleteLog,
+			'  exit 0',
+			'fi',
+			'exit 0',
+		].join('\n');
+
+		buildFakeGh(tempDir, ghScript);
+
+		const result = runClaimScript(tempDir, 42, {});
+		const stdout = result.stdout || '';
+		const stderr = result.stderr || '';
+		const callsContent = existsSync(callsLog) ? readFileSync(callsLog, 'utf8') : '';
+		const deleteContent = existsSync(deleteLog) ? readFileSync(deleteLog, 'utf8') : '';
+
+		// The claim should fail closed with code 1
+		expect(result.status).toBe(1);
+		expect(stdout).toContain('RESULT=ERROR');
+		expect(stderr).toContain('agent-working label retained');
+
+		// Comment 500 should have been deleted during rollback
+		expect(deleteContent).toContain('DELETE_CALLED');
+
+		// Label SHOULD have been added
+		expect(callsContent).toContain('--add-label agent-working');
+
+		// Label MUST NOT have been removed during rollback (fail-closed retention)
+		expect(callsContent).not.toContain('--remove-label agent-working');
+	});
+
+	/**
 	 * Verify issue #338 fix: if a takeover session attempts to take over a stale claim,
 	 * but the target claim comment was renewed via PATCH during/right before takeover,
 	 * the takeover session detects the target renewal, rolls back its takeover comment,

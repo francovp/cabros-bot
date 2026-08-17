@@ -163,14 +163,15 @@
             "api",
             "status"
           ]
-        }
+        },
+        "description": "Protected runtime status. When ENABLE_FIREBASE_REMOTE_CONFIG=true, dependencies.firebaseRemoteConfig contains safe loader metadata only; disabled, stale, invalid, or unavailable remote values fall back to environment/default settings."
       },
       "response": [
         {
           "name": "Success",
           "status": "OK",
           "code": 200,
-          "body": "{\"service\":{\"name\":\"cabros-bot\",\"version\":\"0.1.0\"},\"featureFlags\":{\"telegramBot\":true,\"whatsappAlerts\":false,\"geminiGrounding\":false,\"newsMonitor\":false,\"newsMonitorTestMode\":false,\"tradingViewVolumeConfirmation\":false,\"firestoreJobStorage\":false,\"messageFooterMetadata\":true,\"firestoreIdempotency\":false,\"equityMarketData\":false},\"dependencies\":{\"tradingViewMcp\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"lastCheckedAt\":null,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastErrorCategory\":null,\"successCount\":0,\"failureCount\":0},\"tradingViewVolumeConfirmation\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"lastCheckedAt\":null,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastErrorCategory\":null,\"successCount\":0,\"failureCount\":0},\"firestoreJobStorage\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\"},\"signalOutcomeWorker\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"role\":\"web\",\"running\":false,\"shutdownRequested\":false,\"lastRunScannedCount\":0,\"lastRunPendingCount\":0,\"lastRunEvaluatedCount\":0,\"lastRunErrorCount\":0},\"equityMarketData\":{\"provider\":null,\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"supportedExchanges\":[\"BATS\",\"NASDAQ\"],\"timeoutMs\":5000},\"idempotencyStorage\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"mode\":\"ephemeral\",\"backend\":\"memory\"}}}"
+          "body": "{\"service\":{\"name\":\"cabros-bot\",\"version\":\"0.1.0\"},\"featureFlags\":{\"telegramBot\":true,\"whatsappAlerts\":false,\"geminiGrounding\":false,\"newsMonitor\":false,\"newsMonitorTestMode\":false,\"tradingViewVolumeConfirmation\":false,\"firestoreJobStorage\":false,\"messageFooterMetadata\":true,\"firestoreIdempotency\":false,\"equityMarketData\":false,\"firebaseRemoteConfig\":false,\"jobExecutionWorker\":false},\"dependencies\":{\"tradingViewMcp\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"lastCheckedAt\":null,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastErrorCategory\":null,\"successCount\":0,\"failureCount\":0},\"tradingViewVolumeConfirmation\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"lastCheckedAt\":null,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastErrorCategory\":null,\"successCount\":0,\"failureCount\":0},\"firestoreJobStorage\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\"},\"signalOutcomeWorker\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"role\":\"web\",\"running\":false,\"shutdownRequested\":false,\"lastRunScannedCount\":0,\"lastRunPendingCount\":0,\"lastRunEvaluatedCount\":0,\"lastRunErrorCount\":0},\"equityMarketData\":{\"provider\":null,\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"supportedExchanges\":[\"BATS\",\"NASDAQ\"],\"timeoutMs\":5000},\"idempotencyStorage\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"mode\":\"ephemeral\",\"backend\":\"memory\"},\"firebaseRemoteConfig\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"source\":\"disabled\",\"templateVersion\":null,\"lastSuccessfulLoad\":null,\"lastErrorCategory\":null,\"refreshIntervalMs\":900000,\"maxAgeMs\":3600000}}}"
         }
       ]
     },
@@ -194,14 +195,15 @@
             "api",
             "capabilities"
           ]
-        }
+        },
+        "description": "Alias for /api/status. Remote Config metadata is safe for operational inspection and does not include configured parameter values or secrets."
       },
       "response": [
         {
           "name": "Success",
           "status": "OK",
           "code": 200,
-          "body": "{\"featureFlags\":{\"tradingViewVolumeConfirmation\":true,\"firestoreJobStorage\":true,\"newsMonitorTestMode\":false,\"messageFooterMetadata\":true,\"cloudflareAig\":false,\"equityMarketData\":false},\"dependencies\":{\"tradingViewMcp\":{\"enabled\":true,\"configured\":true,\"ready\":false,\"status\":\"unknown\",\"lastCheckedAt\":null,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastErrorCategory\":null,\"successCount\":0,\"failureCount\":0},\"tradingViewVolumeConfirmation\":{\"enabled\":true,\"configured\":true,\"ready\":false,\"status\":\"unknown\",\"lastCheckedAt\":null,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastErrorCategory\":null,\"successCount\":0,\"failureCount\":0},\"firestoreJobStorage\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\"},\"cloudflareAig\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\"},\"equityMarketData\":{\"provider\":null,\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"supportedExchanges\":[\"BATS\",\"NASDAQ\"],\"timeoutMs\":5000}}}"
+          "body": "{\"featureFlags\":{\"tradingViewVolumeConfirmation\":true,\"firestoreJobStorage\":true,\"newsMonitorTestMode\":false,\"messageFooterMetadata\":true,\"cloudflareAig\":false,\"equityMarketData\":false,\"firebaseRemoteConfig\":true},\"dependencies\":{\"tradingViewMcp\":{\"enabled\":true,\"configured\":true,\"ready\":false,\"status\":\"unknown\",\"lastCheckedAt\":null,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastErrorCategory\":null,\"successCount\":0,\"failureCount\":0},\"tradingViewVolumeConfirmation\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\"},\"firestoreJobStorage\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\"},\"cloudflareAig\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\"},\"equityMarketData\":{\"provider\":null,\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"supportedExchanges\":[\"BATS\",\"NASDAQ\"],\"timeoutMs\":5000},\"firebaseRemoteConfig\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\",\"source\":\"remote\",\"templateVersion\":\"7\",\"lastSuccessfulLoad\":\"2026-08-02T08:30:00.000Z\",\"lastErrorCategory\":null,\"refreshIntervalMs\":900000,\"maxAgeMs\":3600000}}}"
         }
       ]
     },
@@ -3225,6 +3227,353 @@
                   ]
                 }
               }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Binance Trading",
+      "description": "Operator-only Binance Spot order workflow. Feature is disabled by default, uses Spot Testnet by default, fails closed without API-key or Firebase admin authentication, derives a deterministic clientOrderId for idempotent live retries, preserves decimal strings, distinguishes definitive Binance rejections from transient failures, and never retries an order submission automatically.",
+      "item": [
+        {
+          "name": "POST Binance order (dry-run LIMIT)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"symbol\": \"BTCUSDT\",\n  \"side\": \"BUY\",\n  \"type\": \"LIMIT\",\n  \"quantity\": 0.001,\n  \"price\": 60000,\n  \"timeInForce\": \"GTC\",\n  \"dryRun\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/orders",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "orders"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Success (dry-run)",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"environment\": \"testnet\",\n  \"order\": {\n    \"symbol\": \"BTCUSDT\",\n    \"side\": \"BUY\",\n    \"type\": \"LIMIT\",\n    \"quantity\": 0.001,\n    \"price\": 60000,\n    \"timeInForce\": \"GTC\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST Binance order (live MARKET with idempotency)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "idempotency-key",
+                "value": "binance-order-demo-1",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"symbol\": \"BTCUSDT\",\n  \"side\": \"BUY\",\n  \"type\": \"MARKET\",\n  \"quoteOrderQty\": 50,\n  \"dryRun\": false,\n  \"clientOrderId\": \"cabros-375-1\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/orders",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "orders"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Created",
+              "status": "Created",
+              "code": 201,
+              "body": "{\n  \"success\": true,\n  \"dryRun\": false,\n  \"environment\": \"testnet\",\n  \"order\": {\n    \"symbol\": \"BTCUSDT\",\n    \"orderId\": 42,\n    \"clientOrderId\": \"cabros-375-1\",\n    \"status\": \"FILLED\",\n    \"type\": \"MARKET\",\n    \"side\": \"BUY\"\n  }\n}"
+            },
+            {
+              "name": "Replay",
+              "status": "Created",
+              "code": 201,
+              "header": [
+                {
+                  "key": "Idempotency-Replay",
+                  "value": "true"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"dryRun\": false,\n  \"idempotencyReplayed\": true,\n  \"environment\": \"testnet\"\n}"
+            },
+            {
+              "name": "Indeterminate submission (replayed)",
+              "status": "Service Unavailable",
+              "code": 503,
+              "header": [
+                {
+                  "key": "Idempotency-Replay",
+                  "value": "true"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"error\": \"Binance accepted or may have accepted the order, but its final status is unknown; do not resubmit with a new idempotency key\",\n  \"code\": \"BINANCE_ORDER_STATUS_UNKNOWN\",\n  \"idempotencyReplayed\": true\n}"
+            },
+            {
+              "name": "Definitive Binance rejection",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Binance rejected the order\",\n  \"code\": \"BINANCE_ORDER_REJECTED\"\n}"
+            },
+            {
+              "name": "Transient order-test failure",
+              "status": "Bad Gateway",
+              "code": 502,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Binance order-test validation failed; retry without changing the order identity\",\n  \"code\": \"BINANCE_VALIDATION_FAILED\"\n}"
+            },
+            {
+              "name": "Recovered order conflict",
+              "status": "Conflict",
+              "code": 409,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Reconciled Binance order does not match the request\",\n  \"code\": \"BINANCE_ORDER_CONFLICT\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST Binance order (invalid filter)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"symbol\": \"BTCUSDT\",\n  \"side\": \"BUY\",\n  \"type\": \"LIMIT\",\n  \"quantity\": 0.00105,\n  \"price\": 60000,\n  \"dryRun\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/orders",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "orders"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Bad Request",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"success\": false,\n  \"error\": \"quantity does not match Binance lot-size step\",\n  \"code\": \"INVALID_ORDER_REQUEST\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST Binance order (invalid MARKET quantity cap)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"symbol\": \"BTCUSDT\",\n  \"side\": \"BUY\",\n  \"type\": \"MARKET\",\n  \"quantity\": 0.001,\n  \"dryRun\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/orders",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "orders"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Bad Request",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"success\": false,\n  \"error\": \"MARKET orders with quantity are unsupported when enforcing the notional cap; use quoteOrderQty\",\n  \"code\": \"MARKET_QUANTITY_NOTIONAL_UNSUPPORTED\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST Binance order (live missing stable identifier)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"symbol\": \"BTCUSDT\",\n  \"side\": \"BUY\",\n  \"type\": \"LIMIT\",\n  \"quantity\": 0.001,\n  \"price\": 60000,\n  \"dryRun\": false\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/orders",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "orders"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Bad Request",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Live orders require idempotencyKey or clientOrderId\",\n  \"code\": \"LIVE_ORDER_ID_REQUIRED\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST Binance order (invalid MARKET timeInForce)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"symbol\": \"BTCUSDT\",\n  \"side\": \"BUY\",\n  \"type\": \"MARKET\",\n  \"quoteOrderQty\": 50,\n  \"timeInForce\": \"GTC\",\n  \"dryRun\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/orders",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "orders"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Bad Request",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"success\": false,\n  \"error\": \"MARKET orders do not accept timeInForce\",\n  \"code\": \"INVALID_ORDER_REQUEST\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST Binance order (feature disabled)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"symbol\": \"BTCUSDT\",\n  \"side\": \"BUY\",\n  \"type\": \"MARKET\",\n  \"quoteOrderQty\": 50,\n  \"dryRun\": false\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/orders",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "orders"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Feature Disabled",
+              "status": "Forbidden",
+              "code": 403,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Binance trading is disabled\",\n  \"code\": \"FEATURE_DISABLED\"\n}"
             }
           ]
         }

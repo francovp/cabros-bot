@@ -33,6 +33,7 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 - `ENABLE_FIREBASE_ADMIN_AUTH` - Enable opt-in Firebase email/password authentication for the browser admin console (`false` by default)
 - `FIREBASE_WEB_API_KEY` - Public Firebase Web API key used by the browser sign-in flow; not a service-account credential
 - `FIREBASE_AUTH_DOMAIN` - Public Firebase Auth domain used by the browser sign-in flow
+- `FIREBASE_DATABASE_URL` - Public Firebase Realtime Database URL used by the browser configuration
 - `FIREBASE_APP_ID` - Public Firebase Web app ID (optional for Auth, recommended)
 - `FIREBASE_WEB_CONFIG_JSON` - Optional JSON alternative containing the public Firebase Web config (`apiKey`, `authDomain`, `projectId`, and optional `appId`)
 
@@ -47,6 +48,10 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 
 - `ENABLE_DISCORD_ALERTS` - Enable Discord alerts (`true` or `false`, default: `false`)
 - `DISCORD_WEBHOOK_URL` - Discord webhook URL (e.g., `https://discord.com/api/webhooks/<id>/<token>`)
+- `DISCORD_MAX_RETRIES` - Additional Discord attempts after the first request (default: `2`)
+- `DISCORD_FALLBACK_RETRY_DELAY_MS` - Fallback delay for Discord 429 retries (default: `500` ms)
+- `DISCORD_MAX_RETRY_DELAY_MS` - Maximum individual Discord retry delay (default: `5000` ms)
+- `DISCORD_MAX_TOTAL_RETRY_WAIT_MS` - Maximum cumulative Discord retry wait (default: `10000` ms)
 
 #### URL Shortening (003-news-monitor)
 
@@ -59,6 +64,18 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 
 - `ENABLE_GEMINI_GROUNDING` - Enable Gemini-based alert enrichment (`true` or `false`)
 - `GEMINI_API_KEY` - Google API key for Gemini access
+- `GROUNDING_MODEL_NAME` - Grounding model when Brave Search is not forced (default: `gemini-2.5-flash`)
+- `GROUNDING_MAX_SOURCES` - Maximum grounded sources per alert (default: `3`)
+- `GROUNDING_TIMEOUT_MS` - Grounding request timeout (default: `30000` ms)
+- `GROUNDING_MAX_LENGTH` - Maximum alert text length used in grounding prompts (default: `2000` characters)
+
+#### Cloudflare AI Gateway
+
+- `MODEL_PROVIDER=cloudflare` selects Cloudflare runtime routing when the gateway credentials are configured
+- `ENABLE_CLOUDFLARE_AIG` only exposes Cloudflare readiness in status/capabilities (`true` or `false`, default: `false`); it does not select the runtime provider
+- `CF_AIG_TOKEN` - Cloudflare AI Gateway token; keep it in a secret store
+- `CF_AIG_BASE_URL` - OpenAI-compatible Cloudflare gateway base URL
+- `CF_AIG_MODEL` - Gateway target model (default: `google-ai-studio/gemini-2.5-flash`)
 
 #### Langfuse Prompt Management
 
@@ -68,6 +85,7 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 - `LANGFUSE_BASE_URL` - Langfuse base URL (default: `https://cloud.langfuse.com`)
 - `LANGFUSE_PROMPT_LABEL` - Prompt label to fetch (default: `latest` in local/dev/test, `production` in production-like environments)
 - `LANGFUSE_PROMPT_CACHE_TTL_SECONDS` - Prompt cache TTL in seconds (default: `0` for `latest`, `60` for `production`)
+- Optional local prompt overrides: `SEARCH_QUERY_PROMPT`, `GEMINI_SYSTEM_PROMPT`, `ALERT_ENRICHMENT_SYSTEM_PROMPT`, `NEWS_ANALYSIS_SYSTEM_PROMPT`, and `CONFIDENCE_ENRICHMENT_SYSTEM_PROMPT`. Unset values use the versioned local fallback files.
 
 #### TradingView MCP Analysis
 
@@ -75,9 +93,9 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 - `EXPANDED_ANALYSIS_ALERT_SYMBOLS` - Comma-separated fallback symbols for `/api/webhook/expanded-analysis-alert` using `EXCHANGE:SYMBOL` format (for example `BINANCE:BTCUSDT,NASDAQ:NVDA`)
 - `EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS` - Total analysis deadline for `/api/webhook/expanded-analysis-alert` in milliseconds (default: `60000`, capped at `120000`)
 - `TRADINGVIEW_MCP_URL` - MCP server HTTP endpoint (default: `https://tradingview-mcp-yp6b.onrender.com/mcp`)
-- `TRADINGVIEW_MCP_TIMEOUT_MS` - Timeout per MCP request in milliseconds (default: `12000`)
-- `TRADINGVIEW_MCP_MAX_RETRIES` - Retries for MCP failures (default: `3`)
-- `TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS` - Total budget envelope for the synchronous webhook enrichment flow (default: `12000`). When exceeded, all in-flight MCP calls are aborted and the enrichment fails open, preventing the alert webhook from being blocked for too long.
+- `TRADINGVIEW_MCP_TIMEOUT_MS` - Timeout per MCP request in milliseconds (default: `12000`, valid range: `1000`-`120000`)
+- `TRADINGVIEW_MCP_MAX_RETRIES` - Retries for MCP failures (default: `3`, valid range: `1`-`5`)
+- `TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS` - Total budget envelope for the synchronous webhook enrichment flow (default: `12000`, valid range: `1000`-`120000`). When exceeded, all in-flight MCP calls are aborted and the enrichment fails open, preventing the alert webhook from being blocked for too long.
 - `TRADINGVIEW_MCP_DEFAULT_EXCHANGE` - Default exchange when not present in signal (default: `BINANCE`)
 - `TRADINGVIEW_MCP_DEFAULT_TIMEFRAME` - Default timeframe fallback (default: `1D` for `/api/webhook/expanded-analysis-alert`, `1h` for webhook signal enrichment)
 - `ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION` - Enable volume confirmation validation for TradingView alerts (`true` or `false`, default: `false`)
@@ -88,6 +106,7 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 #### Firestore Alert Storage
 
 - `ENABLE_FIRESTORE_ALERT_STORAGE` - Enable Firestore persistence and alert read API (`true` or `false`, default: `false`)
+- `ALERT_STORAGE_RETENTION_DAYS` - Retention for `alerts` and `alertReplays` records in days (`1`-`3650`, default: `90`). New records get `expiresAt`; run `bash ops/configure-firestore-alert-retention.sh` once per Firebase project to backfill legacy records and enable native Firestore TTL deletion.
 - `ENABLE_FIRESTORE_JOB_STORAGE` - Enable Firestore persistence for async TradingView jobs without enabling alert read APIs (`true` or `false`, default: `false`)
 - `ENABLE_FIRESTORE_IDEMPOTENCY` - Enable durable webhook idempotency persistence in Cloud Firestore (`true` or `false`, default: `false`)
 - `ENABLE_SIGNAL_OUTCOME_TRACKING` - Enable shadow-mode signal outcome recording and evaluation (`true` or `false`, default: `false`)
@@ -115,11 +134,22 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 
 Unfiltered signal outcome summaries include `shadowModeMetrics.exchangeBreakdown` and `shadowModeMetrics.providerBreakdown` coverage buckets (`received`, `eligible`, `evaluated`, `pending`, `unavailable`). Filtered alert summaries/exports omit shadow-mode metrics because that service has no matching source/enrichment filters. Equity signals only enter the eligible/evaluated population when the opt-in Twelve Data provider is configured; otherwise they remain explicitly unavailable.
 
+#### Firebase Remote Config (server-side Preview)
+
+- `ENABLE_FIREBASE_REMOTE_CONFIG` - Enable server-side Firebase Remote Config tuning (`true` or `false`, default: `false`)
+- `FIREBASE_REMOTE_CONFIG_REFRESH_INTERVAL_MS` - Bounded refresh cadence (default: `900000`, maximum: `86400000`)
+- `FIREBASE_REMOTE_CONFIG_LOAD_TIMEOUT_MS` - Maximum template-load wait (default: `10000`, maximum: `30000`)
+- `FIREBASE_REMOTE_CONFIG_MAX_AGE_MS` - Maximum age of a successful template before environment/default fallback (default: `3600000`, maximum: `604800000`)
+
+The initial allow-list contains news thresholds, timeouts, concurrency, quota retries, TradingView timeouts/retries, and `ENABLE_MESSAGE_FOOTER_METADATA`. Remote values are parsed as numbers/booleans and must satisfy the existing finite, integer, positive, and range constraints. Credentials, API keys, webhook authentication, route/security gates, and Telegram destinations are never read from Remote Config.
+
+The service loads once at startup and refreshes on the bounded cadence; it does not fetch Remote Config per alert. Disabled, unavailable, timed-out, stale, malformed, or invalid values fail open to the current environment/default behavior. The server-side Remote Config API is currently a Firebase Preview feature, so monitor its quota and error rate before enabling it in production. `firebase-admin` is upgraded to the Node 24-compatible 12.x line (`^12.1.0`, lockfile resolution `12.7.0`).
+
 #### Firestore Emulator Integration Tests
 
 The optional `pnpm test:firebase` command runs the Firestore-backed integration suite against the local Firebase emulator using the `demo-cabros` project ID. It covers the Admin SDK storage paths, idempotency transactions, async jobs, scanner presets, signal outcomes, and deny-by-default client rules.
 
-Prerequisites: Node.js 20+, Java/JDK 11+, and network access for the pinned Firebase CLI and emulator binary on the first run. The command uses `firebase emulators:exec`, clears emulator data between tests, unsets production Firebase credential variables, and stops the emulator on completion or failure. It never connects to a real Firebase project. The default `pnpm test` remains mock-based and does not require Java, the CLI, or external network access.
+Prerequisites: Node.js 24+, Java/JDK 11+, and network access for the pinned Firebase CLI and emulator binary on the first run. The command uses `firebase emulators:exec`, clears emulator data between tests, unsets production Firebase credential variables, and stops the emulator on completion or failure. It never connects to a real Firebase project. The default `pnpm test` remains mock-based and does not require Java, the CLI, or external network access.
 
 ```bash
 pnpm test:firebase
@@ -132,11 +162,16 @@ pnpm test:firebase
 #### Server Configuration
 
 - `PORT` - HTTP server port (default: `80`)
+- `SHUTDOWN_TIMEOUT_MS` - Maximum graceful shutdown budget in milliseconds (default: `10000`, hard cap: `30000`); after the deadline active jobs receive a bounded finalization attempt and are persisted as retryable cancellations, remaining HTTP connections are force-closed, and the process exits
 - `RENDER` - Render.com deployment flag (used internally)
 - `IS_PULL_REQUEST` - Render preview environment flag (disables bot in PRs)
-- `TRUST_PROXY` - Express trusted proxy setting for reverse-proxy deployments (`true`, `false`, `1` hop, or subnet string; defaults to `1` when `RENDER=true`, and `false` for direct deployments)
-- `RATE_LIMIT_WINDOW_MS` - Global API rate limiter window in milliseconds (default: `900000` / 15 minutes)
-- `RATE_LIMIT_MAX` - Global API rate limiter max requests per window (default: `100`)
+- `VERCEL` / `VERCEL_ENV` - Vercel system deployment markers; `VERCEL_ENV=preview` disables the bot
+- `VERCEL_GIT_COMMIT_SHA` / `VERCEL_GIT_REPO_OWNER` / `VERCEL_GIT_REPO_SLUG` - Vercel deployment metadata used for release and deployment notifications
+- `RAILWAY_ENVIRONMENT_NAME` / `RAILWAY_GIT_PULL_REQUEST_NUMBER` - Railway preview markers; a PR number or environment name containing a hyphen-delimited `pr` segment disables the bot
+- `RAILWAY_GIT_COMMIT_SHA` / `RAILWAY_GIT_REPO_OWNER` / `RAILWAY_GIT_REPO_NAME` - Railway GitHub deployment metadata used for release and deployment notifications
+- `TRUST_PROXY` - Express trusted proxy setting for reverse-proxy deployments (`true`, `false`, `1` hop, or subnet string; defaults to `1` on Render/Vercel/Railway, and `false` for direct deployments)
+- `RATE_LIMIT_WINDOW_MS` - Global API rate limiter window in milliseconds (default: `900000` / 15 minutes; invalid values use the default)
+- `RATE_LIMIT_MAX` - Global API rate limiter max requests per window (default: `100`; invalid values use the default)
 - `LOG_LEVEL` - Structured JSON log verbosity (`debug`, `info`, `warn`, `error`, `silent`; defaults to `debug` in development and `info` in production)
 - `SERVICE_NAME` - Optional service name included in JSON logs (default: package name or `cabros-bot`)
 
@@ -147,11 +182,28 @@ pnpm test:firebase
 - `NEWS_SYMBOLS_STOCKS` - Default stock symbols if not provided in request (comma-separated)
 - `NEWS_ALERT_THRESHOLD` - Confidence score threshold for sending alerts (default: `0.7`, range 0.0-1.0)
 - `NEWS_CACHE_TTL_HOURS` - Cache time-to-live for deduplication (default: `6` hours)
+- `ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP` - Enable Firestore-backed news deduplication (`true` or `false`, default: `false`; failures fall back to memory)
 - `NEWS_TIMEOUT_MS` - Per-symbol analysis timeout (default: `30000` ms)
 - `NEWS_GEMINI_CONCURRENCY` - Max concurrent Gemini-backed symbol analyses. Production policy is `3`; unset keeps legacy parallel fan-out for backward compatibility.
 - `NEWS_GEMINI_QUOTA_MAX_RETRIES` - Max per-symbol retries for Gemini `429 RESOURCE_EXHAUSTED` errors (default: `2`)
 - `NEWS_GEMINI_QUOTA_RETRY_BASE_MS` - Base exponential backoff when Gemini does not provide retry delay metadata (default: `1000` ms)
 - `ENABLE_BINANCE_PRICE_CHECK` - Enable Binance crypto price fetching (`true` or `false`, default: `false`)
+- `BINANCE_FETCH_TIMEOUT_MS` - Binance price request timeout (default: `5000` ms)
+
+#### Binance Spot Order Execution
+
+- `ENABLE_BINANCE_TRADING` - Enable the operator-only Spot order endpoint (`true` or `false`, default: `false`)
+- `BINANCE_API_KEY` / `BINANCE_API_SECRET` - Server-side Binance credentials with Spot trading permission only; withdrawals must remain disabled and IP restrictions are recommended
+- `BINANCE_TRADING_ENV` - Binance environment: `testnet` (default) or explicit `live`
+- `BINANCE_TRADING_ALLOWED_SYMBOLS` - Comma-separated Spot symbol allow-list, for example `BTCUSDT,ETHUSDT`
+- `BINANCE_TRADING_MAX_NOTIONAL` - Maximum order notional in quote asset, enforced before submission
+- `BINANCE_TRADING_TIMEOUT_MS` - Signed request timeout (default `10000` ms, capped at `30000` ms)
+
+`POST /api/trading/binance/orders` requires `admin.operator` access through the existing API-key or Firebase admin authentication flow, and fails closed if neither mechanism is configured. It supports `MARKET` and `LIMIT` `BUY`/`SELL` orders, validates the live Binance symbol status and filters, and uses the existing `binance` `MainClient`. MARKET orders must use `quoteOrderQty`; quantity-based market orders are rejected because their execution price cannot be bounded against the configured notional cap.
+
+`dryRun` defaults to `true` and validates the request without submitting. Set `dryRun: false` only after enabling the feature and explicitly selecting the intended environment. The default environment is Spot Testnet; `live` is never selected implicitly. Live requests require `idempotency-key` (or `x-idempotency-key`) or an explicit `clientOrderId`; a matching request is replayed and a changed payload returns `409 IDEMPOTENCY_CONFLICT`. Send decimal quantities, prices, and quote amounts as strings when exact precision matters; the service preserves those values through validation, submission, and reconciliation by disabling Binance SDK response beautification. MARKET orders must omit `timeInForce`; Binance order-test validation runs for LIMIT dynamic price filters and account-dependent filters such as `MAX_POSITION` and `MAX_NUM_ORDERS`. Definitive Binance rejections, including pre-execution timestamp and throttling failures, return `400 BINANCE_ORDER_REJECTED`; a recovered Binance order that does not match the request returns `409 BINANCE_ORDER_CONFLICT`; transient order-test failures return retryable `502 BINANCE_VALIDATION_FAILED`. A live request with an idempotency key derives a deterministic Binance `clientOrderId`; after cache expiration or process restart, the service reconciles that ID before submitting again. If Binance submission status is ambiguous, including Binance execution-unknown code `-1006`, the API returns `503 BINANCE_ORDER_STATUS_UNKNOWN` and replays that result for the same key; reconcile the order before retrying with a new key.
+
+The response and audit logs include only sanitized order metadata. API credentials are never returned or logged.
 - `ENABLE_LLM_ALERT_ENRICHMENT` - Enable optional secondary LLM enrichment (`true` or `false`, default: `false`)
 - `AZURE_LLM_ENDPOINT` - Azure AI Inference endpoint URL (required if enrichment enabled)
 - `AZURE_LLM_KEY` - Azure AI Inference API key (required if enrichment enabled)
@@ -185,6 +237,10 @@ pnpm test:firebase
 - `dependencies.scannerPresetStorage` in `/api/status` and `/api/capabilities` exposes `enabled`, `configured`, `ready`, `status`, `mode`, and `backend` without secrets. A `misconfigured` status means a Firestore gate is enabled but the client is unavailable.
 
 ## Setup
+
+### Supported Runtime
+
+The repository pins Node.js `24.18.0` in `.node-version` and bounds `package.json` to `>=24.18.0 <25`. GitHub Actions reads the same file, and Render native services consume the root `.node-version` file. Use that file with your local Node.js version manager.
 
 ### 1. Install Dependencies
 
@@ -259,14 +315,17 @@ When `ENABLE_FIRESTORE_JOB_STORAGE=true`, `featureFlags.firestoreJobStorage` rep
 
 `featureFlags.messageFooterMetadata` reports the `ENABLE_MESSAGE_FOOTER_METADATA` setting. It defaults to `true` and is disabled only when the environment variable is explicitly set to `false`.
 
-`featureFlags.cloudflareAig` reports `ENABLE_CLOUDFLARE_AIG`, while `dependencies.cloudflareAig` reports whether the Cloudflare AI Gateway credentials are configured and ready.
+`featureFlags.cloudflareAig` reports `ENABLE_CLOUDFLARE_AIG`, while `dependencies.cloudflareAig` reports whether the Cloudflare AI Gateway credentials are configured and ready. Runtime provider selection is controlled separately by `MODEL_PROVIDER=cloudflare`; set both values when status/capability telemetry should match active Cloudflare routing.
 
 When `ENABLE_EQUITY_MARKET_DATA=true`, `dependencies.equityMarketData` reports Twelve Data readiness and the supported `BATS`/`NASDAQ` exchanges without exposing the API key. Signal outcome tracking uses `/quote` for missing entry prices and `/time_series` for bounded historical bars; provider, timeout, malformed-data, and quota failures mark equity outcomes unavailable without blocking alert delivery. Extended-hours data is excluded by default. Confirm current Twelve Data plan limits and licensing before production use: [pricing](https://twelvedata.com/pricing), [US equities coverage](https://support.twelvedata.com/en/articles/9935903-us-equities-market-data), and [commercial usage](https://support.twelvedata.com/en/articles/5332349-commercial-and-personal-usage).
 `dependencies.signalOutcomeWorker` reports the scheduler role, shutdown state, cadence/budgets, and the last-sweep heartbeat counters (`lastRunAt`, scanned, pending, evaluated, and error counts). The `worker` role is intended for the dedicated Render service; set the web service role to `disabled` during cutover so only one scheduler is active. A disabled local scheduler reports `ready: false` and `status: "disabled"` because it is not the process evaluating outcomes.
 
 The dedicated worker also persists the same non-sensitive heartbeat to `workerHeartbeats/signal-outcome` in Firestore. Heartbeat writes fail open and never block alert delivery.
+`featureFlags.firebaseRemoteConfig` reports `ENABLE_FIREBASE_REMOTE_CONFIG`. This is server-side Remote Config: the Firebase Admin SDK loads the published template with `initServerTemplate()`, while no Firebase Web/Client SDK configuration is involved. `dependencies.firebaseRemoteConfig` exposes only `enabled`, `configured`, `ready`, `status`, `source`, `templateVersion`, `lastSuccessfulLoad`, `lastErrorCategory`, and bounded loader settings; it never returns remote parameter values or credentials.
 
 `GET /api/capabilities` is an alias for the same payload.
+
+When configured, `featureFlags.binanceTrading` and `dependencies.binanceTrading` expose only the non-sensitive execution gate, selected `testnet`/`live` environment, allow-listed symbols, and readiness state.
 
 ### Browser admin authentication
 
@@ -275,6 +334,21 @@ The dedicated worker also persists the same non-sensitive heartbeat to `workerHe
 The server verifies Firebase ID tokens with revoked-token checks enabled. Custom claims may use `roles: ["admin.viewer"]`, `roles: ["admin.operator"]`, `adminRole`, `role`, or the equivalent `admin.viewer`/`admin.operator` boolean claims. Viewers can read status, alerts, analytics, exports, scanner presets, and job metadata; operators can perform the existing preset, replay, and job actions. The legacy API-key path remains available for machine clients. Protected webhook and news-monitor routes remain API-key-only.
 
 When Firebase auth is enabled, configure `FIREBASE_SERVICE_ACCOUNT_JSON` or `GOOGLE_APPLICATION_CREDENTIALS` for server-side Admin SDK token verification, plus the public browser settings listed above. Do not put service-account JSON or ID tokens in browser config, Postman variables, logs, or client error messages.
+
+The public browser configuration may also include `FIREBASE_STORAGE_BUCKET`, `FIREBASE_MESSAGING_SENDER_ID`, and `FIREBASE_MEASUREMENT_ID`; these values are not service-account credentials.
+
+### Firebase Hosting for Admin Console
+
+The `/admin` console is deployed as a static site on Firebase Hosting for the `cabros-bot` project (`https://cabros-bot.web.app/admin`):
+
+- **Build & Artifacts**: `pnpm run build:hosting` synchronizes static console assets from `src/admin/` to `public/admin/` and generates the root redirect `public/index.html`. `firebase.json` defines the hosting root (`public`), ignore patterns, rewrite rules (`/admin/**` -> `/admin/index.html`), and `no-cache` cache-control headers.
+- **Backend API Connectivity**: When hosted on Firebase Hosting (`*.web.app` / `*.firebaseapp.com`), the admin console resolves the HTTPS backend API origin (`https://cabros-bot-production.up.railway.app` by default, or overridden via `?backend=` query parameter or `cabros_backend_origin` in localStorage). All `/admin/auth-config`, `/openapi.json`, and `/api/*` requests connect securely over HTTPS.
+- **CORS & CSP Policy**: Backend CORS permits requests from the hosted console, and Helmet CSP allows `connect-src` to Google Auth, Firebase Hosting origins, and the backend origin.
+- **CI/CD Deployment**: `.github/workflows/firebase-hosting.yml` automatically deploys pull requests to ephemeral Firebase preview channels and deploys the `live` channel on releases merged to `master`.
+- **Local Testing**: Run `pnpm run build:hosting` then `firebase emulators:start --only hosting` to test the static hosting deployment locally on port 5000.
+- **Rollback**: In the Firebase Console (Hosting > Release history) or via Firebase CLI: `firebase hosting:rollback` / `firebase hosting:clone cabros-bot:previous_version cabros-bot:live`.
+
+.env.example is the canonical operator template. The documentation-alignment test checks static application-owned `process.env` reads against that template; platform-injected values, test-only controls, and deprecated compatibility aliases are explicitly classified instead of being copied into production configuration.
 
 **Response:**
 ```json
@@ -858,6 +932,8 @@ When `callbackUrl` is configured, each callback POST includes:
 
 Before each delivery attempt, hostname callback URLs are resolved with all current DNS answers. Any private answer blocks the callback (unless `ALLOW_PRIVATE_CALLBACKS=true`), and the connection is pinned to the validated answers so the subsequent fetch cannot perform a second hostname lookup and bypass the SSRF check. Redirects remain disabled with `redirect: 'error'`.
 
+`ALLOW_HTTP_CALLBACKS` and `ALLOW_PRIVATE_CALLBACKS` are local/testing security overrides and should remain `false` in production. `JOB_CALLBACK_RETRY_DELAY_MS` defaults to `1000` ms; `JOB_CALLBACK_SIGNING_SECRET` is an optional server-side HMAC secret and must never be committed.
+
 Verify the signature with HMAC-SHA256 over this exact canonical string, using the shared secret and the raw JSON request body:
 
 ```text
@@ -896,7 +972,7 @@ List recent sanitized jobs. The endpoint includes jobs from the in-memory reposi
 #### GET /api/jobs/:jobId
 
 Retrieve status, partial progress, final report, and delivery state of a job.
-Jobs are retained in memory and, when Firestore job storage is enabled, persisted to the `tradingviewJobs` collection so status survives process restarts. Completed and failed jobs are automatically evicted after 1 hour.
+Jobs are retained in memory and, when Firestore job storage is enabled, persisted to the `tradingviewJobs` collection so status survives process restarts. Completed, failed, cancelled, and timed-out jobs are automatically evicted after 1 hour. Durable terminal documents receive an `expiresAt` timestamp based on `createdAt`; run `bash ops/configure-firestore-alert-retention.sh` once per Firebase project to backfill legacy terminal jobs and enable native TTL deletion for `tradingviewJobs`. Firestore TTL deletion is eventually consistent, while the API still filters expired jobs on reads.
 
 For completed ranked market-scanner jobs, `scanResults[].scores[]` contains the structured `symbol`, numeric `score`, non-empty `reason`, and optional `trendConfluence` fields used by the alert report. This is also included in configured terminal callback payloads.
 
@@ -933,6 +1009,8 @@ By default, jobs still execute in-process. With `JOB_EXECUTION_MODE=render-worke
 ### Stored Alerts API
 
 When `ENABLE_FIRESTORE_ALERT_STORAGE=true`, successful `POST /api/webhook/alert` requests are persisted to Firestore and can be inspected through the protected alerts read API.
+
+Stored `alerts` and `alertReplays` records default to 90 days of retention. The service filters expired records before list, detail, export, and summary responses while Firestore's native TTL deletion is eventual. New records carry an `expiresAt` timestamp; `bash ops/configure-firestore-alert-retention.sh` backfills legacy records from `receivedAt`/`replayedAt` before enabling both TTL policies, shortens existing expiries when the configured deadline is earlier, removes legacy raw replay idempotency keys after hashing them, reports scanned/updated/skipped counts, and fails if a record has no usable timestamp. Replay audit documents retain only a SHA-256 `idempotencyKeyHash`, never the raw key. Inspect the TTL policies with `gcloud firestore fields ttls list`.
 
 All endpoints below require the same `x-api-key` header used by the webhook routes.
 If alert storage is enabled but Firestore credentials/project access are unavailable, they return `503 STORAGE_UNAVAILABLE` instead of a generic `500`.
@@ -981,6 +1059,17 @@ List stored alerts ordered by `receivedAt` descending.
   }
 }
 ```
+
+#### GET /api/alerts/export
+
+Export bounded stored alerts as JSONL or CSV. CSV serialization prefixes string fields whose leading control characters (`tab`/`LF`/`CR`) are followed by `=`, `+`, `-`, or `@`—or that begin directly with those markers—with an apostrophe so spreadsheet clients treat them as inert text; finite numeric strings such as `-42` remain unchanged. JSONL output is unchanged.
+
+**Query Parameters:**
+- `format` - `jsonl` or `csv` (default: `jsonl`)
+- `from` / `to` - Required bounded ISO-8601 timestamps
+- `limit` - Integer between `1` and `1000` (default: `500`)
+- `source` / `enriched` - Optional filters
+- `includeText` - Optional boolean; raw alert text is excluded unless `true`
 
 #### GET /api/alerts/summary
 
@@ -1399,7 +1488,7 @@ When enabled, it also forwards configured console levels to Sentry Logs using th
 ### Features
 
 - **Non-Intrusive**: Monitoring failures never affect HTTP responses or message delivery
-- **Environment Gating**: Auto-derives environment from Render.com variables (`production`, `preview`, `development`)
+- **Environment Gating**: Auto-derives environment from Render.com, Vercel, and Railway system variables (`production`, `preview`, `development`)
 - **Privacy Controls**: Optional exclusion of alert content from error events
 - **Structured Console Logs**: All `console.*` output is emitted as one-line JSON with `timestamp`, `level`, `message`, `service`, `environment`, and optional `attributes`, `parameters`, and `error`
 - **Console Log Capture**: Configured console levels are captured as searchable Sentry Logs
@@ -1416,7 +1505,7 @@ SENTRY_DSN=https://key@o123.ingest.sentry.io/456
 # Optional: Explicit environment (auto-derived if not set)
 SENTRY_ENVIRONMENT=production
 
-# Optional: Explicit release (derived from RENDER_GIT_COMMIT if not set)
+# Optional: Explicit release (derived from RENDER_GIT_COMMIT or VERCEL_GIT_COMMIT_SHA if not set)
 SENTRY_RELEASE=v1.2.3
 
 # Optional: Privacy control (default: true = include alert text)
@@ -1437,8 +1526,8 @@ SENTRY_CONSOLE_LOG_LEVELS=warn,error
 | Condition | Environment |
 |-----------|-------------|
 | `SENTRY_ENVIRONMENT` set | Uses explicit value |
-| `RENDER=true` + `IS_PULL_REQUEST=true` | `preview` |
-| `RENDER=true` (no PR) | `production` |
+| `RENDER=true` + `IS_PULL_REQUEST=true`, `VERCEL_ENV=preview`, or Railway PR metadata/name | `preview` |
+| `RENDER=true`, `VERCEL_ENV=production`, or any Railway deployment (no preview) | `production` |
 | `NODE_ENV=production` | `production` |
 | Default | `development` |
 
@@ -1694,10 +1783,10 @@ AZURE_LLM_MODEL=openai/gpt-5-mini
 
 ### Render.com
 
-The application includes support for Render.com deployment:
+The application includes support for Render.com and Vercel deployments:
 
-- Respects `RENDER` environment variable
-- Skips bot launch in preview environments (`IS_PULL_REQUEST=true`)
+- Respects Render and Vercel deployment environment variables
+- Skips bot launch in preview environments (`IS_PULL_REQUEST=true` or `VERCEL_ENV=preview`)
 - Sends deployment notification to admin chat on startup
 - `render.yaml` defines an opt-in paid `starter` Background Worker using `pnpm run start:signal-outcome-worker`. It is configured with `SIGNAL_OUTCOME_WORKER_ROLE=worker` and `ENABLE_SIGNAL_OUTCOME_TRACKING` as a manual value so the paid worker and Firestore credential decision are explicit.
 - The worker also declares `ENABLE_SENTRY` and `SENTRY_DSN` as manual values; monitoring remains disabled when either value is absent.
@@ -1741,7 +1830,7 @@ The application logs to stdout:
 
 1. Verify `ENABLE_NEWS_MONITOR=true` in environment
 2. Verify `GEMINI_API_KEY` is set (required for Gemini analysis)
-3. Check application logs for "initializeNewsMonitor" message on startup
+3. Check application logs for `[NewsMonitor] Handler initialized` when news monitoring is enabled
 4. Verify `/api/news-monitor` route is registered (check logs for route mounting)
 
 #### News Alerts Not Sending

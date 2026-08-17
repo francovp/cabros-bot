@@ -17,7 +17,7 @@ The integration will be gated by environment configuration, defaulting to a safe
 
 ## Technical Context
 
-**Language/Version**: Node.js 20.x (JavaScript, CommonJS modules)
+**Language/Version**: Node.js 24.x (JavaScript, CommonJS modules)
 
 **Primary Dependencies**:
 
@@ -33,7 +33,7 @@ The integration will be gated by environment configuration, defaulting to a safe
 - `tests/unit` for core logic (e.g., monitoring service, configuration gating)
 - `tests/integration` for end-to-end behavior (e.g., error capture from webhooks and notification channels)
 
-**Target Platform**: Node.js 20.x service deployed on Linux (Render) behind HTTP, plus Telegram/WhatsApp integrations.
+**Target Platform**: Node.js 24.x service deployed on Linux (Render) behind HTTP, plus Telegram/WhatsApp integrations.
 
 **Project Type**: Single backend service (Express HTTP API + Telegram bot + background notification services).
 

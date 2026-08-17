@@ -16,7 +16,7 @@
 
 ## Path Conventions
 
-- **Single project**: `src/`, `tests/` at repository root (Node.js 20.x, Express REST API)
+- **Single project**: `src/`, `tests/` at repository root (Node.js 24.x, Express REST API)
 
 ---
 

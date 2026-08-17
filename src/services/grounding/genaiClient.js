@@ -19,17 +19,10 @@ const { getOpenRouterClient } = require('../inference/openRouterClient');
 const { getCloudflareAiClient } = require('../inference/cloudflareAiClient');
 const { normalizeUsageMetadata } = require('../../lib/tokenUsage');
 const sentryService = require('../monitoring/SentryService');
+const geminiQuotaManager = require('./geminiQuotaManager');
 
 function isGeminiQuotaError(error) {
-	const status = Number(error && (error.status || error.statusCode || error.code));
-	if (status === 429) {
-		return true;
-	}
-
-	const message = String((error && error.message) || '').toUpperCase();
-	return message.includes('429') ||
-		message.includes('RESOURCE_EXHAUSTED') ||
-		message.includes('QUOTA');
+	return geminiQuotaManager.isQuotaError(error);
 }
 
 /**
@@ -58,7 +51,7 @@ class GenaiClient {
 		this.genAI = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
 	}
 
-	async _searchBrave(query, count = 3) {
+	async _searchBrave(query, count = 3, signal = null) {
 		if (!BRAVE_SEARCH_API_KEY) {
 			console.warn('[genaiClient] BRAVE_SEARCH_API_KEY is not set. Returning empty results.');
 			return [];
@@ -69,14 +62,19 @@ class GenaiClient {
 			url.searchParams.append('q', query);
 			url.searchParams.append('count', count);
 
-			const response = await fetch(url.toString(), {
+			const options = {
 				method: 'GET',
 				headers: {
 					'Accept': 'application/json',
 					'Accept-Encoding': 'gzip',
 					'X-Subscription-Token': BRAVE_SEARCH_API_KEY,
 				},
-			});
+			};
+			if (signal) {
+				options.signal = signal;
+			}
+
+			const response = await fetch(url.toString(), options);
 
 			if (!response.ok) {
 				throw new Error(`Brave Search API failed with status ${response.status}: ${response.statusText}`);
@@ -108,16 +106,19 @@ class GenaiClient {
 
 			return results;
 		} catch (error) {
+			if (signal?.aborted || error.name === 'AbortError' || error.message === 'Grounding timeout') {
+				throw error;
+			}
 			console.error('[genaiClient] Brave Search error:', error);
 			return [];
 		}
 	}
 
-	async _executeBraveSearch(query, maxResults) {
+	async _executeBraveSearch(query, maxResults, signal = null) {
 		console.debug(`[genaiClient] Performing search with query: "${query}" using Brave Search API`);
 
 		// 1. Get search results from Brave
-		const results = await this._searchBrave(query, maxResults);
+		const results = await this._searchBrave(query, maxResults, signal);
 
 		// 2. Generate text grounded in these results using LLM
 		let searchResultText = '';
@@ -137,7 +138,7 @@ class GenaiClient {
 		};
 	}
 
-	async _executeGoogleSearch(query, model, maxResults, textWithCitations) {
+	async _executeGoogleSearch(query, model, maxResults, textWithCitations, signal = null) {
 		console.debug(`[genaiClient] Performing search with query: "${query}" using Google Search Tool (model: "${model}")`);
 
 		const groundingTool = {
@@ -149,11 +150,34 @@ class GenaiClient {
 			temperature: 0.2,
 		};
 
-		const result = await this.genAI.models.generateContent({
+		if (signal?.aborted) {
+			throw signal.reason || new Error('Grounding timeout');
+		}
+
+		let abortCleanup = null;
+		let generatePromise = this.genAI.models.generateContent({
 			model: model,
 			contents: query,
 			config: toolConfig,
 		});
+
+		if (signal) {
+			const abortPromise = new Promise((_, reject) => {
+				const onAbort = () => reject(signal.reason || new Error('Grounding timeout'));
+				signal.addEventListener('abort', onAbort, { once: true });
+				abortCleanup = () => signal.removeEventListener('abort', onAbort);
+			});
+			generatePromise = Promise.race([generatePromise, abortPromise]);
+		}
+
+		let result;
+		try {
+			result = await generatePromise;
+			if (abortCleanup) abortCleanup();
+		} catch (error) {
+			if (abortCleanup) abortCleanup();
+			throw error;
+		}
 
 		// Handle response structure - could be direct or wrapped in response property
 		const response = result?.response || result || {};
@@ -203,7 +227,7 @@ class GenaiClient {
 		};
 	}
 
-	async search({ query, model = GROUNDING_MODEL_NAME, maxResults = 3, textWithCitations = false, rethrowQuotaErrors = false }) {
+	async search({ query, model = GROUNDING_MODEL_NAME, maxResults = 3, textWithCitations = false, rethrowQuotaErrors = false, signal = null }) {
 		if (ENABLE_NEWS_MONITOR_TEST_MODE) {
 			console.debug('[genaiClient] News Monitor Test Mode enabled - returning mock search results');
 			return {
@@ -226,27 +250,54 @@ class GenaiClient {
 			};
 		}
 
+		if (signal?.aborted) {
+			throw signal.reason || new Error('Grounding timeout');
+		}
+
 		// Logic: Force Brave -> Google -> Fallback Brave
 		// Access FORCE_BRAVE_SEARCH dynamically from config object
 		if (FORCE_BRAVE_SEARCH) {
-			return this._executeBraveSearch(query, maxResults);
+			return this._executeBraveSearch(query, maxResults, signal);
+		}
+
+		if (geminiQuotaManager.isCooldownActive()) {
+			if (rethrowQuotaErrors) {
+				const remainingMs = geminiQuotaManager.getRemainingCooldownMs();
+				const error = new Error(`Gemini quota cooldown active (${remainingMs}ms remaining)`);
+				error.code = 'GEMINI_QUOTA_EXHAUSTED';
+				error.status = 429;
+				error.retryDelay = remainingMs;
+				throw error;
+			}
+			console.warn('[genaiClient] Gemini process quota cooldown active. Falling back immediately to Brave Search.');
+			return this._executeBraveSearch(query, maxResults, signal);
 		}
 
 		try {
-			const googleResult = await this._executeGoogleSearch(query, model, maxResults, textWithCitations);
+			const googleResult = await this._executeGoogleSearch(query, model, maxResults, textWithCitations, signal);
 			if (googleResult.results && googleResult.results.length > 0) {
 				return googleResult;
 			}
 			console.warn('[genaiClient] Google Search returned no results. Falling back to Brave Search.');
 		} catch (error) {
+			if (signal?.aborted || error.name === 'AbortError' || error.message === 'Grounding timeout' || (typeof error.message === 'string' && error.message.includes('timeout'))) {
+				throw error;
+			}
+			if (isGeminiQuotaError(error)) {
+				geminiQuotaManager.triggerQuotaCooldown(error);
+			}
 			if (rethrowQuotaErrors && isGeminiQuotaError(error)) {
 				throw error;
 			}
 			console.warn(`[genaiClient] Google Search failed: ${error.message}. Falling back to Brave Search.`);
 		}
 
+		if (signal?.aborted) {
+			throw signal.reason || new Error('Grounding timeout');
+		}
+
 		// Fallback to Brave
-		return this._executeBraveSearch(query, maxResults);
+		return this._executeBraveSearch(query, maxResults, signal);
 	}
 
 	/**
@@ -274,18 +325,44 @@ class GenaiClient {
 	}
 
 	async llmCall({ prompt, context = {}, opts = {} }) {
-		const { model = GEMINI_MODEL_NAME, temperature = 0.2 } = opts;
+		const { model = GEMINI_MODEL_NAME, temperature = 0.2, signal } = opts;
+
+		if (signal?.aborted) {
+			throw signal.reason || new Error('Grounding timeout');
+		}
+
+		if (geminiQuotaManager.isCooldownActive()) {
+			const remainingMs = geminiQuotaManager.getRemainingCooldownMs();
+			const error = new Error(`Gemini quota cooldown active (${remainingMs}ms remaining)`);
+			error.code = 'GEMINI_QUOTA_EXHAUSTED';
+			error.status = 429;
+			error.retryDelay = remainingMs;
+			throw error;
+		}
+
+		let abortCleanup = null;
+		let generatePromise = this.genAI.models.generateContent({
+			model,
+			contents: prompt,
+			config: {
+				maxOutputTokens: opts.maxTokens !== undefined ? opts.maxTokens : null,
+				temperature,
+			},
+			context,
+		});
+
+		if (signal) {
+			const abortPromise = new Promise((_, reject) => {
+				const onAbort = () => reject(signal.reason || new Error('Grounding timeout'));
+				signal.addEventListener('abort', onAbort, { once: true });
+				abortCleanup = () => signal.removeEventListener('abort', onAbort);
+			});
+			generatePromise = Promise.race([generatePromise, abortPromise]);
+		}
 
 		try {
-			const response = await this.genAI.models.generateContent({
-				model,
-				contents: prompt,
-				config: {
-					maxOutputTokens: opts.maxTokens !== undefined ? opts.maxTokens : null,
-					temperature,
-				},
-				context,
-			});
+			const response = await generatePromise;
+			if (abortCleanup) abortCleanup();
 
 			// Handle response structure - could be direct or wrapped in response property
 			const result = response?.response || response || {};
@@ -326,6 +403,13 @@ class GenaiClient {
 				usage,
 			};
 		} catch (error) {
+			if (abortCleanup) abortCleanup();
+			if (signal?.aborted || error.name === 'AbortError' || error.message === 'Grounding timeout' || (typeof error.message === 'string' && error.message.includes('timeout'))) {
+				throw error;
+			}
+			if (isGeminiQuotaError(error)) {
+				geminiQuotaManager.triggerQuotaCooldown(error);
+			}
 			if (this._isNonRetryableGeminiError(error)) {
 				throw new NonRetryableProviderError(
 					`LLM provider configuration error: ${error.message}`,

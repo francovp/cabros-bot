@@ -1,0 +1,218 @@
+{
+  "parameters": {
+    "NEWS_ALERT_THRESHOLD": {
+      "defaultValue": {
+        "value": "0.7"
+      },
+      "description": "Minimum confidence required for news alerts",
+      "valueType": "NUMBER"
+    },
+    "NEWS_TIMEOUT_MS": {
+      "defaultValue": {
+        "value": "30000"
+      },
+      "description": "News analysis timeout in milliseconds",
+      "valueType": "NUMBER"
+    },
+    "NEWS_GEMINI_CONCURRENCY": {
+      "defaultValue": {
+        "value": "3"
+      },
+      "description": "Maximum concurrent Gemini-backed symbol analyses",
+      "valueType": "NUMBER"
+    },
+    "NEWS_GEMINI_QUOTA_MAX_RETRIES": {
+      "defaultValue": {
+        "value": "2"
+      },
+      "description": "Maximum Gemini quota retries for news analysis",
+      "valueType": "NUMBER"
+    },
+    "NEWS_GEMINI_QUOTA_RETRY_BASE_MS": {
+      "defaultValue": {
+        "value": "1000"
+      },
+      "description": "Base delay for Gemini quota retries in milliseconds",
+      "valueType": "NUMBER"
+    },
+    "TRADINGVIEW_MCP_TIMEOUT_MS": {
+      "defaultValue": {
+        "value": "12000"
+      },
+      "description": "TradingView MCP request timeout in milliseconds",
+      "valueType": "NUMBER"
+    },
+    "TRADINGVIEW_MCP_MAX_RETRIES": {
+      "defaultValue": {
+        "value": "3"
+      },
+      "description": "Maximum TradingView MCP retries",
+      "valueType": "NUMBER"
+    },
+    "TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS": {
+      "defaultValue": {
+        "value": "12000"
+      },
+      "description": "Maximum TradingView enrichment budget in milliseconds",
+      "valueType": "NUMBER"
+    },
+    "ENABLE_MESSAGE_FOOTER_METADATA": {
+      "defaultValue": {
+        "value": "true"
+      },
+      "description": "Enable metadata footer on outgoing messages",
+      "valueType": "BOOLEAN"
+    },
+    "GROUNDING_MAX_SOURCES": {
+      "defaultValue": {
+        "value": "3"
+      },
+      "description": "Maximum grounding search sources",
+      "valueType": "NUMBER"
+    },
+    "GROUNDING_TIMEOUT_MS": {
+      "defaultValue": {
+        "value": "30000"
+      },
+      "description": "Grounding request timeout in milliseconds",
+      "valueType": "NUMBER"
+    },
+    "GROUNDING_MAX_LENGTH": {
+      "defaultValue": {
+        "value": "2000"
+      },
+      "description": "Maximum character length for grounding response",
+      "valueType": "NUMBER"
+    },
+    "NEWS_CACHE_TTL_HOURS": {
+      "defaultValue": {
+        "value": "6"
+      },
+      "description": "News cache retention TTL in hours",
+      "valueType": "NUMBER"
+    },
+    "BINANCE_FETCH_TIMEOUT_MS": {
+      "defaultValue": {
+        "value": "5000"
+      },
+      "description": "Binance API fetch timeout in milliseconds",
+      "valueType": "NUMBER"
+    },
+    "TRADINGVIEW_MCP_DEFAULT_TIMEFRAME": {
+      "defaultValue": {
+        "value": "1h"
+      },
+      "description": "Default timeframe for TradingView MCP analysis",
+      "valueType": "STRING"
+    },
+    "EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS": {
+      "defaultValue": {
+        "value": "60000"
+      },
+      "description": "Expanded analysis alert processing timeout in milliseconds",
+      "valueType": "NUMBER"
+    },
+    "DISCORD_MAX_RETRIES": {
+      "defaultValue": {
+        "value": "2"
+      },
+      "description": "Maximum retry attempts for Discord webhook notifications",
+      "valueType": "NUMBER"
+    },
+    "DISCORD_FALLBACK_RETRY_DELAY_MS": {
+      "defaultValue": {
+        "value": "500"
+      },
+      "description": "Fallback retry delay in milliseconds for Discord notifications",
+      "valueType": "NUMBER"
+    },
+    "DISCORD_MAX_RETRY_DELAY_MS": {
+      "defaultValue": {
+        "value": "5000"
+      },
+      "description": "Maximum backoff retry delay in milliseconds for Discord notifications",
+      "valueType": "NUMBER"
+    },
+    "DISCORD_MAX_TOTAL_RETRY_WAIT_MS": {
+      "defaultValue": {
+        "value": "10000"
+      },
+      "description": "Maximum cumulative retry wait time in milliseconds for Discord notifications",
+      "valueType": "NUMBER"
+    },
+    "WEBHOOK_IDEMPOTENCY_TTL_MS": {
+      "defaultValue": {
+        "value": "300000"
+      },
+      "description": "Webhook idempotency retention TTL in milliseconds",
+      "valueType": "NUMBER"
+    },
+    "JOB_CALLBACK_RETRY_DELAY_MS": {
+      "defaultValue": {
+        "value": "1000"
+      },
+      "description": "Job webhook callback retry delay in milliseconds",
+      "valueType": "NUMBER"
+    },
+    "SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS": {
+      "defaultValue": {
+        "value": "300000"
+      },
+      "description": "Signal outcome evaluation worker cadence in milliseconds",
+      "valueType": "NUMBER"
+    },
+    "SIGNAL_OUTCOME_EVALUATION_BATCH_LIMIT": {
+      "defaultValue": {
+        "value": "50"
+      },
+      "description": "Maximum signal outcome candidates evaluated per sweep",
+      "valueType": "NUMBER"
+    },
+    "SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS": {
+      "defaultValue": {
+        "value": "30000"
+      },
+      "description": "Maximum execution duration per signal outcome evaluation sweep in milliseconds",
+      "valueType": "NUMBER"
+    },
+    "ENABLE_GEMINI_GROUNDING": {
+      "defaultValue": {
+        "value": "false"
+      },
+      "description": "Enable Gemini grounding for alerts",
+      "valueType": "BOOLEAN"
+    },
+    "ENABLE_TRADINGVIEW_MCP_ENRICHMENT": {
+      "defaultValue": {
+        "value": "false"
+      },
+      "description": "Enable TradingView MCP alert enrichment",
+      "valueType": "BOOLEAN"
+    },
+    "ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION": {
+      "defaultValue": {
+        "value": "false"
+      },
+      "description": "Enable TradingView MCP volume confirmation",
+      "valueType": "BOOLEAN"
+    },
+    "ENABLE_MARKET_SCANNER": {
+      "defaultValue": {
+        "value": "false"
+      },
+      "description": "Enable TradingView market scanner endpoint and job execution",
+      "valueType": "BOOLEAN"
+    },
+    "ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP": {
+      "defaultValue": {
+        "value": "false"
+      },
+      "description": "Enable persistent Firestore-backed deduplication for news monitor",
+      "valueType": "BOOLEAN"
+    }
+  },
+  "version": {
+    "versionNumber": "20",
+    "isLegacy": true
+  }
+}

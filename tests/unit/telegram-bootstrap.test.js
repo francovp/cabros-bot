@@ -5,6 +5,9 @@ describe('getTelegramBootstrapConfig', () => {
 
 	beforeEach(() => {
 		process.env = { ...originalEnv };
+		delete process.env.VERCEL_ENV;
+		delete process.env.RAILWAY_ENVIRONMENT_NAME;
+		delete process.env.RAILWAY_GIT_PULL_REQUEST_NUMBER;
 	});
 
 	afterEach(() => {
@@ -29,6 +32,32 @@ describe('getTelegramBootstrapConfig', () => {
 		process.env.ENABLE_TELEGRAM_BOT = 'true';
 		process.env.RENDER = 'true';
 		process.env.IS_PULL_REQUEST = 'true';
+		delete process.env.BOT_TOKEN;
+
+		expect(getTelegramBootstrapConfig()).toEqual({
+			isPreviewEnv: true,
+			shouldStartTelegramBot: false,
+			telegramBotIsEnabled: true,
+			token: undefined,
+		});
+	});
+
+	it('does not require BOT_TOKEN in Vercel preview deployments', () => {
+		process.env.ENABLE_TELEGRAM_BOT = 'true';
+		process.env.VERCEL_ENV = 'preview';
+		delete process.env.BOT_TOKEN;
+
+		expect(getTelegramBootstrapConfig()).toEqual({
+			isPreviewEnv: true,
+			shouldStartTelegramBot: false,
+			telegramBotIsEnabled: true,
+			token: undefined,
+		});
+	});
+
+	it('does not require BOT_TOKEN in Railway PR environments', () => {
+		process.env.ENABLE_TELEGRAM_BOT = 'true';
+		process.env.RAILWAY_ENVIRONMENT_NAME = 'cabros-bot-pr-359';
 		delete process.env.BOT_TOKEN;
 
 		expect(getTelegramBootstrapConfig()).toEqual({

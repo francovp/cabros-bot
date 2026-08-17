@@ -1,11 +1,22 @@
 const genaiClient = require('./genaiClient');
 const { NonRetryableProviderError } = genaiClient;
 const { validateGeminiResponse } = require('../../lib/validation');
-const { GROUNDING_MODEL_NAME, GEMINI_MODEL_NAME, GEMINI_MODEL_NAME_FALLBACK, ENABLE_NEWS_MONITOR_TEST_MODE } = require('./config');
+const {
+	GROUNDING_MODEL_NAME,
+	GEMINI_MODEL_NAME,
+	GEMINI_MODEL_NAME_FALLBACK,
+	ENABLE_NEWS_MONITOR_TEST_MODE,
+	GROUNDING_MAX_LENGTH,
+} = require('./config');
 const { EventCategory } = require('../../controllers/webhooks/handlers/newsMonitor/constants');
 const { getPromptService, PromptKeys } = require('../prompts');
+const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 
 const promptService = getPromptService();
+
+function getEffectiveGroundingMaxLength() {
+	return getRuntimeConfig().GROUNDING_MAX_LENGTH;
+}
 
 function getLanguageDirective(preserveLanguage) {
 	return preserveLanguage
@@ -113,6 +124,7 @@ async function generateGroundedSummary({ text, searchResults = [], searchResultT
 		preserveLanguage = true,
 		systemPrompt: systemPromptOverride,
 		tokenUsage,
+		signal,
 	} = options;
 
 	if (ENABLE_NEWS_MONITOR_TEST_MODE) {
@@ -145,7 +157,7 @@ async function generateGroundedSummary({ text, searchResults = [], searchResultT
 			systemPrompt,
 			userPrompt,
 			context: { citations: searchResults },
-			opts: { temperature: 0.2 },
+			opts: { temperature: 0.2, signal },
 		});
 
 		if (tokenUsage && usage) {
@@ -160,6 +172,9 @@ async function generateGroundedSummary({ text, searchResults = [], searchResultT
 
 		return validateGeminiResponse(response);
 	} catch (error) {
+		if (signal?.aborted || error.name === 'AbortError' || error.message === 'Grounding timeout' || (typeof error.message === 'string' && error.message.includes('timeout'))) {
+			throw error;
+		}
 		throw new Error(`Summary generation failed: ${error.message}`);
 	}
 }
@@ -581,9 +596,11 @@ function calibrateNewsConfidence(analysisResult, groundingSources = null, option
  */
 async function generateEnrichedAlert({ text, searchResults = [], searchResultText = '', options = {} }) {
 	const {
+		maxLength = getEffectiveGroundingMaxLength(),
 		preserveLanguage = true,
 		systemPrompt: systemPromptOverride,
 		tokenUsage,
+		signal,
 	} = options;
 
 	// Short alert check (< 15 chars or < 2 words)
@@ -598,7 +615,10 @@ async function generateEnrichedAlert({ text, searchResults = [], searchResultTex
 	const languageDirective = getLanguageDirective(preserveLanguage);
 	const contextPrompt = buildContextPrompt(searchResults);
 	const contextSnippet = buildContextSnippet(searchResultText);
-	const alertContext = `${text}${contextPrompt}${contextSnippet}`;
+	const boundedAlertText = (typeof maxLength === 'number' && maxLength > 0 && typeof text === 'string' && text.length > maxLength)
+		? text.slice(0, maxLength)
+		: text;
+	const alertContext = `${boundedAlertText}${contextPrompt}${contextSnippet}`;
 	console.debug('[Gemini] Generating enriched alert with context:', alertContext);
 	const prompt = await promptService.getChatPrompt(
 		PromptKeys.ALERT_ENRICHMENT,
@@ -616,36 +636,39 @@ async function generateEnrichedAlert({ text, searchResults = [], searchResultTex
 			systemPrompt,
 			userPrompt,
 			context: { citations: searchResults },
-			opts: { temperature: 0.2 },
+			opts: { temperature: 0.2, signal },
 		};
 		let llmResult;
 
 		try {
 			llmResult = await genaiClient.llmCallv2(llmParams);
-	} catch (error) {
-		if (error instanceof NonRetryableProviderError) {
-			console.warn('[Gemini] Non-retryable provider error, returning neutral enrichment:', error.message);
-			return {
-				sentiment: 'NEUTRAL',
-				sentiment_score: 0.5,
-				insights: [],
-				modelUsed: GEMINI_MODEL_NAME || 'unknown',
-				...(promptProvenance ? { promptProvenance, prompt_provenance: promptProvenance } : {}),
-			};
-		}
+		} catch (error) {
+			if (signal?.aborted || error.name === 'AbortError' || error.message === 'Grounding timeout' || (typeof error.message === 'string' && error.message.includes('timeout'))) {
+				throw error;
+			}
+			if (error instanceof NonRetryableProviderError) {
+				console.warn('[Gemini] Non-retryable provider error, returning neutral enrichment:', error.message);
+				return {
+					sentiment: 'NEUTRAL',
+					sentiment_score: 0.5,
+					insights: [],
+					modelUsed: GEMINI_MODEL_NAME || 'unknown',
+					...(promptProvenance ? { promptProvenance, prompt_provenance: promptProvenance } : {}),
+				};
+			}
 
-		if (!GEMINI_MODEL_NAME_FALLBACK || !shouldRetryGeminiWithFallback(error)) {
-			throw error;
-		}
+			if (!GEMINI_MODEL_NAME_FALLBACK || !shouldRetryGeminiWithFallback(error)) {
+				throw error;
+			}
 
-		console.warn('[Gemini] Primary enrichment model failed, attempting fallback model:', GEMINI_MODEL_NAME_FALLBACK);
-		llmResult = await genaiClient.llmCallv2({
-			...llmParams,
-			opts: {
-				...llmParams.opts,
-				model: GEMINI_MODEL_NAME_FALLBACK,
-			},
-		});
+			console.warn('[Gemini] Primary enrichment model failed, attempting fallback model:', GEMINI_MODEL_NAME_FALLBACK);
+			llmResult = await genaiClient.llmCallv2({
+				...llmParams,
+				opts: {
+					...llmParams.opts,
+					model: GEMINI_MODEL_NAME_FALLBACK,
+				},
+			});
 		}
 
 		const { text: responseText, usage, modelUsed } = llmResult;
@@ -661,6 +684,9 @@ async function generateEnrichedAlert({ text, searchResults = [], searchResultTex
 			...(promptProvenance ? { promptProvenance, prompt_provenance: promptProvenance } : {}),
 		};
 	} catch (error) {
+		if (signal?.aborted || error.name === 'AbortError' || error.message === 'Grounding timeout' || (typeof error.message === 'string' && error.message.includes('timeout'))) {
+			throw error;
+		}
 		throw new Error(`Enriched alert generation failed: ${error.message}`);
 	}
 }

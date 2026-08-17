@@ -3,10 +3,13 @@
 const { groundAlert } = require('../../src/services/grounding/grounding');
 const { generateEnrichedAlert } = require('../../src/services/grounding/gemini');
 const genaiClient = require('../../src/services/grounding/genaiClient');
+const sentryService = require('../../src/services/monitoring/SentryService');
+const metrics = require('../../src/services/grounding/metrics');
 
 jest.mock('../../src/services/grounding/metrics');
 jest.mock('../../src/services/grounding/gemini');
 jest.mock('../../src/services/grounding/genaiClient');
+jest.mock('../../src/services/monitoring/SentryService');
 
 describe('Grounding Service', () => {
 	describe('groundAlert', () => {
@@ -72,20 +75,47 @@ describe('Grounding Service', () => {
 			expect(result.truncated).toBe(true);
 		});
 
-		it('should handle timeouts', async () => {
-			// Mock slow responses for both search and LLM
-			genaiClient.llmCall.mockImplementationOnce(() => new Promise((_, reject) => {
-				setTimeout(() => reject(new Error('Grounding timeout')), 2000);
-			}));
-
-			genaiClient.search.mockImplementationOnce(() => new Promise((_, reject) => {
-				setTimeout(() => reject(new Error('Grounding timeout')), 2000);
-			}));
+		it('should handle search phase timeout and record search phase error context', async () => {
+			genaiClient.search.mockImplementationOnce(() => new Promise(() => {}));
 
 			await expect(groundAlert({
 				text: 'Test',
-				options: { timeoutMs: 100 },
+				options: { timeoutMs: 50 },
 			})).rejects.toThrow('Grounding timeout');
+
+			expect(metrics.recordFailure).toHaveBeenCalledWith(
+				'timeout',
+				expect.objectContaining({ message: expect.stringContaining('search') }),
+				'ALERT_ENRICHMENT',
+			);
+			expect(sentryService.captureRuntimeError).toHaveBeenCalledWith(expect.objectContaining({
+				channel: 'grounding',
+				extra: expect.objectContaining({ phase: 'search' }),
+			}));
+		});
+
+		it('should handle generation phase timeout and record generation phase error context', async () => {
+			genaiClient.search.mockResolvedValueOnce({
+				results: [],
+				totalResults: 0,
+				searchResultText: '',
+			});
+			generateEnrichedAlert.mockImplementationOnce(() => new Promise(() => {}));
+
+			await expect(groundAlert({
+				text: 'Test',
+				options: { timeoutMs: 50 },
+			})).rejects.toThrow('Grounding timeout');
+
+			expect(metrics.recordFailure).toHaveBeenCalledWith(
+				'timeout',
+				expect.objectContaining({ message: expect.stringContaining('generation') }),
+				'ALERT_ENRICHMENT',
+			);
+			expect(sentryService.captureRuntimeError).toHaveBeenCalledWith(expect.objectContaining({
+				channel: 'grounding',
+				extra: expect.objectContaining({ phase: 'generation' }),
+			}));
 		});
 
 		it('should handle API errors gracefully', async () => {
@@ -128,6 +158,47 @@ describe('Grounding Service', () => {
 			expect(generateEnrichedAlert).toHaveBeenCalledWith(expect.objectContaining({
 				options: expect.objectContaining({
 					systemPrompt: expect.stringContaining('sentiment analyst specializing in crypto and stock news'),
+				}),
+			}));
+		});
+
+		it('should pass configured maxLength to generateEnrichedAlert', async () => {
+			genaiClient.search.mockResolvedValueOnce({ results: [], totalResults: 0 });
+			generateEnrichedAlert.mockResolvedValueOnce({
+				sentiment: 'NEUTRAL',
+				sentiment_score: 0.5,
+				insights: [],
+				sources: [],
+			});
+
+			await groundAlert({
+				text: 'Test alert text',
+				options: { maxLength: 500 },
+			});
+
+			expect(generateEnrichedAlert).toHaveBeenCalledWith(expect.objectContaining({
+				options: expect.objectContaining({
+					maxLength: 500,
+				}),
+			}));
+		});
+
+		it('should default maxLength to GROUNDING_MAX_LENGTH (2000) when not provided', async () => {
+			genaiClient.search.mockResolvedValueOnce({ results: [], totalResults: 0 });
+			generateEnrichedAlert.mockResolvedValueOnce({
+				sentiment: 'NEUTRAL',
+				sentiment_score: 0.5,
+				insights: [],
+				sources: [],
+			});
+
+			await groundAlert({
+				text: 'Test alert text',
+			});
+
+			expect(generateEnrichedAlert).toHaveBeenCalledWith(expect.objectContaining({
+				options: expect.objectContaining({
+					maxLength: 2000,
 				}),
 			}));
 		});

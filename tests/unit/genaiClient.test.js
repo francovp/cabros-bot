@@ -15,12 +15,14 @@ jest.mock('../../src/services/grounding/config', () => ({
 
 const genaiClient = require('../../src/services/grounding/genaiClient');
 const sentryService = require('../../src/services/monitoring/SentryService');
+const geminiQuotaManager = require('../../src/services/grounding/geminiQuotaManager');
 
 // Mock fetch globally
 global.fetch = jest.fn();
 
 describe('GenaiClient robustness', () => {
 	beforeEach(() => {
+		geminiQuotaManager.resetForTesting();
 		// Reset genAI to avoid using the real SDK in tests
 		genaiClient.genAI = { models: { generateContent: jest.fn().mockResolvedValue({}) } };
 		jest.resetAllMocks();
@@ -106,6 +108,38 @@ describe('GenaiClient robustness', () => {
 			expect(global.fetch).not.toHaveBeenCalled();
 		});
 
+		it('does not invoke Google Search and rethrows quota error when cooldown is already active and rethrowQuotaErrors=true', async () => {
+			geminiQuotaManager.triggerQuotaCooldown({ status: 429, retryDelay: 10000 });
+
+			await expect(genaiClient.search({ query: 'test', rethrowQuotaErrors: true }))
+				.rejects
+				.toThrow('Gemini quota cooldown active');
+
+			expect(genaiClient.genAI.models.generateContent).not.toHaveBeenCalled();
+			expect(global.fetch).not.toHaveBeenCalled();
+		});
+
+		it('does not invoke Google Search and falls back to Brave when cooldown is already active and rethrowQuotaErrors=false', async () => {
+			geminiQuotaManager.triggerQuotaCooldown({ status: 429, retryDelay: 10000 });
+			const controller = new AbortController();
+
+			global.fetch.mockImplementationOnce((url, opts) => {
+				expect(opts.signal).toBe(controller.signal);
+				return Promise.resolve({
+					ok: true,
+					json: async () => ({
+						web: { results: [{ title: 'BraveCooldownFallback', url: 'http://cooldown-fallback.com' }] },
+					}),
+				});
+			});
+
+			const res = await genaiClient.search({ query: 'test', rethrowQuotaErrors: false, signal: controller.signal });
+
+			expect(res.results[0].title).toBe('BraveCooldownFallback');
+			expect(genaiClient.genAI.models.generateContent).not.toHaveBeenCalled();
+			expect(global.fetch).toHaveBeenCalledTimes(1);
+		});
+
 		it('falls back to Brave when Google Search returns no results', async () => {
 			// Mock empty Google Search response
 			genaiClient.genAI.models.generateContent.mockResolvedValueOnce({
@@ -129,6 +163,52 @@ describe('GenaiClient robustness', () => {
 			expect(res.results).toHaveLength(1);
 			expect(res.results[0].title).toBe('Brave1');
 			expect(res.searchResultText).toContain('[1] Title: Brave1');
+		});
+	});
+
+	describe('AbortSignal & Timeout handling', () => {
+		it('rethrows abort error when search receives an aborted signal', async () => {
+			const controller = new AbortController();
+			controller.abort(new Error('Grounding timeout'));
+
+			await expect(genaiClient.search({ query: 'test', signal: controller.signal }))
+				.rejects
+				.toThrow('Grounding timeout');
+		});
+
+		it('aborts hanging Google Search SDK call when signal aborts', async () => {
+			const controller = new AbortController();
+			genaiClient.genAI.models.generateContent.mockImplementationOnce(() => new Promise(() => {}));
+
+			const searchPromise = genaiClient.search({ query: 'test', signal: controller.signal });
+			setTimeout(() => controller.abort(new Error('Grounding timeout')), 20);
+
+			await expect(searchPromise).rejects.toThrow('Grounding timeout');
+		});
+
+		it('passes signal to Brave fetch call', async () => {
+			const controller = new AbortController();
+			genaiClient.genAI.models.generateContent.mockRejectedValueOnce(new Error('Google API Error'));
+			global.fetch.mockImplementationOnce((url, opts) => {
+				expect(opts.signal).toBe(controller.signal);
+				return Promise.resolve({
+					ok: true,
+					json: async () => ({ web: { results: [] } }),
+				});
+			});
+
+			await genaiClient.search({ query: 'test', signal: controller.signal });
+			expect(global.fetch).toHaveBeenCalledTimes(1);
+		});
+
+		it('aborts hanging llmCall when signal aborts', async () => {
+			const controller = new AbortController();
+			genaiClient.genAI.models.generateContent.mockImplementationOnce(() => new Promise(() => {}));
+
+			const llmPromise = genaiClient.llmCall({ prompt: 'test', opts: { signal: controller.signal } });
+			setTimeout(() => controller.abort(new Error('Grounding timeout')), 20);
+
+			await expect(llmPromise).rejects.toThrow('Grounding timeout');
 		});
 	});
 
@@ -314,6 +394,29 @@ describe('GenaiClient robustness', () => {
 			// Azure and OpenRouter should NOT be called
 			expect(azureSpy).not.toHaveBeenCalled();
 			expect(openRouterSpy).not.toHaveBeenCalled();
+		});
+	});
+
+	describe('llmCall quota cooldown handling', () => {
+		it('throws quota error and does not invoke generateContent when cooldown is active', async () => {
+			geminiQuotaManager.triggerQuotaCooldown({ status: 429, retryDelay: 10000 });
+
+			await expect(genaiClient.llmCall({ prompt: 'test prompt' }))
+				.rejects
+				.toThrow('Gemini quota cooldown active');
+
+			expect(genaiClient.genAI.models.generateContent).not.toHaveBeenCalled();
+		});
+
+		it('skips Gemini generateContent and throws quota cooldown error in llmCallv2 when Gemini cooldown is active', async () => {
+			geminiQuotaManager.triggerQuotaCooldown({ status: 429, retryDelay: 10000 });
+
+			await expect(genaiClient.llmCallv2({
+				systemPrompt: 'system',
+				userPrompt: 'user',
+			})).rejects.toThrow('Gemini quota cooldown active');
+
+			expect(genaiClient.genAI.models.generateContent).not.toHaveBeenCalled();
 		});
 	});
 

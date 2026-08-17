@@ -7,7 +7,7 @@ export default [
     js.configs.recommended,
     eslintConfigPrettier,
     {
-        files: ["src/**/*.js", "*.js", "tests/**/*.js"],
+        files: ["src/**/*.js", "*.js", "tests/**/*.js", "ops/**/*.js"],
         languageOptions: {
             ecmaVersion: 2022,
             sourceType: "commonjs",

@@ -20,6 +20,21 @@ describe('SentryService', () => {
 		service = new SentryService();
 		// Reset env vars
 		process.env = { ...originalEnv };
+		delete process.env.VERCEL_ENV;
+		delete process.env.VERCEL_GIT_COMMIT_SHA;
+		delete process.env.VERCEL_GIT_REPO_OWNER;
+		delete process.env.VERCEL_GIT_REPO_OWNER_NAME;
+		delete process.env.VERCEL_GIT_REPO_SLUG;
+		delete process.env.RAILWAY_ENVIRONMENT_NAME;
+		delete process.env.RAILWAY_GIT_COMMIT_SHA;
+		delete process.env.RAILWAY_GIT_PULL_REQUEST_NUMBER;
+		delete process.env.RAILWAY_GIT_REPO_OWNER;
+		delete process.env.RAILWAY_GIT_REPO_NAME;
+		delete process.env.RENDER_GIT_COMMIT;
+		delete process.env.GIT_COMMIT;
+		delete process.env.COMMIT_SHA;
+		delete process.env.GITHUB_SHA;
+		delete process.env.SOURCE_VERSION;
 		// Clear all mocks
 		jest.clearAllMocks();
 	});
@@ -43,6 +58,14 @@ describe('SentryService', () => {
 			it('should return preview when RENDER=true and IS_PULL_REQUEST=true', () => {
 				process.env.RENDER = 'true';
 				process.env.IS_PULL_REQUEST = 'true';
+				delete process.env.SENTRY_ENVIRONMENT;
+
+				const env = service._deriveEnvironment();
+				expect(env).toBe('preview');
+			});
+
+			it('should return preview when VERCEL_ENV=preview', () => {
+				process.env.VERCEL_ENV = 'preview';
 				delete process.env.SENTRY_ENVIRONMENT;
 
 				const env = service._deriveEnvironment();
@@ -827,6 +850,12 @@ describe('profiling configuration', () => {
 		process.env.SENTRY_PROFILE_SESSION_SAMPLE_RATE = '1';
 		service.init();
 
+		const initCall = Sentry.init.mock.calls[0][0];
+		expect(initCall.profileSessionSampleRate).toBeUndefined();
+		expect(initCall.profileLifecycle).toBeUndefined();
+	});
+	});
+
 	describe('Sanitization and Tag Enrichment (GH-340)', () => {
 		it('should sanitize sensitive tokens, bot tokens, GreenAPI URLs, and chat IDs from strings', () => {
 			const rawMessage = 'Error sending to bot123456:ABC-DEF1234ghIkl-zyx57 via https://api.green-api.com/waInstance1101/sendMessage/secret-token for chat 56912345678@c.us with token=secret123';
@@ -868,6 +897,7 @@ describe('profiling configuration', () => {
 		it('should enrich tags with endpoint, status_code, provider, and trace_id when available', () => {
 			process.env.ENABLE_SENTRY = 'true';
 			process.env.SENTRY_DSN = 'https://key@sentry.io/123';
+			process.env.SENTRY_TRACES_SAMPLE_RATE = '1.0';
 			service.init();
 
 			const activeSpanMock = {

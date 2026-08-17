@@ -117,6 +117,13 @@ const FEATURE_NAMES = {
 	'process': 'process',
 };
 
+const {
+	getDeploymentCommit,
+	getDeploymentRepoSlug,
+	isPreviewEnvironment,
+	isProductionLikeEnvironment,
+} = require('../../lib/deploymentEnvironment');
+
 const DEFAULT_CONSOLE_LOG_LEVELS = ['warn', 'error'];
 const ALLOWED_CONSOLE_LOG_LEVELS = new Set(['debug', 'info', 'warn', 'error', 'log', 'assert', 'trace']);
 
@@ -147,13 +154,11 @@ class SentryService {
 			return process.env.SENTRY_ENVIRONMENT;
 		}
 
-		// If on Render and this is a PR preview
-		if (process.env.RENDER === 'true' && process.env.IS_PULL_REQUEST === 'true') {
+		if (isPreviewEnvironment()) {
 			return 'preview';
 		}
 
-		// If in production mode or on Render
-		if (process.env.NODE_ENV === 'production' || process.env.RENDER === 'true') {
+		if (isProductionLikeEnvironment()) {
 			return 'production';
 		}
 
@@ -171,10 +176,10 @@ class SentryService {
 			return process.env.SENTRY_RELEASE;
 		}
 
-		// If RENDER_GIT_COMMIT is available, use short commit hash
-		if (process.env.RENDER_GIT_COMMIT) {
-			const shortCommit = process.env.RENDER_GIT_COMMIT.substring(0, 7);
-			const repoSlug = process.env.RENDER_GIT_REPO_SLUG || 'cabros-bot';
+		const deploymentCommit = getDeploymentCommit();
+		if (deploymentCommit) {
+			const shortCommit = deploymentCommit.substring(0, 7);
+			const repoSlug = getDeploymentRepoSlug();
 			return `${repoSlug}@${shortCommit}`;
 		}
 
@@ -558,7 +563,7 @@ class SentryService {
 			.replace(/bot\d+:[A-Za-z0-9_-]+/g, 'bot[REDACTED]')
 			.replace(/(waInstance\d+\/[^/]+\/)[A-Za-z0-9_-]+/g, '$1[REDACTED]')
 			.replace(/(api\/webhooks\/\d+\/)[A-Za-z0-9_-]+/g, '$1[REDACTED]')
-			.replace(/([?&](?:api[-_]?key|token|secret|password|access_token|authorization)=)[^&]+/gi, '$1[REDACTED]')
+			.replace(/((?:[?&]|\b)(?:api[-_]?key|token|secret|password|access_token|authorization)=)[^&\s]+/gi, '$1[REDACTED]')
 			.replace(/\b\d{8,15}@(c|g)\.us\b/g, '[REDACTED_CHAT_ID]')
 			.replace(/(chat[_-]?id["']?\s*[:=]\s*["']?)\d+/gi, '$1[REDACTED]');
 	}
@@ -646,10 +651,12 @@ class SentryService {
 				error_type: event.type,
 				is_process_level: String(event.isProcessLevel),
 				...(event.http && {
-					endpoint: event.http.endpoint,
-					http_method: event.http.method,
-					status_code: String(event.http.statusCode),
-					http_category: `${Math.floor(event.http.statusCode / 100)}xx`,
+					...(event.http.endpoint && { endpoint: event.http.endpoint }),
+					...(event.http.method && { http_method: event.http.method }),
+					...(event.http.statusCode !== undefined && event.http.statusCode !== null && !isNaN(event.http.statusCode) && {
+						status_code: String(event.http.statusCode),
+						http_category: `${Math.floor(Number(event.http.statusCode) / 100)}xx`,
+					}),
 				}),
 				...(event.external && {
 					provider: event.external.provider,

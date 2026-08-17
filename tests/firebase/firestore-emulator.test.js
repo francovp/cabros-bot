@@ -101,7 +101,8 @@ describe('Firestore emulator integration', () => {
 	});
 
 	it('keeps idempotency reservations transactional and persists completed responses', async () => {
-		expect(await idempotencyStorageService.reserveEntry('firebase-key', 'payload-a', 60000)).toMatchObject({
+		const freshReservation = await idempotencyStorageService.reserveEntry('firebase-key', 'payload-a', 60000);
+		expect(freshReservation).toMatchObject({
 			state: 'fresh',
 		});
 		expect(await idempotencyStorageService.reserveEntry('firebase-key', 'payload-b', 60000)).toMatchObject({
@@ -113,6 +114,7 @@ describe('Firestore emulator integration', () => {
 			'payload-a',
 			{ statusCode: 202, body: { accepted: true }, headers: { 'x-test': 'ok' } },
 			60000,
+			freshReservation.claimToken,
 		);
 		expect(await idempotencyStorageService.getEntry('firebase-key', 'payload-a')).toMatchObject({
 			state: 'completed',
@@ -120,8 +122,8 @@ describe('Firestore emulator integration', () => {
 			responseBody: { accepted: true },
 		});
 
-		await idempotencyStorageService.reserveEntry('released-key', 'payload', 60000);
-		await idempotencyStorageService.releaseEntry('released-key', 'payload');
+		const releaseReservation = await idempotencyStorageService.reserveEntry('released-key', 'payload', 60000);
+		await idempotencyStorageService.releaseEntry('released-key', 'payload', releaseReservation.claimToken);
 		expect((await firestore.collection('idempotency_keys').get()).docs).toHaveLength(1);
 	});
 
@@ -143,6 +145,30 @@ describe('Firestore emulator integration', () => {
 		expect((await firestore.collection('tradingviewJobs').doc('firebase-job').get()).data()).not.toHaveProperty('payload');
 		expect(await jobRepository.delete('firebase-job')).toBe(true);
 		expect(await jobRepository.get('firebase-job')).toBeNull();
+	});
+
+	it('stores terminal job expiry without expiring active jobs', async () => {
+		const createdAt = new Date(Date.now() - 1000).toISOString();
+		await jobRepository.save({
+			jobId: 'terminal-retention-job',
+			type: 'expanded-analysis',
+			status: 'completed',
+			createdAt,
+		});
+		await jobRepository.save({
+			jobId: 'active-retention-job',
+			type: 'expanded-analysis',
+			status: 'processing',
+			createdAt,
+		});
+
+		const terminal = await firestore.collection('tradingviewJobs').doc('terminal-retention-job').get();
+		const active = await firestore.collection('tradingviewJobs').doc('active-retention-job').get();
+
+		expect(terminal.data().expiresAt.toDate()).toEqual(
+			new Date(new Date(createdAt).getTime() + 3600000),
+		);
+		expect(active.data()).not.toHaveProperty('expiresAt');
 	});
 
 	it('persists, lists, and deletes scanner presets', async () => {
