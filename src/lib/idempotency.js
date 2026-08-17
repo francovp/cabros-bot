@@ -168,7 +168,11 @@ function idempotencyMiddleware(req, res, next) {
 				&& responseBody.code === 'JOB_QUEUE_ACCEPTANCE_UNKNOWN'
 				&& typeof responseBody.jobId === 'string'
 				&& responseBody.jobId.length > 0;
-			if (res.statusCode >= 500 && !replayableIndeterminateQueueResponse) {
+			const replayableIndeterminateOrderResponse = res.statusCode === 503
+				&& responseBody
+				&& typeof responseBody === 'object'
+				&& responseBody.code === 'BINANCE_ORDER_STATUS_UNKNOWN';
+			if (res.statusCode >= 500 && !replayableIndeterminateQueueResponse && !replayableIndeterminateOrderResponse) {
 				return;
 			}
 			responseCached = true;
@@ -186,13 +190,13 @@ function idempotencyMiddleware(req, res, next) {
 			});
 		};
 
-		res.send = function (body) {
+		res.send = function(body) {
 			const result = originalSend.apply(this, arguments);
 			cacheResponse(body);
 			return result;
 		};
 
-		res.json = function (obj) {
+		res.json = function(obj) {
 			const result = originalJson.apply(this, arguments);
 			cacheResponse(obj);
 			return result;
@@ -254,5 +258,6 @@ function idempotencyMiddleware(req, res, next) {
 }
 
 module.exports = {
+	getIdempotencyKey,
 	idempotencyMiddleware,
 };

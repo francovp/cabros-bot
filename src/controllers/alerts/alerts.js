@@ -250,12 +250,17 @@ function escapeCsvValue(value) {
 	const serialized = typeof value === 'object'
 		? JSON.stringify(value)
 		: String(value);
+	const safeSerialized = typeof value === 'string'
+		&& /^[\t\r\n]*[=+\-@]/.test(value)
+		&& !Number.isFinite(Number(value))
+		? `'${serialized}`
+		: serialized;
 
-	if (/[",\n\r]/.test(serialized)) {
-		return `"${serialized.replace(/"/g, '""')}"`;
+	if (/[",\n\r]/.test(safeSerialized)) {
+		return `"${safeSerialized.replace(/"/g, '""')}"`;
 	}
 
-	return serialized;
+	return safeSerialized;
 }
 
 function buildCsv(alerts, includeText) {

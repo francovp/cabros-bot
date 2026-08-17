@@ -13,7 +13,7 @@ const MAX_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 const PARAMETER_SCHEMA = Object.freeze({
 	NEWS_ALERT_THRESHOLD: { type: 'number', defaultValue: 0.7, min: 0, max: 1 },
-	NEWS_TIMEOUT_MS: { type: 'number', defaultValue: 60000, integer: true, min: 1000, max: 120000 },
+	NEWS_TIMEOUT_MS: { type: 'number', defaultValue: 30000, integer: true, min: 1000, max: 120000 },
 	NEWS_GEMINI_CONCURRENCY: { type: 'number', defaultValue: Infinity, integer: true, min: 1, max: 50 },
 	NEWS_GEMINI_QUOTA_MAX_RETRIES: { type: 'number', defaultValue: 2, integer: true, min: 1, max: 5 },
 	NEWS_GEMINI_QUOTA_RETRY_BASE_MS: { type: 'number', defaultValue: 1000, integer: true, min: 1, max: 60000 },
@@ -21,6 +21,31 @@ const PARAMETER_SCHEMA = Object.freeze({
 	TRADINGVIEW_MCP_MAX_RETRIES: { type: 'number', defaultValue: 3, integer: true, min: 1, max: 5 },
 	TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS: { type: 'number', defaultValue: 12000, integer: true, min: 1000, max: 120000 },
 	ENABLE_MESSAGE_FOOTER_METADATA: { type: 'boolean', defaultValue: true },
+	GROUNDING_MAX_SOURCES: { type: 'number', defaultValue: 3, integer: true, min: 1, max: 20 },
+	GROUNDING_TIMEOUT_MS: { type: 'number', defaultValue: 30000, integer: true, min: 1, max: 120000 },
+	GROUNDING_MAX_LENGTH: { type: 'number', defaultValue: 2000, integer: true, min: 1, max: 10000 },
+	NEWS_CACHE_TTL_HOURS: { type: 'number', defaultValue: 6, min: 0, max: 720 },
+	BINANCE_FETCH_TIMEOUT_MS: { type: 'number', defaultValue: 5000, integer: true, min: 1, max: 60000 },
+	TRADINGVIEW_MCP_DEFAULT_TIMEFRAME: {
+		type: 'string',
+		defaultValue: '1h',
+		allowedValues: ['5m', '15m', '1h', '4h', '1D', '1W', '1M'],
+	},
+	EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS: { type: 'number', defaultValue: 60000, integer: true, min: 1, max: 120000 },
+	DISCORD_MAX_RETRIES: { type: 'number', defaultValue: 2, integer: true, min: 0, max: 10 },
+	DISCORD_FALLBACK_RETRY_DELAY_MS: { type: 'number', defaultValue: 500, integer: true, min: 1, max: 30000 },
+	DISCORD_MAX_RETRY_DELAY_MS: { type: 'number', defaultValue: 5000, integer: true, min: 1, max: 60000 },
+	DISCORD_MAX_TOTAL_RETRY_WAIT_MS: { type: 'number', defaultValue: 10000, integer: true, min: 1, max: 120000 },
+	WEBHOOK_IDEMPOTENCY_TTL_MS: { type: 'number', defaultValue: 300000, integer: true, min: 1, max: 86400000 },
+	JOB_CALLBACK_RETRY_DELAY_MS: { type: 'number', defaultValue: 1000, integer: true, min: 1, max: 60000 },
+	SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS: { type: 'number', defaultValue: 300000, integer: true, min: 1, max: 3600000 },
+	SIGNAL_OUTCOME_EVALUATION_BATCH_LIMIT: { type: 'number', defaultValue: 50, integer: true, min: 1, max: 500 },
+	SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS: { type: 'number', defaultValue: 30000, integer: true, min: 1, max: 300000 },
+	ENABLE_GEMINI_GROUNDING: { type: 'boolean', defaultValue: false },
+	ENABLE_TRADINGVIEW_MCP_ENRICHMENT: { type: 'boolean', defaultValue: false },
+	ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION: { type: 'boolean', defaultValue: false },
+	ENABLE_MARKET_SCANNER: { type: 'boolean', defaultValue: false },
+	ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP: { type: 'boolean', defaultValue: false },
 });
 
 let remoteOverrides = {};
@@ -63,10 +88,25 @@ function parseBoolean(value, fallback) {
 	return fallback;
 }
 
+function parseString(value, schema, fallback) {
+	if (value === undefined || value === null || value === '') {
+		return fallback;
+	}
+	const str = String(value).trim();
+	if (Array.isArray(schema.allowedValues) && !schema.allowedValues.includes(str)) {
+		return fallback;
+	}
+	return str;
+}
+
 function parseValue(value, schema, fallback) {
-	return schema.type === 'boolean'
-		? parseBoolean(value, fallback)
-		: parseBoundedNumber(value, schema, fallback);
+	if (schema.type === 'boolean') {
+		return parseBoolean(value, fallback);
+	}
+	if (schema.type === 'string' || schema.allowedValues) {
+		return parseString(value, schema, fallback);
+	}
+	return parseBoundedNumber(value, schema, fallback);
 }
 
 function getEnvironmentConfig() {
@@ -75,17 +115,28 @@ function getEnvironmentConfig() {
 		return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 	};
 
-	return {
-		NEWS_ALERT_THRESHOLD: Number.parseFloat(process.env.NEWS_ALERT_THRESHOLD || 0.7),
-		NEWS_TIMEOUT_MS: Number.parseInt(process.env.NEWS_TIMEOUT_MS || 60000, 10),
-		NEWS_GEMINI_CONCURRENCY: parseLegacyPositiveInteger(process.env.NEWS_GEMINI_CONCURRENCY, Infinity),
-		NEWS_GEMINI_QUOTA_MAX_RETRIES: parseLegacyPositiveInteger(process.env.NEWS_GEMINI_QUOTA_MAX_RETRIES, 2),
-		NEWS_GEMINI_QUOTA_RETRY_BASE_MS: parseLegacyPositiveInteger(process.env.NEWS_GEMINI_QUOTA_RETRY_BASE_MS, 1000),
-		TRADINGVIEW_MCP_TIMEOUT_MS: Number.parseInt(process.env.TRADINGVIEW_MCP_TIMEOUT_MS || 12000, 10),
-		TRADINGVIEW_MCP_MAX_RETRIES: Number.parseInt(process.env.TRADINGVIEW_MCP_MAX_RETRIES || 3, 10),
-		TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS: Number.parseInt(process.env.TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS || 12000, 10),
-		ENABLE_MESSAGE_FOOTER_METADATA: process.env.ENABLE_MESSAGE_FOOTER_METADATA !== 'false',
-	};
+	const config = {};
+	for (const [key, schema] of Object.entries(PARAMETER_SCHEMA)) {
+		if (key === 'NEWS_ALERT_THRESHOLD') {
+			config[key] = Number.parseFloat(process.env.NEWS_ALERT_THRESHOLD || 0.7);
+		} else if (key === 'NEWS_TIMEOUT_MS') {
+			config[key] = parseLegacyPositiveInteger(process.env.NEWS_TIMEOUT_MS, 30000);
+		} else if (key === 'NEWS_GEMINI_CONCURRENCY') {
+			config[key] = parseLegacyPositiveInteger(process.env.NEWS_GEMINI_CONCURRENCY, Infinity);
+		} else if (key === 'NEWS_GEMINI_QUOTA_MAX_RETRIES') {
+			config[key] = parseLegacyPositiveInteger(process.env.NEWS_GEMINI_QUOTA_MAX_RETRIES, 2);
+		} else if (key === 'NEWS_GEMINI_QUOTA_RETRY_BASE_MS') {
+			config[key] = parseLegacyPositiveInteger(process.env.NEWS_GEMINI_QUOTA_RETRY_BASE_MS, 1000);
+		} else if (key === 'ENABLE_MESSAGE_FOOTER_METADATA') {
+			config[key] = process.env.ENABLE_MESSAGE_FOOTER_METADATA !== 'false';
+		} else if (key === 'SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS') {
+			const envVal = process.env.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS || process.env.SIGNAL_OUTCOME_EVALUATION_CADENCE_MS;
+			config[key] = parseValue(envVal, schema, schema.defaultValue);
+		} else {
+			config[key] = parseValue(process.env[key], schema, schema.defaultValue);
+		}
+	}
+	return config;
 }
 
 function buildDefaultConfig() {

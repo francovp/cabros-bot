@@ -14,6 +14,7 @@
  *   docId         - string (SHA-256 of idempotency:<key>)
  *   payloadHash   - string (SHA-256 of canonicalized request fingerprint)
  *   state         - string ('pending' | 'completed')
+ *   claimToken    - string, unique token for the current pending reservation
  *   statusCode    - number (e.g. 200, 202, 400)
  *   responseBody  - object|string|null
  *   headers       - object
@@ -115,7 +116,7 @@ function getStorageStatus() {
  * @param {string} key - Raw idempotency key (hashed internally)
  * @param {string} payloadHash - SHA-256 hash of canonicalized request payload
  * @param {number} ttlMs - Time to live in ms
- * @returns {Promise<{state: 'fresh' | 'pending' | 'completed' | 'conflict', record?: Object}|null>}
+ * @returns {Promise<{state: 'fresh' | 'pending' | 'completed' | 'conflict', claimToken?: string, record?: Object}|null>}
  */
 async function reserveEntry(key, payloadHash, ttlMs) {
 	const firestore = getFirestore();
@@ -125,12 +126,19 @@ async function reserveEntry(key, payloadHash, ttlMs) {
 
 	const docId = hashKey(key);
 	const docRef = firestore.collection(COLLECTION_NAME).doc(docId);
+	const claimToken = crypto.randomUUID();
 
 	try {
 		const result = await firestore.runTransaction(async (transaction) => {
 			const snapshot = await transaction.get(docRef);
 			const nowMs = Date.now();
 			const nowTimestamp = admin.firestore.Timestamp.fromMillis(nowMs);
+			// Pending claims must remain alive for at least PENDING_STALE_TIMEOUT_MS so that
+			// Firestore native TTL cannot delete an active pending document before reserveEntry
+			// considers it stale. Without this guard a short WEBHOOK_IDEMPOTENCY_TTL_MS (< 180 s)
+			// would let another replica re-reserve the same key and produce a duplicate response.
+			const pendingExpiresAtMs = nowMs + Math.max(ttlMs, PENDING_STALE_TIMEOUT_MS);
+			const pendingExpiresAtTimestamp = admin.firestore.Timestamp.fromMillis(pendingExpiresAtMs);
 			const expiresAtTimestamp = admin.firestore.Timestamp.fromMillis(nowMs + ttlMs);
 
 			if (snapshot.exists) {
@@ -179,12 +187,13 @@ async function reserveEntry(key, payloadHash, ttlMs) {
 				docId,
 				payloadHash,
 				state: 'pending',
+				claimToken,
 				createdAt: nowTimestamp,
-				expiresAt: expiresAtTimestamp,
+				expiresAt: pendingExpiresAtTimestamp,
 				updatedAt: nowTimestamp,
 			});
 
-			return { state: 'fresh' };
+			return { state: 'fresh', claimToken };
 		});
 
 		return result;
@@ -256,11 +265,12 @@ async function waitForPendingCompletion(key, payloadHash, maxWaitMs = 15000, pol
  * @param {string} payloadHash - Canonical request hash
  * @param {Object} responseDetails - { statusCode, body, headers }
  * @param {number} ttlMs - TTL in ms
+ * @param {string} claimToken - Token returned by the matching fresh reservation
  * @returns {Promise<void>}
  */
-async function setEntry(key, payloadHash, { statusCode, body, headers }, ttlMs) {
+async function setEntry(key, payloadHash, { statusCode, body, headers }, ttlMs, claimToken) {
 	const firestore = getFirestore();
-	if (!firestore) {
+	if (!firestore || !claimToken) {
 		return;
 	}
 
@@ -281,18 +291,34 @@ async function setEntry(key, payloadHash, { statusCode, body, headers }, ttlMs) 
 			}
 		}
 
-		await docRef.set({
-			docId,
-			payloadHash,
-			state: 'completed',
-			statusCode,
-			responseBody: body !== undefined ? body : null,
-			headers: cleanHeaders,
-			createdAt: now,
-			expiresAt,
-			updatedAt: now,
+		const stored = await firestore.runTransaction(async (transaction) => {
+			const snapshot = await transaction.get(docRef);
+			if (!snapshot.exists) {
+				return false;
+			}
+
+			const data = snapshot.data();
+			if (data.state !== 'pending' || data.payloadHash !== payloadHash || data.claimToken !== claimToken) {
+				return false;
+			}
+
+			transaction.set(docRef, {
+				docId,
+				payloadHash,
+				state: 'completed',
+				statusCode,
+				responseBody: body !== undefined ? body : null,
+				headers: cleanHeaders,
+				createdAt: data.createdAt || now,
+				expiresAt,
+				updatedAt: now,
+			});
+			return true;
 		});
-		console.debug(`[IdempotencyStorageService] Completed record stored for hash: ${docId}`);
+
+		if (stored) {
+			console.debug(`[IdempotencyStorageService] Completed record stored for hash: ${docId}`);
+		}
 	} catch (error) {
 		console.warn(`[IdempotencyStorageService] setEntry error for hash ${docId} (fail-open):`, error.message);
 	}
@@ -303,11 +329,12 @@ async function setEntry(key, payloadHash, { statusCode, body, headers }, ttlMs) 
  *
  * @param {string} key - Raw key
  * @param {string} payloadHash - Canonical request hash
+ * @param {string} claimToken - Token returned by the matching fresh reservation
  * @returns {Promise<void>}
  */
-async function releaseEntry(key, payloadHash) {
+async function releaseEntry(key, payloadHash, claimToken) {
 	const firestore = getFirestore();
-	if (!firestore) {
+	if (!firestore || !claimToken) {
 		return;
 	}
 
@@ -315,13 +342,23 @@ async function releaseEntry(key, payloadHash) {
 	const docRef = firestore.collection(COLLECTION_NAME).doc(docId);
 
 	try {
-		const snapshot = await docRef.get();
-		if (snapshot.exists) {
-			const data = snapshot.data();
-			if (data.state === 'pending' && data.payloadHash === payloadHash) {
-				await docRef.delete();
-				console.debug(`[IdempotencyStorageService] Released pending record for hash: ${docId}`);
+		const released = await firestore.runTransaction(async (transaction) => {
+			const snapshot = await transaction.get(docRef);
+			if (!snapshot.exists) {
+				return false;
 			}
+
+			const data = snapshot.data();
+			if (data.state !== 'pending' || data.payloadHash !== payloadHash || data.claimToken !== claimToken) {
+				return false;
+			}
+
+			transaction.delete(docRef);
+			return true;
+		});
+
+		if (released) {
+			console.debug(`[IdempotencyStorageService] Released pending record for hash: ${docId}`);
 		}
 	} catch (error) {
 		console.warn(`[IdempotencyStorageService] releaseEntry error for hash ${docId} (fail-open):`, error.message);

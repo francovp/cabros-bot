@@ -3,6 +3,96 @@
 const { JobRepository, _resetForTesting } = require('../../src/services/jobs/JobRepository');
 
 describe('JobRepository durable claims', () => {
+	it('stores a one-hour expiry for terminal durable jobs only', async () => {
+		const terminalCreatedAt = new Date(Date.now() - 1000).toISOString();
+		const activeCreatedAt = new Date(Date.now() - 1000).toISOString();
+		const transaction = {
+			get: jest.fn().mockResolvedValue({ exists: false }),
+			set: jest.fn(),
+		};
+		const firestore = {
+			collection: jest.fn(() => ({ doc: jest.fn((id) => ({ id })) })),
+			runTransaction: jest.fn(async (callback) => callback(transaction)),
+		};
+		const repository = new JobRepository();
+		repository._getFirestore = jest.fn(() => firestore);
+
+		try {
+			await repository.save({
+				jobId: 'terminal-retention-job',
+				type: 'expanded-analysis',
+				status: 'completed',
+				createdAt: terminalCreatedAt,
+			});
+
+			const terminalWrite = transaction.set.mock.calls[0][1];
+			expect(terminalWrite.expiresAt.toDate()).toEqual(
+				new Date(new Date(terminalCreatedAt).getTime() + 3600000),
+			);
+
+			transaction.set.mockClear();
+			await repository.save({
+				jobId: 'active-retention-job',
+				type: 'expanded-analysis',
+				status: 'processing',
+				createdAt: activeCreatedAt,
+			});
+
+			expect(transaction.set.mock.calls[0][1]).not.toHaveProperty('expiresAt');
+		} finally {
+			_resetForTesting();
+		}
+	});
+
+	it('preserves terminal expiry during callback transactions', async () => {
+		const createdAt = new Date(Date.now() - 1000).toISOString();
+		const currentJob = {
+			jobId: 'job-callback-retention-123',
+			status: 'completed',
+			createdAt,
+			callbackStatus: { status: 'pending', attempts: [] },
+		};
+		const docRef = {};
+		const transaction = {
+			get: jest.fn().mockResolvedValue({
+				exists: true,
+				id: currentJob.jobId,
+				data: () => currentJob,
+			}),
+			set: jest.fn(),
+		};
+		const firestore = {
+			collection: jest.fn(() => ({ doc: jest.fn(() => docRef) })),
+			runTransaction: jest.fn(async callback => callback(transaction)),
+		};
+		const repository = new JobRepository();
+		repository._getFirestore = jest.fn(() => firestore);
+
+		try {
+			await expect(repository.updateCallbackStatus(currentJob.jobId, 'completed', {
+				status: 'success',
+				attempts: [{ attempt: 1, statusCode: 200 }],
+			})).resolves.toBe(true);
+			expect(transaction.set.mock.calls[0][1].expiresAt.toDate()).toEqual(
+			new Date(new Date(createdAt).getTime() + 3600000),
+		);
+
+			transaction.set.mockClear();
+			transaction.get.mockResolvedValue({
+				exists: true,
+				id: currentJob.jobId,
+				data: () => currentJob,
+			});
+			await expect(repository.claimCallbackDelivery(currentJob.jobId, 'completed', 'delivery-1'))
+				.resolves.toBe(true);
+			expect(transaction.set.mock.calls[0][1].expiresAt.toDate()).toEqual(
+				new Date(new Date(createdAt).getTime() + 3600000),
+			);
+		} finally {
+			_resetForTesting();
+		}
+	});
+
 	it('prefers a fresh durable row over a stale web-process cache entry', async () => {
 		const jobId = 'job-list-123';
 		const durableJob = {
@@ -378,13 +468,14 @@ describe('JobRepository durable claims', () => {
 			runTransaction: jest.fn(async callback => callback(transaction)),
 		};
 		const repository = new JobRepository();
+		repository.forceFirestoreForTests = true;
 		repository._getFirestore = jest.fn(() => firestore);
 
 		await expect(repository.save({
 			jobId: 'job-123',
 			status: 'processing',
 			execution: { mode: 'render-worker', status: 'running', workerId: 'worker-1' },
-		}, { required: true })).resolves.toBeNull();
+		}, { required: true })).resolves.toBe(false);
 
 		expect(transaction.set).not.toHaveBeenCalled();
 	});
@@ -408,13 +499,14 @@ describe('JobRepository durable claims', () => {
 			runTransaction: jest.fn(async callback => callback(transaction)),
 		};
 		const repository = new JobRepository();
+		repository.forceFirestoreForTests = true;
 		repository._getFirestore = jest.fn(() => firestore);
 
 		await expect(repository.save({
 			jobId: 'job-123',
 			status: 'processing',
 			execution: { mode: 'render-worker', status: 'queued' },
-		}, { required: true })).resolves.toBeNull();
+		}, { required: true })).resolves.toBe(false);
 
 		expect(transaction.set).not.toHaveBeenCalled();
 	});
@@ -482,9 +574,9 @@ describe('JobRepository durable claims', () => {
 		const transaction = {
 			get: jest.fn().mockResolvedValue({
 				exists: true,
-				id: 'job-123',
+				id: 'job-preserve-callback-123',
 				data: () => ({
-					jobId: 'job-123',
+					jobId: 'job-preserve-callback-123',
 					status: 'processing',
 					execution: { mode: 'render-worker', status: 'running', workerId: 'worker-1', attempt: 2 },
 					callbackStatus,
@@ -496,15 +588,17 @@ describe('JobRepository durable claims', () => {
 			collection: jest.fn(() => ({ doc: jest.fn(() => docRef) })),
 			runTransaction: jest.fn(async callback => callback(transaction)),
 		};
+		process.env.ENABLE_FIRESTORE_JOB_STORAGE = 'true';
 		const repository = new JobRepository();
+		repository.forceFirestoreForTests = true;
 		repository._getFirestore = jest.fn(() => firestore);
 
 		await expect(repository.save({
-			jobId: 'job-123',
+			jobId: 'job-preserve-callback-123',
 			status: 'processing',
 			execution: { mode: 'render-worker', status: 'running', workerId: 'worker-1', attempt: 2 },
 			callbackStatus: { status: 'pending', attempts: [] },
-		}, { required: true })).resolves.toBe('job-123');
+		}, { required: true })).resolves.toBe('job-preserve-callback-123');
 
 		expect(transaction.set).toHaveBeenCalledWith(
 			docRef,

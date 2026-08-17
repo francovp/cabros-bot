@@ -21,6 +21,7 @@ describe('Firebase admin browser configuration', () => {
 			ENABLE_FIREBASE_ADMIN_AUTH: 'true',
 			FIREBASE_WEB_API_KEY: 'public-api-key',
 			FIREBASE_AUTH_DOMAIN: 'cabros.firebaseapp.com',
+			FIREBASE_DATABASE_URL: 'https://cabros.firebaseio.com',
 			FIREBASE_PROJECT_ID: 'cabros-project',
 			FIREBASE_APP_ID: '1:123:web:abc',
 			FIREBASE_SERVICE_ACCOUNT_JSON: '{"private_key":"must-not-leak"}',
@@ -37,6 +38,7 @@ describe('Firebase admin browser configuration', () => {
 			config: {
 				apiKey: 'public-api-key',
 				authDomain: 'cabros.firebaseapp.com',
+				databaseURL: 'https://cabros.firebaseio.com',
 				projectId: 'cabros-project',
 				appId: '1:123:web:abc',
 			},

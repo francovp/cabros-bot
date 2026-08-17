@@ -77,6 +77,27 @@ describe('createRequest', () => {
 			},
 		});
 	});
+
+	it('prepends an explicit baseUrl to the generated API request URL', () => {
+		expect(createRequest({
+			path: '/api/status',
+			method: 'GET',
+			baseUrl: 'https://cabros-bot-production.up.railway.app',
+			query: { format: 'json' },
+		})).toEqual({
+			url: 'https://cabros-bot-production.up.railway.app/api/status?format=json',
+			options: { method: 'GET', headers: {} },
+		});
+
+		expect(createRequest({
+			path: '/api/status',
+			method: 'GET',
+			baseUrl: 'https://cabros-bot-production.up.railway.app/',
+		})).toEqual({
+			url: 'https://cabros-bot-production.up.railway.app/api/status',
+			options: { method: 'GET', headers: {} },
+		});
+	});
 });
 
 it('exposes a working helper on a browser-like window global', () => {

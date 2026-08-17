@@ -67,13 +67,49 @@ describe('TelegramService', () => {
 		}));
 		// First call with MarkdownV2, second call as plain text
 		expect(parseErrorBot.telegram.sendMessage).toHaveBeenCalledTimes(2);
+		expect(parseErrorBot.telegram.sendMessage.mock.calls[0][0]).toBe('chat-1');
 		expect(parseErrorBot.telegram.sendMessage.mock.calls[0][2]).toEqual({
 			parse_mode: 'MarkdownV2',
 			disable_web_page_preview: false,
 		});
+		expect(parseErrorBot.telegram.sendMessage.mock.calls[1][0]).toBe('chat-1');
 		expect(parseErrorBot.telegram.sendMessage.mock.calls[1][2]).toEqual({
 			disable_web_page_preview: false,
 		});
+	});
+
+	it('uses telegramChatId override for both MarkdownV2 attempt and plain-text fallback', async () => {
+		const parseErrorBot = {
+			telegram: {
+				sendMessage: jest.fn()
+					.mockRejectedValueOnce({
+						description: "Bad Request: can't parse entities: Can't find end of Bold entity at byte offset 10",
+					})
+					.mockResolvedValueOnce({ message_id: 202 }),
+			},
+		};
+		const fallbackService = new TelegramService({
+			bot: parseErrorBot,
+			chatId: 'chat-default',
+			formatter: {
+				format: (text) => text,
+			},
+			logger: { warn: jest.fn(), error: jest.fn() },
+		});
+
+		const result = await fallbackService.send({
+			text: '*unbalanced bold',
+			telegramChatId: 'chat-override-999',
+		});
+
+		expect(result).toEqual(expect.objectContaining({
+			success: true,
+			channel: 'telegram',
+			messageId: '202',
+		}));
+		expect(parseErrorBot.telegram.sendMessage).toHaveBeenCalledTimes(2);
+		expect(parseErrorBot.telegram.sendMessage.mock.calls[0][0]).toBe('chat-override-999');
+		expect(parseErrorBot.telegram.sendMessage.mock.calls[1][0]).toBe('chat-override-999');
 	});
 
 	it('does not fall back to plain text for non-parse Telegram errors', async () => {
@@ -97,5 +133,36 @@ describe('TelegramService', () => {
 		expect(result.success).toBe(false);
 		expect(result.error).toContain('Telegram error');
 		expect(otherErrorBot.telegram.sendMessage).toHaveBeenCalledTimes(1);
+	});
+
+	it('passes an external abort signal to Telegraf callApi', async () => {
+		const signal = new AbortController().signal;
+		const callApi = jest.fn().mockResolvedValue({ message_id: 301 });
+		const signalBot = {
+			telegram: {
+				sendMessage: jest.fn(),
+				callApi,
+			},
+		};
+		const signalService = new TelegramService({
+			bot: signalBot,
+			chatId: 'chat-1',
+			formatter: { format: (text) => text },
+		});
+
+		await expect(signalService.send({ text: 'lease-aware alert' }, { signal })).resolves.toEqual(
+			expect.objectContaining({ success: true, messageId: '301' }),
+		);
+		expect(callApi).toHaveBeenCalledWith(
+			'sendMessage',
+			{
+				chat_id: 'chat-1',
+				parse_mode: 'MarkdownV2',
+				disable_web_page_preview: false,
+				text: 'lease-aware alert',
+			},
+			{ signal },
+		);
+		expect(signalBot.telegram.sendMessage).not.toHaveBeenCalled();
 	});
 });

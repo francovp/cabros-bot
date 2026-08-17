@@ -113,9 +113,20 @@ describe('IdempotencyStorageService', () => {
 			private_key: '-----BEGIN PRIVATE KEY-----\nkey\n-----END PRIVATE KEY-----\n',
 		});
 		const setMock = jest.fn().mockResolvedValue({});
+		const transactionSetMock = jest.fn();
+		const transactionMock = {
+			get: jest.fn().mockResolvedValue({
+				exists: true,
+				data: () => ({ state: 'pending', payloadHash: 'hash123', claimToken: 'claim-token' }),
+			}),
+			set: transactionSetMock,
+		};
 		const docMock = jest.fn().mockReturnValue({ set: setMock });
 		const collectionMock = jest.fn().mockReturnValue({ doc: docMock });
-		const firestoreMock = { collection: collectionMock };
+		const firestoreMock = {
+			collection: collectionMock,
+			runTransaction: jest.fn(async (callback) => callback(transactionMock)),
+		};
 		const firestoreFn = jest.fn().mockReturnValue(firestoreMock);
 		jest.spyOn(admin, 'firestore').mockImplementation(firestoreFn);
 		admin.firestore.Timestamp = { fromMillis: (ms) => ms };
@@ -126,12 +137,13 @@ describe('IdempotencyStorageService', () => {
 			statusCode: 200,
 			body: { ok: true },
 			headers: { 'content-type': 'application/json', undefinedHeader: undefined },
-		}, 300000);
+		}, 300000, 'claim-token');
 
 		expect(collectionMock).toHaveBeenCalledWith('idempotency_keys');
-		expect(setMock).toHaveBeenCalledWith(expect.objectContaining({
+		expect(transactionSetMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
 			headers: { 'content-type': 'application/json' },
 		}));
+		expect(setMock).not.toHaveBeenCalled();
 	});
 
 	test('reserveEntry should protect live pending claims even when replay TTL has expired', async () => {
@@ -216,7 +228,130 @@ describe('IdempotencyStorageService', () => {
 
 		const result = await reserveEntry('test-key', 'hash123', 5000);
 
-		expect(result).toEqual({ state: 'fresh' });
-		expect(transactionMock.set).toHaveBeenCalled();
+		expect(result).toMatchObject({ state: 'fresh', claimToken: expect.any(String) });
+		expect(transactionMock.set).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+		claimToken: result.claimToken,
+	}));
+	});
+
+	test('setEntry should ignore a late completion after the reservation token was reclaimed', async () => {
+		_resetForTesting();
+		process.env.ENABLE_FIRESTORE_IDEMPOTENCY = 'true';
+		process.env.FIREBASE_SERVICE_ACCOUNT_JSON = JSON.stringify({
+			project_id: 'test-project',
+			client_email: 'test@example.com',
+			private_key: '-----BEGIN PRIVATE KEY-----\nkey\n-----END PRIVATE KEY-----\n',
+		});
+
+		const transactionSetMock = jest.fn();
+		const directSetMock = jest.fn();
+		const transactionMock = {
+			get: jest.fn().mockResolvedValue({
+				exists: true,
+				data: () => ({ state: 'pending', payloadHash: 'hash123', claimToken: 'new-claim' }),
+			}),
+			set: transactionSetMock,
+		};
+		const docMock = jest.fn().mockReturnValue({ set: directSetMock });
+		const collectionMock = jest.fn().mockReturnValue({ doc: docMock });
+		const firestoreMock = {
+			collection: collectionMock,
+			runTransaction: jest.fn(async (callback) => callback(transactionMock)),
+		};
+
+		jest.spyOn(admin, 'firestore').mockReturnValue(firestoreMock);
+		admin.firestore.Timestamp = { fromMillis: (ms) => ms };
+		jest.spyOn(admin.credential, 'cert').mockReturnValue({});
+		jest.spyOn(admin, 'initializeApp').mockReturnValue({});
+
+		await setEntry('test-key', 'hash123', { statusCode: 200, body: { old: true }, headers: {} }, 300000, 'old-claim');
+
+		expect(transactionMock.get).toHaveBeenCalled();
+		expect(transactionSetMock).not.toHaveBeenCalled();
+		expect(directSetMock).not.toHaveBeenCalled();
+	});
+
+	test('releaseEntry should not delete a record owned by a newer reservation token', async () => {
+		_resetForTesting();
+		process.env.ENABLE_FIRESTORE_IDEMPOTENCY = 'true';
+		process.env.FIREBASE_SERVICE_ACCOUNT_JSON = JSON.stringify({
+			project_id: 'test-project',
+			client_email: 'test@example.com',
+			private_key: '-----BEGIN PRIVATE KEY-----\nkey\n-----END PRIVATE KEY-----\n',
+		});
+
+		const transactionDeleteMock = jest.fn();
+		const directGetMock = jest.fn().mockResolvedValue({
+			exists: true,
+			data: () => ({ state: 'pending', payloadHash: 'hash123', claimToken: 'new-claim' }),
+		});
+		const directDeleteMock = jest.fn();
+		const transactionMock = {
+			get: jest.fn().mockResolvedValue({
+				exists: true,
+				data: () => ({ state: 'pending', payloadHash: 'hash123', claimToken: 'new-claim' }),
+			}),
+			delete: transactionDeleteMock,
+		};
+		const docMock = jest.fn().mockReturnValue({ get: directGetMock, delete: directDeleteMock });
+		const collectionMock = jest.fn().mockReturnValue({ doc: docMock });
+		const firestoreMock = {
+			collection: collectionMock,
+			runTransaction: jest.fn(async (callback) => callback(transactionMock)),
+		};
+
+		jest.spyOn(admin, 'firestore').mockReturnValue(firestoreMock);
+		jest.spyOn(admin.credential, 'cert').mockReturnValue({});
+		jest.spyOn(admin, 'initializeApp').mockReturnValue({});
+
+		await releaseEntry('test-key', 'hash123', 'old-claim');
+
+		expect(transactionMock.get).toHaveBeenCalled();
+		expect(transactionDeleteMock).not.toHaveBeenCalled();
+		expect(directGetMock).not.toHaveBeenCalled();
+		expect(directDeleteMock).not.toHaveBeenCalled();
+	});
+
+	test('reserveEntry should set pending expiresAt to at least PENDING_STALE_TIMEOUT_MS to protect against native TTL deletion', async () => {
+		_resetForTesting();
+		process.env.ENABLE_FIRESTORE_IDEMPOTENCY = 'true';
+		process.env.FIREBASE_SERVICE_ACCOUNT_JSON = JSON.stringify({
+			project_id: 'test-project',
+			client_email: 'test@example.com',
+			private_key: '-----BEGIN PRIVATE KEY-----\nkey\n-----END PRIVATE KEY-----\n',
+		});
+
+		const capturedSets = [];
+		const transactionMock = {
+			get: jest.fn().mockResolvedValue({ exists: false }),
+			set: jest.fn((_ref, data) => capturedSets.push(data)),
+		};
+
+		const docMock = jest.fn().mockReturnValue({});
+		const collectionMock = jest.fn().mockReturnValue({ doc: docMock });
+		const firestoreMock = {
+			collection: collectionMock,
+			runTransaction: jest.fn(async (cb) => cb(transactionMock)),
+		};
+
+		jest.spyOn(admin, 'firestore').mockReturnValue(firestoreMock);
+		// Return a plain object from Timestamp.fromMillis so we can inspect _ms
+		admin.firestore.Timestamp = { fromMillis: (ms) => ({ _ms: ms, toMillis: () => ms }) };
+		jest.spyOn(admin.credential, 'cert').mockReturnValue({});
+		jest.spyOn(admin, 'initializeApp').mockReturnValue({});
+
+		// Use a very short TTL (1 second) — well below PENDING_STALE_TIMEOUT_MS (180 s)
+		const shortTtlMs = 1000;
+		const beforeMs = Date.now();
+		await reserveEntry('test-key-short-ttl', 'hash-short', shortTtlMs);
+		const afterMs = Date.now();
+
+		expect(capturedSets).toHaveLength(1);
+		const writtenExpiresAt = capturedSets[0].expiresAt._ms;
+
+		// expiresAt must be at least PENDING_STALE_TIMEOUT_MS (180 s) from now,
+		// not just shortTtlMs (1 s) — ensuring native TTL cannot delete the pending claim early
+		expect(writtenExpiresAt).toBeGreaterThanOrEqual(beforeMs + 180_000);
+		expect(writtenExpiresAt).toBeLessThanOrEqual(afterMs + 180_000);
 	});
 });

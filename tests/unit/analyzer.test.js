@@ -197,6 +197,25 @@ describe('Analyzer - Unit Tests', () => {
 		}));
 	});
 
+	it('should derive provider timeout from remaining budget after cooldown waiting', async () => {
+		const geminiQuotaManager = require('../../src/services/grounding/geminiQuotaManager');
+		geminiQuotaManager.resetForTesting();
+		geminiQuotaManager.triggerQuotaCooldown({ status: 429, retryDelay: 200 });
+
+		const { NewsAnalyzer } = require('../../src/controllers/webhooks/handlers/newsMonitor/analyzer');
+		const analyzer = new NewsAnalyzer();
+		analyzer.timeout = 350;
+
+		analyzer.analyzeSymbolInternal = jest.fn(() => new Promise((resolve) => {
+			setTimeout(() => resolve({ status: 'analyzed', alert: null, cached: false }), 200);
+		}));
+
+		const result = await analyzer.analyzeSymbol('BTCUSDT', 'req-timeout-budget');
+		expect(result.status).toBe('timeout');
+		expect(result.error.code).toBe('ANALYSIS_TIMEOUT');
+		geminiQuotaManager.resetForTesting();
+	});
+
 	it('should retry when Gemini price search returns quota exhaustion', async () => {
 		process.env.NEWS_GEMINI_QUOTA_MAX_RETRIES = '1';
 		process.env.NEWS_GEMINI_QUOTA_RETRY_BASE_MS = '1';

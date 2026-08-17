@@ -1,6 +1,7 @@
 const NotificationChannel = require('./NotificationChannel');
 const WhatsAppMarkdownFormatter = require('./formatters/whatsappMarkdownFormatter');
 const { splitMessageIntoChunks } = require('../../lib/messageHelper');
+const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 
 const DEFAULT_TIMEOUT_MS = 10000;
 const DISCORD_MESSAGE_LIMIT = 2000;
@@ -11,6 +12,23 @@ const DEFAULT_MAX_TOTAL_RETRY_WAIT_MS = 10000;
 
 function sleep(ms) {
 	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function sleepWithSignal(ms, signal) {
+	if (!signal) return sleep(ms);
+	if (signal.aborted) return Promise.reject(new Error(signal.reason?.message || signal.reason || 'Operation aborted'));
+	return new Promise((resolve, reject) => {
+		const timeoutId = setTimeout(() => {
+			signal.removeEventListener('abort', onAbort);
+			resolve();
+		}, ms);
+		const onAbort = () => {
+			clearTimeout(timeoutId);
+			signal.removeEventListener('abort', onAbort);
+			reject(new Error(signal.reason?.message || signal.reason || 'Operation aborted'));
+		};
+		signal.addEventListener('abort', onAbort, { once: true });
+	});
 }
 
 function parseEnvInt(envVar, defaultValue) {
@@ -28,10 +46,50 @@ class DiscordService extends NotificationChannel {
 		this.logger = config.logger;
 		this.formatter = config.formatter || new WhatsAppMarkdownFormatter();
 		this.enabled = false;
-		this.maxRetries = config.maxRetries ?? parseEnvInt('DISCORD_MAX_RETRIES', DEFAULT_MAX_RETRIES);
-		this.fallbackRetryDelayMs = config.fallbackRetryDelayMs ?? parseEnvInt('DISCORD_FALLBACK_RETRY_DELAY_MS', DEFAULT_FALLBACK_RETRY_DELAY_MS);
-		this.maxRetryDelayMs = config.maxRetryDelayMs ?? parseEnvInt('DISCORD_MAX_RETRY_DELAY_MS', DEFAULT_MAX_RETRY_DELAY_MS);
-		this.maxTotalRetryWaitMs = config.maxTotalRetryWaitMs ?? parseEnvInt('DISCORD_MAX_TOTAL_RETRY_WAIT_MS', DEFAULT_MAX_TOTAL_RETRY_WAIT_MS);
+		this._configMaxRetries = config.maxRetries;
+		this._configFallbackRetryDelayMs = config.fallbackRetryDelayMs;
+		this._configMaxRetryDelayMs = config.maxRetryDelayMs;
+		this._configMaxTotalRetryWaitMs = config.maxTotalRetryWaitMs;
+	}
+
+	get maxRetries() {
+		if (this._maxRetries !== undefined) return this._maxRetries;
+		if (this._configMaxRetries !== undefined) return this._configMaxRetries;
+		return getRuntimeConfig().DISCORD_MAX_RETRIES;
+	}
+
+	set maxRetries(val) {
+		this._maxRetries = val;
+	}
+
+	get fallbackRetryDelayMs() {
+		if (this._fallbackRetryDelayMs !== undefined) return this._fallbackRetryDelayMs;
+		if (this._configFallbackRetryDelayMs !== undefined) return this._configFallbackRetryDelayMs;
+		return getRuntimeConfig().DISCORD_FALLBACK_RETRY_DELAY_MS;
+	}
+
+	set fallbackRetryDelayMs(val) {
+		this._fallbackRetryDelayMs = val;
+	}
+
+	get maxRetryDelayMs() {
+		if (this._maxRetryDelayMs !== undefined) return this._maxRetryDelayMs;
+		if (this._configMaxRetryDelayMs !== undefined) return this._configMaxRetryDelayMs;
+		return getRuntimeConfig().DISCORD_MAX_RETRY_DELAY_MS;
+	}
+
+	set maxRetryDelayMs(val) {
+		this._maxRetryDelayMs = val;
+	}
+
+	get maxTotalRetryWaitMs() {
+		if (this._maxTotalRetryWaitMs !== undefined) return this._maxTotalRetryWaitMs;
+		if (this._configMaxTotalRetryWaitMs !== undefined) return this._configMaxTotalRetryWaitMs;
+		return getRuntimeConfig().DISCORD_MAX_TOTAL_RETRY_WAIT_MS;
+	}
+
+	set maxTotalRetryWaitMs(val) {
+		this._maxTotalRetryWaitMs = val;
 	}
 
 	async validate() {
@@ -53,7 +111,7 @@ class DiscordService extends NotificationChannel {
 		return this.enabled;
 	}
 
-	async send(alert = {}) {
+	async send(alert = {}, options = {}) {
 		try {
 			const webhookUrl = alert.discordWebhookUrl || this.webhookUrl;
 			if (!webhookUrl) {
@@ -70,7 +128,7 @@ class DiscordService extends NotificationChannel {
 			let totalAttempts = 0;
 
 			for (const chunk of chunks) {
-				const result = await this.sendChunk(chunk, webhookUrl);
+				const result = await this.sendChunk(chunk, webhookUrl, options.signal);
 				totalAttempts += result.attemptCount || 0;
 				if (!result.success) {
 					if (result.statusCode === 429) {
@@ -159,14 +217,24 @@ class DiscordService extends NotificationChannel {
 		return this.fallbackRetryDelayMs;
 	}
 
-	async sendChunk(content, webhookUrl = this.webhookUrl) {
+	async sendChunk(content, webhookUrl = this.webhookUrl, signal) {
 		let attempt = 0;
 		let totalWaitMs = 0;
 
 		while (attempt <= this.maxRetries) {
+			if (signal?.aborted) {
+				return {
+					success: false,
+					channel: 'discord',
+					error: signal.reason?.message || signal.reason || 'Operation aborted',
+					aborted: true,
+				};
+			}
 			attempt++;
 			const controller = new AbortController();
 			const timeoutId = setTimeout(() => controller.abort(), this.timeoutMs);
+			const forwardAbort = () => controller.abort(signal.reason);
+			signal?.addEventListener('abort', forwardAbort, { once: true });
 
 			try {
 				const response = await fetch(this.getExecutionUrl(webhookUrl), {
@@ -238,9 +306,17 @@ class DiscordService extends NotificationChannel {
 					`Discord webhook rate limited (429). Retrying in ${requiredDelayMs}ms (attempt ${attempt}/${this.maxRetries + 1})...`,
 				);
 
-				await sleep(requiredDelayMs);
+				await sleepWithSignal(requiredDelayMs, signal);
 				totalWaitMs += requiredDelayMs;
 			} catch (error) {
+				if (signal?.aborted) {
+					return {
+						success: false,
+						channel: 'discord',
+						error: signal.reason?.message || signal.reason || 'Operation aborted',
+						aborted: true,
+					};
+				}
 				if (error && error.name === 'AbortError') {
 					return {
 						success: false,
@@ -252,6 +328,7 @@ class DiscordService extends NotificationChannel {
 				throw error;
 			} finally {
 				clearTimeout(timeoutId);
+				signal?.removeEventListener('abort', forwardAbort);
 			}
 		}
 

@@ -1,6 +1,5 @@
 // tests/unit/trustProxy.test.js
-const { parseTrustProxy, setupTrustProxy } = require('../../src/lib/trustProxy');
-const express = require('express');
+const { parseTrustProxy } = require('../../src/lib/trustProxy');
 
 describe('Trust Proxy Configuration', () => {
 	describe('parseTrustProxy', () => {
@@ -37,13 +36,14 @@ describe('Trust Proxy Configuration', () => {
 			expect(parseTrustProxy(undefined, undefined)).toBe(false);
 			expect(parseTrustProxy('', 'false')).toBe(false);
 		});
-	});
 
-	describe('setupTrustProxy', () => {
-		test('should set trust proxy on an Express app instance', () => {
-			const app = express();
-			setupTrustProxy(app, { TRUST_PROXY: '1', RENDER: 'false' });
-			expect(app.get('trust proxy')).toBe(1);
+		test('should default to 1 hop for Vercel deployments', () => {
+			expect(parseTrustProxy(undefined, undefined, '1')).toBe(1);
+		});
+
+		test('should default to 1 hop for Railway deployments', () => {
+			expect(parseTrustProxy(undefined, undefined, undefined, 'production')).toBe(1);
 		});
 	});
+
 });

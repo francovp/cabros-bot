@@ -56,6 +56,7 @@ describe('Status endpoints', () => {
 		Object.keys(process.env).forEach((key) => {
 			delete process.env[key];
 		});
+		process.env.NODE_ENV = 'test';
 		tempDir = null;
 		app = express();
 		app.use(express.json());
@@ -84,6 +85,7 @@ describe('Status endpoints', () => {
 		process.env.SENTRY_DSN = 'https://dsn.example';
 		delete process.env.BRAVE_SEARCH_API_KEY;
 		delete process.env.ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION;
+		delete process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT;
 		delete process.env.ENABLE_SIGNAL_OUTCOME_TRACKING;
 		delete process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING;
 	});
@@ -143,7 +145,18 @@ describe('Status endpoints', () => {
 			ready: false,
 			status: 'disabled',
 		});
+		expect(response.body.featureFlags.tradingViewConfluenceEnrichment).toBe(false);
 		expect(response.body.dependencies.sentry.status).toBe('ready');
+	});
+
+	it('reports tradingViewConfluenceEnrichment as true only when explicitly configured to true', async () => {
+		process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT = 'true';
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.tradingViewConfluenceEnrichment).toBe(true);
 	});
 
 	it('reports scanner presets as ephemeral when no Firestore gate is enabled', async () => {
@@ -331,7 +344,7 @@ describe('Status endpoints', () => {
 		expect(response.body.dependencies.firebaseRemoteConfig).toEqual(expect.objectContaining({
 			enabled: true,
 			configured: true,
-			source: 'default',
+			source: 'environment',
 			templateVersion: null,
 			lastSuccessfulLoad: null,
 			lastErrorCategory: null,
@@ -1324,6 +1337,37 @@ describe('Status endpoints', () => {
 		expect(response.body.featureFlags.telegramBot).toBe(true);
 		expect(response.body.deliveryChannels.telegram).toEqual({ enabled: false, status: 'disabled' });
 		expect(response.body.dependencies.telegram.ready).toBe(false);
+	});
+
+	it('reports Vercel preview deployments consistently', async () => {
+		process.env.VERCEL_ENV = 'preview';
+		process.env.NODE_ENV = 'production';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.service.environment).toBe('preview');
+		expect(response.body.deliveryChannels.telegram).toEqual({ enabled: false, status: 'disabled' });
+	});
+
+	it('reports preview WhatsApp readiness from the preview destination', async () => {
+		process.env.VERCEL_ENV = 'preview';
+		delete process.env.WHATSAPP_CHAT_ID;
+		process.env.WHATSAPP_PREVIEW_CHAT_ID = 'preview-chat';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.whatsapp).toEqual({
+			enabled: true,
+			configured: true,
+			ready: true,
+			status: 'ready',
+		});
 	});
 
 	it('reports news monitor deduplication as process-local (in-memory) by default', async () => {
