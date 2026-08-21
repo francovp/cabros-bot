@@ -216,6 +216,28 @@ describe('Analyzer - Unit Tests', () => {
 		geminiQuotaManager.resetForTesting();
 	});
 
+	it('should keep the quota manager instance aligned after a module reset', async () => {
+		jest.resetModules();
+		let geminiQuotaManager;
+		let NewsAnalyzer;
+		jest.isolateModules(() => {
+			geminiQuotaManager = require('../../src/services/grounding/geminiQuotaManager');
+			({ NewsAnalyzer } = require('../../src/controllers/webhooks/handlers/newsMonitor/analyzer'));
+		});
+
+		geminiQuotaManager.resetForTesting();
+		geminiQuotaManager.triggerQuotaCooldown({ status: 429, retryDelay: 100 });
+		const analyzer = new NewsAnalyzer();
+		analyzer.timeout = 150;
+		analyzer.analyzeSymbolInternal = jest.fn(() => new Promise((resolve) => {
+			setTimeout(() => resolve({ status: 'analyzed', alert: null, cached: false }), 100);
+		}));
+
+		const result = await analyzer.analyzeSymbol('BTCUSDT', 'req-module-reset');
+
+		expect(result.status).toBe('timeout');
+	});
+
 	it('should retry when Gemini price search returns quota exhaustion', async () => {
 		process.env.NEWS_GEMINI_QUOTA_MAX_RETRIES = '1';
 		process.env.NEWS_GEMINI_QUOTA_RETRY_BASE_MS = '1';
