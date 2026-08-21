@@ -250,7 +250,7 @@ function getStatus() {
 	});
 	const { getCacheInstance } = require('./webhooks/handlers/newsMonitor/cache');
 	const cache = getCacheInstance();
-	const newsMonitorDedupEnabled = isEnabled(process.env.ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP);
+	const newsMonitorDedupEnabled = runtimeConfig.ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP;
 	const newsMonitorDedupConfigured = newsMonitorDedupEnabled && firestore.configured;
 	const newsMonitorDedup = {
 		enabled: newsMonitorDedupEnabled,

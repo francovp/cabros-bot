@@ -7,6 +7,7 @@ const { join } = require('path');
 jest.mock('firebase-admin');
 const admin = require('firebase-admin');
 const alertStorageService = require('../../src/services/storage/AlertStorageService');
+const remoteConfigService = require('../../src/services/remoteConfig/RemoteConfigService');
 const { tradingViewMcpService } = require('../../src/services/tradingview/TradingViewMcpService');
 const { getRoutes } = require('../../src/routes');
 
@@ -53,6 +54,7 @@ describe('Status endpoints', () => {
 		admin.__resetApps();
 		admin.__resetCollectionState();
 		alertStorageService._resetForTesting();
+		remoteConfigService._resetForTesting();
 		Object.keys(process.env).forEach((key) => {
 			delete process.env[key];
 		});
@@ -91,6 +93,7 @@ describe('Status endpoints', () => {
 	});
 
 	afterEach(() => {
+		remoteConfigService._resetForTesting();
 		tradingViewMcpService.runtimeStatus = savedTradingViewRuntimeStatus;
 		tradingViewMcpService.volumeRuntimeStatus = savedTradingViewVolumeRuntimeStatus;
 		restoreEnv(savedEnv);
@@ -1403,6 +1406,50 @@ describe('Status endpoints', () => {
 			status: 'ready',
 			mode: 'persistent',
 			backend: 'firestore',
+		});
+	});
+
+	it('reports news monitor deduplication as persistent when enabled via Remote Config while process.env is false', async () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		process.env.ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP = 'false';
+		remoteConfigService._setRemoteOverridesForTesting({
+			ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP: true,
+		});
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.newsMonitorDedup).toEqual({
+			enabled: true,
+			configured: true,
+			ready: true,
+			status: 'ready',
+			mode: 'persistent',
+			backend: 'firestore',
+		});
+	});
+
+	it('reports news monitor deduplication as disabled when disabled via Remote Config while process.env is true', async () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		process.env.ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP = 'true';
+		remoteConfigService._setRemoteOverridesForTesting({
+			ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP: false,
+		});
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.newsMonitorDedup).toEqual({
+			enabled: false,
+			configured: false,
+			ready: false,
+			status: 'disabled',
+			mode: 'in-memory',
+			backend: null,
 		});
 	});
 
