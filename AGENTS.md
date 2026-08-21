@@ -1332,3 +1332,13 @@ News monitor cache reads now include `EventCategory.NONE`, so a cached no-event 
 - `tests/integration/news-monitor-cache.test.js` — Verifies no-event cache hits return no alert and avoid repeated Gemini/market-context provider calls.
 
 No endpoint or response contract changed; Postman and OpenAPI remain unchanged.
+
+## Remote Config Environment Boundaries (CB-169 / Issue #405)
+
+`RemoteConfigService.getEnvironmentConfig()` preserves positive integer environment values for `WEBHOOK_IDEMPOTENCY_TTL_MS` and `SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS` even when they exceed the ceilings used to validate Firebase Remote Config overrides. Out-of-range remote values remain rejected and fail open to the environment value; the other environment parameters retain their existing bounded parsing.
+
+**Coverage**:
+- `src/services/remoteConfig/RemoteConfigService.js` — Separates environment parsing from bounded remote override parsing for the two affected runtime controls.
+- `tests/unit/remote-config-service.test.js` — Covers high environment values and invalid remote overrides for both controls.
+
+No endpoint, OpenAPI, Postman, Firebase template, or environment-variable name changed.

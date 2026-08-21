@@ -101,6 +101,35 @@ describe('RemoteConfigService', () => {
 		}));
 	});
 
+	it('preserves environment values above Remote Config override bounds', () => {
+		process.env.WEBHOOK_IDEMPOTENCY_TTL_MS = '604800000';
+		process.env.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS = '86400000';
+
+		expect(remoteConfigService.getRuntimeConfig()).toEqual(expect.objectContaining({
+			WEBHOOK_IDEMPOTENCY_TTL_MS: 604800000,
+			SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS: 86400000,
+		}));
+	});
+
+	it('rejects out-of-range remote overrides without discarding environment values', async () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		process.env.WEBHOOK_IDEMPOTENCY_TTL_MS = '604800000';
+		process.env.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS = '86400000';
+		mockTemplate({
+			WEBHOOK_IDEMPOTENCY_TTL_MS: 604800001,
+			SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS: 86400001,
+		});
+		alertStorageService.getFirestore.mockReturnValue({});
+
+		await remoteConfigService.loadNow();
+
+		expect(remoteConfigService.getRuntimeConfig()).toEqual(expect.objectContaining({
+			WEBHOOK_IDEMPOTENCY_TTL_MS: 604800000,
+			SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS: 86400000,
+		}));
+		expect(remoteConfigService.getStatus().lastErrorCategory).toBe('invalid_value');
+	});
+
 	it('applies validated allow-listed values and records safe template metadata', async () => {
 		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
 		process.env.FIREBASE_SERVICE_ACCOUNT_JSON = '{"not-a-secret":"redacted-in-test"}';
