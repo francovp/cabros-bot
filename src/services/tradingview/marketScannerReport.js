@@ -583,5 +583,6 @@ module.exports = {
 	parseMarketScannerRequest,
 	buildMarketScannerReport,
 	prepareMarketScannerItems,
+	getRiskLevelsForSide,
 	SUPPORTED_SCAN_TYPES,
 };

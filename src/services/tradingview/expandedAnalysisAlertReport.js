@@ -681,4 +681,5 @@ module.exports = {
 	parseExpandedAnalysisAlertRequest,
 	parseSymbolIdentifier,
 	buildExpandedAnalysisAlertReport,
+	buildReportRow,
 };

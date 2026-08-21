@@ -768,6 +768,13 @@ class NewsAnalyzer {
 		const signalOutcomeService = require('../../../../services/storage/SignalOutcomeService');
 		if (signalOutcomeService.isEnabled()) {
 			const side = (alert.sentimentScore > 0) ? 'BUY' : 'SELL';
+			const stop = (alert.marketContext && typeof alert.marketContext.stop === 'number')
+				? alert.marketContext.stop
+				: (typeof alert.stop === 'number' ? alert.stop : null);
+			const target = (alert.marketContext && typeof alert.marketContext.target === 'number')
+				? alert.marketContext.target
+				: (typeof alert.target === 'number' ? alert.target : null);
+
 			signalOutcomeService.recordSignal({
 				requestId,
 				source: 'news-monitor',
@@ -781,6 +788,8 @@ class NewsAnalyzer {
 				score: alert.confidence,
 				side,
 				price: alert.marketContext ? alert.marketContext.price : null,
+				stop,
+				target,
 				sources: alert.sources || [],
 				tokenUsage: alert.enriched ? alert.enriched.tokenUsage : null,
 			}).catch(() => {});
