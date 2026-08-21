@@ -198,11 +198,16 @@ describe('Analyzer - Unit Tests', () => {
 	});
 
 	it('should derive provider timeout from remaining budget after cooldown waiting', async () => {
-		const geminiQuotaManager = require('../../src/services/grounding/geminiQuotaManager');
+		jest.resetModules();
+		let geminiQuotaManager;
+		let NewsAnalyzer;
+		jest.isolateModules(() => {
+			geminiQuotaManager = require('../../src/services/grounding/geminiQuotaManager');
+			({ NewsAnalyzer } = require('../../src/controllers/webhooks/handlers/newsMonitor/analyzer'));
+		});
 		geminiQuotaManager.resetForTesting();
 		geminiQuotaManager.triggerQuotaCooldown({ status: 429, retryDelay: 200 });
 
-		const { NewsAnalyzer } = require('../../src/controllers/webhooks/handlers/newsMonitor/analyzer');
 		const analyzer = new NewsAnalyzer();
 		analyzer.timeout = 350;
 

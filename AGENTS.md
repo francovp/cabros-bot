@@ -1342,3 +1342,12 @@ No endpoint or response contract changed; Postman and OpenAPI remain unchanged.
 - `tests/unit/remote-config-service.test.js` — Covers high environment values and invalid remote overrides for both controls.
 
 No endpoint, OpenAPI, Postman, Firebase template, or environment-variable name changed.
+
+## Analyzer Cooldown Test Module Isolation (CB-168 / Issue #404)
+
+The analyzer cooldown regression test loads `geminiQuotaManager` and `NewsAnalyzer` inside one `jest.isolateModules()` registry after an explicit module reset. This keeps the cooldown state configured by the test attached to the same singleton instance cached by `NewsAnalyzer`, preventing order-dependent false `analyzed` results.
+
+**Coverage**:
+- `tests/unit/analyzer.test.js` — Verifies the existing cooldown-timeout regression uses the isolated manager and produces the expected timeout after cooldown waiting.
+
+This is test-only hardening; runtime code, endpoints, OpenAPI, Postman, and environment configuration remain unchanged.
