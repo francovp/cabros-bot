@@ -13,6 +13,7 @@ const HEARTBEAT_DOCUMENT_ID = 'signal-outcome';
 const HEARTBEAT_WRITE_TIMEOUT_MS = 5000;
 const MAX_WORKER_DRAIN_TIMEOUT_MS = 30000;
 const MAX_TIMER_DELAY_MS = 2147483647;
+const MAX_CONFIGURED_INTERVAL_MS = 3600000;
 const WORKER_ROLES = new Set(['web', 'worker', 'disabled']);
 let binanceClient = null;
 let isEvaluating = false;
@@ -120,6 +121,14 @@ function parsePositiveInteger(val, defaultVal) {
 function parseTimerInterval(val, defaultVal) {
 	const parsed = parsePositiveInteger(val, defaultVal);
 	return parsed <= MAX_TIMER_DELAY_MS ? parsed : defaultVal;
+}
+
+function getConfiguredInterval(defaultVal) {
+	const intervalMs = parseTimerInterval(
+		process.env.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS || process.env.SIGNAL_OUTCOME_EVALUATION_CADENCE_MS,
+		defaultVal,
+	);
+	return intervalMs <= MAX_CONFIGURED_INTERVAL_MS ? intervalMs : defaultVal;
 }
 
 function normalizeSide(side) {
@@ -727,7 +736,7 @@ function startWorker(options = {}) {
 	if (options.intervalMs !== undefined && options.intervalMs !== null) {
 		intervalMs = parseTimerInterval(options.intervalMs, DEFAULT_INTERVAL_MS);
 	} else {
-		intervalMs = parseTimerInterval(getRuntimeConfig().SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS, DEFAULT_INTERVAL_MS);
+		intervalMs = getConfiguredInterval(DEFAULT_INTERVAL_MS);
 	}
 
 	activeIntervalMs = intervalMs;
@@ -785,7 +794,7 @@ function stopWorker(options = {}) {
 function getWorkerStatus() {
 	const DEFAULT_INTERVAL_MS = 300000;
 	const runtimeConfig = getRuntimeConfig();
-	const intervalMs = activeIntervalMs || parseTimerInterval(runtimeConfig.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS, DEFAULT_INTERVAL_MS);
+	const intervalMs = activeIntervalMs || getConfiguredInterval(DEFAULT_INTERVAL_MS);
 
 	const batchLimit = parsePositiveInteger(runtimeConfig.SIGNAL_OUTCOME_EVALUATION_BATCH_LIMIT, 50);
 

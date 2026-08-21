@@ -38,7 +38,6 @@ const PARAMETER_SCHEMA = Object.freeze({
 	DISCORD_MAX_TOTAL_RETRY_WAIT_MS: { type: 'number', defaultValue: 10000, integer: true, min: 1, max: 120000 },
 	WEBHOOK_IDEMPOTENCY_TTL_MS: { type: 'number', defaultValue: 300000, integer: true, min: 1, max: 86400000 },
 	JOB_CALLBACK_RETRY_DELAY_MS: { type: 'number', defaultValue: 1000, integer: true, min: 1, max: 60000 },
-	SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS: { type: 'number', defaultValue: 300000, integer: true, min: 1, max: 3600000 },
 	SIGNAL_OUTCOME_EVALUATION_BATCH_LIMIT: { type: 'number', defaultValue: 50, integer: true, min: 1, max: 500 },
 	SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS: { type: 'number', defaultValue: 30000, integer: true, min: 1, max: 300000 },
 	ENABLE_GEMINI_GROUNDING: { type: 'boolean', defaultValue: false },
@@ -139,13 +138,8 @@ function getEnvironmentConfig() {
 			config[key] = parseLegacyPositiveInteger(process.env.NEWS_GEMINI_QUOTA_MAX_RETRIES, 2);
 		} else if (key === 'NEWS_GEMINI_QUOTA_RETRY_BASE_MS') {
 			config[key] = parseLegacyPositiveInteger(process.env.NEWS_GEMINI_QUOTA_RETRY_BASE_MS, 1000);
-		} else if (key === 'ENABLE_MESSAGE_FOOTER_METADATA') {
-			config[key] = process.env.ENABLE_MESSAGE_FOOTER_METADATA !== 'false';
 		} else if (key === 'WEBHOOK_IDEMPOTENCY_TTL_MS') {
 			config[key] = parseEnvironmentNumber(process.env[key], schema, schema.defaultValue);
-		} else if (key === 'SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS') {
-			const envVal = process.env.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS || process.env.SIGNAL_OUTCOME_EVALUATION_CADENCE_MS;
-			config[key] = parseEnvironmentNumber(envVal, schema, schema.defaultValue);
 		} else {
 			config[key] = parseValue(process.env[key], schema, schema.defaultValue);
 		}
