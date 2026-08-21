@@ -503,6 +503,80 @@ describe('BinanceOrderService', () => {
 		}));
 	});
 
+	it('uses Binance order-test validation when exchangeInfo contains exchange-wide EXCHANGE_MAX_NUM_ORDERS filter', async () => {
+		const client = {
+			getExchangeInfo: jest.fn().mockResolvedValue({
+				symbols: [{
+					symbol: 'BTCUSDT',
+					status: 'TRADING',
+					orderTypes: ['MARKET', 'LIMIT'],
+					isSpotTradingAllowed: true,
+					quoteOrderQtyMarketAllowed: true,
+					filters: [
+						{ filterType: 'LOT_SIZE', minQty: '0.0001', maxQty: '100', stepSize: '0.0001' },
+						{ filterType: 'MIN_NOTIONAL', minNotional: '10' },
+					],
+				}],
+				exchangeFilters: [
+					{ filterType: 'EXCHANGE_MAX_NUM_ORDERS', maxNumOrders: 1000 },
+				],
+			}),
+			testNewOrder: jest.fn().mockResolvedValue({}),
+		};
+		const service = createBinanceOrderService({ createClient: () => client });
+
+		await expect(service.placeOrder({
+			symbol: 'BTCUSDT',
+			side: 'BUY',
+			type: 'MARKET',
+			quoteOrderQty: 50,
+			dryRun: true,
+		})).resolves.toMatchObject({ success: true, dryRun: true });
+
+		expect(client.testNewOrder).toHaveBeenCalledWith(expect.objectContaining({
+			symbol: 'BTCUSDT',
+			type: 'MARKET',
+			quoteOrderQty: 50,
+		}));
+	});
+
+	it('uses Binance order-test validation when exchangeInfo contains exchange-wide MAX_NUM_ALGO_ORDERS filter', async () => {
+		const client = {
+			getExchangeInfo: jest.fn().mockResolvedValue({
+				symbols: [{
+					symbol: 'BTCUSDT',
+					status: 'TRADING',
+					orderTypes: ['MARKET', 'LIMIT'],
+					isSpotTradingAllowed: true,
+					quoteOrderQtyMarketAllowed: true,
+					filters: [
+						{ filterType: 'LOT_SIZE', minQty: '0.0001', maxQty: '100', stepSize: '0.0001' },
+						{ filterType: 'MIN_NOTIONAL', minNotional: '10' },
+					],
+				}],
+				exchangeFilters: [
+					{ filterType: 'MAX_NUM_ALGO_ORDERS', maxNumAlgoOrders: 5 },
+				],
+			}),
+			testNewOrder: jest.fn().mockResolvedValue({}),
+		};
+		const service = createBinanceOrderService({ createClient: () => client });
+
+		await expect(service.placeOrder({
+			symbol: 'BTCUSDT',
+			side: 'BUY',
+			type: 'MARKET',
+			quoteOrderQty: 50,
+			dryRun: true,
+		})).resolves.toMatchObject({ success: true, dryRun: true });
+
+		expect(client.testNewOrder).toHaveBeenCalledWith(expect.objectContaining({
+			symbol: 'BTCUSDT',
+			type: 'MARKET',
+			quoteOrderQty: 50,
+		}));
+	});
+
 	it('maps definitive Binance submission rejections separately from unknown outcomes', async () => {
 		const client = {
 			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),

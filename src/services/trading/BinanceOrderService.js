@@ -17,6 +17,9 @@ const ACCOUNT_DEPENDENT_FILTERS = new Set([
 	'MAX_NUM_ORDERS',
 	'MAX_NUM_ALGO_ORDERS',
 	'MAX_NUM_ICEBERG_ORDERS',
+	'EXCHANGE_MAX_NUM_ORDERS',
+	'EXCHANGE_MAX_NUM_ALGO_ORDERS',
+	'EXCHANGE_MAX_NUM_ICEBERG_ORDERS',
 ]);
 
 class BinanceOrderRequestError extends Error {
@@ -283,8 +286,10 @@ function getSymbolInfo(exchangeInfo, symbol) {
 	return symbols.find((entry) => entry && entry.symbol === symbol) || null;
 }
 
-function getFilters(symbolInfo) {
-	return new Map((symbolInfo.filters || []).map((filter) => [filter.filterType, filter]));
+function getFilters(symbolInfo, exchangeInfo) {
+	const symbolFilters = symbolInfo && Array.isArray(symbolInfo.filters) ? symbolInfo.filters : [];
+	const exchangeFilters = exchangeInfo && Array.isArray(exchangeInfo.exchangeFilters) ? exchangeInfo.exchangeFilters : [];
+	return new Map([...exchangeFilters, ...symbolFilters].map((filter) => [filter.filterType, filter]));
 }
 
 function validateFilterRange(value, filter, field, stepName) {
@@ -497,8 +502,9 @@ function createBinanceOrderService({ createClient = createBinanceClient } = {}) 
 			}
 
 			let symbolInfo;
+			let exchangeInfo;
 			try {
-				const exchangeInfo = await client.getExchangeInfo({ symbol: order.symbol });
+				exchangeInfo = await client.getExchangeInfo({ symbol: order.symbol });
 				symbolInfo = getSymbolInfo(exchangeInfo, order.symbol);
 			} catch (error) {
 				throw new BinanceOrderServiceError('Binance symbol validation failed', 'BINANCE_VALIDATION_FAILED');
@@ -514,7 +520,7 @@ function createBinanceOrderService({ createClient = createBinanceClient } = {}) 
 				throw new BinanceOrderRequestError('quoteOrderQty is not supported for this symbol');
 			}
 
-			const filters = getFilters(symbolInfo);
+			const filters = getFilters(symbolInfo, exchangeInfo);
 			const quantityFilter = filters.get(order.type === 'MARKET' ? 'MARKET_LOT_SIZE' : 'LOT_SIZE') || filters.get('LOT_SIZE');
 			const priceFilter = filters.get('PRICE_FILTER');
 			const notionalFilter = filters.get('NOTIONAL') || filters.get('MIN_NOTIONAL');
