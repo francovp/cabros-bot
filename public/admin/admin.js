@@ -62,13 +62,28 @@ const DISPLAY_LABELS = {
 	cloudflareAig: 'Cloudflare AI Gateway',
 };
 
+const ALLOWED_BACKEND_ORIGINS = new Set([
+	'https://cabros-bot-production.up.railway.app',
+]);
+
+const getAllowedBackendOrigin = (value) => {
+	try {
+		const origin = new URL(value).origin;
+		return ALLOWED_BACKEND_ORIGINS.has(origin) ? origin : '';
+	} catch (_) {
+		return '';
+	}
+};
+
 const getApiBaseUrl = () => {
 	try {
 		const stored = typeof window !== 'undefined' && window.localStorage && window.localStorage.getItem('cabros_backend_origin');
-		if (stored) return stored.replace(/\/+$/, '');
+		const storedOrigin = getAllowedBackendOrigin(stored);
+		if (storedOrigin) return storedOrigin;
 		const urlParams = typeof window !== 'undefined' && window.location ? new URLSearchParams(window.location.search) : null;
 		const param = urlParams && urlParams.get('backend');
-		if (param) return param.replace(/\/+$/, '');
+		const paramOrigin = getAllowedBackendOrigin(param);
+		if (paramOrigin) return paramOrigin;
 		if (typeof window !== 'undefined' && window.location && (window.location.hostname.endsWith('web.app') || window.location.hostname.endsWith('firebaseapp.com'))) {
 			return 'https://cabros-bot-production.up.railway.app';
 		}
