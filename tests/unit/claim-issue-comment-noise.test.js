@@ -434,7 +434,6 @@ describe('claim-issue.sh renewal comment behavior', () => {
 	});
 
 	/**
-	/**
 	 * Verify that rollback_abandoned_claim retains the agent-working label fail-closed
 	 * when arbitration fails, preventing label deletion out from under a rival in-flight claimant.
 	 */

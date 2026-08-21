@@ -85,6 +85,31 @@ const flush = async () => {
 	await new Promise((resolve) => setImmediate(resolve));
 };
 
+class FakeAbortSignal {
+	constructor() {
+		this.aborted = false;
+		this.reason = undefined;
+		this.listeners = [];
+	}
+
+	addEventListener(_type, listener) {
+		this.listeners.push(listener);
+	}
+}
+
+class FakeAbortController {
+	constructor() {
+		this.signal = new FakeAbortSignal();
+	}
+
+	abort(reason) {
+		if (this.signal.aborted) return;
+		this.signal.aborted = true;
+		this.signal.reason = reason ?? new Error('The operation was aborted');
+		this.signal.listeners.forEach((listener) => listener());
+	}
+}
+
 const response = (body, status = 200) => ({
 	ok: status >= 200 && status < 300,
 	status,
@@ -115,6 +140,7 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 
 	const documentListeners = {};
 	const downloads = [];
+	const timers = new Map();
 	const document = {
 		body,
 		createElement: (tag) => {
@@ -149,6 +175,13 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 			setItem: (key, value) => storage.set(key, value),
 			removeItem: (key) => storage.delete(key),
 		},
+		AbortController: FakeAbortController,
+		setTimeout: (fn) => {
+			const id = timers.size + 1;
+			timers.set(id, fn);
+			return id;
+		},
+		clearTimeout: (id) => { timers.delete(id); },
 		window: {
 			CabrosAdminRequest: helper,
 			confirm,
@@ -166,7 +199,7 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 	);
 	documentListeners.DOMContentLoaded();
 
-	return { body, context, elementsById, helperCalls, storage, downloads };
+	return { body, context, elementsById, helperCalls, storage, downloads, timers };
 }
 
 async function selectView(browser, name) {
@@ -270,6 +303,33 @@ describe('admin browser client', () => {
 		expect(overview.textContent).toContain('Status unavailable. Check the API key and service logs.');
 		expect(overview.textContent).not.toContain('Last checked');
 		expect(overview.textContent).toContain('HTTP 401');
+	});
+
+	it('resolves authentication with fallback when the auth-config fetch stalls until timeout', async () => {
+		const firebase = {
+			initializeApp: jest.fn(),
+			auth: jest.fn(),
+		};
+		const browser = createBrowser({
+			firebase,
+			fetchImpl: (url, options) => new Promise((resolve, reject) => {
+				if (options.signal.aborted) {
+					reject(new Error('AbortError'));
+					return;
+				}
+				options.signal.addEventListener('abort', () => reject(new Error('AbortError')));
+			}),
+		});
+		await flush();
+
+		expect(browser.body.textContent).toContain('Checking authentication');
+		expect(browser.timers.size).toBe(1);
+
+		for (const fireTimer of browser.timers.values()) fireTimer();
+		await flush();
+
+		expect(browser.elementsById['auth-state'].textContent).toContain('Firebase sign-in is unavailable');
+		expect(browser.timers.size).toBe(0);
 	});
 
 	it('shows Firebase sign-in state and sends a verified token after sign-in', async () => {

@@ -846,6 +846,80 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 			expect(mockFetch).toHaveBeenCalledTimes(1);
 		});
 
+		it('should re-deliver cached alerts when a later request specifies a different discordWebhookUrl', async () => {
+			process.env.ENABLE_DISCORD_ALERTS = 'true';
+			process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/default/default';
+			await initializeNotificationServices(mockBot);
+			const webhookA = 'https://discord.com/api/webhooks/123/abc';
+			const webhookB = 'https://discord.com/api/webhooks/456/def';
+
+			const response1 = await request(app)
+				.post('/api/news-monitor').set('x-api-key', 'test-key')
+				.send({
+					crypto: ['BTCUSDT'],
+					channels: ['discord'],
+					discordWebhookUrl: webhookA,
+				})
+				.expect(200);
+
+			expect(response1.body.results[0].cached).toBe(false);
+			expect(response1.body.deliveredChannels).toEqual(['discord']);
+			expect(mockFetch).toHaveBeenCalledWith(
+				expect.stringContaining(webhookA),
+				expect.objectContaining({ method: 'POST' }),
+			);
+
+			mockFetch.mockClear();
+
+			const response2 = await request(app)
+				.post('/api/news-monitor').set('x-api-key', 'test-key')
+				.send({
+					crypto: ['BTCUSDT'],
+					channels: ['discord'],
+					discordWebhookUrl: webhookB,
+				})
+				.expect(200);
+
+			expect(response2.body.results[0].cached).toBe(true);
+			expect(response2.body.deliveredChannels).toEqual(['discord']);
+			expect(mockFetch).toHaveBeenCalledTimes(1);
+			expect(mockFetch).toHaveBeenCalledWith(
+				expect.stringContaining(webhookB),
+				expect.objectContaining({ method: 'POST' }),
+			);
+		});
+
+		it('should not re-deliver when a cached request uses the exact same discordWebhookUrl override', async () => {
+			process.env.ENABLE_DISCORD_ALERTS = 'true';
+			process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/default/default';
+			await initializeNotificationServices(mockBot);
+			const webhookA = 'https://discord.com/api/webhooks/123/abc';
+
+			const response1 = await request(app)
+				.post('/api/news-monitor').set('x-api-key', 'test-key')
+				.send({
+					crypto: ['BTCUSDT'],
+					channels: ['discord'],
+					discordWebhookUrl: webhookA,
+				})
+				.expect(200);
+
+			expect(response1.body.results[0].cached).toBe(false);
+			mockFetch.mockClear();
+
+			const response2 = await request(app)
+				.post('/api/news-monitor').set('x-api-key', 'test-key')
+				.send({
+					crypto: ['BTCUSDT'],
+					channels: ['discord'],
+					discordWebhookUrl: webhookA,
+				})
+				.expect(200);
+
+			expect(response2.body.results[0].cached).toBe(true);
+			expect(mockFetch).not.toHaveBeenCalled();
+		});
+
 		it('should include cached alerts in response', async () => {
 			// First call
 			const response1 = await request(app)

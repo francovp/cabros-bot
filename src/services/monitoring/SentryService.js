@@ -651,10 +651,12 @@ class SentryService {
 				error_type: event.type,
 				is_process_level: String(event.isProcessLevel),
 				...(event.http && {
-					endpoint: event.http.endpoint,
-					http_method: event.http.method,
-					status_code: String(event.http.statusCode),
-					http_category: `${Math.floor(event.http.statusCode / 100)}xx`,
+					...(event.http.endpoint && { endpoint: event.http.endpoint }),
+					...(event.http.method && { http_method: event.http.method }),
+					...(event.http.statusCode !== undefined && event.http.statusCode !== null && !isNaN(event.http.statusCode) && {
+						status_code: String(event.http.statusCode),
+						http_category: `${Math.floor(Number(event.http.statusCode) / 100)}xx`,
+					}),
 				}),
 				...(event.external && {
 					provider: event.external.provider,

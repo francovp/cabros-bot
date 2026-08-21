@@ -127,15 +127,20 @@ const setHidden = (id, hidden) => {
 	if (node) node.hidden = hidden;
 };
 
+const AUTH_CONFIG_TIMEOUT_MS = 8000;
+
 const loadAuthConfig = () => {
 	if (!authConfigPromise) {
 		const prefix = getApiBaseUrl();
-		authConfigPromise = (prefix ? fetch(`${prefix}/admin/auth-config`) : fetch('/admin/auth-config'))
+		const controller = new AbortController();
+		const timer = setTimeout(() => controller.abort(), AUTH_CONFIG_TIMEOUT_MS);
+		authConfigPromise = fetch(`${prefix}/admin/auth-config`, { signal: controller.signal })
 			.then((response) => {
 				if (!response.ok) throw new Error('Authentication configuration unavailable');
 				return response.json();
 			})
-			.catch(() => ({ enabled: true, configured: false }));
+			.catch(() => ({ enabled: true, configured: false }))
+			.finally(() => clearTimeout(timer));
 	}
 	return authConfigPromise;
 };
