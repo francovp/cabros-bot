@@ -75,6 +75,18 @@ function parseBoundedNumber(value, schema, fallback) {
 	return parsed;
 }
 
+function parseEnvironmentNumber(value, schema, fallback) {
+	if (value === undefined || value === null || value === '') {
+		return fallback;
+	}
+
+	const parsed = typeof value === 'number' ? value : Number(String(value).trim());
+	if (!Number.isFinite(parsed) || (schema.integer && !Number.isSafeInteger(parsed)) || parsed < schema.min) {
+		return fallback;
+	}
+	return parsed;
+}
+
 function parseBoolean(value, fallback) {
 	if (value === undefined || value === null || value === '') {
 		return fallback;
@@ -129,9 +141,11 @@ function getEnvironmentConfig() {
 			config[key] = parseLegacyPositiveInteger(process.env.NEWS_GEMINI_QUOTA_RETRY_BASE_MS, 1000);
 		} else if (key === 'ENABLE_MESSAGE_FOOTER_METADATA') {
 			config[key] = process.env.ENABLE_MESSAGE_FOOTER_METADATA !== 'false';
+		} else if (key === 'WEBHOOK_IDEMPOTENCY_TTL_MS') {
+			config[key] = parseEnvironmentNumber(process.env[key], schema, schema.defaultValue);
 		} else if (key === 'SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS') {
 			const envVal = process.env.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS || process.env.SIGNAL_OUTCOME_EVALUATION_CADENCE_MS;
-			config[key] = parseValue(envVal, schema, schema.defaultValue);
+			config[key] = parseEnvironmentNumber(envVal, schema, schema.defaultValue);
 		} else {
 			config[key] = parseValue(process.env[key], schema, schema.defaultValue);
 		}

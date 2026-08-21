@@ -1333,6 +1333,16 @@ News monitor cache reads now include `EventCategory.NONE`, so a cached no-event 
 
 No endpoint or response contract changed; Postman and OpenAPI remain unchanged.
 
+## Remote Config Environment Boundaries (CB-169 / Issue #405)
+
+`RemoteConfigService.getEnvironmentConfig()` preserves positive integer environment values for `WEBHOOK_IDEMPOTENCY_TTL_MS` and `SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS` even when they exceed the ceilings used to validate Firebase Remote Config overrides. Out-of-range remote values remain rejected and fail open to the environment value; the other environment parameters retain their existing bounded parsing.
+
+**Coverage**:
+- `src/services/remoteConfig/RemoteConfigService.js` — Separates environment parsing from bounded remote override parsing for the two affected runtime controls.
+- `tests/unit/remote-config-service.test.js` — Covers high environment values and invalid remote overrides for both controls.
+
+No endpoint, OpenAPI, Postman, Firebase template, or environment-variable name changed.
+
 ## Analyzer Cooldown Test Module Isolation (CB-168 / Issue #404)
 
 The analyzer cooldown regression test loads `geminiQuotaManager` and `NewsAnalyzer` inside one `jest.isolateModules()` registry after an explicit module reset. This keeps the cooldown state configured by the test attached to the same singleton instance cached by `NewsAnalyzer`, preventing order-dependent false `analyzed` results.
