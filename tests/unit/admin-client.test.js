@@ -92,7 +92,7 @@ const response = (body, status = 200) => ({
 	text: async () => JSON.stringify(body),
 });
 
-function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', firebase }) {
+function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', firebase, location = {} }) {
 	const body = new FakeElement('body');
 	const elementsById = {};
 	[
@@ -137,6 +137,8 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 	};
 	const context = {
 		document,
+		URL,
+		URLSearchParams,
 		fetch: jest.fn(async (url, options) => {
 			if (url === '/admin/auth-config' && !firebase) return response({ enabled: false, configured: false });
 			return fetchImpl(url, options);
@@ -151,6 +153,7 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 			CabrosAdminRequest: helper,
 			confirm,
 			firebase,
+			location,
 			URL: {
 				createObjectURL: jest.fn((blob) => `blob:${blob.type}`),
 				revokeObjectURL: jest.fn(),
@@ -229,6 +232,26 @@ describe('admin browser client', () => {
 
 		expect(requests).toEqual(['/openapi.json']);
 		expect(browser.elementsById.view.textContent).toContain('Enter an API key');
+	});
+
+	it('ignores an unallowlisted backend origin override', async () => {
+		const requests = [];
+		const browser = createBrowser({
+			location: {
+				hostname: 'cabros-bot.web.app',
+				search: '?backend=https%3A%2F%2Fattacker.example',
+			},
+			fetchImpl: async (url) => {
+				requests.push(url);
+				if (url.endsWith('/openapi.json')) return response(contract);
+				return response({ enabled: false, configured: false });
+			},
+		});
+		await flush();
+
+		expect(requests[0]).toBe('https://cabros-bot-production.up.railway.app/admin/auth-config');
+		expect(requests.some((url) => url.includes('attacker.example'))).toBe(false);
+		void browser;
 	});
 
 	it('does not render an HTTP error payload as a healthy overview', async () => {
