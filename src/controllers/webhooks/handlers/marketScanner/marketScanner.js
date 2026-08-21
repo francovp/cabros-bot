@@ -7,6 +7,7 @@ const {
 	parseMarketScannerRequest,
 	buildMarketScannerReport,
 	prepareMarketScannerItems,
+	getRiskLevelsForSide,
 } = require('../../../../services/tradingview/marketScannerReport');
 const {
 	getNotificationManager,
@@ -140,6 +141,29 @@ function postMarketScannerAlert(botOrGetter) {
 							}
 							const itemScore = item.changePercent ?? item.indicators?.RSI ?? item.volume_ratio ?? null;
 
+							const atr = Number(item.indicators?.atr ?? item.indicators?.ATR ?? item.atr ?? null);
+							const bbLower = Number(item.indicators?.bb_lower ?? item.indicators?.bollinger_lower ?? item.indicators?.lower ?? item.bollinger?.lower ?? item.bollinger_lower ?? null);
+							const bbUpper = Number(item.indicators?.bb_upper ?? item.indicators?.bollinger_upper ?? item.indicators?.upper ?? item.bollinger?.upper ?? item.bollinger_upper ?? null);
+							const support = Number(item.indicators?.support ?? item.indicators?.nearest_support ?? item.support ?? item.support_resistance?.nearest_support ?? item.support_resistance?.support_1 ?? null);
+							const resistance = Number(item.indicators?.resistance ?? item.indicators?.nearest_resistance ?? item.resistance ?? item.support_resistance?.nearest_resistance ?? item.support_resistance?.resistance_1 ?? null);
+
+							const validPrice = typeof closePrice === 'number' && Number.isFinite(closePrice) ? closePrice : null;
+							let stopLoss = null;
+							let takeProfit = null;
+							if (validPrice !== null) {
+								const riskLevels = getRiskLevelsForSide({
+									side: itemSide,
+									price: validPrice,
+									atr: Number.isFinite(atr) ? atr : null,
+									bbLower: Number.isFinite(bbLower) ? bbLower : null,
+									bbUpper: Number.isFinite(bbUpper) ? bbUpper : null,
+									support: Number.isFinite(support) ? support : null,
+									resistance: Number.isFinite(resistance) ? resistance : null,
+								});
+								stopLoss = riskLevels.stopLoss;
+								takeProfit = riskLevels.takeProfit;
+							}
+
 							signalOutcomeService.recordSignal({
 								requestId,
 								source: 'market-scanner',
@@ -149,7 +173,9 @@ function postMarketScannerAlert(botOrGetter) {
 								setupType: scanResult.scan,
 								score: itemScore,
 								side: itemSide,
-								price: typeof closePrice === 'number' ? closePrice : null,
+								price: validPrice,
+								stop: stopLoss,
+								target: takeProfit,
 								sources: [],
 								tokenUsage: null,
 								processingTimeMs: Date.now() - startTime,

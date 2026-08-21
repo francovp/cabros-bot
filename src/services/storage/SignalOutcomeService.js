@@ -502,16 +502,76 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 						continue;
 					}
 
-					const lastKline = klines[klines.length - 1];
-					const exitPrice = parseFloat(lastKline[4]); // close price of last kline
+					const sortedKlines = [...klines].sort((a, b) => (Number(a[0]) || 0) - (Number(b[0]) || 0));
+					const lastKline = sortedKlines[sortedKlines.length - 1];
+					let exitPrice = parseFloat(lastKline[4]); // close price of last kline
+
+					const stop = typeof data.stop === 'number' && Number.isFinite(data.stop) && data.stop > 0 ? data.stop : null;
+					const target = typeof data.target === 'number' && Number.isFinite(data.target) && data.target > 0 ? data.target : null;
 
 					let highestHigh = -Infinity;
 					let lowestLow = Infinity;
-					for (const kline of klines) {
+					let firstHit = null;
+					let firstHitTime = null;
+					let targetHit = false;
+					let stopHit = false;
+
+					for (let i = 0; i < sortedKlines.length; i++) {
+						const kline = sortedKlines[i];
+						const barTimestamp = typeof kline[0] === 'number' ? kline[0] : parseInt(kline[0], 10);
 						const high = parseFloat(kline[2]);
 						const low = parseFloat(kline[3]);
 						if (high > highestHigh) highestHigh = high;
 						if (low < lowestLow) lowestLow = low;
+
+						if (side === 'BUY') {
+							const isStopHit = stop !== null && low <= stop;
+							const isTargetHit = target !== null && high >= target;
+
+							if (isStopHit && isTargetHit) {
+								// Both hit on same candle: conservative assumption is stop hit
+								firstHit = 'stop';
+								stopHit = true;
+								exitPrice = stop;
+								firstHitTime = Number.isFinite(barTimestamp) ? new Date(barTimestamp).toISOString() : null;
+								break;
+							} else if (isStopHit) {
+								firstHit = 'stop';
+								stopHit = true;
+								exitPrice = stop;
+								firstHitTime = Number.isFinite(barTimestamp) ? new Date(barTimestamp).toISOString() : null;
+								break;
+							} else if (isTargetHit) {
+								firstHit = 'target';
+								targetHit = true;
+								exitPrice = target;
+								firstHitTime = Number.isFinite(barTimestamp) ? new Date(barTimestamp).toISOString() : null;
+								break;
+							}
+						} else { // SELL
+							const isStopHit = stop !== null && high >= stop;
+							const isTargetHit = target !== null && low <= target;
+
+							if (isStopHit && isTargetHit) {
+								firstHit = 'stop';
+								stopHit = true;
+								exitPrice = stop;
+								firstHitTime = Number.isFinite(barTimestamp) ? new Date(barTimestamp).toISOString() : null;
+								break;
+							} else if (isStopHit) {
+								firstHit = 'stop';
+								stopHit = true;
+								exitPrice = stop;
+								firstHitTime = Number.isFinite(barTimestamp) ? new Date(barTimestamp).toISOString() : null;
+								break;
+							} else if (isTargetHit) {
+								firstHit = 'target';
+								targetHit = true;
+								exitPrice = target;
+								firstHitTime = Number.isFinite(barTimestamp) ? new Date(barTimestamp).toISOString() : null;
+								break;
+							}
+						}
 					}
 
 					let returnVal = 0;
@@ -528,11 +588,27 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 						mae = ((entryPrice - highestHigh) / entryPrice) * 100;
 					}
 
+					let rMultiple = null;
+					if (stop !== null) {
+						const initialRisk = side === 'BUY' ? (entryPrice - stop) : (stop - entryPrice);
+						if (initialRisk > 0) {
+							const realizedGain = side === 'BUY' ? (exitPrice - entryPrice) : (entryPrice - exitPrice);
+							rMultiple = parseFloat((realizedGain / initialRisk).toFixed(4));
+						}
+					}
+
 					outcome.status = 'evaluated';
 					outcome.price = exitPrice;
 					outcome.return = parseFloat(returnVal.toFixed(4));
 					outcome.maxFavorableExcursion = parseFloat(Math.max(0, mfe).toFixed(4));
 					outcome.maxAdverseExcursion = parseFloat(Math.min(0, mae).toFixed(4));
+					outcome.firstHit = firstHit;
+					outcome.targetHit = targetHit;
+					outcome.stopHit = stopHit;
+					outcome.firstHitTime = firstHitTime;
+					if (rMultiple !== null) {
+						outcome.rMultiple = rMultiple;
+					}
 					docUpdated = true;
 				} catch (error) {
 					if (abortController) {
@@ -849,10 +925,14 @@ async function getMetricsSummary({ from, to, limit } = {}) {
 			for (const winKey of Object.keys(WINDOW_CONFIGS)) {
 				let totalWinsEvaluated = 0;
 				let hits = 0;
+				let targetHits = 0;
+				let stopHits = 0;
 				let totalReturn = 0;
 				let totalMfe = 0;
 				let totalMae = 0;
 				let maxMae = 0; // absolute maximum drawdown seen
+				let totalR = 0;
+				let rCount = 0;
 
 				for (const signal of evaluatedSignals) {
 					const outcome = signal.outcomes[winKey];
@@ -860,6 +940,16 @@ async function getMetricsSummary({ from, to, limit } = {}) {
 						totalWinsEvaluated++;
 						if (outcome.return > 0) {
 							hits++;
+						}
+						if (outcome.targetHit === true || outcome.firstHit === 'target') {
+							targetHits++;
+						}
+						if (outcome.stopHit === true || outcome.firstHit === 'stop') {
+							stopHits++;
+						}
+						if (typeof outcome.rMultiple === 'number' && Number.isFinite(outcome.rMultiple)) {
+							totalR += outcome.rMultiple;
+							rCount++;
 						}
 						totalReturn += outcome.return;
 						totalMfe += outcome.maxFavorableExcursion;
@@ -874,6 +964,9 @@ async function getMetricsSummary({ from, to, limit } = {}) {
 					windowStats[winKey] = {
 						totalSignals: totalWinsEvaluated,
 						hitRatePercent: parseFloat(((hits / totalWinsEvaluated) * 100).toFixed(2)),
+						targetHitRatePercent: parseFloat(((targetHits / totalWinsEvaluated) * 100).toFixed(2)),
+						stopHitRatePercent: parseFloat(((stopHits / totalWinsEvaluated) * 100).toFixed(2)),
+						expectancyR: rCount > 0 ? parseFloat((totalR / rCount).toFixed(4)) : null,
 						averageReturnPercent: parseFloat((totalReturn / totalWinsEvaluated).toFixed(4)),
 						averageMfePercent: parseFloat((totalMfe / totalWinsEvaluated).toFixed(4)),
 						averageMaePercent: parseFloat((totalMae / totalWinsEvaluated).toFixed(4)),
@@ -949,6 +1042,40 @@ async function getMetricsSummary({ from, to, limit } = {}) {
 		const coveragePercent = totalSignalsReceived > 0 ? parseFloat(((totalSignalsEvaluated / totalSignalsReceived) * 100).toFixed(2)) : 0;
 		const isCoverageComplete = totalSignalsEvaluated === totalSignalsReceived;
 
+		let allTargetHits = 0;
+		let allStopHits = 0;
+		let allEvaluatedWindows = 0;
+		let allTotalR = 0;
+		let allRCount = 0;
+
+		for (const signal of evaluatedSignals) {
+			for (const outcome of Object.values(signal.outcomes || {})) {
+				if (outcome && outcome.status === 'evaluated') {
+					allEvaluatedWindows++;
+					if (outcome.targetHit === true || outcome.firstHit === 'target') {
+						allTargetHits++;
+					}
+					if (outcome.stopHit === true || outcome.firstHit === 'stop') {
+						allStopHits++;
+					}
+					if (typeof outcome.rMultiple === 'number' && Number.isFinite(outcome.rMultiple)) {
+						allTotalR += outcome.rMultiple;
+						allRCount++;
+					}
+				}
+			}
+		}
+
+		const overallTargetHitRatePercent = allEvaluatedWindows > 0
+			? parseFloat(((allTargetHits / allEvaluatedWindows) * 100).toFixed(2))
+			: 0;
+		const overallStopHitRatePercent = allEvaluatedWindows > 0
+			? parseFloat(((allStopHits / allEvaluatedWindows) * 100).toFixed(2))
+			: 0;
+		const overallExpectancyR = allRCount > 0
+			? parseFloat((allTotalR / allRCount).toFixed(4))
+			: null;
+
 		return {
 			totalSignalsReceived,
 			totalSignalsEligible,
@@ -957,6 +1084,9 @@ async function getMetricsSummary({ from, to, limit } = {}) {
 			totalSignalsUnavailable,
 			coveragePercent,
 			isCoverageComplete,
+			targetHitRatePercent: overallTargetHitRatePercent,
+			stopHitRatePercent: overallStopHitRatePercent,
+			expectancyR: overallExpectancyR,
 			populationNote: !isCoverageComplete
 				? `Metrics represent ${totalSignalsEvaluated} evaluated signals out of ${totalSignalsReceived} total received signals (${coveragePercent}% coverage).`
 				: 'Metrics represent 100% of received signals.',

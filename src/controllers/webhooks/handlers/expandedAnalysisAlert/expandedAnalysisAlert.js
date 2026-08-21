@@ -6,6 +6,7 @@ const {
 	ExpandedAnalysisAlertRequestError,
 	parseExpandedAnalysisAlertRequest,
 	buildExpandedAnalysisAlertReport,
+	buildReportRow,
 } = require('../../../../services/tradingview/expandedAnalysisAlertReport');
 const {
 	getNotificationManager,
@@ -120,8 +121,9 @@ function postExpandedAnalysisAlert(botOrGetter) {
 						itemSide = 'SELL';
 					}
 
+					const row = buildReportRow(item);
 					const tech = item.analysis.technical || item.analysis || {};
-					const closePrice = tech.price_data?.current_price ?? tech.price_data?.close ?? null;
+					const closePrice = row.price ?? tech.price_data?.current_price ?? tech.price_data?.close ?? null;
 					const score = item.analysis.market_sentiment?.overall_rating ?? tech.market_sentiment?.overall_rating ?? null;
 
 					signalOutcomeService.recordSignal({
@@ -134,6 +136,8 @@ function postExpandedAnalysisAlert(botOrGetter) {
 						score,
 						side: itemSide,
 						price: typeof closePrice === 'number' ? closePrice : null,
+						stop: typeof row.stopLoss === 'number' ? row.stopLoss : null,
+						target: typeof row.takeProfit === 'number' ? row.takeProfit : null,
 						sources: [],
 						tokenUsage: null,
 						processingTimeMs: Date.now() - startTime,
