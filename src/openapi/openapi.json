@@ -3340,7 +3340,7 @@
               "number",
               "string"
             ],
-            "description": "Base-asset quantity. Required for LIMIT. Send as a string when exact decimal precision matters. MARKET orders must use quoteOrderQty when the configured notional cap is enforced, because quantity-based market execution cannot be bounded safely."
+            "description": "Base-asset quantity. Required for LIMIT. Optional for MARKET (evaluated using average price against the notional cap). Send as a string when exact decimal precision matters."
           },
           "quoteOrderQty": {
             "type": [

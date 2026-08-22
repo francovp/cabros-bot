@@ -138,6 +138,51 @@ describe('Binance orders API', () => {
 		expect(client.submitNewOrder).not.toHaveBeenCalled();
 	});
 
+	it('validates and executes quantity-based MARKET orders using average price notional check', async () => {
+		client.getAvgPrice = jest.fn().mockResolvedValue({ price: '50000.00' });
+		client.submitNewOrder = jest.fn().mockResolvedValue({
+			symbol: 'BTCUSDT',
+			orderId: 1002,
+			clientOrderId: 'custom-sell-1',
+			transactTime: 1700000000000,
+			price: '0.00000000',
+			origQty: '0.00100000',
+			executedQty: '0.00100000',
+			cummulativeQuoteQty: '50.00000000',
+			status: 'FILLED',
+			timeInForce: 'GTC',
+			type: 'MARKET',
+			side: 'SELL',
+			fills: [],
+		});
+
+		const response = await request(app)
+			.post('/api/trading/binance/orders')
+			.set('x-api-key', 'test-key')
+			.send({
+				symbol: 'BTCUSDT',
+				side: 'SELL',
+				type: 'MARKET',
+				quantity: 0.001,
+				clientOrderId: 'custom-sell-1',
+				dryRun: false,
+			})
+			.expect(201);
+
+		expect(client.getAvgPrice).toHaveBeenCalledWith({ symbol: 'BTCUSDT' });
+		expect(response.body).toMatchObject({
+			success: true,
+			dryRun: false,
+			environment: 'testnet',
+			order: {
+				symbol: 'BTCUSDT',
+				orderId: 1002,
+				side: 'SELL',
+				type: 'MARKET',
+			},
+		});
+	});
+
 	it('submits once and replays the cached result for an idempotency key', async () => {
 		const payload = {
 			symbol: 'BTCUSDT',
