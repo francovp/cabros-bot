@@ -107,6 +107,9 @@ const LONG_RUNNING_REQUEST_PATHS = new Set([
 	'/api/webhook/market-scanner-alert',
 	'/api/news-monitor',
 	'/api/scanner-presets/{id}/run',
+	'/api/webhook/alert',
+	'/api/webhook/message',
+	'/api/alerts/{alertId}/replay',
 ]);
 const getApiRequestTimeout = (definition) => {
 	if (definition.path === '/api/webhook/volume-confirmation') return VOLUME_CONFIRMATION_API_REQUEST_TIMEOUT_MS;

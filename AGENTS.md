@@ -1308,7 +1308,7 @@ This is a UI-only consumer change: job persistence, lifecycle semantics, OpenAPI
 
 ## Admin Console Fetch Deadlines (CB-164 / Issue #402)
 
-The hosted admin console now bounds browser fetches: `/admin/auth-config` keeps its existing 8-second fallback, `/openapi.json` uses an 8-second contract-load deadline, ordinary protected API requests use 30 seconds, synchronous analysis/news-monitor/market-scanner/scanner-preset reports use a 900-second client budget derived from their 120-second analysis and notification-delivery ceilings, and volume confirmation uses 360 seconds for its three sequential 120-second MCP calls. A shared `fetchWithTimeout()` helper keeps response-body parsing inside the abortable operation, clears timers on success/failure, and preserves contract retry plus request error/finally behavior.
+The hosted admin console now bounds browser fetches: `/admin/auth-config` keeps its existing 8-second fallback, `/openapi.json` uses an 8-second contract-load deadline, ordinary protected API requests use 30 seconds, synchronous analysis/news-monitor/market-scanner/scanner-preset/direct-alert/message/replay reports use a 900-second client budget derived from their 120-second analysis and notification-delivery ceilings, and volume confirmation uses 360 seconds for its three sequential 120-second MCP calls. A shared `fetchWithTimeout()` helper keeps response-body parsing inside the abortable operation, clears timers on success/failure, and preserves contract retry plus request error/finally behavior.
 
 **Coverage**:
 - `src/admin/admin.js` and generated `public/admin/admin.js` — shared browser deadline helper for auth config, OpenAPI contract, and API requests.
