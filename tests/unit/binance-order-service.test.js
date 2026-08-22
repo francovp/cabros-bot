@@ -170,24 +170,97 @@ describe('BinanceOrderService', () => {
 		});
 	});
 
-	it('rejects quantity-based market orders when the notional cap cannot be enforced', async () => {
+	it('allows quantity-based market orders with average-price notional validation', async () => {
 		const client = {
 			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
-			getAvgPrice: jest.fn(),
+			getAvgPrice: jest.fn().mockResolvedValue({ price: '50000.00' }),
+			testNewOrder: jest.fn().mockResolvedValue({}),
+		};
+		const service = createBinanceOrderService({ createClient: () => client });
+
+		const result = await service.placeOrder({
+			symbol: 'BTCUSDT',
+			side: 'SELL',
+			type: 'MARKET',
+			quantity: 0.001,
+			dryRun: true,
+		});
+
+		expect(client.getAvgPrice).toHaveBeenCalledWith({ symbol: 'BTCUSDT' });
+		expect(result).toMatchObject({
+			success: true,
+			dryRun: true,
+			order: {
+				symbol: 'BTCUSDT',
+				side: 'SELL',
+				type: 'MARKET',
+				quantity: 0.001,
+			},
+		});
+	});
+
+	it('rejects quantity-based market orders when estimated notional exceeds maxNotional', async () => {
+		process.env.BINANCE_TRADING_MAX_NOTIONAL = '100';
+		const client = {
+			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
+			getAvgPrice: jest.fn().mockResolvedValue({ price: '50000.00' }),
 		};
 		const service = createBinanceOrderService({ createClient: () => client });
 
 		await expect(service.placeOrder({
 			symbol: 'BTCUSDT',
-			side: 'BUY',
+			side: 'SELL',
 			type: 'MARKET',
-			quantity: 0.1,
+			quantity: 0.01, // 0.01 * 50000 = 500 > 100
 			dryRun: true,
 		})).rejects.toMatchObject({
-			code: 'MARKET_QUANTITY_NOTIONAL_UNSUPPORTED',
+			code: 'INVALID_ORDER_REQUEST',
+			message: expect.stringContaining('configured maximum'),
 		});
+	});
 
-		expect(client.getAvgPrice).not.toHaveBeenCalled();
+	it('rejects quantity-based market orders when getAvgPrice fails', async () => {
+		const client = {
+			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
+			getAvgPrice: jest.fn().mockRejectedValue(new Error('Binance price service unavailable')),
+		};
+		const service = createBinanceOrderService({ createClient: () => client });
+
+		await expect(service.placeOrder({
+			symbol: 'BTCUSDT',
+			side: 'SELL',
+			type: 'MARKET',
+			quantity: 0.001,
+			dryRun: true,
+		})).rejects.toMatchObject({
+			code: 'BINANCE_VALIDATION_FAILED',
+		});
+	});
+
+	it('enforces MARKET_LOT_SIZE filters on quantity-based market orders', async () => {
+		const client = {
+			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo({
+				filters: [
+					{ filterType: 'PRICE_FILTER', minPrice: '0.01', maxPrice: '1000000', tickSize: '0.01' },
+					{ filterType: 'LOT_SIZE', minQty: '0.0001', maxQty: '100', stepSize: '0.0001' },
+					{ filterType: 'MARKET_LOT_SIZE', minQty: '0.01', maxQty: '10', stepSize: '0.01' },
+					{ filterType: 'NOTIONAL', minNotional: '10', maxNotional: '10000', applyMaxToMarket: false },
+				],
+			})),
+			getAvgPrice: jest.fn().mockResolvedValue({ price: '50000.00' }),
+		};
+		const service = createBinanceOrderService({ createClient: () => client });
+
+		await expect(service.placeOrder({
+			symbol: 'BTCUSDT',
+			side: 'SELL',
+			type: 'MARKET',
+			quantity: 0.005, // Below minQty 0.01
+			dryRun: true,
+		})).rejects.toMatchObject({
+			code: 'INVALID_ORDER_REQUEST',
+			message: expect.stringContaining('minimum'),
+		});
 	});
 
 	it('honors Binance maximum notional and its market applicability flag', async () => {

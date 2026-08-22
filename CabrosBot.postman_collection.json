@@ -3410,7 +3410,7 @@
           ]
         },
         {
-          "name": "POST Binance order (invalid MARKET quantity cap)",
+          "name": "POST Binance order (valid MARKET quantity dry-run)",
           "request": {
             "method": "POST",
             "header": [
@@ -3427,7 +3427,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"symbol\": \"BTCUSDT\",\n  \"side\": \"BUY\",\n  \"type\": \"MARKET\",\n  \"quantity\": 0.001,\n  \"dryRun\": true\n}"
+              "raw": "{\n  \"symbol\": \"BTCUSDT\",\n  \"side\": \"SELL\",\n  \"type\": \"MARKET\",\n  \"quantity\": 0.001,\n  \"dryRun\": true\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/api/trading/binance/orders",
@@ -3444,10 +3444,10 @@
           },
           "response": [
             {
-              "name": "Bad Request",
-              "status": "Bad Request",
-              "code": 400,
-              "body": "{\n  \"success\": false,\n  \"error\": \"MARKET orders with quantity are unsupported when enforcing the notional cap; use quoteOrderQty\",\n  \"code\": \"MARKET_QUANTITY_NOTIONAL_UNSUPPORTED\"\n}"
+              "name": "OK",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"environment\": \"testnet\",\n  \"order\": {\n    \"symbol\": \"BTCUSDT\",\n    \"side\": \"SELL\",\n    \"type\": \"MARKET\",\n    \"quantity\": \"0.001\",\n    \"newClientOrderId\": \"cabros-test-order-id\"\n  }\n}"
             }
           ]
         },

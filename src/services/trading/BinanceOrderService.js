@@ -494,12 +494,6 @@ function createBinanceOrderService({ createClient = createBinanceClient } = {}) 
 			if (!config.allowedSymbols.includes(order.symbol)) {
 				throw new BinanceOrderRequestError('symbol is not allowed for Binance trading');
 			}
-			if (order.type === 'MARKET' && order.quantity !== undefined) {
-				throw new BinanceOrderRequestError(
-					'MARKET orders with quantity are unsupported when enforcing the notional cap; use quoteOrderQty',
-					'MARKET_QUANTITY_NOTIONAL_UNSUPPORTED',
-				);
-			}
 
 			let symbolInfo;
 			let exchangeInfo;
