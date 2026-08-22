@@ -230,19 +230,21 @@ function sanitizeEnrichmentData(enrichmentData) {
 }
 
 // Firestore Admin SDK rejects `undefined` field values anywhere in a write.
+// Only plain objects are rebuilt; class instances (Date, Firestore Timestamp,
+// GeoPoint, DocumentReference, FieldValue) pass through untouched.
 function stripUndefinedFieldsDeep(value) {
 	if (value === null || typeof value !== 'object') {
-		return value;
-	}
-	const FirestoreFieldValue = admin.firestore && admin.firestore.FieldValue;
-	if (value instanceof Date
-		|| (typeof FirestoreFieldValue === 'function' && value instanceof FirestoreFieldValue)) {
 		return value;
 	}
 	if (Array.isArray(value)) {
 		return value
 			.filter((item) => item !== undefined)
 			.map((item) => stripUndefinedFieldsDeep(item));
+	}
+
+	const proto = Object.getPrototypeOf(value);
+	if (proto !== Object.prototype && proto !== null) {
+		return value;
 	}
 
 	const result = {};

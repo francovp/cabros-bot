@@ -309,6 +309,29 @@ describe('AlertStorageService', () => {
 			})).toBe(false);
 		});
 
+		it('preserves nested class instances while stripping sibling undefined fields', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockAdd.mockResolvedValueOnce({ id: 'sentinel-alert' });
+			class ProviderSentinel {
+				constructor(marker) {
+					this.marker = marker;
+				}
+			}
+
+			await AlertStorageService.saveAlert(buildParams({
+				enriched: true,
+				enrichmentData: {
+					sentiment: 'bullish',
+					providerRef: new ProviderSentinel('keep-me'),
+				},
+			}));
+
+			const document = mockAdd.mock.calls.at(-1)[0];
+			expect(document.enrichmentData.providerRef).toBeInstanceOf(ProviderSentinel);
+			expect(document.enrichmentData.providerRef.marker).toBe('keep-me');
+			expect(document.enrichmentData.sentiment).toBe('bullish');
+		});
+
 		it('adds the default retention expiry to new alert documents', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 			jest.useFakeTimers().setSystemTime(new Date('2026-08-13T00:00:00.000Z'));
