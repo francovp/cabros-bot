@@ -1306,6 +1306,17 @@ Job-list, status, and cancel/retry responses use monotonic request versions and 
 
 This is a UI-only consumer change: job persistence, lifecycle semantics, OpenAPI, and Postman contracts remain unchanged.
 
+## Admin Console Fetch Deadlines (CB-164 / Issue #402)
+
+The hosted admin console now bounds browser fetches: `/admin/auth-config` keeps its existing 8-second fallback, `/openapi.json` uses an 8-second contract-load deadline, ordinary protected API requests use 30 seconds, synchronous analysis/news-monitor/market-scanner/scanner-preset/direct-alert/message/replay reports use a 900-second client budget derived from their 120-second analysis and notification-delivery ceilings, and volume confirmation uses 360 seconds for its three sequential 120-second MCP calls. A shared `fetchWithTimeout()` helper keeps response-body parsing inside the abortable operation, clears timers on success/failure, and preserves contract retry plus request error/finally behavior.
+
+**Coverage**:
+- `src/admin/admin.js` and generated `public/admin/admin.js` — shared browser deadline helper for auth config, OpenAPI contract, and API requests.
+- `tests/unit/admin-client.test.js` — proves stalled contract and protected requests abort, settle through existing error UI, clear timers, and cover every synchronous long-running console route.
+- `tests/integration/openapi-docs.test.js` — keeps the public admin asset contract check aligned with the deadline helper.
+
+No new environment variable, endpoint, OpenAPI, Postman, or Remote Config change was needed.
+
 ## Admin Alert Analytics and Export Workflows (CB-120 / Issue #288)
 
 The in-app `/admin` Alerts view now consumes the existing protected `GET /api/alerts/summary` and `GET /api/alerts/export` operations through dedicated bounded report forms. Summary windows default to the latest 24 hours and render returned aggregate data readably; exports require `from`/`to`, support JSONL and CSV, and download the response blob using its content type. Source/enriched filters are applied before bounded summary aggregation with raw Firestore cursors; filtered reports omit shadow-mode metrics because that service has no matching filters.
