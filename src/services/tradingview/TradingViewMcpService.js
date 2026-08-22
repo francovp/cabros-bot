@@ -648,12 +648,15 @@ class TradingViewMcpService {
 		const marketSentiment = (analysis && analysis.market_sentiment) || {};
 		const marketStructure = (analysis && analysis.market_structure) || {};
 		const timeframeContext = (analysis && analysis.timeframe_context) || {};
-		const atr = this._firstNumber([
+		const atrCandidates = [
 			indicators.atr,
 			analysis && analysis.atr && typeof analysis.atr === 'object' ? analysis.atr.value : analysis && analysis.atr,
 			analysis && analysis.volatility && analysis.volatility.atr,
-		], null);
-		const atrWasProvided = Number.isFinite(atr);
+		];
+		const atr = this._firstNumber(atrCandidates.map(value => (
+			typeof value === 'string' && value.trim() ? Number(value) : value
+		)), null);
+		const atrWasProvided = atrCandidates.some(value => value !== null && value !== undefined && value !== '');
 		const atrStop = validCurrentPrice === null ? null : side === 'SELL' ? validCurrentPrice + (atr * 1.5) : validCurrentPrice - (atr * 1.5);
 		const atrTarget = validCurrentPrice === null ? null : side === 'SELL' ? validCurrentPrice - (atr * 3) : validCurrentPrice + (atr * 3);
 		const usableAtr = Number.isFinite(atr)
