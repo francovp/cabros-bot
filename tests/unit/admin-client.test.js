@@ -419,7 +419,8 @@ describe('admin browser client', () => {
 				if (url === '/openapi.json') return response(contract);
 				if (!url.includes('/api/webhook/expanded-analysis-alert')
 					&& !url.includes('/api/news-monitor')
-					&& !url.includes('/api/scanner-presets/')) return response({});
+					&& !url.includes('/api/scanner-presets/')
+					&& !url.includes('/api/webhook/volume-confirmation')) return response({});
 				const signal = options?.signal;
 				signals.push(signal);
 				return new Promise((resolve, reject) => {
@@ -434,7 +435,7 @@ describe('admin browser client', () => {
 		await form.dispatch('submit');
 		await flush();
 
-		expect([...browser.timerDelays.values()]).toContain(180000);
+		expect([...browser.timerDelays.values()]).toContain(900000);
 		for (const fireTimer of browser.timers.values()) fireTimer();
 		await flush();
 		expect(signals[0].aborted).toBe(true);
@@ -442,7 +443,7 @@ describe('admin browser client', () => {
 		await selectView(browser, 'analysis');
 		await findForm(browser.elementsById.view, 'POST /api/news-monitor').dispatch('submit');
 		await flush();
-		expect([...browser.timerDelays.values()]).toContain(180000);
+		expect([...browser.timerDelays.values()]).toContain(900000);
 		for (const fireTimer of browser.timers.values()) fireTimer();
 		await flush();
 		expect(signals[1].aborted).toBe(true);
@@ -450,10 +451,18 @@ describe('admin browser client', () => {
 		await selectView(browser, 'presets');
 		await findForm(browser.elementsById.view, 'POST /api/scanner-presets/{id}/run').dispatch('submit');
 		await flush();
-		expect([...browser.timerDelays.values()]).toContain(180000);
+		expect([...browser.timerDelays.values()]).toContain(900000);
 		for (const fireTimer of browser.timers.values()) fireTimer();
 		await flush();
 		expect(signals[2].aborted).toBe(true);
+
+		await selectView(browser, 'analysis');
+		await findForm(browser.elementsById.view, 'POST /api/webhook/volume-confirmation').dispatch('submit');
+		await flush();
+		expect([...browser.timerDelays.values()]).toContain(360000);
+		for (const fireTimer of browser.timers.values()) fireTimer();
+		await flush();
+		expect(signals[3].aborted).toBe(true);
 	});
 
 	it('shows Firebase sign-in state and sends a verified token after sign-in', async () => {

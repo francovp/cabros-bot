@@ -100,16 +100,19 @@ let authState = { enabled: false, auth: null, user: null, role: null };
 
 const CONTRACT_TIMEOUT_MS = 8000;
 const API_REQUEST_TIMEOUT_MS = 30000;
-const LONG_RUNNING_API_REQUEST_TIMEOUT_MS = 180000;
+const LONG_RUNNING_API_REQUEST_TIMEOUT_MS = 900000;
+const VOLUME_CONFIRMATION_API_REQUEST_TIMEOUT_MS = 360000;
 const LONG_RUNNING_REQUEST_PATHS = new Set([
 	'/api/webhook/expanded-analysis-alert',
 	'/api/webhook/market-scanner-alert',
 	'/api/news-monitor',
 	'/api/scanner-presets/{id}/run',
 ]);
-
-const getApiRequestTimeout = (definition) => LONG_RUNNING_REQUEST_PATHS.has(definition.path)
-	? LONG_RUNNING_API_REQUEST_TIMEOUT_MS : API_REQUEST_TIMEOUT_MS;
+const getApiRequestTimeout = (definition) => {
+	if (definition.path === '/api/webhook/volume-confirmation') return VOLUME_CONFIRMATION_API_REQUEST_TIMEOUT_MS;
+	return LONG_RUNNING_REQUEST_PATHS.has(definition.path)
+		? LONG_RUNNING_API_REQUEST_TIMEOUT_MS : API_REQUEST_TIMEOUT_MS;
+};
 
 const fetchWithTimeout = (input, options, timeoutMs, consume) => {
 	const controller = new AbortController();
