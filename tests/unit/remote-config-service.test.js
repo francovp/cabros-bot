@@ -103,21 +103,17 @@ describe('RemoteConfigService', () => {
 
 	it('preserves environment values above Remote Config override bounds', () => {
 		process.env.WEBHOOK_IDEMPOTENCY_TTL_MS = '604800000';
-		process.env.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS = '86400000';
 
 		expect(remoteConfigService.getRuntimeConfig()).toEqual(expect.objectContaining({
 			WEBHOOK_IDEMPOTENCY_TTL_MS: 604800000,
-			SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS: 86400000,
 		}));
 	});
 
 	it('rejects out-of-range remote overrides without discarding environment values', async () => {
 		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
 		process.env.WEBHOOK_IDEMPOTENCY_TTL_MS = '604800000';
-		process.env.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS = '86400000';
 		mockTemplate({
 			WEBHOOK_IDEMPOTENCY_TTL_MS: 604800001,
-			SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS: 86400001,
 		});
 		alertStorageService.getFirestore.mockReturnValue({});
 
@@ -125,7 +121,6 @@ describe('RemoteConfigService', () => {
 
 		expect(remoteConfigService.getRuntimeConfig()).toEqual(expect.objectContaining({
 			WEBHOOK_IDEMPOTENCY_TTL_MS: 604800000,
-			SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS: 86400000,
 		}));
 		expect(remoteConfigService.getStatus().lastErrorCategory).toBe('invalid_value');
 	});
@@ -292,7 +287,6 @@ describe('RemoteConfigService', () => {
 			DISCORD_MAX_TOTAL_RETRY_WAIT_MS: 20000,
 			WEBHOOK_IDEMPOTENCY_TTL_MS: 600000,
 			JOB_CALLBACK_RETRY_DELAY_MS: 2500,
-			SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS: 600000,
 			SIGNAL_OUTCOME_EVALUATION_BATCH_LIMIT: 100,
 			SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS: 60000,
 		});
@@ -313,7 +307,6 @@ describe('RemoteConfigService', () => {
 		expect(config.DISCORD_MAX_TOTAL_RETRY_WAIT_MS).toBe(20000);
 		expect(config.WEBHOOK_IDEMPOTENCY_TTL_MS).toBe(600000);
 		expect(config.JOB_CALLBACK_RETRY_DELAY_MS).toBe(2500);
-		expect(config.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS).toBe(600000);
 		expect(config.SIGNAL_OUTCOME_EVALUATION_BATCH_LIMIT).toBe(100);
 		expect(config.SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS).toBe(60000);
 	});
@@ -337,6 +330,18 @@ describe('RemoteConfigService', () => {
 		expect(config.ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION).toBe(true);
 		expect(config.ENABLE_MARKET_SCANNER).toBe(true);
 		expect(config.ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP).toBe(true);
+	});
+
+	it('keeps the startup-only signal outcome cadence out of Remote Config', async () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		process.env.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS = '60000';
+		mockTemplate({ SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS: 120000 });
+		alertStorageService.getFirestore.mockReturnValue({});
+
+		await remoteConfigService.loadNow();
+
+		expect(remoteConfigService.PARAMETER_SCHEMA).not.toHaveProperty('SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS');
+		expect(remoteConfigService.getRuntimeConfig()).not.toHaveProperty('SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS');
 	});
 
 	it('enforces bounds on new operational parameters in env parsing', () => {

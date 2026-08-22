@@ -3,6 +3,7 @@
 const admin = require('firebase-admin');
 const SignalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
 const AlertStorageService = require('../../src/services/storage/AlertStorageService');
+const remoteConfigService = require('../../src/services/remoteConfig/RemoteConfigService');
 
 const mockGetKlines = jest.fn();
 jest.mock('binance', () => {
@@ -22,10 +23,12 @@ describe('SignalOutcomeService Worker & Bounded Evaluation', () => {
 		admin.__resetApps();
 		admin.__resetCollectionState();
 		AlertStorageService._resetForTesting();
+		remoteConfigService._resetForTesting();
 		SignalOutcomeService.stopWorker();
 		delete process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING;
 		delete process.env.ENABLE_SIGNAL_OUTCOME_TRACKING;
 		delete process.env.ENABLE_FIRESTORE_ALERT_STORAGE;
+		delete process.env.ENABLE_FIREBASE_REMOTE_CONFIG;
 		delete process.env.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS;
 		delete process.env.SIGNAL_OUTCOME_EVALUATION_CADENCE_MS;
 		delete process.env.SIGNAL_OUTCOME_EVALUATION_BATCH_LIMIT;
@@ -39,6 +42,7 @@ describe('SignalOutcomeService Worker & Bounded Evaluation', () => {
 		delete process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING;
 		delete process.env.ENABLE_SIGNAL_OUTCOME_TRACKING;
 		delete process.env.ENABLE_FIRESTORE_ALERT_STORAGE;
+		delete process.env.ENABLE_FIREBASE_REMOTE_CONFIG;
 		delete process.env.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS;
 		delete process.env.SIGNAL_OUTCOME_EVALUATION_CADENCE_MS;
 		delete process.env.SIGNAL_OUTCOME_EVALUATION_BATCH_LIMIT;
@@ -602,6 +606,19 @@ describe('SignalOutcomeService Worker & Bounded Evaluation', () => {
 
 				expect(status.maxDurationMs).toBe(30000);
 			});
+		});
+
+		it('keeps the startup cadence environment-only when Remote Config publishes the same key', () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+			process.env.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS = '60000';
+			remoteConfigService._setRemoteOverridesForTesting({
+				SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS: 120000,
+			});
+
+			SignalOutcomeService.startWorker();
+
+			expect(SignalOutcomeService.getWorkerStatus().intervalMs).toBe(60000);
 		});
 	});
 });

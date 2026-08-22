@@ -154,13 +154,6 @@
       "description": "Job webhook callback retry delay in milliseconds",
       "valueType": "NUMBER"
     },
-    "SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS": {
-      "defaultValue": {
-        "value": "300000"
-      },
-      "description": "Signal outcome evaluation worker cadence in milliseconds",
-      "valueType": "NUMBER"
-    },
     "SIGNAL_OUTCOME_EVALUATION_BATCH_LIMIT": {
       "defaultValue": {
         "value": "50"
