@@ -111,7 +111,7 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 - `ENABLE_FIRESTORE_IDEMPOTENCY` - Enable durable webhook idempotency persistence in Cloud Firestore (`true` or `false`, default: `false`)
 - `ENABLE_SIGNAL_OUTCOME_TRACKING` - Enable shadow-mode signal outcome recording and evaluation (`true` or `false`, default: `false`)
 - `ENABLE_SHADOW_MODE_OUTCOME_TRACKING` - Legacy alias for signal outcome tracking, retained for one release
-- `ENABLE_EQUITY_MARKET_DATA` - Opt in to equity outcome evaluation for `NASDAQ` and `BATS` signals (`true` or `false`, default: `false`)
+- `ENABLE_EQUITY_MARKET_DATA` - Opt in to equity outcome evaluation for `NASDAQ`, `BATS`, `NYSE`, `AMEX`, and `NYSE ARCA` signals (`true` or `false`, default: `false`)
 - `EQUITY_MARKET_DATA_PROVIDER` - Equity provider name; currently `twelve-data`
 - `TWELVE_DATA_API_KEY` - Twelve Data API key; sent in the `Authorization` header and never returned by status endpoints
 - `TWELVE_DATA_BASE_URL` - Optional Twelve Data base URL override (default: `https://api.twelvedata.com`)
@@ -317,7 +317,7 @@ When `ENABLE_FIRESTORE_JOB_STORAGE=true`, `featureFlags.firestoreJobStorage` rep
 
 `featureFlags.cloudflareAig` reports `ENABLE_CLOUDFLARE_AIG`, while `dependencies.cloudflareAig` reports whether the Cloudflare AI Gateway credentials are configured and ready. Runtime provider selection is controlled separately by `MODEL_PROVIDER=cloudflare`; set both values when status/capability telemetry should match active Cloudflare routing.
 
-When `ENABLE_EQUITY_MARKET_DATA=true`, `dependencies.equityMarketData` reports Twelve Data readiness and the supported `BATS`/`NASDAQ` exchanges without exposing the API key. Signal outcome tracking uses `/quote` for missing entry prices and `/time_series` for bounded historical bars; provider, timeout, malformed-data, and quota failures mark equity outcomes unavailable without blocking alert delivery. Extended-hours data is excluded by default. Confirm current Twelve Data plan limits and licensing before production use: [pricing](https://twelvedata.com/pricing), [US equities coverage](https://support.twelvedata.com/en/articles/9935903-us-equities-market-data), and [commercial usage](https://support.twelvedata.com/en/articles/5332349-commercial-and-personal-usage).
+When `ENABLE_EQUITY_MARKET_DATA=true`, `dependencies.equityMarketData` reports Twelve Data readiness and the supported `BATS`/`NASDAQ`/`NYSE`/`AMEX`/`NYSE ARCA` exchanges without exposing the API key. Signal outcome tracking uses `/quote` for missing entry prices and `/time_series` for bounded historical bars; provider, timeout, malformed-data, and quota failures mark equity outcomes unavailable without blocking alert delivery. Extended-hours data is excluded by default. Confirm current Twelve Data plan limits and licensing before production use: [pricing](https://twelvedata.com/pricing), [US equities coverage](https://support.twelvedata.com/en/articles/9935903-us-equities-market-data), and [commercial usage](https://support.twelvedata.com/en/articles/5332349-commercial-and-personal-usage).
 `dependencies.signalOutcomeWorker` reports the scheduler role, shutdown state, cadence/budgets, and the last-sweep heartbeat counters (`lastRunAt`, scanned, pending, evaluated, and error counts). The `worker` role is intended for the dedicated Render service; set the web service role to `disabled` during cutover so only one scheduler is active. A disabled local scheduler reports `ready: false` and `status: "disabled"` because it is not the process evaluating outcomes.
 
 The dedicated worker also persists the same non-sensitive heartbeat to `workerHeartbeats/signal-outcome` in Firestore. Heartbeat writes fail open and never block alert delivery.
@@ -409,7 +409,7 @@ The `/admin` console is deployed as a static site on Firebase Hosting for the `c
     "newsMonitorLlm": { "provider": "gemini", "enabled": true, "configured": true, "ready": true, "status": "ready" },
     "llmAlertEnrichment": { "enabled": false, "configured": false, "ready": false, "status": "disabled" },
     "cloudflareAig": { "enabled": false, "configured": false, "ready": false, "status": "disabled" },
-    "equityMarketData": { "provider": null, "enabled": false, "configured": false, "ready": false, "status": "disabled", "supportedExchanges": ["BATS", "NASDAQ"], "timeoutMs": 5000 }
+    "equityMarketData": { "provider": null, "enabled": false, "configured": false, "ready": false, "status": "disabled", "supportedExchanges": ["BATS", "NASDAQ", "NYSE", "AMEX", "NYSE ARCA"], "timeoutMs": 5000 }
   }
 }
 ```
