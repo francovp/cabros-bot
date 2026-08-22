@@ -61,6 +61,7 @@ const VALID_SETUP_TYPES = new Set([
 	'trend_continuation',
 	'reversal',
 ]);
+const VALID_TRADINGVIEW_ENRICHMENT_STATUSES = new Set(['full', 'partial', 'failed', 'not_applicable']);
 
 // Lazy Firestore singleton
 let db = null;
@@ -176,6 +177,9 @@ function formatAlertDocument(doc) {
 	}
 	if (extracted.exchange) {
 		docObj.exchange = extracted.exchange;
+	}
+	if (VALID_TRADINGVIEW_ENRICHMENT_STATUSES.has(data.tradingViewEnrichmentStatus)) {
+		docObj.tradingViewEnrichmentStatus = data.tradingViewEnrichmentStatus;
 	}
 	return docObj;
 }
@@ -506,6 +510,9 @@ function formatExportRecord(doc, { includeText }) {
 		deliveryResults: summarizeDeliveryResults(data.deliveryResults),
 		tokenUsage: summarizeTokenUsage(data.tokenUsage),
 	};
+	if (VALID_TRADINGVIEW_ENRICHMENT_STATUSES.has(data.tradingViewEnrichmentStatus)) {
+		record.tradingViewEnrichmentStatus = data.tradingViewEnrichmentStatus;
+	}
 
 	if (includeText) {
 		record.text = truncateAlertText(data.text);
@@ -742,7 +749,7 @@ function getFirestore() {
  * @param {number}  params.processingTimeMs  - Bounded handler processing duration in milliseconds
  * @returns {Promise<string|null>} The new Firestore document ID, or null on failure/disabled
  */
-async function saveAlertInternal({ text, symbol, exchange, enriched, enrichmentData, tokenUsage, channels, deliveryResults, useTradingViewData, tradingViewEnrichmentApplied, processingTimeMs }) {
+async function saveAlertInternal({ text, symbol, exchange, enriched, enrichmentData, tokenUsage, channels, deliveryResults, useTradingViewData, tradingViewEnrichmentApplied, tradingViewEnrichmentStatus, processingTimeMs }) {
 	if (!isEnabled()) {
 		return null;
 	}
@@ -769,6 +776,9 @@ async function saveAlertInternal({ text, symbol, exchange, enriched, enrichmentD
 			useTradingViewData: Boolean(useTradingViewData),
 			tradingViewEnrichmentApplied: Boolean(tradingViewEnrichmentApplied),
 		};
+		if (VALID_TRADINGVIEW_ENRICHMENT_STATUSES.has(tradingViewEnrichmentStatus)) {
+			document.tradingViewEnrichmentStatus = tradingViewEnrichmentStatus;
+		}
 		const normalizedProcessingTimeMs = normalizeProcessingTimeMs(processingTimeMs);
 		if (normalizedProcessingTimeMs !== null) {
 			document.processingTimeMs = normalizedProcessingTimeMs;
