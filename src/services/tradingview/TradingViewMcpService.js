@@ -59,7 +59,7 @@ function inferSetupType(analysis, side) {
 		return 'mean_reversion';
 	}
 
-	return 'reversal';
+	return null;
 }
 
 function isValidRiskLevel(value, price, side, role) {
@@ -661,6 +661,7 @@ class TradingViewMcpService {
 		const stopLossMeta = getStopLossMeta(validCurrentPrice, usableAtr, legacyBollinger, bollingerBands, side);
 		const targetLevel = getTakeProfitTarget(validCurrentPrice, usableAtr, legacyBollinger, bollingerBands, analysis, side);
 		const riskRewardRatio = getRiskRewardRatio(validCurrentPrice, stopLossMeta.value, targetLevel, side);
+		const setupType = inferSetupType(analysis, side);
 		const riskMetadata = isValidRiskLevel(stopLossMeta.value, validCurrentPrice, side, 'stop')
 			&& isValidRiskLevel(targetLevel, validCurrentPrice, side, 'target')
 			&& Number.isFinite(riskRewardRatio)
@@ -668,8 +669,8 @@ class TradingViewMcpService {
 			? {
 				invalidation_level: stopLossMeta.value,
 				target_level: targetLevel,
-				setup_type: inferSetupType(analysis, side),
 				risk_reward_ratio: riskRewardRatio,
+				...(setupType ? { setup_type: setupType } : {}),
 			}
 			: {};
 
