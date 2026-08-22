@@ -11,6 +11,7 @@ const DEFAULT_MAX_RETRIES = 2;
 const DEFAULT_FALLBACK_RETRY_DELAY_MS = 500;
 const DEFAULT_MAX_RETRY_DELAY_MS = 5000;
 const DEFAULT_MAX_TOTAL_RETRY_WAIT_MS = 10000;
+const DEFAULT_REQUEST_TIMEOUT_MS = 10000;
 const MARKDOWN_V2_ESCAPE_CHARS = '\\_*[]()~`>#+-=|{}.!<&';
 
 function sleepWithSignal(ms, signal) {
@@ -111,6 +112,9 @@ class TelegramService extends NotificationChannel {
 		this.maxTotalRetryWaitMs = Number.isFinite(config.maxTotalRetryWaitMs) && config.maxTotalRetryWaitMs >= 0
 			? config.maxTotalRetryWaitMs
 			: DEFAULT_MAX_TOTAL_RETRY_WAIT_MS;
+		this.requestTimeoutMs = Number.isFinite(config.requestTimeoutMs) && config.requestTimeoutMs > 0
+			? config.requestTimeoutMs
+			: DEFAULT_REQUEST_TIMEOUT_MS;
 		this.enabled = false;
 	}
 
@@ -205,13 +209,13 @@ class TelegramService extends NotificationChannel {
 			const chatId = alert.telegramChatId || this.chatId;
 			this.logger?.debug?.(`Sending to Telegram chat ${chatId}`);
 			const messageParts = splitTelegramMessage(formattedText, this.maxMessageLength);
-			const sendMessage = (targetChatId, messagePart, extra) => {
-				if (signal && typeof this.bot.telegram.callApi === 'function') {
+			const sendMessage = (targetChatId, messagePart, extra, requestSignal) => {
+				if (typeof this.bot.telegram.callApi === 'function') {
 					return this.bot.telegram.callApi('sendMessage', {
 						chat_id: targetChatId,
 						...extra,
 						text: messagePart,
-					}, { signal });
+					}, { signal: requestSignal });
 				}
 				return this.bot.telegram.sendMessage(targetChatId, messagePart, extra);
 			};
@@ -348,8 +352,33 @@ class TelegramService extends NotificationChannel {
 
 	async sendFormattedMessage(sendMessage, chatId, messagePart, enriched, signal) {
 		const getAbortError = () => new Error(signal?.reason?.message || signal?.reason || 'Operation aborted');
+		const sendAttempt = async (text, extra) => {
+			const attemptController = new AbortController();
+			const parentAbortListener = signal ? () => attemptController.abort(signal.reason || new Error('Operation aborted')) : null;
+			if (signal) {
+				if (signal.aborted) parentAbortListener();
+				else signal.addEventListener('abort', parentAbortListener, { once: true });
+			}
+			const timeoutId = setTimeout(() => attemptController.abort(new Error('Telegram request timeout')), this.requestTimeoutMs);
+			let abortListener;
+			const abortPromise = new Promise((resolve, reject) => {
+				abortListener = () => reject(attemptController.signal.reason || new Error('Operation aborted'));
+				if (attemptController.signal.aborted) abortListener();
+				else attemptController.signal.addEventListener('abort', abortListener, { once: true });
+			});
+			try {
+				return await Promise.race([
+					sendMessage(chatId, text, extra, attemptController.signal),
+					abortPromise,
+				]);
+			} finally {
+				clearTimeout(timeoutId);
+				attemptController.signal.removeEventListener('abort', abortListener);
+				if (signal && parentAbortListener) signal.removeEventListener('abort', parentAbortListener);
+			}
+		};
 		try {
-			const response = await sendMessage(chatId, messagePart, {
+			const response = await sendAttempt(messagePart, {
 				parse_mode: 'MarkdownV2',
 				disable_web_page_preview: enriched,
 			});
@@ -368,8 +397,8 @@ class TelegramService extends NotificationChannel {
 					return { success: false, error: getAbortError(), attemptCount: 1, aborted: true };
 				}
 				try {
-				const response = await sendMessage(chatId, stripMarkdownV2Escapes(messagePart), {
-					disable_web_page_preview: enriched,
+					const response = await sendAttempt(stripMarkdownV2Escapes(messagePart), {
+						disable_web_page_preview: enriched,
 				});
 					return { success: true, response, attemptCount: 2 };
 				} catch (fallbackError) {

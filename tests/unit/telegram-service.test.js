@@ -299,6 +299,27 @@ describe('TelegramService', () => {
 		}));
 	});
 
+	it('bounds a hanging Telegram API attempt', async () => {
+		const hangingBot = {
+			telegram: {
+				callApi: jest.fn(() => new Promise(() => {})),
+			},
+		};
+		const hangingService = new TelegramService({
+			bot: hangingBot,
+			chatId: 'chat-1',
+			formatter: { format: (text) => text },
+			requestTimeoutMs: 5,
+		});
+
+		await expect(hangingService.send({ text: 'bounded request' })).resolves.toEqual(expect.objectContaining({
+			success: false,
+			category: 'TIMEOUT',
+			attemptCount: 1,
+			error: 'Telegram error: Telegram request timeout',
+		}));
+	});
+
 	it('uses telegramChatId override for both MarkdownV2 attempt and plain-text fallback', async () => {
 		const parseErrorBot = {
 			telegram: {
@@ -383,7 +404,7 @@ describe('TelegramService', () => {
 				disable_web_page_preview: false,
 				text: 'lease-aware alert',
 			},
-			{ signal },
+			{ signal: expect.any(AbortSignal) },
 		);
 		expect(signalBot.telegram.sendMessage).not.toHaveBeenCalled();
 	});

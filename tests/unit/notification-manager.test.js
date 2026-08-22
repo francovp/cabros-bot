@@ -235,6 +235,9 @@ describe('NotificationManager admin failure notifications', () => {
 		expect(captureExternalFailure).toHaveBeenCalledWith(expect.objectContaining({
 			external: expect.objectContaining({ attemptCount: 0 }),
 		}));
+		expect(telegramService.send).toHaveBeenLastCalledWith(expect.objectContaining({
+			text: expect.stringContaining('attempts 0'),
+		}));
 	});
 
 	it.each([
