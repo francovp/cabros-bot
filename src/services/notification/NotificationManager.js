@@ -75,7 +75,7 @@ class NotificationManager {
 		const failureDetails = failures.map((result) => {
 			const metadata = [
 				result.statusCode ? `status ${result.statusCode}` : null,
-				result.attemptCount ? `attempts ${result.attemptCount}` : null,
+				result.attemptCount !== null && result.attemptCount !== undefined ? `attempts ${result.attemptCount}` : null,
 			].filter(Boolean);
 			return `- ${result.channel}: ${result.error || 'Unknown error'}${metadata.length ? ` (${metadata.join(', ')})` : ''}`;
 		});
