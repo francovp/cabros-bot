@@ -666,18 +666,19 @@ class TradingViewMcpService {
 		const targetLevel = getTakeProfitTarget(validCurrentPrice, usableAtr, legacyBollinger, bollingerBands, analysis, side);
 		const riskRewardRatio = getRiskRewardRatio(validCurrentPrice, stopLossMeta.value, targetLevel, side);
 		const setupType = inferSetupType(analysis, side);
-		const riskMetadata = isValidRiskLevel(stopLossMeta.value, validCurrentPrice, side, 'stop')
+		const hasValidRiskMetadata = isValidRiskLevel(stopLossMeta.value, validCurrentPrice, side, 'stop')
 			&& isValidRiskLevel(targetLevel, validCurrentPrice, side, 'target')
 			&& Number.isFinite(riskRewardRatio)
 			&& riskRewardRatio > 0
-			&& !(atrWasProvided && usableAtr === null)
-			? {
+			&& !(atrWasProvided && usableAtr === null);
+		const riskMetadata = {
+			...(hasValidRiskMetadata ? {
 				invalidation_level: stopLossMeta.value,
 				target_level: targetLevel,
 				risk_reward_ratio: riskRewardRatio,
-				...(setupType ? { setup_type: setupType } : {}),
-			}
-			: {};
+			} : {}),
+			...(setupType ? { setup_type: setupType } : {}),
+		};
 
 		const rating = this._firstNumber([
 			marketSentiment.overall_rating,

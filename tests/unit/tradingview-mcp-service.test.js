@@ -317,6 +317,27 @@ describe('TradingViewMcpService', () => {
 		expect(sellResult).not.toHaveProperty('setup_type');
 	});
 
+	it('preserves an explicit setup type without complete numeric risk data', async () => {
+		const service = new TradingViewMcpService({
+			maxRetries: 1,
+			defaultExchange: 'BINANCE',
+			defaultTimeframe: '1h',
+			logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
+		});
+
+		service.callCoinAnalysis = jest.fn().mockResolvedValue({
+			price_data: { current_price: 100 },
+			setup_type: 'breakout',
+		});
+
+		const result = await service.enrichFromAlertText('BTCUSDT(240) pasó a señal de COMPRA');
+
+		expect(result.setup_type).toBe('breakout');
+		expect(result).not.toHaveProperty('invalidation_level');
+		expect(result).not.toHaveProperty('target_level');
+		expect(result).not.toHaveProperty('risk_reward_ratio');
+	});
+
 	it('suppresses the metadata footer when explicitly disabled', async () => {
 		process.env.ENABLE_MESSAGE_FOOTER_METADATA = 'false';
 		const service = new TradingViewMcpService({

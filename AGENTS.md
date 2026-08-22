@@ -1351,3 +1351,14 @@ The analyzer cooldown regression test loads `geminiQuotaManager` and `NewsAnalyz
 - `tests/unit/analyzer.test.js` — Verifies the existing cooldown-timeout regression uses the isolated manager and produces the expected timeout after cooldown waiting.
 
 This is test-only hardening; runtime code, endpoints, OpenAPI, Postman, and environment configuration remain unchanged.
+
+## TradingView MCP Risk Metadata (CB-175 / Issue #412)
+
+TradingView MCP alert enrichment derives optional directional invalidation, target, setup, and risk/reward metadata from the MCP analysis. ATR-derived levels are emitted only when the supplied ATR and every resulting level are finite, positive, and on the correct side of entry; a rejected supplied ATR suppresses the entire numeric risk block instead of falling back to a synthetic stop. Setup metadata remains independently optional, uses explicit/inferred evidence only, and mean-reversion inference must align Bollinger position with signal direction. When Gemini and MCP enrichment are combined, invalidation, target, and risk/reward are selected atomically from one complete provider block to prevent inconsistent ratios.
+
+**Coverage**:
+- `src/services/tradingview/TradingViewMcpService.js` — MCP risk derivation, ATR rejection, standalone setup metadata, and side-aware setup inference.
+- `src/controllers/webhooks/handlers/alert/grounding.js` — Atomic Gemini/MCP risk-block selection.
+- `tests/unit/tradingview-mcp-service.test.js` and `tests/unit/alert-handler.test.js` — Directional calculations, invalid ATR/fallback suppression, setup inference, and provider merge invariants.
+
+No endpoint, OpenAPI, Postman, environment variable, or Remote Config contract changed; existing optional response fields and formatter support remain in place.
