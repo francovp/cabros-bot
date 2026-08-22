@@ -105,7 +105,9 @@ async function processEnrichment(alert, options) {
 				alert.enriched = enrichedAlert;
 				if (isTradingViewMcpEnabled) {
 					const tradingViewEnrichmentStatus = enrichedAlert.tradingViewEnrichmentStatus
-						|| (parseTradingViewSignal(alert.text) ? 'failed' : 'not_applicable');
+						|| (enrichedAlert.tradingViewEnrichmentApplied === true
+							? 'full'
+							: (parseTradingViewSignal(alert.text) ? 'failed' : 'not_applicable'));
 					enrichedAlert.tradingViewEnrichmentStatus = tradingViewEnrichmentStatus;
 					enrichedAlert.tradingViewEnrichmentApplied = ['full', 'partial'].includes(tradingViewEnrichmentStatus);
 					alert.tradingViewEnrichmentStatus = tradingViewEnrichmentStatus;

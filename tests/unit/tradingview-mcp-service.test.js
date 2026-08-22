@@ -329,7 +329,7 @@ describe('TradingViewMcpService', () => {
 
 	it('aborts MCP enrichment when budget timeout is exceeded', async () => {
 		const service = new TradingViewMcpService({
-			maxRetries: 3,
+			maxRetries: 1,
 			enrichmentBudgetMs: 50,
 			logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
 		});
