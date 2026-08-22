@@ -2107,7 +2107,7 @@ describe('JobService Unit Tests', () => {
 			}
 		});
 
-		it('keeps retrying HTTP 408 and HTTP 429 callbacks up to maxAttempts', async () => {
+		it('keeps retrying transient 4xx callbacks (408, 421, 425, 429) up to maxAttempts', async () => {
 			const prevDelay = process.env.JOB_CALLBACK_RETRY_DELAY_MS;
 			process.env.JOB_CALLBACK_RETRY_DELAY_MS = '1';
 			const dns = require('dns');
@@ -2116,6 +2116,8 @@ describe('JobService Unit Tests', () => {
 
 			fetchMock
 				.mockResolvedValueOnce({ ok: false, status: 408, statusText: 'Request Timeout' })
+				.mockResolvedValueOnce({ ok: false, status: 421, statusText: 'Misdirected Request' })
+				.mockResolvedValueOnce({ ok: false, status: 425, statusText: 'Too Early' })
 				.mockResolvedValue({ ok: false, status: 429, statusText: 'Too Many Requests' });
 
 			const job = {
@@ -2139,9 +2141,8 @@ describe('JobService Unit Tests', () => {
 				const freshJob = await jobService.repository.get(job.jobId);
 				expect(freshJob.callbackStatus.status).toBe('failed');
 				expect(freshJob.callbackStatus.attempts).toHaveLength(4);
-				expect(freshJob.callbackStatus.attempts[0].statusCode).toBe(408);
-				expect(freshJob.callbackStatus.attempts.slice(1).every((attempt) => attempt.statusCode === 429))
-					.toBe(true);
+				const retriedStatuses = freshJob.callbackStatus.attempts.map((attempt) => attempt.statusCode);
+				expect(retriedStatuses).toEqual([408, 421, 425, 429]);
 			} finally {
 				process.env.JOB_CALLBACK_RETRY_DELAY_MS = prevDelay;
 				lookupSpy.mockRestore();
