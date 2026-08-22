@@ -142,13 +142,15 @@ class TradingViewMcpService {
 			}
 		};
 
-		const result = await sendWithRetry(async ({ signal: retrySignal }) => {
+		const result = await sendWithRetry(async ({ signal: retrySignal, attempt }) => {
 			const remainingBaseMs = baseDeadlineAt ? baseDeadlineAt - Date.now() : cfg.timeoutMs;
 			if (remainingBaseMs <= 0) {
 				return { success: false, channel: 'tradingview-mcp', error: 'TradingView MCP base analysis budget exhausted' };
 			}
 			const attemptController = new AbortController();
-			const attemptTimeoutMs = Math.min(cfg.timeoutMs, remainingBaseMs);
+			// Reserve the existing retry helper's backoff plus timer jitter for later attempts.
+			const retryReserveMs = Math.max(0, (cfg.maxRetries - attempt) * 1200);
+			const attemptTimeoutMs = Math.min(cfg.timeoutMs, Math.max(1, remainingBaseMs - retryReserveMs));
 			const attemptTimeoutId = setTimeout(() => {
 				attemptController.abort(new Error(`TradingView MCP base analysis attempt timeout after ${attemptTimeoutMs}ms`));
 			}, attemptTimeoutMs);

@@ -356,7 +356,7 @@ describe('TradingViewMcpService', () => {
 	it('retries base analysis inside a sub-budget after the first attempt times out', async () => {
 		const service = new TradingViewMcpService({
 			maxRetries: 2,
-			timeoutMs: 500,
+			timeoutMs: 5000,
 			enrichmentBudgetMs: 3000,
 			logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
 		});
