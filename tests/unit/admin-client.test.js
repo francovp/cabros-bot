@@ -332,6 +332,56 @@ describe('admin browser client', () => {
 		expect(browser.timers.size).toBe(0);
 	});
 
+	it('shows a contract-load error when the OpenAPI fetch stalls until timeout', async () => {
+		let signal;
+		const browser = createBrowser({
+			fetchImpl: (url, options) => {
+				if (url !== '/openapi.json') return response({});
+				signal = options?.signal;
+				return new Promise((resolve, reject) => {
+					signal?.addEventListener('abort', () => reject(new Error('AbortError')));
+				});
+			},
+		});
+		await flush();
+
+		expect(browser.timers.size).toBe(1);
+		for (const fireTimer of browser.timers.values()) fireTimer();
+		await flush();
+
+		expect(signal.aborted).toBe(true);
+		expect(browser.elementsById.view.textContent).toContain('Unable to load the API contract: AbortError');
+		expect(browser.timers.size).toBe(0);
+	});
+
+	it('shows a network error when an API request stalls until timeout', async () => {
+		let signal;
+		const browser = createBrowser({
+			fetchImpl: (url, options) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url !== '/api/status') return response({});
+				signal = options?.signal;
+				return new Promise((resolve, reject) => {
+					signal?.addEventListener('abort', () => reject(new Error('AbortError')));
+				});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'status');
+		const form = findForm(browser.elementsById.view, 'GET /api/status');
+		await form.dispatch('submit');
+		await flush();
+
+		expect(browser.timers.size).toBe(1);
+		for (const fireTimer of browser.timers.values()) fireTimer();
+		await flush();
+
+		expect(signal.aborted).toBe(true);
+		expect(form.textContent).toContain('Network error');
+		expect(browser.timers.size).toBe(0);
+	});
+
 	it('shows Firebase sign-in state and sends a verified token after sign-in', async () => {
 		let authStateChanged;
 		const user = {
