@@ -427,6 +427,7 @@ describe('Alerts API Integration Tests', () => {
 					source: '@webhook',
 					enriched: false,
 					useTradingViewData: true,
+					tradingViewEnrichmentStatus: 'partial',
 					deliveryResults: [{ channel: 'whatsapp', success: false, messageId: null, errorCode: 'PROVIDER_LIMIT', statusCode: 429 }],
 					tokenUsage: null,
 					text: '=@SUM(1,1), "quoted"\r\n+next',
@@ -448,7 +449,7 @@ describe('Alerts API Integration Tests', () => {
 			includeText: true,
 		});
 		expect(res.headers['content-type']).toContain('text/csv');
-		expect(res.text).toContain('id,receivedAt,source,enriched,useTradingViewData,tradingViewEnrichmentApplied,channels,deliveryResults,tokenUsage,text');
+		expect(res.text).toContain('id,receivedAt,source,enriched,useTradingViewData,tradingViewEnrichmentApplied,tradingViewEnrichmentStatus,channels,deliveryResults,tokenUsage,text');
 		expect(res.text).toContain("'=alert-1,-42,'@webhook");
 		expect(res.text).toContain('"\'=@SUM(1,1), ""quoted""\r\n+next"');
 		expect(res.text).not.toContain('=alert-1,-42,@webhook');

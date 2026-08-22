@@ -1936,7 +1936,7 @@
                   "value": "{\"totalSignalsEvaluated\":1,\"windows\":{\"1h\":{\"totalSignals\":1,\"hitRatePercent\":100,\"averageReturnPercent\":0.7353,\"averageMfePercent\":0.7353,\"averageMaePercent\":0.0,\"maxAdverseExcursionPercent\":0.0}},\"drawdownProxy\":{\"averageMaxAdverseExcursionPercent\":0.0,\"absoluteMaxAdverseExcursionPercent\":0.0},\"falsePositiveCandidatesCount\":0,\"falsePositiveCandidates\":[],\"latencyCostMetadata\":{\"averageProcessingTimeMs\":250,\"tokenUsage\":{\"inputTokens\":10,\"outputTokens\":20,\"totalCost\":0.001}}}"
                 }
               ],
-              "body": "{\"id\":\"alert-123\",\"receivedAt\":\"2026-06-06T12:00:00.000Z\",\"source\":\"webhook\",\"enriched\":true,\"useTradingViewData\":false,\"tradingViewEnrichmentApplied\":false,\"deliveryResults\":[{\"channel\":\"telegram\",\"success\":true,\"messageId\":\"123\",\"errorCode\":null,\"statusCode\":null}],\"tokenUsage\":{\"inputTokens\":10,\"outputTokens\":20,\"totalTokens\":30,\"totalCost\":0.001}}\n"
+              "body": "{\"id\":\"alert-123\",\"receivedAt\":\"2026-06-06T12:00:00.000Z\",\"source\":\"webhook\",\"enriched\":true,\"useTradingViewData\":false,\"tradingViewEnrichmentApplied\":false,\"tradingViewEnrichmentStatus\":\"not_applicable\",\"deliveryResults\":[{\"channel\":\"telegram\",\"success\":true,\"messageId\":\"123\",\"errorCode\":null,\"statusCode\":null}],\"tokenUsage\":{\"inputTokens\":10,\"outputTokens\":20,\"totalTokens\":30,\"totalCost\":0.001}}\n"
             }
           ]
         },
@@ -1991,7 +1991,7 @@
               "name": "200 OK - CSV export",
               "status": "OK",
               "code": 200,
-              "body": "id,receivedAt,source,enriched,useTradingViewData,tradingViewEnrichmentApplied,deliveryResults,tokenUsage,text\nalert-123,2026-06-06T12:00:00.000Z,webhook,true,false,false,\"[{\"\"channel\"\":\"\"telegram\"\",\"\"success\"\":true,\"\"messageId\"\":\"\"123\"\",\"\"errorCode\"\":null,\"\"statusCode\"\":null}]\",\"{\"\"inputTokens\"\":10,\"\"outputTokens\"\":20,\"\"totalTokens\"\":30,\"\"totalCost\"\":0.001}\",BTC breakout\n"
+              "body": "id,receivedAt,source,enriched,useTradingViewData,tradingViewEnrichmentApplied,tradingViewEnrichmentStatus,deliveryResults,tokenUsage,text\nalert-123,2026-06-06T12:00:00.000Z,webhook,true,false,false,not_applicable,\"[{\"\"channel\"\":\"\"telegram\"\",\"\"success\"\":true,\"\"messageId\"\":\"\"123\"\",\"\"errorCode\"\":null,\"\"statusCode\"\":null}]\",\"{\"\"inputTokens\"\":10,\"\"outputTokens\"\":20,\"\"totalTokens\"\":30,\"\"totalCost\"\":0.001}\",BTC breakout\n"
             }
           ]
         },

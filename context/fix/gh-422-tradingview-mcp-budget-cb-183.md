@@ -24,6 +24,8 @@ Bound TradingView MCP webhook enrichment retries and preserve successful base an
 - Follow-up also reserves the full exponential backoff sum, distinguishes non-signal Gemini failures as not applicable, and adds all four status variants to Postman.
 - Final review follow-up caps retry delays to the available base budget and exposes fallback status markers in dry-run enrichedData.
 - CI follow-up keeps the short abort-only fixture single-attempt and treats legacy successful MCP payloads without an explicit status as full.
+- Final contract follow-up gives base analysis the full budget when optional calls are disabled and includes enrichment status in CSV/checked-in export examples.
+- Updated `AGENTS.md` to document the final retry/budget and CSV contract behavior.
 - Local focused Jest execution is currently blocked because the workspace shell has no `node` binary (`env: node: No such file or directory`).
 - Static checks: `git diff --check`, OpenAPI JSON parse, and Postman JSON parse.
 

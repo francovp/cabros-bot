@@ -107,7 +107,13 @@ class TradingViewMcpService {
 		const budgetMs = options.budgetMs || cfg.enrichmentBudgetMs;
 		const budgetStartedAt = Date.now();
 		const budgetDeadlineAt = budgetMs > 0 ? budgetStartedAt + budgetMs : null;
-		const baseBudgetMs = budgetDeadlineAt ? Math.max(1, Math.floor(budgetMs * 0.75)) : null;
+		const volumeConfirmationEnabled = getRuntimeConfig().ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION;
+		const confluenceEnabled = process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT === 'true';
+		const multiTimeframeEnabled = process.env.ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME === 'true';
+		const optionalEnrichmentEnabled = volumeConfirmationEnabled || confluenceEnabled;
+		const baseBudgetMs = budgetDeadlineAt
+			? Math.max(1, Math.floor(budgetMs * (optionalEnrichmentEnabled ? 0.75 : 1)))
+			: null;
 		const baseDeadlineAt = budgetDeadlineAt ? Math.min(budgetDeadlineAt, budgetStartedAt + baseBudgetMs) : null;
 		const symbol = parsedSignal.symbol.toUpperCase();
 		const exchange = (parsedSignal.exchange || cfg.defaultExchange).toUpperCase();
@@ -182,7 +188,7 @@ class TradingViewMcpService {
 
 		let volumeAnalysis = null;
 		let optionalEnrichmentPartial = false;
-		if (getRuntimeConfig().ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION) {
+		if (volumeConfirmationEnabled) {
 			const remainingBudgetMs = budgetDeadlineAt ? budgetDeadlineAt - Date.now() : cfg.timeoutMs;
 			if (remainingBudgetMs <= 0) {
 				optionalEnrichmentPartial = true;
@@ -220,8 +226,6 @@ class TradingViewMcpService {
 		// (via AbortSignal.any) so an exhausted enrichment budget cancels it immediately.
 		let confluenceAnalysis = null;
 		let multiTimeframeAnalysis = null;
-		const confluenceEnabled = process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT === 'true';
-		const multiTimeframeEnabled = process.env.ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME === 'true';
 		if (confluenceEnabled && !budgetController.signal.aborted) {
 			const remainingBudgetMs = budgetDeadlineAt ? budgetDeadlineAt - Date.now() : cfg.timeoutMs;
 			const confluenceTimeoutMs = Math.min(8000, Math.max(1, remainingBudgetMs));
