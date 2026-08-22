@@ -148,9 +148,14 @@ class TradingViewMcpService {
 				return { success: false, channel: 'tradingview-mcp', error: 'TradingView MCP base analysis budget exhausted' };
 			}
 			const attemptController = new AbortController();
-			// Reserve the existing retry helper's backoff plus timer jitter for later attempts.
-			const retryReserveMs = Math.max(0, (cfg.maxRetries - attempt) * 1200);
-			const attemptTimeoutMs = Math.min(cfg.timeoutMs, Math.max(1, remainingBaseMs - retryReserveMs));
+			// Reserve every remaining exponential backoff, then split the time left across attempts.
+			const remainingAttempts = Math.max(1, cfg.maxRetries - attempt + 1);
+			let retryReserveMs = 0;
+			for (let retryAttempt = attempt; retryAttempt < cfg.maxRetries; retryAttempt += 1) {
+				retryReserveMs += Math.pow(2, retryAttempt - 1) * 1100;
+			}
+			const attemptBudgetMs = Math.max(1, remainingBaseMs - retryReserveMs);
+			const attemptTimeoutMs = Math.min(cfg.timeoutMs, Math.max(1, Math.floor(attemptBudgetMs / remainingAttempts)));
 			const attemptTimeoutId = setTimeout(() => {
 				attemptController.abort(new Error(`TradingView MCP base analysis attempt timeout after ${attemptTimeoutMs}ms`));
 			}, attemptTimeoutMs);

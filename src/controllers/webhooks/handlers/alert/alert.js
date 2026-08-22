@@ -116,7 +116,7 @@ async function processEnrichment(alert, options) {
 			}
 		} catch (error) {
 			if (isTradingViewMcpEnabled) {
-				alert.tradingViewEnrichmentStatus = 'failed';
+				alert.tradingViewEnrichmentStatus = parseTradingViewSignal(alert.text) ? 'failed' : 'not_applicable';
 			}
 			console.warn('[Alert] Enrichment failed, using original text:', error.message);
 		} finally {

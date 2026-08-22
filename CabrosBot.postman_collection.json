@@ -395,10 +395,28 @@
           },
           "response": [
             {
-              "name": "Dry run with confluence metadata",
+              "name": "Dry run - full TradingView enrichment",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"enriched\": true,\n  \"payload\": {\n    \"text\": \"BTCUSDT(240) pasó a señal de COMPRA\",\n    \"enrichedData\": {\n      \"sentiment\": \"NEUTRAL\",\n      \"insights\": [\"Confluencia contradictoria: SELL - Senales Mixtas - Confianza: 81\"],\n      \"confluenceData\": { \"confluence\": { \"recommendation\": \"SELL\", \"confidence\": 81, \"signals_agree\": false } },\n      \"multiTimeframeData\": { \"alignment\": \"bearish\" }\n    }\n  }\n}"
+              "body": "{\"success\":true,\"dryRun\":true,\"enriched\":true,\"payload\":{\"text\":\"BTCUSDT(240) pasó a señal de COMPRA\",\"enrichedData\":{\"tradingViewEnrichmentApplied\":true,\"tradingViewEnrichmentStatus\":\"full\",\"sentiment\":\"BULLISH\"}}}"
+            },
+            {
+              "name": "Dry run - partial TradingView enrichment",
+              "status": "OK",
+              "code": 200,
+              "body": "{\"success\":true,\"dryRun\":true,\"enriched\":true,\"payload\":{\"text\":\"BTCUSDT(240) pasó a señal de COMPRA\",\"enrichedData\":{\"tradingViewEnrichmentApplied\":true,\"tradingViewEnrichmentStatus\":\"partial\",\"sentiment\":\"BULLISH\"}}}"
+            },
+            {
+              "name": "Dry run - failed TradingView enrichment",
+              "status": "OK",
+              "code": 200,
+              "body": "{\"success\":true,\"dryRun\":true,\"enriched\":true,\"payload\":{\"text\":\"BTCUSDT(240) pasó a señal de COMPRA\",\"enrichedData\":{\"tradingViewEnrichmentApplied\":false,\"tradingViewEnrichmentStatus\":\"failed\",\"sentiment\":\"NEUTRAL\"}}}"
+            },
+            {
+              "name": "Dry run - TradingView not applicable",
+              "status": "OK",
+              "code": 200,
+              "body": "{\"success\":true,\"dryRun\":true,\"enriched\":true,\"payload\":{\"text\":\"Bitcoin breaks above $83,000 with strong volume\",\"enrichedData\":{\"tradingViewEnrichmentApplied\":false,\"tradingViewEnrichmentStatus\":\"not_applicable\",\"sentiment\":\"BULLISH\"}}}"
             }
           ]
         },

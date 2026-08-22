@@ -21,6 +21,7 @@ Bound TradingView MCP webhook enrichment retries and preserve successful base an
 
 - Added regression coverage for base retry after budget-aware per-attempt timeout, optional timeout with base preservation, failed status accounting, and Firestore status persistence.
 - Review follow-up reserves retry backoff inside the base attempt budget and aligns the non-TradingView Postman response example.
+- Follow-up also reserves the full exponential backoff sum, distinguishes non-signal Gemini failures as not applicable, and adds all four status variants to Postman.
 - Local focused Jest execution is currently blocked because the workspace shell has no `node` binary (`env: node: No such file or directory`).
 - Static checks: `git diff --check`, OpenAPI JSON parse, and Postman JSON parse.
 
