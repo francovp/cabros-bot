@@ -152,7 +152,7 @@ describe('Graceful Degradation & Fallback', () => {
 				json: async () => ({ success: true, idMessage: 'wa-msg-1' }),
 			});
 
-			const telegramService = new TelegramService({ bot: mockBot });
+			const telegramService = new TelegramService({ bot: mockBot, maxRetries: 0 });
 			const whatsappService = new WhatsAppService();
 			const notificationManager = new NotificationManager(telegramService, whatsappService);
 

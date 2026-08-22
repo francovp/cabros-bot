@@ -30,7 +30,7 @@ describe('Dual-Channel Alert Integration', () => {
 			},
 		};
 
-		telegramService = new TelegramService({ bot: mockBot });
+		telegramService = new TelegramService({ bot: mockBot, maxRetries: 0 });
 		whatsappService = new WhatsAppService();
 		notificationManager = new NotificationManager(telegramService, whatsappService);
 	});
