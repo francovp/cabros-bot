@@ -100,7 +100,7 @@ let authState = { enabled: false, auth: null, user: null, role: null };
 
 const CONTRACT_TIMEOUT_MS = 8000;
 const API_REQUEST_TIMEOUT_MS = 30000;
-const LONG_RUNNING_API_REQUEST_TIMEOUT_MS = 125000;
+const LONG_RUNNING_API_REQUEST_TIMEOUT_MS = 180000;
 const LONG_RUNNING_REQUEST_PATHS = new Set([
 	'/api/webhook/expanded-analysis-alert',
 	'/api/webhook/market-scanner-alert',

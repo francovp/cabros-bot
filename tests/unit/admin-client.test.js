@@ -434,7 +434,7 @@ describe('admin browser client', () => {
 		await form.dispatch('submit');
 		await flush();
 
-		expect([...browser.timerDelays.values()]).toContain(125000);
+		expect([...browser.timerDelays.values()]).toContain(180000);
 		for (const fireTimer of browser.timers.values()) fireTimer();
 		await flush();
 		expect(signals[0].aborted).toBe(true);
@@ -442,7 +442,7 @@ describe('admin browser client', () => {
 		await selectView(browser, 'analysis');
 		await findForm(browser.elementsById.view, 'POST /api/news-monitor').dispatch('submit');
 		await flush();
-		expect([...browser.timerDelays.values()]).toContain(125000);
+		expect([...browser.timerDelays.values()]).toContain(180000);
 		for (const fireTimer of browser.timers.values()) fireTimer();
 		await flush();
 		expect(signals[1].aborted).toBe(true);
@@ -450,7 +450,7 @@ describe('admin browser client', () => {
 		await selectView(browser, 'presets');
 		await findForm(browser.elementsById.view, 'POST /api/scanner-presets/{id}/run').dispatch('submit');
 		await flush();
-		expect([...browser.timerDelays.values()]).toContain(125000);
+		expect([...browser.timerDelays.values()]).toContain(180000);
 		for (const fireTimer of browser.timers.values()) fireTimer();
 		await flush();
 		expect(signals[2].aborted).toBe(true);
