@@ -379,6 +379,34 @@ describe('Market Scanner Report', () => {
 			expect(report).toContain('🔥 HTF ALIGNED 85%');
 		});
 
+		it('renders higher-timeframe alignment for bollinger_scan squeeze setups', () => {
+			const results = [
+				{
+					scan: 'bollinger_scan',
+					status: 'success',
+					items: [{
+						symbol: 'BINANCE:SOLUSDT',
+						bbw: 0.04,
+						changePercent: 1.2,
+						trendConfluence: {
+							direction: 'bullish',
+							confidence: 80,
+						},
+					}],
+				},
+			];
+
+			const report = buildMarketScannerReport(results, {
+				exchange: 'BINANCE',
+				timeframe: '4h',
+				ranked: true,
+				now: mockDate,
+			});
+
+			expect(report).toContain('🔥 HTF ALIGNED 80%');
+			expect(report).toContain('BBW 0.04');
+		});
+
 		it('covers ATR-based risk/reward formatting when close and ATR are present', () => {
 			const results = [
 				{

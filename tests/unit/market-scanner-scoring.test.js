@@ -190,7 +190,7 @@ describe('Market Scanner Scoring', () => {
 				trendConfluence: {
 					alignment: { status: 'bullish', confidence: 65 },
 				},
-			}, 'bollinger_scan');
+			}, 'smart_volume_scanner');
 
 			expect(result.score).toBeGreaterThanOrEqual(0);
 			expect(result.trendConfluence).toEqual({
@@ -230,6 +230,44 @@ describe('Market Scanner Scoring', () => {
 				status: 'unknown',
 				direction: null,
 				confidence: 82,
+			});
+		});
+
+		it('preserves alignment bonus for bollinger_scan with bullish HTF trend', () => {
+			const result = scoreScannerItem({
+				symbol: 'BINANCE:SOLUSDT',
+				bbw: 0.05,
+				trendConfluence: {
+					direction: 'bullish',
+					confidence: 85,
+				},
+			}, 'bollinger_scan');
+
+			expect(result.reason).toContain('HTF aligned +10');
+			expect(result.trendConfluence).toEqual({
+				status: 'aligned',
+				direction: 'bullish',
+				confidence: 85,
+				adjustment: 10,
+			});
+		});
+
+		it('preserves alignment bonus for bollinger_scan with bearish HTF trend', () => {
+			const result = scoreScannerItem({
+				symbol: 'BINANCE:ETHUSDT',
+				bbw: 0.06,
+				trendConfluence: {
+					trend: 'bearish',
+					confidence: 78,
+				},
+			}, 'bollinger_scan');
+
+			expect(result.reason).toContain('HTF aligned +10');
+			expect(result.trendConfluence).toEqual({
+				status: 'aligned',
+				direction: 'bearish',
+				confidence: 78,
+				adjustment: 10,
 			});
 		});
 
