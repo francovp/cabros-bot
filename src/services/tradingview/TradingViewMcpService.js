@@ -584,7 +584,16 @@ class TradingViewMcpService {
 		const { side, symbol, exchange, timeframe } = signal;
 		const sideLabel = side === 'SELL' ? 'VENTA' : 'COMPRA';
 		const sideSentiment = side === 'SELL' ? -0.55 : 0.55;
-		const priceData = (analysis && analysis.price_data) || {};
+		const rawPriceData = (analysis && (analysis.price_data || analysis.price)) || {};
+		const validCurrentPrice = typeof rawPriceData.current_price === 'number'
+			&& Number.isFinite(rawPriceData.current_price)
+			&& rawPriceData.current_price > 0
+			? rawPriceData.current_price
+			: null;
+		const priceData = {
+			...rawPriceData,
+			current_price: validCurrentPrice,
+		};
 		const indicators = (analysis && analysis.technical_indicators) || {};
 		const rsiData = (analysis && analysis.rsi) || {};
 		const adxData = (analysis && analysis.adx) || {};
@@ -688,6 +697,8 @@ class TradingViewMcpService {
 			tradingViewEnrichmentApplied: true,
 			sentiment,
 			sentiment_score: sentimentScore,
+			current_price: validCurrentPrice,
+			price_data: priceData,
 			insights,
 			technical_levels: {
 				supports,

@@ -117,11 +117,19 @@ function mergeEnrichmentData(text, geminiEnriched, mcpEnriched) {
 		risk_reward_ratio: pickOptionalRiskValue(gemini.risk_reward_ratio, mcp.risk_reward_ratio),
 	};
 
+	const mcpCurrentPrice = typeof mcp.current_price === 'number' && Number.isFinite(mcp.current_price) && mcp.current_price > 0
+		? mcp.current_price
+		: (mcp.price_data && typeof mcp.price_data.current_price === 'number' && Number.isFinite(mcp.price_data.current_price) && mcp.price_data.current_price > 0
+			? mcp.price_data.current_price
+			: null);
+
 	return {
 		original_text: text,
 		tradingViewEnrichmentApplied: mcp.tradingViewEnrichmentApplied === true,
 		sentiment: useMcpSentiment ? (mcp.sentiment || 'NEUTRAL') : (gemini.sentiment || mcp.sentiment || 'NEUTRAL'),
 		sentiment_score: useMcpSentiment && mcpScore !== null ? mcpScore : (geminiScore !== null ? geminiScore : (mcpScore !== null ? mcpScore : 0)),
+		current_price: mcpCurrentPrice,
+		...(mcp.price_data ? { price_data: mcp.price_data } : {}),
 		insights,
 		...(technicalLevels ? { technical_levels: technicalLevels } : {}),
 		sources: Array.isArray(gemini.sources) ? gemini.sources : [],

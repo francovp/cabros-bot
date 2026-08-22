@@ -215,6 +215,7 @@ async function recordSignalInternal({
 	score,
 	side,
 	price,
+	priceSource,
 	stop,
 	target,
 	sources,
@@ -238,14 +239,22 @@ async function recordSignalInternal({
 		const now = new Date();
 		const equityProviderName = equityMarketDataService.getProviderName(normSymbolInfo.exchange, normAssetClass);
 
-		let entryPrice = typeof price === 'number' ? price : null;
+		let entryPrice = typeof price === 'number' && Number.isFinite(price) && price > 0 ? price : null;
+		let entryPriceSource = entryPrice !== null
+			? (priceSource || (normSymbolInfo.exchange === 'BINANCE' ? 'tradingview-mcp' : (equityProviderName || 'direct')))
+			: null;
 		let entryPriceReason = null;
+
 		if (entryPrice === null && normSymbolInfo.exchange === 'BINANCE') {
 			try {
 				const client = getBinanceClient();
 				const avgPriceResult = await client.getAvgPrice({ symbol: normSymbolInfo.symbol });
 				if (avgPriceResult && avgPriceResult.price) {
-					entryPrice = parseFloat(avgPriceResult.price);
+					const parsedAvg = parseFloat(avgPriceResult.price);
+					if (Number.isFinite(parsedAvg) && parsedAvg > 0) {
+						entryPrice = parsedAvg;
+						entryPriceSource = 'binance';
+					}
 				}
 			} catch (err) {
 				console.warn('[SignalOutcomeService] Failed to fetch entry price from Binance:', err.message);
@@ -256,6 +265,9 @@ async function recordSignalInternal({
 					symbol: normSymbolInfo.symbol,
 					exchange: normSymbolInfo.exchange === 'UNKNOWN' ? undefined : normSymbolInfo.exchange,
 				});
+				if (entryPrice !== null) {
+					entryPriceSource = equityProviderName;
+				}
 			} catch (err) {
 				entryPriceReason = err.reason || equityMarketDataService.REASONS.UNAVAILABLE;
 				console.warn('[SignalOutcomeService] Failed to fetch equity entry price:', entryPriceReason);
@@ -269,7 +281,7 @@ async function recordSignalInternal({
 		for (const [winKey, config] of Object.entries(WINDOW_CONFIGS)) {
 			outcomes[winKey] = {
 				status: isEligible ? 'pending' : 'unavailable',
-				reason: isEligible ? undefined : eligibility.state,
+				reason: isEligible ? null : eligibility.state,
 				targetTime: new Date(now.getTime() + config.durationMs).toISOString(),
 				price: null,
 				return: null,
@@ -284,20 +296,21 @@ async function recordSignalInternal({
 			source: typeof source === 'string' ? source : 'unknown',
 			symbol: normSymbolInfo.symbol,
 			exchange: normSymbolInfo.exchange,
-			assetClass: normAssetClass,
+			assetClass: normAssetClass || null,
 			timeframe: timeframe ? String(timeframe).toLowerCase() : null,
 			setupType: setupType ? String(setupType).toLowerCase() : null,
-			score: typeof score === 'number' ? score : null,
+			score: typeof score === 'number' && Number.isFinite(score) ? score : null,
 			side: normSide,
 			price: entryPrice,
-			stop: typeof stop === 'number' ? stop : null,
-			target: typeof target === 'number' ? target : null,
+			entryPriceSource: entryPriceSource || null,
+			stop: typeof stop === 'number' && Number.isFinite(stop) ? stop : null,
+			target: typeof target === 'number' && Number.isFinite(target) ? target : null,
 			sources: Array.isArray(sources) ? sources : [],
 			tokenUsage: tokenUsage || null,
-			processingTimeMs: typeof processingTimeMs === 'number' ? processingTimeMs : null,
-			marketDataProvider: normSymbolInfo.exchange === 'BINANCE' ? 'binance' : equityProviderName,
+			processingTimeMs: typeof processingTimeMs === 'number' && Number.isFinite(processingTimeMs) ? processingTimeMs : null,
+			marketDataProvider: normSymbolInfo.exchange === 'BINANCE' ? 'binance' : (equityProviderName || null),
 			eligibilityState: eligibility.state,
-			eligibilityReason: eligibility.reason,
+			eligibilityReason: eligibility.reason || null,
 			outcomeEvaluated: !isEligible,
 			outcomes,
 		};
@@ -867,6 +880,7 @@ async function getMetricsSummary({ from, to, limit } = {}) {
 
 		const exchangeBreakdown = {};
 		const providerBreakdown = {};
+		const entryPriceSourceBreakdown = {};
 		const eligibilityBreakdown = {};
 
 		const evaluatedSignals = [];
@@ -875,6 +889,7 @@ async function getMetricsSummary({ from, to, limit } = {}) {
 			const exchange = doc.exchange || 'UNKNOWN';
 			const symbol = doc.symbol || 'UNKNOWN';
 			const marketDataProvider = doc.marketDataProvider || (exchange === 'BINANCE' ? 'binance' : 'none');
+			const entryPriceSource = doc.entryPriceSource || (doc.price !== null && doc.price !== undefined ? (doc.marketDataProvider || 'unknown') : 'none');
 
 			let eligibilityState = doc.eligibilityState;
 			if (!eligibilityState) {
@@ -895,6 +910,7 @@ async function getMetricsSummary({ from, to, limit } = {}) {
 			}
 
 			eligibilityBreakdown[eligibilityState] = (eligibilityBreakdown[eligibilityState] || 0) + 1;
+			entryPriceSourceBreakdown[entryPriceSource] = (entryPriceSourceBreakdown[entryPriceSource] || 0) + 1;
 
 			if (!exchangeBreakdown[exchange]) {
 				exchangeBreakdown[exchange] = createCoverageBucket();
@@ -1101,6 +1117,7 @@ async function getMetricsSummary({ from, to, limit } = {}) {
 				: 'Metrics represent 100% of received signals.',
 			exchangeBreakdown,
 			providerBreakdown,
+			entryPriceSourceBreakdown,
 			eligibilityBreakdown,
 			windows: windowStats,
 			drawdownProxy: {
