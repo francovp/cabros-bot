@@ -225,7 +225,7 @@ class NotificationManager {
 					channel: result.channel,
 					external: {
 						provider,
-						attemptCount: result.attemptCount || 1,
+						attemptCount: result.attemptCount ?? 1,
 						durationMs: result.durationMs || totalDurationMs,
 						lastErrorMessage: result.error,
 						lastErrorCode: result.statusCode,
@@ -350,7 +350,7 @@ class NotificationManager {
 					channel: result.channel,
 					external: {
 						provider,
-						attemptCount: result.attemptCount || 1,
+						attemptCount: result.attemptCount ?? 1,
 						durationMs: result.durationMs || totalDurationMs,
 						lastErrorMessage: result.error,
 						lastErrorCode: result.statusCode,

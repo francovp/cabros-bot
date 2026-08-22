@@ -202,6 +202,41 @@ describe('NotificationManager admin failure notifications', () => {
 		expect(drained).toBe(true);
 	});
 
+	it.each(['sendToAll', 'sendToChannels'])('preserves zero attemptCount through %s Sentry telemetry', async (dispatchName) => {
+		process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '-100-admin';
+		const captureExternalFailure = jest.spyOn(sentryService, 'captureExternalFailure').mockImplementation(() => ({ success: true }));
+		const telegramService = {
+			name: 'telegram',
+			isEnabled: jest.fn(() => true),
+			send: jest.fn()
+				.mockResolvedValueOnce({
+					success: false,
+					channel: 'telegram',
+					error: 'Cached delivery lease ownership lost',
+					category: 'TIMEOUT',
+					attemptCount: 0,
+				})
+				.mockResolvedValueOnce({ success: true, channel: 'telegram', messageId: 'admin-1' }),
+		};
+		const whatsappService = {
+			name: 'whatsapp',
+			isEnabled: jest.fn(() => true),
+			send: jest.fn().mockResolvedValue({ success: true, channel: 'whatsapp', messageId: 'wa-1' }),
+		};
+		const manager = new NotificationManager(telegramService, whatsappService);
+
+		if (dispatchName === 'sendToAll') {
+			await manager.sendToAll({ text: 'BTC alert' });
+		} else {
+			await manager.sendToChannels({ text: 'BTC alert' }, ['telegram']);
+		}
+		await waitForBackgroundTasks();
+
+		expect(captureExternalFailure).toHaveBeenCalledWith(expect.objectContaining({
+			external: expect.objectContaining({ attemptCount: 0 }),
+		}));
+	});
+
 	it.each([
 		['sendToAll', (manager, alert) => manager.sendToAll(alert)],
 		['sendToChannels', (manager, alert) => manager.sendToChannels(alert, ['discord'])],
