@@ -104,8 +104,11 @@ async function processEnrichment(alert, options) {
 				enriched = true;
 				alert.enriched = enrichedAlert;
 				if (isTradingViewMcpEnabled) {
-					alert.tradingViewEnrichmentStatus = enrichedAlert.tradingViewEnrichmentStatus
+					const tradingViewEnrichmentStatus = enrichedAlert.tradingViewEnrichmentStatus
 						|| (parseTradingViewSignal(alert.text) ? 'failed' : 'not_applicable');
+					enrichedAlert.tradingViewEnrichmentStatus = tradingViewEnrichmentStatus;
+					enrichedAlert.tradingViewEnrichmentApplied = ['full', 'partial'].includes(tradingViewEnrichmentStatus);
+					alert.tradingViewEnrichmentStatus = tradingViewEnrichmentStatus;
 				}
 				console.debug('[Alert] Enrichment completed, sources:', (enrichedAlert.sources && enrichedAlert.sources.length) || 0);
 			} else {

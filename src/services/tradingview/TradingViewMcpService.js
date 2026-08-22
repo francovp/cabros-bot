@@ -123,6 +123,7 @@ class TradingViewMcpService {
 			}, budgetMs);
 		}
 		const baseBudgetController = new AbortController();
+		const retryDelayCapMs = baseBudgetMs ? Math.max(1, Math.floor(baseBudgetMs / Math.max(1, cfg.maxRetries))) : null;
 		const baseBudgetTimer = baseDeadlineAt
 			? setTimeout(() => {
 				baseBudgetController.abort(new Error(`TradingView MCP base analysis budget exceeded (${baseBudgetMs}ms)`));
@@ -152,7 +153,7 @@ class TradingViewMcpService {
 			const remainingAttempts = Math.max(1, cfg.maxRetries - attempt + 1);
 			let retryReserveMs = 0;
 			for (let retryAttempt = attempt; retryAttempt < cfg.maxRetries; retryAttempt += 1) {
-				retryReserveMs += Math.pow(2, retryAttempt - 1) * 1100;
+				retryReserveMs += Math.min(Math.pow(2, retryAttempt - 1) * 1100, retryDelayCapMs || Number.POSITIVE_INFINITY);
 			}
 			const attemptBudgetMs = Math.max(1, remainingBaseMs - retryReserveMs);
 			const attemptTimeoutMs = Math.min(cfg.timeoutMs, Math.max(1, Math.floor(attemptBudgetMs / remainingAttempts)));
@@ -168,7 +169,7 @@ class TradingViewMcpService {
 			} finally {
 				clearTimeout(attemptTimeoutId);
 			}
-		}, cfg.maxRetries, this.logger, { signal: baseSignal });
+		}, cfg.maxRetries, this.logger, { signal: baseSignal, maxRetryDelayMs: retryDelayCapMs });
 		cleanBaseBudget();
 
 		// Budget still applies for volume confirmation, but the budget timer

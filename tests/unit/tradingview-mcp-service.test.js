@@ -383,6 +383,31 @@ describe('TradingViewMcpService', () => {
 		expect(service.callCoinAnalysis).toHaveBeenCalledTimes(2);
 	});
 
+	it('caps exponential retry delays so later attempts fit inside the base budget', async () => {
+		const service = new TradingViewMcpService({
+			maxRetries: 3,
+			timeoutMs: 5000,
+			enrichmentBudgetMs: 4000,
+			logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
+		});
+		let attempts = 0;
+		service.callCoinAnalysis = jest.fn().mockImplementation(async ({ signal } = {}) => {
+			attempts += 1;
+			if (attempts < 3) {
+				return new Promise((resolve, reject) => {
+					signal.addEventListener('abort', () => reject(new Error('base attempt timeout')), { once: true });
+				});
+			}
+
+			return { price_data: { current_price: 100 } };
+		});
+
+		const result = await service.enrichFromAlertText('BTCUSDT(240) pasó a señal de VENTA');
+
+		expect(result).toEqual(expect.objectContaining({ tradingViewEnrichmentApplied: true, current_price: 100 }));
+		expect(service.callCoinAnalysis).toHaveBeenCalledTimes(3);
+	});
+
 	it('keeps base enrichment when optional volume confirmation exhausts the remaining budget', async () => {
 		process.env.ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION = 'true';
 		const service = new TradingViewMcpService({
