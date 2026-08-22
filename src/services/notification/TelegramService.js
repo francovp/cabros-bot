@@ -298,12 +298,16 @@ class TelegramService extends NotificationChannel {
 					success: false,
 					error: new Error(signal.reason?.message || signal.reason || 'Operation aborted'),
 					attemptCount: totalAttempts,
+					aborted: true,
 				};
 			}
 
-			const result = await this.sendFormattedMessage(sendMessage, chatId, messagePart, enriched);
+			const result = await this.sendFormattedMessage(sendMessage, chatId, messagePart, enriched, signal);
 			totalAttempts += result.attemptCount;
 			if (result.success) {
+				return { ...result, attemptCount: totalAttempts };
+			}
+			if (result.aborted) {
 				return { ...result, attemptCount: totalAttempts };
 			}
 
@@ -342,27 +346,37 @@ class TelegramService extends NotificationChannel {
 		};
 	}
 
-	async sendFormattedMessage(sendMessage, chatId, messagePart, enriched) {
+	async sendFormattedMessage(sendMessage, chatId, messagePart, enriched, signal) {
+		const getAbortError = () => new Error(signal?.reason?.message || signal?.reason || 'Operation aborted');
 		try {
 			const response = await sendMessage(chatId, messagePart, {
 				parse_mode: 'MarkdownV2',
 				disable_web_page_preview: enriched,
 			});
 			return { success: true, response, attemptCount: 1 };
-		} catch (error) {
-			const errorMessage = getErrorMessage(error);
-			if (!errorMessage.includes("can't parse entities")) {
-				return { success: false, error, attemptCount: 1 };
-			}
+			} catch (error) {
+				if (signal?.aborted) {
+					return { success: false, error: getAbortError(), attemptCount: 1, aborted: true };
+				}
+				const errorMessage = getErrorMessage(error);
+				if (!errorMessage.includes("can't parse entities")) {
+					return { success: false, error, attemptCount: 1 };
+				}
 
-			this.logger?.warn?.(`Telegram MarkdownV2 parse failed, retrying as plain text: ${errorMessage}`);
-			try {
+				this.logger?.warn?.(`Telegram MarkdownV2 parse failed, retrying as plain text: ${errorMessage}`);
+				if (signal?.aborted) {
+					return { success: false, error: getAbortError(), attemptCount: 1, aborted: true };
+				}
+				try {
 				const response = await sendMessage(chatId, stripMarkdownV2Escapes(messagePart), {
 					disable_web_page_preview: enriched,
 				});
-				return { success: true, response, attemptCount: 2 };
-			} catch (fallbackError) {
-				return { success: false, error: fallbackError, attemptCount: 2 };
+					return { success: true, response, attemptCount: 2 };
+				} catch (fallbackError) {
+					if (signal?.aborted) {
+						return { success: false, error: getAbortError(), attemptCount: 2, aborted: true };
+					}
+					return { success: false, error: fallbackError, attemptCount: 2 };
 			}
 		}
 	}

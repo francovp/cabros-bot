@@ -269,6 +269,36 @@ describe('TelegramService', () => {
 		}));
 	});
 
+	it('preserves abort telemetry when an in-flight Telegram call is cancelled', async () => {
+		const abortController = new AbortController();
+		const inFlightBot = {
+			telegram: {
+				callApi: jest.fn((method, payload, { signal }) => new Promise((resolve, reject) => {
+					if (signal.aborted) {
+						reject(new Error('The operation was aborted'));
+						return;
+					}
+					signal.addEventListener('abort', () => reject(new Error('The operation was aborted')), { once: true });
+				})),
+			},
+		};
+		const inFlightService = new TelegramService({
+			bot: inFlightBot,
+			chatId: 'chat-1',
+			formatter: { format: (text) => text },
+			maxRetries: 1,
+		});
+		setTimeout(() => abortController.abort(new Error('Cached delivery lease ownership lost')), 1);
+
+		await expect(inFlightService.send({ text: 'abort in flight' }, { signal: abortController.signal })).resolves.toEqual(expect.objectContaining({
+			success: false,
+			category: 'TIMEOUT',
+			attemptCount: 1,
+			aborted: true,
+			error: 'Cached delivery lease ownership lost',
+		}));
+	});
+
 	it('uses telegramChatId override for both MarkdownV2 attempt and plain-text fallback', async () => {
 		const parseErrorBot = {
 			telegram: {
