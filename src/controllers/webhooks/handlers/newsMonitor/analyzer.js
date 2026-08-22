@@ -892,6 +892,13 @@ class NewsAnalyzer {
 			const [data, klines] = await Promise.all([pricePromise, klinesPromise]);
 
 			console.debug(`[Analyzer] Binance price for ${symbol}: $${data.price}`);
+			const price = parseFloat(data.price);
+			const price24hAgo = Array.isArray(klines) && klines.length >= 25
+				? getKlineClose(klines[klines.length - 25])
+				: null;
+			const change24h = Number.isFinite(price24hAgo) && price24hAgo > 0 && Number.isFinite(price)
+				? Math.round(((price - price24hAgo) / price24hAgo) * 10000) / 100
+				: null;
 
 			let volumeRatio = null;
 			let rsi = null;
@@ -903,8 +910,8 @@ class NewsAnalyzer {
 			}
 
 			return {
-				price: parseFloat(data.price),
-				change24h: null, // Binance getAvgPrice doesn't return 24h change, would need additional call
+				price,
+				change24h,
 				volumeRatio,
 				rsi,
 				source: 'binance',
