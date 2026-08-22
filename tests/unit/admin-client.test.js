@@ -413,12 +413,15 @@ describe('admin browser client', () => {
 	});
 
 	it('allows long-running analysis requests to use the server-side deadline budget', async () => {
-		let signal;
+		const signals = [];
 		const browser = createBrowser({
 			fetchImpl: (url, options) => {
 				if (url === '/openapi.json') return response(contract);
-				if (!url.includes('/api/webhook/expanded-analysis-alert')) return response({});
-				signal = options?.signal;
+				if (!url.includes('/api/webhook/expanded-analysis-alert')
+					&& !url.includes('/api/news-monitor')
+					&& !url.includes('/api/scanner-presets/')) return response({});
+				const signal = options?.signal;
+				signals.push(signal);
 				return new Promise((resolve, reject) => {
 					signal.addEventListener('abort', () => reject(new Error('AbortError')));
 				});
@@ -434,7 +437,23 @@ describe('admin browser client', () => {
 		expect([...browser.timerDelays.values()]).toContain(125000);
 		for (const fireTimer of browser.timers.values()) fireTimer();
 		await flush();
-		expect(signal.aborted).toBe(true);
+		expect(signals[0].aborted).toBe(true);
+
+		await selectView(browser, 'analysis');
+		await findForm(browser.elementsById.view, 'POST /api/news-monitor').dispatch('submit');
+		await flush();
+		expect([...browser.timerDelays.values()]).toContain(125000);
+		for (const fireTimer of browser.timers.values()) fireTimer();
+		await flush();
+		expect(signals[1].aborted).toBe(true);
+
+		await selectView(browser, 'presets');
+		await findForm(browser.elementsById.view, 'POST /api/scanner-presets/{id}/run').dispatch('submit');
+		await flush();
+		expect([...browser.timerDelays.values()]).toContain(125000);
+		for (const fireTimer of browser.timers.values()) fireTimer();
+		await flush();
+		expect(signals[2].aborted).toBe(true);
 	});
 
 	it('shows Firebase sign-in state and sends a verified token after sign-in', async () => {

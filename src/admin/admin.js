@@ -104,6 +104,8 @@ const LONG_RUNNING_API_REQUEST_TIMEOUT_MS = 125000;
 const LONG_RUNNING_REQUEST_PATHS = new Set([
 	'/api/webhook/expanded-analysis-alert',
 	'/api/webhook/market-scanner-alert',
+	'/api/news-monitor',
+	'/api/scanner-presets/{id}/run',
 ]);
 
 const getApiRequestTimeout = (definition) => LONG_RUNNING_REQUEST_PATHS.has(definition.path)
