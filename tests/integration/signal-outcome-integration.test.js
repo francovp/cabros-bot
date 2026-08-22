@@ -7,12 +7,13 @@ const { getRoutes } = require('../../src/routes');
 const SignalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
 
 const mockGetKlines = jest.fn();
+const mockGetAvgPrice = jest.fn().mockResolvedValue({ price: '68000.00' });
 jest.mock('binance', () => {
 	return {
 		MainClient: jest.fn().mockImplementation(() => {
 			return {
 				getKlines: mockGetKlines,
-				getAvgPrice: jest.fn().mockResolvedValue({ price: '68000.00' }),
+				getAvgPrice: mockGetAvgPrice,
 			};
 		}),
 	};
@@ -25,6 +26,7 @@ describe('Shadow-Mode Outcome Tracking Integration Tests', () => {
 		admin.__resetApps();
 		admin.__resetCollectionState();
 		mockGetKlines.mockClear();
+		mockGetAvgPrice.mockClear();
 
 		process.env = {
 			...originalEnv,
@@ -160,6 +162,52 @@ describe('Shadow-Mode Outcome Tracking Integration Tests', () => {
 			expect(docData.outcomeEvaluated).toBe(true);
 		} finally {
 			global.fetch = originalFetch;
+		}
+	});
+
+	it('records signal outcome using structured MCP entry price without calling Binance getAvgPrice', async () => {
+		process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT = 'true';
+		const { tradingViewMcpService } = require('../../src/services/tradingview/TradingViewMcpService');
+		const originalEnrich = tradingViewMcpService.enrichFromAlertText;
+		tradingViewMcpService.enrichFromAlertText = jest.fn().mockResolvedValue({
+			original_text: 'BINANCE:BTCUSDT (1h) BUY',
+			sentiment: 'BULLISH',
+			sentiment_score: 0.75,
+			current_price: 64863.03,
+			price_data: { current_price: 64863.03, high: 65000, low: 64000 },
+			insights: ['Señal detectada: COMPRA para BTCUSDT en 1h (BINANCE)'],
+			technical_levels: { supports: ['64000'], resistances: ['66000'] },
+			sources: [],
+			truncated: false,
+			tradingViewEnrichmentApplied: true,
+		});
+
+		try {
+			const postRes = await request(app)
+				.post('/api/webhook/alert?useTradingViewData=true')
+				.set('x-api-key', 'test-key')
+				.send({ text: 'BINANCE:BTCUSDT (1h) BUY' });
+
+			expect(postRes.status).toBe(200);
+			expect(postRes.body.success).toBe(true);
+			await new Promise((resolve) => setImmediate(resolve));
+
+			expect(mockGetAvgPrice).not.toHaveBeenCalled();
+
+			const outcomesMap = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME);
+			expect(outcomesMap).toBeDefined();
+			expect(outcomesMap.size).toBe(1);
+
+			const [, docData] = [...outcomesMap.entries()][0];
+			expect(docData.symbol).toBe('BTCUSDT');
+			expect(docData.exchange).toBe('BINANCE');
+			expect(docData.side).toBe('BUY');
+			expect(docData.price).toBe(64863.03);
+			expect(docData.entryPriceSource).toBe('tradingview-mcp');
+			expect(docData.eligibilityState).toBe('supported_provider');
+			expect(docData.outcomeEvaluated).toBe(false);
+		} finally {
+			tradingViewMcpService.enrichFromAlertText = originalEnrich;
 		}
 	});
 });

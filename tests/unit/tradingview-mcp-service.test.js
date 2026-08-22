@@ -148,6 +148,10 @@ describe('TradingViewMcpService', () => {
 		expect(result).toEqual(expect.objectContaining({
 			original_text: 'BTCUSDT(240) pasó a señal de VENTA',
 			sentiment: 'BEARISH',
+			current_price: 64863.03,
+			price_data: expect.objectContaining({
+				current_price: 64863.03,
+			}),
 			technical_levels: expect.objectContaining({
 				supports: expect.any(Array),
 				resistances: expect.any(Array),

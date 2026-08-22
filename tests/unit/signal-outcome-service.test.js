@@ -16,11 +16,13 @@ const {
 
 // Mock the binance client
 const mockGetKlines = jest.fn();
+const mockGetAvgPrice = jest.fn();
 jest.mock('binance', () => {
 	return {
 		MainClient: jest.fn().mockImplementation(() => {
 			return {
 				getKlines: mockGetKlines,
+				getAvgPrice: mockGetAvgPrice,
 			};
 		}),
 	};
@@ -243,6 +245,100 @@ describe('SignalOutcomeService', () => {
 			} finally {
 				global.fetch = originalFetch;
 			}
+		});
+
+		it('reuses structured MCP entry price without calling Binance getAvgPrice', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			mockGetAvgPrice.mockResolvedValue({ price: '12345.67' });
+
+			const resId = await SignalOutcomeService.recordSignal({
+				requestId: 'req-mcp-price',
+				source: 'webhook-alert',
+				symbol: 'BINANCE:BTCUSDT',
+				price: 64863.03,
+				side: 'BUY',
+			});
+
+			expect(resId).not.toBeNull();
+			expect(mockGetAvgPrice).not.toHaveBeenCalled();
+
+			const saved = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(resId);
+			expect(saved).toBeDefined();
+			expect(saved.price).toBe(64863.03);
+			expect(saved.entryPriceSource).toBe('tradingview-mcp');
+			expect(saved.eligibilityState).toBe('supported_provider');
+			expect(saved.outcomeEvaluated).toBe(false);
+		});
+
+		it('falls back to Binance getAvgPrice when price is null, zero, negative, or invalid', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			mockGetAvgPrice.mockResolvedValue({ price: '68100.50' });
+
+			const resId = await SignalOutcomeService.recordSignal({
+				requestId: 'req-fallback-price',
+				source: 'webhook-alert',
+				symbol: 'BINANCE:BTCUSDT',
+				price: null,
+				side: 'BUY',
+			});
+
+			expect(resId).not.toBeNull();
+			expect(mockGetAvgPrice).toHaveBeenCalledWith({ symbol: 'BTCUSDT' });
+
+			const saved = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(resId);
+			expect(saved).toBeDefined();
+			expect(saved.price).toBe(68100.50);
+			expect(saved.entryPriceSource).toBe('binance');
+			expect(saved.eligibilityState).toBe('supported_provider');
+		});
+
+		it('fails open when Binance getAvgPrice throws due to region block', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			mockGetAvgPrice.mockRejectedValue(new Error('Binance 451: Service unavailable from restricted location'));
+
+			const resId = await SignalOutcomeService.recordSignal({
+				requestId: 'req-region-blocked',
+				source: 'webhook-alert',
+				symbol: 'BINANCE:BTCUSDT',
+				price: null,
+				side: 'BUY',
+			});
+
+			expect(resId).not.toBeNull();
+			const saved = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(resId);
+			expect(saved).toBeDefined();
+			expect(saved.price).toBeNull();
+			expect(saved.entryPriceSource).toBeNull();
+			expect(saved.eligibilityState).toBe('missing_entry_price');
+			expect(saved.outcomeEvaluated).toBe(true);
+			expect(saved.outcomes['1h'].status).toBe('unavailable');
+		});
+
+		it('sanitizes undefined properties to prevent Firestore serialization errors', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+
+			const resId = await SignalOutcomeService.recordSignal({
+				requestId: 'req-sanitize-check',
+				source: 'webhook-alert',
+				symbol: 'BINANCE:BTCUSDT',
+				price: 65000,
+			});
+
+			expect(resId).not.toBeNull();
+			const saved = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(resId);
+			expect(saved).toBeDefined();
+
+			const checkNoUndefined = (obj, path = '') => {
+				for (const [key, value] of Object.entries(obj)) {
+					const currentPath = path ? `${path}.${key}` : key;
+					expect(value).not.toBeUndefined();
+					if (value && typeof value === 'object' && typeof value.toDate !== 'function') {
+						checkNoUndefined(value, currentPath);
+					}
+				}
+			};
+
+			checkNoUndefined(saved);
 		});
 	});
 
@@ -972,6 +1068,72 @@ describe('SignalOutcomeService', () => {
 			expect(res.exchangeBreakdown.BINANCE.received).toBe(1);
 			expect(res.eligibilityBreakdown.unsupported_exchange).toBe(2);
 			expect(res.eligibilityBreakdown.missing_entry_price).toBe(1);
+		});
+
+		it('tracks entryPriceSourceBreakdown across MCP, Binance, Twelve Data, and missing sources', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			const now = new Date();
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, new Map([
+				['doc-mcp', {
+					receivedAt: admin.firestore.Timestamp.fromDate(now),
+					requestId: 'req-mcp',
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					side: 'BUY',
+					price: 65000,
+					entryPriceSource: 'tradingview-mcp',
+					eligibilityState: 'supported_provider',
+					outcomeEvaluated: false,
+					outcomes: {},
+				}],
+				['doc-binance', {
+					receivedAt: admin.firestore.Timestamp.fromDate(now),
+					requestId: 'req-binance',
+					symbol: 'ETHUSDT',
+					exchange: 'BINANCE',
+					side: 'BUY',
+					price: 3500,
+					entryPriceSource: 'binance',
+					eligibilityState: 'supported_provider',
+					outcomeEvaluated: false,
+					outcomes: {},
+				}],
+				['doc-twelve', {
+					receivedAt: admin.firestore.Timestamp.fromDate(now),
+					requestId: 'req-twelve',
+					symbol: 'AAPL',
+					exchange: 'NASDAQ',
+					side: 'BUY',
+					price: 180,
+					entryPriceSource: 'twelve-data',
+					eligibilityState: 'supported_provider',
+					outcomeEvaluated: false,
+					outcomes: {},
+				}],
+				['doc-none', {
+					receivedAt: admin.firestore.Timestamp.fromDate(now),
+					requestId: 'req-none',
+					symbol: 'SOLUSDT',
+					exchange: 'BINANCE',
+					side: 'BUY',
+					price: null,
+					entryPriceSource: null,
+					eligibilityState: 'missing_entry_price',
+					outcomeEvaluated: true,
+					outcomes: {},
+				}],
+			]));
+
+			const res = await SignalOutcomeService.getMetricsSummary();
+			expect(res).not.toBe('No measurements found');
+			expect(res.entryPriceSourceBreakdown).toEqual({
+				'tradingview-mcp': 1,
+				'binance': 1,
+				'twelve-data': 1,
+				'none': 1,
+			});
 		});
 
 		it('reconciles observed 54-alert mix fixture with exact exchange breakdown', async () => {

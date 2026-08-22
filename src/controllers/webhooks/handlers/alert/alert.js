@@ -222,6 +222,12 @@ function postAlert(botOrGetter) {
 				const { parseTradingViewSignal } = require('../../../../services/tradingview/parseTradingViewSignal');
 				const parsed = parseTradingViewSignal(alert.text);
 				if (parsed) {
+					const mcpPrice = (alert.enriched && typeof alert.enriched.current_price === 'number' && Number.isFinite(alert.enriched.current_price) && alert.enriched.current_price > 0)
+						? alert.enriched.current_price
+						: (alert.enriched && alert.enriched.price_data && typeof alert.enriched.price_data.current_price === 'number' && Number.isFinite(alert.enriched.price_data.current_price) && alert.enriched.price_data.current_price > 0)
+							? alert.enriched.price_data.current_price
+							: null;
+
 					signalOutcomeService.recordSignal({
 						requestId,
 						source: 'webhook-alert',
@@ -231,7 +237,8 @@ function postAlert(botOrGetter) {
 						setupType: 'tradingview-enrichment',
 						score: alert.enriched ? alert.enriched.sentiment_score : null,
 						side: parsed.side,
-						price: null,
+						price: mcpPrice,
+						priceSource: mcpPrice !== null ? 'tradingview-mcp' : null,
 						sources: alert.enriched && Array.isArray(alert.enriched.sources) ? alert.enriched.sources : [],
 						tokenUsage: tokenUsageJSON,
 						processingTimeMs: Date.now() - startTime,

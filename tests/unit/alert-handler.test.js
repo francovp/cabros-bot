@@ -372,4 +372,37 @@ describe('Alert Handler', () => {
 
 		process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
 	});
+
+	it('should preserve structured MCP current_price and price_data when merged with Gemini enrichment', async () => {
+		const previousGeminiFlag = process.env.ENABLE_GEMINI_GROUNDING;
+		process.env.ENABLE_GEMINI_GROUNDING = 'true';
+
+		tradingViewMcpService.isEnabled.mockReturnValue(true);
+		tradingViewMcpService.enrichFromAlertText.mockResolvedValue({
+			original_text: 'BTCUSDT(240) pasó a señal de COMPRA',
+			sentiment: 'BULLISH',
+			sentiment_score: 0.8,
+			current_price: 64863.03,
+			price_data: { current_price: 64863.03, high: 65000, low: 64000 },
+			insights: ['MCP insight 1'],
+			sources: [],
+			truncated: false,
+		});
+
+		groundAlert.mockResolvedValue({
+			sentiment: 'BULLISH',
+			sentiment_score: 0.9,
+			insights: ['Gemini insight 1'],
+			sources: [],
+			truncated: false,
+			modelUsed: 'gemini-2.5-flash',
+		});
+
+		const result = await enrichAlert({ text: 'BTCUSDT(240) pasó a señal de COMPRA' }, { useTradingViewData: true });
+
+		expect(result.current_price).toBe(64863.03);
+		expect(result.price_data).toEqual({ current_price: 64863.03, high: 65000, low: 64000 });
+
+		process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
+	});
 });
