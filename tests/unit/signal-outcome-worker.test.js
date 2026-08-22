@@ -598,6 +598,16 @@ describe('SignalOutcomeService Worker & Bounded Evaluation', () => {
 				SignalOutcomeService.stopWorker();
 			});
 
+			it('preserves valid environment cadences above one hour', () => {
+				process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+				process.env.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS = '86400000';
+
+				SignalOutcomeService.startWorker();
+
+				expect(SignalOutcomeService.getWorkerStatus().intervalMs).toBe(86400000);
+				SignalOutcomeService.stopWorker();
+			});
+
 			it('falls back when the sweep duration exceeds Node timer bounds', () => {
 				process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
 				process.env.SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS = '2147483648';
