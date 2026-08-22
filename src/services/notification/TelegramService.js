@@ -7,6 +7,76 @@ const NotificationChannel = require('./NotificationChannel');
 const MarkdownV2Formatter = require('./formatters/markdownV2Formatter');
 
 const DEFAULT_MAX_MESSAGE_LENGTH = 4000;
+const DEFAULT_MAX_RETRIES = 2;
+const DEFAULT_FALLBACK_RETRY_DELAY_MS = 500;
+const DEFAULT_MAX_RETRY_DELAY_MS = 5000;
+const DEFAULT_MAX_TOTAL_RETRY_WAIT_MS = 10000;
+
+function sleepWithSignal(ms, signal) {
+	if (!signal) {
+		return new Promise(resolve => setTimeout(resolve, ms));
+	}
+	if (signal.aborted) {
+		return Promise.reject(new Error(signal.reason?.message || signal.reason || 'Operation aborted'));
+	}
+	return new Promise((resolve, reject) => {
+		const timeoutId = setTimeout(() => {
+			signal.removeEventListener('abort', onAbort);
+			resolve();
+		}, ms);
+		const onAbort = () => {
+			clearTimeout(timeoutId);
+			signal.removeEventListener('abort', onAbort);
+			reject(new Error(signal.reason?.message || signal.reason || 'Operation aborted'));
+		};
+		signal.addEventListener('abort', onAbort, { once: true });
+	});
+}
+
+function getStatusCode(error) {
+	const rawStatusCode = error?.response?.error_code
+		?? error?.response?.statusCode
+		?? error?.response?.status
+		?? error?.error_code
+		?? error?.statusCode
+		?? error?.status;
+	const statusCode = Number(rawStatusCode);
+	return Number.isFinite(statusCode) ? statusCode : null;
+}
+
+function getErrorMessage(error) {
+	if (error?.response?.description || error?.description || error?.message) {
+		return String(error.response?.description || error.description || error.message);
+	}
+	if (error && typeof error === 'object') {
+		return JSON.stringify(error);
+	}
+	return String(error || 'Unknown Telegram error');
+}
+
+function getCategory(error, statusCode) {
+	if (statusCode === 429) return 'RATE_LIMITED';
+	if (statusCode !== null && statusCode >= 400 && statusCode < 500) return 'CLIENT_ERROR';
+	if (error?.name === 'AbortError' || /timeout|aborted/i.test(getErrorMessage(error))) return 'TIMEOUT';
+	return 'PROVIDER_ERROR';
+}
+
+function isRetryable(error, statusCode) {
+	return statusCode === 429 || statusCode === null || statusCode >= 500;
+}
+
+function getRetryAfterMs(error, fallbackDelayMs) {
+	const retryAfter = error?.response?.parameters?.retry_after
+		?? error?.response?.parameters?.retryAfter
+		?? error?.parameters?.retry_after
+		?? error?.parameters?.retryAfter;
+	const seconds = Number(retryAfter);
+	return Number.isFinite(seconds) && seconds > 0 ? Math.round(seconds * 1000) : fallbackDelayMs;
+}
+
+function stripMarkdownV2Escapes(text) {
+	return text.replace(/\\([_*[\]()~`>#+\-=|{}.!])/g, '$1');
+}
 
 class TelegramService extends NotificationChannel {
 	/**
@@ -26,6 +96,16 @@ class TelegramService extends NotificationChannel {
 		this.formatter = config.formatter || new MarkdownV2Formatter();
 		this.logger = config.logger;
 		this.maxMessageLength = config.maxMessageLength || DEFAULT_MAX_MESSAGE_LENGTH;
+		this.maxRetries = Number.isInteger(config.maxRetries) && config.maxRetries >= 0 ? config.maxRetries : DEFAULT_MAX_RETRIES;
+		this.fallbackRetryDelayMs = Number.isFinite(config.fallbackRetryDelayMs) && config.fallbackRetryDelayMs >= 0
+			? config.fallbackRetryDelayMs
+			: DEFAULT_FALLBACK_RETRY_DELAY_MS;
+		this.maxRetryDelayMs = Number.isFinite(config.maxRetryDelayMs) && config.maxRetryDelayMs >= 0
+			? config.maxRetryDelayMs
+			: DEFAULT_MAX_RETRY_DELAY_MS;
+		this.maxTotalRetryWaitMs = Number.isFinite(config.maxTotalRetryWaitMs) && config.maxTotalRetryWaitMs >= 0
+			? config.maxTotalRetryWaitMs
+			: DEFAULT_MAX_TOTAL_RETRY_WAIT_MS;
 		this.enabled = false;
 	}
 
@@ -74,25 +154,36 @@ class TelegramService extends NotificationChannel {
 	/**
    * Send alert to Telegram via Telegraf bot
    * @param {Object} alert - Alert object with text and optional enriched content
-   * @returns {Promise<{success: boolean, channel: string, messageId?: string, error?: string}>}
+	 * @returns {Promise<{success: boolean, channel: string, messageId?: string, error?: string, statusCode?: number|null, category?: string, attemptCount: number, durationMs: number}>}
    */
 	async send(alert, options = {}) {
+		const startedAt = Date.now();
+		const buildResult = (result) => ({
+			statusCode: null,
+			category: 'PROVIDER_ERROR',
+			attemptCount: 0,
+			durationMs: Date.now() - startedAt,
+			...result,
+		});
+
 		const signal = options.signal;
 		try {
 			if (signal?.aborted) {
-				return {
+				return buildResult({
 					success: false,
 					channel: 'telegram',
 					error: signal.reason?.message || signal.reason || 'Operation aborted',
+					category: 'TIMEOUT',
 					aborted: true,
-				};
+				});
 			}
 			if (!this.bot) {
-				return {
+				return buildResult({
 					success: false,
 					channel: 'telegram',
 					error: 'Bot instance not available',
-				};
+					category: 'CLIENT_ERROR',
+				});
 			}
 
 			// Format message for Telegram MarkdownV2
@@ -122,46 +213,138 @@ class TelegramService extends NotificationChannel {
 
 			// Send to Telegram with MarkdownV2 first, fallback to plain text on parse errors
 			const messageIds = [];
+			let attemptCount = 0;
 			for (const messagePart of messageParts) {
 				if (signal?.aborted) {
-					return {
+					return buildResult({
 						success: false,
 						channel: 'telegram',
 						error: signal.reason?.message || signal.reason || 'Operation aborted',
+						category: 'TIMEOUT',
+						attemptCount,
+						messageIds,
+						messageId: messageIds.join(','),
+						messageCount: messageIds.length,
 						aborted: true,
-					};
+					});
 				}
-				const result = await sendMessage(chatId, messagePart, {
-					parse_mode: 'MarkdownV2',
-					disable_web_page_preview: !!alert.enriched,
-				}).catch((err) => {
-					const errMsg = (err && (err.description || err.message)) || '';
-					// If MarkdownV2 parse fails (400 can't parse entities), retry as plain text
-					if (errMsg.includes("can't parse entities")) {
-						this.logger?.warn?.(`Telegram MarkdownV2 parse failed, retrying as plain text: ${errMsg}`);
-						return sendMessage(chatId, messagePart, {
-							disable_web_page_preview: !!alert.enriched,
-						});
-					}
-					throw err;
-				});
-				messageIds.push(String(result.message_id));
+				const result = await this.sendMessagePart(sendMessage, chatId, messagePart, !!alert.enriched, signal);
+				attemptCount += result.attemptCount;
+				if (!result.success) {
+					const statusCode = getStatusCode(result.error);
+					return buildResult({
+						success: false,
+						channel: 'telegram',
+						error: `Telegram error: ${getErrorMessage(result.error)}`,
+						statusCode,
+						category: getCategory(result.error, statusCode),
+						attemptCount,
+						messageIds,
+						messageId: messageIds.join(','),
+						messageCount: messageIds.length,
+					});
+				}
+				messageIds.push(String(result.response.message_id));
 			}
 
-			return {
+			return buildResult({
 				success: true,
 				channel: 'telegram',
 				messageId: messageIds.join(','),
 				messageIds,
 				messageCount: messageIds.length,
-			};
+				statusCode: 200,
+				category: 'SUCCESS',
+				attemptCount,
+			});
 		} catch (error) {
 			this.logger?.error?.(`Failed to send to Telegram: ${error.message}`);
-			return {
+			return buildResult({
 				success: false,
 				channel: 'telegram',
-				error: `Telegram error: ${error.message}`,
-			};
+				error: `Telegram error: ${getErrorMessage(error)}`,
+				statusCode: getStatusCode(error),
+				category: getCategory(error, getStatusCode(error)),
+			});
+		}
+	}
+
+	async sendMessagePart(sendMessage, chatId, messagePart, enriched, signal) {
+		let totalAttempts = 0;
+		let totalWaitMs = 0;
+		let lastError = null;
+
+		for (let retry = 0; retry <= this.maxRetries; retry += 1) {
+			if (signal?.aborted) {
+				return {
+					success: false,
+					error: new Error(signal.reason?.message || signal.reason || 'Operation aborted'),
+					attemptCount: totalAttempts,
+				};
+			}
+
+			const result = await this.sendFormattedMessage(sendMessage, chatId, messagePart, enriched);
+			totalAttempts += result.attemptCount;
+			if (result.success) {
+				return { ...result, attemptCount: totalAttempts };
+			}
+
+			lastError = result.error;
+			const statusCode = getStatusCode(lastError);
+			if (!isRetryable(lastError, statusCode) || retry === this.maxRetries) {
+				break;
+			}
+
+			const delayMs = statusCode === 429
+				? getRetryAfterMs(lastError, this.fallbackRetryDelayMs)
+				: this.fallbackRetryDelayMs;
+			if (delayMs > this.maxRetryDelayMs || totalWaitMs + delayMs > this.maxTotalRetryWaitMs) {
+				this.logger?.warn?.(`Telegram retry delay (${delayMs}ms) exceeds retry budget; aborting retries`);
+				break;
+			}
+
+			this.logger?.warn?.(`Telegram send failed (${statusCode || 'transport error'}), retrying in ${delayMs}ms`);
+			try {
+				await sleepWithSignal(delayMs, signal);
+			} catch (error) {
+				return {
+					success: false,
+					error,
+					attemptCount: totalAttempts,
+				};
+			}
+			totalWaitMs += delayMs;
+		}
+
+		return {
+			success: false,
+			error: lastError,
+			attemptCount: totalAttempts,
+		};
+	}
+
+	async sendFormattedMessage(sendMessage, chatId, messagePart, enriched) {
+		try {
+			const response = await sendMessage(chatId, messagePart, {
+				parse_mode: 'MarkdownV2',
+				disable_web_page_preview: enriched,
+			});
+			return { success: true, response, attemptCount: 1 };
+		} catch (error) {
+			const errorMessage = getErrorMessage(error);
+			if (!errorMessage.includes("can't parse entities")) {
+				return { success: false, error, attemptCount: 1 };
+			}
+
+			this.logger?.warn?.(`Telegram MarkdownV2 parse failed, retrying as plain text: ${errorMessage}`);
+			try {
+				const response = await sendMessage(chatId, stripMarkdownV2Escapes(messagePart), {
+					disable_web_page_preview: enriched,
+				});
+				return { success: true, response, attemptCount: 2 };
+			} catch (fallbackError) {
+				return { success: false, error: fallbackError, attemptCount: 2 };
+			}
 		}
 	}
 }

@@ -78,6 +78,126 @@ describe('TelegramService', () => {
 		});
 	});
 
+	it('removes MarkdownV2 escape characters from the plain-text fallback', async () => {
+		const parseErrorBot = {
+			telegram: {
+				sendMessage: jest.fn()
+					.mockRejectedValueOnce({
+						description: "Bad Request: can't parse entities",
+					})
+					.mockResolvedValueOnce({ message_id: 203 }),
+			},
+		};
+		const fallbackService = new TelegramService({
+			bot: parseErrorBot,
+			chatId: 'chat-1',
+			formatter: {
+				format: () => 'Price: BTC\\_USDT\\.',
+			},
+		});
+
+		await expect(fallbackService.send({ text: 'ignored' })).resolves.toEqual(expect.objectContaining({
+			success: true,
+			statusCode: 200,
+			category: 'SUCCESS',
+			attemptCount: 2,
+			durationMs: expect.any(Number),
+		}));
+		expect(parseErrorBot.telegram.sendMessage.mock.calls[1][1]).toBe('Price: BTC_USDT.');
+	});
+
+	it('retries Telegram 429 responses using retry_after and returns delivery telemetry', async () => {
+		const retryBot = {
+			telegram: {
+				sendMessage: jest.fn()
+					.mockRejectedValueOnce({
+						response: {
+							error_code: 429,
+							description: 'Too Many Requests',
+							parameters: { retry_after: 0.01 },
+						},
+					})
+					.mockResolvedValueOnce({ message_id: 204 }),
+			},
+		};
+		const retryService = new TelegramService({
+			bot: retryBot,
+			chatId: 'chat-1',
+			formatter: { format: (text) => text },
+			maxRetries: 2,
+			maxRetryDelayMs: 1000,
+			maxTotalRetryWaitMs: 2000,
+			logger: { warn: jest.fn() },
+		});
+
+		await expect(retryService.send({ text: 'retry me' })).resolves.toEqual(expect.objectContaining({
+			success: true,
+			statusCode: 200,
+			category: 'SUCCESS',
+			attemptCount: 2,
+			durationMs: expect.any(Number),
+		}));
+		expect(retryBot.telegram.sendMessage).toHaveBeenCalledTimes(2);
+	});
+
+	it('retries transient Telegram transport failures', async () => {
+		const transientBot = {
+			telegram: {
+				sendMessage: jest.fn()
+					.mockRejectedValueOnce(new Error('socket reset'))
+					.mockResolvedValueOnce({ message_id: 205 }),
+			},
+		};
+		const transientService = new TelegramService({
+			bot: transientBot,
+			chatId: 'chat-1',
+			formatter: { format: (text) => text },
+			maxRetries: 1,
+			fallbackRetryDelayMs: 1,
+			maxRetryDelayMs: 100,
+			maxTotalRetryWaitMs: 100,
+		});
+
+		await expect(transientService.send({ text: 'retry transport' })).resolves.toEqual(expect.objectContaining({
+			success: true,
+			attemptCount: 2,
+			statusCode: 200,
+			category: 'SUCCESS',
+		}));
+		expect(transientBot.telegram.sendMessage).toHaveBeenCalledTimes(2);
+	});
+
+	it('does not exceed the retry wait budget for Telegram 429 responses', async () => {
+		const limitedBot = {
+			telegram: {
+				sendMessage: jest.fn().mockRejectedValue({
+					response: {
+						error_code: 429,
+						description: 'Too Many Requests',
+						parameters: { retry_after: 5 },
+					},
+				}),
+			},
+		};
+		const limitedService = new TelegramService({
+			bot: limitedBot,
+			chatId: 'chat-1',
+			formatter: { format: (text) => text },
+			maxRetries: 2,
+			maxRetryDelayMs: 10000,
+			maxTotalRetryWaitMs: 50,
+		});
+
+		await expect(limitedService.send({ text: 'rate limited' })).resolves.toEqual(expect.objectContaining({
+			success: false,
+			statusCode: 429,
+			category: 'RATE_LIMITED',
+			attemptCount: 1,
+			durationMs: expect.any(Number),
+		}));
+		expect(limitedBot.telegram.sendMessage).toHaveBeenCalledTimes(1);
+	});
+
 	it('uses telegramChatId override for both MarkdownV2 attempt and plain-text fallback', async () => {
 		const parseErrorBot = {
 			telegram: {
@@ -122,6 +242,7 @@ describe('TelegramService', () => {
 		const fallbackService = new TelegramService({
 			bot: otherErrorBot,
 			chatId: 'chat-1',
+			maxRetries: 0,
 			formatter: {
 				format: (text) => text,
 			},
