@@ -1345,6 +1345,7 @@ class JobService {
 
 	async _executeMarketScanner(job, parsed, signal, botOrGetter) {
 		const { exchange, timeframe, scans } = parsed;
+		const symbolCache = new Map();
 
 		for (let index = 0; index < scans.length; index++) {
 			const scanType = scans[index];
@@ -1380,7 +1381,7 @@ class JobService {
 				let enrichedItems = items;
 				if (parsed.includeMultiTimeframe === true) {
 					try {
-						enrichedItems = await enrichScannerItemsWithTrendConfluence(items, { ...parsed, scanType }, signal);
+						enrichedItems = await enrichScannerItemsWithTrendConfluence(items, { ...parsed, scanType }, signal, { symbolCache });
 					} catch (error) {
 						if (this._isAbortTriggered(signal, error)) {
 							const timeoutMessage = this._getAbortMessage(signal, error.message);
