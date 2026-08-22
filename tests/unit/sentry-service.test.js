@@ -577,6 +577,21 @@ describe('SentryService', () => {
 				);
 			});
 
+			it('should group external failures with a deterministic fingerprint', () => {
+				service.captureExternalFailure({
+					channel: 'telegram',
+					external: {
+						provider: 'telegram-api',
+						attemptCount: 2,
+						durationMs: 3000,
+						lastErrorCode: 429,
+					},
+				});
+
+				const [, scope] = Sentry.captureException.mock.calls[0];
+				expect(scope.fingerprint).toEqual(['external_failure', 'telegram', 'telegram-api', '429']);
+			});
+
 			it('should set correct message format for external failure', () => {
 				service.captureExternalFailure({
 					channel: 'telegram',

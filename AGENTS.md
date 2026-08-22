@@ -1059,6 +1059,15 @@ This feature introduces backend runtime error monitoring using Sentry's Node SDK
 - Integration tests MAY assert that monitoring helpers are called in error paths but MUST keep HTTP responses and notification behavior identical with Sentry enabled vs disabled.
 - Default for Jest and local dev is to run with Sentry disabled (`ENABLE_SENTRY=false` or no `SENTRY_DSN`), unless a test explicitly enables it with a fake DSN.
 
+## Deterministic Sentry External Failure Fingerprints (CB-182 / Issue #419)
+
+`SentryService.captureExternalFailure()` sends external provider exceptions with a deterministic fingerprint made from the event type, notification channel, provider, and last provider error code. Repeated failures with the same tuple group together in Sentry even when attempt counts or sanitized provider messages differ; missing error codes use `error`. This is monitoring-only and does not alter delivery, HTTP responses, or existing fail-safe behavior.
+
+**Coverage**:
+- `tests/unit/sentry-service.test.js` verifies the fingerprint passed to `Sentry.captureException` for an external Telegram failure.
+
+No endpoint, OpenAPI, Postman, environment variable, or Remote Config contract changed.
+
 ### Testing Patterns
 
 **Test locations**:
