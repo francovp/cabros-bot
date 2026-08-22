@@ -2102,6 +2102,16 @@ class JobService {
 				} else {
 					attemptInfo.error = `HTTP ${response.status} ${response.statusText}`;
 					attempts.push(attemptInfo);
+
+					// Definitive client rejections never succeed on retry. 408 and 429
+					// are transient, so they keep the exponential backoff like 5xx.
+					const isNonRetryableClientError = response.status >= 400
+						&& response.status < 500
+						&& response.status !== 408
+						&& response.status !== 429;
+					if (isNonRetryableClientError) {
+						break;
+					}
 				}
 			} catch (err) {
 				attempts.push({

@@ -2068,5 +2068,84 @@ describe('JobService Unit Tests', () => {
 				process.env.JOB_CALLBACK_RETRY_DELAY_MS = prevDelay;
 			}
 		});
+
+		it.each([400, 401, 403, 404, 422])('stops after one attempt on non-retryable HTTP %s callback', async (statusCode) => {
+			const prevDelay = process.env.JOB_CALLBACK_RETRY_DELAY_MS;
+			process.env.JOB_CALLBACK_RETRY_DELAY_MS = '1';
+			const dns = require('dns');
+			const lookupSpy = jest.spyOn(dns.promises, 'lookup')
+				.mockResolvedValue([{ address: '93.184.216.34', family: 4 }]);
+
+			fetchMock.mockResolvedValue({ ok: false, status: statusCode, statusText: 'Client Error' });
+
+			const job = {
+				jobId: `job-callback-4xx-${statusCode}`,
+				type: 'expanded-analysis',
+				status: 'completed',
+				callbackUrl: 'https://client-error.example.com/callback',
+				callbackStatus: { status: 'pending', attempts: [] },
+				fullResults: [],
+				fullScanResults: [],
+				deliveryResults: [],
+				createdAt: new Date().toISOString(),
+				updatedAt: new Date().toISOString(),
+			};
+			await jobService.repository.save(job);
+
+			try {
+				await jobService._sendCallbackWithRetry(job);
+
+				expect(fetchMock).toHaveBeenCalledTimes(1);
+				const freshJob = await jobService.repository.get(job.jobId);
+				expect(freshJob.callbackStatus.status).toBe('failed');
+				expect(freshJob.callbackStatus.attempts).toHaveLength(1);
+				expect(freshJob.callbackStatus.attempts[0].statusCode).toBe(statusCode);
+				expect(freshJob.callbackStatus.attempts[0].error).toBe(`HTTP ${statusCode} Client Error`);
+			} finally {
+				process.env.JOB_CALLBACK_RETRY_DELAY_MS = prevDelay;
+				lookupSpy.mockRestore();
+			}
+		});
+
+		it('keeps retrying HTTP 408 and HTTP 429 callbacks up to maxAttempts', async () => {
+			const prevDelay = process.env.JOB_CALLBACK_RETRY_DELAY_MS;
+			process.env.JOB_CALLBACK_RETRY_DELAY_MS = '1';
+			const dns = require('dns');
+			const lookupSpy = jest.spyOn(dns.promises, 'lookup')
+				.mockResolvedValue([{ address: '93.184.216.34', family: 4 }]);
+
+			fetchMock
+				.mockResolvedValueOnce({ ok: false, status: 408, statusText: 'Request Timeout' })
+				.mockResolvedValue({ ok: false, status: 429, statusText: 'Too Many Requests' });
+
+			const job = {
+				jobId: 'job-callback-retryable-4xx',
+				type: 'expanded-analysis',
+				status: 'completed',
+				callbackUrl: 'https://rate-limited.example.com/callback',
+				callbackStatus: { status: 'pending', attempts: [] },
+				fullResults: [],
+				fullScanResults: [],
+				deliveryResults: [],
+				createdAt: new Date().toISOString(),
+				updatedAt: new Date().toISOString(),
+			};
+			await jobService.repository.save(job);
+
+			try {
+				await jobService._sendCallbackWithRetry(job);
+
+				expect(fetchMock).toHaveBeenCalledTimes(4);
+				const freshJob = await jobService.repository.get(job.jobId);
+				expect(freshJob.callbackStatus.status).toBe('failed');
+				expect(freshJob.callbackStatus.attempts).toHaveLength(4);
+				expect(freshJob.callbackStatus.attempts[0].statusCode).toBe(408);
+				expect(freshJob.callbackStatus.attempts.slice(1).every((attempt) => attempt.statusCode === 429))
+					.toBe(true);
+			} finally {
+				process.env.JOB_CALLBACK_RETRY_DELAY_MS = prevDelay;
+				lookupSpy.mockRestore();
+			}
+		});
 	});
 });
