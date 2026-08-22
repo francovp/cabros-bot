@@ -1351,3 +1351,12 @@ The analyzer cooldown regression test loads `geminiQuotaManager` and `NewsAnalyz
 - `tests/unit/analyzer.test.js` — Verifies the existing cooldown-timeout regression uses the isolated manager and produces the expected timeout after cooldown waiting.
 
 This is test-only hardening; runtime code, endpoints, OpenAPI, Postman, and environment configuration remain unchanged.
+
+## Standalone Worker Sentry Shutdown Flush (CB-179 / Issue #416)
+
+The dedicated BullMQ worker and signal-outcome worker now await the existing fail-safe `sentryService.flush(2000)` after draining work and before exiting on `SIGTERM`/`SIGINT`, including the BullMQ worker's nonzero-exit error path. This preserves shutdown telemetry without changing worker gates, drain bounds, or exit codes.
+
+**Coverage**:
+- `tests/unit/worker-sentry-shutdown.test.js` verifies drain, flush, and exit ordering for both standalone workers.
+
+No endpoint, OpenAPI, Postman, environment variable, or Remote Config change was required.
