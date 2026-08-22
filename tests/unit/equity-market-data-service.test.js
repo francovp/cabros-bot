@@ -132,6 +132,7 @@ describe('EquityMarketDataService', () => {
 			expect(EquityMarketDataService.isSupportedExchange('AMEX')).toBe(true);
 			expect(EquityMarketDataService.isSupportedExchange('NYSE ARCA')).toBe(true);
 			expect(EquityMarketDataService.isSupportedExchange('NYSE_ARCA')).toBe(true);
+			expect(EquityMarketDataService.isSupportedExchange('ARCA')).toBe(true);
 			expect(EquityMarketDataService.isSupportedExchange('BATS')).toBe(true);
 			expect(EquityMarketDataService.isSupportedExchange('NASDAQ')).toBe(true);
 			expect(EquityMarketDataService.isSupportedExchange('UNKNOWN')).toBe(false);
@@ -159,6 +160,10 @@ describe('EquityMarketDataService', () => {
 			const arcaPrice = await EquityMarketDataService.getEntryPrice({ symbol: 'SPY', exchange: 'NYSE_ARCA' });
 			expect(arcaPrice).toBe(175.50);
 			expect(new URL(global.fetch.mock.calls[2][0]).searchParams.get('exchange')).toBe('NYSE ARCA');
+
+			const arcaAliasPrice = await EquityMarketDataService.getEntryPrice({ symbol: 'SPY', exchange: 'ARCA' });
+			expect(arcaAliasPrice).toBe(175.50);
+			expect(new URL(global.fetch.mock.calls[3][0]).searchParams.get('exchange')).toBe('NYSE ARCA');
 		});
 
 		it('fetches historical bars for NYSE and AMEX symbols', async () => {

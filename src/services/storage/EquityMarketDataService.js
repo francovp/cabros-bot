@@ -45,7 +45,7 @@ function normalizeExchange(exchange) {
 		return null;
 	}
 	const normalized = exchange.trim().toUpperCase();
-	if (normalized === 'NYSE_ARCA') {
+	if (normalized === 'NYSE_ARCA' || normalized === 'ARCA') {
 		return 'NYSE ARCA';
 	}
 	return normalized;
