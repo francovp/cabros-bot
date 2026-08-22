@@ -903,7 +903,10 @@ class NewsAnalyzer {
 
 			console.debug(`[Analyzer] Binance price for ${symbol}: $${data.price}`);
 			const price = parseFloat(data.price);
-			const targetCloseTime = Date.now() - 24 * 60 * 60 * 1000;
+			const priceCloseTime = Number(data.closeTime);
+			const targetCloseTime = (Number.isFinite(priceCloseTime) && priceCloseTime > 0
+				? priceCloseTime
+				: Date.now()) - 24 * 60 * 60 * 1000;
 			const referenceKline = Array.isArray(klines)
 				? klines.reduce((closest, kline) => {
 					const closeTime = getKlineCloseTime(kline);
