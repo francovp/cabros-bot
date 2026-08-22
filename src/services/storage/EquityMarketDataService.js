@@ -4,7 +4,7 @@ const PROVIDER_NAME = 'twelve-data';
 const DEFAULT_BASE_URL = 'https://api.twelvedata.com';
 const DEFAULT_TIMEOUT_MS = 5000;
 const MAX_TIMEOUT_MS = 30000;
-const SUPPORTED_EXCHANGES = Object.freeze(['BATS', 'NASDAQ']);
+const SUPPORTED_EXCHANGES = Object.freeze(['BATS', 'NASDAQ', 'NYSE', 'AMEX', 'NYSE ARCA']);
 const INTERVALS = Object.freeze({
 	'5m': '5min',
 	'15m': '15min',
@@ -38,6 +38,17 @@ function parseTimeout(value) {
 		return DEFAULT_TIMEOUT_MS;
 	}
 	return Math.min(parsed, MAX_TIMEOUT_MS);
+}
+
+function normalizeExchange(exchange) {
+	if (!exchange || typeof exchange !== 'string') {
+		return null;
+	}
+	const normalized = exchange.trim().toUpperCase();
+	if (normalized === 'NYSE_ARCA') {
+		return 'NYSE ARCA';
+	}
+	return normalized;
 }
 
 function getConfig() {
@@ -79,11 +90,12 @@ function getStatus() {
 }
 
 function isSupportedExchange(exchange) {
-	return SUPPORTED_EXCHANGES.includes(String(exchange || '').trim().toUpperCase());
+	const normalized = normalizeExchange(exchange);
+	return normalized ? SUPPORTED_EXCHANGES.includes(normalized) : false;
 }
 
 function getProviderName(exchange, assetClass) {
-	const normalizedExchange = String(exchange || '').trim().toUpperCase();
+	const normalizedExchange = normalizeExchange(exchange) || String(exchange || '').trim().toUpperCase();
 	const normalizedAssetClass = String(assetClass || '').trim().toLowerCase();
 	const isClassifiedBareStock = normalizedExchange === 'UNKNOWN' && normalizedAssetClass === 'stock';
 	return (isSupportedExchange(normalizedExchange) || isClassifiedBareStock) && getConfig().configured
@@ -185,7 +197,8 @@ function parseTimestamp(value) {
 }
 
 async function getEntryPrice({ symbol, exchange, timeoutMs } = {}) {
-	const body = await requestJson('/quote', { symbol, exchange }, timeoutMs);
+	const normalizedExchange = normalizeExchange(exchange) || exchange;
+	const body = await requestJson('/quote', { symbol, exchange: normalizedExchange }, timeoutMs);
 	const price = parsePrice(body.close ?? body.price);
 	if (price === null) {
 		throw new EquityMarketDataError(REASONS.INVALID_RESPONSE);
@@ -199,9 +212,10 @@ async function getHistoricalBars({ symbol, exchange, interval, startTime, endTim
 		throw new EquityMarketDataError(REASONS.INVALID_RESPONSE);
 	}
 
+	const normalizedExchange = normalizeExchange(exchange) || exchange;
 	const body = await requestJson('/time_series', {
 		symbol,
-		exchange,
+		exchange: normalizedExchange,
 		interval: providerInterval,
 		start_date: new Date(startTime).toISOString(),
 		end_date: new Date(endTime).toISOString(),
