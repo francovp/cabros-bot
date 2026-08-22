@@ -100,6 +100,14 @@ let authState = { enabled: false, auth: null, user: null, role: null };
 
 const CONTRACT_TIMEOUT_MS = 8000;
 const API_REQUEST_TIMEOUT_MS = 30000;
+const LONG_RUNNING_API_REQUEST_TIMEOUT_MS = 125000;
+const LONG_RUNNING_REQUEST_PATHS = new Set([
+	'/api/webhook/expanded-analysis-alert',
+	'/api/webhook/market-scanner-alert',
+]);
+
+const getApiRequestTimeout = (definition) => LONG_RUNNING_REQUEST_PATHS.has(definition.path)
+	? LONG_RUNNING_API_REQUEST_TIMEOUT_MS : API_REQUEST_TIMEOUT_MS;
 
 const fetchWithTimeout = (input, options, timeoutMs, consume) => {
 	const controller = new AbortController();
@@ -148,11 +156,10 @@ const AUTH_CONFIG_TIMEOUT_MS = 8000;
 const loadAuthConfig = () => {
 	if (!authConfigPromise) {
 		const prefix = getApiBaseUrl();
-		authConfigPromise = fetchWithTimeout(`${prefix}/admin/auth-config`, undefined, AUTH_CONFIG_TIMEOUT_MS)
-			.then((response) => {
-				if (!response.ok) throw new Error('Authentication configuration unavailable');
-				return response.json();
-			})
+		authConfigPromise = fetchWithTimeout(`${prefix}/admin/auth-config`, undefined, AUTH_CONFIG_TIMEOUT_MS, (response) => {
+			if (!response.ok) throw new Error('Authentication configuration unavailable');
+			return response.json();
+		})
 			.catch(() => ({ enabled: true, configured: false }));
 	}
 	return authConfigPromise;
@@ -543,7 +550,7 @@ const sendRequest = async ({
 	output.textContent = `${summary}\nRequest in progress…`;
 	const started = performance.now();
 	try {
-		const result = await fetchWithTimeout(request.url, request.options, API_REQUEST_TIMEOUT_MS, async (response) => {
+		const result = await fetchWithTimeout(request.url, request.options, getApiRequestTimeout(definition), async (response) => {
 			const elapsed = Math.round(performance.now() - started);
 			let data;
 			let formatted;
