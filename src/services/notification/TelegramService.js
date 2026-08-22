@@ -237,6 +237,19 @@ class TelegramService extends NotificationChannel {
 				const result = await this.sendMessagePart(sendMessage, chatId, messagePart, !!alert.enriched, signal, retryState);
 				attemptCount += result.attemptCount;
 				if (!result.success) {
+					if (result.aborted) {
+						return buildResult({
+							success: false,
+							channel: 'telegram',
+							error: getErrorMessage(result.error),
+							category: 'TIMEOUT',
+							attemptCount,
+							messageIds,
+							messageId: messageIds.join(','),
+							messageCount: messageIds.length,
+							aborted: true,
+						});
+					}
 					const statusCode = getStatusCode(result.error);
 					return buildResult({
 						success: false,
@@ -316,6 +329,7 @@ class TelegramService extends NotificationChannel {
 					success: false,
 					error,
 					attemptCount: totalAttempts,
+					aborted: !!signal?.aborted,
 				};
 			}
 			retryState.totalWaitMs += delayMs;

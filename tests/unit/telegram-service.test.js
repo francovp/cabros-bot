@@ -237,6 +237,38 @@ describe('TelegramService', () => {
 		expect(chunkedBot.telegram.sendMessage).toHaveBeenCalledTimes(3);
 	});
 
+	it('preserves abort telemetry when retry sleep is cancelled', async () => {
+		const abortController = new AbortController();
+		const abortingBot = {
+			telegram: {
+				sendMessage: jest.fn().mockRejectedValue({
+					response: {
+						error_code: 429,
+						description: 'Too Many Requests',
+						parameters: { retry_after: 1 },
+					},
+				}),
+			},
+		};
+		const abortingService = new TelegramService({
+			bot: abortingBot,
+			chatId: 'chat-1',
+			formatter: { format: (text) => text },
+			maxRetries: 1,
+			maxRetryDelayMs: 2000,
+			maxTotalRetryWaitMs: 2000,
+		});
+		setTimeout(() => abortController.abort(new Error('Cached delivery lease ownership lost')), 1);
+
+		await expect(abortingService.send({ text: 'abort retry' }, { signal: abortController.signal })).resolves.toEqual(expect.objectContaining({
+			success: false,
+			category: 'TIMEOUT',
+			attemptCount: 1,
+			aborted: true,
+			error: 'Cached delivery lease ownership lost',
+		}));
+	});
+
 	it('uses telegramChatId override for both MarkdownV2 attempt and plain-text fallback', async () => {
 		const parseErrorBot = {
 			telegram: {
