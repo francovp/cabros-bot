@@ -3134,6 +3134,16 @@
                     "type": "boolean",
                     "description": "True only when TradingView MCP data was successfully applied to this enrichment."
                   },
+                  "tradingViewEnrichmentStatus": {
+                    "type": "string",
+                    "enum": [
+                      "full",
+                      "partial",
+                      "failed",
+                      "not_applicable"
+                    ],
+                    "description": "Sanitized TradingView MCP outcome for this alert."
+                  },
                   "confluenceData": {
                     "type": [
                       "object",

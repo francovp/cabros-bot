@@ -389,6 +389,23 @@ describe('AlertStorageService', () => {
 			}));
 		});
 
+		it('persists sanitized TradingView enrichment outcome status', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockAdd.mockResolvedValueOnce({ id: 'id-partial-tradingview' });
+
+			await AlertStorageService.saveAlert(buildParams({
+				useTradingViewData: true,
+				tradingViewEnrichmentApplied: true,
+				tradingViewEnrichmentStatus: 'partial',
+				enriched: true,
+				enrichmentData: { tradingViewEnrichmentStatus: 'partial' },
+			}));
+
+			expect(mockAdd).toHaveBeenCalledWith(expect.objectContaining({
+				tradingViewEnrichmentStatus: 'partial',
+			}));
+		});
+
 		it('persists only safe prompt provenance fields with enriched alerts', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 			mockAdd.mockResolvedValueOnce({ id: 'id-provenance' });

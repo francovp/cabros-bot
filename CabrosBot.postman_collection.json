@@ -308,7 +308,7 @@
               "name": "Enriched payload",
               "status": "OK",
               "code": 200,
-              "body": "{\"success\":true,\"dryRun\":true,\"enriched\":true,\"payload\":{\"text\":\"Bitcoin breaks above $83,000 with strong volume\",\"enrichedData\":{\"original_text\":\"Bitcoin breaks above $83,000 with strong volume\",\"sentiment\":\"BULLISH\",\"sentiment_score\":0.85,\"insights\":[\"Volume confirms momentum\"],\"invalidation_level\":\"$80,000\",\"target_level\":\"$90,000\",\"setup_type\":\"breakout\",\"risk_reward_ratio\":\"2.5:1\",\"tradingViewEnrichmentApplied\":false,\"sources\":[]}},\"tokenUsage\":{}}"
+              "body": "{\"success\":true,\"dryRun\":true,\"enriched\":true,\"payload\":{\"text\":\"Bitcoin breaks above $83,000 with strong volume\",\"enrichedData\":{\"original_text\":\"Bitcoin breaks above $83,000 with strong volume\",\"sentiment\":\"BULLISH\",\"sentiment_score\":0.85,\"insights\":[\"Volume confirms momentum\"],\"invalidation_level\":\"$80,000\",\"target_level\":\"$90,000\",\"setup_type\":\"breakout\",\"risk_reward_ratio\":\"2.5:1\",\"tradingViewEnrichmentApplied\":true,\"tradingViewEnrichmentStatus\":\"full\",\"sources\":[]}},\"tokenUsage\":{}}"
             }
           ]
         },

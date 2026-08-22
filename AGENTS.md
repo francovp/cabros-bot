@@ -1332,6 +1332,17 @@ Raw alert text remains disabled by default and requires an explicit checkbox. Th
 - `tests/unit/remote-config-service.test.js` — Covers malformed, non-finite, negative, zero, out-of-range, valid, and boundary environment values.
 - `tests/unit/tradingview-mcp-service.test.js` — Verifies runtime MCP timing values remain finite and positive.
 
+## TradingView MCP Enrichment Budget Retries (CB-183 / Issue #422)
+
+`TradingViewMcpService.enrichFromSignal()` keeps the existing total enrichment deadline but reserves a bounded base-analysis sub-budget. Each `coin_analysis` attempt receives its own remaining-time abort signal, so a timed-out first attempt can use the configured retry count without allowing a provider request to outlive the total envelope. Volume, confluence, and multi-timeframe calls combine their per-call signal with the remaining total budget; optional timeout/failure preserves successful base enrichment and marks the result `tradingViewEnrichmentStatus: "partial"`. Base failures remain fail-open and are recorded as `"failed"` in sanitized runtime and Firestore alert telemetry.
+
+**Coverage**:
+- `src/services/tradingview/TradingViewMcpService.js` — Bounded base retry sub-budget, remaining-budget abort propagation, optional fail-open handling, and full/partial/failed runtime counters.
+- `tests/unit/tradingview-mcp-service.test.js` — Covers retry after base timeout, optional timeout preserving base data, and failed status accounting.
+- `src/services/storage/AlertStorageService.js` — Persists only the allow-listed enrichment outcome status.
+
+`TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS`, `TRADINGVIEW_MCP_TIMEOUT_MS`, and `TRADINGVIEW_MCP_MAX_RETRIES` remain the existing environment/Remote Config controls; no new environment variable was added.
+
 ## News Monitor Cached No-Event Analyses (CB-146 / Issue #363)
 
 News monitor cache reads now include `EventCategory.NONE`, so a cached no-event analysis returns `AnalysisStatus.CACHED` during its existing TTL without repeating market-context or Gemini provider calls. Event-category cache keys remain independent and the existing dry-run, routing, delivery, TTL, and fail-open behavior is unchanged.

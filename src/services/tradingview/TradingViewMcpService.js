@@ -28,6 +28,12 @@ function createRuntimeStatus() {
 		lastErrorCategory: null,
 		successCount: 0,
 		failureCount: 0,
+		enrichment: {
+			lastStatus: null,
+			fullCount: 0,
+			partialCount: 0,
+			failedCount: 0,
+		},
 	};
 }
 
@@ -99,6 +105,10 @@ class TradingViewMcpService {
 	async enrichFromSignal(parsedSignal, options = {}) {
 		const cfg = this.getConfig();
 		const budgetMs = options.budgetMs || cfg.enrichmentBudgetMs;
+		const budgetStartedAt = Date.now();
+		const budgetDeadlineAt = budgetMs > 0 ? budgetStartedAt + budgetMs : null;
+		const baseBudgetMs = budgetDeadlineAt ? Math.max(1, Math.floor(budgetMs * 0.75)) : null;
+		const baseDeadlineAt = budgetDeadlineAt ? Math.min(budgetDeadlineAt, budgetStartedAt + baseBudgetMs) : null;
 		const symbol = parsedSignal.symbol.toUpperCase();
 		const exchange = (parsedSignal.exchange || cfg.defaultExchange).toUpperCase();
 		const timeframe = normalizeTradingViewTimeframe(parsedSignal.timeframe || parsedSignal.rawTimeframe, cfg.defaultTimeframe);
@@ -112,6 +122,13 @@ class TradingViewMcpService {
 				budgetController.abort(new Error(`TradingView MCP enrichment budget exceeded (${budgetMs}ms)`));
 			}, budgetMs);
 		}
+		const baseBudgetController = new AbortController();
+		const baseBudgetTimer = baseDeadlineAt
+			? setTimeout(() => {
+				baseBudgetController.abort(new Error(`TradingView MCP base analysis budget exceeded (${baseBudgetMs}ms)`));
+			}, Math.max(1, baseDeadlineAt - Date.now()))
+			: null;
+		const baseSignal = AbortSignal.any([budgetController.signal, baseBudgetController.signal]);
 
 		const cleanBudget = () => {
 			if (budgetTimer) {
@@ -119,48 +136,73 @@ class TradingViewMcpService {
 				budgetTimer = null;
 			}
 		};
+		const cleanBaseBudget = () => {
+			if (baseBudgetTimer) {
+				clearTimeout(baseBudgetTimer);
+			}
+		};
 
 		const result = await sendWithRetry(async ({ signal: retrySignal }) => {
+			const remainingBaseMs = baseDeadlineAt ? baseDeadlineAt - Date.now() : cfg.timeoutMs;
+			if (remainingBaseMs <= 0) {
+				return { success: false, channel: 'tradingview-mcp', error: 'TradingView MCP base analysis budget exhausted' };
+			}
+			const attemptController = new AbortController();
+			const attemptTimeoutMs = Math.min(cfg.timeoutMs, remainingBaseMs);
+			const attemptTimeoutId = setTimeout(() => {
+				attemptController.abort(new Error(`TradingView MCP base analysis attempt timeout after ${attemptTimeoutMs}ms`));
+			}, attemptTimeoutMs);
 			try {
-				const combinedSignal = retrySignal || budgetController.signal;
+				const combinedSignal = AbortSignal.any([retrySignal || baseSignal, attemptController.signal]);
 				const analysis = await this.callCoinAnalysis({ symbol, exchange, timeframe, signal: combinedSignal });
 				return { success: true, channel: 'tradingview-mcp', analysis };
 			} catch (error) {
 				return { success: false, channel: 'tradingview-mcp', error: error.message };
+			} finally {
+				clearTimeout(attemptTimeoutId);
 			}
-		}, cfg.maxRetries, this.logger, { signal: budgetController.signal });
+		}, cfg.maxRetries, this.logger, { signal: baseSignal });
+		cleanBaseBudget();
 
 		// Budget still applies for volume confirmation, but the budget timer
 		// is stopped after the entire enrichment (coin + volume) completes.
 		if (!result.success) {
+			this._recordEnrichmentStatus('failed');
 			cleanBudget();
 			throw new Error(`TradingView MCP call failed: ${result.error || 'unknown error'}`);
 		}
 
 		let volumeAnalysis = null;
+		let optionalEnrichmentPartial = false;
 		if (getRuntimeConfig().ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION) {
-			const volumeTimeoutMs = Math.min(5000, Math.max(1000, (budgetMs || 12000) / 4));
-			const controller = new AbortController();
-			const timeoutId = setTimeout(() => {
-				controller.abort(new Error(`TradingView MCP volume confirmation timeout after ${volumeTimeoutMs}ms`));
-			}, volumeTimeoutMs);
-
-			const vResult = await sendWithRetry(async ({ signal: retrySignal }) => {
-				try {
-					const combinedSignal = retrySignal || controller.signal;
-					const volConfirm = await this.callVolumeConfirmation({ symbol, exchange, timeframe, signal: combinedSignal });
-					return { success: true, channel: 'tradingview-mcp', volConfirm };
-				} catch (error) {
-					return { success: false, channel: 'tradingview-mcp', error: error.message };
-				}
-			}, 1, this.logger, { signal: controller.signal });
-
-			clearTimeout(timeoutId);
-
-			if (vResult.success) {
-				volumeAnalysis = vResult.volConfirm;
+			const remainingBudgetMs = budgetDeadlineAt ? budgetDeadlineAt - Date.now() : cfg.timeoutMs;
+			if (remainingBudgetMs <= 0) {
+				optionalEnrichmentPartial = true;
 			} else {
-				this.logger.warn(`[TradingViewMcpService] Volume confirmation failed for ${symbol}: ${vResult.error || 'unknown error'}`);
+				const volumeTimeoutMs = Math.min(5000, Math.max(1, remainingBudgetMs));
+				const controller = new AbortController();
+				const timeoutId = setTimeout(() => {
+					controller.abort(new Error(`TradingView MCP volume confirmation timeout after ${volumeTimeoutMs}ms`));
+				}, volumeTimeoutMs);
+
+				const vResult = await sendWithRetry(async ({ signal: retrySignal }) => {
+					try {
+						const combinedSignal = AbortSignal.any([retrySignal || controller.signal, controller.signal, budgetController.signal]);
+						const volConfirm = await this.callVolumeConfirmation({ symbol, exchange, timeframe, signal: combinedSignal });
+						return { success: true, channel: 'tradingview-mcp', volConfirm };
+					} catch (error) {
+						return { success: false, channel: 'tradingview-mcp', error: error.message };
+					}
+				}, 1, this.logger, { signal: AbortSignal.any([controller.signal, budgetController.signal]) });
+
+				clearTimeout(timeoutId);
+
+				if (vResult.success) {
+					volumeAnalysis = vResult.volConfirm;
+				} else {
+					optionalEnrichmentPartial = true;
+					this.logger.warn(`[TradingViewMcpService] Volume confirmation failed for ${symbol}: ${vResult.error || 'unknown error'}`);
+				}
 			}
 		}
 
@@ -170,8 +212,11 @@ class TradingViewMcpService {
 		// (via AbortSignal.any) so an exhausted enrichment budget cancels it immediately.
 		let confluenceAnalysis = null;
 		let multiTimeframeAnalysis = null;
-		if (process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT === 'true' && !budgetController.signal.aborted) {
-			const confluenceTimeoutMs = Math.min(8000, Math.max(2000, (budgetMs || 12000) / 2));
+		const confluenceEnabled = process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT === 'true';
+		const multiTimeframeEnabled = process.env.ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME === 'true';
+		if (confluenceEnabled && !budgetController.signal.aborted) {
+			const remainingBudgetMs = budgetDeadlineAt ? budgetDeadlineAt - Date.now() : cfg.timeoutMs;
+			const confluenceTimeoutMs = Math.min(8000, Math.max(1, remainingBudgetMs));
 			const confluenceController = new AbortController();
 			const confluenceTimeoutId = setTimeout(() => {
 				confluenceController.abort(new Error(`TradingView MCP confluence timeout after ${confluenceTimeoutMs}ms`));
@@ -188,23 +233,32 @@ class TradingViewMcpService {
 					signal: combinedSignal,
 				});
 				console.debug(`[TradingViewMcpService] Confluence analysis fetched for ${symbol}`);
-				if (process.env.ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME === 'true' && !budgetController.signal.aborted) {
-					multiTimeframeAnalysis = await this.callMultiTimeframeAnalysis({
-						symbol,
-						exchange,
-						signal: combinedSignal,
-					});
-					console.debug(`[TradingViewMcpService] Multi-timeframe confluence analysis fetched for ${symbol}`);
+				if (multiTimeframeEnabled) {
+					if (budgetController.signal.aborted) {
+						optionalEnrichmentPartial = true;
+					} else {
+						multiTimeframeAnalysis = await this.callMultiTimeframeAnalysis({
+							symbol,
+							exchange,
+							signal: combinedSignal,
+						});
+						console.debug(`[TradingViewMcpService] Multi-timeframe confluence analysis fetched for ${symbol}`);
+					}
 				}
 			} catch (error) {
+				optionalEnrichmentPartial = true;
 				this.logger.warn(`[TradingViewMcpService] Confluence enrichment failed for ${symbol} (fail-open): ${error.message}`);
 			} finally {
 				clearTimeout(confluenceTimeoutId);
 			}
+		} else if (confluenceEnabled) {
+			optionalEnrichmentPartial = true;
 		}
 
 		cleanBudget();
-		return this._toEnrichedAlert(parsedSignal.rawText || '', { symbol, exchange, timeframe, side: parsedSignal.side }, result.analysis, volumeAnalysis, confluenceAnalysis, multiTimeframeAnalysis);
+		const enrichmentStatus = optionalEnrichmentPartial ? 'partial' : 'full';
+		this._recordEnrichmentStatus(enrichmentStatus);
+		return this._toEnrichedAlert(parsedSignal.rawText || '', { symbol, exchange, timeframe, side: parsedSignal.side }, result.analysis, volumeAnalysis, confluenceAnalysis, multiTimeframeAnalysis, enrichmentStatus);
 	}
 
 	async callCoinAnalysis({ symbol, exchange, timeframe, signal }) {
@@ -580,7 +634,7 @@ class TradingViewMcpService {
 		return parsedPayloads[0];
 	}
 
-	_toEnrichedAlert(originalText, signal, analysis = {}, volumeAnalysis = null, confluenceAnalysis = null, multiTimeframeAnalysis = null) {
+	_toEnrichedAlert(originalText, signal, analysis = {}, volumeAnalysis = null, confluenceAnalysis = null, multiTimeframeAnalysis = null, tradingViewEnrichmentStatus = 'full') {
 		const { side, symbol, exchange, timeframe } = signal;
 		const sideLabel = side === 'SELL' ? 'VENTA' : 'COMPRA';
 		const sideSentiment = side === 'SELL' ? -0.55 : 0.55;
@@ -695,6 +749,7 @@ class TradingViewMcpService {
 		return {
 			original_text: originalText,
 			tradingViewEnrichmentApplied: true,
+			tradingViewEnrichmentStatus,
 			sentiment,
 			sentiment_score: sentimentScore,
 			current_price: validCurrentPrice,
@@ -820,6 +875,28 @@ class TradingViewMcpService {
 	_nextRequestId(prefix) {
 		this.requestCounter += 1;
 		return `${prefix}-${Date.now()}-${this.requestCounter}`;
+	}
+
+	_recordEnrichmentStatus(status) {
+		if (!['full', 'partial', 'failed'].includes(status)) {
+			return;
+		}
+
+		const countKey = `${status}Count`;
+		const enrichment = this.runtimeStatus.enrichment || {
+			lastStatus: null,
+			fullCount: 0,
+			partialCount: 0,
+			failedCount: 0,
+		};
+		this.runtimeStatus = {
+			...this.runtimeStatus,
+			enrichment: {
+				...enrichment,
+				lastStatus: status,
+				[countKey]: enrichment[countKey] + 1,
+			},
+		};
 	}
 
 	async _withRuntimeStatus(operation, { signal, runtimeStatusKey } = {}) {

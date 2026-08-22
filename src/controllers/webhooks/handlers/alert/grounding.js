@@ -126,6 +126,7 @@ function mergeEnrichmentData(text, geminiEnriched, mcpEnriched) {
 	return {
 		original_text: text,
 		tradingViewEnrichmentApplied: mcp.tradingViewEnrichmentApplied === true,
+		...(mcp.tradingViewEnrichmentStatus ? { tradingViewEnrichmentStatus: mcp.tradingViewEnrichmentStatus } : {}),
 		sentiment: useMcpSentiment ? (mcp.sentiment || 'NEUTRAL') : (gemini.sentiment || mcp.sentiment || 'NEUTRAL'),
 		sentiment_score: useMcpSentiment && mcpScore !== null ? mcpScore : (geminiScore !== null ? geminiScore : (mcpScore !== null ? mcpScore : 0)),
 		current_price: mcpCurrentPrice,
@@ -255,15 +256,20 @@ async function enrichAlert(alert, options = {}) {
 	}
 
 	let mcpEnrichedAlert = null;
+	let mcpEnrichmentFailed = false;
 	if (isMcpEnabled) {
 		try {
 			mcpEnrichedAlert = await tradingViewMcpService.enrichFromAlertText(text);
 		} catch (error) {
+			mcpEnrichmentFailed = true;
 			console.warn('[Alert] TradingView MCP enrichment failed, continuing with grounding flow:', error.message);
 		}
 	}
 
 	if (!isGeminiEnabled) {
+		if (mcpEnrichmentFailed) {
+			throw new Error('TradingView MCP enrichment failed');
+		}
 		return mcpEnrichedAlert;
 	}
 
