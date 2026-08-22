@@ -221,6 +221,27 @@ describe('TradingViewMcpService', () => {
 		}));
 	});
 
+	it('omits risk metadata when ATR-derived levels are invalid', async () => {
+		const service = new TradingViewMcpService({
+			maxRetries: 1,
+			defaultExchange: 'BINANCE',
+			defaultTimeframe: '1h',
+			logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
+		});
+
+		service.callCoinAnalysis = jest.fn().mockResolvedValue({
+			price_data: { current_price: 0.01 },
+			technical_indicators: { atr: 0.02 },
+		});
+
+		const result = await service.enrichFromAlertText('SHIBUSDT(240) pasó a señal de COMPRA');
+
+		expect(result).not.toHaveProperty('invalidation_level');
+		expect(result).not.toHaveProperty('target_level');
+		expect(result).not.toHaveProperty('risk_reward_ratio');
+		expect(result).not.toHaveProperty('setup_type');
+	});
+
 	it('suppresses the metadata footer when explicitly disabled', async () => {
 		process.env.ENABLE_MESSAGE_FOOTER_METADATA = 'false';
 		const service = new TradingViewMcpService({

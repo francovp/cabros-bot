@@ -62,6 +62,17 @@ function inferSetupType(analysis, side) {
 	return 'reversal';
 }
 
+function isValidRiskLevel(value, price, side, role) {
+	if (!Number.isFinite(value) || value <= 0 || !Number.isFinite(price) || price <= 0) {
+		return false;
+	}
+
+	const isShort = side === 'SELL';
+	return role === 'stop'
+		? (isShort ? value > price : value < price)
+		: (isShort ? value < price : value > price);
+}
+
 class TradingViewMcpService {
 	constructor(config = {}) {
 		this.config = config;
@@ -639,20 +650,28 @@ class TradingViewMcpService {
 			analysis && analysis.atr && typeof analysis.atr === 'object' ? analysis.atr.value : analysis && analysis.atr,
 			analysis && analysis.volatility && analysis.volatility.atr,
 		], null);
-		const stopLossMeta = getStopLossMeta(validCurrentPrice, atr, legacyBollinger, bollingerBands, side);
-		const targetLevel = getTakeProfitTarget(validCurrentPrice, atr, legacyBollinger, bollingerBands, analysis, side);
+		const atrStop = validCurrentPrice === null ? null : side === 'SELL' ? validCurrentPrice + (atr * 1.5) : validCurrentPrice - (atr * 1.5);
+		const atrTarget = validCurrentPrice === null ? null : side === 'SELL' ? validCurrentPrice - (atr * 3) : validCurrentPrice + (atr * 3);
+		const usableAtr = Number.isFinite(atr)
+			&& atr > 0
+			&& isValidRiskLevel(atrStop, validCurrentPrice, side, 'stop')
+			&& isValidRiskLevel(atrTarget, validCurrentPrice, side, 'target')
+			? atr
+			: null;
+		const stopLossMeta = getStopLossMeta(validCurrentPrice, usableAtr, legacyBollinger, bollingerBands, side);
+		const targetLevel = getTakeProfitTarget(validCurrentPrice, usableAtr, legacyBollinger, bollingerBands, analysis, side);
 		const riskRewardRatio = getRiskRewardRatio(validCurrentPrice, stopLossMeta.value, targetLevel, side);
-		const riskMetadata = Object.fromEntries(
-			Object.entries({
+		const riskMetadata = isValidRiskLevel(stopLossMeta.value, validCurrentPrice, side, 'stop')
+			&& isValidRiskLevel(targetLevel, validCurrentPrice, side, 'target')
+			&& Number.isFinite(riskRewardRatio)
+			&& riskRewardRatio > 0
+			? {
 				invalidation_level: stopLossMeta.value,
 				target_level: targetLevel,
+				setup_type: inferSetupType(analysis, side),
 				risk_reward_ratio: riskRewardRatio,
-			})
-				.filter(([, value]) => value !== null && value !== undefined),
-		);
-		if (Object.keys(riskMetadata).length > 0) {
-			riskMetadata.setup_type = inferSetupType(analysis, side);
-		}
+			}
+			: {};
 
 		const rating = this._firstNumber([
 			marketSentiment.overall_rating,
