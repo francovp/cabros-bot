@@ -266,6 +266,57 @@ describe('TradingViewMcpService', () => {
 		expect(result).not.toHaveProperty('setup_type');
 	});
 
+	it('omits the full risk block when rejected ATR leaves a valid alternate target', async () => {
+		const service = new TradingViewMcpService({
+			maxRetries: 1,
+			defaultExchange: 'BINANCE',
+			defaultTimeframe: '1h',
+			logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
+		});
+
+		service.callCoinAnalysis = jest.fn().mockResolvedValue({
+			price_data: { current_price: 0.01 },
+			technical_indicators: { atr: 0.02 },
+			support_resistance: { nearest_resistance: 0.03 },
+		});
+
+		const result = await service.enrichFromAlertText('SHIBUSDT(240) pasó a señal de COMPRA');
+
+		expect(result).not.toHaveProperty('invalidation_level');
+		expect(result).not.toHaveProperty('target_level');
+		expect(result).not.toHaveProperty('risk_reward_ratio');
+		expect(result).not.toHaveProperty('setup_type');
+	});
+
+	it('only infers mean reversion when Bollinger position aligns with signal side', async () => {
+		const service = new TradingViewMcpService({
+			maxRetries: 1,
+			defaultExchange: 'BINANCE',
+			defaultTimeframe: '1h',
+			logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
+		});
+
+		service.callCoinAnalysis = jest.fn()
+			.mockResolvedValueOnce({
+				price_data: { current_price: 100 },
+				technical_indicators: { atr: 4 },
+				bollinger_bands: { position: 'Upper Half' },
+				support_resistance: { nearest_resistance: 112 },
+			})
+			.mockResolvedValueOnce({
+				price_data: { current_price: 100 },
+				technical_indicators: { atr: 4 },
+				bollinger_bands: { position: 'Lower Half' },
+				support_resistance: { nearest_support: 88 },
+			});
+
+		const buyResult = await service.enrichFromAlertText('BTCUSDT(240) pasó a señal de COMPRA');
+		const sellResult = await service.enrichFromAlertText('BTCUSDT(240) pasó a señal de VENTA');
+
+		expect(buyResult).not.toHaveProperty('setup_type');
+		expect(sellResult).not.toHaveProperty('setup_type');
+	});
+
 	it('suppresses the metadata footer when explicitly disabled', async () => {
 		process.env.ENABLE_MESSAGE_FOOTER_METADATA = 'false';
 		const service = new TradingViewMcpService({

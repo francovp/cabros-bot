@@ -55,7 +55,10 @@ function inferSetupType(analysis, side) {
 	const bollingerPosition = String(
 		analysis.bollinger_bands?.position || analysis.bollinger_analysis?.position || '',
 	).toLowerCase();
-	if (/upper|lower|overbought|oversold/.test(bollingerPosition)) {
+	const meanReversionAligned = side === 'SELL'
+		? /upper|overbought/.test(bollingerPosition)
+		: /lower|oversold/.test(bollingerPosition);
+	if (meanReversionAligned) {
 		return 'mean_reversion';
 	}
 
@@ -650,6 +653,7 @@ class TradingViewMcpService {
 			analysis && analysis.atr && typeof analysis.atr === 'object' ? analysis.atr.value : analysis && analysis.atr,
 			analysis && analysis.volatility && analysis.volatility.atr,
 		], null);
+		const atrWasProvided = Number.isFinite(atr);
 		const atrStop = validCurrentPrice === null ? null : side === 'SELL' ? validCurrentPrice + (atr * 1.5) : validCurrentPrice - (atr * 1.5);
 		const atrTarget = validCurrentPrice === null ? null : side === 'SELL' ? validCurrentPrice - (atr * 3) : validCurrentPrice + (atr * 3);
 		const usableAtr = Number.isFinite(atr)
@@ -666,6 +670,7 @@ class TradingViewMcpService {
 			&& isValidRiskLevel(targetLevel, validCurrentPrice, side, 'target')
 			&& Number.isFinite(riskRewardRatio)
 			&& riskRewardRatio > 0
+			&& !(atrWasProvided && usableAtr === null)
 			? {
 				invalidation_level: stopLossMeta.value,
 				target_level: targetLevel,

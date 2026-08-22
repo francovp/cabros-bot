@@ -63,12 +63,11 @@ function hasCompleteRiskMetadata(value = {}) {
 
 function selectRiskMetadata(gemini, mcp) {
 	const source = hasCompleteRiskMetadata(mcp) ? mcp : hasCompleteRiskMetadata(gemini) ? gemini : null;
+	const setupType = pickSetupType(gemini.setup_type, mcp.setup_type);
 	if (!source) {
-		return {};
+		return setupType ? { setup_type: setupType } : {};
 	}
 
-	const fallback = source === mcp ? gemini : mcp;
-	const setupType = pickSetupType(source.setup_type, fallback.setup_type);
 	return {
 		invalidation_level: source.invalidation_level,
 		target_level: source.target_level,
