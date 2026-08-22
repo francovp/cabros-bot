@@ -11,6 +11,7 @@ const DEFAULT_MAX_RETRIES = 2;
 const DEFAULT_FALLBACK_RETRY_DELAY_MS = 500;
 const DEFAULT_MAX_RETRY_DELAY_MS = 5000;
 const DEFAULT_MAX_TOTAL_RETRY_WAIT_MS = 10000;
+const MARKDOWN_V2_ESCAPE_CHARS = '\\_*[]()~`>#+-=|{}.!<&';
 
 function sleepWithSignal(ms, signal) {
 	if (!signal) {
@@ -62,7 +63,9 @@ function getCategory(error, statusCode) {
 }
 
 function isRetryable(error, statusCode) {
-	return statusCode === 429 || statusCode === null || statusCode >= 500;
+	// Telegram has no idempotency key for sendMessage; transport and 5xx failures
+	// may mean Telegram accepted the alert before the response was lost.
+	return statusCode === 429;
 }
 
 function getRetryAfterMs(error, fallbackDelayMs) {
@@ -75,7 +78,9 @@ function getRetryAfterMs(error, fallbackDelayMs) {
 }
 
 function stripMarkdownV2Escapes(text) {
-	return text.replace(/\\([_*[\]()~`>#+\-=|{}.!])/g, '$1');
+	return text.replace(/\\(.)/g, (match, character) => (
+		MARKDOWN_V2_ESCAPE_CHARS.includes(character) ? character : match
+	));
 }
 
 class TelegramService extends NotificationChannel {
@@ -214,6 +219,7 @@ class TelegramService extends NotificationChannel {
 			// Send to Telegram with MarkdownV2 first, fallback to plain text on parse errors
 			const messageIds = [];
 			let attemptCount = 0;
+			const retryState = { totalWaitMs: 0 };
 			for (const messagePart of messageParts) {
 				if (signal?.aborted) {
 					return buildResult({
@@ -228,7 +234,7 @@ class TelegramService extends NotificationChannel {
 						aborted: true,
 					});
 				}
-				const result = await this.sendMessagePart(sendMessage, chatId, messagePart, !!alert.enriched, signal);
+				const result = await this.sendMessagePart(sendMessage, chatId, messagePart, !!alert.enriched, signal, retryState);
 				attemptCount += result.attemptCount;
 				if (!result.success) {
 					const statusCode = getStatusCode(result.error);
@@ -269,9 +275,8 @@ class TelegramService extends NotificationChannel {
 		}
 	}
 
-	async sendMessagePart(sendMessage, chatId, messagePart, enriched, signal) {
+	async sendMessagePart(sendMessage, chatId, messagePart, enriched, signal, retryState = { totalWaitMs: 0 }) {
 		let totalAttempts = 0;
-		let totalWaitMs = 0;
 		let lastError = null;
 
 		for (let retry = 0; retry <= this.maxRetries; retry += 1) {
@@ -298,7 +303,7 @@ class TelegramService extends NotificationChannel {
 			const delayMs = statusCode === 429
 				? getRetryAfterMs(lastError, this.fallbackRetryDelayMs)
 				: this.fallbackRetryDelayMs;
-			if (delayMs > this.maxRetryDelayMs || totalWaitMs + delayMs > this.maxTotalRetryWaitMs) {
+			if (delayMs > this.maxRetryDelayMs || retryState.totalWaitMs + delayMs > this.maxTotalRetryWaitMs) {
 				this.logger?.warn?.(`Telegram retry delay (${delayMs}ms) exceeds retry budget; aborting retries`);
 				break;
 			}
@@ -313,7 +318,7 @@ class TelegramService extends NotificationChannel {
 					attemptCount: totalAttempts,
 				};
 			}
-			totalWaitMs += delayMs;
+			retryState.totalWaitMs += delayMs;
 		}
 
 		return {

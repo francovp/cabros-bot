@@ -92,7 +92,7 @@ describe('TelegramService', () => {
 			bot: parseErrorBot,
 			chatId: 'chat-1',
 			formatter: {
-				format: () => 'Price: BTC\\_USDT\\.',
+				format: () => 'Price: BTC\\_USDT\\. A\\&B \\< C:\\\\temp',
 			},
 		});
 
@@ -103,7 +103,7 @@ describe('TelegramService', () => {
 			attemptCount: 2,
 			durationMs: expect.any(Number),
 		}));
-		expect(parseErrorBot.telegram.sendMessage.mock.calls[1][1]).toBe('Price: BTC_USDT.');
+		expect(parseErrorBot.telegram.sendMessage.mock.calls[1][1]).toBe('Price: BTC_USDT. A&B < C:\\temp');
 	});
 
 	it('retries Telegram 429 responses using retry_after and returns delivery telemetry', async () => {
@@ -140,31 +140,29 @@ describe('TelegramService', () => {
 		expect(retryBot.telegram.sendMessage).toHaveBeenCalledTimes(2);
 	});
 
-	it('retries transient Telegram transport failures', async () => {
+	it('does not retry ambiguous Telegram transport failures', async () => {
 		const transientBot = {
 			telegram: {
-				sendMessage: jest.fn()
-					.mockRejectedValueOnce(new Error('socket reset'))
-					.mockResolvedValueOnce({ message_id: 205 }),
+				sendMessage: jest.fn().mockRejectedValue(new Error('socket reset')),
 			},
 		};
 		const transientService = new TelegramService({
 			bot: transientBot,
 			chatId: 'chat-1',
 			formatter: { format: (text) => text },
-			maxRetries: 1,
+			maxRetries: 2,
 			fallbackRetryDelayMs: 1,
 			maxRetryDelayMs: 100,
 			maxTotalRetryWaitMs: 100,
 		});
 
-		await expect(transientService.send({ text: 'retry transport' })).resolves.toEqual(expect.objectContaining({
-			success: true,
-			attemptCount: 2,
-			statusCode: 200,
-			category: 'SUCCESS',
+		await expect(transientService.send({ text: 'ambiguous transport' })).resolves.toEqual(expect.objectContaining({
+			success: false,
+			attemptCount: 1,
+			statusCode: null,
+			category: 'PROVIDER_ERROR',
 		}));
-		expect(transientBot.telegram.sendMessage).toHaveBeenCalledTimes(2);
+		expect(transientBot.telegram.sendMessage).toHaveBeenCalledTimes(1);
 	});
 
 	it('does not exceed the retry wait budget for Telegram 429 responses', async () => {
@@ -196,6 +194,47 @@ describe('TelegramService', () => {
 			durationMs: expect.any(Number),
 		}));
 		expect(limitedBot.telegram.sendMessage).toHaveBeenCalledTimes(1);
+	});
+
+	it('shares the retry wait budget across message chunks', async () => {
+		const chunkedBot = {
+			telegram: {
+				sendMessage: jest.fn()
+					.mockRejectedValueOnce({
+						response: {
+							error_code: 429,
+							description: 'Too Many Requests',
+							parameters: { retry_after: 0.01 },
+						},
+					})
+					.mockResolvedValueOnce({ message_id: 206 })
+					.mockRejectedValueOnce({
+						response: {
+							error_code: 429,
+							description: 'Too Many Requests',
+							parameters: { retry_after: 0.01 },
+						},
+					})
+					.mockResolvedValueOnce({ message_id: 207 }),
+			},
+		};
+		const chunkedService = new TelegramService({
+			bot: chunkedBot,
+			chatId: 'chat-1',
+			maxMessageLength: 5,
+			maxRetries: 2,
+			maxRetryDelayMs: 100,
+			maxTotalRetryWaitMs: 10,
+			formatter: { format: (text) => text },
+		});
+
+		await expect(chunkedService.send({ text: '1234567890' })).resolves.toEqual(expect.objectContaining({
+			success: false,
+			statusCode: 429,
+			category: 'RATE_LIMITED',
+			attemptCount: 3,
+		}));
+		expect(chunkedBot.telegram.sendMessage).toHaveBeenCalledTimes(3);
 	});
 
 	it('uses telegramChatId override for both MarkdownV2 attempt and plain-text fallback', async () => {
