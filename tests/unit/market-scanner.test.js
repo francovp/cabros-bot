@@ -143,18 +143,28 @@ describe('Market Scanner Handler', () => {
 
 			process.env.MARKET_SCANNER_TIMEOUT_MS = '1';
 
-			tradingViewMcpService.callScanTool.mockImplementation(
+			tradingViewMcpService.callScanTool.mockImplementationOnce(
 				(scanType, args, options) => new Promise((resolve, reject) => {
+					const onAbort = () => {
+						clearTimeout(timeoutId);
+						const err = new Error('AbortError');
+						err.name = 'AbortError';
+						reject(err);
+					};
 					const timeoutId = setTimeout(() => {
+						if (options?.signal) {
+							options.signal.removeEventListener('abort', onAbort);
+						}
 						resolve([]);
 					}, 100);
-					if (options && options.signal) {
-						options.signal.addEventListener('abort', () => {
-							clearTimeout(timeoutId);
-							reject(new Error('AbortError'));
-						});
+					if (options?.signal) {
+						if (options.signal.aborted) {
+							onAbort();
+						} else {
+							options.signal.addEventListener('abort', onAbort, { once: true });
+						}
 					}
-				})
+				}),
 			);
 
 			const handler = postMarketScannerAlert(null);

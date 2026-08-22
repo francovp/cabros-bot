@@ -241,6 +241,7 @@ function postMarketScannerAlert(botOrGetter) {
 async function runScans(parsed, options = {}) {
 	const { signal } = options;
 	const results = [];
+	const symbolCache = new Map();
 
 	for (let index = 0; index < parsed.scans.length; index++) {
 		const scanType = parsed.scans[index];
@@ -262,7 +263,7 @@ async function runScans(parsed, options = {}) {
 			let enrichedItems = items;
 			if (parsed.includeMultiTimeframe === true) {
 				try {
-					enrichedItems = await enrichScannerItemsWithTrendConfluence(items, { ...parsed, scanType }, signal);
+					enrichedItems = await enrichScannerItemsWithTrendConfluence(items, { ...parsed, scanType }, signal, { symbolCache });
 				} catch (error) {
 					if (isAbortTriggered(signal, error)) {
 						const timeoutMessage = getAbortMessage(signal, error.message);
