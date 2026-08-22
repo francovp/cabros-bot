@@ -91,6 +91,22 @@ describe('NewsAnalyzer - fetchBinancePrice timeout decoupling', () => {
 		expect(result.change24h).toBe(10);
 	});
 
+	it('should leave 24h change null when kline history does not reach 24 hours', async () => {
+		mockGetAvgPrice.mockResolvedValue({ price: '110' });
+		const targetCloseTime = Date.now() - 24 * 60 * 60 * 1000;
+		mockGetKlines.mockResolvedValue([
+			{
+				volume: '100',
+				close: '100',
+				closeTime: targetCloseTime + 2 * 60 * 60 * 1000,
+			},
+		]);
+
+		const result = await analyzer.fetchBinancePrice('BTCUSDT');
+
+		expect(result.change24h).toBeNull();
+	});
+
 	it('should return Binance price with null indicators when getKlines rejects with an error', async () => {
 		mockGetAvgPrice.mockResolvedValue({ price: '65000.50' });
 		mockGetKlines.mockRejectedValue(new Error('Binance rate limit'));

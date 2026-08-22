@@ -915,7 +915,11 @@ class NewsAnalyzer {
 						: closest;
 				}, null)
 				: null;
-			const price24hAgo = referenceKline ? getKlineClose(referenceKline) : null;
+			const referenceCloseTime = getKlineCloseTime(referenceKline);
+			const price24hAgo = Number.isFinite(referenceCloseTime)
+				&& Math.abs(referenceCloseTime - targetCloseTime) <= 60 * 60 * 1000
+				? getKlineClose(referenceKline)
+				: null;
 			const change24h = Number.isFinite(price24hAgo) && price24hAgo > 0 && Number.isFinite(price)
 				? Math.round(((price - price24hAgo) / price24hAgo) * 10000) / 100
 				: null;
