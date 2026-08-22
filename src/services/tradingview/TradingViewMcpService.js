@@ -2,6 +2,11 @@
 
 const { sendWithRetry } = require('../../lib/retryHelper');
 const { parseTradingViewSignal, normalizeTradingViewTimeframe } = require('./parseTradingViewSignal');
+const {
+	getStopLossMeta,
+	getTakeProfitTarget,
+	getRiskRewardRatio,
+} = require('./expandedAnalysisAlertReport');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 
 const DEFAULT_TRADINGVIEW_MCP_URL = 'https://tradingview-mcp-yp6b.onrender.com/mcp';
@@ -29,6 +34,32 @@ function createRuntimeStatus() {
 		successCount: 0,
 		failureCount: 0,
 	};
+}
+
+const SETUP_TYPES = new Set(['breakout', 'mean_reversion', 'trend_continuation', 'reversal']);
+
+function inferSetupType(analysis, side) {
+	const explicit = typeof analysis.setup_type === 'string' ? analysis.setup_type.trim().toLowerCase() : '';
+	if (SETUP_TYPES.has(explicit)) {
+		return explicit;
+	}
+
+	const trend = String(analysis.market_structure?.trend || '').toLowerCase();
+	const aligned = side === 'SELL'
+		? /bearish|downtrend|bajista/.test(trend)
+		: /bullish|uptrend|alcista/.test(trend);
+	if (aligned) {
+		return 'trend_continuation';
+	}
+
+	const bollingerPosition = String(
+		analysis.bollinger_bands?.position || analysis.bollinger_analysis?.position || '',
+	).toLowerCase();
+	if (/upper|lower|overbought|oversold/.test(bollingerPosition)) {
+		return 'mean_reversion';
+	}
+
+	return 'reversal';
 }
 
 class TradingViewMcpService {
@@ -603,6 +634,25 @@ class TradingViewMcpService {
 		const marketSentiment = (analysis && analysis.market_sentiment) || {};
 		const marketStructure = (analysis && analysis.market_structure) || {};
 		const timeframeContext = (analysis && analysis.timeframe_context) || {};
+		const atr = this._firstNumber([
+			indicators.atr,
+			analysis && analysis.atr && typeof analysis.atr === 'object' ? analysis.atr.value : analysis && analysis.atr,
+			analysis && analysis.volatility && analysis.volatility.atr,
+		], null);
+		const stopLossMeta = getStopLossMeta(validCurrentPrice, atr, legacyBollinger, bollingerBands, side);
+		const targetLevel = getTakeProfitTarget(validCurrentPrice, atr, legacyBollinger, bollingerBands, analysis, side);
+		const riskRewardRatio = getRiskRewardRatio(validCurrentPrice, stopLossMeta.value, targetLevel, side);
+		const riskMetadata = Object.fromEntries(
+			Object.entries({
+				invalidation_level: stopLossMeta.value,
+				target_level: targetLevel,
+				risk_reward_ratio: riskRewardRatio,
+			})
+				.filter(([, value]) => value !== null && value !== undefined),
+		);
+		if (Object.keys(riskMetadata).length > 0) {
+			riskMetadata.setup_type = inferSetupType(analysis, side);
+		}
 
 		const rating = this._firstNumber([
 			marketSentiment.overall_rating,
@@ -709,6 +759,7 @@ class TradingViewMcpService {
 			extraText,
 			confluenceData: confluenceAnalysis || null,
 			multiTimeframeData: multiTimeframeAnalysis || null,
+			...riskMetadata,
 		};
 	}
 

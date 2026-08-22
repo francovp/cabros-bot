@@ -168,6 +168,59 @@ describe('TradingViewMcpService', () => {
 		}));
 	});
 
+	it('derives directional risk metadata from MCP price, ATR, and support/resistance data', async () => {
+		const service = new TradingViewMcpService({
+			maxRetries: 1,
+			defaultExchange: 'BINANCE',
+			defaultTimeframe: '1h',
+			logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
+		});
+
+		service.callCoinAnalysis = jest.fn().mockResolvedValue({
+			price_data: { current_price: 100 },
+			technical_indicators: { atr: 4 },
+			support_resistance: {
+				nearest_support: 88,
+				nearest_resistance: 112,
+			},
+			market_structure: { trend: 'Bullish' },
+		});
+
+		const result = await service.enrichFromAlertText('BTCUSDT(240) pasó a señal de COMPRA');
+
+		expect(result).toEqual(expect.objectContaining({
+			invalidation_level: 94,
+			target_level: 112,
+			setup_type: 'trend_continuation',
+			risk_reward_ratio: 2,
+		}));
+	});
+
+	it('inverts calculated invalidation and target levels for sell signals', async () => {
+		const service = new TradingViewMcpService({
+			maxRetries: 1,
+			defaultExchange: 'BINANCE',
+			defaultTimeframe: '1h',
+			logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
+		});
+
+		service.callCoinAnalysis = jest.fn().mockResolvedValue({
+			price_data: { current_price: 100 },
+			technical_indicators: { atr: 4 },
+			support_resistance: { nearest_support: 88 },
+			market_structure: { trend: 'Bearish' },
+		});
+
+		const result = await service.enrichFromAlertText('BTCUSDT(240) pasó a señal de VENTA');
+
+		expect(result).toEqual(expect.objectContaining({
+			invalidation_level: 106,
+			target_level: 88,
+			setup_type: 'trend_continuation',
+			risk_reward_ratio: 2,
+		}));
+	});
+
 	it('suppresses the metadata footer when explicitly disabled', async () => {
 		process.env.ENABLE_MESSAGE_FOOTER_METADATA = 'false';
 		const service = new TradingViewMcpService({
