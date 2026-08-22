@@ -422,6 +422,13 @@ function getScanItemSide(scanType, item = {}) {
 		}
 	}
 
+	if (scanType === 'bollinger_scan') {
+		const trendConfluence = item._trendConfluence || item.trendConfluence || item.multiTimeframeData;
+		if (trendConfluence?.direction === 'bearish') {
+			return 'SELL';
+		}
+	}
+
 	return 'BUY';
 }
 
