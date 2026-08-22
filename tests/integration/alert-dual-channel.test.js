@@ -62,7 +62,7 @@ describe('Dual-Channel Alert Integration', () => {
 			await telegramService.validate();
 			await whatsappService.validate();
 
-			mockBot.telegram.sendMessage.mockRejectedValueOnce(new Error('Telegram error'));
+			mockBot.telegram.sendMessage.mockRejectedValue(new Error('Telegram error'));
 
 			global.fetch = jest.fn().mockResolvedValue({
 				ok: true,

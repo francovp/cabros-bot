@@ -145,7 +145,7 @@ describe('Graceful Degradation & Fallback', () => {
 			process.env.WHATSAPP_API_KEY = 'test-key';
 			process.env.WHATSAPP_CHAT_ID = '120363xxxxx@g.us';
 
-			mockBot.telegram.sendMessage.mockRejectedValueOnce(new Error('Bot token invalid'));
+			mockBot.telegram.sendMessage.mockRejectedValue(new Error('Bot token invalid'));
 
 			global.fetch = jest.fn().mockResolvedValue({
 				ok: true,
