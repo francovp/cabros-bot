@@ -221,6 +221,16 @@ function getKlineClose(kline) {
 	return 0;
 }
 
+function getKlineCloseTime(kline) {
+	if (typeof kline === 'object' && kline !== null && !Array.isArray(kline)) {
+		return Number(kline.closeTime);
+	}
+	if (Array.isArray(kline)) {
+		return Number(kline[6]);
+	}
+	return NaN;
+}
+
 function getKlineVolume(kline) {
 	if (typeof kline === 'object' && kline !== null && !Array.isArray(kline)) {
 		return parseFloat(kline.volume);
@@ -893,9 +903,19 @@ class NewsAnalyzer {
 
 			console.debug(`[Analyzer] Binance price for ${symbol}: $${data.price}`);
 			const price = parseFloat(data.price);
-			const price24hAgo = Array.isArray(klines) && klines.length >= 25
-				? getKlineClose(klines[klines.length - 25])
+			const targetCloseTime = Date.now() - 24 * 60 * 60 * 1000;
+			const referenceKline = Array.isArray(klines)
+				? klines.reduce((closest, kline) => {
+					const closeTime = getKlineCloseTime(kline);
+					const closestCloseTime = getKlineCloseTime(closest);
+					return Number.isFinite(closeTime)
+						&& (!Number.isFinite(closestCloseTime)
+							|| Math.abs(closeTime - targetCloseTime) < Math.abs(closestCloseTime - targetCloseTime))
+						? kline
+						: closest;
+				}, null)
 				: null;
+			const price24hAgo = referenceKline ? getKlineClose(referenceKline) : null;
 			const change24h = Number.isFinite(price24hAgo) && price24hAgo > 0 && Number.isFinite(price)
 				? Math.round(((price - price24hAgo) / price24hAgo) * 10000) / 100
 				: null;

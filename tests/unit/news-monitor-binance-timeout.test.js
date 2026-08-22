@@ -76,11 +76,13 @@ describe('NewsAnalyzer - fetchBinancePrice timeout decoupling', () => {
 		expect(result.source).toBe('binance');
 	});
 
-	it('should calculate 24h change from the close 25 hourly candles back', async () => {
+	it('should calculate 24h change from the nearest historical kline close', async () => {
 		mockGetAvgPrice.mockResolvedValue({ price: '110' });
+		const targetCloseTime = Date.now() - 24 * 60 * 60 * 1000;
 		const klines = Array.from({ length: 30 }, (_, index) => ({
 			volume: '100',
-			close: index === 5 ? '100' : '105',
+			close: index === 4 ? '100' : index === 5 ? '120' : '105',
+			closeTime: targetCloseTime + (index - 4) * 60 * 60 * 1000,
 		}));
 		mockGetKlines.mockResolvedValue(klines);
 
