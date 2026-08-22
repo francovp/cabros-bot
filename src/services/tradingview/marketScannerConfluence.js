@@ -80,10 +80,19 @@ function createConcurrencyLimiter(limit) {
 		}
 	};
 
-	return (fn) => new Promise((resolve, reject) => {
+	const limiter = (fn) => new Promise((resolve, reject) => {
 		queue.push({ fn, resolve, reject });
 		next();
 	});
+
+	limiter.clear = (err) => {
+		while (queue.length > 0) {
+			const { reject } = queue.shift();
+			reject(err);
+		}
+	};
+
+	return limiter;
 }
 
 async function fetchTrendConfluence(parsedSymbol, signal) {
@@ -132,6 +141,19 @@ async function enrichScannerItemsWithTrendConfluence(items, parsed = {}, signal,
 	const limiter = createConcurrencyLimiter(concurrency);
 	const symbolCache = options.symbolCache ?? options.sharedCache ?? parsed.symbolCache ?? new Map();
 
+	if (signal) {
+		const onAbort = () => {
+			const abortError = signal.reason instanceof Error ? signal.reason : new Error('Market scanner aborted');
+			abortError.name = 'AbortError';
+			limiter.clear(abortError);
+		};
+		if (signal.aborted) {
+			onAbort();
+		} else {
+			signal.addEventListener('abort', onAbort, { once: true });
+		}
+	}
+
 	const promises = candidateItems.map(async (item) => {
 		const parsedSymbol = parseScannerSymbol(item?.symbol, parsed.exchange);
 		if (!parsedSymbol) {
@@ -151,7 +173,29 @@ async function enrichScannerItemsWithTrendConfluence(items, parsed = {}, signal,
 			: item;
 	});
 
-	return Promise.all(promises);
+	const settledResults = await Promise.allSettled(promises);
+
+	let firstAbortError = null;
+	for (const result of settledResults) {
+		if (result.status === 'rejected') {
+			if (isAbortTriggered(signal, result.reason)) {
+				firstAbortError = firstAbortError || result.reason;
+			} else {
+				throw result.reason;
+			}
+		}
+	}
+
+	if (firstAbortError || (signal && signal.aborted)) {
+		const abortError = firstAbortError
+			|| (signal.reason instanceof Error ? signal.reason : new Error('Market scanner aborted'));
+		if (!abortError.name || abortError.name === 'Error') {
+			abortError.name = 'AbortError';
+		}
+		throw abortError;
+	}
+
+	return settledResults.map((r) => r.value);
 }
 
 module.exports = {

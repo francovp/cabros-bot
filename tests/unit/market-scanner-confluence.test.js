@@ -193,5 +193,59 @@ describe('Market Scanner Confluence', () => {
 				enrichScannerItemsWithTrendConfluence(items, { exchange: 'BINANCE', scanType: 'top_gainers' }, controller.signal),
 			).rejects.toThrow();
 		});
+
+		it('drains active in-flight calls and clears queued calls before rethrowing abort error', async () => {
+			const controller = new AbortController();
+			let activeCalls = 0;
+			let settledCalls = 0;
+			let totalStarted = 0;
+
+			const spy = jest.spyOn(tradingViewMcpService, 'callMultiTimeframeAnalysis').mockImplementation(async ({ signal }) => {
+				totalStarted += 1;
+				activeCalls += 1;
+				await new Promise((resolve, reject) => {
+					const timer = setTimeout(() => {
+						activeCalls -= 1;
+						settledCalls += 1;
+						resolve({ status: 'aligned' });
+					}, 20);
+					if (signal) {
+						signal.addEventListener('abort', () => {
+							clearTimeout(timer);
+							activeCalls -= 1;
+							settledCalls += 1;
+							const err = new Error('AbortError');
+							err.name = 'AbortError';
+							reject(err);
+						});
+					}
+				});
+			});
+
+			const items = Array.from({ length: 8 }, (_, i) => ({
+				symbol: `BINANCE:COIN${i}USDT`,
+				changePercent: 1.0 + i,
+			}));
+
+			// Concurrency 2: start first 2, then abort
+			const enrichmentPromise = enrichScannerItemsWithTrendConfluence(
+				items,
+				{ exchange: 'BINANCE', scanType: 'top_gainers' },
+				controller.signal,
+				{ concurrency: 2 },
+			);
+
+			// Give tick for first 2 to start
+			await new Promise((r) => setTimeout(r, 5));
+			controller.abort(new Error('Scanner timeout'));
+
+			await expect(enrichmentPromise).rejects.toThrow();
+			expect(activeCalls).toBe(0);
+			expect(totalStarted).toBe(2);
+			expect(settledCalls).toBe(2);
+
+			spy.mockRestore();
+		});
 	});
 });
+
