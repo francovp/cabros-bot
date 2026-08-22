@@ -463,6 +463,74 @@ describe('Market Scanner Report', () => {
 			expect(report).toContain('  - *Target:* $3,200.00 | Risk/Reward: 2.00x (favorable)');
 		});
 
+		it('preserves BUY risk/reward levels for bollinger_scan with bullish breakout_type despite bearish HTF confluence', () => {
+			const results = [
+				{
+					scan: 'bollinger_scan',
+					status: 'success',
+					items: [
+						{
+							symbol: 'BINANCE:BTCUSDT',
+							breakout_type: 'bullish',
+							indicators: { close: 60000, bb_lower: 58000, bb_upper: 62000 },
+							trendConfluence: {
+								alignment: { status: 'bearish' },
+								confidence: 85,
+							},
+						},
+					],
+				},
+			];
+
+			const report = buildMarketScannerReport(results, {
+				exchange: 'BINANCE',
+				timeframe: '4h',
+				ranked: false,
+				now: mockDate,
+			});
+
+			// For BUY side:
+			// Stop Loss = lower band = 58000. Invalidation = 2000
+			// Target = upper band = 62000. RRR = 2000 / 2000 = 1.00x
+			expect(report).toContain('1. BTCUSDT $60,000.00');
+			expect(report).toContain('  - *Stop Loss:* $58,000.00 (Invalidación: $2,000.00)');
+			expect(report).toContain('  - *Target:* $62,000.00 | Risk/Reward: 1.00x');
+		});
+
+		it('preserves BUY risk/reward levels for bollinger_scan with BUY trading_recommendation despite bearish HTF confluence', () => {
+			const results = [
+				{
+					scan: 'bollinger_scan',
+					status: 'success',
+					items: [
+						{
+							symbol: 'BINANCE:SOLUSDT',
+							trading_recommendation: 'STRONG_BUY',
+							indicators: { close: 100, bb_lower: 90, bb_upper: 110 },
+							trendConfluence: {
+								alignment: { status: 'bearish' },
+								confidence: 80,
+							},
+						},
+					],
+				},
+			];
+
+			const report = buildMarketScannerReport(results, {
+				exchange: 'BINANCE',
+				timeframe: '4h',
+				ranked: false,
+				now: mockDate,
+			});
+
+			// For BUY side:
+			// Stop Loss = lower band = 90.00
+			// Target = upper band = 110.00
+			expect(report).toContain('1. SOLUSDT $100.00');
+			expect(report).toContain('  - *Stop Loss:* $90.00 (Invalidación: $10.00)');
+			expect(report).toContain('  - *Target:* $110.00 | Risk/Reward: 1.00x');
+		});
+
 			it('covers support/resistance-based risk/reward formatting when support and resistance are present', () => {
 				const results = [
 					{
