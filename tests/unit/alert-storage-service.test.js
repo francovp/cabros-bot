@@ -261,6 +261,77 @@ describe('AlertStorageService', () => {
 			});
 		});
 
+		it('strips nested undefined properties before persisting without serialization errors', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockAdd.mockResolvedValueOnce({ id: 'sanitized-alert' });
+
+			const result = await AlertStorageService.saveAlert(buildParams({
+				enriched: true,
+				enrichmentData: {
+					sentiment: 'bullish',
+					technical_levels: { supports: ['100k'], resistances: undefined },
+					insights: ['RSI > 70', undefined],
+				},
+				tokenUsage: { inputTokens: 10, outputTokens: undefined, formattedSummary: null },
+				deliveryResults: [
+					{ channel: 'telegram', success: true, messageId: 't1', error: undefined },
+					{ channel: 'whatsapp', success: false, messageId: undefined, errorCode: 'TIMEOUT' },
+				],
+			}));
+
+			const containsUndefined = (value) => {
+				if (value === undefined) {
+					return true;
+				}
+				if (Array.isArray(value)) {
+					return value.some(containsUndefined);
+				}
+				if (value && typeof value === 'object') {
+					return Object.values(value).some(containsUndefined);
+				}
+				return false;
+			};
+
+			expect(result).toBe('sanitized-alert');
+			const document = mockAdd.mock.calls[0][0];
+			expect(document.enrichmentData.technical_levels).toEqual({ supports: ['100k'] });
+			expect(document.enrichmentData.technical_levels).not.toHaveProperty('resistances');
+			expect(document.enrichmentData.insights).toEqual(['RSI > 70']);
+			expect(document.tokenUsage).toEqual({ inputTokens: 10, formattedSummary: null });
+			expect(document.tokenUsage).not.toHaveProperty('outputTokens');
+			expect(document.deliveryResults[0]).not.toHaveProperty('error');
+			expect(document.deliveryResults[1]).not.toHaveProperty('messageId');
+			expect(document.deliveryResults[1]).toHaveProperty('errorCode', 'TIMEOUT');
+			expect(containsUndefined({
+				enrichmentData: document.enrichmentData,
+				tokenUsage: document.tokenUsage,
+				deliveryResults: document.deliveryResults,
+			})).toBe(false);
+		});
+
+		it('preserves nested class instances while stripping sibling undefined fields', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockAdd.mockResolvedValueOnce({ id: 'sentinel-alert' });
+			class ProviderSentinel {
+				constructor(marker) {
+					this.marker = marker;
+				}
+			}
+
+			await AlertStorageService.saveAlert(buildParams({
+				enriched: true,
+				enrichmentData: {
+					sentiment: 'bullish',
+					providerRef: new ProviderSentinel('keep-me'),
+				},
+			}));
+
+			const document = mockAdd.mock.calls.at(-1)[0];
+			expect(document.enrichmentData.providerRef).toBeInstanceOf(ProviderSentinel);
+			expect(document.enrichmentData.providerRef.marker).toBe('keep-me');
+			expect(document.enrichmentData.sentiment).toBe('bullish');
+		});
+
 		it('adds the default retention expiry to new alert documents', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 			jest.useFakeTimers().setSystemTime(new Date('2026-08-13T00:00:00.000Z'));

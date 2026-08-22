@@ -229,6 +229,33 @@ function sanitizeEnrichmentData(enrichmentData) {
 	return sanitized;
 }
 
+// Firestore Admin SDK rejects `undefined` field values anywhere in a write.
+// Only plain objects are rebuilt; class instances (Date, Firestore Timestamp,
+// GeoPoint, DocumentReference, FieldValue) pass through untouched.
+function stripUndefinedFieldsDeep(value) {
+	if (value === null || typeof value !== 'object') {
+		return value;
+	}
+	if (Array.isArray(value)) {
+		return value
+			.filter((item) => item !== undefined)
+			.map((item) => stripUndefinedFieldsDeep(item));
+	}
+
+	const proto = Object.getPrototypeOf(value);
+	if (proto !== Object.prototype && proto !== null) {
+		return value;
+	}
+
+	const result = {};
+	for (const [key, item] of Object.entries(value)) {
+		if (item !== undefined) {
+			result[key] = stripUndefinedFieldsDeep(item);
+		}
+	}
+	return result;
+}
+
 function createRiskMetadataCoverageBucket() {
 	return {
 		denominator: 0,
@@ -732,10 +759,12 @@ async function saveAlertInternal({ text, symbol, exchange, enriched, enrichmentD
 			expiresAt: buildRetentionExpiryTimestamp(),
 			text: typeof text === 'string' ? text.substring(0, 20000) : '',
 			enriched: Boolean(enriched),
-			enrichmentData: sanitizeEnrichmentData(enrichmentData),
-			tokenUsage: tokenUsage || null,
+			enrichmentData: stripUndefinedFieldsDeep(sanitizeEnrichmentData(enrichmentData)),
+			tokenUsage: stripUndefinedFieldsDeep(tokenUsage ?? null),
 			channels: Array.isArray(channels) ? channels : [],
-			deliveryResults: Array.isArray(deliveryResults) ? deliveryResults : [],
+			deliveryResults: Array.isArray(deliveryResults)
+				? stripUndefinedFieldsDeep(deliveryResults)
+				: [],
 			source: 'webhook',
 			useTradingViewData: Boolean(useTradingViewData),
 			tradingViewEnrichmentApplied: Boolean(tradingViewEnrichmentApplied),
