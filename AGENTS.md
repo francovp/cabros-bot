@@ -1351,3 +1351,12 @@ The analyzer cooldown regression test loads `geminiQuotaManager` and `NewsAnalyz
 - `tests/unit/analyzer.test.js` — Verifies the existing cooldown-timeout regression uses the isolated manager and produces the expected timeout after cooldown waiting.
 
 This is test-only hardening; runtime code, endpoints, OpenAPI, Postman, and environment configuration remain unchanged.
+
+## Telegram Delivery Retry and Telemetry (CB-178 / Issue #415)
+
+`TelegramService.send()` retries only definitive Telegram `429` responses with the provider's `retry_after` delay; transport and `5xx` failures are not retried because Telegram has no `sendMessage` idempotency key and the request may already have been accepted. Each Telegraf API attempt has a bounded 10-second deadline, while retry waits have a 5-second per-delay cap and a shared 10-second budget across all message chunks. MarkdownV2 remains the primary delivery mode; parse failures use a plain-text retry with every MarkdownV2 formatter escape removed. Every result reports `statusCode`, `category`, `attemptCount`, and `durationMs`, including zero-attempt, partial chunk, and aborted/configuration paths, so `NotificationManager` preserves exact attempt telemetry for Sentry and admin alerts.
+
+**Coverage**:
+- `tests/unit/telegram-service.test.js` — Covers parse fallback unescaping, `429` retry-after handling, ambiguous transport failures, shared retry budgets, retry-budget aborts, and delivery telemetry.
+
+No endpoint, OpenAPI, Postman, environment variable, or Remote Config contract changed.
