@@ -1478,6 +1478,252 @@ describe('admin browser client', () => {
 		expect(panel.textContent).toContain('detail body');
 	});
 
+	it('renders a structured job panel with progress, results, and raw toggle', async () => {
+		const job = {
+			success: true,
+			jobId: 'job-panel',
+			type: 'expanded-analysis',
+			status: 'completed',
+			progress: { current: 2, total: 4, status: 'Analyzing symbols' },
+			createdAt: '2026-08-01T10:00:00.000Z',
+			totalDurationMs: 42000,
+			alertText: '📊 REPORT BODY',
+			results: [{ symbol: 'BINANCE:BTCUSDT', status: 'analyzed', price: 65000, rsi: 55.5 }],
+			deliveryResults: [{ channel: 'telegram', success: true }],
+		};
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/jobs/job-panel') return response(job);
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'jobs');
+
+		const statusForm = findForm(browser.elementsById.view, 'GET /api/jobs/{jobId}');
+		statusForm.elements['path-jobId'].value = 'job-panel';
+		await statusForm.dispatch('submit');
+		await flush();
+
+		const panel = find(statusForm, (node) => node.className.includes('job-panel'));
+		expect(panel).toBeDefined();
+		const fill = find(panel, (node) => node.className === 'progress-fill');
+		expect(fill.style).toBe('width: 50%;');
+		expect(panel.textContent).toContain('2 / 4');
+		expect(find(panel, (node) => node.tagName === 'TR' && node.textContent.includes('BINANCE:BTCUSDT'))).toBeDefined();
+		expect(find(panel, (node) => node.className === 'report-text').textContent).toContain('REPORT BODY');
+		expect(find(panel, (node) => node.className.includes('delivery-ok'))).toBeDefined();
+		expect(findButton(statusForm, 'Copy JSON').hidden).toBe(false);
+	});
+
+	it('auto-refreshes active jobs and stops on terminal status', async () => {
+		let statusCalls = 0;
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/jobs/job-live') {
+					statusCalls += 1;
+					return response(statusCalls === 1
+						? { jobId: 'job-live', type: 'market-scanner', status: 'processing', progress: { current: 1, total: 3 } }
+						: { jobId: 'job-live', type: 'market-scanner', status: 'completed', progress: { current: 3, total: 3 } });
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'jobs');
+
+		const statusForm = findForm(browser.elementsById.view, 'GET /api/jobs/{jobId}');
+		statusForm.elements['path-jobId'].value = 'job-live';
+		await statusForm.dispatch('submit');
+		await flush();
+		expect(statusCalls).toBe(1);
+		expect(findButton(statusForm, 'Pause auto-refresh').hidden).toBe(false);
+
+		for (const fireTimer of [...browser.timers.values()]) fireTimer();
+		await flush();
+		expect(statusCalls).toBe(2);
+
+		for (const fireTimer of [...browser.timers.values()]) fireTimer();
+		await flush();
+		expect(statusCalls).toBe(2);
+	});
+
+	it('pauses auto-refresh while a job is still processing', async () => {
+		let statusCalls = 0;
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/jobs/job-slow') {
+					statusCalls += 1;
+					return response({ jobId: 'job-slow', status: 'processing', progress: {} });
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'jobs');
+
+		const statusForm = findForm(browser.elementsById.view, 'GET /api/jobs/{jobId}');
+		statusForm.elements['path-jobId'].value = 'job-slow';
+		await statusForm.dispatch('submit');
+		await flush();
+
+		const pauseButton = findButton(statusForm, 'Pause auto-refresh');
+		expect(pauseButton.hidden).toBe(false);
+		await pauseButton.dispatch('click');
+		expect(findButton(statusForm, 'Resume auto-refresh')).toBeDefined();
+
+		for (const fireTimer of [...browser.timers.values()]) fireTimer();
+		await flush();
+		expect(statusCalls).toBe(1);
+	});
+
+	it('stops polling when the job ID input changes mid-refresh cycle', async () => {
+		let statusCalls = 0;
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/jobs/job-a') {
+					statusCalls += 1;
+					return response({ jobId: 'job-a', status: 'processing', progress: {} });
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'jobs');
+
+		const statusForm = findForm(browser.elementsById.view, 'GET /api/jobs/{jobId}');
+		statusForm.elements['path-jobId'].value = 'job-a';
+		await statusForm.dispatch('submit');
+		await flush();
+		expect(statusCalls).toBe(1);
+
+		statusForm.elements['path-jobId'].value = 'job-b';
+		await statusForm.elements['path-jobId'].dispatch('input');
+		for (const fireTimer of [...browser.timers.values()]) fireTimer();
+		await flush();
+		expect(statusCalls).toBe(1);
+	});
+
+	it('renders the volume confirmation verdict with a ratio meter', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/webhook/volume-confirmation') {
+					return response({
+						success: true,
+						symbol: 'BINANCE:BTCUSDT',
+						timeframe: '4h',
+						confirmed: true,
+						decision: 'confirm',
+						volumeRatio: 1.7,
+						analysis: { volume_analysis: { volume_strength: 'HIGH' } },
+					});
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'analysis');
+
+		const form = findForm(browser.elementsById.view, 'POST /api/webhook/volume-confirmation');
+		await form.dispatch('submit');
+		await flush();
+
+		const verdict = find(form, (node) => node.className.includes('verdict-panel'));
+		expect(verdict).toBeDefined();
+		expect(verdict.textContent).toContain('Confirmed');
+		expect(verdict.textContent).toContain('BINANCE:BTCUSDT · 4h');
+		expect(verdict.textContent).toContain('1.7x average volume');
+		expect(verdict.textContent).toContain('Strength: HIGH');
+		expect(findButton(form, 'Copy JSON').hidden).toBe(false);
+	});
+
+	it('renders news-monitor result cards with confidence and dry-run notice', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/news-monitor')) {
+					return response({
+						success: true,
+						dryRun: true,
+						summary: { analyzed: 1, alerts_sent: 1 },
+						results: [{
+							symbol: 'BTCUSDT',
+							status: 'analyzed',
+							alert: {
+								eventCategory: 'price_surge',
+								headline: 'Bitcoin breaks resistance',
+								confidence: 0.85,
+								sources: ['https://example.com/news'],
+							},
+						}],
+					});
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'analysis');
+
+		const form = findForm(browser.elementsById.view, 'POST /api/news-monitor');
+		await form.dispatch('submit');
+		await flush();
+
+		const results = find(form, (node) => node.className === 'dashboard news-results');
+		expect(results).toBeDefined();
+		expect(results.textContent).toContain('Dry run');
+		expect(results.textContent).toContain('Bitcoin breaks resistance');
+		expect(results.textContent).toContain('85% confidence');
+		expect(results.textContent).toContain('Analyzed: 1');
+		expect(find(results, (node) => node.tagName === 'LI' && node.textContent.includes('example.com/news'))).toBeDefined();
+	});
+
+	it('renders market-scanner sections with ranked score tables and trend chips', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/webhook/market-scanner-alert')) {
+					return response({
+						success: true,
+						alertText: '📡 SCANNER REPORT',
+						scanResults: [{
+							scan: 'top_gainers',
+							status: 'success',
+							itemCount: 1,
+							scores: [{
+								symbol: 'ETHUSDT',
+								score: 83,
+								reason: '+3.5% · RSI 62',
+								trendConfluence: { status: 'aligned', direction: 'bullish', confidence: 82 },
+							}],
+						}],
+						deliveryResults: [{ channel: 'telegram', success: true }],
+					});
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'analysis');
+
+		const form = findForm(browser.elementsById.view, 'POST /api/webhook/market-scanner-alert');
+		await form.dispatch('submit');
+		await flush();
+
+		const report = find(form, (node) => node.className === 'dashboard analysis-report');
+		expect(report).toBeDefined();
+		expect(find(report, (node) => node.className === 'report-text').textContent).toContain('SCANNER REPORT');
+		const row = find(report, (node) => node.tagName === 'TR' && node.textContent.includes('ETHUSDT'));
+		expect(row).toBeDefined();
+		expect(row.textContent).toContain('83');
+		expect(row.textContent).toContain('Aligned bullish (82%)');
+		expect(find(report, (node) => node.className.includes('delivery-ok'))).toBeDefined();
+	});
+
 	it('keeps navigation icons as inline SVG instead of platform glyphs', () => {
 		const shell = fs.readFileSync(path.join(__dirname, '../../src/admin/index.html'), 'utf8');
 		expect(shell.match(/<svg class="nav-icon"/g)).toHaveLength(7);

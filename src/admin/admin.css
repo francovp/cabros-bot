@@ -94,6 +94,15 @@ textarea { resize: vertical; font-family: ui-monospace, SFMono-Regular, Consolas
 .status-ready { background: #123b35; color: var(--success); }
 .status-disabled { background: #253144; color: #a3b3c8; }
 .status-misconfigured, .status-unknown { background: #49371d; color: var(--warning); }
+.status-active { background: #49371d; color: var(--warning); }
+.status-danger { background: #3a1622; color: var(--danger); }
+.meter { display: flex; align-items: center; gap: .6rem; margin: .2rem 0; }
+.meter .progress-track { flex: 1 1 auto; }
+.meter-label { color: var(--muted); font-size: .76rem; white-space: nowrap; overflow-wrap: anywhere; }
+.job-meta { margin-bottom: .2rem; }
+.scan-section h3 { margin: 0 0 .5rem; font-size: .9rem; }
+.verdict-panel .badge-row { margin-bottom: .4rem; }
+.news-result .alert-preview { margin: .4rem 0; }
 .chip-grid { display: flex; flex-wrap: wrap; gap: .5rem; }
 .capability-chip { padding: .45rem .65rem; border: 1px solid #2e5d77; border-radius: 999px; background: #12334a; color: #bfeaff; font-size: .78rem; }
 .raw-status summary { cursor: pointer; color: var(--muted); font-size: .78rem; }

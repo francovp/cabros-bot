@@ -10,10 +10,22 @@ const VIEWS = {
 	],
 	jobs: [{ method: 'POST', path: '/api/jobs/tradingview-analysis', label: 'Create job' }],
 	analysis: [
-		{ method: 'POST', path: '/api/webhook/expanded-analysis-alert', label: 'Expanded analysis' },
-		{ method: 'POST', path: '/api/webhook/market-scanner-alert', label: 'Market scanner' },
-		{ method: 'POST', path: '/api/webhook/volume-confirmation', label: 'Volume confirmation' },
-		{ method: 'POST', path: '/api/news-monitor', label: 'News monitor' },
+		{
+			method: 'POST', path: '/api/webhook/expanded-analysis-alert', label: 'Expanded analysis',
+			renderSuccess: (data) => analysisReportResult(data),
+		},
+		{
+			method: 'POST', path: '/api/webhook/market-scanner-alert', label: 'Market scanner',
+			renderSuccess: (data) => analysisReportResult(data),
+		},
+		{
+			method: 'POST', path: '/api/webhook/volume-confirmation', label: 'Volume confirmation',
+			renderSuccess: (data) => volumeConfirmationResult(data),
+		},
+		{
+			method: 'POST', path: '/api/news-monitor', label: 'News monitor',
+			renderSuccess: (data) => newsMonitorResults(data),
+		},
 	],
 };
 
@@ -103,6 +115,7 @@ const getApiBaseUrl = () => {
 let contractPromise;
 let authConfigPromise;
 let firebaseSdkPromise;
+let detachActiveViewPoll = null;
 let authState = { enabled: false, auth: null, user: null, role: null };
 
 const CONTRACT_TIMEOUT_MS = 8000;
@@ -243,6 +256,7 @@ const createCopyButton = (getText, label = 'Copy') => {
 };
 
 const AUTH_CONFIG_TIMEOUT_MS = 8000;
+const JOB_POLL_INTERVAL_MS = 5000;
 
 const loadAuthConfig = () => {
 	if (!authConfigPromise) {
@@ -478,8 +492,269 @@ const statusCounts = (entries) => entries.reduce((counts, [, detail]) => {
 
 const SENTIMENT_TONES = {
 	bullish: 'status-ready',
-	bearish: 'response-error',
+	bearish: 'status-danger',
 	neutral: 'status-disabled',
+};
+
+const JOB_ACTIVE_STATUSES = ['pending', 'processing'];
+const JOB_STATUS_TONES = {
+	completed: 'status-ready',
+	failed: 'status-danger',
+	cancelled: 'status-danger',
+	timed_out: 'status-danger',
+	processing: 'status-active',
+	pending: 'status-active',
+};
+const RESULT_STATUS_TONES = {
+	analyzed: 'status-ready',
+	success: 'status-ready',
+	cached: 'status-disabled',
+	error: 'status-danger',
+	timeout: 'status-danger',
+	failed: 'status-danger',
+};
+
+const createStatusBadge = (status, tones) => element('span', {
+	className: `status-badge ${(tones && tones[status]) || 'status-misconfigured'}`,
+	text: displayLabel(status),
+});
+
+const createMeter = (fraction, labelText) => {
+	const wrap = element('div', { className: 'meter' });
+	const track = element('div', { className: 'progress-track' });
+	const fill = element('div', { className: 'progress-fill' });
+	const bounded = Math.max(0, Math.min(1, Number(fraction) || 0));
+	fill.style = `width: ${Math.round(bounded * 100)}%;`;
+	track.append(fill);
+	wrap.append(track);
+	if (labelText) wrap.append(element('span', { className: 'meter-label', text: labelText }));
+	return wrap;
+};
+
+const symbolResultsTable = (results) => {
+	if (!Array.isArray(results) || !results.length) return null;
+	const table = element('table', { className: 'data-table' });
+	const head = element('tr');
+	['Symbol', 'Status', 'Price', 'RSI'].forEach((label) => head.append(element('th', { text: label })));
+	table.append(head);
+	results.forEach((result) => {
+		const detail = asObject(result);
+		if (!detail.symbol && !detail.status) return;
+		const row = element('tr');
+		row.append(
+			element('td', { text: formatJobValue(detail.symbol) }),
+			element('td', { text: formatJobValue(detail.status) }),
+			element('td', { text: formatJobValue(detail.price) }),
+			element('td', { text: formatJobValue(detail.rsi) }),
+		);
+		table.append(row);
+	});
+	return table.children.length > 1 ? table : null;
+};
+
+const trendCell = (confluence) => {
+	const detail = asObject(confluence);
+	if (!detail.status) return formatJobValue(undefined);
+	const direction = detail.direction ? ` ${detail.direction}` : '';
+	const confidence = asFiniteNumber(detail.confidence);
+	return `${displayLabel(detail.status)}${direction}`
+		+ `${confidence !== null ? ` (${confidence}%)` : ''}`;
+};
+
+const scanResultSections = (scanResults) => {
+	const wrap = element('div');
+	(Array.isArray(scanResults) ? scanResults : []).forEach((scan) => {
+		const detail = asObject(scan);
+		const section = element('section', { className: 'dashboard-section scan-section' });
+		section.append(element('h3', {
+			text: `${detail.scan || 'scan'} · ${displayStatus(detail.status || 'unknown')}`,
+		}));
+		const scores = Array.isArray(detail.scores) ? detail.scores : [];
+		if (scores.length) {
+			const table = element('table', { className: 'data-table' });
+			const head = element('tr');
+			['Symbol', 'Score', 'Reason', 'Trend'].forEach((label) => head.append(element('th', { text: label })));
+			table.append(head);
+			scores.forEach((entry) => {
+				const score = asObject(entry);
+				const confluence = asObject(score.trendConfluence);
+				const row = element('tr');
+				row.append(
+					element('td', { text: formatJobValue(score.symbol) }),
+					element('td', { text: formatJobValue(score.score) }),
+					element('td', { text: formatJobValue(score.reason) }),
+					element('td', { text: trendCell(confluence) }),
+				);
+				table.append(row);
+			});
+			section.append(table);
+		} else if (detail.itemCount !== undefined) {
+			section.append(element('p', {
+				className: 'request-state',
+				text: `${formatJobValue(detail.itemCount)} items`,
+			}));
+		} else if (['error', 'timeout'].includes(detail.status)) {
+			section.append(createEmptyState(`This scan did not complete (${displayStatus(detail.status)}).`));
+		}
+		wrap.append(section);
+	});
+	return wrap.children.length ? wrap : null;
+};
+
+const summaryCounterChips = (summary, keys) => {
+	const wrap = element('div', { className: 'chip-grid' });
+	keys.forEach(([key, label]) => {
+		const value = asObject(summary)[key];
+		if (value === undefined || value === null) return;
+		wrap.append(element('span', { className: 'capability-chip', text: `${label}: ${value}` }));
+	});
+	return wrap;
+};
+
+const createJobPanel = (data) => {
+	const panel = element('article', { className: 'operation-card job-panel' });
+	const headCopy = element('div');
+	headCopy.append(
+		element('p', { className: 'eyebrow', text: 'Job status' }),
+		element('p', { className: 'mono-line', text: formatJobValue(data.jobId) }),
+	);
+	const badges = element('div', { className: 'badge-row' });
+	if (data.type) badges.append(element('span', { className: 'capability-chip', text: displayLabel(data.type) }));
+	badges.append(createStatusBadge(data.status, JOB_STATUS_TONES));
+	const head = element('div', { className: 'section-heading' });
+	head.append(headCopy, badges);
+	panel.append(head);
+
+	const meta = element('div', { className: 'badge-row job-meta' });
+	if (data.createdAt) meta.append(createTimestamp(data.createdAt));
+	if (data.updatedAt) meta.append(createTimestamp(data.updatedAt));
+	if (data.totalDurationMs !== undefined && data.totalDurationMs !== null) {
+		meta.append(element('span', { className: 'timestamp', text: `${data.totalDurationMs} ms` }));
+	}
+	if (meta.children.length) panel.append(meta);
+
+	const progress = asObject(data.progress);
+	const total = asFiniteNumber(progress.total);
+	const current = asFiniteNumber(progress.current);
+	if (total !== null && total > 0) {
+		panel.append(createMeter(
+			(current ?? 0) / total,
+			`${formatJobValue(current)} / ${formatJobValue(total)}`
+				+ (progress.status ? ` · ${progress.status}` : ''),
+		));
+	}
+
+	if (typeof data.alertText === 'string' && data.alertText.trim()) {
+		panel.append(element('h4', { text: 'Generated report' }));
+		panel.append(element('pre', { className: 'report-text', text: data.alertText }));
+	}
+
+	const symbolTable = symbolResultsTable(data.results);
+	if (symbolTable) {
+		panel.append(element('h4', { text: 'Symbol results' }));
+		panel.append(symbolTable);
+	}
+
+	const scans = scanResultSections(data.scanResults);
+	if (scans) panel.append(scans);
+
+	const chips = deliveryChips(data.deliveryResults);
+	if (chips.children.length) {
+		panel.append(element('h4', { text: 'Delivery' }));
+		panel.append(chips);
+	}
+	return panel;
+};
+
+const volumeConfirmationResult = (data) => {
+	const panel = element('article', { className: 'operation-card verdict-panel' });
+	const confirmed = data.confirmed === true;
+	panel.append(element('p', { className: 'eyebrow', text: 'Volume confirmation' }));
+	const badges = element('div', { className: 'badge-row' });
+	badges.append(confirmed
+		? element('span', { className: 'status-badge status-ready', text: 'Confirmed' })
+		: element('span', { className: 'status-badge status-danger', text: 'Not confirmed' }));
+	if (data.decision) badges.append(element('span', { className: 'capability-chip', text: displayLabel(data.decision) }));
+	panel.append(badges);
+
+	const identity = [data.symbol, data.timeframe].filter(Boolean).join(' · ');
+	if (identity) panel.append(element('p', { className: 'request-state', text: identity }));
+
+	const ratio = asFiniteNumber(data.volumeRatio);
+	if (ratio !== null) {
+		panel.append(createMeter(ratio / 2, `${ratio}x average volume · confirm threshold 1.2x`));
+	}
+	const strength = asObject(asObject(data.analysis).volume_analysis).volume_strength;
+	if (strength) {
+		panel.append(element('p', { className: 'capability-chip', text: `Strength: ${displayLabel(strength)}` }));
+	}
+	return panel;
+};
+
+const newsMonitorResults = (data) => {
+	const wrap = element('div', { className: 'dashboard news-results' });
+	if (data.dryRun === true) {
+		wrap.append(element('p', { className: 'empty-state', text: 'Dry run: no notifications were sent and nothing was cached.' }));
+	}
+	const counterChips = summaryCounterChips(data.summary, [
+		['analyzed', 'Analyzed'], ['cached', 'Cached'], ['alerts_sent', 'Alerts sent'],
+		['timeout', 'Timeout'], ['error', 'Error'], ['quota_exhausted', 'Quota exhausted'],
+	]);
+	if (counterChips.children.length) wrap.append(counterChips);
+
+	(Array.isArray(data.results) ? data.results : []).forEach((item) => {
+		const detail = asObject(item);
+		const card = element('article', { className: 'operation-card news-result' });
+		const badges = element('div', { className: 'badge-row' });
+		badges.append(element('strong', { text: formatJobValue(detail.symbol) }));
+		if (detail.status) badges.append(createStatusBadge(detail.status, RESULT_STATUS_TONES));
+		if (detail.cached === true) badges.append(element('span', { className: 'capability-chip', text: 'from cache' }));
+		card.append(badges);
+
+		const alert = asObject(detail.alert);
+		if (alert.headline) card.append(element('p', { className: 'alert-preview', text: String(alert.headline) }));
+		if (alert.eventCategory) {
+			card.append(element('span', { className: 'capability-chip', text: displayLabel(alert.eventCategory) }));
+		}
+		const confidence = asFiniteNumber(alert.confidence);
+		if (confidence !== null) {
+			card.append(createMeter(confidence, `${Math.round(confidence * 100)}% confidence`));
+		}
+		if (Array.isArray(alert.sources) && alert.sources.length) {
+			const block = element('div', { className: 'detail-block' });
+			block.append(element('h4', { text: 'Sources' }));
+			const ul = element('ul', { className: 'detail-list' });
+			alert.sources.slice(0, 8).forEach((source) => ul.append(sourceLink(source)));
+			block.append(ul);
+			card.append(block);
+		}
+		wrap.append(card);
+	});
+	return wrap.children.length ? wrap : null;
+};
+
+const analysisReportResult = (data) => {
+	const wrap = element('div', { className: 'dashboard analysis-report' });
+	if (typeof data.alertText === 'string' && data.alertText.trim()) {
+		wrap.append(element('h4', { text: 'Report preview' }));
+		wrap.append(element('pre', { className: 'report-text', text: data.alertText }));
+	}
+	const symbolTable = symbolResultsTable(data.results);
+	if (symbolTable) {
+		const section = element('section', { className: 'dashboard-section' });
+		section.append(element('h3', { text: 'Symbol results' }), symbolTable);
+		wrap.append(section);
+	}
+	const scans = scanResultSections(data.scanResults);
+	if (scans) wrap.append(scans);
+	const counterChips = summaryCounterChips(data.summary, [
+		['analyzed', 'Analyzed'], ['delivered', 'Delivered'], ['success', 'Successful scans'],
+		['error', 'Failed scans'], ['timeout', 'Timed out scans'], ['totalItems', 'Items'],
+	]);
+	if (counterChips.children.length) wrap.append(counterChips);
+	const chips = deliveryChips(data.deliveryResults);
+	if (chips.children.length) wrap.append(chips);
+	return wrap.children.length ? wrap : null;
 };
 
 const asFiniteNumber = (value) => (typeof value === 'number' && Number.isFinite(value) ? value : null);
@@ -1391,13 +1666,103 @@ const createJobStatusForm = () => {
 	const button = element('button', { text: definition.label });
 	button.type = 'submit';
 	const actions = element('div', { className: 'form-actions' });
+	const pollButton = element('button', { className: 'button-ghost', text: 'Pause auto-refresh' });
+	pollButton.type = 'button';
+	pollButton.hidden = true;
 	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
-	form.append(button, actions, output);
+	const statusPanel = element('div');
+	let lastRawJson = '';
+	const rawOutput = element('pre', { className: 'response-block' });
+	const rawCopyButton = createCopyButton(() => lastRawJson, 'Copy JSON');
+	rawCopyButton.hidden = true;
+	const rawToggle = element('details', { className: 'raw-status' });
+	rawToggle.append(
+		element('summary', { text: 'Show raw job payload' }),
+		rawCopyButton,
+		rawOutput,
+	);
+	form.append(button, actions, pollButton, statusPanel, output, rawToggle);
+
 	let statusRequestVersion = 0;
+	let pollTimer;
+	let pollPaused = false;
+	let lastFetchedActive = false;
+
+	function schedulePoll() {
+		if (!lastFetchedActive || pollPaused) return;
+		const version = statusRequestVersion;
+		pollTimer = setTimeout(() => {
+			pollTimer = undefined;
+			if (pollPaused || version !== statusRequestVersion) return;
+			Promise.resolve(requestStatus(true)).catch(() => {});
+		}, JOB_POLL_INTERVAL_MS);
+	}
+
+	const stopPollTimer = () => {
+		if (pollTimer !== undefined) {
+			clearTimeout(pollTimer);
+			pollTimer = undefined;
+		}
+	};
+
+	const updatePollButton = () => {
+		pollButton.hidden = !lastFetchedActive && !pollPaused;
+		pollButton.textContent = pollPaused ? 'Resume auto-refresh' : 'Pause auto-refresh';
+	};
+
+	const clearStructuredState = () => {
+		statusPanel.replaceChildren();
+		actions.replaceChildren();
+		rawOutput.textContent = '';
+		rawCopyButton.hidden = true;
+		lastFetchedActive = false;
+		stopPollTimer();
+		updatePollButton();
+	};
+
+	const applyStatus = (data, jobId) => {
+		statusPanel.replaceChildren(createJobPanel(data));
+		lastRawJson = JSON.stringify(data, null, 2);
+		rawOutput.textContent = lastRawJson;
+		rawCopyButton.hidden = false;
+		renderActions(data, jobId);
+		lastFetchedActive = JOB_ACTIVE_STATUSES.includes(data.status);
+		stopPollTimer();
+		if (lastFetchedActive && !pollPaused) schedulePoll();
+		updatePollButton();
+	};
+
+	const requestStatus = async (isAutoRefresh) => {
+		const jobId = jobIdInput.value.trim();
+		if (!jobId) return undefined;
+		const requestVersion = ++statusRequestVersion;
+		const data = await sendRequest({
+			definition,
+			path: fillPath(definition.path, pathNames, form),
+			button,
+			output,
+			isCurrent: () => requestVersion === statusRequestVersion
+				&& form.elements['path-jobId'].value === jobId,
+			formatResponse: ({ summary, status, elapsed }) => `${summary}\nHTTP ${status} · ${elapsed} ms`
+				+ (isAutoRefresh ? ' · auto-refresh' : ''),
+		});
+		if (requestVersion !== statusRequestVersion || form.elements['path-jobId'].value !== jobId) return data;
+		if (data && data.status) applyStatus(data, jobId);
+		else clearStructuredState();
+		return data;
+	};
+
+	pollButton.addEventListener('click', () => {
+		pollPaused = !pollPaused;
+		if (pollPaused) stopPollTimer();
+		else schedulePoll();
+		updatePollButton();
+	});
+
 	jobIdInput.addEventListener('input', () => {
 		statusRequestVersion += 1;
 		button.disabled = false;
-		actions.replaceChildren();
+		clearStructuredState();
 	});
 
 	const renderActions = (job, jobId) => {
@@ -1438,29 +1803,20 @@ const createJobStatusForm = () => {
 		});
 	};
 
-	form.addEventListener('submit', async (event) => {
+	form.addEventListener('submit', (event) => {
 		event.preventDefault();
-		const jobId = form.elements['path-jobId'].value;
-		const requestVersion = ++statusRequestVersion;
-		const data = await sendRequest({
-			definition,
-			path: fillPath(definition.path, pathNames, form),
-			button,
-			output,
-			isCurrent: () => requestVersion === statusRequestVersion
-				&& form.elements['path-jobId'].value === jobId,
-		});
-		if (requestVersion !== statusRequestVersion || form.elements['path-jobId'].value !== jobId) return;
-		if (data && data.status) renderActions(data, jobId);
-		else actions.replaceChildren();
+		Promise.resolve(requestStatus(false)).catch(() => {});
 	});
+
+	detachActiveViewPoll = stopPollTimer;
+
 	return {
 		form,
-		selectJob: (jobId) => {
+		selectJob: (selectedJobId) => {
 			statusRequestVersion += 1;
-			jobIdInput.value = jobId;
+			jobIdInput.value = selectedJobId;
 			button.disabled = false;
-			actions.replaceChildren();
+			clearStructuredState();
 			output.textContent = 'Job selected. Submit to load its status.';
 			if (typeof jobIdInput.focus === 'function') jobIdInput.focus();
 		},
@@ -1486,8 +1842,25 @@ const createOperationForm = (contract, definition) => {
 	button.type = 'submit';
 	if (definition.confirm) button.className = 'destructive-action';
 	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
-	const resultHost = typeof definition.renderSuccess === 'function' ? element('div') : null;
-	form.append(button, ...(resultHost ? [resultHost] : []), output);
+	const hasStructuredResult = typeof definition.renderSuccess === 'function';
+	const resultHost = hasStructuredResult ? element('div') : null;
+	let lastRawJson = '';
+	let rawOutputEl = null;
+	let rawCopyButton = null;
+	if (hasStructuredResult) {
+		rawOutputEl = element('pre', { className: 'response-block' });
+		rawCopyButton = createCopyButton(() => lastRawJson, 'Copy JSON');
+		rawCopyButton.hidden = true;
+		const rawToggle = element('details', { className: 'raw-status' });
+		rawToggle.append(
+			element('summary', { text: 'Show raw response' }),
+			rawCopyButton,
+			rawOutputEl,
+		);
+		form.append(button, resultHost, output, rawToggle);
+	} else {
+		form.append(button, output);
+	}
 	form.addEventListener('submit', (event) => {
 		event.preventDefault();
 		try {
@@ -1502,9 +1875,21 @@ const createOperationForm = (contract, definition) => {
 				body,
 				button,
 				output,
+				formatResponse: hasStructuredResult
+					? ({ summary, status, elapsed }) => `${summary}\nHTTP ${status} · ${elapsed} ms`
+					: undefined,
 			})).then((data) => {
 				if (!resultHost) return;
-				const rendered = data ? definition.renderSuccess(data) : null;
+				if (!data) {
+					resultHost.replaceChildren();
+					rawOutputEl.textContent = '';
+					rawCopyButton.hidden = true;
+					return;
+				}
+				lastRawJson = JSON.stringify(data, null, 2);
+				rawOutputEl.textContent = lastRawJson;
+				rawCopyButton.hidden = false;
+				const rendered = definition.renderSuccess(data);
 				resultHost.replaceChildren(...(rendered ? [rendered] : []));
 			}).catch(() => {});
 		} catch (error) {
@@ -1566,6 +1951,8 @@ const renderPlayground = (contract, view) => {
 
 const renderView = async (name) => {
 	const view = document.getElementById('view');
+	if (typeof detachActiveViewPoll === 'function') detachActiveViewPoll();
+	detachActiveViewPoll = null;
 	view.replaceChildren(createLoadingState('Loading API contract…'));
 	try {
 		const contract = await loadContract();
