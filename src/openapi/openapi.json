@@ -1080,6 +1080,103 @@
       }
     },
     "/api/trading/binance/orders": {
+      "get": {
+        "tags": [
+          "Trading"
+        ],
+        "summary": "Read Binance Spot order status or recent order history",
+        "description": "Reads a single order status by orderId or origClientOrderId, or lists recent orders for an allowed symbol when no specific order identifier is provided.",
+        "operationId": "getBinanceSpotOrders",
+        "parameters": [
+          {
+            "name": "symbol",
+            "in": "query",
+            "required": true,
+            "description": "Binance Spot symbol (e.g. BTCUSDT) from configured allowed symbols list.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "orderId",
+            "in": "query",
+            "required": false,
+            "description": "Binance order ID to query a specific order status.",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "origClientOrderId",
+            "in": "query",
+            "required": false,
+            "description": "Original client order ID to query a specific order status.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Maximum number of recent orders to return when querying order history (default 50, max 100).",
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "minimum": 1,
+              "maximum": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BinanceOrdersQueryResult"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "description": "The requested Binance order was not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "examples": {
+                  "orderNotFound": {
+                    "value": {
+                      "success": false,
+                      "error": "Binance order not found",
+                      "code": "ORDER_NOT_FOUND"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "502": {
+            "$ref": "#/components/responses/BinanceOrderFailure"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      },
       "post": {
         "tags": [
           "Trading"
@@ -1787,6 +1884,61 @@
       }
     },
     "responses": {
+      "BinanceOrdersQueryResult": {
+        "description": "Binance Spot order status or recent order history query result.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/BinanceOrdersQueryResult"
+            },
+            "examples": {
+              "singleOrder": {
+                "value": {
+                  "success": true,
+                  "environment": "testnet",
+                  "order": {
+                    "symbol": "BTCUSDT",
+                    "orderId": 42,
+                    "clientOrderId": "cabros-375-1",
+                    "status": "FILLED",
+                    "type": "LIMIT",
+                    "side": "BUY",
+                    "price": "60000.00000000",
+                    "origQty": "0.00100000",
+                    "executedQty": "0.00100000",
+                    "cummulativeQuoteQty": "60.00000000",
+                    "time": 1700000000000,
+                    "updateTime": 1700000005000,
+                    "isWorking": true
+                  }
+                }
+              },
+              "orderHistory": {
+                "value": {
+                  "success": true,
+                  "environment": "testnet",
+                  "orders": [
+                    {
+                      "symbol": "BTCUSDT",
+                      "orderId": 42,
+                      "clientOrderId": "cabros-375-1",
+                      "status": "FILLED",
+                      "type": "LIMIT",
+                      "side": "BUY",
+                      "price": "60000.00000000",
+                      "origQty": "0.00100000",
+                      "executedQty": "0.00100000",
+                      "cummulativeQuoteQty": "60.00000000",
+                      "time": 1700000000000
+                    }
+                  ],
+                  "count": 1
+                }
+              }
+            }
+          }
+        }
+      },
       "BinanceOrderResult": {
         "description": "Validated dry-run or confirmed Binance Spot order. A replay includes idempotencyReplayed=true.",
         "headers": {
@@ -3413,6 +3565,37 @@
           }
         ],
         "additionalProperties": false
+      },
+      "BinanceOrdersQueryResult": {
+        "type": "object",
+        "required": [
+          "success",
+          "environment"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "environment": {
+            "type": "string",
+            "enum": [
+              "testnet",
+              "live"
+            ]
+          },
+          "order": {
+            "$ref": "#/components/schemas/JsonObject"
+          },
+          "orders": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/JsonObject"
+            }
+          },
+          "count": {
+            "type": "integer"
+          }
+        }
       },
       "BinanceOrderResult": {
         "type": "object",
