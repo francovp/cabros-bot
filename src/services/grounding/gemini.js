@@ -84,6 +84,7 @@ function getPromptProvenance(prompt) {
 		source,
 		label: typeof prompt.label === 'string' && prompt.label.trim() ? prompt.label.trim() : null,
 		version: Number.isInteger(prompt.version) ? prompt.version : null,
+		schemaDriftDetected: Boolean(prompt && prompt.schemaDriftDetected),
 	};
 }
 

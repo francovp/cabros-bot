@@ -429,6 +429,7 @@ describe('AlertStorageService', () => {
 					source: 'langfuse',
 					label: 'production',
 					version: 12,
+					schemaDriftDetected: false,
 				},
 			});
 		});
@@ -1568,6 +1569,7 @@ describe('AlertStorageService', () => {
 							source: 'langfuse',
 							label: 'production',
 							version: 12,
+							schemaDriftDetected: false,
 						},
 						denominator: 1,
 						fields: {
@@ -1583,6 +1585,7 @@ describe('AlertStorageService', () => {
 							source: 'local',
 							label: null,
 							version: null,
+							schemaDriftDetected: false,
 						},
 						denominator: 1,
 						fields: {

@@ -2541,6 +2541,9 @@
               "integer",
               "null"
             ]
+          },
+          "schemaDriftDetected": {
+            "type": "boolean"
           }
         }
       },
