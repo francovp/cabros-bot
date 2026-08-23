@@ -204,6 +204,36 @@ describe('NewsCache — Persistent Dedup Backend (Issue #120)', () => {
 			expect(mockSetEntry).toHaveBeenCalledWith('BTCUSDT:price_surge', cache.ttlMs, data);
 		});
 
+		it('preserves a local-only finalized result when Firestore refresh is stale', async () => {
+			const failedData = {
+				alert: { symbol: 'BTCUSDT' },
+				deliveryResults: [{ channel: 'telegram', success: false }],
+			};
+			const recoveredData = {
+				...failedData,
+				deliveryResults: [{ channel: 'telegram', success: true, messageId: 'telegram-recovered' }],
+			};
+
+			await cache.set('BTCUSDT', EventCategory.PRICE_SURGE, failedData);
+			await cache.set('BTCUSDT', EventCategory.PRICE_SURGE, recoveredData, {
+				preserveTtl: true,
+				deliveryChannels: [],
+				localDeliveryChannels: ['telegram'],
+				skipPersistence: true,
+			});
+			mockGetEntryRecord.mockResolvedValue({
+				data: failedData,
+				expiresAtMs: Date.now() + cache.ttlMs,
+			});
+
+			const result = await cache.get('BTCUSDT', EventCategory.PRICE_SURGE);
+
+			expect(result.deliveryResults).toEqual([
+				expect.objectContaining({ channel: 'telegram', success: true, messageId: 'telegram-recovered' }),
+			]);
+			expect(cache.cache.get('BTCUSDT:price_surge').localOnly).toBe(true);
+		});
+
 		it('preserves the cache TTL when updating cached delivery results', async () => {
 			const firstData = { alert: { symbol: 'BTCUSDT' }, deliveryResults: [{ channel: 'telegram', success: true }] };
 			const retryData = { ...firstData, deliveryResults: [{ channel: 'telegram', success: true }, { channel: 'whatsapp', success: true }] };

@@ -238,6 +238,9 @@ class NewsCache {
 			try {
 				const entryRecord = await newsDedupStorageService.getEntryRecord(key);
 				if (entryRecord) {
+					if (localData && entry?.localOnly) {
+						return localData;
+					}
 					if (localData && localData.status !== 'claiming' && entryRecord.data?.status === 'claiming') {
 						return localData;
 					}
@@ -284,6 +287,7 @@ class NewsCache {
 			timestamp,
 			expiresAt: existingEntry?.expiresAt ?? timestamp + this.ttlMs,
 			data: dataToStore,
+			localOnly: options.skipPersistence === true,
 		});
 
 		// Persistent dedup: write to Firestore (fail-open)

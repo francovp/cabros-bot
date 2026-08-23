@@ -1396,11 +1396,11 @@ No endpoint, OpenAPI, Postman, environment variable, or Remote Config contract c
 
 ## News Monitor Indeterminate Lease Persistence (CB-189 / Issue #426)
 
-Cached news-monitor retries now distinguish active delivery ownership from durable persistence ownership. Proven lease loss still aborts the retry and removes its result from the response; an indeterminate renewal (`null` or an exception) keeps a successful delivery result in the current response and local cache while skipping only the durable cache merge, preventing a stale replica from overwriting a newer result. Per-channel timer renewals are serialized, and in-flight/final renewals are bounded by the analysis deadline; only channels still unresolved at that deadline lose persistence ownership.
+Cached news-monitor retries now distinguish active delivery ownership from durable persistence ownership. Proven lease loss still aborts the retry and removes its result from the response; an indeterminate renewal (`null` or an exception) keeps a successful delivery result in the current response and local cache while skipping only the durable cache merge, preventing a stale replica from overwriting a newer result. Persistent refreshes also preserve a finalized local-only result instead of replacing it with an older Firestore snapshot. Per-channel timer renewals are serialized, and in-flight/final renewals are bounded by the analysis deadline; only channels still unresolved at that deadline lose persistence ownership.
 
 **Coverage**:
 - `src/controllers/webhooks/handlers/newsMonitor/analyzer.js` — Separates response ownership from persistence ownership during cached retry lease renewal, bounds renewal waits, and preserves independently completed channels.
-- `src/controllers/webhooks/handlers/newsMonitor/cache.js` — Allows local cache refreshes while suppressing an indeterminate durable write.
-- `tests/integration/news-monitor-cache.test.js` — Verifies successful indeterminate retries are retained locally, stalled renewals are bounded, and completed channels keep durable persistence.
+- `src/controllers/webhooks/handlers/newsMonitor/cache.js` — Allows local cache refreshes while suppressing an indeterminate durable write and protects finalized local-only results from stale persistent refreshes.
+- `tests/integration/news-monitor-cache.test.js` and `tests/unit/news-monitor-persistent-dedup.test.js` — Verify successful indeterminate retries are retained locally, stalled renewals are bounded, completed channels keep durable persistence, and stale Firestore refreshes do not reintroduce failures.
 
 No endpoint, OpenAPI, Postman, environment variable, or Remote Config contract changed.
