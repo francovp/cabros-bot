@@ -460,6 +460,7 @@ class NewsAnalyzer {
 	async runSymbolAnalysisWithRetry(symbol, requestId, tokenUsage, routing, startedAt, options = {}) {
 		let attempt = 0;
 		let lastQuotaError = null;
+		const deadline = options.deadline ?? startedAt + this.timeout;
 
 		while (attempt <= this.geminiQuotaMaxRetries) {
 			let timeoutHandle;
@@ -481,7 +482,7 @@ class NewsAnalyzer {
 					timeoutHandle = setTimeout(() => reject(new Error('TIMEOUT')), remainingAfterWaitMs);
 				});
 				return await Promise.race([
-					this.analyzeSymbolInternal(symbol, requestId, tokenUsage, routing, options),
+					this.analyzeSymbolInternal(symbol, requestId, tokenUsage, routing, { ...options, deadline }),
 					timeoutPromise,
 				]);
 			} catch (error) {
@@ -598,23 +599,69 @@ class NewsAnalyzer {
 								const leaseOwnership = new Map(
 									claimedRetryChannels.map((channel) => [channel, true]),
 								);
+								const persistenceOwnership = new Map(
+									claimedRetryChannels.map((channel) => [channel, true]),
+								);
 								const markLeaseOwnershipLost = (channel) => {
 									if (leaseOwnership.get(channel)) {
 										leaseOwnership.set(channel, false);
+										persistenceOwnership.set(channel, false);
 										leaseAbortControllers.get(channel)?.abort('Cached delivery lease ownership lost');
 									}
 								};
+								const markPersistenceOwnershipLost = (channel) => {
+									persistenceOwnership.set(channel, false);
+								};
 								const renewLease = async (channel) => {
 									try {
-										if (await this.cache.renewDelivery(symbol, category, channel) === false) {
+										const renewed = await this.cache.renewDelivery(symbol, category, channel);
+										if (renewed === false) {
 											markLeaseOwnershipLost(channel);
+										} else if (renewed !== true) {
+											markPersistenceOwnershipLost(channel);
 										}
 									} catch (error) {
+										markPersistenceOwnershipLost(channel);
 										console.warn('[Analyzer] Cached delivery lease renewal indeterminate:', error.message);
 									}
 								};
+								const leaseDeadline = options.deadline ?? Date.now() + this.timeout;
+								const waitForLeaseRenewals = async (renewalEntries) => {
+									const pending = renewalEntries
+										.filter(([, renewal]) => renewal)
+										.map(([channel, renewal]) => {
+											const state = { channel, settled: false };
+											state.promise = Promise.resolve(renewal).finally(() => { state.settled = true; });
+											return state;
+										});
+									if (pending.length === 0) return [];
+									const remainingMs = leaseDeadline - Date.now();
+									if (remainingMs <= 0) return pending.map(({ channel }) => channel);
+									let timeoutHandle;
+									try {
+										const completed = await Promise.race([
+											Promise.all(pending.map(({ promise }) => promise)).then(() => true),
+											new Promise(resolve => {
+												timeoutHandle = setTimeout(() => resolve(false), remainingMs);
+											}),
+										]);
+										return completed ? [] : pending.filter(({ settled }) => !settled).map(({ channel }) => channel);
+									} finally {
+										clearTimeout(timeoutHandle);
+									}
+								};
+								const pendingLeaseRenewals = new Map(
+									claimedRetryChannels.map((channel) => [channel, null]),
+								);
+								const queueLeaseRenewal = (channel) => {
+									if (pendingLeaseRenewals.get(channel)) {
+										return;
+									}
+									const renewal = renewLease(channel).finally(() => pendingLeaseRenewals.set(channel, null));
+									pendingLeaseRenewals.set(channel, renewal);
+								};
 								const leaseRenewalIntervals = claimedRetryChannels.map((channel) => setInterval(
-									() => renewLease(channel),
+									() => queueLeaseRenewal(channel),
 									this.cache.getDeliveryLeaseRenewIntervalMs(),
 								));
 								try {
@@ -627,8 +674,20 @@ class NewsAnalyzer {
 										{ ...routing, channels: claimedRetryChannels },
 										{ signalByChannel },
 									);
-									await Promise.all(claimedRetryChannels.map(renewLease));
+									leaseRenewalIntervals.forEach(clearInterval);
+									const timedOutPendingChannels = await waitForLeaseRenewals([...pendingLeaseRenewals.entries()],
+									);
+									timedOutPendingChannels.forEach(markPersistenceOwnershipLost);
+									const finalRenewals = claimedRetryChannels
+										.filter(channel => !pendingLeaseRenewals.get(channel))
+										.map(channel => [channel, renewLease(channel)]);
+									const timedOutFinalChannels = await waitForLeaseRenewals(finalRenewals);
+									timedOutFinalChannels.forEach(markPersistenceOwnershipLost);
 									const ownedRetryChannels = claimedRetryChannels.filter((channel) => leaseOwnership.get(channel));
+									const persistenceRetryChannels = claimedRetryChannels.filter((channel) => persistenceOwnership.get(channel));
+									const successfulRetryChannels = new Set(
+										retryResults.filter(result => result.success).map(result => result.channel),
+									);
 									deliveryResults = mergeDeliveryResults(
 										activeCachedDeliveryResults,
 										retryResults.filter((result) => ownedRetryChannels.includes(result.channel)),
@@ -641,8 +700,13 @@ class NewsAnalyzer {
 											deliveryResults,
 										}, {
 											preserveTtl: true,
-											deliveryChannels: ownedRetryChannels,
-											awaitPersistence: true,
+											deliveryChannels: persistenceRetryChannels,
+											localDeliveryChannels: ownedRetryChannels,
+											localOnlyChannels: ownedRetryChannels.filter(
+												channel => successfulRetryChannels.has(channel) && !persistenceRetryChannels.includes(channel),
+											),
+											awaitPersistence: persistenceRetryChannels.length > 0,
+											skipPersistence: persistenceRetryChannels.length === 0,
 										});
 									}
 								} finally {
