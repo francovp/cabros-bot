@@ -1,4 +1,6 @@
 const {
+	REQUIRED_ALERT_ENRICHMENT_RISK_FIELDS,
+	inspectAlertEnrichmentRiskSchema,
 	PromptKeys,
 	PromptService,
 	getPromptService,
@@ -6,6 +8,8 @@ const {
 } = require('./PromptService');
 
 module.exports = {
+	REQUIRED_ALERT_ENRICHMENT_RISK_FIELDS,
+	inspectAlertEnrichmentRiskSchema,
 	PromptKeys,
 	PromptService,
 	getPromptService,

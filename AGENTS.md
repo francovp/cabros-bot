@@ -1270,16 +1270,17 @@ Terminal Discord HTTP 429 results preserve the cumulative number of webhook requ
 - `tests/unit/discord-service.test.js` verifies exhausted retries return `attemptCount: 3`, budget-aborted retries return the count actually made, and later chunk failures include earlier chunk requests.
 - `tests/unit/notification-manager.test.js` verifies Sentry and admin failure telemetry for both notification dispatch paths.
 
-## Alert Risk-Metadata Coverage and Prompt Provenance (CB-100 / Issue #243)
+## Alert Risk-Metadata Coverage and Prompt Provenance (CB-100 / Issue #243 / Issue #444)
 
-Stored enriched alerts now carry sanitized `promptProvenance` metadata when the alert-enrichment prompt resolves: `name`, `source` (`langfuse` or `local`), `label`, and numeric `version`; prompt content and unknown provenance fields are not persisted. `GET /api/alerts/summary` exposes `enrichment.riskMetadataCoverage` with the enriched-alert denominator, populated counts/percentages for each optional risk field, and provenance-grouped coverage. Legacy enriched records without provenance are grouped under `provenance: null`. Invalid or absent optional risk values count as unavailable data, and the existing fail-open delivery/authentication/feature gates are unchanged.
+Stored enriched alerts now carry sanitized `promptProvenance` metadata when the alert-enrichment prompt resolves: `name`, `source` (`langfuse` or `local`), `label`, numeric `version`, and `schemaDriftDetected`; prompt content and unknown provenance fields are not persisted. `GET /api/alerts/summary` exposes `enrichment.riskMetadataCoverage` with the enriched-alert denominator, populated counts/percentages for each optional risk field (`invalidation_level`, `target_level`, `setup_type`, `risk_reward_ratio`), and provenance-grouped coverage including `schemaDriftDetected`. Legacy enriched records without provenance are grouped under `provenance: null`. Invalid or absent optional risk values count as unavailable data, and the existing fail-open delivery/authentication/feature gates are unchanged.
 
 **Rollout check**: validate provenance and zero-safe coverage in preview, align the remote production `alert-enrichment` prompt with the local optional-risk schema, then observe a bounded shadow window before using risk metadata in downstream triage. No trading outcome or risk value is inferred from zero coverage.
 
 **Coverage**:
-- `tests/unit/gemini-client.test.js`, `tests/unit/prompt-service.test.js`, and `tests/unit/alert-storage-service.test.js` cover local/Langfuse provenance, safe persistence, missing/invalid values, and mixed coverage.
+- `tests/unit/gemini-client.test.js`, `tests/unit/prompt-service.test.js`, and `tests/unit/alert-storage-service.test.js` cover local/Langfuse provenance, schema drift inspection, safe persistence, missing/invalid values, and mixed coverage.
 - `tests/integration/alerts-endpoint.test.js` covers the protected summary response contract.
-- `README.md`, `src/openapi/openapi.json`, and `CabrosBot.postman_collection.json` document the response and bounded rollout check.
+- `README.md`, `src/openapi/openapi.json`, and `CabrosBot.postman_collection.json` document the response, schemaDriftDetected flag, and bounded rollout check.
+
 
 ## Crypto Suffix Grounding Guard (CB-109 / Issue #271)
 
