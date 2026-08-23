@@ -43,6 +43,11 @@ const JOB_STATUSES = new Set(['pending', 'processing', 'completed', 'failed', 'c
 const JOB_TYPES = new Set(['expanded-analysis', 'market-scanner']);
 const DEFAULT_JOB_LIST_LIMIT = 50;
 const MAX_JOB_LIST_LIMIT = 100;
+
+// Allowlist: definitive rejections only stop after one attempt; all other
+// statuses (including transient 408/421/425/429 and 5xx) keep retrying.
+const NON_RETRYABLE_CALLBACK_STATUSES = new Set([400, 401, 403, 404, 422]);
+
 const nativeFetch = globalThis.fetch;
 
 function getCallbackFetch() {
@@ -2102,6 +2107,10 @@ class JobService {
 				} else {
 					attemptInfo.error = `HTTP ${response.status} ${response.statusText}`;
 					attempts.push(attemptInfo);
+
+					if (NON_RETRYABLE_CALLBACK_STATUSES.has(response.status)) {
+						break;
+					}
 				}
 			} catch (err) {
 				attempts.push({

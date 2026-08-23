@@ -503,44 +503,54 @@ function getVolumeLabel(analysis) {
 	return 'Normal';
 }
 
-function getStopLossMeta(price, atr, bollinger, currentBollinger = {}) {
+function getStopLossMeta(price, atr, bollinger, currentBollinger = {}, side = 'BUY') {
 	if (price === null) {
 		return { value: null, source: 'missing' };
 	}
 
+	const isShort = side === 'SELL';
 	if (atr !== null) {
-		return { value: price - (atr * 1.5), source: 'atr' };
+		return { value: isShort ? price + (atr * 1.5) : price - (atr * 1.5), source: 'atr' };
 	}
 
-	const bbLower = numberOrNull(bollinger.bb_lower ?? currentBollinger.lower);
-	if (bbLower !== null) {
-		return { value: bbLower, source: 'bollinger' };
+	const bollingerStop = numberOrNull(isShort
+		? bollinger.bb_upper ?? currentBollinger.upper
+		: bollinger.bb_lower ?? currentBollinger.lower);
+	if (bollingerStop !== null) {
+		return { value: bollingerStop, source: 'bollinger' };
 	}
 
-	return { value: price * 0.95, source: 'fallback' };
+	return { value: price * (isShort ? 1.05 : 0.95), source: 'fallback' };
 }
 
-function getTakeProfitTarget(price, atr, bollinger, currentBollinger = {}, techData = {}) {
+function getTakeProfitTarget(price, atr, bollinger, currentBollinger = {}, techData = {}, side = 'BUY') {
 	if (price === null) {
 		return null;
 	}
 
-	const nearestResistance = numberOrNull(
-		techData.support_resistance?.nearest_resistance
-		?? techData.support_resistance?.resistance_1
-		?? techData.resistance?.nearest,
+	const isShort = side === 'SELL';
+	const nearestTarget = numberOrNull(
+		isShort
+			? techData.support_resistance?.nearest_support
+				?? techData.support_resistance?.support_1
+				?? techData.support?.nearest
+			: techData.support_resistance?.nearest_resistance
+				?? techData.support_resistance?.resistance_1
+				?? techData.resistance?.nearest,
 	);
-	if (nearestResistance !== null && nearestResistance > price) {
-		return nearestResistance;
+	if (nearestTarget !== null && (isShort ? nearestTarget < price : nearestTarget > price)) {
+		return nearestTarget;
 	}
 
-	const bbUpper = numberOrNull(bollinger.bb_upper ?? currentBollinger.upper);
-	if (bbUpper !== null && bbUpper > price) {
-		return bbUpper;
+	const bollingerTarget = numberOrNull(isShort
+		? bollinger.bb_lower ?? currentBollinger.lower
+		: bollinger.bb_upper ?? currentBollinger.upper);
+	if (bollingerTarget !== null && (isShort ? bollingerTarget < price : bollingerTarget > price)) {
+		return bollingerTarget;
 	}
 
 	if (atr !== null) {
-		return price + (atr * 3);
+		return isShort ? price - (atr * 3) : price + (atr * 3);
 	}
 
 	return null;
@@ -554,13 +564,14 @@ function getInvalidationDistance(price, stopLoss, stopLossSource) {
 	return Math.max(price - stopLoss, 0);
 }
 
-function getRiskRewardRatio(price, stopLoss, takeProfit) {
+function getRiskRewardRatio(price, stopLoss, takeProfit, side = 'BUY') {
 	if (price === null || stopLoss === null || takeProfit === null) {
 		return null;
 	}
 
-	const risk = price - stopLoss;
-	const reward = takeProfit - price;
+	const isShort = side === 'SELL';
+	const risk = isShort ? stopLoss - price : price - stopLoss;
+	const reward = isShort ? price - takeProfit : takeProfit - price;
 
 	if (risk <= 0 || reward <= 0) {
 		return null;
@@ -682,4 +693,7 @@ module.exports = {
 	parseSymbolIdentifier,
 	buildExpandedAnalysisAlertReport,
 	buildReportRow,
+	getStopLossMeta,
+	getTakeProfitTarget,
+	getRiskRewardRatio,
 };

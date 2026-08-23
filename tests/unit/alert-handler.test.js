@@ -175,6 +175,62 @@ describe('Alert Handler', () => {
 		process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
 	});
 
+	it('keeps MCP risk levels and ratio together when Gemini provides a partial risk block', async () => {
+		const previousGeminiFlag = process.env.ENABLE_GEMINI_GROUNDING;
+		process.env.ENABLE_GEMINI_GROUNDING = 'true';
+
+		tradingViewMcpService.isEnabled.mockReturnValue(true);
+		tradingViewMcpService.enrichFromAlertText.mockResolvedValue({
+			insights: ['MCP insight'],
+			sources: [],
+			invalidation_level: 94,
+			target_level: 112,
+			setup_type: 'trend_continuation',
+			risk_reward_ratio: 2,
+		});
+		groundAlert.mockResolvedValue({
+			insights: ['Gemini insight'],
+			sources: [],
+			invalidation_level: 90,
+		});
+
+		const result = await enrichAlert({ text: 'BTCUSDT(240) pasó a señal de COMPRA' }, { useTradingViewData: true });
+
+		expect(result).toEqual(expect.objectContaining({
+			invalidation_level: 94,
+			target_level: 112,
+			setup_type: 'trend_continuation',
+			risk_reward_ratio: 2,
+		}));
+
+		process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
+	});
+
+	it('preserves a valid standalone setup type without a complete numeric risk block', async () => {
+		const previousGeminiFlag = process.env.ENABLE_GEMINI_GROUNDING;
+		process.env.ENABLE_GEMINI_GROUNDING = 'true';
+
+		tradingViewMcpService.isEnabled.mockReturnValue(true);
+		tradingViewMcpService.enrichFromAlertText.mockResolvedValue({
+			insights: ['MCP insight'],
+			sources: [],
+		});
+		groundAlert.mockResolvedValue({
+			insights: ['Gemini insight'],
+			sources: [],
+			setup_type: 'breakout',
+		});
+
+		const result = await enrichAlert({ text: 'BTCUSDT(240) pasó a señal de COMPRA' }, { useTradingViewData: true });
+
+		expect(result.setup_type).toBe('breakout');
+		expect(result).not.toHaveProperty('invalidation_level');
+		expect(result).not.toHaveProperty('target_level');
+		expect(result).not.toHaveProperty('risk_reward_ratio');
+
+		process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
+	});
+
 	it('should suppress combined enrichment footer when message metadata is disabled', async () => {
 		const previousGeminiFlag = process.env.ENABLE_GEMINI_GROUNDING;
 		const previousFooterFlag = process.env.ENABLE_MESSAGE_FOOTER_METADATA;

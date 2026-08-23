@@ -97,14 +97,46 @@ let contractPromise;
 let authConfigPromise;
 let firebaseSdkPromise;
 let authState = { enabled: false, auth: null, user: null, role: null };
+
+const CONTRACT_TIMEOUT_MS = 8000;
+const API_REQUEST_TIMEOUT_MS = 30000;
+const LONG_RUNNING_API_REQUEST_TIMEOUT_MS = 900000;
+const VOLUME_CONFIRMATION_API_REQUEST_TIMEOUT_MS = 360000;
+const LONG_RUNNING_REQUEST_PATHS = new Set([
+	'/api/webhook/expanded-analysis-alert',
+	'/api/webhook/market-scanner-alert',
+	'/api/news-monitor',
+	'/api/scanner-presets/{id}/run',
+	'/api/webhook/alert',
+	'/api/webhook/message',
+	'/api/alerts/{alertId}/replay',
+]);
+const getApiRequestTimeout = (definition) => {
+	if (definition.path === '/api/webhook/volume-confirmation') return VOLUME_CONFIRMATION_API_REQUEST_TIMEOUT_MS;
+	return LONG_RUNNING_REQUEST_PATHS.has(definition.path)
+		? LONG_RUNNING_API_REQUEST_TIMEOUT_MS : API_REQUEST_TIMEOUT_MS;
+};
+
+const fetchWithTimeout = (input, options, timeoutMs, consume) => {
+	const controller = new AbortController();
+	const timer = setTimeout(() => controller.abort(), timeoutMs);
+	try {
+		return fetch(input, { ...(options || {}), signal: controller.signal })
+			.then((response) => typeof consume === 'function' ? consume(response) : response)
+			.finally(() => clearTimeout(timer));
+	} catch (error) {
+		clearTimeout(timer);
+		throw error;
+	}
+};
+
 const loadContract = () => {
 	if (!contractPromise) {
 		const prefix = getApiBaseUrl();
-		contractPromise = (prefix ? fetch(`${prefix}/openapi.json`) : fetch('/openapi.json'))
-			.then((response) => {
-				if (!response.ok) throw new Error(`OpenAPI contract returned HTTP ${response.status}`);
-				return response.json();
-			})
+		contractPromise = fetchWithTimeout(`${prefix}/openapi.json`, undefined, CONTRACT_TIMEOUT_MS, (response) => {
+			if (!response.ok) throw new Error(`OpenAPI contract returned HTTP ${response.status}`);
+			return response.json();
+		})
 			.catch((error) => {
 				contractPromise = undefined;
 				throw error;
@@ -132,15 +164,11 @@ const AUTH_CONFIG_TIMEOUT_MS = 8000;
 const loadAuthConfig = () => {
 	if (!authConfigPromise) {
 		const prefix = getApiBaseUrl();
-		const controller = new AbortController();
-		const timer = setTimeout(() => controller.abort(), AUTH_CONFIG_TIMEOUT_MS);
-		authConfigPromise = fetch(`${prefix}/admin/auth-config`, { signal: controller.signal })
-			.then((response) => {
-				if (!response.ok) throw new Error('Authentication configuration unavailable');
-				return response.json();
-			})
-			.catch(() => ({ enabled: true, configured: false }))
-			.finally(() => clearTimeout(timer));
+		authConfigPromise = fetchWithTimeout(`${prefix}/admin/auth-config`, undefined, AUTH_CONFIG_TIMEOUT_MS, (response) => {
+			if (!response.ok) throw new Error('Authentication configuration unavailable');
+			return response.json();
+		})
+			.catch(() => ({ enabled: true, configured: false }));
 	}
 	return authConfigPromise;
 };
@@ -530,22 +558,25 @@ const sendRequest = async ({
 	output.textContent = `${summary}\nRequest in progress…`;
 	const started = performance.now();
 	try {
-		const response = await fetch(request.url, request.options);
-		const elapsed = Math.round(performance.now() - started);
-		let data;
-		let formatted;
-		if (response.ok && typeof parseSuccessResponse === 'function') {
-			({ data, formatted } = await parseSuccessResponse(response));
-		} else {
-			const text = await response.text();
-			formatted = text || '(empty response)';
-			try {
-				data = JSON.parse(text);
-				formatted = JSON.stringify(data, null, 2);
-			} catch (_) {
-				// Non-JSON responses stay readable as text.
+		const result = await fetchWithTimeout(request.url, request.options, getApiRequestTimeout(definition), async (response) => {
+			const elapsed = Math.round(performance.now() - started);
+			let data;
+			let formatted;
+			if (response.ok && typeof parseSuccessResponse === 'function') {
+				({ data, formatted } = await parseSuccessResponse(response));
+			} else {
+				const text = await response.text();
+				formatted = text || '(empty response)';
+				try {
+					data = JSON.parse(text);
+					formatted = JSON.stringify(data, null, 2);
+				} catch (_) {
+					// Non-JSON responses stay readable as text.
+				}
 			}
-		}
+			return { response, data, formatted, elapsed };
+		});
+		const { response, data, formatted, elapsed } = result;
 		if (!requestIsCurrent()) return response.ok ? data : undefined;
 		output.className = `response-block${response.ok ? '' : ' response-error'}`;
 		const responseText = response.ok && formatResponse

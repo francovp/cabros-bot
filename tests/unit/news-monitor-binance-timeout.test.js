@@ -76,6 +76,59 @@ describe('NewsAnalyzer - fetchBinancePrice timeout decoupling', () => {
 		expect(result.source).toBe('binance');
 	});
 
+	it('should calculate 24h change from the nearest historical kline close', async () => {
+		mockGetAvgPrice.mockResolvedValue({ price: '110' });
+		const targetCloseTime = Date.now() - 24 * 60 * 60 * 1000;
+		const klines = Array.from({ length: 30 }, (_, index) => ({
+			volume: '100',
+			close: index === 4 ? '100' : index === 5 ? '120' : '105',
+			closeTime: targetCloseTime + (index - 4) * 60 * 60 * 1000,
+		}));
+		mockGetKlines.mockResolvedValue(klines);
+
+		const result = await analyzer.fetchBinancePrice('BTCUSDT');
+
+		expect(result.change24h).toBe(10);
+	});
+
+	it('should anchor the 24h target to Binance average-price closeTime', async () => {
+		const now = Date.now();
+		const priceCloseTime = now - 2 * 60 * 60 * 1000;
+		mockGetAvgPrice.mockResolvedValue({ price: '110', closeTime: priceCloseTime });
+		mockGetKlines.mockResolvedValue([
+			{
+				volume: '100',
+				close: '100',
+				closeTime: priceCloseTime - 24 * 60 * 60 * 1000,
+			},
+			{
+				volume: '100',
+				close: '120',
+				closeTime: now - 24 * 60 * 60 * 1000,
+			},
+		]);
+
+		const result = await analyzer.fetchBinancePrice('BTCUSDT');
+
+		expect(result.change24h).toBe(10);
+	});
+
+	it('should leave 24h change null when kline history does not reach 24 hours', async () => {
+		mockGetAvgPrice.mockResolvedValue({ price: '110' });
+		const targetCloseTime = Date.now() - 24 * 60 * 60 * 1000;
+		mockGetKlines.mockResolvedValue([
+			{
+				volume: '100',
+				close: '100',
+				closeTime: targetCloseTime + 2 * 60 * 60 * 1000,
+			},
+		]);
+
+		const result = await analyzer.fetchBinancePrice('BTCUSDT');
+
+		expect(result.change24h).toBeNull();
+	});
+
 	it('should return Binance price with null indicators when getKlines rejects with an error', async () => {
 		mockGetAvgPrice.mockResolvedValue({ price: '65000.50' });
 		mockGetKlines.mockRejectedValue(new Error('Binance rate limit'));

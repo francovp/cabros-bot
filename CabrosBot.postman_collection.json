@@ -171,7 +171,7 @@
           "name": "Success",
           "status": "OK",
           "code": 200,
-          "body": "{\"service\":{\"name\":\"cabros-bot\",\"version\":\"0.1.0\"},\"featureFlags\":{\"telegramBot\":true,\"whatsappAlerts\":false,\"geminiGrounding\":false,\"newsMonitor\":false,\"newsMonitorTestMode\":false,\"tradingViewVolumeConfirmation\":false,\"firestoreJobStorage\":false,\"messageFooterMetadata\":true,\"firestoreIdempotency\":false,\"equityMarketData\":false,\"firebaseRemoteConfig\":false,\"jobExecutionWorker\":false},\"dependencies\":{\"tradingViewMcp\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"lastCheckedAt\":null,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastErrorCategory\":null,\"successCount\":0,\"failureCount\":0},\"tradingViewVolumeConfirmation\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"lastCheckedAt\":null,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastErrorCategory\":null,\"successCount\":0,\"failureCount\":0},\"firestoreJobStorage\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\"},\"signalOutcomeWorker\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"role\":\"web\",\"running\":false,\"shutdownRequested\":false,\"lastRunScannedCount\":0,\"lastRunPendingCount\":0,\"lastRunEvaluatedCount\":0,\"lastRunErrorCount\":0},\"equityMarketData\":{\"provider\":null,\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"supportedExchanges\":[\"BATS\",\"NASDAQ\"],\"timeoutMs\":5000},\"idempotencyStorage\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"mode\":\"ephemeral\",\"backend\":\"memory\"},\"firebaseRemoteConfig\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"source\":\"disabled\",\"templateVersion\":null,\"lastSuccessfulLoad\":null,\"lastErrorCategory\":null,\"refreshIntervalMs\":900000,\"maxAgeMs\":3600000}}}"
+          "body": "{\"service\":{\"name\":\"cabros-bot\",\"version\":\"0.1.0\"},\"featureFlags\":{\"telegramBot\":true,\"whatsappAlerts\":false,\"geminiGrounding\":false,\"newsMonitor\":false,\"newsMonitorTestMode\":false,\"tradingViewVolumeConfirmation\":false,\"firestoreJobStorage\":false,\"messageFooterMetadata\":true,\"firestoreIdempotency\":false,\"equityMarketData\":false,\"firebaseRemoteConfig\":false,\"jobExecutionWorker\":false},\"dependencies\":{\"tradingViewMcp\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"lastCheckedAt\":null,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastErrorCategory\":null,\"successCount\":0,\"failureCount\":0},\"tradingViewVolumeConfirmation\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"lastCheckedAt\":null,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastErrorCategory\":null,\"successCount\":0,\"failureCount\":0},\"firestoreJobStorage\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\"},\"signalOutcomeWorker\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"role\":\"web\",\"running\":false,\"shutdownRequested\":false,\"lastRunScannedCount\":0,\"lastRunPendingCount\":0,\"lastRunEvaluatedCount\":0,\"lastRunErrorCount\":0},\"equityMarketData\":{\"provider\":null,\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"supportedExchanges\":[\"BATS\",\"NASDAQ\",\"NYSE\",\"AMEX\",\"NYSE ARCA\"],\"timeoutMs\":5000},\"idempotencyStorage\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"mode\":\"ephemeral\",\"backend\":\"memory\"},\"firebaseRemoteConfig\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"source\":\"disabled\",\"templateVersion\":null,\"lastSuccessfulLoad\":null,\"lastErrorCategory\":null,\"refreshIntervalMs\":900000,\"maxAgeMs\":3600000}}}"
         }
       ]
     },
@@ -203,7 +203,7 @@
           "name": "Success",
           "status": "OK",
           "code": 200,
-          "body": "{\"featureFlags\":{\"tradingViewVolumeConfirmation\":true,\"firestoreJobStorage\":true,\"newsMonitorTestMode\":false,\"messageFooterMetadata\":true,\"cloudflareAig\":false,\"equityMarketData\":false,\"firebaseRemoteConfig\":true},\"dependencies\":{\"tradingViewMcp\":{\"enabled\":true,\"configured\":true,\"ready\":false,\"status\":\"unknown\",\"lastCheckedAt\":null,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastErrorCategory\":null,\"successCount\":0,\"failureCount\":0},\"tradingViewVolumeConfirmation\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\"},\"firestoreJobStorage\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\"},\"cloudflareAig\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\"},\"equityMarketData\":{\"provider\":null,\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"supportedExchanges\":[\"BATS\",\"NASDAQ\"],\"timeoutMs\":5000},\"firebaseRemoteConfig\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\",\"source\":\"remote\",\"templateVersion\":\"7\",\"lastSuccessfulLoad\":\"2026-08-02T08:30:00.000Z\",\"lastErrorCategory\":null,\"refreshIntervalMs\":900000,\"maxAgeMs\":3600000}}}"
+          "body": "{\"featureFlags\":{\"tradingViewVolumeConfirmation\":true,\"firestoreJobStorage\":true,\"newsMonitorTestMode\":false,\"messageFooterMetadata\":true,\"cloudflareAig\":false,\"equityMarketData\":false,\"firebaseRemoteConfig\":true},\"dependencies\":{\"tradingViewMcp\":{\"enabled\":true,\"configured\":true,\"ready\":false,\"status\":\"unknown\",\"lastCheckedAt\":null,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastErrorCategory\":null,\"successCount\":0,\"failureCount\":0},\"tradingViewVolumeConfirmation\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\"},\"firestoreJobStorage\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\"},\"cloudflareAig\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\"},\"equityMarketData\":{\"provider\":null,\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"supportedExchanges\":[\"BATS\",\"NASDAQ\",\"NYSE\",\"AMEX\",\"NYSE ARCA\"],\"timeoutMs\":5000},\"firebaseRemoteConfig\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\",\"source\":\"remote\",\"templateVersion\":\"7\",\"lastSuccessfulLoad\":\"2026-08-02T08:30:00.000Z\",\"lastErrorCategory\":null,\"refreshIntervalMs\":900000,\"maxAgeMs\":3600000}}}"
         }
       ]
     },
@@ -395,10 +395,28 @@
           },
           "response": [
             {
-              "name": "Dry run with confluence metadata",
+              "name": "Dry run - full TradingView enrichment",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"enriched\": true,\n  \"payload\": {\n    \"text\": \"BTCUSDT(240) pasó a señal de COMPRA\",\n    \"enrichedData\": {\n      \"sentiment\": \"NEUTRAL\",\n      \"insights\": [\"Confluencia contradictoria: SELL - Senales Mixtas - Confianza: 81\"],\n      \"confluenceData\": { \"confluence\": { \"recommendation\": \"SELL\", \"confidence\": 81, \"signals_agree\": false } },\n      \"multiTimeframeData\": { \"alignment\": \"bearish\" }\n    }\n  }\n}"
+              "body": "{\"success\":true,\"dryRun\":true,\"enriched\":true,\"payload\":{\"text\":\"BTCUSDT(240) pasó a señal de COMPRA\",\"enrichedData\":{\"tradingViewEnrichmentApplied\":true,\"tradingViewEnrichmentStatus\":\"full\",\"sentiment\":\"BULLISH\"}}}"
+            },
+            {
+              "name": "Dry run - partial TradingView enrichment",
+              "status": "OK",
+              "code": 200,
+              "body": "{\"success\":true,\"dryRun\":true,\"enriched\":true,\"payload\":{\"text\":\"BTCUSDT(240) pasó a señal de COMPRA\",\"enrichedData\":{\"tradingViewEnrichmentApplied\":true,\"tradingViewEnrichmentStatus\":\"partial\",\"sentiment\":\"BULLISH\"}}}"
+            },
+            {
+              "name": "Dry run - failed TradingView enrichment",
+              "status": "OK",
+              "code": 200,
+              "body": "{\"success\":true,\"dryRun\":true,\"enriched\":true,\"payload\":{\"text\":\"BTCUSDT(240) pasó a señal de COMPRA\",\"enrichedData\":{\"tradingViewEnrichmentApplied\":false,\"tradingViewEnrichmentStatus\":\"failed\",\"sentiment\":\"NEUTRAL\"}}}"
+            },
+            {
+              "name": "Dry run - TradingView not applicable",
+              "status": "OK",
+              "code": 200,
+              "body": "{\"success\":true,\"dryRun\":true,\"enriched\":true,\"payload\":{\"text\":\"Bitcoin breaks above $83,000 with strong volume\",\"enrichedData\":{\"tradingViewEnrichmentApplied\":false,\"tradingViewEnrichmentStatus\":\"not_applicable\",\"sentiment\":\"BULLISH\"}}}"
             }
           ]
         },
@@ -1918,7 +1936,7 @@
                   "value": "{\"totalSignalsEvaluated\":1,\"windows\":{\"1h\":{\"totalSignals\":1,\"hitRatePercent\":100,\"averageReturnPercent\":0.7353,\"averageMfePercent\":0.7353,\"averageMaePercent\":0.0,\"maxAdverseExcursionPercent\":0.0}},\"drawdownProxy\":{\"averageMaxAdverseExcursionPercent\":0.0,\"absoluteMaxAdverseExcursionPercent\":0.0},\"falsePositiveCandidatesCount\":0,\"falsePositiveCandidates\":[],\"latencyCostMetadata\":{\"averageProcessingTimeMs\":250,\"tokenUsage\":{\"inputTokens\":10,\"outputTokens\":20,\"totalCost\":0.001}}}"
                 }
               ],
-              "body": "{\"id\":\"alert-123\",\"receivedAt\":\"2026-06-06T12:00:00.000Z\",\"source\":\"webhook\",\"enriched\":true,\"useTradingViewData\":false,\"tradingViewEnrichmentApplied\":false,\"deliveryResults\":[{\"channel\":\"telegram\",\"success\":true,\"messageId\":\"123\",\"errorCode\":null,\"statusCode\":null}],\"tokenUsage\":{\"inputTokens\":10,\"outputTokens\":20,\"totalTokens\":30,\"totalCost\":0.001}}\n"
+              "body": "{\"id\":\"alert-123\",\"receivedAt\":\"2026-06-06T12:00:00.000Z\",\"source\":\"webhook\",\"enriched\":true,\"useTradingViewData\":false,\"tradingViewEnrichmentApplied\":false,\"tradingViewEnrichmentStatus\":\"not_applicable\",\"deliveryResults\":[{\"channel\":\"telegram\",\"success\":true,\"messageId\":\"123\",\"errorCode\":null,\"statusCode\":null}],\"tokenUsage\":{\"inputTokens\":10,\"outputTokens\":20,\"totalTokens\":30,\"totalCost\":0.001}}\n"
             }
           ]
         },
@@ -1973,7 +1991,7 @@
               "name": "200 OK - CSV export",
               "status": "OK",
               "code": 200,
-              "body": "id,receivedAt,source,enriched,useTradingViewData,tradingViewEnrichmentApplied,deliveryResults,tokenUsage,text\nalert-123,2026-06-06T12:00:00.000Z,webhook,true,false,false,\"[{\"\"channel\"\":\"\"telegram\"\",\"\"success\"\":true,\"\"messageId\"\":\"\"123\"\",\"\"errorCode\"\":null,\"\"statusCode\"\":null}]\",\"{\"\"inputTokens\"\":10,\"\"outputTokens\"\":20,\"\"totalTokens\"\":30,\"\"totalCost\"\":0.001}\",BTC breakout\n"
+              "body": "id,receivedAt,source,enriched,useTradingViewData,tradingViewEnrichmentApplied,tradingViewEnrichmentStatus,deliveryResults,tokenUsage,text\nalert-123,2026-06-06T12:00:00.000Z,webhook,true,false,false,not_applicable,\"[{\"\"channel\"\":\"\"telegram\"\",\"\"success\"\":true,\"\"messageId\"\":\"\"123\"\",\"\"errorCode\"\":null,\"\"statusCode\"\":null}]\",\"{\"\"inputTokens\"\":10,\"\"outputTokens\"\":20,\"\"totalTokens\"\":30,\"\"totalCost\"\":0.001}\",BTC breakout\n"
             }
           ]
         },

@@ -247,6 +247,51 @@ describe('SignalOutcomeService', () => {
 			}
 		});
 
+		it('resolves configured equity entry prices for NYSE and AMEX signals', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_EQUITY_MARKET_DATA = 'true';
+			process.env.EQUITY_MARKET_DATA_PROVIDER = 'twelve-data';
+			process.env.TWELVE_DATA_API_KEY = 'test-twelve-data-key';
+			const originalFetch = global.fetch;
+			const mockFetch = jest.fn().mockResolvedValue({
+				ok: true,
+				json: async () => ({
+					status: 'ok',
+					symbol: 'TSM',
+					exchange: 'NYSE',
+					close: '175.50',
+				}),
+			});
+			global.fetch = mockFetch;
+
+			try {
+				const nyseId = await SignalOutcomeService.recordSignal({
+					symbol: 'NYSE:TSM',
+					price: null,
+				});
+
+				const nyseSaved = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(nyseId);
+				expect(nyseSaved.symbol).toBe('TSM');
+				expect(nyseSaved.exchange).toBe('NYSE');
+				expect(nyseSaved.price).toBe(175.50);
+				expect(nyseSaved.marketDataProvider).toBe('twelve-data');
+				expect(nyseSaved.eligibilityState).toBe('supported_provider');
+
+				const amexId = await SignalOutcomeService.recordSignal({
+					symbol: 'AMEX:SPY',
+					price: null,
+				});
+
+				const amexSaved = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(amexId);
+				expect(amexSaved.symbol).toBe('SPY');
+				expect(amexSaved.exchange).toBe('AMEX');
+				expect(amexSaved.marketDataProvider).toBe('twelve-data');
+				expect(amexSaved.eligibilityState).toBe('supported_provider');
+			} finally {
+				global.fetch = originalFetch;
+			}
+		});
+
 		it('reuses structured MCP entry price without calling Binance getAvgPrice', async () => {
 			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
 			mockGetAvgPrice.mockResolvedValue({ price: '12345.67' });

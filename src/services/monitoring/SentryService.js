@@ -693,6 +693,14 @@ class SentryService {
 				tags,
 				contexts,
 				extra,
+				...(event.type === 'external_failure' && event.external && {
+					fingerprint: [
+						event.type,
+						event.channel,
+						event.external.provider,
+						String(event.external.lastErrorCode || 'error'),
+					],
+				}),
 			});
 
 			console.debug(`[SentryService] Event captured: ${eventId} (channel=${event.channel}, type=${event.type})`);

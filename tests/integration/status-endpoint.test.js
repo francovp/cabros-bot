@@ -432,7 +432,7 @@ describe('Status endpoints', () => {
 			configured: true,
 			ready: true,
 			status: 'ready',
-			supportedExchanges: ['BATS', 'NASDAQ'],
+			supportedExchanges: ['BATS', 'NASDAQ', 'NYSE', 'AMEX', 'NYSE ARCA'],
 			timeoutMs: 5000,
 		});
 		expect(JSON.stringify(response.body)).not.toContain('secret-equity-key');
