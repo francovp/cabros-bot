@@ -349,6 +349,37 @@ describe('NewsCache — Persistent Dedup Backend (Issue #120)', () => {
 			expect(cache.cache.get('BTCUSDT:price_surge').localOnlyChannels).toEqual([]);
 		});
 
+		it('rechecks local state after a concurrent persistent refresh await', async () => {
+			const failedData = {
+				alert: { symbol: 'BTCUSDT' },
+				deliveryResults: [{ channel: 'telegram', success: false }],
+			};
+			const recoveredData = {
+				...failedData,
+				deliveryResults: [{ channel: 'telegram', success: true, messageId: 'telegram-concurrent' }],
+			};
+			let releaseRefresh;
+			mockGetEntryRecord.mockReturnValue(new Promise(resolve => { releaseRefresh = resolve; }));
+
+			await cache.set('BTCUSDT', EventCategory.PRICE_SURGE, failedData);
+			const refreshPromise = cache.get('BTCUSDT', EventCategory.PRICE_SURGE);
+			await Promise.resolve();
+			await cache.set('BTCUSDT', EventCategory.PRICE_SURGE, recoveredData, {
+				preserveTtl: true,
+				deliveryChannels: [],
+				localDeliveryChannels: ['telegram'],
+				localOnlyChannels: ['telegram'],
+				skipPersistence: true,
+			});
+			releaseRefresh({ data: failedData, expiresAtMs: Date.now() + cache.ttlMs });
+
+			const result = await refreshPromise;
+
+			expect(result.deliveryResults).toEqual([
+				expect.objectContaining({ channel: 'telegram', success: true, messageId: 'telegram-concurrent' }),
+			]);
+		});
+
 		it('preserves the cache TTL when updating cached delivery results', async () => {
 			const firstData = { alert: { symbol: 'BTCUSDT' }, deliveryResults: [{ channel: 'telegram', success: true }] };
 			const retryData = { ...firstData, deliveryResults: [{ channel: 'telegram', success: true }, { channel: 'whatsapp', success: true }] };

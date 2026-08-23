@@ -238,15 +238,18 @@ class NewsCache {
 			try {
 				const entryRecord = await newsDedupStorageService.getEntryRecord(key);
 				if (entryRecord) {
-					const localOnlyChannels = (entry?.localOnlyChannels ?? []).filter(channel => {
+					const latestEntry = this.cache.get(key);
+					const latestLocalData = latestEntry && !this.isExpired(latestEntry) ? latestEntry.data : null;
+					const refreshedLocalData = latestLocalData ?? localData;
+					const localOnlyChannels = (latestEntry?.localOnlyChannels ?? entry?.localOnlyChannels ?? []).filter(channel => {
 						const persistentResult = entryRecord.data?.deliveryResults?.find(result => result?.channel === channel);
 						return persistentResult?.success !== true;
 					});
-					const refreshedData = localData && localOnlyChannels.length > 0
-						? mergeDeliveryData(entryRecord.data, localData, localOnlyChannels)
+					const refreshedData = refreshedLocalData && localOnlyChannels.length > 0
+						? mergeDeliveryData(entryRecord.data, refreshedLocalData, localOnlyChannels)
 						: entryRecord.data;
-					if (localData && localData.status !== 'claiming' && entryRecord.data?.status === 'claiming') {
-						return localData;
+					if (refreshedLocalData && refreshedLocalData.status !== 'claiming' && entryRecord.data?.status === 'claiming') {
+						return refreshedLocalData;
 					}
 					// Warm the local cache to avoid repeated Firestore lookups
 					this.cache.set(key, {
