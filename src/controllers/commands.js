@@ -182,6 +182,52 @@ const cryptoBotCmd = (context) => {
 	}
 };
 
+function buildHelpMessage() {
+	return [
+		'*🤖 Comandos disponibles en Cabros Bot*',
+		'',
+		'• `/precio <simbolo>` — Consulta el precio promedio de un par en Binance \\(ej: `/precio BTCUSDT`\\)',
+		'• `/cryptobot id` — Muestra el Chat ID actual de Telegram',
+		'• `/analisis <simbolos>` — Crea un análisis técnico en TradingView \\(alias: `/analysis`\\)',
+		'  _Opciones: `timeframe=1D`, `mtf=true`, `timeoutMs=300000`_',
+		'• `/scanner` — Escaneo de mercado en TradingView \\(top gainers, losers, breakouts\\)',
+		'  _Opciones: `scans=top_gainers,top_losers`, `exchange=BINANCE`, `timeframe=4h`, `limit=10`_',
+		'• `/noticias` — Monitor y análisis de noticias con IA \\(alias: `/news`\\)',
+		'  _Opciones: `crypto=BTCUSDT,ETHUSDT`, `stocks=NVDA`_',
+		'• `/help` / `/start` — Muestra este mensaje de ayuda',
+	].join('\n');
+}
+
+const helpCmd = async (context) => {
+	const chatId = getChatId(context);
+	const commandSpan = sentryService.startInactiveSpan({
+		name: 'telegram.command.help',
+		op: 'bot.command',
+		forceTransaction: true,
+		attributes: {
+			'telegram.command': '/help',
+			'telegram.chat_id': chatId ? String(chatId) : 'unknown',
+		},
+	});
+
+	try {
+		const message = buildHelpMessage();
+		await context.reply(message, { parse_mode: 'MarkdownV2' });
+	} catch (error) {
+		console.error(error);
+		sentryService.captureRuntimeError({
+			channel: 'telegram',
+			error,
+			extra: {
+				command: 'helpCmd',
+				chatId,
+			},
+		});
+	} finally {
+		sentryService.endSpan(commandSpan);
+	}
+};
+
 function getChatId(context) {
 	return context.update && context.update.message && context.update.message.chat && context.update.message.chat.id;
 }
@@ -270,5 +316,7 @@ module.exports = {
 	expandedAnalysisCmd,
 	marketScannerCmd,
 	newsMonitorCmd,
+	helpCmd,
+	buildHelpMessage,
 	parseCommandArgs,
 };

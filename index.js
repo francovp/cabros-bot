@@ -8,6 +8,7 @@ const {
 	expandedAnalysisCmd,
 	marketScannerCmd,
 	newsMonitorCmd,
+	helpCmd,
 } = require('./src/controllers/commands');
 const app = require('./app.js');
 const { Telegraf, Markup } = require('telegraf');
@@ -92,6 +93,7 @@ async function bootstrapApplication() {
 		bot.command(['analisis', 'analysis'], expandedAnalysisCmd);
 		bot.command(['scanner'], marketScannerCmd);
 		bot.command(['noticias', 'news'], newsMonitorCmd);
+		bot.command(['help', 'start'], helpCmd);
 
 		// Initialize notification services
 		await initializeNotificationServices(bot);
