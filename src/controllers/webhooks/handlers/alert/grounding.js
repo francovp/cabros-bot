@@ -49,15 +49,31 @@ function isOptionalRiskValue(value) {
 		|| (typeof value === 'string' && value.trim().length > 0);
 }
 
-function pickOptionalRiskValue(...values) {
-	return values.find(isOptionalRiskValue);
-}
-
 function pickSetupType(...values) {
 	return values.find(value => (
 		typeof value === 'string'
 		&& ['breakout', 'mean_reversion', 'trend_continuation', 'reversal'].includes(value)
 	));
+}
+
+function hasCompleteRiskMetadata(value = {}) {
+	return ['invalidation_level', 'target_level', 'risk_reward_ratio']
+		.every(field => isOptionalRiskValue(value[field]));
+}
+
+function selectRiskMetadata(gemini, mcp) {
+	const source = hasCompleteRiskMetadata(mcp) ? mcp : hasCompleteRiskMetadata(gemini) ? gemini : null;
+	const setupType = pickSetupType(gemini.setup_type, mcp.setup_type);
+	if (!source) {
+		return setupType ? { setup_type: setupType } : {};
+	}
+
+	return {
+		invalidation_level: source.invalidation_level,
+		target_level: source.target_level,
+		risk_reward_ratio: source.risk_reward_ratio,
+		...(setupType ? { setup_type: setupType } : {}),
+	};
 }
 
 function extractPriorityMcpInsights(mcp = {}) {
@@ -110,12 +126,7 @@ function mergeEnrichmentData(text, geminiEnriched, mcpEnriched) {
 		priorityMcpInsights,
 		mergeUnique(gemini.insights || [], remainingMcpInsights),
 	);
-	const optionalRiskMetadata = {
-		invalidation_level: pickOptionalRiskValue(gemini.invalidation_level, mcp.invalidation_level),
-		target_level: pickOptionalRiskValue(gemini.target_level, mcp.target_level),
-		setup_type: pickSetupType(gemini.setup_type, mcp.setup_type),
-		risk_reward_ratio: pickOptionalRiskValue(gemini.risk_reward_ratio, mcp.risk_reward_ratio),
-	};
+	const optionalRiskMetadata = selectRiskMetadata(gemini, mcp);
 
 	const mcpCurrentPrice = typeof mcp.current_price === 'number' && Number.isFinite(mcp.current_price) && mcp.current_price > 0
 		? mcp.current_price
@@ -126,6 +137,7 @@ function mergeEnrichmentData(text, geminiEnriched, mcpEnriched) {
 	return {
 		original_text: text,
 		tradingViewEnrichmentApplied: mcp.tradingViewEnrichmentApplied === true,
+		...(mcp.tradingViewEnrichmentStatus ? { tradingViewEnrichmentStatus: mcp.tradingViewEnrichmentStatus } : {}),
 		sentiment: useMcpSentiment ? (mcp.sentiment || 'NEUTRAL') : (gemini.sentiment || mcp.sentiment || 'NEUTRAL'),
 		sentiment_score: useMcpSentiment && mcpScore !== null ? mcpScore : (geminiScore !== null ? geminiScore : (mcpScore !== null ? mcpScore : 0)),
 		current_price: mcpCurrentPrice,
@@ -255,15 +267,20 @@ async function enrichAlert(alert, options = {}) {
 	}
 
 	let mcpEnrichedAlert = null;
+	let mcpEnrichmentFailed = false;
 	if (isMcpEnabled) {
 		try {
 			mcpEnrichedAlert = await tradingViewMcpService.enrichFromAlertText(text);
 		} catch (error) {
+			mcpEnrichmentFailed = true;
 			console.warn('[Alert] TradingView MCP enrichment failed, continuing with grounding flow:', error.message);
 		}
 	}
 
 	if (!isGeminiEnabled) {
+		if (mcpEnrichmentFailed) {
+			throw new Error('TradingView MCP enrichment failed');
+		}
 		return mcpEnrichedAlert;
 	}
 

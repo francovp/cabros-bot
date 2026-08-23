@@ -20,6 +20,7 @@ const {
 	getDeliveredChannels,
 } = require('../../../../services/notification/requestRouting');
 const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteConfigService');
+const { parseTradingViewSignal } = require('../../../../services/tradingview/parseTradingViewSignal');
 
 // Initialize services
 let notificationManager = null;
@@ -102,11 +103,26 @@ async function processEnrichment(alert, options) {
 				enrichedAlert.tokenUsage = tokenUsage.toJSON();
 				enriched = true;
 				alert.enriched = enrichedAlert;
+				if (isTradingViewMcpEnabled) {
+					const tradingViewEnrichmentStatus = enrichedAlert.tradingViewEnrichmentStatus
+						|| (enrichedAlert.tradingViewEnrichmentApplied === true
+							? 'full'
+							: (parseTradingViewSignal(alert.text) ? 'failed' : 'not_applicable'));
+					enrichedAlert.tradingViewEnrichmentStatus = tradingViewEnrichmentStatus;
+					enrichedAlert.tradingViewEnrichmentApplied = ['full', 'partial'].includes(tradingViewEnrichmentStatus);
+					alert.tradingViewEnrichmentStatus = tradingViewEnrichmentStatus;
+				}
 				console.debug('[Alert] Enrichment completed, sources:', (enrichedAlert.sources && enrichedAlert.sources.length) || 0);
 			} else {
+				if (isTradingViewMcpEnabled) {
+					alert.tradingViewEnrichmentStatus = parseTradingViewSignal(alert.text) ? 'failed' : 'not_applicable';
+				}
 				console.debug('[Alert] Enrichment skipped: alert text did not match enabled providers');
 			}
 		} catch (error) {
+			if (isTradingViewMcpEnabled) {
+				alert.tradingViewEnrichmentStatus = parseTradingViewSignal(alert.text) ? 'failed' : 'not_applicable';
+			}
 			console.warn('[Alert] Enrichment failed, using original text:', error.message);
 		} finally {
 			sentryService.endSpan(enrichmentSpan);
@@ -216,6 +232,7 @@ function postAlert(botOrGetter) {
 				useTradingViewData,
 				processingTimeMs,
 				tradingViewEnrichmentApplied: Boolean(alert.enriched && alert.enriched.tradingViewEnrichmentApplied === true),
+				tradingViewEnrichmentStatus: alert.tradingViewEnrichmentStatus,
 			}).catch(() => {}); // errors already logged inside AlertStorageService
 
 			if (signalOutcomeService.isEnabled()) {

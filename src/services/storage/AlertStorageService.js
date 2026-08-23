@@ -61,6 +61,7 @@ const VALID_SETUP_TYPES = new Set([
 	'trend_continuation',
 	'reversal',
 ]);
+const VALID_TRADINGVIEW_ENRICHMENT_STATUSES = new Set(['full', 'partial', 'failed', 'not_applicable']);
 
 // Lazy Firestore singleton
 let db = null;
@@ -177,6 +178,9 @@ function formatAlertDocument(doc) {
 	if (extracted.exchange) {
 		docObj.exchange = extracted.exchange;
 	}
+	if (VALID_TRADINGVIEW_ENRICHMENT_STATUSES.has(data.tradingViewEnrichmentStatus)) {
+		docObj.tradingViewEnrichmentStatus = data.tradingViewEnrichmentStatus;
+	}
 	return docObj;
 }
 
@@ -227,6 +231,33 @@ function sanitizeEnrichmentData(enrichmentData) {
 	}
 
 	return sanitized;
+}
+
+// Firestore Admin SDK rejects `undefined` field values anywhere in a write.
+// Only plain objects are rebuilt; class instances (Date, Firestore Timestamp,
+// GeoPoint, DocumentReference, FieldValue) pass through untouched.
+function stripUndefinedFieldsDeep(value) {
+	if (value === null || typeof value !== 'object') {
+		return value;
+	}
+	if (Array.isArray(value)) {
+		return value
+			.filter((item) => item !== undefined)
+			.map((item) => stripUndefinedFieldsDeep(item));
+	}
+
+	const proto = Object.getPrototypeOf(value);
+	if (proto !== Object.prototype && proto !== null) {
+		return value;
+	}
+
+	const result = {};
+	for (const [key, item] of Object.entries(value)) {
+		if (item !== undefined) {
+			result[key] = stripUndefinedFieldsDeep(item);
+		}
+	}
+	return result;
 }
 
 function createRiskMetadataCoverageBucket() {
@@ -479,6 +510,9 @@ function formatExportRecord(doc, { includeText }) {
 		deliveryResults: summarizeDeliveryResults(data.deliveryResults),
 		tokenUsage: summarizeTokenUsage(data.tokenUsage),
 	};
+	if (VALID_TRADINGVIEW_ENRICHMENT_STATUSES.has(data.tradingViewEnrichmentStatus)) {
+		record.tradingViewEnrichmentStatus = data.tradingViewEnrichmentStatus;
+	}
 
 	if (includeText) {
 		record.text = truncateAlertText(data.text);
@@ -715,7 +749,7 @@ function getFirestore() {
  * @param {number}  params.processingTimeMs  - Bounded handler processing duration in milliseconds
  * @returns {Promise<string|null>} The new Firestore document ID, or null on failure/disabled
  */
-async function saveAlertInternal({ text, symbol, exchange, enriched, enrichmentData, tokenUsage, channels, deliveryResults, useTradingViewData, tradingViewEnrichmentApplied, processingTimeMs }) {
+async function saveAlertInternal({ text, symbol, exchange, enriched, enrichmentData, tokenUsage, channels, deliveryResults, useTradingViewData, tradingViewEnrichmentApplied, tradingViewEnrichmentStatus, processingTimeMs }) {
 	if (!isEnabled()) {
 		return null;
 	}
@@ -732,14 +766,19 @@ async function saveAlertInternal({ text, symbol, exchange, enriched, enrichmentD
 			expiresAt: buildRetentionExpiryTimestamp(),
 			text: typeof text === 'string' ? text.substring(0, 20000) : '',
 			enriched: Boolean(enriched),
-			enrichmentData: sanitizeEnrichmentData(enrichmentData),
-			tokenUsage: tokenUsage || null,
+			enrichmentData: stripUndefinedFieldsDeep(sanitizeEnrichmentData(enrichmentData)),
+			tokenUsage: stripUndefinedFieldsDeep(tokenUsage ?? null),
 			channels: Array.isArray(channels) ? channels : [],
-			deliveryResults: Array.isArray(deliveryResults) ? deliveryResults : [],
+			deliveryResults: Array.isArray(deliveryResults)
+				? stripUndefinedFieldsDeep(deliveryResults)
+				: [],
 			source: 'webhook',
 			useTradingViewData: Boolean(useTradingViewData),
 			tradingViewEnrichmentApplied: Boolean(tradingViewEnrichmentApplied),
 		};
+		if (VALID_TRADINGVIEW_ENRICHMENT_STATUSES.has(tradingViewEnrichmentStatus)) {
+			document.tradingViewEnrichmentStatus = tradingViewEnrichmentStatus;
+		}
 		const normalizedProcessingTimeMs = normalizeProcessingTimeMs(processingTimeMs);
 		if (normalizedProcessingTimeMs !== null) {
 			document.processingTimeMs = normalizedProcessingTimeMs;

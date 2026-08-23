@@ -94,7 +94,7 @@ function parseTradingViewSignal(text, options = {}) {
 	};
 }
 
-const STOCK_EXCHANGES = new Set(['BATS', 'NASDAQ', 'NYSE', 'AMEX', 'SPCFD', 'CBOE']);
+const STOCK_EXCHANGES = new Set(['BATS', 'NASDAQ', 'NYSE', 'AMEX', 'SPCFD', 'CBOE', 'NYSE_ARCA', 'NYSE ARCA', 'ARCA']);
 const NON_EQUITY_EXCHANGES = new Set(['FX_IDC', 'CME_MINI', 'CBOT_MINI']);
 const CRYPTO_EXCHANGES = new Set(['BINANCE', 'BYBIT', 'COINBASE', 'OKX', 'KRAKEN', 'BITFINEX', 'KUCOIN']);
 const CRYPTO_SUFFIXES = ['USDT', 'BUSD', 'USDC', 'BTC', 'ETH', 'SOL', 'PERP'];

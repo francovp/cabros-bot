@@ -141,6 +141,7 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 	const documentListeners = {};
 	const downloads = [];
 	const timers = new Map();
+	const timerDelays = new Map();
 	const document = {
 		body,
 		createElement: (tag) => {
@@ -176,12 +177,13 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 			removeItem: (key) => storage.delete(key),
 		},
 		AbortController: FakeAbortController,
-		setTimeout: (fn) => {
+		setTimeout: (fn, delay) => {
 			const id = timers.size + 1;
 			timers.set(id, fn);
+			timerDelays.set(id, delay);
 			return id;
 		},
-		clearTimeout: (id) => { timers.delete(id); },
+		clearTimeout: (id) => { timers.delete(id); timerDelays.delete(id); },
 		window: {
 			CabrosAdminRequest: helper,
 			confirm,
@@ -199,7 +201,7 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 	);
 	documentListeners.DOMContentLoaded();
 
-	return { body, context, elementsById, helperCalls, storage, downloads, timers };
+	return { body, context, elementsById, helperCalls, storage, downloads, timers, timerDelays };
 }
 
 async function selectView(browser, name) {
@@ -330,6 +332,137 @@ describe('admin browser client', () => {
 
 		expect(browser.elementsById['auth-state'].textContent).toContain('Firebase sign-in is unavailable');
 		expect(browser.timers.size).toBe(0);
+	});
+
+	it('resolves authentication with fallback when the auth-config body stalls until timeout', async () => {
+		const firebase = {
+			initializeApp: jest.fn(),
+			auth: jest.fn(),
+		};
+		const browser = createBrowser({
+			firebase,
+			fetchImpl: (url, options) => {
+				if (url !== '/admin/auth-config') return response({});
+				return Promise.resolve({
+					ok: true,
+					status: 200,
+					json: () => new Promise((resolve, reject) => {
+						options.signal.addEventListener('abort', () => reject(new Error('AbortError')));
+					}),
+				});
+			},
+		});
+		await flush();
+
+		expect(browser.timers.size).toBe(1);
+		for (const fireTimer of browser.timers.values()) fireTimer();
+		await flush();
+
+		expect(browser.elementsById['auth-state'].textContent).toContain('Firebase sign-in is unavailable');
+		expect(browser.timers.size).toBe(0);
+	});
+
+	it('shows a contract-load error when the OpenAPI fetch stalls until timeout', async () => {
+		let signal;
+		const browser = createBrowser({
+			fetchImpl: (url, options) => {
+				if (url !== '/openapi.json') return response({});
+				signal = options?.signal;
+				return new Promise((resolve, reject) => {
+					signal?.addEventListener('abort', () => reject(new Error('AbortError')));
+				});
+			},
+		});
+		await flush();
+
+		expect(browser.timers.size).toBe(1);
+		for (const fireTimer of browser.timers.values()) fireTimer();
+		await flush();
+
+		expect(signal.aborted).toBe(true);
+		expect(browser.elementsById.view.textContent).toContain('Unable to load the API contract: AbortError');
+		expect(browser.timers.size).toBe(0);
+	});
+
+	it('shows a network error when an API request stalls until timeout', async () => {
+		let signal;
+		const browser = createBrowser({
+			fetchImpl: (url, options) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url !== '/api/status') return response({});
+				signal = options?.signal;
+				return new Promise((resolve, reject) => {
+					signal?.addEventListener('abort', () => reject(new Error('AbortError')));
+				});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'status');
+		const form = findForm(browser.elementsById.view, 'GET /api/status');
+		await form.dispatch('submit');
+		await flush();
+
+		expect(browser.timers.size).toBe(1);
+		for (const fireTimer of browser.timers.values()) fireTimer();
+		await flush();
+
+		expect(signal.aborted).toBe(true);
+		expect(form.textContent).toContain('Network error');
+		expect(browser.timers.size).toBe(0);
+	});
+
+	it('allows long-running analysis requests to use the server-side deadline budget', async () => {
+		const signals = [];
+		const browser = createBrowser({
+			fetchImpl: (url, options) => {
+				if (url === '/openapi.json') return response(contract);
+				if (!url.includes('/api/webhook/expanded-analysis-alert')
+					&& !url.includes('/api/news-monitor')
+					&& !url.includes('/api/scanner-presets/')
+					&& !url.includes('/api/webhook/volume-confirmation')) return response({});
+				const signal = options?.signal;
+				signals.push(signal);
+				return new Promise((resolve, reject) => {
+					signal.addEventListener('abort', () => reject(new Error('AbortError')));
+				});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'analysis');
+		const form = findForm(browser.elementsById.view, 'POST /api/webhook/expanded-analysis-alert');
+		await form.dispatch('submit');
+		await flush();
+
+		expect([...browser.timerDelays.values()]).toContain(900000);
+		for (const fireTimer of browser.timers.values()) fireTimer();
+		await flush();
+		expect(signals[0].aborted).toBe(true);
+
+		await selectView(browser, 'analysis');
+		await findForm(browser.elementsById.view, 'POST /api/news-monitor').dispatch('submit');
+		await flush();
+		expect([...browser.timerDelays.values()]).toContain(900000);
+		for (const fireTimer of browser.timers.values()) fireTimer();
+		await flush();
+		expect(signals[1].aborted).toBe(true);
+
+		await selectView(browser, 'presets');
+		await findForm(browser.elementsById.view, 'POST /api/scanner-presets/{id}/run').dispatch('submit');
+		await flush();
+		expect([...browser.timerDelays.values()]).toContain(900000);
+		for (const fireTimer of browser.timers.values()) fireTimer();
+		await flush();
+		expect(signals[2].aborted).toBe(true);
+
+		await selectView(browser, 'analysis');
+		await findForm(browser.elementsById.view, 'POST /api/webhook/volume-confirmation').dispatch('submit');
+		await flush();
+		expect([...browser.timerDelays.values()]).toContain(360000);
+		for (const fireTimer of browser.timers.values()) fireTimer();
+		await flush();
+		expect(signals[3].aborted).toBe(true);
 	});
 
 	it('shows Firebase sign-in state and sends a verified token after sign-in', async () => {

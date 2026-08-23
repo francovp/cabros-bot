@@ -191,7 +191,7 @@ The Remote Config workflow publishes the server-side template consumed by Fireba
 - Webhook idempotency (`IdempotencyService`) stores reservations and cached responses in Cloud Firestore `idempotency_keys` collection when `ENABLE_FIRESTORE_IDEMPOTENCY=true`. All storage interactions fail open to in-memory caching upon Firestore errors, ensuring webhooks remain responsive across process restarts and horizontal scaling. `/api/status` exposes `featureFlags.firestoreIdempotency` and `dependencies.idempotencyStorage`.
 - Scanner preset CRUD responses include a non-sensitive `storage` object with the effective `mode` (`durable` or `ephemeral`) and `backend` (`firestore` or `memory`). `ENABLE_FIRESTORE_SCANNER_PRESETS=true` enables Firestore independently; `/api/status` and `/api/capabilities` expose the same state under `dependencies.scannerPresetStorage`.
 - Signal Outcome Tracking includes an autonomous background evaluation worker (`SignalOutcomeService.startWorker()`) that runs on a configurable cadence (default: 5 minutes / `SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS=300000`). `SIGNAL_OUTCOME_WORKER_ROLE=web` preserves the existing web timer; `worker` starts only `src/workers/signalOutcomeWorker.js`; `disabled` prevents scheduler startup. Sweeps are single-flight, drain active work on dedicated-worker shutdown, and remain bounded by `SIGNAL_OUTCOME_EVALUATION_BATCH_LIMIT` (default: 50) and `SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS` (default: 30000). `/api/status` exposes role, heartbeat, scanned/pending/evaluated/error counters under `dependencies.signalOutcomeWorker`; a disabled local scheduler reports `ready: false` and `status: "disabled"`; the dedicated process also persists those safe counters to `workerHeartbeats/signal-outcome` for cross-process inspection.
-- Equity outcome evaluation is opt-in via `ENABLE_EQUITY_MARKET_DATA=true` with `EQUITY_MARKET_DATA_PROVIDER=twelve-data` and `TWELVE_DATA_API_KEY`. `EquityMarketDataService` supports `BATS` and `NASDAQ`, uses native `fetch` with bounded AbortController timeouts for `/quote` and `/time_series`, maps provider/quota/malformed-data failures to unavailable outcomes, and never blocks alert delivery. `/api/status` exposes non-sensitive readiness under `featureFlags.equityMarketData` and `dependencies.equityMarketData`.
+- Equity outcome evaluation is opt-in via `ENABLE_EQUITY_MARKET_DATA=true` with `EQUITY_MARKET_DATA_PROVIDER=twelve-data` and `TWELVE_DATA_API_KEY`. `EquityMarketDataService` supports `BATS`, `NASDAQ`, `NYSE`, `AMEX`, and `NYSE ARCA`, uses native `fetch` with bounded AbortController timeouts for `/quote` and `/time_series`, maps provider/quota/malformed-data failures to unavailable outcomes, and never blocks alert delivery. `/api/status` exposes non-sensitive readiness under `featureFlags.equityMarketData` and `dependencies.equityMarketData`.
 
 ---
 
@@ -807,7 +807,7 @@ See `/specs/TERMINOLOGY_GUIDE.md` for extended discussion and examples.
 - GH-313 / CB-128: grounding asset-context parsing now preserves slash-delimited crypto pairs such as `BTC/USDT`; the fallback no longer truncates a symbol before `/`, while explicit exchange and TradingView signal parsing remain unchanged. Regression coverage is in `tests/unit/tradingview-signal-parser.test.js`.
 - GH-291 / CB-112: hardened Render-worker job acceptance and recovery. Indeterminate enqueue responses preserve a replayable idempotency result with the durable `jobId`; the worker periodically reconciles durable queued rows and expired claims after Redis recovery, retries retained failed BullMQ jobs, terminal checkpoint races abort before notification delivery, status-filtered list queries preserve recent-first ordering while bounding Firestore scans, and terminal BullMQ failure handling retries pending callbacks even after the terminal job state was already committed. Production worker/Key Value provisioning remains payment-gated.
 - GH-284 / CB-118: Production Gemini quota recurrence was traced to an unset `NEWS_GEMINI_CONCURRENCY` with a Sentry `POST /api/news-monitor` dry-run carrying 28 symbols. Production uses the existing scheduler with `NEWS_GEMINI_CONCURRENCY=3`; analysis now runs inside the Sentry span so `summary.quota_exhausted` plus the `news.quota_exhausted` and `news.error_count` attributes remain correlated operational signals. Sentry measured 61 quota events through 2026-07-28T13:44:03Z against a Gemini free-tier limit of 15 requests/minute for the affected model; no current percentile or complete request-count measurement is inferred from that error window.
-- GH-287 / CB-119: Added opt-in Twelve Data equity market-data evaluation for `BATS` and `NASDAQ` signals. Entry prices use `/quote`; bounded historical `/time_series` bars calculate return, MFE, and MAE across existing windows. Provider failures remain unavailable/fail-open, metrics expose exchange/provider coverage, and `/api/status`, README, OpenAPI, Postman, and `.env.example` document readiness without secrets. Production remains disabled until plan/licensing and live-provider validation are completed.
+- GH-287 / CB-119: Added opt-in Twelve Data equity market-data evaluation for `BATS`, `NASDAQ`, `NYSE`, `AMEX`, and `NYSE ARCA` signals. Entry prices use `/quote`; bounded historical `/time_series` bars calculate return, MFE, and MAE across existing windows. Provider failures remain unavailable/fail-open, metrics expose exchange/provider coverage, and `/api/status`, README, OpenAPI, Postman, and `.env.example` document readiness without secrets. Production remains disabled until plan/licensing and live-provider validation are completed.
 - GH-292 / CB-122: added an opt-in Render Background Worker entrypoint for signal-outcome evaluation, role-gated web/worker scheduling, graceful dedicated-worker drain, safe heartbeat counters, and paid-worker Blueprint wiring. Production cutover remains explicit: enable tracking and disable the web scheduler only after the worker plan and Firestore credentials are confirmed.
 - GH-318 / CB-130: propagated the existing opt-in `ENABLE_SENTRY` and `SENTRY_DSN` settings to the signal-outcome worker Blueprint as manual values; the worker stays monitoring-disabled when either value is absent.
 - GH-320 / CB-132: TradingView signal parsing and alert-storage extraction now preserve underscore-delimited exchange identifiers such as `FX_IDC:USDCLP(D)`; known non-equity venues (`FX_IDC`, `CME_MINI`, `CBOT_MINI`) stay neutral even when symbols resemble crypto suffixes, while unlisted equity exchanges retain the stock default. Known symbol, timeframe, auth, delivery, and fail-open behavior remain unchanged; focused parser/storage regressions cover recovered exchange, symbol, non-equity precedence, futures, and unlisted-equity metadata.
@@ -1059,6 +1059,15 @@ This feature introduces backend runtime error monitoring using Sentry's Node SDK
 - Integration tests MAY assert that monitoring helpers are called in error paths but MUST keep HTTP responses and notification behavior identical with Sentry enabled vs disabled.
 - Default for Jest and local dev is to run with Sentry disabled (`ENABLE_SENTRY=false` or no `SENTRY_DSN`), unless a test explicitly enables it with a fake DSN.
 
+## Deterministic Sentry External Failure Fingerprints (CB-182 / Issue #419)
+
+`SentryService.captureExternalFailure()` sends external provider exceptions with a deterministic fingerprint made from the event type, notification channel, provider, and last provider error code. Repeated failures with the same tuple group together in Sentry even when attempt counts or sanitized provider messages differ; missing error codes use `error`. This is monitoring-only and does not alter delivery, HTTP responses, or existing fail-safe behavior.
+
+**Coverage**:
+- `tests/unit/sentry-service.test.js` verifies the fingerprint passed to `Sentry.captureException` for an external Telegram failure.
+
+No endpoint, OpenAPI, Postman, environment variable, or Remote Config contract changed.
+
 ### Testing Patterns
 
 **Test locations**:
@@ -1297,6 +1306,17 @@ Job-list, status, and cancel/retry responses use monotonic request versions and 
 
 This is a UI-only consumer change: job persistence, lifecycle semantics, OpenAPI, and Postman contracts remain unchanged.
 
+## Admin Console Fetch Deadlines (CB-164 / Issue #402)
+
+The hosted admin console now bounds browser fetches: `/admin/auth-config` keeps its existing 8-second fallback, `/openapi.json` uses an 8-second contract-load deadline, ordinary protected API requests use 30 seconds, synchronous analysis/news-monitor/market-scanner/scanner-preset/direct-alert/message/replay reports use a 900-second client budget derived from their 120-second analysis and notification-delivery ceilings, and volume confirmation uses 360 seconds for its three sequential 120-second MCP calls. A shared `fetchWithTimeout()` helper keeps response-body parsing inside the abortable operation, clears timers on success/failure, and preserves contract retry plus request error/finally behavior.
+
+**Coverage**:
+- `src/admin/admin.js` and generated `public/admin/admin.js` — shared browser deadline helper for auth config, OpenAPI contract, and API requests.
+- `tests/unit/admin-client.test.js` — proves stalled contract and protected requests abort, settle through existing error UI, clear timers, and cover every synchronous long-running console route.
+- `tests/integration/openapi-docs.test.js` — keeps the public admin asset contract check aligned with the deadline helper.
+
+No new environment variable, endpoint, OpenAPI, Postman, or Remote Config change was needed.
+
 ## Admin Alert Analytics and Export Workflows (CB-120 / Issue #288)
 
 The in-app `/admin` Alerts view now consumes the existing protected `GET /api/alerts/summary` and `GET /api/alerts/export` operations through dedicated bounded report forms. Summary windows default to the latest 24 hours and render returned aggregate data readably; exports require `from`/`to`, support JSONL and CSV, and download the response blob using its content type. Source/enriched filters are applied before bounded summary aggregation with raw Firestore cursors; filtered reports omit shadow-mode metrics because that service has no matching filters.
@@ -1322,6 +1342,17 @@ Raw alert text remains disabled by default and requires an explicit checkbox. Th
 **Coverage**:
 - `tests/unit/remote-config-service.test.js` — Covers malformed, non-finite, negative, zero, out-of-range, valid, and boundary environment values.
 - `tests/unit/tradingview-mcp-service.test.js` — Verifies runtime MCP timing values remain finite and positive.
+
+## TradingView MCP Enrichment Budget Retries (CB-183 / Issue #422)
+
+`TradingViewMcpService.enrichFromSignal()` keeps the existing total enrichment deadline and gives base analysis the full budget when optional enrichment is disabled; otherwise it reserves a bounded base-analysis sub-budget. Each `coin_analysis` attempt receives its own remaining-time abort signal, and retry delays are capped to the available base deadline, so retries cannot outlive the total envelope. Volume, confluence, and multi-timeframe calls combine their per-call signal with the remaining total budget; optional timeout/failure preserves successful base enrichment and marks the result `tradingViewEnrichmentStatus: "partial"`. Base failures remain fail-open and are recorded as `"failed"` in sanitized runtime and Firestore alert telemetry. CSV exports include the allow-listed enrichment status.
+
+**Coverage**:
+- `src/services/tradingview/TradingViewMcpService.js` — Bounded base retry sub-budget, remaining-budget abort propagation, optional fail-open handling, and full/partial/failed runtime counters.
+- `tests/unit/tradingview-mcp-service.test.js` — Covers full-budget base analysis, retry after base timeout, capped retry delays, optional timeout preserving base data, and failed status accounting.
+- `src/services/storage/AlertStorageService.js` — Persists only the allow-listed enrichment outcome status.
+
+`TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS`, `TRADINGVIEW_MCP_TIMEOUT_MS`, and `TRADINGVIEW_MCP_MAX_RETRIES` remain the existing environment/Remote Config controls; no new environment variable was added.
 
 ## News Monitor Cached No-Event Analyses (CB-146 / Issue #363)
 
@@ -1351,6 +1382,17 @@ The analyzer cooldown regression test loads `geminiQuotaManager` and `NewsAnalyz
 - `tests/unit/analyzer.test.js` — Verifies the existing cooldown-timeout regression uses the isolated manager and produces the expected timeout after cooldown waiting.
 
 This is test-only hardening; runtime code, endpoints, OpenAPI, Postman, and environment configuration remain unchanged.
+
+## TradingView MCP Risk Metadata (CB-175 / Issue #412)
+
+TradingView MCP alert enrichment derives optional directional invalidation, target, setup, and risk/reward metadata from the MCP analysis. Numeric and numeric-string ATR values are normalized before validation. ATR-derived levels are emitted only when the supplied ATR and every resulting level are finite, positive, and on the correct side of entry; a rejected supplied ATR suppresses the entire numeric risk block instead of falling back to a synthetic stop. Setup metadata remains independently optional, uses explicit/inferred evidence only, and mean-reversion inference must align Bollinger position with signal direction. When Gemini and MCP enrichment are combined, invalidation, target, and risk/reward are selected atomically from one complete provider block to prevent inconsistent ratios.
+
+**Coverage**:
+- `src/services/tradingview/TradingViewMcpService.js` — MCP risk derivation, ATR rejection, standalone setup metadata, and side-aware setup inference.
+- `src/controllers/webhooks/handlers/alert/grounding.js` — Atomic Gemini/MCP risk-block selection.
+- `tests/unit/tradingview-mcp-service.test.js` and `tests/unit/alert-handler.test.js` — Directional calculations, invalid ATR/fallback suppression, setup inference, and provider merge invariants.
+
+No endpoint, OpenAPI, Postman, environment variable, or Remote Config contract changed; existing optional response fields and formatter support remain in place.
 
 ## Telegram Delivery Retry and Telemetry (CB-178 / Issue #415)
 
