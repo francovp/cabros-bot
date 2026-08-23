@@ -141,6 +141,14 @@ describe('Status endpoints', () => {
 			lastErrorCategory: null,
 			successCount: 0,
 			failureCount: 0,
+			circuitBreaker: {
+				state: 'closed',
+				consecutiveFailures: 0,
+				openedAt: null,
+				lastStateChangeAt: null,
+				failureThreshold: 5,
+				cooldownMs: 600000,
+			},
 		});
 		expect(response.body.dependencies.braveSearch).toEqual({
 			enabled: false,
@@ -292,6 +300,14 @@ describe('Status endpoints', () => {
 			lastErrorCategory: null,
 			successCount: 0,
 			failureCount: 0,
+			circuitBreaker: {
+				state: 'closed',
+				consecutiveFailures: 0,
+				openedAt: null,
+				lastStateChangeAt: null,
+				failureThreshold: 5,
+				cooldownMs: 600000,
+			},
 		});
 	});
 
@@ -530,6 +546,14 @@ describe('Status endpoints', () => {
 			lastErrorCategory: null,
 			successCount: 0,
 			failureCount: 0,
+			circuitBreaker: {
+				state: 'closed',
+				consecutiveFailures: 0,
+				openedAt: null,
+				lastStateChangeAt: null,
+				failureThreshold: 5,
+				cooldownMs: 600000,
+			},
 		});
 	});
 
@@ -554,6 +578,14 @@ describe('Status endpoints', () => {
 			lastErrorCategory: null,
 			successCount: 0,
 			failureCount: 0,
+			circuitBreaker: {
+				state: 'closed',
+				consecutiveFailures: 0,
+				openedAt: null,
+				lastStateChangeAt: null,
+				failureThreshold: 5,
+				cooldownMs: 600000,
+			},
 		});
 	});
 
@@ -861,6 +893,14 @@ describe('Status endpoints', () => {
 			lastErrorCategory: null,
 			successCount: 0,
 			failureCount: 0,
+			circuitBreaker: {
+				state: 'closed',
+				consecutiveFailures: 0,
+				openedAt: null,
+				lastStateChangeAt: null,
+				failureThreshold: 5,
+				cooldownMs: 600000,
+			},
 		});
 	});
 

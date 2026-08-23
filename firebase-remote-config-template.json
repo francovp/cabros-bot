@@ -56,6 +56,27 @@
       "description": "Maximum TradingView enrichment budget in milliseconds",
       "valueType": "NUMBER"
     },
+    "TRADINGVIEW_MCP_BREAKER_FAILURE_THRESHOLD": {
+      "defaultValue": {
+        "value": "5"
+      },
+      "description": "Consecutive MCP failures required to open the circuit breaker and page operators",
+      "valueType": "NUMBER"
+    },
+    "TRADINGVIEW_MCP_BREAKER_COOLDOWN_MS": {
+      "defaultValue": {
+        "value": "600000"
+      },
+      "description": "Circuit breaker open cooldown duration in milliseconds before half-open probe",
+      "valueType": "NUMBER"
+    },
+    "TRADINGVIEW_MCP_PAGE_COOLDOWN_MS": {
+      "defaultValue": {
+        "value": "3600000"
+      },
+      "description": "Operator degradation paging cooldown in milliseconds between admin notifications",
+      "valueType": "NUMBER"
+    },
     "ENABLE_MESSAGE_FOOTER_METADATA": {
       "defaultValue": {
         "value": "true"

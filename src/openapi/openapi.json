@@ -2447,7 +2447,15 @@
                   "lastFailureAt": null,
                   "lastErrorCategory": null,
                   "successCount": 0,
-                  "failureCount": 0
+                  "failureCount": 0,
+                  "circuitBreaker": {
+                    "state": "closed",
+                    "consecutiveFailures": 0,
+                    "openedAt": null,
+                    "lastStateChangeAt": null,
+                    "failureThreshold": 5,
+                    "cooldownMs": 600000
+                  }
                 },
                 "equityMarketData": {
                   "provider": null,
