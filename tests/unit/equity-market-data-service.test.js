@@ -122,12 +122,12 @@ describe('EquityMarketDataService', () => {
 		})).rejects.toMatchObject({ reason: EquityMarketDataService.REASONS.TIMEOUT });
 	});
 
-	describe('Exchange support for NYSE, AMEX, and NYSE ARCA', () => {
-		it('includes BATS, NASDAQ, NYSE, AMEX, and NYSE ARCA in SUPPORTED_EXCHANGES', () => {
-			expect(EquityMarketDataService.SUPPORTED_EXCHANGES).toEqual(['BATS', 'NASDAQ', 'NYSE', 'AMEX', 'NYSE ARCA']);
+	describe('Exchange support for NYSE, AMEX, NYSE ARCA, FX_IDC, and SPCFD', () => {
+		it('includes BATS, NASDAQ, NYSE, AMEX, NYSE ARCA, FX_IDC, and SPCFD in SUPPORTED_EXCHANGES', () => {
+			expect(EquityMarketDataService.SUPPORTED_EXCHANGES).toEqual(['BATS', 'NASDAQ', 'NYSE', 'AMEX', 'NYSE ARCA', 'FX_IDC', 'SPCFD']);
 		});
 
-		it('identifies NYSE, AMEX, and NYSE ARCA as supported exchanges', () => {
+		it('identifies NYSE, AMEX, NYSE ARCA, FX_IDC, and SPCFD as supported exchanges', () => {
 			expect(EquityMarketDataService.isSupportedExchange('NYSE')).toBe(true);
 			expect(EquityMarketDataService.isSupportedExchange('AMEX')).toBe(true);
 			expect(EquityMarketDataService.isSupportedExchange('NYSE ARCA')).toBe(true);
@@ -135,10 +135,61 @@ describe('EquityMarketDataService', () => {
 			expect(EquityMarketDataService.isSupportedExchange('ARCA')).toBe(true);
 			expect(EquityMarketDataService.isSupportedExchange('BATS')).toBe(true);
 			expect(EquityMarketDataService.isSupportedExchange('NASDAQ')).toBe(true);
+			expect(EquityMarketDataService.isSupportedExchange('NASDAQ_DLY')).toBe(true);
+			expect(EquityMarketDataService.isSupportedExchange('FX_IDC')).toBe(true);
+			expect(EquityMarketDataService.isSupportedExchange('FX')).toBe(true);
+			expect(EquityMarketDataService.isSupportedExchange('FOREX')).toBe(true);
+			expect(EquityMarketDataService.isSupportedExchange('SPCFD')).toBe(true);
 			expect(EquityMarketDataService.isSupportedExchange('UNKNOWN')).toBe(false);
 			expect(EquityMarketDataService.isSupportedExchange('BINANCE')).toBe(false);
 			expect(EquityMarketDataService.isSupportedExchange('')).toBe(false);
 			expect(EquityMarketDataService.isSupportedExchange(null)).toBe(false);
+		});
+
+		it('normalizes symbols correctly for forex and parenthetical timeframe suffixes', () => {
+			expect(EquityMarketDataService.normalizeSymbol('USDCLP')).toBe('USD/CLP');
+			expect(EquityMarketDataService.normalizeSymbol('USDCLP(D)')).toBe('USD/CLP');
+			expect(EquityMarketDataService.normalizeSymbol('EURUSD')).toBe('EUR/USD');
+			expect(EquityMarketDataService.normalizeSymbol('SPX(D)')).toBe('SPX');
+			expect(EquityMarketDataService.normalizeSymbol('NDX(1h)')).toBe('NDX');
+			expect(EquityMarketDataService.normalizeSymbol('AAPL')).toBe('AAPL');
+		});
+
+		it('resolves query exchange correctly', () => {
+			expect(EquityMarketDataService.resolveQueryExchange('NASDAQ_DLY')).toBe('NASDAQ');
+			expect(EquityMarketDataService.resolveQueryExchange('NYSE_ARCA')).toBe('NYSE ARCA');
+			expect(EquityMarketDataService.resolveQueryExchange('FX_IDC')).toBeUndefined();
+			expect(EquityMarketDataService.resolveQueryExchange('FX')).toBeUndefined();
+			expect(EquityMarketDataService.resolveQueryExchange('SPCFD')).toBeUndefined();
+			expect(EquityMarketDataService.resolveQueryExchange('UNKNOWN')).toBeUndefined();
+			expect(EquityMarketDataService.resolveQueryExchange('NYSE')).toBe('NYSE');
+		});
+
+		it('fetches quotes for FX_IDC, SPCFD, and NASDAQ_DLY symbols with proper symbol normalization and no exchange parameter for FX/CFD', async () => {
+			configure();
+			global.fetch = jest.fn().mockResolvedValue({
+				ok: true,
+				status: 200,
+				json: async () => ({ status: 'ok', close: '950.50' }),
+			});
+
+			const fxPrice = await EquityMarketDataService.getEntryPrice({ symbol: 'USDCLP(D)', exchange: 'FX_IDC' });
+			expect(fxPrice).toBe(950.50);
+			const fxUrl = new URL(global.fetch.mock.calls[0][0]);
+			expect(fxUrl.searchParams.get('symbol')).toBe('USD/CLP');
+			expect(fxUrl.searchParams.get('exchange')).toBeNull();
+
+			const spcfdPrice = await EquityMarketDataService.getEntryPrice({ symbol: 'SPX(D)', exchange: 'SPCFD' });
+			expect(spcfdPrice).toBe(950.50);
+			const spcfdUrl = new URL(global.fetch.mock.calls[1][0]);
+			expect(spcfdUrl.searchParams.get('symbol')).toBe('SPX');
+			expect(spcfdUrl.searchParams.get('exchange')).toBeNull();
+
+			const nasdaqDlyPrice = await EquityMarketDataService.getEntryPrice({ symbol: 'NDX(D)', exchange: 'NASDAQ_DLY' });
+			expect(nasdaqDlyPrice).toBe(950.50);
+			const nasdaqDlyUrl = new URL(global.fetch.mock.calls[2][0]);
+			expect(nasdaqDlyUrl.searchParams.get('symbol')).toBe('NDX');
+			expect(nasdaqDlyUrl.searchParams.get('exchange')).toBe('NASDAQ');
 		});
 
 		it('fetches quotes for NYSE and AMEX symbols with normalized exchange parameters', async () => {

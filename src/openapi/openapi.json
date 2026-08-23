@@ -2468,7 +2468,9 @@
                     "NASDAQ",
                     "NYSE",
                     "AMEX",
-                    "NYSE ARCA"
+                    "NYSE ARCA",
+                    "FX_IDC",
+                    "SPCFD"
                   ],
                   "timeoutMs": 5000
                 },
