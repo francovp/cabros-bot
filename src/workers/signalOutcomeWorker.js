@@ -4,6 +4,7 @@ require('dotenv').config();
 require('../../instrument.js');
 
 const SignalOutcomeService = require('../services/storage/SignalOutcomeService');
+const sentryService = require('../services/monitoring/SentryService');
 
 const status = SignalOutcomeService.getWorkerStatus();
 if (status.role !== 'worker') {
@@ -33,6 +34,9 @@ if (status.role !== 'worker') {
 				if (keepAlive) {
 					clearInterval(keepAlive);
 				}
+				return sentryService.flush(2000);
+			})
+			.finally(() => {
 				process.exit(0);
 			});
 

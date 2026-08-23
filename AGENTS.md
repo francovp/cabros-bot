@@ -1394,6 +1394,24 @@ TradingView MCP alert enrichment derives optional directional invalidation, targ
 
 No endpoint, OpenAPI, Postman, environment variable, or Remote Config contract changed; existing optional response fields and formatter support remain in place.
 
+## Telegram Delivery Retry and Telemetry (CB-178 / Issue #415)
+
+`TelegramService.send()` retries only definitive Telegram `429` responses with the provider's `retry_after` delay; transport and `5xx` failures are not retried because Telegram has no `sendMessage` idempotency key and the request may already have been accepted. Each Telegraf API attempt has a bounded 10-second deadline, while retry waits have a 5-second per-delay cap and a shared 10-second budget across all message chunks. MarkdownV2 remains the primary delivery mode; parse failures use a plain-text retry with every MarkdownV2 formatter escape removed. Every result reports `statusCode`, `category`, `attemptCount`, and `durationMs`, including zero-attempt, partial chunk, and aborted/configuration paths, so `NotificationManager` preserves exact attempt telemetry for Sentry and admin alerts.
+
+**Coverage**:
+- `tests/unit/telegram-service.test.js` — Covers parse fallback unescaping, `429` retry-after handling, ambiguous transport failures, shared retry budgets, retry-budget aborts, and delivery telemetry.
+
+No endpoint, OpenAPI, Postman, environment variable, or Remote Config contract changed.
+
+## Standalone Worker Sentry Shutdown Flush (CB-179 / Issue #416)
+
+The dedicated BullMQ worker and signal-outcome worker now await the existing fail-safe `sentryService.flush(2000)` after draining work and before exiting on `SIGTERM`/`SIGINT`, including the BullMQ worker's nonzero-exit error path. This preserves shutdown telemetry without changing worker gates, drain bounds, or exit codes.
+
+**Coverage**:
+- `tests/unit/worker-sentry-shutdown.test.js` verifies drain, flush, and exit ordering for both standalone workers.
+
+No endpoint, OpenAPI, Postman, environment variable, or Remote Config change was required.
+
 ## News Monitor Indeterminate Lease Persistence (CB-189 / Issue #426)
 
 Cached news-monitor retries now distinguish active delivery ownership from durable persistence ownership. Proven lease loss still aborts the retry and removes its result from the response; an indeterminate renewal (`null` or an exception) keeps a successful delivery result in the current response and local cache while skipping only the durable cache merge, preventing a stale replica from overwriting a newer result. Persistent refreshes preserve successful finalized local-only results per delivery channel instead of replacing them with older Firestore snapshots; failed indeterminate retries do not create a local overlay. Per-channel timer renewals are serialized, and in-flight/final renewals are bounded by the analysis deadline; only channels still unresolved at that deadline lose persistence ownership.
@@ -1404,3 +1422,4 @@ Cached news-monitor retries now distinguish active delivery ownership from durab
 - `tests/integration/news-monitor-cache.test.js` and `tests/unit/news-monitor-persistent-dedup.test.js` — Verify successful indeterminate retries are retained locally, stalled renewals are bounded, completed channels keep durable persistence, and mixed-channel stale Firestore refreshes do not reintroduce failures.
 
 No endpoint, OpenAPI, Postman, environment variable, or Remote Config contract changed.
+
