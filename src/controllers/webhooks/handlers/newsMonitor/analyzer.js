@@ -598,18 +598,29 @@ class NewsAnalyzer {
 								const leaseOwnership = new Map(
 									claimedRetryChannels.map((channel) => [channel, true]),
 								);
+								const persistenceOwnership = new Map(
+									claimedRetryChannels.map((channel) => [channel, true]),
+								);
 								const markLeaseOwnershipLost = (channel) => {
 									if (leaseOwnership.get(channel)) {
 										leaseOwnership.set(channel, false);
+										persistenceOwnership.set(channel, false);
 										leaseAbortControllers.get(channel)?.abort('Cached delivery lease ownership lost');
 									}
 								};
+								const markPersistenceOwnershipLost = (channel) => {
+									persistenceOwnership.set(channel, false);
+								};
 								const renewLease = async (channel) => {
 									try {
-										if (await this.cache.renewDelivery(symbol, category, channel) === false) {
+										const renewed = await this.cache.renewDelivery(symbol, category, channel);
+										if (renewed === false) {
 											markLeaseOwnershipLost(channel);
+										} else if (renewed !== true) {
+											markPersistenceOwnershipLost(channel);
 										}
 									} catch (error) {
+										markPersistenceOwnershipLost(channel);
 										console.warn('[Analyzer] Cached delivery lease renewal indeterminate:', error.message);
 									}
 								};
@@ -629,19 +640,20 @@ class NewsAnalyzer {
 									);
 									await Promise.all(claimedRetryChannels.map(renewLease));
 									const ownedRetryChannels = claimedRetryChannels.filter((channel) => leaseOwnership.get(channel));
+									const persistenceRetryChannels = claimedRetryChannels.filter((channel) => persistenceOwnership.get(channel));
 									deliveryResults = mergeDeliveryResults(
 										activeCachedDeliveryResults,
 										retryResults.filter((result) => ownedRetryChannels.includes(result.channel)),
 										requestedChannels,
 									);
-									if (ownedRetryChannels.length > 0) {
+									if (persistenceRetryChannels.length > 0) {
 										await this.cache.set(symbol, category, {
 											...cached,
 											routing: getCachedRoutingMetadata(routing, cached.routing, notificationMgr),
 											deliveryResults,
 										}, {
 											preserveTtl: true,
-											deliveryChannels: ownedRetryChannels,
+											deliveryChannels: persistenceRetryChannels,
 											awaitPersistence: true,
 										});
 									}

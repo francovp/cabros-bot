@@ -366,10 +366,11 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 			}
 		});
 
-		it('should keep a successful retry when lease renewal is indeterminate', async () => {
+		it('should keep a successful retry but skip durable persistence when lease renewal is indeterminate', async () => {
 			process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '';
 			const cache = getCacheInstance();
 			const intervalSpy = jest.spyOn(cache, 'getDeliveryLeaseRenewIntervalMs').mockReturnValue(1);
+			const cacheSetSpy = jest.spyOn(cache, 'set');
 			const renewSpy = jest.spyOn(cache, 'renewDelivery').mockResolvedValue(null);
 			const { getNotificationManager } = require('../../src/controllers/webhooks/handlers/alert/alert');
 			const telegramSend = jest.spyOn(getNotificationManager().channels.get('telegram'), 'send')
@@ -388,10 +389,12 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 				expect(retry.body.results[0].deliveryResults).toEqual([
 					expect.objectContaining({ channel: 'telegram', success: true, messageId: 'telegram-after-storage-error' }),
 				]);
+				expect(cacheSetSpy.mock.calls.some(([, , , options]) => options?.awaitPersistence === true)).toBe(false);
 				expect(telegramSend).toHaveBeenCalledTimes(2);
 				expect(renewSpy).toHaveBeenCalled();
 			} finally {
 				intervalSpy.mockRestore();
+				cacheSetSpy.mockRestore();
 				renewSpy.mockRestore();
 			}
 		});
