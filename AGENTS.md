@@ -1402,3 +1402,13 @@ No endpoint, OpenAPI, Postman, environment variable, or Remote Config contract c
 - `tests/unit/telegram-service.test.js` — Covers parse fallback unescaping, `429` retry-after handling, ambiguous transport failures, shared retry budgets, retry-budget aborts, and delivery telemetry.
 
 No endpoint, OpenAPI, Postman, environment variable, or Remote Config contract changed.
+
+## Standalone Worker Sentry Shutdown Flush (CB-179 / Issue #416)
+
+The dedicated BullMQ worker and signal-outcome worker now await the existing fail-safe `sentryService.flush(2000)` after draining work and before exiting on `SIGTERM`/`SIGINT`, including the BullMQ worker's nonzero-exit error path. This preserves shutdown telemetry without changing worker gates, drain bounds, or exit codes.
+
+**Coverage**:
+- `tests/unit/worker-sentry-shutdown.test.js` verifies drain, flush, and exit ordering for both standalone workers.
+
+No endpoint, OpenAPI, Postman, environment variable, or Remote Config change was required.
+
