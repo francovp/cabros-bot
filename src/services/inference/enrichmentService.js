@@ -81,35 +81,70 @@ class EnrichmentService {
    * Enrich alert with secondary LLM analysis
    * Applies conservative confidence selection
    * @param {Object} geminiAnalysis - Gemini analysis result
+   * @param {Object} [options] - Additional options (e.g. signal, timeout)
    * @returns {Promise<Object|null>} Enrichment metadata or null on failure
    */
-	async enrichAlert(geminiAnalysis) {
+	async enrichAlert(geminiAnalysis, options = {}) {
 		if (!this.isEnabled()) {
 			console.debug('[EnrichmentService] Enrichment disabled');
 			return null;
 		}
 
 		const { confidence: geminiConfidence } = geminiAnalysis;
+		const timeoutBudgetMs = (typeof options?.timeout === 'number' && options.timeout > 0)
+			? options.timeout
+			: this.timeout;
+
+		const timeoutController = new AbortController();
+		let timeoutId = null;
+		if (timeoutBudgetMs > 0) {
+			timeoutId = setTimeout(() => {
+				timeoutController.abort(new Error(`Enrichment budget exceeded (${timeoutBudgetMs}ms)`));
+			}, timeoutBudgetMs);
+		}
+
+		const combinedSignal = options?.signal
+			? AbortSignal.any([options.signal, timeoutController.signal])
+			: timeoutController.signal;
 
 		try {
-		// Call LLM enrichment with retry logic
+			// Call LLM enrichment with retry logic
 			const enrichmentResponse = await sendWithRetry(
-				async () => {
+				async ({ signal: retrySignal } = {}) => {
 					const startTime = Date.now();
 					const { systemPrompt, userPrompt } = await this.buildEnrichmentPrompt(geminiAnalysis);
-					const result = await this.azureClient.chatCompletion(systemPrompt, userPrompt);
+					const activeSignal = retrySignal || combinedSignal;
+					const result = await this.azureClient.chatCompletion(systemPrompt, userPrompt, { signal: activeSignal });
 					const durationMs = Date.now() - startTime;
-					const usage = normalizeUsageMetadata(result.usage) || { inputTokens: 0, outputTokens: 0 };
+					const usage = normalizeUsageMetadata(result?.usage) || { inputTokens: 0, outputTokens: 0 };
 
 					sentryService.captureLlmMetric({ model: process.env.AZURE_LLM_MODEL || 'unknown', inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, durationMs });
-					return result;
+					const rawText = typeof result === 'string' ? result : result?.text;
+					return {
+						success: true,
+						text: rawText,
+						raw: result,
+					};
 				},
 				3,
 				console,
+				{ signal: combinedSignal },
 			);
 
+			const isSuccess = enrichmentResponse && (
+				enrichmentResponse.success === true ||
+				typeof enrichmentResponse === 'string' ||
+				typeof enrichmentResponse.text === 'string'
+			);
+
+			if (!isSuccess) {
+				console.warn('[EnrichmentService] Enrichment failed, using Gemini confidence:', enrichmentResponse?.error || 'Unknown error');
+				return null;
+			}
+
 			// Parse LLM response
-			const llmResult = this.azureClient.parseJsonResponse(enrichmentResponse.text);
+			const responseText = enrichmentResponse.text || (typeof enrichmentResponse === 'string' ? enrichmentResponse : enrichmentResponse.raw?.text || enrichmentResponse.raw);
+			const llmResult = this.azureClient.parseJsonResponse(responseText);
 
 			// Apply conservative confidence selection
 			const finalConfidence = Math.min(geminiConfidence, llmResult.confidence);
@@ -118,7 +153,7 @@ class EnrichmentService {
 				original_confidence: geminiConfidence,
 				enriched_confidence: finalConfidence,
 				enrichment_applied: true,
-				reasoning_excerpt: llmResult.reasoning.substring(0, 500),
+				reasoning_excerpt: llmResult.reasoning ? llmResult.reasoning.substring(0, 500) : '',
 				model_name: process.env.AZURE_LLM_MODEL || 'unknown',
 				processing_time_ms: 0,
 			};
@@ -133,6 +168,10 @@ class EnrichmentService {
 		} catch (error) {
 			console.warn('[EnrichmentService] Enrichment failed, using Gemini confidence:', error.message);
 			return null;
+		} finally {
+			if (timeoutId) {
+				clearTimeout(timeoutId);
+			}
 		}
 	}
 
