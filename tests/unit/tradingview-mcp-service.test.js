@@ -169,6 +169,198 @@ describe('TradingViewMcpService', () => {
 		}));
 	});
 
+	it('derives directional risk metadata from MCP price, ATR, and support/resistance data', async () => {
+		const service = new TradingViewMcpService({
+			maxRetries: 1,
+			defaultExchange: 'BINANCE',
+			defaultTimeframe: '1h',
+			logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
+		});
+
+		service.callCoinAnalysis = jest.fn().mockResolvedValue({
+			price_data: { current_price: 100 },
+			technical_indicators: { atr: 4 },
+			support_resistance: {
+				nearest_support: 88,
+				nearest_resistance: 112,
+			},
+			market_structure: { trend: 'Bullish' },
+		});
+
+		const result = await service.enrichFromAlertText('BTCUSDT(240) pasó a señal de COMPRA');
+
+		expect(result).toEqual(expect.objectContaining({
+			invalidation_level: 94,
+			target_level: 112,
+			setup_type: 'trend_continuation',
+			risk_reward_ratio: 2,
+		}));
+	});
+
+	it('omits setup type when MCP provides no setup evidence', async () => {
+		const service = new TradingViewMcpService({
+			maxRetries: 1,
+			defaultExchange: 'BINANCE',
+			defaultTimeframe: '1h',
+			logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
+		});
+
+		service.callCoinAnalysis = jest.fn().mockResolvedValue({
+			price_data: { current_price: 100 },
+			technical_indicators: { atr: 4 },
+			support_resistance: { nearest_resistance: 112 },
+		});
+
+		const result = await service.enrichFromAlertText('BTCUSDT(240) pasó a señal de COMPRA');
+
+		expect(result).toEqual(expect.objectContaining({
+			invalidation_level: 94,
+			target_level: 112,
+			risk_reward_ratio: 2,
+		}));
+		expect(result).not.toHaveProperty('setup_type');
+	});
+
+	it('inverts calculated invalidation and target levels for sell signals', async () => {
+		const service = new TradingViewMcpService({
+			maxRetries: 1,
+			defaultExchange: 'BINANCE',
+			defaultTimeframe: '1h',
+			logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
+		});
+
+		service.callCoinAnalysis = jest.fn().mockResolvedValue({
+			price_data: { current_price: 100 },
+			technical_indicators: { atr: 4 },
+			support_resistance: { nearest_support: 88 },
+			market_structure: { trend: 'Bearish' },
+		});
+
+		const result = await service.enrichFromAlertText('BTCUSDT(240) pasó a señal de VENTA');
+
+		expect(result).toEqual(expect.objectContaining({
+			invalidation_level: 106,
+			target_level: 88,
+			setup_type: 'trend_continuation',
+			risk_reward_ratio: 2,
+		}));
+	});
+
+	it('omits risk metadata when ATR-derived levels are invalid', async () => {
+		const service = new TradingViewMcpService({
+			maxRetries: 1,
+			defaultExchange: 'BINANCE',
+			defaultTimeframe: '1h',
+			logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
+		});
+
+		service.callCoinAnalysis = jest.fn().mockResolvedValue({
+			price_data: { current_price: 0.01 },
+			technical_indicators: { atr: 0.02 },
+		});
+
+		const result = await service.enrichFromAlertText('SHIBUSDT(240) pasó a señal de COMPRA');
+
+		expect(result).not.toHaveProperty('invalidation_level');
+		expect(result).not.toHaveProperty('target_level');
+		expect(result).not.toHaveProperty('risk_reward_ratio');
+		expect(result).not.toHaveProperty('setup_type');
+	});
+
+	it('omits the full risk block when rejected ATR leaves a valid alternate target', async () => {
+		const service = new TradingViewMcpService({
+			maxRetries: 1,
+			defaultExchange: 'BINANCE',
+			defaultTimeframe: '1h',
+			logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
+		});
+
+		service.callCoinAnalysis = jest.fn().mockResolvedValue({
+			price_data: { current_price: 0.01 },
+			technical_indicators: { atr: 0.02 },
+			support_resistance: { nearest_resistance: 0.03 },
+		});
+
+		const result = await service.enrichFromAlertText('SHIBUSDT(240) pasó a señal de COMPRA');
+
+		expect(result).not.toHaveProperty('invalidation_level');
+		expect(result).not.toHaveProperty('target_level');
+		expect(result).not.toHaveProperty('risk_reward_ratio');
+		expect(result).not.toHaveProperty('setup_type');
+	});
+
+	it('treats string-valued ATR as supplied when validating risk metadata', async () => {
+		const service = new TradingViewMcpService({
+			maxRetries: 1,
+			defaultExchange: 'BINANCE',
+			defaultTimeframe: '1h',
+			logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
+		});
+
+		service.callCoinAnalysis = jest.fn().mockResolvedValue({
+			price_data: { current_price: 0.01 },
+			technical_indicators: { atr: '0.02' },
+			support_resistance: { nearest_resistance: 0.03 },
+		});
+
+		const result = await service.enrichFromAlertText('SHIBUSDT(240) pasó a señal de COMPRA');
+
+		expect(result).not.toHaveProperty('invalidation_level');
+		expect(result).not.toHaveProperty('target_level');
+		expect(result).not.toHaveProperty('risk_reward_ratio');
+		expect(result).not.toHaveProperty('setup_type');
+	});
+
+	it('only infers mean reversion when Bollinger position aligns with signal side', async () => {
+		const service = new TradingViewMcpService({
+			maxRetries: 1,
+			defaultExchange: 'BINANCE',
+			defaultTimeframe: '1h',
+			logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
+		});
+
+		service.callCoinAnalysis = jest.fn()
+			.mockResolvedValueOnce({
+				price_data: { current_price: 100 },
+				technical_indicators: { atr: 4 },
+				bollinger_bands: { position: 'Upper Half' },
+				support_resistance: { nearest_resistance: 112 },
+			})
+			.mockResolvedValueOnce({
+				price_data: { current_price: 100 },
+				technical_indicators: { atr: 4 },
+				bollinger_bands: { position: 'Lower Half' },
+				support_resistance: { nearest_support: 88 },
+			});
+
+		const buyResult = await service.enrichFromAlertText('BTCUSDT(240) pasó a señal de COMPRA');
+		const sellResult = await service.enrichFromAlertText('BTCUSDT(240) pasó a señal de VENTA');
+
+		expect(buyResult).not.toHaveProperty('setup_type');
+		expect(sellResult).not.toHaveProperty('setup_type');
+	});
+
+	it('preserves an explicit setup type without complete numeric risk data', async () => {
+		const service = new TradingViewMcpService({
+			maxRetries: 1,
+			defaultExchange: 'BINANCE',
+			defaultTimeframe: '1h',
+			logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
+		});
+
+		service.callCoinAnalysis = jest.fn().mockResolvedValue({
+			price_data: { current_price: 100 },
+			setup_type: 'breakout',
+		});
+
+		const result = await service.enrichFromAlertText('BTCUSDT(240) pasó a señal de COMPRA');
+
+		expect(result.setup_type).toBe('breakout');
+		expect(result).not.toHaveProperty('invalidation_level');
+		expect(result).not.toHaveProperty('target_level');
+		expect(result).not.toHaveProperty('risk_reward_ratio');
+	});
+
 	it('suppresses the metadata footer when explicitly disabled', async () => {
 		process.env.ENABLE_MESSAGE_FOOTER_METADATA = 'false';
 		const service = new TradingViewMcpService({

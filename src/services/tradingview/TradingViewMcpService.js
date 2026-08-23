@@ -2,6 +2,11 @@
 
 const { sendWithRetry } = require('../../lib/retryHelper');
 const { parseTradingViewSignal, normalizeTradingViewTimeframe } = require('./parseTradingViewSignal');
+const {
+	getStopLossMeta,
+	getTakeProfitTarget,
+	getRiskRewardRatio,
+} = require('./expandedAnalysisAlertReport');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 
 const DEFAULT_TRADINGVIEW_MCP_URL = 'https://tradingview-mcp-yp6b.onrender.com/mcp';
@@ -35,6 +40,46 @@ function createRuntimeStatus() {
 			failedCount: 0,
 		},
 	};
+}
+
+const SETUP_TYPES = new Set(['breakout', 'mean_reversion', 'trend_continuation', 'reversal']);
+
+function inferSetupType(analysis, side) {
+	const explicit = typeof analysis.setup_type === 'string' ? analysis.setup_type.trim().toLowerCase() : '';
+	if (SETUP_TYPES.has(explicit)) {
+		return explicit;
+	}
+
+	const trend = String(analysis.market_structure?.trend || '').toLowerCase();
+	const aligned = side === 'SELL'
+		? /bearish|downtrend|bajista/.test(trend)
+		: /bullish|uptrend|alcista/.test(trend);
+	if (aligned) {
+		return 'trend_continuation';
+	}
+
+	const bollingerPosition = String(
+		analysis.bollinger_bands?.position || analysis.bollinger_analysis?.position || '',
+	).toLowerCase();
+	const meanReversionAligned = side === 'SELL'
+		? /upper|overbought/.test(bollingerPosition)
+		: /lower|oversold/.test(bollingerPosition);
+	if (meanReversionAligned) {
+		return 'mean_reversion';
+	}
+
+	return null;
+}
+
+function isValidRiskLevel(value, price, side, role) {
+	if (!Number.isFinite(value) || value <= 0 || !Number.isFinite(price) || price <= 0) {
+		return false;
+	}
+
+	const isShort = side === 'SELL';
+	return role === 'stop'
+		? (isShort ? value > price : value < price)
+		: (isShort ? value < price : value > price);
 }
 
 class TradingViewMcpService {
@@ -669,6 +714,40 @@ class TradingViewMcpService {
 		const marketSentiment = (analysis && analysis.market_sentiment) || {};
 		const marketStructure = (analysis && analysis.market_structure) || {};
 		const timeframeContext = (analysis && analysis.timeframe_context) || {};
+		const atrCandidates = [
+			indicators.atr,
+			analysis && analysis.atr && typeof analysis.atr === 'object' ? analysis.atr.value : analysis && analysis.atr,
+			analysis && analysis.volatility && analysis.volatility.atr,
+		];
+		const atr = this._firstNumber(atrCandidates.map(value => (
+			typeof value === 'string' && value.trim() ? Number(value) : value
+		)), null);
+		const atrWasProvided = atrCandidates.some(value => value !== null && value !== undefined && value !== '');
+		const atrStop = validCurrentPrice === null ? null : side === 'SELL' ? validCurrentPrice + (atr * 1.5) : validCurrentPrice - (atr * 1.5);
+		const atrTarget = validCurrentPrice === null ? null : side === 'SELL' ? validCurrentPrice - (atr * 3) : validCurrentPrice + (atr * 3);
+		const usableAtr = Number.isFinite(atr)
+			&& atr > 0
+			&& isValidRiskLevel(atrStop, validCurrentPrice, side, 'stop')
+			&& isValidRiskLevel(atrTarget, validCurrentPrice, side, 'target')
+			? atr
+			: null;
+		const stopLossMeta = getStopLossMeta(validCurrentPrice, usableAtr, legacyBollinger, bollingerBands, side);
+		const targetLevel = getTakeProfitTarget(validCurrentPrice, usableAtr, legacyBollinger, bollingerBands, analysis, side);
+		const riskRewardRatio = getRiskRewardRatio(validCurrentPrice, stopLossMeta.value, targetLevel, side);
+		const setupType = inferSetupType(analysis, side);
+		const hasValidRiskMetadata = isValidRiskLevel(stopLossMeta.value, validCurrentPrice, side, 'stop')
+			&& isValidRiskLevel(targetLevel, validCurrentPrice, side, 'target')
+			&& Number.isFinite(riskRewardRatio)
+			&& riskRewardRatio > 0
+			&& !(atrWasProvided && usableAtr === null);
+		const riskMetadata = {
+			...(hasValidRiskMetadata ? {
+				invalidation_level: stopLossMeta.value,
+				target_level: targetLevel,
+				risk_reward_ratio: riskRewardRatio,
+			} : {}),
+			...(setupType ? { setup_type: setupType } : {}),
+		};
 
 		const rating = this._firstNumber([
 			marketSentiment.overall_rating,
@@ -776,6 +855,7 @@ class TradingViewMcpService {
 			extraText,
 			confluenceData: confluenceAnalysis || null,
 			multiTimeframeData: multiTimeframeAnalysis || null,
+			...riskMetadata,
 		};
 	}
 
