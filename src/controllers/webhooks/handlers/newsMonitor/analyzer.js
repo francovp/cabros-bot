@@ -685,6 +685,9 @@ class NewsAnalyzer {
 									timedOutFinalChannels.forEach(markPersistenceOwnershipLost);
 									const ownedRetryChannels = claimedRetryChannels.filter((channel) => leaseOwnership.get(channel));
 									const persistenceRetryChannels = claimedRetryChannels.filter((channel) => persistenceOwnership.get(channel));
+									const successfulRetryChannels = new Set(
+										retryResults.filter(result => result.success).map(result => result.channel),
+									);
 									deliveryResults = mergeDeliveryResults(
 										activeCachedDeliveryResults,
 										retryResults.filter((result) => ownedRetryChannels.includes(result.channel)),
@@ -700,7 +703,7 @@ class NewsAnalyzer {
 											deliveryChannels: persistenceRetryChannels,
 											localDeliveryChannels: ownedRetryChannels,
 											localOnlyChannels: ownedRetryChannels.filter(
-												channel => !persistenceRetryChannels.includes(channel),
+												channel => successfulRetryChannels.has(channel) && !persistenceRetryChannels.includes(channel),
 											),
 											awaitPersistence: persistenceRetryChannels.length > 0,
 											skipPersistence: persistenceRetryChannels.length === 0,

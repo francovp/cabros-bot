@@ -539,6 +539,49 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 			}
 		});
 
+		it('should not mark a failed indeterminate retry as a local-only overlay', async () => {
+			process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '';
+			const cache = getCacheInstance();
+			const intervalSpy = jest.spyOn(cache, 'getDeliveryLeaseRenewIntervalMs').mockReturnValue(1000);
+			const cacheSetSpy = jest.spyOn(cache, 'set');
+			const renewSpy = jest.spyOn(cache, 'renewDelivery')
+				.mockImplementation((symbol, category, channel) => Promise.resolve(channel === 'whatsapp' ? null : true));
+			const { getNotificationManager } = require('../../src/controllers/webhooks/handlers/alert/alert');
+			const manager = getNotificationManager();
+			const telegramSend = jest.spyOn(manager.channels.get('telegram'), 'send')
+				.mockResolvedValueOnce({ success: false, channel: 'telegram', error: 'temporary telegram failure' })
+				.mockResolvedValueOnce({ success: true, channel: 'telegram', messageId: 'telegram-retry' });
+			const whatsappSend = jest.spyOn(manager.channels.get('whatsapp'), 'send')
+				.mockResolvedValueOnce({ success: false, channel: 'whatsapp', error: 'temporary whatsapp failure' })
+				.mockResolvedValueOnce({ success: false, channel: 'whatsapp', error: 'retry still failed' });
+
+			try {
+				await request(app)
+					.post('/api/news-monitor').set('x-api-key', 'test-key')
+					.send({ crypto: ['BTCUSDT'], channels: ['telegram', 'whatsapp'] })
+					.expect(200);
+
+				const { getAnalyzer } = require('../../src/controllers/webhooks/handlers/newsMonitor/analyzer');
+				await getAnalyzer().analyzeSymbolInternal(
+					'BTCUSDT',
+					'retry-failed-indeterminate',
+					{},
+					{ channels: ['telegram', 'whatsapp'] },
+					{ deadline: Date.now() + 100 },
+				);
+
+				const retryCacheWrite = cacheSetSpy.mock.calls.at(-1)[3];
+				expect(retryCacheWrite.localOnlyChannels).toEqual([]);
+				expect(retryCacheWrite.localDeliveryChannels).toEqual(['telegram', 'whatsapp']);
+			} finally {
+				intervalSpy.mockRestore();
+				cacheSetSpy.mockRestore();
+				renewSpy.mockRestore();
+				telegramSend.mockRestore();
+				whatsappSend.mockRestore();
+			}
+		});
+
 		it('should drop the old destination success when a claimed retry loses its lease', async () => {
 			process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '';
 			const cache = getCacheInstance();
