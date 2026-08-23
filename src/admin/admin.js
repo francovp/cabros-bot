@@ -666,14 +666,15 @@ const createJobPanel = (data) => {
 	return panel;
 };
 
-const volumeConfirmationResult = (data) => {
-	const panel = element('article', { className: 'operation-card verdict-panel' });
-	const confirmed = data.confirmed === true;
-	panel.append(element('p', { className: 'eyebrow', text: 'Volume confirmation' }));
-	const badges = element('div', { className: 'badge-row' });
-	badges.append(confirmed
-		? element('span', { className: 'status-badge status-ready', text: 'Confirmed' })
-		: element('span', { className: 'status-badge status-danger', text: 'Not confirmed' }));
+	const volumeConfirmationResult = (data) => {
+		const panel = element('article', { className: 'operation-card verdict-panel' });
+		panel.append(element('p', { className: 'eyebrow', text: 'Volume confirmation' }));
+		const badges = element('div', { className: 'badge-row' });
+		badges.append(data.confirmed === true
+			? element('span', { className: 'status-badge status-ready', text: 'Confirmed' })
+			: data.confirmed === false
+				? element('span', { className: 'status-badge status-danger', text: 'Not confirmed' })
+				: element('span', { className: 'status-badge status-active', text: 'Unknown' }));
 	if (data.decision) badges.append(element('span', { className: 'capability-chip', text: displayLabel(data.decision) }));
 	panel.append(badges);
 
@@ -735,9 +736,12 @@ const newsMonitorResults = (data) => {
 
 const analysisReportResult = (data) => {
 	const wrap = element('div', { className: 'dashboard analysis-report' });
-	if (typeof data.alertText === 'string' && data.alertText.trim()) {
+	const reportText = typeof data.alertText === 'string' && data.alertText.trim()
+		? data.alertText
+		: asObject(data.payload).alertText;
+	if (typeof reportText === 'string' && reportText.trim()) {
 		wrap.append(element('h4', { text: 'Report preview' }));
-		wrap.append(element('pre', { className: 'report-text', text: data.alertText }));
+		wrap.append(element('pre', { className: 'report-text', text: reportText }));
 	}
 	const symbolTable = symbolResultsTable(data.results);
 	if (symbolTable) {
@@ -1808,7 +1812,10 @@ const createJobStatusForm = () => {
 		Promise.resolve(requestStatus(false)).catch(() => {});
 	});
 
-	detachActiveViewPoll = stopPollTimer;
+	detachActiveViewPoll = () => {
+		statusRequestVersion += 1;
+		stopPollTimer();
+	};
 
 	return {
 		form,
