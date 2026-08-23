@@ -267,7 +267,7 @@ class NewsCache {
    * @param {string} symbol - Financial symbol
    * @param {string} eventCategory - Event category
    * @param {Object} data - Analysis data to cache
-	 * @param {{preserveTtl?: boolean, deliveryChannels?: string[], awaitPersistence?: boolean}} options - Preserve TTL, optionally persist only claimed channel deltas, and optionally wait for that write
+	 * @param {{preserveTtl?: boolean, deliveryChannels?: string[], localDeliveryChannels?: string[], awaitPersistence?: boolean, skipPersistence?: boolean}} options - Preserve TTL, optionally persist only claimed channel deltas, and optionally wait for that write
    * @returns {Promise<void>}
    */
 	async set(symbol, eventCategory, data, options = {}) {
@@ -276,7 +276,8 @@ class NewsCache {
 		if (options.preserveTtl && (!existingEntry || this.isExpired(existingEntry))) {
 			return;
 		}
-		const dataToStore = existingEntry ? mergeDeliveryData(existingEntry.data, data, options.deliveryChannels) : data;
+		const localDeliveryChannels = options.localDeliveryChannels ?? options.deliveryChannels;
+		const dataToStore = existingEntry ? mergeDeliveryData(existingEntry.data, data, localDeliveryChannels) : data;
 		const timestamp = existingEntry?.timestamp ?? Date.now();
 		this.cache.set(key, {
 			key,
@@ -286,7 +287,7 @@ class NewsCache {
 		});
 
 		// Persistent dedup: write to Firestore (fail-open)
-		if (newsDedupStorageService.isEnabled() && newsDedupStorageService.isReady()) {
+		if (!options.skipPersistence && newsDedupStorageService.isEnabled() && newsDedupStorageService.isReady()) {
 			let write;
 			if (options.preserveTtl) {
 				write = Array.isArray(options.deliveryChannels)

@@ -1396,10 +1396,11 @@ No endpoint, OpenAPI, Postman, environment variable, or Remote Config contract c
 
 ## News Monitor Indeterminate Lease Persistence (CB-189 / Issue #426)
 
-Cached news-monitor retries now distinguish active delivery ownership from durable persistence ownership. Proven lease loss still aborts the retry and removes its result from the response; an indeterminate renewal (`null` or an exception) keeps a successful delivery result in the current response but skips the durable cache merge, preventing a stale replica from overwriting a newer result. Per-channel timer renewals are serialized, and in-flight renewals are awaited before the persistence decision.
+Cached news-monitor retries now distinguish active delivery ownership from durable persistence ownership. Proven lease loss still aborts the retry and removes its result from the response; an indeterminate renewal (`null` or an exception) keeps a successful delivery result in the current response and local cache while skipping only the durable cache merge, preventing a stale replica from overwriting a newer result. Per-channel timer renewals are serialized, and in-flight/final renewals are bounded by the analysis deadline before the persistence decision.
 
 **Coverage**:
-- `src/controllers/webhooks/handlers/newsMonitor/analyzer.js` — Separates response ownership from persistence ownership during cached retry lease renewal.
-- `tests/integration/news-monitor-cache.test.js` — Verifies successful indeterminate retries and late in-flight renewals are returned without `awaitPersistence` writes.
+- `src/controllers/webhooks/handlers/newsMonitor/analyzer.js` — Separates response ownership from persistence ownership during cached retry lease renewal and bounds renewal waits.
+- `src/controllers/webhooks/handlers/newsMonitor/cache.js` — Allows local cache refreshes while suppressing an indeterminate durable write.
+- `tests/integration/news-monitor-cache.test.js` — Verifies successful indeterminate retries are retained locally and late/stalled renewals are bounded without `awaitPersistence` writes.
 
 No endpoint, OpenAPI, Postman, environment variable, or Remote Config contract changed.
