@@ -887,4 +887,248 @@ describe('TradingViewMcpService', () => {
 		expect(result.insights).toContain('Multi-timeframe: bullish');
 		expect(result.insights.join(' ')).not.toContain('[object Object]');
 	});
+
+	describe('circuit breaker and operator paging', () => {
+		let originalAdminChatId;
+
+		beforeEach(() => {
+			originalAdminChatId = process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID;
+			delete process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID;
+		});
+
+		afterEach(() => {
+			if (originalAdminChatId !== undefined) {
+				process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = originalAdminChatId;
+			} else {
+				delete process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID;
+			}
+		});
+
+		it('initializes in closed state with 0 consecutive failures', () => {
+			const service = new TradingViewMcpService();
+			const status = service.getCircuitBreakerStatus();
+			expect(status).toEqual({
+				state: 'closed',
+				consecutiveFailures: 0,
+				openedAt: null,
+				lastStateChangeAt: null,
+				failureThreshold: 5,
+				cooldownMs: 600000,
+			});
+			expect(service.isBreakerOpen()).toBe(false);
+		});
+
+		it('opens circuit breaker after reaching failure threshold and reports degraded in status', async () => {
+			const notifyAdmin = jest.fn().mockResolvedValue(undefined);
+			const service = new TradingViewMcpService({
+				breakerThreshold: 3,
+				breakerCooldownMs: 60000,
+				pageCooldownMs: 300000,
+				notifyAdmin,
+			});
+
+			for (let i = 1; i <= 2; i++) {
+				await expect(service._withRuntimeStatus(async () => {
+					throw new Error('HTTP 502 Bad Gateway');
+				})).rejects.toThrow('HTTP 502 Bad Gateway');
+				expect(service.getBreakerState()).toBe('closed');
+				expect(service.isBreakerOpen()).toBe(false);
+			}
+
+			expect(notifyAdmin).not.toHaveBeenCalled();
+
+			// 3rd failure hits threshold
+			await expect(service._withRuntimeStatus(async () => {
+				throw new Error('HTTP 503 Service Unavailable');
+			})).rejects.toThrow('HTTP 503 Service Unavailable');
+
+			expect(service.getBreakerState()).toBe('open');
+			expect(service.isBreakerOpen()).toBe(true);
+
+			const cbStatus = service.getCircuitBreakerStatus();
+			expect(cbStatus.state).toBe('open');
+			expect(cbStatus.consecutiveFailures).toBe(3);
+			expect(cbStatus.openedAt).toBeTruthy();
+
+			const overallStatus = service.getStatus({ enabled: true });
+			expect(overallStatus.status).toBe('degraded');
+			expect(overallStatus.ready).toBe(false);
+			expect(overallStatus.circuitBreaker.state).toBe('open');
+
+			expect(notifyAdmin).toHaveBeenCalledTimes(1);
+			expect(notifyAdmin).toHaveBeenCalledWith(expect.objectContaining({
+				type: 'degradation',
+				consecutiveFailures: 3,
+				errorCategory: 'http_5xx',
+			}));
+		});
+
+		it('fails open immediately in enrichFromSignal without making outbound calls when breaker is open', async () => {
+			const service = new TradingViewMcpService({
+				breakerThreshold: 2,
+				breakerCooldownMs: 60000,
+			});
+			service.callCoinAnalysis = jest.fn();
+
+			service._recordFailure(new Error('timeout'));
+			service._recordFailure(new Error('timeout'));
+
+			expect(service.isBreakerOpen()).toBe(true);
+
+			const result = await service.enrichFromAlertText('BTCUSDT(240) pasó a señal de COMPRA');
+			expect(result).toBeNull();
+			expect(service.callCoinAnalysis).not.toHaveBeenCalled();
+			expect(service.runtimeStatus.enrichment.failedCount).toBe(1);
+		});
+
+		it('throws circuit_breaker_open in _withRuntimeStatus without executing operation when breaker is open', async () => {
+			const service = new TradingViewMcpService({
+				breakerThreshold: 1,
+				breakerCooldownMs: 60000,
+			});
+			service._recordFailure(new Error('outage'));
+
+			const operation = jest.fn();
+			await expect(service._withRuntimeStatus(operation)).rejects.toThrow('TradingView MCP circuit breaker is OPEN');
+			expect(operation).not.toHaveBeenCalled();
+		});
+
+		it('respects pageCooldownMs and does not spam admin notifications during sustained outages', async () => {
+			const notifyAdmin = jest.fn().mockResolvedValue(undefined);
+			const service = new TradingViewMcpService({
+				breakerThreshold: 2,
+				breakerCooldownMs: 60000,
+				pageCooldownMs: 3600000,
+				notifyAdmin,
+			});
+
+			// Failures 1 and 2
+			service._recordFailure(new Error('HTTP 500'));
+			service._recordFailure(new Error('HTTP 500'));
+			expect(notifyAdmin).toHaveBeenCalledTimes(1);
+
+			// Additional failures during outage within page cooldown
+			service._recordFailure(new Error('HTTP 500'));
+			service._recordFailure(new Error('HTTP 500'));
+			expect(notifyAdmin).toHaveBeenCalledTimes(1);
+		});
+
+		it('transitions from open to half-open after breakerCooldownMs has elapsed', () => {
+			const service = new TradingViewMcpService({
+				breakerThreshold: 2,
+				breakerCooldownMs: 10000,
+			});
+
+			service._recordFailure(new Error('fail'));
+			service._recordFailure(new Error('fail'));
+			expect(service.getBreakerState()).toBe('open');
+
+			// Fast forward time past cooldown
+			service.breakerOpenedAt = new Date(Date.now() - 15000).toISOString();
+			expect(service.getBreakerState()).toBe('half-open');
+			expect(service.isBreakerOpen()).toBe(false);
+		});
+
+		it('recovers to closed and sends recovery page on successful trial probe in half-open state', async () => {
+			const notifyAdmin = jest.fn().mockResolvedValue(undefined);
+			const service = new TradingViewMcpService({
+				breakerThreshold: 2,
+				breakerCooldownMs: 10000,
+				notifyAdmin,
+			});
+
+			service._recordFailure(new Error('fail'));
+			service._recordFailure(new Error('fail'));
+			expect(notifyAdmin).toHaveBeenCalledWith(expect.objectContaining({ type: 'degradation' }));
+			notifyAdmin.mockClear();
+
+			// Simulate half-open
+			service.breakerOpenedAt = new Date(Date.now() - 15000).toISOString();
+			expect(service.getBreakerState()).toBe('half-open');
+
+			// Successful operation executes
+			await service._withRuntimeStatus(async () => ({ success: true }));
+
+			expect(service.getBreakerState()).toBe('closed');
+			expect(service.consecutiveFailures).toBe(0);
+			expect(service.breakerOpenedAt).toBeNull();
+			expect(notifyAdmin).toHaveBeenCalledWith(expect.objectContaining({ type: 'recovery' }));
+		});
+
+		it('re-opens breaker if trial probe fails in half-open state', async () => {
+			const service = new TradingViewMcpService({
+				breakerThreshold: 2,
+				breakerCooldownMs: 10000,
+			});
+
+			service._recordFailure(new Error('fail'));
+			service._recordFailure(new Error('fail'));
+
+			// Simulate half-open
+			service.breakerOpenedAt = new Date(Date.now() - 15000).toISOString();
+			expect(service.getBreakerState()).toBe('half-open');
+
+			// Trial probe fails
+			await expect(service._withRuntimeStatus(async () => {
+				throw new Error('HTTP 504 Gateway Timeout');
+			})).rejects.toThrow('HTTP 504 Gateway Timeout');
+
+			expect(service.getBreakerState()).toBe('open');
+			expect(service.consecutiveFailures).toBe(3);
+		});
+
+		it('pages admin via TelegramService when notifyAdmin callback is omitted but TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID is set', async () => {
+			process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '-100998877';
+			const sendMock = jest.fn().mockResolvedValue({ message_id: 123 });
+			const notificationManager = {
+				channels: new Map([
+					['telegram', { isEnabled: () => true, send: sendMock }],
+				]),
+			};
+
+			const service = new TradingViewMcpService({
+				breakerThreshold: 1,
+				breakerCooldownMs: 60000,
+				notificationManager,
+			});
+
+			service._recordFailure(new Error('HTTP 503'));
+			expect(sendMock).toHaveBeenCalledWith(expect.objectContaining({
+				telegramChatId: '-100998877',
+				text: expect.stringContaining('TradingView MCP Sustained Outage Alert'),
+			}));
+		});
+
+		it('catches and logs warning if notifyAdmin throws, without bubbling error to caller', async () => {
+			const logger = { warn: jest.fn(), error: jest.fn(), log: jest.fn() };
+			const notifyAdmin = jest.fn().mockRejectedValue(new Error('telegram network down'));
+			const service = new TradingViewMcpService({
+				breakerThreshold: 1,
+				breakerCooldownMs: 60000,
+				notifyAdmin,
+				logger,
+			});
+
+			service._recordFailure(new Error('mcp down'));
+			// Allow microtask resolution
+			await new Promise((r) => setTimeout(r, 10));
+
+			expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('telegram network down'));
+		});
+
+		it('_resetForTesting clears all circuit breaker state', () => {
+			const service = new TradingViewMcpService();
+			service.consecutiveFailures = 8;
+			service.breakerState = 'open';
+			service.breakerOpenedAt = new Date().toISOString();
+			service.hasActiveOutagePage = true;
+
+			service._resetForTesting();
+
+			expect(service.consecutiveFailures).toBe(0);
+			expect(service.breakerState).toBe('closed');
+			expect(service.breakerOpenedAt).toBeNull();
+			expect(service.hasActiveOutagePage).toBe(false);
+		});
+	});
 });
