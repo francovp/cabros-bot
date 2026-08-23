@@ -53,6 +53,15 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 - `DISCORD_MAX_RETRY_DELAY_MS` - Maximum individual Discord retry delay (default: `5000` ms)
 - `DISCORD_MAX_TOTAL_RETRY_WAIT_MS` - Maximum cumulative Discord retry wait (default: `10000` ms)
 
+#### Notification Dead-Letter & Redrive
+
+- `ENABLE_NOTIFICATION_REDRIVE` - Enable dead-letter recording and background redrive for failed channel deliveries (`true` or `false`, default: `false`)
+- `NOTIFICATION_REDRIVE_WORKER_ROLE` - Scheduler execution role (`web`, `worker`, or `disabled`, default: `web`)
+- `NOTIFICATION_REDRIVE_INTERVAL_MS` - Background sweep interval in milliseconds (default: `60000`, Remote Config supported)
+- `NOTIFICATION_REDRIVE_BATCH_LIMIT` - Maximum candidate records per sweep (default: `50`, Remote Config supported)
+- `NOTIFICATION_REDRIVE_MAX_ATTEMPTS` - Maximum attempts before terminal exhaustion (default: `5`, Remote Config supported)
+- `NOTIFICATION_REDRIVE_MAX_AGE_MS` - Maximum lifespan of dead-letter records before expiration (default: `3600000`, Remote Config supported)
+
 #### URL Shortening (003-news-monitor)
 
 - `URL_SHORTENER_SERVICE` - URL-shortening provider for WhatsApp citations (optional; defaults to `picsee`; supported values: `picsee`, `tinyurl`, `cuttly`)

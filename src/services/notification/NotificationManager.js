@@ -5,6 +5,7 @@
 
 const sentryService = require('../monitoring/SentryService');
 const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
+const { notificationRedriveService } = require('./NotificationRedriveService');
 
 class NotificationManager {
 	/**
@@ -20,6 +21,7 @@ class NotificationManager {
 				['discord', discordService],
 			].filter(([, channel]) => !!channel),
 		);
+		notificationRedriveService.setNotificationManagerGetter(() => this);
 	}
 
 	/**
@@ -54,7 +56,11 @@ class NotificationManager {
 			.map((ch) => ch.name);
 	}
 
-	async notifyAdminOfFailures(alert, results) {
+	async notifyAdminOfFailures(alert, results, options = {}) {
+		if (options && options.isRedrive) {
+			return;
+		}
+
 		const failures = results.filter(result => !result.success);
 		if (failures.length === 0) {
 			return;
@@ -80,11 +86,15 @@ class NotificationManager {
 			return `- ${result.channel}: ${result.error || 'Unknown error'}${metadata.length ? ` (${metadata.join(', ')})` : ''}`;
 		});
 		const requestId = alert && (alert.requestId || alert.correlationId);
+		const redriveContext = notificationRedriveService.isEnabled()
+			? [`Dead-letters queued for redrive (pending: ${notificationRedriveService.getPendingCount()})`]
+			: [];
 		const message = [
 			'Notification delivery failure',
 			`Failed channels: ${failures.map(result => result.channel).join(', ')}`,
 			`Succeeded channels: ${succeededChannels.length ? succeededChannels.join(', ') : 'none'}`,
 			...failureDetails,
+			...redriveContext,
 			...(requestId ? [`Request ID: ${requestId}`] : []),
 		].join('\n');
 
@@ -235,7 +245,16 @@ class NotificationManager {
 			}
 		}
 
-		trackBackgroundTask(this.notifyAdminOfFailures(alert, formattedResults)).catch((error) => {
+		if (!options.isRedrive && notificationRedriveService.isEnabled()) {
+			const failedResults = formattedResults.filter(result => result && !result.success);
+			if (failedResults.length > 0) {
+				trackBackgroundTask(notificationRedriveService.recordDeliveryResults(alert, formattedResults, options)).catch((error) => {
+					console.warn('[NotificationManager] Failed to record dead-letters for redrive:', error.message);
+				});
+			}
+		}
+
+		trackBackgroundTask(this.notifyAdminOfFailures(alert, formattedResults, options)).catch((error) => {
 			console.error('[NotificationManager] Unexpected admin notification failure:', error.message);
 		});
 
@@ -360,7 +379,16 @@ class NotificationManager {
 			}
 		}
 
-		trackBackgroundTask(this.notifyAdminOfFailures(alert, formattedResults)).catch((error) => {
+		if (!options.isRedrive && notificationRedriveService.isEnabled()) {
+			const failedResults = formattedResults.filter(result => result && !result.success);
+			if (failedResults.length > 0) {
+				trackBackgroundTask(notificationRedriveService.recordDeliveryResults(alert, formattedResults, options)).catch((error) => {
+					console.warn('[NotificationManager] Failed to record dead-letters for redrive:', error.message);
+				});
+			}
+		}
+
+		trackBackgroundTask(this.notifyAdminOfFailures(alert, formattedResults, options)).catch((error) => {
 			console.error('[NotificationManager] Unexpected admin notification failure:', error.message);
 		});
 

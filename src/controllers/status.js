@@ -9,6 +9,7 @@ const equityMarketDataService = require('../services/storage/EquityMarketDataSer
 const remoteConfigService = require('../services/remoteConfig/RemoteConfigService');
 const { tradingViewMcpService } = require('../services/tradingview/TradingViewMcpService');
 const { binanceOrderService } = require('../services/trading/BinanceOrderService');
+const { notificationRedriveService } = require('../services/notification/NotificationRedriveService');
 const {
 	getDeploymentCommit,
 	isPreviewEnvironment,
@@ -310,6 +311,7 @@ function getStatus() {
 			firestoreIdempotency: idempotencyStorageService.isEnabled(),
 			firebaseRemoteConfig: remoteConfigStatus.enabled,
 			jobExecutionWorker: jobExecutionQueueStatus.enabled || process.env.JOB_EXECUTION_MODE === 'firestore-poller',
+			notificationRedrive: notificationRedriveService.isEnabled(),
 		},
 		deliveryChannels: {
 			telegram: {
@@ -367,6 +369,7 @@ function getStatus() {
 				lastRunPendingCount: signalOutcomeWorkerStatus.lastRunPendingCount,
 				lastRunErrorCount: signalOutcomeWorkerStatus.lastRunErrorCount,
 			},
+			notificationRedrive: notificationRedriveService.getStatus(),
 			jobExecutionQueue: jobExecutionQueueStatus,
 			binanceTrading: binanceTradingStatus,
 		},

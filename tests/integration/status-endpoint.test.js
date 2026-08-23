@@ -1554,4 +1554,36 @@ describe('Status endpoints', () => {
 			status: 'misconfigured',
 		});
 	});
+
+	it('reports notificationRedrive feature flag and dependency status when disabled and enabled', async () => {
+		delete process.env.ENABLE_NOTIFICATION_REDRIVE;
+		const disabledResponse = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(disabledResponse.status).toBe(200);
+		expect(disabledResponse.body.featureFlags.notificationRedrive).toBe(false);
+		expect(disabledResponse.body.dependencies.notificationRedrive).toMatchObject({
+			enabled: false,
+			role: 'web',
+			running: false,
+			pendingCount: 0,
+		});
+
+		process.env.ENABLE_NOTIFICATION_REDRIVE = 'true';
+		process.env.NOTIFICATION_REDRIVE_WORKER_ROLE = 'worker';
+		const enabledResponse = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(enabledResponse.status).toBe(200);
+		expect(enabledResponse.body.featureFlags.notificationRedrive).toBe(true);
+		expect(enabledResponse.body.dependencies.notificationRedrive).toMatchObject({
+			enabled: true,
+			role: 'worker',
+			batchLimit: 50,
+			maxAttempts: 5,
+		});
+	});
 });
+

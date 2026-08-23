@@ -196,6 +196,34 @@
       "description": "Maximum execution duration per signal outcome evaluation sweep in milliseconds",
       "valueType": "NUMBER"
     },
+    "NOTIFICATION_REDRIVE_INTERVAL_MS": {
+      "defaultValue": {
+        "value": "60000"
+      },
+      "description": "Background sweep interval in milliseconds for retrying dead-lettered channel deliveries",
+      "valueType": "NUMBER"
+    },
+    "NOTIFICATION_REDRIVE_BATCH_LIMIT": {
+      "defaultValue": {
+        "value": "50"
+      },
+      "description": "Maximum candidate dead-letter records to process per redrive sweep",
+      "valueType": "NUMBER"
+    },
+    "NOTIFICATION_REDRIVE_MAX_ATTEMPTS": {
+      "defaultValue": {
+        "value": "5"
+      },
+      "description": "Maximum redrive attempts per dead-letter channel before terminal exhaustion",
+      "valueType": "NUMBER"
+    },
+    "NOTIFICATION_REDRIVE_MAX_AGE_MS": {
+      "defaultValue": {
+        "value": "3600000"
+      },
+      "description": "Maximum lifespan in milliseconds of dead-letter records before expiration",
+      "valueType": "NUMBER"
+    },
     "ENABLE_GEMINI_GROUNDING": {
       "defaultValue": {
         "value": "false"
@@ -233,7 +261,7 @@
     }
   },
   "version": {
-    "versionNumber": "20",
+    "versionNumber": "21",
     "isLegacy": true
   }
 }
