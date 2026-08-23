@@ -699,6 +699,9 @@ class NewsAnalyzer {
 											preserveTtl: true,
 											deliveryChannels: persistenceRetryChannels,
 											localDeliveryChannels: ownedRetryChannels,
+											localOnlyChannels: ownedRetryChannels.filter(
+												channel => !persistenceRetryChannels.includes(channel),
+											),
 											awaitPersistence: persistenceRetryChannels.length > 0,
 											skipPersistence: persistenceRetryChannels.length === 0,
 										});

@@ -238,9 +238,10 @@ class NewsCache {
 			try {
 				const entryRecord = await newsDedupStorageService.getEntryRecord(key);
 				if (entryRecord) {
-					if (localData && entry?.localOnly) {
-						return localData;
-					}
+					const localOnlyChannels = entry?.localOnlyChannels ?? [];
+					const refreshedData = localData && localOnlyChannels.length > 0
+						? mergeDeliveryData(entryRecord.data, localData, localOnlyChannels)
+						: entryRecord.data;
 					if (localData && localData.status !== 'claiming' && entryRecord.data?.status === 'claiming') {
 						return localData;
 					}
@@ -249,9 +250,10 @@ class NewsCache {
 						key,
 						timestamp: Date.now(),
 						expiresAt: entryRecord.expiresAtMs,
-						data: entryRecord.data,
+						data: refreshedData,
+						localOnlyChannels,
 					});
-					return entryRecord.data;
+					return refreshedData;
 				}
 			} catch (error) {
 				console.warn('[NewsCache] Firestore getEntry failed (fail-open):', error.message);
@@ -270,7 +272,7 @@ class NewsCache {
    * @param {string} symbol - Financial symbol
    * @param {string} eventCategory - Event category
    * @param {Object} data - Analysis data to cache
-	 * @param {{preserveTtl?: boolean, deliveryChannels?: string[], localDeliveryChannels?: string[], awaitPersistence?: boolean, skipPersistence?: boolean}} options - Preserve TTL, optionally persist only claimed channel deltas, and optionally wait for that write
+	 * @param {{preserveTtl?: boolean, deliveryChannels?: string[], localDeliveryChannels?: string[], localOnlyChannels?: string[], awaitPersistence?: boolean, skipPersistence?: boolean}} options - Preserve TTL, optionally persist only claimed channel deltas, and optionally wait for that write
    * @returns {Promise<void>}
    */
 	async set(symbol, eventCategory, data, options = {}) {
@@ -281,13 +283,21 @@ class NewsCache {
 		}
 		const localDeliveryChannels = options.localDeliveryChannels ?? options.deliveryChannels;
 		const dataToStore = existingEntry ? mergeDeliveryData(existingEntry.data, data, localDeliveryChannels) : data;
+		const persistedChannels = Array.isArray(options.deliveryChannels) ? options.deliveryChannels : null;
+		const existingLocalOnlyChannels = existingEntry?.localOnlyChannels ?? [];
+		const localOnlyChannels = Array.from(new Set([
+			...(options.localOnlyChannels ?? (options.skipPersistence ? localDeliveryChannels ?? [] : [])),
+			...(options.preserveTtl && persistedChannels
+				? existingLocalOnlyChannels.filter(channel => !persistedChannels.includes(channel))
+				: []),
+		]));
 		const timestamp = existingEntry?.timestamp ?? Date.now();
 		this.cache.set(key, {
 			key,
 			timestamp,
 			expiresAt: existingEntry?.expiresAt ?? timestamp + this.ttlMs,
 			data: dataToStore,
-			localOnly: options.skipPersistence === true,
+			localOnlyChannels,
 		});
 
 		// Persistent dedup: write to Firestore (fail-open)

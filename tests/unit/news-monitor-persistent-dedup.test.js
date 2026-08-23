@@ -231,7 +231,47 @@ describe('NewsCache — Persistent Dedup Backend (Issue #120)', () => {
 			expect(result.deliveryResults).toEqual([
 				expect.objectContaining({ channel: 'telegram', success: true, messageId: 'telegram-recovered' }),
 			]);
-			expect(cache.cache.get('BTCUSDT:price_surge').localOnly).toBe(true);
+			expect(cache.cache.get('BTCUSDT:price_surge').localOnlyChannels).toEqual(['telegram']);
+		});
+
+		it('preserves only the non-durable channel across a mixed persistent refresh', async () => {
+			const failedData = {
+				alert: { symbol: 'BTCUSDT' },
+				deliveryResults: [
+					{ channel: 'telegram', success: false },
+					{ channel: 'whatsapp', success: false },
+				],
+			};
+			const recoveredData = {
+				...failedData,
+				deliveryResults: [
+					{ channel: 'telegram', success: true, messageId: 'telegram-recovered' },
+					{ channel: 'whatsapp', success: true, messageId: 'whatsapp-recovered' },
+				],
+			};
+
+			await cache.set('BTCUSDT', EventCategory.PRICE_SURGE, failedData);
+			await cache.set('BTCUSDT', EventCategory.PRICE_SURGE, recoveredData, {
+				preserveTtl: true,
+				deliveryChannels: ['telegram'],
+				localDeliveryChannels: ['telegram', 'whatsapp'],
+				localOnlyChannels: ['whatsapp'],
+			});
+			mockGetEntryRecord.mockResolvedValue({
+				data: {
+					...failedData,
+					deliveryResults: [{ channel: 'telegram', success: true, messageId: 'telegram-recovered' }],
+				},
+				expiresAtMs: Date.now() + cache.ttlMs,
+			});
+
+			const result = await cache.get('BTCUSDT', EventCategory.PRICE_SURGE);
+
+			expect(result.deliveryResults).toEqual([
+				expect.objectContaining({ channel: 'telegram', success: true, messageId: 'telegram-recovered' }),
+				expect.objectContaining({ channel: 'whatsapp', success: true, messageId: 'whatsapp-recovered' }),
+			]);
+			expect(cache.cache.get('BTCUSDT:price_surge').localOnlyChannels).toEqual(['whatsapp']);
 		});
 
 		it('preserves the cache TTL when updating cached delivery results', async () => {
