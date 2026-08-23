@@ -108,6 +108,25 @@ describe('SignalOutcomeService', () => {
 			expect(res.exchange).toBe('COINBASE');
 			expect(res.symbol).toBe('BTCUSDT');
 		});
+
+		it('strips parenthetical timeframe suffixes from symbol', () => {
+			expect(SignalOutcomeService.normalizeSymbolAndExchange('FX_IDC:USDCLP(D)')).toEqual({
+				exchange: 'FX_IDC',
+				symbol: 'USDCLP',
+			});
+			expect(SignalOutcomeService.normalizeSymbolAndExchange('SPCFD:SPX(D)')).toEqual({
+				exchange: 'SPCFD',
+				symbol: 'SPX',
+			});
+			expect(SignalOutcomeService.normalizeSymbolAndExchange('NASDAQ_DLY:NDX(D)')).toEqual({
+				exchange: 'NASDAQ_DLY',
+				symbol: 'NDX',
+			});
+			expect(SignalOutcomeService.normalizeSymbolAndExchange('BTCUSDT(1h)')).toEqual({
+				exchange: 'BINANCE',
+				symbol: 'BTCUSDT',
+			});
+		});
 	});
 
 	describe('recordSignal()', () => {
@@ -357,6 +376,58 @@ describe('SignalOutcomeService', () => {
 			expect(saved.eligibilityState).toBe('missing_entry_price');
 			expect(saved.outcomeEvaluated).toBe(true);
 			expect(saved.outcomes['1h'].status).toBe('unavailable');
+		});
+
+		it('records and resolves entry price for FX_IDC, SPCFD, and NASDAQ_DLY signals when equity market data is enabled', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_EQUITY_MARKET_DATA = 'true';
+			process.env.EQUITY_MARKET_DATA_PROVIDER = 'twelve-data';
+			process.env.TWELVE_DATA_API_KEY = 'test-twelve-key';
+
+			global.fetch = jest.fn().mockResolvedValue({
+				ok: true,
+				status: 200,
+				json: async () => ({ status: 'ok', close: '950.25' }),
+			});
+
+			const resId = await SignalOutcomeService.recordSignal({
+				requestId: 'req-fx-test',
+				source: 'webhook-alert',
+				symbol: 'FX_IDC:USDCLP(D)',
+				price: null,
+				side: 'BUY',
+			});
+
+			expect(resId).not.toBeNull();
+			const saved = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(resId);
+			expect(saved).toBeDefined();
+			expect(saved.exchange).toBe('FX_IDC');
+			expect(saved.symbol).toBe('USDCLP');
+			expect(saved.price).toBe(950.25);
+			expect(saved.entryPriceSource).toBe('twelve-data');
+			expect(saved.eligibilityState).toBe('supported_provider');
+			expect(saved.outcomeEvaluated).toBe(false);
+		});
+
+		it('marks FX_IDC signals as twelve_data_not_configured when equity market data is not enabled', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_EQUITY_MARKET_DATA = 'false';
+
+			const resId = await SignalOutcomeService.recordSignal({
+				requestId: 'req-fx-disabled',
+				source: 'webhook-alert',
+				symbol: 'FX_IDC:USDCLP(D)',
+				price: 950.25,
+				side: 'BUY',
+			});
+
+			expect(resId).not.toBeNull();
+			const saved = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(resId);
+			expect(saved).toBeDefined();
+			expect(saved.exchange).toBe('FX_IDC');
+			expect(saved.symbol).toBe('USDCLP');
+			expect(saved.eligibilityState).toBe('twelve_data_not_configured');
+			expect(saved.outcomeEvaluated).toBe(true);
 		});
 
 		it('sanitizes undefined properties to prevent Firestore serialization errors', async () => {
