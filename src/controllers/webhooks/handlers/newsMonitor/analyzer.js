@@ -626,19 +626,26 @@ class NewsAnalyzer {
 									}
 								};
 								const leaseDeadline = options.deadline ?? Date.now() + this.timeout;
-								const waitForLeaseRenewals = async (renewals) => {
-									const pending = renewals.filter(Boolean);
-									if (pending.length === 0) return true;
+								const waitForLeaseRenewals = async (renewalEntries) => {
+									const pending = renewalEntries
+										.filter(([, renewal]) => renewal)
+										.map(([channel, renewal]) => {
+											const state = { channel, settled: false };
+											state.promise = Promise.resolve(renewal).finally(() => { state.settled = true; });
+											return state;
+										});
+									if (pending.length === 0) return [];
 									const remainingMs = leaseDeadline - Date.now();
-									if (remainingMs <= 0) return false;
+									if (remainingMs <= 0) return pending.map(({ channel }) => channel);
 									let timeoutHandle;
 									try {
-										return await Promise.race([
-											Promise.all(pending).then(() => true),
+										const completed = await Promise.race([
+											Promise.all(pending.map(({ promise }) => promise)).then(() => true),
 											new Promise(resolve => {
 												timeoutHandle = setTimeout(() => resolve(false), remainingMs);
 											}),
 										]);
+										return completed ? [] : pending.filter(({ settled }) => !settled).map(({ channel }) => channel);
 									} finally {
 										clearTimeout(timeoutHandle);
 									}
@@ -668,15 +675,14 @@ class NewsAnalyzer {
 										{ signalByChannel },
 									);
 									leaseRenewalIntervals.forEach(clearInterval);
-									if (!await waitForLeaseRenewals([...pendingLeaseRenewals.values()])) {
-										claimedRetryChannels.forEach(markPersistenceOwnershipLost);
-									}
+									const timedOutPendingChannels = await waitForLeaseRenewals([...pendingLeaseRenewals.entries()],
+									);
+									timedOutPendingChannels.forEach(markPersistenceOwnershipLost);
 									const finalRenewals = claimedRetryChannels
 										.filter(channel => !pendingLeaseRenewals.get(channel))
-										.map(renewLease);
-									if (!await waitForLeaseRenewals(finalRenewals)) {
-										claimedRetryChannels.forEach(markPersistenceOwnershipLost);
-									}
+										.map(channel => [channel, renewLease(channel)]);
+									const timedOutFinalChannels = await waitForLeaseRenewals(finalRenewals);
+									timedOutFinalChannels.forEach(markPersistenceOwnershipLost);
 									const ownedRetryChannels = claimedRetryChannels.filter((channel) => leaseOwnership.get(channel));
 									const persistenceRetryChannels = claimedRetryChannels.filter((channel) => persistenceOwnership.get(channel));
 									deliveryResults = mergeDeliveryResults(
