@@ -285,11 +285,13 @@ class NewsCache {
 		const dataToStore = existingEntry ? mergeDeliveryData(existingEntry.data, data, localDeliveryChannels) : data;
 		const persistedChannels = Array.isArray(options.deliveryChannels) ? options.deliveryChannels : null;
 		const existingLocalOnlyChannels = existingEntry?.localOnlyChannels ?? [];
+		const locallyUpdatedChannels = new Set([
+			...(Array.isArray(localDeliveryChannels) ? localDeliveryChannels : []),
+			...(persistedChannels ?? []),
+		]);
 		const localOnlyChannels = Array.from(new Set([
 			...(options.localOnlyChannels ?? (options.skipPersistence ? localDeliveryChannels ?? [] : [])),
-			...(options.preserveTtl && persistedChannels
-				? existingLocalOnlyChannels.filter(channel => !persistedChannels.includes(channel))
-				: []),
+			...existingLocalOnlyChannels.filter(channel => !locallyUpdatedChannels.has(channel)),
 		]));
 		const timestamp = existingEntry?.timestamp ?? Date.now();
 		this.cache.set(key, {
