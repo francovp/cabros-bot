@@ -646,7 +646,7 @@ class NewsAnalyzer {
 										notificationMgr,
 										cached.alert,
 										{ ...routing, channels: claimedRetryChannels },
-											{ signalByChannel },
+										{ signalByChannel },
 									);
 									leaseRenewalIntervals.forEach(clearInterval);
 									await Promise.all([...pendingLeaseRenewals.values()].filter(Boolean));
