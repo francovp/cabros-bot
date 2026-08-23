@@ -624,8 +624,18 @@ class NewsAnalyzer {
 										console.warn('[Analyzer] Cached delivery lease renewal indeterminate:', error.message);
 									}
 								};
+								const pendingLeaseRenewals = new Map(
+									claimedRetryChannels.map((channel) => [channel, null]),
+								);
+								const queueLeaseRenewal = (channel) => {
+									if (pendingLeaseRenewals.get(channel)) {
+										return;
+									}
+									const renewal = renewLease(channel).finally(() => pendingLeaseRenewals.set(channel, null));
+									pendingLeaseRenewals.set(channel, renewal);
+								};
 								const leaseRenewalIntervals = claimedRetryChannels.map((channel) => setInterval(
-									() => renewLease(channel),
+									() => queueLeaseRenewal(channel),
 									this.cache.getDeliveryLeaseRenewIntervalMs(),
 								));
 								try {
@@ -636,8 +646,10 @@ class NewsAnalyzer {
 										notificationMgr,
 										cached.alert,
 										{ ...routing, channels: claimedRetryChannels },
-										{ signalByChannel },
+											{ signalByChannel },
 									);
+									leaseRenewalIntervals.forEach(clearInterval);
+									await Promise.all([...pendingLeaseRenewals.values()].filter(Boolean));
 									await Promise.all(claimedRetryChannels.map(renewLease));
 									const ownedRetryChannels = claimedRetryChannels.filter((channel) => leaseOwnership.get(channel));
 									const persistenceRetryChannels = claimedRetryChannels.filter((channel) => persistenceOwnership.get(channel));

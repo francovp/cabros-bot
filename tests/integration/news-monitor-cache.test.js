@@ -399,6 +399,44 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 			}
 		});
 
+		it('should await an in-flight lease renewal before deciding durable persistence', async () => {
+			process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '';
+			const cache = getCacheInstance();
+			const intervalSpy = jest.spyOn(cache, 'getDeliveryLeaseRenewIntervalMs').mockReturnValue(1);
+			const cacheSetSpy = jest.spyOn(cache, 'set');
+			const renewSpy = jest.spyOn(cache, 'renewDelivery')
+				.mockImplementationOnce(() => new Promise((resolve) => setTimeout(() => resolve(null), 20)))
+				.mockResolvedValue(true);
+			const { getNotificationManager } = require('../../src/controllers/webhooks/handlers/alert/alert');
+			const telegramSend = jest.spyOn(getNotificationManager().channels.get('telegram'), 'send')
+				.mockResolvedValueOnce({ success: false, channel: 'telegram', error: 'temporary failure' })
+				.mockImplementationOnce(() => new Promise((resolve) => setTimeout(() => resolve({
+					success: true,
+					channel: 'telegram',
+					messageId: 'telegram-after-late-renewal',
+				}), 5)));
+
+			try {
+				await request(app)
+					.get('/api/news-monitor?crypto=BTCUSDT&channels=telegram').set('x-api-key', 'test-key')
+					.expect(200);
+
+				const retry = await request(app)
+					.get('/api/news-monitor?crypto=BTCUSDT&channels=telegram').set('x-api-key', 'test-key')
+					.expect(200);
+
+				expect(retry.body.results[0].deliveryResults).toEqual([
+					expect.objectContaining({ channel: 'telegram', success: true, messageId: 'telegram-after-late-renewal' }),
+				]);
+				expect(cacheSetSpy.mock.calls.some(([, , , options]) => options?.awaitPersistence === true)).toBe(false);
+				expect(renewSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
+			} finally {
+				intervalSpy.mockRestore();
+				cacheSetSpy.mockRestore();
+				renewSpy.mockRestore();
+			}
+		});
+
 		it('should drop the old destination success when a claimed retry loses its lease', async () => {
 			process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '';
 			const cache = getCacheInstance();
