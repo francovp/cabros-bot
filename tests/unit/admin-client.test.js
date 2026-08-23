@@ -1282,6 +1282,42 @@ describe('admin browser client', () => {
 		expect(copyButton.textContent).toBe('Copy JSON');
 	});
 
+	it('clears the raw-status copy payload when a later refresh fails', async () => {
+		const status = {
+			service: { name: 'cabros-bot', version: '0.1.0', environment: 'production', commit: 'abc123' },
+			featureFlags: {},
+			deliveryChannels: {},
+			dependencies: {},
+		};
+		let statusCalls = 0;
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/status') {
+					statusCalls += 1;
+					if (statusCalls === 1) return response(status);
+					return response({ error: 'Unauthorized' }, 401);
+				}
+				return response({});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'overview');
+		await flush();
+
+		const copyButton = findButton(browser.elementsById.view, 'Copy JSON');
+		expect(copyButton).toBeDefined();
+		expect(copyButton.hidden).toBe(false);
+
+		const refreshButton = findButton(browser.elementsById.view, 'Refresh dashboard');
+		await refreshButton.dispatch('click');
+		await flush();
+
+		expect(statusCalls).toBe(2);
+		expect(copyButton.hidden).toBe(true);
+	});
+
 	it('keeps navigation icons as inline SVG instead of platform glyphs', () => {
 		const shell = fs.readFileSync(path.join(__dirname, '../../src/admin/index.html'), 'utf8');
 		expect(shell.match(/<svg class="nav-icon"/g)).toHaveLength(7);
