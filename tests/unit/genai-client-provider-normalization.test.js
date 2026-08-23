@@ -51,7 +51,7 @@ describe('GenaiClient provider normalization', () => {
 		});
 
 		expect(mockAzureClient.validate).toHaveBeenCalled();
-		expect(mockAzureClient.chatCompletion).toHaveBeenCalledWith('system', 'user');
+		expect(mockAzureClient.chatCompletion).toHaveBeenCalledWith('system', 'user', {});
 		expect(result.text).toBe('azure response');
 		expect(result.modelUsed).toBe('gpt-4o-mini');
 		expect(result.usage).toEqual({ inputTokens: 11, outputTokens: 22, totalTokens: 33 });
@@ -89,11 +89,83 @@ describe('GenaiClient provider normalization', () => {
 		const genaiClient = require('../../src/services/grounding/genaiClient');
 		const result = await genaiClient.llmCallv2({ systemPrompt: 'system', userPrompt: 'user' });
 
-		expect(mockProviderClient.chatCompletion).toHaveBeenCalledWith('system', 'user');
+		expect(mockProviderClient.chatCompletion).toHaveBeenCalledWith('system', 'user', {});
 		expect(result).toEqual(expect.objectContaining({
 			text: `${provider} response`,
 			modelUsed: model,
 			usage: { inputTokens: 7, outputTokens: 13, totalTokens: 20 },
 		}));
+	});
+
+	it('propagates abort signal to Azure and rethrows abort error without failing over to subsequent logic', async () => {
+		process.env.MODEL_PROVIDER = 'azure';
+		process.env.AZURE_LLM_KEY = 'azure-key';
+		process.env.AZURE_LLM_MODEL = 'gpt-4o-mini';
+
+		const controller = new AbortController();
+		const abortError = new Error('The operation was aborted');
+		abortError.name = 'AbortError';
+
+		const mockAzureClient = {
+			validate: jest.fn().mockReturnValue(true),
+			chatCompletion: jest.fn().mockRejectedValue(abortError),
+		};
+
+		jest.doMock('@google/genai', () => ({
+			GoogleGenAI: jest.fn(() => ({ models: { generateContent: jest.fn() } })),
+		}));
+		jest.doMock('../../src/services/inference/azureAiClient', () => ({
+			getAzureAIClient: jest.fn(() => mockAzureClient),
+		}));
+
+		const genaiClient = require('../../src/services/grounding/genaiClient');
+
+		await expect(
+			genaiClient.llmCallv2({
+				systemPrompt: 'system',
+				userPrompt: 'user',
+				opts: { signal: controller.signal },
+			}),
+		).rejects.toThrow('The operation was aborted');
+
+		expect(mockAzureClient.chatCompletion).toHaveBeenCalledWith('system', 'user', {
+			signal: controller.signal,
+		});
+	});
+
+	it('propagates abort signal to OpenRouter and rethrows abort error', async () => {
+		process.env.MODEL_PROVIDER = 'openrouter';
+		process.env.OPENROUTER_API_KEY = 'openrouter-key';
+		process.env.OPENROUTER_MODEL = 'openrouter-model';
+
+		const controller = new AbortController();
+		const abortError = new Error('The operation was aborted');
+		abortError.name = 'AbortError';
+
+		const mockOpenRouterClient = {
+			validate: jest.fn().mockReturnValue(true),
+			chatCompletion: jest.fn().mockRejectedValue(abortError),
+		};
+
+		jest.doMock('@google/genai', () => ({
+			GoogleGenAI: jest.fn(() => ({ models: { generateContent: jest.fn() } })),
+		}));
+		jest.doMock('../../src/services/inference/openRouterClient', () => ({
+			getOpenRouterClient: jest.fn(() => mockOpenRouterClient),
+		}));
+
+		const genaiClient = require('../../src/services/grounding/genaiClient');
+
+		await expect(
+			genaiClient.llmCallv2({
+				systemPrompt: 'system',
+				userPrompt: 'user',
+				opts: { signal: controller.signal },
+			}),
+		).rejects.toThrow('The operation was aborted');
+
+		expect(mockOpenRouterClient.chatCompletion).toHaveBeenCalledWith('system', 'user', {
+			signal: controller.signal,
+		});
 	});
 });

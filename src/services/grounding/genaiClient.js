@@ -477,7 +477,7 @@ class GenaiClient {
 				if (azureClient.validate()) {
 					const startTime = Date.now();
 					console.debug('[GenaiClient] Attempting Azure AI Client');
-					const { text, usage } = await azureClient.chatCompletion(systemPrompt, userPrompt);
+					const { text, usage } = await azureClient.chatCompletion(systemPrompt, userPrompt, opts);
 					const durationMs = Date.now() - startTime;
 					const usageNorm = normalizeUsageMetadata(usage);
 					sentryService.captureLlmMetric({ model: AZURE_LLM_MODEL || 'azure-llm', inputTokens: usageNorm?.inputTokens || 0, outputTokens: usageNorm?.outputTokens || 0, durationMs });
@@ -491,6 +491,9 @@ class GenaiClient {
 					console.debug('[GenaiClient] Azure AI Client not configured, skipping');
 				}
 			} catch (error) {
+				if (opts.signal?.aborted || error.name === 'AbortError' || error.name === 'AbortSignalError' || error.message === 'Grounding timeout' || (typeof error.message === 'string' && error.message.includes('timeout'))) {
+					throw error;
+				}
 				console.warn('[GenaiClient] Azure call failed, attempting failover:', error.message);
 				lastError = error;
 			}
@@ -503,7 +506,7 @@ class GenaiClient {
 				if (openRouterClient.validate()) {
 					const startTime = Date.now();
 					console.debug('[GenaiClient] Attempting OpenRouter Client');
-					const { text, usage } = await openRouterClient.chatCompletion(systemPrompt, userPrompt);
+					const { text, usage } = await openRouterClient.chatCompletion(systemPrompt, userPrompt, opts);
 					const durationMs = Date.now() - startTime;
 					const usageNorm = normalizeUsageMetadata(usage);
 					sentryService.captureLlmMetric({ model: OPENROUTER_MODEL || 'openrouter-model', inputTokens: usageNorm?.inputTokens || 0, outputTokens: usageNorm?.outputTokens || 0, durationMs });
@@ -517,6 +520,9 @@ class GenaiClient {
 					console.debug('[GenaiClient] OpenRouter Client not configured, skipping');
 				}
 			} catch (error) {
+				if (opts.signal?.aborted || error.name === 'AbortError' || error.name === 'AbortSignalError' || error.message === 'Grounding timeout' || (typeof error.message === 'string' && error.message.includes('timeout'))) {
+					throw error;
+				}
 				console.warn('[GenaiClient] OpenRouter call failed:', error.message);
 				lastError = error;
 			}
@@ -529,7 +535,7 @@ class GenaiClient {
 				if (cfClient.validate()) {
 					const startTime = Date.now();
 					console.debug('[GenaiClient] Attempting Cloudflare AI Gateway Client');
-					const { text, usage } = await cfClient.chatCompletion(systemPrompt, userPrompt);
+					const { text, usage } = await cfClient.chatCompletion(systemPrompt, userPrompt, opts);
 					const durationMs = Date.now() - startTime;
 					const usageNorm = normalizeUsageMetadata(usage);
 					sentryService.captureLlmMetric({ model: CF_AIG_MODEL || 'cloudflare-aig', inputTokens: usageNorm?.inputTokens || 0, outputTokens: usageNorm?.outputTokens || 0, durationMs });
@@ -543,6 +549,9 @@ class GenaiClient {
 					console.debug('[GenaiClient] Cloudflare AI Gateway not configured, skipping');
 				}
 			} catch (error) {
+				if (opts.signal?.aborted || error.name === 'AbortError' || error.name === 'AbortSignalError' || error.message === 'Grounding timeout' || (typeof error.message === 'string' && error.message.includes('timeout'))) {
+					throw error;
+				}
 				console.warn('[GenaiClient] Cloudflare AI Gateway call failed:', error.message);
 				lastError = error;
 			}
