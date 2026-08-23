@@ -22,6 +22,7 @@ const { waitForBackgroundTasks } = require('./src/lib/backgroundTaskTracker');
 const { getTelegramBootstrapConfig } = require('./src/lib/telegramBootstrap');
 const { jobService } = require('./src/services/jobs/JobService');
 const SignalOutcomeService = require('./src/services/storage/SignalOutcomeService');
+const { notificationRedriveService } = require('./src/services/notification/NotificationRedriveService');
 const sentryService = require('./src/services/monitoring/SentryService');
 const { getDeploymentCommit, getDeploymentRepoSlug } = require('./src/lib/deploymentEnvironment');
 const remoteConfigService = require('./src/services/remoteConfig/RemoteConfigService');
@@ -62,6 +63,7 @@ const lifecycle = createProcessLifecycle({
 	waitForBackgroundTasks,
 	finalizeBackgroundJobs: () => jobService.finalizeActiveJobsForShutdown(),
 	stopSignalOutcomeWorker: (options) => SignalOutcomeService.stopWorker(options),
+	stopNotificationRedriveWorker: (options) => notificationRedriveService.stopWorker(options),
 	stopRemoteConfig: () => remoteConfigService.stop(),
 	shutdownNewsMonitor: () => getCacheInstance().shutdown(),
 	flushSentry: (timeout) => sentryService.flush(timeout),
@@ -77,6 +79,8 @@ async function bootstrapApplication() {
 
 	// Start background signal outcome evaluation worker if enabled
 	SignalOutcomeService.startWorker();
+	// Start background notification redrive worker if enabled
+	notificationRedriveService.startWorker();
 	if (process.env.ENABLE_NEWS_MONITOR === 'true') {
 		getNewsMonitor().initialize();
 	}

@@ -79,6 +79,7 @@ function createProcessLifecycle(options = {}) {
 		finalizeBackgroundJobs = () => undefined,
 		finalizationTimeoutMs = DEFAULT_FORCED_FINALIZATION_TIMEOUT_MS,
 		stopSignalOutcomeWorker = () => undefined,
+		stopNotificationRedriveWorker = () => undefined,
 		stopRemoteConfig = () => undefined,
 		shutdownNewsMonitor = () => undefined,
 		flushSentry = () => undefined,
@@ -174,6 +175,7 @@ function createProcessLifecycle(options = {}) {
 				await safelyRun(logger, 'background persistence tasks', waitForBackgroundTasks);
 				await Promise.allSettled([
 					safelyRun(logger, 'signal-outcome worker', () => stopSignalOutcomeWorker({ drain: true })),
+					safelyRun(logger, 'notification redrive worker', () => stopNotificationRedriveWorker({ drain: true })),
 					safelyRun(logger, 'remote config service', stopRemoteConfig),
 					safelyRun(logger, 'news monitor cache', shutdownNewsMonitor),
 				]);
