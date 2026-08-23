@@ -148,7 +148,10 @@ const loadContract = () => {
 const element = (tag, options = {}) => {
 	const node = document.createElement(tag);
 	if (options.className) node.className = options.className;
-	if (options.text) node.textContent = options.text;
+	if (options.text !== undefined) node.textContent = options.text;
+	if (options.attributes) {
+		Object.entries(options.attributes).forEach(([name, value]) => node.setAttribute(name, value));
+	}
 	return node;
 };
 
@@ -157,6 +160,79 @@ const getElement = (id) => document.getElementById(id);
 const setHidden = (id, hidden) => {
 	const node = getElement(id);
 	if (node) node.hidden = hidden;
+};
+
+const createLoadingState = (label) => {
+	const wrap = element('span', {
+		className: 'loading-state',
+		attributes: { role: 'status' },
+	});
+	wrap.append(
+		element('span', { className: 'spinner', attributes: { 'aria-hidden': 'true' } }),
+		element('span', { text: label }),
+	);
+	return wrap;
+};
+
+const createEmptyState = (text) => element('p', { className: 'empty-state', text });
+
+const formatRelativeTime = (value, now = Date.now()) => {
+	const date = new Date(value);
+	if (!value || Number.isNaN(date.getTime())) return null;
+	const diffMinutes = Math.round((now - date.getTime()) / 60000);
+	if (diffMinutes < 1) return 'just now';
+	if (diffMinutes < 60) return `${diffMinutes} min ago`;
+	const diffHours = Math.round(diffMinutes / 60);
+	if (diffHours < 24) return `${diffHours} h ago`;
+	const diffDays = Math.round(diffHours / 24);
+	return `${diffDays} d ago`;
+};
+
+const createTimestamp = (value) => {
+	const date = new Date(value);
+	const readable = !value || Number.isNaN(date.getTime()) ? String(value || '—') : date.toLocaleString();
+	return element('span', {
+		className: 'timestamp',
+		text: formatRelativeTime(value) || readable,
+		attributes: { title: readable },
+	});
+};
+
+const copyToClipboard = async (text, button) => {
+	const original = button.textContent;
+	let copied = false;
+	try {
+		if (typeof navigator !== 'undefined' && navigator.clipboard
+			&& typeof navigator.clipboard.writeText === 'function') {
+			await navigator.clipboard.writeText(text);
+			copied = true;
+		} else if (typeof document.execCommand === 'function') {
+			const area = document.createElement('textarea');
+			area.value = text;
+			area.setAttribute('readonly', 'readonly');
+			document.body.append(area);
+			area.select();
+			copied = document.execCommand('copy');
+			if (typeof area.remove === 'function') area.remove();
+		}
+	} catch (_) {
+		copied = false;
+	}
+	button.textContent = copied ? 'Copied!' : 'Copy unavailable';
+	setTimeout(() => {
+		button.textContent = original;
+	}, 2000);
+};
+
+const createCopyButton = (getText, label = 'Copy') => {
+	const button = element('button', { text: label });
+	button.type = 'button';
+	button.className = 'copy-button';
+	button.addEventListener('click', () => copyToClipboard(
+		typeof getText === 'function' ? String(getText() ?? '') : String(getText ?? ''),
+		button,
+	));
+	return button;
 };
 
 const AUTH_CONFIG_TIMEOUT_MS = 8000;
@@ -406,7 +482,7 @@ const createMetricCard = (label, value, meta) => {
 const renderStatusCards = (container, entries, emptyText) => {
 	container.replaceChildren();
 	if (!entries.length) {
-		container.append(element('p', { className: 'request-state', text: emptyText }));
+		container.append(createEmptyState(emptyText));
 		return;
 	}
 	entries.forEach(([name, detail]) => {
@@ -475,8 +551,15 @@ const createOverviewDashboard = () => {
 	const dependencyGrid = element('div', { className: 'status-grid' });
 	const featureGrid = element('div', { className: 'chip-grid' });
 	const statusOutput = element('pre', { className: 'response-block', text: 'No status response yet.' });
+	let lastRawStatus = '';
+	const rawCopyButton = createCopyButton(() => lastRawStatus, 'Copy JSON');
+	rawCopyButton.hidden = true;
 	const rawStatus = element('details', { className: 'raw-status' });
-	rawStatus.append(element('summary', { text: 'Show raw status response' }), statusOutput);
+	rawStatus.append(
+		element('summary', { text: 'Show raw status response' }),
+		rawCopyButton,
+		statusOutput,
+	);
 
 	const section = (title, content) => {
 		const node = element('section', { className: 'dashboard-section' });
@@ -500,6 +583,8 @@ const createOverviewDashboard = () => {
 			output: statusOutput,
 		});
 		if (status && typeof status === 'object') {
+			lastRawStatus = JSON.stringify(status, null, 2);
+			rawCopyButton.hidden = false;
 			renderStatusDashboard({ metrics, channelGrid, dependencyGrid, featureGrid, lastChecked }, status);
 		} else {
 			metrics.replaceChildren(element('p', { className: 'request-state', text: 'Status unavailable. Check the API key and service logs.' }));
@@ -554,8 +639,11 @@ const sendRequest = async ({
 
 	if (!requestIsCurrent()) return;
 	button.disabled = true;
-	output.className = 'response-block request-state';
-	output.textContent = `${summary}\nRequest in progress…`;
+	output.className = 'response-block';
+	output.replaceChildren(
+		element('span', { className: 'response-summary', text: summary }),
+		createLoadingState('Request in progress…'),
+	);
 	const started = performance.now();
 	try {
 		const result = await fetchWithTimeout(request.url, request.options, getApiRequestTimeout(definition), async (response) => {
@@ -822,20 +910,33 @@ const formatJobProgress = (progress) => {
 const createJobSummary = (job, onSelect) => {
 	const card = element('article', { className: 'operation-card' });
 	const jobId = formatJobValue(job && job.jobId);
-	card.append(element('h3', { text: jobId }));
+	const jobHeading = element('h3');
+	jobHeading.append(
+		element('span', { text: jobId }),
+		createCopyButton(jobId, 'Copy ID'),
+	);
+	card.append(jobHeading);
 
 	const details = element('dl');
 	[
 		['Type', job && job.type],
 		['Status', job && job.status],
 		['Progress', formatJobProgress(job && job.progress)],
-		['Created', job && job.createdAt],
-		['Updated', job && job.updatedAt],
-		['Duration', job && job.totalDurationMs !== undefined && job.totalDurationMs !== null
-			? `${job.totalDurationMs} ms` : undefined],
 	].forEach(([label, value]) => {
 		details.append(element('dt', { text: label }), element('dd', { text: formatJobValue(value) }));
 	});
+	[
+		['Created', job && job.createdAt],
+		['Updated', job && job.updatedAt],
+	].forEach(([label, value]) => {
+		const dd = element('dd');
+		if (value) dd.append(createTimestamp(value));
+		else dd.textContent = '—';
+		details.append(element('dt', { text: label }), dd);
+	});
+	const duration = job && job.totalDurationMs !== undefined && job.totalDurationMs !== null
+		? `${job.totalDurationMs} ms` : undefined;
+	details.append(element('dt', { text: 'Duration' }), element('dd', { text: formatJobValue(duration) }));
 	card.append(details);
 
 	const select = element('button', { text: 'Open status' });
@@ -893,7 +994,7 @@ const createJobListForm = (contract, onSelect) => {
 	const renderJobs = (jobs) => {
 		list.replaceChildren();
 		if (!jobs.length) {
-			list.append(element('p', { className: 'request-state', text: 'No recent jobs found.' }));
+			list.append(createEmptyState('No recent jobs found.'));
 			return;
 		}
 		jobs.forEach((job) => list.append(createJobSummary(job, onSelect)));
@@ -1106,7 +1207,7 @@ const renderPlayground = (contract, view) => {
 
 const renderView = async (name) => {
 	const view = document.getElementById('view');
-	view.replaceChildren(element('p', { className: 'request-state', text: 'Loading API contract…' }));
+	view.replaceChildren(createLoadingState('Loading API contract…'));
 	try {
 		const contract = await loadContract();
 		view.replaceChildren();
@@ -1191,7 +1292,7 @@ const setupLegacyConsole = ({ persist = true } = {}) => {
 
 document.addEventListener('DOMContentLoaded', async () => {
 	const view = getElement('view');
-	if (view) view.replaceChildren(element('p', { className: 'request-state', text: 'Checking authentication…' }));
+	if (view) view.replaceChildren(createLoadingState('Checking authentication…'));
 	document.querySelectorAll('[data-view]').forEach((button) => button.addEventListener('click', () => navigateToView(button.dataset.view)));
 
 	getElement('connection-form')?.addEventListener('submit', (event) => {

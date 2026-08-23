@@ -1179,4 +1179,112 @@ describe('admin browser client', () => {
 			expect.objectContaining({ method: 'POST' }),
 		);
 	});
+
+	it('shows a shared loading state while a request is in flight', async () => {
+		let resolveStatus;
+		const pendingStatus = new Promise((resolve) => { resolveStatus = resolve; });
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/status') return pendingStatus;
+				return response({});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'status');
+
+		const statusForm = findForm(browser.elementsById.view, 'GET /api/status');
+		const pendingSubmit = statusForm.dispatch('submit');
+		await flush();
+
+		const output = find(statusForm, (node) => node.tagName === 'PRE');
+		expect(find(output, (node) => node.className === 'spinner')).toBeDefined();
+		expect(output.textContent).toContain('Request in progress');
+
+		resolveStatus(response({
+			service: { name: 'cabros-bot', environment: 'production' },
+			featureFlags: {},
+			deliveryChannels: {},
+			dependencies: {},
+		}));
+		await pendingSubmit;
+		await flush();
+		expect(output.textContent).toContain('cabros-bot');
+	});
+
+	it('renders an empty state when the recent-jobs list has no rows', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => response(url === '/openapi.json' ? contract : { success: true, jobs: [] }),
+		});
+		await flush();
+		await selectView(browser, 'jobs');
+
+		const listForm = findForm(browser.elementsById.view, 'Load recent jobs');
+		await listForm.dispatch('submit');
+		await flush();
+
+		const empty = find(listForm, (node) => node.className === 'empty-state');
+		expect(empty).toBeDefined();
+		expect(empty.textContent).toContain('No recent jobs found.');
+	});
+
+	it('formats job card timestamps relatively with an absolute title', async () => {
+		const createdAt = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				return response({ success: true, jobs: [{
+					jobId: 'recent-job', type: 'expanded-analysis', status: 'completed',
+					progress: {}, createdAt,
+				}] });
+			},
+		});
+		await flush();
+		await selectView(browser, 'jobs');
+
+		const listForm = findForm(browser.elementsById.view, 'Load recent jobs');
+		await listForm.dispatch('submit');
+		await flush();
+
+		const stamps = findAll(browser.elementsById.view, (node) => node.className === 'timestamp'
+			&& node.textContent.includes('min ago'));
+		expect(stamps.length).toBeGreaterThanOrEqual(1);
+		expect(stamps[0].attributes.title).toContain(String(new Date(createdAt).getFullYear()));
+	});
+
+	it('offers a raw-status copy action that reports unavailable clipboards safely', async () => {
+		const status = {
+			service: { name: 'cabros-bot', version: '0.1.0', environment: 'production', commit: 'abc123' },
+			featureFlags: {},
+			deliveryChannels: {},
+			dependencies: {},
+		};
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/status') return response(status);
+				return response({});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'overview');
+		await flush();
+
+		const copyButton = findButton(browser.elementsById.view, 'Copy JSON');
+		expect(copyButton).toBeDefined();
+		await copyButton.dispatch('click');
+		await flush();
+		expect(copyButton.textContent).toBe('Copy unavailable');
+
+		for (const fireTimer of [...browser.timers.values()]) fireTimer();
+		expect(copyButton.textContent).toBe('Copy JSON');
+	});
+
+	it('keeps navigation icons as inline SVG instead of platform glyphs', () => {
+		const shell = fs.readFileSync(path.join(__dirname, '../../src/admin/index.html'), 'utf8');
+		expect(shell.match(/<svg class="nav-icon"/g)).toHaveLength(7);
+		expect(shell).not.toMatch(/[⌂◈◉◇◌✦▷]/);
+	});
 });
