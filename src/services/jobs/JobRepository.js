@@ -393,7 +393,7 @@ class JobRepository {
 					...current,
 					execution: {
 						...execution,
-						mode: 'render-worker',
+						mode: execution.mode || 'render-worker',
 						status: 'claimed',
 						workerId,
 						attempt: Number(execution.attempt || 0) + 1,
