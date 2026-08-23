@@ -63,7 +63,7 @@ describe('OpenAPI contract', () => {
 			'DELETE /api/scanner-presets/{id}', 'POST /api/scanner-presets/{id}/run',
 			'POST /api/jobs/tradingview-analysis', 'GET /api/jobs', 'GET /api/jobs/{jobId}',
 			'POST /api/jobs/{jobId}/cancel', 'POST /api/jobs/{jobId}/retry',
-			'POST /api/jobs/{jobId}/retry-failed', 'POST /api/trading/binance/orders', 'GET /api/status', 'GET /api/capabilities',
+			'POST /api/jobs/{jobId}/retry-failed', 'GET /api/trading/binance/orders', 'POST /api/trading/binance/orders', 'GET /api/status', 'GET /api/capabilities',
 		]);
 
 		for (const operation of operations) {
@@ -79,6 +79,7 @@ describe('OpenAPI contract', () => {
 		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
 		const expectedRoles = {
 			'GET /api/status': 'admin.viewer',
+			'GET /api/trading/binance/orders': 'admin.viewer',
 			'POST /api/trading/binance/orders': 'admin.operator',
 			'GET /api/alerts': 'admin.viewer',
 			'GET /api/jobs': 'admin.viewer',

@@ -3594,6 +3594,222 @@
               "body": "{\n  \"success\": false,\n  \"error\": \"Binance trading is disabled\",\n  \"code\": \"FEATURE_DISABLED\"\n}"
             }
           ]
+        },
+        {
+          "name": "GET Binance Orders (recent history)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Reads recent order history for an allowed symbol.",
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/orders?symbol=BTCUSDT&limit=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "orders"
+              ],
+              "query": [
+                {
+                  "key": "symbol",
+                  "value": "BTCUSDT"
+                },
+                {
+                  "key": "limit",
+                  "value": "20"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"environment\": \"testnet\",\n  \"orders\": [\n    {\n      \"symbol\": \"BTCUSDT\",\n      \"orderId\": 42,\n      \"clientOrderId\": \"cabros-375-1\",\n      \"status\": \"FILLED\",\n      \"type\": \"LIMIT\",\n      \"side\": \"BUY\",\n      \"price\": \"60000.00000000\",\n      \"origQty\": \"0.00100000\",\n      \"executedQty\": \"0.00100000\",\n      \"cummulativeQuoteQty\": \"60.00000000\",\n      \"time\": 1700000000000\n    }\n  ],\n  \"count\": 1\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Binance Order (by ID)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Reads a single order status by Binance order ID.",
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/orders?symbol=BTCUSDT&orderId=42",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "orders"
+              ],
+              "query": [
+                {
+                  "key": "symbol",
+                  "value": "BTCUSDT"
+                },
+                {
+                  "key": "orderId",
+                  "value": "42"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"environment\": \"testnet\",\n  \"order\": {\n    \"symbol\": \"BTCUSDT\",\n    \"orderId\": 42,\n    \"clientOrderId\": \"cabros-375-1\",\n    \"status\": \"FILLED\",\n    \"type\": \"LIMIT\",\n    \"side\": \"BUY\",\n    \"price\": \"60000.00000000\",\n    \"origQty\": \"0.00100000\",\n    \"executedQty\": \"0.00100000\",\n    \"cummulativeQuoteQty\": \"60.00000000\",\n    \"time\": 1700000000000,\n    \"updateTime\": 1700000005000,\n    \"isWorking\": true\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Binance Order (by clientOrderId)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Reads a single order status by original client order ID.",
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/orders?symbol=BTCUSDT&origClientOrderId=cabros-375-1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "orders"
+              ],
+              "query": [
+                {
+                  "key": "symbol",
+                  "value": "BTCUSDT"
+                },
+                {
+                  "key": "origClientOrderId",
+                  "value": "cabros-375-1"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"environment\": \"testnet\",\n  \"order\": {\n    \"symbol\": \"BTCUSDT\",\n    \"orderId\": 42,\n    \"clientOrderId\": \"cabros-375-1\",\n    \"status\": \"FILLED\",\n    \"type\": \"LIMIT\",\n    \"side\": \"BUY\",\n    \"price\": \"60000.00000000\",\n    \"origQty\": \"0.00100000\",\n    \"executedQty\": \"0.00100000\",\n    \"cummulativeQuoteQty\": \"60.00000000\",\n    \"time\": 1700000000000,\n    \"updateTime\": 1700000005000,\n    \"isWorking\": true\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Binance Orders (invalid symbol - 400)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Returns 400 when symbol is invalid or disallowed.",
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/orders?symbol=INVALID",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "orders"
+              ],
+              "query": [
+                {
+                  "key": "symbol",
+                  "value": "INVALID"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Bad Request",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"success\": false,\n  \"error\": \"symbol is not allowed for Binance trading\",\n  \"code\": \"INVALID_ORDER_REQUEST\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Binance Order (not found - 404)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Returns 404 when the requested order ID does not exist on Binance.",
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/orders?symbol=BTCUSDT&orderId=999999",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "orders"
+              ],
+              "query": [
+                {
+                  "key": "symbol",
+                  "value": "BTCUSDT"
+                },
+                {
+                  "key": "orderId",
+                  "value": "999999"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Not Found",
+              "status": "Not Found",
+              "code": 404,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Binance order not found\",\n  \"code\": \"ORDER_NOT_FOUND\"\n}"
+            }
+          ]
         }
       ]
     },

@@ -409,6 +409,7 @@ function sanitizeOrderResponse(response) {
 	const order = Object.fromEntries(Object.entries({
 		symbol: response.symbol,
 		orderId: response.orderId,
+		orderListId: response.orderListId,
 		clientOrderId: response.clientOrderId,
 		transactTime: response.transactTime,
 		price: response.price,
@@ -420,11 +421,70 @@ function sanitizeOrderResponse(response) {
 		timeInForce: response.timeInForce,
 		type: response.type,
 		side: response.side,
+		stopPrice: response.stopPrice,
+		icebergQty: response.icebergQty,
+		time: response.time,
+		updateTime: response.updateTime,
+		isWorking: response.isWorking,
 		workingTime: response.workingTime,
 		selfTradePreventionMode: response.selfTradePreventionMode,
 		fills: Array.isArray(response.fills) ? response.fills.map(sanitizeFill) : undefined,
 	}).filter(([, value]) => value !== undefined));
 	return order;
+}
+
+function hasQueryParam(value) {
+	if (value === undefined || value === null) return false;
+	if (typeof value === 'string') return value.trim().length > 0;
+	if (typeof value === 'number') return Number.isFinite(value);
+	return false;
+}
+
+function normalizeOrderQuery(query = {}) {
+	const rawSymbol = query.symbol;
+	if (!hasQueryParam(rawSymbol)) {
+		throw new BinanceOrderRequestError('symbol is required');
+	}
+	const symbol = String(rawSymbol).trim().toUpperCase();
+	if (!/^[A-Z0-9]{5,20}$/.test(symbol)) {
+		throw new BinanceOrderRequestError('symbol must be a Binance Spot symbol such as BTCUSDT');
+	}
+
+	let orderId;
+	if (hasQueryParam(query.orderId)) {
+		const orderIdStr = String(query.orderId).trim();
+		if (!/^\d+$/.test(orderIdStr) || Number(orderIdStr) <= 0) {
+			throw new BinanceOrderRequestError('orderId must be a positive integer');
+		}
+		orderId = Number.parseInt(orderIdStr, 10);
+	}
+
+	let origClientOrderId;
+	const rawClientOrderId = [query.origClientOrderId, query.clientOrderId].find(hasQueryParam);
+	if (rawClientOrderId !== undefined) {
+		const clientOrderIdStr = String(rawClientOrderId).trim();
+		if (!/^[A-Za-z0-9._:-]{1,36}$/.test(clientOrderIdStr)) {
+			throw new BinanceOrderRequestError('origClientOrderId must contain 1-36 safe characters');
+		}
+		origClientOrderId = clientOrderIdStr;
+	}
+
+	let limit = 50;
+	if (hasQueryParam(query.limit)) {
+		const limitStr = String(query.limit).trim();
+		if (!/^-?\d+$/.test(limitStr)) {
+			throw new BinanceOrderRequestError('limit must be an integer between 1 and 100');
+		}
+		const parsedLimit = Number.parseInt(limitStr, 10);
+		limit = Math.max(1, Math.min(100, parsedLimit));
+	}
+
+	return {
+		symbol,
+		orderId,
+		origClientOrderId,
+		limit,
+	};
 }
 
 function createBinanceOrderService({ createClient = createBinanceClient } = {}) {
@@ -440,6 +500,73 @@ function createBinanceOrderService({ createClient = createBinanceClient } = {}) 
 				allowedSymbols: config.allowedSymbols,
 				maxNotionalConfigured: Number.isFinite(config.maxNotional) && config.maxNotional > 0,
 			};
+		},
+
+		async getOrders(query = {}) {
+			const config = getConfig();
+			if (!config.enabled) {
+				throw new BinanceOrderRequestError('Binance trading is disabled', 'FEATURE_DISABLED', 403);
+			}
+			if (!config.configured) {
+				throw new BinanceOrderRequestError(
+					'Binance trading is enabled but not configured',
+					'BINANCE_TRADING_UNAVAILABLE',
+					503,
+				);
+			}
+
+			const { symbol, orderId, origClientOrderId, limit } = normalizeOrderQuery(query);
+
+			if (!config.allowedSymbols.includes(symbol)) {
+				throw new BinanceOrderRequestError('symbol is not allowed for Binance trading');
+			}
+
+			let client;
+			try {
+				client = createClient(config);
+			} catch (error) {
+				throw new BinanceOrderServiceError('Binance client could not be initialized', 'BINANCE_CLIENT_UNAVAILABLE', 503);
+			}
+
+			if (orderId !== undefined || origClientOrderId !== undefined) {
+				const params = {
+					symbol,
+					...(orderId !== undefined ? { orderId } : {}),
+					...(origClientOrderId !== undefined ? { origClientOrderId } : {}),
+				};
+				try {
+					const order = await client.getOrder(params);
+					return {
+						success: true,
+						environment: config.environment,
+						order: sanitizeOrderResponse(order || {}),
+					};
+				} catch (error) {
+					if (isOrderNotFoundError(error)) {
+						throw new BinanceOrderRequestError('Binance order not found', 'ORDER_NOT_FOUND', 404);
+					}
+					if (isDefinitiveBinanceRejection(error)) {
+						throw new BinanceOrderRequestError('Binance rejected the request', 'BINANCE_REQUEST_REJECTED', 400);
+					}
+					throw new BinanceOrderServiceError('Binance order query failed', 'BINANCE_QUERY_FAILED', 502);
+				}
+			}
+
+			try {
+				const orders = await client.allOrders({ symbol, limit });
+				const sanitizedOrders = Array.isArray(orders) ? orders.map(sanitizeOrderResponse) : [];
+				return {
+					success: true,
+					environment: config.environment,
+					orders: sanitizedOrders,
+					count: sanitizedOrders.length,
+				};
+			} catch (error) {
+				if (isDefinitiveBinanceRejection(error)) {
+					throw new BinanceOrderRequestError('Binance rejected the request', 'BINANCE_REQUEST_REJECTED', 400);
+				}
+				throw new BinanceOrderServiceError('Binance order query failed', 'BINANCE_QUERY_FAILED', 502);
+			}
 		},
 
 		async placeOrder(body, { idempotencyKey } = {}) {
