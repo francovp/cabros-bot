@@ -619,7 +619,7 @@ const createAlertDetailPanel = (alert) => {
 		panel.append(block);
 	}
 
-	const provenance = asObject(data.prompt_provenance);
+	const provenance = asObject(data.promptProvenance || data.prompt_provenance);
 	if (provenance.name) {
 		panel.append(element('p', {
 			className: 'request-state',
@@ -947,6 +947,8 @@ const createAlertListForm = () => {
 	let nextBefore;
 	let backCursors = [];
 	const requestPage = async (cursor) => {
+		prev.disabled = true;
+		next.disabled = true;
 		before.value = cursor || '';
 		const query = Object.fromEntries(Object.entries({
 			limit: limit.value,
