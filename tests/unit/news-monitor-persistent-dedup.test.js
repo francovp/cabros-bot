@@ -312,6 +312,43 @@ describe('NewsCache — Persistent Dedup Backend (Issue #120)', () => {
 			expect(cache.cache.get('BTCUSDT:price_surge').localOnlyChannels).toEqual([]);
 		});
 
+		it('prefers a persistent successful channel state over an older local-only success', async () => {
+			const failedData = {
+				alert: { symbol: 'BTCUSDT' },
+				routing: { channels: ['telegram'], telegramChatId: 'destination-a' },
+				deliveryResults: [{ channel: 'telegram', success: false }],
+			};
+			const localData = {
+				...failedData,
+				deliveryResults: [{ channel: 'telegram', success: true, messageId: 'telegram-local' }],
+			};
+			const persistentData = {
+				...failedData,
+				routing: { channels: ['telegram'], telegramChatId: 'destination-b' },
+				deliveryResults: [{ channel: 'telegram', success: true, messageId: 'telegram-persistent' }],
+			};
+
+			await cache.set('BTCUSDT', EventCategory.PRICE_SURGE, failedData);
+			await cache.set('BTCUSDT', EventCategory.PRICE_SURGE, localData, {
+				preserveTtl: true,
+				deliveryChannels: [],
+				localDeliveryChannels: ['telegram'],
+				localOnlyChannels: ['telegram'],
+				skipPersistence: true,
+			});
+			mockGetEntryRecord.mockResolvedValue({
+				data: persistentData,
+				expiresAtMs: Date.now() + cache.ttlMs,
+			});
+
+			const result = await cache.get('BTCUSDT', EventCategory.PRICE_SURGE);
+
+			expect(result.deliveryResults).toEqual([
+				expect.objectContaining({ channel: 'telegram', success: true, messageId: 'telegram-persistent' }),
+			]);
+			expect(cache.cache.get('BTCUSDT:price_surge').localOnlyChannels).toEqual([]);
+		});
+
 		it('preserves the cache TTL when updating cached delivery results', async () => {
 			const firstData = { alert: { symbol: 'BTCUSDT' }, deliveryResults: [{ channel: 'telegram', success: true }] };
 			const retryData = { ...firstData, deliveryResults: [{ channel: 'telegram', success: true }, { channel: 'whatsapp', success: true }] };

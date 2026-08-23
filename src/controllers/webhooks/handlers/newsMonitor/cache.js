@@ -238,7 +238,10 @@ class NewsCache {
 			try {
 				const entryRecord = await newsDedupStorageService.getEntryRecord(key);
 				if (entryRecord) {
-					const localOnlyChannels = entry?.localOnlyChannels ?? [];
+					const localOnlyChannels = (entry?.localOnlyChannels ?? []).filter(channel => {
+						const persistentResult = entryRecord.data?.deliveryResults?.find(result => result?.channel === channel);
+						return persistentResult?.success !== true;
+					});
 					const refreshedData = localData && localOnlyChannels.length > 0
 						? mergeDeliveryData(entryRecord.data, localData, localOnlyChannels)
 						: entryRecord.data;
