@@ -175,6 +175,13 @@
       "description": "Job webhook callback retry delay in milliseconds",
       "valueType": "NUMBER"
     },
+    "JOB_POLL_INTERVAL_MS": {
+      "defaultValue": {
+        "value": "15000"
+      },
+      "description": "Polling interval in milliseconds for firestore-poller job execution mode",
+      "valueType": "NUMBER"
+    },
     "SIGNAL_OUTCOME_EVALUATION_BATCH_LIMIT": {
       "defaultValue": {
         "value": "50"

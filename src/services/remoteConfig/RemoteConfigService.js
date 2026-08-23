@@ -41,6 +41,7 @@ const PARAMETER_SCHEMA = Object.freeze({
 	DISCORD_MAX_TOTAL_RETRY_WAIT_MS: { type: 'number', defaultValue: 10000, integer: true, min: 1, max: 120000 },
 	WEBHOOK_IDEMPOTENCY_TTL_MS: { type: 'number', defaultValue: 300000, integer: true, min: 1, max: 86400000 },
 	JOB_CALLBACK_RETRY_DELAY_MS: { type: 'number', defaultValue: 1000, integer: true, min: 1, max: 60000 },
+	JOB_POLL_INTERVAL_MS: { type: 'number', defaultValue: 15000, integer: true, min: 1000, max: 300000 },
 	SIGNAL_OUTCOME_EVALUATION_BATCH_LIMIT: { type: 'number', defaultValue: 50, integer: true, min: 1, max: 500 },
 	SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS: { type: 'number', defaultValue: 30000, integer: true, min: 1, max: 300000 },
 	ENABLE_GEMINI_GROUNDING: { type: 'boolean', defaultValue: false },

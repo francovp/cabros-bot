@@ -23,8 +23,9 @@ function stopNotificationBot(bot, signal) {
 }
 
 async function main() {
-	if (process.env.JOB_EXECUTION_MODE !== 'render-worker') {
-		const error = new Error('The worker requires JOB_EXECUTION_MODE=render-worker.');
+	const mode = process.env.JOB_EXECUTION_MODE;
+	if (mode !== 'render-worker' && mode !== 'firestore-poller') {
+		const error = new Error('The worker requires JOB_EXECUTION_MODE=render-worker or JOB_EXECUTION_MODE=firestore-poller.');
 		error.code = 'JOB_WORKER_DISABLED';
 		throw error;
 	}

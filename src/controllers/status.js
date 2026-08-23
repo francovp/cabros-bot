@@ -309,7 +309,7 @@ function getStatus() {
 			equityMarketData: equityMarketDataStatus.enabled,
 			firestoreIdempotency: idempotencyStorageService.isEnabled(),
 			firebaseRemoteConfig: remoteConfigStatus.enabled,
-			jobExecutionWorker: jobExecutionQueueStatus.enabled,
+			jobExecutionWorker: jobExecutionQueueStatus.enabled || process.env.JOB_EXECUTION_MODE === 'firestore-poller',
 		},
 		deliveryChannels: {
 			telegram: {

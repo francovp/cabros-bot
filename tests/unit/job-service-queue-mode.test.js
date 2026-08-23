@@ -166,4 +166,64 @@ describe('JobService Render worker mode', () => {
 
 		expect(repository.delete).toHaveBeenCalledWith(expect.any(String));
 	});
+
+	describe('JobService firestore-poller mode', () => {
+		const originalMode = process.env.JOB_EXECUTION_MODE;
+
+		beforeEach(() => {
+			process.env.JOB_EXECUTION_MODE = 'firestore-poller';
+		});
+
+		afterEach(() => {
+			if (originalMode !== undefined) {
+				process.env.JOB_EXECUTION_MODE = originalMode;
+			} else {
+				delete process.env.JOB_EXECUTION_MODE;
+			}
+		});
+
+		it('persists a queued job to durable storage without Redis queue enqueue or web process execution', async () => {
+			const repository = {
+				entries: () => [],
+				isDurable: jest.fn(() => true),
+				save: jest.fn().mockResolvedValue('job-fp-123'),
+			};
+			const queue = {
+				isEnabled: () => false,
+				enqueue: jest.fn(),
+			};
+			const service = new JobService(repository, queue);
+			service._triggerCallbackIfConfigured = jest.fn().mockResolvedValue(undefined);
+			service._runBackgroundJob = jest.fn();
+
+			const result = await service.createJob('expanded-analysis', {
+				type: 'expanded-analysis',
+				symbols: ['BINANCE:BTCUSDT'],
+			});
+
+			expect(result).toMatchObject({ success: true, jobId: expect.any(String), status: 'processing' });
+			expect(repository.save).toHaveBeenCalledWith(
+				expect.objectContaining({
+					execution: expect.objectContaining({ mode: 'firestore-poller', status: 'queued', attempt: 0 }),
+				}),
+				{ required: true },
+			);
+			expect(queue.enqueue).not.toHaveBeenCalled();
+			expect(service._runBackgroundJob).not.toHaveBeenCalled();
+		});
+
+		it('requires durable Firestore storage when creating jobs in firestore-poller mode', async () => {
+			const repository = {
+				entries: () => [],
+				isDurable: jest.fn(() => false),
+				save: jest.fn(),
+			};
+			const service = new JobService(repository);
+
+			await expect(service.createJob('expanded-analysis', {
+				type: 'expanded-analysis',
+				symbols: ['BINANCE:BTCUSDT'],
+			})).rejects.toThrow('Firestore-poller mode requires durable Firestore job storage.');
+		});
+	});
 });

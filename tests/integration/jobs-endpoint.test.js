@@ -91,6 +91,36 @@ describe('Jobs API Integration Tests', () => {
 		expect(tradingViewMcpService.analyzeSymbolIdentifier).not.toHaveBeenCalled();
 	});
 
+	it('accepts and persists job in firestore-poller mode without Redis', async () => {
+		process.env.JOB_EXECUTION_MODE = 'firestore-poller';
+		process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+		delete process.env.REDIS_URL;
+
+		const response = await request(app)
+			.post('/api/jobs/tradingview-analysis')
+			.set('x-api-key', 'test-key')
+			.send({ type: 'expanded-analysis', symbols: ['BINANCE:BTCUSDT'] })
+			.expect(201);
+
+		expect(response.body).toMatchObject({
+			success: true,
+			jobId: expect.any(String),
+			status: 'processing',
+		});
+		expect(tradingViewMcpService.analyzeSymbolIdentifier).not.toHaveBeenCalled();
+
+		const persisted = await jobRepository.get(response.body.jobId);
+		expect(persisted).toMatchObject({
+			jobId: response.body.jobId,
+			status: 'processing',
+			execution: {
+				mode: 'firestore-poller',
+				status: 'queued',
+				attempt: 0,
+			},
+		});
+	});
+
 	it('deduplicates concurrent job creation with one idempotency key', async () => {
 		tradingViewMcpService.analyzeSymbolIdentifier.mockImplementation(async () => {
 			await new Promise((resolve) => setTimeout(resolve, 50));

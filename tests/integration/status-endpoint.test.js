@@ -491,6 +491,25 @@ describe('Status endpoints', () => {
 		expect(JSON.stringify(response.body.dependencies.jobExecutionQueue)).not.toContain('redis://');
 	});
 
+	it('reports firestore-poller mode execution readiness without Redis', async () => {
+		process.env.JOB_EXECUTION_MODE = 'firestore-poller';
+		delete process.env.REDIS_URL;
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.jobExecutionWorker).toBe(true);
+		expect(response.body.dependencies.jobExecutionQueue).toMatchObject({
+			mode: 'firestore-poller',
+			enabled: false,
+			configured: false,
+			ready: false,
+			status: 'disabled',
+		});
+	});
+
 	it('reports Firestore job storage through the legacy alert-storage gate', async () => {
 		delete process.env.ENABLE_FIRESTORE_JOB_STORAGE;
 

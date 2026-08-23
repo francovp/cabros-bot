@@ -53,6 +53,26 @@ describe('standalone worker Sentry shutdown flush', () => {
 		expect(events).toEqual(['jobs:stop', 'flush:2000', 'exit:0']);
 	});
 
+	it('flushes Sentry after TradingView job drain in firestore-poller mode and before exit', async () => {
+		process.env.JOB_EXECUTION_MODE = 'firestore-poller';
+		mockSentry();
+		jest.doMock('../../src/controllers/webhooks/handlers/alert/alert', () => ({
+			initializeNotificationServices: jest.fn().mockResolvedValue(undefined),
+		}));
+		jest.doMock('../../src/services/jobs/jobWorker', () => ({
+			startJobWorker: jest.fn().mockResolvedValue({
+				stop: jest.fn(async () => events.push('jobs:stop')),
+			}),
+		}));
+
+		const { main } = require('../../worker');
+		await main();
+		process.emit('SIGTERM');
+		await waitForShutdown();
+
+		expect(events).toEqual(['jobs:stop', 'flush:2000', 'exit:0']);
+	});
+
 	it('flushes Sentry before nonzero exit when TradingView job drain fails', async () => {
 		process.env.JOB_EXECUTION_MODE = 'render-worker';
 		mockSentry();
