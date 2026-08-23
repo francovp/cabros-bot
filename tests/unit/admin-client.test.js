@@ -1482,7 +1482,7 @@ describe('admin browser client', () => {
 				if (url === '/openapi.json') return response(contract);
 				if (url.startsWith('/api/alerts')) {
 					alertCalls += 1;
-					if (alertCalls === 3) return slowPage.then(() => response(pages[2]));
+					if (alertCalls === 2) return slowPage.then(() => response(pages[2]));
 					return response(pages[alertCalls - 1]);
 				}
 				return response({});
