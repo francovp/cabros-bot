@@ -1454,6 +1454,15 @@ GEMINI_API_KEY=your_google_ai_studio_api_key
 
 ## Commands
 
+### /help, /start
+
+Display the list of available Telegram bot commands, argument syntax, and aliases formatted in MarkdownV2.
+
+**Example:**
+```
+/help
+```
+
 ### /precio `<symbol>`
 
 Get crypto price from Binance.
@@ -1468,9 +1477,41 @@ Get crypto price from Binance.
 Precio de BTCUSDT es $45,000.50
 ```
 
-### /cryptobot
+### /cryptobot id
 
-Crypto bot help command.
+Telegram bot utility command to get current Telegram chat ID.
+
+**Example:**
+```
+/cryptobot id
+```
+
+### /analisis `<symbols>` (alias: `/analysis`)
+
+Create a TradingView technical analysis background job.
+
+**Example:**
+```
+/analisis BINANCE:BTCUSDT,NASDAQ:NVDA timeframe=1D mtf=true
+```
+
+### /scanner `[options]`
+
+Create a TradingView market scanner background job (`top_gainers`, `top_losers`, `breakouts`).
+
+**Example:**
+```
+/scanner scans=top_gainers,top_losers exchange=BINANCE timeframe=4h limit=10
+```
+
+### /noticias `[options]` (alias: `/news`)
+
+Run the news monitor and AI sentiment analysis.
+
+**Example:**
+```
+/noticias crypto=BTCUSDT,ETHUSDT stocks=NVDA
+```
 
 ## Runtime Error Monitoring (005-sentry-runtime-errors)
 
