@@ -1937,6 +1937,37 @@ describe('admin browser client', () => {
 		expect(findButton(listForm, 'Next page').disabled).toBe(true);
 	});
 
+	it('clears the generated before cursor when non-cursor filters change', async () => {
+		let lastUrl = '';
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/alerts')) {
+					lastUrl = url;
+					return response({ alerts: [{ id: 'a1', text: 'page alert', enriched: false }], pagination: { hasMore: true, nextBefore: 'cursor-2' } });
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alerts');
+		await listForm.dispatch('submit');
+		await flush();
+		await findButton(listForm, 'Next page').dispatch('click');
+		await flush();
+		expect(lastUrl).toContain('before=cursor-2');
+
+		listForm.elements.source.value = 'webhook';
+		await listForm.elements.source.dispatch('input');
+		expect(listForm.elements.before.value).toBe('');
+
+		await listForm.dispatch('submit');
+		await flush();
+		expect(lastUrl).not.toContain('before=');
+	});
+
 	it('keeps navigation icons as inline SVG instead of platform glyphs', () => {
 		const shell = fs.readFileSync(path.join(__dirname, '../../src/admin/index.html'), 'utf8');
 		expect(shell.match(/<svg class="nav-icon"/g)).toHaveLength(7);
