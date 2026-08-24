@@ -82,6 +82,16 @@ function postSymbolAnalysis() {
 
 			if (error && error.message) {
 				console.warn('[SymbolAnalysis] TradingView MCP call failed:', error.message);
+				try {
+					sentryService.captureRuntimeError({
+						channel: 'http-alert',
+						error,
+						http: { endpoint: '/api/webhook/symbol-analysis', method: 'POST', statusCode: 502, requestId },
+						extra: { provider: 'tradingview-mcp', failureClass: 'upstream_failure' },
+					});
+				} catch (monitoringError) {
+					console.warn('[SymbolAnalysis] Sentry capture failed:', monitoringError.message);
+				}
 				return res.status(502).json({
 					success: false,
 					error: error.message,
@@ -152,7 +162,7 @@ function normalizeAnalysis({ analysis = {}, input, parsed, multiTimeframe, side 
 		SMA20: numberOrNull(rawIndicators.SMA20 ?? rawIndicators.sma20),
 		MACD: numberOrNull(rawIndicators.MACD ?? rawIndicators.macd),
 		MACD_signal: numberOrNull(rawIndicators.MACD_signal ?? rawIndicators.macd_signal),
-		ATR: numberOrNull(rawIndicators.ATR ?? rawIndicators.atr ?? technical.atr?.value ?? technical.atr),
+		ATR: numberOrNull(rawIndicators.ATR ?? rawIndicators.atr ?? technical.atr?.value ?? technical.atr ?? technical.volatility?.atr),
 		ADX: numberOrNull(rawIndicators.ADX ?? rawIndicators.adx ?? technical.adx?.value),
 	};
 	const assessment = analysis.overall_assessment || technical.overall_assessment || {};
@@ -188,7 +198,7 @@ function buildRisk({ technical, price, side }) {
 	const indicators = technical.technical_indicators || {};
 	const bollinger = technical.bollinger_analysis || {};
 	const currentBollinger = technical.bollinger_bands || {};
-	const atr = numberOrNull(indicators.ATR ?? indicators.atr ?? technical.atr?.value ?? technical.atr);
+	const atr = numberOrNull(indicators.ATR ?? indicators.atr ?? technical.atr?.value ?? technical.atr ?? technical.volatility?.atr);
 	const stop = getStopLossMeta(price, atr, bollinger, currentBollinger, side);
 	const target = atr !== null
 		? (side === 'SELL' ? price - (atr * 3) : price + (atr * 3))
@@ -268,6 +278,7 @@ function createDeadline(timeoutMs) {
 }
 
 function numberOrNull(value) {
+	if (value === null || value === undefined || (typeof value === 'string' && value.trim() === '')) return null;
 	const number = Number(value);
 	return Number.isFinite(number) ? number : null;
 }

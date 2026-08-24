@@ -2,6 +2,7 @@ const request = require('supertest');
 const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
 const { tradingViewMcpService } = require('../../src/services/tradingview/TradingViewMcpService');
+const sentryService = require('../../src/services/monitoring/SentryService');
 
 jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
 	tradingViewMcpService: {
@@ -20,11 +21,13 @@ describe('Symbol analysis endpoint', () => {
 			TRADINGVIEW_MCP_DEFAULT_TIMEFRAME: '1D',
 		};
 		jest.clearAllMocks();
+		jest.spyOn(sentryService, 'captureRuntimeError').mockImplementation(() => {});
 		app.use('/api', getRoutes(null));
 	});
 
 	afterEach(() => {
 		process.env = originalEnv;
+		jest.restoreAllMocks();
 		if (app._router && app._router.stack && app._router.stack.length > 0) {
 			app._router.stack.pop();
 		}
@@ -152,6 +155,48 @@ describe('Symbol analysis endpoint', () => {
 			success: false,
 			code: 'SYMBOL_ANALYSIS_FAILED',
 		}));
+		expect(sentryService.captureRuntimeError).toHaveBeenCalledWith(expect.objectContaining({
+			http: expect.objectContaining({ endpoint: '/api/webhook/symbol-analysis', statusCode: 502 }),
+		}));
+	});
+
+	it('preserves missing numeric values and supports ATR from volatility data', async () => {
+		tradingViewMcpService.analyzeSymbolIdentifier.mockResolvedValueOnce({
+			technical: {
+				price_data: { current_price: null, high: null, low: null },
+				technical_indicators: { rsi: null },
+				volatility: { atr: 4 },
+			},
+			confluence: { recommendation: 'BUY', confidence: 'LOW' },
+		});
+
+		const res = await request(app)
+			.post('/api/webhook/symbol-analysis')
+			.set('x-api-key', 'test-key')
+			.send({ symbol: 'BINANCE:BTCUSDT' })
+			.expect(200);
+
+		expect(res.body.analysis.price_data).toEqual(expect.objectContaining({ close: null, high: null, low: null }));
+		expect(res.body.analysis.technical_indicators).toEqual(expect.objectContaining({ RSI: null, ATR: 4 }));
+		expect(res.body.analysis.risk).toEqual(expect.objectContaining({ valid: false, entry_price: null }));
+		expect(res.body.analysis.decision).toEqual(expect.objectContaining({ action: 'NO_TRADE', dataSufficient: false }));
+
+		tradingViewMcpService.analyzeSymbolIdentifier.mockResolvedValueOnce({
+			technical: {
+				price_data: { current_price: 100 },
+				technical_indicators: { rsi: 50 },
+				volatility: { atr: 4 },
+			},
+			confluence: { recommendation: 'BUY', confidence: 'HIGH' },
+		});
+
+		const atrRes = await request(app)
+			.post('/api/webhook/symbol-analysis')
+			.set('x-api-key', 'test-key')
+			.send({ symbol: 'BINANCE:BTCUSDT' })
+			.expect(200);
+
+		expect(atrRes.body.analysis.risk).toEqual(expect.objectContaining({ stop_loss: 94, target: 112, valid: true }));
 	});
 
 	it('returns 504 when the TradingView call exceeds the endpoint deadline', async () => {
