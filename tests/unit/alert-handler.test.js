@@ -131,9 +131,9 @@ describe('Alert Handler', () => {
 
 		tradingViewMcpService.isEnabled.mockReturnValue(true);
 		tradingViewMcpService.enrichFromAlertText.mockResolvedValue({
-			original_text: 'BTCUSDT(240) pasó a señal de VENTA',
-			sentiment: 'BEARISH',
-			sentiment_score: -0.6,
+			original_text: 'BTCUSDT(240) pasó a señal de COMPRA',
+			sentiment: 'BULLISH',
+			sentiment_score: 0.6,
 			insights: ['MCP insight'],
 			technical_levels: { supports: ['65000'], resistances: ['68000'] },
 			sources: [],
@@ -154,7 +154,7 @@ describe('Alert Handler', () => {
 			modelUsed: 'gemini-2.5-flash',
 		});
 
-		const result = await enrichAlert({ text: 'BTCUSDT(240) pasó a señal de VENTA' }, { useTradingViewData: true });
+		const result = await enrichAlert({ text: 'BTCUSDT(240) pasó a señal de COMPRA' }, { useTradingViewData: true });
 
 		expect(tradingViewMcpService.enrichFromAlertText).toHaveBeenCalled();
 		expect(groundAlert).toHaveBeenCalled();
@@ -368,7 +368,7 @@ describe('Alert Handler', () => {
 		const result = await enrichAlert({ text: 'BTCUSDT(240) pasó a señal de COMPRA' }, { useTradingViewData: true });
 
 		expect(result.sentiment).toBe('NEUTRAL');
-		expect(result.sentiment_score).toBe(0.1);
+		expect(result.sentiment_score).toBe(0);
 		expect(result.insights).toHaveLength(6);
 		expect(result.insights[0]).toBe('Confluencia contradictoria: SELL · Señales Mixtas ⚠️ · Confianza: 81');
 		expect(result.insights).not.toContain('Gemini insight 6');
@@ -460,5 +460,281 @@ describe('Alert Handler', () => {
 		expect(result.price_data).toEqual({ current_price: 64863.03, high: 65000, low: 64000 });
 
 		process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
+	});
+
+	describe('Sentiment and score merge coherence and sign-coherence guard', () => {
+		it('prefers MCP when Gemini and MCP conflict, selecting sentiment and score atomically and tagging conflict', async () => {
+			const previousGeminiFlag = process.env.ENABLE_GEMINI_GROUNDING;
+			process.env.ENABLE_GEMINI_GROUNDING = 'true';
+
+			const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+			tradingViewMcpService.isEnabled.mockReturnValue(true);
+			tradingViewMcpService.enrichFromAlertText.mockResolvedValue({
+				original_text: 'BTCUSDT(240) pasó a señal de VENTA',
+				tradingViewEnrichmentApplied: true,
+				sentiment: 'BEARISH',
+				sentiment_score: -0.65,
+				insights: ['Technical breakdown confirmed'],
+				sources: [],
+				truncated: false,
+			});
+
+			groundAlert.mockResolvedValue({
+				sentiment: 'BULLISH',
+				sentiment_score: 0.85,
+				insights: ['Gemini bullish news overview'],
+				sources: [{ title: 'News', url: 'https://news.com' }],
+				truncated: false,
+				modelUsed: 'gemini-2.5-flash',
+			});
+
+			const result = await enrichAlert({ text: 'BTCUSDT(240) pasó a señal de VENTA' }, { useTradingViewData: true });
+
+			expect(result.sentiment).toBe('BEARISH');
+			expect(result.sentiment_score).toBe(-0.65);
+			expect(result.sentimentConflict).toBe(true);
+			expect(warnSpy).toHaveBeenCalledWith(
+				expect.stringContaining('[Alert] Sentiment conflict between Gemini and TradingView MCP; selecting MCP indicators over LLM prose')
+			);
+
+			warnSpy.mockRestore();
+			process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
+		});
+
+		it('selects Gemini sentiment and score atomically when providers agree without conflict tag', async () => {
+			const previousGeminiFlag = process.env.ENABLE_GEMINI_GROUNDING;
+			process.env.ENABLE_GEMINI_GROUNDING = 'true';
+
+			tradingViewMcpService.isEnabled.mockReturnValue(true);
+			tradingViewMcpService.enrichFromAlertText.mockResolvedValue({
+				original_text: 'BTCUSDT(240) pasó a señal de COMPRA',
+				tradingViewEnrichmentApplied: true,
+				sentiment: 'BULLISH',
+				sentiment_score: 0.6,
+				insights: ['Technical breakout'],
+				sources: [],
+				truncated: false,
+			});
+
+			groundAlert.mockResolvedValue({
+				sentiment: 'BULLISH',
+				sentiment_score: 0.82,
+				insights: ['Positive market tailwinds'],
+				sources: [],
+				truncated: false,
+				modelUsed: 'gemini-2.5-flash',
+			});
+
+			const result = await enrichAlert({ text: 'BTCUSDT(240) pasó a señal de COMPRA' }, { useTradingViewData: true });
+
+			expect(result.sentiment).toBe('BULLISH');
+			expect(result.sentiment_score).toBe(0.82);
+			expect(result.sentimentConflict).toBeUndefined();
+
+			process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
+		});
+
+		it('triggers MCP selection when structured confluence data signals disagree, even without insight text prefix', async () => {
+			const previousGeminiFlag = process.env.ENABLE_GEMINI_GROUNDING;
+			process.env.ENABLE_GEMINI_GROUNDING = 'true';
+
+			tradingViewMcpService.isEnabled.mockReturnValue(true);
+			tradingViewMcpService.enrichFromAlertText.mockResolvedValue({
+				original_text: 'BTCUSDT(240) pasó a señal de COMPRA',
+				tradingViewEnrichmentApplied: true,
+				sentiment: 'BEARISH',
+				sentiment_score: -0.4,
+				insights: ['Custom insight text without prefix'],
+				confluenceData: {
+					confluence: {
+						signals_agree: false,
+						recommendation: 'SELL',
+						confidence: 85,
+					},
+				},
+				sources: [],
+				truncated: false,
+			});
+
+			groundAlert.mockResolvedValue({
+				sentiment: 'BULLISH',
+				sentiment_score: 0.75,
+				insights: ['Gemini bullish news'],
+				sources: [],
+				truncated: false,
+				modelUsed: 'gemini-2.5-flash',
+			});
+
+			const result = await enrichAlert({ text: 'BTCUSDT(240) pasó a señal de COMPRA' }, { useTradingViewData: true });
+
+			expect(result.sentiment).toBe('BEARISH');
+			expect(result.sentiment_score).toBe(-0.4);
+
+			process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
+		});
+
+		it('enforces post-merge sign-coherence guard so BEARISH never carries a positive score', async () => {
+			const previousGeminiFlag = process.env.ENABLE_GEMINI_GROUNDING;
+			process.env.ENABLE_GEMINI_GROUNDING = 'true';
+
+			tradingViewMcpService.isEnabled.mockReturnValue(false);
+
+			groundAlert.mockResolvedValue({
+				sentiment: 'BEARISH',
+				sentiment_score: 0.9, // positive score with BEARISH label
+				insights: ['Bearish technical analysis'],
+				sources: [],
+				truncated: false,
+				modelUsed: 'gemini-2.5-flash',
+			});
+
+			const result = await enrichAlert({ text: 'BTCUSDT(240) pasó a señal de VENTA' });
+
+			expect(result.sentiment).toBe('BEARISH');
+			expect(result.sentiment_score).toBe(-0.9);
+
+			process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
+		});
+
+		it('enforces post-merge sign-coherence guard so BULLISH never carries a negative score', async () => {
+			const previousGeminiFlag = process.env.ENABLE_GEMINI_GROUNDING;
+			process.env.ENABLE_GEMINI_GROUNDING = 'true';
+
+			tradingViewMcpService.isEnabled.mockReturnValue(false);
+
+			groundAlert.mockResolvedValue({
+				sentiment: 'BULLISH',
+				sentiment_score: -0.85, // negative score with BULLISH label
+				insights: ['Bullish rally'],
+				sources: [],
+				truncated: false,
+				modelUsed: 'gemini-2.5-flash',
+			});
+
+			const result = await enrichAlert({ text: 'BTCUSDT(240) pasó a señal de COMPRA' });
+
+			expect(result.sentiment).toBe('BULLISH');
+			expect(result.sentiment_score).toBe(0.85);
+
+			process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
+		});
+
+		it('enforces post-merge sign-coherence guard so NEUTRAL always carries a score of 0', async () => {
+			const previousGeminiFlag = process.env.ENABLE_GEMINI_GROUNDING;
+			process.env.ENABLE_GEMINI_GROUNDING = 'true';
+
+			tradingViewMcpService.isEnabled.mockReturnValue(false);
+
+			groundAlert.mockResolvedValue({
+				sentiment: 'NEUTRAL',
+				sentiment_score: 0.55,
+				insights: ['Consolidation'],
+				sources: [],
+				truncated: false,
+				modelUsed: 'gemini-2.5-flash',
+			});
+
+			const result = await enrichAlert({ text: 'BTCUSDT(240) pasó a señal de VENTA' });
+
+			expect(result.sentiment).toBe('NEUTRAL');
+			expect(result.sentiment_score).toBe(0);
+
+			process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
+		});
+
+		it('enforces sign-coherence guard on MCP-only execution path when Gemini is disabled', async () => {
+			const previousGeminiFlag = process.env.ENABLE_GEMINI_GROUNDING;
+			process.env.ENABLE_GEMINI_GROUNDING = 'false';
+
+			tradingViewMcpService.isEnabled.mockReturnValue(true);
+			tradingViewMcpService.enrichFromAlertText.mockResolvedValue({
+				original_text: 'BTCUSDT(240) pasó a señal de VENTA',
+				tradingViewEnrichmentApplied: true,
+				sentiment: 'BEARISH',
+				sentiment_score: 0.7, // positive on BEARISH
+				insights: ['Bearish indicators'],
+				sources: [],
+				truncated: false,
+			});
+
+			const result = await enrichAlert({ text: 'BTCUSDT(240) pasó a señal de VENTA' }, { useTradingViewData: true });
+
+			expect(result.sentiment).toBe('BEARISH');
+			expect(result.sentiment_score).toBe(-0.7);
+
+			process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
+		});
+
+		it('enforces sign-coherence guard on Gemini failure fallback-to-MCP path', async () => {
+			const previousGeminiFlag = process.env.ENABLE_GEMINI_GROUNDING;
+			process.env.ENABLE_GEMINI_GROUNDING = 'true';
+
+			tradingViewMcpService.isEnabled.mockReturnValue(true);
+			tradingViewMcpService.enrichFromAlertText.mockResolvedValue({
+				original_text: 'BTCUSDT(240) pasó a señal de COMPRA',
+				tradingViewEnrichmentApplied: true,
+				sentiment: 'BULLISH',
+				sentiment_score: -0.8, // negative on BULLISH
+				insights: ['Bullish breakout'],
+				sources: [],
+				truncated: false,
+			});
+
+			groundAlert.mockRejectedValue(new Error('Gemini service unavailable'));
+
+			const result = await enrichAlert({ text: 'BTCUSDT(240) pasó a señal de COMPRA' }, { useTradingViewData: true });
+
+			expect(result.sentiment).toBe('BULLISH');
+			expect(result.sentiment_score).toBe(0.8);
+
+			process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
+		});
+
+		it('clamps out-of-bounds sentiment scores to [-1.0, 1.0] while enforcing direction', async () => {
+			const previousGeminiFlag = process.env.ENABLE_GEMINI_GROUNDING;
+			process.env.ENABLE_GEMINI_GROUNDING = 'true';
+
+			tradingViewMcpService.isEnabled.mockReturnValue(false);
+
+			groundAlert.mockResolvedValue({
+				sentiment: 'BULLISH',
+				sentiment_score: 2.5,
+				insights: ['Super bullish'],
+				sources: [],
+				truncated: false,
+				modelUsed: 'gemini-2.5-flash',
+			});
+
+			const result = await enrichAlert({ text: 'BTCUSDT(240) pasó a señal de COMPRA' });
+
+			expect(result.sentiment).toBe('BULLISH');
+			expect(result.sentiment_score).toBe(1.0);
+
+			process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
+		});
+
+		it('provides fallback signed score when score is missing or 0 for directional sentiments', async () => {
+			const previousGeminiFlag = process.env.ENABLE_GEMINI_GROUNDING;
+			process.env.ENABLE_GEMINI_GROUNDING = 'true';
+
+			tradingViewMcpService.isEnabled.mockReturnValue(false);
+
+			groundAlert.mockResolvedValue({
+				sentiment: 'BEARISH',
+				sentiment_score: 0,
+				insights: ['Bearish trend'],
+				sources: [],
+				truncated: false,
+				modelUsed: 'gemini-2.5-flash',
+			});
+
+			const result = await enrichAlert({ text: 'BTCUSDT(240) pasó a señal de VENTA' });
+
+			expect(result.sentiment).toBe('BEARISH');
+			expect(result.sentiment_score).toBe(-0.5);
+
+			process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
+		});
 	});
 });
