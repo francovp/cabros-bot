@@ -15,6 +15,16 @@
   --success: #68e0ac;
   --warning: #ffd37b;
   --danger: #ff91a3;
+  --space-1: .25rem;
+  --space-2: .5rem;
+  --space-3: .75rem;
+  --space-4: 1rem;
+  --radius-sm: .45rem;
+  --radius-md: .65rem;
+  --radius-lg: 1rem;
+  --font-mono: ui-monospace, SFMono-Regular, Consolas, monospace;
+  --speed-fast: .15s;
+  --speed: .2s;
 }
 * { box-sizing: border-box; }
 body { min-height: 100vh; margin: 0; background: radial-gradient(circle at 10% 0%, #143257 0, transparent 32rem), var(--page); }
@@ -88,6 +98,27 @@ textarea { resize: vertical; font-family: ui-monospace, SFMono-Regular, Consolas
 .capability-chip { padding: .45rem .65rem; border: 1px solid #2e5d77; border-radius: 999px; background: #12334a; color: #bfeaff; font-size: .78rem; }
 .raw-status summary { cursor: pointer; color: var(--muted); font-size: .78rem; }
 .raw-status[open] summary { margin-bottom: .7rem; }
-@media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; } }
+
+.nav-icon { width: 1.05rem; height: 1.05rem; flex: 0 0 auto; color: var(--accent); }
+.loading-state { display: inline-flex; align-items: center; gap: .55rem; color: #a7c6e5; font-size: .85rem; }
+.spinner { width: 1rem; height: 1rem; flex: 0 0 auto; border-radius: 999px; border: 2px solid rgba(255, 255, 255, .25); border-top-color: var(--accent); animation: spin .8s linear infinite; display: inline-block; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.response-summary { display: block; color: #d7e5f6; font-weight: 700; margin-bottom: .5rem; }
+.empty-state { margin: 0; padding: 1rem; border: 1px dashed var(--border-bright); border-radius: var(--radius-md); background: var(--panel-soft); color: var(--muted); text-align: center; font-size: .85rem; }
+.banner-error { border-color: var(--danger); background: #3a1622; }
+.skeleton { position: relative; overflow: hidden; background: #12233a; border-radius: var(--radius-sm); min-height: .9rem; }
+.skeleton::after { content: ''; position: absolute; inset: 0; transform: translateX(-100%); background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .08), transparent); animation: shimmer 1.4s infinite; }
+@keyframes shimmer { 100% { transform: translateX(100%); } }
+.data-table { width: 100%; border-collapse: collapse; font-size: .85rem; }
+.data-table th, .data-table td { padding: .5rem .65rem; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+.data-table th { color: var(--muted); font-size: .72rem; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+.data-table tr:last-child td { border-bottom: none; }
+.copy-button { padding: .3rem .55rem; border-radius: var(--radius-sm); font-size: .72rem; font-weight: 700; color: var(--muted); }
+.copy-button:hover { color: #fff; }
+.timestamp { color: var(--muted); font-size: .78rem; overflow-wrap: anywhere; }
+.progress-track { height: .55rem; min-width: 8rem; border-radius: 999px; background: #0c1c30; border: 1px solid var(--border-bright); overflow: hidden; }
+.progress-fill { height: 100%; border-radius: 999px; background: linear-gradient(90deg, var(--accent-strong), var(--accent)); transition: width var(--speed) ease; }
+.report-text { white-space: pre-wrap; overflow-wrap: anywhere; padding: 1rem; border-radius: var(--radius-md); background: #091727; border: 1px solid var(--border); font-family: var(--font-mono); font-size: .82rem; line-height: 1.5; }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; } }
 @media (max-width: 58rem) { .console-shell { grid-template-columns: 1fr; } .console-sidebar { min-height: 0; position: static; } .console-nav { grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr)); } .console-nav .nav-label, .sidebar-note { display: none; } .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 36rem) { .console-shell { width: min(100% - 1rem, 92rem); padding: .5rem 0; } .topbar, .connection-row, .auth-form, .dashboard-hero { align-items: stretch; grid-template-columns: 1fr; flex-direction: column; } .topbar button, .connection-row button, .auth-form button { width: 100%; } .metric-grid { grid-template-columns: 1fr; } }
