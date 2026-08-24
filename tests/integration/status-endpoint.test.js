@@ -419,7 +419,7 @@ describe('Status endpoints', () => {
 		});
 	});
 
-	it('reports signal outcome tracking from the legacy environment variable', async () => {
+	it('does not enable signal outcome tracking from the retired legacy environment variable', async () => {
 		process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING = 'true';
 
 		const response = await request(app)
@@ -427,8 +427,8 @@ describe('Status endpoints', () => {
 			.set('x-api-key', 'status-key');
 
 		expect(response.status).toBe(200);
-		expect(response.body.featureFlags.signalOutcomeTracking).toBe(true);
-		expect(response.body.dependencies.signalOutcomeWorker.enabled).toBe(true);
+		expect(response.body.featureFlags.signalOutcomeTracking).toBe(false);
+		expect(response.body.dependencies.signalOutcomeWorker.enabled).toBe(false);
 	});
 
 	it('reports equity market-data readiness without exposing provider credentials', async () => {
