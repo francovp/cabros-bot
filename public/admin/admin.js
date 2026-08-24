@@ -1231,7 +1231,9 @@ const createAlertListForm = () => {
 
 	let nextBefore;
 	let backCursors = [];
+	let pageGeneration = 0;
 	const requestPage = async (cursor) => {
+		const generation = ++pageGeneration;
 		prev.disabled = true;
 		next.disabled = true;
 		before.value = cursor || '';
@@ -1250,6 +1252,7 @@ const createAlertListForm = () => {
 			formatResponse: ({ summary, status, elapsed, data: payload }) => `${summary}\nHTTP ${status} · ${elapsed} ms · `
 				+ `${payload && Array.isArray(payload.alerts) ? `${payload.alerts.length} alerts on this page` : 'no alert list returned'}`,
 		});
+		if (generation !== pageGeneration) return false;
 		if (data && Array.isArray(data.alerts)) {
 			lastRawJson = JSON.stringify(data, null, 2);
 			rawOutput.textContent = lastRawJson;
@@ -1266,11 +1269,20 @@ const createAlertListForm = () => {
 			rawCopyButton.hidden = true;
 			alertList.replaceChildren();
 		}
-		nextBefore = data && data.pagination && data.pagination.nextBefore;
+		const pagination = (data && data.pagination) || {};
+		nextBefore = pagination.hasMore === true && pagination.nextBefore
+			? pagination.nextBefore
+			: undefined;
+		next.disabled = !nextBefore;
+		prev.disabled = !backCursors.length;
+		return Boolean(data && Array.isArray(data.alerts));
+	};
+	const syncPagingButtons = () => {
 		next.disabled = !nextBefore;
 		prev.disabled = !backCursors.length;
 	};
 	const resetPagination = () => {
+		pageGeneration += 1;
 		nextBefore = undefined;
 		backCursors = [];
 		next.disabled = true;
@@ -1287,12 +1299,21 @@ const createAlertListForm = () => {
 	});
 	next.addEventListener('click', () => {
 		if (!nextBefore) return;
-		backCursors.push(before.value || '');
-		return requestPage(nextBefore);
+		const entry = before.value || '';
+		Promise.resolve(requestPage(nextBefore)).then((succeeded) => {
+			if (!succeeded) return;
+			backCursors.push(entry);
+			syncPagingButtons();
+		});
 	});
 	prev.addEventListener('click', () => {
-		const target = backCursors.pop();
-		return requestPage(target);
+		if (!backCursors.length) return;
+		const target = backCursors[backCursors.length - 1];
+		Promise.resolve(requestPage(target)).then((succeeded) => {
+			if (!succeeded) return;
+			backCursors.pop();
+			syncPagingButtons();
+		});
 	});
 	return form;
 };
