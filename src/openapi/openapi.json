@@ -3877,7 +3877,7 @@
               "number",
               "string"
             ],
-            "description": "Base-asset quantity. Required for LIMIT. Optional for MARKET (evaluated using average price against the notional cap). Send as a string when exact decimal precision matters."
+            "description": "Base-asset quantity. Required for LIMIT. Optional for MARKET (evaluated using average price against the notional cap; MARKET BUYs are converted to an exchange-enforced quoteOrderQty at the estimated average price). Send as a string when exact decimal precision matters."
           },
           "quoteOrderQty": {
             "type": [

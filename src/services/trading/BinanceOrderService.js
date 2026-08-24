@@ -44,10 +44,19 @@ function hasValue(value) {
 	return typeof value === 'string' && value.trim().length > 0;
 }
 
-function deriveClientOrderId(idempotencyKey) {
+function deriveClientOrderId(idempotencyKey, order) {
 	if (!hasValue(idempotencyKey)) return undefined;
+	const fingerprint = order ? [
+		order.symbol,
+		order.side,
+		order.type,
+		order.quantity ?? '',
+		order.quoteOrderQty ?? '',
+		order.price ?? '',
+		order.timeInForce ?? '',
+	].join(':') : '';
 	const digest = crypto.createHash('sha256')
-		.update(`cabros-binance-order:${idempotencyKey}`)
+		.update(`cabros-binance-order:${idempotencyKey}:${fingerprint}`)
 		.digest('hex')
 		.slice(0, 32);
 	return `cb_${digest}`;
@@ -355,19 +364,87 @@ function buildOrderParams(order) {
 	}).filter(([, value]) => value !== undefined));
 }
 
-function reconciledOrderMatchesRequest(order, existingOrder, clientOrderId) {
+function reconciledOrderMatchesRequest(order, existingOrder, clientOrderId, requestIdempotencyKey) {
 	if (existingOrder.symbol !== order.symbol || existingOrder.clientOrderId !== clientOrderId) return false;
 	if (String(existingOrder.side).toUpperCase() !== order.side) return false;
 	if (String(existingOrder.type).toUpperCase() !== order.type) return false;
 	if (order.type === 'LIMIT' && String(existingOrder.timeInForce || '').toUpperCase() !== order.timeInForce) return false;
 
 	const existingQuantity = existingOrder.origQty ?? existingOrder.quantity;
-	if (order.quantity !== undefined && compareDecimals(existingQuantity, order.quantity) !== 0) return false;
-
 	const existingQuoteOrderQty = existingOrder.origQuoteOrderQty ?? existingOrder.quoteOrderQty;
+
+	if (order.quantity !== undefined) {
+		const isZeroOrigQty = existingQuantity === undefined || compareDecimals(existingQuantity, '0') === 0;
+		const hasQuoteQty = existingQuoteOrderQty !== undefined && compareDecimals(existingQuoteOrderQty, '0') > 0;
+		// A quantity-based MARKET BUY may have been submitted as quoteOrderQty to bound notional.
+		const isConvertedMarketBuy = order.side === 'BUY' && order.type === 'MARKET' && isZeroOrigQty && hasQuoteQty;
+		const matchesDerivedFingerprint = isConvertedMarketBuy
+			&& Boolean(requestIdempotencyKey)
+			&& existingOrder.clientOrderId === deriveClientOrderId(requestIdempotencyKey, order);
+
+		if (!matchesDerivedFingerprint && compareDecimals(existingQuantity, order.quantity) !== 0) {
+			return false;
+		}
+	}
+
 	if (order.quoteOrderQty !== undefined && compareDecimals(existingQuoteOrderQty, order.quoteOrderQty) !== 0) return false;
 	if (order.price !== undefined && compareDecimals(existingOrder.price, order.price) !== 0) return false;
 	return true;
+}
+
+// Exact decimal multiplication serialized without float rounding; returns
+// null when either operand is not a valid decimal literal.
+function multiplyDecimalsToString(left, right) {
+	const parts = multiplyDecimals(left, right);
+	if (!parts) return null;
+	const digits = String(parts.integer);
+	const scale = parts.scale;
+	if (scale <= 0) return digits + '0'.repeat(-scale);
+	const padded = digits.padStart(scale + 1, '0');
+	const whole = padded.slice(0, padded.length - scale);
+	const fraction = padded.slice(padded.length - scale).replace(/0+$/, '');
+	return fraction ? `${whole}.${fraction}` : whole;
+}
+
+function truncateDecimalsToPrecision(decimalString, precision) {
+	if (typeof precision !== 'number' || precision < 0) return decimalString;
+	const [whole, fraction = ''] = String(decimalString).split('.');
+	if (fraction.length <= precision) return decimalString;
+	const truncatedFraction = fraction.slice(0, precision).replace(/0+$/, '');
+	return truncatedFraction.length > 0 ? `${whole}.${truncatedFraction}` : whole;
+}
+
+// Quantity-based MARKET BUYs within budget are submitted as an
+// exchange-enforced quoteOrderQty so Binance caps realized quote spend at
+// BINANCE_TRADING_MAX_NOTIONAL even if execution price rises. MARKET SELLs
+// keep base quantity so position sizing stays exact.
+function deriveBoundedMarketBuy(order, maxNotional, averagePrice, symbolInfo, filters) {
+	if (order.side !== 'BUY' || order.type !== 'MARKET' || order.quantity === undefined || order.quoteOrderQty !== undefined) {
+		return order;
+	}
+	if (!averagePrice || !Number.isFinite(maxNotional) || maxNotional <= 0) return order;
+
+	const rawQuoteOrderQty = multiplyDecimalsToString(order.quantity, averagePrice);
+	if (!rawQuoteOrderQty) return order;
+
+	const quotePrecision = symbolInfo?.quotePrecision ?? symbolInfo?.quoteAssetPrecision;
+	const quoteOrderQty = typeof quotePrecision === 'number' && quotePrecision >= 0
+		? truncateDecimalsToPrecision(rawQuoteOrderQty, quotePrecision)
+		: rawQuoteOrderQty;
+
+	if (!quoteOrderQty || compareDecimals(quoteOrderQty, '0') <= 0) return order;
+
+	const notional = decimalParts(quoteOrderQty);
+	if (!notional || compareDecimalParts(notional, decimalParts(maxNotional)) > 0) return order;
+
+	const notionalFilter = filters?.get('NOTIONAL') || filters?.get('MIN_NOTIONAL');
+	const minNotional = notionalFilter?.minNotional;
+	const minAppliesToMarket = notionalFilter ? notionalFilter.applyMinToMarket !== false : notionalFilter?.applyToMarket !== false;
+	if (minNotional && minAppliesToMarket && compareDecimalParts(notional, decimalParts(minNotional)) < 0) {
+		return order;
+	}
+
+	return { ...order, quantity: undefined, quoteOrderQty };
 }
 
 async function validateOrderTestFilters(client, order, orderParams, filters) {
@@ -598,11 +675,11 @@ function createBinanceOrderService({ createClient = createBinanceClient } = {}) 
 			}
 
 			const clientOrderId = order.clientOrderId
-				|| (!order.dryRun ? deriveClientOrderId(requestIdempotencyKey) : undefined);
+				|| (!order.dryRun ? deriveClientOrderId(requestIdempotencyKey, order) : undefined);
 			if (!order.dryRun) {
 				const existingOrder = await reconcileOrder(client, order.symbol, clientOrderId);
 				if (existingOrder) {
-					if (!reconciledOrderMatchesRequest(order, existingOrder, clientOrderId)) {
+					if (!reconciledOrderMatchesRequest(order, existingOrder, clientOrderId, requestIdempotencyKey)) {
 						throw new BinanceOrderRequestError(
 							'Reconciled Binance order does not match the request',
 							'BINANCE_ORDER_CONFLICT',
@@ -658,6 +735,7 @@ function createBinanceOrderService({ createClient = createBinanceClient } = {}) 
 			if (order.price !== undefined) validatePriceRange(order.price, priceFilter);
 
 			let notional;
+			let boundedOrder = order;
 			if (order.quoteOrderQty !== undefined) {
 				notional = decimalParts(order.quoteOrderQty);
 			} else if (order.type === 'LIMIT') {
@@ -668,15 +746,25 @@ function createBinanceOrderService({ createClient = createBinanceClient } = {}) 
 					const price = averagePrice && averagePrice.price;
 					if (!price || !decimalParts(price)) throw new Error('invalid average price');
 					notional = multiplyDecimals(order.quantity, price);
+
+					boundedOrder = deriveBoundedMarketBuy(order, config.maxNotional, price, symbolInfo, filters);
+					if (boundedOrder.quoteOrderQty !== undefined) {
+						// The converted order must respect the symbol's quote-order support.
+						if (symbolInfo.quoteOrderQtyMarketAllowed === false) {
+							throw new BinanceOrderRequestError('quoteOrderQty is not supported for this symbol');
+						}
+						notional = decimalParts(boundedOrder.quoteOrderQty);
+					}
 				} catch (error) {
+					if (error instanceof BinanceOrderRequestError) throw error;
 					throw new BinanceOrderServiceError('Binance market price validation failed', 'BINANCE_VALIDATION_FAILED');
 				}
 			}
 			validateNotional(notional, filters, config.maxNotional, order.type === 'MARKET');
 
-			const orderParams = buildOrderParams({ ...order, clientOrderId });
+			const orderParams = buildOrderParams({ ...boundedOrder, clientOrderId });
 			if (order.dryRun) {
-				await validateOrderTestFilters(client, order, orderParams, filters);
+				await validateOrderTestFilters(client, boundedOrder, orderParams, filters);
 				return {
 					success: true,
 					dryRun: true,
@@ -685,7 +773,7 @@ function createBinanceOrderService({ createClient = createBinanceClient } = {}) 
 				};
 			}
 
-			await validateOrderTestFilters(client, order, orderParams, filters);
+			await validateOrderTestFilters(client, boundedOrder, orderParams, filters);
 			try {
 				const response = await client.submitNewOrder(orderParams);
 				return {

@@ -181,6 +181,76 @@ describe('Binance orders API', () => {
 				type: 'MARKET',
 			},
 		});
+		expect(client.submitNewOrder).toHaveBeenCalledWith(expect.objectContaining({
+			symbol: 'BTCUSDT',
+			side: 'SELL',
+			type: 'MARKET',
+			quantity: 0.001,
+		}));
+		expect(client.submitNewOrder.mock.calls[0][0].quoteOrderQty).toBeUndefined();
+	});
+
+	it('bounds live quantity-based MARKET BUYs with exchange-enforced quoteOrderQty', async () => {
+		process.env.BINANCE_TRADING_MAX_NOTIONAL = '1000';
+		client.getAvgPrice = jest.fn().mockResolvedValue({ price: '50000.00' });
+		client.submitNewOrder = jest.fn().mockResolvedValue({
+			symbol: 'BTCUSDT',
+			orderId: 1003,
+			clientOrderId: 'cb_267ef7d4f4c1a898bffebf85a138d98b',
+			transactTime: 1700000000000,
+			origQuoteOrderQty: '50.00000000',
+			executedQty: '0.00100000',
+			cummulativeQuoteQty: '50.00000000',
+			status: 'FILLED',
+			type: 'MARKET',
+			side: 'BUY',
+			fills: [],
+		});
+
+		const response = await request(app)
+			.post('/api/trading/binance/orders')
+			.set('x-api-key', 'test-key')
+			.send({
+				symbol: 'BTCUSDT',
+				side: 'BUY',
+				type: 'MARKET',
+				quantity: 0.001, // 0.001 * 50000 = 50 <= 1000
+				idempotencyKey: 'bounded-buy-1',
+				dryRun: false,
+			})
+			.expect(201);
+
+		expect(client.getAvgPrice).toHaveBeenCalledWith({ symbol: 'BTCUSDT' });
+		expect(client.submitNewOrder).toHaveBeenCalledWith(expect.objectContaining({
+			symbol: 'BTCUSDT',
+			side: 'BUY',
+			type: 'MARKET',
+			quoteOrderQty: '50',
+		}));
+		expect(client.submitNewOrder.mock.calls[0][0].quantity).toBeUndefined();
+		expect(response.body).toMatchObject({
+			success: true,
+			dryRun: false,
+			order: { orderId: 1003, side: 'BUY', type: 'MARKET' },
+		});
+	});
+
+	it('rejects quantity-based MARKET BUYs above the configured ceiling before submission', async () => {
+		process.env.BINANCE_TRADING_MAX_NOTIONAL = '10';
+		const response = await request(app)
+			.post('/api/trading/binance/orders')
+			.set('x-api-key', 'test-key')
+			.send({
+				symbol: 'BTCUSDT',
+				side: 'BUY',
+				type: 'MARKET',
+				quantity: 1, // 1 * 50000 = 50000 > 10
+				dryRun: true,
+			})
+			.expect(400);
+
+		expect(response.body.error).toContain('configured maximum');
+		expect(client.submitNewOrder).not.toHaveBeenCalled();
 	});
 
 	it('submits once and replays the cached result for an idempotency key', async () => {
@@ -262,17 +332,17 @@ describe('Binance orders API', () => {
 		client.submitNewOrder.mockRejectedValueOnce(new Error('provider timeout'));
 		client.getOrder
 			.mockRejectedValueOnce({ code: -2013, message: 'Unknown order sent.' })
-			.mockResolvedValueOnce({
+			.mockImplementationOnce(async (params) => ({
 				symbol: 'BTCUSDT',
 				orderId: 43,
-				clientOrderId: 'cb_267ef7d4f4c1a898bffebf85a138d98b',
+				clientOrderId: params.origClientOrderId,
 				status: 'FILLED',
 				side: 'SELL',
 				type: 'LIMIT',
 				timeInForce: 'GTC',
 				origQty: '0.1',
 				price: '100',
-			});
+			}));
 		const payload = {
 			symbol: 'BTCUSDT',
 			side: 'SELL',
@@ -304,6 +374,88 @@ describe('Binance orders API', () => {
 		});
 		expect(client.submitNewOrder).toHaveBeenCalledTimes(1);
 		expect(client.submitNewOrder.mock.calls[0][0].newClientOrderId).toMatch(/^cb_[a-f0-9]{32}$/);
+	});
+
+	it('reconciles an ambiguous bounded MARKET BUY after the idempotency cache is lost', async () => {
+		client.submitNewOrder.mockRejectedValueOnce(new Error('provider timeout'));
+		client.getOrder
+			.mockRejectedValueOnce({ code: -2013, message: 'Unknown order sent.' })
+			.mockImplementationOnce(async (params) => ({
+				symbol: 'BTCUSDT',
+				orderId: 44,
+				clientOrderId: params.origClientOrderId,
+				status: 'FILLED',
+				side: 'BUY',
+				type: 'MARKET',
+				origQty: '0.00000000',
+				origQuoteOrderQty: '50.00',
+				cummulativeQuoteQty: '50.00',
+				executedQty: '0.50000000',
+			}));
+		const payload = {
+			symbol: 'BTCUSDT',
+			side: 'BUY',
+			type: 'MARKET',
+			quantity: 0.5,
+			dryRun: false,
+		};
+
+		await request(app)
+			.post('/api/trading/binance/orders')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'order-375-reconcile')
+			.send(payload)
+			.expect(503);
+		idempotencyService.clear();
+
+		const reconciled = await request(app)
+			.post('/api/trading/binance/orders')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'order-375-reconcile')
+			.send(payload)
+			.expect(201);
+
+		expect(reconciled.body).toMatchObject({ success: true, dryRun: false, order: { orderId: 44 } });
+		expect(client.getOrder).toHaveBeenNthCalledWith(2, {
+			symbol: 'BTCUSDT',
+			origClientOrderId: expect.stringMatching(/^cb_[a-f0-9]{32}$/),
+		});
+		expect(client.submitNewOrder).toHaveBeenCalledTimes(1);
+	});
+
+	it('rejects changed quantity during quote-sized MARKET BUY reconciliation with 409 conflict', async () => {
+		client.getOrder.mockResolvedValueOnce({
+			symbol: 'BTCUSDT',
+			orderId: 45,
+			clientOrderId: 'cb_267ef7d4f4c1a898bffebf85a138d98b',
+			status: 'FILLED',
+			side: 'BUY',
+			type: 'MARKET',
+			origQty: '0.00000000',
+			origQuoteOrderQty: '50.00',
+			cummulativeQuoteQty: '50.00',
+			executedQty: '0.50000000',
+		});
+		idempotencyService.clear();
+
+		const response = await request(app)
+			.post('/api/trading/binance/orders')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'order-375-reconcile')
+			.send({
+				symbol: 'BTCUSDT',
+				side: 'BUY',
+				type: 'MARKET',
+				quantity: 0.1,
+				dryRun: false,
+			})
+			.expect(409);
+
+		expect(response.body).toMatchObject({
+			success: false,
+			code: 'BINANCE_ORDER_CONFLICT',
+			error: expect.stringContaining('Reconciled Binance order does not match the request'),
+		});
 	});
 
 	it('exposes Binance trading readiness in status and capabilities', async () => {
