@@ -370,6 +370,39 @@ function reconciledOrderMatchesRequest(order, existingOrder, clientOrderId) {
 	return true;
 }
 
+// Exact decimal multiplication serialized without float rounding; returns
+// null when either operand is not a valid decimal literal.
+function multiplyDecimalsToString(left, right) {
+	const parts = multiplyDecimals(left, right);
+	if (!parts) return null;
+	const digits = String(parts.integer);
+	const scale = parts.scale;
+	if (scale <= 0) return digits + '0'.repeat(-scale);
+	const padded = digits.padStart(scale + 1, '0');
+	const whole = padded.slice(0, padded.length - scale);
+	const fraction = padded.slice(padded.length - scale).replace(/0+$/, '');
+	return fraction ? `${whole}.${fraction}` : whole;
+}
+
+// Quantity-based MARKET BUYs within budget are submitted as an
+// exchange-enforced quoteOrderQty so Binance caps realized quote spend at
+// BINANCE_TRADING_MAX_NOTIONAL even if execution price rises. MARKET SELLs
+// keep base quantity so position sizing stays exact.
+function deriveBoundedMarketBuy(order, maxNotional, averagePrice) {
+	if (order.side !== 'BUY' || order.type !== 'MARKET' || order.quantity === undefined || order.quoteOrderQty !== undefined) {
+		return order;
+	}
+	if (!averagePrice || !Number.isFinite(maxNotional) || maxNotional <= 0) return order;
+
+	const notional = multiplyDecimals(order.quantity, averagePrice);
+	if (!notional || compareDecimalParts(notional, decimalParts(maxNotional)) > 0) return order;
+
+	const quoteOrderQty = multiplyDecimalsToString(order.quantity, averagePrice);
+	if (!quoteOrderQty) return order;
+
+	return { ...order, quantity: undefined, quoteOrderQty };
+}
+
 async function validateOrderTestFilters(client, order, orderParams, filters) {
 	const hasDynamicPriceFilters = order.type === 'LIMIT'
 		&& (filters.has('PERCENT_PRICE') || filters.has('PERCENT_PRICE_BY_SIDE'));
@@ -602,7 +635,11 @@ function createBinanceOrderService({ createClient = createBinanceClient } = {}) 
 			if (!order.dryRun) {
 				const existingOrder = await reconcileOrder(client, order.symbol, clientOrderId);
 				if (existingOrder) {
-					if (!reconciledOrderMatchesRequest(order, existingOrder, clientOrderId)) {
+					// A previously accepted quantity-based MARKET BUY was submitted as a
+					// quote-sized order, so reconciliation must compare against that
+					// transformed request rather than the original base-quantity body.
+					const expectedOrder = deriveBoundedMarketBuy(order, config.maxNotional);
+					if (!reconciledOrderMatchesRequest(expectedOrder, existingOrder, clientOrderId)) {
 						throw new BinanceOrderRequestError(
 							'Reconciled Binance order does not match the request',
 							'BINANCE_ORDER_CONFLICT',
@@ -670,20 +707,16 @@ function createBinanceOrderService({ createClient = createBinanceClient } = {}) 
 					if (!price || !decimalParts(price)) throw new Error('invalid average price');
 					notional = multiplyDecimals(order.quantity, price);
 
-					// Quantity-based MARKET BUYs are converted to an exchange-enforced
-					// quoteOrderQty so the provider itself caps quote spend at
-					// BINANCE_TRADING_MAX_NOTIONAL even if execution price rises.
-					// MARKET SELLs keep base quantity so position sizing stays exact.
-					if (
-						order.side === 'BUY'
-						&& Number.isFinite(config.maxNotional)
-						&& config.maxNotional > 0
-						&& compareDecimalParts(notional, decimalParts(config.maxNotional)) <= 0
-					) {
-						boundedOrder = { ...order, quantity: undefined, quoteOrderQty: order.quantity * price };
+					boundedOrder = deriveBoundedMarketBuy(order, config.maxNotional, price);
+					if (boundedOrder.quoteOrderQty !== undefined) {
+						// The converted order must respect the symbol's quote-order support.
+						if (symbolInfo.quoteOrderQtyMarketAllowed === false) {
+							throw new BinanceOrderRequestError('quoteOrderQty is not supported for this symbol');
+						}
 						notional = decimalParts(boundedOrder.quoteOrderQty);
 					}
 				} catch (error) {
+					if (error instanceof BinanceOrderRequestError) throw error;
 					throw new BinanceOrderServiceError('Binance market price validation failed', 'BINANCE_VALIDATION_FAILED');
 				}
 			}

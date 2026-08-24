@@ -237,7 +237,7 @@ describe('BinanceOrderService', () => {
 
 		expect(result.success).toBe(true);
 		expect(result.dryRun).toBe(true);
-		expect(result.order.quoteOrderQty).toBe(50);
+		expect(result.order.quoteOrderQty).toBe('50');
 		expect(result.order.quantity).toBeUndefined();
 		expect(client.getAvgPrice).toHaveBeenCalledWith({ symbol: 'BTCUSDT' });
 	});
@@ -283,6 +283,119 @@ describe('BinanceOrderService', () => {
 			code: 'INVALID_ORDER_REQUEST',
 			message: expect.stringContaining('configured maximum'),
 		});
+	});
+
+	it('preserves exact decimal precision when converting MARKET BUYs to quoteOrderQty', async () => {
+		const client = {
+			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
+			getAvgPrice: jest.fn().mockResolvedValue({ price: '100.2' }),
+		};
+		const service = createBinanceOrderService({ createClient: () => client });
+
+		const result = await service.placeOrder({
+			symbol: 'BTCUSDT',
+			side: 'BUY',
+			type: 'MARKET',
+			quantity: '0.1',
+			dryRun: true,
+		});
+
+		expect(result.order.quoteOrderQty).toBe('10.02');
+	});
+
+	it('rejects converted MARKET BUYs when the symbol disallows quoteOrderQty', async () => {
+		const client = {
+			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo({
+				quoteOrderQtyMarketAllowed: false,
+			})),
+			getAvgPrice: jest.fn().mockResolvedValue({ price: '50000.00' }),
+		};
+		const service = createBinanceOrderService({ createClient: () => client });
+
+		await expect(service.placeOrder({
+			symbol: 'BTCUSDT',
+			side: 'BUY',
+			type: 'MARKET',
+			quantity: 0.001,
+			dryRun: true,
+		})).rejects.toMatchObject({
+			code: 'INVALID_ORDER_REQUEST',
+			message: expect.stringContaining('quoteOrderQty is not supported'),
+		});
+	});
+
+	it('keeps quantity-based market orders unconverted for SELL when quoteOrderQty is not allowed', async () => {
+		const client = {
+			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo({
+				filters: [
+					{ filterType: 'LOT_SIZE', minQty: '0.0001', maxQty: '100', stepSize: '0.0001' },
+					{ filterType: 'MIN_NOTIONAL', minNotional: '10' },
+				],
+			})),
+			getAvgPrice: jest.fn().mockResolvedValue({ price: '50000.00' }),
+			testNewOrder: jest.fn().mockResolvedValue({}),
+		};
+		const service = createBinanceOrderService({ createClient: () => client });
+
+		const result = await service.placeOrder({
+			symbol: 'BTCUSDT',
+			side: 'SELL',
+			type: 'MARKET',
+			quantity: 0.001,
+			dryRun: true,
+		});
+
+		expect(result.order.quantity).toBe(0.001);
+		expect(result.order.quoteOrderQty).toBeUndefined();
+	});
+
+	it('reconciles an accepted quote-sized MARKET BUY after idempotency cache loss', async () => {
+		process.env.BINANCE_TRADING_MAX_NOTIONAL = '1000';
+		const clientOrderId = `cb_${'a'.repeat(32)}`;
+		let callCount = 0;
+		const client = {
+			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
+			getAvgPrice: jest.fn().mockResolvedValue({ price: '50000.00' }),
+			testNewOrder: jest.fn().mockResolvedValue({}),
+			submitNewOrder: jest.fn().mockRejectedValue(new Error('provider timeout')),
+			getOrder: jest.fn(() => {
+				callCount += 1;
+				if (callCount === 1) throw { code: -2013, message: 'Unknown order sent.' };
+				return Promise.resolve({
+					symbol: 'BTCUSDT',
+					orderId: 77,
+					clientOrderId,
+					status: 'FILLED',
+					side: 'BUY',
+					type: 'MARKET',
+					origQty: '0.00100000',
+					origQuoteOrderQty: '50.00',
+					cummulativeQuoteQty: '50.00',
+				});
+			}),
+		};
+		const service = createBinanceOrderService({ createClient: () => client });
+
+		await expect(service.placeOrder({
+			symbol: 'BTCUSDT',
+			side: 'BUY',
+			type: 'MARKET',
+			quantity: 0.001,
+			clientOrderId,
+			dryRun: false,
+		})).rejects.toMatchObject({ code: 'BINANCE_ORDER_STATUS_UNKNOWN' });
+
+		const reconciled = await service.placeOrder({
+			symbol: 'BTCUSDT',
+			side: 'BUY',
+			type: 'MARKET',
+			quantity: 0.001,
+			clientOrderId,
+			dryRun: false,
+		});
+
+		expect(reconciled.success).toBe(true);
+		expect(reconciled.order.orderId).toBe(77);
 	});
 
 	it('rejects quantity-based market orders when getAvgPrice fails', async () => {

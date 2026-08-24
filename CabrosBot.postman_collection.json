@@ -3810,7 +3810,7 @@
               "name": "OK",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"environment\": \"testnet\",\n  \"order\": {\n    \"symbol\": \"BTCUSDT\",\n    \"side\": \"BUY\",\n    \"type\": \"MARKET\",\n    \"quoteOrderQty\": 50,\n    \"newClientOrderId\": \"cabros-test-order-id\"\n  }\n}"
+              "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"environment\": \"testnet\",\n  \"order\": {\n    \"symbol\": \"BTCUSDT\",\n    \"side\": \"BUY\",\n    \"type\": \"MARKET\",\n    \"quoteOrderQty\": \"50\"\n  }\n}"
             }
           ]
         },

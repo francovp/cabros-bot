@@ -225,7 +225,7 @@ describe('Binance orders API', () => {
 			symbol: 'BTCUSDT',
 			side: 'BUY',
 			type: 'MARKET',
-			quoteOrderQty: 50,
+			quoteOrderQty: '50',
 		}));
 		expect(client.submitNewOrder.mock.calls[0][0].quantity).toBeUndefined();
 		expect(response.body).toMatchObject({
