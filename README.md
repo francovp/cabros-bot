@@ -1412,7 +1412,7 @@ Sources:
 **Independent Retry**: Each channel retries independently
 - Channel A failure doesn't affect Channel B
 - WhatsApp retries transient provider failures up to 3 attempts with exponential backoff (1s → 2s → 4s, ±10% jitter) per chunk
-- Discord retries 429 rate-limit responses up to `DISCORD_MAX_RETRIES` attempts per chunk using `Retry-After` backoff bounded by `DISCORD_MAX_TOTAL_RETRY_WAIT_MS`
+- Discord retries 429 rate-limit responses with up to `DISCORD_MAX_RETRIES` additional attempts (default: `2`, up to 3 total attempts) per chunk using `Retry-After` backoff bounded by `DISCORD_MAX_TOTAL_RETRY_WAIT_MS`
 - Telegram retries 429 rate-limit responses up to 2 times
 
 **Message Chunking**: Payloads exceeding provider length limits (20,000 characters for WhatsApp, 2,000 characters for Discord) are automatically split into sequential chunks that deliver and retry independently; earlier delivered chunks are preserved if a later chunk fails.
@@ -1532,7 +1532,7 @@ GEMINI_API_KEY=your_google_ai_studio_api_key
 
 **Message size & chunking**:
 - Payloads exceeding provider limits (20,000 characters for WhatsApp, 2,000 characters for Discord) are automatically split into sequential chunks and delivered in order rather than truncated.
-- Each chunk retries independently. If a later chunk fails, earlier chunks remain delivered and the error response identifies the failed part (`failedPart`).
+- Each chunk retries independently. If a later chunk fails, earlier chunks remain delivered; for WhatsApp, the error response also identifies the failed chunk (`failedPart` and `splitMessageCount`).
 - Use MarkdownV2 / concise formatting or summarize via Gemini enrichment to keep alerts within a single chunk when preferred.
 
 **Retry exhaustion**:
