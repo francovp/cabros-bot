@@ -3,6 +3,7 @@
 const admin = require('firebase-admin');
 const SignalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
 const AlertStorageService = require('../../src/services/storage/AlertStorageService');
+const EquityMarketDataService = require('../../src/services/storage/EquityMarketDataService');
 
 // Shorthand references to mock internals
 const {
@@ -34,6 +35,7 @@ describe('SignalOutcomeService', () => {
 		admin.__resetApps();
 		admin.__resetCollectionState();
 		AlertStorageService._resetForTesting();
+		EquityMarketDataService._resetPacerForTesting();
 		delete process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING;
 		delete process.env.SIGNAL_OUTCOME_WORKER_ROLE;
 		delete process.env.ENABLE_SIGNAL_OUTCOME_TRACKING;
@@ -43,9 +45,12 @@ describe('SignalOutcomeService', () => {
 		delete process.env.TWELVE_DATA_API_KEY;
 		delete process.env.TWELVE_DATA_BASE_URL;
 		delete process.env.EQUITY_MARKET_DATA_TIMEOUT_MS;
+		process.env.EQUITY_MARKET_DATA_RPM = '0';
+		delete process.env.TWELVE_DATA_RPM;
 	});
 
 	afterEach(() => {
+		EquityMarketDataService._resetPacerForTesting();
 		delete process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING;
 		delete process.env.SIGNAL_OUTCOME_WORKER_ROLE;
 		delete process.env.ENABLE_SIGNAL_OUTCOME_TRACKING;
@@ -55,6 +60,8 @@ describe('SignalOutcomeService', () => {
 		delete process.env.TWELVE_DATA_API_KEY;
 		delete process.env.TWELVE_DATA_BASE_URL;
 		delete process.env.EQUITY_MARKET_DATA_TIMEOUT_MS;
+		process.env.EQUITY_MARKET_DATA_RPM = '0';
+		delete process.env.TWELVE_DATA_RPM;
 	});
 
 	describe('isEnabled()', () => {

@@ -488,14 +488,29 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 				}
 
 				if (data.exchange === 'BINANCE') {
+					let abortController = null;
+					let timerId = null;
 					try {
-						const client = getBinanceClient();
-						const klines = await client.getKlines({
+						abortController = new AbortController();
+						const requestOptions = {
+							timeout: Math.max(1, remainingMs),
+							signal: abortController.signal,
+						};
+						const sweepClient = getBinanceClient(requestOptions);
+						const timeoutPromise = new Promise((_, reject) => {
+							timerId = setTimeout(() => {
+								abortController.abort();
+								reject(new Error(`Signal outcome sweep deadline exceeded (${effectiveMaxDurationMs}ms)`));
+							}, remainingMs);
+						});
+
+						const klinesPromise = sweepClient.getKlines({
 							symbol: data.symbol,
 							interval: '5m',
 							startTime: receivedAtMs,
 							limit: 1,
 						});
+						const klines = await Promise.race([klinesPromise, timeoutPromise]);
 						if (Array.isArray(klines) && klines.length > 0 && klines[0][1]) {
 							const parsed = parseFloat(klines[0][1]);
 							if (Number.isFinite(parsed) && parsed > 0) {
@@ -504,7 +519,12 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 							}
 						}
 						if (!resolvedPrice) {
-							const avgRes = await client.getAvgPrice({ symbol: data.symbol });
+							const remainingAfterKlines = effectiveMaxDurationMs - (Date.now() - startTime);
+							if (remainingAfterKlines <= 0) {
+								throw new Error(`Signal outcome sweep deadline exceeded (${effectiveMaxDurationMs}ms)`);
+							}
+							const avgPromise = sweepClient.getAvgPrice({ symbol: data.symbol });
+							const avgRes = await Promise.race([avgPromise, timeoutPromise]);
 							if (avgRes && avgRes.price) {
 								const parsed = parseFloat(avgRes.price);
 								if (Number.isFinite(parsed) && parsed > 0) {
@@ -515,6 +535,8 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 						}
 					} catch (err) {
 						entryPriceError = err;
+					} finally {
+						if (timerId) clearTimeout(timerId);
 					}
 				} else {
 					try {

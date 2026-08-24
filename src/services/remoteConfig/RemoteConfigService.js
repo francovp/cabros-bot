@@ -46,7 +46,7 @@ const PARAMETER_SCHEMA = Object.freeze({
 	SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS: { type: 'number', defaultValue: 30000, integer: true, min: 1, max: 300000 },
 	SIGNAL_OUTCOME_MAX_RETRY_ATTEMPTS: { type: 'number', defaultValue: 3, integer: true, min: 1, max: 20 },
 	SIGNAL_OUTCOME_MAX_RETRY_AGE_MS: { type: 'number', defaultValue: 604800000, integer: true, min: 60000, max: 2592000000 },
-	EQUITY_MARKET_DATA_RPM: { type: 'number', defaultValue: 8, integer: true, min: 1, max: 1200 },
+	EQUITY_MARKET_DATA_RPM: { type: 'number', defaultValue: 8, integer: true, min: 0, max: 1200 },
 	NOTIFICATION_REDRIVE_INTERVAL_MS: { type: 'number', defaultValue: 60000, integer: true, min: 1000, max: 3600000 },
 	NOTIFICATION_REDRIVE_BATCH_LIMIT: { type: 'number', defaultValue: 50, integer: true, min: 1, max: 500 },
 	NOTIFICATION_REDRIVE_MAX_ATTEMPTS: { type: 'number', defaultValue: 5, integer: true, min: 1, max: 20 },
@@ -153,6 +153,11 @@ function getEnvironmentConfig() {
 			config[key] = parseLegacyPositiveInteger(process.env.NEWS_GEMINI_QUOTA_RETRY_BASE_MS, 1000);
 		} else if (key === 'WEBHOOK_IDEMPOTENCY_TTL_MS') {
 			config[key] = parseEnvironmentNumber(process.env[key], schema, schema.defaultValue);
+		} else if (key === 'EQUITY_MARKET_DATA_RPM') {
+			const envVal = process.env.EQUITY_MARKET_DATA_RPM ?? process.env.TWELVE_DATA_RPM;
+			config[key] = process.env.NODE_ENV === 'test' && envVal === undefined
+				? 0
+				: parseValue(envVal, schema, schema.defaultValue);
 		} else {
 			config[key] = parseValue(process.env[key], schema, schema.defaultValue);
 		}

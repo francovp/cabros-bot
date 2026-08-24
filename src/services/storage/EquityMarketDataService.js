@@ -1,5 +1,7 @@
 'use strict';
 
+const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
+
 const PROVIDER_NAME = 'twelve-data';
 const DEFAULT_BASE_URL = 'https://api.twelvedata.com';
 const DEFAULT_TIMEOUT_MS = 5000;
@@ -69,11 +71,13 @@ class EquityMarketDataError extends Error {
 	}
 }
 
-let lastRequestAtMs = 0;
+let pacingQueue = Promise.resolve();
+let lastScheduledAtMs = 0;
 let cooldownUntilMs = 0;
 
 function _resetPacerForTesting() {
-	lastRequestAtMs = 0;
+	pacingQueue = Promise.resolve();
+	lastScheduledAtMs = 0;
 	cooldownUntilMs = 0;
 }
 
@@ -149,23 +153,29 @@ function parseRetryAfter(headerValue) {
 async function waitForPacing(maxWaitMs) {
 	const config = getConfig();
 	const rpm = config.rpm;
-	const now = Date.now();
-	if (rpm <= 0 && cooldownUntilMs <= now) {
-		lastRequestAtMs = now;
-		return;
-	}
 
-	const minIntervalMs = rpm > 0 ? Math.ceil(60000 / rpm) : 0;
-	const nextAllowedTime = Math.max(lastRequestAtMs + minIntervalMs, cooldownUntilMs);
-	const delayMs = nextAllowedTime - now;
-
-	if (delayMs > 0) {
-		if (maxWaitMs !== undefined && delayMs >= maxWaitMs) {
-			throw new EquityMarketDataError(REASONS.TIMEOUT);
+	const reservation = pacingQueue.then(async () => {
+		const now = Date.now();
+		if (rpm <= 0 && cooldownUntilMs <= now) {
+			lastScheduledAtMs = now;
+			return;
 		}
-		await new Promise((resolve) => setTimeout(resolve, delayMs));
-	}
-	lastRequestAtMs = Date.now();
+
+		const minIntervalMs = rpm > 0 ? Math.ceil(60000 / rpm) : 0;
+		const nextAllowedTime = Math.max(lastScheduledAtMs + minIntervalMs, cooldownUntilMs, now);
+		lastScheduledAtMs = nextAllowedTime;
+		const delayMs = nextAllowedTime - now;
+
+		if (delayMs > 0) {
+			if (maxWaitMs !== undefined && delayMs >= maxWaitMs) {
+				throw new EquityMarketDataError(REASONS.TIMEOUT, { status: 408 });
+			}
+			await new Promise((resolve) => setTimeout(resolve, delayMs));
+		}
+	});
+
+	pacingQueue = reservation.catch(() => {});
+	await reservation;
 }
 
 function getConfig() {
@@ -180,13 +190,17 @@ function getConfig() {
 		? process.env.TWELVE_DATA_API_KEY.trim()
 		: '';
 
+	const rc = getRuntimeConfig?.();
+	const rcRpm = rc?.EQUITY_MARKET_DATA_RPM;
+	const effectiveRpm = rcRpm !== undefined ? rcRpm : parseRpm(process.env.EQUITY_MARKET_DATA_RPM || process.env.TWELVE_DATA_RPM);
+
 	return {
 		enabled,
 		provider,
 		apiKey,
 		configured: enabled && provider === PROVIDER_NAME && apiKey.length > 0,
 		timeoutMs: parseTimeout(process.env.EQUITY_MARKET_DATA_TIMEOUT_MS),
-		rpm: parseRpm(process.env.EQUITY_MARKET_DATA_RPM || process.env.TWELVE_DATA_RPM),
+		rpm: effectiveRpm,
 	};
 }
 
@@ -200,7 +214,7 @@ function getStatus() {
 		provider: config.provider || null,
 		enabled: config.enabled,
 		configured: config.configured,
-		ready: config.enabled && config.configured,
+		ready: status === 'ready',
 		status,
 		supportedExchanges: [...SUPPORTED_EXCHANGES],
 		timeoutMs: config.timeoutMs,
@@ -222,18 +236,16 @@ function getProviderName(exchange, assetClass) {
 		: null;
 }
 
-function buildUrl(path, params) {
+function buildUrl(pathname, params = {}) {
 	const configuredBaseUrl = process.env.TWELVE_DATA_BASE_URL || DEFAULT_BASE_URL;
 	const baseUrl = configuredBaseUrl.endsWith('/') ? configuredBaseUrl : `${configuredBaseUrl}/`;
-	const url = new URL(path.replace(/^\//, ''), baseUrl);
-
+	const url = new URL(pathname.replace(/^\//, ''), baseUrl);
 	for (const [key, value] of Object.entries(params)) {
 		if (value !== undefined && value !== null && value !== '') {
 			url.searchParams.set(key, String(value));
 		}
 	}
-
-	return url;
+	return url.toString();
 }
 
 function classifyResponseError(statusCode, body) {
@@ -256,11 +268,16 @@ async function requestJson(path, params, timeoutOverride) {
 		throw new EquityMarketDataError(REASONS.NOT_CONFIGURED);
 	}
 
-	const timeoutMs = timeoutOverride === undefined ? config.timeoutMs : parseTimeout(timeoutOverride);
-	await waitForPacing(timeoutOverride);
+	const totalTimeoutMs = timeoutOverride === undefined ? config.timeoutMs : parseTimeout(timeoutOverride);
+	const startMs = Date.now();
+
+	await waitForPacing(totalTimeoutMs);
+
+	const elapsedMs = Date.now() - startMs;
+	const remainingFetchTimeoutMs = Math.max(1, totalTimeoutMs - elapsedMs);
 
 	const controller = new AbortController();
-	const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+	const timeoutId = setTimeout(() => controller.abort(), remainingFetchTimeoutMs);
 
 	try {
 		const response = await fetch(buildUrl(path, params), {

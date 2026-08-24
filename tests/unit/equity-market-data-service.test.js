@@ -15,10 +15,15 @@ describe('EquityMarketDataService', () => {
 		delete process.env.EQUITY_MARKET_DATA_TIMEOUT_MS;
 		process.env.EQUITY_MARKET_DATA_RPM = '0';
 		delete process.env.TWELVE_DATA_RPM;
+		delete process.env.ENABLE_FIREBASE_REMOTE_CONFIG;
 	});
 
 	afterEach(() => {
 		global.fetch = originalFetch;
+		EquityMarketDataService._resetPacerForTesting();
+		process.env.EQUITY_MARKET_DATA_RPM = '0';
+		delete process.env.TWELVE_DATA_RPM;
+		delete process.env.ENABLE_FIREBASE_REMOTE_CONFIG;
 	});
 
 	function configure() {
@@ -342,6 +347,68 @@ describe('EquityMarketDataService', () => {
 			// Second request should have waited for at least ~900ms due to pacing
 			expect(elapsed).toBeGreaterThanOrEqual(850);
 			expect(global.fetch).toHaveBeenCalledTimes(2);
+
+			EquityMarketDataService._resetPacerForTesting();
+		});
+
+		it('consumes Remote Config RPM override', () => {
+			configure();
+			process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+			const RemoteConfigService = require('../../src/services/remoteConfig/RemoteConfigService');
+			RemoteConfigService._setRemoteOverridesForTesting({
+				EQUITY_MARKET_DATA_RPM: 30,
+			});
+
+			expect(EquityMarketDataService.getStatus().rpm).toBe(30);
+			RemoteConfigService._resetForTesting();
+			delete process.env.ENABLE_FIREBASE_REMOTE_CONFIG;
+		});
+
+		it('serializes concurrent pacing reservations across simultaneous requests', async () => {
+			configure();
+			process.env.EQUITY_MARKET_DATA_RPM = '120'; // 500ms interval
+			EquityMarketDataService._resetPacerForTesting();
+
+			global.fetch = jest.fn().mockImplementation(async () => ({
+				ok: true,
+				status: 200,
+				json: async () => ({ status: 'ok', close: '100.00' }),
+			}));
+
+			const start = Date.now();
+			const results = await Promise.all([
+				EquityMarketDataService.getEntryPrice({ symbol: 'AAPL', exchange: 'NASDAQ' }),
+				EquityMarketDataService.getEntryPrice({ symbol: 'MSFT', exchange: 'NASDAQ' }),
+			]);
+			const duration = Date.now() - start;
+
+			expect(results).toEqual([100, 100]);
+			expect(duration).toBeGreaterThanOrEqual(400);
+			expect(global.fetch).toHaveBeenCalledTimes(2);
+
+			EquityMarketDataService._resetPacerForTesting();
+		});
+
+		it('fails fast when pacing wait exceeds caller timeout budget', async () => {
+			configure();
+			process.env.EQUITY_MARKET_DATA_RPM = '6'; // 10,000ms interval
+			EquityMarketDataService._resetPacerForTesting();
+
+			global.fetch = jest.fn().mockImplementation(async () => ({
+				ok: true,
+				status: 200,
+				json: async () => ({ status: 'ok', close: '100.00' }),
+			}));
+
+			// First request occupies slot
+			await EquityMarketDataService.getEntryPrice({ symbol: 'AAPL', exchange: 'NASDAQ' });
+
+			// Second request with a tight timeout budget (e.g. 500ms) should fail with TIMEOUT
+			await expect(
+				EquityMarketDataService.getEntryPrice({ symbol: 'MSFT', exchange: 'NASDAQ', timeoutMs: 500 })
+			).rejects.toMatchObject({
+				reason: EquityMarketDataService.REASONS.TIMEOUT,
+			});
 
 			EquityMarketDataService._resetPacerForTesting();
 		});
