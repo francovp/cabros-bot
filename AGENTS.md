@@ -228,7 +228,12 @@ After a PR that adds or changes an environment variable is merged, wait for the 
 - Vercel production, using the Vercel CLI/API.
 - Railway production, using `railway-cli` with explicit project, environment, and service identifiers.
 
-Use the platform's secret mechanism for credentials and never print secret values, place them in URLs, commit them, or include them in command output. Public configuration values may be set directly, but still must match the approved `.env.example`, Blueprint, or PR configuration. Verify each platform with a redacted variable-name/readiness check and confirm any resulting deployment reaches green/`SUCCESS`. If a platform does not host the affected service, record that as an explicit no-op rather than silently skipping it. Do not claim the change is complete until the application deployment and environment synchronization checks pass.
+Use the repository helper script [`scripts/sync-production-env.js`](file:///Users/fgvaleriop/repositorios/cabros-bot/scripts/sync-production-env.js) (or `pnpm run sync:production-env --key <NAME>`) to generate safe per-platform commands, identify affected Render services, and audit configuration.
+- **Dry-run by default**: `pnpm run sync:production-env --key <NAME>` inspects `render.yaml` and prints ready-to-run per-platform commands without mutating anything.
+- **Record execution & explicit no-ops**: `pnpm run sync:production-env --key <NAME> --apply --no-op vercel --no-op-reason vercel="Backend unhosted on Vercel"` appends a timestamped audit record to `.env-sync.log`.
+- **Audit drift**: `pnpm run sync:production-env --check-drift` diffs `.env.example` against platform blueprint definitions.
+
+Use the platform's secret mechanism for credentials and never print secret values, place them in URLs, commit them, or include them in command output (the helper strictly rejects `KEY=VALUE` on `argv`). Public configuration values may be set directly, but still must match the approved `.env.example`, Blueprint, or PR configuration. Verify each platform with a redacted variable-name/readiness check and confirm any resulting deployment reaches green/`SUCCESS`. If a platform does not host the affected service, record that as an explicit no-op rather than silently skipping it. Do not claim the change is complete until the application deployment and environment synchronization checks pass.
 
 
 **Linting and Commits During Implementation**:

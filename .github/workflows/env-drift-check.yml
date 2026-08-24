@@ -1,0 +1,38 @@
+name: Production Environment Drift Check
+
+on:
+  workflow_dispatch:
+    inputs:
+      variable_name:
+        description: 'Optional single variable name to inspect across platforms (leave blank to audit full .env.example)'
+        required: false
+        default: ''
+
+jobs:
+  env-drift-check:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install pnpm
+      uses: pnpm/action-setup@v3
+      with:
+        version: 10
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version-file: .node-version
+        cache: pnpm
+
+    - name: Install dependencies
+      run: pnpm install --frozen-lockfile
+
+    - name: Run Environment Sync & Drift Inspection
+      run: |
+        if [ -n "${{ github.event.inputs.variable_name }}" ]; then
+          pnpm run sync:production-env --key "${{ github.event.inputs.variable_name }}"
+        else
+          pnpm run sync:production-env --check-drift
+        fi
