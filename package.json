@@ -58,7 +58,7 @@
     "@firebase/rules-unit-testing": "5.0.1",
     "eslint": "^10.3.0",
     "eslint-config-prettier": "^10.1.8",
-    "eslint-plugin-jest": "^29.15.2",
+    "eslint-plugin-jest": "^29.16.1",
     "firebase": "12.18.0",
     "firebase-tools": "15.25.1",
     "globals": "^17.6.0",
