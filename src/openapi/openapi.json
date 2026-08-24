@@ -3653,6 +3653,21 @@
                     ],
                     "description": "Sanitized TradingView MCP outcome for this alert."
                   },
+                  "current_price": {
+                    "type": [
+                      "number",
+                      "null"
+                    ],
+                    "description": "Current price supplied by TradingView MCP enrichment; null when unavailable."
+                  },
+                  "price_data": {
+                    "type": [
+                      "object",
+                      "null"
+                    ],
+                    "additionalProperties": true,
+                    "description": "Optional structured TradingView MCP price snapshot (e.g. current_price, high, low)."
+                  },
                   "confluenceData": {
                     "type": [
                       "object",
