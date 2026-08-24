@@ -1387,6 +1387,77 @@ describe('SignalOutcomeService', () => {
 			expect(res.eligibilityBreakdown.unsupported_exchange).toBe(34); // 33 BATS + 1 SPCFD
 			expect(res.eligibilityBreakdown.unparseable_symbol).toBe(2);
 		});
+
+		it('identifies false positive candidates using absolute score for both bullish and bearish signals', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			const now = new Date();
+			const map = new Map([
+				['sig-bullish-bad', {
+					receivedAt: admin.firestore.Timestamp.fromDate(now),
+					requestId: 'req-bullish',
+					source: 'alert',
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					side: 'BUY',
+					score: 0.85,
+					price: 60000,
+					eligibilityState: 'supported_provider',
+					outcomeEvaluated: true,
+					outcomes: {
+						'1h': {
+							status: 'evaluated',
+							targetTime: now.toISOString(),
+							price: 58000,
+							return: -3.33,
+							maxAdverseExcursion: -4.0,
+							maxFavorableExcursion: 0.5,
+							targetHit: false,
+							stopHit: true,
+							rMultiple: -1.0,
+							evaluationDurationMs: 120,
+						},
+					},
+				}],
+				['sig-bearish-bad', {
+					receivedAt: admin.firestore.Timestamp.fromDate(now),
+					requestId: 'req-bearish',
+					source: 'alert',
+					symbol: 'ETHUSDT',
+					exchange: 'BINANCE',
+					side: 'SELL',
+					score: -0.85,
+					price: 3000,
+					eligibilityState: 'supported_provider',
+					outcomeEvaluated: true,
+					outcomes: {
+						'1h': {
+							status: 'evaluated',
+							targetTime: now.toISOString(),
+							price: 3150,
+							return: -5.0,
+							maxAdverseExcursion: -6.0,
+							maxFavorableExcursion: 0.2,
+							targetHit: false,
+							stopHit: true,
+							rMultiple: -1.0,
+							evaluationDurationMs: 110,
+						},
+					},
+				}],
+			]);
+
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, map);
+
+			const res = await SignalOutcomeService.getMetricsSummary();
+			expect(res).not.toBe('No measurements found');
+			expect(res.falsePositiveCandidates).toHaveLength(2);
+			expect(res.falsePositiveCandidates).toEqual(expect.arrayContaining([
+				expect.objectContaining({ symbol: 'BTCUSDT', score: 0.85, side: 'BUY' }),
+				expect.objectContaining({ symbol: 'ETHUSDT', score: -0.85, side: 'SELL' }),
+			]));
+		});
 	});
 
 	describe('worker lifecycle and scheduling', () => {
