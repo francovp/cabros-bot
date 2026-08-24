@@ -1803,8 +1803,7 @@ const createJobStatusForm = () => {
 				+ (isAutoRefresh ? ' · auto-refresh' : ''),
 			captureResponseStatus: (responseStatus) => { pollFailureStatus = responseStatus; },
 		});
-				console.error('RS-guard', 'rv', requestVersion, 'srv', statusRequestVersion, 'data?', !!data);
-if (requestVersion !== statusRequestVersion || form.elements['path-jobId'].value.trim() !== jobId) return data;
+		if (requestVersion !== statusRequestVersion || form.elements['path-jobId'].value.trim() !== jobId) return data;
 		if (data && data.status) applyStatus(data, jobId);
 		else if (!isAutoRefresh) clearStructuredState();
 		else {
