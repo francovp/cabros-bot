@@ -221,7 +221,7 @@ function parseTimestamp(value) {
 	return Number.isFinite(timestamp) ? timestamp : null;
 }
 
-async function getEntryPrice({ symbol, exchange, timeoutMs } = {}) {
+async function getQuote({ symbol, exchange, timeoutMs } = {}) {
 	const normSymbol = normalizeSymbol(symbol);
 	const queryExchange = resolveQueryExchange(exchange);
 	const body = await requestJson('/quote', { symbol: normSymbol, exchange: queryExchange }, timeoutMs);
@@ -229,7 +229,25 @@ async function getEntryPrice({ symbol, exchange, timeoutMs } = {}) {
 	if (price === null) {
 		throw new EquityMarketDataError(REASONS.INVALID_RESPONSE);
 	}
-	return price;
+	const change = body.change !== undefined && body.change !== null && body.change !== '' ? Number(body.change) : null;
+	const percentChange = body.percent_change !== undefined && body.percent_change !== null && body.percent_change !== '' ? Number(body.percent_change) : null;
+
+	return {
+		symbol: body.symbol || normSymbol,
+		name: body.name || null,
+		exchange: body.exchange || queryExchange || null,
+		currency: body.currency || 'USD',
+		price,
+		change: Number.isFinite(change) ? change : null,
+		percentChange: Number.isFinite(percentChange) ? percentChange : null,
+		isMarketOpen: typeof body.is_market_open === 'boolean' ? body.is_market_open : null,
+		datetime: body.datetime || null,
+	};
+}
+
+async function getEntryPrice({ symbol, exchange, timeoutMs } = {}) {
+	const quote = await getQuote({ symbol, exchange, timeoutMs });
+	return quote.price;
 }
 
 async function getHistoricalBars({ symbol, exchange, interval, startTime, endTime, timeoutMs } = {}) {
@@ -283,6 +301,7 @@ module.exports = {
 	getStatus,
 	isSupportedExchange,
 	getProviderName,
+	getQuote,
 	getEntryPrice,
 	getHistoricalBars,
 	parseTimestamp,

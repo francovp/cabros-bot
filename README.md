@@ -1562,16 +1562,19 @@ Display the list of available Telegram bot commands, argument syntax, and aliase
 
 ### /precio `<symbol>`
 
-Get crypto price from Binance.
+Get real-time price for crypto pairs (Binance) or equities/stocks (Twelve Data).
 
-**Example:**
+**Examples:**
 ```
 /precio BTCUSDT
+/precio NVDA
+/precio NASDAQ:AAPL
 ```
 
-**Response:**
+**Responses:**
 ```
-Precio de BTCUSDT es $45,000.50
+Precio de BTCUSDT es 65000
+Precio de NVDA es 125.50 (+2.32%)
 ```
 
 ### /cryptobot id
