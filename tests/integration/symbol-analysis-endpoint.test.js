@@ -108,9 +108,9 @@ describe('Symbol analysis endpoint', () => {
 				risk: expect.objectContaining({
 					side: 'SELL',
 					stop_loss: 106,
-					target: 88,
+					target: 80,
 					invalidation_level: 106,
-					risk_reward_ratio: 2,
+					risk_reward_ratio: 3.3333333333333335,
 					valid: true,
 				}),
 				decision: expect.objectContaining({ action: 'SELL', dataSufficient: true }),
@@ -239,5 +239,71 @@ describe('Symbol analysis endpoint', () => {
 
 		expect(res.body.analysis.risk).toEqual(expect.objectContaining({ valid: false }));
 		expect(res.body.analysis.decision).toEqual(expect.objectContaining({ action: 'NO_TRADE', dataSufficient: false }));
+	});
+
+	it('does not return an actionable decision when RSI is missing', async () => {
+		tradingViewMcpService.analyzeSymbolIdentifier.mockResolvedValueOnce({
+			technical: {
+				price_data: { current_price: 100 },
+				technical_indicators: { atr: 4 },
+			},
+			confluence: { recommendation: 'BUY', confidence: 'HIGH' },
+		});
+
+		const res = await request(app)
+			.post('/api/webhook/symbol-analysis')
+			.set('x-api-key', 'test-key')
+			.send({ symbol: 'BINANCE:BTCUSDT' })
+			.expect(200);
+
+		expect(res.body.analysis.decision).toEqual(expect.objectContaining({
+			action: 'NO_TRADE',
+			dataSufficient: false,
+		}));
+		expect(res.body.analysis.decision.warnings).toContain('Falta el RSI para una decisión accionable.');
+	});
+
+	it('keeps structured targets aligned with the displayed nearest resistance', async () => {
+		tradingViewMcpService.analyzeSymbolIdentifier.mockResolvedValueOnce({
+			technical: {
+				price_data: { current_price: 100 },
+				technical_indicators: { rsi: 50, atr: 4 },
+				support_resistance: { nearest_resistance: 105 },
+			},
+			confluence: { recommendation: 'BUY', confidence: 'HIGH' },
+		});
+
+		const res = await request(app)
+			.post('/api/webhook/symbol-analysis')
+			.set('x-api-key', 'test-key')
+			.send({ symbol: 'BINANCE:BTCUSDT' })
+			.expect(200);
+
+		expect(res.body.analysis.risk).toEqual(expect.objectContaining({ target: 105, valid: true }));
+		expect(res.body.alertText).toContain('- *Target sugerido:* $105.00');
+	});
+
+	it('uses current_price as the structured risk entry when close differs', async () => {
+		tradingViewMcpService.analyzeSymbolIdentifier.mockResolvedValueOnce({
+			technical: {
+				price_data: { current_price: 100, close: 90 },
+				technical_indicators: { rsi: 50, atr: 4 },
+			},
+			confluence: { recommendation: 'BUY', confidence: 'HIGH' },
+		});
+
+		const res = await request(app)
+			.post('/api/webhook/symbol-analysis')
+			.set('x-api-key', 'test-key')
+			.send({ symbol: 'BINANCE:BTCUSDT' })
+			.expect(200);
+
+		expect(res.body.analysis.price_data).toEqual(expect.objectContaining({ close: 90, current_price: 100 }));
+		expect(res.body.analysis.risk).toEqual(expect.objectContaining({
+			entry_price: 100,
+			stop_loss: 94,
+			target: 112,
+		}));
+		expect(res.body.alertText).toContain('BTCUSDT $100.00');
 	});
 });

@@ -142,12 +142,13 @@ function normalizeAnalysis({ analysis = {}, input, parsed, multiTimeframe, side 
 	const rawPrice = technical.price_data || {};
 	const rawIndicators = technical.technical_indicators || {};
 	const rawBollinger = technical.bollinger_analysis || technical.bollinger_bands || {};
-	const price = numberOrNull(rawPrice.close ?? rawPrice.current_price);
+	const price = numberOrNull(rawPrice.current_price ?? rawPrice.close);
+	const close = numberOrNull(rawPrice.close ?? rawPrice.current_price);
 	const high = numberOrNull(rawPrice.high);
 	const low = numberOrNull(rawPrice.low);
 	const priceData = {
 		...rawPrice,
-		close: price,
+		close,
 		current_price: numberOrNull(rawPrice.current_price ?? rawPrice.close),
 		change_percent: numberOrNull(rawPrice.change_percent),
 		high,
@@ -210,9 +211,7 @@ function buildRisk({ technical, price, side }) {
 	const currentBollinger = technical.bollinger_bands || {};
 	const atr = numberOrNull(indicators.ATR ?? indicators.atr ?? technical.atr?.value ?? technical.atr ?? technical.volatility?.atr);
 	const stop = getStopLossMeta(price, atr, bollinger, currentBollinger, side);
-	const target = atr !== null
-		? (side === 'SELL' ? price - (atr * 3) : price + (atr * 3))
-		: getTakeProfitTarget(price, atr, bollinger, currentBollinger, technical, side);
+	const target = getTakeProfitTarget(price, atr, bollinger, currentBollinger, technical, side);
 	const ratio = getRiskRewardRatio(price, stop.value, target, side);
 	const valid = price > 0
 		&& stop.value > 0
@@ -250,18 +249,20 @@ function buildDecision({ analysis, technical, side, risk, price, technicalIndica
 	const reasons = [];
 	const warnings = [];
 	const confluence = analysis.confluence || {};
+	const dataSufficient = Boolean(price !== null && technicalIndicators.RSI !== null && side && risk.valid);
 	if (confluence.recommendation || confluence.action) reasons.push(`Confluencia: ${confluence.recommendation || confluence.action}`);
 	if (technicalIndicators.RSI !== null) reasons.push(`RSI: ${technicalIndicators.RSI}`);
 	if (technical.market_structure?.trend) reasons.push(`Tendencia: ${technical.market_structure.trend}`);
 	if (technical.macd?.direction) reasons.push(`MACD: ${technical.macd.direction}`);
 	if (!side) warnings.push('No hay una dirección BUY/SELL concluyente.');
+	if (technicalIndicators.RSI === null) warnings.push('Falta el RSI para una decisión accionable.');
 	if (!risk.valid) warnings.push('El riesgo calculado no tiene niveles direccionales válidos.');
 	if (!Number.isFinite(price)) warnings.push('Falta el precio actual.');
 
 	return {
-		action: side && risk.valid ? side : 'NO_TRADE',
+		action: dataSufficient ? side : 'NO_TRADE',
 		confidence: confluence.confidence ?? null,
-		dataSufficient: Boolean(price !== null && technicalIndicators.RSI !== null && side && risk.valid),
+		dataSufficient,
 		reasons,
 		warnings,
 	};
