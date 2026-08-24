@@ -57,6 +57,9 @@
           },
           {
             "$ref": "#/components/parameters/XIdempotencyKeyHeader"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
         "requestBody": {
@@ -1708,6 +1711,17 @@
           "minLength": 1
         },
         "description": "Optional replay key. Alternative x-prefixed header variant."
+      },
+      "XRequestIdHeader": {
+        "name": "x-request-id",
+        "in": "header",
+        "required": false,
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "description": "Optional client-supplied request correlation ID. If provided, it must be 1-128 printable ASCII characters. If omitted or invalid, a UUIDv4 correlation ID is generated automatically. Echoed in the response and persisted on stored alerts."
       }
     },
     "requestBodies": {
@@ -2410,6 +2424,7 @@
             },
             "example": {
               "success": true,
+              "requestId": "req-123",
               "results": [
                 {
                   "channel": "telegram",
@@ -3686,6 +3701,10 @@
         "properties": {
           "success": {
             "type": "boolean"
+          },
+          "requestId": {
+            "type": "string",
+            "description": "Request correlation ID echoed from the inbound x-request-id header or generated as a UUIDv4."
           },
           "dryRun": {
             "type": "boolean"

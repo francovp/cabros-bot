@@ -132,6 +132,17 @@ async function processEnrichment(alert, options) {
 	return enriched;
 }
 
+function resolveRequestId(req) {
+	const raw = req && req.headers && (req.headers['x-request-id'] || req.headers['X-Request-Id'] || req.headers['x-request-ID']);
+	if (typeof raw === 'string') {
+		const trimmed = raw.trim();
+		if (trimmed.length > 0 && trimmed.length <= 128 && /^[\x21-\x7E]+$/.test(trimmed)) {
+			return trimmed;
+		}
+	}
+	return uuidv4();
+}
+
 function resolveDryRun(req) {
 	const queryFlag = req.query && (req.query.dryRun === 'true' || req.query.dryRun === true);
 	const bodyFlag = req.body && typeof req.body === 'object' && (req.body.dryRun === true || req.body.dryRun === 'true');
@@ -140,7 +151,7 @@ function resolveDryRun(req) {
 
 function postAlert(botOrGetter) {
 	return async (req, res) => {
-		const requestId = uuidv4();
+		const requestId = resolveRequestId(req);
 		const startTime = Date.now();
 		const { body } = req;
 		const useTradingViewData = req.query && (req.query.useTradingViewData === true || req.query.useTradingViewData === 'true');
@@ -179,6 +190,7 @@ function postAlert(botOrGetter) {
 						enrichedData: alert.enriched || null,
 					},
 					tokenUsage: tokenUsageJSON,
+					requestId,
 				});
 			}
 
@@ -202,6 +214,7 @@ function postAlert(botOrGetter) {
 				tokenUsage: tokenUsageJSON,
 				requestedChannels,
 				deliveredChannels,
+				requestId,
 			});
 
 			const extracted = alertStorageService.extractSymbolAndExchange({
@@ -221,6 +234,7 @@ function postAlert(botOrGetter) {
 			// Fire-and-forget: persist alert to Firestore after responding to the caller.
 			// Errors are caught inside saveAlert — delivery is never blocked by storage.
 			alertStorageService.saveAlert({
+				requestId,
 				text: alert.text,
 				symbol: extracted.symbol !== 'unknown' ? extracted.symbol : null,
 				exchange: extracted.exchange || null,
@@ -268,6 +282,7 @@ function postAlert(botOrGetter) {
 					success: false,
 					error: error.message,
 					details: error.details,
+					requestId,
 				});
 			}
 
@@ -281,6 +296,7 @@ function postAlert(botOrGetter) {
 					endpoint: '/api/webhook/alert',
 					method: 'POST',
 					statusCode: (error.response && error.response.error_code) || 500,
+					requestId,
 				},
 				alert: {
 					textLength: alertText ? alertText.length : 0,
@@ -291,7 +307,7 @@ function postAlert(botOrGetter) {
 			});
 
 			const status = (error.response && error.response.error_code) || 500;
-			const errorResponse = error.response || { error: 'Internal server error', details: error.message };
+			const errorResponse = error.response || { error: 'Internal server error', details: error.message, requestId };
 			res.status(status).send(errorResponse);
 		}
 	};
@@ -299,6 +315,7 @@ function postAlert(botOrGetter) {
 
 module.exports = {
 	postAlert,
+	resolveRequestId,
 	initializeNotificationServices,
 	getNotificationManager,
 };
