@@ -1838,6 +1838,67 @@ describe('admin browser client', () => {
 		expect(findButton(listForm, 'Next page').disabled).toBe(true);
 	});
 
+	it('keeps the back-stack entry when a Next page request fails', async () => {
+		let alertCalls = 0;
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/alerts')) {
+					alertCalls += 1;
+					if (alertCalls === 1) {
+						return response({ alerts: [{ id: 'a1', text: 'first page alert', enriched: false }], pagination: { hasMore: true, nextBefore: 'cursor-2' } });
+					}
+					return response({ error: 'boom' }, 500);
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alerts');
+		await listForm.dispatch('submit');
+		await flush();
+		expect(findButton(listForm, 'Previous page').disabled).toBe(true);
+
+		await findButton(listForm, 'Next page').dispatch('click');
+		await flush();
+
+		expect(findButton(listForm, 'Previous page').disabled).toBe(true);
+	});
+
+	it('keeps history when navigating back to a previous page fails', async () => {
+		let alertCalls = 0;
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/alerts')) {
+					alertCalls += 1;
+					if (alertCalls === 3) return response({ error: 'boom' }, 500);
+					return response(alertCalls === 1
+						? { alerts: [{ id: 'a1', text: 'first page alert', enriched: false }], pagination: { hasMore: true, nextBefore: 'cursor-2' } }
+						: { alerts: [{ id: 'a2', text: 'second page alert', enriched: false }], pagination: { hasMore: false } });
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alerts');
+		await listForm.dispatch('submit');
+		await flush();
+		await findButton(listForm, 'Next page').dispatch('click');
+		await flush();
+		expect(listForm.textContent).toContain('second page alert');
+		expect(findButton(listForm, 'Previous page').disabled).toBe(false);
+
+		await findButton(listForm, 'Previous page').dispatch('click');
+		await flush();
+
+		expect(findButton(listForm, 'Previous page').disabled).toBe(false);
+	});
+
 	it('keeps navigation icons as inline SVG instead of platform glyphs', () => {
 		const shell = fs.readFileSync(path.join(__dirname, '../../src/admin/index.html'), 'utf8');
 		expect(shell.match(/<svg class="nav-icon"/g)).toHaveLength(7);

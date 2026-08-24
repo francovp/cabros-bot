@@ -992,6 +992,11 @@ const createAlertListForm = () => {
 			: undefined;
 		next.disabled = !nextBefore;
 		prev.disabled = !backCursors.length;
+		return Boolean(data && Array.isArray(data.alerts));
+	};
+	const syncPagingButtons = () => {
+		next.disabled = !nextBefore;
+		prev.disabled = !backCursors.length;
 	};
 	const resetPagination = () => {
 		nextBefore = undefined;
@@ -1010,12 +1015,21 @@ const createAlertListForm = () => {
 	});
 	next.addEventListener('click', () => {
 		if (!nextBefore) return;
-		backCursors.push(before.value || '');
-		return requestPage(nextBefore);
+		const entry = before.value || '';
+		Promise.resolve(requestPage(nextBefore)).then((succeeded) => {
+			if (!succeeded) return;
+			backCursors.push(entry);
+			syncPagingButtons();
+		});
 	});
 	prev.addEventListener('click', () => {
-		const target = backCursors.pop();
-		return requestPage(target);
+		if (!backCursors.length) return;
+		const target = backCursors[backCursors.length - 1];
+		Promise.resolve(requestPage(target)).then((succeeded) => {
+			if (!succeeded) return;
+			backCursors.pop();
+			syncPagingButtons();
+		});
 	});
 	return form;
 };
