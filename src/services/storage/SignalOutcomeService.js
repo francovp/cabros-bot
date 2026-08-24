@@ -61,8 +61,7 @@ function getBinanceClient(requestOptions = {}) {
 }
 
 function isEnabled() {
-	return process.env.ENABLE_SIGNAL_OUTCOME_TRACKING === 'true'
-		|| process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING === 'true';
+	return process.env.ENABLE_SIGNAL_OUTCOME_TRACKING === 'true';
 }
 
 function getWorkerRole() {
@@ -148,15 +147,17 @@ function normalizeSymbolAndExchange(rawSymbol, rawExchange) {
 	}
 	const parts = rawSymbol.trim().toUpperCase().split(':');
 	if (parts.length === 2) {
-		return { exchange: parts[0], symbol: parts[1] };
+		const symbol = parts[1].replace(/\s*\([A-Za-z0-9]+\)$/, '');
+		return { exchange: parts[0], symbol };
 	}
 	const exchange = rawExchange ? String(rawExchange).trim().toUpperCase() : 'BINANCE';
-	return { exchange, symbol: parts[0] };
+	const symbol = parts[0].replace(/\s*\([A-Za-z0-9]+\)$/, '');
+	return { exchange, symbol };
 }
 
 function normalizeAssetClass(rawAssetClass) {
 	const assetClass = String(rawAssetClass || '').trim().toLowerCase();
-	return ['crypto', 'stock'].includes(assetClass) ? assetClass : null;
+	return ['crypto', 'stock', 'forex', 'index'].includes(assetClass) ? assetClass : null;
 }
 
 function determineEligibility(normSymbolInfo, assetClass, entryPrice, equityProviderName = null, entryPriceReason = null) {
@@ -895,7 +896,7 @@ async function getMetricsSummary({ from, to, limit } = {}) {
 			if (!eligibilityState) {
 				if (symbol === 'UNKNOWN' || exchange === 'UNKNOWN') {
 					eligibilityState = 'unparseable_symbol';
-				} else if (exchange !== 'BINANCE') {
+				} else if (exchange !== 'BINANCE' && !equityMarketDataService.isSupportedExchange(exchange)) {
 					eligibilityState = 'unsupported_exchange';
 				} else if (doc.price === null || doc.price === undefined) {
 					eligibilityState = 'missing_entry_price';

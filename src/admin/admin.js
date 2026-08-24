@@ -231,9 +231,12 @@ const copyToClipboard = async (text, button) => {
 			area.value = text;
 			area.setAttribute('readonly', 'readonly');
 			document.body.append(area);
-			area.select();
-			copied = document.execCommand('copy');
-			if (typeof area.remove === 'function') area.remove();
+			try {
+				area.select();
+				copied = document.execCommand('copy');
+			} finally {
+				if (typeof area.remove === 'function') area.remove();
+			}
 		}
 	} catch (_) {
 		copied = false;
@@ -1256,11 +1259,26 @@ const createAlertListForm = () => {
 			} else {
 				data.alerts.forEach((alert) => alertList.append(createAlertCard(alert)));
 			}
+		} else {
+			lastRawJson = '';
+			rawOutput.textContent = '';
+			rawCopyButton.hidden = true;
+			alertList.replaceChildren();
 		}
 		nextBefore = data && data.pagination && data.pagination.nextBefore;
 		next.disabled = !nextBefore;
 		prev.disabled = !backCursors.length;
 	};
+	const resetPagination = () => {
+		nextBefore = undefined;
+		backCursors = [];
+		next.disabled = true;
+		prev.disabled = true;
+	};
+	[before, limit, source, enriched].forEach((field) => {
+		field.addEventListener('input', resetPagination);
+		field.addEventListener('change', resetPagination);
+	});
 	form.addEventListener('submit', (event) => {
 		event.preventDefault();
 		backCursors = [];
@@ -1471,6 +1489,8 @@ const createAlertSummaryForm = () => {
 			}).then((data) => {
 				if (!data || !data.summary) {
 					blocks.replaceChildren();
+					lastRawJson = '';
+					rawOutput.textContent = '';
 					rawCopyButton.hidden = true;
 					return;
 				}
@@ -1875,6 +1895,7 @@ const createOperationForm = (contract, definition) => {
 	}
 	form.addEventListener('submit', (event) => {
 		event.preventDefault();
+		if (resultHost) resultHost.replaceChildren();
 		try {
 			const query = form.elements.query
 				? window.CabrosAdminRequest.validateQuery(parseJson(form.elements.query.value, 'Query'))

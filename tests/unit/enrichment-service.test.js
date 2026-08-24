@@ -196,6 +196,7 @@ describe('EnrichmentService (Phase 8 - US6)', () => {
 			expect(mockAzureClient.chatCompletion).toHaveBeenCalledWith(
 				'Risk assessment system prompt',
 				'Risk assessment user prompt',
+				expect.objectContaining({ signal: expect.anything() }),
 			);
 		});
 
@@ -464,6 +465,92 @@ describe('EnrichmentService (Phase 8 - US6)', () => {
 
 			const service = new EnrichmentService();
 			expect(service.timeout).toBe(10000);
+		});
+
+		it('returns null within total budget when Azure chatCompletion stalls and aborts', async () => {
+			process.env.ENABLE_LLM_ALERT_ENRICHMENT = 'true';
+			const actualRetry = jest.requireActual('../../src/lib/retryHelper');
+			retryHelper.sendWithRetry.mockImplementation(actualRetry.sendWithRetry);
+
+			const mockAzureClient = {
+				validate: jest.fn().mockReturnValue(true),
+				parseJsonResponse: jest.fn(),
+				chatCompletion: jest.fn(),
+			};
+			azureAiClient.getAzureAIClient.mockReturnValue(mockAzureClient);
+
+			const service = new EnrichmentService();
+			service.timeout = 50; // fast timeout for test
+
+			let callCount = 0;
+			mockAzureClient.chatCompletion.mockImplementation((sys, user, opts) => {
+				callCount++;
+				return new Promise((resolve, reject) => {
+					if (opts?.signal?.aborted) {
+						const err = new Error('The operation was aborted');
+						err.name = 'AbortError';
+						return reject(err);
+					}
+					opts?.signal?.addEventListener('abort', () => {
+						const err = new Error('The operation was aborted');
+						err.name = 'AbortError';
+						reject(err);
+					});
+				});
+			});
+
+			const result = await service.enrichAlert({
+				confidence: 0.8,
+				headline: 'Stalled test',
+				sentiment_score: 0.5,
+				event_significance: 0.5,
+				sources: [],
+			});
+
+			expect(result).toBeNull();
+			// With abort signal fired, retry loop terminates immediately without retrying indefinitely
+			expect(callCount).toBe(1);
+		});
+
+		it('stops retry attempts when total budget expires during retries', async () => {
+			process.env.ENABLE_LLM_ALERT_ENRICHMENT = 'true';
+			const actualRetry = jest.requireActual('../../src/lib/retryHelper');
+			retryHelper.sendWithRetry.mockImplementation(actualRetry.sendWithRetry);
+
+			const mockAzureClient = {
+				validate: jest.fn().mockReturnValue(true),
+				parseJsonResponse: jest.fn(),
+				chatCompletion: jest.fn(),
+			};
+			azureAiClient.getAzureAIClient.mockReturnValue(mockAzureClient);
+
+			const service = new EnrichmentService();
+
+			const controller = new AbortController();
+			let attempt = 0;
+
+			mockAzureClient.chatCompletion.mockImplementation(async (sys, user, opts) => {
+				attempt++;
+				// Abort controller during first attempt
+				controller.abort();
+				const err = new Error('Stalled call aborted');
+				err.name = 'AbortError';
+				throw err;
+			});
+
+			const result = await service.enrichAlert(
+				{
+					confidence: 0.85,
+					headline: 'Abort test',
+					sentiment_score: 0.6,
+					event_significance: 0.6,
+					sources: [],
+				},
+				{ signal: controller.signal },
+			);
+
+			expect(result).toBeNull();
+			expect(attempt).toBe(1);
 		});
 	});
 });

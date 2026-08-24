@@ -241,4 +241,141 @@ describe('job worker runtime', () => {
 		expect(queue.closeWorker).toHaveBeenCalledTimes(1);
 		expect(service.waitForCallbacks).toHaveBeenCalledTimes(1);
 	});
+
+	describe('firestore-poller mode', () => {
+		const originalMode = process.env.JOB_EXECUTION_MODE;
+
+		beforeEach(() => {
+			process.env.JOB_EXECUTION_MODE = 'firestore-poller';
+		});
+
+		afterEach(() => {
+			if (originalMode !== undefined) {
+				process.env.JOB_EXECUTION_MODE = originalMode;
+			} else {
+				delete process.env.JOB_EXECUTION_MODE;
+			}
+		});
+
+		it('polls and processes queued jobs without initializing Redis or BullMQ', async () => {
+			const queue = {
+				isEnabled: jest.fn(() => false),
+				createWorker: jest.fn(),
+			};
+			const repository = {
+				list: jest.fn().mockResolvedValue([
+					{
+						jobId: 'job-1',
+						status: 'processing',
+						execution: { mode: 'firestore-poller', status: 'queued' },
+					},
+					{
+						jobId: 'job-other',
+						status: 'processing',
+						execution: { mode: 'render-worker', status: 'queued' },
+					},
+				]),
+			};
+			const service = {
+				repository,
+				processQueuedJob: jest.fn().mockResolvedValue(undefined),
+				releaseQueuedJob: jest.fn(),
+				failQueuedJob: jest.fn(),
+				waitForCallbacks: jest.fn().mockResolvedValue(undefined),
+			};
+
+			const runtime = await startJobWorker({ queue, service, workerId: 'worker-fp-1' });
+			await runtime.pollOnce();
+			await runtime.stop();
+
+			expect(queue.createWorker).not.toHaveBeenCalled();
+			expect(repository.list).toHaveBeenCalledWith({ status: 'processing', limit: 50 });
+			expect(service.processQueuedJob).toHaveBeenCalledWith('job-1', null, 'worker-fp-1');
+			expect(service.processQueuedJob).not.toHaveBeenCalledWith('job-other', expect.anything(), expect.anything());
+			expect(service.waitForCallbacks).toHaveBeenCalledTimes(1);
+		});
+
+		it('polls expired claims and handles race conditions safely', async () => {
+			const repository = {
+				list: jest.fn().mockResolvedValue([
+					{
+						jobId: 'job-expired',
+						status: 'processing',
+						execution: {
+							mode: 'firestore-poller',
+							status: 'running',
+							leaseUntil: new Date(Date.now() - 5000).toISOString(),
+						},
+					},
+					{
+						jobId: 'job-active-claim',
+						status: 'processing',
+						execution: {
+							mode: 'firestore-poller',
+							status: 'running',
+							leaseUntil: new Date(Date.now() + 60000).toISOString(),
+						},
+					},
+				]),
+			};
+			const raceError = Object.assign(new Error('Job claim is active'), { code: 'JOB_CLAIM_ACTIVE' });
+			const service = {
+				repository,
+				processQueuedJob: jest.fn().mockRejectedValue(raceError),
+				releaseQueuedJob: jest.fn(),
+				failQueuedJob: jest.fn(),
+				waitForCallbacks: jest.fn().mockResolvedValue(undefined),
+			};
+
+			const runtime = await startJobWorker({ service, workerId: 'worker-fp-1' });
+			await runtime.pollOnce();
+			await runtime.stop();
+
+			expect(service.processQueuedJob).toHaveBeenCalledWith('job-expired', null, 'worker-fp-1');
+			expect(service.processQueuedJob).not.toHaveBeenCalledWith('job-active-claim', expect.anything(), expect.anything());
+			expect(service.releaseQueuedJob).not.toHaveBeenCalled();
+			expect(service.failQueuedJob).not.toHaveBeenCalled();
+		});
+
+		it('releases retryable claims when attempts remain and fails when max attempts reached', async () => {
+			const repository = {
+				list: jest.fn().mockResolvedValue([
+					{
+						jobId: 'job-retryable',
+						status: 'processing',
+						execution: { mode: 'firestore-poller', status: 'queued' },
+					},
+					{
+						jobId: 'job-final-fail',
+						status: 'processing',
+						execution: { mode: 'firestore-poller', status: 'queued' },
+					},
+				]),
+			};
+			const retryError = Object.assign(new Error('transient network glitch'), {
+				claimAttempt: 2,
+				code: 'NETWORK_ERROR',
+			});
+			const finalError = Object.assign(new Error('fatal error'), {
+				claimAttempt: 5,
+				code: 'FATAL_ERROR',
+			});
+			const service = {
+				repository,
+				processQueuedJob: jest.fn()
+					.mockRejectedValueOnce(retryError)
+					.mockRejectedValueOnce(finalError),
+				releaseQueuedJob: jest.fn().mockResolvedValue(true),
+				failQueuedJob: jest.fn().mockResolvedValue(true),
+				waitForCallbacks: jest.fn().mockResolvedValue(undefined),
+			};
+
+			const runtime = await startJobWorker({ service, workerId: 'worker-fp-1' });
+			await runtime.pollOnce();
+			await runtime.stop();
+
+			expect(service.releaseQueuedJob).toHaveBeenCalledWith('job-retryable', 'worker-fp-1', retryError, 2);
+			expect(service.failQueuedJob).toHaveBeenCalledWith('job-final-fail', 'worker-fp-1', finalError, 5);
+		});
+	});
 });

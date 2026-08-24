@@ -202,6 +202,44 @@ describe('NotificationManager admin failure notifications', () => {
 		expect(drained).toBe(true);
 	});
 
+	it.each(['sendToAll', 'sendToChannels'])('preserves zero attemptCount through %s Sentry telemetry', async (dispatchName) => {
+		process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '-100-admin';
+		const captureExternalFailure = jest.spyOn(sentryService, 'captureExternalFailure').mockImplementation(() => ({ success: true }));
+		const telegramService = {
+			name: 'telegram',
+			isEnabled: jest.fn(() => true),
+			send: jest.fn()
+				.mockResolvedValueOnce({
+					success: false,
+					channel: 'telegram',
+					error: 'Cached delivery lease ownership lost',
+					category: 'TIMEOUT',
+					attemptCount: 0,
+				})
+				.mockResolvedValueOnce({ success: true, channel: 'telegram', messageId: 'admin-1' }),
+		};
+		const whatsappService = {
+			name: 'whatsapp',
+			isEnabled: jest.fn(() => true),
+			send: jest.fn().mockResolvedValue({ success: true, channel: 'whatsapp', messageId: 'wa-1' }),
+		};
+		const manager = new NotificationManager(telegramService, whatsappService);
+
+		if (dispatchName === 'sendToAll') {
+			await manager.sendToAll({ text: 'BTC alert' });
+		} else {
+			await manager.sendToChannels({ text: 'BTC alert' }, ['telegram']);
+		}
+		await waitForBackgroundTasks();
+
+		expect(captureExternalFailure).toHaveBeenCalledWith(expect.objectContaining({
+			external: expect.objectContaining({ attemptCount: 0 }),
+		}));
+		expect(telegramService.send).toHaveBeenLastCalledWith(expect.objectContaining({
+			text: expect.stringContaining('attempts 0'),
+		}));
+	});
+
 	it.each([
 		['sendToAll', (manager, alert) => manager.sendToAll(alert)],
 		['sendToChannels', (manager, alert) => manager.sendToChannels(alert, ['discord'])],
@@ -248,4 +286,63 @@ describe('NotificationManager admin failure notifications', () => {
 			text: expect.stringContaining('attempts 3'),
 		}));
 	});
+
+	it('records dead letters and includes pending count in admin alerts when redrive is enabled', async () => {
+		process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '-100-admin';
+		process.env.ENABLE_NOTIFICATION_REDRIVE = 'true';
+		const { notificationRedriveService } = require('../../src/services/notification/NotificationRedriveService');
+		notificationRedriveService.resetForTesting();
+
+		const telegramService = {
+			name: 'telegram',
+			isEnabled: jest.fn(() => true),
+			send: jest.fn()
+				.mockResolvedValueOnce({ success: true, channel: 'telegram', messageId: 'alert-1' })
+				.mockResolvedValueOnce({ success: true, channel: 'telegram', messageId: 'admin-1' }),
+		};
+		const whatsappService = {
+			name: 'whatsapp',
+			isEnabled: jest.fn(() => true),
+			send: jest.fn().mockResolvedValue({
+				success: false,
+				channel: 'whatsapp',
+				error: 'WhatsApp network disconnect',
+			}),
+		};
+
+		const manager = new NotificationManager(telegramService, whatsappService);
+		await manager.sendToAll({ text: 'BTC alert', correlationId: 'redrive-corr-1' });
+		await waitForBackgroundTasks();
+
+		expect(notificationRedriveService.getPendingCount()).toBe(1);
+		expect(telegramService.send).toHaveBeenLastCalledWith(expect.objectContaining({
+			telegramChatId: '-100-admin',
+			text: expect.stringContaining('Dead-letters queued for redrive (pending: 1)'),
+		}));
+		notificationRedriveService.resetForTesting();
+	});
+
+	it('does not send standard admin failure alert for redrive dispatches (isRedrive: true)', async () => {
+		process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '-100-admin';
+		process.env.ENABLE_NOTIFICATION_REDRIVE = 'true';
+
+		const telegramService = {
+			name: 'telegram',
+			isEnabled: jest.fn(() => true),
+			send: jest.fn().mockResolvedValue({
+				success: false,
+				channel: 'telegram',
+				error: 'Telegram still offline',
+			}),
+		};
+
+		const manager = new NotificationManager(telegramService);
+		const results = await manager.sendToChannels({ text: 'BTC alert' }, ['telegram'], { isRedrive: true });
+		await waitForBackgroundTasks();
+
+		expect(results[0].success).toBe(false);
+		// telegramService.send called only once for the actual redrive attempt, not for an admin notification
+		expect(telegramService.send).toHaveBeenCalledTimes(1);
+	});
 });
+

@@ -5,10 +5,13 @@
 #
 # Usage:
 # 1. Copy this file to your actual workflow: cp .github/workflows/news-monitor-cron.yml.example .github/workflows/news-monitor-cron.yml
-# 2. Update the schedule, symbols, and webhook URL as needed
-# 3. Commit and push to enable the workflow
+# 2. Configure repository secrets in GitHub (Settings -> Secrets and variables -> Actions):
+#    - WEBHOOK_API_KEY: API key matching the server's WEBHOOK_API_KEY environment variable
+#    - NEWS_MONITOR_BASE_URL: Base URL of your deployed bot (e.g. https://cabros-bot-production.up.railway.app)
+# 3. Adjust schedule and options as needed
+# 4. Commit and push to enable the workflow
 #
-# Note: Replace WEBHOOK_URL with your actual deployment endpoint
+# Security Note: Never include API keys in URLs, query strings, or logs. Pass WEBHOOK_API_KEY strictly in the x-api-key header.
 
 name: News Monitor - Scheduled Analysis
 
@@ -16,8 +19,14 @@ name: News Monitor - Scheduled Analysis
 on:
   schedule:
     - cron: '0 */4 * * *'
-  # Allow manual triggering
+  # Allow manual triggering with optional dry-run
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (analyze without sending alerts)'
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   news_monitor:
@@ -27,21 +36,34 @@ jobs:
     steps:
       - name: Call News Monitor API
         run: |
-          curl -X POST \
+          # Use server-side configured symbols by default (NEWS_SYMBOLS_CRYPTO and NEWS_SYMBOLS_STOCKS)
+          # Pass x-api-key header securely from GitHub secrets
+          DRY_RUN="${{ inputs.dry_run || 'false' }}"
+          
+          if [ "$DRY_RUN" = "true" ]; then
+            PAYLOAD='{"dryRun":true}'
+          else
+            PAYLOAD='{}'
+          fi
+          
+          # Optional per-run symbol overrides example:
+          # PAYLOAD='{"crypto":["BTCUSDT","ETHUSDT"],"stocks":["NVDA","AAPL"],"dryRun":false}'
+          
+          curl -f -sS -X POST \
             -H "Content-Type: application/json" \
-            -d '{
-              "crypto": ["BTCUSDT", "ETHUSD", "BNBUSDT"],
-              "stocks": ["AAPL", "GOOGL", "MSFT", "NVDA"]
-            }' \
-            "${{ secrets.NEWS_MONITOR_WEBHOOK_URL }}/api/news-monitor"
+            -H "x-api-key: ${{ secrets.WEBHOOK_API_KEY }}" \
+            -d "$PAYLOAD" \
+            "${{ secrets.NEWS_MONITOR_BASE_URL }}/api/news-monitor"
         env:
-          WEBHOOK_URL: ${{ secrets.NEWS_MONITOR_WEBHOOK_URL }}
+          # Webhook API key passed safely to curl via secrets
+          WEBHOOK_API_KEY: ${{ secrets.WEBHOOK_API_KEY }}
+          NEWS_MONITOR_BASE_URL: ${{ secrets.NEWS_MONITOR_BASE_URL }}
         
       - name: Log Analysis Results
         if: failure()
         run: echo "News monitoring failed. Check logs above for details."
 
-  # Optional: Send summary email on failures
+  # Optional: Send summary notification on failures
   notify_on_failure:
     needs: news_monitor
     runs-on: ubuntu-latest
@@ -50,18 +72,18 @@ jobs:
     steps:
       - name: Send failure notification
         run: |
-          # Uncomment to enable email notifications:
+          # Uncomment to enable notifications:
           # - Set up GitHub email notifications
-          # - Or integrate with external notification service (Slack, PagerDuty, etc.)
+          # - Or integrate with external notification service (Slack, Discord, PagerDuty, etc.)
           echo "News monitoring workflow failed. Review logs in Actions tab."
 
-# Environment Variables
-# Add these as repository secrets in GitHub:
-# - NEWS_MONITOR_WEBHOOK_URL: Full URL to your /api/news-monitor endpoint
-#   Example: https://your-bot.render.com/api/news-monitor
+# Secrets Configuration:
+# Add these in GitHub Repository Settings -> Secrets and variables -> Actions:
+# - WEBHOOK_API_KEY: The API key secret required by validateApiKey (x-api-key header)
+# - NEWS_MONITOR_BASE_URL: Base URL of your deployment (e.g. https://cabros-bot-production.up.railway.app)
 
-# Customize for your needs:
-# - Update schedule (cron format): https://crontab.guru/
-# - Add more symbols to analyze
-# - Integrate with notification services (Slack, Discord, etc.)
-# - Add conditional triggers (only run during market hours, etc.)
+# Customization Options:
+# - Adjust cron schedule: https://crontab.guru/
+# - Test runs safely with workflow_dispatch dry_run=true
+# - To override server-configured symbols per run, customize PAYLOAD as shown above
+

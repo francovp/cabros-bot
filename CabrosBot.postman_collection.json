@@ -171,7 +171,7 @@
           "name": "Success",
           "status": "OK",
           "code": 200,
-          "body": "{\"service\":{\"name\":\"cabros-bot\",\"version\":\"0.1.0\"},\"featureFlags\":{\"telegramBot\":true,\"whatsappAlerts\":false,\"geminiGrounding\":false,\"newsMonitor\":false,\"newsMonitorTestMode\":false,\"tradingViewVolumeConfirmation\":false,\"firestoreJobStorage\":false,\"messageFooterMetadata\":true,\"firestoreIdempotency\":false,\"equityMarketData\":false,\"firebaseRemoteConfig\":false,\"jobExecutionWorker\":false},\"dependencies\":{\"tradingViewMcp\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"lastCheckedAt\":null,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastErrorCategory\":null,\"successCount\":0,\"failureCount\":0},\"tradingViewVolumeConfirmation\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"lastCheckedAt\":null,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastErrorCategory\":null,\"successCount\":0,\"failureCount\":0},\"firestoreJobStorage\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\"},\"signalOutcomeWorker\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"role\":\"web\",\"running\":false,\"shutdownRequested\":false,\"lastRunScannedCount\":0,\"lastRunPendingCount\":0,\"lastRunEvaluatedCount\":0,\"lastRunErrorCount\":0},\"equityMarketData\":{\"provider\":null,\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"supportedExchanges\":[\"BATS\",\"NASDAQ\",\"NYSE\",\"AMEX\",\"NYSE ARCA\"],\"timeoutMs\":5000},\"idempotencyStorage\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"mode\":\"ephemeral\",\"backend\":\"memory\"},\"firebaseRemoteConfig\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"source\":\"disabled\",\"templateVersion\":null,\"lastSuccessfulLoad\":null,\"lastErrorCategory\":null,\"refreshIntervalMs\":900000,\"maxAgeMs\":3600000}}}"
+          "body": "{\"service\":{\"name\":\"cabros-bot\",\"version\":\"0.1.0\"},\"featureFlags\":{\"telegramBot\":true,\"whatsappAlerts\":false,\"geminiGrounding\":false,\"newsMonitor\":false,\"newsMonitorTestMode\":false,\"tradingViewVolumeConfirmation\":false,\"firestoreJobStorage\":false,\"messageFooterMetadata\":true,\"firestoreIdempotency\":false,\"equityMarketData\":false,\"firebaseRemoteConfig\":false,\"jobExecutionWorker\":false},\"dependencies\":{\"tradingViewMcp\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"lastCheckedAt\":null,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastErrorCategory\":null,\"successCount\":0,\"failureCount\":0,\"circuitBreaker\":{\"state\":\"closed\",\"consecutiveFailures\":0,\"openedAt\":null,\"lastStateChangeAt\":null,\"failureThreshold\":5,\"cooldownMs\":600000}},\"tradingViewVolumeConfirmation\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"lastCheckedAt\":null,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastErrorCategory\":null,\"successCount\":0,\"failureCount\":0,\"circuitBreaker\":{\"state\":\"closed\",\"consecutiveFailures\":0,\"openedAt\":null,\"lastStateChangeAt\":null,\"failureThreshold\":5,\"cooldownMs\":600000}},\"firestoreJobStorage\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\"},\"signalOutcomeWorker\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"role\":\"web\",\"running\":false,\"shutdownRequested\":false,\"lastRunScannedCount\":0,\"lastRunPendingCount\":0,\"lastRunEvaluatedCount\":0,\"lastRunErrorCount\":0},\"equityMarketData\":{\"provider\":null,\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"supportedExchanges\":[\"BATS\",\"NASDAQ\",\"NYSE\",\"AMEX\",\"NYSE ARCA\",\"FX_IDC\",\"SPCFD\"],\"timeoutMs\":5000},\"idempotencyStorage\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"mode\":\"ephemeral\",\"backend\":\"memory\"},\"firebaseRemoteConfig\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"source\":\"disabled\",\"templateVersion\":null,\"lastSuccessfulLoad\":null,\"lastErrorCategory\":null,\"refreshIntervalMs\":900000,\"maxAgeMs\":3600000}}}"
         }
       ]
     },
@@ -203,7 +203,7 @@
           "name": "Success",
           "status": "OK",
           "code": 200,
-          "body": "{\"featureFlags\":{\"tradingViewVolumeConfirmation\":true,\"firestoreJobStorage\":true,\"newsMonitorTestMode\":false,\"messageFooterMetadata\":true,\"cloudflareAig\":false,\"equityMarketData\":false,\"firebaseRemoteConfig\":true},\"dependencies\":{\"tradingViewMcp\":{\"enabled\":true,\"configured\":true,\"ready\":false,\"status\":\"unknown\",\"lastCheckedAt\":null,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastErrorCategory\":null,\"successCount\":0,\"failureCount\":0},\"tradingViewVolumeConfirmation\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\"},\"firestoreJobStorage\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\"},\"cloudflareAig\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\"},\"equityMarketData\":{\"provider\":null,\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"supportedExchanges\":[\"BATS\",\"NASDAQ\",\"NYSE\",\"AMEX\",\"NYSE ARCA\"],\"timeoutMs\":5000},\"firebaseRemoteConfig\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\",\"source\":\"remote\",\"templateVersion\":\"7\",\"lastSuccessfulLoad\":\"2026-08-02T08:30:00.000Z\",\"lastErrorCategory\":null,\"refreshIntervalMs\":900000,\"maxAgeMs\":3600000}}}"
+          "body": "{\"featureFlags\":{\"tradingViewVolumeConfirmation\":true,\"firestoreJobStorage\":true,\"newsMonitorTestMode\":false,\"messageFooterMetadata\":true,\"cloudflareAig\":false,\"equityMarketData\":false,\"firebaseRemoteConfig\":true},\"dependencies\":{\"tradingViewMcp\":{\"enabled\":true,\"configured\":true,\"ready\":false,\"status\":\"unknown\",\"lastCheckedAt\":null,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastErrorCategory\":null,\"successCount\":0,\"failureCount\":0,\"circuitBreaker\":{\"state\":\"closed\",\"consecutiveFailures\":0,\"openedAt\":null,\"lastStateChangeAt\":null,\"failureThreshold\":5,\"cooldownMs\":600000}},\"tradingViewVolumeConfirmation\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\",\"circuitBreaker\":{\"state\":\"closed\",\"consecutiveFailures\":0,\"openedAt\":null,\"lastStateChangeAt\":null,\"failureThreshold\":5,\"cooldownMs\":600000}},\"firestoreJobStorage\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\"},\"cloudflareAig\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\"},\"equityMarketData\":{\"provider\":null,\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"supportedExchanges\":[\"BATS\",\"NASDAQ\",\"NYSE\",\"AMEX\",\"NYSE ARCA\",\"FX_IDC\",\"SPCFD\"],\"timeoutMs\":5000},\"firebaseRemoteConfig\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\",\"source\":\"remote\",\"templateVersion\":\"7\",\"lastSuccessfulLoad\":\"2026-08-02T08:30:00.000Z\",\"lastErrorCategory\":null,\"refreshIntervalMs\":900000,\"maxAgeMs\":3600000}}}"
         }
       ]
     },
@@ -1773,7 +1773,7 @@
               "name": "200 OK - Risk metadata coverage",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"summary\": {\n    \"enrichment\": {\n      \"enrichedAlerts\": 2,\n      \"plainAlerts\": 0,\n      \"riskMetadataCoverage\": {\n        \"denominator\": 2,\n        \"fields\": {\n          \"invalidation_level\": {\n            \"populated\": 1,\n            \"percentage\": 50\n          },\n          \"target_level\": {\n            \"populated\": 1,\n            \"percentage\": 50\n          },\n          \"setup_type\": {\n            \"populated\": 1,\n            \"percentage\": 50\n          },\n          \"risk_reward_ratio\": {\n            \"populated\": 1,\n            \"percentage\": 50\n          }\n        },\n        \"byPromptProvenance\": [\n          {\n            \"provenance\": {\n              \"name\": \"alert-enrichment\",\n              \"source\": \"langfuse\",\n              \"label\": \"production\",\n              \"version\": 12\n            },\n            \"denominator\": 1,\n            \"fields\": {\n              \"invalidation_level\": {\n                \"populated\": 1,\n                \"percentage\": 100\n              },\n              \"target_level\": {\n                \"populated\": 1,\n                \"percentage\": 100\n              },\n              \"setup_type\": {\n                \"populated\": 1,\n                \"percentage\": 100\n              },\n              \"risk_reward_ratio\": {\n                \"populated\": 1,\n                \"percentage\": 100\n              }\n            }\n          },\n          {\n            \"provenance\": {\n              \"name\": \"alert-enrichment\",\n              \"source\": \"local\",\n              \"label\": null,\n              \"version\": null\n            },\n            \"denominator\": 1,\n            \"fields\": {\n              \"invalidation_level\": {\n                \"populated\": 0,\n                \"percentage\": 0\n              },\n              \"target_level\": {\n                \"populated\": 0,\n                \"percentage\": 0\n              },\n              \"setup_type\": {\n                \"populated\": 0,\n                \"percentage\": 0\n              },\n              \"risk_reward_ratio\": {\n                \"populated\": 0,\n                \"percentage\": 0\n              }\n            }\n          }\n        ]\n      }\n    },\n    \"shadowModeMetrics\": \"No measurements found\"\n  }\n}"
+              "body": "{\n  \"success\": true,\n  \"summary\": {\n    \"enrichment\": {\n      \"enrichedAlerts\": 2,\n      \"plainAlerts\": 0,\n      \"riskMetadataCoverage\": {\n        \"denominator\": 2,\n        \"fields\": {\n          \"invalidation_level\": {\n            \"populated\": 1,\n            \"percentage\": 50\n          },\n          \"target_level\": {\n            \"populated\": 1,\n            \"percentage\": 50\n          },\n          \"setup_type\": {\n            \"populated\": 1,\n            \"percentage\": 50\n          },\n          \"risk_reward_ratio\": {\n            \"populated\": 1,\n            \"percentage\": 50\n          }\n        },\n        \"byPromptProvenance\": [\n          {\n            \"provenance\": {\n              \"name\": \"alert-enrichment\",\n              \"source\": \"langfuse\",\n              \"label\": \"production\",\n              \"version\": 12,\n              \"schemaDriftDetected\": false\n            },\n            \"denominator\": 1,\n            \"fields\": {\n              \"invalidation_level\": {\n                \"populated\": 1,\n                \"percentage\": 100\n              },\n              \"target_level\": {\n                \"populated\": 1,\n                \"percentage\": 100\n              },\n              \"setup_type\": {\n                \"populated\": 1,\n                \"percentage\": 100\n              },\n              \"risk_reward_ratio\": {\n                \"populated\": 1,\n                \"percentage\": 100\n              }\n            }\n          },\n          {\n            \"provenance\": {\n              \"name\": \"alert-enrichment\",\n              \"source\": \"local\",\n              \"label\": null,\n              \"version\": null,\n              \"schemaDriftDetected\": false\n            },\n            \"denominator\": 1,\n            \"fields\": {\n              \"invalidation_level\": {\n                \"populated\": 0,\n                \"percentage\": 0\n              },\n              \"target_level\": {\n                \"populated\": 0,\n                \"percentage\": 0\n              },\n              \"setup_type\": {\n                \"populated\": 0,\n                \"percentage\": 0\n              },\n              \"risk_reward_ratio\": {\n                \"populated\": 0,\n                \"percentage\": 0\n              }\n            }\n          }\n        ]\n      }\n    },\n    \"shadowModeMetrics\": \"No measurements found\"\n  }\n}"
             }
           ]
         },
@@ -3592,6 +3592,222 @@
               "status": "Forbidden",
               "code": 403,
               "body": "{\n  \"success\": false,\n  \"error\": \"Binance trading is disabled\",\n  \"code\": \"FEATURE_DISABLED\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Binance Orders (recent history)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Reads recent order history for an allowed symbol.",
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/orders?symbol=BTCUSDT&limit=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "orders"
+              ],
+              "query": [
+                {
+                  "key": "symbol",
+                  "value": "BTCUSDT"
+                },
+                {
+                  "key": "limit",
+                  "value": "20"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"environment\": \"testnet\",\n  \"orders\": [\n    {\n      \"symbol\": \"BTCUSDT\",\n      \"orderId\": 42,\n      \"clientOrderId\": \"cabros-375-1\",\n      \"status\": \"FILLED\",\n      \"type\": \"LIMIT\",\n      \"side\": \"BUY\",\n      \"price\": \"60000.00000000\",\n      \"origQty\": \"0.00100000\",\n      \"executedQty\": \"0.00100000\",\n      \"cummulativeQuoteQty\": \"60.00000000\",\n      \"time\": 1700000000000\n    }\n  ],\n  \"count\": 1\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Binance Order (by ID)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Reads a single order status by Binance order ID.",
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/orders?symbol=BTCUSDT&orderId=42",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "orders"
+              ],
+              "query": [
+                {
+                  "key": "symbol",
+                  "value": "BTCUSDT"
+                },
+                {
+                  "key": "orderId",
+                  "value": "42"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"environment\": \"testnet\",\n  \"order\": {\n    \"symbol\": \"BTCUSDT\",\n    \"orderId\": 42,\n    \"clientOrderId\": \"cabros-375-1\",\n    \"status\": \"FILLED\",\n    \"type\": \"LIMIT\",\n    \"side\": \"BUY\",\n    \"price\": \"60000.00000000\",\n    \"origQty\": \"0.00100000\",\n    \"executedQty\": \"0.00100000\",\n    \"cummulativeQuoteQty\": \"60.00000000\",\n    \"time\": 1700000000000,\n    \"updateTime\": 1700000005000,\n    \"isWorking\": true\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Binance Order (by clientOrderId)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Reads a single order status by original client order ID.",
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/orders?symbol=BTCUSDT&origClientOrderId=cabros-375-1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "orders"
+              ],
+              "query": [
+                {
+                  "key": "symbol",
+                  "value": "BTCUSDT"
+                },
+                {
+                  "key": "origClientOrderId",
+                  "value": "cabros-375-1"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"environment\": \"testnet\",\n  \"order\": {\n    \"symbol\": \"BTCUSDT\",\n    \"orderId\": 42,\n    \"clientOrderId\": \"cabros-375-1\",\n    \"status\": \"FILLED\",\n    \"type\": \"LIMIT\",\n    \"side\": \"BUY\",\n    \"price\": \"60000.00000000\",\n    \"origQty\": \"0.00100000\",\n    \"executedQty\": \"0.00100000\",\n    \"cummulativeQuoteQty\": \"60.00000000\",\n    \"time\": 1700000000000,\n    \"updateTime\": 1700000005000,\n    \"isWorking\": true\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Binance Orders (invalid symbol - 400)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Returns 400 when symbol is invalid or disallowed.",
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/orders?symbol=INVALID",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "orders"
+              ],
+              "query": [
+                {
+                  "key": "symbol",
+                  "value": "INVALID"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Bad Request",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"success\": false,\n  \"error\": \"symbol is not allowed for Binance trading\",\n  \"code\": \"INVALID_ORDER_REQUEST\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Binance Order (not found - 404)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Returns 404 when the requested order ID does not exist on Binance.",
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/orders?symbol=BTCUSDT&orderId=999999",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "orders"
+              ],
+              "query": [
+                {
+                  "key": "symbol",
+                  "value": "BTCUSDT"
+                },
+                {
+                  "key": "orderId",
+                  "value": "999999"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Not Found",
+              "status": "Not Found",
+              "code": 404,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Binance order not found\",\n  \"code\": \"ORDER_NOT_FOUND\"\n}"
             }
           ]
         }

@@ -58,18 +58,18 @@ describe('SignalOutcomeService', () => {
 	});
 
 	describe('isEnabled()', () => {
-		it('returns false when ENABLE_SHADOW_MODE_OUTCOME_TRACKING is not set', () => {
+		it('returns false when ENABLE_SIGNAL_OUTCOME_TRACKING is not set', () => {
 			expect(SignalOutcomeService.isEnabled()).toBe(false);
 		});
 
-		it('returns false when ENABLE_SHADOW_MODE_OUTCOME_TRACKING is "false"', () => {
-			process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING = 'false';
+		it('returns false when ENABLE_SIGNAL_OUTCOME_TRACKING is "false"', () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'false';
 			expect(SignalOutcomeService.isEnabled()).toBe(false);
 		});
 
-		it('returns true when ENABLE_SHADOW_MODE_OUTCOME_TRACKING is "true"', () => {
+		it('returns false when only retired ENABLE_SHADOW_MODE_OUTCOME_TRACKING is "true"', () => {
 			process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING = 'true';
-			expect(SignalOutcomeService.isEnabled()).toBe(true);
+			expect(SignalOutcomeService.isEnabled()).toBe(false);
 		});
 
 		it('returns true when ENABLE_SIGNAL_OUTCOME_TRACKING is "true"', () => {
@@ -108,16 +108,35 @@ describe('SignalOutcomeService', () => {
 			expect(res.exchange).toBe('COINBASE');
 			expect(res.symbol).toBe('BTCUSDT');
 		});
+
+		it('strips parenthetical timeframe suffixes from symbol', () => {
+			expect(SignalOutcomeService.normalizeSymbolAndExchange('FX_IDC:USDCLP(D)')).toEqual({
+				exchange: 'FX_IDC',
+				symbol: 'USDCLP',
+			});
+			expect(SignalOutcomeService.normalizeSymbolAndExchange('SPCFD:SPX(D)')).toEqual({
+				exchange: 'SPCFD',
+				symbol: 'SPX',
+			});
+			expect(SignalOutcomeService.normalizeSymbolAndExchange('NASDAQ_DLY:NDX(D)')).toEqual({
+				exchange: 'NASDAQ_DLY',
+				symbol: 'NDX',
+			});
+			expect(SignalOutcomeService.normalizeSymbolAndExchange('BTCUSDT(1h)')).toEqual({
+				exchange: 'BINANCE',
+				symbol: 'BTCUSDT',
+			});
+		});
 	});
 
 	describe('recordSignal()', () => {
 		it('returns null when feature is disabled', async () => {
-			process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING = 'false';
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'false';
 			const res = await SignalOutcomeService.recordSignal({ symbol: 'BTCUSDT', price: 50000 });
 			expect(res).toBeNull();
 		});
 
-		it('records a signal when only ENABLE_SIGNAL_OUTCOME_TRACKING is enabled', async () => {
+		it('records a signal when ENABLE_SIGNAL_OUTCOME_TRACKING is enabled', async () => {
 			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
 
 			const resId = await SignalOutcomeService.recordSignal({
@@ -130,13 +149,13 @@ describe('SignalOutcomeService', () => {
 			expect(resId).not.toBeNull();
 		});
 
-		it('saves a normalised document when only SHADOW_MODE_OUTCOME_TRACKING is enabled', async () => {
-			process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING = 'true';
+		it('saves a normalised document when only ENABLE_SIGNAL_OUTCOME_TRACKING is enabled', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
 			// Intentionally NOT setting ENABLE_FIRESTORE_ALERT_STORAGE or ENABLE_FIRESTORE_JOB_STORAGE
 			// to verify the fix for issue #155.
 
 			const resId = await SignalOutcomeService.recordSignal({
-				requestId: 'test-req-shadow-only',
+				requestId: 'test-req-signal-only',
 				source: 'market-scanner',
 				symbol: 'BINANCE:BTCUSDT',
 				price: 50000,
@@ -147,14 +166,14 @@ describe('SignalOutcomeService', () => {
 			expect(resId).not.toBeNull();
 			const saved = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(resId);
 			expect(saved).toBeDefined();
-			expect(saved.requestId).toBe('test-req-shadow-only');
+			expect(saved.requestId).toBe('test-req-signal-only');
 			expect(saved.source).toBe('market-scanner');
 			expect(saved.price).toBe(50000);
 			expect(saved.side).toBe('BUY');
 		});
 
-		it('saves a normalised document when enabled with both flags', async () => {
-			process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING = 'true';
+		it('saves a normalised document when enabled with alert storage', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 
 			const resId = await SignalOutcomeService.recordSignal({
@@ -359,6 +378,58 @@ describe('SignalOutcomeService', () => {
 			expect(saved.outcomes['1h'].status).toBe('unavailable');
 		});
 
+		it('records and resolves entry price for FX_IDC, SPCFD, and NASDAQ_DLY signals when equity market data is enabled', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_EQUITY_MARKET_DATA = 'true';
+			process.env.EQUITY_MARKET_DATA_PROVIDER = 'twelve-data';
+			process.env.TWELVE_DATA_API_KEY = 'test-twelve-key';
+
+			global.fetch = jest.fn().mockResolvedValue({
+				ok: true,
+				status: 200,
+				json: async () => ({ status: 'ok', close: '950.25' }),
+			});
+
+			const resId = await SignalOutcomeService.recordSignal({
+				requestId: 'req-fx-test',
+				source: 'webhook-alert',
+				symbol: 'FX_IDC:USDCLP(D)',
+				price: null,
+				side: 'BUY',
+			});
+
+			expect(resId).not.toBeNull();
+			const saved = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(resId);
+			expect(saved).toBeDefined();
+			expect(saved.exchange).toBe('FX_IDC');
+			expect(saved.symbol).toBe('USDCLP');
+			expect(saved.price).toBe(950.25);
+			expect(saved.entryPriceSource).toBe('twelve-data');
+			expect(saved.eligibilityState).toBe('supported_provider');
+			expect(saved.outcomeEvaluated).toBe(false);
+		});
+
+		it('marks FX_IDC signals as twelve_data_not_configured when equity market data is not enabled', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_EQUITY_MARKET_DATA = 'false';
+
+			const resId = await SignalOutcomeService.recordSignal({
+				requestId: 'req-fx-disabled',
+				source: 'webhook-alert',
+				symbol: 'FX_IDC:USDCLP(D)',
+				price: 950.25,
+				side: 'BUY',
+			});
+
+			expect(resId).not.toBeNull();
+			const saved = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(resId);
+			expect(saved).toBeDefined();
+			expect(saved.exchange).toBe('FX_IDC');
+			expect(saved.symbol).toBe('USDCLP');
+			expect(saved.eligibilityState).toBe('twelve_data_not_configured');
+			expect(saved.outcomeEvaluated).toBe(true);
+		});
+
 		it('sanitizes undefined properties to prevent Firestore serialization errors', async () => {
 			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
 
@@ -389,7 +460,7 @@ describe('SignalOutcomeService', () => {
 
 	describe('evaluatePendingOutcomes()', () => {
 		it('evaluates pending outcomes using mocked klines', async () => {
-			process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 
 			// Mock a timestamp in the past for receivedAt
@@ -728,7 +799,7 @@ describe('SignalOutcomeService', () => {
 		});
 
 		it('marks outcomes as unavailable for non-Binance symbols', async () => {
-			process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 
 			const receivedAtDate = new Date(Date.now() - 2 * 60 * 60 * 1000); // 2 hours ago
@@ -922,7 +993,7 @@ describe('SignalOutcomeService', () => {
 
 	describe('getMetricsSummary()', () => {
 		it('returns "No measurements found" when snapshot is empty', async () => {
-			process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 
 			const res = await SignalOutcomeService.getMetricsSummary();
@@ -930,7 +1001,7 @@ describe('SignalOutcomeService', () => {
 		});
 
 		it('computes correct aggregate metrics and coverage metadata when evaluated outcomes exist', async () => {
-			process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 
 			const mockDocId = 'evaluated-doc-1';
@@ -1053,7 +1124,7 @@ describe('SignalOutcomeService', () => {
 		});
 
 		it('reports non-Binance and missing-entry signals with explicit coverage metadata instead of "No measurements found"', async () => {
-			process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 
 			const now = new Date();
@@ -1182,7 +1253,7 @@ describe('SignalOutcomeService', () => {
 		});
 
 		it('reconciles observed 54-alert mix fixture with exact exchange breakdown', async () => {
-			process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 
 			const now = new Date();
@@ -1302,7 +1373,6 @@ describe('SignalOutcomeService', () => {
 
 		it('does not start worker when feature is disabled', () => {
 			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'false';
-			process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING = 'false';
 
 			const started = SignalOutcomeService.startWorker();
 			expect(started).toBe(false);

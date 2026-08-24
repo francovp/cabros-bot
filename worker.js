@@ -6,6 +6,7 @@ require('./instrument.js');
 const { Telegraf } = require('telegraf');
 const { initializeNotificationServices } = require('./src/controllers/webhooks/handlers/alert/alert');
 const { startJobWorker } = require('./src/services/jobs/jobWorker');
+const sentryService = require('./src/services/monitoring/SentryService');
 
 function buildNotificationBot() {
 	if (process.env.ENABLE_TELEGRAM_BOT !== 'true' || !process.env.BOT_TOKEN) {
@@ -22,8 +23,9 @@ function stopNotificationBot(bot, signal) {
 }
 
 async function main() {
-	if (process.env.JOB_EXECUTION_MODE !== 'render-worker') {
-		const error = new Error('The worker requires JOB_EXECUTION_MODE=render-worker.');
+	const mode = process.env.JOB_EXECUTION_MODE;
+	if (mode !== 'render-worker' && mode !== 'firestore-poller') {
+		const error = new Error('The worker requires JOB_EXECUTION_MODE=render-worker or JOB_EXECUTION_MODE=firestore-poller.');
 		error.code = 'JOB_WORKER_DISABLED';
 		throw error;
 	}
@@ -42,9 +44,11 @@ async function main() {
 		try {
 			await runtime.stop();
 			stopNotificationBot(bot, signal);
+			await sentryService.flush(2000);
 			process.exit(0);
 		} catch (error) {
 			console.error('[worker] Graceful shutdown failed:', error.message);
+			await sentryService.flush(2000);
 			process.exit(1);
 		}
 	};
