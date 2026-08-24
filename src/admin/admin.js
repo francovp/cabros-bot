@@ -986,7 +986,10 @@ const createAlertListForm = () => {
 			rawCopyButton.hidden = true;
 			alertList.replaceChildren();
 		}
-		nextBefore = data && data.pagination && data.pagination.nextBefore;
+		const pagination = (data && data.pagination) || {};
+		nextBefore = pagination.hasMore === true && pagination.nextBefore
+			? pagination.nextBefore
+			: undefined;
 		next.disabled = !nextBefore;
 		prev.disabled = !backCursors.length;
 	};

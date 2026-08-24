@@ -1808,6 +1808,36 @@ describe('admin browser client', () => {
 		expect(rawPre).toBeUndefined();
 	});
 
+	it('disables Next when hasMore is false even if a cursor is present', async () => {
+		const pages = [
+			{ alerts: [{ id: 'a1', text: 'first page alert', enriched: false }], pagination: { hasMore: true, nextBefore: 'cursor-2' } },
+			{ alerts: [{ id: 'a2', text: 'last page alert', enriched: false }], pagination: { hasMore: false, nextBefore: 'cursor-last' } },
+		];
+		let alertCalls = 0;
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/alerts')) {
+					alertCalls += 1;
+					return response(pages[alertCalls - 1] || pages[1]);
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alerts');
+		await listForm.dispatch('submit');
+		await flush();
+		expect(findButton(listForm, 'Next page').disabled).toBe(false);
+
+		await findButton(listForm, 'Next page').dispatch('click');
+		await flush();
+		expect(listForm.textContent).toContain('last page alert');
+		expect(findButton(listForm, 'Next page').disabled).toBe(true);
+	});
+
 	it('keeps navigation icons as inline SVG instead of platform glyphs', () => {
 		const shell = fs.readFileSync(path.join(__dirname, '../../src/admin/index.html'), 'utf8');
 		expect(shell.match(/<svg class="nav-icon"/g)).toHaveLength(7);
