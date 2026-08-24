@@ -1,6 +1,9 @@
 const packageJson = require('../../package.json');
 const sentryService = require('../services/monitoring/SentryService');
-const { scannerPresetService } = require('../services/scannerPresets/ScannerPresetService');
+const {
+	scannerPresetService,
+	scannerPresetSchedulerService,
+} = require('../services/scannerPresets');
 const idempotencyStorageService = require('../services/storage/IdempotencyStorageService');
 const { isFirestoreConfigured } = require('../services/storage/firestoreConfig');
 const SignalOutcomeService = require('../services/storage/SignalOutcomeService');
@@ -296,6 +299,7 @@ function getStatus() {
 			firestoreAlertStorage: firestoreEnabled,
 			firestoreScannerPresets: firestoreScannerPresetsEnabled,
 			firestoreJobStorage: firestoreJobStorageEnabled,
+			scannerPresetScheduler: scannerPresetSchedulerService.isEnabled(),
 			sentryMonitoring: sentryEnabled,
 			sentryProfiling: sentryService.isProfilingEnabled(),
 			langfusePrompts: langfusePromptsEnabled,
@@ -351,6 +355,7 @@ function getStatus() {
 			idempotencyStorage: idempotencyStorageService.getStorageStatus(),
 			firebaseRemoteConfig: remoteConfigStatus,
 			scannerPresetStorage: scannerPresetService.getStorageStatus(),
+			scannerPresetScheduler: scannerPresetSchedulerService.getStatus(),
 			equityMarketData: equityMarketDataStatus,
 			signalOutcomeWorker: {
 				...signalOutcomeWorkerDependency,

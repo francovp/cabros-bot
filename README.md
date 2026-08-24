@@ -245,6 +245,15 @@ The response and audit logs include only sanitized order metadata. API credentia
 - When the flag is disabled, or Firestore initialization/write fails, the service reports `storage.mode: "ephemeral"` with `backend: "memory"`; presets in this mode can be lost on restart or redeploy.
 - `dependencies.scannerPresetStorage` in `/api/status` and `/api/capabilities` exposes `enabled`, `configured`, `ready`, `status`, `mode`, and `backend` without secrets. A `misconfigured` status means a Firestore gate is enabled but the client is unavailable.
 
+#### Scanner Preset Scheduler
+
+- `ENABLE_SCANNER_PRESET_SCHEDULER` - Enable background recurring execution of scheduled scanner presets (default: `false`)
+- `SCANNER_PRESET_SCHEDULER_WORKER_ROLE` - Scheduler worker role: `web` (default), `worker`, or `disabled`.
+- `SCANNER_PRESET_SCHEDULER_INTERVAL_MS` - Background sweep interval in milliseconds (default: `60000`, bounds `1000`-`3600000`).
+- `SCANNER_PRESET_SCHEDULER_BATCH_LIMIT` - Maximum due presets processed per sweep (default: `50`, bounds `1`-`500`).
+- `SCANNER_PRESET_SCHEDULER_LEASE_MS` - Distributed concurrency lock lease duration in milliseconds (default: `120000`, bounds `10000`-`600000`).
+- `dependencies.scannerPresetScheduler` in `/api/status` and `/api/capabilities` exposes `enabled`, `configured`, `ready`, `status`, `role`, `running`, `shutdownRequested`, and execution counters without secrets.
+
 ## Setup
 
 ### Supported Runtime

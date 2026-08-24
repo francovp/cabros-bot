@@ -23,6 +23,7 @@ const { getTelegramBootstrapConfig } = require('./src/lib/telegramBootstrap');
 const { jobService } = require('./src/services/jobs/JobService');
 const SignalOutcomeService = require('./src/services/storage/SignalOutcomeService');
 const { notificationRedriveService } = require('./src/services/notification/NotificationRedriveService');
+const { scannerPresetSchedulerService } = require('./src/services/scannerPresets');
 const sentryService = require('./src/services/monitoring/SentryService');
 const { getDeploymentCommit, getDeploymentRepoSlug } = require('./src/lib/deploymentEnvironment');
 const remoteConfigService = require('./src/services/remoteConfig/RemoteConfigService');
@@ -64,6 +65,7 @@ const lifecycle = createProcessLifecycle({
 	finalizeBackgroundJobs: () => jobService.finalizeActiveJobsForShutdown(),
 	stopSignalOutcomeWorker: (options) => SignalOutcomeService.stopWorker(options),
 	stopNotificationRedriveWorker: (options) => notificationRedriveService.stopWorker(options),
+	stopScannerPresetScheduler: (options) => scannerPresetSchedulerService.stopWorker(options),
 	stopRemoteConfig: () => remoteConfigService.stop(),
 	shutdownNewsMonitor: () => getCacheInstance().shutdown(),
 	flushSentry: (timeout) => sentryService.flush(timeout),
@@ -81,6 +83,9 @@ async function bootstrapApplication() {
 	SignalOutcomeService.startWorker();
 	// Start background notification redrive worker if enabled
 	notificationRedriveService.startWorker();
+	// Start background scanner preset scheduler if enabled
+	scannerPresetSchedulerService.botGetter = () => bot;
+	scannerPresetSchedulerService.startWorker();
 	if (process.env.ENABLE_NEWS_MONITOR === 'true') {
 		getNewsMonitor().initialize();
 	}
