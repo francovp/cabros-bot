@@ -31,7 +31,7 @@ export interface EnrichedAlert {
 	original_text: string;
 	sentiment: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
 	sentiment_score: number;
-	current_price: number | null;
+	current_price?: number | null;
 	price_data?: PriceData | null;
 	insights: string[];
 	promptProvenance?: PromptProvenance;
