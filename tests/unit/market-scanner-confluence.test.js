@@ -1,3 +1,4 @@
+const { getEventListeners } = require('node:events');
 const { filterScannerCandidates, enrichScannerItemsWithTrendConfluence } = require('../../src/services/tradingview/marketScannerConfluence');
 const { tradingViewMcpService } = require('../../src/services/tradingview/TradingViewMcpService');
 
@@ -246,6 +247,55 @@ describe('Market Scanner Confluence', () => {
 
 			spy.mockRestore();
 		});
+
+		it('removes abort listener from signal after successful enrichment pass', async () => {
+			const controller = new AbortController();
+			const spy = jest.spyOn(tradingViewMcpService, 'callMultiTimeframeAnalysis').mockResolvedValue({
+				status: 'aligned',
+				direction: 'bullish',
+			});
+
+			const items = [
+				{ symbol: 'BINANCE:BTCUSDT', changePercent: 5.2 },
+			];
+
+			expect(getEventListeners(controller.signal, 'abort')).toHaveLength(0);
+
+			await enrichScannerItemsWithTrendConfluence(
+				items,
+				{ exchange: 'BINANCE', scanType: 'top_gainers' },
+				controller.signal,
+			);
+
+			expect(getEventListeners(controller.signal, 'abort')).toHaveLength(0);
+
+			spy.mockRestore();
+		});
+
+		it('does not leak abort listeners across repeated sequential enrichment passes on a shared signal', async () => {
+			const controller = new AbortController();
+			const spy = jest.spyOn(tradingViewMcpService, 'callMultiTimeframeAnalysis').mockResolvedValue({
+				status: 'aligned',
+				direction: 'bullish',
+			});
+
+			const items = [
+				{ symbol: 'BINANCE:BTCUSDT', changePercent: 5.2 },
+			];
+
+			for (let i = 0; i < 15; i++) {
+				await enrichScannerItemsWithTrendConfluence(
+					items,
+					{ exchange: 'BINANCE', scanType: 'top_gainers' },
+					controller.signal,
+				);
+			}
+
+			expect(getEventListeners(controller.signal, 'abort')).toHaveLength(0);
+
+			spy.mockRestore();
+		});
 	});
 });
+
 
