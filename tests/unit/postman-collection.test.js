@@ -127,4 +127,14 @@ describe('Postman collection contract', () => {
 			durationMs: 450,
 		}));
 	});
+
+	it('documents current_price and price_data in the TradingView dry-run example', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const sendAlert = findItem(collection.item, 'POST Send Alert Dry Run (TradingView confluence)');
+		const full = sendAlert.response.find((response) => response.name === 'Dry run - full TradingView enrichment');
+		const enrichedData = JSON.parse(full.body).payload.enrichedData;
+
+		expect(enrichedData.current_price).toBe(64863.03);
+		expect(enrichedData.price_data).toEqual({ current_price: 64863.03, high: 65000, low: 64000 });
+	});
 });

@@ -166,6 +166,18 @@ describe('OpenAPI contract', () => {
 		}
 	});
 
+	it('documents current_price and price_data in the enrichedData schema', () => {
+		if (!fs.existsSync(contractPath)) return;
+		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+		const enrichedData = contract.components.schemas.DeliveryResult.properties.payload.properties.enrichedData;
+
+		expect(enrichedData.properties.current_price.type).toEqual(['number', 'null']);
+		expect(enrichedData.properties.price_data).toMatchObject({
+			type: ['object', 'null'],
+			additionalProperties: true,
+		});
+	});
+
 	describe('Job schema alignment with JobService runtime', () => {
 		// The runtime terminal statuses are defined in JobService as:
 		// TERMINAL_JOB_STATUSES = new Set(['completed', 'failed', 'cancelled', 'timed_out'])
