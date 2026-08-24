@@ -157,6 +157,7 @@ describe('OpenAPI contract', () => {
 		expect(schema.properties.symbol.pattern).toBe('^[A-Za-z0-9_]+:[A-Za-z0-9._-]+$');
 		expect(schema.properties.timeframe).not.toHaveProperty('default');
 		expect(schema.description).toContain('TRADINGVIEW_MCP_DEFAULT_TIMEFRAME');
+		expect(schema.properties.timeframe.enum).toEqual(expect.arrayContaining(['60', '240', 'D', 'W', 'M']));
 	});
 
 	it('documents idempotency conflicts for header-backed alert operations', () => {

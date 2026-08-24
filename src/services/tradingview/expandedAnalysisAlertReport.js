@@ -212,7 +212,7 @@ function buildReportRow({ input = {}, analysis = {}, multiTimeframe, side = 'BUY
 	const stopLossMeta = getStopLossMeta(price, atr, bollinger, currentBollinger, side);
 	const stopLoss = stopLossMeta.value;
 	const isOverbought = rsi !== null && rsi > 70;
-	const takeProfit = isOverbought
+	const takeProfit = isOverbought && side !== 'SELL'
 		? null
 		: getTakeProfitTarget(price, atr, bollinger, currentBollinger, techData, side);
 	const invalidationDistance = getInvalidationDistance(price, stopLoss, stopLossMeta.source, side);

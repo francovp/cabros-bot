@@ -118,6 +118,8 @@ describe('Symbol analysis endpoint', () => {
 			}),
 		}));
 		expect(res.body).not.toHaveProperty('deliveryResults');
+		expect(res.body.alertText).toContain('*Target sugerido:*');
+		expect(res.body.alertText).toContain('*Risk/Reward:*');
 		expect(tradingViewMcpService.analyzeSymbolIdentifier).toHaveBeenCalledWith(expect.objectContaining({
 			raw: 'BINANCE:BTCUSDT',
 			exchange: 'BINANCE',
@@ -215,5 +217,27 @@ describe('Symbol analysis endpoint', () => {
 			success: false,
 			code: 'SYMBOL_ANALYSIS_TIMEOUT',
 		}));
+		expect(sentryService.captureRuntimeError).toHaveBeenCalledWith(expect.objectContaining({
+			http: expect.objectContaining({ endpoint: '/api/webhook/symbol-analysis', statusCode: 504 }),
+		}));
+	});
+
+	it('rejects nonpositive directional risk levels', async () => {
+		tradingViewMcpService.analyzeSymbolIdentifier.mockResolvedValueOnce({
+			technical: {
+				price_data: { current_price: 1 },
+				technical_indicators: { rsi: 50, atr: 2 },
+			},
+			confluence: { recommendation: 'BUY', confidence: 'HIGH' },
+		});
+
+		const res = await request(app)
+			.post('/api/webhook/symbol-analysis')
+			.set('x-api-key', 'test-key')
+			.send({ symbol: 'BINANCE:BTCUSDT' })
+			.expect(200);
+
+		expect(res.body.analysis.risk).toEqual(expect.objectContaining({ valid: false }));
+		expect(res.body.analysis.decision).toEqual(expect.objectContaining({ action: 'NO_TRADE', dataSufficient: false }));
 	});
 });

@@ -71,6 +71,16 @@ function postSymbolAnalysis() {
 
 			const timedOut = Boolean(deadline && deadline.signal.aborted) || error?.name === 'AbortError';
 			if (timedOut) {
+				try {
+					sentryService.captureRuntimeError({
+						channel: 'http-alert',
+						error,
+						http: { endpoint: '/api/webhook/symbol-analysis', method: 'POST', statusCode: 504, requestId },
+						extra: { provider: 'tradingview-mcp', failureClass: 'timeout' },
+					});
+				} catch (monitoringError) {
+					console.warn('[SymbolAnalysis] Sentry timeout capture failed:', monitoringError.message);
+				}
 				return res.status(504).json({
 					success: false,
 					error: 'Symbol analysis timed out.',
@@ -204,7 +214,10 @@ function buildRisk({ technical, price, side }) {
 		? (side === 'SELL' ? price - (atr * 3) : price + (atr * 3))
 		: getTakeProfitTarget(price, atr, bollinger, currentBollinger, technical, side);
 	const ratio = getRiskRewardRatio(price, stop.value, target, side);
-	const valid = stop.source !== 'fallback'
+	const valid = price > 0
+		&& stop.value > 0
+		&& target > 0
+		&& stop.source !== 'fallback'
 		&& ratio !== null
 		&& (side === 'SELL' ? stop.value > price && target < price : stop.value < price && target > price);
 
