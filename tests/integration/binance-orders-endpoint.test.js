@@ -332,17 +332,17 @@ describe('Binance orders API', () => {
 		client.submitNewOrder.mockRejectedValueOnce(new Error('provider timeout'));
 		client.getOrder
 			.mockRejectedValueOnce({ code: -2013, message: 'Unknown order sent.' })
-			.mockResolvedValueOnce({
+			.mockImplementationOnce(async (params) => ({
 				symbol: 'BTCUSDT',
 				orderId: 43,
-				clientOrderId: 'cb_267ef7d4f4c1a898bffebf85a138d98b',
+				clientOrderId: params.origClientOrderId,
 				status: 'FILLED',
 				side: 'SELL',
 				type: 'LIMIT',
 				timeInForce: 'GTC',
 				origQty: '0.1',
 				price: '100',
-			});
+			}));
 		const payload = {
 			symbol: 'BTCUSDT',
 			side: 'SELL',
@@ -380,10 +380,10 @@ describe('Binance orders API', () => {
 		client.submitNewOrder.mockRejectedValueOnce(new Error('provider timeout'));
 		client.getOrder
 			.mockRejectedValueOnce({ code: -2013, message: 'Unknown order sent.' })
-			.mockResolvedValueOnce({
+			.mockImplementationOnce(async (params) => ({
 				symbol: 'BTCUSDT',
 				orderId: 44,
-				clientOrderId: 'cb_267ef7d4f4c1a898bffebf85a138d98b',
+				clientOrderId: params.origClientOrderId,
 				status: 'FILLED',
 				side: 'BUY',
 				type: 'MARKET',
@@ -391,7 +391,7 @@ describe('Binance orders API', () => {
 				origQuoteOrderQty: '50.00',
 				cummulativeQuoteQty: '50.00',
 				executedQty: '0.50000000',
-			});
+			}));
 		const payload = {
 			symbol: 'BTCUSDT',
 			side: 'BUY',

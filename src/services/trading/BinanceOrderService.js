@@ -44,10 +44,19 @@ function hasValue(value) {
 	return typeof value === 'string' && value.trim().length > 0;
 }
 
-function deriveClientOrderId(idempotencyKey) {
+function deriveClientOrderId(idempotencyKey, order) {
 	if (!hasValue(idempotencyKey)) return undefined;
+	const fingerprint = order ? [
+		order.symbol,
+		order.side,
+		order.type,
+		order.quantity ?? '',
+		order.quoteOrderQty ?? '',
+		order.price ?? '',
+		order.timeInForce ?? '',
+	].join(':') : '';
 	const digest = crypto.createHash('sha256')
-		.update(`cabros-binance-order:${idempotencyKey}`)
+		.update(`cabros-binance-order:${idempotencyKey}:${fingerprint}`)
 		.digest('hex')
 		.slice(0, 32);
 	return `cb_${digest}`;
@@ -355,7 +364,7 @@ function buildOrderParams(order) {
 	}).filter(([, value]) => value !== undefined));
 }
 
-function reconciledOrderMatchesRequest(order, existingOrder, clientOrderId) {
+function reconciledOrderMatchesRequest(order, existingOrder, clientOrderId, requestIdempotencyKey) {
 	if (existingOrder.symbol !== order.symbol || existingOrder.clientOrderId !== clientOrderId) return false;
 	if (String(existingOrder.side).toUpperCase() !== order.side) return false;
 	if (String(existingOrder.type).toUpperCase() !== order.type) return false;
@@ -369,14 +378,11 @@ function reconciledOrderMatchesRequest(order, existingOrder, clientOrderId) {
 		const hasQuoteQty = existingQuoteOrderQty !== undefined && compareDecimals(existingQuoteOrderQty, '0') > 0;
 		// A quantity-based MARKET BUY may have been submitted as quoteOrderQty to bound notional.
 		const isConvertedMarketBuy = order.side === 'BUY' && order.type === 'MARKET' && isZeroOrigQty && hasQuoteQty;
-		if (isConvertedMarketBuy) {
-			const executedQuantity = existingOrder.executedQty;
-			if (executedQuantity !== undefined && compareDecimals(executedQuantity, '0') > 0) {
-				if (compareDecimals(executedQuantity, order.quantity) !== 0) {
-					return false;
-				}
-			}
-		} else if (compareDecimals(existingQuantity, order.quantity) !== 0) {
+		const matchesDerivedFingerprint = isConvertedMarketBuy
+			&& Boolean(requestIdempotencyKey)
+			&& existingOrder.clientOrderId === deriveClientOrderId(requestIdempotencyKey, order);
+
+		if (!matchesDerivedFingerprint && compareDecimals(existingQuantity, order.quantity) !== 0) {
 			return false;
 		}
 	}
@@ -400,21 +406,43 @@ function multiplyDecimalsToString(left, right) {
 	return fraction ? `${whole}.${fraction}` : whole;
 }
 
+function truncateDecimalsToPrecision(decimalString, precision) {
+	if (typeof precision !== 'number' || precision < 0) return decimalString;
+	const [whole, fraction = ''] = String(decimalString).split('.');
+	if (fraction.length <= precision) return decimalString;
+	const truncatedFraction = fraction.slice(0, precision).replace(/0+$/, '');
+	return truncatedFraction.length > 0 ? `${whole}.${truncatedFraction}` : whole;
+}
+
 // Quantity-based MARKET BUYs within budget are submitted as an
 // exchange-enforced quoteOrderQty so Binance caps realized quote spend at
 // BINANCE_TRADING_MAX_NOTIONAL even if execution price rises. MARKET SELLs
 // keep base quantity so position sizing stays exact.
-function deriveBoundedMarketBuy(order, maxNotional, averagePrice) {
+function deriveBoundedMarketBuy(order, maxNotional, averagePrice, symbolInfo, filters) {
 	if (order.side !== 'BUY' || order.type !== 'MARKET' || order.quantity === undefined || order.quoteOrderQty !== undefined) {
 		return order;
 	}
 	if (!averagePrice || !Number.isFinite(maxNotional) || maxNotional <= 0) return order;
 
-	const notional = multiplyDecimals(order.quantity, averagePrice);
+	const rawQuoteOrderQty = multiplyDecimalsToString(order.quantity, averagePrice);
+	if (!rawQuoteOrderQty) return order;
+
+	const quotePrecision = symbolInfo?.quotePrecision ?? symbolInfo?.quoteAssetPrecision;
+	const quoteOrderQty = typeof quotePrecision === 'number' && quotePrecision >= 0
+		? truncateDecimalsToPrecision(rawQuoteOrderQty, quotePrecision)
+		: rawQuoteOrderQty;
+
+	if (!quoteOrderQty || compareDecimals(quoteOrderQty, '0') <= 0) return order;
+
+	const notional = decimalParts(quoteOrderQty);
 	if (!notional || compareDecimalParts(notional, decimalParts(maxNotional)) > 0) return order;
 
-	const quoteOrderQty = multiplyDecimalsToString(order.quantity, averagePrice);
-	if (!quoteOrderQty) return order;
+	const notionalFilter = filters?.get('NOTIONAL') || filters?.get('MIN_NOTIONAL');
+	const minNotional = notionalFilter?.minNotional;
+	const minAppliesToMarket = notionalFilter ? notionalFilter.applyMinToMarket !== false : notionalFilter?.applyToMarket !== false;
+	if (minNotional && minAppliesToMarket && compareDecimalParts(notional, decimalParts(minNotional)) < 0) {
+		return order;
+	}
 
 	return { ...order, quantity: undefined, quoteOrderQty };
 }
@@ -647,11 +675,11 @@ function createBinanceOrderService({ createClient = createBinanceClient } = {}) 
 			}
 
 			const clientOrderId = order.clientOrderId
-				|| (!order.dryRun ? deriveClientOrderId(requestIdempotencyKey) : undefined);
+				|| (!order.dryRun ? deriveClientOrderId(requestIdempotencyKey, order) : undefined);
 			if (!order.dryRun) {
 				const existingOrder = await reconcileOrder(client, order.symbol, clientOrderId);
 				if (existingOrder) {
-					if (!reconciledOrderMatchesRequest(order, existingOrder, clientOrderId)) {
+					if (!reconciledOrderMatchesRequest(order, existingOrder, clientOrderId, requestIdempotencyKey)) {
 						throw new BinanceOrderRequestError(
 							'Reconciled Binance order does not match the request',
 							'BINANCE_ORDER_CONFLICT',
@@ -719,7 +747,7 @@ function createBinanceOrderService({ createClient = createBinanceClient } = {}) 
 					if (!price || !decimalParts(price)) throw new Error('invalid average price');
 					notional = multiplyDecimals(order.quantity, price);
 
-					boundedOrder = deriveBoundedMarketBuy(order, config.maxNotional, price);
+					boundedOrder = deriveBoundedMarketBuy(order, config.maxNotional, price, symbolInfo, filters);
 					if (boundedOrder.quoteOrderQty !== undefined) {
 						// The converted order must respect the symbol's quote-order support.
 						if (symbolInfo.quoteOrderQtyMarketAllowed === false) {

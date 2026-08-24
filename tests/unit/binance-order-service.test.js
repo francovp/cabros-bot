@@ -303,6 +303,26 @@ describe('BinanceOrderService', () => {
 		expect(result.order.quoteOrderQty).toBe('10.02');
 	});
 
+	it('quantizes converted MARKET BUY quoteOrderQty to symbol quote precision', async () => {
+		const client = {
+			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo({
+				quotePrecision: 8,
+			})),
+			getAvgPrice: jest.fn().mockResolvedValue({ price: '50000.123456789' }),
+		};
+		const service = createBinanceOrderService({ createClient: () => client });
+
+		const result = await service.placeOrder({
+			symbol: 'BTCUSDT',
+			side: 'BUY',
+			type: 'MARKET',
+			quantity: '0.001',
+			dryRun: true,
+		});
+
+		expect(result.order.quoteOrderQty).toBe('50.00012345');
+	});
+
 	it('rejects converted MARKET BUYs when the symbol disallows quoteOrderQty', async () => {
 		const client = {
 			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo({
@@ -351,20 +371,19 @@ describe('BinanceOrderService', () => {
 
 	it('reconciles an accepted quote-sized MARKET BUY after idempotency cache loss', async () => {
 		process.env.BINANCE_TRADING_MAX_NOTIONAL = '1000';
-		const clientOrderId = `cb_${'a'.repeat(32)}`;
 		let callCount = 0;
 		const client = {
 			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
 			getAvgPrice: jest.fn().mockResolvedValue({ price: '50000.00' }),
 			testNewOrder: jest.fn().mockResolvedValue({}),
 			submitNewOrder: jest.fn().mockRejectedValue(new Error('provider timeout')),
-			getOrder: jest.fn(() => {
+			getOrder: jest.fn((params) => {
 				callCount += 1;
 				if (callCount === 1) throw { code: -2013, message: 'Unknown order sent.' };
 				return Promise.resolve({
 					symbol: 'BTCUSDT',
 					orderId: 77,
-					clientOrderId,
+					clientOrderId: params?.origClientOrderId,
 					status: 'FILLED',
 					side: 'BUY',
 					type: 'MARKET',
@@ -382,32 +401,29 @@ describe('BinanceOrderService', () => {
 			side: 'BUY',
 			type: 'MARKET',
 			quantity: 0.001,
-			clientOrderId,
 			dryRun: false,
-		})).rejects.toMatchObject({ code: 'BINANCE_ORDER_STATUS_UNKNOWN' });
+		}, { idempotencyKey: 'reconcile-cache-loss' })).rejects.toMatchObject({ code: 'BINANCE_ORDER_STATUS_UNKNOWN' });
 
 		const reconciled = await service.placeOrder({
 			symbol: 'BTCUSDT',
 			side: 'BUY',
 			type: 'MARKET',
 			quantity: 0.001,
-			clientOrderId,
 			dryRun: false,
-		});
+		}, { idempotencyKey: 'reconcile-cache-loss' });
 
 		expect(reconciled.success).toBe(true);
 		expect(reconciled.order.orderId).toBe(77);
 	});
 
-	it('reconciles a quote-sized MARKET BUY when matching executed quantity', async () => {
+	it('reconciles a quote-sized MARKET BUY when matching canonical request fingerprint', async () => {
 		process.env.BINANCE_TRADING_MAX_NOTIONAL = '1000';
-		const clientOrderId = `cb_${'c'.repeat(32)}`;
 		const client = {
 			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
-			getOrder: jest.fn().mockResolvedValue({
+			getOrder: jest.fn().mockImplementation(async (params) => ({
 				symbol: 'BTCUSDT',
 				orderId: 99,
-				clientOrderId,
+				clientOrderId: params?.origClientOrderId,
 				status: 'FILLED',
 				side: 'BUY',
 				type: 'MARKET',
@@ -415,7 +431,7 @@ describe('BinanceOrderService', () => {
 				origQuoteOrderQty: '50.00',
 				cummulativeQuoteQty: '50.00',
 				executedQty: '0.00100000',
-			}),
+			})),
 		};
 		const service = createBinanceOrderService({ createClient: () => client });
 
@@ -424,9 +440,8 @@ describe('BinanceOrderService', () => {
 			side: 'BUY',
 			type: 'MARKET',
 			quantity: 0.001,
-			clientOrderId,
 			dryRun: false,
-		});
+		}, { idempotencyKey: 'quote-market-buy' });
 
 		expect(reconciled.success).toBe(true);
 		expect(reconciled.order.orderId).toBe(99);
@@ -569,9 +584,9 @@ describe('BinanceOrderService', () => {
 	it('uses a deterministic client order id to reconcile an existing order', async () => {
 		const client = {
 			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
-			getOrder: jest.fn().mockResolvedValue({
+			getOrder: jest.fn().mockImplementation(async (params) => ({
 				symbol: 'BTCUSDT',
-				clientOrderId: 'cb_b07697a7210406a422c57a9ea9340bed',
+				clientOrderId: params?.origClientOrderId,
 				orderId: 99,
 				status: 'FILLED',
 				side: 'BUY',
@@ -579,7 +594,7 @@ describe('BinanceOrderService', () => {
 				timeInForce: 'GTC',
 				origQty: '0.1',
 				price: '100',
-			}),
+			})),
 			submitNewOrder: jest.fn(),
 		};
 		const service = createBinanceOrderService({ createClient: () => client });
@@ -606,9 +621,9 @@ describe('BinanceOrderService', () => {
 
 	it('reconciles exact decimal strings returned by Binance', async () => {
 		const client = {
-			getOrder: jest.fn().mockResolvedValue({
+			getOrder: jest.fn().mockImplementation(async (params) => ({
 				symbol: 'BTCUSDT',
-				clientOrderId: 'cb_b07697a7210406a422c57a9ea9340bed',
+				clientOrderId: params?.origClientOrderId,
 				orderId: 99,
 				status: 'NEW',
 				side: 'BUY',
@@ -616,7 +631,7 @@ describe('BinanceOrderService', () => {
 				timeInForce: 'GTC',
 				origQty: '0.100000000000000005',
 				price: '100.000000000000000005',
-			}),
+			})),
 			getExchangeInfo: jest.fn(),
 			submitNewOrder: jest.fn(),
 		};
@@ -636,6 +651,39 @@ describe('BinanceOrderService', () => {
 
 		expect(client.getExchangeInfo).not.toHaveBeenCalled();
 		expect(client.submitNewOrder).not.toHaveBeenCalled();
+	});
+
+	it('fingerprints clientOrderId so different order parameters produce different clientOrderIds', async () => {
+		const client = {
+			getOrder: jest.fn().mockRejectedValue({ code: -2013, message: 'Unknown order sent.' }),
+			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
+			submitNewOrder: jest.fn().mockResolvedValue({ symbol: 'BTCUSDT', status: 'NEW' }),
+		};
+		const service = createBinanceOrderService({ createClient: () => client });
+
+		await service.placeOrder({
+			symbol: 'BTCUSDT',
+			side: 'BUY',
+			type: 'LIMIT',
+			quantity: 0.1,
+			price: 100,
+			dryRun: false,
+		}, { idempotencyKey: 'same-key' });
+
+		const firstClientOrderId = client.submitNewOrder.mock.calls[0][0].newClientOrderId;
+
+		await service.placeOrder({
+			symbol: 'BTCUSDT',
+			side: 'BUY',
+			type: 'LIMIT',
+			quantity: 0.2,
+			price: 100,
+			dryRun: false,
+		}, { idempotencyKey: 'same-key' });
+
+		const secondClientOrderId = client.submitNewOrder.mock.calls[1][0].newClientOrderId;
+
+		expect(firstClientOrderId).not.toBe(secondClientOrderId);
 	});
 
 	it('disables Binance response beautification for order clients', async () => {
@@ -664,9 +712,9 @@ describe('BinanceOrderService', () => {
 	it('rejects a reconciled limit order with a mismatched time-in-force', async () => {
 		const client = {
 			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
-			getOrder: jest.fn().mockResolvedValue({
+			getOrder: jest.fn().mockImplementation(async (params) => ({
 				symbol: 'BTCUSDT',
-				clientOrderId: 'cb_b07697a7210406a422c57a9ea9340bed',
+				clientOrderId: params?.origClientOrderId,
 				orderId: 99,
 				status: 'NEW',
 				side: 'BUY',
@@ -674,7 +722,7 @@ describe('BinanceOrderService', () => {
 				timeInForce: 'GTC',
 				origQty: '0.1',
 				price: '100',
-			}),
+			})),
 			submitNewOrder: jest.fn(),
 		};
 		const service = createBinanceOrderService({ createClient: () => client });
@@ -697,9 +745,9 @@ describe('BinanceOrderService', () => {
 
 	it('reconciles an existing order before current symbol status gates', async () => {
 		const client = {
-			getOrder: jest.fn().mockResolvedValue({
+			getOrder: jest.fn().mockImplementation(async (params) => ({
 				symbol: 'BTCUSDT',
-				clientOrderId: 'cb_b07697a7210406a422c57a9ea9340bed',
+				clientOrderId: params?.origClientOrderId,
 				orderId: 99,
 				status: 'FILLED',
 				side: 'BUY',
@@ -707,7 +755,7 @@ describe('BinanceOrderService', () => {
 				timeInForce: 'GTC',
 				origQty: '0.1',
 				price: '100',
-			}),
+			})),
 			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo({ status: 'BREAK' })),
 			submitNewOrder: jest.fn(),
 		};
