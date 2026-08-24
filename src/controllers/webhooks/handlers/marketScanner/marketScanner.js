@@ -8,6 +8,8 @@ const {
 	buildMarketScannerReport,
 	prepareMarketScannerItems,
 	getRiskLevelsForSide,
+	getScanItemSide,
+	pickLevel,
 } = require('../../../../services/tradingview/marketScannerReport');
 const {
 	getNotificationManager,
@@ -27,8 +29,7 @@ const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteCo
 const DEFAULT_SCANNER_TIMEOUT_MS = 90000;
 const MAX_SCANNER_TIMEOUT_MS = 120000;
 
-function resolveBot(botOrGetter) {
-	if (typeof botOrGetter === 'function') {
+function resolveBot(botOrGetter) {	if (typeof botOrGetter === 'function') {
 		return botOrGetter();
 	}
 
@@ -127,25 +128,33 @@ function postMarketScannerAlert(botOrGetter) {
 			const signalOutcomeService = require('../../../../services/storage/SignalOutcomeService');
 			if (signalOutcomeService.isEnabled()) {
 				for (const scanResult of scanResults) {
-					if (scanResult.status === 'success' && Array.isArray(scanResult.items)) {
-						for (const item of scanResult.items) {
+					if (scanResult.status === 'success' && Array.isArray(scanResult.items) && scanResult.items.length > 0) {
+						// Resolve sides from the same prepared (rank-normalized) item set the
+						// report rendered, so persisted sides match delivered levels
+						const preparedItems = prepareMarketScannerItems(scanResult, parsed.ranked === true);
+						for (const item of preparedItems) {
 							const closePrice = item.indicators?.close ?? null;
-							let itemSide = 'BUY';
-							if (scanResult.scan === 'top_losers') {
-								itemSide = 'SELL';
-							} else if (item.breakout_type) {
-								const lowerBreakout = item.breakout_type.trim().toLowerCase();
-								if (lowerBreakout === 'bearish' || lowerBreakout === 'sell') {
-									itemSide = 'SELL';
-								}
-							}
+							// Persisted side must match the rendered report side
+							const itemSide = getScanItemSide(scanResult.scan, item);
 							const itemScore = item.changePercent ?? item.indicators?.RSI ?? item.volume_ratio ?? null;
 
-							const atr = Number(item.indicators?.atr ?? item.indicators?.ATR ?? item.atr ?? null);
-							const bbLower = Number(item.indicators?.bb_lower ?? item.indicators?.bollinger_lower ?? item.indicators?.lower ?? item.bollinger?.lower ?? item.bollinger_lower ?? null);
-							const bbUpper = Number(item.indicators?.bb_upper ?? item.indicators?.bollinger_upper ?? item.indicators?.upper ?? item.bollinger?.upper ?? item.bollinger_upper ?? null);
-							const support = Number(item.indicators?.support ?? item.indicators?.nearest_support ?? item.support ?? item.support_resistance?.nearest_support ?? item.support_resistance?.support_1 ?? null);
-							const resistance = Number(item.indicators?.resistance ?? item.indicators?.nearest_resistance ?? item.resistance ?? item.support_resistance?.nearest_resistance ?? item.support_resistance?.resistance_1 ?? null);
+							const atr = pickLevel([item.indicators?.atr, item.indicators?.ATR, item.atr]);
+							const bbLower = pickLevel([item.indicators?.bb_lower, item.indicators?.bollinger_lower, item.indicators?.lower, item.bollinger?.lower, item.bollinger_lower]);
+							const bbUpper = pickLevel([item.indicators?.bb_upper, item.indicators?.bollinger_upper, item.indicators?.upper, item.bollinger?.upper, item.bollinger_upper]);
+							const support = pickLevel([
+								item.indicators?.support,
+								item.indicators?.nearest_support,
+								item.support,
+								item.support_resistance?.nearest_support,
+								item.support_resistance?.support_1,
+							]);
+							const resistance = pickLevel([
+								item.indicators?.resistance,
+								item.indicators?.nearest_resistance,
+								item.resistance,
+								item.support_resistance?.nearest_resistance,
+								item.support_resistance?.resistance_1,
+							]);
 
 							const validPrice = typeof closePrice === 'number' && Number.isFinite(closePrice) ? closePrice : null;
 							let stopLoss = null;

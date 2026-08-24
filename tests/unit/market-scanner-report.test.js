@@ -497,8 +497,71 @@ describe('Market Scanner Report', () => {
 			expect(report).toContain('  - *Target:* $62,000.00 | Risk/Reward: 1.00x');
 		});
 
-		it('preserves BUY risk/reward levels for bollinger_scan with BUY trading_recommendation despite bearish HTF confluence', () => {
+		it('emits BUY side and long-side levels for bollinger_scan with bullish breakout_type and explicit bearish HTF direction', () => {
 			const results = [
+				{
+					scan: 'bollinger_scan',
+					status: 'success',
+					items: [
+						{
+							symbol: 'BINANCE:BTCUSDT',
+							breakout_type: 'bullish',
+							indicators: { close: 60000, bb_lower: 58000, bb_upper: 62000 },
+							trendConfluence: {
+								direction: 'bearish',
+								confidence: 85,
+							},
+						},
+					],
+				},
+			];
+
+			const report = buildMarketScannerReport(results, {
+				exchange: 'BINANCE',
+				timeframe: '4h',
+				ranked: false,
+				now: mockDate,
+			});
+
+			expect(report).toContain('⚠️ HTF COUNTER-TREND 85%');
+			expect(report).toContain('1. BTCUSDT $60,000.00');
+			expect(report).toContain('  - *Stop Loss:* $58,000.00 (Invalidación: $2,000.00)');
+			expect(report).toContain('  - *Target:* $62,000.00 | Risk/Reward: 1.00x');
+		});
+
+		it('emits SELL side for bollinger_scan with bearish breakout_type and aligned bearish HTF direction', () => {
+			const results = [
+				{
+					scan: 'bollinger_scan',
+					status: 'success',
+					items: [
+						{
+							symbol: 'BINANCE:ETHUSDT',
+							breakout_type: 'bearish',
+							indicators: { close: 3000, bb_lower: 2900, bb_upper: 3100 },
+							trendConfluence: {
+								direction: 'bearish',
+								confidence: 70,
+							},
+						},
+					],
+				},
+			];
+
+			const report = buildMarketScannerReport(results, {
+				exchange: 'BINANCE',
+				timeframe: '4h',
+				ranked: false,
+				now: mockDate,
+			});
+
+			expect(report).toContain('🔥 HTF ALIGNED 70%');
+			// Short-side levels: stop above price, target below
+			expect(report).toContain('  - *Stop Loss:* $3,100.00 (Invalidación: $100.00)');
+			expect(report).toContain('  - *Target:* $2,900.00 | Risk/Reward: 1.00x');
+		});
+
+		it('preserves BUY risk/reward levels for bollinger_scan with BUY trading_recommendation despite bearish HTF confluence', () => {			const results = [
 				{
 					scan: 'bollinger_scan',
 					status: 'success',
@@ -531,7 +594,103 @@ describe('Market Scanner Report', () => {
 			expect(report).toContain('  - *Target:* $110.00 | Risk/Reward: 1.00x');
 		});
 
-			it('covers support/resistance-based risk/reward formatting when support and resistance are present', () => {
+			it('preserves BUY side for bollinger_scan with Spanish bullish breakout_type (alcista) against bearish HTF direction', () => {
+			const results = [
+				{
+					scan: 'bollinger_scan',
+					status: 'success',
+					items: [
+						{
+							symbol: 'BINANCE:XRPUSDT',
+							breakout_type: 'alcista',
+							indicators: { close: 2, bb_lower: 1.9, bb_upper: 2.1 },
+							trendConfluence: {
+								direction: 'bearish',
+								confidence: 75,
+							},
+						},
+					],
+				},
+			];
+
+			const report = buildMarketScannerReport(results, {
+				exchange: 'BINANCE',
+				timeframe: '4h',
+				ranked: false,
+				now: mockDate,
+			});
+
+			expect(report).toContain('⚠️ HTF COUNTER-TREND 75%');
+			expect(report).toContain('  - *Stop Loss:* $1.90 (Invalidación: $0.100000)');
+			expect(report).toContain('  - *Target:* $2.10 | Risk/Reward: 1.00x');
+		});
+
+		it('preserves SELL side for bollinger_scan with Spanish bearish breakout_type (bajista) despite bullish trading_recommendation', () => {
+			const results = [
+				{
+					scan: 'bollinger_scan',
+					status: 'success',
+					items: [
+						{
+							symbol: 'BINANCE:BTCUSDT',
+							breakout_type: 'bajista',
+							trading_recommendation: 'STRONG_BUY',
+							indicators: { close: 60000, bb_lower: 58000, bb_upper: 62000 },
+							trendConfluence: {
+								direction: 'bearish',
+								confidence: 85,
+							},
+						},
+					],
+				},
+			];
+
+			const report = buildMarketScannerReport(results, {
+				exchange: 'BINANCE',
+				timeframe: '4h',
+				ranked: false,
+				now: mockDate,
+			});
+
+			expect(report).toContain('🔥 HTF ALIGNED 85%');
+			// Short-side levels: breakout_type takes precedence over recommendation
+			expect(report).toContain('  - *Stop Loss:* $62,000.00 (Invalidación: $2,000.00)');
+			expect(report).toContain('  - *Target:* $58,000.00 | Risk/Reward: 1.00x');
+		});
+
+		it('treats SHORT_TERM_BUY as bullish for side rendering, matching scoring direction', () => {
+			const results = [
+				{
+					scan: 'bollinger_scan',
+					status: 'success',
+					items: [
+						{
+							symbol: 'BINANCE:ADAUSDT',
+							trading_recommendation: 'SHORT_TERM_BUY',
+							indicators: { close: 1, bb_lower: 0.9, bb_upper: 1.1 },
+							trendConfluence: {
+								direction: 'bearish',
+								confidence: 80,
+							},
+						},
+					],
+				},
+			];
+
+			const report = buildMarketScannerReport(results, {
+				exchange: 'BINANCE',
+				timeframe: '4h',
+				ranked: false,
+				now: mockDate,
+			});
+
+			expect(report).toContain('⚠️ HTF COUNTER-TREND 80%');
+			// Long-side levels despite `short` appearing in the phrase
+			expect(report).toContain('  - *Stop Loss:* $0.900000 (Invalidación: $0.100000)');
+			expect(report).toContain('  - *Target:* $1.10 | Risk/Reward: 1.00x');
+		});
+
+		it('covers support/resistance-based risk/reward formatting when support and resistance are present', () => {
 				const results = [
 					{
 						scan: 'top_gainers',
