@@ -193,7 +193,7 @@ function buildExpandedAnalysisAlertReport(items = [], options = {}) {
 	return lines.join('\n');
 }
 
-function buildReportRow({ input = {}, analysis = {}, multiTimeframe }) {
+function buildReportRow({ input = {}, analysis = {}, multiTimeframe, side = 'BUY' }) {
 	const techData = analysis.technical || analysis || {};
 	const priceData = techData.price_data || {};
 	const indicators = techData.technical_indicators || {};
@@ -209,14 +209,14 @@ function buildReportRow({ input = {}, analysis = {}, multiTimeframe }) {
 	const trend = getTrend(price, sma20);
 	const macdDirection = getMacdDirection(macd, macdSignal);
 	const volume = getVolumeLabel(techData);
-	const stopLossMeta = getStopLossMeta(price, atr, bollinger, currentBollinger);
+	const stopLossMeta = getStopLossMeta(price, atr, bollinger, currentBollinger, side);
 	const stopLoss = stopLossMeta.value;
 	const isOverbought = rsi !== null && rsi > 70;
 	const takeProfit = isOverbought
 		? null
-		: getTakeProfitTarget(price, atr, bollinger, currentBollinger, techData);
-	const invalidationDistance = getInvalidationDistance(price, stopLoss, stopLossMeta.source);
-	const riskRewardRatio = getRiskRewardRatio(price, stopLoss, takeProfit);
+		: getTakeProfitTarget(price, atr, bollinger, currentBollinger, techData, side);
+	const invalidationDistance = getInvalidationDistance(price, stopLoss, stopLossMeta.source, side);
+	const riskRewardRatio = getRiskRewardRatio(price, stopLoss, takeProfit, side);
 
 	const sentiment = analysis.sentiment || null;
 	const confluence = analysis.confluence || null;
@@ -235,6 +235,7 @@ function buildReportRow({ input = {}, analysis = {}, multiTimeframe }) {
 		takeProfit,
 		invalidationDistance,
 		riskRewardRatio,
+		side,
 		suggestion: getSuggestion({ rsi, trend, macdDirection }),
 		multiTimeframe,
 		sentiment,
@@ -556,12 +557,16 @@ function getTakeProfitTarget(price, atr, bollinger, currentBollinger = {}, techD
 	return null;
 }
 
-function getInvalidationDistance(price, stopLoss, stopLossSource) {
-	if (price === null || stopLoss === null || stopLossSource === 'fallback' || stopLoss >= price) {
+function getInvalidationDistance(price, stopLoss, stopLossSource, side = 'BUY') {
+	if (price === null || stopLoss === null || stopLossSource === 'fallback') {
 		return null;
 	}
 
-	return Math.max(price - stopLoss, 0);
+	if (side === 'SELL') {
+		return stopLoss > price ? stopLoss - price : null;
+	}
+
+	return stopLoss < price ? price - stopLoss : null;
 }
 
 function getRiskRewardRatio(price, stopLoss, takeProfit, side = 'BUY') {
@@ -601,7 +606,8 @@ function formatInvalidationLine(row) {
 		return null;
 	}
 
-	return `- *Invalidación:* ${formatCurrency(row.invalidationDistance)} por debajo del precio actual`;
+	const direction = row.side === 'SELL' ? 'por encima' : 'por debajo';
+	return `- *Invalidación:* ${formatCurrency(row.invalidationDistance)} ${direction} del precio actual`;
 }
 
 function classifyRiskReward(ratio) {

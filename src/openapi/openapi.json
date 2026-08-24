@@ -264,6 +264,40 @@
         ]
       }
     },
+    "/api/webhook/symbol-analysis": {
+      "post": {
+        "tags": [
+          "Webhooks"
+        ],
+        "summary": "Analyze one TradingView symbol without delivery",
+        "operationId": "postSymbolAnalysis",
+        "requestBody": {
+          "$ref": "#/components/requestBodies/SymbolAnalysis"
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/SymbolAnalysisResult"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "502": {
+            "$ref": "#/components/responses/Error"
+          },
+          "504": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          }
+        ]
+      }
+    },
     "/api/alerts": {
       "get": {
         "tags": [
@@ -1827,6 +1861,22 @@
           }
         }
       },
+      "SymbolAnalysis": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/SymbolAnalysisRequest"
+            },
+            "example": {
+              "symbol": "BINANCE:BTCUSDT",
+              "timeframe": "1D",
+              "analysisMode": "combined",
+              "includeMultiTimeframe": true
+            }
+          }
+        }
+      },
       "Replay": {
         "content": {
           "application/json": {
@@ -2426,6 +2476,16 @@
           "application/json": {
             "schema": {
               "$ref": "#/components/schemas/JsonObject"
+            }
+          }
+        }
+      },
+      "SymbolAnalysisResult": {
+        "description": "Single-symbol TradingView analysis, formatted alert text, risk levels, and decision metadata.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/SymbolAnalysisResult"
             }
           }
         }
@@ -3267,6 +3327,91 @@
           },
           "timeframe": {
             "type": "string"
+          }
+        }
+      },
+      "SymbolAnalysisRequest": {
+        "type": "object",
+        "required": [
+          "symbol"
+        ],
+        "properties": {
+          "symbol": {
+            "type": "string",
+            "pattern": "^[A-Z0-9_]+:[A-Z0-9._-]+$",
+            "example": "BINANCE:BTCUSDT"
+          },
+          "timeframe": {
+            "type": "string",
+            "enum": [
+              "5m",
+              "15m",
+              "1h",
+              "4h",
+              "1D",
+              "1W",
+              "1M"
+            ],
+            "default": "1D"
+          },
+          "analysisMode": {
+            "type": "string",
+            "enum": [
+              "standard",
+              "combined"
+            ],
+            "default": "standard"
+          },
+          "includeMultiTimeframe": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "SymbolAnalysisResult": {
+        "type": "object",
+        "required": [
+          "success",
+          "symbol",
+          "analysis",
+          "alertText"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "symbol": {
+            "type": "string"
+          },
+          "exchange": {
+            "type": "string"
+          },
+          "asset": {
+            "type": "string"
+          },
+          "timeframe": {
+            "type": "string"
+          },
+          "alertText": {
+            "type": "string"
+          },
+          "analysisStatus": {
+            "type": "string",
+            "enum": [
+              "complete",
+              "partial"
+            ]
+          },
+          "analysis": {
+            "$ref": "#/components/schemas/JsonObject"
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "totalDurationMs": {
+            "type": "integer",
+            "minimum": 0
           }
         }
       },

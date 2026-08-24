@@ -760,6 +760,22 @@ Run TradingView MCP `volume_confirmation_analysis` on demand and return structur
 
 If the symbol format is invalid, the endpoint returns `400 INVALID_REQUEST`. If TradingView MCP fails, it returns `502 VOLUME_CONFIRMATION_FAILED` with the upstream error message.
 
+### POST /api/webhook/symbol-analysis
+
+Analyze one `EXCHANGE:SYMBOL` with TradingView MCP and return the Spanish report plus decision-ready data without sending notifications or placing orders.
+
+**Request (JSON):**
+```json
+{
+  "symbol": "BINANCE:BTCUSDT",
+  "timeframe": "1D",
+  "analysisMode": "combined",
+  "includeMultiTimeframe": true
+}
+```
+
+The response includes `alertText`, normalized price/volume/indicator/signal/assessment data, sentiment/news/confluence and multi-timeframe results when requested, plus directional `risk` and `decision` metadata. `decision.action` is `BUY` or `SELL` only when the data and risk levels are sufficient; otherwise it is `NO_TRADE`. This endpoint never delivers notifications or submits orders. Invalid symbols return `400 INVALID_REQUEST`, TradingView failures return `502 SYMBOL_ANALYSIS_FAILED`, and deadline expiry returns `504 SYMBOL_ANALYSIS_TIMEOUT`.
+
 ### POST /api/webhook/market-scanner-alert
 
 Execute multiple market scanner tools on the TradingView MCP server (such as top gainers, top losers, volume breakout, smart volume, or Bollinger squeeze), generate a formatted technical summary report in Spanish, and send it through all enabled notification channels.
