@@ -627,7 +627,7 @@ const createAlertDetailPanel = (alert) => {
 		panel.append(element('p', {
 			className: 'request-state',
 			text: `Prompt: ${provenance.name} (${provenance.source || 'unknown source'}`
-				+ `${provenance.version !== undefined ? ` v${provenance.version}` : ''})`,
+				+ `${provenance.version != null ? ` v${provenance.version}` : ''})`,
 		}));
 	}
 	const tokens = asObject(alert && alert.tokenUsage);
@@ -1220,8 +1220,24 @@ const createAlertSummaryForm = () => {
 		rawOutput,
 	);
 	form.append(button, output, blocks, rawToggle);
+	let summaryGeneration = 0;
+	const invalidateSummary = () => {
+		summaryGeneration += 1;
+		button.disabled = false;
+		blocks.replaceChildren();
+		lastRawJson = '';
+		rawOutput.textContent = '';
+		rawCopyButton.hidden = true;
+		output.textContent = 'Filters changed — load alert analytics to refresh.';
+	};
+	Object.values(fields).forEach((field) => {
+		if (!field) return;
+		field.addEventListener('input', invalidateSummary);
+		field.addEventListener('change', invalidateSummary);
+	});
 	form.addEventListener('submit', (event) => {
 		event.preventDefault();
+		const generation = ++summaryGeneration;
 		try {
 			sendRequest({
 				definition,
@@ -1229,12 +1245,14 @@ const createAlertSummaryForm = () => {
 				query: getAlertReportQuery(fields),
 				button,
 				output,
+				isCurrent: () => generation === summaryGeneration,
 				formatResponse: ({ summary, status, elapsed, data }) => {
 					if (!data || !data.summary) return `${summary}\nHTTP ${status} · ${elapsed} ms\n\nNo summary data returned.`;
 					lastRawJson = JSON.stringify(data, null, 2);
 					return `${summary}\nHTTP ${status} · ${elapsed} ms`;
 				},
 			}).then((data) => {
+				if (generation !== summaryGeneration) return;
 				if (!data || !data.summary) {
 					blocks.replaceChildren();
 					lastRawJson = '';

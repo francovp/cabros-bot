@@ -2004,6 +2004,42 @@ describe('admin browser client', () => {
 		expect(listForm.textContent).toContain('Filters changed');
 	});
 
+	it('invalidates pending analytics when report filters change', async () => {
+		let summaryCalls = 0;
+		let releaseSlow;
+		const slowSummary = new Promise((resolve) => { releaseSlow = resolve; });
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/alerts/summary')) {
+					summaryCalls += 1;
+					if (summaryCalls === 1) return slowSummary.then(() => response({ success: true, summary: { totalAlerts: 9, window: {} } }));
+					return response({ success: true, summary: { totalAlerts: 1, window: {} } });
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const summaryForm = findForm(browser.elementsById.view, 'GET /api/alerts/summary');
+		const loadButton = findButton(summaryForm, 'Load alert analytics');
+		await summaryForm.dispatch('submit');
+		await flush();
+		expect(summaryCalls).toBe(1);
+
+		summaryForm.elements.source.value = 'webhook';
+		await summaryForm.elements.source.dispatch('input');
+
+		expect(loadButton.disabled).toBe(false);
+		expect(findButton(summaryForm, 'Copy JSON').hidden).toBe(true);
+
+		releaseSlow();
+		await flush();
+		expect(find(summaryForm, (node) => node.tagName === 'PRE' && node.textContent.includes('totalAlerts'))).toBeUndefined();
+		expect(summaryForm.textContent).toContain('Filters changed');
+	});
+
 	it('keeps navigation icons as inline SVG instead of platform glyphs', () => {
 		const shell = fs.readFileSync(path.join(__dirname, '../../src/admin/index.html'), 'utf8');
 		expect(shell.match(/<svg class="nav-icon"/g)).toHaveLength(7);
