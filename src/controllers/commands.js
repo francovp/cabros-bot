@@ -5,7 +5,8 @@ const sentryService = require('../services/monitoring/SentryService');
 
 const getPrice = async (context) => {
 	const chatId = context.update && context.update.message && context.update.message.chat && context.update.message.chat.id;
-	const messageSplited = context.message.text.split(' ');
+	const text = (context.message && context.message.text) || '';
+	const messageSplited = text.trim().split(/\s+/);
 	const symbol = messageSplited[1] || '';
 	const commandSpan = sentryService.startInactiveSpan({
 		name: 'telegram.command.precio',
@@ -14,25 +15,36 @@ const getPrice = async (context) => {
 		attributes: {
 			'telegram.command': '/precio',
 			'telegram.chat_id': chatId ? String(chatId) : 'unknown',
-			'crypto.symbol': symbol || 'missing',
+			'query.symbol': symbol || 'missing',
 		},
 	});
 
 	try {
 		const result = await fetchSymbolPrice(context, { parentSpan: commandSpan });
-		await context.reply(`Precio de ${result.symbol} es ${result.price}`);
+		if (result && result.message) {
+			await context.reply(result.message);
+		} else if (result && result.symbol && result.price !== undefined) {
+			await context.reply(`Precio de ${result.symbol} es ${result.price}`);
+		}
 	} catch (error) {
 		console.error(error);
-		// Capture Telegram command errors to Sentry (T015)
-		sentryService.captureRuntimeError({
-			channel: 'telegram',
-			error,
-			extra: {
-				command: 'getPrice',
-				chatId,
-				symbol,
-			},
-		});
+		if (!error.isUserFriendly) {
+			sentryService.captureRuntimeError({
+				channel: 'telegram',
+				error,
+				extra: {
+					command: 'getPrice',
+					chatId,
+					symbol,
+				},
+			});
+		}
+		try {
+			const replyText = error.userMessage || 'Ocurrió un error al consultar el precio. Intenta nuevamente.';
+			await context.reply(replyText);
+		} catch (replyError) {
+			console.error('Failed to send error reply:', replyError);
+		}
 	} finally {
 		sentryService.endSpan(commandSpan);
 	}
@@ -186,7 +198,7 @@ function buildHelpMessage() {
 	return [
 		'*🤖 Comandos disponibles en Cabros Bot*',
 		'',
-		'• `/precio <simbolo>` — Consulta el precio promedio de un par en Binance \\(ej: `/precio BTCUSDT`\\)',
+		'• `/precio <simbolo>` — Consulta el precio en Binance o Twelve Data \\(ej: `/precio BTCUSDT`, `/precio NVDA`\\)',
 		'• `/cryptobot id` — Muestra el Chat ID actual de Telegram',
 		'• `/analisis <simbolos>` — Crea un análisis técnico en TradingView \\(alias: `/analysis`\\)',
 		'  _Opciones: `timeframe=1D`, `mtf=true`, `timeoutMs=300000`_',

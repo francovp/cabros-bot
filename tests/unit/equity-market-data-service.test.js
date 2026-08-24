@@ -58,6 +58,39 @@ describe('EquityMarketDataService', () => {
 		expect(requestOptions.headers.Authorization).toBe('apikey test-key');
 	});
 
+	it('returns structured quote with price, change, percentChange and currency via getQuote', async () => {
+		configure();
+		global.fetch = jest.fn().mockResolvedValue({
+			ok: true,
+			status: 200,
+			json: async () => ({
+				status: 'ok',
+				symbol: 'NVDA',
+				name: 'NVIDIA Corp',
+				exchange: 'NASDAQ',
+				currency: 'USD',
+				close: '125.50',
+				change: '2.85',
+				percent_change: '2.32',
+				is_market_open: true,
+				datetime: '2026-08-24 16:00:00',
+			}),
+		});
+
+		const quote = await EquityMarketDataService.getQuote({ symbol: 'NVDA', exchange: 'NASDAQ' });
+		expect(quote).toEqual({
+			symbol: 'NVDA',
+			name: 'NVIDIA Corp',
+			exchange: 'NASDAQ',
+			currency: 'USD',
+			price: 125.5,
+			change: 2.85,
+			percentChange: 2.32,
+			isMarketOpen: true,
+			datetime: '2026-08-24 16:00:00',
+		});
+	});
+
 	it('maps and orders historical bars for the outcome evaluator', async () => {
 		configure();
 		global.fetch = jest.fn().mockResolvedValue({
