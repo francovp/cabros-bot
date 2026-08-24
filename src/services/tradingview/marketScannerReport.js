@@ -403,6 +403,18 @@ function formatTrendConfluence(trendConfluence = {}) {
 	return '🧭 HTF UNKNOWN';
 }
 
+function getCandidateDirection(item = {}) {
+	if (typeof item.breakout_type === 'string' && /(bull|buy|long|compra)/i.test(item.breakout_type)) {
+		return 'bullish';
+	}
+
+	if (typeof item.trading_recommendation === 'string' && /(bull|buy|long|compra)/i.test(item.trading_recommendation)) {
+		return 'bullish';
+	}
+
+	return null;
+}
+
 function getScanItemSide(scanType, item = {}) {
 	if (scanType === 'top_losers') {
 		return 'SELL';
@@ -424,7 +436,7 @@ function getScanItemSide(scanType, item = {}) {
 
 	if (scanType === 'bollinger_scan') {
 		const trendConfluence = item._trendConfluence || item.trendConfluence || item.multiTimeframeData;
-		if (trendConfluence?.direction === 'bearish') {
+		if (trendConfluence?.direction === 'bearish' && !getCandidateDirection(item)) {
 			return 'SELL';
 		}
 	}

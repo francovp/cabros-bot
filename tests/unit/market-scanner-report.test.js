@@ -497,6 +497,70 @@ describe('Market Scanner Report', () => {
 			expect(report).toContain('  - *Target:* $62,000.00 | Risk/Reward: 1.00x');
 		});
 
+		it('emits BUY side and long-side levels for bollinger_scan with bullish breakout_type and explicit bearish HTF direction', () => {
+			const results = [
+				{
+					scan: 'bollinger_scan',
+					status: 'success',
+					items: [
+						{
+							symbol: 'BINANCE:BTCUSDT',
+							breakout_type: 'bullish',
+							indicators: { close: 60000, bb_lower: 58000, bb_upper: 62000 },
+							trendConfluence: {
+								direction: 'bearish',
+								confidence: 85,
+							},
+						},
+					],
+				},
+			];
+
+			const report = buildMarketScannerReport(results, {
+				exchange: 'BINANCE',
+				timeframe: '4h',
+				ranked: false,
+				now: mockDate,
+			});
+
+			expect(report).toContain('⚠️ HTF COUNTER-TREND 85%');
+			expect(report).toContain('1. BTCUSDT $60,000.00');
+			expect(report).toContain('  - *Stop Loss:* $58,000.00 (Invalidación: $2,000.00)');
+			expect(report).toContain('  - *Target:* $62,000.00 | Risk/Reward: 1.00x');
+		});
+
+		it('emits SELL side for bollinger_scan with bearish breakout_type and aligned bearish HTF direction', () => {
+			const results = [
+				{
+					scan: 'bollinger_scan',
+					status: 'success',
+					items: [
+						{
+							symbol: 'BINANCE:ETHUSDT',
+							breakout_type: 'bearish',
+							indicators: { close: 3000, bb_lower: 2900, bb_upper: 3100 },
+							trendConfluence: {
+								direction: 'bearish',
+								confidence: 70,
+							},
+						},
+					],
+				},
+			];
+
+			const report = buildMarketScannerReport(results, {
+				exchange: 'BINANCE',
+				timeframe: '4h',
+				ranked: false,
+				now: mockDate,
+			});
+
+			expect(report).toContain('🔥 HTF ALIGNED 70%');
+			// Short-side levels: stop above price, target below
+			expect(report).toContain('  - *Stop Loss:* $3,100.00 (Invalidación: $100.00)');
+			expect(report).toContain('  - *Target:* $2,900.00 | Risk/Reward: 1.00x');
+		});
+
 		it('preserves BUY risk/reward levels for bollinger_scan with BUY trading_recommendation despite bearish HTF confluence', () => {
 			const results = [
 				{
