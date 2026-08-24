@@ -1728,7 +1728,59 @@
                 }
               ]
             }
-          }
+          },
+          "response": [
+            {
+              "name": "200 OK - Webhook alerts list",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"success\": true,\n  \"alerts\": [\n    {\n      \"id\": \"alert-123\",\n      \"receivedAt\": \"2026-06-06T12:00:00.000Z\",\n      \"source\": \"webhook\",\n      \"symbol\": \"BTCUSDT\",\n      \"exchange\": \"BINANCE\",\n      \"enriched\": true,\n      \"useTradingViewData\": false,\n      \"tradingViewEnrichmentApplied\": false,\n      \"tradingViewEnrichmentStatus\": \"not_applicable\",\n      \"channels\": [\"telegram\"],\n      \"deliveryResults\": [\n        {\n          \"channel\": \"telegram\",\n          \"success\": true,\n          \"messageId\": \"123\"\n        }\n      ],\n      \"tokenUsage\": {\n        \"inputTokens\": 10,\n        \"outputTokens\": 20,\n        \"totalTokens\": 30,\n        \"totalCost\": 0.001\n      }\n    }\n  ]\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET List Alerts (news-monitor)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts?limit=10&source=news-monitor",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "10"
+                },
+                {
+                  "key": "source",
+                  "value": "news-monitor"
+                }
+              ]
+            },
+            "description": "Lists stored alerts filtered by source=news-monitor, including eventCategory, confidence, sentimentScore, and dedupStatus metadata."
+          },
+          "response": [
+            {
+              "name": "200 OK - News monitor alerts list",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"success\": true,\n  \"alerts\": [\n    {\n      \"id\": \"news-doc-123\",\n      \"receivedAt\": \"2026-08-24T02:00:00.000Z\",\n      \"source\": \"news-monitor\",\n      \"symbol\": \"BTCUSDT\",\n      \"exchange\": \"BINANCE\",\n      \"eventCategory\": \"price_surge\",\n      \"confidence\": 0.85,\n      \"sentimentScore\": 0.75,\n      \"dedupStatus\": \"fresh\",\n      \"enriched\": true,\n      \"useTradingViewData\": false,\n      \"tradingViewEnrichmentApplied\": false,\n      \"channels\": [\"telegram\"],\n      \"deliveryResults\": [\n        {\n          \"channel\": \"telegram\",\n          \"success\": true,\n          \"messageId\": \"12345\"\n        }\n      ],\n      \"tokenUsage\": {\n        \"inputTokens\": 100,\n        \"outputTokens\": 50,\n        \"totalTokens\": 150,\n        \"totalCost\": 0.00025\n      }\n    }\n  ]\n}"
+            }
+          ]
         },
         {
           "name": "GET Alert Analytics Summary (risk coverage)",
@@ -1937,6 +1989,13 @@
                 }
               ],
               "body": "{\"id\":\"alert-123\",\"receivedAt\":\"2026-06-06T12:00:00.000Z\",\"source\":\"webhook\",\"enriched\":true,\"useTradingViewData\":false,\"tradingViewEnrichmentApplied\":false,\"tradingViewEnrichmentStatus\":\"not_applicable\",\"deliveryResults\":[{\"channel\":\"telegram\",\"success\":true,\"messageId\":\"123\",\"errorCode\":null,\"statusCode\":null}],\"tokenUsage\":{\"inputTokens\":10,\"outputTokens\":20,\"totalTokens\":30,\"totalCost\":0.001}}\n"
+            },
+            {
+              "name": "200 OK - JSONL export (news-monitor)",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "body": "{\"id\":\"news-doc-123\",\"receivedAt\":\"2026-08-24T02:00:00.000Z\",\"source\":\"news-monitor\",\"symbol\":\"BTCUSDT\",\"exchange\":\"BINANCE\",\"eventCategory\":\"price_surge\",\"confidence\":0.85,\"sentimentScore\":0.75,\"dedupStatus\":\"fresh\",\"enriched\":true,\"useTradingViewData\":false,\"tradingViewEnrichmentApplied\":false,\"tradingViewEnrichmentStatus\":\"not_applicable\",\"deliveryResults\":[{\"channel\":\"telegram\",\"success\":true,\"messageId\":\"12345\",\"errorCode\":null,\"statusCode\":null}],\"tokenUsage\":{\"inputTokens\":100,\"outputTokens\":50,\"totalTokens\":150,\"totalCost\":0.00025}}\n"
             }
           ]
         },
@@ -1991,7 +2050,7 @@
               "name": "200 OK - CSV export",
               "status": "OK",
               "code": 200,
-              "body": "id,receivedAt,source,enriched,useTradingViewData,tradingViewEnrichmentApplied,tradingViewEnrichmentStatus,deliveryResults,tokenUsage,text\nalert-123,2026-06-06T12:00:00.000Z,webhook,true,false,false,not_applicable,\"[{\"\"channel\"\":\"\"telegram\"\",\"\"success\"\":true,\"\"messageId\"\":\"\"123\"\",\"\"errorCode\"\":null,\"\"statusCode\"\":null}]\",\"{\"\"inputTokens\"\":10,\"\"outputTokens\"\":20,\"\"totalTokens\"\":30,\"\"totalCost\"\":0.001}\",BTC breakout\n"
+              "body": "id,receivedAt,source,enriched,useTradingViewData,tradingViewEnrichmentApplied,tradingViewEnrichmentStatus,eventCategory,confidence,sentimentScore,dedupStatus,channels,deliveryResults,tokenUsage,text\nalert-123,2026-06-06T12:00:00.000Z,webhook,true,false,false,not_applicable,,,,,\"[\"\"telegram\"\"]\",\"[{\"\"channel\"\": \"\"telegram\"\", \"\"success\"\": true, \"\"messageId\"\": \"\"123\"\", \"\"errorCode\"\": null, \"\"statusCode\"\": null}]\",\"{\"\"inputTokens\"\":10,\"\"outputTokens\"\":20,\"\"totalTokens\"\":30,\"\"totalCost\"\":0.001}\",BTC breakout\n"
             }
           ]
         },

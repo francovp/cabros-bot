@@ -174,7 +174,7 @@ class NewsMonitorHandler {
 							exchange: result.alert.marketContext && result.alert.marketContext.source === 'binance' ? 'BINANCE' : undefined,
 							enriched: Boolean(result.alert.enriched),
 							enrichmentData: result.alert.enriched || null,
-							tokenUsage: (result.alert.enriched && result.alert.enriched.tokenUsage) || response.tokenUsage || null,
+							tokenUsage: (result.alert.enriched && result.alert.enriched.tokenUsage) || null,
 							channels: requestedChannels,
 							deliveryResults: result.deliveryResults || [],
 							source: 'news-monitor',

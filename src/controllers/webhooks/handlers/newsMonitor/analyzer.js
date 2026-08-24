@@ -15,6 +15,7 @@ const geminiQuotaManager = require('../../../../services/grounding/geminiQuotaMa
 const { getPromptService, PromptKeys } = require('../../../../services/prompts');
 const { MainClient } = require('binance');
 const { createHash } = require('node:crypto');
+const { TokenUsageTracker } = require('../../../../lib/tokenUsage');
 const {
 	sendWithNotificationRouting,
 	getRequestedChannels,
@@ -438,17 +439,30 @@ class NewsAnalyzer {
 				const currentIndex = nextIndex;
 				nextIndex += 1;
 				const symbol = symbols[currentIndex];
-				results[currentIndex] = await this.analyzeSymbol(symbol, requestId, tokenUsage, routing, batchStartedAt, options).catch(error => ({
-					symbol,
-					status: AnalysisStatus.ERROR,
-					error: {
-						code: isGeminiQuotaError(error) ? 'GEMINI_QUOTA_EXHAUSTED' : 'ANALYSIS_ERROR',
-						message: error.message,
-					},
-					totalDurationMs: 0,
-					cached: false,
-					requestId,
-				}));
+				const symbolTokenUsage = new TokenUsageTracker();
+				results[currentIndex] = await this.analyzeSymbol(symbol, requestId, symbolTokenUsage, routing, batchStartedAt, options)
+					.then((result) => {
+						if (tokenUsage) {
+							tokenUsage.merge(symbolTokenUsage);
+						}
+						return result;
+					})
+					.catch(error => {
+						if (tokenUsage) {
+							tokenUsage.merge(symbolTokenUsage);
+						}
+						return {
+							symbol,
+							status: AnalysisStatus.ERROR,
+							error: {
+								code: isGeminiQuotaError(error) ? 'GEMINI_QUOTA_EXHAUSTED' : 'ANALYSIS_ERROR',
+								message: error.message,
+							},
+							totalDurationMs: 0,
+							cached: false,
+							requestId,
+						};
+					});
 			}
 		};
 

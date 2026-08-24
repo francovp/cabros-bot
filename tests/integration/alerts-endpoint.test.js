@@ -449,11 +449,45 @@ describe('Alerts API Integration Tests', () => {
 			includeText: true,
 		});
 		expect(res.headers['content-type']).toContain('text/csv');
-		expect(res.text).toContain('id,receivedAt,source,enriched,useTradingViewData,tradingViewEnrichmentApplied,tradingViewEnrichmentStatus,channels,deliveryResults,tokenUsage,text');
+		expect(res.text).toContain('id,receivedAt,source,enriched,useTradingViewData,tradingViewEnrichmentApplied,tradingViewEnrichmentStatus,eventCategory,confidence,sentimentScore,dedupStatus,channels,deliveryResults,tokenUsage,text');
 		expect(res.text).toContain("'=alert-1,-42,'@webhook");
 		expect(res.text).toContain('"\'=@SUM(1,1), ""quoted""\r\n+next"');
 		expect(res.text).not.toContain('=alert-1,-42,@webhook');
 		expect(res.text).toContain('PROVIDER_LIMIT');
+	});
+
+	it('includes news-monitor metadata in CSV export', async () => {
+		alertStorageService.exportAlerts.mockResolvedValue({
+			alerts: [
+				{
+					id: 'news-123',
+					receivedAt: '2026-06-06T12:00:00.000Z',
+					source: 'news-monitor',
+					enriched: true,
+					useTradingViewData: false,
+					tradingViewEnrichmentApplied: false,
+					tradingViewEnrichmentStatus: 'not_applicable',
+					eventCategory: 'price_surge',
+					confidence: 0.85,
+					sentimentScore: 0.75,
+					dedupStatus: 'fresh',
+					channels: ['telegram'],
+					deliveryResults: [{ channel: 'telegram', success: true }],
+					tokenUsage: { inputTokens: 100, outputTokens: 50, totalTokens: 150, totalCost: 0.001 },
+					text: 'BTCUSDT: Bitcoin surges past 100k',
+				},
+			],
+		});
+
+		const res = await request(app)
+			.get('/api/alerts/export?format=csv&from=2026-06-06T00:00:00.000Z&to=2026-06-07T00:00:00.000Z&source=news-monitor&includeText=true')
+			.set('x-api-key', 'test-key')
+			.expect(200);
+
+		expect(res.headers['content-type']).toContain('text/csv');
+		expect(res.text).toContain('id,receivedAt,source,enriched,useTradingViewData,tradingViewEnrichmentApplied,tradingViewEnrichmentStatus,eventCategory,confidence,sentimentScore,dedupStatus,channels,deliveryResults,tokenUsage,text');
+		expect(res.text).toContain('news-123,2026-06-06T12:00:00.000Z,news-monitor,true,false,false,not_applicable,price_surge,0.85,0.75,fresh');
+		expect(res.text).toContain('BTCUSDT: Bitcoin surges past 100k');
 	});
 
 	it('neutralizes tab- and carriage-return-prefixed formulas in CSV strings', async () => {
