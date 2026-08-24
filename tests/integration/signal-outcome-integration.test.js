@@ -157,9 +157,9 @@ describe('Shadow-Mode Outcome Tracking Integration Tests', () => {
 
 			const outcomesMap = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME);
 			const [, docData] = [...outcomesMap.entries()][0];
-			expect(docData.eligibilityState).toBe('equity_provider_unavailable');
+			expect(docData.eligibilityState).toBe('pending_entry_price');
 			expect(docData.eligibilityReason).toBe('twelve_data_rate_limited');
-			expect(docData.outcomeEvaluated).toBe(true);
+			expect(docData.outcomeEvaluated).toBe(false);
 		} finally {
 			global.fetch = originalFetch;
 		}
