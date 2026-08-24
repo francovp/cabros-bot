@@ -141,8 +141,9 @@ async function enrichScannerItemsWithTrendConfluence(items, parsed = {}, signal,
 	const limiter = createConcurrencyLimiter(concurrency);
 	const symbolCache = options.symbolCache ?? options.sharedCache ?? parsed.symbolCache ?? new Map();
 
+	let onAbort;
 	if (signal) {
-		const onAbort = () => {
+		onAbort = () => {
 			const abortError = signal.reason instanceof Error ? signal.reason : new Error('Market scanner aborted');
 			abortError.name = 'AbortError';
 			limiter.clear(abortError);
@@ -154,48 +155,54 @@ async function enrichScannerItemsWithTrendConfluence(items, parsed = {}, signal,
 		}
 	}
 
-	const promises = candidateItems.map(async (item) => {
-		const parsedSymbol = parseScannerSymbol(item?.symbol, parsed.exchange);
-		if (!parsedSymbol) {
-			return item;
-		}
+	try {
+		const promises = candidateItems.map(async (item) => {
+			const parsedSymbol = parseScannerSymbol(item?.symbol, parsed.exchange);
+			if (!parsedSymbol) {
+				return item;
+			}
 
-		const cacheKey = `${parsedSymbol.exchange}:${parsedSymbol.symbol}`;
-		let confluencePromise = symbolCache.get(cacheKey);
-		if (!confluencePromise) {
-			confluencePromise = limiter(() => fetchTrendConfluence(parsedSymbol, signal));
-			symbolCache.set(cacheKey, confluencePromise);
-		}
+			const cacheKey = `${parsedSymbol.exchange}:${parsedSymbol.symbol}`;
+			let confluencePromise = symbolCache.get(cacheKey);
+			if (!confluencePromise) {
+				confluencePromise = limiter(() => fetchTrendConfluence(parsedSymbol, signal));
+				symbolCache.set(cacheKey, confluencePromise);
+			}
 
-		const trendConfluence = await confluencePromise;
-		return (trendConfluence && typeof trendConfluence === 'object')
-			? { ...item, trendConfluence }
-			: item;
-	});
+			const trendConfluence = await confluencePromise;
+			return (trendConfluence && typeof trendConfluence === 'object')
+				? { ...item, trendConfluence }
+				: item;
+		});
 
-	const settledResults = await Promise.allSettled(promises);
+		const settledResults = await Promise.allSettled(promises);
 
-	let firstAbortError = null;
-	for (const result of settledResults) {
-		if (result.status === 'rejected') {
-			if (isAbortTriggered(signal, result.reason)) {
-				firstAbortError = firstAbortError || result.reason;
-			} else {
-				throw result.reason;
+		let firstAbortError = null;
+		for (const result of settledResults) {
+			if (result.status === 'rejected') {
+				if (isAbortTriggered(signal, result.reason)) {
+					firstAbortError = firstAbortError || result.reason;
+				} else {
+					throw result.reason;
+				}
 			}
 		}
-	}
 
-	if (firstAbortError || (signal && signal.aborted)) {
-		const abortError = firstAbortError
-			|| (signal.reason instanceof Error ? signal.reason : new Error('Market scanner aborted'));
-		if (!abortError.name || abortError.name === 'Error') {
-			abortError.name = 'AbortError';
+		if (firstAbortError || (signal && signal.aborted)) {
+			const abortError = firstAbortError
+				|| (signal.reason instanceof Error ? signal.reason : new Error('Market scanner aborted'));
+			if (!abortError.name || abortError.name === 'Error') {
+				abortError.name = 'AbortError';
+			}
+			throw abortError;
 		}
-		throw abortError;
-	}
 
-	return settledResults.map((r) => r.value);
+		return settledResults.map((r) => r.value);
+	} finally {
+		if (signal && onAbort && typeof signal.removeEventListener === 'function') {
+			signal.removeEventListener('abort', onAbort);
+		}
+	}
 }
 
 module.exports = {
