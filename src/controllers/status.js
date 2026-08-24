@@ -13,6 +13,7 @@ const remoteConfigService = require('../services/remoteConfig/RemoteConfigServic
 const { tradingViewMcpService } = require('../services/tradingview/TradingViewMcpService');
 const { binanceOrderService } = require('../services/trading/BinanceOrderService');
 const { notificationRedriveService } = require('../services/notification/NotificationRedriveService');
+const { workerHeartbeatMonitorService } = require('../services/monitoring/WorkerHeartbeatMonitorService');
 const {
 	getDeploymentCommit,
 	isPreviewEnvironment,
@@ -374,6 +375,7 @@ function getStatus() {
 				lastRunErrorCount: signalOutcomeWorkerStatus.lastRunErrorCount,
 			},
 			notificationRedrive: notificationRedriveService.getStatus(),
+			workerHeartbeatMonitor: workerHeartbeatMonitorService.getStatus(),
 			jobExecutionQueue: jobExecutionQueueStatus,
 			binanceTrading: binanceTradingStatus,
 		},

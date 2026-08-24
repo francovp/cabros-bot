@@ -312,5 +312,70 @@ describe('ScannerPresetSchedulerService', () => {
 			expect(drained).toBe(true);
 			expect(scheduler.running).toBe(false);
 		});
+
+		it('persists workerHeartbeats/scanner-preset-scheduler on sweep and stopWorker', async () => {
+			const setSpy = jest.fn().mockResolvedValue(undefined);
+			const docMock = { set: setSpy };
+			const collectionMock = { doc: jest.fn().mockReturnValue(docMock) };
+			const customFirestore = { collection: jest.fn().mockReturnValue(collectionMock) };
+
+			jest.spyOn(scheduler.presetService, '_getFirestore').mockReturnValue(customFirestore);
+			jest.spyOn(scheduler, '_fetchDuePresets').mockResolvedValue([]);
+
+			await scheduler.sweep();
+
+			expect(customFirestore.collection).toHaveBeenCalledWith('workerHeartbeats');
+			expect(collectionMock.doc).toHaveBeenCalledWith('scanner-preset-scheduler');
+			expect(setSpy).toHaveBeenCalledWith(
+				expect.objectContaining({
+					worker: 'scanner-preset-scheduler',
+					role: 'web',
+					enabled: true,
+					running: false,
+					shutdownRequested: false,
+					lastRunScannedCount: 0,
+					lastRunExecutedCount: 0,
+					lastRunErrorCount: 0,
+				}),
+				{ merge: true },
+			);
+
+			await scheduler.stopWorker({ drain: false });
+			expect(setSpy).toHaveBeenLastCalledWith(
+				expect.objectContaining({
+					worker: 'scanner-preset-scheduler',
+					shutdownRequested: true,
+				}),
+				{ merge: true },
+			);
+		});
+
+		it('skips heartbeat persistence when role is disabled', async () => {
+			process.env.SCANNER_PRESET_SCHEDULER_WORKER_ROLE = 'disabled';
+			const customFirestore = { collection: jest.fn() };
+			jest.spyOn(scheduler.presetService, '_getFirestore').mockReturnValue(customFirestore);
+
+			await scheduler.persistWorkerHeartbeat();
+			expect(customFirestore.collection).not.toHaveBeenCalled();
+		});
+
+		it('fails open when heartbeat persistence throws', async () => {
+			const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+			const customFirestore = {
+				collection: jest.fn(() => ({
+					doc: jest.fn(() => ({
+						set: jest.fn().mockRejectedValue(new Error('Firestore unavailable')),
+					})),
+				})),
+			};
+			jest.spyOn(scheduler.presetService, '_getFirestore').mockReturnValue(customFirestore);
+
+			await expect(scheduler.persistWorkerHeartbeat()).resolves.toBeUndefined();
+			expect(warnSpy).toHaveBeenCalledWith(
+				'[ScannerPresetScheduler] Failed to persist worker heartbeat:',
+				'Firestore unavailable',
+			);
+			warnSpy.mockRestore();
+		});
 	});
 });

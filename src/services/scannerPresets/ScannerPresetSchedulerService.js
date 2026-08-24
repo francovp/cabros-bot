@@ -3,6 +3,7 @@
 /* global AbortController */
 
 const crypto = require('crypto');
+const admin = require('firebase-admin');
 const {
 	scannerPresetService,
 	COLLECTION_NAME,
@@ -15,6 +16,32 @@ const alertModule = require('../../controllers/webhooks/handlers/alert/alert');
 const requestRoutingModule = require('../notification/requestRouting');
 const sentryService = require('../monitoring/SentryService');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
+
+const HEARTBEAT_COLLECTION_NAME = 'workerHeartbeats';
+const HEARTBEAT_DOCUMENT_ID = 'scanner-preset-scheduler';
+const HEARTBEAT_WRITE_TIMEOUT_MS = 5000;
+
+function awaitWithTimeout(promise, timeoutMs, message) {
+	return new Promise((resolve, reject) => {
+		let settled = false;
+		const timerId = setTimeout(() => {
+			settled = true;
+			reject(new Error(message));
+		}, timeoutMs);
+
+		Promise.resolve(promise).then((value) => {
+			if (settled) return;
+			settled = true;
+			globalThis.clearTimeout?.(timerId);
+			resolve(value);
+		}, (error) => {
+			if (settled) return;
+			settled = true;
+			globalThis.clearTimeout?.(timerId);
+			reject(error);
+		});
+	});
+}
 
 const DEFAULT_SCHEDULER_INTERVAL_MS = 60000;
 const MIN_SCHEDULER_INTERVAL_MS = 1000;
@@ -134,6 +161,46 @@ class ScannerPresetSchedulerService {
 		};
 	}
 
+	async persistWorkerHeartbeat() {
+		if (this.getWorkerRole() === 'disabled') {
+			return;
+		}
+
+		try {
+			const firestore = this.presetService._getFirestore();
+			if (!firestore) {
+				return;
+			}
+
+			const status = this.getStatus();
+			const payload = stripUndefinedFieldsDeep({
+				worker: 'scanner-preset-scheduler',
+				role: status.role,
+				enabled: status.enabled,
+				running: status.running,
+				shutdownRequested: this.shutdownRequested,
+				intervalMs: status.intervalMs,
+				batchLimit: status.batchLimit,
+				lastRunAt: this.lastRunAt
+					? admin.firestore.Timestamp.fromDate(new Date(this.lastRunAt))
+					: null,
+				lastRunDurationMs: status.lastRunDurationMs,
+				lastRunScannedCount: status.lastRunScannedCount,
+				lastRunExecutedCount: status.lastRunExecutedCount,
+				lastRunErrorCount: status.lastRunErrorCount,
+				updatedAt: admin.firestore.Timestamp.fromDate(new Date()),
+			});
+
+			await awaitWithTimeout(
+				firestore.collection(HEARTBEAT_COLLECTION_NAME).doc(HEARTBEAT_DOCUMENT_ID).set(payload, { merge: true }),
+				HEARTBEAT_WRITE_TIMEOUT_MS,
+				`Heartbeat write timed out after ${HEARTBEAT_WRITE_TIMEOUT_MS}ms`,
+			);
+		} catch (error) {
+			console.warn('[ScannerPresetScheduler] Failed to persist worker heartbeat:', error.message);
+		}
+	}
+
 	startWorker() {
 		if (!this.isEnabled() || this.getWorkerRole() === 'disabled') {
 			return;
@@ -146,6 +213,7 @@ class ScannerPresetSchedulerService {
 		this.running = true;
 		this.shutdownRequested = false;
 		this._scheduleNextSweep(this.getIntervalMs());
+		void this.persistWorkerHeartbeat();
 	}
 
 	async stopWorker(options = {}) {
@@ -170,6 +238,8 @@ class ScannerPresetSchedulerService {
 				clearTimeout(timeoutHandle);
 			}
 		}
+
+		await this.persistWorkerHeartbeat();
 	}
 
 	_scheduleNextSweep(delayMs) {
@@ -256,6 +326,7 @@ class ScannerPresetSchedulerService {
 			this.lastRunScannedCount = scannedCount;
 			this.lastRunExecutedCount = executedCount;
 			this.lastRunErrorCount = errorCount;
+			await this.persistWorkerHeartbeat();
 		}
 
 		return {

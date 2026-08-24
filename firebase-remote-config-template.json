@@ -259,6 +259,27 @@
       "description": "Maximum due scanner presets to process per scheduler sweep",
       "valueType": "NUMBER"
     },
+    "WORKER_HEARTBEAT_STALE_MULTIPLIER": {
+      "defaultValue": {
+        "value": "3"
+      },
+      "description": "Multiplier on worker interval before heartbeat is considered stale",
+      "valueType": "NUMBER"
+    },
+    "WORKER_HEARTBEAT_ALERT_COOLDOWN_MS": {
+      "defaultValue": {
+        "value": "1800000"
+      },
+      "description": "Cooldown period in milliseconds between operator staleness alert pages",
+      "valueType": "NUMBER"
+    },
+    "WORKER_HEARTBEAT_CHECK_INTERVAL_MS": {
+      "defaultValue": {
+        "value": "60000"
+      },
+      "description": "Periodic check interval in milliseconds for worker heartbeat staleness evaluation",
+      "valueType": "NUMBER"
+    },
     "ENABLE_GEMINI_GROUNDING": {
       "defaultValue": {
         "value": "false"

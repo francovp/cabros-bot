@@ -81,6 +81,7 @@ function createProcessLifecycle(options = {}) {
 		stopSignalOutcomeWorker = () => undefined,
 		stopNotificationRedriveWorker = () => undefined,
 		stopScannerPresetScheduler = () => undefined,
+		stopWorkerHeartbeatMonitor = () => undefined,
 		stopRemoteConfig = () => undefined,
 		shutdownNewsMonitor = () => undefined,
 		flushSentry = () => undefined,
@@ -178,6 +179,7 @@ function createProcessLifecycle(options = {}) {
 					safelyRun(logger, 'signal-outcome worker', () => stopSignalOutcomeWorker({ drain: true })),
 					safelyRun(logger, 'notification redrive worker', () => stopNotificationRedriveWorker({ drain: true })),
 					safelyRun(logger, 'scanner preset scheduler', () => stopScannerPresetScheduler({ drain: true })),
+					safelyRun(logger, 'worker heartbeat monitor', stopWorkerHeartbeatMonitor),
 					safelyRun(logger, 'remote config service', stopRemoteConfig),
 					safelyRun(logger, 'news monitor cache', shutdownNewsMonitor),
 				]);

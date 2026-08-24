@@ -25,6 +25,7 @@ const { jobService } = require('./src/services/jobs/JobService');
 const SignalOutcomeService = require('./src/services/storage/SignalOutcomeService');
 const { notificationRedriveService } = require('./src/services/notification/NotificationRedriveService');
 const { scannerPresetSchedulerService } = require('./src/services/scannerPresets');
+const { workerHeartbeatMonitorService } = require('./src/services/monitoring/WorkerHeartbeatMonitorService');
 const sentryService = require('./src/services/monitoring/SentryService');
 const { getDeploymentCommit, getDeploymentRepoSlug } = require('./src/lib/deploymentEnvironment');
 const remoteConfigService = require('./src/services/remoteConfig/RemoteConfigService');
@@ -67,6 +68,7 @@ const lifecycle = createProcessLifecycle({
 	stopSignalOutcomeWorker: (options) => SignalOutcomeService.stopWorker(options),
 	stopNotificationRedriveWorker: (options) => notificationRedriveService.stopWorker(options),
 	stopScannerPresetScheduler: (options) => scannerPresetSchedulerService.stopWorker(options),
+	stopWorkerHeartbeatMonitor: () => workerHeartbeatMonitorService.stop(),
 	stopRemoteConfig: () => remoteConfigService.stop(),
 	shutdownNewsMonitor: () => getCacheInstance().shutdown(),
 	flushSentry: (timeout) => sentryService.flush(timeout),
@@ -87,6 +89,8 @@ async function bootstrapApplication() {
 	// Start background scanner preset scheduler if enabled
 	scannerPresetSchedulerService.botGetter = () => bot;
 	scannerPresetSchedulerService.startWorker();
+	// Start background worker heartbeat staleness monitor
+	workerHeartbeatMonitorService.start();
 	if (process.env.ENABLE_NEWS_MONITOR === 'true') {
 		getNewsMonitor().initialize();
 	}

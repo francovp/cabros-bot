@@ -254,6 +254,14 @@ The response and audit logs include only sanitized order metadata. API credentia
 - `SCANNER_PRESET_SCHEDULER_LEASE_MS` - Distributed concurrency lock lease duration in milliseconds (default: `120000`, bounds `10000`-`600000`).
 - `dependencies.scannerPresetScheduler` in `/api/status` and `/api/capabilities` exposes `enabled`, `configured`, `ready`, `status`, `role`, `running`, `shutdownRequested`, and execution counters without secrets.
 
+#### Worker Heartbeat Staleness Monitoring
+
+- `WORKER_HEARTBEAT_STALE_MULTIPLIER` - Multiplier on worker cadence before worker heartbeat is considered stale (default: `3`, bounds `1`-`20`).
+- `WORKER_HEARTBEAT_ALERT_COOLDOWN_MS` - Cooldown duration in milliseconds between operator staleness pages (default: `1800000` / 30m, bounds `1000`-`86400000`).
+- `WORKER_HEARTBEAT_CHECK_INTERVAL_MS` - Background check interval in milliseconds for evaluating worker heartbeat health (default: `60000` / 1m, bounds `1000`-`3600000`).
+- `WORKER_HEARTBEAT_GRACE_PERIOD_MS` - Startup grace period in milliseconds before missing heartbeat documents trigger alerts (default: `300000` / 5m).
+- `dependencies.workerHeartbeatMonitor` in `/api/status` and `/api/capabilities` exposes `enabled`, `configured`, `ready`, `status`, `checkIntervalMs`, `staleMultiplier`, `alertCooldownMs`, and `lastCheckAt` without secrets.
+
 ## Setup
 
 ### Supported Runtime
