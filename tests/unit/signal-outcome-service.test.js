@@ -311,6 +311,29 @@ describe('SignalOutcomeService', () => {
 			}
 		});
 
+		it('persists explicit priceSource over the BINANCE tradingview-mcp default', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			mockGetAvgPrice.mockResolvedValue({ price: '12345.67' });
+
+			const resId = await SignalOutcomeService.recordSignal({
+				requestId: 'req-explicit-binance-source',
+				source: 'news-monitor',
+				symbol: 'BINANCE:BTCUSDT',
+				price: 64863.03,
+				priceSource: 'binance',
+				side: 'BUY',
+			});
+
+			expect(resId).not.toBeNull();
+			expect(mockGetAvgPrice).not.toHaveBeenCalled();
+
+			const saved = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(resId);
+			expect(saved).toBeDefined();
+			expect(saved.price).toBe(64863.03);
+			expect(saved.entryPriceSource).toBe('binance');
+			expect(saved.eligibilityState).toBe('supported_provider');
+		});
+
 		it('reuses structured MCP entry price without calling Binance getAvgPrice', async () => {
 			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
 			mockGetAvgPrice.mockResolvedValue({ price: '12345.67' });

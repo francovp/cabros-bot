@@ -202,4 +202,59 @@ describe('News Monitor - Binance Integration (US4)', () => {
 			expect(response.body.summary).toHaveProperty('alerts_sent');
 		});
 	});
+
+	describe('Signal Outcome Provenance', () => {
+		it('records Binance-derived prices with entryPriceSource binance', async () => {
+			jest.resetModules();
+			jest.doMock('../../src/services/storage/SignalOutcomeService', () => ({
+				isEnabled: jest.fn(() => true),
+				recordSignal: jest.fn().mockResolvedValue('outcome-id'),
+			}));
+			jest.doMock('../../src/services/grounding/gemini', () => ({
+				analyzeNewsForSymbol: jest.fn().mockResolvedValue({
+					event_category: 'price_surge',
+					event_significance: 0.8,
+					sentiment_score: 0.9,
+					headline: 'Bitcoin surges on positive news',
+					confidence: 0.95,
+					sources: ['https://example.com/news'],
+				}),
+			}));
+			const signalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
+			const { getAnalyzer, setNotificationManager } = require('../../src/controllers/webhooks/handlers/newsMonitor/analyzer');
+
+			const mockBot = {
+				telegram: {
+					sendMessage: jest.fn().mockResolvedValue({ message_id: 'provenance-message-id' }),
+				},
+			};
+			setNotificationManager({
+				sendToAll: jest.fn().mockResolvedValue([{ channel: 'telegram', success: true }]),
+				validateAll: jest.fn(),
+				channels: new Map([
+					['telegram', { chatId: '123456789', enabled: true }],
+				]),
+			});
+
+			const cache = getCacheInstance();
+			cache.clear();
+			cache.initialize();
+
+			try {
+				const analyzer = getAnalyzer();
+				await analyzer.analyzeSymbol('BTCUSDT', 'req-provenance', null, {}, Date.now(), {});
+
+				expect(signalOutcomeService.isEnabled).toHaveBeenCalled();
+				expect(signalOutcomeService.recordSignal).toHaveBeenCalledTimes(1);
+				expect(signalOutcomeService.recordSignal.mock.calls[0][0]).toEqual(expect.objectContaining({
+					source: 'news-monitor',
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					priceSource: 'binance',
+				}));
+			} finally {
+				cache.shutdown();
+			}
+		});
+	});
 });

@@ -862,6 +862,7 @@ class NewsAnalyzer {
 				score: alert.confidence,
 				side,
 				price: alert.marketContext ? alert.marketContext.price : null,
+				priceSource: alert.marketContext ? alert.marketContext.source : null,
 				stop,
 				target,
 				sources: alert.sources || [],
