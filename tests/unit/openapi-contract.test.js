@@ -149,6 +149,19 @@ describe('OpenAPI contract', () => {
 		});
 	});
 
+	it('aligns symbol analysis schema with runtime normalization', () => {
+		if (!fs.existsSync(contractPath)) return;
+		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+		const schema = contract.components.schemas.SymbolAnalysisRequest;
+
+		expect(schema.properties.symbol.pattern).toBe('^[A-Za-z0-9_]+:[A-Za-z0-9._-]+$');
+		expect(schema.properties.timeframe).not.toHaveProperty('default');
+		expect(schema.description).toContain('TRADINGVIEW_MCP_DEFAULT_TIMEFRAME');
+		expect(schema.properties.timeframe.enum).toEqual(expect.arrayContaining(['60', '240', 'D', 'W', 'M']));
+		expect(schema.properties).toHaveProperty('analysis_mode');
+		expect(schema.properties).toHaveProperty('include_multi_timeframe');
+	});
+
 	it('documents idempotency conflicts for header-backed alert operations', () => {
 		if (!fs.existsSync(contractPath)) return;
 		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));

@@ -267,6 +267,40 @@
         ]
       }
     },
+    "/api/webhook/symbol-analysis": {
+      "post": {
+        "tags": [
+          "Webhooks"
+        ],
+        "summary": "Analyze one TradingView symbol without delivery",
+        "operationId": "postSymbolAnalysis",
+        "requestBody": {
+          "$ref": "#/components/requestBodies/SymbolAnalysis"
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/SymbolAnalysisResult"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "502": {
+            "$ref": "#/components/responses/Error"
+          },
+          "504": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          }
+        ]
+      }
+    },
     "/api/alerts": {
       "get": {
         "tags": [
@@ -1841,6 +1875,22 @@
           }
         }
       },
+      "SymbolAnalysis": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/SymbolAnalysisRequest"
+            },
+            "example": {
+              "symbol": "BINANCE:BTCUSDT",
+              "timeframe": "1D",
+              "analysisMode": "combined",
+              "includeMultiTimeframe": true
+            }
+          }
+        }
+      },
       "Replay": {
         "content": {
           "application/json": {
@@ -2441,6 +2491,16 @@
           "application/json": {
             "schema": {
               "$ref": "#/components/schemas/JsonObject"
+            }
+          }
+        }
+      },
+      "SymbolAnalysisResult": {
+        "description": "Single-symbol TradingView analysis, formatted alert text, risk levels, and decision metadata.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/SymbolAnalysisResult"
             }
           }
         }
@@ -3282,6 +3342,116 @@
           },
           "timeframe": {
             "type": "string"
+          }
+        }
+      },
+      "SymbolAnalysisRequest": {
+        "type": "object",
+        "description": "timeframe defaults to TRADINGVIEW_MCP_DEFAULT_TIMEFRAME at runtime, or 1D when that setting is absent.",
+        "required": [
+          "symbol"
+        ],
+        "properties": {
+          "symbol": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_]+:[A-Za-z0-9._-]+$",
+            "example": "BINANCE:BTCUSDT"
+          },
+          "timeframe": {
+            "type": "string",
+            "enum": [
+              "5",
+              "5m",
+              "5M",
+              "15",
+              "15m",
+              "15M",
+              "60",
+              "1H",
+              "1h",
+              "240",
+              "4h",
+              "1440",
+              "1D",
+              "D",
+              "10080",
+              "1W",
+              "W",
+              "43200",
+              "M",
+              "1M"
+            ]
+          },
+          "analysisMode": {
+            "type": "string",
+            "enum": [
+              "standard",
+              "combined"
+            ],
+            "default": "standard"
+          },
+          "analysis_mode": {
+            "type": "string",
+            "enum": [
+              "standard",
+              "combined"
+            ],
+            "default": "standard"
+          },
+          "includeMultiTimeframe": {
+            "type": "boolean",
+            "default": false
+          },
+          "include_multi_timeframe": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "SymbolAnalysisResult": {
+        "type": "object",
+        "required": [
+          "success",
+          "symbol",
+          "analysis",
+          "alertText"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "symbol": {
+            "type": "string"
+          },
+          "exchange": {
+            "type": "string"
+          },
+          "asset": {
+            "type": "string"
+          },
+          "timeframe": {
+            "type": "string"
+          },
+          "alertText": {
+            "type": "string"
+          },
+          "analysisStatus": {
+            "type": "string",
+            "enum": [
+              "complete",
+              "partial"
+            ]
+          },
+          "analysis": {
+            "$ref": "#/components/schemas/JsonObject"
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "totalDurationMs": {
+            "type": "integer",
+            "minimum": 0
           }
         }
       },

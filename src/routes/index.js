@@ -12,6 +12,7 @@ const {
 	postRunPreset,
 } = require('../controllers/webhooks/handlers/scannerPresets/scannerPresets');
 const { postVolumeConfirmation } = require('../controllers/webhooks/handlers/volumeConfirmation/volumeConfirmation');
+const { postSymbolAnalysis } = require('../controllers/webhooks/handlers/symbolAnalysis/symbolAnalysis');
 const {
 	postCreateJob,
 	getJobList,
@@ -45,6 +46,7 @@ function getRoutes(botOrGetter) {
 	router.post('/webhook/expanded-analysis-alert', validateApiKey, idempotencyMiddleware, postExpandedAnalysisAlert(botOrGetter));
 	router.post('/webhook/market-scanner-alert', validateApiKey, idempotencyMiddleware, postMarketScannerAlert(botOrGetter));
 	router.post('/webhook/volume-confirmation', validateApiKey, postVolumeConfirmation());
+	router.post('/webhook/symbol-analysis', validateApiKey, postSymbolAnalysis());
 	router.get('/alerts', ...adminRead, listAlerts);
 	router.get('/alerts/summary', ...adminRead, summarizeAlerts);
 	router.get('/alerts/export', ...adminRead, exportAlerts);

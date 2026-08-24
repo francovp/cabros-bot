@@ -438,6 +438,17 @@ The system provides a `POST /api/webhook/expanded-analysis-alert` endpoint that 
 - If `includeMultiTimeframe` or `"analysisMode": "combined"` queries fail or timeout for a specific symbol, the handler uses a fail-open approach, logging the warning but proceeding with formatting the base technical report to avoid dropping the alert.
 - The endpoint does not normalize crypto pairs; callers must pass full symbols such as `BINANCE:BTCUSDT`.
 
+## TradingView Single-Symbol Analysis
+
+`POST /api/webhook/symbol-analysis` analyzes one complete `EXCHANGE:SYMBOL` through TradingView MCP and returns the Spanish `alertText` plus normalized decision data without notification or order side effects.
+
+- `src/controllers/webhooks/handlers/symbolAnalysis/symbolAnalysis.js` owns request validation, the bounded MCP call, optional multi-timeframe enrichment, risk normalization, and `BUY`/`SELL`/`NO_TRADE` decision output.
+- `src/services/tradingview/expandedAnalysisAlertReport.js` is reused for symbol parsing and Markdown formatting; risk levels are directional for both long and short setups.
+- `tests/integration/symbol-analysis-endpoint.test.js` covers the successful decision-ready response and malformed-symbol rejection.
+- The route is API-key protected and documented in `src/openapi/openapi.json`, `CabrosBot.postman_collection.json`, and `README.md`.
+
+If price, indicators, or directional risk are insufficient, the endpoint returns `decision.action: "NO_TRADE"` and numeric missing values as `null`.
+
 ## TradingView Market Scanner Alerts
 
 The system provides a `POST /api/webhook/market-scanner-alert` endpoint that runs multiple market scans (e.g. top gainers, top losers, volume breakout, smart volume, bollinger squeeze) on TradingView MCP server, generates a formatted Spanish market summary, and delivers it to all enabled notification channels.
@@ -1074,6 +1085,7 @@ This feature introduces backend runtime error monitoring using Sentry's Node SDK
 
 No endpoint, OpenAPI, Postman, environment variable, or Remote Config contract changed.
 
+
 ### Testing Patterns
 
 **Test locations**:
@@ -1429,4 +1441,3 @@ Cached news-monitor retries now distinguish active delivery ownership from durab
 - `tests/integration/news-monitor-cache.test.js` and `tests/unit/news-monitor-persistent-dedup.test.js` — Verify successful indeterminate retries are retained locally, stalled renewals are bounded, completed channels keep durable persistence, and mixed-channel stale Firestore refreshes do not reintroduce failures.
 
 No endpoint, OpenAPI, Postman, environment variable, or Remote Config contract changed.
-
