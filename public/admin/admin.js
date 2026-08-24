@@ -19,10 +19,17 @@ const VIEWS = {
 
 const VIEW_ACTIONS = {
 	alerts: [
-		{ method: 'GET', path: '/api/alerts/{alertId}', label: 'Get alert by ID' },
+		{
+			method: 'GET', path: '/api/alerts/{alertId}', label: 'Get alert by ID',
+			renderSuccess: (data) => (data && data.alert ? createAlertDetailPanel(data.alert) : null),
+		},
 		{
 			method: 'POST', path: '/api/alerts/{alertId}/replay', label: 'Replay alert',
 			confirm: 'Replay this alert?',
+			renderSuccess: (data) => {
+				const chips = deliveryChips(data && data.results);
+				return chips.children.length ? chips : null;
+			},
 		},
 	],
 	presets: [
@@ -211,9 +218,12 @@ const copyToClipboard = async (text, button) => {
 			area.value = text;
 			area.setAttribute('readonly', 'readonly');
 			document.body.append(area);
-			area.select();
-			copied = document.execCommand('copy');
-			if (typeof area.remove === 'function') area.remove();
+			try {
+				area.select();
+				copied = document.execCommand('copy');
+			} finally {
+				if (typeof area.remove === 'function') area.remove();
+			}
 		}
 	} catch (_) {
 		copied = false;
@@ -469,6 +479,220 @@ const statusCounts = (entries) => entries.reduce((counts, [, detail]) => {
 	return counts;
 }, {});
 
+const SENTIMENT_TONES = {
+	bullish: 'status-ready',
+	bearish: 'response-error',
+	neutral: 'status-disabled',
+};
+
+const asFiniteNumber = (value) => (typeof value === 'number' && Number.isFinite(value) ? value : null);
+
+const sentimentBadge = (enrichment) => {
+	const sentiment = enrichment && typeof enrichment === 'object' ? String(enrichment.sentiment || '') : '';
+	if (!sentiment) return null;
+	const score = asFiniteNumber(enrichment && enrichment.sentiment_score);
+	return element('span', {
+		className: `status-badge ${SENTIMENT_TONES[sentiment.toLowerCase()] || 'status-unknown'}`,
+		text: `${displayLabel(sentiment)}${score !== null ? ` (${score})` : ''}`,
+	});
+};
+
+const deliveryChips = (results) => {
+	const wrap = element('div', { className: 'chip-grid delivery-chips' });
+	(Array.isArray(results) ? results : []).forEach((result) => {
+		const ok = !!(result && result.success);
+		wrap.append(element('span', {
+			className: `capability-chip ${ok ? 'delivery-ok' : 'delivery-fail'}`,
+			text: `${ok ? '✓' : '✗'} ${result && result.channel ? displayLabel(result.channel) : 'Unknown channel'}`,
+		}));
+	});
+	return wrap;
+};
+
+const sourceLink = (source) => {
+	const url = typeof source === 'string' ? source : source && typeof source === 'object' && source.url;
+	const title = typeof source === 'string'
+		? url
+		: (source && typeof source === 'object' && (source.title || source.url)) || null;
+	if (!url || typeof url !== 'string' || !/^https?:\/\//i.test(url)) {
+		return element('li', { text: title || url || 'Unknown source' });
+	}
+	const li = element('li');
+	const anchor = element('a', { text: title || url });
+	anchor.href = url;
+	anchor.setAttribute('target', '_blank');
+	anchor.setAttribute('rel', 'noopener noreferrer');
+	li.append(anchor);
+	return li;
+};
+
+const detailListBlock = (labelText, values) => {
+	if (!Array.isArray(values) || !values.length) return null;
+	const block = element('div', { className: 'detail-block' });
+	block.append(element('h4', { text: labelText }));
+	const ul = element('ul', { className: 'detail-list' });
+	values.slice(0, 12).forEach((value) => {
+		ul.append(typeof value === 'object' && value !== null ? sourceLink(value) : element('li', { text: String(value) }));
+	});
+	block.append(ul);
+	return block;
+};
+
+const appendRiskRows = (dl, data) => [
+	['Invalidation level', data.invalidation_level],
+	['Target level', data.target_level],
+	['Setup type', data.setup_type],
+	['Risk / reward', data.risk_reward_ratio],
+].forEach(([label, value]) => {
+	if (value === undefined || value === null || value === '') return;
+	dl.append(element('dt', { text: label }), element('dd', { text: String(value) }));
+});
+
+const createAlertDetailPanel = (alert) => {
+	const panel = element('article', { className: 'operation-card alert-detail' });
+	const headCopy = element('div');
+	headCopy.append(element('p', { className: 'eyebrow', text: 'Alert detail' }));
+	if (alert && alert.id) {
+		const idLine = element('p', { className: 'mono-line', text: String(alert.id) });
+		idLine.append(createCopyButton(String(alert.id), 'Copy ID'));
+		headCopy.append(idLine);
+	}
+	const badges = element('div', { className: 'badge-row' });
+	badges.append(alert && alert.enriched
+		? element('span', { className: 'status-badge status-ready', text: 'Enriched' })
+		: element('span', { className: 'status-badge status-disabled', text: 'Plain' }));
+	const data = asObject(alert && alert.enrichmentData);
+	const sentimentNode = sentimentBadge(data);
+	if (sentimentNode) badges.append(sentimentNode);
+	const head = element('div', { className: 'section-heading' });
+	head.append(headCopy, badges);
+	panel.append(head);
+
+	if (alert && alert.receivedAt) {
+		panel.append(createTimestamp(alert.receivedAt));
+	}
+	if (alert && typeof alert.text === 'string') {
+		panel.append(element('h4', { text: 'Alert text' }));
+		panel.append(element('pre', { className: 'report-text', text: alert.text }));
+	}
+
+	const levelsBlock = (() => {
+		const levels = asObject(data.technical_levels);
+		const supports = Array.isArray(levels.supports) ? levels.supports : [];
+		const resistances = Array.isArray(levels.resistances) ? levels.resistances : [];
+		if (!supports.length && !resistances.length) return null;
+		const block = element('div', { className: 'detail-block' });
+		block.append(element('h4', { text: 'Technical levels' }));
+		const grid = element('div', { className: 'levels-grid' });
+		[['Supports', supports], ['Resistances', resistances]].forEach(([label, values]) => {
+			const column = element('div');
+			column.append(element('p', { className: 'metric-label', text: label }));
+			column.append(element('p', {
+				className: 'levels-value',
+				text: values.slice(0, 8).map((value) => String(value)).join(' · ') || '—',
+			}));
+			grid.append(column);
+		});
+		block.append(grid);
+		return block;
+	})();
+	if (levelsBlock) panel.append(levelsBlock);
+
+	const insightsBlock = detailListBlock('Key insights', Array.isArray(data.insights) ? data.insights : []);
+	if (insightsBlock) panel.append(insightsBlock);
+
+	const sources = Array.isArray(data.sources) ? data.sources : [];
+	if (sources.length) {
+		const block = element('div', { className: 'detail-block' });
+		block.append(element('h4', { text: 'Sources' }));
+		const ul = element('ul', { className: 'detail-list' });
+		sources.slice(0, 10).forEach((source) => ul.append(sourceLink(source)));
+		block.append(ul);
+		panel.append(block);
+	}
+
+	const hasRisk = ['invalidation_level', 'target_level', 'setup_type', 'risk_reward_ratio']
+		.some((key) => data[key] !== undefined && data[key] !== null && data[key] !== '');
+	if (hasRisk) {
+		const block = element('div', { className: 'detail-block' });
+		block.append(element('h4', { text: 'Risk parameters' }));
+		const dl = element('dl', { className: 'risk-list' });
+		appendRiskRows(dl, data);
+		block.append(dl);
+		panel.append(block);
+	}
+
+	const provenance = asObject(data.promptProvenance || data.prompt_provenance);
+	if (provenance.name) {
+		panel.append(element('p', {
+			className: 'request-state',
+			text: `Prompt: ${provenance.name} (${provenance.source || 'unknown source'}`
+				+ `${provenance.version != null ? ` v${provenance.version}` : ''})`,
+		}));
+	}
+	const tokens = asObject(alert && alert.tokenUsage);
+	if (tokens.totalTokens !== undefined) {
+		panel.append(element('p', {
+			className: 'request-state',
+			text: `Token usage: ${tokens.inputTokens ?? '?'} in · ${tokens.outputTokens ?? '?'} out · ${tokens.totalTokens} total`,
+		}));
+	}
+	if (data.truncated === true) {
+		panel.append(element('p', { className: 'request-state', text: 'Enrichment content was truncated.' }));
+	}
+	return panel;
+};
+
+const createAlertCard = (alert) => {
+	const card = element('article', { className: 'operation-card alert-card' });
+	const headCopy = element('div');
+	headCopy.append(element('p', {
+		className: 'eyebrow',
+		text: alert && alert.source ? `Source: ${alert.source}` : 'Stored alert',
+	}));
+	if (alert && alert.id) {
+		const idLine = element('p', { className: 'mono-line', text: String(alert.id) });
+		idLine.append(createCopyButton(String(alert.id), 'Copy ID'));
+		headCopy.append(idLine);
+	}
+	const badges = element('div', { className: 'badge-row' });
+	if (alert && alert.receivedAt) badges.append(createTimestamp(alert.receivedAt));
+	badges.append(alert && alert.enriched
+		? element('span', { className: 'status-badge status-ready', text: 'Enriched' })
+		: element('span', { className: 'status-badge status-disabled', text: 'Plain' }));
+	const sentimentNode = sentimentBadge(asObject(alert && alert.enrichmentData));
+	if (sentimentNode) badges.append(sentimentNode);
+	const head = element('div', { className: 'section-heading' });
+	head.append(headCopy, badges);
+	card.append(head);
+
+	const text = alert && typeof alert.text === 'string' ? alert.text : '';
+	card.append(element('p', {
+		className: 'alert-preview',
+		text: text.length > 200 ? `${text.slice(0, 200)}…` : text,
+	}));
+
+	const chips = deliveryChips(alert && alert.deliveryResults);
+	if (chips.children.length) card.append(chips);
+
+	const detailsToggle = element('button', { text: 'Show detail' });
+	detailsToggle.type = 'button';
+	const detailHost = element('div');
+	let builtDetail = false;
+	detailsToggle.addEventListener('click', () => {
+		const expanded = detailHost.hidden;
+		if (expanded && !builtDetail) {
+			detailHost.replaceChildren(createAlertDetailPanel(alert));
+			builtDetail = true;
+		}
+		detailHost.hidden = !expanded;
+		detailsToggle.textContent = expanded ? 'Hide detail' : 'Show detail';
+	});
+	detailHost.hidden = true;
+	card.append(detailsToggle, detailHost);
+	return card;
+};
+
 const createMetricCard = (label, value, meta) => {
 	const card = element('article', { className: 'metric-card' });
 	card.append(
@@ -705,30 +929,122 @@ const createAlertListForm = () => {
 	});
 	const button = element('button', { text: definition.label });
 	button.type = 'submit';
+	const prev = element('button', { text: 'Previous page' });
+	prev.type = 'button';
+	prev.disabled = true;
 	const next = element('button', { text: 'Next page' });
 	next.type = 'button';
 	next.disabled = true;
 	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
-	form.append(button, next, output);
+	const alertList = element('div', { className: 'form-fields alert-list' });
+	let lastRawJson = '';
+	const rawOutput = element('pre', { className: 'response-block' });
+	const rawCopyButton = createCopyButton(() => lastRawJson, 'Copy JSON');
+	rawCopyButton.hidden = true;
+	const rawToggle = element('details', { className: 'raw-status' });
+	rawToggle.append(
+		element('summary', { text: 'Show raw response' }),
+		rawCopyButton,
+		rawOutput,
+	);
+	form.append(button, prev, next, output, alertList, rawToggle);
 
 	let nextBefore;
+	let backCursors = [];
+	let pageGeneration = 0;
 	const requestPage = async (cursor) => {
-		if (cursor) before.value = cursor;
+		const generation = ++pageGeneration;
+		prev.disabled = true;
+		next.disabled = true;
+		before.value = cursor || '';
 		const query = Object.fromEntries(Object.entries({
 			limit: limit.value,
 			before: before.value,
 			source: source.value,
 			enriched: enriched.value,
 		}).filter(([, value]) => value !== ''));
-		const data = await sendRequest({ definition, path: definition.path, query, button, output });
-		nextBefore = data && data.pagination && data.pagination.nextBefore;
+		const data = await sendRequest({
+			definition,
+			path: definition.path,
+			query,
+			button,
+			output,
+			isCurrent: () => generation === pageGeneration,
+			formatResponse: ({ summary, status, elapsed, data: payload }) => `${summary}\nHTTP ${status} · ${elapsed} ms · `
+				+ `${payload && Array.isArray(payload.alerts) ? `${payload.alerts.length} alerts on this page` : 'no alert list returned'}`,
+		});
+		if (generation !== pageGeneration) return false;
+		if (data && Array.isArray(data.alerts)) {
+			lastRawJson = JSON.stringify(data, null, 2);
+			rawOutput.textContent = lastRawJson;
+			rawCopyButton.hidden = false;
+			alertList.replaceChildren();
+			if (!data.alerts.length) {
+				alertList.append(createEmptyState('No stored alerts match these filters.'));
+			} else {
+				data.alerts.forEach((alert) => alertList.append(createAlertCard(alert)));
+			}
+		} else {
+			lastRawJson = '';
+			rawOutput.textContent = '';
+			rawCopyButton.hidden = true;
+			alertList.replaceChildren();
+		}
+		const pagination = (data && data.pagination) || {};
+		nextBefore = pagination.hasMore === true && pagination.nextBefore
+			? pagination.nextBefore
+			: undefined;
 		next.disabled = !nextBefore;
+		prev.disabled = !backCursors.length;
+		return Boolean(data && Array.isArray(data.alerts));
 	};
+	const syncPagingButtons = () => {
+		next.disabled = !nextBefore;
+		prev.disabled = !backCursors.length;
+	};
+	const resetPagination = ({ clearCursor }) => {
+		pageGeneration += 1;
+		nextBefore = undefined;
+		backCursors = [];
+		next.disabled = true;
+		prev.disabled = true;
+		button.disabled = false;
+		alertList.replaceChildren();
+		lastRawJson = '';
+		rawOutput.textContent = '';
+		rawCopyButton.hidden = true;
+		output.textContent = 'Filters changed — load alerts to refresh.';
+		if (clearCursor) before.value = '';
+	};
+	[limit, source, enriched].forEach((field) => {
+		field.addEventListener('input', () => resetPagination({ clearCursor: true }));
+		field.addEventListener('change', () => resetPagination({ clearCursor: true }));
+	});
+	before.addEventListener('input', () => resetPagination({ clearCursor: false }));
+	before.addEventListener('change', () => resetPagination({ clearCursor: false }));
 	form.addEventListener('submit', (event) => {
 		event.preventDefault();
+		backCursors = [];
 		return requestPage(before.value);
 	});
-	next.addEventListener('click', () => requestPage(nextBefore));
+	next.addEventListener('click', () => {
+		if (!nextBefore) return;
+		const entry = before.value || '';
+		Promise.resolve(requestPage(nextBefore)).then((succeeded) => {
+			if (!succeeded) return;
+			backCursors.push(entry);
+			syncPagingButtons();
+		});
+	});
+	prev.addEventListener('click', () => {
+		if (!backCursors.length) return;
+		const target = backCursors[backCursors.length - 1];
+		Promise.resolve(requestPage(target)).then((succeeded) => {
+			if (!succeeded) return;
+			backCursors.pop();
+			syncPagingButtons();
+		});
+	});
 	return form;
 };
 
@@ -787,19 +1103,84 @@ const getAlertReportQuery = (fields, { format, includeText } = {}) => Object.fro
 	}).filter(([, value]) => value !== undefined && value !== ''),
 );
 
-const formatSummaryValue = (value) => {
-	if (Array.isArray(value)) return `[${value.map(formatSummaryValue).join(', ')}]`;
-	if (value && typeof value === 'object') {
-		return `{ ${Object.entries(value).map(([key, nested]) => `${key}: ${formatSummaryValue(nested)}`).join(', ')} }`;
-	}
-	return String(value);
-};
+const renderAlertSummaryBlocks = (data) => {
+	const wrap = element('div', { className: 'dashboard summary-blocks' });
+	const summary = asObject(data && data.summary);
+	const windowInfo = asObject(summary.window);
+	const delivery = asObject(summary.delivery);
+	const enrichment = asObject(summary.enrichment);
+	const tokenTotals = asObject(enrichment.tokenUsage);
+	const coverage = asObject(enrichment.riskMetadataCoverage);
 
-const formatAlertSummary = ({ summary, status, elapsed, data }) => {
-	const values = data && data.summary && typeof data.summary === 'object' ? data.summary : {};
-	const lines = Object.entries(values).map(([key, value]) => `${key}: ${formatSummaryValue(value)}`);
-	return `${summary}\nHTTP ${status} · ${elapsed} ms\n\n${lines.length
-		? lines.join('\n') : 'No summary data returned.'}`;
+	wrap.replaceChildren(element('div', { className: 'metric-grid' }));
+	wrap.children[0].append(
+		createMetricCard(
+			'Total alerts',
+			formatJobValue(summary.totalAlerts),
+			windowInfo.from ? `${String(windowInfo.from).slice(0, 10)} → ${String(windowInfo.to).slice(0, 10)}` : 'Window unavailable',
+		),
+		createMetricCard(
+			'Delivery',
+			`${formatJobValue(delivery.totalSuccess)} ok`,
+			`${formatJobValue(delivery.totalFailure)} failed`,
+		),
+		createMetricCard(
+			'Tokens',
+			formatJobValue(tokenTotals.totalTokens),
+			tokenTotals.totalCost !== undefined ? `Estimated cost ${tokenTotals.totalCost}` : 'LLM usage in window',
+		),
+		createMetricCard(
+			'Enriched alerts',
+			formatJobValue(enrichment.enrichedAlerts),
+			`${formatJobValue(enrichment.plainAlerts)} plain · denominator ${formatJobValue(coverage.denominator)}`,
+		),
+	);
+
+	const channels = Object.entries(asObject(delivery.byChannel));
+	if (channels.length) {
+		const section = element('section', { className: 'dashboard-section' });
+		section.append(element('h3', { text: 'Delivery by channel' }));
+		const table = element('table', { className: 'data-table' });
+		const head = element('tr');
+		['Channel', 'Total', 'Success', 'Failure'].forEach((label) => head.append(element('th', { text: label })));
+		table.append(head);
+		channels.forEach(([channel, stats]) => {
+			const detail = asObject(stats);
+			const row = element('tr');
+			row.append(
+				element('td', { text: displayLabel(channel) }),
+				element('td', { text: formatJobValue(detail.total) }),
+				element('td', { text: formatJobValue(detail.success) }),
+				element('td', { text: formatJobValue(detail.failure) }),
+			);
+			table.append(row);
+		});
+		section.append(table);
+		wrap.append(section);
+	}
+
+	const fields = Object.entries(asObject(coverage.fields));
+	if (fields.length) {
+		const section = element('section', { className: 'dashboard-section' });
+		section.append(element('h3', { text: 'Risk metadata coverage' }));
+		const table = element('table', { className: 'data-table' });
+		const head = element('tr');
+		['Field', 'Populated', 'Coverage'].forEach((label) => head.append(element('th', { text: label })));
+		table.append(head);
+		fields.forEach(([field, info]) => {
+			const detail = asObject(info);
+			const row = element('tr');
+			row.append(
+				element('td', { text: displayLabel(field) }),
+				element('td', { text: `${formatJobValue(detail.populated)} / ${formatJobValue(coverage.denominator)}` }),
+				element('td', { text: `${formatJobValue(detail.percentage)}%` }),
+			);
+			table.append(row);
+		});
+		section.append(table);
+		wrap.append(section);
+	}
+	return wrap;
 };
 
 const parseAlertExportResponse = (format) => async (response) => {
@@ -831,9 +1212,36 @@ const createAlertSummaryForm = () => {
 	const button = element('button', { text: definition.label });
 	button.type = 'submit';
 	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
-	form.append(button, output);
+	const blocks = element('div', { className: 'summary-host' });
+	let lastRawJson = '';
+	const rawOutput = element('pre', { className: 'response-block' });
+	const rawCopyButton = createCopyButton(() => lastRawJson, 'Copy JSON');
+	rawCopyButton.hidden = true;
+	const rawToggle = element('details', { className: 'raw-status' });
+	rawToggle.append(
+		element('summary', { text: 'Show raw analytics response' }),
+		rawCopyButton,
+		rawOutput,
+	);
+	form.append(button, output, blocks, rawToggle);
+	let summaryGeneration = 0;
+	const invalidateSummary = () => {
+		summaryGeneration += 1;
+		button.disabled = false;
+		blocks.replaceChildren();
+		lastRawJson = '';
+		rawOutput.textContent = '';
+		rawCopyButton.hidden = true;
+		output.textContent = 'Filters changed — load alert analytics to refresh.';
+	};
+	Object.values(fields).forEach((field) => {
+		if (!field) return;
+		field.addEventListener('input', invalidateSummary);
+		field.addEventListener('change', invalidateSummary);
+	});
 	form.addEventListener('submit', (event) => {
 		event.preventDefault();
+		const generation = ++summaryGeneration;
 		try {
 			sendRequest({
 				definition,
@@ -841,7 +1249,24 @@ const createAlertSummaryForm = () => {
 				query: getAlertReportQuery(fields),
 				button,
 				output,
-				formatResponse: formatAlertSummary,
+				isCurrent: () => generation === summaryGeneration,
+				formatResponse: ({ summary, status, elapsed, data }) => {
+					if (!data || !data.summary) return `${summary}\nHTTP ${status} · ${elapsed} ms\n\nNo summary data returned.`;
+					lastRawJson = JSON.stringify(data, null, 2);
+					return `${summary}\nHTTP ${status} · ${elapsed} ms`;
+				},
+			}).then((data) => {
+				if (generation !== summaryGeneration) return;
+				if (!data || !data.summary) {
+					blocks.replaceChildren();
+					lastRawJson = '';
+					rawOutput.textContent = '';
+					rawCopyButton.hidden = true;
+					return;
+				}
+				blocks.replaceChildren(renderAlertSummaryBlocks(data));
+				rawOutput.textContent = lastRawJson;
+				rawCopyButton.hidden = false;
 			});
 		} catch (error) {
 			showError(output, error.message);
@@ -1134,22 +1559,28 @@ const createOperationForm = (contract, definition) => {
 	button.type = 'submit';
 	if (definition.confirm) button.className = 'destructive-action';
 	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
-	form.append(button, output);
+	const resultHost = typeof definition.renderSuccess === 'function' ? element('div') : null;
+	form.append(button, ...(resultHost ? [resultHost] : []), output);
 	form.addEventListener('submit', (event) => {
 		event.preventDefault();
+		if (resultHost) resultHost.replaceChildren();
 		try {
 			const query = form.elements.query
 				? window.CabrosAdminRequest.validateQuery(parseJson(form.elements.query.value, 'Query'))
 				: undefined;
 			const body = getRequestBody(definition, form);
-			sendRequest({
+			Promise.resolve(sendRequest({
 				definition,
 				path: fillPath(definition.path, pathNames, form),
 				query,
 				body,
 				button,
 				output,
-			});
+			})).then((data) => {
+				if (!resultHost) return;
+				const rendered = data ? definition.renderSuccess(data) : null;
+				resultHost.replaceChildren(...(rendered ? [rendered] : []));
+			}).catch(() => {});
 		} catch (error) {
 			showError(output, error.message);
 		}

@@ -66,6 +66,16 @@ class FakeElement {
 		delete this.attributes[name];
 	}
 
+	remove() {
+		if (!this.parentNode) return;
+		const siblings = this.parentNode.children;
+		const index = siblings.indexOf(this);
+		if (index >= 0) siblings.splice(index, 1);
+		this.parentNode = undefined;
+	}
+
+	select() {}
+
 	querySelectorAll(selector) {
 		if (selector === '[data-view]') return findAll(this, (node) => node.dataset.view);
 		return [];
@@ -152,6 +162,7 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 		getElementById: (id) => elementsById[id],
 		querySelectorAll: (selector) => body.querySelectorAll(selector),
 		addEventListener: (type, listener) => { documentListeners[type] = listener; },
+		execCommand: () => false,
 	};
 	const storage = new Map(storedKey ? [['cabros-admin-api-key', storedKey]] : []);
 	const helperCalls = [];
@@ -708,10 +719,27 @@ describe('admin browser client', () => {
 			fetchImpl: async (url, options) => {
 				if (url === '/openapi.json') return response(contract);
 				requests.push([url, options]);
-				return response({
-					success: true,
-					summary: { totalAlerts: 3, totalSuccess: 2, byChannel: { telegram: 3 } },
-				});
+			return response({
+				success: true,
+				summary: {
+					window: { from: '2026-08-01T00:00:00.000Z', to: '2026-08-02T00:00:00.000Z' },
+					totalAlerts: 3,
+					enrichment: {
+						enrichedAlerts: 2,
+						plainAlerts: 1,
+						riskMetadataCoverage: {
+							denominator: 2,
+							fields: { invalidation_level: { populated: 1, percentage: 50 } },
+						},
+						tokenUsage: { inputTokens: 10, outputTokens: 20, totalTokens: 30, totalCost: 0.002 },
+					},
+					delivery: {
+						totalSuccess: 2,
+						totalFailure: 1,
+						byChannel: { telegram: { total: 3, success: 2, failure: 1 } },
+					},
+				},
+			});
 			},
 		});
 		await flush();
@@ -732,9 +760,16 @@ describe('admin browser client', () => {
 		expect(query.get('limit')).toBe('25');
 		expect(query.get('source')).toBe('webhook');
 		expect(query.get('enriched')).toBe('true');
-		expect(summaryForm.textContent).toContain('totalAlerts: 3');
-		expect(summaryForm.textContent).toContain('totalSuccess: 2');
-		expect(summaryForm.textContent).toContain('telegram: 3');
+
+		const blocks = find(summaryForm, (node) => node.className === 'dashboard summary-blocks');
+		expect(blocks).toBeDefined();
+		expect(blocks.textContent).toContain('Total alerts');
+		expect(blocks.textContent).toContain('Estimated cost 0.002');
+		expect(find(blocks, (node) => node.tagName === 'TR' && node.textContent.includes('Telegram'))).toBeDefined();
+		expect(find(blocks, (node) => node.tagName === 'TR'
+			&& node.textContent.toLowerCase().includes('invalidation'))).toBeDefined();
+		expect(blocks.textContent).toContain('50%');
+		expect(findButton(summaryForm, 'Copy JSON').hidden).toBe(false);
 	});
 
 	it.each([
@@ -1282,6 +1317,254 @@ describe('admin browser client', () => {
 		expect(copyButton.textContent).toBe('Copy JSON');
 	});
 
+	it('renders stored alerts as cards with sentiment, delivery chips, and lazy detail', async () => {
+		const receivedAt = new Date(Date.now() - 2 * 60 * 1000).toISOString();
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/alerts')) {
+					return response({
+						success: true,
+						alerts: [{
+							id: 'alert-9',
+							receivedAt,
+							text: 'BTCUSDT breakout confirmed',
+							enriched: true,
+							source: 'webhook',
+							enrichmentData: {
+								sentiment: 'bullish',
+								sentiment_score: 0.82,
+								insights: ['Volume confirms move'],
+								technical_levels: { supports: [81000], resistances: [85000] },
+								invalidation_level: 80000,
+								target_level: 90000,
+								setup_type: 'breakout',
+								risk_reward_ratio: '2.5:1',
+								prompt_provenance: { name: 'alert-enrichment', source: 'langfuse', version: 4 },
+								sources: [{ url: 'https://example.com/a', title: 'Example News' }],
+							},
+							tokenUsage: { inputTokens: 5, outputTokens: 7, totalTokens: 12 },
+							deliveryResults: [
+								{ channel: 'telegram', success: true },
+								{ channel: 'whatsapp', success: false },
+							],
+						}],
+						pagination: { hasMore: false },
+					});
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alerts');
+		await listForm.dispatch('submit');
+		await flush();
+
+		const card = find(listForm, (node) => node.className.includes('alert-card'));
+		expect(card).toBeDefined();
+		expect(card.textContent).toContain('BTCUSDT breakout confirmed');
+		expect(card.textContent).toContain('Bullish (0.82)');
+		expect(find(card, (node) => node.className.includes('delivery-ok')).textContent).toContain('Telegram');
+		expect(find(card, (node) => node.className.includes('delivery-fail')).textContent).toContain('WhatsApp');
+		expect(find(card, (node) => node.tagName === 'A')).toBeUndefined();
+
+		await findButton(card, 'Show detail').dispatch('click');
+		const link = find(card, (node) => node.tagName === 'A');
+		expect(link.href).toBe('https://example.com/a');
+		expect(link.attributes.rel).toBe('noopener noreferrer');
+		expect(card.textContent).toContain('Invalidation level');
+		expect(card.textContent).toContain('2.5:1');
+		expect(card.textContent).toContain('alert-enrichment');
+		expect(card.textContent).toContain('Token usage');
+
+		await findButton(card, 'Hide detail').dispatch('click');
+		expect(findButton(card, 'Hide detail')).toBeUndefined();
+		expect(findButton(card, 'Show detail')).toBeDefined();
+	});
+
+	it('keeps the raw stored-alerts payload behind a collapsed toggle with copy', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/alerts')) {
+					return response({ success: true, alerts: [{ id: 'a1', text: 'x', enriched: false }], pagination: {} });
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alerts');
+		await listForm.dispatch('submit');
+		await flush();
+
+		const rawToggle = find(listForm, (node) => node.tagName === 'DETAILS');
+		expect(rawToggle).toBeDefined();
+		const summary = find(rawToggle, (node) => node.tagName === 'SUMMARY');
+		expect(summary.textContent).toContain('Show raw response');
+		expect(findButton(listForm, 'Copy JSON').hidden).toBe(false);
+	});
+
+	it('paginates stored alerts backward through visited cursors', async () => {
+		const pages = [
+			{ alerts: [{ id: 'a1', text: 'first page alert', enriched: false }], pagination: { hasMore: true, nextBefore: 'cursor-2' } },
+			{ alerts: [{ id: 'a2', text: 'second page alert', enriched: false }], pagination: { hasMore: false } },
+		];
+		const requests = [];
+		const browser = createBrowser({
+			fetchImpl: async (url, options) => {
+				if (url === '/openapi.json') return response(contract);
+				requests.push([url, options]);
+				if (url.startsWith('/api/alerts')) {
+					const params = new URLSearchParams(url.split('?')[1] || '');
+					return response(params.get('before') === 'cursor-2' ? pages[1] : pages[0]);
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alerts');
+		await listForm.dispatch('submit');
+		await flush();
+		expect(listForm.textContent).toContain('first page alert');
+		expect(findButton(listForm, 'Previous page').disabled).toBe(true);
+
+		await findButton(listForm, 'Next page').dispatch('click');
+		await flush();
+		expect(requests.at(-1)[0]).toBe('/api/alerts?limit=50&before=cursor-2');
+		expect(listForm.textContent).toContain('second page alert');
+		expect(findButton(listForm, 'Previous page').disabled).toBe(false);
+		expect(findButton(listForm, 'Next page').disabled).toBe(true);
+
+		await findButton(listForm, 'Previous page').dispatch('click');
+		await flush();
+		expect(requests.at(-1)[0]).toBe('/api/alerts?limit=50');
+		expect(listForm.textContent).toContain('first page alert');
+	});
+
+	it('reads the persisted camelCase promptProvenance field in alert details', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/alerts')) {
+					return response({
+						success: true,
+						alerts: [{
+							id: 'alert-p',
+							text: 'provenance alert',
+							enriched: true,
+							enrichmentData: {
+								sentiment: 'bullish',
+								promptProvenance: { name: 'alert-enrichment', source: 'langfuse', version: 7 },
+							},
+						}],
+						pagination: {},
+					});
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alerts');
+		await listForm.dispatch('submit');
+		await flush();
+
+		const card = find(listForm, (node) => node.className.includes('alert-card'));
+		await findButton(card, 'Show detail').dispatch('click');
+		expect(card.textContent).toContain('Prompt: alert-enrichment (langfuse v7)');
+	});
+
+	it('serializes stored-alert pagination so a slow page cannot interleave', async () => {
+		const pages = [
+			{ alerts: [{ id: 'a1', text: 'first page alert', enriched: false }], pagination: { hasMore: true, nextBefore: 'cursor-2' } },
+			{ alerts: [{ id: 'a2', text: 'second page alert', enriched: false }], pagination: { hasMore: true, nextBefore: 'cursor-3' } },
+			{ alerts: [{ id: 'a3', text: 'third page alert', enriched: false }], pagination: { hasMore: false } },
+		];
+		let alertCalls = 0;
+		let releaseSlowPage;
+		const slowPage = new Promise((resolve) => { releaseSlowPage = resolve; });
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/alerts')) {
+					alertCalls += 1;
+					if (alertCalls === 2) return slowPage.then(() => response(pages[2]));
+					return response(pages[alertCalls - 1]);
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alerts');
+		await listForm.dispatch('submit');
+		await flush();
+		expect(listForm.textContent).toContain('first page alert');
+
+		const nextButton = findButton(listForm, 'Next page');
+		const prevButton = findButton(listForm, 'Previous page');
+		const click = nextButton.dispatch('click');
+		await flush();
+		expect(alertCalls).toBe(2);
+		expect(nextButton.disabled).toBe(true);
+		expect(prevButton.disabled).toBe(true);
+
+		releaseSlowPage();
+		await click;
+		await flush();
+		expect(listForm.textContent).toContain('third page alert');
+		expect(findButton(listForm, 'Next page').disabled).toBe(true);
+	});
+
+	it('renders an empty state when no stored alerts match the filters', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/alerts')) return response({ success: true, alerts: [], pagination: {} });
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alerts');
+		await listForm.dispatch('submit');
+		await flush();
+
+		const empty = find(listForm, (node) => node.className === 'empty-state');
+		expect(empty).toBeDefined();
+		expect(empty.textContent).toContain('No stored alerts match these filters.');
+	});
+
+	it('renders an alert detail panel after a successful lookup by ID', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/alerts/alert-7') {
+					return response({ success: true, alert: { id: 'alert-7', text: 'detail body', enriched: false } });
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const detailForm = findForm(browser.elementsById.view, 'GET /api/alerts/{alertId}');
+		detailForm.elements['path-alertId'].value = 'alert-7';
+		await detailForm.dispatch('submit');
+		await flush();
+
+		const panel = find(detailForm, (node) => node.className.includes('alert-detail'));
+		expect(panel).toBeDefined();
+		expect(panel.textContent).toContain('Plain');
+		expect(panel.textContent).toContain('detail body');
+	});
+
 	it('clears the raw-status copy payload when a later refresh fails', async () => {
 		const status = {
 			service: { name: 'cabros-bot', version: '0.1.0', environment: 'production', commit: 'abc123' },
@@ -1316,6 +1599,448 @@ describe('admin browser client', () => {
 
 		expect(statusCalls).toBe(2);
 		expect(copyButton.hidden).toBe(true);
+	});
+
+	it('removes the fallback textarea even when execCommand throws', async () => {
+		const status = {
+			service: { name: 'cabros-bot' },
+			featureFlags: {},
+			deliveryChannels: {},
+			dependencies: {},
+		};
+		const browser = createBrowser({
+			fetchImpl: async (url) => response(url === '/openapi.json' ? contract : (url === '/api/status' ? status : {})),
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'overview');
+		await flush();
+
+		browser.context.document.execCommand = () => { throw new Error('blocked'); };
+		const copyButton = findButton(browser.elementsById.view, 'Copy JSON');
+		await copyButton.dispatch('click');
+		await flush();
+
+		expect(copyButton.textContent).toBe('Copy unavailable');
+		expect(find(browser.body, (node) => node.tagName === 'TEXTAREA')).toBeUndefined();
+	});
+
+	it('reports a successful execCommand fallback and cleans up its textarea', async () => {
+		const status = {
+			service: { name: 'cabros-bot' },
+			featureFlags: {},
+			deliveryChannels: {},
+			dependencies: {},
+		};
+		const browser = createBrowser({
+			fetchImpl: async (url) => response(url === '/openapi.json' ? contract : (url === '/api/status' ? status : {})),
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'overview');
+		await flush();
+
+		browser.context.document.execCommand = () => true;
+		const copyButton = findButton(browser.elementsById.view, 'Copy JSON');
+		await copyButton.dispatch('click');
+		await flush();
+
+		expect(copyButton.textContent).toBe('Copied!');
+		expect(find(browser.body, (node) => node.tagName === 'TEXTAREA')).toBeUndefined();
+	});
+
+	it('clears a previous structured result when the next submission fails validation', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/alerts/alert-7') {
+					return response({ success: true, alert: { id: 'alert-7', text: 'detail body', enriched: false } });
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const detailForm = findForm(browser.elementsById.view, 'GET /api/alerts/{alertId}');
+		detailForm.elements['path-alertId'].value = 'alert-7';
+		await detailForm.dispatch('submit');
+		await flush();
+		expect(find(detailForm, (node) => node.className.includes('alert-detail'))).toBeDefined();
+
+		detailForm.elements.query.value = '{ invalid json';
+		await detailForm.dispatch('submit');
+		await flush();
+
+		expect(find(detailForm, (node) => node.className.includes('alert-detail'))).toBeUndefined();
+		expect(detailForm.textContent).toContain('Query must be valid JSON');
+	});
+
+	it('resets pagination state when alert filters change', async () => {
+		let alertCalls = 0;
+		const pages = [
+			{ alerts: [{ id: 'a1', text: 'first page alert', enriched: false }], pagination: { hasMore: true, nextBefore: 'cursor-2' } },
+			{ alerts: [{ id: 'a2', text: 'second page alert', enriched: false }], pagination: { hasMore: false } },
+		];
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/alerts')) {
+					alertCalls += 1;
+					return response(pages[alertCalls - 1] || pages[0]);
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alerts');
+		await listForm.dispatch('submit');
+		await flush();
+		const nextButton = findButton(listForm, 'Next page');
+		expect(nextButton.disabled).toBe(false);
+
+		listForm.elements.source.value = 'webhook';
+		await listForm.elements.source.dispatch('input');
+
+		expect(nextButton.disabled).toBe(true);
+		expect(findButton(listForm, 'Previous page').disabled).toBe(true);
+		expect(listForm.textContent).not.toContain('first page alert');
+		expect(findButton(listForm, 'Copy JSON').hidden).toBe(true);
+		expect(find(listForm, (node) => node.tagName === 'PRE' && node.textContent.includes('first page alert'))).toBeUndefined();
+
+		await nextButton.dispatch('click');
+		await flush();
+		expect(alertCalls).toBe(1);
+	});
+
+	it('clears stale stored-alert cards when a later refresh fails', async () => {
+		let alertCalls = 0;
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/alerts')) {
+					alertCalls += 1;
+					if (alertCalls === 1) {
+						return response({ success: true, alerts: [{ id: 'a1', text: 'first page alert', enriched: false }], pagination: {} });
+					}
+					return response({ error: 'boom' }, 500);
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alerts');
+		await listForm.dispatch('submit');
+		await flush();
+		expect(listForm.textContent).toContain('first page alert');
+		expect(findButton(listForm, 'Copy JSON').hidden).toBe(false);
+
+		await listForm.dispatch('submit');
+		await flush();
+
+		expect(listForm.textContent).not.toContain('first page alert');
+		expect(findButton(listForm, 'Copy JSON').hidden).toBe(true);
+	});
+
+	it('resets pagination when the before cursor is edited manually', async () => {
+		let alertCalls = 0;
+		const pages = [
+			{ alerts: [{ id: 'a1', text: 'first page alert', enriched: false }], pagination: { hasMore: true, nextBefore: 'cursor-2' } },
+			{ alerts: [{ id: 'a2', text: 'second page alert', enriched: false }], pagination: { hasMore: false } },
+		];
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/alerts')) {
+					alertCalls += 1;
+					return response(pages[alertCalls - 1] || pages[0]);
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alerts');
+		await listForm.dispatch('submit');
+		await flush();
+		const nextButton = findButton(listForm, 'Next page');
+		expect(nextButton.disabled).toBe(false);
+
+		listForm.elements.before.value = 'hand-edited-cursor';
+		await listForm.elements.before.dispatch('input');
+
+		expect(nextButton.disabled).toBe(true);
+		await nextButton.dispatch('click');
+		await flush();
+		expect(alertCalls).toBe(1);
+	});
+
+	it('clears the raw analytics payload when a later summary refresh fails', async () => {
+		let summaryCalls = 0;
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/alerts/summary')) {
+					summaryCalls += 1;
+					if (summaryCalls === 1) {
+						return response({ success: true, summary: { totalAlerts: 3, window: {} } });
+					}
+					return response({ error: 'boom' }, 500);
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const summaryForm = findForm(browser.elementsById.view, 'GET /api/alerts/summary');
+		await summaryForm.dispatch('submit');
+		await flush();
+		expect(findButton(summaryForm, 'Copy JSON').hidden).toBe(false);
+
+		await summaryForm.dispatch('submit');
+		await flush();
+
+		expect(findButton(summaryForm, 'Copy JSON').hidden).toBe(true);
+		const rawPre = find(summaryForm, (node) => node.tagName === 'PRE' && node.textContent.includes('totalAlerts'));
+		expect(rawPre).toBeUndefined();
+	});
+
+	it('disables Next when hasMore is false even if a cursor is present', async () => {
+		const pages = [
+			{ alerts: [{ id: 'a1', text: 'first page alert', enriched: false }], pagination: { hasMore: true, nextBefore: 'cursor-2' } },
+			{ alerts: [{ id: 'a2', text: 'last page alert', enriched: false }], pagination: { hasMore: false, nextBefore: 'cursor-last' } },
+		];
+		let alertCalls = 0;
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/alerts')) {
+					alertCalls += 1;
+					return response(pages[alertCalls - 1] || pages[1]);
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alerts');
+		await listForm.dispatch('submit');
+		await flush();
+		expect(findButton(listForm, 'Next page').disabled).toBe(false);
+
+		await findButton(listForm, 'Next page').dispatch('click');
+		await flush();
+		expect(listForm.textContent).toContain('last page alert');
+		expect(findButton(listForm, 'Next page').disabled).toBe(true);
+	});
+
+	it('keeps the back-stack entry when a Next page request fails', async () => {
+		let alertCalls = 0;
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/alerts')) {
+					alertCalls += 1;
+					if (alertCalls === 1) {
+						return response({ alerts: [{ id: 'a1', text: 'first page alert', enriched: false }], pagination: { hasMore: true, nextBefore: 'cursor-2' } });
+					}
+					return response({ error: 'boom' }, 500);
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alerts');
+		await listForm.dispatch('submit');
+		await flush();
+		expect(findButton(listForm, 'Previous page').disabled).toBe(true);
+
+		await findButton(listForm, 'Next page').dispatch('click');
+		await flush();
+
+		expect(findButton(listForm, 'Previous page').disabled).toBe(true);
+	});
+
+	it('keeps history when navigating back to a previous page fails', async () => {
+		let alertCalls = 0;
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/alerts')) {
+					alertCalls += 1;
+					if (alertCalls === 3) return response({ error: 'boom' }, 500);
+					return response(alertCalls === 1
+						? { alerts: [{ id: 'a1', text: 'first page alert', enriched: false }], pagination: { hasMore: true, nextBefore: 'cursor-2' } }
+						: { alerts: [{ id: 'a2', text: 'second page alert', enriched: false }], pagination: { hasMore: false } });
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alerts');
+		await listForm.dispatch('submit');
+		await flush();
+		await findButton(listForm, 'Next page').dispatch('click');
+		await flush();
+		expect(listForm.textContent).toContain('second page alert');
+		expect(findButton(listForm, 'Previous page').disabled).toBe(false);
+
+		await findButton(listForm, 'Previous page').dispatch('click');
+		await flush();
+
+		expect(findButton(listForm, 'Previous page').disabled).toBe(false);
+	});
+
+	it('discards an in-flight page response after filters change', async () => {
+		let alertCalls = 0;
+		let releaseNext;
+		const slowNext = new Promise((resolve) => { releaseNext = resolve; });
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/alerts')) {
+					alertCalls += 1;
+					if (alertCalls === 2) return slowNext.then(() => response({ alerts: [{ id: 'a2', text: 'second page alert', enriched: false }], pagination: { hasMore: false } }));
+					return response({ alerts: [{ id: 'a1', text: 'first page alert', enriched: false }], pagination: { hasMore: true, nextBefore: 'cursor-2' } });
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alerts');
+		await listForm.dispatch('submit');
+		await flush();
+
+		const click = findButton(listForm, 'Next page').dispatch('click');
+		await flush();
+		expect(alertCalls).toBe(2);
+
+		listForm.elements.source.value = 'webhook';
+		await listForm.elements.source.dispatch('input');
+
+		releaseNext();
+		await click;
+		await flush();
+
+		expect(listForm.textContent).not.toContain('second page alert');
+		expect(findButton(listForm, 'Previous page').disabled).toBe(true);
+		expect(findButton(listForm, 'Next page').disabled).toBe(true);
+	});
+
+	it('clears the generated before cursor when non-cursor filters change', async () => {
+		let lastUrl = '';
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/alerts')) {
+					lastUrl = url;
+					return response({ alerts: [{ id: 'a1', text: 'page alert', enriched: false }], pagination: { hasMore: true, nextBefore: 'cursor-2' } });
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alerts');
+		await listForm.dispatch('submit');
+		await flush();
+		await findButton(listForm, 'Next page').dispatch('click');
+		await flush();
+		expect(lastUrl).toContain('before=cursor-2');
+
+		listForm.elements.source.value = 'webhook';
+		await listForm.elements.source.dispatch('input');
+		expect(listForm.elements.before.value).toBe('');
+
+		await listForm.dispatch('submit');
+		await flush();
+		expect(lastUrl).not.toContain('before=');
+	});
+
+	it('restores the list form immediately when filters change mid-request', async () => {
+		let alertCalls = 0;
+		let releaseSlow;
+		const slowRequest = new Promise((resolve) => { releaseSlow = resolve; });
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/alerts')) {
+					alertCalls += 1;
+					if (alertCalls === 1) return slowRequest.then(() => response({ alerts: [{ id: 'a1', text: 'slow page alert', enriched: false }], pagination: { hasMore: false } }));
+					return response({ alerts: [], pagination: {} });
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alerts');
+		const loadButton = findButton(listForm, 'Load alerts');
+		const click = listForm.dispatch('submit');
+		await flush();
+		expect(alertCalls).toBe(1);
+
+		listForm.elements.source.value = 'webhook';
+		await listForm.elements.source.dispatch('input');
+
+		expect(loadButton.disabled).toBe(false);
+
+		releaseSlow();
+		await flush();
+		expect(findButton(listForm, 'Load alerts').disabled).toBe(false);
+		expect(listForm.textContent).not.toContain('slow page alert');
+		expect(listForm.textContent).toContain('Filters changed');
+	});
+
+	it('invalidates pending analytics when report filters change', async () => {
+		let summaryCalls = 0;
+		let releaseSlow;
+		const slowSummary = new Promise((resolve) => { releaseSlow = resolve; });
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/alerts/summary')) {
+					summaryCalls += 1;
+					if (summaryCalls === 1) return slowSummary.then(() => response({ success: true, summary: { totalAlerts: 9, window: {} } }));
+					return response({ success: true, summary: { totalAlerts: 1, window: {} } });
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const summaryForm = findForm(browser.elementsById.view, 'GET /api/alerts/summary');
+		const loadButton = findButton(summaryForm, 'Load alert analytics');
+		await summaryForm.dispatch('submit');
+		await flush();
+		expect(summaryCalls).toBe(1);
+
+		summaryForm.elements.source.value = 'webhook';
+		await summaryForm.elements.source.dispatch('input');
+
+		expect(loadButton.disabled).toBe(false);
+		expect(findButton(summaryForm, 'Copy JSON').hidden).toBe(true);
+
+		releaseSlow();
+		await flush();
+		expect(find(summaryForm, (node) => node.tagName === 'PRE' && node.textContent.includes('totalAlerts'))).toBeUndefined();
+		expect(summaryForm.textContent).toContain('Filters changed');
 	});
 
 	it('keeps navigation icons as inline SVG instead of platform glyphs', () => {
