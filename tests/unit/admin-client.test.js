@@ -1743,6 +1743,71 @@ describe('admin browser client', () => {
 		expect(findButton(listForm, 'Copy JSON').hidden).toBe(true);
 	});
 
+	it('resets pagination when the before cursor is edited manually', async () => {
+		let alertCalls = 0;
+		const pages = [
+			{ alerts: [{ id: 'a1', text: 'first page alert', enriched: false }], pagination: { hasMore: true, nextBefore: 'cursor-2' } },
+			{ alerts: [{ id: 'a2', text: 'second page alert', enriched: false }], pagination: { hasMore: false } },
+		];
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/alerts')) {
+					alertCalls += 1;
+					return response(pages[alertCalls - 1] || pages[0]);
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alerts');
+		await listForm.dispatch('submit');
+		await flush();
+		const nextButton = findButton(listForm, 'Next page');
+		expect(nextButton.disabled).toBe(false);
+
+		listForm.elements.before.value = 'hand-edited-cursor';
+		await listForm.elements.before.dispatch('input');
+
+		expect(nextButton.disabled).toBe(true);
+		await nextButton.dispatch('click');
+		await flush();
+		expect(alertCalls).toBe(1);
+	});
+
+	it('clears the raw analytics payload when a later summary refresh fails', async () => {
+		let summaryCalls = 0;
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/alerts/summary')) {
+					summaryCalls += 1;
+					if (summaryCalls === 1) {
+						return response({ success: true, summary: { totalAlerts: 3, window: {} } });
+					}
+					return response({ error: 'boom' }, 500);
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const summaryForm = findForm(browser.elementsById.view, 'GET /api/alerts/summary');
+		await summaryForm.dispatch('submit');
+		await flush();
+		expect(findButton(summaryForm, 'Copy JSON').hidden).toBe(false);
+
+		await summaryForm.dispatch('submit');
+		await flush();
+
+		expect(findButton(summaryForm, 'Copy JSON').hidden).toBe(true);
+		const rawPre = find(summaryForm, (node) => node.tagName === 'PRE' && node.textContent.includes('totalAlerts'));
+		expect(rawPre).toBeUndefined();
+	});
+
 	it('keeps navigation icons as inline SVG instead of platform glyphs', () => {
 		const shell = fs.readFileSync(path.join(__dirname, '../../src/admin/index.html'), 'utf8');
 		expect(shell.match(/<svg class="nav-icon"/g)).toHaveLength(7);

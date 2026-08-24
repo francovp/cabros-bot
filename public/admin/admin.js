@@ -996,7 +996,7 @@ const createAlertListForm = () => {
 		next.disabled = true;
 		prev.disabled = true;
 	};
-	[limit, source, enriched].forEach((field) => {
+	[before, limit, source, enriched].forEach((field) => {
 		field.addEventListener('input', resetPagination);
 		field.addEventListener('change', resetPagination);
 	});
@@ -1210,6 +1210,8 @@ const createAlertSummaryForm = () => {
 			}).then((data) => {
 				if (!data || !data.summary) {
 					blocks.replaceChildren();
+					lastRawJson = '';
+					rawOutput.textContent = '';
 					rawCopyButton.hidden = true;
 					return;
 				}
