@@ -371,11 +371,17 @@ function reconciledOrderMatchesRequest(order, existingOrder, clientOrderId) {
 		const isConvertedMarketBuy = order.side === 'BUY' && order.type === 'MARKET' && isZeroOrigQty && hasQuoteQty;
 		if (isConvertedMarketBuy) {
 			const executedQuantity = existingOrder.executedQty;
-			if (executedQuantity === undefined || compareDecimals(executedQuantity, '0') === 0) {
-				return false;
-			}
-			if (compareDecimals(executedQuantity, order.quantity) !== 0) {
-				return false;
+			const cummulativeQuoteQty = existingOrder.cummulativeQuoteQty;
+			if (executedQuantity !== undefined && cummulativeQuoteQty !== undefined && compareDecimals(cummulativeQuoteQty, '0') > 0) {
+				const impliedTargetQuantity = (Number(existingQuoteOrderQty) * Number(executedQuantity)) / Number(cummulativeQuoteQty);
+				const reqQty = Number(order.quantity);
+				if (!Number.isFinite(impliedTargetQuantity) || !Number.isFinite(reqQty) || reqQty <= 0) {
+					return false;
+				}
+				const relativeDiff = Math.abs(impliedTargetQuantity - reqQty) / reqQty;
+				if (relativeDiff > 0.2) {
+					return false;
+				}
 			}
 		} else if (compareDecimals(existingQuantity, order.quantity) !== 0) {
 			return false;
