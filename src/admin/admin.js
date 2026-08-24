@@ -300,6 +300,8 @@ const showAuthState = (message, isError = false) => {
 };
 
 const showSignedOutState = () => {
+	if (typeof detachActiveViewPoll === 'function') detachActiveViewPoll();
+	detachActiveViewPoll = null;
 	setHidden('auth-form', false);
 	setHidden('sign-out', true);
 	showAuthState('Sign in to continue.');
@@ -1105,8 +1107,8 @@ const createOverviewDashboard = () => {
 	return dashboard;
 };
 
-const sendRequest = async ({
-	definition, path, query, body, button, output, formatResponse, parseSuccessResponse, isCurrent,
+	const sendRequest = async ({
+		definition, path, query, body, button, output, formatResponse, parseSuccessResponse, isCurrent, captureResponseStatus,
 }) => {
 	const requestIsCurrent = typeof isCurrent === 'function' ? isCurrent : () => true;
 	const apiKey = getElement('api-key')?.value || '';
@@ -1171,6 +1173,7 @@ const sendRequest = async ({
 			return { response, data, formatted, elapsed };
 		});
 		const { response, data, formatted, elapsed } = result;
+		if (typeof captureResponseStatus === 'function') captureResponseStatus(response.status);
 		if (!requestIsCurrent()) return response.ok ? data : undefined;
 		output.className = `response-block${response.ok ? '' : ' response-error'}`;
 		const responseText = response.ok && formatResponse
@@ -1787,6 +1790,7 @@ const createJobStatusForm = () => {
 		const jobId = jobIdInput.value.trim();
 		if (!jobId) return undefined;
 		const requestVersion = ++statusRequestVersion;
+		let pollFailureStatus;
 		const data = await sendRequest({
 			definition,
 			path: fillPath(definition.path, pathNames, form),
@@ -1796,11 +1800,23 @@ const createJobStatusForm = () => {
 				&& form.elements['path-jobId'].value === jobId,
 			formatResponse: ({ summary, status, elapsed }) => `${summary}\nHTTP ${status} · ${elapsed} ms`
 				+ (isAutoRefresh ? ' · auto-refresh' : ''),
+			captureResponseStatus: (responseStatus) => { pollFailureStatus = responseStatus; },
 		});
-		if (requestVersion !== statusRequestVersion || form.elements['path-jobId'].value !== jobId) return data;
+				console.error('RS-guard', 'rv', requestVersion, 'srv', statusRequestVersion, 'data?', !!data);
+if (requestVersion !== statusRequestVersion || form.elements['path-jobId'].value !== jobId) return data;
 		if (data && data.status) applyStatus(data, jobId);
 		else if (!isAutoRefresh) clearStructuredState();
-		else if (lastFetchedActive && !pollPaused) schedulePoll();
+		else {
+			statusRequestVersion += 1;
+			stopPollTimer();
+			const recoverable = typeof pollFailureStatus !== 'number'
+				|| pollFailureStatus >= 500 || pollFailureStatus === 429;
+			if (recoverable && lastFetchedActive && !pollPaused) schedulePoll();
+			else {
+				lastFetchedActive = false;
+				updatePollButton();
+			}
+		}
 		return data;
 	};
 

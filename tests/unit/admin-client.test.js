@@ -1554,6 +1554,7 @@ describe('admin browser client', () => {
 
 		for (const fireTimer of [...browser.timers.values()]) fireTimer();
 		await flush();
+		console.error('DBG1', statusCalls, browser.timers.size);
 		expect(statusCalls).toBe(2);
 
 		for (const fireTimer of [...browser.timers.values()]) fireTimer();
@@ -2411,6 +2412,105 @@ describe('admin browser client', () => {
 		expect(listForm.textContent).not.toContain('second page alert');
 		expect(findButton(listForm, 'Previous page').disabled).toBe(true);
 		expect(findButton(listForm, 'Next page').disabled).toBe(true);
+	});
+
+	it('stops job polling when the user signs out mid-refresh', async () => {
+		let authStateChanged;
+		const user = {
+			getIdToken: jest.fn().mockResolvedValue('firebase-token'),
+			getIdTokenResult: jest.fn().mockResolvedValue({ claims: { roles: ['admin.operator'] } }),
+		};
+		const auth = {
+			setPersistence: jest.fn().mockResolvedValue(undefined),
+			onAuthStateChanged: jest.fn((listener) => {
+				authStateChanged = listener;
+				listener(null);
+				return jest.fn();
+			}),
+			signInWithEmailAndPassword: jest.fn(async () => {
+				await authStateChanged(user);
+				return { user };
+			}),
+			signOut: jest.fn(async () => {
+				await authStateChanged(null);
+			}),
+		};
+		const firebase = { initializeApp: jest.fn(), auth: jest.fn(() => auth) };
+		let statusCalls = 0;
+		let releasePoll;
+		const slowPoll = new Promise((resolve) => { releasePoll = resolve; });
+		const browser = createBrowser({
+			firebase,
+			fetchImpl: async (url) => {
+				if (url === '/admin/auth-config') {
+					return response({ enabled: true, configured: true, config: { apiKey: 'k', authDomain: 'a', projectId: 'p' } });
+				}
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/jobs/job-live') {
+					statusCalls += 1;
+					if (statusCalls === 1) return response({ jobId: 'job-live', type: 'market-scanner', status: 'processing', progress: {} });
+					return slowPoll.then(() => response({ jobId: 'job-live', status: 'processing', progress: {} }));
+				}
+				return response({});
+			},
+		});
+		await flush();
+		browser.elementsById['auth-email'].value = 'operator@example.com';
+		browser.elementsById['auth-password'].value = 'password';
+		await browser.elementsById['sign-in'].dispatch('click');
+		await flush();
+		await selectView(browser, 'jobs');
+
+		const statusForm = findForm(browser.elementsById.view, 'GET /api/jobs/{jobId}');
+		statusForm.elements['path-jobId'].value = 'job-live';
+		await statusForm.dispatch('submit');
+		await flush();
+
+		for (const fireTimer of [...browser.timers.values()]) fireTimer();
+		await flush();
+		expect(statusCalls).toBe(2);
+
+		await browser.elementsById['sign-out'].dispatch('click');
+		await flush();
+
+		releasePoll();
+		await flush();
+		for (const fireTimer of [...browser.timers.values()]) fireTimer();
+		await flush();
+		expect(statusCalls).toBe(2);
+	});
+
+	it('stops auto-refresh on definitive failures but retries transient ones', async () => {
+		let statusCalls = 0;
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/jobs/job-gone') {
+					statusCalls += 1;
+					console.error('FETCH', statusCalls, 'timers:', browser.timers.size, (new Error().stack || ''));
+					if (statusCalls === 1) return response({ jobId: 'job-gone', type: 'market-scanner', status: 'processing', progress: {} });
+					return response({ error: 'not found' }, 404);
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'jobs');
+
+		const statusForm = findForm(browser.elementsById.view, 'GET /api/jobs/{jobId}');
+		statusForm.elements['path-jobId'].value = 'job-gone';
+		await statusForm.dispatch('submit');
+		await flush();
+
+		for (const fireTimer of [...browser.timers.values()]) fireTimer();
+		await flush();
+		expect(statusCalls).toBe(2);
+
+		for (const fireTimer of [...browser.timers.values()]) fireTimer();
+		await flush();
+		console.error('DBG2', statusCalls, browser.timers.size);
+		expect(statusCalls).toBe(2);
+		expect(findButton(statusForm, 'Pause auto-refresh').hidden).toBe(true);
 	});
 
 	it('keeps navigation icons as inline SVG instead of platform glyphs', () => {
