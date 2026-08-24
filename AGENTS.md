@@ -48,6 +48,7 @@ This project is a small Express + Telegraf (Telegram) bot service that exposes a
 - `src/controllers/outcomes/outcomes.js` — Signal outcome query handler for `GET /api/outcomes`.
 - `src/workers/signalOutcomeWorker.js` — Dedicated Render worker bootstrap with SIGTERM drain handling.
 - `src/lib/adminAuth.js` — Opt-in Firebase ID-token verification and `admin.viewer`/`admin.operator` authorization for browser admin workflows; legacy API keys remain supported.
+- `src/lib/telegramErrorBoundary.js` — Telegraf global update error boundary (`bot.catch`), polling error rate-limiting supervisor, Sentry reporting, and fail-open admin notifications.
 - `src/controllers/webhooks/handlers/marketScanner/marketScanner.js` — Scanner webhook handler executing sequential gainers, losers, and breakouts scanner runs on TradingView MCP.
 - `src/services/jobs/JobService.js` — Manages job state, executes background TradingView analysis runs, and performs periodic expiration cleanup.
 - `src/services/jobs/JobQueue.js` / `src/services/jobs/jobWorker.js` — BullMQ producer/worker integration for the optional Render worker execution mode.
