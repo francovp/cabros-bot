@@ -1899,6 +1899,44 @@ describe('admin browser client', () => {
 		expect(findButton(listForm, 'Previous page').disabled).toBe(false);
 	});
 
+	it('discards an in-flight page response after filters change', async () => {
+		let alertCalls = 0;
+		let releaseNext;
+		const slowNext = new Promise((resolve) => { releaseNext = resolve; });
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/alerts')) {
+					alertCalls += 1;
+					if (alertCalls === 2) return slowNext.then(() => response({ alerts: [{ id: 'a2', text: 'second page alert', enriched: false }], pagination: { hasMore: false } }));
+					return response({ alerts: [{ id: 'a1', text: 'first page alert', enriched: false }], pagination: { hasMore: true, nextBefore: 'cursor-2' } });
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alerts');
+		await listForm.dispatch('submit');
+		await flush();
+
+		const click = findButton(listForm, 'Next page').dispatch('click');
+		await flush();
+		expect(alertCalls).toBe(2);
+
+		listForm.elements.source.value = 'webhook';
+		await listForm.elements.source.dispatch('input');
+
+		releaseNext();
+		await click;
+		await flush();
+
+		expect(listForm.textContent).not.toContain('second page alert');
+		expect(findButton(listForm, 'Previous page').disabled).toBe(true);
+		expect(findButton(listForm, 'Next page').disabled).toBe(true);
+	});
+
 	it('keeps navigation icons as inline SVG instead of platform glyphs', () => {
 		const shell = fs.readFileSync(path.join(__dirname, '../../src/admin/index.html'), 'utf8');
 		expect(shell.match(/<svg class="nav-icon"/g)).toHaveLength(7);

@@ -951,7 +951,9 @@ const createAlertListForm = () => {
 
 	let nextBefore;
 	let backCursors = [];
+	let pageGeneration = 0;
 	const requestPage = async (cursor) => {
+		const generation = ++pageGeneration;
 		prev.disabled = true;
 		next.disabled = true;
 		before.value = cursor || '';
@@ -970,6 +972,7 @@ const createAlertListForm = () => {
 			formatResponse: ({ summary, status, elapsed, data: payload }) => `${summary}\nHTTP ${status} · ${elapsed} ms · `
 				+ `${payload && Array.isArray(payload.alerts) ? `${payload.alerts.length} alerts on this page` : 'no alert list returned'}`,
 		});
+		if (generation !== pageGeneration) return false;
 		if (data && Array.isArray(data.alerts)) {
 			lastRawJson = JSON.stringify(data, null, 2);
 			rawOutput.textContent = lastRawJson;
@@ -999,6 +1002,7 @@ const createAlertListForm = () => {
 		prev.disabled = !backCursors.length;
 	};
 	const resetPagination = () => {
+		pageGeneration += 1;
 		nextBefore = undefined;
 		backCursors = [];
 		next.disabled = true;
