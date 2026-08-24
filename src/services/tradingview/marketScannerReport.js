@@ -404,12 +404,22 @@ function formatTrendConfluence(trendConfluence = {}) {
 }
 
 function getCandidateDirection(item = {}) {
-	if (typeof item.breakout_type === 'string' && /(bull|buy|long|alcist|compra)/i.test(item.breakout_type)) {
-		return 'bullish';
+	if (typeof item.breakout_type === 'string') {
+		if (/(bear|sell|short|bajist|venta)/i.test(item.breakout_type)) {
+			return 'bearish';
+		}
+		if (/(bull|buy|long|alcist|compra)/i.test(item.breakout_type)) {
+			return 'bullish';
+		}
 	}
 
-	if (typeof item.trading_recommendation === 'string' && /(bull|buy|long|alcist|compra)/i.test(item.trading_recommendation)) {
-		return 'bullish';
+	if (typeof item.trading_recommendation === 'string') {
+		if (/(bear|sell|short|bajist|venta)/i.test(item.trading_recommendation)) {
+			return 'bearish';
+		}
+		if (/(bull|buy|long|alcist|compra)/i.test(item.trading_recommendation)) {
+			return 'bullish';
+		}
 	}
 
 	return null;
@@ -420,23 +430,14 @@ function getScanItemSide(scanType, item = {}) {
 		return 'SELL';
 	}
 
-	if (typeof item.breakout_type === 'string') {
-		const breakoutType = item.breakout_type.trim().toLowerCase();
-		if (breakoutType === 'bearish' || breakoutType === 'sell') {
-			return 'SELL';
-		}
-	}
-
-	if (typeof item.trading_recommendation === 'string') {
-		const recommendation = item.trading_recommendation.trim().toLowerCase();
-		if (/\bsell\b/.test(recommendation)) {
-			return 'SELL';
-		}
+	const candidateDirection = getCandidateDirection(item);
+	if (candidateDirection === 'bearish') {
+		return 'SELL';
 	}
 
 	if (scanType === 'bollinger_scan') {
 		const trendConfluence = item._trendConfluence || item.trendConfluence || item.multiTimeframeData;
-		if (trendConfluence?.direction === 'bearish' && !getCandidateDirection(item)) {
+		if (trendConfluence?.direction === 'bearish' && !candidateDirection) {
 			return 'SELL';
 		}
 	}

@@ -625,6 +625,39 @@ describe('Market Scanner Report', () => {
 			expect(report).toContain('  - *Target:* $2.10 | Risk/Reward: 1.00x');
 		});
 
+		it('preserves SELL side for bollinger_scan with Spanish bearish breakout_type (bajista) despite bullish trading_recommendation', () => {
+			const results = [
+				{
+					scan: 'bollinger_scan',
+					status: 'success',
+					items: [
+						{
+							symbol: 'BINANCE:BTCUSDT',
+							breakout_type: 'bajista',
+							trading_recommendation: 'STRONG_BUY',
+							indicators: { close: 60000, bb_lower: 58000, bb_upper: 62000 },
+							trendConfluence: {
+								direction: 'bearish',
+								confidence: 85,
+							},
+						},
+					],
+				},
+			];
+
+			const report = buildMarketScannerReport(results, {
+				exchange: 'BINANCE',
+				timeframe: '4h',
+				ranked: false,
+				now: mockDate,
+			});
+
+			expect(report).toContain('🔥 HTF ALIGNED 85%');
+			// Short-side levels: breakout_type takes precedence over recommendation
+			expect(report).toContain('  - *Stop Loss:* $62,000.00 (Invalidación: $2,000.00)');
+			expect(report).toContain('  - *Target:* $58,000.00 | Risk/Reward: 1.00x');
+		});
+
 		it('covers support/resistance-based risk/reward formatting when support and resistance are present', () => {
 				const results = [
 					{
