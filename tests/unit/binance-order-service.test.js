@@ -368,7 +368,7 @@ describe('BinanceOrderService', () => {
 					status: 'FILLED',
 					side: 'BUY',
 					type: 'MARKET',
-					origQty: '0.00100000',
+					origQty: '0.00000000',
 					origQuoteOrderQty: '50.00',
 					cummulativeQuoteQty: '50.00',
 				});

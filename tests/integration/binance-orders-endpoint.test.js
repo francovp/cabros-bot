@@ -376,6 +376,53 @@ describe('Binance orders API', () => {
 		expect(client.submitNewOrder.mock.calls[0][0].newClientOrderId).toMatch(/^cb_[a-f0-9]{32}$/);
 	});
 
+	it('reconciles an ambiguous bounded MARKET BUY after the idempotency cache is lost', async () => {
+		client.submitNewOrder.mockRejectedValueOnce(new Error('provider timeout'));
+		client.getOrder
+			.mockRejectedValueOnce({ code: -2013, message: 'Unknown order sent.' })
+			.mockResolvedValueOnce({
+				symbol: 'BTCUSDT',
+				orderId: 44,
+				clientOrderId: 'cb_267ef7d4f4c1a898bffebf85a138d98b',
+				status: 'FILLED',
+				side: 'BUY',
+				type: 'MARKET',
+				origQty: '0.00000000',
+				origQuoteOrderQty: '50.00',
+				cummulativeQuoteQty: '50.00',
+				executedQty: '0.00100000',
+			});
+		const payload = {
+			symbol: 'BTCUSDT',
+			side: 'BUY',
+			type: 'MARKET',
+			quantity: 0.5,
+			dryRun: false,
+		};
+
+		await request(app)
+			.post('/api/trading/binance/orders')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'order-375-reconcile')
+			.send(payload)
+			.expect(503);
+		idempotencyService.clear();
+
+		const reconciled = await request(app)
+			.post('/api/trading/binance/orders')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'order-375-reconcile')
+			.send(payload)
+			.expect(201);
+
+		expect(reconciled.body).toMatchObject({ success: true, dryRun: false, order: { orderId: 44 } });
+		expect(client.getOrder).toHaveBeenNthCalledWith(2, {
+			symbol: 'BTCUSDT',
+			origClientOrderId: expect.stringMatching(/^cb_[a-f0-9]{32}$/),
+		});
+		expect(client.submitNewOrder).toHaveBeenCalledTimes(1);
+	});
+
 	it('exposes Binance trading readiness in status and capabilities', async () => {
 		const status = await request(app)
 			.get('/api/status')

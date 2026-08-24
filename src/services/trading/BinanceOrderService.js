@@ -362,9 +362,18 @@ function reconciledOrderMatchesRequest(order, existingOrder, clientOrderId) {
 	if (order.type === 'LIMIT' && String(existingOrder.timeInForce || '').toUpperCase() !== order.timeInForce) return false;
 
 	const existingQuantity = existingOrder.origQty ?? existingOrder.quantity;
-	if (order.quantity !== undefined && compareDecimals(existingQuantity, order.quantity) !== 0) return false;
-
 	const existingQuoteOrderQty = existingOrder.origQuoteOrderQty ?? existingOrder.quoteOrderQty;
+
+	if (order.quantity !== undefined) {
+		const isZeroOrigQty = existingQuantity === undefined || compareDecimals(existingQuantity, '0') === 0;
+		const hasQuoteQty = existingQuoteOrderQty !== undefined && compareDecimals(existingQuoteOrderQty, '0') > 0;
+		// A quantity-based MARKET BUY may have been submitted as quoteOrderQty to bound notional.
+		const isConvertedMarketBuy = order.side === 'BUY' && order.type === 'MARKET' && isZeroOrigQty && hasQuoteQty;
+		if (!isConvertedMarketBuy && compareDecimals(existingQuantity, order.quantity) !== 0) {
+			return false;
+		}
+	}
+
 	if (order.quoteOrderQty !== undefined && compareDecimals(existingQuoteOrderQty, order.quoteOrderQty) !== 0) return false;
 	if (order.price !== undefined && compareDecimals(existingOrder.price, order.price) !== 0) return false;
 	return true;
@@ -635,11 +644,7 @@ function createBinanceOrderService({ createClient = createBinanceClient } = {}) 
 			if (!order.dryRun) {
 				const existingOrder = await reconcileOrder(client, order.symbol, clientOrderId);
 				if (existingOrder) {
-					// A previously accepted quantity-based MARKET BUY was submitted as a
-					// quote-sized order, so reconciliation must compare against that
-					// transformed request rather than the original base-quantity body.
-					const expectedOrder = deriveBoundedMarketBuy(order, config.maxNotional);
-					if (!reconciledOrderMatchesRequest(expectedOrder, existingOrder, clientOrderId)) {
+					if (!reconciledOrderMatchesRequest(order, existingOrder, clientOrderId)) {
 						throw new BinanceOrderRequestError(
 							'Reconciled Binance order does not match the request',
 							'BINANCE_ORDER_CONFLICT',
