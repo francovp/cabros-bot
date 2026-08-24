@@ -2513,6 +2513,34 @@ describe('admin browser client', () => {
 		expect(findButton(statusForm, 'Pause auto-refresh').hidden).toBe(true);
 	});
 
+	it('trims pasted job IDs before guarding and requesting', async () => {
+		const requests = [];
+		let statusCalls = 0;
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.includes('/api/jobs/job-live')) {
+					statusCalls += 1;
+					requests.push(url);
+					return response(statusCalls === 1
+						? { jobId: 'job-live', type: 'market-scanner', status: 'completed', progress: { current: 1, total: 1 } }
+						: {});
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'jobs');
+
+		const statusForm = findForm(browser.elementsById.view, 'GET /api/jobs/{jobId}');
+		statusForm.elements['path-jobId'].value = '  job-live  ';
+		await statusForm.dispatch('submit');
+		await flush();
+
+		expect(requests.some((url) => url === '/api/jobs/job-live')).toBe(true);
+		expect(findButton(statusForm, 'Get job status').disabled).toBe(false);
+	});
+
 	it('keeps navigation icons as inline SVG instead of platform glyphs', () => {
 		const shell = fs.readFileSync(path.join(__dirname, '../../src/admin/index.html'), 'utf8');
 		expect(shell.match(/<svg class="nav-icon"/g)).toHaveLength(7);

@@ -1788,6 +1788,7 @@ const createJobStatusForm = () => {
 
 	const requestStatus = async (isAutoRefresh) => {
 		const jobId = jobIdInput.value.trim();
+		if (jobIdInput.value !== jobId) jobIdInput.value = jobId;
 		if (!jobId) return undefined;
 		const requestVersion = ++statusRequestVersion;
 		let pollFailureStatus;
@@ -1797,13 +1798,13 @@ const createJobStatusForm = () => {
 			button,
 			output,
 			isCurrent: () => requestVersion === statusRequestVersion
-				&& form.elements['path-jobId'].value === jobId,
+				&& form.elements['path-jobId'].value.trim() === jobId,
 			formatResponse: ({ summary, status, elapsed }) => `${summary}\nHTTP ${status} · ${elapsed} ms`
 				+ (isAutoRefresh ? ' · auto-refresh' : ''),
 			captureResponseStatus: (responseStatus) => { pollFailureStatus = responseStatus; },
 		});
 				console.error('RS-guard', 'rv', requestVersion, 'srv', statusRequestVersion, 'data?', !!data);
-if (requestVersion !== statusRequestVersion || form.elements['path-jobId'].value !== jobId) return data;
+if (requestVersion !== statusRequestVersion || form.elements['path-jobId'].value.trim() !== jobId) return data;
 		if (data && data.status) applyStatus(data, jobId);
 		else if (!isAutoRefresh) clearStructuredState();
 		else {
@@ -1828,6 +1829,7 @@ if (requestVersion !== statusRequestVersion || form.elements['path-jobId'].value
 	});
 
 	jobIdInput.addEventListener('input', () => {
+		jobIdInput.value = jobIdInput.value.trim();
 		statusRequestVersion += 1;
 		button.disabled = false;
 		clearStructuredState();
@@ -1865,7 +1867,7 @@ if (requestVersion !== statusRequestVersion || form.elements['path-jobId'].value
 				button: actionButton,
 				output,
 				isCurrent: () => actionVersion === actionsEpoch
-					&& form.elements['path-jobId'].value === jobId,
+					&& form.elements['path-jobId'].value.trim() === jobId,
 			}));
 			actions.append(actionButton);
 		});
