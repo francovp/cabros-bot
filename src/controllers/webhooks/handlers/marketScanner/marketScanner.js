@@ -28,8 +28,22 @@ const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteCo
 const DEFAULT_SCANNER_TIMEOUT_MS = 90000;
 const MAX_SCANNER_TIMEOUT_MS = 120000;
 
-function resolveBot(botOrGetter) {
-	if (typeof botOrGetter === 'function') {
+// Picks the first candidate that converts to a finite number; null/empty
+// candidates are skipped so Number(null)=0 cannot fabricate a level.
+function pickFiniteLevel(candidates) {
+	for (const candidate of candidates) {
+		if (candidate === null || candidate === undefined || candidate === '') {
+			continue;
+		}
+		const number = Number(candidate);
+		if (Number.isFinite(number)) {
+			return number;
+		}
+	}
+	return null;
+}
+
+function resolveBot(botOrGetter) {	if (typeof botOrGetter === 'function') {
 		return botOrGetter();
 	}
 
@@ -138,19 +152,20 @@ function postMarketScannerAlert(botOrGetter) {
 							const atr = Number(item.indicators?.atr ?? item.indicators?.ATR ?? item.atr ?? null);
 							const bbLower = Number(item.indicators?.bb_lower ?? item.indicators?.bollinger_lower ?? item.indicators?.lower ?? item.bollinger?.lower ?? item.bollinger_lower ?? null);
 							const bbUpper = Number(item.indicators?.bb_upper ?? item.indicators?.bollinger_upper ?? item.indicators?.upper ?? item.bollinger?.upper ?? item.bollinger_upper ?? null);
-							// Number(null) is 0, which would leak a fake support/resistance level
-							const support = Number.isFinite(Number(item.indicators?.support)) ? Number(item.indicators.support)
-								: Number.isFinite(Number(item.indicators?.nearest_support)) ? Number(item.indicators.nearest_support)
-									: Number.isFinite(Number(item.support)) ? Number(item.support)
-										: Number.isFinite(Number(item.support_resistance?.nearest_support)) ? Number(item.support_resistance.nearest_support)
-											: Number.isFinite(Number(item.support_resistance?.support_1)) ? Number(item.support_resistance.support_1)
-												: null;
-							const resistance = Number.isFinite(Number(item.indicators?.resistance)) ? Number(item.indicators.resistance)
-								: Number.isFinite(Number(item.indicators?.nearest_resistance)) ? Number(item.indicators.nearest_resistance)
-									: Number.isFinite(Number(item.resistance)) ? Number(item.resistance)
-										: Number.isFinite(Number(item.support_resistance?.nearest_resistance)) ? Number(item.support_resistance.nearest_resistance)
-											: Number.isFinite(Number(item.support_resistance?.resistance_1)) ? Number(item.support_resistance.resistance_1)
-												: null;
+							const support = pickFiniteLevel([
+								item.indicators?.support,
+								item.indicators?.nearest_support,
+								item.support,
+								item.support_resistance?.nearest_support,
+								item.support_resistance?.support_1,
+							]);
+							const resistance = pickFiniteLevel([
+								item.indicators?.resistance,
+								item.indicators?.nearest_resistance,
+								item.resistance,
+								item.support_resistance?.nearest_resistance,
+								item.support_resistance?.resistance_1,
+							]);
 
 							const validPrice = typeof closePrice === 'number' && Number.isFinite(closePrice) ? closePrice : null;
 							let stopLoss = null;
