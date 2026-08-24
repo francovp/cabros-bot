@@ -969,6 +969,7 @@ const createAlertListForm = () => {
 			query,
 			button,
 			output,
+			isCurrent: () => generation === pageGeneration,
 			formatResponse: ({ summary, status, elapsed, data: payload }) => `${summary}\nHTTP ${status} · ${elapsed} ms · `
 				+ `${payload && Array.isArray(payload.alerts) ? `${payload.alerts.length} alerts on this page` : 'no alert list returned'}`,
 		});
@@ -1007,6 +1008,8 @@ const createAlertListForm = () => {
 		backCursors = [];
 		next.disabled = true;
 		prev.disabled = true;
+		button.disabled = false;
+		output.textContent = 'Filters changed — load alerts to refresh.';
 		if (clearCursor) before.value = '';
 	};
 	[limit, source, enriched].forEach((field) => {

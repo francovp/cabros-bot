@@ -1968,6 +1968,42 @@ describe('admin browser client', () => {
 		expect(lastUrl).not.toContain('before=');
 	});
 
+	it('restores the list form immediately when filters change mid-request', async () => {
+		let alertCalls = 0;
+		let releaseSlow;
+		const slowRequest = new Promise((resolve) => { releaseSlow = resolve; });
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/alerts')) {
+					alertCalls += 1;
+					if (alertCalls === 1) return slowRequest.then(() => response({ alerts: [{ id: 'a1', text: 'slow page alert', enriched: false }], pagination: { hasMore: false } }));
+					return response({ alerts: [], pagination: {} });
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alerts');
+		const loadButton = findButton(listForm, 'Load alerts');
+		const click = listForm.dispatch('submit');
+		await flush();
+		expect(alertCalls).toBe(1);
+
+		listForm.elements.source.value = 'webhook';
+		await listForm.elements.source.dispatch('input');
+
+		expect(loadButton.disabled).toBe(false);
+
+		releaseSlow();
+		await flush();
+		expect(findButton(listForm, 'Load alerts').disabled).toBe(false);
+		expect(listForm.textContent).not.toContain('slow page alert');
+		expect(listForm.textContent).toContain('Filters changed');
+	});
+
 	it('keeps navigation icons as inline SVG instead of platform glyphs', () => {
 		const shell = fs.readFileSync(path.join(__dirname, '../../src/admin/index.html'), 'utf8');
 		expect(shell.match(/<svg class="nav-icon"/g)).toHaveLength(7);
