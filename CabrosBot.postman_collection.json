@@ -238,6 +238,13 @@
                 "type": "text",
                 "description": "Alternative x-prefixed idempotency header variant",
                 "disabled": true
+              },
+              {
+                "key": "x-request-id",
+                "value": "req-12345",
+                "type": "text",
+                "description": "Optional request correlation ID",
+                "disabled": true
               }
             ],
             "body": {
@@ -261,7 +268,7 @@
               "name": "Success",
               "status": "OK",
               "code": 200,
-              "body": "{\"success\":true,\"results\":[{\"channel\":\"telegram\",\"success\":true,\"messageId\":\"12345\"}],\"enriched\":false}"
+              "body": "{\"success\":true,\"requestId\":\"req-12345\",\"results\":[{\"channel\":\"telegram\",\"success\":true,\"messageId\":\"12345\"}],\"enriched\":false}"
             }
           ]
         },
@@ -308,7 +315,7 @@
               "name": "Enriched payload",
               "status": "OK",
               "code": 200,
-              "body": "{\"success\":true,\"dryRun\":true,\"enriched\":true,\"payload\":{\"text\":\"Bitcoin breaks above $83,000 with strong volume\",\"enrichedData\":{\"original_text\":\"Bitcoin breaks above $83,000 with strong volume\",\"sentiment\":\"BULLISH\",\"sentiment_score\":0.85,\"insights\":[\"Volume confirms momentum\"],\"invalidation_level\":\"$80,000\",\"target_level\":\"$90,000\",\"setup_type\":\"breakout\",\"risk_reward_ratio\":\"2.5:1\",\"tradingViewEnrichmentApplied\":false,\"sources\":[]}},\"tokenUsage\":{}}"
+              "body": "{\"success\":true,\"requestId\":\"req-12345\",\"dryRun\":true,\"enriched\":true,\"payload\":{\"text\":\"Bitcoin breaks above $83,000 with strong volume\",\"enrichedData\":{\"original_text\":\"Bitcoin breaks above $83,000 with strong volume\",\"sentiment\":\"BULLISH\",\"sentiment_score\":0.85,\"insights\":[\"Volume confirms momentum\"],\"invalidation_level\":\"$80,000\",\"target_level\":\"$90,000\",\"setup_type\":\"breakout\",\"risk_reward_ratio\":\"2.5:1\",\"tradingViewEnrichmentApplied\":false,\"sources\":[]}},\"tokenUsage\":{}}"
             }
           ]
         },

@@ -172,6 +172,9 @@ function formatAlertDocument(doc) {
 		useTradingViewData: Boolean(data.useTradingViewData),
 		tradingViewEnrichmentApplied: Boolean(data.tradingViewEnrichmentApplied),
 	};
+	if (typeof data.requestId === 'string' && data.requestId.trim()) {
+		docObj.requestId = data.requestId.trim();
+	}
 	if (extracted.symbol !== 'unknown') {
 		docObj.symbol = extracted.symbol;
 	}
@@ -549,6 +552,9 @@ function formatExportRecord(doc, { includeText }) {
 		deliveryResults: summarizeDeliveryResults(data.deliveryResults),
 		tokenUsage: summarizeTokenUsage(data.tokenUsage),
 	};
+	if (typeof data.requestId === 'string' && data.requestId.trim()) {
+		record.requestId = data.requestId.trim();
+	}
 	if (VALID_TRADINGVIEW_ENRICHMENT_STATUSES.has(data.tradingViewEnrichmentStatus)) {
 		record.tradingViewEnrichmentStatus = data.tradingViewEnrichmentStatus;
 	}
@@ -818,6 +824,7 @@ async function saveAlertInternal({
 	confidence,
 	sentimentScore,
 	dedupStatus,
+	requestId,
 }) {
 	if (!isEnabled()) {
 		return null;
@@ -845,6 +852,9 @@ async function saveAlertInternal({
 			useTradingViewData: Boolean(useTradingViewData),
 			tradingViewEnrichmentApplied: Boolean(tradingViewEnrichmentApplied),
 		};
+		if (typeof requestId === 'string' && requestId.trim()) {
+			document.requestId = requestId.trim();
+		}
 		if (VALID_TRADINGVIEW_ENRICHMENT_STATUSES.has(tradingViewEnrichmentStatus)) {
 			document.tradingViewEnrichmentStatus = tradingViewEnrichmentStatus;
 		}

@@ -850,6 +850,10 @@ When `ranked` is `true`, each successful scan also includes structured scores:
 
 Send alert via webhook. Accepts either JSON or plain text.
 
+Optional headers:
+- `x-request-id`: Optional client-supplied correlation ID (1-128 printable ASCII characters). If omitted or invalid, a UUIDv4 is generated.
+- `idempotency-key` / `x-idempotency-key`: Optional replay key for deduplicating retries.
+
 Optional query param: `useTradingViewData=true` enables TradingView MCP technical enrichment for this request (requires `ENABLE_TRADINGVIEW_MCP_ENRICHMENT=true`).
 
 **Request (JSON):**
@@ -870,6 +874,7 @@ BTC price is at $45,000 - breakout detected!
 ```json
 {
   "success": true,
+  "requestId": "0d63f03b-d5a2-4a0b-928d-1959b8eb6a95",
   "results": [
     {
       "channel": "telegram",

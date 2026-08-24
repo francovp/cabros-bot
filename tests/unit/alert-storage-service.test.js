@@ -419,6 +419,30 @@ describe('AlertStorageService', () => {
 			}
 		});
 
+		it('persists sanitized requestId when provided', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockAdd.mockResolvedValueOnce({ id: 'id-request-id' });
+
+			await AlertStorageService.saveAlert(buildParams({
+				requestId: '  req-trace-abc-123  ',
+			}));
+
+			expect(mockAdd).toHaveBeenCalledWith(expect.objectContaining({
+				requestId: 'req-trace-abc-123',
+			}));
+		});
+
+		it('omits requestId when not a non-empty string', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockAdd.mockResolvedValueOnce({ id: 'id-no-req-id' });
+
+			await AlertStorageService.saveAlert(buildParams({
+				requestId: '   ',
+			}));
+
+			expect(mockAdd.mock.calls.at(-1)[0]).not.toHaveProperty('requestId');
+		});
+
 		it('persists requested and successfully applied TradingView enrichment separately', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 			mockAdd.mockResolvedValueOnce({ id: 'id-tradingview' });
@@ -856,6 +880,21 @@ describe('AlertStorageService', () => {
 			});
 		});
 
+		it('returns requestId when present on the document', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockDocGet.mockResolvedValueOnce(buildDocSnapshot('alert-with-req-id', {
+				receivedAt: buildTimestamp('2026-06-06T10:30:00.000Z'),
+				text: 'Stored alert with requestId',
+				requestId: 'req-observable-123',
+			}));
+
+			const result = await AlertStorageService.getAlertById('alert-with-req-id');
+			expect(result).toMatchObject({
+				id: 'alert-with-req-id',
+				requestId: 'req-observable-123',
+			});
+		});
+
 		it('returns null for an expired alert document', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 			jest.useFakeTimers().setSystemTime(new Date('2026-08-13T00:00:00.000Z'));
@@ -1181,6 +1220,30 @@ describe('AlertStorageService', () => {
 			expect(mockLimit).toHaveBeenCalledWith(100);
 			expect(mockStartAfter).toHaveBeenCalledWith(firstPageLastTimestamp, 'webhook-btc');
 			expect(result.alerts.map(alert => alert.id)).toEqual(['webhook-btc', 'webhook-eth']);
+		});
+
+		it('includes requestId in exported records when present on the document', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('alert-req-1', {
+						receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+						source: 'webhook',
+						requestId: 'trace-export-999',
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.exportAlerts({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+			});
+
+			expect(result.alerts[0]).toMatchObject({
+				id: 'alert-req-1',
+				requestId: 'trace-export-999',
+			});
 		});
 
 		it('throws STORAGE_UNAVAILABLE when Firestore export reads fail', async () => {
