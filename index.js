@@ -20,6 +20,7 @@ const { registerDebugSentryRoute } = require('./src/lib/debugSentryRoute');
 const { createProcessLifecycle } = require('./src/lib/processLifecycle');
 const { waitForBackgroundTasks } = require('./src/lib/backgroundTaskTracker');
 const { getTelegramBootstrapConfig } = require('./src/lib/telegramBootstrap');
+const { attachTelegramErrorBoundary, handlePollingError } = require('./src/lib/telegramErrorBoundary');
 const { jobService } = require('./src/services/jobs/JobService');
 const SignalOutcomeService = require('./src/services/storage/SignalOutcomeService');
 const { notificationRedriveService } = require('./src/services/notification/NotificationRedriveService');
@@ -104,6 +105,9 @@ async function bootstrapApplication() {
 		bot.command(['noticias', 'news'], newsMonitorCmd);
 		bot.command(['help', 'start'], helpCmd);
 
+		// Attach Telegram error boundary
+		attachTelegramErrorBoundary(bot);
+
 		// Initialize notification services
 		await initializeNotificationServices(bot);
 		if (lifecycle.isShuttingDown()) return;
@@ -112,6 +116,7 @@ async function bootstrapApplication() {
 		botLaunchPromise = bot.launch();
 		void botLaunchPromise.catch((error) => {
 			console.error('[index] Failed to launch Telegram bot:', error.message);
+			void handlePollingError(error, { bot });
 		});
 
 		if (!lifecycle.isShuttingDown() && process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID !== undefined) {
