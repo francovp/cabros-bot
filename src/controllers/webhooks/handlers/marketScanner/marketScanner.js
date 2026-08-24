@@ -8,6 +8,7 @@ const {
 	buildMarketScannerReport,
 	prepareMarketScannerItems,
 	getRiskLevelsForSide,
+	getScanItemSide,
 } = require('../../../../services/tradingview/marketScannerReport');
 const {
 	getNotificationManager,
@@ -130,22 +131,26 @@ function postMarketScannerAlert(botOrGetter) {
 					if (scanResult.status === 'success' && Array.isArray(scanResult.items)) {
 						for (const item of scanResult.items) {
 							const closePrice = item.indicators?.close ?? null;
-							let itemSide = 'BUY';
-							if (scanResult.scan === 'top_losers') {
-								itemSide = 'SELL';
-							} else if (item.breakout_type) {
-								const lowerBreakout = item.breakout_type.trim().toLowerCase();
-								if (lowerBreakout === 'bearish' || lowerBreakout === 'sell') {
-									itemSide = 'SELL';
-								}
-							}
+							// Persisted side must match the rendered report side
+							const itemSide = getScanItemSide(scanResult.scan, item);
 							const itemScore = item.changePercent ?? item.indicators?.RSI ?? item.volume_ratio ?? null;
 
 							const atr = Number(item.indicators?.atr ?? item.indicators?.ATR ?? item.atr ?? null);
 							const bbLower = Number(item.indicators?.bb_lower ?? item.indicators?.bollinger_lower ?? item.indicators?.lower ?? item.bollinger?.lower ?? item.bollinger_lower ?? null);
 							const bbUpper = Number(item.indicators?.bb_upper ?? item.indicators?.bollinger_upper ?? item.indicators?.upper ?? item.bollinger?.upper ?? item.bollinger_upper ?? null);
-							const support = Number(item.indicators?.support ?? item.indicators?.nearest_support ?? item.support ?? item.support_resistance?.nearest_support ?? item.support_resistance?.support_1 ?? null);
-							const resistance = Number(item.indicators?.resistance ?? item.indicators?.nearest_resistance ?? item.resistance ?? item.support_resistance?.nearest_resistance ?? item.support_resistance?.resistance_1 ?? null);
+							// Number(null) is 0, which would leak a fake support/resistance level
+							const support = Number.isFinite(Number(item.indicators?.support)) ? Number(item.indicators.support)
+								: Number.isFinite(Number(item.indicators?.nearest_support)) ? Number(item.indicators.nearest_support)
+									: Number.isFinite(Number(item.support)) ? Number(item.support)
+										: Number.isFinite(Number(item.support_resistance?.nearest_support)) ? Number(item.support_resistance.nearest_support)
+											: Number.isFinite(Number(item.support_resistance?.support_1)) ? Number(item.support_resistance.support_1)
+												: null;
+							const resistance = Number.isFinite(Number(item.indicators?.resistance)) ? Number(item.indicators.resistance)
+								: Number.isFinite(Number(item.indicators?.nearest_resistance)) ? Number(item.indicators.nearest_resistance)
+									: Number.isFinite(Number(item.resistance)) ? Number(item.resistance)
+										: Number.isFinite(Number(item.support_resistance?.nearest_resistance)) ? Number(item.support_resistance.nearest_resistance)
+											: Number.isFinite(Number(item.support_resistance?.resistance_1)) ? Number(item.support_resistance.resistance_1)
+												: null;
 
 							const validPrice = typeof closePrice === 'number' && Number.isFinite(closePrice) ? closePrice : null;
 							let stopLoss = null;

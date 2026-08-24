@@ -140,6 +140,48 @@ describe('Market Scanner Alert endpoint', () => {
 		expect(mockFetch).not.toHaveBeenCalled();
 	});
 
+	it('persists outcome side consistent with the rendered side for bollinger_scan items', async () => {
+		const signalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
+		jest.spyOn(signalOutcomeService, 'isEnabled').mockReturnValue(true);
+		// Capture the params the controller passes without requiring Firestore persistence
+		const recordedCalls = [];
+		const recordSignalSpy = jest.spyOn(signalOutcomeService, 'recordSignal').mockImplementation(async (params) => {
+			recordedCalls.push(params);
+			return {};
+		});
+
+		tradingViewMcpService.callScanTool.mockImplementation(async (scanType) => {
+			if (scanType === 'bollinger_scan') {
+				return [
+					{
+						symbol: 'BINANCE:BTCUSDT',
+						breakout_type: 'bajista',
+						trading_recommendation: 'STRONG_BUY',
+						indicators: { close: 60000, atr: 500, bb_lower: 58000, bb_upper: 62000 },
+					},
+				];
+			}
+			return [];
+		});
+
+		const res = await request(app)
+			.post('/api/webhook/market-scanner-alert')
+			.set('x-api-key', 'test-key')
+			.send({ scans: ['bollinger_scan'], timeframe: '4h', exchange: 'BINANCE' })
+			.expect(200);
+
+		expect(res.body.success).toBe(true);
+		expect(recordedCalls).toHaveLength(1);
+		const recorded = recordedCalls[0];
+		// Report renders SELL (breakout precedence) → persisted side must be SELL
+		expect(recorded.side).toBe('SELL');
+		expect(recorded.stop).toBe(60750); // price + atr*1.5
+		expect(recorded.target).toBe(58000); // bb_lower
+
+		recordSignalSpy.mockRestore();
+		signalOutcomeService.isEnabled.mockRestore();
+	});
+
 	it('returns 502 when all scanner calls fail', async () => {
 		tradingViewMcpService.callScanTool.mockRejectedValue(new Error('Connection failure'));
 
