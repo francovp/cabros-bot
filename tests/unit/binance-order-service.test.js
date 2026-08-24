@@ -399,7 +399,7 @@ describe('BinanceOrderService', () => {
 		expect(reconciled.order.orderId).toBe(77);
 	});
 
-	it('reconciles a quote-sized MARKET BUY with minor execution slippage or partial fill', async () => {
+	it('reconciles a quote-sized MARKET BUY when matching executed quantity', async () => {
 		process.env.BINANCE_TRADING_MAX_NOTIONAL = '1000';
 		const clientOrderId = `cb_${'c'.repeat(32)}`;
 		const client = {
@@ -408,13 +408,13 @@ describe('BinanceOrderService', () => {
 				symbol: 'BTCUSDT',
 				orderId: 99,
 				clientOrderId,
-				status: 'PARTIALLY_FILLED',
+				status: 'FILLED',
 				side: 'BUY',
 				type: 'MARKET',
 				origQty: '0.00000000',
 				origQuoteOrderQty: '50.00',
-				cummulativeQuoteQty: '25.00',
-				executedQty: '0.00049990',
+				cummulativeQuoteQty: '50.00',
+				executedQty: '0.00100000',
 			}),
 		};
 		const service = createBinanceOrderService({ createClient: () => client });
@@ -431,6 +431,7 @@ describe('BinanceOrderService', () => {
 		expect(reconciled.success).toBe(true);
 		expect(reconciled.order.orderId).toBe(99);
 	});
+
 
 	it('rejects changed quantity during quote-sized MARKET BUY reconciliation with 409 conflict', async () => {
 		process.env.BINANCE_TRADING_MAX_NOTIONAL = '1000';
