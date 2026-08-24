@@ -260,6 +260,54 @@ describe('AlertStorageService', () => {
 			});
 		});
 
+		it('persists news-monitor alert with source, eventCategory, confidence, and dedupStatus', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			const docId = 'news-doc-123';
+			mockAdd.mockResolvedValueOnce({ id: docId });
+
+			const params = buildParams({
+				text: 'BTCUSDT: Bitcoin surges on positive news',
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+				source: 'news-monitor',
+				eventCategory: 'price_surge',
+				confidence: 0.85,
+				sentimentScore: 0.75,
+				dedupStatus: 'fresh',
+				enriched: true,
+				enrichmentData: { originalText: 'BTCUSDT: Bitcoin surges on positive news', summary: 'Bullish momentum' },
+				tokenUsage: { total: 350, formattedSummary: '350 tokens' },
+				deliveryResults: [{ channel: 'telegram', success: true }],
+				channels: ['telegram', 'whatsapp'],
+				processingTimeMs: 120,
+			});
+
+			const result = await AlertStorageService.saveAlert(params);
+
+			expect(result).toBe(docId);
+			expect(mockCollection).toHaveBeenCalledWith('alerts');
+			expect(mockAdd).toHaveBeenCalledWith({
+				receivedAt: expect.anything(),
+				expiresAt: expect.anything(),
+				text: 'BTCUSDT: Bitcoin surges on positive news',
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+				source: 'news-monitor',
+				eventCategory: 'price_surge',
+				confidence: 0.85,
+				sentimentScore: 0.75,
+				dedupStatus: 'fresh',
+				enriched: true,
+				enrichmentData: { originalText: 'BTCUSDT: Bitcoin surges on positive news', summary: 'Bullish momentum' },
+				tokenUsage: { total: 350, formattedSummary: '350 tokens' },
+				deliveryResults: [{ channel: 'telegram', success: true }],
+				channels: ['telegram', 'whatsapp'],
+				useTradingViewData: false,
+				tradingViewEnrichmentApplied: false,
+				processingTimeMs: 120,
+			});
+		});
+
 		it('strips nested undefined properties before persisting without serialization errors', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 			mockAdd.mockResolvedValueOnce({ id: 'sanitized-alert' });
@@ -467,7 +515,7 @@ describe('AlertStorageService', () => {
 			expect(calledWith.deliveryResults).toEqual([]);
 		});
 
-		it('always sets source to "webhook"', async () => {
+		it('defaults source to "webhook" when not provided', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 			mockAdd.mockResolvedValueOnce({ id: 'id3' });
 

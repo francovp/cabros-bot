@@ -30,6 +30,15 @@ describe('WhatsApp Webhook Error Handling & Resiliency (GH-337 / CB-136)', () =>
 
 	let router;
 	beforeEach(async () => {
+		process.env.WEBHOOK_API_KEY = API_KEY;
+		process.env.ENABLE_TELEGRAM_BOT = 'true';
+		process.env.BOT_TOKEN = '123456:ABC-DEF1234ghIkl-zyx57';
+		process.env.TELEGRAM_CHAT_ID = '123456789';
+		process.env.ENABLE_WHATSAPP_ALERTS = 'true';
+		process.env.WHATSAPP_API_URL = 'https://api.green-api.com/waInstance123/SendMessage/';
+		process.env.WHATSAPP_API_KEY = 'secret-token-12345';
+		process.env.WHATSAPP_CHAT_ID = '123456789@g.us';
+
 		const mockBot = {
 			telegram: {
 				sendMessage: jest.fn().mockResolvedValue({ message_id: 111 }),
