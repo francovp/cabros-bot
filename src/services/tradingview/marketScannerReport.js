@@ -354,8 +354,20 @@ function formatScanItem(item, rank, scanType, ranked = false) {
 		const atr = numberOrNull(item.indicators?.atr ?? item.indicators?.ATR ?? item.atr ?? null);
 		const bbLower = numberOrNull(item.indicators?.bb_lower ?? item.indicators?.bollinger_lower ?? item.indicators?.lower ?? item.bollinger?.lower ?? item.bollinger_lower ?? null);
 		const bbUpper = numberOrNull(item.indicators?.bb_upper ?? item.indicators?.bollinger_upper ?? item.indicators?.upper ?? item.bollinger?.upper ?? item.bollinger_upper ?? null);
-			const support = numberOrNull(item.indicators?.support ?? item.indicators?.nearest_support ?? item.support ?? item.support_resistance?.nearest_support ?? item.support_resistance?.support_1 ?? null);
-			const resistance = numberOrNull(item.indicators?.resistance ?? item.indicators?.nearest_resistance ?? item.resistance ?? item.support_resistance?.nearest_resistance ?? item.support_resistance?.resistance_1 ?? null);
+		const support = pickLevel([
+			item.indicators?.support,
+			item.indicators?.nearest_support,
+			item.support,
+			item.support_resistance?.nearest_support,
+			item.support_resistance?.support_1,
+		]);
+		const resistance = pickLevel([
+			item.indicators?.resistance,
+			item.indicators?.nearest_resistance,
+			item.resistance,
+			item.support_resistance?.nearest_resistance,
+			item.support_resistance?.resistance_1,
+		]);
 
 		const { stopLoss, takeProfit } = getRiskLevelsForSide({
 			side,
@@ -404,21 +416,24 @@ function formatTrendConfluence(trendConfluence = {}) {
 }
 
 function getCandidateDirection(item = {}) {
+	// Bullish evidence is checked before bearish within each field, mirroring
+	// marketScannerScoring.normalizeTrendDirection(), so time-horizon phrases
+	// like "SHORT_TERM_BUY" resolve bullish instead of matching `short`.
 	if (typeof item.breakout_type === 'string') {
-		if (/(bear|sell|short|bajist|venta)/i.test(item.breakout_type)) {
-			return 'bearish';
-		}
 		if (/(bull|buy|long|alcist|compra)/i.test(item.breakout_type)) {
 			return 'bullish';
+		}
+		if (/(bear|sell|short|bajist|venta)/i.test(item.breakout_type)) {
+			return 'bearish';
 		}
 	}
 
 	if (typeof item.trading_recommendation === 'string') {
-		if (/(bear|sell|short|bajist|venta)/i.test(item.trading_recommendation)) {
-			return 'bearish';
-		}
 		if (/(bull|buy|long|alcist|compra)/i.test(item.trading_recommendation)) {
 			return 'bullish';
+		}
+		if (/(bear|sell|short|bajist|venta)/i.test(item.trading_recommendation)) {
+			return 'bearish';
 		}
 	}
 
@@ -598,6 +613,20 @@ function numberOrNull(value) {
 	return Number.isFinite(number) ? number : null;
 }
 
+// Shared candidate-selection for optional numeric level fields. Skips
+// null/undefined/empty/nonnumeric candidates (including Number(null)=0
+// fabrications from explicit nulls and 'N/A' placeholders) so the report
+// renderer and the outcome-persistence path resolve identical levels.
+function pickLevel(candidates) {
+	for (const candidate of candidates) {
+		const level = numberOrNull(candidate);
+		if (level !== null && candidate !== null && candidate !== undefined && candidate !== '') {
+			return level;
+		}
+	}
+	return null;
+}
+
 module.exports = {
 	MarketScannerRequestError,
 	parseMarketScannerRequest,
@@ -605,5 +634,6 @@ module.exports = {
 	prepareMarketScannerItems,
 	getRiskLevelsForSide,
 	getScanItemSide,
+	pickLevel,
 	SUPPORTED_SCAN_TYPES,
 };

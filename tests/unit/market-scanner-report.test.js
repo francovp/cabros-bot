@@ -658,6 +658,38 @@ describe('Market Scanner Report', () => {
 			expect(report).toContain('  - *Target:* $58,000.00 | Risk/Reward: 1.00x');
 		});
 
+		it('treats SHORT_TERM_BUY as bullish for side rendering, matching scoring direction', () => {
+			const results = [
+				{
+					scan: 'bollinger_scan',
+					status: 'success',
+					items: [
+						{
+							symbol: 'BINANCE:ADAUSDT',
+							trading_recommendation: 'SHORT_TERM_BUY',
+							indicators: { close: 1, bb_lower: 0.9, bb_upper: 1.1 },
+							trendConfluence: {
+								direction: 'bearish',
+								confidence: 80,
+							},
+						},
+					],
+				},
+			];
+
+			const report = buildMarketScannerReport(results, {
+				exchange: 'BINANCE',
+				timeframe: '4h',
+				ranked: false,
+				now: mockDate,
+			});
+
+			expect(report).toContain('⚠️ HTF COUNTER-TREND 80%');
+			// Long-side levels despite `short` appearing in the phrase
+			expect(report).toContain('  - *Stop Loss:* $0.900000 (Invalidación: $0.100000)');
+			expect(report).toContain('  - *Target:* $1.10 | Risk/Reward: 1.00x');
+		});
+
 		it('covers support/resistance-based risk/reward formatting when support and resistance are present', () => {
 				const results = [
 					{

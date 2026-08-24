@@ -221,6 +221,47 @@ describe('Market Scanner Alert endpoint', () => {
 		signalOutcomeService.isEnabled.mockRestore();
 	});
 
+	it('renders and persists identical levels when an earlier support field is a nonnumeric placeholder', async () => {
+		const signalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
+		jest.spyOn(signalOutcomeService, 'isEnabled').mockReturnValue(true);
+		const recordedCalls = [];
+		const recordSignalSpy = jest.spyOn(signalOutcomeService, 'recordSignal').mockImplementation(async (params) => {
+			recordedCalls.push(params);
+			return {};
+		});
+
+		tradingViewMcpService.callScanTool.mockImplementation(async (scanType) => {
+			if (scanType === 'bollinger_scan') {
+				return [
+					{
+						symbol: 'BINANCE:LINKUSDT',
+						breakout_type: 'bearish',
+						indicators: { close: 100, atr: 10, bb_lower: 90, bb_upper: 110, support: 'N/A' },
+						support: 85,
+					},
+				];
+			}
+			return [];
+		});
+
+		const res = await request(app)
+			.post('/api/webhook/market-scanner-alert')
+			.set('x-api-key', 'test-key')
+			.send({ scans: ['bollinger_scan'], timeframe: '4h', exchange: 'BINANCE' })
+			.expect(200);
+
+		expect(res.body.success).toBe(true);
+		// The rendered report must include the fallback level in the target
+		expect(res.body.alertText).toContain('*Target:* $85.00');
+		// The persisted outcome must carry the same level — not a missing one
+		const recorded = recordedCalls[0];
+		expect(recorded.side).toBe('SELL');
+		expect(recorded.target).toBe(85);
+
+		recordSignalSpy.mockRestore();
+		signalOutcomeService.isEnabled.mockRestore();
+	});
+
 	it('returns 502 when all scanner calls fail', async () => {
 		tradingViewMcpService.callScanTool.mockRejectedValue(new Error('Connection failure'));
 
