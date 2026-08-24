@@ -302,6 +302,47 @@ describe('Market Scanner Alert endpoint', () => {
 		signalOutcomeService.isEnabled.mockRestore();
 	});
 
+	it('renders and persists identical ATR fallback when an earlier ATR field is a nonnumeric placeholder', async () => {
+		const signalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
+		jest.spyOn(signalOutcomeService, 'isEnabled').mockReturnValue(true);
+		const recordedCalls = [];
+		const recordSignalSpy = jest.spyOn(signalOutcomeService, 'recordSignal').mockImplementation(async (params) => {
+			recordedCalls.push(params);
+			return {};
+		});
+
+		tradingViewMcpService.callScanTool.mockImplementation(async (scanType) => {
+			if (scanType === 'bollinger_scan') {
+				return [
+					{
+						symbol: 'BINANCE:ETHUSDT',
+						breakout_type: 'bearish',
+						indicators: { close: 3000, atr: 'N/A', bb_lower: 2900, bb_upper: 3100 },
+						atr: 100,
+					},
+				];
+			}
+			return [];
+		});
+
+		const res = await request(app)
+			.post('/api/webhook/market-scanner-alert')
+			.set('x-api-key', 'test-key')
+			.send({ scans: ['bollinger_scan'], timeframe: '4h', exchange: 'BINANCE' })
+			.expect(200);
+
+		expect(res.body.success).toBe(true);
+		// Report renders SELL with stop = price + atr*1.5 using the fallback ATR
+		expect(res.body.alertText).toContain('*Stop Loss:* $3,150.00');
+		// Persisted outcome must carry the same ATR-derived stop
+		const recorded = recordedCalls[0];
+		expect(recorded.side).toBe('SELL');
+		expect(recorded.stop).toBe(3150);
+
+		recordSignalSpy.mockRestore();
+		signalOutcomeService.isEnabled.mockRestore();
+	});
+
 	it('returns 502 when all scanner calls fail', async () => {
 		tradingViewMcpService.callScanTool.mockRejectedValue(new Error('Connection failure'));
 
