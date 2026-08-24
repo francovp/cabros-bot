@@ -7,11 +7,14 @@ describe('EquityMarketDataService', () => {
 
 	beforeEach(() => {
 		jest.clearAllMocks();
+		EquityMarketDataService._resetPacerForTesting();
 		delete process.env.ENABLE_EQUITY_MARKET_DATA;
 		delete process.env.EQUITY_MARKET_DATA_PROVIDER;
 		delete process.env.TWELVE_DATA_API_KEY;
 		delete process.env.TWELVE_DATA_BASE_URL;
 		delete process.env.EQUITY_MARKET_DATA_TIMEOUT_MS;
+		process.env.EQUITY_MARKET_DATA_RPM = '0';
+		delete process.env.TWELVE_DATA_RPM;
 	});
 
 	afterEach(() => {
@@ -276,6 +279,71 @@ describe('EquityMarketDataService', () => {
 				[Date.parse('2026-08-02T15:00:00Z'), '170', '176', '169', '175.5'],
 			]);
 			expect(new URL(global.fetch.mock.calls[0][0]).searchParams.get('exchange')).toBe('NYSE');
+		});
+
+		it('correctly classifies transient and structural reasons', () => {
+			expect(EquityMarketDataService.isTransientReason(EquityMarketDataService.REASONS.RATE_LIMITED)).toBe(true);
+			expect(EquityMarketDataService.isTransientReason(EquityMarketDataService.REASONS.TIMEOUT)).toBe(true);
+			expect(EquityMarketDataService.isTransientReason(EquityMarketDataService.REASONS.UNAVAILABLE)).toBe(true);
+			expect(EquityMarketDataService.isTransientReason(EquityMarketDataService.REASONS.NO_DATA)).toBe(false);
+
+			expect(EquityMarketDataService.isStructuralReason(EquityMarketDataService.REASONS.NOT_CONFIGURED)).toBe(true);
+			expect(EquityMarketDataService.isStructuralReason(EquityMarketDataService.REASONS.MISCONFIGURED)).toBe(true);
+			expect(EquityMarketDataService.isStructuralReason(EquityMarketDataService.REASONS.INVALID_RESPONSE)).toBe(true);
+			expect(EquityMarketDataService.isStructuralReason(EquityMarketDataService.REASONS.NO_DATA)).toBe(true);
+			expect(EquityMarketDataService.isStructuralReason('unparseable_symbol')).toBe(true);
+			expect(EquityMarketDataService.isStructuralReason('unsupported_exchange')).toBe(true);
+		});
+
+		it('extracts Retry-After header on 429 responses into EquityMarketDataError', async () => {
+			configure();
+			EquityMarketDataService._resetPacerForTesting();
+
+			const mockHeaders = new Map();
+			mockHeaders.set('retry-after', '15');
+
+			global.fetch = jest.fn().mockResolvedValue({
+				ok: false,
+				status: 429,
+				statusText: 'Too Many Requests',
+				headers: {
+					get: (name) => mockHeaders.get(name.toLowerCase()) || null,
+				},
+				json: async () => ({ code: 429, message: 'You have reached your API call rate limit' }),
+			});
+
+			try {
+				await EquityMarketDataService.getQuote({ symbol: 'AAPL', exchange: 'NASDAQ' });
+				throw new Error('Expected getQuote to throw');
+			} catch (err) {
+				expect(err).toBeInstanceOf(EquityMarketDataService.EquityMarketDataError);
+				expect(err.reason).toBe(EquityMarketDataService.REASONS.RATE_LIMITED);
+				expect(err.retryAfterSeconds).toBe(15);
+				expect(err.status).toBe(429);
+			}
+		});
+
+		it('paces outbound requests when RPM is configured', async () => {
+			configure();
+			process.env.EQUITY_MARKET_DATA_RPM = '60'; // 1 request per second
+			EquityMarketDataService._resetPacerForTesting();
+
+			global.fetch = jest.fn().mockResolvedValue({
+				ok: true,
+				status: 200,
+				json: async () => ({ status: 'ok', close: '150.00' }),
+			});
+
+			const startTime = Date.now();
+			await EquityMarketDataService.getEntryPrice({ symbol: 'AAPL', exchange: 'NASDAQ' });
+			await EquityMarketDataService.getEntryPrice({ symbol: 'MSFT', exchange: 'NASDAQ' });
+			const elapsed = Date.now() - startTime;
+
+			// Second request should have waited for at least ~900ms due to pacing
+			expect(elapsed).toBeGreaterThanOrEqual(850);
+			expect(global.fetch).toHaveBeenCalledTimes(2);
+
+			EquityMarketDataService._resetPacerForTesting();
 		});
 	});
 });

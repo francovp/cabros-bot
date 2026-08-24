@@ -166,6 +166,9 @@ function normalizeAssetClass(rawAssetClass) {
 	return ['crypto', 'stock', 'forex', 'index'].includes(assetClass) ? assetClass : null;
 }
 
+const DEFAULT_MAX_RETRY_ATTEMPTS = 3;
+const DEFAULT_MAX_RETRY_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
 function determineEligibility(normSymbolInfo, assetClass, entryPrice, equityProviderName = null, entryPriceReason = null) {
 	const isClassifiedBareStock = normSymbolInfo.exchange === 'UNKNOWN' && assetClass === 'stock';
 	if (normSymbolInfo.symbol === 'UNKNOWN' || (normSymbolInfo.exchange === 'UNKNOWN' && !isClassifiedBareStock)) {
@@ -189,6 +192,17 @@ function determineEligibility(normSymbolInfo, assetClass, entryPrice, equityProv
 		};
 	}
 	if (entryPrice === null || entryPrice === undefined) {
+		const isTransient = equityMarketDataService.isTransientReason(entryPriceReason)
+			|| entryPriceReason === 'binance_unavailable'
+			|| entryPriceReason === 'twelve_data_unavailable'
+			|| entryPriceReason === 'twelve_data_rate_limited'
+			|| entryPriceReason === 'twelve_data_timeout';
+		if (isTransient) {
+			return {
+				state: 'pending_entry_price',
+				reason: entryPriceReason || 'Entry price temporarily unavailable; will resolve on sweep',
+			};
+		}
 		return {
 			state: equityProviderName ? 'equity_provider_unavailable' : 'missing_entry_price',
 			reason: entryPriceReason || (equityProviderName
@@ -264,6 +278,10 @@ async function recordSignalInternal({
 					}
 				}
 			} catch (err) {
+				const isTransient = !err.message.includes('400')
+					&& !err.message.includes('UNKNOWN_SYMBOL')
+					&& !err.message.includes('Invalid symbol');
+				entryPriceReason = isTransient ? 'binance_unavailable' : 'binance_invalid_symbol';
 				console.warn('[SignalOutcomeService] Failed to fetch entry price from Binance:', err.message);
 			}
 		} else if (entryPrice === null && equityProviderName) {
@@ -282,7 +300,7 @@ async function recordSignalInternal({
 		}
 
 		const eligibility = determineEligibility(normSymbolInfo, normAssetClass, entryPrice, equityProviderName, entryPriceReason);
-		const isEligible = eligibility.state === 'supported_provider';
+		const isEligible = eligibility.state === 'supported_provider' || eligibility.state === 'pending_entry_price';
 
 		const outcomes = {};
 		for (const [winKey, config] of Object.entries(WINDOW_CONFIGS)) {
@@ -371,6 +389,16 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 			30000
 		);
 
+		const maxRetryAttempts = parsePositiveInteger(
+			options.maxRetryAttempts !== undefined ? options.maxRetryAttempts : getRuntimeConfig().SIGNAL_OUTCOME_MAX_RETRY_ATTEMPTS,
+			DEFAULT_MAX_RETRY_ATTEMPTS
+		);
+
+		const maxRetryAgeMs = parsePositiveInteger(
+			options.maxRetryAgeMs !== undefined ? options.maxRetryAgeMs : getRuntimeConfig().SIGNAL_OUTCOME_MAX_RETRY_AGE_MS,
+			DEFAULT_MAX_RETRY_AGE_MS
+		);
+
 		let query = firestore.collection(COLLECTION_NAME).where('outcomeEvaluated', '==', false);
 		if (lastEvaluatedDoc) {
 			query = query.startAfter(lastEvaluatedDoc);
@@ -405,65 +433,178 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 
 			scannedCount++;
 			const data = doc.data();
-			const entryPrice = data.price;
+			let entryPrice = data.price;
 			const side = data.side;
 			const receivedAtMs = data.receivedAt.toDate().getTime();
 			const equityProviderName = data.exchange === 'BINANCE'
 				? null
 				: equityMarketDataService.getProviderName(data.exchange, data.assetClass);
 
-			if (!entryPrice || typeof entryPrice !== 'number') {
-				// Mark evaluated if entry price is invalid/missing
-				const outcomes = { ...data.outcomes };
-				for (const winKey of Object.keys(outcomes)) {
-					if (outcomes[winKey].status === 'pending') {
-						outcomes[winKey].status = 'unavailable';
-						outcomes[winKey].reason = 'missing_entry_price';
-					}
-				}
-				await doc.ref.update({
-					outcomeEvaluated: true,
-					eligibilityState: 'missing_entry_price',
-					eligibilityReason: 'Entry price unavailable for symbol',
-					outcomes,
-				});
-				evaluatedCount++;
-				lastEvaluatedDoc = doc;
-				continue;
-			}
-
-			if (data.exchange !== 'BINANCE' && !equityProviderName) {
-				const isClassifiedBareStock = data.exchange === 'UNKNOWN' && data.assetClass === 'stock';
-				const state = (data.symbol === 'UNKNOWN' || (data.exchange === 'UNKNOWN' && !isClassifiedBareStock))
-					? 'unparseable_symbol'
-					: ((equityMarketDataService.isSupportedExchange(data.exchange) || isClassifiedBareStock) && !equityProviderName
-						? equityMarketDataService.REASONS.NOT_CONFIGURED
-						: 'unsupported_exchange');
-				const outcomes = { ...data.outcomes };
-				for (const winKey of Object.keys(outcomes)) {
-					if (outcomes[winKey].status === 'pending') {
-						outcomes[winKey].status = 'unavailable';
-						outcomes[winKey].reason = state;
-					}
-				}
-				await doc.ref.update({
-					outcomeEvaluated: true,
-					eligibilityState: state,
-					eligibilityReason: state === 'unparseable_symbol'
-						? 'Symbol or exchange unparseable or unknown'
-						: state === equityMarketDataService.REASONS.NOT_CONFIGURED
-							? 'Twelve Data equity market-data provider is not configured'
-							: `Exchange ${data.exchange} not supported by Binance market-data evaluator`,
-					marketDataProvider: data.marketDataProvider || equityProviderName,
-					outcomes,
-				});
-				evaluatedCount++;
-				lastEvaluatedDoc = doc;
-				continue;
-			}
-
 			let docUpdated = false;
 			let allResolved = true;
+
+			if (!entryPrice || typeof entryPrice !== 'number') {
+				// Check structural eligibility first
+				if (data.exchange !== 'BINANCE' && !equityProviderName) {
+					const isClassifiedBareStock = data.exchange === 'UNKNOWN' && data.assetClass === 'stock';
+					const state = (data.symbol === 'UNKNOWN' || (data.exchange === 'UNKNOWN' && !isClassifiedBareStock))
+						? 'unparseable_symbol'
+						: ((equityMarketDataService.isSupportedExchange(data.exchange) || isClassifiedBareStock) && !equityProviderName
+							? equityMarketDataService.REASONS.NOT_CONFIGURED
+							: 'unsupported_exchange');
+					const outcomes = { ...data.outcomes };
+					for (const winKey of Object.keys(outcomes)) {
+						if (outcomes[winKey].status === 'pending') {
+							outcomes[winKey].status = 'unavailable';
+							outcomes[winKey].reason = state;
+						}
+					}
+					await doc.ref.update({
+						outcomeEvaluated: true,
+						eligibilityState: state,
+						eligibilityReason: state === 'unparseable_symbol'
+							? 'Symbol or exchange unparseable or unknown'
+							: state === equityMarketDataService.REASONS.NOT_CONFIGURED
+								? 'Twelve Data equity market-data provider is not configured'
+								: `Exchange ${data.exchange} not supported by Binance market-data evaluator`,
+						marketDataProvider: data.marketDataProvider || equityProviderName,
+						outcomes,
+					});
+					evaluatedCount++;
+					lastEvaluatedDoc = doc;
+					continue;
+				}
+
+				// Attempt to resolve entry price
+				let resolvedPrice = null;
+				let resolvedPriceSource = null;
+				let entryPriceError = null;
+
+				const remainingMs = effectiveMaxDurationMs - (Date.now() - startTime);
+				if (remainingMs <= 0) {
+					allResolved = false;
+					sweepDeadlineExceeded = true;
+					break;
+				}
+
+				if (data.exchange === 'BINANCE') {
+					try {
+						const client = getBinanceClient();
+						const klines = await client.getKlines({
+							symbol: data.symbol,
+							interval: '5m',
+							startTime: receivedAtMs,
+							limit: 1,
+						});
+						if (Array.isArray(klines) && klines.length > 0 && klines[0][1]) {
+							const parsed = parseFloat(klines[0][1]);
+							if (Number.isFinite(parsed) && parsed > 0) {
+								resolvedPrice = parsed;
+								resolvedPriceSource = 'binance';
+							}
+						}
+						if (!resolvedPrice) {
+							const avgRes = await client.getAvgPrice({ symbol: data.symbol });
+							if (avgRes && avgRes.price) {
+								const parsed = parseFloat(avgRes.price);
+								if (Number.isFinite(parsed) && parsed > 0) {
+									resolvedPrice = parsed;
+									resolvedPriceSource = 'binance';
+								}
+							}
+						}
+					} catch (err) {
+						entryPriceError = err;
+					}
+				} else {
+					try {
+						const bars = await equityMarketDataService.getHistoricalBars({
+							symbol: data.symbol,
+							exchange: data.exchange === 'UNKNOWN' ? undefined : data.exchange,
+							interval: '5m',
+							startTime: receivedAtMs,
+							endTime: receivedAtMs + 2 * 60 * 60 * 1000,
+							timeoutMs: remainingMs,
+						});
+						if (Array.isArray(bars) && bars.length > 0 && bars[0][1]) {
+							const parsed = parseFloat(bars[0][1]);
+							if (Number.isFinite(parsed) && parsed > 0) {
+								resolvedPrice = parsed;
+								resolvedPriceSource = equityProviderName;
+							}
+						}
+					} catch (err) {
+						entryPriceError = err;
+					}
+					if (!resolvedPrice) {
+						try {
+							const quotePrice = await equityMarketDataService.getEntryPrice({
+								symbol: data.symbol,
+								exchange: data.exchange === 'UNKNOWN' ? undefined : data.exchange,
+								timeoutMs: remainingMs,
+							});
+							if (typeof quotePrice === 'number' && Number.isFinite(quotePrice) && quotePrice > 0) {
+								resolvedPrice = quotePrice;
+								resolvedPriceSource = equityProviderName;
+								entryPriceError = null;
+							}
+						} catch (err) {
+							if (!entryPriceError) entryPriceError = err;
+						}
+					}
+				}
+
+				if (resolvedPrice !== null) {
+					entryPrice = resolvedPrice;
+					data.price = resolvedPrice;
+					data.entryPriceSource = resolvedPriceSource;
+					data.eligibilityState = 'supported_provider';
+					data.eligibilityReason = data.exchange === 'BINANCE' ? 'Binance market data supported' : 'Twelve Data market data supported';
+					docUpdated = true;
+				} else {
+					const isStructural = entryPriceError && (
+						(entryPriceError instanceof equityMarketDataService.EquityMarketDataError && equityMarketDataService.isStructuralReason(entryPriceError.reason))
+						|| (entryPriceError.message && (entryPriceError.message.includes('400') || entryPriceError.message.includes('Invalid symbol') || entryPriceError.message.includes('UNKNOWN_SYMBOL')))
+					);
+
+					const entryAttempts = (data.entryPriceAttempts || 0) + 1;
+					const lastAttemptAt = new Date().toISOString();
+					const isExpired = (now - receivedAtMs) > maxRetryAgeMs || entryAttempts >= maxRetryAttempts;
+
+					if (isStructural || isExpired) {
+						const outcomes = { ...data.outcomes };
+						for (const winKey of Object.keys(outcomes)) {
+							if (outcomes[winKey].status === 'pending') {
+								outcomes[winKey].status = 'unavailable';
+								outcomes[winKey].reason = (entryPriceError && entryPriceError.reason) || 'missing_entry_price';
+								if (isExpired && !isStructural) {
+									outcomes[winKey].retryExhausted = true;
+								}
+							}
+						}
+						await doc.ref.update({
+							outcomeEvaluated: true,
+							eligibilityState: isStructural && entryPriceError ? (entryPriceError.reason || 'missing_entry_price') : 'missing_entry_price',
+							eligibilityReason: 'Entry price unavailable for symbol',
+							entryPriceAttempts: entryAttempts,
+							lastEntryPriceAttemptAt: lastAttemptAt,
+							outcomes,
+						});
+						evaluatedCount++;
+						lastEvaluatedDoc = doc;
+						continue;
+					} else {
+						await doc.ref.update({
+							entryPriceAttempts: entryAttempts,
+							lastEntryPriceAttemptAt: lastAttemptAt,
+						});
+						pendingCount++;
+						lastEvaluatedDoc = doc;
+						continue;
+					}
+				}
+			}
+
 			const outcomes = { ...data.outcomes };
 
 			for (const [winKey, outcome] of Object.entries(outcomes)) {
@@ -525,9 +666,20 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 					}
 
 					if (!Array.isArray(klines) || klines.length === 0) {
-						outcome.status = 'unavailable';
-						outcome.reason = 'market_data_unavailable';
-						docUpdated = true;
+						const attempts = (outcome.attempts || 0) + 1;
+						outcome.attempts = attempts;
+						outcome.lastAttemptAt = new Date().toISOString();
+						outcome.lastError = 'no_data';
+						const isExpired = (now - targetTimeMs) > maxRetryAgeMs || attempts >= maxRetryAttempts;
+						if (isExpired) {
+							outcome.status = 'unavailable';
+							outcome.reason = 'market_data_unavailable';
+							outcome.retryExhausted = true;
+							docUpdated = true;
+						} else {
+							allResolved = false;
+							docUpdated = true;
+						}
 						continue;
 					}
 
@@ -645,20 +797,61 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 					}
 					errorCount++;
 					console.warn(`[SignalOutcomeService] Error evaluating window ${winKey} for ${data.symbol}:`, error.message);
-					if (error instanceof equityMarketDataService.EquityMarketDataError) {
-						outcome.status = 'unavailable';
-						outcome.reason = error.reason;
-						docUpdated = true;
-					} else if (error.message.includes('deadline exceeded') || error.name === 'AbortError') {
+
+					if (error.message && (error.message.includes('deadline exceeded') || error.name === 'AbortError')) {
 						allResolved = false;
 						sweepDeadlineExceeded = true;
 						break;
-					} else if (error.message.includes('400') || error.message.includes('Invalid symbol') || error.message.includes('UNKNOWN_SYMBOL')) {
+					}
+
+					let isStructural = false;
+					let reason = 'market_data_unavailable';
+					let errorIdentifier = error.message;
+
+					if (error instanceof equityMarketDataService.EquityMarketDataError) {
+						isStructural = equityMarketDataService.isStructuralReason(error.reason);
+						reason = error.reason;
+						errorIdentifier = error.reason;
+					} else if (data.exchange === 'BINANCE') {
+						const isBinanceStructural = Boolean(error.message && (
+							error.message.includes('400') ||
+							error.message.includes('Invalid symbol') ||
+							error.message.includes('UNKNOWN_SYMBOL')
+						));
+						isStructural = isBinanceStructural;
+						reason = isBinanceStructural ? 'binance_invalid_symbol' : 'binance_unavailable';
+						errorIdentifier = reason;
+					} else {
+						isStructural = Boolean(error.message && (
+							error.message.includes('400') ||
+							error.message.includes('Invalid symbol') ||
+							error.message.includes('UNKNOWN_SYMBOL')
+						));
+						reason = 'market_data_unavailable';
+						errorIdentifier = error.message;
+					}
+
+					if (isStructural) {
 						outcome.status = 'unavailable';
-						outcome.reason = 'market_data_unavailable';
+						outcome.reason = reason;
 						docUpdated = true;
 					} else {
-						allResolved = false; // retry on network/rate-limit error
+						const attempts = (outcome.attempts || 0) + 1;
+						outcome.attempts = attempts;
+						outcome.lastAttemptAt = new Date().toISOString();
+						outcome.lastError = errorIdentifier;
+
+						const isExpired = (now - targetTimeMs) > maxRetryAgeMs || attempts >= maxRetryAttempts;
+						if (isExpired) {
+							outcome.status = 'unavailable';
+							outcome.reason = reason;
+							outcome.retryExhausted = true;
+							docUpdated = true;
+						} else {
+							outcome.status = 'pending';
+							allResolved = false;
+							docUpdated = true;
+						}
 					}
 				} finally {
 					if (timerId) {
@@ -669,6 +862,18 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 
 			if (docUpdated) {
 				const updateFields = { outcomes };
+				if (data.price !== undefined && data.price !== null) {
+					updateFields.price = data.price;
+				}
+				if (data.entryPriceSource) {
+					updateFields.entryPriceSource = data.entryPriceSource;
+				}
+				if (data.eligibilityState) {
+					updateFields.eligibilityState = data.eligibilityState;
+				}
+				if (data.eligibilityReason) {
+					updateFields.eligibilityReason = data.eligibilityReason;
+				}
 				if (allResolved) {
 					updateFields.outcomeEvaluated = true;
 				}
@@ -819,6 +1024,8 @@ function getWorkerStatus() {
 	const batchLimit = parsePositiveInteger(runtimeConfig.SIGNAL_OUTCOME_EVALUATION_BATCH_LIMIT, 50);
 
 	const maxDurationMs = parseTimerInterval(runtimeConfig.SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS, 30000);
+	const maxRetryAttempts = parsePositiveInteger(runtimeConfig.SIGNAL_OUTCOME_MAX_RETRY_ATTEMPTS, DEFAULT_MAX_RETRY_ATTEMPTS);
+	const maxRetryAgeMs = parsePositiveInteger(runtimeConfig.SIGNAL_OUTCOME_MAX_RETRY_AGE_MS, DEFAULT_MAX_RETRY_AGE_MS);
 
 	return {
 		enabled: isEnabled(),
@@ -828,6 +1035,8 @@ function getWorkerStatus() {
 		intervalMs,
 		batchLimit,
 		maxDurationMs,
+		maxRetryAttempts,
+		maxRetryAgeMs,
 		isEvaluating,
 		lastRunAt,
 		lastRunDurationMs,

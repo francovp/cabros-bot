@@ -4,6 +4,7 @@ const PROVIDER_NAME = 'twelve-data';
 const DEFAULT_BASE_URL = 'https://api.twelvedata.com';
 const DEFAULT_TIMEOUT_MS = 5000;
 const MAX_TIMEOUT_MS = 30000;
+const DEFAULT_RPM = 8;
 const SUPPORTED_EXCHANGES = Object.freeze(['BATS', 'NASDAQ', 'NYSE', 'AMEX', 'NYSE ARCA', 'FX_IDC', 'SPCFD']);
 const INTERVALS = Object.freeze({
 	'5m': '5min',
@@ -24,12 +25,66 @@ const REASONS = Object.freeze({
 	UNAVAILABLE: 'twelve_data_unavailable',
 });
 
+const TRANSIENT_REASONS = Object.freeze(new Set([
+	REASONS.RATE_LIMITED,
+	REASONS.TIMEOUT,
+	REASONS.UNAVAILABLE,
+	'binance_unavailable',
+	'market_data_unavailable',
+]));
+
+const STRUCTURAL_REASONS = Object.freeze(new Set([
+	REASONS.NOT_CONFIGURED,
+	REASONS.MISCONFIGURED,
+	REASONS.INVALID_RESPONSE,
+	REASONS.NO_DATA,
+	'unparseable_symbol',
+	'unsupported_exchange',
+	'missing_barrier',
+	'binance_invalid_symbol',
+]));
+
+function isTransientReason(reason) {
+	return typeof reason === 'string' && TRANSIENT_REASONS.has(reason);
+}
+
+function isStructuralReason(reason) {
+	return typeof reason === 'string' && STRUCTURAL_REASONS.has(reason);
+}
+
 class EquityMarketDataError extends Error {
-	constructor(reason) {
+	constructor(reason, options = {}) {
 		super(reason);
 		this.name = 'EquityMarketDataError';
 		this.reason = reason;
+		if (typeof options.status === 'number') {
+			this.status = options.status;
+		}
+		if (typeof options.retryAfterSeconds === 'number' && Number.isFinite(options.retryAfterSeconds)) {
+			this.retryAfterSeconds = options.retryAfterSeconds;
+		}
+		if (options.cause) {
+			this.cause = options.cause;
+		}
 	}
+}
+
+let lastRequestAtMs = 0;
+let cooldownUntilMs = 0;
+
+function _resetPacerForTesting() {
+	lastRequestAtMs = 0;
+	cooldownUntilMs = 0;
+}
+
+function parseRpm(value) {
+	if (value !== undefined && value !== null && value !== '') {
+		const parsed = Number(value);
+		if (Number.isSafeInteger(parsed) && parsed >= 0) {
+			return Math.min(parsed, 1200);
+		}
+	}
+	return process.env.NODE_ENV === 'test' ? 0 : DEFAULT_RPM;
 }
 
 function parseTimeout(value) {
@@ -76,6 +131,43 @@ function resolveQueryExchange(exchange) {
 	return normalized;
 }
 
+function parseRetryAfter(headerValue) {
+	if (!headerValue || typeof headerValue !== 'string') return null;
+	const trimmed = headerValue.trim();
+	const asSeconds = Number(trimmed);
+	if (Number.isFinite(asSeconds) && asSeconds >= 0) {
+		return Math.ceil(asSeconds);
+	}
+	const asDate = Date.parse(trimmed);
+	if (!Number.isNaN(asDate)) {
+		const diffSeconds = Math.ceil((asDate - Date.now()) / 1000);
+		return Math.max(0, diffSeconds);
+	}
+	return null;
+}
+
+async function waitForPacing(maxWaitMs) {
+	const config = getConfig();
+	const rpm = config.rpm;
+	const now = Date.now();
+	if (rpm <= 0 && cooldownUntilMs <= now) {
+		lastRequestAtMs = now;
+		return;
+	}
+
+	const minIntervalMs = rpm > 0 ? Math.ceil(60000 / rpm) : 0;
+	const nextAllowedTime = Math.max(lastRequestAtMs + minIntervalMs, cooldownUntilMs);
+	const delayMs = nextAllowedTime - now;
+
+	if (delayMs > 0) {
+		if (maxWaitMs !== undefined && delayMs >= maxWaitMs) {
+			throw new EquityMarketDataError(REASONS.TIMEOUT);
+		}
+		await new Promise((resolve) => setTimeout(resolve, delayMs));
+	}
+	lastRequestAtMs = Date.now();
+}
+
 function getConfig() {
 	const rawProvider = typeof process.env.EQUITY_MARKET_DATA_PROVIDER === 'string'
 		? process.env.EQUITY_MARKET_DATA_PROVIDER.trim().toLowerCase()
@@ -94,6 +186,7 @@ function getConfig() {
 		apiKey,
 		configured: enabled && provider === PROVIDER_NAME && apiKey.length > 0,
 		timeoutMs: parseTimeout(process.env.EQUITY_MARKET_DATA_TIMEOUT_MS),
+		rpm: parseRpm(process.env.EQUITY_MARKET_DATA_RPM || process.env.TWELVE_DATA_RPM),
 	};
 }
 
@@ -111,6 +204,7 @@ function getStatus() {
 		status,
 		supportedExchanges: [...SUPPORTED_EXCHANGES],
 		timeoutMs: config.timeoutMs,
+		rpm: config.rpm,
 	};
 }
 
@@ -162,8 +256,10 @@ async function requestJson(path, params, timeoutOverride) {
 		throw new EquityMarketDataError(REASONS.NOT_CONFIGURED);
 	}
 
-	const controller = new AbortController();
 	const timeoutMs = timeoutOverride === undefined ? config.timeoutMs : parseTimeout(timeoutOverride);
+	await waitForPacing(timeoutOverride);
+
+	const controller = new AbortController();
 	const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
 	try {
@@ -182,8 +278,25 @@ async function requestJson(path, params, timeoutOverride) {
 			throw new EquityMarketDataError(REASONS.INVALID_RESPONSE);
 		}
 
+		if (response.status === 429) {
+			const rawHeader = response.headers && typeof response.headers.get === 'function'
+				? response.headers.get('retry-after')
+				: null;
+			const retryAfterSeconds = parseRetryAfter(rawHeader);
+			if (retryAfterSeconds && retryAfterSeconds > 0) {
+				cooldownUntilMs = Date.now() + (retryAfterSeconds * 1000);
+				throw new EquityMarketDataError(REASONS.RATE_LIMITED, { retryAfterSeconds, status: response.status });
+			}
+			cooldownUntilMs = Date.now() + (config.rpm > 0 ? Math.ceil(60000 / config.rpm) : 7500);
+			throw new EquityMarketDataError(REASONS.RATE_LIMITED, { status: response.status });
+		}
+
 		if (!response.ok || !body || body.status === 'error') {
-			throw new EquityMarketDataError(classifyResponseError(response.status, body));
+			const reason = classifyResponseError(response.status, body);
+			if (reason === REASONS.RATE_LIMITED) {
+				cooldownUntilMs = Date.now() + (config.rpm > 0 ? Math.ceil(60000 / config.rpm) : 7500);
+			}
+			throw new EquityMarketDataError(reason, { status: response.status });
 		}
 
 		return body;
@@ -194,7 +307,7 @@ async function requestJson(path, params, timeoutOverride) {
 		if (error && error.name === 'AbortError') {
 			throw new EquityMarketDataError(REASONS.TIMEOUT);
 		}
-		throw new EquityMarketDataError(REASONS.UNAVAILABLE);
+		throw new EquityMarketDataError(REASONS.UNAVAILABLE, { cause: error });
 	} finally {
 		clearTimeout(timeoutId);
 	}
@@ -297,6 +410,10 @@ module.exports = {
 	PROVIDER_NAME,
 	SUPPORTED_EXCHANGES,
 	REASONS,
+	TRANSIENT_REASONS,
+	STRUCTURAL_REASONS,
+	isTransientReason,
+	isStructuralReason,
 	EquityMarketDataError,
 	getStatus,
 	isSupportedExchange,
@@ -308,4 +425,5 @@ module.exports = {
 	normalizeExchange,
 	normalizeSymbol,
 	resolveQueryExchange,
+	_resetPacerForTesting,
 };
