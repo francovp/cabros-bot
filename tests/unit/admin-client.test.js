@@ -66,6 +66,16 @@ class FakeElement {
 		delete this.attributes[name];
 	}
 
+	remove() {
+		if (!this.parentNode) return;
+		const siblings = this.parentNode.children;
+		const index = siblings.indexOf(this);
+		if (index >= 0) siblings.splice(index, 1);
+		this.parentNode = undefined;
+	}
+
+	select() {}
+
 	querySelectorAll(selector) {
 		if (selector === '[data-view]') return findAll(this, (node) => node.dataset.view);
 		return [];
@@ -152,6 +162,7 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 		getElementById: (id) => elementsById[id],
 		querySelectorAll: (selector) => body.querySelectorAll(selector),
 		addEventListener: (type, listener) => { documentListeners[type] = listener; },
+		execCommand: () => false,
 	};
 	const storage = new Map(storedKey ? [['cabros-admin-api-key', storedKey]] : []);
 	const helperCalls = [];
@@ -1588,6 +1599,148 @@ describe('admin browser client', () => {
 
 		expect(statusCalls).toBe(2);
 		expect(copyButton.hidden).toBe(true);
+	});
+
+	it('removes the fallback textarea even when execCommand throws', async () => {
+		const status = {
+			service: { name: 'cabros-bot' },
+			featureFlags: {},
+			deliveryChannels: {},
+			dependencies: {},
+		};
+		const browser = createBrowser({
+			fetchImpl: async (url) => response(url === '/openapi.json' ? contract : (url === '/api/status' ? status : {})),
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'overview');
+		await flush();
+
+		browser.context.document.execCommand = () => { throw new Error('blocked'); };
+		const copyButton = findButton(browser.elementsById.view, 'Copy JSON');
+		await copyButton.dispatch('click');
+		await flush();
+
+		expect(copyButton.textContent).toBe('Copy unavailable');
+		expect(find(browser.body, (node) => node.tagName === 'TEXTAREA')).toBeUndefined();
+	});
+
+	it('reports a successful execCommand fallback and cleans up its textarea', async () => {
+		const status = {
+			service: { name: 'cabros-bot' },
+			featureFlags: {},
+			deliveryChannels: {},
+			dependencies: {},
+		};
+		const browser = createBrowser({
+			fetchImpl: async (url) => response(url === '/openapi.json' ? contract : (url === '/api/status' ? status : {})),
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'overview');
+		await flush();
+
+		browser.context.document.execCommand = () => true;
+		const copyButton = findButton(browser.elementsById.view, 'Copy JSON');
+		await copyButton.dispatch('click');
+		await flush();
+
+		expect(copyButton.textContent).toBe('Copied!');
+		expect(find(browser.body, (node) => node.tagName === 'TEXTAREA')).toBeUndefined();
+	});
+
+	it('clears a previous structured result when the next submission fails validation', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/alerts/alert-7') {
+					return response({ success: true, alert: { id: 'alert-7', text: 'detail body', enriched: false } });
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const detailForm = findForm(browser.elementsById.view, 'GET /api/alerts/{alertId}');
+		detailForm.elements['path-alertId'].value = 'alert-7';
+		await detailForm.dispatch('submit');
+		await flush();
+		expect(find(detailForm, (node) => node.className.includes('alert-detail'))).toBeDefined();
+
+		detailForm.elements.query.value = '{ invalid json';
+		await detailForm.dispatch('submit');
+		await flush();
+
+		expect(find(detailForm, (node) => node.className.includes('alert-detail'))).toBeUndefined();
+		expect(detailForm.textContent).toContain('Query must be valid JSON');
+	});
+
+	it('resets pagination state when alert filters change', async () => {
+		let alertCalls = 0;
+		const pages = [
+			{ alerts: [{ id: 'a1', text: 'first page alert', enriched: false }], pagination: { hasMore: true, nextBefore: 'cursor-2' } },
+			{ alerts: [{ id: 'a2', text: 'second page alert', enriched: false }], pagination: { hasMore: false } },
+		];
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/alerts')) {
+					alertCalls += 1;
+					return response(pages[alertCalls - 1] || pages[0]);
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alerts');
+		await listForm.dispatch('submit');
+		await flush();
+		const nextButton = findButton(listForm, 'Next page');
+		expect(nextButton.disabled).toBe(false);
+
+		listForm.elements.source.value = 'webhook';
+		await listForm.elements.source.dispatch('input');
+
+		expect(nextButton.disabled).toBe(true);
+		expect(findButton(listForm, 'Previous page').disabled).toBe(true);
+
+		await nextButton.dispatch('click');
+		await flush();
+		expect(alertCalls).toBe(1);
+	});
+
+	it('clears stale stored-alert cards when a later refresh fails', async () => {
+		let alertCalls = 0;
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/alerts')) {
+					alertCalls += 1;
+					if (alertCalls === 1) {
+						return response({ success: true, alerts: [{ id: 'a1', text: 'first page alert', enriched: false }], pagination: {} });
+					}
+					return response({ error: 'boom' }, 500);
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alerts');
+		await listForm.dispatch('submit');
+		await flush();
+		expect(listForm.textContent).toContain('first page alert');
+		expect(findButton(listForm, 'Copy JSON').hidden).toBe(false);
+
+		await listForm.dispatch('submit');
+		await flush();
+
+		expect(listForm.textContent).not.toContain('first page alert');
+		expect(findButton(listForm, 'Copy JSON').hidden).toBe(true);
 	});
 
 	it('keeps navigation icons as inline SVG instead of platform glyphs', () => {
