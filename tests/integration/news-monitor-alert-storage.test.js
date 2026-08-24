@@ -179,6 +179,61 @@ describe('News Monitor - Alert Storage Integration', () => {
 		expect(saveAlertSpy).not.toHaveBeenCalled();
 	});
 
+	it('persists redelivered alerts when cached item is successfully sent to new channel', async () => {
+		// First request delivers to telegram only
+		await request(app)
+			.post('/api/news-monitor')
+			.set('x-api-key', 'test-key')
+			.send({ crypto: ['BTCUSDT'], channels: ['telegram'] })
+			.expect(200);
+
+		expect(saveAlertSpy).toHaveBeenCalledTimes(1);
+		expect(saveAlertSpy).toHaveBeenLastCalledWith(expect.objectContaining({
+			dedupStatus: 'fresh',
+			channels: ['telegram'],
+		}));
+
+		// Second request sends to whatsapp (which was not in previous delivery)
+		const res = await request(app)
+			.post('/api/news-monitor')
+			.set('x-api-key', 'test-key')
+			.send({ crypto: ['BTCUSDT'], channels: ['whatsapp'] })
+			.expect(200);
+
+		expect(res.body.success).toBe(true);
+		expect(res.body.summary.cached).toBe(1);
+		expect(saveAlertSpy).toHaveBeenCalledTimes(2);
+		expect(saveAlertSpy).toHaveBeenLastCalledWith(expect.objectContaining({
+			source: 'news-monitor',
+			symbol: 'BTCUSDT',
+			dedupStatus: 'cached',
+			channels: ['whatsapp'],
+		}));
+	});
+
+	it('does not persist cached alert when no redelivery is attempted or needed', async () => {
+		// First request delivers to telegram
+		await request(app)
+			.post('/api/news-monitor')
+			.set('x-api-key', 'test-key')
+			.send({ crypto: ['BTCUSDT'], channels: ['telegram'] })
+			.expect(200);
+
+		expect(saveAlertSpy).toHaveBeenCalledTimes(1);
+
+		// Second request sends to telegram again (already delivered)
+		const res = await request(app)
+			.post('/api/news-monitor')
+			.set('x-api-key', 'test-key')
+			.send({ crypto: ['BTCUSDT'], channels: ['telegram'] })
+			.expect(200);
+
+		expect(res.body.success).toBe(true);
+		expect(res.body.summary.cached).toBe(1);
+		// Should NOT call saveAlert a second time because no redelivery happened
+		expect(saveAlertSpy).toHaveBeenCalledTimes(1);
+	});
+
 	it('does not persist when ENABLE_FIRESTORE_ALERT_STORAGE is false', async () => {
 		process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'false';
 
@@ -193,3 +248,4 @@ describe('News Monitor - Alert Storage Integration', () => {
 		expect(saveAlertSpy).not.toHaveBeenCalled();
 	});
 });
+

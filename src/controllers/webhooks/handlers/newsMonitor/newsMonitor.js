@@ -167,7 +167,9 @@ class NewsMonitorHandler {
 			if (!dryRun && alertStorageService.isEnabled()) {
 				const requestedChannels = response.requestedChannels || [];
 				for (const result of results || []) {
-					if (result && result.alert && result.status === AnalysisStatus.ANALYZED) {
+					const isDeliveredAnalyzed = result && result.alert && result.status === AnalysisStatus.ANALYZED;
+					const isDeliveredCached = result && result.alert && result.status === AnalysisStatus.CACHED && result.redelivered;
+					if (isDeliveredAnalyzed || isDeliveredCached) {
 						alertStorageService.saveAlert({
 							text: result.alert.text || '',
 							symbol: result.alert.symbol || result.symbol,
