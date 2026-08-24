@@ -47,6 +47,26 @@ describe('sync-production-env tool', () => {
 				/Environment variable name is required/i
 			);
 		});
+
+		it('parses --verified, --applied, and custom --status flags correctly', () => {
+			const parsedVerified = parseArgs(['--key', 'BOT_TOKEN', '--verified']);
+			expect(parsedVerified.verified).toBe(true);
+			expect(parsedVerified.apply).toBe(true);
+
+			const parsedStatus = parseArgs([
+				'--key',
+				'BOT_TOKEN',
+				'--status',
+				'render=VERIFIED',
+				'--status',
+				'railway=APPLIED',
+			]);
+			expect(parsedStatus.platformStatuses).toEqual({
+				render: 'VERIFIED',
+				railway: 'APPLIED',
+			});
+			expect(parsedStatus.apply).toBe(true);
+		});
 	});
 
 	describe('Render Service Detection from Blueprint', () => {

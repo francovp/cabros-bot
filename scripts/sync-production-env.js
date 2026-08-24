@@ -43,6 +43,9 @@ function parseArgs(argv = process.argv.slice(2)) {
 		key: null,
 		dryRun: true,
 		apply: false,
+		applied: false,
+		verified: false,
+		platformStatuses: {},
 		noOpPlatforms: [],
 		noOpReasons: {},
 		logFile: DEFAULT_LOG_FILE,
@@ -64,10 +67,32 @@ function parseArgs(argv = process.argv.slice(2)) {
 		} else if (arg === '--diff' || arg === '--check-drift') {
 			args.checkDrift = true;
 			i++;
-		} else if (arg === '--apply') {
+		} else if (arg === '--apply' || arg === '--record-log') {
 			args.apply = true;
 			args.dryRun = false;
 			i++;
+		} else if (arg === '--applied') {
+			args.apply = true;
+			args.applied = true;
+			args.dryRun = false;
+			i++;
+		} else if (arg === '--verified') {
+			args.apply = true;
+			args.verified = true;
+			args.dryRun = false;
+			i++;
+		} else if (arg === '--status') {
+			if (i + 1 >= argv.length) {
+				throw new Error('Missing argument for --status');
+			}
+			const statusArg = argv[i + 1];
+			if (statusArg.includes('=')) {
+				const [plat, ...rest] = statusArg.split('=');
+				args.platformStatuses[plat.trim().toLowerCase()] = rest.join('=');
+			}
+			args.apply = true;
+			args.dryRun = false;
+			i += 2;
 		} else if (arg === '--dry-run') {
 			args.dryRun = true;
 			args.apply = false;
@@ -326,7 +351,10 @@ Usage:
 Options:
   --key, -k <NAME>       Variable name to synchronize (required for sync plan)
   --dry-run              Print planned platform actions without mutating (default)
-  --apply                Prompt and record applied sync
+  --apply, --record-log  Record sync execution plan to log file
+  --verified             Record non-no-op platforms as VERIFIED
+  --applied              Record non-no-op platforms as APPLIED
+  --status <p=STATUS>    Record specific status for platform (e.g. --status render=APPLIED --status railway=VERIFIED)
   --no-op <platform>     Mark platform as explicit no-op (e.g. --no-op vercel)
   --no-op-reason <p=r>   Reason for no-op (e.g. --no-op-reason vercel="Web-only host")
   --log-file <path>      Path to local sync log (default: .env-sync.log)
@@ -378,7 +406,7 @@ Security Rules:
 		}
 
 		console.log(`\n=== Production Environment Sync Plan for ${plan.key} ===\n`);
-		console.log(`Mode: ${args.dryRun ? 'DRY-RUN (Planned actions only)' : 'APPLY'}`);
+		console.log(`Mode: ${args.dryRun ? 'DRY-RUN (Planned actions only)' : 'APPLY / RECORD'}`);
 		console.log(`Generated At: ${plan.generatedAt}\n`);
 
 		// Render
@@ -416,19 +444,36 @@ Security Rules:
 
 		// If apply mode, record to log
 		if (args.apply) {
+			const resolveStatus = (platformName, platformObj) => {
+				if (platformObj.isNoOp) {
+					return `NO_OP (${platformObj.noOpReason})`;
+				}
+				if (args.platformStatuses[platformName]) {
+					return args.platformStatuses[platformName].toUpperCase();
+				}
+				if (args.verified) {
+					return 'VERIFIED';
+				}
+				if (args.applied) {
+					return 'APPLIED';
+				}
+				return 'PLANNED_UNVERIFIED';
+			};
+
 			const statuses = {
-				render: plan.platforms.render.isNoOp ? `NO_OP (${plan.platforms.render.noOpReason})` : 'APPLIED',
-				railway: plan.platforms.railway.isNoOp ? `NO_OP (${plan.platforms.railway.noOpReason})` : 'APPLIED',
-				vercel: plan.platforms.vercel.isNoOp ? `NO_OP (${plan.platforms.vercel.noOpReason})` : 'APPLIED',
+				render: resolveStatus('render', plan.platforms.render),
+				railway: resolveStatus('railway', plan.platforms.railway),
+				vercel: resolveStatus('vercel', plan.platforms.vercel),
 			};
 			recordSyncLog({
 				key: plan.key,
 				logFile: args.logFile,
 				statuses,
 			});
-			console.log(`\n✓ Sync audit record appended to ${args.logFile}`);
+			console.log(`\n✓ Sync audit record appended to ${args.logFile}:`);
+			console.log(`  Render: ${statuses.render} | Railway: ${statuses.railway} | Vercel: ${statuses.vercel}`);
 		} else {
-			console.log(`Tip: Run with --apply to record timestamped execution in ${args.logFile}`);
+			console.log(`Tip: Run with --apply / --verified / --status to record verified execution in ${args.logFile}`);
 		}
 	} catch (error) {
 		console.error(`\nError: ${error.message}\n`);
