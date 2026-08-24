@@ -87,9 +87,112 @@ function extractPriorityMcpInsights(mcp = {}) {
 	));
 }
 
+function hasContradictoryConfluence(mcp = {}) {
+	if (mcp && mcp.confluenceData) {
+		const conf = mcp.confluenceData.confluence || mcp.confluenceData;
+		if (conf) {
+			const signalsAgree = conf.signals_agree;
+			if (signalsAgree === false || ['NO', 'FALSE', '0'].includes(String(signalsAgree).toUpperCase())) {
+				return true;
+			}
+			const rec = String(conf.recommendation || conf.action || '').toUpperCase();
+			const isSell = rec.includes('SELL') || rec.includes('VENTA') || rec.includes('SHORT');
+			const isBuy = rec.includes('BUY') || rec.includes('COMPRA') || rec.includes('LONG');
+			if (mcp.sentiment === 'BEARISH' && isBuy) {
+				return true;
+			}
+			if (mcp.sentiment === 'BULLISH' && isSell) {
+				return true;
+			}
+		}
+	}
+
+	return hasContradictoryConfluenceInsight(mcp);
+}
+
 function hasContradictoryConfluenceInsight(mcp = {}) {
-	return Array.isArray(mcp.insights)
+	return Array.isArray(mcp && mcp.insights)
 		&& mcp.insights.some(insight => typeof insight === 'string' && insight.startsWith('Confluencia contradictoria:'));
+}
+
+function applySignCoherenceGuard(sentiment, score) {
+	const clampedScore = typeof score === 'number' && Number.isFinite(score)
+		? Math.max(-1, Math.min(1, score))
+		: 0;
+
+	if (sentiment === 'BEARISH') {
+		const finalScore = clampedScore > 0
+			? -clampedScore
+			: (clampedScore < 0 ? clampedScore : -0.5);
+		return { sentiment: 'BEARISH', sentiment_score: finalScore };
+	}
+
+	if (sentiment === 'BULLISH') {
+		const finalScore = clampedScore < 0
+			? -clampedScore
+			: (clampedScore > 0 ? clampedScore : 0.5);
+		return { sentiment: 'BULLISH', sentiment_score: finalScore };
+	}
+
+	return { sentiment: 'NEUTRAL', sentiment_score: 0 };
+}
+
+function selectSentimentAndScore(gemini = {}, mcp = {}) {
+	const isMcpApplied = mcp.tradingViewEnrichmentApplied === true
+		|| (mcp.tradingViewEnrichmentApplied !== false && Boolean(mcp.sentiment || typeof mcp.sentiment_score === 'number' || mcp.confluenceData || (Array.isArray(mcp.insights) && mcp.insights.length > 0)));
+
+	const geminiSentiment = (typeof gemini.sentiment === 'string' && ['BULLISH', 'BEARISH', 'NEUTRAL'].includes(gemini.sentiment))
+		? gemini.sentiment
+		: null;
+	const geminiScore = (typeof gemini.sentiment_score === 'number' && Number.isFinite(gemini.sentiment_score))
+		? gemini.sentiment_score
+		: null;
+
+	const mcpSentiment = (typeof mcp.sentiment === 'string' && ['BULLISH', 'BEARISH', 'NEUTRAL'].includes(mcp.sentiment))
+		? mcp.sentiment
+		: null;
+	const mcpScore = (typeof mcp.sentiment_score === 'number' && Number.isFinite(mcp.sentiment_score))
+		? mcp.sentiment_score
+		: null;
+
+	const contradictoryConfluence = isMcpApplied && hasContradictoryConfluence(mcp);
+
+	// Detect conflict between providers
+	const hasLabelConflict = isMcpApplied && geminiSentiment && mcpSentiment
+		&& geminiSentiment !== 'NEUTRAL' && mcpSentiment !== 'NEUTRAL'
+		&& geminiSentiment !== mcpSentiment;
+	const hasScoreConflict = isMcpApplied && geminiScore !== null && mcpScore !== null
+		&& ((geminiScore > 0 && mcpScore < 0) || (geminiScore < 0 && mcpScore > 0));
+	const sentimentConflict = hasLabelConflict || hasScoreConflict;
+
+	let chosenSentiment = 'NEUTRAL';
+	let chosenScore = 0;
+
+	if (contradictoryConfluence) {
+		chosenSentiment = mcpSentiment || 'NEUTRAL';
+		chosenScore = mcpScore !== null ? mcpScore : (chosenSentiment === 'BEARISH' ? -0.5 : chosenSentiment === 'BULLISH' ? 0.5 : 0);
+	} else if (sentimentConflict) {
+		console.warn('[Alert] Sentiment conflict between Gemini and TradingView MCP; selecting MCP indicators over LLM prose');
+		chosenSentiment = mcpSentiment || 'NEUTRAL';
+		chosenScore = mcpScore !== null ? mcpScore : (chosenSentiment === 'BEARISH' ? -0.5 : chosenSentiment === 'BULLISH' ? 0.5 : 0);
+	} else if (geminiSentiment !== null || geminiScore !== null) {
+		chosenSentiment = geminiSentiment || 'NEUTRAL';
+		chosenScore = geminiScore !== null ? geminiScore : (chosenSentiment === 'BEARISH' ? -0.5 : chosenSentiment === 'BULLISH' ? 0.5 : 0);
+	} else if (isMcpApplied && (mcpSentiment !== null || mcpScore !== null)) {
+		chosenSentiment = mcpSentiment || 'NEUTRAL';
+		chosenScore = mcpScore !== null ? mcpScore : (chosenSentiment === 'BEARISH' ? -0.5 : chosenSentiment === 'BULLISH' ? 0.5 : 0);
+	} else {
+		chosenSentiment = mcpSentiment || geminiSentiment || 'NEUTRAL';
+		chosenScore = mcpScore ?? geminiScore ?? 0;
+	}
+
+	const guarded = applySignCoherenceGuard(chosenSentiment, chosenScore);
+
+	return {
+		sentiment: guarded.sentiment,
+		sentiment_score: guarded.sentiment_score,
+		sentimentConflict: sentimentConflict ? true : undefined,
+	};
 }
 
 function isMessageFooterMetadataEnabled() {
@@ -97,63 +200,74 @@ function isMessageFooterMetadataEnabled() {
 }
 
 function mergeEnrichmentData(text, geminiEnriched, mcpEnriched) {
-	const gemini = geminiEnriched || {};
-	const mcp = mcpEnriched || {};
+	try {
+		const gemini = geminiEnriched || {};
+		const mcp = mcpEnriched || {};
 
-	const geminiLevels = gemini.technical_levels || { supports: [], resistances: [] };
-	const mcpLevels = mcp.technical_levels || { supports: [], resistances: [] };
-	const technicalLevels = buildTechnicalLevels({
-		supports: mergeUnique(geminiLevels.supports || [], mcpLevels.supports || []),
-		resistances: mergeUnique(geminiLevels.resistances || [], mcpLevels.resistances || []),
-	});
+		const geminiLevels = gemini.technical_levels || { supports: [], resistances: [] };
+		const mcpLevels = mcp.technical_levels || { supports: [], resistances: [] };
+		const technicalLevels = buildTechnicalLevels({
+			supports: mergeUnique(geminiLevels.supports || [], mcpLevels.supports || []),
+			resistances: mergeUnique(geminiLevels.resistances || [], mcpLevels.resistances || []),
+		});
 
-	const geminiScore = typeof gemini.sentiment_score === 'number' ? gemini.sentiment_score : null;
-	const mcpScore = typeof mcp.sentiment_score === 'number' ? mcp.sentiment_score : null;
-	const useMcpSentiment = hasContradictoryConfluenceInsight(mcp);
+		const { sentiment, sentiment_score, sentimentConflict } = selectSentimentAndScore(gemini, mcp);
 
-	const geminiBackticked = extractBacktickedValues(gemini.extraText);
-	const modelName = geminiBackticked[0] || GROUNDING_MODEL_NAME;
-	const groundingFromGemini = geminiBackticked[1] || GROUNDING_MODEL_NAME;
-	const groundingProviders = mergeUnique([groundingFromGemini], ['tradingview-mcp'], 8);
-	const extraText = isMessageFooterMetadataEnabled()
-		? '*Model used*: ' + '`' + `${modelName}` + '`' + '\n*Grounding*: ' + '`' + `${groundingProviders.join('`, `')}` + '`'
-		: '';
-	const priorityMcpInsights = extractPriorityMcpInsights(mcp);
-	const remainingMcpInsights = Array.isArray(mcp.insights)
-		? mcp.insights.filter(insight => !priorityMcpInsights.includes(insight))
-		: [];
-	const insights = mergeUnique(
-		priorityMcpInsights,
-		mergeUnique(gemini.insights || [], remainingMcpInsights),
-	);
-	const optionalRiskMetadata = selectRiskMetadata(gemini, mcp);
+		const geminiBackticked = extractBacktickedValues(gemini.extraText);
+		const modelName = geminiBackticked[0] || GROUNDING_MODEL_NAME;
+		const groundingFromGemini = geminiBackticked[1] || GROUNDING_MODEL_NAME;
+		const groundingProviders = mergeUnique([groundingFromGemini], ['tradingview-mcp'], 8);
+		const extraText = isMessageFooterMetadataEnabled()
+			? '*Model used*: ' + '`' + `${modelName}` + '`' + '\n*Grounding*: ' + '`' + `${groundingProviders.join('`, `')}` + '`'
+			: '';
+		const priorityMcpInsights = extractPriorityMcpInsights(mcp);
+		const remainingMcpInsights = Array.isArray(mcp.insights)
+			? mcp.insights.filter(insight => !priorityMcpInsights.includes(insight))
+			: [];
+		const insights = mergeUnique(
+			priorityMcpInsights,
+			mergeUnique(gemini.insights || [], remainingMcpInsights),
+		);
+		const optionalRiskMetadata = selectRiskMetadata(gemini, mcp);
 
-	const mcpCurrentPrice = typeof mcp.current_price === 'number' && Number.isFinite(mcp.current_price) && mcp.current_price > 0
-		? mcp.current_price
-		: (mcp.price_data && typeof mcp.price_data.current_price === 'number' && Number.isFinite(mcp.price_data.current_price) && mcp.price_data.current_price > 0
-			? mcp.price_data.current_price
-			: null);
+		const mcpCurrentPrice = typeof mcp.current_price === 'number' && Number.isFinite(mcp.current_price) && mcp.current_price > 0
+			? mcp.current_price
+			: (mcp.price_data && typeof mcp.price_data.current_price === 'number' && Number.isFinite(mcp.price_data.current_price) && mcp.price_data.current_price > 0
+				? mcp.price_data.current_price
+				: null);
 
-	return {
-		original_text: text,
-		tradingViewEnrichmentApplied: mcp.tradingViewEnrichmentApplied === true,
-		...(mcp.tradingViewEnrichmentStatus ? { tradingViewEnrichmentStatus: mcp.tradingViewEnrichmentStatus } : {}),
-		sentiment: useMcpSentiment ? (mcp.sentiment || 'NEUTRAL') : (gemini.sentiment || mcp.sentiment || 'NEUTRAL'),
-		sentiment_score: useMcpSentiment && mcpScore !== null ? mcpScore : (geminiScore !== null ? geminiScore : (mcpScore !== null ? mcpScore : 0)),
-		current_price: mcpCurrentPrice,
-		...(mcp.price_data ? { price_data: mcp.price_data } : {}),
-		insights,
-		...(technicalLevels ? { technical_levels: technicalLevels } : {}),
-		sources: Array.isArray(gemini.sources) ? gemini.sources : [],
-		truncated: !!(gemini.truncated || mcp.truncated),
-		extraText,
-		confluenceData: mcp.confluenceData || null,
-		multiTimeframeData: mcp.multiTimeframeData || null,
-		...(gemini.promptProvenance ? { promptProvenance: gemini.promptProvenance } : {}),
-		...Object.fromEntries(
-			Object.entries(optionalRiskMetadata).filter(([, value]) => value !== undefined),
-		),
-	};
+		return {
+			original_text: text,
+			tradingViewEnrichmentApplied: mcp.tradingViewEnrichmentApplied === true,
+			...(mcp.tradingViewEnrichmentStatus ? { tradingViewEnrichmentStatus: mcp.tradingViewEnrichmentStatus } : {}),
+			sentiment,
+			sentiment_score,
+			...(sentimentConflict ? { sentimentConflict: true } : {}),
+			current_price: mcpCurrentPrice,
+			...(mcp.price_data ? { price_data: mcp.price_data } : {}),
+			insights,
+			...(technicalLevels ? { technical_levels: technicalLevels } : {}),
+			sources: Array.isArray(gemini.sources) ? gemini.sources : [],
+			truncated: !!(gemini.truncated || mcp.truncated),
+			extraText,
+			confluenceData: mcp.confluenceData || null,
+			multiTimeframeData: mcp.multiTimeframeData || null,
+			...(gemini.promptProvenance ? { promptProvenance: gemini.promptProvenance } : {}),
+			...Object.fromEntries(
+				Object.entries(optionalRiskMetadata).filter(([, value]) => value !== undefined),
+			),
+		};
+	} catch (error) {
+		console.warn('[Alert] mergeEnrichmentData encountered error, falling back:', error.message);
+		const fallback = geminiEnriched || mcpEnriched || {};
+		const guarded = applySignCoherenceGuard(fallback.sentiment || 'NEUTRAL', fallback.sentiment_score || 0);
+		return {
+			original_text: text,
+			...fallback,
+			sentiment: guarded.sentiment,
+			sentiment_score: guarded.sentiment_score,
+		};
+	}
 }
 
 async function enrichWithGemini(text, tokenUsage) {
@@ -184,10 +298,12 @@ async function enrichWithGemini(text, tokenUsage) {
 		? '*Model used*: ' + '`' + `${modelName}` + '`' + '\n*Grounding*: ' + '`' + `${GROUNDING_MODEL_NAME}` + '`'
 		: '';
 
+	const hasSentiment = typeof sentiment === 'string' || typeof sentiment_score === 'number';
+	const guarded = hasSentiment ? applySignCoherenceGuard(sentiment, sentiment_score) : null;
+
 	return {
 		original_text: text,
-		sentiment,
-		sentiment_score,
+		...(guarded ? { sentiment: guarded.sentiment, sentiment_score: guarded.sentiment_score } : {}),
 		insights,
 		sources,
 		truncated,
@@ -281,6 +397,14 @@ async function enrichAlert(alert, options = {}) {
 		if (mcpEnrichmentFailed) {
 			throw new Error('TradingView MCP enrichment failed');
 		}
+		if (mcpEnrichedAlert) {
+			const guarded = applySignCoherenceGuard(mcpEnrichedAlert.sentiment, mcpEnrichedAlert.sentiment_score);
+			return {
+				...mcpEnrichedAlert,
+				sentiment: guarded.sentiment,
+				sentiment_score: guarded.sentiment_score,
+			};
+		}
 		return mcpEnrichedAlert;
 	}
 
@@ -291,11 +415,25 @@ async function enrichAlert(alert, options = {}) {
 			return mergeEnrichmentData(text, geminiEnrichedAlert, mcpEnrichedAlert);
 		}
 
+		if (geminiEnrichedAlert) {
+			const guarded = applySignCoherenceGuard(geminiEnrichedAlert.sentiment, geminiEnrichedAlert.sentiment_score);
+			return {
+				...geminiEnrichedAlert,
+				sentiment: guarded.sentiment,
+				sentiment_score: guarded.sentiment_score,
+			};
+		}
+
 		return geminiEnrichedAlert;
 	} catch (error) {
 		if (mcpEnrichedAlert) {
 			console.warn('[Alert] Gemini grounding failed, using TradingView MCP enrichment:', error.message);
-			return mcpEnrichedAlert;
+			const guarded = applySignCoherenceGuard(mcpEnrichedAlert.sentiment, mcpEnrichedAlert.sentiment_score);
+			return {
+				...mcpEnrichedAlert,
+				sentiment: guarded.sentiment,
+				sentiment_score: guarded.sentiment_score,
+			};
 		}
 
 		throw new Error(`Alert enrichment failed: ${error.message}`);
