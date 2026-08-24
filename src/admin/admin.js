@@ -701,7 +701,8 @@ const newsMonitorResults = (data) => {
 		wrap.append(element('p', { className: 'empty-state', text: 'Dry run: no notifications were sent and nothing was cached.' }));
 	}
 	const counterChips = summaryCounterChips(data.summary, [
-		['analyzed', 'Analyzed'], ['cached', 'Cached'], ['alerts_sent', 'Alerts sent'],
+		['analyzed', 'Analyzed'], ['cached', 'Cached'],
+		['alerts_sent', data.dryRun === true ? 'Alerts generated' : 'Alerts sent'],
 		['timeout', 'Timeout'], ['error', 'Error'], ['quota_exhausted', 'Quota exhausted'],
 	]);
 	if (counterChips.children.length) wrap.append(counterChips);
@@ -1777,7 +1778,8 @@ const createJobStatusForm = () => {
 		});
 		if (requestVersion !== statusRequestVersion || form.elements['path-jobId'].value !== jobId) return data;
 		if (data && data.status) applyStatus(data, jobId);
-		else clearStructuredState();
+		else if (!isAutoRefresh) clearStructuredState();
+		else if (lastFetchedActive && !pollPaused) schedulePoll();
 		return data;
 	};
 
@@ -1896,6 +1898,11 @@ const createOperationForm = (contract, definition) => {
 	form.addEventListener('submit', (event) => {
 		event.preventDefault();
 		if (resultHost) resultHost.replaceChildren();
+		if (rawCopyButton) {
+			lastRawJson = '';
+			rawOutputEl.textContent = '';
+			rawCopyButton.hidden = true;
+		}
 		try {
 			const query = form.elements.query
 				? window.CabrosAdminRequest.validateQuery(parseJson(form.elements.query.value, 'Query'))

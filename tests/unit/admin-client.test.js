@@ -2197,6 +2197,93 @@ describe('admin browser client', () => {
 		expect(rawPre).toBeUndefined();
 	});
 
+	it('reschedules job auto-refresh after a transient status failure', async () => {
+		let statusCalls = 0;
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/jobs/job-live') {
+					statusCalls += 1;
+					if (statusCalls === 1) return response({ jobId: 'job-live', type: 'market-scanner', status: 'processing', progress: { current: 1, total: 3 } });
+					if (statusCalls === 2) return response({ error: 'boom' }, 500);
+					return response({ jobId: 'job-live', type: 'market-scanner', status: 'completed', progress: { current: 3, total: 3 } });
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'jobs');
+
+		const statusForm = findForm(browser.elementsById.view, 'GET /api/jobs/{jobId}');
+		statusForm.elements['path-jobId'].value = 'job-live';
+		await statusForm.dispatch('submit');
+		await flush();
+		expect(statusCalls).toBe(1);
+
+		for (const fireTimer of [...browser.timers.values()]) fireTimer();
+		await flush();
+		expect(statusCalls).toBe(2);
+		expect(findButton(statusForm, 'Pause auto-refresh').hidden).toBe(false);
+
+		for (const fireTimer of [...browser.timers.values()]) fireTimer();
+		await flush();
+		expect(statusCalls).toBe(3);
+		expect(findButton(statusForm, 'Pause auto-refresh').hidden).toBe(true);
+	});
+
+	it('labels dry-run news alerts as generated instead of sent', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/news-monitor')) {
+					return response({
+						success: true,
+						dryRun: true,
+						summary: { analyzed: 1, alerts_sent: 1 },
+						results: [{ symbol: 'BTCUSDT', status: 'analyzed', alert: { eventCategory: 'price_surge', headline: 'Breakout', confidence: 0.9 } }],
+					});
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'analysis');
+
+		const form = findForm(browser.elementsById.view, 'POST /api/news-monitor');
+		await form.dispatch('submit');
+		await flush();
+
+		expect(form.textContent).toContain('Alerts generated: 1');
+		expect(form.textContent).not.toContain('Alerts sent');
+	});
+
+	it('clears the raw analysis payload when the next submission fails validation', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/webhook/volume-confirmation') {
+					return response({ success: true, symbol: 'BINANCE:BTCUSDT', confirmed: true, decision: 'confirm', volumeRatio: 1.7, analysis: { volume_analysis: { volume_strength: 'HIGH' } } });
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'analysis');
+
+		const form = findForm(browser.elementsById.view, 'POST /api/webhook/volume-confirmation');
+		await form.dispatch('submit');
+		await flush();
+		expect(findButton(form, 'Copy JSON').hidden).toBe(false);
+
+		form.elements.body.value = '{ invalid';
+		await form.dispatch('submit');
+		await flush();
+
+		expect(findButton(form, 'Copy JSON').hidden).toBe(true);
+		const staleRaw = find(form, (node) => node.tagName === 'PRE' && node.textContent.includes('volume_ratio'));
+		expect(staleRaw).toBeUndefined();
+	});
+
 	it('keeps navigation icons as inline SVG instead of platform glyphs', () => {
 		const shell = fs.readFileSync(path.join(__dirname, '../../src/admin/index.html'), 'utf8');
 		expect(shell.match(/<svg class="nav-icon"/g)).toHaveLength(7);
