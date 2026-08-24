@@ -369,7 +369,15 @@ function reconciledOrderMatchesRequest(order, existingOrder, clientOrderId) {
 		const hasQuoteQty = existingQuoteOrderQty !== undefined && compareDecimals(existingQuoteOrderQty, '0') > 0;
 		// A quantity-based MARKET BUY may have been submitted as quoteOrderQty to bound notional.
 		const isConvertedMarketBuy = order.side === 'BUY' && order.type === 'MARKET' && isZeroOrigQty && hasQuoteQty;
-		if (!isConvertedMarketBuy && compareDecimals(existingQuantity, order.quantity) !== 0) {
+		if (isConvertedMarketBuy) {
+			const executedQuantity = existingOrder.executedQty;
+			if (executedQuantity === undefined || compareDecimals(executedQuantity, '0') === 0) {
+				return false;
+			}
+			if (compareDecimals(executedQuantity, order.quantity) !== 0) {
+				return false;
+			}
+		} else if (compareDecimals(existingQuantity, order.quantity) !== 0) {
 			return false;
 		}
 	}

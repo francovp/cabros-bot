@@ -390,7 +390,7 @@ describe('Binance orders API', () => {
 				origQty: '0.00000000',
 				origQuoteOrderQty: '50.00',
 				cummulativeQuoteQty: '50.00',
-				executedQty: '0.00100000',
+				executedQty: '0.50000000',
 			});
 		const payload = {
 			symbol: 'BTCUSDT',
@@ -421,6 +421,41 @@ describe('Binance orders API', () => {
 			origClientOrderId: expect.stringMatching(/^cb_[a-f0-9]{32}$/),
 		});
 		expect(client.submitNewOrder).toHaveBeenCalledTimes(1);
+	});
+
+	it('rejects changed quantity during quote-sized MARKET BUY reconciliation with 409 conflict', async () => {
+		client.getOrder.mockResolvedValueOnce({
+			symbol: 'BTCUSDT',
+			orderId: 45,
+			clientOrderId: 'cb_267ef7d4f4c1a898bffebf85a138d98b',
+			status: 'FILLED',
+			side: 'BUY',
+			type: 'MARKET',
+			origQty: '0.00000000',
+			origQuoteOrderQty: '50.00',
+			cummulativeQuoteQty: '50.00',
+			executedQty: '0.50000000',
+		});
+		idempotencyService.clear();
+
+		const response = await request(app)
+			.post('/api/trading/binance/orders')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'order-375-reconcile')
+			.send({
+				symbol: 'BTCUSDT',
+				side: 'BUY',
+				type: 'MARKET',
+				quantity: 0.1,
+				dryRun: false,
+			})
+			.expect(409);
+
+		expect(response.body).toMatchObject({
+			success: false,
+			code: 'BINANCE_ORDER_CONFLICT',
+			error: expect.stringContaining('Reconciled Binance order does not match the request'),
+		});
 	});
 
 	it('exposes Binance trading readiness in status and capabilities', async () => {

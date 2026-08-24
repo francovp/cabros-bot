@@ -371,6 +371,7 @@ describe('BinanceOrderService', () => {
 					origQty: '0.00000000',
 					origQuoteOrderQty: '50.00',
 					cummulativeQuoteQty: '50.00',
+					executedQty: '0.00100000',
 				});
 			}),
 		};
@@ -396,6 +397,40 @@ describe('BinanceOrderService', () => {
 
 		expect(reconciled.success).toBe(true);
 		expect(reconciled.order.orderId).toBe(77);
+	});
+
+	it('rejects changed quantity during quote-sized MARKET BUY reconciliation with 409 conflict', async () => {
+		process.env.BINANCE_TRADING_MAX_NOTIONAL = '1000';
+		const clientOrderId = `cb_${'b'.repeat(32)}`;
+		const client = {
+			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
+			getOrder: jest.fn().mockResolvedValue({
+				symbol: 'BTCUSDT',
+				orderId: 88,
+				clientOrderId,
+				status: 'FILLED',
+				side: 'BUY',
+				type: 'MARKET',
+				origQty: '0.00000000',
+				origQuoteOrderQty: '50.00',
+				cummulativeQuoteQty: '50.00',
+				executedQty: '0.00100000',
+			}),
+		};
+		const service = createBinanceOrderService({ createClient: () => client });
+
+		await expect(service.placeOrder({
+			symbol: 'BTCUSDT',
+			side: 'BUY',
+			type: 'MARKET',
+			quantity: 0.005,
+			clientOrderId,
+			dryRun: false,
+		})).rejects.toMatchObject({
+			code: 'BINANCE_ORDER_CONFLICT',
+			statusCode: 409,
+			message: expect.stringContaining('Reconciled Binance order does not match the request'),
+		});
 	});
 
 	it('rejects quantity-based market orders when getAvgPrice fails', async () => {
