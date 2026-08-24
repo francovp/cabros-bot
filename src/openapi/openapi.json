@@ -31,6 +31,9 @@
       "name": "Trading"
     },
     {
+      "name": "Signal outcomes"
+    },
+    {
       "name": "Operations"
     }
   ],
@@ -1079,6 +1082,71 @@
         ]
       }
     },
+    "/api/outcomes": {
+      "get": {
+        "tags": [
+          "Signal outcomes"
+        ],
+        "summary": "List evaluated signal outcomes",
+        "description": "Query durably recorded signal outcomes record-by-record with pagination and filtering by symbol, exchange, status, window, and date range.",
+        "operationId": "listOutcomes",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/OutcomeLimit"
+          },
+          {
+            "$ref": "#/components/parameters/BeforeCursor"
+          },
+          {
+            "$ref": "#/components/parameters/OutcomeSymbol"
+          },
+          {
+            "$ref": "#/components/parameters/OutcomeExchange"
+          },
+          {
+            "$ref": "#/components/parameters/OutcomeStatus"
+          },
+          {
+            "$ref": "#/components/parameters/OutcomeWindow"
+          },
+          {
+            "$ref": "#/components/parameters/From"
+          },
+          {
+            "$ref": "#/components/parameters/To"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/OutcomeList"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      }
+    },
     "/api/trading/binance/orders": {
       "get": {
         "tags": [
@@ -1418,6 +1486,70 @@
           "maximum": 100,
           "default": 50
         }
+      },
+      "OutcomeLimit": {
+        "name": "limit",
+        "in": "query",
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 50
+        },
+        "description": "Maximum number of outcomes to return (1-100)."
+      },
+      "BeforeCursor": {
+        "name": "before",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        },
+        "description": "Pagination cursor returned as nextBefore from a previous response, or an ISO-8601 timestamp."
+      },
+      "OutcomeSymbol": {
+        "name": "symbol",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        },
+        "example": "BINANCE:BTCUSDT",
+        "description": "Filter by trading symbol (e.g. BTCUSDT or BINANCE:BTCUSDT)."
+      },
+      "OutcomeExchange": {
+        "name": "exchange",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        },
+        "example": "BINANCE",
+        "description": "Filter by exchange identifier (e.g. BINANCE, NASDAQ)."
+      },
+      "OutcomeStatus": {
+        "name": "status",
+        "in": "query",
+        "schema": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "evaluated",
+            "unavailable"
+          ]
+        },
+        "description": "Filter by outcome evaluation status."
+      },
+      "OutcomeWindow": {
+        "name": "window",
+        "in": "query",
+        "schema": {
+          "type": "string",
+          "enum": [
+            "1h",
+            "4h",
+            "1D",
+            "1W"
+          ]
+        },
+        "description": "Filter by measurement window."
       },
       "JobListLimit": {
         "name": "limit",
@@ -2298,6 +2430,58 @@
           }
         }
       },
+      "OutcomeList": {
+        "description": "Signal outcome page",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "required": [
+                "success",
+                "outcomes",
+                "pagination"
+              ],
+              "properties": {
+                "success": {
+                  "type": "boolean",
+                  "example": true
+                },
+                "outcomes": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SignalOutcome"
+                  }
+                },
+                "pagination": {
+                  "type": "object",
+                  "required": [
+                    "limit",
+                    "hasMore",
+                    "nextBefore"
+                  ],
+                  "properties": {
+                    "limit": {
+                      "type": "integer",
+                      "example": 50
+                    },
+                    "hasMore": {
+                      "type": "boolean",
+                      "example": false
+                    },
+                    "nextBefore": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "example": null
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
       "NewsMonitorAnalysisResult": {
         "description": "News monitor analysis and delivery result",
         "content": {
@@ -2512,6 +2696,166 @@
           "jobId": {
             "type": "string",
             "description": "Durably stored job identifier returned when queue acceptance is indeterminate."
+          }
+        }
+      },
+      "SignalOutcome": {
+        "type": "object",
+        "required": [
+          "id",
+          "receivedAt",
+          "symbol",
+          "exchange",
+          "side",
+          "price",
+          "outcomeEvaluated",
+          "outcomes"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "outcome-doc-123"
+          },
+          "receivedAt": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2026-08-23T12:00:00.000Z"
+          },
+          "requestId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "example": "req-123"
+          },
+          "source": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "example": "news-monitor"
+          },
+          "symbol": {
+            "type": "string",
+            "example": "BTCUSDT"
+          },
+          "exchange": {
+            "type": "string",
+            "example": "BINANCE"
+          },
+          "assetClass": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "example": "crypto"
+          },
+          "timeframe": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "example": "1h"
+          },
+          "setupType": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "example": "breakout"
+          },
+          "score": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "example": 0.85
+          },
+          "side": {
+            "type": "string",
+            "enum": [
+              "BUY",
+              "SELL"
+            ],
+            "example": "BUY"
+          },
+          "price": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "example": 65000
+          },
+          "entryPriceSource": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "example": "tradingview-mcp"
+          },
+          "stop": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "example": 63000
+          },
+          "target": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "example": 68000
+          },
+          "marketDataProvider": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "example": "binance"
+          },
+          "eligibilityState": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "example": "supported_provider"
+          },
+          "eligibilityReason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "example": null
+          },
+          "outcomeEvaluated": {
+            "type": "boolean",
+            "example": true
+          },
+          "outcomes": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "tokenUsage": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": true
+          },
+          "processingTimeMs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "example": 150
           }
         }
       },

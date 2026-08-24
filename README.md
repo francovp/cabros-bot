@@ -1241,6 +1241,81 @@ Retrieve a single stored alert by Firestore document ID.
 }
 ```
 
+### Signal Outcomes (CB-199)
+
+#### GET /api/outcomes
+
+Query durably recorded signal outcomes record-by-record with pagination and filtering by symbol, exchange, status, window, and date range. Requires `x-api-key` header (or `api-key` query parameter) or Firebase Bearer token with `admin.viewer` or `admin.operator` role. Returns `403 FEATURE_DISABLED` if `ENABLE_SIGNAL_OUTCOME_TRACKING !== 'true'`, and `503 STORAGE_UNAVAILABLE` if Firestore is enabled but inaccessible.
+
+**Query Parameters:**
+- `limit` - Integer between `1` and `100` (default: `50`)
+- `before` - Either an ISO-8601 timestamp cursor or the opaque `nextBefore` token from a previous response
+- `symbol` - Filter by trading symbol (e.g. `BTCUSDT` or `BINANCE:BTCUSDT`)
+- `exchange` - Filter by exchange identifier (e.g. `BINANCE`, `NASDAQ`)
+- `status` - Filter by evaluation status (`pending`, `evaluated`, `unavailable`)
+- `window` - Filter by measurement window (`1h`, `4h`, `1D`, `1W`)
+- `from` - Optional ISO-8601 lower bound timestamp
+- `to` - Optional ISO-8601 upper bound timestamp
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "outcomes": [
+    {
+      "id": "outcome-doc-1",
+      "receivedAt": "2026-08-23T12:00:00.000Z",
+      "requestId": "req-1",
+      "source": "news-monitor",
+      "symbol": "BTCUSDT",
+      "exchange": "BINANCE",
+      "assetClass": "crypto",
+      "timeframe": "1h",
+      "setupType": "breakout",
+      "score": 0.9,
+      "side": "BUY",
+      "price": 65000,
+      "entryPriceSource": "tradingview-mcp",
+      "stop": 63000,
+      "target": 68000,
+      "marketDataProvider": "binance",
+      "eligibilityState": "supported_provider",
+      "eligibilityReason": null,
+      "outcomeEvaluated": true,
+      "outcomes": {
+        "1h": {
+          "status": "evaluated",
+          "reason": null,
+          "targetTime": "2026-08-23T13:00:00.000Z",
+          "price": 66000,
+          "return": 1.5385,
+          "maxFavorableExcursion": 2.0,
+          "maxAdverseExcursion": -0.2,
+          "firstHit": null,
+          "targetHit": false,
+          "stopHit": false,
+          "firstHitTime": null,
+          "rMultiple": 0.5
+        }
+      },
+      "sources": [],
+      "tokenUsage": {
+        "inputTokens": 100,
+        "outputTokens": 40,
+        "totalTokens": 140,
+        "totalCost": 0.00003
+      },
+      "processingTimeMs": 150
+    }
+  ],
+  "pagination": {
+    "limit": 50,
+    "hasMore": false,
+    "nextBefore": null
+  }
+}
+```
+
 ## Multi-Channel Alerts (002)
 
 The alert webhook system supports simultaneous delivery to multiple channels (Telegram, WhatsApp, and Discord) with independent retry logic and graceful degradation.

@@ -7,6 +7,8 @@ const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 const { MainClient } = require('binance');
 
+const { encodeAlertPaginationCursor, parseAlertPaginationCursor } = require('./alertPaginationCursor');
+
 const COLLECTION_NAME = 'tradingSignalOutcomes';
 const HEARTBEAT_COLLECTION_NAME = 'workerHeartbeats';
 const HEARTBEAT_DOCUMENT_ID = 'signal-outcome';
@@ -14,6 +16,10 @@ const HEARTBEAT_WRITE_TIMEOUT_MS = 5000;
 const MAX_WORKER_DRAIN_TIMEOUT_MS = 30000;
 const MAX_TIMER_DELAY_MS = 2147483647;
 const MAX_CONFIGURED_INTERVAL_MS = 3600000;
+const DEFAULT_LIMIT = 50;
+const MAX_LIMIT = 100;
+const STORAGE_UNAVAILABLE_CODE = 'STORAGE_UNAVAILABLE';
+const INVALID_CURSOR_MESSAGE = 'Invalid before cursor. Use an ISO-8601 timestamp or the nextBefore cursor from a previous response.';
 const WORKER_ROLES = new Set(['web', 'worker', 'disabled']);
 let binanceClient = null;
 let isEvaluating = false;
@@ -1142,11 +1148,267 @@ async function getMetricsSummary({ from, to, limit } = {}) {
 	}
 }
 
+function createStorageUnavailableError(cause) {
+	const error = new Error('Signal outcome tracking is enabled but Firestore is unavailable. Check Firestore credentials and project configuration.');
+	error.code = STORAGE_UNAVAILABLE_CODE;
+	if (cause) {
+		error.cause = cause;
+	}
+	return error;
+}
+
+function clampOutcomeLimit(limit) {
+	if (!Number.isInteger(limit) || limit < 1) {
+		return DEFAULT_LIMIT;
+	}
+	return Math.min(limit, MAX_LIMIT);
+}
+
+function getNumericValue(value) {
+	return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function summarizeTokenUsage(tokenUsage) {
+	if (!tokenUsage || typeof tokenUsage !== 'object') {
+		return null;
+	}
+
+	return {
+		inputTokens: getNumericValue(tokenUsage.inputTokens || tokenUsage.promptTokens),
+		outputTokens: getNumericValue(tokenUsage.outputTokens || tokenUsage.completionTokens),
+		totalTokens: getNumericValue(tokenUsage.totalTokens || tokenUsage.total),
+		totalCost: getNumericValue(tokenUsage.totalCost),
+	};
+}
+
+function getDocTimestamp(data) {
+	if (!data || typeof data !== 'object') {
+		return null;
+	}
+
+	if (data.receivedAt && typeof data.receivedAt.toDate === 'function') {
+		return data.receivedAt.toDate().toISOString();
+	}
+
+	if (data.receivedAt instanceof Date) {
+		return data.receivedAt.toISOString();
+	}
+
+	if (typeof data.receivedAt === 'string' && !Number.isNaN(Date.parse(data.receivedAt))) {
+		return new Date(data.receivedAt).toISOString();
+	}
+
+	return null;
+}
+
+function getDocCursorValues(doc) {
+	if (!doc || typeof doc.data !== 'function') {
+		return null;
+	}
+
+	const data = doc.data() || {};
+	const receivedAt = getDocTimestamp(data);
+	if (!receivedAt || typeof doc.id !== 'string' || !doc.id) {
+		return null;
+	}
+
+	return {
+		receivedAt,
+		documentId: doc.id,
+	};
+}
+
+function buildParsedCursorTimestamp(parsedCursor) {
+	return admin.firestore.Timestamp.fromDate(new Date(parsedCursor.receivedAt));
+}
+
+function formatOutcomeDocument(doc) {
+	const data = doc.data() || {};
+	const receivedAt = getDocTimestamp(data);
+
+	return {
+		id: doc.id,
+		receivedAt,
+		requestId: typeof data.requestId === 'string' ? data.requestId : 'unknown',
+		source: typeof data.source === 'string' ? data.source : 'unknown',
+		symbol: typeof data.symbol === 'string' ? data.symbol : 'UNKNOWN',
+		exchange: typeof data.exchange === 'string' ? data.exchange : 'UNKNOWN',
+		assetClass: typeof data.assetClass === 'string' ? data.assetClass : null,
+		timeframe: typeof data.timeframe === 'string' ? data.timeframe : null,
+		setupType: typeof data.setupType === 'string' ? data.setupType : null,
+		score: typeof data.score === 'number' && Number.isFinite(data.score) ? data.score : null,
+		side: data.side === 'SELL' ? 'SELL' : 'BUY',
+		price: typeof data.price === 'number' && Number.isFinite(data.price) ? data.price : null,
+		entryPriceSource: typeof data.entryPriceSource === 'string' ? data.entryPriceSource : null,
+		stop: typeof data.stop === 'number' && Number.isFinite(data.stop) ? data.stop : null,
+		target: typeof data.target === 'number' && Number.isFinite(data.target) ? data.target : null,
+		marketDataProvider: typeof data.marketDataProvider === 'string' ? data.marketDataProvider : null,
+		eligibilityState: typeof data.eligibilityState === 'string' ? data.eligibilityState : null,
+		eligibilityReason: typeof data.eligibilityReason === 'string' ? data.eligibilityReason : null,
+		outcomeEvaluated: Boolean(data.outcomeEvaluated),
+		outcomes: data.outcomes && typeof data.outcomes === 'object' ? data.outcomes : {},
+		sources: Array.isArray(data.sources) ? data.sources : [],
+		tokenUsage: summarizeTokenUsage(data.tokenUsage),
+		processingTimeMs: typeof data.processingTimeMs === 'number' && Number.isFinite(data.processingTimeMs) ? data.processingTimeMs : null,
+	};
+}
+
+function matchesOutcomeFilters(outcome, { symbol, exchange, status, window, from, to }) {
+	if (from && outcome.receivedAt && new Date(outcome.receivedAt) < new Date(from)) {
+		return false;
+	}
+	if (to && outcome.receivedAt && new Date(outcome.receivedAt) > new Date(to)) {
+		return false;
+	}
+	if (symbol) {
+		const targetSymbol = symbol.includes(':') ? symbol.split(':')[1].toUpperCase() : symbol.toUpperCase();
+		if ((outcome.symbol || '').toUpperCase() !== targetSymbol) {
+			return false;
+		}
+		if (symbol.includes(':') && !exchange) {
+			const inferredExchange = symbol.split(':')[0].toUpperCase();
+			if ((outcome.exchange || '').toUpperCase() !== inferredExchange) {
+				return false;
+			}
+		}
+	}
+	if (exchange) {
+		if ((outcome.exchange || '').toUpperCase() !== exchange.toUpperCase()) {
+			return false;
+		}
+	}
+	if (window && status) {
+		const winKey = Object.keys(WINDOW_CONFIGS).find(k => k.toLowerCase() === window.toLowerCase()) || window;
+		const winOutcome = outcome.outcomes && outcome.outcomes[winKey];
+		if (!winOutcome || winOutcome.status !== status) {
+			return false;
+		}
+	} else if (window) {
+		const winKey = Object.keys(WINDOW_CONFIGS).find(k => k.toLowerCase() === window.toLowerCase()) || window;
+		if (!outcome.outcomes || !outcome.outcomes[winKey]) {
+			return false;
+		}
+	} else if (status) {
+		const outcomesList = Object.values(outcome.outcomes || {});
+		if (status === 'evaluated') {
+			const hasEvaluated = outcomesList.some(o => o.status === 'evaluated');
+			if (!hasEvaluated) return false;
+		} else if (status === 'pending') {
+			const hasPending = outcome.outcomeEvaluated === false && outcomesList.some(o => o.status === 'pending');
+			if (!hasPending) return false;
+		} else if (status === 'unavailable') {
+			const hasEvaluated = outcomesList.some(o => o.status === 'evaluated');
+			const hasPending = outcome.outcomeEvaluated === false && outcomesList.some(o => o.status === 'pending');
+			if (hasEvaluated || hasPending) return false;
+		}
+	}
+	return true;
+}
+
+async function listOutcomes({
+	before,
+	limit = DEFAULT_LIMIT,
+	symbol,
+	exchange,
+	status,
+	window,
+	from,
+	to,
+} = {}) {
+	if (!isEnabled()) {
+		return null;
+	}
+
+	const firestore = AlertStorageService.getFirestore();
+	if (!firestore) {
+		throw createStorageUnavailableError();
+	}
+
+	const pageSize = clampOutcomeLimit(limit);
+	const targetCount = pageSize + 1;
+	const scanLimit = Math.max(targetCount, MAX_LIMIT);
+	const matches = [];
+	const parsedBeforeCursor = before
+		? parseAlertPaginationCursor(before)
+		: null;
+	if (before && !parsedBeforeCursor) {
+		const error = new Error(INVALID_CURSOR_MESSAGE);
+		error.code = 'INVALID_REQUEST';
+		throw error;
+	}
+
+	let pageCursor = parsedBeforeCursor
+		? {
+			receivedAt: parsedBeforeCursor.receivedAt,
+			documentId: parsedBeforeCursor.documentId,
+		}
+		: null;
+
+	while (matches.length < targetCount) {
+		let query = firestore
+			.collection(COLLECTION_NAME)
+			.orderBy('receivedAt', 'desc')
+			.orderBy(admin.firestore.FieldPath.documentId(), 'desc')
+			.limit(scanLimit);
+
+		if (pageCursor) {
+			const cursorTimestamp = buildParsedCursorTimestamp(pageCursor);
+			if (pageCursor.documentId) {
+				query = query.startAfter(cursorTimestamp, pageCursor.documentId);
+			} else {
+				query = query.where('receivedAt', '<', cursorTimestamp);
+			}
+		}
+
+		let snapshot;
+		try {
+			snapshot = await query.get();
+		} catch (error) {
+			console.warn('[SignalOutcomeService] Failed to read signal outcomes from Firestore:', error.message);
+			throw createStorageUnavailableError(error);
+		}
+
+		if (!snapshot || snapshot.empty || !Array.isArray(snapshot.docs) || snapshot.docs.length === 0) {
+			break;
+		}
+
+		for (const doc of snapshot.docs) {
+			const formatted = formatOutcomeDocument(doc);
+			if (matchesOutcomeFilters(formatted, { symbol, exchange, status, window, from, to })) {
+				matches.push(formatted);
+				if (matches.length >= targetCount) {
+					break;
+				}
+			}
+		}
+
+		const lastDocCursor = getDocCursorValues(snapshot.docs[snapshot.docs.length - 1]);
+		if (!lastDocCursor) {
+			break;
+		}
+
+		pageCursor = lastDocCursor;
+		if (snapshot.docs.length < scanLimit) {
+			break;
+		}
+	}
+
+	const outcomes = matches.slice(0, pageSize);
+	return {
+		outcomes,
+		hasMore: matches.length > pageSize,
+		nextBefore: outcomes.length > 0
+			? encodeAlertPaginationCursor(outcomes[outcomes.length - 1])
+			: null,
+	};
+}
+
 module.exports = {
 	isEnabled,
 	recordSignal,
 	evaluatePendingOutcomes,
 	getMetricsSummary,
+	listOutcomes,
 	normalizeSide,
 	normalizeSymbolAndExchange,
 	startWorker,
@@ -1155,4 +1417,6 @@ module.exports = {
 	getWorkerRole,
 	COLLECTION_NAME,
 	HEARTBEAT_COLLECTION_NAME,
+	STORAGE_UNAVAILABLE_CODE,
+	INVALID_CURSOR_MESSAGE,
 };
