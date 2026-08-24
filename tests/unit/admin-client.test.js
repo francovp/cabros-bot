@@ -66,6 +66,16 @@ class FakeElement {
 		delete this.attributes[name];
 	}
 
+	remove() {
+		if (!this.parentNode) return;
+		const siblings = this.parentNode.children;
+		const index = siblings.indexOf(this);
+		if (index >= 0) siblings.splice(index, 1);
+		this.parentNode = undefined;
+	}
+
+	select() {}
+
 	querySelectorAll(selector) {
 		if (selector === '[data-view]') return findAll(this, (node) => node.dataset.view);
 		return [];
@@ -152,6 +162,7 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 		getElementById: (id) => elementsById[id],
 		querySelectorAll: (selector) => body.querySelectorAll(selector),
 		addEventListener: (type, listener) => { documentListeners[type] = listener; },
+		execCommand: () => false,
 	};
 	const storage = new Map(storedKey ? [['cabros-admin-api-key', storedKey]] : []);
 	const helperCalls = [];
