@@ -577,7 +577,9 @@ class JobService {
 	async createJob(type, payload, botOrGetter) {
 		await this._cleanExpiredJobs();
 		const routing = parseNotificationRouting(payload);
+		const mode = this._getExecutionMode();
 		const queueMode = this._isQueueMode();
+		const durableQueueMode = this._isDurableQueueMode();
 
 		// Synchronous validation based on job type
 		let parsed;
@@ -675,8 +677,8 @@ class JobService {
 			}
 		}
 
-		if (queueMode && typeof this.repository.isDurable === 'function' && !this.repository.isDurable()) {
-			throw new JobQueueUnavailableError('Render-worker mode requires durable Firestore job storage.');
+		if (durableQueueMode && typeof this.repository.isDurable === 'function' && !this.repository.isDurable()) {
+			throw new JobQueueUnavailableError(`${mode === 'firestore-poller' ? 'Firestore-poller' : 'Render-worker'} mode requires durable Firestore job storage.`);
 		}
 
 		const requestMetadata = {
@@ -726,9 +728,9 @@ class JobService {
 			updatedAt: new Date().toISOString(),
 			totalDurationMs: 0,
 			timeoutMs: validatedTimeoutMs,
-			...(queueMode ? {
+			...(durableQueueMode ? {
 				execution: {
-					mode: 'render-worker',
+					mode,
 					status: 'queued',
 					attempt: 0,
 				},
@@ -752,7 +754,7 @@ class JobService {
 		this.activeCreations.set(jobId, creation);
 
 		try {
-			creation.persistencePromise = this.repository.save(job, { required: queueMode });
+			creation.persistencePromise = this.repository.save(job, { required: durableQueueMode });
 			await creation.persistencePromise;
 
 			if (job.shutdownFinalized) {
@@ -824,7 +826,7 @@ class JobService {
 				};
 			}
 
-			if (!queueMode) {
+			if (!durableQueueMode) {
 				// Execute background job while retaining its promise for graceful shutdown.
 				const runPromise = this._runBackgroundJob(jobId, parsed, payload, botOrGetter);
 				this.activeJobs.set(jobId, runPromise);
@@ -846,7 +848,7 @@ class JobService {
 				createdAt: job.createdAt,
 			};
 		} catch (error) {
-			if (queueMode) {
+			if (durableQueueMode) {
 				if (error instanceof JobQueueUnavailableError || error.code === 'JOB_QUEUE_UNAVAILABLE' || error.code === 'JOB_STORAGE_UNAVAILABLE' || error.code === 'JOB_QUEUE_ACCEPTANCE_UNKNOWN') {
 					throw error;
 				}
@@ -910,10 +912,22 @@ class JobService {
 		return reconciled;
 	}
 
+	_getExecutionMode() {
+		if (this._isQueueMode()) {
+			return 'render-worker';
+		}
+		return process.env.JOB_EXECUTION_MODE || 'local';
+	}
+
 	_isQueueMode() {
 		return typeof this.queue?.isEnabled === 'function'
 			? this.queue.isEnabled()
 			: isQueueExecutionEnabled();
+	}
+
+	_isDurableQueueMode() {
+		const mode = this._getExecutionMode();
+		return mode === 'render-worker' || mode === 'firestore-poller';
 	}
 
 	_getWorkerId() {
@@ -1032,13 +1046,16 @@ class JobService {
 		const startTime = Date.now();
 		const job = await this.repository.get(jobId);
 		if (!job) return;
-		const claimAttempt = job.execution && job.execution.mode === 'render-worker'
+		const isQueuedMode = Boolean(
+			job.execution
+			&& (job.execution.mode === 'render-worker' || job.execution.mode === 'firestore-poller'),
+		);
+		const claimAttempt = isQueuedMode
 			? job.execution.attempt
 			: null;
 		const queuedExecution = Boolean(
 			workerId
-			&& job.execution
-			&& job.execution.mode === 'render-worker',
+			&& isQueuedMode,
 		);
 		if (queuedExecution) {
 			job._workerId = workerId;
@@ -1052,7 +1069,7 @@ class JobService {
 		}
 
 		job.status = 'processing';
-		if (job.execution && job.execution.mode === 'render-worker') {
+		if (isQueuedMode) {
 			job.execution.status = 'running';
 		}
 		job.updatedAt = new Date().toISOString();
@@ -1073,8 +1090,7 @@ class JobService {
 		};
 		if (
 			workerId
-			&& job.execution
-			&& job.execution.mode === 'render-worker'
+			&& isQueuedMode
 			&& typeof this.repository.renewClaim === 'function'
 		) {
 			const configuredLeaseMs = Number(process.env.JOB_QUEUE_CLAIM_LEASE_MS);
@@ -1507,7 +1523,11 @@ class JobService {
 				job.callbackStatus = mergeCallbackStatus(current.callbackStatus, job.callbackStatus);
 			}
 		}
-		if (job.execution && job.execution.mode === 'render-worker') {
+		const isQueuedMode = Boolean(
+			job.execution
+			&& (job.execution.mode === 'render-worker' || job.execution.mode === 'firestore-poller'),
+		);
+		if (isQueuedMode) {
 			const leaseMs = Number(process.env.JOB_QUEUE_CLAIM_LEASE_MS);
 			const effectiveLeaseMs = Number.isInteger(leaseMs) && leaseMs > 0 ? leaseMs : 60000;
 			if (job.execution.status === 'claimed' || job.execution.status === 'running') {
@@ -1515,7 +1535,7 @@ class JobService {
 			}
 		}
 		const saved = await this.repository.save(job, {
-			required: job.execution && job.execution.mode === 'render-worker',
+			required: isQueuedMode,
 		});
 		if (saved === null || saved === false) {
 			if (job._workerId) {
@@ -1533,7 +1553,7 @@ class JobService {
 			job
 			&& job._workerId
 			&& job.execution
-			&& job.execution.mode === 'render-worker',
+			&& (job.execution.mode === 'render-worker' || job.execution.mode === 'firestore-poller'),
 		);
 	}
 
@@ -1586,7 +1606,10 @@ class JobService {
 	}
 
 	_finishQueuedExecution(job) {
-		if (!job.execution || job.execution.mode !== 'render-worker') {
+		if (
+			!job.execution
+			|| (job.execution.mode !== 'render-worker' && job.execution.mode !== 'firestore-poller')
+		) {
 			return;
 		}
 

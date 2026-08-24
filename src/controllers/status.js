@@ -9,6 +9,7 @@ const equityMarketDataService = require('../services/storage/EquityMarketDataSer
 const remoteConfigService = require('../services/remoteConfig/RemoteConfigService');
 const { tradingViewMcpService } = require('../services/tradingview/TradingViewMcpService');
 const { binanceOrderService } = require('../services/trading/BinanceOrderService');
+const { notificationRedriveService } = require('../services/notification/NotificationRedriveService');
 const {
 	getDeploymentCommit,
 	isPreviewEnvironment,
@@ -175,8 +176,7 @@ function getStatus() {
 	const cloudflareAigEnabled = isEnabled(process.env.ENABLE_CLOUDFLARE_AIG);
 	const messageFooterMetadataEnabled = runtimeConfig.ENABLE_MESSAGE_FOOTER_METADATA;
 	const remoteConfigStatus = remoteConfigService.getStatus();
-	const signalOutcomeTrackingEnabled = isEnabled(process.env.ENABLE_SIGNAL_OUTCOME_TRACKING)
-		|| isEnabled(process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING);
+	const signalOutcomeTrackingEnabled = isEnabled(process.env.ENABLE_SIGNAL_OUTCOME_TRACKING);
 	const equityMarketDataStatus = equityMarketDataService.getStatus();
 	const llmAlertEnrichmentDependencyEnabled = llmAlertEnrichmentEnabled && newsMonitorEnabled;
 
@@ -309,7 +309,8 @@ function getStatus() {
 			equityMarketData: equityMarketDataStatus.enabled,
 			firestoreIdempotency: idempotencyStorageService.isEnabled(),
 			firebaseRemoteConfig: remoteConfigStatus.enabled,
-			jobExecutionWorker: jobExecutionQueueStatus.enabled,
+			jobExecutionWorker: jobExecutionQueueStatus.enabled || process.env.JOB_EXECUTION_MODE === 'firestore-poller',
+			notificationRedrive: notificationRedriveService.isEnabled(),
 		},
 		deliveryChannels: {
 			telegram: {
@@ -367,6 +368,7 @@ function getStatus() {
 				lastRunPendingCount: signalOutcomeWorkerStatus.lastRunPendingCount,
 				lastRunErrorCount: signalOutcomeWorkerStatus.lastRunErrorCount,
 			},
+			notificationRedrive: notificationRedriveService.getStatus(),
 			jobExecutionQueue: jobExecutionQueueStatus,
 			binanceTrading: binanceTradingStatus,
 		},

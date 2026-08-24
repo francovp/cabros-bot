@@ -35,9 +35,10 @@ class OpenRouterClient {
    * Send chat completion request to OpenRouter
    * @param {string} systemPrompt - System prompt
    * @param {string} userMessage - User message
-   * @returns {Promise<string>} Model response
+   * @param {object} [options] - Additional options (e.g. signal)
+   * @returns {Promise<{text: string, usage: object}>} Model response
    */
-	async chatCompletion(systemPrompt, userMessage) {
+	async chatCompletion(systemPrompt, userMessage, options = {}) {
 		if (!this.validate()) {
 			throw new Error('OpenRouterClient configuration incomplete');
 		}
@@ -52,17 +53,23 @@ class OpenRouterClient {
 			top_p: 1.0,
 		};
 
+		const fetchOptions = {
+			method: 'POST',
+			headers: {
+				'Authorization': `Bearer ${this.apiKey}`,
+				'Content-Type': 'application/json',
+				'HTTP-Referer': 'https://github.com/carlos-bastidas/ai-news-monitor', // Optional, using a placeholder or repo URL
+				'X-Title': 'AI News Monitor', // Optional
+			},
+			body: JSON.stringify(payload),
+		};
+
+		if (options?.signal) {
+			fetchOptions.signal = options.signal;
+		}
+
 		try {
-			const response = await fetch(this.endpoint, {
-				method: 'POST',
-				headers: {
-					'Authorization': `Bearer ${this.apiKey}`,
-					'Content-Type': 'application/json',
-					'HTTP-Referer': 'https://github.com/carlos-bastidas/ai-news-monitor', // Optional, using a placeholder or repo URL
-					'X-Title': 'AI News Monitor', // Optional
-				},
-				body: JSON.stringify(payload),
-			});
+			const response = await fetch(this.endpoint, fetchOptions);
 
 			if (!response.ok) {
 				const errorText = await response.text();

@@ -234,6 +234,7 @@ class JobQueue {
 	}
 
 	getStatus() {
+		const mode = process.env.JOB_EXECUTION_MODE || 'local';
 		const enabled = this.isEnabled();
 		const configured = this.isConfigured();
 		let status = 'disabled';
@@ -242,7 +243,7 @@ class JobQueue {
 		}
 
 		return {
-			mode: enabled ? 'render-worker' : 'local',
+			mode,
 			enabled,
 			configured,
 			ready: enabled && this.queueReady,

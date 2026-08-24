@@ -20,6 +20,8 @@ const {
 	expandedAnalysisCmd,
 	marketScannerCmd,
 	newsMonitorCmd,
+	helpCmd,
+	buildHelpMessage,
 	parseCommandArgs,
 } = require('../../src/controllers/commands');
 
@@ -138,4 +140,70 @@ describe('Telegram TradingView commands', () => {
 		);
 		expect(context.reply).toHaveBeenCalledWith('Noticias listas. Analizados: 2, cache: 1, alertas: 1.');
 	});
+
+	describe('helpCmd and buildHelpMessage', () => {
+		it('buildHelpMessage returns MarkdownV2 formatted message with all commands and aliases', () => {
+			const message = buildHelpMessage();
+			expect(message).toContain('*🤖 Comandos disponibles en Cabros Bot*');
+			expect(message).toContain('/precio <simbolo>');
+			expect(message).toContain('/cryptobot id');
+			expect(message).toContain('/analisis <simbolos>');
+			expect(message).toContain('/analysis');
+			expect(message).toContain('/scanner');
+			expect(message).toContain('/noticias');
+			expect(message).toContain('/news');
+			expect(message).toContain('/help');
+			expect(message).toContain('/start');
+
+			// MarkdownV2 escaping checks: ensure unescaped parentheses outside backticks are not present
+			const lines = message.split('\n');
+			lines.forEach((line) => {
+				// Remove inline code blocks `...` to check plain text formatting
+				const withoutCode = line.replace(/`[^`]+`/g, '');
+				// Should not have unescaped ( or ) in plain text
+				expect(withoutCode).not.toMatch(/(?<!\\)[()]/);
+			});
+		});
+
+		it('sends MarkdownV2 formatted help message via context.reply', async () => {
+			const context = buildContext('/help');
+			await helpCmd(context);
+
+			expect(context.reply).toHaveBeenCalledWith(
+				buildHelpMessage(),
+				{ parse_mode: 'MarkdownV2' },
+			);
+		});
+
+		it('sends help message when called via /start', async () => {
+			const context = buildContext('/start');
+			await helpCmd(context);
+
+			expect(context.reply).toHaveBeenCalledWith(
+				buildHelpMessage(),
+				{ parse_mode: 'MarkdownV2' },
+			);
+		});
+
+		it('captures runtime error safely if context.reply fails', async () => {
+			const context = buildContext('/help');
+			const error = new Error('Telegram API connection error');
+			context.reply.mockRejectedValueOnce(error);
+
+			const { captureRuntimeError } = require('../../src/services/monitoring/SentryService');
+
+			await expect(helpCmd(context)).resolves.not.toThrow();
+			expect(captureRuntimeError).toHaveBeenCalledWith(
+				expect.objectContaining({
+					channel: 'telegram',
+					error,
+					extra: expect.objectContaining({
+						command: 'helpCmd',
+						chatId: 123,
+					}),
+				}),
+			);
+		});
+	});
 });
+

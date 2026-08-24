@@ -76,8 +76,8 @@ function canInitializeFirestore() {
 		|| process.env.ENABLE_FIRESTORE_SCANNER_PRESETS === 'true'
 		|| process.env.ENABLE_FIRESTORE_JOB_STORAGE === 'true'
 		|| process.env.ENABLE_SIGNAL_OUTCOME_TRACKING === 'true'
-		|| process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING === 'true'
-		|| process.env.ENABLE_FIREBASE_REMOTE_CONFIG === 'true';
+		|| process.env.ENABLE_FIREBASE_REMOTE_CONFIG === 'true'
+		|| process.env.ENABLE_NOTIFICATION_REDRIVE === 'true';
 }
 
 function getAlertStorageRetentionDays() {
@@ -212,6 +212,7 @@ function normalizePromptProvenance(provenance) {
 			? provenance.label.trim()
 			: null,
 		version: Number.isInteger(provenance.version) ? provenance.version : null,
+		schemaDriftDetected: Boolean(provenance.schemaDriftDetected),
 	};
 }
 
@@ -299,14 +300,40 @@ function finalizeRiskMetadataCoverage(bucket) {
 }
 
 function getPromptProvenanceGroup(coverage, provenance) {
-	const key = JSON.stringify(provenance);
-	let group = coverage.byPromptProvenance.find(item => JSON.stringify(item.provenance) === key);
+	const safeProvenanceKey = provenance
+		? {
+			name: provenance.name,
+			source: provenance.source,
+			label: provenance.label,
+			version: provenance.version,
+		}
+		: null;
+	const key = JSON.stringify(safeProvenanceKey);
+	let group = coverage.byPromptProvenance.find(item => {
+		const itemKey = item.provenance
+			? JSON.stringify({
+				name: item.provenance.name,
+				source: item.provenance.source,
+				label: item.provenance.label,
+				version: item.provenance.version,
+			})
+			: JSON.stringify(null);
+		return itemKey === key;
+	});
+
 	if (!group) {
 		group = {
-			provenance,
+			provenance: provenance
+				? {
+					...safeProvenanceKey,
+					schemaDriftDetected: Boolean(provenance.schemaDriftDetected),
+				}
+				: null,
 			...createRiskMetadataCoverageBucket(),
 		};
 		coverage.byPromptProvenance.push(group);
+	} else if (provenance?.schemaDriftDetected && group.provenance) {
+		group.provenance.schemaDriftDetected = true;
 	}
 
 	return group;

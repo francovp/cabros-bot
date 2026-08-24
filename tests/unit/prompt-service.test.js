@@ -156,4 +156,81 @@ describe('PromptService', () => {
 		expect(prompt.systemPrompt).toBe('My custom system prompt');
 		expect(prompt.userPrompt).toContain('Custom system prompt alert');
 	});
+
+	it('should detect schema drift when remote alert-enrichment prompt is missing risk fields', async () => {
+		process.env.ENABLE_LANGFUSE_PROMPTS = 'true';
+
+		const remotePrompt = {
+			version: 4,
+			compile: jest.fn().mockReturnValue([
+				{ role: 'system', content: 'Remote system prompt without risk fields' },
+				{ role: 'user', content: 'Context: {{alertContext}}' },
+			]),
+		};
+		const client = {
+			prompt: {
+				get: jest.fn().mockResolvedValue(remotePrompt),
+			},
+		};
+		const service = new PromptService({
+			logger,
+			clientProvider: jest.fn().mockResolvedValue(client),
+		});
+
+		const prompt = await service.getChatPrompt(
+			PromptKeys.ALERT_ENRICHMENT,
+			{ alertContext: 'Bitcoin alert context' },
+		);
+
+		expect(prompt.source).toBe('langfuse');
+		expect(prompt.schemaDriftDetected).toBe(true);
+		expect(prompt.missingRiskFields).toEqual([
+			'invalidation_level',
+			'target_level',
+			'setup_type',
+			'risk_reward_ratio',
+		]);
+		expect(logger.warn).toHaveBeenCalledWith(
+			expect.stringContaining('missing required risk fields: invalidation_level, target_level, setup_type, risk_reward_ratio'),
+		);
+
+		const driftStatus = service.getSchemaDriftStatus();
+		expect(driftStatus['alert-enrichment:4']).toEqual(expect.objectContaining({
+			promptName: 'alert-enrichment',
+			version: 4,
+			missingRiskFields: ['invalidation_level', 'target_level', 'setup_type', 'risk_reward_ratio'],
+		}));
+	});
+
+	it('should mark schemaDriftDetected as false when remote alert-enrichment prompt includes all required risk fields', async () => {
+		process.env.ENABLE_LANGFUSE_PROMPTS = 'true';
+
+		const remotePrompt = {
+			version: 5,
+			compile: jest.fn().mockReturnValue([
+				{ role: 'system', content: 'You are an analyst. Include invalidation_level, target_level, setup_type, and risk_reward_ratio.' },
+				{ role: 'user', content: 'Context: {{alertContext}}' },
+			]),
+		};
+		const client = {
+			prompt: {
+				get: jest.fn().mockResolvedValue(remotePrompt),
+			},
+		};
+		const service = new PromptService({
+			logger,
+			clientProvider: jest.fn().mockResolvedValue(client),
+		});
+
+		const prompt = await service.getChatPrompt(
+			PromptKeys.ALERT_ENRICHMENT,
+			{ alertContext: 'Bitcoin alert context' },
+		);
+
+		expect(prompt.source).toBe('langfuse');
+		expect(prompt.schemaDriftDetected).toBe(false);
+		expect(prompt.missingRiskFields).toEqual([]);
+		expect(logger.warn).not.toHaveBeenCalled();
+	});
 });
+

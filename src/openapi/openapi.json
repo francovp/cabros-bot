@@ -1080,6 +1080,103 @@
       }
     },
     "/api/trading/binance/orders": {
+      "get": {
+        "tags": [
+          "Trading"
+        ],
+        "summary": "Read Binance Spot order status or recent order history",
+        "description": "Reads a single order status by orderId or origClientOrderId, or lists recent orders for an allowed symbol when no specific order identifier is provided.",
+        "operationId": "getBinanceSpotOrders",
+        "parameters": [
+          {
+            "name": "symbol",
+            "in": "query",
+            "required": true,
+            "description": "Binance Spot symbol (e.g. BTCUSDT) from configured allowed symbols list.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "orderId",
+            "in": "query",
+            "required": false,
+            "description": "Binance order ID to query a specific order status.",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "origClientOrderId",
+            "in": "query",
+            "required": false,
+            "description": "Original client order ID to query a specific order status.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Maximum number of recent orders to return when querying order history (default 50, max 100).",
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "minimum": 1,
+              "maximum": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BinanceOrdersQueryResult"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "description": "The requested Binance order was not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "examples": {
+                  "orderNotFound": {
+                    "value": {
+                      "success": false,
+                      "error": "Binance order not found",
+                      "code": "ORDER_NOT_FOUND"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "502": {
+            "$ref": "#/components/responses/BinanceOrderFailure"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      },
       "post": {
         "tags": [
           "Trading"
@@ -1787,6 +1884,61 @@
       }
     },
     "responses": {
+      "BinanceOrdersQueryResult": {
+        "description": "Binance Spot order status or recent order history query result.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/BinanceOrdersQueryResult"
+            },
+            "examples": {
+              "singleOrder": {
+                "value": {
+                  "success": true,
+                  "environment": "testnet",
+                  "order": {
+                    "symbol": "BTCUSDT",
+                    "orderId": 42,
+                    "clientOrderId": "cabros-375-1",
+                    "status": "FILLED",
+                    "type": "LIMIT",
+                    "side": "BUY",
+                    "price": "60000.00000000",
+                    "origQty": "0.00100000",
+                    "executedQty": "0.00100000",
+                    "cummulativeQuoteQty": "60.00000000",
+                    "time": 1700000000000,
+                    "updateTime": 1700000005000,
+                    "isWorking": true
+                  }
+                }
+              },
+              "orderHistory": {
+                "value": {
+                  "success": true,
+                  "environment": "testnet",
+                  "orders": [
+                    {
+                      "symbol": "BTCUSDT",
+                      "orderId": 42,
+                      "clientOrderId": "cabros-375-1",
+                      "status": "FILLED",
+                      "type": "LIMIT",
+                      "side": "BUY",
+                      "price": "60000.00000000",
+                      "origQty": "0.00100000",
+                      "executedQty": "0.00100000",
+                      "cummulativeQuoteQty": "60.00000000",
+                      "time": 1700000000000
+                    }
+                  ],
+                  "count": 1
+                }
+              }
+            }
+          }
+        }
+      },
       "BinanceOrderResult": {
         "description": "Validated dry-run or confirmed Binance Spot order. A replay includes idempotencyReplayed=true.",
         "headers": {
@@ -2295,7 +2447,15 @@
                   "lastFailureAt": null,
                   "lastErrorCategory": null,
                   "successCount": 0,
-                  "failureCount": 0
+                  "failureCount": 0,
+                  "circuitBreaker": {
+                    "state": "closed",
+                    "consecutiveFailures": 0,
+                    "openedAt": null,
+                    "lastStateChangeAt": null,
+                    "failureThreshold": 5,
+                    "cooldownMs": 600000
+                  }
                 },
                 "equityMarketData": {
                   "provider": null,
@@ -2308,7 +2468,9 @@
                     "NASDAQ",
                     "NYSE",
                     "AMEX",
-                    "NYSE ARCA"
+                    "NYSE ARCA",
+                    "FX_IDC",
+                    "SPCFD"
                   ],
                   "timeoutMs": 5000
                 },
@@ -2381,6 +2543,9 @@
               "integer",
               "null"
             ]
+          },
+          "schemaDriftDetected": {
+            "type": "boolean"
           }
         }
       },
@@ -3414,6 +3579,37 @@
         ],
         "additionalProperties": false
       },
+      "BinanceOrdersQueryResult": {
+        "type": "object",
+        "required": [
+          "success",
+          "environment"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "environment": {
+            "type": "string",
+            "enum": [
+              "testnet",
+              "live"
+            ]
+          },
+          "order": {
+            "$ref": "#/components/schemas/JsonObject"
+          },
+          "orders": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/JsonObject"
+            }
+          },
+          "count": {
+            "type": "integer"
+          }
+        }
+      },
       "BinanceOrderResult": {
         "type": "object",
         "required": [
@@ -3446,7 +3642,7 @@
       },
       "Status": {
         "type": "object",
-        "description": "Runtime status. TradingView dependencies expose configured endpoint metadata plus runtime status (unknown before an MCP operation, ready after success, degraded after failure), timestamps, sanitized error categories, and success/failure counters without provider response bodies. featureFlags.firestoreJobStorage reports the ENABLE_FIRESTORE_JOB_STORAGE gate or the legacy ENABLE_FIRESTORE_ALERT_STORAGE gate; featureFlags.jobExecutionWorker reports JOB_EXECUTION_MODE=render-worker; dependencies.jobExecutionQueue reports queue readiness and safe operational counters without broker credentials; featureFlags.firestoreScannerPresets reports ENABLE_FIRESTORE_SCANNER_PRESETS; dependencies.scannerPresetStorage reports the effective durable or ephemeral scanner-preset backend and readiness; dependencies.signalOutcomeWorker reports the scheduler role (web, worker, or disabled), graceful-shutdown state, cadence, heartbeat, and scanned/pending/evaluated/error counters; a disabled local scheduler reports ready false and status disabled because it is not the process evaluating outcomes; dependencies.firestoreJobStorage reports Firestore credential readiness for that runtime path; featureFlags.newsMonitorTestMode reports ENABLE_NEWS_MONITOR_TEST_MODE without changing news monitor behavior; featureFlags.messageFooterMetadata reports ENABLE_MESSAGE_FOOTER_METADATA and defaults to true unless explicitly set to false; featureFlags.cloudflareAig reports ENABLE_CLOUDFLARE_AIG and dependencies.cloudflareAig reports Cloudflare AI Gateway credential readiness; featureFlags.equityMarketData reports ENABLE_EQUITY_MARKET_DATA and dependencies.equityMarketData reports non-sensitive Twelve Data readiness for BATS/NASDAQ/NYSE/AMEX/NYSE ARCA outcome evaluation; featureFlags.firebaseRemoteConfig reports ENABLE_FIREBASE_REMOTE_CONFIG and dependencies.firebaseRemoteConfig reports only bounded loader metadata, source, template version, last successful load, and last error category without remote values or credentials.",
+        "description": "Runtime status. TradingView dependencies expose configured endpoint metadata plus runtime status (unknown before an MCP operation, ready after success, degraded after failure), timestamps, sanitized error categories, and success/failure counters without provider response bodies. featureFlags.firestoreJobStorage reports the ENABLE_FIRESTORE_JOB_STORAGE gate or the legacy ENABLE_FIRESTORE_ALERT_STORAGE gate; featureFlags.jobExecutionWorker reports JOB_EXECUTION_MODE=render-worker or firestore-poller; dependencies.jobExecutionQueue reports queue readiness and safe operational counters without broker credentials; featureFlags.firestoreScannerPresets reports ENABLE_FIRESTORE_SCANNER_PRESETS; dependencies.scannerPresetStorage reports the effective durable or ephemeral scanner-preset backend and readiness; dependencies.signalOutcomeWorker reports the scheduler role (web, worker, or disabled), graceful-shutdown state, cadence, heartbeat, and scanned/pending/evaluated/error counters; a disabled local scheduler reports ready false and status disabled because it is not the process evaluating outcomes; dependencies.firestoreJobStorage reports Firestore credential readiness for that runtime path; featureFlags.newsMonitorTestMode reports ENABLE_NEWS_MONITOR_TEST_MODE without changing news monitor behavior; featureFlags.messageFooterMetadata reports ENABLE_MESSAGE_FOOTER_METADATA and defaults to true unless explicitly set to false; featureFlags.cloudflareAig reports ENABLE_CLOUDFLARE_AIG and dependencies.cloudflareAig reports Cloudflare AI Gateway credential readiness; featureFlags.equityMarketData reports ENABLE_EQUITY_MARKET_DATA and dependencies.equityMarketData reports non-sensitive Twelve Data readiness for BATS/NASDAQ/NYSE/AMEX/NYSE ARCA outcome evaluation; featureFlags.firebaseRemoteConfig reports ENABLE_FIREBASE_REMOTE_CONFIG and dependencies.firebaseRemoteConfig reports only bounded loader metadata, source, template version, last successful load, and last error category without remote values or credentials; featureFlags.notificationRedrive reports ENABLE_NOTIFICATION_REDRIVE and dependencies.notificationRedrive reports dead-letter redrive worker role, configuration, running state, and safe operational counters.",
         "properties": {
           "service": {
             "$ref": "#/components/schemas/JsonObject"

@@ -325,4 +325,148 @@ describe('Binance orders API', () => {
 		});
 		expect(capabilities.body.dependencies.binanceTrading).toEqual(status.body.dependencies.binanceTrading);
 	});
+
+	describe('GET /api/trading/binance/orders', () => {
+		it('requires authentication before querying Binance', async () => {
+			const response = await request(app)
+				.get('/api/trading/binance/orders?symbol=BTCUSDT')
+				.expect(401);
+
+			expect(response.body.error).toContain('Missing API key');
+			expect(MainClient).not.toHaveBeenCalled();
+		});
+
+		it('fails closed when no authentication mechanism is configured', async () => {
+			delete process.env.WEBHOOK_API_KEY;
+			delete process.env.ENABLE_FIREBASE_ADMIN_AUTH;
+
+			const response = await request(app)
+				.get('/api/trading/binance/orders?symbol=BTCUSDT')
+				.expect(503);
+
+			expect(response.body.code).toBe('ADMIN_AUTH_UNAVAILABLE');
+			expect(MainClient).not.toHaveBeenCalled();
+		});
+
+		it('fails closed when the feature is disabled', async () => {
+			process.env.ENABLE_BINANCE_TRADING = 'false';
+
+			const response = await request(app)
+				.get('/api/trading/binance/orders?symbol=BTCUSDT')
+				.set('x-api-key', 'test-key')
+				.expect(403);
+
+			expect(response.body.code).toBe('FEATURE_DISABLED');
+			expect(MainClient).not.toHaveBeenCalled();
+		});
+
+		it('rejects missing or disallowed symbols with 400', async () => {
+			const missing = await request(app)
+				.get('/api/trading/binance/orders')
+				.set('x-api-key', 'test-key')
+				.expect(400);
+			expect(missing.body.code).toBe('INVALID_ORDER_REQUEST');
+
+			const disallowed = await request(app)
+				.get('/api/trading/binance/orders?symbol=DOGEUSDT')
+				.set('x-api-key', 'test-key')
+				.expect(400);
+			expect(disallowed.body.code).toBe('INVALID_ORDER_REQUEST');
+		});
+
+		it('returns recent order history for allowed symbol', async () => {
+			client.allOrders = jest.fn().mockResolvedValue([
+				{
+					symbol: 'BTCUSDT',
+					orderId: 101,
+					clientOrderId: 'client-1',
+					status: 'FILLED',
+					type: 'MARKET',
+					side: 'BUY',
+					price: '0.00000000',
+					origQty: '0.00100000',
+					executedQty: '0.00100000',
+					cummulativeQuoteQty: '50.00000000',
+					time: 1700000000000,
+				},
+			]);
+
+			const response = await request(app)
+				.get('/api/trading/binance/orders?symbol=BTCUSDT&limit=10')
+				.set('x-api-key', 'test-key')
+				.expect(200);
+
+			expect(client.allOrders).toHaveBeenCalledWith({ symbol: 'BTCUSDT', limit: 10 });
+			expect(response.body).toEqual({
+				success: true,
+				environment: 'testnet',
+				orders: [
+					{
+						symbol: 'BTCUSDT',
+						orderId: 101,
+						clientOrderId: 'client-1',
+						status: 'FILLED',
+						type: 'MARKET',
+						side: 'BUY',
+						price: '0.00000000',
+						origQty: '0.00100000',
+						executedQty: '0.00100000',
+						cummulativeQuoteQty: '50.00000000',
+						time: 1700000000000,
+					},
+				],
+				count: 1,
+			});
+		});
+
+		it('returns single order status when orderId is provided', async () => {
+			client.getOrder = jest.fn().mockResolvedValue({
+				symbol: 'BTCUSDT',
+				orderId: 42,
+				clientOrderId: 'client-1',
+				status: 'FILLED',
+				type: 'LIMIT',
+				side: 'BUY',
+				price: '60000.00000000',
+				origQty: '0.00100000',
+				executedQty: '0.00100000',
+				cummulativeQuoteQty: '60.00000000',
+				time: 1700000000000,
+				updateTime: 1700000005000,
+				isWorking: true,
+			});
+
+			const response = await request(app)
+				.get('/api/trading/binance/orders?symbol=BTCUSDT&orderId=42')
+				.set('x-api-key', 'test-key')
+				.expect(200);
+
+			expect(client.getOrder).toHaveBeenCalledWith({ symbol: 'BTCUSDT', orderId: 42 });
+			expect(response.body).toMatchObject({
+				success: true,
+				environment: 'testnet',
+				order: {
+					symbol: 'BTCUSDT',
+					orderId: 42,
+					status: 'FILLED',
+					side: 'BUY',
+				},
+			});
+		});
+
+		it('returns 404 when order is not found on Binance', async () => {
+			client.getOrder = jest.fn().mockRejectedValue({ code: -2013, message: 'Unknown order sent.' });
+
+			const response = await request(app)
+				.get('/api/trading/binance/orders?symbol=BTCUSDT&orderId=999')
+				.set('x-api-key', 'test-key')
+				.expect(404);
+
+			expect(response.body).toMatchObject({
+				success: false,
+				code: 'ORDER_NOT_FOUND',
+				error: 'Binance order not found',
+			});
+		});
+	});
 });

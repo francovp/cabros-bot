@@ -78,6 +78,7 @@ describe('Gemini Service', () => {
 				source: 'local',
 				label: null,
 				version: null,
+				schemaDriftDetected: false,
 			});
 			expect(result).not.toHaveProperty('technical_levels');
 			expect(result.promptProvenance).toEqual({
@@ -85,6 +86,7 @@ describe('Gemini Service', () => {
 				source: 'local',
 				label: null,
 				version: null,
+				schemaDriftDetected: false,
 			});
 			// sources are not returned by generateEnrichedAlert
 		});

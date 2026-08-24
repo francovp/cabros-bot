@@ -89,6 +89,25 @@ class TradingViewMcpService {
 		this.requestCounter = 0;
 		this.runtimeStatus = createRuntimeStatus();
 		this.volumeRuntimeStatus = createRuntimeStatus();
+		this.consecutiveFailures = 0;
+		this.breakerState = 'closed';
+		this.breakerOpenedAt = null;
+		this.lastBreakerStateChangeAt = null;
+		this.lastAdminPageSentAt = null;
+		this.hasActiveOutagePage = false;
+		this.notifyAdmin = config.notifyAdmin || null;
+		this.notificationManager = config.notificationManager || null;
+	}
+
+	_resetForTesting() {
+		this.runtimeStatus = createRuntimeStatus();
+		this.volumeRuntimeStatus = createRuntimeStatus();
+		this.consecutiveFailures = 0;
+		this.breakerState = 'closed';
+		this.breakerOpenedAt = null;
+		this.lastBreakerStateChangeAt = null;
+		this.lastAdminPageSentAt = null;
+		this.hasActiveOutagePage = false;
 	}
 
 	isEnabled() {
@@ -108,27 +127,74 @@ class TradingViewMcpService {
 			this.config.enrichmentBudgetMs || runtimeConfig.TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS,
 			10,
 		);
+		const breakerThreshold = parseInt(
+			this.config.breakerThreshold || runtimeConfig.TRADINGVIEW_MCP_BREAKER_FAILURE_THRESHOLD,
+			10,
+		);
+		const breakerCooldownMs = parseInt(
+			this.config.breakerCooldownMs || runtimeConfig.TRADINGVIEW_MCP_BREAKER_COOLDOWN_MS,
+			10,
+		);
+		const pageCooldownMs = parseInt(
+			this.config.pageCooldownMs || runtimeConfig.TRADINGVIEW_MCP_PAGE_COOLDOWN_MS,
+			10,
+		);
 
 		return {
 			url: this.config.url || process.env.TRADINGVIEW_MCP_URL || DEFAULT_TRADINGVIEW_MCP_URL,
-			timeoutMs,
-			maxRetries,
+			timeoutMs: Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 12000,
+			maxRetries: Number.isFinite(maxRetries) && maxRetries >= 0 ? maxRetries : 3,
 			defaultExchange,
 			defaultTimeframe,
-			enrichmentBudgetMs,
+			enrichmentBudgetMs: Number.isFinite(enrichmentBudgetMs) && enrichmentBudgetMs > 0 ? enrichmentBudgetMs : 12000,
+			breakerThreshold: Number.isFinite(breakerThreshold) && breakerThreshold > 0 ? breakerThreshold : 5,
+			breakerCooldownMs: Number.isFinite(breakerCooldownMs) && breakerCooldownMs > 0 ? breakerCooldownMs : 600000,
+			pageCooldownMs: Number.isFinite(pageCooldownMs) && pageCooldownMs > 0 ? pageCooldownMs : 3600000,
+		};
+	}
+
+	getBreakerState() {
+		if (this.breakerState === 'open') {
+			const { breakerCooldownMs } = this.getConfig();
+			const openedTime = this.breakerOpenedAt ? new Date(this.breakerOpenedAt).getTime() : 0;
+			if (Date.now() - openedTime >= breakerCooldownMs) {
+				this.breakerState = 'half-open';
+				this.lastBreakerStateChangeAt = new Date().toISOString();
+			}
+		}
+		return this.breakerState;
+	}
+
+	isBreakerOpen() {
+		return this.getBreakerState() === 'open';
+	}
+
+	getCircuitBreakerStatus() {
+		const state = this.getBreakerState();
+		const { breakerThreshold, breakerCooldownMs } = this.getConfig();
+		return {
+			state,
+			consecutiveFailures: this.consecutiveFailures,
+			openedAt: this.breakerOpenedAt,
+			lastStateChangeAt: this.lastBreakerStateChangeAt,
+			failureThreshold: breakerThreshold,
+			cooldownMs: breakerCooldownMs,
 		};
 	}
 
 	getStatus({ enabled = this.isEnabled(), runtimeStatus = this.runtimeStatus } = {}) {
 		const { url } = this.getConfig();
 		const configured = typeof url === 'string' && url.trim().length > 0;
-		const status = !enabled ? 'disabled' : !configured ? 'misconfigured' : runtimeStatus.status;
+		const circuitBreaker = this.getCircuitBreakerStatus();
+		const baseStatus = !enabled ? 'disabled' : !configured ? 'misconfigured' : runtimeStatus.status;
+		const status = baseStatus === 'ready' && circuitBreaker.state === 'open' ? 'degraded' : baseStatus;
 
 		return {
 			enabled,
 			configured,
 			...runtimeStatus,
-			ready: enabled && configured && status === 'ready',
+			circuitBreaker,
+			ready: enabled && configured && status === 'ready' && circuitBreaker.state !== 'open',
 			status,
 		};
 	}
@@ -148,6 +214,12 @@ class TradingViewMcpService {
 	}
 
 	async enrichFromSignal(parsedSignal, options = {}) {
+		if (this.isBreakerOpen()) {
+			this.logger?.info?.(`[TradingViewMcpService] Circuit breaker is OPEN (${this.consecutiveFailures} consecutive failures); skipping enrichment to fail open immediately.`);
+			this._recordEnrichmentStatus('failed');
+			return null;
+		}
+
 		const cfg = this.getConfig();
 		const budgetMs = options.budgetMs || cfg.enrichmentBudgetMs;
 		const budgetStartedAt = Date.now();
@@ -994,9 +1066,16 @@ class TradingViewMcpService {
 	async _withRuntimeStatus(operation, { signal, runtimeStatusKey } = {}) {
 		const runtimeStatusKeys = runtimeStatusKey ? ['runtimeStatus', runtimeStatusKey] : ['runtimeStatus'];
 
+		if (this.isBreakerOpen()) {
+			const error = new Error('TradingView MCP circuit breaker is OPEN');
+			error.category = 'circuit_breaker_open';
+			throw error;
+		}
+
 		try {
 			const result = await operation();
 			const timestamp = new Date().toISOString();
+			this._recordSuccess();
 			runtimeStatusKeys.forEach((key) => {
 				this[key] = {
 					...this[key],
@@ -1014,6 +1093,7 @@ class TradingViewMcpService {
 			}
 
 			const timestamp = new Date().toISOString();
+			this._recordFailure(error);
 			runtimeStatusKeys.forEach((key) => {
 				this[key] = {
 					...this[key],
@@ -1028,8 +1108,146 @@ class TradingViewMcpService {
 		}
 	}
 
+	_recordSuccess() {
+		this.consecutiveFailures = 0;
+		if (this.breakerState !== 'closed') {
+			this.breakerState = 'closed';
+			this.breakerOpenedAt = null;
+			this.lastBreakerStateChangeAt = new Date().toISOString();
+		}
+		if (this.hasActiveOutagePage) {
+			this.hasActiveOutagePage = false;
+			void this._notifyAdminRecovery().catch((err) => {
+				this.logger?.warn?.(`[TradingViewMcpService] Failed to send admin recovery page: ${err.message}`);
+			});
+		}
+	}
+
+	_recordFailure(error) {
+		if (error && error.category === 'circuit_breaker_open') {
+			return;
+		}
+		this.consecutiveFailures += 1;
+		const { breakerThreshold, pageCooldownMs } = this.getConfig();
+		if (this.consecutiveFailures >= breakerThreshold) {
+			if (this.breakerState !== 'open') {
+				this.breakerState = 'open';
+				this.breakerOpenedAt = new Date().toISOString();
+				this.lastBreakerStateChangeAt = this.breakerOpenedAt;
+			}
+			const now = Date.now();
+			if (!this.lastAdminPageSentAt || (now - this.lastAdminPageSentAt >= pageCooldownMs)) {
+				this.lastAdminPageSentAt = now;
+				this.hasActiveOutagePage = true;
+				void this._notifyAdminDegradation(error).catch((err) => {
+					this.logger?.warn?.(`[TradingViewMcpService] Failed to send admin degradation page: ${err.message}`);
+				});
+			}
+		}
+	}
+
+	async _notifyAdminDegradation(error) {
+		const adminChatId = process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID;
+		const { breakerCooldownMs } = this.getConfig();
+		const cooldownSeconds = Math.round(breakerCooldownMs / 1000);
+		const errorCategory = this._getErrorCategory(error);
+		const errorMessage = error && error.message ? error.message : 'Unknown error';
+		const message = [
+			'⚠️ TradingView MCP Sustained Outage Alert',
+			`Consecutive failures: ${this.consecutiveFailures}`,
+			`Error category: ${errorCategory}`,
+			`Error details: ${errorMessage}`,
+			`Circuit breaker: OPEN (skipping outbound calls for ${cooldownSeconds}s)`,
+		].join('\n');
+
+		if (typeof this.notifyAdmin === 'function') {
+			try {
+				await this.notifyAdmin({
+					type: 'degradation',
+					message,
+					consecutiveFailures: this.consecutiveFailures,
+					errorCategory,
+					error,
+				});
+			} catch (err) {
+				this.logger?.warn?.(`[TradingViewMcpService] notifyAdmin callback failed: ${err.message}`);
+			}
+			return;
+		}
+
+		if (!adminChatId) {
+			return;
+		}
+
+		try {
+			const manager = this.notificationManager || this._getNotificationManager();
+			const telegramService = manager && manager.channels && manager.channels.get('telegram');
+			if (telegramService && telegramService.isEnabled()) {
+				await telegramService.send({
+					text: message,
+					telegramChatId: adminChatId,
+				});
+			}
+		} catch (err) {
+			this.logger?.warn?.(`[TradingViewMcpService] Failed to send admin degradation page: ${err.message}`);
+		}
+	}
+
+	async _notifyAdminRecovery() {
+		const adminChatId = process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID;
+		const message = [
+			'✅ TradingView MCP Service Recovered',
+			'TradingView MCP connection restored successfully.',
+			'Circuit breaker: CLOSED (resuming normal enrichment).',
+		].join('\n');
+
+		if (typeof this.notifyAdmin === 'function') {
+			try {
+				await this.notifyAdmin({
+					type: 'recovery',
+					message,
+				});
+			} catch (err) {
+				this.logger?.warn?.(`[TradingViewMcpService] notifyAdmin callback failed: ${err.message}`);
+			}
+			return;
+		}
+
+		if (!adminChatId) {
+			return;
+		}
+
+		try {
+			const manager = this.notificationManager || this._getNotificationManager();
+			const telegramService = manager && manager.channels && manager.channels.get('telegram');
+			if (telegramService && telegramService.isEnabled()) {
+				await telegramService.send({
+					text: message,
+					telegramChatId: adminChatId,
+				});
+			}
+		} catch (err) {
+			this.logger?.warn?.(`[TradingViewMcpService] Failed to send admin recovery page: ${err.message}`);
+		}
+	}
+
+	_getNotificationManager() {
+		try {
+			const { getNotificationManager } = require('../../controllers/webhooks/handlers/alert/alert');
+			return typeof getNotificationManager === 'function' ? getNotificationManager() : null;
+		} catch {
+			return null;
+		}
+	}
+
 	_getErrorCategory(error) {
 		const message = error && typeof error.message === 'string' ? error.message : '';
+		if (error && error.category === 'circuit_breaker_open') {
+			return 'circuit_breaker_open';
+		}
+		if (/circuit breaker/i.test(message)) {
+			return 'circuit_breaker_open';
+		}
 		if (/HTTP 5\d\d/i.test(message)) {
 			return 'http_5xx';
 		}

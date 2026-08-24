@@ -141,6 +141,14 @@ describe('Status endpoints', () => {
 			lastErrorCategory: null,
 			successCount: 0,
 			failureCount: 0,
+			circuitBreaker: {
+				state: 'closed',
+				consecutiveFailures: 0,
+				openedAt: null,
+				lastStateChangeAt: null,
+				failureThreshold: 5,
+				cooldownMs: 600000,
+			},
 		});
 		expect(response.body.dependencies.braveSearch).toEqual({
 			enabled: false,
@@ -292,6 +300,14 @@ describe('Status endpoints', () => {
 			lastErrorCategory: null,
 			successCount: 0,
 			failureCount: 0,
+			circuitBreaker: {
+				state: 'closed',
+				consecutiveFailures: 0,
+				openedAt: null,
+				lastStateChangeAt: null,
+				failureThreshold: 5,
+				cooldownMs: 600000,
+			},
 		});
 	});
 
@@ -403,7 +419,7 @@ describe('Status endpoints', () => {
 		});
 	});
 
-	it('reports signal outcome tracking from the legacy environment variable', async () => {
+	it('does not enable signal outcome tracking from the retired legacy environment variable', async () => {
 		process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING = 'true';
 
 		const response = await request(app)
@@ -411,8 +427,8 @@ describe('Status endpoints', () => {
 			.set('x-api-key', 'status-key');
 
 		expect(response.status).toBe(200);
-		expect(response.body.featureFlags.signalOutcomeTracking).toBe(true);
-		expect(response.body.dependencies.signalOutcomeWorker.enabled).toBe(true);
+		expect(response.body.featureFlags.signalOutcomeTracking).toBe(false);
+		expect(response.body.dependencies.signalOutcomeWorker.enabled).toBe(false);
 	});
 
 	it('reports equity market-data readiness without exposing provider credentials', async () => {
@@ -432,7 +448,7 @@ describe('Status endpoints', () => {
 			configured: true,
 			ready: true,
 			status: 'ready',
-			supportedExchanges: ['BATS', 'NASDAQ', 'NYSE', 'AMEX', 'NYSE ARCA'],
+			supportedExchanges: ['BATS', 'NASDAQ', 'NYSE', 'AMEX', 'NYSE ARCA', 'FX_IDC', 'SPCFD'],
 			timeoutMs: 5000,
 		});
 		expect(JSON.stringify(response.body)).not.toContain('secret-equity-key');
@@ -473,6 +489,25 @@ describe('Status endpoints', () => {
 			status: 'misconfigured',
 		});
 		expect(JSON.stringify(response.body.dependencies.jobExecutionQueue)).not.toContain('redis://');
+	});
+
+	it('reports firestore-poller mode execution readiness without Redis', async () => {
+		process.env.JOB_EXECUTION_MODE = 'firestore-poller';
+		delete process.env.REDIS_URL;
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.jobExecutionWorker).toBe(true);
+		expect(response.body.dependencies.jobExecutionQueue).toMatchObject({
+			mode: 'firestore-poller',
+			enabled: false,
+			configured: false,
+			ready: false,
+			status: 'disabled',
+		});
 	});
 
 	it('reports Firestore job storage through the legacy alert-storage gate', async () => {
@@ -530,6 +565,14 @@ describe('Status endpoints', () => {
 			lastErrorCategory: null,
 			successCount: 0,
 			failureCount: 0,
+			circuitBreaker: {
+				state: 'closed',
+				consecutiveFailures: 0,
+				openedAt: null,
+				lastStateChangeAt: null,
+				failureThreshold: 5,
+				cooldownMs: 600000,
+			},
 		});
 	});
 
@@ -554,6 +597,14 @@ describe('Status endpoints', () => {
 			lastErrorCategory: null,
 			successCount: 0,
 			failureCount: 0,
+			circuitBreaker: {
+				state: 'closed',
+				consecutiveFailures: 0,
+				openedAt: null,
+				lastStateChangeAt: null,
+				failureThreshold: 5,
+				cooldownMs: 600000,
+			},
 		});
 	});
 
@@ -861,6 +912,14 @@ describe('Status endpoints', () => {
 			lastErrorCategory: null,
 			successCount: 0,
 			failureCount: 0,
+			circuitBreaker: {
+				state: 'closed',
+				consecutiveFailures: 0,
+				openedAt: null,
+				lastStateChangeAt: null,
+				failureThreshold: 5,
+				cooldownMs: 600000,
+			},
 		});
 	});
 
@@ -1495,4 +1554,36 @@ describe('Status endpoints', () => {
 			status: 'misconfigured',
 		});
 	});
+
+	it('reports notificationRedrive feature flag and dependency status when disabled and enabled', async () => {
+		delete process.env.ENABLE_NOTIFICATION_REDRIVE;
+		const disabledResponse = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(disabledResponse.status).toBe(200);
+		expect(disabledResponse.body.featureFlags.notificationRedrive).toBe(false);
+		expect(disabledResponse.body.dependencies.notificationRedrive).toMatchObject({
+			enabled: false,
+			role: 'web',
+			running: false,
+			pendingCount: 0,
+		});
+
+		process.env.ENABLE_NOTIFICATION_REDRIVE = 'true';
+		process.env.NOTIFICATION_REDRIVE_WORKER_ROLE = 'worker';
+		const enabledResponse = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(enabledResponse.status).toBe(200);
+		expect(enabledResponse.body.featureFlags.notificationRedrive).toBe(true);
+		expect(enabledResponse.body.dependencies.notificationRedrive).toMatchObject({
+			enabled: true,
+			role: 'worker',
+			batchLimit: 50,
+			maxAttempts: 5,
+		});
+	});
 });
+

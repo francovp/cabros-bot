@@ -19,6 +19,7 @@ function getRemoteConfigService() {
 describe('Analyzer - Unit Tests', () => {
 	beforeEach(() => {
 		jest.clearAllMocks();
+		getRemoteConfigService()._resetForTesting();
 
 		gemini.analyzeNewsForSymbol = jest.fn().mockResolvedValue({
 			event_category: 'price_surge',

@@ -4,7 +4,7 @@ const PROVIDER_NAME = 'twelve-data';
 const DEFAULT_BASE_URL = 'https://api.twelvedata.com';
 const DEFAULT_TIMEOUT_MS = 5000;
 const MAX_TIMEOUT_MS = 30000;
-const SUPPORTED_EXCHANGES = Object.freeze(['BATS', 'NASDAQ', 'NYSE', 'AMEX', 'NYSE ARCA']);
+const SUPPORTED_EXCHANGES = Object.freeze(['BATS', 'NASDAQ', 'NYSE', 'AMEX', 'NYSE ARCA', 'FX_IDC', 'SPCFD']);
 const INTERVALS = Object.freeze({
 	'5m': '5min',
 	'15m': '15min',
@@ -44,9 +44,34 @@ function normalizeExchange(exchange) {
 	if (!exchange || typeof exchange !== 'string') {
 		return null;
 	}
-	const normalized = exchange.trim().toUpperCase();
+	let normalized = exchange.trim().toUpperCase();
+	if (normalized.endsWith('_DLY')) {
+		normalized = normalized.slice(0, -4);
+	}
 	if (normalized === 'NYSE_ARCA' || normalized === 'ARCA') {
 		return 'NYSE ARCA';
+	}
+	if (normalized === 'FX' || normalized === 'FOREX') {
+		return 'FX_IDC';
+	}
+	return normalized;
+}
+
+function normalizeSymbol(symbol) {
+	if (!symbol || typeof symbol !== 'string') {
+		return null;
+	}
+	let cleaned = symbol.trim().toUpperCase().replace(/\s*\([A-Za-z0-9]+\)$/, '');
+	if (/^[A-Z]{6}$/.test(cleaned) && !cleaned.includes('/')) {
+		cleaned = `${cleaned.slice(0, 3)}/${cleaned.slice(3)}`;
+	}
+	return cleaned;
+}
+
+function resolveQueryExchange(exchange) {
+	const normalized = normalizeExchange(exchange);
+	if (!normalized || normalized === 'UNKNOWN' || normalized === 'FX_IDC' || normalized === 'SPCFD') {
+		return undefined;
 	}
 	return normalized;
 }
@@ -197,8 +222,9 @@ function parseTimestamp(value) {
 }
 
 async function getEntryPrice({ symbol, exchange, timeoutMs } = {}) {
-	const normalizedExchange = normalizeExchange(exchange) || exchange;
-	const body = await requestJson('/quote', { symbol, exchange: normalizedExchange }, timeoutMs);
+	const normSymbol = normalizeSymbol(symbol);
+	const queryExchange = resolveQueryExchange(exchange);
+	const body = await requestJson('/quote', { symbol: normSymbol, exchange: queryExchange }, timeoutMs);
 	const price = parsePrice(body.close ?? body.price);
 	if (price === null) {
 		throw new EquityMarketDataError(REASONS.INVALID_RESPONSE);
@@ -212,10 +238,11 @@ async function getHistoricalBars({ symbol, exchange, interval, startTime, endTim
 		throw new EquityMarketDataError(REASONS.INVALID_RESPONSE);
 	}
 
-	const normalizedExchange = normalizeExchange(exchange) || exchange;
+	const normSymbol = normalizeSymbol(symbol);
+	const queryExchange = resolveQueryExchange(exchange);
 	const body = await requestJson('/time_series', {
-		symbol,
-		exchange: normalizedExchange,
+		symbol: normSymbol,
+		exchange: queryExchange,
 		interval: providerInterval,
 		start_date: new Date(startTime).toISOString(),
 		end_date: new Date(endTime).toISOString(),
@@ -259,4 +286,7 @@ module.exports = {
 	getEntryPrice,
 	getHistoricalBars,
 	parseTimestamp,
+	normalizeExchange,
+	normalizeSymbol,
+	resolveQueryExchange,
 };

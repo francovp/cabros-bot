@@ -287,8 +287,16 @@ describe('RemoteConfigService', () => {
 			DISCORD_MAX_TOTAL_RETRY_WAIT_MS: 20000,
 			WEBHOOK_IDEMPOTENCY_TTL_MS: 600000,
 			JOB_CALLBACK_RETRY_DELAY_MS: 2500,
+			JOB_POLL_INTERVAL_MS: 20000,
 			SIGNAL_OUTCOME_EVALUATION_BATCH_LIMIT: 100,
 			SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS: 60000,
+			NOTIFICATION_REDRIVE_INTERVAL_MS: 120000,
+			NOTIFICATION_REDRIVE_BATCH_LIMIT: 75,
+			NOTIFICATION_REDRIVE_MAX_ATTEMPTS: 8,
+			NOTIFICATION_REDRIVE_MAX_AGE_MS: 7200000,
+			TRADINGVIEW_MCP_BREAKER_FAILURE_THRESHOLD: 10,
+			TRADINGVIEW_MCP_BREAKER_COOLDOWN_MS: 300000,
+			TRADINGVIEW_MCP_PAGE_COOLDOWN_MS: 1800000,
 		});
 		alertStorageService.getFirestore.mockReturnValue({});
 
@@ -307,8 +315,16 @@ describe('RemoteConfigService', () => {
 		expect(config.DISCORD_MAX_TOTAL_RETRY_WAIT_MS).toBe(20000);
 		expect(config.WEBHOOK_IDEMPOTENCY_TTL_MS).toBe(600000);
 		expect(config.JOB_CALLBACK_RETRY_DELAY_MS).toBe(2500);
+		expect(config.JOB_POLL_INTERVAL_MS).toBe(20000);
 		expect(config.SIGNAL_OUTCOME_EVALUATION_BATCH_LIMIT).toBe(100);
 		expect(config.SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS).toBe(60000);
+		expect(config.NOTIFICATION_REDRIVE_INTERVAL_MS).toBe(120000);
+		expect(config.NOTIFICATION_REDRIVE_BATCH_LIMIT).toBe(75);
+		expect(config.NOTIFICATION_REDRIVE_MAX_ATTEMPTS).toBe(8);
+		expect(config.NOTIFICATION_REDRIVE_MAX_AGE_MS).toBe(7200000);
+		expect(config.TRADINGVIEW_MCP_BREAKER_FAILURE_THRESHOLD).toBe(10);
+		expect(config.TRADINGVIEW_MCP_BREAKER_COOLDOWN_MS).toBe(300000);
+		expect(config.TRADINGVIEW_MCP_PAGE_COOLDOWN_MS).toBe(1800000);
 	});
 
 	it('validates and applies safe request-time feature flags from remote config', async () => {
@@ -350,6 +366,9 @@ describe('RemoteConfigService', () => {
 		process.env.BINANCE_FETCH_TIMEOUT_MS = '100000'; // max 60000
 		process.env.DISCORD_MAX_RETRIES = '-1'; // min 0
 		process.env.TRADINGVIEW_MCP_DEFAULT_TIMEFRAME = 'unknown'; // invalid enum
+		process.env.TRADINGVIEW_MCP_BREAKER_FAILURE_THRESHOLD = '0'; // min 1
+		process.env.TRADINGVIEW_MCP_BREAKER_COOLDOWN_MS = '500'; // min 1000
+		process.env.TRADINGVIEW_MCP_PAGE_COOLDOWN_MS = '999999999'; // max 86400000
 
 		const config = remoteConfigService.getRuntimeConfig();
 		expect(config.GROUNDING_MAX_SOURCES).toBe(3); // fallback to default
@@ -357,5 +376,8 @@ describe('RemoteConfigService', () => {
 		expect(config.BINANCE_FETCH_TIMEOUT_MS).toBe(5000); // fallback to default
 		expect(config.DISCORD_MAX_RETRIES).toBe(2); // fallback to default
 		expect(config.TRADINGVIEW_MCP_DEFAULT_TIMEFRAME).toBe('1h'); // fallback to default
+		expect(config.TRADINGVIEW_MCP_BREAKER_FAILURE_THRESHOLD).toBe(5); // fallback to default
+		expect(config.TRADINGVIEW_MCP_BREAKER_COOLDOWN_MS).toBe(600000); // fallback to default
+		expect(config.TRADINGVIEW_MCP_PAGE_COOLDOWN_MS).toBe(3600000); // fallback to default
 	});
 });
