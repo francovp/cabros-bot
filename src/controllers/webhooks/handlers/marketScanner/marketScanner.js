@@ -128,16 +128,19 @@ function postMarketScannerAlert(botOrGetter) {
 			const signalOutcomeService = require('../../../../services/storage/SignalOutcomeService');
 			if (signalOutcomeService.isEnabled()) {
 				for (const scanResult of scanResults) {
-					if (scanResult.status === 'success' && Array.isArray(scanResult.items)) {
-						for (const item of scanResult.items) {
+					if (scanResult.status === 'success' && Array.isArray(scanResult.items) && scanResult.items.length > 0) {
+						// Resolve sides from the same prepared (rank-normalized) item set the
+						// report rendered, so persisted sides match delivered levels
+						const preparedItems = prepareMarketScannerItems(scanResult, parsed.ranked === true);
+						for (const item of preparedItems) {
 							const closePrice = item.indicators?.close ?? null;
 							// Persisted side must match the rendered report side
 							const itemSide = getScanItemSide(scanResult.scan, item);
 							const itemScore = item.changePercent ?? item.indicators?.RSI ?? item.volume_ratio ?? null;
 
-							const atr = Number(item.indicators?.atr ?? item.indicators?.ATR ?? item.atr ?? null);
-							const bbLower = Number(item.indicators?.bb_lower ?? item.indicators?.bollinger_lower ?? item.indicators?.lower ?? item.bollinger?.lower ?? item.bollinger_lower ?? null);
-							const bbUpper = Number(item.indicators?.bb_upper ?? item.indicators?.bollinger_upper ?? item.indicators?.upper ?? item.bollinger?.upper ?? item.bollinger_upper ?? null);
+							const atr = pickLevel([item.indicators?.atr, item.indicators?.ATR, item.atr]);
+							const bbLower = pickLevel([item.indicators?.bb_lower, item.indicators?.bollinger_lower, item.indicators?.lower, item.bollinger?.lower, item.bollinger_lower]);
+							const bbUpper = pickLevel([item.indicators?.bb_upper, item.indicators?.bollinger_upper, item.indicators?.upper, item.bollinger?.upper, item.bollinger_upper]);
 							const support = pickLevel([
 								item.indicators?.support,
 								item.indicators?.nearest_support,
