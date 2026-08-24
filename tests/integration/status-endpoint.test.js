@@ -450,6 +450,7 @@ describe('Status endpoints', () => {
 			status: 'ready',
 			supportedExchanges: ['BATS', 'NASDAQ', 'NYSE', 'AMEX', 'NYSE ARCA', 'FX_IDC', 'SPCFD'],
 			timeoutMs: 5000,
+			rpm: 0,
 		});
 		expect(JSON.stringify(response.body)).not.toContain('secret-equity-key');
 	});

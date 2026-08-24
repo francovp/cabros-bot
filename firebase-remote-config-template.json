@@ -196,6 +196,27 @@
       "description": "Maximum execution duration per signal outcome evaluation sweep in milliseconds",
       "valueType": "NUMBER"
     },
+    "SIGNAL_OUTCOME_MAX_RETRY_ATTEMPTS": {
+      "defaultValue": {
+        "value": "3"
+      },
+      "description": "Maximum retry attempts for transient market data failures before signal outcome window is marked unavailable",
+      "valueType": "NUMBER"
+    },
+    "SIGNAL_OUTCOME_MAX_RETRY_AGE_MS": {
+      "defaultValue": {
+        "value": "604800000"
+      },
+      "description": "Maximum age in milliseconds for retrying transient market data failures before signal outcome window is marked unavailable",
+      "valueType": "NUMBER"
+    },
+    "EQUITY_MARKET_DATA_RPM": {
+      "defaultValue": {
+        "value": "8"
+      },
+      "description": "Rate limit ceiling in requests per minute for equity market data provider requests",
+      "valueType": "NUMBER"
+    },
     "NOTIFICATION_REDRIVE_INTERVAL_MS": {
       "defaultValue": {
         "value": "60000"

@@ -3,6 +3,7 @@
 const admin = require('firebase-admin');
 const SignalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
 const AlertStorageService = require('../../src/services/storage/AlertStorageService');
+const EquityMarketDataService = require('../../src/services/storage/EquityMarketDataService');
 
 // Shorthand references to mock internals
 const {
@@ -34,6 +35,7 @@ describe('SignalOutcomeService', () => {
 		admin.__resetApps();
 		admin.__resetCollectionState();
 		AlertStorageService._resetForTesting();
+		EquityMarketDataService._resetPacerForTesting();
 		delete process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING;
 		delete process.env.SIGNAL_OUTCOME_WORKER_ROLE;
 		delete process.env.ENABLE_SIGNAL_OUTCOME_TRACKING;
@@ -43,9 +45,12 @@ describe('SignalOutcomeService', () => {
 		delete process.env.TWELVE_DATA_API_KEY;
 		delete process.env.TWELVE_DATA_BASE_URL;
 		delete process.env.EQUITY_MARKET_DATA_TIMEOUT_MS;
+		process.env.EQUITY_MARKET_DATA_RPM = '0';
+		delete process.env.TWELVE_DATA_RPM;
 	});
 
 	afterEach(() => {
+		EquityMarketDataService._resetPacerForTesting();
 		delete process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING;
 		delete process.env.SIGNAL_OUTCOME_WORKER_ROLE;
 		delete process.env.ENABLE_SIGNAL_OUTCOME_TRACKING;
@@ -55,6 +60,8 @@ describe('SignalOutcomeService', () => {
 		delete process.env.TWELVE_DATA_API_KEY;
 		delete process.env.TWELVE_DATA_BASE_URL;
 		delete process.env.EQUITY_MARKET_DATA_TIMEOUT_MS;
+		process.env.EQUITY_MARKET_DATA_RPM = '0';
+		delete process.env.TWELVE_DATA_RPM;
 	});
 
 	describe('isEnabled()', () => {
@@ -387,6 +394,28 @@ describe('SignalOutcomeService', () => {
 				requestId: 'req-region-blocked',
 				source: 'webhook-alert',
 				symbol: 'BINANCE:BTCUSDT',
+				price: null,
+				side: 'BUY',
+			});
+
+			expect(resId).not.toBeNull();
+			const saved = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(resId);
+			expect(saved).toBeDefined();
+			expect(saved.price).toBeNull();
+			expect(saved.entryPriceSource).toBeNull();
+			expect(saved.eligibilityState).toBe('pending_entry_price');
+			expect(saved.outcomeEvaluated).toBe(false);
+			expect(saved.outcomes['1h'].status).toBe('pending');
+		});
+
+		it('marks signal immediately unavailable when Binance getAvgPrice throws structural invalid symbol error', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			mockGetAvgPrice.mockRejectedValue(new Error('Binance 400: Invalid symbol'));
+
+			const resId = await SignalOutcomeService.recordSignal({
+				requestId: 'req-invalid-symbol',
+				source: 'webhook-alert',
+				symbol: 'BINANCE:INVALID',
 				price: null,
 				side: 'BUY',
 			});
@@ -922,6 +951,162 @@ describe('SignalOutcomeService', () => {
 			const metrics = await SignalOutcomeService.getMetricsSummary();
 			expect(metrics.exchangeBreakdown.BATS.evaluated).toBe(1);
 			expect(metrics.providerBreakdown['twelve-data'].evaluated).toBe(1);
+		});
+
+		it('retries transient market data failures and retains pending status with attempts incremented', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			const receivedAtDate = new Date(Date.now() - 2 * 60 * 60 * 1000);
+			const mockDocId = 'test-transient-retry';
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, new Map([
+				[mockDocId, {
+					receivedAt: admin.firestore.Timestamp.fromDate(receivedAtDate),
+					requestId: 'req-transient',
+					source: 'news-monitor',
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					side: 'BUY',
+					price: 50000,
+					outcomeEvaluated: false,
+					outcomes: {
+						'1h': {
+							status: 'pending',
+							targetTime: new Date(receivedAtDate.getTime() + 1 * 60 * 60 * 1000).toISOString(),
+						},
+					},
+				}],
+			]));
+
+			mockGetKlines.mockRejectedValue(new Error('Binance 503: Service Unavailable'));
+
+			await SignalOutcomeService.evaluatePendingOutcomes();
+
+			const updated = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(mockDocId);
+			expect(updated).toBeDefined();
+			expect(updated.outcomes['1h'].status).toBe('pending');
+			expect(updated.outcomes['1h'].attempts).toBe(1);
+			expect(updated.outcomes['1h'].lastAttemptAt).toBeDefined();
+			expect(updated.outcomes['1h'].lastError).toBe('binance_unavailable');
+			expect(updated.outcomeEvaluated).toBe(false);
+		});
+
+		it('marks outcome unavailable when max retry attempts budget is exhausted', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			const receivedAtDate = new Date(Date.now() - 2 * 60 * 60 * 1000);
+			const mockDocId = 'test-retry-exhausted';
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, new Map([
+				[mockDocId, {
+					receivedAt: admin.firestore.Timestamp.fromDate(receivedAtDate),
+					requestId: 'req-exhausted',
+					source: 'news-monitor',
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					side: 'BUY',
+					price: 50000,
+					outcomeEvaluated: false,
+					outcomes: {
+						'1h': {
+							status: 'pending',
+							targetTime: new Date(receivedAtDate.getTime() + 1 * 60 * 60 * 1000).toISOString(),
+							attempts: 2,
+						},
+					},
+				}],
+			]));
+
+			mockGetKlines.mockRejectedValue(new Error('Binance 503: Service Unavailable'));
+
+			await SignalOutcomeService.evaluatePendingOutcomes({ maxRetryAttempts: 3 });
+
+			const updated = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(mockDocId);
+			expect(updated).toBeDefined();
+			expect(updated.outcomes['1h'].status).toBe('unavailable');
+			expect(updated.outcomes['1h'].attempts).toBe(3);
+			expect(updated.outcomes['1h'].retryExhausted).toBe(true);
+			expect(updated.outcomes['1h'].reason).toBe('binance_unavailable');
+			expect(updated.outcomeEvaluated).toBe(true);
+		});
+
+		it('marks outcome unavailable immediately on structural errors without retrying', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			const receivedAtDate = new Date(Date.now() - 2 * 60 * 60 * 1000);
+			const mockDocId = 'test-structural-error';
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, new Map([
+				[mockDocId, {
+					receivedAt: admin.firestore.Timestamp.fromDate(receivedAtDate),
+					requestId: 'req-structural',
+					source: 'news-monitor',
+					symbol: 'INVALID',
+					exchange: 'BINANCE',
+					side: 'BUY',
+					price: 50000,
+					outcomeEvaluated: false,
+					outcomes: {
+						'1h': {
+							status: 'pending',
+							targetTime: new Date(receivedAtDate.getTime() + 1 * 60 * 60 * 1000).toISOString(),
+						},
+					},
+				}],
+			]));
+
+			mockGetKlines.mockRejectedValue(new Error('Binance 400: Invalid symbol'));
+
+			await SignalOutcomeService.evaluatePendingOutcomes();
+
+			const updated = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(mockDocId);
+			expect(updated).toBeDefined();
+			expect(updated.outcomes['1h'].status).toBe('unavailable');
+			expect(updated.outcomes['1h'].reason).toBe('binance_invalid_symbol');
+			expect(updated.outcomeEvaluated).toBe(true);
+		});
+
+		it('backfills missing entry price during sweep for pending_entry_price signals', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			const receivedAtDate = new Date(Date.now() - 2 * 60 * 60 * 1000);
+			const mockDocId = 'test-backfill-entry';
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, new Map([
+				[mockDocId, {
+					receivedAt: admin.firestore.Timestamp.fromDate(receivedAtDate),
+					requestId: 'req-backfill',
+					source: 'news-monitor',
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					side: 'BUY',
+					price: null,
+					eligibilityState: 'pending_entry_price',
+					outcomeEvaluated: false,
+					outcomes: {
+						'1h': {
+							status: 'pending',
+							targetTime: new Date(receivedAtDate.getTime() + 1 * 60 * 60 * 1000).toISOString(),
+						},
+					},
+				}],
+			]));
+
+			// First call for entry price (getKlines near signal time) or getAvgPrice
+			mockGetKlines.mockResolvedValue([
+				[receivedAtDate.getTime(), '50000', '52000', '49000', '51000'],
+			]);
+
+			await SignalOutcomeService.evaluatePendingOutcomes();
+
+			const updated = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(mockDocId);
+			expect(updated).toBeDefined();
+			expect(updated.price).toBe(50000);
+			expect(updated.entryPriceSource).toBe('binance');
+			expect(updated.eligibilityState).toBe('supported_provider');
+			expect(updated.outcomes['1h'].status).toBe('evaluated');
+			expect(updated.outcomes['1h'].price).toBe(51000);
+			expect(updated.outcomes['1h'].return).toBe(2);
 		});
 
 		it('enforces sweep max duration budget on slow or hanging getKlines requests', async () => {
