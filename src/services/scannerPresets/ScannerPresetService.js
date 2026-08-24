@@ -33,12 +33,119 @@ const firestoreDeleteGenerations = new Map();
 const pendingFirestoreWriteTokens = new Map();
 const firestoreWriteQueues = new Map();
 
+function stripUndefinedFieldsDeep(value) {
+	if (value === null || typeof value !== 'object') {
+		return value;
+	}
+	if (Array.isArray(value)) {
+		return value
+			.map((item) => stripUndefinedFieldsDeep(item))
+			.filter((item) => item !== undefined);
+	}
+	const result = {};
+	for (const [key, val] of Object.entries(value)) {
+		if (val !== undefined) {
+			result[key] = stripUndefinedFieldsDeep(val);
+		}
+	}
+	return result;
+}
+
+function parseCadenceToMs(cadence) {
+	if (cadence === undefined || cadence === null || cadence === '') {
+		return 3600000;
+	}
+
+	if (typeof cadence === 'number') {
+		if (!Number.isFinite(cadence) || !Number.isInteger(cadence)) {
+			throw new MarketScannerRequestError('schedule cadenceMs must be an integer');
+		}
+		if (cadence < 60000) {
+			throw new MarketScannerRequestError('schedule cadence must be at least 1 minute (60000 ms)');
+		}
+		return cadence;
+	}
+
+	if (typeof cadence !== 'string') {
+		throw new MarketScannerRequestError('schedule cadence must be a string or number');
+	}
+
+	const trimmed = cadence.trim();
+	if (!trimmed) {
+		return 3600000;
+	}
+
+	const match = trimmed.match(/^(\d+)\s*(m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days|w|week|weeks)$/i);
+	if (match) {
+		const val = parseInt(match[1], 10);
+		const unit = match[2].toLowerCase();
+		let ms;
+		if (unit.startsWith('m')) {
+			ms = val * 60 * 1000;
+		} else if (unit.startsWith('h')) {
+			ms = val * 3600 * 1000;
+		} else if (unit.startsWith('d')) {
+			ms = val * 86400 * 1000;
+		} else if (unit.startsWith('w')) {
+			ms = val * 7 * 86400 * 1000;
+		}
+		if (ms < 60000) {
+			throw new MarketScannerRequestError('schedule cadence must be at least 1 minute (60000 ms)');
+		}
+		return ms;
+	}
+
+	if (/^\d+$/.test(trimmed)) {
+		const ms = parseInt(trimmed, 10);
+		if (ms < 60000) {
+			throw new MarketScannerRequestError('schedule cadence must be at least 1 minute (60000 ms)');
+		}
+		return ms;
+	}
+
+	throw new MarketScannerRequestError(`Invalid schedule cadence "${cadence}". Use format like "5m", "1h", "1d" or milliseconds`);
+}
+
+function normalizeSchedule(schedule) {
+	if (schedule === undefined || schedule === null) {
+		return {
+			enabled: false,
+			cadence: '1h',
+			cadenceMs: 3600000,
+		};
+	}
+
+	if (typeof schedule !== 'object' || Array.isArray(schedule)) {
+		throw new MarketScannerRequestError('schedule must be an object');
+	}
+
+	const enabled = Boolean(schedule.enabled);
+	const rawCadence = schedule.cadence !== undefined ? schedule.cadence : schedule.cadenceMs;
+	const cadenceMs = parseCadenceToMs(rawCadence);
+	const cadence = typeof schedule.cadence === 'string' && schedule.cadence.trim()
+		? schedule.cadence.trim()
+		: `${cadenceMs}ms`;
+
+	return {
+		enabled,
+		cadence,
+		cadenceMs,
+	};
+}
+
 function clonePreset(preset) {
 	if (!preset) return null;
-	return {
+	const cloned = {
 		...preset,
 		scans: Array.isArray(preset.scans) ? [...preset.scans] : [...DEFAULT_SCANS],
+		schedule: preset.schedule
+			? { ...preset.schedule }
+			: { enabled: false, cadence: '1h', cadenceMs: 3600000 },
 	};
+	if (Array.isArray(preset.channels)) {
+		cloned.channels = [...preset.channels];
+	}
+	return cloned;
 }
 
 function compareByCreatedAtDesc(a, b) {
@@ -282,6 +389,8 @@ class ScannerPresetService {
 		const scans = normalizeScanList(params.scans);
 		const limit = normalizeLimit(params.limit);
 		const bbwThreshold = normalizeBbwThreshold(params.bbwThreshold);
+		const schedule = normalizeSchedule(params.schedule);
+		const routing = this._parseRouting(params);
 		const id = typeof params.id === 'string' && params.id.trim() ? params.id.trim() : uuidv4();
 		const createdAt = typeof params.createdAt === 'string' && params.createdAt.trim()
 			? params.createdAt.trim()
@@ -290,7 +399,37 @@ class ScannerPresetService {
 			? params.updatedAt.trim()
 			: createdAt;
 
-		return {
+		let nextRunAt = typeof params.nextRunAt === 'string' && params.nextRunAt.trim()
+			? params.nextRunAt.trim()
+			: null;
+		if (schedule.enabled) {
+			if (!nextRunAt) {
+				nextRunAt = new Date(Date.now() + schedule.cadenceMs).toISOString();
+			}
+		} else {
+			nextRunAt = null;
+		}
+
+		const lastRunAt = typeof params.lastRunAt === 'string' && params.lastRunAt.trim()
+			? params.lastRunAt.trim()
+			: null;
+		const lastStatus = typeof params.lastStatus === 'string' && params.lastStatus.trim()
+			? params.lastStatus.trim()
+			: null;
+		const lastError = typeof params.lastError === 'string'
+			? params.lastError
+			: null;
+		const lastDurationMs = Number.isFinite(Number(params.lastDurationMs))
+			? Number(params.lastDurationMs)
+			: null;
+		const lockedUntil = typeof params.lockedUntil === 'string' && params.lockedUntil.trim()
+			? params.lockedUntil.trim()
+			: null;
+		const lockedBy = typeof params.lockedBy === 'string' && params.lockedBy.trim()
+			? params.lockedBy.trim()
+			: null;
+
+		const preset = {
 			id,
 			name,
 			exchange,
@@ -298,9 +437,86 @@ class ScannerPresetService {
 			scans,
 			limit,
 			bbwThreshold,
+			schedule,
 			createdAt,
 			updatedAt,
+			lastRunAt,
+			nextRunAt,
+			lastStatus,
+			lastError,
+			lastDurationMs,
+			lockedUntil,
+			lockedBy,
 		};
+
+		if (routing.channels !== undefined) preset.channels = routing.channels;
+		if (routing.telegramChatId !== undefined) preset.telegramChatId = routing.telegramChatId;
+		if (routing.whatsappChatId !== undefined) preset.whatsappChatId = routing.whatsappChatId;
+		if (routing.discordWebhookUrl !== undefined) preset.discordWebhookUrl = routing.discordWebhookUrl;
+
+		return preset;
+	}
+
+	_parseRouting(params = {}) {
+		const routing = {};
+		if (params.channels !== undefined) {
+			if (params.channels === null) {
+				// unset
+			} else if (Array.isArray(params.channels)) {
+				const validChannels = ['telegram', 'whatsapp', 'discord'];
+				const unique = Array.from(new Set(params.channels.map((c) => (typeof c === 'string' ? c.trim().toLowerCase() : '')))).filter(Boolean);
+				if (unique.length === 0) {
+					throw new MarketScannerRequestError('"channels" must be a non-empty array if provided');
+				}
+				const invalid = unique.filter((c) => !validChannels.includes(c));
+				if (invalid.length > 0) {
+					throw new MarketScannerRequestError(`Unknown channel(s): ${invalid.join(', ')}. Valid channels: ${validChannels.join(', ')}`);
+				}
+				routing.channels = unique;
+			} else {
+				throw new MarketScannerRequestError('"channels" must be an array if provided');
+			}
+		}
+
+		if (params.telegramChatId !== undefined) {
+			if (params.telegramChatId === null || params.telegramChatId === '') {
+				// unset
+			} else if (typeof params.telegramChatId === 'string' && params.telegramChatId.trim()) {
+				routing.telegramChatId = params.telegramChatId.trim();
+			} else {
+				throw new MarketScannerRequestError('"telegramChatId" must be a non-empty string if provided');
+			}
+		}
+
+		if (params.whatsappChatId !== undefined) {
+			if (params.whatsappChatId === null || params.whatsappChatId === '') {
+				// unset
+			} else if (typeof params.whatsappChatId === 'string' && params.whatsappChatId.trim()) {
+				routing.whatsappChatId = params.whatsappChatId.trim();
+			} else {
+				throw new MarketScannerRequestError('"whatsappChatId" must be a non-empty string if provided');
+			}
+		}
+
+		if (params.discordWebhookUrl !== undefined) {
+			if (params.discordWebhookUrl === null || params.discordWebhookUrl === '') {
+				// unset
+			} else if (typeof params.discordWebhookUrl === 'string' && params.discordWebhookUrl.trim()) {
+				try {
+					const url = new URL(params.discordWebhookUrl.trim());
+					if (url.protocol !== 'https:') {
+						throw new Error('must be https');
+					}
+					routing.discordWebhookUrl = params.discordWebhookUrl.trim();
+				} catch {
+					throw new MarketScannerRequestError('"discordWebhookUrl" must be a valid https URL if provided');
+				}
+			} else {
+				throw new MarketScannerRequestError('"discordWebhookUrl" must be a valid https URL if provided');
+			}
+		}
+
+		return routing;
 	}
 
 	_parseName(name) {
@@ -458,9 +674,9 @@ class ScannerPresetService {
 		const previousWrite = firestoreWriteQueues.get(preset.id) || Promise.resolve();
 		const currentWrite = previousWrite
 			.catch(() => undefined)
-			.then(() => firestore.collection(COLLECTION_NAME).doc(preset.id).set({
+			.then(() => firestore.collection(COLLECTION_NAME).doc(preset.id).set(stripUndefinedFieldsDeep({
 				...clonePreset(preset),
-			}));
+			})));
 		firestoreWriteQueues.set(preset.id, currentWrite);
 
 		try {
@@ -494,6 +710,14 @@ class ScannerPresetService {
 
 	_formatFirestoreDoc(doc) {
 		const data = doc.data() || {};
+		const schedule = data.schedule && typeof data.schedule === 'object'
+			? {
+				enabled: Boolean(data.schedule.enabled),
+				cadence: typeof data.schedule.cadence === 'string' ? data.schedule.cadence : '1h',
+				cadenceMs: Number.isInteger(data.schedule.cadenceMs) ? data.schedule.cadenceMs : parseCadenceToMs(data.schedule.cadence || '1h'),
+			}
+			: { enabled: false, cadence: '1h', cadenceMs: 3600000 };
+
 		const preset = {
 			id: doc.id,
 			name: typeof data.name === 'string' ? data.name : '',
@@ -504,13 +728,37 @@ class ScannerPresetService {
 			scans: Array.isArray(data.scans) ? data.scans.filter((scan) => typeof scan === 'string') : [...DEFAULT_SCANS],
 			limit: Number.isInteger(data.limit) ? data.limit : DEFAULT_SCAN_LIMIT,
 			bbwThreshold: Number.isFinite(Number(data.bbwThreshold)) ? Number(data.bbwThreshold) : DEFAULT_BBW_THRESHOLD,
+			schedule,
 			createdAt: typeof data.createdAt === 'string' ? data.createdAt : new Date().toISOString(),
 			updatedAt: typeof data.updatedAt === 'string'
 				? data.updatedAt
 				: (typeof data.createdAt === 'string' ? data.createdAt : new Date().toISOString()),
+			lastRunAt: typeof data.lastRunAt === 'string' ? data.lastRunAt : null,
+			nextRunAt: typeof data.nextRunAt === 'string' ? data.nextRunAt : null,
+			lastStatus: typeof data.lastStatus === 'string' ? data.lastStatus : null,
+			lastError: typeof data.lastError === 'string' ? data.lastError : null,
+			lastDurationMs: Number.isFinite(Number(data.lastDurationMs)) ? Number(data.lastDurationMs) : null,
+			lockedUntil: typeof data.lockedUntil === 'string' ? data.lockedUntil : null,
+			lockedBy: typeof data.lockedBy === 'string' ? data.lockedBy : null,
 		};
 
+		if (Array.isArray(data.channels)) preset.channels = data.channels.filter((c) => typeof c === 'string');
+		if (typeof data.telegramChatId === 'string') preset.telegramChatId = data.telegramChatId;
+		if (typeof data.whatsappChatId === 'string') preset.whatsappChatId = data.whatsappChatId;
+		if (typeof data.discordWebhookUrl === 'string') preset.discordWebhookUrl = data.discordWebhookUrl;
+
 		return clonePreset(preset);
+	}
+
+	_resetForTesting() {
+		memoryPresets.clear();
+		pendingFirestorePresets.clear();
+		inFlightFirestorePresets.clear();
+		pendingFirestoreDeletes.clear();
+		firestoreDeleteGenerations.clear();
+		pendingFirestoreWriteTokens.clear();
+		firestoreWriteQueues.clear();
+		this.firestoreUnavailable = false;
 	}
 }
 
@@ -520,15 +768,12 @@ module.exports = {
 	ScannerPresetService,
 	scannerPresetService,
 	COLLECTION_NAME,
+	parseCadenceToMs,
+	normalizeSchedule,
+	stripUndefinedFieldsDeep,
 	// Test helper
 	_resetForTesting() {
-		memoryPresets.clear();
-		pendingFirestorePresets.clear();
-		inFlightFirestorePresets.clear();
-		pendingFirestoreDeletes.clear();
-		firestoreDeleteGenerations.clear();
-		pendingFirestoreWriteTokens.clear();
-		firestoreWriteQueues.clear();
-		scannerPresetService.firestoreUnavailable = false;
+		scannerPresetService._resetForTesting();
 	},
+	_memoryPresets: memoryPresets,
 };

@@ -299,4 +299,67 @@ describe('Scanner presets API integration tests', () => {
 		);
 		expect(mockFetch).not.toHaveBeenCalled();
 	});
+
+	it('creates a scheduled preset and executes it via scheduler sweep', async () => {
+		process.env.ENABLE_SCANNER_PRESET_SCHEDULER = 'true';
+		const { scannerPresetSchedulerService } = require('../../src/services/scannerPresets');
+
+		tradingViewMcpService.callScanTool.mockResolvedValueOnce([
+			{
+				symbol: 'BINANCE:BTCUSDT',
+				changePercent: 5.2,
+				indicators: { close: 65000, RSI: 55 },
+			},
+		]);
+
+		const createResponse = await request(app)
+			.post('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.send({
+				name: 'Hourly scheduled scan',
+				exchange: 'binance',
+				timeframe: '1h',
+				scans: ['top_gainers'],
+				schedule: {
+					enabled: true,
+					cadence: '1h',
+				},
+				channels: ['telegram'],
+				telegramChatId: '123456789',
+			})
+			.expect(201);
+
+		const preset = createResponse.body.preset;
+		expect(preset.schedule).toEqual({
+			enabled: true,
+			cadence: '1h',
+			cadenceMs: 3600000,
+		});
+		expect(preset.nextRunAt).toBeTruthy();
+
+		// Wait for queued create writes to settle
+		await new Promise((r) => setTimeout(r, 10));
+
+		// Fast-forward due time by manually setting nextRunAt in the past
+		await admin.firestore().collection('scannerPresets').doc(preset.id).update({
+			nextRunAt: new Date(Date.now() - 5000).toISOString(),
+		});
+
+		const sweepResult = await scannerPresetSchedulerService.sweep();
+		expect(sweepResult.executedCount).toBe(1);
+		expect(sweepResult.errorCount).toBe(0);
+
+		expect(mockTelegramSendMessage).toHaveBeenCalledWith(
+			'123456789',
+			expect.stringContaining('SCANNER DE MERCADO'),
+			expect.any(Object),
+		);
+
+		const updatedDoc = await admin.firestore().collection('scannerPresets').doc(preset.id).get();
+		const data = updatedDoc.data();
+		expect(data.lastStatus).toBe('success');
+		expect(data.lastRunAt).toBeTruthy();
+		expect(new Date(data.nextRunAt).getTime()).toBeGreaterThan(Date.now());
+	});
 });
+

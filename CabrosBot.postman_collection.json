@@ -1170,6 +1170,12 @@
               "body": "{\n  \"error\": \"name must be a string\",\n  \"code\": \"INVALID_REQUEST\"\n}"
             },
             {
+              "name": "Created with Schedule and Routing",
+              "status": "Created",
+              "code": 201,
+              "body": "{\n  \"success\": true,\n  \"preset\": {\n    \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n    \"name\": \"Hourly Scan\",\n    \"exchange\": \"BINANCE\",\n    \"timeframe\": \"1h\",\n    \"scans\": [\"top_gainers\", \"top_losers\"],\n    \"limit\": 5,\n    \"bbwThreshold\": 0.05,\n    \"schedule\": {\n      \"enabled\": true,\n      \"cadence\": \"1h\",\n      \"cadenceMs\": 3600000\n    },\n    \"channels\": [\"telegram\"],\n    \"lastRunAt\": null,\n    \"nextRunAt\": \"2026-08-24T18:00:00.000Z\",\n    \"lastStatus\": null,\n    \"lastError\": null,\n    \"lastDurationMs\": null,\n    \"createdAt\": \"2026-08-24T17:00:00.000Z\",\n    \"updatedAt\": \"2026-08-24T17:00:00.000Z\"\n  }\n}"
+            },
+            {
               "name": "Created",
               "status": "Created",
               "code": 201,

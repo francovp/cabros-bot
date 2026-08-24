@@ -51,10 +51,21 @@ function buildDocSnapshot(id, data, collectionName) {
 	};
 }
 
+function getNestedValue(obj, fieldPath) {
+	if (!obj || typeof obj !== 'object' || typeof fieldPath !== 'string') return undefined;
+	const parts = fieldPath.split('.');
+	let current = obj;
+	for (const part of parts) {
+		if (current == null) return undefined;
+		current = current[part];
+	}
+	return current;
+}
+
 function sortDocs(docs, field, direction) {
 	return docs.sort((a, b) => {
-		const left = a.data()[field];
-		const right = b.data()[field];
+		const left = getNestedValue(a.data(), field);
+		const right = getNestedValue(b.data(), field);
 
 		if (left === right) {
 			return a.id.localeCompare(b.id);
@@ -88,7 +99,7 @@ function buildQuerySnapshot(collectionName, queryState = {}) {
 	if (queryState.where && Array.isArray(queryState.where)) {
 		const [field, op, val] = queryState.where;
 		if (op === '==') {
-			docs = docs.filter(d => d.data() && d.data()[field] === val);
+			docs = docs.filter(d => d.data() && getNestedValue(d.data(), field) === val);
 		}
 	}
 

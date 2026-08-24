@@ -3376,6 +3376,70 @@
           "bbwThreshold": {
             "type": "number"
           },
+          "schedule": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "cadence": {
+                "type": "string",
+                "description": "Recurring schedule interval (e.g. 5m, 1h, 1d)"
+              },
+              "cadenceMs": {
+                "type": "integer",
+                "description": "Parsed cadence in milliseconds (min: 60000)"
+              }
+            }
+          },
+          "channels": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "telegram",
+                "whatsapp",
+                "discord"
+              ]
+            }
+          },
+          "telegramChatId": {
+            "type": "string"
+          },
+          "whatsappChatId": {
+            "type": "string"
+          },
+          "discordWebhookUrl": {
+            "type": "string",
+            "format": "uri"
+          },
+          "lastRunAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "nextRunAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "lastStatus": {
+            "type": "string",
+            "enum": [
+              "success",
+              "error",
+              "timeout"
+            ],
+            "nullable": true
+          },
+          "lastError": {
+            "type": "string",
+            "nullable": true
+          },
+          "lastDurationMs": {
+            "type": "integer",
+            "nullable": true
+          },
           "createdAt": {
             "type": "string",
             "format": "date-time"

@@ -224,6 +224,20 @@
       "description": "Maximum lifespan in milliseconds of dead-letter records before expiration",
       "valueType": "NUMBER"
     },
+    "SCANNER_PRESET_SCHEDULER_INTERVAL_MS": {
+      "defaultValue": {
+        "value": "60000"
+      },
+      "description": "Background sweep interval in milliseconds for recurring scanner preset runs",
+      "valueType": "NUMBER"
+    },
+    "SCANNER_PRESET_SCHEDULER_BATCH_LIMIT": {
+      "defaultValue": {
+        "value": "50"
+      },
+      "description": "Maximum due scanner presets to process per scheduler sweep",
+      "valueType": "NUMBER"
+    },
     "ENABLE_GEMINI_GROUNDING": {
       "defaultValue": {
         "value": "false"
