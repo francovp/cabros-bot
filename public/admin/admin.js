@@ -797,6 +797,8 @@ const createOverviewDashboard = () => {
 	);
 
 	const loadStatus = async () => {
+		lastRawStatus = '';
+		rawCopyButton.hidden = true;
 		const status = await sendRequest({
 			definition: STATUS_DEFINITION,
 			path: STATUS_DEFINITION.path,
