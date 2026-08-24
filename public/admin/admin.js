@@ -1692,6 +1692,7 @@ const createJobStatusForm = () => {
 	form.append(button, actions, pollButton, statusPanel, output, rawToggle);
 
 	let statusRequestVersion = 0;
+	let actionsEpoch = 0;
 	let pollTimer;
 	let pollPaused = false;
 	let lastFetchedActive = false;
@@ -1794,7 +1795,7 @@ const createJobStatusForm = () => {
 				confirm: 'Retry failed items for this job?',
 			});
 		}
-		const actionVersion = statusRequestVersion;
+		const actionVersion = ++actionsEpoch;
 		definitions.forEach((action) => {
 			const actionButton = element('button', { text: action.label });
 			actionButton.type = 'button';
@@ -1804,7 +1805,7 @@ const createJobStatusForm = () => {
 				path: action.path.replace('{jobId}', encodeURIComponent(jobId)),
 				button: actionButton,
 				output,
-				isCurrent: () => actionVersion === statusRequestVersion
+				isCurrent: () => actionVersion === actionsEpoch
 					&& form.elements['path-jobId'].value === jobId,
 			}));
 			actions.append(actionButton);

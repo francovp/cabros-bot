@@ -1936,6 +1936,49 @@ describe('admin browser client', () => {
 		expect(copyButton.hidden).toBe(true);
 	});
 
+	it('sends job actions confirmed during an in-flight auto-refresh', async () => {
+		const requests = [];
+		let statusCalls = 0;
+		let releasePoll;
+		const slowPoll = new Promise((resolve) => { releasePoll = resolve; });
+		const browser = createBrowser({
+			fetchImpl: async (url, options) => {
+				if (url === '/openapi.json') return response(contract);
+				requests.push([url, options?.method || 'GET']);
+				if (url === '/api/jobs/job-live') {
+					statusCalls += 1;
+					if (statusCalls === 1) {
+						return response({ jobId: 'job-live', type: 'market-scanner', status: 'processing', progress: { current: 1, total: 3 } });
+					}
+					return slowPoll.then(() => response({ jobId: 'job-live', status: 'processing', progress: {} }));
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'jobs');
+
+		const statusForm = findForm(browser.elementsById.view, 'GET /api/jobs/{jobId}');
+		statusForm.elements['path-jobId'].value = 'job-live';
+		await statusForm.dispatch('submit');
+		await flush();
+
+		const cancelButton = findButton(statusForm, 'Cancel job');
+		expect(cancelButton).toBeDefined();
+
+		for (const fireTimer of [...browser.timers.values()]) fireTimer();
+		await flush();
+		expect(statusCalls).toBe(2);
+
+		await cancelButton.dispatch('click');
+		await flush();
+
+		expect(requests.some(([url, method]) => url.includes('/api/jobs/job-live/cancel') && method === 'POST')).toBe(true);
+
+		releasePoll();
+		await flush();
+	});
+
 	it('keeps navigation icons as inline SVG instead of platform glyphs', () => {
 		const shell = fs.readFileSync(path.join(__dirname, '../../src/admin/index.html'), 'utf8');
 		expect(shell.match(/<svg class="nav-icon"/g)).toHaveLength(7);
