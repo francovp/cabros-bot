@@ -242,6 +242,8 @@ describe('News Monitor - Binance Integration (US4)', () => {
 
 			try {
 				const analyzer = getAnalyzer();
+				analyzer.alertThreshold = 0; // ensure the mock alert clears the confidence gate
+				analyzer.enableBinance = true; // force the Binance market-context path
 				await analyzer.analyzeSymbol('BTCUSDT', 'req-provenance', null, {}, Date.now(), {});
 
 				expect(signalOutcomeService.isEnabled).toHaveBeenCalled();
