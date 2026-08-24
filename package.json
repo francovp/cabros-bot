@@ -43,7 +43,7 @@
     "swagger-ui-dist": "^5.32.6",
     "telegraf": "^4.3.0",
     "undici": "6.28.0",
-    "uuid": "^11.1.1"
+    "uuid": "^14.0.2"
   },
   "optionalDependencies": {
     "@azure-rest/ai-inference": "^1.0.0-beta.6",
