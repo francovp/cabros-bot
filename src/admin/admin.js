@@ -1155,6 +1155,7 @@ const createOverviewDashboard = () => {
 	const started = performance.now();
 	try {
 		const result = await fetchWithTimeout(request.url, request.options, getApiRequestTimeout(definition), async (response) => {
+			if (typeof captureResponseStatus === 'function') captureResponseStatus(response.status);
 			const elapsed = Math.round(performance.now() - started);
 			let data;
 			let formatted;
@@ -1173,7 +1174,6 @@ const createOverviewDashboard = () => {
 			return { response, data, formatted, elapsed };
 		});
 		const { response, data, formatted, elapsed } = result;
-		if (typeof captureResponseStatus === 'function') captureResponseStatus(response.status);
 		if (!requestIsCurrent()) return response.ok ? data : undefined;
 		output.className = `response-block${response.ok ? '' : ' response-error'}`;
 		const responseText = response.ok && formatResponse
@@ -1831,6 +1831,7 @@ const createJobStatusForm = () => {
 	});
 
 	jobIdInput.addEventListener('input', () => {
+		actionsEpoch += 1;
 		jobIdInput.value = jobIdInput.value.trim();
 		statusRequestVersion += 1;
 		button.disabled = false;
@@ -1858,7 +1859,7 @@ const createJobStatusForm = () => {
 				confirm: 'Retry failed items for this job?',
 			});
 		}
-		const actionVersion = ++actionsEpoch;
+		const actionVersion = actionsEpoch;
 		definitions.forEach((action) => {
 			const actionButton = element('button', { text: action.label });
 			actionButton.type = 'button';
