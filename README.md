@@ -1327,15 +1327,15 @@ The alert webhook system supports simultaneous delivery to multiple channels (Te
 - **Enabled by**: `ENABLE_TELEGRAM_BOT=true` + valid `BOT_TOKEN` and `TELEGRAM_CHAT_ID`
 - **Format**: MarkdownV2 with special character escaping
 - **Timeout**: ~10 seconds per delivery
-- **Retry**: 3 attempts with exponential backoff (1s → 2s → 4s)
+- **Retry**: Rate limits (HTTP 429) retried up to 2 additional times (3 total attempts) with `Retry-After` parameter backoff and total wait budget caps
 
 #### WhatsApp (Optional)
 
 - **Enabled by**: `ENABLE_WHATSAPP_ALERTS=true` + GreenAPI credentials
 - **Format**: WhatsApp markdown (bold, italic, strikethrough, code blocks, lists)
 - **Timeout**: ~10 seconds per delivery  
-- **Retry**: 3 attempts with exponential backoff (1s → 2s → 4s)
-- **Message Size**: Automatically truncated to 20,000 characters with "…" suffix if needed
+- **Retry**: 3 attempts with exponential backoff (1s → 2s → 4s) per chunk
+- **Message Size**: Payloads exceeding 20,000 characters are automatically split into sequential chunks that each deliver and retry independently (no ellipsis truncation)
 - **Provider**: GreenAPI (REST API via native fetch)
 
 #### Discord (Optional)
@@ -1343,7 +1343,8 @@ The alert webhook system supports simultaneous delivery to multiple channels (Te
 - **Enabled by**: `ENABLE_DISCORD_ALERTS=true` + valid `DISCORD_WEBHOOK_URL`
 - **Format**: Plain Discord webhook content with Markdown-friendly text
 - **Timeout**: ~10 seconds per delivery
-- **Retry**: Single request per delivery
+- **Retry**: Rate limits (HTTP 429) retried up to `DISCORD_MAX_RETRIES` additional attempts (default: `2`) using `Retry-After` backoff bounded by `DISCORD_FALLBACK_RETRY_DELAY_MS`, `DISCORD_MAX_RETRY_DELAY_MS`, and `DISCORD_MAX_TOTAL_RETRY_WAIT_MS`
+- **Message Size**: Payloads exceeding 2,000 characters are automatically split into sequential chunks that each deliver and retry independently
 - **Provider**: Discord webhook execute endpoint via native `fetch`
 
 ### Channel-Specific Formatting
@@ -1410,8 +1411,11 @@ Sources:
 
 **Independent Retry**: Each channel retries independently
 - Channel A failure doesn't affect Channel B
-- Retry timing: 1s → 2s → 4s (max 3 attempts)
-- Jitter: ±10% to prevent thundering herd
+- WhatsApp retries transient provider failures up to 3 attempts with exponential backoff (1s → 2s → 4s, ±10% jitter) per chunk
+- Discord retries 429 rate-limit responses up to `DISCORD_MAX_RETRIES` attempts per chunk using `Retry-After` backoff bounded by `DISCORD_MAX_TOTAL_RETRY_WAIT_MS`
+- Telegram retries 429 rate-limit responses up to 2 times
+
+**Message Chunking**: Payloads exceeding provider length limits (20,000 characters for WhatsApp, 2,000 characters for Discord) are automatically split into sequential chunks that deliver and retry independently; earlier delivered chunks are preserved if a later chunk fails.
 
 **Graceful Degradation**: If one channel fails
 - Other channels still receive the alert
@@ -1526,15 +1530,15 @@ GEMINI_API_KEY=your_google_ai_studio_api_key
 2. Check `DISCORD_WEBHOOK_URL` format and channel permissions
 3. Confirm the webhook has not been deleted or regenerated in Discord
 
-**Message truncation**:
-- WhatsApp automatically truncates messages > 20,000 characters
-- Use MarkdownV2 formatting to reduce character count
-- For very long alerts, consider summarizing before sending
+**Message size & chunking**:
+- Payloads exceeding provider limits (20,000 characters for WhatsApp, 2,000 characters for Discord) are automatically split into sequential chunks and delivered in order rather than truncated.
+- Each chunk retries independently. If a later chunk fails, earlier chunks remain delivered and the error response identifies the failed part (`failedPart`).
+- Use MarkdownV2 / concise formatting or summarize via Gemini enrichment to keep alerts within a single chunk when preferred.
 
 **Retry exhaustion**:
-- If all 3 retries fail, alert is not re-attempted
-- Total maximum wait per channel: ~7.8 seconds (1 + 2 + 4 seconds)
-- Check server logs for transient network/API issues
+- If all retries fail for a channel, the channel failure is recorded in the alert response and logged without blocking other channels.
+- Discord and Telegram retry rate limits (HTTP 429) up to their configured max retries and total wait budget.
+- WhatsApp retries transient provider errors up to 3 attempts per chunk.
 
 ## Commands
 
@@ -1766,7 +1770,7 @@ pnpm test:firebase
 ### Supporting Utilities
 
 - **retryHelper**: Exponential backoff retry logic (1s → 2s → 4s)
-- **messageHelper**: Message truncation and formatting
+- **messageHelper**: Message chunking (`splitMessageIntoChunks`) and formatting utilities
 - **MarkdownV2Formatter**: Telegram MarkdownV2 text escaping
 - **WhatsAppMarkdownFormatter**: WhatsApp markdown conversion
 - **PromptService** (`src/services/prompts/`): Centralized runtime prompt registry with Langfuse fetch + local file-based fallback behavior
@@ -2040,12 +2044,11 @@ The application logs to stdout:
 
 **WhatsApp message still too long**:
 - Shortening reduces URL length, not entire message
-- If full alert text > 20,000 chars, WhatsApp auto-truncates
+- If full alert text > 20,000 chars, it is automatically split into sequential chunks and delivered in parts
 - Reduce alert detail or enable Gemini enrichment to summarize
 
 ### Retry Logic
 
-- Failed alerts automatically retry up to 3 times
-- Each retry waits: 1s, then 2s, then 4s
-- ±10% jitter prevents thundering herd
+- Failed alerts automatically retry per channel (WhatsApp up to 3 attempts with 1s → 2s → 4s exponential backoff per chunk; Telegram and Discord for 429 rate limits up to their configured retry limits)
+- ±10% jitter prevents thundering herd on exponential backoff
 - All retries logged at WARN/ERROR level

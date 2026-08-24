@@ -210,6 +210,24 @@ describe('Documentation Alignment Policy', () => {
 
 		expect(undocumentedKeys).toEqual([]);
 	});
+
+	test('multi-channel notification documentation matches runtime behavior', () => {
+		const readme = fs.readFileSync(path.join(repoRoot, 'README.md'), 'utf8');
+		const staleDeliveryPatterns = [
+			/Retry:\s*Single request per delivery/i,
+			/Automatically truncated to 20,000 characters with ["']?…["']? suffix/i,
+			/WhatsApp automatically truncates messages\s*>\s*20,000/i,
+			/WhatsApp auto-truncates/i,
+		];
+
+		for (const pattern of staleDeliveryPatterns) {
+			expect(readme).not.toMatch(pattern);
+		}
+
+		expect(readme).toContain('DISCORD_MAX_RETRIES');
+		expect(readme).toContain('DISCORD_MAX_TOTAL_RETRY_WAIT_MS');
+		expect(readme).toMatch(/split(?:s|ting)? into (?:ordered|sequential) chunks/i);
+	});
 });
 
 describe('Node.js runtime contract', () => {
