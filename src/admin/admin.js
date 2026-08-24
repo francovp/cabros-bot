@@ -1284,17 +1284,20 @@ const createAlertListForm = () => {
 		next.disabled = !nextBefore;
 		prev.disabled = !backCursors.length;
 	};
-	const resetPagination = () => {
+	const resetPagination = ({ clearCursor }) => {
 		pageGeneration += 1;
 		nextBefore = undefined;
 		backCursors = [];
 		next.disabled = true;
 		prev.disabled = true;
+		if (clearCursor) before.value = '';
 	};
-	[before, limit, source, enriched].forEach((field) => {
-		field.addEventListener('input', resetPagination);
-		field.addEventListener('change', resetPagination);
+	[limit, source, enriched].forEach((field) => {
+		field.addEventListener('input', () => resetPagination({ clearCursor: true }));
+		field.addEventListener('change', () => resetPagination({ clearCursor: true }));
 	});
+	before.addEventListener('input', () => resetPagination({ clearCursor: false }));
+	before.addEventListener('change', () => resetPagination({ clearCursor: false }));
 	form.addEventListener('submit', (event) => {
 		event.preventDefault();
 		backCursors = [];
