@@ -1824,6 +1824,118 @@ describe('admin browser client', () => {
 		expect(report.textContent).toContain('ANÁLISIS AMPLIADO (dry run)');
 	});
 
+	it('reads the persisted camelCase promptProvenance field in alert details', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/alerts')) {
+					return response({
+						success: true,
+						alerts: [{
+							id: 'alert-p',
+							text: 'provenance alert',
+							enriched: true,
+							enrichmentData: {
+								sentiment: 'bullish',
+								promptProvenance: { name: 'alert-enrichment', source: 'langfuse', version: 7 },
+							},
+						}],
+						pagination: {},
+					});
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alerts');
+		await listForm.dispatch('submit');
+		await flush();
+
+		const card = find(listForm, (node) => node.className.includes('alert-card'));
+		await findButton(card, 'Show detail').dispatch('click');
+		expect(card.textContent).toContain('Prompt: alert-enrichment (langfuse v7)');
+	});
+
+	it('serializes stored-alert pagination so a slow page cannot interleave', async () => {
+		const pages = [
+			{ alerts: [{ id: 'a1', text: 'first page alert', enriched: false }], pagination: { hasMore: true, nextBefore: 'cursor-2' } },
+			{ alerts: [{ id: 'a2', text: 'second page alert', enriched: false }], pagination: { hasMore: true, nextBefore: 'cursor-3' } },
+			{ alerts: [{ id: 'a3', text: 'third page alert', enriched: false }], pagination: { hasMore: false } },
+		];
+		let alertCalls = 0;
+		let releaseSlowPage;
+		const slowPage = new Promise((resolve) => { releaseSlowPage = resolve; });
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/alerts')) {
+					alertCalls += 1;
+					if (alertCalls === 2) return slowPage.then(() => response(pages[2]));
+					return response(pages[alertCalls - 1]);
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alerts');
+		await listForm.dispatch('submit');
+		await flush();
+		expect(listForm.textContent).toContain('first page alert');
+
+		const nextButton = findButton(listForm, 'Next page');
+		const prevButton = findButton(listForm, 'Previous page');
+		const click = nextButton.dispatch('click');
+		await flush();
+		expect(alertCalls).toBe(2);
+		expect(nextButton.disabled).toBe(true);
+		expect(prevButton.disabled).toBe(true);
+
+		releaseSlowPage();
+		await click;
+		await flush();
+		expect(listForm.textContent).toContain('third page alert');
+		expect(findButton(listForm, 'Next page').disabled).toBe(true);
+	});
+
+	it('clears the raw-status copy payload when a later refresh fails', async () => {
+		const status = {
+			service: { name: 'cabros-bot', version: '0.1.0', environment: 'production', commit: 'abc123' },
+			featureFlags: {},
+			deliveryChannels: {},
+			dependencies: {},
+		};
+		let statusCalls = 0;
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/status') {
+					statusCalls += 1;
+					if (statusCalls === 1) return response(status);
+					return response({ error: 'Unauthorized' }, 401);
+				}
+				return response({});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'overview');
+		await flush();
+
+		const copyButton = findButton(browser.elementsById.view, 'Copy JSON');
+		expect(copyButton).toBeDefined();
+		expect(copyButton.hidden).toBe(false);
+
+		const refreshButton = findButton(browser.elementsById.view, 'Refresh dashboard');
+		await refreshButton.dispatch('click');
+		await flush();
+
+		expect(statusCalls).toBe(2);
+		expect(copyButton.hidden).toBe(true);
+	});
+
 	it('keeps navigation icons as inline SVG instead of platform glyphs', () => {
 		const shell = fs.readFileSync(path.join(__dirname, '../../src/admin/index.html'), 'utf8');
 		expect(shell.match(/<svg class="nav-icon"/g)).toHaveLength(7);
