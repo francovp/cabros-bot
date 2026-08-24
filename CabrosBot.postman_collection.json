@@ -3772,6 +3772,91 @@
           ]
         },
         {
+          "name": "POST Binance order (bounded MARKET BUY quantity dry-run)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"symbol\": \"BTCUSDT\",\n  \"side\": \"BUY\",\n  \"type\": \"MARKET\",\n  \"quantity\": 0.001,\n  \"dryRun\": true\n}",
+              "description": "Quantity-based MARKET BUYs are converted to an exchange-enforced quoteOrderQty at the estimated average price so Binance caps the realized quote spend at BINANCE_TRADING_MAX_NOTIONAL. MARKET SELLs keep base-quantity sizing."
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/orders",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "orders"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "OK",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"environment\": \"testnet\",\n  \"order\": {\n    \"symbol\": \"BTCUSDT\",\n    \"side\": \"BUY\",\n    \"type\": \"MARKET\",\n    \"quoteOrderQty\": 50,\n    \"newClientOrderId\": \"cabros-test-order-id\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST Binance order (MARKET BUY quantity above notional ceiling)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"symbol\": \"BTCUSDT\",\n  \"side\": \"BUY\",\n  \"type\": \"MARKET\",\n  \"quantity\": 1,\n  \"dryRun\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/orders",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "orders"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Bad Request",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"success\": false,\n  \"error\": \"order notional exceeds configured maximum\",\n  \"code\": \"INVALID_ORDER_REQUEST\"\n}"
+            }
+          ]
+        },
+        {
           "name": "POST Binance order (live missing stable identifier)",
           "request": {
             "method": "POST",

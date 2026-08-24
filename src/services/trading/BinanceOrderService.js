@@ -658,6 +658,7 @@ function createBinanceOrderService({ createClient = createBinanceClient } = {}) 
 			if (order.price !== undefined) validatePriceRange(order.price, priceFilter);
 
 			let notional;
+			let boundedOrder = order;
 			if (order.quoteOrderQty !== undefined) {
 				notional = decimalParts(order.quoteOrderQty);
 			} else if (order.type === 'LIMIT') {
@@ -668,15 +669,29 @@ function createBinanceOrderService({ createClient = createBinanceClient } = {}) 
 					const price = averagePrice && averagePrice.price;
 					if (!price || !decimalParts(price)) throw new Error('invalid average price');
 					notional = multiplyDecimals(order.quantity, price);
+
+					// Quantity-based MARKET BUYs are converted to an exchange-enforced
+					// quoteOrderQty so the provider itself caps quote spend at
+					// BINANCE_TRADING_MAX_NOTIONAL even if execution price rises.
+					// MARKET SELLs keep base quantity so position sizing stays exact.
+					if (
+						order.side === 'BUY'
+						&& Number.isFinite(config.maxNotional)
+						&& config.maxNotional > 0
+						&& compareDecimalParts(notional, decimalParts(config.maxNotional)) <= 0
+					) {
+						boundedOrder = { ...order, quantity: undefined, quoteOrderQty: order.quantity * price };
+						notional = decimalParts(boundedOrder.quoteOrderQty);
+					}
 				} catch (error) {
 					throw new BinanceOrderServiceError('Binance market price validation failed', 'BINANCE_VALIDATION_FAILED');
 				}
 			}
 			validateNotional(notional, filters, config.maxNotional, order.type === 'MARKET');
 
-			const orderParams = buildOrderParams({ ...order, clientOrderId });
+			const orderParams = buildOrderParams({ ...boundedOrder, clientOrderId });
 			if (order.dryRun) {
-				await validateOrderTestFilters(client, order, orderParams, filters);
+				await validateOrderTestFilters(client, boundedOrder, orderParams, filters);
 				return {
 					success: true,
 					dryRun: true,
@@ -685,7 +700,7 @@ function createBinanceOrderService({ createClient = createBinanceClient } = {}) 
 				};
 			}
 
-			await validateOrderTestFilters(client, order, orderParams, filters);
+			await validateOrderTestFilters(client, boundedOrder, orderParams, filters);
 			try {
 				const response = await client.submitNewOrder(orderParams);
 				return {

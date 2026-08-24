@@ -219,6 +219,72 @@ describe('BinanceOrderService', () => {
 		});
 	});
 
+	it('bounds quantity-based market BUYs with exchange-enforced quoteOrderQty', async () => {
+		process.env.BINANCE_TRADING_MAX_NOTIONAL = '100';
+		const client = {
+			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
+			getAvgPrice: jest.fn().mockResolvedValue({ price: '50000.00' }),
+		};
+		const service = createBinanceOrderService({ createClient: () => client });
+
+		const result = await service.placeOrder({
+			symbol: 'BTCUSDT',
+			side: 'BUY',
+			type: 'MARKET',
+			quantity: 0.001, // 0.001 * 50000 = 50 <= 100
+			dryRun: true,
+		});
+
+		expect(result.success).toBe(true);
+		expect(result.dryRun).toBe(true);
+		expect(result.order.quoteOrderQty).toBe(50);
+		expect(result.order.quantity).toBeUndefined();
+		expect(client.getAvgPrice).toHaveBeenCalledWith({ symbol: 'BTCUSDT' });
+	});
+
+	it('keeps base-quantity market SELLs unchanged without quoteOrderQty conversion', async () => {
+		process.env.BINANCE_TRADING_MAX_NOTIONAL = '100';
+		const client = {
+			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
+			getAvgPrice: jest.fn().mockResolvedValue({ price: '50000.00' }),
+		};
+		const service = createBinanceOrderService({ createClient: () => client });
+
+		const result = await service.placeOrder({
+			symbol: 'BTCUSDT',
+			side: 'SELL',
+			type: 'MARKET',
+			quantity: 0.001,
+			dryRun: true,
+		});
+
+		expect(result.success).toBe(true);
+		expect(result.dryRun).toBe(true);
+		expect(result.order.quantity).toBe(0.001);
+		expect(result.order.quoteOrderQty).toBeUndefined();
+	});
+
+	it('rejects quantity-based market BUYs above maxNotional before any provider call', async () => {
+		process.env.BINANCE_TRADING_MAX_NOTIONAL = '10';
+		const getAvgPrice = jest.fn().mockResolvedValue({ price: '50000.00' });
+		const client = {
+			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
+			getAvgPrice,
+		};
+		const service = createBinanceOrderService({ createClient: () => client });
+
+		await expect(service.placeOrder({
+			symbol: 'BTCUSDT',
+			side: 'BUY',
+			type: 'MARKET',
+			quantity: 1, // 1 * 50000 = 50000 > 10
+			dryRun: true,
+		})).rejects.toMatchObject({
+			code: 'INVALID_ORDER_REQUEST',
+			message: expect.stringContaining('configured maximum'),
+		});
+	});
+
 	it('rejects quantity-based market orders when getAvgPrice fails', async () => {
 		const client = {
 			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
