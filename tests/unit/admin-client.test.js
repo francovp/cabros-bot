@@ -1706,6 +1706,9 @@ describe('admin browser client', () => {
 
 		expect(nextButton.disabled).toBe(true);
 		expect(findButton(listForm, 'Previous page').disabled).toBe(true);
+		expect(listForm.textContent).not.toContain('first page alert');
+		expect(findButton(listForm, 'Copy JSON').hidden).toBe(true);
+		expect(find(listForm, (node) => node.tagName === 'PRE' && node.textContent.includes('first page alert'))).toBeUndefined();
 
 		await nextButton.dispatch('click');
 		await flush();

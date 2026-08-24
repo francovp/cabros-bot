@@ -1009,6 +1009,10 @@ const createAlertListForm = () => {
 		next.disabled = true;
 		prev.disabled = true;
 		button.disabled = false;
+		alertList.replaceChildren();
+		lastRawJson = '';
+		rawOutput.textContent = '';
+		rawCopyButton.hidden = true;
 		output.textContent = 'Filters changed — load alerts to refresh.';
 		if (clearCursor) before.value = '';
 	};
