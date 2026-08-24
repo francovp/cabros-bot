@@ -48,9 +48,17 @@ function postSymbolAnalysis() {
 			}
 
 			const side = inferSide(analysis);
-			const row = buildReportRow({ input, analysis, multiTimeframe, side: side || 'BUY' });
 			const normalized = normalizeAnalysis({ analysis, input, parsed, multiTimeframe, side });
-			const item = { input, analysis, multiTimeframe, side: side || 'BUY' };
+			const reportAnalysis = {
+				...analysis,
+				technical: {
+					...(analysis.technical || analysis),
+					price_data: normalized.price_data,
+					technical_indicators: normalized.technical_indicators,
+					volume_analysis: normalized.volume_analysis,
+				},
+			};
+			const item = { input, analysis: reportAnalysis, multiTimeframe, side };
 
 			return res.status(200).json({
 				success: true,

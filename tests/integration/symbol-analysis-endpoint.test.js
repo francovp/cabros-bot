@@ -306,4 +306,48 @@ describe('Symbol analysis endpoint', () => {
 		}));
 		expect(res.body.alertText).toContain('BTCUSDT $100.00');
 	});
+
+	it('does not invent BUY report levels for inconclusive analysis', async () => {
+		tradingViewMcpService.analyzeSymbolIdentifier.mockResolvedValueOnce({
+			technical: {
+				price_data: { current_price: 100 },
+				technical_indicators: { rsi: 50, atr: 4 },
+			},
+		});
+
+		const res = await request(app)
+			.post('/api/webhook/symbol-analysis')
+			.set('x-api-key', 'test-key')
+			.send({ symbol: 'BINANCE:BTCUSDT' })
+			.expect(200);
+
+		expect(res.body.analysis).toEqual(expect.objectContaining({
+			risk: expect.objectContaining({ side: null, stop_loss: null, target: null, valid: false }),
+			decision: expect.objectContaining({ action: 'NO_TRADE' }),
+		}));
+		expect(res.body.alertText).not.toContain('Stop Loss sugerido');
+		expect(res.body.alertText).not.toContain('Target sugerido');
+		expect(res.body.alertText).not.toContain('Risk/Reward');
+	});
+
+	it('formats uppercase indicator aliases consistently with structured analysis', async () => {
+		tradingViewMcpService.analyzeSymbolIdentifier.mockResolvedValueOnce({
+			technical: {
+				price_data: { current_price: 100 },
+				technical_indicators: { RSI: 50, ATR: 4 },
+			},
+			confluence: { recommendation: 'BUY', confidence: 'HIGH' },
+		});
+
+		const res = await request(app)
+			.post('/api/webhook/symbol-analysis')
+			.set('x-api-key', 'test-key')
+			.send({ symbol: 'BINANCE:BTCUSDT' })
+			.expect(200);
+
+		expect(res.body.analysis.decision).toEqual(expect.objectContaining({ action: 'BUY', dataSufficient: true }));
+		expect(res.body.alertText).toContain('RSI 50.0');
+		expect(res.body.alertText).toContain('*ATR:* $4.00');
+		expect(res.body.alertText).toContain('- *Target sugerido:* $112.00');
+	});
 });

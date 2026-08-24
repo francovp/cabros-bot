@@ -3375,7 +3375,19 @@
             ],
             "default": "standard"
           },
+          "analysis_mode": {
+            "type": "string",
+            "enum": [
+              "standard",
+              "combined"
+            ],
+            "default": "standard"
+          },
           "includeMultiTimeframe": {
+            "type": "boolean",
+            "default": false
+          },
+          "include_multi_timeframe": {
             "type": "boolean",
             "default": false
           }

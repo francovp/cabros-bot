@@ -158,6 +158,8 @@ describe('OpenAPI contract', () => {
 		expect(schema.properties.timeframe).not.toHaveProperty('default');
 		expect(schema.description).toContain('TRADINGVIEW_MCP_DEFAULT_TIMEFRAME');
 		expect(schema.properties.timeframe.enum).toEqual(expect.arrayContaining(['60', '240', 'D', 'W', 'M']));
+		expect(schema.properties).toHaveProperty('analysis_mode');
+		expect(schema.properties).toHaveProperty('include_multi_timeframe');
 	});
 
 	it('documents idempotency conflicts for header-backed alert operations', () => {

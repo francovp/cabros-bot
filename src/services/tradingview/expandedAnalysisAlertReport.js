@@ -201,20 +201,22 @@ function buildReportRow({ input = {}, analysis = {}, multiTimeframe, side = 'BUY
 	const currentBollinger = techData.bollinger_bands || {};
 	const price = numberOrNull(priceData.current_price ?? priceData.close);
 	const changePercent = numberOrNull(priceData.change_percent);
-	const rsi = numberOrNull(indicators.rsi ?? techData.rsi?.value);
-	const sma20 = numberOrNull(indicators.sma20 ?? bollinger.bb_middle ?? techData.sma?.sma20 ?? currentBollinger.middle);
-	const macd = numberOrNull(indicators.macd ?? techData.macd?.macd_line);
-	const macdSignal = numberOrNull(indicators.macd_signal ?? techData.macd?.signal_line);
-	const atr = numberOrNull(indicators.atr ?? techData.atr?.value ?? techData.atr ?? techData.volatility?.atr);
+	const rsi = numberOrNull(indicators.RSI ?? indicators.rsi ?? techData.rsi?.value);
+	const sma20 = numberOrNull(indicators.SMA20 ?? indicators.sma20 ?? bollinger.bb_middle ?? techData.sma?.sma20 ?? currentBollinger.middle);
+	const macd = numberOrNull(indicators.MACD ?? indicators.macd ?? techData.macd?.macd_line);
+	const macdSignal = numberOrNull(indicators.MACD_signal ?? indicators.macd_signal ?? techData.macd?.signal_line);
+	const atr = numberOrNull(indicators.ATR ?? indicators.atr ?? techData.atr?.value ?? techData.atr ?? techData.volatility?.atr);
 	const trend = getTrend(price, sma20);
 	const macdDirection = getMacdDirection(macd, macdSignal);
 	const volume = getVolumeLabel(techData);
-	const stopLossMeta = getStopLossMeta(price, atr, bollinger, currentBollinger, side);
+	const stopLossMeta = side ? getStopLossMeta(price, atr, bollinger, currentBollinger, side) : { value: null, source: 'missing' };
 	const stopLoss = stopLossMeta.value;
 	const isOverbought = rsi !== null && rsi > 70;
-	const takeProfit = isOverbought && side !== 'SELL'
+	const takeProfit = !side
 		? null
-		: getTakeProfitTarget(price, atr, bollinger, currentBollinger, techData, side);
+		: isOverbought && side !== 'SELL'
+			? null
+			: getTakeProfitTarget(price, atr, bollinger, currentBollinger, techData, side);
 	const invalidationDistance = getInvalidationDistance(price, stopLoss, stopLossMeta.source, side);
 	const riskRewardRatio = getRiskRewardRatio(price, stopLoss, takeProfit, side);
 
@@ -254,7 +256,7 @@ function formatGroupRows(rows) {
 			`${row.symbol} ${formatCurrency(row.price)} (${formatPercent(row.changePercent)}) | RSI ${formatNumber(row.rsi, 1)}`,
 			`- *Tendencia (SMA20):* ${row.trend} | *MACD:* ${row.macdDirection}`,
 			formatVolumeAtrLine(row),
-			`- *Stop Loss sugerido:* ${formatCurrency(row.stopLoss)}`,
+			formatStopLossLine(row),
 			formatTargetLine(row),
 			formatRiskRewardLine(row),
 			formatInvalidationLine(row),
@@ -417,6 +419,14 @@ function formatVolumeAtrLine(row) {
 	}
 
 	return `${base} | *ATR:* ${formatCurrency(row.atr)}`;
+}
+
+function formatStopLossLine(row) {
+	if (row.stopLoss === null) {
+		return null;
+	}
+
+	return `- *Stop Loss sugerido:* ${formatCurrency(row.stopLoss)}`;
 }
 
 function categorizeRsi(rsi) {
