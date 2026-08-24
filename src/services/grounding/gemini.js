@@ -608,7 +608,7 @@ async function generateEnrichedAlert({ text, searchResults = [], searchResultTex
 	if (text.length < 15 || text.split(/\s+/).length < 2) {
 		return {
 			sentiment: 'NEUTRAL',
-			sentiment_score: 0.5,
+			sentiment_score: 0,
 			insights: [],
 		};
 	}
@@ -651,7 +651,7 @@ async function generateEnrichedAlert({ text, searchResults = [], searchResultTex
 				console.warn('[Gemini] Non-retryable provider error, returning neutral enrichment:', error.message);
 				return {
 					sentiment: 'NEUTRAL',
-					sentiment_score: 0.5,
+					sentiment_score: 0,
 					insights: [],
 					modelUsed: GEMINI_MODEL_NAME || 'unknown',
 					...(promptProvenance ? { promptProvenance, prompt_provenance: promptProvenance } : {}),
@@ -663,39 +663,36 @@ async function generateEnrichedAlert({ text, searchResults = [], searchResultTex
 			}
 
 			console.warn('[Gemini] Primary enrichment model failed, attempting fallback model:', GEMINI_MODEL_NAME_FALLBACK);
-			llmResult = await genaiClient.llmCallv2({
+			const fallbackParams = {
 				...llmParams,
 				opts: {
 					...llmParams.opts,
 					model: GEMINI_MODEL_NAME_FALLBACK,
 				},
-			});
+			};
+			llmResult = await genaiClient.llmCallv2(fallbackParams);
 		}
 
-		const { text: responseText, usage, modelUsed } = llmResult;
-
-		if (tokenUsage && usage) {
-			const modelName = modelUsed || GEMINI_MODEL_NAME;
-			tokenUsage.addUsage(usage, modelName);
+		if (tokenUsage && llmResult.usage) {
+			tokenUsage.addUsage(llmResult.usage, llmResult.modelUsed || GEMINI_MODEL_NAME || 'gemini');
 		}
 
+		const parsed = parseEnrichedAlertResponse(llmResult.text);
 		return {
-			...parseEnrichedAlertResponse(responseText),
-			modelUsed: modelUsed || GEMINI_MODEL_NAME,
+			...parsed,
+			modelUsed: llmResult.modelUsed || GEMINI_MODEL_NAME || 'unknown',
 			...(promptProvenance ? { promptProvenance, prompt_provenance: promptProvenance } : {}),
 		};
 	} catch (error) {
-		if (signal?.aborted || error.name === 'AbortError' || error.message === 'Grounding timeout' || (typeof error.message === 'string' && error.message.includes('timeout'))) {
-			throw error;
-		}
-		throw new Error(`Enriched alert generation failed: ${error.message}`);
+		console.error('[Gemini] Alert enrichment failed:', error.message);
+		throw error;
 	}
 }
 
 /**
- * Parse and validate Gemini enriched alert response
- * @param {string} response - Raw Gemini response
- * @returns {object} Validated enriched alert data
+ * Parse structured enriched alert response from Gemini
+ * @param {string} response - Raw JSON string from Gemini
+ * @returns {object} Parsed enriched alert data with safe defaults
  */
 function parseEnrichedAlertResponse(response) {
 	try {
@@ -711,6 +708,24 @@ function parseEnrichedAlertResponse(response) {
 			parsed.sentiment = 'NEUTRAL';
 		}
 
+		let sentimentScore = 0;
+		if (parsed.sentiment === 'BULLISH') {
+			const raw = typeof parsed.sentiment_score === 'number' && Number.isFinite(parsed.sentiment_score)
+				? parsed.sentiment_score
+				: 0.5;
+			const clamped = Math.max(-1, Math.min(1, raw));
+			sentimentScore = Math.abs(clamped) || 0.5;
+		} else if (parsed.sentiment === 'BEARISH') {
+			const raw = typeof parsed.sentiment_score === 'number' && Number.isFinite(parsed.sentiment_score)
+				? parsed.sentiment_score
+				: -0.5;
+			const clamped = Math.max(-1, Math.min(1, raw));
+			const absVal = Math.abs(clamped);
+			sentimentScore = absVal === 0 ? -0.5 : -absVal;
+		} else {
+			sentimentScore = 0;
+		}
+
 		const optionalRiskMetadata = {
 			invalidation_level: parseOptionalRiskValue(parsed.invalidation_level),
 			target_level: parseOptionalRiskValue(parsed.target_level),
@@ -720,7 +735,7 @@ function parseEnrichedAlertResponse(response) {
 
 		return {
 			sentiment: parsed.sentiment,
-			sentiment_score: Math.max(0, Math.min(1, parsed.sentiment_score || 0.5)),
+			sentiment_score: sentimentScore,
 			insights: Array.isArray(parsed.insights) ? parsed.insights : [],
 			...Object.fromEntries(
 				Object.entries(optionalRiskMetadata).filter(([, value]) => value !== undefined),
@@ -730,7 +745,7 @@ function parseEnrichedAlertResponse(response) {
 		console.warn(`[Gemini] Response parsing failed, using safe defaults: ${error.message}`);
 		return {
 			sentiment: 'NEUTRAL',
-			sentiment_score: 0.5,
+			sentiment_score: 0,
 			insights: [],
 		};
 	}

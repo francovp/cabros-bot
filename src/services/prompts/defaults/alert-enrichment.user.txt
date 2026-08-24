@@ -7,7 +7,7 @@ Instructions:
 - **JSON schema:**
 {
   "sentiment": "BULLISH" | "BEARISH" | "NEUTRAL",
-  "sentiment_score": number (0.0 to 1.0),
+  "sentiment_score": number (-1.0 to 1.0 — negative = bearish, positive = bullish),
   "insights": string[] (max 10 key points),
   "technical_levels": {
     "supports": string[],

@@ -131,6 +131,108 @@ describe('Gemini Service', () => {
 			expect(result).not.toHaveProperty('risk_reward_ratio');
 		});
 
+		describe('sentiment_score signed range and sign-coherence guard', () => {
+			it('preserves negative sentiment_score in [-1, 1] for BEARISH sentiment', () => {
+				const result = parseEnrichedAlertResponse(JSON.stringify({
+					sentiment: 'BEARISH',
+					sentiment_score: -0.75,
+					insights: ['Bearish trend continuing'],
+				}));
+
+				expect(result.sentiment).toBe('BEARISH');
+				expect(result.sentiment_score).toBe(-0.75);
+			});
+
+			it('clamps negative values beyond -1.0 to -1.0', () => {
+				const result = parseEnrichedAlertResponse(JSON.stringify({
+					sentiment: 'BEARISH',
+					sentiment_score: -1.8,
+					insights: [],
+				}));
+
+				expect(result.sentiment).toBe('BEARISH');
+				expect(result.sentiment_score).toBe(-1.0);
+			});
+
+			it('clamps positive values beyond 1.0 to 1.0', () => {
+				const result = parseEnrichedAlertResponse(JSON.stringify({
+					sentiment: 'BULLISH',
+					sentiment_score: 1.8,
+					insights: [],
+				}));
+
+				expect(result.sentiment).toBe('BULLISH');
+				expect(result.sentiment_score).toBe(1.0);
+			});
+
+			it('enforces sign-coherence: converts positive score to negative for BEARISH sentiment', () => {
+				const result = parseEnrichedAlertResponse(JSON.stringify({
+					sentiment: 'BEARISH',
+					sentiment_score: 0.85,
+					insights: ['Downtrend detected'],
+				}));
+
+				expect(result.sentiment).toBe('BEARISH');
+				expect(result.sentiment_score).toBe(-0.85);
+			});
+
+			it('enforces sign-coherence: converts negative score to positive for BULLISH sentiment', () => {
+				const result = parseEnrichedAlertResponse(JSON.stringify({
+					sentiment: 'BULLISH',
+					sentiment_score: -0.85,
+					insights: ['Uptrend detected'],
+				}));
+
+				expect(result.sentiment).toBe('BULLISH');
+				expect(result.sentiment_score).toBe(0.85);
+			});
+
+			it('forces sentiment_score to 0 for NEUTRAL sentiment regardless of input', () => {
+				const resultWithScore = parseEnrichedAlertResponse(JSON.stringify({
+					sentiment: 'NEUTRAL',
+					sentiment_score: 0.6,
+					insights: ['Consolidation phase'],
+				}));
+				expect(resultWithScore.sentiment).toBe('NEUTRAL');
+				expect(resultWithScore.sentiment_score).toBe(0);
+
+				const resultWithoutScore = parseEnrichedAlertResponse(JSON.stringify({
+					sentiment: 'NEUTRAL',
+					insights: [],
+				}));
+				expect(resultWithoutScore.sentiment).toBe('NEUTRAL');
+				expect(resultWithoutScore.sentiment_score).toBe(0);
+			});
+
+			it('falls back to directional defaults when score is missing or invalid', () => {
+				const bullishNoScore = parseEnrichedAlertResponse(JSON.stringify({
+					sentiment: 'BULLISH',
+					insights: [],
+				}));
+				expect(bullishNoScore.sentiment).toBe('BULLISH');
+				expect(bullishNoScore.sentiment_score).toBe(0.5);
+
+				const bearishNoScore = parseEnrichedAlertResponse(JSON.stringify({
+					sentiment: 'BEARISH',
+					insights: [],
+				}));
+				expect(bearishNoScore.sentiment).toBe('BEARISH');
+				expect(bearishNoScore.sentiment_score).toBe(-0.5);
+
+				const bearishZeroScore = parseEnrichedAlertResponse(JSON.stringify({
+					sentiment: 'BEARISH',
+					sentiment_score: 0,
+					insights: [],
+				}));
+				expect(bearishZeroScore.sentiment).toBe('BEARISH');
+				expect(bearishZeroScore.sentiment_score).toBe(-0.5);
+
+				const malformed = parseEnrichedAlertResponse('not valid json');
+				expect(malformed.sentiment).toBe('NEUTRAL');
+				expect(malformed.sentiment_score).toBe(0);
+			});
+		});
+
 		it('adds provider usage returned by llmCallv2 to the token tracker', async () => {
 			const tokenUsage = { addUsage: jest.fn() };
 			const usage = { inputTokens: 11, outputTokens: 22, totalTokens: 33 };
@@ -218,7 +320,7 @@ describe('Gemini Service', () => {
 			});
 
 			expect(result.sentiment).toBe('NEUTRAL');
-			expect(result.sentiment_score).toBe(0.5);
+			expect(result.sentiment_score).toBe(0);
 			expect(result.insights).toHaveLength(0);
 			expect(genaiClient.llmCallv2).not.toHaveBeenCalled();
 		});
@@ -267,7 +369,7 @@ describe('Gemini Service', () => {
 			});
 
 			expect(result.sentiment).toBe('NEUTRAL');
-			expect(result.sentiment_score).toBe(0.5);
+			expect(result.sentiment_score).toBe(0);
 			expect(result.insights).toEqual([]);
 			// Fallback model should NOT be called
 			expect(genaiClient.llmCallv2).toHaveBeenCalledTimes(1);

@@ -1055,7 +1055,7 @@ async function getMetricsSummary({ from, to, limit } = {}) {
 			}
 
 			// False positive candidate: high confidence/score but poor performance (e.g. return < -2% or worstMae < -5%)
-			const isHighConfidence = (signal.score >= 0.75 || (signal.source === 'news-monitor' && signal.score >= 0.7));
+			const isHighConfidence = (Math.abs(signal.score) >= 0.75 || (signal.source === 'news-monitor' && Math.abs(signal.score) >= 0.7));
 			if (isHighConfidence && (resolvedReturn < -1 || worstMae < -3)) {
 				falsePositiveCandidates.push({
 					symbol: signal.symbol,
