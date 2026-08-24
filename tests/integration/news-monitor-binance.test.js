@@ -206,6 +206,12 @@ describe('News Monitor - Binance Integration (US4)', () => {
 	describe('Signal Outcome Provenance', () => {
 		it('records Binance-derived prices with entryPriceSource binance', async () => {
 			jest.resetModules();
+			jest.doMock('binance', () => ({
+				MainClient: jest.fn().mockImplementation(() => ({
+					getAvgPrice: jest.fn().mockResolvedValue({ price: '77543.41057187', closeTime: Date.now() }),
+					getKlines: jest.fn().mockResolvedValue([]),
+				})),
+			}));
 			jest.doMock('../../src/services/storage/SignalOutcomeService', () => ({
 				isEnabled: jest.fn(() => true),
 				recordSignal: jest.fn().mockResolvedValue('outcome-id'),
