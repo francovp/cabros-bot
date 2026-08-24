@@ -561,8 +561,7 @@ describe('Market Scanner Report', () => {
 			expect(report).toContain('  - *Target:* $2,900.00 | Risk/Reward: 1.00x');
 		});
 
-		it('preserves BUY risk/reward levels for bollinger_scan with BUY trading_recommendation despite bearish HTF confluence', () => {
-			const results = [
+		it('preserves BUY risk/reward levels for bollinger_scan with BUY trading_recommendation despite bearish HTF confluence', () => {			const results = [
 				{
 					scan: 'bollinger_scan',
 					status: 'success',
@@ -595,7 +594,38 @@ describe('Market Scanner Report', () => {
 			expect(report).toContain('  - *Target:* $110.00 | Risk/Reward: 1.00x');
 		});
 
-			it('covers support/resistance-based risk/reward formatting when support and resistance are present', () => {
+			it('preserves BUY side for bollinger_scan with Spanish bullish breakout_type (alcista) against bearish HTF direction', () => {
+			const results = [
+				{
+					scan: 'bollinger_scan',
+					status: 'success',
+					items: [
+						{
+							symbol: 'BINANCE:XRPUSDT',
+							breakout_type: 'alcista',
+							indicators: { close: 2, bb_lower: 1.9, bb_upper: 2.1 },
+							trendConfluence: {
+								direction: 'bearish',
+								confidence: 75,
+							},
+						},
+					],
+				},
+			];
+
+			const report = buildMarketScannerReport(results, {
+				exchange: 'BINANCE',
+				timeframe: '4h',
+				ranked: false,
+				now: mockDate,
+			});
+
+			expect(report).toContain('⚠️ HTF COUNTER-TREND 75%');
+			expect(report).toContain('  - *Stop Loss:* $1.90 (Invalidación: $0.100000)');
+			expect(report).toContain('  - *Target:* $2.10 | Risk/Reward: 1.00x');
+		});
+
+		it('covers support/resistance-based risk/reward formatting when support and resistance are present', () => {
 				const results = [
 					{
 						scan: 'top_gainers',

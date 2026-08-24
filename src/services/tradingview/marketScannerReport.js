@@ -404,11 +404,11 @@ function formatTrendConfluence(trendConfluence = {}) {
 }
 
 function getCandidateDirection(item = {}) {
-	if (typeof item.breakout_type === 'string' && /(bull|buy|long|compra)/i.test(item.breakout_type)) {
+	if (typeof item.breakout_type === 'string' && /(bull|buy|long|alcist|compra)/i.test(item.breakout_type)) {
 		return 'bullish';
 	}
 
-	if (typeof item.trading_recommendation === 'string' && /(bull|buy|long|compra)/i.test(item.trading_recommendation)) {
+	if (typeof item.trading_recommendation === 'string' && /(bull|buy|long|alcist|compra)/i.test(item.trading_recommendation)) {
 		return 'bullish';
 	}
 
