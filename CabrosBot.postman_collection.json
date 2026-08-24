@@ -2408,6 +2408,200 @@
       ]
     },
     {
+      "name": "Signal Outcomes",
+      "description": "Signal outcome tracking read operations. Feature is gated by ENABLE_SIGNAL_OUTCOME_TRACKING=true and requires admin.viewer authorization (via API key or Firebase Bearer token).",
+      "item": [
+        {
+          "name": "GET List Signal Outcomes",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Lists recorded signal outcomes with default limit (50).",
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"outcomes\": [\n    {\n      \"id\": \"outcome-doc-1\",\n      \"receivedAt\": \"2026-08-23T12:00:00.000Z\",\n      \"requestId\": \"req-1\",\n      \"source\": \"news-monitor\",\n      \"symbol\": \"BTCUSDT\",\n      \"exchange\": \"BINANCE\",\n      \"assetClass\": \"crypto\",\n      \"timeframe\": \"1h\",\n      \"setupType\": \"breakout\",\n      \"score\": 0.9,\n      \"side\": \"BUY\",\n      \"price\": 65000,\n      \"entryPriceSource\": \"tradingview-mcp\",\n      \"stop\": 63000,\n      \"target\": 68000,\n      \"marketDataProvider\": \"binance\",\n      \"eligibilityState\": \"supported_provider\",\n      \"eligibilityReason\": null,\n      \"outcomeEvaluated\": true,\n      \"outcomes\": {\n        \"1h\": {\n          \"status\": \"evaluated\",\n          \"reason\": null,\n          \"targetTime\": \"2026-08-23T13:00:00.000Z\",\n          \"price\": 66000,\n          \"return\": 1.5385,\n          \"maxFavorableExcursion\": 2.0,\n          \"maxAdverseExcursion\": -0.2,\n          \"firstHit\": null,\n          \"targetHit\": false,\n          \"stopHit\": false,\n          \"firstHitTime\": null,\n          \"rMultiple\": 0.5\n        }\n      },\n      \"sources\": [],\n      \"tokenUsage\": {\n        \"inputTokens\": 100,\n        \"outputTokens\": 40,\n        \"totalTokens\": 140,\n        \"totalCost\": 0.00003\n      },\n      \"processingTimeMs\": 150\n    }\n  ],\n  \"pagination\": {\n    \"limit\": 50,\n    \"hasMore\": false,\n    \"nextBefore\": null\n  }\n}"
+            },
+            {
+              "name": "401 Unauthorized",
+              "status": "Unauthorized",
+              "code": 401,
+              "body": "{\n  \"error\": \"Unauthorized: Missing or invalid API key.\",\n  \"code\": \"UNAUTHORIZED\"\n}"
+            },
+            {
+              "name": "403 Feature Disabled",
+              "status": "Forbidden",
+              "code": 403,
+              "body": "{\n  \"error\": \"Signal outcome tracking feature is disabled. Set ENABLE_SIGNAL_OUTCOME_TRACKING=true to enable.\",\n  \"code\": \"FEATURE_DISABLED\"\n}"
+            },
+            {
+              "name": "503 Storage Unavailable",
+              "status": "Service Unavailable",
+              "code": 503,
+              "body": "{\n  \"error\": \"Signal outcome tracking is enabled but Firestore is unavailable. Check Firestore credentials and project configuration.\",\n  \"code\": \"STORAGE_UNAVAILABLE\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET List Signal Outcomes (filtered)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Lists signal outcomes filtered by symbol, exchange, status, window, and time range.",
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes?symbol=BTCUSDT&exchange=BINANCE&status=evaluated&window=1h&limit=10&from=2026-08-23T00:00:00.000Z&to=2026-08-23T23:59:59.000Z",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes"
+              ],
+              "query": [
+                {
+                  "key": "symbol",
+                  "value": "BTCUSDT"
+                },
+                {
+                  "key": "exchange",
+                  "value": "BINANCE"
+                },
+                {
+                  "key": "status",
+                  "value": "evaluated"
+                },
+                {
+                  "key": "window",
+                  "value": "1h"
+                },
+                {
+                  "key": "limit",
+                  "value": "10"
+                },
+                {
+                  "key": "from",
+                  "value": "2026-08-23T00:00:00.000Z"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-08-23T23:59:59.000Z"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 Filtered Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"outcomes\": [],\n  \"pagination\": {\n    \"limit\": 10,\n    \"hasMore\": false,\n    \"nextBefore\": null\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET List Signal Outcomes (Firebase bearer)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{firebaseIdToken}}",
+                "type": "text"
+              }
+            ],
+            "description": "Lists signal outcomes authenticated with a Firebase Admin ID token (admin.viewer role).",
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes?limit=25",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "25"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"outcomes\": [],\n  \"pagination\": {\n    \"limit\": 25,\n    \"hasMore\": false,\n    \"nextBefore\": null\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET List Signal Outcomes (invalid parameters)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Example of 400 INVALID_REQUEST response when passing invalid limit, status, window, or dates.",
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes?limit=200",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "200"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "400 Invalid Limit",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"Invalid limit. Use an integer between 1 and 100.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
       "name": "Async Jobs",
       "item": [
         {

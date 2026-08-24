@@ -1570,4 +1570,242 @@ describe('SignalOutcomeService', () => {
 			}
 		});
 	});
+
+	describe('listOutcomes()', () => {
+		function buildQueryDoc(id, data) {
+			return {
+				id,
+				data: () => data,
+			};
+		}
+
+		it('returns null when feature is disabled', async () => {
+			const res = await SignalOutcomeService.listOutcomes({ limit: 10 });
+			expect(res).toBeNull();
+		});
+
+		it('throws STORAGE_UNAVAILABLE when Firestore is not available', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			const origGetFirestore = AlertStorageService.getFirestore;
+			AlertStorageService.getFirestore = () => null;
+
+			try {
+				await expect(SignalOutcomeService.listOutcomes({ limit: 10 })).rejects.toMatchObject({
+					code: 'STORAGE_UNAVAILABLE',
+				});
+			} finally {
+				AlertStorageService.getFirestore = origGetFirestore;
+			}
+		});
+
+		it('throws INVALID_REQUEST when before cursor is malformed', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+
+			await expect(SignalOutcomeService.listOutcomes({
+				limit: 10,
+				before: 'invalid-before-cursor',
+			})).rejects.toMatchObject({
+				code: 'INVALID_REQUEST',
+				message: SignalOutcomeService.INVALID_CURSOR_MESSAGE,
+			});
+		});
+
+		it('lists outcomes with formatted fields and pagination metadata', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+
+			const receivedDate1 = new Date('2026-08-23T12:00:00.000Z');
+			const receivedDate2 = new Date('2026-08-23T11:00:00.000Z');
+
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('doc-1', {
+						receivedAt: admin.firestore.Timestamp.fromDate(receivedDate1),
+						requestId: 'req-1',
+						source: 'news-monitor',
+						symbol: 'BTCUSDT',
+						exchange: 'BINANCE',
+						assetClass: 'crypto',
+						timeframe: '1h',
+						setupType: 'breakout',
+						score: 0.9,
+						side: 'BUY',
+						price: 65000,
+						entryPriceSource: 'tradingview-mcp',
+						stop: 63000,
+						target: 68000,
+						marketDataProvider: 'binance',
+						eligibilityState: 'supported_provider',
+						eligibilityReason: null,
+						outcomeEvaluated: true,
+						outcomes: {
+							'1h': {
+								status: 'evaluated',
+								reason: null,
+								targetTime: '2026-08-23T13:00:00.000Z',
+								price: 66000,
+								return: 1.5385,
+								maxFavorableExcursion: 2.0,
+								maxAdverseExcursion: -0.2,
+								firstHit: null,
+								targetHit: false,
+								stopHit: false,
+								firstHitTime: null,
+								rMultiple: 0.5,
+							},
+						},
+						tokenUsage: {
+							inputTokens: 100,
+							outputTokens: 40,
+							totalTokens: 140,
+							totalCost: 0.00003,
+						},
+						processingTimeMs: 150,
+					}),
+					buildQueryDoc('doc-2', {
+						receivedAt: admin.firestore.Timestamp.fromDate(receivedDate2),
+						requestId: 'req-2',
+						source: 'alert',
+						symbol: 'ETHUSDT',
+						exchange: 'BINANCE',
+						side: 'SELL',
+						price: 3500,
+						outcomeEvaluated: false,
+						outcomes: {
+							'1h': { status: 'pending', targetTime: '2026-08-23T12:00:00.000Z' },
+						},
+					}),
+				],
+			});
+
+			const res = await SignalOutcomeService.listOutcomes({ limit: 1 });
+
+			expect(res.outcomes).toHaveLength(1);
+			expect(res.outcomes[0]).toEqual({
+				id: 'doc-1',
+				receivedAt: '2026-08-23T12:00:00.000Z',
+				requestId: 'req-1',
+				source: 'news-monitor',
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+				assetClass: 'crypto',
+				timeframe: '1h',
+				setupType: 'breakout',
+				score: 0.9,
+				side: 'BUY',
+				price: 65000,
+				entryPriceSource: 'tradingview-mcp',
+				stop: 63000,
+				target: 68000,
+				marketDataProvider: 'binance',
+				eligibilityState: 'supported_provider',
+				eligibilityReason: null,
+				outcomeEvaluated: true,
+				outcomes: {
+					'1h': {
+						status: 'evaluated',
+						reason: null,
+						targetTime: '2026-08-23T13:00:00.000Z',
+						price: 66000,
+						return: 1.5385,
+						maxFavorableExcursion: 2.0,
+						maxAdverseExcursion: -0.2,
+						firstHit: null,
+						targetHit: false,
+						stopHit: false,
+						firstHitTime: null,
+						rMultiple: 0.5,
+					},
+				},
+				sources: [],
+				tokenUsage: {
+					inputTokens: 100,
+					outputTokens: 40,
+					totalTokens: 140,
+					totalCost: 0.00003,
+				},
+				processingTimeMs: 150,
+			});
+			expect(res.hasMore).toBe(true);
+			expect(res.nextBefore).toBeTruthy();
+		});
+
+		it('filters outcomes by symbol, exchange, status, window, and time range', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('doc-match', {
+						receivedAt: admin.firestore.Timestamp.fromDate(new Date('2026-08-23T12:00:00.000Z')),
+						symbol: 'BTCUSDT',
+						exchange: 'BINANCE',
+						outcomeEvaluated: true,
+						outcomes: {
+							'1h': { status: 'evaluated', return: 2.0 },
+						},
+					}),
+					buildQueryDoc('doc-wrong-sym', {
+						receivedAt: admin.firestore.Timestamp.fromDate(new Date('2026-08-23T12:00:00.000Z')),
+						symbol: 'ETHUSDT',
+						exchange: 'BINANCE',
+						outcomeEvaluated: true,
+						outcomes: {
+							'1h': { status: 'evaluated', return: 1.0 },
+						},
+					}),
+					buildQueryDoc('doc-wrong-status', {
+						receivedAt: admin.firestore.Timestamp.fromDate(new Date('2026-08-23T12:00:00.000Z')),
+						symbol: 'BTCUSDT',
+						exchange: 'BINANCE',
+						outcomeEvaluated: false,
+						outcomes: {
+							'1h': { status: 'pending' },
+						},
+					}),
+					buildQueryDoc('doc-wrong-time', {
+						receivedAt: admin.firestore.Timestamp.fromDate(new Date('2026-08-20T12:00:00.000Z')),
+						symbol: 'BTCUSDT',
+						exchange: 'BINANCE',
+						outcomeEvaluated: true,
+						outcomes: {
+							'1h': { status: 'evaluated' },
+						},
+					}),
+				],
+			});
+
+			const res = await SignalOutcomeService.listOutcomes({
+				symbol: 'BINANCE:BTCUSDT',
+				exchange: 'BINANCE',
+				status: 'evaluated',
+				window: '1h',
+				from: '2026-08-23T00:00:00.000Z',
+				to: '2026-08-23T23:59:59.000Z',
+			});
+
+			expect(res.outcomes).toHaveLength(1);
+			expect(res.outcomes[0].id).toBe('doc-match');
+			expect(res.hasMore).toBe(false);
+		});
+
+		it('throws STORAGE_UNAVAILABLE when Firestore query.get() rejects', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			mockGet.mockRejectedValueOnce(new Error('Connection terminated'));
+
+			const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+			try {
+				await expect(SignalOutcomeService.listOutcomes({ limit: 10 })).rejects.toMatchObject({
+					code: 'STORAGE_UNAVAILABLE',
+				});
+				expect(warnSpy).toHaveBeenCalledWith(
+					expect.stringContaining('[SignalOutcomeService]'),
+					expect.stringContaining('Connection terminated'),
+				);
+			} finally {
+				warnSpy.mockRestore();
+			}
+		});
+	});
 });
