@@ -181,6 +181,18 @@ function formatAlertDocument(doc) {
 	if (VALID_TRADINGVIEW_ENRICHMENT_STATUSES.has(data.tradingViewEnrichmentStatus)) {
 		docObj.tradingViewEnrichmentStatus = data.tradingViewEnrichmentStatus;
 	}
+	if (typeof data.eventCategory === 'string') {
+		docObj.eventCategory = data.eventCategory;
+	}
+	if (typeof data.confidence === 'number' && Number.isFinite(data.confidence)) {
+		docObj.confidence = data.confidence;
+	}
+	if (typeof data.sentimentScore === 'number' && Number.isFinite(data.sentimentScore)) {
+		docObj.sentimentScore = data.sentimentScore;
+	}
+	if (typeof data.dedupStatus === 'string') {
+		docObj.dedupStatus = data.dedupStatus;
+	}
 	return docObj;
 }
 
@@ -540,6 +552,18 @@ function formatExportRecord(doc, { includeText }) {
 	if (VALID_TRADINGVIEW_ENRICHMENT_STATUSES.has(data.tradingViewEnrichmentStatus)) {
 		record.tradingViewEnrichmentStatus = data.tradingViewEnrichmentStatus;
 	}
+	if (typeof data.eventCategory === 'string') {
+		record.eventCategory = data.eventCategory;
+	}
+	if (typeof data.confidence === 'number' && Number.isFinite(data.confidence)) {
+		record.confidence = data.confidence;
+	}
+	if (typeof data.sentimentScore === 'number' && Number.isFinite(data.sentimentScore)) {
+		record.sentimentScore = data.sentimentScore;
+	}
+	if (typeof data.dedupStatus === 'string') {
+		record.dedupStatus = data.dedupStatus;
+	}
 
 	if (includeText) {
 		record.text = truncateAlertText(data.text);
@@ -776,7 +800,25 @@ function getFirestore() {
  * @param {number}  params.processingTimeMs  - Bounded handler processing duration in milliseconds
  * @returns {Promise<string|null>} The new Firestore document ID, or null on failure/disabled
  */
-async function saveAlertInternal({ text, symbol, exchange, enriched, enrichmentData, tokenUsage, channels, deliveryResults, useTradingViewData, tradingViewEnrichmentApplied, tradingViewEnrichmentStatus, processingTimeMs }) {
+async function saveAlertInternal({
+	text,
+	symbol,
+	exchange,
+	enriched,
+	enrichmentData,
+	tokenUsage,
+	channels,
+	deliveryResults,
+	useTradingViewData,
+	tradingViewEnrichmentApplied,
+	tradingViewEnrichmentStatus,
+	processingTimeMs,
+	source,
+	eventCategory,
+	confidence,
+	sentimentScore,
+	dedupStatus,
+}) {
 	if (!isEnabled()) {
 		return null;
 	}
@@ -799,7 +841,7 @@ async function saveAlertInternal({ text, symbol, exchange, enriched, enrichmentD
 			deliveryResults: Array.isArray(deliveryResults)
 				? stripUndefinedFieldsDeep(deliveryResults)
 				: [],
-			source: 'webhook',
+			source: typeof source === 'string' && source.trim() ? source.trim() : 'webhook',
 			useTradingViewData: Boolean(useTradingViewData),
 			tradingViewEnrichmentApplied: Boolean(tradingViewEnrichmentApplied),
 		};
@@ -816,6 +858,18 @@ async function saveAlertInternal({ text, symbol, exchange, enriched, enrichmentD
 		}
 		if (extracted.exchange) {
 			document.exchange = extracted.exchange;
+		}
+		if (typeof eventCategory === 'string' && eventCategory.trim()) {
+			document.eventCategory = eventCategory.trim();
+		}
+		if (typeof confidence === 'number' && Number.isFinite(confidence)) {
+			document.confidence = confidence;
+		}
+		if (typeof sentimentScore === 'number' && Number.isFinite(sentimentScore)) {
+			document.sentimentScore = sentimentScore;
+		}
+		if (typeof dedupStatus === 'string' && dedupStatus.trim()) {
+			document.dedupStatus = dedupStatus.trim();
 		}
 
 		const docRef = await firestore.collection(COLLECTION_NAME).add(document);

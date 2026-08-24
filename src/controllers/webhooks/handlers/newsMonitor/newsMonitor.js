@@ -19,6 +19,7 @@ const {
 	getRequestedChannels,
 	getDeliveredChannels,
 } = require('../../../../services/notification/requestRouting');
+const alertStorageService = require('../../../../services/storage/AlertStorageService');
 
 function resolveDryRun(req) {
 	const queryFlag = req.query && (req.query.dryRun === 'true' || req.query.dryRun === true);
@@ -159,7 +160,37 @@ class NewsMonitorHandler {
 				summary,
 			});
 
-			return res.status(200).json(response);
+			res.status(200).json(response);
+
+			// Fire-and-forget: persist delivered alerts to Firestore after responding to the caller.
+			// Failures are caught and logged — delivery is never blocked by storage.
+			if (!dryRun && alertStorageService.isEnabled()) {
+				const requestedChannels = response.requestedChannels || [];
+				for (const result of results || []) {
+					if (result && result.alert && result.status === AnalysisStatus.ANALYZED) {
+						alertStorageService.saveAlert({
+							text: result.alert.text || '',
+							symbol: result.alert.symbol || result.symbol,
+							exchange: result.alert.marketContext && result.alert.marketContext.source === 'binance' ? 'BINANCE' : undefined,
+							enriched: Boolean(result.alert.enriched),
+							enrichmentData: result.alert.enriched || null,
+							tokenUsage: (result.alert.enriched && result.alert.enriched.tokenUsage) || response.tokenUsage || null,
+							channels: requestedChannels,
+							deliveryResults: result.deliveryResults || [],
+							source: 'news-monitor',
+							eventCategory: result.alert.eventCategory,
+							confidence: result.alert.confidence,
+							sentimentScore: result.alert.sentimentScore,
+							dedupStatus: result.cached ? 'cached' : 'fresh',
+							processingTimeMs: result.totalDurationMs,
+						}).catch((err) => {
+							console.warn('[NewsMonitor] Failed to persist alert to storage:', err.message);
+						});
+					}
+				}
+			}
+
+			return;
 		} catch (error) {
 			if (error instanceof NotificationRoutingValidationError) {
 				return res.status(400).json({
