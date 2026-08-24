@@ -101,12 +101,11 @@ describe('AlertStorageService', () => {
 			expect(result.collection).toBeDefined();
 		});
 
-		it('initializes Firestore when only ENABLE_SHADOW_MODE_OUTCOME_TRACKING is true', () => {
+		it('does not initialize Firestore when only retired ENABLE_SHADOW_MODE_OUTCOME_TRACKING is true', () => {
 			process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING = 'true';
 			const result = AlertStorageService.getFirestore();
-			expect(mockInitializeApp).toHaveBeenCalledTimes(1);
-			expect(result).not.toBeNull();
-			expect(result.collection).toBeDefined();
+			expect(mockInitializeApp).not.toHaveBeenCalled();
+			expect(result).toBeNull();
 		});
 
 		it('initializes Firestore when only ENABLE_SIGNAL_OUTCOME_TRACKING is true', () => {
@@ -212,8 +211,8 @@ describe('AlertStorageService', () => {
 			expect(mockAdd).not.toHaveBeenCalled();
 		});
 
-		it('does not save alerts when only legacy shadow-mode tracking is enabled', async () => {
-			process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING = 'true';
+		it('does not save alerts when only signal outcome tracking is enabled', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
 
 			const result = await AlertStorageService.saveAlert(buildParams());
 
