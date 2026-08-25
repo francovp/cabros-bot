@@ -257,7 +257,7 @@ describe('Telegram TradingView commands', () => {
 			expect(reply).toContain('Compra');
 			expect(reply).toContain('50000');
 			expect(reply).toContain('4h');
-			expect(reply).toContain('+2.50%');
+			expect(reply).toContain('+2\\.50%');
 		});
 
 		it('reports when no evaluated outcomes exist for the symbol', async () => {
@@ -329,8 +329,53 @@ describe('Telegram TradingView commands', () => {
 					extra: expect.objectContaining({ command: 'outcomes' }),
 				}),
 			);
-			expect(context.reply).toHaveBeenCalledWith(expect.stringContaining('No pude consultar los resultados'));
+			expect(context.reply.mock.calls[0][0]).toContain('No pude consultar los resultados');
 		});
+
+		it('escapes MarkdownV2 special characters in generated outcome values', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			signalOutcomeService.listOutcomes.mockResolvedValue({
+				outcomes: [{
+					id: 'outcome-2',
+					receivedAt: '2026-08-25T10:00:00.000Z',
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					side: 'SELL',
+					price: 12345.67,
+					outcomeEvaluated: true,
+					outcomes: {
+						'1h': { status: 'evaluated', return: 3.5, targetHit: false, stopHit: false },
+					},
+				}],
+				hasMore: false,
+				nextBefore: null,
+			});
+			const context = buildContext('/outcomes BINANCE:BTCUSDT');
+
+			await outcomesCommand(context);
+
+			expect(context.reply).toHaveBeenCalledTimes(1);
+			const reply = context.reply.mock.calls[0][0];
+			// Dots and the plus sign in generated numbers must be escaped for MarkdownV2
+			expect(reply).toContain('+3\\.50%');
+			expect(reply).toContain('12345\\.67');
+			// No unescaped dot may remain in generated numeric fields
+			expect(reply).not.toContain('+3.50%');
+			expect(reply).not.toMatch(/(?<!\\)\.(?![\s\S]*`)/);
+		});
+
+		it('bounds the outcome store read with a command-level deadline', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			signalOutcomeService.listOutcomes.mockImplementation(
+				() => new Promise(() => {}), // never settles
+			);
+			const context = buildContext('/outcomes BTCUSDT');
+
+			await outcomesCommand(context);
+
+			expect(context.reply).toHaveBeenCalledWith(expect.stringContaining('No pude consultar los resultados'));
+			expect(signalOutcomeService.listOutcomes).toHaveBeenCalled();
+		}, 12000);
 	});
 });
 

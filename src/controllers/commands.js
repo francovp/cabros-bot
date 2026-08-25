@@ -199,6 +199,13 @@ const OUTCOMES_COMMAND_LIMIT = 5;
 const OUTCOME_WINDOW_KEYS = ['1h', '4h', '1D', '1W'];
 const OUTCOME_WINDOW_LABELS = { '1h': '1h', '4h': '4h', '1D': '1D', '1W': '1S' };
 const OUTCOME_SYMBOL_PATTERN = /^[A-Z0-9]{2,20}$/;
+// Bounded deadline for the outcome store read so a chat command can never hold
+// the handler open indefinitely behind a large Firestore scan.
+const OUTCOMES_COMMAND_TIMEOUT_MS = 8000;
+
+function escapeOutcomeText(value) {
+	return String(value).replace(/([_*[\]()~`>#+\-=|{}.!\\])/g, '\\$1');
+}
 
 const outcomesCommand = async (context) => {
 	const chatId = getChatId(context);
@@ -218,7 +225,7 @@ const outcomesCommand = async (context) => {
 	try {
 		if (!signalOutcomeService.isEnabled()) {
 			await context.reply(
-				'El seguimiento de resultados de señales está desactivado. Pide a un operador que active ENABLE_SIGNAL_OUTCOME_TRACKING.',
+				'El seguimiento de resultados de señales está desactivado — pide a un operador que active ENABLE_SIGNAL_OUTCOME_TRACKING',
 			);
 			return;
 		}
@@ -226,18 +233,22 @@ const outcomesCommand = async (context) => {
 		const parsed = parseOutcomeSymbol(rawSymbol);
 		if (!parsed) {
 			await context.reply(
-				'Uso: /outcomes <simbolo> — por ejemplo `/outcomes BTCUSDT` o `/outcomes BINANCE:BTCUSDT`',
+				'Uso: `/outcomes simbolo` — por ejemplo `/outcomes BTCUSDT` o `/outcomes BINANCE:BTCUSDT`',
 				{ parse_mode: 'MarkdownV2' },
 			);
 			return;
 		}
 
-		const result = await signalOutcomeService.listOutcomes({
-			symbol: parsed.symbol,
-			exchange: parsed.exchange,
-			limit: OUTCOMES_COMMAND_LIMIT,
-			status: 'evaluated',
-		});
+		const result = await withTimeout(
+			signalOutcomeService.listOutcomes({
+				symbol: parsed.symbol,
+				exchange: parsed.exchange,
+				limit: OUTCOMES_COMMAND_LIMIT,
+				status: 'evaluated',
+			}),
+			OUTCOMES_COMMAND_TIMEOUT_MS,
+			'outcome store read timed out',
+		);
 
 		const outcomes = Array.isArray(result && result.outcomes) ? result.outcomes : [];
 		if (outcomes.length === 0) {
@@ -247,7 +258,6 @@ const outcomesCommand = async (context) => {
 			);
 			return;
 		}
-
 		await context.reply(formatOutcomesMessage(parsed.symbol, outcomes), { parse_mode: 'MarkdownV2' });
 	} catch (error) {
 		console.error('[commands] /outcomes failed:', error.message);
@@ -288,22 +298,36 @@ function parseOutcomeSymbol(rawSymbol) {
 	return { symbol: symbolPart, exchange };
 }
 
+function withTimeout(promise, timeoutMs, message) {
+	let timer;
+	const timeout = new Promise((_, reject) => {
+		timer = setTimeout(() => {
+			const error = new Error(message);
+			error.isUserFriendly = true;
+			reject(error);
+		}, timeoutMs);
+	});
+	return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 function formatOutcomesMessage(symbol, outcomes) {
 	const lines = [
-		`*📊 Rendimiento reciente — ${escapeMarkdownV2(symbol)}*`,
+		`*📊 Rendimiento reciente — ${escapeOutcomeText(symbol)}*`,
 		'',
 	];
 	outcomes.slice(0, OUTCOMES_COMMAND_LIMIT).forEach((outcome) => {
 		const sideLabel = outcome.side === 'SELL' ? 'Venta' : 'Compra';
-		const entry = Number.isFinite(outcome.price) ? outcome.price : null;
+		const entry = Number.isFinite(outcome.price) ? escapeOutcomeText(outcome.price) : null;
 		const receivedAt = outcome.receivedAt ? String(outcome.receivedAt).slice(0, 10) : '';
-		lines.push(`• ${sideLabel}${entry !== null ? ` @ ${entry}` : ''}${receivedAt ? ` \\(${receivedAt}\\)` : ''}`);
+		lines.push(`• ${sideLabel}${entry !== null ? ` @ ${entry}` : ''}${receivedAt ? ` \\(${escapeOutcomeText(receivedAt)}\\)` : ''}`);
 
 		OUTCOME_WINDOW_KEYS.forEach((winKey) => {
 			const win = outcome.outcomes && outcome.outcomes[winKey];
 			if (!win || win.status !== 'evaluated') return;
 			const label = OUTCOME_WINDOW_LABELS[winKey] || winKey;
-			const returnPct = Number.isFinite(win.return) ? `${win.return >= 0 ? '+' : ''}${win.return.toFixed(2)}%` : 'n/d';
+			const returnPct = Number.isFinite(win.return)
+				? `${escapeOutcomeText(`${win.return >= 0 ? '+' : ''}${win.return.toFixed(2)}%`)}`
+				: 'n/d';
 			let detail = returnPct;
 			if (win.targetHit) detail += ' ✅ TP';
 			else if (win.stopHit) detail += ' 🛑 SL';
@@ -315,10 +339,6 @@ function formatOutcomesMessage(symbol, outcomes) {
 	lines.push('');
 	lines.push(`_Últimas ${Math.min(outcomes.length, OUTCOMES_COMMAND_LIMIT)} señales evaluadas_`);
 	return lines.join('\n');
-}
-
-function escapeMarkdownV2(text) {
-	return String(text).replace(/([_*[\]()~`>#+\-=|{}.!\\])/g, '\\$1');
 }
 
 function buildHelpMessage() {
