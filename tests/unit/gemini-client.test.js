@@ -194,6 +194,19 @@ describe('Gemini Service', () => {
 			expect(result.technical_levels.resistances).toHaveLength(6);
 		});
 
+		it('does not let malformed early entries consume the per-side quota', () => {
+			const result = parseEnrichedAlertResponse(JSON.stringify({
+				...mockEnrichedResponse,
+				technical_levels: {
+					supports: [{ bad: 1 }, '', null, true, Number.NaN, [], 's-valid-1', 's-valid-2'],
+					resistances: ['r-valid'],
+				},
+			}));
+
+			expect(result.technical_levels.supports).toEqual(['s-valid-1', 's-valid-2']);
+			expect(result.technical_levels.resistances).toEqual(['r-valid']);
+		});
+
 		it('ignores non-object technical_levels payloads entirely', () => {
 			const stringPayload = parseEnrichedAlertResponse(JSON.stringify({
 				...mockEnrichedResponse,
