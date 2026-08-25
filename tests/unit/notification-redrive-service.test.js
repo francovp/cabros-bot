@@ -109,6 +109,7 @@ describe('NotificationRedriveService', () => {
 				pendingCount: 0,
 				deliveredCount: 0,
 				exhaustedCount: 0,
+				zeroChannelBroadcasts: 0,
 				lastRunAt: null,
 				lastRunDurationMs: null,
 				lastRunScannedCount: 0,

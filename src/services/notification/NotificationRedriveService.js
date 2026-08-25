@@ -99,6 +99,15 @@ class NotificationRedriveService {
 		this.lastRunErrorCount = 0;
 		this.totalDeliveredCount = 0;
 		this.totalExhaustedCount = 0;
+		this.totalZeroChannelBroadcasts = 0;
+	}
+
+	incrementZeroChannelBroadcasts() {
+		this.totalZeroChannelBroadcasts += 1;
+	}
+
+	getZeroChannelBroadcastsCount() {
+		return this.totalZeroChannelBroadcasts;
 	}
 
 	isEnabled() {
@@ -715,6 +724,7 @@ class NotificationRedriveService {
 			pendingCount: this.getPendingCount(),
 			deliveredCount: this.totalDeliveredCount,
 			exhaustedCount: this.totalExhaustedCount,
+			zeroChannelBroadcasts: this.totalZeroChannelBroadcasts,
 			lastRunAt: this.lastRunAt ? this.lastRunAt.toISOString() : null,
 			lastRunDurationMs: this.lastRunDurationMs,
 			lastRunScannedCount: this.lastRunScannedCount,
@@ -738,6 +748,7 @@ class NotificationRedriveService {
 		this.lastRunErrorCount = 0;
 		this.totalDeliveredCount = 0;
 		this.totalExhaustedCount = 0;
+		this.totalZeroChannelBroadcasts = 0;
 	}
 
 	_resetForTesting() {
