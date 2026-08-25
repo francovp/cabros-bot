@@ -178,6 +178,52 @@ describe('HTF Alignment Formatter (Issue #635)', () => {
 			expect(flatResult.text).toBe('📈 HTF: ALINEADO');
 		});
 
+		it('handles string-valued alignment metadata (e.g. { alignment: "bearish" })', () => {
+			const buyCounter = resolveHtfAlignment({
+				side: 'BUY',
+				multiTimeframeData: { alignment: 'bearish' },
+			});
+			expect(buyCounter).not.toBeNull();
+			expect(buyCounter.classification).toBe('counter-trend');
+			expect(buyCounter.label).toBe('EN CONTRA');
+			expect(buyCounter.text).toBe('📉 HTF: EN CONTRA');
+
+			const buyAligned = resolveHtfAlignment({
+				side: 'BUY',
+				multiTimeframeData: { alignment: 'bullish' },
+			});
+			expect(buyAligned).not.toBeNull();
+			expect(buyAligned.classification).toBe('aligned');
+			expect(buyAligned.label).toBe('ALINEADO');
+			expect(buyAligned.text).toBe('📈 HTF: ALINEADO');
+
+			const sellAligned = resolveHtfAlignment({
+				side: 'SELL',
+				multiTimeframeData: { alignment: 'bearish' },
+			});
+			expect(sellAligned).not.toBeNull();
+			expect(sellAligned.classification).toBe('aligned');
+			expect(sellAligned.label).toBe('ALINEADO');
+			expect(sellAligned.text).toBe('📈 HTF: ALINEADO');
+
+			const sellCounter = resolveHtfAlignment({
+				side: 'SELL',
+				multiTimeframeData: { alignment: 'bullish' },
+			});
+			expect(sellCounter).not.toBeNull();
+			expect(sellCounter.classification).toBe('counter-trend');
+			expect(sellCounter.label).toBe('EN CONTRA');
+			expect(sellCounter.text).toBe('📉 HTF: EN CONTRA');
+
+			const directString = resolveHtfAlignment({
+				side: 'BUY',
+				multiTimeframeData: 'bullish',
+			});
+			expect(directString).not.toBeNull();
+			expect(directString.classification).toBe('aligned');
+			expect(directString.text).toBe('📈 HTF: ALINEADO');
+		});
+
 		it('returns null when multiTimeframeData is missing or empty', () => {
 			expect(resolveHtfAlignment({})).toBeNull();
 			expect(resolveHtfAlignment({ multiTimeframeData: null })).toBeNull();

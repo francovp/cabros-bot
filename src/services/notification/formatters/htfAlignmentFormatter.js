@@ -54,8 +54,18 @@ function resolveSide(enriched = {}) {
  * @returns {{ classification: 'aligned'|'counter-trend'|'mixed', label: string, netScore: number|null, divergentTimeframes: string[], text: string }|null}
  */
 function resolveHtfAlignment(enriched = {}) {
-	const multiTimeframe = enriched.multiTimeframeData || enriched.trendConfluence || null;
-	if (!multiTimeframe || typeof multiTimeframe !== 'object' || Array.isArray(multiTimeframe)) {
+	const rawMt = enriched.multiTimeframeData || enriched.trendConfluence || null;
+	if (!rawMt) {
+		return null;
+	}
+
+	let multiTimeframe = rawMt;
+	let stringFallback = null;
+
+	if (typeof rawMt === 'string' && rawMt.trim()) {
+		stringFallback = rawMt.trim();
+		multiTimeframe = {};
+	} else if (typeof rawMt !== 'object' || Array.isArray(rawMt)) {
 		return null;
 	}
 
@@ -63,15 +73,29 @@ function resolveHtfAlignment(enriched = {}) {
 		? multiTimeframe.alignment
 		: multiTimeframe;
 
+	const stringAlignment = typeof multiTimeframe.alignment === 'string' && multiTimeframe.alignment.trim()
+		? multiTimeframe.alignment.trim()
+		: null;
+	const stringRecommendation = typeof multiTimeframe.recommendation === 'string' && multiTimeframe.recommendation.trim()
+		? multiTimeframe.recommendation.trim()
+		: (typeof alignment.recommendation === 'string' && alignment.recommendation.trim() ? alignment.recommendation.trim() : null);
+	const stringTrend = typeof multiTimeframe.trend === 'string' && multiTimeframe.trend.trim()
+		? multiTimeframe.trend.trim()
+		: (typeof alignment.trend === 'string' && alignment.trend.trim() ? alignment.trend.trim() : null);
+
 	const netScore = numberOrNull(alignment.net_score ?? multiTimeframe.net_score);
-	const rawStatus = typeof alignment.status === 'string'
-		? alignment.status
-		: (typeof multiTimeframe.status === 'string' ? multiTimeframe.status : null);
-	const rawDirection = typeof alignment.direction === 'string'
-		? alignment.direction
-		: (typeof alignment.trend === 'string'
-			? alignment.trend
-			: (typeof multiTimeframe.direction === 'string' ? multiTimeframe.direction : null));
+	const rawStatus = typeof alignment.status === 'string' && alignment.status.trim()
+		? alignment.status.trim()
+		: (typeof multiTimeframe.status === 'string' && multiTimeframe.status.trim()
+			? multiTimeframe.status.trim()
+			: (stringAlignment || stringRecommendation || stringFallback));
+	const rawDirection = typeof alignment.direction === 'string' && alignment.direction.trim()
+		? alignment.direction.trim()
+		: (typeof alignment.trend === 'string' && alignment.trend.trim()
+			? alignment.trend.trim()
+			: (typeof multiTimeframe.direction === 'string' && multiTimeframe.direction.trim()
+				? multiTimeframe.direction.trim()
+				: (stringTrend || stringAlignment || stringFallback)));
 
 	let divergentTimeframes = [];
 	const rawDivergent = alignment.divergent_timeframes ?? multiTimeframe.divergent_timeframes;
