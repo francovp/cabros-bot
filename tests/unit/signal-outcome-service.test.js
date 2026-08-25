@@ -2419,6 +2419,54 @@ describe('SignalOutcomeService', () => {
 			expect(res.hasMore).toBe(false);
 		});
 
+		it('throws AbortError and stops scanning when signal is aborted', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			const ac = new AbortController();
+			ac.abort();
+
+			await expect(SignalOutcomeService.listOutcomes({
+				limit: 10,
+				signal: ac.signal,
+			})).rejects.toMatchObject({
+				name: 'AbortError',
+				code: 'ABORTED',
+			});
+			expect(mockGet).not.toHaveBeenCalled();
+		});
+
+		it('caps the Firestore scan when maxScanDocs is reached', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('doc-1', {
+						receivedAt: admin.firestore.Timestamp.fromDate(new Date('2026-08-23T12:00:00.000Z')),
+						symbol: 'OTHER',
+						exchange: 'BINANCE',
+						outcomeEvaluated: true,
+						outcomes: {},
+					}),
+					buildQueryDoc('doc-2', {
+						receivedAt: admin.firestore.Timestamp.fromDate(new Date('2026-08-23T11:00:00.000Z')),
+						symbol: 'OTHER',
+						exchange: 'BINANCE',
+						outcomeEvaluated: true,
+						outcomes: {},
+					}),
+				],
+			});
+
+			const res = await SignalOutcomeService.listOutcomes({
+				symbol: 'TARGET',
+				limit: 5,
+				maxScanDocs: 2,
+			});
+
+			expect(res.outcomes).toHaveLength(0);
+			expect(mockGet).toHaveBeenCalledTimes(1);
+		});
+
 		it('throws STORAGE_UNAVAILABLE when Firestore query.get() rejects', async () => {
 			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
 			mockGet.mockRejectedValueOnce(new Error('Connection terminated'));

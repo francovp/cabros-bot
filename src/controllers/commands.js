@@ -1,6 +1,7 @@
 const { fetchSymbolPrice } = require('./commands/handlers/core/fetchPriceCryptoSymbol');
 const { jobService } = require('../services/jobs/JobService');
 const { getNewsMonitor } = require('./webhooks/handlers/newsMonitor/newsMonitor');
+const signalOutcomeService = require('../services/storage/SignalOutcomeService');
 const sentryService = require('../services/monitoring/SentryService');
 
 const getPrice = async (context) => {
@@ -198,6 +199,168 @@ const cryptoBotCmd = async (context) => {
 	}
 };
 
+const OUTCOMES_COMMAND_LIMIT = 5;
+const OUTCOME_WINDOW_KEYS = ['1h', '4h', '1D', '1W'];
+const OUTCOME_WINDOW_LABELS = { '1h': '1h', '4h': '4h', '1D': '1D', '1W': '1S' };
+const OUTCOME_EXCHANGE_PATTERN = /^[A-Z0-9_]{1,30}$/;
+const OUTCOME_SYMBOL_PATTERN = /^[A-Z0-9._-]{1,30}$/;
+// Bounded deadline for the outcome store read so a chat command can never hold
+// the handler open indefinitely behind a large Firestore scan.
+const OUTCOMES_COMMAND_TIMEOUT_MS = 8000;
+
+function escapeOutcomeText(value) {
+	return String(value).replace(/([_*[\]()~`>#+\-=|{}.!\\])/g, '\\$1');
+}
+
+const outcomesCommand = async (context) => {
+	const chatId = getChatId(context);
+	const args = parseCommandArgs(context);
+	const rawSymbol = (args.positionals[0] || '').trim();
+	const commandSpan = sentryService.startInactiveSpan({
+		name: 'telegram.command.outcomes',
+		op: 'bot.command',
+		forceTransaction: true,
+		attributes: {
+			'telegram.command': '/outcomes',
+			'telegram.chat_id': chatId ? String(chatId) : 'unknown',
+			'query.symbol': rawSymbol || 'missing',
+		},
+	});
+
+	try {
+		if (!signalOutcomeService.isEnabled()) {
+			await context.reply(
+				'El seguimiento de resultados de señales está desactivado — pide a un operador que active ENABLE_SIGNAL_OUTCOME_TRACKING',
+			);
+			return;
+		}
+
+		const parsed = parseOutcomeSymbol(rawSymbol);
+		if (!parsed) {
+			await context.reply(
+				'Uso: `/outcomes simbolo` — por ejemplo `/outcomes BTCUSDT` o `/outcomes BINANCE:BTCUSDT`',
+				{ parse_mode: 'MarkdownV2' },
+			);
+			return;
+		}
+
+		const result = await withTimeout(
+			(signal) => signalOutcomeService.listOutcomes({
+				symbol: parsed.symbol,
+				exchange: parsed.exchange,
+				limit: OUTCOMES_COMMAND_LIMIT,
+				status: 'evaluated',
+				signal,
+			}),
+			OUTCOMES_COMMAND_TIMEOUT_MS,
+			'outcome store read timed out',
+		);
+
+		const outcomes = Array.isArray(result && result.outcomes) ? result.outcomes : [];
+		if (outcomes.length === 0) {
+			await context.reply(
+				`Sin resultados evaluados para ${escapeOutcomeText(parsed.symbol)} todavía — vuelve a intentarlo cuando se evalúen más señales`,
+				{ parse_mode: 'MarkdownV2' },
+			);
+			return;
+		}
+		await context.reply(formatOutcomesMessage(parsed.symbol, outcomes), { parse_mode: 'MarkdownV2' });
+	} catch (error) {
+		console.error('[commands] /outcomes failed:', error.message);
+		if (!error.code || (error.code !== signalOutcomeService.STORAGE_UNAVAILABLE_CODE && error.name !== 'AbortError')) {
+			sentryService.captureRuntimeError({
+				channel: 'telegram',
+				error,
+				extra: {
+					command: 'outcomes',
+					chatId,
+					symbol: rawSymbol,
+				},
+			});
+		}
+		try {
+			await context.reply('No pude consultar los resultados ahora mismo. Intenta nuevamente más tarde.');
+		} catch (replyError) {
+			console.error('Failed to send error reply:', replyError);
+		}
+	} finally {
+		sentryService.endSpan(commandSpan);
+	}
+};
+
+function parseOutcomeSymbol(rawSymbol) {
+	const value = String(rawSymbol || '').trim().toUpperCase();
+	if (!value) return null;
+	let symbolPart = value;
+	let exchange;
+	if (value.includes(':')) {
+		const parts = value.split(':');
+		if (parts.length !== 2) {
+			return null;
+		}
+		exchange = parts[0];
+		symbolPart = parts[1];
+		if (!OUTCOME_EXCHANGE_PATTERN.test(exchange) || !OUTCOME_SYMBOL_PATTERN.test(symbolPart)) {
+			return null;
+		}
+		return { symbol: symbolPart, exchange };
+	}
+	if (!OUTCOME_SYMBOL_PATTERN.test(symbolPart)) {
+		return null;
+	}
+	return { symbol: symbolPart, exchange: undefined };
+}
+
+async function withTimeout(asyncFn, timeoutMs, message) {
+	const ac = new AbortController();
+	let timer;
+	const timeoutPromise = new Promise((_, reject) => {
+		timer = setTimeout(() => {
+			ac.abort();
+			const error = new Error(message);
+			error.isUserFriendly = true;
+			reject(error);
+		}, timeoutMs);
+	});
+	try {
+		const promise = typeof asyncFn === 'function' ? asyncFn(ac.signal) : asyncFn;
+		return await Promise.race([promise, timeoutPromise]);
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
+function formatOutcomesMessage(symbol, outcomes) {
+	const lines = [
+		`*📊 Rendimiento reciente — ${escapeOutcomeText(symbol)}*`,
+		'',
+	];
+	outcomes.slice(0, OUTCOMES_COMMAND_LIMIT).forEach((outcome) => {
+		const sideLabel = outcome.side === 'SELL' ? 'Venta' : 'Compra';
+		const entry = Number.isFinite(outcome.price) ? escapeOutcomeText(outcome.price) : null;
+		const receivedAt = outcome.receivedAt ? String(outcome.receivedAt).slice(0, 10) : '';
+		lines.push(`• ${sideLabel}${entry !== null ? ` @ ${entry}` : ''}${receivedAt ? ` \\(${escapeOutcomeText(receivedAt)}\\)` : ''}`);
+
+		OUTCOME_WINDOW_KEYS.forEach((winKey) => {
+			const win = outcome.outcomes && outcome.outcomes[winKey];
+			if (!win || win.status !== 'evaluated') return;
+			const label = OUTCOME_WINDOW_LABELS[winKey] || winKey;
+			const returnPct = Number.isFinite(win.return)
+				? `${escapeOutcomeText(`${win.return >= 0 ? '+' : ''}${win.return.toFixed(2)}%`)}`
+				: 'n/d';
+			let detail = returnPct;
+			if (win.targetHit) detail += ' ✅ TP';
+			else if (win.stopHit) detail += ' 🛑 SL';
+			else if (win.firstHit === 'target') detail += ' ✅ TP';
+			else if (win.firstHit === 'stop') detail += ' 🛑 SL';
+			lines.push(`  ${label}: ${detail}`);
+		});
+	});
+	lines.push('');
+	lines.push(`_Últimas ${Math.min(outcomes.length, OUTCOMES_COMMAND_LIMIT)} señales evaluadas_`);
+	return lines.join('\n');
+}
+
 function buildHelpMessage() {
 	return [
 		'*🤖 Comandos disponibles en Cabros Bot*',
@@ -210,6 +373,8 @@ function buildHelpMessage() {
 		'  _Opciones: `scans=top_gainers,top_losers`, `exchange=BINANCE`, `timeframe=4h`, `limit=10`_',
 		'• `/noticias` — Monitor y análisis de noticias con IA \\(alias: `/news`\\)',
 		'  _Opciones: `crypto=BTCUSDT,ETHUSDT`, `stocks=NVDA`_',
+		'• `/outcomes <simbolo>` — Rendimiento reciente de señales evaluadas \\(alias: `/rendimiento`\\)',
+		'  _Ej: `/outcomes BINANCE:BTCUSDT`_',
 		'• `/help` / `/start` — Muestra este mensaje de ayuda',
 	].join('\n');
 }
@@ -333,6 +498,7 @@ module.exports = {
 	marketScannerCmd,
 	newsMonitorCmd,
 	helpCmd,
+	outcomesCommand,
 	buildHelpMessage,
 	parseCommandArgs,
 };

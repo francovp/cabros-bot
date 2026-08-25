@@ -14,14 +14,21 @@ jest.mock('../../src/services/monitoring/SentryService', () => ({
 	captureRuntimeError: jest.fn(),
 }));
 
+jest.mock('../../src/services/storage/SignalOutcomeService', () => ({
+	isEnabled: jest.fn(),
+	listOutcomes: jest.fn(),
+}));
+
 const { jobService } = require('../../src/services/jobs/JobService');
 const { getNewsMonitor } = require('../../src/controllers/webhooks/handlers/newsMonitor/newsMonitor');
+const signalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
 const {
 	cryptoBotCmd,
 	expandedAnalysisCmd,
 	marketScannerCmd,
 	newsMonitorCmd,
 	helpCmd,
+	outcomesCommand,
 	buildHelpMessage,
 	parseCommandArgs,
 } = require('../../src/controllers/commands');
@@ -153,6 +160,8 @@ describe('Telegram TradingView commands', () => {
 			expect(message).toContain('/scanner');
 			expect(message).toContain('/noticias');
 			expect(message).toContain('/news');
+			expect(message).toContain('/outcomes');
+			expect(message).toContain('/rendimiento');
 			expect(message).toContain('/help');
 			expect(message).toContain('/start');
 
@@ -248,6 +257,220 @@ describe('Telegram TradingView commands', () => {
 				}),
 			);
 		});
+	});
+
+	describe('outcomesCommand', () => {
+		const evaluatedOutcome = {
+			id: 'outcome-1',
+			receivedAt: '2026-08-25T10:00:00.000Z',
+			symbol: 'BTCUSDT',
+			exchange: 'BINANCE',
+			side: 'BUY',
+			price: 50000,
+			stop: 48000,
+			target: 55000,
+			outcomeEvaluated: true,
+			outcomes: {
+				'1h': { status: 'evaluated', return: 1.25, targetHit: false, stopHit: false },
+				'4h': { status: 'evaluated', return: 2.5, targetHit: true, stopHit: false, firstHit: 'target' },
+				'1D': { status: 'pending' },
+			},
+		};
+
+		beforeEach(() => {
+			jest.clearAllMocks();
+		});
+
+		it('replies with a formatted summary of recent evaluated outcomes for the requested symbol', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			signalOutcomeService.listOutcomes.mockResolvedValue({
+				outcomes: [evaluatedOutcome],
+				hasMore: false,
+				nextBefore: null,
+			});
+			const context = buildContext('/outcomes BINANCE:BTCUSDT');
+
+			await outcomesCommand(context);
+
+			expect(signalOutcomeService.listOutcomes).toHaveBeenCalledWith(
+				expect.objectContaining({ symbol: 'BTCUSDT', exchange: 'BINANCE', limit: expect.any(Number), status: 'evaluated' }),
+			);
+			expect(context.reply).toHaveBeenCalledTimes(1);
+			const reply = context.reply.mock.calls[0][0];
+			expect(reply).toContain('BTCUSDT');
+			expect(reply).toContain('Compra');
+			expect(reply).toContain('50000');
+			expect(reply).toContain('4h');
+			expect(reply).toContain('+2\\.50%');
+		});
+
+		it('reports when no evaluated outcomes exist for the symbol', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			signalOutcomeService.listOutcomes.mockResolvedValue({ outcomes: [], hasMore: false, nextBefore: null });
+			const context = buildContext('/outcomes NYSE:BRK.B');
+
+			await outcomesCommand(context);
+
+			expect(context.reply.mock.calls[0][0]).toContain('Sin resultados evaluados para BRK\\.B todavía');
+			expect(context.reply.mock.calls[0][1]).toEqual({ parse_mode: 'MarkdownV2' });
+		});
+
+		it('replies with an explicit message when signal outcome tracking is disabled', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(false);
+			const context = buildContext('/outcomes BINANCE:BTCUSDT');
+
+			await outcomesCommand(context);
+
+			expect(signalOutcomeService.listOutcomes).not.toHaveBeenCalled();
+			expect(context.reply.mock.calls[0][0]).toContain('seguimiento de resultados');
+		});
+
+		it('asks for a symbol when the argument is missing', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			const context = buildContext('/outcomes');
+
+			await outcomesCommand(context);
+
+			expect(signalOutcomeService.listOutcomes).not.toHaveBeenCalled();
+			expect(context.reply.mock.calls[0][0]).toContain('Uso');
+		});
+
+		it('rejects malformed symbols with a validation reply', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			const context = buildContext('/outcomes not@@valid!');
+
+			await outcomesCommand(context);
+
+			expect(signalOutcomeService.listOutcomes).not.toHaveBeenCalled();
+			expect(context.reply.mock.calls[0][0]).toContain('Uso');
+		});
+
+		it('replies with a friendly fail-open message when the outcome store is unavailable', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			const error = new Error('Firestore unavailable');
+			error.code = 'STORAGE_UNAVAILABLE';
+			signalOutcomeService.listOutcomes.mockRejectedValue(error);
+			const context = buildContext('/outcomes BTCUSDT');
+
+			await outcomesCommand(context);
+
+			expect(context.reply.mock.calls[0][0]).toContain('No pude consultar los resultados');
+			expect(context.reply).toHaveBeenCalledTimes(1);
+		});
+
+		it('captures unexpected runtime errors and still replies safely', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			const error = new Error('boom');
+			signalOutcomeService.listOutcomes.mockRejectedValue(error);
+			const context = buildContext('/outcomes BTCUSDT');
+
+			await outcomesCommand(context);
+
+			const { captureRuntimeError } = require('../../src/services/monitoring/SentryService');
+			expect(captureRuntimeError).toHaveBeenCalledWith(
+				expect.objectContaining({
+					channel: 'telegram',
+					error,
+					extra: expect.objectContaining({ command: 'outcomes' }),
+				}),
+			);
+			expect(context.reply.mock.calls[0][0]).toContain('No pude consultar los resultados');
+		});
+
+		it('escapes MarkdownV2 special characters in generated outcome values', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			signalOutcomeService.listOutcomes.mockResolvedValue({
+				outcomes: [{
+					id: 'outcome-2',
+					receivedAt: '2026-08-25T10:00:00.000Z',
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					side: 'SELL',
+					price: 12345.67,
+					outcomeEvaluated: true,
+					outcomes: {
+						'1h': { status: 'evaluated', return: 3.5, targetHit: false, stopHit: false },
+					},
+				}],
+				hasMore: false,
+				nextBefore: null,
+			});
+			const context = buildContext('/outcomes BINANCE:BTCUSDT');
+
+			await outcomesCommand(context);
+
+			expect(context.reply).toHaveBeenCalledTimes(1);
+			const reply = context.reply.mock.calls[0][0];
+			// Dots and the plus sign in generated numbers must be escaped for MarkdownV2
+			expect(reply).toContain('+3\\.50%');
+			expect(reply).toContain('12345\\.67');
+			// No unescaped dot may remain in generated numeric fields
+			expect(reply).not.toContain('+3.50%');
+		});
+
+		it('accepts supported exchange and symbol separators (FX_IDC:USDCLP, NYSE_ARCA:SPY, NYSE:BRK.B)', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			signalOutcomeService.listOutcomes.mockResolvedValue({ outcomes: [], hasMore: false, nextBefore: null });
+
+			const context1 = buildContext('/outcomes FX_IDC:USDCLP');
+			await outcomesCommand(context1);
+			expect(signalOutcomeService.listOutcomes).toHaveBeenCalledWith(
+				expect.objectContaining({ symbol: 'USDCLP', exchange: 'FX_IDC' }),
+			);
+
+			const context2 = buildContext('/outcomes NYSE_ARCA:SPY');
+			await outcomesCommand(context2);
+			expect(signalOutcomeService.listOutcomes).toHaveBeenCalledWith(
+				expect.objectContaining({ symbol: 'SPY', exchange: 'NYSE_ARCA' }),
+			);
+
+			const context3 = buildContext('/outcomes NYSE:BRK.B');
+			await outcomesCommand(context3);
+			expect(signalOutcomeService.listOutcomes).toHaveBeenCalledWith(
+				expect.objectContaining({ symbol: 'BRK.B', exchange: 'NYSE' }),
+			);
+			expect(context3.reply).toHaveBeenCalledWith(
+				expect.stringContaining('BRK\\.B'),
+				{ parse_mode: 'MarkdownV2' },
+			);
+
+			const context4 = buildContext('/outcomes BRK.B');
+			await outcomesCommand(context4);
+			expect(signalOutcomeService.listOutcomes).toHaveBeenCalledWith(
+				expect.objectContaining({ symbol: 'BRK.B', exchange: undefined }),
+			);
+			expect(context4.reply).toHaveBeenCalledWith(
+				expect.stringContaining('BRK\\.B'),
+				{ parse_mode: 'MarkdownV2' },
+			);
+		});
+
+		it('rejects arguments with extra colon separators (e.g. BINANCE:ETHUSDT:PERP)', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			const context = buildContext('/outcomes BINANCE:ETHUSDT:PERP');
+
+			await outcomesCommand(context);
+
+			expect(signalOutcomeService.listOutcomes).not.toHaveBeenCalled();
+			expect(context.reply.mock.calls[0][0]).toContain('Uso');
+		});
+
+		it('bounds the outcome store read with a command-level deadline and propagates cancellation signal', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			let receivedSignal;
+			signalOutcomeService.listOutcomes.mockImplementation(({ signal }) => {
+				receivedSignal = signal;
+				return new Promise(() => {}); // never settles
+			});
+			const context = buildContext('/outcomes BTCUSDT');
+
+			await outcomesCommand(context);
+
+			expect(context.reply).toHaveBeenCalledWith(expect.stringContaining('No pude consultar los resultados'));
+			expect(signalOutcomeService.listOutcomes).toHaveBeenCalled();
+			expect(receivedSignal).toBeDefined();
+			expect(receivedSignal.aborted).toBe(true);
+		}, 12000);
 	});
 });
 

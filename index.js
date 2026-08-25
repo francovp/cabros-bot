@@ -9,6 +9,7 @@ const {
 	marketScannerCmd,
 	newsMonitorCmd,
 	helpCmd,
+	outcomesCommand,
 } = require('./src/controllers/commands');
 const app = require('./app.js');
 const { Telegraf, Markup } = require('telegraf');
@@ -103,6 +104,7 @@ async function bootstrapApplication() {
 		bot.command(['analisis', 'analysis'], expandedAnalysisCmd);
 		bot.command(['scanner'], marketScannerCmd);
 		bot.command(['noticias', 'news'], newsMonitorCmd);
+		bot.command(['outcomes', 'rendimiento'], outcomesCommand);
 		bot.command(['help', 'start'], helpCmd);
 
 		// Attach Telegram error boundary
