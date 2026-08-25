@@ -1,6 +1,7 @@
 const { fetchSymbolPrice } = require('./commands/handlers/core/fetchPriceCryptoSymbol');
 const { jobService } = require('../services/jobs/JobService');
 const { getNewsMonitor } = require('./webhooks/handlers/newsMonitor/newsMonitor');
+const signalOutcomeService = require('../services/storage/SignalOutcomeService');
 const sentryService = require('../services/monitoring/SentryService');
 
 const getPrice = async (context) => {
@@ -194,6 +195,132 @@ const cryptoBotCmd = (context) => {
 	}
 };
 
+const OUTCOMES_COMMAND_LIMIT = 5;
+const OUTCOME_WINDOW_KEYS = ['1h', '4h', '1D', '1W'];
+const OUTCOME_WINDOW_LABELS = { '1h': '1h', '4h': '4h', '1D': '1D', '1W': '1S' };
+const OUTCOME_SYMBOL_PATTERN = /^[A-Z0-9]{2,20}$/;
+
+const outcomesCommand = async (context) => {
+	const chatId = getChatId(context);
+	const args = parseCommandArgs(context);
+	const rawSymbol = (args.positionals[0] || '').trim();
+	const commandSpan = sentryService.startInactiveSpan({
+		name: 'telegram.command.outcomes',
+		op: 'bot.command',
+		forceTransaction: true,
+		attributes: {
+			'telegram.command': '/outcomes',
+			'telegram.chat_id': chatId ? String(chatId) : 'unknown',
+			'query.symbol': rawSymbol || 'missing',
+		},
+	});
+
+	try {
+		if (!signalOutcomeService.isEnabled()) {
+			await context.reply(
+				'El seguimiento de resultados de señales está desactivado. Pide a un operador que active ENABLE_SIGNAL_OUTCOME_TRACKING.',
+			);
+			return;
+		}
+
+		const parsed = parseOutcomeSymbol(rawSymbol);
+		if (!parsed) {
+			await context.reply(
+				'Uso: /outcomes <simbolo> — por ejemplo `/outcomes BTCUSDT` o `/outcomes BINANCE:BTCUSDT`',
+				{ parse_mode: 'MarkdownV2' },
+			);
+			return;
+		}
+
+		const result = await signalOutcomeService.listOutcomes({
+			symbol: parsed.symbol,
+			exchange: parsed.exchange,
+			limit: OUTCOMES_COMMAND_LIMIT,
+			status: 'evaluated',
+		});
+
+		const outcomes = Array.isArray(result && result.outcomes) ? result.outcomes : [];
+		if (outcomes.length === 0) {
+			await context.reply(
+				`Sin resultados evaluados para ${parsed.symbol} todavía — vuelve a intentarlo cuando se evalúen más señales`,
+				{ parse_mode: 'MarkdownV2' },
+			);
+			return;
+		}
+
+		await context.reply(formatOutcomesMessage(parsed.symbol, outcomes), { parse_mode: 'MarkdownV2' });
+	} catch (error) {
+		console.error('[commands] /outcomes failed:', error.message);
+		if (!error.code || error.code !== signalOutcomeService.STORAGE_UNAVAILABLE_CODE) {
+			sentryService.captureRuntimeError({
+				channel: 'telegram',
+				error,
+				extra: {
+					command: 'outcomes',
+					chatId,
+					symbol: rawSymbol,
+				},
+			});
+		}
+		try {
+			await context.reply('No pude consultar los resultados ahora mismo. Intenta nuevamente más tarde.');
+		} catch (replyError) {
+			console.error('Failed to send error reply:', replyError);
+		}
+	} finally {
+		sentryService.endSpan(commandSpan);
+	}
+};
+
+function parseOutcomeSymbol(rawSymbol) {
+	const value = String(rawSymbol || '').trim().toUpperCase();
+	if (!value) return null;
+	let symbolPart = value;
+	let exchange;
+	if (value.includes(':')) {
+		const parts = value.split(':');
+		exchange = parts[0];
+		symbolPart = parts[1] || '';
+	}
+	if (!OUTCOME_SYMBOL_PATTERN.test(exchange || 'BINANCE') || !OUTCOME_SYMBOL_PATTERN.test(symbolPart)) {
+		return null;
+	}
+	return { symbol: symbolPart, exchange };
+}
+
+function formatOutcomesMessage(symbol, outcomes) {
+	const lines = [
+		`*📊 Rendimiento reciente — ${escapeMarkdownV2(symbol)}*`,
+		'',
+	];
+	outcomes.slice(0, OUTCOMES_COMMAND_LIMIT).forEach((outcome) => {
+		const sideLabel = outcome.side === 'SELL' ? 'Venta' : 'Compra';
+		const entry = Number.isFinite(outcome.price) ? outcome.price : null;
+		const receivedAt = outcome.receivedAt ? String(outcome.receivedAt).slice(0, 10) : '';
+		lines.push(`• ${sideLabel}${entry !== null ? ` @ ${entry}` : ''}${receivedAt ? ` \\(${receivedAt}\\)` : ''}`);
+
+		OUTCOME_WINDOW_KEYS.forEach((winKey) => {
+			const win = outcome.outcomes && outcome.outcomes[winKey];
+			if (!win || win.status !== 'evaluated') return;
+			const label = OUTCOME_WINDOW_LABELS[winKey] || winKey;
+			const returnPct = Number.isFinite(win.return) ? `${win.return >= 0 ? '+' : ''}${win.return.toFixed(2)}%` : 'n/d';
+			let detail = returnPct;
+			if (win.targetHit) detail += ' ✅ TP';
+			else if (win.stopHit) detail += ' 🛑 SL';
+			else if (win.firstHit === 'target') detail += ' ✅ TP';
+			else if (win.firstHit === 'stop') detail += ' 🛑 SL';
+			lines.push(`  ${label}: ${detail}`);
+		});
+	});
+	lines.push('');
+	lines.push(`_Últimas ${Math.min(outcomes.length, OUTCOMES_COMMAND_LIMIT)} señales evaluadas_`);
+	return lines.join('\n');
+}
+
+function escapeMarkdownV2(text) {
+	return String(text).replace(/([_*[\]()~`>#+\-=|{}.!\\])/g, '\\$1');
+}
+
 function buildHelpMessage() {
 	return [
 		'*🤖 Comandos disponibles en Cabros Bot*',
@@ -206,6 +333,8 @@ function buildHelpMessage() {
 		'  _Opciones: `scans=top_gainers,top_losers`, `exchange=BINANCE`, `timeframe=4h`, `limit=10`_',
 		'• `/noticias` — Monitor y análisis de noticias con IA \\(alias: `/news`\\)',
 		'  _Opciones: `crypto=BTCUSDT,ETHUSDT`, `stocks=NVDA`_',
+		'• `/outcomes <simbolo>` — Rendimiento reciente de señales evaluadas \\(alias: `/rendimiento`\\)',
+		'  _Ej: `/outcomes BINANCE:BTCUSDT`_',
 		'• `/help` / `/start` — Muestra este mensaje de ayuda',
 	].join('\n');
 }
@@ -329,6 +458,7 @@ module.exports = {
 	marketScannerCmd,
 	newsMonitorCmd,
 	helpCmd,
+	outcomesCommand,
 	buildHelpMessage,
 	parseCommandArgs,
 };

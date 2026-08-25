@@ -14,8 +14,14 @@ jest.mock('../../src/services/monitoring/SentryService', () => ({
 	captureRuntimeError: jest.fn(),
 }));
 
+jest.mock('../../src/services/storage/SignalOutcomeService', () => ({
+	isEnabled: jest.fn(),
+	listOutcomes: jest.fn(),
+}));
+
 const { jobService } = require('../../src/services/jobs/JobService');
 const { getNewsMonitor } = require('../../src/controllers/webhooks/handlers/newsMonitor/newsMonitor');
+const signalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
 const {
 	expandedAnalysisCmd,
 	marketScannerCmd,
@@ -23,6 +29,7 @@ const {
 	helpCmd,
 	buildHelpMessage,
 	parseCommandArgs,
+	outcomesCommand,
 } = require('../../src/controllers/commands');
 
 function buildContext(text) {
@@ -152,6 +159,8 @@ describe('Telegram TradingView commands', () => {
 			expect(message).toContain('/scanner');
 			expect(message).toContain('/noticias');
 			expect(message).toContain('/news');
+			expect(message).toContain('/outcomes');
+			expect(message).toContain('/rendimiento');
 			expect(message).toContain('/help');
 			expect(message).toContain('/start');
 
@@ -203,6 +212,124 @@ describe('Telegram TradingView commands', () => {
 					}),
 				}),
 			);
+		});
+	});
+
+	describe('outcomesCommand', () => {
+		const evaluatedOutcome = {
+			id: 'outcome-1',
+			receivedAt: '2026-08-25T10:00:00.000Z',
+			symbol: 'BTCUSDT',
+			exchange: 'BINANCE',
+			side: 'BUY',
+			price: 50000,
+			stop: 48000,
+			target: 55000,
+			outcomeEvaluated: true,
+			outcomes: {
+				'1h': { status: 'evaluated', return: 1.25, targetHit: false, stopHit: false },
+				'4h': { status: 'evaluated', return: 2.5, targetHit: true, stopHit: false, firstHit: 'target' },
+				'1D': { status: 'pending' },
+			},
+		};
+
+		beforeEach(() => {
+			jest.clearAllMocks();
+		});
+
+		it('replies with a formatted summary of recent evaluated outcomes for the requested symbol', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			signalOutcomeService.listOutcomes.mockResolvedValue({
+				outcomes: [evaluatedOutcome],
+				hasMore: false,
+				nextBefore: null,
+			});
+			const context = buildContext('/outcomes BINANCE:BTCUSDT');
+
+			await outcomesCommand(context);
+
+			expect(signalOutcomeService.listOutcomes).toHaveBeenCalledWith(
+				expect.objectContaining({ symbol: 'BTCUSDT', exchange: 'BINANCE', limit: expect.any(Number), status: 'evaluated' }),
+			);
+			expect(context.reply).toHaveBeenCalledTimes(1);
+			const reply = context.reply.mock.calls[0][0];
+			expect(reply).toContain('BTCUSDT');
+			expect(reply).toContain('Compra');
+			expect(reply).toContain('50000');
+			expect(reply).toContain('4h');
+			expect(reply).toContain('+2.50%');
+		});
+
+		it('reports when no evaluated outcomes exist for the symbol', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			signalOutcomeService.listOutcomes.mockResolvedValue({ outcomes: [], hasMore: false, nextBefore: null });
+			const context = buildContext('/outcomes BINANCE:BTCUSDT');
+
+			await outcomesCommand(context);
+
+			expect(context.reply.mock.calls[0][0]).toContain('Sin resultados evaluados');
+		});
+
+		it('replies with an explicit message when signal outcome tracking is disabled', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(false);
+			const context = buildContext('/outcomes BINANCE:BTCUSDT');
+
+			await outcomesCommand(context);
+
+			expect(signalOutcomeService.listOutcomes).not.toHaveBeenCalled();
+			expect(context.reply.mock.calls[0][0]).toContain('seguimiento de resultados');
+		});
+
+		it('asks for a symbol when the argument is missing', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			const context = buildContext('/outcomes');
+
+			await outcomesCommand(context);
+
+			expect(signalOutcomeService.listOutcomes).not.toHaveBeenCalled();
+			expect(context.reply.mock.calls[0][0]).toContain('Uso');
+		});
+
+		it('rejects malformed symbols with a validation reply', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			const context = buildContext('/outcomes not@@valid!');
+
+			await outcomesCommand(context);
+
+			expect(signalOutcomeService.listOutcomes).not.toHaveBeenCalled();
+			expect(context.reply.mock.calls[0][0]).toContain('Uso');
+		});
+
+		it('replies with a friendly fail-open message when the outcome store is unavailable', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			const error = new Error('Firestore unavailable');
+			error.code = 'STORAGE_UNAVAILABLE';
+			signalOutcomeService.listOutcomes.mockRejectedValue(error);
+			const context = buildContext('/outcomes BTCUSDT');
+
+			await outcomesCommand(context);
+
+			expect(context.reply).toHaveBeenCalledWith(expect.stringContaining('No pude consultar los resultados'));
+			expect(context.reply).toHaveBeenCalledTimes(1);
+		});
+
+		it('captures unexpected runtime errors and still replies safely', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			const error = new Error('boom');
+			signalOutcomeService.listOutcomes.mockRejectedValue(error);
+			const context = buildContext('/outcomes BTCUSDT');
+
+			await outcomesCommand(context);
+
+			const { captureRuntimeError } = require('../../src/services/monitoring/SentryService');
+			expect(captureRuntimeError).toHaveBeenCalledWith(
+				expect.objectContaining({
+					channel: 'telegram',
+					error,
+					extra: expect.objectContaining({ command: 'outcomes' }),
+				}),
+			);
+			expect(context.reply).toHaveBeenCalledWith(expect.stringContaining('No pude consultar los resultados'));
 		});
 	});
 });
