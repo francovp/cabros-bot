@@ -5,14 +5,19 @@ const { initializeNotificationServices } = require('../../src/controllers/webhoo
 const { analyzeSymbols } = require('../../src/controllers/webhooks/handlers/expandedAnalysisAlert/expandedAnalysisAlert');
 const { tradingViewMcpService } = require('../../src/services/tradingview/TradingViewMcpService');
 
+jest.mock('../../src/services/storage/SignalOutcomeService', () => ({
+	isEnabled: jest.fn(() => true),
+	recordSignal: jest.fn().mockResolvedValue('doc-id'),
+}));
+
+const signalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
+
 jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
 	tradingViewMcpService: {
 		analyzeSymbolIdentifier: jest.fn(),
 		callMultiTimeframeAnalysis: jest.fn(),
 	},
-}));
-
-describe('Expanded Analysis Alert endpoint', () => {
+}));describe('Expanded Analysis Alert endpoint', () => {
 	let savedEnv;
 	let mockTelegramSendMessage;
 	let mockBot;
@@ -100,6 +105,53 @@ describe('Expanded Analysis Alert endpoint', () => {
 		}));
 		expect(mockTelegramSendMessage).toHaveBeenCalledTimes(1);
 		expect(mockTelegramSendMessage.mock.calls[0][1]).toContain('ANÁLISIS AMPLIADO');
+	});
+
+	it('records SELL expanded-analysis signals with side-correct stop and target barriers', async () => {
+		process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+
+		tradingViewMcpService.analyzeSymbolIdentifier.mockResolvedValueOnce({
+			symbol: 'BINANCE:BTCUSDT',
+			price_data: {
+				current_price: 100,
+				change_percent: -2.5,
+			},
+			technical_indicators: {
+				rsi: 40,
+				sma20: 102,
+				macd: -1.2,
+				macd_signal: -0.8,
+				atr: 4,
+			},
+			market_sentiment: {
+				overall_sentiment: 'Bearish',
+			},
+		});
+
+		const res = await request(app)
+			.post('/api/webhook/expanded-analysis-alert')
+			.set('x-api-key', 'test-key')
+			.send({ symbols: ['BINANCE:BTCUSDT'], timeframe: '1D' })
+			.expect(200);
+
+		expect(res.body.success).toBe(true);
+		expect(signalOutcomeService.recordSignal).toHaveBeenCalledTimes(1);
+
+		const recorded = signalOutcomeService.recordSignal.mock.calls[0][0];
+		expect(recorded.side).toBe('SELL');
+		expect(recorded.price).toBe(100);
+		expect(recorded.stop).toBeGreaterThan(recorded.price); // SELL stop above entry
+		expect(recorded.stop).toBe(106); // price + atr*1.5
+		expect(recorded.target).toBeLessThan(recorded.price); // SELL target below entry
+		expect(recorded.target).toBe(88); // price - atr*3
+
+		// The delivered report must use the same SELL geometry as persistence.
+		// Telegram sends MarkdownV2-escaped text, so compare escape-insensitively.
+		const sentText = mockTelegramSendMessage.mock.calls[0][1];
+		const unescaped = sentText.replace(/\\([_*\[\]()~`>#+\-=|{}.!])/g, '$1');
+		expect(unescaped).toContain('- *Stop Loss sugerido:* $106.00');
+		expect(unescaped).toContain('- *Target sugerido:* $88.00');
+		expect(unescaped).toContain('- *Invalidación:* $6.00 por encima del precio actual');
 	});
 
 	it('routes expanded analysis delivery to requested channels only', async () => {
