@@ -30,6 +30,8 @@ const SPECIAL_CHARS = [
 	'!',
 ];
 
+const { formatHtfAlignment } = require('./htfAlignmentFormatter');
+
 /**
  * Normalize backslashes to avoid double-escaping
  * Collapses sequences like "\\\\" -> "\\"
@@ -182,6 +184,11 @@ class MarkdownV2Formatter {
 		const sentimentEmoji = sentiment === 'BULLISH' ? '🚀' : sentiment === 'BEARISH' ? '🔻' : '😐';
 		const score = sentiment_score.toFixed(2).replace('.', '\\.');
 		message += `\n\nSentiment: ${sentiment} ${sentimentEmoji} \\(${score}\\)`;
+
+		const htfLine = formatHtfAlignment(enriched);
+		if (htfLine) {
+			message += `\n${smartEscapeMarkdownV2(htfLine)}`;
+		}
 
 		// Technical Levels
 		const hasSupports = technical_levels.supports && technical_levels.supports.length > 0;

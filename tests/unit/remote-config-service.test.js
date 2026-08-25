@@ -341,6 +341,7 @@ describe('RemoteConfigService', () => {
 			ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION: true,
 			ENABLE_MARKET_SCANNER: true,
 			ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP: true,
+			ENABLE_ALERT_HTF_RENDER: false,
 		});
 		alertStorageService.getFirestore.mockReturnValue({});
 
@@ -352,6 +353,7 @@ describe('RemoteConfigService', () => {
 		expect(config.ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION).toBe(true);
 		expect(config.ENABLE_MARKET_SCANNER).toBe(true);
 		expect(config.ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP).toBe(true);
+		expect(config.ENABLE_ALERT_HTF_RENDER).toBe(false);
 	});
 
 	it('keeps the startup-only signal outcome cadence out of Remote Config', async () => {
