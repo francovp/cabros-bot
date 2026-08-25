@@ -17,8 +17,10 @@ jest.mock('../../src/services/monitoring/SentryService', () => ({
 jest.mock('../../src/services/storage/SignalOutcomeService', () => ({
 	isEnabled: jest.fn(),
 	listOutcomes: jest.fn(),
+	STORAGE_UNAVAILABLE_CODE: 'STORAGE_UNAVAILABLE',
 }));
 
+const { captureRuntimeError } = require('../../src/services/monitoring/SentryService');
 const { jobService } = require('../../src/services/jobs/JobService');
 const { getNewsMonitor } = require('../../src/controllers/webhooks/handlers/newsMonitor/newsMonitor');
 const signalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
@@ -467,9 +469,12 @@ describe('Telegram TradingView commands', () => {
 			await outcomesCommand(context);
 
 			expect(context.reply).toHaveBeenCalledWith(expect.stringContaining('No pude consultar los resultados'));
-			expect(signalOutcomeService.listOutcomes).toHaveBeenCalled();
+			expect(signalOutcomeService.listOutcomes).toHaveBeenCalledWith(
+				expect.objectContaining({ maxScanDocs: 300 }),
+			);
 			expect(receivedSignal).toBeDefined();
 			expect(receivedSignal.aborted).toBe(true);
+			expect(captureRuntimeError).not.toHaveBeenCalled();
 		}, 12000);
 	});
 });

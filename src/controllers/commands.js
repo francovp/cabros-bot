@@ -200,6 +200,7 @@ const cryptoBotCmd = async (context) => {
 };
 
 const OUTCOMES_COMMAND_LIMIT = 5;
+const OUTCOMES_COMMAND_MAX_SCAN_DOCS = 300;
 const OUTCOME_WINDOW_KEYS = ['1h', '4h', '1D', '1W'];
 const OUTCOME_WINDOW_LABELS = { '1h': '1h', '4h': '4h', '1D': '1D', '1W': '1S' };
 const OUTCOME_EXCHANGE_PATTERN = /^[A-Z0-9_]{1,30}$/;
@@ -249,6 +250,7 @@ const outcomesCommand = async (context) => {
 				symbol: parsed.symbol,
 				exchange: parsed.exchange,
 				limit: OUTCOMES_COMMAND_LIMIT,
+				maxScanDocs: OUTCOMES_COMMAND_MAX_SCAN_DOCS,
 				status: 'evaluated',
 				signal,
 			}),
@@ -267,7 +269,14 @@ const outcomesCommand = async (context) => {
 		await context.reply(formatOutcomesMessage(parsed.symbol, outcomes), { parse_mode: 'MarkdownV2' });
 	} catch (error) {
 		console.error('[commands] /outcomes failed:', error.message);
-		if (!error.code || (error.code !== signalOutcomeService.STORAGE_UNAVAILABLE_CODE && error.name !== 'AbortError')) {
+		const isExpectedError = Boolean(
+			error.isUserFriendly ||
+			error.name === 'AbortError' ||
+			error.name === 'TimeoutError' ||
+			error.code === 'TIMEOUT' ||
+			(error.code && error.code === signalOutcomeService.STORAGE_UNAVAILABLE_CODE),
+		);
+		if (!isExpectedError) {
 			sentryService.captureRuntimeError({
 				channel: 'telegram',
 				error,
@@ -318,6 +327,8 @@ async function withTimeout(asyncFn, timeoutMs, message) {
 		timer = setTimeout(() => {
 			ac.abort();
 			const error = new Error(message);
+			error.name = 'TimeoutError';
+			error.code = 'TIMEOUT';
 			error.isUserFriendly = true;
 			reject(error);
 		}, timeoutMs);
