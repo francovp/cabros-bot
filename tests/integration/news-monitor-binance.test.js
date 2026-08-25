@@ -259,7 +259,50 @@ describe('News Monitor - Binance Integration (US4)', () => {
 					symbol: 'BTCUSDT',
 					exchange: 'BINANCE',
 					priceSource: 'binance',
+					side: 'BUY',
+					stop: 75992.54236043,
+					target: 79869.71288903,
 				}));
+			} finally {
+				cache.shutdown();
+			}
+		});
+
+		it('skips recording signal when conviction is low or uncertainty is reported', async () => {
+			const { getAnalyzer, setNotificationManager } = require('../../src/controllers/webhooks/handlers/newsMonitor/analyzer');
+			const signalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
+			const gemini = require('../../src/services/grounding/gemini');
+
+			gemini.analyzeNewsForSymbol.mockResolvedValueOnce({
+				event_category: 'price_surge',
+				event_significance: 0.8,
+				sentiment_score: 0.05, // low conviction
+				headline: 'Minor news update',
+				confidence: 0.95,
+				sources: ['https://example.com/news'],
+			});
+
+			setNotificationManager({
+				sendToAll: jest.fn().mockResolvedValue([{ channel: 'telegram', success: true }]),
+				validateAll: jest.fn(),
+				channels: new Map([
+					['telegram', { chatId: '123456789', enabled: true }],
+				]),
+			});
+
+			const cache = getCacheInstance();
+			cache.clear();
+			cache.initialize();
+
+			try {
+				const analyzer = getAnalyzer();
+				analyzer.alertThreshold = 0;
+				analyzer.enableBinance = true;
+				signalOutcomeService.recordSignal.mockClear();
+
+				await analyzer.analyzeSymbol('BTCUSDT', 'req-low-conviction', null, {}, Date.now(), {});
+
+				expect(signalOutcomeService.recordSignal).not.toHaveBeenCalled();
 			} finally {
 				cache.shutdown();
 			}

@@ -61,7 +61,17 @@ class WhatsAppMarkdownFormatter {
    * @returns {Promise<string>} Formatted WhatsApp message
    */
 	async formatNewsAlert(enriched = {}) {
-		const { originalText = '', summary = '', citations = [], extraText = '', tokenUsage } = enriched;
+		const {
+			originalText = '',
+			summary = '',
+			citations = [],
+			extraText = '',
+			tokenUsage,
+			time_horizon,
+			timeHorizon,
+			invalidation_hint,
+			invalidationHint,
+		} = enriched;
 
 		// Unescape MarkdownV2 sequences if present in originalText
 		const unescapedTitle = originalText.replace(/\\([_*[\]()~`>#+\-=|{}.!])/g, '$1');
@@ -78,6 +88,24 @@ class WhatsAppMarkdownFormatter {
 			unescapedSummary = unescapedSummary.replace(/\n\*\s+/g, '\n- ');
 
 			message += `\n\n${unescapedSummary}`;
+		}
+
+		const horizonVal = time_horizon || timeHorizon;
+		if (horizonVal && typeof horizonVal === 'string' && horizonVal.trim() && (!summary || !summary.includes('Horizonte:'))) {
+			const horizonLabels = {
+				very_short_term: 'Muy corto plazo',
+				short_term: 'Corto plazo',
+				medium_term: 'Medio plazo',
+				long_term: 'Largo plazo',
+			};
+			const horizonLabel = horizonLabels[horizonVal.toLowerCase()] || horizonVal;
+			message += `\n\n*Horizonte:* ${horizonLabel}`;
+		}
+
+		const invalidationVal = invalidation_hint || invalidationHint;
+		if (invalidationVal && typeof invalidationVal === 'string' && invalidationVal.trim() && (!summary || !summary.includes('Invalidación:'))) {
+			const cleanInvalidation = invalidationVal.trim().replace(/\\([_*[\]()~`>#+\-=|{}.!])/g, '$1');
+			message += `\n\n*Invalidación:* ${cleanInvalidation}`;
 		}
 
 		// Citations
