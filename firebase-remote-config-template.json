@@ -294,6 +294,20 @@
       "description": "Enable persistent Firestore-backed deduplication for news monitor",
       "valueType": "BOOLEAN"
     },
+    "ZERO_CHANNEL_ALERT_COOLDOWN_MS": {
+      "defaultValue": {
+        "value": "300000"
+      },
+      "description": "Cooldown between admin notifications when all channels are disabled in milliseconds",
+      "valueType": "NUMBER"
+    },
+    "ENABLE_API_ONLY_MODE": {
+      "defaultValue": {
+        "value": "false"
+      },
+      "description": "Declare intentional API-only mode without notification delivery",
+      "valueType": "BOOLEAN"
+    },
     "ENABLE_ALERT_HTF_RENDER": {
       "defaultValue": {
         "value": "true"

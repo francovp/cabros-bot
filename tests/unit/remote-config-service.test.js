@@ -394,4 +394,19 @@ describe('RemoteConfigService', () => {
 		expect(config.SIGNAL_OUTCOME_MAX_RETRY_AGE_MS).toBe(604800000); // fallback to default
 		expect(config.EQUITY_MARKET_DATA_RPM).toBe(8); // fallback to default
 	});
+
+	it('supports ZERO_CHANNEL_ALERT_COOLDOWN_MS and ENABLE_API_ONLY_MODE via Remote Config', async () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		mockTemplate({
+			ZERO_CHANNEL_ALERT_COOLDOWN_MS: 600000,
+			ENABLE_API_ONLY_MODE: true,
+		});
+		alertStorageService.getFirestore.mockReturnValue({});
+
+		await remoteConfigService.loadNow();
+
+		const config = remoteConfigService.getRuntimeConfig();
+		expect(config.ZERO_CHANNEL_ALERT_COOLDOWN_MS).toBe(600000);
+		expect(config.ENABLE_API_ONLY_MODE).toBe(true);
+	});
 });
