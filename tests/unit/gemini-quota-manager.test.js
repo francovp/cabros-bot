@@ -117,4 +117,84 @@ describe('GeminiQuotaManager', () => {
 		await expect(waitPromise).resolves.toBe(false);
 		jest.useRealTimers();
 	});
+
+	it('returns initial snapshot when no cooldowns have occurred', () => {
+		const snapshot = geminiQuotaManager.getSnapshot();
+		expect(snapshot).toEqual({
+			cooldownActive: false,
+			remainingCooldownMs: 0,
+			lastTriggeredAt: null,
+			triggersTotal: 0,
+			braveFallbacksDuringCooldown: 0,
+			lastBraveFallbackAt: null,
+		});
+	});
+
+	it('tracks active cooldown, lastTriggeredAt, and triggersTotal in snapshot', () => {
+		const before = Date.now();
+		geminiQuotaManager.triggerQuotaCooldown({ status: 429, retryDelay: 4000 });
+		const after = Date.now();
+
+		const snapshot = geminiQuotaManager.getSnapshot();
+		expect(snapshot.cooldownActive).toBe(true);
+		expect(snapshot.remainingCooldownMs).toBeGreaterThan(0);
+		expect(snapshot.remainingCooldownMs).toBeLessThanOrEqual(4000);
+		expect(snapshot.triggersTotal).toBe(1);
+		expect(snapshot.lastTriggeredAt).not.toBeNull();
+
+		const triggeredTime = new Date(snapshot.lastTriggeredAt).getTime();
+		expect(triggeredTime).toBeGreaterThanOrEqual(before);
+		expect(triggeredTime).toBeLessThanOrEqual(after);
+
+		// Second trigger increments triggersTotal
+		geminiQuotaManager.triggerQuotaCooldown({ status: 429, retryDelay: 6000 });
+		const snapshot2 = geminiQuotaManager.getSnapshot();
+		expect(snapshot2.triggersTotal).toBe(2);
+	});
+
+	it('records brave fallbacks during cooldown and exposes them in snapshot', () => {
+		expect(geminiQuotaManager.getSnapshot().braveFallbacksDuringCooldown).toBe(0);
+		expect(geminiQuotaManager.getSnapshot().lastBraveFallbackAt).toBeNull();
+
+		geminiQuotaManager.recordBraveFallbackDuringCooldown();
+		const snapshot = geminiQuotaManager.getSnapshot();
+		expect(snapshot.braveFallbacksDuringCooldown).toBe(1);
+		expect(snapshot.lastBraveFallbackAt).not.toBeNull();
+
+		geminiQuotaManager.recordBraveFallbackDuringCooldown();
+		expect(geminiQuotaManager.getSnapshot().braveFallbacksDuringCooldown).toBe(2);
+	});
+
+	it('preserves historical counters and timestamps after cooldown expires', () => {
+		jest.useFakeTimers();
+		geminiQuotaManager.triggerQuotaCooldown({ status: 429, retryDelay: 1000 });
+		geminiQuotaManager.recordBraveFallbackDuringCooldown();
+
+		jest.advanceTimersByTime(1500);
+
+		const snapshot = geminiQuotaManager.getSnapshot();
+		expect(snapshot.cooldownActive).toBe(false);
+		expect(snapshot.remainingCooldownMs).toBe(0);
+		expect(snapshot.triggersTotal).toBe(1);
+		expect(snapshot.lastTriggeredAt).not.toBeNull();
+		expect(snapshot.braveFallbacksDuringCooldown).toBe(1);
+		expect(snapshot.lastBraveFallbackAt).not.toBeNull();
+		jest.useRealTimers();
+	});
+
+	it('resets all snapshot counters and state on resetForTesting', () => {
+		geminiQuotaManager.triggerQuotaCooldown({ status: 429, retryDelay: 5000 });
+		geminiQuotaManager.recordBraveFallbackDuringCooldown();
+		geminiQuotaManager.resetForTesting();
+
+		expect(geminiQuotaManager.getSnapshot()).toEqual({
+			cooldownActive: false,
+			remainingCooldownMs: 0,
+			lastTriggeredAt: null,
+			triggersTotal: 0,
+			braveFallbacksDuringCooldown: 0,
+			lastBraveFallbackAt: null,
+		});
+	});
 });
+

@@ -13,6 +13,8 @@ const remoteConfigService = require('../services/remoteConfig/RemoteConfigServic
 const { tradingViewMcpService } = require('../services/tradingview/TradingViewMcpService');
 const { binanceOrderService } = require('../services/trading/BinanceOrderService');
 const { notificationRedriveService } = require('../services/notification/NotificationRedriveService');
+const geminiQuotaManager = require('../services/grounding/geminiQuotaManager');
+const groundingMetrics = require('../services/grounding/metrics');
 const {
 	getDeploymentCommit,
 	isPreviewEnvironment,
@@ -142,6 +144,30 @@ function getGeminiDependency({
 	});
 }
 
+function getGeminiQuotaDependency({ gemini }) {
+	const snapshot = geminiQuotaManager.getSnapshot();
+	const status = !gemini.enabled
+		? 'disabled'
+		: (!gemini.configured
+			? 'misconfigured'
+			: (snapshot.cooldownActive ? 'degraded' : 'ready'));
+
+	return {
+		enabled: gemini.enabled,
+		configured: gemini.configured,
+		ready: gemini.ready && !snapshot.cooldownActive,
+		status,
+		cooldownActive: snapshot.cooldownActive,
+		remainingCooldownMs: snapshot.remainingCooldownMs,
+		lastTriggeredAt: snapshot.lastTriggeredAt,
+		triggersTotal: snapshot.triggersTotal,
+		braveFallbacksDuringCooldown: snapshot.braveFallbacksDuringCooldown,
+		lastBraveFallbackAt: snapshot.lastBraveFallbackAt,
+		metrics: groundingMetrics.getSnapshot(),
+	};
+}
+
+
 function getStatus() {
 	const previewEnvironment = isPreview();
 	const modelProvider = getModelProvider();
@@ -206,6 +232,7 @@ function getStatus() {
 		geminiGroundingEnabled,
 		modelProvider,
 	});
+	const geminiQuota = getGeminiQuotaDependency({ gemini });
 	const tradingViewRuntimeStatus = tradingViewMcpService.getStatus({ enabled: tradingViewMcpEnabled });
 	const tradingViewMcp = tradingViewRuntimeStatus;
 	const tradingViewVolumeConfirmation = tradingViewMcpService.getVolumeConfirmationStatus({
@@ -335,6 +362,7 @@ function getStatus() {
 			whatsapp,
 			discord,
 			gemini,
+			geminiQuota,
 			tradingViewMcp,
 			tradingViewVolumeConfirmation,
 			firestore,

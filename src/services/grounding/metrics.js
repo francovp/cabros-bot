@@ -51,7 +51,32 @@ function recordFailure(reason, error, promptType = 'UNKNOWN') {
 	});
 }
 
+/**
+ * Get snapshot of grounding request metrics
+ * @returns {object}
+ */
+function getSnapshot() {
+	return {
+		totalRequests,
+		successRequests,
+		failureRequests,
+		timeoutRequests,
+	};
+}
+
+/**
+ * Reset metrics counters for testing
+ */
+function resetForTesting() {
+	totalRequests = 0;
+	successRequests = 0;
+	failureRequests = 0;
+	timeoutRequests = 0;
+}
+
 module.exports = {
 	recordSuccess,
 	recordFailure,
+	getSnapshot,
+	resetForTesting,
 };
