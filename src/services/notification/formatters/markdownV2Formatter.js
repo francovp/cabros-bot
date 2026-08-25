@@ -253,7 +253,17 @@ class MarkdownV2Formatter {
    * @returns {string} Formatted message
    */
 	formatNewsAlert(enriched = {}) {
-		const { originalText = '', summary = '', citations = [], extraText = '', tokenUsage } = enriched;
+		const {
+			originalText = '',
+			summary = '',
+			citations = [],
+			extraText = '',
+			tokenUsage,
+			time_horizon,
+			timeHorizon,
+			invalidation_hint,
+			invalidationHint,
+		} = enriched;
 
 		// Escape title
 		const escapedTitle = smartEscapeMarkdownV2(normalizeBackslashes(originalText));
@@ -263,6 +273,23 @@ class MarkdownV2Formatter {
 		// We append it as is to preserve NewsAnalyzer formatting.
 		if (summary) {
 			message += `\n\n${summary}`;
+		}
+
+		const horizonVal = time_horizon || timeHorizon;
+		if (horizonVal && typeof horizonVal === 'string' && horizonVal.trim() && (!summary || !summary.includes('Horizonte:'))) {
+			const horizonLabels = {
+				very_short_term: 'Muy corto plazo',
+				short_term: 'Corto plazo',
+				medium_term: 'Medio plazo',
+				long_term: 'Largo plazo',
+			};
+			const horizonLabel = horizonLabels[horizonVal.toLowerCase()] || horizonVal;
+			message += `\n\n*Horizonte:* ${smartEscapeMarkdownV2(normalizeBackslashes(horizonLabel))}`;
+		}
+
+		const invalidationVal = invalidation_hint || invalidationHint;
+		if (invalidationVal && typeof invalidationVal === 'string' && invalidationVal.trim() && (!summary || !summary.includes('Invalidación:'))) {
+			message += `\n\n*Invalidación:* ${smartEscapeMarkdownV2(normalizeBackslashes(invalidationVal.trim()))}`;
 		}
 
 		// Citations
@@ -291,3 +318,4 @@ class MarkdownV2Formatter {
 }
 
 module.exports = MarkdownV2Formatter;
+
