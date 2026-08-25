@@ -121,7 +121,7 @@ function postExpandedAnalysisAlert(botOrGetter) {
 						itemSide = 'SELL';
 					}
 
-					const row = buildReportRow(item);
+					const row = buildReportRow({ ...item, side: itemSide });
 					const tech = item.analysis.technical || item.analysis || {};
 					const closePrice = row.price ?? tech.price_data?.current_price ?? tech.price_data?.close ?? null;
 					const score = item.analysis.market_sentiment?.overall_rating ?? tech.market_sentiment?.overall_rating ?? null;
