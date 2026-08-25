@@ -144,6 +144,14 @@ jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
 		expect(recorded.stop).toBe(106); // price + atr*1.5
 		expect(recorded.target).toBeLessThan(recorded.price); // SELL target below entry
 		expect(recorded.target).toBe(88); // price - atr*3
+
+		// The delivered report must use the same SELL geometry as persistence.
+		// Telegram sends MarkdownV2-escaped text, so compare escape-insensitively.
+		const sentText = mockTelegramSendMessage.mock.calls[0][1];
+		const unescaped = sentText.replace(/\\([_*\[\]()~`>#+\-=|{}.!])/g, '$1');
+		expect(unescaped).toContain('- *Stop Loss sugerido:* $106.00');
+		expect(unescaped).toContain('- *Target sugerido:* $88.00');
+		expect(unescaped).toContain('- *Invalidación:* $6.00 por encima del precio actual');
 	});
 
 	it('routes expanded analysis delivery to requested channels only', async () => {

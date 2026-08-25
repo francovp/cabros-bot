@@ -39,6 +39,15 @@ function resolveDryRun(req) {
 	return queryFlag || bodyFlag;
 }
 
+function deriveItemSide(analysis = {}) {
+	const sentiment = String(analysis.sentiment || analysis.market_sentiment?.overall_sentiment || '').toUpperCase();
+	const confluence = String(analysis.confluence?.recommendation || analysis.confluence?.action || '').toUpperCase();
+	if (confluence.includes('SELL') || sentiment.includes('BEARISH') || sentiment.includes('BAJISTA')) {
+		return 'SELL';
+	}
+	return 'BUY';
+}
+
 function postExpandedAnalysisAlert(botOrGetter) {
 	return async (req, res) => {
 		const requestId = uuidv4();
@@ -65,6 +74,7 @@ function postExpandedAnalysisAlert(botOrGetter) {
 					input: result.input,
 					analysis: result.analysis,
 					multiTimeframe: result.multiTimeframe,
+					side: deriveItemSide(result.analysis),
 				}));
 
 			if (analyzedItems.length === 0) {
@@ -114,14 +124,8 @@ function postExpandedAnalysisAlert(botOrGetter) {
 			const signalOutcomeService = require('../../../../services/storage/SignalOutcomeService');
 			if (signalOutcomeService.isEnabled()) {
 				for (const item of analyzedItems) {
-					const sentiment = String(item.analysis.sentiment || item.analysis.market_sentiment?.overall_sentiment || '').toUpperCase();
-					const confluence = String(item.analysis.confluence?.recommendation || item.analysis.confluence?.action || '').toUpperCase();
-					let itemSide = 'BUY';
-					if (confluence.includes('SELL') || sentiment.includes('BEARISH') || sentiment.includes('BAJISTA')) {
-						itemSide = 'SELL';
-					}
-
-					const row = buildReportRow({ ...item, side: itemSide });
+					const itemSide = item.side;
+					const row = buildReportRow(item);
 					const tech = item.analysis.technical || item.analysis || {};
 					const closePrice = row.price ?? tech.price_data?.current_price ?? tech.price_data?.close ?? null;
 					const score = item.analysis.market_sentiment?.overall_rating ?? tech.market_sentiment?.overall_rating ?? null;
