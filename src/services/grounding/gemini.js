@@ -87,10 +87,14 @@ function parseTechnicalLevelEntry(value) {
 const NUMERIC_LEVEL_STRING_OPTIONS = { useGrouping: false, maximumFractionDigits: 20 };
 
 // Formatters expect string levels (smartEscapeMarkdownV2 only accepts strings), so
-// numeric entries are normalized to their plain decimal representation here.
+// numeric entries are normalized to their exact decimal representation here.
+// String() preserves full double precision (e.g. 1e-21 stays "1e-21") where
+// toLocaleString with a 20-digit cap would round tiny values to "0".
 function formatTechnicalLevelEntry(entry) {
 	if (typeof entry === 'number') {
-		return entry.toLocaleString('en-US', NUMERIC_LEVEL_STRING_OPTIONS);
+		return Number.isInteger(entry)
+			? entry.toLocaleString('en-US', NUMERIC_LEVEL_STRING_OPTIONS)
+			: String(entry);
 	}
 
 	return entry;

@@ -207,6 +207,19 @@ describe('Gemini Service', () => {
 			expect(result.technical_levels.resistances).toEqual(['r-valid']);
 		});
 
+		it('preserves full precision when stringifying numeric levels, including tiny values', () => {
+			const result = parseEnrichedAlertResponse(JSON.stringify({
+				...mockEnrichedResponse,
+				technical_levels: {
+					supports: [1e-21, 77500],
+					resistances: [-1e-21, 1234.5678901234567],
+				},
+			}));
+
+			expect(result.technical_levels.supports).toEqual(['1e-21', '77500']);
+			expect(result.technical_levels.resistances).toEqual(['-1e-21', String(1234.5678901234567)]);
+		});
+
 		it('ignores non-object technical_levels payloads entirely', () => {
 			const stringPayload = parseEnrichedAlertResponse(JSON.stringify({
 				...mockEnrichedResponse,
