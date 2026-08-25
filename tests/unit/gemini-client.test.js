@@ -220,6 +220,19 @@ describe('Gemini Service', () => {
 			expect(result.technical_levels.resistances).toEqual(['-1e-21', String(1234.5678901234567)]);
 		});
 
+		it('deduplicates levels before applying the per-side cap', () => {
+			const result = parseEnrichedAlertResponse(JSON.stringify({
+				...mockEnrichedResponse,
+				technical_levels: {
+					supports: ['80k', '80k', '80k', '80k', '80k', '80k', '79k', 80000],
+					resistances: ['85k'],
+				},
+			}));
+
+			expect(result.technical_levels.supports).toEqual(['80k', '79k', '80000']);
+			expect(result.technical_levels.resistances).toEqual(['85k']);
+		});
+
 		it('ignores non-object technical_levels payloads entirely', () => {
 			const stringPayload = parseEnrichedAlertResponse(JSON.stringify({
 				...mockEnrichedResponse,

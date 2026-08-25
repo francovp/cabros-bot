@@ -109,10 +109,15 @@ function parseOptionalTechnicalLevels(value) {
 		return undefined;
 	}
 
-	// Validate/normalize every entry first, then cap — malformed early entries must not
-	// consume the per-side quota or discard usable later levels.
+	// Validate/normalize every entry first, deduplicate, then cap — malformed or
+	// duplicated early entries must not consume the per-side quota.
 	const parseLevelSide = side => (Array.isArray(value[side])
-		? value[side].map(parseTechnicalLevelEntry).filter(entry => entry !== undefined).map(formatTechnicalLevelEntry).slice(0, MAX_TECHNICAL_LEVELS_PER_SIDE)
+		? [...new Set(
+			value[side]
+				.map(parseTechnicalLevelEntry)
+				.filter(entry => entry !== undefined)
+				.map(formatTechnicalLevelEntry),
+		)].slice(0, MAX_TECHNICAL_LEVELS_PER_SIDE)
 		: []);
 
 	const supports = parseLevelSide('supports');
