@@ -197,11 +197,11 @@ class MarkdownV2Formatter {
 		if (hasSupports || hasResistances) {
 			message += '\n\n*Technical Levels*';
 			if (hasSupports) {
-				const supports = technical_levels.supports.map(s => smartEscapeMarkdownV2(s)).join(', ');
+				const supports = technical_levels.supports.map(s => escapeRiskFieldValue(String(s))).join(', ');
 				message += `\nSupports: ${supports}`;
 			}
 			if (hasResistances) {
-				const resistances = technical_levels.resistances.map(r => smartEscapeMarkdownV2(r)).join(', ');
+				const resistances = technical_levels.resistances.map(r => escapeRiskFieldValue(String(r))).join(', ');
 				message += `\nResistances: ${resistances}`;
 			}
 		}
