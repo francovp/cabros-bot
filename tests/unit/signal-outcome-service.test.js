@@ -1376,6 +1376,109 @@ describe('SignalOutcomeService', () => {
 			expect(res.expectancyR).toBe(0.5);
 		});
 
+		it('excludes barrierless outcomes from target and stop hit-rate denominators in mixed populations', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			const now = new Date();
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, new Map([
+				['doc-barrier-target', {
+					receivedAt: admin.firestore.Timestamp.fromDate(now),
+					requestId: 'req-tp',
+					source: 'market-scanner',
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					side: 'BUY',
+					price: 50000,
+					stop: 48000,
+					target: 54000,
+					eligibilityState: 'supported_provider',
+					outcomeEvaluated: true,
+					outcomes: {
+						'1h': {
+							status: 'evaluated',
+							targetTime: now.toISOString(),
+							price: 54000,
+							return: 8.0,
+							rMultiple: 2.0,
+							firstHit: 'target',
+							targetHit: true,
+							stopHit: false,
+							maxFavorableExcursion: 8.0,
+							maxAdverseExcursion: -1.0,
+						},
+					},
+				}],
+				['doc-stop-only', {
+					receivedAt: admin.firestore.Timestamp.fromDate(now),
+					requestId: 'req-sl',
+					source: 'expanded-analysis',
+					symbol: 'SOLUSDT',
+					exchange: 'BINANCE',
+					side: 'SELL',
+					price: 200,
+					stop: 210,
+					target: null,
+					eligibilityState: 'supported_provider',
+					outcomeEvaluated: true,
+					outcomes: {
+						'1h': {
+							status: 'evaluated',
+							targetTime: now.toISOString(),
+							price: 190,
+							return: -5.0,
+							firstHit: null,
+							targetHit: false,
+							stopHit: false, // stop never crossed within window; no firstHit recorded
+							maxFavorableExcursion: 2.0,
+							maxAdverseExcursion: -5.0,
+						},
+					},
+				}],
+				['doc-barrierless', {
+					receivedAt: admin.firestore.Timestamp.fromDate(now),
+					requestId: 'req-bare',
+					source: 'news-monitor',
+					symbol: 'ETHUSDT',
+					exchange: 'BINANCE',
+					side: 'BUY',
+					price: 3000,
+					stop: null,
+					target: null,
+					eligibilityState: 'supported_provider',
+					outcomeEvaluated: true,
+					outcomes: {
+						'1h': {
+							status: 'evaluated',
+							targetTime: now.toISOString(),
+							price: 3060,
+							return: 2.0,
+							firstHit: null,
+							targetHit: false,
+							stopHit: false,
+							maxFavorableExcursion: 3.0,
+							maxAdverseExcursion: -1.0,
+						},
+					},
+				}],
+			]));
+
+			const res = await SignalOutcomeService.getMetricsSummary();
+			expect(res.totalSignalsEvaluated).toBe(3);
+			// Window-level: only barrier-configured outcomes are denominator-eligible
+			expect(res.windows['1h'].totalSignals).toBe(3);
+			expect(res.windows['1h'].hitRatePercent).toBe(66.67); // return > 0 for 2 of 3 (barrierless doc also has return 2.0)
+			expect(res.windows['1h'].targetEligibleWindows).toBe(1);
+			expect(res.windows['1h'].stopEligibleWindows).toBe(2);
+			expect(res.windows['1h'].targetHitRatePercent).toBe(100); // 1/1 eligible
+		 expect(res.windows['1h'].stopHitRatePercent).toBe(0); // 0/2 eligible
+			expect(res.windows['1h'].expectancyR).toBe(2.0); // rCount stays 1 (only doc with rMultiple)
+			// Overall: eligible denominators exclude barrierless windows
+			expect(res.targetHitRatePercent).toBe(100); // 1/1 target-eligible
+			expect(res.stopHitRatePercent).toBe(0); // 0/2 stop-eligible
+			expect(res.expectancyR).toBe(2.0);
+		});
+
 		it('reports non-Binance and missing-entry signals with explicit coverage metadata instead of "No measurements found"', async () => {
 			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
