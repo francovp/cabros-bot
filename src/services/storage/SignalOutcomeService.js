@@ -3,6 +3,7 @@
 const admin = require('firebase-admin');
 const AlertStorageService = require('./AlertStorageService');
 const equityMarketDataService = require('./EquityMarketDataService');
+const geminiPriceService = require('../grounding/geminiPriceService');
 const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 const { MainClient } = require('binance');
@@ -267,9 +268,23 @@ async function recordSignalInternal({
 		let entryPriceReason = null;
 
 		if (entryPrice === null && normSymbolInfo.exchange === 'BINANCE') {
+			let abortController = null;
+			let timerId = null;
 			try {
-				const client = getBinanceClient();
-				const avgPriceResult = await client.getAvgPrice({ symbol: normSymbolInfo.symbol });
+				abortController = new AbortController();
+				const requestOptions = {
+					timeout: 5000,
+					signal: abortController.signal,
+				};
+				const client = getBinanceClient(requestOptions);
+				const timeoutPromise = new Promise((_, reject) => {
+					timerId = setTimeout(() => {
+						abortController.abort();
+						reject(new Error('Binance getAvgPrice timeout (5000ms)'));
+					}, 5000);
+				});
+				const avgPricePromise = client.getAvgPrice({ symbol: normSymbolInfo.symbol });
+				const avgPriceResult = await Promise.race([avgPricePromise, timeoutPromise]);
 				if (avgPriceResult && avgPriceResult.price) {
 					const parsedAvg = parseFloat(avgPriceResult.price);
 					if (Number.isFinite(parsedAvg) && parsedAvg > 0) {
@@ -283,6 +298,24 @@ async function recordSignalInternal({
 					&& !err.message.includes('Invalid symbol');
 				entryPriceReason = isTransient ? 'binance_unavailable' : 'binance_invalid_symbol';
 				console.warn('[SignalOutcomeService] Failed to fetch entry price from Binance:', err.message);
+			} finally {
+				if (timerId) clearTimeout(timerId);
+			}
+
+			if (entryPrice === null && entryPriceReason !== 'binance_invalid_symbol') {
+				try {
+					const geminiResult = await geminiPriceService.fetchGeminiPrice(normSymbolInfo.symbol, {
+						timeoutMs: 5000,
+						tokenUsage,
+					});
+					if (geminiResult && typeof geminiResult.price === 'number' && Number.isFinite(geminiResult.price) && geminiResult.price > 0) {
+						entryPrice = geminiResult.price;
+						entryPriceSource = 'gemini-grounding';
+						entryPriceReason = null;
+					}
+				} catch (geminiErr) {
+					console.warn('[SignalOutcomeService] Failed to fetch tertiary entry price from Gemini:', geminiErr.message);
+				}
 			}
 		} else if (entryPrice === null && equityProviderName) {
 			try {
@@ -537,6 +570,29 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 						entryPriceError = err;
 					} finally {
 						if (timerId) clearTimeout(timerId);
+					}
+
+					if (!resolvedPrice) {
+						const remainingAfterBinance = effectiveMaxDurationMs - (Date.now() - startTime);
+						const isStructural = entryPriceError && entryPriceError.message && (
+							entryPriceError.message.includes('400')
+							|| entryPriceError.message.includes('Invalid symbol')
+							|| entryPriceError.message.includes('UNKNOWN_SYMBOL')
+						);
+						if (remainingAfterBinance > 0 && !isStructural) {
+							try {
+								const tertiaryPrice = await geminiPriceService.fetchGeminiPrice(data.symbol, {
+									timeoutMs: Math.min(5000, remainingAfterBinance),
+								});
+								if (tertiaryPrice && typeof tertiaryPrice.price === 'number' && Number.isFinite(tertiaryPrice.price) && tertiaryPrice.price > 0) {
+									resolvedPrice = tertiaryPrice.price;
+									resolvedPriceSource = 'gemini-grounding';
+									entryPriceError = null;
+								}
+							} catch (geminiErr) {
+								console.warn('[SignalOutcomeService] Sweep failed to fetch tertiary entry price from Gemini:', geminiErr.message);
+							}
+						}
 					}
 				} else {
 					try {

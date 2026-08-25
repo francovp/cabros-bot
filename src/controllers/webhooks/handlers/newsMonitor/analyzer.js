@@ -12,6 +12,7 @@ const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteCo
 const { AnalysisStatus, EventCategory } = require('./constants');
 const { GROUNDING_MODEL_NAME, ENABLE_NEWS_MONITOR_TEST_MODE } = require('../../../../services/grounding/config');
 const geminiQuotaManager = require('../../../../services/grounding/geminiQuotaManager');
+const geminiPriceService = require('../../../../services/grounding/geminiPriceService');
 const { getPromptService, PromptKeys } = require('../../../../services/prompts');
 const { MainClient } = require('binance');
 const { createHash } = require('node:crypto');
@@ -1036,99 +1037,15 @@ class NewsAnalyzer {
 	 * Fetch price via Gemini GoogleSearch
 	 * Extracts numeric price data from grounded search snippets
 	 * @param {string} symbol - Financial symbol
+	 * @param {TokenUsageTracker} [tokenUsage] - Optional token usage tracker
 	 * @returns {Promise<Object>} MarketContext with parsed price/change or null
 	 */
 	async fetchGeminiPrice(symbol, tokenUsage) {
-
-		if (ENABLE_NEWS_MONITOR_TEST_MODE) {
-			console.debug(`[Analyzer] Test mode enabled - returning mock Gemini price for ${symbol}`);
-			return {
-				price: 123.45,
-				change24h: 1.23,
-				source: 'gemini-grounding-test-mode',
-				timestamp: Date.now(),
-				context: 'Mocked price data for testing purposes.',
-				sources: ['https://example.com/mock-price'],
-			};
-		}
-
-		const genaiClient = require('../../../../services/grounding/genaiClient');
-		let { price, change24h } = { price: null, change24h: null };
-		let timeoutHandle;
-
-		try {
-			// Timeout wrapper (~20s for Gemini)
-			const timeoutMs = 30000;
-			const timeoutPromise = new Promise((_, reject) => {
-				timeoutHandle = setTimeout(() => reject(new Error('Gemini fetch timeout')), timeoutMs);
-			});
-
-			const { text: priceQuery } = await promptService.getTextPrompt(
-				PromptKeys.MARKET_PRICE_FETCH,
-				{ symbol },
-			);
-
-			// Use Gemini GoogleSearch to fetch current price
-			const priceSearchPromise = genaiClient.search({
-				query: priceQuery,
-				maxResults: 3,
-				rethrowQuotaErrors: true,
-			});
-
-			const priceSearchResult = await Promise.race([priceSearchPromise, timeoutPromise]);
-			clearTimeout(timeoutHandle);
-
-			if (tokenUsage && priceSearchResult && priceSearchResult.usage) {
-				tokenUsage.addUsage(priceSearchResult.usage, GROUNDING_MODEL_NAME);
-			}
-
-			// Extract JSON from response - try to find valid JSON
-			let priceSearchResultParsed = null;
-			if (priceSearchResult.searchResultText) {
-				// Try multiple patterns to extract JSON
-				const jsonPatterns = [
-					/{[^{}]*"price"[^{}]*}/, // Look for object with "price" property first
-					/{[\s\S]*}/, // Fallback to any JSON-like structure
-				];
-
-				for (const pattern of jsonPatterns) {
-					const jsonMatch = priceSearchResult.searchResultText.match(pattern);
-					if (jsonMatch) {
-						try {
-							priceSearchResultParsed = JSON.parse(jsonMatch[0]);
-							break;
-						} catch (parseErr) {
-							// Continue to next pattern if this one fails
-							continue;
-						}
-					}
-				}
-			}
-
-			if (!priceSearchResultParsed) {
-				throw new Error('No valid JSON found in price search response');
-			}
-			price = parseFloat(priceSearchResultParsed.price);
-			change24h = parseFloat(priceSearchResultParsed.change_24h);
-
-			console.debug(`[Analyzer] Gemini GoogleSearch market context fetched for ${symbol}: price=$${price}, change24h=${change24h}%`);
-			return {
-				price,
-				change24h,
-				source: 'gemini-grounding',
-				timestamp: Date.now(),
-				context: priceSearchResultParsed.context || '',
-				sources: priceSearchResultParsed.sources || [],
-			};
-		} catch (error) {
-			if (isGeminiQuotaError(error)) {
-				throw error;
-			}
-			console.warn(`[Analyzer] Gemini price fetch failed for ${symbol}: ${error.message}`);
-			return null;
-		} finally {
-			clearTimeout(timeoutHandle);
-		}
+		return geminiPriceService.fetchGeminiPrice(symbol, {
+			tokenUsage,
+			timeoutMs: 30000,
+			rethrowQuotaErrors: true,
+		});
 	}
 
 	/**

@@ -29,9 +29,18 @@ jest.mock('binance', () => {
 	};
 });
 
+// Mock geminiPriceService
+const mockFetchGeminiPrice = jest.fn();
+jest.mock('../../src/services/grounding/geminiPriceService', () => ({
+	fetchGeminiPrice: (...args) => mockFetchGeminiPrice(...args),
+	extractPriceJson: jest.fn(),
+	isGeminiQuotaError: jest.fn(() => false),
+}));
+
 describe('SignalOutcomeService', () => {
 	beforeEach(() => {
 		jest.clearAllMocks();
+		mockFetchGeminiPrice.mockResolvedValue(null);
 		admin.__resetApps();
 		admin.__resetCollectionState();
 		AlertStorageService._resetForTesting();
@@ -408,6 +417,37 @@ describe('SignalOutcomeService', () => {
 			expect(saved.outcomes['1h'].status).toBe('pending');
 		});
 
+		it('resolves entry price from tertiary Gemini source when Binance is region-blocked', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			mockGetAvgPrice.mockRejectedValue(new Error('Binance 451: Service unavailable from restricted location'));
+			mockFetchGeminiPrice.mockResolvedValue({
+				price: 68250.75,
+				change24h: 1.2,
+				source: 'gemini-grounding',
+			});
+
+			const resId = await SignalOutcomeService.recordSignal({
+				requestId: 'req-tertiary-gemini',
+				source: 'webhook-alert',
+				symbol: 'BINANCE:BTCUSDT',
+				price: null,
+				side: 'BUY',
+			});
+
+			expect(resId).not.toBeNull();
+			expect(mockFetchGeminiPrice).toHaveBeenCalledWith('BTCUSDT', expect.objectContaining({
+				timeoutMs: 5000,
+			}));
+
+			const saved = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(resId);
+			expect(saved).toBeDefined();
+			expect(saved.price).toBe(68250.75);
+			expect(saved.entryPriceSource).toBe('gemini-grounding');
+			expect(saved.eligibilityState).toBe('supported_provider');
+			expect(saved.outcomeEvaluated).toBe(false);
+			expect(saved.outcomes['1h'].status).toBe('pending');
+		});
+
 		it('marks signal immediately unavailable when Binance getAvgPrice throws structural invalid symbol error', async () => {
 			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
 			mockGetAvgPrice.mockRejectedValue(new Error('Binance 400: Invalid symbol'));
@@ -421,6 +461,7 @@ describe('SignalOutcomeService', () => {
 			});
 
 			expect(resId).not.toBeNull();
+			expect(mockFetchGeminiPrice).not.toHaveBeenCalled();
 			const saved = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(resId);
 			expect(saved).toBeDefined();
 			expect(saved.price).toBeNull();
@@ -1152,6 +1193,49 @@ describe('SignalOutcomeService', () => {
 			expect(updated.outcomes['1h'].status).toBe('evaluated');
 			expect(updated.outcomes['1h'].price).toBe(51000);
 			expect(updated.outcomes['1h'].return).toBe(2);
+		});
+
+		it('backfills missing entry price during sweep from tertiary Gemini source when Binance fails', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			const receivedAtDate = new Date(Date.now() - 2 * 60 * 60 * 1000);
+			const mockDocId = 'test-backfill-gemini-entry';
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, new Map([
+				[mockDocId, {
+					receivedAt: admin.firestore.Timestamp.fromDate(receivedAtDate),
+					requestId: 'req-backfill-gemini',
+					source: 'news-monitor',
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					side: 'BUY',
+					price: null,
+					eligibilityState: 'pending_entry_price',
+					outcomeEvaluated: false,
+					outcomes: {
+						'1h': {
+							status: 'pending',
+							targetTime: new Date(receivedAtDate.getTime() + 1 * 60 * 60 * 1000).toISOString(),
+						},
+					},
+				}],
+			]));
+
+			mockGetKlines.mockRejectedValue(new Error('Binance 451: Restricted location'));
+			mockGetAvgPrice.mockRejectedValue(new Error('Binance 451: Restricted location'));
+			mockFetchGeminiPrice.mockResolvedValue({
+				price: 68750.50,
+				source: 'gemini-grounding',
+			});
+
+			await SignalOutcomeService.evaluatePendingOutcomes();
+
+			const updated = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(mockDocId);
+			expect(updated).toBeDefined();
+			expect(updated.price).toBe(68750.50);
+			expect(updated.entryPriceSource).toBe('gemini-grounding');
+			expect(updated.eligibilityState).toBe('supported_provider');
+			expect(mockFetchGeminiPrice).toHaveBeenCalledWith('BTCUSDT', expect.any(Object));
 		});
 
 		it('enforces sweep max duration budget on slow or hanging getKlines requests', async () => {
