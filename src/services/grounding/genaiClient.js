@@ -148,6 +148,7 @@ class GenaiClient {
 		const toolConfig = {
 			tools: [groundingTool],
 			temperature: 0.2,
+			...(signal ? { abortSignal: signal } : {}),
 		};
 
 		if (signal?.aborted) {
@@ -348,6 +349,7 @@ class GenaiClient {
 			config: {
 				maxOutputTokens: opts.maxTokens !== undefined ? opts.maxTokens : null,
 				temperature,
+				...(signal ? { abortSignal: signal } : {}),
 			},
 			context,
 		});
