@@ -384,5 +384,40 @@ describe('fetchPriceCryptoSymbol and /precio command', () => {
 				'No se pudo obtener el precio de NVDA (tiempo de espera agotado).'
 			);
 		});
+
+		it('replies with error message for /precio BADSYMBOL when Binance rejects with invalid symbol', async () => {
+			const err = new Error('Invalid symbol.');
+			err.code = -1121;
+			mockGetAvgPrice.mockRejectedValueOnce(err);
+			const context = buildContext('/precio BADSYMBOL');
+
+			await getPrice(context);
+			expect(context.reply).toHaveBeenCalledWith(
+				'No se encontró el símbolo BADSYMBOL en Binance.'
+			);
+			expect(sentryService.captureRuntimeError).not.toHaveBeenCalled();
+		});
+
+		it('replies with error message and captures runtime error when Binance throws network error', async () => {
+			const err = new Error('Network error');
+			mockGetAvgPrice.mockRejectedValueOnce(err);
+			const context = buildContext('/precio BTCUSDT');
+
+			await getPrice(context);
+			expect(context.reply).toHaveBeenCalledWith(
+				'No se pudo obtener el precio de BTCUSDT en Binance.'
+			);
+			expect(sentryService.captureRuntimeError).toHaveBeenCalledWith(
+				expect.objectContaining({
+					channel: 'telegram',
+					error: expect.any(Error),
+					extra: expect.objectContaining({
+						command: 'getPrice',
+						chatId: 987,
+						symbol: 'BTCUSDT',
+					}),
+				})
+			);
+		});
 	});
 });

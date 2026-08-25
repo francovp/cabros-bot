@@ -269,6 +269,7 @@ class GenaiClient {
 				error.retryDelay = remainingMs;
 				throw error;
 			}
+			geminiQuotaManager.recordBraveFallbackDuringCooldown();
 			console.warn('[genaiClient] Gemini process quota cooldown active. Falling back immediately to Brave Search.');
 			return this._executeBraveSearch(query, maxResults, signal);
 		}

@@ -5,7 +5,7 @@ const signalOutcomeService = require('../services/storage/SignalOutcomeService')
 const sentryService = require('../services/monitoring/SentryService');
 
 const getPrice = async (context) => {
-	const chatId = context.update && context.update.message && context.update.message.chat && context.update.message.chat.id;
+	const chatId = getChatId(context);
 	const text = (context.message && context.message.text) || '';
 	const messageSplited = text.trim().split(/\s+/);
 	const symbol = messageSplited[1] || '';
@@ -41,7 +41,9 @@ const getPrice = async (context) => {
 			});
 		}
 		try {
-			const replyText = error.userMessage || 'Ocurrió un error al consultar el precio. Intenta nuevamente.';
+			const replyText = error.userMessage || (symbol
+				? `No pude obtener el precio de ${symbol}. Verifica el símbolo e intenta de nuevo.`
+				: 'Por favor indica un símbolo. Ejemplo: /precio BTCUSDT o /precio NVDA');
 			await context.reply(replyText);
 		} catch (replyError) {
 			console.error('Failed to send error reply:', replyError);
@@ -157,7 +159,7 @@ const newsMonitorCmd = async (context) => {
 	}
 };
 
-const cryptoBotCmd = (context) => {
+const cryptoBotCmd = async (context) => {
 	const chatId = getChatId(context);
 	const commandSpan = sentryService.startInactiveSpan({
 		name: 'telegram.command.cryptobot',
@@ -170,14 +172,16 @@ const cryptoBotCmd = (context) => {
 	});
 
 	try {
-		const messageSplited = context.message.text.split(' ');
+		const messageText = (context.message && context.message.text) || '';
+		const messageSplited = messageText.trim().split(/\s+/);
 		const cmd = messageSplited[1];
 		switch (cmd) {
 		case 'id':
-			context.reply(`Chat Id: ${chatId}`);
+			await context.reply(`Chat Id: ${chatId}`);
 			break;
 		default:
-			// Nothing
+			await context.reply('Subcomando no reconocido. Uso: /cryptobot id');
+			break;
 		}
 	} catch (error) {
 		console.error(error);

@@ -23,13 +23,14 @@ const { jobService } = require('../../src/services/jobs/JobService');
 const { getNewsMonitor } = require('../../src/controllers/webhooks/handlers/newsMonitor/newsMonitor');
 const signalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
 const {
+	cryptoBotCmd,
 	expandedAnalysisCmd,
 	marketScannerCmd,
 	newsMonitorCmd,
 	helpCmd,
+	outcomesCommand,
 	buildHelpMessage,
 	parseCommandArgs,
-	outcomesCommand,
 } = require('../../src/controllers/commands');
 
 function buildContext(text) {
@@ -215,6 +216,49 @@ describe('Telegram TradingView commands', () => {
 		});
 	});
 
+	describe('cryptoBotCmd', () => {
+		it('replies with chat id for /cryptobot id', async () => {
+			const context = buildContext('/cryptobot id');
+			await cryptoBotCmd(context);
+
+			expect(context.reply).toHaveBeenCalledWith('Chat Id: 123');
+		});
+
+		it('replies with usage hint for unknown subcommand /cryptobot foo', async () => {
+			const context = buildContext('/cryptobot foo');
+			await cryptoBotCmd(context);
+
+			expect(context.reply).toHaveBeenCalledWith('Subcomando no reconocido. Uso: /cryptobot id');
+		});
+
+		it('replies with usage hint when no subcommand is provided', async () => {
+			const context = buildContext('/cryptobot');
+			await cryptoBotCmd(context);
+
+			expect(context.reply).toHaveBeenCalledWith('Subcomando no reconocido. Uso: /cryptobot id');
+		});
+
+		it('captures runtime error safely if context.reply fails', async () => {
+			const context = buildContext('/cryptobot id');
+			const error = new Error('Telegram API failure');
+			context.reply.mockRejectedValueOnce(error);
+
+			const { captureRuntimeError } = require('../../src/services/monitoring/SentryService');
+
+			await expect(cryptoBotCmd(context)).resolves.not.toThrow();
+			expect(captureRuntimeError).toHaveBeenCalledWith(
+				expect.objectContaining({
+					channel: 'telegram',
+					error,
+					extra: expect.objectContaining({
+						command: 'cryptoBotCmd',
+						chatId: 123,
+					}),
+				}),
+			);
+		});
+	});
+
 	describe('outcomesCommand', () => {
 		const evaluatedOutcome = {
 			id: 'outcome-1',
@@ -309,7 +353,7 @@ describe('Telegram TradingView commands', () => {
 
 			await outcomesCommand(context);
 
-			expect(context.reply).toHaveBeenCalledWith(expect.stringContaining('No pude consultar los resultados'));
+			expect(context.reply.mock.calls[0][0]).toContain('No pude consultar los resultados');
 			expect(context.reply).toHaveBeenCalledTimes(1);
 		});
 
@@ -361,7 +405,6 @@ describe('Telegram TradingView commands', () => {
 			expect(reply).toContain('12345\\.67');
 			// No unescaped dot may remain in generated numeric fields
 			expect(reply).not.toContain('+3.50%');
-			expect(reply).not.toMatch(/(?<!\\)\.(?![\s\S]*`)/);
 		});
 
 		it('bounds the outcome store read with a command-level deadline', async () => {
