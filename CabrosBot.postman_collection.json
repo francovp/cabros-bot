@@ -2772,6 +2772,204 @@
               "body": "{\n  \"error\": \"Invalid limit. Use an integer between 1 and 100.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
             }
           ]
+        },
+        {
+          "name": "GET Summarize Signal Outcomes",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Summarizes recorded signal outcomes metrics with default limit (50) and 30-day window.",
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes/summary",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes",
+                "summary"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"summary\": {\n    \"available\": true,\n    \"totalSignalsReceived\": 50,\n    \"totalSignalsEligible\": 45,\n    \"totalSignalsEvaluated\": 40,\n    \"totalSignalsPending\": 5,\n    \"totalSignalsUnavailable\": 5,\n    \"coveragePercent\": 80,\n    \"isCoverageComplete\": false,\n    \"targetHitRatePercent\": 65.5,\n    \"stopHitRatePercent\": 25,\n    \"expectancyR\": 1.25,\n    \"populationNote\": \"Metrics represent 40 evaluated signals out of 50 total received signals (80% coverage).\",\n    \"exchangeBreakdown\": {\n      \"BINANCE\": {\n        \"received\": 40,\n        \"eligible\": 40,\n        \"evaluated\": 35,\n        \"pending\": 3,\n        \"unavailable\": 2\n      }\n    },\n    \"providerBreakdown\": {\n      \"binance\": {\n        \"received\": 40,\n        \"eligible\": 40,\n        \"evaluated\": 35,\n        \"pending\": 3,\n        \"unavailable\": 2\n      }\n    },\n    \"entryPriceSourceBreakdown\": {\n      \"tradingview-mcp\": 40\n    },\n    \"eligibilityBreakdown\": {\n      \"supported_provider\": 45\n    },\n    \"windows\": {\n      \"1h\": {\n        \"totalSignals\": 35,\n        \"hitRatePercent\": 60,\n        \"targetEligibleWindows\": 30,\n        \"stopEligibleWindows\": 30,\n        \"targetHitRatePercent\": 55,\n        \"stopHitRatePercent\": 20,\n        \"expectancyR\": 0.85,\n        \"averageReturnPercent\": 2.15,\n        \"averageMfePercent\": 3.45,\n        \"averageMaePercent\": -1.1,\n        \"maxAdverseExcursionPercent\": -4.5\n      }\n    },\n    \"drawdownProxy\": {\n      \"averageMaxAdverseExcursionPercent\": -1.85,\n      \"absoluteMaxAdverseExcursionPercent\": -7.2\n    },\n    \"falsePositiveCandidatesCount\": 0,\n    \"falsePositiveCandidates\": [],\n    \"latencyCostMetadata\": {\n      \"averageProcessingTimeMs\": 450,\n      \"tokenUsage\": {\n        \"inputTokens\": 1200,\n        \"outputTokens\": 400,\n        \"totalCost\": 0.0035\n      }\n    }\n  }\n}"
+            },
+            {
+              "name": "200 Empty / No Measurements",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"summary\": {\n    \"available\": false,\n    \"totalSignalsReceived\": 0,\n    \"totalSignalsEligible\": 0,\n    \"totalSignalsEvaluated\": 0,\n    \"totalSignalsPending\": 0,\n    \"totalSignalsUnavailable\": 0,\n    \"coveragePercent\": 0,\n    \"isCoverageComplete\": true,\n    \"targetHitRatePercent\": 0,\n    \"stopHitRatePercent\": 0,\n    \"expectancyR\": null,\n    \"populationNote\": \"No outcome measurements found for the requested criteria.\",\n    \"exchangeBreakdown\": {},\n    \"providerBreakdown\": {},\n    \"entryPriceSourceBreakdown\": {},\n    \"eligibilityBreakdown\": {},\n    \"windows\": {},\n    \"drawdownProxy\": {\n      \"averageMaxAdverseExcursionPercent\": 0,\n      \"absoluteMaxAdverseExcursionPercent\": 0\n    },\n    \"falsePositiveCandidatesCount\": 0,\n    \"falsePositiveCandidates\": [],\n    \"latencyCostMetadata\": {\n      \"averageProcessingTimeMs\": null,\n      \"tokenUsage\": {\n        \"inputTokens\": 0,\n        \"outputTokens\": 0,\n        \"totalCost\": 0\n      }\n    }\n  }\n}"
+            },
+            {
+              "name": "401 Unauthorized",
+              "status": "Unauthorized",
+              "code": 401,
+              "body": "{\n  \"error\": \"Unauthorized: Missing or invalid API key.\",\n  \"code\": \"UNAUTHORIZED\"\n}"
+            },
+            {
+              "name": "403 Feature Disabled",
+              "status": "Forbidden",
+              "code": 403,
+              "body": "{\n  \"error\": \"Signal outcome tracking feature is disabled. Set ENABLE_SIGNAL_OUTCOME_TRACKING=true to enable.\",\n  \"code\": \"FEATURE_DISABLED\"\n}"
+            },
+            {
+              "name": "503 Storage Unavailable",
+              "status": "Service Unavailable",
+              "code": 503,
+              "body": "{\n  \"error\": \"Signal outcome tracking is enabled but Firestore is unavailable. Check Firestore credentials and project configuration.\",\n  \"code\": \"STORAGE_UNAVAILABLE\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Summarize Signal Outcomes (filtered)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Summarizes signal outcomes metrics filtered by symbol, exchange, status, window, and time range.",
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes/summary?symbol=BTCUSDT&exchange=BINANCE&status=evaluated&window=1h&limit=10&from=2026-08-23T00:00:00.000Z&to=2026-08-23T23:59:59.000Z",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "symbol",
+                  "value": "BTCUSDT"
+                },
+                {
+                  "key": "exchange",
+                  "value": "BINANCE"
+                },
+                {
+                  "key": "status",
+                  "value": "evaluated"
+                },
+                {
+                  "key": "window",
+                  "value": "1h"
+                },
+                {
+                  "key": "limit",
+                  "value": "10"
+                },
+                {
+                  "key": "from",
+                  "value": "2026-08-23T00:00:00.000Z"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-08-23T23:59:59.000Z"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 Filtered Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"summary\": {\n    \"available\": true,\n    \"totalSignalsReceived\": 10,\n    \"totalSignalsEligible\": 10,\n    \"totalSignalsEvaluated\": 10,\n    \"totalSignalsPending\": 0,\n    \"totalSignalsUnavailable\": 0,\n    \"coveragePercent\": 100,\n    \"isCoverageComplete\": true,\n    \"targetHitRatePercent\": 70,\n    \"stopHitRatePercent\": 20,\n    \"expectancyR\": 1.1,\n    \"populationNote\": \"Metrics represent 100% of received signals.\",\n    \"exchangeBreakdown\": {\n      \"BINANCE\": {\n        \"received\": 10,\n        \"eligible\": 10,\n        \"evaluated\": 10,\n        \"pending\": 0,\n        \"unavailable\": 0\n      }\n    },\n    \"providerBreakdown\": {\n      \"binance\": {\n        \"received\": 10,\n        \"eligible\": 10,\n        \"evaluated\": 10,\n        \"pending\": 0,\n        \"unavailable\": 0\n      }\n    },\n    \"entryPriceSourceBreakdown\": {\n      \"tradingview-mcp\": 10\n    },\n    \"eligibilityBreakdown\": {\n      \"supported_provider\": 10\n    },\n    \"windows\": {\n      \"1h\": {\n        \"totalSignals\": 10,\n        \"hitRatePercent\": 70,\n        \"targetEligibleWindows\": 10,\n        \"stopEligibleWindows\": 10,\n        \"targetHitRatePercent\": 70,\n        \"stopHitRatePercent\": 20,\n        \"expectancyR\": 1.1,\n        \"averageReturnPercent\": 2.5,\n        \"averageMfePercent\": 3.8,\n        \"averageMaePercent\": -0.9,\n        \"maxAdverseExcursionPercent\": -3.2\n      }\n    },\n    \"drawdownProxy\": {\n      \"averageMaxAdverseExcursionPercent\": -1.2,\n      \"absoluteMaxAdverseExcursionPercent\": -4.5\n    },\n    \"falsePositiveCandidatesCount\": 0,\n    \"falsePositiveCandidates\": [],\n    \"latencyCostMetadata\": {\n      \"averageProcessingTimeMs\": 380,\n      \"tokenUsage\": {\n        \"inputTokens\": 300,\n        \"outputTokens\": 120,\n        \"totalCost\": 0.001\n      }\n    }\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Summarize Signal Outcomes (Firebase bearer)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{firebaseIdToken}}",
+                "type": "text"
+              }
+            ],
+            "description": "Summarizes signal outcomes authenticated with a Firebase Admin ID token (admin.viewer role).",
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes/summary?limit=25",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "25"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"summary\": {\n    \"available\": true,\n    \"totalSignalsReceived\": 25,\n    \"totalSignalsEligible\": 25,\n    \"totalSignalsEvaluated\": 25,\n    \"totalSignalsPending\": 0,\n    \"totalSignalsUnavailable\": 0,\n    \"coveragePercent\": 100,\n    \"isCoverageComplete\": true,\n    \"targetHitRatePercent\": 68,\n    \"stopHitRatePercent\": 24,\n    \"expectancyR\": 1.15,\n    \"populationNote\": \"Metrics represent 100% of received signals.\",\n    \"exchangeBreakdown\": {},\n    \"providerBreakdown\": {},\n    \"entryPriceSourceBreakdown\": {},\n    \"eligibilityBreakdown\": {},\n    \"windows\": {},\n    \"drawdownProxy\": {\n      \"averageMaxAdverseExcursionPercent\": -1.5,\n      \"absoluteMaxAdverseExcursionPercent\": -5.5\n    },\n    \"falsePositiveCandidatesCount\": 0,\n    \"falsePositiveCandidates\": [],\n    \"latencyCostMetadata\": {\n      \"averageProcessingTimeMs\": 400,\n      \"tokenUsage\": {\n        \"inputTokens\": 800,\n        \"outputTokens\": 250,\n        \"totalCost\": 0.0025\n      }\n    }\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Summarize Signal Outcomes (invalid parameters)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Example of 400 INVALID_REQUEST response when passing invalid limit, status, window, or dates to summarize outcomes.",
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes/summary?limit=200",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "200"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "400 Invalid Limit",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"Invalid limit. Use an integer between 1 and 100.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
         }
       ]
     },

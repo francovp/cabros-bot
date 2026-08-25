@@ -1347,6 +1347,93 @@ Query durably recorded signal outcomes record-by-record with pagination and filt
 }
 ```
 
+#### GET /api/outcomes/summary
+
+Query aggregated performance and coverage metrics for recorded signal outcomes, with optional filtering by symbol, exchange, status, window, and date range. When no outcomes match the filters or tracking is enabled with an empty dataset, the endpoint returns `200 OK` with `available: false` and a typed empty summary structure. Requires `x-api-key` header (or `api-key` query parameter) or Firebase Bearer token with `admin.viewer` or `admin.operator` role.
+
+**Query Parameters:**
+- `limit` - Maximum number of recent outcomes to aggregate (integer between `1` and `100`, default: `50`)
+- `symbol` - Filter by trading symbol (e.g. `BTCUSDT` or `BINANCE:BTCUSDT`)
+- `exchange` - Filter by exchange identifier (e.g. `BINANCE`, `NASDAQ`)
+- `status` - Filter by evaluation status (`pending`, `evaluated`, `unavailable`)
+- `window` - Filter by measurement window (`1h`, `4h`, `1D`, `1W`)
+- `from` - Optional ISO-8601 lower bound timestamp
+- `to` - Optional ISO-8601 upper bound timestamp
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "summary": {
+    "available": true,
+    "totalSignalsReceived": 50,
+    "totalSignalsEligible": 45,
+    "totalSignalsEvaluated": 40,
+    "totalSignalsPending": 5,
+    "totalSignalsUnavailable": 5,
+    "coveragePercent": 80,
+    "isCoverageComplete": false,
+    "targetHitRatePercent": 65.5,
+    "stopHitRatePercent": 25,
+    "expectancyR": 1.25,
+    "populationNote": "Metrics represent 40 evaluated signals out of 50 total received signals (80% coverage).",
+    "exchangeBreakdown": {
+      "BINANCE": {
+        "received": 40,
+        "eligible": 40,
+        "evaluated": 35,
+        "pending": 3,
+        "unavailable": 2
+      }
+    },
+    "providerBreakdown": {
+      "binance": {
+        "received": 40,
+        "eligible": 40,
+        "evaluated": 35,
+        "pending": 3,
+        "unavailable": 2
+      }
+    },
+    "entryPriceSourceBreakdown": {
+      "tradingview-mcp": 40
+    },
+    "eligibilityBreakdown": {
+      "supported_provider": 45
+    },
+    "windows": {
+      "1h": {
+        "totalSignals": 35,
+        "hitRatePercent": 60,
+        "targetEligibleWindows": 30,
+        "stopEligibleWindows": 30,
+        "targetHitRatePercent": 55,
+        "stopHitRatePercent": 20,
+        "expectancyR": 0.85,
+        "averageReturnPercent": 2.15,
+        "averageMfePercent": 3.45,
+        "averageMaePercent": -1.1,
+        "maxAdverseExcursionPercent": -4.5
+      }
+    },
+    "drawdownProxy": {
+      "averageMaxAdverseExcursionPercent": -1.85,
+      "absoluteMaxAdverseExcursionPercent": -7.2
+    },
+    "falsePositiveCandidatesCount": 0,
+    "falsePositiveCandidates": [],
+    "latencyCostMetadata": {
+      "averageProcessingTimeMs": 450,
+      "tokenUsage": {
+        "inputTokens": 1200,
+        "outputTokens": 400,
+        "totalCost": 0.0035
+      }
+    }
+  }
+}
+```
+
 ## Multi-Channel Alerts (002)
 
 The alert webhook system supports simultaneous delivery to multiple channels (Telegram, WhatsApp, and Discord) with independent retry logic and graceful degradation.

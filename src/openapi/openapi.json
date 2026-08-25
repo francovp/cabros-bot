@@ -1184,6 +1184,71 @@
         "x-admin-role": "admin.viewer"
       }
     },
+    "/api/outcomes/summary": {
+      "get": {
+        "tags": [
+          "Signal outcomes"
+        ],
+        "summary": "Summarize signal outcomes metrics",
+        "description": "Query aggregated performance and coverage metrics for recorded signal outcomes, with optional filtering by symbol, exchange, status, window, and date range.",
+        "operationId": "summarizeOutcomes",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/OutcomeLimit"
+          },
+          {
+            "$ref": "#/components/parameters/OutcomeSymbol"
+          },
+          {
+            "$ref": "#/components/parameters/OutcomeExchange"
+          },
+          {
+            "$ref": "#/components/parameters/OutcomeStatus"
+          },
+          {
+            "$ref": "#/components/parameters/OutcomeWindow"
+          },
+          {
+            "$ref": "#/components/parameters/From"
+          },
+          {
+            "$ref": "#/components/parameters/To"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/OutcomesSummaryResult"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      }
+    },
     "/api/trading/binance/orders": {
       "get": {
         "tags": [
@@ -2557,6 +2622,29 @@
           }
         }
       },
+      "OutcomesSummaryResult": {
+        "description": "Signal outcomes aggregate metrics summary",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "required": [
+                "success",
+                "summary"
+              ],
+              "properties": {
+                "success": {
+                  "type": "boolean",
+                  "example": true
+                },
+                "summary": {
+                  "$ref": "#/components/schemas/OutcomesSummary"
+                }
+              }
+            }
+          }
+        }
+      },
       "NewsMonitorAnalysisResult": {
         "description": "News monitor analysis and delivery result",
         "content": {
@@ -2949,6 +3037,334 @@
               "null"
             ],
             "example": 150
+          }
+        }
+      },
+      "OutcomesSummary": {
+        "type": "object",
+        "required": [
+          "available",
+          "totalSignalsReceived",
+          "totalSignalsEligible",
+          "totalSignalsEvaluated",
+          "totalSignalsPending",
+          "totalSignalsUnavailable",
+          "coveragePercent",
+          "isCoverageComplete",
+          "targetHitRatePercent",
+          "stopHitRatePercent",
+          "expectancyR",
+          "populationNote",
+          "exchangeBreakdown",
+          "providerBreakdown",
+          "entryPriceSourceBreakdown",
+          "eligibilityBreakdown",
+          "windows",
+          "drawdownProxy",
+          "falsePositiveCandidatesCount",
+          "falsePositiveCandidates",
+          "latencyCostMetadata"
+        ],
+        "properties": {
+          "available": {
+            "type": "boolean",
+            "example": true
+          },
+          "totalSignalsReceived": {
+            "type": "integer",
+            "example": 50
+          },
+          "totalSignalsEligible": {
+            "type": "integer",
+            "example": 45
+          },
+          "totalSignalsEvaluated": {
+            "type": "integer",
+            "example": 40
+          },
+          "totalSignalsPending": {
+            "type": "integer",
+            "example": 5
+          },
+          "totalSignalsUnavailable": {
+            "type": "integer",
+            "example": 5
+          },
+          "coveragePercent": {
+            "type": "number",
+            "example": 80
+          },
+          "isCoverageComplete": {
+            "type": "boolean",
+            "example": false
+          },
+          "targetHitRatePercent": {
+            "type": "number",
+            "example": 65.5
+          },
+          "stopHitRatePercent": {
+            "type": "number",
+            "example": 25
+          },
+          "expectancyR": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "example": 1.25
+          },
+          "populationNote": {
+            "type": "string",
+            "example": "Metrics represent 40 evaluated signals out of 50 total received signals (80% coverage)."
+          },
+          "exchangeBreakdown": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/CoverageBucket"
+            }
+          },
+          "providerBreakdown": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/CoverageBucket"
+            }
+          },
+          "entryPriceSourceBreakdown": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer"
+            }
+          },
+          "eligibilityBreakdown": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer"
+            }
+          },
+          "windows": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/WindowStats"
+            }
+          },
+          "drawdownProxy": {
+            "$ref": "#/components/schemas/DrawdownProxy"
+          },
+          "falsePositiveCandidatesCount": {
+            "type": "integer",
+            "example": 2
+          },
+          "falsePositiveCandidates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FalsePositiveCandidate"
+            }
+          },
+          "latencyCostMetadata": {
+            "$ref": "#/components/schemas/LatencyCostMetadata"
+          }
+        }
+      },
+      "CoverageBucket": {
+        "type": "object",
+        "required": [
+          "received",
+          "eligible",
+          "evaluated",
+          "pending",
+          "unavailable"
+        ],
+        "properties": {
+          "received": {
+            "type": "integer",
+            "example": 10
+          },
+          "eligible": {
+            "type": "integer",
+            "example": 10
+          },
+          "evaluated": {
+            "type": "integer",
+            "example": 8
+          },
+          "pending": {
+            "type": "integer",
+            "example": 1
+          },
+          "unavailable": {
+            "type": "integer",
+            "example": 1
+          }
+        }
+      },
+      "WindowStats": {
+        "type": "object",
+        "required": [
+          "totalSignals",
+          "hitRatePercent",
+          "targetEligibleWindows",
+          "stopEligibleWindows",
+          "targetHitRatePercent",
+          "stopHitRatePercent",
+          "expectancyR",
+          "averageReturnPercent",
+          "averageMfePercent",
+          "averageMaePercent",
+          "maxAdverseExcursionPercent"
+        ],
+        "properties": {
+          "totalSignals": {
+            "type": "integer",
+            "example": 35
+          },
+          "hitRatePercent": {
+            "type": "number",
+            "example": 60
+          },
+          "targetEligibleWindows": {
+            "type": "integer",
+            "example": 30
+          },
+          "stopEligibleWindows": {
+            "type": "integer",
+            "example": 30
+          },
+          "targetHitRatePercent": {
+            "type": "number",
+            "example": 55
+          },
+          "stopHitRatePercent": {
+            "type": "number",
+            "example": 20
+          },
+          "expectancyR": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "example": 0.85
+          },
+          "averageReturnPercent": {
+            "type": "number",
+            "example": 2.15
+          },
+          "averageMfePercent": {
+            "type": "number",
+            "example": 3.45
+          },
+          "averageMaePercent": {
+            "type": "number",
+            "example": -1.1
+          },
+          "maxAdverseExcursionPercent": {
+            "type": "number",
+            "example": -4.5
+          }
+        }
+      },
+      "DrawdownProxy": {
+        "type": "object",
+        "required": [
+          "averageMaxAdverseExcursionPercent",
+          "absoluteMaxAdverseExcursionPercent"
+        ],
+        "properties": {
+          "averageMaxAdverseExcursionPercent": {
+            "type": "number",
+            "example": -1.85
+          },
+          "absoluteMaxAdverseExcursionPercent": {
+            "type": "number",
+            "example": -7.2
+          }
+        }
+      },
+      "FalsePositiveCandidate": {
+        "type": "object",
+        "required": [
+          "symbol",
+          "source",
+          "side",
+          "score",
+          "price",
+          "worstReturn",
+          "worstMae"
+        ],
+        "properties": {
+          "symbol": {
+            "type": "string",
+            "example": "BTCUSDT"
+          },
+          "source": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "example": "news-monitor"
+          },
+          "side": {
+            "type": "string",
+            "example": "BUY"
+          },
+          "score": {
+            "type": "number",
+            "example": 0.85
+          },
+          "price": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "example": 65000
+          },
+          "worstReturn": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "example": -3.2
+          },
+          "worstMae": {
+            "type": "number",
+            "example": -4.8
+          }
+        }
+      },
+      "LatencyCostMetadata": {
+        "type": "object",
+        "required": [
+          "averageProcessingTimeMs",
+          "tokenUsage"
+        ],
+        "properties": {
+          "averageProcessingTimeMs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "example": 450
+          },
+          "tokenUsage": {
+            "type": "object",
+            "required": [
+              "inputTokens",
+              "outputTokens",
+              "totalCost"
+            ],
+            "properties": {
+              "inputTokens": {
+                "type": "integer",
+                "example": 1200
+              },
+              "outputTokens": {
+                "type": "integer",
+                "example": 400
+              },
+              "totalCost": {
+                "type": "number",
+                "example": 0.0035
+              }
+            }
           }
         }
       },
