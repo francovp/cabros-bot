@@ -4,6 +4,8 @@
  * Converts MarkdownV2 escape sequences to WhatsApp-friendly format
  */
 
+const { formatHtfAlignment } = require('./htfAlignmentFormatter');
+
 /**
  * WhatsAppMarkdownFormatter - Formats text for WhatsApp markdown
  * WhatsApp supports: *bold*, _italic*, ~strikethrough~, `code`, ```monospace```
@@ -169,6 +171,11 @@ class WhatsAppMarkdownFormatter {
 		const sentimentEmoji = sentiment === 'BULLISH' ? '🚀' : sentiment === 'BEARISH' ? '🔻' : '😐';
 		const score = sentiment_score.toFixed(2);
 		message += `\n\nSentiment: ${sentiment} ${sentimentEmoji} (${score})`;
+
+		const htfLine = formatHtfAlignment(enriched);
+		if (htfLine) {
+			message += `\n${htfLine}`;
+		}
 
 		// Technical Levels
 		const hasSupports = technical_levels.supports && technical_levels.supports.length > 0;

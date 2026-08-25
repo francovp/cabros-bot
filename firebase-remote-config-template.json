@@ -293,6 +293,13 @@
       },
       "description": "Enable persistent Firestore-backed deduplication for news monitor",
       "valueType": "BOOLEAN"
+    },
+    "ENABLE_ALERT_HTF_RENDER": {
+      "defaultValue": {
+        "value": "true"
+      },
+      "description": "Enable rendering higher-timeframe trend alignment on enriched webhook alerts",
+      "valueType": "BOOLEAN"
     }
   },
   "version": {

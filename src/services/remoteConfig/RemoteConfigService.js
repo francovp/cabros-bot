@@ -58,6 +58,7 @@ const PARAMETER_SCHEMA = Object.freeze({
 	ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION: { type: 'boolean', defaultValue: false },
 	ENABLE_MARKET_SCANNER: { type: 'boolean', defaultValue: false },
 	ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP: { type: 'boolean', defaultValue: false },
+	ENABLE_ALERT_HTF_RENDER: { type: 'boolean', defaultValue: true },
 });
 
 let remoteOverrides = {};

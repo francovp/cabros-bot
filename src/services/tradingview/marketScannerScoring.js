@@ -419,4 +419,6 @@ module.exports = {
 	scoreScannerItem,
 	rankScannerItems,
 	resolveTrendConfluence,
+	normalizeTrendDirection,
+	normalizeConfluenceStatus,
 };
