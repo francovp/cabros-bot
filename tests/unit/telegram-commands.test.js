@@ -425,9 +425,9 @@ describe('Telegram TradingView commands', () => {
 
 			const context3 = buildContext('/outcomes NYSE:BRK.B');
 			await outcomesCommand(context3);
-			expect(signalOutcomeService.listOutcomes).toHaveBeenCalledWith(
- 				expect.objectContaining({ symbol: 'BRK.B', exchange: 'NYSE' }),
-			);
+				expect(signalOutcomeService.listOutcomes).toHaveBeenCalledWith(
+					expect.objectContaining({ symbol: 'BRK.B', exchange: 'NYSE' }),
+				);
 
 			const context4 = buildContext('/outcomes BRK.B');
 			await outcomesCommand(context4);
