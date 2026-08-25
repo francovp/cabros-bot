@@ -185,3 +185,75 @@ describe('admin client safety', () => {
 		expect(definitions.find(({ path }) => path === '/api/jobs').requiredRole).toBe('admin.operator');
 	});
 });
+
+describe('admin deadline budget calculations', () => {
+	const adminRequest = require('../../src/admin/admin-request');
+
+	it('derives the volume confirmation deadline from 3 sequential MCP RPCs plus explicit overhead', () => {
+		expect(adminRequest.VOLUME_CONFIRMATION_MCP_CALLS).toBe(3);
+		expect(adminRequest.TRADINGVIEW_MCP_MAX_TIMEOUT_MS).toBe(120000);
+		expect(adminRequest.VOLUME_CONFIRMATION_OVERHEAD_MS).toBe(30000);
+
+		const expectedVolumeTimeout = (adminRequest.VOLUME_CONFIRMATION_MCP_CALLS * adminRequest.TRADINGVIEW_MCP_MAX_TIMEOUT_MS)
+			+ adminRequest.VOLUME_CONFIRMATION_OVERHEAD_MS;
+		expect(expectedVolumeTimeout).toBe(390000);
+		expect(adminRequest.VOLUME_CONFIRMATION_API_REQUEST_TIMEOUT_MS).toBe(390000);
+	});
+
+	it('derives the long-running analysis and alert deadline from full enrichment, multi-chunk retries, and overhead', () => {
+		expect(adminRequest.TRADINGVIEW_MCP_MAX_ENRICHMENT_BUDGET_MS).toBe(120000);
+		expect(adminRequest.GROUNDING_MAX_TIMEOUT_MS).toBe(120000);
+		expect(adminRequest.DISCORD_MAX_CHUNKS).toBe(3);
+		expect(adminRequest.DISCORD_REQUEST_TIMEOUT_MS).toBe(10000);
+		expect(adminRequest.DISCORD_MAX_RETRIES).toBe(10);
+		expect(adminRequest.DISCORD_MAX_TOTAL_RETRY_WAIT_MS).toBe(120000);
+
+		const expectedChunkBudget = adminRequest.DISCORD_REQUEST_TIMEOUT_MS
+			+ (adminRequest.DISCORD_MAX_RETRIES * adminRequest.DISCORD_REQUEST_TIMEOUT_MS)
+			+ adminRequest.DISCORD_MAX_TOTAL_RETRY_WAIT_MS;
+		expect(expectedChunkBudget).toBe(230000);
+		expect(adminRequest.DISCORD_MAX_CHUNK_BUDGET_MS).toBe(230000);
+
+		const expectedDeliveryBudget = adminRequest.DISCORD_MAX_CHUNKS * expectedChunkBudget;
+		expect(expectedDeliveryBudget).toBe(690000);
+		expect(adminRequest.DISCORD_MAX_TOTAL_DELIVERY_BUDGET_MS).toBe(690000);
+
+		const expectedBackendBudget = adminRequest.TRADINGVIEW_MCP_MAX_ENRICHMENT_BUDGET_MS
+			+ adminRequest.GROUNDING_MAX_TIMEOUT_MS
+			+ expectedDeliveryBudget;
+		expect(expectedBackendBudget).toBe(930000);
+		expect(adminRequest.LONG_RUNNING_BACKEND_BUDGET_MS).toBe(930000);
+
+		expect(adminRequest.LONG_RUNNING_OVERHEAD_MS).toBe(60000);
+		expect(adminRequest.LONG_RUNNING_API_REQUEST_TIMEOUT_MS).toBe(990000);
+	});
+
+	it('assigns the derived volume confirmation timeout to /api/webhook/volume-confirmation', () => {
+		expect(adminRequest.getApiRequestTimeout({ path: '/api/webhook/volume-confirmation' })).toBe(390000);
+	});
+
+	it('assigns the derived long-running timeout to all long-running analysis and alert endpoints', () => {
+		const longRunningRoutes = [
+			'/api/webhook/expanded-analysis-alert',
+			'/api/webhook/market-scanner-alert',
+			'/api/news-monitor',
+			'/api/scanner-presets/{id}/run',
+			'/api/webhook/alert',
+			'/api/webhook/message',
+			'/api/alerts/{alertId}/replay',
+		];
+
+		longRunningRoutes.forEach((path) => {
+			expect(adminRequest.getApiRequestTimeout({ path })).toBe(990000);
+		});
+	});
+
+	it('assigns standard 30s timeout to short operations and handles missing definitions safely', () => {
+		expect(adminRequest.getApiRequestTimeout({ path: '/api/status' })).toBe(30000);
+		expect(adminRequest.getApiRequestTimeout({ path: '/api/jobs' })).toBe(30000);
+		expect(adminRequest.getApiRequestTimeout({ path: '/api/alerts' })).toBe(30000);
+		expect(adminRequest.getApiRequestTimeout({})).toBe(30000);
+		expect(adminRequest.getApiRequestTimeout(null)).toBe(30000);
+		expect(adminRequest.getApiRequestTimeout(undefined)).toBe(30000);
+	});
+});

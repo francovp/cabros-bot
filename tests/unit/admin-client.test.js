@@ -446,7 +446,7 @@ describe('admin browser client', () => {
 		await form.dispatch('submit');
 		await flush();
 
-		expect([...browser.timerDelays.values()]).toContain(900000);
+		expect([...browser.timerDelays.values()]).toContain(990000);
 		for (const fireTimer of browser.timers.values()) fireTimer();
 		await flush();
 		expect(signals[0].aborted).toBe(true);
@@ -454,7 +454,7 @@ describe('admin browser client', () => {
 		await selectView(browser, 'analysis');
 		await findForm(browser.elementsById.view, 'POST /api/news-monitor').dispatch('submit');
 		await flush();
-		expect([...browser.timerDelays.values()]).toContain(900000);
+		expect([...browser.timerDelays.values()]).toContain(990000);
 		for (const fireTimer of browser.timers.values()) fireTimer();
 		await flush();
 		expect(signals[1].aborted).toBe(true);
@@ -462,7 +462,7 @@ describe('admin browser client', () => {
 		await selectView(browser, 'presets');
 		await findForm(browser.elementsById.view, 'POST /api/scanner-presets/{id}/run').dispatch('submit');
 		await flush();
-		expect([...browser.timerDelays.values()]).toContain(900000);
+		expect([...browser.timerDelays.values()]).toContain(990000);
 		for (const fireTimer of browser.timers.values()) fireTimer();
 		await flush();
 		expect(signals[2].aborted).toBe(true);
@@ -470,10 +470,69 @@ describe('admin browser client', () => {
 		await selectView(browser, 'analysis');
 		await findForm(browser.elementsById.view, 'POST /api/webhook/volume-confirmation').dispatch('submit');
 		await flush();
-		expect([...browser.timerDelays.values()]).toContain(360000);
+		expect([...browser.timerDelays.values()]).toContain(390000);
 		for (const fireTimer of browser.timers.values()) fireTimer();
 		await flush();
 		expect(signals[3].aborted).toBe(true);
+	});
+
+	it('does not abort slow responses that resolve within the maximum budget for volume-confirmation and alerts', async () => {
+		let volumeResolver;
+		let alertResolver;
+		const browser = createBrowser({
+			fetchImpl: (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.includes('/api/webhook/volume-confirmation')) {
+					return new Promise((resolve) => {
+						volumeResolver = resolve;
+					});
+				}
+				if (url.includes('/api/webhook/alert')) {
+					return new Promise((resolve) => {
+						alertResolver = resolve;
+					});
+				}
+				return response({});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+
+		// Volume confirmation slow response within budget
+		await selectView(browser, 'analysis');
+		const volumeForm = findForm(browser.elementsById.view, 'POST /api/webhook/volume-confirmation');
+		await volumeForm.dispatch('submit');
+		await flush();
+
+		expect([...browser.timerDelays.values()]).toContain(390000);
+		expect(browser.timers.size).toBe(1);
+
+		// Resolve slow valid response before deadline
+		volumeResolver(response({ success: true, volumeConfirmed: true }));
+		await flush();
+
+		expect(browser.timers.size).toBe(0);
+		expect(volumeForm.textContent).toContain('volumeConfirmed');
+
+		// Webhook alert slow response within budget via Playground
+		await selectView(browser, 'playground');
+		const playground = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
+			&& node.textContent.includes('Playground'));
+		const select = find(playground, (node) => node.tagName === 'SELECT');
+		select.value = select.children.find((option) => option.textContent.includes('POST /api/webhook/alert')).value;
+		await select.dispatch('change');
+		await playground.dispatch('submit');
+		await flush();
+
+		expect([...browser.timerDelays.values()]).toContain(990000);
+		expect(browser.timers.size).toBe(1);
+
+		// Resolve slow valid response before deadline
+		alertResolver(response({ success: true, messageId: '12345' }));
+		await flush();
+
+		expect(browser.timers.size).toBe(0);
+		expect(playground.textContent).toContain('12345');
 	});
 
 	it('shows Firebase sign-in state and sends a verified token after sign-in', async () => {
