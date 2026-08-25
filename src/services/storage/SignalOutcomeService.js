@@ -302,11 +302,12 @@ async function recordSignalInternal({
 				if (timerId) clearTimeout(timerId);
 			}
 
-			if (entryPrice === null && entryPriceReason !== 'binance_invalid_symbol') {
+			if (entryPrice === null && entryPriceReason !== 'binance_invalid_symbol' && geminiPriceService.isGeminiGroundingEnabled({ requireGroundingFlag: true })) {
 				try {
 					const geminiResult = await geminiPriceService.fetchGeminiPrice(normSymbolInfo.symbol, {
 						timeoutMs: 5000,
 						tokenUsage,
+						requireGroundingFlag: true,
 					});
 					if (geminiResult && typeof geminiResult.price === 'number' && Number.isFinite(geminiResult.price) && geminiResult.price > 0) {
 						entryPrice = geminiResult.price;

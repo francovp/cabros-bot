@@ -16,15 +16,24 @@ function isGeminiQuotaError(error) {
 	return geminiQuotaManager.isQuotaError(error);
 }
 
-function isGeminiGroundingEnabled() {
+function isGeminiGroundingEnabled(options = {}) {
 	if (config.ENABLE_NEWS_MONITOR_TEST_MODE || process.env.ENABLE_NEWS_MONITOR_TEST_MODE === 'true') {
 		return true;
 	}
-	try {
-		return Boolean(getRuntimeConfig().ENABLE_GEMINI_GROUNDING);
-	} catch {
-		return process.env.ENABLE_GEMINI_GROUNDING === 'true';
+	const isGrounding = (() => {
+		try {
+			return Boolean(getRuntimeConfig().ENABLE_GEMINI_GROUNDING);
+		} catch {
+			return process.env.ENABLE_GEMINI_GROUNDING === 'true';
+		}
+	})();
+
+	if (options.requireGroundingFlag) {
+		return isGrounding;
 	}
+
+	const isNewsMonitor = process.env.ENABLE_NEWS_MONITOR === 'true';
+	return isGrounding || isNewsMonitor;
 }
 
 /**
@@ -67,6 +76,7 @@ function extractPriceJson(text) {
  * @param {object} [options.tokenUsage] - TokenUsageTracker instance
  * @param {AbortSignal} [options.signal] - Optional abort signal
  * @param {boolean} [options.rethrowQuotaErrors=false] - Whether to rethrow quota errors
+ * @param {boolean} [options.requireGroundingFlag=false] - Whether to strictly require ENABLE_GEMINI_GROUNDING
  * @returns {Promise<{ price: number, change24h: number|null, source: string, timestamp: number, context: string, sources: string[] }|null>}
  */
 async function fetchGeminiPrice(symbol, options = {}) {
@@ -82,7 +92,7 @@ async function fetchGeminiPrice(symbol, options = {}) {
 		};
 	}
 
-	if (!isGeminiGroundingEnabled()) {
+	if (!isGeminiGroundingEnabled(options)) {
 		return null;
 	}
 
@@ -119,23 +129,37 @@ async function fetchGeminiPrice(symbol, options = {}) {
 		}, timeoutMs);
 	}
 
+	const abortPromise = new Promise((_, reject) => {
+		if (controller.signal.aborted) {
+			reject(controller.signal.reason || new Error(`Gemini price fetch timeout (${timeoutMs}ms)`));
+		} else {
+			controller.signal.addEventListener('abort', () => {
+				reject(controller.signal.reason || new Error(`Gemini price fetch timeout (${timeoutMs}ms)`));
+			}, { once: true });
+		}
+	});
+
 	try {
 		const promptService = getPromptService();
-		const { text: priceQuery } = await promptService.getTextPrompt(
+		const promptPromise = promptService.getTextPrompt(
 			PromptKeys.MARKET_PRICE_FETCH,
 			{ symbol: cleanSymbol },
 		);
 
-		if (controller.signal.aborted) {
-			throw controller.signal.reason || new Error(`Gemini price fetch timeout (${timeoutMs}ms)`);
-		}
+		const { text: priceQuery } = await Promise.race([
+			promptPromise,
+			abortPromise,
+		]);
 
-		const priceSearchResult = await genaiClient.search({
-			query: priceQuery,
-			maxResults: 3,
-			rethrowQuotaErrors: true,
-			signal: controller.signal,
-		});
+		const priceSearchResult = await Promise.race([
+			genaiClient.search({
+				query: priceQuery,
+				maxResults: 3,
+				rethrowQuotaErrors: true,
+				signal: controller.signal,
+			}),
+			abortPromise,
+		]);
 
 		if (tokenUsage && priceSearchResult && priceSearchResult.usage) {
 			tokenUsage.addUsage(priceSearchResult.usage, GROUNDING_MODEL_NAME);

@@ -49,12 +49,49 @@ describe('GeminiPriceService', () => {
 	});
 
 	describe('fetchGeminiPrice', () => {
-		it('returns null when ENABLE_GEMINI_GROUNDING is false and test mode is disabled', async () => {
+		it('returns null when ENABLE_GEMINI_GROUNDING is false and requireGroundingFlag is true', async () => {
 			process.env.ENABLE_GEMINI_GROUNDING = 'false';
+			process.env.ENABLE_NEWS_MONITOR = 'true';
+			config.ENABLE_NEWS_MONITOR_TEST_MODE = false;
+			const res = await geminiPriceService.fetchGeminiPrice('BTCUSDT', { requireGroundingFlag: true });
+			expect(res).toBeNull();
+			expect(genaiClient.search).not.toHaveBeenCalled();
+		});
+
+		it('allows price fetch when ENABLE_NEWS_MONITOR is true even if ENABLE_GEMINI_GROUNDING is false', async () => {
+			process.env.ENABLE_GEMINI_GROUNDING = 'false';
+			process.env.ENABLE_NEWS_MONITOR = 'true';
+			config.ENABLE_NEWS_MONITOR_TEST_MODE = false;
+			genaiClient.search.mockResolvedValue({
+				searchResultText: '{"price": 50000, "change_24h": 1.0}',
+			});
+
+			const res = await geminiPriceService.fetchGeminiPrice('BTCUSDT');
+			expect(res).not.toBeNull();
+			expect(res.price).toBe(50000);
+		});
+
+		it('returns null when both ENABLE_GEMINI_GROUNDING and ENABLE_NEWS_MONITOR are false', async () => {
+			process.env.ENABLE_GEMINI_GROUNDING = 'false';
+			process.env.ENABLE_NEWS_MONITOR = 'false';
 			config.ENABLE_NEWS_MONITOR_TEST_MODE = false;
 			const res = await geminiPriceService.fetchGeminiPrice('BTCUSDT');
 			expect(res).toBeNull();
 			expect(genaiClient.search).not.toHaveBeenCalled();
+		});
+
+		it('returns null when prompt resolution hangs beyond timeoutMs', async () => {
+			const promptService = getPromptService();
+			let testTimer = null;
+			const spy = jest.spyOn(promptService, 'getTextPrompt').mockImplementation(() => new Promise((resolve) => {
+				testTimer = setTimeout(resolve, 500);
+			}));
+
+			const res = await geminiPriceService.fetchGeminiPrice('BTCUSDT', { timeoutMs: 10 });
+			expect(res).toBeNull();
+			expect(genaiClient.search).not.toHaveBeenCalled();
+			if (testTimer) clearTimeout(testTimer);
+			spy.mockRestore();
 		});
 
 		it('returns null for empty or UNKNOWN symbol', async () => {
