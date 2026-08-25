@@ -156,18 +156,18 @@ function postMarketScannerAlert(botOrGetter) {
 								item.support_resistance?.resistance_1,
 							]);
 
-							const validPrice = typeof closePrice === 'number' && Number.isFinite(closePrice) ? closePrice : null;
+							const validPrice = typeof closePrice === 'number' && Number.isFinite(closePrice) && closePrice > 0 ? closePrice : null;
 							let stopLoss = null;
 							let takeProfit = null;
 							if (validPrice !== null) {
 								const riskLevels = getRiskLevelsForSide({
 									side: itemSide,
 									price: validPrice,
-									atr: Number.isFinite(atr) ? atr : null,
-									bbLower: Number.isFinite(bbLower) ? bbLower : null,
-									bbUpper: Number.isFinite(bbUpper) ? bbUpper : null,
-									support: Number.isFinite(support) ? support : null,
-									resistance: Number.isFinite(resistance) ? resistance : null,
+									atr: typeof atr === 'number' && Number.isFinite(atr) && atr > 0 ? atr : null,
+									bbLower: typeof bbLower === 'number' && Number.isFinite(bbLower) && bbLower > 0 ? bbLower : null,
+									bbUpper: typeof bbUpper === 'number' && Number.isFinite(bbUpper) && bbUpper > 0 ? bbUpper : null,
+									support: typeof support === 'number' && Number.isFinite(support) && support > 0 ? support : null,
+									resistance: typeof resistance === 'number' && Number.isFinite(resistance) && resistance > 0 ? resistance : null,
 								});
 								stopLoss = riskLevels.stopLoss;
 								takeProfit = riskLevels.takeProfit;

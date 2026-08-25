@@ -343,6 +343,46 @@ describe('Market Scanner Alert endpoint', () => {
 		signalOutcomeService.isEnabled.mockRestore();
 	});
 
+	it('persists stop: null and target: null without setting entry price barriers when risk indicators are zero or missing', async () => {
+		const signalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
+		const recordedCalls = [];
+		const recordSignalSpy = jest.spyOn(signalOutcomeService, 'recordSignal').mockImplementation(async (params) => {
+			recordedCalls.push(params);
+			return {};
+		});
+		jest.spyOn(signalOutcomeService, 'isEnabled').mockReturnValue(true);
+
+		tradingViewMcpService.callScanTool.mockImplementation(async (scanType) => {
+			if (scanType === 'top_gainers') {
+				return [
+					{
+						symbol: 'BINANCE:ZEROATR',
+						changePercent: 5.0,
+						indicators: { close: 100, atr: 0, support: 0, resistance: 0 },
+					},
+				];
+			}
+			return [];
+		});
+
+		const res = await request(app)
+			.post('/api/webhook/market-scanner-alert')
+			.set('x-api-key', 'test-key')
+			.send({ scans: ['top_gainers'], timeframe: '4h', exchange: 'BINANCE' })
+			.expect(200);
+
+		expect(res.body.success).toBe(true);
+		expect(recordedCalls).toHaveLength(1);
+		const recorded = recordedCalls[0];
+		expect(recorded.symbol).toBe('BINANCE:ZEROATR');
+		expect(recorded.price).toBe(100);
+		expect(recorded.stop).toBeNull();
+		expect(recorded.target).toBeNull();
+
+		recordSignalSpy.mockRestore();
+		signalOutcomeService.isEnabled.mockRestore();
+	});
+
 	it('returns 502 when all scanner calls fail', async () => {
 		tradingViewMcpService.callScanTool.mockRejectedValue(new Error('Connection failure'));
 
