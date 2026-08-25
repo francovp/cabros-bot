@@ -1190,6 +1190,8 @@ async function getMetricsSummary({ from, to, limit } = {}) {
 				let hits = 0;
 				let targetHits = 0;
 				let stopHits = 0;
+				let targetEligibleWindows = 0;
+				let stopEligibleWindows = 0;
 				let totalReturn = 0;
 				let totalMfe = 0;
 				let totalMae = 0;
@@ -1203,6 +1205,15 @@ async function getMetricsSummary({ from, to, limit } = {}) {
 						totalWinsEvaluated++;
 						if (outcome.return > 0) {
 							hits++;
+						}
+						// Barrier eligibility mirrors the evaluator criterion: finite number > 0
+						const hasTargetBarrier = typeof signal.target === 'number' && Number.isFinite(signal.target) && signal.target > 0;
+						const hasStopBarrier = typeof signal.stop === 'number' && Number.isFinite(signal.stop) && signal.stop > 0;
+						if (hasTargetBarrier) {
+							targetEligibleWindows++;
+						}
+						if (hasStopBarrier) {
+							stopEligibleWindows++;
 						}
 						if (outcome.targetHit === true || outcome.firstHit === 'target') {
 							targetHits++;
@@ -1227,8 +1238,14 @@ async function getMetricsSummary({ from, to, limit } = {}) {
 					windowStats[winKey] = {
 						totalSignals: totalWinsEvaluated,
 						hitRatePercent: parseFloat(((hits / totalWinsEvaluated) * 100).toFixed(2)),
-						targetHitRatePercent: parseFloat(((targetHits / totalWinsEvaluated) * 100).toFixed(2)),
-						stopHitRatePercent: parseFloat(((stopHits / totalWinsEvaluated) * 100).toFixed(2)),
+						targetEligibleWindows,
+						stopEligibleWindows,
+						targetHitRatePercent: targetEligibleWindows > 0
+							? parseFloat(((targetHits / targetEligibleWindows) * 100).toFixed(2))
+							: 0,
+						stopHitRatePercent: stopEligibleWindows > 0
+							? parseFloat(((stopHits / stopEligibleWindows) * 100).toFixed(2))
+							: 0,
 						expectancyR: rCount > 0 ? parseFloat((totalR / rCount).toFixed(4)) : null,
 						averageReturnPercent: parseFloat((totalReturn / totalWinsEvaluated).toFixed(4)),
 						averageMfePercent: parseFloat((totalMfe / totalWinsEvaluated).toFixed(4)),
@@ -1308,13 +1325,23 @@ async function getMetricsSummary({ from, to, limit } = {}) {
 		let allTargetHits = 0;
 		let allStopHits = 0;
 		let allEvaluatedWindows = 0;
+		let allTargetEligible = 0;
+		let allStopEligible = 0;
 		let allTotalR = 0;
 		let allRCount = 0;
 
 		for (const signal of evaluatedSignals) {
+			const hasTargetBarrier = typeof signal.target === 'number' && Number.isFinite(signal.target) && signal.target > 0;
+			const hasStopBarrier = typeof signal.stop === 'number' && Number.isFinite(signal.stop) && signal.stop > 0;
 			for (const outcome of Object.values(signal.outcomes || {})) {
 				if (outcome && outcome.status === 'evaluated') {
 					allEvaluatedWindows++;
+					if (hasTargetBarrier) {
+						allTargetEligible++;
+					}
+					if (hasStopBarrier) {
+						allStopEligible++;
+					}
 					if (outcome.targetHit === true || outcome.firstHit === 'target') {
 						allTargetHits++;
 					}
@@ -1329,11 +1356,11 @@ async function getMetricsSummary({ from, to, limit } = {}) {
 			}
 		}
 
-		const overallTargetHitRatePercent = allEvaluatedWindows > 0
-			? parseFloat(((allTargetHits / allEvaluatedWindows) * 100).toFixed(2))
+		const overallTargetHitRatePercent = allTargetEligible > 0
+			? parseFloat(((allTargetHits / allTargetEligible) * 100).toFixed(2))
 			: 0;
-		const overallStopHitRatePercent = allEvaluatedWindows > 0
-			? parseFloat(((allStopHits / allEvaluatedWindows) * 100).toFixed(2))
+		const overallStopHitRatePercent = allStopEligible > 0
+			? parseFloat(((allStopHits / allStopEligible) * 100).toFixed(2))
 			: 0;
 		const overallExpectancyR = allRCount > 0
 			? parseFloat((allTotalR / allRCount).toFixed(4))
