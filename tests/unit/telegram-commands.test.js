@@ -307,11 +307,12 @@ describe('Telegram TradingView commands', () => {
 		it('reports when no evaluated outcomes exist for the symbol', async () => {
 			signalOutcomeService.isEnabled.mockReturnValue(true);
 			signalOutcomeService.listOutcomes.mockResolvedValue({ outcomes: [], hasMore: false, nextBefore: null });
-			const context = buildContext('/outcomes BINANCE:BTCUSDT');
+			const context = buildContext('/outcomes NYSE:BRK.B');
 
 			await outcomesCommand(context);
 
-			expect(context.reply.mock.calls[0][0]).toContain('Sin resultados evaluados');
+			expect(context.reply.mock.calls[0][0]).toContain('Sin resultados evaluados para BRK\\.B todavía');
+			expect(context.reply.mock.calls[0][1]).toEqual({ parse_mode: 'MarkdownV2' });
 		});
 
 		it('replies with an explicit message when signal outcome tracking is disabled', async () => {
@@ -425,14 +426,22 @@ describe('Telegram TradingView commands', () => {
 
 			const context3 = buildContext('/outcomes NYSE:BRK.B');
 			await outcomesCommand(context3);
-				expect(signalOutcomeService.listOutcomes).toHaveBeenCalledWith(
-					expect.objectContaining({ symbol: 'BRK.B', exchange: 'NYSE' }),
-				);
+			expect(signalOutcomeService.listOutcomes).toHaveBeenCalledWith(
+				expect.objectContaining({ symbol: 'BRK.B', exchange: 'NYSE' }),
+			);
+			expect(context3.reply).toHaveBeenCalledWith(
+				expect.stringContaining('BRK\\.B'),
+				{ parse_mode: 'MarkdownV2' },
+			);
 
 			const context4 = buildContext('/outcomes BRK.B');
 			await outcomesCommand(context4);
 			expect(signalOutcomeService.listOutcomes).toHaveBeenCalledWith(
 				expect.objectContaining({ symbol: 'BRK.B', exchange: undefined }),
+			);
+			expect(context4.reply).toHaveBeenCalledWith(
+				expect.stringContaining('BRK\\.B'),
+				{ parse_mode: 'MarkdownV2' },
 			);
 		});
 

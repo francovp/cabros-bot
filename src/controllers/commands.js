@@ -259,7 +259,7 @@ const outcomesCommand = async (context) => {
 		const outcomes = Array.isArray(result && result.outcomes) ? result.outcomes : [];
 		if (outcomes.length === 0) {
 			await context.reply(
-				`Sin resultados evaluados para ${parsed.symbol} todavía — vuelve a intentarlo cuando se evalúen más señales`,
+				`Sin resultados evaluados para ${escapeOutcomeText(parsed.symbol)} todavía — vuelve a intentarlo cuando se evalúen más señales`,
 				{ parse_mode: 'MarkdownV2' },
 			);
 			return;
