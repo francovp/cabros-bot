@@ -1793,6 +1793,165 @@ describe('SignalOutcomeService', () => {
 		});
 	});
 
+	describe('summarizeOutcomes()', () => {
+		it('throws STORAGE_UNAVAILABLE when Firestore is unavailable', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			const origGetFirestore = AlertStorageService.getFirestore;
+			AlertStorageService.getFirestore = () => null;
+
+			try {
+				await expect(SignalOutcomeService.summarizeOutcomes())
+					.rejects.toMatchObject({
+						code: 'STORAGE_UNAVAILABLE',
+					});
+			} finally {
+				AlertStorageService.getFirestore = origGetFirestore;
+			}
+		});
+
+		it('returns typed empty summary object when snapshot is empty', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			const res = await SignalOutcomeService.summarizeOutcomes();
+			expect(res).toEqual({
+				available: false,
+				totalSignalsReceived: 0,
+				totalSignalsEligible: 0,
+				totalSignalsEvaluated: 0,
+				totalSignalsPending: 0,
+				totalSignalsUnavailable: 0,
+				coveragePercent: 0,
+				isCoverageComplete: true,
+				targetHitRatePercent: 0,
+				stopHitRatePercent: 0,
+				expectancyR: null,
+				populationNote: 'No outcome measurements found for the requested criteria.',
+				exchangeBreakdown: {},
+				providerBreakdown: {},
+				entryPriceSourceBreakdown: {},
+				eligibilityBreakdown: {},
+				windows: {},
+				drawdownProxy: {
+					averageMaxAdverseExcursionPercent: 0,
+					absoluteMaxAdverseExcursionPercent: 0,
+				},
+				falsePositiveCandidatesCount: 0,
+				falsePositiveCandidates: [],
+				latencyCostMetadata: {
+					averageProcessingTimeMs: null,
+					tokenUsage: {
+						inputTokens: 0,
+						outputTokens: 0,
+						totalCost: 0,
+					},
+				},
+			});
+		});
+
+		it('returns typed empty summary object when filters match no documents', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, new Map([
+				['doc-1', {
+					receivedAt: admin.firestore.Timestamp.fromDate(new Date()),
+					requestId: 'req-1',
+					source: 'alert',
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					side: 'BUY',
+					price: 50000,
+					outcomeEvaluated: true,
+					outcomes: {
+						'1h': { status: 'evaluated', return: 2.0, maxFavorableExcursion: 2.0, maxAdverseExcursion: -0.5 },
+					},
+				}],
+			]));
+
+			const res = await SignalOutcomeService.summarizeOutcomes({ symbol: 'SOLUSDT' });
+			expect(res.available).toBe(false);
+			expect(res.totalSignalsReceived).toBe(0);
+		});
+
+		it('filters outcomes by symbol, exchange, status, window, and date range', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			const now = new Date();
+			const map = new Map([
+				['doc-btc', {
+					receivedAt: admin.firestore.Timestamp.fromDate(now),
+					requestId: 'req-btc',
+					source: 'news-monitor',
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					side: 'BUY',
+					price: 50000,
+					target: 52000,
+					stop: 49000,
+					score: 0.8,
+					outcomeEvaluated: true,
+					outcomes: {
+						'1h': {
+							status: 'evaluated',
+							return: 2.5,
+							targetHit: true,
+							stopHit: false,
+							rMultiple: 2.0,
+							maxFavorableExcursion: 4.0,
+							maxAdverseExcursion: -0.5,
+						},
+					},
+					tokenUsage: { inputTokens: 200, outputTokens: 100, totalCost: 0.0001 },
+					processingTimeMs: 250,
+				}],
+				['doc-eth', {
+					receivedAt: admin.firestore.Timestamp.fromDate(now),
+					requestId: 'req-eth',
+					source: 'news-monitor',
+					symbol: 'ETHUSDT',
+					exchange: 'BINANCE',
+					side: 'SELL',
+					price: 3000,
+					outcomeEvaluated: true,
+					outcomes: {
+						'1h': {
+							status: 'evaluated',
+							return: -1.5,
+							targetHit: false,
+							stopHit: true,
+							rMultiple: -1.0,
+							maxFavorableExcursion: 0.2,
+							maxAdverseExcursion: -2.0,
+						},
+					},
+				}],
+			]);
+
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, map);
+
+			// Filter by symbol
+			const btcRes = await SignalOutcomeService.summarizeOutcomes({ symbol: 'BINANCE:BTCUSDT' });
+			expect(btcRes.available).toBe(true);
+			expect(btcRes.totalSignalsReceived).toBe(1);
+			expect(btcRes.totalSignalsEvaluated).toBe(1);
+			expect(btcRes.windows['1h'].hitRatePercent).toBe(100);
+			expect(btcRes.windows['1h'].targetHitRatePercent).toBe(100);
+			expect(btcRes.windows['1h'].expectancyR).toBe(2);
+			expect(btcRes.latencyCostMetadata.averageProcessingTimeMs).toBe(250);
+			expect(btcRes.latencyCostMetadata.tokenUsage.totalCost).toBe(0.0001);
+
+			// Summary over all
+			const allRes = await SignalOutcomeService.summarizeOutcomes();
+			expect(allRes.available).toBe(true);
+			expect(allRes.totalSignalsReceived).toBe(2);
+			expect(allRes.totalSignalsEvaluated).toBe(2);
+			expect(allRes.windows['1h'].totalSignals).toBe(2);
+			expect(allRes.windows['1h'].hitRatePercent).toBe(50);
+		});
+	});
+
 	describe('worker lifecycle and scheduling', () => {
 		afterEach(() => {
 			SignalOutcomeService.stopWorker();

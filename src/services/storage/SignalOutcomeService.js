@@ -1080,326 +1080,385 @@ function createCoverageBucket() {
 	};
 }
 
+function createEmptyMetricsSummary() {
+	return {
+		available: false,
+		totalSignalsReceived: 0,
+		totalSignalsEligible: 0,
+		totalSignalsEvaluated: 0,
+		totalSignalsPending: 0,
+		totalSignalsUnavailable: 0,
+		coveragePercent: 0,
+		isCoverageComplete: true,
+		targetHitRatePercent: 0,
+		stopHitRatePercent: 0,
+		expectancyR: null,
+		populationNote: 'No outcome measurements found for the requested criteria.',
+		exchangeBreakdown: {},
+		providerBreakdown: {},
+		entryPriceSourceBreakdown: {},
+		eligibilityBreakdown: {},
+		windows: {},
+		drawdownProxy: {
+			averageMaxAdverseExcursionPercent: 0,
+			absoluteMaxAdverseExcursionPercent: 0,
+		},
+		falsePositiveCandidatesCount: 0,
+		falsePositiveCandidates: [],
+		latencyCostMetadata: {
+			averageProcessingTimeMs: null,
+			tokenUsage: {
+				inputTokens: 0,
+				outputTokens: 0,
+				totalCost: 0,
+			},
+		},
+	};
+}
+
 /**
  * Compute aggregated metrics.
  */
-async function getMetricsSummary({ from, to, limit } = {}) {
-	if (!isEnabled()) {
-		return 'No measurements found';
-	}
-
+async function summarizeOutcomes({ from, to, limit, symbol, exchange, status, window } = {}) {
 	const firestore = AlertStorageService.getFirestore();
 	if (!firestore) {
-		return 'No measurements found';
+		throw createStorageUnavailableError();
 	}
 
+	let snapshot;
 	try {
 		const parsedFrom = from ? new Date(from) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 		const parsedTo = to ? new Date(to) : new Date();
 
-		const snapshot = await firestore
+		snapshot = await firestore
 			.collection(COLLECTION_NAME)
 			.where('receivedAt', '>=', admin.firestore.Timestamp.fromDate(parsedFrom))
 			.where('receivedAt', '<=', admin.firestore.Timestamp.fromDate(parsedTo))
 			.limit(limit || 1000)
 			.get();
+	} catch (error) {
+		throw createStorageUnavailableError(error);
+	}
 
-		if (snapshot.empty) {
-			return 'No measurements found';
-		}
+	if (snapshot.empty) {
+		return createEmptyMetricsSummary();
+	}
 
-		const docs = snapshot.docs.map(doc => doc.data());
+	let docs = snapshot.docs.map(doc => ({
+		...doc.data(),
+		id: doc.id,
+		receivedAt: getDocTimestamp(doc.data()),
+	}));
 
-		let totalSignalsReceived = docs.length;
-		let totalSignalsEligible = 0;
-		let totalSignalsEvaluated = 0;
-		let totalSignalsPending = 0;
-		let totalSignalsUnavailable = 0;
+	if (symbol || exchange || status || window) {
+		docs = docs.filter(doc => matchesOutcomeFilters(doc, { symbol, exchange, status, window, from, to }));
+	}
 
-		const exchangeBreakdown = {};
-		const providerBreakdown = {};
-		const entryPriceSourceBreakdown = {};
-		const eligibilityBreakdown = {};
+	if (docs.length === 0) {
+		return createEmptyMetricsSummary();
+	}
 
-		const evaluatedSignals = [];
+	let totalSignalsReceived = docs.length;
+	let totalSignalsEligible = 0;
+	let totalSignalsEvaluated = 0;
+	let totalSignalsPending = 0;
+	let totalSignalsUnavailable = 0;
 
-		for (const doc of docs) {
-			const exchange = doc.exchange || 'UNKNOWN';
-			const symbol = doc.symbol || 'UNKNOWN';
-			const marketDataProvider = doc.marketDataProvider || (exchange === 'BINANCE' ? 'binance' : 'none');
-			const entryPriceSource = doc.entryPriceSource || (doc.price !== null && doc.price !== undefined ? (doc.marketDataProvider || 'unknown') : 'none');
+	const exchangeBreakdown = {};
+	const providerBreakdown = {};
+	const entryPriceSourceBreakdown = {};
+	const eligibilityBreakdown = {};
 
-			let eligibilityState = doc.eligibilityState;
-			if (!eligibilityState) {
-				if (symbol === 'UNKNOWN' || exchange === 'UNKNOWN') {
-					eligibilityState = 'unparseable_symbol';
-				} else if (exchange !== 'BINANCE' && !equityMarketDataService.isSupportedExchange(exchange)) {
-					eligibilityState = 'unsupported_exchange';
-				} else if (doc.price === null || doc.price === undefined) {
-					eligibilityState = 'missing_entry_price';
-				} else {
-					eligibilityState = 'supported_provider';
-				}
-			}
+	const evaluatedSignals = [];
 
-			const isEligible = eligibilityState === 'supported_provider';
-			if (isEligible) {
-				totalSignalsEligible++;
-			}
+	for (const doc of docs) {
+		const docExchange = doc.exchange || 'UNKNOWN';
+		const docSymbol = doc.symbol || 'UNKNOWN';
+		const marketDataProvider = doc.marketDataProvider || (docExchange === 'BINANCE' ? 'binance' : 'none');
+		const entryPriceSource = doc.entryPriceSource || (doc.price !== null && doc.price !== undefined ? (doc.marketDataProvider || 'unknown') : 'none');
 
-			eligibilityBreakdown[eligibilityState] = (eligibilityBreakdown[eligibilityState] || 0) + 1;
-			entryPriceSourceBreakdown[entryPriceSource] = (entryPriceSourceBreakdown[entryPriceSource] || 0) + 1;
-
-			if (!exchangeBreakdown[exchange]) {
-				exchangeBreakdown[exchange] = createCoverageBucket();
-			}
-			if (!providerBreakdown[marketDataProvider]) {
-				providerBreakdown[marketDataProvider] = createCoverageBucket();
-			}
-			exchangeBreakdown[exchange].received++;
-			providerBreakdown[marketDataProvider].received++;
-			if (isEligible) {
-				exchangeBreakdown[exchange].eligible++;
-				providerBreakdown[marketDataProvider].eligible++;
-			}
-
-			const outcomesValues = doc.outcomes ? Object.values(doc.outcomes) : [];
-			const hasEvaluated = outcomesValues.some(o => o.status === 'evaluated');
-			const hasPending = doc.outcomeEvaluated === false && outcomesValues.some(o => o.status === 'pending');
-
-			if (hasEvaluated) {
-				totalSignalsEvaluated++;
-				exchangeBreakdown[exchange].evaluated++;
-				providerBreakdown[marketDataProvider].evaluated++;
-				evaluatedSignals.push(doc);
-			} else if (hasPending) {
-				totalSignalsPending++;
-				exchangeBreakdown[exchange].pending++;
-				providerBreakdown[marketDataProvider].pending++;
+		let eligibilityState = doc.eligibilityState;
+		if (!eligibilityState) {
+			if (docSymbol === 'UNKNOWN' || docExchange === 'UNKNOWN') {
+				eligibilityState = 'unparseable_symbol';
+			} else if (docExchange !== 'BINANCE' && !equityMarketDataService.isSupportedExchange(docExchange)) {
+				eligibilityState = 'unsupported_exchange';
+			} else if (doc.price === null || doc.price === undefined) {
+				eligibilityState = 'missing_entry_price';
 			} else {
-				totalSignalsUnavailable++;
-				exchangeBreakdown[exchange].unavailable++;
-				providerBreakdown[marketDataProvider].unavailable++;
+				eligibilityState = 'supported_provider';
 			}
 		}
 
-		const windowStats = {};
-		if (evaluatedSignals.length > 0) {
-			for (const winKey of Object.keys(WINDOW_CONFIGS)) {
-				let totalWinsEvaluated = 0;
-				let hits = 0;
-				let targetHits = 0;
-				let stopHits = 0;
-				let targetEligibleWindows = 0;
-				let stopEligibleWindows = 0;
-				let totalReturn = 0;
-				let totalMfe = 0;
-				let totalMae = 0;
-				let maxMae = 0; // absolute maximum drawdown seen
-				let totalR = 0;
-				let rCount = 0;
-
-				for (const signal of evaluatedSignals) {
-					const outcome = signal.outcomes[winKey];
-					if (outcome && outcome.status === 'evaluated') {
-						totalWinsEvaluated++;
-						if (outcome.return > 0) {
-							hits++;
-						}
-						// Barrier eligibility mirrors the evaluator criterion: finite number > 0
-						const hasTargetBarrier = typeof signal.target === 'number' && Number.isFinite(signal.target) && signal.target > 0;
-						const hasStopBarrier = typeof signal.stop === 'number' && Number.isFinite(signal.stop) && signal.stop > 0;
-						if (hasTargetBarrier) {
-							targetEligibleWindows++;
-						}
-						if (hasStopBarrier) {
-							stopEligibleWindows++;
-						}
-						if (outcome.targetHit === true || outcome.firstHit === 'target') {
-							targetHits++;
-						}
-						if (outcome.stopHit === true || outcome.firstHit === 'stop') {
-							stopHits++;
-						}
-						if (typeof outcome.rMultiple === 'number' && Number.isFinite(outcome.rMultiple)) {
-							totalR += outcome.rMultiple;
-							rCount++;
-						}
-						totalReturn += outcome.return;
-						totalMfe += outcome.maxFavorableExcursion;
-						totalMae += outcome.maxAdverseExcursion;
-						if (outcome.maxAdverseExcursion < maxMae) {
-							maxMae = outcome.maxAdverseExcursion;
-						}
-					}
-				}
-
-				if (totalWinsEvaluated > 0) {
-					windowStats[winKey] = {
-						totalSignals: totalWinsEvaluated,
-						hitRatePercent: parseFloat(((hits / totalWinsEvaluated) * 100).toFixed(2)),
-						targetEligibleWindows,
-						stopEligibleWindows,
-						targetHitRatePercent: targetEligibleWindows > 0
-							? parseFloat(((targetHits / targetEligibleWindows) * 100).toFixed(2))
-							: 0,
-						stopHitRatePercent: stopEligibleWindows > 0
-							? parseFloat(((stopHits / stopEligibleWindows) * 100).toFixed(2))
-							: 0,
-						expectancyR: rCount > 0 ? parseFloat((totalR / rCount).toFixed(4)) : null,
-						averageReturnPercent: parseFloat((totalReturn / totalWinsEvaluated).toFixed(4)),
-						averageMfePercent: parseFloat((totalMfe / totalWinsEvaluated).toFixed(4)),
-						averageMaePercent: parseFloat((totalMae / totalWinsEvaluated).toFixed(4)),
-						maxAdverseExcursionPercent: parseFloat(maxMae.toFixed(4)), // drawdown proxy
-					};
-				}
-			}
+		const isEligible = eligibilityState === 'supported_provider';
+		if (isEligible) {
+			totalSignalsEligible++;
 		}
 
-		// Drawdown proxy across all evaluated windows
-		let totalAllMae = 0;
-		let maeCount = 0;
-		let absoluteMaxMae = 0;
-		let totalTokenCost = 0;
-		let totalInputTokens = 0;
-		let totalOutputTokens = 0;
-		let totalProcessingTime = 0;
-		let processingTimeCount = 0;
+		eligibilityBreakdown[eligibilityState] = (eligibilityBreakdown[eligibilityState] || 0) + 1;
+		entryPriceSourceBreakdown[entryPriceSource] = (entryPriceSourceBreakdown[entryPriceSource] || 0) + 1;
 
-		const falsePositiveCandidates = [];
-
-		for (const signal of evaluatedSignals) {
-			if (signal.tokenUsage) {
-				totalTokenCost += signal.tokenUsage.totalCost || 0;
-				totalInputTokens += signal.tokenUsage.inputTokens || signal.tokenUsage.promptTokens || 0;
-				totalOutputTokens += signal.tokenUsage.outputTokens || signal.tokenUsage.completionTokens || 0;
-			}
-			if (typeof signal.processingTimeMs === 'number') {
-				totalProcessingTime += signal.processingTimeMs;
-				processingTimeCount++;
-			}
-
-			// Gather excursions for drawdown proxy and detect false positive candidates
-			let worstMae = 0;
-			let bestReturn = -Infinity;
-			let resolvedReturn = null;
-
-			for (const outcome of Object.values(signal.outcomes)) {
-				if (outcome.status === 'evaluated') {
-					if (outcome.maxAdverseExcursion < worstMae) {
-						worstMae = outcome.maxAdverseExcursion;
-					}
-					if (outcome.return > bestReturn) {
-						bestReturn = outcome.return;
-					}
-					resolvedReturn = outcome.return; // last resolved window return
-				}
-			}
-
-			totalAllMae += worstMae;
-			maeCount++;
-			if (worstMae < absoluteMaxMae) {
-				absoluteMaxMae = worstMae;
-			}
-
-			// False positive candidate: high confidence/score but poor performance (e.g. return < -2% or worstMae < -5%)
-			const isHighConfidence = (Math.abs(signal.score) >= 0.75 || (signal.source === 'news-monitor' && Math.abs(signal.score) >= 0.7));
-			if (isHighConfidence && (resolvedReturn < -1 || worstMae < -3)) {
-				falsePositiveCandidates.push({
-					symbol: signal.symbol,
-					source: signal.source,
-					side: signal.side,
-					score: signal.score,
-					price: signal.price,
-					worstReturn: resolvedReturn,
-					worstMae,
-				});
-			}
+		if (!exchangeBreakdown[docExchange]) {
+			exchangeBreakdown[docExchange] = createCoverageBucket();
+		}
+		if (!providerBreakdown[marketDataProvider]) {
+			providerBreakdown[marketDataProvider] = createCoverageBucket();
+		}
+		exchangeBreakdown[docExchange].received++;
+		providerBreakdown[marketDataProvider].received++;
+		if (isEligible) {
+			exchangeBreakdown[docExchange].eligible++;
+			providerBreakdown[marketDataProvider].eligible++;
 		}
 
-		const averageWorstMae = maeCount > 0 ? parseFloat((totalAllMae / maeCount).toFixed(4)) : 0;
-		const averageProcessingTimeMs = processingTimeCount > 0 ? Math.round(totalProcessingTime / processingTimeCount) : null;
-		const coveragePercent = totalSignalsReceived > 0 ? parseFloat(((totalSignalsEvaluated / totalSignalsReceived) * 100).toFixed(2)) : 0;
-		const isCoverageComplete = totalSignalsEvaluated === totalSignalsReceived;
+		const outcomesValues = doc.outcomes ? Object.values(doc.outcomes) : [];
+		const hasEvaluated = outcomesValues.some(o => o.status === 'evaluated');
+		const hasPending = doc.outcomeEvaluated === false && outcomesValues.some(o => o.status === 'pending');
 
-		let allTargetHits = 0;
-		let allStopHits = 0;
-		let allEvaluatedWindows = 0;
-		let allTargetEligible = 0;
-		let allStopEligible = 0;
-		let allTotalR = 0;
-		let allRCount = 0;
+		if (hasEvaluated) {
+			totalSignalsEvaluated++;
+			exchangeBreakdown[docExchange].evaluated++;
+			providerBreakdown[marketDataProvider].evaluated++;
+			evaluatedSignals.push(doc);
+		} else if (hasPending) {
+			totalSignalsPending++;
+			exchangeBreakdown[docExchange].pending++;
+			providerBreakdown[marketDataProvider].pending++;
+		} else {
+			totalSignalsUnavailable++;
+			exchangeBreakdown[docExchange].unavailable++;
+			providerBreakdown[marketDataProvider].unavailable++;
+		}
+	}
 
-		for (const signal of evaluatedSignals) {
-			const hasTargetBarrier = typeof signal.target === 'number' && Number.isFinite(signal.target) && signal.target > 0;
-			const hasStopBarrier = typeof signal.stop === 'number' && Number.isFinite(signal.stop) && signal.stop > 0;
-			for (const outcome of Object.values(signal.outcomes || {})) {
+	const windowStats = {};
+	if (evaluatedSignals.length > 0) {
+		for (const winKey of Object.keys(WINDOW_CONFIGS)) {
+			let totalWinsEvaluated = 0;
+			let hits = 0;
+			let targetHits = 0;
+			let stopHits = 0;
+			let targetEligibleWindows = 0;
+			let stopEligibleWindows = 0;
+			let totalReturn = 0;
+			let totalMfe = 0;
+			let totalMae = 0;
+			let maxMae = 0;
+			let totalR = 0;
+			let rCount = 0;
+
+			for (const signal of evaluatedSignals) {
+				const outcome = signal.outcomes ? signal.outcomes[winKey] : null;
 				if (outcome && outcome.status === 'evaluated') {
-					allEvaluatedWindows++;
+					totalWinsEvaluated++;
+					if (outcome.return > 0) {
+						hits++;
+					}
+					const hasTargetBarrier = typeof signal.target === 'number' && Number.isFinite(signal.target) && signal.target > 0;
+					const hasStopBarrier = typeof signal.stop === 'number' && Number.isFinite(signal.stop) && signal.stop > 0;
 					if (hasTargetBarrier) {
-						allTargetEligible++;
+						targetEligibleWindows++;
 					}
 					if (hasStopBarrier) {
-						allStopEligible++;
+						stopEligibleWindows++;
 					}
 					if (outcome.targetHit === true || outcome.firstHit === 'target') {
-						allTargetHits++;
+						targetHits++;
 					}
 					if (outcome.stopHit === true || outcome.firstHit === 'stop') {
-						allStopHits++;
+						stopHits++;
 					}
 					if (typeof outcome.rMultiple === 'number' && Number.isFinite(outcome.rMultiple)) {
-						allTotalR += outcome.rMultiple;
-						allRCount++;
+						totalR += outcome.rMultiple;
+						rCount++;
+					}
+					totalReturn += outcome.return;
+					totalMfe += outcome.maxFavorableExcursion;
+					totalMae += outcome.maxAdverseExcursion;
+					if (outcome.maxAdverseExcursion < maxMae) {
+						maxMae = outcome.maxAdverseExcursion;
 					}
 				}
 			}
+
+			if (totalWinsEvaluated > 0) {
+				windowStats[winKey] = {
+					totalSignals: totalWinsEvaluated,
+					hitRatePercent: parseFloat(((hits / totalWinsEvaluated) * 100).toFixed(2)),
+					targetEligibleWindows,
+					stopEligibleWindows,
+					targetHitRatePercent: targetEligibleWindows > 0
+						? parseFloat(((targetHits / targetEligibleWindows) * 100).toFixed(2))
+						: 0,
+					stopHitRatePercent: stopEligibleWindows > 0
+						? parseFloat(((stopHits / stopEligibleWindows) * 100).toFixed(2))
+						: 0,
+					expectancyR: rCount > 0 ? parseFloat((totalR / rCount).toFixed(4)) : null,
+					averageReturnPercent: parseFloat((totalReturn / totalWinsEvaluated).toFixed(4)),
+					averageMfePercent: parseFloat((totalMfe / totalWinsEvaluated).toFixed(4)),
+					averageMaePercent: parseFloat((totalMae / totalWinsEvaluated).toFixed(4)),
+					maxAdverseExcursionPercent: parseFloat(maxMae.toFixed(4)),
+				};
+			}
+		}
+	}
+
+	let totalAllMae = 0;
+	let maeCount = 0;
+	let absoluteMaxMae = 0;
+	let totalTokenCost = 0;
+	let totalInputTokens = 0;
+	let totalOutputTokens = 0;
+	let totalProcessingTime = 0;
+	let processingTimeCount = 0;
+
+	const falsePositiveCandidates = [];
+
+	for (const signal of evaluatedSignals) {
+		if (signal.tokenUsage) {
+			totalTokenCost += signal.tokenUsage.totalCost || 0;
+			totalInputTokens += signal.tokenUsage.inputTokens || signal.tokenUsage.promptTokens || 0;
+			totalOutputTokens += signal.tokenUsage.outputTokens || signal.tokenUsage.completionTokens || 0;
+		}
+		if (typeof signal.processingTimeMs === 'number') {
+			totalProcessingTime += signal.processingTimeMs;
+			processingTimeCount++;
 		}
 
-		const overallTargetHitRatePercent = allTargetEligible > 0
-			? parseFloat(((allTargetHits / allTargetEligible) * 100).toFixed(2))
-			: 0;
-		const overallStopHitRatePercent = allStopEligible > 0
-			? parseFloat(((allStopHits / allStopEligible) * 100).toFixed(2))
-			: 0;
-		const overallExpectancyR = allRCount > 0
-			? parseFloat((allTotalR / allRCount).toFixed(4))
-			: null;
+		let worstMae = 0;
+		let bestReturn = -Infinity;
+		let resolvedReturn = null;
 
-		return {
-			totalSignalsReceived,
-			totalSignalsEligible,
-			totalSignalsEvaluated,
-			totalSignalsPending,
-			totalSignalsUnavailable,
-			coveragePercent,
-			isCoverageComplete,
-			targetHitRatePercent: overallTargetHitRatePercent,
-			stopHitRatePercent: overallStopHitRatePercent,
-			expectancyR: overallExpectancyR,
-			populationNote: !isCoverageComplete
-				? `Metrics represent ${totalSignalsEvaluated} evaluated signals out of ${totalSignalsReceived} total received signals (${coveragePercent}% coverage).`
-				: 'Metrics represent 100% of received signals.',
-			exchangeBreakdown,
-			providerBreakdown,
-			entryPriceSourceBreakdown,
-			eligibilityBreakdown,
-			windows: windowStats,
-			drawdownProxy: {
-				averageMaxAdverseExcursionPercent: averageWorstMae,
-				absoluteMaxAdverseExcursionPercent: parseFloat(absoluteMaxMae.toFixed(4)),
+		for (const outcome of Object.values(signal.outcomes || {})) {
+			if (outcome && outcome.status === 'evaluated') {
+				if (outcome.maxAdverseExcursion < worstMae) {
+					worstMae = outcome.maxAdverseExcursion;
+				}
+				if (outcome.return > bestReturn) {
+					bestReturn = outcome.return;
+				}
+				resolvedReturn = outcome.return;
+			}
+		}
+
+		totalAllMae += worstMae;
+		maeCount++;
+		if (worstMae < absoluteMaxMae) {
+			absoluteMaxMae = worstMae;
+		}
+
+		const isHighConfidence = (Math.abs(signal.score) >= 0.75 || (signal.source === 'news-monitor' && Math.abs(signal.score) >= 0.7));
+		if (isHighConfidence && (resolvedReturn < -1 || worstMae < -3)) {
+			falsePositiveCandidates.push({
+				symbol: signal.symbol,
+				source: signal.source,
+				side: signal.side,
+				score: signal.score,
+				price: signal.price,
+				worstReturn: resolvedReturn,
+				worstMae,
+			});
+		}
+	}
+
+	const averageWorstMae = maeCount > 0 ? parseFloat((totalAllMae / maeCount).toFixed(4)) : 0;
+	const averageProcessingTimeMs = processingTimeCount > 0 ? Math.round(totalProcessingTime / processingTimeCount) : null;
+	const coveragePercent = totalSignalsReceived > 0 ? parseFloat(((totalSignalsEvaluated / totalSignalsReceived) * 100).toFixed(2)) : 0;
+	const isCoverageComplete = totalSignalsEvaluated === totalSignalsReceived;
+
+	let allTargetHits = 0;
+	let allStopHits = 0;
+	let allEvaluatedWindows = 0;
+	let allTargetEligible = 0;
+	let allStopEligible = 0;
+	let allTotalR = 0;
+	let allRCount = 0;
+
+	for (const signal of evaluatedSignals) {
+		const hasTargetBarrier = typeof signal.target === 'number' && Number.isFinite(signal.target) && signal.target > 0;
+		const hasStopBarrier = typeof signal.stop === 'number' && Number.isFinite(signal.stop) && signal.stop > 0;
+		for (const outcome of Object.values(signal.outcomes || {})) {
+			if (outcome && outcome.status === 'evaluated') {
+				allEvaluatedWindows++;
+				if (hasTargetBarrier) {
+					allTargetEligible++;
+				}
+				if (hasStopBarrier) {
+					allStopEligible++;
+				}
+				if (outcome.targetHit === true || outcome.firstHit === 'target') {
+					allTargetHits++;
+				}
+				if (outcome.stopHit === true || outcome.firstHit === 'stop') {
+					allStopHits++;
+				}
+				if (typeof outcome.rMultiple === 'number' && Number.isFinite(outcome.rMultiple)) {
+					allTotalR += outcome.rMultiple;
+					allRCount++;
+				}
+			}
+		}
+	}
+
+	const overallTargetHitRatePercent = allTargetEligible > 0
+		? parseFloat(((allTargetHits / allTargetEligible) * 100).toFixed(2))
+		: 0;
+	const overallStopHitRatePercent = allStopEligible > 0
+		? parseFloat(((allStopHits / allStopEligible) * 100).toFixed(2))
+		: 0;
+	const overallExpectancyR = allRCount > 0
+		? parseFloat((allTotalR / allRCount).toFixed(4))
+		: null;
+
+	return {
+		available: true,
+		totalSignalsReceived,
+		totalSignalsEligible,
+		totalSignalsEvaluated,
+		totalSignalsPending,
+		totalSignalsUnavailable,
+		coveragePercent,
+		isCoverageComplete,
+		targetHitRatePercent: overallTargetHitRatePercent,
+		stopHitRatePercent: overallStopHitRatePercent,
+		expectancyR: overallExpectancyR,
+		populationNote: !isCoverageComplete
+			? `Metrics represent ${totalSignalsEvaluated} evaluated signals out of ${totalSignalsReceived} total received signals (${coveragePercent}% coverage).`
+			: 'Metrics represent 100% of received signals.',
+		exchangeBreakdown,
+		providerBreakdown,
+		entryPriceSourceBreakdown,
+		eligibilityBreakdown,
+		windows: windowStats,
+		drawdownProxy: {
+			averageMaxAdverseExcursionPercent: averageWorstMae,
+			absoluteMaxAdverseExcursionPercent: parseFloat(absoluteMaxMae.toFixed(4)),
+		},
+		falsePositiveCandidatesCount: falsePositiveCandidates.length,
+		falsePositiveCandidates: falsePositiveCandidates.slice(0, 5),
+		latencyCostMetadata: {
+			averageProcessingTimeMs,
+			tokenUsage: {
+				inputTokens: totalInputTokens,
+				outputTokens: totalOutputTokens,
+				totalCost: parseFloat(totalTokenCost.toFixed(6)),
 			},
-			falsePositiveCandidatesCount: falsePositiveCandidates.length,
-			falsePositiveCandidates: falsePositiveCandidates.slice(0, 5), // top 5 examples
-			latencyCostMetadata: {
-				averageProcessingTimeMs,
-				tokenUsage: {
-					inputTokens: totalInputTokens,
-					outputTokens: totalOutputTokens,
-					totalCost: parseFloat(totalTokenCost.toFixed(6)),
-				},
-			},
-		};
+		},
+	};
+}
+
+async function getMetricsSummary({ from, to, limit } = {}) {
+	if (!isEnabled()) {
+		return 'No measurements found';
+	}
+
+	try {
+		const summary = await summarizeOutcomes({ from, to, limit });
+		if (!summary || !summary.available || summary.totalSignalsReceived === 0) {
+			return 'No measurements found';
+		}
+		const { available, ...rest } = summary;
+		return rest;
 	} catch (error) {
 		console.warn('[SignalOutcomeService] Failed to compute metrics summary:', error.message);
 		return 'No measurements found';
@@ -1666,6 +1725,7 @@ module.exports = {
 	recordSignal,
 	evaluatePendingOutcomes,
 	getMetricsSummary,
+	summarizeOutcomes,
 	listOutcomes,
 	normalizeSide,
 	normalizeSymbolAndExchange,

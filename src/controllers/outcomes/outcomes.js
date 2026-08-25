@@ -161,6 +161,81 @@ function listOutcomes(req, res) {
 	});
 }
 
+function summarizeOutcomes(req, res) {
+	return handleAsync(req, res, '/api/outcomes/summary', async () => {
+		if (!signalOutcomeService.isEnabled()) {
+			return res.status(403).json({
+				error: 'Signal outcome tracking feature is disabled. Set ENABLE_SIGNAL_OUTCOME_TRACKING=true to enable.',
+				code: 'FEATURE_DISABLED',
+			});
+		}
+
+		const limit = parseLimit(req.query.limit);
+		if (limit === null) {
+			return res.status(400).json({
+				error: `Invalid limit. Use an integer between 1 and ${MAX_LIMIT}.`,
+				code: 'INVALID_REQUEST',
+			});
+		}
+
+		const status = parseStatus(req.query.status);
+		if (status === null) {
+			return res.status(400).json({
+				error: 'Invalid status filter. Use pending, evaluated, or unavailable.',
+				code: 'INVALID_REQUEST',
+			});
+		}
+
+		const window = parseWindow(req.query.window);
+		if (window === null) {
+			return res.status(400).json({
+				error: 'Invalid window filter. Use 1h, 4h, 1D, or 1W.',
+				code: 'INVALID_REQUEST',
+			});
+		}
+
+		const from = parseOptionalTimestamp(req.query.from, 'from');
+		if (from.error) {
+			return res.status(400).json(from.error);
+		}
+
+		const to = parseOptionalTimestamp(req.query.to, 'to');
+		if (to.error) {
+			return res.status(400).json(to.error);
+		}
+
+		if (from.value && to.value && new Date(from.value) > new Date(to.value)) {
+			return res.status(400).json({
+				error: 'Invalid time window. from must be before or equal to to.',
+				code: 'INVALID_REQUEST',
+			});
+		}
+
+		const symbol = typeof req.query.symbol === 'string' && req.query.symbol.trim()
+			? req.query.symbol.trim()
+			: undefined;
+
+		const exchange = typeof req.query.exchange === 'string' && req.query.exchange.trim()
+			? req.query.exchange.trim()
+			: undefined;
+
+		const summary = await signalOutcomeService.summarizeOutcomes({
+			limit,
+			symbol,
+			exchange,
+			status,
+			window,
+			from: from.value,
+			to: to.value,
+		});
+
+		return res.status(200).json({
+			success: true,
+			summary,
+		});
+	});
+}
+
 function handleAsync(req, res, endpoint, handler) {
 	return Promise.resolve(handler()).catch((error) => {
 		console.error('[OutcomesController] Request failed:', error.message);
@@ -200,6 +275,7 @@ function handleAsync(req, res, endpoint, handler) {
 
 module.exports = {
 	listOutcomes,
+	summarizeOutcomes,
 	parseLimit,
 	parseStatus,
 	parseWindow,
