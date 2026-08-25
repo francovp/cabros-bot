@@ -571,29 +571,6 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 					} finally {
 						if (timerId) clearTimeout(timerId);
 					}
-
-					if (!resolvedPrice) {
-						const remainingAfterBinance = effectiveMaxDurationMs - (Date.now() - startTime);
-						const isStructural = entryPriceError && entryPriceError.message && (
-							entryPriceError.message.includes('400')
-							|| entryPriceError.message.includes('Invalid symbol')
-							|| entryPriceError.message.includes('UNKNOWN_SYMBOL')
-						);
-						if (remainingAfterBinance > 0 && !isStructural) {
-							try {
-								const tertiaryPrice = await geminiPriceService.fetchGeminiPrice(data.symbol, {
-									timeoutMs: Math.min(5000, remainingAfterBinance),
-								});
-								if (tertiaryPrice && typeof tertiaryPrice.price === 'number' && Number.isFinite(tertiaryPrice.price) && tertiaryPrice.price > 0) {
-									resolvedPrice = tertiaryPrice.price;
-									resolvedPriceSource = 'gemini-grounding';
-									entryPriceError = null;
-								}
-							} catch (geminiErr) {
-								console.warn('[SignalOutcomeService] Sweep failed to fetch tertiary entry price from Gemini:', geminiErr.message);
-							}
-						}
-					}
 				} else {
 					try {
 						const bars = await equityMarketDataService.getHistoricalBars({

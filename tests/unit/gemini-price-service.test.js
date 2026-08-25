@@ -8,13 +8,21 @@ const { getPromptService, PromptKeys } = require('../../src/services/prompts');
 jest.mock('../../src/services/grounding/genaiClient');
 
 describe('GeminiPriceService', () => {
+	const originalGroundingEnv = process.env.ENABLE_GEMINI_GROUNDING;
+
 	beforeEach(() => {
 		jest.clearAllMocks();
 		config.ENABLE_NEWS_MONITOR_TEST_MODE = false;
+		process.env.ENABLE_GEMINI_GROUNDING = 'true';
 	});
 
 	afterEach(() => {
 		config.ENABLE_NEWS_MONITOR_TEST_MODE = false;
+		if (originalGroundingEnv !== undefined) {
+			process.env.ENABLE_GEMINI_GROUNDING = originalGroundingEnv;
+		} else {
+			delete process.env.ENABLE_GEMINI_GROUNDING;
+		}
 	});
 
 	describe('extractPriceJson', () => {
@@ -41,6 +49,14 @@ describe('GeminiPriceService', () => {
 	});
 
 	describe('fetchGeminiPrice', () => {
+		it('returns null when ENABLE_GEMINI_GROUNDING is false and test mode is disabled', async () => {
+			process.env.ENABLE_GEMINI_GROUNDING = 'false';
+			config.ENABLE_NEWS_MONITOR_TEST_MODE = false;
+			const res = await geminiPriceService.fetchGeminiPrice('BTCUSDT');
+			expect(res).toBeNull();
+			expect(genaiClient.search).not.toHaveBeenCalled();
+		});
+
 		it('returns null for empty or UNKNOWN symbol', async () => {
 			expect(await geminiPriceService.fetchGeminiPrice('')).toBeNull();
 			expect(await geminiPriceService.fetchGeminiPrice(null)).toBeNull();
@@ -48,7 +64,8 @@ describe('GeminiPriceService', () => {
 			expect(genaiClient.search).not.toHaveBeenCalled();
 		});
 
-		it('returns mock data when test mode is enabled', async () => {
+		it('returns mock data when test mode is enabled regardless of grounding gate', async () => {
+			process.env.ENABLE_GEMINI_GROUNDING = 'false';
 			config.ENABLE_NEWS_MONITOR_TEST_MODE = true;
 			const res = await geminiPriceService.fetchGeminiPrice('BTCUSDT');
 			expect(res).toEqual(expect.objectContaining({

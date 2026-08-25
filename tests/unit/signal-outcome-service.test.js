@@ -31,10 +31,12 @@ jest.mock('binance', () => {
 
 // Mock geminiPriceService
 const mockFetchGeminiPrice = jest.fn();
+const mockIsGeminiGroundingEnabled = jest.fn(() => true);
 jest.mock('../../src/services/grounding/geminiPriceService', () => ({
 	fetchGeminiPrice: (...args) => mockFetchGeminiPrice(...args),
 	extractPriceJson: jest.fn(),
 	isGeminiQuotaError: jest.fn(() => false),
+	isGeminiGroundingEnabled: () => mockIsGeminiGroundingEnabled(),
 }));
 
 describe('SignalOutcomeService', () => {
@@ -1195,48 +1197,6 @@ describe('SignalOutcomeService', () => {
 			expect(updated.outcomes['1h'].return).toBe(2);
 		});
 
-		it('backfills missing entry price during sweep from tertiary Gemini source when Binance fails', async () => {
-			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
-			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
-
-			const receivedAtDate = new Date(Date.now() - 2 * 60 * 60 * 1000);
-			const mockDocId = 'test-backfill-gemini-entry';
-			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, new Map([
-				[mockDocId, {
-					receivedAt: admin.firestore.Timestamp.fromDate(receivedAtDate),
-					requestId: 'req-backfill-gemini',
-					source: 'news-monitor',
-					symbol: 'BTCUSDT',
-					exchange: 'BINANCE',
-					side: 'BUY',
-					price: null,
-					eligibilityState: 'pending_entry_price',
-					outcomeEvaluated: false,
-					outcomes: {
-						'1h': {
-							status: 'pending',
-							targetTime: new Date(receivedAtDate.getTime() + 1 * 60 * 60 * 1000).toISOString(),
-						},
-					},
-				}],
-			]));
-
-			mockGetKlines.mockRejectedValue(new Error('Binance 451: Restricted location'));
-			mockGetAvgPrice.mockRejectedValue(new Error('Binance 451: Restricted location'));
-			mockFetchGeminiPrice.mockResolvedValue({
-				price: 68750.50,
-				source: 'gemini-grounding',
-			});
-
-			await SignalOutcomeService.evaluatePendingOutcomes();
-
-			const updated = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(mockDocId);
-			expect(updated).toBeDefined();
-			expect(updated.price).toBe(68750.50);
-			expect(updated.entryPriceSource).toBe('gemini-grounding');
-			expect(updated.eligibilityState).toBe('supported_provider');
-			expect(mockFetchGeminiPrice).toHaveBeenCalledWith('BTCUSDT', expect.any(Object));
-		});
 
 		it('enforces sweep max duration budget on slow or hanging getKlines requests', async () => {
 			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';

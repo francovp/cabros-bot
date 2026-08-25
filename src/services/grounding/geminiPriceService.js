@@ -4,9 +4,9 @@ const config = require('./config');
 const genaiClient = require('./genaiClient');
 const geminiQuotaManager = require('./geminiQuotaManager');
 const { getPromptService, PromptKeys } = require('../prompts');
+const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 
 const {
-	ENABLE_NEWS_MONITOR_TEST_MODE,
 	GROUNDING_MODEL_NAME,
 } = config;
 
@@ -14,6 +14,17 @@ const DEFAULT_PRICE_FETCH_TIMEOUT_MS = 10000;
 
 function isGeminiQuotaError(error) {
 	return geminiQuotaManager.isQuotaError(error);
+}
+
+function isGeminiGroundingEnabled() {
+	if (config.ENABLE_NEWS_MONITOR_TEST_MODE || process.env.ENABLE_NEWS_MONITOR_TEST_MODE === 'true') {
+		return true;
+	}
+	try {
+		return Boolean(getRuntimeConfig().ENABLE_GEMINI_GROUNDING);
+	} catch {
+		return process.env.ENABLE_GEMINI_GROUNDING === 'true';
+	}
 }
 
 /**
@@ -71,6 +82,10 @@ async function fetchGeminiPrice(symbol, options = {}) {
 		};
 	}
 
+	if (!isGeminiGroundingEnabled()) {
+		return null;
+	}
+
 	if (!symbol || typeof symbol !== 'string' || symbol.trim() === '' || symbol.toUpperCase() === 'UNKNOWN') {
 		return null;
 	}
@@ -86,31 +101,41 @@ async function fetchGeminiPrice(symbol, options = {}) {
 		tokenUsage = options;
 	}
 
-	let timeoutHandle = null;
+	const controller = new AbortController();
+	let onParentAbort = null;
+	if (options.signal) {
+		if (options.signal.aborted) {
+			controller.abort(options.signal.reason);
+		} else {
+			onParentAbort = () => controller.abort(options.signal.reason);
+			options.signal.addEventListener('abort', onParentAbort, { once: true });
+		}
+	}
+
+	let timerId = null;
+	if (timeoutMs > 0) {
+		timerId = setTimeout(() => {
+			controller.abort(new Error(`Gemini price fetch timeout (${timeoutMs}ms)`));
+		}, timeoutMs);
+	}
 
 	try {
 		const promptService = getPromptService();
-		const timeoutPromise = new Promise((_, reject) => {
-			timeoutHandle = setTimeout(() => reject(new Error(`Gemini price fetch timeout (${timeoutMs}ms)`)), timeoutMs);
-		});
-
 		const { text: priceQuery } = await promptService.getTextPrompt(
 			PromptKeys.MARKET_PRICE_FETCH,
 			{ symbol: cleanSymbol },
 		);
 
-		const priceSearchPromise = genaiClient.search({
+		if (controller.signal.aborted) {
+			throw controller.signal.reason || new Error(`Gemini price fetch timeout (${timeoutMs}ms)`);
+		}
+
+		const priceSearchResult = await genaiClient.search({
 			query: priceQuery,
 			maxResults: 3,
 			rethrowQuotaErrors: true,
-			signal: options.signal,
+			signal: controller.signal,
 		});
-
-		const priceSearchResult = await Promise.race([priceSearchPromise, timeoutPromise]);
-		if (timeoutHandle) {
-			clearTimeout(timeoutHandle);
-			timeoutHandle = null;
-		}
 
 		if (tokenUsage && priceSearchResult && priceSearchResult.usage) {
 			tokenUsage.addUsage(priceSearchResult.usage, GROUNDING_MODEL_NAME);
@@ -147,15 +172,16 @@ async function fetchGeminiPrice(symbol, options = {}) {
 			sources: Array.isArray(parsedJson.sources) ? parsedJson.sources : [],
 		};
 	} catch (error) {
-		if (timeoutHandle) {
-			clearTimeout(timeoutHandle);
-			timeoutHandle = null;
-		}
 		if (options.rethrowQuotaErrors && isGeminiQuotaError(error)) {
 			throw error;
 		}
 		console.warn(`[geminiPriceService] Gemini price fetch failed for ${cleanSymbol}: ${error.message}`);
 		return null;
+	} finally {
+		if (timerId) clearTimeout(timerId);
+		if (options.signal && onParentAbort) {
+			options.signal.removeEventListener('abort', onParentAbort);
+		}
 	}
 }
 
@@ -163,5 +189,6 @@ module.exports = {
 	fetchGeminiPrice,
 	extractPriceJson,
 	isGeminiQuotaError,
+	isGeminiGroundingEnabled,
 	DEFAULT_PRICE_FETCH_TIMEOUT_MS,
 };
