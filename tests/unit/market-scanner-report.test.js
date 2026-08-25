@@ -2,6 +2,8 @@ const {
 	parseMarketScannerRequest,
 	buildMarketScannerReport,
 	MarketScannerRequestError,
+	pickLevel,
+	getRiskLevelsForSide,
 } = require('../../src/services/tradingview/marketScannerReport');
 
 describe('Market Scanner Report', () => {
@@ -935,6 +937,180 @@ describe('Market Scanner Report', () => {
 			expect(report).not.toContain('SOLUSDT\n  - *Stop Loss:*');
 			expect(report).toContain('2. ADAUSDT $0.500000 (+1.0%)');
 			expect(report).not.toContain('ADAUSDT\n  - *Stop Loss:*');
+		});
+
+		it('gracefully handles atr: 0 without producing invalid or zero-distance levels', () => {
+			const results = [
+				{
+					scan: 'top_gainers',
+					status: 'success',
+					items: [
+						{
+							symbol: 'BINANCE:ZEROATR',
+							changePercent: 3.0,
+							indicators: { close: 100, atr: 0 },
+						},
+					],
+				},
+			];
+
+			const report = buildMarketScannerReport(results, {
+				exchange: 'BINANCE',
+				timeframe: '4h',
+				now: mockDate,
+			});
+
+			expect(report).toContain('1. ZEROATR $100.00 (+3.0%)');
+			expect(report).not.toContain('ZEROATR\n  - *Stop Loss:*');
+		});
+	});
+
+	describe('pickLevel', () => {
+		it('returns the first positive numeric value and skips null, undefined, empty string, non-numeric, 0, and negative numbers', () => {
+			expect(pickLevel([null, undefined, '', 'N/A', 0, -5, 12.5, 20])).toBe(12.5);
+			expect(pickLevel([0, -10, null])).toBeNull();
+			expect(pickLevel([])).toBeNull();
+			expect(pickLevel(null)).toBeNull();
+			expect(pickLevel(['15.3'])).toBe(15.3);
+			expect(pickLevel(['0'])).toBeNull();
+		});
+	});
+
+	describe('getRiskLevelsForSide', () => {
+		describe('BUY / Long side', () => {
+			it('returns null stopLoss and takeProfit when atr is 0 or negative and no other levels exist', () => {
+				const levelsZeroAtr = getRiskLevelsForSide({
+					side: 'BUY',
+					price: 100,
+					atr: 0,
+					bbLower: null,
+					bbUpper: null,
+					support: null,
+					resistance: null,
+				});
+				expect(levelsZeroAtr.stopLoss).toBeNull();
+				expect(levelsZeroAtr.takeProfit).toBeNull();
+
+				const levelsNegAtr = getRiskLevelsForSide({
+					side: 'BUY',
+					price: 100,
+					atr: -2,
+					bbLower: null,
+					bbUpper: null,
+					support: null,
+					resistance: null,
+				});
+				expect(levelsNegAtr.stopLoss).toBeNull();
+				expect(levelsNegAtr.takeProfit).toBeNull();
+			});
+
+			it('calculates stop and target when atr is positive', () => {
+				const levels = getRiskLevelsForSide({
+					side: 'BUY',
+					price: 100,
+					atr: 2,
+					bbLower: null,
+					bbUpper: null,
+					support: null,
+					resistance: null,
+				});
+				expect(levels.stopLoss).toBe(97); // 100 - (2 * 1.5)
+				expect(levels.takeProfit).toBe(106); // 100 + (2 * 3)
+			});
+
+			it('rejects bbLower or support that is greater than or equal to entry price', () => {
+				const levels = getRiskLevelsForSide({
+					side: 'BUY',
+					price: 100,
+					atr: null,
+					bbLower: 105,
+					bbUpper: null,
+					support: 100,
+					resistance: null,
+				});
+				expect(levels.stopLoss).toBeNull();
+			});
+
+			it('rejects bbUpper or resistance that is less than or equal to entry price', () => {
+				const levels = getRiskLevelsForSide({
+					side: 'BUY',
+					price: 100,
+					atr: null,
+					bbLower: null,
+					bbUpper: 95,
+					support: null,
+					resistance: 100,
+				});
+				expect(levels.takeProfit).toBeNull();
+			});
+		});
+
+		describe('SELL / Short side', () => {
+			it('returns null stopLoss and takeProfit when atr is 0 or negative and no other levels exist', () => {
+				const levelsZeroAtr = getRiskLevelsForSide({
+					side: 'SELL',
+					price: 100,
+					atr: 0,
+					bbLower: null,
+					bbUpper: null,
+					support: null,
+					resistance: null,
+				});
+				expect(levelsZeroAtr.stopLoss).toBeNull();
+				expect(levelsZeroAtr.takeProfit).toBeNull();
+
+				const levelsNegAtr = getRiskLevelsForSide({
+					side: 'SELL',
+					price: 100,
+					atr: -4,
+					bbLower: null,
+					bbUpper: null,
+					support: null,
+					resistance: null,
+				});
+				expect(levelsNegAtr.stopLoss).toBeNull();
+				expect(levelsNegAtr.takeProfit).toBeNull();
+			});
+
+			it('calculates stop and target when atr is positive for short side', () => {
+				const levels = getRiskLevelsForSide({
+					side: 'SELL',
+					price: 100,
+					atr: 2,
+					bbLower: null,
+					bbUpper: null,
+					support: null,
+					resistance: null,
+				});
+				expect(levels.stopLoss).toBe(103); // 100 + (2 * 1.5)
+				expect(levels.takeProfit).toBe(94); // 100 - (2 * 3)
+			});
+
+			it('rejects bbUpper or resistance that is less than or equal to entry price for short side', () => {
+				const levels = getRiskLevelsForSide({
+					side: 'SELL',
+					price: 100,
+					atr: null,
+					bbLower: null,
+					bbUpper: 95,
+					support: null,
+					resistance: 100,
+				});
+				expect(levels.stopLoss).toBeNull();
+			});
+
+			it('rejects bbLower or support that is greater than or equal to entry price for short side', () => {
+				const levels = getRiskLevelsForSide({
+					side: 'SELL',
+					price: 100,
+					atr: null,
+					bbLower: 105,
+					bbUpper: null,
+					support: 100,
+					resistance: null,
+				});
+				expect(levels.takeProfit).toBeNull();
+			});
 		});
 	});
 });

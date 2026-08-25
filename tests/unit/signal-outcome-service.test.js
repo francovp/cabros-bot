@@ -850,6 +850,51 @@ describe('SignalOutcomeService', () => {
 			expect(updated.outcomes['1h'].firstHitTime).toBeNull();
 		});
 
+		it('does not trigger false barrier hits on candle crossing entry price when stop and target are null (incomplete market-scanner setup)', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			const receivedAtDate = new Date(Date.now() - 2 * 60 * 60 * 1000);
+			const mockDocId = 'test-null-risk-scanner';
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, new Map([
+				[mockDocId, {
+					receivedAt: admin.firestore.Timestamp.fromDate(receivedAtDate),
+					requestId: 'req-scanner-null-risk',
+					source: 'market-scanner',
+					symbol: 'SOLUSDT',
+					exchange: 'BINANCE',
+					side: 'BUY',
+					price: 100,
+					stop: null,
+					target: null,
+					outcomeEvaluated: false,
+					outcomes: {
+						'1h': {
+							status: 'pending',
+							targetTime: new Date(receivedAtDate.getTime() + 1 * 60 * 60 * 1000).toISOString(),
+						},
+					},
+				}],
+			]));
+
+			// Candle goes both below entry (98) and above entry (102)
+			mockGetKlines.mockResolvedValue([
+				[receivedAtDate.getTime(), '100', '102', '98', '101'],
+			]);
+
+			await SignalOutcomeService.evaluatePendingOutcomes();
+
+			const updated = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(mockDocId);
+			expect(updated).toBeDefined();
+			expect(updated.outcomes['1h'].status).toBe('evaluated');
+			expect(updated.outcomes['1h'].firstHit).toBeNull();
+			expect(updated.outcomes['1h'].stopHit).toBe(false);
+			expect(updated.outcomes['1h'].targetHit).toBe(false);
+			expect(updated.outcomes['1h'].price).toBe(101);
+			expect(updated.outcomes['1h'].return).toBe(1);
+			expect(updated.outcomes['1h'].rMultiple).toBeUndefined();
+		});
+
 		it('marks outcomes as unavailable for non-Binance symbols', async () => {
 			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';

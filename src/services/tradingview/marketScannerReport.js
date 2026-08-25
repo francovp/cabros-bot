@@ -484,25 +484,39 @@ function getLongRiskLevels({
 	support,
 	resistance,
 }) {
+	const validPrice = typeof price === 'number' && Number.isFinite(price) && price > 0 ? price : null;
+	if (validPrice === null) {
+		return { stopLoss: null, takeProfit: null };
+	}
+
+	const validAtr = typeof atr === 'number' && Number.isFinite(atr) && atr > 0 ? atr : null;
+	const validBbLower = typeof bbLower === 'number' && Number.isFinite(bbLower) && bbLower > 0 ? bbLower : null;
+	const validBbUpper = typeof bbUpper === 'number' && Number.isFinite(bbUpper) && bbUpper > 0 ? bbUpper : null;
+	const validSupport = typeof support === 'number' && Number.isFinite(support) && support > 0 ? support : null;
+	const validResistance = typeof resistance === 'number' && Number.isFinite(resistance) && resistance > 0 ? resistance : null;
+
 	let stopLoss = null;
-	if (atr !== null) {
-		stopLoss = price - (atr * 1.5);
-	} else if (bbLower !== null && bbLower < price) {
-		stopLoss = bbLower;
-	} else if (support !== null && support < price) {
-		stopLoss = support;
+	if (validAtr !== null) {
+		stopLoss = validPrice - (validAtr * 1.5);
+	} else if (validBbLower !== null && validBbLower < validPrice) {
+		stopLoss = validBbLower;
+	} else if (validSupport !== null && validSupport < validPrice) {
+		stopLoss = validSupport;
 	}
 
 	let takeProfit = null;
-	if (resistance !== null && resistance > price) {
-		takeProfit = resistance;
-	} else if (bbUpper !== null && bbUpper > price) {
-		takeProfit = bbUpper;
-	} else if (atr !== null) {
-		takeProfit = price + (atr * 3);
+	if (validResistance !== null && validResistance > validPrice) {
+		takeProfit = validResistance;
+	} else if (validBbUpper !== null && validBbUpper > validPrice) {
+		takeProfit = validBbUpper;
+	} else if (validAtr !== null) {
+		takeProfit = validPrice + (validAtr * 3);
 	}
 
-	return { stopLoss, takeProfit };
+	return {
+		stopLoss: typeof stopLoss === 'number' && Number.isFinite(stopLoss) && stopLoss > 0 && stopLoss < validPrice ? stopLoss : null,
+		takeProfit: typeof takeProfit === 'number' && Number.isFinite(takeProfit) && takeProfit > 0 && takeProfit > validPrice ? takeProfit : null,
+	};
 }
 
 function getShortRiskLevels({
@@ -513,25 +527,39 @@ function getShortRiskLevels({
 	support,
 	resistance,
 }) {
+	const validPrice = typeof price === 'number' && Number.isFinite(price) && price > 0 ? price : null;
+	if (validPrice === null) {
+		return { stopLoss: null, takeProfit: null };
+	}
+
+	const validAtr = typeof atr === 'number' && Number.isFinite(atr) && atr > 0 ? atr : null;
+	const validBbLower = typeof bbLower === 'number' && Number.isFinite(bbLower) && bbLower > 0 ? bbLower : null;
+	const validBbUpper = typeof bbUpper === 'number' && Number.isFinite(bbUpper) && bbUpper > 0 ? bbUpper : null;
+	const validSupport = typeof support === 'number' && Number.isFinite(support) && support > 0 ? support : null;
+	const validResistance = typeof resistance === 'number' && Number.isFinite(resistance) && resistance > 0 ? resistance : null;
+
 	let stopLoss = null;
-	if (atr !== null) {
-		stopLoss = price + (atr * 1.5);
-	} else if (bbUpper !== null && bbUpper > price) {
-		stopLoss = bbUpper;
-	} else if (resistance !== null && resistance > price) {
-		stopLoss = resistance;
+	if (validAtr !== null) {
+		stopLoss = validPrice + (validAtr * 1.5);
+	} else if (validBbUpper !== null && validBbUpper > validPrice) {
+		stopLoss = validBbUpper;
+	} else if (validResistance !== null && validResistance > validPrice) {
+		stopLoss = validResistance;
 	}
 
 	let takeProfit = null;
-	if (support !== null && support < price) {
-		takeProfit = support;
-	} else if (bbLower !== null && bbLower < price) {
-		takeProfit = bbLower;
-	} else if (atr !== null) {
-		takeProfit = price - (atr * 3);
+	if (validSupport !== null && validSupport < validPrice) {
+		takeProfit = validSupport;
+	} else if (validBbLower !== null && validBbLower < validPrice) {
+		takeProfit = validBbLower;
+	} else if (validAtr !== null) {
+		takeProfit = validPrice - (validAtr * 3);
 	}
 
-	return { stopLoss, takeProfit };
+	return {
+		stopLoss: typeof stopLoss === 'number' && Number.isFinite(stopLoss) && stopLoss > 0 && stopLoss > validPrice ? stopLoss : null,
+		takeProfit: typeof takeProfit === 'number' && Number.isFinite(takeProfit) && takeProfit > 0 && takeProfit < validPrice ? takeProfit : null,
+	};
 }
 
 function getBreakoutEmoji(breakoutType) {
@@ -615,12 +643,16 @@ function numberOrNull(value) {
 
 // Shared candidate-selection for optional numeric level fields. Skips
 // null/undefined/empty/nonnumeric candidates (including Number(null)=0
-// fabrications from explicit nulls and 'N/A' placeholders) so the report
-// renderer and the outcome-persistence path resolve identical levels.
+// fabrications from explicit nulls and 'N/A' placeholders) and non-positive
+// numbers (<= 0) so the report renderer and the outcome-persistence path
+// resolve identical positive levels.
 function pickLevel(candidates) {
+	if (!Array.isArray(candidates)) {
+		return null;
+	}
 	for (const candidate of candidates) {
 		const level = numberOrNull(candidate);
-		if (level !== null && candidate !== null && candidate !== undefined && candidate !== '') {
+		if (level !== null && level > 0 && candidate !== null && candidate !== undefined && candidate !== '') {
 			return level;
 		}
 	}
