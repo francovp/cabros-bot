@@ -9,6 +9,8 @@ const admin = require('firebase-admin');
 const alertStorageService = require('../../src/services/storage/AlertStorageService');
 const remoteConfigService = require('../../src/services/remoteConfig/RemoteConfigService');
 const { tradingViewMcpService } = require('../../src/services/tradingview/TradingViewMcpService');
+const geminiQuotaManager = require('../../src/services/grounding/geminiQuotaManager');
+const groundingMetrics = require('../../src/services/grounding/metrics');
 const { getRoutes } = require('../../src/routes');
 
 const testPrivateKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({
@@ -55,6 +57,8 @@ describe('Status endpoints', () => {
 		admin.__resetCollectionState();
 		alertStorageService._resetForTesting();
 		remoteConfigService._resetForTesting();
+		geminiQuotaManager.resetForTesting();
+		groundingMetrics.resetForTesting();
 		Object.keys(process.env).forEach((key) => {
 			delete process.env[key];
 		});
@@ -94,6 +98,8 @@ describe('Status endpoints', () => {
 
 	afterEach(() => {
 		remoteConfigService._resetForTesting();
+		geminiQuotaManager.resetForTesting();
+		groundingMetrics.resetForTesting();
 		tradingViewMcpService.runtimeStatus = savedTradingViewRuntimeStatus;
 		tradingViewMcpService.volumeRuntimeStatus = savedTradingViewVolumeRuntimeStatus;
 		restoreEnv(savedEnv);
@@ -129,6 +135,24 @@ describe('Status endpoints', () => {
 			configured: true,
 			ready: true,
 			status: 'ready',
+		});
+		expect(response.body.dependencies.geminiQuota).toEqual({
+			enabled: true,
+			configured: true,
+			ready: true,
+			status: 'ready',
+			cooldownActive: false,
+			remainingCooldownMs: 0,
+			lastTriggeredAt: null,
+			triggersTotal: 0,
+			braveFallbacksDuringCooldown: 0,
+			lastBraveFallbackAt: null,
+			metrics: {
+				totalRequests: 0,
+				successRequests: 0,
+				failureRequests: 0,
+				timeoutRequests: 0,
+			},
 		});
 		expect(response.body.dependencies.tradingViewMcp).toEqual({
 			enabled: true,
@@ -625,7 +649,79 @@ describe('Status endpoints', () => {
 			ready: false,
 			status: 'misconfigured',
 		});
+		expect(response.body.dependencies.geminiQuota).toEqual(expect.objectContaining({
+			enabled: true,
+			configured: false,
+			ready: false,
+			status: 'misconfigured',
+		}));
 	});
+
+	it('reports Gemini quota status as degraded when active cooldown is in effect', async () => {
+		const before = Date.now();
+		geminiQuotaManager.triggerQuotaCooldown({ status: 429, retryDelay: 5000 });
+		geminiQuotaManager.recordBraveFallbackDuringCooldown();
+		groundingMetrics.recordSuccess(100, 'ALERT_ENRICHMENT');
+		groundingMetrics.recordFailure('timeout', new Error('timeout'), 'ALERT_ENRICHMENT');
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.geminiQuota).toEqual({
+			enabled: true,
+			configured: true,
+			ready: false,
+			status: 'degraded',
+			cooldownActive: true,
+			remainingCooldownMs: expect.any(Number),
+			lastTriggeredAt: expect.any(String),
+			triggersTotal: 1,
+			braveFallbacksDuringCooldown: 1,
+			lastBraveFallbackAt: expect.any(String),
+			metrics: {
+				totalRequests: 2,
+				successRequests: 1,
+				failureRequests: 0,
+				timeoutRequests: 1,
+			},
+		});
+		expect(response.body.dependencies.geminiQuota.remainingCooldownMs).toBeGreaterThan(0);
+		expect(response.body.dependencies.geminiQuota.remainingCooldownMs).toBeLessThanOrEqual(5000);
+		const lastTriggeredTime = new Date(response.body.dependencies.geminiQuota.lastTriggeredAt).getTime();
+		expect(lastTriggeredTime).toBeGreaterThanOrEqual(before);
+	});
+
+	it('reports Gemini quota status as disabled when Gemini is disabled', async () => {
+		process.env.ENABLE_GEMINI_GROUNDING = 'false';
+		delete process.env.ENABLE_NEWS_MONITOR;
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.geminiQuota).toEqual({
+			enabled: false,
+			configured: true,
+			ready: false,
+			status: 'disabled',
+			cooldownActive: false,
+			remainingCooldownMs: 0,
+			lastTriggeredAt: null,
+			triggersTotal: 0,
+			braveFallbacksDuringCooldown: 0,
+			lastBraveFallbackAt: null,
+			metrics: {
+				totalRequests: 0,
+				successRequests: 0,
+				failureRequests: 0,
+				timeoutRequests: 0,
+			},
+		});
+	});
+
 
 	it('treats Gemini as enabled when news monitor depends on it', async () => {
 		process.env.ENABLE_GEMINI_GROUNDING = 'false';
