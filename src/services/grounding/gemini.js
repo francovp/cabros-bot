@@ -67,6 +67,46 @@ function parseOptionalSetupType(value) {
 	return SETUP_TYPES.has(normalized) ? normalized : undefined;
 }
 
+const MAX_TECHNICAL_LEVELS_PER_SIDE = 6;
+
+// Validates one raw level entry: finite numbers and non-empty strings are kept as-is,
+// everything else (objects, arrays, blanks, NaN) is dropped so no fabricated structure persists.
+function parseTechnicalLevelEntry(value) {
+	if (typeof value === 'number' && Number.isFinite(value)) {
+		return value;
+	}
+
+	if (typeof value === 'string') {
+		const trimmed = value.trim();
+		return trimmed ? trimmed : undefined;
+	}
+
+	return undefined;
+}
+
+// Re-introduced by GH-509 / CB-226: the alert-enrichment prompt asks the model for a
+// technical_levels object, but PR #34 stopped parsing it. Levels are only surfaced
+// downstream when TradingView MCP data is absent/failed (see alert handler merge),
+// and are provenance-tagged there so consumers can distinguish provider quality.
+function parseOptionalTechnicalLevels(value) {
+	if (!value || typeof value !== 'object' || Array.isArray(value)) {
+		return undefined;
+	}
+
+	const supports = Array.isArray(value.supports)
+		? value.supports.slice(0, MAX_TECHNICAL_LEVELS_PER_SIDE).map(parseTechnicalLevelEntry).filter(entry => entry !== undefined)
+		: [];
+	const resistances = Array.isArray(value.resistances)
+		? value.resistances.slice(0, MAX_TECHNICAL_LEVELS_PER_SIDE).map(parseTechnicalLevelEntry).filter(entry => entry !== undefined)
+		: [];
+
+	if (supports.length === 0 && resistances.length === 0) {
+		return undefined;
+	}
+
+	return { supports, resistances };
+}
+
 function getPromptProvenance(prompt) {
 	const name = typeof prompt?.name === 'string' && prompt.name.trim()
 		? prompt.name.trim()
@@ -733,10 +773,13 @@ function parseEnrichedAlertResponse(response) {
 			risk_reward_ratio: parseOptionalRiskValue(parsed.risk_reward_ratio),
 		};
 
+		const technicalLevels = parseOptionalTechnicalLevels(parsed.technical_levels);
+
 		return {
 			sentiment: parsed.sentiment,
 			sentiment_score: sentimentScore,
 			insights: Array.isArray(parsed.insights) ? parsed.insights : [],
+			...(technicalLevels ? { technical_levels: technicalLevels } : {}),
 			...Object.fromEntries(
 				Object.entries(optionalRiskMetadata).filter(([, value]) => value !== undefined),
 			),

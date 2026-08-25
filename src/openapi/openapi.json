@@ -4340,6 +4340,10 @@
                     ],
                     "description": "Sanitized TradingView MCP outcome for this alert."
                   },
+                  "levelsSource": {
+                    "type": "string",
+                    "description": "Provenance of technical_levels. Set to 'gemini-grounding' only when Gemini-parsed fallback levels are emitted because TradingView MCP data was absent or failed; omitted when MCP-derived levels win (GH-509 / CB-226)."
+                  },
                   "current_price": {
                     "type": [
                       "number",

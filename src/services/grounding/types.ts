@@ -43,6 +43,7 @@ export interface EnrichedAlert {
   insights: string[];
   promptProvenance?: PromptProvenance;
   technical_levels?: TechnicalLevels;
+  levelsSource?: string;
   invalidation_level?: string | number;
   target_level?: string | number;
   setup_type?: 'breakout' | 'mean_reversion' | 'trend_continuation' | 'reversal';

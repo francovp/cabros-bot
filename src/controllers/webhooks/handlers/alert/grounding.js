@@ -76,6 +76,44 @@ function selectRiskMetadata(gemini, mcp) {
 	};
 }
 
+// GH-509 / CB-226: MCP levels win whenever MCP enrichment produced data (full or
+// partial). Gemini-parsed levels are a fail-open fallback for the common outage case
+// (status failed/undefined or enrichment never ran), and are provenance-tagged so
+// downstream consumers can distinguish provider quality.
+function hasAppliedMcpLevels(mcp = {}) {
+	const status = mcp.tradingViewEnrichmentStatus;
+	if (status === 'full' || status === 'partial') {
+		return true;
+	}
+
+	return mcp.tradingViewEnrichmentApplied === true && status !== 'failed';
+}
+
+function buildMergedTechnicalLevels(gemini = {}, mcp = {}) {
+	const mcpLevels = mcp.technical_levels || { supports: [], resistances: [] };
+	const merged = buildTechnicalLevels({
+		supports: mergeUnique([], mcpLevels.supports || []),
+		resistances: mergeUnique([], mcpLevels.resistances || []),
+	});
+
+	if (merged) {
+		return { levels: merged, levelsSource: undefined };
+	}
+
+	if (!hasAppliedMcpLevels(mcp)) {
+		const geminiOnly = buildTechnicalLevels({
+			supports: mergeUnique((gemini.technical_levels || {}).supports || [], []),
+			resistances: mergeUnique((gemini.technical_levels || {}).resistances || [], []),
+		});
+
+		if (geminiOnly) {
+			return { levels: geminiOnly, levelsSource: 'gemini-grounding' };
+		}
+	}
+
+	return { levels: undefined, levelsSource: undefined };
+}
+
 function extractPriorityMcpInsights(mcp = {}) {
 	if (!mcp.confluenceData || !Array.isArray(mcp.insights)) {
 		return [];
@@ -204,12 +242,7 @@ function mergeEnrichmentData(text, geminiEnriched, mcpEnriched) {
 		const gemini = geminiEnriched || {};
 		const mcp = mcpEnriched || {};
 
-		const geminiLevels = gemini.technical_levels || { supports: [], resistances: [] };
-		const mcpLevels = mcp.technical_levels || { supports: [], resistances: [] };
-		const technicalLevels = buildTechnicalLevels({
-			supports: mergeUnique(geminiLevels.supports || [], mcpLevels.supports || []),
-			resistances: mergeUnique(geminiLevels.resistances || [], mcpLevels.resistances || []),
-		});
+		const { levels: technicalLevels, levelsSource } = buildMergedTechnicalLevels(gemini, mcp);
 
 		const { sentiment, sentiment_score, sentimentConflict } = selectSentimentAndScore(gemini, mcp);
 
@@ -247,6 +280,7 @@ function mergeEnrichmentData(text, geminiEnriched, mcpEnriched) {
 			...(mcp.price_data ? { price_data: mcp.price_data } : {}),
 			insights,
 			...(technicalLevels ? { technical_levels: technicalLevels } : {}),
+			...(levelsSource ? { levelsSource } : {}),
 			sources: Array.isArray(gemini.sources) ? gemini.sources : [],
 			truncated: !!(gemini.truncated || mcp.truncated),
 			extraText,
@@ -279,6 +313,7 @@ async function enrichWithGemini(text, tokenUsage) {
 		truncated,
 		modelUsed,
 		promptProvenance,
+		technical_levels,
 		invalidation_level,
 		target_level,
 		setup_type,
@@ -309,6 +344,7 @@ async function enrichWithGemini(text, tokenUsage) {
 		truncated,
 		extraText,
 		...(promptProvenance ? { promptProvenance } : {}),
+		...(technical_levels ? { technical_levels } : {}),
 		...Object.fromEntries(
 			Object.entries({ invalidation_level, target_level, setup_type, risk_reward_ratio })
 				.filter(([, value]) => value !== undefined),
@@ -421,6 +457,9 @@ async function enrichAlert(alert, options = {}) {
 				...geminiEnrichedAlert,
 				sentiment: guarded.sentiment,
 				sentiment_score: guarded.sentiment_score,
+				// GH-509 / CB-226: on the Gemini-only path (MCP absent or failed), any
+				// Gemini-parsed levels are fallback data and carry provenance.
+				...(geminiEnrichedAlert.technical_levels ? { levelsSource: 'gemini-grounding' } : {}),
 			};
 		}
 
