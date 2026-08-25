@@ -202,7 +202,8 @@ const cryptoBotCmd = async (context) => {
 const OUTCOMES_COMMAND_LIMIT = 5;
 const OUTCOME_WINDOW_KEYS = ['1h', '4h', '1D', '1W'];
 const OUTCOME_WINDOW_LABELS = { '1h': '1h', '4h': '4h', '1D': '1D', '1W': '1S' };
-const OUTCOME_SYMBOL_PATTERN = /^[A-Z0-9]{2,20}$/;
+const OUTCOME_EXCHANGE_PATTERN = /^[A-Z0-9_]{1,30}$/;
+const OUTCOME_SYMBOL_PATTERN = /^[A-Z0-9._-]{1,30}$/;
 // Bounded deadline for the outcome store read so a chat command can never hold
 // the handler open indefinitely behind a large Firestore scan.
 const OUTCOMES_COMMAND_TIMEOUT_MS = 8000;
@@ -244,11 +245,12 @@ const outcomesCommand = async (context) => {
 		}
 
 		const result = await withTimeout(
-			signalOutcomeService.listOutcomes({
+			(signal) => signalOutcomeService.listOutcomes({
 				symbol: parsed.symbol,
 				exchange: parsed.exchange,
 				limit: OUTCOMES_COMMAND_LIMIT,
 				status: 'evaluated',
+				signal,
 			}),
 			OUTCOMES_COMMAND_TIMEOUT_MS,
 			'outcome store read timed out',
@@ -265,7 +267,7 @@ const outcomesCommand = async (context) => {
 		await context.reply(formatOutcomesMessage(parsed.symbol, outcomes), { parse_mode: 'MarkdownV2' });
 	} catch (error) {
 		console.error('[commands] /outcomes failed:', error.message);
-		if (!error.code || error.code !== signalOutcomeService.STORAGE_UNAVAILABLE_CODE) {
+		if (!error.code || (error.code !== signalOutcomeService.STORAGE_UNAVAILABLE_CODE && error.name !== 'AbortError')) {
 			sentryService.captureRuntimeError({
 				channel: 'telegram',
 				error,
@@ -293,25 +295,39 @@ function parseOutcomeSymbol(rawSymbol) {
 	let exchange;
 	if (value.includes(':')) {
 		const parts = value.split(':');
+		if (parts.length !== 2) {
+			return null;
+		}
 		exchange = parts[0];
-		symbolPart = parts[1] || '';
+		symbolPart = parts[1];
+		if (!OUTCOME_EXCHANGE_PATTERN.test(exchange) || !OUTCOME_SYMBOL_PATTERN.test(symbolPart)) {
+			return null;
+		}
+		return { symbol: symbolPart, exchange };
 	}
-	if (!OUTCOME_SYMBOL_PATTERN.test(exchange || 'BINANCE') || !OUTCOME_SYMBOL_PATTERN.test(symbolPart)) {
+	if (!OUTCOME_SYMBOL_PATTERN.test(symbolPart)) {
 		return null;
 	}
-	return { symbol: symbolPart, exchange };
+	return { symbol: symbolPart, exchange: undefined };
 }
 
-function withTimeout(promise, timeoutMs, message) {
+async function withTimeout(asyncFn, timeoutMs, message) {
+	const ac = new AbortController();
 	let timer;
-	const timeout = new Promise((_, reject) => {
+	const timeoutPromise = new Promise((_, reject) => {
 		timer = setTimeout(() => {
+			ac.abort();
 			const error = new Error(message);
 			error.isUserFriendly = true;
 			reject(error);
 		}, timeoutMs);
 	});
-	return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+	try {
+		const promise = typeof asyncFn === 'function' ? asyncFn(ac.signal) : asyncFn;
+		return await Promise.race([promise, timeoutPromise]);
+	} finally {
+		clearTimeout(timer);
+	}
 }
 
 function formatOutcomesMessage(symbol, outcomes) {

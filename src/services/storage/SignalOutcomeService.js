@@ -1572,6 +1572,8 @@ async function listOutcomes({
 	window,
 	from,
 	to,
+	signal,
+	maxScanDocs,
 } = {}) {
 	if (!isEnabled()) {
 		return null;
@@ -1602,7 +1604,16 @@ async function listOutcomes({
 		}
 		: null;
 
+	let totalScanned = 0;
+
 	while (matches.length < targetCount) {
+		if (signal && signal.aborted) {
+			const abortErr = new Error('Signal outcome listing query was aborted');
+			abortErr.name = 'AbortError';
+			abortErr.code = 'ABORTED';
+			throw abortErr;
+		}
+
 		let query = firestore
 			.collection(COLLECTION_NAME)
 			.orderBy('receivedAt', 'desc')
@@ -1626,9 +1637,18 @@ async function listOutcomes({
 			throw createStorageUnavailableError(error);
 		}
 
+		if (signal && signal.aborted) {
+			const abortErr = new Error('Signal outcome listing query was aborted');
+			abortErr.name = 'AbortError';
+			abortErr.code = 'ABORTED';
+			throw abortErr;
+		}
+
 		if (!snapshot || snapshot.empty || !Array.isArray(snapshot.docs) || snapshot.docs.length === 0) {
 			break;
 		}
+
+		totalScanned += snapshot.docs.length;
 
 		for (const doc of snapshot.docs) {
 			const formatted = formatOutcomeDocument(doc);
@@ -1646,7 +1666,7 @@ async function listOutcomes({
 		}
 
 		pageCursor = lastDocCursor;
-		if (snapshot.docs.length < scanLimit) {
+		if (snapshot.docs.length < scanLimit || (maxScanDocs && totalScanned >= maxScanDocs)) {
 			break;
 		}
 	}

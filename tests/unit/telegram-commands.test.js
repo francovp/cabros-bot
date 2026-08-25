@@ -407,17 +407,60 @@ describe('Telegram TradingView commands', () => {
 			expect(reply).not.toContain('+3.50%');
 		});
 
-		it('bounds the outcome store read with a command-level deadline', async () => {
+		it('accepts supported exchange and symbol separators (FX_IDC:USDCLP, NYSE_ARCA:SPY, NYSE:BRK.B)', async () => {
 			signalOutcomeService.isEnabled.mockReturnValue(true);
-			signalOutcomeService.listOutcomes.mockImplementation(
-				() => new Promise(() => {}), // never settles
+			signalOutcomeService.listOutcomes.mockResolvedValue({ outcomes: [], hasMore: false, nextBefore: null });
+
+			const context1 = buildContext('/outcomes FX_IDC:USDCLP');
+			await outcomesCommand(context1);
+			expect(signalOutcomeService.listOutcomes).toHaveBeenCalledWith(
+				expect.objectContaining({ symbol: 'USDCLP', exchange: 'FX_IDC' }),
 			);
+
+			const context2 = buildContext('/outcomes NYSE_ARCA:SPY');
+			await outcomesCommand(context2);
+			expect(signalOutcomeService.listOutcomes).toHaveBeenCalledWith(
+				expect.objectContaining({ symbol: 'SPY', exchange: 'NYSE_ARCA' }),
+			);
+
+			const context3 = buildContext('/outcomes NYSE:BRK.B');
+			await outcomesCommand(context3);
+			expect(signalOutcomeService.listOutcomes).toHaveBeenCalledWith(
+ 				expect.objectContaining({ symbol: 'BRK.B', exchange: 'NYSE' }),
+			);
+
+			const context4 = buildContext('/outcomes BRK.B');
+			await outcomesCommand(context4);
+			expect(signalOutcomeService.listOutcomes).toHaveBeenCalledWith(
+				expect.objectContaining({ symbol: 'BRK.B', exchange: undefined }),
+			);
+		});
+
+		it('rejects arguments with extra colon separators (e.g. BINANCE:ETHUSDT:PERP)', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			const context = buildContext('/outcomes BINANCE:ETHUSDT:PERP');
+
+			await outcomesCommand(context);
+
+			expect(signalOutcomeService.listOutcomes).not.toHaveBeenCalled();
+			expect(context.reply.mock.calls[0][0]).toContain('Uso');
+		});
+
+		it('bounds the outcome store read with a command-level deadline and propagates cancellation signal', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			let receivedSignal;
+			signalOutcomeService.listOutcomes.mockImplementation(({ signal }) => {
+				receivedSignal = signal;
+				return new Promise(() => {}); // never settles
+			});
 			const context = buildContext('/outcomes BTCUSDT');
 
 			await outcomesCommand(context);
 
 			expect(context.reply).toHaveBeenCalledWith(expect.stringContaining('No pude consultar los resultados'));
 			expect(signalOutcomeService.listOutcomes).toHaveBeenCalled();
+			expect(receivedSignal).toBeDefined();
+			expect(receivedSignal.aborted).toBe(true);
 		}, 12000);
 	});
 });
