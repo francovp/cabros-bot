@@ -29,9 +29,20 @@ jest.mock('binance', () => {
 	};
 });
 
+// Mock geminiPriceService
+const mockFetchGeminiPrice = jest.fn();
+const mockIsGeminiGroundingEnabled = jest.fn(() => true);
+jest.mock('../../src/services/grounding/geminiPriceService', () => ({
+	fetchGeminiPrice: (...args) => mockFetchGeminiPrice(...args),
+	extractPriceJson: jest.fn(),
+	isGeminiQuotaError: jest.fn(() => false),
+	isGeminiGroundingEnabled: () => mockIsGeminiGroundingEnabled(),
+}));
+
 describe('SignalOutcomeService', () => {
 	beforeEach(() => {
 		jest.clearAllMocks();
+		mockFetchGeminiPrice.mockResolvedValue(null);
 		admin.__resetApps();
 		admin.__resetCollectionState();
 		AlertStorageService._resetForTesting();
@@ -408,6 +419,37 @@ describe('SignalOutcomeService', () => {
 			expect(saved.outcomes['1h'].status).toBe('pending');
 		});
 
+		it('resolves entry price from tertiary Gemini source when Binance is region-blocked', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			mockGetAvgPrice.mockRejectedValue(new Error('Binance 451: Service unavailable from restricted location'));
+			mockFetchGeminiPrice.mockResolvedValue({
+				price: 68250.75,
+				change24h: 1.2,
+				source: 'gemini-grounding',
+			});
+
+			const resId = await SignalOutcomeService.recordSignal({
+				requestId: 'req-tertiary-gemini',
+				source: 'webhook-alert',
+				symbol: 'BINANCE:BTCUSDT',
+				price: null,
+				side: 'BUY',
+			});
+
+			expect(resId).not.toBeNull();
+			expect(mockFetchGeminiPrice).toHaveBeenCalledWith('BTCUSDT', expect.objectContaining({
+				timeoutMs: 5000,
+			}));
+
+			const saved = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(resId);
+			expect(saved).toBeDefined();
+			expect(saved.price).toBe(68250.75);
+			expect(saved.entryPriceSource).toBe('gemini-grounding');
+			expect(saved.eligibilityState).toBe('supported_provider');
+			expect(saved.outcomeEvaluated).toBe(false);
+			expect(saved.outcomes['1h'].status).toBe('pending');
+		});
+
 		it('marks signal immediately unavailable when Binance getAvgPrice throws structural invalid symbol error', async () => {
 			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
 			mockGetAvgPrice.mockRejectedValue(new Error('Binance 400: Invalid symbol'));
@@ -421,6 +463,7 @@ describe('SignalOutcomeService', () => {
 			});
 
 			expect(resId).not.toBeNull();
+			expect(mockFetchGeminiPrice).not.toHaveBeenCalled();
 			const saved = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(resId);
 			expect(saved).toBeDefined();
 			expect(saved.price).toBeNull();
@@ -1153,6 +1196,7 @@ describe('SignalOutcomeService', () => {
 			expect(updated.outcomes['1h'].price).toBe(51000);
 			expect(updated.outcomes['1h'].return).toBe(2);
 		});
+
 
 		it('enforces sweep max duration budget on slow or hanging getKlines requests', async () => {
 			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
