@@ -84,6 +84,18 @@ function parseTechnicalLevelEntry(value) {
 	return undefined;
 }
 
+const NUMERIC_LEVEL_STRING_OPTIONS = { useGrouping: false, maximumFractionDigits: 20 };
+
+// Formatters expect string levels (smartEscapeMarkdownV2 only accepts strings), so
+// numeric entries are normalized to their plain decimal representation here.
+function formatTechnicalLevelEntry(entry) {
+	if (typeof entry === 'number') {
+		return entry.toLocaleString('en-US', NUMERIC_LEVEL_STRING_OPTIONS);
+	}
+
+	return entry;
+}
+
 // Re-introduced by GH-509 / CB-226: the alert-enrichment prompt asks the model for a
 // technical_levels object, but PR #34 stopped parsing it. Levels are only surfaced
 // downstream when TradingView MCP data is absent/failed (see alert handler merge),
@@ -94,10 +106,10 @@ function parseOptionalTechnicalLevels(value) {
 	}
 
 	const supports = Array.isArray(value.supports)
-		? value.supports.slice(0, MAX_TECHNICAL_LEVELS_PER_SIDE).map(parseTechnicalLevelEntry).filter(entry => entry !== undefined)
+		? value.supports.slice(0, MAX_TECHNICAL_LEVELS_PER_SIDE).map(parseTechnicalLevelEntry).filter(entry => entry !== undefined).map(formatTechnicalLevelEntry)
 		: [];
 	const resistances = Array.isArray(value.resistances)
-		? value.resistances.slice(0, MAX_TECHNICAL_LEVELS_PER_SIDE).map(parseTechnicalLevelEntry).filter(entry => entry !== undefined)
+		? value.resistances.slice(0, MAX_TECHNICAL_LEVELS_PER_SIDE).map(parseTechnicalLevelEntry).filter(entry => entry !== undefined).map(formatTechnicalLevelEntry)
 		: [];
 
 	if (supports.length === 0 && resistances.length === 0) {

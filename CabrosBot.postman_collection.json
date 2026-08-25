@@ -417,7 +417,7 @@
               "name": "Dry run - failed TradingView enrichment",
               "status": "OK",
               "code": 200,
-              "body": "{\"success\":true,\"dryRun\":true,\"enriched\":true,\"payload\":{\"text\":\"BTCUSDT(240) pasó a señal de COMPRA\",\"enrichedData\":{\"tradingViewEnrichmentApplied\":false,\"tradingViewEnrichmentStatus\":\"failed\",\"sentiment\":\"NEUTRAL\",\"insights\":[\"RSI cercano a sobreventa\"],\"technical_levels\":{\"supports\":[\\\"79,500\\\"],\"resistances\":[\\\"82,300\\\"]},\"levelsSource\":\"gemini-grounding\"}}}"
+              "body": "{\"success\":true,\"dryRun\":true,\"enriched\":true,\"payload\":{\"text\":\"BTCUSDT(240) pasó a señal de COMPRA\",\"enrichedData\":{\"tradingViewEnrichmentApplied\":false,\"tradingViewEnrichmentStatus\":\"failed\",\"sentiment\":\"NEUTRAL\",\"insights\":[\"RSI cercano a sobreventa\"],\"technical_levels\":{\"supports\":[\"79,500\"],\"resistances\":[\"82,300\"]},\"levelsSource\":\"gemini-grounding\"}}}"
             },
             {
               "name": "Dry run - TradingView not applicable",

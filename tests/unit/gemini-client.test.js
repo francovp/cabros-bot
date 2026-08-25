@@ -141,7 +141,7 @@ describe('Gemini Service', () => {
 			}));
 
 			expect(result.technical_levels).toEqual({
-				supports: ['79,500', '78k', 77500],
+				supports: ['79,500', '78k', '77500'],
 				resistances: ['$82,300', '83,000'],
 			});
 		});
@@ -168,7 +168,7 @@ describe('Gemini Service', () => {
 
 			expect(result.technical_levels).toEqual({
 				supports: ['80,000'],
-				resistances: [85000],
+				resistances: ['85000'],
 			});
 
 			const allInvalid = parseEnrichedAlertResponse(JSON.stringify({
