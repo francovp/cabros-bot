@@ -18,6 +18,11 @@ const DEFAULT_LEASE_MS = 60000; // 60s
 const MAX_DRAIN_TIMEOUT_MS = 10000;
 const RECONCILIATION_TIMEOUT_MS = 500;
 const WORKER_ROLES = new Set(['web', 'worker', 'disabled']);
+const ROUTING_FIELDS = Object.freeze({
+	telegram: 'telegramChatId',
+	whatsapp: 'whatsappChatId',
+	discord: 'discordWebhookUrl',
+});
 
 function stripUndefinedFieldsDeep(value) {
 	if (value === undefined) {
@@ -93,6 +98,15 @@ function releaseRepeatCooldown(record) {
 		return;
 	}
 	signalRepeatCooldown.release(repeatCooldown.key, [repeatCooldown.channel]);
+}
+
+function getRedriveRouting(channel, routing, repeatCooldown) {
+	const destination = repeatCooldown?.destinationsByName?.[channel];
+	const field = ROUTING_FIELDS[channel];
+	if (!field || destination === undefined) {
+		return routing || null;
+	}
+	return { ...(routing || {}), [field]: destination };
 }
 
 class NotificationRedriveService {
@@ -193,7 +207,7 @@ class NotificationRedriveService {
 					enrichmentData: alert?.enriched && typeof alert.enriched === 'object' ? alert.enriched : null,
 					requestId: String(alertId),
 				},
-				destinationOverride: options.routing || null,
+				destinationOverride: getRedriveRouting(channel, options.routing, options.repeatCooldown),
 				attemptCount: 0,
 				lastError: failure.error ? String(failure.error) : 'Unknown delivery failure',
 				lastStatusCode: typeof failure.statusCode === 'number' ? failure.statusCode : null,
@@ -486,16 +500,30 @@ class NotificationRedriveService {
 		const firestore = this.getFirestore();
 		if (firestore) {
 			try {
-				const snapshot = await firestore.collection(COLLECTION_NAME)
+				let query = firestore.collection(COLLECTION_NAME)
 					.where('repeatCooldown.key', '==', key)
-					.limit(200)
-					.get();
-				for (const doc of snapshot?.docs || []) {
-					const record = { ...doc.data(), id: doc.id };
-					if (matches(record)) {
-						candidates.set(record.id, record);
+					.limit(200);
+				do {
+					if (Date.now() >= deadline) {
+						break;
 					}
-				}
+					const snapshot = await query.get();
+					const docs = snapshot?.docs || [];
+					for (const doc of docs) {
+						const record = { ...doc.data(), id: doc.id };
+						if (matches(record)) {
+							candidates.set(record.id, record);
+						}
+					}
+					if (docs.length < 200 || typeof query.startAfter !== 'function') {
+						break;
+					}
+					const nextQuery = query.startAfter(docs[docs.length - 1]);
+					if (!nextQuery || nextQuery === query) {
+						break;
+					}
+					query = nextQuery;
+				} while (true);
 			} catch (error) {
 				console.warn('[NotificationRedriveService] Failed to reconcile cooldown state:', error.message);
 			}
@@ -529,7 +557,7 @@ class NotificationRedriveService {
 		return candidates.size;
 	}
 
-	async isRepeatCooldownSuperseded(record) {
+	async isRepeatCooldownSuperseded(record, deadline = Date.now() + RECONCILIATION_TIMEOUT_MS) {
 		if (!record?.id || !record.repeatCooldown?.key || !record.repeatCooldown.channel) {
 			return false;
 		}
@@ -547,11 +575,25 @@ class NotificationRedriveService {
 		if (!firestore) {
 			return false;
 		}
+		const remainingMs = Math.max(0, deadline - Date.now());
+		if (remainingMs === 0) {
+			return false;
+		}
+		let timer = null;
 		try {
-			const [recordSnapshot, supersessionSnapshot] = await Promise.all([
-				firestore.collection(COLLECTION_NAME).doc(record.id).get(),
-				firestore.collection(COLLECTION_NAME).doc(supersessionId).get(),
+			const snapshots = await Promise.race([
+				Promise.all([
+					firestore.collection(COLLECTION_NAME).doc(record.id).get(),
+					firestore.collection(COLLECTION_NAME).doc(supersessionId).get(),
+				]),
+				new Promise((resolve) => {
+					timer = setTimeout(() => resolve(null), remainingMs);
+				}),
 			]);
+			if (!snapshots) {
+				return false;
+			}
+			const [recordSnapshot, supersessionSnapshot] = snapshots;
 			const supersession = supersessionSnapshot?.exists ? supersessionSnapshot.data() : null;
 			return (recordSnapshot?.exists && recordSnapshot.data()?.status === 'cancelled')
 				|| (supersession?.status === 'superseded'
@@ -559,6 +601,10 @@ class NotificationRedriveService {
 		} catch (error) {
 			console.warn('[NotificationRedriveService] Failed to check superseded redrive:', error.message);
 			return false;
+		} finally {
+			if (timer) {
+				clearTimeout(timer);
+			}
 		}
 	}
 
@@ -746,7 +792,7 @@ class NotificationRedriveService {
 					continue;
 				}
 
-				if (await this.isRepeatCooldownSuperseded(claimed)) {
+				if (await this.isRepeatCooldownSuperseded(claimed, Date.now() + RECONCILIATION_TIMEOUT_MS)) {
 					await this.markTerminal(claimed.id, 'cancelled', {
 						lastError: 'Superseded by an opposite-side signal',
 					});
@@ -778,7 +824,7 @@ class NotificationRedriveService {
 					);
 
 					const channelResult = Array.isArray(results) && results[0] ? results[0] : null;
-					if (await this.isRepeatCooldownSuperseded(claimed)) {
+					if (await this.isRepeatCooldownSuperseded(claimed, Date.now() + RECONCILIATION_TIMEOUT_MS)) {
 						await this.markTerminal(claimed.id, 'cancelled', {
 							lastError: 'Superseded by an opposite-side signal',
 						});

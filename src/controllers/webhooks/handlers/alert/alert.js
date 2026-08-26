@@ -272,6 +272,10 @@ function postAlert(botOrGetter) {
 						repeatCooldownOptions = {
 							key: verdict.key,
 							channelsByName: Object.fromEntries(verdict.channels.map((channel) => [getChannelName(channel), channel])),
+							destinationsByName: Object.fromEntries(verdict.channels.map((channel) => {
+								const channelName = getChannelName(channel);
+								return [channelName, getCooldownDestination(channelName, routing)];
+							})),
 						};
 						if (verdict.channels.length < requestedChannels.length) {
 							deliveryRouting = { ...routing, channels: verdict.channels.map(getChannelName) };

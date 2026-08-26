@@ -245,6 +245,60 @@ describe('NotificationRedriveService', () => {
 	});
 
 		describe('sweep and redrive', () => {
+		it('redrives to the destination used by the cooldown identity', async () => {
+			const mockTelegramSend = jest.fn().mockResolvedValue({ success: true, messageId: 'redrive-destination' });
+			const mockNotificationManager = {
+				channels: new Map([['telegram', { name: 'telegram', send: mockTelegramSend, isEnabled: () => true }]]),
+				sendToChannels: jest.fn(async (payload, channels, opts) => [{
+					channel: channels[0],
+					...(await mockTelegramSend(payload, opts)),
+				}]),
+			};
+			service.setNotificationManagerGetter(() => mockNotificationManager);
+
+			await service.recordDeliveryResults(
+				{ text: 'Telegram signal', correlationId: 'corr-destination' },
+				[{ channel: 'telegram', success: false, error: 'Initial failure' }],
+				{
+					routing: { channels: ['telegram'] },
+					repeatCooldown: {
+						key: 'BINANCE|ETHUSDT|5m|BUY',
+						channelsByName: { telegram: 'telegram:destination-a' },
+						destinationsByName: { telegram: 'destination-a' },
+					},
+				},
+			);
+
+			const item = service.inMemoryStore.get('corr-destination_telegram');
+			item.nextAttemptAt = Date.now() - 1000;
+			await service.sweep();
+
+			expect(mockTelegramSend).toHaveBeenCalledWith(
+				expect.objectContaining({ telegramChatId: 'destination-a' }),
+				expect.anything(),
+			);
+		});
+
+		it('bounds supersession reads when Firestore documents stall', async () => {
+			const never = new Promise(() => {});
+			alertStorageService.getFirestore.mockReturnValue({
+				collection: jest.fn(() => ({
+					doc: jest.fn(() => ({ get: jest.fn(() => never) })),
+				})),
+			});
+
+			const result = await service.isRepeatCooldownSuperseded({
+				id: 'stalled_telegram',
+				createdAt: new Date(),
+				repeatCooldown: {
+					key: 'BINANCE|ETHUSDT|5m|BUY',
+					channel: 'telegram:destination-a',
+				},
+			});
+
+			expect(result).toBe(false);
+		});
+
 		it('reconciles terminal Firestore redrives in the local cooldown store', async () => {
 			alertStorageService.getFirestore.mockReturnValue(mockFirestore);
 			const refreshSpy = jest.spyOn(signalRepeatCooldown, 'refresh');
@@ -267,6 +321,54 @@ describe('NotificationRedriveService', () => {
 
 			expect(refreshSpy).toHaveBeenCalledWith('BINANCE|ETHUSDT|5m|BUY', ['telegram:destination-a'], 5000);
 			refreshSpy.mockRestore();
+		});
+
+		it('paginates terminal Firestore redrives beyond the first page', async () => {
+			const key = 'BINANCE|ETHUSDT|5m|BUY';
+			const channel = 'telegram:destination-a';
+			const firstPage = Array.from({ length: 200 }, (_, index) => ({
+				id: `old-${index}`,
+				status: 'delivered',
+				repeatCooldown: { key, channel },
+				deliveredAt: new Date(5000),
+			}));
+			const secondPage = [{
+				id: 'new-terminal',
+				status: 'delivered',
+				repeatCooldown: { key, channel },
+				 deliveredAt: new Date(6000),
+			}];
+			let pageIndex = 0;
+			const getPage = jest.fn(async () => ({
+				docs: (pageIndex++ === 0 ? firstPage : secondPage).map((record) => ({
+					id: record.id,
+					data: () => record,
+				})),
+			}));
+			const secondQuery = {
+				get: getPage,
+				limit: jest.fn(() => secondQuery),
+			};
+			const query = {
+				get: getPage,
+				limit: jest.fn(() => query),
+				startAfter: jest.fn(() => secondQuery),
+			};
+			alertStorageService.getFirestore.mockReturnValue({
+				collection: jest.fn(() => ({ where: jest.fn(() => query) })),
+			});
+			signalRepeatCooldown.reset();
+			signalRepeatCooldown.reserve(
+				{ exchange: 'BINANCE', symbol: 'ETHUSDT', timeframe: '5m', side: 'BUY' },
+				[channel],
+				4000,
+			);
+			const refreshSpy = jest.spyOn(signalRepeatCooldown, 'refresh');
+
+			await service.reconcileRepeatCooldown(key, [channel]);
+
+			expect(getPage).toHaveBeenCalledTimes(2);
+			expect(refreshSpy).toHaveBeenCalledWith(key, [channel], 6000);
 		});
 
 		it('does not apply an older terminal redrive to a newer local reservation', async () => {

@@ -8,6 +8,7 @@ const {
 	DEFAULT_COOLDOWN_BARS,
 	MAX_COOLDOWN_BARS,
 	MAX_ENTRIES,
+	MAX_CHANNELS_PER_ENTRY,
 } = require('../../src/services/alerts/signalRepeatCooldown');
 
 describe('signalRepeatCooldown', () => {
@@ -227,6 +228,35 @@ describe('signalRepeatCooldown', () => {
 	});
 
 	describe('bounded storage', () => {
+		it('prunes expired destination identities while the signal remains active', () => {
+			const store = new Map();
+			const cooldown = createSignalRepeatCooldown({ store });
+			const signal = { exchange: 'BINANCE', symbol: 'ETHUSDT', timeframe: '5m', side: 'BUY' };
+			const t0 = 10_000;
+			const barMs = TIMEFRAME_BAR_MS['5m'];
+
+			const first = cooldown.reserve(signal, ['telegram:old'], t0);
+			cooldown.reserve(signal, ['telegram:active'], t0 + barMs - 1);
+			cooldown.reserve(signal, ['telegram:new'], t0 + barMs + 1);
+
+			expect([...store.get(first.key).channels.keys()]).toEqual(['telegram:active', 'telegram:new']);
+		});
+
+		it('bounds destination identities per signal', () => {
+			const store = new Map();
+			const cooldown = createSignalRepeatCooldown({ store });
+			const signal = { exchange: 'BINANCE', symbol: 'ETHUSDT', timeframe: '5m', side: 'BUY' };
+			const t0 = 10_000;
+
+			for (let index = 0; index <= MAX_CHANNELS_PER_ENTRY; index += 1) {
+				cooldown.reserve(signal, [`telegram:${index}`], t0 + index);
+			}
+
+			const entry = store.get('BINANCE|ETHUSDT|5m|BUY');
+			expect(entry.channels.size).toBe(MAX_CHANNELS_PER_ENTRY);
+			expect(entry.channels.has('telegram:0')).toBe(false);
+		});
+
 		it('evicts oldest entries when the map exceeds its hard cap', () => {
 			const store = new Map();
 			const cooldown = createSignalRepeatCooldown({ store });

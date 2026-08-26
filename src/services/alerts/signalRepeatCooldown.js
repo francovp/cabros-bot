@@ -27,6 +27,7 @@ const TIMEFRAME_BAR_MS = Object.freeze({
 const DEFAULT_COOLDOWN_BARS = 1;
 const MAX_COOLDOWN_BARS = 10;
 const MAX_ENTRIES = 1000;
+const MAX_CHANNELS_PER_ENTRY = 100;
 
 function getEntryFiredAt(entry) {
 	if (Number.isFinite(entry)) {
@@ -142,6 +143,11 @@ function reserve(signal, channels = [], now = Date.now()) {
 			&& now - currentFiredAt < windowMs;
 
 		if (entry && entry.channels instanceof Map && currentIsActive) {
+			for (const [channel, firedAt] of entry.channels.entries()) {
+				if (Number.isFinite(firedAt) && firedAt <= now && now - firedAt >= windowMs) {
+					entry.channels.delete(channel);
+				}
+			}
 			const availableChannels = requestedChannels.filter((channel) => {
 				const firedAt = entry.channels.get(channel);
 				return !Number.isFinite(firedAt) || now - firedAt < 0 || now - firedAt >= windowMs;
@@ -158,6 +164,7 @@ function reserve(signal, channels = [], now = Date.now()) {
 			for (const channel of availableChannels) {
 				entry.channels.set(channel, now);
 			}
+			trimChannels(entry);
 			entry.firedAt = now;
 			this.store.set(key, entry);
 			evictIfNeeded.call(this, now);
@@ -178,12 +185,27 @@ function reserve(signal, channels = [], now = Date.now()) {
 			firedAt: now,
 			channels: new Map(requestedChannels.map(channel => [channel, now])),
 		};
+		trimChannels(nextEntry);
 		this.store.set(key, nextEntry);
 		evictIfNeeded.call(this, now);
 		return { suppressed: false, key, windowMs, channels: requestedChannels };
 	} catch (error) {
 		console.warn('[SignalRepeatCooldown] Store reservation failed, failing open:', error.message);
 		return { suppressed: false, key, windowMs, channels: requestedChannels, storeError: true };
+	}
+}
+
+function trimChannels(entry) {
+	if (!(entry?.channels instanceof Map) || entry.channels.size <= MAX_CHANNELS_PER_ENTRY) {
+		return;
+	}
+
+	// ponytail: cap destinations per signal at 100; raise only with measured memory pressure.
+	const oldest = [...entry.channels.entries()]
+		.sort(([, left], [, right]) => left - right)
+		.slice(0, entry.channels.size - MAX_CHANNELS_PER_ENTRY);
+	for (const [channel] of oldest) {
+		entry.channels.delete(channel);
 	}
 }
 
@@ -403,6 +425,7 @@ module.exports = {
 	DEFAULT_COOLDOWN_BARS,
 	MAX_COOLDOWN_BARS,
 	MAX_ENTRIES,
+	MAX_CHANNELS_PER_ENTRY,
 	buildSignalKey,
 	oppositeKeyOf,
 };
