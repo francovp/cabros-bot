@@ -35,4 +35,24 @@ describe('Telegram command menu', () => {
 		expect(telegram.setMyCommands).toHaveBeenCalledWith(getTelegramCommandMenu());
 		expect(onLaunchError).not.toHaveBeenCalled();
 	});
+
+	it('registers the menu before starting a long-running polling launch', async () => {
+		const events = [];
+		const telegram = {
+			setMyCommands: jest.fn(async () => {
+				events.push('register');
+			}),
+		};
+		const bot = {
+			launch: jest.fn(() => {
+				events.push('launch');
+				return Promise.resolve();
+			}),
+			telegram,
+		};
+
+		await launchTelegramBot(bot, jest.fn());
+
+		expect(events).toEqual(['register', 'launch']);
+	});
 });
