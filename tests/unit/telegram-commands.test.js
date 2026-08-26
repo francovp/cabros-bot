@@ -32,6 +32,7 @@ const {
 	helpCmd,
 	outcomesCommand,
 	buildHelpMessage,
+	getTelegramCommandMenu,
 	parseCommandArgs,
 } = require('../../src/controllers/commands');
 
@@ -152,6 +153,27 @@ describe('Telegram TradingView commands', () => {
 	});
 
 	describe('helpCmd and buildHelpMessage', () => {
+		it('builds a Telegram command menu from the same inventory as help', () => {
+			const menu = getTelegramCommandMenu();
+
+			expect(menu).toEqual([
+				{ command: 'precio', description: 'Consulta el precio en Binance o Twelve Data' },
+				{ command: 'cryptobot', description: 'Muestra el Chat ID actual de Telegram' },
+				{ command: 'analisis', description: 'Crea un análisis técnico en TradingView' },
+				{ command: 'scanner', description: 'Escaneo de mercado en TradingView' },
+				{ command: 'noticias', description: 'Monitor y análisis de noticias con IA' },
+				{ command: 'outcomes', description: 'Rendimiento reciente de señales evaluadas' },
+				{ command: 'help', description: 'Muestra este mensaje de ayuda' },
+				{ command: 'start', description: 'Muestra este mensaje de ayuda' },
+			]);
+			const helpMessage = buildHelpMessage();
+
+			menu.forEach(({ command, description }) => {
+				expect(helpMessage).toContain(`/${command}`);
+				expect(helpMessage).toContain(description);
+			});
+		});
+
 		it('buildHelpMessage returns MarkdownV2 formatted message with all commands and aliases', () => {
 			const message = buildHelpMessage();
 			expect(message).toContain('*🤖 Comandos disponibles en Cabros Bot*');
@@ -478,4 +500,3 @@ describe('Telegram TradingView commands', () => {
 		}, 12000);
 	});
 });
-

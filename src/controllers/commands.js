@@ -3,6 +3,7 @@ const { jobService } = require('../services/jobs/JobService');
 const { getNewsMonitor } = require('./webhooks/handlers/newsMonitor/newsMonitor');
 const signalOutcomeService = require('../services/storage/SignalOutcomeService');
 const sentryService = require('../services/monitoring/SentryService');
+const { getTelegramCommandMenu } = require('../lib/telegramCommandMenu');
 
 const getPrice = async (context) => {
 	const chatId = getChatId(context);
@@ -511,5 +512,6 @@ module.exports = {
 	helpCmd,
 	outcomesCommand,
 	buildHelpMessage,
+	getTelegramCommandMenu,
 	parseCommandArgs,
 };
