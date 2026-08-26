@@ -160,7 +160,6 @@ function reserve(signal, channels = [], now = Date.now()) {
 			}
 			entry.firedAt = now;
 			this.store.set(key, entry);
-			clearOpposite.call(this, key);
 			evictIfNeeded.call(this, now);
 			return { suppressed: false, key, windowMs, channels: availableChannels };
 		}
@@ -180,7 +179,6 @@ function reserve(signal, channels = [], now = Date.now()) {
 			channels: new Map(requestedChannels.map(channel => [channel, now])),
 		};
 		this.store.set(key, nextEntry);
-		clearOpposite.call(this, key);
 		evictIfNeeded.call(this, now);
 		return { suppressed: false, key, windowMs, channels: requestedChannels };
 	} catch (error) {
@@ -194,6 +192,30 @@ function clearOpposite(key) {
 	if (opposite) {
 		this.store.delete(opposite);
 	}
+}
+
+function clearOppositeChannels(key, successfulChannels) {
+	const opposite = oppositeKeyOf(key);
+	if (!opposite || successfulChannels.length === 0) {
+		return;
+	}
+	const entry = this.store.get(opposite);
+	if (!entry) {
+		return;
+	}
+	if (!(entry.channels instanceof Map)) {
+		this.store.delete(opposite);
+		return;
+	}
+	for (const channel of successfulChannels) {
+		entry.channels.delete(channel);
+	}
+	if (entry.channels.size === 0) {
+		this.store.delete(opposite);
+		return;
+	}
+	entry.firedAt = Math.max(...entry.channels.values());
+	this.store.set(opposite, entry);
 }
 
 function finalize(key, reservedChannels = [], successfulChannels = []) {
@@ -213,10 +235,11 @@ function finalize(key, reservedChannels = [], successfulChannels = []) {
 		}
 		if (entry.channels.size === 0) {
 			this.store.delete(key);
-			return;
+		} else {
+			entry.firedAt = Math.max(...entry.channels.values());
+			this.store.set(key, entry);
 		}
-		entry.firedAt = Math.max(...entry.channels.values());
-		this.store.set(key, entry);
+		clearOppositeChannels.call(this, key, successful);
 	} catch (error) {
 		console.warn('[SignalRepeatCooldown] Store finalization failed:', error.message);
 	}
