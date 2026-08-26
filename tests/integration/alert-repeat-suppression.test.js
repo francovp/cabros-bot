@@ -115,6 +115,35 @@ describe('Alert repeat suppression endpoint behavior', () => {
 		expect(mockTelegramSendMessage).toHaveBeenCalledTimes(2);
 	});
 
+	it('cancels a pending default-destination redrive after concrete delivery', async () => {
+		process.env.ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION = 'true';
+		process.env.ENABLE_NOTIFICATION_REDRIVE = 'true';
+		delete process.env.TELEGRAM_CHAT_ID;
+		const key = 'BINANCE|ETHUSDT|4h|BUY';
+		const defaultChannel = getCooldownChannelIdentity('telegram', {});
+
+		await notificationRedriveService.recordDeliveryResults(
+			{ text: SIGNAL_TEXT, correlationId: 'default-destination-redrive' },
+			[{ channel: 'telegram', success: false, error: 'Initial zero-channel drop' }],
+			{
+				repeatCooldown: {
+					key,
+					channelsByName: { telegram: defaultChannel },
+					destinationsByName: { telegram: 'default' },
+				},
+			},
+		);
+
+		await request(app)
+			.post('/api/webhook/alert')
+			.set('x-api-key', 'test-key')
+			.send({ text: SIGNAL_TEXT, channels: ['telegram'], telegramChatId: 'chat-a' })
+			.expect(200);
+
+		expect(notificationRedriveService.inMemoryStore.get('default-destination-redrive_telegram').status)
+			.toBe('cancelled');
+	});
+
 	it('does not record suppressed repeats as signal outcomes', async () => {
 		process.env.ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION = 'true';
 		const enabledSpy = jest.spyOn(signalOutcomeService, 'isEnabled').mockReturnValue(true);

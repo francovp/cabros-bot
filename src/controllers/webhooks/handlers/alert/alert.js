@@ -170,6 +170,10 @@ function getCooldownDestination(channel, routing = {}) {
 
 function getCooldownChannelIdentity(channel, routing) {
 	const destination = String(getCooldownDestination(channel, routing));
+	return getCooldownChannelIdentityForDestination(channel, destination);
+}
+
+function getCooldownChannelIdentityForDestination(channel, destination) {
 	const fingerprint = crypto.createHash('sha256').update(destination).digest('hex').slice(0, 16);
 	return `${channel}:${fingerprint}`;
 }
@@ -277,6 +281,10 @@ function postAlert(botOrGetter) {
 								const channelName = getChannelName(channel);
 								return [channelName, getCooldownDestination(channelName, routing)];
 							})),
+							defaultChannelsByName: Object.fromEntries(verdict.channels.map((channel) => {
+								const channelName = getChannelName(channel);
+								return [channelName, getCooldownChannelIdentityForDestination(channelName, 'default')];
+							})),
 						};
 						if (verdict.channels.length < requestedChannels.length) {
 							deliveryRouting = { ...routing, channels: verdict.channels.map(getChannelName) };
@@ -315,6 +323,20 @@ function postAlert(botOrGetter) {
 					: deliveredReservationChannels;
 				signalRepeatCooldown.finalize(reservation.key, reservation.channels, finalizationChannels, deliveredReservationChannels);
 				if (notificationRedriveService.isEnabled() && deliveredReservationChannels.length > 0) {
+					const defaultDestinationChannels = deliveredReservationChannels
+						.map((channel) => repeatCooldownOptions?.defaultChannelsByName?.[getChannelName(channel)])
+						.filter(Boolean);
+					if (defaultDestinationChannels.length > 0) {
+						const cancellation = notificationRedriveService.cancelPendingRepeatCooldowns(
+							reservation.key,
+							defaultDestinationChannels,
+						);
+						await Promise.race([
+							cancellation,
+							new Promise((resolve) => setTimeout(resolve, 500)),
+						]);
+						trackBackgroundTask(cancellation).catch(() => {});
+					}
 					const oppositeKey = oppositeKeyOf(reservation.key);
 					if (oppositeKey) {
 						const cancellation = notificationRedriveService.cancelPendingRepeatCooldowns(oppositeKey, deliveredReservationChannels);
