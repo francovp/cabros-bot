@@ -210,6 +210,20 @@ describe('signalRepeatCooldown', () => {
 			expect(retry.suppressed).toBe(false);
 			expect(retry.channels).toEqual(['telegram']);
 		});
+
+		it('keeps the last completed overlapping flip as the active cooldown', () => {
+			const cooldown = createSignalRepeatCooldown();
+			const buy = { exchange: 'BINANCE', symbol: 'ETHUSDT', timeframe: '4h', side: 'BUY' };
+			const sell = { ...buy, side: 'SELL' };
+			const now = Date.now();
+			const buyReservation = cooldown.reserve(buy, ['telegram'], now);
+			const sellReservation = cooldown.reserve(sell, ['telegram'], now + 1);
+
+			cooldown.finalize(sellReservation.key, sellReservation.channels, sellReservation.channels);
+			cooldown.finalize(buyReservation.key, buyReservation.channels, buyReservation.channels);
+
+			expect(cooldown.reserve(buy, ['telegram'], Date.now()).suppressed).toBe(true);
+		});
 	});
 
 	describe('bounded storage', () => {

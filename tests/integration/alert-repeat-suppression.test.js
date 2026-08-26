@@ -3,6 +3,7 @@
 const request = require('supertest');
 const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
+const { getCooldownChannelIdentity } = require('../../src/controllers/webhooks/handlers/alert/alert');
 const { initializeNotificationServices } = require('../../src/controllers/webhooks/handlers/alert/alert');
 const { signalRepeatCooldown } = require('../../src/services/alerts/signalRepeatCooldown');
 const signalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
@@ -170,6 +171,18 @@ describe('Alert repeat suppression endpoint behavior', () => {
 		} finally {
 			durableStoreSpy.mockRestore();
 		}
+	});
+
+	it('fingerprints the preview WhatsApp destination', () => {
+		process.env.RAILWAY_ENVIRONMENT_NAME = 'cabros-bot-pr-671';
+		process.env.WHATSAPP_PREVIEW_CHAT_ID = 'preview-chat@g.us';
+		process.env.WHATSAPP_CHAT_ID = 'production-chat@g.us';
+
+		const previewIdentity = getCooldownChannelIdentity('whatsapp', {});
+		process.env.RAILWAY_ENVIRONMENT_NAME = 'production';
+		const productionIdentity = getCooldownChannelIdentity('whatsapp', {});
+
+		expect(previewIdentity).not.toBe(productionIdentity);
 	});
 
 	it('always delivers an opposite-side flip regardless of cooldown', async () => {

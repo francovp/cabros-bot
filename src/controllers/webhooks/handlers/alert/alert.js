@@ -25,6 +25,7 @@ const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteCo
 const { parseTradingViewSignal, TIMEFRAME_MAP } = require('../../../../services/tradingview/parseTradingViewSignal');
 const { signalRepeatCooldown, oppositeKeyOf, buildSignalKey } = require('../../../../services/alerts/signalRepeatCooldown');
 const { notificationRedriveService } = require('../../../../services/notification/NotificationRedriveService');
+const { isPreviewEnvironment } = require('../../../../lib/deploymentEnvironment');
 
 // Initialize services
 let notificationManager = null;
@@ -161,7 +162,7 @@ function getCooldownDestination(channel, routing = {}) {
 	};
 	const envByChannel = {
 		telegram: process.env.TELEGRAM_CHAT_ID,
-		whatsapp: process.env.WHATSAPP_CHAT_ID,
+		whatsapp: (isPreviewEnvironment() && process.env.WHATSAPP_PREVIEW_CHAT_ID) || process.env.WHATSAPP_CHAT_ID,
 		discord: process.env.DISCORD_WEBHOOK_URL,
 	};
 	return overrideByChannel[channel] || envByChannel[channel] || 'default';
@@ -428,4 +429,5 @@ module.exports = {
 	resolveRequestId,
 	initializeNotificationServices,
 	getNotificationManager,
+	getCooldownChannelIdentity,
 };

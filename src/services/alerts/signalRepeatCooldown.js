@@ -225,6 +225,15 @@ function finalize(key, reservedChannels = [], retainedChannels = [], oppositeSuc
 	try {
 		const entry = this.store.get(key);
 		if (!entry || !(entry.channels instanceof Map)) {
+			const retained = Array.isArray(retainedChannels) ? retainedChannels : [];
+			if (retained.length > 0) {
+				const finalizedAt = Date.now();
+				this.store.set(key, {
+					firedAt: finalizedAt,
+					channels: new Map(retained.map((channel) => [channel, finalizedAt])),
+				});
+			}
+			clearOppositeChannels.call(this, key, Array.isArray(oppositeSuccessfulChannels) ? oppositeSuccessfulChannels : retained);
 			return;
 		}
 		const retained = new Set(retainedChannels);
