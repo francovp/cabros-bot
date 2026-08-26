@@ -144,6 +144,29 @@ describe('Alert repeat suppression endpoint behavior', () => {
 			.toBe('cancelled');
 	});
 
+	it('cancels a pending default redrive after an opposite-side concrete delivery', async () => {
+		process.env.ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION = 'true';
+		process.env.ENABLE_NOTIFICATION_REDRIVE = 'true';
+		delete process.env.TELEGRAM_CHAT_ID;
+		const key = 'BINANCE|ETHUSDT|4h|BUY';
+		const defaultChannel = getCooldownChannelIdentity('telegram', {});
+
+		await notificationRedriveService.recordDeliveryResults(
+			{ text: SIGNAL_TEXT, correlationId: 'opposite-default-redrive' },
+			[{ channel: 'telegram', success: false, error: 'Initial zero-channel drop' }],
+			{ repeatCooldown: { key, channelsByName: { telegram: defaultChannel } } },
+		);
+
+		await request(app)
+			.post('/api/webhook/alert')
+			.set('x-api-key', 'test-key')
+			.send({ text: SIGNAL_TEXT.replace('COMPRA', 'VENTA'), channels: ['telegram'], telegramChatId: 'chat-a' })
+			.expect(200);
+
+		expect(notificationRedriveService.inMemoryStore.get('opposite-default-redrive_telegram').status)
+			.toBe('cancelled');
+	});
+
 	it('does not retain a late failure after an opposite-side delivery supersedes it', async () => {
 		process.env.ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION = 'true';
 		process.env.ENABLE_NOTIFICATION_REDRIVE = 'true';

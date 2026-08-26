@@ -363,7 +363,11 @@ function postAlert(botOrGetter) {
 					}
 					const oppositeKey = oppositeKeyOf(reservation.key);
 					if (oppositeKey) {
-						const cancellation = notificationRedriveService.cancelPendingRepeatCooldowns(oppositeKey, deliveredReservationChannels);
+						const oppositeChannels = [...new Set([
+							...deliveredReservationChannels,
+							...defaultDestinationChannels,
+						])];
+						const cancellation = notificationRedriveService.cancelPendingRepeatCooldowns(oppositeKey, oppositeChannels);
 						await Promise.race([
 							cancellation,
 							new Promise((resolve) => setTimeout(resolve, 500)),

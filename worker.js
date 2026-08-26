@@ -42,8 +42,9 @@ async function main() {
 			return;
 		}
 		stopping = true;
-		console.log(`[worker] ${signal} received; draining TradingView jobs.`);
+		console.log(`[worker] ${signal} received; stopping redrive intake and draining TradingView jobs.`);
 		try {
+			await notificationRedriveService.stopWorker({ drain: false });
 			await runtime.stop();
 			await notificationRedriveService.stopWorker({ drain: true });
 			stopNotificationBot(bot, signal);

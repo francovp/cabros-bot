@@ -333,6 +333,24 @@ describe('NotificationRedriveService', () => {
 			expect(result).toBe(false);
 		});
 
+		it('does not start overlapping cooldown reconciliation reads after timeout', async () => {
+			const stalledGet = jest.fn(() => new Promise(() => {}));
+			const query = {
+				get: stalledGet,
+				limit: jest.fn(() => query),
+			};
+			alertStorageService.getFirestore.mockReturnValue({
+				collection: jest.fn(() => ({ where: jest.fn(() => query) })),
+			});
+
+			await Promise.all([
+				service.reconcileRepeatCooldown('BINANCE|ETHUSDT|5m|BUY', ['telegram:destination-a']),
+				service.reconcileRepeatCooldown('BINANCE|ETHUSDT|5m|BUY', ['telegram:destination-a']),
+			]);
+
+			expect(stalledGet).toHaveBeenCalledTimes(1);
+		});
+
 		it('reconciles terminal Firestore redrives in the local cooldown store', async () => {
 			alertStorageService.getFirestore.mockReturnValue(mockFirestore);
 			const refreshSpy = jest.spyOn(signalRepeatCooldown, 'refresh');
@@ -443,6 +461,26 @@ describe('NotificationRedriveService', () => {
 			await service.cancelPendingRepeatCooldowns('BINANCE|ETHUSDT|4h|BUY', ['telegram:destination-a']);
 
 			expect(service.inMemoryStore.get('corr-cancel_telegram').status).toBe('cancelled');
+		});
+
+		it('does not cancel reservations created after the supersession marker', async () => {
+			const key = 'BINANCE|ETHUSDT|4h|BUY';
+			const channel = 'telegram:destination-a';
+			const now = Date.now();
+			service.inMemoryStore.set('old', {
+				id: 'old',
+				status: 'pending',
+				repeatCooldown: { key, channel, reservedAt: now - 100 },
+			});
+			service.inMemoryStore.set('new', {
+				id: 'new',
+				status: 'pending',
+				repeatCooldown: { key, channel, reservedAt: now + 10000 },
+			});
+			await service.cancelPendingRepeatCooldowns(key, [channel]);
+
+			expect(service.inMemoryStore.get('old').status).toBe('cancelled');
+			expect(service.inMemoryStore.get('new').status).toBe('pending');
 		});
 
 		it('blocks a redrive recorded after an opposite-side supersession', async () => {

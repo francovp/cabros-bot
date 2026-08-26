@@ -113,6 +113,7 @@ class NotificationRedriveService {
 	constructor(options = {}) {
 		this.inMemoryStore = new Map();
 		this.supersessionStore = new Map();
+		this.reconciliationPromise = null;
 		this.workerTimer = null;
 		this.activeSweepPromise = null;
 		this.running = false;
@@ -462,11 +463,21 @@ class NotificationRedriveService {
 	}
 
 	async reconcileRepeatCooldown(key, channels = []) {
+		if (!this.reconciliationPromise) {
+			this.reconciliationPromise = Promise.resolve()
+				.then(() => this._reconcileRepeatCooldown(key, channels, Date.now() + RECONCILIATION_TIMEOUT_MS))
+				.catch((error) => {
+					console.warn('[NotificationRedriveService] Cooldown reconciliation failed:', error.message);
+					return 0;
+				})
+				.finally(() => {
+					this.reconciliationPromise = null;
+				});
+		}
 		let timer = null;
-		const deadline = Date.now() + RECONCILIATION_TIMEOUT_MS;
 		try {
 			return await Promise.race([
-				this._reconcileRepeatCooldown(key, channels, deadline),
+				this.reconciliationPromise,
 				new Promise((resolve) => {
 					timer = setTimeout(() => resolve(0), RECONCILIATION_TIMEOUT_MS);
 				}),
@@ -625,7 +636,7 @@ class NotificationRedriveService {
 
 	async markRepeatSupersession(key, channels = []) {
 		if (!key || !Array.isArray(channels) || channels.length === 0) {
-			return;
+			return null;
 		}
 		const now = new Date();
 		const firestore = this.getFirestore();
@@ -645,13 +656,14 @@ class NotificationRedriveService {
 				}
 			}
 		}
+		return now;
 	}
 
 	async cancelPendingRepeatCooldowns(key, channels = []) {
 		if (!key || !Array.isArray(channels) || channels.length === 0) {
 			return 0;
 		}
-		await this.markRepeatSupersession(key, channels);
+		const supersededAtMs = toMillis(await this.markRepeatSupersession(key, channels));
 
 		const channelSet = new Set(channels);
 		const candidates = new Map();
@@ -660,6 +672,10 @@ class NotificationRedriveService {
 			&& ['pending', 'in_flight'].includes(record.status)
 			&& record.repeatCooldown?.key === key
 			&& channelSet.has(record.repeatCooldown.channel)
+			&& (() => {
+				const reservedAt = toMillis(record.repeatCooldown.reservedAt) || toMillis(record.createdAt);
+				return !supersededAtMs || !reservedAt || reservedAt <= supersededAtMs;
+			})()
 		);
 
 		for (const record of this.inMemoryStore.values()) {
@@ -1051,6 +1067,7 @@ class NotificationRedriveService {
 		}
 		this.inMemoryStore.clear();
 		this.supersessionStore.clear();
+		this.reconciliationPromise = null;
 		this.activeSweepPromise = null;
 		this.running = false;
 		this.lastRunAt = null;
