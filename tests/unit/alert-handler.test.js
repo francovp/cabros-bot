@@ -429,6 +429,149 @@ describe('Alert Handler', () => {
 		process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
 	});
 
+	it('emits Gemini technical levels when MCP enrichment fails and tags gemini provenance', async () => {
+		const previousGeminiFlag = process.env.ENABLE_GEMINI_GROUNDING;
+		process.env.ENABLE_GEMINI_GROUNDING = 'true';
+
+		tradingViewMcpService.isEnabled.mockReturnValue(true);
+		tradingViewMcpService.enrichFromAlertText.mockRejectedValue(new Error('MCP unavailable'));
+
+		groundAlert.mockResolvedValue({
+			sentiment: 'BULLISH',
+			sentiment_score: 0.8,
+			insights: ['Gemini insight'],
+			technical_levels: { supports: ['79,500'], resistances: ['$82,300', '83,000'] },
+			sources: [],
+			truncated: false,
+			modelUsed: 'gemini-2.5-flash',
+		});
+
+		const result = await enrichAlert({ text: 'BTCUSDT(240) pasó a señal de COMPRA' }, { useTradingViewData: true });
+
+		expect(result.technical_levels).toEqual({ supports: ['79,500'], resistances: ['$82,300', '83,000'] });
+		expect(result.levelsSource).toBe('gemini-grounding');
+
+		process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
+	});
+
+	it('emits Gemini technical levels on the Gemini-only path with provenance tag', async () => {
+		const previousGeminiFlag = process.env.ENABLE_GEMINI_GROUNDING;
+		process.env.ENABLE_GEMINI_GROUNDING = 'true';
+
+		tradingViewMcpService.isEnabled.mockReturnValue(false);
+
+		groundAlert.mockResolvedValue({
+			sentiment: 'BEARISH',
+			sentiment_score: -0.6,
+			insights: ['Gemini only'],
+			technical_levels: { supports: ['100k'], resistances: [] },
+			sources: [],
+			truncated: false,
+		});
+
+		const result = await enrichAlert({ text: 'BTCUSDT(240) pasó a señal de VENTA' });
+
+		expect(result.technical_levels).toEqual({ supports: ['100k'], resistances: [] });
+		expect(result.levelsSource).toBe('gemini-grounding');
+
+		process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
+	});
+
+	it('keeps behavior identical to today when MCP succeeds and provides its own levels', async () => {
+		const previousGeminiFlag = process.env.ENABLE_GEMINI_GROUNDING;
+		process.env.ENABLE_GEMINI_GROUNDING = 'true';
+
+		tradingViewMcpService.isEnabled.mockReturnValue(true);
+		tradingViewMcpService.enrichFromAlertText.mockResolvedValue({
+			original_text: 'BTCUSDT(240) pasó a señal de COMPRA',
+			tradingViewEnrichmentApplied: true,
+			tradingViewEnrichmentStatus: 'full',
+			sentiment: 'BULLISH',
+			sentiment_score: 0.6,
+			insights: ['MCP insight'],
+			technical_levels: { supports: ['65000'], resistances: ['68000'] },
+			sources: [],
+			truncated: false,
+		});
+
+		groundAlert.mockResolvedValue({
+			sentiment: 'BULLISH',
+			sentiment_score: 0.8,
+			insights: ['Gemini insight'],
+			technical_levels: { supports: ['79000'], resistances: ['83000'] },
+			sources: [],
+			truncated: false,
+			modelUsed: 'gemini-2.5-flash',
+		});
+
+		const result = await enrichAlert({ text: 'BTCUSDT(240) pasó a señal de COMPRA' }, { useTradingViewData: true });
+
+		expect(result.tradingViewEnrichmentApplied).toBe(true);
+		expect(result.tradingViewEnrichmentStatus).toBe('full');
+		expect(result.technical_levels.supports).toContain('65000');
+		expect(result.technical_levels.resistances).toContain('68000');
+		expect(result.levelsSource).toBeUndefined();
+
+		process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
+	});
+
+	it('suppresses Gemini fallback levels on a partial MCP enrichment that already carries levels', async () => {
+		const previousGeminiFlag = process.env.ENABLE_GEMINI_GROUNDING;
+		process.env.ENABLE_GEMINI_GROUNDING = 'true';
+
+		tradingViewMcpService.isEnabled.mockReturnValue(true);
+		tradingViewMcpService.enrichFromAlertText.mockResolvedValue({
+			original_text: 'BTCUSDT(240) pasó a señal de COMPRA',
+			tradingViewEnrichmentApplied: true,
+			tradingViewEnrichmentStatus: 'partial',
+			sentiment: 'BULLISH',
+			sentiment_score: 0.6,
+			insights: ['MCP insight'],
+			technical_levels: { supports: ['65000'], resistances: [] },
+			sources: [],
+			truncated: false,
+		});
+
+		groundAlert.mockResolvedValue({
+			sentiment: 'BULLISH',
+			sentiment_score: 0.8,
+			insights: ['Gemini insight'],
+			technical_levels: { supports: ['79000'], resistances: ['83000'] },
+			sources: [],
+			truncated: false,
+		});
+
+		const result = await enrichAlert({ text: 'BTCUSDT(240) pasó a señal de COMPRA' }, { useTradingViewData: true });
+
+		expect(result.technical_levels).toEqual({ supports: ['65000'], resistances: [] });
+		expect(result.levelsSource).toBeUndefined();
+
+		process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
+	});
+
+	it('omits Gemini fallback levels entirely when Gemini returns no usable levels during MCP failure', async () => {
+		const previousGeminiFlag = process.env.ENABLE_GEMINI_GROUNDING;
+		process.env.ENABLE_GEMINI_GROUNDING = 'true';
+
+		tradingViewMcpService.isEnabled.mockReturnValue(true);
+		tradingViewMcpService.enrichFromAlertText.mockResolvedValue(null);
+
+		groundAlert.mockResolvedValue({
+			sentiment: 'NEUTRAL',
+			sentiment_score: 0,
+			insights: ['No levels available'],
+			sources: [],
+			truncated: false,
+		});
+
+		const result = await enrichAlert({ text: 'BTCUSDT(240) pasó a señal de COMPRA' }, { useTradingViewData: true });
+
+		expect(result).not.toHaveProperty('technical_levels');
+		expect(result).not.toHaveProperty('levelsSource');
+
+		process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
+	});
+
 	it('should preserve structured MCP current_price and price_data when merged with Gemini enrichment', async () => {
 		const previousGeminiFlag = process.env.ENABLE_GEMINI_GROUNDING;
 		process.env.ENABLE_GEMINI_GROUNDING = 'true';

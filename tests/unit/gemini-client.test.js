@@ -131,6 +131,122 @@ describe('Gemini Service', () => {
 			expect(result).not.toHaveProperty('risk_reward_ratio');
 		});
 
+		it('parses valid technical_levels arrays from the model response', () => {
+			const result = parseEnrichedAlertResponse(JSON.stringify({
+				...mockEnrichedResponse,
+				technical_levels: {
+					supports: ['79,500', '78k', 77500],
+					resistances: ['$82,300', '83,000'],
+				},
+			}));
+
+			expect(result.technical_levels).toEqual({
+				supports: ['79,500', '78k', '77500'],
+				resistances: ['$82,300', '83,000'],
+			});
+		});
+
+		it('omits technical_levels when both level arrays are empty or missing', () => {
+			const emptyLevels = parseEnrichedAlertResponse(JSON.stringify({
+				...mockEnrichedResponse,
+				technical_levels: { supports: [], resistances: [] },
+			}));
+			expect(emptyLevels).not.toHaveProperty('technical_levels');
+
+			const missingLevels = parseEnrichedAlertResponse(JSON.stringify({ ...mockEnrichedResponse }));
+			expect(missingLevels).not.toHaveProperty('technical_levels');
+		});
+
+		it('drops malformed technical_levels entries and omits the field when nothing survives validation', () => {
+			const result = parseEnrichedAlertResponse(JSON.stringify({
+				...mockEnrichedResponse,
+				technical_levels: {
+					supports: [{ price: 1 }, '   ', null, '80,000', true],
+					resistances: [Number.NaN, [], 85000],
+				},
+			}));
+
+			expect(result.technical_levels).toEqual({
+				supports: ['80,000'],
+				resistances: ['85000'],
+			});
+
+			const allInvalid = parseEnrichedAlertResponse(JSON.stringify({
+				...mockEnrichedResponse,
+				technical_levels: {
+					supports: [{ price: 1 }, '   '],
+					resistances: [null],
+				},
+			}));
+			expect(allInvalid).not.toHaveProperty('technical_levels');
+		});
+
+		it('caps parsed technical level arrays at six entries per side', () => {
+			const result = parseEnrichedAlertResponse(JSON.stringify({
+				...mockEnrichedResponse,
+				technical_levels: {
+					supports: ['s1', 's2', 's3', 's4', 's5', 's6', 's7', 's8'],
+					resistances: ['r1', 'r2', 'r3', 'r4', 'r5', 'r6', 'r7'],
+				},
+			}));
+
+			expect(result.technical_levels.supports).toHaveLength(6);
+			expect(result.technical_levels.resistances).toHaveLength(6);
+		});
+
+		it('does not let malformed early entries consume the per-side quota', () => {
+			const result = parseEnrichedAlertResponse(JSON.stringify({
+				...mockEnrichedResponse,
+				technical_levels: {
+					supports: [{ bad: 1 }, '', null, true, Number.NaN, [], 's-valid-1', 's-valid-2'],
+					resistances: ['r-valid'],
+				},
+			}));
+
+			expect(result.technical_levels.supports).toEqual(['s-valid-1', 's-valid-2']);
+			expect(result.technical_levels.resistances).toEqual(['r-valid']);
+		});
+
+		it('preserves full precision when stringifying numeric levels, including tiny values', () => {
+			const result = parseEnrichedAlertResponse(JSON.stringify({
+				...mockEnrichedResponse,
+				technical_levels: {
+					supports: [1e-21, 77500],
+					resistances: [-1e-21, 1234.5678901234567],
+				},
+			}));
+
+			expect(result.technical_levels.supports).toEqual(['1e-21', '77500']);
+			expect(result.technical_levels.resistances).toEqual(['-1e-21', String(1234.5678901234567)]);
+		});
+
+		it('deduplicates levels before applying the per-side cap', () => {
+			const result = parseEnrichedAlertResponse(JSON.stringify({
+				...mockEnrichedResponse,
+				technical_levels: {
+					supports: ['80k', '80k', '80k', '80k', '80k', '80k', '79k', 80000],
+					resistances: ['85k'],
+				},
+			}));
+
+			expect(result.technical_levels.supports).toEqual(['80k', '79k', '80000']);
+			expect(result.technical_levels.resistances).toEqual(['85k']);
+		});
+
+		it('ignores non-object technical_levels payloads entirely', () => {
+			const stringPayload = parseEnrichedAlertResponse(JSON.stringify({
+				...mockEnrichedResponse,
+				technical_levels: 'supports at 80k',
+			}));
+			expect(stringPayload).not.toHaveProperty('technical_levels');
+
+			const arrayPayload = parseEnrichedAlertResponse(JSON.stringify({
+				...mockEnrichedResponse,
+				technical_levels: [80000],
+			}));
+			expect(arrayPayload).not.toHaveProperty('technical_levels');
+		});
+
 		describe('sentiment_score signed range and sign-coherence guard', () => {
 			it('preserves negative sentiment_score in [-1, 1] for BEARISH sentiment', () => {
 				const result = parseEnrichedAlertResponse(JSON.stringify({

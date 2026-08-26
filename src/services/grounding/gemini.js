@@ -67,6 +67,69 @@ function parseOptionalSetupType(value) {
 	return SETUP_TYPES.has(normalized) ? normalized : undefined;
 }
 
+const MAX_TECHNICAL_LEVELS_PER_SIDE = 6;
+
+// Validates one raw level entry: finite numbers and non-empty strings are kept as-is,
+// everything else (objects, arrays, blanks, NaN) is dropped so no fabricated structure persists.
+function parseTechnicalLevelEntry(value) {
+	if (typeof value === 'number' && Number.isFinite(value)) {
+		return value;
+	}
+
+	if (typeof value === 'string') {
+		const trimmed = value.trim();
+		return trimmed ? trimmed : undefined;
+	}
+
+	return undefined;
+}
+
+const NUMERIC_LEVEL_STRING_OPTIONS = { useGrouping: false, maximumFractionDigits: 20 };
+
+// Formatters expect string levels (smartEscapeMarkdownV2 only accepts strings), so
+// numeric entries are normalized to their exact decimal representation here.
+// String() preserves full double precision (e.g. 1e-21 stays "1e-21") where
+// toLocaleString with a 20-digit cap would round tiny values to "0".
+function formatTechnicalLevelEntry(entry) {
+	if (typeof entry === 'number') {
+		return Number.isInteger(entry)
+			? entry.toLocaleString('en-US', NUMERIC_LEVEL_STRING_OPTIONS)
+			: String(entry);
+	}
+
+	return entry;
+}
+
+// Re-introduced by GH-509 / CB-226: the alert-enrichment prompt asks the model for a
+// technical_levels object, but PR #34 stopped parsing it. Levels are only surfaced
+// downstream when TradingView MCP data is absent/failed (see alert handler merge),
+// and are provenance-tagged there so consumers can distinguish provider quality.
+function parseOptionalTechnicalLevels(value) {
+	if (!value || typeof value !== 'object' || Array.isArray(value)) {
+		return undefined;
+	}
+
+	// Validate/normalize every entry first, deduplicate, then cap — malformed or
+	// duplicated early entries must not consume the per-side quota.
+	const parseLevelSide = side => (Array.isArray(value[side])
+		? [...new Set(
+			value[side]
+				.map(parseTechnicalLevelEntry)
+				.filter(entry => entry !== undefined)
+				.map(formatTechnicalLevelEntry),
+		)].slice(0, MAX_TECHNICAL_LEVELS_PER_SIDE)
+		: []);
+
+	const supports = parseLevelSide('supports');
+	const resistances = parseLevelSide('resistances');
+
+	if (supports.length === 0 && resistances.length === 0) {
+		return undefined;
+	}
+
+	return { supports, resistances };
+}
+
 function getPromptProvenance(prompt) {
 	const name = typeof prompt?.name === 'string' && prompt.name.trim()
 		? prompt.name.trim()
@@ -733,10 +796,13 @@ function parseEnrichedAlertResponse(response) {
 			risk_reward_ratio: parseOptionalRiskValue(parsed.risk_reward_ratio),
 		};
 
+		const technicalLevels = parseOptionalTechnicalLevels(parsed.technical_levels);
+
 		return {
 			sentiment: parsed.sentiment,
 			sentiment_score: sentimentScore,
 			insights: Array.isArray(parsed.insights) ? parsed.insights : [],
+			...(technicalLevels ? { technical_levels: technicalLevels } : {}),
 			...Object.fromEntries(
 				Object.entries(optionalRiskMetadata).filter(([, value]) => value !== undefined),
 			),

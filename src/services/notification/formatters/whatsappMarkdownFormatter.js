@@ -212,11 +212,11 @@ class WhatsAppMarkdownFormatter {
 		if (hasSupports || hasResistances) {
 			message += '\n\n*Technical Levels*';
 			if (hasSupports) {
-				const supports = technical_levels.supports.join(', ');
+				const supports = technical_levels.supports.map(s => String(s)).join(', ');
 				message += `\nSupports: ${supports}`;
 			}
 			if (hasResistances) {
-				const resistances = technical_levels.resistances.join(', ');
+				const resistances = technical_levels.resistances.map(r => String(r)).join(', ');
 				message += `\nResistances: ${resistances}`;
 			}
 		}

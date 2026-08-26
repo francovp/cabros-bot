@@ -69,6 +69,17 @@ describe('News Alert Source Formatting', () => {
 			expect(message).not.toContain('*Technical Levels*');
 		});
 
+		it('escapes raw markdown delimiters in untrusted level strings', () => {
+			const alert = {
+				...mockEnrichedAlert,
+				technical_levels: { supports: ['80_000', '79*500'], resistances: [] },
+			};
+			const message = formatter.formatEnriched(alert);
+
+			expect(message).toContain('Supports: 80\\_000, 79\\*500');
+			expect(message).not.toContain('80_000,');
+		});
+
 		it('should handle missing sources', () => {
 			const alert = { ...mockEnrichedAlert, sources: [] };
 			const message = formatter.formatEnriched(alert);
