@@ -101,6 +101,26 @@ function releaseRepeatCooldown(record) {
 	signalRepeatCooldown.release(repeatCooldown.key, [repeatCooldown.channel]);
 }
 
+async function resolveBeforeDeadline(promise, deadline) {
+	const remainingMs = Math.max(0, deadline - Date.now());
+	if (remainingMs === 0) {
+		return null;
+	}
+	let timer = null;
+	try {
+		return await Promise.race([
+			promise,
+			new Promise((resolve) => {
+				timer = setTimeout(() => resolve(null), remainingMs);
+			}),
+		]);
+	} finally {
+		if (timer) {
+			clearTimeout(timer);
+		}
+	}
+}
+
 function getRedriveRouting(channel, routing, repeatCooldown) {
 	const destination = repeatCooldown?.destinationsByName?.[channel];
 	const field = ROUTING_FIELDS[channel];
@@ -248,22 +268,36 @@ class NotificationRedriveService {
 					let timer = null;
 					const write = firestore.collection(COLLECTION_NAME).doc(recordId)
 						.set(sanitizedRecord, { merge: true });
-					const persisted = await Promise.race([
-						write.then(() => true, (error) => {
+					const writeOutcome = write.then(() => 'persisted', (error) => {
 							console.warn(`[NotificationRedriveService] Failed to persist dead-letter ${recordId} in Firestore, kept in-memory:`, error.message);
-							return false;
-						}),
+							return 'failed';
+						});
+					const persisted = await Promise.race([
+						writeOutcome,
 						new Promise((resolve) => {
-							timer = setTimeout(() => resolve(false), DURABLE_ENQUEUE_TIMEOUT_MS);
+							timer = setTimeout(() => resolve('timed_out'), DURABLE_ENQUEUE_TIMEOUT_MS);
 						}),
 					]);
 					if (timer) {
 						clearTimeout(timer);
 					}
-					if (persisted) {
+					if (persisted === 'persisted') {
 						console.debug(`[NotificationRedriveService] Recorded dead-letter ${recordId} in Firestore`);
-					} else if (this.getWorkerRole() !== 'web') {
+					} else if (persisted === 'failed' && this.getWorkerRole() !== 'web') {
 						releaseRepeatCooldown(record);
+					} else if (persisted === 'timed_out') {
+						trackBackgroundTask(writeOutcome.then(async (outcome) => {
+							if (outcome === 'persisted') {
+								await this.markTerminal(recordId, 'cancelled', {
+									lastError: 'Durable enqueue timed out before ownership was established',
+								});
+							}
+							if (this.getWorkerRole() !== 'web') {
+								releaseRepeatCooldown(record);
+							}
+						})).catch((error) => {
+							console.warn(`[NotificationRedriveService] Failed to terminalize late dead-letter ${recordId}:`, error.message);
+						});
 					}
 				} catch (error) {
 					console.warn(`[NotificationRedriveService] Failed to persist dead-letter ${recordId} in Firestore, kept in-memory:`, error.message);
@@ -484,22 +518,32 @@ class NotificationRedriveService {
 	async reconcileRepeatCooldown(key, channels = []) {
 		const identity = `${key}|${[...channels].sort().join(',')}`;
 		if (!this.reconciliationPromises.has(identity)) {
-			this.reconciliationPromises.set(identity, Promise.resolve()
-				.then(() => this._reconcileRepeatCooldown(key, channels, Date.now() + RECONCILIATION_TIMEOUT_MS))
+			let reconciliationPromise;
+			reconciliationPromise = Promise.resolve()
+					.then(() => this._reconcileRepeatCooldown(key, channels, Date.now() + RECONCILIATION_TIMEOUT_MS))
 				.catch((error) => {
 					console.warn('[NotificationRedriveService] Cooldown reconciliation failed:', error.message);
 					return 0;
 				})
-				.finally(() => {
-					this.reconciliationPromises.delete(identity);
-				}));
+					.finally(() => {
+						if (this.reconciliationPromises.get(identity) === reconciliationPromise) {
+							this.reconciliationPromises.delete(identity);
+						}
+					});
+			this.reconciliationPromises.set(identity, reconciliationPromise);
 		}
 		let timer = null;
 		try {
+			const reconciliationPromise = this.reconciliationPromises.get(identity);
 			return await Promise.race([
-				this.reconciliationPromises.get(identity),
+				reconciliationPromise,
 				new Promise((resolve) => {
-					timer = setTimeout(() => resolve(0), RECONCILIATION_TIMEOUT_MS);
+					timer = setTimeout(() => {
+						if (this.reconciliationPromises.get(identity) === reconciliationPromise) {
+							this.reconciliationPromises.delete(identity);
+						}
+						resolve(0);
+					}, RECONCILIATION_TIMEOUT_MS);
 				}),
 			]);
 		} finally {
@@ -539,7 +583,10 @@ class NotificationRedriveService {
 					if (Date.now() >= deadline) {
 						break;
 					}
-					const snapshot = await query.get();
+					const snapshot = await resolveBeforeDeadline(query.get(), deadline);
+					if (!snapshot) {
+						break;
+					}
 					const docs = snapshot?.docs || [];
 					for (const doc of docs) {
 						const record = { ...doc.data(), id: doc.id };
@@ -576,7 +623,11 @@ class NotificationRedriveService {
 			}
 			const channel = record.repeatCooldown.channel;
 			const localTimestamp = signalRepeatCooldown.getChannelTimestamp(key, channel);
+			const reservedAt = toMillis(record.repeatCooldown.reservedAt);
 			const terminalAt = toMillis(record.deliveredAt || record.terminalAt || record.updatedAt);
+			if (reservedAt && Number.isFinite(localTimestamp) && localTimestamp > reservedAt) {
+				continue;
+			}
 			if (!Number.isFinite(localTimestamp) || !terminalAt || terminalAt <= localTimestamp) {
 				continue;
 			}
