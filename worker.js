@@ -6,6 +6,7 @@ require('./instrument.js');
 const { Telegraf } = require('telegraf');
 const { initializeNotificationServices } = require('./src/controllers/webhooks/handlers/alert/alert');
 const { startJobWorker } = require('./src/services/jobs/jobWorker');
+const { notificationRedriveService } = require('./src/services/notification/NotificationRedriveService');
 const sentryService = require('./src/services/monitoring/SentryService');
 
 function buildNotificationBot() {
@@ -32,6 +33,7 @@ async function main() {
 
 	const bot = buildNotificationBot();
 	await initializeNotificationServices(bot);
+	notificationRedriveService.startWorker({ source: 'worker', unref: false });
 	const runtime = await startJobWorker({ botOrGetter: bot });
 	let stopping = false;
 
@@ -43,6 +45,7 @@ async function main() {
 		console.log(`[worker] ${signal} received; draining TradingView jobs.`);
 		try {
 			await runtime.stop();
+			await notificationRedriveService.stopWorker({ drain: true });
 			stopNotificationBot(bot, signal);
 			await sentryService.flush(2000);
 			process.exit(0);

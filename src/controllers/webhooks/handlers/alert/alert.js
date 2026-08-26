@@ -23,7 +23,7 @@ const {
 } = require('../../../../services/notification/requestRouting');
 const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteConfigService');
 const { parseTradingViewSignal, TIMEFRAME_MAP } = require('../../../../services/tradingview/parseTradingViewSignal');
-const { signalRepeatCooldown, oppositeKeyOf } = require('../../../../services/alerts/signalRepeatCooldown');
+const { signalRepeatCooldown, oppositeKeyOf, buildSignalKey } = require('../../../../services/alerts/signalRepeatCooldown');
 const { notificationRedriveService } = require('../../../../services/notification/NotificationRedriveService');
 
 // Initialize services
@@ -252,6 +252,7 @@ function postAlert(botOrGetter) {
 				);
 				if (parsedSignal && hasUsableTimeframe && requestedChannels.length > 0) {
 					const cooldownChannels = requestedChannels.map((channel) => getCooldownChannelIdentity(channel, routing));
+					await notificationRedriveService.reconcileRepeatCooldown(buildSignalKey(parsedSignal), cooldownChannels);
 					const verdict = signalRepeatCooldown.reserve(
 						{ ...parsedSignal, timeframe: parsedSignal.timeframe },
 						cooldownChannels,

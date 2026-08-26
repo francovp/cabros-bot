@@ -18,6 +18,15 @@ function waitForShutdown() {
 	return new Promise((resolve) => setImmediate(resolve));
 }
 
+function mockNotificationRedrive() {
+	jest.doMock('../../src/services/notification/NotificationRedriveService', () => ({
+		notificationRedriveService: {
+			startWorker: jest.fn(),
+			stopWorker: jest.fn(async () => events.push('redrive:stop')),
+		},
+	}));
+}
+
 describe('standalone worker Sentry shutdown flush', () => {
 	beforeEach(() => {
 		jest.resetModules();
@@ -44,13 +53,14 @@ describe('standalone worker Sentry shutdown flush', () => {
 				stop: jest.fn(async () => events.push('jobs:stop')),
 			}),
 		}));
+		mockNotificationRedrive();
 
 		const { main } = require('../../worker');
 		await main();
 		process.emit('SIGTERM');
 		await waitForShutdown();
 
-		expect(events).toEqual(['jobs:stop', 'flush:2000', 'exit:0']);
+		expect(events).toEqual(['jobs:stop', 'redrive:stop', 'flush:2000', 'exit:0']);
 	});
 
 	it('flushes Sentry after TradingView job drain in firestore-poller mode and before exit', async () => {
@@ -64,13 +74,14 @@ describe('standalone worker Sentry shutdown flush', () => {
 				stop: jest.fn(async () => events.push('jobs:stop')),
 			}),
 		}));
+		mockNotificationRedrive();
 
 		const { main } = require('../../worker');
 		await main();
 		process.emit('SIGTERM');
 		await waitForShutdown();
 
-		expect(events).toEqual(['jobs:stop', 'flush:2000', 'exit:0']);
+		expect(events).toEqual(['jobs:stop', 'redrive:stop', 'flush:2000', 'exit:0']);
 	});
 
 	it('flushes Sentry before nonzero exit when TradingView job drain fails', async () => {
@@ -87,6 +98,7 @@ describe('standalone worker Sentry shutdown flush', () => {
 				}),
 			}),
 		}));
+		mockNotificationRedrive();
 
 		const { main } = require('../../worker');
 		await main();

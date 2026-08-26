@@ -432,6 +432,80 @@ class NotificationRedriveService {
 		}
 	}
 
+	async reconcileRepeatCooldown(key, channels = []) {
+		if (!key || !Array.isArray(channels) || channels.length === 0) {
+			return 0;
+		}
+
+		const channelSet = new Set(channels);
+		const candidates = new Map();
+		const matches = (record) => (
+			record
+			&& record.repeatCooldown?.key === key
+			&& channelSet.has(record.repeatCooldown.channel)
+			&& ['delivered', 'expired', 'exhausted', 'cancelled'].includes(record.status)
+		);
+
+		for (const record of this.inMemoryStore.values()) {
+			if (matches(record)) {
+				candidates.set(record.id, record);
+			}
+		}
+
+		const firestore = this.getFirestore();
+		if (firestore) {
+			try {
+				const snapshot = await firestore.collection(COLLECTION_NAME)
+					.where('repeatCooldown.key', '==', key)
+					.limit(200)
+					.get();
+				for (const doc of snapshot?.docs || []) {
+					const record = { ...doc.data(), id: doc.id };
+					if (matches(record)) {
+						candidates.set(record.id, record);
+					}
+				}
+			} catch (error) {
+				console.warn('[NotificationRedriveService] Failed to reconcile cooldown state:', error.message);
+			}
+		}
+
+		for (const record of candidates.values()) {
+			const channel = record.repeatCooldown.channel;
+			if (record.status === 'delivered') {
+				const refreshedAt = toMillis(record.deliveredAt || record.terminalAt || record.updatedAt);
+				if (refreshedAt > 0) {
+					signalRepeatCooldown.refresh(key, [channel], refreshedAt);
+				}
+			} else {
+				releaseRepeatCooldown(record);
+			}
+		}
+		return candidates.size;
+	}
+
+	async isRepeatCooldownSuperseded(record) {
+		if (!record?.id || !record.repeatCooldown?.key || !record.repeatCooldown.channel) {
+			return false;
+		}
+
+		if (this.inMemoryStore.get(record.id)?.status === 'cancelled') {
+			return true;
+		}
+
+		const firestore = this.getFirestore();
+		if (!firestore) {
+			return false;
+		}
+		try {
+			const snapshot = await firestore.collection(COLLECTION_NAME).doc(record.id).get();
+			return snapshot?.exists && snapshot.data()?.status === 'cancelled';
+		} catch (error) {
+			console.warn('[NotificationRedriveService] Failed to check superseded redrive:', error.message);
+			return false;
+		}
+	}
+
 	async cancelPendingRepeatCooldowns(key, channels = []) {
 		if (!key || !Array.isArray(channels) || channels.length === 0) {
 			return 0;
@@ -441,7 +515,7 @@ class NotificationRedriveService {
 		const candidates = new Map();
 		const matches = (record) => (
 			record
-			&& record.status === 'pending'
+			&& ['pending', 'in_flight'].includes(record.status)
 			&& record.repeatCooldown?.key === key
 			&& channelSet.has(record.repeatCooldown.channel)
 		);
@@ -583,7 +657,14 @@ class NotificationRedriveService {
 
 				// Claim record with lease
 				const claimed = await this.claimRecord(candidate, leaseMs);
-				if (!claimed) {
+			if (!claimed) {
+					continue;
+				}
+
+				if (await this.isRepeatCooldownSuperseded(claimed)) {
+					await this.markTerminal(claimed.id, 'cancelled', {
+						lastError: 'Superseded by an opposite-side signal',
+					});
 					continue;
 				}
 

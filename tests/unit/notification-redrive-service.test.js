@@ -215,7 +215,25 @@ describe('NotificationRedriveService', () => {
 		});
 	});
 
-	describe('sweep and redrive', () => {
+		describe('sweep and redrive', () => {
+		it('reconciles terminal Firestore redrives in the local cooldown store', async () => {
+			alertStorageService.getFirestore.mockReturnValue(mockFirestore);
+			const refreshSpy = jest.spyOn(signalRepeatCooldown, 'refresh');
+			mockDocs.set('corr-reconcile_telegram', {
+				status: 'delivered',
+				repeatCooldown: {
+					key: 'BINANCE|ETHUSDT|5m|BUY',
+					channel: 'telegram:destination-a',
+				},
+				deliveredAt: new Date(5000),
+			});
+
+			await service.reconcileRepeatCooldown('BINANCE|ETHUSDT|5m|BUY', ['telegram:destination-a']);
+
+			expect(refreshSpy).toHaveBeenCalledWith('BINANCE|ETHUSDT|5m|BUY', ['telegram:destination-a'], 5000);
+			refreshSpy.mockRestore();
+		});
+
 		it('cancels pending opposite-side redrives', async () => {
 			await service.recordDeliveryResults(
 				{ text: 'BUY signal', correlationId: 'corr-cancel' },
@@ -231,6 +249,48 @@ describe('NotificationRedriveService', () => {
 			await service.cancelPendingRepeatCooldowns('BINANCE|ETHUSDT|4h|BUY', ['telegram:destination-a']);
 
 			expect(service.inMemoryStore.get('corr-cancel_telegram').status).toBe('cancelled');
+		});
+
+		it('cancels already claimed opposite-side redrives', async () => {
+			await service.recordDeliveryResults(
+				{ text: 'BUY signal', correlationId: 'corr-in-flight' },
+				[{ channel: 'telegram', success: false, error: 'Initial failure' }],
+				{
+					repeatCooldown: {
+						key: 'BINANCE|ETHUSDT|4h|BUY',
+						channelsByName: { telegram: 'telegram:destination-a' },
+					},
+				},
+			);
+			service.inMemoryStore.get('corr-in-flight_telegram').status = 'in_flight';
+
+			await service.cancelPendingRepeatCooldowns('BINANCE|ETHUSDT|4h|BUY', ['telegram:destination-a']);
+
+			expect(service.inMemoryStore.get('corr-in-flight_telegram').status).toBe('cancelled');
+		});
+
+		it('skips dispatch when a claimed redrive was superseded', async () => {
+			const mockTelegramSend = jest.fn();
+			service.setNotificationManagerGetter(() => ({
+				sendToChannels: jest.fn(),
+			}));
+			await service.recordDeliveryResults(
+				{ text: 'BUY signal', correlationId: 'corr-superseded' },
+				[{ channel: 'telegram', success: false, error: 'Initial failure' }],
+				{
+					repeatCooldown: {
+						key: 'BINANCE|ETHUSDT|4h|BUY',
+						channelsByName: { telegram: 'telegram:destination-a' },
+					},
+				},
+			);
+			service.inMemoryStore.get('corr-superseded_telegram').nextAttemptAt = Date.now() - 1000;
+			jest.spyOn(service, 'isRepeatCooldownSuperseded').mockResolvedValue(true);
+
+			await service.sweep();
+
+			expect(mockTelegramSend).not.toHaveBeenCalled();
+			expect(service.inMemoryStore.get('corr-superseded_telegram').status).toBe('cancelled');
 		});
 
 		it('refreshes cooldown state when redrive succeeds', async () => {
