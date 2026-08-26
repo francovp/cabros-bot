@@ -103,7 +103,7 @@ function releaseRepeatCooldown(record) {
 function getRedriveRouting(channel, routing, repeatCooldown) {
 	const destination = repeatCooldown?.destinationsByName?.[channel];
 	const field = ROUTING_FIELDS[channel];
-	if (!field || destination === undefined) {
+	if (!field || destination === undefined || destination === 'default') {
 		return routing || null;
 	}
 	return { ...(routing || {}), [field]: destination };
@@ -211,11 +211,12 @@ class NotificationRedriveService {
 				attemptCount: 0,
 				lastError: failure.error ? String(failure.error) : 'Unknown delivery failure',
 				lastStatusCode: typeof failure.statusCode === 'number' ? failure.statusCode : null,
-				repeatCooldown: options.repeatCooldown && options.repeatCooldown.key
-					? {
-						key: String(options.repeatCooldown.key),
-						channel: options.repeatCooldown.channelsByName?.[channel] || null,
-					}
+					repeatCooldown: options.repeatCooldown && options.repeatCooldown.key
+						? {
+							key: String(options.repeatCooldown.key),
+							channel: options.repeatCooldown.channelsByName?.[channel] || null,
+							reservedAt: options.repeatCooldown.reservedAt,
+						}
 					: null,
 				createdAt: toTimestamp(nowDate),
 				updatedAt: toTimestamp(nowDate),
@@ -563,7 +564,7 @@ class NotificationRedriveService {
 		}
 
 		const supersessionId = this.getSupersessionId(record.repeatCooldown.key, record.repeatCooldown.channel);
-		const recordCreatedAt = toMillis(record.createdAt);
+		const recordCreatedAt = toMillis(record.repeatCooldown.reservedAt) || toMillis(record.createdAt);
 		const localSupersession = this.supersessionStore.get(supersessionId);
 		if ((localSupersession
 			&& (!recordCreatedAt || toMillis(localSupersession.supersededAt) >= recordCreatedAt))

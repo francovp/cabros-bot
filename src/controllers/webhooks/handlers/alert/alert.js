@@ -271,6 +271,7 @@ function postAlert(botOrGetter) {
 						reservation = verdict;
 						repeatCooldownOptions = {
 							key: verdict.key,
+							reservedAt: verdict.reservedAt,
 							channelsByName: Object.fromEntries(verdict.channels.map((channel) => [getChannelName(channel), channel])),
 							destinationsByName: Object.fromEntries(verdict.channels.map((channel) => {
 								const channelName = getChannelName(channel);

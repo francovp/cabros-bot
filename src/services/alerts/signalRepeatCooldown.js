@@ -168,7 +168,7 @@ function reserve(signal, channels = [], now = Date.now()) {
 			entry.firedAt = now;
 			this.store.set(key, entry);
 			evictIfNeeded.call(this, now);
-			return { suppressed: false, key, windowMs, channels: availableChannels };
+				return { suppressed: false, key, windowMs, channels: availableChannels, reservedAt: now };
 		}
 
 		if (entry && currentIsActive) {
@@ -188,7 +188,7 @@ function reserve(signal, channels = [], now = Date.now()) {
 		trimChannels(nextEntry);
 		this.store.set(key, nextEntry);
 		evictIfNeeded.call(this, now);
-		return { suppressed: false, key, windowMs, channels: requestedChannels };
+		return { suppressed: false, key, windowMs, channels: requestedChannels, reservedAt: now };
 	} catch (error) {
 		console.warn('[SignalRepeatCooldown] Store reservation failed, failing open:', error.message);
 		return { suppressed: false, key, windowMs, channels: requestedChannels, storeError: true };

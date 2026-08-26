@@ -245,6 +245,40 @@ describe('NotificationRedriveService', () => {
 	});
 
 		describe('sweep and redrive', () => {
+		it('compares supersession with reservation time instead of enqueue time', async () => {
+			const key = 'BINANCE|ETHUSDT|5m|BUY';
+			const channel = 'telegram:destination-a';
+			const record = {
+				id: 'late-failure_telegram',
+				createdAt: new Date(2_000),
+				repeatCooldown: { key, channel, reservedAt: 1_000 },
+			};
+			service.supersessionStore.set(service.getSupersessionId(key, channel), {
+				status: 'superseded',
+				supersededAt: new Date(1_500),
+			});
+
+			expect(await service.isRepeatCooldownSuperseded(record)).toBe(true);
+		});
+
+		it('does not persist the default destination sentinel for redrive', async () => {
+			await service.recordDeliveryResults(
+				{ text: 'Telegram signal', correlationId: 'corr-default-destination' },
+				[{ channel: 'telegram', success: false, error: 'Initial failure' }],
+				{
+					routing: { channels: ['telegram'] },
+					repeatCooldown: {
+						key: 'BINANCE|ETHUSDT|5m|BUY',
+						channelsByName: { telegram: 'telegram:default' },
+						destinationsByName: { telegram: 'default' },
+					},
+				},
+			);
+
+			expect(service.inMemoryStore.get('corr-default-destination_telegram').destinationOverride)
+				.toEqual({ channels: ['telegram'] });
+		});
+
 		it('redrives to the destination used by the cooldown identity', async () => {
 			const mockTelegramSend = jest.fn().mockResolvedValue({ success: true, messageId: 'redrive-destination' });
 			const mockNotificationManager = {
