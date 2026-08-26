@@ -309,6 +309,27 @@ function postAlert(botOrGetter) {
 			}
 			const deliveredChannels = suppressedRepeat ? [] : getDeliveredChannels(results);
 			if (reservation) {
+				const failedChannelNames = new Set(
+					results.filter((result) => result && !result.success).map((result) => result.channel),
+				);
+				const supersededReservationChannels = new Set();
+				if (notificationRedriveService.isEnabled() && failedChannelNames.size > 0) {
+					await Promise.all(reservation.channels
+						.filter((channel) => failedChannelNames.has(getChannelName(channel)))
+						.map(async (channel) => {
+							const superseded = await notificationRedriveService.isRepeatCooldownSuperseded({
+								id: `${requestId}_${getChannelName(channel)}`,
+								repeatCooldown: {
+									key: reservation.key,
+									channel,
+									reservedAt: reservation.reservedAt,
+								},
+							});
+							if (superseded) {
+								supersededReservationChannels.add(channel);
+							}
+						}));
+				}
 				const zeroChannelRedriveExpected = requestedChannels.length === 0
 					&& !notificationManager.isIntentionalApiOnly();
 				const deliveredReservationChannels = reservation.channels.filter((channel) => (
@@ -318,8 +339,11 @@ function postAlert(botOrGetter) {
 					&& notificationRedriveService.getWorkerRole() !== 'disabled'
 					&& (notificationRedriveService.getWorkerRole() === 'web' || notificationRedriveService.hasDurableStore())
 					&& (results.some((result) => result && !result.success) || zeroChannelRedriveExpected);
+				const redriveReservationChannels = reservation.channels.filter((channel) => (
+					!supersededReservationChannels.has(channel)
+				));
 				const finalizationChannels = keepFailedForRedrive
-					? reservation.channels
+					? redriveReservationChannels
 					: deliveredReservationChannels;
 				signalRepeatCooldown.finalize(reservation.key, reservation.channels, finalizationChannels, deliveredReservationChannels);
 				if (notificationRedriveService.isEnabled() && deliveredReservationChannels.length > 0) {

@@ -609,6 +609,16 @@ class NotificationRedriveService {
 		}
 	}
 
+	async watchRepeatCooldownSupersession(record, controller, isActive) {
+		while (isActive() && !controller.signal.aborted) {
+			await new Promise((resolve) => setTimeout(resolve, 50));
+			if (isActive() && await this.isRepeatCooldownSuperseded(record)) {
+				controller.abort();
+				break;
+			}
+		}
+	}
+
 	getSupersessionId(key, channel) {
 		return `_repeat_supersession_${crypto.createHash('sha256').update(`${key}|${channel}`).digest('hex')}`;
 	}
@@ -809,20 +819,35 @@ class NotificationRedriveService {
 
 				// Dispatch redrive ONLY to the failed channel
 				try {
+					const dispatchController = new AbortController();
+					const dispatchSignal = options.signal && typeof AbortSignal !== 'undefined' && typeof AbortSignal.any === 'function'
+						? AbortSignal.any([options.signal, dispatchController.signal])
+						: dispatchController.signal;
+					let dispatchComplete = false;
+					const supersessionWatcher = claimed.repeatCooldown?.key && claimed.repeatCooldown?.channel
+						? this.watchRepeatCooldownSupersession(claimed, dispatchController, () => !dispatchComplete)
+						: Promise.resolve();
 					const alertPayload = {
 						...(claimed.alert || {}),
 						...(claimed.destinationOverride || {}),
 					};
 
-					const results = await notificationManager.sendToChannels(
-						alertPayload,
-						[claimed.channel],
-						{
-							...options,
-							isRedrive: true,
-							parentSpan: options.parentSpan,
-						},
-					);
+					let results;
+					try {
+						results = await notificationManager.sendToChannels(
+							alertPayload,
+							[claimed.channel],
+							{
+								...options,
+								isRedrive: true,
+								parentSpan: options.parentSpan,
+								signal: dispatchSignal,
+							},
+						);
+					} finally {
+						dispatchComplete = true;
+						await supersessionWatcher;
+					}
 
 					const channelResult = Array.isArray(results) && results[0] ? results[0] : null;
 					if (await this.isRepeatCooldownSuperseded(claimed, Date.now() + RECONCILIATION_TIMEOUT_MS)) {

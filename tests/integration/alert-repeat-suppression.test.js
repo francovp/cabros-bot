@@ -144,6 +144,29 @@ describe('Alert repeat suppression endpoint behavior', () => {
 			.toBe('cancelled');
 	});
 
+	it('does not retain a late failure after an opposite-side delivery supersedes it', async () => {
+		process.env.ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION = 'true';
+		process.env.ENABLE_NOTIFICATION_REDRIVE = 'true';
+		const supersededSpy = jest.spyOn(notificationRedriveService, 'isRepeatCooldownSuperseded').mockResolvedValue(true);
+		mockTelegramSendMessage.mockRejectedValueOnce(new Error('late BUY failure'));
+
+		try {
+			await request(app)
+				.post('/api/webhook/alert')
+				.set('x-api-key', 'test-key')
+				.send({ text: SIGNAL_TEXT })
+				.expect(200);
+
+			expect(supersededSpy).toHaveBeenCalled();
+			expect(signalRepeatCooldown.getChannelTimestamp(
+				'BINANCE|ETHUSDT|4h|BUY',
+				getCooldownChannelIdentity('telegram', {}),
+			)).toBeNull();
+		} finally {
+			supersededSpy.mockRestore();
+		}
+	});
+
 	it('does not record suppressed repeats as signal outcomes', async () => {
 		process.env.ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION = 'true';
 		const enabledSpy = jest.spyOn(signalOutcomeService, 'isEnabled').mockReturnValue(true);

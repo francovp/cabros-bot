@@ -580,6 +580,43 @@ describe('NotificationRedriveService', () => {
 			expect(service.totalDeliveredCount).toBe(1);
 		});
 
+		it('aborts an in-flight redrive when the signal is superseded', async () => {
+			const key = 'BINANCE|ETHUSDT|4h|BUY';
+			const channel = 'telegram:destination-a';
+			let resolveDispatch;
+			let dispatchSignal;
+			const dispatchStarted = new Promise((resolve) => {
+				service.setNotificationManagerGetter(() => ({
+					channels: new Map([['telegram', { name: 'telegram', isEnabled: () => true }]]),
+					sendToChannels: jest.fn((payload, channels, options) => {
+						dispatchSignal = options.signal;
+						resolve();
+						return new Promise((dispatchResolve) => {
+							resolveDispatch = dispatchResolve;
+						});
+					}),
+				}));
+			});
+
+			await service.recordDeliveryResults(
+				{ text: 'BUY signal', correlationId: 'corr-abort' },
+				[{ channel: 'telegram', success: false, error: 'Initial failure' }],
+				{ repeatCooldown: { key, channelsByName: { telegram: channel } } },
+			);
+			service.inMemoryStore.get('corr-abort_telegram').nextAttemptAt = Date.now() - 1000;
+
+			const sweepPromise = service.sweep();
+			await dispatchStarted;
+			await service.cancelPendingRepeatCooldowns(key, [channel]);
+			await new Promise((resolve) => setTimeout(resolve, 100));
+
+			expect(dispatchSignal).toBeDefined();
+			expect(dispatchSignal.aborted).toBe(true);
+			resolveDispatch([{ channel: 'telegram', success: false, error: 'Aborted' }]);
+			await sweepPromise;
+			expect(service.inMemoryStore.get('corr-abort_telegram').status).toBe('cancelled');
+		});
+
 		it('handles retry failure with backoff increment', async () => {
 			const mockTelegramSend = jest.fn().mockResolvedValue({ success: false, error: 'Still failing' });
 			const mockNotificationManager = {
