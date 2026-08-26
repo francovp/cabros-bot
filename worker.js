@@ -33,8 +33,8 @@ async function main() {
 
 	const bot = buildNotificationBot();
 	await initializeNotificationServices(bot);
-	notificationRedriveService.startWorker({ source: 'worker', unref: false });
 	const runtime = await startJobWorker({ botOrGetter: bot });
+	notificationRedriveService.startWorker({ source: 'worker', unref: false });
 	let stopping = false;
 
 	const shutdown = async (signal) => {

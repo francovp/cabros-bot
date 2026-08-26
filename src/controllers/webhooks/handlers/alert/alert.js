@@ -297,11 +297,12 @@ function postAlert(botOrGetter) {
 				));
 				const keepFailedForRedrive = notificationRedriveService.isEnabled()
 					&& notificationRedriveService.getWorkerRole() !== 'disabled'
+					&& (notificationRedriveService.getWorkerRole() === 'web' || notificationRedriveService.hasDurableStore())
 					&& results.some((result) => result && !result.success);
 				const finalizationChannels = keepFailedForRedrive
 					? reservation.channels
 					: deliveredReservationChannels;
-				signalRepeatCooldown.finalize(reservation.key, reservation.channels, finalizationChannels);
+				signalRepeatCooldown.finalize(reservation.key, reservation.channels, finalizationChannels, deliveredReservationChannels);
 				if (notificationRedriveService.isEnabled() && deliveredReservationChannels.length > 0) {
 					const oppositeKey = oppositeKeyOf(reservation.key);
 					if (oppositeKey) {

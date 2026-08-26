@@ -135,6 +135,10 @@ class NotificationRedriveService {
 		return AlertStorageService.getFirestore();
 	}
 
+	hasDurableStore() {
+		return Boolean(this.getFirestore());
+	}
+
 	setNotificationManagerGetter(getter) {
 		this.notificationManagerGetter = getter;
 	}
@@ -221,6 +225,7 @@ class NotificationRedriveService {
 					console.debug(`[NotificationRedriveService] Recorded dead-letter ${recordId} in Firestore`);
 				} catch (error) {
 					console.warn(`[NotificationRedriveService] Failed to persist dead-letter ${recordId} in Firestore, kept in-memory:`, error.message);
+					releaseRepeatCooldown(record);
 				}
 			} else {
 				console.debug(`[NotificationRedriveService] Recorded dead-letter ${recordId} in memory`);
@@ -472,11 +477,13 @@ class NotificationRedriveService {
 
 		for (const record of candidates.values()) {
 			const channel = record.repeatCooldown.channel;
+			const localTimestamp = signalRepeatCooldown.getChannelTimestamp(key, channel);
+			const terminalAt = toMillis(record.deliveredAt || record.terminalAt || record.updatedAt);
+			if (!Number.isFinite(localTimestamp) || !terminalAt || terminalAt <= localTimestamp) {
+				continue;
+			}
 			if (record.status === 'delivered') {
-				const refreshedAt = toMillis(record.deliveredAt || record.terminalAt || record.updatedAt);
-				if (refreshedAt > 0) {
-					signalRepeatCooldown.refresh(key, [channel], refreshedAt);
-				}
+				signalRepeatCooldown.refresh(key, [channel], terminalAt);
 			} else {
 				releaseRepeatCooldown(record);
 			}
@@ -530,7 +537,7 @@ class NotificationRedriveService {
 		if (firestore) {
 			try {
 				const snapshot = await firestore.collection(COLLECTION_NAME)
-					.where('status', '==', 'pending')
+					.where('status', 'in', ['pending', 'in_flight'])
 					.limit(200)
 					.get();
 				for (const doc of snapshot?.docs || []) {

@@ -218,7 +218,7 @@ function clearOppositeChannels(key, successfulChannels) {
 	this.store.set(opposite, entry);
 }
 
-function finalize(key, reservedChannels = [], successfulChannels = []) {
+function finalize(key, reservedChannels = [], retainedChannels = [], oppositeSuccessfulChannels = retainedChannels) {
 	if (!key) {
 		return;
 	}
@@ -227,9 +227,9 @@ function finalize(key, reservedChannels = [], successfulChannels = []) {
 		if (!entry || !(entry.channels instanceof Map)) {
 			return;
 		}
-		const successful = new Set(successfulChannels);
+		const retained = new Set(retainedChannels);
 		for (const channel of reservedChannels) {
-			if (!successful.has(channel)) {
+			if (!retained.has(channel)) {
 				entry.channels.delete(channel);
 			}
 		}
@@ -239,7 +239,7 @@ function finalize(key, reservedChannels = [], successfulChannels = []) {
 			entry.firedAt = Math.max(...entry.channels.values());
 			this.store.set(key, entry);
 		}
-		clearOppositeChannels.call(this, key, successful);
+		clearOppositeChannels.call(this, key, Array.isArray(oppositeSuccessfulChannels) ? oppositeSuccessfulChannels : retainedChannels);
 	} catch (error) {
 		console.warn('[SignalRepeatCooldown] Store finalization failed:', error.message);
 	}
@@ -286,6 +286,15 @@ function refresh(key, channels = [], now = Date.now()) {
 		this.store.set(key, entry);
 	} catch (error) {
 		console.warn('[SignalRepeatCooldown] Store refresh failed:', error.message);
+	}
+}
+
+function getChannelTimestamp(key, channel) {
+	try {
+		const entry = this.store.get(key);
+		return entry?.channels instanceof Map ? entry.channels.get(channel) : null;
+	} catch (error) {
+		return null;
 	}
 }
 
@@ -361,6 +370,7 @@ function createSignalRepeatCooldown(options = {}) {
 		finalize: finalize.bind(state),
 		release: release.bind(state),
 		refresh: refresh.bind(state),
+		getChannelTimestamp: getChannelTimestamp.bind(state),
 		recordFire: recordFire.bind(state),
 		recordSuppression() {
 			state.suppressedCount += 1;

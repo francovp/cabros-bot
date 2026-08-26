@@ -195,6 +195,21 @@ describe('signalRepeatCooldown', () => {
 
 			expect(cooldown.reserve(buy, ['telegram'], 10_002).suppressed).toBe(true);
 		});
+
+		it('clears opposite-side state only for delivered channels when failures are retained', () => {
+			const cooldown = createSignalRepeatCooldown();
+			const buy = { exchange: 'BINANCE', symbol: 'ETHUSDT', timeframe: '4h', side: 'BUY' };
+			const sell = { ...buy, side: 'SELL' };
+			const buyReservation = cooldown.reserve(buy, ['telegram', 'discord'], 10_000);
+			cooldown.finalize(buyReservation.key, buyReservation.channels, buyReservation.channels);
+			const sellReservation = cooldown.reserve(sell, ['telegram', 'discord'], 10_001);
+
+			cooldown.finalize(sellReservation.key, sellReservation.channels, sellReservation.channels, ['telegram']);
+
+			const retry = cooldown.reserve(buy, ['telegram', 'discord'], 10_002);
+			expect(retry.suppressed).toBe(false);
+			expect(retry.channels).toEqual(['telegram']);
+		});
 	});
 
 	describe('bounded storage', () => {

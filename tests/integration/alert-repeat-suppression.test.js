@@ -152,6 +152,26 @@ describe('Alert repeat suppression endpoint behavior', () => {
 		expect(signalRepeatCooldown.getStats().activeTrackedSignals).toBe(0);
 	});
 
+	it('releases worker-role failures when durable redrive storage is unavailable', async () => {
+		process.env.ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION = 'true';
+		process.env.ENABLE_NOTIFICATION_REDRIVE = 'true';
+		process.env.NOTIFICATION_REDRIVE_WORKER_ROLE = 'worker';
+		const durableStoreSpy = jest.spyOn(notificationRedriveService, 'hasDurableStore').mockReturnValue(false);
+		mockTelegramSendMessage.mockRejectedValue(new Error('Telegram unavailable'));
+
+		try {
+			await request(app)
+				.post('/api/webhook/alert')
+				.set('x-api-key', 'test-key')
+				.send({ text: SIGNAL_TEXT })
+				.expect(200);
+
+			expect(signalRepeatCooldown.getStats().activeTrackedSignals).toBe(0);
+		} finally {
+			durableStoreSpy.mockRestore();
+		}
+	});
+
 	it('always delivers an opposite-side flip regardless of cooldown', async () => {
 		process.env.ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION = 'true';
 		const flipText = 'BINANCE:ETHUSDT (4h) VENTA — giro bajista';

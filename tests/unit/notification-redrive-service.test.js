@@ -219,6 +219,12 @@ describe('NotificationRedriveService', () => {
 		it('reconciles terminal Firestore redrives in the local cooldown store', async () => {
 			alertStorageService.getFirestore.mockReturnValue(mockFirestore);
 			const refreshSpy = jest.spyOn(signalRepeatCooldown, 'refresh');
+			signalRepeatCooldown.reset();
+			signalRepeatCooldown.reserve(
+				{ exchange: 'BINANCE', symbol: 'ETHUSDT', timeframe: '5m', side: 'BUY' },
+				['telegram:destination-a'],
+				4000,
+			);
 			mockDocs.set('corr-reconcile_telegram', {
 				status: 'delivered',
 				repeatCooldown: {
@@ -232,6 +238,29 @@ describe('NotificationRedriveService', () => {
 
 			expect(refreshSpy).toHaveBeenCalledWith('BINANCE|ETHUSDT|5m|BUY', ['telegram:destination-a'], 5000);
 			refreshSpy.mockRestore();
+		});
+
+		it('does not apply an older terminal redrive to a newer local reservation', async () => {
+			alertStorageService.getFirestore.mockReturnValue(mockFirestore);
+			const releaseSpy = jest.spyOn(signalRepeatCooldown, 'release');
+			const current = signalRepeatCooldown.reserve(
+				{ exchange: 'BINANCE', symbol: 'ETHUSDT', timeframe: '5m', side: 'BUY' },
+				['telegram:destination-a'],
+				10_000,
+			);
+			mockDocs.set('corr-old-terminal_telegram', {
+				status: 'expired',
+				repeatCooldown: {
+					key: current.key,
+					channel: 'telegram:destination-a',
+				},
+				terminalAt: new Date(5000),
+			});
+
+			await service.reconcileRepeatCooldown(current.key, ['telegram:destination-a']);
+
+			expect(releaseSpy).not.toHaveBeenCalled();
+			releaseSpy.mockRestore();
 		});
 
 		it('cancels pending opposite-side redrives', async () => {
@@ -252,6 +281,7 @@ describe('NotificationRedriveService', () => {
 		});
 
 		it('cancels already claimed opposite-side redrives', async () => {
+			alertStorageService.getFirestore.mockReturnValue(mockFirestore);
 			await service.recordDeliveryResults(
 				{ text: 'BUY signal', correlationId: 'corr-in-flight' },
 				[{ channel: 'telegram', success: false, error: 'Initial failure' }],
@@ -263,10 +293,12 @@ describe('NotificationRedriveService', () => {
 				},
 			);
 			service.inMemoryStore.get('corr-in-flight_telegram').status = 'in_flight';
+			mockDocs.set('corr-in-flight_telegram', service.inMemoryStore.get('corr-in-flight_telegram'));
 
 			await service.cancelPendingRepeatCooldowns('BINANCE|ETHUSDT|4h|BUY', ['telegram:destination-a']);
 
 			expect(service.inMemoryStore.get('corr-in-flight_telegram').status).toBe('cancelled');
+			expect(mockDocs.get('corr-in-flight_telegram').status).toBe('cancelled');
 		});
 
 		it('skips dispatch when a claimed redrive was superseded', async () => {
