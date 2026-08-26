@@ -10,9 +10,6 @@ const client = new MainClient({
 	// Optional (default: false) - when true, response strings are parsed to floats (only for known keys).
 	beautifyResponses: true,
 });
-const tickerClient = new MainClient({ beautifyResponses: true }, {
-	timeout: getRuntimeConfig().BINANCE_FETCH_TIMEOUT_MS,
-});
 
 const CRYPTO_QUOTE_SUFFIXES = ['USDT', 'USDC', 'BUSD', 'FDUSD', 'TUSD', 'BTC', 'ETH', 'BNB'];
 const FOREX_PAIRS = new Set(['USDCLP', 'EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'USDCHF', 'NZDUSD']);
@@ -23,7 +20,7 @@ function formatTickerPrice(value) {
 	return price >= 1 ? round10(price, 0) : price;
 }
 
-function formatCryptoTicker(ticker) {
+function formatCryptoTicker(ticker, symbol) {
 	const changePercent = Number(ticker?.priceChangePercent);
 	const highPrice = formatTickerPrice(ticker?.highPrice);
 	const lowPrice = formatTickerPrice(ticker?.lowPrice);
@@ -34,6 +31,7 @@ function formatCryptoTicker(ticker) {
 
 	const direction = changePercent > 0 ? '▲ ' : changePercent < 0 ? '▼ ' : '';
 	const sign = changePercent > 0 ? '+' : '';
+	const quoteAsset = CRYPTO_QUOTE_SUFFIXES.find((quote) => symbol?.endsWith(quote)) || '';
 	return {
 		changePercent,
 		highPrice,
@@ -42,7 +40,7 @@ function formatCryptoTicker(ticker) {
 		message: `24h: ${direction}${sign}${changePercent.toFixed(2)}% | Rango: ${lowPrice} – ${highPrice}\nVol: ${new Intl.NumberFormat('en-US', {
 			notation: 'compact',
 			maximumFractionDigits: 1,
-		}).format(quoteVolume)} USDT`,
+		}).format(quoteVolume)}${quoteAsset ? ` ${quoteAsset}` : ''}`,
 	};
 }
 
@@ -140,7 +138,10 @@ async function fetchCryptoPrice(symbol, options = {}) {
 			},
 		});
 		try {
-			ticker = formatCryptoTicker(await tickerClient.get24hrChangeStatistics({ symbol }));
+			const tickerClient = new MainClient({ beautifyResponses: true }, {
+				timeout: getRuntimeConfig().BINANCE_FETCH_TIMEOUT_MS,
+			});
+			ticker = formatCryptoTicker(await tickerClient.get24hrChangeStatistics({ symbol }), symbol);
 		} catch (error) {
 			console.warn('Unable to enrich Binance price with 24h ticker:', error.message);
 		} finally {

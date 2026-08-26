@@ -1433,7 +1433,7 @@ No endpoint, OpenAPI, Postman, environment variable, or Remote Config change was
 
 ## Binance `/precio` Market Context (Issue #527)
 
-Crypto `/precio` replies keep the existing average-price lookup and append Binance 24h change, high/low range, and quote volume when the ticker payload is valid. The ticker request uses the existing `BINANCE_FETCH_TIMEOUT_MS` request bound, logs a warning, and preserves the exact bare-price reply on provider failure or malformed data. No new endpoint, dependency, environment variable, or Remote Config key was added; the optional sparkline was intentionally skipped as outside the acceptance criteria.
+Crypto `/precio` replies keep the existing average-price lookup and append Binance 24h change, high/low range, and quote-asset-labeled volume when the ticker payload is valid. Each ticker request applies the current `BINANCE_FETCH_TIMEOUT_MS` runtime value, logs a warning, and preserves the exact bare-price reply on provider failure or malformed data. No new endpoint, dependency, environment variable, or Remote Config key was added; the optional sparkline was intentionally skipped as outside the acceptance criteria.
 
 **Coverage**:
 - `src/controllers/commands/handlers/core/fetchPriceCryptoSymbol.js` — Validates and formats 24h ticker context with fail-open fallback and Sentry span instrumentation.
