@@ -280,6 +280,23 @@ describe('NotificationRedriveService', () => {
 			expect(service.inMemoryStore.get('corr-cancel_telegram').status).toBe('cancelled');
 		});
 
+		it('blocks a redrive recorded after an opposite-side supersession', async () => {
+			await service.cancelPendingRepeatCooldowns('BINANCE|ETHUSDT|4h|BUY', ['telegram:destination-a']);
+
+			await service.recordDeliveryResults(
+				{ text: 'BUY signal', correlationId: 'corr-after-flip' },
+				[{ channel: 'telegram', success: false, error: 'Late failure' }],
+				{
+					repeatCooldown: {
+						key: 'BINANCE|ETHUSDT|4h|BUY',
+						channelsByName: { telegram: 'telegram:destination-a' },
+					},
+				},
+			);
+
+			expect(service.inMemoryStore.get('corr-after-flip_telegram').status).toBe('cancelled');
+		});
+
 		it('cancels already claimed opposite-side redrives', async () => {
 			alertStorageService.getFirestore.mockReturnValue(mockFirestore);
 			await service.recordDeliveryResults(

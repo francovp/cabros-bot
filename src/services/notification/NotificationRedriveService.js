@@ -16,6 +16,7 @@ const BASE_BACKOFF_MS = 30000; // 30s
 const MAX_BACKOFF_MS = 600000; // 10 minutes
 const DEFAULT_LEASE_MS = 60000; // 60s
 const MAX_DRAIN_TIMEOUT_MS = 10000;
+const RECONCILIATION_TIMEOUT_MS = 500;
 const WORKER_ROLES = new Set(['web', 'worker', 'disabled']);
 
 function stripUndefinedFieldsDeep(value) {
@@ -97,6 +98,7 @@ function releaseRepeatCooldown(record) {
 class NotificationRedriveService {
 	constructor(options = {}) {
 		this.inMemoryStore = new Map();
+		this.supersessionStore = new Map();
 		this.workerTimer = null;
 		this.activeSweepPromise = null;
 		this.running = false;
@@ -213,6 +215,11 @@ class NotificationRedriveService {
 			};
 
 			const sanitizedRecord = stripUndefinedFieldsDeep(record);
+			if (record.repeatCooldown?.key && await this.isRepeatCooldownSuperseded(record)) {
+				sanitizedRecord.status = 'cancelled';
+				sanitizedRecord.lastError = 'Superseded by an opposite-side signal';
+				sanitizedRecord.terminalAt = toTimestamp(nowDate);
+			}
 
 			// Persist in-memory store
 			this.inMemoryStore.set(recordId, { ...sanitizedRecord });
@@ -438,6 +445,23 @@ class NotificationRedriveService {
 	}
 
 	async reconcileRepeatCooldown(key, channels = []) {
+		let timer = null;
+		const deadline = Date.now() + RECONCILIATION_TIMEOUT_MS;
+		try {
+			return await Promise.race([
+				this._reconcileRepeatCooldown(key, channels, deadline),
+				new Promise((resolve) => {
+					timer = setTimeout(() => resolve(0), RECONCILIATION_TIMEOUT_MS);
+				}),
+			]);
+		} finally {
+			if (timer) {
+				clearTimeout(timer);
+			}
+		}
+	}
+
+	async _reconcileRepeatCooldown(key, channels = [], deadline = Infinity) {
 		if (!key || !Array.isArray(channels) || channels.length === 0) {
 			return 0;
 		}
@@ -476,6 +500,9 @@ class NotificationRedriveService {
 		}
 
 		for (const record of candidates.values()) {
+			if (Date.now() >= deadline) {
+				return 0;
+			}
 			const channel = record.repeatCooldown.channel;
 			const localTimestamp = signalRepeatCooldown.getChannelTimestamp(key, channel);
 			const terminalAt = toMillis(record.deliveredAt || record.terminalAt || record.updatedAt);
@@ -496,7 +523,12 @@ class NotificationRedriveService {
 			return false;
 		}
 
-		if (this.inMemoryStore.get(record.id)?.status === 'cancelled') {
+		const supersessionId = this.getSupersessionId(record.repeatCooldown.key, record.repeatCooldown.channel);
+		const recordCreatedAt = toMillis(record.createdAt);
+		const localSupersession = this.supersessionStore.get(supersessionId);
+		if ((localSupersession
+			&& (!recordCreatedAt || toMillis(localSupersession.supersededAt) >= recordCreatedAt))
+			|| this.inMemoryStore.get(record.id)?.status === 'cancelled') {
 			return true;
 		}
 
@@ -505,11 +537,45 @@ class NotificationRedriveService {
 			return false;
 		}
 		try {
-			const snapshot = await firestore.collection(COLLECTION_NAME).doc(record.id).get();
-			return snapshot?.exists && snapshot.data()?.status === 'cancelled';
+			const [recordSnapshot, supersessionSnapshot] = await Promise.all([
+				firestore.collection(COLLECTION_NAME).doc(record.id).get(),
+				firestore.collection(COLLECTION_NAME).doc(supersessionId).get(),
+			]);
+			const supersession = supersessionSnapshot?.exists ? supersessionSnapshot.data() : null;
+			return (recordSnapshot?.exists && recordSnapshot.data()?.status === 'cancelled')
+				|| (supersession?.status === 'superseded'
+					&& (!recordCreatedAt || toMillis(supersession.supersededAt) >= recordCreatedAt));
 		} catch (error) {
 			console.warn('[NotificationRedriveService] Failed to check superseded redrive:', error.message);
 			return false;
+		}
+	}
+
+	getSupersessionId(key, channel) {
+		return `_repeat_supersession_${crypto.createHash('sha256').update(`${key}|${channel}`).digest('hex')}`;
+	}
+
+	async markRepeatSupersession(key, channels = []) {
+		if (!key || !Array.isArray(channels) || channels.length === 0) {
+			return;
+		}
+		const now = new Date();
+		const firestore = this.getFirestore();
+		for (const channel of channels) {
+			const id = this.getSupersessionId(key, channel);
+			this.supersessionStore.set(id, { key, channel, status: 'superseded', supersededAt: now });
+			if (firestore) {
+				try {
+					await firestore.collection(COLLECTION_NAME).doc(id).set({
+						key,
+						channel,
+						status: 'superseded',
+						supersededAt: toTimestamp(now),
+					}, { merge: true });
+				} catch (error) {
+					console.warn('[NotificationRedriveService] Failed to persist repeat supersession:', error.message);
+				}
+			}
 		}
 	}
 
@@ -517,6 +583,7 @@ class NotificationRedriveService {
 		if (!key || !Array.isArray(channels) || channels.length === 0) {
 			return 0;
 		}
+		await this.markRepeatSupersession(key, channels);
 
 		const channelSet = new Set(channels);
 		const candidates = new Map();
@@ -537,8 +604,8 @@ class NotificationRedriveService {
 		if (firestore) {
 			try {
 				const snapshot = await firestore.collection(COLLECTION_NAME)
+					.where('repeatCooldown.key', '==', key)
 					.where('status', 'in', ['pending', 'in_flight'])
-					.limit(200)
 					.get();
 				for (const doc of snapshot?.docs || []) {
 					const record = { ...doc.data(), id: doc.id };
@@ -894,6 +961,7 @@ class NotificationRedriveService {
 			this.workerTimer = null;
 		}
 		this.inMemoryStore.clear();
+		this.supersessionStore.clear();
 		this.activeSweepPromise = null;
 		this.running = false;
 		this.lastRunAt = null;

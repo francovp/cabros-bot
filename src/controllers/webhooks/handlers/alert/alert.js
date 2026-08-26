@@ -307,9 +307,12 @@ function postAlert(botOrGetter) {
 				if (notificationRedriveService.isEnabled() && deliveredReservationChannels.length > 0) {
 					const oppositeKey = oppositeKeyOf(reservation.key);
 					if (oppositeKey) {
-						trackBackgroundTask(
-							notificationRedriveService.cancelPendingRepeatCooldowns(oppositeKey, deliveredReservationChannels),
-						).catch(() => {});
+						const cancellation = notificationRedriveService.cancelPendingRepeatCooldowns(oppositeKey, deliveredReservationChannels);
+						await Promise.race([
+							cancellation,
+							new Promise((resolve) => setTimeout(resolve, 500)),
+						]);
+						trackBackgroundTask(cancellation).catch(() => {});
 					}
 				}
 			}
