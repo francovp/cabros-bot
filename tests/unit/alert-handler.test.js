@@ -1,5 +1,11 @@
-/* global jest, describe, it, expect, beforeEach */
+jest.mock('../../src/services/tradingview/fallbackTradePlan', () => ({
+	deriveFallbackTradePlan: jest.fn(),
+	calculateFallbackRiskLevels: jest.fn(),
+	TIMEFRAME_RISK_MAP: {},
+	formatDerivedLevel: jest.fn(p => p),
+}));
 
+const { deriveFallbackTradePlan, calculateFallbackRiskLevels } = require('../../src/services/tradingview/fallbackTradePlan');
 const { enrichAlert } = require('../../src/controllers/webhooks/handlers/alert/grounding');
 const { groundAlert } = require('../../src/services/grounding/grounding');
 const { GROUNDING_MODEL_NAME } = require('../../src/services/grounding/config');
@@ -18,6 +24,8 @@ jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
 describe('Alert Handler', () => {
 	beforeEach(() => {
 		jest.resetAllMocks();
+		deriveFallbackTradePlan.mockResolvedValue(null);
+		calculateFallbackRiskLevels.mockReturnValue(null);
 		// Return the text directly, not wrapped in an object
 		validateAlert.mockImplementation(text => text);
 	});
@@ -603,6 +611,18 @@ describe('Alert Handler', () => {
 			truncated: false,
 		});
 
+		deriveFallbackTradePlan.mockResolvedValue({
+			symbol: 'BTCUSDT',
+			side: 'BUY',
+			current_price: 85000,
+			price_data: { current_price: 85000 },
+			invalidation_level: 83725,
+			target_level: 89250,
+			risk_reward_ratio: 2,
+			setup_type: 'trend_continuation',
+			levelsSource: 'derived-quote',
+		});
+
 		const result = await enrichAlert({ text: 'BTCUSDT(240) pasó a señal de COMPRA' }, { useTradingViewData: true });
 
 		expect(result.levelsSource).toBe('derived-quote');
@@ -620,6 +640,18 @@ describe('Alert Handler', () => {
 
 		tradingViewMcpService.isEnabled.mockReturnValue(true);
 		tradingViewMcpService.enrichFromAlertText.mockRejectedValue(new Error('MCP service timeout'));
+
+		deriveFallbackTradePlan.mockResolvedValue({
+			symbol: 'ETHUSDT',
+			side: 'BUY',
+			current_price: 3200,
+			price_data: { current_price: 3200 },
+			invalidation_level: 3120,
+			target_level: 3360,
+			risk_reward_ratio: 2,
+			setup_type: 'trend_continuation',
+			levelsSource: 'derived-quote',
+		});
 
 		const result = await enrichAlert({ text: 'ETHUSDT(60) pasó a señal de COMPRA' }, { useTradingViewData: true });
 
