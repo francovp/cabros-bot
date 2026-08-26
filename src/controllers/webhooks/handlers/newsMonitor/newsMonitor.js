@@ -167,28 +167,43 @@ class NewsMonitorHandler {
 			if (!dryRun && alertStorageService.isEnabled()) {
 				const requestedChannels = response.requestedChannels || [];
 				for (const result of results || []) {
-					const isDeliveredAnalyzed = result && result.alert && result.status === AnalysisStatus.ANALYZED;
-					const isDeliveredCached = result && result.alert && result.status === AnalysisStatus.CACHED && result.redelivered;
-					if (isDeliveredAnalyzed || isDeliveredCached) {
-						alertStorageService.saveAlert({
-							text: result.alert.text || '',
-							symbol: result.alert.symbol || result.symbol,
-							exchange: result.alert.marketContext && result.alert.marketContext.source === 'binance' ? 'BINANCE' : undefined,
-							enriched: Boolean(result.alert.enriched),
-							enrichmentData: result.alert.enriched || null,
-							tokenUsage: (result.alert.enriched && result.alert.enriched.tokenUsage) || null,
-							channels: requestedChannels,
-							deliveryResults: result.deliveryResults || [],
-							source: 'news-monitor',
-							eventCategory: result.alert.eventCategory,
-							confidence: result.alert.confidence,
-							sentimentScore: result.alert.sentimentScore,
-							dedupStatus: result.cached ? 'cached' : 'fresh',
-							processingTimeMs: result.totalDurationMs,
-						}).catch((err) => {
-							console.warn('[NewsMonitor] Failed to persist alert to storage:', err.message);
-						});
+					if (!result || !result.alert) {
+						continue;
 					}
+
+					const isCachedRedelivery = result.status === AnalysisStatus.CACHED
+						&& Array.isArray(result.attemptedDeliveryResults)
+						&& result.attemptedDeliveryResults.some((delivery) => delivery && delivery.success === true);
+					const currentDeliveryResults = isCachedRedelivery
+						? result.attemptedDeliveryResults
+						: (result.deliveryResults || []);
+					if (result.status !== AnalysisStatus.ANALYZED && !isCachedRedelivery) {
+						continue;
+					}
+					if (!currentDeliveryResults.some((delivery) => delivery && delivery.success === true)) {
+						continue;
+					}
+
+					alertStorageService.saveAlert({
+						text: result.alert.text || '',
+						symbol: result.alert.symbol || result.symbol,
+						exchange: result.alert.marketContext && result.alert.marketContext.source === 'binance' ? 'BINANCE' : undefined,
+						enriched: Boolean(result.alert.enriched),
+						enrichmentData: result.alert.enriched || null,
+						// Null for cached redeliveries: no new analysis ran, and the original
+						// document already carries its token usage.
+						tokenUsage: isCachedRedelivery ? null : ((result.alert.enriched && result.alert.enriched.tokenUsage) || null),
+						channels: requestedChannels,
+						deliveryResults: currentDeliveryResults,
+						source: 'news-monitor',
+						eventCategory: result.alert.eventCategory,
+						confidence: result.alert.confidence,
+						sentimentScore: result.alert.sentimentScore,
+						dedupStatus: isCachedRedelivery ? 'cached' : 'fresh',
+						processingTimeMs: result.totalDurationMs,
+					}).catch((err) => {
+						console.warn('[NewsMonitor] Failed to persist alert to storage:', err.message);
+					});
 				}
 			}
 

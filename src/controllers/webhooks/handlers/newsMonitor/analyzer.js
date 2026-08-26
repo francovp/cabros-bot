@@ -588,6 +588,7 @@ class NewsAnalyzer {
 					console.debug('[Analyzer] Returning cached result:', symbol, category);
 					let deliveryResults = cached.deliveryResults;
 					let redelivered = false;
+					let attemptedDeliveryResults = [];
 					if (cached.alert) {
 						const notificationMgr = getNotificationManager();
 						if (notificationMgr) {
@@ -689,7 +690,6 @@ class NewsAnalyzer {
 										{ ...routing, channels: claimedRetryChannels },
 										{ signalByChannel },
 									);
-									redelivered = retryResults.some(result => result && result.success);
 									leaseRenewalIntervals.forEach(clearInterval);
 									const timedOutPendingChannels = await waitForLeaseRenewals([...pendingLeaseRenewals.entries()],
 									);
@@ -704,6 +704,8 @@ class NewsAnalyzer {
 									const successfulRetryChannels = new Set(
 										retryResults.filter(result => result.success).map(result => result.channel),
 									);
+									attemptedDeliveryResults = retryResults.filter((result) => ownedRetryChannels.includes(result.channel));
+									redelivered = attemptedDeliveryResults.some((result) => result && result.success);
 									deliveryResults = mergeDeliveryResults(
 										activeCachedDeliveryResults,
 										retryResults.filter((result) => ownedRetryChannels.includes(result.channel)),
@@ -742,6 +744,7 @@ class NewsAnalyzer {
 						deliveryResults,
 						cached: true,
 						redelivered,
+						attemptedDeliveryResults,
 					};
 				}
 			}
