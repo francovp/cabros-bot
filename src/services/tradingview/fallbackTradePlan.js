@@ -84,7 +84,7 @@ async function fetchQuotePriceForSignal(parsedSignal, options = {}) {
 				return price;
 			}
 		} catch (error) {
-			console.warn(`[FallbackTradePlan] Failed to fetch crypto price for ${symbol} from Binance:`, error.message);
+			console.warn('[FallbackTradePlan] Failed to fetch crypto price from Binance:', { symbol, error: error.message });
 		}
 		return null;
 	}
@@ -105,7 +105,7 @@ async function fetchQuotePriceForSignal(parsedSignal, options = {}) {
 			}
 		}
 	} catch (error) {
-		console.warn(`[FallbackTradePlan] Failed to fetch equity quote for ${symbol} from Twelve Data:`, error.message);
+		console.warn('[FallbackTradePlan] Failed to fetch equity quote from Twelve Data:', { symbol, error: error.message });
 	}
 
 	return null;

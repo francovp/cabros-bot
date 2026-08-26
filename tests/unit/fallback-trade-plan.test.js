@@ -117,6 +117,7 @@ describe('FallbackTradePlan', () => {
 			const mockBinanceClient = {
 				getAvgPrice: jest.fn().mockRejectedValue(new Error('Network failure')),
 			};
+			const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
 
 			const parsedSignal = {
 				symbol: 'ETHUSDT',
@@ -129,6 +130,11 @@ describe('FallbackTradePlan', () => {
 			});
 
 			expect(price).toBeNull();
+			expect(warnSpy).toHaveBeenCalledWith(
+				'[FallbackTradePlan] Failed to fetch crypto price from Binance:',
+				{ symbol: 'ETHUSDT', error: 'Network failure' },
+			);
+			warnSpy.mockRestore();
 		});
 
 		it('fetches equity price from mock Twelve Data service', async () => {
