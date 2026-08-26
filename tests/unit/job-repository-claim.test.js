@@ -153,6 +153,44 @@ describe('JobRepository durable claims', () => {
 		}
 	});
 
+	it('pushes a Telegram chat filter into Firestore job queries', async () => {
+		const query = {
+			where: jest.fn().mockReturnThis(),
+			orderBy: jest.fn().mockReturnThis(),
+			limit: jest.fn().mockReturnThis(),
+			get: jest.fn().mockResolvedValue({ docs: [] }),
+		};
+		const repository = new JobRepository();
+		repository._getFirestore = jest.fn(() => ({
+			collection: jest.fn(() => query),
+		}));
+
+		try {
+			await repository.list({ telegramChatId: 'telegram-123', limit: 5 });
+			expect(query.where).toHaveBeenCalledWith('requestMetadata.telegramChatId', '==', 'telegram-123');
+		} finally {
+			_resetForTesting();
+		}
+	});
+
+	it('stops awaiting a Firestore list when its signal aborts', async () => {
+		const query = {
+			orderBy: jest.fn().mockReturnThis(),
+			limit: jest.fn().mockReturnThis(),
+			get: jest.fn(() => new Promise(() => {})),
+		};
+		const repository = new JobRepository();
+		repository._getFirestore = jest.fn(() => ({
+			collection: jest.fn(() => query),
+		}));
+		const controller = new AbortController();
+		const pending = repository.list({ limit: 1, signal: controller.signal });
+
+		controller.abort();
+
+		await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+	});
+
 	it('atomically claims a queued job and rejects an active duplicate claim', async () => {
 		const job = {
 			jobId: 'job-123',

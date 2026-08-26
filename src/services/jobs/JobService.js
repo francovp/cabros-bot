@@ -412,9 +412,10 @@ class JobService {
 	/**
 	 * Cleans up terminal jobs older than 1 hour.
 	 */
-	async _cleanExpiredJobs() {
+	async _cleanExpiredJobs(signal) {
 		const now = Date.now();
 		for (const [id, job] of this.repository.entries()) {
+			if (signal?.aborted) throw signal.reason || new Error('Job read aborted');
 			if (this._isExpiredTerminalJob(job, now)) {
 				await this.repository.delete(id);
 			}
@@ -429,8 +430,8 @@ class JobService {
 		);
 	}
 
-	async _getUnexpiredJob(jobId) {
-		const job = await this.repository.get(jobId);
+	async _getUnexpiredJob(jobId, signal) {
+		const job = await this.repository.get(jobId, { signal });
 		if (!job) {
 			return null;
 		}
@@ -450,8 +451,8 @@ class JobService {
 	 */
 	async getJob(jobId, { telegramChatId, signal } = {}) {
 		if (signal?.aborted) throw signal.reason || new Error('Job read aborted');
-		await this._cleanExpiredJobs();
-		const job = await this._getUnexpiredJob(jobId);
+		await this._cleanExpiredJobs(signal);
+		const job = await this._getUnexpiredJob(jobId, signal);
 		if (signal?.aborted) throw signal.reason || new Error('Job read aborted');
 		if (!job || (telegramChatId !== undefined && String(job.requestMetadata?.telegramChatId) !== String(telegramChatId))) {
 			return null;
@@ -518,14 +519,16 @@ class JobService {
 
 	async listJobs({ status, type, telegramChatId, signal, limit = DEFAULT_JOB_LIST_LIMIT } = {}) {
 		if (signal?.aborted) throw signal.reason || new Error('Job read aborted');
-		await this._cleanExpiredJobs();
+		await this._cleanExpiredJobs(signal);
 		const safeLimit = Number.isInteger(limit) && limit > 0
 			? Math.min(limit, MAX_JOB_LIST_LIMIT)
 			: DEFAULT_JOB_LIST_LIMIT;
 		const jobs = await this.repository.list({
 			status,
 			type,
-			limit: telegramChatId === undefined ? safeLimit : MAX_JOB_LIST_LIMIT,
+			telegramChatId,
+			signal,
+			limit: safeLimit,
 		});
 		if (signal?.aborted) throw signal.reason || new Error('Job read aborted');
 		const activeJobs = [];
