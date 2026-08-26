@@ -26,7 +26,13 @@ describe('Telegram command menu', () => {
 
 	it('registers the menu from the startup launch promise', async () => {
 		const telegram = { setMyCommands: jest.fn().mockResolvedValue(true) };
-		const bot = { launch: jest.fn().mockResolvedValue(undefined), telegram };
+		const bot = {
+			launch: jest.fn((onLaunch) => {
+				onLaunch();
+				return Promise.resolve();
+			}),
+			telegram,
+		};
 		const onLaunchError = jest.fn();
 
 		await launchTelegramBot(bot, onLaunchError);
@@ -36,23 +42,21 @@ describe('Telegram command menu', () => {
 		expect(onLaunchError).not.toHaveBeenCalled();
 	});
 
-	it('registers the menu before starting a long-running polling launch', async () => {
-		const events = [];
+	it('does not block polling when menu registration never settles', async () => {
 		const telegram = {
-			setMyCommands: jest.fn(async () => {
-				events.push('register');
-			}),
+			setMyCommands: jest.fn(() => new Promise(() => {})),
 		};
 		const bot = {
-			launch: jest.fn(() => {
-				events.push('launch');
+			launch: jest.fn((onLaunch) => {
+				onLaunch();
 				return Promise.resolve();
 			}),
 			telegram,
 		};
 
-		await launchTelegramBot(bot, jest.fn());
+		await expect(launchTelegramBot(bot, jest.fn())).resolves.toBeUndefined();
 
-		expect(events).toEqual(['register', 'launch']);
+		expect(bot.launch).toHaveBeenCalledWith(expect.any(Function));
+		expect(telegram.setMyCommands).toHaveBeenCalledWith(getTelegramCommandMenu());
 	});
 });

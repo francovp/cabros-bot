@@ -22,10 +22,11 @@ async function registerTelegramCommandMenu(telegram) {
 }
 
 function launchTelegramBot(bot, onLaunchError) {
-	const startupPromise = registerTelegramCommandMenu(bot.telegram)
-		.then(() => bot.launch());
-	void startupPromise.catch(onLaunchError);
-	return startupPromise;
+	const launchPromise = bot.launch(() => {
+		void registerTelegramCommandMenu(bot.telegram);
+	});
+	void launchPromise.catch(onLaunchError);
+	return launchPromise;
 }
 
 module.exports = {
