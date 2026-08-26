@@ -200,9 +200,10 @@ class NewsMonitorHandler {
 							.catch(err => console.warn('[NewsMonitor] Failed to record pending storage state:', err.message));
 					}
 					// Fallback redeliveries embed usage only when they win the ownership
-					// claim, so concurrent channel expansions cannot duplicate it.
+					// claim (process-local and cross-replica atomic), so concurrent
+					// channel expansions cannot duplicate it.
 					const usageClaimed = !isCachedRedelivery
-						|| this.cache.tryClaimUsageOwnership(persistSymbol, persistCategory);
+						|| await this.cache.claimUsageOwnership(persistSymbol, persistCategory);
 					const includeUsage = !isCachedRedelivery || usageClaimed;
 					alertStorageService.saveAlert({
 						text: result.alert.text || '',
@@ -234,7 +235,8 @@ class NewsMonitorHandler {
 					}).catch((err) => {
 						if (isCachedRedelivery) {
 							if (usageClaimed) {
-								this.cache.releaseUsageOwnershipClaim(persistSymbol, persistCategory);
+								this.cache.releaseUsageOwnershipClaim(persistSymbol, persistCategory)
+									.catch(markErr => console.warn('[NewsMonitor] Failed to release usage claim:', markErr.message));
 							}
 						} else {
 							this.cache.markOriginalPersistState(persistSymbol, persistCategory, 'none')
