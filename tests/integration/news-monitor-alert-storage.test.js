@@ -291,6 +291,8 @@ describe('News Monitor - Alert Storage Integration', () => {
 			.expect(200);
 
 		expect(saveAlertSpy).toHaveBeenCalledTimes(1);
+		const failedEntry = await getCacheInstance().get('BTCUSDT', 'price_surge');
+		expect(failedEntry.originalPersistedState).toBe('none');
 
 		await request(app)
 			.post('/api/news-monitor')
@@ -303,6 +305,9 @@ describe('News Monitor - Alert Storage Integration', () => {
 		expect(redelivery.dedupStatus).toBe('cached');
 		expect(redelivery.tokenUsage).not.toBeNull();
 		expect(redelivery.tokenUsage.totalTokens).toBeGreaterThan(0);
+
+		const promotedEntry = await getCacheInstance().get('BTCUSDT', 'price_surge');
+		expect(promotedEntry.originalPersistedState).toBe('owned');
 	});
 
 	it('does not double-count usage when redelivering while the original write is pending', async () => {

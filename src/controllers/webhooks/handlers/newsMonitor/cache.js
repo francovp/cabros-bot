@@ -334,16 +334,17 @@ class NewsCache {
 	/**
 	 * Record the original alert document's storage outcome on the cache entry.
 	 *
-	 * State transitions: 'pending' when the fire-and-forget write is scheduled,
-	 * 'succeeded' after it resolves with a document id, 'failed' when it
-	 * rejects or resolves without one. Updates the local entry synchronously
-	 * and, when persistent dedup is enabled, merges the FULL local payload
-	 * plus the flag into the Firestore document transactionally so other
-	 * replicas observe it on their next cache read. Fail-open.
+	 * State machine: 'pending' when the fire-and-forget write is scheduled,
+	 * 'owned' once some durable document carries this analysis usage (the
+	 * original, or a promoted fallback redelivery), 'none' when the original
+	 * failed before any document owned it. Updates the local entry
+	 * synchronously and, when persistent dedup is enabled, merges ONLY this
+	 * field into the durable Firestore payload transactionally so concurrent
+	 * delivery updates from other replicas are preserved. Fail-open.
 	 *
 	 * @param {string} symbol
 	 * @param {string} eventCategory
-	 * @param {'pending'|'succeeded'|'failed'} state
+	 * @param {'pending'|'owned'|'none'} state
 	 * @returns {Promise<void>}
 	 */
 	async markOriginalPersistState(symbol, eventCategory, state) {
@@ -356,7 +357,11 @@ class NewsCache {
 
 		if (newsDedupStorageService.isEnabled() && newsDedupStorageService.isReady()) {
 			try {
-				await newsDedupStorageService.updateEntry(key, { ...entry.data, originalPersistedState: state });
+				await newsDedupStorageService.updateEntry(
+					key,
+					{ originalPersistedState: state },
+					{ mergeFields: ['originalPersistedState'] },
+				);
 			} catch (error) {
 				console.warn('[NewsCache] Failed to persist original-write state (fail-open):', error.message);
 			}

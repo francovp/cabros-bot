@@ -194,22 +194,22 @@ class NewsMonitorHandler {
 					const persistSymbol = result.alert.symbol || result.symbol;
 					const persistCategory = result.alert.eventCategory;
 					if (!isCachedRedelivery) {
-						// Record 'pending' synchronously so a redelivery arriving before the
-						// write settles cannot double-count usage; 'failed' re-enables it.
+						// 'pending' closes the double-count window while the write is in
+						// flight; a failed outcome ('none') lets the next redelivery own it.
 						this.cache.markOriginalPersistState(persistSymbol, persistCategory, 'pending')
 							.catch(err => console.warn('[NewsMonitor] Failed to record pending storage state:', err.message));
 					}
+					// Usage rides only on records that may become the durable owner:
+					// originals, and fallback redeliveries when nothing owns it yet.
+					const stateOwnsUsage = result.originalPersistedState === 'owned' || result.originalPersistedState === 'pending';
+					const includeUsage = !(isCachedRedelivery && stateOwnsUsage);
 					alertStorageService.saveAlert({
 						text: result.alert.text || '',
 						symbol: result.alert.symbol || result.symbol,
 						exchange: result.alert.marketContext && result.alert.marketContext.source === 'binance' ? 'BINANCE' : undefined,
 						enriched: Boolean(result.alert.enriched),
 						enrichmentData: result.alert.enriched || null,
-						// Zero usage when the original document exists or is in flight;
-						// only a known-failed original leaves the analysis usage intact.
-						tokenUsage: isCachedRedelivery && (result.originalPersistedState === 'succeeded' || result.originalPersistedState === 'pending')
-							? null
-							: ((result.alert.enriched && result.alert.enriched.tokenUsage) || null),
+						tokenUsage: includeUsage ? ((result.alert.enriched && result.alert.enriched.tokenUsage) || null) : null,
 						channels: requestedChannels,
 						deliveryResults: currentDeliveryResults,
 						source: 'news-monitor',
@@ -219,13 +219,16 @@ class NewsMonitorHandler {
 						dedupStatus: isCachedRedelivery ? 'cached' : 'fresh',
 						processingTimeMs: result.totalDurationMs,
 					}).then((savedId) => {
-						if (!isCachedRedelivery) {
-							return this.cache.markOriginalPersistState(persistSymbol, persistCategory, savedId ? 'succeeded' : 'failed');
+						if (isCachedRedelivery) {
+							if (savedId && includeUsage) {
+								return this.cache.markOriginalPersistState(persistSymbol, persistCategory, 'owned');
+							}
+							return undefined;
 						}
-						return undefined;
+						return this.cache.markOriginalPersistState(persistSymbol, persistCategory, savedId ? 'owned' : 'none');
 					}).catch((err) => {
 						if (!isCachedRedelivery) {
-							this.cache.markOriginalPersistState(persistSymbol, persistCategory, 'failed')
+							this.cache.markOriginalPersistState(persistSymbol, persistCategory, 'none')
 								.catch(markErr => console.warn('[NewsMonitor] Failed to record failed storage state:', markErr.message));
 						}
 						console.warn('[NewsMonitor] Failed to persist alert to storage:', err.message);

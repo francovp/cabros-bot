@@ -309,11 +309,23 @@ async function updateEntry(key, data, options = {}) {
 				return false;
 			}
 
+			let nextData;
+			if (Array.isArray(options.mergeFields)) {
+				nextData = { ...(existingData.data || {}) };
+				for (const field of options.mergeFields) {
+					if (Object.prototype.hasOwnProperty.call(data, field)) {
+						nextData[field] = data[field];
+					}
+				}
+			} else {
+				nextData = mergeDeliveryData(existingData.data, data, options) || null;
+			}
+
 			transaction.set(docRef, {
 				key,
 				createdAt: existingData.createdAt,
 				expiresAt: existingData.expiresAt,
-				data: mergeDeliveryData(existingData.data, data, options) || null,
+				data: nextData,
 			});
 			return true;
 		});
