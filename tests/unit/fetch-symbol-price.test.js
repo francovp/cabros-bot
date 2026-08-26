@@ -227,6 +227,20 @@ describe('fetchPriceCryptoSymbol and /precio command', () => {
 			expect(result.message).toContain('Vol: 12.5 BTC');
 		});
 
+		it('preserves decimal precision in the 24h range', async () => {
+			mockGetAvgPrice.mockResolvedValueOnce({ price: 200.1 });
+			mockGet24hrChangeStatistics.mockResolvedValueOnce({
+				priceChangePercent: '1.2',
+				highPrice: '198.49',
+				lowPrice: '198.40',
+				quoteVolume: '12.5',
+			});
+
+			const result = await fetchSymbolPrice(buildContext('/precio ETHUSDT'));
+
+			expect(result.message).toContain('Rango: 198.4 – 198.49');
+		});
+
 		it('uses the current Remote Config timeout for each ticker request', async () => {
 			const previousEnabled = process.env.ENABLE_FIREBASE_REMOTE_CONFIG;
 			process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';

@@ -17,7 +17,7 @@ const FOREX_PAIRS = new Set(['USDCLP', 'EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', '
 function formatTickerPrice(value) {
 	const price = Number(value);
 	if (!Number.isFinite(price) || price <= 0) throw new Error('Invalid 24h ticker payload');
-	return price >= 1 ? round10(price, 0) : price;
+	return price >= 1 ? round10(price, -2) : price;
 }
 
 function formatCryptoTicker(ticker, symbol) {
