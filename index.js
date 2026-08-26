@@ -7,6 +7,7 @@ const {
 	cryptoBotCmd,
 	expandedAnalysisCmd,
 	marketScannerCmd,
+	jobsCommand,
 	newsMonitorCmd,
 	helpCmd,
 	outcomesCommand,
@@ -103,6 +104,7 @@ async function bootstrapApplication() {
 		bot.command(['cryptobot'], cryptoBotCmd);
 		bot.command(['analisis', 'analysis'], expandedAnalysisCmd);
 		bot.command(['scanner'], marketScannerCmd);
+		bot.command(['jobs', 'trabajos'], jobsCommand);
 		bot.command(['noticias', 'news'], newsMonitorCmd);
 		bot.command(['outcomes', 'rendimiento'], outcomesCommand);
 		bot.command(['help', 'start'], helpCmd);

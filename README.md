@@ -1715,6 +1715,16 @@ Create a TradingView market scanner background job (`top_gainers`, `top_losers`,
 /scanner scans=top_gainers,top_losers exchange=BINANCE timeframe=4h limit=10
 ```
 
+### /jobs `[jobId]` (alias: `/trabajos`)
+
+List recent TradingView jobs or inspect one job's progress, terminal status, compact result summary, and notification delivery state. Expired terminal jobs are reported as unavailable.
+
+**Examples:**
+```
+/jobs
+/jobs 4f0c2f2e-7e6b-4c4c-8f9a-2e1a3c4b5d6e
+```
+
 ### /noticias `[options]` (alias: `/news`)
 
 Run the news monitor and AI sentiment analysis.
