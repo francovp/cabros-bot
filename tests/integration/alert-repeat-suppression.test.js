@@ -155,4 +155,91 @@ describe('Alert repeat suppression endpoint behavior', () => {
 		expect(second.body.dryRun).toBe(true);
 		expect(second.body.suppressedRepeat).toBeUndefined();
 	});
+
+	it('does not commit the cooldown when every channel delivery fails', async () => {
+		process.env.ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION = 'true';
+		mockTelegramSendMessage.mockRejectedValue(new Error('Telegram unavailable'));
+
+		await request(app)
+			.post('/api/webhook/alert')
+			.set('x-api-key', 'test-key')
+			.send({ text: SIGNAL_TEXT })
+			.expect(200);
+		expect(signalRepeatCooldown.getStats().activeTrackedSignals).toBe(0);
+
+		// Provider recovers: the client retry delivers instead of being suppressed.
+		mockTelegramSendMessage.mockResolvedValue({ message_id: 'recovered' });
+		const retry = await request(app)
+			.post('/api/webhook/alert')
+			.set('x-api-key', 'test-key')
+			.send({ text: SIGNAL_TEXT })
+			.expect(200);
+
+		expect(retry.body.suppressedRepeat).toBeUndefined();
+		expect(mockTelegramSendMessage.mock.calls.length).toBeGreaterThanOrEqual(2);
+		expect(retry.body.deliveredChannels).toEqual(['telegram']);
+	});
+
+	it('never suppresses alerts with unsupported raw timeframes', async () => {
+		process.env.ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION = 'true';
+		const oddTimeframe = 'BINANCE:ETHUSDT (3m) COMPRA — marco raro';
+
+		await request(app)
+			.post('/api/webhook/alert?dryRun=true')
+			.set('x-api-key', 'test-key')
+			.send({ text: oddTimeframe })
+			.expect(200);
+		const second = await request(app)
+			.post('/api/webhook/alert?dryRun=true')
+			.set('x-api-key', 'test-key')
+			.send({ text: oddTimeframe })
+			.expect(200);
+
+		// Dry-run bypasses the gate, so the pair proves nothing about cooldown;
+		// assert via the service store instead using real delivery.
+		signalRepeatCooldown.reset();
+		const parsed = require('../../src/services/tradingview/parseTradingViewSignal').parseTradingViewSignal(oddTimeframe);
+		const verdict = signalRepeatCooldown.isSuppressed(parsed);
+		expect(verdict.suppressed).toBe(false);
+
+		mockTelegramSendMessage.mockClear();
+		await request(app)
+			.post('/api/webhook/alert')
+			.set('x-api-key', 'test-key')
+			.send({ text: oddTimeframe })
+			.expect(200);
+		const third = await request(app)
+			.post('/api/webhook/alert')
+			.set('x-api-key', 'test-key')
+			.send({ text: `${oddTimeframe} (segundo aviso)` })
+			.expect(200);
+
+		expect(third.body.suppressedRepeat).toBeUndefined();
+		expect(mockTelegramSendMessage).toHaveBeenCalledTimes(2);
+	});
+
+	it('delivers a BUY → SELL → BUY sequence without swallowing the final re-entry', async () => {
+		process.env.ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION = 'true';
+		const buyText = 'BINANCE:ETHUSDT (4h) COMPRA — entrada larga';
+		const sellText = 'BINANCE:ETHUSDT (4h) VENTA — giro corto';
+
+		await request(app)
+			.post('/api/webhook/alert')
+			.set('x-api-key', 'test-key')
+			.send({ text: buyText })
+			.expect(200);
+		await request(app)
+			.post('/api/webhook/alert')
+			.set('x-api-key', 'test-key')
+			.send({ text: sellText })
+			.expect(200);
+		const reBuy = await request(app)
+			.post('/api/webhook/alert')
+			.set('x-api-key', 'test-key')
+			.send({ text: buyText })
+			.expect(200);
+
+		expect(reBuy.body.suppressedRepeat).toBeUndefined();
+		expect(mockTelegramSendMessage).toHaveBeenCalledTimes(3);
+	});
 });

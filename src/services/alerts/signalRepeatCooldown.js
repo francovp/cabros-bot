@@ -6,11 +6,13 @@
  * Suppresses duplicate channel delivery for the same
  * `(exchange, symbol, timeframe, side)` signal while the prior signal is
  * still within its cooldown window. Opposite-side flips are always delivered
- * (they produce a different key). Suppressed alerts remain persisted (with a
- * suppression marker) so replay and audit stay complete. All storage errors
- * fail open: when the store cannot be read or written, delivery proceeds as
- * today.
+ * and clear the prior side so BUY → SELL → BUY re-entries are not swallowed.
+ * Suppressed alerts remain persisted (with a suppression marker) so replay
+ * and audit stay complete. All storage errors fail open: when the store
+ * cannot be read or written, delivery proceeds as today.
  */
+
+const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 
 const TIMEFRAME_BAR_MS = Object.freeze({
 	'5m': 5 * 60 * 1000,
@@ -27,15 +29,11 @@ const MAX_COOLDOWN_BARS = 10;
 const MAX_ENTRIES = 1000;
 
 function resolveCooldownBars() {
-	const raw = process.env.ALERT_SIGNAL_COOLDOWN_BARS;
-	if (raw === undefined || raw === null || raw === '') {
+	const configured = getRuntimeConfig().ALERT_SIGNAL_COOLDOWN_BARS;
+	if (!Number.isFinite(configured)) {
 		return DEFAULT_COOLDOWN_BARS;
 	}
-	const parsed = Number(String(raw).trim());
-	if (!Number.isFinite(parsed) || !Number.isSafeInteger(parsed) || parsed < 1) {
-		return DEFAULT_COOLDOWN_BARS;
-	}
-	return Math.min(parsed, MAX_COOLDOWN_BARS);
+	return Math.min(Math.max(configured, 1), MAX_COOLDOWN_BARS);
 }
 
 function buildSignalKey({ exchange, symbol, timeframe, side }) {
@@ -48,6 +46,18 @@ function buildSignalKey({ exchange, symbol, timeframe, side }) {
 		String(timeframe || '').toLowerCase(),
 		String(side).toUpperCase(),
 	].join('|');
+}
+
+function oppositeKeyOf(key) {
+	if (!key || typeof key !== 'string') {
+		return null;
+	}
+	const parts = key.split('|');
+	if (parts.length !== 4) {
+		return null;
+	}
+	parts[3] = parts[3] === 'BUY' ? 'SELL' : 'BUY';
+	return parts.join('|');
 }
 
 function isSuppressed(signal, now = Date.now()) {
@@ -94,6 +104,10 @@ function recordFire(key, now = Date.now()) {
 	}
 	try {
 		this.store.set(key, now);
+		const opposite = oppositeKeyOf(key);
+		if (opposite) {
+			this.store.delete(opposite);
+		}
 	} catch (error) {
 		// Storage write failure must never break alert flow.
 		console.warn('[SignalRepeatCooldown] Store write failed:', error.message);
@@ -146,7 +160,7 @@ function createSignalRepeatCooldown(options = {}) {
 
 	return {
 		isEnabled() {
-			return process.env.ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION === 'true';
+			return getRuntimeConfig().ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION === true;
 		},
 		isSuppressed: isSuppressed.bind(state),
 		recordFire: recordFire.bind(state),

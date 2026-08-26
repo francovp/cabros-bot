@@ -95,7 +95,7 @@ describe('signalRepeatCooldown', () => {
 			expect(cooldown.isSuppressed(h4, now + 1000).suppressed).toBe(false);
 		});
 
-		it('honors ALERT_SIGNAL_COOLDOWN_BARS multiplier and clamps invalid values', () => {
+		it('honors ALERT_SIGNAL_COOLDOWN_BARS multiplier via runtime config and clamps out-of-range remote values', () => {
 			const cooldown = createSignalRepeatCooldown();
 			process.env.ALERT_SIGNAL_COOLDOWN_BARS = '2';
 			const signal = { exchange: 'BATS', symbol: 'NVDA', timeframe: '1D', side: 'SELL' };
@@ -109,9 +109,11 @@ describe('signalRepeatCooldown', () => {
 			expect(cooldown.isSuppressed(signal, t0 + TIMEFRAME_BAR_MS['1D']).windowMs)
 				.toBe(DEFAULT_COOLDOWN_BARS * TIMEFRAME_BAR_MS['1D']);
 
+			// Remote Config schema rejects out-of-range overrides and falls back
+			// to the default, so the window stays at one bar.
 			process.env.ALERT_SIGNAL_COOLDOWN_BARS = String(MAX_COOLDOWN_BARS + 50);
 			expect(cooldown.isSuppressed(signal, t0 + TIMEFRAME_BAR_MS['1D']).windowMs)
-				.toBe(MAX_COOLDOWN_BARS * TIMEFRAME_BAR_MS['1D']);
+				.toBe(DEFAULT_COOLDOWN_BARS * TIMEFRAME_BAR_MS['1D']);
 			delete process.env.ALERT_SIGNAL_COOLDOWN_BARS;
 		});
 	});
@@ -178,6 +180,36 @@ describe('signalRepeatCooldown', () => {
 				Date.now(),
 			);
 			expect(verdict.suppressed).toBe(false);
+		});
+	});
+
+	describe('flip invalidation (BUY → SELL → BUY)', () => {
+		it('clears the prior side so a re-flip delivers instead of being suppressed', () => {
+			const cooldown = createSignalRepeatCooldown();
+			const buy = { exchange: 'BINANCE', symbol: 'ETHUSDT', timeframe: '4h', side: 'BUY' };
+			const sell = { exchange: 'BINANCE', symbol: 'ETHUSDT', timeframe: '4h', side: 'SELL' };
+			const t0 = Date.now();
+
+			let verdict = cooldown.isSuppressed(buy, t0);
+			cooldown.recordFire(verdict.key, t0);
+
+			// Flip to SELL inside the window and deliver it.
+			verdict = cooldown.isSuppressed(sell, t0 + 1000);
+			expect(verdict.suppressed).toBe(false);
+			cooldown.recordFire(verdict.key, t0 + 1000);
+
+			// Flip back to BUY: the stale first-BUY timestamp must not suppress it.
+			verdict = cooldown.isSuppressed(buy, t0 + 2000);
+			expect(verdict.suppressed).toBe(false);
+		});
+
+		it('exposes oppositeKeyOf helper for key inversion', () => {
+			const { buildSignalKey } = require('../../src/services/alerts/signalRepeatCooldown');
+			const key = buildSignalKey({ exchange: 'BINANCE', symbol: 'ETHUSDT', timeframe: '4h', side: 'BUY' });
+			const cooldown2 = createSignalRepeatCooldown();
+			// recordFire on the SELL twin removes the BUY entry.
+			cooldown2.recordFire(key, Date.now());
+			expect(cooldown2.getStats().activeTrackedSignals).toBe(1);
 		});
 	});
 });

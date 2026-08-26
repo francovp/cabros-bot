@@ -20,7 +20,7 @@ const {
 	getDeliveredChannels,
 } = require('../../../../services/notification/requestRouting');
 const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteConfigService');
-const { parseTradingViewSignal } = require('../../../../services/tradingview/parseTradingViewSignal');
+const { parseTradingViewSignal, TIMEFRAME_MAP } = require('../../../../services/tradingview/parseTradingViewSignal');
 const { signalRepeatCooldown } = require('../../../../services/alerts/signalRepeatCooldown');
 
 // Initialize services
@@ -203,12 +203,25 @@ function postAlert(botOrGetter) {
 
 			// Opt-in repeat suppression: same (exchange, symbol, timeframe, side)
 			// inside its cooldown window skips channel delivery but is still
-			// persisted with a marker below. Storage errors fail open.
+			// persisted with a marker below. Storage errors fail open. The
+			// fire timestamp is committed only after at least one successful
+			// delivery so transient provider outages stay retryable.
 			let suppressedRepeat = false;
+			let pendingFireKey = null;
 			if (signalRepeatCooldown.isEnabled()) {
 				const parsedSignal = parseTradingViewSignal(alert.text);
-				if (parsedSignal) {
-					const verdict = signalRepeatCooldown.isSuppressed(parsedSignal);
+				// Unsupported timeframes normalize to the default timeframe, so
+				// they must never enter the cooldown store: a raw token like
+				// "3M" collapses to "1h" and stays unsuppressed, while "4H"
+				// legitimately maps to the 4h bar via the TIMEFRAME_MAP.
+				const hasUsableTimeframe = Boolean(
+					parsedSignal
+					&& parsedSignal.rawTimeframe
+					&& Object.prototype.hasOwnProperty.call(TIMEFRAME_MAP, parsedSignal.rawTimeframe)
+					&& TIMEFRAME_MAP[parsedSignal.rawTimeframe] === parsedSignal.timeframe,
+				);
+				if (parsedSignal && hasUsableTimeframe) {
+					const verdict = signalRepeatCooldown.isSuppressed({ ...parsedSignal, timeframe: parsedSignal.timeframe });
 					if (verdict.suppressed) {
 						suppressedRepeat = true;
 						signalRepeatCooldown.recordSuppression();
@@ -216,7 +229,7 @@ function postAlert(botOrGetter) {
 							`[Alert] Repeat suppressed for ${verdict.key} (${Math.round(verdict.elapsedMs / 1000)}s elapsed, retry in ${Math.round(verdict.retryInMs / 1000)}s)`,
 						);
 					} else if (verdict.key) {
-						signalRepeatCooldown.recordFire(verdict.key);
+						pendingFireKey = verdict.key;
 					}
 				}
 			}
@@ -224,10 +237,12 @@ function postAlert(botOrGetter) {
 			const results = suppressedRepeat
 				? []
 				: await sendWithNotificationRouting(notificationManager, alert, routing, { parentSpan: requestSpan });
-			const requestedChannels = suppressedRepeat
-				? getRequestedChannels(notificationManager, routing)
-				: getRequestedChannels(notificationManager, routing);
 			const deliveredChannels = suppressedRepeat ? [] : getDeliveredChannels(results);
+			if (pendingFireKey && deliveredChannels.length > 0) {
+				signalRepeatCooldown.recordFire(pendingFireKey);
+				pendingFireKey = null;
+			}
+			const requestedChannels = getRequestedChannels(notificationManager, routing);
 			const processingTimeMs = Math.max(0, Date.now() - startTime);
 
 			// Return 200 OK regardless of delivery success (fail-open pattern)
