@@ -214,6 +214,27 @@ describe('NotificationRedriveService', () => {
 			expect(service.getPendingCount()).toBe(1);
 		});
 
+		it('bounds stalled durable enqueue and releases worker cooldown ownership', async () => {
+			process.env.NOTIFICATION_REDRIVE_WORKER_ROLE = 'worker';
+			const stalledSet = jest.fn(() => new Promise(() => {}));
+			alertStorageService.getFirestore.mockReturnValue({
+				collection: jest.fn(() => ({
+					doc: jest.fn(() => ({ set: stalledSet })),
+				})),
+			});
+			const releaseSpy = jest.spyOn(signalRepeatCooldown, 'release');
+
+			await service.recordDeliveryResults(
+				{ text: 'BUY signal', correlationId: 'corr-stalled-enqueue' },
+				[{ channel: 'telegram', success: false, error: 'Initial failure' }],
+				{ repeatCooldown: { key: 'BINANCE|ETHUSDT|4h|BUY', channelsByName: { telegram: 'telegram:destination-a' } } },
+			);
+
+			expect(stalledSet).toHaveBeenCalledTimes(1);
+			expect(releaseSpy).toHaveBeenCalledWith('BINANCE|ETHUSDT|4h|BUY', ['telegram:destination-a']);
+			releaseSpy.mockRestore();
+		});
+
 		it('keeps web-role cooldowns when Firestore falls back to in-memory redrive', async () => {
 			process.env.ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION = 'true';
 			const failingFirestore = {
@@ -349,6 +370,24 @@ describe('NotificationRedriveService', () => {
 			]);
 
 			expect(stalledGet).toHaveBeenCalledTimes(1);
+		});
+
+		it('keeps reconciliation single-flight scoped to each cooldown identity', async () => {
+			const stalledGet = jest.fn(() => new Promise(() => {}));
+			const query = {
+				get: stalledGet,
+				limit: jest.fn(() => query),
+			};
+			alertStorageService.getFirestore.mockReturnValue({
+				collection: jest.fn(() => ({ where: jest.fn(() => query) })),
+			});
+
+			await Promise.all([
+				service.reconcileRepeatCooldown('BINANCE|ETHUSDT|5m|BUY', ['telegram:destination-a']),
+				service.reconcileRepeatCooldown('BINANCE|BTCUSDT|5m|BUY', ['telegram:destination-a']),
+			]);
+
+			expect(stalledGet).toHaveBeenCalledTimes(2);
 		});
 
 		it('reconciles terminal Firestore redrives in the local cooldown store', async () => {

@@ -17,6 +17,7 @@ const MAX_BACKOFF_MS = 600000; // 10 minutes
 const DEFAULT_LEASE_MS = 60000; // 60s
 const MAX_DRAIN_TIMEOUT_MS = 10000;
 const RECONCILIATION_TIMEOUT_MS = 500;
+const DURABLE_ENQUEUE_TIMEOUT_MS = 500;
 const WORKER_ROLES = new Set(['web', 'worker', 'disabled']);
 const ROUTING_FIELDS = Object.freeze({
 	telegram: 'telegramChatId',
@@ -113,7 +114,7 @@ class NotificationRedriveService {
 	constructor(options = {}) {
 		this.inMemoryStore = new Map();
 		this.supersessionStore = new Map();
-		this.reconciliationPromise = null;
+		this.reconciliationPromises = new Map();
 		this.workerTimer = null;
 		this.activeSweepPromise = null;
 		this.running = false;
@@ -244,8 +245,26 @@ class NotificationRedriveService {
 			const firestore = this.getFirestore();
 			if (firestore) {
 				try {
-					await firestore.collection(COLLECTION_NAME).doc(recordId).set(sanitizedRecord, { merge: true });
-					console.debug(`[NotificationRedriveService] Recorded dead-letter ${recordId} in Firestore`);
+					let timer = null;
+					const write = firestore.collection(COLLECTION_NAME).doc(recordId)
+						.set(sanitizedRecord, { merge: true });
+					const persisted = await Promise.race([
+						write.then(() => true, (error) => {
+							console.warn(`[NotificationRedriveService] Failed to persist dead-letter ${recordId} in Firestore, kept in-memory:`, error.message);
+							return false;
+						}),
+						new Promise((resolve) => {
+							timer = setTimeout(() => resolve(false), DURABLE_ENQUEUE_TIMEOUT_MS);
+						}),
+					]);
+					if (timer) {
+						clearTimeout(timer);
+					}
+					if (persisted) {
+						console.debug(`[NotificationRedriveService] Recorded dead-letter ${recordId} in Firestore`);
+					} else if (this.getWorkerRole() !== 'web') {
+						releaseRepeatCooldown(record);
+					}
 				} catch (error) {
 					console.warn(`[NotificationRedriveService] Failed to persist dead-letter ${recordId} in Firestore, kept in-memory:`, error.message);
 					if (this.getWorkerRole() !== 'web') {
@@ -463,21 +482,22 @@ class NotificationRedriveService {
 	}
 
 	async reconcileRepeatCooldown(key, channels = []) {
-		if (!this.reconciliationPromise) {
-			this.reconciliationPromise = Promise.resolve()
+		const identity = `${key}|${[...channels].sort().join(',')}`;
+		if (!this.reconciliationPromises.has(identity)) {
+			this.reconciliationPromises.set(identity, Promise.resolve()
 				.then(() => this._reconcileRepeatCooldown(key, channels, Date.now() + RECONCILIATION_TIMEOUT_MS))
 				.catch((error) => {
 					console.warn('[NotificationRedriveService] Cooldown reconciliation failed:', error.message);
 					return 0;
 				})
 				.finally(() => {
-					this.reconciliationPromise = null;
-				});
+					this.reconciliationPromises.delete(identity);
+				}));
 		}
 		let timer = null;
 		try {
 			return await Promise.race([
-				this.reconciliationPromise,
+				this.reconciliationPromises.get(identity),
 				new Promise((resolve) => {
 					timer = setTimeout(() => resolve(0), RECONCILIATION_TIMEOUT_MS);
 				}),
@@ -673,7 +693,7 @@ class NotificationRedriveService {
 			&& record.repeatCooldown?.key === key
 			&& channelSet.has(record.repeatCooldown.channel)
 			&& (() => {
-				const reservedAt = toMillis(record.repeatCooldown.reservedAt) || toMillis(record.createdAt);
+				const reservedAt = toMillis(record.repeatCooldown.reservedAt);
 				return !supersededAtMs || !reservedAt || reservedAt <= supersededAtMs;
 			})()
 		);
@@ -1067,7 +1087,7 @@ class NotificationRedriveService {
 		}
 		this.inMemoryStore.clear();
 		this.supersessionStore.clear();
-		this.reconciliationPromise = null;
+		this.reconciliationPromises.clear();
 		this.activeSweepPromise = null;
 		this.running = false;
 		this.lastRunAt = null;
