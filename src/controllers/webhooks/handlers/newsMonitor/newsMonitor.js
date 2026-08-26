@@ -134,11 +134,12 @@ class NewsMonitorHandler {
 			}
 
 			const notificationManagerForResponse = getNotificationManager();
-			// attemptedDeliveryResults and originalPersisted are storage-only bookkeeping
-			// for the post-response persistence pass; keep them out of the public contract.
+			// attemptedDeliveryResults and originalPersistedState are storage-only
+			// bookkeeping for the post-response persistence pass; keep them out of
+			// the public contract.
 			const analysisResults = results;
 			const responseResults = (results || []).map(
-				({ attemptedDeliveryResults, originalPersisted, ...publicResult }) => publicResult,
+				({ attemptedDeliveryResults, originalPersistedState, ...publicResult }) => publicResult,
 			);
 			const response = {
 				success: summary.analyzed > 0 || summary.cached > 0,
@@ -192,15 +193,21 @@ class NewsMonitorHandler {
 
 					const persistSymbol = result.alert.symbol || result.symbol;
 					const persistCategory = result.alert.eventCategory;
+					if (!isCachedRedelivery) {
+						// Record 'pending' synchronously so a redelivery arriving before the
+						// write settles cannot double-count usage; 'failed' re-enables it.
+						this.cache.markOriginalPersistState(persistSymbol, persistCategory, 'pending')
+							.catch(err => console.warn('[NewsMonitor] Failed to record pending storage state:', err.message));
+					}
 					alertStorageService.saveAlert({
 						text: result.alert.text || '',
 						symbol: result.alert.symbol || result.symbol,
 						exchange: result.alert.marketContext && result.alert.marketContext.source === 'binance' ? 'BINANCE' : undefined,
 						enriched: Boolean(result.alert.enriched),
 						enrichmentData: result.alert.enriched || null,
-						// Zero usage only when the original document is known persisted
-						// (durable cache flag); otherwise its analysis usage could be lost.
-						tokenUsage: isCachedRedelivery && result.originalPersisted === true
+						// Zero usage when the original document exists or is in flight;
+						// only a known-failed original leaves the analysis usage intact.
+						tokenUsage: isCachedRedelivery && (result.originalPersistedState === 'succeeded' || result.originalPersistedState === 'pending')
 							? null
 							: ((result.alert.enriched && result.alert.enriched.tokenUsage) || null),
 						channels: requestedChannels,
@@ -212,11 +219,15 @@ class NewsMonitorHandler {
 						dedupStatus: isCachedRedelivery ? 'cached' : 'fresh',
 						processingTimeMs: result.totalDurationMs,
 					}).then((savedId) => {
-						if (!isCachedRedelivery && savedId) {
-							return this.cache.markOriginalPersisted(persistSymbol, persistCategory);
+						if (!isCachedRedelivery) {
+							return this.cache.markOriginalPersistState(persistSymbol, persistCategory, savedId ? 'succeeded' : 'failed');
 						}
 						return undefined;
 					}).catch((err) => {
+						if (!isCachedRedelivery) {
+							this.cache.markOriginalPersistState(persistSymbol, persistCategory, 'failed')
+								.catch(markErr => console.warn('[NewsMonitor] Failed to record failed storage state:', markErr.message));
+						}
 						console.warn('[NewsMonitor] Failed to persist alert to storage:', err.message);
 					});
 				}

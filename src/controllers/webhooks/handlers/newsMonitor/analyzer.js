@@ -746,7 +746,7 @@ class NewsAnalyzer {
 						cached: true,
 						redelivered,
 						attemptedDeliveryResults,
-						originalPersisted: Boolean(cached.originalPersisted),
+						originalPersistedState: cached.originalPersistedState,
 					};
 				}
 			}

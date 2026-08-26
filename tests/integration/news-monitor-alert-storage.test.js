@@ -305,6 +305,33 @@ describe('News Monitor - Alert Storage Integration', () => {
 		expect(redelivery.tokenUsage.totalTokens).toBeGreaterThan(0);
 	});
 
+	it('does not double-count usage when redelivering while the original write is pending', async () => {
+		let resolveFirstSave;
+		saveAlertSpy.mockImplementationOnce(() => new Promise((resolve) => { resolveFirstSave = resolve; }));
+
+		await request(app)
+			.post('/api/news-monitor')
+			.set('x-api-key', 'test-key')
+			.send({ crypto: ['BTCUSDT'], channels: ['telegram'] })
+			.expect(200);
+
+		expect(saveAlertSpy).toHaveBeenCalledTimes(1);
+		expect(saveAlertSpy.mock.calls[0][0].tokenUsage).not.toBeNull();
+
+		const res = await request(app)
+			.post('/api/news-monitor')
+			.set('x-api-key', 'test-key')
+			.send({ crypto: ['BTCUSDT'], channels: ['whatsapp'] })
+			.expect(200);
+
+		expect(res.body.summary.cached).toBe(1);
+		expect(saveAlertSpy).toHaveBeenCalledTimes(2);
+		expect(saveAlertSpy.mock.calls[1][0].dedupStatus).toBe('cached');
+		expect(saveAlertSpy.mock.calls[1][0].tokenUsage).toBeNull();
+
+		resolveFirstSave('original-doc-id');
+	});
+
 	it('does not persist when ENABLE_FIRESTORE_ALERT_STORAGE is false', async () => {
 		process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'false';
 
