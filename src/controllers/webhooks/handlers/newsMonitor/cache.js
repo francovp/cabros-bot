@@ -369,6 +369,47 @@ class NewsCache {
 	}
 
 	/**
+	 * Synchronized check-and-set claiming durable-usage ownership for a
+	 * fallback record. Serializes overlapping redelivery requests within this
+	 * process so only one may embed the analysis usage; cross-replica races
+	 * are out of scope for this local primitive.
+	 *
+	 * @param {string} symbol
+	 * @param {string} eventCategory
+	 * @returns {boolean} true when the caller holds the usage claim
+	 */
+	tryClaimUsageOwnership(symbol, eventCategory) {
+		const key = this.generateKey(symbol, eventCategory);
+		const entry = this.cache.get(key);
+		if (!entry || this.isExpired(entry)) {
+			return false;
+		}
+		const state = entry.data.originalPersistedState;
+		if (state === 'owned' || state === 'pending' || state === 'claimed') {
+			return false;
+		}
+		entry.data = { ...entry.data, originalPersistedState: 'claimed' };
+		return true;
+	}
+
+	/**
+	 * Release a claim acquired via tryClaimUsageOwnership after its record
+	 * failed to persist, restoring 'none' so a later redelivery can own it.
+	 *
+	 * @param {string} symbol
+	 * @param {string} eventCategory
+	 * @returns {void}
+	 */
+	releaseUsageOwnershipClaim(symbol, eventCategory) {
+		const key = this.generateKey(symbol, eventCategory);
+		const entry = this.cache.get(key);
+		if (!entry || this.isExpired(entry) || entry.data.originalPersistedState !== 'claimed') {
+			return;
+		}
+		entry.data = { ...entry.data, originalPersistedState: 'none' };
+	}
+
+	/**
 	 * Claim a channel-specific cached redelivery lease.
 	 *
 	 * Local leases suppress same-process races. Persistent leases use the same

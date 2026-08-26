@@ -199,10 +199,11 @@ class NewsMonitorHandler {
 						this.cache.markOriginalPersistState(persistSymbol, persistCategory, 'pending')
 							.catch(err => console.warn('[NewsMonitor] Failed to record pending storage state:', err.message));
 					}
-					// Usage rides only on records that may become the durable owner:
-					// originals, and fallback redeliveries when nothing owns it yet.
-					const stateOwnsUsage = result.originalPersistedState === 'owned' || result.originalPersistedState === 'pending';
-					const includeUsage = !(isCachedRedelivery && stateOwnsUsage);
+					// Fallback redeliveries embed usage only when they win the ownership
+					// claim, so concurrent channel expansions cannot duplicate it.
+					const usageClaimed = !isCachedRedelivery
+						|| this.cache.tryClaimUsageOwnership(persistSymbol, persistCategory);
+					const includeUsage = !isCachedRedelivery || usageClaimed;
 					alertStorageService.saveAlert({
 						text: result.alert.text || '',
 						symbol: result.alert.symbol || result.symbol,
@@ -220,14 +221,22 @@ class NewsMonitorHandler {
 						processingTimeMs: result.totalDurationMs,
 					}).then((savedId) => {
 						if (isCachedRedelivery) {
-							if (savedId && includeUsage) {
-								return this.cache.markOriginalPersistState(persistSymbol, persistCategory, 'owned');
+							if (usageClaimed) {
+								return this.cache.markOriginalPersistState(
+									persistSymbol,
+									persistCategory,
+									savedId ? 'owned' : 'none',
+								);
 							}
 							return undefined;
 						}
 						return this.cache.markOriginalPersistState(persistSymbol, persistCategory, savedId ? 'owned' : 'none');
 					}).catch((err) => {
-						if (!isCachedRedelivery) {
+						if (isCachedRedelivery) {
+							if (usageClaimed) {
+								this.cache.releaseUsageOwnershipClaim(persistSymbol, persistCategory);
+							}
+						} else {
 							this.cache.markOriginalPersistState(persistSymbol, persistCategory, 'none')
 								.catch(markErr => console.warn('[NewsMonitor] Failed to record failed storage state:', markErr.message));
 						}
