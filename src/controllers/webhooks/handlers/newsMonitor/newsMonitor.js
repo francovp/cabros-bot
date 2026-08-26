@@ -32,6 +32,9 @@ class NewsMonitorHandler {
 		this.analyzer = getAnalyzer();
 		this.cache = getCacheInstance();
 		this.maxSymbols = 100;
+		// "symbol:eventCategory" keys whose original document is known persisted;
+		// redeliveries zero token usage only for these.
+		this.persistedOriginalKeys = new Set();
 	}
 
 	/**
@@ -134,10 +137,16 @@ class NewsMonitorHandler {
 			}
 
 			const notificationManagerForResponse = getNotificationManager();
+			// attemptedDeliveryResults is storage-only bookkeeping for the post-response
+			// persistence pass; keep it out of the public response contract.
+			const analysisResults = results;
+			const responseResults = (results || []).map(
+				({ attemptedDeliveryResults, ...publicResult }) => publicResult,
+			);
 			const response = {
 				success: summary.analyzed > 0 || summary.cached > 0,
 				partial_success: summary.timeout > 0 || summary.error > 0,
-				results,
+				results: responseResults,
 				summary,
 				requestedChannels: getRequestedChannels(notificationManagerForResponse, routing),
 				deliveredChannels: getDeliveredChannels(results.flatMap((result) => result.deliveryResults || [])),
@@ -166,7 +175,7 @@ class NewsMonitorHandler {
 			// Failures are caught and logged — delivery is never blocked by storage.
 			if (!dryRun && alertStorageService.isEnabled()) {
 				const requestedChannels = response.requestedChannels || [];
-				for (const result of results || []) {
+				for (const result of analysisResults || []) {
 					if (!result || !result.alert) {
 						continue;
 					}
@@ -184,15 +193,19 @@ class NewsMonitorHandler {
 						continue;
 					}
 
+					const persistSymbol = result.alert.symbol || result.symbol;
+					const persistKey = `${persistSymbol}:${result.alert.eventCategory}`;
 					alertStorageService.saveAlert({
 						text: result.alert.text || '',
 						symbol: result.alert.symbol || result.symbol,
 						exchange: result.alert.marketContext && result.alert.marketContext.source === 'binance' ? 'BINANCE' : undefined,
 						enriched: Boolean(result.alert.enriched),
 						enrichmentData: result.alert.enriched || null,
-						// Null for cached redeliveries: no new analysis ran, and the original
-						// document already carries its token usage.
-						tokenUsage: isCachedRedelivery ? null : ((result.alert.enriched && result.alert.enriched.tokenUsage) || null),
+						// Zero usage only when the original write is known-succeeded; otherwise
+						// that document may not exist and its analysis usage would be lost.
+						tokenUsage: isCachedRedelivery && this.persistedOriginalKeys.has(persistKey)
+							? null
+							: ((result.alert.enriched && result.alert.enriched.tokenUsage) || null),
 						channels: requestedChannels,
 						deliveryResults: currentDeliveryResults,
 						source: 'news-monitor',
@@ -201,6 +214,10 @@ class NewsMonitorHandler {
 						sentimentScore: result.alert.sentimentScore,
 						dedupStatus: isCachedRedelivery ? 'cached' : 'fresh',
 						processingTimeMs: result.totalDurationMs,
+					}).then((savedId) => {
+						if (!isCachedRedelivery && savedId) {
+							this.persistedOriginalKeys.add(persistKey);
+						}
 					}).catch((err) => {
 						console.warn('[NewsMonitor] Failed to persist alert to storage:', err.message);
 					});

@@ -39,6 +39,9 @@ describe('News Monitor - Alert Storage Integration', () => {
 
 		jest.clearAllMocks();
 		getCacheInstance().clear();
+		require('../../src/controllers/webhooks/handlers/newsMonitor/newsMonitor')
+			.getNewsMonitor()
+			.persistedOriginalKeys.clear();
 
 		const gemini = require('../../src/services/grounding/gemini');
 		gemini.analyzeNewsForSymbol.mockReset();
@@ -269,6 +272,7 @@ describe('News Monitor - Alert Storage Integration', () => {
 
 		expect(res.body.success).toBe(true);
 		expect(res.body.summary.cached).toBe(1);
+		expect(res.body.results[0]).not.toHaveProperty('attemptedDeliveryResults');
 		expect(saveAlertSpy).toHaveBeenCalledTimes(2);
 		const redelivery = saveAlertSpy.mock.calls[1][0];
 		expect(redelivery.source).toBe('news-monitor');
@@ -278,6 +282,30 @@ describe('News Monitor - Alert Storage Integration', () => {
 		expect(redelivery.deliveryResults).toEqual([
 			expect.objectContaining({ channel: 'whatsapp', success: true }),
 		]);
+	});
+
+	it('preserves token usage on redelivery when the original write failed', async () => {
+		saveAlertSpy.mockRejectedValueOnce(new Error('firestore unavailable'));
+
+		await request(app)
+			.post('/api/news-monitor')
+			.set('x-api-key', 'test-key')
+			.send({ crypto: ['BTCUSDT'], channels: ['telegram'] })
+			.expect(200);
+
+		expect(saveAlertSpy).toHaveBeenCalledTimes(1);
+
+		await request(app)
+			.post('/api/news-monitor')
+			.set('x-api-key', 'test-key')
+			.send({ crypto: ['BTCUSDT'], channels: ['whatsapp'] })
+			.expect(200);
+
+		expect(saveAlertSpy).toHaveBeenCalledTimes(2);
+		const redelivery = saveAlertSpy.mock.calls[1][0];
+		expect(redelivery.dedupStatus).toBe('cached');
+		expect(redelivery.tokenUsage).not.toBeNull();
+		expect(redelivery.tokenUsage.totalTokens).toBeGreaterThan(0);
 	});
 
 	it('does not persist when ENABLE_FIRESTORE_ALERT_STORAGE is false', async () => {
