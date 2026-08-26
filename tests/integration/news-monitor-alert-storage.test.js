@@ -39,9 +39,6 @@ describe('News Monitor - Alert Storage Integration', () => {
 
 		jest.clearAllMocks();
 		getCacheInstance().clear();
-		require('../../src/controllers/webhooks/handlers/newsMonitor/newsMonitor')
-			.getNewsMonitor()
-			.persistedOriginalKeys.clear();
 
 		const gemini = require('../../src/services/grounding/gemini');
 		gemini.analyzeNewsForSymbol.mockReset();

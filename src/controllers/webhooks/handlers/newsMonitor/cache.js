@@ -332,6 +332,34 @@ class NewsCache {
 	}
 
 	/**
+	 * Mark the cached entry's original alert document as durably stored.
+	 *
+	 * Updates the local entry synchronously and, when persistent dedup is
+	 * enabled, merges the flag into the Firestore document transactionally so
+	 * other replicas observe it on their next cache read. Fail-open.
+	 *
+	 * @param {string} symbol
+	 * @param {string} eventCategory
+	 * @returns {Promise<void>}
+	 */
+	async markOriginalPersisted(symbol, eventCategory) {
+		const key = this.generateKey(symbol, eventCategory);
+		const entry = this.cache.get(key);
+		if (!entry || this.isExpired(entry)) {
+			return;
+		}
+		entry.data = { ...entry.data, originalPersisted: true };
+
+		if (newsDedupStorageService.isEnabled() && newsDedupStorageService.isReady()) {
+			try {
+				await newsDedupStorageService.updateEntry(key, { originalPersisted: true });
+			} catch (error) {
+				console.warn('[NewsCache] Failed to persist original-write flag (fail-open):', error.message);
+			}
+		}
+	}
+
+	/**
 	 * Claim a channel-specific cached redelivery lease.
 	 *
 	 * Local leases suppress same-process races. Persistent leases use the same
