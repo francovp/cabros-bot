@@ -35,7 +35,7 @@ This project is a small Express + Telegraf (Telegram) bot service that exposes a
 - `app.js` — Express app configuration (body parsing, CORS, helmet, healthcheck route).
 - `src/routes/index.js` — Registers HTTP API routes (mounted under `/api`; endpoints are feature-gated at runtime).
 - `src/controllers/commands.js` — Telegram command handlers wired in `index.js` (`/precio`, `/cryptobot`).
-- `src/controllers/commands/handlers/core/fetchPriceCryptoSymbol.js` — Price lookup resolver routing crypto to Binance and equities/stocks to Twelve Data (`EquityMarketDataService`).
+- `src/controllers/commands/handlers/core/fetchPriceCryptoSymbol.js` — Price lookup resolver routing crypto to Binance and equities/stocks to Twelve Data (`EquityMarketDataService`); crypto replies optionally include bounded Binance 24h ticker context and retain the bare-price fallback.
 - `src/controllers/trading/binanceOrders.js` — Operator-only `POST /api/trading/binance/orders` controller.
 - `src/controllers/webhooks/handlers/alert/alert.js` — Webhook handler that forwards alert text to a Telegram chat.
 - `src/controllers/webhooks/handlers/expandedAnalysisAlert/expandedAnalysisAlert.js` — `POST /api/webhook/expanded-analysis-alert` handler that builds TradingView MCP analysis reports and sends them through notification channels.
@@ -1430,6 +1430,14 @@ The dedicated BullMQ worker and signal-outcome worker now await the existing fai
 - `tests/unit/worker-sentry-shutdown.test.js` verifies drain, flush, and exit ordering for both standalone workers.
 
 No endpoint, OpenAPI, Postman, environment variable, or Remote Config change was required.
+
+## Binance `/precio` Market Context (Issue #527)
+
+Crypto `/precio` replies keep the existing average-price lookup and append Binance 24h change, high/low range, and quote volume when the ticker payload is valid. The ticker request uses the existing `BINANCE_FETCH_TIMEOUT_MS` request bound, logs a warning, and preserves the exact bare-price reply on provider failure or malformed data. No new endpoint, dependency, environment variable, or Remote Config key was added; the optional sparkline was intentionally skipped as outside the acceptance criteria.
+
+**Coverage**:
+- `src/controllers/commands/handlers/core/fetchPriceCryptoSymbol.js` — Validates and formats 24h ticker context with fail-open fallback and Sentry span instrumentation.
+- `tests/unit/fetch-symbol-price.test.js` — Covers enriched output, ticker failure, and malformed payload fallback.
 
 ## News Monitor Indeterminate Lease Persistence (CB-189 / Issue #426)
 
