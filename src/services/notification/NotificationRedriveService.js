@@ -499,7 +499,16 @@ class NotificationRedriveService {
 			}
 		}
 
+		const newestCandidates = new Map();
 		for (const record of candidates.values()) {
+			const transitionAt = toMillis(record.deliveredAt || record.terminalAt || record.updatedAt);
+			const current = newestCandidates.get(record.repeatCooldown.channel);
+			if (!current || transitionAt > toMillis(current.deliveredAt || current.terminalAt || current.updatedAt)) {
+				newestCandidates.set(record.repeatCooldown.channel, record);
+			}
+		}
+
+		for (const record of newestCandidates.values()) {
 			if (Date.now() >= deadline) {
 				return 0;
 			}
@@ -767,6 +776,12 @@ class NotificationRedriveService {
 					);
 
 					const channelResult = Array.isArray(results) && results[0] ? results[0] : null;
+					if (await this.isRepeatCooldownSuperseded(claimed)) {
+						await this.markTerminal(claimed.id, 'cancelled', {
+							lastError: 'Superseded by an opposite-side signal',
+						});
+						continue;
+					}
 
 					if (channelResult && channelResult.success) {
 						if (claimed.repeatCooldown?.key && claimed.repeatCooldown.channel) {

@@ -251,8 +251,11 @@ function postAlert(botOrGetter) {
 					&& Object.prototype.hasOwnProperty.call(TIMEFRAME_MAP, parsedSignal.rawTimeframe)
 					&& TIMEFRAME_MAP[parsedSignal.rawTimeframe] === parsedSignal.timeframe,
 				);
-				if (parsedSignal && hasUsableTimeframe && requestedChannels.length > 0) {
-					const cooldownChannels = requestedChannels.map((channel) => getCooldownChannelIdentity(channel, routing));
+				const cooldownChannelNames = requestedChannels.length > 0
+					? requestedChannels
+					: ['telegram', 'whatsapp', 'discord'];
+				if (parsedSignal && hasUsableTimeframe) {
+					const cooldownChannels = cooldownChannelNames.map((channel) => getCooldownChannelIdentity(channel, routing));
 					await notificationRedriveService.reconcileRepeatCooldown(buildSignalKey(parsedSignal), cooldownChannels);
 					const verdict = signalRepeatCooldown.reserve(
 						{ ...parsedSignal, timeframe: parsedSignal.timeframe },
@@ -299,7 +302,7 @@ function postAlert(botOrGetter) {
 				const keepFailedForRedrive = notificationRedriveService.isEnabled()
 					&& notificationRedriveService.getWorkerRole() !== 'disabled'
 					&& (notificationRedriveService.getWorkerRole() === 'web' || notificationRedriveService.hasDurableStore())
-					&& results.some((result) => result && !result.success);
+					&& (results.some((result) => result && !result.success) || requestedChannels.length === 0);
 				const finalizationChannels = keepFailedForRedrive
 					? reservation.channels
 					: deliveredReservationChannels;
