@@ -830,4 +830,25 @@ describe('JobRepository durable claims', () => {
 			code: 'JOB_CLAIM_RENEWAL_UNAVAILABLE',
 		});
 	});
+
+	it('configures composite indexes for scoped tradingviewJobs list queries', () => {
+		const fs = require('fs');
+		const path = require('path');
+		const indexesPath = path.resolve(__dirname, '../../firestore.indexes.json');
+		const raw = fs.readFileSync(indexesPath, 'utf8');
+		const parsed = JSON.parse(raw);
+
+		expect(Array.isArray(parsed.indexes)).toBe(true);
+		const jobIndexes = parsed.indexes.filter(idx => idx.collectionGroup === 'tradingviewJobs');
+		expect(jobIndexes.length).toBeGreaterThan(0);
+
+		const hasChatScopeIndex = jobIndexes.some(idx => {
+			const fields = idx.fields || [];
+			return fields.some(f => f.fieldPath === 'requestMetadata.telegramChatId')
+				&& fields.some(f => f.fieldPath === 'createdAt' && f.order === 'DESCENDING');
+		});
+		expect(hasChatScopeIndex).toBe(true);
+	});
 });
+
+
