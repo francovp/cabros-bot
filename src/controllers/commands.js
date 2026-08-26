@@ -90,6 +90,7 @@ const createTradingViewJobCommand = (type, command, buildPayload) => async (cont
 };
 
 const JOBS_COMMAND_LIMIT = 5;
+const JOBS_COMMAND_TIMEOUT_MS = 8000;
 const JOB_STATUS_LABELS = {
 	pending: 'pendiente',
 	processing: 'procesando',
@@ -158,21 +159,40 @@ const jobsCommand = async (context) => {
 	});
 
 	try {
+		if (chatId === undefined || chatId === null) {
+			await context.reply('No pude identificar el chat para consultar sus jobs.');
+			return;
+		}
+
 		const jobId = args.positionals[0];
 		if (jobId) {
-			const job = await jobService.getJob(jobId);
+			const job = await withTimeout(
+				(signal) => jobService.getJob(jobId, { telegramChatId: String(chatId), signal }),
+				JOBS_COMMAND_TIMEOUT_MS,
+				'job store read timed out',
+			);
 			await context.reply(job ? formatJobDetail(job) : `No encontré el job ${jobId}. Puede haber expirado.`);
 		} else {
-			const jobs = await jobService.listJobs({ limit: JOBS_COMMAND_LIMIT });
+			const jobs = await withTimeout(
+				(signal) => jobService.listJobs({
+					limit: JOBS_COMMAND_LIMIT,
+					telegramChatId: String(chatId),
+					signal,
+				}),
+				JOBS_COMMAND_TIMEOUT_MS,
+				'job store read timed out',
+			);
 			await context.reply(jobs.length ? formatJobList(jobs) : 'No hay jobs recientes.');
 		}
 	} catch (error) {
 		console.error('[commands] /jobs failed:', error.message);
-		sentryService.captureRuntimeError({
-			channel: 'telegram',
-			error,
-			extra: { command: 'jobs', chatId },
-		});
+		if (error.name !== 'AbortError' && error.name !== 'TimeoutError' && error.code !== 'TIMEOUT') {
+			sentryService.captureRuntimeError({
+				channel: 'telegram',
+				error,
+				extra: { command: 'jobs', chatId },
+			});
+		}
 		try {
 			await context.reply('No pude consultar los jobs ahora mismo. Intenta nuevamente más tarde.');
 		} catch (replyError) {

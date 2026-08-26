@@ -132,7 +132,11 @@ describe('Telegram TradingView commands', () => {
 
 			await jobsCommand(context);
 
-			expect(jobService.listJobs).toHaveBeenCalledWith({ limit: expect.any(Number) });
+			expect(jobService.listJobs).toHaveBeenCalledWith({
+				limit: expect.any(Number),
+				telegramChatId: '123',
+				signal: expect.any(AbortSignal),
+			});
 			expect(context.reply).toHaveBeenCalledWith(expect.stringContaining('job-1'));
 			expect(context.reply.mock.calls[0][0]).toContain('1/2');
 		});
@@ -150,7 +154,10 @@ describe('Telegram TradingView commands', () => {
 
 			await jobsCommand(context);
 
-			expect(jobService.getJob).toHaveBeenCalledWith('job-2');
+			expect(jobService.getJob).toHaveBeenCalledWith('job-2', {
+				telegramChatId: '123',
+				signal: expect.any(AbortSignal),
+			});
 			expect(context.reply.mock.calls[0][0]).toEqual(expect.stringContaining('completado'));
 			expect(context.reply.mock.calls[0][0]).toEqual(expect.stringContaining('8'));
 			expect(context.reply.mock.calls[0][0]).toContain('Entrega: OK.');
@@ -194,6 +201,19 @@ describe('Telegram TradingView commands', () => {
 
 			await expect(jobsCommand(context)).resolves.not.toThrow();
 			expect(context.reply).toHaveBeenCalledWith(expect.stringContaining('No pude consultar los jobs'));
+		});
+
+		it('fails open when job storage stalls past the read deadline', async () => {
+			jest.useFakeTimers();
+			jobService.listJobs.mockImplementation(() => new Promise(() => {}));
+			const context = buildContext('/jobs');
+
+			const command = jobsCommand(context);
+			await jest.advanceTimersByTimeAsync(8000);
+			await command;
+
+			expect(context.reply).toHaveBeenCalledWith(expect.stringContaining('No pude consultar los jobs'));
+			jest.useRealTimers();
 		});
 	});
 

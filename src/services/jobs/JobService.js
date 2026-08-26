@@ -448,10 +448,12 @@ class JobService {
 	 * @param {string} jobId
 	 * @returns {Object|null}
 	 */
-	async getJob(jobId) {
+	async getJob(jobId, { telegramChatId, signal } = {}) {
+		if (signal?.aborted) throw signal.reason || new Error('Job read aborted');
 		await this._cleanExpiredJobs();
 		const job = await this._getUnexpiredJob(jobId);
-		if (!job) {
+		if (signal?.aborted) throw signal.reason || new Error('Job read aborted');
+		if (!job || (telegramChatId !== undefined && String(job.requestMetadata?.telegramChatId) !== String(telegramChatId))) {
 			return null;
 		}
 
@@ -514,12 +516,18 @@ class JobService {
 		return formatted;
 	}
 
-	async listJobs({ status, type, limit = DEFAULT_JOB_LIST_LIMIT } = {}) {
+	async listJobs({ status, type, telegramChatId, signal, limit = DEFAULT_JOB_LIST_LIMIT } = {}) {
+		if (signal?.aborted) throw signal.reason || new Error('Job read aborted');
 		await this._cleanExpiredJobs();
 		const safeLimit = Number.isInteger(limit) && limit > 0
 			? Math.min(limit, MAX_JOB_LIST_LIMIT)
 			: DEFAULT_JOB_LIST_LIMIT;
-		const jobs = await this.repository.list({ status, type, limit: safeLimit });
+		const jobs = await this.repository.list({
+			status,
+			type,
+			limit: telegramChatId === undefined ? safeLimit : MAX_JOB_LIST_LIMIT,
+		});
+		if (signal?.aborted) throw signal.reason || new Error('Job read aborted');
 		const activeJobs = [];
 
 		for (const job of jobs) {
@@ -528,7 +536,11 @@ class JobService {
 				continue;
 			}
 
-			if ((!status || job.status === status) && (!type || job.type === type)) {
+			if (
+				(!status || job.status === status)
+				&& (!type || job.type === type)
+				&& (telegramChatId === undefined || String(job.requestMetadata?.telegramChatId) === String(telegramChatId))
+			) {
 				activeJobs.push(job);
 			}
 		}
