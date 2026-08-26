@@ -6,6 +6,7 @@ const { getRoutes } = require('../../src/routes');
 const { initializeNotificationServices } = require('../../src/controllers/webhooks/handlers/alert/alert');
 const { signalRepeatCooldown } = require('../../src/services/alerts/signalRepeatCooldown');
 const signalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
+const { notificationRedriveService } = require('../../src/services/notification/NotificationRedriveService');
 
 const SIGNAL_TEXT = 'BINANCE:ETHUSDT (4h) COMPRA — señal de prueba';
 
@@ -27,6 +28,7 @@ describe('Alert repeat suppression endpoint behavior', () => {
 
 		jest.clearAllMocks();
 		signalRepeatCooldown.reset();
+		notificationRedriveService._resetForTesting();
 
 		mockTelegramSendMessage = jest.fn().mockResolvedValue({ message_id: 'test-msg-id' });
 		mockBot = {
@@ -43,6 +45,7 @@ describe('Alert repeat suppression endpoint behavior', () => {
 	afterEach(() => {
 		restoreEnv(savedEnv);
 		signalRepeatCooldown.reset();
+		notificationRedriveService._resetForTesting();
 		if (app._router && app._router.stack && app._router.stack.length > 0) {
 			app._router.stack.pop();
 		}
@@ -132,6 +135,21 @@ describe('Alert repeat suppression endpoint behavior', () => {
 			enabledSpy.mockRestore();
 			recordSpy.mockRestore();
 		}
+	});
+
+	it('releases failed reservations when redrive is explicitly disabled', async () => {
+		process.env.ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION = 'true';
+		process.env.ENABLE_NOTIFICATION_REDRIVE = 'true';
+		process.env.NOTIFICATION_REDRIVE_WORKER_ROLE = 'disabled';
+		mockTelegramSendMessage.mockRejectedValue(new Error('Telegram unavailable'));
+
+		await request(app)
+			.post('/api/webhook/alert')
+			.set('x-api-key', 'test-key')
+			.send({ text: SIGNAL_TEXT })
+			.expect(200);
+
+		expect(signalRepeatCooldown.getStats().activeTrackedSignals).toBe(0);
 	});
 
 	it('always delivers an opposite-side flip regardless of cooldown', async () => {

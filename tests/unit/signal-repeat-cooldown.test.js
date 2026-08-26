@@ -173,6 +173,17 @@ describe('signalRepeatCooldown', () => {
 			expect(cooldown.reserve(signal, ['telegram:destination-a'], 10_001).suppressed).toBe(false);
 		});
 
+		it('refreshes a redriven channel timestamp after successful delivery', () => {
+			const cooldown = createSignalRepeatCooldown();
+			const signal = { exchange: 'BINANCE', symbol: 'ETHUSDT', timeframe: '5m', side: 'BUY' };
+			const first = cooldown.reserve(signal, ['telegram:destination-a'], 10_000);
+			cooldown.finalize(first.key, first.channels, first.channels);
+
+			cooldown.refresh(first.key, first.channels, 20_000);
+
+			expect(cooldown.isSuppressed(signal, 20_000 + TIMEFRAME_BAR_MS['5m'] - 1).suppressed).toBe(true);
+		});
+
 		it('keeps the prior side active when an opposite-side delivery fails', () => {
 			const cooldown = createSignalRepeatCooldown();
 			const buy = { exchange: 'BINANCE', symbol: 'ETHUSDT', timeframe: '4h', side: 'BUY' };

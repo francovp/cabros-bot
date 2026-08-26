@@ -12,6 +12,7 @@ const NotificationManager = require('../../../../services/notification/Notificat
 const { getURLShortener } = require('../../handlers/newsMonitor/urlShortener');
 const sentryService = require('../../../../services/monitoring/SentryService');
 const { TokenUsageTracker } = require('../../../../lib/tokenUsage');
+const { trackBackgroundTask } = require('../../../../lib/backgroundTaskTracker');
 const alertStorageService = require('../../../../services/storage/AlertStorageService');
 const {
 	NotificationRoutingValidationError,
@@ -22,7 +23,7 @@ const {
 } = require('../../../../services/notification/requestRouting');
 const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteConfigService');
 const { parseTradingViewSignal, TIMEFRAME_MAP } = require('../../../../services/tradingview/parseTradingViewSignal');
-const { signalRepeatCooldown } = require('../../../../services/alerts/signalRepeatCooldown');
+const { signalRepeatCooldown, oppositeKeyOf } = require('../../../../services/alerts/signalRepeatCooldown');
 const { notificationRedriveService } = require('../../../../services/notification/NotificationRedriveService');
 
 // Initialize services
@@ -294,11 +295,20 @@ function postAlert(botOrGetter) {
 					deliveredChannels.includes(getChannelName(channel))
 				));
 				const keepFailedForRedrive = notificationRedriveService.isEnabled()
+					&& notificationRedriveService.getWorkerRole() !== 'disabled'
 					&& results.some((result) => result && !result.success);
 				const finalizationChannels = keepFailedForRedrive
 					? reservation.channels
 					: deliveredReservationChannels;
 				signalRepeatCooldown.finalize(reservation.key, reservation.channels, finalizationChannels);
+				if (notificationRedriveService.isEnabled() && deliveredReservationChannels.length > 0) {
+					const oppositeKey = oppositeKeyOf(reservation.key);
+					if (oppositeKey) {
+						trackBackgroundTask(
+							notificationRedriveService.cancelPendingRepeatCooldowns(oppositeKey, deliveredReservationChannels),
+						).catch(() => {});
+					}
+				}
 			}
 			const processingTimeMs = Math.max(0, Date.now() - startTime);
 

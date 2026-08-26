@@ -216,6 +216,49 @@ describe('NotificationRedriveService', () => {
 	});
 
 	describe('sweep and redrive', () => {
+		it('cancels pending opposite-side redrives', async () => {
+			await service.recordDeliveryResults(
+				{ text: 'BUY signal', correlationId: 'corr-cancel' },
+				[{ channel: 'telegram', success: false, error: 'Initial failure' }],
+				{
+					repeatCooldown: {
+						key: 'BINANCE|ETHUSDT|4h|BUY',
+						channelsByName: { telegram: 'telegram:destination-a' },
+					},
+				},
+			);
+
+			await service.cancelPendingRepeatCooldowns('BINANCE|ETHUSDT|4h|BUY', ['telegram:destination-a']);
+
+			expect(service.inMemoryStore.get('corr-cancel_telegram').status).toBe('cancelled');
+		});
+
+		it('refreshes cooldown state when redrive succeeds', async () => {
+			const refreshSpy = jest.spyOn(signalRepeatCooldown, 'refresh');
+			const mockTelegramSend = jest.fn().mockResolvedValue({ success: true, messageId: 'redrive-msg-refresh' });
+			service.setNotificationManagerGetter(() => ({
+				channels: new Map([['telegram', { name: 'telegram', send: mockTelegramSend, isEnabled: () => true }]]),
+				sendToChannels: jest.fn(async (payload, channels, opts) => [{ channel: 'telegram', ...(await mockTelegramSend(payload, opts)) }]),
+			}));
+
+			await service.recordDeliveryResults(
+				{ text: 'BUY signal', correlationId: 'corr-refresh' },
+				[{ channel: 'telegram', success: false, error: 'Initial failure' }],
+				{
+					repeatCooldown: {
+						key: 'BINANCE|ETHUSDT|5m|BUY',
+						channelsByName: { telegram: 'telegram:destination-a' },
+					},
+				},
+			);
+			service.inMemoryStore.get('corr-refresh_telegram').nextAttemptAt = Date.now() - 1000;
+
+			await service.sweep();
+
+			expect(refreshSpy).toHaveBeenCalledWith('BINANCE|ETHUSDT|5m|BUY', ['telegram:destination-a']);
+			refreshSpy.mockRestore();
+		});
+
 		it('dispatches only failed channels with channel isolation and isRedrive: true', async () => {
 			const mockTelegramSend = jest.fn().mockResolvedValue({ success: true, messageId: 'redrive-msg-1' });
 			const mockWhatsappSend = jest.fn();

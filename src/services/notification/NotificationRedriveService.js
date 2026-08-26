@@ -432,6 +432,52 @@ class NotificationRedriveService {
 		}
 	}
 
+	async cancelPendingRepeatCooldowns(key, channels = []) {
+		if (!key || !Array.isArray(channels) || channels.length === 0) {
+			return 0;
+		}
+
+		const channelSet = new Set(channels);
+		const candidates = new Map();
+		const matches = (record) => (
+			record
+			&& record.status === 'pending'
+			&& record.repeatCooldown?.key === key
+			&& channelSet.has(record.repeatCooldown.channel)
+		);
+
+		for (const record of this.inMemoryStore.values()) {
+			if (matches(record)) {
+				candidates.set(record.id, record);
+			}
+		}
+
+		const firestore = this.getFirestore();
+		if (firestore) {
+			try {
+				const snapshot = await firestore.collection(COLLECTION_NAME)
+					.where('status', '==', 'pending')
+					.limit(200)
+					.get();
+				for (const doc of snapshot?.docs || []) {
+					const record = { ...doc.data(), id: doc.id };
+					if (matches(record)) {
+						candidates.set(record.id, record);
+					}
+				}
+			} catch (error) {
+				console.warn('[NotificationRedriveService] Failed to query pending redrives for cancellation:', error.message);
+			}
+		}
+
+		for (const record of candidates.values()) {
+			await this.markTerminal(record.id, 'cancelled', {
+				lastError: 'Superseded by an opposite-side signal',
+			});
+		}
+		return candidates.size;
+	}
+
 	async notifyAdminPermanentFailure(record, reason) {
 		const adminChatId = process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID;
 		if (!adminChatId) {
@@ -568,6 +614,9 @@ class NotificationRedriveService {
 					const channelResult = Array.isArray(results) && results[0] ? results[0] : null;
 
 					if (channelResult && channelResult.success) {
+						if (claimed.repeatCooldown?.key && claimed.repeatCooldown.channel) {
+							signalRepeatCooldown.refresh(claimed.repeatCooldown.key, [claimed.repeatCooldown.channel]);
+						}
 						// Delivery succeeded
 						await this.markTerminal(claimed.id, 'delivered', {
 							deliveredAt: toTimestamp(new Date()),

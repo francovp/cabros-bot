@@ -268,6 +268,27 @@ function release(key, channels = []) {
 	}
 }
 
+function refresh(key, channels = [], now = Date.now()) {
+	if (!key || !Array.isArray(channels) || channels.length === 0) {
+		return;
+	}
+	try {
+		const entry = this.store.get(key);
+		if (!entry || !(entry.channels instanceof Map)) {
+			return;
+		}
+		for (const channel of channels) {
+			if (entry.channels.has(channel)) {
+				entry.channels.set(channel, now);
+			}
+		}
+		entry.firedAt = Math.max(...entry.channels.values());
+		this.store.set(key, entry);
+	} catch (error) {
+		console.warn('[SignalRepeatCooldown] Store refresh failed:', error.message);
+	}
+}
+
 function recordFire(key, now = Date.now()) {
 	if (!key) {
 		return;
@@ -339,6 +360,7 @@ function createSignalRepeatCooldown(options = {}) {
 		reserve: reserve.bind(state),
 		finalize: finalize.bind(state),
 		release: release.bind(state),
+		refresh: refresh.bind(state),
 		recordFire: recordFire.bind(state),
 		recordSuppression() {
 			state.suppressedCount += 1;
@@ -363,4 +385,5 @@ module.exports = {
 	MAX_COOLDOWN_BARS,
 	MAX_ENTRIES,
 	buildSignalKey,
+	oppositeKeyOf,
 };
