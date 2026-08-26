@@ -7,6 +7,7 @@ const {
 	buildSignalKey,
 	DEFAULT_COOLDOWN_BARS,
 	MAX_COOLDOWN_BARS,
+	MAX_ENTRIES,
 } = require('../../src/services/alerts/signalRepeatCooldown');
 
 describe('signalRepeatCooldown', () => {
@@ -136,6 +137,45 @@ describe('signalRepeatCooldown', () => {
 			};
 			const cooldown = createSignalRepeatCooldown({ store: throwingStore });
 			expect(() => cooldown.recordFire('BINANCE|ETHUSDT|4h|BUY')).not.toThrow();
+		});
+	});
+
+	describe('reservations', () => {
+		it('reserves before delivery so overlapping requests cannot both send', () => {
+			const cooldown = createSignalRepeatCooldown();
+			const signal = { exchange: 'BINANCE', symbol: 'ETHUSDT', timeframe: '4h', side: 'BUY' };
+			const first = cooldown.reserve(signal, ['telegram'], 10_000);
+			const overlapping = cooldown.reserve(signal, ['telegram'], 10_001);
+
+			expect(first.suppressed).toBe(false);
+			expect(first.channels).toEqual(['telegram']);
+			expect(overlapping.suppressed).toBe(true);
+		});
+
+		it('releases only failed channels after partial delivery', () => {
+			const cooldown = createSignalRepeatCooldown();
+			const signal = { exchange: 'BINANCE', symbol: 'ETHUSDT', timeframe: '4h', side: 'BUY' };
+			const first = cooldown.reserve(signal, ['telegram', 'discord'], 10_000);
+			cooldown.finalize(first.key, first.channels, ['telegram'], 10_000);
+
+			const retry = cooldown.reserve(signal, ['telegram', 'discord'], 10_001);
+			expect(retry.suppressed).toBe(false);
+			expect(retry.channels).toEqual(['discord']);
+		});
+	});
+
+	describe('bounded storage', () => {
+		it('evicts oldest entries when the map exceeds its hard cap', () => {
+			const store = new Map();
+			const cooldown = createSignalRepeatCooldown({ store });
+			const now = 10_000;
+
+			for (let index = 0; index <= MAX_ENTRIES; index += 1) {
+				cooldown.recordFire(`BINANCE|SYM${index}|1h|BUY`, now + index);
+			}
+
+			expect(store.size).toBe(MAX_ENTRIES);
+			expect(store.has('BINANCE|SYM0|1h|BUY')).toBe(false);
 		});
 	});
 

@@ -114,12 +114,8 @@ describe('Alert repeat suppression endpoint behavior', () => {
 	it('fails open to delivery when the cooldown store errors', async () => {
 		process.env.ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION = 'true';
 
-		const throwingStore = new Map();
-		throwingStore.get = () => {
-			throw new Error('store unavailable');
-		};
-		const originalIsSuppressed = signalRepeatCooldown.isSuppressed;
-		signalRepeatCooldown.isSuppressed = () => ({ suppressed: false });
+		const originalReserve = signalRepeatCooldown.reserve;
+		signalRepeatCooldown.reserve = () => ({ suppressed: false });
 
 		try {
 			await request(app)
@@ -134,7 +130,7 @@ describe('Alert repeat suppression endpoint behavior', () => {
 				.expect(200);
 			expect(mockTelegramSendMessage).toHaveBeenCalledTimes(2);
 		} finally {
-			signalRepeatCooldown.isSuppressed = originalIsSuppressed;
+			signalRepeatCooldown.reserve = originalReserve;
 		}
 	});
 
@@ -178,6 +174,37 @@ describe('Alert repeat suppression endpoint behavior', () => {
 		expect(retry.body.suppressedRepeat).toBeUndefined();
 		expect(mockTelegramSendMessage.mock.calls.length).toBeGreaterThanOrEqual(2);
 		expect(retry.body.deliveredChannels).toEqual(['telegram']);
+	});
+
+	it('reserves the signal before an overlapping delivery completes', async () => {
+		process.env.ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION = 'true';
+		let releaseFirst;
+		mockTelegramSendMessage
+			.mockImplementationOnce(() => new Promise(resolve => { releaseFirst = resolve; }))
+			.mockResolvedValueOnce({ message_id: 'unexpected-second-delivery' });
+
+		const firstRequest = request(app)
+			.post('/api/webhook/alert')
+			.set('x-api-key', 'test-key')
+			.send({ text: SIGNAL_TEXT });
+		const firstResponse = new Promise((resolve, reject) => {
+			firstRequest.end((error, response) => (error ? reject(error) : resolve(response)));
+		});
+		await new Promise((resolve) => {
+			const waitForReservation = () => (releaseFirst ? resolve() : setImmediate(waitForReservation));
+			waitForReservation();
+		});
+
+		const overlapping = await request(app)
+			.post('/api/webhook/alert')
+			.set('x-api-key', 'test-key')
+			.send({ text: SIGNAL_TEXT })
+			.expect(200);
+		expect(overlapping.body.suppressedRepeat).toBe(true);
+
+		releaseFirst({ message_id: 'first-delivery' });
+		expect((await firstResponse).statusCode).toBe(200);
+		expect(mockTelegramSendMessage).toHaveBeenCalledTimes(1);
 	});
 
 	it('never suppresses alerts with unsupported raw timeframes', async () => {

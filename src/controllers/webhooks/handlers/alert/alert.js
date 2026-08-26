@@ -200,14 +200,16 @@ function postAlert(botOrGetter) {
 			if (!notificationManager) {
 				await initializeNotificationServices(bot);
 			}
+			const requestedChannels = getRequestedChannels(notificationManager, routing);
 
 			// Opt-in repeat suppression: same (exchange, symbol, timeframe, side)
 			// inside its cooldown window skips channel delivery but is still
 			// persisted with a marker below. Storage errors fail open. The
-			// fire timestamp is committed only after at least one successful
-			// delivery so transient provider outages stay retryable.
+			// reservation is made before delivery so overlapping requests cannot
+			// both send; failed channels remain retryable.
 			let suppressedRepeat = false;
-			let pendingFireKey = null;
+			let reservation = null;
+			let deliveryRouting = routing;
 			if (signalRepeatCooldown.isEnabled()) {
 				const parsedSignal = parseTradingViewSignal(alert.text);
 				// Unsupported timeframes normalize to the default timeframe, so
@@ -220,8 +222,11 @@ function postAlert(botOrGetter) {
 					&& Object.prototype.hasOwnProperty.call(TIMEFRAME_MAP, parsedSignal.rawTimeframe)
 					&& TIMEFRAME_MAP[parsedSignal.rawTimeframe] === parsedSignal.timeframe,
 				);
-				if (parsedSignal && hasUsableTimeframe) {
-					const verdict = signalRepeatCooldown.isSuppressed({ ...parsedSignal, timeframe: parsedSignal.timeframe });
+				if (parsedSignal && hasUsableTimeframe && requestedChannels.length > 0) {
+					const verdict = signalRepeatCooldown.reserve(
+						{ ...parsedSignal, timeframe: parsedSignal.timeframe },
+						requestedChannels,
+					);
 					if (verdict.suppressed) {
 						suppressedRepeat = true;
 						signalRepeatCooldown.recordSuppression();
@@ -229,20 +234,29 @@ function postAlert(botOrGetter) {
 							`[Alert] Repeat suppressed for ${verdict.key} (${Math.round(verdict.elapsedMs / 1000)}s elapsed, retry in ${Math.round(verdict.retryInMs / 1000)}s)`,
 						);
 					} else if (verdict.key) {
-						pendingFireKey = verdict.key;
+						reservation = verdict;
+						if (verdict.channels.length < requestedChannels.length) {
+							deliveryRouting = { ...routing, channels: verdict.channels };
+						}
 					}
 				}
 			}
 
-			const results = suppressedRepeat
-				? []
-				: await sendWithNotificationRouting(notificationManager, alert, routing, { parentSpan: requestSpan });
-			const deliveredChannels = suppressedRepeat ? [] : getDeliveredChannels(results);
-			if (pendingFireKey && deliveredChannels.length > 0) {
-				signalRepeatCooldown.recordFire(pendingFireKey);
-				pendingFireKey = null;
+			let results;
+			try {
+				results = suppressedRepeat
+					? []
+					: await sendWithNotificationRouting(notificationManager, alert, deliveryRouting, { parentSpan: requestSpan });
+			} catch (error) {
+				if (reservation) {
+					signalRepeatCooldown.finalize(reservation.key, reservation.channels, []);
+				}
+				throw error;
 			}
-			const requestedChannels = getRequestedChannels(notificationManager, routing);
+			const deliveredChannels = suppressedRepeat ? [] : getDeliveredChannels(results);
+			if (reservation) {
+				signalRepeatCooldown.finalize(reservation.key, reservation.channels, deliveredChannels);
+			}
 			const processingTimeMs = Math.max(0, Date.now() - startTime);
 
 			// Return 200 OK regardless of delivery success (fail-open pattern)

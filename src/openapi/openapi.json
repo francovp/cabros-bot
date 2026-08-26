@@ -4306,6 +4306,10 @@
           "success": {
             "type": "boolean"
           },
+          "suppressedRepeat": {
+            "type": "boolean",
+            "description": "True when this alert was persisted without channel delivery because it repeated a recent signal."
+          },
           "requestId": {
             "type": "string",
             "description": "Request correlation ID echoed from the inbound x-request-id header or generated as a UUIDv4."

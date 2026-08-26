@@ -192,6 +192,15 @@ describe('OpenAPI contract', () => {
 		});
 	});
 
+	it('declares suppressedRepeat in the alert delivery response schema', () => {
+		if (!fs.existsSync(contractPath)) return;
+		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+		expect(contract.components.schemas.DeliveryResult.properties.suppressedRepeat).toEqual({
+			type: 'boolean',
+			description: 'True when this alert was persisted without channel delivery because it repeated a recent signal.',
+		});
+	});
+
 	describe('Job schema alignment with JobService runtime', () => {
 		// The runtime terminal statuses are defined in JobService as:
 		// TERMINAL_JOB_STATUSES = new Set(['completed', 'failed', 'cancelled', 'timed_out'])
