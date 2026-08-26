@@ -15,6 +15,7 @@ const { binanceOrderService } = require('../services/trading/BinanceOrderService
 const { notificationRedriveService } = require('../services/notification/NotificationRedriveService');
 const geminiQuotaManager = require('../services/grounding/geminiQuotaManager');
 const groundingMetrics = require('../services/grounding/metrics');
+const { signalRepeatCooldown } = require('../services/alerts/signalRepeatCooldown');
 const {
 	getDeploymentCommit,
 	isPreviewEnvironment,
@@ -342,6 +343,7 @@ function getStatus() {
 			firebaseRemoteConfig: remoteConfigStatus.enabled,
 			jobExecutionWorker: jobExecutionQueueStatus.enabled || process.env.JOB_EXECUTION_MODE === 'firestore-poller',
 			notificationRedrive: notificationRedriveService.isEnabled(),
+			alertSignalRepeatSuppression: signalRepeatCooldown.isEnabled(),
 		},
 		deliveryChannels: {
 			telegram: {
@@ -402,6 +404,10 @@ function getStatus() {
 				lastRunErrorCount: signalOutcomeWorkerStatus.lastRunErrorCount,
 			},
 			notificationRedrive: notificationRedriveService.getStatus(),
+			alertSignalRepeatSuppression: {
+				enabled: signalRepeatCooldown.isEnabled(),
+				...signalRepeatCooldown.getStats(),
+			},
 			jobExecutionQueue: jobExecutionQueueStatus,
 			binanceTrading: binanceTradingStatus,
 		},

@@ -21,6 +21,7 @@ const {
 } = require('../../../../services/notification/requestRouting');
 const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteConfigService');
 const { parseTradingViewSignal } = require('../../../../services/tradingview/parseTradingViewSignal');
+const { signalRepeatCooldown } = require('../../../../services/alerts/signalRepeatCooldown');
 
 // Initialize services
 let notificationManager = null;
@@ -200,10 +201,33 @@ function postAlert(botOrGetter) {
 				await initializeNotificationServices(bot);
 			}
 
-			// NotificationManager owns the custom dispatch spans.
-			const results = await sendWithNotificationRouting(notificationManager, alert, routing, { parentSpan: requestSpan });
-			const requestedChannels = getRequestedChannels(notificationManager, routing);
-			const deliveredChannels = getDeliveredChannels(results);
+			// Opt-in repeat suppression: same (exchange, symbol, timeframe, side)
+			// inside its cooldown window skips channel delivery but is still
+			// persisted with a marker below. Storage errors fail open.
+			let suppressedRepeat = false;
+			if (signalRepeatCooldown.isEnabled()) {
+				const parsedSignal = parseTradingViewSignal(alert.text);
+				if (parsedSignal) {
+					const verdict = signalRepeatCooldown.isSuppressed(parsedSignal);
+					if (verdict.suppressed) {
+						suppressedRepeat = true;
+						signalRepeatCooldown.recordSuppression();
+						console.log(
+							`[Alert] Repeat suppressed for ${verdict.key} (${Math.round(verdict.elapsedMs / 1000)}s elapsed, retry in ${Math.round(verdict.retryInMs / 1000)}s)`,
+						);
+					} else if (verdict.key) {
+						signalRepeatCooldown.recordFire(verdict.key);
+					}
+				}
+			}
+
+			const results = suppressedRepeat
+				? []
+				: await sendWithNotificationRouting(notificationManager, alert, routing, { parentSpan: requestSpan });
+			const requestedChannels = suppressedRepeat
+				? getRequestedChannels(notificationManager, routing)
+				: getRequestedChannels(notificationManager, routing);
+			const deliveredChannels = suppressedRepeat ? [] : getDeliveredChannels(results);
 			const processingTimeMs = Math.max(0, Date.now() - startTime);
 
 			// Return 200 OK regardless of delivery success (fail-open pattern)
@@ -211,6 +235,7 @@ function postAlert(botOrGetter) {
 				success: true,
 				results,
 				enriched,
+				suppressedRepeat: suppressedRepeat || undefined,
 				tokenUsage: tokenUsageJSON,
 				requestedChannels,
 				deliveredChannels,
@@ -247,6 +272,7 @@ function postAlert(botOrGetter) {
 				processingTimeMs,
 				tradingViewEnrichmentApplied: Boolean(alert.enriched && alert.enriched.tradingViewEnrichmentApplied === true),
 				tradingViewEnrichmentStatus: alert.tradingViewEnrichmentStatus,
+				suppressedRepeat,
 			}).catch(() => {}); // errors already logged inside AlertStorageService
 
 			if (signalOutcomeService.isEnabled()) {

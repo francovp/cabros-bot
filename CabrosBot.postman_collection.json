@@ -1179,6 +1179,78 @@
               }
             }
           ]
+        },
+        {
+          "name": "POST Send Alert (repeat suppressed)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"text\": \"BINANCE:ETHUSDT (4h) COMPRA \\u2014 repita este texto con ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION=true para ver la supresi\\u00f3n\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/webhook/alert",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "webhook",
+                "alert"
+              ]
+            },
+            "description": "Send the same exchange/symbol/timeframe/side signal twice with ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION=true. The first request delivers normally; the second returns suppressedRepeat: true with empty results/deliveredChannels while the alert is still persisted with a suppression marker. Opposite-side flips always deliver."
+          },
+          "response": [
+            {
+              "name": "Suppressed repeat",
+              "status": "OK",
+              "code": 200,
+              "body": "{\"success\":true,\"results\":[],\"enriched\":false,\"suppressedRepeat\":true,\"requestedChannels\":[\"telegram\"],\"deliveredChannels\":[],\"requestId\":\"req-123\"}",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-api-key",
+                    "value": "{{apiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"text\": \"BINANCE:ETHUSDT (4h) COMPRA — repeated signal\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/webhook/alert",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "webhook",
+                    "alert"
+                  ]
+                }
+              }
+            }
+          ]
         }
       ]
     },
