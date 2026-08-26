@@ -5,6 +5,7 @@ const crypto = require('crypto');
 const AlertStorageService = require('../storage/AlertStorageService');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
+const { signalRepeatCooldown } = require('../alerts/signalRepeatCooldown');
 
 const COLLECTION_NAME = 'notificationDeadLetters';
 const DEFAULT_REDRIVE_INTERVAL_MS = 60000;
@@ -83,6 +84,14 @@ function toMillis(timestampOrDate) {
 		return timestampOrDate;
 	}
 	return new Date(timestampOrDate).getTime() || 0;
+}
+
+function releaseRepeatCooldown(record) {
+	const repeatCooldown = record && record.repeatCooldown;
+	if (!repeatCooldown || !repeatCooldown.key || !repeatCooldown.channel) {
+		return;
+	}
+	signalRepeatCooldown.release(repeatCooldown.key, [repeatCooldown.channel]);
 }
 
 class NotificationRedriveService {
@@ -182,6 +191,12 @@ class NotificationRedriveService {
 				attemptCount: 0,
 				lastError: failure.error ? String(failure.error) : 'Unknown delivery failure',
 				lastStatusCode: typeof failure.statusCode === 'number' ? failure.statusCode : null,
+				repeatCooldown: options.repeatCooldown && options.repeatCooldown.key
+					? {
+						key: String(options.repeatCooldown.key),
+						channel: options.repeatCooldown.channelsByName?.[channel] || null,
+					}
+					: null,
 				createdAt: toTimestamp(nowDate),
 				updatedAt: toTimestamp(nowDate),
 				nextAttemptAt: toTimestamp(nextAttemptAtDate),
@@ -511,6 +526,7 @@ class NotificationRedriveService {
 				// Check budget expiration
 				if (candidate.expired || candidate.attemptCount >= maxAttempts) {
 					const terminalStatus = candidate.expired ? 'expired' : 'exhausted';
+					releaseRepeatCooldown(candidate);
 					await this.markTerminal(candidate.id, terminalStatus, {
 						terminalAt: toTimestamp(new Date()),
 					});
@@ -566,6 +582,7 @@ class NotificationRedriveService {
 						const lastCode = channelResult?.statusCode || null;
 
 						if (nextAttempts >= maxAttempts) {
+							releaseRepeatCooldown(claimed);
 							await this.markTerminal(claimed.id, 'exhausted', {
 								lastError: String(lastErr),
 								lastStatusCode: lastCode,
@@ -587,6 +604,7 @@ class NotificationRedriveService {
 					console.error(`[NotificationRedriveService] Unexpected redrive dispatch error for ${claimed.id}:`, error.message);
 					const nextAttempts = (claimed.attemptCount || 0) + 1;
 					if (nextAttempts >= maxAttempts) {
+						releaseRepeatCooldown(claimed);
 						await this.markTerminal(claimed.id, 'exhausted', {
 							lastError: error.message,
 							attemptCount: nextAttempts,

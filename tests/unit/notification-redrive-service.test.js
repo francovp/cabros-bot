@@ -1,5 +1,6 @@
 const { NotificationRedriveService, notificationRedriveService, calculateBackoffMs, stripUndefinedFieldsDeep } = require('../../src/services/notification/NotificationRedriveService');
 const alertStorageService = require('../../src/services/storage/AlertStorageService');
+const { signalRepeatCooldown } = require('../../src/services/alerts/signalRepeatCooldown');
 
 describe('NotificationRedriveService', () => {
 	let savedEnv;
@@ -318,7 +319,13 @@ describe('NotificationRedriveService', () => {
 			service.setNotificationManagerGetter(() => mockNotificationManager);
 
 			const alert = { text: 'ETH signal', correlationId: 'corr-exhaust' };
-			await service.recordDeliveryResults(alert, [{ channel: 'telegram', success: false, error: 'Init fail' }]);
+			const releaseSpy = jest.spyOn(signalRepeatCooldown, 'release');
+			await service.recordDeliveryResults(alert, [{ channel: 'telegram', success: false, error: 'Init fail' }], {
+				repeatCooldown: {
+					key: 'BINANCE|ETHUSDT|4h|BUY',
+					channelsByName: { telegram: 'telegram:destination-a' },
+				},
+			});
 
 			const item = service.inMemoryStore.get('corr-exhaust_telegram');
 			item.nextAttemptAt = Date.now() - 1000;
@@ -345,6 +352,8 @@ describe('NotificationRedriveService', () => {
 			expect(adminMsg).toContain('Notification Redrive Exhausted');
 			expect(adminMsg).toContain('telegram');
 			expect(adminMsg).toContain('Fatal error');
+			expect(releaseSpy).toHaveBeenCalledWith('BINANCE|ETHUSDT|4h|BUY', ['telegram:destination-a']);
+			releaseSpy.mockRestore();
 		});
 
 		it('expires dead-letter records older than maxAgeMs', async () => {

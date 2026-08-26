@@ -5,6 +5,7 @@ const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
 const { initializeNotificationServices } = require('../../src/controllers/webhooks/handlers/alert/alert');
 const { signalRepeatCooldown } = require('../../src/services/alerts/signalRepeatCooldown');
+const signalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
 
 const SIGNAL_TEXT = 'BINANCE:ETHUSDT (4h) COMPRA — señal de prueba';
 
@@ -89,6 +90,48 @@ describe('Alert repeat suppression endpoint behavior', () => {
 
 		const stats = signalRepeatCooldown.getStats();
 		expect(stats.suppressedCount).toBe(1);
+	});
+
+	it('keeps cooldown reservations independent for destination overrides', async () => {
+		process.env.ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION = 'true';
+
+		await request(app)
+			.post('/api/webhook/alert')
+			.set('x-api-key', 'test-key')
+			.send({ text: SIGNAL_TEXT, channels: ['telegram'], telegramChatId: 'chat-a' })
+			.expect(200);
+		const second = await request(app)
+			.post('/api/webhook/alert')
+			.set('x-api-key', 'test-key')
+			.send({ text: SIGNAL_TEXT, channels: ['telegram'], telegramChatId: 'chat-b' })
+			.expect(200);
+
+		expect(second.body.suppressedRepeat).toBeUndefined();
+		expect(mockTelegramSendMessage).toHaveBeenCalledTimes(2);
+	});
+
+	it('does not record suppressed repeats as signal outcomes', async () => {
+		process.env.ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION = 'true';
+		const enabledSpy = jest.spyOn(signalOutcomeService, 'isEnabled').mockReturnValue(true);
+		const recordSpy = jest.spyOn(signalOutcomeService, 'recordSignal').mockResolvedValue(null);
+
+		try {
+			await request(app)
+				.post('/api/webhook/alert')
+				.set('x-api-key', 'test-key')
+				.send({ text: SIGNAL_TEXT })
+				.expect(200);
+			await request(app)
+				.post('/api/webhook/alert')
+				.set('x-api-key', 'test-key')
+				.send({ text: SIGNAL_TEXT })
+				.expect(200);
+
+			expect(recordSpy).toHaveBeenCalledTimes(1);
+		} finally {
+			enabledSpy.mockRestore();
+			recordSpy.mockRestore();
+		}
 	});
 
 	it('always delivers an opposite-side flip regardless of cooldown', async () => {

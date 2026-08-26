@@ -1,4 +1,5 @@
 require('dotenv').config();
+const crypto = require('crypto');
 const { enrichAlert } = require('./grounding');
 const { validateAlert } = require('../../../../lib/validation');
 const { v4: uuidv4 } = require('uuid');
@@ -22,6 +23,7 @@ const {
 const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteConfigService');
 const { parseTradingViewSignal, TIMEFRAME_MAP } = require('../../../../services/tradingview/parseTradingViewSignal');
 const { signalRepeatCooldown } = require('../../../../services/alerts/signalRepeatCooldown');
+const { notificationRedriveService } = require('../../../../services/notification/NotificationRedriveService');
 
 // Initialize services
 let notificationManager = null;
@@ -150,6 +152,30 @@ function resolveDryRun(req) {
 	return queryFlag || bodyFlag;
 }
 
+function getCooldownDestination(channel, routing = {}) {
+	const overrideByChannel = {
+		telegram: routing.telegramChatId,
+		whatsapp: routing.whatsappChatId,
+		discord: routing.discordWebhookUrl,
+	};
+	const envByChannel = {
+		telegram: process.env.TELEGRAM_CHAT_ID,
+		whatsapp: process.env.WHATSAPP_CHAT_ID,
+		discord: process.env.DISCORD_WEBHOOK_URL,
+	};
+	return overrideByChannel[channel] || envByChannel[channel] || 'default';
+}
+
+function getCooldownChannelIdentity(channel, routing) {
+	const destination = String(getCooldownDestination(channel, routing));
+	const fingerprint = crypto.createHash('sha256').update(destination).digest('hex').slice(0, 16);
+	return `${channel}:${fingerprint}`;
+}
+
+function getChannelName(identity) {
+	return String(identity).split(':', 1)[0];
+}
+
 function postAlert(botOrGetter) {
 	return async (req, res) => {
 		const requestId = resolveRequestId(req);
@@ -210,6 +236,7 @@ function postAlert(botOrGetter) {
 			let suppressedRepeat = false;
 			let reservation = null;
 			let deliveryRouting = routing;
+			let repeatCooldownOptions;
 			if (signalRepeatCooldown.isEnabled()) {
 				const parsedSignal = parseTradingViewSignal(alert.text);
 				// Unsupported timeframes normalize to the default timeframe, so
@@ -223,9 +250,10 @@ function postAlert(botOrGetter) {
 					&& TIMEFRAME_MAP[parsedSignal.rawTimeframe] === parsedSignal.timeframe,
 				);
 				if (parsedSignal && hasUsableTimeframe && requestedChannels.length > 0) {
+					const cooldownChannels = requestedChannels.map((channel) => getCooldownChannelIdentity(channel, routing));
 					const verdict = signalRepeatCooldown.reserve(
 						{ ...parsedSignal, timeframe: parsedSignal.timeframe },
-						requestedChannels,
+						cooldownChannels,
 					);
 					if (verdict.suppressed) {
 						suppressedRepeat = true;
@@ -235,8 +263,12 @@ function postAlert(botOrGetter) {
 						);
 					} else if (verdict.key) {
 						reservation = verdict;
+						repeatCooldownOptions = {
+							key: verdict.key,
+							channelsByName: Object.fromEntries(verdict.channels.map((channel) => [getChannelName(channel), channel])),
+						};
 						if (verdict.channels.length < requestedChannels.length) {
-							deliveryRouting = { ...routing, channels: verdict.channels };
+							deliveryRouting = { ...routing, channels: verdict.channels.map(getChannelName) };
 						}
 					}
 				}
@@ -246,7 +278,10 @@ function postAlert(botOrGetter) {
 			try {
 				results = suppressedRepeat
 					? []
-					: await sendWithNotificationRouting(notificationManager, alert, deliveryRouting, { parentSpan: requestSpan });
+					: await sendWithNotificationRouting(notificationManager, alert, deliveryRouting, {
+						parentSpan: requestSpan,
+						repeatCooldown: repeatCooldownOptions,
+					});
 			} catch (error) {
 				if (reservation) {
 					signalRepeatCooldown.finalize(reservation.key, reservation.channels, []);
@@ -255,7 +290,15 @@ function postAlert(botOrGetter) {
 			}
 			const deliveredChannels = suppressedRepeat ? [] : getDeliveredChannels(results);
 			if (reservation) {
-				signalRepeatCooldown.finalize(reservation.key, reservation.channels, deliveredChannels);
+				const deliveredReservationChannels = reservation.channels.filter((channel) => (
+					deliveredChannels.includes(getChannelName(channel))
+				));
+				const keepFailedForRedrive = notificationRedriveService.isEnabled()
+					&& results.some((result) => result && !result.success);
+				const finalizationChannels = keepFailedForRedrive
+					? reservation.channels
+					: deliveredReservationChannels;
+				signalRepeatCooldown.finalize(reservation.key, reservation.channels, finalizationChannels);
 			}
 			const processingTimeMs = Math.max(0, Date.now() - startTime);
 
@@ -304,7 +347,7 @@ function postAlert(botOrGetter) {
 				suppressedRepeat,
 			}).catch(() => {}); // errors already logged inside AlertStorageService
 
-			if (signalOutcomeService.isEnabled()) {
+			if (signalOutcomeService.isEnabled() && !suppressedRepeat) {
 				const { parseTradingViewSignal } = require('../../../../services/tradingview/parseTradingViewSignal');
 				const parsed = parseTradingViewSignal(alert.text);
 				if (parsed) {

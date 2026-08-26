@@ -163,6 +163,16 @@ describe('signalRepeatCooldown', () => {
 			expect(retry.channels).toEqual(['discord']);
 		});
 
+		it('releases a reservation when a queued redrive becomes terminal', () => {
+			const cooldown = createSignalRepeatCooldown();
+			const signal = { exchange: 'BINANCE', symbol: 'ETHUSDT', timeframe: '4h', side: 'BUY' };
+			const first = cooldown.reserve(signal, ['telegram:destination-a'], 10_000);
+
+			cooldown.release(first.key, first.channels);
+
+			expect(cooldown.reserve(signal, ['telegram:destination-a'], 10_001).suppressed).toBe(false);
+		});
+
 		it('keeps the prior side active when an opposite-side delivery fails', () => {
 			const cooldown = createSignalRepeatCooldown();
 			const buy = { exchange: 'BINANCE', symbol: 'ETHUSDT', timeframe: '4h', side: 'BUY' };
