@@ -4,10 +4,11 @@ const request = require('supertest');
 const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
 const { getCooldownChannelIdentity } = require('../../src/controllers/webhooks/handlers/alert/alert');
-const { initializeNotificationServices } = require('../../src/controllers/webhooks/handlers/alert/alert');
+const { initializeNotificationServices, getNotificationManager } = require('../../src/controllers/webhooks/handlers/alert/alert');
 const { signalRepeatCooldown } = require('../../src/services/alerts/signalRepeatCooldown');
 const signalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
 const { notificationRedriveService } = require('../../src/services/notification/NotificationRedriveService');
+const remoteConfigService = require('../../src/services/remoteConfig/RemoteConfigService');
 
 const SIGNAL_TEXT = 'BINANCE:ETHUSDT (4h) COMPRA — señal de prueba';
 
@@ -170,6 +171,38 @@ describe('Alert repeat suppression endpoint behavior', () => {
 			expect(signalRepeatCooldown.getStats().activeTrackedSignals).toBe(0);
 		} finally {
 			durableStoreSpy.mockRestore();
+		}
+	});
+
+	it('does not retain synthetic cooldowns in intentional API-only mode', async () => {
+		process.env.ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION = 'true';
+		process.env.ENABLE_API_ONLY_MODE = 'true';
+		process.env.ENABLE_TELEGRAM_BOT = 'false';
+		process.env.ENABLE_WHATSAPP_ALERTS = 'false';
+		process.env.ENABLE_DISCORD_ALERTS = 'false';
+		const runtimeConfigSpy = jest.spyOn(remoteConfigService, 'getRuntimeConfig').mockReturnValue({ ENABLE_API_ONLY_MODE: true });
+		for (const channel of getNotificationManager().channels.values()) {
+			channel.enabled = false;
+		}
+
+		try {
+			const first = await request(app)
+				.post('/api/webhook/alert')
+				.set('x-api-key', 'test-key')
+				.send({ text: SIGNAL_TEXT })
+				.expect(200);
+			const second = await request(app)
+				.post('/api/webhook/alert')
+				.set('x-api-key', 'test-key')
+				.send({ text: SIGNAL_TEXT })
+				.expect(200);
+
+			expect(first.body.suppressedRepeat).toBeUndefined();
+			expect(second.body.suppressedRepeat).toBeUndefined();
+			expect(signalRepeatCooldown.getStats().activeTrackedSignals).toBe(0);
+			expect(mockTelegramSendMessage).not.toHaveBeenCalled();
+		} finally {
+			runtimeConfigSpy.mockRestore();
 		}
 	});
 

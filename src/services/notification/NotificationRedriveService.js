@@ -232,7 +232,9 @@ class NotificationRedriveService {
 					console.debug(`[NotificationRedriveService] Recorded dead-letter ${recordId} in Firestore`);
 				} catch (error) {
 					console.warn(`[NotificationRedriveService] Failed to persist dead-letter ${recordId} in Firestore, kept in-memory:`, error.message);
-					releaseRepeatCooldown(record);
+					if (this.getWorkerRole() !== 'web') {
+						releaseRepeatCooldown(record);
+					}
 				}
 			} else {
 				console.debug(`[NotificationRedriveService] Recorded dead-letter ${recordId} in memory`);

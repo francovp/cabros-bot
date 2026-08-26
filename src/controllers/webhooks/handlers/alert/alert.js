@@ -296,13 +296,15 @@ function postAlert(botOrGetter) {
 			}
 			const deliveredChannels = suppressedRepeat ? [] : getDeliveredChannels(results);
 			if (reservation) {
+				const zeroChannelRedriveExpected = requestedChannels.length === 0
+					&& !notificationManager.isIntentionalApiOnly();
 				const deliveredReservationChannels = reservation.channels.filter((channel) => (
 					deliveredChannels.includes(getChannelName(channel))
 				));
 				const keepFailedForRedrive = notificationRedriveService.isEnabled()
 					&& notificationRedriveService.getWorkerRole() !== 'disabled'
 					&& (notificationRedriveService.getWorkerRole() === 'web' || notificationRedriveService.hasDurableStore())
-					&& (results.some((result) => result && !result.success) || requestedChannels.length === 0);
+					&& (results.some((result) => result && !result.success) || zeroChannelRedriveExpected);
 				const finalizationChannels = keepFailedForRedrive
 					? reservation.channels
 					: deliveredReservationChannels;

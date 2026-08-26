@@ -213,6 +213,35 @@ describe('NotificationRedriveService', () => {
 			expect(recorded).toHaveLength(1);
 			expect(service.getPendingCount()).toBe(1);
 		});
+
+		it('keeps web-role cooldowns when Firestore falls back to in-memory redrive', async () => {
+			process.env.ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION = 'true';
+			const failingFirestore = {
+				collection: jest.fn(() => ({
+					doc: jest.fn(() => ({
+						set: jest.fn().mockRejectedValue(new Error('Firestore unavailable')),
+					})),
+				})),
+			};
+			alertStorageService.getFirestore.mockReturnValue(failingFirestore);
+			const reservation = signalRepeatCooldown.reserve(
+				{ exchange: 'BINANCE', symbol: 'ETHUSDT', timeframe: '5m', side: 'BUY' },
+				['telegram:destination-a'],
+			);
+
+			await service.recordDeliveryResults(
+				{ text: 'Alert fallback', correlationId: 'fallback-cooldown' },
+				[{ channel: 'telegram', success: false, error: 'Failed' }],
+				{
+					repeatCooldown: {
+						key: reservation.key,
+						channelsByName: { telegram: 'telegram:destination-a' },
+					},
+				},
+			);
+
+			expect(signalRepeatCooldown.getStats().activeTrackedSignals).toBe(1);
+		});
 	});
 
 		describe('sweep and redrive', () => {
