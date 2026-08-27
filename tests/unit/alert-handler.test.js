@@ -689,7 +689,7 @@ describe('Alert Handler', () => {
 			const result = await enrichAlert({ text: 'BTCUSDT(240) pasó a señal de COMPRA' }, { useTradingViewData: true });
 
 			expect(result.sentiment).toBe('BULLISH');
-			expect(result.sentiment_score).toBe(0.9);
+			expect(result.sentiment_score).toBe(0.55);
 			expect(result.sentiment_score_raw).toBe(0.9);
 			expect(result.sentimentConflict).toBeUndefined();
 

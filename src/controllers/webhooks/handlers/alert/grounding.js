@@ -185,10 +185,6 @@ function selectSentimentAndScore(gemini = {}, mcp = {}) {
 	const geminiScore = (typeof gemini.sentiment_score === 'number' && Number.isFinite(gemini.sentiment_score))
 		? gemini.sentiment_score
 		: null;
-	const geminiRawScore = (typeof gemini.sentiment_score_raw === 'number' && Number.isFinite(gemini.sentiment_score_raw))
-		? gemini.sentiment_score_raw
-		: null;
-
 	const mcpSentiment = (typeof mcp.sentiment === 'string' && ['BULLISH', 'BEARISH', 'NEUTRAL'].includes(mcp.sentiment))
 		? mcp.sentiment
 		: null;
@@ -218,9 +214,7 @@ function selectSentimentAndScore(gemini = {}, mcp = {}) {
 		chosenScore = mcpScore !== null ? mcpScore : (chosenSentiment === 'BEARISH' ? -0.5 : chosenSentiment === 'BULLISH' ? 0.5 : 0);
 	} else if (geminiSentiment !== null || geminiScore !== null) {
 		chosenSentiment = geminiSentiment || 'NEUTRAL';
-		chosenScore = geminiScore !== null
-			? (isMcpApplied && geminiRawScore !== null ? geminiRawScore : geminiScore)
-			: (chosenSentiment === 'BEARISH' ? -0.5 : chosenSentiment === 'BULLISH' ? 0.5 : 0);
+		chosenScore = geminiScore !== null ? geminiScore : (chosenSentiment === 'BEARISH' ? -0.5 : chosenSentiment === 'BULLISH' ? 0.5 : 0);
 	} else if (isMcpApplied && (mcpSentiment !== null || mcpScore !== null)) {
 		chosenSentiment = mcpSentiment || 'NEUTRAL';
 		chosenScore = mcpScore !== null ? mcpScore : (chosenSentiment === 'BEARISH' ? -0.5 : chosenSentiment === 'BULLISH' ? 0.5 : 0);
