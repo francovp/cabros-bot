@@ -6,7 +6,10 @@ const rateLimit = new Map();
 const MAX_KEYS = 10000;
 // Protection against memory exhaustion
 const DEFAULT_MAX_REQUESTS = 100;
+// ponytail: fixed 1,000-request webhook bucket; split by API-key identity if isolation needs to scale.
+const WEBHOOK_MAX_REQUESTS = 1000;
 const DEFAULT_WINDOW_MS = 900000;
+const WEBHOOK_INGEST_PATHS = new Set(['/api/webhook/alert', '/api/webhook/message']);
 const invalidConfigWarnings = new Set();
 
 let testModeEnabled = false;
@@ -46,13 +49,18 @@ function rateLimiter(req, res, next) {
 		return next();
 	}
 
-	const maxRequests = readPositiveInteger('RATE_LIMIT_MAX', DEFAULT_MAX_REQUESTS);
+	const requestPath = String(req.originalUrl || req.url || req.path || '').split('?')[0];
+	const isWebhookIngest = WEBHOOK_INGEST_PATHS.has(requestPath);
+	const maxRequests = isWebhookIngest
+		? WEBHOOK_MAX_REQUESTS
+		: readPositiveInteger('RATE_LIMIT_MAX', DEFAULT_MAX_REQUESTS);
 	const windowMs = readPositiveInteger('RATE_LIMIT_WINDOW_MS', DEFAULT_WINDOW_MS);
 
 	const ip = req.ip || req.socket?.remoteAddress || '127.0.0.1';
+	const bucketKey = isWebhookIngest ? `webhook:${ip}` : ip;
 	const now = Date.now();
 
-	let data = rateLimit.get(ip);
+	let data = rateLimit.get(bucketKey);
 
 	if (!data) {
 		// Protection against memory exhaustion
@@ -65,7 +73,7 @@ function rateLimiter(req, res, next) {
 			count: 1,
 			resetTime: now + windowMs,
 		};
-		rateLimit.set(ip, data);
+		rateLimit.set(bucketKey, data);
 	} else if (now > data.resetTime) {
 		// Window expired, reset
 		data.count = 1;

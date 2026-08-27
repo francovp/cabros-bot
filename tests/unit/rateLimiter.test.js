@@ -155,4 +155,35 @@ describe('Rate Limiter Middleware', () => {
 			Date.now = realNow;
 		}
 	});
+
+	test.each(['/api/webhook/alert', '/api/webhook/message'])('uses a separate high-capacity bucket for %s', (url) => {
+		process.env.RATE_LIMIT_MAX = '2';
+		req.method = 'POST';
+		req.url = url;
+		req.originalUrl = url;
+
+		for (let i = 0; i < 101; i++) {
+			rateLimiter(req, res, next);
+		}
+
+		expect(next).toHaveBeenCalledTimes(101);
+	});
+
+	test('keeps the ordinary bucket isolated and rate limited', () => {
+		process.env.RATE_LIMIT_MAX = '2';
+
+		rateLimiter(req, res, next);
+		rateLimiter(req, res, next);
+		const resBlocked = httpMocks.createResponse();
+		rateLimiter(req, resBlocked, jest.fn());
+
+		expect(resBlocked.statusCode).toBe(429);
+
+		req.method = 'POST';
+		req.url = '/api/webhook/alert';
+		req.originalUrl = req.url;
+		rateLimiter(req, res, next);
+
+		expect(next).toHaveBeenCalledTimes(3);
+	});
 });
