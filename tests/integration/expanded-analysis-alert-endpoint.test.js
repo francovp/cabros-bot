@@ -376,16 +376,17 @@ jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
 		expect(mockTelegramSendMessage).not.toHaveBeenCalled();
 	});
 
-	it('analyzes symbols sequentially to avoid concurrent MCP failures', async () => {
+	it('analyzes symbols with bounded concurrency and preserves input order', async () => {
 		let activeCalls = 0;
 		let maxActiveCalls = 0;
 		const callOrder = [];
+		process.env.EXPANDED_ANALYSIS_ALERT_CONCURRENCY = '2';
 
 		tradingViewMcpService.analyzeSymbolIdentifier.mockImplementation(async ({ raw }) => {
 			activeCalls++;
 			maxActiveCalls = Math.max(maxActiveCalls, activeCalls);
 			callOrder.push(`start:${raw}`);
-			await Promise.resolve();
+			await new Promise((resolve) => setTimeout(resolve, raw.endsWith('NVDA') ? 10 : 1));
 			activeCalls--;
 			callOrder.push(`end:${raw}`);
 			return {
@@ -394,7 +395,7 @@ jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
 			};
 		});
 
-		await analyzeSymbols({
+		const results = await analyzeSymbols({
 			symbols: [
 				{ raw: 'NASDAQ:NVDA', exchange: 'NASDAQ', symbol: 'NVDA' },
 				{ raw: 'NASDAQ:AAPL', exchange: 'NASDAQ', symbol: 'AAPL' },
@@ -402,16 +403,21 @@ jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
 			timeframe: '1D',
 		});
 
-		expect(maxActiveCalls).toBe(1);
+		expect(maxActiveCalls).toBe(2);
 		expect(callOrder).toEqual([
 			'start:NASDAQ:NVDA',
-			'end:NASDAQ:NVDA',
 			'start:NASDAQ:AAPL',
 			'end:NASDAQ:AAPL',
+			'end:NASDAQ:NVDA',
+		]);
+		expect(results.map((result) => result.symbol)).toEqual([
+			'NASDAQ:NVDA',
+			'NASDAQ:AAPL',
 		]);
 	});
 
 	it('stops analysis and marks remaining symbols as timeout when deadline is aborted', async () => {
+		process.env.EXPANDED_ANALYSIS_ALERT_CONCURRENCY = '1';
 		const controller = new AbortController();
 		tradingViewMcpService.analyzeSymbolIdentifier.mockImplementationOnce(async () => {
 			controller.abort(new Error('Expanded analysis alert timeout after 60000ms'));
