@@ -4354,6 +4354,10 @@
                     ],
                     "description": "Current price supplied by TradingView MCP enrichment; null when unavailable."
                   },
+                  "sentiment_score_raw": {
+                    "type": "number",
+                    "description": "Original signed Gemini sentiment score when the effective score was capped because grounding returned no sources."
+                  },
                   "price_data": {
                     "type": [
                       "object",
