@@ -49,7 +49,10 @@ function rateLimiter(req, res, next) {
 		return next();
 	}
 
-	const requestPath = String(req.originalUrl || req.url || req.path || '').split('?')[0];
+	const requestPath = String(req.originalUrl || req.url || req.path || '')
+		.split('?')[0]
+		.replace(/\/+$/, '')
+		.toLowerCase();
 	const isWebhookIngest = WEBHOOK_INGEST_PATHS.has(requestPath);
 	const maxRequests = isWebhookIngest
 		? WEBHOOK_MAX_REQUESTS

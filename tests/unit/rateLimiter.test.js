@@ -156,7 +156,7 @@ describe('Rate Limiter Middleware', () => {
 		}
 	});
 
-	test.each(['/api/webhook/alert', '/api/webhook/message'])('uses a separate high-capacity bucket for %s', (url) => {
+	test.each(['/api/webhook/alert', '/api/webhook/alert/', '/API/WEBHOOK/MESSAGE/'])('uses a separate high-capacity bucket for %s', (url) => {
 		process.env.RATE_LIMIT_MAX = '2';
 		req.method = 'POST';
 		req.url = url;
