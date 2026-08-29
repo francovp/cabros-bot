@@ -1266,6 +1266,52 @@ describe('AlertStorageService', () => {
 	});
 
 		describe('summarizeAlerts()', () => {
+		it('counts recorded, not-applicable, and legacy unrecorded TradingView outcomes separately', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('full-alert', {
+						receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+						useTradingViewData: true,
+						tradingViewEnrichmentStatus: 'full',
+					}),
+					buildQueryDoc('partial-alert', {
+						receivedAt: buildTimestamp('2026-06-06T11:00:00.000Z'),
+						useTradingViewData: true,
+						tradingViewEnrichmentStatus: 'partial',
+					}),
+					buildQueryDoc('failed-alert', {
+						receivedAt: buildTimestamp('2026-06-06T10:00:00.000Z'),
+						useTradingViewData: true,
+						tradingViewEnrichmentStatus: 'failed',
+					}),
+					buildQueryDoc('not-applicable-alert', {
+						receivedAt: buildTimestamp('2026-06-06T09:00:00.000Z'),
+						useTradingViewData: false,
+					}),
+					buildQueryDoc('unrecorded-alert', {
+						receivedAt: buildTimestamp('2026-06-06T08:00:00.000Z'),
+						useTradingViewData: true,
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.summarizeAlerts({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+				limit: 200,
+			});
+
+			expect(result.enrichment.tradingViewStatusCounts).toEqual({
+				full: 1,
+				partial: 1,
+				failed: 1,
+				not_applicable: 1,
+				unrecorded: 1,
+			});
+		});
+
 		it('preserves zero latency, accepts legacy latency, and ignores invalid values', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 			mockGet.mockResolvedValueOnce({
@@ -1371,6 +1417,13 @@ describe('AlertStorageService', () => {
 				enrichment: {
 					enrichedAlerts: 1,
 					plainAlerts: 1,
+					tradingViewStatusCounts: {
+						full: 0,
+						partial: 0,
+						failed: 0,
+						not_applicable: 1,
+						unrecorded: 1,
+					},
 					riskMetadataCoverage: {
 						denominator: 1,
 						fields: {

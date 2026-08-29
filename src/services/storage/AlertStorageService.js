@@ -285,6 +285,16 @@ function createRiskMetadataCoverageBucket() {
 	};
 }
 
+function createTradingViewStatusCounts() {
+	return {
+		full: 0,
+		partial: 0,
+		failed: 0,
+		not_applicable: 0,
+		unrecorded: 0,
+	};
+}
+
 function isRiskMetadataPopulated(field, value) {
 	if (field === 'setup_type') {
 		return typeof value === 'string' && VALID_SETUP_TYPES.has(value.trim().toLowerCase());
@@ -1239,6 +1249,7 @@ async function summarizeAlerts({ from, to, limit, source, enriched } = {}) {
 		enrichment: {
 			enrichedAlerts: 0,
 			plainAlerts: 0,
+			tradingViewStatusCounts: createTradingViewStatusCounts(),
 			riskMetadataCoverage: {
 				...createRiskMetadataCoverageBucket(),
 				byPromptProvenance: [],
@@ -1268,6 +1279,7 @@ async function summarizeAlerts({ from, to, limit, source, enriched } = {}) {
 		const alertEnriched = Boolean(data.enriched);
 		const useTradingViewData = Boolean(data.useTradingViewData);
 		const tradingViewEnrichmentApplied = Boolean(data.tradingViewEnrichmentApplied);
+		const tradingViewEnrichmentStatus = data.tradingViewEnrichmentStatus;
 
 		summary.totalAlerts += 1;
 		incrementCounter(summary.bySource, data.source);
@@ -1280,6 +1292,14 @@ async function summarizeAlerts({ from, to, limit, source, enriched } = {}) {
 		} else {
 			summary.byFeatureFlag.plain += 1;
 			summary.enrichment.plainAlerts += 1;
+		}
+
+		if (VALID_TRADINGVIEW_ENRICHMENT_STATUSES.has(tradingViewEnrichmentStatus)) {
+			summary.enrichment.tradingViewStatusCounts[tradingViewEnrichmentStatus] += 1;
+		} else if (useTradingViewData) {
+			summary.enrichment.tradingViewStatusCounts.unrecorded += 1;
+		} else {
+			summary.enrichment.tradingViewStatusCounts.not_applicable += 1;
 		}
 
 		if (useTradingViewData) {

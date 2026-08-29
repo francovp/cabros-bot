@@ -28,6 +28,7 @@ describe('Status endpoints', () => {
 	let savedEnv;
 	let savedTradingViewRuntimeStatus;
 	let savedTradingViewVolumeRuntimeStatus;
+	let savedTradingViewEnrichmentEvents;
 	let app;
 	let tempDir;
 
@@ -35,6 +36,7 @@ describe('Status endpoints', () => {
 		savedEnv = saveEnv();
 		savedTradingViewRuntimeStatus = tradingViewMcpService.runtimeStatus;
 		savedTradingViewVolumeRuntimeStatus = tradingViewMcpService.volumeRuntimeStatus;
+		savedTradingViewEnrichmentEvents = tradingViewMcpService.enrichmentEvents;
 		tradingViewMcpService.runtimeStatus = {
 			status: 'unknown',
 			lastCheckedAt: null,
@@ -53,6 +55,7 @@ describe('Status endpoints', () => {
 			successCount: 0,
 			failureCount: 0,
 		};
+		tradingViewMcpService.enrichmentEvents = [];
 		admin.__resetApps();
 		admin.__resetCollectionState();
 		alertStorageService._resetForTesting();
@@ -102,6 +105,7 @@ describe('Status endpoints', () => {
 		groundingMetrics.resetForTesting();
 		tradingViewMcpService.runtimeStatus = savedTradingViewRuntimeStatus;
 		tradingViewMcpService.volumeRuntimeStatus = savedTradingViewVolumeRuntimeStatus;
+		tradingViewMcpService.enrichmentEvents = savedTradingViewEnrichmentEvents;
 		restoreEnv(savedEnv);
 		if (tempDir) {
 			rmSync(tempDir, { recursive: true, force: true });
@@ -182,6 +186,39 @@ describe('Status endpoints', () => {
 		});
 		expect(response.body.featureFlags.tradingViewConfluenceEnrichment).toBe(false);
 		expect(response.body.dependencies.sentry.status).toBe('ready');
+	});
+
+	it('exposes rolling alert-path MCP enrichment rates', async () => {
+		tradingViewMcpService.runtimeStatus = {
+			status: 'degraded',
+			lastCheckedAt: null,
+			lastSuccessAt: null,
+			lastFailureAt: null,
+			lastErrorCategory: null,
+			successCount: 0,
+			failureCount: 0,
+			enrichment: {
+				lastStatus: null,
+				fullCount: 0,
+				partialCount: 0,
+				failedCount: 0,
+			},
+		};
+		tradingViewMcpService._recordEnrichmentStatus('full');
+		tradingViewMcpService._recordEnrichmentStatus('failed');
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.tradingViewMcp.enrichment.alertPath).toEqual(expect.objectContaining({
+			totalCount: 2,
+			appliedCount: 1,
+			failedCount: 1,
+			appliedRate24h: 50,
+			failureRate24h: 50,
+		}));
 	});
 
 	it('reports tradingViewConfluenceEnrichment as true only when explicitly configured to true', async () => {
@@ -1683,4 +1720,3 @@ describe('Status endpoints', () => {
 		});
 	});
 });
-
