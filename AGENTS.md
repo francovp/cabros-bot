@@ -704,9 +704,13 @@ Every successful `POST /api/webhook/alert` request is persisted as a document in
 | `enrichmentData` | map \| null | Full `alert.enriched` object from Gemini/TradingView |
 | `tokenUsage` | map \| null | `tokenUsage.toJSON()` result including `formattedSummary` |
 | `deliveryResults` | array | Per-channel `SendResult` objects from `notificationManager.sendToAll()` |
-| `source` | string | Always `"webhook"` |
+| `source` | string | Originating flow: `"webhook"` or `"news-monitor"` |
 | `useTradingViewData` | boolean | Whether `?useTradingViewData=true` was set on the request |
 | `tradingViewEnrichmentApplied` | boolean | Whether a TradingView MCP result was successfully applied |
+| `eventCategory` | string \| undefined | News-monitor records only: detected event category (e.g. `price_surge`) |
+| `confidence` | number \| undefined | News-monitor records only: alert confidence score |
+| `sentimentScore` | number \| undefined | News-monitor records only: Gemini sentiment score |
+| `dedupStatus` | string \| undefined | News-monitor records only: `fresh` for new analyses, `cached` for successful redeliveries |
 | `expiresAt` | timestamp | `receivedAt` plus `ALERT_STORAGE_RETENTION_DAYS`; configured as a Firestore TTL field |
 
 **Credential Configuration** (choose one):
@@ -738,9 +742,10 @@ Every successful `POST /api/webhook/alert` request is persisted as a document in
   - `enrichmentData`
   - `tokenUsage`
   - `deliveryResults`
-  - `source`
+  - `source` (`webhook` or `news-monitor`)
   - `useTradingViewData`
   - `tradingViewEnrichmentApplied`
+  - optional news-monitor metadata when present: `eventCategory`, `confidence`, `sentimentScore`, `dedupStatus`
 - Read filtering for `source` and `enriched` is applied in memory after `receivedAt`-ordered batches to avoid introducing new composite Firestore index requirements.
 - Retention filtering is also applied in memory because Firestore TTL deletion is eventual. Run `bash ops/configure-firestore-alert-retention.sh` to backfill legacy documents from `receivedAt` or `replayedAt` before enabling TTL deletion for both collection groups; the script shortens existing expiries when the configured deadline is earlier, hashes and removes legacy raw replay keys, reports counts, and fails on records without a usable timestamp.
 - Read endpoints must map Firestore initialization/read failures to `503 STORAGE_UNAVAILABLE` instead of a generic `500`.
