@@ -316,6 +316,8 @@ describe('AlertStorageService', () => {
 				enriched: true,
 				enrichmentData: {
 					sentiment: 'bullish',
+					sentiment_score: 0.55,
+					sentiment_score_raw: 0.9,
 					technical_levels: { supports: ['100k'], resistances: undefined },
 					insights: ['RSI > 70', undefined],
 				},
@@ -341,6 +343,10 @@ describe('AlertStorageService', () => {
 
 			expect(result).toBe('sanitized-alert');
 			const document = mockAdd.mock.calls[0][0];
+			expect(document.enrichmentData).toEqual(expect.objectContaining({
+				sentiment_score: 0.55,
+				sentiment_score_raw: 0.9,
+			}));
 			expect(document.enrichmentData.technical_levels).toEqual({ supports: ['100k'] });
 			expect(document.enrichmentData.technical_levels).not.toHaveProperty('resistances');
 			expect(document.enrichmentData.insights).toEqual(['RSI > 70']);

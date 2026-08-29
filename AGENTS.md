@@ -704,9 +704,13 @@ Every successful `POST /api/webhook/alert` request is persisted as a document in
 | `enrichmentData` | map \| null | Full `alert.enriched` object from Gemini/TradingView |
 | `tokenUsage` | map \| null | `tokenUsage.toJSON()` result including `formattedSummary` |
 | `deliveryResults` | array | Per-channel `SendResult` objects from `notificationManager.sendToAll()` |
-| `source` | string | Always `"webhook"` |
+| `source` | string | Originating flow: `"webhook"` or `"news-monitor"` |
 | `useTradingViewData` | boolean | Whether `?useTradingViewData=true` was set on the request |
 | `tradingViewEnrichmentApplied` | boolean | Whether a TradingView MCP result was successfully applied |
+| `eventCategory` | string \| undefined | News-monitor records only: detected event category (e.g. `price_surge`) |
+| `confidence` | number \| undefined | News-monitor records only: alert confidence score |
+| `sentimentScore` | number \| undefined | News-monitor records only: Gemini sentiment score |
+| `dedupStatus` | string \| undefined | News-monitor records only: `fresh` for new analyses, `cached` for successful redeliveries |
 | `expiresAt` | timestamp | `receivedAt` plus `ALERT_STORAGE_RETENTION_DAYS`; configured as a Firestore TTL field |
 
 **Credential Configuration** (choose one):
@@ -738,9 +742,10 @@ Every successful `POST /api/webhook/alert` request is persisted as a document in
   - `enrichmentData`
   - `tokenUsage`
   - `deliveryResults`
-  - `source`
+  - `source` (`webhook` or `news-monitor`)
   - `useTradingViewData`
   - `tradingViewEnrichmentApplied`
+  - optional news-monitor metadata when present: `eventCategory`, `confidence`, `sentimentScore`, `dedupStatus`
 - Read filtering for `source` and `enriched` is applied in memory after `receivedAt`-ordered batches to avoid introducing new composite Firestore index requirements.
 - Retention filtering is also applied in memory because Firestore TTL deletion is eventual. Run `bash ops/configure-firestore-alert-retention.sh` to backfill legacy documents from `receivedAt` or `replayedAt` before enabling TTL deletion for both collection groups; the script shortens existing expiries when the configured deadline is earlier, hashes and removes legacy raw replay keys, reports counts, and fails on records without a usable timestamp.
 - Read endpoints must map Firestore initialization/read failures to `503 STORAGE_UNAVAILABLE` instead of a generic `500`.
@@ -1093,14 +1098,16 @@ The global rate limiter keeps its existing per-IP `RATE_LIMIT_MAX`/`RATE_LIMIT_W
 - `src/lib/rateLimiter.js` — Selects the isolated webhook bucket by exact request path and preserves bounded cleanup/fallback behavior.
 - `tests/unit/rateLimiter.test.js` and `tests/integration/rate-limiter-webhook.test.js` — Cover webhook burst headroom, bucket isolation, and the ordinary 429 boundary.
 
-## Webhook Ingest Rate-Limit Separation (CB-239 / Issue #532)
+## Gemini Evidence-Based Sentiment Calibration (CB-238 / Issue #530)
 
-The global rate limiter keeps its existing per-IP `RATE_LIMIT_MAX`/`RATE_LIMIT_WINDOW_MS` bucket for ordinary routes. Core `POST /api/webhook/alert` and `POST /api/webhook/message` requests use an isolated finite 1,000-request bucket per IP and the same window, preventing normal TradingView bursts from consuming the ordinary bucket while preserving downstream API-key validation. No new environment variable, Remote Config parameter, endpoint, OpenAPI, or Postman contract was added; the fixed cap remains a bounded security control.
+Gemini alert enrichment now passes grounded source results into the response parser. When grounding returns zero sources, directional sentiment magnitude above `0.55` is capped while the original signed value is retained as `sentiment_score_raw` only when adjusted; sourced scores and TradingView MCP scoring remain unchanged. The local alert-enrichment prompt includes an evidence calibration rubric, and Langfuse alert-enrichment prompts expose schema drift when the rubric markers are absent. Alert storage already deep-strips undefined fields, so the optional raw score remains Firestore-safe.
 
 **Coverage**:
-- `src/lib/rateLimiter.js` — Selects the isolated webhook bucket by exact request path and preserves bounded cleanup/fallback behavior.
-- `tests/unit/rateLimiter.test.js` and `tests/integration/rate-limiter-webhook.test.js` — Cover webhook burst headroom, bucket isolation, and the ordinary 429 boundary.
+- `src/services/grounding/gemini.js` and `tests/unit/gemini-client.test.js` — Zero-source cap, signed raw-score audit field, and sourced-score preservation.
+- `src/services/prompts/PromptService.js`, `src/services/prompts/defaults/alert-enrichment.user.txt`, and `tests/unit/prompt-service.test.js` — Local rubric and Langfuse calibration-drift detection.
+- `src/openapi/openapi.json` and `CabrosBot.postman_collection.json` — Document the optional raw score in enriched payload examples.
 
+No new environment variable or Remote Config key was added; the fixed cap is an application safety boundary, not operator tuning.
 
 ### Testing Patterns
 

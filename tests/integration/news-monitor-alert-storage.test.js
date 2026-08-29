@@ -234,6 +234,109 @@ describe('News Monitor - Alert Storage Integration', () => {
 		expect(saveAlertSpy).toHaveBeenCalledTimes(1);
 	});
 
+	it('does not persist analyzed alerts when every channel delivery fails', async () => {
+		mockTelegramSendMessage.mockRejectedValue(new Error('telegram transport down'));
+
+		const res = await request(app)
+			.post('/api/news-monitor')
+			.set('x-api-key', 'test-key')
+			.send({ crypto: ['BTCUSDT'], channels: ['telegram'] })
+			.expect(200);
+
+		expect(res.body.success).toBe(true);
+		expect(res.body.summary.alerts_sent).toBe(1);
+		expect(res.body.deliveredChannels).toEqual([]);
+		expect(saveAlertSpy).not.toHaveBeenCalled();
+	});
+
+	it('persists cached redeliveries with only current-attempt results and no token usage', async () => {
+		await request(app)
+			.post('/api/news-monitor')
+			.set('x-api-key', 'test-key')
+			.send({ crypto: ['BTCUSDT'], channels: ['telegram'] })
+			.expect(200);
+
+		expect(saveAlertSpy).toHaveBeenCalledTimes(1);
+		const original = saveAlertSpy.mock.calls[0][0];
+		expect(original.dedupStatus).toBe('fresh');
+		expect(original.tokenUsage).not.toBeNull();
+
+		const res = await request(app)
+			.post('/api/news-monitor')
+			.set('x-api-key', 'test-key')
+			.send({ crypto: ['BTCUSDT'], channels: ['whatsapp'] })
+			.expect(200);
+
+		expect(res.body.success).toBe(true);
+		expect(res.body.summary.cached).toBe(1);
+		expect(res.body.results[0]).not.toHaveProperty('attemptedDeliveryResults');
+		expect(saveAlertSpy).toHaveBeenCalledTimes(2);
+		const redelivery = saveAlertSpy.mock.calls[1][0];
+		expect(redelivery.source).toBe('news-monitor');
+		expect(redelivery.symbol).toBe('BTCUSDT');
+		expect(redelivery.dedupStatus).toBe('cached');
+		expect(redelivery.tokenUsage).toBeNull();
+		expect(redelivery.deliveryResults).toEqual([
+			expect.objectContaining({ channel: 'whatsapp', success: true }),
+		]);
+	});
+
+	it('preserves token usage on redelivery when the original write failed', async () => {
+		saveAlertSpy.mockRejectedValueOnce(new Error('firestore unavailable'));
+
+		await request(app)
+			.post('/api/news-monitor')
+			.set('x-api-key', 'test-key')
+			.send({ crypto: ['BTCUSDT'], channels: ['telegram'] })
+			.expect(200);
+
+		expect(saveAlertSpy).toHaveBeenCalledTimes(1);
+		const failedEntry = await getCacheInstance().get('BTCUSDT', 'price_surge');
+		expect(failedEntry.originalPersistedState).toBe('none');
+
+		await request(app)
+			.post('/api/news-monitor')
+			.set('x-api-key', 'test-key')
+			.send({ crypto: ['BTCUSDT'], channels: ['whatsapp'] })
+			.expect(200);
+
+		expect(saveAlertSpy).toHaveBeenCalledTimes(2);
+		const redelivery = saveAlertSpy.mock.calls[1][0];
+		expect(redelivery.dedupStatus).toBe('cached');
+		expect(redelivery.tokenUsage).not.toBeNull();
+		expect(redelivery.tokenUsage.totalTokens).toBeGreaterThan(0);
+
+		const promotedEntry = await getCacheInstance().get('BTCUSDT', 'price_surge');
+		expect(promotedEntry.originalPersistedState).toBe('owned');
+	});
+
+	it('does not double-count usage when redelivering while the original write is pending', async () => {
+		let resolveFirstSave;
+		saveAlertSpy.mockImplementationOnce(() => new Promise((resolve) => { resolveFirstSave = resolve; }));
+
+		await request(app)
+			.post('/api/news-monitor')
+			.set('x-api-key', 'test-key')
+			.send({ crypto: ['BTCUSDT'], channels: ['telegram'] })
+			.expect(200);
+
+		expect(saveAlertSpy).toHaveBeenCalledTimes(1);
+		expect(saveAlertSpy.mock.calls[0][0].tokenUsage).not.toBeNull();
+
+		const res = await request(app)
+			.post('/api/news-monitor')
+			.set('x-api-key', 'test-key')
+			.send({ crypto: ['BTCUSDT'], channels: ['whatsapp'] })
+			.expect(200);
+
+		expect(res.body.summary.cached).toBe(1);
+		expect(saveAlertSpy).toHaveBeenCalledTimes(2);
+		expect(saveAlertSpy.mock.calls[1][0].dedupStatus).toBe('cached');
+		expect(saveAlertSpy.mock.calls[1][0].tokenUsage).toBeNull();
+
+		resolveFirstSave('original-doc-id');
+	});
+
 	it('does not persist when ENABLE_FIRESTORE_ALERT_STORAGE is false', async () => {
 		process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'false';
 
