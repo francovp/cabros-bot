@@ -21,6 +21,7 @@ const {
 	getDeliveredChannels,
 } = require('../../../../services/notification/requestRouting');
 const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteConfigService');
+const alertStorageService = require('../../../../services/storage/AlertStorageService');
 
 const DEFAULT_ALERT_TIMEOUT_MS = 60000;
 const MAX_ALERT_TIMEOUT_MS = 120000;
@@ -120,6 +121,30 @@ function postExpandedAnalysisAlert(botOrGetter) {
 			const requestedChannels = getRequestedChannels(notificationManager, routing);
 			const deliveredChannels = getDeliveredChannels(deliveryResults);
 			const summary = buildSummary(results, deliveryResults);
+
+			// Fire-and-forget: persist delivered expanded-analysis report to AlertStorageService.
+			// Storage failures never block delivery (handled inside saveAlert).
+			if (alertStorageService.isEnabled() && deliveredChannels.length > 0 && analyzedItems.length > 0) {
+				const firstSymbol = analyzedItems[0].input && analyzedItems[0].input.symbol
+					? analyzedItems[0].input.symbol
+					: (analyzedItems[0].input && analyzedItems[0].input.raw) || null;
+				const firstExchange = analyzedItems[0].input && analyzedItems[0].input.exchange
+					? analyzedItems[0].input.exchange
+					: null;
+				alertStorageService.saveAlert({
+					requestId,
+					text: alertText,
+					symbol: firstSymbol,
+					exchange: firstExchange,
+					enriched: false,
+					enrichmentData: null,
+					tokenUsage: null,
+					channels: requestedChannels,
+					deliveryResults,
+					source: 'expanded-analysis',
+					processingTimeMs: Date.now() - startTime,
+				}).catch(() => {});
+			}
 
 			const signalOutcomeService = require('../../../../services/storage/SignalOutcomeService');
 			if (signalOutcomeService.isEnabled()) {
