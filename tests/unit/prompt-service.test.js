@@ -62,6 +62,19 @@ describe('PromptService', () => {
 		expect(prompt.userPrompt).toEqual(expect.stringContaining('corroborating sources'));
 	});
 
+	it('should include setup_type evidence rubric and omission guidance in the local alert enrichment prompt', async () => {
+		const service = new PromptService({ logger });
+
+		const prompt = await service.getChatPrompt(PromptKeys.ALERT_ENRICHMENT, {
+			alertContext: 'Bitcoin breaks resistance',
+		});
+
+		expect(prompt.userPrompt).toEqual(expect.stringContaining('setup_evidence'));
+		expect(prompt.userPrompt).toEqual(expect.stringContaining('Setup type rubric:'));
+		expect(prompt.userPrompt).toEqual(expect.stringContaining('Do NOT infer `setup_type` solely from signal direction'));
+		expect(prompt.userPrompt).toEqual(expect.stringContaining('OMIT `setup_type` and `setup_evidence` entirely'));
+	});
+
 	it('should fetch and compile remote Langfuse chat prompts', async () => {
 		process.env.ENABLE_LANGFUSE_PROMPTS = 'true';
 
