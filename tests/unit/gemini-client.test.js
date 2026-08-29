@@ -115,6 +115,20 @@ describe('Gemini Service', () => {
 			}));
 		});
 
+		it('should calibrate generated scores when grounding returns no sources', async () => {
+			genaiClient.llmCallv2.mockResolvedValue({
+				text: JSON.stringify(mockEnrichedResponse),
+			});
+
+			const result = await generateEnrichedAlert({
+				text: 'Bitcoin breaks 83k after a volatile session',
+				searchResults: [],
+			});
+
+			expect(result.sentiment_score).toBe(0.55);
+			expect(result.sentiment_score_raw).toBe(0.9);
+		});
+
 		it('should omit invalid optional risk metadata without degrading the enrichment', () => {
 			const result = parseEnrichedAlertResponse(JSON.stringify({
 				...mockEnrichedResponse,
@@ -248,6 +262,39 @@ describe('Gemini Service', () => {
 		});
 
 		describe('sentiment_score signed range and sign-coherence guard', () => {
+			it('caps high-confidence zero-source scores and retains the raw score', () => {
+				const result = parseEnrichedAlertResponse(JSON.stringify({
+					sentiment: 'BULLISH',
+					sentiment_score: 0.9,
+					insights: ['Strong move'],
+				}), []);
+
+				expect(result.sentiment_score).toBe(0.55);
+				expect(result.sentiment_score_raw).toBe(0.9);
+			});
+
+			it('leaves sourced scores unchanged without a raw calibration field', () => {
+				const result = parseEnrichedAlertResponse(JSON.stringify({
+					sentiment: 'BEARISH',
+					sentiment_score: -0.9,
+					insights: ['Weak move'],
+				}), [{ url: 'https://example.com' }]);
+
+				expect(result.sentiment_score).toBe(-0.9);
+				expect(result).not.toHaveProperty('sentiment_score_raw');
+			});
+
+			it('does not add a raw score when a zero-source score is already below the cap', () => {
+				const result = parseEnrichedAlertResponse(JSON.stringify({
+					sentiment: 'BULLISH',
+					sentiment_score: 0.4,
+					insights: [],
+				}), []);
+
+				expect(result.sentiment_score).toBe(0.4);
+				expect(result).not.toHaveProperty('sentiment_score_raw');
+			});
+
 			it('preserves negative sentiment_score in [-1, 1] for BEARISH sentiment', () => {
 				const result = parseEnrichedAlertResponse(JSON.stringify({
 					sentiment: 'BEARISH',
