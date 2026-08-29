@@ -288,9 +288,12 @@ class NotificationRedriveService {
 					} else if (persisted === 'timed_out') {
 						trackBackgroundTask(writeOutcome.then(async (outcome) => {
 							if (outcome === 'persisted') {
-								await this.markTerminal(recordId, 'cancelled', {
+								const terminalized = await this.markTerminal(recordId, 'cancelled', {
 									lastError: 'Durable enqueue timed out before ownership was established',
 								});
+								if (!terminalized) {
+									return;
+								}
 							}
 							if (this.getWorkerRole() !== 'web') {
 								releaseRepeatCooldown(record);
@@ -476,10 +479,13 @@ class NotificationRedriveService {
 		if (firestore) {
 			try {
 				await firestore.collection(COLLECTION_NAME).doc(recordId).set(sanitized, { merge: true });
+				return true;
 			} catch (error) {
 				console.warn(`[NotificationRedriveService] Failed to mark dead-letter ${recordId} terminal (${status}):`, error.message);
+				return false;
 			}
 		}
+		return true;
 	}
 
 	async markRetry(recordId, attemptCount, lastError, lastStatusCode) {
@@ -539,9 +545,6 @@ class NotificationRedriveService {
 				reconciliationPromise,
 				new Promise((resolve) => {
 					timer = setTimeout(() => {
-						if (this.reconciliationPromises.get(identity) === reconciliationPromise) {
-							this.reconciliationPromises.delete(identity);
-						}
 						resolve(0);
 					}, RECONCILIATION_TIMEOUT_MS);
 				}),
@@ -583,7 +586,7 @@ class NotificationRedriveService {
 					if (Date.now() >= deadline) {
 						break;
 					}
-					const snapshot = await resolveBeforeDeadline(query.get(), deadline);
+					const snapshot = await query.get();
 					if (!snapshot) {
 						break;
 					}
@@ -610,10 +613,16 @@ class NotificationRedriveService {
 
 		const newestCandidates = new Map();
 		for (const record of candidates.values()) {
+			const channel = record.repeatCooldown.channel;
+			const localTimestamp = signalRepeatCooldown.getChannelTimestamp(key, channel);
+			const reservedAt = toMillis(record.repeatCooldown.reservedAt);
+			if (reservedAt && Number.isFinite(localTimestamp) && localTimestamp > reservedAt) {
+				continue;
+			}
 			const transitionAt = toMillis(record.deliveredAt || record.terminalAt || record.updatedAt);
-			const current = newestCandidates.get(record.repeatCooldown.channel);
+			const current = newestCandidates.get(channel);
 			if (!current || transitionAt > toMillis(current.deliveredAt || current.terminalAt || current.updatedAt)) {
-				newestCandidates.set(record.repeatCooldown.channel, record);
+				newestCandidates.set(channel, record);
 			}
 		}
 
@@ -711,21 +720,30 @@ class NotificationRedriveService {
 		}
 		const now = new Date();
 		const firestore = this.getFirestore();
-		for (const channel of channels) {
-			const id = this.getSupersessionId(key, channel);
+		const supersessions = channels.map((channel) => ({
+			channel,
+			id: this.getSupersessionId(key, channel),
+		}));
+		for (const { channel, id } of supersessions) {
 			this.supersessionStore.set(id, { key, channel, status: 'superseded', supersededAt: now });
-			if (firestore) {
-				try {
-					await firestore.collection(COLLECTION_NAME).doc(id).set({
-						key,
-						channel,
-						status: 'superseded',
-						supersededAt: toTimestamp(now),
-					}, { merge: true });
-				} catch (error) {
+		}
+		if (firestore) {
+			const deadline = Date.now() + RECONCILIATION_TIMEOUT_MS;
+			await Promise.all(supersessions.map(async ({ channel, id }) => {
+				const write = firestore.collection(COLLECTION_NAME).doc(id).set({
+					key,
+					channel,
+					status: 'superseded',
+					supersededAt: toTimestamp(now),
+				}, { merge: true }).then(() => true, (error) => {
 					console.warn('[NotificationRedriveService] Failed to persist repeat supersession:', error.message);
+					return false;
+				});
+				const persisted = await resolveBeforeDeadline(write, deadline);
+				if (persisted === null) {
+					console.warn(`[NotificationRedriveService] Timed out persisting repeat supersession for ${channel}`);
 				}
-			}
+			}));
 		}
 		return now;
 	}

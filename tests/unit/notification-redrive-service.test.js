@@ -256,6 +256,42 @@ describe('NotificationRedriveService', () => {
 			releaseSpy.mockRestore();
 		});
 
+		it('keeps worker cooldown ownership when late enqueue cancellation is not durable', async () => {
+			process.env.NOTIFICATION_REDRIVE_WORKER_ROLE = 'worker';
+			const recordId = 'corr-failed-cancellation_telegram';
+			let resolveStalledSet;
+			let writeCount = 0;
+			const set = jest.fn((data, options) => {
+				writeCount += 1;
+				if (writeCount === 1) {
+					return new Promise((resolve) => {
+						resolveStalledSet = () => {
+							mockDocs.set(recordId, options?.merge ? { ...mockDocs.get(recordId), ...data } : { ...data });
+							resolve();
+						};
+					});
+				}
+				return Promise.reject(new Error('cancellation write failed'));
+			});
+			alertStorageService.getFirestore.mockReturnValue({
+				collection: jest.fn(() => ({
+					doc: jest.fn(() => ({ id: recordId, set })),
+				})),
+			});
+			const releaseSpy = jest.spyOn(signalRepeatCooldown, 'release');
+
+			await service.recordDeliveryResults(
+				{ text: 'BUY signal', correlationId: 'corr-failed-cancellation' },
+				[{ channel: 'telegram', success: false, error: 'Initial failure' }],
+				{ repeatCooldown: { key: 'BINANCE|ETHUSDT|4h|BUY', channelsByName: { telegram: 'telegram:destination-a' } } },
+			);
+
+			resolveStalledSet();
+			await new Promise((resolve) => setImmediate(resolve));
+			expect(releaseSpy).not.toHaveBeenCalled();
+			releaseSpy.mockRestore();
+		});
+
 		it('keeps web-role cooldowns when Firestore falls back to in-memory redrive', async () => {
 			process.env.ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION = 'true';
 			const failingFirestore = {
@@ -411,8 +447,11 @@ describe('NotificationRedriveService', () => {
 			expect(stalledGet).toHaveBeenCalledTimes(2);
 		});
 
-		it('clears stalled reconciliation ownership after the deadline', async () => {
-			const stalledGet = jest.fn(() => new Promise(() => {}));
+		it('retains stalled reconciliation ownership until the Firestore read settles', async () => {
+			let resolveStalledGet;
+			const stalledGet = jest.fn(() => new Promise((resolve) => {
+				resolveStalledGet = resolve;
+			}));
 			const query = {
 				get: stalledGet,
 				limit: jest.fn(() => query),
@@ -423,6 +462,9 @@ describe('NotificationRedriveService', () => {
 
 			await service.reconcileRepeatCooldown('BINANCE|ETHUSDT|5m|BUY', ['telegram:destination-a']);
 
+			expect(service.reconciliationPromises.size).toBe(1);
+			resolveStalledGet({ docs: [] });
+			await new Promise((resolve) => setImmediate(resolve));
 			expect(service.reconciliationPromises.size).toBe(0);
 		});
 
@@ -496,6 +538,35 @@ describe('NotificationRedriveService', () => {
 
 			expect(getPage).toHaveBeenCalledTimes(2);
 			expect(refreshSpy).toHaveBeenCalledWith(key, [channel], 6000);
+		});
+
+		it('filters stale generations before selecting the newest terminal transition', async () => {
+			const key = 'BINANCE|ETHUSDT|5m|BUY';
+			const channel = 'telegram:destination-a';
+			alertStorageService.getFirestore.mockReturnValue(mockFirestore);
+			signalRepeatCooldown.reset();
+			signalRepeatCooldown.reserve(
+				{ exchange: 'BINANCE', symbol: 'ETHUSDT', timeframe: '5m', side: 'BUY' },
+				[channel],
+				4_000,
+			);
+			signalRepeatCooldown.refresh(key, [channel], 10_000);
+			mockDocs.set('old-terminal', {
+				status: 'cancelled',
+				repeatCooldown: { key, channel, reservedAt: 4_000 },
+				terminalAt: new Date(20_000),
+			});
+			mockDocs.set('new-delivery', {
+				status: 'delivered',
+				repeatCooldown: { key, channel, reservedAt: 10_000 },
+				deliveredAt: new Date(15_000),
+			});
+			const refreshSpy = jest.spyOn(signalRepeatCooldown, 'refresh');
+
+			await service.reconcileRepeatCooldown(key, [channel]);
+
+			expect(refreshSpy).toHaveBeenCalledWith(key, [channel], 15_000);
+			refreshSpy.mockRestore();
 		});
 
 		it('does not apply an older terminal redrive to a newer local reservation', async () => {
@@ -582,7 +653,36 @@ describe('NotificationRedriveService', () => {
 			expect(service.inMemoryStore.get('new').status).toBe('pending');
 		});
 
+		it('marks all local supersessions before awaiting durable writes', async () => {
+			const key = 'BINANCE|ETHUSDT|4h|BUY';
+			const channels = ['telegram:destination-a', 'whatsapp:destination-b'];
+			let resolveFirstWrite;
+			const set = jest.fn((data) => {
+				if (data.channel === channels[0]) {
+					return new Promise((resolve) => {
+						resolveFirstWrite = resolve;
+					});
+				}
+				return Promise.resolve();
+			});
+			alertStorageService.getFirestore.mockReturnValue({
+				collection: jest.fn(() => ({
+					doc: jest.fn(() => ({ set })),
+				})),
+			});
+
+			const supersessionPromise = service.markRepeatSupersession(key, channels);
+			await new Promise((resolve) => setImmediate(resolve));
+
+			expect(service.supersessionStore.get(service.getSupersessionId(key, channels[0]))).toBeDefined();
+			expect(service.supersessionStore.get(service.getSupersessionId(key, channels[1]))).toBeDefined();
+			expect(set).toHaveBeenCalledTimes(2);
+			resolveFirstWrite();
+			await supersessionPromise;
+		});
+
 		it('blocks a redrive recorded after an opposite-side supersession', async () => {
+			const reservedAt = Date.now();
 			await service.cancelPendingRepeatCooldowns('BINANCE|ETHUSDT|4h|BUY', ['telegram:destination-a']);
 
 			await service.recordDeliveryResults(
@@ -592,6 +692,7 @@ describe('NotificationRedriveService', () => {
 					repeatCooldown: {
 						key: 'BINANCE|ETHUSDT|4h|BUY',
 						channelsByName: { telegram: 'telegram:destination-a' },
+						reservedAt,
 					},
 				},
 			);
