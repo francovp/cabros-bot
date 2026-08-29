@@ -57,6 +57,22 @@ describe('Alert Handler', () => {
 		});
 	});
 
+	it('should preserve the raw Gemini sentiment score in the mapped alert', async () => {
+		groundAlert.mockResolvedValue({
+			sentiment: 'BULLISH',
+			sentiment_score: 0.55,
+			sentiment_score_raw: 0.9,
+			insights: [],
+			sources: [],
+			truncated: false,
+		});
+
+		const result = await enrichAlert({ text: 'Bitcoin rally' });
+
+		expect(result.sentiment_score).toBe(0.55);
+		expect(result.sentiment_score_raw).toBe(0.9);
+	});
+
 	it('should handle empty text', async () => {
 		validateAlert.mockImplementation(() => {
 			throw new Error('Alert text is required');
@@ -662,7 +678,8 @@ describe('Alert Handler', () => {
 
 			groundAlert.mockResolvedValue({
 				sentiment: 'BULLISH',
-				sentiment_score: 0.82,
+				sentiment_score: 0.55,
+				sentiment_score_raw: 0.9,
 				insights: ['Positive market tailwinds'],
 				sources: [],
 				truncated: false,
@@ -672,7 +689,8 @@ describe('Alert Handler', () => {
 			const result = await enrichAlert({ text: 'BTCUSDT(240) pasó a señal de COMPRA' }, { useTradingViewData: true });
 
 			expect(result.sentiment).toBe('BULLISH');
-			expect(result.sentiment_score).toBe(0.82);
+			expect(result.sentiment_score).toBe(0.55);
+			expect(result.sentiment_score_raw).toBe(0.9);
 			expect(result.sentimentConflict).toBeUndefined();
 
 			process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
