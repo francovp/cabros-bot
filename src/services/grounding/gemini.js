@@ -68,6 +68,7 @@ function parseOptionalSetupType(value) {
 }
 
 const MAX_TECHNICAL_LEVELS_PER_SIDE = 6;
+const ZERO_SOURCE_SENTIMENT_SCORE_CAP = 0.55;
 
 // Validates one raw level entry: finite numbers and non-empty strings are kept as-is,
 // everything else (objects, arrays, blanks, NaN) is dropped so no fabricated structure persists.
@@ -740,7 +741,7 @@ async function generateEnrichedAlert({ text, searchResults = [], searchResultTex
 			tokenUsage.addUsage(llmResult.usage, llmResult.modelUsed || GEMINI_MODEL_NAME || 'gemini');
 		}
 
-		const parsed = parseEnrichedAlertResponse(llmResult.text);
+		const parsed = parseEnrichedAlertResponse(llmResult.text, searchResults);
 		return {
 			...parsed,
 			modelUsed: llmResult.modelUsed || GEMINI_MODEL_NAME || 'unknown',
@@ -757,7 +758,7 @@ async function generateEnrichedAlert({ text, searchResults = [], searchResultTex
  * @param {string} response - Raw JSON string from Gemini
  * @returns {object} Parsed enriched alert data with safe defaults
  */
-function parseEnrichedAlertResponse(response) {
+function parseEnrichedAlertResponse(response, sources) {
 	try {
 		const jsonMatch = response.match(/\{[\s\S]*\}/);
 		if (!jsonMatch) {
@@ -788,6 +789,12 @@ function parseEnrichedAlertResponse(response) {
 		} else {
 			sentimentScore = 0;
 		}
+		const shouldCalibrate = Array.isArray(sources)
+			&& sources.length === 0
+			&& Math.abs(sentimentScore) > ZERO_SOURCE_SENTIMENT_SCORE_CAP;
+		const calibratedSentimentScore = shouldCalibrate
+			? Math.sign(sentimentScore) * ZERO_SOURCE_SENTIMENT_SCORE_CAP
+			: sentimentScore;
 
 		const optionalRiskMetadata = {
 			invalidation_level: parseOptionalRiskValue(parsed.invalidation_level),
@@ -800,7 +807,8 @@ function parseEnrichedAlertResponse(response) {
 
 		return {
 			sentiment: parsed.sentiment,
-			sentiment_score: sentimentScore,
+			sentiment_score: calibratedSentimentScore,
+			...(shouldCalibrate ? { sentiment_score_raw: sentimentScore } : {}),
 			insights: Array.isArray(parsed.insights) ? parsed.insights : [],
 			...(technicalLevels ? { technical_levels: technicalLevels } : {}),
 			...Object.fromEntries(

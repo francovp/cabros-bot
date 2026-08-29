@@ -185,7 +185,6 @@ function selectSentimentAndScore(gemini = {}, mcp = {}) {
 	const geminiScore = (typeof gemini.sentiment_score === 'number' && Number.isFinite(gemini.sentiment_score))
 		? gemini.sentiment_score
 		: null;
-
 	const mcpSentiment = (typeof mcp.sentiment === 'string' && ['BULLISH', 'BEARISH', 'NEUTRAL'].includes(mcp.sentiment))
 		? mcp.sentiment
 		: null;
@@ -273,9 +272,12 @@ function mergeEnrichmentData(text, geminiEnriched, mcpEnriched) {
 			original_text: text,
 			tradingViewEnrichmentApplied: mcp.tradingViewEnrichmentApplied === true,
 			...(mcp.tradingViewEnrichmentStatus ? { tradingViewEnrichmentStatus: mcp.tradingViewEnrichmentStatus } : {}),
-			sentiment,
-			sentiment_score,
-			...(sentimentConflict ? { sentimentConflict: true } : {}),
+				sentiment,
+				sentiment_score,
+				...(typeof gemini.sentiment_score_raw === 'number' && Number.isFinite(gemini.sentiment_score_raw)
+					? { sentiment_score_raw: gemini.sentiment_score_raw }
+					: {}),
+				...(sentimentConflict ? { sentimentConflict: true } : {}),
 			current_price: mcpCurrentPrice,
 			...(mcp.price_data ? { price_data: mcp.price_data } : {}),
 			insights,
@@ -308,6 +310,7 @@ async function enrichWithGemini(text, tokenUsage) {
 	const {
 		sentiment,
 		sentiment_score,
+		sentiment_score_raw,
 		insights,
 		sources,
 		truncated,
@@ -339,6 +342,9 @@ async function enrichWithGemini(text, tokenUsage) {
 	return {
 		original_text: text,
 		...(guarded ? { sentiment: guarded.sentiment, sentiment_score: guarded.sentiment_score } : {}),
+		...(typeof sentiment_score_raw === 'number' && Number.isFinite(sentiment_score_raw)
+			? { sentiment_score_raw }
+			: {}),
 		insights,
 		sources,
 		truncated,
