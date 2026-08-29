@@ -13,6 +13,7 @@ const remoteConfigService = require('../services/remoteConfig/RemoteConfigServic
 const { tradingViewMcpService } = require('../services/tradingview/TradingViewMcpService');
 const { binanceOrderService } = require('../services/trading/BinanceOrderService');
 const { notificationRedriveService } = require('../services/notification/NotificationRedriveService');
+const { whatsAppCommandBridgeService } = require('../services/notification/WhatsAppCommandBridgeService');
 const geminiQuotaManager = require('../services/grounding/geminiQuotaManager');
 const groundingMetrics = require('../services/grounding/metrics');
 const {
@@ -342,6 +343,7 @@ function getStatus() {
 			firebaseRemoteConfig: remoteConfigStatus.enabled,
 			jobExecutionWorker: jobExecutionQueueStatus.enabled || process.env.JOB_EXECUTION_MODE === 'firestore-poller',
 			notificationRedrive: notificationRedriveService.isEnabled(),
+			whatsappCommands: whatsAppCommandBridgeService.isEnabled(),
 		},
 		deliveryChannels: {
 			telegram: {
@@ -361,6 +363,7 @@ function getStatus() {
 			telegram,
 			whatsapp,
 			discord,
+			whatsappCommandBridge: whatsAppCommandBridgeService.getStatus(),
 			gemini,
 			geminiQuota,
 			tradingViewMcp,

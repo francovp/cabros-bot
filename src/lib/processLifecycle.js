@@ -80,6 +80,7 @@ function createProcessLifecycle(options = {}) {
 		finalizationTimeoutMs = DEFAULT_FORCED_FINALIZATION_TIMEOUT_MS,
 		stopSignalOutcomeWorker = () => undefined,
 		stopNotificationRedriveWorker = () => undefined,
+		stopWhatsAppCommandBridge = () => undefined,
 		stopScannerPresetScheduler = () => undefined,
 		stopRemoteConfig = () => undefined,
 		shutdownNewsMonitor = () => undefined,
@@ -177,6 +178,7 @@ function createProcessLifecycle(options = {}) {
 				await Promise.allSettled([
 					safelyRun(logger, 'signal-outcome worker', () => stopSignalOutcomeWorker({ drain: true })),
 					safelyRun(logger, 'notification redrive worker', () => stopNotificationRedriveWorker({ drain: true })),
+					safelyRun(logger, 'whatsapp command bridge', () => stopWhatsAppCommandBridge({ drain: true })),
 					safelyRun(logger, 'scanner preset scheduler', () => stopScannerPresetScheduler({ drain: true })),
 					safelyRun(logger, 'remote config service', stopRemoteConfig),
 					safelyRun(logger, 'news monitor cache', shutdownNewsMonitor),
