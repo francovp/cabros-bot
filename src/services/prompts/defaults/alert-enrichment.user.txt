@@ -19,4 +19,9 @@ Instructions:
   "risk_reward_ratio": string | number (optional)
 }
 
+Score calibration:
+- Use an absolute sentiment_score of 0.9+ only when multiple independent corroborating sources and aligned technicals support the alert.
+- Use an absolute sentiment_score of 0.6-0.8 for mixed or partial corroboration.
+- Use an absolute sentiment_score below 0.4 when evidence is thin, absent, or contradictory.
+
 Risk metadata must be omitted when it cannot be inferred reliably. Never invent a price level or risk-reward estimate.
