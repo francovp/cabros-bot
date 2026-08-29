@@ -64,8 +64,12 @@ function hasCompleteRiskMetadata(value = {}) {
 function selectRiskMetadata(gemini, mcp) {
 	const source = hasCompleteRiskMetadata(mcp) ? mcp : hasCompleteRiskMetadata(gemini) ? gemini : null;
 	const setupType = pickSetupType(gemini.setup_type, mcp.setup_type);
+	const setupEvidence = setupType && (setupType === gemini.setup_type ? gemini.setup_evidence : mcp.setup_evidence);
 	if (!source) {
-		return setupType ? { setup_type: setupType } : {};
+		return {
+			...(setupType ? { setup_type: setupType } : {}),
+			...(setupEvidence ? { setup_evidence: setupEvidence } : {}),
+		};
 	}
 
 	return {
@@ -73,6 +77,7 @@ function selectRiskMetadata(gemini, mcp) {
 		target_level: source.target_level,
 		risk_reward_ratio: source.risk_reward_ratio,
 		...(setupType ? { setup_type: setupType } : {}),
+		...(setupEvidence ? { setup_evidence: setupEvidence } : {}),
 	};
 }
 
@@ -320,6 +325,7 @@ async function enrichWithGemini(text, tokenUsage) {
 		invalidation_level,
 		target_level,
 		setup_type,
+		setup_evidence,
 		risk_reward_ratio,
 	} = await groundAlert({
 		text,
@@ -352,7 +358,7 @@ async function enrichWithGemini(text, tokenUsage) {
 		...(promptProvenance ? { promptProvenance } : {}),
 		...(technical_levels ? { technical_levels } : {}),
 		...Object.fromEntries(
-			Object.entries({ invalidation_level, target_level, setup_type, risk_reward_ratio })
+			Object.entries({ invalidation_level, target_level, setup_type, setup_evidence, risk_reward_ratio })
 				.filter(([, value]) => value !== undefined),
 		),
 	};
