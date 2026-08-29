@@ -15,6 +15,65 @@ const { deriveAssetContext, deriveCleanSearchQuery } = require('../tradingview/p
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 
 const promptService = getPromptService();
+const coalescedSearches = new Map();
+
+function startSearch({ searchQuery, maxSources, signal, timeoutMs }) {
+	return genaiClient.search({
+		query: searchQuery,
+		model: GROUNDING_MODEL_NAME,
+		maxResults: maxSources,
+		signal,
+		timeoutMs,
+	});
+}
+
+function getCoalescedSearch({ assetContext, searchQuery, maxSources, signal, timeoutMs, promptType, coalesceWindowMs }) {
+	const canCoalesce = promptType === 'ALERT_ENRICHMENT'
+		&& assetContext?.assetClass === 'stock'
+		&& coalesceWindowMs > 0;
+	if (!canCoalesce) {
+		return { promise: startSearch({ searchQuery, maxSources, signal, timeoutMs }), shared: false };
+	}
+
+	const key = `${GROUNDING_MODEL_NAME}:${maxSources}:stock`;
+	const now = Date.now();
+	const existing = coalescedSearches.get(key);
+	if (existing && now - existing.createdAt <= coalesceWindowMs) {
+		metrics.recordCoalescingHit();
+		return { promise: existing.promise, shared: true };
+	}
+
+	const entry = {
+		createdAt: now,
+		promise: startSearch({ searchQuery, maxSources, signal, timeoutMs }),
+	};
+	coalescedSearches.set(key, entry);
+	metrics.recordCoalescingMiss();
+	entry.promise.catch(() => {
+		if (coalescedSearches.get(key) === entry) {
+			coalescedSearches.delete(key);
+			metrics.recordCoalescingFailure();
+		}
+	});
+	return { promise: entry.promise, shared: false };
+}
+
+function getCoalescingStatus() {
+	const windowMs = getRuntimeConfig().ALERT_GROUNDING_COALESCE_MS;
+	if (!(windowMs > 0)) {
+		coalescedSearches.clear();
+	}
+	const now = Date.now();
+	for (const [key, entry] of coalescedSearches) {
+		if (now - entry.createdAt > windowMs) coalescedSearches.delete(key);
+	}
+	return {
+		enabled: windowMs > 0,
+		windowMs,
+		activeEntries: coalescedSearches.size,
+		...metrics.getCoalescingSnapshot(),
+	};
+}
 
 /**
  * Derives a search query from alert text using an LLM
@@ -94,20 +153,31 @@ async function groundAlert({ text, options = {} }) {
 		const searchQuery = deriveCleanSearchQuery(text) || text;
 
 		// 1. Search for evidence using clean query with bounded timeout & signal
-		const searchPromise = genaiClient.search({
-			query: searchQuery,
-			model: GROUNDING_MODEL_NAME,
-			maxResults: maxSources,
+		const coalescedSearch = getCoalescedSearch({
+			assetContext,
+			searchQuery,
+			maxSources,
 			signal,
 			timeoutMs,
+			promptType,
+			coalesceWindowMs: runtimeConfig.ALERT_GROUNDING_COALESCE_MS,
 		});
+		let searchResponse;
+		let ownsSearchUsage = !coalescedSearch.shared;
+		try {
+			searchResponse = await Promise.race([coalescedSearch.promise, timeoutPromise]);
+		} catch (searchError) {
+			if (!coalescedSearch.shared || signal.aborted) throw searchError;
+			searchResponse = await Promise.race([
+				startSearch({ searchQuery, maxSources, signal, timeoutMs }),
+				timeoutPromise,
+			]);
+			ownsSearchUsage = true;
+		}
 
-		const { results: searchResults, totalResults, searchResultText, usage: searchUsage } = await Promise.race([
-			searchPromise,
-			timeoutPromise,
-		]);
+		const { results: searchResults, totalResults, searchResultText, usage: searchUsage } = searchResponse;
 
-		if (tokenUsage && searchUsage) {
+		if (ownsSearchUsage && tokenUsage && searchUsage) {
 			tokenUsage.addUsage(searchUsage, GROUNDING_MODEL_NAME);
 		}
 		console.debug(`[Grounding] Retrieved ${searchResults.length}/${totalResults} search results for query: ${searchQuery}`);
@@ -178,4 +248,6 @@ async function groundAlert({ text, options = {} }) {
 module.exports = {
 	groundAlert,
 	deriveSearchQuery,
+	getCoalescingStatus,
+	_resetForTesting: () => coalescedSearches.clear(),
 };

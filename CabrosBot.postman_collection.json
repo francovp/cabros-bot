@@ -164,7 +164,7 @@
             "status"
           ]
         },
-        "description": "Protected runtime status. When ENABLE_FIREBASE_REMOTE_CONFIG=true, dependencies.firebaseRemoteConfig contains safe loader metadata only; disabled, stale, invalid, or unavailable remote values fall back to environment/default settings."
+        "description": "Protected runtime status. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters. When ENABLE_FIREBASE_REMOTE_CONFIG=true, dependencies.firebaseRemoteConfig contains safe loader metadata only; disabled, stale, invalid, or unavailable remote values fall back to environment/default settings."
       },
       "response": [
         {
@@ -196,7 +196,7 @@
             "capabilities"
           ]
         },
-        "description": "Alias for /api/status. Remote Config metadata is safe for operational inspection and does not include configured parameter values or secrets."
+        "description": "Alias for /api/status. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters. Remote Config metadata is safe for operational inspection and does not include configured parameter values or secrets."
       },
       "response": [
         {

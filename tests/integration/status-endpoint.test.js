@@ -154,6 +154,14 @@ describe('Status endpoints', () => {
 				timeoutRequests: 0,
 			},
 		});
+		expect(response.body.dependencies.groundingCoalescing).toEqual({
+			enabled: false,
+			windowMs: 0,
+			activeEntries: 0,
+			hits: 0,
+			misses: 0,
+			failures: 0,
+		});
 		expect(response.body.dependencies.tradingViewMcp).toEqual({
 			enabled: true,
 			configured: true,
@@ -1683,4 +1691,3 @@ describe('Status endpoints', () => {
 		});
 	});
 });
-

@@ -105,6 +105,13 @@
       "description": "Maximum character length for grounding response",
       "valueType": "NUMBER"
     },
+    "ALERT_GROUNDING_COALESCE_MS": {
+      "defaultValue": {
+        "value": "0"
+      },
+      "description": "Window in milliseconds for sharing equity grounding search context; zero disables coalescing",
+      "valueType": "NUMBER"
+    },
     "NEWS_CACHE_TTL_HOURS": {
       "defaultValue": {
         "value": "6"

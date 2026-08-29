@@ -278,6 +278,7 @@ describe('RemoteConfigService', () => {
 			GROUNDING_MAX_SOURCES: 5,
 			GROUNDING_TIMEOUT_MS: 45000,
 			GROUNDING_MAX_LENGTH: 3000,
+			ALERT_GROUNDING_COALESCE_MS: 2500,
 			NEWS_CACHE_TTL_HOURS: 12,
 			BINANCE_FETCH_TIMEOUT_MS: 8000,
 			EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS: 90000,
@@ -309,6 +310,7 @@ describe('RemoteConfigService', () => {
 		expect(config.GROUNDING_MAX_SOURCES).toBe(5);
 		expect(config.GROUNDING_TIMEOUT_MS).toBe(45000);
 		expect(config.GROUNDING_MAX_LENGTH).toBe(3000);
+		expect(config.ALERT_GROUNDING_COALESCE_MS).toBe(2500);
 		expect(config.NEWS_CACHE_TTL_HOURS).toBe(12);
 		expect(config.BINANCE_FETCH_TIMEOUT_MS).toBe(8000);
 		expect(config.EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS).toBe(90000);

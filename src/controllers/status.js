@@ -15,6 +15,7 @@ const { binanceOrderService } = require('../services/trading/BinanceOrderService
 const { notificationRedriveService } = require('../services/notification/NotificationRedriveService');
 const geminiQuotaManager = require('../services/grounding/geminiQuotaManager');
 const groundingMetrics = require('../services/grounding/metrics');
+const { getCoalescingStatus } = require('../services/grounding/grounding');
 const {
 	getDeploymentCommit,
 	isPreviewEnvironment,
@@ -363,6 +364,7 @@ function getStatus() {
 			discord,
 			gemini,
 			geminiQuota,
+			groundingCoalescing: getCoalescingStatus(),
 			tradingViewMcp,
 			tradingViewVolumeConfirmation,
 			firestore,
