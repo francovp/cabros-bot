@@ -4,6 +4,7 @@ async function runWithConcurrency(items, concurrency, worker, { shouldContinue =
 	const results = new Array(items.length);
 	let nextIndex = 0;
 	let stopped = false;
+	let firstError = null;
 	const workerCount = Math.min(items.length, Number.isSafeInteger(concurrency) && concurrency > 0 ? concurrency : 1);
 
 	const run = async () => {
@@ -13,8 +14,16 @@ async function runWithConcurrency(items, concurrency, worker, { shouldContinue =
 				return;
 			}
 
-			if (!await shouldContinue()) {
+			try {
+				if (!await shouldContinue()) {
+					stopped = true;
+					return;
+				}
+			} catch (error) {
 				stopped = true;
+				if (!firstError) {
+					firstError = error;
+				}
 				return;
 			}
 
@@ -22,14 +31,36 @@ async function runWithConcurrency(items, concurrency, worker, { shouldContinue =
 				return;
 			}
 
-			results[index] = await worker(items[index], index);
-			if (!await shouldContinue()) {
+			try {
+				results[index] = await worker(items[index], index);
+			} catch (error) {
 				stopped = true;
+				if (!firstError) {
+					firstError = error;
+				}
+				return;
+			}
+
+			try {
+				if (!await shouldContinue()) {
+					stopped = true;
+				}
+			} catch (error) {
+				stopped = true;
+				if (!firstError) {
+					firstError = error;
+				}
 			}
 		}
 	};
 
-	await Promise.all(Array.from({ length: workerCount }, run));
+	const workers = Array.from({ length: workerCount }, () => run());
+	await Promise.allSettled(workers);
+
+	if (firstError) {
+		throw firstError;
+	}
+
 	return { results, stopped };
 }
 

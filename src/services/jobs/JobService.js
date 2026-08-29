@@ -1234,6 +1234,13 @@ class JobService {
 			completedCount++;
 			const current = completedCount;
 			progressSave = progressSave.then(async () => {
+				if (this._isClaimLost(signal) || (signal && signal.aborted)) {
+					return;
+				}
+				const currentJob = await this.repository.get(job.jobId);
+				if (currentJob && (currentJob.status === 'cancelled' || TERMINAL_JOB_STATUSES.has(currentJob.status))) {
+					return;
+				}
 				job.progress.current = current;
 				job.progress.status = `Completed ${current}/${symbols.length}`;
 				job.updatedAt = new Date().toISOString();
