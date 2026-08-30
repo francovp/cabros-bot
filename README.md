@@ -272,6 +272,16 @@ The response and audit logs include only sanitized order metadata. API credentia
 - `SCANNER_PRESET_SCHEDULER_LEASE_MS` - Distributed concurrency lock lease duration in milliseconds (default: `120000`, bounds `10000`-`600000`).
 - `dependencies.scannerPresetScheduler` in `/api/status` and `/api/capabilities` exposes `enabled`, `configured`, `ready`, `status`, `role`, `running`, `shutdownRequested`, and execution counters without secrets.
 
+#### News Monitor Scheduler
+
+- `ENABLE_NEWS_MONITOR_SCHEDULER` - Enable built-in recurring execution of news-monitor sweeps (default: `false`)
+- `NEWS_MONITOR_SCHEDULER_WORKER_ROLE` - Scheduler worker role: `web` (default), `worker`, or `disabled`.
+- `NEWS_MONITOR_SCHEDULER_INTERVAL_MS` - Background sweep interval in milliseconds (default: `300000`, bounds `10000`-`3600000`).
+- `NEWS_MONITOR_SCHEDULER_BATCH_LIMIT` - Maximum default news-monitor symbols processed per sweep (default: `50`, bounds `1`-`500`).
+- `NEWS_MONITOR_SCHEDULER_LEASE_MS` - Distributed concurrency lock lease duration in milliseconds (default: `120000`, bounds `10000`-`600000`).
+- `NEWS_MONITOR_SCHEDULER_TIMEOUT_MS` - Per-sweep execution deadline in milliseconds (default: `90000`, bounds `1000`-`600000`).
+- `dependencies.newsMonitorScheduler` in `/api/status` and `/api/capabilities` exposes `enabled`, `configured`, `ready`, `status`, `role`, `running`, `lastRunAt`, `lastRunDurationMs`, `lastRunSymbolCount`, `lastRunExecutedCount`, `lastRunErrorCount`, and `lastError` without secrets.
+
 ## Setup
 
 ### Supported Runtime
