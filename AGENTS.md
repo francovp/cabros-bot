@@ -237,6 +237,16 @@ Use the repository helper script [`scripts/sync-production-env.js`](file:///User
 
 Use the platform's secret mechanism for credentials and never print secret values, place them in URLs, commit them, or include them in command output (the helper strictly rejects `KEY=VALUE` on `argv`). Public configuration values may be set directly, but still must match the approved `.env.example`, Blueprint, or PR configuration. Verify each platform with a redacted variable-name/readiness check and confirm any resulting deployment reaches green/`SUCCESS`. If a platform does not host the affected service, record that as an explicit no-op rather than silently skipping it. Do not claim the change is complete until the application deployment and environment synchronization checks pass.
 
+### Firebase Hosting preview channel cleanup
+
+Ephemeral preview channels created by the `.github/workflows/firebase-hosting.yml` PR deploy accumulate over time. Use [`scripts/cleanup-preview-channels.js`](file:///Users/fgvaleriop/repositorios/cabros-bot/scripts/cleanup-preview-channels.js) (or `pnpm run cleanup:preview-channels`) to list and delete preview channels older than a configured age. It drives the locally pinned `firebase-tools` CLI (`hosting:channel:list` / `hosting:channel:delete`), requires an authenticated firebase session (`firebase login` or `FIREBASE_TOKEN`) with site-update permission, and never deletes the `live` channel or channels without a parseable create time.
+
+- **Dry-run by default**: `pnpm run cleanup:preview-channels` lists matching preview channels without deleting anything.
+- **Apply with a bounded window**: `pnpm run cleanup:preview-channels --apply --max-age-days 3` deletes non-live channels created more than 3 days ago and appends a timestamped audit record (project, max age, deleted channel ids) to `.preview-channels-cleanup.log` (override with `--log-file`).
+- **Project/site override**: `--project <id>` (default `cabros-bot`) and `--site <siteId>` (default resolved from the project); output is available as JSON via `--json`.
+- **Tests**: `tests/unit/cleanup-preview-channels.test.js` covers argument parsing, resource-name parsing, JSON envelope parsing, age cutoff selection (including `live`-channel protection and unparseable create-time skipping), delete-command construction, and audit logging.
+
+
 
 **Linting and Commits During Implementation**:
 - **Ignore linter issues during implementation**: Focus on feature functionality first; linter errors will be fixed in a dedicated final pass
