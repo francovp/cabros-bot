@@ -1348,6 +1348,52 @@ describe('SignalOutcomeService', () => {
 			expect(res.exchangeBreakdown.BINANCE.evaluated).toBe(1);
 		});
 
+		it('counts price-return wins independently of TP/SL first-hit semantics', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			const now = new Date();
+			const evaluatedOutcome = (overrides) => ({
+				status: 'evaluated',
+				targetTime: now.toISOString(),
+				maxFavorableExcursion: 1,
+				maxAdverseExcursion: -1,
+				...overrides,
+			});
+			const signal = (overrides) => ({
+				receivedAt: admin.firestore.Timestamp.fromDate(now),
+				source: 'market-scanner',
+				exchange: 'BINANCE',
+				price: 100,
+				outcomeEvaluated: true,
+				outcomes: { '1h': evaluatedOutcome(overrides.outcome) },
+				...overrides,
+			});
+
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, new Map([
+				['buy-target', signal({ symbol: 'BTCUSDT', side: 'BUY', target: 110, stop: 90, outcome: {
+					return: 10,
+					firstHit: 'target',
+					targetHit: true,
+				} })],
+				['sell-win', signal({ symbol: 'ETHUSDT', side: 'SELL', outcome: { return: 2, firstHit: null } })],
+				['stop-hit-loss', signal({ symbol: 'SOLUSDT', side: 'BUY', target: 110, stop: 95, outcome: {
+					return: -5,
+					firstHit: 'stop',
+					stopHit: true,
+				} })],
+				['negative-close', signal({ symbol: 'ADAUSDT', side: 'BUY', outcome: { return: -1, firstHit: null } })],
+			]));
+
+			const res = await SignalOutcomeService.getMetricsSummary();
+
+			expect(res.windows['1h'].hitRatePercent).toBe(50);
+			expect(res.windows['1h'].bySide.BUY.hitRatePercent).toBe(33.33);
+			expect(res.windows['1h'].bySide.SELL.hitRatePercent).toBe(100);
+			expect(res.windows['1h'].targetHitRatePercent).toBe(50);
+			expect(res.windows['1h'].stopHitRatePercent).toBe(50);
+		});
+
 		it('computes targetHitRatePercent, stopHitRatePercent, and expectancyR for evaluated barrier outcomes', async () => {
 			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';

@@ -3236,6 +3236,7 @@
           },
           "hitRatePercent": {
             "type": "number",
+            "description": "Percentage of evaluated windows whose side-aware price return exceeded 0%; this is independent of TP/SL first-hit semantics.",
             "example": 60
           },
           "targetEligibleWindows": {

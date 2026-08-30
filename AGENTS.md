@@ -1439,6 +1439,16 @@ No endpoint or response contract changed; Postman and OpenAPI remain unchanged.
 
 No endpoint, OpenAPI, Postman, Firebase template, or environment-variable name changed.
 
+## Signal Outcome Hit-Rate Semantics (CB-251 / Issue #550)
+
+`windows[*].hitRatePercent` is intentionally a price-performance metric: evaluated windows whose side-aware `return` exceeds `0%`, divided by evaluated windows. It does not mean TP/SL first-hit success; target and stop hit rates remain separate barrier-eligible metrics. The implementation and numeric outputs are unchanged.
+
+**Coverage**:
+- `tests/unit/signal-outcome-service.test.js` — Pins BUY and SELL positive returns, a reachable stop-hit loss, and a negative-return loss.
+- `src/openapi/openapi.json`, `README.md`, and `CabrosBot.postman_collection.json` — Document the metric definition and keep the example contract explicit.
+
+No new endpoint, environment variable, Remote Config key, or runtime behavior was added.
+
 ## Analyzer Cooldown Test Module Isolation (CB-168 / Issue #404)
 
 The analyzer cooldown regression test loads `geminiQuotaManager` and `NewsAnalyzer` inside one `jest.isolateModules()` registry after an explicit module reset. This keeps the cooldown state configured by the test attached to the same singleton instance cached by `NewsAnalyzer`, preventing order-dependent false `analyzed` results.
