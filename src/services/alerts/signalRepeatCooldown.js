@@ -257,7 +257,7 @@ function clearOppositeChannels(key, successfulChannels) {
 	this.store.set(opposite, entry);
 }
 
-function finalize(key, reservedChannels = [], retainedChannels = [], oppositeSuccessfulChannels = retainedChannels) {
+function finalize(key, reservedChannels = [], retainedChannels = [], oppositeSuccessfulChannels = retainedChannels, expectedGeneration = null) {
 	if (!key) {
 		return;
 	}
@@ -267,12 +267,18 @@ function finalize(key, reservedChannels = [], retainedChannels = [], oppositeSuc
 			const retained = Array.isArray(retainedChannels) ? retainedChannels : [];
 			if (retained.length > 0) {
 				const finalizedAt = Date.now();
+				const generation = Number.isFinite(expectedGeneration) ? expectedGeneration : nextMonotonicGeneration(finalizedAt);
 				this.store.set(key, {
 					firedAt: finalizedAt,
+					generation,
 					channels: new Map(retained.map((channel) => [channel, finalizedAt])),
 				});
 			}
 			clearOppositeChannels.call(this, key, Array.isArray(oppositeSuccessfulChannels) ? oppositeSuccessfulChannels : retained);
+			return;
+		}
+		if (Number.isFinite(expectedGeneration) && Number.isFinite(entry.generation) && entry.generation > expectedGeneration) {
+			clearOppositeChannels.call(this, key, Array.isArray(oppositeSuccessfulChannels) ? oppositeSuccessfulChannels : retainedChannels);
 			return;
 		}
 		const retained = new Set(retainedChannels);
@@ -293,13 +299,16 @@ function finalize(key, reservedChannels = [], retainedChannels = [], oppositeSuc
 	}
 }
 
-function release(key, channels = []) {
+function release(key, channels = [], expectedGeneration = null) {
 	if (!key || !Array.isArray(channels) || channels.length === 0) {
 		return;
 	}
 	try {
 		const entry = this.store.get(key);
 		if (!entry || !(entry.channels instanceof Map)) {
+			return;
+		}
+		if (Number.isFinite(expectedGeneration) && Number.isFinite(entry.generation) && entry.generation > expectedGeneration) {
 			return;
 		}
 		for (const channel of channels) {
@@ -316,13 +325,16 @@ function release(key, channels = []) {
 	}
 }
 
-function refresh(key, channels = [], now = Date.now()) {
+function refresh(key, channels = [], now = Date.now(), expectedGeneration = null) {
 	if (!key || !Array.isArray(channels) || channels.length === 0) {
 		return;
 	}
 	try {
 		const entry = this.store.get(key);
 		if (!entry || !(entry.channels instanceof Map)) {
+			return;
+		}
+		if (Number.isFinite(expectedGeneration) && Number.isFinite(entry.generation) && entry.generation > expectedGeneration) {
 			return;
 		}
 		for (const channel of channels) {

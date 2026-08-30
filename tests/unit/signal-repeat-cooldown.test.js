@@ -225,6 +225,20 @@ describe('signalRepeatCooldown', () => {
 
 			expect(cooldown.reserve(buy, ['telegram'], Date.now()).suppressed).toBe(true);
 		});
+
+		it('does not mutate newer reservations when finalization belongs to an older generation', () => {
+			const cooldown = createSignalRepeatCooldown();
+			const buy = { exchange: 'BINANCE', symbol: 'ETHUSDT', timeframe: '4h', side: 'BUY' };
+			const oldRes = cooldown.reserve(buy, ['telegram'], 10_000);
+			const newRes = cooldown.reserve(buy, ['telegram', 'discord'], 10_000 + TIMEFRAME_BAR_MS['4h'] + 1);
+			expect(newRes.generation).toBeGreaterThan(oldRes.generation);
+
+			// Calling finalize with the old generation and empty retained channels must NOT clear newRes channels
+			cooldown.finalize(oldRes.key, oldRes.channels, [], [], oldRes.generation);
+
+			// newRes channels should still be active/suppressed
+			expect(cooldown.reserve(buy, ['telegram'], 10_000 + TIMEFRAME_BAR_MS['4h'] + 2).suppressed).toBe(true);
+		});
 	});
 
 	describe('bounded storage', () => {

@@ -17,6 +17,7 @@ const alertStorageService = require('../../../../services/storage/AlertStorageSe
 const {
 	NotificationRoutingValidationError,
 	parseNotificationRouting,
+	validateNotificationRouting,
 	sendWithNotificationRouting,
 	getRequestedChannels,
 	getDeliveredChannels,
@@ -232,6 +233,7 @@ function postAlert(botOrGetter) {
 			if (!notificationManager) {
 				await initializeNotificationServices(bot);
 			}
+			validateNotificationRouting(notificationManager, routing);
 			const requestedChannels = getRequestedChannels(notificationManager, routing);
 
 			// Opt-in repeat suppression: same (exchange, symbol, timeframe, side)
@@ -304,7 +306,7 @@ function postAlert(botOrGetter) {
 					});
 			} catch (error) {
 				if (reservation) {
-					signalRepeatCooldown.finalize(reservation.key, reservation.channels, []);
+					signalRepeatCooldown.finalize(reservation.key, reservation.channels, [], [], reservation.generation);
 				}
 				throw error;
 			}
@@ -347,7 +349,13 @@ function postAlert(botOrGetter) {
 				const finalizationChannels = keepFailedForRedrive
 					? redriveReservationChannels
 					: deliveredReservationChannels;
-				signalRepeatCooldown.finalize(reservation.key, reservation.channels, finalizationChannels, deliveredReservationChannels);
+				signalRepeatCooldown.finalize(
+					reservation.key,
+					reservation.channels,
+					finalizationChannels,
+					deliveredReservationChannels,
+					reservation.generation,
+				);
 				if (notificationRedriveService.isEnabled() && deliveredReservationChannels.length > 0) {
 					const defaultDestinationChannels = deliveredReservationChannels
 						.map((channel) => repeatCooldownOptions?.defaultChannelsByName?.[getChannelName(channel)])

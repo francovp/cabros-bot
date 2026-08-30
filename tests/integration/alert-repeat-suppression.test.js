@@ -471,4 +471,27 @@ describe('Alert repeat suppression endpoint behavior', () => {
 		expect(reBuy.body.suppressedRepeat).toBeUndefined();
 		expect(mockTelegramSendMessage).toHaveBeenCalledTimes(3);
 	});
+
+	it('validates explicit routing and returns 400 even when signal is within repeat cooldown', async () => {
+		process.env.ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION = 'true';
+		process.env.ENABLE_DISCORD_ALERTS = 'false';
+
+		// First request with default routing succeeds and establishes cooldown
+		const first = await request(app)
+			.post('/api/webhook/alert')
+			.set('x-api-key', 'test-key')
+			.send({ text: SIGNAL_TEXT })
+			.expect(200);
+		expect(first.body.deliveredChannels).toEqual(['telegram']);
+
+		// Second request explicitly requests disabled discord channel: must return 400, not 200 suppressed
+		const second = await request(app)
+			.post('/api/webhook/alert')
+			.set('x-api-key', 'test-key')
+			.send({ text: SIGNAL_TEXT, channels: ['discord'] })
+			.expect(400);
+
+		expect(second.body.success).toBe(false);
+		expect(second.body.error).toContain('Requested channel(s) disabled or misconfigured');
+	});
 });
