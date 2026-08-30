@@ -1515,6 +1515,12 @@ No endpoint, OpenAPI, Postman, environment variable, or Remote Config contract c
 
 Disabled by default preserves existing webhook behavior byte-for-byte.
 
+## CI Secret Scanning and Least-Privilege Workflows (CB-257 / Issue #556)
+
+`.github/workflows/secret-scan.yml` runs the pinned Gitleaks Action on pushes to `master`, pull requests, and manual dispatch with full git history. It uses only the GitHub token and optional organization license secret; no application credentials are introduced. `.gitleaks.toml` narrowly allowlists the intentionally public Firebase browser key already tracked in `render.yaml`, without disabling other detections. `.github/workflows/node.js.yml` and `.github/workflows/env-drift-check.yml` now explicitly grant `contents: read` permissions. README documents secret storage and rotation for webhook, Binance, and Firebase service-account credentials.
+
+This change is workflow/documentation-only: no application environment variable, Remote Config key, endpoint, OpenAPI, or Postman contract changed.
+
 ## Binance Market-Data Host Configuration (CB-244 / Issue #539)
 
 Added an application-owned `BINANCE_DATA_BASE_URL` env var (default `https://api.binance.com`) that overrides the default Binance REST host for **all** market-data client construction paths. The new variable is forwarded as `MainClient` `baseUrl` (which `binance@2.15.22` honors via `BaseRestClient.options.baseUrl` → `requestUtils.getRestBaseUrl`), so Railway production can route around the `HTTP 451 Service unavailable from restricted location` reply from `api.binance.com` without touching the trading order client or hot-patching `node_modules`. Affected paths: `SignalOutcomeService` sweep + entry fallback, `BinanceOrderService` live client (testnet stays pinned to `https://testnet.binance.vision`), news-monitor price fallback, and the `/precio` Telegram command. Malformed values fall back to the default with a `console.warn`, so a typo never silently breaks evaluation.

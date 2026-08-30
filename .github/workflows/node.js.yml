@@ -9,6 +9,8 @@ on:
   pull_request:
     branches: [ "master" ]
 
+permissions:
+  contents: read
 # Cancel superseded PR runs to free Actions minutes; preserve `master` pushes so
 # a freshly merged commit never cancels its own follow-up run. See issue #565.
 concurrency:
