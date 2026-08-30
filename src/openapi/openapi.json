@@ -3276,6 +3276,76 @@
           "maxAdverseExcursionPercent": {
             "type": "number",
             "example": -4.5
+          },
+          "bySide": {
+            "type": "object",
+            "description": "Per-side breakdown mirroring the parent WindowStats shape. Each side block is emitted only when at least one evaluated signal exists for that side.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/WindowStats"
+            },
+            "example": {
+              "BUY": {
+                "totalSignals": 20,
+                "hitRatePercent": 65,
+                "targetEligibleWindows": 18,
+                "stopEligibleWindows": 18,
+                "targetHitRatePercent": 60,
+                "stopHitRatePercent": 22,
+                "expectancyR": 0.92,
+                "averageReturnPercent": 2.4,
+                "averageMfePercent": 3.6,
+                "averageMaePercent": -1.05,
+                "maxAdverseExcursionPercent": -4.2
+              },
+              "SELL": {
+                "totalSignals": 15,
+                "hitRatePercent": 53,
+                "targetEligibleWindows": 12,
+                "stopEligibleWindows": 12,
+                "targetHitRatePercent": 48,
+                "stopHitRatePercent": 18,
+                "expectancyR": 0.71,
+                "averageReturnPercent": 1.8,
+                "averageMfePercent": 3.2,
+                "averageMaePercent": -1.2,
+                "maxAdverseExcursionPercent": -4.5
+              }
+            }
+          },
+          "bySetupType": {
+            "type": "object",
+            "description": "Per-setup-type breakdown mirroring the parent WindowStats shape. Each setup-type block is emitted only when at least one evaluated signal exists for that setup.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/WindowStats"
+            },
+            "example": {
+              "trend_continuation": {
+                "totalSignals": 25,
+                "hitRatePercent": 68,
+                "targetEligibleWindows": 22,
+                "stopEligibleWindows": 22,
+                "targetHitRatePercent": 64,
+                "stopHitRatePercent": 18,
+                "expectancyR": 1.05,
+                "averageReturnPercent": 2.6,
+                "averageMfePercent": 3.8,
+                "averageMaePercent": -0.95,
+                "maxAdverseExcursionPercent": -3.8
+              },
+              "reversal": {
+                "totalSignals": 10,
+                "hitRatePercent": 40,
+                "targetEligibleWindows": 8,
+                "stopEligibleWindows": 8,
+                "targetHitRatePercent": 38,
+                "stopHitRatePercent": 25,
+                "expectancyR": 0.45,
+                "averageReturnPercent": 1.2,
+                "averageMfePercent": 2.9,
+                "averageMaePercent": -1.5,
+                "maxAdverseExcursionPercent": -4.5
+              }
+            }
           }
         }
       },
