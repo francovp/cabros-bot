@@ -3,14 +3,15 @@
 /**
  * backfill-operational-collection-retention.js
  *
- * Backfills the `expiresAt` field on legacy documents in the two operational
+ * Backfills the `expiresAt` field on legacy documents in the operational
  * collections that use Firestore TTL:
  *
  *   - idempotency_keys  — defaults to WEBHOOK_IDEMPOTENCY_TTL_MS (5 min) from createdAt
  *   - news-monitor-dedup — defaults to NEWS_CACHE_TTL_HOURS (6 h) from createdAt,
  *                         or DELIVERY_LOCK_TTL_MS (30 s) for channel delivery leases
+ *   - notificationDeadLetters — defaults to NOTIFICATION_REDRIVE_MAX_AGE_MS (1 h)
  *
- * Both collections write `expiresAt` on document creation, so legacy documents
+ * All collections write `expiresAt` on document creation, so legacy documents
  * only exist when the service was running an older version that did not set the
  * field. The backfill is a safety measure and is idempotent: documents that
  * already have a future `expiresAt` are left unchanged.
@@ -42,6 +43,9 @@ const MAX_IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000; // 1 day hard cap
 const DEFAULT_DEDUP_TTL_HOURS = 6; // NEWS_CACHE_TTL_HOURS default
 const MAX_DEDUP_TTL_HOURS = 720; // 30 days hard cap
 
+const DEFAULT_NOTIFICATION_REDRIVE_TTL_MS = 3_600_000; // 1 hour
+const MAX_NOTIFICATION_REDRIVE_TTL_MS = 24 * 60 * 60 * 1000; // 1 day hard cap
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function parseIdempotencyTtlMs(raw = process.env.WEBHOOK_IDEMPOTENCY_TTL_MS) {
@@ -68,6 +72,34 @@ function parseDedupTtlMs(raw = process.env.NEWS_CACHE_TTL_HOURS) {
 		return DEFAULT_DEDUP_TTL_HOURS * 60 * 60 * 1000;
 	}
 	return Math.floor(val * 60 * 60 * 1000);
+}
+
+function parseNotificationRedriveTtlMs(raw = process.env.NOTIFICATION_REDRIVE_MAX_AGE_MS) {
+	const val = Number(raw);
+	if (!Number.isSafeInteger(val) || val < 60_000 || val > MAX_NOTIFICATION_REDRIVE_TTL_MS) {
+		return DEFAULT_NOTIFICATION_REDRIVE_TTL_MS;
+	}
+	return val;
+}
+
+function getOperationalCollectionConfigs() {
+	return [
+		{
+			collectionName: 'idempotency_keys',
+			ttlMs: parseIdempotencyTtlMs(),
+			options: { protectActivePending: true },
+		},
+		{
+			collectionName: 'news-monitor-dedup',
+			ttlMs: parseDedupTtlMs(),
+			options: {},
+		},
+		{
+			collectionName: 'notificationDeadLetters',
+			ttlMs: parseNotificationRedriveTtlMs(),
+			options: {},
+		},
+	];
 }
 
 function isDeliveryLease(docId, data = {}) {
@@ -208,43 +240,29 @@ function initializeFirestore() {
 async function main() {
 	const dryRun = process.argv.includes('--dry-run') || process.env.DRY_RUN === 'true';
 	const firestore = initializeFirestore();
-	const idempotencyTtlMs = parseIdempotencyTtlMs();
-	const dedupTtlMs = parseDedupTtlMs();
 
 	const collections = {};
+	const operationalConfigs = getOperationalCollectionConfigs();
+	const idempotencyTtlMs = operationalConfigs.find(({ collectionName }) => collectionName === 'idempotency_keys').ttlMs;
+	const dedupTtlMs = operationalConfigs.find(({ collectionName }) => collectionName === 'news-monitor-dedup').ttlMs;
+	const notificationRedriveTtlMs = operationalConfigs.find(({ collectionName }) => collectionName === 'notificationDeadLetters').ttlMs;
 
-	// idempotency_keys — protect active pending claims from TTL shortening
-	try {
-		collections.idempotency_keys = await backfillCollection(
-			firestore,
-			'idempotency_keys',
-			idempotencyTtlMs,
-			{ protectActivePending: true, dryRun },
-		);
-	} catch (error) {
-		console.error(JSON.stringify({
-			event: 'operational_retention_backfill_failed',
-			collection: 'idempotency_keys',
-			error: error.message,
-		}));
-		throw error;
-	}
-
-	// news-monitor-dedup — no active-pending concept; delivery leases retain 30s TTL
-	try {
-		collections['news-monitor-dedup'] = await backfillCollection(
-			firestore,
-			'news-monitor-dedup',
-			dedupTtlMs,
-			{ dryRun },
-		);
-	} catch (error) {
-		console.error(JSON.stringify({
-			event: 'operational_retention_backfill_failed',
-			collection: 'news-monitor-dedup',
-			error: error.message,
-		}));
-		throw error;
+	for (const { collectionName, ttlMs, options } of operationalConfigs) {
+		try {
+			collections[collectionName] = await backfillCollection(
+				firestore,
+				collectionName,
+				ttlMs,
+				{ ...options, dryRun },
+			);
+		} catch (error) {
+			console.error(JSON.stringify({
+				event: 'operational_retention_backfill_failed',
+				collection: collectionName,
+				error: error.message,
+			}));
+			throw error;
+		}
 	}
 
 	console.log(JSON.stringify({
@@ -252,6 +270,7 @@ async function main() {
 		dryRun,
 		idempotencyTtlMs,
 		dedupTtlMs,
+		notificationRedriveTtlMs,
 		collections,
 	}));
 }
@@ -268,8 +287,10 @@ if (require.main === module) {
 
 module.exports = {
 	backfillCollection,
+	getOperationalCollectionConfigs,
 	parseIdempotencyTtlMs,
 	parseDedupTtlMs,
+	parseNotificationRedriveTtlMs,
 	isDeliveryLease,
 	DELIVERY_LOCK_TTL_MS,
 	PENDING_STALE_TIMEOUT_MS,

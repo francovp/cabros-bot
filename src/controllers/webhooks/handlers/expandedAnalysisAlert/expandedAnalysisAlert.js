@@ -21,6 +21,8 @@ const {
 	getDeliveredChannels,
 } = require('../../../../services/notification/requestRouting');
 const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteConfigService');
+const { runWithConcurrency } = require('../../../../lib/runWithConcurrency');
+const alertStorageService = require('../../../../services/storage/AlertStorageService');
 
 const DEFAULT_ALERT_TIMEOUT_MS = 60000;
 const MAX_ALERT_TIMEOUT_MS = 120000;
@@ -121,6 +123,30 @@ function postExpandedAnalysisAlert(botOrGetter) {
 			const deliveredChannels = getDeliveredChannels(deliveryResults);
 			const summary = buildSummary(results, deliveryResults);
 
+			// Fire-and-forget: persist delivered expanded-analysis report to AlertStorageService.
+			// Storage failures never block delivery (handled inside saveAlert).
+			if (alertStorageService.isEnabled() && deliveredChannels.length > 0 && analyzedItems.length > 0) {
+				const firstSymbol = analyzedItems[0].input && analyzedItems[0].input.symbol
+					? analyzedItems[0].input.symbol
+					: (analyzedItems[0].input && analyzedItems[0].input.raw) || null;
+				const firstExchange = analyzedItems[0].input && analyzedItems[0].input.exchange
+					? analyzedItems[0].input.exchange
+					: null;
+				alertStorageService.saveAlert({
+					requestId,
+					text: alertText,
+					symbol: firstSymbol,
+					exchange: firstExchange,
+					enriched: false,
+					enrichmentData: null,
+					tokenUsage: null,
+					channels: requestedChannels,
+					deliveryResults,
+					source: 'expanded-analysis',
+					processingTimeMs: Date.now() - startTime,
+				}).catch(() => {});
+			}
+
 			const signalOutcomeService = require('../../../../services/storage/SignalOutcomeService');
 			if (signalOutcomeService.isEnabled()) {
 				for (const item of analyzedItems) {
@@ -202,74 +228,43 @@ function postExpandedAnalysisAlert(botOrGetter) {
 
 async function analyzeSymbols({ symbols, timeframe, includeMultiTimeframe, analysisMode }, options = {}) {
 	const { signal } = options;
-	const results = [];
+	const { results } = await runWithConcurrency(
+		symbols,
+		getRuntimeConfig().EXPANDED_ANALYSIS_ALERT_CONCURRENCY,
+		async (input) => {
+			try {
+				const analysisRequest = { ...input, timeframe, analysisMode };
+				if (signal) analysisRequest.signal = signal;
 
-	for (let index = 0; index < symbols.length; index++) {
-		const input = symbols[index];
-		if (signal && signal.aborted) {
-			appendTimeoutResults(results, symbols.slice(index), getAbortMessage(signal));
-			break;
-		}
-
-		try {
-			const analysisRequest = {
-				...input,
-				timeframe,
-				analysisMode,
-			};
-			if (signal) {
-				analysisRequest.signal = signal;
-			}
-
-			const analysis = await tradingViewMcpService.analyzeSymbolIdentifier({
-				...analysisRequest,
-			});
-
-			let multiTimeframe = null;
-			if (includeMultiTimeframe) {
-				try {
-					multiTimeframe = await tradingViewMcpService.callMultiTimeframeAnalysis({
-						symbol: input.symbol,
-						exchange: input.exchange,
-						signal,
-					});
-				} catch (mErr) {
-					console.warn(
-						'[ExpandedAnalysisAlert] Multi-timeframe analysis failed for',
-						input.raw,
-						mErr.message,
-					);
+				const analysis = await tradingViewMcpService.analyzeSymbolIdentifier(analysisRequest);
+				let multiTimeframe = null;
+				if (includeMultiTimeframe) {
+					try {
+						multiTimeframe = await tradingViewMcpService.callMultiTimeframeAnalysis({
+							symbol: input.symbol,
+							exchange: input.exchange,
+							signal,
+						});
+					} catch (mErr) {
+						console.warn('[ExpandedAnalysisAlert] Multi-timeframe analysis failed for', input.raw, mErr.message);
+					}
 				}
-			}
 
-			results.push({
-				symbol: input.raw,
-				status: 'analyzed',
-				input,
-				analysis,
-				multiTimeframe,
-			});
-		} catch (error) {
-			if (isAbortTriggered(signal, error)) {
-				const timeoutMessage = getAbortMessage(signal, error.message);
-				results.push({
-					symbol: input.raw,
-					status: 'timeout',
-					input,
-					error: timeoutMessage,
-				});
-				appendTimeoutResults(results, symbols.slice(index + 1), timeoutMessage);
-				break;
-			}
+				return { symbol: input.raw, status: 'analyzed', input, analysis, multiTimeframe };
+			} catch (error) {
+				if (isAbortTriggered(signal, error)) {
+					return { symbol: input.raw, status: 'timeout', input, error: getAbortMessage(signal, error.message) };
+				}
 
-			console.warn('[ExpandedAnalysisAlert] Symbol analysis failed:', input.raw, error.message);
-			results.push({
-				symbol: input.raw,
-				status: 'error',
-				input,
-				error: error.message,
-			});
-		}
+				console.warn('[ExpandedAnalysisAlert] Symbol analysis failed:', input.raw, error.message);
+				return { symbol: input.raw, status: 'error', input, error: error.message };
+			}
+		},
+		{ shouldContinue: () => !(signal && signal.aborted) },
+	);
+
+	if (signal && signal.aborted) {
+		fillTimeoutResults(results, symbols, getAbortMessage(signal));
 	}
 
 	return results;
@@ -339,14 +334,16 @@ function createAlertDeadline(timeoutMs) {
 	};
 }
 
-function appendTimeoutResults(results, symbols, error) {
-	symbols.forEach((input) => {
-		results.push({
-			symbol: input.raw,
-			status: 'timeout',
-			input,
-			error,
-		});
+function fillTimeoutResults(results, symbols, error) {
+	symbols.forEach((input, index) => {
+		if (!results[index]) {
+			results[index] = {
+				symbol: input.raw,
+				status: 'timeout',
+				input,
+				error,
+			};
+		}
 	});
 }
 

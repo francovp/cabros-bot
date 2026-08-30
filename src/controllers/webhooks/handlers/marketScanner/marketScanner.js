@@ -25,6 +25,7 @@ const {
 } = require('../../../../services/notification/requestRouting');
 const { enrichScannerItemsWithTrendConfluence } = require('../../../../services/tradingview/marketScannerConfluence');
 const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteConfigService');
+const alertStorageService = require('../../../../services/storage/AlertStorageService');
 
 const DEFAULT_SCANNER_TIMEOUT_MS = 90000;
 const MAX_SCANNER_TIMEOUT_MS = 120000;
@@ -124,6 +125,32 @@ function postMarketScannerAlert(botOrGetter) {
 			const requestedChannels = getRequestedChannels(notificationManager, routing);
 			const deliveredChannels = getDeliveredChannels(deliveryResults);
 			const summary = buildSummary(scanResults, deliveryResults);
+
+			// Fire-and-forget: persist delivered market-scanner report to AlertStorageService.
+			// Storage failures never block delivery (handled inside saveAlert).
+			if (alertStorageService.isEnabled() && deliveredChannels.length > 0) {
+				const scannerSymbols = successfulScans.length > 0
+					? Array.from(new Set(
+						successfulScans
+							.flatMap((scan) => Array.isArray(scan.items) ? scan.items : [])
+							.map((item) => item && item.symbol)
+							.filter(Boolean),
+					))
+					: [];
+				alertStorageService.saveAlert({
+					requestId,
+					text: alertText,
+					symbol: scannerSymbols[0] || null,
+					exchange: parsed.exchange || null,
+					enriched: false,
+					enrichmentData: null,
+					tokenUsage: null,
+					channels: requestedChannels,
+					deliveryResults,
+					source: 'market-scanner',
+					processingTimeMs: Date.now() - startTime,
+				}).catch(() => {});
+			}
 
 			const signalOutcomeService = require('../../../../services/storage/SignalOutcomeService');
 			if (signalOutcomeService.isEnabled()) {

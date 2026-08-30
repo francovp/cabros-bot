@@ -26,6 +26,7 @@ const { attachTelegramErrorBoundary, handlePollingError } = require('./src/lib/t
 const { jobService } = require('./src/services/jobs/JobService');
 const SignalOutcomeService = require('./src/services/storage/SignalOutcomeService');
 const { notificationRedriveService } = require('./src/services/notification/NotificationRedriveService');
+const { whatsAppCommandBridgeService } = require('./src/services/notification/WhatsAppCommandBridgeService');
 const { scannerPresetSchedulerService } = require('./src/services/scannerPresets');
 const sentryService = require('./src/services/monitoring/SentryService');
 const { getDeploymentCommit, getDeploymentRepoSlug } = require('./src/lib/deploymentEnvironment');
@@ -45,6 +46,7 @@ const now = new Date();
 // Always mount routes (they gate access based on feature flags)
 app.use('/api', getRoutes(() => bot));
 
+// Register Sentry debug routes if enabled
 registerDebugSentryRoute(app);
 
 // The error handler must be registered before any other error middleware and after all controllers
@@ -68,6 +70,7 @@ const lifecycle = createProcessLifecycle({
 	finalizeBackgroundJobs: () => jobService.finalizeActiveJobsForShutdown(),
 	stopSignalOutcomeWorker: (options) => SignalOutcomeService.stopWorker(options),
 	stopNotificationRedriveWorker: (options) => notificationRedriveService.stopWorker(options),
+	stopWhatsAppCommandBridge: (options) => whatsAppCommandBridgeService.stop(options),
 	stopScannerPresetScheduler: (options) => scannerPresetSchedulerService.stopWorker(options),
 	stopRemoteConfig: () => remoteConfigService.stop(),
 	shutdownNewsMonitor: () => getCacheInstance().shutdown(),
@@ -89,6 +92,10 @@ async function bootstrapApplication() {
 	// Start background scanner preset scheduler if enabled
 	scannerPresetSchedulerService.botGetter = () => bot;
 	scannerPresetSchedulerService.startWorker();
+	// Start WhatsApp inbound command bridge if enabled
+	if (whatsAppCommandBridgeService.isEnabled()) {
+		whatsAppCommandBridgeService.start();
+	}
 	if (process.env.ENABLE_NEWS_MONITOR === 'true') {
 		getNewsMonitor().initialize();
 	}

@@ -35,6 +35,7 @@ const {
 	getDeliveredChannels,
 } = require('../notification/requestRouting');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
+const { runWithConcurrency } = require('../../lib/runWithConcurrency');
 
 const EXPIRATION_MS = 3600000; // 1 hour
 const DEFAULT_JOB_TIMEOUT_MS = 300000; // 5 minutes
@@ -1239,88 +1240,80 @@ class JobService {
 
 	async _executeExpandedAnalysis(job, parsed, signal, botOrGetter) {
 		const { symbols, timeframe, includeMultiTimeframe } = parsed;
-
-		for (let index = 0; index < symbols.length; index++) {
-			const input = symbols[index];
-			if (this._isClaimLost(signal)) {
-				return;
-			}
-
-			const currentJob = await this.repository.get(job.jobId);
-			if (currentJob && currentJob.status === 'cancelled') {
-				break;
-			}
-
-			job.progress.current = index;
-			job.progress.status = `Analyzing symbol ${input.raw} (${index + 1}/${symbols.length})`;
-			job.updatedAt = new Date().toISOString();
-			await this._persistJob(job);
-
-			if (signal && signal.aborted) {
-				this._appendTimeoutResults(job.fullResults, symbols.slice(index), this._getAbortMessage(signal));
-				break;
-			}
-
-			try {
-				const analysisRequest = {
-					...input,
-					timeframe,
-				};
-				if (signal) {
-					analysisRequest.signal = signal;
+		let completedCount = 0;
+		const orderedResults = new Array(symbols.length);
+		let progressSave = Promise.resolve();
+		const recordProgress = (result, index) => {
+			orderedResults[index] = result;
+			job.fullResults = orderedResults.filter(Boolean);
+			completedCount++;
+			const current = completedCount;
+			progressSave = progressSave.then(async () => {
+				if (this._isClaimLost(signal) || (signal && signal.aborted)) {
+					return;
 				}
+				const currentJob = await this.repository.get(job.jobId);
+				if (currentJob && (currentJob.status === 'cancelled' || TERMINAL_JOB_STATUSES.has(currentJob.status))) {
+					return;
+				}
+				job.progress.current = current;
+				job.progress.status = `Completed ${current}/${symbols.length}`;
+				job.updatedAt = new Date().toISOString();
+				await this._persistJob(job);
+			});
+			return progressSave;
+		};
 
-				const analysis = await tradingViewMcpService.analyzeSymbolIdentifier(analysisRequest);
+		const { results } = await runWithConcurrency(
+			symbols,
+			getRuntimeConfig().EXPANDED_ANALYSIS_ALERT_CONCURRENCY,
+			async (input, index) => {
+				let result;
+				try {
+					const analysisRequest = { ...input, timeframe };
+					if (signal) analysisRequest.signal = signal;
 
-				let multiTimeframe = null;
-				if (includeMultiTimeframe) {
-					try {
-						multiTimeframe = await tradingViewMcpService.callMultiTimeframeAnalysis({
-							symbol: input.symbol,
-							exchange: input.exchange,
-							signal,
-						});
-					} catch (mErr) {
-						console.warn(
-							'[JobService] Multi-timeframe analysis failed for',
-							input.raw,
-							mErr.message,
-						);
+					const analysis = await tradingViewMcpService.analyzeSymbolIdentifier(analysisRequest);
+					let multiTimeframe = null;
+					if (includeMultiTimeframe) {
+						try {
+							multiTimeframe = await tradingViewMcpService.callMultiTimeframeAnalysis({
+								symbol: input.symbol,
+								exchange: input.exchange,
+								signal,
+							});
+						} catch (mErr) {
+							console.warn('[JobService] Multi-timeframe analysis failed for', input.raw, mErr.message);
+						}
+					}
+
+					result = { symbol: input.raw, status: 'analyzed', input, analysis, multiTimeframe };
+				} catch (error) {
+					if (this._isClaimLost(signal)) return null;
+					if (this._isAbortTriggered(signal, error)) {
+						result = {
+							symbol: input.raw,
+							status: 'timeout',
+							input,
+							error: this._getAbortMessage(signal, error.message),
+						};
+					} else {
+						console.warn('[JobService] Symbol analysis failed:', input.raw, error.message);
+						result = { symbol: input.raw, status: 'error', input, error: error.message };
 					}
 				}
 
-				job.fullResults.push({
-					symbol: input.raw,
-					status: 'analyzed',
-					input,
-					analysis,
-					multiTimeframe,
-				});
-			} catch (error) {
-				if (this._isClaimLost(signal)) {
-					return;
-				}
-				if (this._isAbortTriggered(signal, error)) {
-					const timeoutMessage = this._getAbortMessage(signal, error.message);
-					job.fullResults.push({
-						symbol: input.raw,
-						status: 'timeout',
-						input,
-						error: timeoutMessage,
-					});
-					this._appendTimeoutResults(job.fullResults, symbols.slice(index + 1), timeoutMessage);
-					break;
-				}
-
-				console.warn('[JobService] Symbol analysis failed:', input.raw, error.message);
-				job.fullResults.push({
-					symbol: input.raw,
-					status: 'error',
-					input,
-					error: error.message,
-				});
-			}
-		}
+				await recordProgress(result, index);
+				return result;
+			},
+			{
+				shouldContinue: async () => {
+					if (this._isClaimLost(signal) || (signal && signal.aborted)) return false;
+					const currentJob = await this.repository.get(job.jobId);
+					return !(currentJob && currentJob.status === 'cancelled');
+				},
+			},
+		);
 
 		const currentJob = await this.repository.get(job.jobId);
 		if (this._isClaimLost(signal)) {
@@ -1329,6 +1322,14 @@ class JobService {
 		if (currentJob && currentJob.status === 'cancelled') {
 			return;
 		}
+		job.fullResults = signal && signal.aborted
+			? symbols.map((input, index) => results[index] || {
+				symbol: input.raw,
+				status: 'timeout',
+				input,
+				error: this._getAbortMessage(signal),
+			})
+			: results;
 
 		job.progress.current = symbols.length;
 		job.progress.status = 'Completed analysis';
@@ -1732,17 +1733,6 @@ class JobService {
 			totalItems: scanResults.reduce((sum, r) => sum + r.items.length, 0),
 			delivered: deliveryResults.filter((r) => r.success).length,
 		};
-	}
-
-	_appendTimeoutResults(results, symbols, error) {
-		symbols.forEach((input) => {
-			results.push({
-				symbol: input.raw,
-				status: 'timeout',
-				input,
-				error,
-			});
-		});
 	}
 
 	_appendScannerTimeoutResults(results, scans, error) {

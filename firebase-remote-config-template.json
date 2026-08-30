@@ -133,6 +133,13 @@
       "description": "Expanded analysis alert processing timeout in milliseconds",
       "valueType": "NUMBER"
     },
+    "EXPANDED_ANALYSIS_ALERT_CONCURRENCY": {
+      "defaultValue": {
+        "value": "3"
+      },
+      "description": "Maximum concurrent expanded-analysis MCP calls",
+      "valueType": "NUMBER"
+    },
     "DISCORD_MAX_RETRIES": {
       "defaultValue": {
         "value": "2"

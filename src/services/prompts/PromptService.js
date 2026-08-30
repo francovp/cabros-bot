@@ -18,6 +18,11 @@ const REQUIRED_ALERT_ENRICHMENT_RISK_FIELDS = Object.freeze([
 	'setup_type',
 	'risk_reward_ratio',
 ]);
+const REQUIRED_ALERT_ENRICHMENT_CALIBRATION_GUIDANCE = Object.freeze([
+	'0.9+',
+	'0.6-0.8',
+	'corroborating sources',
+]);
 
 function inspectAlertEnrichmentRiskSchema(promptName, content) {
 	if (promptName !== 'alert-enrichment' && promptName !== PromptKeys.ALERT_ENRICHMENT) {
@@ -38,10 +43,14 @@ function inspectAlertEnrichmentRiskSchema(promptName, content) {
 	const missingRiskFields = REQUIRED_ALERT_ENRICHMENT_RISK_FIELDS.filter(
 		field => !textToScan.includes(field),
 	);
+	const missingCalibrationGuidance = REQUIRED_ALERT_ENRICHMENT_CALIBRATION_GUIDANCE.filter(
+		marker => !textToScan.includes(marker),
+	);
 
 	return {
-		schemaDriftDetected: missingRiskFields.length > 0,
+		schemaDriftDetected: missingRiskFields.length > 0 || missingCalibrationGuidance.length > 0,
 		missingRiskFields,
+		missingCalibrationGuidance,
 	};
 }
 
@@ -212,11 +221,12 @@ class PromptService {
 					version: prompt.version ?? null,
 					label,
 					missingRiskFields: riskSchemaCheck.missingRiskFields,
+					missingCalibrationGuidance: riskSchemaCheck.missingCalibrationGuidance,
 					detectedAt: new Date().toISOString(),
 				});
 				this.warnOnce(
 					`schema-drift:${driftKey}`,
-					`[PromptService] Langfuse prompt "${definition.name}" (version ${prompt.version}) missing required risk fields: ${riskSchemaCheck.missingRiskFields.join(', ')}. Downstream risk coverage may be degraded.`,
+					`[PromptService] Langfuse prompt "${definition.name}" (version ${prompt.version}) missing required risk fields: ${riskSchemaCheck.missingRiskFields.join(', ') || 'none'}; missing calibration guidance: ${riskSchemaCheck.missingCalibrationGuidance.join(', ') || 'none'}. Downstream risk coverage may be degraded.`,
 				);
 			}
 
@@ -227,6 +237,7 @@ class PromptService {
 				version: prompt.version,
 				schemaDriftDetected: riskSchemaCheck.schemaDriftDetected,
 				missingRiskFields: riskSchemaCheck.missingRiskFields,
+				missingCalibrationGuidance: riskSchemaCheck.missingCalibrationGuidance,
 			};
 
 			if (definition.type === 'chat') {
@@ -261,6 +272,7 @@ class PromptService {
 			version: null,
 			schemaDriftDetected: riskSchemaCheck.schemaDriftDetected,
 			missingRiskFields: riskSchemaCheck.missingRiskFields,
+			missingCalibrationGuidance: riskSchemaCheck.missingCalibrationGuidance,
 		};
 
 		if (definition.type === 'chat') {
@@ -317,6 +329,7 @@ function resetPromptServiceForTests() {
 
 module.exports = {
 	REQUIRED_ALERT_ENRICHMENT_RISK_FIELDS,
+	REQUIRED_ALERT_ENRICHMENT_CALIBRATION_GUIDANCE,
 	inspectAlertEnrichmentRiskSchema,
 	PromptKeys,
 	PromptService,
