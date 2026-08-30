@@ -1288,9 +1288,45 @@ The service caps the queried window at 31 days to keep routine operator usage ch
 
 For rollout validation, first verify the active prompt provenance and coverage in preview, then observe a bounded production/shadow window after aligning the remote `alert-enrichment` prompt with the local optional-risk schema. Treat missing fields as unavailable data; do not use zero coverage as a trading outcome or fabricate stops, targets, setup types, or R:R values.
 
+#### GET /api/alerts/replays
+
+List bounded alert-replay audit records from the Firestore `alertReplays` collection, ordered by `replayedAt` descending. Each `POST /api/alerts/{alertId}/replay` writes a unique audit document so retries with the same idempotency key are preserved as history instead of overwriting prior attempts; the HTTP `Idempotency-Replay` contract remains upstream of storage. Raw idempotency keys are never stored or returned — only a SHA-256 hash prefix is exposed.
+
+**Query Parameters:**
+- `limit` - Integer between `1` and `100` (default: `50`)
+- `before` - Either a legacy ISO-8601 timestamp cursor or the opaque `nextBefore` token from a previous response
+- `alertId` - Optional stored alert id to scope replays to a single document
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "replays": [
+    {
+      "id": "1700000000000_<uuid>",
+      "alertId": "alert-1",
+      "idempotencyKeyHashPrefix": "06bdeddf2a29",
+      "attemptId": "1700000000000_<uuid>",
+      "channels": ["telegram"],
+      "deliverySummary": [
+        { "channel": "telegram", "success": true, "messageId": "tg-1" }
+      ],
+      "replayedAt": "2026-06-06T12:34:56.000Z"
+    }
+  ],
+  "pagination": {
+    "hasMore": false,
+    "limit": 50,
+    "nextBefore": null
+  }
+}
+```
+
+The same `403 FEATURE_DISABLED` (when `ENABLE_FIRESTORE_ALERT_STORAGE=false`) and `503 STORAGE_UNAVAILABLE` mapping as the sibling endpoints applies.
+
 #### GET /api/alerts/:alertId
 
-Retrieve a single stored alert by Firestore document ID.
+Retrieve a single stored alert by Firestore document ID. The response also surfaces `lastReplay` — the most recent `alertReplays` entry for the alert, or `null` if none has been recorded.
 
 **Response (200 OK):**
 ```json
@@ -1307,6 +1343,17 @@ Retrieve a single stored alert by Firestore document ID.
     "source": "webhook",
     "useTradingViewData": true,
     "tradingViewEnrichmentApplied": false
+  },
+  "lastReplay": {
+    "id": "1700000000000_<uuid>",
+    "alertId": "alert-123",
+    "idempotencyKeyHashPrefix": "06bdeddf2a29",
+    "attemptId": "1700000000000_<uuid>",
+    "channels": ["telegram"],
+    "deliverySummary": [
+      { "channel": "telegram", "success": true, "messageId": "tg-1" }
+    ],
+    "replayedAt": "2026-06-06T12:34:56.000Z"
   }
 }
 ```
@@ -2153,6 +2200,49 @@ ngrok http 80
 
 ```bash
 curl http://localhost/healthcheck
+```
+
+### Production Smoke Probe
+
+A scheduled GitHub Actions workflow (`.github/workflows/production-smoke-probe.yml`) probes the Railway deployment every 15 minutes and pages the Telegram admin chat on persistent failures. The probe runs `ops/production-smoke-probe.sh`, which:
+
+- Hits `/healthcheck` (must return HTTP 200).
+- Hits `/api/status` with the `x-api-key` header from the `WEBHOOK_API_KEY` GitHub secret.
+- Asserts `service.commit` matches the latest `master` SHA (catches stale deploys).
+- Optionally asserts each dependency in `PRODUCTION_REQUIRE_READY_DEPS` is `ready: true`.
+
+Configure the probe via GitHub repository variables (no application-owned env vars required):
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `PRODUCTION_BASE_URL` | `https://cabros-bot-production.up.railway.app` | Probe target. |
+| `PRODUCTION_REQUIRE_READY_DEPS` | empty | Comma-separated dependency names that must be ready (e.g. `tradingViewMcp,firestore`). |
+| `PRODUCTION_PROBE_TIMEOUT` | `15` | Per-request curl timeout (seconds). |
+
+Configure the probe via GitHub repository secrets:
+
+| Secret | Purpose |
+| --- | --- |
+| `WEBHOOK_API_KEY` | Sent via the `x-api-key` header. Never appears in URLs, logs, or job summaries. |
+| `TELEGRAM_BOT_TOKEN` | (Optional) Enables admin paging on persistent failures. |
+| `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID` | (Optional) Target chat id for admin paging. |
+
+Exit codes:
+
+- `0` — probe succeeded
+- `2` — `AUTH_BLOCKED` (missing `WEBHOOK_API_KEY`) or `SECRET_LEAK` (credentials in URL)
+- `3` — `/healthcheck` non-200
+- `4` — `/api/status` request failed or returned non-JSON
+- `5` — `service.commit` does not match the expected SHA (stale deploy)
+- `6` — at least one required dependency is not ready
+
+Run locally for debugging:
+
+```bash
+WEBHOOK_API_KEY=$YOUR_KEY \
+PRODUCTION_BASE_URL=https://cabros-bot-production.up.railway.app \
+PRODUCTION_EXPECTED_COMMIT=$(git rev-parse origin/master) \
+ops/production-smoke-probe.sh
 ```
 
 ### Logs

@@ -5,6 +5,8 @@ jest.mock('../../src/services/storage/AlertStorageService', () => ({
 	listAlerts: jest.fn(),
 	getAlertById: jest.fn(),
 	saveReplayAttempt: jest.fn(),
+	listReplayAttempts: jest.fn(),
+	getLatestReplayForAlert: jest.fn(),
 	summarizeAlerts: jest.fn(),
 	exportAlerts: jest.fn(),
 	STORAGE_UNAVAILABLE_CODE: 'STORAGE_UNAVAILABLE',
@@ -53,6 +55,8 @@ describe('Alerts API Integration Tests', () => {
 		alertHandler.initializeNotificationServices.mockResolvedValue(mockNotificationManager);
 		alertStorageService.isEnabled.mockReturnValue(true);
 		alertStorageService.saveReplayAttempt.mockResolvedValue('replay-1');
+		alertStorageService.listReplayAttempts.mockResolvedValue({ replays: [], hasMore: false, nextBefore: null });
+		alertStorageService.getLatestReplayForAlert.mockResolvedValue(null);
 		signalOutcomeService.isEnabled.mockReturnValue(false);
 		signalOutcomeService.getMetricsSummary.mockResolvedValue('No measurements found');
 		const { parseAlertPaginationCursor: actualParseCursor } = jest.requireActual('../../src/services/storage/alertPaginationCursor');
@@ -598,6 +602,7 @@ describe('Alerts API Integration Tests', () => {
 				source: 'webhook',
 				useTradingViewData: true,
 			},
+			lastReplay: null,
 		});
 	});
 
@@ -728,5 +733,173 @@ describe('Alerts API Integration Tests', () => {
 			error: 'Unknown channel(s): slack. Valid channels: telegram, whatsapp, discord.',
 			code: 'INVALID_REQUEST',
 		});
+	});
+
+	it('returns 403 when GET /api/alerts/replays has storage disabled', async () => {
+		alertStorageService.isEnabled.mockReturnValue(false);
+
+		const res = await request(app)
+			.get('/api/alerts/replays')
+			.set('x-api-key', 'test-key')
+			.expect(403);
+
+		expect(res.body).toEqual({
+			error: 'Alert storage feature is disabled. Set ENABLE_FIRESTORE_ALERT_STORAGE=true to enable.',
+			code: 'FEATURE_DISABLED',
+		});
+		expect(alertStorageService.listReplayAttempts).not.toHaveBeenCalled();
+	});
+
+	it('returns bounded replay records with safe fields and pagination', async () => {
+		const replayRecord = {
+			id: '1234_uuid',
+			alertId: 'alert-1',
+			idempotencyKeyHashPrefix: 'abcdef012345',
+			channels: ['telegram'],
+			deliverySummary: [
+				{ channel: 'telegram', success: true, messageId: 'tg-1' },
+			],
+			replayedAt: '2026-06-06T12:34:56.000Z',
+			attemptId: '1234_uuid',
+		};
+		alertStorageService.listReplayAttempts.mockResolvedValue({
+			replays: [replayRecord],
+			hasMore: false,
+			nextBefore: null,
+		});
+
+		const res = await request(app)
+			.get('/api/alerts/replays?limit=10')
+			.set('x-api-key', 'test-key')
+			.expect(200);
+
+		expect(alertStorageService.listReplayAttempts).toHaveBeenCalledWith({
+			limit: 10,
+			alertId: undefined,
+			before: undefined,
+		});
+		expect(res.body).toEqual({
+			success: true,
+			replays: [replayRecord],
+			pagination: { hasMore: false, limit: 10, nextBefore: null },
+		});
+	});
+
+	it('passes alertId filter through to listReplayAttempts', async () => {
+		alertStorageService.listReplayAttempts.mockResolvedValue({
+			replays: [],
+			hasMore: false,
+			nextBefore: null,
+		});
+
+		await request(app)
+			.get('/api/alerts/replays?alertId=alert-42&limit=5')
+			.set('x-api-key', 'test-key')
+			.expect(200);
+
+		expect(alertStorageService.listReplayAttempts).toHaveBeenCalledWith({
+			limit: 5,
+			alertId: 'alert-42',
+			before: undefined,
+		});
+	});
+
+	it('passes the replay before cursor through to listReplayAttempts', async () => {
+		const before = encodeAlertPaginationCursor({
+			receivedAt: '2026-06-06T12:34:56.000Z',
+			id: 'alert-1_replayhash_1234',
+		});
+
+		await request(app)
+			.get(`/api/alerts/replays?before=${encodeURIComponent(before)}`)
+			.set('x-api-key', 'test-key')
+			.expect(200);
+
+		expect(alertStorageService.listReplayAttempts).toHaveBeenCalledWith({
+			limit: 50,
+			alertId: undefined,
+			before,
+		});
+	});
+
+	it('returns 400 for invalid limit on GET /api/alerts/replays', async () => {
+		const res = await request(app)
+			.get('/api/alerts/replays?limit=999')
+			.set('x-api-key', 'test-key')
+			.expect(400);
+
+		expect(res.body.code).toBe('INVALID_REQUEST');
+		expect(alertStorageService.listReplayAttempts).not.toHaveBeenCalled();
+	});
+
+	it('returns 503 when GET /api/alerts/replays hits storage unavailable', async () => {
+		const storageError = new Error('Firestore down');
+		storageError.code = 'STORAGE_UNAVAILABLE';
+		alertStorageService.listReplayAttempts.mockRejectedValue(storageError);
+
+		const res = await request(app)
+			.get('/api/alerts/replays')
+			.set('x-api-key', 'test-key')
+			.expect(503);
+
+		expect(res.body).toEqual({
+			error: 'Firestore down',
+			code: 'STORAGE_UNAVAILABLE',
+		});
+	});
+
+	it('includes lastReplay on GET /api/alerts/:alertId when a replay exists', async () => {
+		const alertRecord = {
+			id: 'alert-1',
+			receivedAt: '2026-06-06T12:00:00.000Z',
+			text: 'Hello',
+			enriched: false,
+			enrichmentData: null,
+			tokenUsage: null,
+			deliveryResults: [],
+			source: 'webhook',
+			useTradingViewData: false,
+		};
+		const lastReplay = {
+			id: 'ts_uuid',
+			alertId: 'alert-1',
+			idempotencyKeyHashPrefix: 'abcdef012345',
+			channels: ['telegram'],
+			deliverySummary: [{ channel: 'telegram', success: true }],
+			replayedAt: '2026-06-06T12:34:56.000Z',
+			attemptId: 'ts_uuid',
+		};
+		alertStorageService.getAlertById.mockResolvedValue(alertRecord);
+		alertStorageService.getLatestReplayForAlert.mockResolvedValue(lastReplay);
+
+		const res = await request(app)
+			.get('/api/alerts/alert-1')
+			.set('x-api-key', 'test-key')
+			.expect(200);
+
+		expect(res.body.alert).toEqual(alertRecord);
+		expect(res.body.lastReplay).toEqual(lastReplay);
+	});
+
+	it('omits lastReplay on GET /api/alerts/:alertId when no replay exists', async () => {
+		alertStorageService.getAlertById.mockResolvedValue({
+			id: 'alert-2',
+			receivedAt: '2026-06-06T12:00:00.000Z',
+			text: 'Hello',
+			enriched: false,
+			enrichmentData: null,
+			tokenUsage: null,
+			deliveryResults: [],
+			source: 'webhook',
+			useTradingViewData: false,
+		});
+		alertStorageService.getLatestReplayForAlert.mockResolvedValue(null);
+
+		const res = await request(app)
+			.get('/api/alerts/alert-2')
+			.set('x-api-key', 'test-key')
+			.expect(200);
+
+		expect(res.body.lastReplay).toBeNull();
 	});
 });

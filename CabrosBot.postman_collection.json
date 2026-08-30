@@ -21,6 +21,11 @@
       "type": "string"
     },
     {
+      "key": "replayBefore",
+      "value": "eyJ2IjoxLCJyZWNlaXZlZEF0IjoiMjAyNi0wNi0wNlQxMjozNDo1Ni4wMDBaIiwiaWQiOiJhbGVydC0xX2hhc2hfdHNfdXVpZCJ9",
+      "type": "string"
+    },
+    {
       "key": "jobCreateIdempotencyKey",
       "value": "job-create-001",
       "type": "string"
@@ -2088,6 +2093,150 @@
           ]
         },
         {
+          "name": "GET List Replay Attempts",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/replays?limit=50",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "replays"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "50"
+                },
+                {
+                  "key": "alertId",
+                  "value": "{{alertId}}",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Lists bounded alert-replay audit records (alertReplays collection). Each replay creates a unique document so retries with the same idempotency key are preserved as history rather than overwritten. Raw idempotency keys and internal document IDs are never returned; only an opaque attempt ID and SHA-256 hash prefix are exposed."
+          },
+          "response": [
+            {
+              "name": "200 OK - Replay attempts list",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"success\": true,\n  \"replays\": [\n    {\n      \"id\": \"1700000000000_5b1f0c79-9f0b-4d6e-9b1f-3b8c0e6a5f1a\",\n      \"alertId\": \"alert-123\",\n      \"idempotencyKeyHashPrefix\": \"06bdeddf2a29\",\n      \"attemptId\": \"1700000000000_5b1f0c79-9f0b-4d6e-9b1f-3b8c0e6a5f1a\",\n      \"channels\": [\"telegram\"],\n      \"deliverySummary\": [\n        {\n          \"channel\": \"telegram\",\n          \"success\": true,\n          \"messageId\": \"tg-msg-123\"\n        }\n      ],\n      \"replayedAt\": \"2026-06-06T12:34:56.000Z\"\n    }\n  ],\n  \"pagination\": {\n    \"hasMore\": false,\n    \"limit\": 50,\n    \"nextBefore\": null\n  }\n}"
+            },
+            {
+              "name": "200 OK - Filtered to a single alertId",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"success\": true,\n  \"replays\": [\n    {\n      \"id\": \"1700000000000_bbbbbbbb-cccc-dddd-eeee-ffffffffffff\",\n      \"alertId\": \"alert-123\",\n      \"idempotencyKeyHashPrefix\": \"aaaaaaaaaaaa\",\n      \"attemptId\": \"1700000000000_bbbbbbbb-cccc-dddd-eeee-ffffffffffff\",\n      \"channels\": [\"whatsapp\"],\n      \"deliverySummary\": [\n        {\n          \"channel\": \"whatsapp\",\n          \"success\": false,\n          \"errorCode\": \"TIMEOUT\",\n          \"statusCode\": 504\n        }\n      ],\n      \"replayedAt\": \"2026-06-06T13:00:00.000Z\"\n    }\n  ],\n  \"pagination\": {\n    \"hasMore\": false,\n    \"limit\": 50,\n    \"nextBefore\": null\n  }\n}"
+            },
+            {
+              "name": "403 FEATURE_DISABLED - storage disabled",
+              "status": "Forbidden",
+              "code": 403,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"error\": \"Alert storage feature is disabled. Set ENABLE_FIRESTORE_ALERT_STORAGE=true to enable.\",\n  \"code\": \"FEATURE_DISABLED\"\n}"
+            },
+            {
+              "name": "503 STORAGE_UNAVAILABLE - Firestore read failed",
+              "status": "Service Unavailable",
+              "code": 503,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"error\": \"Alert storage is enabled but Firestore is unavailable. Check Firestore credentials and project configuration.\",\n  \"code\": \"STORAGE_UNAVAILABLE\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET List Replay Attempts (before cursor)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/replays?limit=50&before={{replayBefore}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "replays"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "50"
+                },
+                {
+                  "key": "before",
+                  "value": "{{replayBefore}}"
+                }
+              ]
+            },
+            "description": "Continue a replay-history read with the nextBefore cursor returned by a previous page."
+          }
+        },
+        {
+          "name": "GET List Replay Attempts (invalid input)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/replays?limit=999&before=not-a-cursor",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "replays"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "999"
+                },
+                {
+                  "key": "before",
+                  "value": "not-a-cursor"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "400 INVALID_REQUEST - invalid limit and cursor",
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"error\": \"Invalid limit. Use an integer between 1 and 100.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
+        },
+        {
           "name": "GET Alert Analytics Summary (risk coverage)",
           "request": {
             "method": "GET",
@@ -2632,7 +2781,15 @@
                 "{{alertId}}"
               ]
             }
-          }
+          },
+          "response": [
+            {
+              "name": "200 OK - Stored alert with latest replay",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"alert\": {\n    \"id\": \"{{alertId}}\",\n    \"text\": \"BTC alert\"\n  },\n  \"lastReplay\": null\n}"
+            }
+          ]
         },
         {
           "name": "POST Replay Alert (telegram)",
@@ -2720,7 +2877,7 @@
               },
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"alertId\": \"alert-123\",\n  \"replayId\": \"alert-123_06bdeddf2a292e8940d24fb2847d88234dc85d7cd751d4cc7dbc471692aadf38\",\n  \"results\": [\n    { \"channel\": \"telegram\", \"success\": true, \"messageId\": \"123\" }\n  ]\n}"
+              "body": "{\n  \"success\": true,\n  \"alertId\": \"alert-123\",\n  \"replayId\": \"alert-123_06bdeddf2a292e8940d24fb2847d88234dc85d7cd751d4cc7dbc471692aadf38_1700000000000_5b1f0c79-9f0b-4d6e-9b1f-3b8c0e6a5f1a\",\n  \"results\": [\n    { \"channel\": \"telegram\", \"success\": true, \"messageId\": \"123\" }\n  ]\n}"
             },
             {
               "name": "Missing idempotency key",
@@ -2847,7 +3004,7 @@
               "name": "Success (market-scanner replay)",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"alertId\": \"scanner-doc-456\",\n  \"replayId\": \"scanner-doc-456_06bdeddf2a292e8940d24fb2847d88234dc85d7cd751d4cc7dbc471692aadf38\",\n  \"results\": [\n    { \"channel\": \"telegram\", \"success\": true, \"messageId\": \"replay-msg-1\" }\n  ]\n}"
+              "body": "{\n  \"success\": true,\n  \"alertId\": \"scanner-doc-456\",\n  \"replayId\": \"scanner-doc-456_06bdeddf2a292e8940d24fb2847d88234dc85d7cd751d4cc7dbc471692aadf38_1700000000000_5b1f0c79-9f0b-4d6e-9b1f-3b8c0e6a5f1a\",\n  \"results\": [\n    { \"channel\": \"telegram\", \"success\": true, \"messageId\": \"replay-msg-1\" }\n  ]\n}"
             }
           ]
         },
@@ -2895,7 +3052,7 @@
               "name": "Success (expanded-analysis replay)",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"alertId\": \"expanded-doc-789\",\n  \"replayId\": \"expanded-doc-789_06bdeddf2a292e8940d24fb2847d88234dc85d7cd751d4cc7dbc471692aadf38\",\n  \"results\": [\n    { \"channel\": \"telegram\", \"success\": true, \"messageId\": \"replay-msg-2\" }\n  ]\n}"
+              "body": "{\n  \"success\": true,\n  \"alertId\": \"expanded-doc-789\",\n  \"replayId\": \"expanded-doc-789_06bdeddf2a292e8940d24fb2847d88234dc85d7cd751d4cc7dbc471692aadf38_1700000000000_5b1f0c79-9f0b-4d6e-9b1f-3b8c0e6a5f1a\",\n  \"results\": [\n    { \"channel\": \"telegram\", \"success\": true, \"messageId\": \"replay-msg-2\" }\n  ]\n}"
             }
           ]
         },
@@ -2943,7 +3100,7 @@
               "name": "Success (x-idempotency-key header)",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"alertId\": \"alert-123\",\n  \"replayId\": \"alert-123_06bdeddf2a292e8940d24fb2847d88234dc85d7cd751d4cc7dbc471692aadf38\",\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"123\"\n    }\n  ]\n}",
+              "body": "{\n  \"success\": true,\n  \"alertId\": \"alert-123\",\n  \"replayId\": \"alert-123_06bdeddf2a292e8940d24fb2847d88234dc85d7cd751d4cc7dbc471692aadf38_1700000000000_5b1f0c79-9f0b-4d6e-9b1f-3b8c0e6a5f1a\",\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"123\"\n    }\n  ]\n}",
               "originalRequest": {
                 "method": "POST",
                 "header": [
@@ -2991,7 +3148,7 @@
                   "value": "true"
                 }
               ],
-              "body": "{\n  \"success\": true,\n  \"alertId\": \"alert-123\",\n  \"replayId\": \"alert-123_06bdeddf2a292e8940d24fb2847d88234dc85d7cd751d4cc7dbc471692aadf38\",\n  \"idempotencyReplayed\": true,\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"123\"\n    }\n  ]\n}",
+              "body": "{\n  \"success\": true,\n  \"alertId\": \"alert-123\",\n  \"replayId\": \"alert-123_06bdeddf2a292e8940d24fb2847d88234dc85d7cd751d4cc7dbc471692aadf38_1700000000000_5b1f0c79-9f0b-4d6e-9b1f-3b8c0e6a5f1a\",\n  \"idempotencyReplayed\": true,\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"123\"\n    }\n  ]\n}",
               "originalRequest": {
                 "method": "POST",
                 "header": [
