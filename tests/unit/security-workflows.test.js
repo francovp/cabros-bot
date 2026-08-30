@@ -24,6 +24,7 @@ describe('security workflows', () => {
 
     expect(config).toContain('render\\.yaml');
     expect(config).toMatch(/AIzaSyDskGc5b0hpVX6YIUW-IYqwuH7_ZIP07O0/);
+    expect(config).toContain('condition = "AND"');
   });
 
   it.each(['node.js.yml', 'env-drift-check.yml'])(
