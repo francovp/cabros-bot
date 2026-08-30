@@ -18,6 +18,7 @@ const geminiQuotaManager = require('../services/grounding/geminiQuotaManager');
 const groundingMetrics = require('../services/grounding/metrics');
 const { signalRepeatCooldown } = require('../services/alerts/signalRepeatCooldown');
 const { getCoalescingStatus } = require('../services/grounding/grounding');
+const telegramCommandAuth = require('../lib/telegramCommandAuth');
 const {
 	getDeploymentCommit,
 	isPreviewEnvironment,
@@ -352,6 +353,7 @@ function getStatus() {
 			notificationRedrive: notificationRedriveService.isEnabled(),
 			alertSignalRepeatSuppression: signalRepeatCooldown.isEnabled(),
 			whatsappCommands: whatsAppCommandBridgeService.isEnabled(),
+			telegramCommandAuth: telegramCommandAuth.getStatus().enabled,
 		},
 		deliveryChannels: {
 			telegram: {
@@ -421,6 +423,7 @@ function getStatus() {
 			},
 			jobExecutionQueue: jobExecutionQueueStatus,
 			binanceTrading: binanceTradingStatus,
+			telegramCommandAuth: telegramCommandAuth.getStatus(),
 		},
 	};
 }
