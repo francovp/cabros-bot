@@ -181,6 +181,9 @@ function buildChunkResumeOptions(claimed, channel) {
 	}
 	const resume = claimed.chunkResume;
 	if (!resume || !Number.isInteger(resume.resumeFromChunk)) {
+		if (claimed.chunkResume === undefined) {
+			console.warn(`[NotificationRedriveService] Legacy dead-letter ${claimed.id} has no chunk metadata; replaying the full message`);
+		}
 		return {};
 	}
 	if (!Number.isInteger(resume.splitMessageCount) || resume.splitMessageCount <= 1) {
@@ -599,7 +602,7 @@ class NotificationRedriveService {
 		return true;
 	}
 
-	async markRetry(recordId, attemptCount, lastError, lastStatusCode) {
+	async markRetry(recordId, attemptCount, lastError, lastStatusCode, chunkResume) {
 		const nowMs = Date.now();
 		const nowDate = new Date(nowMs);
 		const backoffMs = calculateBackoffMs(attemptCount);
@@ -614,6 +617,7 @@ class NotificationRedriveService {
 			updatedAt: toTimestamp(nowDate),
 			workerId: null,
 			leaseUntil: null,
+			...(chunkResume !== undefined ? { chunkResume } : {}),
 		};
 
 		const sanitized = stripUndefinedFieldsDeep(updateData);
@@ -1133,6 +1137,7 @@ class NotificationRedriveService {
 						const nextAttempts = (claimed.attemptCount || 0) + 1;
 						const lastErr = channelResult?.error || 'Redrive attempt failed';
 						const lastCode = channelResult?.statusCode || null;
+						const chunkResume = extractChunkResumeContext(channelResult) || claimed.chunkResume;
 
 						if (nextAttempts >= maxAttempts) {
 							releaseRepeatCooldown(claimed);
@@ -1140,6 +1145,7 @@ class NotificationRedriveService {
 								lastError: String(lastErr),
 								lastStatusCode: lastCode,
 								attemptCount: nextAttempts,
+								chunkResume,
 							});
 							this.totalExhaustedCount += 1;
 							trackBackgroundTask(this.notifyAdminPermanentFailure({
@@ -1149,7 +1155,7 @@ class NotificationRedriveService {
 							}, 'Exhausted maximum retry attempts')).catch(() => {});
 							errorCount += 1;
 						} else {
-							await this.markRetry(claimed.id, nextAttempts, lastErr, lastCode);
+							await this.markRetry(claimed.id, nextAttempts, lastErr, lastCode, chunkResume);
 							errorCount += 1;
 						}
 					}

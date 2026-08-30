@@ -1278,6 +1278,58 @@ describe('NotificationRedriveService', () => {
 			expect(whatsappSend.mock.calls[0][1]).toMatchObject({ startChunk: 2, isRedrive: true });
 		});
 
+		it('advances the resume point after a later redrive chunk fails', async () => {
+			const whatsappSend = jest.fn()
+				.mockResolvedValueOnce({
+					success: false,
+					channel: 'whatsapp',
+					error: 'Part 4 failed',
+					statusCode: 502,
+					messageIds: ['msg-c'],
+					messageCount: 1,
+					splitMessageCount: 5,
+					failedPart: 4,
+				})
+				.mockResolvedValueOnce({
+					success: true,
+					channel: 'whatsapp',
+					messageIds: ['msg-d', 'msg-e'],
+					messageCount: 2,
+					splitMessageCount: 5,
+				});
+			const notificationManager = {
+				channels: new Map([['whatsapp', { name: 'whatsapp', send: whatsappSend, isEnabled: () => true }]]),
+				sendToChannels: jest.fn(async (payload, channels, opts) => [{
+					channel: channels[0],
+					...(await whatsappSend(payload, opts)),
+				}]),
+			};
+			service.setNotificationManagerGetter(() => notificationManager);
+
+			await service.recordDeliveryResults(
+				{ text: 'Chunked', correlationId: 'corr-resume-progress' },
+				[{
+					channel: 'whatsapp',
+					success: false,
+					error: 'Part 3 failed',
+					statusCode: 502,
+					messageIds: ['msg-a', 'msg-b'],
+					messageCount: 2,
+					splitMessageCount: 5,
+					failedPart: 3,
+				}],
+			);
+
+			service.inMemoryStore.get('corr-resume-progress_whatsapp').nextAttemptAt = Date.now() - 1000;
+			await service.sweep();
+			service.inMemoryStore.get('corr-resume-progress_whatsapp').nextAttemptAt = Date.now() - 1000;
+			await service.sweep();
+
+			expect(whatsappSend.mock.calls).toHaveLength(2);
+			expect(whatsappSend.mock.calls[0][1]).toMatchObject({ startChunk: 2, isRedrive: true });
+			expect(whatsappSend.mock.calls[1][1]).toMatchObject({ startChunk: 3, isRedrive: true });
+		});
+
 		it('does not pass startChunk on legacy dead-letter records without chunk metadata', async () => {
 			const whatsappSend = jest.fn().mockResolvedValue({
 				success: true,
@@ -1304,7 +1356,6 @@ describe('NotificationRedriveService', () => {
 				alert: { text: 'Legacy alert' },
 				attemptCount: 0,
 				lastError: 'Legacy failure',
-				chunkResume: null,
 				createdAt: { toDate: () => new Date(nowMs - 60000) },
 				updatedAt: { toDate: () => new Date(nowMs - 60000) },
 				nextAttemptAt: { toDate: () => new Date(nowMs - 1000) },
@@ -1317,7 +1368,13 @@ describe('NotificationRedriveService', () => {
 			});
 			alertStorageService.getFirestore.mockReturnValue(mockFirestore);
 
-			await service.sweep();
+			const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+			try {
+				await service.sweep();
+				expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Legacy dead-letter legacy_whatsapp'));
+			} finally {
+				warnSpy.mockRestore();
+			}
 
 			expect(whatsappSend).toHaveBeenCalledTimes(1);
 			expect(whatsappSend.mock.calls[0][1]).not.toHaveProperty('startChunk');
