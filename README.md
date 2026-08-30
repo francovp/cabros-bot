@@ -1867,7 +1867,7 @@ SENTRY_CONSOLE_LOG_LEVELS=warn,error
 
 ## News Monitoring & Event Detection
 
-**📖 [Full Quickstart specs/003-news-monitor/quickstart.md(Guide] Complete setup instructions, API reference, and advanced configuration.)** 
+**📖 [Full Quickstart Guide](specs/003-news-monitor/quickstart.md)** — Complete setup instructions, API reference, and advanced configuration.
 
 **🔄 [Scheduled Monitoring Example](.github/workflows/news-monitor-cron.yml.example)** — GitHub Actions workflow for periodic symbol analysis.
 
