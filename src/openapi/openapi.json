@@ -2809,7 +2809,8 @@
                     "queueDepth": 0,
                     "acquiredTotal": 0,
                     "shedTotal": 0,
-                    "timeoutTotal": 0
+                    "timeoutTotal": 0,
+                    "abortedTotal": 0
                   },
                   "metrics": {
                     "totalRequests": 0,

@@ -156,6 +156,21 @@ class GenaiClient {
 			throw signal.reason || new Error('Grounding timeout');
 		}
 
+		// Acquire a process-wide LLM concurrency slot so search calls respect
+		// the same cross-surface cap as llmCall().
+		const releaseGate = await llmConcurrencyGate.acquire({ signal });
+		// Recheck cooldown after acquire - another queued caller may have
+		// observed a 429 and opened the cooldown while we were waiting.
+		if (geminiQuotaManager.isCooldownActive()) {
+			releaseGate();
+			const remainingMs = geminiQuotaManager.getRemainingCooldownMs();
+			const error = new Error(`Gemini quota cooldown active (${remainingMs}ms remaining)`);
+			error.code = 'GEMINI_QUOTA_EXHAUSTED';
+			error.status = 429;
+			error.retryDelay = remainingMs;
+			throw error;
+		}
+
 		let abortCleanup = null;
 		let generatePromise = this.genAI.models.generateContent({
 			model: model,
@@ -176,8 +191,10 @@ class GenaiClient {
 		try {
 			result = await generatePromise;
 			if (abortCleanup) abortCleanup();
+			releaseGate();
 		} catch (error) {
 			if (abortCleanup) abortCleanup();
+			releaseGate();
 			throw error;
 		}
 
@@ -346,7 +363,21 @@ class GenaiClient {
 		// Acquire a process-wide LLM concurrency slot before contacting the
 		// provider. Shed / queue-timeout failures are typed errors callers
 		// catch and fail-open into the un-enriched path.
-		const releaseGate = await llmConcurrencyGate.acquire({ timeoutMs: opts.gateTimeoutMs });
+		const releaseGate = await llmConcurrencyGate.acquire({
+			timeoutMs: opts.gateTimeoutMs,
+			signal,
+		});
+		// Recheck cooldown after acquire - another queued caller may have
+		// observed a 429 and opened the cooldown while we were waiting.
+		if (geminiQuotaManager.isCooldownActive()) {
+			releaseGate();
+			const remainingMs = geminiQuotaManager.getRemainingCooldownMs();
+			const error = new Error(`Gemini quota cooldown active (${remainingMs}ms remaining)`);
+			error.code = 'GEMINI_QUOTA_EXHAUSTED';
+			error.status = 429;
+			error.retryDelay = remainingMs;
+			throw error;
+		}
 
 		let abortCleanup = null;
 		let generatePromise = this.genAI.models.generateContent({

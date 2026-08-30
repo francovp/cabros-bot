@@ -169,3 +169,82 @@ describe('LlmConcurrencyGate', () => {
 		expect(gate.getSnapshot().queueDepth).toBe(0);
 	});
 });
+
+describe('LlmConcurrencyGate - review feedback', () => {
+	let g;
+
+	beforeEach(() => {
+		jest.useFakeTimers();
+		g = new LlmConcurrencyGate();
+	});
+
+	afterEach(() => {
+		g.resetForTesting();
+		jest.clearAllTimers();
+		jest.useRealTimers();
+	});
+
+	it('accepts the unbounded sentinel and resets to Infinity', () => {
+		g.configure({ maxConcurrent: 5, queueTimeoutMs: 50 });
+		expect(g.maxConcurrent).toBe(5);
+		g.configure({ maxConcurrent: Infinity });
+		expect(g.maxConcurrent).toBe(Number.POSITIVE_INFINITY);
+		g.configure({ maxConcurrent: null });
+		expect(g.maxConcurrent).toBe(Number.POSITIVE_INFINITY);
+		g.configure({ maxConcurrent: undefined });
+		expect(g.maxConcurrent).toBe(Number.POSITIVE_INFINITY);
+		g.configure({ maxConcurrent: '' });
+		expect(g.maxConcurrent).toBe(Number.POSITIVE_INFINITY);
+	});
+
+	it('cancels queued acquisition when the caller signal aborts', async () => {
+		g.configure({ maxConcurrent: 1, queueTimeoutMs: 5000 });
+		await g.acquire();
+		const controller = new AbortController();
+		const queuedPromise = g.acquire({ signal: controller.signal });
+		const settled = queuedPromise.catch((error) => error);
+		controller.abort(new Error('caller-deadline'));
+		const error = await settled;
+		expect(error).toMatchObject({ code: 'LLM_GATE_ABORTED' });
+		expect(g.getSnapshot().abortedTotal).toBe(1);
+		expect(g.getSnapshot().queueDepth).toBe(0);
+	});
+
+	it('rejects immediately when caller signal is already aborted before queueing', async () => {
+		g.configure({ maxConcurrent: 1, queueTimeoutMs: 5000 });
+		await g.acquire();
+		const controller = new AbortController();
+		controller.abort(new Error('already-dead'));
+		await expect(g.acquire({ signal: controller.signal })).rejects.toMatchObject({
+			code: 'LLM_GATE_ABORTED',
+		});
+		expect(g.getSnapshot().abortedTotal).toBe(1);
+		expect(g.getSnapshot().queueDepth).toBe(0);
+	});
+
+	it('skips already-aborted waiters during drain', async () => {
+		g.configure({ maxConcurrent: 1, queueTimeoutMs: 5000 });
+		const release = await g.acquire();
+		const c1 = new AbortController();
+		const c2 = new AbortController();
+		const w1 = g.acquire({ signal: c1.signal });
+		const w2 = g.acquire({ signal: c2.signal });
+		const s1 = w1.catch((e) => e);
+		const s2 = w2.catch((e) => e);
+		// Abort w1 before releasing the slot. w1 should be rejected; w2 should drain.
+		c1.abort(new Error('abort-1'));
+		const err1 = await s1;
+		expect(err1).toMatchObject({ code: 'LLM_GATE_ABORTED' });
+		release();
+		await Promise.resolve();
+		await Promise.resolve();
+		const r2 = await w2;
+		expect(typeof r2).toBe('function');
+		r2();
+	});
+
+	it('exposes abortedTotal in the snapshot', () => {
+		const snap = g.getSnapshot();
+		expect(snap.abortedTotal).toBe(0);
+	});
+});

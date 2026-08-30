@@ -160,6 +160,7 @@ describe('Status endpoints', () => {
 				acquiredTotal: 0,
 				shedTotal: 0,
 				timeoutTotal: 0,
+				abortedTotal: 0,
 			},
 			metrics: {
 				totalRequests: 0,
@@ -778,6 +779,7 @@ describe('Status endpoints', () => {
 				acquiredTotal: 0,
 				shedTotal: 0,
 				timeoutTotal: 0,
+				abortedTotal: 0,
 			},
 			metrics: {
 				totalRequests: 2,
@@ -820,6 +822,7 @@ describe('Status endpoints', () => {
 				acquiredTotal: 0,
 				shedTotal: 0,
 				timeoutTotal: 0,
+				abortedTotal: 0,
 			},
 			metrics: {
 				totalRequests: 0,
