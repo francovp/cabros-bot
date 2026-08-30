@@ -307,6 +307,11 @@ function getStatus() {
 		signalOutcomeWorkerDependency.status = 'disabled';
 	}
 
+	const webhookAuth = dependencyStatus({
+		enabled: true,
+		configured: hasValue(process.env.WEBHOOK_API_KEY),
+	});
+
 	return {
 		service: {
 			name: process.env.SERVICE_NAME || packageJson.name || 'cabros-bot',
@@ -364,6 +369,7 @@ function getStatus() {
 			telegram,
 			whatsapp,
 			discord,
+			webhookAuth,
 			whatsappCommandBridge: whatsAppCommandBridgeService.getStatus(),
 			gemini,
 			geminiQuota,

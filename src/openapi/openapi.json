@@ -3698,6 +3698,55 @@
               "riskMetadataCoverage": {
                 "$ref": "#/components/schemas/RiskMetadataCoverage"
               },
+              "evidenceCoverage": {
+                "type": "object",
+                "description": "Tracks whether enriched alerts cited grounding sources. Denominator counts only enriched alerts; legacy records missing a sources field count as zero. Grouped by prompt provenance (Langfuse vs. local fallback) for regression attribution.",
+                "properties": {
+                  "denominator": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Number of enriched alerts included in this coverage window."
+                  },
+                  "zeroSources": {
+                    "type": "object",
+                    "properties": {
+                      "populated": { "type": "integer", "minimum": 0 },
+                      "percentage": { "type": "number", "minimum": 0, "maximum": 100 }
+                    }
+                  },
+                  "oneToTwoSources": {
+                    "type": "object",
+                    "properties": {
+                      "populated": { "type": "integer", "minimum": 0 },
+                      "percentage": { "type": "number", "minimum": 0, "maximum": 100 }
+                    }
+                  },
+                  "threePlusSources": {
+                    "type": "object",
+                    "properties": {
+                      "populated": { "type": "integer", "minimum": 0 },
+                      "percentage": { "type": "number", "minimum": 0, "maximum": 100 }
+                    }
+                  },
+                  "totalSourceCount": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Sum of all source counts across enriched alerts in the window."
+                  },
+                  "averageSourceCount": {
+                    "type": "number",
+                    "minimum": 0,
+                    "description": "Average number of cited sources per enriched alert. 0 when denominator is 0."
+                  },
+                  "byPromptProvenance": {
+                    "type": "array",
+                    "description": "Per-provenance breakdown (Langfuse version, local fallback, etc.) using the same bucket shape.",
+                    "items": {
+                      "$ref": "#/components/schemas/JsonObject"
+                    }
+                  }
+                }
+              },
               "tokenUsage": {
                 "$ref": "#/components/schemas/JsonObject"
               }
