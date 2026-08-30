@@ -16,6 +16,7 @@ const { notificationRedriveService } = require('../services/notification/Notific
 const { whatsAppCommandBridgeService } = require('../services/notification/WhatsAppCommandBridgeService');
 const geminiQuotaManager = require('../services/grounding/geminiQuotaManager');
 const groundingMetrics = require('../services/grounding/metrics');
+const { getCoalescingStatus } = require('../services/grounding/grounding');
 const {
 	getDeploymentCommit,
 	isPreviewEnvironment,
@@ -366,6 +367,7 @@ function getStatus() {
 			whatsappCommandBridge: whatsAppCommandBridgeService.getStatus(),
 			gemini,
 			geminiQuota,
+			groundingCoalescing: getCoalescingStatus(),
 			tradingViewMcp,
 			tradingViewVolumeConfirmation,
 			firestore,
