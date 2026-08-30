@@ -26,6 +26,11 @@ const { listOutcomes, summarizeOutcomes } = require('../controllers/outcomes/out
 const { validateApiKey } = require('../lib/auth');
 const { getApiStatus } = require('../controllers/status');
 const { postBinanceOrder, getBinanceOrders } = require('../controllers/trading/binanceOrders');
+const {
+	postBinancePause,
+	postBinanceResume,
+	getBinancePause,
+} = require('../controllers/trading/binanceTradingControl');
 const { idempotencyMiddleware } = require('../lib/idempotency');
 const {
 	ADMIN_OPERATOR,
@@ -71,6 +76,9 @@ function getRoutes(botOrGetter) {
 	router.post('/jobs/:jobId/retry-failed', ...adminWrite, idempotencyMiddleware, postRetryFailedJob(botOrGetter));
 	router.get('/trading/binance/orders', ...binanceOrderRead, getBinanceOrders);
 	router.post('/trading/binance/orders', ...binanceOrderWrite, idempotencyMiddleware, postBinanceOrder);
+	router.get('/trading/binance/pause', ...binanceOrderRead, getBinancePause);
+	router.post('/trading/binance/pause', ...binanceOrderWrite, idempotencyMiddleware, postBinancePause);
+	router.post('/trading/binance/resume', ...binanceOrderWrite, idempotencyMiddleware, postBinanceResume);
 
 	const { getNewsMonitor } = require('../controllers/webhooks/handlers/newsMonitor/newsMonitor');
 	const newsMonitor = getNewsMonitor();
