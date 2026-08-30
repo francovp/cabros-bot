@@ -71,6 +71,21 @@ describe('Firestore Backup & Export Tooling', () => {
 			expect(serializeValue(undefined)).toBeUndefined();
 		});
 
+		it('preserves ordinary maps with seconds and nanoseconds fields', () => {
+			const duration = { seconds: 12, nanoseconds: 345, label: 'cooldown' };
+
+			expect(serializeValue(duration)).toEqual(duration);
+		});
+
+		it('round-trips non-finite Firestore doubles explicitly', () => {
+			for (const value of [NaN, Infinity, -Infinity]) {
+				const serialized = serializeValue(value);
+
+				expect(serialized).toEqual({ __type: 'Number', value: String(value) });
+				expect(deserializeValue(serialized)).toBe(value);
+			}
+		});
+
 		it('serializes and deserializes Firestore Timestamps with nanosecond precision', () => {
 			const tsWithNanos = {
 				toDate: () => new Date(1234567890123),
@@ -439,6 +454,20 @@ describe('Firestore Backup & Export Tooling', () => {
 			expect(mockBatch.commit).toHaveBeenCalledTimes(2);
 		});
 
+		it('rejects records without a document ID before writing', async () => {
+			const jsonlFile = path.join(tempDir, 'alerts.jsonl');
+			fs.writeFileSync(jsonlFile, JSON.stringify({ text: 'missing id' }) + '\n', 'utf8');
+			const mockBatch = { set: jest.fn(), commit: jest.fn() };
+			const mockFirestore = {
+				batch: jest.fn().mockReturnValue(mockBatch),
+				collection: jest.fn(),
+			};
+
+			await expect(restoreCollectionFile(mockFirestore, 'alerts', jsonlFile)).rejects.toThrow('document ID');
+			expect(mockBatch.set).not.toHaveBeenCalled();
+			expect(mockBatch.commit).not.toHaveBeenCalled();
+		});
+
 		it('supports dry-run mode for restoration without calling Firestore', async () => {
 			const jsonlFile = path.join(tempDir, 'alerts.jsonl');
 			fs.writeFileSync(jsonlFile, JSON.stringify({ _id: 'a1', text: 'Alert' }) + '\n', 'utf8');
@@ -680,6 +709,13 @@ describe('Firestore Backup & Export Tooling', () => {
 	});
 
 	describe('Managed Shell Scripts Validation', () => {
+		it('keeps fallback artifacts longer than the default alert retention window', () => {
+			const workflowPath = path.join(__dirname, '../../.github/workflows/firestore-backup.yml');
+			const content = fs.readFileSync(workflowPath, 'utf8');
+
+			expect(content).toContain('retention-days: 120');
+		});
+
 		it('export-firestore-managed.sh requires project and bucket', () => {
 			const scriptPath = path.join(__dirname, '../../ops/export-firestore-managed.sh');
 			const content = fs.readFileSync(scriptPath, 'utf8');

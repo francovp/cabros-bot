@@ -50,6 +50,13 @@ function serializeValue(val) {
 		return val;
 	}
 
+	if (typeof val === 'number' && !Number.isFinite(val)) {
+		return {
+			__type: 'Number',
+			value: String(val),
+		};
+	}
+
 	if (Buffer.isBuffer(val)) {
 		return {
 			__type: 'Bytes',
@@ -57,8 +64,11 @@ function serializeValue(val) {
 		};
 	}
 
-	// Firestore Timestamp
-	if (typeof val.toMillis === 'function' || (typeof val.seconds === 'number' && typeof val.nanoseconds === 'number') || (val instanceof Date)) {
+	// Firestore Timestamp or JavaScript Date
+	const isFirestoreTimestamp = typeof val.toDate === 'function'
+		&& (typeof val.toMillis === 'function'
+			|| (typeof val.seconds === 'number' && typeof val.nanoseconds === 'number'));
+	if (isFirestoreTimestamp || val instanceof Date) {
 		const seconds = typeof val.seconds === 'number'
 			? val.seconds
 			: (typeof val.toMillis === 'function' ? Math.floor(val.toMillis() / 1000) : Math.floor(val.getTime() / 1000));

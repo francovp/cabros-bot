@@ -65,7 +65,7 @@ jobs:
         with:
           name: firestore-backup-${{ github.run_id }}
           path: ${{ runner.temp }}/firestore-backup/
-          retention-days: 30
+          retention-days: 120
           if-no-files-found: ignore
 
       - name: Notify on failure

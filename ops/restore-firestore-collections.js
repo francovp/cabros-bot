@@ -134,6 +134,10 @@ function deserializeValue(val, firestore) {
 	}
 
 	if (typeof val === 'object') {
+		if (val.__type === 'Number' && ['NaN', 'Infinity', '-Infinity'].includes(val.value)) {
+			return Number(val.value);
+		}
+
 		if (val.__type === 'Bytes' && typeof val.base64 === 'string') {
 			return Buffer.from(val.base64, 'base64');
 		}
@@ -346,7 +350,7 @@ async function restoreCollectionFile(firestore, collectionName, filePath, option
 		const { id, data } = deserializeDocument(parsed, firestore);
 
 		if (!id) {
-			continue;
+			throw new Error(`Backup record missing document ID in ${filePath} at line ${totalRead}`);
 		}
 
 		currentChunk.push({ id, data });
