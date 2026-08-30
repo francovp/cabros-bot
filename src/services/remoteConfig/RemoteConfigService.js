@@ -65,6 +65,10 @@ const PARAMETER_SCHEMA = Object.freeze({
 	ENABLE_ALERT_HTF_RENDER: { type: 'boolean', defaultValue: true },
 	ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION: { type: 'boolean', defaultValue: false },
 	ALERT_SIGNAL_COOLDOWN_BARS: { type: 'number', defaultValue: 1, integer: true, min: 1, max: 10 },
+	ENABLE_USER_PRICE_ALERTS: { type: 'boolean', defaultValue: false },
+	USER_PRICE_ALERT_EVALUATION_INTERVAL_MS: { type: 'number', defaultValue: 60000, integer: true, min: 1000, max: 3600000 },
+	USER_PRICE_ALERT_EVALUATION_BATCH_LIMIT: { type: 'number', defaultValue: 50, integer: true, min: 1, max: 500 },
+	USER_PRICE_ALERT_MAX_PER_CHAT: { type: 'number', defaultValue: 20, integer: true, min: 1, max: 100 },
 });
 
 let remoteOverrides = {};

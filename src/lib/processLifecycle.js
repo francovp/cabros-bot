@@ -82,6 +82,7 @@ function createProcessLifecycle(options = {}) {
 		stopNotificationRedriveWorker = () => undefined,
 		stopWhatsAppCommandBridge = () => undefined,
 		stopScannerPresetScheduler = () => undefined,
+		stopUserPriceAlertWorker = () => undefined,
 		stopRemoteConfig = () => undefined,
 		shutdownNewsMonitor = () => undefined,
 		flushSentry = () => undefined,
@@ -180,6 +181,7 @@ function createProcessLifecycle(options = {}) {
 					safelyRun(logger, 'notification redrive worker', () => stopNotificationRedriveWorker({ drain: true })),
 					safelyRun(logger, 'whatsapp command bridge', () => stopWhatsAppCommandBridge({ drain: true })),
 					safelyRun(logger, 'scanner preset scheduler', () => stopScannerPresetScheduler({ drain: true })),
+					safelyRun(logger, 'user price alert worker', () => stopUserPriceAlertWorker({ drain: true })),
 					safelyRun(logger, 'remote config service', stopRemoteConfig),
 					safelyRun(logger, 'news monitor cache', shutdownNewsMonitor),
 				]);

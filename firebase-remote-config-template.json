@@ -342,6 +342,34 @@
       },
       "description": "Cooldown length in alert-timeframe bars for same-signal repeat suppression",
       "valueType": "NUMBER"
+    },
+    "ENABLE_USER_PRICE_ALERTS": {
+      "defaultValue": {
+        "value": "false"
+      },
+      "description": "Enable Telegram custom user price alerts and background evaluation worker",
+      "valueType": "BOOLEAN"
+    },
+    "USER_PRICE_ALERT_EVALUATION_INTERVAL_MS": {
+      "defaultValue": {
+        "value": "60000"
+      },
+      "description": "Cadence between background user price alert evaluation sweeps in milliseconds",
+      "valueType": "NUMBER"
+    },
+    "USER_PRICE_ALERT_EVALUATION_BATCH_LIMIT": {
+      "defaultValue": {
+        "value": "50"
+      },
+      "description": "Maximum number of armed user price alerts evaluated per sweep",
+      "valueType": "NUMBER"
+    },
+    "USER_PRICE_ALERT_MAX_PER_CHAT": {
+      "defaultValue": {
+        "value": "20"
+      },
+      "description": "Maximum active price alerts allowed per Telegram chat",
+      "valueType": "NUMBER"
     }
   },
   "version": {

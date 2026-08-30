@@ -17,6 +17,7 @@ const { whatsAppCommandBridgeService } = require('../services/notification/Whats
 const geminiQuotaManager = require('../services/grounding/geminiQuotaManager');
 const groundingMetrics = require('../services/grounding/metrics');
 const { signalRepeatCooldown } = require('../services/alerts/signalRepeatCooldown');
+const { userPriceAlertService } = require('../services/alerts/UserPriceAlertService');
 const { getCoalescingStatus } = require('../services/grounding/grounding');
 const {
 	getDeploymentCommit,
@@ -352,6 +353,7 @@ function getStatus() {
 			notificationRedrive: notificationRedriveService.isEnabled(),
 			alertSignalRepeatSuppression: signalRepeatCooldown.isEnabled(),
 			whatsappCommands: whatsAppCommandBridgeService.isEnabled(),
+			userPriceAlerts: userPriceAlertService.isEnabled(),
 		},
 		deliveryChannels: {
 			telegram: {
@@ -397,6 +399,7 @@ function getStatus() {
 			firebaseRemoteConfig: remoteConfigStatus,
 			scannerPresetStorage: scannerPresetService.getStorageStatus(),
 			scannerPresetScheduler: scannerPresetSchedulerService.getStatus(),
+			userPriceAlertWorker: userPriceAlertService.getStatus(),
 			equityMarketData: equityMarketDataStatus,
 			signalOutcomeWorker: {
 				...signalOutcomeWorkerDependency,

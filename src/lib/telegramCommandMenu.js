@@ -1,5 +1,6 @@
 const TELEGRAM_COMMAND_MENU = Object.freeze([
 	{ command: 'precio', description: 'Consulta el precio en Binance o Twelve Data' },
+	{ command: 'alerta', description: 'Configura o gestiona alertas de precio' },
 	{ command: 'cryptobot', description: 'Muestra el Chat ID actual de Telegram' },
 	{ command: 'analisis', description: 'Crea un análisis técnico en TradingView' },
 	{ command: 'scanner', description: 'Escaneo de mercado en TradingView' },
