@@ -347,6 +347,59 @@
         "x-admin-role": "admin.viewer"
       }
     },
+    "/api/alerts/replays": {
+      "get": {
+        "tags": [
+          "Alerts"
+        ],
+        "summary": "List stored alert replay attempts",
+        "description": "Bounded read of the alertReplays audit collection. Each POST /api/alerts/{alertId}/replay creates a unique document so retries with the same idempotency key do not overwrite prior attempts; raw idempotency keys are never returned. Use the optional alertId query to scope the result to a single stored alert.",
+        "operationId": "listReplays",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/AlertListLimit"
+          },
+          {
+            "$ref": "#/components/parameters/Cursor"
+          },
+          {
+            "name": "alertId",
+            "in": "query",
+            "required": false,
+            "description": "Optional stored alert id to filter replay attempts.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/ReplayAttemptList"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      }
+    },
     "/api/alerts/summary": {
       "get": {
         "tags": [
@@ -432,6 +485,14 @@
         "responses": {
           "200": {
             "description": "JSON Lines or CSV export",
+            "headers": {
+              "X-Shadow-Mode-Metrics": {
+                "description": "JSON-encoded shadow-mode outcome metrics payload emitted by SignalOutcomeService.getMetricsSummary(). Returns the string \"No measurements found\" when signal-outcome tracking is disabled or no measurements exist. Object form (when tracking is enabled with data) follows the ShadowModeMetrics schema: coverage buckets, per-window hitRatePercent/targetHitRatePercent/stopHitRatePercent/expectancyR plus drawdown proxy and latency/cost metadata. Omitted when source or enriched filters are supplied because the shadow-mode metrics service has no matching filters.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
             "content": {
               "application/x-ndjson": {
                 "schema": {
@@ -483,7 +544,7 @@
         ],
         "responses": {
           "200": {
-            "$ref": "#/components/responses/JsonResult"
+            "$ref": "#/components/responses/AlertDetailResult"
           },
           "404": {
             "$ref": "#/components/responses/Error"
@@ -660,7 +721,8 @@
             "FirebaseBearerAuth": []
           }
         ],
-        "x-admin-role": "admin.viewer"
+        "x-admin-role": "admin.viewer",
+        "description": "Response includes an ETag header (e.g. ETag: \"3\") that mirrors the preset's monotonic version. Supply it on PUT or DELETE via If-Match to opt into optimistic concurrency."
       },
       "put": {
         "tags": [
@@ -671,6 +733,16 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/PresetId"
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": false,
+            "description": "Optional optimistic-concurrency token (e.g. \"3\"). When present and not equal to the current preset version, the request returns 412 PRECONDITION_FAILED with the current preset so the client can rebase. When omitted, the write succeeds and increments version (backwards-compatible default). A malformed token (e.g. a comma-separated entity-tag list or the wildcard \"*\") returns 400 INVALID_IF_MATCH instead of being silently dropped.",
+            "schema": {
+              "type": "string",
+              "example": "\"3\""
+            }
           }
         ],
         "requestBody": {
@@ -681,10 +753,37 @@
             "$ref": "#/components/responses/ScannerPresetResult"
           },
           "400": {
-            "$ref": "#/components/responses/Error"
+            "description": "Malformed request body, or malformed If-Match header (e.g. a comma-separated entity-tag list or the wildcard \"*\").",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScannerPresetConflictResponse"
+                }
+              }
+            }
           },
           "404": {
             "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "description": "Preset is locked by an in-flight sweep (lockedUntil > now). Response body includes code=PRESET_LOCKED and the lockedUntil timestamp; the current preset is also returned so the client can decide whether to retry.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScannerPresetConflictResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "If-Match version does not match the current preset version. Response body includes code=PRECONDITION_FAILED and the current preset so the client can rebase.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScannerPresetConflictResponse"
+                }
+              }
+            }
           },
           "500": {
             "$ref": "#/components/responses/Error"
@@ -712,14 +811,44 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/PresetId"
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": false,
+            "description": "Optional optimistic-concurrency token (e.g. \"3\"). When present and not equal to the current preset version, the request returns 412 PRECONDITION_FAILED with the current preset so the client can rebase. When omitted, the delete proceeds (backwards-compatible default). A malformed token (e.g. a comma-separated entity-tag list or the wildcard \"*\") returns 400 INVALID_IF_MATCH instead of being silently dropped.",
+            "schema": {
+              "type": "string",
+              "example": "\"3\""
+            }
           }
         ],
         "responses": {
           "200": {
             "$ref": "#/components/responses/ScannerPresetResult"
           },
+          "400": {
+            "description": "Malformed If-Match header. Use a quoted integer such as \"3\" or the weak form W/\"3\".",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScannerPresetConflictResponse"
+                }
+              }
+            }
+          },
           "404": {
             "$ref": "#/components/responses/Error"
+          },
+          "412": {
+            "description": "If-Match version does not match the current preset version. Response body includes code=PRECONDITION_FAILED and the current preset so the client can rebase.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScannerPresetConflictResponse"
+                }
+              }
+            }
           },
           "500": {
             "$ref": "#/components/responses/Error"
@@ -744,7 +873,7 @@
         "tags": [
           "Scanner presets"
         ],
-        "summary": "Run a scanner preset",
+        "summary": "Run a scanner preset or preview configuration in dry-run mode",
         "operationId": "runScannerPreset",
         "parameters": [
           {
@@ -752,14 +881,32 @@
           },
           {
             "$ref": "#/components/parameters/DryRun"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/XIdempotencyKeyHeader"
           }
         ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/ScannerPresetRun"
+        },
         "responses": {
           "200": {
             "$ref": "#/components/responses/AnalysisResult"
           },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
           "404": {
             "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/IdempotencyConflict"
           },
           "502": {
             "$ref": "#/components/responses/Error"
@@ -1796,12 +1943,12 @@
         }
       },
       "Cursor": {
-        "name": "cursor",
+        "name": "before",
         "in": "query",
         "schema": {
           "type": "string"
         },
-        "description": "Opaque pagination cursor returned by the previous page."
+        "description": "Pagination cursor returned as nextBefore from a previous response, or an ISO-8601 timestamp."
       },
       "Source": {
         "name": "source",
@@ -2091,6 +2238,31 @@
                 "top_gainers"
               ],
               "limit": 5
+            }
+          }
+        }
+      },
+      "ScannerPresetRun": {
+        "required": false,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ScannerPresetRunRequest"
+            },
+            "examples": {
+              "dryRunPreview": {
+                "value": {
+                  "dryRun": true,
+                  "scans": [
+                    "top_gainers",
+                    "volume_breakout_scanner"
+                  ],
+                  "timeframe": "1h",
+                  "channels": [
+                    "telegram"
+                  ]
+                }
+              }
             }
           }
         }
@@ -2511,6 +2683,16 @@
           }
         }
       },
+      "AlertDetailResult": {
+        "description": "Stored alert detail with the latest replay metadata",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/AlertDetail"
+            }
+          }
+        }
+      },
       "AlertSummaryResult": {
         "description": "Protected stored-alert analytics summary including bounded risk-metadata coverage and safe prompt provenance groups",
         "content": {
@@ -2522,7 +2704,16 @@
         }
       },
       "ScannerPresetResult": {
-        "description": "Scanner preset response including the effective durable or ephemeral storage mode",
+        "description": "Scanner preset response including the effective durable or ephemeral storage mode. GET, POST, and PUT responses set an ETag header that mirrors the preset version (e.g. \"3\"); supply it back on PUT or DELETE via If-Match to opt into optimistic concurrency.",
+        "headers": {
+          "ETag": {
+            "description": "Optimistic-concurrency token mirroring the preset version. Format is a quoted integer (e.g. \"3\"). Supply via If-Match on PUT or DELETE to enforce a version check.",
+            "schema": {
+              "type": "string",
+              "example": "\"3\""
+            }
+          }
+        },
         "content": {
           "application/json": {
             "schema": {
@@ -2834,6 +3025,16 @@
                   ]
                 }
               }
+            }
+          }
+        }
+      },
+      "ReplayAttemptList": {
+        "description": "Bounded list of replay audit records with safe fields and pagination metadata",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ReplayAttemptList"
             }
           }
         }
@@ -3461,6 +3662,21 @@
           }
         }
       },
+      "ShadowModeMetrics": {
+        "type": "object",
+        "description": "Aggregated shadow-mode outcome metrics emitted by SignalOutcomeService.getMetricsSummary(). The object form is returned only when totalSignalsReceived > 0 and signal-outcome tracking is enabled. When the service has no data or tracking is disabled, the field becomes the string sentinel \"No measurements found\". Win-rate semantics (see issue GH-593): hitRatePercent counts evaluated window outcomes whose return > 0; targetHitRatePercent/stopHitRatePercent count explicit target/stop hits including firstHit fallbacks and use barrier-eligible denominators (evaluated outcomes without a configured target or stop are excluded instead of counted as misses); expectancyR averages rMultiple over evaluated windows with finite rMultiple. All rates use evaluated-window denominators and zero-fill when none are eligible.",
+        "oneOf": [
+          {
+            "type": "string",
+            "enum": [
+              "No measurements found"
+            ]
+          },
+          {
+            "$ref": "#/components/schemas/OutcomesSummary"
+          }
+        ]
+      },
       "DrawdownProxy": {
         "type": "object",
         "required": [
@@ -3701,6 +3917,153 @@
           }
         }
       },
+      "ReplayAttempt": {
+        "type": "object",
+        "description": "Audit record for a single replay attempt. Each call to POST /api/alerts/{alertId}/replay creates a unique document so repeated replays with the same idempotency key do not overwrite prior attempts; the HTTP Idempotency-Replay contract is preserved upstream by the idempotency middleware. Raw idempotency keys are never persisted; only a SHA-256 hash prefix is exposed so attempts can be grouped without leaking the caller-supplied key.",
+        "required": [
+          "id",
+          "alertId",
+          "channels",
+          "deliverySummary",
+          "replayedAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Opaque replay-attempt identifier; use this value for display and audit references, not as the Firestore document ID."
+          },
+          "alertId": {
+            "type": "string"
+          },
+          "idempotencyKeyHashPrefix": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "First 12 hex characters of the SHA-256 hash of the supplied idempotency key. The raw key is never stored or returned."
+          },
+          "attemptId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Unique attempt identifier (timestamp + UUID)."
+          },
+          "channels": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "telegram",
+                "whatsapp",
+                "discord"
+              ]
+            }
+          },
+          "deliverySummary": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "channel"
+              ],
+              "properties": {
+                "channel": {
+                  "type": "string"
+                },
+                "success": {
+                  "type": "boolean"
+                },
+                "messageId": {
+                  "type": "string"
+                },
+                "errorCode": {
+                  "type": "string"
+                },
+                "statusCode": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "replayedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "AlertDetail": {
+        "type": "object",
+        "required": [
+          "success",
+          "alert",
+          "lastReplay"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "alert": {
+            "$ref": "#/components/schemas/StoredAlert"
+          },
+          "lastReplay": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ReplayAttempt"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "ReplayAttemptList": {
+        "type": "object",
+        "required": [
+          "success",
+          "replays",
+          "pagination"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "replays": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReplayAttempt"
+            }
+          },
+          "pagination": {
+            "type": "object",
+            "required": [
+              "hasMore",
+              "limit",
+              "nextBefore"
+            ],
+            "properties": {
+              "hasMore": {
+                "type": "boolean"
+              },
+              "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100
+              },
+              "nextBefore": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          }
+        }
+      },
       "RiskMetadataCoverage": {
         "type": "object",
         "required": [
@@ -3871,15 +4234,8 @@
             "$ref": "#/components/schemas/JsonObject"
           },
           "shadowModeMetrics": {
-            "description": "When an object, includes exchangeBreakdown and providerBreakdown coverage buckets with received, eligible, evaluated, pending, and unavailable counts. Equity providers remain opt-in and fail open. This field is omitted when source or enriched filters are supplied because shadow-mode metrics do not support those filters.",
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/JsonObject"
-              },
-              {
-                "type": "string"
-              }
-            ]
+            "description": "Aggregated shadow-mode outcome metrics. When an object, includes the full OutcomesSummary payload (coverage buckets, per-window WindowStats with hit/target/stop rates and expectancyR, drawdown proxy, latency/cost metadata, and falsePositiveCandidates). When no data is available or signal-outcome tracking is disabled, the value is the string sentinel \"No measurements found\". Equity providers remain opt-in and fail open. This field is omitted when source or enriched filters are supplied because shadow-mode metrics do not support those filters. Win-rate field semantics: hitRatePercent counts evaluated window outcomes whose return > 0; targetHitRatePercent/stopHitRatePercent count explicit target/stop hits (including firstHit fallbacks) over barrier-eligible denominators only; expectancyR averages finite rMultiple over evaluated windows.",
+            "$ref": "#/components/schemas/ShadowModeMetrics"
           }
         }
       },
@@ -4282,6 +4638,64 @@
           }
         }
       },
+      "ScannerPresetRunRequest": {
+        "type": "object",
+        "properties": {
+          "dryRun": {
+            "type": "boolean",
+            "description": "When true, returns configuration validation, MCP readiness, estimated call volume, and resolved channels without executing scans or delivering messages."
+          },
+          "scans": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "timeframe": {
+            "type": "string"
+          },
+          "exchange": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 20
+          },
+          "bbw_threshold": {
+            "type": "number"
+          },
+          "ranked": {
+            "type": "boolean"
+          },
+          "includeMultiTimeframe": {
+            "type": "boolean"
+          },
+          "channels": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "telegram",
+                "whatsapp",
+                "discord"
+              ]
+            }
+          },
+          "telegramChatId": {
+            "type": "string"
+          },
+          "telegramThreadId": {
+            "type": "integer"
+          },
+          "whatsappChatId": {
+            "type": "string"
+          },
+          "discordWebhookUrl": {
+            "type": "string"
+          }
+        }
+      },
       "ScannerPresetStorage": {
         "type": "object",
         "required": [
@@ -4426,6 +4840,21 @@
             "type": "integer",
             "nullable": true
           },
+          "lockedUntil": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "When the preset is held by an in-flight sweep. Updates return 409 PRESET_LOCKED while this timestamp is in the future."
+          },
+          "lockedBy": {
+            "type": "string",
+            "nullable": true
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Monotonic per-preset version used for optimistic concurrency. Increment by 1 on every successful update. Echoed as the ETag response header and accepted via the If-Match request header on PUT/DELETE."
+          },
           "createdAt": {
             "type": "string",
             "format": "date-time"
@@ -4457,6 +4886,42 @@
             "items": {
               "$ref": "#/components/schemas/ScannerPreset"
             }
+          }
+        }
+      },
+      "ScannerPresetConflictResponse": {
+        "type": "object",
+        "description": "Conflict response for scanner-preset If-Match / lockedUntil failures. Returned with HTTP 412 PRECONDITION_FAILED and HTTP 409 PRESET_LOCKED so the client can rebase or wait for the scheduler lease to release.",
+        "required": [
+          "error",
+          "code",
+          "storage"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "Human-readable explanation of why the request was rejected."
+          },
+          "code": {
+            "type": "string",
+            "enum": [
+              "PRECONDITION_FAILED",
+              "PRESET_LOCKED",
+              "PRESET_NOT_FOUND"
+            ]
+          },
+          "storage": {
+            "$ref": "#/components/schemas/ScannerPresetStorage"
+          },
+          "preset": {
+            "$ref": "#/components/schemas/ScannerPreset",
+            "description": "Current preset state, including its monotonic version, so the client can rebase."
+          },
+          "lockedUntil": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "Echoed on 409 PRESET_LOCKED responses so the client knows when the scheduler lease expires."
           }
         }
       },

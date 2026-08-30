@@ -21,6 +21,11 @@
       "type": "string"
     },
     {
+      "key": "replayBefore",
+      "value": "eyJ2IjoxLCJyZWNlaXZlZEF0IjoiMjAyNi0wNi0wNlQxMjozNDo1Ni4wMDBaIiwiaWQiOiJhbGVydC0xX2hhc2hfdHNfdXVpZCJ9",
+      "type": "string"
+    },
+    {
       "key": "jobCreateIdempotencyKey",
       "value": "job-create-001",
       "type": "string"
@@ -369,7 +374,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"text\": \"BTCUSDT(240) pasó a señal de VENTA\"\n}"
+              "raw": "{\n  \"text\": \"BTCUSDT(240) pas\u00f3 a se\u00f1al de VENTA\"\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/api/webhook/alert?useTradingViewData=true",
@@ -408,7 +413,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"text\": \"BTCUSDT(240) pasó a señal de COMPRA\"\n}"
+              "raw": "{\n  \"text\": \"BTCUSDT(240) pas\u00f3 a se\u00f1al de COMPRA\"\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/api/webhook/alert?useTradingViewData=true&dryRun=true",
@@ -437,19 +442,19 @@
               "name": "Dry run - full TradingView enrichment",
               "status": "OK",
               "code": 200,
-              "body": "{\"success\":true,\"dryRun\":true,\"enriched\":true,\"payload\":{\"text\":\"BTCUSDT(240) pasó a señal de COMPRA\",\"enrichedData\":{\"tradingViewEnrichmentApplied\":true,\"tradingViewEnrichmentStatus\":\"full\",\"sentiment\":\"BULLISH\",\"sentiment_score\":0.8,\"current_price\":64863.03,\"price_data\":{\"current_price\":64863.03,\"high\":65000,\"low\":64000}}}}"
+              "body": "{\"success\":true,\"dryRun\":true,\"enriched\":true,\"payload\":{\"text\":\"BTCUSDT(240) pas\u00f3 a se\u00f1al de COMPRA\",\"enrichedData\":{\"tradingViewEnrichmentApplied\":true,\"tradingViewEnrichmentStatus\":\"full\",\"sentiment\":\"BULLISH\",\"sentiment_score\":0.8,\"current_price\":64863.03,\"price_data\":{\"current_price\":64863.03,\"high\":65000,\"low\":64000}}}}"
             },
             {
               "name": "Dry run - partial TradingView enrichment",
               "status": "OK",
               "code": 200,
-              "body": "{\"success\":true,\"dryRun\":true,\"enriched\":true,\"payload\":{\"text\":\"BTCUSDT(240) pasó a señal de COMPRA\",\"enrichedData\":{\"tradingViewEnrichmentApplied\":true,\"tradingViewEnrichmentStatus\":\"partial\",\"sentiment\":\"BULLISH\",\"current_price\":64863.03,\"price_data\":{\"current_price\":64863.03,\"high\":65000,\"low\":64000}}}}"
+              "body": "{\"success\":true,\"dryRun\":true,\"enriched\":true,\"payload\":{\"text\":\"BTCUSDT(240) pas\u00f3 a se\u00f1al de COMPRA\",\"enrichedData\":{\"tradingViewEnrichmentApplied\":true,\"tradingViewEnrichmentStatus\":\"partial\",\"sentiment\":\"BULLISH\",\"current_price\":64863.03,\"price_data\":{\"current_price\":64863.03,\"high\":65000,\"low\":64000}}}}"
             },
             {
               "name": "Dry run - failed TradingView enrichment",
               "status": "OK",
               "code": 200,
-              "body": "{\"success\":true,\"dryRun\":true,\"enriched\":true,\"payload\":{\"text\":\"BTCUSDT(240) pasó a señal de COMPRA\",\"enrichedData\":{\"tradingViewEnrichmentApplied\":false,\"tradingViewEnrichmentStatus\":\"failed\",\"sentiment\":\"NEUTRAL\",\"insights\":[\"RSI cercano a sobreventa\"],\"technical_levels\":{\"supports\":[\"79,500\"],\"resistances\":[\"82,300\"]},\"levelsSource\":\"gemini-grounding\"}}}"
+              "body": "{\"success\":true,\"dryRun\":true,\"enriched\":true,\"payload\":{\"text\":\"BTCUSDT(240) pas\u00f3 a se\u00f1al de COMPRA\",\"enrichedData\":{\"tradingViewEnrichmentApplied\":false,\"tradingViewEnrichmentStatus\":\"failed\",\"sentiment\":\"NEUTRAL\",\"insights\":[\"RSI cercano a sobreventa\"],\"technical_levels\":{\"supports\":[\"79,500\"],\"resistances\":[\"82,300\"]},\"levelsSource\":\"gemini-grounding\"}}}"
             },
             {
               "name": "Dry run - TradingView not applicable",
@@ -621,7 +626,7 @@
                     "value": "application/json"
                   }
                 ],
-                "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"ranked\": true,\n  \"includeMultiTimeframe\": true,\n  \"scanResults\": [{\n    \"scan\": \"top_gainers\",\n    \"status\": \"success\",\n    \"itemCount\": 1,\n    \"scores\": [{ \"symbol\": \"BTCUSDT\", \"score\": 83, \"reason\": \"+3.5% · RSI 62.0 · Vol 1.8x · HTF aligned +10\", \"trendConfluence\": { \"status\": \"aligned\", \"direction\": \"bullish\", \"confidence\": 82, \"adjustment\": 10 } }]\n  }]\n}"
+                "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"ranked\": true,\n  \"includeMultiTimeframe\": true,\n  \"scanResults\": [{\n    \"scan\": \"top_gainers\",\n    \"status\": \"success\",\n    \"itemCount\": 1,\n    \"scores\": [{ \"symbol\": \"BTCUSDT\", \"score\": 83, \"reason\": \"+3.5% \u00b7 RSI 62.0 \u00b7 Vol 1.8x \u00b7 HTF aligned +10\", \"trendConfluence\": { \"status\": \"aligned\", \"direction\": \"bullish\", \"confidence\": 82, \"adjustment\": 10 } }]\n  }]\n}"
               }
             ]
           }
@@ -804,7 +809,7 @@
               "name": "Success - decision-ready analysis",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"symbol\": \"BINANCE:BTCUSDT\",\n  \"alertText\": \"*🔴 SOBRECOMPRADOS*\\nBTCUSDT $77,103.55 (-0.8%) | RSI 77.9...\",\n  \"analysis\": {\n    \"price_data\": {\n      \"close\": 77066.92,\n      \"change_percent\": -0.86\n    },\n    \"technical_indicators\": {\n      \"RSI\": 77.8,\n      \"ATR\": 1484.21\n    },\n    \"risk\": {\n      \"side\": \"SELL\",\n      \"stop_loss\": 79293.24,\n      \"target\": 72614.29,\n      \"valid\": true\n    },\n    \"decision\": {\n      \"action\": \"SELL\",\n      \"dataSufficient\": true\n    }\n  }\n}"
+              "body": "{\n  \"success\": true,\n  \"symbol\": \"BINANCE:BTCUSDT\",\n  \"alertText\": \"*\ud83d\udd34 SOBRECOMPRADOS*\\nBTCUSDT $77,103.55 (-0.8%) | RSI 77.9...\",\n  \"analysis\": {\n    \"price_data\": {\n      \"close\": 77066.92,\n      \"change_percent\": -0.86\n    },\n    \"technical_indicators\": {\n      \"RSI\": 77.8,\n      \"ATR\": 1484.21\n    },\n    \"risk\": {\n      \"side\": \"SELL\",\n      \"stop_loss\": 79293.24,\n      \"target\": 72614.29,\n      \"valid\": true\n    },\n    \"decision\": {\n      \"action\": \"SELL\",\n      \"dataSufficient\": true\n    }\n  }\n}"
             },
             {
               "name": "400 Invalid symbol",
@@ -1273,7 +1278,7 @@
                 ],
                 "body": {
                   "mode": "raw",
-                  "raw": "{\n  \"text\": \"BINANCE:ETHUSDT (4h) COMPRA — repeated signal\"\n}"
+                  "raw": "{\n  \"text\": \"BINANCE:ETHUSDT (4h) COMPRA \u2014 repeated signal\"\n}"
                 },
                 "url": {
                   "raw": "{{baseUrl}}/api/webhook/alert",
@@ -1424,12 +1429,18 @@
               "name": "Success",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"preset\": {\n    \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n    \"name\": \"Daily Scan\",\n    \"exchange\": \"BINANCE\",\n    \"timeframe\": \"4h\",\n    \"scans\": [\"top_gainers\", \"top_losers\", \"volume_breakout_scanner\"],\n    \"limit\": 10,\n    \"bbwThreshold\": 0.05,\n    \"createdAt\": \"2026-06-13T04:43:15.301Z\",\n    \"updatedAt\": \"2026-06-13T04:43:15.301Z\"\n  }\n}"
+              "body": "{\n  \"success\": true,\n  \"preset\": {\n    \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n    \"name\": \"Daily Scan\",\n    \"exchange\": \"BINANCE\",\n    \"timeframe\": \"4h\",\n    \"scans\": [\"top_gainers\", \"top_losers\", \"volume_breakout_scanner\"],\n    \"limit\": 10,\n    \"bbwThreshold\": 0.05,\n    \"createdAt\": \"2026-06-13T04:43:15.301Z\",\n    \"updatedAt\": \"2026-06-13T04:43:15.301Z\",\n    \"version\": 3\n  }\n}",
+              "header": [
+                {
+                  "key": "ETag",
+                  "value": "\"3\""
+                }
+              ]
             }
           ]
         },
         {
-          "name": "PUT Update Scanner Preset",
+          "name": "PUT Update Scanner Preset (matching If-Match)",
           "request": {
             "method": "PUT",
             "header": [
@@ -1442,6 +1453,11 @@
                 "key": "x-api-key",
                 "value": "{{apiKey}}",
                 "type": "text"
+              },
+              {
+                "key": "If-Match",
+                "value": "\"3\"",
+                "description": "Optimistic-concurrency token mirrored from the ETag response header"
               }
             ],
             "body": {
@@ -1465,13 +1481,37 @@
               "name": "Storage mode contract",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"storage\": {\n    \"enabled\": true,\n    \"configured\": true,\n    \"ready\": true,\n    \"status\": \"ready\",\n    \"mode\": \"durable\",\n    \"backend\": \"firestore\"\n  },\n  \"preset\": {\n    \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\"\n  }\n}"
+              "body": "{\n  \"success\": true,\n  \"storage\": {\n    \"enabled\": true,\n    \"configured\": true,\n    \"ready\": true,\n    \"status\": \"ready\",\n    \"mode\": \"durable\",\n    \"backend\": \"firestore\"\n  },\n  \"preset\": {\n    \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n    \"version\": 4\n  }\n}",
+              "header": [
+                {
+                  "key": "ETag",
+                  "value": "\"4\""
+                }
+              ]
             },
             {
               "name": "Success",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"preset\": {\n    \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n    \"name\": \"Updated Scan\",\n    \"exchange\": \"BINANCE\",\n    \"timeframe\": \"4h\",\n    \"scans\": [\"top_gainers\", \"top_losers\", \"volume_breakout_scanner\"],\n    \"limit\": 15,\n    \"bbwThreshold\": 0.05,\n    \"createdAt\": \"2026-06-13T04:43:15.301Z\",\n    \"updatedAt\": \"2026-06-13T04:43:15.301Z\"\n  }\n}"
+              "body": "{\n  \"success\": true,\n  \"preset\": {\n    \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n    \"name\": \"Updated Scan\",\n    \"exchange\": \"BINANCE\",\n    \"timeframe\": \"4h\",\n    \"scans\": [\"top_gainers\", \"top_losers\", \"volume_breakout_scanner\"],\n    \"limit\": 15,\n    \"bbwThreshold\": 0.05,\n    \"createdAt\": \"2026-06-13T04:43:15.301Z\",\n    \"updatedAt\": \"2026-06-13T04:43:15.301Z\",\n    \"version\": 4\n  }\n}",
+              "header": [
+                {
+                  "key": "ETag",
+                  "value": "\"4\""
+                }
+              ]
+            },
+            {
+              "name": "Stale If-Match (412 PRECONDITION_FAILED)",
+              "status": "Precondition Failed",
+              "code": 412,
+              "body": "{\n  \"success\": false,\n  \"error\": \"If-Match version does not match current preset version (4)\",\n  \"code\": \"PRECONDITION_FAILED\",\n  \"storage\": {\n    \"enabled\": true,\n    \"configured\": true,\n    \"ready\": true,\n    \"status\": \"ready\",\n    \"mode\": \"durable\",\n    \"backend\": \"firestore\"\n  },\n  \"preset\": {\n    \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n    \"version\": 4\n  }\n}"
+            },
+            {
+              "name": "Locked preset (409 PRESET_LOCKED)",
+              "status": "Conflict",
+              "code": 409,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Preset is locked by an in-flight sweep until 2026-08-30T20:00:00.000Z\",\n  \"code\": \"PRESET_LOCKED\",\n  \"lockedUntil\": \"2026-08-30T20:00:00.000Z\",\n  \"storage\": {\n    \"enabled\": true,\n    \"configured\": true,\n    \"ready\": true,\n    \"status\": \"ready\",\n    \"mode\": \"durable\",\n    \"backend\": \"firestore\"\n  },\n  \"preset\": {\n    \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n    \"version\": 4\n  }\n}"
             }
           ]
         },
@@ -1484,6 +1524,12 @@
                 "key": "x-api-key",
                 "value": "{{apiKey}}",
                 "type": "text"
+              },
+              {
+                "key": "If-Match",
+                "value": "\"4\"",
+                "description": "Optional optimistic-concurrency token mirrored from the ETag response header",
+                "disabled": true
               }
             ],
             "url": {
@@ -1504,6 +1550,12 @@
               "status": "OK",
               "code": 200,
               "body": "{\n  \"success\": true,\n  \"storage\": {\n    \"enabled\": true,\n    \"configured\": true,\n    \"ready\": true,\n    \"status\": \"ready\",\n    \"mode\": \"durable\",\n    \"backend\": \"firestore\"\n  }\n}"
+            },
+            {
+              "name": "Stale If-Match (412 PRECONDITION_FAILED)",
+              "status": "Precondition Failed",
+              "code": 412,
+              "body": "{\n  \"success\": false,\n  \"error\": \"If-Match version does not match current preset version (4)\",\n  \"code\": \"PRECONDITION_FAILED\",\n  \"storage\": {\n    \"enabled\": true,\n    \"configured\": true,\n    \"ready\": true,\n    \"status\": \"ready\",\n    \"mode\": \"durable\",\n    \"backend\": \"firestore\"\n  },\n  \"preset\": {\n    \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n    \"version\": 4\n  }\n}"
             },
             {
               "name": "Success",
@@ -1551,7 +1603,7 @@
               "name": "Success",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"presetId\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n  \"alertText\": \"📡 *SCANNER DE MERCADO — ...\",\n  \"scanResults\": [\n    {\n      \"scan\": \"top_gainers\",\n      \"status\": \"success\",\n      \"itemCount\": 3\n    }\n  ],\n  \"summary\": {\n    \"totalScans\": 1,\n    \"success\": 1,\n    \"error\": 0,\n    \"timeout\": 0,\n    \"totalItems\": 3,\n    \"delivered\": 1\n  },\n  \"timedOut\": false,\n  \"timeoutMs\": 90000,\n  \"requestId\": \"req-xyz789\",\n  \"totalDurationMs\": 1450\n}"
+              "body": "{\n  \"success\": true,\n  \"presetId\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n  \"alertText\": \"\ud83d\udce1 *SCANNER DE MERCADO \u2014 ...\",\n  \"scanResults\": [\n    {\n      \"scan\": \"top_gainers\",\n      \"status\": \"success\",\n      \"itemCount\": 3\n    }\n  ],\n  \"summary\": {\n    \"totalScans\": 1,\n    \"success\": 1,\n    \"error\": 0,\n    \"timeout\": 0,\n    \"totalItems\": 3,\n    \"delivered\": 1\n  },\n  \"timedOut\": false,\n  \"timeoutMs\": 90000,\n  \"requestId\": \"req-xyz789\",\n  \"totalDurationMs\": 1450\n}"
             }
           ]
         },
@@ -1564,8 +1616,17 @@
                 "key": "x-api-key",
                 "value": "{{apiKey}}",
                 "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "preset-dryrun-key-123",
+                "type": "text"
               }
             ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dryRun\": true,\n  \"channels\": [\"telegram\"]\n}"
+            },
             "url": {
               "raw": "{{baseUrl}}/api/scanner-presets/{{presetId}}/run?dryRun=true",
               "host": [
@@ -1590,7 +1651,7 @@
               "name": "Success",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"presetId\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n  \"payload\": {\n    \"alertText\": \"📡 *SCANNER DE MERCADO — ...\"\n  },\n  \"scanResults\": [],\n  \"summary\": {\n    \"totalScans\": 1,\n    \"success\": 1,\n    \"error\": 0,\n    \"timeout\": 0,\n    \"totalItems\": 3,\n    \"delivered\": 0\n  },\n  \"timedOut\": false,\n  \"timeoutMs\": 90000,\n  \"requestId\": \"req-dryrun-abc\",\n  \"totalDurationMs\": 1200\n}"
+              "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"presetId\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n  \"preset\": {\n    \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n    \"name\": \"Daily Scan\",\n    \"exchange\": \"BINANCE\",\n    \"timeframe\": \"4h\",\n    \"scans\": [\n      \"top_gainers\"\n    ],\n    \"limit\": 5,\n    \"bbw_threshold\": 0.05,\n    \"ranked\": false,\n    \"includeMultiTimeframe\": false\n  },\n  \"validation\": {\n    \"ok\": true,\n    \"errors\": []\n  },\n  \"estimatedCalls\": {\n    \"coinAnalysis\": 1,\n    \"multiTimeframe\": 0\n  },\n  \"requestedChannels\": [\n    \"telegram\"\n  ],\n  \"mcpReadiness\": {\n    \"ready\": true,\n    \"lastCheckedAt\": \"2026-08-30T12:00:00.000Z\",\n    \"lastErrorCategory\": null\n  },\n  \"idempotencyKey\": \"preset-dryrun-key-123\",\n  \"requestId\": \"req-dryrun-abc\"\n}"
             }
           ]
         }
@@ -2088,6 +2149,150 @@
           ]
         },
         {
+          "name": "GET List Replay Attempts",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/replays?limit=50",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "replays"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "50"
+                },
+                {
+                  "key": "alertId",
+                  "value": "{{alertId}}",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Lists bounded alert-replay audit records (alertReplays collection). Each replay creates a unique document so retries with the same idempotency key are preserved as history rather than overwritten. Raw idempotency keys and internal document IDs are never returned; only an opaque attempt ID and SHA-256 hash prefix are exposed."
+          },
+          "response": [
+            {
+              "name": "200 OK - Replay attempts list",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"success\": true,\n  \"replays\": [\n    {\n      \"id\": \"1700000000000_5b1f0c79-9f0b-4d6e-9b1f-3b8c0e6a5f1a\",\n      \"alertId\": \"alert-123\",\n      \"idempotencyKeyHashPrefix\": \"06bdeddf2a29\",\n      \"attemptId\": \"1700000000000_5b1f0c79-9f0b-4d6e-9b1f-3b8c0e6a5f1a\",\n      \"channels\": [\"telegram\"],\n      \"deliverySummary\": [\n        {\n          \"channel\": \"telegram\",\n          \"success\": true,\n          \"messageId\": \"tg-msg-123\"\n        }\n      ],\n      \"replayedAt\": \"2026-06-06T12:34:56.000Z\"\n    }\n  ],\n  \"pagination\": {\n    \"hasMore\": false,\n    \"limit\": 50,\n    \"nextBefore\": null\n  }\n}"
+            },
+            {
+              "name": "200 OK - Filtered to a single alertId",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"success\": true,\n  \"replays\": [\n    {\n      \"id\": \"1700000000000_bbbbbbbb-cccc-dddd-eeee-ffffffffffff\",\n      \"alertId\": \"alert-123\",\n      \"idempotencyKeyHashPrefix\": \"aaaaaaaaaaaa\",\n      \"attemptId\": \"1700000000000_bbbbbbbb-cccc-dddd-eeee-ffffffffffff\",\n      \"channels\": [\"whatsapp\"],\n      \"deliverySummary\": [\n        {\n          \"channel\": \"whatsapp\",\n          \"success\": false,\n          \"errorCode\": \"TIMEOUT\",\n          \"statusCode\": 504\n        }\n      ],\n      \"replayedAt\": \"2026-06-06T13:00:00.000Z\"\n    }\n  ],\n  \"pagination\": {\n    \"hasMore\": false,\n    \"limit\": 50,\n    \"nextBefore\": null\n  }\n}"
+            },
+            {
+              "name": "403 FEATURE_DISABLED - storage disabled",
+              "status": "Forbidden",
+              "code": 403,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"error\": \"Alert storage feature is disabled. Set ENABLE_FIRESTORE_ALERT_STORAGE=true to enable.\",\n  \"code\": \"FEATURE_DISABLED\"\n}"
+            },
+            {
+              "name": "503 STORAGE_UNAVAILABLE - Firestore read failed",
+              "status": "Service Unavailable",
+              "code": 503,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"error\": \"Alert storage is enabled but Firestore is unavailable. Check Firestore credentials and project configuration.\",\n  \"code\": \"STORAGE_UNAVAILABLE\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET List Replay Attempts (before cursor)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/replays?limit=50&before={{replayBefore}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "replays"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "50"
+                },
+                {
+                  "key": "before",
+                  "value": "{{replayBefore}}"
+                }
+              ]
+            },
+            "description": "Continue a replay-history read with the nextBefore cursor returned by a previous page."
+          }
+        },
+        {
+          "name": "GET List Replay Attempts (invalid input)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/replays?limit=999&before=not-a-cursor",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "replays"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "999"
+                },
+                {
+                  "key": "before",
+                  "value": "not-a-cursor"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "400 INVALID_REQUEST - invalid limit and cursor",
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"error\": \"Invalid limit. Use an integer between 1 and 100.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
+        },
+        {
           "name": "GET Alert Analytics Summary (risk coverage)",
           "request": {
             "method": "GET",
@@ -2170,9 +2375,15 @@
                 }
               ]
             },
-            "description": "Returns bounded JSON-only aggregates for stored alerts. Requires ENABLE_FIRESTORE_ALERT_STORAGE=true and a valid x-api-key."
+            "description": "Protected summary request. Unfiltered responses include the full shadow-mode outcome metrics payload (coverage buckets, per-window WindowStats with hitRatePercent/targetHitRatePercent/stopHitRatePercent/expectancyR, drawdown proxy, and latency/cost metadata). The shadow-mode metrics field is the string sentinel \"No measurements found\" when signal-outcome tracking is disabled or has no data. Requires ENABLE_FIRESTORE_ALERT_STORAGE=true and a valid x-api-key."
           },
           "response": [
+            {
+              "name": "200 OK - Full shadow mode metrics coverage buckets",
+              "status": "OK",
+              "code": 200,
+              "body": "{\"success\": true, \"summary\": {\"shadowModeMetrics\": {\"available\": true, \"totalSignalsReceived\": 50, \"totalSignalsEligible\": 45, \"totalSignalsEvaluated\": 40, \"totalSignalsPending\": 5, \"totalSignalsUnavailable\": 5, \"coveragePercent\": 80, \"isCoverageComplete\": false, \"targetHitRatePercent\": 65.5, \"stopHitRatePercent\": 25.0, \"expectancyR\": 1.25, \"populationNote\": \"Metrics represent 40 evaluated signals out of 50 total received signals (80% coverage).\", \"exchangeBreakdown\": {\"BINANCE\": {\"received\": 30, \"eligible\": 28, \"evaluated\": 25, \"pending\": 3, \"unavailable\": 2}, \"NASDAQ\": {\"received\": 20, \"eligible\": 17, \"evaluated\": 15, \"pending\": 2, \"unavailable\": 3}}, \"providerBreakdown\": {\"binance\": {\"received\": 30, \"eligible\": 28, \"evaluated\": 25, \"pending\": 3, \"unavailable\": 2}, \"twelve-data\": {\"received\": 20, \"eligible\": 17, \"evaluated\": 15, \"pending\": 2, \"unavailable\": 3}}, \"entryPriceSourceBreakdown\": {\"binance\": 25, \"twelve-data\": 15, \"unknown\": 10}, \"eligibilityBreakdown\": {\"supported_provider\": 45, \"unsupported_exchange\": 5}, \"windows\": {\"1h\": {\"totalSignals\": 35, \"hitRatePercent\": 60.0, \"targetEligibleWindows\": 30, \"stopEligibleWindows\": 30, \"targetHitRatePercent\": 60.0, \"stopHitRatePercent\": 23.33, \"expectancyR\": 0.92, \"averageReturnPercent\": 1.85, \"averageMfePercent\": 2.4, \"averageMaePercent\": -0.85, \"maxAdverseExcursionPercent\": -3.5, \"bySide\": {\"BUY\": {\"totalSignals\": 20, \"hitRatePercent\": 65.0, \"targetEligibleWindows\": 18, \"stopEligibleWindows\": 18, \"targetHitRatePercent\": 60.0, \"stopHitRatePercent\": 22.22, \"expectancyR\": 0.92, \"averageReturnPercent\": 2.4, \"averageMfePercent\": 3.6, \"averageMaePercent\": -1.05, \"maxAdverseExcursionPercent\": -4.2}, \"SELL\": {\"totalSignals\": 15, \"hitRatePercent\": 53.33, \"targetEligibleWindows\": 12, \"stopEligibleWindows\": 12, \"targetHitRatePercent\": 48.0, \"stopHitRatePercent\": 18.0, \"expectancyR\": 0.71, \"averageReturnPercent\": 1.8, \"averageMfePercent\": 3.2, \"averageMaePercent\": -0.92, \"maxAdverseExcursionPercent\": -3.1}}}, \"4h\": {\"totalSignals\": 28, \"hitRatePercent\": 64.29, \"targetEligibleWindows\": 24, \"stopEligibleWindows\": 24, \"targetHitRatePercent\": 62.5, \"stopHitRatePercent\": 20.83, \"expectancyR\": 1.08, \"averageReturnPercent\": 2.15, \"averageMfePercent\": 3.1, \"averageMaePercent\": -0.95, \"maxAdverseExcursionPercent\": -3.8}, \"1D\": {\"totalSignals\": 18, \"hitRatePercent\": 66.67, \"targetEligibleWindows\": 15, \"stopEligibleWindows\": 15, \"targetHitRatePercent\": 73.33, \"stopHitRatePercent\": 13.33, \"expectancyR\": 1.45, \"averageReturnPercent\": 3.05, \"averageMfePercent\": 4.2, \"averageMaePercent\": -1.15, \"maxAdverseExcursionPercent\": -5.2}}, \"drawdownProxy\": {\"averageMaxAdverseExcursionPercent\": -1.85, \"absoluteMaxAdverseExcursionPercent\": -7.2}, \"falsePositiveCandidatesCount\": 2, \"falsePositiveCandidates\": [{\"symbol\": \"BTCUSDT\", \"source\": \"news-monitor\", \"side\": \"BUY\", \"score\": 0.85, \"price\": 68500.0, \"worstReturn\": -1.05, \"worstMae\": -3.6}], \"latencyCostMetadata\": {\"averageProcessingTimeMs\": 250, \"tokenUsage\": {\"inputTokens\": 120, \"outputTokens\": 240, \"totalCost\": 0.0012}}}}}"
+            },
             {
               "name": "200 OK - Analytics summary",
               "status": "OK",
@@ -2190,6 +2401,53 @@
               "status": "OK",
               "code": 200,
               "body": "{\"success\":true,\"summary\":{\"shadowModeMetrics\":{\"exchangeBreakdown\":{\"BATS\":{\"received\":1,\"eligible\":1,\"evaluated\":1,\"pending\":0,\"unavailable\":0}},\"providerBreakdown\":{\"twelve-data\":{\"received\":1,\"eligible\":1,\"evaluated\":1,\"pending\":0,\"unavailable\":0}}}}}"
+            }
+          ]
+        },
+        {
+          "name": "GET Alert Analytics Summary (shadow mode no measurements)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/summary?from=2026-06-06T00:00:00.000Z&to=2026-06-07T00:00:00.000Z&limit=500",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "2026-06-06T00:00:00.000Z"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-06-07T00:00:00.000Z"
+                },
+                {
+                  "key": "limit",
+                  "value": "500"
+                }
+              ]
+            },
+            "description": "Demonstrates the shadow-mode metrics string sentinel when signal-outcome tracking is disabled or has no data. The field becomes the literal string \"No measurements found\" instead of an object payload. The win-rate semantics (hitRatePercent = evaluated window outcomes with return > 0; targetHitRatePercent/stopHitRatePercent use barrier-eligible denominators and firstHit fallbacks; expectancyR averages finite rMultiple) apply only when the field is an object."
+          },
+          "response": [
+            {
+              "name": "200 OK - Shadow mode string sentinel",
+              "status": "OK",
+              "code": 200,
+              "body": "{\"success\": true, \"summary\": {\"shadowModeMetrics\": \"No measurements found\"}}"
             }
           ]
         },
@@ -2327,7 +2585,7 @@
                 }
               ]
             },
-            "description": "Exports bounded stored alerts as JSON Lines. Requires from/to, validates x-api-key, and excludes raw text unless includeText=true"
+            "description": "Exports bounded stored alerts as JSON Lines. Requires from/to, validates x-api-key, and excludes raw text unless includeText=true. Unfiltered responses emit the X-Shadow-Mode-Metrics response header with the JSON-encoded shadow-mode outcome metrics payload (string sentinel \"No measurements found\" when tracking is disabled or has no data; full OutcomesSummary object form otherwise). The header is omitted when source or enriched filters are supplied."
           },
           "response": [
             {
@@ -2632,7 +2890,15 @@
                 "{{alertId}}"
               ]
             }
-          }
+          },
+          "response": [
+            {
+              "name": "200 OK - Stored alert with latest replay",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"alert\": {\n    \"id\": \"{{alertId}}\",\n    \"text\": \"BTC alert\"\n  },\n  \"lastReplay\": null\n}"
+            }
+          ]
         },
         {
           "name": "POST Replay Alert (telegram)",
@@ -2720,7 +2986,7 @@
               },
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"alertId\": \"alert-123\",\n  \"replayId\": \"alert-123_06bdeddf2a292e8940d24fb2847d88234dc85d7cd751d4cc7dbc471692aadf38\",\n  \"results\": [\n    { \"channel\": \"telegram\", \"success\": true, \"messageId\": \"123\" }\n  ]\n}"
+              "body": "{\n  \"success\": true,\n  \"alertId\": \"alert-123\",\n  \"replayId\": \"alert-123_06bdeddf2a292e8940d24fb2847d88234dc85d7cd751d4cc7dbc471692aadf38_1700000000000_5b1f0c79-9f0b-4d6e-9b1f-3b8c0e6a5f1a\",\n  \"results\": [\n    { \"channel\": \"telegram\", \"success\": true, \"messageId\": \"123\" }\n  ]\n}"
             },
             {
               "name": "Missing idempotency key",
@@ -2847,7 +3113,7 @@
               "name": "Success (market-scanner replay)",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"alertId\": \"scanner-doc-456\",\n  \"replayId\": \"scanner-doc-456_06bdeddf2a292e8940d24fb2847d88234dc85d7cd751d4cc7dbc471692aadf38\",\n  \"results\": [\n    { \"channel\": \"telegram\", \"success\": true, \"messageId\": \"replay-msg-1\" }\n  ]\n}"
+              "body": "{\n  \"success\": true,\n  \"alertId\": \"scanner-doc-456\",\n  \"replayId\": \"scanner-doc-456_06bdeddf2a292e8940d24fb2847d88234dc85d7cd751d4cc7dbc471692aadf38_1700000000000_5b1f0c79-9f0b-4d6e-9b1f-3b8c0e6a5f1a\",\n  \"results\": [\n    { \"channel\": \"telegram\", \"success\": true, \"messageId\": \"replay-msg-1\" }\n  ]\n}"
             }
           ]
         },
@@ -2888,14 +3154,14 @@
                 "replay"
               ]
             },
-            "description": "Replays a stored expanded-analysis alert (delivered multi-symbol Spanish report from POST /api/webhook/expanded-analysis-alert). If the original report exceeded the 20,000-character cap, the replay will only redeliver the truncated text — verify truncated/originalLength before replaying large reports."
+            "description": "Replays a stored expanded-analysis alert (delivered multi-symbol Spanish report from POST /api/webhook/expanded-analysis-alert). If the original report exceeded the 20,000-character cap, the replay will only redeliver the truncated text \u2014 verify truncated/originalLength before replaying large reports."
           },
           "response": [
             {
               "name": "Success (expanded-analysis replay)",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"alertId\": \"expanded-doc-789\",\n  \"replayId\": \"expanded-doc-789_06bdeddf2a292e8940d24fb2847d88234dc85d7cd751d4cc7dbc471692aadf38\",\n  \"results\": [\n    { \"channel\": \"telegram\", \"success\": true, \"messageId\": \"replay-msg-2\" }\n  ]\n}"
+              "body": "{\n  \"success\": true,\n  \"alertId\": \"expanded-doc-789\",\n  \"replayId\": \"expanded-doc-789_06bdeddf2a292e8940d24fb2847d88234dc85d7cd751d4cc7dbc471692aadf38_1700000000000_5b1f0c79-9f0b-4d6e-9b1f-3b8c0e6a5f1a\",\n  \"results\": [\n    { \"channel\": \"telegram\", \"success\": true, \"messageId\": \"replay-msg-2\" }\n  ]\n}"
             }
           ]
         },
@@ -2943,7 +3209,7 @@
               "name": "Success (x-idempotency-key header)",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"alertId\": \"alert-123\",\n  \"replayId\": \"alert-123_06bdeddf2a292e8940d24fb2847d88234dc85d7cd751d4cc7dbc471692aadf38\",\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"123\"\n    }\n  ]\n}",
+              "body": "{\n  \"success\": true,\n  \"alertId\": \"alert-123\",\n  \"replayId\": \"alert-123_06bdeddf2a292e8940d24fb2847d88234dc85d7cd751d4cc7dbc471692aadf38_1700000000000_5b1f0c79-9f0b-4d6e-9b1f-3b8c0e6a5f1a\",\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"123\"\n    }\n  ]\n}",
               "originalRequest": {
                 "method": "POST",
                 "header": [
@@ -2991,7 +3257,7 @@
                   "value": "true"
                 }
               ],
-              "body": "{\n  \"success\": true,\n  \"alertId\": \"alert-123\",\n  \"replayId\": \"alert-123_06bdeddf2a292e8940d24fb2847d88234dc85d7cd751d4cc7dbc471692aadf38\",\n  \"idempotencyReplayed\": true,\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"123\"\n    }\n  ]\n}",
+              "body": "{\n  \"success\": true,\n  \"alertId\": \"alert-123\",\n  \"replayId\": \"alert-123_06bdeddf2a292e8940d24fb2847d88234dc85d7cd751d4cc7dbc471692aadf38_1700000000000_5b1f0c79-9f0b-4d6e-9b1f-3b8c0e6a5f1a\",\n  \"idempotencyReplayed\": true,\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"123\"\n    }\n  ]\n}",
               "originalRequest": {
                 "method": "POST",
                 "header": [
@@ -3995,7 +4261,7 @@
               "status": "OK",
               "code": 200,
               "_postman_previewlanguage": "json",
-              "body": "{\n  \"success\": true,\n  \"jobId\": \"job-uuid-123\",\n  \"type\": \"market-scanner\",\n  \"status\": \"completed\",\n  \"scanResults\": [{\n    \"scan\": \"top_gainers\",\n    \"status\": \"success\",\n    \"itemCount\": 1,\n    \"scores\": [{ \"symbol\": \"BINANCE:BTCUSDT\", \"score\": 80, \"reason\": \"+3.5% · RSI 62.0 · Vol 1.8x · HTF aligned +10\", \"trendConfluence\": { \"status\": \"aligned\", \"direction\": \"bullish\", \"confidence\": 82, \"adjustment\": 10 } }]\n  }]\n}"
+              "body": "{\n  \"success\": true,\n  \"jobId\": \"job-uuid-123\",\n  \"type\": \"market-scanner\",\n  \"status\": \"completed\",\n  \"scanResults\": [{\n    \"scan\": \"top_gainers\",\n    \"status\": \"success\",\n    \"itemCount\": 1,\n    \"scores\": [{ \"symbol\": \"BINANCE:BTCUSDT\", \"score\": 80, \"reason\": \"+3.5% \u00b7 RSI 62.0 \u00b7 Vol 1.8x \u00b7 HTF aligned +10\", \"trendConfluence\": { \"status\": \"aligned\", \"direction\": \"bullish\", \"confidence\": 82, \"adjustment\": 10 } }]\n  }]\n}"
             }
           ]
         },

@@ -28,6 +28,23 @@ function getDocumentedApiOperations(contract) {
 }
 
 describe('OpenAPI contract', () => {
+	it('documents the concrete alert detail response including lastReplay', () => {
+		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+		const operation = contract.paths['/api/alerts/{alertId}'].get;
+
+		expect(operation.responses['200'].$ref).toBe('#/components/responses/AlertDetailResult');
+		expect(contract.components.responses.AlertDetailResult.content['application/json'].schema.$ref)
+			.toBe('#/components/schemas/AlertDetail');
+		expect(contract.components.schemas.AlertDetail.required).toEqual(
+			expect.arrayContaining(['success', 'alert', 'lastReplay']),
+		);
+		expect(contract.components.schemas.AlertDetail.properties.alert.$ref).toBe('#/components/schemas/StoredAlert');
+		expect(contract.components.schemas.AlertDetail.properties.lastReplay.oneOf).toEqual(expect.arrayContaining([
+			{ $ref: '#/components/schemas/ReplayAttempt' },
+			{ type: 'null' },
+		]));
+	});
+
 	it('exists as the canonical JSON source', () => {
 		expect(fs.existsSync(contractPath)).toBe(true);
 	});
@@ -56,7 +73,7 @@ describe('OpenAPI contract', () => {
 			.filter((operation) => operation && operation.responses);
 
 		const firebaseAdminOperations = new Set([
-			'GET /api/alerts', 'GET /api/alerts/summary', 'GET /api/alerts/export',
+			'GET /api/alerts', 'GET /api/alerts/replays', 'GET /api/alerts/summary', 'GET /api/alerts/export',
 			'GET /api/alerts/{alertId}', 'POST /api/alerts/{alertId}/replay',
 			'GET /api/scanner-presets', 'POST /api/scanner-presets',
 			'GET /api/scanner-presets/{id}', 'PUT /api/scanner-presets/{id}',
@@ -117,10 +134,31 @@ describe('OpenAPI contract', () => {
 		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
 		const shadowModeMetrics = contract.components.schemas.AlertSummary.properties.shadowModeMetrics;
 
-		expect(shadowModeMetrics.oneOf).toEqual(expect.arrayContaining([
-			{ type: 'string' },
-			{ $ref: '#/components/schemas/JsonObject' },
+		expect(shadowModeMetrics.$ref).toBe('#/components/schemas/ShadowModeMetrics');
+		expect(shadowModeMetrics.description).toContain('hitRatePercent');
+		expect(shadowModeMetrics.description).toContain('targetHitRatePercent');
+		expect(shadowModeMetrics.description).toContain('expectancyR');
+
+		const shadowModeMetricsSchema = contract.components.schemas.ShadowModeMetrics;
+		expect(shadowModeMetricsSchema.oneOf).toEqual(expect.arrayContaining([
+			{
+				type: 'string',
+				enum: ['No measurements found'],
+			},
+			{ $ref: '#/components/schemas/OutcomesSummary' },
 		]));
+	});
+
+	it('documents the X-Shadow-Mode-Metrics header on GET /api/alerts/export', () => {
+		if (!fs.existsSync(contractPath)) return;
+		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+		const exportResponse = contract.paths['/api/alerts/export'].get.responses['200'];
+
+		expect(exportResponse.headers).toBeDefined();
+		expect(exportResponse.headers['X-Shadow-Mode-Metrics']).toEqual({
+			description: expect.stringContaining('SignalOutcomeService.getMetricsSummary'),
+			schema: { type: 'string' },
+		});
 	});
 
 	it('documents generic-message idempotency key locations and replay conflicts', () => {
