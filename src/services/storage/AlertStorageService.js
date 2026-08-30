@@ -1297,9 +1297,10 @@ function getReplayCursorValues(doc) {
  * @param {Object} params
  * @param {number|undefined} params.limit
  * @param {string|undefined} params.alertId
+ * @param {string|undefined} params.before
  * @returns {Promise<{replays: Array, hasMore: boolean, nextBefore: string|null}|null>}
  */
-async function listReplayAttempts({ limit = DEFAULT_PAGE_SIZE, alertId } = {}) {
+async function listReplayAttempts({ limit = DEFAULT_PAGE_SIZE, alertId, before } = {}) {
 	if (!isEnabled()) {
 		return null;
 	}
@@ -1312,6 +1313,15 @@ async function listReplayAttempts({ limit = DEFAULT_PAGE_SIZE, alertId } = {}) {
 	const pageSize = clampLimit(limit);
 	const targetCount = pageSize + 1;
 	const matches = [];
+	const parsedBeforeCursor = before
+		? parseAlertPaginationCursor(before)
+		: null;
+	if (before && !parsedBeforeCursor) {
+		throw createInvalidCursorError();
+	}
+	const cursorTimestamp = parsedBeforeCursor
+		? buildParsedCursorTimestamp(parsedBeforeCursor)
+		: null;
 
 	let query = firestore
 		.collection(REPLAY_COLLECTION_NAME)
@@ -1326,6 +1336,13 @@ async function listReplayAttempts({ limit = DEFAULT_PAGE_SIZE, alertId } = {}) {
 			.orderBy('replayedAt', 'desc')
 			.orderBy(admin.firestore.FieldPath.documentId(), 'desc')
 			.limit(targetCount);
+	}
+	if (cursorTimestamp) {
+		if (parsedBeforeCursor.documentId) {
+			query = query.startAfter(cursorTimestamp, parsedBeforeCursor.documentId);
+		} else {
+			query = query.where('replayedAt', '<', cursorTimestamp);
+		}
 	}
 
 	let snapshot;

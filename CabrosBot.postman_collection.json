@@ -2692,7 +2692,15 @@
                 "{{alertId}}"
               ]
             }
-          }
+          },
+          "response": [
+            {
+              "name": "200 OK - Stored alert with latest replay",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"alert\": {\n    \"id\": \"{{alertId}}\",\n    \"text\": \"BTC alert\"\n  },\n  \"lastReplay\": null\n}"
+            }
+          ]
         },
         {
           "name": "POST Replay Alert (telegram)",

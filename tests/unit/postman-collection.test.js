@@ -122,6 +122,18 @@ describe('Postman collection contract', () => {
 		}));
 	});
 
+	it('documents lastReplay in the stored alert detail response example', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const detail = findItem(collection.item, 'GET Get Alert by ID');
+
+		expect(detail.response).toEqual(expect.arrayContaining([
+			expect.objectContaining({
+				code: 200,
+				body: expect.stringContaining('"lastReplay"'),
+			}),
+		]));
+	});
+
 	it('includes createdAt in both x-header job success examples', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const job = findItem(collection.item, 'POST Create TradingView Analysis Job (x-idempotency-key header)');
@@ -202,4 +214,3 @@ describe('Postman collection contract', () => {
 		expect(marketBuyResp.order.newClientOrderId).toBeUndefined();
 	});
 });
-

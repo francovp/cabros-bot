@@ -1043,8 +1043,8 @@ describe('AlertStorageService', () => {
 				code: 'STORAGE_UNAVAILABLE',
 			});
 		});
+		});
 
-	});
 
 	describe('listReplayAttempts()', () => {
 		it('returns null when alert storage is disabled', async () => {
@@ -1102,6 +1102,19 @@ describe('AlertStorageService', () => {
 			});
 		});
 
+		it('applies the composite before cursor to the Firestore query', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			const before = require('../../src/services/storage/alertPaginationCursor').encodeAlertPaginationCursor({
+				receivedAt: '2026-06-06T12:34:56.000Z',
+				id: 'alert-1_hash_ts_uuid',
+			});
+			mockGet.mockResolvedValueOnce({ empty: true, docs: [] });
+
+			await AlertStorageService.listReplayAttempts({ limit: 10, before });
+
+			expect(mockStartAfter).toHaveBeenCalledWith(expect.anything(), 'alert-1_hash_ts_uuid');
+		});
+
 		it('filters by alertId when provided', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 			mockGet.mockResolvedValueOnce({ empty: true, docs: [] });
@@ -1132,6 +1145,17 @@ describe('AlertStorageService', () => {
 	});
 
 	describe('getLatestReplayForAlert()', () => {
+		it('declares the composite Firestore index required by alert-scoped replay reads', () => {
+			const fs = require('fs');
+			const path = require('path');
+			const indexes = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../../firestore.indexes.json'), 'utf8'));
+			const replayIndex = indexes.indexes.find(index => index.collectionGroup === 'alertReplays'
+				&& index.fields.some(field => field.fieldPath === 'alertId' && field.order === 'ASCENDING')
+				&& index.fields.some(field => field.fieldPath === 'replayedAt' && field.order === 'DESCENDING')
+				&& index.fields.some(field => field.fieldPath === '__name__' && field.order === 'DESCENDING'));
+
+			expect(replayIndex).toBeDefined();
+		});
 		it('returns null when alert storage is disabled', async () => {
 			const result = await AlertStorageService.getLatestReplayForAlert('alert-1');
 			expect(result).toBeNull();

@@ -28,6 +28,23 @@ function getDocumentedApiOperations(contract) {
 }
 
 describe('OpenAPI contract', () => {
+	it('documents the concrete alert detail response including lastReplay', () => {
+		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+		const operation = contract.paths['/api/alerts/{alertId}'].get;
+
+		expect(operation.responses['200'].$ref).toBe('#/components/responses/AlertDetailResult');
+		expect(contract.components.responses.AlertDetailResult.content['application/json'].schema.$ref)
+			.toBe('#/components/schemas/AlertDetail');
+		expect(contract.components.schemas.AlertDetail.required).toEqual(
+			expect.arrayContaining(['success', 'alert', 'lastReplay']),
+		);
+		expect(contract.components.schemas.AlertDetail.properties.alert.$ref).toBe('#/components/schemas/StoredAlert');
+		expect(contract.components.schemas.AlertDetail.properties.lastReplay.oneOf).toEqual(expect.arrayContaining([
+			{ $ref: '#/components/schemas/ReplayAttempt' },
+			{ type: 'null' },
+		]));
+	});
+
 	it('exists as the canonical JSON source', () => {
 		expect(fs.existsSync(contractPath)).toBe(true);
 	});

@@ -770,6 +770,7 @@ describe('Alerts API Integration Tests', () => {
 		expect(alertStorageService.listReplayAttempts).toHaveBeenCalledWith({
 			limit: 10,
 			alertId: undefined,
+			before: undefined,
 		});
 		expect(res.body).toEqual({
 			success: true,
@@ -793,6 +794,25 @@ describe('Alerts API Integration Tests', () => {
 		expect(alertStorageService.listReplayAttempts).toHaveBeenCalledWith({
 			limit: 5,
 			alertId: 'alert-42',
+			before: undefined,
+		});
+	});
+
+	it('passes the replay before cursor through to listReplayAttempts', async () => {
+		const before = encodeAlertPaginationCursor({
+			receivedAt: '2026-06-06T12:34:56.000Z',
+			id: 'alert-1_replayhash_1234',
+		});
+
+		await request(app)
+			.get(`/api/alerts/replays?before=${encodeURIComponent(before)}`)
+			.set('x-api-key', 'test-key')
+			.expect(200);
+
+		expect(alertStorageService.listReplayAttempts).toHaveBeenCalledWith({
+			limit: 50,
+			alertId: undefined,
+			before,
 		});
 	});
 

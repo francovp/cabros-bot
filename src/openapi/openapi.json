@@ -536,7 +536,7 @@
         ],
         "responses": {
           "200": {
-            "$ref": "#/components/responses/JsonResult"
+            "$ref": "#/components/responses/AlertDetailResult"
           },
           "404": {
             "$ref": "#/components/responses/Error"
@@ -1763,12 +1763,12 @@
         }
       },
       "Cursor": {
-        "name": "cursor",
+        "name": "before",
         "in": "query",
         "schema": {
           "type": "string"
         },
-        "description": "Opaque pagination cursor returned by the previous page."
+        "description": "Pagination cursor returned as nextBefore from a previous response, or an ISO-8601 timestamp."
       },
       "Source": {
         "name": "source",
@@ -2448,6 +2448,16 @@
           "application/json": {
             "schema": {
               "$ref": "#/components/schemas/JsonObject"
+            }
+          }
+        }
+      },
+      "AlertDetailResult": {
+        "description": "Stored alert detail with the latest replay metadata",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/AlertDetail"
             }
           }
         }
@@ -3727,6 +3737,32 @@
               "null"
             ],
             "format": "date-time"
+          }
+        }
+      },
+      "AlertDetail": {
+        "type": "object",
+        "required": [
+          "success",
+          "alert",
+          "lastReplay"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "alert": {
+            "$ref": "#/components/schemas/StoredAlert"
+          },
+          "lastReplay": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ReplayAttempt"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       },

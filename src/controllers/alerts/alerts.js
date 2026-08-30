@@ -454,6 +454,7 @@ function listReplays(req, res) {
 		const result = await alertStorageService.listReplayAttempts({
 			limit,
 			alertId,
+			before,
 		});
 
 		return res.status(200).json({
