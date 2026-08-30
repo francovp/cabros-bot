@@ -133,10 +133,31 @@ describe('OpenAPI contract', () => {
 		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
 		const shadowModeMetrics = contract.components.schemas.AlertSummary.properties.shadowModeMetrics;
 
-		expect(shadowModeMetrics.oneOf).toEqual(expect.arrayContaining([
-			{ type: 'string' },
-			{ $ref: '#/components/schemas/JsonObject' },
+		expect(shadowModeMetrics.$ref).toBe('#/components/schemas/ShadowModeMetrics');
+		expect(shadowModeMetrics.description).toContain('hitRatePercent');
+		expect(shadowModeMetrics.description).toContain('targetHitRatePercent');
+		expect(shadowModeMetrics.description).toContain('expectancyR');
+
+		const shadowModeMetricsSchema = contract.components.schemas.ShadowModeMetrics;
+		expect(shadowModeMetricsSchema.oneOf).toEqual(expect.arrayContaining([
+			{
+				type: 'string',
+				enum: ['No measurements found'],
+			},
+			{ $ref: '#/components/schemas/OutcomesSummary' },
 		]));
+	});
+
+	it('documents the X-Shadow-Mode-Metrics header on GET /api/alerts/export', () => {
+		if (!fs.existsSync(contractPath)) return;
+		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+		const exportResponse = contract.paths['/api/alerts/export'].get.responses['200'];
+
+		expect(exportResponse.headers).toBeDefined();
+		expect(exportResponse.headers['X-Shadow-Mode-Metrics']).toEqual({
+			description: expect.stringContaining('SignalOutcomeService.getMetricsSummary'),
+			schema: { type: 'string' },
+		});
 	});
 
 	it('documents generic-message idempotency key locations and replay conflicts', () => {
