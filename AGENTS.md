@@ -1510,3 +1510,9 @@ No endpoint, OpenAPI, Postman, environment variable, or Remote Config contract c
 - `tests/unit/signal-repeat-cooldown.test.js`, `tests/integration/alert-repeat-suppression.test.js`, `tests/integration/status-endpoint.test.js` — Window/flip/fail-open coverage, endpoint double-post behavior, and status exposure.
 
 Disabled by default preserves existing webhook behavior byte-for-byte.
+
+## CI Secret Scanning and Least-Privilege Workflows (CB-257 / Issue #556)
+
+`.github/workflows/secret-scan.yml` runs the pinned Gitleaks Action on pushes to `master`, pull requests, and manual dispatch with full git history. It uses only the GitHub token and optional organization license secret; no application credentials are introduced. `.github/workflows/node.js.yml` and `.github/workflows/env-drift-check.yml` now explicitly grant `contents: read` permissions. README documents secret storage and rotation for webhook, Binance, and Firebase service-account credentials.
+
+This change is workflow/documentation-only: no application environment variable, Remote Config key, endpoint, OpenAPI, or Postman contract changed.

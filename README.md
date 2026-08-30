@@ -311,6 +311,18 @@ Run the fail-open configuration doctor before deployment. It exits successfully 
 pnpm run doctor
 ```
 
+### CI secret scanning and credential rotation
+
+The `Secret Scan` workflow runs Gitleaks on every push to `master`, pull request, and manual dispatch. It scans the full Git history and fails when a credential is detected. Keep secrets in the platform's encrypted secret store or local `.env` files that are excluded from git; never add real credentials to source, fixtures, Postman examples, or workflow files.
+
+If a credential may have been committed or exposed:
+
+1. Disable the affected integration first, especially Binance trading.
+2. Rotate `WEBHOOK_API_KEY` in the production secret store, then redeploy and verify protected endpoints with the new key.
+3. Revoke and replace `BINANCE_API_KEY`/`BINANCE_API_SECRET`; validate on testnet before any approved live enablement.
+4. Revoke the exposed Firebase service-account key, create a replacement, update `FIREBASE_SERVICE_ACCOUNT_JSON` in the deployment secret store, and verify Firestore/Remote Config access.
+5. Review the scan result and confirm no credential remains in git history; treat the old credential as compromised even if the file was deleted.
+
 ### 4. Run Development Server
 
 ```bash
