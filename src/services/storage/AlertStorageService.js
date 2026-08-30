@@ -839,6 +839,13 @@ function createInvalidCursorError() {
 }
 
 function buildParsedCursorTimestamp(parsedCursor) {
+	if (parsedCursor && parsedCursor.timestamp
+		&& typeof admin.firestore.Timestamp.fromSeconds === 'function') {
+		return admin.firestore.Timestamp.fromSeconds(
+			parsedCursor.timestamp.seconds,
+			parsedCursor.timestamp.nanoseconds,
+		);
+	}
 	return admin.firestore.Timestamp.fromDate(new Date(parsedCursor.receivedAt));
 }
 
@@ -1264,7 +1271,9 @@ function formatReplayDocument(doc) {
 	}).filter(Boolean);
 
 	return {
-		id: doc.id,
+		id: typeof data.attemptId === 'string' && data.attemptId
+			? data.attemptId
+			: crypto.createHash('sha256').update(doc.id).digest('hex').slice(0, 24),
 		alertId: typeof data.alertId === 'string' ? data.alertId : null,
 		idempotencyKeyHashPrefix: typeof data.idempotencyKeyHash === 'string'
 			? data.idempotencyKeyHash.slice(0, 12)
@@ -1287,7 +1296,7 @@ function getReplayCursorValues(doc) {
 	if (!replayedAt || typeof doc.id !== 'string' || !doc.id) {
 		return null;
 	}
-	return { replayedAt, documentId: doc.id };
+	return { replayedAt, timestamp: data.replayedAt, documentId: doc.id };
 }
 
 /**
@@ -1314,6 +1323,7 @@ async function listReplayAttempts({ limit = DEFAULT_PAGE_SIZE, alertId, before }
 	const targetCount = pageSize + 1;
 	const scanLimit = Math.max(targetCount, MAX_PAGE_SIZE);
 	const matches = [];
+	const matchCursors = [];
 	const parsedBeforeCursor = before
 		? parseAlertPaginationCursor(before)
 		: null;
@@ -1323,6 +1333,7 @@ async function listReplayAttempts({ limit = DEFAULT_PAGE_SIZE, alertId, before }
 	let pageCursor = parsedBeforeCursor
 		? {
 			receivedAt: parsedBeforeCursor.receivedAt,
+			timestamp: parsedBeforeCursor.timestamp,
 			documentId: parsedBeforeCursor.documentId,
 		}
 		: null;
@@ -1368,8 +1379,10 @@ async function listReplayAttempts({ limit = DEFAULT_PAGE_SIZE, alertId, before }
 				continue;
 			}
 			const formatted = formatReplayDocument(doc);
-			if (formatted) {
+			const docCursor = getReplayCursorValues(doc);
+			if (formatted && docCursor) {
 				matches.push(formatted);
+				matchCursors.push(docCursor);
 				if (matches.length >= targetCount) {
 					break;
 				}
@@ -1382,15 +1395,20 @@ async function listReplayAttempts({ limit = DEFAULT_PAGE_SIZE, alertId, before }
 		}
 		pageCursor = {
 			receivedAt: lastDocCursor.replayedAt,
+			timestamp: lastDocCursor.timestamp,
 			documentId: lastDocCursor.documentId,
 		};
 	}
 
 	const hasMore = matches.length > pageSize;
 	const replays = hasMore ? matches.slice(0, pageSize) : matches;
-	const lastReplay = replays[replays.length - 1];
-	const nextBefore = hasMore && lastReplay
-		? encodeAlertPaginationCursor({ receivedAt: lastReplay.replayedAt, id: lastReplay.id })
+	const lastCursor = hasMore ? matchCursors[pageSize - 1] : null;
+	const nextBefore = hasMore && lastCursor
+		? encodeAlertPaginationCursor({
+			receivedAt: lastCursor.replayedAt,
+			id: lastCursor.documentId,
+			timestamp: lastCursor.timestamp,
+		})
 		: null;
 
 	return { replays, hasMore, nextBefore };
@@ -1413,26 +1431,41 @@ async function getLatestReplayForAlert(alertId) {
 		throw createStorageUnavailableError();
 	}
 
-	let snapshot;
-	try {
-		snapshot = await firestore
+	let pageCursor = null;
+	while (true) {
+		let query = firestore
 			.collection(REPLAY_COLLECTION_NAME)
 			.where('alertId', '==', alertId.trim())
 			.orderBy('replayedAt', 'desc')
 			.orderBy(admin.firestore.FieldPath.documentId(), 'desc')
-			.limit(1)
-			.get();
-	} catch (error) {
-		console.warn('[AlertStorageService] Failed to read latest replay for alert:', error.message);
-		throw createStorageUnavailableError(error);
-	}
+			.limit(MAX_PAGE_SIZE);
+		if (pageCursor) {
+			query = query.startAfter(pageCursor.timestamp, pageCursor.documentId);
+		}
 
-	if (!snapshot || !Array.isArray(snapshot.docs) || snapshot.docs.length === 0) {
-		return null;
-	}
+		let snapshot;
+		try {
+			snapshot = await query.get();
+		} catch (error) {
+			console.warn('[AlertStorageService] Failed to read latest replay for alert:', error.message);
+			throw createStorageUnavailableError(error);
+		}
 
-	const doc = snapshot.docs.find(d => !isRetentionExpired(d.data() || {}));
-	return doc ? formatReplayDocument(doc) : null;
+		if (!snapshot || !Array.isArray(snapshot.docs) || snapshot.docs.length === 0) {
+			return null;
+		}
+
+		const doc = snapshot.docs.find(d => !isRetentionExpired(d.data() || {}));
+		if (doc) {
+			return formatReplayDocument(doc);
+		}
+
+		const lastDocCursor = getReplayCursorValues(snapshot.docs[snapshot.docs.length - 1]);
+		if (!lastDocCursor || snapshot.docs.length < MAX_PAGE_SIZE) {
+			return null;
+		}
+		pageCursor = lastDocCursor;
+	}
 }
 
 /**

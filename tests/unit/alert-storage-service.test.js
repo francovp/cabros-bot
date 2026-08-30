@@ -1085,7 +1085,7 @@ describe('AlertStorageService', () => {
 			expect(mockLimit).toHaveBeenCalledWith(100);
 			expect(result.replays).toEqual([
 				{
-					id: 'alert-1_hash_ts_uuid',
+					id: 'ts_uuid',
 					alertId: 'alert-1',
 					idempotencyKeyHashPrefix: 'abcdef012345',
 					channels: ['telegram'],
@@ -1100,6 +1100,25 @@ describe('AlertStorageService', () => {
 				receivedAt: '2026-06-06T12:34:56.000Z',
 				documentId: 'alert-1_hash_ts_uuid',
 			});
+		});
+
+		it('does not expose the internal replay document ID', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [buildQueryDoc('alert-1_full-hash_1700000000000_uuid', {
+					alertId: 'alert-1',
+					idempotencyKeyHash: 'abcdef0123456789',
+					attemptId: '1700000000000_uuid',
+					channels: ['telegram'],
+					replayedAt: buildTimestamp('2026-06-06T12:34:56.000Z'),
+				})],
+			});
+
+			const result = await AlertStorageService.listReplayAttempts({ limit: 10 });
+
+			expect(result.replays[0].id).toBe('1700000000000_uuid');
+			expect(result.replays[0].id).not.toContain('full-hash');
 		});
 
 		it('applies the composite before cursor to the Firestore query', async () => {
@@ -1128,6 +1147,7 @@ describe('AlertStorageService', () => {
 					empty: false,
 					docs: [buildQueryDoc('active-replay', {
 						alertId: 'alert-1',
+						attemptId: 'active-replay',
 						replayedAt: buildTimestamp('2026-08-12T11:00:00.000Z'),
 						expiresAt: buildTimestamp('2026-11-11T00:00:00.000Z'),
 					})],
@@ -1137,6 +1157,39 @@ describe('AlertStorageService', () => {
 
 			expect(mockGet).toHaveBeenCalledTimes(2);
 			expect(result.replays.map(replay => replay.id)).toEqual(['active-replay']);
+		});
+
+		it('preserves Firestore timestamp precision in replay cursors', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			const newerTimestamp = Object.assign(buildTimestamp('2026-06-06T12:34:56.000Z'), {
+				seconds: 1780749296,
+				nanoseconds: 900000001,
+			});
+			const olderTimestamp = Object.assign(buildTimestamp('2026-06-06T12:34:56.000Z'), {
+				seconds: 1780749296,
+				nanoseconds: 900000000,
+			});
+			mockGet
+				.mockResolvedValueOnce({
+					empty: false,
+					docs: [
+						buildQueryDoc('newer-replay', { attemptId: 'newer', replayedAt: newerTimestamp }),
+						buildQueryDoc('older-replay', { attemptId: 'older', replayedAt: olderTimestamp }),
+					],
+				})
+				.mockResolvedValueOnce({ empty: true, docs: [] });
+
+			const firstPage = await AlertStorageService.listReplayAttempts({ limit: 1 });
+			const parsedCursor = parseAlertPaginationCursor(firstPage.nextBefore);
+			expect(parsedCursor.timestamp).toEqual({ seconds: 1780749296, nanoseconds: 900000001 });
+
+			mockStartAfter.mockClear();
+			await AlertStorageService.listReplayAttempts({ limit: 1, before: firstPage.nextBefore });
+
+			expect(mockStartAfter).toHaveBeenCalledWith(
+				expect.objectContaining({ seconds: 1780749296, nanoseconds: 900000001 }),
+				'newer-replay',
+			);
 		});
 
 		it('filters by alertId when provided', async () => {
@@ -1212,9 +1265,9 @@ describe('AlertStorageService', () => {
 			const result = await AlertStorageService.getLatestReplayForAlert('alert-1');
 
 			expect(mockWhere).toHaveBeenCalledWith('alertId', '==', 'alert-1');
-			expect(mockLimit).toHaveBeenCalledWith(1);
+			expect(mockLimit).toHaveBeenCalledWith(100);
 			expect(result).toEqual({
-				id: 'alert-1_hash_ts_uuid',
+				id: 'ts_uuid',
 				alertId: 'alert-1',
 				idempotencyKeyHashPrefix: 'abcdef012345',
 				channels: ['telegram'],
@@ -1222,6 +1275,33 @@ describe('AlertStorageService', () => {
 				replayedAt: '2026-06-06T12:34:56.000Z',
 				attemptId: 'ts_uuid',
 			});
+		});
+
+		it('continues scanning after the newest replay expires', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			jest.useFakeTimers().setSystemTime(new Date('2026-08-13T00:00:00.000Z'));
+			const expiredBatch = Array.from({ length: 100 }, (_, index) => buildQueryDoc(`expired-${index}`, {
+				alertId: 'alert-1',
+				attemptId: `expired-${index}`,
+				replayedAt: buildTimestamp('2026-08-12T12:00:00.000Z'),
+				expiresAt: buildTimestamp('2026-08-12T23:59:59.000Z'),
+			}));
+			mockGet
+				.mockResolvedValueOnce({ empty: false, docs: expiredBatch })
+				.mockResolvedValueOnce({
+					empty: false,
+					docs: [buildQueryDoc('active-replay', {
+						alertId: 'alert-1',
+						attemptId: 'active-attempt',
+						replayedAt: buildTimestamp('2026-08-12T11:00:00.000Z'),
+						expiresAt: buildTimestamp('2026-11-11T00:00:00.000Z'),
+					})],
+				});
+
+			const result = await AlertStorageService.getLatestReplayForAlert('alert-1');
+
+			expect(mockGet).toHaveBeenCalledTimes(2);
+			expect(result.id).toBe('active-attempt');
 		});
 
 		it('returns null when no replay document exists', async () => {

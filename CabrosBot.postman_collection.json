@@ -2119,7 +2119,7 @@
                 }
               ]
             },
-            "description": "Lists bounded alert-replay audit records (alertReplays collection). Each replay creates a unique document so retries with the same idempotency key are preserved as history rather than overwritten. Raw idempotency keys are never returned; only a SHA-256 hash prefix is exposed."
+            "description": "Lists bounded alert-replay audit records (alertReplays collection). Each replay creates a unique document so retries with the same idempotency key are preserved as history rather than overwritten. Raw idempotency keys and internal document IDs are never returned; only an opaque attempt ID and SHA-256 hash prefix are exposed."
           },
           "response": [
             {
@@ -2127,14 +2127,14 @@
               "status": "OK",
               "code": 200,
               "_postman_previewlanguage": "json",
-              "body": "{\n  \"success\": true,\n  \"replays\": [\n    {\n      \"id\": \"alert-123_06bdeddf2a292e8940d24fb2847d88234dc85d7cd751d4cc7dbc471692aadf38_1700000000000_5b1f0c79-9f0b-4d6e-9b1f-3b8c0e6a5f1a\",\n      \"alertId\": \"alert-123\",\n      \"idempotencyKeyHashPrefix\": \"06bdeddf2a29\",\n      \"attemptId\": \"1700000000000_5b1f0c79-9f0b-4d6e-9b1f-3b8c0e6a5f1a\",\n      \"channels\": [\"telegram\"],\n      \"deliverySummary\": [\n        {\n          \"channel\": \"telegram\",\n          \"success\": true,\n          \"messageId\": \"tg-msg-123\"\n        }\n      ],\n      \"replayedAt\": \"2026-06-06T12:34:56.000Z\"\n    }\n  ],\n  \"pagination\": {\n    \"hasMore\": false,\n    \"limit\": 50,\n    \"nextBefore\": null\n  }\n}"
+              "body": "{\n  \"success\": true,\n  \"replays\": [\n    {\n      \"id\": \"1700000000000_5b1f0c79-9f0b-4d6e-9b1f-3b8c0e6a5f1a\",\n      \"alertId\": \"alert-123\",\n      \"idempotencyKeyHashPrefix\": \"06bdeddf2a29\",\n      \"attemptId\": \"1700000000000_5b1f0c79-9f0b-4d6e-9b1f-3b8c0e6a5f1a\",\n      \"channels\": [\"telegram\"],\n      \"deliverySummary\": [\n        {\n          \"channel\": \"telegram\",\n          \"success\": true,\n          \"messageId\": \"tg-msg-123\"\n        }\n      ],\n      \"replayedAt\": \"2026-06-06T12:34:56.000Z\"\n    }\n  ],\n  \"pagination\": {\n    \"hasMore\": false,\n    \"limit\": 50,\n    \"nextBefore\": null\n  }\n}"
             },
             {
               "name": "200 OK - Filtered to a single alertId",
               "status": "OK",
               "code": 200,
               "_postman_previewlanguage": "json",
-              "body": "{\n  \"success\": true,\n  \"replays\": [\n    {\n      \"id\": \"alert-123_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_1700000000000_bbbbbbbb-cccc-dddd-eeee-ffffffffffff\",\n      \"alertId\": \"alert-123\",\n      \"idempotencyKeyHashPrefix\": \"aaaaaaaaaaaa\",\n      \"attemptId\": \"1700000000000_bbbbbbbb-cccc-dddd-eeee-ffffffffffff\",\n      \"channels\": [\"whatsapp\"],\n      \"deliverySummary\": [\n        {\n          \"channel\": \"whatsapp\",\n          \"success\": false,\n          \"errorCode\": \"TIMEOUT\",\n          \"statusCode\": 504\n        }\n      ],\n      \"replayedAt\": \"2026-06-06T13:00:00.000Z\"\n    }\n  ],\n  \"pagination\": {\n    \"hasMore\": false,\n    \"limit\": 50,\n    \"nextBefore\": null\n  }\n}"
+              "body": "{\n  \"success\": true,\n  \"replays\": [\n    {\n      \"id\": \"1700000000000_bbbbbbbb-cccc-dddd-eeee-ffffffffffff\",\n      \"alertId\": \"alert-123\",\n      \"idempotencyKeyHashPrefix\": \"aaaaaaaaaaaa\",\n      \"attemptId\": \"1700000000000_bbbbbbbb-cccc-dddd-eeee-ffffffffffff\",\n      \"channels\": [\"whatsapp\"],\n      \"deliverySummary\": [\n        {\n          \"channel\": \"whatsapp\",\n          \"success\": false,\n          \"errorCode\": \"TIMEOUT\",\n          \"statusCode\": 504\n        }\n      ],\n      \"replayedAt\": \"2026-06-06T13:00:00.000Z\"\n    }\n  ],\n  \"pagination\": {\n    \"hasMore\": false,\n    \"limit\": 50,\n    \"nextBefore\": null\n  }\n}"
             },
             {
               "name": "403 FEATURE_DISABLED - storage disabled",

@@ -746,7 +746,7 @@ describe('Alerts API Integration Tests', () => {
 
 	it('returns bounded replay records with safe fields and pagination', async () => {
 		const replayRecord = {
-			id: 'alert-1_replayhash_1234',
+			id: '1234_uuid',
 			alertId: 'alert-1',
 			idempotencyKeyHashPrefix: 'abcdef012345',
 			channels: ['telegram'],
@@ -855,7 +855,7 @@ describe('Alerts API Integration Tests', () => {
 			useTradingViewData: false,
 		};
 		const lastReplay = {
-			id: 'alert-1_hash_ts',
+			id: 'ts_uuid',
 			alertId: 'alert-1',
 			idempotencyKeyHashPrefix: 'abcdef012345',
 			channels: ['telegram'],

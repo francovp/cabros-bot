@@ -3675,7 +3675,7 @@
         "properties": {
           "id": {
             "type": "string",
-            "description": "Composite document ID `${alertId}_${idempotencyKeyHash}_${timestamp}_${uuid}`."
+            "description": "Opaque replay-attempt identifier; use this value for display and audit references, not as the Firestore document ID."
           },
           "alertId": {
             "type": "string"

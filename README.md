@@ -1276,7 +1276,7 @@ List bounded alert-replay audit records from the Firestore `alertReplays` collec
   "success": true,
   "replays": [
     {
-      "id": "alert-1_<sha256-hash>_1700000000000_<uuid>",
+      "id": "1700000000000_<uuid>",
       "alertId": "alert-1",
       "idempotencyKeyHashPrefix": "06bdeddf2a29",
       "attemptId": "1700000000000_<uuid>",
@@ -1318,7 +1318,7 @@ Retrieve a single stored alert by Firestore document ID. The response also surfa
     "tradingViewEnrichmentApplied": false
   },
   "lastReplay": {
-    "id": "alert-123_<sha256-hash>_1700000000000_<uuid>",
+    "id": "1700000000000_<uuid>",
     "alertId": "alert-123",
     "idempotencyKeyHashPrefix": "06bdeddf2a29",
     "attemptId": "1700000000000_<uuid>",
