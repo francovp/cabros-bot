@@ -2133,6 +2133,49 @@ ngrok http 80
 curl http://localhost/healthcheck
 ```
 
+### Production Smoke Probe
+
+A scheduled GitHub Actions workflow (`.github/workflows/production-smoke-probe.yml`) probes the Railway deployment every 15 minutes and pages the Telegram admin chat on persistent failures. The probe runs `ops/production-smoke-probe.sh`, which:
+
+- Hits `/healthcheck` (must return HTTP 200).
+- Hits `/api/status` with the `x-api-key` header from the `WEBHOOK_API_KEY` GitHub secret.
+- Asserts `service.commit` matches the latest `master` SHA (catches stale deploys).
+- Optionally asserts each dependency in `PRODUCTION_REQUIRE_READY_DEPS` is `ready: true`.
+
+Configure the probe via GitHub repository variables (no application-owned env vars required):
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `PRODUCTION_BASE_URL` | `https://cabros-bot-production.up.railway.app` | Probe target. |
+| `PRODUCTION_REQUIRE_READY_DEPS` | empty | Comma-separated dependency names that must be ready (e.g. `tradingViewMcp,firestore`). |
+| `PRODUCTION_PROBE_TIMEOUT` | `15` | Per-request curl timeout (seconds). |
+
+Configure the probe via GitHub repository secrets:
+
+| Secret | Purpose |
+| --- | --- |
+| `WEBHOOK_API_KEY` | Sent via the `x-api-key` header. Never appears in URLs, logs, or job summaries. |
+| `TELEGRAM_BOT_TOKEN` | (Optional) Enables admin paging on persistent failures. |
+| `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID` | (Optional) Target chat id for admin paging. |
+
+Exit codes:
+
+- `0` — probe succeeded
+- `2` — `AUTH_BLOCKED` (missing `WEBHOOK_API_KEY`) or `SECRET_LEAK` (credentials in URL)
+- `3` — `/healthcheck` non-200
+- `4` — `/api/status` request failed or returned non-JSON
+- `5` — `service.commit` does not match the expected SHA (stale deploy)
+- `6` — at least one required dependency is not ready
+
+Run locally for debugging:
+
+```bash
+WEBHOOK_API_KEY=$YOUR_KEY \
+PRODUCTION_BASE_URL=https://cabros-bot-production.up.railway.app \
+PRODUCTION_EXPECTED_COMMIT=$(git rev-parse origin/master) \
+ops/production-smoke-probe.sh
+```
+
 ### Logs
 
 The application logs to stdout:
