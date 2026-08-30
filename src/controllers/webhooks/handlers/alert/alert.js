@@ -259,17 +259,36 @@ function postAlert(botOrGetter) {
 							? alert.enriched.price_data.current_price
 							: null;
 
+					const stopLevel = alert.enriched && typeof alert.enriched.invalidation_level === 'number' && Number.isFinite(alert.enriched.invalidation_level) && alert.enriched.invalidation_level > 0
+						? alert.enriched.invalidation_level
+						: (alert.enriched && typeof alert.enriched.invalidation_level === 'string' && Number.isFinite(Number(alert.enriched.invalidation_level)) && Number(alert.enriched.invalidation_level) > 0
+							? Number(alert.enriched.invalidation_level)
+							: null);
+
+					const targetLevel = alert.enriched && typeof alert.enriched.target_level === 'number' && Number.isFinite(alert.enriched.target_level) && alert.enriched.target_level > 0
+						? alert.enriched.target_level
+						: (alert.enriched && typeof alert.enriched.target_level === 'string' && Number.isFinite(Number(alert.enriched.target_level)) && Number(alert.enriched.target_level) > 0
+							? Number(alert.enriched.target_level)
+							: null);
+
+					const levelsSource = alert.enriched && alert.enriched.levelsSource;
+					const priceSource = mcpPrice !== null
+						? (levelsSource === 'derived-quote' ? 'derived-quote' : (levelsSource === 'gemini-grounding' ? 'gemini-grounding' : 'tradingview-mcp'))
+						: null;
+
 					signalOutcomeService.recordSignal({
 						requestId,
 						source: 'webhook-alert',
 						symbol: parsed.symbol,
 						exchange: parsed.exchange || 'BINANCE',
 						timeframe: parsed.timeframe,
-						setupType: 'tradingview-enrichment',
+						setupType: (alert.enriched && alert.enriched.setup_type) || 'tradingview-enrichment',
 						score: alert.enriched ? alert.enriched.sentiment_score : null,
 						side: parsed.side,
 						price: mcpPrice,
-						priceSource: mcpPrice !== null ? 'tradingview-mcp' : null,
+						stop: stopLevel,
+						target: targetLevel,
+						priceSource,
 						sources: alert.enriched && Array.isArray(alert.enriched.sources) ? alert.enriched.sources : [],
 						tokenUsage: tokenUsageJSON,
 						processingTimeMs: Date.now() - startTime,
