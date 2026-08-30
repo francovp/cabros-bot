@@ -340,9 +340,14 @@ function postRunPreset(botOrGetter) {
 				notificationManager = await initializeNotificationServices(resolveBot(botOrGetter));
 			}
 
-			const deliveryResults = await sendWithNotificationRouting(notificationManager, { text: alertText }, routing, {
-				parentSpan: sentryService.getActiveSpan(),
-			});
+			const deliveryResults = await sendWithNotificationRouting(
+				notificationManager,
+				{ text: alertText, source: 'scanner-preset' },
+				routing,
+				{
+					parentSpan: sentryService.getActiveSpan(),
+				},
+			);
 			const requestedChannels = getRequestedChannels(notificationManager, routing);
 			const deliveredChannels = getDeliveredChannels(deliveryResults);
 			const summary = buildSummary(scanResults, deliveryResults);

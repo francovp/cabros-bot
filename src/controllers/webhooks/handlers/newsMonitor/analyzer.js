@@ -94,6 +94,17 @@ function getRoutingDestination(notificationMgr, routing = {}, channel) {
 		return hashDiscordWebhook(routing.discordWebhookUrl || getChannelDefaultDestination(notificationMgr, channel));
 	}
 
+	if (channel === 'telegram') {
+		const chatId = (typeof routing.telegramChatId === 'string' && routing.telegramChatId)
+			? routing.telegramChatId
+			: getChannelDefaultDestination(notificationMgr, channel);
+		if (!chatId) return undefined;
+		const threadId = (typeof routing.telegramThreadId === 'number' && Number.isSafeInteger(routing.telegramThreadId))
+			? routing.telegramThreadId
+			: undefined;
+		return threadId !== undefined ? `${chatId}:${threadId}` : String(chatId);
+	}
+
 	const field = ROUTING_IDENTITY_FIELDS[channel];
 	if (field && typeof routing[field] === 'string') return routing[field];
 	return getChannelDefaultDestination(notificationMgr, channel);
@@ -102,6 +113,14 @@ function getRoutingDestination(notificationMgr, routing = {}, channel) {
 function getStoredRoutingIdentity(routing = {}, channel) {
 	if (channel === 'discord') {
 		return routing.discordWebhookFingerprint || hashDiscordWebhook(routing.discordWebhookUrl);
+	}
+	if (channel === 'telegram') {
+		const chatId = routing.telegramChatId;
+		if (!chatId) return undefined;
+		const threadId = (typeof routing.telegramThreadId === 'number' && Number.isSafeInteger(routing.telegramThreadId))
+			? routing.telegramThreadId
+			: undefined;
+		return threadId !== undefined ? `${chatId}:${threadId}` : String(chatId);
 	}
 	return routing[ROUTING_IDENTITY_FIELDS[channel]];
 }
@@ -120,6 +139,12 @@ function getCachedRoutingMetadata(routing = {}, previousRouting = {}, notificati
 		if (identity !== undefined) {
 			metadata[field] = identity;
 		}
+	}
+	const threadId = typeof routing.telegramThreadId === 'number'
+		? routing.telegramThreadId
+		: (typeof previousRouting.telegramThreadId === 'number' ? previousRouting.telegramThreadId : undefined);
+	if (threadId !== undefined) {
+		metadata.telegramThreadId = threadId;
 	}
 	return metadata;
 }
@@ -1213,6 +1238,7 @@ class NewsAnalyzer {
 
 		return {
 			symbol,
+			source: 'news-monitor',
 			eventCategory: geminiAnalysis.event_category,
 			headline: geminiAnalysis.headline,
 			sentimentScore: geminiAnalysis.sentiment_score,

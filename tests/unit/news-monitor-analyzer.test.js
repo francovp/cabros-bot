@@ -52,6 +52,18 @@ describe('News Monitor Analyzer - Volume & RSI Filtering', () => {
 			expect(metadata).not.toHaveProperty('discordWebhookFingerprint');
 			expect(Object.values(metadata)).not.toContain(undefined);
 		});
+
+		it('preserves telegramThreadId in cached routing metadata and includes in destination identity', () => {
+			const notificationManager = {
+				channels: new Map([
+					['telegram', { chatId: 'telegram-default' }],
+				]),
+			};
+
+			const metadata = getCachedRoutingMetadata({ telegramThreadId: 42 }, {}, notificationManager);
+			expect(metadata.telegramChatId).toBe('telegram-default:42');
+			expect(metadata.telegramThreadId).toBe(42);
+		});
 	});
 
 	describe('calculateVolumeRatio', () => {

@@ -649,6 +649,7 @@ describe('Alerts API Integration Tests', () => {
 		expect(mockNotificationManager.sendToChannels).toHaveBeenCalledWith({
 			text: 'Replay me',
 			enriched: { sentiment: 'bullish' },
+			source: 'webhook',
 			replay: {
 				originalAlertId: 'alert-123',
 				idempotencyKey: 'replay-key-1',

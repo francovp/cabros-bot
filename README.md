@@ -27,6 +27,11 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 
 ### Optional Variables
 
+#### Telegram Forum Topic Routing
+
+- `TELEGRAM_TOPIC_ROUTES` - Optional mapping of alert categories/sources to Telegram forum topic `message_thread_id` values. Format: comma-separated pairs `category:threadId` (e.g. `webhook-signal:101,market-scanner:202,news-monitor:303,default:0`) or JSON object string `{"webhook-signal":101,"market-scanner":202}`. Thread ID `0` or `null` routes alerts to the chat's General topic.
+- `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID` - Dedicated Telegram chat ID for admin/error notices (optional, falls back to `TELEGRAM_CHAT_ID`)
+
 #### Security
 
 - `WEBHOOK_API_KEY` - API key used to secure `/api/*` webhook endpoints. Required in production-like environments (`NODE_ENV=production`, Render, Vercel, Railway), where endpoints fail-closed with HTTP 503 if unset. When configured, clients must provide the key via the `x-api-key` header (or the `api-key` query parameter)
@@ -1498,6 +1503,7 @@ The alert webhook system supports simultaneous delivery to multiple channels (Te
 - **Format**: MarkdownV2 with special character escaping
 - **Timeout**: ~10 seconds per delivery
 - **Retry**: Rate limits (HTTP 429) retried up to 2 additional times (3 total attempts) with `Retry-After` parameter backoff and total wait budget caps
+- **Forum Topics (`message_thread_id`)**: Route alerts automatically into forum topics by category/source via `TELEGRAM_TOPIC_ROUTES` or explicitly per request via `telegramThreadId` (set `0` to target the General topic). Precedence: explicit request payload `telegramThreadId` > `TELEGRAM_TOPIC_ROUTES[category]` > `TELEGRAM_TOPIC_ROUTES.default` > General topic.
 
 #### WhatsApp (Optional)
 

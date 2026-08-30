@@ -202,6 +202,18 @@ function formatAlertDocument(doc) {
 	if (typeof data.sentimentScore === 'number' && Number.isFinite(data.sentimentScore)) {
 		docObj.sentimentScore = data.sentimentScore;
 	}
+	if (typeof data.telegramChatId === 'string' && data.telegramChatId.trim()) {
+		docObj.telegramChatId = data.telegramChatId.trim();
+	}
+	if (typeof data.telegramThreadId === 'number' && Number.isSafeInteger(data.telegramThreadId) && data.telegramThreadId >= 0) {
+		docObj.telegramThreadId = data.telegramThreadId;
+	}
+	if (typeof data.whatsappChatId === 'string' && data.whatsappChatId.trim()) {
+		docObj.whatsappChatId = data.whatsappChatId.trim();
+	}
+	if (typeof data.discordWebhookUrl === 'string' && data.discordWebhookUrl.trim()) {
+		docObj.discordWebhookUrl = data.discordWebhookUrl.trim();
+	}
 	if (typeof data.dedupStatus === 'string') {
 		docObj.dedupStatus = data.dedupStatus;
 	}
@@ -965,6 +977,11 @@ async function saveAlertInternal({
 	sentimentScore,
 	dedupStatus,
 	requestId,
+	telegramChatId,
+	telegramThreadId,
+	whatsappChatId,
+	discordWebhookUrl,
+	routing,
 }) {
 	if (!isEnabled()) {
 		return null;
@@ -979,6 +996,13 @@ async function saveAlertInternal({
 		const extracted = extractSymbolAndExchange({ text, symbol, exchange, enrichmentData });
 		const rawText = typeof text === 'string' ? text : '';
 		const truncated = rawText.length > MAX_ALERT_TEXT_LENGTH;
+		const effectiveTelegramChatId = telegramChatId || (routing && routing.telegramChatId);
+		const effectiveTelegramThreadId = telegramThreadId !== undefined
+			? telegramThreadId
+			: (routing && routing.telegramThreadId !== undefined ? routing.telegramThreadId : undefined);
+		const effectiveWhatsappChatId = whatsappChatId || (routing && routing.whatsappChatId);
+		const effectiveDiscordWebhookUrl = discordWebhookUrl || (routing && routing.discordWebhookUrl);
+
 		const document = {
 			receivedAt: admin.firestore.FieldValue.serverTimestamp(),
 			expiresAt: buildRetentionExpiryTimestamp(),
@@ -1030,6 +1054,18 @@ async function saveAlertInternal({
 		}
 		if (typeof dedupStatus === 'string' && dedupStatus.trim()) {
 			document.dedupStatus = dedupStatus.trim();
+		}
+		if (typeof effectiveTelegramChatId === 'string' && effectiveTelegramChatId.trim()) {
+			document.telegramChatId = effectiveTelegramChatId.trim();
+		}
+		if (typeof effectiveTelegramThreadId === 'number' && Number.isSafeInteger(effectiveTelegramThreadId) && effectiveTelegramThreadId >= 0) {
+			document.telegramThreadId = effectiveTelegramThreadId;
+		}
+		if (typeof effectiveWhatsappChatId === 'string' && effectiveWhatsappChatId.trim()) {
+			document.whatsappChatId = effectiveWhatsappChatId.trim();
+		}
+		if (typeof effectiveDiscordWebhookUrl === 'string' && effectiveDiscordWebhookUrl.trim()) {
+			document.discordWebhookUrl = effectiveDiscordWebhookUrl.trim();
 		}
 
 		const docRef = await firestore.collection(COLLECTION_NAME).add(document);
