@@ -25,6 +25,7 @@ const { registerDebugSentryRoute } = require('./src/lib/debugSentryRoute');
 const { createProcessLifecycle } = require('./src/lib/processLifecycle');
 const { waitForBackgroundTasks } = require('./src/lib/backgroundTaskTracker');
 const { getTelegramBootstrapConfig } = require('./src/lib/telegramBootstrap');
+const { launchTelegramBot } = require('./src/lib/telegramCommandMenu');
 const { attachTelegramErrorBoundary, handlePollingError } = require('./src/lib/telegramErrorBoundary');
 const { jobService } = require('./src/services/jobs/JobService');
 const SignalOutcomeService = require('./src/services/storage/SignalOutcomeService');
@@ -127,8 +128,7 @@ async function bootstrapApplication() {
 		if (lifecycle.isShuttingDown()) return;
 
 		// Start polling without blocking the rest of bootstrap.
-		botLaunchPromise = bot.launch();
-		void botLaunchPromise.catch((error) => {
+		botLaunchPromise = launchTelegramBot(bot, (error) => {
 			console.error('[index] Failed to launch Telegram bot:', error.message);
 			void handlePollingError(error, { bot });
 		});
