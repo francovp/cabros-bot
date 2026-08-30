@@ -42,6 +42,8 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 - `FIREBASE_APP_ID` - Public Firebase Web app ID (optional for Auth, recommended)
 - `FIREBASE_WEB_CONFIG_JSON` - Optional JSON alternative containing the public Firebase Web config (`apiKey`, `authDomain`, `projectId`, and optional `appId`)
 
+To report a vulnerability, see [`SECURITY.md`](./SECURITY.md) — the project documents a private disclosure channel, scope, and safe-harbor guidance. Do not file security issues as public GitHub issues.
+
 #### WhatsApp Alerts & Commands (GreenAPI)
 
 - `ENABLE_WHATSAPP_ALERTS` - Enable WhatsApp alerts (`true` or `false`, default: `false`)
