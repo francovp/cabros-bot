@@ -204,6 +204,7 @@ function getStatus() {
 	const binancePriceCheckEnabled = isEnabled(process.env.ENABLE_BINANCE_PRICE_CHECK);
 	const binanceTradingEnabled = isEnabled(process.env.ENABLE_BINANCE_TRADING);
 	const binanceTradingStatus = binanceOrderService.getStatus();
+	const binanceTradingKillSwitchEnabled = binanceTradingEnabled;
 	const llmAlertEnrichmentEnabled = isEnabled(process.env.ENABLE_LLM_ALERT_ENRICHMENT);
 	const cloudflareAigEnabled = isEnabled(process.env.ENABLE_CLOUDFLARE_AIG);
 	const messageFooterMetadataEnabled = runtimeConfig.ENABLE_MESSAGE_FOOTER_METADATA;
@@ -341,6 +342,7 @@ function getStatus() {
 			marketScanner: marketScannerEnabled,
 			binancePriceCheck: binancePriceCheckEnabled,
 			binanceTrading: binanceTradingEnabled,
+			binanceTradingKillSwitch: binanceTradingKillSwitchEnabled,
 			llmAlertEnrichment: llmAlertEnrichmentEnabled,
 			cloudflareAig: cloudflareAigEnabled,
 			messageFooterMetadata: messageFooterMetadataEnabled,
@@ -420,7 +422,23 @@ function getStatus() {
 				...signalRepeatCooldown.getStats(),
 			},
 			jobExecutionQueue: jobExecutionQueueStatus,
-			binanceTrading: binanceTradingStatus,
+			binanceTrading: {
+				enabled: binanceTradingStatus.enabled,
+				configured: binanceTradingStatus.configured,
+				ready: binanceTradingStatus.ready,
+				status: binanceTradingStatus.status,
+				environment: binanceTradingStatus.environment,
+				allowedSymbols: binanceTradingStatus.allowedSymbols,
+				maxNotionalConfigured: binanceTradingStatus.maxNotionalConfigured,
+				paused: binanceTradingStatus.paused,
+				pausedBy: binanceTradingStatus.pausedBy,
+				pausedAt: binanceTradingStatus.pausedAt,
+				pausedReason: binanceTradingStatus.pausedReason,
+				lastChangedAt: binanceTradingStatus.lastChangedAt,
+				lastChangedBy: binanceTradingStatus.lastChangedBy,
+				lastAction: binanceTradingStatus.lastAction,
+				controlStorage: binanceTradingStatus.controlStorage,
+			},
 		},
 	};
 }

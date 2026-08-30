@@ -1460,8 +1460,301 @@
             "$ref": "#/components/responses/BinanceOrderFailure"
           },
           "503": {
+            "description": "Binance order submissions are paused by the operator kill-switch, the pause state storage is unavailable, or another transient unavailability was detected. The body code field identifies the cause.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "examples": {
+                  "tradingPaused": {
+                    "value": {
+                      "success": false,
+                      "error": "Binance order submissions are paused by ops-user: suspected credential leak",
+                      "code": "TRADING_PAUSED"
+                    }
+                  },
+                  "tradingUnavailable": {
+                    "value": {
+                      "success": false,
+                      "error": "Binance trading pause state is unavailable; refusing to submit until storage recovers",
+                      "code": "TRADING_PAUSED"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.operator"
+      }
+    },
+    "/api/trading/binance/pause": {
+      "get": {
+        "tags": [
+          "Trading"
+        ],
+        "summary": "Read the current Binance runtime kill-switch state",
+        "description": "Returns the effective pause state (paused, pausedBy, pausedAt, pausedReason, lastChangedAt, lastChangedBy, lastAction, unavailable, storage) for the Binance Spot order workflow. The same state is exposed in `/api/status` under `dependencies.binanceTrading`.",
+        "operationId": "getBinanceTradingPause",
+        "responses": {
+          "200": {
+            "description": "Current pause state for the Binance order workflow.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["success", "state"],
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "state": {
+                      "$ref": "#/components/schemas/BinanceTradingPauseState"
+                    }
+                  }
+                },
+                "examples": {
+                  "paused": {
+                    "value": {
+                      "success": true,
+                      "state": {
+                        "paused": true,
+                        "pausedBy": "ops-user",
+                        "pausedAt": "2026-08-30T12:00:00Z",
+                        "pausedReason": "suspected credential leak",
+                        "lastChangedAt": "2026-08-30T12:00:00Z",
+                        "lastChangedBy": "ops-user",
+                        "lastAction": "pause",
+                        "unavailable": false,
+                        "storage": "firestore"
+                      }
+                    }
+                  },
+                  "open": {
+                    "value": {
+                      "success": true,
+                      "state": {
+                        "paused": false,
+                        "pausedBy": null,
+                        "pausedAt": null,
+                        "pausedReason": null,
+                        "lastChangedAt": "2026-08-30T13:00:00Z",
+                        "lastChangedBy": "ops-user",
+                        "lastAction": "resume",
+                        "unavailable": false,
+                        "storage": "firestore"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
             "$ref": "#/components/responses/Error"
           }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      },
+      "post": {
+        "tags": [
+          "Trading"
+        ],
+        "summary": "Pause Binance Spot order submissions",
+        "description": "Operator-gated runtime kill-switch. With pause active, all Binance Spot order submissions (live and dryRun) fail with 503 TRADING_PAUSED before any signed Binance request. Requires the same admin.operator role as the order endpoint. Idempotent. The optional `reason` field is logged and surfaced in `/api/status`.",
+        "operationId": "postBinanceTradingPause",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKeyHeader"
+          },
+          {
+            "$ref": "#/components/parameters/XIdempotencyKeyHeader"
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "description": "Free-text operator note (max 280 chars) recorded in the audit log and surfaced in `/api/status`.",
+                    "maxLength": 280
+                  }
+                }
+              },
+              "examples": {
+                "withReason": {
+                  "value": { "reason": "suspected credential leak" }
+                },
+                "empty": {
+                  "value": {}
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Pause applied. Echoes the resulting state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["success", "action", "state"],
+                  "properties": {
+                    "success": { "type": "boolean", "const": true },
+                    "action": { "type": "string", "const": "pause" },
+                    "state": { "$ref": "#/components/schemas/BinanceTradingPauseState" }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/Error" },
+          "401": { "$ref": "#/components/responses/Error" },
+          "403": { "$ref": "#/components/responses/Error" },
+          "409": {
+            "description": "Binance trading is disabled. The pause endpoint cannot be used while the order path is disabled.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" },
+                "examples": {
+                  "tradingDisabled": {
+                    "value": {
+                      "success": false,
+                      "error": "Binance trading is disabled; pause state cannot be set without an enabled order path",
+                      "code": "TRADING_DISABLED"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The authoritative pause state storage is unavailable, so the request fails closed.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" },
+                "examples": {
+                  "unavailable": {
+                    "value": {
+                      "success": false,
+                      "error": "Pause state is unavailable; refuse to update without authoritative storage",
+                      "code": "TRADING_CONTROL_UNAVAILABLE"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.operator"
+      }
+    },
+    "/api/trading/binance/resume": {
+      "post": {
+        "tags": [
+          "Trading"
+        ],
+        "summary": "Resume Binance Spot order submissions",
+        "description": "Operator-gated counterpart to `POST /api/trading/binance/pause`. Clears the pause state and restores prior order submission behavior. Requires the same admin.operator role as the order endpoint. Idempotent. The optional `reason` field is recorded in the audit log.",
+        "operationId": "postBinanceTradingResume",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKeyHeader"
+          },
+          {
+            "$ref": "#/components/parameters/XIdempotencyKeyHeader"
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "description": "Free-text operator note (max 280 chars) recorded in the audit log.",
+                    "maxLength": 280
+                  }
+                }
+              },
+              "examples": {
+                "withReason": {
+                  "value": { "reason": "mitigation applied" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Resume applied. Echoes the resulting state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["success", "action", "state"],
+                  "properties": {
+                    "success": { "type": "boolean", "const": true },
+                    "action": { "type": "string", "const": "resume" },
+                    "state": { "$ref": "#/components/schemas/BinanceTradingPauseState" }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/Error" },
+          "401": { "$ref": "#/components/responses/Error" },
+          "403": { "$ref": "#/components/responses/Error" },
+          "409": { "$ref": "#/components/responses/Error" },
+          "503": { "$ref": "#/components/responses/Error" }
         },
         "security": [
           {
@@ -5182,6 +5475,58 @@
           },
           "order": {
             "$ref": "#/components/schemas/JsonObject"
+          }
+        }
+      },
+      "BinanceTradingPauseState": {
+        "type": "object",
+        "description": "Effective runtime kill-switch state for the Binance Spot order workflow.",
+        "required": ["paused", "storage"],
+        "properties": {
+          "paused": {
+            "type": "boolean",
+            "description": "True when order submissions are blocked by the operator kill-switch."
+          },
+          "pausedBy": {
+            "type": ["string", "null"],
+            "description": "Operator identity (api-key, firebase-bearer, or admin role) that last paused submissions."
+          },
+          "pausedAt": {
+            "type": ["string", "null"],
+            "format": "date-time",
+            "description": "ISO-8601 timestamp of the most recent pause."
+          },
+          "pausedReason": {
+            "type": ["string", "null"],
+            "description": "Free-text operator note recorded with the most recent pause (max 280 chars)."
+          },
+          "resumedBy": {
+            "type": ["string", "null"],
+            "description": "Operator identity that last resumed submissions."
+          },
+          "resumedAt": {
+            "type": ["string", "null"],
+            "format": "date-time"
+          },
+          "lastChangedAt": {
+            "type": ["string", "null"],
+            "format": "date-time"
+          },
+          "lastChangedBy": {
+            "type": ["string", "null"]
+          },
+          "lastAction": {
+            "type": ["string", "null"],
+            "enum": ["pause", "resume", null]
+          },
+          "unavailable": {
+            "type": "boolean",
+            "description": "True when the authoritative pause state storage is unreachable while trading is enabled. The order path fails closed in that case."
+          },
+          "storage": {
+            "type": "string",
+            "enum": ["memory", "firestore"],
+            "description": "Storage backend currently serving the pause state."
           }
         }
       },

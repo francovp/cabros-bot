@@ -2,6 +2,7 @@
 
 const crypto = require('crypto');
 const { MainClient } = require('binance');
+const { tradingControlService } = require('./TradingControlService');
 
 const TESTNET_BASE_URL = 'https://testnet.binance.vision';
 const LIVE_BASE_URL = 'https://api.binance.com';
@@ -579,10 +580,16 @@ function normalizeOrderQuery(query = {}) {
 	};
 }
 
-function createBinanceOrderService({ createClient = createBinanceClient } = {}) {
+function createBinanceOrderService({
+	createClient = createBinanceClient,
+	controlService = tradingControlService,
+} = {}) {
 	return {
 		getStatus() {
 			const config = getConfig();
+			const controlStatus = typeof controlService.getStatus === 'function'
+				? controlService.getStatus()
+				: { paused: false, storage: 'memory' };
 			return {
 				enabled: config.enabled,
 				configured: config.configured,
@@ -591,7 +598,22 @@ function createBinanceOrderService({ createClient = createBinanceClient } = {}) 
 				environment: config.environment,
 				allowedSymbols: config.allowedSymbols,
 				maxNotionalConfigured: Number.isFinite(config.maxNotional) && config.maxNotional > 0,
+				paused: Boolean(controlStatus.paused),
+				pausedBy: controlStatus.pausedBy || null,
+				pausedAt: controlStatus.pausedAt || null,
+				pausedReason: controlStatus.pausedReason || null,
+				lastChangedAt: controlStatus.lastChangedAt || null,
+				lastChangedBy: controlStatus.lastChangedBy || null,
+				lastAction: controlStatus.lastAction || null,
+				controlStorage: controlStatus.storage || 'memory',
 			};
+		},
+
+		async getPauseState() {
+			if (typeof controlService.getPauseState !== 'function') {
+				return { paused: false, inactive: true, storage: 'memory' };
+			}
+			return controlService.getPauseState();
 		},
 
 		async getOrders(query = {}) {
@@ -673,6 +695,23 @@ function createBinanceOrderService({ createClient = createBinanceClient } = {}) 
 			}
 
 			const order = normalizeRequest(body);
+
+			// Runtime kill-switch: a paused or unavailable pause state
+			// blocks every Binance path (live and dryRun) so the
+			// operator can stop new submissions instantly. The check
+			// happens before any client is constructed or signed call
+			// is made.
+			if (typeof controlService.getPauseState === 'function') {
+				const pauseState = await controlService.getPauseState();
+				if (pauseState && pauseState.isBlocked && pauseState.isBlocked()) {
+					const message = pauseState.paused
+						? `Binance order submissions are paused${pauseState.pausedBy ? ` by ${pauseState.pausedBy}` : ''}${pauseState.pausedReason ? `: ${pauseState.pausedReason}` : ''}`
+						: pauseState.unavailable
+							? 'Binance trading pause state is unavailable; refusing to submit until storage recovers'
+							: 'Binance order submissions are blocked';
+					throw new BinanceOrderServiceError(message, 'TRADING_PAUSED', 503);
+				}
+			}
 			const requestIdempotencyKey = hasValue(idempotencyKey)
 				? idempotencyKey
 				: [body.idempotencyKey, body.idempotency_key].find(hasValue);

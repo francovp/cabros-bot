@@ -374,7 +374,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"text\": \"BTCUSDT(240) pasó a señal de VENTA\"\n}"
+              "raw": "{\n  \"text\": \"BTCUSDT(240) pas\u00f3 a se\u00f1al de VENTA\"\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/api/webhook/alert?useTradingViewData=true",
@@ -413,7 +413,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"text\": \"BTCUSDT(240) pasó a señal de COMPRA\"\n}"
+              "raw": "{\n  \"text\": \"BTCUSDT(240) pas\u00f3 a se\u00f1al de COMPRA\"\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/api/webhook/alert?useTradingViewData=true&dryRun=true",
@@ -442,19 +442,19 @@
               "name": "Dry run - full TradingView enrichment",
               "status": "OK",
               "code": 200,
-              "body": "{\"success\":true,\"dryRun\":true,\"enriched\":true,\"payload\":{\"text\":\"BTCUSDT(240) pasó a señal de COMPRA\",\"enrichedData\":{\"tradingViewEnrichmentApplied\":true,\"tradingViewEnrichmentStatus\":\"full\",\"sentiment\":\"BULLISH\",\"sentiment_score\":0.8,\"current_price\":64863.03,\"price_data\":{\"current_price\":64863.03,\"high\":65000,\"low\":64000}}}}"
+              "body": "{\"success\":true,\"dryRun\":true,\"enriched\":true,\"payload\":{\"text\":\"BTCUSDT(240) pas\u00f3 a se\u00f1al de COMPRA\",\"enrichedData\":{\"tradingViewEnrichmentApplied\":true,\"tradingViewEnrichmentStatus\":\"full\",\"sentiment\":\"BULLISH\",\"sentiment_score\":0.8,\"current_price\":64863.03,\"price_data\":{\"current_price\":64863.03,\"high\":65000,\"low\":64000}}}}"
             },
             {
               "name": "Dry run - partial TradingView enrichment",
               "status": "OK",
               "code": 200,
-              "body": "{\"success\":true,\"dryRun\":true,\"enriched\":true,\"payload\":{\"text\":\"BTCUSDT(240) pasó a señal de COMPRA\",\"enrichedData\":{\"tradingViewEnrichmentApplied\":true,\"tradingViewEnrichmentStatus\":\"partial\",\"sentiment\":\"BULLISH\",\"current_price\":64863.03,\"price_data\":{\"current_price\":64863.03,\"high\":65000,\"low\":64000}}}}"
+              "body": "{\"success\":true,\"dryRun\":true,\"enriched\":true,\"payload\":{\"text\":\"BTCUSDT(240) pas\u00f3 a se\u00f1al de COMPRA\",\"enrichedData\":{\"tradingViewEnrichmentApplied\":true,\"tradingViewEnrichmentStatus\":\"partial\",\"sentiment\":\"BULLISH\",\"current_price\":64863.03,\"price_data\":{\"current_price\":64863.03,\"high\":65000,\"low\":64000}}}}"
             },
             {
               "name": "Dry run - failed TradingView enrichment",
               "status": "OK",
               "code": 200,
-              "body": "{\"success\":true,\"dryRun\":true,\"enriched\":true,\"payload\":{\"text\":\"BTCUSDT(240) pasó a señal de COMPRA\",\"enrichedData\":{\"tradingViewEnrichmentApplied\":false,\"tradingViewEnrichmentStatus\":\"failed\",\"sentiment\":\"NEUTRAL\",\"insights\":[\"RSI cercano a sobreventa\"],\"technical_levels\":{\"supports\":[\"79,500\"],\"resistances\":[\"82,300\"]},\"levelsSource\":\"gemini-grounding\"}}}"
+              "body": "{\"success\":true,\"dryRun\":true,\"enriched\":true,\"payload\":{\"text\":\"BTCUSDT(240) pas\u00f3 a se\u00f1al de COMPRA\",\"enrichedData\":{\"tradingViewEnrichmentApplied\":false,\"tradingViewEnrichmentStatus\":\"failed\",\"sentiment\":\"NEUTRAL\",\"insights\":[\"RSI cercano a sobreventa\"],\"technical_levels\":{\"supports\":[\"79,500\"],\"resistances\":[\"82,300\"]},\"levelsSource\":\"gemini-grounding\"}}}"
             },
             {
               "name": "Dry run - TradingView not applicable",
@@ -626,7 +626,7 @@
                     "value": "application/json"
                   }
                 ],
-                "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"ranked\": true,\n  \"includeMultiTimeframe\": true,\n  \"scanResults\": [{\n    \"scan\": \"top_gainers\",\n    \"status\": \"success\",\n    \"itemCount\": 1,\n    \"scores\": [{ \"symbol\": \"BTCUSDT\", \"score\": 83, \"reason\": \"+3.5% · RSI 62.0 · Vol 1.8x · HTF aligned +10\", \"trendConfluence\": { \"status\": \"aligned\", \"direction\": \"bullish\", \"confidence\": 82, \"adjustment\": 10 } }]\n  }]\n}"
+                "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"ranked\": true,\n  \"includeMultiTimeframe\": true,\n  \"scanResults\": [{\n    \"scan\": \"top_gainers\",\n    \"status\": \"success\",\n    \"itemCount\": 1,\n    \"scores\": [{ \"symbol\": \"BTCUSDT\", \"score\": 83, \"reason\": \"+3.5% \u00b7 RSI 62.0 \u00b7 Vol 1.8x \u00b7 HTF aligned +10\", \"trendConfluence\": { \"status\": \"aligned\", \"direction\": \"bullish\", \"confidence\": 82, \"adjustment\": 10 } }]\n  }]\n}"
               }
             ]
           }
@@ -809,7 +809,7 @@
               "name": "Success - decision-ready analysis",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"symbol\": \"BINANCE:BTCUSDT\",\n  \"alertText\": \"*🔴 SOBRECOMPRADOS*\\nBTCUSDT $77,103.55 (-0.8%) | RSI 77.9...\",\n  \"analysis\": {\n    \"price_data\": {\n      \"close\": 77066.92,\n      \"change_percent\": -0.86\n    },\n    \"technical_indicators\": {\n      \"RSI\": 77.8,\n      \"ATR\": 1484.21\n    },\n    \"risk\": {\n      \"side\": \"SELL\",\n      \"stop_loss\": 79293.24,\n      \"target\": 72614.29,\n      \"valid\": true\n    },\n    \"decision\": {\n      \"action\": \"SELL\",\n      \"dataSufficient\": true\n    }\n  }\n}"
+              "body": "{\n  \"success\": true,\n  \"symbol\": \"BINANCE:BTCUSDT\",\n  \"alertText\": \"*\ud83d\udd34 SOBRECOMPRADOS*\\nBTCUSDT $77,103.55 (-0.8%) | RSI 77.9...\",\n  \"analysis\": {\n    \"price_data\": {\n      \"close\": 77066.92,\n      \"change_percent\": -0.86\n    },\n    \"technical_indicators\": {\n      \"RSI\": 77.8,\n      \"ATR\": 1484.21\n    },\n    \"risk\": {\n      \"side\": \"SELL\",\n      \"stop_loss\": 79293.24,\n      \"target\": 72614.29,\n      \"valid\": true\n    },\n    \"decision\": {\n      \"action\": \"SELL\",\n      \"dataSufficient\": true\n    }\n  }\n}"
             },
             {
               "name": "400 Invalid symbol",
@@ -1278,7 +1278,7 @@
                 ],
                 "body": {
                   "mode": "raw",
-                  "raw": "{\n  \"text\": \"BINANCE:ETHUSDT (4h) COMPRA — repeated signal\"\n}"
+                  "raw": "{\n  \"text\": \"BINANCE:ETHUSDT (4h) COMPRA \u2014 repeated signal\"\n}"
                 },
                 "url": {
                   "raw": "{{baseUrl}}/api/webhook/alert",
@@ -1556,7 +1556,7 @@
               "name": "Success",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"presetId\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n  \"alertText\": \"📡 *SCANNER DE MERCADO — ...\",\n  \"scanResults\": [\n    {\n      \"scan\": \"top_gainers\",\n      \"status\": \"success\",\n      \"itemCount\": 3\n    }\n  ],\n  \"summary\": {\n    \"totalScans\": 1,\n    \"success\": 1,\n    \"error\": 0,\n    \"timeout\": 0,\n    \"totalItems\": 3,\n    \"delivered\": 1\n  },\n  \"timedOut\": false,\n  \"timeoutMs\": 90000,\n  \"requestId\": \"req-xyz789\",\n  \"totalDurationMs\": 1450\n}"
+              "body": "{\n  \"success\": true,\n  \"presetId\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n  \"alertText\": \"\ud83d\udce1 *SCANNER DE MERCADO \u2014 ...\",\n  \"scanResults\": [\n    {\n      \"scan\": \"top_gainers\",\n      \"status\": \"success\",\n      \"itemCount\": 3\n    }\n  ],\n  \"summary\": {\n    \"totalScans\": 1,\n    \"success\": 1,\n    \"error\": 0,\n    \"timeout\": 0,\n    \"totalItems\": 3,\n    \"delivered\": 1\n  },\n  \"timedOut\": false,\n  \"timeoutMs\": 90000,\n  \"requestId\": \"req-xyz789\",\n  \"totalDurationMs\": 1450\n}"
             }
           ]
         },
@@ -1595,7 +1595,7 @@
               "name": "Success",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"presetId\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n  \"payload\": {\n    \"alertText\": \"📡 *SCANNER DE MERCADO — ...\"\n  },\n  \"scanResults\": [],\n  \"summary\": {\n    \"totalScans\": 1,\n    \"success\": 1,\n    \"error\": 0,\n    \"timeout\": 0,\n    \"totalItems\": 3,\n    \"delivered\": 0\n  },\n  \"timedOut\": false,\n  \"timeoutMs\": 90000,\n  \"requestId\": \"req-dryrun-abc\",\n  \"totalDurationMs\": 1200\n}"
+              "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"presetId\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n  \"payload\": {\n    \"alertText\": \"\ud83d\udce1 *SCANNER DE MERCADO \u2014 ...\"\n  },\n  \"scanResults\": [],\n  \"summary\": {\n    \"totalScans\": 1,\n    \"success\": 1,\n    \"error\": 0,\n    \"timeout\": 0,\n    \"totalItems\": 3,\n    \"delivered\": 0\n  },\n  \"timedOut\": false,\n  \"timeoutMs\": 90000,\n  \"requestId\": \"req-dryrun-abc\",\n  \"totalDurationMs\": 1200\n}"
             }
           ]
         }
@@ -3045,7 +3045,7 @@
                 "replay"
               ]
             },
-            "description": "Replays a stored expanded-analysis alert (delivered multi-symbol Spanish report from POST /api/webhook/expanded-analysis-alert). If the original report exceeded the 20,000-character cap, the replay will only redeliver the truncated text — verify truncated/originalLength before replaying large reports."
+            "description": "Replays a stored expanded-analysis alert (delivered multi-symbol Spanish report from POST /api/webhook/expanded-analysis-alert). If the original report exceeded the 20,000-character cap, the replay will only redeliver the truncated text \u2014 verify truncated/originalLength before replaying large reports."
           },
           "response": [
             {
@@ -4152,7 +4152,7 @@
               "status": "OK",
               "code": 200,
               "_postman_previewlanguage": "json",
-              "body": "{\n  \"success\": true,\n  \"jobId\": \"job-uuid-123\",\n  \"type\": \"market-scanner\",\n  \"status\": \"completed\",\n  \"scanResults\": [{\n    \"scan\": \"top_gainers\",\n    \"status\": \"success\",\n    \"itemCount\": 1,\n    \"scores\": [{ \"symbol\": \"BINANCE:BTCUSDT\", \"score\": 80, \"reason\": \"+3.5% · RSI 62.0 · Vol 1.8x · HTF aligned +10\", \"trendConfluence\": { \"status\": \"aligned\", \"direction\": \"bullish\", \"confidence\": 82, \"adjustment\": 10 } }]\n  }]\n}"
+              "body": "{\n  \"success\": true,\n  \"jobId\": \"job-uuid-123\",\n  \"type\": \"market-scanner\",\n  \"status\": \"completed\",\n  \"scanResults\": [{\n    \"scan\": \"top_gainers\",\n    \"status\": \"success\",\n    \"itemCount\": 1,\n    \"scores\": [{ \"symbol\": \"BINANCE:BTCUSDT\", \"score\": 80, \"reason\": \"+3.5% \u00b7 RSI 62.0 \u00b7 Vol 1.8x \u00b7 HTF aligned +10\", \"trendConfluence\": { \"status\": \"aligned\", \"direction\": \"bullish\", \"confidence\": 82, \"adjustment\": 10 } }]\n  }]\n}"
             }
           ]
         },
@@ -5110,6 +5110,227 @@
               "status": "Not Found",
               "code": 404,
               "body": "{\n  \"success\": false,\n  \"error\": \"Binance order not found\",\n  \"code\": \"ORDER_NOT_FOUND\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Binance Trading Pause State",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Reads the current operator-gated runtime kill-switch state for the Binance Spot order workflow. Same state is exposed in /api/status under dependencies.binanceTrading.",
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/pause",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "pause"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Paused",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"state\": {\n    \"paused\": true,\n    \"pausedBy\": \"api-key\",\n    \"pausedAt\": \"2026-08-30T12:00:00Z\",\n    \"pausedReason\": \"suspected credential leak\",\n    \"lastChangedAt\": \"2026-08-30T12:00:00Z\",\n    \"lastChangedBy\": \"api-key\",\n    \"lastAction\": \"pause\",\n    \"unavailable\": false,\n    \"storage\": \"firestore\"\n  }\n}"
+            },
+            {
+              "name": "Open",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"state\": {\n    \"paused\": false,\n    \"pausedBy\": null,\n    \"pausedAt\": null,\n    \"pausedReason\": null,\n    \"lastChangedAt\": null,\n    \"lastChangedBy\": null,\n    \"lastAction\": null,\n    \"unavailable\": false,\n    \"storage\": \"firestore\"\n  }\n}"
+            },
+            {
+              "name": "Unauthorized",
+              "status": "Unauthorized",
+              "code": 401,
+              "body": "{\"error\":\"Missing API key\",\"code\":\"UNAUTHORIZED\"}"
+            }
+          ]
+        },
+        {
+          "name": "POST Binance Trading Pause",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "pause-incident-2026-08-30",
+                "type": "text"
+              }
+            ],
+            "description": "Operator-gated runtime kill-switch. With pause active, all Binance Spot order submissions (live and dryRun) fail with 503 TRADING_PAUSED before any signed Binance request. Idempotent. The optional reason field is logged and surfaced in /api/status.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"suspected credential leak\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/pause",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "pause"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Paused",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"action\": \"pause\",\n  \"state\": {\n    \"paused\": true,\n    \"pausedBy\": \"api-key\",\n    \"pausedAt\": \"2026-08-30T12:00:00Z\",\n    \"pausedReason\": \"suspected credential leak\",\n    \"lastChangedAt\": \"2026-08-30T12:00:00Z\",\n    \"lastChangedBy\": \"api-key\",\n    \"lastAction\": \"pause\",\n    \"unavailable\": false,\n    \"storage\": \"firestore\"\n  }\n}"
+            },
+            {
+              "name": "Idempotent replay",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"action\": \"pause\",\n  \"idempotencyReplayed\": true,\n  \"state\": {\n    \"paused\": true,\n    \"pausedBy\": \"api-key\",\n    \"pausedAt\": \"2026-08-30T12:00:00Z\",\n    \"pausedReason\": \"suspected credential leak\",\n    \"lastChangedAt\": \"2026-08-30T12:00:00Z\",\n    \"lastChangedBy\": \"api-key\",\n    \"lastAction\": \"pause\",\n    \"unavailable\": false,\n    \"storage\": \"firestore\"\n  }\n}"
+            },
+            {
+              "name": "Trading disabled",
+              "status": "Conflict",
+              "code": 409,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Binance trading is disabled; pause state cannot be set without an enabled order path\",\n  \"code\": \"TRADING_DISABLED\"\n}"
+            },
+            {
+              "name": "State unavailable",
+              "status": "Service Unavailable",
+              "code": 503,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Pause state is unavailable; refuse to update without authoritative storage\",\n  \"code\": \"TRADING_CONTROL_UNAVAILABLE\"\n}"
+            },
+            {
+              "name": "Unauthorized",
+              "status": "Unauthorized",
+              "code": 401,
+              "body": "{\"error\":\"Missing API key\",\"code\":\"UNAUTHORIZED\"}"
+            }
+          ]
+        },
+        {
+          "name": "POST Binance Trading Resume",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "resume-incident-2026-08-30",
+                "type": "text"
+              }
+            ],
+            "description": "Operator-gated counterpart to POST /api/trading/binance/pause. Clears the pause state and restores prior order submission behavior. Idempotent. The optional reason field is recorded in the audit log.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"mitigation applied\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/resume",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "resume"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Resumed",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"action\": \"resume\",\n  \"state\": {\n    \"paused\": false,\n    \"pausedBy\": null,\n    \"pausedAt\": null,\n    \"pausedReason\": null,\n    \"lastChangedAt\": \"2026-08-30T13:00:00Z\",\n    \"lastChangedBy\": \"api-key\",\n    \"lastAction\": \"resume\",\n    \"unavailable\": false,\n    \"storage\": \"firestore\"\n  }\n}"
+            },
+            {
+              "name": "Unauthorized",
+              "status": "Unauthorized",
+              "code": 401,
+              "body": "{\"error\":\"Missing API key\",\"code\":\"UNAUTHORIZED\"}"
+            }
+          ]
+        },
+        {
+          "name": "POST Binance order (paused - 503 TRADING_PAUSED)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Live order submission while the operator kill-switch is active. Returns 503 TRADING_PAUSED before any signed Binance request. Use POST /api/trading/binance/resume to restore order flow.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"symbol\": \"BTCUSDT\",\n  \"side\": \"BUY\",\n  \"type\": \"MARKET\",\n  \"quoteOrderQty\": 50,\n  \"dryRun\": false\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/orders",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "orders"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Trading paused",
+              "status": "Service Unavailable",
+              "code": 503,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Binance order submissions are paused by api-key: suspected credential leak\",\n  \"code\": \"TRADING_PAUSED\"\n}"
+            },
+            {
+              "name": "Pause state unavailable",
+              "status": "Service Unavailable",
+              "code": 503,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Binance trading pause state is unavailable; refusing to submit until storage recovers\",\n  \"code\": \"TRADING_PAUSED\"\n}"
             }
           ]
         }
