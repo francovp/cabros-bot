@@ -73,7 +73,7 @@ describe('detect-agent-prs.sh script', () => {
 		expect(result.stdout).toContain('--json');
 	});
 
-	it('correctly classifies PRs by agent using mock gh output with --json', () => {
+	it('correctly classifies PRs and distinguishes human branches from copilot', () => {
 		const tempDir = mkdtempSync(join(tmpdir(), 'agent-cross-review-test-'));
 		const mockGhPath = join(tempDir, 'gh');
 
@@ -111,6 +111,17 @@ describe('detect-agent-prs.sh script', () => {
 				url: 'https://github.com/francovp/cabros-bot/pull/103',
 				commits: [{ authors: [{ name: 'Franco Valerio', email: 'franco@example.com' }], messageHeadline: 'chore: antigravity work', messageBody: '' }],
 			},
+			{
+				number: 104,
+				title: 'fix: human fix on personal branch',
+				body: 'Fixing typo manually',
+				headRefName: 'francovp-fix-alert',
+				author: { login: 'francovp' },
+				createdAt: '2026-08-30T03:00:00Z',
+				state: 'OPEN',
+				url: 'https://github.com/francovp/cabros-bot/pull/104',
+				commits: [{ authors: [{ name: 'Franco Valerio', email: 'franco@example.com' }], messageHeadline: 'fix: typo', messageBody: '' }],
+			},
 		];
 
 		writeFileSync(
@@ -119,7 +130,9 @@ describe('detect-agent-prs.sh script', () => {
 if [ "$1" = "repo" ]; then
   echo "francovp/cabros-bot"
 elif [ "$1" = "auth" ]; then
-  echo "Logged in to github.com as francovp"
+  if [ "$2" = "status" ]; then
+    echo "Logged in to github.com as francovp"
+  fi
 elif [ "$1" = "pr" ]; then
   cat << 'EOF'
 ${JSON.stringify(samplePrs)}
@@ -135,10 +148,11 @@ fi
 		const resultAll = spawnSync('bash', [detectScriptPath, '--json'], { env, encoding: 'utf8' });
 		expect(resultAll.status).toBe(0);
 		const parsedAll = JSON.parse(resultAll.stdout);
-		expect(parsedAll).toHaveLength(3);
+		expect(parsedAll).toHaveLength(4);
 		expect(parsedAll[0].detectedAgent).toBe('codex');
 		expect(parsedAll[1].detectedAgent).toBe('github-copilot');
 		expect(parsedAll[2].detectedAgent).toBe('antigravity');
+		expect(parsedAll[3].detectedAgent).toBe('human');
 
 		// 2. Filter by --agent codex
 		const resultCodex = spawnSync('bash', [detectScriptPath, '--agent', 'codex', '--json'], { env, encoding: 'utf8' });
@@ -151,8 +165,37 @@ fi
 		const resultExclude = spawnSync('bash', [detectScriptPath, '--exclude-self', 'antigravity', '--json'], { env, encoding: 'utf8' });
 		expect(resultExclude.status).toBe(0);
 		const parsedExclude = JSON.parse(resultExclude.stdout);
-		expect(parsedExclude).toHaveLength(2);
-		expect(parsedExclude.map(p => p.detectedAgent)).toEqual(['codex', 'github-copilot']);
+		expect(parsedExclude).toHaveLength(3);
+		expect(parsedExclude.map(p => p.detectedAgent)).toEqual(['codex', 'github-copilot', 'human']);
+
+		rmSync(tempDir, { recursive: true, force: true });
+	});
+
+	it('propagates gh command errors with non-zero exit and error output', () => {
+		const tempDir = mkdtempSync(join(tmpdir(), 'agent-cross-review-fail-'));
+		const mockGhPath = join(tempDir, 'gh');
+
+		writeFileSync(
+			mockGhPath,
+			`#!/bin/sh
+if [ "$1" = "repo" ]; then
+  echo "francovp/cabros-bot"
+elif [ "$1" = "auth" ]; then
+  echo "Logged in to github.com as francovp"
+elif [ "$1" = "pr" ]; then
+  echo "HTTP 401: Bad credentials" >&2
+  exit 1
+fi
+`,
+		);
+		chmodSync(mockGhPath, 0o755);
+
+		const env = { ...process.env, PATH: `${tempDir}:${process.env.PATH}` };
+
+		const result = spawnSync('bash', [detectScriptPath], { env, encoding: 'utf8' });
+		expect(result.status).toBe(1);
+		expect(result.stderr).toContain('Error: Failed to list PRs');
+		expect(result.stderr).toContain('Bad credentials');
 
 		rmSync(tempDir, { recursive: true, force: true });
 	});

@@ -9,7 +9,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/../../../" && pwd)"
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || (cd "$SCRIPT_DIR/../../../../" && pwd))"
 AUTH_UTILS="$REPO_ROOT/.agents/skills/issue-automator/scripts/gh-auth-utils.sh"
 
 # Source auth utils if available
@@ -86,11 +86,19 @@ if [[ -z "$REPO_NAME" ]]; then
   REPO_NAME="$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null || echo "francovp/cabros-bot")"
 fi
 
-# Fetch PRs
+# Fetch PRs and propagate errors if gh fails
 if [[ -n "$TARGET_PR" ]]; then
-  PR_JSON="$(gh pr view "$TARGET_PR" --repo "$REPO_NAME" --json number,title,body,headRefName,author,createdAt,state,url,commits 2>/dev/null | jq '[.]' || echo '[]')"
+  if ! RAW_PR="$(gh pr view "$TARGET_PR" --repo "$REPO_NAME" --json number,title,body,headRefName,author,createdAt,state,url,commits 2>&1)"; then
+    echo "Error: Failed to fetch PR #$TARGET_PR from $REPO_NAME: $RAW_PR" >&2
+    exit 1
+  fi
+  PR_JSON="$(echo "$RAW_PR" | jq '[.]')"
 else
-  PR_JSON="$(gh pr list --repo "$REPO_NAME" --state "$STATE" --limit "$LIMIT" --json number,title,body,headRefName,author,createdAt,state,url,commits 2>/dev/null || echo '[]')"
+  if ! RAW_PR="$(gh pr list --repo "$REPO_NAME" --state "$STATE" --limit "$LIMIT" --json number,title,body,headRefName,author,createdAt,state,url,commits 2>&1)"; then
+    echo "Error: Failed to list PRs from $REPO_NAME: $RAW_PR" >&2
+    exit 1
+  fi
+  PR_JSON="$RAW_PR"
 fi
 
 # Classify each PR's authoring agent
@@ -106,13 +114,13 @@ CLASSIFIED_JSON="$(echo "$PR_JSON" | jq --arg targetAgent "$TARGET_AGENT" --arg 
 
     if ($branch | test("^codex/|/codex/"; "i")) or ($fullText | test("codex"; "i")) or ($commitAuthors | test("codex"; "i")) then
       "codex"
-    elif ($branch | test("^copilot/|/copilot/|francovp-"; "i")) or ($commitAuthors | test("copilot|anthropic\\.local"; "i")) or ($fullText | test("copilot"; "i")) then
+    elif ($branch | test("^copilot/|/copilot/"; "i")) or ($commitAuthors | test("copilot|anthropic\\.local"; "i")) or ($fullText | test("copilot|Co-authored-by:.*copilot"; "i")) then
       "github-copilot"
     elif ($branch | test("opencode"; "i")) or ($commitAuthors | test("opencode"; "i")) or ($fullText | test("opencode"; "i")) then
       "opencode"
     elif ($branch | test("claude"; "i")) or ($commitAuthors | test("claude"; "i")) or ($fullText | test("Claude Code"; "i")) then
       "claude"
-    elif ($branch | test("antigravity|agent_cross_review"; "i")) or ($commitAuthors | test("antigravity"; "i")) or ($fullText | test("antigravity"; "i")) then
+    elif ($branch | test("antigravity"; "i")) or ($commitAuthors | test("antigravity"; "i")) or ($fullText | test("antigravity"; "i")) then
       "antigravity"
     elif ($branch | test("cursor"; "i")) or ($commitAuthors | test("cursor"; "i")) then
       "cursor"
