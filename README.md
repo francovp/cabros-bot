@@ -154,6 +154,10 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 - `JOB_QUEUE_CONCURRENCY` - Worker concurrency (default: `1`)
 - `JOB_QUEUE_CLAIM_LEASE_MS` - Firestore claim lease and heartbeat interval (default: `60000` ms)
 - `JOB_QUEUE_CONNECT_TIMEOUT_MS` - Redis connection timeout (default: `5000` ms)
+- `ENABLE_JOB_BACKLOG_MONITOR` - Enable periodic background async job backlog depth monitor (default: `true`)
+- `JOB_BACKLOG_ALERT_THRESHOLD_MS` - Threshold in milliseconds before oldest queued job triggers operator alert paging (default: `900000` / 15m)
+- `JOB_BACKLOG_PAGE_COOLDOWN_MS` - Cooldown in milliseconds between repeated backlog operator alert pages (default: `900000` / 15m)
+- `JOB_BACKLOG_PROBE_INTERVAL_MS` - Interval in milliseconds between periodic async job backlog depth probes (default: `60000` / 1m)
 
 `render.yaml` provisions a starter Background Worker and Key Value store. The web service remains on `JOB_EXECUTION_MODE=local` by default; switching it to `render-worker` requires the worker, Redis, and Firestore credentials to be available. For deployments without Redis, `JOB_EXECUTION_MODE=firestore-poller` allows dedicated workers to poll Firestore directly without extra infrastructure. The API returns `503 JOB_QUEUE_UNAVAILABLE` instead of accepting a job when durable storage or queue requirements are not met. If enqueue acknowledgement and deterministic Redis reconciliation both fail in `render-worker` mode, it returns `503 JOB_QUEUE_ACCEPTANCE_UNKNOWN` with the durably stored `jobId`; the worker periodically re-enqueues durable queued rows, retries retained failed BullMQ jobs, and recovers expired claims after Redis recovers.
 

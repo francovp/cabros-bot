@@ -849,6 +849,78 @@ describe('JobRepository durable claims', () => {
 		});
 		expect(hasChatScopeIndex).toBe(true);
 	});
+
+	it('computes memory backlog depth accurately', async () => {
+		const now = Date.now();
+		const repository = new JobRepository();
+		_resetForTesting();
+
+		try {
+			await repository.save({
+				jobId: 'job-1',
+				status: 'processing',
+				execution: { status: 'queued' },
+				createdAt: new Date(now - 300000).toISOString(),
+			});
+			await repository.save({
+				jobId: 'job-2',
+				status: 'processing',
+				execution: { status: 'queued' },
+				createdAt: new Date(now - 100000).toISOString(),
+			});
+			await repository.save({
+				jobId: 'job-3',
+				status: 'completed',
+				execution: { status: 'completed' },
+				createdAt: new Date(now - 500000).toISOString(),
+			});
+
+			const depth = repository.getMemoryBacklogDepth(now);
+			expect(depth.durableQueuedCount).toBe(2);
+			expect(depth.oldestQueuedAgeMs).toBe(300000);
+			expect(depth.oldestCreatedAt).toBe(new Date(now - 300000).toISOString());
+		} finally {
+			_resetForTesting();
+		}
+	});
+
+	it('computes firestore backlog depth from non-terminal queued jobs', async () => {
+		const now = Date.now();
+		const docs = [
+			{
+				data: () => ({
+					jobId: 'job-fs-1',
+					status: 'processing',
+					execution: { status: 'queued' },
+					createdAt: new Date(now - 500000).toISOString(),
+				}),
+			},
+			{
+				data: () => ({
+					jobId: 'job-fs-2',
+					status: 'processing',
+					execution: { status: 'queued' },
+					createdAt: new Date(now - 200000).toISOString(),
+				}),
+			},
+		];
+
+		const get = jest.fn().mockResolvedValue({ docs });
+		const limit = jest.fn(() => ({ get }));
+		const orderBy = jest.fn(() => ({ limit }));
+		const where = jest.fn(() => ({ orderBy }));
+		const firestore = {
+			collection: jest.fn(() => ({ where })),
+		};
+
+		const repository = new JobRepository();
+		repository._getFirestore = jest.fn(() => firestore);
+
+		const depth = await repository.getBacklogDepth({ maxScan: 50, now });
+		expect(depth.durableQueuedCount).toBe(2);
+		expect(depth.oldestQueuedAgeMs).toBe(500000);
+		expect(depth.oldestCreatedAt).toBe(new Date(now - 500000).toISOString());
+	});
 });
 
 
