@@ -176,6 +176,38 @@
       ]
     },
     {
+      "name": "Get Status - alert enrichment metrics",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{apiKey}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/status",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "status"
+          ]
+        },
+        "description": "Valid protected status request showing rolling 24-hour TradingView alert-path enrichment rates."
+      },
+      "response": [
+        {
+          "name": "200 OK - Rolling alert enrichment",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"dependencies\":{\"tradingViewMcp\":{\"enrichment\":{\"alertPath\":{\"windowMs\":86400000,\"totalCount\":3,\"appliedCount\":2,\"failedCount\":1,\"appliedRate24h\":66.67,\"failureRate24h\":33.33}}}}}"
+        }
+      ]
+    },
+    {
       "name": "Get Capabilities",
       "request": {
         "method": "GET",
@@ -2080,6 +2112,53 @@
               "status": "OK",
               "code": 200,
               "body": "{\"success\":true,\"summary\":{\"shadowModeMetrics\":{\"exchangeBreakdown\":{\"BATS\":{\"received\":1,\"eligible\":1,\"evaluated\":1,\"pending\":0,\"unavailable\":0}},\"providerBreakdown\":{\"twelve-data\":{\"received\":1,\"eligible\":1,\"evaluated\":1,\"pending\":0,\"unavailable\":0}}}}}"
+            }
+          ]
+        },
+        {
+          "name": "GET Alert Analytics Summary - TradingView status buckets",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/summary?from=2026-06-06T00:00:00.000Z&to=2026-06-07T00:00:00.000Z&limit=500",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "2026-06-06T00:00:00.000Z"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-06-07T00:00:00.000Z"
+                },
+                {
+                  "key": "limit",
+                  "value": "500"
+                }
+              ]
+            },
+            "description": "Valid protected summary request showing full, partial, failed, not_applicable, and unrecorded TradingView enrichment outcome buckets."
+          },
+          "response": [
+            {
+              "name": "200 OK - TradingView outcome buckets",
+              "status": "OK",
+              "code": 200,
+              "body": "{\"success\":true,\"summary\":{\"enrichment\":{\"tradingViewStatusCounts\":{\"full\":1,\"partial\":1,\"failed\":1,\"not_applicable\":1,\"unrecorded\":1}}}}"
             }
           ]
         },
