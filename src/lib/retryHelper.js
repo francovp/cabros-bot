@@ -87,6 +87,16 @@ async function sendWithRetry(sendFn, maxRetries = 3, logger = null, options = {}
 				return buildAbortedResult(signal, lastResult, totalStartTime, attempt);
 			}
 
+			if (typeof options.shouldStop === 'function' && options.shouldStop({ error: lastResult, attempt }) === true) {
+				const totalDurationMs = Date.now() - totalStartTime;
+				return {
+					...lastResult,
+					attemptCount: attempt,
+					durationMs: totalDurationMs,
+					stoppedEarly: true,
+				};
+			}
+
 			if (attempt < maxRetries) {
 				const delayMs = Math.min(
 					calculateBackoffDelay(attempt),
