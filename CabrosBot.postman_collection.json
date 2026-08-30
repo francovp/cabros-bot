@@ -4955,6 +4955,184 @@
               "body": "{\n  \"success\": false,\n  \"error\": \"Binance order not found\",\n  \"code\": \"ORDER_NOT_FOUND\"\n}"
             }
           ]
+        },
+        {
+          "name": "DELETE Binance Order (by orderId)",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"symbol\": \"BTCUSDT\",\n  \"orderId\": 42\n}"
+            },
+            "description": "Cancels a resting LIMIT order using its Binance-assigned orderId. Already-terminal orders return 404 ORDER_NOT_FOUND; ambiguous bodies return 400 INVALID_ORDER_REQUEST.",
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/orders",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "orders"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"cancelled\": true,\n  \"environment\": \"testnet\",\n  \"order\": {\n    \"symbol\": \"BTCUSDT\",\n    \"orderId\": 42,\n    \"clientOrderId\": \"cabros-574-1\",\n    \"status\": \"CANCELED\",\n    \"type\": \"LIMIT\",\n    \"side\": \"SELL\",\n    \"origQty\": \"0.00100000\",\n    \"executedQty\": \"0.00000000\",\n    \"price\": \"60000.00000000\"\n  }\n}"
+            },
+            {
+              "name": "Order Not Found",
+              "status": "Not Found",
+              "code": 404,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Binance order not found\",\n  \"code\": \"ORDER_NOT_FOUND\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "DELETE Binance Order (by origClientOrderId)",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"symbol\": \"BTCUSDT\",\n  \"origClientOrderId\": \"cabros-574-1\"\n}"
+            },
+            "description": "Cancels a resting order using the client-side stable identifier that was supplied when the order was placed.",
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/orders",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "orders"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"cancelled\": true,\n  \"environment\": \"testnet\",\n  \"order\": {\n    \"symbol\": \"BTCUSDT\",\n    \"orderId\": 99,\n    \"clientOrderId\": \"cabros-574-1\",\n    \"status\": \"CANCELED\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "DELETE Binance Order (ambiguous - 400)",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"symbol\": \"BTCUSDT\"\n}"
+            },
+            "description": "Rejects cancel requests that supply neither orderId nor origClientOrderId.",
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/orders",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "orders"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Bad Request",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"success\": false,\n  \"error\": \"cancel requests require exactly one of orderId or origClientOrderId\",\n  \"code\": \"INVALID_ORDER_REQUEST\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "DELETE Binance Order (feature disabled - 403)",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"symbol\": \"BTCUSDT\",\n  \"orderId\": 42\n}"
+            },
+            "description": "Returns 403 FEATURE_DISABLED when ENABLE_BINANCE_TRADING is not 'true'.",
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/orders",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "orders"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Feature Disabled",
+              "status": "Forbidden",
+              "code": 403,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Binance trading is disabled\",\n  \"code\": \"FEATURE_DISABLED\"\n}"
+            }
+          ]
         }
       ]
     },
