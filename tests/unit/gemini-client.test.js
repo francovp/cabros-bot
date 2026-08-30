@@ -91,13 +91,14 @@ describe('Gemini Service', () => {
 			// sources are not returned by generateEnrichedAlert
 		});
 
-		it('should preserve valid optional risk metadata from the model response', async () => {
+		it('should preserve valid optional risk metadata and setup_evidence from the model response', async () => {
 			genaiClient.llmCallv2.mockResolvedValue({
 				text: JSON.stringify({
 					...mockEnrichedResponse,
 					invalidation_level: '$80,000',
 					target_level: 90000,
 					setup_type: 'breakout',
+					setup_evidence: 'Price broke above range high with volume',
 					risk_reward_ratio: '2.5:1',
 				}),
 			});
@@ -111,6 +112,7 @@ describe('Gemini Service', () => {
 				invalidation_level: '$80,000',
 				target_level: 90000,
 				setup_type: 'breakout',
+				setup_evidence: 'Price broke above range high with volume',
 				risk_reward_ratio: '2.5:1',
 			}));
 		});
@@ -129,12 +131,26 @@ describe('Gemini Service', () => {
 			expect(result.sentiment_score_raw).toBe(0.9);
 		});
 
+		it('should parse all valid setup_type enum values', () => {
+			const validTypes = ['breakout', 'mean_reversion', 'trend_continuation', 'reversal'];
+			for (const setupType of validTypes) {
+				const result = parseEnrichedAlertResponse(JSON.stringify({
+					...mockEnrichedResponse,
+					setup_type: setupType,
+					setup_evidence: `Evidence for ${setupType}`,
+				}));
+				expect(result.setup_type).toBe(setupType);
+				expect(result.setup_evidence).toBe(`Evidence for ${setupType}`);
+			}
+		});
+
 		it('should omit invalid optional risk metadata without degrading the enrichment', () => {
 			const result = parseEnrichedAlertResponse(JSON.stringify({
 				...mockEnrichedResponse,
 				invalidation_level: { price: 80000 },
 				target_level: '   ',
 				setup_type: 'scalp',
+				setup_evidence: 'Some evidence for invalid setup',
 				risk_reward_ratio: Number.NaN,
 			}));
 
@@ -142,7 +158,19 @@ describe('Gemini Service', () => {
 			expect(result).not.toHaveProperty('invalidation_level');
 			expect(result).not.toHaveProperty('target_level');
 			expect(result).not.toHaveProperty('setup_type');
+			expect(result).not.toHaveProperty('setup_evidence');
 			expect(result).not.toHaveProperty('risk_reward_ratio');
+		});
+
+		it('should omit setup_evidence when setup_type is not provided', () => {
+			const result = parseEnrichedAlertResponse(JSON.stringify({
+				...mockEnrichedResponse,
+				setup_evidence: 'Orphan evidence without setup_type',
+			}));
+
+			expect(result.sentiment).toBe('BULLISH');
+			expect(result).not.toHaveProperty('setup_type');
+			expect(result).not.toHaveProperty('setup_evidence');
 		});
 
 		it('parses valid technical_levels arrays from the model response', () => {

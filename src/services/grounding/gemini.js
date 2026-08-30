@@ -796,10 +796,16 @@ function parseEnrichedAlertResponse(response, sources) {
 			? Math.sign(sentimentScore) * ZERO_SOURCE_SENTIMENT_SCORE_CAP
 			: sentimentScore;
 
+		const parsedSetupType = parseOptionalSetupType(parsed.setup_type);
+		const parsedSetupEvidence = parsedSetupType && typeof parsed.setup_evidence === 'string' && parsed.setup_evidence.trim()
+			? parsed.setup_evidence.trim()
+			: undefined;
+
 		const optionalRiskMetadata = {
 			invalidation_level: parseOptionalRiskValue(parsed.invalidation_level),
 			target_level: parseOptionalRiskValue(parsed.target_level),
-			setup_type: parseOptionalSetupType(parsed.setup_type),
+			setup_type: parsedSetupType,
+			setup_evidence: parsedSetupEvidence,
 			risk_reward_ratio: parseOptionalRiskValue(parsed.risk_reward_ratio),
 		};
 

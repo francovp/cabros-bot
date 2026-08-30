@@ -1721,9 +1721,16 @@
         "name": "source",
         "in": "query",
         "schema": {
-          "type": "string"
+          "type": "string",
+          "enum": [
+            "webhook",
+            "news-monitor",
+            "market-scanner",
+            "expanded-analysis"
+          ]
         },
-        "example": "webhook"
+        "example": "webhook",
+        "description": "Stored alert source filter. webhook covers /api/webhook/alert; news-monitor covers /api/news-monitor deliveries; market-scanner covers delivered /api/webhook/market-scanner-alert reports; expanded-analysis covers delivered /api/webhook/expanded-analysis-alert reports."
       },
       "Enriched": {
         "name": "enriched",
@@ -2705,7 +2712,7 @@
                 "alerts": {
                   "type": "array",
                   "items": {
-                    "$ref": "#/components/schemas/JsonObject"
+                    "$ref": "#/components/schemas/StoredAlert"
                   }
                 },
                 "nextCursor": {
@@ -3427,6 +3434,88 @@
             "type": "number",
             "minimum": 0,
             "maximum": 100
+          }
+        }
+      },
+      "StoredAlert": {
+        "type": "object",
+        "description": "Stored alert document. The `source` field identifies the producing flow (webhook, news-monitor, market-scanner, expanded-analysis). When the report text exceeded the 20,000-character storage cap, `truncated: true` and `originalLength` are populated so consumers and replay can flag the loss; replay will redeliver only the truncated text.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "receivedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "text": {
+            "type": "string"
+          },
+          "enriched": {
+            "type": "boolean"
+          },
+          "enrichmentData": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": true
+          },
+          "tokenUsage": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": true
+          },
+          "channels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "deliveryResults": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "webhook",
+              "news-monitor",
+              "market-scanner",
+              "expanded-analysis"
+            ]
+          },
+          "useTradingViewData": {
+            "type": "boolean"
+          },
+          "tradingViewEnrichmentApplied": {
+            "type": "boolean"
+          },
+          "symbol": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "exchange": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "True when the stored text was clipped to the 20,000-character cap; see originalLength for the pre-truncation size."
+          },
+          "originalLength": {
+            "type": "integer",
+            "minimum": 20001,
+            "description": "Length of the original alert text in characters before the 20,000-character cap was applied."
           }
         }
       },
@@ -4421,6 +4510,10 @@
                       "trend_continuation",
                       "reversal"
                     ]
+                  },
+                  "setup_evidence": {
+                    "type": "string",
+                    "description": "Optional one-line rationale or observed market structure supporting the setup_type"
                   },
                   "risk_reward_ratio": {
                     "type": [

@@ -524,7 +524,7 @@ describe('AlertStorageService', () => {
 			expect(calledWith.channels).toEqual(['telegram']);
 		});
 
-		it('truncates text longer than 20000 characters', async () => {
+		it('truncates text longer than 20000 characters and flags truncation metadata', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 			mockAdd.mockResolvedValueOnce({ id: 'id1' });
 			const longText = 'x'.repeat(25000);
@@ -533,6 +533,21 @@ describe('AlertStorageService', () => {
 
 			const calledWith = mockAdd.mock.calls[0][0];
 			expect(calledWith.text.length).toBe(20000);
+			expect(calledWith.truncated).toBe(true);
+			expect(calledWith.originalLength).toBe(25000);
+		});
+
+		it('does not flag truncation when text is within the 20000 character limit', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockAdd.mockResolvedValueOnce({ id: 'id1b' });
+			const shortText = 'x'.repeat(15000);
+
+			await AlertStorageService.saveAlert(buildParams({ text: shortText }));
+
+			const calledWith = mockAdd.mock.calls[0][0];
+			expect(calledWith.text.length).toBe(15000);
+			expect(calledWith.truncated).toBeUndefined();
+			expect(calledWith.originalLength).toBeUndefined();
 		});
 
 		it('stores empty array when deliveryResults is not an array', async () => {
@@ -668,6 +683,50 @@ describe('AlertStorageService', () => {
 				receivedAt: '2026-06-06T12:00:00.000Z',
 				documentId: 'alert-1',
 			});
+		});
+
+		it('exposes truncated flag and originalLength in /api/alerts list responses', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('expanded-truncated-1', {
+						receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+						source: 'expanded-analysis',
+						text: 'x'.repeat(20000),
+						truncated: true,
+						originalLength: 24513,
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.listAlerts({ limit: 1 });
+
+			expect(result.alerts[0]).toMatchObject({
+				id: 'expanded-truncated-1',
+				truncated: true,
+				originalLength: 24513,
+			});
+			expect(result.alerts[0].text).toHaveLength(20000);
+		});
+
+		it('omits truncated flag in /api/alerts list responses when stored text fits within the cap', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('webhook-fine', {
+						receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+						source: 'webhook',
+						text: 'short alert',
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.listAlerts({ limit: 1 });
+
+			expect(result.alerts[0]).not.toHaveProperty('truncated');
+			expect(result.alerts[0]).not.toHaveProperty('originalLength');
 		});
 
 		it('hides expired alerts and ages legacy records from receivedAt', async () => {
@@ -1262,6 +1321,61 @@ describe('AlertStorageService', () => {
 			})).rejects.toMatchObject({
 				code: 'STORAGE_UNAVAILABLE',
 			});
+		});
+
+		it('exposes truncated flag and originalLength in export when stored text was clipped', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('expanded-truncated-1', {
+						receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+						source: 'expanded-analysis',
+						text: 'x'.repeat(20000),
+						truncated: true,
+						originalLength: 24513,
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.exportAlerts({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+				includeText: true,
+			});
+
+			// Export layer additionally caps raw text at MAX_EXPORT_TEXT_LENGTH (1000) for
+			// safety, but the storage-layer truncation flag and originalLength are
+			// preserved so consumers can detect the 20,000-character clip.
+			expect(result.alerts[0]).toMatchObject({
+				id: 'expanded-truncated-1',
+				truncated: true,
+				originalLength: 24513,
+			});
+			expect(result.alerts[0].text.length).toBeLessThanOrEqual(1000);
+		});
+
+		it('omits truncated flag in export when stored text fits within the cap', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('webhook-fine', {
+						receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+						source: 'webhook',
+						text: 'short alert',
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.exportAlerts({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+				includeText: true,
+			});
+
+			expect(result.alerts[0]).not.toHaveProperty('truncated');
+			expect(result.alerts[0]).not.toHaveProperty('originalLength');
 		});
 	});
 

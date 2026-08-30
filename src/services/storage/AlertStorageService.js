@@ -42,6 +42,12 @@ const DEFAULT_EXPORT_LIMIT = 500;
 const MAX_EXPORT_LIMIT = 1000;
 const MAX_EXPORT_WINDOW_DAYS = 31;
 const MAX_EXPORT_TEXT_LENGTH = 1000;
+// Stored alert text cap; high-volume expanded-analysis (50 symbols) and ranked
+// market-scanner reports can exceed this. When clipped, the document is flagged
+// with `truncated: true` and `originalLength` so consumers and replay can
+// detect the loss; raise only if Firestore's 1 MiB document cap and the
+// existing per-channel chunked delivery can absorb the full text.
+const MAX_ALERT_TEXT_LENGTH = 20000;
 const DEFAULT_ALERT_STORAGE_RETENTION_DAYS = 90;
 const MAX_ALERT_STORAGE_RETENTION_DAYS = 3650;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -195,6 +201,12 @@ function formatAlertDocument(doc) {
 	}
 	if (typeof data.dedupStatus === 'string') {
 		docObj.dedupStatus = data.dedupStatus;
+	}
+	if (data.truncated === true) {
+		docObj.truncated = true;
+		if (typeof data.originalLength === 'number' && Number.isFinite(data.originalLength)) {
+			docObj.originalLength = data.originalLength;
+		}
 	}
 	return docObj;
 }
@@ -583,6 +595,12 @@ function formatExportRecord(doc, { includeText }) {
 
 	if (includeText) {
 		record.text = truncateAlertText(data.text);
+		if (data.truncated === true) {
+			record.truncated = true;
+			if (typeof data.originalLength === 'number' && Number.isFinite(data.originalLength)) {
+				record.originalLength = data.originalLength;
+			}
+		}
 	}
 
 	return record;
@@ -847,10 +865,12 @@ async function saveAlertInternal({
 
 	try {
 		const extracted = extractSymbolAndExchange({ text, symbol, exchange, enrichmentData });
+		const rawText = typeof text === 'string' ? text : '';
+		const truncated = rawText.length > MAX_ALERT_TEXT_LENGTH;
 		const document = {
 			receivedAt: admin.firestore.FieldValue.serverTimestamp(),
 			expiresAt: buildRetentionExpiryTimestamp(),
-			text: typeof text === 'string' ? text.substring(0, 20000) : '',
+			text: truncated ? rawText.substring(0, MAX_ALERT_TEXT_LENGTH) : rawText,
 			enriched: Boolean(enriched),
 			enrichmentData: stripUndefinedFieldsDeep(sanitizeEnrichmentData(enrichmentData)),
 			tokenUsage: stripUndefinedFieldsDeep(tokenUsage ?? null),
@@ -862,6 +882,10 @@ async function saveAlertInternal({
 			useTradingViewData: Boolean(useTradingViewData),
 			tradingViewEnrichmentApplied: Boolean(tradingViewEnrichmentApplied),
 		};
+		if (truncated) {
+			document.truncated = true;
+			document.originalLength = rawText.length;
+		}
 		if (typeof requestId === 'string' && requestId.trim()) {
 			document.requestId = requestId.trim();
 		}
@@ -1344,6 +1368,7 @@ module.exports = {
 	STORAGE_UNAVAILABLE_CODE,
 	INVALID_CURSOR_MESSAGE,
 	parseAlertPaginationCursor,
+	MAX_ALERT_TEXT_LENGTH,
 	// Exported for testing
 	getFirestore,
 	COLLECTION_NAME,

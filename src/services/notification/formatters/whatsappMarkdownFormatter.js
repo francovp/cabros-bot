@@ -167,6 +167,8 @@ class WhatsAppMarkdownFormatter {
 			target_level,
 			setup_type,
 			risk_reward_ratio,
+			current_price,
+			price_data,
 			sources = [],
 			truncated = false,
 			extraText = '',
@@ -221,8 +223,11 @@ class WhatsAppMarkdownFormatter {
 			}
 		}
 
+		const entryPrice = current_price ?? (price_data && price_data.current_price);
+
 		const riskParameters = [
 			['Setup', setup_type],
+			['Entry', entryPrice],
 			['Invalidation', invalidation_level],
 			['Target', target_level],
 			['Risk/Reward', risk_reward_ratio],

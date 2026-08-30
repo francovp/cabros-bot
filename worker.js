@@ -2,11 +2,15 @@
 
 require('dotenv').config();
 require('./instrument.js');
+const { printWarnings, validateEnv } = require('./scripts/validate-env');
+
+printWarnings(validateEnv());
 
 const { Telegraf } = require('telegraf');
 const { initializeNotificationServices } = require('./src/controllers/webhooks/handlers/alert/alert');
 const { startJobWorker } = require('./src/services/jobs/jobWorker');
 const sentryService = require('./src/services/monitoring/SentryService');
+const remoteConfigService = require('./src/services/remoteConfig/RemoteConfigService');
 
 function buildNotificationBot() {
 	if (process.env.ENABLE_TELEGRAM_BOT !== 'true' || !process.env.BOT_TOKEN) {
@@ -30,6 +34,7 @@ async function main() {
 		throw error;
 	}
 
+	void remoteConfigService.start();
 	const bot = buildNotificationBot();
 	await initializeNotificationServices(bot);
 	const runtime = await startJobWorker({ botOrGetter: bot });
@@ -44,10 +49,12 @@ async function main() {
 		try {
 			await runtime.stop();
 			stopNotificationBot(bot, signal);
+			remoteConfigService.stop();
 			await sentryService.flush(2000);
 			process.exit(0);
 		} catch (error) {
 			console.error('[worker] Graceful shutdown failed:', error.message);
+			remoteConfigService.stop();
 			await sentryService.flush(2000);
 			process.exit(1);
 		}

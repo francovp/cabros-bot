@@ -1,5 +1,11 @@
-/* global jest, describe, it, expect, beforeEach */
+jest.mock('../../src/services/tradingview/fallbackTradePlan', () => ({
+	deriveFallbackTradePlan: jest.fn(),
+	calculateFallbackRiskLevels: jest.fn(),
+	TIMEFRAME_RISK_MAP: {},
+	formatDerivedLevel: jest.fn(p => p),
+}));
 
+const { deriveFallbackTradePlan, calculateFallbackRiskLevels } = require('../../src/services/tradingview/fallbackTradePlan');
 const { enrichAlert } = require('../../src/controllers/webhooks/handlers/alert/grounding');
 const { groundAlert } = require('../../src/services/grounding/grounding');
 const { GROUNDING_MODEL_NAME } = require('../../src/services/grounding/config');
@@ -18,6 +24,8 @@ jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
 describe('Alert Handler', () => {
 	beforeEach(() => {
 		jest.resetAllMocks();
+		deriveFallbackTradePlan.mockResolvedValue(null);
+		calculateFallbackRiskLevels.mockReturnValue(null);
 		// Return the text directly, not wrapped in an object
 		validateAlert.mockImplementation(text => text);
 	});
@@ -565,7 +573,7 @@ describe('Alert Handler', () => {
 		process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
 	});
 
-	it('omits Gemini fallback levels entirely when Gemini returns no usable levels during MCP failure', async () => {
+	it('omits Gemini fallback levels entirely when Gemini returns no usable levels during MCP failure on non-signal text', async () => {
 		const previousGeminiFlag = process.env.ENABLE_GEMINI_GROUNDING;
 		process.env.ENABLE_GEMINI_GROUNDING = 'true';
 
@@ -580,10 +588,79 @@ describe('Alert Handler', () => {
 			truncated: false,
 		});
 
-		const result = await enrichAlert({ text: 'BTCUSDT(240) pasó a señal de COMPRA' }, { useTradingViewData: true });
+		const result = await enrichAlert({ text: 'Bitcoin market update and macro overview' }, { useTradingViewData: true });
 
 		expect(result).not.toHaveProperty('technical_levels');
 		expect(result).not.toHaveProperty('levelsSource');
+
+		process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
+	});
+
+	it('derives fallback trade plan and tags levelsSource as derived-quote when MCP fails and Gemini returns no risk levels for signal', async () => {
+		const previousGeminiFlag = process.env.ENABLE_GEMINI_GROUNDING;
+		process.env.ENABLE_GEMINI_GROUNDING = 'true';
+
+		tradingViewMcpService.isEnabled.mockReturnValue(true);
+		tradingViewMcpService.enrichFromAlertText.mockResolvedValue(null);
+
+		groundAlert.mockResolvedValue({
+			sentiment: 'BULLISH',
+			sentiment_score: 0.7,
+			insights: ['Gemini detected breakout'],
+			sources: [],
+			truncated: false,
+		});
+
+		deriveFallbackTradePlan.mockResolvedValue({
+			symbol: 'BTCUSDT',
+			side: 'BUY',
+			current_price: 85000,
+			price_data: { current_price: 85000 },
+			invalidation_level: 83725,
+			target_level: 89250,
+			risk_reward_ratio: 2,
+			setup_type: 'trend_continuation',
+			levelsSource: 'derived-quote',
+		});
+
+		const result = await enrichAlert({ text: 'BTCUSDT(240) pasó a señal de COMPRA' }, { useTradingViewData: true });
+
+		expect(result.levelsSource).toBe('derived-quote');
+		expect(result.invalidation_level).toBeDefined();
+		expect(result.target_level).toBeDefined();
+		expect(result.risk_reward_ratio).toBe(2);
+		expect(result.setup_type).toBe('trend_continuation');
+
+		process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
+	});
+
+	it('derives fallback trade plan when Gemini is disabled and MCP enrichment fails', async () => {
+		const previousGeminiFlag = process.env.ENABLE_GEMINI_GROUNDING;
+		process.env.ENABLE_GEMINI_GROUNDING = 'false';
+
+		tradingViewMcpService.isEnabled.mockReturnValue(true);
+		tradingViewMcpService.enrichFromAlertText.mockRejectedValue(new Error('MCP service timeout'));
+
+		deriveFallbackTradePlan.mockResolvedValue({
+			symbol: 'ETHUSDT',
+			side: 'BUY',
+			current_price: 3200,
+			price_data: { current_price: 3200 },
+			invalidation_level: 3120,
+			target_level: 3360,
+			risk_reward_ratio: 2,
+			setup_type: 'trend_continuation',
+			levelsSource: 'derived-quote',
+		});
+
+		const result = await enrichAlert({ text: 'ETHUSDT(60) pasó a señal de COMPRA' }, { useTradingViewData: true });
+
+		expect(result.levelsSource).toBe('derived-quote');
+		expect(result.sentiment).toBe('BULLISH');
+		expect(result.sentiment_score).toBe(0.55);
+		expect(result.invalidation_level).toBeDefined();
+		expect(result.target_level).toBeDefined();
+		expect(result.risk_reward_ratio).toBe(2);
 
 		process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
 	});

@@ -97,6 +97,7 @@ describe('Status endpoints', () => {
 		delete process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT;
 		delete process.env.ENABLE_SIGNAL_OUTCOME_TRACKING;
 		delete process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING;
+		delete process.env.ENABLE_FIREBASE_ADMIN_AUTH;
 	});
 
 	afterEach(() => {

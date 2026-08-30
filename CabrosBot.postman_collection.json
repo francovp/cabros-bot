@@ -347,7 +347,7 @@
               "name": "Enriched payload",
               "status": "OK",
               "code": 200,
-              "body": "{\"success\":true,\"requestId\":\"req-12345\",\"dryRun\":true,\"enriched\":true,\"payload\":{\"text\":\"Bitcoin breaks above $83,000 with strong volume\",\"enrichedData\":{\"original_text\":\"Bitcoin breaks above $83,000 with strong volume\",\"sentiment\":\"BULLISH\",\"sentiment_score\":0.55,\"sentiment_score_raw\":0.85,\"insights\":[\"Volume confirms momentum\"],\"invalidation_level\":\"$80,000\",\"target_level\":\"$90,000\",\"setup_type\":\"breakout\",\"risk_reward_ratio\":\"2.5:1\",\"tradingViewEnrichmentApplied\":false,\"sources\":[]}},\"tokenUsage\":{}}"
+              "body": "{\"success\":true,\"requestId\":\"req-12345\",\"dryRun\":true,\"enriched\":true,\"payload\":{\"text\":\"Bitcoin breaks above $83,000 with strong volume\",\"enrichedData\":{\"original_text\":\"Bitcoin breaks above $83,000 with strong volume\",\"sentiment\":\"BULLISH\",\"sentiment_score\":0.55,\"sentiment_score_raw\":0.85,\"insights\":[\"Volume confirms momentum\"],\"invalidation_level\":\"$80,000\",\"target_level\":\"$90,000\",\"setup_type\":\"breakout\",\"setup_evidence\":\"Price broke above resistance range with volume confirmation\",\"risk_reward_ratio\":\"2.5:1\",\"tradingViewEnrichmentApplied\":false,\"sources\":[]}},\"tokenUsage\":{}}"
             }
           ]
         },
@@ -1881,6 +1881,135 @@
           ]
         },
         {
+          "name": "GET List Alerts (market-scanner)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts?limit=10&source=market-scanner",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "10"
+                },
+                {
+                  "key": "source",
+                  "value": "market-scanner"
+                }
+              ]
+            },
+            "description": "Lists stored alerts filtered by source=market-scanner. Each entry is a delivered Spanish market report; truncated documents surface truncated=true and originalLength."
+          },
+          "response": [
+            {
+              "name": "200 OK - Market scanner alerts list",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"success\": true,\n  \"alerts\": [\n    {\n      \"id\": \"scanner-doc-456\",\n      \"receivedAt\": \"2026-08-28T14:00:00.000Z\",\n      \"source\": \"market-scanner\",\n      \"symbol\": \"BINANCE:GMTUSDT\",\n      \"exchange\": \"BINANCE\",\n      \"enriched\": false,\n      \"useTradingViewData\": false,\n      \"tradingViewEnrichmentApplied\": false,\n      \"channels\": [\"telegram\"],\n      \"deliveryResults\": [\n        {\n          \"channel\": \"telegram\",\n          \"success\": true,\n          \"messageId\": \"scanner-msg-1\"\n        }\n      ],\n      \"tokenUsage\": null\n    }\n  ]\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET List Alerts (expanded-analysis)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts?limit=10&source=expanded-analysis",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "10"
+                },
+                {
+                  "key": "source",
+                  "value": "expanded-analysis"
+                }
+              ]
+            },
+            "description": "Lists stored alerts filtered by source=expanded-analysis. Each entry is a delivered multi-symbol Spanish analysis report; large reports clip at 20,000 characters and surface truncated=true plus originalLength."
+          },
+          "response": [
+            {
+              "name": "200 OK - Expanded analysis alerts list",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"success\": true,\n  \"alerts\": [\n    {\n      \"id\": \"expanded-doc-789\",\n      \"receivedAt\": \"2026-08-28T14:05:00.000Z\",\n      \"source\": \"expanded-analysis\",\n      \"symbol\": \"BTCUSDT\",\n      \"exchange\": \"BINANCE\",\n      \"enriched\": false,\n      \"useTradingViewData\": false,\n      \"tradingViewEnrichmentApplied\": false,\n      \"channels\": [\"telegram\"],\n      \"deliveryResults\": [\n        {\n          \"channel\": \"telegram\",\n          \"success\": true,\n          \"messageId\": \"expanded-msg-1\"\n        }\n      ],\n      \"tokenUsage\": null\n    }\n  ]\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET List Alerts (truncated source example)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts?limit=10&source=expanded-analysis",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "10"
+                },
+                {
+                  "key": "source",
+                  "value": "expanded-analysis"
+                }
+              ]
+            },
+            "description": "Response example showing the truncation metadata (`truncated: true`, `originalLength`) when an expanded-analysis or market-scanner report exceeded the 20,000-character stored-text cap. Operators can detect clipped content and use replay with caution."
+          },
+          "response": [
+            {
+              "name": "200 OK - Truncated alert with metadata",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"success\": true,\n  \"alerts\": [\n    {\n      \"id\": \"expanded-doc-clipped\",\n      \"receivedAt\": \"2026-08-28T15:00:00.000Z\",\n      \"source\": \"expanded-analysis\",\n      \"symbol\": \"BTCUSDT\",\n      \"exchange\": \"BINANCE\",\n      \"enriched\": false,\n      \"useTradingViewData\": false,\n      \"tradingViewEnrichmentApplied\": false,\n      \"truncated\": true,\n      \"originalLength\": 24513,\n      \"channels\": [\"telegram\"],\n      \"deliveryResults\": [\n        {\n          \"channel\": \"telegram\",\n          \"success\": true,\n          \"messageId\": \"expanded-msg-2\"\n        }\n      ],\n      \"tokenUsage\": null\n    }\n  ]\n}"
+            }
+          ]
+        },
+        {
           "name": "GET Alert Analytics Summary (risk coverage)",
           "request": {
             "method": "GET",
@@ -2194,6 +2323,118 @@
           ]
         },
         {
+          "name": "GET Export Alerts (JSONL - market-scanner)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/export?format=jsonl&from=2026-06-06T00:00:00.000Z&to=2026-06-07T00:00:00.000Z&limit=500&source=market-scanner",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "export"
+              ],
+              "query": [
+                {
+                  "key": "format",
+                  "value": "jsonl"
+                },
+                {
+                  "key": "from",
+                  "value": "2026-06-06T00:00:00.000Z"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-06-07T00:00:00.000Z"
+                },
+                {
+                  "key": "limit",
+                  "value": "500"
+                },
+                {
+                  "key": "source",
+                  "value": "market-scanner"
+                }
+              ]
+            },
+            "description": "Exports bounded stored alerts filtered by source=market-scanner as JSON Lines. Excludes raw text unless includeText=true; truncated entries expose truncated=true and originalLength."
+          },
+          "response": [
+            {
+              "name": "200 OK - JSONL export (market-scanner)",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "body": "{\"id\":\"scanner-doc-456\",\"receivedAt\":\"2026-08-28T14:00:00.000Z\",\"source\":\"market-scanner\",\"enriched\":false,\"useTradingViewData\":false,\"tradingViewEnrichmentApplied\":false,\"deliveryResults\":[{\"channel\":\"telegram\",\"success\":true,\"messageId\":\"scanner-msg-1\",\"errorCode\":null,\"statusCode\":null}],\"tokenUsage\":null}\n"
+            }
+          ]
+        },
+        {
+          "name": "GET Export Alerts (JSONL - expanded-analysis)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/export?format=jsonl&from=2026-06-06T00:00:00.000Z&to=2026-06-07T00:00:00.000Z&limit=500&source=expanded-analysis",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "export"
+              ],
+              "query": [
+                {
+                  "key": "format",
+                  "value": "jsonl"
+                },
+                {
+                  "key": "from",
+                  "value": "2026-06-06T00:00:00.000Z"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-06-07T00:00:00.000Z"
+                },
+                {
+                  "key": "limit",
+                  "value": "500"
+                },
+                {
+                  "key": "source",
+                  "value": "expanded-analysis"
+                }
+              ]
+            },
+            "description": "Exports bounded stored alerts filtered by source=expanded-analysis as JSON Lines. Excludes raw text unless includeText=true; truncated entries expose truncated=true and originalLength."
+          },
+          "response": [
+            {
+              "name": "200 OK - JSONL export (expanded-analysis)",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "body": "{\"id\":\"expanded-doc-789\",\"receivedAt\":\"2026-08-28T14:05:00.000Z\",\"source\":\"expanded-analysis\",\"enriched\":false,\"useTradingViewData\":false,\"tradingViewEnrichmentApplied\":false,\"deliveryResults\":[{\"channel\":\"telegram\",\"success\":true,\"messageId\":\"expanded-msg-1\",\"errorCode\":null,\"statusCode\":null}],\"tokenUsage\":null}\n"
+            }
+          ]
+        },
+        {
           "name": "GET Export Alerts (CSV with text)",
           "request": {
             "method": "GET",
@@ -2481,6 +2722,102 @@
               "status": "Bad Request",
               "code": 400,
               "body": "{\n  \"error\": \"Unknown channel(s): slack. Valid channels: telegram, whatsapp, discord.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST Replay Alert (market-scanner)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "idempotency-key",
+                "value": "{{replayIdempotencyKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"channels\": [\"telegram\"]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/scanner-doc-456/replay",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "scanner-doc-456",
+                "replay"
+              ]
+            },
+            "description": "Replays a stored market-scanner alert (delivered Spanish report from POST /api/webhook/market-scanner-alert). Truncated entries will redeliver the clipped text; verify the originalLength flag before relying on replay for large scans."
+          },
+          "response": [
+            {
+              "name": "Success (market-scanner replay)",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"alertId\": \"scanner-doc-456\",\n  \"replayId\": \"scanner-doc-456_06bdeddf2a292e8940d24fb2847d88234dc85d7cd751d4cc7dbc471692aadf38\",\n  \"results\": [\n    { \"channel\": \"telegram\", \"success\": true, \"messageId\": \"replay-msg-1\" }\n  ]\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST Replay Alert (expanded-analysis)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "idempotency-key",
+                "value": "{{replayIdempotencyKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"channels\": [\"telegram\"]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/expanded-doc-789/replay",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "expanded-doc-789",
+                "replay"
+              ]
+            },
+            "description": "Replays a stored expanded-analysis alert (delivered multi-symbol Spanish report from POST /api/webhook/expanded-analysis-alert). If the original report exceeded the 20,000-character cap, the replay will only redeliver the truncated text — verify truncated/originalLength before replaying large reports."
+          },
+          "response": [
+            {
+              "name": "Success (expanded-analysis replay)",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"alertId\": \"expanded-doc-789\",\n  \"replayId\": \"expanded-doc-789_06bdeddf2a292e8940d24fb2847d88234dc85d7cd751d4cc7dbc471692aadf38\",\n  \"results\": [\n    { \"channel\": \"telegram\", \"success\": true, \"messageId\": \"replay-msg-2\" }\n  ]\n}"
             }
           ]
         },
