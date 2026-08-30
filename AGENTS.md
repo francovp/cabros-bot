@@ -32,7 +32,8 @@ This project is a small Express + Telegraf (Telegram) bot service that exposes a
 ### Key Files & Entry Points
 - `index.js` — App entry. Starts Express server and conditionally launches the Telegraf bot. Important logic for enabling the bot lives here.
 - `instrument.js` — Initializes Sentry logging + monitoring early (loaded by `index.js`).
-- `app.js` — Express app configuration (body parsing, CORS, helmet, healthcheck route).
+- `app.js` — Express app configuration (body parsing, helmet, healthcheck route); mounts `src/lib/corsAllowlist.js` instead of the prior unconfigured `cors()` so browser requests only get `Access-Control-Allow-Origin` for the explicit origin allowlist (see CORS_ALLOWED_ORIGINS).
+- `src/lib/corsAllowlist.js` — Origin-restricted CORS middleware (`parseCorsAllowedOrigins`, `buildCorsMiddleware`, `setupCorsAllowlist`). Defaults to the documented hosted-console + Railway backend origins; non-browser requests without an `Origin` header pass through untouched.
 - `src/routes/index.js` — Registers HTTP API routes (mounted under `/api`; endpoints are feature-gated at runtime).
 - `src/controllers/commands.js` — Telegram command handlers wired in `index.js` (`/precio`, `/cryptobot`, `/jobs`).
 - `src/controllers/commands/handlers/core/fetchPriceCryptoSymbol.js` — Price lookup resolver routing crypto to Binance and equities/stocks to Twelve Data (`EquityMarketDataService`).
