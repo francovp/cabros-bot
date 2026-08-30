@@ -45,6 +45,17 @@ describe('telegramTopicRouting', () => {
 			expect(mockLogger.warn).toHaveBeenCalledTimes(2);
 		});
 
+		it('parses JSON string format', () => {
+			const rawJson = '{"webhook-signal":101,"market-scanner":202,"news-monitor":303,"default":0}';
+			const result = parseTelegramTopicRoutes(rawJson);
+			expect(result).toEqual({
+				'webhook-signal': 101,
+				'market-scanner': 202,
+				'news-monitor': 303,
+				default: 0,
+			});
+		});
+
 		it('normalizes object input', () => {
 			const rawObj = {
 				'webhook-signal': 101,

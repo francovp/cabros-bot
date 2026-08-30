@@ -73,11 +73,7 @@ function getCategory(error, statusCode) {
 }
 
 function isRetryable(error, statusCode) {
-	if (statusCode === 429) {
-		return true;
-	}
-	const message = getErrorMessage(error).toLowerCase();
-	return message.includes('retry_after') || message.includes('too many requests');
+	return statusCode === 429;
 }
 
 function getRetryAfterMs(error, fallbackDelayMs) {
@@ -180,6 +176,16 @@ class TelegramService extends NotificationChannel {
    * @returns {number|null}
    */
 	resolveThreadId(alert = {}) {
+		const isCustomChat = Boolean(alert.telegramChatId && String(alert.telegramChatId) !== String(this.chatId));
+		if (isCustomChat) {
+			return resolveTelegramThreadId({
+				telegramThreadId: alert.telegramThreadId,
+				threadId: alert.threadId,
+				messageThreadId: alert.messageThreadId,
+				telegram_thread_id: alert.telegram_thread_id,
+				message_thread_id: alert.message_thread_id,
+			}, {}, this.logger);
+		}
 		return resolveTelegramThreadId(alert, this.topicRoutes, this.logger);
 	}
 

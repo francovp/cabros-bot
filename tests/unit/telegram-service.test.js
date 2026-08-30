@@ -523,4 +523,72 @@ describe('TelegramService', () => {
 		expect(bot.telegram.sendMessage.mock.calls[0][2].message_thread_id).toBe(99);
 		expect(bot.telegram.sendMessage.mock.calls[1][2].message_thread_id).toBe(99);
 	});
+
+	it('does not apply default topicRoutes when telegramChatId is overridden to a custom chat', async () => {
+		const bot = {
+			telegram: {
+				sendMessage: jest.fn().mockResolvedValue({ message_id: 506 }),
+			},
+		};
+		const service = new TelegramService({
+			bot,
+			chatId: 'chat-default',
+			topicRoutes: 'market-scanner:101,news-monitor:202',
+			formatter: { format: (text) => text },
+		});
+
+		// Custom chat without explicit thread ID should NOT get thread 101
+		const result = await service.send({
+			text: 'Scanner alert',
+			source: 'market-scanner',
+			telegramChatId: 'chat-custom',
+		});
+
+		expect(result).toEqual(expect.objectContaining({
+			success: true,
+			threadId: null,
+		}));
+		expect(bot.telegram.sendMessage).toHaveBeenCalledWith('chat-custom', 'Scanner alert', expect.not.objectContaining({
+			message_thread_id: expect.anything(),
+		}));
+
+		// Custom chat WITH explicit thread ID should use explicit thread ID
+		const resultWithOverride = await service.send({
+			text: 'Scanner alert',
+			source: 'market-scanner',
+			telegramChatId: 'chat-custom',
+			telegramThreadId: 777,
+		});
+
+		expect(resultWithOverride).toEqual(expect.objectContaining({
+			success: true,
+			threadId: 777,
+		}));
+		expect(bot.telegram.sendMessage).toHaveBeenCalledWith('chat-custom', 'Scanner alert', expect.objectContaining({
+			message_thread_id: 777,
+		}));
+	});
+
+	it('retries only when HTTP status is 429, not on generic error message string matches', async () => {
+		const bot = {
+			telegram: {
+				sendMessage: jest.fn().mockRejectedValue({
+					message: 'too many requests in this channel',
+					// No response.status / statusCode = 429
+				}),
+			},
+		};
+		const service = new TelegramService({
+			bot,
+			chatId: 'chat-1',
+			formatter: { format: (text) => text },
+			maxRetries: 3,
+		});
+
+		const result = await service.send({ text: 'Test' });
+
+		expect(result.success).toBe(false);
+		expect(result.attemptCount).toBe(1);
+		expect(bot.telegram.sendMessage).toHaveBeenCalledTimes(1);
+	});
 });

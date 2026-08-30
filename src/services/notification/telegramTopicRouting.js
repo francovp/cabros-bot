@@ -24,10 +24,22 @@ function parseTelegramTopicRoutes(rawRoutes, logger = console) {
 		return {};
 	}
 
+	let parsedInput = rawRoutes;
+	if (typeof rawRoutes === 'string') {
+		const trimmed = rawRoutes.trim();
+		if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+			try {
+				parsedInput = JSON.parse(trimmed);
+			} catch {
+				// Fall through to comma-separated string parsing
+			}
+		}
+	}
+
 	const routes = {};
 
-	if (typeof rawRoutes === 'object' && !Array.isArray(rawRoutes)) {
-		for (const [key, value] of Object.entries(rawRoutes)) {
+	if (typeof parsedInput === 'object' && parsedInput !== null && !Array.isArray(parsedInput)) {
+		for (const [key, value] of Object.entries(parsedInput)) {
 			if (!key || typeof key !== 'string') continue;
 			const normalizedKey = key.trim().toLowerCase();
 			if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) {

@@ -148,6 +148,10 @@ function postExpandedAnalysisAlert(botOrGetter) {
 					channels: requestedChannels,
 					deliveryResults,
 					source: 'expanded-analysis',
+					telegramChatId: routing.telegramChatId,
+					telegramThreadId: routing.telegramThreadId,
+					whatsappChatId: routing.whatsappChatId,
+					discordWebhookUrl: routing.discordWebhookUrl,
 					processingTimeMs: Date.now() - startTime,
 				}).catch(() => {});
 			}

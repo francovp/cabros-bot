@@ -156,13 +156,22 @@ function resolveDryRun(req) {
 }
 
 function getCooldownDestination(channel, routing = {}) {
+	const defaultTelegramChatId = process.env.TELEGRAM_CHAT_ID;
+	const telegramChatId = routing.telegramChatId || defaultTelegramChatId;
+	const telegramThreadId = (typeof routing.telegramThreadId === 'number' && Number.isSafeInteger(routing.telegramThreadId))
+		? routing.telegramThreadId
+		: undefined;
+	const telegramDestination = telegramChatId
+		? (telegramThreadId !== undefined ? `${telegramChatId}:${telegramThreadId}` : telegramChatId)
+		: undefined;
+
 	const overrideByChannel = {
-		telegram: routing.telegramChatId,
+		telegram: telegramDestination,
 		whatsapp: routing.whatsappChatId,
 		discord: routing.discordWebhookUrl,
 	};
 	const envByChannel = {
-		telegram: process.env.TELEGRAM_CHAT_ID,
+		telegram: defaultTelegramChatId,
 		whatsapp: (isPreviewEnvironment() && process.env.WHATSAPP_PREVIEW_CHAT_ID) || process.env.WHATSAPP_CHAT_ID,
 		discord: process.env.DISCORD_WEBHOOK_URL,
 	};
@@ -434,6 +443,11 @@ function postAlert(botOrGetter) {
 				tradingViewEnrichmentApplied: Boolean(alert.enriched && alert.enriched.tradingViewEnrichmentApplied === true),
 				tradingViewEnrichmentStatus: alert.tradingViewEnrichmentStatus,
 				suppressedRepeat,
+				source: body.source || 'webhook-alert',
+				telegramChatId: routing.telegramChatId,
+				telegramThreadId: routing.telegramThreadId,
+				whatsappChatId: routing.whatsappChatId,
+				discordWebhookUrl: routing.discordWebhookUrl,
 			}).catch(() => {}); // errors already logged inside AlertStorageService
 
 			if (signalOutcomeService.isEnabled() && !suppressedRepeat) {

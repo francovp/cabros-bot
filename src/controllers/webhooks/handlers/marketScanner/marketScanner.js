@@ -153,6 +153,10 @@ function postMarketScannerAlert(botOrGetter) {
 					channels: requestedChannels,
 					deliveryResults,
 					source: 'market-scanner',
+					telegramChatId: routing.telegramChatId,
+					telegramThreadId: routing.telegramThreadId,
+					whatsappChatId: routing.whatsappChatId,
+					discordWebhookUrl: routing.discordWebhookUrl,
 					processingTimeMs: Date.now() - startTime,
 				}).catch(() => {});
 			}
