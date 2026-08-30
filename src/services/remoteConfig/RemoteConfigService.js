@@ -65,6 +65,8 @@ const PARAMETER_SCHEMA = Object.freeze({
 	ENABLE_ALERT_HTF_RENDER: { type: 'boolean', defaultValue: true },
 	ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION: { type: 'boolean', defaultValue: false },
 	ALERT_SIGNAL_COOLDOWN_BARS: { type: 'number', defaultValue: 1, integer: true, min: 1, max: 10 },
+	LLM_GLOBAL_MAX_CONCURRENT: { type: 'number', defaultValue: Number.POSITIVE_INFINITY, integer: true, min: 1, max: 50 },
+	LLM_GLOBAL_QUEUE_TIMEOUT_MS: { type: 'number', defaultValue: 0, integer: true, min: 0, max: 30000 },
 });
 
 let remoteOverrides = {};
@@ -217,6 +219,24 @@ function getRuntimeConfig() {
 	return config;
 }
 
+/**
+ * Apply runtime config to consumers that need it (e.g. LlmConcurrencyGate).
+ * Called after environment and remote config are reconciled.
+ */
+function applyRuntimeConfig() {
+	try {
+		// Lazy-require to avoid pulling the gate into remote-config tests.
+		const llmConcurrencyGate = require('../llm/LlmConcurrencyGate');
+		const config = getRuntimeConfig();
+		llmConcurrencyGate.configure({
+			maxConcurrent: config.LLM_GLOBAL_MAX_CONCURRENT,
+			queueTimeoutMs: config.LLM_GLOBAL_QUEUE_TIMEOUT_MS,
+		});
+	} catch (error) {
+		console.warn('[remoteConfig] failed to apply runtime config:', error.message);
+	}
+}
+
 function getSource() {
 	if (!isEnabled()) {
 		return 'disabled';
@@ -361,6 +381,7 @@ async function loadNow(options = {}) {
 			if (invalidValue) {
 				console.warn('[RemoteConfigService] Ignored invalid allow-listed value');
 			}
+			applyRuntimeConfig();
 			return true;
 		} catch (error) {
 			remoteOverrides = {};
@@ -411,6 +432,7 @@ function resetForTesting() {
 module.exports = {
 	PARAMETER_SCHEMA,
 	getRuntimeConfig,
+	applyRuntimeConfig,
 	getStatus,
 	loadNow,
 	start,

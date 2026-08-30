@@ -1510,3 +1510,28 @@ No endpoint, OpenAPI, Postman, environment variable, or Remote Config contract c
 - `tests/unit/signal-repeat-cooldown.test.js`, `tests/integration/alert-repeat-suppression.test.js`, `tests/integration/status-endpoint.test.js` — Window/flip/fail-open coverage, endpoint double-post behavior, and status exposure.
 
 Disabled by default preserves existing webhook behavior byte-for-byte.
+
+## Cross-Surface LLM Concurrency Governor (CB-255 / Issue #554)
+
+A new process-wide `LlmConcurrencyGate` module caps concurrent Gemini-backed provider calls across all surfaces (alert grounding, news analysis + price fetch, expanded-analysis, scanner confluence, market scanner, job workers). When `LLM_GLOBAL_MAX_CONCURRENT` is set, callers acquire a slot before contacting the provider; excess callers shed immediately (default `LLM_GLOBAL_QUEUE_TIMEOUT_MS=0`) or queue up to a bounded timeout. Shed / timeout calls fail-open with typed errors so alert/news delivery completes without enrichment, matching the existing degradation contract. `GeminiQuotaManager` cooldown logic remains orthogonal — the gate handles capacity, not cooldown state.
+
+**Core Components**:
+- `src/services/llm/LlmConcurrencyGate.js` — Token-bucket / FIFO queue gate with `acquire()` (returns release function), `configure({maxConcurrent, queueTimeoutMs})`, `getSnapshot()`, `resetForTesting()`. Defaults to unbounded when unset (preserves existing behavior).
+- `src/services/grounding/genaiClient.js` — `llmCall()` acquires from the gate after the cooldown check, releases on success and on every error path (typed `LLM_GATE_SHED` / `LLM_GATE_TIMEOUT` errors propagate to callers).
+- `src/controllers/status.js` — `dependencies.geminiQuota.concurrencyGate` exposes `maxConcurrent`, `queueTimeoutMs`, `inFlight`, `queueDepth`, `acquiredTotal`, `shedTotal`, `timeoutTotal` counters without secrets.
+- `src/services/remoteConfig/RemoteConfigService.js` — Adds `LLM_GLOBAL_MAX_CONCURRENT` and `LLM_GLOBAL_QUEUE_TIMEOUT_MS` to the `PARAMETER_SCHEMA`, validates environment + remote overrides, and calls `applyRuntimeConfig()` after each successful load to keep the gate in sync.
+- `firebase-remote-config-template.json` — New allow-listed entries with safe defaults (`10`, `0`).
+- `.env.example` — Documents both env vars with valid ranges and Remote Config parity note.
+
+**Coverage**:
+- `tests/unit/llm-concurrency-gate.test.js` — 10 tests covering defaults, acquire/release, shed, queue, timeout, FIFO drain, counters, configure validation, idempotent release, and reset behavior.
+- `tests/unit/remote-config-service.test.js` — Validates environment + remote-bound parsing for the new keys.
+- `tests/integration/status-endpoint.test.js` — Updates `geminiQuota` expected payload to include the `concurrencyGate` block; 75 status tests pass.
+- `tests/integration/alert-grounding.test.js`, `tests/integration/news-monitor-*.test.js`, `tests/integration/alerts-endpoint.test.js`, etc. — No regressions (512 integration tests pass).
+
+**Configuration**:
+- `LLM_GLOBAL_MAX_CONCURRENT` — Positive integer, bounded `1`-`50`, default `unset` = unbounded. Remote Config eligible.
+- `LLM_GLOBAL_QUEUE_TIMEOUT_MS` — Positive integer, bounded `0`-`30000`, default `0` = shed immediately. Remote Config eligible.
+- Existing per-feature caps (`NEWS_GEMINI_CONCURRENCY`, etc.) remain in place as inner limits.
+
+No endpoint, OpenAPI, Postman, or notification contract changed. Existing fail-safe delivery / cooldown semantics unchanged.

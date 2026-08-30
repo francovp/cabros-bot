@@ -342,6 +342,20 @@
       },
       "description": "Cooldown length in alert-timeframe bars for same-signal repeat suppression",
       "valueType": "NUMBER"
+    },
+    "LLM_GLOBAL_MAX_CONCURRENT": {
+      "defaultValue": {
+        "value": "10"
+      },
+      "description": "Process-wide LLM provider concurrency cap shared by Gemini-backed paths (alert grounding, news analysis + price fetch, expanded-analysis, scanner confluence, job workers); preserves unbounded behavior when unset",
+      "valueType": "NUMBER"
+    },
+    "LLM_GLOBAL_QUEUE_TIMEOUT_MS": {
+      "defaultValue": {
+        "value": "0"
+      },
+      "description": "Bounded queue timeout when the LLM concurrency gate is at capacity (0 = shed immediately, no queue); shed/timeout deliveries fail open without enrichment",
+      "valueType": "NUMBER"
     }
   },
   "version": {

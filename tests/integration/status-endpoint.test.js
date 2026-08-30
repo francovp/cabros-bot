@@ -152,6 +152,15 @@ describe('Status endpoints', () => {
 			triggersTotal: 0,
 			braveFallbacksDuringCooldown: 0,
 			lastBraveFallbackAt: null,
+			concurrencyGate: {
+				maxConcurrent: null,
+				queueTimeoutMs: 0,
+				inFlight: 0,
+				queueDepth: 0,
+				acquiredTotal: 0,
+				shedTotal: 0,
+				timeoutTotal: 0,
+			},
 			metrics: {
 				totalRequests: 0,
 				successRequests: 0,
@@ -761,6 +770,15 @@ describe('Status endpoints', () => {
 			triggersTotal: 1,
 			braveFallbacksDuringCooldown: 1,
 			lastBraveFallbackAt: expect.any(String),
+			concurrencyGate: {
+				maxConcurrent: null,
+				queueTimeoutMs: 0,
+				inFlight: 0,
+				queueDepth: 0,
+				acquiredTotal: 0,
+				shedTotal: 0,
+				timeoutTotal: 0,
+			},
 			metrics: {
 				totalRequests: 2,
 				successRequests: 1,
@@ -794,6 +812,15 @@ describe('Status endpoints', () => {
 			triggersTotal: 0,
 			braveFallbacksDuringCooldown: 0,
 			lastBraveFallbackAt: null,
+			concurrencyGate: {
+				maxConcurrent: null,
+				queueTimeoutMs: 0,
+				inFlight: 0,
+				queueDepth: 0,
+				acquiredTotal: 0,
+				shedTotal: 0,
+				timeoutTotal: 0,
+			},
 			metrics: {
 				totalRequests: 0,
 				successRequests: 0,

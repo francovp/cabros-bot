@@ -15,6 +15,7 @@ const { binanceOrderService } = require('../services/trading/BinanceOrderService
 const { notificationRedriveService } = require('../services/notification/NotificationRedriveService');
 const { whatsAppCommandBridgeService } = require('../services/notification/WhatsAppCommandBridgeService');
 const geminiQuotaManager = require('../services/grounding/geminiQuotaManager');
+const llmConcurrencyGate = require('../services/llm/LlmConcurrencyGate');
 const groundingMetrics = require('../services/grounding/metrics');
 const { signalRepeatCooldown } = require('../services/alerts/signalRepeatCooldown');
 const { getCoalescingStatus } = require('../services/grounding/grounding');
@@ -149,6 +150,7 @@ function getGeminiDependency({
 
 function getGeminiQuotaDependency({ gemini }) {
 	const snapshot = geminiQuotaManager.getSnapshot();
+	const gateSnapshot = llmConcurrencyGate.getSnapshot();
 	const status = !gemini.enabled
 		? 'disabled'
 		: (!gemini.configured
@@ -166,6 +168,7 @@ function getGeminiQuotaDependency({ gemini }) {
 		triggersTotal: snapshot.triggersTotal,
 		braveFallbacksDuringCooldown: snapshot.braveFallbacksDuringCooldown,
 		lastBraveFallbackAt: snapshot.lastBraveFallbackAt,
+		concurrencyGate: gateSnapshot,
 		metrics: groundingMetrics.getSnapshot(),
 	};
 }

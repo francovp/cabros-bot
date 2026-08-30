@@ -20,6 +20,7 @@ const { getCloudflareAiClient } = require('../inference/cloudflareAiClient');
 const { normalizeUsageMetadata } = require('../../lib/tokenUsage');
 const sentryService = require('../monitoring/SentryService');
 const geminiQuotaManager = require('./geminiQuotaManager');
+const llmConcurrencyGate = require('../llm/LlmConcurrencyGate');
 
 function isGeminiQuotaError(error) {
 	return geminiQuotaManager.isQuotaError(error);
@@ -342,6 +343,11 @@ class GenaiClient {
 			throw error;
 		}
 
+		// Acquire a process-wide LLM concurrency slot before contacting the
+		// provider. Shed / queue-timeout failures are typed errors callers
+		// catch and fail-open into the un-enriched path.
+		const releaseGate = await llmConcurrencyGate.acquire({ timeoutMs: opts.gateTimeoutMs });
+
 		let abortCleanup = null;
 		let generatePromise = this.genAI.models.generateContent({
 			model,
@@ -366,6 +372,7 @@ class GenaiClient {
 		try {
 			const response = await generatePromise;
 			if (abortCleanup) abortCleanup();
+			if (releaseGate) releaseGate();
 
 			// Handle response structure - could be direct or wrapped in response property
 			const result = response?.response || response || {};
@@ -407,6 +414,7 @@ class GenaiClient {
 			};
 		} catch (error) {
 			if (abortCleanup) abortCleanup();
+			if (releaseGate) releaseGate();
 			if (signal?.aborted || error.name === 'AbortError' || error.message === 'Grounding timeout' || (typeof error.message === 'string' && error.message.includes('timeout'))) {
 				throw error;
 			}
