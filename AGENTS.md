@@ -34,7 +34,7 @@ This project is a small Express + Telegraf (Telegram) bot service that exposes a
 - `instrument.js` — Initializes Sentry logging + monitoring early (loaded by `index.js`).
 - `app.js` — Express app configuration (body parsing, CORS, helmet, healthcheck route).
 - `src/routes/index.js` — Registers HTTP API routes (mounted under `/api`; endpoints are feature-gated at runtime).
-- `src/controllers/commands.js` — Telegram command handlers wired in `index.js` (`/precio`, `/cryptobot`).
+- `src/controllers/commands.js` — Telegram command handlers wired in `index.js` (`/precio`, `/cryptobot`, `/jobs`).
 - `src/controllers/commands/handlers/core/fetchPriceCryptoSymbol.js` — Price lookup resolver routing crypto to Binance and equities/stocks to Twelve Data (`EquityMarketDataService`).
 - `src/controllers/trading/binanceOrders.js` — Operator-only `POST /api/trading/binance/orders` controller.
 - `src/controllers/webhooks/handlers/alert/alert.js` — Webhook handler that forwards alert text to a Telegram chat.
@@ -498,7 +498,7 @@ The system provides asynchronous job endpoints to support executing both `expand
 - `src/services/jobs/JobQueue.js` — Enqueues only durable `jobId` references in Redis/BullMQ, reports queue readiness without exposing `REDIS_URL`, and recreates failed producer connections without disabling later submissions.
 - `src/services/jobs/jobWorker.js` / `worker.js` — Claims queued jobs through Firestore transactions, periodically re-enqueues durable rows still marked `processing`/`queued` or holding expired `claimed`/`running` leases, renews active claims while external work is in flight, releases claims only when BullMQ has another attempt, persists final worker failures, tracks terminal callback delivery during shutdown, and drains the worker on `SIGTERM` without stopping an unlaunched Telegraf transport.
 - `src/controllers/webhooks/handlers/jobs/jobs.js` — HTTP route controller handlers (`postCreateJob`, `getJobList`, `getJobStatus`).
-- `src/controllers/commands.js` — Telegram `/analisis` and `/scanner` commands create these jobs and must `await jobService.createJob()` before replying or handling validation/storage errors.
+- `src/controllers/commands.js` — Telegram `/analisis` and `/scanner` commands create these jobs, preserve the originating `telegramChatId`, and must `await jobService.createJob()` before replying or handling validation/storage errors. `/jobs` and `/trabajos` list bounded job summaries or show one job's progress/result/delivery status with fail-open storage errors.
 
 **Failure and Edge Case Behavior**:
 - Sync validation: throws `400` synchronously on invalid inputs before job registration.
