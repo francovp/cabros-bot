@@ -23,8 +23,10 @@ jest.mock('firebase-admin');
 
 const {
 	backfillCollection,
+	getOperationalCollectionConfigs,
 	parseIdempotencyTtlMs,
 	parseDedupTtlMs,
+	parseNotificationRedriveTtlMs,
 	isDeliveryLease,
 	DELIVERY_LOCK_TTL_MS,
 	PENDING_STALE_TIMEOUT_MS,
@@ -159,6 +161,24 @@ describe('parseDedupTtlMs', () => {
 		delete process.env.NEWS_CACHE_TTL_HOURS;
 		expect(parseDedupTtlMs(undefined)).toBe(6 * 60 * 60 * 1000);
 		if (originalEnv !== undefined) process.env.NEWS_CACHE_TTL_HOURS = originalEnv;
+	});
+});
+
+describe('getOperationalCollectionConfigs', () => {
+	test('includes notification dead letters with the configured redrive max age', () => {
+		const originalEnv = process.env.NOTIFICATION_REDRIVE_MAX_AGE_MS;
+		process.env.NOTIFICATION_REDRIVE_MAX_AGE_MS = '7200000';
+
+		expect(getOperationalCollectionConfigs()).toEqual(expect.arrayContaining([
+			expect.objectContaining({
+				collectionName: 'notificationDeadLetters',
+				ttlMs: 7_200_000,
+			}),
+		]));
+		expect(parseNotificationRedriveTtlMs()).toBe(7_200_000);
+
+		if (originalEnv !== undefined) process.env.NOTIFICATION_REDRIVE_MAX_AGE_MS = originalEnv;
+		else delete process.env.NOTIFICATION_REDRIVE_MAX_AGE_MS;
 	});
 });
 

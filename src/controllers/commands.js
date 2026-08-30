@@ -3,6 +3,7 @@ const { jobService } = require('../services/jobs/JobService');
 const { getNewsMonitor } = require('./webhooks/handlers/newsMonitor/newsMonitor');
 const signalOutcomeService = require('../services/storage/SignalOutcomeService');
 const sentryService = require('../services/monitoring/SentryService');
+const { getTelegramCommandMenu } = require('../lib/telegramCommandMenu');
 
 const getPrice = async (context) => {
 	const chatId = getChatId(context);
@@ -68,7 +69,10 @@ const createTradingViewJobCommand = (type, command, buildPayload) => async (cont
 	});
 
 	try {
-		const payload = buildPayload(args);
+		const payload = {
+			...buildPayload(args),
+			...(chatId !== undefined && chatId !== null ? { telegramChatId: String(chatId) } : {}),
+		};
 		const result = await jobService.createJob(type, payload, buildBotFromContext(context));
 		await context.reply(`Job ${result.jobId} creado para ${type}. Estado: ${result.status}.`);
 	} catch (error) {
@@ -81,6 +85,120 @@ const createTradingViewJobCommand = (type, command, buildPayload) => async (cont
 				chatId,
 			},
 		});
+	} finally {
+		sentryService.endSpan(commandSpan);
+	}
+};
+
+const JOBS_COMMAND_LIMIT = 5;
+const JOBS_COMMAND_TIMEOUT_MS = 8000;
+const JOB_STATUS_LABELS = {
+	pending: 'pendiente',
+	processing: 'procesando',
+	completed: 'completado',
+	failed: 'fallido',
+	cancelled: 'cancelado',
+	timed_out: 'expirado',
+};
+
+function formatJobStatus(job) {
+	const status = JOB_STATUS_LABELS[job.status] || job.status || 'desconocido';
+	const progress = job.progress && Number.isFinite(job.progress.current) && Number.isFinite(job.progress.total)
+		? ` (${job.progress.current}/${job.progress.total})`
+		: '';
+	return `${status}${progress}`;
+}
+
+function formatJobResult(job) {
+	const summary = job.summary || {};
+	if (job.type === 'market-scanner') {
+		return `${summary.success || 0}/${summary.totalScans || 0} escaneos OK, ${summary.totalItems || 0} items, ${summary.delivered || 0} entregas`;
+	}
+	return `${summary.analyzed || 0}/${summary.total || 0} símbolos analizados, ${summary.error || 0} errores, ${summary.delivered || 0} entregas`;
+}
+
+function formatJobDelivery(job) {
+	if (!Array.isArray(job.deliveryResults) || job.deliveryResults.length === 0) return ' Entrega: no registrada.';
+	const delivered = job.deliveryResults.filter((result) => result.success).length;
+	if (delivered === job.deliveryResults.length) return ' Entrega: OK.';
+	if (delivered > 0) return ' Entrega: parcial.';
+	return ' Entrega: fallida.';
+}
+
+function formatJobList(jobs) {
+	return [
+		'Jobs recientes:',
+		...jobs.slice(0, JOBS_COMMAND_LIMIT).map((job) => `• ${job.jobId} — ${formatJobStatus(job)}`),
+	].join('\n');
+}
+
+function formatJobDetail(job) {
+	const lines = [
+		`Job ${job.jobId}`,
+		`Tipo: ${job.type}`,
+		`Estado: ${formatJobStatus(job)}`,
+	];
+	if (job.status === 'completed') {
+		lines.push(`Resultado: ${formatJobResult(job)}.${formatJobDelivery(job)}`);
+	} else if (job.status === 'failed' || job.status === 'timed_out') {
+		lines.push(`Error: ${job.error || 'el procesamiento no terminó correctamente'}.`);
+	}
+	return lines.join('\n');
+}
+
+const jobsCommand = async (context) => {
+	const chatId = getChatId(context);
+	const args = parseCommandArgs(context);
+	const commandSpan = sentryService.startInactiveSpan({
+		name: 'telegram.command.jobs',
+		op: 'bot.command',
+		forceTransaction: true,
+		attributes: {
+			'telegram.command': '/jobs',
+			'telegram.chat_id': chatId ? String(chatId) : 'unknown',
+		},
+	});
+
+	try {
+		if (chatId === undefined || chatId === null) {
+			await context.reply('No pude identificar el chat para consultar sus jobs.');
+			return;
+		}
+
+		const jobId = args.positionals[0];
+		if (jobId) {
+			const job = await withTimeout(
+				(signal) => jobService.getJob(jobId, { telegramChatId: String(chatId), signal }),
+				JOBS_COMMAND_TIMEOUT_MS,
+				'job store read timed out',
+			);
+			await context.reply(job ? formatJobDetail(job) : `No encontré el job ${jobId}. Puede haber expirado.`);
+		} else {
+			const jobs = await withTimeout(
+				(signal) => jobService.listJobs({
+					limit: JOBS_COMMAND_LIMIT,
+					telegramChatId: String(chatId),
+					signal,
+				}),
+				JOBS_COMMAND_TIMEOUT_MS,
+				'job store read timed out',
+			);
+			await context.reply(jobs.length ? formatJobList(jobs) : 'No hay jobs recientes.');
+		}
+	} catch (error) {
+		console.error('[commands] /jobs failed:', error.message);
+		if (error.name !== 'AbortError' && error.name !== 'TimeoutError' && error.code !== 'TIMEOUT') {
+			sentryService.captureRuntimeError({
+				channel: 'telegram',
+				error,
+				extra: { command: 'jobs', chatId },
+			});
+		}
+		try {
+			await context.reply('No pude consultar los jobs ahora mismo. Intenta nuevamente más tarde.');
+		} catch (replyError) {
+			console.error('Failed to send error reply:', replyError);
+		}
 	} finally {
 		sentryService.endSpan(commandSpan);
 	}
@@ -386,6 +504,7 @@ function buildHelpMessage() {
 		'  _Opciones: `crypto=BTCUSDT,ETHUSDT`, `stocks=NVDA`_',
 		'• `/outcomes <simbolo>` — Rendimiento reciente de señales evaluadas \\(alias: `/rendimiento`\\)',
 		'  _Ej: `/outcomes BINANCE:BTCUSDT`_',
+		'• `/jobs [jobId]` — Lista jobs recientes o muestra su estado \\(alias: `/trabajos`\\)',
 		'• `/help` / `/start` — Muestra este mensaje de ayuda',
 	].join('\n');
 }
@@ -507,9 +626,11 @@ module.exports = {
 	cryptoBotCmd,
 	expandedAnalysisCmd,
 	marketScannerCmd,
+	jobsCommand,
 	newsMonitorCmd,
 	helpCmd,
 	outcomesCommand,
 	buildHelpMessage,
+	getTelegramCommandMenu,
 	parseCommandArgs,
 };

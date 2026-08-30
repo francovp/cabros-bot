@@ -42,6 +42,12 @@ const DEFAULT_EXPORT_LIMIT = 500;
 const MAX_EXPORT_LIMIT = 1000;
 const MAX_EXPORT_WINDOW_DAYS = 31;
 const MAX_EXPORT_TEXT_LENGTH = 1000;
+// Stored alert text cap; high-volume expanded-analysis (50 symbols) and ranked
+// market-scanner reports can exceed this. When clipped, the document is flagged
+// with `truncated: true` and `originalLength` so consumers and replay can
+// detect the loss; raise only if Firestore's 1 MiB document cap and the
+// existing per-channel chunked delivery can absorb the full text.
+const MAX_ALERT_TEXT_LENGTH = 20000;
 const DEFAULT_ALERT_STORAGE_RETENTION_DAYS = 90;
 const MAX_ALERT_STORAGE_RETENTION_DAYS = 3650;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -196,6 +202,12 @@ function formatAlertDocument(doc) {
 	if (typeof data.dedupStatus === 'string') {
 		docObj.dedupStatus = data.dedupStatus;
 	}
+	if (data.truncated === true) {
+		docObj.truncated = true;
+		if (typeof data.originalLength === 'number' && Number.isFinite(data.originalLength)) {
+			docObj.originalLength = data.originalLength;
+		}
+	}
 	return docObj;
 }
 
@@ -282,6 +294,16 @@ function createRiskMetadataCoverageBucket() {
 		fields: Object.fromEntries(
 			RISK_METADATA_FIELDS.map(field => [field, { populated: 0, percentage: 0 }]),
 		),
+	};
+}
+
+function createTradingViewStatusCounts() {
+	return {
+		full: 0,
+		partial: 0,
+		failed: 0,
+		not_applicable: 0,
+		unrecorded: 0,
 	};
 }
 
@@ -573,6 +595,12 @@ function formatExportRecord(doc, { includeText }) {
 
 	if (includeText) {
 		record.text = truncateAlertText(data.text);
+		if (data.truncated === true) {
+			record.truncated = true;
+			if (typeof data.originalLength === 'number' && Number.isFinite(data.originalLength)) {
+				record.originalLength = data.originalLength;
+			}
+		}
 	}
 
 	return record;
@@ -837,10 +865,12 @@ async function saveAlertInternal({
 
 	try {
 		const extracted = extractSymbolAndExchange({ text, symbol, exchange, enrichmentData });
+		const rawText = typeof text === 'string' ? text : '';
+		const truncated = rawText.length > MAX_ALERT_TEXT_LENGTH;
 		const document = {
 			receivedAt: admin.firestore.FieldValue.serverTimestamp(),
 			expiresAt: buildRetentionExpiryTimestamp(),
-			text: typeof text === 'string' ? text.substring(0, 20000) : '',
+			text: truncated ? rawText.substring(0, MAX_ALERT_TEXT_LENGTH) : rawText,
 			enriched: Boolean(enriched),
 			enrichmentData: stripUndefinedFieldsDeep(sanitizeEnrichmentData(enrichmentData)),
 			tokenUsage: stripUndefinedFieldsDeep(tokenUsage ?? null),
@@ -852,6 +882,10 @@ async function saveAlertInternal({
 			useTradingViewData: Boolean(useTradingViewData),
 			tradingViewEnrichmentApplied: Boolean(tradingViewEnrichmentApplied),
 		};
+		if (truncated) {
+			document.truncated = true;
+			document.originalLength = rawText.length;
+		}
 		if (typeof requestId === 'string' && requestId.trim()) {
 			document.requestId = requestId.trim();
 		}
@@ -1239,6 +1273,7 @@ async function summarizeAlerts({ from, to, limit, source, enriched } = {}) {
 		enrichment: {
 			enrichedAlerts: 0,
 			plainAlerts: 0,
+			tradingViewStatusCounts: createTradingViewStatusCounts(),
 			riskMetadataCoverage: {
 				...createRiskMetadataCoverageBucket(),
 				byPromptProvenance: [],
@@ -1268,6 +1303,7 @@ async function summarizeAlerts({ from, to, limit, source, enriched } = {}) {
 		const alertEnriched = Boolean(data.enriched);
 		const useTradingViewData = Boolean(data.useTradingViewData);
 		const tradingViewEnrichmentApplied = Boolean(data.tradingViewEnrichmentApplied);
+		const tradingViewEnrichmentStatus = data.tradingViewEnrichmentStatus;
 
 		summary.totalAlerts += 1;
 		incrementCounter(summary.bySource, data.source);
@@ -1280,6 +1316,14 @@ async function summarizeAlerts({ from, to, limit, source, enriched } = {}) {
 		} else {
 			summary.byFeatureFlag.plain += 1;
 			summary.enrichment.plainAlerts += 1;
+		}
+
+		if (VALID_TRADINGVIEW_ENRICHMENT_STATUSES.has(tradingViewEnrichmentStatus)) {
+			summary.enrichment.tradingViewStatusCounts[tradingViewEnrichmentStatus] += 1;
+		} else if (useTradingViewData) {
+			summary.enrichment.tradingViewStatusCounts.unrecorded += 1;
+		} else {
+			summary.enrichment.tradingViewStatusCounts.not_applicable += 1;
 		}
 
 		if (useTradingViewData) {
@@ -1324,6 +1368,7 @@ module.exports = {
 	STORAGE_UNAVAILABLE_CODE,
 	INVALID_CURSOR_MESSAGE,
 	parseAlertPaginationCursor,
+	MAX_ALERT_TEXT_LENGTH,
 	// Exported for testing
 	getFirestore,
 	COLLECTION_NAME,
