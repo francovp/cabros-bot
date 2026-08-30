@@ -201,15 +201,7 @@ describe('Scanner presets API integration tests', () => {
 		});
 	});
 
-	it('runs a saved preset in dry-run mode with the market scanner report', async () => {
-		tradingViewMcpService.callScanTool.mockResolvedValueOnce([
-			{
-				symbol: 'BINANCE:GMTUSDT',
-				changePercent: 26.415,
-				indicators: { close: 0.0134, RSI: 79.72 },
-			},
-		]);
-
+	it('returns structured preview in dry-run mode without calling MCP or delivery services', async () => {
 		const createResponse = await request(app)
 			.post('/api/scanner-presets')
 			.set('x-api-key', 'test-key')
@@ -218,6 +210,102 @@ describe('Scanner presets API integration tests', () => {
 				exchange: 'binance',
 				timeframe: '4h',
 				scans: ['top_gainers'],
+				limit: 5,
+			})
+			.expect(201);
+
+		const presetId = createResponse.body.preset.id;
+
+		const runResponse = await request(app)
+			.post(`/api/scanner-presets/${presetId}/run?dryRun=true`)
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'preset-dry-key-123')
+			.expect(200);
+
+		expect(runResponse.body).toEqual(expect.objectContaining({
+			success: true,
+			dryRun: true,
+			presetId,
+			preset: expect.objectContaining({
+				id: presetId,
+				name: 'Dry run preset',
+				exchange: 'BINANCE',
+				timeframe: '4h',
+				scans: ['top_gainers'],
+				limit: 5,
+			}),
+			validation: {
+				ok: true,
+				errors: [],
+			},
+			estimatedCalls: {
+				coinAnalysis: 1,
+				multiTimeframe: 0,
+			},
+			requestedChannels: expect.any(Array),
+			mcpReadiness: expect.objectContaining({
+				ready: expect.any(Boolean),
+			}),
+			idempotencyKey: 'preset-dry-key-123',
+			requestId: expect.any(String),
+		}));
+
+		expect(tradingViewMcpService.callScanTool).not.toHaveBeenCalled();
+		expect(mockTelegramSendMessage).not.toHaveBeenCalled();
+	});
+
+	it('returns validation errors with 200 OK when dry-run preset configuration has invalid settings', async () => {
+		const createResponse = await request(app)
+			.post('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.send({
+				name: 'Valid preset initially',
+				exchange: 'binance',
+				timeframe: '4h',
+				scans: ['top_gainers'],
+			})
+			.expect(201);
+
+		const presetId = createResponse.body.preset.id;
+
+		const runResponse = await request(app)
+			.post(`/api/scanner-presets/${presetId}/run`)
+			.set('x-api-key', 'test-key')
+			.send({
+				dryRun: true,
+				scans: ['invalid_scan_tool'],
+				timeframe: 'invalid_timeframe',
+			})
+			.expect(200);
+
+		expect(runResponse.body).toEqual(expect.objectContaining({
+			success: true,
+			dryRun: true,
+			presetId,
+			validation: {
+				ok: false,
+				errors: expect.arrayContaining([
+					expect.stringContaining('Unsupported scan types'),
+					expect.stringContaining('Unsupported timeframe'),
+				]),
+			},
+		}));
+
+		expect(tradingViewMcpService.callScanTool).not.toHaveBeenCalled();
+		expect(mockTelegramSendMessage).not.toHaveBeenCalled();
+	});
+
+	it('estimates multiTimeframe calls when includeMultiTimeframe is enabled', async () => {
+		const createResponse = await request(app)
+			.post('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.send({
+				name: 'Multi-timeframe preset',
+				exchange: 'binance',
+				timeframe: '1h',
+				scans: ['top_gainers', 'top_losers'],
+				limit: 10,
+				includeMultiTimeframe: true,
 			})
 			.expect(201);
 
@@ -228,26 +316,45 @@ describe('Scanner presets API integration tests', () => {
 			.set('x-api-key', 'test-key')
 			.expect(200);
 
-		expect(runResponse.body).toEqual(expect.objectContaining({
-			success: true,
-			dryRun: true,
-			presetId,
-			summary: expect.objectContaining({
-				totalScans: 1,
-				success: 1,
-				error: 0,
-				timeout: 0,
-				totalItems: 1,
-				delivered: 0,
-			}),
-		}));
-		expect(runResponse.body.payload.alertText).toContain('SCANNER DE MERCADO');
-		expect(runResponse.body.payload.alertText).toContain('GMTUSDT');
-		expect(tradingViewMcpService.callScanTool).toHaveBeenCalledWith(
-			'top_gainers',
-			{ exchange: 'BINANCE', timeframe: '4h', limit: 5 },
-			expect.any(Object),
-		);
+		expect(runResponse.body.estimatedCalls).toEqual({
+			coinAnalysis: 2,
+			multiTimeframe: 20,
+		});
+		expect(runResponse.body.preset.includeMultiTimeframe).toBe(true);
+		expect(tradingViewMcpService.callScanTool).not.toHaveBeenCalled();
+	});
+
+	it('resolves requested channels and chat overrides in dry-run mode', async () => {
+		process.env.ENABLE_TELEGRAM_BOT = 'true';
+		process.env.BOT_TOKEN = 'test-bot-token';
+		process.env.TELEGRAM_CHAT_ID = '123456789';
+
+		const createResponse = await request(app)
+			.post('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.send({
+				name: 'Channel override preset',
+				exchange: 'binance',
+				timeframe: '4h',
+				scans: ['top_gainers'],
+			})
+			.expect(201);
+
+		const presetId = createResponse.body.preset.id;
+
+		const runResponse = await request(app)
+			.post(`/api/scanner-presets/${presetId}/run`)
+			.set('x-api-key', 'test-key')
+			.send({
+				dryRun: true,
+				channels: ['telegram'],
+				telegramChatId: '-100999888777',
+			})
+			.expect(200);
+
+		expect(runResponse.body.requestedChannels).toEqual(['telegram']);
+		expect(tradingViewMcpService.callScanTool).not.toHaveBeenCalled();
+		expect(mockTelegramSendMessage).not.toHaveBeenCalled();
 	});
 
 	it('routes preset delivery to requested channels only', async () => {

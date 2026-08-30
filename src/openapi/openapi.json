@@ -797,7 +797,7 @@
         "tags": [
           "Scanner presets"
         ],
-        "summary": "Run a scanner preset",
+        "summary": "Run a scanner preset or preview configuration in dry-run mode",
         "operationId": "runScannerPreset",
         "parameters": [
           {
@@ -805,14 +805,32 @@
           },
           {
             "$ref": "#/components/parameters/DryRun"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/XIdempotencyKeyHeader"
           }
         ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/ScannerPresetRun"
+        },
         "responses": {
           "200": {
             "$ref": "#/components/responses/AnalysisResult"
           },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
           "404": {
             "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/IdempotencyConflict"
           },
           "502": {
             "$ref": "#/components/responses/Error"
@@ -2058,6 +2076,31 @@
                 "top_gainers"
               ],
               "limit": 5
+            }
+          }
+        }
+      },
+      "ScannerPresetRun": {
+        "required": false,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ScannerPresetRunRequest"
+            },
+            "examples": {
+              "dryRunPreview": {
+                "value": {
+                  "dryRun": true,
+                  "scans": [
+                    "top_gainers",
+                    "volume_breakout_scanner"
+                  ],
+                  "timeframe": "1h",
+                  "channels": [
+                    "telegram"
+                  ]
+                }
+              }
             }
           }
         }
@@ -4387,6 +4430,64 @@
           },
           "bbwThreshold": {
             "type": "number"
+          }
+        }
+      },
+      "ScannerPresetRunRequest": {
+        "type": "object",
+        "properties": {
+          "dryRun": {
+            "type": "boolean",
+            "description": "When true, returns configuration validation, MCP readiness, estimated call volume, and resolved channels without executing scans or delivering messages."
+          },
+          "scans": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "timeframe": {
+            "type": "string"
+          },
+          "exchange": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 20
+          },
+          "bbw_threshold": {
+            "type": "number"
+          },
+          "ranked": {
+            "type": "boolean"
+          },
+          "includeMultiTimeframe": {
+            "type": "boolean"
+          },
+          "channels": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "telegram",
+                "whatsapp",
+                "discord"
+              ]
+            }
+          },
+          "telegramChatId": {
+            "type": "string"
+          },
+          "telegramThreadId": {
+            "type": "integer"
+          },
+          "whatsappChatId": {
+            "type": "string"
+          },
+          "discordWebhookUrl": {
+            "type": "string"
           }
         }
       },

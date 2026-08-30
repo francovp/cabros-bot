@@ -1616,8 +1616,17 @@
                 "key": "x-api-key",
                 "value": "{{apiKey}}",
                 "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "preset-dryrun-key-123",
+                "type": "text"
               }
             ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dryRun\": true,\n  \"channels\": [\"telegram\"]\n}"
+            },
             "url": {
               "raw": "{{baseUrl}}/api/scanner-presets/{{presetId}}/run?dryRun=true",
               "host": [
@@ -1642,7 +1651,7 @@
               "name": "Success",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"presetId\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n  \"payload\": {\n    \"alertText\": \"📡 *SCANNER DE MERCADO — ...\"\n  },\n  \"scanResults\": [],\n  \"summary\": {\n    \"totalScans\": 1,\n    \"success\": 1,\n    \"error\": 0,\n    \"timeout\": 0,\n    \"totalItems\": 3,\n    \"delivered\": 0\n  },\n  \"timedOut\": false,\n  \"timeoutMs\": 90000,\n  \"requestId\": \"req-dryrun-abc\",\n  \"totalDurationMs\": 1200\n}"
+              "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"presetId\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n  \"preset\": {\n    \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n    \"name\": \"Daily Scan\",\n    \"exchange\": \"BINANCE\",\n    \"timeframe\": \"4h\",\n    \"scans\": [\n      \"top_gainers\"\n    ],\n    \"limit\": 5,\n    \"bbw_threshold\": 0.05,\n    \"ranked\": false,\n    \"includeMultiTimeframe\": false\n  },\n  \"validation\": {\n    \"ok\": true,\n    \"errors\": []\n  },\n  \"estimatedCalls\": {\n    \"coinAnalysis\": 1,\n    \"multiTimeframe\": 0\n  },\n  \"requestedChannels\": [\n    \"telegram\"\n  ],\n  \"mcpReadiness\": {\n    \"ready\": true,\n    \"lastCheckedAt\": \"2026-08-30T12:00:00.000Z\",\n    \"lastErrorCategory\": null\n  },\n  \"idempotencyKey\": \"preset-dryrun-key-123\",\n  \"requestId\": \"req-dryrun-abc\"\n}"
             }
           ]
         }

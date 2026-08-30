@@ -60,7 +60,7 @@ function getRoutes(botOrGetter) {
 	router.get('/scanner-presets/:id', ...adminRead, getPreset);
 	router.put('/scanner-presets/:id', ...adminWrite, updatePreset);
 	router.delete('/scanner-presets/:id', ...adminWrite, deletePreset);
-	router.post('/scanner-presets/:id/run', ...adminWrite, postRunPreset(botOrGetter));
+	router.post('/scanner-presets/:id/run', ...adminWrite, idempotencyMiddleware, postRunPreset(botOrGetter));
 
 	// Async job endpoints
 	router.post('/jobs/tradingview-analysis', ...adminWrite, idempotencyMiddleware, postCreateJob(botOrGetter));
