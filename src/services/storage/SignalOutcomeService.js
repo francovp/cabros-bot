@@ -1150,6 +1150,87 @@ function createEmptyMetricsSummary() {
 	};
 }
 
+function createWindowAccumulator() {
+	return {
+		ALL: createWindowBucket(),
+		BUY: createWindowBucket(),
+		SELL: createWindowBucket(),
+	};
+}
+
+function createWindowBucket() {
+	return {
+		totalWinsEvaluated: 0,
+		hits: 0,
+		targetHits: 0,
+		stopHits: 0,
+		targetEligibleWindows: 0,
+		stopEligibleWindows: 0,
+		totalReturn: 0,
+		totalMfe: 0,
+		totalMae: 0,
+		maxMae: 0,
+		totalR: 0,
+		rCount: 0,
+	};
+}
+
+function accumulateWindowBucket(accumulator, signal, outcome, key) {
+	if (!accumulator[key]) {
+		accumulator[key] = createWindowBucket();
+	}
+	const bucket = accumulator[key];
+	bucket.totalWinsEvaluated++;
+	if (outcome.return > 0) {
+		bucket.hits++;
+	}
+	const hasTargetBarrier = typeof signal.target === 'number' && Number.isFinite(signal.target) && signal.target > 0;
+	const hasStopBarrier = typeof signal.stop === 'number' && Number.isFinite(signal.stop) && signal.stop > 0;
+	if (hasTargetBarrier) {
+		bucket.targetEligibleWindows++;
+	}
+	if (hasStopBarrier) {
+		bucket.stopEligibleWindows++;
+	}
+	if (outcome.targetHit === true || outcome.firstHit === 'target') {
+		bucket.targetHits++;
+	}
+	if (outcome.stopHit === true || outcome.firstHit === 'stop') {
+		bucket.stopHits++;
+	}
+	if (typeof outcome.rMultiple === 'number' && Number.isFinite(outcome.rMultiple)) {
+		bucket.totalR += outcome.rMultiple;
+		bucket.rCount++;
+	}
+	bucket.totalReturn += outcome.return;
+	bucket.totalMfe += outcome.maxFavorableExcursion;
+	bucket.totalMae += outcome.maxAdverseExcursion;
+	if (outcome.maxAdverseExcursion < bucket.maxMae) {
+		bucket.maxMae = outcome.maxAdverseExcursion;
+	}
+}
+
+function buildWindowStatsShape(bucket) {
+	const total = bucket.totalWinsEvaluated;
+	return {
+		totalSignals: total,
+		hitRatePercent: parseFloat(((bucket.hits / total) * 100).toFixed(2)),
+		targetEligibleWindows: bucket.targetEligibleWindows,
+		stopEligibleWindows: bucket.stopEligibleWindows,
+		targetHitRatePercent: bucket.targetEligibleWindows > 0
+			? parseFloat(((bucket.targetHits / bucket.targetEligibleWindows) * 100).toFixed(2))
+			: 0,
+		stopHitRatePercent: bucket.stopEligibleWindows > 0
+			? parseFloat(((bucket.stopHits / bucket.stopEligibleWindows) * 100).toFixed(2))
+			: 0,
+		expectancyR: bucket.rCount > 0 ? parseFloat((bucket.totalR / bucket.rCount).toFixed(4)) : null,
+		averageReturnPercent: parseFloat((bucket.totalReturn / total).toFixed(4)),
+		averageMfePercent: parseFloat((bucket.totalMfe / total).toFixed(4)),
+		averageMaePercent: parseFloat((bucket.totalMae / total).toFixed(4)),
+		maxAdverseExcursionPercent: parseFloat(bucket.maxMae.toFixed(4)),
+	};
+}
+
 /**
  * Compute aggregated metrics.
  */
@@ -1268,70 +1349,43 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, status, wi
 	const windowStats = {};
 	if (evaluatedSignals.length > 0) {
 		for (const winKey of Object.keys(WINDOW_CONFIGS)) {
-			let totalWinsEvaluated = 0;
-			let hits = 0;
-			let targetHits = 0;
-			let stopHits = 0;
-			let targetEligibleWindows = 0;
-			let stopEligibleWindows = 0;
-			let totalReturn = 0;
-			let totalMfe = 0;
-			let totalMae = 0;
-			let maxMae = 0;
-			let totalR = 0;
-			let rCount = 0;
+			const accumulator = createWindowAccumulator();
 
 			for (const signal of evaluatedSignals) {
 				const outcome = signal.outcomes ? signal.outcomes[winKey] : null;
 				if (outcome && outcome.status === 'evaluated') {
-					totalWinsEvaluated++;
-					if (outcome.return > 0) {
-						hits++;
-					}
-					const hasTargetBarrier = typeof signal.target === 'number' && Number.isFinite(signal.target) && signal.target > 0;
-					const hasStopBarrier = typeof signal.stop === 'number' && Number.isFinite(signal.stop) && signal.stop > 0;
-					if (hasTargetBarrier) {
-						targetEligibleWindows++;
-					}
-					if (hasStopBarrier) {
-						stopEligibleWindows++;
-					}
-					if (outcome.targetHit === true || outcome.firstHit === 'target') {
-						targetHits++;
-					}
-					if (outcome.stopHit === true || outcome.firstHit === 'stop') {
-						stopHits++;
-					}
-					if (typeof outcome.rMultiple === 'number' && Number.isFinite(outcome.rMultiple)) {
-						totalR += outcome.rMultiple;
-						rCount++;
-					}
-					totalReturn += outcome.return;
-					totalMfe += outcome.maxFavorableExcursion;
-					totalMae += outcome.maxAdverseExcursion;
-					if (outcome.maxAdverseExcursion < maxMae) {
-						maxMae = outcome.maxAdverseExcursion;
+					accumulateWindowBucket(accumulator, signal, outcome, 'ALL');
+					const side = signal.side === 'SELL' ? 'SELL' : 'BUY';
+					accumulateWindowBucket(accumulator, signal, outcome, side);
+					const setupKey = typeof signal.setupType === 'string' && signal.setupType.trim()
+						? signal.setupType.trim().toLowerCase()
+						: null;
+					if (setupKey) {
+						accumulateWindowBucket(accumulator, signal, outcome, setupKey);
 					}
 				}
 			}
 
-			if (totalWinsEvaluated > 0) {
+			if (accumulator.ALL.totalWinsEvaluated > 0) {
+				const built = buildWindowStatsShape(accumulator.ALL);
+				const bySide = {};
+				if (accumulator.BUY.totalWinsEvaluated > 0) {
+					bySide.BUY = buildWindowStatsShape(accumulator.BUY);
+				}
+				if (accumulator.SELL.totalWinsEvaluated > 0) {
+					bySide.SELL = buildWindowStatsShape(accumulator.SELL);
+				}
+				const bySetupType = {};
+				for (const [setupKey, bucket] of Object.entries(accumulator)) {
+					if (setupKey === 'ALL' || setupKey === 'BUY' || setupKey === 'SELL') continue;
+					if (bucket.totalWinsEvaluated > 0) {
+						bySetupType[setupKey] = buildWindowStatsShape(bucket);
+					}
+				}
 				windowStats[winKey] = {
-					totalSignals: totalWinsEvaluated,
-					hitRatePercent: parseFloat(((hits / totalWinsEvaluated) * 100).toFixed(2)),
-					targetEligibleWindows,
-					stopEligibleWindows,
-					targetHitRatePercent: targetEligibleWindows > 0
-						? parseFloat(((targetHits / targetEligibleWindows) * 100).toFixed(2))
-						: 0,
-					stopHitRatePercent: stopEligibleWindows > 0
-						? parseFloat(((stopHits / stopEligibleWindows) * 100).toFixed(2))
-						: 0,
-					expectancyR: rCount > 0 ? parseFloat((totalR / rCount).toFixed(4)) : null,
-					averageReturnPercent: parseFloat((totalReturn / totalWinsEvaluated).toFixed(4)),
-					averageMfePercent: parseFloat((totalMfe / totalWinsEvaluated).toFixed(4)),
-					averageMaePercent: parseFloat((totalMae / totalWinsEvaluated).toFixed(4)),
-					maxAdverseExcursionPercent: parseFloat(maxMae.toFixed(4)),
+					...built,
+					...(Object.keys(bySide).length > 0 ? { bySide } : {}),
+					...(Object.keys(bySetupType).length > 0 ? { bySetupType } : {}),
 				};
 			}
 		}

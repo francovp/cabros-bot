@@ -1835,6 +1835,226 @@ describe('SignalOutcomeService', () => {
 				expect.objectContaining({ symbol: 'ETHUSDT', score: -0.85, side: 'SELL' }),
 			]));
 		});
+
+		it('splits window stats by side and setup type with same metric shape as parent window', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			const now = new Date();
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, new Map([
+				['buy-tp', {
+					receivedAt: admin.firestore.Timestamp.fromDate(now),
+					requestId: 'req-buy-tp',
+					source: 'alert',
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					side: 'BUY',
+					setupType: 'trend_continuation',
+					price: 50000,
+					stop: 48000,
+					target: 54000,
+					eligibilityState: 'supported_provider',
+					outcomeEvaluated: true,
+					outcomes: {
+						'1h': {
+							status: 'evaluated',
+							targetTime: now.toISOString(),
+							price: 54000,
+							return: 8.0,
+							rMultiple: 2.0,
+							firstHit: 'target',
+							targetHit: true,
+							stopHit: false,
+							maxFavorableExcursion: 8.0,
+							maxAdverseExcursion: -1.0,
+						},
+					},
+				}],
+				['buy-sl', {
+					receivedAt: admin.firestore.Timestamp.fromDate(now),
+					requestId: 'req-buy-sl',
+					source: 'alert',
+					symbol: 'ETHUSDT',
+					exchange: 'BINANCE',
+					side: 'BUY',
+					setupType: 'trend_continuation',
+					price: 3000,
+					stop: 2900,
+					target: 3300,
+					eligibilityState: 'supported_provider',
+					outcomeEvaluated: true,
+					outcomes: {
+						'1h': {
+							status: 'evaluated',
+							targetTime: now.toISOString(),
+							price: 2900,
+							return: -3.3333,
+							rMultiple: -1.0,
+							firstHit: 'stop',
+							targetHit: false,
+							stopHit: true,
+							maxFavorableExcursion: 1.0,
+							maxAdverseExcursion: -3.3333,
+						},
+					},
+				}],
+				['sell-tp', {
+					receivedAt: admin.firestore.Timestamp.fromDate(now),
+					requestId: 'req-sell-tp',
+					source: 'alert',
+					symbol: 'SOLUSDT',
+					exchange: 'BINANCE',
+					side: 'SELL',
+					setupType: 'reversal',
+					price: 200,
+					stop: 210,
+					target: 180,
+					eligibilityState: 'supported_provider',
+					outcomeEvaluated: true,
+					outcomes: {
+						'1h': {
+							status: 'evaluated',
+							targetTime: now.toISOString(),
+							price: 180,
+							return: 10.0,
+							rMultiple: 2.0,
+							firstHit: 'target',
+							targetHit: true,
+							stopHit: false,
+							maxFavorableExcursion: 10.0,
+							maxAdverseExcursion: -0.5,
+						},
+					},
+				}],
+			]));
+
+			const res = await SignalOutcomeService.getMetricsSummary();
+
+			const win = res.windows['1h'];
+			expect(win).toBeDefined();
+			expect(win.totalSignals).toBe(3);
+
+			// bySide: BUY has 2 evaluated, SELL has 1 evaluated
+			expect(win.bySide).toBeDefined();
+			expect(win.bySide.BUY).toBeDefined();
+			expect(win.bySide.SELL).toBeDefined();
+			expect(win.bySide.BUY.totalSignals).toBe(2);
+			expect(win.bySide.SELL.totalSignals).toBe(1);
+			expect(win.bySide.BUY.hitRatePercent).toBe(50); // 1 of 2 BUY hit target
+			expect(win.bySide.SELL.hitRatePercent).toBe(100); // 1 of 1 SELL hit target
+			expect(win.bySide.BUY.expectancyR).toBe(0.5); // (2.0 + (-1.0)) / 2
+			expect(win.bySide.SELL.expectancyR).toBe(2.0);
+			expect(win.bySide.BUY.targetHitRatePercent).toBe(50);
+			expect(win.bySide.SELL.targetHitRatePercent).toBe(100);
+
+			// bySetupType: trend_continuation has 2 evaluated, reversal has 1
+			expect(win.bySetupType).toBeDefined();
+			expect(win.bySetupType.trend_continuation).toBeDefined();
+			expect(win.bySetupType.reversal).toBeDefined();
+			expect(win.bySetupType.trend_continuation.totalSignals).toBe(2);
+			expect(win.bySetupType.reversal.totalSignals).toBe(1);
+			expect(win.bySetupType.trend_continuation.hitRatePercent).toBe(50);
+			expect(win.bySetupType.reversal.hitRatePercent).toBe(100);
+
+			// Existing top-level windowStats shape unchanged (still has the parent metrics)
+			expect(win.hitRatePercent).toBeDefined();
+			expect(win.expectancyR).toBeDefined();
+			expect(win.averageReturnPercent).toBeDefined();
+			expect(win.averageMfePercent).toBeDefined();
+			expect(win.averageMaePercent).toBeDefined();
+			expect(win.maxAdverseExcursionPercent).toBeDefined();
+		});
+
+		it('omits empty bySide and bySetupType buckets when only one side or one setupType has signals', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			const now = new Date();
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, new Map([
+				['only-buy', {
+					receivedAt: admin.firestore.Timestamp.fromDate(now),
+					requestId: 'req-only-buy',
+					source: 'alert',
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					side: 'BUY',
+					setupType: 'breakout',
+					price: 50000,
+					stop: 48000,
+					target: 54000,
+					eligibilityState: 'supported_provider',
+					outcomeEvaluated: true,
+					outcomes: {
+						'1h': {
+							status: 'evaluated',
+							targetTime: now.toISOString(),
+							price: 54000,
+							return: 8.0,
+							rMultiple: 2.0,
+							firstHit: 'target',
+							targetHit: true,
+							stopHit: false,
+							maxFavorableExcursion: 8.0,
+							maxAdverseExcursion: -1.0,
+						},
+					},
+				}],
+			]));
+
+			const res = await SignalOutcomeService.getMetricsSummary();
+			const win = res.windows['1h'];
+			expect(win).toBeDefined();
+			// BUY side present, SELL side omitted
+			expect(win.bySide.BUY).toBeDefined();
+			expect(win.bySide.SELL).toBeUndefined();
+			// breakout setup present (only one)
+			expect(win.bySetupType.breakout).toBeDefined();
+		});
+
+		it('omits bySide and bySetupType when no signals have setupType metadata', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			const now = new Date();
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, new Map([
+				['no-setup', {
+					receivedAt: admin.firestore.Timestamp.fromDate(now),
+					requestId: 'req-no-setup',
+					source: 'alert',
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					side: 'BUY',
+					// no setupType
+					price: 50000,
+					stop: 48000,
+					target: 54000,
+					eligibilityState: 'supported_provider',
+					outcomeEvaluated: true,
+					outcomes: {
+						'1h': {
+							status: 'evaluated',
+							targetTime: now.toISOString(),
+							price: 54000,
+							return: 8.0,
+							rMultiple: 2.0,
+							firstHit: 'target',
+							targetHit: true,
+							stopHit: false,
+							maxFavorableExcursion: 8.0,
+							maxAdverseExcursion: -1.0,
+						},
+					},
+				}],
+			]));
+
+			const res = await SignalOutcomeService.getMetricsSummary();
+			const win = res.windows['1h'];
+			expect(win).toBeDefined();
+			expect(win.bySide).toBeDefined();
+			expect(win.bySide.BUY).toBeDefined();
+			// No setupType anywhere → bySetupType omitted
+			expect(win.bySetupType).toBeUndefined();
+		});
 	});
 
 	describe('summarizeOutcomes()', () => {
