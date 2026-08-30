@@ -388,6 +388,7 @@ async function loadNow(options = {}) {
 			remoteLoadedAt = null;
 			lastErrorCategory = getErrorCategory(error);
 			console.warn('[RemoteConfigService] Remote Config load failed:', lastErrorCategory);
+			applyRuntimeConfig();
 			return false;
 		} finally {
 			loadingPromise = null;
@@ -427,6 +428,7 @@ function resetForTesting() {
 	lastSuccessfulLoad = null;
 	lastErrorCategory = null;
 	loadingPromise = null;
+	applyRuntimeConfig();
 }
 
 module.exports = {
@@ -441,5 +443,6 @@ module.exports = {
 	_setRemoteOverridesForTesting(overrides, loadedAt = Date.now()) {
 		remoteOverrides = { ...overrides };
 		remoteLoadedAt = loadedAt;
+		applyRuntimeConfig();
 	},
 };

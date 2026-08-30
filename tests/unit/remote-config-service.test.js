@@ -417,4 +417,28 @@ describe('RemoteConfigService', () => {
 		expect(config.ZERO_CHANNEL_ALERT_COOLDOWN_MS).toBe(600000);
 		expect(config.ENABLE_API_ONLY_MODE).toBe(true);
 	});
+
+	it('restores fallback LLM gate configuration when Remote Config load fails', async () => {
+		const llmConcurrencyGate = require('../../src/services/llm/LlmConcurrencyGate');
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+
+		// Step 1: Initial successful load sets finite gate
+		mockTemplate({
+			LLM_GLOBAL_MAX_CONCURRENT: 5,
+			LLM_GLOBAL_QUEUE_TIMEOUT_MS: 2500,
+		});
+		alertStorageService.getFirestore.mockReturnValue({});
+		await remoteConfigService.loadNow();
+		expect(llmConcurrencyGate.maxConcurrent).toBe(5);
+		expect(llmConcurrencyGate.queueTimeoutMs).toBe(2500);
+
+		// Step 2: Second load fails (e.g. timeout or rejected)
+		const rejectingLoad = jest.fn().mockRejectedValue(new Error('network error'));
+		mockTemplate({}, { load: rejectingLoad });
+		await remoteConfigService.loadNow();
+
+		// Gate should restore environment/default fallback (unbounded / 0)
+		expect(llmConcurrencyGate.maxConcurrent).toBe(Number.POSITIVE_INFINITY);
+		expect(llmConcurrencyGate.queueTimeoutMs).toBe(0);
+	});
 });

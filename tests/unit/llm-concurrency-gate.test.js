@@ -247,4 +247,44 @@ describe('LlmConcurrencyGate - review feedback', () => {
 		const snap = g.getSnapshot();
 		expect(snap.abortedTotal).toBe(0);
 	});
+
+	it('handles standard controller.abort() without arguments (DOMException) without throwing TypeError or mutating signal.reason', async () => {
+		g.configure({ maxConcurrent: 1, queueTimeoutMs: 5000 });
+		await g.acquire();
+		const controller = new AbortController();
+		const queuedPromise = g.acquire({ signal: controller.signal });
+		const settled = queuedPromise.catch((error) => error);
+		controller.abort(); // signal.reason is a DOMException with read-only code
+		const error = await settled;
+		expect(error).toMatchObject({ code: 'LLM_GATE_ABORTED' });
+		expect(error.cause).toBe(controller.signal.reason);
+		expect(g.getSnapshot().abortedTotal).toBe(1);
+		expect(g.getSnapshot().queueDepth).toBe(0);
+	});
+
+	it('drains queued callers FIFO when maxConcurrent is increased or reset to unbounded', async () => {
+		g.configure({ maxConcurrent: 1, queueTimeoutMs: 5000 });
+		const release0 = await g.acquire();
+		expect(g.getSnapshot().inFlight).toBe(1);
+
+		const w1 = g.acquire();
+		const w2 = g.acquire();
+		expect(g.getSnapshot().queueDepth).toBe(2);
+
+		// Raise capacity to 3 - both queued callers should drain immediately
+		g.configure({ maxConcurrent: 3 });
+		await Promise.resolve();
+		await Promise.resolve();
+
+		const [r1, r2] = await Promise.all([w1, w2]);
+		expect(typeof r1).toBe('function');
+		expect(typeof r2).toBe('function');
+		expect(g.getSnapshot().inFlight).toBe(3);
+		expect(g.getSnapshot().queueDepth).toBe(0);
+
+		release0();
+		r1();
+		r2();
+		expect(g.getSnapshot().inFlight).toBe(0);
+	});
 });

@@ -17,6 +17,17 @@
 const DEFAULT_MAX_CONCURRENT = Number.POSITIVE_INFINITY;
 const DEFAULT_QUEUE_TIMEOUT_MS = 0;
 
+function createAbortError(message, reason) {
+	const error = new Error(message);
+	error.code = 'LLM_GATE_ABORTED';
+	error.status = 499;
+	if (reason) {
+		error.reason = reason;
+		error.cause = reason;
+	}
+	return error;
+}
+
 class LlmConcurrencyGate {
 	constructor(options = {}) {
 		const { defaultMaxConcurrent, defaultQueueTimeoutMs } = options;
@@ -37,6 +48,7 @@ class LlmConcurrencyGate {
 
 	configure(options = {}) {
 		const { maxConcurrent, queueTimeoutMs } = options;
+		const previousMax = this.maxConcurrent;
 
 		// Only update maxConcurrent when the caller passed the key.
 		if ('maxConcurrent' in options) {
@@ -56,6 +68,11 @@ class LlmConcurrencyGate {
 				this.queueTimeoutMs = Math.floor(queueTimeoutMs);
 			}
 			// Reject otherwise - keep previous valid configuration.
+		}
+
+		// If capacity increased (or unbounded restored) and waiters exist, drain waiters FIFO.
+		if (this.maxConcurrent > previousMax && this._waiters.length > 0) {
+			this._drainOne();
 		}
 	}
 
@@ -101,8 +118,7 @@ class LlmConcurrencyGate {
 				if (signal.aborted) {
 					clearTimeout(waiter.timer);
 					this._abortedTotal += 1;
-					const error = signal.reason || new Error('Caller aborted before queueing');
-					error.code = 'LLM_GATE_ABORTED';
+					const error = createAbortError('Caller aborted before queueing', signal.reason);
 					reject(error);
 					return;
 				}
@@ -110,8 +126,7 @@ class LlmConcurrencyGate {
 				waiter.onAbort = () => {
 					if (this._removeWaiter(waiter)) {
 						this._abortedTotal += 1;
-						const error = signal.reason || new Error('Caller aborted while queued');
-						error.code = 'LLM_GATE_ABORTED';
+						const error = createAbortError('Caller aborted while queued', signal.reason);
 						reject(error);
 					}
 				};
@@ -172,8 +187,7 @@ class LlmConcurrencyGate {
 			}
 			if (next.signal && next.signal.aborted) {
 				this._abortedTotal += 1;
-				const error = next.signal.reason || new Error('Caller aborted before draining');
-				error.code = 'LLM_GATE_ABORTED';
+				const error = createAbortError('Caller aborted before draining', next.signal.reason);
 				next.reject(error);
 				continue;
 			}
