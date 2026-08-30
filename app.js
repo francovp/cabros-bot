@@ -1,8 +1,8 @@
 const express = require('express');
 const { setupTrustProxy } = require('./src/lib/trustProxy');
+const { setupCorsAllowlist } = require('./src/lib/corsAllowlist');
 
 const app = express();
-const cors = require('cors');
 const helmet = require('helmet');
 const { getOpenApiDocsRouter } = require('./src/openapi/docs');
 
@@ -15,8 +15,11 @@ app.use(express.urlencoded({ extended: false }));
 app.use(express.text({ type: 'text/plain' }));
 app.use(express.json());
 
-// Configurar Cabeseras y CORS
-app.use(cors());
+// Origin-restricted CORS allowlist (replaces the prior `cors()` wildcard grant).
+// Server-to-server, curl, and same-origin requests without an Origin header
+// pass through unchanged; browser requests are only granted when the Origin
+// matches the explicit allowlist (see CORS_ALLOWED_ORIGINS).
+setupCorsAllowlist(app);
 
 // Use helmet for improved security
 const contentSecurityPolicy = helmet.contentSecurityPolicy.getDefaultDirectives();

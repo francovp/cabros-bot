@@ -82,6 +82,156 @@
       ]
     },
     {
+      "name": "Healthcheck (CORS Allowed Origin)",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Origin",
+            "value": "https://cabros-bot.web.app",
+            "type": "text"
+          }
+        ],
+        "description": "Healthcheck with an allowed Origin header. Returns Access-Control-Allow-Origin matching the origin.",
+        "url": {
+          "raw": "{{baseUrl}}/healthcheck",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "healthcheck"
+          ]
+        }
+      },
+      "response": [
+        {
+          "name": "Success - Allowed Origin",
+          "status": "OK",
+          "code": 200,
+          "header": [
+            {
+              "key": "Access-Control-Allow-Origin",
+              "value": "https://cabros-bot.web.app"
+            },
+            {
+              "key": "Vary",
+              "value": "Origin"
+            },
+            {
+              "key": "Content-Type",
+              "value": "application/json; charset=utf-8"
+            }
+          ],
+          "body": "{\"uptime\":\"42.5\"}"
+        }
+      ]
+    },
+    {
+      "name": "Healthcheck (CORS Disallowed Origin)",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Origin",
+            "value": "https://disallowed.example.com",
+            "type": "text"
+          }
+        ],
+        "description": "Healthcheck with a disallowed Origin header. Access-Control-Allow-Origin is omitted.",
+        "url": {
+          "raw": "{{baseUrl}}/healthcheck",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "healthcheck"
+          ]
+        }
+      },
+      "response": [
+        {
+          "name": "Success - Disallowed Origin (No CORS Header)",
+          "status": "OK",
+          "code": 200,
+          "header": [
+            {
+              "key": "Vary",
+              "value": "Origin"
+            },
+            {
+              "key": "Content-Type",
+              "value": "application/json; charset=utf-8"
+            }
+          ],
+          "body": "{\"uptime\":\"42.5\"}"
+        }
+      ]
+    },
+    {
+      "name": "CORS Preflight OPTIONS (/api/status)",
+      "request": {
+        "method": "OPTIONS",
+        "header": [
+          {
+            "key": "Origin",
+            "value": "https://cabros-bot.web.app",
+            "type": "text"
+          },
+          {
+            "key": "Access-Control-Request-Method",
+            "value": "GET",
+            "type": "text"
+          },
+          {
+            "key": "Access-Control-Request-Headers",
+            "value": "x-api-key",
+            "type": "text"
+          }
+        ],
+        "description": "CORS preflight OPTIONS request from an allowed origin. Returns 204 No Content with CORS allow headers.",
+        "url": {
+          "raw": "{{baseUrl}}/api/status",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "status"
+          ]
+        }
+      },
+      "response": [
+        {
+          "name": "204 No Content - Preflight Allowed",
+          "status": "No Content",
+          "code": 204,
+          "header": [
+            {
+              "key": "Access-Control-Allow-Origin",
+              "value": "https://cabros-bot.web.app"
+            },
+            {
+              "key": "Access-Control-Allow-Methods",
+              "value": "GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS"
+            },
+            {
+              "key": "Access-Control-Allow-Headers",
+              "value": "x-api-key"
+            },
+            {
+              "key": "Access-Control-Max-Age",
+              "value": "600"
+            },
+            {
+              "key": "Vary",
+              "value": "Origin"
+            }
+          ],
+          "body": ""
+        }
+      ]
+    },
+    {
       "name": "Get OpenAPI Contract",
       "request": {
         "method": "GET",
