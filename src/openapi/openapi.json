@@ -3589,11 +3589,38 @@
           }
         }
       },
+      "DirectionEchoRate": {
+        "type": "object",
+        "required": [
+          "echoed",
+          "total",
+          "percentage"
+        ],
+        "properties": {
+          "echoed": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Number of enriched alerts with setup_type and signal side where the setup matched the naive direction-echo pattern (BUY + trend_continuation, SELL + reversal)."
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Total number of enriched alerts with a populated setup_type and a detected signal side."
+          },
+          "percentage": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 100,
+            "description": "Percentage of labeled alerts that matched the direction-echo pattern."
+          }
+        }
+      },
       "RiskMetadataCoverage": {
         "type": "object",
         "required": [
           "denominator",
           "fields",
+          "directionEchoRate",
           "byPromptProvenance"
         ],
         "properties": {
@@ -3624,6 +3651,9 @@
               }
             }
           },
+          "directionEchoRate": {
+            "$ref": "#/components/schemas/DirectionEchoRate"
+          },
           "byPromptProvenance": {
             "type": "array",
             "items": {
@@ -3631,7 +3661,8 @@
               "required": [
                 "provenance",
                 "denominator",
-                "fields"
+                "fields",
+                "directionEchoRate"
               ],
               "properties": {
                 "provenance": {
@@ -3650,6 +3681,9 @@
                 },
                 "fields": {
                   "$ref": "#/components/schemas/RiskMetadataCoverage/properties/fields"
+                },
+                "directionEchoRate": {
+                  "$ref": "#/components/schemas/DirectionEchoRate"
                 }
               }
             }

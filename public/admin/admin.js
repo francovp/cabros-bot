@@ -1519,6 +1519,16 @@ const renderAlertSummaryBlocks = (data) => {
 			);
 			table.append(row);
 		});
+		if (coverage.directionEchoRate && typeof coverage.directionEchoRate === 'object') {
+			const echo = asObject(coverage.directionEchoRate);
+			const echoRow = element('tr');
+			echoRow.append(
+				element('td', { text: 'Direction echo rate' }),
+				element('td', { text: `${formatJobValue(echo.echoed)} / ${formatJobValue(echo.total)}` }),
+				element('td', { text: `${formatJobValue(echo.percentage)}%` }),
+			);
+			table.append(echoRow);
+		}
 		section.append(table);
 		wrap.append(section);
 	}

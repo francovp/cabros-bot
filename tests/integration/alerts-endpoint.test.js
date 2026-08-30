@@ -304,6 +304,11 @@ describe('Alerts API Integration Tests', () => {
 				setup_type: { populated: 1, percentage: 50 },
 				risk_reward_ratio: { populated: 1, percentage: 50 },
 			},
+			directionEchoRate: {
+				echoed: 0,
+				total: 1,
+				percentage: 0,
+			},
 			byPromptProvenance: [],
 		};
 		alertStorageService.summarizeAlerts.mockResolvedValue({

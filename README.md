@@ -1158,7 +1158,7 @@ Export bounded stored alerts as JSONL or CSV. CSV serialization prefixes string 
 
 Return bounded JSON-only analytics for stored alerts without exposing raw alert text or credentials.
 
-Each enriched alert records only safe prompt provenance (`name`, `source`, `label`, and `version`) when a prompt was resolved. The `enrichment.riskMetadataCoverage` block uses enriched alerts as its denominator and reports populated counts/percentages for `invalidation_level`, `target_level`, `setup_type`, and `risk_reward_ratio`. `byPromptProvenance` groups the same metrics by Langfuse/local provenance; legacy records without provenance use `null`. Missing or invalid optional values remain zero coverage and are never synthesized.
+Each enriched alert records only safe prompt provenance (`name`, `source`, `label`, and `version`) when a prompt was resolved. The `enrichment.riskMetadataCoverage` block uses enriched alerts as its denominator and reports populated counts/percentages for `invalidation_level`, `target_level`, `setup_type`, and `risk_reward_ratio`. It also reports `directionEchoRate` (`echoed`, `total`, `percentage`) to track naive direction echoes (e.g. BUY paired with `trend_continuation`, SELL paired with `reversal`). `byPromptProvenance` groups the same metrics by Langfuse/local provenance; legacy records without provenance use `null`. Missing or invalid optional values remain zero coverage and are never synthesized.
 
 Similarly, `enrichment.evidenceCoverage` tracks whether enriched alerts cited grounding sources, reporting `zeroSources`, `oneToTwoSources`, and `threePlusSources` distribution along with `averageSourceCount`, overall and grouped `byPromptProvenance`.
 
@@ -1213,6 +1213,11 @@ The service caps the queried window at 31 days to keep routine operator usage ch
           "setup_type": { "populated": 0, "percentage": 0 },
           "risk_reward_ratio": { "populated": 0, "percentage": 0 }
         },
+        "directionEchoRate": {
+          "echoed": 0,
+          "total": 0,
+          "percentage": 0
+        },
         "byPromptProvenance": [
           {
             "provenance": null,
@@ -1222,6 +1227,11 @@ The service caps the queried window at 31 days to keep routine operator usage ch
               "target_level": { "populated": 0, "percentage": 0 },
               "setup_type": { "populated": 0, "percentage": 0 },
               "risk_reward_ratio": { "populated": 0, "percentage": 0 }
+            },
+            "directionEchoRate": {
+              "echoed": 0,
+              "total": 0,
+              "percentage": 0
             }
           }
         ]
