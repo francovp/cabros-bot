@@ -3816,6 +3816,11 @@
             "type": "string",
             "minLength": 1
           },
+          "telegramThreadId": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Optional Telegram forum topic message_thread_id override (0 routes to the chat general topic)."
+          },
           "whatsappChatId": {
             "type": "string",
             "minLength": 1
@@ -3847,6 +3852,11 @@
           "telegramChatId": {
             "type": "string",
             "minLength": 1
+          },
+          "telegramThreadId": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Optional Telegram forum topic message_thread_id override (0 routes to the chat general topic)."
           },
           "whatsappChatId": {
             "type": "string",
@@ -3921,6 +3931,11 @@
             "type": "string",
             "minLength": 1
           },
+          "telegramThreadId": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Optional Telegram forum topic message_thread_id override (0 routes to the chat general topic)."
+          },
           "whatsappChatId": {
             "type": "string",
             "minLength": 1
@@ -3986,6 +4001,11 @@
           "telegramChatId": {
             "type": "string",
             "minLength": 1
+          },
+          "telegramThreadId": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Optional Telegram forum topic message_thread_id override (0 routes to the chat general topic)."
           },
           "whatsappChatId": {
             "type": "string",
@@ -4254,6 +4274,12 @@
           "telegramChatId": {
             "type": "string"
           },
+          "telegramThreadId": {
+            "type": "integer",
+            "minimum": 0,
+            "nullable": true,
+            "description": "Optional Telegram forum topic message_thread_id override (0 routes to the chat general topic)."
+          },
           "whatsappChatId": {
             "type": "string"
           },
@@ -4445,6 +4471,11 @@
           "telegramChatId": {
             "type": "string",
             "minLength": 1
+          },
+          "telegramThreadId": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Optional Telegram forum topic message_thread_id override (0 routes to the chat general topic)."
           },
           "whatsappChatId": {
             "type": "string",
