@@ -469,5 +469,24 @@ describe('Scanner presets API integration tests', () => {
 		expect(response.body.code).toBe('PRECONDITION_FAILED');
 		expect(await admin.firestore().collection('scannerPresets').doc(presetId).get()).toBeDefined();
 	});
+
+	it('returns 400 INVALID_IF_MATCH for a malformed If-Match header', async () => {
+		const createResponse = await request(app)
+			.post('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.send({ name: 'Malformed If-Match preset' })
+			.expect(201);
+
+		const presetId = createResponse.body.preset.id;
+
+		const response = await request(app)
+			.put(`/api/scanner-presets/${presetId}`)
+			.set('x-api-key', 'test-key')
+			.set('If-Match', '"3", "4"')
+			.send({ limit: 7 })
+			.expect(400);
+
+		expect(response.body.code).toBe('INVALID_IF_MATCH');
+	});
 });
 

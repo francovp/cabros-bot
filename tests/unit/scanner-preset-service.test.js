@@ -217,6 +217,10 @@ describe('ScannerPresetService', () => {
 			}
 			return Promise.resolve();
 		});
+		firestoreAdmin.__mockDocGet.mockImplementation(() => Promise.resolve({
+			exists: true,
+			data: () => ({ name: 'New value', version: 1 }),
+		}));
 
 		const triggerPromise = service.createPreset({ name: 'Trigger flush' });
 		await new Promise((resolve) => setImmediate(resolve));
@@ -491,6 +495,10 @@ describe('ScannerPresetService', () => {
 			}
 			return Promise.resolve();
 		});
+		firestoreAdmin.__mockDocGet.mockImplementation(() => Promise.resolve({
+			exists: true,
+			data: () => ({ name: 'New value', version: 1 }),
+		}));
 
 		const updatePromise = service.updatePreset(created.id, { name: 'New value' });
 		await new Promise((resolve) => setImmediate(resolve));
@@ -687,5 +695,67 @@ describe('ScannerPresetService', () => {
 		const fetched = await new ReloadedScannerPresetService().getPreset(created.id);
 		expect(fetched.version).toBe(2);
 		expect(fetched.name).toBe('Firestore versioned v2');
+	});
+
+	it('atomically rejects a stale Firestore write that races a successful one', async () => {
+		process.env.ENABLE_FIRESTORE_SCANNER_PRESETS = 'true';
+
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const firestoreAdmin = require('firebase-admin');
+		const service = new ScannerPresetService();
+		const created = await service.createPreset({ name: 'Race target preset' });
+
+		const setSpy = firestoreAdmin.__mockDocSet;
+		setSpy.mockClear();
+		// First get: updatePreset's initial getPreset sees the local
+		// in-memory preset (mock returns version 1 to match what create wrote).
+		// Second get: the atomic re-check inside _writeFirestorePreset
+		// sees version 2 (a concurrent writer already won). The atomic
+		// write must be rejected.
+		let getCalls = 0;
+		firestoreAdmin.__mockDocGet.mockImplementation(() => {
+			getCalls += 1;
+			if (getCalls === 1) {
+				return Promise.resolve({ exists: true, data: () => ({ version: 1, name: 'Race target preset' }) });
+			}
+			return Promise.resolve({ exists: true, data: () => ({ version: 2, name: 'Concurrent winner' }) });
+		});
+
+		const stale = await service.updatePreset(created.id, { name: 'Stale concurrent write' });
+		expect(stale).toBeNull();
+		// The stale write never reached Firestore: no set() call was made
+		// because the atomic version check threw first.
+		expect(setSpy).not.toHaveBeenCalled();
+	});
+
+	it('serializes concurrent in-memory updates so only one wins per version', async () => {
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const service = new ScannerPresetService();
+		const created = await service.createPreset({ name: 'In-memory race' });
+
+		const [a, b] = await Promise.all([
+			service.updatePreset(created.id, { name: 'Writer A' }),
+			service.updatePreset(created.id, { name: 'Writer B' }),
+		]);
+
+		const winners = [a, b].filter((preset) => preset !== null);
+		expect(winners).toHaveLength(1);
+		expect(winners[0].version).toBe(2);
+		expect(['Writer A', 'Writer B']).toContain(winners[0].name);
+
+		const refetched = await service.getPreset(created.id);
+		expect(refetched.version).toBe(2);
+	});
+
+	it('rejects a malformed If-Match header instead of disabling the check', () => {
+		const { parseIfMatchHeader } = require('../../src/services/scannerPresets/ScannerPresetService');
+
+		expect(parseIfMatchHeader('"3"')).toEqual({ present: true, version: 3, malformed: false });
+		expect(parseIfMatchHeader('W/"3"')).toEqual({ present: true, version: 3, malformed: false });
+		expect(parseIfMatchHeader('3')).toEqual({ present: true, version: 3, malformed: false });
+		expect(parseIfMatchHeader('"3", "4"')).toEqual({ present: true, version: null, malformed: true });
+		expect(parseIfMatchHeader('*')).toEqual({ present: true, version: null, malformed: true });
+		expect(parseIfMatchHeader('')).toEqual({ present: true, version: null, malformed: true });
+		expect(parseIfMatchHeader(undefined)).toEqual({ present: false, version: null, malformed: false });
 	});
 });

@@ -755,7 +755,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ScannerPresetResponse"
+                  "$ref": "#/components/schemas/ScannerPresetConflictResponse"
                 }
               }
             }
@@ -765,7 +765,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ScannerPresetResponse"
+                  "$ref": "#/components/schemas/ScannerPresetConflictResponse"
                 }
               }
             }
@@ -820,7 +820,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ScannerPresetResponse"
+                  "$ref": "#/components/schemas/ScannerPresetConflictResponse"
                 }
               }
             }
@@ -4640,6 +4640,42 @@
             "items": {
               "$ref": "#/components/schemas/ScannerPreset"
             }
+          }
+        }
+      },
+      "ScannerPresetConflictResponse": {
+        "type": "object",
+        "description": "Conflict response for scanner-preset If-Match / lockedUntil failures. Returned with HTTP 412 PRECONDITION_FAILED and HTTP 409 PRESET_LOCKED so the client can rebase or wait for the scheduler lease to release.",
+        "required": [
+          "error",
+          "code",
+          "storage"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "Human-readable explanation of why the request was rejected."
+          },
+          "code": {
+            "type": "string",
+            "enum": [
+              "PRECONDITION_FAILED",
+              "PRESET_LOCKED",
+              "PRESET_NOT_FOUND"
+            ]
+          },
+          "storage": {
+            "$ref": "#/components/schemas/ScannerPresetStorage"
+          },
+          "preset": {
+            "$ref": "#/components/schemas/ScannerPreset",
+            "description": "Current preset state, including its monotonic version, so the client can rebase."
+          },
+          "lockedUntil": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "Echoed on 409 PRESET_LOCKED responses so the client knows when the scheduler lease expires."
           }
         }
       },

@@ -171,6 +171,14 @@ function resolveIfMatchVersion(req) {
 	return parseIfMatchHeader(headerValue);
 }
 
+function sendMalformedIfMatch(res) {
+	return res.status(400).json({
+		error: 'Malformed If-Match header. Use a quoted integer such as "3" or the weak form W/"3".',
+		code: 'INVALID_IF_MATCH',
+		storage: getStorageMetadata(),
+	});
+}
+
 function getPreset(req, res) {
 	return (async () => {
 		try {
@@ -209,8 +217,11 @@ function getPreset(req, res) {
 function deletePreset(req, res) {
 	return (async () => {
 		try {
-			const ifMatchVersion = resolveIfMatchVersion(req);
-			const deleted = await scannerPresetService.deletePreset(req.params.id, { ifMatchVersion });
+			const ifMatch = resolveIfMatchVersion(req);
+			if (ifMatch.present && ifMatch.malformed) {
+				return sendMalformedIfMatch(res);
+			}
+			const deleted = await scannerPresetService.deletePreset(req.params.id, { ifMatchVersion: ifMatch.version });
 			if (!deleted) {
 				return res.status(404).json({
 					success: false,
@@ -256,8 +267,15 @@ function deletePreset(req, res) {
 function updatePreset(req, res) {
 	return (async () => {
 		try {
-			const ifMatchVersion = resolveIfMatchVersion(req);
-			const preset = await scannerPresetService.updatePreset(req.params.id, req.body || {}, { ifMatchVersion });
+			const ifMatch = resolveIfMatchVersion(req);
+			if (ifMatch.present && ifMatch.malformed) {
+				return sendMalformedIfMatch(res);
+			}
+			const preset = await scannerPresetService.updatePreset(
+				req.params.id,
+				req.body || {},
+				{ ifMatchVersion: ifMatch.version },
+			);
 			if (!preset) {
 				return res.status(404).json({
 					success: false,
