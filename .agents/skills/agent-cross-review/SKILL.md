@@ -15,15 +15,16 @@ When you are acting as one agent (e.g., **Antigravity**), use this skill to insp
 
 ### 1. Discover Target PRs
 
-Discover active pull requests authored by other agents using the detection script:
+Discover active pull requests authored by other agents using the detection script. The script prioritizes agent+model labels (e.g. `codex-gpt-5.6-luna`, `antigravity-gemini-3.7-flash`, `github-copilot-minimax-m3:free`):
 
 ```bash
 # Auto-detect PRs from other agents (excluding current agent, e.g. antigravity)
 .agents/skills/agent-cross-review/scripts/detect-agent-prs.sh --exclude-self antigravity --limit 5
 
-# Or filter for a specific authoring agent
+# Or filter for a specific authoring agent or agent label pattern
 .agents/skills/agent-cross-review/scripts/detect-agent-prs.sh --agent codex
-.agents/skills/agent-cross-review/scripts/detect-agent-prs.sh --agent github-copilot
+.agents/skills/agent-cross-review/scripts/detect-agent-prs.sh --label "codex-*"
+.agents/skills/agent-cross-review/scripts/detect-agent-prs.sh --label "github-copilot-*"
 ```
 
 If a specific PR number is provided (e.g. `PR #894`), target that PR directly:
@@ -32,13 +33,25 @@ If a specific PR number is provided (e.g. `PR #894`), target that PR directly:
 .agents/skills/agent-cross-review/scripts/detect-agent-prs.sh --pr 894
 ```
 
-### 2. Inspect PR Context and Diff
+### 2. Ensure Agent Attribution Label
+
+Every PR created or updated by an AI agent must carry an attribution label matching `<agent>-<model>` (e.g. `antigravity-gemini-3.7-flash`, `codex-gpt-5.6-luna`, `github-copilot-minimax-m3:free`). If the target PR is missing its attribution label, attach it:
+
+```bash
+# Via detection script:
+.agents/skills/agent-cross-review/scripts/detect-agent-prs.sh --pr "$PR_NUM" --add-label "antigravity-gemini-3.7-flash"
+
+# Or directly with gh:
+gh pr edit "$PR_NUM" --add-label "<agent>-<model>"
+```
+
+### 3. Inspect PR Context and Diff
 
 Fetch PR metadata and inspect the full changeset:
 
 ```bash
-# View PR summary and description
-gh pr view "$PR_NUM" --json number,title,body,headRefName,author,url
+# View PR summary, labels, and description
+gh pr view "$PR_NUM" --json number,title,body,headRefName,author,labels,url
 
 # Inspect the diff
 gh pr diff "$PR_NUM"
@@ -46,7 +59,7 @@ gh pr diff "$PR_NUM"
 
 Read the linked GitHub issues, Linear tickets (e.g. `CB-xxx`), or user stories mentioned in the PR description to understand the intended behavior.
 
-### 3. Evaluate Against Cabros Bot Rubric
+### 4. Evaluate Against Cabros Bot Rubric
 
 Review the diff systematically against [cabros-bot-review-rubric.md](references/cabros-bot-review-rubric.md):
 
@@ -73,11 +86,14 @@ Review the diff systematically against [cabros-bot-review-rubric.md](references/
    - Are non-secret runtime variables added to `RemoteConfigService.js` and `firebase-remote-config-template.json`?
    - Are new routes and payloads registered in `src/openapi/openapi.json` and `CabrosBot.postman_collection.json`?
 
-6. **Test Quality & Coverage**:
+6. **Agent & Model Attribution**:
+   - Does the PR carry its mandatory `<agent>-<model>` label (e.g. `antigravity-gemini-3.7-flash`, `codex-gpt-5.6-luna`, `github-copilot-minimax-m3:free`)?
+
+7. **Test Quality & Coverage**:
    - Are new or modified behaviors tested in `tests/unit/` or `tests/integration/`?
    - Do bug fixes include regression tests proving the bug is resolved?
 
-### 4. Run Preflight Verification
+### 5. Run Preflight Verification
 
 Execute relevant local test suites to verify that the changes pass cleanly:
 
@@ -89,7 +105,7 @@ pnpm test -- tests/unit/<related-test>.test.js
 pnpm test
 ```
 
-### 5. Format Structured Review
+### 6. Format Structured Review
 
 Assemble the review using this standard structure:
 
@@ -97,7 +113,7 @@ Assemble the review using this standard structure:
 # 🤖 Cross-Agent PR Review: PR #[NUMBER] - [TITLE]
 
 **Reviewer Agent**: [Your Name/Model, e.g. Antigravity]
-**Author Agent**: [Detected Agent, e.g. GitHub Copilot, Codex, OpenCode]
+**Author Agent**: [Detected Agent & Model, e.g. GitHub Copilot (minimax-m3:free), Codex (gpt-5.6-luna)]
 **Branch**: `[HEAD_BRANCH]`
 **Verdict**: [APPROVE | REQUEST_CHANGES | COMMENT]
 
@@ -125,13 +141,14 @@ Assemble the review using this standard structure:
 - [ ] Timing-safe auth & fail-closed production check
 - [ ] `.env.example` & Remote Config parity
 - [ ] OpenAPI 3.1 & Postman collection sync
+- [ ] Agent & Model attribution label (`<agent>-<model>`)
 - [ ] Unit & Integration test coverage
 
 ### 🎯 Recommendation
 [Final recommendation for merging or next steps]
 ```
 
-### 6. Present Findings & Optional GitHub Posting
+### 7. Present Findings & Optional GitHub Posting
 
 1. Present the complete formatted review to the user.
 2. If the user explicitly asks to post the review or the skill was invoked with `--post`, confirm with the user before publishing:

@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # detect-agent-prs.sh
-# Safely inspects GitHub PRs and classifies the authoring AI agent
+# Safely inspects GitHub PRs and classifies the authoring AI agent & model
 # (Codex, GitHub Copilot, OpenCode, Claude, Antigravity, Human/Other).
 #
+# Recognizes agent-model labels like "antigravity-*", "codex-*", "github-copilot-*", etc.
+#
 # Usage:
-#   detect-agent-prs.sh [--limit N] [--state open|merged|all] [--agent NAME] [--exclude-self NAME] [--pr NUMBER] [--json] [--repo OWNER/NAME]
+#   detect-agent-prs.sh [--limit N] [--state open|merged|all] [--agent NAME] [--label PATTERN] [--exclude-self NAME] [--pr NUMBER] [--add-label LABEL] [--json] [--repo OWNER/NAME]
 
 set -euo pipefail
 
@@ -23,8 +25,10 @@ fi
 LIMIT=10
 STATE="open"
 TARGET_AGENT=""
+TARGET_LABEL=""
 EXCLUDE_SELF=""
 TARGET_PR=""
+ADD_LABEL=""
 OUTPUT_JSON=false
 REPO_NAME=""
 
@@ -42,12 +46,20 @@ while [[ $# -gt 0 ]]; do
       TARGET_AGENT="$(echo "${2:?missing value for --agent}" | tr '[:upper:]' '[:lower:]')"
       shift 2
       ;;
+    --label)
+      TARGET_LABEL="${2:?missing value for --label}"
+      shift 2
+      ;;
     --exclude-self)
       EXCLUDE_SELF="$(echo "${2:?missing value for --exclude-self}" | tr '[:upper:]' '[:lower:]')"
       shift 2
       ;;
     --pr)
       TARGET_PR="${2:?missing value for --pr}"
+      shift 2
+      ;;
+    --add-label|--ensure-agent-label)
+      ADD_LABEL="${2:?missing value for --add-label}"
       shift 2
       ;;
     --json)
@@ -66,8 +78,10 @@ Options:
   --limit N            Max PRs to fetch (default: 10)
   --state STATE        PR state: open, merged, all (default: open)
   --agent NAME         Filter to PRs authored by specific agent (e.g. codex, copilot, opencode, claude)
+  --label PATTERN      Filter to PRs having a label matching PATTERN (e.g. "codex-*", "antigravity-*")
   --exclude-self NAME  Exclude PRs authored by current agent (e.g. antigravity, codex)
   --pr NUMBER          Inspect a specific PR number
+  --add-label LABEL    Attach an agent-model label to the specified PR (--pr required)
   --json               Output machine-readable JSON
   --repo OWNER/NAME    Target GitHub repository (default: current repo)
   -h, --help           Show this help message
@@ -86,55 +100,114 @@ if [[ -z "$REPO_NAME" ]]; then
   REPO_NAME="$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null || echo "francovp/cabros-bot")"
 fi
 
+# If --add-label requested on a PR
+if [[ -n "$ADD_LABEL" ]]; then
+  if [[ -z "$TARGET_PR" ]]; then
+    echo "Error: --add-label requires --pr <number>" >&2
+    exit 1
+  fi
+  # Ensure label exists in repository or create it
+  gh label create "$ADD_LABEL" --repo "$REPO_NAME" --color "7057ff" --description "Agent and model attribution label" 2>/dev/null || true
+  gh pr edit "$TARGET_PR" --repo "$REPO_NAME" --add-label "$ADD_LABEL" >/dev/null
+  echo "Added label '$ADD_LABEL' to PR #$TARGET_PR in $REPO_NAME."
+fi
+
 # Fetch PRs and propagate errors if gh fails
 if [[ -n "$TARGET_PR" ]]; then
-  if ! RAW_PR="$(gh pr view "$TARGET_PR" --repo "$REPO_NAME" --json number,title,body,headRefName,author,createdAt,state,url,commits 2>&1)"; then
+  if ! RAW_PR="$(gh pr view "$TARGET_PR" --repo "$REPO_NAME" --json number,title,body,headRefName,author,createdAt,state,url,commits,labels 2>&1)"; then
     echo "Error: Failed to fetch PR #$TARGET_PR from $REPO_NAME: $RAW_PR" >&2
     exit 1
   fi
   PR_JSON="$(echo "$RAW_PR" | jq '[.]')"
 else
-  if ! RAW_PR="$(gh pr list --repo "$REPO_NAME" --state "$STATE" --limit "$LIMIT" --json number,title,body,headRefName,author,createdAt,state,url,commits 2>&1)"; then
+  if ! RAW_PR="$(gh pr list --repo "$REPO_NAME" --state "$STATE" --limit "$LIMIT" --json number,title,body,headRefName,author,createdAt,state,url,commits,labels 2>&1)"; then
     echo "Error: Failed to list PRs from $REPO_NAME: $RAW_PR" >&2
     exit 1
   fi
   PR_JSON="$RAW_PR"
 fi
 
-# Classify each PR's authoring agent
-CLASSIFIED_JSON="$(echo "$PR_JSON" | jq --arg targetAgent "$TARGET_AGENT" --arg excludeSelf "$EXCLUDE_SELF" '
+# Classify each PR's authoring agent and model
+CLASSIFIED_JSON="$(echo "$PR_JSON" | jq --arg targetAgent "$TARGET_AGENT" --arg targetLabel "$TARGET_LABEL" --arg excludeSelf "$EXCLUDE_SELF" '
+  def extract_agent_label:
+    (.labels // [])
+    | map(.name)
+    | map(select(test("^(antigravity|codex|github-copilot|copilot|claude|opencode|cursor)-"; "i")))
+    | first // null;
+
+  def parse_agent_from_label($lbl):
+    if $lbl == null then null
+    elif ($lbl | test("^antigravity-"; "i")) then "antigravity"
+    elif ($lbl | test("^codex-"; "i")) then "codex"
+    elif ($lbl | test("^(github-copilot|copilot)-"; "i")) then "github-copilot"
+    elif ($lbl | test("^claude-"; "i")) then "claude"
+    elif ($lbl | test("^opencode-"; "i")) then "opencode"
+    elif ($lbl | test("^cursor-"; "i")) then "cursor"
+    else null
+    end;
+
+  def parse_model_from_label($lbl):
+    if $lbl == null then null
+    elif ($lbl | test("^antigravity-"; "i")) then ($lbl | sub("^antigravity-"; ""; "i"))
+    elif ($lbl | test("^codex-"; "i")) then ($lbl | sub("^codex-"; ""; "i"))
+    elif ($lbl | test("^github-copilot-"; "i")) then ($lbl | sub("^github-copilot-"; ""; "i"))
+    elif ($lbl | test("^copilot-"; "i")) then ($lbl | sub("^copilot-"; ""; "i"))
+    elif ($lbl | test("^claude-"; "i")) then ($lbl | sub("^claude-"; ""; "i"))
+    elif ($lbl | test("^opencode-"; "i")) then ($lbl | sub("^opencode-"; ""; "i"))
+    elif ($lbl | test("^cursor-"; "i")) then ($lbl | sub("^cursor-"; ""; "i"))
+    else ($lbl | sub("^[a-zA-Z0-9_]+-"; ""))
+    end;
+
   def detect_agent:
     . as $pr |
-    ($pr.headRefName // "") as $branch |
-    ($pr.body // "") as $body |
-    ($pr.commits // []) as $commits |
-    ($commits | map(.authors // [] | map(.name + " " + .email + " " + (.login // "")) | join(" ")) | join(" ")) as $commitAuthors |
-    ($commits | map(.messageHeadline + " " + .messageBody) | join(" ")) as $commitMsgs |
-    ($body + " " + $commitMsgs) as $fullText |
+    (extract_agent_label) as $agentLabel |
+    (parse_agent_from_label($agentLabel)) as $agentFromLabel |
 
-    if ($branch | test("^codex/|/codex/"; "i")) or ($fullText | test("codex"; "i")) or ($commitAuthors | test("codex"; "i")) then
-      "codex"
-    elif ($branch | test("^copilot/|/copilot/"; "i")) or ($commitAuthors | test("copilot|anthropic\\.local"; "i")) or ($fullText | test("copilot|Co-authored-by:.*copilot"; "i")) then
-      "github-copilot"
-    elif ($branch | test("opencode"; "i")) or ($commitAuthors | test("opencode"; "i")) or ($fullText | test("opencode"; "i")) then
-      "opencode"
-    elif ($branch | test("claude"; "i")) or ($commitAuthors | test("claude"; "i")) or ($fullText | test("Claude Code"; "i")) then
-      "claude"
-    elif ($branch | test("antigravity"; "i")) or ($commitAuthors | test("antigravity"; "i")) or ($fullText | test("antigravity"; "i")) then
-      "antigravity"
-    elif ($branch | test("cursor"; "i")) or ($commitAuthors | test("cursor"; "i")) then
-      "cursor"
+    if $agentFromLabel != null then
+      $agentFromLabel
     else
-      "human"
+      ($pr.headRefName // "") as $branch |
+      ($pr.body // "") as $body |
+      ($pr.commits // []) as $commits |
+      ($commits | map(.authors // [] | map(.name + " " + .email + " " + (.login // "")) | join(" ")) | join(" ")) as $commitAuthors |
+      ($commits | map(.messageHeadline + " " + .messageBody) | join(" ")) as $commitMsgs |
+      ($body + " " + $commitMsgs) as $fullText |
+
+      if ($branch | test("^codex/|/codex/"; "i")) or ($fullText | test("codex"; "i")) or ($commitAuthors | test("codex"; "i")) then
+        "codex"
+      elif ($branch | test("^copilot/|/copilot/"; "i")) or ($commitAuthors | test("copilot|anthropic\\.local"; "i")) or ($fullText | test("copilot|Co-authored-by:.*copilot"; "i")) then
+        "github-copilot"
+      elif ($branch | test("opencode"; "i")) or ($commitAuthors | test("opencode"; "i")) or ($fullText | test("opencode"; "i")) then
+        "opencode"
+      elif ($branch | test("claude"; "i")) or ($commitAuthors | test("claude"; "i")) or ($fullText | test("Claude Code"; "i")) then
+        "claude"
+      elif ($branch | test("antigravity"; "i")) or ($commitAuthors | test("antigravity"; "i")) or ($fullText | test("antigravity"; "i")) then
+        "antigravity"
+      elif ($branch | test("cursor"; "i")) or ($commitAuthors | test("cursor"; "i")) then
+        "cursor"
+      else
+        "human"
+      end
     end;
 
   map(
-    . + {
-      detectedAgent: detect_agent
+    . as $item |
+    ($item | extract_agent_label) as $lbl |
+    $item + {
+      detectedAgent: detect_agent,
+      agentLabel: $lbl,
+      detectedModel: (parse_model_from_label($lbl))
     }
     | select(
         if $targetAgent != "" then
           (.detectedAgent == $targetAgent or (.detectedAgent | test($targetAgent; "i")))
+        else
+          true
+        end
+      )
+    | select(
+        if $targetLabel != "" then
+          ((.labels // []) | map(.name) | any(test($targetLabel | gsub("\\*"; ".*"); "i")))
         else
           true
         end
@@ -157,7 +230,7 @@ fi
 TOTAL_COUNT="$(echo "$CLASSIFIED_JSON" | jq 'length')"
 
 if [[ "$TOTAL_COUNT" -eq 0 ]]; then
-  echo "No PRs matched criteria (state=$STATE, agent=$TARGET_AGENT, exclude-self=$EXCLUDE_SELF)."
+  echo "No PRs matched criteria (state=$STATE, agent=$TARGET_AGENT, label=$TARGET_LABEL, exclude-self=$EXCLUDE_SELF)."
   exit 0
 fi
 
@@ -165,4 +238,5 @@ echo "==========================================================================
 echo " Detected PRs for Cross-Review in $REPO_NAME (Total: $TOTAL_COUNT)"
 echo "================================================================================"
 
-echo "$CLASSIFIED_JSON" | jq -r '.[] | "PR #\(.number): \(.title)\n  • Agent:  \(.detectedAgent)\n  • Branch: \(.headRefName)\n  • State:  \(.state)\n  • URL:    \(.url)\n"'
+echo "$CLASSIFIED_JSON" | jq -r '.[] | 
+  "PR #\(.number): \(.title)\n  • Agent:  \(.detectedAgent)\(if .detectedModel then " (Model: " + .detectedModel + ", Label: " + .agentLabel + ")" elif .agentLabel then " (Label: " + .agentLabel + ")" else "" end)\n  • Branch: \(.headRefName)\n  • State:  \(.state)\n  • URL:    \(.url)\n"'
