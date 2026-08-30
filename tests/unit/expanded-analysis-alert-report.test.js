@@ -2,7 +2,10 @@ const {
 	parseExpandedAnalysisAlertRequest,
 	buildExpandedAnalysisAlertReport,
 	buildReportRow,
+	deriveItemSide,
+	recordExpandedAnalysisOutcomes,
 } = require('../../src/services/tradingview/expandedAnalysisAlertReport');
+const signalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
 
 describe('Expanded Analysis Alert report', () => {
 	const originalEnv = process.env;
@@ -534,6 +537,104 @@ describe('Expanded Analysis Alert report', () => {
 			expect(report).toContain('- *Stop Loss sugerido:* $106.00');
 			expect(report).toContain('- *Target sugerido:* $88.00');
 			expect(report).toContain('- *Invalidación:* $6.00 por encima del precio actual');
+		});
+	});
+
+	describe('deriveItemSide', () => {
+		it('derives SELL for bearish sentiment or sell recommendation', () => {
+			expect(deriveItemSide({ sentiment: 'bearish' })).toBe('SELL');
+			expect(deriveItemSide({ market_sentiment: { overall_sentiment: 'Bajista' } })).toBe('SELL');
+			expect(deriveItemSide({ confluence: { recommendation: 'STRONG_SELL' } })).toBe('SELL');
+			expect(deriveItemSide({ confluence: { action: 'SELL' } })).toBe('SELL');
+		});
+
+		it('defaults to BUY for bullish, neutral, or unknown sentiment', () => {
+			expect(deriveItemSide({ sentiment: 'bullish' })).toBe('BUY');
+			expect(deriveItemSide({ market_sentiment: { overall_sentiment: 'Alcista' } })).toBe('BUY');
+			expect(deriveItemSide({ confluence: { action: 'BUY' } })).toBe('BUY');
+			expect(deriveItemSide({})).toBe('BUY');
+		});
+	});
+
+	describe('recordExpandedAnalysisOutcomes', () => {
+		it('records signals when signalOutcomeService is enabled', () => {
+			jest.spyOn(signalOutcomeService, 'isEnabled').mockReturnValue(true);
+			const recordSpy = jest.spyOn(signalOutcomeService, 'recordSignal').mockResolvedValue({});
+
+			const analyzedItems = [
+				{
+					input: { raw: 'BINANCE:BTCUSDT', exchange: 'BINANCE', symbol: 'BTCUSDT' },
+					analysis: {
+						price_data: { close: 60000 },
+						technical: {
+							price_data: { close: 60000 },
+							atr: 500,
+						},
+						market_sentiment: {
+							overall_sentiment: 'Bearish',
+							overall_rating: -0.6,
+						},
+					},
+					side: 'SELL',
+				},
+			];
+
+			recordExpandedAnalysisOutcomes(analyzedItems, { timeframe: '4h' }, {
+				requestId: 'req-123',
+				startTime: Date.now() - 1500,
+				source: 'expanded-analysis',
+			});
+
+			expect(recordSpy).toHaveBeenCalledTimes(1);
+			const recorded = recordSpy.mock.calls[0][0];
+			expect(recorded.requestId).toBe('req-123');
+			expect(recorded.source).toBe('expanded-analysis');
+			expect(recorded.symbol).toBe('BTCUSDT');
+			expect(recorded.exchange).toBe('BINANCE');
+			expect(recorded.timeframe).toBe('4h');
+			expect(recorded.setupType).toBe('expanded-analysis');
+			expect(recorded.side).toBe('SELL');
+			expect(recorded.price).toBe(60000);
+			expect(recorded.stop).toBe(60750); // 60000 + 500*1.5
+			expect(recorded.target).toBe(58500); // 60000 - 500*3
+			expect(recorded.score).toBe(-0.6);
+
+			recordSpy.mockRestore();
+			signalOutcomeService.isEnabled.mockRestore();
+		});
+
+		it('does nothing when signalOutcomeService is disabled', () => {
+			jest.spyOn(signalOutcomeService, 'isEnabled').mockReturnValue(false);
+			const recordSpy = jest.spyOn(signalOutcomeService, 'recordSignal');
+
+			recordExpandedAnalysisOutcomes([
+				{
+					input: { raw: 'BINANCE:BTCUSDT', exchange: 'BINANCE', symbol: 'BTCUSDT' },
+					analysis: { price_data: { close: 60000 } },
+				},
+			], { timeframe: '1D' });
+
+			expect(recordSpy).not.toHaveBeenCalled();
+			recordSpy.mockRestore();
+			signalOutcomeService.isEnabled.mockRestore();
+		});
+
+		it('fails open when recordSignal throws or rejects', () => {
+			jest.spyOn(signalOutcomeService, 'isEnabled').mockReturnValue(true);
+			const recordSpy = jest.spyOn(signalOutcomeService, 'recordSignal').mockRejectedValue(new Error('Firestore down'));
+
+			expect(() => {
+				recordExpandedAnalysisOutcomes([
+					{
+						input: { raw: 'BINANCE:BTCUSDT', exchange: 'BINANCE', symbol: 'BTCUSDT' },
+						analysis: { price_data: { close: 60000 } },
+					},
+				], { timeframe: '1D' });
+			}).not.toThrow();
+
+			expect(recordSpy).toHaveBeenCalledTimes(1);
+			recordSpy.mockRestore();
+			signalOutcomeService.isEnabled.mockRestore();
 		});
 	});
 });

@@ -4,7 +4,9 @@ const {
 	MarketScannerRequestError,
 	pickLevel,
 	getRiskLevelsForSide,
+	recordMarketScannerOutcomes,
 } = require('../../src/services/tradingview/marketScannerReport');
+const signalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
 
 describe('Market Scanner Report', () => {
 	const originalEnv = process.env;
@@ -1111,6 +1113,88 @@ describe('Market Scanner Report', () => {
 				});
 				expect(levels.takeProfit).toBeNull();
 			});
+		});
+	});
+
+	describe('recordMarketScannerOutcomes', () => {
+		afterEach(() => {
+			jest.restoreAllMocks();
+		});
+
+		it('records signals for successful scan items when enabled', () => {
+			jest.spyOn(signalOutcomeService, 'isEnabled').mockReturnValue(true);
+			const recordSpy = jest.spyOn(signalOutcomeService, 'recordSignal').mockResolvedValue({});
+
+			const scanResults = [
+				{
+					scan: 'top_gainers',
+					status: 'success',
+					items: [
+						{
+							symbol: 'ETHUSDT',
+							changePercent: 8.5,
+							indicators: { close: 3200, atr: 50, bb_lower: 3000, bb_upper: 3400 },
+						},
+					],
+				},
+				{
+					scan: 'top_losers',
+					status: 'error',
+					items: [],
+				},
+			];
+
+			recordMarketScannerOutcomes(scanResults, { exchange: 'BINANCE', timeframe: '1h', ranked: false }, {
+				requestId: 'scan-req-123',
+				startTime: Date.now() - 2000,
+				source: 'scanner-preset',
+			});
+
+			expect(recordSpy).toHaveBeenCalledTimes(1);
+			const recorded = recordSpy.mock.calls[0][0];
+			expect(recorded.requestId).toBe('scan-req-123');
+			expect(recorded.source).toBe('scanner-preset');
+			expect(recorded.symbol).toBe('ETHUSDT');
+			expect(recorded.exchange).toBe('BINANCE');
+			expect(recorded.timeframe).toBe('1h');
+			expect(recorded.setupType).toBe('top_gainers');
+			expect(recorded.side).toBe('BUY');
+			expect(recorded.price).toBe(3200);
+			expect(recorded.stop).toBe(3125); // 3200 - 50*1.5
+			expect(recorded.target).toBe(3400); // bb_upper
+			expect(recorded.score).toBe(8.5);
+		});
+
+		it('does nothing when signalOutcomeService is disabled', () => {
+			jest.spyOn(signalOutcomeService, 'isEnabled').mockReturnValue(false);
+			const recordSpy = jest.spyOn(signalOutcomeService, 'recordSignal');
+
+			recordMarketScannerOutcomes([
+				{
+					scan: 'top_gainers',
+					status: 'success',
+					items: [{ symbol: 'BTCUSDT', indicators: { close: 60000 } }],
+				},
+			], { exchange: 'BINANCE', timeframe: '4h' });
+
+			expect(recordSpy).not.toHaveBeenCalled();
+		});
+
+		it('fails open when recordSignal throws or rejects', () => {
+			jest.spyOn(signalOutcomeService, 'isEnabled').mockReturnValue(true);
+			const recordSpy = jest.spyOn(signalOutcomeService, 'recordSignal').mockRejectedValue(new Error('DB unreachable'));
+
+			expect(() => {
+				recordMarketScannerOutcomes([
+					{
+						scan: 'top_gainers',
+						status: 'success',
+						items: [{ symbol: 'BTCUSDT', changePercent: 5.0, indicators: { close: 60000 } }],
+					},
+				], { exchange: 'BINANCE', timeframe: '4h' });
+			}).not.toThrow();
+
+			expect(recordSpy).toHaveBeenCalledTimes(1);
 		});
 	});
 });

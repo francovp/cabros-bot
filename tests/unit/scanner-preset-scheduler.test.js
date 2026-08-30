@@ -6,6 +6,7 @@ const alertStorageService = require('../../src/services/storage/AlertStorageServ
 const marketScannerController = require('../../src/controllers/webhooks/handlers/marketScanner/marketScanner');
 const notificationAlertModule = require('../../src/controllers/webhooks/handlers/alert/alert');
 const requestRouting = require('../../src/services/notification/requestRouting');
+const signalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
 
 describe('ScannerPresetSchedulerService', () => {
 	let savedEnv;
@@ -177,6 +178,49 @@ describe('ScannerPresetSchedulerService', () => {
 			expect(updated.lastRunAt).toBeDefined();
 			expect(new Date(updated.nextRunAt).getTime()).toBeGreaterThan(Date.now());
 			expect(updated.lockedUntil).toBeNull();
+		});
+
+		it('records signal outcomes for executed presets when enabled', async () => {
+			jest.spyOn(signalOutcomeService, 'isEnabled').mockReturnValue(true);
+			const recordSpy = jest.spyOn(signalOutcomeService, 'recordSignal').mockResolvedValue({});
+
+			const preset = await scannerPresetService.createPreset({
+				name: 'Outcome Preset',
+				exchange: 'BINANCE',
+				timeframe: '4h',
+				scans: ['top_gainers'],
+				schedule: { enabled: true, cadence: '1h' },
+				nextRunAt: new Date(Date.now() - 1000).toISOString(),
+			});
+
+			const mockScanResults = [
+				{
+					scan: 'top_gainers',
+					status: 'success',
+					items: [{ symbol: 'ADAUSDT', changePercent: 7.2, indicators: { close: 0.5, atr: 0.02, bb_lower: 0.45, bb_upper: 0.55 } }],
+				},
+			];
+
+			jest.spyOn(marketScannerController, 'runScans').mockResolvedValue(mockScanResults);
+			jest.spyOn(requestRouting, 'sendWithNotificationRouting').mockResolvedValue([{ channel: 'telegram', success: true }]);
+			jest.spyOn(notificationAlertModule, 'getNotificationManager').mockReturnValue({});
+
+			await scheduler.sweep();
+
+			expect(recordSpy).toHaveBeenCalledTimes(1);
+			const recorded = recordSpy.mock.calls[0][0];
+			expect(recorded.source).toBe('scanner-preset');
+			expect(recorded.symbol).toBe('ADAUSDT');
+			expect(recorded.exchange).toBe('BINANCE');
+			expect(recorded.timeframe).toBe('4h');
+			expect(recorded.setupType).toBe('top_gainers');
+			expect(recorded.side).toBe('BUY');
+			expect(recorded.price).toBe(0.5);
+			expect(recorded.stop).toBe(0.47);
+			expect(recorded.score).toBe(7.2);
+
+			recordSpy.mockRestore();
+			signalOutcomeService.isEnabled.mockRestore();
 		});
 
 		it('skips presets that are not due or disabled', async () => {

@@ -9,11 +9,13 @@ const { tradingViewMcpService } = require('../tradingview/TradingViewMcpService'
 const {
 	parseExpandedAnalysisAlertRequest,
 	buildExpandedAnalysisAlertReport,
+	recordExpandedAnalysisOutcomes,
 } = require('../tradingview/expandedAnalysisAlertReport');
 const {
 	parseMarketScannerRequest,
 	buildMarketScannerReport,
 	prepareMarketScannerItems,
+	recordMarketScannerOutcomes,
 } = require('../tradingview/marketScannerReport');
 const { enrichScannerItemsWithTrendConfluence } = require('../tradingview/marketScannerConfluence');
 const {
@@ -1379,6 +1381,13 @@ class JobService {
 		job.requestedChannels = getRequestedChannels(notificationManager, routing);
 		job.summary = this._buildExpandedSummary(job.fullResults, deliveryResults);
 		job.status = 'completed';
+
+		recordExpandedAnalysisOutcomes(analyzedItems, parsed, {
+			requestId: job.requestId || job.jobId,
+			startTime: job.startedAt ? new Date(job.startedAt).getTime() : undefined,
+			source: 'expanded-analysis',
+		});
+
 		await this._persistJob(job);
 	}
 
@@ -1520,6 +1529,13 @@ class JobService {
 		job.requestedChannels = getRequestedChannels(notificationManager, routing);
 		job.summary = this._buildScannerSummary(job.fullScanResults, deliveryResults);
 		job.status = 'completed';
+
+		recordMarketScannerOutcomes(job.fullScanResults, parsed, {
+			requestId: job.requestId || job.jobId,
+			startTime: job.startedAt ? new Date(job.startedAt).getTime() : undefined,
+			source: 'market-scanner',
+		});
+
 		await this._persistJob(job);
 	}
 

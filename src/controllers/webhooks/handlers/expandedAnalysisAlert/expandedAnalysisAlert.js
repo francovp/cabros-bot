@@ -7,6 +7,8 @@ const {
 	parseExpandedAnalysisAlertRequest,
 	buildExpandedAnalysisAlertReport,
 	buildReportRow,
+	deriveItemSide,
+	recordExpandedAnalysisOutcomes,
 } = require('../../../../services/tradingview/expandedAnalysisAlertReport');
 const {
 	getNotificationManager,
@@ -39,15 +41,6 @@ function resolveDryRun(req) {
 	const queryFlag = req.query && (req.query.dryRun === 'true' || req.query.dryRun === true);
 	const bodyFlag = req.body && typeof req.body === 'object' && (req.body.dryRun === true || req.body.dryRun === 'true');
 	return queryFlag || bodyFlag;
-}
-
-function deriveItemSide(analysis = {}) {
-	const sentiment = String(analysis.sentiment || analysis.market_sentiment?.overall_sentiment || '').toUpperCase();
-	const confluence = String(analysis.confluence?.recommendation || analysis.confluence?.action || '').toUpperCase();
-	if (confluence.includes('SELL') || sentiment.includes('BEARISH') || sentiment.includes('BAJISTA')) {
-		return 'SELL';
-	}
-	return 'BUY';
 }
 
 function postExpandedAnalysisAlert(botOrGetter) {
@@ -156,33 +149,11 @@ function postExpandedAnalysisAlert(botOrGetter) {
 				}).catch(() => {});
 			}
 
-			const signalOutcomeService = require('../../../../services/storage/SignalOutcomeService');
-			if (signalOutcomeService.isEnabled()) {
-				for (const item of analyzedItems) {
-					const itemSide = item.side;
-					const row = buildReportRow(item);
-					const tech = item.analysis.technical || item.analysis || {};
-					const closePrice = row.price ?? tech.price_data?.current_price ?? tech.price_data?.close ?? null;
-					const score = item.analysis.market_sentiment?.overall_rating ?? tech.market_sentiment?.overall_rating ?? null;
-
-					signalOutcomeService.recordSignal({
-						requestId,
-						source: 'expanded-analysis',
-						symbol: item.input.symbol,
-						exchange: item.input.exchange,
-						timeframe: parsed.timeframe,
-						setupType: 'expanded-analysis',
-						score,
-						side: itemSide,
-						price: typeof closePrice === 'number' ? closePrice : null,
-						stop: typeof row.stopLoss === 'number' ? row.stopLoss : null,
-						target: typeof row.takeProfit === 'number' ? row.takeProfit : null,
-						sources: [],
-						tokenUsage: null,
-						processingTimeMs: Date.now() - startTime,
-					}).catch(() => {});
-				}
-			}
+			recordExpandedAnalysisOutcomes(analyzedItems, parsed, {
+				requestId,
+				startTime,
+				source: 'expanded-analysis',
+			});
 
 			return res.status(200).json({
 				success: true,

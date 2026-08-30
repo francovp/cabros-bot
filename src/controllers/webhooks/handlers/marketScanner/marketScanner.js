@@ -10,6 +10,7 @@ const {
 	getRiskLevelsForSide,
 	getScanItemSide,
 	pickLevel,
+	recordMarketScannerOutcomes,
 } = require('../../../../services/tradingview/marketScannerReport');
 const {
 	getNotificationManager,
@@ -161,74 +162,11 @@ function postMarketScannerAlert(botOrGetter) {
 				}).catch(() => {});
 			}
 
-			const signalOutcomeService = require('../../../../services/storage/SignalOutcomeService');
-			if (signalOutcomeService.isEnabled()) {
-				for (const scanResult of scanResults) {
-					if (scanResult.status === 'success' && Array.isArray(scanResult.items) && scanResult.items.length > 0) {
-						// Resolve sides from the same prepared (rank-normalized) item set the
-						// report rendered, so persisted sides match delivered levels
-						const preparedItems = prepareMarketScannerItems(scanResult, parsed.ranked === true);
-						for (const item of preparedItems) {
-							const closePrice = item.indicators?.close ?? null;
-							// Persisted side must match the rendered report side
-							const itemSide = getScanItemSide(scanResult.scan, item);
-							const itemScore = item.changePercent ?? item.indicators?.RSI ?? item.volume_ratio ?? null;
-
-							const atr = pickLevel([item.indicators?.atr, item.indicators?.ATR, item.atr]);
-							const bbLower = pickLevel([item.indicators?.bb_lower, item.indicators?.bollinger_lower, item.indicators?.lower, item.bollinger?.lower, item.bollinger_lower]);
-							const bbUpper = pickLevel([item.indicators?.bb_upper, item.indicators?.bollinger_upper, item.indicators?.upper, item.bollinger?.upper, item.bollinger_upper]);
-							const support = pickLevel([
-								item.indicators?.support,
-								item.indicators?.nearest_support,
-								item.support,
-								item.support_resistance?.nearest_support,
-								item.support_resistance?.support_1,
-							]);
-							const resistance = pickLevel([
-								item.indicators?.resistance,
-								item.indicators?.nearest_resistance,
-								item.resistance,
-								item.support_resistance?.nearest_resistance,
-								item.support_resistance?.resistance_1,
-							]);
-
-							const validPrice = typeof closePrice === 'number' && Number.isFinite(closePrice) && closePrice > 0 ? closePrice : null;
-							let stopLoss = null;
-							let takeProfit = null;
-							if (validPrice !== null) {
-								const riskLevels = getRiskLevelsForSide({
-									side: itemSide,
-									price: validPrice,
-									atr: typeof atr === 'number' && Number.isFinite(atr) && atr > 0 ? atr : null,
-									bbLower: typeof bbLower === 'number' && Number.isFinite(bbLower) && bbLower > 0 ? bbLower : null,
-									bbUpper: typeof bbUpper === 'number' && Number.isFinite(bbUpper) && bbUpper > 0 ? bbUpper : null,
-									support: typeof support === 'number' && Number.isFinite(support) && support > 0 ? support : null,
-									resistance: typeof resistance === 'number' && Number.isFinite(resistance) && resistance > 0 ? resistance : null,
-								});
-								stopLoss = riskLevels.stopLoss;
-								takeProfit = riskLevels.takeProfit;
-							}
-
-							signalOutcomeService.recordSignal({
-								requestId,
-								source: 'market-scanner',
-								symbol: item.symbol,
-								exchange: parsed.exchange,
-								timeframe: parsed.timeframe,
-								setupType: scanResult.scan,
-								score: itemScore,
-								side: itemSide,
-								price: validPrice,
-								stop: stopLoss,
-								target: takeProfit,
-								sources: [],
-								tokenUsage: null,
-								processingTimeMs: Date.now() - startTime,
-							}).catch(() => {});
-						}
-					}
-				}
-			}
+			recordMarketScannerOutcomes(scanResults, parsed, {
+				requestId,
+				startTime,
+				source: 'market-scanner',
+			});
 
 			return res.status(200).json({
 				success: true,

@@ -5,6 +5,7 @@ const http = require('http');
 const { JobService } = require('../../src/services/jobs/JobService');
 const { tradingViewMcpService } = require('../../src/services/tradingview/TradingViewMcpService');
 const JobRepository = require('../../src/services/jobs/JobRepository');
+const signalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const nativeFetch = globalThis.fetch;
@@ -841,6 +842,89 @@ describe('JobService Unit Tests', () => {
 				reason: expect.stringContaining('HTF aligned +10'),
 				trendConfluence: expect.objectContaining({ status: 'aligned', confidence: 82 }),
 			}));
+		});
+
+		it('records signal outcomes for async expanded-analysis jobs when enabled', async () => {
+			jest.spyOn(signalOutcomeService, 'isEnabled').mockReturnValue(true);
+			const recordSpy = jest.spyOn(signalOutcomeService, 'recordSignal').mockResolvedValue({});
+
+			tradingViewMcpService.analyzeSymbolIdentifier.mockResolvedValueOnce({
+				symbol: 'BINANCE:BTCUSDT',
+				price_data: { close: 65000, change_percent: 2.0 },
+				rsi: { value: 50 },
+				market_sentiment: { overall_sentiment: 'Bullish', overall_rating: 0.75 },
+			});
+
+			const metadata = await jobService.createJob('expanded-analysis', {
+				symbols: ['BINANCE:BTCUSDT'],
+				timeframe: '4h',
+			});
+
+			let job = await jobService.getJob(metadata.jobId);
+			let attempts = 0;
+			while (job.status !== 'completed' && attempts < 10) {
+				await delay(20);
+				job = await jobService.getJob(metadata.jobId);
+				attempts++;
+			}
+
+			expect(job.status).toBe('completed');
+			expect(recordSpy).toHaveBeenCalledTimes(1);
+			const recorded = recordSpy.mock.calls[0][0];
+			expect(recorded.source).toBe('expanded-analysis');
+			expect(recorded.symbol).toBe('BTCUSDT');
+			expect(recorded.exchange).toBe('BINANCE');
+			expect(recorded.timeframe).toBe('4h');
+			expect(recorded.setupType).toBe('expanded-analysis');
+			expect(recorded.side).toBe('BUY');
+			expect(recorded.price).toBe(65000);
+			expect(recorded.score).toBe(0.75);
+
+			recordSpy.mockRestore();
+			signalOutcomeService.isEnabled.mockRestore();
+		});
+
+		it('records signal outcomes for async market-scanner jobs when enabled', async () => {
+			jest.spyOn(signalOutcomeService, 'isEnabled').mockReturnValue(true);
+			const recordSpy = jest.spyOn(signalOutcomeService, 'recordSignal').mockResolvedValue({});
+
+			tradingViewMcpService.callScanTool.mockResolvedValueOnce([
+				{
+					symbol: 'BINANCE:SOLUSDT',
+					changePercent: 12.4,
+					indicators: { close: 150, atr: 5, bb_lower: 140, bb_upper: 160 },
+				},
+			]);
+
+			const metadata = await jobService.createJob('market-scanner', {
+				scans: ['top_gainers'],
+				timeframe: '1D',
+				exchange: 'BINANCE',
+			});
+
+			let job = await jobService.getJob(metadata.jobId);
+			let attempts = 0;
+			while (job.status !== 'completed' && attempts < 10) {
+				await delay(20);
+				job = await jobService.getJob(metadata.jobId);
+				attempts++;
+			}
+
+			expect(job.status).toBe('completed');
+			expect(recordSpy).toHaveBeenCalledTimes(1);
+			const recorded = recordSpy.mock.calls[0][0];
+			expect(recorded.source).toBe('market-scanner');
+			expect(recorded.symbol).toBe('BINANCE:SOLUSDT');
+			expect(recorded.exchange).toBe('BINANCE');
+			expect(recorded.timeframe).toBe('1D');
+			expect(recorded.setupType).toBe('top_gainers');
+			expect(recorded.side).toBe('BUY');
+			expect(recorded.price).toBe(150);
+			expect(recorded.stop).toBe(142.5);
+			expect(recorded.score).toBe(12.4);
+
+			recordSpy.mockRestore();
+			signalOutcomeService.isEnabled.mockRestore();
 		});
 	});
 

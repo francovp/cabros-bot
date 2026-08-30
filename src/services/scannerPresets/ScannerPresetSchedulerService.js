@@ -449,6 +449,12 @@ class ScannerPresetSchedulerService {
 						parentSpan: sentryService.getActiveSpan(),
 					});
 				}
+
+				marketScannerReportModule.recordMarketScannerOutcomes(scanResults, preset, {
+					requestId: `preset-${preset.id}-${startTime}`,
+					startTime,
+					source: 'scanner-preset',
+				});
 			}
 		} catch (err) {
 			status = 'error';

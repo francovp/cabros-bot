@@ -703,6 +703,66 @@ function numberOrNull(value) {
 	return Number.isFinite(number) ? number : null;
 }
 
+function deriveItemSide(analysis = {}) {
+	const sentiment = String(analysis?.sentiment || analysis?.market_sentiment?.overall_sentiment || '').toUpperCase();
+	const confluence = String(analysis?.confluence?.recommendation || analysis?.confluence?.action || '').toUpperCase();
+	if (confluence.includes('SELL') || sentiment.includes('BEARISH') || sentiment.includes('BAJISTA')) {
+		return 'SELL';
+	}
+	return 'BUY';
+}
+
+/**
+ * Records signal outcomes for analyzed items in a fail-open manner.
+ * @param {Array<Object>} analyzedItems - Array of { input, analysis, multiTimeframe, side? }
+ * @param {Object} [parsed] - { timeframe, ... }
+ * @param {Object} [options] - { requestId, startTime, processingTimeMs, source }
+ * @returns {void}
+ */
+function recordExpandedAnalysisOutcomes(analyzedItems, parsed = {}, options = {}) {
+	try {
+		const signalOutcomeService = require('../storage/SignalOutcomeService');
+		if (!signalOutcomeService.isEnabled() || !Array.isArray(analyzedItems)) {
+			return;
+		}
+
+		const requestId = options.requestId || null;
+		const source = options.source || 'expanded-analysis';
+		const processingTimeMs = typeof options.processingTimeMs === 'number'
+			? options.processingTimeMs
+			: (options.startTime ? Date.now() - options.startTime : null);
+		const timeframe = parsed?.timeframe || null;
+
+		for (const item of analyzedItems) {
+			if (!item || !item.input) continue;
+			const itemSide = item.side || deriveItemSide(item.analysis);
+			const row = buildReportRow(item);
+			const tech = item.analysis?.technical || item.analysis || {};
+			const closePrice = row.price ?? tech.price_data?.current_price ?? tech.price_data?.close ?? null;
+			const score = item.analysis?.market_sentiment?.overall_rating ?? tech.market_sentiment?.overall_rating ?? null;
+
+			signalOutcomeService.recordSignal({
+				requestId,
+				source,
+				symbol: item.input.symbol,
+				exchange: item.input.exchange,
+				timeframe,
+				setupType: 'expanded-analysis',
+				score,
+				side: itemSide,
+				price: typeof closePrice === 'number' ? closePrice : null,
+				stop: typeof row.stopLoss === 'number' ? row.stopLoss : null,
+				target: typeof row.takeProfit === 'number' ? row.takeProfit : null,
+				sources: [],
+				tokenUsage: null,
+				processingTimeMs,
+			}).catch(() => {});
+		}
+	} catch (err) {
+		// Fail-open: signal-outcome tracking failure must never block callers or throw
+	}
+}
+
 module.exports = {
 	ExpandedAnalysisAlertRequestError,
 	parseExpandedAnalysisAlertRequest,
@@ -712,4 +772,6 @@ module.exports = {
 	getStopLossMeta,
 	getTakeProfitTarget,
 	getRiskRewardRatio,
+	deriveItemSide,
+	recordExpandedAnalysisOutcomes,
 };

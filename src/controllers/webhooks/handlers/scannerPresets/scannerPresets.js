@@ -8,6 +8,7 @@ const { runScans } = require('../marketScanner/marketScanner');
 const {
 	MarketScannerRequestError,
 	buildMarketScannerReport,
+	recordMarketScannerOutcomes,
 	SUPPORTED_SCAN_TYPES,
 } = require('../../../../services/tradingview/marketScannerReport');
 const {
@@ -500,6 +501,12 @@ function postRunPreset(botOrGetter) {
 			const requestedChannels = getRequestedChannels(notificationManager, routing);
 			const deliveredChannels = getDeliveredChannels(deliveryResults);
 			const summary = buildSummary(scanResults, deliveryResults);
+
+			recordMarketScannerOutcomes(scanResults, preset, {
+				requestId,
+				startTime,
+				source: 'scanner-preset',
+			});
 
 			return res.status(200).json({
 				success: true,

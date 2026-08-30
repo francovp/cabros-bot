@@ -14,6 +14,7 @@ const { getRoutes } = require('../../src/routes');
 const { initializeNotificationServices } = require('../../src/controllers/webhooks/handlers/alert/alert');
 const { tradingViewMcpService } = require('../../src/services/tradingview/TradingViewMcpService');
 const { _resetForTesting: resetScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+const signalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
 
 const testPrivateKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({
 	type: 'pkcs1',
@@ -467,6 +468,53 @@ describe('Scanner presets API integration tests', () => {
 		expect(data.lastStatus).toBe('success');
 		expect(data.lastRunAt).toBeTruthy();
 		expect(new Date(data.nextRunAt).getTime()).toBeGreaterThan(Date.now());
+	});
+
+	it('records signal outcomes when manual preset run succeeds and outcomes are enabled', async () => {
+		jest.spyOn(signalOutcomeService, 'isEnabled').mockReturnValue(true);
+		const recordSpy = jest.spyOn(signalOutcomeService, 'recordSignal').mockResolvedValue({});
+
+		tradingViewMcpService.callScanTool.mockResolvedValueOnce([
+			{
+				symbol: 'BINANCE:AVAXUSDT',
+				changePercent: 15.2,
+				indicators: { close: 35.5, atr: 1.2, bb_lower: 32.0, bb_upper: 38.0 },
+			},
+		]);
+
+		const createResponse = await request(app)
+			.post('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.send({
+				name: 'Outcome Manual Preset',
+				exchange: 'binance',
+				timeframe: '1h',
+				scans: ['top_gainers'],
+			})
+			.expect(201);
+
+		const presetId = createResponse.body.preset.id;
+
+		const runResponse = await request(app)
+			.post(`/api/scanner-presets/${presetId}/run`)
+			.set('x-api-key', 'test-key')
+			.expect(200);
+
+		expect(runResponse.body.success).toBe(true);
+		expect(recordSpy).toHaveBeenCalledTimes(1);
+		const recorded = recordSpy.mock.calls[0][0];
+		expect(recorded.source).toBe('scanner-preset');
+		expect(recorded.symbol).toBe('BINANCE:AVAXUSDT');
+		expect(recorded.exchange).toBe('BINANCE');
+		expect(recorded.timeframe).toBe('1h');
+		expect(recorded.setupType).toBe('top_gainers');
+		expect(recorded.side).toBe('BUY');
+		expect(recorded.price).toBe(35.5);
+		expect(recorded.stop).toBe(33.7);
+		expect(recorded.score).toBe(15.2);
+
+		recordSpy.mockRestore();
+		signalOutcomeService.isEnabled.mockRestore();
 	});
 });
 
