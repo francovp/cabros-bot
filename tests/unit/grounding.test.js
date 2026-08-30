@@ -52,7 +52,7 @@ describe('Grounding Service', () => {
 			expect(generateEnrichedAlert).toHaveBeenCalled();
 		});
 
-		it('should coalesce concurrent equity alert searches while generating each alert separately', async () => {
+		it('should coalesce concurrent equity alert searches for the same symbol while generating each alert separately', async () => {
 			process.env.ALERT_GROUNDING_COALESCE_MS = '1000';
 			genaiClient.search.mockClear();
 			generateEnrichedAlert.mockClear();
@@ -74,7 +74,7 @@ describe('Grounding Service', () => {
 				options: { tokenUsage: firstUsage },
 			});
 			const second = groundAlert({
-				text: 'NYSE:AMD(D) cambió a señal de COMPRA',
+				text: 'NASDAQ:NVDA(60) cambió a señal de COMPRA',
 				options: { tokenUsage: secondUsage },
 			});
 			await Promise.resolve();
@@ -95,6 +95,36 @@ describe('Grounding Service', () => {
 			expect(secondUsage.addUsage).not.toHaveBeenCalled();
 		});
 
+		it('does not coalesce equity alerts for different symbols', async () => {
+			process.env.ALERT_GROUNDING_COALESCE_MS = '1000';
+			genaiClient.search.mockClear();
+			generateEnrichedAlert.mockClear();
+			genaiClient.search.mockResolvedValue({
+				results: [],
+				totalResults: 0,
+				searchResultText: '',
+				usage: { inputTokens: 10, outputTokens: 0 },
+			});
+			generateEnrichedAlert.mockImplementation(({ text }) => Promise.resolve({
+				sentiment: 'NEUTRAL',
+				sentiment_score: 0.5,
+				insights: [text],
+				sources: [],
+			}));
+
+			const first = groundAlert({
+				text: 'NASDAQ:NVDA(D) cambió a señal de COMPRA',
+			});
+			const second = groundAlert({
+				text: 'NYSE:AMD(D) cambió a señal de COMPRA',
+			});
+			await Promise.all([first, second]);
+			delete process.env.ALERT_GROUNDING_COALESCE_MS;
+			_resetForTesting();
+
+			expect(genaiClient.search).toHaveBeenCalledTimes(2);
+		});
+
 		it('falls back to an independent search when shared equity search fails', async () => {
 			process.env.ALERT_GROUNDING_COALESCE_MS = '1000';
 			genaiClient.search.mockClear();
@@ -109,7 +139,7 @@ describe('Grounding Service', () => {
 				.mockResolvedValueOnce({ results: [], totalResults: 0, searchResultText: '' });
 
 			const first = groundAlert({ text: 'NASDAQ:NVDA(D) cambió a señal de COMPRA' });
-			const second = groundAlert({ text: 'NYSE:AMD(D) cambió a señal de COMPRA' });
+			const second = groundAlert({ text: 'NASDAQ:NVDA(60) cambió a señal de COMPRA' });
 
 			await expect(first).rejects.toThrow('Grounding failed: shared search failed');
 			await expect(second).resolves.toEqual(expect.objectContaining({

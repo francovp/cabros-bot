@@ -35,7 +35,9 @@ function getCoalescedSearch({ assetContext, searchQuery, maxSources, signal, tim
 		return { promise: startSearch({ searchQuery, maxSources, signal, timeoutMs }), shared: false };
 	}
 
-	const key = `${GROUNDING_MODEL_NAME}:${maxSources}:stock`;
+	const normalizedQuery = (searchQuery || '').trim().toLowerCase();
+	const symbol = (assetContext?.symbol || '').trim().toUpperCase();
+	const key = `${GROUNDING_MODEL_NAME}:${maxSources}:stock:${symbol || 'query'}:${normalizedQuery}`;
 	const now = Date.now();
 	const existing = coalescedSearches.get(key);
 	if (existing && now - existing.createdAt <= coalesceWindowMs) {
