@@ -413,6 +413,10 @@ function getStatus() {
 				lastRunEvaluatedCount: signalOutcomeWorkerStatus.lastRunEvaluatedCount,
 				lastRunPendingCount: signalOutcomeWorkerStatus.lastRunPendingCount,
 				lastRunErrorCount: signalOutcomeWorkerStatus.lastRunErrorCount,
+				lastRunSkipped: signalOutcomeWorkerStatus.lastRunSkipped,
+				lastRunSkipReason: signalOutcomeWorkerStatus.lastRunSkipReason,
+				lastLeaseRenewedAt: signalOutcomeWorkerStatus.lastLeaseRenewedAt,
+				lastLeaseReleasedAt: signalOutcomeWorkerStatus.lastLeaseReleasedAt,
 			},
 			notificationRedrive: notificationRedriveService.getStatus(),
 			alertSignalRepeatSuppression: {

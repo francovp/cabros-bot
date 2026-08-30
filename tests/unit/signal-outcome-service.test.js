@@ -2528,6 +2528,144 @@ describe('SignalOutcomeService', () => {
 				consoleWarnSpy.mockRestore();
 			}
 		});
+
+		it('skips sweep when another instance holds the cross-instance lease', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			const receivedAtDate = new Date(Date.now() - 2 * 60 * 60 * 1000);
+			const mockDocId = 'lease-held-doc';
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, new Map([
+				[mockDocId, {
+					receivedAt: admin.firestore.Timestamp.fromDate(receivedAtDate),
+					requestId: 'req-lease-held',
+					source: 'webhook',
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					side: 'BUY',
+					price: 50000,
+					outcomeEvaluated: false,
+					outcomes: {
+						'1h': {
+							status: 'pending',
+							targetTime: new Date(receivedAtDate.getTime() + 1 * 60 * 60 * 1000).toISOString(),
+						},
+					},
+				}],
+			]));
+
+			// Simulate a foreign holder by priming the in-memory lease directly
+			// (the firebase-admin mock does not implement runTransaction so the
+			// service falls back to its in-memory lease guard).
+			const futureExpiry = Date.now() + 60000;
+			const internals = require('../../src/services/storage/SignalOutcomeService');
+			// Reset state first
+			internals._resetSweepLeaseForTesting();
+			internals._setInMemorySweepLeaseForTesting('foreign-worker-id', futureExpiry);
+
+			mockGetKlines.mockClear();
+			const result = await SignalOutcomeService.evaluatePendingOutcomes();
+
+			expect(result.skipped).toBe(true);
+			expect(result.reason).toBe('lease_held');
+			expect(result.scannedCount).toBe(0);
+			expect(result.evaluatedCount).toBe(0);
+			// No Binance request should have been made when the lease is held.
+			expect(mockGetKlines).not.toHaveBeenCalled();
+			expect(mockDocUpdate).not.toHaveBeenCalled();
+
+			const status = SignalOutcomeService.getWorkerStatus();
+			expect(status.lastRunSkipped).toBe(true);
+			expect(status.lastRunSkipReason).toBe('lease_held');
+
+			internals._resetSweepLeaseForTesting();
+		});
+
+		it('evaluates pending outcomes and reports lease release telemetry when no foreign holder exists', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			const receivedAtDate = new Date(Date.now() - 2 * 60 * 60 * 1000);
+			const mockDocId = 'lease-clear-doc';
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, new Map([
+				[mockDocId, {
+					receivedAt: admin.firestore.Timestamp.fromDate(receivedAtDate),
+					requestId: 'req-lease-clear',
+					source: 'webhook',
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					side: 'BUY',
+					price: 50000,
+					outcomeEvaluated: false,
+					outcomes: {
+						'1h': {
+							status: 'pending',
+							targetTime: new Date(receivedAtDate.getTime() + 1 * 60 * 60 * 1000).toISOString(),
+						},
+					},
+				}],
+			]));
+
+			const internals = require('../../src/services/storage/SignalOutcomeService');
+			internals._resetSweepLeaseForTesting();
+
+			mockGetKlines.mockResolvedValue([
+				[receivedAtDate.getTime(), '50000', '52000', '49000', '51000'],
+			]);
+
+			const result = await SignalOutcomeService.evaluatePendingOutcomes();
+
+			expect(result.scannedCount).toBe(1);
+			expect(result.evaluatedCount).toBeGreaterThanOrEqual(0);
+			expect(result.skipped).toBeUndefined();
+
+			const status = SignalOutcomeService.getWorkerStatus();
+			expect(status.lastRunSkipped).toBe(false);
+			expect(status.lastRunSkipReason).toBeNull();
+			expect(status.lastLeaseReleasedAt).toBeInstanceOf(Date);
+		});
+
+		it('takes over the sweep lease after expiry', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			const internals = require('../../src/services/storage/SignalOutcomeService');
+			internals._resetSweepLeaseForTesting();
+
+			// A stale lease from a crashed holder is no longer blocking.
+			internals._setInMemorySweepLeaseForTesting('crashed-holder', Date.now() - 1000);
+
+			const receivedAtDate = new Date(Date.now() - 2 * 60 * 60 * 1000);
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, new Map([
+				['lease-takeover-doc', {
+					receivedAt: admin.firestore.Timestamp.fromDate(receivedAtDate),
+					requestId: 'req-lease-takeover',
+					source: 'webhook',
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					side: 'BUY',
+					price: 50000,
+					outcomeEvaluated: false,
+					outcomes: {
+						'1h': {
+							status: 'pending',
+							targetTime: new Date(receivedAtDate.getTime() + 1 * 60 * 60 * 1000).toISOString(),
+						},
+					},
+				}],
+			]));
+
+			mockGetKlines.mockResolvedValue([
+				[receivedAtDate.getTime(), '50000', '52000', '49000', '51000'],
+			]);
+
+			const result = await SignalOutcomeService.evaluatePendingOutcomes();
+
+			expect(result.skipped).toBeUndefined();
+			expect(result.scannedCount).toBe(1);
+
+			internals._resetSweepLeaseForTesting();
+		});
 	});
 
 	describe('listOutcomes()', () => {
