@@ -220,4 +220,5 @@ module.exports = {
 	deriveAssetContext,
 	deriveCleanSearchQuery,
 	SUPPORTED_MCP_TIMEFRAMES,
+	TIMEFRAME_MAP,
 };

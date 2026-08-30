@@ -205,6 +205,7 @@ The Remote Config workflow publishes the server-side template consumed by Fireba
 - `transaction-safety-review` (`.agents/skills/transaction-safety-review/`): reviews live order/auth boundaries, ambiguous provider outcomes, idempotency, Firestore type preservation, undefined sanitization, and TTL/claim retention before changing or reviewing transactional paths.
 - `async-integration-review` (`.agents/skills/async-integration-review/`): reviews deadlines, abortable external calls, retries, cooldowns, worker fairness, scheduling inputs, telemetry, and graceful shutdown for asynchronous integrations.
 - `contract-alignment-review` (`.agents/skills/contract-alignment-review/`): reviews runtime/API/config/deployment changes for alignment across OpenAPI, Postman, `.env.example`, README/specs, and repository agent skills.
+- `agent-cross-review` (`.agents/skills/agent-cross-review/`): discovers and cross-reviews pull requests created by other AI coding agents (Codex, GitHub Copilot, OpenCode, Claude) against Cabros Bot fail-open async, formatting, persistence, auth, and contract standards.
 
 ### When implementing a feature:
 
@@ -220,7 +221,8 @@ The Remote Config workflow publishes the server-side template consumed by Fireba
 10. **Update `firebase-remote-config-template.json`** with every approved eligible key/value and keep it aligned with `RemoteConfigService.js`
 11. **After merge and green deployment**, let the Remote Config workflow publish the template and verify the deployed source/status; do not run the Firebase publish command manually
 12. **Update this agents.md file** with the new context, recent PRs, and implementation details before creating a new PR
-13. **Final verification pass** before completion: run the exact relevant checks again, then do the full test suite `pnpm test` once per implementation to ensure no regressions
+13. **Agent & Model Attribution Labels**: Ensure every PR created or updated by an AI agent carries an attribution label matching `<agent>-<model>` (e.g. `antigravity-gemini-3.7-flash`, `codex-gpt-5.6-luna`, `github-copilot-minimax-m3:free`)
+14. **Final verification pass** before completion: run the exact relevant checks again, then do the full test suite `pnpm test` once per implementation to ensure no regressions
 
 ### Post-merge production environment synchronization
 
@@ -1506,3 +1508,16 @@ Cached news-monitor retries now distinguish active delivery ownership from durab
 - `tests/integration/news-monitor-cache.test.js` and `tests/unit/news-monitor-persistent-dedup.test.js` — Verify successful indeterminate retries are retained locally, stalled renewals are bounded, completed channels keep durable persistence, and mixed-channel stale Firestore refreshes do not reintroduce failures.
 
 No endpoint, OpenAPI, Postman, environment variable, or Remote Config contract changed.
+
+## Webhook Alert Repeat Suppression (CB-230 / Issue #522)
+
+`/api/webhook/alert` supports opt-in same-signal repeat suppression. When `ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION=true`, a signal whose `(exchange, symbol, timeframe, side)` key already fired within a cooldown window of `ALERT_SIGNAL_COOLDOWN_BARS` bars (default `1`, bounded `1`-`10`) skips channel delivery but still returns 200 with `suppressedRepeat: true` and remains persisted with the marker so replay and audit stay complete. Opposite-side flips always deliver because they produce a different key; unknown timeframes never suppress; dry-run requests bypass the cooldown entirely. The in-process store fails open on read/write errors, and both Remote Config keys (`ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION`, `ALERT_SIGNAL_COOLDOWN_BARS`) follow the parity workflow with template entries.
+
+**Core Components**:
+- `src/services/alerts/signalRepeatCooldown.js` — Key building, bar-window math, suppression counters, fail-open store semantics.
+- `src/controllers/webhooks/handlers/alert/alert.js` — Post-enrichment gate before notification dispatch and persistence marker propagation.
+- `src/services/storage/AlertStorageService.js` — Persists `suppressedRepeat: true` (with empty delivery results) and returns it on reads.
+- `src/controllers/status.js` — `featureFlags.alertSignalRepeatSuppression` plus non-sensitive `dependencies.alertSignalRepeatSuppression` counters (`suppressedCount`, `lastSuppressedAt`, `activeTrackedSignals`).
+- `tests/unit/signal-repeat-cooldown.test.js`, `tests/integration/alert-repeat-suppression.test.js`, `tests/integration/status-endpoint.test.js` — Window/flip/fail-open coverage, endpoint double-post behavior, and status exposure.
+
+Disabled by default preserves existing webhook behavior byte-for-byte.
