@@ -85,8 +85,54 @@ async function getBinanceOrders(req, res) {
 	}
 }
 
+async function postBinanceOrderPreview(req, res) {
+	try {
+		const result = await binanceOrderService.previewOrder(req.body || {});
+		try {
+			console.log('[BinanceOrdersController] order preview generated', {
+				symbol: result.order?.symbol,
+				side: result.order?.side,
+				type: result.order?.type,
+				environment: result.environment,
+				wouldExceedBudget: result.slippage?.wouldExceedBudget,
+			});
+		} catch {
+			// Audit logging is best effort; never fail the preview on logging errors.
+		}
+		return res.status(200).json(result);
+	} catch (error) {
+		if (error instanceof BinanceOrderRequestError || error instanceof BinanceOrderServiceError) {
+			console.warn('[BinanceOrdersController] order preview rejected', { code: error.code });
+			return res.status(error.statusCode || 400).json({
+				success: false,
+				error: error.message,
+				code: error.code,
+				preview: true,
+			});
+		}
+
+		console.error('[BinanceOrdersController] order preview failed', { code: 'BINANCE_PREVIEW_FAILED' });
+		sentryService.captureRuntimeError({
+			channel: 'binance-orders-controller',
+			error,
+			http: {
+				endpoint: '/api/trading/binance/orders/preview',
+				method: 'POST',
+				statusCode: 502,
+			},
+		});
+		return res.status(502).json({
+			success: false,
+			error: 'Binance order preview failed',
+			code: 'BINANCE_PREVIEW_FAILED',
+			preview: true,
+		});
+	}
+}
+
 module.exports = {
 	postBinanceOrder,
 	getBinanceOrders,
+	postBinanceOrderPreview,
 };
 

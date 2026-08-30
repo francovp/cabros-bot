@@ -621,4 +621,76 @@ describe('Binance orders API', () => {
 			});
 		});
 	});
+
+	describe('POST /api/trading/binance/orders/preview', () => {
+		it('requires authentication before generating a preview', async () => {
+			const response = await request(app)
+				.post('/api/trading/binance/orders/preview')
+				.send({ symbol: 'BTCUSDT', side: 'BUY', type: 'MARKET', quantity: 0.1 })
+				.expect(401);
+
+			expect(response.body.error).toContain('Missing API key');
+			expect(MainClient).not.toHaveBeenCalled();
+		});
+
+		it('fails closed when the feature is disabled', async () => {
+			process.env.ENABLE_BINANCE_TRADING = 'false';
+
+			const response = await request(app)
+				.post('/api/trading/binance/orders/preview')
+				.set('x-api-key', 'test-key')
+				.send({ symbol: 'BTCUSDT', side: 'BUY', type: 'MARKET', quantity: 0.1 })
+				.expect(403);
+
+			expect(response.body.code).toBe('FEATURE_DISABLED');
+			expect(MainClient).not.toHaveBeenCalled();
+		});
+
+		it('returns a preview without touching submitNewOrder', async () => {
+			client.depth = jest.fn().mockResolvedValue({
+				asks: [
+					['100.10', '5'],
+				],
+				limit: 20,
+			});
+
+			const response = await request(app)
+				.post('/api/trading/binance/orders/preview')
+				.set('x-api-key', 'test-key')
+				.send({ symbol: 'BTCUSDT', side: 'BUY', type: 'MARKET', quantity: 0.1, maxSlippageBps: 75 })
+				.expect(200);
+
+			expect(response.body.success).toBe(true);
+			expect(response.body.preview).toBe(true);
+			expect(response.body.order.symbol).toBe('BTCUSDT');
+			expect(response.body.adjustedQuantity).toBe('0.1');
+			expect(response.body.feeEstimate.appliedFeeBps).toBe(10);
+			expect(response.body.depthSnapshot.available).toBe(true);
+			expect(client.submitNewOrder).not.toHaveBeenCalled();
+		});
+
+		it('rejects preview with 400 when the order does not match the LOT_SIZE filter', async () => {
+			const response = await request(app)
+				.post('/api/trading/binance/orders/preview')
+				.set('x-api-key', 'test-key')
+				.send({ symbol: 'BTCUSDT', side: 'BUY', type: 'LIMIT', quantity: 0.00015, price: 100 })
+				.expect(400);
+
+			expect(response.body.success).toBe(false);
+			expect(response.body.preview).toBe(true);
+			expect(response.body.code).toBe('INVALID_ORDER_REQUEST');
+		});
+
+		it('rejects preview with 403 when the order exceeds the configured maximum notional', async () => {
+			client.getAvgPrice = jest.fn().mockResolvedValue({ price: '5000' });
+
+			const response = await request(app)
+				.post('/api/trading/binance/orders/preview')
+				.set('x-api-key', 'test-key')
+				.send({ symbol: 'BTCUSDT', side: 'BUY', type: 'MARKET', quantity: 0.5 })
+				.expect(403);
+
+			expect(response.body.code).toBe('MAX_NOTIONAL_EXCEEDED');
+		});
+	});
 });

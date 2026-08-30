@@ -7,6 +7,11 @@ const TESTNET_BASE_URL = 'https://testnet.binance.vision';
 const LIVE_BASE_URL = 'https://api.binance.com';
 const DEFAULT_TIMEOUT_MS = 10000;
 const MAX_TIMEOUT_MS = 30000;
+const PREVIEW_TTL_MS = 5000;
+const PREVIEW_DEPTH_TIMEOUT_MS = 4000;
+const PREVIEW_DEFAULT_MAKER_BPS = 10;
+const PREVIEW_DEFAULT_TAKER_BPS = 10;
+const PREVIEW_DEPTH_NOTIONAL_FRACTION = 0.0005;
 const ALLOWED_ORDER_TYPES = new Set(['MARKET', 'LIMIT']);
 const ALLOWED_SIDES = new Set(['BUY', 'SELL']);
 const ALLOWED_TIME_IN_FORCE = new Set(['GTC', 'IOC', 'FOK']);
@@ -218,6 +223,36 @@ function createBinanceClient(config) {
 	});
 }
 
+async function withTimeout(promise, timeoutMs) {
+	let timer;
+	const timeoutPromise = new Promise((_, reject) => {
+		timer = setTimeout(() => reject(new Error(`operation timed out after ${timeoutMs}ms`)), timeoutMs);
+	});
+	try {
+		return await Promise.race([promise, timeoutPromise]);
+	} finally {
+		if (timer) clearTimeout(timer);
+	}
+}
+
+function computeSlippageBps(referencePrice, fillPrice, side) {
+	const refParts = decimalParts(referencePrice);
+	const fillParts = decimalParts(fillPrice);
+	if (!refParts || !fillParts) return null;
+	const scale = Math.max(refParts.scale, fillParts.scale);
+	const refScaled = refParts.integer * (10n ** BigInt(scale - refParts.scale));
+	const fillScaled = fillParts.integer * (10n ** BigInt(scale - fillParts.scale));
+	if (refScaled === 0n) return null;
+	// BUY: slippage = (fillPrice - refPrice) / refPrice (positive = adverse)
+	// SELL: slippage = (refPrice - fillPrice) / refPrice (positive = adverse)
+	const diff = side === 'BUY'
+		? fillScaled - refScaled
+		: refScaled - fillScaled;
+	if (diff === 0n) return 0;
+	const scaledBps = (diff * 10000n) / refScaled;
+	return Number(scaledBps);
+}
+
 function normalizeRequest(body) {
 	if (!body || typeof body !== 'object' || Array.isArray(body)) {
 		throw new BinanceOrderRequestError('Request body must be an object');
@@ -226,6 +261,7 @@ function normalizeRequest(body) {
 	const allowedKeys = new Set([
 		'symbol', 'side', 'type', 'quantity', 'quoteOrderQty', 'price',
 		'timeInForce', 'clientOrderId', 'dryRun', 'idempotencyKey', 'idempotency_key',
+		'maxSlippageBps',
 	]);
 	const unknownKey = Object.keys(body).find((key) => !allowedKeys.has(key));
 	if (unknownKey) throw new BinanceOrderRequestError(`Unsupported order field: ${unknownKey}`);
@@ -288,6 +324,125 @@ function normalizeRequest(body) {
 		clientOrderId,
 		dryRun,
 	};
+}
+
+function normalizePreviewRequest(body) {
+	const order = normalizeRequest(body);
+
+	let maxSlippageBps;
+	if (body.maxSlippageBps !== undefined) {
+		if (typeof body.maxSlippageBps !== 'number' && typeof body.maxSlippageBps !== 'string') {
+			throw new BinanceOrderRequestError('maxSlippageBps must be a positive number');
+		}
+		const parsed = Number(String(body.maxSlippageBps).trim());
+		if (!Number.isFinite(parsed) || parsed <= 0) {
+			throw new BinanceOrderRequestError('maxSlippageBps must be a positive number');
+		}
+		maxSlippageBps = parsed;
+	}
+
+	return { ...order, maxSlippageBps };
+}
+
+function formatDecimalParts(parts) {
+	if (!parts) return null;
+	const digits = String(parts.integer);
+	const scale = parts.scale;
+	if (scale <= 0) return digits + '0'.repeat(-scale);
+	const padded = digits.padStart(scale + 1, '0');
+	const whole = padded.slice(0, padded.length - scale);
+	const fraction = padded.slice(padded.length - scale).replace(/0+$/, '');
+	return fraction ? `${whole}.${fraction}` : whole;
+}
+
+function roundDownToStep(value, stepSize) {
+	const valueParts = decimalParts(value);
+	const stepParts = decimalParts(stepSize);
+	if (!valueParts || !stepParts || stepParts.integer === 0n) return value;
+
+	const scale = Math.max(valueParts.scale, stepParts.scale);
+	const valueInteger = valueParts.integer * (10n ** BigInt(scale - valueParts.scale));
+	const stepInteger = stepParts.integer * (10n ** BigInt(scale - stepParts.scale));
+	const stepped = (valueInteger / stepInteger) * stepInteger;
+	const resultParts = { integer: stepped, scale };
+	return formatDecimalParts(resultParts);
+}
+
+function readBps(source, ...keys) {
+	for (const key of keys) {
+		const value = source && source[key];
+		if (typeof value === 'number' && Number.isFinite(value)) return value;
+		if (typeof value === 'string' && value.trim() !== '') {
+			const parsed = Number(value);
+			if (Number.isFinite(parsed)) return parsed;
+		}
+	}
+	return null;
+}
+
+function calculateDepthFill(asks, quantity) {
+	if (!Array.isArray(asks) || asks.length === 0 || !quantity) return null;
+	let remaining = decimalParts(quantity);
+	if (!remaining) return null;
+	let totalQuote = decimalParts('0');
+	let totalBase = decimalParts('0');
+	let worstPrice = null;
+
+	for (const level of asks) {
+		if (!Array.isArray(level) || level.length < 2) continue;
+		const priceParts = decimalParts(level[0]);
+		const levelQtyParts = decimalParts(level[1]);
+		if (!priceParts || !levelQtyParts) continue;
+		const availableAtLevel = levelQtyParts;
+		const scale = Math.max(remaining.scale, availableAtLevel.scale);
+		const remScaled = remaining.integer * (10n ** BigInt(scale - remaining.scale));
+		const availScaled = availableAtLevel.integer * (10n ** BigInt(scale - availableAtLevel.scale));
+		const fillScaled = remScaled <= availScaled ? remScaled : availScaled;
+		if (fillScaled <= 0n) break;
+		const fillParts = { integer: fillScaled, scale };
+		const levelQuote = multiplyDecimals(formatDecimalParts(fillParts), formatDecimalParts(priceParts));
+		if (levelQuote) {
+			const newQuoteScale = Math.max(totalQuote.scale, levelQuote.scale);
+			totalQuote = {
+				integer: totalQuote.integer * (10n ** BigInt(newQuoteScale - totalQuote.scale))
+					+ levelQuote.integer * (10n ** BigInt(newQuoteScale - levelQuote.scale)),
+				scale: newQuoteScale,
+			};
+		}
+		const newBaseScale = Math.max(totalBase.scale, fillParts.scale);
+		totalBase = {
+			integer: totalBase.integer * (10n ** BigInt(newBaseScale - totalBase.scale))
+				+ fillParts.integer * (10n ** BigInt(newBaseScale - fillParts.scale)),
+			scale: newBaseScale,
+		};
+		remaining = {
+			integer: remScaled - fillScaled,
+			scale,
+		};
+		worstPrice = formatDecimalParts(priceParts);
+		if (remaining.integer <= 0n) {
+			remaining = decimalParts('0');
+			break;
+		}
+	}
+
+	if (totalBase.integer === 0n) return null;
+	const filledBase = formatDecimalParts(totalBase);
+	const filledQuote = formatDecimalParts(totalQuote);
+	const filledNotionalParts = totalQuote;
+	const baseParts = totalBase;
+	// notional has baseParts.scale decimals after point; we divide notional by base to get
+	// a price with the same scale as the inputs. align the scales first.
+	const scale = Math.max(baseParts.scale, filledNotionalParts.scale);
+	const baseScaled = baseParts.integer * (10n ** BigInt(scale - baseParts.scale));
+	const notionalScaled = filledNotionalParts.integer * (10n ** BigInt(scale - filledNotionalParts.scale));
+	if (baseScaled === 0n) return null;
+	// price = notional_scaled / base_scaled, result has scale == (notional.scale - base.scale) when alignment is preserved.
+	// To preserve the notional scale exactly we multiply by 10^(notional.scale) then divide.
+	const priceScale = Math.max(filledNotionalParts.scale - baseParts.scale, 0);
+	const averageScaled = (notionalScaled * (10n ** BigInt(priceScale))) / baseScaled;
+	const averageStr = formatDecimalParts({ integer: averageScaled, scale: priceScale });
+	return { filledBase, filledQuote, averagePrice: averageStr, worstPrice, fullyFilled: remaining.integer <= 0n };
 }
 
 function getSymbolInfo(exchangeInfo, symbol) {
@@ -792,6 +947,283 @@ function createBinanceOrderService({ createClient = createBinanceClient } = {}) 
 					503,
 				);
 			}
+		},
+
+		async previewOrder(body) {
+			const config = getConfig();
+			if (!config.enabled) {
+				throw new BinanceOrderRequestError('Binance trading is disabled', 'FEATURE_DISABLED', 403);
+			}
+			if (!config.configured) {
+				throw new BinanceOrderRequestError(
+					'Binance trading is enabled but not configured',
+					'BINANCE_TRADING_UNAVAILABLE',
+					503,
+				);
+			}
+
+			const order = normalizePreviewRequest(body);
+
+			if (!config.allowedSymbols.includes(order.symbol)) {
+				throw new BinanceOrderRequestError('symbol is not allowed for Binance trading');
+			}
+
+			let client;
+			try {
+				client = createClient(config);
+			} catch (error) {
+				throw new BinanceOrderServiceError('Binance client could not be initialized', 'BINANCE_CLIENT_UNAVAILABLE', 503);
+			}
+
+			let exchangeInfo;
+			let symbolInfo;
+			try {
+				exchangeInfo = await client.getExchangeInfo({ symbol: order.symbol });
+				symbolInfo = getSymbolInfo(exchangeInfo, order.symbol);
+			} catch (error) {
+				throw new BinanceOrderServiceError('Binance symbol validation failed', 'BINANCE_VALIDATION_FAILED');
+			}
+
+			if (!symbolInfo || symbolInfo.status !== 'TRADING' || symbolInfo.isSpotTradingAllowed === false) {
+				throw new BinanceOrderRequestError('symbol is not available for Spot trading');
+			}
+			if (!Array.isArray(symbolInfo.orderTypes) || !symbolInfo.orderTypes.includes(order.type)) {
+				throw new BinanceOrderRequestError('order type is not supported for this symbol');
+			}
+
+			const filters = getFilters(symbolInfo, exchangeInfo);
+			const quantityFilter = filters.get(order.type === 'MARKET' ? 'MARKET_LOT_SIZE' : 'LOT_SIZE') || filters.get('LOT_SIZE');
+			const priceFilter = filters.get('PRICE_FILTER');
+			const notionalFilter = filters.get('NOTIONAL') || filters.get('MIN_NOTIONAL');
+
+			const lotSizeOk = !order.quantity || !quantityFilter
+				|| (compareDecimals(order.quantity, quantityFilter.minQty || '0') >= 0
+					&& (!quantityFilter.maxQty || Number(quantityFilter.maxQty) <= 0 || compareDecimals(order.quantity, quantityFilter.maxQty) <= 0)
+					&& (!quantityFilter.stepSize || Number(quantityFilter.stepSize) <= 0 || isDecimalMultiple(order.quantity, quantityFilter.stepSize)));
+			const priceFilterOk = !order.price || !priceFilter
+				|| ((!priceFilter.minPrice || Number(priceFilter.minPrice) <= 0 || compareDecimals(order.price, priceFilter.minPrice) >= 0)
+					&& (!priceFilter.maxPrice || Number(priceFilter.maxPrice) <= 0 || compareDecimals(order.price, priceFilter.maxPrice) <= 0)
+					&& (!priceFilter.tickSize || Number(priceFilter.tickSize) <= 0 || isDecimalMultiple(order.price, priceFilter.tickSize)));
+
+			const adjustedQuantity = order.quantity && quantityFilter?.stepSize && Number(quantityFilter.stepSize) > 0
+				? roundDownToStep(order.quantity, quantityFilter.stepSize)
+				: order.quantity;
+
+			if (lotSizeOk === false && order.quantity !== undefined) {
+				throw new BinanceOrderRequestError(
+					`quantity does not match Binance lot-size step; suggested adjustedQuantity: ${adjustedQuantity}`,
+					'INVALID_ORDER_REQUEST',
+					400,
+				);
+			}
+
+			const baseConstraints = {
+				lotSize: quantityFilter ? {
+					minQty: quantityFilter.minQty,
+					maxQty: quantityFilter.maxQty,
+					stepSize: quantityFilter.stepSize,
+				} : null,
+				priceFilter: priceFilter ? {
+					minPrice: priceFilter.minPrice,
+					maxPrice: priceFilter.maxPrice,
+					tickSize: priceFilter.tickSize,
+				} : null,
+				notional: notionalFilter ? {
+					minNotional: notionalFilter.minNotional,
+					maxNotional: notionalFilter.maxNotional,
+					applyMinToMarket: notionalFilter.applyMinToMarket,
+					applyMaxToMarket: notionalFilter.applyMaxToMarket,
+				} : null,
+			};
+
+			let effectivePrice = null;
+			let priceSource = 'none';
+			let marketPriceError = null;
+			if (order.type === 'LIMIT') {
+				effectivePrice = order.price;
+				priceSource = 'limitPrice';
+			} else if (order.quoteOrderQty !== undefined) {
+				effectivePrice = null;
+				priceSource = 'quoteOrderQty';
+			} else {
+				try {
+					const averagePrice = await client.getAvgPrice({ symbol: order.symbol });
+					const price = averagePrice && averagePrice.price;
+					if (price && decimalParts(price)) {
+						effectivePrice = String(price);
+						priceSource = 'avgPrice';
+					} else {
+						marketPriceError = 'Binance average price response was empty';
+					}
+				} catch (error) {
+					marketPriceError = error instanceof Error ? error.message : 'avg price unavailable';
+				}
+			}
+
+			let notionalParts = null;
+			let adjustedNotional = null;
+			if (order.quoteOrderQty !== undefined) {
+				notionalParts = decimalParts(order.quoteOrderQty);
+			} else if (effectivePrice && adjustedQuantity) {
+				notionalParts = multiplyDecimals(adjustedQuantity, effectivePrice);
+			} else if (effectivePrice && order.quantity) {
+				notionalParts = multiplyDecimals(order.quantity, effectivePrice);
+			}
+			if (notionalParts) adjustedNotional = formatDecimalParts(notionalParts);
+
+			let minNotionalOk = true;
+			let minNotionalExceededReason = null;
+			if (notionalParts && notionalFilter?.minNotional) {
+				const minAppliesToMarket = order.type !== 'MARKET' || (notionalFilter.applyMinToMarket !== false);
+				if (minAppliesToMarket) {
+					minNotionalOk = compareDecimalParts(notionalParts, decimalParts(notionalFilter.minNotional)) >= 0;
+					if (!minNotionalOk) minNotionalExceededReason = 'below Binance minimum';
+				}
+			}
+
+			let maxNotionalOk = true;
+			let maxNotionalExceededReason = null;
+			if (notionalParts) {
+				if (notionalFilter?.maxNotional
+					&& Number(notionalFilter.maxNotional) > 0
+					&& (order.type !== 'MARKET' || notionalFilter.applyMaxToMarket !== false)) {
+					const exceedsBinanceMax = compareDecimalParts(notionalParts, decimalParts(notionalFilter.maxNotional)) > 0;
+					if (exceedsBinanceMax) {
+						maxNotionalOk = false;
+						maxNotionalExceededReason = 'above Binance maximum';
+					}
+				}
+				if (maxNotionalOk && Number.isFinite(config.maxNotional) && config.maxNotional > 0) {
+					const exceedsConfigured = compareDecimalParts(notionalParts, decimalParts(config.maxNotional)) > 0;
+					if (exceedsConfigured) {
+						maxNotionalOk = false;
+						maxNotionalExceededReason = 'above configured maximum';
+					}
+				}
+			}
+
+			if (notionalParts && Number.isFinite(config.maxNotional) && config.maxNotional > 0
+				&& compareDecimalParts(notionalParts, decimalParts(config.maxNotional)) > 0) {
+				throw new BinanceOrderRequestError(
+					'order notional exceeds configured maximum',
+					'MAX_NOTIONAL_EXCEEDED',
+					403,
+				);
+			}
+
+			const feeBps = readBps(symbolInfo, 'takerCommission', 'commissionTakerBps');
+			const makerBps = readBps(symbolInfo, 'makerCommission', 'commissionMakerBps');
+			const takerFeeBps = typeof feeBps === 'number' ? feeBps : PREVIEW_DEFAULT_TAKER_BPS;
+			const makerFeeBps = typeof makerBps === 'number' ? makerBps : PREVIEW_DEFAULT_MAKER_BPS;
+			const feeSide = order.type === 'LIMIT' ? makerFeeBps : takerFeeBps;
+			const estimatedFeeQuote = notionalParts
+				? formatDecimalParts(multiplyDecimals(formatDecimalParts(notionalParts), String(feeSide / 10000)))
+				: null;
+
+			let depthSnapshot = null;
+			let depthError = null;
+			if (order.type === 'MARKET' && order.side === 'BUY' && order.quantity && typeof client.depth === 'function') {
+				try {
+					const depthLimit = Math.max(5, Math.min(100, Math.ceil(Number(order.quantity) * 100) || 20));
+					const depthResult = await withTimeout(
+						client.depth({ symbol: order.symbol, limit: depthLimit }),
+						PREVIEW_DEPTH_TIMEOUT_MS,
+					);
+					if (depthResult && Array.isArray(depthResult.asks)) {
+						depthSnapshot = {
+							asks: depthResult.asks,
+							limit: depthResult.limit || depthLimit,
+							fetchedAt: new Date().toISOString(),
+						};
+					}
+				} catch (error) {
+					depthError = error instanceof Error ? error.message : 'depth unavailable';
+				}
+			}
+
+			let slippageEstimate = null;
+			if (depthSnapshot) {
+				const fill = calculateDepthFill(depthSnapshot.asks, order.quantity);
+				if (fill) {
+					const mid = effectivePrice || null;
+					if (mid && fill.averagePrice) {
+						const bps = computeSlippageBps(mid, fill.averagePrice, order.side);
+						slippageEstimate = {
+							worstPrice: fill.worstPrice,
+							averagePrice: fill.averagePrice,
+							filledBase: fill.filledBase,
+							filledQuote: fill.filledQuote,
+							fullyFilled: fill.fullyFilled,
+							slippageBps: bps,
+						};
+					}
+				}
+			}
+
+			let wouldExceedBudget = null;
+			if (order.maxSlippageBps !== undefined) {
+				if (!slippageEstimate || slippageEstimate.slippageBps === null) {
+					wouldExceedBudget = null;
+				} else {
+					wouldExceedBudget = slippageEstimate.slippageBps > order.maxSlippageBps;
+				}
+			}
+
+			const previewExpiresAt = new Date(Date.now() + PREVIEW_TTL_MS).toISOString();
+			const previewFingerprint = crypto.createHash('sha256')
+				.update(`cabros-binance-preview:${order.symbol}:${order.side}:${order.type}:${adjustedQuantity || ''}:${order.quoteOrderQty || ''}:${order.price || ''}:${order.timeInForce || ''}:${previewExpiresAt}`)
+				.digest('hex')
+				.slice(0, 24);
+
+			const result = {
+				success: true,
+				preview: true,
+				environment: config.environment,
+				order: {
+					symbol: order.symbol,
+					side: order.side,
+					type: order.type,
+					quantity: adjustedQuantity,
+					quoteOrderQty: order.quoteOrderQty,
+					price: order.price,
+					timeInForce: order.timeInForce,
+					clientOrderId: order.clientOrderId,
+				},
+				adjustedQuantity,
+				adjustedNotional,
+				constraints: baseConstraints,
+				flags: {
+					lotSizeOk,
+					priceFilterOk,
+					minNotionalOk,
+					maxNotionalOk,
+					minNotionalExceededReason,
+					maxNotionalExceededReason,
+				},
+				effectivePriceEstimate: effectivePrice,
+				priceSource,
+				marketPriceError,
+				feeEstimate: {
+					takerFeeBps,
+					makerFeeBps,
+					appliedFeeBps: feeSide,
+					estimatedFeeQuote,
+					label: 'estimate — not a Binance fill guarantee',
+				},
+				slippage: slippageEstimate ? {
+					slippageBudgetBps: order.maxSlippageBps ?? null,
+					wouldExceedBudget,
+				} : null,
+				depthSnapshot: depthSnapshot ? {
+					limit: depthSnapshot.limit,
+					fetchedAt: depthSnapshot.fetchedAt,
+					available: true,
+				} : (depthError ? { available: false, error: depthError } : { available: false }),
+				expiresAt: previewExpiresAt,
+				previewFingerprint,
+			};
+
+			return result;
 		},
 	};
 }
