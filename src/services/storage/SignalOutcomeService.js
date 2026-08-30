@@ -22,6 +22,15 @@ const MAX_LIMIT = 100;
 const STORAGE_UNAVAILABLE_CODE = 'STORAGE_UNAVAILABLE';
 const INVALID_CURSOR_MESSAGE = 'Invalid before cursor. Use an ISO-8601 timestamp or the nextBefore cursor from a previous response.';
 const WORKER_ROLES = new Set(['web', 'worker', 'disabled']);
+const DEFAULT_BINANCE_DATA_BASE_URL = 'https://api.binance.com';
+const REASON_BINANCE_UNAVAILABLE = 'binance_unavailable';
+const REASON_BINANCE_REGION_BLOCKED = 'binance_region_blocked';
+const REASON_MARKET_DATA_REGION_BLOCKED = 'market_data_region_blocked';
+const REGION_BLOCK_MESSAGE_PATTERNS = [
+	'restricted location',
+	'service unavailable from restricted',
+	'451',
+];
 let binanceClient = null;
 let isEvaluating = false;
 let workerTimer = null;
@@ -34,6 +43,7 @@ let lastRunScannedCount = 0;
 let lastRunEvaluatedCount = 0;
 let lastRunPendingCount = 0;
 let lastRunErrorCount = 0;
+let lastRunRegionBlockedCount = 0;
 let lastEvaluatedDoc = null;
 
 function awaitWithTimeout(promise, timeoutMs, message) {
@@ -59,12 +69,47 @@ function awaitWithTimeout(promise, timeoutMs, message) {
 }
 
 function getBinanceClient(requestOptions = {}) {
+	const baseUrl = resolveBinanceBaseUrl();
+	const clientOptions = {
+		beautifyResponses: true,
+	};
+	if (baseUrl) {
+		clientOptions.baseUrl = baseUrl;
+	}
 	if (!binanceClient || (requestOptions && Object.keys(requestOptions).length > 0)) {
-		return new MainClient({
-			beautifyResponses: true,
-		}, requestOptions);
+		return new MainClient(clientOptions, requestOptions);
 	}
 	return binanceClient;
+}
+
+function resolveBinanceBaseUrl() {
+	const configured = process.env.BINANCE_DATA_BASE_URL;
+	if (typeof configured === 'string' && configured.trim() !== '') {
+		const trimmed = configured.trim();
+		if (/^https?:\/\//i.test(trimmed)) {
+			return trimmed;
+		}
+		console.warn(
+			`[SignalOutcomeService] Ignoring BINANCE_DATA_BASE_URL="${configured}" — must be an http(s) URL. Falling back to ${DEFAULT_BINANCE_DATA_BASE_URL}.`,
+		);
+	}
+	return DEFAULT_BINANCE_DATA_BASE_URL;
+}
+
+function isRegionBlockedError(err) {
+	if (!err) {
+ return false;
+}
+	const message = typeof err.message === 'string' ? err.message : '';
+	const code = err.code;
+	if (code === 451) {
+ return true;
+}
+	if (typeof code === 'string' && code.trim() === '451') {
+ return true;
+}
+	const lower = message.toLowerCase();
+	return REGION_BLOCK_MESSAGE_PATTERNS.some((pattern) => lower.includes(pattern));
 }
 
 function isEnabled() {
@@ -194,7 +239,8 @@ function determineEligibility(normSymbolInfo, assetClass, entryPrice, equityProv
 	}
 	if (entryPrice === null || entryPrice === undefined) {
 		const isTransient = equityMarketDataService.isTransientReason(entryPriceReason)
-			|| entryPriceReason === 'binance_unavailable'
+			|| entryPriceReason === REASON_BINANCE_UNAVAILABLE
+			|| entryPriceReason === REASON_BINANCE_REGION_BLOCKED
 			|| entryPriceReason === 'twelve_data_unavailable'
 			|| entryPriceReason === 'twelve_data_rate_limited'
 			|| entryPriceReason === 'twelve_data_timeout';
@@ -293,10 +339,18 @@ async function recordSignalInternal({
 					}
 				}
 			} catch (err) {
-				const isTransient = !err.message.includes('400')
-					&& !err.message.includes('UNKNOWN_SYMBOL')
-					&& !err.message.includes('Invalid symbol');
-				entryPriceReason = isTransient ? 'binance_unavailable' : 'binance_invalid_symbol';
+				const isRegionBlocked = isRegionBlockedError(err);
+				const isInvalidSymbol = err.message
+					&& (err.message.includes('400')
+						|| err.message.includes('UNKNOWN_SYMBOL')
+						|| err.message.includes('Invalid symbol'));
+				if (isRegionBlocked) {
+					entryPriceReason = REASON_BINANCE_REGION_BLOCKED;
+				} else if (isInvalidSymbol) {
+					entryPriceReason = 'binance_invalid_symbol';
+				} else {
+					entryPriceReason = REASON_BINANCE_UNAVAILABLE;
+				}
 				console.warn('[SignalOutcomeService] Failed to fetch entry price from Binance:', err.message);
 			} finally {
 				if (timerId) clearTimeout(timerId);
@@ -406,6 +460,7 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 	let evaluatedCount = 0;
 	let pendingCount = 0;
 	let errorCount = 0;
+	let regionBlockedCount = 0;
 
 	try {
 		const firestore = AlertStorageService.getFirestore();
@@ -869,14 +924,22 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 						reason = error.reason;
 						errorIdentifier = error.reason;
 					} else if (data.exchange === 'BINANCE') {
-						const isBinanceStructural = Boolean(error.message && (
+						const isBinanceRegionBlocked = isRegionBlockedError(error);
+						const isBinanceStructural = !isBinanceRegionBlocked && Boolean(error.message && (
 							error.message.includes('400') ||
 							error.message.includes('Invalid symbol') ||
 							error.message.includes('UNKNOWN_SYMBOL')
 						));
-						isStructural = isBinanceStructural;
-						reason = isBinanceStructural ? 'binance_invalid_symbol' : 'binance_unavailable';
-						errorIdentifier = reason;
+						if (isBinanceRegionBlocked) {
+							isStructural = false;
+							reason = REASON_MARKET_DATA_REGION_BLOCKED;
+							errorIdentifier = REASON_MARKET_DATA_REGION_BLOCKED;
+							regionBlockedCount++;
+						} else {
+							isStructural = isBinanceStructural;
+							reason = isBinanceStructural ? 'binance_invalid_symbol' : REASON_BINANCE_UNAVAILABLE;
+							errorIdentifier = reason;
+						}
 					} else {
 						isStructural = Boolean(error.message && (
 							error.message.includes('400') ||
@@ -905,6 +968,12 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 							docUpdated = true;
 						} else {
 							outcome.status = 'pending';
+							// Surface the region-blocked classification to operators without
+							// forcing a terminal unavailable state. Replaced on the next
+							// transient attempt if the host becomes reachable.
+							if (reason) {
+								outcome.reason = reason;
+							}
 							allResolved = false;
 							docUpdated = true;
 						}
@@ -963,6 +1032,7 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 		lastRunEvaluatedCount = evaluatedCount;
 		lastRunPendingCount = pendingCount;
 		lastRunErrorCount = errorCount;
+		lastRunRegionBlockedCount = regionBlockedCount;
 	}
 }
 
@@ -1100,6 +1170,7 @@ function getWorkerStatus() {
 		lastRunEvaluatedCount,
 		lastRunPendingCount,
 		lastRunErrorCount,
+		lastRunRegionBlockedCount,
 		timerId: workerTimer ? true : null,
 	};
 }

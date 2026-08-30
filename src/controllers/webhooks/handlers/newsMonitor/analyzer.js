@@ -31,11 +31,30 @@ let notificationManager = null;
 // Binance client singleton
 let binanceClient = null;
 
+function resolveBinanceBaseUrl() {
+	const configured = process.env.BINANCE_DATA_BASE_URL;
+	if (typeof configured === 'string' && configured.trim() !== '') {
+		const trimmed = configured.trim();
+		if (/^https?:\/\//i.test(trimmed)) {
+			return trimmed;
+		}
+		console.warn(
+			`[newsMonitor/analyzer] Ignoring BINANCE_DATA_BASE_URL="${configured}" — must be an http(s) URL. Falling back to https://api.binance.com.`,
+		);
+	}
+	return 'https://api.binance.com';
+}
+
 function getBinanceClient() {
 	if (!binanceClient) {
-		binanceClient = new MainClient({
+		const clientOptions = {
 			beautifyResponses: true,
-		});
+		};
+		const baseUrl = resolveBinanceBaseUrl();
+		if (baseUrl) {
+			clientOptions.baseUrl = baseUrl;
+		}
+		binanceClient = new MainClient(clientOptions);
 	}
 	return binanceClient;
 }
