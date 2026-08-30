@@ -16,11 +16,8 @@ const { notificationRedriveService } = require('../services/notification/Notific
 const { whatsAppCommandBridgeService } = require('../services/notification/WhatsAppCommandBridgeService');
 const geminiQuotaManager = require('../services/grounding/geminiQuotaManager');
 const groundingMetrics = require('../services/grounding/metrics');
-<<<<<<< HEAD
 const { signalRepeatCooldown } = require('../services/alerts/signalRepeatCooldown');
-=======
 const { getCoalescingStatus } = require('../services/grounding/grounding');
->>>>>>> origin/master
 const {
 	getDeploymentCommit,
 	isPreviewEnvironment,
