@@ -1521,6 +1521,19 @@ describe('AlertStorageService', () => {
 						whatsapp: { total: 1, success: 1, failure: 0 },
 					},
 				},
+				scanner: {
+					totalRuns: 0,
+					errorCategoryCounts: {
+						mcp_unreachable: 0,
+						mcp_timeout: 0,
+						mcp_rate_limited: 0,
+						mcp_tool_error: 0,
+						mcp_suspended: 0,
+						symbol_invalid: 0,
+						symbol_unsupported: 0,
+						unknown: 0,
+					},
+				},
 				latency: {
 					averageProcessingMs: 250,
 					averageDeliveryMs: 150,

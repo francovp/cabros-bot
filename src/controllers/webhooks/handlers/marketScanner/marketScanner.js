@@ -26,6 +26,11 @@ const {
 const { enrichScannerItemsWithTrendConfluence } = require('../../../../services/tradingview/marketScannerConfluence');
 const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteConfigService');
 const alertStorageService = require('../../../../services/storage/AlertStorageService');
+const {
+	classifyScannerError,
+	emptyScannerErrorCategoryCounts,
+	incrementScannerErrorCategoryCount,
+} = require('../../../../services/tradingview/marketScannerErrorCategories');
 
 const DEFAULT_SCANNER_TIMEOUT_MS = 90000;
 const MAX_SCANNER_TIMEOUT_MS = 120000;
@@ -137,6 +142,9 @@ function postMarketScannerAlert(botOrGetter) {
 							.filter(Boolean),
 					))
 					: [];
+				const scannerErrorCategories = scanResults
+					.filter((r) => r.status === 'error' && r.errorCategory)
+					.map((r) => r.errorCategory);
 				alertStorageService.saveAlert({
 					requestId,
 					text: alertText,
@@ -149,6 +157,7 @@ function postMarketScannerAlert(botOrGetter) {
 					deliveryResults,
 					source: 'market-scanner',
 					processingTimeMs: Date.now() - startTime,
+					scannerErrorCategories,
 				}).catch(() => {});
 			}
 
@@ -330,11 +339,23 @@ async function runScans(parsed, options = {}) {
 			}
 
 			console.warn('[MarketScanner] Scan failed:', scanType, error.message);
+			const errorCategory = classifyScannerError(error);
+			sentryService.captureRuntimeError({
+				channel: 'market-scanner',
+				feature: 'market-scanner',
+				error,
+				extra: {
+					mcp_error_category: errorCategory,
+					scan_type: scanType,
+					source: 'market-scanner',
+				},
+			});
 			results.push({
 				scan: scanType,
 				status: 'error',
 				items: [],
 				error: error.message,
+				errorCategory,
 			});
 		}
 	}
@@ -361,6 +382,7 @@ function compactScanResults(results, includeScores = false) {
 				scan: result.scan,
 				status: result.status,
 				error: result.error,
+				errorCategory: result.errorCategory || null,
 			};
 		}
 
@@ -384,6 +406,12 @@ function compactScanResults(results, includeScores = false) {
 }
 
 function buildSummary(scanResults, deliveryResults) {
+	const errorCategories = emptyScannerErrorCategoryCounts();
+	for (const result of scanResults) {
+		if (result.status === 'error' && result.errorCategory) {
+			incrementScannerErrorCategoryCount(errorCategories, result.errorCategory);
+		}
+	}
 	return {
 		totalScans: scanResults.length,
 		success: scanResults.filter((r) => r.status === 'success').length,
@@ -391,6 +419,7 @@ function buildSummary(scanResults, deliveryResults) {
 		timeout: scanResults.filter((r) => r.status === 'timeout').length,
 		totalItems: scanResults.reduce((sum, r) => sum + r.items.length, 0),
 		delivered: deliveryResults.filter((r) => r.success).length,
+		errorCategoryCounts: errorCategories,
 	};
 }
 

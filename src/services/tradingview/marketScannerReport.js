@@ -3,6 +3,7 @@ const {
 	SUPPORTED_MCP_TIMEFRAMES,
 } = require('./parseTradingViewSignal');
 const { rankScannerItems, resolveTrendConfluence } = require('./marketScannerScoring');
+const { SCANNER_ERROR_CATEGORY_DISPLAY, isScannerErrorCategory } = require('./marketScannerErrorCategories');
 
 const SUPPORTED_SCAN_TYPES = new Set([
 	'top_gainers',
@@ -237,7 +238,8 @@ function buildMarketScannerReport(scanResults = [], options = {}) {
 		lines.push(`*${section.emoji} ${section.title}*`);
 
 		if (scanResult.error) {
-			lines.push(`⚠️ Error: ${scanResult.error}`);
+			const errorLabel = formatScannerErrorLine(scanResult);
+			lines.push(`⚠️ Error: ${errorLabel}`);
 			return;
 		}
 
@@ -639,6 +641,15 @@ function numberOrNull(value) {
 	}
 	const number = Number(value);
 	return Number.isFinite(number) ? number : null;
+}
+
+function formatScannerErrorLine(scanResult = {}) {
+	const baseMessage = typeof scanResult.error === 'string' ? scanResult.error : 'Unknown error';
+	if (!isScannerErrorCategory(scanResult.errorCategory)) {
+		return baseMessage;
+	}
+	const display = SCANNER_ERROR_CATEGORY_DISPLAY[scanResult.errorCategory] || scanResult.errorCategory;
+	return `${baseMessage} (${display})`;
 }
 
 // Shared candidate-selection for optional numeric level fields. Skips

@@ -476,11 +476,21 @@ The system provides a `POST /api/webhook/market-scanner-alert` endpoint that run
 - Timeout-aborted scans are recorded as status `timeout`. If all scans fail or timeout, the endpoint returns 502/504 respectively.
 - Validation failures (e.g. invalid timeframe, bad scan types) return 400.
 
+**Per-symbol scanner error categorization** (GH-861 / CB-245):
+- Every per-scan result with `status: 'error'` carries a non-empty `errorCategory` drawn from the closed enum in `src/services/tradingview/marketScannerErrorCategories.js`: `mcp_unreachable`, `mcp_timeout`, `mcp_rate_limited`, `mcp_tool_error`, `mcp_suspended`, `symbol_invalid`, `symbol_unsupported`, `unknown`.
+- The Telegram/WhatsApp report renders the category in parentheses next to the message (e.g. `⚠️ Error: MCP server connection refused (mcp_unreachable)`).
+- `summary.errorCategoryCounts` in the response surfaces the totals for every category so operators can distinguish one MCP outage from many symbol-specific failures.
+- `/api/alerts/summary` aggregates the persisted `scannerErrorCategories` from delivered scanner runs and exposes `summary.scanner.{totalRuns, errorCategoryCounts}` under the bounded 31-day window.
+- `/api/status` exposes `dependencies.tradingViewMcp.errorCategoryCounts` (rolling 24h) with the legacy circuit-breaker categorization so spikes in `mcp_rate_limited` / `timeout` are easy to alert on.
+- Sentry captures the category as the `mcp_error_category` tag on scanner failures; alerts remain fail-open.
+
 **Where to look first when extending or debugging**:
 - `src/routes/index.js` for endpoint route definition.
 - `src/controllers/webhooks/handlers/marketScanner/marketScanner.js` for scan orchestration and deadline management.
 - `src/services/tradingview/marketScannerReport.js` for layout and item-specific formatters.
-- Tests in `tests/integration/market-scanner-endpoint.test.js` and `tests/unit/market-scanner-report.test.js` / `tests/unit/market-scanner.test.js`.
+- `src/services/tradingview/marketScannerErrorCategories.js` for the closed enum and classifier.
+- `src/services/storage/AlertStorageService.js` for the `scannerErrorCategories` field sanitization and summary aggregation.
+- Tests in `tests/integration/market-scanner-endpoint.test.js`, `tests/unit/market-scanner-report.test.js`, `tests/unit/market-scanner.test.js`, `tests/unit/market-scanner-error-categories.test.js`, `tests/integration/scanner-expanded-alert-storage.test.js`, `tests/integration/status-endpoint.test.js`, and `tests/integration/alerts-endpoint.test.js`.
 
 ## Asynchronous TradingView Jobs
 
