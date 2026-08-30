@@ -206,6 +206,7 @@ pnpm test:firebase
 - `NEWS_GEMINI_QUOTA_MAX_RETRIES` - Max per-symbol retries for Gemini `429 RESOURCE_EXHAUSTED` errors (default: `2`)
 - `NEWS_GEMINI_QUOTA_RETRY_BASE_MS` - Base exponential backoff when Gemini does not provide retry delay metadata (default: `1000` ms)
 - `ENABLE_BINANCE_PRICE_CHECK` - Enable Binance crypto price fetching (`true` or `false`, default: `false`)
+- `BINANCE_DATA_BASE_URL` - Optional custom Binance market-data host for public data (klines, ticker, avgPrice), e.g. `https://data-api.binance.vision` (default: unset / `https://api.binance.com`)
 - `BINANCE_FETCH_TIMEOUT_MS` - Binance price request timeout (default: `5000` ms)
 
 #### Binance Spot Order Execution
@@ -213,6 +214,7 @@ pnpm test:firebase
 - `ENABLE_BINANCE_TRADING` - Enable the operator-only Spot order endpoint (`true` or `false`, default: `false`)
 - `BINANCE_API_KEY` / `BINANCE_API_SECRET` - Server-side Binance credentials with Spot trading permission only; withdrawals must remain disabled and IP restrictions are recommended
 - `BINANCE_TRADING_ENV` - Binance environment: `testnet` (default) or explicit `live`
+- `BINANCE_TRADING_BASE_URL` - Optional custom base URL for Binance trading endpoints in live mode (default: unset / `https://api.binance.com`)
 - `BINANCE_TRADING_ALLOWED_SYMBOLS` - Comma-separated Spot symbol allow-list, for example `BTCUSDT,ETHUSDT`
 - `BINANCE_TRADING_MAX_NOTIONAL` - Maximum order notional in quote asset, enforced before submission
 - `BINANCE_TRADING_TIMEOUT_MS` - Signed request timeout (default `10000` ms, capped at `30000` ms)
@@ -1137,6 +1139,8 @@ Return bounded JSON-only analytics for stored alerts without exposing raw alert 
 
 Each enriched alert records only safe prompt provenance (`name`, `source`, `label`, and `version`) when a prompt was resolved. The `enrichment.riskMetadataCoverage` block uses enriched alerts as its denominator and reports populated counts/percentages for `invalidation_level`, `target_level`, `setup_type`, and `risk_reward_ratio`. `byPromptProvenance` groups the same metrics by Langfuse/local provenance; legacy records without provenance use `null`. Missing or invalid optional values remain zero coverage and are never synthesized.
 
+Similarly, `enrichment.evidenceCoverage` tracks whether enriched alerts cited grounding sources, reporting `zeroSources`, `oneToTwoSources`, and `threePlusSources` distribution along with `averageSourceCount`, overall and grouped `byPromptProvenance`.
+
 **Query Parameters:**
 - `from` - Optional ISO-8601 lower bound; defaults to 24 hours before `to`
 - `to` - Optional ISO-8601 upper bound; defaults to request time
@@ -1198,6 +1202,25 @@ The service caps the queried window at 31 days to keep routine operator usage ch
               "setup_type": { "populated": 0, "percentage": 0 },
               "risk_reward_ratio": { "populated": 0, "percentage": 0 }
             }
+          }
+        ]
+      },
+      "evidenceCoverage": {
+        "denominator": 1,
+        "zeroSources": { "populated": 1, "percentage": 100 },
+        "oneToTwoSources": { "populated": 0, "percentage": 0 },
+        "threePlusSources": { "populated": 0, "percentage": 0 },
+        "totalSourceCount": 0,
+        "averageSourceCount": 0,
+        "byPromptProvenance": [
+          {
+            "provenance": null,
+            "denominator": 1,
+            "zeroSources": { "populated": 1, "percentage": 100 },
+            "oneToTwoSources": { "populated": 0, "percentage": 0 },
+            "threePlusSources": { "populated": 0, "percentage": 0 },
+            "totalSourceCount": 0,
+            "averageSourceCount": 0
           }
         ]
       },

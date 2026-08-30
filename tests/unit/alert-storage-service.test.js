@@ -1559,6 +1559,25 @@ describe('AlertStorageService', () => {
 							},
 						],
 					},
+					evidenceCoverage: {
+						denominator: 1,
+						zeroSources: { populated: 1, percentage: 100 },
+						oneToTwoSources: { populated: 0, percentage: 0 },
+						threePlusSources: { populated: 0, percentage: 0 },
+						totalSourceCount: 0,
+						averageSourceCount: 0,
+						byPromptProvenance: [
+							{
+								provenance: null,
+								denominator: 1,
+								zeroSources: { populated: 1, percentage: 100 },
+								oneToTwoSources: { populated: 0, percentage: 0 },
+								threePlusSources: { populated: 0, percentage: 0 },
+								totalSourceCount: 0,
+								averageSourceCount: 0,
+							},
+						],
+					},
 					tokenUsage: {
 						inputTokens: 10,
 						outputTokens: 20,
@@ -1879,6 +1898,205 @@ describe('AlertStorageService', () => {
 						},
 					},
 				],
+			});
+		});
+
+		it('aggregates evidenceCoverage across zero-, low-, and high-source enriched alerts', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					// 0 sources (missing sources field — legacy) — counted as zeroSources
+					buildQueryDoc('alert-no-sources', {
+						receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+						enriched: true,
+						enrichmentData: { symbol: 'BTCUSDT' },
+						source: 'webhook',
+					}),
+					// 1 source — oneToTwoSources
+					buildQueryDoc('alert-one-source', {
+						receivedAt: buildTimestamp('2026-06-06T11:00:00.000Z'),
+						enriched: true,
+						enrichmentData: { symbol: 'ETHUSDT', sources: [{ url: 'https://a.com' }] },
+						source: 'webhook',
+					}),
+					// 3 sources — threePlusSources
+					buildQueryDoc('alert-three-sources', {
+						receivedAt: buildTimestamp('2026-06-06T10:00:00.000Z'),
+						enriched: true,
+						enrichmentData: {
+							symbol: 'SOLUSDT',
+							sources: [
+								{ url: 'https://a.com' },
+								{ url: 'https://b.com' },
+								{ url: 'https://c.com' },
+							],
+						},
+						source: 'webhook',
+					}),
+					// plain alert — must not count toward evidenceCoverage
+					buildQueryDoc('alert-plain', {
+						receivedAt: buildTimestamp('2026-06-06T09:00:00.000Z'),
+						enriched: false,
+						source: 'webhook',
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.summarizeAlerts({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+				limit: 200,
+			});
+
+			expect(result.enrichment.evidenceCoverage).toEqual({
+				denominator: 3,
+				zeroSources: { populated: 1, percentage: Number(((1 / 3) * 100).toFixed(2)) },
+				oneToTwoSources: { populated: 1, percentage: Number(((1 / 3) * 100).toFixed(2)) },
+				threePlusSources: { populated: 1, percentage: Number(((1 / 3) * 100).toFixed(2)) },
+				totalSourceCount: 4, // 0 + 1 + 3
+				averageSourceCount: Number((4 / 3).toFixed(2)),
+				byPromptProvenance: [
+					{
+						provenance: null,
+						denominator: 3,
+						zeroSources: { populated: 1, percentage: Number(((1 / 3) * 100).toFixed(2)) },
+						oneToTwoSources: { populated: 1, percentage: Number(((1 / 3) * 100).toFixed(2)) },
+						threePlusSources: { populated: 1, percentage: Number(((1 / 3) * 100).toFixed(2)) },
+						totalSourceCount: 4,
+						averageSourceCount: Number((4 / 3).toFixed(2)),
+					},
+				],
+			});
+		});
+
+		it('evidenceCoverage groups by prompt provenance and handles schema drift', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					// langfuse-sourced prompt — 3 sources
+					buildQueryDoc('alert-lf', {
+						receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+						enriched: true,
+						enrichmentData: {
+							symbol: 'BTCUSDT',
+							sources: ['a', 'b', 'c'],
+							promptProvenance: {
+								name: 'alert-enrichment',
+								source: 'langfuse',
+								label: 'production',
+								version: 12,
+							},
+						},
+						source: 'webhook',
+					}),
+					// local fallback — 0 sources
+					buildQueryDoc('alert-local', {
+						receivedAt: buildTimestamp('2026-06-06T11:00:00.000Z'),
+						enriched: true,
+						enrichmentData: {
+							symbol: 'ETHUSDT',
+							sources: [],
+							promptProvenance: {
+								name: 'alert-enrichment',
+								source: 'local',
+								label: null,
+								version: null,
+							},
+						},
+						source: 'webhook',
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.summarizeAlerts({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+				limit: 200,
+			});
+
+			// Top-level bucket covers both
+			expect(result.enrichment.evidenceCoverage.denominator).toBe(2);
+			expect(result.enrichment.evidenceCoverage.threePlusSources.populated).toBe(1);
+			expect(result.enrichment.evidenceCoverage.zeroSources.populated).toBe(1);
+			expect(result.enrichment.evidenceCoverage.averageSourceCount).toBe(1.5);
+
+			// Per-provenance grouping
+			const provenanceGroups = result.enrichment.evidenceCoverage.byPromptProvenance;
+			expect(provenanceGroups).toHaveLength(2);
+
+			const lfGroup = provenanceGroups.find(g => g.provenance && g.provenance.source === 'langfuse');
+			expect(lfGroup.denominator).toBe(1);
+			expect(lfGroup.threePlusSources.populated).toBe(1);
+			expect(lfGroup.averageSourceCount).toBe(3);
+
+			const localGroup = provenanceGroups.find(g => g.provenance && g.provenance.source === 'local');
+			expect(localGroup.denominator).toBe(1);
+			expect(localGroup.zeroSources.populated).toBe(1);
+			expect(localGroup.averageSourceCount).toBe(0);
+		});
+
+		it('evidenceCoverage treats numeric sources field as count and is zero-safe with no enriched alerts', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					// numeric sources field (non-array) treated as count
+					buildQueryDoc('alert-numeric', {
+						receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+						enriched: true,
+						enrichmentData: { symbol: 'BTCUSDT', sources: 5 },
+						source: 'webhook',
+					}),
+					// non-enriched only — evidenceCoverage denominator must stay 0
+					buildQueryDoc('alert-plain', {
+						receivedAt: buildTimestamp('2026-06-06T11:00:00.000Z'),
+						enriched: false,
+						source: 'webhook',
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.summarizeAlerts({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+				limit: 200,
+			});
+
+			// numeric sources: 5 → threePlusSources
+			expect(result.enrichment.evidenceCoverage.denominator).toBe(1);
+			expect(result.enrichment.evidenceCoverage.threePlusSources.populated).toBe(1);
+			expect(result.enrichment.evidenceCoverage.averageSourceCount).toBe(5);
+		});
+
+		it('evidenceCoverage denominator is 0 and percentages are 0 when no enriched alerts exist', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('plain-only', {
+						receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+						enriched: false,
+						source: 'webhook',
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.summarizeAlerts({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+				limit: 200,
+			});
+
+			expect(result.enrichment.evidenceCoverage).toEqual({
+				denominator: 0,
+				zeroSources: { populated: 0, percentage: 0 },
+				oneToTwoSources: { populated: 0, percentage: 0 },
+				threePlusSources: { populated: 0, percentage: 0 },
+				totalSourceCount: 0,
+				averageSourceCount: 0,
+				byPromptProvenance: [],
 			});
 		});
 
