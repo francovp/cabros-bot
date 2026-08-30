@@ -1386,6 +1386,10 @@ async function summarizeAlerts({ from, to, limit, source, enriched } = {}) {
 				...createRiskMetadataCoverageBucket(),
 				byPromptProvenance: [],
 			},
+			evidenceCoverage: {
+				...createEvidenceCoverageBucket(),
+				byPromptProvenance: [],
+			},
 			tokenUsage: {
 				inputTokens: 0,
 				outputTokens: 0,
@@ -1421,6 +1425,7 @@ async function summarizeAlerts({ from, to, limit, source, enriched } = {}) {
 			summary.byFeatureFlag.enriched += 1;
 			summary.enrichment.enrichedAlerts += 1;
 			recordRiskMetadataCoverageByProvenance(summary.enrichment.riskMetadataCoverage, data.enrichmentData);
+			recordEvidenceCoverageByProvenance(summary.enrichment.evidenceCoverage, data.enrichmentData);
 		} else {
 			summary.byFeatureFlag.plain += 1;
 			summary.enrichment.plainAlerts += 1;
@@ -1455,6 +1460,7 @@ async function summarizeAlerts({ from, to, limit, source, enriched } = {}) {
 	}
 
 	finalizeRiskMetadataCoverageByProvenance(summary.enrichment.riskMetadataCoverage);
+	finalizeEvidenceCoverageByProvenance(summary.enrichment.evidenceCoverage);
 	summary.enrichment.tokenUsage.totalCost = Number(summary.enrichment.tokenUsage.totalCost.toFixed(6));
 	summary.latency.averageProcessingMs = averageLatency(processingLatencySamples);
 	summary.latency.averageDeliveryMs = averageLatency(deliveryLatencySamples);

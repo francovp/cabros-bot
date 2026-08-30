@@ -319,6 +319,28 @@ describe('Alerts API Integration Tests', () => {
 		expect(res.body.summary.shadowModeMetrics).toBe('No measurements found');
 	});
 
+	it('returns evidence coverage from the protected summary endpoint', async () => {
+		const evidenceCoverage = {
+			denominator: 2,
+			zeroSources: { populated: 1, percentage: 50 },
+			oneToTwoSources: { populated: 0, percentage: 0 },
+			threePlusSources: { populated: 1, percentage: 50 },
+			totalSourceCount: 3,
+			averageSourceCount: 1.5,
+			byPromptProvenance: [],
+		};
+		alertStorageService.summarizeAlerts.mockResolvedValue({
+			enrichment: { evidenceCoverage },
+		});
+
+		const res = await request(app)
+			.get('/api/alerts/summary')
+			.set('x-api-key', 'test-key')
+			.expect(200);
+
+		expect(res.body.summary.enrichment.evidenceCoverage).toEqual(evidenceCoverage);
+	});
+
 	it('omits unfiltered shadow metrics from filtered summaries', async () => {
 		signalOutcomeService.isEnabled.mockReturnValue(true);
 		signalOutcomeService.getMetricsSummary.mockResolvedValue({ totalSignalsReceived: 99 });
