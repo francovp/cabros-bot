@@ -485,6 +485,14 @@
         "responses": {
           "200": {
             "description": "JSON Lines or CSV export",
+            "headers": {
+              "X-Shadow-Mode-Metrics": {
+                "description": "JSON-encoded shadow-mode outcome metrics payload emitted by SignalOutcomeService.getMetricsSummary(). Returns the string \"No measurements found\" when signal-outcome tracking is disabled or no measurements exist. Object form (when tracking is enabled with data) follows the ShadowModeMetrics schema: coverage buckets, per-window hitRatePercent/targetHitRatePercent/stopHitRatePercent/expectancyR plus drawdown proxy and latency/cost metadata. Omitted when source or enriched filters are supplied because the shadow-mode metrics service has no matching filters.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
             "content": {
               "application/x-ndjson": {
                 "schema": {
@@ -3542,6 +3550,21 @@
           }
         }
       },
+      "ShadowModeMetrics": {
+        "type": "object",
+        "description": "Aggregated shadow-mode outcome metrics emitted by SignalOutcomeService.getMetricsSummary(). The object form is returned only when totalSignalsReceived > 0 and signal-outcome tracking is enabled. When the service has no data or tracking is disabled, the field becomes the string sentinel \"No measurements found\". Win-rate semantics (see issue GH-593): hitRatePercent counts evaluated window outcomes whose return > 0; targetHitRatePercent/stopHitRatePercent count explicit target/stop hits including firstHit fallbacks and use barrier-eligible denominators (evaluated outcomes without a configured target or stop are excluded instead of counted as misses); expectancyR averages rMultiple over evaluated windows with finite rMultiple. All rates use evaluated-window denominators and zero-fill when none are eligible.",
+        "oneOf": [
+          {
+            "type": "string",
+            "enum": [
+              "No measurements found"
+            ]
+          },
+          {
+            "$ref": "#/components/schemas/OutcomesSummary"
+          }
+        ]
+      },
       "DrawdownProxy": {
         "type": "object",
         "required": [
@@ -4099,15 +4122,8 @@
             "$ref": "#/components/schemas/JsonObject"
           },
           "shadowModeMetrics": {
-            "description": "When an object, includes exchangeBreakdown and providerBreakdown coverage buckets with received, eligible, evaluated, pending, and unavailable counts. Equity providers remain opt-in and fail open. This field is omitted when source or enriched filters are supplied because shadow-mode metrics do not support those filters.",
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/JsonObject"
-              },
-              {
-                "type": "string"
-              }
-            ]
+            "description": "Aggregated shadow-mode outcome metrics. When an object, includes the full OutcomesSummary payload (coverage buckets, per-window WindowStats with hit/target/stop rates and expectancyR, drawdown proxy, latency/cost metadata, and falsePositiveCandidates). When no data is available or signal-outcome tracking is disabled, the value is the string sentinel \"No measurements found\". Equity providers remain opt-in and fail open. This field is omitted when source or enriched filters are supplied because shadow-mode metrics do not support those filters. Win-rate field semantics: hitRatePercent counts evaluated window outcomes whose return > 0; targetHitRatePercent/stopHitRatePercent count explicit target/stop hits (including firstHit fallbacks) over barrier-eligible denominators only; expectancyR averages finite rMultiple over evaluated windows.",
+            "$ref": "#/components/schemas/ShadowModeMetrics"
           }
         }
       },
