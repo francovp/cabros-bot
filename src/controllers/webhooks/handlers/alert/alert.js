@@ -25,6 +25,7 @@ const {
 const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteConfigService');
 const { parseTradingViewSignal, TIMEFRAME_MAP } = require('../../../../services/tradingview/parseTradingViewSignal');
 const { signalRepeatCooldown, oppositeKeyOf, buildSignalKey } = require('../../../../services/alerts/signalRepeatCooldown');
+const { outcomeAnnotationService, renderAnnotationLine } = require('../../../../services/alerts/outcomeAnnotationService');
 const { notificationRedriveService } = require('../../../../services/notification/NotificationRedriveService');
 const { isPreviewEnvironment } = require('../../../../lib/deploymentEnvironment');
 
@@ -138,6 +139,62 @@ async function processEnrichment(alert, options) {
 	return enriched;
 }
 
+async function processOutcomeAnnotation(alert, options = {}) {
+	if (!outcomeAnnotationService.isEnabled()) {
+		return null;
+	}
+	if (!alert || typeof alert.text !== 'string') {
+		return null;
+	}
+
+	const parsed = parseTradingViewSignal(alert.text);
+	if (!parsed || !parsed.symbol || !parsed.side) {
+		return null;
+	}
+
+	const setupType = alert.enriched && typeof alert.enriched.setup_type === 'string'
+		? alert.enriched.setup_type
+		: null;
+
+	const annotation = await outcomeAnnotationService.annotate({
+		exchange: parsed.exchange || null,
+		symbol: parsed.symbol,
+		side: parsed.side,
+		setupType,
+	}, {
+		timeoutMs: typeof options.timeoutMs === 'number' ? options.timeoutMs : undefined,
+	});
+
+	if (annotation && annotation.summary) {
+		const existingExtra = typeof alert.extraText === 'string' && alert.extraText.length > 0
+			? alert.extraText
+			: '';
+		alert.extraText = existingExtra
+			? `${existingExtra}\n${annotation.summary}`
+			: annotation.summary;
+		if (alert.enriched && typeof alert.enriched === 'object') {
+			alert.enriched.outcomeAnnotation = {
+				exchange: annotation.exchange,
+				symbol: annotation.symbol,
+				side: annotation.side,
+				setupType: annotation.setupType,
+				windowLabel: annotation.windowLabel,
+				sampleSize: annotation.sampleSize,
+				hitRatePercent: annotation.hitRatePercent,
+				expectancyR: annotation.expectancyR,
+				totalWins: annotation.totalWins,
+				totalLosses: annotation.totalLosses,
+				summary: annotation.summary,
+			};
+		}
+		alert.outcomeAnnotation = {
+			...annotation,
+		};
+	}
+
+	return annotation;
+}
+
 function resolveRequestId(req) {
 	const raw = req && req.headers && (req.headers['x-request-id'] || req.headers['X-Request-Id'] || req.headers['x-request-ID']);
 	if (typeof raw === 'string') {
@@ -225,12 +282,27 @@ function postAlert(botOrGetter) {
 			const tokenUsageJSON = tokenUsage.toJSON();
 			tokenUsageJSON.formattedSummary = tokenUsage.formatSummary();
 
+			const outcomeAnnotation = await processOutcomeAnnotation(alert, { timeoutMs: 1500 });
+
 			if (dryRun) {
 				console.debug('[Alert] Dry-run mode: skipping delivery and Firestore persistence');
 				return res.json({
 					success: true,
 					dryRun: true,
 					enriched,
+					outcomeAnnotation: outcomeAnnotation
+						? {
+							summary: outcomeAnnotation.summary,
+							exchange: outcomeAnnotation.exchange,
+							symbol: outcomeAnnotation.symbol,
+							side: outcomeAnnotation.side,
+							setupType: outcomeAnnotation.setupType,
+							windowLabel: outcomeAnnotation.windowLabel,
+							sampleSize: outcomeAnnotation.sampleSize,
+							hitRatePercent: outcomeAnnotation.hitRatePercent,
+							expectancyR: outcomeAnnotation.expectancyR,
+						}
+						: null,
 					payload: {
 						text: alert.text,
 						enrichedData: alert.enriched || null,
@@ -442,6 +514,21 @@ function postAlert(botOrGetter) {
 				processingTimeMs,
 				tradingViewEnrichmentApplied: Boolean(alert.enriched && alert.enriched.tradingViewEnrichmentApplied === true),
 				tradingViewEnrichmentStatus: alert.tradingViewEnrichmentStatus,
+				outcomeAnnotation: outcomeAnnotation
+					? {
+						exchange: outcomeAnnotation.exchange,
+						symbol: outcomeAnnotation.symbol,
+						side: outcomeAnnotation.side,
+						setupType: outcomeAnnotation.setupType,
+						windowLabel: outcomeAnnotation.windowLabel,
+						sampleSize: outcomeAnnotation.sampleSize,
+						hitRatePercent: outcomeAnnotation.hitRatePercent,
+						expectancyR: outcomeAnnotation.expectancyR,
+						totalWins: outcomeAnnotation.totalWins,
+						totalLosses: outcomeAnnotation.totalLosses,
+						summary: outcomeAnnotation.summary,
+					}
+					: null,
 				suppressedRepeat,
 				source: body.source || 'webhook-alert',
 				telegramChatId: routing.telegramChatId,
