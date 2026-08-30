@@ -559,4 +559,133 @@ describe('ScannerPresetService', () => {
 		expect(await service.listPresets()).toEqual([]);
 		expect(await service.getPreset(created.id)).toBeNull();
 	});
+
+	it('initializes version to 1 on create and increments on each successful update', async () => {
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const service = new ScannerPresetService();
+
+		const created = await service.createPreset({ name: 'Versioned preset' });
+		expect(created.version).toBe(1);
+
+		const updatedOnce = await service.updatePreset(created.id, { name: 'Versioned preset v2' });
+		expect(updatedOnce.version).toBe(2);
+
+		const updatedTwice = await service.updatePreset(created.id, { limit: 9 });
+		expect(updatedTwice.version).toBe(3);
+
+		const refetched = await service.getPreset(created.id);
+		expect(refetched.version).toBe(3);
+	});
+
+	it('rejects updates with a stale ifMatch token using PRECONDITION_FAILED', async () => {
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const service = new ScannerPresetService();
+		const created = await service.createPreset({ name: 'Stale token preset' });
+
+		let caught;
+		try {
+			await service.updatePreset(created.id, { name: 'Should fail' }, { ifMatchVersion: 99 });
+		} catch (error) {
+			caught = error;
+		}
+		expect(caught).toBeDefined();
+		expect(caught.name).toBe('MarketScannerRequestError');
+		expect(caught.code).toBe('PRECONDITION_FAILED');
+		expect(caught.statusCode).toBe(412);
+		expect(caught.preset).toMatchObject({ id: created.id, version: 1 });
+
+		const refetched = await service.getPreset(created.id);
+		expect(refetched.name).toBe('Stale token preset');
+		expect(refetched.version).toBe(1);
+	});
+
+	it('accepts updates with a matching ifMatchVersion and increments version', async () => {
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const service = new ScannerPresetService();
+		const created = await service.createPreset({ name: 'Matched token preset' });
+
+		const updated = await service.updatePreset(
+			created.id,
+			{ name: 'Matched token preset v2' },
+			{ ifMatchVersion: created.version },
+		);
+		expect(updated.version).toBe(2);
+		expect(updated.name).toBe('Matched token preset v2');
+	});
+
+	it('rejects updates against a locked preset using PRESET_LOCKED', async () => {
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const service = new ScannerPresetService();
+		const created = await service.createPreset({ name: 'Locked preset' });
+		const futureLock = new Date(Date.now() + 60000).toISOString();
+		await service.updatePreset(created.id, { lockedUntil: futureLock, lockedBy: 'scheduler' });
+
+		let caught;
+		try {
+			await service.updatePreset(created.id, { name: 'Should fail locked' });
+		} catch (error) {
+			caught = error;
+		}
+		expect(caught).toBeDefined();
+		expect(caught.name).toBe('MarketScannerRequestError');
+		expect(caught.code).toBe('PRESET_LOCKED');
+		expect(caught.statusCode).toBe(409);
+		expect(caught.lockedUntil).toBe(futureLock);
+	});
+
+	it('rejects deletes with a stale ifMatch token', async () => {
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const service = new ScannerPresetService();
+		const created = await service.createPreset({ name: 'Stale delete preset' });
+
+		let caught;
+		try {
+			await service.deletePreset(created.id, { ifMatchVersion: 42 });
+		} catch (error) {
+			caught = error;
+		}
+		expect(caught).toBeDefined();
+		expect(caught.code).toBe('PRECONDITION_FAILED');
+		expect(caught.statusCode).toBe(412);
+
+		expect(await service.getPreset(created.id)).not.toBeNull();
+	});
+
+	it('accepts deletes with a matching ifMatchVersion', async () => {
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const service = new ScannerPresetService();
+		const created = await service.createPreset({ name: 'Matched delete preset' });
+
+		const deleted = await service.deletePreset(created.id, { ifMatchVersion: created.version });
+		expect(deleted).toBe(true);
+		expect(await service.getPreset(created.id)).toBeNull();
+	});
+
+	it('returns null from updatePreset and deletePreset when the preset is missing without a token', async () => {
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const service = new ScannerPresetService();
+
+		expect(await service.updatePreset('missing-id', { name: 'gone' })).toBeNull();
+		expect(await service.deletePreset('missing-id')).toBe(false);
+	});
+
+	it('persists the version across Firestore writes and reloads', async () => {
+		process.env.ENABLE_FIRESTORE_SCANNER_PRESETS = 'true';
+
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const serviceA = new ScannerPresetService();
+		const created = await serviceA.createPreset({ name: 'Firestore versioned preset' });
+		expect(created.version).toBe(1);
+
+		const updated = await serviceA.updatePreset(created.id, { name: 'Firestore versioned v2' });
+		expect(updated.version).toBe(2);
+
+		jest.resetModules();
+		const {
+			ScannerPresetService: ReloadedScannerPresetService,
+		} = require('../../src/services/scannerPresets/ScannerPresetService');
+		const fetched = await new ReloadedScannerPresetService().getPreset(created.id);
+		expect(fetched.version).toBe(2);
+		expect(fetched.name).toBe('Firestore versioned v2');
+	});
 });

@@ -145,7 +145,82 @@ function clonePreset(preset) {
 	if (Array.isArray(preset.channels)) {
 		cloned.channels = [...preset.channels];
 	}
+	if (Number.isInteger(cloned.version) && cloned.version < 1) {
+		cloned.version = 1;
+	}
 	return cloned;
+}
+
+function normalizeVersion(value, fallback = 1) {
+	const num = Number(value);
+	if (!Number.isInteger(num) || num < 1) {
+		return fallback;
+	}
+	return num;
+}
+
+function formatEtag(version) {
+	const safe = normalizeVersion(version, 1);
+	return `"${safe}"`;
+}
+
+function parseIfMatchHeader(headerValue) {
+	if (typeof headerValue !== 'string') {
+		return null;
+	}
+	const trimmed = headerValue.trim();
+	if (!trimmed) {
+		return null;
+	}
+	const match = trimmed.match(/^"(-?\d+)"$/);
+	if (match) {
+		return normalizeVersion(match[1], null);
+	}
+	const weakMatch = trimmed.match(/^W\/"(-?\d+)"$/);
+	if (weakMatch) {
+		return normalizeVersion(weakMatch[1], null);
+	}
+	const bare = trimmed.match(/^(-?\d+)$/);
+	if (bare) {
+		return normalizeVersion(bare[1], null);
+	}
+	return null;
+}
+
+function buildPreconditionFailed(preset) {
+	const error = new MarketScannerRequestError(
+		`If-Match version does not match current preset version (${preset.version})`,
+		'PRECONDITION_FAILED',
+		{ statusCode: 412, details: { preset } },
+	);
+	error.preset = clonePreset(preset);
+	error.currentVersion = preset.version;
+	return error;
+}
+
+function buildPresetLocked(preset, lockedUntil) {
+	const error = new MarketScannerRequestError(
+		`Preset is locked by an in-flight sweep until ${lockedUntil}`,
+		'PRESET_LOCKED',
+		{ statusCode: 409, details: { preset, lockedUntil } },
+	);
+	error.preset = clonePreset(preset);
+	error.lockedUntil = lockedUntil;
+	return error;
+}
+
+function isPresetLocked(preset, now = Date.now()) {
+	if (!preset || typeof preset.lockedUntil !== 'string' || !preset.lockedUntil) {
+		return null;
+	}
+	const lockedUntilMs = Date.parse(preset.lockedUntil);
+	if (!Number.isFinite(lockedUntilMs)) {
+		return null;
+	}
+	if (lockedUntilMs > now) {
+		return preset.lockedUntil;
+	}
+	return null;
 }
 
 function compareByCreatedAtDesc(a, b) {
@@ -323,13 +398,42 @@ class ScannerPresetService {
 		return clonePreset(memoryPresets.get(id));
 	}
 
-	async updatePreset(id, params = {}) {
+	async updatePreset(id, params = {}, options = {}) {
 		const deleteGenerationAtReadStart = firestoreDeleteGenerations.get(id) || 0;
 		const existing = await this.getPreset(id);
 		if (!existing
 			|| (firestoreDeleteGenerations.get(id) || 0) !== deleteGenerationAtReadStart
 			|| pendingFirestoreDeletes.has(id)) {
+			if (options && options.ifMatchVersion !== undefined && options.ifMatchVersion !== null) {
+				throw new MarketScannerRequestError(
+					'Preset not found',
+					'PRESET_NOT_FOUND',
+					{ statusCode: 404 },
+				);
+			}
 			return null;
+		}
+
+		const ifMatchVersion = options && options.ifMatchVersion !== undefined && options.ifMatchVersion !== null
+			? normalizeVersion(options.ifMatchVersion, null)
+			: null;
+		if (ifMatchVersion !== null && ifMatchVersion !== existing.version) {
+			console.debug('[ScannerPresetService] Stale If-Match on updatePreset', {
+				presetId: id,
+				clientVersion: ifMatchVersion,
+				currentVersion: existing.version,
+			});
+			throw buildPreconditionFailed(existing);
+		}
+
+		const lockedUntil = isPresetLocked(existing);
+		if (lockedUntil) {
+			console.debug('[ScannerPresetService] Preset locked during updatePreset', {
+				presetId: id,
+				lockedUntil,
+				currentVersion: existing.version,
+			});
+			throw buildPresetLocked(existing, lockedUntil);
 		}
 
 		const preset = this._buildPreset({
@@ -337,6 +441,7 @@ class ScannerPresetService {
 			...params,
 			id: existing.id,
 			createdAt: existing.createdAt,
+			version: existing.version + 1,
 		});
 		preset.updatedAt = new Date().toISOString();
 		preset.createdAt = existing.createdAt;
@@ -345,9 +450,27 @@ class ScannerPresetService {
 		return persisted ? clonePreset(preset) : null;
 	}
 
-	async deletePreset(id) {
+	async deletePreset(id, options = {}) {
 		if (!id) {
 			return false;
+		}
+
+		const ifMatchVersion = options && options.ifMatchVersion !== undefined && options.ifMatchVersion !== null
+			? normalizeVersion(options.ifMatchVersion, null)
+			: null;
+		if (ifMatchVersion !== null) {
+			const existing = await this.getPreset(id);
+			if (!existing) {
+				throw new MarketScannerRequestError('Preset not found', 'PRESET_NOT_FOUND', { statusCode: 404 });
+			}
+			if (ifMatchVersion !== existing.version) {
+				console.debug('[ScannerPresetService] Stale If-Match on deletePreset', {
+					presetId: id,
+					clientVersion: ifMatchVersion,
+					currentVersion: existing.version,
+				});
+				throw buildPreconditionFailed(existing);
+			}
 		}
 
 		let deleted = false;
@@ -428,6 +551,7 @@ class ScannerPresetService {
 		const lockedBy = typeof params.lockedBy === 'string' && params.lockedBy.trim()
 			? params.lockedBy.trim()
 			: null;
+		const version = normalizeVersion(params.version, 1);
 
 		const preset = {
 			id,
@@ -447,6 +571,7 @@ class ScannerPresetService {
 			lastDurationMs,
 			lockedUntil,
 			lockedBy,
+			version,
 		};
 
 		if (routing.channels !== undefined) preset.channels = routing.channels;
@@ -754,6 +879,7 @@ class ScannerPresetService {
 			lastDurationMs: Number.isFinite(Number(data.lastDurationMs)) ? Number(data.lastDurationMs) : null,
 			lockedUntil: typeof data.lockedUntil === 'string' ? data.lockedUntil : null,
 			lockedBy: typeof data.lockedBy === 'string' ? data.lockedBy : null,
+			version: normalizeVersion(data.version, 1),
 		};
 
 		if (Array.isArray(data.channels)) preset.channels = data.channels.filter((c) => typeof c === 'string');
@@ -786,6 +912,9 @@ module.exports = {
 	parseCadenceToMs,
 	normalizeSchedule,
 	stripUndefinedFieldsDeep,
+	normalizeVersion,
+	formatEtag,
+	parseIfMatchHeader,
 	// Test helper
 	_resetForTesting() {
 		scannerPresetService._resetForTesting();

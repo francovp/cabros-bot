@@ -3,7 +3,11 @@
 /* global AbortController */
 
 const { v4: uuidv4 } = require('uuid');
-const { scannerPresetService } = require('../../../../services/scannerPresets/ScannerPresetService');
+const {
+	scannerPresetService,
+	parseIfMatchHeader,
+	formatEtag,
+} = require('../../../../services/scannerPresets/ScannerPresetService');
 const { runScans } = require('../marketScanner/marketScanner');
 const {
 	MarketScannerRequestError,
@@ -102,6 +106,7 @@ function postPreset(req, res) {
 	return (async () => {
 		try {
 			const preset = await scannerPresetService.createPreset(req.body || {});
+			setPresetEtag(res, preset);
 			return res.status(201).json({
 				success: true,
 				storage: getStorageMetadata(),
@@ -155,6 +160,17 @@ function listPresets(req, res) {
 	})();
 }
 
+function setPresetEtag(res, preset) {
+	if (preset && Number.isInteger(preset.version)) {
+		res.set('ETag', formatEtag(preset.version));
+	}
+}
+
+function resolveIfMatchVersion(req) {
+	const headerValue = req.headers ? req.headers['if-match'] : undefined;
+	return parseIfMatchHeader(headerValue);
+}
+
 function getPreset(req, res) {
 	return (async () => {
 		try {
@@ -168,6 +184,7 @@ function getPreset(req, res) {
 				});
 			}
 
+			setPresetEtag(res, preset);
 			return res.status(200).json({
 				success: true,
 				storage: getStorageMetadata(),
@@ -192,7 +209,8 @@ function getPreset(req, res) {
 function deletePreset(req, res) {
 	return (async () => {
 		try {
-			const deleted = await scannerPresetService.deletePreset(req.params.id);
+			const ifMatchVersion = resolveIfMatchVersion(req);
+			const deleted = await scannerPresetService.deletePreset(req.params.id, { ifMatchVersion });
 			if (!deleted) {
 				return res.status(404).json({
 					success: false,
@@ -206,6 +224,20 @@ function deletePreset(req, res) {
 				storage: getStorageMetadata(),
 			});
 		} catch (error) {
+			if (error instanceof MarketScannerRequestError) {
+				const statusCode = Number.isInteger(error.statusCode) ? error.statusCode : 400;
+				const body = {
+					error: error.message,
+					code: error.code || 'INVALID_REQUEST',
+					storage: getStorageMetadata(),
+				};
+				if (error.code === 'PRECONDITION_FAILED' && error.preset) {
+					body.preset = error.preset;
+					setPresetEtag(res, error.preset);
+				}
+				return res.status(statusCode).json(body);
+			}
+
 			console.error('[ScannerPresets] Delete failed:', error.message);
 			sentryService.captureRuntimeError({
 				channel: 'scanner-presets',
@@ -224,7 +256,8 @@ function deletePreset(req, res) {
 function updatePreset(req, res) {
 	return (async () => {
 		try {
-			const preset = await scannerPresetService.updatePreset(req.params.id, req.body || {});
+			const ifMatchVersion = resolveIfMatchVersion(req);
+			const preset = await scannerPresetService.updatePreset(req.params.id, req.body || {}, { ifMatchVersion });
 			if (!preset) {
 				return res.status(404).json({
 					success: false,
@@ -233,6 +266,7 @@ function updatePreset(req, res) {
 				});
 			}
 
+			setPresetEtag(res, preset);
 			return res.status(200).json({
 				success: true,
 				storage: getStorageMetadata(),
@@ -240,10 +274,26 @@ function updatePreset(req, res) {
 			});
 		} catch (error) {
 			if (error instanceof MarketScannerRequestError) {
-				return res.status(400).json({
+				const statusCode = Number.isInteger(error.statusCode) ? error.statusCode : 400;
+				const body = {
 					error: error.message,
 					code: error.code || 'INVALID_REQUEST',
-				});
+					storage: getStorageMetadata(),
+				};
+				if (error.code === 'PRECONDITION_FAILED' && error.preset) {
+					body.preset = error.preset;
+					setPresetEtag(res, error.preset);
+				}
+				if (error.code === 'PRESET_LOCKED') {
+					if (error.lockedUntil) {
+						body.lockedUntil = error.lockedUntil;
+					}
+					if (error.preset) {
+						body.preset = error.preset;
+						setPresetEtag(res, error.preset);
+					}
+				}
+				return res.status(statusCode).json(body);
 			}
 
 			console.error('[ScannerPresets] Update failed:', error.message);
