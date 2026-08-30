@@ -8,7 +8,7 @@ If you discover a security vulnerability in Cabros Bot, please report it through
 
 Do **not** open a public GitHub issue, send a public pull request, or post the report to any public channel. Public disclosure gives attackers time to exploit the issue before a fix is shipped and endangers every operator of this service.
 
-If private vulnerability reporting is temporarily unavailable, contact the maintainer (`@francovp`) directly through GitHub and mark the message as private.
+If private vulnerability reporting is temporarily unavailable, do not disclose the vulnerability publicly; wait until the private reporting channel is restored.
 
 We aim to acknowledge new reports within **3 business days** and to provide a triage outcome (accepted / duplicate / out of scope / needs more info) within **10 business days**. Timelines for a fix depend on severity and complexity; we will coordinate a disclosure window with you before publishing any advisory or patch.
 
@@ -35,7 +35,7 @@ The following surfaces are **in scope** for vulnerability reports:
 - Server-side Firestore persistence for alerts, replay attempts, idempotency claims, scanner presets, jobs, and signal outcomes, plus server-side Firebase Remote Config loading.
 - Webhook authentication (`validateApiKey` timing-safe comparison, Firebase ID-token verification for the admin console).
 
-The deployed service is publicly reachable at `https://cabros-bot-production.up.railway.app`; preview deployments follow the convention documented in `agents.md`. Do not target any other infrastructure you may discover during research.
+The deployed service is publicly reachable at `https://cabros-bot-production.up.railway.app`; authorized Railway PR previews use the host pattern `cabros-bot-cabros-bot-pr-<PR_NUMBER>.up.railway.app`. Do not target any other infrastructure you may discover during research.
 
 ## Out of Scope
 
