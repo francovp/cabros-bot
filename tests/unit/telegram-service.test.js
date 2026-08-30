@@ -408,4 +408,119 @@ describe('TelegramService', () => {
 		);
 		expect(signalBot.telegram.sendMessage).not.toHaveBeenCalled();
 	});
+
+	it('routes messages to Telegram forum topic via explicit telegramThreadId override', async () => {
+		const bot = {
+			telegram: {
+				sendMessage: jest.fn().mockResolvedValue({ message_id: 501 }),
+			},
+		};
+		const service = new TelegramService({
+			bot,
+			chatId: 'chat-1',
+			formatter: { format: (text) => text },
+		});
+
+		const result = await service.send({ text: 'Signal in topic', telegramThreadId: 42 });
+
+		expect(result).toEqual(expect.objectContaining({
+			success: true,
+			channel: 'telegram',
+			messageId: '501',
+			threadId: 42,
+		}));
+		expect(bot.telegram.sendMessage).toHaveBeenCalledWith('chat-1', 'Signal in topic', {
+			parse_mode: 'MarkdownV2',
+			disable_web_page_preview: false,
+			message_thread_id: 42,
+		});
+	});
+
+	it('routes messages to Telegram forum topic resolved from topicRoutes mapping based on source', async () => {
+		const bot = {
+			telegram: {
+				sendMessage: jest.fn().mockResolvedValue({ message_id: 502 }),
+			},
+		};
+		const service = new TelegramService({
+			bot,
+			chatId: 'chat-1',
+			topicRoutes: 'market-scanner:101,news-monitor:202,webhook-signal:303',
+			formatter: { format: (text) => text },
+		});
+
+		const result = await service.send({ text: 'Scanner alert', source: 'market-scanner' });
+
+		expect(result).toEqual(expect.objectContaining({
+			success: true,
+			threadId: 101,
+		}));
+		expect(bot.telegram.sendMessage).toHaveBeenCalledWith('chat-1', 'Scanner alert', {
+			parse_mode: 'MarkdownV2',
+			disable_web_page_preview: false,
+			message_thread_id: 101,
+		});
+	});
+
+	it('preserves message_thread_id during MarkdownV2 parse failure plain-text fallback', async () => {
+		const bot = {
+			telegram: {
+				sendMessage: jest.fn()
+					.mockRejectedValueOnce({ description: "Bad Request: can't parse entities" })
+					.mockResolvedValueOnce({ message_id: 503 }),
+			},
+		};
+		const service = new TelegramService({
+			bot,
+			chatId: 'chat-1',
+			topicRoutes: { news: 202 },
+			formatter: { format: (text) => text },
+			logger: { warn: jest.fn(), error: jest.fn() },
+		});
+
+		const result = await service.send({ text: 'News update', source: 'news-monitor' });
+
+		expect(result).toEqual(expect.objectContaining({
+			success: true,
+			messageId: '503',
+			threadId: 202,
+		}));
+		expect(bot.telegram.sendMessage).toHaveBeenCalledTimes(2);
+		expect(bot.telegram.sendMessage.mock.calls[0][2]).toEqual({
+			parse_mode: 'MarkdownV2',
+			disable_web_page_preview: false,
+			message_thread_id: 202,
+		});
+		expect(bot.telegram.sendMessage.mock.calls[1][2]).toEqual({
+			disable_web_page_preview: false,
+			message_thread_id: 202,
+		});
+	});
+
+	it('preserves message_thread_id across chunked messages', async () => {
+		const bot = {
+			telegram: {
+				sendMessage: jest.fn()
+					.mockResolvedValueOnce({ message_id: 504 })
+					.mockResolvedValueOnce({ message_id: 505 }),
+			},
+		};
+		const service = new TelegramService({
+			bot,
+			chatId: 'chat-1',
+			maxMessageLength: 5,
+			formatter: { format: (text) => text },
+		});
+
+		const result = await service.send({ text: '1234567890', telegramThreadId: 99 });
+
+		expect(result).toEqual(expect.objectContaining({
+			success: true,
+			messageIds: ['504', '505'],
+			threadId: 99,
+		}));
+		expect(bot.telegram.sendMessage).toHaveBeenCalledTimes(2);
+		expect(bot.telegram.sendMessage.mock.calls[0][2].message_thread_id).toBe(99);
+		expect(bot.telegram.sendMessage.mock.calls[1][2].message_thread_id).toBe(99);
+	});
 });

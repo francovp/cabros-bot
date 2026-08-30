@@ -205,7 +205,10 @@ function postAlert(botOrGetter) {
 			}
 
 			const { text } = validateAlert(alertText);
-			alert = { text };
+			const source = (typeof body === 'object' && body && typeof body.source === 'string' && body.source.trim())
+				? body.source.trim()
+				: 'webhook-alert';
+			alert = { text, source };
 
 			const tokenUsage = new TokenUsageTracker();
 			const enriched = await processEnrichment(alert, { tokenUsage, useTradingViewData, parentSpan: requestSpan });

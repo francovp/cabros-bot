@@ -705,7 +705,9 @@ class JobService {
 			callbackEvents,
 			...(routing.channels ? { channels: routing.channels } : {}),
 			...(routing.telegramChatId ? { telegramChatId: routing.telegramChatId } : {}),
+			...(routing.telegramThreadId !== undefined ? { telegramThreadId: routing.telegramThreadId } : {}),
 			...(routing.whatsappChatId ? { whatsappChatId: routing.whatsappChatId } : {}),
+			...(routing.discordWebhookUrl ? { discordWebhookUrl: routing.discordWebhookUrl } : {}),
 			...(type === 'expanded-analysis' ? {
 				symbols: parsed.symbols.map((s) => s.raw),
 				timeframe: parsed.timeframe,
@@ -1367,7 +1369,7 @@ class JobService {
 		const deliveryResults = await this._sendQueuedNotification(
 			job,
 			notificationManager,
-			{ text: alertText },
+			{ text: alertText, source: 'tradingview-analysis' },
 			routing,
 		);
 		if (this._isClaimLost(signal)) {
@@ -1508,7 +1510,7 @@ class JobService {
 		const deliveryResults = await this._sendQueuedNotification(
 			job,
 			notificationManager,
-			{ text: alertText },
+			{ text: alertText, source: 'tradingview-analysis' },
 			routing,
 		);
 		if (this._isClaimLost(signal)) {
@@ -1639,7 +1641,9 @@ class JobService {
 		return {
 			channels: metadata.channels,
 			telegramChatId: metadata.telegramChatId,
+			telegramThreadId: metadata.telegramThreadId,
 			whatsappChatId: metadata.whatsappChatId,
+			discordWebhookUrl: metadata.discordWebhookUrl,
 		};
 	}
 

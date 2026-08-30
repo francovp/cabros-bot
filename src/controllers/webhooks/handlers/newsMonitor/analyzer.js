@@ -1194,6 +1194,7 @@ class NewsAnalyzer {
 
 		return {
 			symbol,
+			source: 'news-monitor',
 			eventCategory: geminiAnalysis.event_category,
 			headline: geminiAnalysis.headline,
 			sentimentScore: geminiAnalysis.sentiment_score,

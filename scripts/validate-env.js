@@ -81,6 +81,18 @@ function validateEnv(env = process.env) {
 		addMissing(warnings, 'TELEGRAM_CHAT_ID', env.TELEGRAM_CHAT_ID);
 	}
 
+	if (hasValue(env.TELEGRAM_TOPIC_ROUTES)) {
+		try {
+			const { parseTelegramTopicRoutes } = require('../src/services/notification/telegramTopicRouting');
+			const parsedRoutes = parseTelegramTopicRoutes(env.TELEGRAM_TOPIC_ROUTES);
+			if (Object.keys(parsedRoutes).length === 0) {
+				addInvalid(warnings, 'TELEGRAM_TOPIC_ROUTES', 'must contain valid category:threadId mappings');
+			}
+		} catch (_) {
+			addInvalid(warnings, 'TELEGRAM_TOPIC_ROUTES', 'must contain valid category:threadId mappings');
+		}
+	}
+
 	const isPreview = isPreviewEnvironment(env) || env.IS_PULL_REQUEST === 'true';
 	const effectiveWhatsAppChatId = (isPreview && env.WHATSAPP_PREVIEW_CHAT_ID) || env.WHATSAPP_CHAT_ID;
 

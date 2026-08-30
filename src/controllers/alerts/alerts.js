@@ -500,6 +500,12 @@ function replayAlert(botOrGetter) {
 					originalAlertId: alertId,
 					idempotencyKey: idempotencyKey.trim(),
 				},
+				...(storedAlert.telegramChatId ? { telegramChatId: storedAlert.telegramChatId } : {}),
+				...(storedAlert.telegramThreadId !== undefined && storedAlert.telegramThreadId !== null
+					? { telegramThreadId: storedAlert.telegramThreadId }
+					: {}),
+				...(storedAlert.whatsappChatId ? { whatsappChatId: storedAlert.whatsappChatId } : {}),
+				...(storedAlert.discordWebhookUrl ? { discordWebhookUrl: storedAlert.discordWebhookUrl } : {}),
 			};
 			const results = await notificationManager.sendToChannels(replayPayload, channels);
 			const replayId = await alertStorageService.saveReplayAttempt({
