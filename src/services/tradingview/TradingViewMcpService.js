@@ -42,6 +42,7 @@ function getFallbackTradePlan() {
 
 const DEFAULT_TRADINGVIEW_MCP_URL = 'https://tradingview-mcp-yp6b.onrender.com/mcp';
 const DEFAULT_TRADINGVIEW_MCP_CACHE_TTL_MS = 90000;
+const MAX_TRADINGVIEW_MCP_CACHE_ENTRIES = 100;
 const ENRICHMENT_WINDOW_MS = 24 * 60 * 60 * 1000;
 // Upper bound on distinct tool names kept in toolMetrics. MCP tools are a fixed,
 // allowlisted set today, so this only guards against a future dynamic tool name
@@ -185,6 +186,19 @@ function createEmptyBaseAttemptStats() {
 	};
 }
 
+function awaitWithAbort(promise, signal) {
+	if (!signal) return promise;
+	if (signal.aborted) {
+		return Promise.reject(new Error(getAbortMessage(signal, 'TradingView MCP request aborted')));
+	}
+
+	return new Promise((resolve, reject) => {
+		const onAbort = () => reject(new Error(getAbortMessage(signal, 'TradingView MCP request aborted')));
+		signal.addEventListener('abort', onAbort, { once: true });
+		Promise.resolve(promise).then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
+	});
+}
+
 function createRuntimeStatus({ includeEnrichment = true } = {}) {
 	const status = {
 		status: 'unknown',
@@ -292,6 +306,7 @@ class TradingViewMcpService {
 		this.notificationManager = config.notificationManager || null;
 		this.toolMetrics = {};
 		this.toolCache = new Map();
+		this.toolInFlight = new Map();
 	}
 
 	_resetForTesting() {
@@ -308,6 +323,7 @@ class TradingViewMcpService {
 		this.baseAttemptDurations = [];
 		this.toolMetrics = {};
 		this.toolCache.clear();
+		this.toolInFlight.clear();
 	}
 
 	isEnabled() {
@@ -948,7 +964,7 @@ class TradingViewMcpService {
 				symbol,
 				exchange,
 				timeframe,
-			}, { signal });
+			}, { signal, validateResult: result => this._validateToolError(result) });
 			const normalizedResult = this._unwrapSchemaResult(rpcResult);
 
 			if (normalizedResult && normalizedResult.error) {
@@ -1008,7 +1024,7 @@ class TradingViewMcpService {
 				symbol,
 				exchange,
 				timeframe,
-			}, { signal });
+			}, { signal, validateResult: result => this._validateToolError(result) });
 			const normalizedResult = this._unwrapSchemaResult(rpcResult);
 
 			if (normalizedResult && normalizedResult.error) {
@@ -1028,7 +1044,7 @@ class TradingViewMcpService {
 			const rpcResult = await this._callTool('multi_timeframe_analysis', {
 				symbol,
 				exchange,
-			}, { signal });
+			}, { signal, validateResult: result => this._validateToolError(result) });
 			const normalizedResult = this._unwrapSchemaResult(rpcResult);
 
 			if (normalizedResult && normalizedResult.error) {
@@ -1071,7 +1087,7 @@ class TradingViewMcpService {
 				symbol: fullSymbol,
 				exchange,
 				timeframe,
-			}, { signal });
+			}, { signal, validateResult: result => this._validateToolError(result) });
 			const normalizedResult = this._unwrapSchemaResult(rpcResult);
 
 			if (normalizedResult && normalizedResult.error) {
@@ -1157,12 +1173,23 @@ class TradingViewMcpService {
 	}
 
 	async _executeCallTool(toolName, args = {}, options = {}) {
-		const { signal } = options;
+		const { signal, validateResult } = options;
 		const cfg = this.getConfig();
 		let cacheKey = null;
+		let inFlightPromise = null;
 		const cacheResult = (value) => {
+			if (validateResult) {
+				validateResult(value);
+			}
 			if (cacheKey) {
 				try {
+					const now = Date.now();
+					for (const [key, entry] of this.toolCache) {
+						if (entry.expiresAt <= now) this.toolCache.delete(key);
+					}
+					if (this.toolCache.size >= MAX_TRADINGVIEW_MCP_CACHE_ENTRIES) {
+						this.toolCache.delete(this.toolCache.keys().next().value);
+					}
 					this.toolCache.set(cacheKey, { value, expiresAt: Date.now() + cfg.cacheTtlMs });
 				} catch {
 					// Cache failures are intentionally fail-open.
@@ -1183,72 +1210,99 @@ class TradingViewMcpService {
 					}
 					this.toolCache.delete(cacheKey);
 				}
+				inFlightPromise = this.toolInFlight.get(cacheKey) || null;
 			} catch (error) {
 				if (error.message === getAbortMessage(signal, 'TradingView MCP request aborted')) {
 					throw error;
 				}
 				cacheKey = null;
 			}
+			if (inFlightPromise) {
+				return awaitWithAbort(inFlightPromise, signal);
+			}
 		}
-		const initializeRequest = {
-			jsonrpc: '2.0',
-			id: this._nextRequestId('initialize'),
-			method: 'initialize',
-			params: {
-				protocolVersion: '2024-11-05',
-				capabilities: {},
-				clientInfo: {
-					name: 'cabros-bot',
-					version: '0.1.0',
+		const executeToolCall = async () => {
+			const initializeRequest = {
+				jsonrpc: '2.0',
+				id: this._nextRequestId('initialize'),
+				method: 'initialize',
+				params: {
+					protocolVersion: '2024-11-05',
+					capabilities: {},
+					clientInfo: {
+						name: 'cabros-bot',
+						version: '0.1.0',
+					},
 				},
-			},
+				};
+
+			const initResponse = await this._rpcRequest(initializeRequest, { signal });
+			const sessionId = initResponse.sessionId;
+
+			if (!sessionId) {
+				throw new Error('TradingView MCP did not return mcp-session-id header');
+			}
+
+			await this._rpcRequest({
+				jsonrpc: '2.0',
+				method: 'notifications/initialized',
+				params: {},
+			}, { sessionId, expectResponse: false, signal });
+
+			const toolCallRequest = {
+				jsonrpc: '2.0',
+				id: this._nextRequestId('tool'),
+				method: 'tools/call',
+				params: {
+					name: toolName,
+					arguments: args,
+				},
+			};
+
+			const toolResponse = await this._rpcRequest(toolCallRequest, { sessionId, signal });
+			const callResult = toolResponse.rpc && toolResponse.rpc.result;
+
+			if (!callResult) {
+				throw new Error(`TradingView MCP tool ${toolName} returned empty result`);
+			}
+
+			if (callResult.isError) {
+				const errorMessage = this._extractContentText(callResult) || `TradingView MCP tool ${toolName} returned isError=true`;
+				throw createToolResultError(errorMessage);
+			}
+
+			if (callResult.structuredContent && typeof callResult.structuredContent === 'object') {
+				return cacheResult(callResult.structuredContent);
+			}
+
+			const contentText = this._extractContentText(callResult);
+			if (!contentText) {
+				throw new Error(`TradingView MCP tool ${toolName} returned empty content`);
+			}
+
+			return cacheResult(this._parseToolJson(contentText));
 		};
 
-		const initResponse = await this._rpcRequest(initializeRequest, { signal });
-		const sessionId = initResponse.sessionId;
-
-		if (!sessionId) {
-			throw new Error('TradingView MCP did not return mcp-session-id header');
+		if (!cacheKey) {
+			return executeToolCall();
 		}
 
-		await this._rpcRequest({
-			jsonrpc: '2.0',
-			method: 'notifications/initialized',
-			params: {},
-		}, { sessionId, expectResponse: false, signal });
-
-		const toolCallRequest = {
-			jsonrpc: '2.0',
-			id: this._nextRequestId('tool'),
-			method: 'tools/call',
-			params: {
-				name: toolName,
-				arguments: args,
-			},
-		};
-
-		const toolResponse = await this._rpcRequest(toolCallRequest, { sessionId, signal });
-		const callResult = toolResponse.rpc && toolResponse.rpc.result;
-
-		if (!callResult) {
-			throw new Error(`TradingView MCP tool ${toolName} returned empty result`);
+		inFlightPromise = executeToolCall();
+		this.toolInFlight.set(cacheKey, inFlightPromise);
+		try {
+			return await awaitWithAbort(inFlightPromise, signal);
+		} finally {
+			if (this.toolInFlight.get(cacheKey) === inFlightPromise) {
+				this.toolInFlight.delete(cacheKey);
+			}
 		}
+	}
 
-		if (callResult.isError) {
-			const errorMessage = this._extractContentText(callResult) || `TradingView MCP tool ${toolName} returned isError=true`;
-			throw createToolResultError(errorMessage);
+	_validateToolError(result) {
+		const normalizedResult = this._unwrapSchemaResult(result);
+		if (normalizedResult && normalizedResult.error) {
+			throw createToolResultError(normalizedResult.error);
 		}
-
-		if (callResult.structuredContent && typeof callResult.structuredContent === 'object') {
-			return cacheResult(callResult.structuredContent);
-		}
-
-		const contentText = this._extractContentText(callResult);
-		if (!contentText) {
-			throw new Error(`TradingView MCP tool ${toolName} returned empty content`);
-		}
-
-		return cacheResult(this._parseToolJson(contentText));
 	}
 
 	_extractContentText(callResult) {
