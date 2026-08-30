@@ -66,6 +66,16 @@ class FakeElement {
 		delete this.attributes[name];
 	}
 
+	remove() {
+		if (!this.parentNode) return;
+		const siblings = this.parentNode.children;
+		const index = siblings.indexOf(this);
+		if (index >= 0) siblings.splice(index, 1);
+		this.parentNode = undefined;
+	}
+
+	select() {}
+
 	querySelectorAll(selector) {
 		if (selector === '[data-view]') return findAll(this, (node) => node.dataset.view);
 		return [];
@@ -132,7 +142,7 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 		elementsById[id] = node;
 		body.append(node);
 	});
-	['overview', 'status', 'alerts', 'presets', 'jobs', 'analysis', 'playground'].forEach((view) => {
+	['overview', 'status', 'alerts', 'outcomes', 'presets', 'jobs', 'analysis', 'playground'].forEach((view) => {
 		const button = new FakeElement('button');
 		button.dataset.view = view;
 		body.append(button);
@@ -152,6 +162,7 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 		getElementById: (id) => elementsById[id],
 		querySelectorAll: (selector) => body.querySelectorAll(selector),
 		addEventListener: (type, listener) => { documentListeners[type] = listener; },
+		execCommand: () => false,
 	};
 	const storage = new Map(storedKey ? [['cabros-admin-api-key', storedKey]] : []);
 	const helperCalls = [];
@@ -435,7 +446,7 @@ describe('admin browser client', () => {
 		await form.dispatch('submit');
 		await flush();
 
-		expect([...browser.timerDelays.values()]).toContain(900000);
+		expect([...browser.timerDelays.values()]).toContain(990000);
 		for (const fireTimer of browser.timers.values()) fireTimer();
 		await flush();
 		expect(signals[0].aborted).toBe(true);
@@ -443,7 +454,7 @@ describe('admin browser client', () => {
 		await selectView(browser, 'analysis');
 		await findForm(browser.elementsById.view, 'POST /api/news-monitor').dispatch('submit');
 		await flush();
-		expect([...browser.timerDelays.values()]).toContain(900000);
+		expect([...browser.timerDelays.values()]).toContain(990000);
 		for (const fireTimer of browser.timers.values()) fireTimer();
 		await flush();
 		expect(signals[1].aborted).toBe(true);
@@ -451,7 +462,7 @@ describe('admin browser client', () => {
 		await selectView(browser, 'presets');
 		await findForm(browser.elementsById.view, 'POST /api/scanner-presets/{id}/run').dispatch('submit');
 		await flush();
-		expect([...browser.timerDelays.values()]).toContain(900000);
+		expect([...browser.timerDelays.values()]).toContain(990000);
 		for (const fireTimer of browser.timers.values()) fireTimer();
 		await flush();
 		expect(signals[2].aborted).toBe(true);
@@ -459,10 +470,69 @@ describe('admin browser client', () => {
 		await selectView(browser, 'analysis');
 		await findForm(browser.elementsById.view, 'POST /api/webhook/volume-confirmation').dispatch('submit');
 		await flush();
-		expect([...browser.timerDelays.values()]).toContain(360000);
+		expect([...browser.timerDelays.values()]).toContain(390000);
 		for (const fireTimer of browser.timers.values()) fireTimer();
 		await flush();
 		expect(signals[3].aborted).toBe(true);
+	});
+
+	it('does not abort slow responses that resolve within the maximum budget for volume-confirmation and alerts', async () => {
+		let volumeResolver;
+		let alertResolver;
+		const browser = createBrowser({
+			fetchImpl: (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.includes('/api/webhook/volume-confirmation')) {
+					return new Promise((resolve) => {
+						volumeResolver = resolve;
+					});
+				}
+				if (url.includes('/api/webhook/alert')) {
+					return new Promise((resolve) => {
+						alertResolver = resolve;
+					});
+				}
+				return response({});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+
+		// Volume confirmation slow response within budget
+		await selectView(browser, 'analysis');
+		const volumeForm = findForm(browser.elementsById.view, 'POST /api/webhook/volume-confirmation');
+		await volumeForm.dispatch('submit');
+		await flush();
+
+		expect([...browser.timerDelays.values()]).toContain(390000);
+		expect(browser.timers.size).toBe(1);
+
+		// Resolve slow valid response before deadline
+		volumeResolver(response({ success: true, volumeConfirmed: true }));
+		await flush();
+
+		expect(browser.timers.size).toBe(0);
+		expect(volumeForm.textContent).toContain('volumeConfirmed');
+
+		// Webhook alert slow response within budget via Playground
+		await selectView(browser, 'playground');
+		const playground = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
+			&& node.textContent.includes('Playground'));
+		const select = find(playground, (node) => node.tagName === 'SELECT');
+		select.value = select.children.find((option) => option.textContent.includes('POST /api/webhook/alert')).value;
+		await select.dispatch('change');
+		await playground.dispatch('submit');
+		await flush();
+
+		expect([...browser.timerDelays.values()]).toContain(990000);
+		expect(browser.timers.size).toBe(1);
+
+		// Resolve slow valid response before deadline
+		alertResolver(response({ success: true, messageId: '12345' }));
+		await flush();
+
+		expect(browser.timers.size).toBe(0);
+		expect(playground.textContent).toContain('12345');
 	});
 
 	it('shows Firebase sign-in state and sends a verified token after sign-in', async () => {
@@ -708,10 +778,27 @@ describe('admin browser client', () => {
 			fetchImpl: async (url, options) => {
 				if (url === '/openapi.json') return response(contract);
 				requests.push([url, options]);
-				return response({
-					success: true,
-					summary: { totalAlerts: 3, totalSuccess: 2, byChannel: { telegram: 3 } },
-				});
+			return response({
+				success: true,
+				summary: {
+					window: { from: '2026-08-01T00:00:00.000Z', to: '2026-08-02T00:00:00.000Z' },
+					totalAlerts: 3,
+					enrichment: {
+						enrichedAlerts: 2,
+						plainAlerts: 1,
+						riskMetadataCoverage: {
+							denominator: 2,
+							fields: { invalidation_level: { populated: 1, percentage: 50 } },
+						},
+						tokenUsage: { inputTokens: 10, outputTokens: 20, totalTokens: 30, totalCost: 0.002 },
+					},
+					delivery: {
+						totalSuccess: 2,
+						totalFailure: 1,
+						byChannel: { telegram: { total: 3, success: 2, failure: 1 } },
+					},
+				},
+			});
 			},
 		});
 		await flush();
@@ -732,9 +819,16 @@ describe('admin browser client', () => {
 		expect(query.get('limit')).toBe('25');
 		expect(query.get('source')).toBe('webhook');
 		expect(query.get('enriched')).toBe('true');
-		expect(summaryForm.textContent).toContain('totalAlerts: 3');
-		expect(summaryForm.textContent).toContain('totalSuccess: 2');
-		expect(summaryForm.textContent).toContain('telegram: 3');
+
+		const blocks = find(summaryForm, (node) => node.className === 'dashboard summary-blocks');
+		expect(blocks).toBeDefined();
+		expect(blocks.textContent).toContain('Total alerts');
+		expect(blocks.textContent).toContain('Estimated cost 0.002');
+		expect(find(blocks, (node) => node.tagName === 'TR' && node.textContent.includes('Telegram'))).toBeDefined();
+		expect(find(blocks, (node) => node.tagName === 'TR'
+			&& node.textContent.toLowerCase().includes('invalidation'))).toBeDefined();
+		expect(blocks.textContent).toContain('50%');
+		expect(findButton(summaryForm, 'Copy JSON').hidden).toBe(false);
 	});
 
 	it.each([
@@ -1282,6 +1376,600 @@ describe('admin browser client', () => {
 		expect(copyButton.textContent).toBe('Copy JSON');
 	});
 
+	it('renders stored alerts as cards with sentiment, delivery chips, and lazy detail', async () => {
+		const receivedAt = new Date(Date.now() - 2 * 60 * 1000).toISOString();
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/alerts')) {
+					return response({
+						success: true,
+						alerts: [{
+							id: 'alert-9',
+							receivedAt,
+							text: 'BTCUSDT breakout confirmed',
+							enriched: true,
+							source: 'webhook',
+							enrichmentData: {
+								sentiment: 'bullish',
+								sentiment_score: 0.82,
+								insights: ['Volume confirms move'],
+								technical_levels: { supports: [81000], resistances: [85000] },
+								invalidation_level: 80000,
+								target_level: 90000,
+								setup_type: 'breakout',
+								risk_reward_ratio: '2.5:1',
+								prompt_provenance: { name: 'alert-enrichment', source: 'langfuse', version: 4 },
+								sources: [{ url: 'https://example.com/a', title: 'Example News' }],
+							},
+							tokenUsage: { inputTokens: 5, outputTokens: 7, totalTokens: 12 },
+							deliveryResults: [
+								{ channel: 'telegram', success: true },
+								{ channel: 'whatsapp', success: false },
+							],
+						}],
+						pagination: { hasMore: false },
+					});
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alerts');
+		await listForm.dispatch('submit');
+		await flush();
+
+		const card = find(listForm, (node) => node.className.includes('alert-card'));
+		expect(card).toBeDefined();
+		expect(card.textContent).toContain('BTCUSDT breakout confirmed');
+		expect(card.textContent).toContain('Bullish (0.82)');
+		expect(find(card, (node) => node.className.includes('delivery-ok')).textContent).toContain('Telegram');
+		expect(find(card, (node) => node.className.includes('delivery-fail')).textContent).toContain('WhatsApp');
+		expect(find(card, (node) => node.tagName === 'A')).toBeUndefined();
+
+		await findButton(card, 'Show detail').dispatch('click');
+		const link = find(card, (node) => node.tagName === 'A');
+		expect(link.href).toBe('https://example.com/a');
+		expect(link.attributes.rel).toBe('noopener noreferrer');
+		expect(card.textContent).toContain('Invalidation level');
+		expect(card.textContent).toContain('2.5:1');
+		expect(card.textContent).toContain('alert-enrichment');
+		expect(card.textContent).toContain('Token usage');
+
+		await findButton(card, 'Hide detail').dispatch('click');
+		expect(findButton(card, 'Hide detail')).toBeUndefined();
+		expect(findButton(card, 'Show detail')).toBeDefined();
+	});
+
+	it('keeps the raw stored-alerts payload behind a collapsed toggle with copy', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/alerts')) {
+					return response({ success: true, alerts: [{ id: 'a1', text: 'x', enriched: false }], pagination: {} });
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alerts');
+		await listForm.dispatch('submit');
+		await flush();
+
+		const rawToggle = find(listForm, (node) => node.tagName === 'DETAILS');
+		expect(rawToggle).toBeDefined();
+		const summary = find(rawToggle, (node) => node.tagName === 'SUMMARY');
+		expect(summary.textContent).toContain('Show raw response');
+		expect(findButton(listForm, 'Copy JSON').hidden).toBe(false);
+	});
+
+	it('paginates stored alerts backward through visited cursors', async () => {
+		const pages = [
+			{ alerts: [{ id: 'a1', text: 'first page alert', enriched: false }], pagination: { hasMore: true, nextBefore: 'cursor-2' } },
+			{ alerts: [{ id: 'a2', text: 'second page alert', enriched: false }], pagination: { hasMore: false } },
+		];
+		const requests = [];
+		const browser = createBrowser({
+			fetchImpl: async (url, options) => {
+				if (url === '/openapi.json') return response(contract);
+				requests.push([url, options]);
+				if (url.startsWith('/api/alerts')) {
+					const params = new URLSearchParams(url.split('?')[1] || '');
+					return response(params.get('before') === 'cursor-2' ? pages[1] : pages[0]);
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alerts');
+		await listForm.dispatch('submit');
+		await flush();
+		expect(listForm.textContent).toContain('first page alert');
+		expect(findButton(listForm, 'Previous page').disabled).toBe(true);
+
+		await findButton(listForm, 'Next page').dispatch('click');
+		await flush();
+		expect(requests.at(-1)[0]).toBe('/api/alerts?limit=50&before=cursor-2');
+		expect(listForm.textContent).toContain('second page alert');
+		expect(findButton(listForm, 'Previous page').disabled).toBe(false);
+		expect(findButton(listForm, 'Next page').disabled).toBe(true);
+
+		await findButton(listForm, 'Previous page').dispatch('click');
+		await flush();
+		expect(requests.at(-1)[0]).toBe('/api/alerts?limit=50');
+		expect(listForm.textContent).toContain('first page alert');
+	});
+
+	it('renders an empty state when no stored alerts match the filters', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/alerts')) return response({ success: true, alerts: [], pagination: {} });
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alerts');
+		await listForm.dispatch('submit');
+		await flush();
+
+		const empty = find(listForm, (node) => node.className === 'empty-state');
+		expect(empty).toBeDefined();
+		expect(empty.textContent).toContain('No stored alerts match these filters.');
+	});
+
+	it('renders an alert detail panel after a successful lookup by ID', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/alerts/alert-7') {
+					return response({ success: true, alert: { id: 'alert-7', text: 'detail body', enriched: false } });
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const detailForm = findForm(browser.elementsById.view, 'GET /api/alerts/{alertId}');
+		detailForm.elements['path-alertId'].value = 'alert-7';
+		await detailForm.dispatch('submit');
+		await flush();
+
+		const panel = find(detailForm, (node) => node.className.includes('alert-detail'));
+		expect(panel).toBeDefined();
+		expect(panel.textContent).toContain('Plain');
+		expect(panel.textContent).toContain('detail body');
+	});
+
+	it('renders a structured job panel with progress, results, and raw toggle', async () => {
+		const job = {
+			success: true,
+			jobId: 'job-panel',
+			type: 'expanded-analysis',
+			status: 'completed',
+			progress: { current: 2, total: 4, status: 'Analyzing symbols' },
+			createdAt: '2026-08-01T10:00:00.000Z',
+			totalDurationMs: 42000,
+			alertText: '📊 REPORT BODY',
+			results: [{ symbol: 'BINANCE:BTCUSDT', status: 'analyzed', price: 65000, rsi: 55.5 }],
+			deliveryResults: [{ channel: 'telegram', success: true }],
+		};
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/jobs/job-panel') return response(job);
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'jobs');
+
+		const statusForm = findForm(browser.elementsById.view, 'GET /api/jobs/{jobId}');
+		statusForm.elements['path-jobId'].value = 'job-panel';
+		await statusForm.dispatch('submit');
+		await flush();
+
+		const panel = find(statusForm, (node) => node.className.includes('job-panel'));
+		expect(panel).toBeDefined();
+		const fill = find(panel, (node) => node.className === 'progress-fill');
+		expect(fill.style).toBe('width: 50%;');
+		expect(panel.textContent).toContain('2 / 4');
+		expect(find(panel, (node) => node.tagName === 'TR' && node.textContent.includes('BINANCE:BTCUSDT'))).toBeDefined();
+		expect(find(panel, (node) => node.className === 'report-text').textContent).toContain('REPORT BODY');
+		expect(find(panel, (node) => node.className.includes('delivery-ok'))).toBeDefined();
+		expect(findButton(statusForm, 'Copy JSON').hidden).toBe(false);
+	});
+
+	it('auto-refreshes active jobs and stops on terminal status', async () => {
+		let statusCalls = 0;
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/jobs/job-live') {
+					statusCalls += 1;
+					return response(statusCalls === 1
+						? { jobId: 'job-live', type: 'market-scanner', status: 'processing', progress: { current: 1, total: 3 } }
+						: { jobId: 'job-live', type: 'market-scanner', status: 'completed', progress: { current: 3, total: 3 } });
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'jobs');
+
+		const statusForm = findForm(browser.elementsById.view, 'GET /api/jobs/{jobId}');
+		statusForm.elements['path-jobId'].value = 'job-live';
+		await statusForm.dispatch('submit');
+		await flush();
+		expect(statusCalls).toBe(1);
+		expect(findButton(statusForm, 'Pause auto-refresh').hidden).toBe(false);
+
+		for (const fireTimer of [...browser.timers.values()]) fireTimer();
+		await flush();
+		expect(statusCalls).toBe(2);
+
+		for (const fireTimer of [...browser.timers.values()]) fireTimer();
+		await flush();
+		expect(statusCalls).toBe(2);
+	});
+
+	it('pauses auto-refresh while a job is still processing', async () => {
+		let statusCalls = 0;
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/jobs/job-slow') {
+					statusCalls += 1;
+					return response({ jobId: 'job-slow', status: 'processing', progress: {} });
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'jobs');
+
+		const statusForm = findForm(browser.elementsById.view, 'GET /api/jobs/{jobId}');
+		statusForm.elements['path-jobId'].value = 'job-slow';
+		await statusForm.dispatch('submit');
+		await flush();
+
+		const pauseButton = findButton(statusForm, 'Pause auto-refresh');
+		expect(pauseButton.hidden).toBe(false);
+		await pauseButton.dispatch('click');
+		expect(findButton(statusForm, 'Resume auto-refresh')).toBeDefined();
+
+		for (const fireTimer of [...browser.timers.values()]) fireTimer();
+		await flush();
+		expect(statusCalls).toBe(1);
+	});
+
+	it('stops polling when the job ID input changes mid-refresh cycle', async () => {
+		let statusCalls = 0;
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/jobs/job-a') {
+					statusCalls += 1;
+					return response({ jobId: 'job-a', status: 'processing', progress: {} });
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'jobs');
+
+		const statusForm = findForm(browser.elementsById.view, 'GET /api/jobs/{jobId}');
+		statusForm.elements['path-jobId'].value = 'job-a';
+		await statusForm.dispatch('submit');
+		await flush();
+		expect(statusCalls).toBe(1);
+
+		statusForm.elements['path-jobId'].value = 'job-b';
+		await statusForm.elements['path-jobId'].dispatch('input');
+		for (const fireTimer of [...browser.timers.values()]) fireTimer();
+		await flush();
+		expect(statusCalls).toBe(1);
+	});
+
+	it('renders the volume confirmation verdict with a ratio meter', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/webhook/volume-confirmation') {
+					return response({
+						success: true,
+						symbol: 'BINANCE:BTCUSDT',
+						timeframe: '4h',
+						confirmed: true,
+						decision: 'confirm',
+						volumeRatio: 1.7,
+						analysis: { volume_analysis: { volume_strength: 'HIGH' } },
+					});
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'analysis');
+
+		const form = findForm(browser.elementsById.view, 'POST /api/webhook/volume-confirmation');
+		await form.dispatch('submit');
+		await flush();
+
+		const verdict = find(form, (node) => node.className.includes('verdict-panel'));
+		expect(verdict).toBeDefined();
+		expect(verdict.textContent).toContain('Confirmed');
+		expect(verdict.textContent).toContain('BINANCE:BTCUSDT · 4h');
+		expect(verdict.textContent).toContain('1.7x average volume');
+		expect(verdict.textContent).toContain('Strength: HIGH');
+		expect(findButton(form, 'Copy JSON').hidden).toBe(false);
+	});
+
+	it('renders news-monitor result cards with confidence and dry-run notice', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/news-monitor')) {
+					return response({
+						success: true,
+						dryRun: true,
+						summary: { analyzed: 1, alerts_sent: 1 },
+						results: [{
+							symbol: 'BTCUSDT',
+							status: 'analyzed',
+							alert: {
+								eventCategory: 'price_surge',
+								headline: 'Bitcoin breaks resistance',
+								confidence: 0.85,
+								sources: ['https://example.com/news'],
+							},
+						}],
+					});
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'analysis');
+
+		const form = findForm(browser.elementsById.view, 'POST /api/news-monitor');
+		await form.dispatch('submit');
+		await flush();
+
+		const results = find(form, (node) => node.className === 'dashboard news-results');
+		expect(results).toBeDefined();
+		expect(results.textContent).toContain('Dry run');
+		expect(results.textContent).toContain('Bitcoin breaks resistance');
+		expect(results.textContent).toContain('85% confidence');
+		expect(results.textContent).toContain('Analyzed: 1');
+		expect(find(results, (node) => node.tagName === 'LI' && node.textContent.includes('example.com/news'))).toBeDefined();
+	});
+
+	it('renders market-scanner sections with ranked score tables and trend chips', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/webhook/market-scanner-alert')) {
+					return response({
+						success: true,
+						alertText: '📡 SCANNER REPORT',
+						scanResults: [{
+							scan: 'top_gainers',
+							status: 'success',
+							itemCount: 1,
+							scores: [{
+								symbol: 'ETHUSDT',
+								score: 83,
+								reason: '+3.5% · RSI 62',
+								trendConfluence: { status: 'aligned', direction: 'bullish', confidence: 82 },
+							}],
+						}],
+						deliveryResults: [{ channel: 'telegram', success: true }],
+					});
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'analysis');
+
+		const form = findForm(browser.elementsById.view, 'POST /api/webhook/market-scanner-alert');
+		await form.dispatch('submit');
+		await flush();
+
+		const report = find(form, (node) => node.className === 'dashboard analysis-report');
+		expect(report).toBeDefined();
+		expect(find(report, (node) => node.className === 'report-text').textContent).toContain('SCANNER REPORT');
+		const row = find(report, (node) => node.tagName === 'TR' && node.textContent.includes('ETHUSDT'));
+		expect(row).toBeDefined();
+		expect(row.textContent).toContain('83');
+		expect(row.textContent).toContain('Aligned bullish (82%)');
+		expect(find(report, (node) => node.className.includes('delivery-ok'))).toBeDefined();
+	});
+
+	it('stops in-flight auto-refresh polling when the jobs view detaches', async () => {
+		let statusCalls = 0;
+		let releasePoll;
+		const slowPoll = new Promise((resolve) => { releasePoll = resolve; });
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/jobs/job-live') {
+					statusCalls += 1;
+					if (statusCalls === 1) {
+						return response({ jobId: 'job-live', type: 'market-scanner', status: 'processing', progress: { current: 1, total: 3 } });
+					}
+					return slowPoll.then(() => response({ jobId: 'job-live', status: 'processing', progress: {} }));
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'jobs');
+
+		const statusForm = findForm(browser.elementsById.view, 'GET /api/jobs/{jobId}');
+		statusForm.elements['path-jobId'].value = 'job-live';
+		await statusForm.dispatch('submit');
+		await flush();
+		expect(statusCalls).toBe(1);
+
+		for (const fireTimer of [...browser.timers.values()]) fireTimer();
+		await flush();
+		expect(statusCalls).toBe(2);
+
+		await selectView(browser, 'overview');
+
+		releasePoll();
+		await flush();
+		expect(statusCalls).toBe(2);
+
+		for (const fireTimer of [...browser.timers.values()]) fireTimer();
+		await flush();
+		expect(statusCalls).toBe(2);
+	});
+
+	it('renders an unknown volume verdict separately from denial', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/webhook/volume-confirmation') {
+					return response({
+						success: true,
+						symbol: 'BINANCE:ETHUSDT',
+						timeframe: '1h',
+						confirmed: null,
+						decision: 'unknown',
+					});
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'analysis');
+
+		const form = findForm(browser.elementsById.view, 'POST /api/webhook/volume-confirmation');
+		await form.dispatch('submit');
+		await flush();
+
+		const verdict = find(form, (node) => node.className.includes('verdict-panel'));
+		expect(verdict).toBeDefined();
+		const badge = find(verdict, (node) => node.className.includes('status-badge'));
+		expect(badge.className).toContain('status-active');
+		expect(badge.textContent).toBe('Unknown');
+		expect(find(verdict, (node) => node.className.includes('status-danger'))).toBeUndefined();
+	});
+
+	it('reads dry-run analysis reports from the nested payload.alertText', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/webhook/expanded-analysis-alert')) {
+					return response({
+						success: true,
+						dryRun: true,
+						payload: { alertText: '📊 ANÁLISIS AMPLIADO (dry run)' },
+						results: [{ symbol: 'BINANCE:BTCUSDT', status: 'analyzed' }],
+						summary: { total: 1, analyzed: 1, delivered: 0 },
+					});
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'analysis');
+
+		const form = findForm(browser.elementsById.view, 'POST /api/webhook/expanded-analysis-alert');
+		await form.dispatch('submit');
+		await flush();
+
+		const report = find(form, (node) => node.className === 'dashboard analysis-report');
+		expect(report).toBeDefined();
+		expect(report.textContent).toContain('ANÁLISIS AMPLIADO (dry run)');
+	});
+
+	it('reads the persisted camelCase promptProvenance field in alert details', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/alerts')) {
+					return response({
+						success: true,
+						alerts: [{
+							id: 'alert-p',
+							text: 'provenance alert',
+							enriched: true,
+							enrichmentData: {
+								sentiment: 'bullish',
+								promptProvenance: { name: 'alert-enrichment', source: 'langfuse', version: 7 },
+							},
+						}],
+						pagination: {},
+					});
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alerts');
+		await listForm.dispatch('submit');
+		await flush();
+
+		const card = find(listForm, (node) => node.className.includes('alert-card'));
+		await findButton(card, 'Show detail').dispatch('click');
+		expect(card.textContent).toContain('Prompt: alert-enrichment (langfuse v7)');
+	});
+
+	it('serializes stored-alert pagination so a slow page cannot interleave', async () => {
+		const pages = [
+			{ alerts: [{ id: 'a1', text: 'first page alert', enriched: false }], pagination: { hasMore: true, nextBefore: 'cursor-2' } },
+			{ alerts: [{ id: 'a2', text: 'second page alert', enriched: false }], pagination: { hasMore: true, nextBefore: 'cursor-3' } },
+			{ alerts: [{ id: 'a3', text: 'third page alert', enriched: false }], pagination: { hasMore: false } },
+		];
+		let alertCalls = 0;
+		let releaseSlowPage;
+		const slowPage = new Promise((resolve) => { releaseSlowPage = resolve; });
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/alerts')) {
+					alertCalls += 1;
+					if (alertCalls === 2) return slowPage.then(() => response(pages[2]));
+					return response(pages[alertCalls - 1]);
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alerts');
+		await listForm.dispatch('submit');
+		await flush();
+		expect(listForm.textContent).toContain('first page alert');
+
+		const nextButton = findButton(listForm, 'Next page');
+		const prevButton = findButton(listForm, 'Previous page');
+		const click = nextButton.dispatch('click');
+		await flush();
+		expect(alertCalls).toBe(2);
+		expect(nextButton.disabled).toBe(true);
+		expect(prevButton.disabled).toBe(true);
+
+		releaseSlowPage();
+		await click;
+		await flush();
+		expect(listForm.textContent).toContain('third page alert');
+		expect(findButton(listForm, 'Next page').disabled).toBe(true);
+	});
+
 	it('clears the raw-status copy payload when a later refresh fails', async () => {
 		const status = {
 			service: { name: 'cabros-bot', version: '0.1.0', environment: 'production', commit: 'abc123' },
@@ -1318,9 +2006,990 @@ describe('admin browser client', () => {
 		expect(copyButton.hidden).toBe(true);
 	});
 
+	it('sends job actions confirmed during an in-flight auto-refresh', async () => {
+		const requests = [];
+		let statusCalls = 0;
+		let releasePoll;
+		const slowPoll = new Promise((resolve) => { releasePoll = resolve; });
+		const browser = createBrowser({
+			fetchImpl: async (url, options) => {
+				if (url === '/openapi.json') return response(contract);
+				requests.push([url, options?.method || 'GET']);
+				if (url === '/api/jobs/job-live') {
+					statusCalls += 1;
+					if (statusCalls === 1) {
+						return response({ jobId: 'job-live', type: 'market-scanner', status: 'processing', progress: { current: 1, total: 3 } });
+					}
+					return slowPoll.then(() => response({ jobId: 'job-live', status: 'processing', progress: {} }));
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'jobs');
+
+		const statusForm = findForm(browser.elementsById.view, 'GET /api/jobs/{jobId}');
+		statusForm.elements['path-jobId'].value = 'job-live';
+		await statusForm.dispatch('submit');
+		await flush();
+
+		const cancelButton = findButton(statusForm, 'Cancel job');
+		expect(cancelButton).toBeDefined();
+
+		for (const fireTimer of [...browser.timers.values()]) fireTimer();
+		await flush();
+		expect(statusCalls).toBe(2);
+
+		await cancelButton.dispatch('click');
+		await flush();
+
+		expect(requests.some(([url, method]) => url.includes('/api/jobs/job-live/cancel') && method === 'POST')).toBe(true);
+
+		releasePoll();
+		await flush();
+	});
+
+	it('removes the fallback textarea even when execCommand throws', async () => {
+		const status = {
+			service: { name: 'cabros-bot' },
+			featureFlags: {},
+			deliveryChannels: {},
+			dependencies: {},
+		};
+		const browser = createBrowser({
+			fetchImpl: async (url) => response(url === '/openapi.json' ? contract : (url === '/api/status' ? status : {})),
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'overview');
+		await flush();
+
+		browser.context.document.execCommand = () => { throw new Error('blocked'); };
+		const copyButton = findButton(browser.elementsById.view, 'Copy JSON');
+		await copyButton.dispatch('click');
+		await flush();
+
+		expect(copyButton.textContent).toBe('Copy unavailable');
+		expect(find(browser.body, (node) => node.tagName === 'TEXTAREA')).toBeUndefined();
+	});
+
+	it('reports a successful execCommand fallback and cleans up its textarea', async () => {
+		const status = {
+			service: { name: 'cabros-bot' },
+			featureFlags: {},
+			deliveryChannels: {},
+			dependencies: {},
+		};
+		const browser = createBrowser({
+			fetchImpl: async (url) => response(url === '/openapi.json' ? contract : (url === '/api/status' ? status : {})),
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'overview');
+		await flush();
+
+		browser.context.document.execCommand = () => true;
+		const copyButton = findButton(browser.elementsById.view, 'Copy JSON');
+		await copyButton.dispatch('click');
+		await flush();
+
+		expect(copyButton.textContent).toBe('Copied!');
+		expect(find(browser.body, (node) => node.tagName === 'TEXTAREA')).toBeUndefined();
+	});
+
+	it('clears a previous structured result when the next submission fails validation', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/alerts/alert-7') {
+					return response({ success: true, alert: { id: 'alert-7', text: 'detail body', enriched: false } });
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const detailForm = findForm(browser.elementsById.view, 'GET /api/alerts/{alertId}');
+		detailForm.elements['path-alertId'].value = 'alert-7';
+		await detailForm.dispatch('submit');
+		await flush();
+		expect(find(detailForm, (node) => node.className.includes('alert-detail'))).toBeDefined();
+
+		detailForm.elements.query.value = '{ invalid json';
+		await detailForm.dispatch('submit');
+		await flush();
+
+		expect(find(detailForm, (node) => node.className.includes('alert-detail'))).toBeUndefined();
+		expect(detailForm.textContent).toContain('Query must be valid JSON');
+	});
+
+	it('resets pagination state when alert filters change', async () => {
+		let alertCalls = 0;
+		const pages = [
+			{ alerts: [{ id: 'a1', text: 'first page alert', enriched: false }], pagination: { hasMore: true, nextBefore: 'cursor-2' } },
+			{ alerts: [{ id: 'a2', text: 'second page alert', enriched: false }], pagination: { hasMore: false } },
+		];
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/alerts')) {
+					alertCalls += 1;
+					return response(pages[alertCalls - 1] || pages[0]);
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alerts');
+		await listForm.dispatch('submit');
+		await flush();
+		const nextButton = findButton(listForm, 'Next page');
+		expect(nextButton.disabled).toBe(false);
+
+		listForm.elements.source.value = 'webhook';
+		await listForm.elements.source.dispatch('input');
+
+		expect(nextButton.disabled).toBe(true);
+		expect(findButton(listForm, 'Previous page').disabled).toBe(true);
+		expect(listForm.textContent).not.toContain('first page alert');
+		expect(findButton(listForm, 'Copy JSON').hidden).toBe(true);
+		expect(find(listForm, (node) => node.tagName === 'PRE' && node.textContent.includes('first page alert'))).toBeUndefined();
+
+		await nextButton.dispatch('click');
+		await flush();
+		expect(alertCalls).toBe(1);
+	});
+
+	it('clears stale stored-alert cards when a later refresh fails', async () => {
+		let alertCalls = 0;
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/alerts')) {
+					alertCalls += 1;
+					if (alertCalls === 1) {
+						return response({ success: true, alerts: [{ id: 'a1', text: 'first page alert', enriched: false }], pagination: {} });
+					}
+					return response({ error: 'boom' }, 500);
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alerts');
+		await listForm.dispatch('submit');
+		await flush();
+		expect(listForm.textContent).toContain('first page alert');
+		expect(findButton(listForm, 'Copy JSON').hidden).toBe(false);
+
+		await listForm.dispatch('submit');
+		await flush();
+
+		expect(listForm.textContent).not.toContain('first page alert');
+		expect(findButton(listForm, 'Copy JSON').hidden).toBe(true);
+	});
+
+	it('resets pagination when the before cursor is edited manually', async () => {
+		let alertCalls = 0;
+		const pages = [
+			{ alerts: [{ id: 'a1', text: 'first page alert', enriched: false }], pagination: { hasMore: true, nextBefore: 'cursor-2' } },
+			{ alerts: [{ id: 'a2', text: 'second page alert', enriched: false }], pagination: { hasMore: false } },
+		];
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/alerts')) {
+					alertCalls += 1;
+					return response(pages[alertCalls - 1] || pages[0]);
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alerts');
+		await listForm.dispatch('submit');
+		await flush();
+		const nextButton = findButton(listForm, 'Next page');
+		expect(nextButton.disabled).toBe(false);
+
+		listForm.elements.before.value = 'hand-edited-cursor';
+		await listForm.elements.before.dispatch('input');
+
+		expect(nextButton.disabled).toBe(true);
+		await nextButton.dispatch('click');
+		await flush();
+		expect(alertCalls).toBe(1);
+	});
+
+	it('clears the raw analytics payload when a later summary refresh fails', async () => {
+		let summaryCalls = 0;
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/alerts/summary')) {
+					summaryCalls += 1;
+					if (summaryCalls === 1) {
+						return response({ success: true, summary: { totalAlerts: 3, window: {} } });
+					}
+					return response({ error: 'boom' }, 500);
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const summaryForm = findForm(browser.elementsById.view, 'GET /api/alerts/summary');
+		await summaryForm.dispatch('submit');
+		await flush();
+		expect(findButton(summaryForm, 'Copy JSON').hidden).toBe(false);
+
+		await summaryForm.dispatch('submit');
+		await flush();
+
+		expect(findButton(summaryForm, 'Copy JSON').hidden).toBe(true);
+		const rawPre = find(summaryForm, (node) => node.tagName === 'PRE' && node.textContent.includes('totalAlerts'));
+		expect(rawPre).toBeUndefined();
+	});
+
+	it('reschedules job auto-refresh after a transient status failure', async () => {
+		let statusCalls = 0;
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/jobs/job-live') {
+					statusCalls += 1;
+					if (statusCalls === 1) return response({ jobId: 'job-live', type: 'market-scanner', status: 'processing', progress: { current: 1, total: 3 } });
+					if (statusCalls === 2) return response({ error: 'boom' }, 500);
+					return response({ jobId: 'job-live', type: 'market-scanner', status: 'completed', progress: { current: 3, total: 3 } });
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'jobs');
+
+		const statusForm = findForm(browser.elementsById.view, 'GET /api/jobs/{jobId}');
+		statusForm.elements['path-jobId'].value = 'job-live';
+		await statusForm.dispatch('submit');
+		await flush();
+		expect(statusCalls).toBe(1);
+
+		for (const fireTimer of [...browser.timers.values()]) fireTimer();
+		await flush();
+		expect(statusCalls).toBe(2);
+		expect(findButton(statusForm, 'Pause auto-refresh').hidden).toBe(false);
+
+		for (const fireTimer of [...browser.timers.values()]) fireTimer();
+		await flush();
+		expect(statusCalls).toBe(3);
+		expect(findButton(statusForm, 'Pause auto-refresh').hidden).toBe(true);
+	});
+
+	it('labels dry-run news alerts as generated instead of sent', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/news-monitor')) {
+					return response({
+						success: true,
+						dryRun: true,
+						summary: { analyzed: 1, alerts_sent: 1 },
+						results: [{ symbol: 'BTCUSDT', status: 'analyzed', alert: { eventCategory: 'price_surge', headline: 'Breakout', confidence: 0.9 } }],
+					});
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'analysis');
+
+		const form = findForm(browser.elementsById.view, 'POST /api/news-monitor');
+		await form.dispatch('submit');
+		await flush();
+
+		expect(form.textContent).toContain('Alerts generated: 1');
+		expect(form.textContent).not.toContain('Alerts sent');
+	});
+
+	it('clears the raw analysis payload when the next submission fails validation', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/webhook/volume-confirmation') {
+					return response({ success: true, symbol: 'BINANCE:BTCUSDT', confirmed: true, decision: 'confirm', volumeRatio: 1.7, analysis: { volume_analysis: { volume_strength: 'HIGH' } } });
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'analysis');
+
+		const form = findForm(browser.elementsById.view, 'POST /api/webhook/volume-confirmation');
+		await form.dispatch('submit');
+		await flush();
+		expect(findButton(form, 'Copy JSON').hidden).toBe(false);
+
+		form.elements.body.value = '{ invalid';
+		await form.dispatch('submit');
+		await flush();
+
+		expect(findButton(form, 'Copy JSON').hidden).toBe(true);
+		const staleRaw = find(form, (node) => node.tagName === 'PRE' && node.textContent.includes('volume_ratio'));
+		expect(staleRaw).toBeUndefined();
+	});
+
+	it('disables Next when hasMore is false even if a cursor is present', async () => {
+		const pages = [
+			{ alerts: [{ id: 'a1', text: 'first page alert', enriched: false }], pagination: { hasMore: true, nextBefore: 'cursor-2' } },
+			{ alerts: [{ id: 'a2', text: 'last page alert', enriched: false }], pagination: { hasMore: false, nextBefore: 'cursor-last' } },
+		];
+		let alertCalls = 0;
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/alerts')) {
+					alertCalls += 1;
+					return response(pages[alertCalls - 1] || pages[1]);
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alerts');
+		await listForm.dispatch('submit');
+		await flush();
+		expect(findButton(listForm, 'Next page').disabled).toBe(false);
+
+		await findButton(listForm, 'Next page').dispatch('click');
+		await flush();
+		expect(listForm.textContent).toContain('last page alert');
+		expect(findButton(listForm, 'Next page').disabled).toBe(true);
+	});
+
+	it('keeps the back-stack entry when a Next page request fails', async () => {
+		let alertCalls = 0;
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/alerts')) {
+					alertCalls += 1;
+					if (alertCalls === 1) {
+						return response({ alerts: [{ id: 'a1', text: 'first page alert', enriched: false }], pagination: { hasMore: true, nextBefore: 'cursor-2' } });
+					}
+					return response({ error: 'boom' }, 500);
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alerts');
+		await listForm.dispatch('submit');
+		await flush();
+		expect(findButton(listForm, 'Previous page').disabled).toBe(true);
+
+		await findButton(listForm, 'Next page').dispatch('click');
+		await flush();
+
+		expect(findButton(listForm, 'Previous page').disabled).toBe(true);
+	});
+
+	it('keeps history when navigating back to a previous page fails', async () => {
+		let alertCalls = 0;
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/alerts')) {
+					alertCalls += 1;
+					if (alertCalls === 3) return response({ error: 'boom' }, 500);
+					return response(alertCalls === 1
+						? { alerts: [{ id: 'a1', text: 'first page alert', enriched: false }], pagination: { hasMore: true, nextBefore: 'cursor-2' } }
+						: { alerts: [{ id: 'a2', text: 'second page alert', enriched: false }], pagination: { hasMore: false } });
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alerts');
+		await listForm.dispatch('submit');
+		await flush();
+		await findButton(listForm, 'Next page').dispatch('click');
+		await flush();
+		expect(listForm.textContent).toContain('second page alert');
+		expect(findButton(listForm, 'Previous page').disabled).toBe(false);
+
+		await findButton(listForm, 'Previous page').dispatch('click');
+		await flush();
+
+		expect(findButton(listForm, 'Previous page').disabled).toBe(false);
+	});
+
+	it('discards an in-flight page response after filters change', async () => {
+		let alertCalls = 0;
+		let releaseNext;
+		const slowNext = new Promise((resolve) => { releaseNext = resolve; });
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/alerts')) {
+					alertCalls += 1;
+					if (alertCalls === 2) return slowNext.then(() => response({ alerts: [{ id: 'a2', text: 'second page alert', enriched: false }], pagination: { hasMore: false } }));
+					return response({ alerts: [{ id: 'a1', text: 'first page alert', enriched: false }], pagination: { hasMore: true, nextBefore: 'cursor-2' } });
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alerts');
+		await listForm.dispatch('submit');
+		await flush();
+
+		const click = findButton(listForm, 'Next page').dispatch('click');
+		await flush();
+		expect(alertCalls).toBe(2);
+
+		listForm.elements.source.value = 'webhook';
+		await listForm.elements.source.dispatch('input');
+
+		releaseNext();
+		await click;
+		await flush();
+
+		expect(listForm.textContent).not.toContain('second page alert');
+		expect(findButton(listForm, 'Previous page').disabled).toBe(true);
+		expect(findButton(listForm, 'Next page').disabled).toBe(true);
+	});
+
+	it('stops job polling when the user signs out mid-refresh', async () => {
+		let authStateChanged;
+		const user = {
+			getIdToken: jest.fn().mockResolvedValue('firebase-token'),
+			getIdTokenResult: jest.fn().mockResolvedValue({ claims: { roles: ['admin.operator'] } }),
+		};
+		const auth = {
+			setPersistence: jest.fn().mockResolvedValue(undefined),
+			onAuthStateChanged: jest.fn((listener) => {
+				authStateChanged = listener;
+				listener(null);
+				return jest.fn();
+			}),
+			signInWithEmailAndPassword: jest.fn(async () => {
+				await authStateChanged(user);
+				return { user };
+			}),
+			signOut: jest.fn(async () => {
+				await authStateChanged(null);
+			}),
+		};
+		const firebase = { initializeApp: jest.fn(), auth: jest.fn(() => auth) };
+		let statusCalls = 0;
+		let releasePoll;
+		const slowPoll = new Promise((resolve) => { releasePoll = resolve; });
+		const browser = createBrowser({
+			firebase,
+			fetchImpl: async (url) => {
+				if (url === '/admin/auth-config') {
+					return response({ enabled: true, configured: true, config: { apiKey: 'k', authDomain: 'a', projectId: 'p' } });
+				}
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/jobs/job-live') {
+					statusCalls += 1;
+					if (statusCalls === 1) return response({ jobId: 'job-live', type: 'market-scanner', status: 'processing', progress: {} });
+					return slowPoll.then(() => response({ jobId: 'job-live', status: 'processing', progress: {} }));
+				}
+				return response({});
+			},
+		});
+		await flush();
+		browser.elementsById['auth-email'].value = 'operator@example.com';
+		browser.elementsById['auth-password'].value = 'password';
+		await browser.elementsById['sign-in'].dispatch('click');
+		await flush();
+		await selectView(browser, 'jobs');
+
+		const statusForm = findForm(browser.elementsById.view, 'GET /api/jobs/{jobId}');
+		statusForm.elements['path-jobId'].value = 'job-live';
+		await statusForm.dispatch('submit');
+		await flush();
+
+		for (const fireTimer of [...browser.timers.values()]) fireTimer();
+		await flush();
+		expect(statusCalls).toBe(2);
+
+		await browser.elementsById['sign-out'].dispatch('click');
+		await flush();
+
+		releasePoll();
+		await flush();
+		for (const fireTimer of [...browser.timers.values()]) fireTimer();
+		await flush();
+		expect(statusCalls).toBe(2);
+	});
+
+	it('stops auto-refresh on definitive failures but retries transient ones', async () => {
+		let statusCalls = 0;
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/jobs/job-gone') {
+					statusCalls += 1;
+					if (statusCalls === 1) return response({ jobId: 'job-gone', type: 'market-scanner', status: 'processing', progress: {} });
+					return response({ error: 'not found' }, 404);
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'jobs');
+
+		const statusForm = findForm(browser.elementsById.view, 'GET /api/jobs/{jobId}');
+		statusForm.elements['path-jobId'].value = 'job-gone';
+		await statusForm.dispatch('submit');
+		await flush();
+
+		for (const fireTimer of [...browser.timers.values()]) fireTimer();
+		await flush();
+		expect(statusCalls).toBe(2);
+
+		for (const fireTimer of [...browser.timers.values()]) fireTimer();
+		await flush();
+		expect(statusCalls).toBe(2);
+		expect(findButton(statusForm, 'Pause auto-refresh').hidden).toBe(true);
+	});
+
+	it('trims pasted job IDs before guarding and requesting', async () => {
+		const requests = [];
+		let statusCalls = 0;
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.includes('/api/jobs/job-live')) {
+					statusCalls += 1;
+					requests.push(url);
+					return response(statusCalls === 1
+						? { jobId: 'job-live', type: 'market-scanner', status: 'completed', progress: { current: 1, total: 1 } }
+						: {});
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'jobs');
+
+		const statusForm = findForm(browser.elementsById.view, 'GET /api/jobs/{jobId}');
+		statusForm.elements['path-jobId'].value = '  job-live  ';
+		await statusForm.dispatch('submit');
+		await flush();
+
+		expect(requests.some((url) => url === '/api/jobs/job-live')).toBe(true);
+		expect(findButton(statusForm, 'Get job status').disabled).toBe(false);
+	});
+
+	it('clears the generated before cursor when non-cursor filters change', async () => {
+		let lastUrl = '';
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/alerts')) {
+					lastUrl = url;
+					return response({ alerts: [{ id: 'a1', text: 'page alert', enriched: false }], pagination: { hasMore: true, nextBefore: 'cursor-2' } });
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alerts');
+		await listForm.dispatch('submit');
+		await flush();
+		await findButton(listForm, 'Next page').dispatch('click');
+		await flush();
+		expect(lastUrl).toContain('before=cursor-2');
+
+		listForm.elements.source.value = 'webhook';
+		await listForm.elements.source.dispatch('input');
+		expect(listForm.elements.before.value).toBe('');
+
+		await listForm.dispatch('submit');
+		await flush();
+		expect(lastUrl).not.toContain('before=');
+	});
+
+	it('restores the list form immediately when filters change mid-request', async () => {
+		let alertCalls = 0;
+		let releaseSlow;
+		const slowRequest = new Promise((resolve) => { releaseSlow = resolve; });
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/alerts')) {
+					alertCalls += 1;
+					if (alertCalls === 1) return slowRequest.then(() => response({ alerts: [{ id: 'a1', text: 'slow page alert', enriched: false }], pagination: { hasMore: false } }));
+					return response({ alerts: [], pagination: {} });
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alerts');
+		const loadButton = findButton(listForm, 'Load alerts');
+		const click = listForm.dispatch('submit');
+		await flush();
+		expect(alertCalls).toBe(1);
+
+		listForm.elements.source.value = 'webhook';
+		await listForm.elements.source.dispatch('input');
+
+		expect(loadButton.disabled).toBe(false);
+
+		releaseSlow();
+		await flush();
+		expect(findButton(listForm, 'Load alerts').disabled).toBe(false);
+		expect(listForm.textContent).not.toContain('slow page alert');
+		expect(listForm.textContent).toContain('Filters changed');
+	});
+
+	it('invalidates pending analytics when report filters change', async () => {
+		let summaryCalls = 0;
+		let releaseSlow;
+		const slowSummary = new Promise((resolve) => { releaseSlow = resolve; });
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/alerts/summary')) {
+					summaryCalls += 1;
+					if (summaryCalls === 1) return slowSummary.then(() => response({ success: true, summary: { totalAlerts: 9, window: {} } }));
+					return response({ success: true, summary: { totalAlerts: 1, window: {} } });
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const summaryForm = findForm(browser.elementsById.view, 'GET /api/alerts/summary');
+		const loadButton = findButton(summaryForm, 'Load alert analytics');
+		await summaryForm.dispatch('submit');
+		await flush();
+		expect(summaryCalls).toBe(1);
+
+		summaryForm.elements.source.value = 'webhook';
+		await summaryForm.elements.source.dispatch('input');
+
+		expect(loadButton.disabled).toBe(false);
+		expect(findButton(summaryForm, 'Copy JSON').hidden).toBe(true);
+
+		releaseSlow();
+		await flush();
+		expect(find(summaryForm, (node) => node.tagName === 'PRE' && node.textContent.includes('totalAlerts'))).toBeUndefined();
+		expect(summaryForm.textContent).toContain('Filters changed');
+	});
+
+	it('renders dedicated outcomes filters and follows the returned before cursor', async () => {
+		let outcomesPage = 0;
+		const requests = [];
+		const browser = createBrowser({
+			fetchImpl: async (url, options) => {
+				if (url === '/openapi.json') return response(contract);
+				requests.push([url, options]);
+				if (url.startsWith('/api/outcomes')) {
+					outcomesPage++;
+					return response({
+						success: true,
+						outcomes: [
+							{
+								id: `doc-${outcomesPage}`,
+								symbol: 'BTCUSDT',
+								exchange: 'BINANCE',
+								side: 'BUY',
+								price: 65000,
+								outcomeEvaluated: true,
+								outcomes: {
+									'1h': { status: 'evaluated', return: 1.5, rMultiple: 0.5, maxFavorableExcursion: 2.0, maxAdverseExcursion: -0.2, firstHit: 'target' },
+								},
+							},
+						],
+						pagination: outcomesPage === 1
+							? { hasMore: true, nextBefore: 'cursor-outcome-2' }
+							: { hasMore: false },
+					});
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'outcomes');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/outcomes');
+		expect(listForm).toBeDefined();
+		expect(listForm.elements.limit).toBeDefined();
+		expect(listForm.elements.before).toBeDefined();
+		expect(listForm.elements.symbol).toBeDefined();
+		expect(listForm.elements.exchange).toBeDefined();
+		expect(listForm.elements.status).toBeDefined();
+		expect(listForm.elements.window).toBeDefined();
+		expect(listForm.elements.from).toBeDefined();
+		expect(listForm.elements.to).toBeDefined();
+
+		listForm.elements.limit.value = '25';
+		listForm.elements.symbol.value = 'BTCUSDT';
+		listForm.elements.exchange.value = 'BINANCE';
+		listForm.elements.status.value = 'evaluated';
+		listForm.elements.window.value = '1h';
+		await listForm.dispatch('submit');
+		await flush();
+
+		expect(requests.at(-1)[0]).toBe('/api/outcomes?limit=25&symbol=BTCUSDT&exchange=BINANCE&status=evaluated&window=1h');
+		expect(listForm.textContent).toContain('1 outcomes on this page');
+		expect(listForm.textContent).toContain('BTCUSDT · BINANCE');
+
+		const nextButton = findButton(listForm, 'Next page');
+		expect(nextButton.disabled).toBe(false);
+		await nextButton.dispatch('click');
+		await flush();
+
+		expect(requests.at(-1)[0]).toBe('/api/outcomes?limit=25&before=cursor-outcome-2&symbol=BTCUSDT&exchange=BINANCE&status=evaluated&window=1h');
+
+		const prevButton = findButton(listForm, 'Previous page');
+		expect(prevButton.disabled).toBe(false);
+		await prevButton.dispatch('click');
+		await flush();
+
+		expect(requests.at(-1)[0]).toBe('/api/outcomes?limit=25&symbol=BTCUSDT&exchange=BINANCE&status=evaluated&window=1h');
+	});
+
+	it('renders dedicated outcomes summary query and builds metrics dashboard', async () => {
+		const requests = [];
+		const browser = createBrowser({
+			fetchImpl: async (url, options) => {
+				if (url === '/openapi.json') return response(contract);
+				requests.push([url, options]);
+				if (url.startsWith('/api/outcomes/summary')) {
+					return response({
+						success: true,
+						summary: {
+							totalSignalsReceived: 10,
+							totalSignalsEligible: 8,
+							totalSignalsEvaluated: 6,
+							totalSignalsPending: 2,
+							winRatePercent: 75,
+							expectancyR: 1.25,
+							averageReturnPercent: 2.34,
+							averageMfePercent: 3.5,
+							averageMaePercent: -0.8,
+							windows: {
+								'1h': {
+									totalSignals: 6,
+									hitRatePercent: 66.67,
+									targetHitRatePercent: 50.0,
+									stopHitRatePercent: 16.67,
+									expectancyR: 1.1,
+									averageReturnPercent: 1.8,
+									averageMfePercent: 2.5,
+									averageMaePercent: -0.5,
+								},
+							},
+						},
+					});
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'outcomes');
+
+		const summaryForm = findForm(browser.elementsById.view, 'GET /api/outcomes/summary');
+		expect(summaryForm).toBeDefined();
+		summaryForm.elements.symbol.value = 'ETHUSDT';
+		summaryForm.elements.status.value = 'evaluated';
+		await summaryForm.dispatch('submit');
+		await flush();
+
+		expect(requests.at(-1)[0]).toBe('/api/outcomes/summary?limit=50&symbol=ETHUSDT&status=evaluated');
+		expect(summaryForm.textContent).toContain('Hit rate');
+		expect(summaryForm.textContent).toContain('75%');
+		expect(summaryForm.textContent).toContain('Average return');
+		expect(summaryForm.textContent).toContain('+2.34%');
+		expect(summaryForm.textContent).toContain('Performance by window');
+		expect(summaryForm.textContent).toContain('66.67%');
+	});
+
+	it('safely renders outcome cards with excursions, barriers, and expandable detail', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/outcomes')) {
+					return response({
+						success: true,
+						outcomes: [
+							{
+								id: 'outcome-detail-doc-1',
+								requestId: 'req-abc-123',
+								source: 'market-scanner',
+								symbol: 'SOLUSDT',
+								exchange: 'BINANCE',
+								assetClass: 'crypto',
+								timeframe: '4h',
+								setupType: 'breakout',
+								score: 85,
+								side: 'BUY',
+								price: 145.5,
+								stop: 140.0,
+								target: 155.0,
+								entryPriceSource: 'binance',
+								marketDataProvider: 'binance',
+								eligibilityState: 'supported_provider',
+								outcomeEvaluated: true,
+								outcomes: {
+									'1h': { status: 'evaluated', return: 2.1, rMultiple: 0.8, maxFavorableExcursion: 3.2, maxAdverseExcursion: -0.4, firstHit: 'target', price: 148.5 },
+									'4h': { status: 'pending' },
+									'1D': { status: 'unavailable', reason: 'market closed' },
+								},
+								tokenUsage: { inputTokens: 120, outputTokens: 60, totalTokens: 180, totalCost: 0.0005 },
+								processingTimeMs: 250,
+							},
+						],
+						pagination: { hasMore: false },
+					});
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'outcomes');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/outcomes');
+		await listForm.dispatch('submit');
+		await flush();
+
+		expect(listForm.textContent).toContain('SOLUSDT · BINANCE');
+		expect(listForm.textContent).toContain('BUY');
+		expect(listForm.textContent).toContain('Evaluated');
+		expect(listForm.textContent).toContain('Score: 85');
+		expect(listForm.textContent).toContain('145.5');
+		expect(listForm.textContent).toContain('+2.10%');
+		expect(listForm.textContent).toContain('+0.80R');
+		expect(listForm.textContent).toContain('+3.20% / -0.40%');
+		expect(listForm.textContent).toContain('First: target');
+
+		const detailButton = findButton(listForm, 'Show detail');
+		expect(detailButton).toBeDefined();
+		await detailButton.dispatch('click');
+		await flush();
+
+		expect(detailButton.textContent).toBe('Hide detail');
+		expect(listForm.textContent).toContain('req-abc-123');
+		expect(listForm.textContent).toContain('market-scanner');
+		expect(listForm.textContent).toContain('180 total');
+		expect(listForm.textContent).toContain('250 ms');
+	});
+
+	it('handles 403 FEATURE_DISABLED and 503 STORAGE_UNAVAILABLE cleanly on outcomes requests', async () => {
+		let currentStatus = 403;
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/outcomes')) {
+					return response({
+						error: currentStatus === 403 ? 'Feature disabled' : 'Storage unavailable',
+						code: currentStatus === 403 ? 'FEATURE_DISABLED' : 'STORAGE_UNAVAILABLE',
+					}, currentStatus);
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'outcomes');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/outcomes');
+		await listForm.dispatch('submit');
+		await flush();
+
+		expect(listForm.textContent).toContain('HTTP 403');
+		expect(listForm.textContent).toContain('FEATURE_DISABLED');
+
+		currentStatus = 503;
+		await listForm.dispatch('submit');
+		await flush();
+
+		expect(listForm.textContent).toContain('HTTP 503');
+		expect(listForm.textContent).toContain('STORAGE_UNAVAILABLE');
+	});
+
+	it('invalidates pending outcomes list and summary responses when filters change', async () => {
+		let releaseList;
+		let releaseSummary;
+		const slowList = new Promise((resolve) => { releaseList = resolve; });
+		const slowSummary = new Promise((resolve) => { releaseSummary = resolve; });
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/outcomes/summary')) {
+					return slowSummary.then(() => response({ success: true, summary: { totalSignalsReceived: 5 } }));
+				}
+				if (url.startsWith('/api/outcomes')) {
+					return slowList.then(() => response({ success: true, outcomes: [{ id: 'doc-stale', symbol: 'BTCUSDT' }] }));
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'outcomes');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/outcomes');
+		const listButton = findButton(listForm, 'Load outcomes');
+		const listSubmit = listForm.dispatch('submit');
+		await flush();
+
+		listForm.elements.symbol.value = 'XRPUSDT';
+		await listForm.elements.symbol.dispatch('input');
+
+		expect(listButton.disabled).toBe(false);
+		expect(findButton(listForm, 'Copy JSON').hidden).toBe(true);
+
+		releaseList();
+		await flush();
+		await listSubmit;
+		expect(listForm.textContent).toContain('Filters changed');
+		expect(listForm.textContent).not.toContain('doc-stale');
+
+		const summaryForm = findForm(browser.elementsById.view, 'GET /api/outcomes/summary');
+		const summaryButton = findButton(summaryForm, 'Load outcomes summary');
+		const summarySubmit = summaryForm.dispatch('submit');
+		await flush();
+
+		summaryForm.elements.symbol.value = 'ADAUSDT';
+		await summaryForm.elements.symbol.dispatch('input');
+
+		expect(summaryButton.disabled).toBe(false);
+
+		releaseSummary();
+		await flush();
+		await summarySubmit;
+		expect(summaryForm.textContent).toContain('Filters changed');
+	});
+
 	it('keeps navigation icons as inline SVG instead of platform glyphs', () => {
 		const shell = fs.readFileSync(path.join(__dirname, '../../src/admin/index.html'), 'utf8');
-		expect(shell.match(/<svg class="nav-icon"/g)).toHaveLength(7);
+		expect(shell.match(/<svg class="nav-icon"/g)).toHaveLength(8);
 		expect(shell).not.toMatch(/[⌂◈◉◇◌✦▷]/);
 	});
 });

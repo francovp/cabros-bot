@@ -67,6 +67,70 @@ function parseOptionalSetupType(value) {
 	return SETUP_TYPES.has(normalized) ? normalized : undefined;
 }
 
+const MAX_TECHNICAL_LEVELS_PER_SIDE = 6;
+const ZERO_SOURCE_SENTIMENT_SCORE_CAP = 0.55;
+
+// Validates one raw level entry: finite numbers and non-empty strings are kept as-is,
+// everything else (objects, arrays, blanks, NaN) is dropped so no fabricated structure persists.
+function parseTechnicalLevelEntry(value) {
+	if (typeof value === 'number' && Number.isFinite(value)) {
+		return value;
+	}
+
+	if (typeof value === 'string') {
+		const trimmed = value.trim();
+		return trimmed ? trimmed : undefined;
+	}
+
+	return undefined;
+}
+
+const NUMERIC_LEVEL_STRING_OPTIONS = { useGrouping: false, maximumFractionDigits: 20 };
+
+// Formatters expect string levels (smartEscapeMarkdownV2 only accepts strings), so
+// numeric entries are normalized to their exact decimal representation here.
+// String() preserves full double precision (e.g. 1e-21 stays "1e-21") where
+// toLocaleString with a 20-digit cap would round tiny values to "0".
+function formatTechnicalLevelEntry(entry) {
+	if (typeof entry === 'number') {
+		return Number.isInteger(entry)
+			? entry.toLocaleString('en-US', NUMERIC_LEVEL_STRING_OPTIONS)
+			: String(entry);
+	}
+
+	return entry;
+}
+
+// Re-introduced by GH-509 / CB-226: the alert-enrichment prompt asks the model for a
+// technical_levels object, but PR #34 stopped parsing it. Levels are only surfaced
+// downstream when TradingView MCP data is absent/failed (see alert handler merge),
+// and are provenance-tagged there so consumers can distinguish provider quality.
+function parseOptionalTechnicalLevels(value) {
+	if (!value || typeof value !== 'object' || Array.isArray(value)) {
+		return undefined;
+	}
+
+	// Validate/normalize every entry first, deduplicate, then cap — malformed or
+	// duplicated early entries must not consume the per-side quota.
+	const parseLevelSide = side => (Array.isArray(value[side])
+		? [...new Set(
+			value[side]
+				.map(parseTechnicalLevelEntry)
+				.filter(entry => entry !== undefined)
+				.map(formatTechnicalLevelEntry),
+		)].slice(0, MAX_TECHNICAL_LEVELS_PER_SIDE)
+		: []);
+
+	const supports = parseLevelSide('supports');
+	const resistances = parseLevelSide('resistances');
+
+	if (supports.length === 0 && resistances.length === 0) {
+		return undefined;
+	}
+
+	return { supports, resistances };
+}
+
 function getPromptProvenance(prompt) {
 	const name = typeof prompt?.name === 'string' && prompt.name.trim()
 		? prompt.name.trim()
@@ -608,7 +672,7 @@ async function generateEnrichedAlert({ text, searchResults = [], searchResultTex
 	if (text.length < 15 || text.split(/\s+/).length < 2) {
 		return {
 			sentiment: 'NEUTRAL',
-			sentiment_score: 0.5,
+			sentiment_score: 0,
 			insights: [],
 		};
 	}
@@ -651,7 +715,7 @@ async function generateEnrichedAlert({ text, searchResults = [], searchResultTex
 				console.warn('[Gemini] Non-retryable provider error, returning neutral enrichment:', error.message);
 				return {
 					sentiment: 'NEUTRAL',
-					sentiment_score: 0.5,
+					sentiment_score: 0,
 					insights: [],
 					modelUsed: GEMINI_MODEL_NAME || 'unknown',
 					...(promptProvenance ? { promptProvenance, prompt_provenance: promptProvenance } : {}),
@@ -663,41 +727,38 @@ async function generateEnrichedAlert({ text, searchResults = [], searchResultTex
 			}
 
 			console.warn('[Gemini] Primary enrichment model failed, attempting fallback model:', GEMINI_MODEL_NAME_FALLBACK);
-			llmResult = await genaiClient.llmCallv2({
+			const fallbackParams = {
 				...llmParams,
 				opts: {
 					...llmParams.opts,
 					model: GEMINI_MODEL_NAME_FALLBACK,
 				},
-			});
+			};
+			llmResult = await genaiClient.llmCallv2(fallbackParams);
 		}
 
-		const { text: responseText, usage, modelUsed } = llmResult;
-
-		if (tokenUsage && usage) {
-			const modelName = modelUsed || GEMINI_MODEL_NAME;
-			tokenUsage.addUsage(usage, modelName);
+		if (tokenUsage && llmResult.usage) {
+			tokenUsage.addUsage(llmResult.usage, llmResult.modelUsed || GEMINI_MODEL_NAME || 'gemini');
 		}
 
+		const parsed = parseEnrichedAlertResponse(llmResult.text, searchResults);
 		return {
-			...parseEnrichedAlertResponse(responseText),
-			modelUsed: modelUsed || GEMINI_MODEL_NAME,
+			...parsed,
+			modelUsed: llmResult.modelUsed || GEMINI_MODEL_NAME || 'unknown',
 			...(promptProvenance ? { promptProvenance, prompt_provenance: promptProvenance } : {}),
 		};
 	} catch (error) {
-		if (signal?.aborted || error.name === 'AbortError' || error.message === 'Grounding timeout' || (typeof error.message === 'string' && error.message.includes('timeout'))) {
-			throw error;
-		}
-		throw new Error(`Enriched alert generation failed: ${error.message}`);
+		console.error('[Gemini] Alert enrichment failed:', error.message);
+		throw error;
 	}
 }
 
 /**
- * Parse and validate Gemini enriched alert response
- * @param {string} response - Raw Gemini response
- * @returns {object} Validated enriched alert data
+ * Parse structured enriched alert response from Gemini
+ * @param {string} response - Raw JSON string from Gemini
+ * @returns {object} Parsed enriched alert data with safe defaults
  */
-function parseEnrichedAlertResponse(response) {
+function parseEnrichedAlertResponse(response, sources) {
 	try {
 		const jsonMatch = response.match(/\{[\s\S]*\}/);
 		if (!jsonMatch) {
@@ -711,17 +772,51 @@ function parseEnrichedAlertResponse(response) {
 			parsed.sentiment = 'NEUTRAL';
 		}
 
+		let sentimentScore = 0;
+		if (parsed.sentiment === 'BULLISH') {
+			const raw = typeof parsed.sentiment_score === 'number' && Number.isFinite(parsed.sentiment_score)
+				? parsed.sentiment_score
+				: 0.5;
+			const clamped = Math.max(-1, Math.min(1, raw));
+			sentimentScore = Math.abs(clamped) || 0.5;
+		} else if (parsed.sentiment === 'BEARISH') {
+			const raw = typeof parsed.sentiment_score === 'number' && Number.isFinite(parsed.sentiment_score)
+				? parsed.sentiment_score
+				: -0.5;
+			const clamped = Math.max(-1, Math.min(1, raw));
+			const absVal = Math.abs(clamped);
+			sentimentScore = absVal === 0 ? -0.5 : -absVal;
+		} else {
+			sentimentScore = 0;
+		}
+		const shouldCalibrate = Array.isArray(sources)
+			&& sources.length === 0
+			&& Math.abs(sentimentScore) > ZERO_SOURCE_SENTIMENT_SCORE_CAP;
+		const calibratedSentimentScore = shouldCalibrate
+			? Math.sign(sentimentScore) * ZERO_SOURCE_SENTIMENT_SCORE_CAP
+			: sentimentScore;
+
+		const parsedSetupType = parseOptionalSetupType(parsed.setup_type);
+		const parsedSetupEvidence = parsedSetupType && typeof parsed.setup_evidence === 'string' && parsed.setup_evidence.trim()
+			? parsed.setup_evidence.trim()
+			: undefined;
+
 		const optionalRiskMetadata = {
 			invalidation_level: parseOptionalRiskValue(parsed.invalidation_level),
 			target_level: parseOptionalRiskValue(parsed.target_level),
-			setup_type: parseOptionalSetupType(parsed.setup_type),
+			setup_type: parsedSetupType,
+			setup_evidence: parsedSetupEvidence,
 			risk_reward_ratio: parseOptionalRiskValue(parsed.risk_reward_ratio),
 		};
 
+		const technicalLevels = parseOptionalTechnicalLevels(parsed.technical_levels);
+
 		return {
 			sentiment: parsed.sentiment,
-			sentiment_score: Math.max(0, Math.min(1, parsed.sentiment_score || 0.5)),
+			sentiment_score: calibratedSentimentScore,
+			...(shouldCalibrate ? { sentiment_score_raw: sentimentScore } : {}),
 			insights: Array.isArray(parsed.insights) ? parsed.insights : [],
+			...(technicalLevels ? { technical_levels: technicalLevels } : {}),
 			...Object.fromEntries(
 				Object.entries(optionalRiskMetadata).filter(([, value]) => value !== undefined),
 			),
@@ -730,7 +825,7 @@ function parseEnrichedAlertResponse(response) {
 		console.warn(`[Gemini] Response parsing failed, using safe defaults: ${error.message}`);
 		return {
 			sentiment: 'NEUTRAL',
-			sentiment_score: 0.5,
+			sentiment_score: 0,
 			insights: [],
 		};
 	}

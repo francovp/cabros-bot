@@ -37,6 +37,22 @@ describe('Postman collection contract', () => {
 		]));
 	});
 
+	it('documents groundingCoalescing dependency in the Get Status response example', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const status = findItem(collection.item, 'Get Status');
+
+		expect(status).toBeDefined();
+		const responseBody = JSON.parse(status.response[0].body);
+		expect(responseBody.dependencies.groundingCoalescing).toEqual({
+			enabled: false,
+			windowMs: 0,
+			activeEntries: 0,
+			hits: 0,
+			misses: 0,
+			failures: 0,
+		});
+	});
+
 	it('documents x-idempotency-key on the alert webhook request', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const sendAlert = findItem(collection.item, 'POST Send Alert');
@@ -127,4 +143,63 @@ describe('Postman collection contract', () => {
 			durationMs: 450,
 		}));
 	});
+
+	it('documents current_price and price_data in the TradingView dry-run example', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const sendAlert = findItem(collection.item, 'POST Send Alert Dry Run (TradingView confluence)');
+		const full = sendAlert.response.find((response) => response.name === 'Dry run - full TradingView enrichment');
+		const enrichedData = JSON.parse(full.body).payload.enrichedData;
+
+		expect(enrichedData.current_price).toBe(64863.03);
+		expect(enrichedData.price_data).toEqual({ current_price: 64863.03, high: 65000, low: 64000 });
+	});
+
+	it('aligns Binance MARKET quantity dry-run example with request and runtime response', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const marketSell = findItem(collection.item, 'POST Binance order (valid MARKET quantity dry-run)');
+		expect(marketSell).toBeDefined();
+
+		const requestBody = JSON.parse(marketSell.request.body.raw);
+		const responseBody = JSON.parse(marketSell.response[0].body);
+
+		expect(requestBody.side).toBe('SELL');
+		expect(requestBody.type).toBe('MARKET');
+		expect(typeof requestBody.quantity).toBe('number');
+		expect(requestBody.quantity).toBe(0.001);
+		expect(requestBody.clientOrderId).toBeUndefined();
+		expect(requestBody.dryRun).toBe(true);
+
+		expect(responseBody.success).toBe(true);
+		expect(responseBody.dryRun).toBe(true);
+		expect(responseBody.order.symbol).toBe('BTCUSDT');
+		expect(responseBody.order.side).toBe('SELL');
+		expect(responseBody.order.type).toBe('MARKET');
+		expect(responseBody.order.quantity).toBe(requestBody.quantity);
+		expect(typeof responseBody.order.quantity).toBe('number');
+		expect(responseBody.order.newClientOrderId).toBeUndefined();
+		expect(responseBody.order.newOrderRespType).toBe('FULL');
+	});
+
+	it('aligns Binance dry-run response shapes across LIMIT and bounded MARKET BUY examples', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const limitDryRun = findItem(collection.item, 'POST Binance order (dry-run LIMIT)');
+		const marketBuyDryRun = findItem(collection.item, 'POST Binance order (bounded MARKET BUY quantity dry-run)');
+
+		expect(limitDryRun).toBeDefined();
+		expect(marketBuyDryRun).toBeDefined();
+
+		const limitResp = JSON.parse(limitDryRun.response[0].body);
+		expect(limitResp.dryRun).toBe(true);
+		expect(limitResp.order.quantity).toBe(0.001);
+		expect(typeof limitResp.order.quantity).toBe('number');
+		expect(limitResp.order.newOrderRespType).toBe('FULL');
+		expect(limitResp.order.newClientOrderId).toBeUndefined();
+
+		const marketBuyResp = JSON.parse(marketBuyDryRun.response[0].body);
+		expect(marketBuyResp.dryRun).toBe(true);
+		expect(marketBuyResp.order.quoteOrderQty).toBe('50');
+		expect(marketBuyResp.order.newOrderRespType).toBe('FULL');
+		expect(marketBuyResp.order.newClientOrderId).toBeUndefined();
+	});
 });
+

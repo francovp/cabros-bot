@@ -12,9 +12,11 @@ const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteCo
 const { AnalysisStatus, EventCategory } = require('./constants');
 const { GROUNDING_MODEL_NAME, ENABLE_NEWS_MONITOR_TEST_MODE } = require('../../../../services/grounding/config');
 const geminiQuotaManager = require('../../../../services/grounding/geminiQuotaManager');
+const geminiPriceService = require('../../../../services/grounding/geminiPriceService');
 const { getPromptService, PromptKeys } = require('../../../../services/prompts');
 const { MainClient } = require('binance');
 const { createHash } = require('node:crypto');
+const { TokenUsageTracker } = require('../../../../lib/tokenUsage');
 const {
 	sendWithNotificationRouting,
 	getRequestedChannels,
@@ -438,17 +440,30 @@ class NewsAnalyzer {
 				const currentIndex = nextIndex;
 				nextIndex += 1;
 				const symbol = symbols[currentIndex];
-				results[currentIndex] = await this.analyzeSymbol(symbol, requestId, tokenUsage, routing, batchStartedAt, options).catch(error => ({
-					symbol,
-					status: AnalysisStatus.ERROR,
-					error: {
-						code: isGeminiQuotaError(error) ? 'GEMINI_QUOTA_EXHAUSTED' : 'ANALYSIS_ERROR',
-						message: error.message,
-					},
-					totalDurationMs: 0,
-					cached: false,
-					requestId,
-				}));
+				const symbolTokenUsage = new TokenUsageTracker();
+				results[currentIndex] = await this.analyzeSymbol(symbol, requestId, symbolTokenUsage, routing, batchStartedAt, options)
+					.then((result) => {
+						if (tokenUsage) {
+							tokenUsage.merge(symbolTokenUsage);
+						}
+						return result;
+					})
+					.catch(error => {
+						if (tokenUsage) {
+							tokenUsage.merge(symbolTokenUsage);
+						}
+						return {
+							symbol,
+							status: AnalysisStatus.ERROR,
+							error: {
+								code: isGeminiQuotaError(error) ? 'GEMINI_QUOTA_EXHAUSTED' : 'ANALYSIS_ERROR',
+								message: error.message,
+							},
+							totalDurationMs: 0,
+							cached: false,
+							requestId,
+						};
+					});
 			}
 		};
 
@@ -573,6 +588,8 @@ class NewsAnalyzer {
 				if (cached) {
 					console.debug('[Analyzer] Returning cached result:', symbol, category);
 					let deliveryResults = cached.deliveryResults;
+					let redelivered = false;
+					let attemptedDeliveryResults = [];
 					if (cached.alert) {
 						const notificationMgr = getNotificationManager();
 						if (notificationMgr) {
@@ -688,6 +705,8 @@ class NewsAnalyzer {
 									const successfulRetryChannels = new Set(
 										retryResults.filter(result => result.success).map(result => result.channel),
 									);
+									attemptedDeliveryResults = retryResults.filter((result) => ownedRetryChannels.includes(result.channel));
+									redelivered = attemptedDeliveryResults.some((result) => result && result.success);
 									deliveryResults = mergeDeliveryResults(
 										activeCachedDeliveryResults,
 										retryResults.filter((result) => ownedRetryChannels.includes(result.channel)),
@@ -725,6 +744,9 @@ class NewsAnalyzer {
 						alert: cached.alert,
 						deliveryResults,
 						cached: true,
+						redelivered,
+						attemptedDeliveryResults,
+						originalPersistedState: cached.originalPersistedState,
 					};
 				}
 			}
@@ -841,32 +863,39 @@ class NewsAnalyzer {
 
 		const signalOutcomeService = require('../../../../services/storage/SignalOutcomeService');
 		if (signalOutcomeService.isEnabled()) {
-			const side = (alert.sentimentScore > 0) ? 'BUY' : 'SELL';
-			const stop = (alert.marketContext && typeof alert.marketContext.stop === 'number')
-				? alert.marketContext.stop
-				: (typeof alert.stop === 'number' ? alert.stop : null);
-			const target = (alert.marketContext && typeof alert.marketContext.target === 'number')
-				? alert.marketContext.target
-				: (typeof alert.target === 'number' ? alert.target : null);
+			const sentimentScore = typeof alert.sentimentScore === 'number' ? alert.sentimentScore : 0;
+			const hasUncertainty = typeof alert.uncertainty_reason === 'string' && alert.uncertainty_reason.trim().length > 0;
+			const meetsConviction = Math.abs(sentimentScore) >= 0.15 && !hasUncertainty;
 
-			signalOutcomeService.recordSignal({
-				requestId,
-				source: 'news-monitor',
-				symbol: alert.symbol,
-				assetClass: options.assetClassBySymbol
-					? options.assetClassBySymbol[String(alert.symbol).trim().toUpperCase()]
-					: null,
-				exchange: alert.marketContext && alert.marketContext.source === 'binance' ? 'BINANCE' : 'UNKNOWN',
-				timeframe: null,
-				setupType: 'news-alert',
-				score: alert.confidence,
-				side,
-				price: alert.marketContext ? alert.marketContext.price : null,
-				stop,
-				target,
-				sources: alert.sources || [],
-				tokenUsage: alert.enriched ? alert.enriched.tokenUsage : null,
-			}).catch(() => {});
+			if (meetsConviction) {
+				const side = (sentimentScore > 0) ? 'BUY' : 'SELL';
+				const stop = (alert.marketContext && typeof alert.marketContext.stop === 'number')
+					? alert.marketContext.stop
+					: (typeof alert.stop === 'number' ? alert.stop : null);
+				const target = (alert.marketContext && typeof alert.marketContext.target === 'number')
+					? alert.marketContext.target
+					: (typeof alert.target === 'number' ? alert.target : null);
+
+				signalOutcomeService.recordSignal({
+					requestId,
+					source: 'news-monitor',
+					symbol: alert.symbol,
+					assetClass: options.assetClassBySymbol
+						? options.assetClassBySymbol[String(alert.symbol).trim().toUpperCase()]
+						: null,
+					exchange: alert.marketContext && alert.marketContext.source === 'binance' ? 'BINANCE' : 'UNKNOWN',
+					timeframe: null,
+					setupType: 'news-alert',
+					score: alert.confidence,
+					side,
+					price: alert.marketContext ? alert.marketContext.price : null,
+					priceSource: alert.marketContext ? alert.marketContext.source : null,
+					stop,
+					target,
+					sources: alert.sources || [],
+					tokenUsage: alert.enriched ? alert.enriched.tokenUsage : null,
+				}).catch(() => {});
+			}
 		}
 
 		// Cache the final results (updates the claimed cache entry with final metadata/results)
@@ -1018,99 +1047,15 @@ class NewsAnalyzer {
 	 * Fetch price via Gemini GoogleSearch
 	 * Extracts numeric price data from grounded search snippets
 	 * @param {string} symbol - Financial symbol
+	 * @param {TokenUsageTracker} [tokenUsage] - Optional token usage tracker
 	 * @returns {Promise<Object>} MarketContext with parsed price/change or null
 	 */
 	async fetchGeminiPrice(symbol, tokenUsage) {
-
-		if (ENABLE_NEWS_MONITOR_TEST_MODE) {
-			console.debug(`[Analyzer] Test mode enabled - returning mock Gemini price for ${symbol}`);
-			return {
-				price: 123.45,
-				change24h: 1.23,
-				source: 'gemini-grounding-test-mode',
-				timestamp: Date.now(),
-				context: 'Mocked price data for testing purposes.',
-				sources: ['https://example.com/mock-price'],
-			};
-		}
-
-		const genaiClient = require('../../../../services/grounding/genaiClient');
-		let { price, change24h } = { price: null, change24h: null };
-		let timeoutHandle;
-
-		try {
-			// Timeout wrapper (~20s for Gemini)
-			const timeoutMs = 30000;
-			const timeoutPromise = new Promise((_, reject) => {
-				timeoutHandle = setTimeout(() => reject(new Error('Gemini fetch timeout')), timeoutMs);
-			});
-
-			const { text: priceQuery } = await promptService.getTextPrompt(
-				PromptKeys.MARKET_PRICE_FETCH,
-				{ symbol },
-			);
-
-			// Use Gemini GoogleSearch to fetch current price
-			const priceSearchPromise = genaiClient.search({
-				query: priceQuery,
-				maxResults: 3,
-				rethrowQuotaErrors: true,
-			});
-
-			const priceSearchResult = await Promise.race([priceSearchPromise, timeoutPromise]);
-			clearTimeout(timeoutHandle);
-
-			if (tokenUsage && priceSearchResult && priceSearchResult.usage) {
-				tokenUsage.addUsage(priceSearchResult.usage, GROUNDING_MODEL_NAME);
-			}
-
-			// Extract JSON from response - try to find valid JSON
-			let priceSearchResultParsed = null;
-			if (priceSearchResult.searchResultText) {
-				// Try multiple patterns to extract JSON
-				const jsonPatterns = [
-					/{[^{}]*"price"[^{}]*}/, // Look for object with "price" property first
-					/{[\s\S]*}/, // Fallback to any JSON-like structure
-				];
-
-				for (const pattern of jsonPatterns) {
-					const jsonMatch = priceSearchResult.searchResultText.match(pattern);
-					if (jsonMatch) {
-						try {
-							priceSearchResultParsed = JSON.parse(jsonMatch[0]);
-							break;
-						} catch (parseErr) {
-							// Continue to next pattern if this one fails
-							continue;
-						}
-					}
-				}
-			}
-
-			if (!priceSearchResultParsed) {
-				throw new Error('No valid JSON found in price search response');
-			}
-			price = parseFloat(priceSearchResultParsed.price);
-			change24h = parseFloat(priceSearchResultParsed.change_24h);
-
-			console.debug(`[Analyzer] Gemini GoogleSearch market context fetched for ${symbol}: price=$${price}, change24h=${change24h}%`);
-			return {
-				price,
-				change24h,
-				source: 'gemini-grounding',
-				timestamp: Date.now(),
-				context: priceSearchResultParsed.context || '',
-				sources: priceSearchResultParsed.sources || [],
-			};
-		} catch (error) {
-			if (isGeminiQuotaError(error)) {
-				throw error;
-			}
-			console.warn(`[Analyzer] Gemini price fetch failed for ${symbol}: ${error.message}`);
-			return null;
-		} finally {
-			clearTimeout(timeoutHandle);
-		}
+		return geminiPriceService.fetchGeminiPrice(symbol, {
+			tokenUsage,
+			timeoutMs: 30000,
+			rethrowQuotaErrors: true,
+		});
 	}
 
 	/**
@@ -1197,6 +1142,23 @@ class NewsAnalyzer {
 			}
 		}
 
+		if (geminiAnalysis.time_horizon && typeof geminiAnalysis.time_horizon === 'string' && geminiAnalysis.time_horizon.trim()) {
+			const horizonLabel = this.timeHorizonLabel(geminiAnalysis.time_horizon);
+			if (horizonLabel) {
+				context += `\n*Horizonte:* ${horizonLabel}`;
+			}
+		}
+
+		if (geminiAnalysis.invalidation_hint && typeof geminiAnalysis.invalidation_hint === 'string' && geminiAnalysis.invalidation_hint.trim()) {
+			context += `\n*Invalidación:* ${geminiAnalysis.invalidation_hint.trim()}`;
+		}
+
+		// Derive outcome barriers when marketContext has a valid numeric price
+		let derivedBarriers = null;
+		if (marketContext && typeof marketContext.price === 'number' && Number.isFinite(marketContext.price) && marketContext.price > 0) {
+			derivedBarriers = this.deriveBarriers(marketContext.price, geminiAnalysis.sentiment_score, geminiAnalysis.time_horizon);
+		}
+
 		// Build citations from sources
 		const citations = [];
 		if (geminiAnalysis.sources && Array.isArray(geminiAnalysis.sources)) {
@@ -1226,6 +1188,8 @@ class NewsAnalyzer {
 			citations,
 			extraText: enrichedExtraText,
 			tokenUsage: tokenUsageSummary || undefined,
+			time_horizon: geminiAnalysis.time_horizon,
+			invalidation_hint: geminiAnalysis.invalidation_hint,
 		};
 
 		return {
@@ -1252,6 +1216,12 @@ class NewsAnalyzer {
 			timestamp: Date.now(),
 			marketContext: marketContext || undefined,
 			enrichmentMetadata: enrichmentMetadata || undefined,
+			stop: (marketContext && typeof marketContext.stop === 'number')
+				? marketContext.stop
+				: (derivedBarriers ? derivedBarriers.stop : undefined),
+			target: (marketContext && typeof marketContext.target === 'number')
+				? marketContext.target
+				: (derivedBarriers ? derivedBarriers.target : undefined),
 		};
 	}
 
@@ -1298,6 +1268,17 @@ class NewsAnalyzer {
 			if (typeof marketContext.rsi === 'number') {
 				message += `RSI (14): ${marketContext.rsi.toFixed(1)}\n`;
 			}
+		}
+
+		if (analysis.time_horizon && typeof analysis.time_horizon === 'string' && analysis.time_horizon.trim()) {
+			const horizonLabel = this.timeHorizonLabel(analysis.time_horizon);
+			if (horizonLabel) {
+				message += `Horizonte: ${horizonLabel}\n`;
+			}
+		}
+
+		if (analysis.invalidation_hint && typeof analysis.invalidation_hint === 'string' && analysis.invalidation_hint.trim()) {
+			message += `Invalidación: ${analysis.invalidation_hint.trim()}\n`;
 		}
 
 		if (analysis.sources && Array.isArray(analysis.sources) && analysis.sources.length > 0) {
@@ -1347,6 +1328,84 @@ class NewsAnalyzer {
 		if (score < -0.5) return 'Bearish 📉';
 		if (score < 0) return 'Negative 📉';
 		return 'Neutral ➡️';
+	}
+
+	/**
+	 * Get human-friendly label for time horizon
+	 * @param {string} horizon - Time horizon
+	 * @returns {string} Label
+	 */
+	timeHorizonLabel(horizon) {
+		if (!horizon || typeof horizon !== 'string') return '';
+		const labels = {
+			very_short_term: 'Muy corto plazo',
+			short_term: 'Corto plazo',
+			medium_term: 'Medio plazo',
+			long_term: 'Largo plazo',
+		};
+		return labels[horizon.toLowerCase()] || horizon;
+	}
+
+	/**
+	 * Derive conservative barriers (stop and target) from price, sentiment, and time horizon.
+	 * @param {number} price - Entry price
+	 * @param {number} sentimentScore - Sentiment score [-1, 1]
+	 * @param {string} [timeHorizon='short_term'] - Time horizon string
+	 * @param {Object} [options] - Optional overrides for minConviction and rewardMultiplier
+	 * @returns {Object|null} { stop, target, side, stopPct, rewardMultiplier } or null if invalid/low conviction
+	 */
+	deriveBarriers(price, sentimentScore, timeHorizon, options = {}) {
+		if (typeof price !== 'number' || !Number.isFinite(price) || price <= 0) {
+			return null;
+		}
+		if (typeof sentimentScore !== 'number' || !Number.isFinite(sentimentScore)) {
+			return null;
+		}
+
+		const minConviction = typeof options.minConviction === 'number' ? options.minConviction : 0.15;
+		if (Math.abs(sentimentScore) < minConviction) {
+			return null;
+		}
+
+		const side = sentimentScore > 0 ? 'BUY' : 'SELL';
+		const TIME_HORIZON_STOP_PCT = {
+			very_short_term: 0.01,
+			short_term: 0.02,
+			medium_term: 0.035,
+			long_term: 0.05,
+		};
+		const normalizedHorizon = typeof timeHorizon === 'string' ? timeHorizon.toLowerCase() : 'short_term';
+		const stopPct = TIME_HORIZON_STOP_PCT[normalizedHorizon] || 0.02;
+		const rewardMultiplier = typeof options.rewardMultiplier === 'number' ? options.rewardMultiplier : 1.5;
+		const riskDistance = price * stopPct;
+
+		if (side === 'BUY') {
+			const stop = price - riskDistance;
+			const target = price + (rewardMultiplier * riskDistance);
+			if (stop > 0 && stop < price && target > price) {
+				return {
+					stop: parseFloat(stop.toFixed(8)),
+					target: parseFloat(target.toFixed(8)),
+					side,
+					stopPct,
+					rewardMultiplier,
+				};
+			}
+		} else {
+			const stop = price + riskDistance;
+			const target = price - (rewardMultiplier * riskDistance);
+			if (target > 0 && stop > price && target < price) {
+				return {
+					stop: parseFloat(stop.toFixed(8)),
+					target: parseFloat(target.toFixed(8)),
+					side,
+					stopPct,
+					rewardMultiplier,
+				};
+			}
+		}
+
+		return null;
 	}
 
 	/**

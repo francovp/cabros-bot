@@ -13,14 +13,20 @@ const DEFAULT_EXPORT_LIMIT = 500;
 const MAX_EXPORT_LIMIT = 1000;
 const EXPORT_FIELDS = [
 	'id',
+	'requestId',
 	'receivedAt',
 	'source',
 	'enriched',
 	'useTradingViewData',
 	'tradingViewEnrichmentApplied',
 	'tradingViewEnrichmentStatus',
+	'eventCategory',
+	'confidence',
+	'sentimentScore',
+	'dedupStatus',
 	'channels',
 	'deliveryResults',
+	'suppressedRepeat',
 	'tokenUsage',
 	'text',
 ];

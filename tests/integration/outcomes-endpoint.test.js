@@ -3,6 +3,7 @@
 jest.mock('../../src/services/storage/SignalOutcomeService', () => ({
 	isEnabled: jest.fn(),
 	listOutcomes: jest.fn(),
+	summarizeOutcomes: jest.fn(),
 	STORAGE_UNAVAILABLE_CODE: 'STORAGE_UNAVAILABLE',
 	INVALID_CURSOR_MESSAGE: 'Invalid before cursor. Use an ISO-8601 timestamp or the nextBefore cursor from a previous response.',
 }));
@@ -258,5 +259,199 @@ describe('Signal Outcomes API Integration Tests', () => {
 			.expect(200);
 
 		expect(res.body.success).toBe(true);
+	});
+
+	describe('GET /api/outcomes/summary', () => {
+		it('returns 401 when request lacks a valid api key', async () => {
+			const res = await request(app)
+				.get('/api/outcomes/summary')
+				.expect(401);
+
+			expect(res.body.error).toContain('Unauthorized');
+		});
+
+		it('returns 403 when signal outcome tracking is disabled', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(false);
+
+			const res = await request(app)
+				.get('/api/outcomes/summary')
+				.set('x-api-key', 'test-key')
+				.expect(403);
+
+			expect(res.body).toEqual({
+				error: 'Signal outcome tracking feature is disabled. Set ENABLE_SIGNAL_OUTCOME_TRACKING=true to enable.',
+				code: 'FEATURE_DISABLED',
+			});
+		});
+
+		it('returns 503 when Firestore is unavailable', async () => {
+			const error = new Error('Signal outcome tracking is enabled but Firestore is unavailable. Check Firestore credentials and project configuration.');
+			error.code = 'STORAGE_UNAVAILABLE';
+			signalOutcomeService.summarizeOutcomes.mockRejectedValue(error);
+
+			const res = await request(app)
+				.get('/api/outcomes/summary')
+				.set('x-api-key', 'test-key')
+				.expect(503);
+
+			expect(res.body).toEqual({
+				error: 'Signal outcome tracking is enabled but Firestore is unavailable. Check Firestore credentials and project configuration.',
+				code: 'STORAGE_UNAVAILABLE',
+			});
+		});
+
+		it('returns 400 for invalid query parameters', async () => {
+			let res = await request(app)
+				.get('/api/outcomes/summary?limit=0')
+				.set('x-api-key', 'test-key')
+				.expect(400);
+			expect(res.body.code).toBe('INVALID_REQUEST');
+
+			res = await request(app)
+				.get('/api/outcomes/summary?status=unknown')
+				.set('x-api-key', 'test-key')
+				.expect(400);
+			expect(res.body.code).toBe('INVALID_REQUEST');
+
+			res = await request(app)
+				.get('/api/outcomes/summary?window=2h')
+				.set('x-api-key', 'test-key')
+				.expect(400);
+			expect(res.body.code).toBe('INVALID_REQUEST');
+
+			res = await request(app)
+				.get('/api/outcomes/summary?from=not-a-date')
+				.set('x-api-key', 'test-key')
+				.expect(400);
+			expect(res.body.code).toBe('INVALID_REQUEST');
+
+			res = await request(app)
+				.get('/api/outcomes/summary?from=2026-08-23T20:00:00.000Z&to=2026-08-23T10:00:00.000Z')
+				.set('x-api-key', 'test-key')
+				.expect(400);
+			expect(res.body.code).toBe('INVALID_REQUEST');
+		});
+
+		it('returns 200 with summary for valid query with filters', async () => {
+			const mockSummary = {
+				available: true,
+				totalSignalsReceived: 5,
+				totalSignalsEligible: 5,
+				totalSignalsEvaluated: 5,
+				totalSignalsPending: 0,
+				totalSignalsUnavailable: 0,
+				coveragePercent: 100,
+				isCoverageComplete: true,
+				targetHitRatePercent: 80,
+				stopHitRatePercent: 20,
+				expectancyR: 1.2,
+				populationNote: 'Metrics represent 100% of received signals.',
+				exchangeBreakdown: { BINANCE: { received: 5, eligible: 5, evaluated: 5, pending: 0, unavailable: 0 } },
+				providerBreakdown: { binance: { received: 5, eligible: 5, evaluated: 5, pending: 0, unavailable: 0 } },
+				entryPriceSourceBreakdown: { 'tradingview-mcp': 5 },
+				eligibilityBreakdown: { supported_provider: 5 },
+				windows: {
+					'1h': {
+						totalSignals: 5,
+						hitRatePercent: 80,
+						targetEligibleWindows: 5,
+						stopEligibleWindows: 5,
+						targetHitRatePercent: 80,
+						stopHitRatePercent: 20,
+						expectancyR: 1.2,
+						averageReturnPercent: 2.1,
+						averageMfePercent: 3.0,
+						averageMaePercent: -0.4,
+						maxAdverseExcursionPercent: -1.0,
+					},
+				},
+				drawdownProxy: {
+					averageMaxAdverseExcursionPercent: -0.4,
+					absoluteMaxAdverseExcursionPercent: -1.0,
+				},
+				falsePositiveCandidatesCount: 0,
+				falsePositiveCandidates: [],
+				latencyCostMetadata: {
+					averageProcessingTimeMs: 110,
+					tokenUsage: { inputTokens: 400, outputTokens: 150, totalCost: 0.00012 },
+				},
+			};
+			signalOutcomeService.summarizeOutcomes.mockResolvedValue(mockSummary);
+
+			const res = await request(app)
+				.get('/api/outcomes/summary?symbol=BTCUSDT&exchange=BINANCE&status=evaluated&window=1h&limit=10')
+				.set('x-api-key', 'test-key')
+				.expect(200);
+
+			expect(signalOutcomeService.summarizeOutcomes).toHaveBeenCalledWith({
+				limit: 10,
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+				status: 'evaluated',
+				window: '1h',
+				from: undefined,
+				to: undefined,
+			});
+			expect(res.body).toEqual({
+				success: true,
+				summary: mockSummary,
+			});
+		});
+
+		it('returns 200 with typed empty summary when dataset is empty', async () => {
+			const emptySummary = {
+				available: false,
+				totalSignalsReceived: 0,
+				totalSignalsEligible: 0,
+				totalSignalsEvaluated: 0,
+				totalSignalsPending: 0,
+				totalSignalsUnavailable: 0,
+				coveragePercent: 0,
+				isCoverageComplete: true,
+				targetHitRatePercent: 0,
+				stopHitRatePercent: 0,
+				expectancyR: null,
+				populationNote: 'No outcome measurements found for the requested criteria.',
+				exchangeBreakdown: {},
+				providerBreakdown: {},
+				entryPriceSourceBreakdown: {},
+				eligibilityBreakdown: {},
+				windows: {},
+				drawdownProxy: {
+					averageMaxAdverseExcursionPercent: 0,
+					absoluteMaxAdverseExcursionPercent: 0,
+				},
+				falsePositiveCandidatesCount: 0,
+				falsePositiveCandidates: [],
+				latencyCostMetadata: {
+					averageProcessingTimeMs: null,
+					tokenUsage: { inputTokens: 0, outputTokens: 0, totalCost: 0 },
+				},
+			};
+			signalOutcomeService.summarizeOutcomes.mockResolvedValue(emptySummary);
+
+			const res = await request(app)
+				.get('/api/outcomes/summary')
+				.set('x-api-key', 'test-key')
+				.expect(200);
+
+			expect(res.body).toEqual({
+				success: true,
+				summary: emptySummary,
+			});
+		});
+
+		it('accepts api key in query parameters', async () => {
+			signalOutcomeService.summarizeOutcomes.mockResolvedValue({
+				available: false,
+				totalSignalsReceived: 0,
+			});
+
+			const res = await request(app)
+				.get('/api/outcomes/summary?api-key=test-key')
+				.expect(200);
+
+			expect(res.body.success).toBe(true);
+		});
 	});
 });

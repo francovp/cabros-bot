@@ -9,6 +9,8 @@ const admin = require('firebase-admin');
 const alertStorageService = require('../../src/services/storage/AlertStorageService');
 const remoteConfigService = require('../../src/services/remoteConfig/RemoteConfigService');
 const { tradingViewMcpService } = require('../../src/services/tradingview/TradingViewMcpService');
+const geminiQuotaManager = require('../../src/services/grounding/geminiQuotaManager');
+const groundingMetrics = require('../../src/services/grounding/metrics');
 const { getRoutes } = require('../../src/routes');
 
 const testPrivateKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({
@@ -26,6 +28,7 @@ describe('Status endpoints', () => {
 	let savedEnv;
 	let savedTradingViewRuntimeStatus;
 	let savedTradingViewVolumeRuntimeStatus;
+	let savedTradingViewEnrichmentEvents;
 	let app;
 	let tempDir;
 
@@ -33,6 +36,7 @@ describe('Status endpoints', () => {
 		savedEnv = saveEnv();
 		savedTradingViewRuntimeStatus = tradingViewMcpService.runtimeStatus;
 		savedTradingViewVolumeRuntimeStatus = tradingViewMcpService.volumeRuntimeStatus;
+		savedTradingViewEnrichmentEvents = tradingViewMcpService.enrichmentEvents;
 		tradingViewMcpService.runtimeStatus = {
 			status: 'unknown',
 			lastCheckedAt: null,
@@ -51,10 +55,13 @@ describe('Status endpoints', () => {
 			successCount: 0,
 			failureCount: 0,
 		};
+		tradingViewMcpService.enrichmentEvents = [];
 		admin.__resetApps();
 		admin.__resetCollectionState();
 		alertStorageService._resetForTesting();
 		remoteConfigService._resetForTesting();
+		geminiQuotaManager.resetForTesting();
+		groundingMetrics.resetForTesting();
 		Object.keys(process.env).forEach((key) => {
 			delete process.env[key];
 		});
@@ -90,12 +97,16 @@ describe('Status endpoints', () => {
 		delete process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT;
 		delete process.env.ENABLE_SIGNAL_OUTCOME_TRACKING;
 		delete process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING;
+		delete process.env.ENABLE_FIREBASE_ADMIN_AUTH;
 	});
 
 	afterEach(() => {
 		remoteConfigService._resetForTesting();
+		geminiQuotaManager.resetForTesting();
+		groundingMetrics.resetForTesting();
 		tradingViewMcpService.runtimeStatus = savedTradingViewRuntimeStatus;
 		tradingViewMcpService.volumeRuntimeStatus = savedTradingViewVolumeRuntimeStatus;
+		tradingViewMcpService.enrichmentEvents = savedTradingViewEnrichmentEvents;
 		restoreEnv(savedEnv);
 		if (tempDir) {
 			rmSync(tempDir, { recursive: true, force: true });
@@ -130,6 +141,32 @@ describe('Status endpoints', () => {
 			ready: true,
 			status: 'ready',
 		});
+		expect(response.body.dependencies.geminiQuota).toEqual({
+			enabled: true,
+			configured: true,
+			ready: true,
+			status: 'ready',
+			cooldownActive: false,
+			remainingCooldownMs: 0,
+			lastTriggeredAt: null,
+			triggersTotal: 0,
+			braveFallbacksDuringCooldown: 0,
+			lastBraveFallbackAt: null,
+			metrics: {
+				totalRequests: 0,
+				successRequests: 0,
+				failureRequests: 0,
+				timeoutRequests: 0,
+			},
+		});
+		expect(response.body.dependencies.groundingCoalescing).toEqual({
+			enabled: false,
+			windowMs: 0,
+			activeEntries: 0,
+			hits: 0,
+			misses: 0,
+			failures: 0,
+		});
 		expect(response.body.dependencies.tradingViewMcp).toEqual({
 			enabled: true,
 			configured: true,
@@ -158,6 +195,45 @@ describe('Status endpoints', () => {
 		});
 		expect(response.body.featureFlags.tradingViewConfluenceEnrichment).toBe(false);
 		expect(response.body.dependencies.sentry.status).toBe('ready');
+		expect(response.body.dependencies.webhookAuth).toEqual({
+			enabled: true,
+			configured: true,
+			ready: true,
+			status: 'ready',
+		});
+	});
+
+	it('exposes rolling alert-path MCP enrichment rates', async () => {
+		tradingViewMcpService.runtimeStatus = {
+			status: 'degraded',
+			lastCheckedAt: null,
+			lastSuccessAt: null,
+			lastFailureAt: null,
+			lastErrorCategory: null,
+			successCount: 0,
+			failureCount: 0,
+			enrichment: {
+				lastStatus: null,
+				fullCount: 0,
+				partialCount: 0,
+				failedCount: 0,
+			},
+		};
+		tradingViewMcpService._recordEnrichmentStatus('full');
+		tradingViewMcpService._recordEnrichmentStatus('failed');
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.tradingViewMcp.enrichment.alertPath).toEqual(expect.objectContaining({
+			totalCount: 2,
+			appliedCount: 1,
+			failedCount: 1,
+			appliedRate24h: 50,
+			failureRate24h: 50,
+		}));
 	});
 
 	it('reports tradingViewConfluenceEnrichment as true only when explicitly configured to true', async () => {
@@ -351,6 +427,35 @@ describe('Status endpoints', () => {
 		expect(response.body.featureFlags.messageFooterMetadata).toBe(false);
 	});
 
+	it('reports alert signal repeat suppression as disabled by default', async () => {
+		delete process.env.ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION;
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.alertSignalRepeatSuppression).toBe(false);
+		expect(response.body.dependencies.alertSignalRepeatSuppression).toEqual({
+			enabled: false,
+			suppressedCount: expect.any(Number),
+			lastSuppressedAt: null,
+			activeTrackedSignals: 0,
+		});
+	});
+
+	it('reports alert signal repeat suppression when enabled', async () => {
+		process.env.ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION = 'true';
+
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.alertSignalRepeatSuppression).toBe(true);
+		expect(response.body.dependencies.alertSignalRepeatSuppression.enabled).toBe(true);
+	});
+
 	it('reports safe Firebase Remote Config load metadata without values', async () => {
 		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
 
@@ -450,6 +555,7 @@ describe('Status endpoints', () => {
 			status: 'ready',
 			supportedExchanges: ['BATS', 'NASDAQ', 'NYSE', 'AMEX', 'NYSE ARCA', 'FX_IDC', 'SPCFD'],
 			timeoutMs: 5000,
+			rpm: 0,
 		});
 		expect(JSON.stringify(response.body)).not.toContain('secret-equity-key');
 	});
@@ -624,7 +730,79 @@ describe('Status endpoints', () => {
 			ready: false,
 			status: 'misconfigured',
 		});
+		expect(response.body.dependencies.geminiQuota).toEqual(expect.objectContaining({
+			enabled: true,
+			configured: false,
+			ready: false,
+			status: 'misconfigured',
+		}));
 	});
+
+	it('reports Gemini quota status as degraded when active cooldown is in effect', async () => {
+		const before = Date.now();
+		geminiQuotaManager.triggerQuotaCooldown({ status: 429, retryDelay: 5000 });
+		geminiQuotaManager.recordBraveFallbackDuringCooldown();
+		groundingMetrics.recordSuccess(100, 'ALERT_ENRICHMENT');
+		groundingMetrics.recordFailure('timeout', new Error('timeout'), 'ALERT_ENRICHMENT');
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.geminiQuota).toEqual({
+			enabled: true,
+			configured: true,
+			ready: false,
+			status: 'degraded',
+			cooldownActive: true,
+			remainingCooldownMs: expect.any(Number),
+			lastTriggeredAt: expect.any(String),
+			triggersTotal: 1,
+			braveFallbacksDuringCooldown: 1,
+			lastBraveFallbackAt: expect.any(String),
+			metrics: {
+				totalRequests: 2,
+				successRequests: 1,
+				failureRequests: 0,
+				timeoutRequests: 1,
+			},
+		});
+		expect(response.body.dependencies.geminiQuota.remainingCooldownMs).toBeGreaterThan(0);
+		expect(response.body.dependencies.geminiQuota.remainingCooldownMs).toBeLessThanOrEqual(5000);
+		const lastTriggeredTime = new Date(response.body.dependencies.geminiQuota.lastTriggeredAt).getTime();
+		expect(lastTriggeredTime).toBeGreaterThanOrEqual(before);
+	});
+
+	it('reports Gemini quota status as disabled when Gemini is disabled', async () => {
+		process.env.ENABLE_GEMINI_GROUNDING = 'false';
+		delete process.env.ENABLE_NEWS_MONITOR;
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.geminiQuota).toEqual({
+			enabled: false,
+			configured: true,
+			ready: false,
+			status: 'disabled',
+			cooldownActive: false,
+			remainingCooldownMs: 0,
+			lastTriggeredAt: null,
+			triggersTotal: 0,
+			braveFallbacksDuringCooldown: 0,
+			lastBraveFallbackAt: null,
+			metrics: {
+				totalRequests: 0,
+				successRequests: 0,
+				failureRequests: 0,
+				timeoutRequests: 0,
+			},
+		});
+	});
+
 
 	it('treats Gemini as enabled when news monitor depends on it', async () => {
 		process.env.ENABLE_GEMINI_GROUNDING = 'false';
@@ -1586,4 +1764,3 @@ describe('Status endpoints', () => {
 		});
 	});
 });
-

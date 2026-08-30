@@ -7,6 +7,9 @@ let totalRequests = 0;
 let successRequests = 0;
 let failureRequests = 0;
 let timeoutRequests = 0;
+let coalescingHits = 0;
+let coalescingMisses = 0;
+let coalescingFailures = 0;
 
 /**
  * Record a successful grounding operation
@@ -51,7 +54,61 @@ function recordFailure(reason, error, promptType = 'UNKNOWN') {
 	});
 }
 
+/**
+ * Get snapshot of grounding request metrics
+ * @returns {object}
+ */
+function getSnapshot() {
+	return {
+		totalRequests,
+		successRequests,
+		failureRequests,
+		timeoutRequests,
+	};
+}
+
+function recordCoalescingHit() {
+	coalescingHits++;
+	console.debug('[METRICS] Grounding search coalesced', { coalescingHits });
+}
+
+function recordCoalescingMiss() {
+	coalescingMisses++;
+}
+
+function recordCoalescingFailure() {
+	coalescingFailures++;
+	console.warn('[METRICS] Grounding search coalescing failed', { coalescingFailures });
+}
+
+function getCoalescingSnapshot() {
+	return {
+		hits: coalescingHits,
+		misses: coalescingMisses,
+		failures: coalescingFailures,
+	};
+}
+
+/**
+ * Reset metrics counters for testing
+ */
+function resetForTesting() {
+	totalRequests = 0;
+	successRequests = 0;
+	failureRequests = 0;
+	timeoutRequests = 0;
+	coalescingHits = 0;
+	coalescingMisses = 0;
+	coalescingFailures = 0;
+}
+
 module.exports = {
 	recordSuccess,
 	recordFailure,
+	getSnapshot,
+	recordCoalescingHit,
+	recordCoalescingMiss,
+	recordCoalescingFailure,
+	getCoalescingSnapshot,
+	resetForTesting,
 };

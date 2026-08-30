@@ -63,7 +63,7 @@ describe('OpenAPI contract', () => {
 			'DELETE /api/scanner-presets/{id}', 'POST /api/scanner-presets/{id}/run',
 			'POST /api/jobs/tradingview-analysis', 'GET /api/jobs', 'GET /api/jobs/{jobId}',
 			'POST /api/jobs/{jobId}/cancel', 'POST /api/jobs/{jobId}/retry',
-			'POST /api/jobs/{jobId}/retry-failed', 'GET /api/outcomes', 'GET /api/trading/binance/orders', 'POST /api/trading/binance/orders', 'GET /api/status', 'GET /api/capabilities',
+			'POST /api/jobs/{jobId}/retry-failed', 'GET /api/outcomes', 'GET /api/outcomes/summary', 'GET /api/trading/binance/orders', 'POST /api/trading/binance/orders', 'GET /api/status', 'GET /api/capabilities',
 		]);
 
 		for (const operation of operations) {
@@ -80,6 +80,7 @@ describe('OpenAPI contract', () => {
 		const expectedRoles = {
 			'GET /api/status': 'admin.viewer',
 			'GET /api/outcomes': 'admin.viewer',
+			'GET /api/outcomes/summary': 'admin.viewer',
 			'GET /api/trading/binance/orders': 'admin.viewer',
 			'POST /api/trading/binance/orders': 'admin.operator',
 			'GET /api/alerts': 'admin.viewer',
@@ -149,6 +150,19 @@ describe('OpenAPI contract', () => {
 		});
 	});
 
+	it('aligns symbol analysis schema with runtime normalization', () => {
+		if (!fs.existsSync(contractPath)) return;
+		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+		const schema = contract.components.schemas.SymbolAnalysisRequest;
+
+		expect(schema.properties.symbol.pattern).toBe('^[A-Za-z0-9_]+:[A-Za-z0-9._-]+$');
+		expect(schema.properties.timeframe).not.toHaveProperty('default');
+		expect(schema.description).toContain('TRADINGVIEW_MCP_DEFAULT_TIMEFRAME');
+		expect(schema.properties.timeframe.enum).toEqual(expect.arrayContaining(['60', '240', 'D', 'W', 'M']));
+		expect(schema.properties).toHaveProperty('analysis_mode');
+		expect(schema.properties).toHaveProperty('include_multi_timeframe');
+	});
+
 	it('documents idempotency conflicts for header-backed alert operations', () => {
 		if (!fs.existsSync(contractPath)) return;
 		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
@@ -164,6 +178,27 @@ describe('OpenAPI contract', () => {
 				$ref: `#/components/responses/${responseName}`,
 			});
 		}
+	});
+
+	it('documents current_price and price_data in the enrichedData schema', () => {
+		if (!fs.existsSync(contractPath)) return;
+		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+		const enrichedData = contract.components.schemas.DeliveryResult.properties.payload.properties.enrichedData;
+
+		expect(enrichedData.properties.current_price.type).toEqual(['number', 'null']);
+		expect(enrichedData.properties.price_data).toMatchObject({
+			type: ['object', 'null'],
+			additionalProperties: true,
+		});
+	});
+
+	it('declares suppressedRepeat in the alert delivery response schema', () => {
+		if (!fs.existsSync(contractPath)) return;
+		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+		expect(contract.components.schemas.DeliveryResult.properties.suppressedRepeat).toEqual({
+			type: 'boolean',
+			description: 'True when this alert was persisted without channel delivery because it repeated a recent signal.',
+		});
 	});
 
 	describe('Job schema alignment with JobService runtime', () => {

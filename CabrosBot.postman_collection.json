@@ -164,14 +164,46 @@
             "status"
           ]
         },
-        "description": "Protected runtime status. When ENABLE_FIREBASE_REMOTE_CONFIG=true, dependencies.firebaseRemoteConfig contains safe loader metadata only; disabled, stale, invalid, or unavailable remote values fall back to environment/default settings."
+        "description": "Protected runtime status. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters. When ENABLE_FIREBASE_REMOTE_CONFIG=true, dependencies.firebaseRemoteConfig contains safe loader metadata only; disabled, stale, invalid, or unavailable remote values fall back to environment/default settings."
       },
       "response": [
         {
           "name": "Success",
           "status": "OK",
           "code": 200,
-          "body": "{\"service\":{\"name\":\"cabros-bot\",\"version\":\"0.1.0\"},\"featureFlags\":{\"telegramBot\":true,\"whatsappAlerts\":false,\"geminiGrounding\":false,\"newsMonitor\":false,\"newsMonitorTestMode\":false,\"tradingViewVolumeConfirmation\":false,\"firestoreJobStorage\":false,\"messageFooterMetadata\":true,\"firestoreIdempotency\":false,\"equityMarketData\":false,\"firebaseRemoteConfig\":false,\"jobExecutionWorker\":false},\"dependencies\":{\"tradingViewMcp\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"lastCheckedAt\":null,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastErrorCategory\":null,\"successCount\":0,\"failureCount\":0,\"circuitBreaker\":{\"state\":\"closed\",\"consecutiveFailures\":0,\"openedAt\":null,\"lastStateChangeAt\":null,\"failureThreshold\":5,\"cooldownMs\":600000}},\"tradingViewVolumeConfirmation\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"lastCheckedAt\":null,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastErrorCategory\":null,\"successCount\":0,\"failureCount\":0,\"circuitBreaker\":{\"state\":\"closed\",\"consecutiveFailures\":0,\"openedAt\":null,\"lastStateChangeAt\":null,\"failureThreshold\":5,\"cooldownMs\":600000}},\"firestoreJobStorage\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\"},\"signalOutcomeWorker\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"role\":\"web\",\"running\":false,\"shutdownRequested\":false,\"lastRunScannedCount\":0,\"lastRunPendingCount\":0,\"lastRunEvaluatedCount\":0,\"lastRunErrorCount\":0},\"equityMarketData\":{\"provider\":null,\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"supportedExchanges\":[\"BATS\",\"NASDAQ\",\"NYSE\",\"AMEX\",\"NYSE ARCA\",\"FX_IDC\",\"SPCFD\"],\"timeoutMs\":5000},\"idempotencyStorage\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"mode\":\"ephemeral\",\"backend\":\"memory\"},\"firebaseRemoteConfig\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"source\":\"disabled\",\"templateVersion\":null,\"lastSuccessfulLoad\":null,\"lastErrorCategory\":null,\"refreshIntervalMs\":900000,\"maxAgeMs\":3600000}}}"
+          "body": "{\"service\":{\"name\":\"cabros-bot\",\"version\":\"0.1.0\"},\"featureFlags\":{\"telegramBot\":true,\"whatsappAlerts\":false,\"geminiGrounding\":false,\"newsMonitor\":false,\"newsMonitorTestMode\":false,\"tradingViewVolumeConfirmation\":false,\"firestoreJobStorage\":false,\"messageFooterMetadata\":true,\"firestoreIdempotency\":false,\"equityMarketData\":false,\"firebaseRemoteConfig\":false,\"jobExecutionWorker\":false},\"dependencies\":{\"geminiQuota\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"cooldownActive\":false,\"remainingCooldownMs\":0,\"lastTriggeredAt\":null,\"triggersTotal\":0,\"braveFallbacksDuringCooldown\":0,\"lastBraveFallbackAt\":null,\"metrics\":{\"totalRequests\":0,\"successRequests\":0,\"failureRequests\":0,\"timeoutRequests\":0}},\"groundingCoalescing\":{\"enabled\":false,\"windowMs\":0,\"activeEntries\":0,\"hits\":0,\"misses\":0,\"failures\":0},\"tradingViewMcp\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"lastCheckedAt\":null,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastErrorCategory\":null,\"successCount\":0,\"failureCount\":0,\"circuitBreaker\":{\"state\":\"closed\",\"consecutiveFailures\":0,\"openedAt\":null,\"lastStateChangeAt\":null,\"failureThreshold\":5,\"cooldownMs\":600000}},\"tradingViewVolumeConfirmation\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"lastCheckedAt\":null,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastErrorCategory\":null,\"successCount\":0,\"failureCount\":0,\"circuitBreaker\":{\"state\":\"closed\",\"consecutiveFailures\":0,\"openedAt\":null,\"lastStateChangeAt\":null,\"failureThreshold\":5,\"cooldownMs\":600000}},\"firestoreJobStorage\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\"},\"signalOutcomeWorker\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"role\":\"web\",\"running\":false,\"shutdownRequested\":false,\"lastRunScannedCount\":0,\"lastRunPendingCount\":0,\"lastRunEvaluatedCount\":0,\"lastRunErrorCount\":0},\"equityMarketData\":{\"provider\":null,\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"supportedExchanges\":[\"BATS\",\"NASDAQ\",\"NYSE\",\"AMEX\",\"NYSE ARCA\",\"FX_IDC\",\"SPCFD\"],\"timeoutMs\":5000},\"idempotencyStorage\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"mode\":\"ephemeral\",\"backend\":\"memory\"},\"firebaseRemoteConfig\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"source\":\"disabled\",\"templateVersion\":null,\"lastSuccessfulLoad\":null,\"lastErrorCategory\":null,\"refreshIntervalMs\":900000,\"maxAgeMs\":3600000}}}"
+        }
+      ]
+    },
+    {
+      "name": "Get Status - alert enrichment metrics",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{apiKey}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/status",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "status"
+          ]
+        },
+        "description": "Valid protected status request showing rolling 24-hour TradingView alert-path enrichment rates."
+      },
+      "response": [
+        {
+          "name": "200 OK - Rolling alert enrichment",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"dependencies\":{\"tradingViewMcp\":{\"enrichment\":{\"alertPath\":{\"windowMs\":86400000,\"totalCount\":3,\"appliedCount\":2,\"failedCount\":1,\"appliedRate24h\":66.67,\"failureRate24h\":33.33}}}}}"
         }
       ]
     },
@@ -196,14 +228,14 @@
             "capabilities"
           ]
         },
-        "description": "Alias for /api/status. Remote Config metadata is safe for operational inspection and does not include configured parameter values or secrets."
+        "description": "Alias for /api/status. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters. Remote Config metadata is safe for operational inspection and does not include configured parameter values or secrets."
       },
       "response": [
         {
           "name": "Success",
           "status": "OK",
           "code": 200,
-          "body": "{\"featureFlags\":{\"tradingViewVolumeConfirmation\":true,\"firestoreJobStorage\":true,\"newsMonitorTestMode\":false,\"messageFooterMetadata\":true,\"cloudflareAig\":false,\"equityMarketData\":false,\"firebaseRemoteConfig\":true},\"dependencies\":{\"tradingViewMcp\":{\"enabled\":true,\"configured\":true,\"ready\":false,\"status\":\"unknown\",\"lastCheckedAt\":null,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastErrorCategory\":null,\"successCount\":0,\"failureCount\":0,\"circuitBreaker\":{\"state\":\"closed\",\"consecutiveFailures\":0,\"openedAt\":null,\"lastStateChangeAt\":null,\"failureThreshold\":5,\"cooldownMs\":600000}},\"tradingViewVolumeConfirmation\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\",\"circuitBreaker\":{\"state\":\"closed\",\"consecutiveFailures\":0,\"openedAt\":null,\"lastStateChangeAt\":null,\"failureThreshold\":5,\"cooldownMs\":600000}},\"firestoreJobStorage\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\"},\"cloudflareAig\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\"},\"equityMarketData\":{\"provider\":null,\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"supportedExchanges\":[\"BATS\",\"NASDAQ\",\"NYSE\",\"AMEX\",\"NYSE ARCA\",\"FX_IDC\",\"SPCFD\"],\"timeoutMs\":5000},\"firebaseRemoteConfig\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\",\"source\":\"remote\",\"templateVersion\":\"7\",\"lastSuccessfulLoad\":\"2026-08-02T08:30:00.000Z\",\"lastErrorCategory\":null,\"refreshIntervalMs\":900000,\"maxAgeMs\":3600000}}}"
+          "body": "{\"featureFlags\":{\"tradingViewVolumeConfirmation\":true,\"firestoreJobStorage\":true,\"newsMonitorTestMode\":false,\"messageFooterMetadata\":true,\"cloudflareAig\":false,\"equityMarketData\":false,\"firebaseRemoteConfig\":true},\"dependencies\":{\"geminiQuota\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\",\"cooldownActive\":false,\"remainingCooldownMs\":0,\"lastTriggeredAt\":null,\"triggersTotal\":0,\"braveFallbacksDuringCooldown\":0,\"lastBraveFallbackAt\":null,\"metrics\":{\"totalRequests\":0,\"successRequests\":0,\"failureRequests\":0,\"timeoutRequests\":0}},\"tradingViewMcp\":{\"enabled\":true,\"configured\":true,\"ready\":false,\"status\":\"unknown\",\"lastCheckedAt\":null,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastErrorCategory\":null,\"successCount\":0,\"failureCount\":0,\"circuitBreaker\":{\"state\":\"closed\",\"consecutiveFailures\":0,\"openedAt\":null,\"lastStateChangeAt\":null,\"failureThreshold\":5,\"cooldownMs\":600000}},\"tradingViewVolumeConfirmation\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\",\"circuitBreaker\":{\"state\":\"closed\",\"consecutiveFailures\":0,\"openedAt\":null,\"lastStateChangeAt\":null,\"failureThreshold\":5,\"cooldownMs\":600000}},\"firestoreJobStorage\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\"},\"cloudflareAig\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\"},\"equityMarketData\":{\"provider\":null,\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"supportedExchanges\":[\"BATS\",\"NASDAQ\",\"NYSE\",\"AMEX\",\"NYSE ARCA\",\"FX_IDC\",\"SPCFD\"],\"timeoutMs\":5000},\"firebaseRemoteConfig\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\",\"source\":\"remote\",\"templateVersion\":\"7\",\"lastSuccessfulLoad\":\"2026-08-02T08:30:00.000Z\",\"lastErrorCategory\":null,\"refreshIntervalMs\":900000,\"maxAgeMs\":3600000}}}"
         }
       ]
     },
@@ -238,6 +270,13 @@
                 "type": "text",
                 "description": "Alternative x-prefixed idempotency header variant",
                 "disabled": true
+              },
+              {
+                "key": "x-request-id",
+                "value": "req-12345",
+                "type": "text",
+                "description": "Optional request correlation ID",
+                "disabled": true
               }
             ],
             "body": {
@@ -261,7 +300,7 @@
               "name": "Success",
               "status": "OK",
               "code": 200,
-              "body": "{\"success\":true,\"results\":[{\"channel\":\"telegram\",\"success\":true,\"messageId\":\"12345\"}],\"enriched\":false}"
+              "body": "{\"success\":true,\"requestId\":\"req-12345\",\"results\":[{\"channel\":\"telegram\",\"success\":true,\"messageId\":\"12345\"}],\"enriched\":false}"
             }
           ]
         },
@@ -308,7 +347,7 @@
               "name": "Enriched payload",
               "status": "OK",
               "code": 200,
-              "body": "{\"success\":true,\"dryRun\":true,\"enriched\":true,\"payload\":{\"text\":\"Bitcoin breaks above $83,000 with strong volume\",\"enrichedData\":{\"original_text\":\"Bitcoin breaks above $83,000 with strong volume\",\"sentiment\":\"BULLISH\",\"sentiment_score\":0.85,\"insights\":[\"Volume confirms momentum\"],\"invalidation_level\":\"$80,000\",\"target_level\":\"$90,000\",\"setup_type\":\"breakout\",\"risk_reward_ratio\":\"2.5:1\",\"tradingViewEnrichmentApplied\":false,\"sources\":[]}},\"tokenUsage\":{}}"
+              "body": "{\"success\":true,\"requestId\":\"req-12345\",\"dryRun\":true,\"enriched\":true,\"payload\":{\"text\":\"Bitcoin breaks above $83,000 with strong volume\",\"enrichedData\":{\"original_text\":\"Bitcoin breaks above $83,000 with strong volume\",\"sentiment\":\"BULLISH\",\"sentiment_score\":0.55,\"sentiment_score_raw\":0.85,\"insights\":[\"Volume confirms momentum\"],\"invalidation_level\":\"$80,000\",\"target_level\":\"$90,000\",\"setup_type\":\"breakout\",\"setup_evidence\":\"Price broke above resistance range with volume confirmation\",\"risk_reward_ratio\":\"2.5:1\",\"tradingViewEnrichmentApplied\":false,\"sources\":[]}},\"tokenUsage\":{}}"
             }
           ]
         },
@@ -398,19 +437,19 @@
               "name": "Dry run - full TradingView enrichment",
               "status": "OK",
               "code": 200,
-              "body": "{\"success\":true,\"dryRun\":true,\"enriched\":true,\"payload\":{\"text\":\"BTCUSDT(240) pasó a señal de COMPRA\",\"enrichedData\":{\"tradingViewEnrichmentApplied\":true,\"tradingViewEnrichmentStatus\":\"full\",\"sentiment\":\"BULLISH\"}}}"
+              "body": "{\"success\":true,\"dryRun\":true,\"enriched\":true,\"payload\":{\"text\":\"BTCUSDT(240) pasó a señal de COMPRA\",\"enrichedData\":{\"tradingViewEnrichmentApplied\":true,\"tradingViewEnrichmentStatus\":\"full\",\"sentiment\":\"BULLISH\",\"sentiment_score\":0.8,\"current_price\":64863.03,\"price_data\":{\"current_price\":64863.03,\"high\":65000,\"low\":64000}}}}"
             },
             {
               "name": "Dry run - partial TradingView enrichment",
               "status": "OK",
               "code": 200,
-              "body": "{\"success\":true,\"dryRun\":true,\"enriched\":true,\"payload\":{\"text\":\"BTCUSDT(240) pasó a señal de COMPRA\",\"enrichedData\":{\"tradingViewEnrichmentApplied\":true,\"tradingViewEnrichmentStatus\":\"partial\",\"sentiment\":\"BULLISH\"}}}"
+              "body": "{\"success\":true,\"dryRun\":true,\"enriched\":true,\"payload\":{\"text\":\"BTCUSDT(240) pasó a señal de COMPRA\",\"enrichedData\":{\"tradingViewEnrichmentApplied\":true,\"tradingViewEnrichmentStatus\":\"partial\",\"sentiment\":\"BULLISH\",\"current_price\":64863.03,\"price_data\":{\"current_price\":64863.03,\"high\":65000,\"low\":64000}}}}"
             },
             {
               "name": "Dry run - failed TradingView enrichment",
               "status": "OK",
               "code": 200,
-              "body": "{\"success\":true,\"dryRun\":true,\"enriched\":true,\"payload\":{\"text\":\"BTCUSDT(240) pasó a señal de COMPRA\",\"enrichedData\":{\"tradingViewEnrichmentApplied\":false,\"tradingViewEnrichmentStatus\":\"failed\",\"sentiment\":\"NEUTRAL\"}}}"
+              "body": "{\"success\":true,\"dryRun\":true,\"enriched\":true,\"payload\":{\"text\":\"BTCUSDT(240) pasó a señal de COMPRA\",\"enrichedData\":{\"tradingViewEnrichmentApplied\":false,\"tradingViewEnrichmentStatus\":\"failed\",\"sentiment\":\"NEUTRAL\",\"insights\":[\"RSI cercano a sobreventa\"],\"technical_levels\":{\"supports\":[\"79,500\"],\"resistances\":[\"82,300\"]},\"levelsSource\":\"gemini-grounding\"}}}"
             },
             {
               "name": "Dry run - TradingView not applicable",
@@ -727,6 +766,59 @@
               ]
             }
           }
+        },
+        {
+          "name": "POST Single Symbol Analysis",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"symbol\": \"BINANCE:BTCUSDT\",\n  \"timeframe\": \"1D\",\n  \"analysisMode\": \"combined\",\n  \"includeMultiTimeframe\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/webhook/symbol-analysis",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "webhook",
+                "symbol-analysis"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Success - decision-ready analysis",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"symbol\": \"BINANCE:BTCUSDT\",\n  \"alertText\": \"*🔴 SOBRECOMPRADOS*\\nBTCUSDT $77,103.55 (-0.8%) | RSI 77.9...\",\n  \"analysis\": {\n    \"price_data\": {\n      \"close\": 77066.92,\n      \"change_percent\": -0.86\n    },\n    \"technical_indicators\": {\n      \"RSI\": 77.8,\n      \"ATR\": 1484.21\n    },\n    \"risk\": {\n      \"side\": \"SELL\",\n      \"stop_loss\": 79293.24,\n      \"target\": 72614.29,\n      \"valid\": true\n    },\n    \"decision\": {\n      \"action\": \"SELL\",\n      \"dataSufficient\": true\n    }\n  }\n}"
+            },
+            {
+              "name": "400 Invalid symbol",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Symbol must use EXCHANGE:SYMBOL format: BTCUSDT\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            },
+            {
+              "name": "502 TradingView failure",
+              "status": "Bad Gateway",
+              "code": 502,
+              "body": "{\n  \"success\": false,\n  \"error\": \"TradingView MCP unavailable\",\n  \"code\": \"SYMBOL_ANALYSIS_FAILED\"\n}"
+            }
+          ]
         },
         {
           "name": "POST Send Message",
@@ -1119,6 +1211,78 @@
               }
             }
           ]
+        },
+        {
+          "name": "POST Send Alert (repeat suppressed)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"text\": \"BINANCE:ETHUSDT (4h) COMPRA \\u2014 repita este texto con ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION=true para ver la supresi\\u00f3n\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/webhook/alert",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "webhook",
+                "alert"
+              ]
+            },
+            "description": "Send the same exchange/symbol/timeframe/side signal twice with ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION=true. The first request delivers normally; the second returns suppressedRepeat: true with empty results/deliveredChannels while the alert is still persisted with a suppression marker. Opposite-side flips always deliver."
+          },
+          "response": [
+            {
+              "name": "Suppressed repeat",
+              "status": "OK",
+              "code": 200,
+              "body": "{\"success\":true,\"results\":[],\"enriched\":false,\"suppressedRepeat\":true,\"requestedChannels\":[\"telegram\"],\"deliveredChannels\":[],\"requestId\":\"req-123\"}",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-api-key",
+                    "value": "{{apiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"text\": \"BINANCE:ETHUSDT (4h) COMPRA — repeated signal\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/webhook/alert",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "webhook",
+                    "alert"
+                  ]
+                }
+              }
+            }
+          ]
         }
       ]
     },
@@ -1168,6 +1332,12 @@
               "status": "Bad Request",
               "code": 400,
               "body": "{\n  \"error\": \"name must be a string\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            },
+            {
+              "name": "Created with Schedule and Routing",
+              "status": "Created",
+              "code": 201,
+              "body": "{\n  \"success\": true,\n  \"preset\": {\n    \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n    \"name\": \"Hourly Scan\",\n    \"exchange\": \"BINANCE\",\n    \"timeframe\": \"1h\",\n    \"scans\": [\"top_gainers\", \"top_losers\"],\n    \"limit\": 5,\n    \"bbwThreshold\": 0.05,\n    \"schedule\": {\n      \"enabled\": true,\n      \"cadence\": \"1h\",\n      \"cadenceMs\": 3600000\n    },\n    \"channels\": [\"telegram\"],\n    \"lastRunAt\": null,\n    \"nextRunAt\": \"2026-08-24T18:00:00.000Z\",\n    \"lastStatus\": null,\n    \"lastError\": null,\n    \"lastDurationMs\": null,\n    \"createdAt\": \"2026-08-24T17:00:00.000Z\",\n    \"updatedAt\": \"2026-08-24T17:00:00.000Z\"\n  }\n}"
             },
             {
               "name": "Created",
@@ -1728,7 +1898,188 @@
                 }
               ]
             }
-          }
+          },
+          "response": [
+            {
+              "name": "200 OK - Webhook alerts list",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"success\": true,\n  \"alerts\": [\n    {\n      \"id\": \"alert-123\",\n      \"receivedAt\": \"2026-06-06T12:00:00.000Z\",\n      \"source\": \"webhook\",\n      \"symbol\": \"BTCUSDT\",\n      \"exchange\": \"BINANCE\",\n      \"enriched\": true,\n      \"useTradingViewData\": false,\n      \"tradingViewEnrichmentApplied\": false,\n      \"tradingViewEnrichmentStatus\": \"not_applicable\",\n      \"channels\": [\"telegram\"],\n      \"deliveryResults\": [\n        {\n          \"channel\": \"telegram\",\n          \"success\": true,\n          \"messageId\": \"123\"\n        }\n      ],\n      \"tokenUsage\": {\n        \"inputTokens\": 10,\n        \"outputTokens\": 20,\n        \"totalTokens\": 30,\n        \"totalCost\": 0.001\n      }\n    }\n  ]\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET List Alerts (news-monitor)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts?limit=10&source=news-monitor",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "10"
+                },
+                {
+                  "key": "source",
+                  "value": "news-monitor"
+                }
+              ]
+            },
+            "description": "Lists stored alerts filtered by source=news-monitor, including eventCategory, confidence, sentimentScore, and dedupStatus metadata."
+          },
+          "response": [
+            {
+              "name": "200 OK - News monitor alerts list",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"success\": true,\n  \"alerts\": [\n    {\n      \"id\": \"news-doc-123\",\n      \"receivedAt\": \"2026-08-24T02:00:00.000Z\",\n      \"source\": \"news-monitor\",\n      \"symbol\": \"BTCUSDT\",\n      \"exchange\": \"BINANCE\",\n      \"eventCategory\": \"price_surge\",\n      \"confidence\": 0.85,\n      \"sentimentScore\": 0.75,\n      \"dedupStatus\": \"fresh\",\n      \"enriched\": true,\n      \"useTradingViewData\": false,\n      \"tradingViewEnrichmentApplied\": false,\n      \"channels\": [\"telegram\"],\n      \"deliveryResults\": [\n        {\n          \"channel\": \"telegram\",\n          \"success\": true,\n          \"messageId\": \"12345\"\n        }\n      ],\n      \"tokenUsage\": {\n        \"inputTokens\": 100,\n        \"outputTokens\": 50,\n        \"totalTokens\": 150,\n        \"totalCost\": 0.00025\n      }\n    }\n  ]\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET List Alerts (market-scanner)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts?limit=10&source=market-scanner",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "10"
+                },
+                {
+                  "key": "source",
+                  "value": "market-scanner"
+                }
+              ]
+            },
+            "description": "Lists stored alerts filtered by source=market-scanner. Each entry is a delivered Spanish market report; truncated documents surface truncated=true and originalLength."
+          },
+          "response": [
+            {
+              "name": "200 OK - Market scanner alerts list",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"success\": true,\n  \"alerts\": [\n    {\n      \"id\": \"scanner-doc-456\",\n      \"receivedAt\": \"2026-08-28T14:00:00.000Z\",\n      \"source\": \"market-scanner\",\n      \"symbol\": \"BINANCE:GMTUSDT\",\n      \"exchange\": \"BINANCE\",\n      \"enriched\": false,\n      \"useTradingViewData\": false,\n      \"tradingViewEnrichmentApplied\": false,\n      \"channels\": [\"telegram\"],\n      \"deliveryResults\": [\n        {\n          \"channel\": \"telegram\",\n          \"success\": true,\n          \"messageId\": \"scanner-msg-1\"\n        }\n      ],\n      \"tokenUsage\": null\n    }\n  ]\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET List Alerts (expanded-analysis)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts?limit=10&source=expanded-analysis",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "10"
+                },
+                {
+                  "key": "source",
+                  "value": "expanded-analysis"
+                }
+              ]
+            },
+            "description": "Lists stored alerts filtered by source=expanded-analysis. Each entry is a delivered multi-symbol Spanish analysis report; large reports clip at 20,000 characters and surface truncated=true plus originalLength."
+          },
+          "response": [
+            {
+              "name": "200 OK - Expanded analysis alerts list",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"success\": true,\n  \"alerts\": [\n    {\n      \"id\": \"expanded-doc-789\",\n      \"receivedAt\": \"2026-08-28T14:05:00.000Z\",\n      \"source\": \"expanded-analysis\",\n      \"symbol\": \"BTCUSDT\",\n      \"exchange\": \"BINANCE\",\n      \"enriched\": false,\n      \"useTradingViewData\": false,\n      \"tradingViewEnrichmentApplied\": false,\n      \"channels\": [\"telegram\"],\n      \"deliveryResults\": [\n        {\n          \"channel\": \"telegram\",\n          \"success\": true,\n          \"messageId\": \"expanded-msg-1\"\n        }\n      ],\n      \"tokenUsage\": null\n    }\n  ]\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET List Alerts (truncated source example)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts?limit=10&source=expanded-analysis",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "10"
+                },
+                {
+                  "key": "source",
+                  "value": "expanded-analysis"
+                }
+              ]
+            },
+            "description": "Response example showing the truncation metadata (`truncated: true`, `originalLength`) when an expanded-analysis or market-scanner report exceeded the 20,000-character stored-text cap. Operators can detect clipped content and use replay with caution."
+          },
+          "response": [
+            {
+              "name": "200 OK - Truncated alert with metadata",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"success\": true,\n  \"alerts\": [\n    {\n      \"id\": \"expanded-doc-clipped\",\n      \"receivedAt\": \"2026-08-28T15:00:00.000Z\",\n      \"source\": \"expanded-analysis\",\n      \"symbol\": \"BTCUSDT\",\n      \"exchange\": \"BINANCE\",\n      \"enriched\": false,\n      \"useTradingViewData\": false,\n      \"tradingViewEnrichmentApplied\": false,\n      \"truncated\": true,\n      \"originalLength\": 24513,\n      \"channels\": [\"telegram\"],\n      \"deliveryResults\": [\n        {\n          \"channel\": \"telegram\",\n          \"success\": true,\n          \"messageId\": \"expanded-msg-2\"\n        }\n      ],\n      \"tokenUsage\": null\n    }\n  ]\n}"
+            }
+          ]
         },
         {
           "name": "GET Alert Analytics Summary (risk coverage)",
@@ -1773,7 +2124,7 @@
               "name": "200 OK - Risk metadata coverage",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"summary\": {\n    \"enrichment\": {\n      \"enrichedAlerts\": 2,\n      \"plainAlerts\": 0,\n      \"riskMetadataCoverage\": {\n        \"denominator\": 2,\n        \"fields\": {\n          \"invalidation_level\": {\n            \"populated\": 1,\n            \"percentage\": 50\n          },\n          \"target_level\": {\n            \"populated\": 1,\n            \"percentage\": 50\n          },\n          \"setup_type\": {\n            \"populated\": 1,\n            \"percentage\": 50\n          },\n          \"risk_reward_ratio\": {\n            \"populated\": 1,\n            \"percentage\": 50\n          }\n        },\n        \"byPromptProvenance\": [\n          {\n            \"provenance\": {\n              \"name\": \"alert-enrichment\",\n              \"source\": \"langfuse\",\n              \"label\": \"production\",\n              \"version\": 12,\n              \"schemaDriftDetected\": false\n            },\n            \"denominator\": 1,\n            \"fields\": {\n              \"invalidation_level\": {\n                \"populated\": 1,\n                \"percentage\": 100\n              },\n              \"target_level\": {\n                \"populated\": 1,\n                \"percentage\": 100\n              },\n              \"setup_type\": {\n                \"populated\": 1,\n                \"percentage\": 100\n              },\n              \"risk_reward_ratio\": {\n                \"populated\": 1,\n                \"percentage\": 100\n              }\n            }\n          },\n          {\n            \"provenance\": {\n              \"name\": \"alert-enrichment\",\n              \"source\": \"local\",\n              \"label\": null,\n              \"version\": null,\n              \"schemaDriftDetected\": false\n            },\n            \"denominator\": 1,\n            \"fields\": {\n              \"invalidation_level\": {\n                \"populated\": 0,\n                \"percentage\": 0\n              },\n              \"target_level\": {\n                \"populated\": 0,\n                \"percentage\": 0\n              },\n              \"setup_type\": {\n                \"populated\": 0,\n                \"percentage\": 0\n              },\n              \"risk_reward_ratio\": {\n                \"populated\": 0,\n                \"percentage\": 0\n              }\n            }\n          }\n        ]\n      }\n    },\n    \"shadowModeMetrics\": \"No measurements found\"\n  }\n}"
+              "body": "{\n  \"success\": true,\n  \"summary\": {\n    \"enrichment\": {\n      \"enrichedAlerts\": 2,\n      \"plainAlerts\": 0,\n      \"riskMetadataCoverage\": {\n        \"denominator\": 2,\n        \"fields\": {\n          \"invalidation_level\": {\n            \"populated\": 1,\n            \"percentage\": 50\n          },\n          \"target_level\": {\n            \"populated\": 1,\n            \"percentage\": 50\n          },\n          \"setup_type\": {\n            \"populated\": 1,\n            \"percentage\": 50\n          },\n          \"risk_reward_ratio\": {\n            \"populated\": 1,\n            \"percentage\": 50\n          }\n        },\n        \"byPromptProvenance\": [\n          {\n            \"provenance\": {\n              \"name\": \"alert-enrichment\",\n              \"source\": \"langfuse\",\n              \"label\": \"production\",\n              \"version\": 12,\n              \"schemaDriftDetected\": false\n            },\n            \"denominator\": 1,\n            \"fields\": {\n              \"invalidation_level\": {\n                \"populated\": 1,\n                \"percentage\": 100\n              },\n              \"target_level\": {\n                \"populated\": 1,\n                \"percentage\": 100\n              },\n              \"setup_type\": {\n                \"populated\": 1,\n                \"percentage\": 100\n              },\n              \"risk_reward_ratio\": {\n                \"populated\": 1,\n                \"percentage\": 100\n              }\n            }\n          },\n          {\n            \"provenance\": {\n              \"name\": \"alert-enrichment\",\n              \"source\": \"local\",\n              \"label\": null,\n              \"version\": null,\n              \"schemaDriftDetected\": false\n            },\n            \"denominator\": 1,\n            \"fields\": {\n              \"invalidation_level\": {\n                \"populated\": 0,\n                \"percentage\": 0\n              },\n              \"target_level\": {\n                \"populated\": 0,\n                \"percentage\": 0\n              },\n              \"setup_type\": {\n                \"populated\": 0,\n                \"percentage\": 0\n              },\n              \"risk_reward_ratio\": {\n                \"populated\": 0,\n                \"percentage\": 0\n              }\n            }\n          }\n        ]\n      },\n      \"evidenceCoverage\": {\n        \"denominator\": 2,\n        \"zeroSources\": { \"populated\": 1, \"percentage\": 50 },\n        \"oneToTwoSources\": { \"populated\": 0, \"percentage\": 0 },\n        \"threePlusSources\": { \"populated\": 1, \"percentage\": 50 },\n        \"totalSourceCount\": 3,\n        \"averageSourceCount\": 1.5,\n        \"byPromptProvenance\": [\n          {\n            \"provenance\": { \"name\": \"alert-enrichment\", \"source\": \"langfuse\", \"label\": \"production\", \"version\": 12, \"schemaDriftDetected\": false },\n            \"denominator\": 1,\n            \"zeroSources\": { \"populated\": 0, \"percentage\": 0 },\n            \"oneToTwoSources\": { \"populated\": 0, \"percentage\": 0 },\n            \"threePlusSources\": { \"populated\": 1, \"percentage\": 100 },\n            \"totalSourceCount\": 3,\n            \"averageSourceCount\": 3\n          },\n          {\n            \"provenance\": { \"name\": \"alert-enrichment\", \"source\": \"local\", \"label\": null, \"version\": null, \"schemaDriftDetected\": false },\n            \"denominator\": 1,\n            \"zeroSources\": { \"populated\": 1, \"percentage\": 100 },\n            \"oneToTwoSources\": { \"populated\": 0, \"percentage\": 0 },\n            \"threePlusSources\": { \"populated\": 0, \"percentage\": 0 },\n            \"totalSourceCount\": 0,\n            \"averageSourceCount\": 0\n          }\n        ]\n      }\n    },\n    \"shadowModeMetrics\": \"No measurements found\"\n  }\n}"
             }
           ]
         },
@@ -1820,7 +2171,7 @@
               "name": "200 OK - Analytics summary",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"summary\": {\n    \"window\": {\n      \"from\": \"2026-06-06T00:00:00.000Z\",\n      \"to\": \"2026-06-07T00:00:00.000Z\",\n      \"limit\": 500,\n      \"maxDays\": 31\n    },\n    \"totalAlerts\": 2,\n    \"bySource\": { \"webhook\": 2 },\n    \"bySymbol\": { \"BTCUSDT\": 1, \"ETHUSDT\": 1 },\n    \"byFeatureFlag\": {\n      \"enriched\": 1,\n      \"plain\": 1,\n      \"tradingViewData\": 1,\n      \"withoutTradingViewData\": 1\n    },\n    \"enrichment\": {\n      \"enrichedAlerts\": 1,\n      \"plainAlerts\": 1,\n      \"riskMetadataCoverage\": {\n        \"denominator\": 1,\n        \"fields\": {\n          \"invalidation_level\": {\n            \"populatedCount\": 1,\n            \"percentage\": 100\n          },\n          \"target_level\": {\n            \"populatedCount\": 1,\n            \"percentage\": 100\n          },\n          \"setup_type\": {\n            \"populatedCount\": 1,\n            \"percentage\": 100\n          },\n          \"risk_reward_ratio\": {\n            \"populatedCount\": 1,\n            \"percentage\": 100\n          }\n        },\n        \"byPromptProvenance\": {\n          \"alert-enrichment:langfuse:production:1\": {\n            \"name\": \"alert-enrichment\",\n            \"source\": \"langfuse\",\n            \"label\": \"production\",\n            \"version\": 1,\n            \"denominator\": 1,\n            \"fields\": {\n              \"invalidation_level\": {\n                \"populatedCount\": 1,\n                \"percentage\": 100\n              },\n              \"target_level\": {\n                \"populatedCount\": 1,\n                \"percentage\": 100\n              },\n              \"setup_type\": {\n                \"populatedCount\": 1,\n                \"percentage\": 100\n              },\n              \"risk_reward_ratio\": {\n                \"populatedCount\": 1,\n                \"percentage\": 100\n              }\n            }\n          }\n        }\n      },\n      \"tokenUsage\": {\n        \"inputTokens\": 10,\n        \"outputTokens\": 20,\n        \"totalTokens\": 30,\n        \"totalCost\": 0.001\n      }\n    },\n    \"delivery\": {\n      \"totalSuccess\": 2,\n      \"totalFailure\": 1,\n      \"byChannel\": {\n        \"telegram\": { \"total\": 2, \"success\": 1, \"failure\": 1 },\n        \"whatsapp\": { \"total\": 1, \"success\": 1, \"failure\": 0 }\n      }\n    },\n    \"latency\": {\n      \"averageProcessingMs\": 250,\n      \"averageDeliveryMs\": 150\n    },\n    \"shadowModeMetrics\": {\n      \"totalSignalsEvaluated\": 1,\n      \"windows\": {\n        \"1h\": {\n          \"totalSignals\": 1,\n          \"hitRatePercent\": 100,\n          \"averageReturnPercent\": 0.7353,\n          \"averageMfePercent\": 0.7353,\n          \"averageMaePercent\": 0.0,\n          \"maxAdverseExcursionPercent\": 0.0\n        }\n      },\n      \"drawdownProxy\": {\n        \"averageMaxAdverseExcursionPercent\": 0.0,\n        \"absoluteMaxAdverseExcursionPercent\": 0.0\n      },\n      \"falsePositiveCandidatesCount\": 0,\n      \"falsePositiveCandidates\": [],\n      \"latencyCostMetadata\": {\n        \"averageProcessingTimeMs\": 250,\n        \"tokenUsage\": {\n          \"inputTokens\": 10,\n          \"outputTokens\": 20,\n          \"totalCost\": 0.001\n        }\n      }\n    }\n  }\n}"
+              "body": "{\n  \"success\": true,\n  \"summary\": {\n    \"window\": {\n      \"from\": \"2026-06-06T00:00:00.000Z\",\n      \"to\": \"2026-06-07T00:00:00.000Z\",\n      \"limit\": 500,\n      \"maxDays\": 31\n    },\n    \"totalAlerts\": 2,\n    \"bySource\": { \"webhook\": 2 },\n    \"bySymbol\": { \"BTCUSDT\": 1, \"ETHUSDT\": 1 },\n    \"byFeatureFlag\": {\n      \"enriched\": 1,\n      \"plain\": 1,\n      \"tradingViewData\": 1,\n      \"withoutTradingViewData\": 1\n    },\n    \"enrichment\": {\n      \"enrichedAlerts\": 1,\n      \"plainAlerts\": 1,\n      \"riskMetadataCoverage\": {\n        \"denominator\": 1,\n        \"fields\": {\n          \"invalidation_level\": {\n            \"populatedCount\": 1,\n            \"percentage\": 100\n          },\n          \"target_level\": {\n            \"populatedCount\": 1,\n            \"percentage\": 100\n          },\n          \"setup_type\": {\n            \"populatedCount\": 1,\n            \"percentage\": 100\n          },\n          \"risk_reward_ratio\": {\n            \"populatedCount\": 1,\n            \"percentage\": 100\n          }\n        },\n        \"byPromptProvenance\": {\n          \"alert-enrichment:langfuse:production:1\": {\n            \"name\": \"alert-enrichment\",\n            \"source\": \"langfuse\",\n            \"label\": \"production\",\n            \"version\": 1,\n            \"denominator\": 1,\n            \"fields\": {\n              \"invalidation_level\": {\n                \"populatedCount\": 1,\n                \"percentage\": 100\n              },\n              \"target_level\": {\n                \"populatedCount\": 1,\n                \"percentage\": 100\n              },\n              \"setup_type\": {\n                \"populatedCount\": 1,\n                \"percentage\": 100\n              },\n              \"risk_reward_ratio\": {\n                \"populatedCount\": 1,\n                \"percentage\": 100\n              }\n            }\n          }\n        }\n      },\n      \"tokenUsage\": {\n        \"inputTokens\": 10,\n        \"outputTokens\": 20,\n        \"totalTokens\": 30,\n        \"totalCost\": 0.001\n      }\n    },\n    \"delivery\": {\n      \"totalSuccess\": 2,\n      \"totalFailure\": 1,\n      \"byChannel\": {\n        \"telegram\": { \"total\": 2, \"success\": 1, \"failure\": 1 },\n        \"whatsapp\": { \"total\": 1, \"success\": 1, \"failure\": 0 }\n      }\n    },\n    \"latency\": {\n      \"averageProcessingMs\": 250,\n      \"averageDeliveryMs\": 150\n    },\n    \"shadowModeMetrics\": {\n      \"totalSignalsEvaluated\": 1,\n      \"targetHitRatePercent\": 0,\n      \"stopHitRatePercent\": 0,\n      \"expectancyR\": null,\n      \"windows\": {\n        \"1h\": {\n          \"totalSignals\": 1,\n          \"hitRatePercent\": 100,\n          \"targetEligibleWindows\": 0,\n          \"stopEligibleWindows\": 0,\n          \"targetHitRatePercent\": 0,\n          \"stopHitRatePercent\": 0,\n          \"averageReturnPercent\": 0.7353,\n          \"averageMfePercent\": 0.7353,\n          \"averageMaePercent\": 0.0,\n          \"maxAdverseExcursionPercent\": 0.0\n        }\n      },\n      \"drawdownProxy\": {\n        \"averageMaxAdverseExcursionPercent\": 0.0,\n        \"absoluteMaxAdverseExcursionPercent\": 0.0\n      },\n      \"falsePositiveCandidatesCount\": 0,\n      \"falsePositiveCandidates\": [],\n      \"latencyCostMetadata\": {\n        \"averageProcessingTimeMs\": 250,\n        \"tokenUsage\": {\n          \"inputTokens\": 10,\n          \"outputTokens\": 20,\n          \"totalCost\": 0.001\n        }\n      }\n    }\n  }\n}"
             },
             {
               "name": "200 OK - TradingView application counters",
@@ -1833,6 +2184,53 @@
               "status": "OK",
               "code": 200,
               "body": "{\"success\":true,\"summary\":{\"shadowModeMetrics\":{\"exchangeBreakdown\":{\"BATS\":{\"received\":1,\"eligible\":1,\"evaluated\":1,\"pending\":0,\"unavailable\":0}},\"providerBreakdown\":{\"twelve-data\":{\"received\":1,\"eligible\":1,\"evaluated\":1,\"pending\":0,\"unavailable\":0}}}}}"
+            }
+          ]
+        },
+        {
+          "name": "GET Alert Analytics Summary - TradingView status buckets",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/summary?from=2026-06-06T00:00:00.000Z&to=2026-06-07T00:00:00.000Z&limit=500",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "2026-06-06T00:00:00.000Z"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-06-07T00:00:00.000Z"
+                },
+                {
+                  "key": "limit",
+                  "value": "500"
+                }
+              ]
+            },
+            "description": "Valid protected summary request showing full, partial, failed, not_applicable, and unrecorded TradingView enrichment outcome buckets."
+          },
+          "response": [
+            {
+              "name": "200 OK - TradingView outcome buckets",
+              "status": "OK",
+              "code": 200,
+              "body": "{\"success\":true,\"summary\":{\"enrichment\":{\"tradingViewStatusCounts\":{\"full\":1,\"partial\":1,\"failed\":1,\"not_applicable\":1,\"unrecorded\":1}}}}"
             }
           ]
         },
@@ -1941,6 +2339,174 @@
           ]
         },
         {
+          "name": "GET Export Alerts (JSONL - news-monitor)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/export?format=jsonl&from=2026-06-06T00:00:00.000Z&to=2026-06-07T00:00:00.000Z&limit=500&source=news-monitor",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "export"
+              ],
+              "query": [
+                {
+                  "key": "format",
+                  "value": "jsonl"
+                },
+                {
+                  "key": "from",
+                  "value": "2026-06-06T00:00:00.000Z"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-06-07T00:00:00.000Z"
+                },
+                {
+                  "key": "limit",
+                  "value": "500"
+                },
+                {
+                  "key": "source",
+                  "value": "news-monitor"
+                }
+              ]
+            },
+            "description": "Exports bounded stored alerts filtered by source=news-monitor as JSON Lines. Excludes raw text unless includeText=true"
+          },
+          "response": [
+            {
+              "name": "200 OK - JSONL export (news-monitor)",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "body": "{\"id\":\"news-doc-123\",\"receivedAt\":\"2026-08-24T02:00:00.000Z\",\"source\":\"news-monitor\",\"enriched\":true,\"useTradingViewData\":false,\"tradingViewEnrichmentApplied\":false,\"deliveryResults\":[{\"channel\":\"telegram\",\"success\":true,\"messageId\":\"12345\",\"errorCode\":null,\"statusCode\":null}],\"tokenUsage\":{\"inputTokens\":100,\"outputTokens\":50,\"totalTokens\":150,\"totalCost\":0.00025},\"eventCategory\":\"price_surge\",\"confidence\":0.85,\"sentimentScore\":0.75,\"dedupStatus\":\"fresh\"}\n"
+            }
+          ]
+        },
+        {
+          "name": "GET Export Alerts (JSONL - market-scanner)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/export?format=jsonl&from=2026-06-06T00:00:00.000Z&to=2026-06-07T00:00:00.000Z&limit=500&source=market-scanner",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "export"
+              ],
+              "query": [
+                {
+                  "key": "format",
+                  "value": "jsonl"
+                },
+                {
+                  "key": "from",
+                  "value": "2026-06-06T00:00:00.000Z"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-06-07T00:00:00.000Z"
+                },
+                {
+                  "key": "limit",
+                  "value": "500"
+                },
+                {
+                  "key": "source",
+                  "value": "market-scanner"
+                }
+              ]
+            },
+            "description": "Exports bounded stored alerts filtered by source=market-scanner as JSON Lines. Excludes raw text unless includeText=true; truncated entries expose truncated=true and originalLength."
+          },
+          "response": [
+            {
+              "name": "200 OK - JSONL export (market-scanner)",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "body": "{\"id\":\"scanner-doc-456\",\"receivedAt\":\"2026-08-28T14:00:00.000Z\",\"source\":\"market-scanner\",\"enriched\":false,\"useTradingViewData\":false,\"tradingViewEnrichmentApplied\":false,\"deliveryResults\":[{\"channel\":\"telegram\",\"success\":true,\"messageId\":\"scanner-msg-1\",\"errorCode\":null,\"statusCode\":null}],\"tokenUsage\":null}\n"
+            }
+          ]
+        },
+        {
+          "name": "GET Export Alerts (JSONL - expanded-analysis)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/export?format=jsonl&from=2026-06-06T00:00:00.000Z&to=2026-06-07T00:00:00.000Z&limit=500&source=expanded-analysis",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "export"
+              ],
+              "query": [
+                {
+                  "key": "format",
+                  "value": "jsonl"
+                },
+                {
+                  "key": "from",
+                  "value": "2026-06-06T00:00:00.000Z"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-06-07T00:00:00.000Z"
+                },
+                {
+                  "key": "limit",
+                  "value": "500"
+                },
+                {
+                  "key": "source",
+                  "value": "expanded-analysis"
+                }
+              ]
+            },
+            "description": "Exports bounded stored alerts filtered by source=expanded-analysis as JSON Lines. Excludes raw text unless includeText=true; truncated entries expose truncated=true and originalLength."
+          },
+          "response": [
+            {
+              "name": "200 OK - JSONL export (expanded-analysis)",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "body": "{\"id\":\"expanded-doc-789\",\"receivedAt\":\"2026-08-28T14:05:00.000Z\",\"source\":\"expanded-analysis\",\"enriched\":false,\"useTradingViewData\":false,\"tradingViewEnrichmentApplied\":false,\"deliveryResults\":[{\"channel\":\"telegram\",\"success\":true,\"messageId\":\"expanded-msg-1\",\"errorCode\":null,\"statusCode\":null}],\"tokenUsage\":null}\n"
+            }
+          ]
+        },
+        {
           "name": "GET Export Alerts (CSV with text)",
           "request": {
             "method": "GET",
@@ -1991,7 +2557,7 @@
               "name": "200 OK - CSV export",
               "status": "OK",
               "code": 200,
-              "body": "id,receivedAt,source,enriched,useTradingViewData,tradingViewEnrichmentApplied,tradingViewEnrichmentStatus,deliveryResults,tokenUsage,text\nalert-123,2026-06-06T12:00:00.000Z,webhook,true,false,false,not_applicable,\"[{\"\"channel\"\":\"\"telegram\"\",\"\"success\"\":true,\"\"messageId\"\":\"\"123\"\",\"\"errorCode\"\":null,\"\"statusCode\"\":null}]\",\"{\"\"inputTokens\"\":10,\"\"outputTokens\"\":20,\"\"totalTokens\"\":30,\"\"totalCost\"\":0.001}\",BTC breakout\n"
+              "body": "id,receivedAt,source,enriched,useTradingViewData,tradingViewEnrichmentApplied,tradingViewEnrichmentStatus,eventCategory,confidence,sentimentScore,dedupStatus,channels,deliveryResults,tokenUsage,text\nalert-123,2026-06-06T12:00:00.000Z,webhook,true,false,false,not_applicable,,,,,\"[\"\"telegram\"\"]\",\"[{\"\"channel\"\": \"\"telegram\"\", \"\"success\"\": true, \"\"messageId\"\": \"\"123\"\", \"\"errorCode\"\": null, \"\"statusCode\"\": null}]\",\"{\"\"inputTokens\"\":10,\"\"outputTokens\"\":20,\"\"totalTokens\"\":30,\"\"totalCost\"\":0.001}\",BTC breakout\n"
             }
           ]
         },
@@ -2228,6 +2794,102 @@
               "status": "Bad Request",
               "code": 400,
               "body": "{\n  \"error\": \"Unknown channel(s): slack. Valid channels: telegram, whatsapp, discord.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST Replay Alert (market-scanner)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "idempotency-key",
+                "value": "{{replayIdempotencyKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"channels\": [\"telegram\"]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/scanner-doc-456/replay",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "scanner-doc-456",
+                "replay"
+              ]
+            },
+            "description": "Replays a stored market-scanner alert (delivered Spanish report from POST /api/webhook/market-scanner-alert). Truncated entries will redeliver the clipped text; verify the originalLength flag before relying on replay for large scans."
+          },
+          "response": [
+            {
+              "name": "Success (market-scanner replay)",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"alertId\": \"scanner-doc-456\",\n  \"replayId\": \"scanner-doc-456_06bdeddf2a292e8940d24fb2847d88234dc85d7cd751d4cc7dbc471692aadf38\",\n  \"results\": [\n    { \"channel\": \"telegram\", \"success\": true, \"messageId\": \"replay-msg-1\" }\n  ]\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST Replay Alert (expanded-analysis)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "idempotency-key",
+                "value": "{{replayIdempotencyKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"channels\": [\"telegram\"]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/expanded-doc-789/replay",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "expanded-doc-789",
+                "replay"
+              ]
+            },
+            "description": "Replays a stored expanded-analysis alert (delivered multi-symbol Spanish report from POST /api/webhook/expanded-analysis-alert). If the original report exceeded the 20,000-character cap, the replay will only redeliver the truncated text — verify truncated/originalLength before replaying large reports."
+          },
+          "response": [
+            {
+              "name": "Success (expanded-analysis replay)",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"alertId\": \"expanded-doc-789\",\n  \"replayId\": \"expanded-doc-789_06bdeddf2a292e8940d24fb2847d88234dc85d7cd751d4cc7dbc471692aadf38\",\n  \"results\": [\n    { \"channel\": \"telegram\", \"success\": true, \"messageId\": \"replay-msg-2\" }\n  ]\n}"
             }
           ]
         },
@@ -2581,6 +3243,204 @@
               "path": [
                 "api",
                 "outcomes"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "200"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "400 Invalid Limit",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"Invalid limit. Use an integer between 1 and 100.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Summarize Signal Outcomes",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Summarizes recorded signal outcomes metrics with default limit (50) and 30-day window.",
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes/summary",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes",
+                "summary"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"summary\": {\n    \"available\": true,\n    \"totalSignalsReceived\": 50,\n    \"totalSignalsEligible\": 45,\n    \"totalSignalsEvaluated\": 40,\n    \"totalSignalsPending\": 5,\n    \"totalSignalsUnavailable\": 5,\n    \"coveragePercent\": 80,\n    \"isCoverageComplete\": false,\n    \"targetHitRatePercent\": 65.5,\n    \"stopHitRatePercent\": 25,\n    \"expectancyR\": 1.25,\n    \"populationNote\": \"Metrics represent 40 evaluated signals out of 50 total received signals (80% coverage).\",\n    \"exchangeBreakdown\": {\n      \"BINANCE\": {\n        \"received\": 40,\n        \"eligible\": 40,\n        \"evaluated\": 35,\n        \"pending\": 3,\n        \"unavailable\": 2\n      }\n    },\n    \"providerBreakdown\": {\n      \"binance\": {\n        \"received\": 40,\n        \"eligible\": 40,\n        \"evaluated\": 35,\n        \"pending\": 3,\n        \"unavailable\": 2\n      }\n    },\n    \"entryPriceSourceBreakdown\": {\n      \"tradingview-mcp\": 40\n    },\n    \"eligibilityBreakdown\": {\n      \"supported_provider\": 45\n    },\n    \"windows\": {\n      \"1h\": {\n        \"totalSignals\": 35,\n        \"hitRatePercent\": 60,\n        \"targetEligibleWindows\": 30,\n        \"stopEligibleWindows\": 30,\n        \"targetHitRatePercent\": 55,\n        \"stopHitRatePercent\": 20,\n        \"expectancyR\": 0.85,\n        \"averageReturnPercent\": 2.15,\n        \"averageMfePercent\": 3.45,\n        \"averageMaePercent\": -1.1,\n        \"maxAdverseExcursionPercent\": -4.5,\n        \"bySide\": {\n          \"BUY\": {\n            \"totalSignals\": 20,\n            \"hitRatePercent\": 65,\n            \"targetEligibleWindows\": 18,\n            \"stopEligibleWindows\": 18,\n            \"targetHitRatePercent\": 60,\n            \"stopHitRatePercent\": 22,\n            \"expectancyR\": 0.92,\n            \"averageReturnPercent\": 2.4,\n            \"averageMfePercent\": 3.6,\n            \"averageMaePercent\": -1.05,\n            \"maxAdverseExcursionPercent\": -4.2\n          },\n          \"SELL\": {\n            \"totalSignals\": 15,\n            \"hitRatePercent\": 53,\n            \"targetEligibleWindows\": 12,\n            \"stopEligibleWindows\": 12,\n            \"targetHitRatePercent\": 48,\n            \"stopHitRatePercent\": 18,\n            \"expectancyR\": 0.71,\n            \"averageReturnPercent\": 1.8,\n            \"averageMfePercent\": 3.2,\n            \"averageMaePercent\": -1.2,\n            \"maxAdverseExcursionPercent\": -4.5\n          }\n        },\n        \"bySetupType\": {\n          \"trend_continuation\": {\n            \"totalSignals\": 25,\n            \"hitRatePercent\": 68,\n            \"targetEligibleWindows\": 22,\n            \"stopEligibleWindows\": 22,\n            \"targetHitRatePercent\": 64,\n            \"stopHitRatePercent\": 18,\n            \"expectancyR\": 1.05,\n            \"averageReturnPercent\": 2.6,\n            \"averageMfePercent\": 3.8,\n            \"averageMaePercent\": -0.95,\n            \"maxAdverseExcursionPercent\": -3.8\n          },\n          \"reversal\": {\n            \"totalSignals\": 10,\n            \"hitRatePercent\": 40,\n            \"targetEligibleWindows\": 8,\n            \"stopEligibleWindows\": 8,\n            \"targetHitRatePercent\": 38,\n            \"stopHitRatePercent\": 25,\n            \"expectancyR\": 0.45,\n            \"averageReturnPercent\": 1.2,\n            \"averageMfePercent\": 2.9,\n            \"averageMaePercent\": -1.5,\n            \"maxAdverseExcursionPercent\": -4.5\n          }\n        }\n      }\n    },\n    \"drawdownProxy\": {\n      \"averageMaxAdverseExcursionPercent\": -1.85,\n      \"absoluteMaxAdverseExcursionPercent\": -7.2\n    },\n    \"falsePositiveCandidatesCount\": 0,\n    \"falsePositiveCandidates\": [],\n    \"latencyCostMetadata\": {\n      \"averageProcessingTimeMs\": 450,\n      \"tokenUsage\": {\n        \"inputTokens\": 1200,\n        \"outputTokens\": 400,\n        \"totalCost\": 0.0035\n      }\n    }\n  }\n}"
+            },
+            {
+              "name": "200 Empty / No Measurements",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"summary\": {\n    \"available\": false,\n    \"totalSignalsReceived\": 0,\n    \"totalSignalsEligible\": 0,\n    \"totalSignalsEvaluated\": 0,\n    \"totalSignalsPending\": 0,\n    \"totalSignalsUnavailable\": 0,\n    \"coveragePercent\": 0,\n    \"isCoverageComplete\": true,\n    \"targetHitRatePercent\": 0,\n    \"stopHitRatePercent\": 0,\n    \"expectancyR\": null,\n    \"populationNote\": \"No outcome measurements found for the requested criteria.\",\n    \"exchangeBreakdown\": {},\n    \"providerBreakdown\": {},\n    \"entryPriceSourceBreakdown\": {},\n    \"eligibilityBreakdown\": {},\n    \"windows\": {},\n    \"drawdownProxy\": {\n      \"averageMaxAdverseExcursionPercent\": 0,\n      \"absoluteMaxAdverseExcursionPercent\": 0\n    },\n    \"falsePositiveCandidatesCount\": 0,\n    \"falsePositiveCandidates\": [],\n    \"latencyCostMetadata\": {\n      \"averageProcessingTimeMs\": null,\n      \"tokenUsage\": {\n        \"inputTokens\": 0,\n        \"outputTokens\": 0,\n        \"totalCost\": 0\n      }\n    }\n  }\n}"
+            },
+            {
+              "name": "401 Unauthorized",
+              "status": "Unauthorized",
+              "code": 401,
+              "body": "{\n  \"error\": \"Unauthorized: Missing or invalid API key.\",\n  \"code\": \"UNAUTHORIZED\"\n}"
+            },
+            {
+              "name": "403 Feature Disabled",
+              "status": "Forbidden",
+              "code": 403,
+              "body": "{\n  \"error\": \"Signal outcome tracking feature is disabled. Set ENABLE_SIGNAL_OUTCOME_TRACKING=true to enable.\",\n  \"code\": \"FEATURE_DISABLED\"\n}"
+            },
+            {
+              "name": "503 Storage Unavailable",
+              "status": "Service Unavailable",
+              "code": 503,
+              "body": "{\n  \"error\": \"Signal outcome tracking is enabled but Firestore is unavailable. Check Firestore credentials and project configuration.\",\n  \"code\": \"STORAGE_UNAVAILABLE\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Summarize Signal Outcomes (filtered)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Summarizes signal outcomes metrics filtered by symbol, exchange, status, window, and time range.",
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes/summary?symbol=BTCUSDT&exchange=BINANCE&status=evaluated&window=1h&limit=10&from=2026-08-23T00:00:00.000Z&to=2026-08-23T23:59:59.000Z",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "symbol",
+                  "value": "BTCUSDT"
+                },
+                {
+                  "key": "exchange",
+                  "value": "BINANCE"
+                },
+                {
+                  "key": "status",
+                  "value": "evaluated"
+                },
+                {
+                  "key": "window",
+                  "value": "1h"
+                },
+                {
+                  "key": "limit",
+                  "value": "10"
+                },
+                {
+                  "key": "from",
+                  "value": "2026-08-23T00:00:00.000Z"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-08-23T23:59:59.000Z"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 Filtered Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"summary\": {\n    \"available\": true,\n    \"totalSignalsReceived\": 10,\n    \"totalSignalsEligible\": 10,\n    \"totalSignalsEvaluated\": 10,\n    \"totalSignalsPending\": 0,\n    \"totalSignalsUnavailable\": 0,\n    \"coveragePercent\": 100,\n    \"isCoverageComplete\": true,\n    \"targetHitRatePercent\": 70,\n    \"stopHitRatePercent\": 20,\n    \"expectancyR\": 1.1,\n    \"populationNote\": \"Metrics represent 100% of received signals.\",\n    \"exchangeBreakdown\": {\n      \"BINANCE\": {\n        \"received\": 10,\n        \"eligible\": 10,\n        \"evaluated\": 10,\n        \"pending\": 0,\n        \"unavailable\": 0\n      }\n    },\n    \"providerBreakdown\": {\n      \"binance\": {\n        \"received\": 10,\n        \"eligible\": 10,\n        \"evaluated\": 10,\n        \"pending\": 0,\n        \"unavailable\": 0\n      }\n    },\n    \"entryPriceSourceBreakdown\": {\n      \"tradingview-mcp\": 10\n    },\n    \"eligibilityBreakdown\": {\n      \"supported_provider\": 10\n    },\n    \"windows\": {\n      \"1h\": {\n        \"totalSignals\": 10,\n        \"hitRatePercent\": 70,\n        \"targetEligibleWindows\": 10,\n        \"stopEligibleWindows\": 10,\n        \"targetHitRatePercent\": 70,\n        \"stopHitRatePercent\": 20,\n        \"expectancyR\": 1.1,\n        \"averageReturnPercent\": 2.5,\n        \"averageMfePercent\": 3.8,\n        \"averageMaePercent\": -0.9,\n        \"maxAdverseExcursionPercent\": -3.2\n      }\n    },\n    \"drawdownProxy\": {\n      \"averageMaxAdverseExcursionPercent\": -1.2,\n      \"absoluteMaxAdverseExcursionPercent\": -4.5\n    },\n    \"falsePositiveCandidatesCount\": 0,\n    \"falsePositiveCandidates\": [],\n    \"latencyCostMetadata\": {\n      \"averageProcessingTimeMs\": 380,\n      \"tokenUsage\": {\n        \"inputTokens\": 300,\n        \"outputTokens\": 120,\n        \"totalCost\": 0.001\n      }\n    }\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Summarize Signal Outcomes (Firebase bearer)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{firebaseIdToken}}",
+                "type": "text"
+              }
+            ],
+            "description": "Summarizes signal outcomes authenticated with a Firebase Admin ID token (admin.viewer role).",
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes/summary?limit=25",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "25"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"summary\": {\n    \"available\": true,\n    \"totalSignalsReceived\": 25,\n    \"totalSignalsEligible\": 25,\n    \"totalSignalsEvaluated\": 25,\n    \"totalSignalsPending\": 0,\n    \"totalSignalsUnavailable\": 0,\n    \"coveragePercent\": 100,\n    \"isCoverageComplete\": true,\n    \"targetHitRatePercent\": 68,\n    \"stopHitRatePercent\": 24,\n    \"expectancyR\": 1.15,\n    \"populationNote\": \"Metrics represent 100% of received signals.\",\n    \"exchangeBreakdown\": {},\n    \"providerBreakdown\": {},\n    \"entryPriceSourceBreakdown\": {},\n    \"eligibilityBreakdown\": {},\n    \"windows\": {},\n    \"drawdownProxy\": {\n      \"averageMaxAdverseExcursionPercent\": -1.5,\n      \"absoluteMaxAdverseExcursionPercent\": -5.5\n    },\n    \"falsePositiveCandidatesCount\": 0,\n    \"falsePositiveCandidates\": [],\n    \"latencyCostMetadata\": {\n      \"averageProcessingTimeMs\": 400,\n      \"tokenUsage\": {\n        \"inputTokens\": 800,\n        \"outputTokens\": 250,\n        \"totalCost\": 0.0025\n      }\n    }\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Summarize Signal Outcomes (invalid parameters)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Example of 400 INVALID_REQUEST response when passing invalid limit, status, window, or dates to summarize outcomes.",
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes/summary?limit=200",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes",
+                "summary"
               ],
               "query": [
                 {
@@ -3486,7 +4346,7 @@
               "name": "Success (dry-run)",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"environment\": \"testnet\",\n  \"order\": {\n    \"symbol\": \"BTCUSDT\",\n    \"side\": \"BUY\",\n    \"type\": \"LIMIT\",\n    \"quantity\": 0.001,\n    \"price\": 60000,\n    \"timeInForce\": \"GTC\"\n  }\n}"
+              "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"environment\": \"testnet\",\n  \"order\": {\n    \"symbol\": \"BTCUSDT\",\n    \"side\": \"BUY\",\n    \"type\": \"LIMIT\",\n    \"quantity\": 0.001,\n    \"price\": 60000,\n    \"timeInForce\": \"GTC\",\n    \"newOrderRespType\": \"FULL\"\n  }\n}"
             }
           ]
         },
@@ -3659,7 +4519,92 @@
               "name": "OK",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"environment\": \"testnet\",\n  \"order\": {\n    \"symbol\": \"BTCUSDT\",\n    \"side\": \"SELL\",\n    \"type\": \"MARKET\",\n    \"quantity\": \"0.001\",\n    \"newClientOrderId\": \"cabros-test-order-id\"\n  }\n}"
+              "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"environment\": \"testnet\",\n  \"order\": {\n    \"symbol\": \"BTCUSDT\",\n    \"side\": \"SELL\",\n    \"type\": \"MARKET\",\n    \"quantity\": 0.001,\n    \"newOrderRespType\": \"FULL\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST Binance order (bounded MARKET BUY quantity dry-run)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"symbol\": \"BTCUSDT\",\n  \"side\": \"BUY\",\n  \"type\": \"MARKET\",\n  \"quantity\": 0.001,\n  \"dryRun\": true\n}",
+              "description": "Quantity-based MARKET BUYs are converted to an exchange-enforced quoteOrderQty at the estimated average price so Binance caps the realized quote spend at BINANCE_TRADING_MAX_NOTIONAL. MARKET SELLs keep base-quantity sizing."
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/orders",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "orders"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "OK",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"environment\": \"testnet\",\n  \"order\": {\n    \"symbol\": \"BTCUSDT\",\n    \"side\": \"BUY\",\n    \"type\": \"MARKET\",\n    \"quoteOrderQty\": \"50\",\n    \"newOrderRespType\": \"FULL\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST Binance order (MARKET BUY quantity above notional ceiling)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"symbol\": \"BTCUSDT\",\n  \"side\": \"BUY\",\n  \"type\": \"MARKET\",\n  \"quantity\": 1,\n  \"dryRun\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/orders",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "orders"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Bad Request",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"success\": false,\n  \"error\": \"order notional exceeds configured maximum\",\n  \"code\": \"INVALID_ORDER_REQUEST\"\n}"
             }
           ]
         },

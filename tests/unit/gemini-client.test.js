@@ -91,13 +91,14 @@ describe('Gemini Service', () => {
 			// sources are not returned by generateEnrichedAlert
 		});
 
-		it('should preserve valid optional risk metadata from the model response', async () => {
+		it('should preserve valid optional risk metadata and setup_evidence from the model response', async () => {
 			genaiClient.llmCallv2.mockResolvedValue({
 				text: JSON.stringify({
 					...mockEnrichedResponse,
 					invalidation_level: '$80,000',
 					target_level: 90000,
 					setup_type: 'breakout',
+					setup_evidence: 'Price broke above range high with volume',
 					risk_reward_ratio: '2.5:1',
 				}),
 			});
@@ -111,8 +112,36 @@ describe('Gemini Service', () => {
 				invalidation_level: '$80,000',
 				target_level: 90000,
 				setup_type: 'breakout',
+				setup_evidence: 'Price broke above range high with volume',
 				risk_reward_ratio: '2.5:1',
 			}));
+		});
+
+		it('should calibrate generated scores when grounding returns no sources', async () => {
+			genaiClient.llmCallv2.mockResolvedValue({
+				text: JSON.stringify(mockEnrichedResponse),
+			});
+
+			const result = await generateEnrichedAlert({
+				text: 'Bitcoin breaks 83k after a volatile session',
+				searchResults: [],
+			});
+
+			expect(result.sentiment_score).toBe(0.55);
+			expect(result.sentiment_score_raw).toBe(0.9);
+		});
+
+		it('should parse all valid setup_type enum values', () => {
+			const validTypes = ['breakout', 'mean_reversion', 'trend_continuation', 'reversal'];
+			for (const setupType of validTypes) {
+				const result = parseEnrichedAlertResponse(JSON.stringify({
+					...mockEnrichedResponse,
+					setup_type: setupType,
+					setup_evidence: `Evidence for ${setupType}`,
+				}));
+				expect(result.setup_type).toBe(setupType);
+				expect(result.setup_evidence).toBe(`Evidence for ${setupType}`);
+			}
 		});
 
 		it('should omit invalid optional risk metadata without degrading the enrichment', () => {
@@ -121,6 +150,7 @@ describe('Gemini Service', () => {
 				invalidation_level: { price: 80000 },
 				target_level: '   ',
 				setup_type: 'scalp',
+				setup_evidence: 'Some evidence for invalid setup',
 				risk_reward_ratio: Number.NaN,
 			}));
 
@@ -128,7 +158,270 @@ describe('Gemini Service', () => {
 			expect(result).not.toHaveProperty('invalidation_level');
 			expect(result).not.toHaveProperty('target_level');
 			expect(result).not.toHaveProperty('setup_type');
+			expect(result).not.toHaveProperty('setup_evidence');
 			expect(result).not.toHaveProperty('risk_reward_ratio');
+		});
+
+		it('should omit setup_evidence when setup_type is not provided', () => {
+			const result = parseEnrichedAlertResponse(JSON.stringify({
+				...mockEnrichedResponse,
+				setup_evidence: 'Orphan evidence without setup_type',
+			}));
+
+			expect(result.sentiment).toBe('BULLISH');
+			expect(result).not.toHaveProperty('setup_type');
+			expect(result).not.toHaveProperty('setup_evidence');
+		});
+
+		it('parses valid technical_levels arrays from the model response', () => {
+			const result = parseEnrichedAlertResponse(JSON.stringify({
+				...mockEnrichedResponse,
+				technical_levels: {
+					supports: ['79,500', '78k', 77500],
+					resistances: ['$82,300', '83,000'],
+				},
+			}));
+
+			expect(result.technical_levels).toEqual({
+				supports: ['79,500', '78k', '77500'],
+				resistances: ['$82,300', '83,000'],
+			});
+		});
+
+		it('omits technical_levels when both level arrays are empty or missing', () => {
+			const emptyLevels = parseEnrichedAlertResponse(JSON.stringify({
+				...mockEnrichedResponse,
+				technical_levels: { supports: [], resistances: [] },
+			}));
+			expect(emptyLevels).not.toHaveProperty('technical_levels');
+
+			const missingLevels = parseEnrichedAlertResponse(JSON.stringify({ ...mockEnrichedResponse }));
+			expect(missingLevels).not.toHaveProperty('technical_levels');
+		});
+
+		it('drops malformed technical_levels entries and omits the field when nothing survives validation', () => {
+			const result = parseEnrichedAlertResponse(JSON.stringify({
+				...mockEnrichedResponse,
+				technical_levels: {
+					supports: [{ price: 1 }, '   ', null, '80,000', true],
+					resistances: [Number.NaN, [], 85000],
+				},
+			}));
+
+			expect(result.technical_levels).toEqual({
+				supports: ['80,000'],
+				resistances: ['85000'],
+			});
+
+			const allInvalid = parseEnrichedAlertResponse(JSON.stringify({
+				...mockEnrichedResponse,
+				technical_levels: {
+					supports: [{ price: 1 }, '   '],
+					resistances: [null],
+				},
+			}));
+			expect(allInvalid).not.toHaveProperty('technical_levels');
+		});
+
+		it('caps parsed technical level arrays at six entries per side', () => {
+			const result = parseEnrichedAlertResponse(JSON.stringify({
+				...mockEnrichedResponse,
+				technical_levels: {
+					supports: ['s1', 's2', 's3', 's4', 's5', 's6', 's7', 's8'],
+					resistances: ['r1', 'r2', 'r3', 'r4', 'r5', 'r6', 'r7'],
+				},
+			}));
+
+			expect(result.technical_levels.supports).toHaveLength(6);
+			expect(result.technical_levels.resistances).toHaveLength(6);
+		});
+
+		it('does not let malformed early entries consume the per-side quota', () => {
+			const result = parseEnrichedAlertResponse(JSON.stringify({
+				...mockEnrichedResponse,
+				technical_levels: {
+					supports: [{ bad: 1 }, '', null, true, Number.NaN, [], 's-valid-1', 's-valid-2'],
+					resistances: ['r-valid'],
+				},
+			}));
+
+			expect(result.technical_levels.supports).toEqual(['s-valid-1', 's-valid-2']);
+			expect(result.technical_levels.resistances).toEqual(['r-valid']);
+		});
+
+		it('preserves full precision when stringifying numeric levels, including tiny values', () => {
+			const result = parseEnrichedAlertResponse(JSON.stringify({
+				...mockEnrichedResponse,
+				technical_levels: {
+					supports: [1e-21, 77500],
+					resistances: [-1e-21, 1234.5678901234567],
+				},
+			}));
+
+			expect(result.technical_levels.supports).toEqual(['1e-21', '77500']);
+			expect(result.technical_levels.resistances).toEqual(['-1e-21', String(1234.5678901234567)]);
+		});
+
+		it('deduplicates levels before applying the per-side cap', () => {
+			const result = parseEnrichedAlertResponse(JSON.stringify({
+				...mockEnrichedResponse,
+				technical_levels: {
+					supports: ['80k', '80k', '80k', '80k', '80k', '80k', '79k', 80000],
+					resistances: ['85k'],
+				},
+			}));
+
+			expect(result.technical_levels.supports).toEqual(['80k', '79k', '80000']);
+			expect(result.technical_levels.resistances).toEqual(['85k']);
+		});
+
+		it('ignores non-object technical_levels payloads entirely', () => {
+			const stringPayload = parseEnrichedAlertResponse(JSON.stringify({
+				...mockEnrichedResponse,
+				technical_levels: 'supports at 80k',
+			}));
+			expect(stringPayload).not.toHaveProperty('technical_levels');
+
+			const arrayPayload = parseEnrichedAlertResponse(JSON.stringify({
+				...mockEnrichedResponse,
+				technical_levels: [80000],
+			}));
+			expect(arrayPayload).not.toHaveProperty('technical_levels');
+		});
+
+		describe('sentiment_score signed range and sign-coherence guard', () => {
+			it('caps high-confidence zero-source scores and retains the raw score', () => {
+				const result = parseEnrichedAlertResponse(JSON.stringify({
+					sentiment: 'BULLISH',
+					sentiment_score: 0.9,
+					insights: ['Strong move'],
+				}), []);
+
+				expect(result.sentiment_score).toBe(0.55);
+				expect(result.sentiment_score_raw).toBe(0.9);
+			});
+
+			it('leaves sourced scores unchanged without a raw calibration field', () => {
+				const result = parseEnrichedAlertResponse(JSON.stringify({
+					sentiment: 'BEARISH',
+					sentiment_score: -0.9,
+					insights: ['Weak move'],
+				}), [{ url: 'https://example.com' }]);
+
+				expect(result.sentiment_score).toBe(-0.9);
+				expect(result).not.toHaveProperty('sentiment_score_raw');
+			});
+
+			it('does not add a raw score when a zero-source score is already below the cap', () => {
+				const result = parseEnrichedAlertResponse(JSON.stringify({
+					sentiment: 'BULLISH',
+					sentiment_score: 0.4,
+					insights: [],
+				}), []);
+
+				expect(result.sentiment_score).toBe(0.4);
+				expect(result).not.toHaveProperty('sentiment_score_raw');
+			});
+
+			it('preserves negative sentiment_score in [-1, 1] for BEARISH sentiment', () => {
+				const result = parseEnrichedAlertResponse(JSON.stringify({
+					sentiment: 'BEARISH',
+					sentiment_score: -0.75,
+					insights: ['Bearish trend continuing'],
+				}));
+
+				expect(result.sentiment).toBe('BEARISH');
+				expect(result.sentiment_score).toBe(-0.75);
+			});
+
+			it('clamps negative values beyond -1.0 to -1.0', () => {
+				const result = parseEnrichedAlertResponse(JSON.stringify({
+					sentiment: 'BEARISH',
+					sentiment_score: -1.8,
+					insights: [],
+				}));
+
+				expect(result.sentiment).toBe('BEARISH');
+				expect(result.sentiment_score).toBe(-1.0);
+			});
+
+			it('clamps positive values beyond 1.0 to 1.0', () => {
+				const result = parseEnrichedAlertResponse(JSON.stringify({
+					sentiment: 'BULLISH',
+					sentiment_score: 1.8,
+					insights: [],
+				}));
+
+				expect(result.sentiment).toBe('BULLISH');
+				expect(result.sentiment_score).toBe(1.0);
+			});
+
+			it('enforces sign-coherence: converts positive score to negative for BEARISH sentiment', () => {
+				const result = parseEnrichedAlertResponse(JSON.stringify({
+					sentiment: 'BEARISH',
+					sentiment_score: 0.85,
+					insights: ['Downtrend detected'],
+				}));
+
+				expect(result.sentiment).toBe('BEARISH');
+				expect(result.sentiment_score).toBe(-0.85);
+			});
+
+			it('enforces sign-coherence: converts negative score to positive for BULLISH sentiment', () => {
+				const result = parseEnrichedAlertResponse(JSON.stringify({
+					sentiment: 'BULLISH',
+					sentiment_score: -0.85,
+					insights: ['Uptrend detected'],
+				}));
+
+				expect(result.sentiment).toBe('BULLISH');
+				expect(result.sentiment_score).toBe(0.85);
+			});
+
+			it('forces sentiment_score to 0 for NEUTRAL sentiment regardless of input', () => {
+				const resultWithScore = parseEnrichedAlertResponse(JSON.stringify({
+					sentiment: 'NEUTRAL',
+					sentiment_score: 0.6,
+					insights: ['Consolidation phase'],
+				}));
+				expect(resultWithScore.sentiment).toBe('NEUTRAL');
+				expect(resultWithScore.sentiment_score).toBe(0);
+
+				const resultWithoutScore = parseEnrichedAlertResponse(JSON.stringify({
+					sentiment: 'NEUTRAL',
+					insights: [],
+				}));
+				expect(resultWithoutScore.sentiment).toBe('NEUTRAL');
+				expect(resultWithoutScore.sentiment_score).toBe(0);
+			});
+
+			it('falls back to directional defaults when score is missing or invalid', () => {
+				const bullishNoScore = parseEnrichedAlertResponse(JSON.stringify({
+					sentiment: 'BULLISH',
+					insights: [],
+				}));
+				expect(bullishNoScore.sentiment).toBe('BULLISH');
+				expect(bullishNoScore.sentiment_score).toBe(0.5);
+
+				const bearishNoScore = parseEnrichedAlertResponse(JSON.stringify({
+					sentiment: 'BEARISH',
+					insights: [],
+				}));
+				expect(bearishNoScore.sentiment).toBe('BEARISH');
+				expect(bearishNoScore.sentiment_score).toBe(-0.5);
+
+				const bearishZeroScore = parseEnrichedAlertResponse(JSON.stringify({
+					sentiment: 'BEARISH',
+					sentiment_score: 0,
+					insights: [],
+				}));
+				expect(bearishZeroScore.sentiment).toBe('BEARISH');
+				expect(bearishZeroScore.sentiment_score).toBe(-0.5);
+
+				const malformed = parseEnrichedAlertResponse('not valid json');
+				expect(malformed.sentiment).toBe('NEUTRAL');
+				expect(malformed.sentiment_score).toBe(0);
+			});
 		});
 
 		it('adds provider usage returned by llmCallv2 to the token tracker', async () => {
@@ -218,7 +511,7 @@ describe('Gemini Service', () => {
 			});
 
 			expect(result.sentiment).toBe('NEUTRAL');
-			expect(result.sentiment_score).toBe(0.5);
+			expect(result.sentiment_score).toBe(0);
 			expect(result.insights).toHaveLength(0);
 			expect(genaiClient.llmCallv2).not.toHaveBeenCalled();
 		});
@@ -267,7 +560,7 @@ describe('Gemini Service', () => {
 			});
 
 			expect(result.sentiment).toBe('NEUTRAL');
-			expect(result.sentiment_score).toBe(0.5);
+			expect(result.sentiment_score).toBe(0);
 			expect(result.insights).toEqual([]);
 			// Fallback model should NOT be called
 			expect(genaiClient.llmCallv2).toHaveBeenCalledTimes(1);

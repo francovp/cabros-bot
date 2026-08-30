@@ -148,6 +148,7 @@ class GenaiClient {
 		const toolConfig = {
 			tools: [groundingTool],
 			temperature: 0.2,
+			...(signal ? { abortSignal: signal } : {}),
 		};
 
 		if (signal?.aborted) {
@@ -269,6 +270,7 @@ class GenaiClient {
 				error.retryDelay = remainingMs;
 				throw error;
 			}
+			geminiQuotaManager.recordBraveFallbackDuringCooldown();
 			console.warn('[genaiClient] Gemini process quota cooldown active. Falling back immediately to Brave Search.');
 			return this._executeBraveSearch(query, maxResults, signal);
 		}
@@ -347,6 +349,7 @@ class GenaiClient {
 			config: {
 				maxOutputTokens: opts.maxTokens !== undefined ? opts.maxTokens : null,
 				temperature,
+				...(signal ? { abortSignal: signal } : {}),
 			},
 			context,
 		});

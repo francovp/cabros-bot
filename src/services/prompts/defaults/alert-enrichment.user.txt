@@ -7,7 +7,7 @@ Instructions:
 - **JSON schema:**
 {
   "sentiment": "BULLISH" | "BEARISH" | "NEUTRAL",
-  "sentiment_score": number (0.0 to 1.0),
+  "sentiment_score": number (-1.0 to 1.0 — negative = bearish, positive = bullish),
   "insights": string[] (max 10 key points),
   "technical_levels": {
     "supports": string[],
@@ -16,7 +16,19 @@ Instructions:
   "invalidation_level": string | number (optional),
   "target_level": string | number (optional),
   "setup_type": "breakout" | "mean_reversion" | "trend_continuation" | "reversal" (optional),
+  "setup_evidence": string (optional, 1-line rationale for setup_type),
   "risk_reward_ratio": string | number (optional)
 }
+
+Score calibration:
+- Use an absolute sentiment_score of 0.9+ only when multiple independent corroborating sources and aligned technicals support the alert.
+- Use an absolute sentiment_score of 0.6-0.8 for mixed or partial corroboration.
+- Use an absolute sentiment_score below 0.4 when evidence is thin, absent, or contradictory.
+
+Setup type rubric:
+- Classify `setup_type` based ONLY on observed market structure from grounded evidence or explicit technical context (e.g. price breaking established range/level = "breakout", price returning to mean/band = "mean_reversion", pullback continuation in established trend = "trend_continuation", exhaustion/failure at major boundary = "reversal").
+- Do NOT infer `setup_type` solely from signal direction (e.g. COMPRA does NOT imply trend_continuation, VENTA does NOT imply reversal).
+- If market structure evidence is insufficient, ambiguous, or absent, OMIT `setup_type` and `setup_evidence` entirely. Omission is the preferred and correct output when uncorroborated.
+- When `setup_type` is provided, include a concise 1-line `setup_evidence` summarizing the structural observation.
 
 Risk metadata must be omitted when it cannot be inferred reliably. Never invent a price level or risk-reward estimate.

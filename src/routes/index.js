@@ -12,6 +12,7 @@ const {
 	postRunPreset,
 } = require('../controllers/webhooks/handlers/scannerPresets/scannerPresets');
 const { postVolumeConfirmation } = require('../controllers/webhooks/handlers/volumeConfirmation/volumeConfirmation');
+const { postSymbolAnalysis } = require('../controllers/webhooks/handlers/symbolAnalysis/symbolAnalysis');
 const {
 	postCreateJob,
 	getJobList,
@@ -21,7 +22,7 @@ const {
 	postRetryFailedJob,
 } = require('../controllers/webhooks/handlers/jobs/jobs');
 const { listAlerts, getAlertById, replayAlert, summarizeAlerts, exportAlerts } = require('../controllers/alerts/alerts');
-const { listOutcomes } = require('../controllers/outcomes/outcomes');
+const { listOutcomes, summarizeOutcomes } = require('../controllers/outcomes/outcomes');
 const { validateApiKey } = require('../lib/auth');
 const { getApiStatus } = require('../controllers/status');
 const { postBinanceOrder, getBinanceOrders } = require('../controllers/trading/binanceOrders');
@@ -45,12 +46,14 @@ function getRoutes(botOrGetter) {
 	router.post('/webhook/expanded-analysis-alert', validateApiKey, idempotencyMiddleware, postExpandedAnalysisAlert(botOrGetter));
 	router.post('/webhook/market-scanner-alert', validateApiKey, idempotencyMiddleware, postMarketScannerAlert(botOrGetter));
 	router.post('/webhook/volume-confirmation', validateApiKey, postVolumeConfirmation());
+	router.post('/webhook/symbol-analysis', validateApiKey, postSymbolAnalysis());
 	router.get('/alerts', ...adminRead, listAlerts);
 	router.get('/alerts/summary', ...adminRead, summarizeAlerts);
 	router.get('/alerts/export', ...adminRead, exportAlerts);
 	router.post('/alerts/:alertId/replay', ...adminWrite, idempotencyMiddleware, replayAlert(botOrGetter));
 	router.get('/alerts/:alertId', ...adminRead, getAlertById);
 	router.get('/outcomes', ...adminRead, listOutcomes);
+	router.get('/outcomes/summary', ...adminRead, summarizeOutcomes);
 	router.post('/scanner-presets', ...adminWrite, postPreset);
 	router.get('/scanner-presets', ...adminRead, listPresets);
 	router.get('/scanner-presets/:id', ...adminRead, getPreset);

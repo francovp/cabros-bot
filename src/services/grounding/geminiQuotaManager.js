@@ -8,6 +8,10 @@
 class GeminiQuotaManager {
 	constructor() {
 		this.quotaCooldownUntil = 0;
+		this.lastTriggeredAt = null;
+		this.triggersTotal = 0;
+		this.braveFallbacksDuringCooldown = 0;
+		this.lastBraveFallbackAt = null;
 	}
 
 	/**
@@ -73,7 +77,11 @@ class GeminiQuotaManager {
 	 */
 	triggerQuotaCooldown(error, attempt = 1, baseDelayMs = 1000) {
 		const delayMs = this.extractRetryDelayMs(error, attempt, baseDelayMs);
-		const newCooldownUntil = Date.now() + delayMs;
+		const now = Date.now();
+		const newCooldownUntil = now + delayMs;
+		this.triggersTotal += 1;
+		this.lastTriggeredAt = new Date(now).toISOString();
+
 		if (newCooldownUntil > this.quotaCooldownUntil) {
 			this.quotaCooldownUntil = newCooldownUntil;
 			console.warn('[GeminiQuotaManager] Gemini 429 quota exhaustion detected. Process-level cooldown activated:', {
@@ -83,6 +91,29 @@ class GeminiQuotaManager {
 			});
 		}
 		return delayMs;
+	}
+
+	/**
+	 * Record a fallback to Brave search during active cooldown
+	 */
+	recordBraveFallbackDuringCooldown() {
+		this.braveFallbacksDuringCooldown += 1;
+		this.lastBraveFallbackAt = new Date().toISOString();
+	}
+
+	/**
+	 * Get snapshot of current quota manager state and counters
+	 * @returns {object}
+	 */
+	getSnapshot() {
+		return {
+			cooldownActive: this.isCooldownActive(),
+			remainingCooldownMs: this.getRemainingCooldownMs(),
+			lastTriggeredAt: this.lastTriggeredAt,
+			triggersTotal: this.triggersTotal,
+			braveFallbacksDuringCooldown: this.braveFallbacksDuringCooldown,
+			lastBraveFallbackAt: this.lastBraveFallbackAt,
+		};
 	}
 
 	/**
@@ -146,6 +177,10 @@ class GeminiQuotaManager {
 	 */
 	resetForTesting() {
 		this.quotaCooldownUntil = 0;
+		this.lastTriggeredAt = null;
+		this.triggersTotal = 0;
+		this.braveFallbacksDuringCooldown = 0;
+		this.lastBraveFallbackAt = null;
 	}
 }
 

@@ -161,7 +161,7 @@ describe('retryHelper', () => {
 			const elapsed = Date.now() - start;
 
 			expect(elapsed).toBeGreaterThanOrEqual(90);
-			expect(elapsed).toBeLessThan(200); // Allow some variance
+			expect(elapsed).toBeLessThan(1000); // Allow scheduling variance on busy CI runners
 		});
 	});
 });

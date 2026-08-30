@@ -29,7 +29,7 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 
 #### Security
 
-- `WEBHOOK_API_KEY` - API key used to secure `/api/*` endpoints. When configured, clients must provide the key via the `x-api-key` header (or the `api-key` query parameter)
+- `WEBHOOK_API_KEY` - API key used to secure `/api/*` webhook endpoints. Required in production-like environments (`NODE_ENV=production`, Render, Vercel, Railway), where endpoints fail-closed with HTTP 503 if unset. When configured, clients must provide the key via the `x-api-key` header (or the `api-key` query parameter)
 - `ENABLE_FIREBASE_ADMIN_AUTH` - Enable opt-in Firebase email/password authentication for the browser admin console (`false` by default)
 - `FIREBASE_WEB_API_KEY` - Public Firebase Web API key used by the browser sign-in flow; not a service-account credential
 - `FIREBASE_AUTH_DOMAIN` - Public Firebase Auth domain used by the browser sign-in flow
@@ -37,12 +37,15 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 - `FIREBASE_APP_ID` - Public Firebase Web app ID (optional for Auth, recommended)
 - `FIREBASE_WEB_CONFIG_JSON` - Optional JSON alternative containing the public Firebase Web config (`apiKey`, `authDomain`, `projectId`, and optional `appId`)
 
-#### WhatsApp Alerts (GreenAPI)
+#### WhatsApp Alerts & Commands (GreenAPI)
 
 - `ENABLE_WHATSAPP_ALERTS` - Enable WhatsApp alerts (`true` or `false`, default: `false`)
 - `WHATSAPP_API_URL` - GreenAPI endpoint URL (e.g., `https://7107.api.green-api.com/waInstance7107356806/`)
 - `WHATSAPP_API_KEY` - GreenAPI API key for authentication
 - `WHATSAPP_CHAT_ID` - Destination WhatsApp chat/group ID (format: `120363xxxxx@g.us`)
+- `ENABLE_WHATSAPP_COMMANDS` - Enable WhatsApp inbound commands poller (`!precio`, `!help`) (`true` or `false`, default: `false`)
+- `WHATSAPP_COMMAND_CHAT_IDS` - Comma-separated list of WhatsApp chat/group IDs permitted to run commands (e.g., `120363025492938@g.us`)
+- `WHATSAPP_COMMAND_POLL_INTERVAL_MS` - Inbound command polling interval in milliseconds (default: `3000`)
 
 #### Discord Alerts (Webhook)
 
@@ -61,6 +64,9 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 - `NOTIFICATION_REDRIVE_BATCH_LIMIT` - Maximum candidate records per sweep (default: `50`, Remote Config supported)
 - `NOTIFICATION_REDRIVE_MAX_ATTEMPTS` - Maximum attempts before terminal exhaustion (default: `5`, Remote Config supported)
 - `NOTIFICATION_REDRIVE_MAX_AGE_MS` - Maximum lifespan of dead-letter records before expiration (default: `3600000`, Remote Config supported)
+- Firestore-backed `notificationDeadLetters` records use `expiresAt`; run `bash ops/configure-operational-collection-retention.sh` once per project to enable native TTL and optionally backfill legacy records.
+- `ZERO_CHANNEL_ALERT_COOLDOWN_MS` - Cooldown between admin notifications when all channels are disabled in milliseconds (default: `300000`, Remote Config supported)
+- `ENABLE_API_ONLY_MODE` - Declare intentional API-only mode without notification delivery, suppressing zero-channel alerts and dead-letters (default: `false`, Remote Config supported)
 
 #### URL Shortening (003-news-monitor)
 
@@ -77,6 +83,7 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 - `GROUNDING_MAX_SOURCES` - Maximum grounded sources per alert (default: `3`)
 - `GROUNDING_TIMEOUT_MS` - Grounding request timeout (default: `30000` ms)
 - `GROUNDING_MAX_LENGTH` - Maximum alert text length used in grounding prompts (default: `2000` characters)
+- `ALERT_GROUNDING_COALESCE_MS` - Optional equity-alert search coalescing window in milliseconds (default: `0`, disabled; Remote Config supported)
 
 #### Cloudflare AI Gateway
 
@@ -101,6 +108,7 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 - `ENABLE_TRADINGVIEW_MCP_ENRICHMENT` - Enable TradingView MCP enrichment for TradingView-like webhook messages (`true` or `false`, default: `false`)
 - `EXPANDED_ANALYSIS_ALERT_SYMBOLS` - Comma-separated fallback symbols for `/api/webhook/expanded-analysis-alert` using `EXCHANGE:SYMBOL` format (for example `BINANCE:BTCUSDT,NASDAQ:NVDA`)
 - `EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS` - Total analysis deadline for `/api/webhook/expanded-analysis-alert` in milliseconds (default: `60000`, capped at `120000`)
+- `EXPANDED_ANALYSIS_ALERT_CONCURRENCY` - Maximum concurrent expanded-analysis MCP calls in webhook and job paths (default: `3`, valid range: `1`-`10`)
 - `TRADINGVIEW_MCP_URL` - MCP server HTTP endpoint (default: `https://tradingview-mcp-yp6b.onrender.com/mcp`)
 - `TRADINGVIEW_MCP_TIMEOUT_MS` - Timeout per MCP request in milliseconds (default: `12000`, valid range: `1000`-`120000`)
 - `TRADINGVIEW_MCP_MAX_RETRIES` - Retries for MCP failures (default: `3`, valid range: `1`-`5`)
@@ -110,6 +118,9 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 - `ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION` - Enable volume confirmation validation for TradingView alerts (`true` or `false`, default: `false`)
 - `ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT` - Enable optional `combined_analysis` confluence enrichment for TradingView webhook alerts (`true` or `false`, default: `false`)
 - `ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME` - Also call `multi_timeframe_analysis` during confluence enrichment (`true` or `false`, default: `false`)
+- `ENABLE_ALERT_HTF_RENDER` - Enable rendering higher-timeframe trend alignment on enriched webhook alerts (`true` or `false`, default: `true`)
+- `ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION` - Suppress duplicate channel delivery for the same `exchange|symbol|timeframe|side` signal within its cooldown window; suppressed alerts are still persisted with a `suppressedRepeat: true` marker and opposite-side flips always deliver (`true` or `false`, default: `false`)
+- `ALERT_SIGNAL_COOLDOWN_BARS` - Cooldown length in alert-timeframe bars for repeat suppression (`1`-`10`, default: `1`)
 - Runtime gate: TradingView MCP data is only used when webhook requests include `?useTradingViewData=true`
 
 #### Firestore Alert Storage
@@ -141,7 +152,7 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 
 `render.yaml` provisions a starter Background Worker and Key Value store. The web service remains on `JOB_EXECUTION_MODE=local` by default; switching it to `render-worker` requires the worker, Redis, and Firestore credentials to be available. For deployments without Redis, `JOB_EXECUTION_MODE=firestore-poller` allows dedicated workers to poll Firestore directly without extra infrastructure. The API returns `503 JOB_QUEUE_UNAVAILABLE` instead of accepting a job when durable storage or queue requirements are not met. If enqueue acknowledgement and deterministic Redis reconciliation both fail in `render-worker` mode, it returns `503 JOB_QUEUE_ACCEPTANCE_UNKNOWN` with the durably stored `jobId`; the worker periodically re-enqueues durable queued rows, retries retained failed BullMQ jobs, and recovers expired claims after Redis recovers.
 
-Unfiltered signal outcome summaries include `shadowModeMetrics.exchangeBreakdown` and `shadowModeMetrics.providerBreakdown` coverage buckets (`received`, `eligible`, `evaluated`, `pending`, `unavailable`). Filtered alert summaries/exports omit shadow-mode metrics because that service has no matching source/enrichment filters. Equity signals only enter the eligible/evaluated population when the opt-in Twelve Data provider is configured; otherwise they remain explicitly unavailable.
+Unfiltered signal outcome summaries include `shadowModeMetrics.exchangeBreakdown` and `shadowModeMetrics.providerBreakdown` coverage buckets (`received`, `eligible`, `evaluated`, `pending`, `unavailable`). Target and stop hit rates use barrier-eligible denominators: evaluated outcomes without a configured target or stop (`null`/non-positive) are excluded from the corresponding rate instead of counted as misses, and `windows[*].targetEligibleWindows` / `windows[*].stopEligibleWindows` expose each window's eligible denominator. Filtered alert summaries/exports omit shadow-mode metrics because that service has no matching source/enrichment filters. Equity signals only enter the eligible/evaluated population when the opt-in Twelve Data provider is configured; otherwise they remain explicitly unavailable.
 
 #### Firebase Remote Config (server-side Preview)
 
@@ -180,7 +191,7 @@ pnpm test:firebase
 - `RAILWAY_GIT_COMMIT_SHA` / `RAILWAY_GIT_REPO_OWNER` / `RAILWAY_GIT_REPO_NAME` - Railway GitHub deployment metadata used for release and deployment notifications
 - `TRUST_PROXY` - Express trusted proxy setting for reverse-proxy deployments (`true`, `false`, `1` hop, or subnet string; defaults to `1` on Render/Vercel/Railway, and `false` for direct deployments)
 - `RATE_LIMIT_WINDOW_MS` - Global API rate limiter window in milliseconds (default: `900000` / 15 minutes; invalid values use the default)
-- `RATE_LIMIT_MAX` - Global API rate limiter max requests per window (default: `100`; invalid values use the default)
+- `RATE_LIMIT_MAX` - Global API rate limiter max requests per window (default: `100`; invalid values use the default). Core `/api/webhook/alert` and `/api/webhook/message` ingest uses an isolated finite bucket of 1,000 requests per window so TradingView bursts do not consume the ordinary client bucket; API-key validation still applies.
 - `LOG_LEVEL` - Structured JSON log verbosity (`debug`, `info`, `warn`, `error`, `silent`; defaults to `debug` in development and `info` in production)
 - `SERVICE_NAME` - Optional service name included in JSON logs (default: package name or `cabros-bot`)
 
@@ -197,6 +208,7 @@ pnpm test:firebase
 - `NEWS_GEMINI_QUOTA_MAX_RETRIES` - Max per-symbol retries for Gemini `429 RESOURCE_EXHAUSTED` errors (default: `2`)
 - `NEWS_GEMINI_QUOTA_RETRY_BASE_MS` - Base exponential backoff when Gemini does not provide retry delay metadata (default: `1000` ms)
 - `ENABLE_BINANCE_PRICE_CHECK` - Enable Binance crypto price fetching (`true` or `false`, default: `false`)
+- `BINANCE_DATA_BASE_URL` - Optional custom Binance market-data host for public data (klines, ticker, avgPrice), e.g. `https://data-api.binance.vision` (default: unset / `https://api.binance.com`)
 - `BINANCE_FETCH_TIMEOUT_MS` - Binance price request timeout (default: `5000` ms)
 
 #### Binance Spot Order Execution
@@ -204,11 +216,12 @@ pnpm test:firebase
 - `ENABLE_BINANCE_TRADING` - Enable the operator-only Spot order endpoint (`true` or `false`, default: `false`)
 - `BINANCE_API_KEY` / `BINANCE_API_SECRET` - Server-side Binance credentials with Spot trading permission only; withdrawals must remain disabled and IP restrictions are recommended
 - `BINANCE_TRADING_ENV` - Binance environment: `testnet` (default) or explicit `live`
+- `BINANCE_TRADING_BASE_URL` - Optional custom base URL for Binance trading endpoints in live mode (default: unset / `https://api.binance.com`)
 - `BINANCE_TRADING_ALLOWED_SYMBOLS` - Comma-separated Spot symbol allow-list, for example `BTCUSDT,ETHUSDT`
 - `BINANCE_TRADING_MAX_NOTIONAL` - Maximum order notional in quote asset, enforced before submission
 - `BINANCE_TRADING_TIMEOUT_MS` - Signed request timeout (default `10000` ms, capped at `30000` ms)
 
-`POST /api/trading/binance/orders` requires `admin.operator` access through the existing API-key or Firebase admin authentication flow, and fails closed if neither mechanism is configured. It supports `MARKET` and `LIMIT` `BUY`/`SELL` orders, validates the live Binance symbol status and filters, and uses the existing `binance` `MainClient`. MARKET orders accept either `quoteOrderQty` or base asset `quantity` (evaluated using average price against the configured notional cap).
+`POST /api/trading/binance/orders` requires `admin.operator` access through the existing API-key or Firebase admin authentication flow, and fails closed if neither mechanism is configured. It supports `MARKET` and `LIMIT` `BUY`/`SELL` orders, validates the live Binance symbol status and filters, and uses the existing `binance` `MainClient`. MARKET orders accept either `quoteOrderQty` or base asset `quantity` (evaluated using average price against the configured notional cap). Quantity-based MARKET BUYs are converted to an exchange-enforced `quoteOrderQty` at the estimated average price so Binance itself caps the realized quote spend at `BINANCE_TRADING_MAX_NOTIONAL`; quantity-based MARKET SELLs keep base-quantity sizing.
 
 `dryRun` defaults to `true` and validates the request without submitting. Set `dryRun: false` only after enabling the feature and explicitly selecting the intended environment. The default environment is Spot Testnet; `live` is never selected implicitly. Live requests require `idempotency-key` (or `x-idempotency-key`) or an explicit `clientOrderId`; a matching request is replayed and a changed payload returns `409 IDEMPOTENCY_CONFLICT`. Send decimal quantities, prices, and quote amounts as strings when exact precision matters; the service preserves those values through validation, submission, and reconciliation by disabling Binance SDK response beautification. MARKET orders must omit `timeInForce`; Binance order-test validation runs for LIMIT dynamic price filters and account-dependent filters such as `MAX_POSITION` and `MAX_NUM_ORDERS`. Definitive Binance rejections, including pre-execution timestamp and throttling failures, return `400 BINANCE_ORDER_REJECTED`; a recovered Binance order that does not match the request returns `409 BINANCE_ORDER_CONFLICT`; transient order-test failures return retryable `502 BINANCE_VALIDATION_FAILED`. A live request with an idempotency key derives a deterministic Binance `clientOrderId`; after cache expiration or process restart, the service reconciles that ID before submitting again. If Binance submission status is ambiguous, including Binance execution-unknown code `-1006`, the API returns `503 BINANCE_ORDER_STATUS_UNKNOWN` and replays that result for the same key; reconcile the order before retrying with a new key.
 
@@ -244,6 +257,15 @@ The response and audit logs include only sanitized order metadata. API credentia
 - When Firestore is initialized and writes succeed, scanner-preset responses and `/api/status` report `storage.mode: "durable"` with `backend: "firestore"`.
 - When the flag is disabled, or Firestore initialization/write fails, the service reports `storage.mode: "ephemeral"` with `backend: "memory"`; presets in this mode can be lost on restart or redeploy.
 - `dependencies.scannerPresetStorage` in `/api/status` and `/api/capabilities` exposes `enabled`, `configured`, `ready`, `status`, `mode`, and `backend` without secrets. A `misconfigured` status means a Firestore gate is enabled but the client is unavailable.
+
+#### Scanner Preset Scheduler
+
+- `ENABLE_SCANNER_PRESET_SCHEDULER` - Enable background recurring execution of scheduled scanner presets (default: `false`)
+- `SCANNER_PRESET_SCHEDULER_WORKER_ROLE` - Scheduler worker role: `web` (default), `worker`, or `disabled`.
+- `SCANNER_PRESET_SCHEDULER_INTERVAL_MS` - Background sweep interval in milliseconds (default: `60000`, bounds `1000`-`3600000`).
+- `SCANNER_PRESET_SCHEDULER_BATCH_LIMIT` - Maximum due presets processed per sweep (default: `50`, bounds `1`-`500`).
+- `SCANNER_PRESET_SCHEDULER_LEASE_MS` - Distributed concurrency lock lease duration in milliseconds (default: `120000`, bounds `10000`-`600000`).
+- `dependencies.scannerPresetScheduler` in `/api/status` and `/api/capabilities` exposes `enabled`, `configured`, `ready`, `status`, `role`, `running`, `shutdownRequested`, and execution counters without secrets.
 
 ## Setup
 
@@ -281,13 +303,21 @@ Then edit `.env` with your specific values. See `.env.example` for complete docu
 
 See [Environment Configuration](#environment-configuration) section below for detailed descriptions of each variable.
 
-### 3. Run Development Server
+### 3. Check Configuration
+
+Run the fail-open configuration doctor before deployment. It exits successfully even when it finds warnings and never prints secret values:
+
+```bash
+pnpm run doctor
+```
+
+### 4. Run Development Server
 
 ```bash
 pnpm start-dev
 ```
 
-### 4. Run Production Server
+### 5. Run Production Server
 
 ```bash
 pnpm start
@@ -312,7 +342,7 @@ Machine-readable runtime status for operational tooling. This endpoint uses the 
 
 The response intentionally exposes only non-sensitive booleans and metadata: service identity, version, commit, environment, feature-flag state, delivery channel readiness, and dependency readiness/configuration status. Secret values such as bot tokens, API keys, DSNs, chat IDs, and provider URLs are not returned.
 
-For `ENABLE_NEWS_MONITOR=true`, the payload also reports the primary LLM dependency used by that flow as `dependencies.newsMonitorLlm`, including the resolved provider (`gemini`, `azure`, or `openrouter`) and whether that provider is actually configured for runtime use. When `FORCE_BRAVE_SEARCH=true`, the payload also exposes `dependencies.braveSearch` so the forced search path can be monitored independently of Gemini. When `ENABLE_GEMINI_GROUNDING=true` and `MODEL_PROVIDER=gemini`, `dependencies.gemini` requires both `GEMINI_API_KEY` and `GEMINI_MODEL_NAME`, matching the runtime path used for grounded alert generation. Firestore readiness treats `GOOGLE_APPLICATION_CREDENTIALS` as configured only when the referenced credential file exists and is readable.
+For `ENABLE_NEWS_MONITOR=true`, the payload also reports the primary LLM dependency used by that flow as `dependencies.newsMonitorLlm`, including the resolved provider (`gemini`, `azure`, or `openrouter`) and whether that provider is actually configured for runtime use. When `FORCE_BRAVE_SEARCH=true`, the payload also exposes `dependencies.braveSearch` so the forced search path can be monitored independently of Gemini. When `ENABLE_GEMINI_GROUNDING=true` and `MODEL_PROVIDER=gemini`, `dependencies.gemini` requires both `GEMINI_API_KEY` and `GEMINI_MODEL_NAME`, matching the runtime path used for grounded alert generation. `dependencies.geminiQuota` reports whether a Gemini quota cooldown is active, bounded remaining cooldown duration, trigger counters, Brave search fallback events during cooldown, and grounding request telemetry counters (`totalRequests`, `successRequests`, `failureRequests`, `timeoutRequests`) without exposing prompts, error bodies, or provider credentials. `dependencies.groundingCoalescing` reports the bounded equity-alert search sharing window and hit/miss/failure counters. Firestore readiness treats `GOOGLE_APPLICATION_CREDENTIALS` as configured only when the referenced credential file exists and is readable.
 
 When `ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION=true`, `featureFlags.tradingViewVolumeConfirmation` reports the gate value and `dependencies.tradingViewVolumeConfirmation` reports readiness only when the configured TradingView MCP endpoint and its parent MCP enrichment gate are active.
 
@@ -323,6 +353,8 @@ When `ENABLE_FIRESTORE_JOB_STORAGE=true`, `featureFlags.firestoreJobStorage` rep
 `featureFlags.newsMonitorTestMode` reports `ENABLE_NEWS_MONITOR_TEST_MODE` without changing the news monitor's existing test-mode behavior.
 
 `featureFlags.messageFooterMetadata` reports the `ENABLE_MESSAGE_FOOTER_METADATA` setting. It defaults to `true` and is disabled only when the environment variable is explicitly set to `false`.
+
+When `ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION=true`, `/api/webhook/alert` suppresses duplicate channel delivery for the same `(exchange, symbol, timeframe, side)` signal within a cooldown window of `ALERT_SIGNAL_COOLDOWN_BARS` bars (default `1`). Suppressed requests still return 200 with `suppressedRepeat: true`, empty `results`/`deliveredChannels`, and remain persisted with a suppression marker so replay and audit stay complete. Opposite-side flips always deliver; storage failures fail open to normal delivery. `featureFlags.alertSignalRepeatSuppression` reports the gate and `dependencies.alertSignalRepeatSuppression` exposes non-sensitive counters (`suppressedCount`, `lastSuppressedAt`, `activeTrackedSignals`).
 
 `featureFlags.cloudflareAig` reports `ENABLE_CLOUDFLARE_AIG`, while `dependencies.cloudflareAig` reports whether the Cloudflare AI Gateway credentials are configured and ready. Runtime provider selection is controlled separately by `MODEL_PROVIDER=cloudflare`; set both values when status/capability telemetry should match active Cloudflare routing.
 
@@ -395,7 +427,7 @@ The `/admin` console is deployed as a static site on Firebase Hosting for the `c
     "telegram": { "enabled": true, "configured": true, "ready": true, "status": "ready" },
     "whatsapp": { "enabled": false, "configured": false, "ready": false, "status": "disabled" },
     "gemini": { "enabled": true, "configured": true, "ready": true, "status": "ready" },
-    "tradingViewMcp": { "enabled": true, "configured": true, "ready": false, "status": "unknown", "lastCheckedAt": null, "lastSuccessAt": null, "lastFailureAt": null, "lastErrorCategory": null, "successCount": 0, "failureCount": 0 },
+    "tradingViewMcp": { "enabled": true, "configured": true, "ready": false, "status": "unknown", "lastCheckedAt": null, "lastSuccessAt": null, "lastFailureAt": null, "lastErrorCategory": null, "successCount": 0, "failureCount": 0, "enrichment": { "alertPath": { "windowMs": 86400000, "totalCount": 0, "appliedCount": 0, "failedCount": 0, "appliedRate24h": 0, "failureRate24h": 0 } } },
     "tradingViewVolumeConfirmation": { "enabled": false, "configured": true, "ready": false, "status": "disabled", "lastCheckedAt": null, "lastSuccessAt": null, "lastFailureAt": null, "lastErrorCategory": null, "successCount": 0, "failureCount": 0 },
     "firestore": { "enabled": true, "configured": true, "ready": true, "status": "ready" },
     "firestoreJobStorage": { "enabled": false, "configured": true, "ready": false, "status": "disabled" },
@@ -486,12 +518,14 @@ When `ENABLE_TRADINGVIEW_MCP_ENRICHMENT=true`, webhook alerts matching TradingVi
 3. If TradingView pattern is detected, it queries `coin_analysis` via MCP and uses that output as an **additional real-time technical source**.
 4. If `ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT=true`, it also calls `combined_analysis` inside the same enrichment budget and annotates or downgrades the signal when confluence contradicts the webhook side.
 5. If `ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME=true`, it also calls `multi_timeframe_analysis` and returns the raw multi-timeframe metadata in dry-run/stored enrichment data.
-6. Gemini/Brave grounding still runs when enabled, and the final `alert.enriched` merges grounding context + MCP technical data.
+6. Gemini/Brave grounding still runs when enabled, and the final `alert.enriched` merges grounding context + MCP technical data. When grounding returns no sources, Gemini sentiment magnitude is capped at `0.55`; the original signed value is retained as `sentiment_score_raw` only when that cap changes the score.
 7. If either provider fails, the flow degrades gracefully to the other provider (or original text if none succeed).
 
 Base `coin_analysis` gets the full configured budget when optional enrichment is disabled; when volume/confluence calls are enabled, it gets a bounded sub-budget so a timed-out first attempt can retry before the total envelope expires. Optional calls share the remaining envelope; if one times out, the base result is retained with `tradingViewEnrichmentStatus: "partial"` (or `"full"` when all requested enrichment completes). Failed base enrichment remains fail-open and is tracked as `"failed"` in runtime/storage telemetry.
 
-When TradingView data is requested, `alert.enriched.tradingViewEnrichmentApplied` is `true` only when the MCP result was successfully applied. `tradingViewEnrichmentStatus` reports `full`, `partial`, `failed`, or `not_applicable`; the status is persisted separately from `useTradingViewData`, so analytics can distinguish requested, delivered, partial, and failed enrichment.
+When TradingView data is requested, `alert.enriched.tradingViewEnrichmentApplied` is `true` only when the MCP result was successfully applied. `tradingViewEnrichmentStatus` reports `full`, `partial`, `failed`, or `not_applicable`; the status is persisted separately from `useTradingViewData`, so analytics can distinguish requested, delivered, partial, and failed enrichment. When the MCP result supplies price data, `alert.enriched.current_price` (number or `null`) and the optional structured `alert.enriched.price_data` snapshot (e.g. `current_price`, `high`, `low`) are also part of the enrichment payload; these fields feed outcome-tracking entry prices and appear in dry-run `enrichedData` responses.
+
+`GET /api/status` exposes `dependencies.tradingViewMcp.enrichment.alertPath`, an in-process rolling 24-hour window with `totalCount`, `appliedCount`, `failedCount`, `appliedRate24h`, and `failureRate24h`. The existing circuit-breaker admin page remains deduplicated and fail-open. `GET /api/alerts/summary` exposes `enrichment.tradingViewStatusCounts`; requested records without a persisted status are counted as `unrecorded`, while non-requested records are `not_applicable`.
 
 ### Timeframe Mapping
 
@@ -760,6 +794,22 @@ Run TradingView MCP `volume_confirmation_analysis` on demand and return structur
 
 If the symbol format is invalid, the endpoint returns `400 INVALID_REQUEST`. If TradingView MCP fails, it returns `502 VOLUME_CONFIRMATION_FAILED` with the upstream error message.
 
+### POST /api/webhook/symbol-analysis
+
+Analyze one `EXCHANGE:SYMBOL` with TradingView MCP and return the Spanish report plus decision-ready data without sending notifications or placing orders.
+
+**Request (JSON):**
+```json
+{
+  "symbol": "BINANCE:BTCUSDT",
+  "timeframe": "1D",
+  "analysisMode": "combined",
+  "includeMultiTimeframe": true
+}
+```
+
+The response includes `alertText`, normalized price/volume/indicator/signal/assessment data, sentiment/news/confluence and multi-timeframe results when requested, plus directional `risk` and `decision` metadata. `decision.action` is `BUY` or `SELL` only when the data and risk levels are sufficient; otherwise it is `NO_TRADE`. This endpoint never delivers notifications or submits orders. Invalid symbols return `400 INVALID_REQUEST`, TradingView failures return `502 SYMBOL_ANALYSIS_FAILED`, and deadline expiry returns `504 SYMBOL_ANALYSIS_TIMEOUT`.
+
 ### POST /api/webhook/market-scanner-alert
 
 Execute multiple market scanner tools on the TradingView MCP server (such as top gainers, top losers, volume breakout, smart volume, or Bollinger squeeze), generate a formatted technical summary report in Spanish, and send it through all enabled notification channels.
@@ -841,6 +891,10 @@ When `ranked` is `true`, each successful scan also includes structured scores:
 
 Send alert via webhook. Accepts either JSON or plain text.
 
+Optional headers:
+- `x-request-id`: Optional client-supplied correlation ID (1-128 printable ASCII characters). If omitted or invalid, a UUIDv4 is generated.
+- `idempotency-key` / `x-idempotency-key`: Optional replay key for deduplicating retries.
+
 Optional query param: `useTradingViewData=true` enables TradingView MCP technical enrichment for this request (requires `ENABLE_TRADINGVIEW_MCP_ENRICHMENT=true`).
 
 **Request (JSON):**
@@ -861,6 +915,7 @@ BTC price is at $45,000 - breakout detected!
 ```json
 {
   "success": true,
+  "requestId": "0d63f03b-d5a2-4a0b-928d-1959b8eb6a95",
   "results": [
     {
       "channel": "telegram",
@@ -1019,7 +1074,7 @@ By default, jobs still execute in-process (`JOB_EXECUTION_MODE=local`). With `JO
 
 ### Stored Alerts API
 
-When `ENABLE_FIRESTORE_ALERT_STORAGE=true`, successful `POST /api/webhook/alert` requests are persisted to Firestore and can be inspected through the protected alerts read API.
+When `ENABLE_FIRESTORE_ALERT_STORAGE=true`, successful `POST /api/webhook/alert`, news-monitor deliveries, and delivered `POST /api/webhook/market-scanner-alert` / `POST /api/webhook/expanded-analysis-alert` reports are persisted to Firestore and can be inspected through the protected alerts read API. Each stored record carries a `source` field of one of `webhook`, `news-monitor`, `market-scanner`, or `expanded-analysis`. Stored alert text is capped at 20,000 characters; when clipped, the record exposes `truncated: true` and `originalLength` so the read API, export, and replay can flag the loss — `replay` will redeliver the truncated text only.
 
 Stored `alerts` and `alertReplays` records default to 90 days of retention. The service filters expired records before list, detail, export, and summary responses while Firestore's native TTL deletion is eventual. New records carry an `expiresAt` timestamp; `bash ops/configure-firestore-alert-retention.sh` backfills legacy records from `receivedAt`/`replayedAt` before enabling both TTL policies, shortens existing expiries when the configured deadline is earlier, removes legacy raw replay idempotency keys after hashing them, reports scanned/updated/skipped counts, and fails if a record has no usable timestamp. Replay audit documents retain only a SHA-256 `idempotencyKeyHash`, never the raw key. Inspect the TTL policies with `gcloud firestore fields ttls list`.
 
@@ -1033,7 +1088,7 @@ List stored alerts ordered by `receivedAt` descending.
 **Query Parameters:**
 - `limit` - Integer between `1` and `100` (default: `50`)
 - `before` - Either a legacy ISO-8601 timestamp cursor or the opaque `nextBefore` token from a previous response
-- `source` - Optional source filter (current writes use `webhook`)
+- `source` - Optional source filter. Valid values include `webhook`, `news-monitor`, `market-scanner`, and `expanded-analysis`.
 - `enriched` - Optional boolean filter (`true` or `false`)
 
 **Response (200 OK):**
@@ -1088,6 +1143,8 @@ Return bounded JSON-only analytics for stored alerts without exposing raw alert 
 
 Each enriched alert records only safe prompt provenance (`name`, `source`, `label`, and `version`) when a prompt was resolved. The `enrichment.riskMetadataCoverage` block uses enriched alerts as its denominator and reports populated counts/percentages for `invalidation_level`, `target_level`, `setup_type`, and `risk_reward_ratio`. `byPromptProvenance` groups the same metrics by Langfuse/local provenance; legacy records without provenance use `null`. Missing or invalid optional values remain zero coverage and are never synthesized.
 
+Similarly, `enrichment.evidenceCoverage` tracks whether enriched alerts cited grounding sources, reporting `zeroSources`, `oneToTwoSources`, and `threePlusSources` distribution along with `averageSourceCount`, overall and grouped `byPromptProvenance`.
+
 **Query Parameters:**
 - `from` - Optional ISO-8601 lower bound; defaults to 24 hours before `to`
 - `to` - Optional ISO-8601 upper bound; defaults to request time
@@ -1124,6 +1181,13 @@ The service caps the queried window at 31 days to keep routine operator usage ch
     "enrichment": {
       "enrichedAlerts": 1,
       "plainAlerts": 1,
+      "tradingViewStatusCounts": {
+        "full": 0,
+        "partial": 0,
+        "failed": 0,
+        "not_applicable": 1,
+        "unrecorded": 1
+      },
       "riskMetadataCoverage": {
         "denominator": 1,
         "fields": {
@@ -1142,6 +1206,25 @@ The service caps the queried window at 31 days to keep routine operator usage ch
               "setup_type": { "populated": 0, "percentage": 0 },
               "risk_reward_ratio": { "populated": 0, "percentage": 0 }
             }
+          }
+        ]
+      },
+      "evidenceCoverage": {
+        "denominator": 1,
+        "zeroSources": { "populated": 1, "percentage": 100 },
+        "oneToTwoSources": { "populated": 0, "percentage": 0 },
+        "threePlusSources": { "populated": 0, "percentage": 0 },
+        "totalSourceCount": 0,
+        "averageSourceCount": 0,
+        "byPromptProvenance": [
+          {
+            "provenance": null,
+            "denominator": 1,
+            "zeroSources": { "populated": 1, "percentage": 100 },
+            "oneToTwoSources": { "populated": 0, "percentage": 0 },
+            "threePlusSources": { "populated": 0, "percentage": 0 },
+            "totalSourceCount": 0,
+            "averageSourceCount": 0
           }
         ]
       },
@@ -1312,6 +1395,93 @@ Query durably recorded signal outcomes record-by-record with pagination and filt
     "limit": 50,
     "hasMore": false,
     "nextBefore": null
+  }
+}
+```
+
+#### GET /api/outcomes/summary
+
+Query aggregated performance and coverage metrics for recorded signal outcomes, with optional filtering by symbol, exchange, status, window, and date range. When no outcomes match the filters or tracking is enabled with an empty dataset, the endpoint returns `200 OK` with `available: false` and a typed empty summary structure. Requires `x-api-key` header (or `api-key` query parameter) or Firebase Bearer token with `admin.viewer` or `admin.operator` role.
+
+**Query Parameters:**
+- `limit` - Maximum number of recent outcomes to aggregate (integer between `1` and `100`, default: `50`)
+- `symbol` - Filter by trading symbol (e.g. `BTCUSDT` or `BINANCE:BTCUSDT`)
+- `exchange` - Filter by exchange identifier (e.g. `BINANCE`, `NASDAQ`)
+- `status` - Filter by evaluation status (`pending`, `evaluated`, `unavailable`)
+- `window` - Filter by measurement window (`1h`, `4h`, `1D`, `1W`)
+- `from` - Optional ISO-8601 lower bound timestamp
+- `to` - Optional ISO-8601 upper bound timestamp
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "summary": {
+    "available": true,
+    "totalSignalsReceived": 50,
+    "totalSignalsEligible": 45,
+    "totalSignalsEvaluated": 40,
+    "totalSignalsPending": 5,
+    "totalSignalsUnavailable": 5,
+    "coveragePercent": 80,
+    "isCoverageComplete": false,
+    "targetHitRatePercent": 65.5,
+    "stopHitRatePercent": 25,
+    "expectancyR": 1.25,
+    "populationNote": "Metrics represent 40 evaluated signals out of 50 total received signals (80% coverage).",
+    "exchangeBreakdown": {
+      "BINANCE": {
+        "received": 40,
+        "eligible": 40,
+        "evaluated": 35,
+        "pending": 3,
+        "unavailable": 2
+      }
+    },
+    "providerBreakdown": {
+      "binance": {
+        "received": 40,
+        "eligible": 40,
+        "evaluated": 35,
+        "pending": 3,
+        "unavailable": 2
+      }
+    },
+    "entryPriceSourceBreakdown": {
+      "tradingview-mcp": 40
+    },
+    "eligibilityBreakdown": {
+      "supported_provider": 45
+    },
+    "windows": {
+      "1h": {
+        "totalSignals": 35,
+        "hitRatePercent": 60,
+        "targetEligibleWindows": 30,
+        "stopEligibleWindows": 30,
+        "targetHitRatePercent": 55,
+        "stopHitRatePercent": 20,
+        "expectancyR": 0.85,
+        "averageReturnPercent": 2.15,
+        "averageMfePercent": 3.45,
+        "averageMaePercent": -1.1,
+        "maxAdverseExcursionPercent": -4.5
+      }
+    },
+    "drawdownProxy": {
+      "averageMaxAdverseExcursionPercent": -1.85,
+      "absoluteMaxAdverseExcursionPercent": -7.2
+    },
+    "falsePositiveCandidatesCount": 0,
+    "falsePositiveCandidates": [],
+    "latencyCostMetadata": {
+      "averageProcessingTimeMs": 450,
+      "tokenUsage": {
+        "inputTokens": 1200,
+        "outputTokens": 400,
+        "totalCost": 0.0035
+      }
+    }
   }
 }
 ```
@@ -1553,16 +1723,19 @@ Display the list of available Telegram bot commands, argument syntax, and aliase
 
 ### /precio `<symbol>`
 
-Get crypto price from Binance.
+Get real-time price for crypto pairs (Binance) or equities/stocks (Twelve Data).
 
-**Example:**
+**Examples:**
 ```
 /precio BTCUSDT
+/precio NVDA
+/precio NASDAQ:AAPL
 ```
 
-**Response:**
+**Responses:**
 ```
-Precio de BTCUSDT es $45,000.50
+Precio de BTCUSDT es 65000
+Precio de NVDA es 125.50 (+2.32%)
 ```
 
 ### /cryptobot id
@@ -1590,6 +1763,16 @@ Create a TradingView market scanner background job (`top_gainers`, `top_losers`,
 **Example:**
 ```
 /scanner scans=top_gainers,top_losers exchange=BINANCE timeframe=4h limit=10
+```
+
+### /jobs `[jobId]` (alias: `/trabajos`)
+
+List recent TradingView jobs or inspect one job's progress, terminal status, compact result summary, and notification delivery state. Expired terminal jobs are reported as unavailable.
+
+**Examples:**
+```
+/jobs
+/jobs 4f0c2f2e-7e6b-4c4c-8f9a-2e1a3c4b5d6e
 ```
 
 ### /noticias `[options]` (alias: `/news`)
@@ -1688,7 +1871,7 @@ SENTRY_CONSOLE_LOG_LEVELS=warn,error
 
 ## News Monitoring & Event Detection
 
-**📖 [Full Quickstart specs/003-news-monitor/quickstart.md(Guide] Complete setup instructions, API reference, and advanced configuration.)** 
+**📖 [Full Quickstart Guide](specs/003-news-monitor/quickstart.md)** — Complete setup instructions, API reference, and advanced configuration.
 
 **🔄 [Scheduled Monitoring Example](.github/workflows/news-monitor-cron.yml.example)** — GitHub Actions workflow for periodic symbol analysis.
 

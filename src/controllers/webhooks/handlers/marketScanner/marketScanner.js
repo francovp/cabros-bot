@@ -8,6 +8,8 @@ const {
 	buildMarketScannerReport,
 	prepareMarketScannerItems,
 	getRiskLevelsForSide,
+	getScanItemSide,
+	pickLevel,
 } = require('../../../../services/tradingview/marketScannerReport');
 const {
 	getNotificationManager,
@@ -23,12 +25,12 @@ const {
 } = require('../../../../services/notification/requestRouting');
 const { enrichScannerItemsWithTrendConfluence } = require('../../../../services/tradingview/marketScannerConfluence');
 const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteConfigService');
+const alertStorageService = require('../../../../services/storage/AlertStorageService');
 
 const DEFAULT_SCANNER_TIMEOUT_MS = 90000;
 const MAX_SCANNER_TIMEOUT_MS = 120000;
 
-function resolveBot(botOrGetter) {
-	if (typeof botOrGetter === 'function') {
+function resolveBot(botOrGetter) {	if (typeof botOrGetter === 'function') {
 		return botOrGetter();
 	}
 
@@ -124,41 +126,75 @@ function postMarketScannerAlert(botOrGetter) {
 			const deliveredChannels = getDeliveredChannels(deliveryResults);
 			const summary = buildSummary(scanResults, deliveryResults);
 
+			// Fire-and-forget: persist delivered market-scanner report to AlertStorageService.
+			// Storage failures never block delivery (handled inside saveAlert).
+			if (alertStorageService.isEnabled() && deliveredChannels.length > 0) {
+				const scannerSymbols = successfulScans.length > 0
+					? Array.from(new Set(
+						successfulScans
+							.flatMap((scan) => Array.isArray(scan.items) ? scan.items : [])
+							.map((item) => item && item.symbol)
+							.filter(Boolean),
+					))
+					: [];
+				alertStorageService.saveAlert({
+					requestId,
+					text: alertText,
+					symbol: scannerSymbols[0] || null,
+					exchange: parsed.exchange || null,
+					enriched: false,
+					enrichmentData: null,
+					tokenUsage: null,
+					channels: requestedChannels,
+					deliveryResults,
+					source: 'market-scanner',
+					processingTimeMs: Date.now() - startTime,
+				}).catch(() => {});
+			}
+
 			const signalOutcomeService = require('../../../../services/storage/SignalOutcomeService');
 			if (signalOutcomeService.isEnabled()) {
 				for (const scanResult of scanResults) {
-					if (scanResult.status === 'success' && Array.isArray(scanResult.items)) {
-						for (const item of scanResult.items) {
+					if (scanResult.status === 'success' && Array.isArray(scanResult.items) && scanResult.items.length > 0) {
+						// Resolve sides from the same prepared (rank-normalized) item set the
+						// report rendered, so persisted sides match delivered levels
+						const preparedItems = prepareMarketScannerItems(scanResult, parsed.ranked === true);
+						for (const item of preparedItems) {
 							const closePrice = item.indicators?.close ?? null;
-							let itemSide = 'BUY';
-							if (scanResult.scan === 'top_losers') {
-								itemSide = 'SELL';
-							} else if (item.breakout_type) {
-								const lowerBreakout = item.breakout_type.trim().toLowerCase();
-								if (lowerBreakout === 'bearish' || lowerBreakout === 'sell') {
-									itemSide = 'SELL';
-								}
-							}
+							// Persisted side must match the rendered report side
+							const itemSide = getScanItemSide(scanResult.scan, item);
 							const itemScore = item.changePercent ?? item.indicators?.RSI ?? item.volume_ratio ?? null;
 
-							const atr = Number(item.indicators?.atr ?? item.indicators?.ATR ?? item.atr ?? null);
-							const bbLower = Number(item.indicators?.bb_lower ?? item.indicators?.bollinger_lower ?? item.indicators?.lower ?? item.bollinger?.lower ?? item.bollinger_lower ?? null);
-							const bbUpper = Number(item.indicators?.bb_upper ?? item.indicators?.bollinger_upper ?? item.indicators?.upper ?? item.bollinger?.upper ?? item.bollinger_upper ?? null);
-							const support = Number(item.indicators?.support ?? item.indicators?.nearest_support ?? item.support ?? item.support_resistance?.nearest_support ?? item.support_resistance?.support_1 ?? null);
-							const resistance = Number(item.indicators?.resistance ?? item.indicators?.nearest_resistance ?? item.resistance ?? item.support_resistance?.nearest_resistance ?? item.support_resistance?.resistance_1 ?? null);
+							const atr = pickLevel([item.indicators?.atr, item.indicators?.ATR, item.atr]);
+							const bbLower = pickLevel([item.indicators?.bb_lower, item.indicators?.bollinger_lower, item.indicators?.lower, item.bollinger?.lower, item.bollinger_lower]);
+							const bbUpper = pickLevel([item.indicators?.bb_upper, item.indicators?.bollinger_upper, item.indicators?.upper, item.bollinger?.upper, item.bollinger_upper]);
+							const support = pickLevel([
+								item.indicators?.support,
+								item.indicators?.nearest_support,
+								item.support,
+								item.support_resistance?.nearest_support,
+								item.support_resistance?.support_1,
+							]);
+							const resistance = pickLevel([
+								item.indicators?.resistance,
+								item.indicators?.nearest_resistance,
+								item.resistance,
+								item.support_resistance?.nearest_resistance,
+								item.support_resistance?.resistance_1,
+							]);
 
-							const validPrice = typeof closePrice === 'number' && Number.isFinite(closePrice) ? closePrice : null;
+							const validPrice = typeof closePrice === 'number' && Number.isFinite(closePrice) && closePrice > 0 ? closePrice : null;
 							let stopLoss = null;
 							let takeProfit = null;
 							if (validPrice !== null) {
 								const riskLevels = getRiskLevelsForSide({
 									side: itemSide,
 									price: validPrice,
-									atr: Number.isFinite(atr) ? atr : null,
-									bbLower: Number.isFinite(bbLower) ? bbLower : null,
-									bbUpper: Number.isFinite(bbUpper) ? bbUpper : null,
-									support: Number.isFinite(support) ? support : null,
-									resistance: Number.isFinite(resistance) ? resistance : null,
+									atr: typeof atr === 'number' && Number.isFinite(atr) && atr > 0 ? atr : null,
+									bbLower: typeof bbLower === 'number' && Number.isFinite(bbLower) && bbLower > 0 ? bbLower : null,
+									bbUpper: typeof bbUpper === 'number' && Number.isFinite(bbUpper) && bbUpper > 0 ? bbUpper : null,
+									support: typeof support === 'number' && Number.isFinite(support) && support > 0 ? support : null,
+									resistance: typeof resistance === 'number' && Number.isFinite(resistance) && resistance > 0 ? resistance : null,
 								});
 								stopLoss = riskLevels.stopLoss;
 								takeProfit = riskLevels.takeProfit;

@@ -4,6 +4,8 @@
  * Converts MarkdownV2 escape sequences to WhatsApp-friendly format
  */
 
+const { formatHtfAlignment } = require('./htfAlignmentFormatter');
+
 /**
  * WhatsAppMarkdownFormatter - Formats text for WhatsApp markdown
  * WhatsApp supports: *bold*, _italic*, ~strikethrough~, `code`, ```monospace```
@@ -59,7 +61,17 @@ class WhatsAppMarkdownFormatter {
    * @returns {Promise<string>} Formatted WhatsApp message
    */
 	async formatNewsAlert(enriched = {}) {
-		const { originalText = '', summary = '', citations = [], extraText = '', tokenUsage } = enriched;
+		const {
+			originalText = '',
+			summary = '',
+			citations = [],
+			extraText = '',
+			tokenUsage,
+			time_horizon,
+			timeHorizon,
+			invalidation_hint,
+			invalidationHint,
+		} = enriched;
 
 		// Unescape MarkdownV2 sequences if present in originalText
 		const unescapedTitle = originalText.replace(/\\([_*[\]()~`>#+\-=|{}.!])/g, '$1');
@@ -76,6 +88,24 @@ class WhatsAppMarkdownFormatter {
 			unescapedSummary = unescapedSummary.replace(/\n\*\s+/g, '\n- ');
 
 			message += `\n\n${unescapedSummary}`;
+		}
+
+		const horizonVal = time_horizon || timeHorizon;
+		if (horizonVal && typeof horizonVal === 'string' && horizonVal.trim() && (!summary || !summary.includes('Horizonte:'))) {
+			const horizonLabels = {
+				very_short_term: 'Muy corto plazo',
+				short_term: 'Corto plazo',
+				medium_term: 'Medio plazo',
+				long_term: 'Largo plazo',
+			};
+			const horizonLabel = horizonLabels[horizonVal.toLowerCase()] || horizonVal;
+			message += `\n\n*Horizonte:* ${horizonLabel}`;
+		}
+
+		const invalidationVal = invalidation_hint || invalidationHint;
+		if (invalidationVal && typeof invalidationVal === 'string' && invalidationVal.trim() && (!summary || !summary.includes('Invalidación:'))) {
+			const cleanInvalidation = invalidationVal.trim().replace(/\\([_*[\]()~`>#+\-=|{}.!])/g, '$1');
+			message += `\n\n*Invalidación:* ${cleanInvalidation}`;
 		}
 
 		// Citations
@@ -137,6 +167,8 @@ class WhatsAppMarkdownFormatter {
 			target_level,
 			setup_type,
 			risk_reward_ratio,
+			current_price,
+			price_data,
 			sources = [],
 			truncated = false,
 			extraText = '',
@@ -170,6 +202,11 @@ class WhatsAppMarkdownFormatter {
 		const score = sentiment_score.toFixed(2);
 		message += `\n\nSentiment: ${sentiment} ${sentimentEmoji} (${score})`;
 
+		const htfLine = formatHtfAlignment(enriched);
+		if (htfLine) {
+			message += `\n${htfLine}`;
+		}
+
 		// Technical Levels
 		const hasSupports = technical_levels.supports && technical_levels.supports.length > 0;
 		const hasResistances = technical_levels.resistances && technical_levels.resistances.length > 0;
@@ -177,17 +214,20 @@ class WhatsAppMarkdownFormatter {
 		if (hasSupports || hasResistances) {
 			message += '\n\n*Technical Levels*';
 			if (hasSupports) {
-				const supports = technical_levels.supports.join(', ');
+				const supports = technical_levels.supports.map(s => String(s)).join(', ');
 				message += `\nSupports: ${supports}`;
 			}
 			if (hasResistances) {
-				const resistances = technical_levels.resistances.join(', ');
+				const resistances = technical_levels.resistances.map(r => String(r)).join(', ');
 				message += `\nResistances: ${resistances}`;
 			}
 		}
 
+		const entryPrice = current_price ?? (price_data && price_data.current_price);
+
 		const riskParameters = [
 			['Setup', setup_type],
+			['Entry', entryPrice],
 			['Invalidation', invalidation_level],
 			['Target', target_level],
 			['Risk/Reward', risk_reward_ratio],

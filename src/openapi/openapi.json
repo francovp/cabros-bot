@@ -57,6 +57,9 @@
           },
           {
             "$ref": "#/components/parameters/XIdempotencyKeyHeader"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
         "requestBody": {
@@ -251,6 +254,40 @@
             "$ref": "#/components/responses/Error"
           },
           "502": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          }
+        ]
+      }
+    },
+    "/api/webhook/symbol-analysis": {
+      "post": {
+        "tags": [
+          "Webhooks"
+        ],
+        "summary": "Analyze one TradingView symbol without delivery",
+        "operationId": "postSymbolAnalysis",
+        "requestBody": {
+          "$ref": "#/components/requestBodies/SymbolAnalysis"
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/SymbolAnalysisResult"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "502": {
+            "$ref": "#/components/responses/Error"
+          },
+          "504": {
             "$ref": "#/components/responses/Error"
           }
         },
@@ -1147,6 +1184,71 @@
         "x-admin-role": "admin.viewer"
       }
     },
+    "/api/outcomes/summary": {
+      "get": {
+        "tags": [
+          "Signal outcomes"
+        ],
+        "summary": "Summarize signal outcomes metrics",
+        "description": "Query aggregated performance and coverage metrics for recorded signal outcomes, with optional filtering by symbol, exchange, status, window, and date range.",
+        "operationId": "summarizeOutcomes",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/OutcomeLimit"
+          },
+          {
+            "$ref": "#/components/parameters/OutcomeSymbol"
+          },
+          {
+            "$ref": "#/components/parameters/OutcomeExchange"
+          },
+          {
+            "$ref": "#/components/parameters/OutcomeStatus"
+          },
+          {
+            "$ref": "#/components/parameters/OutcomeWindow"
+          },
+          {
+            "$ref": "#/components/parameters/From"
+          },
+          {
+            "$ref": "#/components/parameters/To"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/OutcomesSummaryResult"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      }
+    },
     "/api/trading/binance/orders": {
       "get": {
         "tags": [
@@ -1619,9 +1721,16 @@
         "name": "source",
         "in": "query",
         "schema": {
-          "type": "string"
+          "type": "string",
+          "enum": [
+            "webhook",
+            "news-monitor",
+            "market-scanner",
+            "expanded-analysis"
+          ]
         },
-        "example": "webhook"
+        "example": "webhook",
+        "description": "Stored alert source filter. webhook covers /api/webhook/alert; news-monitor covers /api/news-monitor deliveries; market-scanner covers delivered /api/webhook/market-scanner-alert reports; expanded-analysis covers delivered /api/webhook/expanded-analysis-alert reports."
       },
       "Enriched": {
         "name": "enriched",
@@ -1708,6 +1817,17 @@
           "minLength": 1
         },
         "description": "Optional replay key. Alternative x-prefixed header variant."
+      },
+      "XRequestIdHeader": {
+        "name": "x-request-id",
+        "in": "header",
+        "required": false,
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "description": "Optional client-supplied request correlation ID. If provided, it must be 1-128 printable ASCII characters. If omitted or invalid, a UUIDv4 correlation ID is generated automatically. Echoed in the response and persisted on stored alerts."
       }
     },
     "requestBodies": {
@@ -1823,6 +1943,22 @@
             "example": {
               "symbol": "BINANCE:BTCUSDT",
               "timeframe": "1h"
+            }
+          }
+        }
+      },
+      "SymbolAnalysis": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/SymbolAnalysisRequest"
+            },
+            "example": {
+              "symbol": "BINANCE:BTCUSDT",
+              "timeframe": "1D",
+              "analysisMode": "combined",
+              "includeMultiTimeframe": true
             }
           }
         }
@@ -2402,7 +2538,7 @@
         }
       },
       "DeliveryResult": {
-        "description": "Per-channel delivery result",
+        "description": "Per-channel delivery result. When ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION is enabled and the same exchange/symbol/timeframe/side signal fires within its cooldown window, the response includes suppressedRepeat: true with empty results and deliveredChannels while the alert remains persisted with a suppression marker.",
         "content": {
           "application/json": {
             "schema": {
@@ -2410,6 +2546,7 @@
             },
             "example": {
               "success": true,
+              "requestId": "req-123",
               "results": [
                 {
                   "channel": "telegram",
@@ -2426,6 +2563,16 @@
           "application/json": {
             "schema": {
               "$ref": "#/components/schemas/JsonObject"
+            }
+          }
+        }
+      },
+      "SymbolAnalysisResult": {
+        "description": "Single-symbol TradingView analysis, formatted alert text, risk levels, and decision metadata.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/SymbolAnalysisResult"
             }
           }
         }
@@ -2476,6 +2623,29 @@
                       "example": null
                     }
                   }
+                }
+              }
+            }
+          }
+        }
+      },
+      "OutcomesSummaryResult": {
+        "description": "Signal outcomes aggregate metrics summary",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "required": [
+                "success",
+                "summary"
+              ],
+              "properties": {
+                "success": {
+                  "type": "boolean",
+                  "example": true
+                },
+                "summary": {
+                  "$ref": "#/components/schemas/OutcomesSummary"
                 }
               }
             }
@@ -2542,7 +2712,7 @@
                 "alerts": {
                   "type": "array",
                   "items": {
-                    "$ref": "#/components/schemas/JsonObject"
+                    "$ref": "#/components/schemas/StoredAlert"
                   }
                 },
                 "nextCursor": {
@@ -2621,6 +2791,24 @@
                 "firebaseRemoteConfig": false
               },
               "dependencies": {
+                "geminiQuota": {
+                  "enabled": true,
+                  "configured": true,
+                  "ready": true,
+                  "status": "ready",
+                  "cooldownActive": false,
+                  "remainingCooldownMs": 0,
+                  "lastTriggeredAt": null,
+                  "triggersTotal": 0,
+                  "braveFallbacksDuringCooldown": 0,
+                  "lastBraveFallbackAt": null,
+                  "metrics": {
+                    "totalRequests": 0,
+                    "successRequests": 0,
+                    "failureRequests": 0,
+                    "timeoutRequests": 0
+                  }
+                },
                 "tradingViewMcp": {
                   "enabled": true,
                   "configured": true,
@@ -2632,6 +2820,16 @@
                   "lastErrorCategory": null,
                   "successCount": 0,
                   "failureCount": 0,
+                  "enrichment": {
+                    "alertPath": {
+                      "windowMs": 86400000,
+                      "totalCount": 0,
+                      "appliedCount": 0,
+                      "failedCount": 0,
+                      "appliedRate24h": 0,
+                      "failureRate24h": 0
+                    }
+                  },
                   "circuitBreaker": {
                     "state": "closed",
                     "consecutiveFailures": 0,
@@ -2859,6 +3057,404 @@
           }
         }
       },
+      "OutcomesSummary": {
+        "type": "object",
+        "required": [
+          "available",
+          "totalSignalsReceived",
+          "totalSignalsEligible",
+          "totalSignalsEvaluated",
+          "totalSignalsPending",
+          "totalSignalsUnavailable",
+          "coveragePercent",
+          "isCoverageComplete",
+          "targetHitRatePercent",
+          "stopHitRatePercent",
+          "expectancyR",
+          "populationNote",
+          "exchangeBreakdown",
+          "providerBreakdown",
+          "entryPriceSourceBreakdown",
+          "eligibilityBreakdown",
+          "windows",
+          "drawdownProxy",
+          "falsePositiveCandidatesCount",
+          "falsePositiveCandidates",
+          "latencyCostMetadata"
+        ],
+        "properties": {
+          "available": {
+            "type": "boolean",
+            "example": true
+          },
+          "totalSignalsReceived": {
+            "type": "integer",
+            "example": 50
+          },
+          "totalSignalsEligible": {
+            "type": "integer",
+            "example": 45
+          },
+          "totalSignalsEvaluated": {
+            "type": "integer",
+            "example": 40
+          },
+          "totalSignalsPending": {
+            "type": "integer",
+            "example": 5
+          },
+          "totalSignalsUnavailable": {
+            "type": "integer",
+            "example": 5
+          },
+          "coveragePercent": {
+            "type": "number",
+            "example": 80
+          },
+          "isCoverageComplete": {
+            "type": "boolean",
+            "example": false
+          },
+          "targetHitRatePercent": {
+            "type": "number",
+            "example": 65.5
+          },
+          "stopHitRatePercent": {
+            "type": "number",
+            "example": 25
+          },
+          "expectancyR": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "example": 1.25
+          },
+          "populationNote": {
+            "type": "string",
+            "example": "Metrics represent 40 evaluated signals out of 50 total received signals (80% coverage)."
+          },
+          "exchangeBreakdown": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/CoverageBucket"
+            }
+          },
+          "providerBreakdown": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/CoverageBucket"
+            }
+          },
+          "entryPriceSourceBreakdown": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer"
+            }
+          },
+          "eligibilityBreakdown": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer"
+            }
+          },
+          "windows": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/WindowStats"
+            }
+          },
+          "drawdownProxy": {
+            "$ref": "#/components/schemas/DrawdownProxy"
+          },
+          "falsePositiveCandidatesCount": {
+            "type": "integer",
+            "example": 2
+          },
+          "falsePositiveCandidates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FalsePositiveCandidate"
+            }
+          },
+          "latencyCostMetadata": {
+            "$ref": "#/components/schemas/LatencyCostMetadata"
+          }
+        }
+      },
+      "CoverageBucket": {
+        "type": "object",
+        "required": [
+          "received",
+          "eligible",
+          "evaluated",
+          "pending",
+          "unavailable"
+        ],
+        "properties": {
+          "received": {
+            "type": "integer",
+            "example": 10
+          },
+          "eligible": {
+            "type": "integer",
+            "example": 10
+          },
+          "evaluated": {
+            "type": "integer",
+            "example": 8
+          },
+          "pending": {
+            "type": "integer",
+            "example": 1
+          },
+          "unavailable": {
+            "type": "integer",
+            "example": 1
+          }
+        }
+      },
+      "WindowStats": {
+        "type": "object",
+        "required": [
+          "totalSignals",
+          "hitRatePercent",
+          "targetEligibleWindows",
+          "stopEligibleWindows",
+          "targetHitRatePercent",
+          "stopHitRatePercent",
+          "expectancyR",
+          "averageReturnPercent",
+          "averageMfePercent",
+          "averageMaePercent",
+          "maxAdverseExcursionPercent"
+        ],
+        "properties": {
+          "totalSignals": {
+            "type": "integer",
+            "example": 35
+          },
+          "hitRatePercent": {
+            "type": "number",
+            "example": 60
+          },
+          "targetEligibleWindows": {
+            "type": "integer",
+            "example": 30
+          },
+          "stopEligibleWindows": {
+            "type": "integer",
+            "example": 30
+          },
+          "targetHitRatePercent": {
+            "type": "number",
+            "example": 55
+          },
+          "stopHitRatePercent": {
+            "type": "number",
+            "example": 20
+          },
+          "expectancyR": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "example": 0.85
+          },
+          "averageReturnPercent": {
+            "type": "number",
+            "example": 2.15
+          },
+          "averageMfePercent": {
+            "type": "number",
+            "example": 3.45
+          },
+          "averageMaePercent": {
+            "type": "number",
+            "example": -1.1
+          },
+          "maxAdverseExcursionPercent": {
+            "type": "number",
+            "example": -4.5
+          },
+          "bySide": {
+            "type": "object",
+            "description": "Per-side breakdown mirroring the parent WindowStats shape. Each side block is emitted only when at least one evaluated signal exists for that side.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/WindowStats"
+            },
+            "example": {
+              "BUY": {
+                "totalSignals": 20,
+                "hitRatePercent": 65,
+                "targetEligibleWindows": 18,
+                "stopEligibleWindows": 18,
+                "targetHitRatePercent": 60,
+                "stopHitRatePercent": 22,
+                "expectancyR": 0.92,
+                "averageReturnPercent": 2.4,
+                "averageMfePercent": 3.6,
+                "averageMaePercent": -1.05,
+                "maxAdverseExcursionPercent": -4.2
+              },
+              "SELL": {
+                "totalSignals": 15,
+                "hitRatePercent": 53,
+                "targetEligibleWindows": 12,
+                "stopEligibleWindows": 12,
+                "targetHitRatePercent": 48,
+                "stopHitRatePercent": 18,
+                "expectancyR": 0.71,
+                "averageReturnPercent": 1.8,
+                "averageMfePercent": 3.2,
+                "averageMaePercent": -1.2,
+                "maxAdverseExcursionPercent": -4.5
+              }
+            }
+          },
+          "bySetupType": {
+            "type": "object",
+            "description": "Per-setup-type breakdown mirroring the parent WindowStats shape. Each setup-type block is emitted only when at least one evaluated signal exists for that setup.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/WindowStats"
+            },
+            "example": {
+              "trend_continuation": {
+                "totalSignals": 25,
+                "hitRatePercent": 68,
+                "targetEligibleWindows": 22,
+                "stopEligibleWindows": 22,
+                "targetHitRatePercent": 64,
+                "stopHitRatePercent": 18,
+                "expectancyR": 1.05,
+                "averageReturnPercent": 2.6,
+                "averageMfePercent": 3.8,
+                "averageMaePercent": -0.95,
+                "maxAdverseExcursionPercent": -3.8
+              },
+              "reversal": {
+                "totalSignals": 10,
+                "hitRatePercent": 40,
+                "targetEligibleWindows": 8,
+                "stopEligibleWindows": 8,
+                "targetHitRatePercent": 38,
+                "stopHitRatePercent": 25,
+                "expectancyR": 0.45,
+                "averageReturnPercent": 1.2,
+                "averageMfePercent": 2.9,
+                "averageMaePercent": -1.5,
+                "maxAdverseExcursionPercent": -4.5
+              }
+            }
+          }
+        }
+      },
+      "DrawdownProxy": {
+        "type": "object",
+        "required": [
+          "averageMaxAdverseExcursionPercent",
+          "absoluteMaxAdverseExcursionPercent"
+        ],
+        "properties": {
+          "averageMaxAdverseExcursionPercent": {
+            "type": "number",
+            "example": -1.85
+          },
+          "absoluteMaxAdverseExcursionPercent": {
+            "type": "number",
+            "example": -7.2
+          }
+        }
+      },
+      "FalsePositiveCandidate": {
+        "type": "object",
+        "required": [
+          "symbol",
+          "source",
+          "side",
+          "score",
+          "price",
+          "worstReturn",
+          "worstMae"
+        ],
+        "properties": {
+          "symbol": {
+            "type": "string",
+            "example": "BTCUSDT"
+          },
+          "source": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "example": "news-monitor"
+          },
+          "side": {
+            "type": "string",
+            "example": "BUY"
+          },
+          "score": {
+            "type": "number",
+            "example": 0.85
+          },
+          "price": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "example": 65000
+          },
+          "worstReturn": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "example": -3.2
+          },
+          "worstMae": {
+            "type": "number",
+            "example": -4.8
+          }
+        }
+      },
+      "LatencyCostMetadata": {
+        "type": "object",
+        "required": [
+          "averageProcessingTimeMs",
+          "tokenUsage"
+        ],
+        "properties": {
+          "averageProcessingTimeMs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "example": 450
+          },
+          "tokenUsage": {
+            "type": "object",
+            "required": [
+              "inputTokens",
+              "outputTokens",
+              "totalCost"
+            ],
+            "properties": {
+              "inputTokens": {
+                "type": "integer",
+                "example": 1200
+              },
+              "outputTokens": {
+                "type": "integer",
+                "example": 400
+              },
+              "totalCost": {
+                "type": "number",
+                "example": 0.0035
+              }
+            }
+          }
+        }
+      },
       "PromptProvenance": {
         "type": "object",
         "required": [
@@ -2908,6 +3504,88 @@
             "type": "number",
             "minimum": 0,
             "maximum": 100
+          }
+        }
+      },
+      "StoredAlert": {
+        "type": "object",
+        "description": "Stored alert document. The `source` field identifies the producing flow (webhook, news-monitor, market-scanner, expanded-analysis). When the report text exceeded the 20,000-character storage cap, `truncated: true` and `originalLength` are populated so consumers and replay can flag the loss; replay will redeliver only the truncated text.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "receivedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "text": {
+            "type": "string"
+          },
+          "enriched": {
+            "type": "boolean"
+          },
+          "enrichmentData": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": true
+          },
+          "tokenUsage": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": true
+          },
+          "channels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "deliveryResults": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "webhook",
+              "news-monitor",
+              "market-scanner",
+              "expanded-analysis"
+            ]
+          },
+          "useTradingViewData": {
+            "type": "boolean"
+          },
+          "tradingViewEnrichmentApplied": {
+            "type": "boolean"
+          },
+          "symbol": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "exchange": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "True when the stored text was clipped to the 20,000-character cap; see originalLength for the pre-truncation size."
+          },
+          "originalLength": {
+            "type": "integer",
+            "minimum": 20001,
+            "description": "Length of the original alert text in characters before the 20,000-character cap was applied."
           }
         }
       },
@@ -3006,8 +3684,68 @@
               "plainAlerts": {
                 "type": "integer"
               },
+              "tradingViewStatusCounts": {
+                "type": "object",
+                "description": "Counts TradingView enrichment outcomes; requested alerts without a stored status are reported as unrecorded.",
+                "properties": {
+                  "full": { "type": "integer", "minimum": 0 },
+                  "partial": { "type": "integer", "minimum": 0 },
+                  "failed": { "type": "integer", "minimum": 0 },
+                  "not_applicable": { "type": "integer", "minimum": 0 },
+                  "unrecorded": { "type": "integer", "minimum": 0 }
+                }
+              },
               "riskMetadataCoverage": {
                 "$ref": "#/components/schemas/RiskMetadataCoverage"
+              },
+              "evidenceCoverage": {
+                "type": "object",
+                "description": "Tracks whether enriched alerts cited grounding sources. Denominator counts only enriched alerts; legacy records missing a sources field count as zero. Grouped by prompt provenance (Langfuse vs. local fallback) for regression attribution.",
+                "properties": {
+                  "denominator": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Number of enriched alerts included in this coverage window."
+                  },
+                  "zeroSources": {
+                    "type": "object",
+                    "properties": {
+                      "populated": { "type": "integer", "minimum": 0 },
+                      "percentage": { "type": "number", "minimum": 0, "maximum": 100 }
+                    }
+                  },
+                  "oneToTwoSources": {
+                    "type": "object",
+                    "properties": {
+                      "populated": { "type": "integer", "minimum": 0 },
+                      "percentage": { "type": "number", "minimum": 0, "maximum": 100 }
+                    }
+                  },
+                  "threePlusSources": {
+                    "type": "object",
+                    "properties": {
+                      "populated": { "type": "integer", "minimum": 0 },
+                      "percentage": { "type": "number", "minimum": 0, "maximum": 100 }
+                    }
+                  },
+                  "totalSourceCount": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Sum of all source counts across enriched alerts in the window."
+                  },
+                  "averageSourceCount": {
+                    "type": "number",
+                    "minimum": 0,
+                    "description": "Average number of cited sources per enriched alert. 0 when denominator is 0."
+                  },
+                  "byPromptProvenance": {
+                    "type": "array",
+                    "description": "Per-provenance breakdown (Langfuse version, local fallback, etc.) using the same bucket shape.",
+                    "items": {
+                      "$ref": "#/components/schemas/JsonObject"
+                    }
+                  }
+                }
               },
               "tokenUsage": {
                 "$ref": "#/components/schemas/JsonObject"
@@ -3270,6 +4008,116 @@
           }
         }
       },
+      "SymbolAnalysisRequest": {
+        "type": "object",
+        "description": "timeframe defaults to TRADINGVIEW_MCP_DEFAULT_TIMEFRAME at runtime, or 1D when that setting is absent.",
+        "required": [
+          "symbol"
+        ],
+        "properties": {
+          "symbol": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_]+:[A-Za-z0-9._-]+$",
+            "example": "BINANCE:BTCUSDT"
+          },
+          "timeframe": {
+            "type": "string",
+            "enum": [
+              "5",
+              "5m",
+              "5M",
+              "15",
+              "15m",
+              "15M",
+              "60",
+              "1H",
+              "1h",
+              "240",
+              "4h",
+              "1440",
+              "1D",
+              "D",
+              "10080",
+              "1W",
+              "W",
+              "43200",
+              "M",
+              "1M"
+            ]
+          },
+          "analysisMode": {
+            "type": "string",
+            "enum": [
+              "standard",
+              "combined"
+            ],
+            "default": "standard"
+          },
+          "analysis_mode": {
+            "type": "string",
+            "enum": [
+              "standard",
+              "combined"
+            ],
+            "default": "standard"
+          },
+          "includeMultiTimeframe": {
+            "type": "boolean",
+            "default": false
+          },
+          "include_multi_timeframe": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "SymbolAnalysisResult": {
+        "type": "object",
+        "required": [
+          "success",
+          "symbol",
+          "analysis",
+          "alertText"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "symbol": {
+            "type": "string"
+          },
+          "exchange": {
+            "type": "string"
+          },
+          "asset": {
+            "type": "string"
+          },
+          "timeframe": {
+            "type": "string"
+          },
+          "alertText": {
+            "type": "string"
+          },
+          "analysisStatus": {
+            "type": "string",
+            "enum": [
+              "complete",
+              "partial"
+            ]
+          },
+          "analysis": {
+            "$ref": "#/components/schemas/JsonObject"
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "totalDurationMs": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
       "ScannerPresetRequest": {
         "type": "object",
         "required": [
@@ -3375,6 +4223,70 @@
           },
           "bbwThreshold": {
             "type": "number"
+          },
+          "schedule": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "cadence": {
+                "type": "string",
+                "description": "Recurring schedule interval (e.g. 5m, 1h, 1d)"
+              },
+              "cadenceMs": {
+                "type": "integer",
+                "description": "Parsed cadence in milliseconds (min: 60000)"
+              }
+            }
+          },
+          "channels": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "telegram",
+                "whatsapp",
+                "discord"
+              ]
+            }
+          },
+          "telegramChatId": {
+            "type": "string"
+          },
+          "whatsappChatId": {
+            "type": "string"
+          },
+          "discordWebhookUrl": {
+            "type": "string",
+            "format": "uri"
+          },
+          "lastRunAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "nextRunAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "lastStatus": {
+            "type": "string",
+            "enum": [
+              "success",
+              "error",
+              "timeout"
+            ],
+            "nullable": true
+          },
+          "lastError": {
+            "type": "string",
+            "nullable": true
+          },
+          "lastDurationMs": {
+            "type": "integer",
+            "nullable": true
           },
           "createdAt": {
             "type": "string",
@@ -3623,6 +4535,14 @@
           "success": {
             "type": "boolean"
           },
+          "suppressedRepeat": {
+            "type": "boolean",
+            "description": "True when this alert was persisted without channel delivery because it repeated a recent signal."
+          },
+          "requestId": {
+            "type": "string",
+            "description": "Request correlation ID echoed from the inbound x-request-id header or generated as a UUIDv4."
+          },
           "dryRun": {
             "type": "boolean"
           },
@@ -3652,6 +4572,32 @@
                       "not_applicable"
                     ],
                     "description": "Sanitized TradingView MCP outcome for this alert."
+                  },
+                  "levelsSource": {
+                    "type": "string",
+                    "enum": [
+                      "gemini-grounding"
+                    ],
+                    "description": "Provenance of technical_levels. Set to 'gemini-grounding' only when Gemini-parsed fallback levels are emitted because TradingView MCP data was absent or failed; omitted when MCP-derived levels win (GH-509 / CB-226)."
+                  },
+                  "current_price": {
+                    "type": [
+                      "number",
+                      "null"
+                    ],
+                    "description": "Current price supplied by TradingView MCP enrichment; null when unavailable."
+                  },
+                  "sentiment_score_raw": {
+                    "type": "number",
+                    "description": "Original signed Gemini sentiment score when the effective score was capped because grounding returned no sources."
+                  },
+                  "price_data": {
+                    "type": [
+                      "object",
+                      "null"
+                    ],
+                    "additionalProperties": true,
+                    "description": "Optional structured TradingView MCP price snapshot (e.g. current_price, high, low)."
                   },
                   "confluenceData": {
                     "type": [
@@ -3687,6 +4633,10 @@
                       "trend_continuation",
                       "reversal"
                     ]
+                  },
+                  "setup_evidence": {
+                    "type": "string",
+                    "description": "Optional one-line rationale or observed market structure supporting the setup_type"
                   },
                   "risk_reward_ratio": {
                     "type": [
@@ -3862,7 +4812,7 @@
               "number",
               "string"
             ],
-            "description": "Base-asset quantity. Required for LIMIT. Optional for MARKET (evaluated using average price against the notional cap). Send as a string when exact decimal precision matters."
+            "description": "Base-asset quantity. Required for LIMIT. Optional for MARKET (evaluated using average price against the notional cap; MARKET BUYs are converted to an exchange-enforced quoteOrderQty at the estimated average price). Send as a string when exact decimal precision matters."
           },
           "quoteOrderQty": {
             "type": [
@@ -3986,7 +4936,7 @@
       },
       "Status": {
         "type": "object",
-        "description": "Runtime status. TradingView dependencies expose configured endpoint metadata plus runtime status (unknown before an MCP operation, ready after success, degraded after failure), timestamps, sanitized error categories, and success/failure counters without provider response bodies. featureFlags.firestoreJobStorage reports the ENABLE_FIRESTORE_JOB_STORAGE gate or the legacy ENABLE_FIRESTORE_ALERT_STORAGE gate; featureFlags.jobExecutionWorker reports JOB_EXECUTION_MODE=render-worker or firestore-poller; dependencies.jobExecutionQueue reports queue readiness and safe operational counters without broker credentials; featureFlags.firestoreScannerPresets reports ENABLE_FIRESTORE_SCANNER_PRESETS; dependencies.scannerPresetStorage reports the effective durable or ephemeral scanner-preset backend and readiness; dependencies.signalOutcomeWorker reports the scheduler role (web, worker, or disabled), graceful-shutdown state, cadence, heartbeat, and scanned/pending/evaluated/error counters; a disabled local scheduler reports ready false and status disabled because it is not the process evaluating outcomes; dependencies.firestoreJobStorage reports Firestore credential readiness for that runtime path; featureFlags.newsMonitorTestMode reports ENABLE_NEWS_MONITOR_TEST_MODE without changing news monitor behavior; featureFlags.messageFooterMetadata reports ENABLE_MESSAGE_FOOTER_METADATA and defaults to true unless explicitly set to false; featureFlags.cloudflareAig reports ENABLE_CLOUDFLARE_AIG and dependencies.cloudflareAig reports Cloudflare AI Gateway credential readiness; featureFlags.equityMarketData reports ENABLE_EQUITY_MARKET_DATA and dependencies.equityMarketData reports non-sensitive Twelve Data readiness for BATS/NASDAQ/NYSE/AMEX/NYSE ARCA outcome evaluation; featureFlags.firebaseRemoteConfig reports ENABLE_FIREBASE_REMOTE_CONFIG and dependencies.firebaseRemoteConfig reports only bounded loader metadata, source, template version, last successful load, and last error category without remote values or credentials; featureFlags.notificationRedrive reports ENABLE_NOTIFICATION_REDRIVE and dependencies.notificationRedrive reports dead-letter redrive worker role, configuration, running state, and safe operational counters.",
+        "description": "Runtime status. TradingView dependencies expose configured endpoint metadata plus runtime status (unknown before an MCP operation, ready after success, degraded after failure), timestamps, sanitized error categories, success/failure counters, and dependencies.tradingViewMcp.enrichment.alertPath rolling 24-hour alert-path outcome rates without provider response bodies. dependencies.geminiQuota reports Gemini quota cooldown state, remaining cooldown duration, trigger counters, Brave search fallback events during cooldown, and grounding request telemetry counters without exposing prompt text or provider credentials. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters. featureFlags.firestoreJobStorage reports the ENABLE_FIRESTORE_JOB_STORAGE gate or the legacy ENABLE_FIRESTORE_ALERT_STORAGE gate; featureFlags.jobExecutionWorker reports JOB_EXECUTION_MODE=render-worker or firestore-poller; dependencies.jobExecutionQueue reports queue readiness and safe operational counters without broker credentials; featureFlags.firestoreScannerPresets reports ENABLE_FIRESTORE_SCANNER_PRESETS; dependencies.scannerPresetStorage reports the effective durable or ephemeral scanner-preset backend and readiness; dependencies.signalOutcomeWorker reports the scheduler role (web, worker, or disabled), graceful-shutdown state, cadence, heartbeat, and scanned/pending/evaluated/error counters; a disabled local scheduler reports ready false and status disabled because it is not the process evaluating outcomes; dependencies.firestoreJobStorage reports Firestore credential readiness for that runtime path; featureFlags.newsMonitorTestMode reports ENABLE_NEWS_MONITOR_TEST_MODE without changing news monitor behavior; featureFlags.messageFooterMetadata reports ENABLE_MESSAGE_FOOTER_METADATA and defaults to true unless explicitly set to false; featureFlags.cloudflareAig reports ENABLE_CLOUDFLARE_AIG and dependencies.cloudflareAig reports Cloudflare AI Gateway credential readiness; featureFlags.equityMarketData reports ENABLE_EQUITY_MARKET_DATA and dependencies.equityMarketData reports non-sensitive Twelve Data readiness for BATS/NASDAQ/NYSE/AMEX/NYSE ARCA outcome evaluation; featureFlags.firebaseRemoteConfig reports ENABLE_FIREBASE_REMOTE_CONFIG and dependencies.firebaseRemoteConfig reports only bounded loader metadata, source, template version, last successful load, and last error category without remote values or credentials; featureFlags.notificationRedrive reports ENABLE_NOTIFICATION_REDRIVE and dependencies.notificationRedrive reports dead-letter redrive worker role, configuration, running state, and safe operational counters. featureFlags.alertSignalRepeatSuppression reports ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION and dependencies.alertSignalRepeatSuppression reports the enabled state plus non-sensitive suppression counters (suppressedCount, lastSuppressedAt, activeTrackedSignals).",
         "properties": {
           "service": {
             "$ref": "#/components/schemas/JsonObject"

@@ -1,6 +1,9 @@
 const packageJson = require('../../package.json');
 const sentryService = require('../services/monitoring/SentryService');
-const { scannerPresetService } = require('../services/scannerPresets/ScannerPresetService');
+const {
+	scannerPresetService,
+	scannerPresetSchedulerService,
+} = require('../services/scannerPresets');
 const idempotencyStorageService = require('../services/storage/IdempotencyStorageService');
 const { isFirestoreConfigured } = require('../services/storage/firestoreConfig');
 const SignalOutcomeService = require('../services/storage/SignalOutcomeService');
@@ -10,6 +13,11 @@ const remoteConfigService = require('../services/remoteConfig/RemoteConfigServic
 const { tradingViewMcpService } = require('../services/tradingview/TradingViewMcpService');
 const { binanceOrderService } = require('../services/trading/BinanceOrderService');
 const { notificationRedriveService } = require('../services/notification/NotificationRedriveService');
+const { whatsAppCommandBridgeService } = require('../services/notification/WhatsAppCommandBridgeService');
+const geminiQuotaManager = require('../services/grounding/geminiQuotaManager');
+const groundingMetrics = require('../services/grounding/metrics');
+const { signalRepeatCooldown } = require('../services/alerts/signalRepeatCooldown');
+const { getCoalescingStatus } = require('../services/grounding/grounding');
 const {
 	getDeploymentCommit,
 	isPreviewEnvironment,
@@ -139,6 +147,30 @@ function getGeminiDependency({
 	});
 }
 
+function getGeminiQuotaDependency({ gemini }) {
+	const snapshot = geminiQuotaManager.getSnapshot();
+	const status = !gemini.enabled
+		? 'disabled'
+		: (!gemini.configured
+			? 'misconfigured'
+			: (snapshot.cooldownActive ? 'degraded' : 'ready'));
+
+	return {
+		enabled: gemini.enabled,
+		configured: gemini.configured,
+		ready: gemini.ready && !snapshot.cooldownActive,
+		status,
+		cooldownActive: snapshot.cooldownActive,
+		remainingCooldownMs: snapshot.remainingCooldownMs,
+		lastTriggeredAt: snapshot.lastTriggeredAt,
+		triggersTotal: snapshot.triggersTotal,
+		braveFallbacksDuringCooldown: snapshot.braveFallbacksDuringCooldown,
+		lastBraveFallbackAt: snapshot.lastBraveFallbackAt,
+		metrics: groundingMetrics.getSnapshot(),
+	};
+}
+
+
 function getStatus() {
 	const previewEnvironment = isPreview();
 	const modelProvider = getModelProvider();
@@ -203,6 +235,7 @@ function getStatus() {
 		geminiGroundingEnabled,
 		modelProvider,
 	});
+	const geminiQuota = getGeminiQuotaDependency({ gemini });
 	const tradingViewRuntimeStatus = tradingViewMcpService.getStatus({ enabled: tradingViewMcpEnabled });
 	const tradingViewMcp = tradingViewRuntimeStatus;
 	const tradingViewVolumeConfirmation = tradingViewMcpService.getVolumeConfirmationStatus({
@@ -275,6 +308,11 @@ function getStatus() {
 		signalOutcomeWorkerDependency.status = 'disabled';
 	}
 
+	const webhookAuth = dependencyStatus({
+		enabled: true,
+		configured: hasValue(process.env.WEBHOOK_API_KEY),
+	});
+
 	return {
 		service: {
 			name: process.env.SERVICE_NAME || packageJson.name || 'cabros-bot',
@@ -296,6 +334,7 @@ function getStatus() {
 			firestoreAlertStorage: firestoreEnabled,
 			firestoreScannerPresets: firestoreScannerPresetsEnabled,
 			firestoreJobStorage: firestoreJobStorageEnabled,
+			scannerPresetScheduler: scannerPresetSchedulerService.isEnabled(),
 			sentryMonitoring: sentryEnabled,
 			sentryProfiling: sentryService.isProfilingEnabled(),
 			langfusePrompts: langfusePromptsEnabled,
@@ -311,6 +350,8 @@ function getStatus() {
 			firebaseRemoteConfig: remoteConfigStatus.enabled,
 			jobExecutionWorker: jobExecutionQueueStatus.enabled || process.env.JOB_EXECUTION_MODE === 'firestore-poller',
 			notificationRedrive: notificationRedriveService.isEnabled(),
+			alertSignalRepeatSuppression: signalRepeatCooldown.isEnabled(),
+			whatsappCommands: whatsAppCommandBridgeService.isEnabled(),
 		},
 		deliveryChannels: {
 			telegram: {
@@ -330,7 +371,11 @@ function getStatus() {
 			telegram,
 			whatsapp,
 			discord,
+			webhookAuth,
+			whatsappCommandBridge: whatsAppCommandBridgeService.getStatus(),
 			gemini,
+			geminiQuota,
+			groundingCoalescing: getCoalescingStatus(),
 			tradingViewMcp,
 			tradingViewVolumeConfirmation,
 			firestore,
@@ -351,6 +396,7 @@ function getStatus() {
 			idempotencyStorage: idempotencyStorageService.getStorageStatus(),
 			firebaseRemoteConfig: remoteConfigStatus,
 			scannerPresetStorage: scannerPresetService.getStorageStatus(),
+			scannerPresetScheduler: scannerPresetSchedulerService.getStatus(),
 			equityMarketData: equityMarketDataStatus,
 			signalOutcomeWorker: {
 				...signalOutcomeWorkerDependency,
@@ -369,6 +415,10 @@ function getStatus() {
 				lastRunErrorCount: signalOutcomeWorkerStatus.lastRunErrorCount,
 			},
 			notificationRedrive: notificationRedriveService.getStatus(),
+			alertSignalRepeatSuppression: {
+				enabled: signalRepeatCooldown.isEnabled(),
+				...signalRepeatCooldown.getStats(),
+			},
 			jobExecutionQueue: jobExecutionQueueStatus,
 			binanceTrading: binanceTradingStatus,
 		},

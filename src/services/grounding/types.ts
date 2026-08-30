@@ -23,17 +23,32 @@ export interface PromptProvenance {
   version: number | null;
 }
 
+export interface PriceData {
+  current_price: number | null;
+  high?: number | string;
+  low?: number | string;
+  open?: number | string;
+  previous_close?: number | string;
+  volume?: number | string;
+  [key: string]: unknown;
+}
+
 export interface EnrichedAlert {
   original_text: string;
   tradingViewEnrichmentApplied?: boolean;
   sentiment: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
   sentiment_score: number;
+  sentiment_score_raw?: number;
+  current_price?: number | null;
+  price_data?: PriceData | null;
   insights: string[];
   promptProvenance?: PromptProvenance;
   technical_levels?: TechnicalLevels;
+  levelsSource?: 'gemini-grounding';
   invalidation_level?: string | number;
   target_level?: string | number;
   setup_type?: 'breakout' | 'mean_reversion' | 'trend_continuation' | 'reversal';
+  setup_evidence?: string;
   risk_reward_ratio?: string | number;
   sources: Source[];
 }

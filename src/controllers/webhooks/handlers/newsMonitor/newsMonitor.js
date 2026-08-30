@@ -19,6 +19,7 @@ const {
 	getRequestedChannels,
 	getDeliveredChannels,
 } = require('../../../../services/notification/requestRouting');
+const alertStorageService = require('../../../../services/storage/AlertStorageService');
 
 function resolveDryRun(req) {
 	const queryFlag = req.query && (req.query.dryRun === 'true' || req.query.dryRun === true);
@@ -133,10 +134,17 @@ class NewsMonitorHandler {
 			}
 
 			const notificationManagerForResponse = getNotificationManager();
+			// attemptedDeliveryResults and originalPersistedState are storage-only
+			// bookkeeping for the post-response persistence pass; keep them out of
+			// the public contract.
+			const analysisResults = results;
+			const responseResults = (results || []).map(
+				({ attemptedDeliveryResults, originalPersistedState, ...publicResult }) => publicResult,
+			);
 			const response = {
 				success: summary.analyzed > 0 || summary.cached > 0,
 				partial_success: summary.timeout > 0 || summary.error > 0,
-				results,
+				results: responseResults,
 				summary,
 				requestedChannels: getRequestedChannels(notificationManagerForResponse, routing),
 				deliveredChannels: getDeliveredChannels(results.flatMap((result) => result.deliveryResults || [])),
@@ -159,7 +167,87 @@ class NewsMonitorHandler {
 				summary,
 			});
 
-			return res.status(200).json(response);
+			res.status(200).json(response);
+
+			// Fire-and-forget: persist delivered alerts to Firestore after responding to the caller.
+			// Failures are caught and logged — delivery is never blocked by storage.
+			if (!dryRun && alertStorageService.isEnabled()) {
+				const requestedChannels = response.requestedChannels || [];
+				for (const result of analysisResults || []) {
+					if (!result || !result.alert) {
+						continue;
+					}
+
+					const isCachedRedelivery = result.status === AnalysisStatus.CACHED
+						&& Array.isArray(result.attemptedDeliveryResults)
+						&& result.attemptedDeliveryResults.some((delivery) => delivery && delivery.success === true);
+					const currentDeliveryResults = isCachedRedelivery
+						? result.attemptedDeliveryResults
+						: (result.deliveryResults || []);
+					if (result.status !== AnalysisStatus.ANALYZED && !isCachedRedelivery) {
+						continue;
+					}
+					if (!currentDeliveryResults.some((delivery) => delivery && delivery.success === true)) {
+						continue;
+					}
+
+					const persistSymbol = result.alert.symbol || result.symbol;
+					const persistCategory = result.alert.eventCategory;
+					if (!isCachedRedelivery) {
+						// 'pending' closes the double-count window while the write is in
+						// flight; a failed outcome ('none') lets the next redelivery own it.
+						this.cache.markOriginalPersistState(persistSymbol, persistCategory, 'pending')
+							.catch(err => console.warn('[NewsMonitor] Failed to record pending storage state:', err.message));
+					}
+					// Fallback redeliveries embed usage only when they win the ownership
+					// claim (process-local and cross-replica atomic), so concurrent
+					// channel expansions cannot duplicate it.
+					const usageClaimed = !isCachedRedelivery
+						|| await this.cache.claimUsageOwnership(persistSymbol, persistCategory);
+					const includeUsage = !isCachedRedelivery || usageClaimed;
+					alertStorageService.saveAlert({
+						text: result.alert.text || '',
+						symbol: result.alert.symbol || result.symbol,
+						exchange: result.alert.marketContext && result.alert.marketContext.source === 'binance' ? 'BINANCE' : undefined,
+						enriched: Boolean(result.alert.enriched),
+						enrichmentData: result.alert.enriched || null,
+						tokenUsage: includeUsage ? ((result.alert.enriched && result.alert.enriched.tokenUsage) || null) : null,
+						channels: requestedChannels,
+						deliveryResults: currentDeliveryResults,
+						source: 'news-monitor',
+						eventCategory: persistCategory,
+						confidence: result.alert.confidence,
+						sentimentScore: result.alert.sentimentScore,
+						dedupStatus: isCachedRedelivery ? 'cached' : 'fresh',
+						processingTimeMs: result.totalDurationMs,
+					}).then((savedId) => {
+						if (isCachedRedelivery) {
+							if (usageClaimed) {
+								return this.cache.markOriginalPersistState(
+									persistSymbol,
+									persistCategory,
+									savedId ? 'owned' : 'none',
+								);
+							}
+							return undefined;
+						}
+						return this.cache.markOriginalPersistState(persistSymbol, persistCategory, savedId ? 'owned' : 'none');
+					}).catch((err) => {
+						if (isCachedRedelivery) {
+							if (usageClaimed) {
+								this.cache.releaseUsageOwnershipClaim(persistSymbol, persistCategory)
+									.catch(markErr => console.warn('[NewsMonitor] Failed to release usage claim:', markErr.message));
+							}
+						} else {
+							this.cache.markOriginalPersistState(persistSymbol, persistCategory, 'none')
+								.catch(markErr => console.warn('[NewsMonitor] Failed to record failed storage state:', markErr.message));
+						}
+						console.warn('[NewsMonitor] Failed to persist alert to storage:', err.message);
+					});
+				}
+			}
+
+			return;
 		} catch (error) {
 			if (error instanceof NotificationRoutingValidationError) {
 				return res.status(400).json({

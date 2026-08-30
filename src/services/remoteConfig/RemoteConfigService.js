@@ -27,6 +27,7 @@ const PARAMETER_SCHEMA = Object.freeze({
 	GROUNDING_MAX_SOURCES: { type: 'number', defaultValue: 3, integer: true, min: 1, max: 20 },
 	GROUNDING_TIMEOUT_MS: { type: 'number', defaultValue: 30000, integer: true, min: 1, max: 120000 },
 	GROUNDING_MAX_LENGTH: { type: 'number', defaultValue: 2000, integer: true, min: 1, max: 10000 },
+	ALERT_GROUNDING_COALESCE_MS: { type: 'number', defaultValue: 0, integer: true, min: 0, max: 60000 },
 	NEWS_CACHE_TTL_HOURS: { type: 'number', defaultValue: 6, min: 0, max: 720 },
 	BINANCE_FETCH_TIMEOUT_MS: { type: 'number', defaultValue: 5000, integer: true, min: 1, max: 60000 },
 	TRADINGVIEW_MCP_DEFAULT_TIMEFRAME: {
@@ -35,6 +36,7 @@ const PARAMETER_SCHEMA = Object.freeze({
 		allowedValues: ['5m', '15m', '1h', '4h', '1D', '1W', '1M'],
 	},
 	EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS: { type: 'number', defaultValue: 60000, integer: true, min: 1, max: 120000 },
+	EXPANDED_ANALYSIS_ALERT_CONCURRENCY: { type: 'number', defaultValue: 3, integer: true, min: 1, max: 10 },
 	DISCORD_MAX_RETRIES: { type: 'number', defaultValue: 2, integer: true, min: 0, max: 10 },
 	DISCORD_FALLBACK_RETRY_DELAY_MS: { type: 'number', defaultValue: 500, integer: true, min: 1, max: 30000 },
 	DISCORD_MAX_RETRY_DELAY_MS: { type: 'number', defaultValue: 5000, integer: true, min: 1, max: 60000 },
@@ -44,15 +46,25 @@ const PARAMETER_SCHEMA = Object.freeze({
 	JOB_POLL_INTERVAL_MS: { type: 'number', defaultValue: 15000, integer: true, min: 1000, max: 300000 },
 	SIGNAL_OUTCOME_EVALUATION_BATCH_LIMIT: { type: 'number', defaultValue: 50, integer: true, min: 1, max: 500 },
 	SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS: { type: 'number', defaultValue: 30000, integer: true, min: 1, max: 300000 },
+	SIGNAL_OUTCOME_MAX_RETRY_ATTEMPTS: { type: 'number', defaultValue: 3, integer: true, min: 1, max: 20 },
+	SIGNAL_OUTCOME_MAX_RETRY_AGE_MS: { type: 'number', defaultValue: 604800000, integer: true, min: 60000, max: 2592000000 },
+	EQUITY_MARKET_DATA_RPM: { type: 'number', defaultValue: 8, integer: true, min: 0, max: 1200 },
 	NOTIFICATION_REDRIVE_INTERVAL_MS: { type: 'number', defaultValue: 60000, integer: true, min: 1000, max: 3600000 },
 	NOTIFICATION_REDRIVE_BATCH_LIMIT: { type: 'number', defaultValue: 50, integer: true, min: 1, max: 500 },
 	NOTIFICATION_REDRIVE_MAX_ATTEMPTS: { type: 'number', defaultValue: 5, integer: true, min: 1, max: 20 },
 	NOTIFICATION_REDRIVE_MAX_AGE_MS: { type: 'number', defaultValue: 3600000, integer: true, min: 60000, max: 86400000 },
+	SCANNER_PRESET_SCHEDULER_INTERVAL_MS: { type: 'number', defaultValue: 60000, integer: true, min: 1000, max: 3600000 },
+	SCANNER_PRESET_SCHEDULER_BATCH_LIMIT: { type: 'number', defaultValue: 50, integer: true, min: 1, max: 500 },
 	ENABLE_GEMINI_GROUNDING: { type: 'boolean', defaultValue: false },
 	ENABLE_TRADINGVIEW_MCP_ENRICHMENT: { type: 'boolean', defaultValue: false },
 	ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION: { type: 'boolean', defaultValue: false },
 	ENABLE_MARKET_SCANNER: { type: 'boolean', defaultValue: false },
 	ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP: { type: 'boolean', defaultValue: false },
+	ZERO_CHANNEL_ALERT_COOLDOWN_MS: { type: 'number', defaultValue: 300000, integer: true, min: 1000, max: 86400000 },
+	ENABLE_API_ONLY_MODE: { type: 'boolean', defaultValue: false },
+	ENABLE_ALERT_HTF_RENDER: { type: 'boolean', defaultValue: true },
+	ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION: { type: 'boolean', defaultValue: false },
+	ALERT_SIGNAL_COOLDOWN_BARS: { type: 'number', defaultValue: 1, integer: true, min: 1, max: 10 },
 });
 
 let remoteOverrides = {};
@@ -148,6 +160,11 @@ function getEnvironmentConfig() {
 			config[key] = parseLegacyPositiveInteger(process.env.NEWS_GEMINI_QUOTA_RETRY_BASE_MS, 1000);
 		} else if (key === 'WEBHOOK_IDEMPOTENCY_TTL_MS') {
 			config[key] = parseEnvironmentNumber(process.env[key], schema, schema.defaultValue);
+		} else if (key === 'EQUITY_MARKET_DATA_RPM') {
+			const envVal = process.env.EQUITY_MARKET_DATA_RPM ?? process.env.TWELVE_DATA_RPM;
+			config[key] = process.env.NODE_ENV === 'test' && envVal === undefined
+				? 0
+				: parseValue(envVal, schema, schema.defaultValue);
 		} else {
 			config[key] = parseValue(process.env[key], schema, schema.defaultValue);
 		}

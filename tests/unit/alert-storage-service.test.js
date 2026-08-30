@@ -260,6 +260,54 @@ describe('AlertStorageService', () => {
 			});
 		});
 
+		it('persists news-monitor alert with source, eventCategory, confidence, and dedupStatus', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			const docId = 'news-doc-123';
+			mockAdd.mockResolvedValueOnce({ id: docId });
+
+			const params = buildParams({
+				text: 'BTCUSDT: Bitcoin surges on positive news',
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+				source: 'news-monitor',
+				eventCategory: 'price_surge',
+				confidence: 0.85,
+				sentimentScore: 0.75,
+				dedupStatus: 'fresh',
+				enriched: true,
+				enrichmentData: { originalText: 'BTCUSDT: Bitcoin surges on positive news', summary: 'Bullish momentum' },
+				tokenUsage: { total: 350, formattedSummary: '350 tokens' },
+				deliveryResults: [{ channel: 'telegram', success: true }],
+				channels: ['telegram', 'whatsapp'],
+				processingTimeMs: 120,
+			});
+
+			const result = await AlertStorageService.saveAlert(params);
+
+			expect(result).toBe(docId);
+			expect(mockCollection).toHaveBeenCalledWith('alerts');
+			expect(mockAdd).toHaveBeenCalledWith({
+				receivedAt: expect.anything(),
+				expiresAt: expect.anything(),
+				text: 'BTCUSDT: Bitcoin surges on positive news',
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+				source: 'news-monitor',
+				eventCategory: 'price_surge',
+				confidence: 0.85,
+				sentimentScore: 0.75,
+				dedupStatus: 'fresh',
+				enriched: true,
+				enrichmentData: { originalText: 'BTCUSDT: Bitcoin surges on positive news', summary: 'Bullish momentum' },
+				tokenUsage: { total: 350, formattedSummary: '350 tokens' },
+				deliveryResults: [{ channel: 'telegram', success: true }],
+				channels: ['telegram', 'whatsapp'],
+				useTradingViewData: false,
+				tradingViewEnrichmentApplied: false,
+				processingTimeMs: 120,
+			});
+		});
+
 		it('strips nested undefined properties before persisting without serialization errors', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 			mockAdd.mockResolvedValueOnce({ id: 'sanitized-alert' });
@@ -268,6 +316,8 @@ describe('AlertStorageService', () => {
 				enriched: true,
 				enrichmentData: {
 					sentiment: 'bullish',
+					sentiment_score: 0.55,
+					sentiment_score_raw: 0.9,
 					technical_levels: { supports: ['100k'], resistances: undefined },
 					insights: ['RSI > 70', undefined],
 				},
@@ -293,6 +343,10 @@ describe('AlertStorageService', () => {
 
 			expect(result).toBe('sanitized-alert');
 			const document = mockAdd.mock.calls[0][0];
+			expect(document.enrichmentData).toEqual(expect.objectContaining({
+				sentiment_score: 0.55,
+				sentiment_score_raw: 0.9,
+			}));
 			expect(document.enrichmentData.technical_levels).toEqual({ supports: ['100k'] });
 			expect(document.enrichmentData.technical_levels).not.toHaveProperty('resistances');
 			expect(document.enrichmentData.insights).toEqual(['RSI > 70']);
@@ -371,6 +425,30 @@ describe('AlertStorageService', () => {
 			}
 		});
 
+		it('persists sanitized requestId when provided', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockAdd.mockResolvedValueOnce({ id: 'id-request-id' });
+
+			await AlertStorageService.saveAlert(buildParams({
+				requestId: '  req-trace-abc-123  ',
+			}));
+
+			expect(mockAdd).toHaveBeenCalledWith(expect.objectContaining({
+				requestId: 'req-trace-abc-123',
+			}));
+		});
+
+		it('omits requestId when not a non-empty string', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockAdd.mockResolvedValueOnce({ id: 'id-no-req-id' });
+
+			await AlertStorageService.saveAlert(buildParams({
+				requestId: '   ',
+			}));
+
+			expect(mockAdd.mock.calls.at(-1)[0]).not.toHaveProperty('requestId');
+		});
+
 		it('persists requested and successfully applied TradingView enrichment separately', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 			mockAdd.mockResolvedValueOnce({ id: 'id-tradingview' });
@@ -446,7 +524,7 @@ describe('AlertStorageService', () => {
 			expect(calledWith.channels).toEqual(['telegram']);
 		});
 
-		it('truncates text longer than 20000 characters', async () => {
+		it('truncates text longer than 20000 characters and flags truncation metadata', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 			mockAdd.mockResolvedValueOnce({ id: 'id1' });
 			const longText = 'x'.repeat(25000);
@@ -455,6 +533,21 @@ describe('AlertStorageService', () => {
 
 			const calledWith = mockAdd.mock.calls[0][0];
 			expect(calledWith.text.length).toBe(20000);
+			expect(calledWith.truncated).toBe(true);
+			expect(calledWith.originalLength).toBe(25000);
+		});
+
+		it('does not flag truncation when text is within the 20000 character limit', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockAdd.mockResolvedValueOnce({ id: 'id1b' });
+			const shortText = 'x'.repeat(15000);
+
+			await AlertStorageService.saveAlert(buildParams({ text: shortText }));
+
+			const calledWith = mockAdd.mock.calls[0][0];
+			expect(calledWith.text.length).toBe(15000);
+			expect(calledWith.truncated).toBeUndefined();
+			expect(calledWith.originalLength).toBeUndefined();
 		});
 
 		it('stores empty array when deliveryResults is not an array', async () => {
@@ -467,7 +560,7 @@ describe('AlertStorageService', () => {
 			expect(calledWith.deliveryResults).toEqual([]);
 		});
 
-		it('always sets source to "webhook"', async () => {
+		it('defaults source to "webhook" when not provided', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 			mockAdd.mockResolvedValueOnce({ id: 'id3' });
 
@@ -590,6 +683,50 @@ describe('AlertStorageService', () => {
 				receivedAt: '2026-06-06T12:00:00.000Z',
 				documentId: 'alert-1',
 			});
+		});
+
+		it('exposes truncated flag and originalLength in /api/alerts list responses', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('expanded-truncated-1', {
+						receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+						source: 'expanded-analysis',
+						text: 'x'.repeat(20000),
+						truncated: true,
+						originalLength: 24513,
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.listAlerts({ limit: 1 });
+
+			expect(result.alerts[0]).toMatchObject({
+				id: 'expanded-truncated-1',
+				truncated: true,
+				originalLength: 24513,
+			});
+			expect(result.alerts[0].text).toHaveLength(20000);
+		});
+
+		it('omits truncated flag in /api/alerts list responses when stored text fits within the cap', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('webhook-fine', {
+						receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+						source: 'webhook',
+						text: 'short alert',
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.listAlerts({ limit: 1 });
+
+			expect(result.alerts[0]).not.toHaveProperty('truncated');
+			expect(result.alerts[0]).not.toHaveProperty('originalLength');
 		});
 
 		it('hides expired alerts and ages legacy records from receivedAt', async () => {
@@ -805,6 +942,21 @@ describe('AlertStorageService', () => {
 				source: 'webhook',
 				useTradingViewData: true,
 				tradingViewEnrichmentApplied: false,
+			});
+		});
+
+		it('returns requestId when present on the document', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockDocGet.mockResolvedValueOnce(buildDocSnapshot('alert-with-req-id', {
+				receivedAt: buildTimestamp('2026-06-06T10:30:00.000Z'),
+				text: 'Stored alert with requestId',
+				requestId: 'req-observable-123',
+			}));
+
+			const result = await AlertStorageService.getAlertById('alert-with-req-id');
+			expect(result).toMatchObject({
+				id: 'alert-with-req-id',
+				requestId: 'req-observable-123',
 			});
 		});
 
@@ -1135,6 +1287,30 @@ describe('AlertStorageService', () => {
 			expect(result.alerts.map(alert => alert.id)).toEqual(['webhook-btc', 'webhook-eth']);
 		});
 
+		it('includes requestId in exported records when present on the document', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('alert-req-1', {
+						receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+						source: 'webhook',
+						requestId: 'trace-export-999',
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.exportAlerts({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+			});
+
+			expect(result.alerts[0]).toMatchObject({
+				id: 'alert-req-1',
+				requestId: 'trace-export-999',
+			});
+		});
+
 		it('throws STORAGE_UNAVAILABLE when Firestore export reads fail', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 			mockGet.mockRejectedValueOnce(new Error('Permission denied'));
@@ -1146,9 +1322,110 @@ describe('AlertStorageService', () => {
 				code: 'STORAGE_UNAVAILABLE',
 			});
 		});
+
+		it('exposes truncated flag and originalLength in export when stored text was clipped', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('expanded-truncated-1', {
+						receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+						source: 'expanded-analysis',
+						text: 'x'.repeat(20000),
+						truncated: true,
+						originalLength: 24513,
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.exportAlerts({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+				includeText: true,
+			});
+
+			// Export layer additionally caps raw text at MAX_EXPORT_TEXT_LENGTH (1000) for
+			// safety, but the storage-layer truncation flag and originalLength are
+			// preserved so consumers can detect the 20,000-character clip.
+			expect(result.alerts[0]).toMatchObject({
+				id: 'expanded-truncated-1',
+				truncated: true,
+				originalLength: 24513,
+			});
+			expect(result.alerts[0].text.length).toBeLessThanOrEqual(1000);
+		});
+
+		it('omits truncated flag in export when stored text fits within the cap', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('webhook-fine', {
+						receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+						source: 'webhook',
+						text: 'short alert',
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.exportAlerts({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+				includeText: true,
+			});
+
+			expect(result.alerts[0]).not.toHaveProperty('truncated');
+			expect(result.alerts[0]).not.toHaveProperty('originalLength');
+		});
 	});
 
 		describe('summarizeAlerts()', () => {
+		it('counts recorded, not-applicable, and legacy unrecorded TradingView outcomes separately', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('full-alert', {
+						receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+						useTradingViewData: true,
+						tradingViewEnrichmentStatus: 'full',
+					}),
+					buildQueryDoc('partial-alert', {
+						receivedAt: buildTimestamp('2026-06-06T11:00:00.000Z'),
+						useTradingViewData: true,
+						tradingViewEnrichmentStatus: 'partial',
+					}),
+					buildQueryDoc('failed-alert', {
+						receivedAt: buildTimestamp('2026-06-06T10:00:00.000Z'),
+						useTradingViewData: true,
+						tradingViewEnrichmentStatus: 'failed',
+					}),
+					buildQueryDoc('not-applicable-alert', {
+						receivedAt: buildTimestamp('2026-06-06T09:00:00.000Z'),
+						useTradingViewData: false,
+					}),
+					buildQueryDoc('unrecorded-alert', {
+						receivedAt: buildTimestamp('2026-06-06T08:00:00.000Z'),
+						useTradingViewData: true,
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.summarizeAlerts({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+				limit: 200,
+			});
+
+			expect(result.enrichment.tradingViewStatusCounts).toEqual({
+				full: 1,
+				partial: 1,
+				failed: 1,
+				not_applicable: 1,
+				unrecorded: 1,
+			});
+		});
+
 		it('preserves zero latency, accepts legacy latency, and ignores invalid values', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 			mockGet.mockResolvedValueOnce({
@@ -1254,6 +1531,13 @@ describe('AlertStorageService', () => {
 				enrichment: {
 					enrichedAlerts: 1,
 					plainAlerts: 1,
+					tradingViewStatusCounts: {
+						full: 0,
+						partial: 0,
+						failed: 0,
+						not_applicable: 1,
+						unrecorded: 1,
+					},
 					riskMetadataCoverage: {
 						denominator: 1,
 						fields: {
@@ -1272,6 +1556,25 @@ describe('AlertStorageService', () => {
 									setup_type: { populated: 0, percentage: 0 },
 									risk_reward_ratio: { populated: 0, percentage: 0 },
 								},
+							},
+						],
+					},
+					evidenceCoverage: {
+						denominator: 1,
+						zeroSources: { populated: 1, percentage: 100 },
+						oneToTwoSources: { populated: 0, percentage: 0 },
+						threePlusSources: { populated: 0, percentage: 0 },
+						totalSourceCount: 0,
+						averageSourceCount: 0,
+						byPromptProvenance: [
+							{
+								provenance: null,
+								denominator: 1,
+								zeroSources: { populated: 1, percentage: 100 },
+								oneToTwoSources: { populated: 0, percentage: 0 },
+								threePlusSources: { populated: 0, percentage: 0 },
+								totalSourceCount: 0,
+								averageSourceCount: 0,
 							},
 						],
 					},
@@ -1595,6 +1898,205 @@ describe('AlertStorageService', () => {
 						},
 					},
 				],
+			});
+		});
+
+		it('aggregates evidenceCoverage across zero-, low-, and high-source enriched alerts', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					// 0 sources (missing sources field — legacy) — counted as zeroSources
+					buildQueryDoc('alert-no-sources', {
+						receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+						enriched: true,
+						enrichmentData: { symbol: 'BTCUSDT' },
+						source: 'webhook',
+					}),
+					// 1 source — oneToTwoSources
+					buildQueryDoc('alert-one-source', {
+						receivedAt: buildTimestamp('2026-06-06T11:00:00.000Z'),
+						enriched: true,
+						enrichmentData: { symbol: 'ETHUSDT', sources: [{ url: 'https://a.com' }] },
+						source: 'webhook',
+					}),
+					// 3 sources — threePlusSources
+					buildQueryDoc('alert-three-sources', {
+						receivedAt: buildTimestamp('2026-06-06T10:00:00.000Z'),
+						enriched: true,
+						enrichmentData: {
+							symbol: 'SOLUSDT',
+							sources: [
+								{ url: 'https://a.com' },
+								{ url: 'https://b.com' },
+								{ url: 'https://c.com' },
+							],
+						},
+						source: 'webhook',
+					}),
+					// plain alert — must not count toward evidenceCoverage
+					buildQueryDoc('alert-plain', {
+						receivedAt: buildTimestamp('2026-06-06T09:00:00.000Z'),
+						enriched: false,
+						source: 'webhook',
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.summarizeAlerts({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+				limit: 200,
+			});
+
+			expect(result.enrichment.evidenceCoverage).toEqual({
+				denominator: 3,
+				zeroSources: { populated: 1, percentage: Number(((1 / 3) * 100).toFixed(2)) },
+				oneToTwoSources: { populated: 1, percentage: Number(((1 / 3) * 100).toFixed(2)) },
+				threePlusSources: { populated: 1, percentage: Number(((1 / 3) * 100).toFixed(2)) },
+				totalSourceCount: 4, // 0 + 1 + 3
+				averageSourceCount: Number((4 / 3).toFixed(2)),
+				byPromptProvenance: [
+					{
+						provenance: null,
+						denominator: 3,
+						zeroSources: { populated: 1, percentage: Number(((1 / 3) * 100).toFixed(2)) },
+						oneToTwoSources: { populated: 1, percentage: Number(((1 / 3) * 100).toFixed(2)) },
+						threePlusSources: { populated: 1, percentage: Number(((1 / 3) * 100).toFixed(2)) },
+						totalSourceCount: 4,
+						averageSourceCount: Number((4 / 3).toFixed(2)),
+					},
+				],
+			});
+		});
+
+		it('evidenceCoverage groups by prompt provenance and handles schema drift', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					// langfuse-sourced prompt — 3 sources
+					buildQueryDoc('alert-lf', {
+						receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+						enriched: true,
+						enrichmentData: {
+							symbol: 'BTCUSDT',
+							sources: ['a', 'b', 'c'],
+							promptProvenance: {
+								name: 'alert-enrichment',
+								source: 'langfuse',
+								label: 'production',
+								version: 12,
+							},
+						},
+						source: 'webhook',
+					}),
+					// local fallback — 0 sources
+					buildQueryDoc('alert-local', {
+						receivedAt: buildTimestamp('2026-06-06T11:00:00.000Z'),
+						enriched: true,
+						enrichmentData: {
+							symbol: 'ETHUSDT',
+							sources: [],
+							promptProvenance: {
+								name: 'alert-enrichment',
+								source: 'local',
+								label: null,
+								version: null,
+							},
+						},
+						source: 'webhook',
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.summarizeAlerts({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+				limit: 200,
+			});
+
+			// Top-level bucket covers both
+			expect(result.enrichment.evidenceCoverage.denominator).toBe(2);
+			expect(result.enrichment.evidenceCoverage.threePlusSources.populated).toBe(1);
+			expect(result.enrichment.evidenceCoverage.zeroSources.populated).toBe(1);
+			expect(result.enrichment.evidenceCoverage.averageSourceCount).toBe(1.5);
+
+			// Per-provenance grouping
+			const provenanceGroups = result.enrichment.evidenceCoverage.byPromptProvenance;
+			expect(provenanceGroups).toHaveLength(2);
+
+			const lfGroup = provenanceGroups.find(g => g.provenance && g.provenance.source === 'langfuse');
+			expect(lfGroup.denominator).toBe(1);
+			expect(lfGroup.threePlusSources.populated).toBe(1);
+			expect(lfGroup.averageSourceCount).toBe(3);
+
+			const localGroup = provenanceGroups.find(g => g.provenance && g.provenance.source === 'local');
+			expect(localGroup.denominator).toBe(1);
+			expect(localGroup.zeroSources.populated).toBe(1);
+			expect(localGroup.averageSourceCount).toBe(0);
+		});
+
+		it('evidenceCoverage treats numeric sources field as count and is zero-safe with no enriched alerts', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					// numeric sources field (non-array) treated as count
+					buildQueryDoc('alert-numeric', {
+						receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+						enriched: true,
+						enrichmentData: { symbol: 'BTCUSDT', sources: 5 },
+						source: 'webhook',
+					}),
+					// non-enriched only — evidenceCoverage denominator must stay 0
+					buildQueryDoc('alert-plain', {
+						receivedAt: buildTimestamp('2026-06-06T11:00:00.000Z'),
+						enriched: false,
+						source: 'webhook',
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.summarizeAlerts({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+				limit: 200,
+			});
+
+			// numeric sources: 5 → threePlusSources
+			expect(result.enrichment.evidenceCoverage.denominator).toBe(1);
+			expect(result.enrichment.evidenceCoverage.threePlusSources.populated).toBe(1);
+			expect(result.enrichment.evidenceCoverage.averageSourceCount).toBe(5);
+		});
+
+		it('evidenceCoverage denominator is 0 and percentages are 0 when no enriched alerts exist', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('plain-only', {
+						receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+						enriched: false,
+						source: 'webhook',
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.summarizeAlerts({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+				limit: 200,
+			});
+
+			expect(result.enrichment.evidenceCoverage).toEqual({
+				denominator: 0,
+				zeroSources: { populated: 0, percentage: 0 },
+				oneToTwoSources: { populated: 0, percentage: 0 },
+				threePlusSources: { populated: 0, percentage: 0 },
+				totalSourceCount: 0,
+				averageSourceCount: 0,
+				byPromptProvenance: [],
 			});
 		});
 

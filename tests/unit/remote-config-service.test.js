@@ -60,6 +60,8 @@ describe('RemoteConfigService', () => {
 			['TRADINGVIEW_MCP_TIMEOUT_MS', 'not-a-number', 12000],
 			['TRADINGVIEW_MCP_MAX_RETRIES', '0', 3],
 			['TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS', 'Infinity', 12000],
+			['EXPANDED_ANALYSIS_ALERT_CONCURRENCY', '0', 3],
+			['EXPANDED_ANALYSIS_ALERT_CONCURRENCY', '11', 3],
 			['TRADINGVIEW_MCP_TIMEOUT_MS', '999', 12000],
 			['TRADINGVIEW_MCP_MAX_RETRIES', '6', 3],
 			['TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS', '-1', 12000],
@@ -76,6 +78,7 @@ describe('RemoteConfigService', () => {
 		process.env.TRADINGVIEW_MCP_TIMEOUT_MS = '15000';
 		process.env.TRADINGVIEW_MCP_MAX_RETRIES = '4';
 		process.env.TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS = '20000';
+		process.env.EXPANDED_ANALYSIS_ALERT_CONCURRENCY = '2';
 
 		await remoteConfigService.start();
 
@@ -86,6 +89,7 @@ describe('RemoteConfigService', () => {
 			TRADINGVIEW_MCP_TIMEOUT_MS: 15000,
 			TRADINGVIEW_MCP_MAX_RETRIES: 4,
 			TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS: 20000,
+			EXPANDED_ANALYSIS_ALERT_CONCURRENCY: 2,
 		}));
 	});
 
@@ -278,9 +282,11 @@ describe('RemoteConfigService', () => {
 			GROUNDING_MAX_SOURCES: 5,
 			GROUNDING_TIMEOUT_MS: 45000,
 			GROUNDING_MAX_LENGTH: 3000,
+			ALERT_GROUNDING_COALESCE_MS: 2500,
 			NEWS_CACHE_TTL_HOURS: 12,
 			BINANCE_FETCH_TIMEOUT_MS: 8000,
 			EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS: 90000,
+			EXPANDED_ANALYSIS_ALERT_CONCURRENCY: 4,
 			DISCORD_MAX_RETRIES: 5,
 			DISCORD_FALLBACK_RETRY_DELAY_MS: 1000,
 			DISCORD_MAX_RETRY_DELAY_MS: 8000,
@@ -290,6 +296,9 @@ describe('RemoteConfigService', () => {
 			JOB_POLL_INTERVAL_MS: 20000,
 			SIGNAL_OUTCOME_EVALUATION_BATCH_LIMIT: 100,
 			SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS: 60000,
+			SIGNAL_OUTCOME_MAX_RETRY_ATTEMPTS: 5,
+			SIGNAL_OUTCOME_MAX_RETRY_AGE_MS: 1209600000,
+			EQUITY_MARKET_DATA_RPM: 12,
 			NOTIFICATION_REDRIVE_INTERVAL_MS: 120000,
 			NOTIFICATION_REDRIVE_BATCH_LIMIT: 75,
 			NOTIFICATION_REDRIVE_MAX_ATTEMPTS: 8,
@@ -306,9 +315,11 @@ describe('RemoteConfigService', () => {
 		expect(config.GROUNDING_MAX_SOURCES).toBe(5);
 		expect(config.GROUNDING_TIMEOUT_MS).toBe(45000);
 		expect(config.GROUNDING_MAX_LENGTH).toBe(3000);
+		expect(config.ALERT_GROUNDING_COALESCE_MS).toBe(2500);
 		expect(config.NEWS_CACHE_TTL_HOURS).toBe(12);
 		expect(config.BINANCE_FETCH_TIMEOUT_MS).toBe(8000);
 		expect(config.EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS).toBe(90000);
+		expect(config.EXPANDED_ANALYSIS_ALERT_CONCURRENCY).toBe(4);
 		expect(config.DISCORD_MAX_RETRIES).toBe(5);
 		expect(config.DISCORD_FALLBACK_RETRY_DELAY_MS).toBe(1000);
 		expect(config.DISCORD_MAX_RETRY_DELAY_MS).toBe(8000);
@@ -318,6 +329,9 @@ describe('RemoteConfigService', () => {
 		expect(config.JOB_POLL_INTERVAL_MS).toBe(20000);
 		expect(config.SIGNAL_OUTCOME_EVALUATION_BATCH_LIMIT).toBe(100);
 		expect(config.SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS).toBe(60000);
+		expect(config.SIGNAL_OUTCOME_MAX_RETRY_ATTEMPTS).toBe(5);
+		expect(config.SIGNAL_OUTCOME_MAX_RETRY_AGE_MS).toBe(1209600000);
+		expect(config.EQUITY_MARKET_DATA_RPM).toBe(12);
 		expect(config.NOTIFICATION_REDRIVE_INTERVAL_MS).toBe(120000);
 		expect(config.NOTIFICATION_REDRIVE_BATCH_LIMIT).toBe(75);
 		expect(config.NOTIFICATION_REDRIVE_MAX_ATTEMPTS).toBe(8);
@@ -335,6 +349,7 @@ describe('RemoteConfigService', () => {
 			ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION: true,
 			ENABLE_MARKET_SCANNER: true,
 			ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP: true,
+			ENABLE_ALERT_HTF_RENDER: false,
 		});
 		alertStorageService.getFirestore.mockReturnValue({});
 
@@ -346,6 +361,7 @@ describe('RemoteConfigService', () => {
 		expect(config.ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION).toBe(true);
 		expect(config.ENABLE_MARKET_SCANNER).toBe(true);
 		expect(config.ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP).toBe(true);
+		expect(config.ENABLE_ALERT_HTF_RENDER).toBe(false);
 	});
 
 	it('keeps the startup-only signal outcome cadence out of Remote Config', async () => {
@@ -369,6 +385,9 @@ describe('RemoteConfigService', () => {
 		process.env.TRADINGVIEW_MCP_BREAKER_FAILURE_THRESHOLD = '0'; // min 1
 		process.env.TRADINGVIEW_MCP_BREAKER_COOLDOWN_MS = '500'; // min 1000
 		process.env.TRADINGVIEW_MCP_PAGE_COOLDOWN_MS = '999999999'; // max 86400000
+		process.env.SIGNAL_OUTCOME_MAX_RETRY_ATTEMPTS = '25'; // max 20
+		process.env.SIGNAL_OUTCOME_MAX_RETRY_AGE_MS = '3000000000'; // max 2592000000
+		process.env.EQUITY_MARKET_DATA_RPM = '2000'; // max 1200
 
 		const config = remoteConfigService.getRuntimeConfig();
 		expect(config.GROUNDING_MAX_SOURCES).toBe(3); // fallback to default
@@ -379,5 +398,23 @@ describe('RemoteConfigService', () => {
 		expect(config.TRADINGVIEW_MCP_BREAKER_FAILURE_THRESHOLD).toBe(5); // fallback to default
 		expect(config.TRADINGVIEW_MCP_BREAKER_COOLDOWN_MS).toBe(600000); // fallback to default
 		expect(config.TRADINGVIEW_MCP_PAGE_COOLDOWN_MS).toBe(3600000); // fallback to default
+		expect(config.SIGNAL_OUTCOME_MAX_RETRY_ATTEMPTS).toBe(3); // fallback to default
+		expect(config.SIGNAL_OUTCOME_MAX_RETRY_AGE_MS).toBe(604800000); // fallback to default
+		expect(config.EQUITY_MARKET_DATA_RPM).toBe(8); // fallback to default
+	});
+
+	it('supports ZERO_CHANNEL_ALERT_COOLDOWN_MS and ENABLE_API_ONLY_MODE via Remote Config', async () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		mockTemplate({
+			ZERO_CHANNEL_ALERT_COOLDOWN_MS: 600000,
+			ENABLE_API_ONLY_MODE: true,
+		});
+		alertStorageService.getFirestore.mockReturnValue({});
+
+		await remoteConfigService.loadNow();
+
+		const config = remoteConfigService.getRuntimeConfig();
+		expect(config.ZERO_CHANNEL_ALERT_COOLDOWN_MS).toBe(600000);
+		expect(config.ENABLE_API_ONLY_MODE).toBe(true);
 	});
 });

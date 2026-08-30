@@ -4,8 +4,11 @@
  */
 
 const sentryService = require('../monitoring/SentryService');
+const remoteConfigService = require('../remoteConfig/RemoteConfigService');
 const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
 const { notificationRedriveService } = require('./NotificationRedriveService');
+
+const DEFAULT_ZERO_CHANNEL_ALERT_COOLDOWN_MS = 300000;
 
 class NotificationManager {
 	/**
@@ -21,7 +24,41 @@ class NotificationManager {
 				['discord', discordService],
 			].filter(([, channel]) => !!channel),
 		);
+		this.zeroChannelBroadcastCount = 0;
+		this.lastZeroChannelAlertAt = 0;
 		notificationRedriveService.setNotificationManagerGetter(() => this);
+	}
+
+	/**
+   * Check if zero-channel broadcast is intentional (API-only mode)
+   * @returns {boolean}
+   */
+	isIntentionalApiOnly() {
+		const runtimeConfig = remoteConfigService.getRuntimeConfig();
+		if (runtimeConfig.ENABLE_API_ONLY_MODE) {
+			return true;
+		}
+		const hasAnyConfig = Boolean(
+			process.env.BOT_TOKEN ||
+			process.env.TELEGRAM_CHAT_ID ||
+			process.env.ENABLE_TELEGRAM_BOT === 'true' ||
+			process.env.ENABLE_WHATSAPP_ALERTS === 'true' ||
+			process.env.ENABLE_DISCORD_ALERTS === 'true' ||
+			process.env.WHATSAPP_API_KEY ||
+			process.env.WHATSAPP_API_URL ||
+			process.env.WHATSAPP_CHAT_ID ||
+			process.env.DISCORD_WEBHOOK_URL,
+		);
+		return !hasAnyConfig;
+	}
+
+	getZeroChannelBroadcastCount() {
+		return this.zeroChannelBroadcastCount;
+	}
+
+	resetForTesting() {
+		this.zeroChannelBroadcastCount = 0;
+		this.lastZeroChannelAlertAt = 0;
 	}
 
 	/**
@@ -110,6 +147,59 @@ class NotificationManager {
 			}
 		} catch (error) {
 			console.error('[NotificationManager] Admin delivery failure notification failed:', error.message);
+		}
+	}
+
+	async notifyAdminOfZeroChannels(alert, options = {}) {
+		if (options && options.isRedrive) {
+			return;
+		}
+
+		const runtimeConfig = remoteConfigService.getRuntimeConfig();
+		const cooldownMs = runtimeConfig.ZERO_CHANNEL_ALERT_COOLDOWN_MS ?? DEFAULT_ZERO_CHANNEL_ALERT_COOLDOWN_MS;
+		const now = Date.now();
+		if (now - this.lastZeroChannelAlertAt < cooldownMs) {
+			console.debug('[NotificationManager] Zero-channel admin notification suppressed due to cooldown');
+			return;
+		}
+		this.lastZeroChannelAlertAt = now;
+
+		const adminChatId = process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID;
+		const telegramService = this.channels.get('telegram');
+		if (!adminChatId) {
+			console.warn('[NotificationManager] Admin chat is not configured; zero-channel alert notification skipped');
+			return;
+		}
+		if (!telegramService || !telegramService.isEnabled()) {
+			console.warn('[NotificationManager] Telegram is disabled; zero-channel alert notification skipped');
+			return;
+		}
+
+		const requestId = alert && (alert.requestId || alert.correlationId);
+		const redriveContext = notificationRedriveService.isEnabled()
+			? [`Dead-letters queued for redrive (pending: ${notificationRedriveService.getPendingCount()})`]
+			: [];
+		const message = [
+			'🚨 CRITICAL: Notification delivery failure (Zero channels enabled)',
+			'All notification channels are currently disabled or failing validation.',
+			'Broadcast alerts are being dropped and dead-lettered.',
+			`Total zero-channel broadcasts dropped: ${this.zeroChannelBroadcastCount}`,
+			...redriveContext,
+			...(requestId ? [`Request ID: ${requestId}`] : []),
+		].join('\n');
+
+		try {
+			const adminResult = await telegramService.send({
+				text: message,
+				telegramChatId: adminChatId,
+			});
+			if (adminResult && adminResult.success) {
+				console.info('[NotificationManager] Admin zero-channel notification sent');
+			} else {
+				console.error('[NotificationManager] Admin zero-channel notification failed:', adminResult && adminResult.error);
+			}
+		} catch (error) {
+			console.error('[NotificationManager] Admin zero-channel notification failed:', error.message);
 		}
 	}
 
@@ -279,7 +369,56 @@ class NotificationManager {
 		const { parentSpan } = options;
 
 		if (enabledChannels.length === 0) {
-			console.warn('[NotificationManager] No notification channels enabled');
+			if (this.isIntentionalApiOnly()) {
+				console.debug('[NotificationManager] No notification channels enabled (intentional API-only mode)');
+				return [];
+			}
+
+			this.zeroChannelBroadcastCount += 1;
+			notificationRedriveService.incrementZeroChannelBroadcasts();
+			console.warn('[NotificationManager] No notification channels enabled; alert dropped and dead-lettered');
+
+			const totalDurationMs = Date.now() - startTime;
+			const httpContext = options.http || (options.endpoint ? {
+				endpoint: options.endpoint,
+				method: options.method || 'POST',
+				statusCode: 500,
+			} : undefined);
+
+			sentryService.captureExternalFailure({
+				channel: 'none',
+				external: {
+					provider: 'none',
+					attemptCount: 0,
+					durationMs: totalDurationMs,
+					lastErrorMessage: 'No notification channels enabled at broadcast time (zero-channel drop)',
+					lastErrorCode: 'NO_ENABLED_CHANNELS',
+				},
+				http: httpContext,
+			});
+
+			if (!options.isRedrive && notificationRedriveService.isEnabled()) {
+				const candidateChannels = Array.from(this.channels.keys());
+				const channelsToQueue = candidateChannels.length > 0 ? candidateChannels : ['telegram', 'whatsapp', 'discord'];
+				const syntheticResults = channelsToQueue.map(channelName => ({
+					channel: channelName,
+					success: false,
+					error: 'No notification channels enabled at broadcast time (zero-channel drop)',
+					statusCode: 0,
+					attemptCount: 1,
+				}));
+
+				trackBackgroundTask(
+					notificationRedriveService.recordDeliveryResults(alert, syntheticResults, options),
+				).catch((error) => {
+					console.warn('[NotificationManager] Failed to record dead-letters for zero-channel broadcast:', error.message);
+				});
+			}
+
+			trackBackgroundTask(this.notifyAdminOfZeroChannels(alert, options)).catch((error) => {
+				console.error('[NotificationManager] Unexpected zero-channel admin notification failure:', error.message);
+			});
+
 			return [];
 		}
 

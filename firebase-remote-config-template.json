@@ -105,6 +105,13 @@
       "description": "Maximum character length for grounding response",
       "valueType": "NUMBER"
     },
+    "ALERT_GROUNDING_COALESCE_MS": {
+      "defaultValue": {
+        "value": "0"
+      },
+      "description": "Window in milliseconds for sharing equity grounding search context; zero disables coalescing",
+      "valueType": "NUMBER"
+    },
     "NEWS_CACHE_TTL_HOURS": {
       "defaultValue": {
         "value": "6"
@@ -131,6 +138,13 @@
         "value": "60000"
       },
       "description": "Expanded analysis alert processing timeout in milliseconds",
+      "valueType": "NUMBER"
+    },
+    "EXPANDED_ANALYSIS_ALERT_CONCURRENCY": {
+      "defaultValue": {
+        "value": "3"
+      },
+      "description": "Maximum concurrent expanded-analysis MCP calls",
       "valueType": "NUMBER"
     },
     "DISCORD_MAX_RETRIES": {
@@ -196,6 +210,27 @@
       "description": "Maximum execution duration per signal outcome evaluation sweep in milliseconds",
       "valueType": "NUMBER"
     },
+    "SIGNAL_OUTCOME_MAX_RETRY_ATTEMPTS": {
+      "defaultValue": {
+        "value": "3"
+      },
+      "description": "Maximum retry attempts for transient market data failures before signal outcome window is marked unavailable",
+      "valueType": "NUMBER"
+    },
+    "SIGNAL_OUTCOME_MAX_RETRY_AGE_MS": {
+      "defaultValue": {
+        "value": "604800000"
+      },
+      "description": "Maximum age in milliseconds for retrying transient market data failures before signal outcome window is marked unavailable",
+      "valueType": "NUMBER"
+    },
+    "EQUITY_MARKET_DATA_RPM": {
+      "defaultValue": {
+        "value": "8"
+      },
+      "description": "Rate limit ceiling in requests per minute for equity market data provider requests",
+      "valueType": "NUMBER"
+    },
     "NOTIFICATION_REDRIVE_INTERVAL_MS": {
       "defaultValue": {
         "value": "60000"
@@ -222,6 +257,20 @@
         "value": "3600000"
       },
       "description": "Maximum lifespan in milliseconds of dead-letter records before expiration",
+      "valueType": "NUMBER"
+    },
+    "SCANNER_PRESET_SCHEDULER_INTERVAL_MS": {
+      "defaultValue": {
+        "value": "60000"
+      },
+      "description": "Background sweep interval in milliseconds for recurring scanner preset runs",
+      "valueType": "NUMBER"
+    },
+    "SCANNER_PRESET_SCHEDULER_BATCH_LIMIT": {
+      "defaultValue": {
+        "value": "50"
+      },
+      "description": "Maximum due scanner presets to process per scheduler sweep",
       "valueType": "NUMBER"
     },
     "ENABLE_GEMINI_GROUNDING": {
@@ -258,6 +307,41 @@
       },
       "description": "Enable persistent Firestore-backed deduplication for news monitor",
       "valueType": "BOOLEAN"
+    },
+    "ZERO_CHANNEL_ALERT_COOLDOWN_MS": {
+      "defaultValue": {
+        "value": "300000"
+      },
+      "description": "Cooldown between admin notifications when all channels are disabled in milliseconds",
+      "valueType": "NUMBER"
+    },
+    "ENABLE_API_ONLY_MODE": {
+      "defaultValue": {
+        "value": "false"
+      },
+      "description": "Declare intentional API-only mode without notification delivery",
+      "valueType": "BOOLEAN"
+    },
+    "ENABLE_ALERT_HTF_RENDER": {
+      "defaultValue": {
+        "value": "true"
+      },
+      "description": "Enable rendering higher-timeframe trend alignment on enriched webhook alerts",
+      "valueType": "BOOLEAN"
+    },
+    "ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION": {
+      "defaultValue": {
+        "value": "false"
+      },
+      "description": "Suppress duplicate channel delivery for the same exchange/symbol/timeframe/side signal within its cooldown window (alerts stay persisted with a suppression marker)",
+      "valueType": "BOOLEAN"
+    },
+    "ALERT_SIGNAL_COOLDOWN_BARS": {
+      "defaultValue": {
+        "value": "1"
+      },
+      "description": "Cooldown length in alert-timeframe bars for same-signal repeat suppression",
+      "valueType": "NUMBER"
     }
   },
   "version": {
