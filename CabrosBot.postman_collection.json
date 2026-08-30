@@ -1429,12 +1429,18 @@
               "name": "Success",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"preset\": {\n    \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n    \"name\": \"Daily Scan\",\n    \"exchange\": \"BINANCE\",\n    \"timeframe\": \"4h\",\n    \"scans\": [\"top_gainers\", \"top_losers\", \"volume_breakout_scanner\"],\n    \"limit\": 10,\n    \"bbwThreshold\": 0.05,\n    \"createdAt\": \"2026-06-13T04:43:15.301Z\",\n    \"updatedAt\": \"2026-06-13T04:43:15.301Z\"\n  }\n}"
+              "body": "{\n  \"success\": true,\n  \"preset\": {\n    \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n    \"name\": \"Daily Scan\",\n    \"exchange\": \"BINANCE\",\n    \"timeframe\": \"4h\",\n    \"scans\": [\"top_gainers\", \"top_losers\", \"volume_breakout_scanner\"],\n    \"limit\": 10,\n    \"bbwThreshold\": 0.05,\n    \"createdAt\": \"2026-06-13T04:43:15.301Z\",\n    \"updatedAt\": \"2026-06-13T04:43:15.301Z\",\n    \"version\": 3\n  }\n}",
+              "header": [
+                {
+                  "key": "ETag",
+                  "value": "\"3\""
+                }
+              ]
             }
           ]
         },
         {
-          "name": "PUT Update Scanner Preset",
+          "name": "PUT Update Scanner Preset (matching If-Match)",
           "request": {
             "method": "PUT",
             "header": [
@@ -1447,6 +1453,11 @@
                 "key": "x-api-key",
                 "value": "{{apiKey}}",
                 "type": "text"
+              },
+              {
+                "key": "If-Match",
+                "value": "\"3\"",
+                "description": "Optimistic-concurrency token mirrored from the ETag response header"
               }
             ],
             "body": {
@@ -1470,13 +1481,37 @@
               "name": "Storage mode contract",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"storage\": {\n    \"enabled\": true,\n    \"configured\": true,\n    \"ready\": true,\n    \"status\": \"ready\",\n    \"mode\": \"durable\",\n    \"backend\": \"firestore\"\n  },\n  \"preset\": {\n    \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\"\n  }\n}"
+              "body": "{\n  \"success\": true,\n  \"storage\": {\n    \"enabled\": true,\n    \"configured\": true,\n    \"ready\": true,\n    \"status\": \"ready\",\n    \"mode\": \"durable\",\n    \"backend\": \"firestore\"\n  },\n  \"preset\": {\n    \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n    \"version\": 4\n  }\n}",
+              "header": [
+                {
+                  "key": "ETag",
+                  "value": "\"4\""
+                }
+              ]
             },
             {
               "name": "Success",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"preset\": {\n    \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n    \"name\": \"Updated Scan\",\n    \"exchange\": \"BINANCE\",\n    \"timeframe\": \"4h\",\n    \"scans\": [\"top_gainers\", \"top_losers\", \"volume_breakout_scanner\"],\n    \"limit\": 15,\n    \"bbwThreshold\": 0.05,\n    \"createdAt\": \"2026-06-13T04:43:15.301Z\",\n    \"updatedAt\": \"2026-06-13T04:43:15.301Z\"\n  }\n}"
+              "body": "{\n  \"success\": true,\n  \"preset\": {\n    \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n    \"name\": \"Updated Scan\",\n    \"exchange\": \"BINANCE\",\n    \"timeframe\": \"4h\",\n    \"scans\": [\"top_gainers\", \"top_losers\", \"volume_breakout_scanner\"],\n    \"limit\": 15,\n    \"bbwThreshold\": 0.05,\n    \"createdAt\": \"2026-06-13T04:43:15.301Z\",\n    \"updatedAt\": \"2026-06-13T04:43:15.301Z\",\n    \"version\": 4\n  }\n}",
+              "header": [
+                {
+                  "key": "ETag",
+                  "value": "\"4\""
+                }
+              ]
+            },
+            {
+              "name": "Stale If-Match (412 PRECONDITION_FAILED)",
+              "status": "Precondition Failed",
+              "code": 412,
+              "body": "{\n  \"success\": false,\n  \"error\": \"If-Match version does not match current preset version (4)\",\n  \"code\": \"PRECONDITION_FAILED\",\n  \"storage\": {\n    \"enabled\": true,\n    \"configured\": true,\n    \"ready\": true,\n    \"status\": \"ready\",\n    \"mode\": \"durable\",\n    \"backend\": \"firestore\"\n  },\n  \"preset\": {\n    \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n    \"version\": 4\n  }\n}"
+            },
+            {
+              "name": "Locked preset (409 PRESET_LOCKED)",
+              "status": "Conflict",
+              "code": 409,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Preset is locked by an in-flight sweep until 2026-08-30T20:00:00.000Z\",\n  \"code\": \"PRESET_LOCKED\",\n  \"lockedUntil\": \"2026-08-30T20:00:00.000Z\",\n  \"storage\": {\n    \"enabled\": true,\n    \"configured\": true,\n    \"ready\": true,\n    \"status\": \"ready\",\n    \"mode\": \"durable\",\n    \"backend\": \"firestore\"\n  },\n  \"preset\": {\n    \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n    \"version\": 4\n  }\n}"
             }
           ]
         },
@@ -1489,6 +1524,12 @@
                 "key": "x-api-key",
                 "value": "{{apiKey}}",
                 "type": "text"
+              },
+              {
+                "key": "If-Match",
+                "value": "\"4\"",
+                "description": "Optional optimistic-concurrency token mirrored from the ETag response header",
+                "disabled": true
               }
             ],
             "url": {
@@ -1509,6 +1550,12 @@
               "status": "OK",
               "code": 200,
               "body": "{\n  \"success\": true,\n  \"storage\": {\n    \"enabled\": true,\n    \"configured\": true,\n    \"ready\": true,\n    \"status\": \"ready\",\n    \"mode\": \"durable\",\n    \"backend\": \"firestore\"\n  }\n}"
+            },
+            {
+              "name": "Stale If-Match (412 PRECONDITION_FAILED)",
+              "status": "Precondition Failed",
+              "code": 412,
+              "body": "{\n  \"success\": false,\n  \"error\": \"If-Match version does not match current preset version (4)\",\n  \"code\": \"PRECONDITION_FAILED\",\n  \"storage\": {\n    \"enabled\": true,\n    \"configured\": true,\n    \"ready\": true,\n    \"status\": \"ready\",\n    \"mode\": \"durable\",\n    \"backend\": \"firestore\"\n  },\n  \"preset\": {\n    \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n    \"version\": 4\n  }\n}"
             },
             {
               "name": "Success",
@@ -1569,8 +1616,17 @@
                 "key": "x-api-key",
                 "value": "{{apiKey}}",
                 "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "preset-dryrun-key-123",
+                "type": "text"
               }
             ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dryRun\": true,\n  \"channels\": [\"telegram\"]\n}"
+            },
             "url": {
               "raw": "{{baseUrl}}/api/scanner-presets/{{presetId}}/run?dryRun=true",
               "host": [
@@ -1595,7 +1651,7 @@
               "name": "Success",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"presetId\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n  \"payload\": {\n    \"alertText\": \"📡 *SCANNER DE MERCADO — ...\"\n  },\n  \"scanResults\": [],\n  \"summary\": {\n    \"totalScans\": 1,\n    \"success\": 1,\n    \"error\": 0,\n    \"timeout\": 0,\n    \"totalItems\": 3,\n    \"delivered\": 0\n  },\n  \"timedOut\": false,\n  \"timeoutMs\": 90000,\n  \"requestId\": \"req-dryrun-abc\",\n  \"totalDurationMs\": 1200\n}"
+              "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"presetId\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n  \"preset\": {\n    \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n    \"name\": \"Daily Scan\",\n    \"exchange\": \"BINANCE\",\n    \"timeframe\": \"4h\",\n    \"scans\": [\n      \"top_gainers\"\n    ],\n    \"limit\": 5,\n    \"bbw_threshold\": 0.05,\n    \"ranked\": false,\n    \"includeMultiTimeframe\": false\n  },\n  \"validation\": {\n    \"ok\": true,\n    \"errors\": []\n  },\n  \"estimatedCalls\": {\n    \"coinAnalysis\": 1,\n    \"multiTimeframe\": 0\n  },\n  \"requestedChannels\": [\n    \"telegram\"\n  ],\n  \"mcpReadiness\": {\n    \"ready\": true,\n    \"lastCheckedAt\": \"2026-08-30T12:00:00.000Z\",\n    \"lastErrorCategory\": null\n  },\n  \"idempotencyKey\": \"preset-dryrun-key-123\",\n  \"requestId\": \"req-dryrun-abc\"\n}"
             }
           ]
         }

@@ -12,7 +12,15 @@ const { runScans } = require('../marketScanner/marketScanner');
 const {
 	MarketScannerRequestError,
 	buildMarketScannerReport,
+	SUPPORTED_SCAN_TYPES,
 } = require('../../../../services/tradingview/marketScannerReport');
+const {
+	SUPPORTED_MCP_TIMEFRAMES,
+} = require('../../../../services/tradingview/parseTradingViewSignal');
+const {
+	tradingViewMcpService,
+} = require('../../../../services/tradingview/TradingViewMcpService');
+const { getIdempotencyKey } = require('../../../../lib/idempotency');
 const {
 	getNotificationManager,
 	initializeNotificationServices,
@@ -26,6 +34,11 @@ const {
 	getDeliveredChannels,
 } = require('../../../../services/notification/requestRouting');
 const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteConfigService');
+
+const SUPPORTED_TIMEFRAME_ALIASES = new Set([
+	'5', '5M', '15', '15M', '60', '1H', '240', '4H',
+	'1440', 'D', '1D', '10080', 'W', '1W', '43200', 'M', '1M',
+]);
 
 const DEFAULT_SCANNER_TIMEOUT_MS = 90000;
 const MAX_SCANNER_TIMEOUT_MS = 120000;
@@ -329,6 +342,66 @@ function updatePreset(req, res) {
 	})();
 }
 
+function validatePresetConfig(preset, reqBody = {}) {
+	const errors = [];
+
+	if (!preset || typeof preset !== 'object') {
+		errors.push('preset must be a valid object');
+		return errors;
+	}
+
+	if (!Array.isArray(preset.scans) || preset.scans.length === 0) {
+		errors.push('scans must be a non-empty array of scan types');
+	} else {
+		const unknownScans = preset.scans.filter((scan) => typeof scan !== 'string' || !SUPPORTED_SCAN_TYPES.has(scan.trim()));
+		if (unknownScans.length > 0) {
+			errors.push(`Unsupported scan types: ${unknownScans.join(', ')}. Supported: ${[...SUPPORTED_SCAN_TYPES].join(', ')}`);
+		}
+	}
+
+	if (typeof preset.timeframe !== 'string' || !preset.timeframe.trim()) {
+		errors.push('timeframe must be a non-empty string');
+	} else {
+		const rawTimeframe = preset.timeframe.trim();
+		const normalizedToken = rawTimeframe.toUpperCase();
+		if (!SUPPORTED_MCP_TIMEFRAMES.has(rawTimeframe) && !SUPPORTED_TIMEFRAME_ALIASES.has(normalizedToken)) {
+			errors.push(`Unsupported timeframe: ${rawTimeframe}`);
+		}
+	}
+
+	if (typeof preset.exchange !== 'string' || !preset.exchange.trim()) {
+		errors.push('exchange must be a non-empty string');
+	}
+
+	if (preset.limit !== undefined && preset.limit !== null) {
+		const num = Number(preset.limit);
+		if (!Number.isFinite(num) || !Number.isInteger(num) || num < 1 || num > 20) {
+			errors.push('limit must be an integer between 1 and 20');
+		}
+	}
+
+	if (preset.bbw_threshold !== undefined && preset.bbw_threshold !== null) {
+		const threshold = Number(preset.bbw_threshold);
+		if (!Number.isFinite(threshold)) {
+			errors.push('bbw_threshold must be a number');
+		}
+	}
+
+	if (reqBody && reqBody.ranked !== undefined && reqBody.ranked !== null) {
+		if (typeof reqBody.ranked !== 'boolean' && reqBody.ranked !== 'true' && reqBody.ranked !== 'false') {
+			errors.push('ranked must be a boolean');
+		}
+	}
+
+	if (reqBody && reqBody.includeMultiTimeframe !== undefined && reqBody.includeMultiTimeframe !== null) {
+		if (typeof reqBody.includeMultiTimeframe !== 'boolean' && reqBody.includeMultiTimeframe !== 'true' && reqBody.includeMultiTimeframe !== 'false') {
+			errors.push('includeMultiTimeframe must be a boolean');
+		}
+	}
+
+	return errors;
+}
+
 function postRunPreset(botOrGetter) {
 	return async (req, res) => {
 		const requestId = uuidv4();
@@ -341,13 +414,106 @@ function postRunPreset(botOrGetter) {
 					code: 'FEATURE_DISABLED',
 				});
 			}
-			const routing = parseNotificationRouting(req.body);
 
 			const preset = await scannerPresetService.getPreset(req.params.id);
 			if (!preset) {
 				return res.status(404).json({
 					success: false,
 					error: 'Preset not found',
+					storage: getStorageMetadata(),
+				});
+			}
+
+			const dryRun = resolveDryRun(req);
+
+			const bodyRouting = parseNotificationRouting(req.body);
+			const routing = {
+				channels: bodyRouting.channels || preset.channels || undefined,
+				telegramChatId: bodyRouting.telegramChatId || preset.telegramChatId || undefined,
+				telegramThreadId: bodyRouting.telegramThreadId !== undefined ? bodyRouting.telegramThreadId : preset.telegramThreadId,
+				whatsappChatId: bodyRouting.whatsappChatId || preset.whatsappChatId || undefined,
+				discordWebhookUrl: bodyRouting.discordWebhookUrl || preset.discordWebhookUrl || undefined,
+			};
+
+			if (dryRun) {
+				console.debug('[ScannerPresets] Dry-run preview mode: skipping MCP calls and delivery');
+
+				let notificationManager = getNotificationManager();
+				if (!notificationManager) {
+					try {
+						notificationManager = await initializeNotificationServices(resolveBot(botOrGetter));
+					} catch (_) {}
+				}
+				const requestedChannels = getRequestedChannels(notificationManager, routing);
+
+				const effectivePreset = {
+					id: preset.id,
+					name: preset.name || '',
+					exchange: req.body?.exchange !== undefined && typeof req.body?.exchange === 'string' ? req.body.exchange.trim().toUpperCase() : preset.exchange,
+					timeframe: req.body?.timeframe !== undefined && typeof req.body?.timeframe === 'string' ? req.body.timeframe.trim() : preset.timeframe,
+					scans: Array.isArray(req.body?.scans) ? req.body.scans : preset.scans,
+					limit: req.body?.limit !== undefined ? req.body.limit : preset.limit,
+					bbw_threshold: req.body?.bbw_threshold !== undefined
+						? req.body.bbw_threshold
+						: (req.body?.bbwThreshold !== undefined
+							? req.body.bbwThreshold
+							: (preset.bbwThreshold !== undefined ? preset.bbwThreshold : preset.bbw_threshold)),
+					ranked: req.body?.ranked !== undefined
+						? (req.body.ranked === true || req.body.ranked === 'true')
+						: Boolean(preset.ranked),
+					includeMultiTimeframe: req.body?.includeMultiTimeframe !== undefined
+						? (req.body.includeMultiTimeframe === true || req.body.includeMultiTimeframe === 'true')
+						: Boolean(preset.includeMultiTimeframe),
+				};
+
+				const validationErrors = validatePresetConfig(effectivePreset, req.body);
+				const validation = {
+					ok: validationErrors.length === 0,
+					errors: validationErrors,
+				};
+
+				const scanCount = Array.isArray(effectivePreset.scans) ? effectivePreset.scans.length : 0;
+				const parsedLimit = typeof effectivePreset.limit === 'number' && Number.isFinite(effectivePreset.limit) && effectivePreset.limit > 0
+					? effectivePreset.limit
+					: 5;
+				const estimatedCalls = {
+					coinAnalysis: scanCount,
+					multiTimeframe: effectivePreset.includeMultiTimeframe ? scanCount * parsedLimit : 0,
+				};
+
+				const mcpStatus = typeof tradingViewMcpService?.getStatus === 'function'
+					? tradingViewMcpService.getStatus({ enabled: true })
+					: { ready: false, lastCheckedAt: null, lastErrorCategory: null };
+
+				const mcpReadiness = {
+					ready: Boolean(mcpStatus.ready),
+					lastCheckedAt: mcpStatus.lastCheckedAt || null,
+					lastErrorCategory: mcpStatus.lastErrorCategory || null,
+				};
+
+				const idempotencyKey = getIdempotencyKey(req) || null;
+
+				return res.status(200).json({
+					success: true,
+					dryRun: true,
+					presetId: preset.id,
+					preset: {
+						id: effectivePreset.id,
+						name: effectivePreset.name,
+						exchange: effectivePreset.exchange,
+						timeframe: effectivePreset.timeframe,
+						scans: effectivePreset.scans,
+						limit: effectivePreset.limit,
+						bbw_threshold: effectivePreset.bbw_threshold,
+						ranked: effectivePreset.ranked,
+						includeMultiTimeframe: effectivePreset.includeMultiTimeframe,
+					},
+					validation,
+					estimatedCalls,
+					requestedChannels,
+					mcpReadiness,
+					idempotencyKey,
+					requestId,
 				});
 			}
 
@@ -385,23 +551,6 @@ function postRunPreset(botOrGetter) {
 				timeframe: preset.timeframe,
 				now: new Date(),
 			});
-
-			const dryRun = resolveDryRun(req);
-			if (dryRun) {
-				console.debug('[ScannerPresets] Dry-run mode: skipping delivery');
-				return res.status(200).json({
-					success: true,
-					dryRun: true,
-					presetId: preset.id,
-					payload: { alertText },
-					scanResults: compactScanResults(scanResults),
-					summary: buildSummary(scanResults, []),
-					timedOut,
-					timeoutMs,
-					requestId,
-					totalDurationMs: Date.now() - startTime,
-				});
-			}
 
 			let notificationManager = getNotificationManager();
 			if (!notificationManager) {
@@ -471,4 +620,5 @@ module.exports = {
 	deletePreset,
 	updatePreset,
 	postRunPreset,
+	validatePresetConfig,
 };
