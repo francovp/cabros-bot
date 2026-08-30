@@ -11,11 +11,19 @@ on:
 
 permissions:
   contents: read
+# Cancel superseded PR runs to free Actions minutes; preserve `master` pushes so
+# a freshly merged commit never cancels its own follow-up run. See issue #565.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
 
     runs-on: ubuntu-latest
+    # Bounded CI run (was unbounded; default 360 min). 30 min covers install +
+    # JDK 21 + emulator cache + full Jest suite + Firebase emulator suite.
+    timeout-minutes: 30
 
     steps:
     - uses: actions/checkout@v4
@@ -39,6 +47,12 @@ jobs:
       with:
         path: ~/.cache/firebase/emulators
         key: firebase-tools-15.25.1-${{ runner.os }}
+    # ESLint gate. Currently the tree has ~800 pre-existing findings from the
+    # deferred-cleanup convention, so the step is non-blocking with a fast-follow
+    # plan to flip `continue-on-error` once the codebase is lint-clean (#565).
+    - name: Lint
+      run: pnpm run lint
+      continue-on-error: true
     - name: Run Firestore emulator integration tests
       run: pnpm test:firebase
     # - run: pnpm run build --if-present # No build step needed for this project, yet.

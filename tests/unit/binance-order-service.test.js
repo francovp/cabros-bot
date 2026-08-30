@@ -1145,6 +1145,98 @@ describe('BinanceOrderService', () => {
 		expect(client.submitNewOrder).toHaveBeenCalledTimes(1);
 	});
 
+	describe('BINANCE_DATA_BASE_URL forwarding', () => {
+		it('forwards configured BINANCE_DATA_BASE_URL to the live Binance client', async () => {
+			process.env.ENABLE_BINANCE_TRADING = 'true';
+			process.env.BINANCE_API_KEY = 'test-api-key';
+			process.env.BINANCE_API_SECRET = 'test-api-secret';
+			process.env.BINANCE_TRADING_ENV = 'live';
+			process.env.BINANCE_TRADING_ALLOWED_SYMBOLS = 'BTCUSDT';
+			process.env.BINANCE_TRADING_MAX_NOTIONAL = '1000';
+			process.env.BINANCE_DATA_BASE_URL = 'https://api1.binance.com';
+
+			const client = {
+				getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
+				submitNewOrder: jest.fn().mockResolvedValue({ orderId: 1, status: 'FILLED' }),
+			};
+			MainClient.mockClear().mockImplementation(() => client);
+
+			await binanceOrderService.placeOrder({
+				symbol: 'BTCUSDT',
+				side: 'BUY',
+				type: 'LIMIT',
+				quantity: '0.1',
+				price: '100',
+				idempotencyKey: 'idem-base-url-live',
+				dryRun: false,
+			});
+
+			expect(MainClient).toHaveBeenCalledWith(expect.objectContaining({
+				baseUrl: 'https://api1.binance.com',
+			}), expect.any(Object));
+		});
+
+		it('keeps default testnet host for testnet environment when BINANCE_DATA_BASE_URL is set', async () => {
+			process.env.ENABLE_BINANCE_TRADING = 'true';
+			process.env.BINANCE_API_KEY = 'test-api-key';
+			process.env.BINANCE_API_SECRET = 'test-api-secret';
+			process.env.BINANCE_TRADING_ENV = 'testnet';
+			process.env.BINANCE_TRADING_ALLOWED_SYMBOLS = 'BTCUSDT';
+			process.env.BINANCE_TRADING_MAX_NOTIONAL = '1000';
+			process.env.BINANCE_DATA_BASE_URL = 'https://api1.binance.com';
+
+			const client = {
+				getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
+				submitNewOrder: jest.fn().mockResolvedValue({ orderId: 1, status: 'FILLED' }),
+			};
+			MainClient.mockClear().mockImplementation(() => client);
+
+			await binanceOrderService.placeOrder({
+				symbol: 'BTCUSDT',
+				side: 'BUY',
+				type: 'LIMIT',
+				quantity: '0.1',
+				price: '100',
+				idempotencyKey: 'idem-base-url-testnet',
+				dryRun: false,
+			});
+
+			expect(MainClient).toHaveBeenCalledWith(expect.objectContaining({
+				baseUrl: 'https://testnet.binance.vision',
+			}), expect.any(Object));
+		});
+
+		it('falls back to default live Binance base URL when BINANCE_DATA_BASE_URL is malformed', async () => {
+			process.env.ENABLE_BINANCE_TRADING = 'true';
+			process.env.BINANCE_API_KEY = 'test-api-key';
+			process.env.BINANCE_API_SECRET = 'test-api-secret';
+			process.env.BINANCE_TRADING_ENV = 'live';
+			process.env.BINANCE_TRADING_ALLOWED_SYMBOLS = 'BTCUSDT';
+			process.env.BINANCE_TRADING_MAX_NOTIONAL = '1000';
+			process.env.BINANCE_DATA_BASE_URL = 'not-a-url';
+
+			const client = {
+				getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
+				submitNewOrder: jest.fn().mockResolvedValue({ orderId: 1, status: 'FILLED' }),
+			};
+			MainClient.mockClear().mockImplementation(() => client);
+
+			await binanceOrderService.placeOrder({
+				symbol: 'BTCUSDT',
+				side: 'BUY',
+				type: 'LIMIT',
+				quantity: '0.1',
+				price: '100',
+				idempotencyKey: 'idem-base-url-malformed',
+				dryRun: false,
+			});
+
+			expect(MainClient).toHaveBeenCalledWith(expect.objectContaining({
+				baseUrl: 'https://api.binance.com',
+			}), expect.any(Object));
+		});
+	});
+
 	describe('getOrders', () => {
 		it('rejects disabled trading before constructing a Binance client', async () => {
 			delete process.env.ENABLE_BINANCE_TRADING;

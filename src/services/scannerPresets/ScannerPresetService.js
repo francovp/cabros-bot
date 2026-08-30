@@ -451,6 +451,7 @@ class ScannerPresetService {
 
 		if (routing.channels !== undefined) preset.channels = routing.channels;
 		if (routing.telegramChatId !== undefined) preset.telegramChatId = routing.telegramChatId;
+		if (routing.telegramThreadId !== undefined) preset.telegramThreadId = routing.telegramThreadId;
 		if (routing.whatsappChatId !== undefined) preset.whatsappChatId = routing.whatsappChatId;
 		if (routing.discordWebhookUrl !== undefined) preset.discordWebhookUrl = routing.discordWebhookUrl;
 
@@ -485,6 +486,19 @@ class ScannerPresetService {
 				routing.telegramChatId = params.telegramChatId.trim();
 			} else {
 				throw new MarketScannerRequestError('"telegramChatId" must be a non-empty string if provided');
+			}
+		}
+
+		if (params.telegramThreadId !== undefined) {
+			if (params.telegramThreadId === null || params.telegramThreadId === '') {
+				// unset
+			} else {
+				const raw = typeof params.telegramThreadId === 'string' ? params.telegramThreadId.trim() : params.telegramThreadId;
+				const num = Number(raw);
+				if (!Number.isSafeInteger(num) || num < 0) {
+					throw new MarketScannerRequestError('"telegramThreadId" must be a non-negative integer if provided');
+				}
+				routing.telegramThreadId = num;
 			}
 		}
 
@@ -744,6 +758,7 @@ class ScannerPresetService {
 
 		if (Array.isArray(data.channels)) preset.channels = data.channels.filter((c) => typeof c === 'string');
 		if (typeof data.telegramChatId === 'string') preset.telegramChatId = data.telegramChatId;
+		if (typeof data.telegramThreadId === 'number' && Number.isSafeInteger(data.telegramThreadId) && data.telegramThreadId >= 0) preset.telegramThreadId = data.telegramThreadId;
 		if (typeof data.whatsappChatId === 'string') preset.whatsappChatId = data.whatsappChatId;
 		if (typeof data.discordWebhookUrl === 'string') preset.discordWebhookUrl = data.discordWebhookUrl;
 

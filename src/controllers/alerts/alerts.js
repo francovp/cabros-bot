@@ -493,13 +493,32 @@ function replayAlert(botOrGetter) {
 				notificationManager = await initializeNotificationServices(bot);
 			}
 
+			let storedTelegramThreadId = storedAlert.telegramThreadId;
+			if (storedTelegramThreadId === undefined && Array.isArray(storedAlert.deliveryResults)) {
+				const telegramResult = storedAlert.deliveryResults.find((r) => r && r.channel === 'telegram');
+				if (telegramResult) {
+					if (typeof telegramResult.threadId === 'number' && Number.isSafeInteger(telegramResult.threadId) && telegramResult.threadId >= 0) {
+						storedTelegramThreadId = telegramResult.threadId;
+					} else if (typeof telegramResult.message_thread_id === 'number' && Number.isSafeInteger(telegramResult.message_thread_id) && telegramResult.message_thread_id >= 0) {
+						storedTelegramThreadId = telegramResult.message_thread_id;
+					}
+				}
+			}
+
 			const replayPayload = {
 				text: storedAlert.text,
 				enriched: storedAlert.enrichmentData || undefined,
+				source: storedAlert.source || 'alert-replay',
 				replay: {
 					originalAlertId: alertId,
 					idempotencyKey: idempotencyKey.trim(),
 				},
+				...(storedAlert.telegramChatId ? { telegramChatId: storedAlert.telegramChatId } : {}),
+				...(storedTelegramThreadId !== undefined && storedTelegramThreadId !== null
+					? { telegramThreadId: storedTelegramThreadId }
+					: {}),
+				...(storedAlert.whatsappChatId ? { whatsappChatId: storedAlert.whatsappChatId } : {}),
+				...(storedAlert.discordWebhookUrl ? { discordWebhookUrl: storedAlert.discordWebhookUrl } : {}),
 			};
 			const results = await notificationManager.sendToChannels(replayPayload, channels);
 			const replayId = await alertStorageService.saveReplayAttempt({
