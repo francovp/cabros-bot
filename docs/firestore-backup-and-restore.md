@@ -135,8 +135,13 @@ CLI Options:
 - `--input-dir=<path>`: Directory containing exported `.jsonl` files (Required).
 - `--collections=<col1,col2>`: Filter specific collections to restore.
 - `--batch-size=<num>`: Number of documents per batch commit (default: 400, max: 500).
-- `--dry-run`: Test parse without writing to Firestore.
-- `--no-overwrite`: Merge fields instead of replacing entire documents.
+- `--dry-run`: Test parse and count documents without writing to Firestore.
+- `--no-overwrite`: Skip existing documents to protect live/newer data from being rolled back by older backups.
+- `--ttl-policy=<refresh|clear|preserve>`: Policy for historical TTL / `expiresAt` fields (default: `refresh`).
+  - `refresh`: Computes a new `expiresAt` based on current time + retention window (default 90 days), ensuring restored documents are queryable and preserved.
+  - `clear`: Removes the `expiresAt` field from restored documents to prevent automated TTL deletion.
+  - `preserve`: Keeps the exact original `expiresAt` timestamp from the backup.
+- `--retention-days=<num>`: Retention days used when `--ttl-policy=refresh` (default: `ALERT_STORAGE_RETENTION_DAYS` or 90).
 - `--project=<projectId>`: Target Firebase project ID.
 
 ---
@@ -145,4 +150,4 @@ CLI Options:
 
 The GitHub Actions workflow [`.github/workflows/firestore-backup.yml`](../.github/workflows/firestore-backup.yml) runs weekly on Sundays at 04:00 UTC and can also be triggered manually via `workflow_dispatch`.
 
-It uses the `FIREBASE_SERVICE_ACCOUNT_JSON` repository secret and `GCS_BACKUP_BUCKET` variable. In the event of a backup failure, it dispatches an alert to configured notification channels.
+It uses the `FIREBASE_SERVICE_ACCOUNT_JSON` repository secret and `GCS_BACKUP_BUCKET` variable. Backups generated via the JSONL fallback path are automatically uploaded to GitHub Actions run artifacts with 30-day retention. In the event of a backup failure, it dispatches an alert to configured notification channels.

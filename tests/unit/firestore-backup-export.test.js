@@ -70,20 +70,25 @@ describe('Firestore Backup & Export Tooling', () => {
 			expect(serializeValue(undefined)).toBeUndefined();
 		});
 
-		it('serializes and deserializes Firestore Timestamps', () => {
-			const ts = buildMockTimestamp('2026-08-30T12:00:00.000Z');
-			const serialized = serializeValue(ts);
+		it('serializes and deserializes Firestore Timestamps with nanosecond precision', () => {
+			const tsWithNanos = {
+				toDate: () => new Date(1234567890123),
+				seconds: 1234567890,
+				nanoseconds: 123456789,
+			};
+			const serialized = serializeValue(tsWithNanos);
 
 			expect(serialized).toEqual({
 				__type: 'Timestamp',
-				iso: '2026-08-30T12:00:00.000Z',
-				seconds: Math.floor(new Date('2026-08-30T12:00:00.000Z').getTime() / 1000),
-				nanoseconds: 0,
+				iso: new Date(1234567890123).toISOString(),
+				seconds: 1234567890,
+				nanoseconds: 123456789,
 			});
 
 			const deserialized = deserializeValue(serialized);
 			expect(deserialized).toBeDefined();
-			expect(deserialized.toDate().toISOString()).toBe('2026-08-30T12:00:00.000Z');
+			expect(deserialized.seconds).toBe(1234567890);
+			expect(deserialized.nanoseconds).toBe(123456789);
 		});
 
 		it('serializes JavaScript Date objects', () => {
@@ -353,6 +358,104 @@ describe('Firestore Backup & Export Tooling', () => {
 
 			expect(result.totalRead).toBe(1);
 			expect(result.totalRestored).toBe(1);
+		});
+
+		it('applies --ttl-policy=refresh to recompute expiresAt for restored alerts', async () => {
+			const jsonlFile = path.join(tempDir, 'alerts.jsonl');
+			const expiredTs = {
+				__type: 'Timestamp',
+				seconds: 100000,
+				nanoseconds: 0,
+			};
+			fs.writeFileSync(jsonlFile, JSON.stringify({ _id: 'old-alert', text: 'Old', expiresAt: expiredTs }) + '\n', 'utf8');
+
+			const mockBatch = {
+				set: jest.fn(),
+				commit: jest.fn().mockResolvedValue(undefined),
+			};
+			const mockCollection = {
+				doc: jest.fn((id) => ({ id })),
+			};
+			const mockFirestore = {
+				collection: jest.fn().mockReturnValue(mockCollection),
+				batch: jest.fn().mockReturnValue(mockBatch),
+			};
+
+			const result = await restoreCollectionFile(mockFirestore, 'alerts', jsonlFile, {
+				ttlPolicy: 'refresh',
+				retentionDays: 90,
+			});
+
+			expect(result.totalRestored).toBe(1);
+			expect(mockBatch.set).toHaveBeenCalledTimes(1);
+			const writtenData = mockBatch.set.mock.calls[0][1];
+			expect(writtenData.expiresAt).toBeDefined();
+			// Should be future timestamp
+			const expiresAtMillis = typeof writtenData.expiresAt.toMillis === 'function'
+				? writtenData.expiresAt.toMillis()
+				: writtenData.expiresAt.seconds * 1000;
+			expect(expiresAtMillis).toBeGreaterThan(Date.now());
+		});
+
+		it('applies --ttl-policy=clear to remove expiresAt completely', async () => {
+			const jsonlFile = path.join(tempDir, 'alerts.jsonl');
+			fs.writeFileSync(jsonlFile, JSON.stringify({ _id: 'old-alert', text: 'Old', expiresAt: { __type: 'Timestamp', seconds: 100 } }) + '\n', 'utf8');
+
+			const mockBatch = {
+				set: jest.fn(),
+				commit: jest.fn().mockResolvedValue(undefined),
+			};
+			const mockCollection = {
+				doc: jest.fn((id) => ({ id })),
+			};
+			const mockFirestore = {
+				collection: jest.fn().mockReturnValue(mockCollection),
+				batch: jest.fn().mockReturnValue(mockBatch),
+			};
+
+			await restoreCollectionFile(mockFirestore, 'alerts', jsonlFile, {
+				ttlPolicy: 'clear',
+			});
+
+			expect(mockBatch.set).toHaveBeenCalledTimes(1);
+			const writtenData = mockBatch.set.mock.calls[0][1];
+			expect(writtenData.expiresAt).toBeUndefined();
+		});
+
+		it('skips existing documents when --no-overwrite is set', async () => {
+			const jsonlFile = path.join(tempDir, 'alerts.jsonl');
+			const lines = [
+				JSON.stringify({ _id: 'doc-exists', text: 'Old Value' }),
+				JSON.stringify({ _id: 'doc-new', text: 'New Value' }),
+			];
+			fs.writeFileSync(jsonlFile, lines.join('\n') + '\n', 'utf8');
+
+			const mockBatch = {
+				set: jest.fn(),
+				commit: jest.fn().mockResolvedValue(undefined),
+			};
+			const mockFirestore = {
+				collection: jest.fn().mockReturnValue({
+					doc: jest.fn((id) => ({
+						id,
+						get: jest.fn().mockResolvedValue({ exists: id === 'doc-exists' }),
+					})),
+				}),
+				batch: jest.fn().mockReturnValue(mockBatch),
+				getAll: jest.fn().mockResolvedValue([
+					{ id: 'doc-exists', exists: true },
+					{ id: 'doc-new', exists: false },
+				]),
+			};
+
+			const result = await restoreCollectionFile(mockFirestore, 'alerts', jsonlFile, {
+				overwrite: false,
+			});
+
+			expect(result.totalRead).toBe(2);
+			expect(result.totalRestored).toBe(1);
+			expect(mockBatch.set).toHaveBeenCalledTimes(1);
+			expect(mockBatch.set).toHaveBeenCalledWith(expect.objectContaining({ id: 'doc-new' }), expect.objectContaining({ text: 'New Value' }));
 		});
 
 		it('runRestore discovers .jsonl files in input directory and restores all', async () => {

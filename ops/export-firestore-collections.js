@@ -51,13 +51,21 @@ function serializeValue(val) {
 	}
 
 	// Firestore Timestamp
-	if (typeof val.toMillis === 'function' || (val instanceof Date)) {
-		const date = typeof val.toDate === 'function' ? val.toDate() : (val instanceof Date ? val : new Date(val.toMillis()));
+	if (typeof val.toMillis === 'function' || (typeof val.seconds === 'number' && typeof val.nanoseconds === 'number') || (val instanceof Date)) {
+		const seconds = typeof val.seconds === 'number'
+			? val.seconds
+			: (typeof val.toMillis === 'function' ? Math.floor(val.toMillis() / 1000) : Math.floor(val.getTime() / 1000));
+		const nanoseconds = typeof val.nanoseconds === 'number'
+			? val.nanoseconds
+			: (typeof val.toMillis === 'function' ? (val.toMillis() % 1000) * 1000000 : (val.getTime() % 1000) * 1000000);
+		const iso = typeof val.toDate === 'function'
+			? val.toDate().toISOString()
+			: (val instanceof Date ? val.toISOString() : new Date(seconds * 1000 + Math.floor(nanoseconds / 1000000)).toISOString());
 		return {
 			__type: 'Timestamp',
-			iso: date.toISOString(),
-			seconds: Math.floor(date.getTime() / 1000),
-			nanoseconds: (date.getTime() % 1000) * 1000000,
+			iso,
+			seconds,
+			nanoseconds,
 		};
 	}
 
