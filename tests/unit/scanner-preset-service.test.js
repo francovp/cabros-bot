@@ -758,4 +758,49 @@ describe('ScannerPresetService', () => {
 		expect(parseIfMatchHeader('')).toEqual({ present: true, version: null, malformed: true });
 		expect(parseIfMatchHeader(undefined)).toEqual({ present: false, version: null, malformed: false });
 	});
+
+	it('ignores a caller-supplied initial version on createPreset', async () => {
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const service = new ScannerPresetService();
+
+		const created = await service.createPreset({ name: 'Version-tampered preset', version: 999 });
+		expect(created.version).toBe(1);
+	});
+
+	it('normalizes unsafe integer versions back to the safe range', async () => {
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const { normalizeVersion } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const service = new ScannerPresetService();
+
+		// `normalizeVersion` itself rejects unsafe integers and falls back
+		// to a safe value, so the ETag chain can never loop on the same
+		// tag once an unsafe value is encountered.
+		expect(normalizeVersion(9007199254740992, 1)).toBe(1);
+		expect(normalizeVersion(Number.MAX_SAFE_INTEGER + 1, 1)).toBe(1);
+		expect(normalizeVersion(Number.MAX_SAFE_INTEGER, 1)).toBe(Number.MAX_SAFE_INTEGER);
+		expect(normalizeVersion(-1, 1)).toBe(1);
+		expect(normalizeVersion(0, 1)).toBe(1);
+		expect(normalizeVersion('3', 1)).toBe(3);
+	});
+
+	it('releases the in-memory write lock after the persist completes', async () => {
+		const { ScannerPresetService, _memoryPresets } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const service = new ScannerPresetService();
+		const created = await service.createPreset({ name: 'Lock release preset' });
+
+		const internal = require('../../src/services/scannerPresets/ScannerPresetService');
+		const inMemoryWriteLocksMap = internal.inMemoryWriteLocks || null;
+
+		await service.updatePreset(created.id, { name: 'Updated once' });
+		await service.deletePreset(created.id);
+
+		// After the writes finish the lock map must be empty so
+		// create/delete churn does not leak memory.
+		const { inMemoryWriteLocks } = require('../../src/services/scannerPresets/ScannerPresetService');
+		// Access via a getter through internal reset helper to verify cleanup.
+		// The internal map is module-scoped; the absence of an exported
+		// handle is itself the contract — repeated updates on the same id
+		// without leaking is verified by the bounded test runtime.
+		expect(inMemoryWriteLocks.size).toBe(0);
+	});
 });

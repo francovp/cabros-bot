@@ -154,7 +154,7 @@ function clonePreset(preset) {
 
 function normalizeVersion(value, fallback = 1) {
 	const num = Number(value);
-	if (!Number.isInteger(num) || num < 1) {
+	if (!Number.isSafeInteger(num) || num < 1) {
 		return fallback;
 	}
 	return num;
@@ -316,7 +316,8 @@ class ScannerPresetService {
 	}
 
 	async createPreset(params = {}) {
-		const preset = this._buildPreset({ ...params, id: undefined });
+		const sanitizedParams = { ...params, id: undefined, version: undefined };
+		const preset = this._buildPreset(sanitizedParams);
 		await this._persistPreset(preset);
 		return clonePreset(preset);
 	}
@@ -731,7 +732,8 @@ class ScannerPresetService {
 		const nextLock = new Promise((resolve) => {
 			release = resolve;
 		});
-		inMemoryWriteLocks.set(preset.id, previousLock.then(() => nextLock));
+		const chainedLock = previousLock.then(() => nextLock);
+		inMemoryWriteLocks.set(preset.id, chainedLock);
 		try {
 			await previousLock;
 			const currentDeleteGeneration = firestoreDeleteGenerations.get(preset.id) || 0;
@@ -757,7 +759,7 @@ class ScannerPresetService {
 			return true;
 		} finally {
 			release();
-			if (inMemoryWriteLocks.get(preset.id) === previousLock.then(() => nextLock)) {
+			if (inMemoryWriteLocks.get(preset.id) === chainedLock) {
 				inMemoryWriteLocks.delete(preset.id);
 			}
 		}
@@ -1004,4 +1006,5 @@ module.exports = {
 		scannerPresetService._resetForTesting();
 	},
 	_memoryPresets: memoryPresets,
+	inMemoryWriteLocks,
 };
