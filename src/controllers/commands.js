@@ -1,4 +1,5 @@
 const { fetchSymbolPrice } = require('./commands/handlers/core/fetchPriceCryptoSymbol');
+const { userPriceAlertCmd } = require('./commands/handlers/core/userPriceAlertHandler');
 const { jobService } = require('../services/jobs/JobService');
 const { getNewsMonitor } = require('./webhooks/handlers/newsMonitor/newsMonitor');
 const signalOutcomeService = require('../services/storage/SignalOutcomeService');
@@ -495,6 +496,8 @@ function buildHelpMessage() {
 		'*🤖 Comandos disponibles en Cabros Bot*',
 		'',
 		'• `/precio <simbolo>` — Consulta el precio en Binance o Twelve Data \\(ej: `/precio BTCUSDT`, `/precio NVDA`\\)',
+		'• `/alerta <simbolo> <operador> <precio>` — Configura o gestiona alertas de precio \\(alias: `/alert`\\)',
+		'  _Opciones: `/alerta BTCUSDT < 60000`, `/alerta list`, `/alerta cancel <id>`_',
 		'• `/cryptobot id` — Muestra el Chat ID actual de Telegram',
 		'• `/analisis <simbolos>` — Crea un análisis técnico en TradingView \\(alias: `/analysis`\\)',
 		'  _Opciones: `timeframe=1D`, `mtf=true`, `timeoutMs=300000`_',
@@ -623,6 +626,7 @@ async function replyValidationError(context, error) {
 
 module.exports = {
 	getPrice,
+	userPriceAlertCmd,
 	cryptoBotCmd,
 	expandedAnalysisCmd,
 	marketScannerCmd,

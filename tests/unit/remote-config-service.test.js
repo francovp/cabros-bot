@@ -417,4 +417,23 @@ describe('RemoteConfigService', () => {
 		expect(config.ZERO_CHANNEL_ALERT_COOLDOWN_MS).toBe(600000);
 		expect(config.ENABLE_API_ONLY_MODE).toBe(true);
 	});
+
+	it('supports user price alert parameters via Remote Config', async () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		mockTemplate({
+			ENABLE_USER_PRICE_ALERTS: true,
+			USER_PRICE_ALERT_EVALUATION_INTERVAL_MS: 30000,
+			USER_PRICE_ALERT_EVALUATION_BATCH_LIMIT: 25,
+			USER_PRICE_ALERT_MAX_PER_CHAT: 15,
+		});
+		alertStorageService.getFirestore.mockReturnValue({});
+
+		await remoteConfigService.loadNow();
+
+		const config = remoteConfigService.getRuntimeConfig();
+		expect(config.ENABLE_USER_PRICE_ALERTS).toBe(true);
+		expect(config.USER_PRICE_ALERT_EVALUATION_INTERVAL_MS).toBe(30000);
+		expect(config.USER_PRICE_ALERT_EVALUATION_BATCH_LIMIT).toBe(25);
+		expect(config.USER_PRICE_ALERT_MAX_PER_CHAT).toBe(15);
+	});
 });
