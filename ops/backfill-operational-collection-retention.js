@@ -282,11 +282,11 @@ async function main() {
 	const dryRun = process.argv.includes('--dry-run') || process.env.DRY_RUN === 'true';
 	const firestore = initializeFirestore();
 
-	if (RemoteConfigService && typeof RemoteConfigService.init === 'function') {
+	if (RemoteConfigService && typeof RemoteConfigService.loadNow === 'function') {
 		try {
-			await RemoteConfigService.init();
+			await RemoteConfigService.loadNow();
 		} catch (err) {
-			console.warn('[OperationalRetentionBackfill] Could not initialize RemoteConfigService, using env/defaults:', err.message);
+			console.warn('[OperationalRetentionBackfill] Could not load Remote Config template, using env/defaults:', err.message);
 		}
 	}
 

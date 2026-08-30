@@ -113,14 +113,18 @@ function buildRetentionExpiryTimestamp(baseDate = new Date()) {
 }
 
 function isRetentionExpired(data) {
+	const now = Date.now();
 	const explicitExpiry = getTimestampMillis(data && data.expiresAt);
-	if (explicitExpiry !== null) {
-		return explicitExpiry <= Date.now();
+	if (explicitExpiry !== null && explicitExpiry <= now) {
+		return true;
 	}
 
 	const receivedAtMs = getTimestampMillis(data && data.receivedAt);
-	return receivedAtMs !== null
-		&& receivedAtMs + (getSignalOutcomeRetentionDays() * DAY_MS) <= Date.now();
+	if (receivedAtMs !== null && receivedAtMs + (getSignalOutcomeRetentionDays() * DAY_MS) <= now) {
+		return true;
+	}
+
+	return false;
 }
 
 function awaitWithTimeout(promise, timeoutMs, message) {

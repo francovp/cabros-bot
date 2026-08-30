@@ -274,6 +274,36 @@ describe('SignalOutcomeService Retention and TTL', () => {
 			jest.useRealTimers();
 		});
 
+		it('excludes documents when runtime retention policy is reduced even if written with longer explicit expiresAt', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			// Runtime policy reduced to 30 days
+			process.env.SIGNAL_OUTCOME_RETENTION_DAYS = '30';
+			const now = new Date('2026-08-01T12:00:00.000Z');
+			jest.useFakeTimers().setSystemTime(now);
+
+			// Doc written 45 days ago with 365-day expiresAt (which would not expire for 320 more days under old policy)
+			const docWithLongExpiry = {
+				requestId: 'reduced-policy-req',
+				source: 'market-scanner',
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+				price: 50000,
+				side: 'BUY',
+				receivedAt: admin.firestore.Timestamp.fromDate(new Date(now.getTime() - (45 * DAY_MS))),
+				expiresAt: admin.firestore.Timestamp.fromDate(new Date(now.getTime() + (320 * DAY_MS))),
+				outcomeEvaluated: true,
+				outcomes: {},
+			};
+
+			const firestore = AlertStorageService.getFirestore();
+			await firestore.collection(SignalOutcomeService.COLLECTION_NAME).doc('reduced-policy-id').set(docWithLongExpiry);
+
+			const result = await SignalOutcomeService.listOutcomes({ limit: 10 });
+			expect(result.outcomes).toHaveLength(0);
+
+			jest.useRealTimers();
+		});
+
 		it('advances evaluation sweep cursor past expired pending documents to prevent starvation', async () => {
 			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
 			process.env.SIGNAL_OUTCOME_EVALUATION_BATCH_LIMIT = '1';
