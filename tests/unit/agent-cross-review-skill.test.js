@@ -243,9 +243,42 @@ fi
 		);
 
 		expect(result.status).toBe(0);
+		const parsed = JSON.parse(result.stdout);
+		expect(parsed).toHaveLength(1);
+		expect(parsed[0].number).toBe(897);
+
 		const logContent = readFileSync(logPath, 'utf8');
 		expect(logContent).toContain('label create antigravity-gemini-3.7-flash');
 		expect(logContent).toContain('pr edit 897 --repo francovp/cabros-bot --add-label antigravity-gemini-3.7-flash');
+
+		rmSync(tempDir, { recursive: true, force: true });
+	});
+
+	it('propagates repo resolution errors when gh repo view fails', () => {
+		const tempDir = mkdtempSync(join(tmpdir(), 'agent-cross-review-repo-fail-'));
+		const mockGhPath = join(tempDir, 'gh');
+
+		writeFileSync(
+			mockGhPath,
+			`#!/bin/sh
+if [ "$1" = "repo" ]; then
+  echo "GraphQL: Could not resolve to a Repository (HTTP 404)" >&2
+  exit 1
+elif [ "$1" = "auth" ]; then
+  if [ "$2" = "status" ]; then
+    echo "Logged in to github.com as francovp"
+  fi
+fi
+`,
+		);
+		chmodSync(mockGhPath, 0o755);
+
+		const env = { ...process.env, PATH: `${tempDir}:${process.env.PATH}` };
+
+		const result = spawnSync('bash', [detectScriptPath], { env, encoding: 'utf8' });
+		expect(result.status).toBe(1);
+		expect(result.stderr).toContain("Error: Failed to resolve current repository with 'gh repo view'");
+		expect(result.stderr).toContain('Could not resolve to a Repository');
 
 		rmSync(tempDir, { recursive: true, force: true });
 	});

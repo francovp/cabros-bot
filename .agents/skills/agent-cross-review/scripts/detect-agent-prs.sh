@@ -97,7 +97,10 @@ done
 
 # Resolve repo
 if [[ -z "$REPO_NAME" ]]; then
-  REPO_NAME="$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null || echo "francovp/cabros-bot")"
+  if ! REPO_NAME="$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>&1)"; then
+    echo "Error: Failed to resolve current repository with 'gh repo view': $REPO_NAME" >&2
+    exit 1
+  fi
 fi
 
 # If --add-label requested on a PR
@@ -109,7 +112,9 @@ if [[ -n "$ADD_LABEL" ]]; then
   # Ensure label exists in repository or create it
   gh label create "$ADD_LABEL" --repo "$REPO_NAME" --color "7057ff" --description "Agent and model attribution label" 2>/dev/null || true
   gh pr edit "$TARGET_PR" --repo "$REPO_NAME" --add-label "$ADD_LABEL" >/dev/null
-  echo "Added label '$ADD_LABEL' to PR #$TARGET_PR in $REPO_NAME."
+  if [[ "$OUTPUT_JSON" != "true" ]]; then
+    echo "Added label '$ADD_LABEL' to PR #$TARGET_PR in $REPO_NAME."
+  fi
 fi
 
 # Fetch PRs and propagate errors if gh fails
