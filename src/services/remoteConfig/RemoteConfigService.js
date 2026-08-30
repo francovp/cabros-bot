@@ -65,6 +65,9 @@ const PARAMETER_SCHEMA = Object.freeze({
 	ENABLE_ALERT_HTF_RENDER: { type: 'boolean', defaultValue: true },
 	ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION: { type: 'boolean', defaultValue: false },
 	ALERT_SIGNAL_COOLDOWN_BARS: { type: 'number', defaultValue: 1, integer: true, min: 1, max: 10 },
+	ENABLE_MIN_ALERT_CONTEXT: { type: 'boolean', defaultValue: false },
+	MIN_ALERT_PROVISIONAL_STOP_PERCENT: { type: 'number', defaultValue: 2.5, min: 0.1, max: 20 },
+	MIN_ALERT_PROVISIONAL_TARGET_PERCENT: { type: 'number', defaultValue: 5.0, min: 0.1, max: 40 },
 });
 
 let remoteOverrides = {};
