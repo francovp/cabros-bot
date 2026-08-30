@@ -4401,6 +4401,10 @@
                       "reversal"
                     ]
                   },
+                  "setup_evidence": {
+                    "type": "string",
+                    "description": "Optional one-line rationale or observed market structure supporting the setup_type"
+                  },
                   "risk_reward_ratio": {
                     "type": [
                       "string",
