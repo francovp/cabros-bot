@@ -273,5 +273,69 @@ describe('SignalOutcomeService Retention and TTL', () => {
 
 			jest.useRealTimers();
 		});
+
+		it('advances evaluation sweep cursor past expired pending documents to prevent starvation', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.SIGNAL_OUTCOME_EVALUATION_BATCH_LIMIT = '1';
+			const now = new Date('2026-08-01T12:00:00.000Z');
+			jest.useFakeTimers().setSystemTime(now);
+
+			SignalOutcomeService._resetForTesting();
+
+			// First doc: expired pending doc
+			const expiredPendingDoc = {
+				requestId: 'expired-pending',
+				source: 'market-scanner',
+				symbol: 'ETHUSDT',
+				exchange: 'BINANCE',
+				price: 3000,
+				side: 'BUY',
+				receivedAt: admin.firestore.Timestamp.fromDate(new Date('2025-01-01T10:00:00.000Z')),
+				expiresAt: admin.firestore.Timestamp.fromDate(new Date('2026-01-01T10:00:00.000Z')),
+				outcomeEvaluated: false,
+				outcomes: {
+					'1h': {
+						status: 'pending',
+						targetTime: new Date('2025-01-01T11:00:00.000Z').toISOString(),
+					},
+				},
+			};
+
+			// Second doc: active unparseable doc that resolves to unavailable when evaluated
+			const activePendingDoc = {
+				requestId: 'active-pending',
+				source: 'market-scanner',
+				symbol: 'UNPARSEABLE',
+				exchange: 'UNKNOWN',
+				price: null,
+				side: 'BUY',
+				receivedAt: admin.firestore.Timestamp.fromDate(new Date('2026-08-01T10:00:00.000Z')),
+				expiresAt: admin.firestore.Timestamp.fromDate(new Date('2027-08-01T10:00:00.000Z')),
+				outcomeEvaluated: false,
+				outcomes: {
+					'1h': {
+						status: 'pending',
+						targetTime: new Date('2026-08-01T11:00:00.000Z').toISOString(),
+					},
+				},
+			};
+
+			const firestore = AlertStorageService.getFirestore();
+			await firestore.collection(SignalOutcomeService.COLLECTION_NAME).doc('doc-1-expired').set(expiredPendingDoc);
+			await firestore.collection(SignalOutcomeService.COLLECTION_NAME).doc('doc-2-active').set(activePendingDoc);
+
+			// First sweep processes doc-1-expired, advances cursor, but does not evaluate it
+			const sweep1 = await SignalOutcomeService.evaluatePendingOutcomes();
+			expect(sweep1.scannedCount).toBe(1);
+			expect(sweep1.evaluatedCount).toBe(0);
+
+			// Second sweep starts after doc-1-expired, fetching doc-2-active and evaluating it
+			const sweep2 = await SignalOutcomeService.evaluatePendingOutcomes();
+			expect(sweep2.scannedCount).toBe(1);
+			expect(sweep2.evaluatedCount).toBe(1);
+
+			jest.useRealTimers();
+		});
 	});
 });
+

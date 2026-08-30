@@ -601,6 +601,7 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 			scannedCount++;
 			const data = doc.data() || {};
 			if (isRetentionExpired(data)) {
+				lastEvaluatedDoc = doc;
 				continue;
 			}
 			let entryPrice = data.price;
@@ -1397,9 +1398,17 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, status, wi
 		const parsedFrom = from ? new Date(from) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 		const parsedTo = to ? new Date(to) : new Date();
 
+		const retentionDays = getSignalOutcomeRetentionDays();
+		const retentionCutoffMs = Date.now() - (retentionDays * DAY_MS);
+		const effectiveFromMs = Math.max(parsedFrom.getTime(), retentionCutoffMs);
+		if (effectiveFromMs > parsedTo.getTime()) {
+			return createEmptyMetricsSummary();
+		}
+		const effectiveFrom = new Date(effectiveFromMs);
+
 		snapshot = await firestore
 			.collection(COLLECTION_NAME)
-			.where('receivedAt', '>=', admin.firestore.Timestamp.fromDate(parsedFrom))
+			.where('receivedAt', '>=', admin.firestore.Timestamp.fromDate(effectiveFrom))
 			.where('receivedAt', '<=', admin.firestore.Timestamp.fromDate(parsedTo))
 			.limit(limit || 1000)
 			.get();

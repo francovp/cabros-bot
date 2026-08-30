@@ -31,6 +31,13 @@
 
 const admin = require('firebase-admin');
 
+let RemoteConfigService;
+try {
+	RemoteConfigService = require('../src/services/remoteConfig/RemoteConfigService');
+} catch {
+	RemoteConfigService = null;
+}
+
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 const PAGE_SIZE = 400;
@@ -89,6 +96,14 @@ function parseNotificationRedriveTtlMs(raw = process.env.NOTIFICATION_REDRIVE_MA
 
 function parseSignalOutcomeRetentionTtlMs(raw = process.env.SIGNAL_OUTCOME_RETENTION_DAYS) {
 	if (raw === undefined || raw === null) {
+		try {
+			const remoteDays = RemoteConfigService?.getRuntimeConfig?.().SIGNAL_OUTCOME_RETENTION_DAYS;
+			if (typeof remoteDays === 'number' && Number.isSafeInteger(remoteDays) && remoteDays >= 1 && remoteDays <= MAX_SIGNAL_OUTCOME_RETENTION_DAYS) {
+				return remoteDays * DAY_MS;
+			}
+		} catch {
+			// ignore
+		}
 		return DEFAULT_SIGNAL_OUTCOME_RETENTION_DAYS * DAY_MS;
 	}
 	const str = String(raw).trim();
@@ -266,6 +281,14 @@ function initializeFirestore() {
 async function main() {
 	const dryRun = process.argv.includes('--dry-run') || process.env.DRY_RUN === 'true';
 	const firestore = initializeFirestore();
+
+	if (RemoteConfigService && typeof RemoteConfigService.init === 'function') {
+		try {
+			await RemoteConfigService.init();
+		} catch (err) {
+			console.warn('[OperationalRetentionBackfill] Could not initialize RemoteConfigService, using env/defaults:', err.message);
+		}
+	}
 
 	const collections = {};
 	const operationalConfigs = getOperationalCollectionConfigs();
