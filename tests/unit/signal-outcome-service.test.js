@@ -419,6 +419,74 @@ describe('SignalOutcomeService', () => {
 			expect(saved.outcomes['1h'].status).toBe('pending');
 		});
 
+		it('classifies Binance 451 entry fallback as binance_region_blocked reason', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			const err = new Error('Service unavailable from restricted location');
+			err.code = 451;
+			mockGetAvgPrice.mockRejectedValue(err);
+
+			const resId = await SignalOutcomeService.recordSignal({
+				requestId: 'req-region-blocked-reason',
+				source: 'webhook-alert',
+				symbol: 'BINANCE:BTCUSDT',
+				price: null,
+				side: 'BUY',
+			});
+
+			expect(resId).not.toBeNull();
+			const saved = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(resId);
+			expect(saved).toBeDefined();
+			expect(saved.eligibilityState).toBe('pending_entry_price');
+			expect(saved.eligibilityReason).toBe('binance_region_blocked');
+		});
+
+		it('forwards BINANCE_DATA_BASE_URL to MainClient when set to a valid URL', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.BINANCE_DATA_BASE_URL = 'https://data-api.binance.vision';
+			const { MainClient } = require('binance');
+			const previousCalls = MainClient.mock.calls.length;
+			mockGetAvgPrice.mockResolvedValue({ price: '68000.00' });
+
+			try {
+				await SignalOutcomeService.recordSignal({
+					requestId: 'req-custom-base-url',
+					source: 'webhook-alert',
+					symbol: 'BINANCE:BTCUSDT',
+					price: null,
+					side: 'BUY',
+				});
+
+				const latestCall = MainClient.mock.calls[MainClient.mock.calls.length - 1];
+				const latestOptions = latestCall[0];
+				expect(latestOptions.baseUrl).toBe('https://data-api.binance.vision');
+				expect(MainClient.mock.calls.length).toBeGreaterThan(previousCalls);
+			} finally {
+				delete process.env.BINANCE_DATA_BASE_URL;
+			}
+		});
+
+		it('falls back to default Binance base URL when BINANCE_DATA_BASE_URL is malformed', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.BINANCE_DATA_BASE_URL = 'not-a-url';
+			const { MainClient } = require('binance');
+			mockGetAvgPrice.mockResolvedValue({ price: '68000.00' });
+
+			try {
+				await SignalOutcomeService.recordSignal({
+					requestId: 'req-malformed-base-url',
+					source: 'webhook-alert',
+					symbol: 'BINANCE:BTCUSDT',
+					price: null,
+					side: 'BUY',
+				});
+
+				const latestCall = MainClient.mock.calls[MainClient.mock.calls.length - 1];
+				expect(latestCall[0].baseUrl).toBe('https://api.binance.com');
+			} finally {
+				delete process.env.BINANCE_DATA_BASE_URL;
+			}
+		});
+
 		it('resolves entry price from tertiary Gemini source when Binance is region-blocked', async () => {
 			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
 			mockGetAvgPrice.mockRejectedValue(new Error('Binance 451: Service unavailable from restricted location'));
@@ -1152,6 +1220,47 @@ describe('SignalOutcomeService', () => {
 			expect(updated.outcomes['1h'].status).toBe('unavailable');
 			expect(updated.outcomes['1h'].reason).toBe('binance_invalid_symbol');
 			expect(updated.outcomeEvaluated).toBe(true);
+		});
+
+		it('classifies Binance sweep getKlines 451 as market_data_region_blocked and keeps outcome pending', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			const receivedAtDate = new Date(Date.now() - 2 * 60 * 60 * 1000);
+			const mockDocId = 'test-region-block-sweep';
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, new Map([
+				[mockDocId, {
+					receivedAt: admin.firestore.Timestamp.fromDate(receivedAtDate),
+					requestId: 'req-region-block-sweep',
+					source: 'news-monitor',
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					side: 'BUY',
+					price: 50000,
+					outcomeEvaluated: false,
+					outcomes: {
+						'1h': {
+							status: 'pending',
+							targetTime: new Date(receivedAtDate.getTime() + 1 * 60 * 60 * 1000).toISOString(),
+						},
+					},
+				}],
+			]));
+
+			const err = new Error('Service unavailable from restricted location');
+			err.code = 451;
+			mockGetKlines.mockRejectedValue(err);
+
+			await SignalOutcomeService.evaluatePendingOutcomes();
+
+			const updated = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(mockDocId);
+			expect(updated).toBeDefined();
+			expect(updated.outcomes['1h'].reason).toBe('market_data_region_blocked');
+			// region-blocked is treated as transient — outcome stays pending, not unavailable
+			expect(updated.outcomes['1h'].status).toBe('pending');
+
+			const status = SignalOutcomeService.getWorkerStatus();
+			expect(status.lastRunRegionBlockedCount).toBeGreaterThanOrEqual(1);
 		});
 
 		it('backfills missing entry price during sweep for pending_entry_price signals', async () => {

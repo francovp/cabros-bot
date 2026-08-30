@@ -1510,3 +1510,21 @@ No endpoint, OpenAPI, Postman, environment variable, or Remote Config contract c
 - `tests/unit/signal-repeat-cooldown.test.js`, `tests/integration/alert-repeat-suppression.test.js`, `tests/integration/status-endpoint.test.js` — Window/flip/fail-open coverage, endpoint double-post behavior, and status exposure.
 
 Disabled by default preserves existing webhook behavior byte-for-byte.
+
+## Binance Market-Data Host Configuration (CB-244 / Issue #539)
+
+Added an application-owned `BINANCE_DATA_BASE_URL` env var (default `https://api.binance.com`) that overrides the default Binance REST host for **all** market-data client construction paths. The new variable is forwarded as `MainClient` `baseUrl` (which `binance@2.15.22` honors via `BaseRestClient.options.baseUrl` → `requestUtils.getRestBaseUrl`), so Railway production can route around the `HTTP 451 Service unavailable from restricted location` reply from `api.binance.com` without touching the trading order client or hot-patching `node_modules`. Affected paths: `SignalOutcomeService` sweep + entry fallback, `BinanceOrderService` live client (testnet stays pinned to `https://testnet.binance.vision`), news-monitor price fallback, and the `/precio` Telegram command. Malformed values fall back to the default with a `console.warn`, so a typo never silently breaks evaluation.
+
+Binance 451 / `restricted location` errors are now classified as `binance_region_blocked` on the entry-fallback path (persists `eligibilityReason` and keeps the signal `pending_entry_price` until the host becomes reachable) and as `market_data_region_blocked` on the sweep path (replaces the prior generic `market_data_unavailable` so dashboards can distinguish "expected closure" from "transient gap"; surfaced as `lastRunRegionBlockedCount` on the worker status). The pending retry path now writes `outcome.reason` so operators see the classification without forcing an unavailable terminal state.
+
+**Core Components**:
+- `src/services/storage/SignalOutcomeService.js` — `resolveBinanceBaseUrl()` + `isRegionBlockedError()`, `baseUrl` forwarding in `getBinanceClient()`, region-blocked entry + sweep classification, worker status counter.
+- `src/services/trading/BinanceOrderService.js` — `resolveLiveBaseUrl()` + `https://`-only validation; preserves testnet override; live forwarding.
+- `src/controllers/webhooks/handlers/newsMonitor/analyzer.js` and `src/controllers/commands/handlers/core/fetchPriceCryptoSymbol.js` — Honor `BINANCE_DATA_BASE_URL` for the price fallback and `/precio` client.
+- `.env.example` — Documents the env var with default + valid-value guidance.
+- `tests/unit/signal-outcome-service.test.js` and `tests/unit/binance-order-service.test.js` — `baseUrl` forwarding + 451 classification + fallback coverage.
+
+**Configuration**:
+- `BINANCE_DATA_BASE_URL` — Optional override for all Binance market-data REST calls. Default `https://api.binance.com` (preserves existing behavior when unset). Must be an http(s) URL; live trading also requires `https://`. Classified as **environment-only** for Remote Config parity (external destination; secrets/credentials/external-endpoint policy excludes it).
+
+No endpoint, OpenAPI, Postman, or Remote Config contract changed; the new env var follows the standard `environment-only` classification.
