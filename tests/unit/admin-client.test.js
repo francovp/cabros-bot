@@ -142,7 +142,7 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 		elementsById[id] = node;
 		body.append(node);
 	});
-	['overview', 'status', 'alerts', 'outcomes', 'presets', 'jobs', 'analysis', 'playground'].forEach((view) => {
+	['overview', 'status', 'alerts', 'outcomes', 'presets', 'jobs', 'orders', 'analysis', 'playground'].forEach((view) => {
 		const button = new FakeElement('button');
 		button.dataset.view = view;
 		body.append(button);
@@ -2989,7 +2989,287 @@ describe('admin browser client', () => {
 
 	it('keeps navigation icons as inline SVG instead of platform glyphs', () => {
 		const shell = fs.readFileSync(path.join(__dirname, '../../src/admin/index.html'), 'utf8');
-		expect(shell.match(/<svg class="nav-icon"/g)).toHaveLength(8);
+		expect(shell.match(/<svg class="nav-icon"/g)).toHaveLength(9);
 		expect(shell).not.toMatch(/[⌂◈◉◇◌✦▷]/);
+	});
+
+	it('loads recent Binance orders with symbol and limit filters', async () => {
+		const requests = [];
+		const browser = createBrowser({
+			fetchImpl: async (url, options) => {
+				if (url === '/openapi.json') return response(contract);
+				requests.push([url, options]);
+				return response({ success: true, environment: 'testnet', orders: [] });
+			},
+		});
+		await flush();
+		await selectView(browser, 'orders');
+
+		const listForm = findForm(browser.elementsById.view, 'Load recent orders');
+		listForm.elements.symbol.value = 'BTCUSDT';
+		listForm.elements.limit.value = '5';
+		browser.elementsById['api-key'].value = 'session-secret';
+		await listForm.dispatch('submit');
+		await flush();
+
+		const last = requests.at(-1);
+		expect(last[0]).toBe('/api/trading/binance/orders?symbol=BTCUSDT&limit=5');
+		expect(last[1].headers['x-api-key']).toBe('session-secret');
+	});
+
+	it('renders sanitized Binance order summary fields and hides provider noise', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				return response({
+					success: true,
+					environment: 'testnet',
+					orders: [{
+						symbol: 'BTCUSDT',
+						orderId: 9007199254740993,
+						clientOrderId: 'cb-test-001',
+						price: '65000.00',
+						origQty: '0.01000000',
+						executedQty: '0.00500000',
+						cummulativeQuoteQty: '325.00000',
+						status: 'PARTIALLY_FILLED',
+						type: 'LIMIT',
+						side: 'BUY',
+						timeInForce: 'GTC',
+						transactTime: 1717000000000,
+						updateTime: 1717000060000,
+						time: 1717000000000,
+						workingTime: 1717000000000,
+						isWorking: true,
+						stopPrice: '0.00000000',
+						icebergQty: '0.00000000',
+						origQuoteOrderQty: '0.00000000',
+						orderListId: -1,
+						selfTradePreventionMode: 'NONE',
+						fills: [{
+							price: '65000.00',
+							qty: '0.00500000',
+							commission: '0.00000500',
+							commissionAsset: 'BNB',
+							tradeId: 12345,
+							hiddenField: 'hidden-noisy-data',
+						}],
+						hiddenProviderField: 'hidden-noise',
+					}],
+				});
+			},
+		});
+		await flush();
+		await selectView(browser, 'orders');
+
+		const listForm = findForm(browser.elementsById.view, 'Load recent orders');
+		listForm.elements.symbol.value = 'BTCUSDT';
+		await listForm.dispatch('submit');
+		await flush();
+
+		expect(listForm.textContent).toContain('BTCUSDT');
+		expect(listForm.textContent).toContain('LIMIT');
+		expect(listForm.textContent).toContain('BUY');
+		expect(listForm.textContent).toContain('PARTIALLY_FILLED');
+		expect(listForm.textContent).toContain('cb-test-001');
+		expect(listForm.textContent).toContain('65000');
+		expect(listForm.textContent).toContain('0.00500000');
+		expect(listForm.textContent).not.toContain('hidden-noise');
+		expect(listForm.textContent).not.toContain('hidden-noisy-data');
+	});
+
+	it('looks up a single Binance order by orderId through the dedicated form', async () => {
+		const requests = [];
+		const browser = createBrowser({
+			fetchImpl: async (url, options) => {
+				if (url === '/openapi.json') return response(contract);
+				requests.push([url, options]);
+				return response({
+					success: true,
+					environment: 'testnet',
+					order: {
+						symbol: 'BTCUSDT',
+						orderId: 42,
+						clientOrderId: 'cb-order-42',
+						price: '62000.00',
+						origQty: '0.02000000',
+						executedQty: '0.02000000',
+						status: 'FILLED',
+						type: 'MARKET',
+						side: 'SELL',
+						transactTime: 1717000000000,
+						updateTime: 1717000005000,
+					},
+				});
+			},
+		});
+		await flush();
+		await selectView(browser, 'orders');
+
+		const detailForm = findForm(browser.elementsById.view, 'Get single order');
+		detailForm.elements.symbol.value = 'BTCUSDT';
+		detailForm.elements['path-orderId'].value = '42';
+		await detailForm.dispatch('submit');
+		await flush();
+
+		expect(requests.at(-1)[0]).toBe('/api/trading/binance/orders?symbol=BTCUSDT&orderId=42');
+		expect(detailForm.textContent).toContain('FILLED');
+		expect(detailForm.textContent).toContain('MARKET');
+		expect(detailForm.textContent).toContain('SELL');
+		expect(detailForm.textContent).toContain('cb-order-42');
+	});
+
+	it('looks up a single Binance order by origClientOrderId through the dedicated form', async () => {
+		const requests = [];
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				requests.push(url);
+				return response({
+					success: true,
+					environment: 'testnet',
+					order: {
+						symbol: 'ETHUSDT',
+						orderId: 7,
+						clientOrderId: 'cb-eth-7',
+						status: 'NEW',
+						type: 'LIMIT',
+						side: 'BUY',
+					},
+				});
+			},
+		});
+		await flush();
+		await selectView(browser, 'orders');
+
+		const detailForm = findForm(browser.elementsById.view, 'Get single order');
+		detailForm.elements.symbol.value = 'ETHUSDT';
+		detailForm.elements['path-origClientOrderId'].value = 'cb-eth-7';
+		await detailForm.dispatch('submit');
+		await flush();
+
+		expect(requests.at(-1)).toBe('/api/trading/binance/orders?symbol=ETHUSDT&origClientOrderId=cb-eth-7');
+	});
+
+	it('clears stale Binance orders when filters change before the response resolves', async () => {
+		let releaseList;
+		const slow = new Promise((resolve) => { releaseList = resolve; });
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/trading/binance/orders')) {
+					return slow.then(() => response({
+						success: true,
+						environment: 'testnet',
+						orders: [{ symbol: 'BTCUSDT', orderId: 1, side: 'BUY', status: 'NEW', type: 'LIMIT', executedQty: '0', origQty: '1' }],
+					}));
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'orders');
+
+		const listForm = findForm(browser.elementsById.view, 'Load recent orders');
+		listForm.elements.symbol.value = 'BTCUSDT';
+		const submit = listForm.dispatch('submit');
+		await flush();
+
+		listForm.elements.symbol.value = 'ETHUSDT';
+		await listForm.elements.symbol.dispatch('input');
+
+		expect(listForm.textContent).toContain('Filters changed');
+
+		releaseList();
+		await flush();
+		await submit;
+		expect(listForm.textContent).not.toContain('orderId');
+		expect(listForm.textContent).toContain('Filters changed');
+	});
+
+	it('surfaces ORDER_NOT_FOUND through the error UI on single-order lookup', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				return response({
+					success: false,
+					error: 'Binance order not found',
+					code: 'ORDER_NOT_FOUND',
+				}, 404);
+			},
+		});
+		await flush();
+		await selectView(browser, 'orders');
+
+		const detailForm = findForm(browser.elementsById.view, 'Get single order');
+		detailForm.elements.symbol.value = 'BTCUSDT';
+		detailForm.elements['path-orderId'].value = '9999';
+		await detailForm.dispatch('submit');
+		await flush();
+
+		expect(detailForm.textContent).toContain('HTTP 404');
+		expect(detailForm.textContent).toContain('ORDER_NOT_FOUND');
+	});
+
+	it('renders an empty state when the recent-orders list has no rows', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => response(url === '/openapi.json' ? contract : { success: true, environment: 'testnet', orders: [] }),
+		});
+		await flush();
+		await selectView(browser, 'orders');
+
+		const listForm = findForm(browser.elementsById.view, 'Load recent orders');
+		listForm.elements.symbol.value = 'BTCUSDT';
+		await listForm.dispatch('submit');
+		await flush();
+
+		const empty = find(listForm, (node) => node.className === 'empty-state');
+		expect(empty).toBeDefined();
+		expect(empty.textContent).toContain('No recent orders found.');
+	});
+
+	it('disables single-order lookup unless at least one identifier is set', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				return response({ success: true, environment: 'testnet', order: {} });
+			},
+		});
+		await flush();
+		await selectView(browser, 'orders');
+
+		const detailForm = findForm(browser.elementsById.view, 'Get single order');
+		detailForm.elements.symbol.value = 'BTCUSDT';
+		const button = findButton(detailForm, 'Get single order');
+		const submitPromise = detailForm.dispatch('submit');
+		await flush();
+		expect(button.disabled).toBe(false);
+		expect(detailForm.textContent).toContain('orderId or origClientOrderId');
+		await submitPromise;
+	});
+
+	it('keeps the API key out of query strings for Binance order requests', async () => {
+		const requests = [];
+		const browser = createBrowser({
+			fetchImpl: async (url, options) => {
+				if (url === '/openapi.json') return response(contract);
+				requests.push([url, options]);
+				return response({ success: true, environment: 'testnet', orders: [] });
+			},
+		});
+		await flush();
+		await selectView(browser, 'orders');
+
+		const listForm = findForm(browser.elementsById.view, 'Load recent orders');
+		listForm.elements.symbol.value = 'BTCUSDT';
+		browser.elementsById['api-key'].value = 'should-only-be-header';
+		await listForm.dispatch('submit');
+		await flush();
+
+		const last = requests.at(-1);
+		expect(last[0]).not.toContain('should-only-be-header');
+		expect(last[0]).not.toContain('api-key');
+		expect(last[0]).not.toContain('x-api-key');
+		expect(last[1].headers['x-api-key']).toBe('should-only-be-header');
 	});
 });
