@@ -1663,6 +1663,570 @@ const createAlertExportForm = () => {
 	return form;
 };
 
+const createOutcomeDetailPanel = (outcome) => {
+	const panel = element('article', { className: 'operation-card outcome-detail' });
+	const headCopy = element('div');
+	headCopy.append(element('p', { className: 'eyebrow', text: 'Outcome detail' }));
+	if (outcome && outcome.id) {
+		const idLine = element('p', { className: 'mono-line', text: String(outcome.id) });
+		idLine.append(createCopyButton(String(outcome.id), 'Copy ID'));
+		headCopy.append(idLine);
+	}
+	const badges = element('div', { className: 'badge-row' });
+	badges.append(outcome && outcome.outcomeEvaluated
+		? element('span', { className: 'status-badge status-ready', text: 'Evaluated' })
+		: element('span', { className: 'status-badge status-disabled', text: 'Pending' }));
+	if (outcome && outcome.side) {
+		badges.append(element('span', {
+			className: `status-badge ${outcome.side === 'SELL' ? 'status-disabled' : 'status-ready'}`,
+			text: outcome.side,
+		}));
+	}
+	const head = element('div', { className: 'section-heading' });
+	head.append(headCopy, badges);
+	panel.append(head);
+
+	if (outcome && outcome.receivedAt) {
+		panel.append(createTimestamp(outcome.receivedAt));
+	}
+
+	const dl = element('dl', { className: 'risk-list' });
+	const detailFields = [
+		['Request ID', outcome && outcome.requestId],
+		['Source', outcome && outcome.source],
+		['Symbol', outcome && outcome.symbol],
+		['Exchange', outcome && outcome.exchange],
+		['Asset class', outcome && outcome.assetClass],
+		['Timeframe', outcome && outcome.timeframe],
+		['Setup type', outcome && outcome.setupType],
+		['Score', outcome && typeof outcome.score === 'number' ? outcome.score : null],
+		['Entry price', outcome && typeof outcome.price === 'number' ? outcome.price : null],
+		['Stop loss', outcome && typeof outcome.stop === 'number' ? outcome.stop : null],
+		['Target price', outcome && typeof outcome.target === 'number' ? outcome.target : null],
+		['Market data provider', outcome && outcome.marketDataProvider],
+		['Entry price source', outcome && outcome.entryPriceSource],
+		['Eligibility state', outcome && outcome.eligibilityState],
+		['Eligibility reason', outcome && outcome.eligibilityReason],
+		['Processing time', outcome && typeof outcome.processingTimeMs === 'number' ? `${outcome.processingTimeMs} ms` : null],
+	];
+	detailFields.forEach(([label, val]) => {
+		if (val !== undefined && val !== null && val !== '') {
+			const dt = element('dt', { text: label });
+			const dd = element('dd', { text: String(val) });
+			dl.append(dt, dd);
+		}
+	});
+	panel.append(dl);
+
+	const sources = Array.isArray(outcome && outcome.sources) ? outcome.sources : [];
+	if (sources.length) {
+		const block = element('div', { className: 'detail-block' });
+		block.append(element('h4', { text: 'Sources' }));
+		const ul = element('ul', { className: 'detail-list' });
+		sources.slice(0, 10).forEach((source) => ul.append(sourceLink(source)));
+		block.append(ul);
+		panel.append(block);
+	}
+
+	const tokens = asObject(outcome && outcome.tokenUsage);
+	if (tokens.totalTokens !== undefined || tokens.totalCost !== undefined) {
+		panel.append(element('p', {
+			className: 'request-state',
+			text: `Token usage: ${tokens.inputTokens ?? '?'} in · ${tokens.outputTokens ?? '?'} out · ${tokens.totalTokens ?? '?'} total`
+				+ (tokens.totalCost !== undefined ? ` · Cost: $${tokens.totalCost}` : ''),
+		}));
+	}
+
+	return panel;
+};
+
+const createOutcomeCard = (outcome) => {
+	const card = element('article', { className: 'operation-card outcome-card' });
+	const headCopy = element('div');
+	const symbolExchange = `${outcome && outcome.symbol ? outcome.symbol : 'UNKNOWN'}${outcome && outcome.exchange ? ` · ${outcome.exchange}` : ''}`;
+	headCopy.append(element('p', {
+		className: 'eyebrow',
+		text: outcome && outcome.source ? `Source: ${outcome.source}` : 'Signal outcome',
+	}));
+	headCopy.append(element('h4', {
+		className: 'outcome-title',
+		text: symbolExchange,
+	}));
+	if (outcome && outcome.id) {
+		const idLine = element('p', { className: 'mono-line', text: String(outcome.id) });
+		idLine.append(createCopyButton(String(outcome.id), 'Copy ID'));
+		headCopy.append(idLine);
+	}
+	const badges = element('div', { className: 'badge-row' });
+	if (outcome && outcome.receivedAt) badges.append(createTimestamp(outcome.receivedAt));
+	if (outcome && outcome.side) {
+		badges.append(element('span', {
+			className: `status-badge ${outcome.side === 'SELL' ? 'status-disabled' : 'status-ready'}`,
+			text: outcome.side,
+		}));
+	}
+	badges.append(outcome && outcome.outcomeEvaluated
+		? element('span', { className: 'status-badge status-ready', text: 'Evaluated' })
+		: element('span', { className: 'status-badge status-disabled', text: 'Pending' }));
+	if (outcome && outcome.setupType) {
+		badges.append(element('span', { className: 'status-badge', text: outcome.setupType }));
+	}
+	if (outcome && outcome.timeframe) {
+		badges.append(element('span', { className: 'status-badge', text: outcome.timeframe }));
+	}
+	if (outcome && typeof outcome.score === 'number') {
+		badges.append(element('span', { className: 'status-badge', text: `Score: ${outcome.score}` }));
+	}
+
+	const head = element('div', { className: 'section-heading' });
+	head.append(headCopy, badges);
+	card.append(head);
+
+	const levels = element('div', { className: 'levels-grid' });
+	const levelItems = [
+		['Entry Price', outcome && typeof outcome.price === 'number' ? outcome.price : '—'],
+		['Stop Loss', outcome && typeof outcome.stop === 'number' ? outcome.stop : '—'],
+		['Target Price', outcome && typeof outcome.target === 'number' ? outcome.target : '—'],
+		['Price Source', outcome && outcome.entryPriceSource ? outcome.entryPriceSource : '—'],
+	];
+	levelItems.forEach(([label, val]) => {
+		const col = element('div');
+		col.append(element('p', { className: 'metric-label', text: label }));
+		col.append(element('p', { className: 'levels-value', text: String(val) }));
+		levels.append(col);
+	});
+	card.append(levels);
+
+	if (outcome && outcome.eligibilityReason) {
+		card.append(element('p', {
+			className: 'request-state',
+			text: `Eligibility: ${outcome.eligibilityReason}`,
+		}));
+	}
+
+	const outcomesMap = asObject(outcome && outcome.outcomes);
+	const windowKeys = ['1h', '4h', '1D', '1W'];
+	const windowsGrid = element('div', { className: 'outcome-windows-grid' });
+	windowKeys.forEach((winKey) => {
+		const win = outcomesMap[winKey] || outcomesMap[winKey.toLowerCase()] || null;
+		const winCard = element('div', { className: 'outcome-window-card' });
+		const winHead = element('div', { className: 'outcome-window-header' });
+		winHead.append(element('strong', { text: winKey }));
+		if (!win) {
+			winHead.append(element('span', { className: 'status-badge status-disabled', text: 'No data' }));
+			winCard.append(winHead);
+		} else if (win.status === 'pending') {
+			winHead.append(element('span', { className: 'status-badge status-disabled', text: 'Pending' }));
+			winCard.append(winHead);
+		} else if (win.status === 'unavailable') {
+			winHead.append(element('span', { className: 'status-badge status-misconfigured', text: 'Unavailable' }));
+			winCard.append(winHead);
+			if (win.reason) {
+				winCard.append(element('span', { className: 'timestamp', text: String(win.reason) }));
+			}
+		} else if (win.status === 'evaluated') {
+			winHead.append(element('span', { className: 'status-badge status-ready', text: 'Evaluated' }));
+			winCard.append(winHead);
+
+			if (typeof win.return === 'number') {
+				const retClass = win.return >= 0 ? 'outcome-return-pos' : 'outcome-return-neg';
+				const retText = `${win.return > 0 ? '+' : ''}${win.return.toFixed(2)}%`;
+				const retRow = element('div', { className: 'outcome-stat-row' });
+				retRow.append(element('span', { text: 'Return' }), element('span', { className: retClass, text: retText }));
+				winCard.append(retRow);
+			}
+
+			if (typeof win.rMultiple === 'number') {
+				const rClass = win.rMultiple >= 0 ? 'outcome-return-pos' : 'outcome-return-neg';
+				const rText = `${win.rMultiple > 0 ? '+' : ''}${win.rMultiple.toFixed(2)}R`;
+				const rRow = element('div', { className: 'outcome-stat-row' });
+				rRow.append(element('span', { text: 'R-Multiple' }), element('span', { className: rClass, text: rText }));
+				winCard.append(rRow);
+			}
+
+			if (typeof win.maxFavorableExcursion === 'number' || typeof win.maxAdverseExcursion === 'number') {
+				const mfeMaeRow = element('div', { className: 'outcome-stat-row' });
+				mfeMaeRow.append(
+					element('span', { text: 'MFE / MAE' }),
+					element('span', { text: `+${(win.maxFavorableExcursion ?? 0).toFixed(2)}% / ${(win.maxAdverseExcursion ?? 0).toFixed(2)}%` }),
+				);
+				winCard.append(mfeMaeRow);
+			}
+
+			if (win.firstHit || win.targetHit || win.stopHit) {
+				const hitRow = element('div', { className: 'outcome-stat-row' });
+				const hitSummary = win.firstHit ? `First: ${win.firstHit}` : (win.targetHit ? 'Target hit' : (win.stopHit ? 'Stop hit' : 'None'));
+				hitRow.append(element('span', { text: 'Barriers' }), element('span', { text: hitSummary }));
+				winCard.append(hitRow);
+			}
+
+			if (typeof win.price === 'number') {
+				const exitRow = element('div', { className: 'outcome-stat-row' });
+				exitRow.append(element('span', { text: 'Exit price' }), element('span', { text: String(win.price) }));
+				winCard.append(exitRow);
+			}
+		}
+		windowsGrid.append(winCard);
+	});
+	card.append(windowsGrid);
+
+	const detailsToggle = element('button', { text: 'Show detail' });
+	detailsToggle.type = 'button';
+	const detailHost = element('div');
+	let builtDetail = false;
+	detailsToggle.addEventListener('click', () => {
+		const expanded = detailHost.hidden;
+		if (expanded && !builtDetail) {
+			detailHost.replaceChildren(createOutcomeDetailPanel(outcome));
+			builtDetail = true;
+		}
+		detailHost.hidden = !expanded;
+		detailsToggle.textContent = expanded ? 'Hide detail' : 'Show detail';
+	});
+	detailHost.hidden = true;
+	card.append(detailsToggle, detailHost);
+
+	return card;
+};
+
+const createOutcomesListForm = () => {
+	const definition = { method: 'GET', path: '/api/outcomes', label: 'Load outcomes' };
+	const form = element('form', { className: 'operation-card' });
+	form.append(
+		element('h3', { text: definition.label }),
+		element('code', { text: `${definition.method} ${definition.path}` }),
+	);
+	const symbol = addField(form, 'Symbol', 'symbol', { placeholder: 'BTCUSDT or BINANCE:BTCUSDT' });
+	const exchange = addField(form, 'Exchange', 'exchange', { placeholder: 'BINANCE' });
+	const status = addField(form, 'Status', 'status', { tag: 'select' });
+	[
+		['', 'All statuses'],
+		['pending', 'Pending'],
+		['evaluated', 'Evaluated'],
+		['unavailable', 'Unavailable'],
+	].forEach(([value, text]) => {
+		const option = element('option', { text });
+		option.value = value;
+		status.append(option);
+	});
+	const windowField = addField(form, 'Window', 'window', { tag: 'select' });
+	[
+		['', 'All windows'],
+		['1h', '1h'],
+		['4h', '4h'],
+		['1D', '1D'],
+		['1W', '1W'],
+	].forEach(([value, text]) => {
+		const option = element('option', { text });
+		option.value = value;
+		windowField.append(option);
+	});
+	const from = addField(form, 'From', 'from', { placeholder: 'ISO-8601 timestamp' });
+	const to = addField(form, 'To', 'to', { placeholder: 'ISO-8601 timestamp' });
+	const limit = addField(form, 'Limit', 'limit', { type: 'number', min: 1, max: 100, value: 50 });
+	const before = addField(form, 'Before cursor', 'before', { placeholder: 'nextBefore from the previous page' });
+
+	const button = element('button', { text: definition.label });
+	button.type = 'submit';
+	const prev = element('button', { text: 'Previous page' });
+	prev.type = 'button';
+	prev.disabled = true;
+	const next = element('button', { text: 'Next page' });
+	next.type = 'button';
+	next.disabled = true;
+	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
+	const outcomeList = element('div', { className: 'form-fields outcome-list' });
+	let lastRawJson = '';
+	const rawOutput = element('pre', { className: 'response-block' });
+	const rawCopyButton = createCopyButton(() => lastRawJson, 'Copy JSON');
+	rawCopyButton.hidden = true;
+	const rawToggle = element('details', { className: 'raw-status' });
+	rawToggle.append(
+		element('summary', { text: 'Show raw response' }),
+		rawCopyButton,
+		rawOutput,
+	);
+	form.append(button, prev, next, output, outcomeList, rawToggle);
+
+	let nextBefore;
+	let backCursors = [];
+	let pageGeneration = 0;
+	const requestPage = async (cursor) => {
+		const generation = ++pageGeneration;
+		prev.disabled = true;
+		next.disabled = true;
+		before.value = cursor || '';
+		const query = Object.fromEntries(Object.entries({
+			limit: limit.value,
+			before: before.value,
+			symbol: symbol.value,
+			exchange: exchange.value,
+			status: status.value,
+			window: windowField.value,
+			from: from.value,
+			to: to.value,
+		}).filter(([, value]) => value !== ''));
+		const data = await sendRequest({
+			definition,
+			path: definition.path,
+			query,
+			button,
+			output,
+			isCurrent: () => generation === pageGeneration,
+			formatResponse: ({ summary, status: respStatus, elapsed, data: payload }) => `${summary}\nHTTP ${respStatus} · ${elapsed} ms · `
+				+ `${payload && Array.isArray(payload.outcomes) ? `${payload.outcomes.length} outcomes on this page` : 'no outcome list returned'}`,
+		});
+		if (generation !== pageGeneration) return false;
+		if (data && Array.isArray(data.outcomes)) {
+			lastRawJson = JSON.stringify(data, null, 2);
+			rawOutput.textContent = lastRawJson;
+			rawCopyButton.hidden = false;
+			outcomeList.replaceChildren();
+			if (!data.outcomes.length) {
+				outcomeList.append(createEmptyState('No recorded outcomes match these filters.'));
+			} else {
+				data.outcomes.forEach((outcome) => outcomeList.append(createOutcomeCard(outcome)));
+			}
+		} else {
+			lastRawJson = '';
+			rawOutput.textContent = '';
+			rawCopyButton.hidden = true;
+			outcomeList.replaceChildren();
+		}
+		const pagination = (data && data.pagination) || {};
+		nextBefore = pagination.hasMore === true && pagination.nextBefore
+			? pagination.nextBefore
+			: undefined;
+		next.disabled = !nextBefore;
+		prev.disabled = !backCursors.length;
+		return Boolean(data && Array.isArray(data.outcomes));
+	};
+	const syncPagingButtons = () => {
+		next.disabled = !nextBefore;
+		prev.disabled = !backCursors.length;
+	};
+	const resetPagination = ({ clearCursor }) => {
+		pageGeneration += 1;
+		nextBefore = undefined;
+		backCursors = [];
+		next.disabled = true;
+		prev.disabled = true;
+		button.disabled = false;
+		outcomeList.replaceChildren();
+		lastRawJson = '';
+		rawOutput.textContent = '';
+		rawCopyButton.hidden = true;
+		output.textContent = 'Filters changed — load outcomes to refresh.';
+		if (clearCursor) before.value = '';
+	};
+	[limit, symbol, exchange, status, windowField, from, to].forEach((field) => {
+		field.addEventListener('input', () => resetPagination({ clearCursor: true }));
+		field.addEventListener('change', () => resetPagination({ clearCursor: true }));
+	});
+	before.addEventListener('input', () => resetPagination({ clearCursor: false }));
+	before.addEventListener('change', () => resetPagination({ clearCursor: false }));
+	form.addEventListener('submit', (event) => {
+		event.preventDefault();
+		backCursors = [];
+		return requestPage(before.value);
+	});
+	next.addEventListener('click', () => {
+		if (!nextBefore) return;
+		const entry = before.value || '';
+		Promise.resolve(requestPage(nextBefore)).then((succeeded) => {
+			if (!succeeded) return;
+			backCursors.push(entry);
+			syncPagingButtons();
+		});
+	});
+	prev.addEventListener('click', () => {
+		if (!backCursors.length) return;
+		const target = backCursors[backCursors.length - 1];
+		Promise.resolve(requestPage(target)).then((succeeded) => {
+			if (!succeeded) return;
+			backCursors.pop();
+			syncPagingButtons();
+		});
+	});
+	return form;
+};
+
+const renderOutcomesSummaryBlocks = (data) => {
+	const summary = asObject(data && data.summary);
+	const wrap = element('div', { className: 'dashboard' });
+	const metrics = element('div', { className: 'metric-grid' });
+	wrap.append(metrics);
+
+	const totalSignals = summary.totalSignalsReceived ?? summary.totalSignals ?? 0;
+	const totalEligible = summary.totalSignalsEligible ?? 0;
+	const totalEvaluated = summary.totalSignalsEvaluated ?? 0;
+	const totalPending = summary.totalSignalsPending ?? 0;
+	const winRate = summary.winRatePercent ?? summary.overallHitRatePercent;
+	const expR = summary.expectancyR;
+	const avgReturn = summary.averageReturnPercent;
+
+	metrics.append(
+		createMetricCard(
+			'Signals',
+			formatJobValue(totalSignals),
+			`${formatJobValue(totalEligible)} eligible · ${formatJobValue(totalEvaluated)} evaluated · ${formatJobValue(totalPending)} pending`,
+		),
+		createMetricCard(
+			'Hit rate',
+			winRate !== undefined && winRate !== null ? `${winRate}%` : '—',
+			'Evaluated signals meeting targets',
+		),
+		createMetricCard(
+			'Average return',
+			avgReturn !== undefined && avgReturn !== null ? `${avgReturn > 0 ? '+' : ''}${avgReturn}%` : '—',
+			expR !== undefined && expR !== null ? `Expectancy ${expR > 0 ? '+' : ''}${expR}R` : 'Average per evaluated window',
+		),
+		createMetricCard(
+			'MFE / MAE',
+			summary.averageMfePercent !== undefined ? `+${summary.averageMfePercent}%` : '—',
+			summary.averageMaePercent !== undefined ? `Avg MAE: ${summary.averageMaePercent}%` : 'Excursion metrics',
+		),
+	);
+
+	const windows = asObject(summary.windows || summary.byWindow);
+	const windowEntries = Object.entries(windows);
+	if (windowEntries.length) {
+		const section = element('section', { className: 'dashboard-section' });
+		section.append(element('h3', { text: 'Performance by window' }));
+		const table = element('table', { className: 'data-table' });
+		const head = element('tr');
+		['Window', 'Evaluated', 'Hit rate', 'Target hit', 'Stop hit', 'Exp (R)', 'Avg return', 'Avg MFE', 'Avg MAE'].forEach((label) => head.append(element('th', { text: label })));
+		table.append(head);
+		windowEntries.forEach(([winKey, stats]) => {
+			const detail = asObject(stats);
+			const row = element('tr');
+			row.append(
+				element('td', { text: winKey }),
+				element('td', { text: formatJobValue(detail.totalSignals ?? detail.evaluatedCount) }),
+				element('td', { text: detail.hitRatePercent !== undefined ? `${detail.hitRatePercent}%` : '—' }),
+				element('td', { text: detail.targetHitRatePercent !== undefined ? `${detail.targetHitRatePercent}%` : '—' }),
+				element('td', { text: detail.stopHitRatePercent !== undefined ? `${detail.stopHitRatePercent}%` : '—' }),
+				element('td', { text: detail.expectancyR !== undefined && detail.expectancyR !== null ? `${detail.expectancyR > 0 ? '+' : ''}${detail.expectancyR}R` : '—' }),
+				element('td', { text: detail.averageReturnPercent !== undefined ? `${detail.averageReturnPercent > 0 ? '+' : ''}${detail.averageReturnPercent}%` : '—' }),
+				element('td', { text: detail.averageMfePercent !== undefined ? `+${detail.averageMfePercent}%` : '—' }),
+				element('td', { text: detail.averageMaePercent !== undefined ? `${detail.averageMaePercent}%` : '—' }),
+			);
+			table.append(row);
+		});
+		section.append(table);
+		wrap.append(section);
+	}
+
+	return wrap;
+};
+
+const createOutcomesSummaryForm = () => {
+	const definition = { method: 'GET', path: '/api/outcomes/summary', label: 'Load outcomes summary' };
+	const form = element('form', { className: 'operation-card' });
+	form.append(
+		element('h3', { text: definition.label }),
+		element('code', { text: `${definition.method} ${definition.path}` }),
+	);
+	const symbol = addField(form, 'Symbol', 'symbol', { placeholder: 'BTCUSDT or BINANCE:BTCUSDT' });
+	const exchange = addField(form, 'Exchange', 'exchange', { placeholder: 'BINANCE' });
+	const status = addField(form, 'Status', 'status', { tag: 'select' });
+	[
+		['', 'All statuses'],
+		['pending', 'Pending'],
+		['evaluated', 'Evaluated'],
+		['unavailable', 'Unavailable'],
+	].forEach(([value, text]) => {
+		const option = element('option', { text });
+		option.value = value;
+		status.append(option);
+	});
+	const windowField = addField(form, 'Window', 'window', { tag: 'select' });
+	[
+		['', 'All windows'],
+		['1h', '1h'],
+		['4h', '4h'],
+		['1D', '1D'],
+		['1W', '1W'],
+	].forEach(([value, text]) => {
+		const option = element('option', { text });
+		option.value = value;
+		windowField.append(option);
+	});
+	const from = addField(form, 'From', 'from', { placeholder: 'ISO-8601 timestamp' });
+	const to = addField(form, 'To', 'to', { placeholder: 'ISO-8601 timestamp' });
+	const limit = addField(form, 'Limit', 'limit', { type: 'number', min: 1, max: 100, value: 50 });
+
+	const button = element('button', { text: definition.label });
+	button.type = 'submit';
+	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
+	const blocks = element('div', { className: 'summary-host' });
+	let lastRawJson = '';
+	const rawOutput = element('pre', { className: 'response-block' });
+	const rawCopyButton = createCopyButton(() => lastRawJson, 'Copy JSON');
+	rawCopyButton.hidden = true;
+	const rawToggle = element('details', { className: 'raw-status' });
+	rawToggle.append(
+		element('summary', { text: 'Show raw summary response' }),
+		rawCopyButton,
+		rawOutput,
+	);
+	form.append(button, output, blocks, rawToggle);
+
+	let summaryGeneration = 0;
+	const invalidateSummary = () => {
+		summaryGeneration += 1;
+		button.disabled = false;
+		blocks.replaceChildren();
+		lastRawJson = '';
+		rawOutput.textContent = '';
+		rawCopyButton.hidden = true;
+		output.textContent = 'Filters changed — load outcomes summary to refresh.';
+	};
+	[symbol, exchange, status, windowField, from, to, limit].forEach((field) => {
+		field.addEventListener('input', invalidateSummary);
+		field.addEventListener('change', invalidateSummary);
+	});
+	form.addEventListener('submit', (event) => {
+		event.preventDefault();
+		const generation = ++summaryGeneration;
+		const query = Object.fromEntries(Object.entries({
+			limit: limit.value,
+			symbol: symbol.value,
+			exchange: exchange.value,
+			status: status.value,
+			window: windowField.value,
+			from: from.value,
+			to: to.value,
+		}).filter(([, value]) => value !== ''));
+		sendRequest({
+			definition,
+			path: definition.path,
+			query,
+			button,
+			output,
+			isCurrent: () => generation === summaryGeneration,
+			formatResponse: ({ summary: sumText, status: respStatus, elapsed, data }) => {
+				if (!data || !data.summary) return `${sumText}\nHTTP ${respStatus} · ${elapsed} ms\n\nNo summary data returned.`;
+				lastRawJson = JSON.stringify(data, null, 2);
+				return `${sumText}\nHTTP ${respStatus} · ${elapsed} ms`;
+			},
+		}).then((data) => {
+			if (generation !== summaryGeneration) return;
+			if (!data || !data.summary) {
+				blocks.replaceChildren();
+				lastRawJson = '';
+				rawOutput.textContent = '';
+				rawCopyButton.hidden = true;
+				return;
+			}
+			blocks.replaceChildren(renderOutcomesSummaryBlocks(data));
+			rawOutput.textContent = lastRawJson;
+			rawCopyButton.hidden = false;
+		});
+	});
+	return form;
+};
+
 const getQueryEnum = (contract, definition, name) => {
 	const operation = getOperation(contract, definition);
 	const parameter = getParameters(contract, operation).find((item) => item.name === name);
@@ -2136,6 +2700,11 @@ const renderView = async (name) => {
 			view.append(createAlertListForm());
 			view.append(createAlertSummaryForm(), createAlertExportForm());
 			VIEW_ACTIONS.alerts.forEach((definition) => view.append(createOperationForm(contract, definition)));
+			return;
+		}
+		if (name === 'outcomes') {
+			view.append(createOutcomesListForm());
+			view.append(createOutcomesSummaryForm());
 			return;
 		}
 		if (name === 'jobs') {

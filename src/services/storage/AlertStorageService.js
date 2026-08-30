@@ -388,6 +388,114 @@ function finalizeRiskMetadataCoverageByProvenance(coverage) {
 	coverage.byPromptProvenance.forEach(finalizeRiskMetadataCoverage);
 }
 
+// ---------------------------------------------------------------------------
+// Evidence coverage — tracks how many enriched alerts cited grounding sources.
+// Mirrors the riskMetadataCoverage pattern: a top-level bucket plus a
+// byPromptProvenance sub-array so regressions can be attributed to a specific
+// prompt version vs. the local fallback.
+// ---------------------------------------------------------------------------
+
+function createEvidenceCoverageBucket() {
+	return {
+		denominator: 0,
+		zeroSources: { populated: 0, percentage: 0 },
+		oneToTwoSources: { populated: 0, percentage: 0 },
+		threePlusSources: { populated: 0, percentage: 0 },
+		totalSourceCount: 0,
+		averageSourceCount: 0,
+	};
+}
+
+function getSourceCount(enrichmentData) {
+	const sources = enrichmentData && typeof enrichmentData === 'object'
+		? enrichmentData.sources
+		: undefined;
+	if (Array.isArray(sources)) {
+		return sources.length;
+	}
+	if (typeof sources === 'number' && Number.isFinite(sources) && sources >= 0) {
+		return Math.floor(sources);
+	}
+	// Legacy records lacking a sources field count as zero (fail-safe: no crash).
+	return 0;
+}
+
+function recordEvidenceCoverage(bucket, enrichmentData) {
+	bucket.denominator += 1;
+	const count = getSourceCount(enrichmentData);
+	bucket.totalSourceCount += count;
+	if (count === 0) {
+		bucket.zeroSources.populated += 1;
+	} else if (count <= 2) {
+		bucket.oneToTwoSources.populated += 1;
+	} else {
+		bucket.threePlusSources.populated += 1;
+	}
+}
+
+function finalizeEvidenceCoverage(bucket) {
+	const denom = bucket.denominator;
+	const pct = (n) => (denom === 0 ? 0 : Number(((n / denom) * 100).toFixed(2)));
+	bucket.zeroSources.percentage = pct(bucket.zeroSources.populated);
+	bucket.oneToTwoSources.percentage = pct(bucket.oneToTwoSources.populated);
+	bucket.threePlusSources.percentage = pct(bucket.threePlusSources.populated);
+	bucket.averageSourceCount = denom === 0
+		? 0
+		: Number((bucket.totalSourceCount / denom).toFixed(2));
+}
+
+function getEvidenceProvenanceGroup(coverage, provenance) {
+	const safeProvenanceKey = provenance
+		? {
+			name: provenance.name,
+			source: provenance.source,
+			label: provenance.label,
+			version: provenance.version,
+		}
+		: null;
+	const key = JSON.stringify(safeProvenanceKey);
+	let group = coverage.byPromptProvenance.find(item => {
+		const itemKey = item.provenance
+			? JSON.stringify({
+				name: item.provenance.name,
+				source: item.provenance.source,
+				label: item.provenance.label,
+				version: item.provenance.version,
+			})
+			: JSON.stringify(null);
+		return itemKey === key;
+	});
+
+	if (!group) {
+		group = {
+			provenance: provenance
+				? {
+					...safeProvenanceKey,
+					schemaDriftDetected: Boolean(provenance.schemaDriftDetected),
+				}
+				: null,
+			...createEvidenceCoverageBucket(),
+		};
+		coverage.byPromptProvenance.push(group);
+	} else if (provenance?.schemaDriftDetected && group.provenance) {
+		group.provenance.schemaDriftDetected = true;
+	}
+
+	return group;
+}
+
+function recordEvidenceCoverageByProvenance(coverage, enrichmentData) {
+	recordEvidenceCoverage(coverage, enrichmentData);
+	const provenance = normalizePromptProvenance(enrichmentData && enrichmentData.promptProvenance);
+	const group = getEvidenceProvenanceGroup(coverage, provenance);
+	recordEvidenceCoverage(group, enrichmentData);
+}
+
+function finalizeEvidenceCoverageByProvenance(coverage) {
+	finalizeEvidenceCoverage(coverage);
+	coverage.byPromptProvenance.forEach(finalizeEvidenceCoverage);
+}
+
 function incrementCounter(target, key) {
 	const normalizedKey = typeof key === 'string' && key.trim()
 		? key.trim()
