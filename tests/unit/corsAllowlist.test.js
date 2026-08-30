@@ -3,6 +3,10 @@ const express = require('express');
 const request = require('supertest');
 
 const {
+	DEFAULT_CORS_ALLOWED_ORIGINS,
+	normalizeHttpOrigin,
+	isFirebasePreviewOrigin,
+	isAllowedOrigin,
 	parseCorsAllowedOrigins,
 	buildCorsMiddleware,
 } = require('../../src/lib/corsAllowlist');
@@ -13,10 +17,46 @@ describe('CORS allowlist', () => {
 	beforeEach(() => {
 		savedEnv = saveEnv();
 		delete process.env.CORS_ALLOWED_ORIGINS;
+		delete process.env.FIREBASE_PROJECT_ID;
 	});
 
 	afterEach(() => {
 		restoreEnv(savedEnv);
+	});
+
+	describe('normalizeHttpOrigin', () => {
+		test('normalizes origins with trailing slashes, paths, or uppercase hostnames', () => {
+			expect(normalizeHttpOrigin('https://staging.example.com/')).toBe('https://staging.example.com');
+			expect(normalizeHttpOrigin('https://STAGING.EXAMPLE.COM/some/path')).toBe('https://staging.example.com');
+			expect(normalizeHttpOrigin('http://localhost:3000/')).toBe('http://localhost:3000');
+		});
+
+		test('returns null for non-http(s) schemes or invalid inputs', () => {
+			expect(normalizeHttpOrigin('ftp://example.com')).toBeNull();
+			expect(normalizeHttpOrigin('javascript:alert(1)')).toBeNull();
+			expect(normalizeHttpOrigin('not a url')).toBeNull();
+			expect(normalizeHttpOrigin(null)).toBeNull();
+			expect(normalizeHttpOrigin('')).toBeNull();
+		});
+	});
+
+	describe('isFirebasePreviewOrigin', () => {
+		test('matches project ephemeral preview channels on web.app and firebaseapp.com', () => {
+			expect(isFirebasePreviewOrigin('https://cabros-bot--pr900-xyz.web.app')).toBe(true);
+			expect(isFirebasePreviewOrigin('https://cabros-bot--pr-123.firebaseapp.com')).toBe(true);
+		});
+
+		test('rejects other projects or non-https preview origins', () => {
+			expect(isFirebasePreviewOrigin('https://other-project--pr900.web.app')).toBe(false);
+			expect(isFirebasePreviewOrigin('http://cabros-bot--pr900.web.app')).toBe(false);
+			expect(isFirebasePreviewOrigin('https://cabros-bot.web.app')).toBe(false);
+			expect(isFirebasePreviewOrigin('https://cabros-bot--pr900.web.app:8080')).toBe(false);
+		});
+
+		test('supports custom FIREBASE_PROJECT_ID', () => {
+			expect(isFirebasePreviewOrigin('https://my-custom-app--pr5.web.app', 'my-custom-app')).toBe(true);
+			expect(isFirebasePreviewOrigin('https://cabros-bot--pr5.web.app', 'my-custom-app')).toBe(false);
+		});
 	});
 
 	describe('parseCorsAllowedOrigins', () => {
@@ -25,11 +65,13 @@ describe('CORS allowlist', () => {
 			expect(origins.has('https://cabros-bot.web.app')).toBe(true);
 			expect(origins.has('https://cabros-bot.firebaseapp.com')).toBe(true);
 			expect(origins.has('https://cabros-bot-production.up.railway.app')).toBe(true);
+			expect(origins.isDefault).toBe(true);
 		});
 
 		test('returns the documented defaults when CORS_ALLOWED_ORIGINS is empty', () => {
 			const origins = parseCorsAllowedOrigins('');
 			expect(origins.size).toBe(3);
+			expect(origins.isDefault).toBe(true);
 		});
 
 		test('replaces the defaults with the explicit override list (no silent merge)', () => {
@@ -38,10 +80,11 @@ describe('CORS allowlist', () => {
 			expect(origins.has('https://preview.example.com')).toBe(true);
 			expect(origins.has('https://cabros-bot.web.app')).toBe(false);
 			expect(origins.size).toBe(2);
+			expect(origins.isDefault).toBe(false);
 		});
 
-		test('trims whitespace and drops blank entries from an explicit override', () => {
-			const origins = parseCorsAllowedOrigins('  https://a.example.com ,, https://b.example.com ');
+		test('trims whitespace, normalizes paths/slashes, and drops blank entries from an explicit override', () => {
+			const origins = parseCorsAllowedOrigins('  https://a.example.com/ ,, https://B.example.com/path ');
 			expect([...origins].sort()).toEqual([
 				'https://a.example.com',
 				'https://b.example.com',
@@ -54,12 +97,14 @@ describe('CORS allowlist', () => {
 			expect(origins.has('javascript:alert(1)')).toBe(false);
 			expect(origins.has('https://cabros-bot.web.app')).toBe(true);
 			expect(origins.size).toBe(3);
+			expect(origins.isDefault).toBe(true);
 		});
 
 		test('accepts the wildcard as an explicit override (documented opt-in for local testing)', () => {
 			const origins = parseCorsAllowedOrigins('*');
 			expect(origins.has('*')).toBe(true);
 			expect(origins.size).toBe(1);
+			expect(origins.isDefault).toBe(false);
 		});
 
 		test('refuses a mixed wildcard + explicit-origin list to avoid ambiguous intent', () => {
@@ -67,6 +112,7 @@ describe('CORS allowlist', () => {
 			expect(origins.has('*')).toBe(false);
 			expect(origins.has('https://staging.example.com')).toBe(false);
 			expect(origins.has('https://cabros-bot.web.app')).toBe(true);
+			expect(origins.isDefault).toBe(true);
 		});
 
 		test('returns a new Set on every call so callers cannot mutate the defaults', () => {
@@ -78,9 +124,9 @@ describe('CORS allowlist', () => {
 	});
 
 	describe('buildCorsMiddleware', () => {
-		function makeApp() {
+		function makeApp(options) {
 			const app = express();
-			app.use(buildCorsMiddleware(parseCorsAllowedOrigins(undefined)));
+			app.use(buildCorsMiddleware(parseCorsAllowedOrigins(undefined), options));
 			app.get('/api/test', (_req, res) => res.json({ ok: true }));
 			return app;
 		}
@@ -97,6 +143,14 @@ describe('CORS allowlist', () => {
 				.set('Origin', 'https://cabros-bot.web.app');
 			expect(response.status).toBe(200);
 			expect(response.headers['access-control-allow-origin']).toBe('https://cabros-bot.web.app');
+		});
+
+		test('grants Access-Control-Allow-Origin for Firebase PR preview channels by default', async () => {
+			const response = await request(makeApp())
+				.get('/api/test')
+				.set('Origin', 'https://cabros-bot--pr900-xyz.web.app');
+			expect(response.status).toBe(200);
+			expect(response.headers['access-control-allow-origin']).toBe('https://cabros-bot--pr900-xyz.web.app');
 		});
 
 		test('omits Access-Control-Allow-Origin for a disallowed origin', async () => {
@@ -129,8 +183,8 @@ describe('CORS allowlist', () => {
 			expect(response.headers['access-control-allow-origin']).toBeUndefined();
 		});
 
-		test('honors CORS_ALLOWED_ORIGINS overrides when building the middleware', async () => {
-			process.env.CORS_ALLOWED_ORIGINS = 'https://staging.example.com';
+		test('honors CORS_ALLOWED_ORIGINS overrides with trailing slashes when building the middleware', async () => {
+			process.env.CORS_ALLOWED_ORIGINS = 'https://staging.example.com/';
 			const app = express();
 			app.use(buildCorsMiddleware(parseCorsAllowedOrigins(process.env.CORS_ALLOWED_ORIGINS)));
 			app.get('/api/test', (_req, res) => res.json({ ok: true }));

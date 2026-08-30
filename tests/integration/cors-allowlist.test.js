@@ -38,6 +38,16 @@ describe('App-level CORS allowlist integration', () => {
 		expect(response.headers.vary).toContain('Origin');
 	});
 
+	test('grants CORS headers for default Firebase PR preview channels', async () => {
+		const app = loadApp();
+		const response = await request(app)
+			.get('/healthcheck')
+			.set('Origin', 'https://cabros-bot--pr900-xyz.web.app');
+		expect(response.status).toBe(200);
+		expect(response.headers['access-control-allow-origin']).toBe('https://cabros-bot--pr900-xyz.web.app');
+		expect(response.headers.vary).toContain('Origin');
+	});
+
 	test('omits CORS headers for a disallowed browser origin', async () => {
 		const app = loadApp();
 		const response = await request(app)
