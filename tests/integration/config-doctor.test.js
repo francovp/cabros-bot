@@ -10,7 +10,7 @@ describe('configuration doctor process', () => {
 		env.ENABLE_WHATSAPP_ALERTS = 'true';
 		env.WHATSAPP_API_URL = 'https://api.green-api.com/waInstance/';
 		env.WHATSAPP_CHAT_ID = '120363000000000000@g.us';
-		delete env.WHATSAPP_API_KEY;
+		env.WHATSAPP_API_KEY = '';
 
 		const result = spawnSync(process.execPath, ['scripts/validate-env.js'], {
 			cwd: repoRoot,
@@ -24,6 +24,35 @@ describe('configuration doctor process', () => {
 		expect(output).toContain('.env.example');
 	});
 
+	it('logs startup warnings in worker.js and signalOutcomeWorker.js', () => {
+		const env = { ...process.env };
+		env.NODE_ENV = 'test';
+		env.LOG_LEVEL = 'info';
+		env.ENABLE_WHATSAPP_ALERTS = 'true';
+		env.WHATSAPP_API_URL = 'https://api.green-api.com/waInstance/';
+		env.WHATSAPP_CHAT_ID = '120363000000000000@g.us';
+		env.WHATSAPP_API_KEY = '';
+		env.ENABLE_SENTRY = 'false';
+
+		const workerResult = spawnSync(process.execPath, ['worker.js'], {
+			cwd: repoRoot,
+			env,
+			encoding: 'utf8',
+		});
+		const workerOutput = `${workerResult.stdout}${workerResult.stderr}`;
+		expect(workerOutput).toContain('WHATSAPP_API_KEY');
+		expect(workerOutput).toContain('Configuration warning');
+
+		const signalWorkerResult = spawnSync(process.execPath, ['src/workers/signalOutcomeWorker.js'], {
+			cwd: repoRoot,
+			env,
+			encoding: 'utf8',
+		});
+		const signalWorkerOutput = `${signalWorkerResult.stdout}${signalWorkerResult.stderr}`;
+		expect(signalWorkerOutput).toContain('WHATSAPP_API_KEY');
+		expect(signalWorkerOutput).toContain('Configuration warning');
+	});
+
 	it('logs startup warnings without preventing server boot or Telegram gating', async () => {
 		const env = { ...process.env };
 		Object.assign(env, {
@@ -35,6 +64,7 @@ describe('configuration doctor process', () => {
 			ENABLE_WHATSAPP_ALERTS: 'true',
 			WHATSAPP_API_URL: 'https://api.green-api.com/waInstance/',
 			WHATSAPP_CHAT_ID: '120363000000000000@g.us',
+			WHATSAPP_API_KEY: '',
 			ENABLE_GEMINI_GROUNDING: 'false',
 			ENABLE_SENTRY: 'false',
 			ENABLE_NEWS_MONITOR: 'false',
@@ -46,7 +76,6 @@ describe('configuration doctor process', () => {
 			ENABLE_SIGNAL_OUTCOME_TRACKING: 'false',
 			LOG_LEVEL: 'info',
 		});
-		delete env.WHATSAPP_API_KEY;
 
 		const child = spawn(process.execPath, ['index.js'], {
 			cwd: repoRoot,

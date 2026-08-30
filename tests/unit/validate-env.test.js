@@ -64,16 +64,49 @@ describe('validate-env', () => {
 		]));
 	});
 
-	it('reports numeric values outside documented bounds', () => {
+	it('reports numeric values outside documented bounds and rejects fractional integers', () => {
 		process.env.TRADINGVIEW_MCP_TIMEOUT_MS = '10';
-		process.env.TRADINGVIEW_MCP_MAX_RETRIES = '0';
+		process.env.TRADINGVIEW_MCP_MAX_RETRIES = '1.5';
+		process.env.GROUNDING_MAX_SOURCES = '0';
 
 		const variables = validateEnv().map((warning) => warning.variable);
 
 		expect(variables).toEqual(expect.arrayContaining([
 			'TRADINGVIEW_MCP_TIMEOUT_MS',
 			'TRADINGVIEW_MCP_MAX_RETRIES',
+			'GROUNDING_MAX_SOURCES',
 		]));
+	});
+
+	it('accepts personal WhatsApp chat IDs ending with @c.us', () => {
+		process.env.WHATSAPP_CHAT_ID = '56912345678@c.us';
+
+		const warnings = validateEnv();
+
+		expect(warnings.map((w) => w.variable)).not.toContain('WHATSAPP_CHAT_ID');
+	});
+
+	it('resolves preview WhatsApp chat ID in preview environments without warning', () => {
+		process.env.ENABLE_WHATSAPP_ALERTS = 'true';
+		process.env.WHATSAPP_API_URL = 'https://api.green-api.com/waInstance/';
+		process.env.WHATSAPP_API_KEY = 'test-key';
+		process.env.IS_PULL_REQUEST = 'true';
+		process.env.WHATSAPP_PREVIEW_CHAT_ID = '120363000000000000@g.us';
+		delete process.env.WHATSAPP_CHAT_ID;
+
+		const warnings = validateEnv();
+
+		expect(warnings.map((w) => w.variable)).not.toContain('WHATSAPP_CHAT_ID');
+	});
+
+	it('reports missing Firestore credentials when signal outcome tracking is enabled', () => {
+		process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+		delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+		delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
+
+		const warnings = validateEnv();
+
+		expect(warnings.map((w) => w.variable)).toContain('FIREBASE_CREDENTIALS');
 	});
 
 	it('formats warnings with remediation and no raw value', () => {

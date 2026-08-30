@@ -2,6 +2,9 @@
 
 require('dotenv').config();
 require('./instrument.js');
+const { printWarnings, validateEnv } = require('./scripts/validate-env');
+
+printWarnings(validateEnv());
 
 const { Telegraf } = require('telegraf');
 const { initializeNotificationServices } = require('./src/controllers/webhooks/handlers/alert/alert');

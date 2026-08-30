@@ -2,10 +2,11 @@
 'use strict';
 
 const { isFirestoreConfigured } = require('../src/services/storage/firestoreConfig');
+const { isPreviewEnvironment } = require('../src/lib/deploymentEnvironment');
 
 const ENV_EXAMPLE = '.env.example';
 const HTTP_PROTOCOLS = new Set(['http:', 'https:']);
-const NUMERIC_RULES = {
+const INTEGER_RULES = {
 	TRADINGVIEW_MCP_TIMEOUT_MS: [1000, 120000],
 	TRADINGVIEW_MCP_MAX_RETRIES: [1, 5],
 	GROUNDING_TIMEOUT_MS: [1000, 120000],
@@ -44,7 +45,7 @@ function isDiscordWebhookUrl(value) {
 }
 
 function isWhatsAppChatId(value) {
-	return typeof value === 'string' && /^\d+@g\.us$/.test(value.trim());
+	return typeof value === 'string' && /^\d+@(g|c)\.us$/.test(value.trim());
 }
 
 function isSymbolList(value) {
@@ -52,10 +53,16 @@ function isSymbolList(value) {
 	return value.split(',').every((symbol) => /^[A-Za-z0-9._-]+:[A-Za-z0-9._-]+$/.test(symbol.trim()));
 }
 
-function isPositiveNumberInRange(value, [minimum, maximum]) {
+function isIntegerInRange(value, [minimum, maximum]) {
+	if (!/^-?\d+$/.test(String(value).trim())) return false;
+	const parsed = Number(value);
+	return Number.isSafeInteger(parsed) && parsed >= minimum && parsed <= maximum;
+}
+
+function isPositiveNumber(value) {
 	if (!/^-?\d+(?:\.\d+)?$/.test(String(value).trim())) return false;
 	const parsed = Number(value);
-	return Number.isFinite(parsed) && parsed >= minimum && parsed <= maximum;
+	return Number.isFinite(parsed) && parsed > 0;
 }
 
 function addMissing(warnings, variable, value) {
@@ -74,17 +81,23 @@ function validateEnv(env = process.env) {
 		addMissing(warnings, 'TELEGRAM_CHAT_ID', env.TELEGRAM_CHAT_ID);
 	}
 
+	const isPreview = isPreviewEnvironment(env) || env.IS_PULL_REQUEST === 'true';
+	const effectiveWhatsAppChatId = (isPreview && env.WHATSAPP_PREVIEW_CHAT_ID) || env.WHATSAPP_CHAT_ID;
+
 	if (isEnabled(env, 'ENABLE_WHATSAPP_ALERTS')) {
 		addMissing(warnings, 'WHATSAPP_API_URL', env.WHATSAPP_API_URL);
 		addMissing(warnings, 'WHATSAPP_API_KEY', env.WHATSAPP_API_KEY);
-		addMissing(warnings, 'WHATSAPP_CHAT_ID', env.WHATSAPP_CHAT_ID);
+		addMissing(warnings, 'WHATSAPP_CHAT_ID', effectiveWhatsAppChatId);
 	}
 
 	if (hasValue(env.WHATSAPP_API_URL) && !isHttpUrl(env.WHATSAPP_API_URL)) {
 		addInvalid(warnings, 'WHATSAPP_API_URL', 'has an invalid HTTP URL');
 	}
 	if (hasValue(env.WHATSAPP_CHAT_ID) && !isWhatsAppChatId(env.WHATSAPP_CHAT_ID)) {
-		addInvalid(warnings, 'WHATSAPP_CHAT_ID', 'must end with @g.us');
+		addInvalid(warnings, 'WHATSAPP_CHAT_ID', 'must end with @g.us or @c.us');
+	}
+	if (hasValue(env.WHATSAPP_PREVIEW_CHAT_ID) && !isWhatsAppChatId(env.WHATSAPP_PREVIEW_CHAT_ID)) {
+		addInvalid(warnings, 'WHATSAPP_PREVIEW_CHAT_ID', 'must end with @g.us or @c.us');
 	}
 
 	if (isEnabled(env, 'ENABLE_DISCORD_ALERTS')) addMissing(warnings, 'DISCORD_WEBHOOK_URL', env.DISCORD_WEBHOOK_URL);
@@ -127,6 +140,7 @@ function validateEnv(env = process.env) {
 		'ENABLE_FIRESTORE_JOB_STORAGE',
 		'ENABLE_FIRESTORE_IDEMPOTENCY',
 		'ENABLE_FIREBASE_REMOTE_CONFIG',
+		'ENABLE_SIGNAL_OUTCOME_TRACKING',
 	].some((name) => isEnabled(env, name));
 	if (firestoreGateEnabled && !isFirestoreConfigured()) {
 		addInvalid(warnings, 'FIREBASE_CREDENTIALS', 'are not configured or readable for an enabled Firebase feature');
@@ -147,14 +161,14 @@ function validateEnv(env = process.env) {
 		if (hasValue(env.BINANCE_TRADING_ENV) && !['testnet', 'live'].includes(env.BINANCE_TRADING_ENV.trim().toLowerCase())) {
 			addInvalid(warnings, 'BINANCE_TRADING_ENV', 'must be testnet or live');
 		}
-		if (hasValue(env.BINANCE_TRADING_MAX_NOTIONAL) && !isPositiveNumberInRange(env.BINANCE_TRADING_MAX_NOTIONAL, [Number.MIN_VALUE, Number.MAX_VALUE])) {
+		if (hasValue(env.BINANCE_TRADING_MAX_NOTIONAL) && !isPositiveNumber(env.BINANCE_TRADING_MAX_NOTIONAL)) {
 			addInvalid(warnings, 'BINANCE_TRADING_MAX_NOTIONAL', 'must be a positive number');
 		}
 	}
 
-	for (const [variable, bounds] of Object.entries(NUMERIC_RULES)) {
-		if (hasValue(env[variable]) && !isPositiveNumberInRange(env[variable], bounds)) {
-			addInvalid(warnings, variable, `must be between ${bounds[0]} and ${bounds[1]}`);
+	for (const [variable, bounds] of Object.entries(INTEGER_RULES)) {
+		if (hasValue(env[variable]) && !isIntegerInRange(env[variable], bounds)) {
+			addInvalid(warnings, variable, `must be an integer between ${bounds[0]} and ${bounds[1]}`);
 		}
 	}
 

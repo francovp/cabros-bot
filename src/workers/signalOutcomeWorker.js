@@ -2,6 +2,9 @@
 
 require('dotenv').config();
 require('../../instrument.js');
+const { printWarnings, validateEnv } = require('../../scripts/validate-env');
+
+printWarnings(validateEnv());
 
 const SignalOutcomeService = require('../services/storage/SignalOutcomeService');
 const sentryService = require('../services/monitoring/SentryService');
