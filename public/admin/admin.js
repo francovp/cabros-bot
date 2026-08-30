@@ -2235,6 +2235,21 @@ const getQueryEnum = (contract, definition, name) => {
 
 const formatOrderValue = (value) => value === undefined || value === null || value === '' ? '—' : String(value);
 
+const formatOrderEnvironment = (environment) => {
+	if (environment === 'live') return element('span', {
+		className: 'status-badge status-blocked',
+		text: 'Environment: live',
+	});
+	if (environment === 'testnet') return element('span', {
+		className: 'status-badge status-ready',
+		text: 'Environment: testnet',
+	});
+	return element('span', {
+		className: 'status-badge status-disabled',
+		text: `Environment: ${formatOrderValue(environment)}`,
+	});
+};
+
 const ORDER_SUMMARY_FIELDS = [
 	['Symbol', 'symbol'],
 	['Side', 'side'],
@@ -2336,14 +2351,16 @@ const createOrderListForm = () => {
 	const limit = addField(form, 'Limit', 'limit', { type: 'number', min: 1, max: 100, value: 50 });
 	const button = element('button', { text: definition.label });
 	button.type = 'submit';
+	const environmentBadge = element('p', { className: 'order-environment', text: 'Environment: —' });
 	const list = element('div', { className: 'form-fields' });
 	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
-	form.append(button, list, output);
+	form.append(button, environmentBadge, list, output);
 
 	let listRequestVersion = 0;
 	const invalidateListRequest = () => {
 		listRequestVersion += 1;
 		list.replaceChildren();
+		environmentBadge.replaceChildren(element('span', { text: 'Environment: —' }));
 		button.disabled = false;
 		output.className = 'response-block request-state';
 		output.textContent = 'Filters changed. Submit to load recent orders.';
@@ -2351,8 +2368,9 @@ const createOrderListForm = () => {
 	symbol.addEventListener('input', invalidateListRequest);
 	limit.addEventListener('input', invalidateListRequest);
 
-	const renderOrders = (orders) => {
+	const renderOrders = (orders, environment) => {
 		list.replaceChildren();
+		environmentBadge.replaceChildren(formatOrderEnvironment(environment));
 		if (!orders.length) {
 			list.append(createEmptyState('No recent orders found.'));
 			return;
@@ -2363,6 +2381,7 @@ const createOrderListForm = () => {
 	form.addEventListener('submit', async (event) => {
 		event.preventDefault();
 		list.replaceChildren();
+		environmentBadge.replaceChildren(element('span', { text: 'Environment: —' }));
 		const requestVersion = ++listRequestVersion;
 		const query = {};
 		const symbolValue = trimFormValue(symbol.value).toUpperCase();
@@ -2384,7 +2403,9 @@ const createOrderListForm = () => {
 				`${summary}\nHTTP ${responseStatus} · ${elapsed} ms`
 			),
 		});
-		if (requestVersion === listRequestVersion && data && Array.isArray(data.orders)) renderOrders(data.orders);
+		if (requestVersion === listRequestVersion && data && Array.isArray(data.orders)) {
+			renderOrders(data.orders, data.environment);
+		}
 	});
 
 	return form;
@@ -2404,15 +2425,17 @@ const createOrderLookupForm = () => {
 	});
 	const button = element('button', { text: definition.label });
 	button.type = 'submit';
+	const environmentBadge = element('p', { className: 'order-environment', text: 'Environment: —' });
 	const result = element('div');
 	const output = element('pre', { className: 'response-block', text: 'No request sent.' });
 	const hint = element('p', { className: 'hint', text: 'Provide either orderId or origClientOrderId to query a single order.' });
-	form.append(button, hint, result, output);
+	form.append(button, environmentBadge, hint, result, output);
 
 	let lookupRequestVersion = 0;
 	const invalidateLookup = () => {
 		lookupRequestVersion += 1;
 		result.replaceChildren();
+		environmentBadge.replaceChildren(element('span', { text: 'Environment: —' }));
 		button.disabled = false;
 		output.className = 'response-block request-state';
 		output.textContent = 'Filters changed. Submit to load order.';
@@ -2424,6 +2447,7 @@ const createOrderLookupForm = () => {
 	form.addEventListener('submit', async (event) => {
 		event.preventDefault();
 		result.replaceChildren();
+		environmentBadge.replaceChildren(element('span', { text: 'Environment: —' }));
 		const requestVersion = ++lookupRequestVersion;
 		const symbolValue = trimFormValue(symbol.value).toUpperCase();
 		const orderIdValue = trimFormValue(orderId.value);
@@ -2451,6 +2475,7 @@ const createOrderLookupForm = () => {
 			),
 		});
 		if (requestVersion === lookupRequestVersion && data && data.order) {
+			environmentBadge.replaceChildren(formatOrderEnvironment(data.environment));
 			result.replaceChildren(createOrderCard(data.order));
 		}
 	});

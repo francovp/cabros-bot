@@ -3272,4 +3272,64 @@ describe('admin browser client', () => {
 		expect(last[0]).not.toContain('x-api-key');
 		expect(last[1].headers['x-api-key']).toBe('should-only-be-header');
 	});
+
+	it('renders the Binance environment badge for both list and lookup results', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.includes('orderId=42')) {
+					return response({
+						success: true,
+						environment: 'live',
+						order: { symbol: 'BTCUSDT', orderId: 42, side: 'SELL', status: 'FILLED', type: 'MARKET' },
+					});
+				}
+				return response({
+					success: true,
+					environment: 'testnet',
+					orders: [{ symbol: 'BTCUSDT', orderId: 1, side: 'BUY', status: 'NEW', type: 'LIMIT' }],
+				});
+			},
+		});
+		await flush();
+		await selectView(browser, 'orders');
+
+		const listForm = findForm(browser.elementsById.view, 'Load recent orders');
+		listForm.elements.symbol.value = 'BTCUSDT';
+		await listForm.dispatch('submit');
+		await flush();
+		expect(listForm.textContent).toContain('Environment: testnet');
+
+		const detailForm = findForm(browser.elementsById.view, 'Get single order');
+		detailForm.elements.symbol.value = 'BTCUSDT';
+		detailForm.elements['path-orderId'].value = '42';
+		await detailForm.dispatch('submit');
+		await flush();
+		expect(detailForm.textContent).toContain('Environment: live');
+	});
+
+	it('resets the Binance environment badge when filters change', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				return response({
+					success: true,
+					environment: 'testnet',
+					orders: [{ symbol: 'BTCUSDT', orderId: 1, side: 'BUY', status: 'NEW', type: 'LIMIT' }],
+				});
+			},
+		});
+		await flush();
+		await selectView(browser, 'orders');
+
+		const listForm = findForm(browser.elementsById.view, 'Load recent orders');
+		listForm.elements.symbol.value = 'BTCUSDT';
+		await listForm.dispatch('submit');
+		await flush();
+		expect(listForm.textContent).toContain('Environment: testnet');
+
+		listForm.elements.symbol.value = 'ETHUSDT';
+		await listForm.elements.symbol.dispatch('input');
+		expect(listForm.textContent).toContain('Environment: —');
+	});
 });
