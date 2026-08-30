@@ -195,6 +195,12 @@ describe('Status endpoints', () => {
 		});
 		expect(response.body.featureFlags.tradingViewConfluenceEnrichment).toBe(false);
 		expect(response.body.dependencies.sentry.status).toBe('ready');
+		expect(response.body.dependencies.webhookAuth).toEqual({
+			enabled: true,
+			configured: true,
+			ready: true,
+			status: 'ready',
+		});
 	});
 
 	it('exposes rolling alert-path MCP enrichment rates', async () => {
