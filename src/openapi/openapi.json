@@ -713,7 +713,8 @@
             "FirebaseBearerAuth": []
           }
         ],
-        "x-admin-role": "admin.viewer"
+        "x-admin-role": "admin.viewer",
+        "description": "Response includes an ETag header (e.g. ETag: \"3\") that mirrors the preset's monotonic version. Supply it on PUT or DELETE via If-Match to opt into optimistic concurrency."
       },
       "put": {
         "tags": [
@@ -724,6 +725,16 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/PresetId"
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": false,
+            "description": "Optional optimistic-concurrency token (e.g. \"3\"). When present and not equal to the current preset version, the request returns 412 PRECONDITION_FAILED with the current preset so the client can rebase. When omitted, the write succeeds and increments version (backwards-compatible default). A malformed token (e.g. a comma-separated entity-tag list or the wildcard \"*\") returns 400 INVALID_IF_MATCH instead of being silently dropped.",
+            "schema": {
+              "type": "string",
+              "example": "\"3\""
+            }
           }
         ],
         "requestBody": {
@@ -734,10 +745,37 @@
             "$ref": "#/components/responses/ScannerPresetResult"
           },
           "400": {
-            "$ref": "#/components/responses/Error"
+            "description": "Malformed request body, or malformed If-Match header (e.g. a comma-separated entity-tag list or the wildcard \"*\").",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScannerPresetConflictResponse"
+                }
+              }
+            }
           },
           "404": {
             "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "description": "Preset is locked by an in-flight sweep (lockedUntil > now). Response body includes code=PRESET_LOCKED and the lockedUntil timestamp; the current preset is also returned so the client can decide whether to retry.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScannerPresetConflictResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "If-Match version does not match the current preset version. Response body includes code=PRECONDITION_FAILED and the current preset so the client can rebase.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScannerPresetConflictResponse"
+                }
+              }
+            }
           },
           "500": {
             "$ref": "#/components/responses/Error"
@@ -765,14 +803,44 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/PresetId"
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": false,
+            "description": "Optional optimistic-concurrency token (e.g. \"3\"). When present and not equal to the current preset version, the request returns 412 PRECONDITION_FAILED with the current preset so the client can rebase. When omitted, the delete proceeds (backwards-compatible default). A malformed token (e.g. a comma-separated entity-tag list or the wildcard \"*\") returns 400 INVALID_IF_MATCH instead of being silently dropped.",
+            "schema": {
+              "type": "string",
+              "example": "\"3\""
+            }
           }
         ],
         "responses": {
           "200": {
             "$ref": "#/components/responses/ScannerPresetResult"
           },
+          "400": {
+            "description": "Malformed If-Match header. Use a quoted integer such as \"3\" or the weak form W/\"3\".",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScannerPresetConflictResponse"
+                }
+              }
+            }
+          },
           "404": {
             "$ref": "#/components/responses/Error"
+          },
+          "412": {
+            "description": "If-Match version does not match the current preset version. Response body includes code=PRECONDITION_FAILED and the current preset so the client can rebase.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScannerPresetConflictResponse"
+                }
+              }
+            }
           },
           "500": {
             "$ref": "#/components/responses/Error"
@@ -2516,7 +2584,16 @@
         }
       },
       "ScannerPresetResult": {
-        "description": "Scanner preset response including the effective durable or ephemeral storage mode",
+        "description": "Scanner preset response including the effective durable or ephemeral storage mode. GET, POST, and PUT responses set an ETag header that mirrors the preset version (e.g. \"3\"); supply it back on PUT or DELETE via If-Match to opt into optimistic concurrency.",
+        "headers": {
+          "ETag": {
+            "description": "Optimistic-concurrency token mirroring the preset version. Format is a quoted integer (e.g. \"3\"). Supply via If-Match on PUT or DELETE to enforce a version check.",
+            "schema": {
+              "type": "string",
+              "example": "\"3\""
+            }
+          }
+        },
         "content": {
           "application/json": {
             "schema": {
@@ -4635,6 +4712,21 @@
             "type": "integer",
             "nullable": true
           },
+          "lockedUntil": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "When the preset is held by an in-flight sweep. Updates return 409 PRESET_LOCKED while this timestamp is in the future."
+          },
+          "lockedBy": {
+            "type": "string",
+            "nullable": true
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Monotonic per-preset version used for optimistic concurrency. Increment by 1 on every successful update. Echoed as the ETag response header and accepted via the If-Match request header on PUT/DELETE."
+          },
           "createdAt": {
             "type": "string",
             "format": "date-time"
@@ -4666,6 +4758,42 @@
             "items": {
               "$ref": "#/components/schemas/ScannerPreset"
             }
+          }
+        }
+      },
+      "ScannerPresetConflictResponse": {
+        "type": "object",
+        "description": "Conflict response for scanner-preset If-Match / lockedUntil failures. Returned with HTTP 412 PRECONDITION_FAILED and HTTP 409 PRESET_LOCKED so the client can rebase or wait for the scheduler lease to release.",
+        "required": [
+          "error",
+          "code",
+          "storage"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "Human-readable explanation of why the request was rejected."
+          },
+          "code": {
+            "type": "string",
+            "enum": [
+              "PRECONDITION_FAILED",
+              "PRESET_LOCKED",
+              "PRESET_NOT_FOUND"
+            ]
+          },
+          "storage": {
+            "$ref": "#/components/schemas/ScannerPresetStorage"
+          },
+          "preset": {
+            "$ref": "#/components/schemas/ScannerPreset",
+            "description": "Current preset state, including its monotonic version, so the client can rebase."
+          },
+          "lockedUntil": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "Echoed on 409 PRESET_LOCKED responses so the client knows when the scheduler lease expires."
           }
         }
       },

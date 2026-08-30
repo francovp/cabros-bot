@@ -32,6 +32,7 @@ const pendingFirestoreDeletes = new Set();
 const firestoreDeleteGenerations = new Map();
 const pendingFirestoreWriteTokens = new Map();
 const firestoreWriteQueues = new Map();
+const inMemoryWriteLocks = new Map();
 
 function stripUndefinedFieldsDeep(value) {
 	if (value === null || typeof value !== 'object') {
@@ -145,9 +146,84 @@ function clonePreset(preset) {
 	if (Array.isArray(preset.channels)) {
 		cloned.channels = [...preset.channels];
 	}
+	if (Number.isInteger(cloned.version) && cloned.version < 1) {
+		cloned.version = 1;
+	}
 	if (preset.ranked !== undefined) cloned.ranked = preset.ranked;
 	if (preset.includeMultiTimeframe !== undefined) cloned.includeMultiTimeframe = preset.includeMultiTimeframe;
 	return cloned;
+}
+
+function normalizeVersion(value, fallback = 1) {
+	const num = Number(value);
+	if (!Number.isSafeInteger(num) || num < 1) {
+		return fallback;
+	}
+	return num;
+}
+
+function formatEtag(version) {
+	const safe = normalizeVersion(version, 1);
+	return `"${safe}"`;
+}
+
+function parseIfMatchHeader(headerValue) {
+	if (typeof headerValue !== 'string') {
+		return { present: false, version: null, malformed: false };
+	}
+	const trimmed = headerValue.trim();
+	if (!trimmed) {
+		return { present: true, version: null, malformed: true };
+	}
+	const match = trimmed.match(/^"(-?\d+)"$/);
+	if (match) {
+		return { present: true, version: normalizeVersion(match[1], null), malformed: false };
+	}
+	const weakMatch = trimmed.match(/^W\/"(-?\d+)"$/);
+	if (weakMatch) {
+		return { present: true, version: normalizeVersion(weakMatch[1], null), malformed: false };
+	}
+	const bare = trimmed.match(/^(-?\d+)$/);
+	if (bare) {
+		return { present: true, version: normalizeVersion(bare[1], null), malformed: false };
+	}
+	return { present: true, version: null, malformed: true };
+}
+
+function buildPreconditionFailed(preset) {
+	const error = new MarketScannerRequestError(
+		`If-Match version does not match current preset version (${preset.version})`,
+		'PRECONDITION_FAILED',
+		{ statusCode: 412, details: { preset } },
+	);
+	error.preset = clonePreset(preset);
+	error.currentVersion = preset.version;
+	return error;
+}
+
+function buildPresetLocked(preset, lockedUntil) {
+	const error = new MarketScannerRequestError(
+		`Preset is locked by an in-flight sweep until ${lockedUntil}`,
+		'PRESET_LOCKED',
+		{ statusCode: 409, details: { preset, lockedUntil } },
+	);
+	error.preset = clonePreset(preset);
+	error.lockedUntil = lockedUntil;
+	return error;
+}
+
+function isPresetLocked(preset, now = Date.now()) {
+	if (!preset || typeof preset.lockedUntil !== 'string' || !preset.lockedUntil) {
+		return null;
+	}
+	const lockedUntilMs = Date.parse(preset.lockedUntil);
+	if (!Number.isFinite(lockedUntilMs)) {
+		return null;
+	}
+	if (lockedUntilMs > now) {
+		return preset.lockedUntil;
+	}
+	return null;
 }
 
 function compareByCreatedAtDesc(a, b) {
@@ -242,7 +318,8 @@ class ScannerPresetService {
 	}
 
 	async createPreset(params = {}) {
-		const preset = this._buildPreset({ ...params, id: undefined });
+		const sanitizedParams = { ...params, id: undefined, version: undefined };
+		const preset = this._buildPreset(sanitizedParams);
 		await this._persistPreset(preset);
 		return clonePreset(preset);
 	}
@@ -325,13 +402,42 @@ class ScannerPresetService {
 		return clonePreset(memoryPresets.get(id));
 	}
 
-	async updatePreset(id, params = {}) {
+	async updatePreset(id, params = {}, options = {}) {
 		const deleteGenerationAtReadStart = firestoreDeleteGenerations.get(id) || 0;
 		const existing = await this.getPreset(id);
 		if (!existing
 			|| (firestoreDeleteGenerations.get(id) || 0) !== deleteGenerationAtReadStart
 			|| pendingFirestoreDeletes.has(id)) {
+			if (options && options.ifMatchVersion !== undefined && options.ifMatchVersion !== null) {
+				throw new MarketScannerRequestError(
+					'Preset not found',
+					'PRESET_NOT_FOUND',
+					{ statusCode: 404 },
+				);
+			}
 			return null;
+		}
+
+		const ifMatchVersion = options && options.ifMatchVersion !== undefined && options.ifMatchVersion !== null
+			? normalizeVersion(options.ifMatchVersion, null)
+			: null;
+		if (ifMatchVersion !== null && ifMatchVersion !== existing.version) {
+			console.debug('[ScannerPresetService] Stale If-Match on updatePreset', {
+				presetId: id,
+				clientVersion: ifMatchVersion,
+				currentVersion: existing.version,
+			});
+			throw buildPreconditionFailed(existing);
+		}
+
+		const lockedUntil = isPresetLocked(existing);
+		if (lockedUntil) {
+			console.debug('[ScannerPresetService] Preset locked during updatePreset', {
+				presetId: id,
+				lockedUntil,
+				currentVersion: existing.version,
+			});
+			throw buildPresetLocked(existing, lockedUntil);
 		}
 
 		const preset = this._buildPreset({
@@ -339,17 +445,45 @@ class ScannerPresetService {
 			...params,
 			id: existing.id,
 			createdAt: existing.createdAt,
+			version: existing.version + 1,
 		});
 		preset.updatedAt = new Date().toISOString();
 		preset.createdAt = existing.createdAt;
 
-		const persisted = await this._persistPreset(preset, deleteGenerationAtReadStart);
-		return persisted ? clonePreset(preset) : null;
+		const persisted = await this._persistPreset(preset, deleteGenerationAtReadStart, {
+			expectedVersion: existing.version,
+		});
+		if (!persisted) {
+			const latest = await this.getPreset(id);
+			if (latest && ifMatchVersion !== null && latest.version !== existing.version) {
+				throw buildPreconditionFailed(latest);
+			}
+			return null;
+		}
+		return clonePreset(preset);
 	}
 
-	async deletePreset(id) {
+	async deletePreset(id, options = {}) {
 		if (!id) {
 			return false;
+		}
+
+		const ifMatchVersion = options && options.ifMatchVersion !== undefined && options.ifMatchVersion !== null
+			? normalizeVersion(options.ifMatchVersion, null)
+			: null;
+		if (ifMatchVersion !== null) {
+			const existing = await this.getPreset(id);
+			if (!existing) {
+				throw new MarketScannerRequestError('Preset not found', 'PRESET_NOT_FOUND', { statusCode: 404 });
+			}
+			if (ifMatchVersion !== existing.version) {
+				console.debug('[ScannerPresetService] Stale If-Match on deletePreset', {
+					presetId: id,
+					clientVersion: ifMatchVersion,
+					currentVersion: existing.version,
+				});
+				throw buildPreconditionFailed(existing);
+			}
 		}
 
 		let deleted = false;
@@ -430,6 +564,7 @@ class ScannerPresetService {
 		const lockedBy = typeof params.lockedBy === 'string' && params.lockedBy.trim()
 			? params.lockedBy.trim()
 			: null;
+		const version = normalizeVersion(params.version, 1);
 
 		const preset = {
 			id,
@@ -449,6 +584,7 @@ class ScannerPresetService {
 			lastDurationMs,
 			lockedUntil,
 			lockedBy,
+			version,
 		};
 
 		if (params.ranked !== undefined) preset.ranked = Boolean(params.ranked);
@@ -588,11 +724,66 @@ class ScannerPresetService {
 		return normalizeTradingViewTimeframe(raw, '4h');
 	}
 
-	async _persistPreset(preset, expectedDeleteGeneration = null) {
+	async _persistPreset(preset, expectedDeleteGeneration = null, options = {}) {
+		const expectedVersion = options && Number.isInteger(options.expectedVersion)
+			? options.expectedVersion
+			: null;
+		const firestore = this._getFirestore();
+		if (!firestore) {
+			return this._persistInMemoryPreset(preset, expectedDeleteGeneration, expectedVersion);
+		}
+		return this._persistFirestorePreset(preset, expectedDeleteGeneration, expectedVersion);
+	}
+
+	async _persistInMemoryPreset(preset, expectedDeleteGeneration, expectedVersion) {
+		const previousLock = inMemoryWriteLocks.get(preset.id) || Promise.resolve();
+		let release;
+		const nextLock = new Promise((resolve) => {
+			release = resolve;
+		});
+		const chainedLock = previousLock.then(() => nextLock);
+		inMemoryWriteLocks.set(preset.id, chainedLock);
+		try {
+			await previousLock;
+			const currentDeleteGeneration = firestoreDeleteGenerations.get(preset.id) || 0;
+			if (expectedDeleteGeneration !== null
+				&& (currentDeleteGeneration !== expectedDeleteGeneration || pendingFirestoreDeletes.has(preset.id))) {
+				return false;
+			}
+			if (expectedVersion !== null) {
+				const current = memoryPresets.get(preset.id);
+				const currentVersion = current ? normalizeVersion(current.version, null) : null;
+				if (currentVersion === null || currentVersion !== expectedVersion) {
+					return false;
+				}
+			}
+			memoryPresets.set(preset.id, clonePreset(preset));
+			pendingFirestoreDeletes.delete(preset.id);
+			if (isFirestoreEnabled()) {
+				pendingFirestoreWriteTokens.set(preset.id, {});
+				pendingFirestorePresets.set(preset.id, clonePreset(preset));
+			} else {
+				pendingFirestoreWriteTokens.delete(preset.id);
+			}
+			return true;
+		} finally {
+			release();
+			if (inMemoryWriteLocks.get(preset.id) === chainedLock) {
+				inMemoryWriteLocks.delete(preset.id);
+			}
+		}
+	}
+
+	async _persistFirestorePreset(preset, expectedDeleteGeneration, expectedVersion) {
 		const currentDeleteGeneration = firestoreDeleteGenerations.get(preset.id) || 0;
 		if (expectedDeleteGeneration !== null
 			&& (currentDeleteGeneration !== expectedDeleteGeneration || pendingFirestoreDeletes.has(preset.id))) {
 			return false;
+		}
+
+		const firestore = this._getFirestore();
+		if (!firestore) {
+			return this._persistInMemoryPreset(preset, expectedDeleteGeneration, expectedVersion);
 		}
 
 		memoryPresets.set(preset.id, clonePreset(preset));
@@ -601,24 +792,14 @@ class ScannerPresetService {
 			: expectedDeleteGeneration;
 		pendingFirestoreDeletes.delete(preset.id);
 
-		const firestore = this._getFirestore();
-		if (!firestore) {
-			if (isFirestoreEnabled()) {
-				pendingFirestoreWriteTokens.set(preset.id, {});
-				pendingFirestorePresets.set(preset.id, clonePreset(preset));
-			} else {
-				pendingFirestoreWriteTokens.delete(preset.id);
-			}
-			return true;
-		}
-
 		const pendingWriteToken = {};
 		pendingFirestoreWriteTokens.set(preset.id, pendingWriteToken);
 		pendingFirestorePresets.delete(preset.id);
 		const inFlightWrite = { preset: clonePreset(preset) };
 		inFlightFirestorePresets.set(preset.id, inFlightWrite);
+		let versionMismatch = false;
 		try {
-			await this._writeFirestorePreset(firestore, preset);
+			await this._writeFirestorePreset(firestore, preset, expectedVersion);
 			if (pendingFirestoreWriteTokens.get(preset.id) === pendingWriteToken) {
 				pendingFirestorePresets.delete(preset.id);
 				pendingFirestoreWriteTokens.delete(preset.id);
@@ -630,22 +811,34 @@ class ScannerPresetService {
 			await this._flushPendingPresets(firestore);
 			this.firestoreUnavailable = pendingFirestorePresets.size > 0 || pendingFirestoreDeletes.size > 0;
 		} catch (error) {
+			if (error && error.code === 'version-mismatch') {
+				versionMismatch = true;
+			}
 			if (pendingFirestoreWriteTokens.get(preset.id) === pendingWriteToken) {
-				if ((firestoreDeleteGenerations.get(preset.id) || 0) === deleteGenerationAtStart) {
+				if (versionMismatch) {
+					pendingFirestoreWriteTokens.delete(preset.id);
+					pendingFirestorePresets.delete(preset.id);
+					memoryPresets.delete(preset.id);
+				} else if ((firestoreDeleteGenerations.get(preset.id) || 0) === deleteGenerationAtStart) {
 					pendingFirestorePresets.set(preset.id, clonePreset(preset));
 				} else {
 					pendingFirestorePresets.delete(preset.id);
 					pendingFirestoreWriteTokens.delete(preset.id);
 				}
 			}
-			this.firestoreUnavailable = true;
-			console.warn('[ScannerPresetService] Failed to persist preset to Firestore:', error.message);
+			this.firestoreUnavailable = !versionMismatch;
+			if (!versionMismatch) {
+				console.warn('[ScannerPresetService] Failed to persist preset to Firestore:', error.message);
+			}
 		} finally {
 			if (inFlightFirestorePresets.get(preset.id) === inFlightWrite) {
 				inFlightFirestorePresets.delete(preset.id);
 			}
 		}
 
+		if (versionMismatch) {
+			return false;
+		}
 		return true;
 	}
 
@@ -693,13 +886,30 @@ class ScannerPresetService {
 		}
 	}
 
-	async _writeFirestorePreset(firestore, preset) {
+	async _writeFirestorePreset(firestore, preset, expectedVersion = null) {
 		const previousWrite = firestoreWriteQueues.get(preset.id) || Promise.resolve();
 		const currentWrite = previousWrite
 			.catch(() => undefined)
-			.then(() => firestore.collection(COLLECTION_NAME).doc(preset.id).set(stripUndefinedFieldsDeep({
-				...clonePreset(preset),
-			})));
+			.then(async () => {
+				if (expectedVersion !== null) {
+					const snapshot = await firestore.collection(COLLECTION_NAME).doc(preset.id).get();
+					if (!snapshot || !snapshot.exists) {
+						const err = new Error('preset missing during compare-and-set');
+						err.code = 'version-mismatch';
+						throw err;
+					}
+					const data = snapshot.data() || {};
+					const remoteVersion = normalizeVersion(data.version, null);
+					if (remoteVersion !== expectedVersion) {
+						const err = new Error(`stale version during compare-and-set (expected ${expectedVersion}, got ${remoteVersion})`);
+						err.code = 'version-mismatch';
+						throw err;
+					}
+				}
+				await firestore.collection(COLLECTION_NAME).doc(preset.id).set(stripUndefinedFieldsDeep({
+					...clonePreset(preset),
+				}));
+			});
 		firestoreWriteQueues.set(preset.id, currentWrite);
 
 		try {
@@ -763,6 +973,7 @@ class ScannerPresetService {
 			lastDurationMs: Number.isFinite(Number(data.lastDurationMs)) ? Number(data.lastDurationMs) : null,
 			lockedUntil: typeof data.lockedUntil === 'string' ? data.lockedUntil : null,
 			lockedBy: typeof data.lockedBy === 'string' ? data.lockedBy : null,
+			version: normalizeVersion(data.version, 1),
 		};
 
 		if (typeof data.ranked === 'boolean') preset.ranked = data.ranked;
@@ -789,6 +1000,7 @@ class ScannerPresetService {
 		firestoreDeleteGenerations.clear();
 		pendingFirestoreWriteTokens.clear();
 		firestoreWriteQueues.clear();
+		inMemoryWriteLocks.clear();
 		this.firestoreUnavailable = false;
 	}
 }
@@ -802,9 +1014,13 @@ module.exports = {
 	parseCadenceToMs,
 	normalizeSchedule,
 	stripUndefinedFieldsDeep,
+	normalizeVersion,
+	formatEtag,
+	parseIfMatchHeader,
 	// Test helper
 	_resetForTesting() {
 		scannerPresetService._resetForTesting();
 	},
 	_memoryPresets: memoryPresets,
+	inMemoryWriteLocks,
 };

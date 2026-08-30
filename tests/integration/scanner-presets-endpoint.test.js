@@ -468,5 +468,132 @@ describe('Scanner presets API integration tests', () => {
 		expect(data.lastRunAt).toBeTruthy();
 		expect(new Date(data.nextRunAt).getTime()).toBeGreaterThan(Date.now());
 	});
+
+	it('returns ETag header and version field on GET /api/scanner-presets/:id', async () => {
+		const createResponse = await request(app)
+			.post('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.send({ name: 'ETag preset', exchange: 'BINANCE' })
+			.expect(201);
+
+		const presetId = createResponse.body.preset.id;
+		expect(createResponse.body.preset.version).toBe(1);
+
+		const getResponse = await request(app)
+			.get(`/api/scanner-presets/${presetId}`)
+			.set('x-api-key', 'test-key')
+			.expect(200);
+
+		expect(getResponse.headers.etag).toBe('"1"');
+		expect(getResponse.body.preset.version).toBe(1);
+	});
+
+	it('updates with a matching If-Match token and increments version', async () => {
+		const createResponse = await request(app)
+			.post('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.send({ name: 'Matched If-Match preset' })
+			.expect(201);
+
+		const presetId = createResponse.body.preset.id;
+		const initialVersion = createResponse.body.preset.version;
+
+		const updateResponse = await request(app)
+			.put(`/api/scanner-presets/${presetId}`)
+			.set('x-api-key', 'test-key')
+			.set('If-Match', `"${initialVersion}"`)
+			.send({ limit: 12 })
+			.expect(200);
+
+		expect(updateResponse.body.preset.version).toBe(initialVersion + 1);
+		expect(updateResponse.body.preset.limit).toBe(12);
+		expect(updateResponse.headers.etag).toBe(`"${initialVersion + 1}"`);
+	});
+
+	it('returns 412 PRECONDITION_FAILED with current preset on stale If-Match', async () => {
+		const createResponse = await request(app)
+			.post('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.send({ name: 'Stale If-Match preset' })
+			.expect(201);
+
+		const presetId = createResponse.body.preset.id;
+
+		const response = await request(app)
+			.put(`/api/scanner-presets/${presetId}`)
+			.set('x-api-key', 'test-key')
+			.set('If-Match', '"999"')
+			.send({ limit: 12 })
+			.expect(412);
+
+		expect(response.body.code).toBe('PRECONDITION_FAILED');
+		expect(response.body.preset).toMatchObject({
+			id: presetId,
+			version: createResponse.body.preset.version,
+		});
+	});
+
+	it('returns 409 PRESET_LOCKED when lockedUntil is in the future', async () => {
+		const createResponse = await request(app)
+			.post('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.send({ name: 'Locked preset' })
+			.expect(201);
+
+		const presetId = createResponse.body.preset.id;
+		const futureLock = new Date(Date.now() + 60000).toISOString();
+		await admin.firestore().collection('scannerPresets').doc(presetId).update({
+			lockedUntil: futureLock,
+			lockedBy: 'scheduler',
+			version: 2,
+		});
+
+		const response = await request(app)
+			.put(`/api/scanner-presets/${presetId}`)
+			.set('x-api-key', 'test-key')
+			.send({ limit: 5 })
+			.expect(409);
+
+		expect(response.body.code).toBe('PRESET_LOCKED');
+		expect(response.body.lockedUntil).toBe(futureLock);
+	});
+
+	it('returns 412 PRECONDITION_FAILED on stale If-Match for DELETE', async () => {
+		const createResponse = await request(app)
+			.post('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.send({ name: 'Stale delete preset' })
+			.expect(201);
+
+		const presetId = createResponse.body.preset.id;
+
+		const response = await request(app)
+			.delete(`/api/scanner-presets/${presetId}`)
+			.set('x-api-key', 'test-key')
+			.set('If-Match', '"999"')
+			.expect(412);
+
+		expect(response.body.code).toBe('PRECONDITION_FAILED');
+		expect(await admin.firestore().collection('scannerPresets').doc(presetId).get()).toBeDefined();
+	});
+
+	it('returns 400 INVALID_IF_MATCH for a malformed If-Match header', async () => {
+		const createResponse = await request(app)
+			.post('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.send({ name: 'Malformed If-Match preset' })
+			.expect(201);
+
+		const presetId = createResponse.body.preset.id;
+
+		const response = await request(app)
+			.put(`/api/scanner-presets/${presetId}`)
+			.set('x-api-key', 'test-key')
+			.set('If-Match', '"3", "4"')
+			.send({ limit: 7 })
+			.expect(400);
+
+		expect(response.body.code).toBe('INVALID_IF_MATCH');
+	});
 });
 
