@@ -13,6 +13,14 @@ const { encodeAlertPaginationCursor, parseAlertPaginationCursor } = require('./a
 const COLLECTION_NAME = 'tradingSignalOutcomes';
 const HEARTBEAT_COLLECTION_NAME = 'workerHeartbeats';
 const HEARTBEAT_DOCUMENT_ID = 'signal-outcome';
+const LEASE_COLLECTION_NAME = 'workerLeases';
+const LEASE_DOCUMENT_ID = 'signal-outcome-sweep';
+const DEFAULT_SWEEP_LEASE_MS = 60000;
+const MIN_SWEEP_LEASE_MS = 10000;
+const MAX_SWEEP_LEASE_MS = 600000;
+const DEFAULT_SWEEP_RENEW_INTERVAL_MS = 20000;
+const LEASE_HELD_REASON = 'lease_held';
+const LEASE_RENEWED_REASON = 'lease_renewed';
 const HEARTBEAT_WRITE_TIMEOUT_MS = 5000;
 const MAX_WORKER_DRAIN_TIMEOUT_MS = 30000;
 const MAX_TIMER_DELAY_MS = 2147483647;
@@ -31,6 +39,7 @@ const REGION_BLOCK_MESSAGE_PATTERNS = [
 	'service unavailable from restricted',
 	'451',
 ];
+const SWEEP_WORKER_ID = `${process.pid}-${(globalThis.crypto && globalThis.crypto.randomUUID) ? globalThis.crypto.randomUUID() : `sw-${Date.now()}`}`;
 let binanceClient = null;
 let isEvaluating = false;
 let workerTimer = null;
@@ -44,7 +53,12 @@ let lastRunEvaluatedCount = 0;
 let lastRunPendingCount = 0;
 let lastRunErrorCount = 0;
 let lastRunRegionBlockedCount = 0;
+let lastRunSkipped = false;
+let lastRunSkipReason = null;
+let lastLeaseRenewedAt = null;
+let lastLeaseReleasedAt = null;
 let lastEvaluatedDoc = null;
+let inMemorySweepLease = null;
 
 function awaitWithTimeout(promise, timeoutMs, message) {
 	return new Promise((resolve, reject) => {
@@ -151,6 +165,14 @@ async function persistWorkerHeartbeat() {
 			lastRunEvaluatedCount: status.lastRunEvaluatedCount,
 			lastRunPendingCount: status.lastRunPendingCount,
 			lastRunErrorCount: status.lastRunErrorCount,
+			lastRunSkipped: status.lastRunSkipped,
+			lastRunSkipReason: status.lastRunSkipReason,
+			lastLeaseRenewedAt: status.lastLeaseRenewedAt
+				? admin.firestore.Timestamp.fromDate(status.lastLeaseRenewedAt)
+				: null,
+			lastLeaseReleasedAt: status.lastLeaseReleasedAt
+				? admin.firestore.Timestamp.fromDate(status.lastLeaseReleasedAt)
+				: null,
 			updatedAt: admin.firestore.Timestamp.fromDate(new Date()),
 		}, { merge: true }), HEARTBEAT_WRITE_TIMEOUT_MS, `Heartbeat write timed out after ${HEARTBEAT_WRITE_TIMEOUT_MS}ms`);
 	} catch (error) {
@@ -180,6 +202,200 @@ function getConfiguredInterval(defaultVal) {
 		defaultVal,
 	);
 	return intervalMs <= MAX_CONFIGURED_INTERVAL_MS ? intervalMs : defaultVal;
+}
+
+function getSweepLeaseMs(defaultVal) {
+	const configured = parsePositiveInteger(
+		process.env.SIGNAL_OUTCOME_SWEEP_LEASE_MS,
+		defaultVal,
+	);
+	if (configured < MIN_SWEEP_LEASE_MS) return MIN_SWEEP_LEASE_MS;
+	if (configured > MAX_SWEEP_LEASE_MS) return MAX_SWEEP_LEASE_MS;
+	return configured;
+}
+
+function getSweepLeaseRenewIntervalMs(leaseMs) {
+	const configured = parsePositiveInteger(
+		process.env.SIGNAL_OUTCOME_SWEEP_LEASE_RENEW_INTERVAL_MS,
+		DEFAULT_SWEEP_RENEW_INTERVAL_MS,
+	);
+	if (configured < 1000) return 1000;
+	if (configured >= leaseMs) return Math.max(1000, Math.floor(leaseMs / 2));
+	return configured;
+}
+
+function leaseExpiresAtToMs(value) {
+	if (!value) return 0;
+	if (value && typeof value.toDate === 'function') {
+		const date = value.toDate();
+		if (date instanceof Date) return date.getTime();
+	}
+	if (value instanceof Date) return value.getTime();
+	if (typeof value === 'string') {
+		const parsed = new Date(value).getTime();
+		return Number.isFinite(parsed) ? parsed : 0;
+	}
+	if (typeof value === 'number') return value;
+	return 0;
+}
+
+function isLeaseHeldByOther(data, nowMs, expectedWorkerId) {
+	if (!data || typeof data !== 'object') return false;
+	const expiresAtMs = leaseExpiresAtToMs(data.lockedUntil);
+	if (!Number.isFinite(expiresAtMs) || expiresAtMs <= nowMs) return false;
+	if (data.lockedBy && expectedWorkerId && data.lockedBy === expectedWorkerId) return false;
+	return true;
+}
+
+function buildLeaseWrite(nowMs, leaseMs, workerId) {
+	const lockedUntilMs = nowMs + leaseMs;
+	return {
+		lockedBy: workerId,
+		lockedUntil: new Date(lockedUntilMs).toISOString(),
+		updatedAt: new Date(nowMs).toISOString(),
+		createdAt: new Date(nowMs).toISOString(),
+	};
+}
+
+async function acquireSweepLease(nowMs, leaseMs) {
+	const firestore = AlertStorageService.getFirestore();
+	if (!firestore) {
+		// In-memory fallback: single-flight guard inside this process only.
+		const existing = inMemorySweepLease;
+		if (existing && existing.lockedUntilMs > nowMs && existing.workerId !== SWEEP_WORKER_ID) {
+			return { acquired: false, reason: LEASE_HELD_REASON };
+		}
+		inMemorySweepLease = {
+			lockedUntilMs: nowMs + leaseMs,
+			workerId: SWEEP_WORKER_ID,
+		};
+		return { acquired: true, source: 'memory' };
+	}
+
+	const leaseRef = firestore.collection(LEASE_COLLECTION_NAME).doc(LEASE_DOCUMENT_ID);
+
+	if (typeof firestore.runTransaction === 'function') {
+		try {
+			const acquired = await firestore.runTransaction(async (tx) => {
+				const doc = await tx.get(leaseRef);
+				const data = doc && doc.exists ? doc.data() : null;
+				if (isLeaseHeldByOther(data, nowMs, SWEEP_WORKER_ID)) {
+					return false;
+				}
+				const write = buildLeaseWrite(nowMs, leaseMs, SWEEP_WORKER_ID);
+				tx.set(leaseRef, write, { merge: true });
+				return true;
+			});
+			return acquired
+				? { acquired: true, source: 'firestore' }
+				: { acquired: false, reason: LEASE_HELD_REASON };
+		} catch (err) {
+			console.warn('[SignalOutcomeService] Sweep lease transaction failed, falling back to memory:', err.message);
+			return acquireSweepLeaseInMemoryFallback(nowMs, leaseMs);
+		}
+	}
+
+	// Firestore client without runTransaction support (rare) — fall back.
+	return acquireSweepLeaseInMemoryFallback(nowMs, leaseMs);
+}
+
+function acquireSweepLeaseInMemoryFallback(nowMs, leaseMs) {
+	const existing = inMemorySweepLease;
+	if (existing && existing.lockedUntilMs > nowMs && existing.workerId !== SWEEP_WORKER_ID) {
+		return { acquired: false, reason: LEASE_HELD_REASON };
+	}
+	inMemorySweepLease = {
+		lockedUntilMs: nowMs + leaseMs,
+		workerId: SWEEP_WORKER_ID,
+	};
+	return { acquired: true, source: 'memory' };
+}
+
+async function renewSweepLease(nowMs, leaseMs) {
+	const firestore = AlertStorageService.getFirestore();
+	if (!firestore) {
+		if (inMemorySweepLease && inMemorySweepLease.workerId === SWEEP_WORKER_ID) {
+			inMemorySweepLease.lockedUntilMs = nowMs + leaseMs;
+			return { renewed: true, source: 'memory' };
+		}
+		return { renewed: false, reason: 'lost' };
+	}
+
+	const leaseRef = firestore.collection(LEASE_COLLECTION_NAME).doc(LEASE_DOCUMENT_ID);
+	if (typeof firestore.runTransaction !== 'function') {
+		return renewSweepLeaseInMemoryFallback(nowMs, leaseMs);
+	}
+	try {
+		const renewed = await firestore.runTransaction(async (tx) => {
+			const doc = await tx.get(leaseRef);
+			const data = doc && doc.exists ? doc.data() : null;
+			if (!data || data.lockedBy !== SWEEP_WORKER_ID) return false;
+			tx.update(leaseRef, {
+				lockedUntil: new Date(nowMs + leaseMs).toISOString(),
+				updatedAt: new Date(nowMs).toISOString(),
+			});
+			return true;
+		});
+		return renewed
+			? { renewed: true, source: 'firestore' }
+			: { renewed: false, reason: 'lost' };
+	} catch (err) {
+		console.warn('[SignalOutcomeService] Sweep lease renew failed:', err.message);
+		return { renewed: false, reason: 'error', error: err.message };
+	}
+}
+
+function renewSweepLeaseInMemoryFallback(nowMs, leaseMs) {
+	if (inMemorySweepLease && inMemorySweepLease.workerId === SWEEP_WORKER_ID) {
+		inMemorySweepLease.lockedUntilMs = nowMs + leaseMs;
+		return { renewed: true, source: 'memory' };
+	}
+	return { renewed: false, reason: 'lost' };
+}
+
+async function releaseSweepLease() {
+	const firestore = AlertStorageService.getFirestore();
+	if (!firestore) {
+		inMemorySweepLease = null;
+		return { released: true, source: 'memory' };
+	}
+
+	const leaseRef = firestore.collection(LEASE_COLLECTION_NAME).doc(LEASE_DOCUMENT_ID);
+	if (typeof firestore.runTransaction !== 'function') {
+		inMemorySweepLease = null;
+		return { released: true, source: 'memory' };
+	}
+	try {
+		await firestore.runTransaction(async (tx) => {
+			const doc = await tx.get(leaseRef);
+			const data = doc && doc.exists ? doc.data() : null;
+			if (!data || data.lockedBy !== SWEEP_WORKER_ID) return;
+			tx.update(leaseRef, {
+				lockedBy: null,
+				lockedUntil: null,
+				updatedAt: new Date().toISOString(),
+			});
+		});
+		return { released: true, source: 'firestore' };
+	} catch (err) {
+		console.warn('[SignalOutcomeService] Sweep lease release failed:', err.message);
+		return { released: false, reason: 'error', error: err.message };
+	}
+}
+
+function _resetSweepLeaseForTesting() {
+	inMemorySweepLease = null;
+}
+
+function _setInMemorySweepLeaseForTesting(workerId, lockedUntilMs) {
+	inMemorySweepLease = {
+		lockedUntilMs: Number(lockedUntilMs),
+		workerId: String(workerId),
+	};
+}
+
+function _getInMemorySweepLeaseForTesting() {
+	return inMemorySweepLease ? { ...inMemorySweepLease } : null;
 }
 
 function normalizeSide(side) {
@@ -461,9 +677,36 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 	let pendingCount = 0;
 	let errorCount = 0;
 	let regionBlockedCount = 0;
+	let sweepSkipped = false;
+	let sweepSkipReason = null;
+	let leaseHeld = false;
+	let leaseSource = null;
+	let leaseRenewalScheduled = false;
+
+	const effectiveMaxDurationMs = parseTimerInterval(
+		options.maxDurationMs !== undefined ? options.maxDurationMs : getRuntimeConfig().SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS,
+		30000,
+	);
+	const sweepLeaseMs = getSweepLeaseMs(DEFAULT_SWEEP_LEASE_MS);
+	const sweepLeaseRenewIntervalMs = getSweepLeaseRenewIntervalMs(sweepLeaseMs);
 
 	try {
 		const firestore = AlertStorageService.getFirestore();
+		const lease = await acquireSweepLease(startTime, sweepLeaseMs);
+		if (!lease.acquired) {
+			leaseHeld = true;
+			sweepSkipped = true;
+			sweepSkipReason = lease.reason || LEASE_HELD_REASON;
+			return {
+				scannedCount: 0,
+				evaluatedCount: 0,
+				skipped: true,
+				reason: sweepSkipReason,
+			};
+		}
+		leaseSource = lease.source;
+		lastLeaseRenewedAt = new Date(startTime);
+
 		if (!firestore) {
 			return { scannedCount: 0, evaluatedCount: 0, skipped: true, reason: 'no_firestore' };
 		}
@@ -473,19 +716,14 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 			50
 		);
 
-		const effectiveMaxDurationMs = parseTimerInterval(
-			options.maxDurationMs !== undefined ? options.maxDurationMs : getRuntimeConfig().SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS,
-			30000
-		);
-
 		const maxRetryAttempts = parsePositiveInteger(
 			options.maxRetryAttempts !== undefined ? options.maxRetryAttempts : getRuntimeConfig().SIGNAL_OUTCOME_MAX_RETRY_ATTEMPTS,
-			DEFAULT_MAX_RETRY_ATTEMPTS
+			DEFAULT_MAX_RETRY_ATTEMPTS,
 		);
 
 		const maxRetryAgeMs = parsePositiveInteger(
 			options.maxRetryAgeMs !== undefined ? options.maxRetryAgeMs : getRuntimeConfig().SIGNAL_OUTCOME_MAX_RETRY_AGE_MS,
-			DEFAULT_MAX_RETRY_AGE_MS
+			DEFAULT_MAX_RETRY_AGE_MS,
 		);
 
 		let query = firestore.collection(COLLECTION_NAME).where('outcomeEvaluated', '==', false);
@@ -518,6 +756,20 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 			if (Date.now() - startTime >= effectiveMaxDurationMs || sweepDeadlineExceeded) {
 				console.warn(`[SignalOutcomeService] Outcome evaluation sweep max duration budget (${effectiveMaxDurationMs}ms) exceeded. Halting sweep.`);
 				break;
+			}
+
+			// Renew the cross-instance sweep lease for long sweeps so the holder does not lose it mid-flight.
+			if (!sweepDeadlineExceeded
+				&& Date.now() - startTime >= sweepLeaseRenewIntervalMs
+				&& effectiveMaxDurationMs > sweepLeaseRenewIntervalMs) {
+				const renewResult = await renewSweepLease(Date.now(), sweepLeaseMs);
+				if (renewResult && renewResult.renewed) {
+					lastLeaseRenewedAt = new Date();
+				} else if (renewResult && renewResult.reason === 'lost') {
+					console.warn('[SignalOutcomeService] Sweep lease lost mid-sweep; another instance took over. Halting sweep.');
+					sweepDeadlineExceeded = true;
+					break;
+				}
 			}
 
 			scannedCount++;
@@ -1033,6 +1285,15 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 		lastRunPendingCount = pendingCount;
 		lastRunErrorCount = errorCount;
 		lastRunRegionBlockedCount = regionBlockedCount;
+		lastRunSkipped = sweepSkipped;
+		lastRunSkipReason = sweepSkipReason;
+		if (leaseSource && !leaseHeld) {
+			// Best-effort release; failures are logged inside releaseSweepLease.
+			await releaseSweepLease().catch((err) => {
+				console.warn('[SignalOutcomeService] Sweep lease release error during finally:', err && err.message);
+			});
+			lastLeaseReleasedAt = new Date();
+		}
 	}
 }
 
@@ -1171,6 +1432,10 @@ function getWorkerStatus() {
 		lastRunPendingCount,
 		lastRunErrorCount,
 		lastRunRegionBlockedCount,
+		lastRunSkipped,
+		lastRunSkipReason,
+		lastLeaseRenewedAt,
+		lastLeaseReleasedAt,
 		timerId: workerTimer ? true : null,
 	};
 }
@@ -1916,4 +2181,8 @@ module.exports = {
 	HEARTBEAT_COLLECTION_NAME,
 	STORAGE_UNAVAILABLE_CODE,
 	INVALID_CURSOR_MESSAGE,
+	// Test-only helpers for the in-memory sweep lease.
+	_resetSweepLeaseForTesting,
+	_setInMemorySweepLeaseForTesting,
+	_getInMemorySweepLeaseForTesting,
 };
