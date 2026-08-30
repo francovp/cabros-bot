@@ -1184,6 +1184,12 @@ async function getAlertById(alertId) {
 /**
  * Persist a replay attempt separately from the immutable original alert.
  *
+ * Each call writes a unique audit document so retries with the same idempotency
+ * key do not overwrite history. The HTTP `Idempotency-Replay` contract is
+ * preserved upstream by the idempotency middleware, which replays the cached
+ * response without re-running this storage write; this layer only sees fresh
+ * attempts that survived middleware, so uniqueness is required for audit.
+ *
  * @param {Object} params
  * @param {string} params.alertId
  * @param {string} params.idempotencyKey
@@ -1198,10 +1204,12 @@ async function saveReplayAttempt({ alertId, idempotencyKey, channels, deliveryRe
 	}
 
 	const idempotencyKeyHash = crypto.createHash('sha256').update(idempotencyKey).digest('hex');
-	const replayId = `${alertId}_${idempotencyKeyHash}`;
+	const attemptId = `${Date.now()}_${crypto.randomUUID()}`;
+	const replayId = `${alertId}_${idempotencyKeyHash}_${attemptId}`;
 	const document = {
 		alertId,
 		idempotencyKeyHash,
+		attemptId,
 		channels: Array.isArray(channels) ? channels : [],
 		deliveryResults: Array.isArray(deliveryResults) ? deliveryResults : [],
 		replayedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -1216,6 +1224,181 @@ async function saveReplayAttempt({ alertId, idempotencyKey, channels, deliveryRe
 		console.warn('[AlertStorageService] Failed to store alert replay attempt:', error.message);
 		throw createStorageUnavailableError(error);
 	}
+}
+
+/**
+ * Format a replay document into an API-safe response payload. Only safe fields
+ * are exposed: the original idempotency key is never persisted or returned, and
+ * delivery results are reduced to a compact summary.
+ *
+ * @param {Object} doc Firestore snapshot document
+ * @returns {Object|null}
+ */
+function formatReplayDocument(doc) {
+	if (!doc || typeof doc.data !== 'function') {
+		return null;
+	}
+
+	const data = doc.data() || {};
+	const replayedAt = data.replayedAt && typeof data.replayedAt.toDate === 'function'
+		? data.replayedAt.toDate().toISOString()
+		: null;
+	const compactDelivery = (Array.isArray(data.deliveryResults) ? data.deliveryResults : []).map((entry) => {
+		if (!entry || typeof entry !== 'object') {
+			return null;
+		}
+		const compact = { channel: typeof entry.channel === 'string' ? entry.channel : null };
+		if (typeof entry.success === 'boolean') {
+			compact.success = entry.success;
+		}
+		if (typeof entry.messageId === 'string' && entry.messageId) {
+			compact.messageId = entry.messageId;
+		}
+		if (typeof entry.errorCode === 'string' && entry.errorCode) {
+			compact.errorCode = entry.errorCode;
+		}
+		if (typeof entry.statusCode === 'number' && Number.isFinite(entry.statusCode)) {
+			compact.statusCode = entry.statusCode;
+		}
+		return compact;
+	}).filter(Boolean);
+
+	return {
+		id: doc.id,
+		alertId: typeof data.alertId === 'string' ? data.alertId : null,
+		idempotencyKeyHashPrefix: typeof data.idempotencyKeyHash === 'string'
+			? data.idempotencyKeyHash.slice(0, 12)
+			: null,
+		channels: Array.isArray(data.channels) ? data.channels : [],
+		deliverySummary: compactDelivery,
+		replayedAt,
+		attemptId: typeof data.attemptId === 'string' ? data.attemptId : null,
+	};
+}
+
+function getReplayCursorValues(doc) {
+	if (!doc || typeof doc.data !== 'function') {
+		return null;
+	}
+	const data = doc.data() || {};
+	const replayedAt = data.replayedAt && typeof data.replayedAt.toDate === 'function'
+		? data.replayedAt.toDate().toISOString()
+		: null;
+	if (!replayedAt || typeof doc.id !== 'string' || !doc.id) {
+		return null;
+	}
+	return { replayedAt, documentId: doc.id };
+}
+
+/**
+ * Bounded list of replay audit records with retention filtering and optional
+ * alertId filter. Mirrors `listAlerts()` pagination and error semantics.
+ *
+ * @param {Object} params
+ * @param {number|undefined} params.limit
+ * @param {string|undefined} params.alertId
+ * @returns {Promise<{replays: Array, hasMore: boolean, nextBefore: string|null}|null>}
+ */
+async function listReplayAttempts({ limit = DEFAULT_PAGE_SIZE, alertId } = {}) {
+	if (!isEnabled()) {
+		return null;
+	}
+
+	const firestore = getFirestore();
+	if (!firestore) {
+		throw createStorageUnavailableError();
+	}
+
+	const pageSize = clampLimit(limit);
+	const targetCount = pageSize + 1;
+	const matches = [];
+
+	let query = firestore
+		.collection(REPLAY_COLLECTION_NAME)
+		.orderBy('replayedAt', 'desc')
+		.orderBy(admin.firestore.FieldPath.documentId(), 'desc')
+		.limit(targetCount);
+
+	if (typeof alertId === 'string' && alertId.trim()) {
+		query = firestore
+			.collection(REPLAY_COLLECTION_NAME)
+			.where('alertId', '==', alertId.trim())
+			.orderBy('replayedAt', 'desc')
+			.orderBy(admin.firestore.FieldPath.documentId(), 'desc')
+			.limit(targetCount);
+	}
+
+	let snapshot;
+	try {
+		snapshot = await query.get();
+	} catch (error) {
+		console.warn('[AlertStorageService] Failed to list replay attempts:', error.message);
+		throw createStorageUnavailableError(error);
+	}
+
+	if (!snapshot || !Array.isArray(snapshot.docs)) {
+		return { replays: [], hasMore: false, nextBefore: null };
+	}
+
+	const activeDocs = snapshot.docs.filter(doc => !isRetentionExpired(doc.data() || {}));
+	for (const doc of activeDocs) {
+		if (matches.length >= targetCount) {
+			break;
+		}
+		const formatted = formatReplayDocument(doc);
+		if (formatted) {
+			matches.push(formatted);
+		}
+	}
+
+	const hasMore = matches.length > pageSize;
+	const replays = hasMore ? matches.slice(0, pageSize) : matches;
+	const lastDoc = hasMore ? activeDocs[pageSize - 1] : activeDocs[activeDocs.length - 1];
+	const lastCursor = lastDoc ? getReplayCursorValues(lastDoc) : null;
+	const nextBefore = hasMore && lastCursor
+		? encodeAlertPaginationCursor({ receivedAt: lastCursor.replayedAt, id: lastCursor.documentId })
+		: null;
+
+	return { replays, hasMore, nextBefore };
+}
+
+/**
+ * Most recent replay metadata for a single alert, formatted for inclusion on
+ * `GET /api/alerts/:alertId`. Returns `null` if no replay exists.
+ *
+ * @param {string} alertId
+ * @returns {Promise<Object|null>}
+ */
+async function getLatestReplayForAlert(alertId) {
+	if (!isEnabled() || typeof alertId !== 'string' || !alertId.trim()) {
+		return null;
+	}
+
+	const firestore = getFirestore();
+	if (!firestore) {
+		throw createStorageUnavailableError();
+	}
+
+	let snapshot;
+	try {
+		snapshot = await firestore
+			.collection(REPLAY_COLLECTION_NAME)
+			.where('alertId', '==', alertId.trim())
+			.orderBy('replayedAt', 'desc')
+			.orderBy(admin.firestore.FieldPath.documentId(), 'desc')
+			.limit(1)
+			.get();
+	} catch (error) {
+		console.warn('[AlertStorageService] Failed to read latest replay for alert:', error.message);
+		throw createStorageUnavailableError(error);
+	}
+
+	if (!snapshot || !Array.isArray(snapshot.docs) || snapshot.docs.length === 0) {
+		return null;
+	}
+
+	const doc = snapshot.docs.find(d => !isRetentionExpired(d.data() || {}));
+	return doc ? formatReplayDocument(doc) : null;
 }
 
 /**
@@ -1484,6 +1667,8 @@ module.exports = {
 	summarizeAlerts,
 	exportAlerts,
 	saveReplayAttempt,
+	listReplayAttempts,
+	getLatestReplayForAlert,
 	parseSymbolFromText,
 	extractSymbolAndExchange,
 	extractAlertSymbol,

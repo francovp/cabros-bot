@@ -347,6 +347,59 @@
         "x-admin-role": "admin.viewer"
       }
     },
+    "/api/alerts/replays": {
+      "get": {
+        "tags": [
+          "Alerts"
+        ],
+        "summary": "List stored alert replay attempts",
+        "description": "Bounded read of the alertReplays audit collection. Each POST /api/alerts/{alertId}/replay creates a unique document so retries with the same idempotency key do not overwrite prior attempts; raw idempotency keys are never returned. Use the optional alertId query to scope the result to a single stored alert.",
+        "operationId": "listReplays",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/AlertListLimit"
+          },
+          {
+            "$ref": "#/components/parameters/Cursor"
+          },
+          {
+            "name": "alertId",
+            "in": "query",
+            "required": false,
+            "description": "Optional stored alert id to filter replay attempts.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/ReplayAttemptList"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      }
+    },
     "/api/alerts/summary": {
       "get": {
         "tags": [
@@ -2726,6 +2779,16 @@
           }
         }
       },
+      "ReplayAttemptList": {
+        "description": "Bounded list of replay audit records with safe fields and pagination metadata",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ReplayAttemptList"
+            }
+          }
+        }
+      },
       "JobResult": {
         "description": "Asynchronous job state",
         "content": {
@@ -3586,6 +3649,127 @@
             "type": "integer",
             "minimum": 20001,
             "description": "Length of the original alert text in characters before the 20,000-character cap was applied."
+          }
+        }
+      },
+      "ReplayAttempt": {
+        "type": "object",
+        "description": "Audit record for a single replay attempt. Each call to POST /api/alerts/{alertId}/replay creates a unique document so repeated replays with the same idempotency key do not overwrite prior attempts; the HTTP Idempotency-Replay contract is preserved upstream by the idempotency middleware. Raw idempotency keys are never persisted; only a SHA-256 hash prefix is exposed so attempts can be grouped without leaking the caller-supplied key.",
+        "required": [
+          "id",
+          "alertId",
+          "channels",
+          "deliverySummary",
+          "replayedAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Composite document ID `${alertId}_${idempotencyKeyHash}_${timestamp}_${uuid}`."
+          },
+          "alertId": {
+            "type": "string"
+          },
+          "idempotencyKeyHashPrefix": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "First 12 hex characters of the SHA-256 hash of the supplied idempotency key. The raw key is never stored or returned."
+          },
+          "attemptId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Unique attempt identifier (timestamp + UUID)."
+          },
+          "channels": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "telegram",
+                "whatsapp",
+                "discord"
+              ]
+            }
+          },
+          "deliverySummary": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "channel"
+              ],
+              "properties": {
+                "channel": {
+                  "type": "string"
+                },
+                "success": {
+                  "type": "boolean"
+                },
+                "messageId": {
+                  "type": "string"
+                },
+                "errorCode": {
+                  "type": "string"
+                },
+                "statusCode": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "replayedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "ReplayAttemptList": {
+        "type": "object",
+        "required": [
+          "success",
+          "replays",
+          "pagination"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "replays": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReplayAttempt"
+            }
+          },
+          "pagination": {
+            "type": "object",
+            "required": [
+              "hasMore",
+              "limit",
+              "nextBefore"
+            ],
+            "properties": {
+              "hasMore": {
+                "type": "boolean"
+              },
+              "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100
+              },
+              "nextBefore": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
           }
         }
       },

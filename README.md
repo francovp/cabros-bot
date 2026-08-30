@@ -1261,9 +1261,45 @@ The service caps the queried window at 31 days to keep routine operator usage ch
 
 For rollout validation, first verify the active prompt provenance and coverage in preview, then observe a bounded production/shadow window after aligning the remote `alert-enrichment` prompt with the local optional-risk schema. Treat missing fields as unavailable data; do not use zero coverage as a trading outcome or fabricate stops, targets, setup types, or R:R values.
 
+#### GET /api/alerts/replays
+
+List bounded alert-replay audit records from the Firestore `alertReplays` collection, ordered by `replayedAt` descending. Each `POST /api/alerts/{alertId}/replay` writes a unique audit document so retries with the same idempotency key are preserved as history instead of overwriting prior attempts; the HTTP `Idempotency-Replay` contract remains upstream of storage. Raw idempotency keys are never stored or returned — only a SHA-256 hash prefix is exposed.
+
+**Query Parameters:**
+- `limit` - Integer between `1` and `100` (default: `50`)
+- `before` - Either a legacy ISO-8601 timestamp cursor or the opaque `nextBefore` token from a previous response
+- `alertId` - Optional stored alert id to scope replays to a single document
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "replays": [
+    {
+      "id": "alert-1_<sha256-hash>_1700000000000_<uuid>",
+      "alertId": "alert-1",
+      "idempotencyKeyHashPrefix": "06bdeddf2a29",
+      "attemptId": "1700000000000_<uuid>",
+      "channels": ["telegram"],
+      "deliverySummary": [
+        { "channel": "telegram", "success": true, "messageId": "tg-1" }
+      ],
+      "replayedAt": "2026-06-06T12:34:56.000Z"
+    }
+  ],
+  "pagination": {
+    "hasMore": false,
+    "limit": 50,
+    "nextBefore": null
+  }
+}
+```
+
+The same `403 FEATURE_DISABLED` (when `ENABLE_FIRESTORE_ALERT_STORAGE=false`) and `503 STORAGE_UNAVAILABLE` mapping as the sibling endpoints applies.
+
 #### GET /api/alerts/:alertId
 
-Retrieve a single stored alert by Firestore document ID.
+Retrieve a single stored alert by Firestore document ID. The response also surfaces `lastReplay` — the most recent `alertReplays` entry for the alert, or `null` if none has been recorded.
 
 **Response (200 OK):**
 ```json
@@ -1280,6 +1316,17 @@ Retrieve a single stored alert by Firestore document ID.
     "source": "webhook",
     "useTradingViewData": true,
     "tradingViewEnrichmentApplied": false
+  },
+  "lastReplay": {
+    "id": "alert-123_<sha256-hash>_1700000000000_<uuid>",
+    "alertId": "alert-123",
+    "idempotencyKeyHashPrefix": "06bdeddf2a29",
+    "attemptId": "1700000000000_<uuid>",
+    "channels": ["telegram"],
+    "deliverySummary": [
+      { "channel": "telegram", "success": true, "messageId": "tg-1" }
+    ],
+    "replayedAt": "2026-06-06T12:34:56.000Z"
   }
 }
 ```

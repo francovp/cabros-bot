@@ -982,7 +982,7 @@ describe('AlertStorageService', () => {
 	});
 
 	describe('saveReplayAttempt()', () => {
-		it('stores replay attempts using a hashed idempotency key document ID', async () => {
+		it('stores replay attempts using a hashed idempotency key plus a unique attempt suffix', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 			const idempotencyKey = 'replay/key-1';
 			const idempotencyKeyHash = crypto.createHash('sha256').update(idempotencyKey).digest('hex');
@@ -994,33 +994,40 @@ describe('AlertStorageService', () => {
 				deliveryResults: [{ channel: 'telegram', success: true }],
 			});
 
-			expect(result).toBe(`alert-123_${idempotencyKeyHash}`);
+			expect(result).toMatch(/^alert-123_[a-f0-9]{64}_[0-9]+_[0-9a-f-]{36}$/);
+			expect(result.startsWith(`alert-123_${idempotencyKeyHash}_`)).toBe(true);
 			expect(mockCollection).toHaveBeenCalledWith('alertReplays');
-			expect(mockDocSet).toHaveBeenCalledWith({
-				alertId: 'alert-123',
-				idempotencyKeyHash,
-				channels: ['telegram'],
-				deliveryResults: [{ channel: 'telegram', success: true }],
-				replayedAt: expect.anything(),
-				expiresAt: expect.anything(),
-				source: 'alert-replay',
-			});
-			expect(JSON.stringify(mockDocSet.mock.calls[0][0])).not.toContain(idempotencyKey);
+			const document = mockDocSet.mock.calls[0][0];
+			expect(document.alertId).toBe('alert-123');
+			expect(document.idempotencyKeyHash).toBe(idempotencyKeyHash);
+			expect(document.channels).toEqual(['telegram']);
+			expect(document.deliveryResults).toEqual([{ channel: 'telegram', success: true }]);
+			expect(document.replayedAt).toBeDefined();
+			expect(document.expiresAt).toBeDefined();
+			expect(document.source).toBe('alert-replay');
+			expect(typeof document.attemptId).toBe('string');
+			expect(JSON.stringify(document)).not.toContain(idempotencyKey);
 		});
 
-		it('uses a bounded replay document ID for long idempotency keys', async () => {
+		it('produces a unique document ID for repeated calls with the same idempotency key', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
-			const idempotencyKey = 'a'.repeat(10_000);
+			const idempotencyKey = 'replay-key-shared';
 
-			const result = await AlertStorageService.saveReplayAttempt({
+			const first = await AlertStorageService.saveReplayAttempt({
 				alertId: 'alert-123',
 				idempotencyKey,
-				channels: [],
-				deliveryResults: [],
+				channels: ['telegram'],
+				deliveryResults: [{ channel: 'telegram', success: true }],
+			});
+			const second = await AlertStorageService.saveReplayAttempt({
+				alertId: 'alert-123',
+				idempotencyKey,
+				channels: ['whatsapp'],
+				deliveryResults: [{ channel: 'whatsapp', success: false }],
 			});
 
-			expect(result).toMatch(/^alert-123_[a-f0-9]{64}$/);
-			expect(result).toHaveLength('alert-123_'.length + 64);
+			expect(first).not.toEqual(second);
+			expect(mockDocSet).toHaveBeenCalledTimes(2);
 		});
 
 		it('throws STORAGE_UNAVAILABLE when replay audit storage fails', async () => {
@@ -1037,6 +1044,155 @@ describe('AlertStorageService', () => {
 			});
 		});
 
+	});
+
+	describe('listReplayAttempts()', () => {
+		it('returns null when alert storage is disabled', async () => {
+			const result = await AlertStorageService.listReplayAttempts({ limit: 5 });
+			expect(result).toBeNull();
+			expect(mockGet).not.toHaveBeenCalled();
+		});
+
+		it('lists replay attempts with safe fields and pagination metadata', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('alert-1_hash_ts_uuid', {
+						alertId: 'alert-1',
+						idempotencyKeyHash: 'abcdef0123456789',
+						attemptId: 'ts_uuid',
+						channels: ['telegram'],
+						deliveryResults: [{ channel: 'telegram', success: true, messageId: 'tg-1' }],
+						replayedAt: buildTimestamp('2026-06-06T12:34:56.000Z'),
+					}),
+					buildQueryDoc('alert-2_hash_ts_uuid', {
+						alertId: 'alert-2',
+						idempotencyKeyHash: '0123456789abcdef',
+						attemptId: 'ts_uuid',
+						channels: ['whatsapp'],
+						deliveryResults: [{ channel: 'whatsapp', success: false, errorCode: 'TIMEOUT', statusCode: 504 }],
+						replayedAt: buildTimestamp('2026-06-06T11:34:56.000Z'),
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.listReplayAttempts({ limit: 1 });
+
+			expect(mockCollection).toHaveBeenCalledWith('alertReplays');
+			expect(mockOrderBy).toHaveBeenNthCalledWith(1, 'replayedAt', 'desc');
+			expect(mockOrderBy).toHaveBeenNthCalledWith(2, '__name__', 'desc');
+			expect(mockLimit).toHaveBeenCalledWith(2);
+			expect(result.replays).toEqual([
+				{
+					id: 'alert-1_hash_ts_uuid',
+					alertId: 'alert-1',
+					idempotencyKeyHashPrefix: 'abcdef012345',
+					channels: ['telegram'],
+					deliverySummary: [{ channel: 'telegram', success: true, messageId: 'tg-1' }],
+					replayedAt: '2026-06-06T12:34:56.000Z',
+					attemptId: 'ts_uuid',
+				},
+			]);
+			expect(result.hasMore).toBe(true);
+			expect(parseAlertPaginationCursor(result.nextBefore)).toMatchObject({
+				type: 'composite',
+				receivedAt: '2026-06-06T12:34:56.000Z',
+				documentId: 'alert-1_hash_ts_uuid',
+			});
+		});
+
+		it('filters by alertId when provided', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({ empty: true, docs: [] });
+
+			await AlertStorageService.listReplayAttempts({ alertId: 'alert-42', limit: 10 });
+
+			expect(mockWhere).toHaveBeenCalledWith('alertId', '==', 'alert-42');
+			expect(mockCollection).toHaveBeenCalledWith('alertReplays');
+		});
+
+		it('throws STORAGE_UNAVAILABLE when listing replays fails', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockRejectedValueOnce(new Error('permission denied'));
+
+			await expect(AlertStorageService.listReplayAttempts({ limit: 5 })).rejects.toMatchObject({
+				code: 'STORAGE_UNAVAILABLE',
+			});
+		});
+
+		it('returns empty list when the snapshot is empty', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({ empty: true, docs: [] });
+
+			const result = await AlertStorageService.listReplayAttempts({ limit: 5 });
+
+			expect(result).toEqual({ replays: [], hasMore: false, nextBefore: null });
+		});
+	});
+
+	describe('getLatestReplayForAlert()', () => {
+		it('returns null when alert storage is disabled', async () => {
+			const result = await AlertStorageService.getLatestReplayForAlert('alert-1');
+			expect(result).toBeNull();
+			expect(mockGet).not.toHaveBeenCalled();
+		});
+
+		it('returns null when alertId is missing or blank', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			expect(await AlertStorageService.getLatestReplayForAlert('')).toBeNull();
+			expect(await AlertStorageService.getLatestReplayForAlert('   ')).toBeNull();
+			expect(mockGet).not.toHaveBeenCalled();
+		});
+
+		it('returns the formatted latest replay for an alert', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('alert-1_hash_ts_uuid', {
+						alertId: 'alert-1',
+						idempotencyKeyHash: 'abcdef0123456789',
+						attemptId: 'ts_uuid',
+						channels: ['telegram'],
+						deliveryResults: [{ channel: 'telegram', success: true }],
+						replayedAt: buildTimestamp('2026-06-06T12:34:56.000Z'),
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.getLatestReplayForAlert('alert-1');
+
+			expect(mockWhere).toHaveBeenCalledWith('alertId', '==', 'alert-1');
+			expect(mockLimit).toHaveBeenCalledWith(1);
+			expect(result).toEqual({
+				id: 'alert-1_hash_ts_uuid',
+				alertId: 'alert-1',
+				idempotencyKeyHashPrefix: 'abcdef012345',
+				channels: ['telegram'],
+				deliverySummary: [{ channel: 'telegram', success: true }],
+				replayedAt: '2026-06-06T12:34:56.000Z',
+				attemptId: 'ts_uuid',
+			});
+		});
+
+		it('returns null when no replay document exists', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({ empty: true, docs: [] });
+
+			const result = await AlertStorageService.getLatestReplayForAlert('alert-1');
+
+			expect(result).toBeNull();
+		});
+
+		it('throws STORAGE_UNAVAILABLE when reading latest replay fails', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockRejectedValueOnce(new Error('permission denied'));
+
+			await expect(AlertStorageService.getLatestReplayForAlert('alert-1')).rejects.toMatchObject({
+				code: 'STORAGE_UNAVAILABLE',
+			});
+		});
 	});
 
 	describe('exportAlerts()', () => {

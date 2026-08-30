@@ -401,9 +401,69 @@ function getAlertById(req, res) {
 			});
 		}
 
+		let lastReplay = null;
+		try {
+			lastReplay = await alertStorageService.getLatestReplayForAlert(alertId);
+		} catch (error) {
+			// Storage errors are surfaced by the outer handleAsync — never block alert reads.
+			if (error && error.code === alertStorageService.STORAGE_UNAVAILABLE_CODE) {
+				throw error;
+			}
+			console.warn('[AlertsController] Failed to read last replay metadata:', error && error.message);
+		}
+
 		return res.status(200).json({
 			success: true,
 			alert,
+			lastReplay,
+		});
+	});
+}
+
+function listReplays(req, res) {
+	return handleAsync(req, res, '/api/alerts/replays', async () => {
+		if (!alertStorageService.isEnabled()) {
+			return res.status(403).json({
+				error: 'Alert storage feature is disabled. Set ENABLE_FIRESTORE_ALERT_STORAGE=true to enable.',
+				code: 'FEATURE_DISABLED',
+			});
+		}
+
+		const limit = parseLimit(req.query.limit);
+		if (limit === null) {
+			return res.status(400).json({
+				error: `Invalid limit. Use an integer between 1 and ${MAX_LIMIT}.`,
+				code: 'INVALID_REQUEST',
+			});
+		}
+
+		const before = typeof req.query.before === 'string' && req.query.before.trim()
+			? req.query.before.trim()
+			: undefined;
+		if (before && !alertStorageService.parseAlertPaginationCursor(before)) {
+			return res.status(400).json({
+				error: alertStorageService.INVALID_CURSOR_MESSAGE,
+				code: 'INVALID_REQUEST',
+			});
+		}
+
+		const alertId = typeof req.query.alertId === 'string' && req.query.alertId.trim()
+			? req.query.alertId.trim()
+			: undefined;
+
+		const result = await alertStorageService.listReplayAttempts({
+			limit,
+			alertId,
+		});
+
+		return res.status(200).json({
+			success: true,
+			replays: result.replays,
+			pagination: {
+				hasMore: result.hasMore,
+				limit,
+				nextBefore: result.nextBefore,
+			},
 		});
 	});
 }
@@ -559,6 +619,7 @@ function handleAsync(req, res, endpoint, handler) {
 module.exports = {
 	listAlerts,
 	getAlertById,
+	listReplays,
 	replayAlert,
 	summarizeAlerts,
 	exportAlerts,

@@ -56,7 +56,7 @@ describe('OpenAPI contract', () => {
 			.filter((operation) => operation && operation.responses);
 
 		const firebaseAdminOperations = new Set([
-			'GET /api/alerts', 'GET /api/alerts/summary', 'GET /api/alerts/export',
+			'GET /api/alerts', 'GET /api/alerts/replays', 'GET /api/alerts/summary', 'GET /api/alerts/export',
 			'GET /api/alerts/{alertId}', 'POST /api/alerts/{alertId}/replay',
 			'GET /api/scanner-presets', 'POST /api/scanner-presets',
 			'GET /api/scanner-presets/{id}', 'PUT /api/scanner-presets/{id}',
