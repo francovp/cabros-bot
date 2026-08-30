@@ -3,6 +3,11 @@ const { groundAlert } = require('../../../../services/grounding/grounding');
 const { GROUNDING_MODEL_NAME } = require('../../../../services/grounding/config');
 const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteConfigService');
 const { tradingViewMcpService } = require('../../../../services/tradingview/TradingViewMcpService');
+const { parseTradingViewSignal } = require('../../../../services/tradingview/parseTradingViewSignal');
+const {
+	deriveFallbackTradePlan,
+	calculateFallbackRiskLevels,
+} = require('../../../../services/tradingview/fallbackTradePlan');
 
 function mergeUnique(first = [], second = [], maxItems = 6) {
 	const result = [];
@@ -64,8 +69,12 @@ function hasCompleteRiskMetadata(value = {}) {
 function selectRiskMetadata(gemini, mcp) {
 	const source = hasCompleteRiskMetadata(mcp) ? mcp : hasCompleteRiskMetadata(gemini) ? gemini : null;
 	const setupType = pickSetupType(gemini.setup_type, mcp.setup_type);
+	const setupEvidence = setupType && (setupType === gemini.setup_type ? gemini.setup_evidence : mcp.setup_evidence);
 	if (!source) {
-		return setupType ? { setup_type: setupType } : {};
+		return {
+			...(setupType ? { setup_type: setupType } : {}),
+			...(setupEvidence ? { setup_evidence: setupEvidence } : {}),
+		};
 	}
 
 	return {
@@ -73,6 +82,7 @@ function selectRiskMetadata(gemini, mcp) {
 		target_level: source.target_level,
 		risk_reward_ratio: source.risk_reward_ratio,
 		...(setupType ? { setup_type: setupType } : {}),
+		...(setupEvidence ? { setup_evidence: setupEvidence } : {}),
 	};
 }
 
@@ -185,7 +195,6 @@ function selectSentimentAndScore(gemini = {}, mcp = {}) {
 	const geminiScore = (typeof gemini.sentiment_score === 'number' && Number.isFinite(gemini.sentiment_score))
 		? gemini.sentiment_score
 		: null;
-
 	const mcpSentiment = (typeof mcp.sentiment === 'string' && ['BULLISH', 'BEARISH', 'NEUTRAL'].includes(mcp.sentiment))
 		? mcp.sentiment
 		: null;
@@ -242,7 +251,7 @@ function mergeEnrichmentData(text, geminiEnriched, mcpEnriched) {
 		const gemini = geminiEnriched || {};
 		const mcp = mcpEnriched || {};
 
-		const { levels: technicalLevels, levelsSource } = buildMergedTechnicalLevels(gemini, mcp);
+		const { levels: technicalLevels, levelsSource: technicalLevelsSource } = buildMergedTechnicalLevels(gemini, mcp);
 
 		const { sentiment, sentiment_score, sentimentConflict } = selectSentimentAndScore(gemini, mcp);
 
@@ -261,7 +270,7 @@ function mergeEnrichmentData(text, geminiEnriched, mcpEnriched) {
 			priorityMcpInsights,
 			mergeUnique(gemini.insights || [], remainingMcpInsights),
 		);
-		const optionalRiskMetadata = selectRiskMetadata(gemini, mcp);
+		let optionalRiskMetadata = selectRiskMetadata(gemini, mcp);
 
 		const mcpCurrentPrice = typeof mcp.current_price === 'number' && Number.isFinite(mcp.current_price) && mcp.current_price > 0
 			? mcp.current_price
@@ -269,13 +278,36 @@ function mergeEnrichmentData(text, geminiEnriched, mcpEnriched) {
 				? mcp.price_data.current_price
 				: null);
 
+		let levelsSource = technicalLevelsSource;
+
+		if (!hasCompleteRiskMetadata(optionalRiskMetadata) && mcpCurrentPrice) {
+			const parsed = parseTradingViewSignal(text);
+			if (parsed && parsed.side) {
+				const fallback = calculateFallbackRiskLevels(mcpCurrentPrice, parsed.timeframe, parsed.side);
+				if (fallback) {
+					optionalRiskMetadata = {
+						invalidation_level: fallback.invalidation_level,
+						target_level: fallback.target_level,
+						risk_reward_ratio: fallback.risk_reward_ratio,
+						setup_type: optionalRiskMetadata.setup_type || fallback.setup_type,
+					};
+					if (!levelsSource) {
+						levelsSource = 'derived-quote';
+					}
+				}
+			}
+		}
+
 		return {
 			original_text: text,
 			tradingViewEnrichmentApplied: mcp.tradingViewEnrichmentApplied === true,
 			...(mcp.tradingViewEnrichmentStatus ? { tradingViewEnrichmentStatus: mcp.tradingViewEnrichmentStatus } : {}),
-			sentiment,
-			sentiment_score,
-			...(sentimentConflict ? { sentimentConflict: true } : {}),
+				sentiment,
+				sentiment_score,
+				...(typeof gemini.sentiment_score_raw === 'number' && Number.isFinite(gemini.sentiment_score_raw)
+					? { sentiment_score_raw: gemini.sentiment_score_raw }
+					: {}),
+				...(sentimentConflict ? { sentimentConflict: true } : {}),
 			current_price: mcpCurrentPrice,
 			...(mcp.price_data ? { price_data: mcp.price_data } : {}),
 			insights,
@@ -308,6 +340,7 @@ async function enrichWithGemini(text, tokenUsage) {
 	const {
 		sentiment,
 		sentiment_score,
+		sentiment_score_raw,
 		insights,
 		sources,
 		truncated,
@@ -317,6 +350,7 @@ async function enrichWithGemini(text, tokenUsage) {
 		invalidation_level,
 		target_level,
 		setup_type,
+		setup_evidence,
 		risk_reward_ratio,
 	} = await groundAlert({
 		text,
@@ -339,6 +373,9 @@ async function enrichWithGemini(text, tokenUsage) {
 	return {
 		original_text: text,
 		...(guarded ? { sentiment: guarded.sentiment, sentiment_score: guarded.sentiment_score } : {}),
+		...(typeof sentiment_score_raw === 'number' && Number.isFinite(sentiment_score_raw)
+			? { sentiment_score_raw }
+			: {}),
 		insights,
 		sources,
 		truncated,
@@ -346,7 +383,7 @@ async function enrichWithGemini(text, tokenUsage) {
 		...(promptProvenance ? { promptProvenance } : {}),
 		...(technical_levels ? { technical_levels } : {}),
 		...Object.fromEntries(
-			Object.entries({ invalidation_level, target_level, setup_type, risk_reward_ratio })
+			Object.entries({ invalidation_level, target_level, setup_type, setup_evidence, risk_reward_ratio })
 				.filter(([, value]) => value !== undefined),
 		),
 	};
@@ -431,6 +468,28 @@ async function enrichAlert(alert, options = {}) {
 
 	if (!isGeminiEnabled) {
 		if (mcpEnrichmentFailed) {
+			const fallbackPlan = await deriveFallbackTradePlan(text).catch(() => null);
+			if (fallbackPlan) {
+				const sideSentiment = fallbackPlan.side === 'SELL' ? 'BEARISH' : 'BULLISH';
+				const sideScore = fallbackPlan.side === 'SELL' ? -0.55 : 0.55;
+				return {
+					original_text: text,
+					sentiment: sideSentiment,
+					sentiment_score: sideScore,
+					insights: [`Señal de ${fallbackPlan.side === 'SELL' ? 'VENTA' : 'COMPRA'} detectada para ${fallbackPlan.symbol}`],
+					technical_levels: { supports: [], resistances: [] },
+					current_price: fallbackPlan.current_price,
+					price_data: fallbackPlan.price_data,
+					invalidation_level: fallbackPlan.invalidation_level,
+					target_level: fallbackPlan.target_level,
+					risk_reward_ratio: fallbackPlan.risk_reward_ratio,
+					setup_type: fallbackPlan.setup_type,
+					levelsSource: 'derived-quote',
+					sources: [],
+					truncated: false,
+					extraText: '*Model used*: `derived-quote`',
+				};
+			}
 			throw new Error('TradingView MCP enrichment failed');
 		}
 		if (mcpEnrichedAlert) {
@@ -453,7 +512,7 @@ async function enrichAlert(alert, options = {}) {
 
 		if (geminiEnrichedAlert) {
 			const guarded = applySignCoherenceGuard(geminiEnrichedAlert.sentiment, geminiEnrichedAlert.sentiment_score);
-			return {
+			let result = {
 				...geminiEnrichedAlert,
 				sentiment: guarded.sentiment,
 				sentiment_score: guarded.sentiment_score,
@@ -461,6 +520,24 @@ async function enrichAlert(alert, options = {}) {
 				// Gemini-parsed levels are fallback data and carry provenance.
 				...(geminiEnrichedAlert.technical_levels ? { levelsSource: 'gemini-grounding' } : {}),
 			};
+
+			if (!hasCompleteRiskMetadata(geminiEnrichedAlert)) {
+				const fallbackPlan = await deriveFallbackTradePlan(text).catch(() => null);
+				if (fallbackPlan) {
+					result = {
+						...result,
+						current_price: result.current_price ?? fallbackPlan.current_price,
+						price_data: result.price_data ?? fallbackPlan.price_data,
+						invalidation_level: result.invalidation_level ?? fallbackPlan.invalidation_level,
+						target_level: result.target_level ?? fallbackPlan.target_level,
+						risk_reward_ratio: result.risk_reward_ratio ?? fallbackPlan.risk_reward_ratio,
+						setup_type: result.setup_type || fallbackPlan.setup_type,
+						levelsSource: result.levelsSource || 'derived-quote',
+					};
+				}
+			}
+
+			return result;
 		}
 
 		return geminiEnrichedAlert;
@@ -472,6 +549,29 @@ async function enrichAlert(alert, options = {}) {
 				...mcpEnrichedAlert,
 				sentiment: guarded.sentiment,
 				sentiment_score: guarded.sentiment_score,
+			};
+		}
+
+		const fallbackPlan = await deriveFallbackTradePlan(text).catch(() => null);
+		if (fallbackPlan) {
+			const sideSentiment = fallbackPlan.side === 'SELL' ? 'BEARISH' : 'BULLISH';
+			const sideScore = fallbackPlan.side === 'SELL' ? -0.55 : 0.55;
+			return {
+				original_text: text,
+				sentiment: sideSentiment,
+				sentiment_score: sideScore,
+				insights: [`Señal de ${fallbackPlan.side === 'SELL' ? 'VENTA' : 'COMPRA'} detectada para ${fallbackPlan.symbol}`],
+				technical_levels: { supports: [], resistances: [] },
+				current_price: fallbackPlan.current_price,
+				price_data: fallbackPlan.price_data,
+				invalidation_level: fallbackPlan.invalidation_level,
+				target_level: fallbackPlan.target_level,
+				risk_reward_ratio: fallbackPlan.risk_reward_ratio,
+				setup_type: fallbackPlan.setup_type,
+				levelsSource: 'derived-quote',
+				sources: [],
+				truncated: false,
+				extraText: '*Model used*: `derived-quote`',
 			};
 		}
 

@@ -332,6 +332,104 @@ class NewsCache {
 	}
 
 	/**
+	 * Record the original alert document's storage outcome on the cache entry.
+	 *
+	 * State machine: 'pending' when the fire-and-forget write is scheduled,
+	 * 'owned' once some durable document carries this analysis usage (the
+	 * original, or a promoted fallback redelivery), 'none' when the original
+	 * failed before any document owned it. Updates the local entry
+	 * synchronously and, when persistent dedup is enabled, merges ONLY this
+	 * field into the durable Firestore payload transactionally so concurrent
+	 * delivery updates from other replicas are preserved. Fail-open.
+	 *
+	 * @param {string} symbol
+	 * @param {string} eventCategory
+	 * @param {'pending'|'owned'|'none'} state
+	 * @returns {Promise<void>}
+	 */
+	async markOriginalPersistState(symbol, eventCategory, state) {
+		const key = this.generateKey(symbol, eventCategory);
+		const entry = this.cache.get(key);
+		if (!entry || this.isExpired(entry)) {
+			return;
+		}
+		entry.data = { ...entry.data, originalPersistedState: state };
+
+		if (newsDedupStorageService.isEnabled() && newsDedupStorageService.isReady()) {
+			try {
+				await newsDedupStorageService.updateEntry(
+					key,
+					{ originalPersistedState: state },
+					{ mergeFields: ['originalPersistedState'] },
+				);
+			} catch (error) {
+				console.warn('[NewsCache] Failed to persist original-write state (fail-open):', error.message);
+			}
+		}
+	}
+
+	/**
+	 * Atomically claim durable-usage ownership for a fallback record.
+	 *
+	 * Performs a synchronized local check-and-set first, then — when
+	 * persistent dedup is enabled — commits the claim with an expected-state
+	 * guard inside the Firestore transaction so concurrent replicas cannot
+	 * double-claim. Callers must release via markOriginalPersistState('none')
+	 * when the claimed record fails to persist. Fail-open: storage errors
+	 * roll the local claim back.
+	 *
+	 * @param {string} symbol
+	 * @param {string} eventCategory
+	 * @returns {Promise<boolean>} true when the caller holds the usage claim
+	 */
+	async claimUsageOwnership(symbol, eventCategory) {
+		const key = this.generateKey(symbol, eventCategory);
+		const entry = this.cache.get(key);
+		if (!entry || this.isExpired(entry)) {
+			return false;
+		}
+		const previousState = entry.data.originalPersistedState;
+		if (previousState === 'owned' || previousState === 'pending' || previousState === 'claimed') {
+			return false;
+		}
+		entry.data = { ...entry.data, originalPersistedState: 'claimed' };
+
+		if (!newsDedupStorageService.isEnabled() || !newsDedupStorageService.isReady()) {
+			return true;
+		}
+		try {
+			const committed = await newsDedupStorageService.updateEntry(
+				key,
+				{ originalPersistedState: 'claimed' },
+				{
+					mergeFields: ['originalPersistedState'],
+					expectedField: 'originalPersistedState',
+					expectedValues: ['none'],
+				},
+			);
+			if (committed) {
+				return true;
+			}
+		} catch (error) {
+			console.warn('[NewsCache] Usage-ownership claim failed (fail-open):', error.message);
+		}
+		entry.data = { ...entry.data, originalPersistedState: previousState ?? 'none' };
+		return false;
+	}
+
+	/**
+	 * Release a claim acquired via claimUsageOwnership after its record
+	 * failed to persist, restoring 'none' so a later redelivery can own it.
+	 *
+	 * @param {string} symbol
+	 * @param {string} eventCategory
+	 * @returns {Promise<void>}
+	 */
+	async releaseUsageOwnershipClaim(symbol, eventCategory) {
+		await this.markOriginalPersistState(symbol, eventCategory, 'none');
+	}
+
+	/**
 	 * Claim a channel-specific cached redelivery lease.
 	 *
 	 * Local leases suppress same-process races. Persistent leases use the same

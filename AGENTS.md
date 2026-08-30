@@ -59,7 +59,7 @@ This project is a small Express + Telegraf (Telegram) bot service that exposes a
 - `src/services/prompts/` — Langfuse-backed PromptService that resolves prompts with file-backed local defaults.
 - `src/controllers/helpers.js` — Small numeric helper (`round10`) used by price formatting.
 - `src/lib/logging.js` — Configures `console.*` levels via `LOG_LEVEL` and emits one-line structured JSON logs.
-- `src/lib/rateLimiter.js` — Global API rate limiting middleware (returns 429 when exceeded; configured via `RATE_LIMIT_WINDOW_MS`/`RATE_LIMIT_MAX`, with safe defaults for invalid values).
+- `src/lib/rateLimiter.js` — Global API rate limiting middleware (returns 429 when exceeded; configured via `RATE_LIMIT_WINDOW_MS`/`RATE_LIMIT_MAX`, with safe defaults for invalid values). Core alert/message webhook ingest uses a separate finite 1,000-request bucket per IP and window.
 - `src/openapi/openapi.json` — Canonical OpenAPI 3.1 contract for every mounted `/api` operation.
 - `src/openapi/docs.js` — Public, read-only `/openapi.json` and self-hosted Swagger UI `/docs` routes.
 
@@ -108,7 +108,7 @@ Maintain these patterns and rules in all contributions:
 ### Common Failure Modes
 - **Missing BOT_TOKEN**: Throws on startup (explicit check in `index.js`).
 - **Preview Environments**: Gated bot launch disabled in Render preview PR builds or Vercel preview deployments (`RENDER==='true' && IS_PULL_REQUEST==='true'` or `VERCEL_ENV==='preview'`).
-- **HTTP 429**: Requests rejected if rate limit window exceeded (`RATE_LIMIT_WINDOW_MS` / `RATE_LIMIT_MAX`).
+- **HTTP 429**: Non-ingest requests are rejected if the global rate limit window is exceeded (`RATE_LIMIT_WINDOW_MS` / `RATE_LIMIT_MAX`); core alert/message ingest has its own 1,000-request bucket.
 - **JSON Error Parsing**: Webhook error responses must not crash if `error.response` is missing or shaped unexpectedly.
 
 ### Commits and Cleanups
@@ -424,7 +424,7 @@ The system provides a `POST /api/webhook/expanded-analysis-alert` endpoint that 
 - `analysisMode` is optional (`"standard"` or `"combined"`, defaults to `"standard"`). When set to `"combined"`, it calls the `combined_analysis` tool on the TradingView MCP server to retrieve technical indicators, Reddit sentiment analysis, RSS news headlines, and confluences.
 - `includeMultiTimeframe` (or `include_multi_timeframe`) is an optional boolean (defaults to `false`). When `true`, it calls the `multi_timeframe_analysis` tool to fetch alignment confluences across Weekly, Daily, 4h, 1h, and 15m intervals.
 - If body symbols are missing or empty, the handler falls back to `EXPANDED_ANALYSIS_ALERT_SYMBOLS` (comma-separated). If neither exists, it returns `400 NO_SYMBOLS`.
-- Analysis has an endpoint-level deadline via `EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS` (default 60s, capped at 120s) so repeated MCP failures do not hold the request open for the full per-symbol retry chain.
+- Analysis has an endpoint-level deadline via `EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS` (default 60s, capped at 120s) and bounded concurrency via `EXPANDED_ANALYSIS_ALERT_CONCURRENCY` (default 3, range 1-10). Completed symbols retain their results while unfinished symbols are marked `timeout` when the shared deadline aborts.
 
 **Core Components**:
 - `src/controllers/webhooks/handlers/expandedAnalysisAlert/expandedAnalysisAlert.js` — request handler, per-symbol MCP orchestration, notification dispatch, and response assembly.
@@ -704,9 +704,13 @@ Every successful `POST /api/webhook/alert` request is persisted as a document in
 | `enrichmentData` | map \| null | Full `alert.enriched` object from Gemini/TradingView |
 | `tokenUsage` | map \| null | `tokenUsage.toJSON()` result including `formattedSummary` |
 | `deliveryResults` | array | Per-channel `SendResult` objects from `notificationManager.sendToAll()` |
-| `source` | string | Always `"webhook"` |
+| `source` | string | Originating flow: `"webhook"` or `"news-monitor"` |
 | `useTradingViewData` | boolean | Whether `?useTradingViewData=true` was set on the request |
 | `tradingViewEnrichmentApplied` | boolean | Whether a TradingView MCP result was successfully applied |
+| `eventCategory` | string \| undefined | News-monitor records only: detected event category (e.g. `price_surge`) |
+| `confidence` | number \| undefined | News-monitor records only: alert confidence score |
+| `sentimentScore` | number \| undefined | News-monitor records only: Gemini sentiment score |
+| `dedupStatus` | string \| undefined | News-monitor records only: `fresh` for new analyses, `cached` for successful redeliveries |
 | `expiresAt` | timestamp | `receivedAt` plus `ALERT_STORAGE_RETENTION_DAYS`; configured as a Firestore TTL field |
 
 **Credential Configuration** (choose one):
@@ -738,9 +742,10 @@ Every successful `POST /api/webhook/alert` request is persisted as a document in
   - `enrichmentData`
   - `tokenUsage`
   - `deliveryResults`
-  - `source`
+  - `source` (`webhook` or `news-monitor`)
   - `useTradingViewData`
   - `tradingViewEnrichmentApplied`
+  - optional news-monitor metadata when present: `eventCategory`, `confidence`, `sentimentScore`, `dedupStatus`
 - Read filtering for `source` and `enriched` is applied in memory after `receivedAt`-ordered batches to avoid introducing new composite Firestore index requirements.
 - Retention filtering is also applied in memory because Firestore TTL deletion is eventual. Run `bash ops/configure-firestore-alert-retention.sh` to backfill legacy documents from `receivedAt` or `replayedAt` before enabling TTL deletion for both collection groups; the script shortens existing expiries when the configured deadline is earlier, hashes and removes legacy raw replay keys, reports counts, and fails on records without a usable timestamp.
 - Read endpoints must map Firestore initialization/read failures to `503 STORAGE_UNAVAILABLE` instead of a generic `500`.
@@ -821,6 +826,7 @@ See `/specs/TERMINOLOGY_GUIDE.md` for extended discussion and examples.
 - GH-401 / CB-163: `src/admin/admin.js` now validates both the `backend` query parameter and `cabros_backend_origin` localStorage override with an exact HTTPS origin allowlist before using them for API requests. The only allowed override is `https://cabros-bot-production.up.railway.app`; arbitrary origins, wildcards, HTTP URLs, and malformed values fall back to the normal same-origin or hosted-production behavior. `tests/unit/admin-client.test.js` covers rejection of an attacker-controlled override, and the generated Firebase Hosting asset must stay synchronized with `pnpm run build:hosting`.
 - GH-402 / CB-164: the hosted admin console `loadAuthConfig()` fetch is now bounded by an 8-second `AbortController` timeout; an aborted or stalled `/admin/auth-config` request resolves through the existing `{ enabled: true, configured: false }` fallback so the console renders "Firebase sign-in is unavailable" instead of hanging on "Checking authentication…". The vm-based admin client test harness provides controllable timers and a fake `AbortController`, with regression coverage for the stall-then-timeout path in `tests/unit/admin-client.test.js`.
 - GH-366 / CB-150: durable TradingView jobs now receive a one-hour `expiresAt` on terminal Firestore writes; the shared Firestore retention backfill/configuration covers legacy terminal `tradingviewJobs` documents while leaving active jobs untouched. Unit and Firebase Emulator coverage verify terminal expiry and active-job preservation.
+- GH-533 / CB-236: operational Firestore retention now enables native TTL and backfills legacy `notificationDeadLetters` documents using `NOTIFICATION_REDRIVE_MAX_AGE_MS`; existing idempotency and news-dedup retention behavior remains unchanged. Unit coverage verifies the collection mapping.
 - GH-313 / CB-128: grounding asset-context parsing now preserves slash-delimited crypto pairs such as `BTC/USDT`; the fallback no longer truncates a symbol before `/`, while explicit exchange and TradingView signal parsing remain unchanged. Regression coverage is in `tests/unit/tradingview-signal-parser.test.js`.
 - GH-291 / CB-112: hardened Render-worker job acceptance and recovery. Indeterminate enqueue responses preserve a replayable idempotency result with the durable `jobId`; the worker periodically reconciles durable queued rows and expired claims after Redis recovery, retries retained failed BullMQ jobs, terminal checkpoint races abort before notification delivery, status-filtered list queries preserve recent-first ordering while bounding Firestore scans, and terminal BullMQ failure handling retries pending callbacks even after the terminal job state was already committed. Production worker/Key Value provisioning remains payment-gated.
 - GH-284 / CB-118: Production Gemini quota recurrence was traced to an unset `NEWS_GEMINI_CONCURRENCY` with a Sentry `POST /api/news-monitor` dry-run carrying 28 symbols. Production uses the existing scheduler with `NEWS_GEMINI_CONCURRENCY=3`; analysis now runs inside the Sentry span so `summary.quota_exhausted` plus the `news.quota_exhausted` and `news.error_count` attributes remain correlated operational signals. Sentry measured 61 quota events through 2026-07-28T13:44:03Z against a Gemini free-tier limit of 15 requests/minute for the affected model; no current percentile or complete request-count measurement is inferred from that error window.
@@ -1085,6 +1091,24 @@ This feature introduces backend runtime error monitoring using Sentry's Node SDK
 
 No endpoint, OpenAPI, Postman, environment variable, or Remote Config contract changed.
 
+## Webhook Ingest Rate-Limit Separation (CB-239 / Issue #532)
+
+The global rate limiter keeps its existing per-IP `RATE_LIMIT_MAX`/`RATE_LIMIT_WINDOW_MS` bucket for ordinary routes. Core `POST /api/webhook/alert` and `POST /api/webhook/message` requests use an isolated finite 1,000-request bucket per IP and the same window, with URL normalization matching Express's case-insensitive, non-strict routing. This prevents normal TradingView bursts from consuming the ordinary bucket while preserving downstream API-key validation. No new environment variable, Remote Config parameter, endpoint, OpenAPI, or Postman contract was added; the fixed cap remains a bounded security control.
+
+**Coverage**:
+- `src/lib/rateLimiter.js` — Selects the isolated webhook bucket by exact request path and preserves bounded cleanup/fallback behavior.
+- `tests/unit/rateLimiter.test.js` and `tests/integration/rate-limiter-webhook.test.js` — Cover webhook burst headroom, bucket isolation, and the ordinary 429 boundary.
+
+## Gemini Evidence-Based Sentiment Calibration (CB-238 / Issue #530)
+
+Gemini alert enrichment now passes grounded source results into the response parser. When grounding returns zero sources, directional sentiment magnitude above `0.55` is capped while the original signed value is retained as `sentiment_score_raw` only when adjusted; sourced scores and TradingView MCP scoring remain unchanged. The local alert-enrichment prompt includes an evidence calibration rubric, and Langfuse alert-enrichment prompts expose schema drift when the rubric markers are absent. Alert storage already deep-strips undefined fields, so the optional raw score remains Firestore-safe.
+
+**Coverage**:
+- `src/services/grounding/gemini.js` and `tests/unit/gemini-client.test.js` — Zero-source cap, signed raw-score audit field, and sourced-score preservation.
+- `src/services/prompts/PromptService.js`, `src/services/prompts/defaults/alert-enrichment.user.txt`, and `tests/unit/prompt-service.test.js` — Local rubric and Langfuse calibration-drift detection.
+- `src/openapi/openapi.json` and `CabrosBot.postman_collection.json` — Document the optional raw score in enriched payload examples.
+
+No new environment variable or Remote Config key was added; the fixed cap is an application safety boundary, not operator tuning.
 
 ### Testing Patterns
 

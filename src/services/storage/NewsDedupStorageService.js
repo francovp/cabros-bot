@@ -271,11 +271,23 @@ async function setEntry(key, ttlMs, data) {
 		const expiresAtMs = now.toMillis() + ttlMs;
 		const expiresAt = admin.firestore.Timestamp.fromMillis(expiresAtMs);
 
-		await firestore.collection(COLLECTION_NAME).doc(key).set({
-			key,
-			createdAt: now,
-			expiresAt,
-			data: data || null,
+		await firestore.runTransaction(async transaction => {
+			const docRef = firestore.collection(COLLECTION_NAME).doc(key);
+			const existing = await transaction.get(docRef);
+			const existingData = existing.exists ? existing.data() : null;
+			// Merge over the current durable payload so concurrent field-scoped
+			// writes (e.g. originalPersistedState committed after this write
+			// started) are not erased by this replacement.
+			const baseData = existingData?.data && typeof existingData.data === 'object'
+				? existingData.data
+				: {};
+			const nextData = { ...baseData, ...(data || {}) };
+			transaction.set(docRef, {
+				key,
+				createdAt: existingData?.createdAt ?? now,
+				expiresAt,
+				data: nextData,
+			});
 		});
 		console.debug('[NewsDedupStorageService] Dedup entry written with data:', key);
 	} catch (error) {
@@ -309,11 +321,34 @@ async function updateEntry(key, data, options = {}) {
 				return false;
 			}
 
+			let nextData;
+			if (Array.isArray(options.mergeFields)) {
+				if (options.expectedField !== undefined) {
+					const currentValue = existingData.data
+						? existingData.data[options.expectedField]
+						: undefined;
+					const allowed = Array.isArray(options.expectedValues)
+						? options.expectedValues
+						: [];
+					if (currentValue !== undefined && !allowed.includes(currentValue)) {
+						return false;
+					}
+				}
+				nextData = { ...(existingData.data || {}) };
+				for (const field of options.mergeFields) {
+					if (Object.prototype.hasOwnProperty.call(data, field)) {
+						nextData[field] = data[field];
+					}
+				}
+			} else {
+				nextData = mergeDeliveryData(existingData.data, data, options) || null;
+			}
+
 			transaction.set(docRef, {
 				key,
 				createdAt: existingData.createdAt,
 				expiresAt: existingData.expiresAt,
-				data: mergeDeliveryData(existingData.data, data, options) || null,
+				data: nextData,
 			});
 			return true;
 		});

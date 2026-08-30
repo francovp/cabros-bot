@@ -38,6 +38,7 @@ export interface EnrichedAlert {
   tradingViewEnrichmentApplied?: boolean;
   sentiment: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
   sentiment_score: number;
+  sentiment_score_raw?: number;
   current_price?: number | null;
   price_data?: PriceData | null;
   insights: string[];
@@ -47,6 +48,7 @@ export interface EnrichedAlert {
   invalidation_level?: string | number;
   target_level?: string | number;
   setup_type?: 'breakout' | 'mean_reversion' | 'trend_continuation' | 'reversal';
+  setup_evidence?: string;
   risk_reward_ratio?: string | number;
   sources: Source[];
 }
