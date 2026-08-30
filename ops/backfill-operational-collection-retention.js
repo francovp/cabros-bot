@@ -94,27 +94,40 @@ function parseNotificationRedriveTtlMs(raw = process.env.NOTIFICATION_REDRIVE_MA
 	return val;
 }
 
-function parseSignalOutcomeRetentionTtlMs(raw = process.env.SIGNAL_OUTCOME_RETENTION_DAYS) {
-	if (raw === undefined || raw === null) {
-		try {
-			const remoteDays = RemoteConfigService?.getRuntimeConfig?.().SIGNAL_OUTCOME_RETENTION_DAYS;
-			if (typeof remoteDays === 'number' && Number.isSafeInteger(remoteDays) && remoteDays >= 1 && remoteDays <= MAX_SIGNAL_OUTCOME_RETENTION_DAYS) {
-				return remoteDays * DAY_MS;
-			}
-		} catch {
-			// ignore
+function parseSignalOutcomeRetentionTtlMs(raw) {
+	if (raw !== undefined && raw !== null) {
+		const str = String(raw).trim();
+		if (!/^\d+$/.test(str)) {
+			return DEFAULT_SIGNAL_OUTCOME_RETENTION_DAYS * DAY_MS;
 		}
-		return DEFAULT_SIGNAL_OUTCOME_RETENTION_DAYS * DAY_MS;
+		const val = Number(str);
+		if (!Number.isSafeInteger(val) || val < 1 || val > MAX_SIGNAL_OUTCOME_RETENTION_DAYS) {
+			return DEFAULT_SIGNAL_OUTCOME_RETENTION_DAYS * DAY_MS;
+		}
+		return val * DAY_MS;
 	}
-	const str = String(raw).trim();
-	if (!/^\d+$/.test(str)) {
-		return DEFAULT_SIGNAL_OUTCOME_RETENTION_DAYS * DAY_MS;
+
+	try {
+		const remoteDays = RemoteConfigService?.getRuntimeConfig?.().SIGNAL_OUTCOME_RETENTION_DAYS;
+		if (typeof remoteDays === 'number' && Number.isSafeInteger(remoteDays) && remoteDays >= 1 && remoteDays <= MAX_SIGNAL_OUTCOME_RETENTION_DAYS) {
+			return remoteDays * DAY_MS;
+		}
+	} catch {
+		// ignore
 	}
-	const val = Number(str);
-	if (!Number.isSafeInteger(val) || val < 1 || val > MAX_SIGNAL_OUTCOME_RETENTION_DAYS) {
-		return DEFAULT_SIGNAL_OUTCOME_RETENTION_DAYS * DAY_MS;
+
+	const envVal = process.env.SIGNAL_OUTCOME_RETENTION_DAYS;
+	if (envVal !== undefined && envVal !== null) {
+		const str = String(envVal).trim();
+		if (/^\d+$/.test(str)) {
+			const val = Number(str);
+			if (Number.isSafeInteger(val) && val >= 1 && val <= MAX_SIGNAL_OUTCOME_RETENTION_DAYS) {
+				return val * DAY_MS;
+			}
+		}
 	}
-	return val * DAY_MS;
+
+	return DEFAULT_SIGNAL_OUTCOME_RETENTION_DAYS * DAY_MS;
 }
 
 function getOperationalCollectionConfigs() {

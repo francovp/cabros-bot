@@ -304,6 +304,49 @@ describe('SignalOutcomeService Retention and TTL', () => {
 			jest.useRealTimers();
 		});
 
+		it('paginates summarizeOutcomes across expired documents to satisfy requested active limit', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			const now = new Date('2026-08-01T12:00:00.000Z');
+			jest.useFakeTimers().setSystemTime(now);
+
+			const expiredDoc = {
+				requestId: 'expired-prior-policy-req',
+				source: 'market-scanner',
+				symbol: 'ETHUSDT',
+				exchange: 'BINANCE',
+				price: 3000,
+				side: 'BUY',
+				receivedAt: admin.firestore.Timestamp.fromDate(new Date('2026-07-25T10:00:00.000Z')),
+				expiresAt: admin.firestore.Timestamp.fromDate(new Date('2026-07-30T10:00:00.000Z')),
+				outcomeEvaluated: true,
+				eligibilityState: 'supported_provider',
+				outcomes: {},
+			};
+
+			const activeDoc = {
+				requestId: 'active-doc-req',
+				source: 'market-scanner',
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+				price: 50000,
+				side: 'BUY',
+				receivedAt: admin.firestore.Timestamp.fromDate(new Date('2026-07-26T10:00:00.000Z')),
+				expiresAt: admin.firestore.Timestamp.fromDate(new Date('2027-07-26T10:00:00.000Z')),
+				outcomeEvaluated: true,
+				eligibilityState: 'supported_provider',
+				outcomes: {},
+			};
+
+			const firestore = AlertStorageService.getFirestore();
+			await firestore.collection(SignalOutcomeService.COLLECTION_NAME).doc('expired-batch-1').set(expiredDoc);
+			await firestore.collection(SignalOutcomeService.COLLECTION_NAME).doc('active-batch-2').set(activeDoc);
+
+			const summary = await SignalOutcomeService.summarizeOutcomes({ limit: 1 });
+			expect(summary.totalSignalsReceived).toBe(1);
+
+			jest.useRealTimers();
+		});
+
 		it('advances evaluation sweep cursor past expired pending documents to prevent starvation', async () => {
 			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
 			process.env.SIGNAL_OUTCOME_EVALUATION_BATCH_LIMIT = '1';

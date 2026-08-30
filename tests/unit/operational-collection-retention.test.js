@@ -197,19 +197,20 @@ describe('parseSignalOutcomeRetentionTtlMs', () => {
 		expect(parseSignalOutcomeRetentionTtlMs('3651')).toBe(DEFAULT_SIGNAL_OUTCOME_RETENTION_DAYS * DAY_MS);
 	});
 
-	test('sources retention days from RemoteConfigService when env is undefined', () => {
+	test('sources retention days from RemoteConfigService with precedence over env when raw is omitted', () => {
 		const originalEnv = process.env.SIGNAL_OUTCOME_RETENTION_DAYS;
-		delete process.env.SIGNAL_OUTCOME_RETENTION_DAYS;
+		process.env.SIGNAL_OUTCOME_RETENTION_DAYS = '365';
 
 		const RemoteConfigService = require('../../src/services/remoteConfig/RemoteConfigService');
 		const spy = jest.spyOn(RemoteConfigService, 'getRuntimeConfig').mockReturnValue({
 			SIGNAL_OUTCOME_RETENTION_DAYS: 30,
 		});
 
-		expect(parseSignalOutcomeRetentionTtlMs(undefined)).toBe(30 * DAY_MS);
+		expect(parseSignalOutcomeRetentionTtlMs()).toBe(30 * DAY_MS);
 
 		spy.mockRestore();
 		if (originalEnv !== undefined) process.env.SIGNAL_OUTCOME_RETENTION_DAYS = originalEnv;
+		else delete process.env.SIGNAL_OUTCOME_RETENTION_DAYS;
 	});
 });
 

@@ -1397,8 +1397,6 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, status, wi
 		throw createStorageUnavailableError();
 	}
 
-	let snapshot;
-	try {
 		const parsedFrom = from ? new Date(from) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 		const parsedTo = to ? new Date(to) : new Date();
 
@@ -1410,24 +1408,51 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, status, wi
 		}
 		const effectiveFrom = new Date(effectiveFromMs);
 
-		snapshot = await firestore
-			.collection(COLLECTION_NAME)
-			.where('receivedAt', '>=', admin.firestore.Timestamp.fromDate(effectiveFrom))
-			.where('receivedAt', '<=', admin.firestore.Timestamp.fromDate(parsedTo))
-			.limit(limit || 1000)
-			.get();
-	} catch (error) {
-		throw createStorageUnavailableError(error);
-	}
+		const targetLimit = limit || 1000;
+		const batchSize = Math.min(targetLimit, 100);
+		const activeDocs = [];
+		let lastDoc = null;
 
-	if (snapshot.empty) {
-		return createEmptyMetricsSummary();
-	}
+		while (activeDocs.length < targetLimit) {
+			let query = firestore
+				.collection(COLLECTION_NAME)
+				.where('receivedAt', '>=', admin.firestore.Timestamp.fromDate(effectiveFrom))
+				.where('receivedAt', '<=', admin.firestore.Timestamp.fromDate(parsedTo))
+				.limit(batchSize);
 
-	const activeDocs = snapshot.docs.filter(doc => !isRetentionExpired(doc.data() || {}));
-	if (activeDocs.length === 0) {
-		return createEmptyMetricsSummary();
-	}
+			if (lastDoc) {
+				query = query.startAfter(lastDoc);
+			}
+
+			let snapshot;
+			try {
+				snapshot = await query.get();
+			} catch (error) {
+				throw createStorageUnavailableError(error);
+			}
+
+			if (!snapshot || snapshot.empty) {
+				break;
+			}
+
+			for (const doc of snapshot.docs) {
+				if (!isRetentionExpired(doc.data() || {})) {
+					activeDocs.push(doc);
+					if (activeDocs.length >= targetLimit) {
+						break;
+					}
+				}
+			}
+
+			if (snapshot.docs.length < batchSize) {
+				break;
+			}
+			lastDoc = snapshot.docs[snapshot.docs.length - 1];
+		}
+
+		if (activeDocs.length === 0) {
+			return createEmptyMetricsSummary();
+		}
 
 	let docs = activeDocs.map(doc => ({
 		...doc.data(),
