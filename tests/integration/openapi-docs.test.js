@@ -24,6 +24,7 @@ describe('public OpenAPI documentation', () => {
 			type: 'apiKey',
 			in: 'header',
 			name: 'x-api-key',
+			description: expect.stringContaining('WEBHOOK_API_KEY_PREVIOUS'),
 		});
 		expect(response.text).not.toContain(process.env.WEBHOOK_API_KEY);
 	});

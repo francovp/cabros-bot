@@ -74,10 +74,28 @@ function isValidApiKey(req) {
 	const keyToCheck = Array.isArray(apiKey) ? apiKey[0] : apiKey;
 	if (typeof keyToCheck !== 'string') return false;
 
-	const bufferApiKey = Buffer.from(keyToCheck);
-	const bufferValidApiKey = Buffer.from(validApiKey);
-	return bufferApiKey.length === bufferValidApiKey.length
-		&& crypto.timingSafeEqual(bufferApiKey, bufferValidApiKey);
+	if (timingSafeMatchString(keyToCheck, validApiKey)) {
+		return true;
+	}
+
+	// Optional zero-downtime rotation grace key: when WEBHOOK_API_KEY_PREVIOUS is
+	// configured, the previous key is accepted alongside the primary. Comparison
+	// remains timing-safe; when the grace key is unset this branch is skipped and
+	// the single-key path is byte-for-byte identical to the previous behavior.
+	const previousApiKey = process.env.WEBHOOK_API_KEY_PREVIOUS;
+	if (previousApiKey && timingSafeMatchString(keyToCheck, previousApiKey)) {
+		return true;
+	}
+
+	return false;
 }
 
-module.exports = { isValidApiKey, validateApiKey };
+function timingSafeMatchString(candidate, expected) {
+	if (typeof candidate !== 'string' || typeof expected !== 'string') return false;
+	const bufferCandidate = Buffer.from(candidate);
+	const bufferExpected = Buffer.from(expected);
+	if (bufferCandidate.length !== bufferExpected.length) return false;
+	return crypto.timingSafeEqual(bufferCandidate, bufferExpected);
+}
+
+module.exports = { isValidApiKey, validateApiKey, timingSafeMatchString };
