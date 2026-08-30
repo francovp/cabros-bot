@@ -17,6 +17,7 @@ const {
 const {
 	deserializeDocument,
 	deserializeValue,
+	refreshCollectionTtls,
 	parseArgs: parseRestoreArgs,
 	restoreCollectionFile,
 	runRestore,
@@ -129,6 +130,18 @@ describe('Firestore Backup & Export Tooling', () => {
 			const deserialized = deserializeValue(serialized, mockFirestore);
 			expect(mockFirestore.doc).toHaveBeenCalledWith('alerts/alert-123');
 			expect(deserialized.path).toBe('alerts/alert-123');
+		});
+
+		it('serializes and deserializes Firestore byte values as base64', () => {
+			const original = Buffer.from([0, 1, 2, 255]);
+			const serialized = serializeValue(original);
+
+			expect(serialized).toEqual({
+				__type: 'Bytes',
+				base64: original.toString('base64'),
+			});
+			expect(Buffer.isBuffer(deserializeValue(serialized))).toBe(true);
+			expect(deserializeValue(serialized)).toEqual(original);
 		});
 
 		it('serializes and deserializes nested objects and arrays recursively', () => {
@@ -273,6 +286,13 @@ describe('Firestore Backup & Export Tooling', () => {
 				'--input-dir=/tmp/test-export',
 				'--ttl-policy=preserv',
 			])).toThrow('Invalid --ttl-policy');
+		});
+
+		it('throws when restore receives an unsupported argument', () => {
+			expect(() => parseRestoreArgs([
+				'--input-dir=/tmp/test-export',
+				'--no-overwite',
+			])).toThrow('Unsupported restore argument');
 		});
 
 		it('throws when restore receives invalid --retention-days', () => {
@@ -525,6 +545,10 @@ describe('Firestore Backup & Export Tooling', () => {
 		it('runRestore forwards ttlPolicy and retentionDays to restoreCollectionFile', async () => {
 			const jsonlFile = path.join(tempDir, 'alerts.jsonl');
 			fs.writeFileSync(jsonlFile, JSON.stringify({ _id: 'a1', text: 'Alert 1' }) + '\n');
+			fs.writeFileSync(path.join(tempDir, 'manifest.json'), JSON.stringify({
+				totalDocuments: 1,
+				collections: { alerts: { documentCount: 1 } },
+			}) + '\n');
 
 			const mockBatch = {
 				set: jest.fn(),
@@ -563,6 +587,13 @@ describe('Firestore Backup & Export Tooling', () => {
 		it('runRestore discovers .jsonl files in input directory and restores all', async () => {
 			fs.writeFileSync(path.join(tempDir, 'alerts.jsonl'), JSON.stringify({ _id: 'a1' }) + '\n');
 			fs.writeFileSync(path.join(tempDir, 'tradingSignalOutcomes.jsonl'), JSON.stringify({ _id: 's1' }) + '\n');
+			fs.writeFileSync(path.join(tempDir, 'manifest.json'), JSON.stringify({
+				totalDocuments: 2,
+				collections: {
+					alerts: { documentCount: 1 },
+					tradingSignalOutcomes: { documentCount: 1 },
+				},
+			}) + '\n');
 
 			const mockBatch = {
 				set: jest.fn(),
@@ -581,6 +612,70 @@ describe('Firestore Backup & Export Tooling', () => {
 			expect(result.totalDocuments).toBe(2);
 			expect(result.collections.alerts.totalRestored).toBe(1);
 			expect(result.collections.tradingSignalOutcomes.totalRestored).toBe(1);
+		});
+
+		it('rejects auto-discovered restores without a completed manifest before writes', async () => {
+			fs.writeFileSync(path.join(tempDir, 'alerts.jsonl'), JSON.stringify({ _id: 'a1' }) + '\n');
+			const mockFirestore = {
+				batch: jest.fn(),
+				collection: jest.fn(),
+			};
+
+			await expect(runRestore({
+				firestore: mockFirestore,
+				inputDir: tempDir,
+			})).rejects.toThrow('manifest.json');
+			expect(mockFirestore.batch).not.toHaveBeenCalled();
+		});
+
+		it('rejects auto-discovered restores when manifest counts do not match files', async () => {
+			fs.writeFileSync(path.join(tempDir, 'alerts.jsonl'), JSON.stringify({ _id: 'a1' }) + '\n');
+			fs.writeFileSync(path.join(tempDir, 'manifest.json'), JSON.stringify({
+				totalDocuments: 2,
+				collections: { alerts: { documentCount: 2 } },
+			}) + '\n');
+			const mockFirestore = {
+				batch: jest.fn(),
+				collection: jest.fn(),
+			};
+
+			await expect(runRestore({
+				firestore: mockFirestore,
+				inputDir: tempDir,
+			})).rejects.toThrow('document count');
+			expect(mockFirestore.batch).not.toHaveBeenCalled();
+		});
+
+		it('refreshes TTLs for managed-import collections after import', async () => {
+			const docs = [
+				{
+					id: 'alert-1',
+					ref: { id: 'alert-1' },
+					data: () => ({ text: 'Alert', expiresAt: { seconds: 1 } }),
+				},
+			];
+			const query = {
+				orderBy: jest.fn().mockReturnThis(),
+				limit: jest.fn().mockReturnThis(),
+				startAfter: jest.fn().mockReturnThis(),
+				get: jest.fn()
+					.mockResolvedValueOnce({ empty: false, docs })
+					.mockResolvedValueOnce({ empty: true, docs: [] }),
+			};
+			const batch = {
+				update: jest.fn(),
+				commit: jest.fn().mockResolvedValue(undefined),
+			};
+			const mockFirestore = {
+				collection: jest.fn().mockReturnValue(query),
+				batch: jest.fn().mockReturnValue(batch),
+			};
+
+			const result = await refreshCollectionTtls(mockFirestore, ['alerts'], { retentionDays: 30 });
+
+			expect(result.totalUpdated).toBe(1);
+			expect(batch.update).toHaveBeenCalledWith(docs[0].ref, { expiresAt: expect.anything() });
+			expect(batch.commit).toHaveBeenCalledTimes(1);
 		});
 	});
 

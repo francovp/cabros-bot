@@ -69,6 +69,8 @@ function parseArgs(args = process.argv.slice(2)) {
 			}
 		} else if (arg.startsWith('--project=')) {
 			options.projectId = arg.split('=')[1].trim();
+		} else {
+			throw new Error(`Unsupported restore argument: "${arg}"`);
 		}
 	}
 
@@ -132,6 +134,10 @@ function deserializeValue(val, firestore) {
 	}
 
 	if (typeof val === 'object') {
+		if (val.__type === 'Bytes' && typeof val.base64 === 'string') {
+			return Buffer.from(val.base64, 'base64');
+		}
+
 		if (val.__type === 'Timestamp') {
 			let result;
 			if (typeof admin.firestore.Timestamp === 'function' && typeof val.seconds === 'number') {
@@ -375,6 +381,114 @@ async function restoreCollectionFile(firestore, collectionName, filePath, option
 	};
 }
 
+async function validateManifest(inputDir) {
+	const manifestPath = path.join(inputDir, 'manifest.json');
+	if (!fs.existsSync(manifestPath)) {
+		throw new Error(`Completed manifest.json is required for auto-discovered restores: ${manifestPath}`);
+	}
+
+	let manifest;
+	try {
+		manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+	} catch (err) {
+		throw new Error(`Invalid manifest.json: ${err.message}`);
+	}
+
+	if (!manifest.collections || typeof manifest.collections !== 'object' || Array.isArray(manifest.collections)) {
+		throw new Error('Invalid manifest.json: collections must be an object');
+	}
+
+	const entries = Object.entries(manifest.collections);
+	if (entries.length === 0) {
+		throw new Error('Invalid manifest.json: collections must not be empty');
+	}
+
+	let expectedTotal = 0;
+	for (const [collectionName, metadata] of entries) {
+		const expectedCount = metadata?.documentCount;
+		if (!Number.isSafeInteger(expectedCount) || expectedCount < 0) {
+			throw new Error(`Invalid manifest document count for ${collectionName}`);
+		}
+
+		const filePath = path.join(inputDir, `${collectionName}.jsonl`);
+		if (!fs.existsSync(filePath)) {
+			throw new Error(`Manifest collection file not found: ${filePath}`);
+		}
+
+		let actualCount = 0;
+		const fileStream = fs.createReadStream(filePath, { encoding: 'utf8' });
+		const rl = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
+		try {
+			for await (const line of rl) {
+				const trimmed = line.trim();
+				if (!trimmed) continue;
+				try {
+					JSON.parse(trimmed);
+				} catch (err) {
+					throw new Error(`Invalid JSON in ${filePath}: ${err.message}`);
+				}
+				actualCount += 1;
+			}
+		} finally {
+			rl.close();
+		}
+
+		if (actualCount !== expectedCount) {
+			throw new Error(`Manifest document count mismatch for ${collectionName}: expected ${expectedCount}, found ${actualCount}`);
+		}
+		expectedTotal += expectedCount;
+	}
+
+	if (!Number.isSafeInteger(manifest.totalDocuments) || manifest.totalDocuments !== expectedTotal) {
+		throw new Error(`Manifest document count mismatch: expected total ${manifest.totalDocuments}, found ${expectedTotal}`);
+	}
+
+	return entries.map(([collectionName]) => collectionName);
+}
+
+async function refreshCollectionTtls(firestore, collectionNames, options = {}) {
+	const pageSize = options.pageSize || BATCH_SIZE;
+	const retentionDays = options.retentionDays || getDefaultRetentionDays();
+	const results = { totalUpdated: 0, collections: {} };
+
+	for (const collectionName of collectionNames) {
+		let lastDocument = null;
+		let updated = 0;
+		while (true) {
+			let query = firestore.collection(collectionName).orderBy('__name__').limit(pageSize);
+			if (lastDocument) query = query.startAfter(lastDocument);
+			const snapshot = await query.get();
+			if (snapshot.empty) break;
+
+			const batch = firestore.batch();
+			let pending = 0;
+			for (const doc of snapshot.docs) {
+				const data = typeof doc.data === 'function' ? (doc.data() || {}) : {};
+				if (data.expiresAt === undefined && collectionName !== 'alerts' && collectionName !== 'alertReplays') {
+					continue;
+				}
+				const expiresAt = applyTtlPolicy({}, collectionName, 'refresh', retentionDays).expiresAt;
+				const docRef = doc.ref || firestore.collection(collectionName).doc(doc.id);
+				batch.update(docRef, { expiresAt });
+				pending += 1;
+			}
+
+			if (pending > 0) {
+				await batch.commit();
+				updated += pending;
+			}
+
+			if (snapshot.docs.length < pageSize) break;
+			lastDocument = snapshot.docs.at(-1);
+		}
+
+		results.collections[collectionName] = updated;
+		results.totalUpdated += updated;
+	}
+
+	return results;
+}
+
 function initializeFirestore(projectId = null) {
 	let credential;
 	if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
@@ -427,14 +541,7 @@ async function runRestore(options = {}) {
 
 	let targetCollections = options.collections;
 	if (!hasExplicitCollections) {
-		// Discover from files in inputDir
-		const files = fs.readdirSync(inputDir);
-		targetCollections = files
-			.filter((f) => f.endsWith('.jsonl'))
-			.map((f) => f.slice(0, -6));
-		if (targetCollections.length === 0) {
-			targetCollections = DEFAULT_COLLECTIONS;
-		}
+		targetCollections = await validateManifest(inputDir);
 	}
 
 	const results = {
@@ -515,6 +622,7 @@ module.exports = {
 	deserializeValue,
 	initializeFirestore,
 	parseArgs,
+	refreshCollectionTtls,
 	restoreCollectionFile,
 	runRestore,
 };

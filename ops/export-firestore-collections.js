@@ -50,6 +50,13 @@ function serializeValue(val) {
 		return val;
 	}
 
+	if (Buffer.isBuffer(val)) {
+		return {
+			__type: 'Bytes',
+			base64: val.toString('base64'),
+		};
+	}
+
 	// Firestore Timestamp
 	if (typeof val.toMillis === 'function' || (typeof val.seconds === 'number' && typeof val.nanoseconds === 'number') || (val instanceof Date)) {
 		const seconds = typeof val.seconds === 'number'

@@ -111,11 +111,15 @@ export FIREBASE_PROJECT_ID="cabros-bot"
 ./ops/restore-firestore-managed.sh gs://cabros-bot-backups/firestore-backups/2026-08-30T04-00-00Z alerts,tradingSignalOutcomes
 ```
 
+Managed restores automatically refresh `expiresAt` for `alerts` and `alertReplays` after import using `ALERT_STORAGE_RETENTION_DAYS` (or 90 days when unset). This prevents an old snapshot from being immediately hidden or deleted by the native TTL policy. The restore runner must have Node.js and the same Firebase Admin credentials available to the `gcloud` import.
+
 ---
 
 ### Restoring from JSONL Node Export
 
 Restores documents from local JSONL export files with automatic batching (400 items per batch) and type deserialization:
+
+When `--collections` is omitted, `manifest.json` is required. The restore validates every listed JSONL file, its parseability, and its document count before writing any document. Use `--collections` explicitly to restore a deliberately selected file without manifest discovery.
 
 ```bash
 # Validate input files and document count without modifying Firestore (Dry Run)

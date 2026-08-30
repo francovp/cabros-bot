@@ -24,6 +24,11 @@ if ! command -v gcloud >/dev/null 2>&1; then
 	exit 1
 fi
 
+if ! command -v node >/dev/null 2>&1; then
+	echo "Error: node is required to refresh TTL fields after managed Firestore imports." >&2
+	exit 1
+fi
+
 echo "Starting managed Firestore import for project '${project}' from '${export_uri}'..."
 echo "Collections: ${collections}"
 
@@ -31,4 +36,9 @@ gcloud firestore import "$export_uri" \
 	--collection-ids="$collections" \
 	--project="$project"
 
-echo "Managed import completed successfully."
+echo "Managed import completed; refreshing TTL fields for the configured retention window..."
+node ops/refresh-firestore-ttl.js \
+	--collections="$collections" \
+	--project="$project"
+
+echo "Managed import and TTL refresh completed successfully."
