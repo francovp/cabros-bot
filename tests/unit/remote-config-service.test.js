@@ -387,6 +387,7 @@ describe('RemoteConfigService', () => {
 		process.env.TRADINGVIEW_MCP_PAGE_COOLDOWN_MS = '999999999'; // max 86400000
 		process.env.SIGNAL_OUTCOME_MAX_RETRY_ATTEMPTS = '25'; // max 20
 		process.env.SIGNAL_OUTCOME_MAX_RETRY_AGE_MS = '3000000000'; // max 2592000000
+		process.env.SIGNAL_OUTCOME_RETENTION_DAYS = '5000'; // max 3650
 		process.env.EQUITY_MARKET_DATA_RPM = '2000'; // max 1200
 
 		const config = remoteConfigService.getRuntimeConfig();
@@ -400,6 +401,7 @@ describe('RemoteConfigService', () => {
 		expect(config.TRADINGVIEW_MCP_PAGE_COOLDOWN_MS).toBe(3600000); // fallback to default
 		expect(config.SIGNAL_OUTCOME_MAX_RETRY_ATTEMPTS).toBe(3); // fallback to default
 		expect(config.SIGNAL_OUTCOME_MAX_RETRY_AGE_MS).toBe(604800000); // fallback to default
+		expect(config.SIGNAL_OUTCOME_RETENTION_DAYS).toBe(365); // fallback to default
 		expect(config.EQUITY_MARKET_DATA_RPM).toBe(8); // fallback to default
 	});
 
@@ -408,6 +410,7 @@ describe('RemoteConfigService', () => {
 		mockTemplate({
 			ZERO_CHANNEL_ALERT_COOLDOWN_MS: 600000,
 			ENABLE_API_ONLY_MODE: true,
+			SIGNAL_OUTCOME_RETENTION_DAYS: 180,
 		});
 		alertStorageService.getFirestore.mockReturnValue({});
 
@@ -416,5 +419,6 @@ describe('RemoteConfigService', () => {
 		const config = remoteConfigService.getRuntimeConfig();
 		expect(config.ZERO_CHANNEL_ALERT_COOLDOWN_MS).toBe(600000);
 		expect(config.ENABLE_API_ONLY_MODE).toBe(true);
+		expect(config.SIGNAL_OUTCOME_RETENTION_DAYS).toBe(180);
 	});
 });
