@@ -4,7 +4,7 @@
 
 const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
-const { getAnalyzer } = require('../../controllers/webhooks/handlers/newsMonitor/analyzer');
+const { getAnalyzer, setNotificationManager } = require('../../controllers/webhooks/handlers/newsMonitor/analyzer');
 const { getNotificationManager } = require('../../controllers/webhooks/handlers/alert/alert');
 const alertStorageService = require('../storage/AlertStorageService');
 const sentryService = require('../monitoring/SentryService');
@@ -68,11 +68,13 @@ class NewsMonitorSchedulerService {
 	constructor(options = {}) {
 		this.getAnalyzerFn = options.getAnalyzer || getAnalyzer;
 		this.getNotificationManagerFn = options.getNotificationManager || getNotificationManager;
+		this.setNotificationManagerFn = options.setNotificationManager || setNotificationManager;
 		this.alertStorage = options.alertStorageService || alertStorageService;
 		this.workerId = options.workerId || `${process.pid}-${crypto.randomUUID()}`;
 		this.running = false;
 		this.timer = null;
 		this.activeSweepPromise = null;
+		this.activeSweepController = null;
 		this.shutdownRequested = false;
 
 		this.lastRunAt = null;
@@ -184,6 +186,10 @@ class NewsMonitorSchedulerService {
 			this.timer = null;
 		}
 
+		if (!drain && this.activeSweepController) {
+			this.activeSweepController.abort();
+		}
+
 		if (drain && this.activeSweepPromise) {
 			let timeoutHandle;
 			const timeoutPromise = new Promise((resolve) => {
@@ -193,6 +199,9 @@ class NewsMonitorSchedulerService {
 				await Promise.race([this.activeSweepPromise, timeoutPromise]);
 			} finally {
 				clearTimeout(timeoutHandle);
+				if (this.activeSweepController) {
+					this.activeSweepController.abort();
+				}
 			}
 		}
 	}
@@ -282,7 +291,7 @@ class NewsMonitorSchedulerService {
 			};
 		}
 
-		const leaseAcquired = await this._acquireLease(symbols, nowMs, leaseMs);
+		const leaseAcquired = await this._acquireLease(symbols, nowMs, leaseMs, options);
 		if (!leaseAcquired) {
 			// Another worker owns the lease — skip this sweep.
 			this.lastRunAt = new Date(sweepStartTime);
@@ -318,7 +327,8 @@ class NewsMonitorSchedulerService {
 				error: err,
 			});
 		} finally {
-			await this._releaseLease(nowMs + leaseMs);
+			const intervalMs = options.intervalMs || this.getIntervalMs();
+			await this._releaseLease(Date.now(), intervalMs);
 			this.lastRunAt = new Date(sweepStartTime);
 			this.lastRunDurationMs = Date.now() - sweepStartTime;
 			this.lastRunSymbolCount = symbolCount;
@@ -367,13 +377,15 @@ class NewsMonitorSchedulerService {
 		return null;
 	}
 
-	async _acquireLease(symbols, nowMs, leaseMs) {
+	async _acquireLease(symbols, nowMs, leaseMs, options = {}) {
 		const firestore = this._getFirestore();
 		if (!firestore || typeof firestore.runTransaction !== 'function') {
 			// Without Firestore, the scheduler still runs but with at-most-once semantics per process.
 			// Multi-replica arbitration is best-effort when Firestore is unavailable.
 			return true;
 		}
+
+		const bypassCadenceGuard = Boolean(options.force || options.bypassCadenceGuard);
 
 		try {
 			const docRef = firestore.collection(COLLECTION_NAME).doc('singleton');
@@ -382,9 +394,16 @@ class NewsMonitorSchedulerService {
 				const data = doc.exists ? (doc.data() || {}) : {};
 				const lockedUntilMs = data.lockedUntil ? new Date(data.lockedUntil).getTime() : 0;
 				const lockedBy = data.lockedBy || null;
+				const nextAllowedSweepAtMs = data.nextAllowedSweepAt ? new Date(data.nextAllowedSweepAt).getTime() : 0;
+
 				if (lockedUntilMs > nowMs && lockedBy && lockedBy !== this.workerId) {
 					return false;
 				}
+
+				if (!bypassCadenceGuard && nextAllowedSweepAtMs > nowMs && lockedBy !== this.workerId) {
+					return false;
+				}
+
 				tx.set(docRef, {
 					lockedUntil: new Date(nowMs + leaseMs).toISOString(),
 					lockedBy: this.workerId,
@@ -428,11 +447,14 @@ class NewsMonitorSchedulerService {
 		}
 	}
 
-	async _releaseLease(leaseUntilMs) {
+	async _releaseLease(completedAtMs, intervalMs) {
 		const firestore = this._getFirestore();
 		if (!firestore || typeof firestore.runTransaction !== 'function') {
 			return;
 		}
+
+		const interval = intervalMs || this.getIntervalMs();
+		const nextAllowedSweepAt = new Date(completedAtMs + interval).toISOString();
 
 		try {
 			const docRef = firestore.collection(COLLECTION_NAME).doc('singleton');
@@ -444,8 +466,10 @@ class NewsMonitorSchedulerService {
 					return;
 				}
 				tx.set(docRef, {
-					lockedUntil: new Date(leaseUntilMs).toISOString(),
+					lockedUntil: null,
 					lockedBy: null,
+					lastCompletedAt: new Date(completedAtMs).toISOString(),
+					nextAllowedSweepAt,
 					updatedAt: new Date().toISOString(),
 				}, { merge: true });
 			});
@@ -462,20 +486,21 @@ class NewsMonitorSchedulerService {
 	async _executeAnalysis(symbols, timeoutMs, options = {}) {
 		const analyzer = this.getAnalyzerFn();
 		const controller = new AbortController();
+		this.activeSweepController = controller;
 		const timer = setTimeout(() => controller.abort(), timeoutMs);
 		const startedAt = Date.now();
 
-		// Renew the lease halfway through the sweep deadline so the lock
-		// covers the full execution even when analysis exceeds the initial
-		// lease window.
+		// Periodically renew the lease throughout the sweep execution so the lock
+		// covers long sweeps without letting the initial lease window expire.
 		const renewLease = typeof options.renewLease === 'function' ? options.renewLease : null;
 		const leaseMs = options.leaseMs || this.getLeaseMs();
+		const renewIntervalMs = Math.max(1000, Math.floor(leaseMs / 2));
 		const renewHandle = renewLease
-			? setTimeout(() => {
+			? setInterval(() => {
 				renewLease(Date.now() + leaseMs).catch((err) => {
 					console.warn('[NewsMonitorScheduler] Lease renew tick failed:', err.message);
 				});
-			}, Math.max(1000, Math.floor(timeoutMs / 2)))
+			}, renewIntervalMs)
 			: null;
 
 		let executedCount = 0;
@@ -483,17 +508,21 @@ class NewsMonitorSchedulerService {
 		let lastError = null;
 
 		try {
-			if (this.shutdownRequested || options.signal?.aborted) {
+			if (this.shutdownRequested || options.signal?.aborted || controller.signal.aborted) {
 				return { executedCount, errorCount, lastError };
 			}
 
 			const notificationManager = this.getNotificationManagerFn();
 			if (notificationManager) {
 				try {
-					const setNotificationManager = analyzer.setNotificationManager
-						|| analyzer.constructor.setNotificationManager;
-					if (typeof setNotificationManager === 'function') {
-						setNotificationManager.call(analyzer, notificationManager);
+					if (typeof this.setNotificationManagerFn === 'function') {
+						this.setNotificationManagerFn(notificationManager);
+					} else {
+						const setNotificationManager = analyzer.setNotificationManager
+							|| analyzer.constructor.setNotificationManager;
+						if (typeof setNotificationManager === 'function') {
+							setNotificationManager.call(analyzer, notificationManager);
+						}
 					}
 				} catch (err) {
 					console.warn('[NewsMonitorScheduler] Could not inject notification manager:', err.message);
@@ -539,7 +568,8 @@ class NewsMonitorSchedulerService {
 			});
 		} finally {
 			clearTimeout(timer);
-			if (renewHandle) clearTimeout(renewHandle);
+			if (renewHandle) clearInterval(renewHandle);
+			this.activeSweepController = null;
 		}
 
 		return { executedCount, errorCount, lastError };

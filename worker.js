@@ -50,9 +50,10 @@ async function main() {
 		}
 		stopping = true;
 		console.log(`[worker] ${signal} received; stopping redrive intake and draining TradingView jobs.`);
+		const shutdownTimeoutMs = Number(process.env.SHUTDOWN_TIMEOUT_MS) || 60000;
 		try {
 			await notificationRedriveService.stopWorker({ drain: false });
-			await newsMonitorSchedulerService.stopWorker({ drain: true });
+			await newsMonitorSchedulerService.stopWorker({ drain: true, timeoutMs: shutdownTimeoutMs });
 			await runtime.stop();
 			await notificationRedriveService.stopWorker({ drain: true });
 			stopNotificationBot(bot, signal);

@@ -273,17 +273,17 @@ describe('NewsMonitorSchedulerService', () => {
 			const analyzeSymbols = jest.fn().mockResolvedValue([]);
 			scheduler.getAnalyzerFn = () => ({ analyzeSymbols });
 
-			const firstSweep = await scheduler.sweep();
+			const firstSweep = await scheduler.sweep({ force: true });
 			const firstSymbols = analyzeSymbols.mock.calls[0][0];
 			expect(firstSweep.symbolCount).toBe(2);
 			expect(firstSymbols).toEqual(['BTCUSDT', 'ETHUSDT']);
 
-			const secondSweep = await scheduler.sweep();
+			const secondSweep = await scheduler.sweep({ force: true });
 			const secondSymbols = analyzeSymbols.mock.calls[1][0];
 			expect(secondSweep.symbolCount).toBe(2);
 			expect(secondSymbols).toEqual(['SOLUSDT', 'BNBUSDT']);
 
-			const thirdSweep = await scheduler.sweep();
+			const thirdSweep = await scheduler.sweep({ force: true });
 			const thirdSymbols = analyzeSymbols.mock.calls[2][0];
 			expect(thirdSweep.symbolCount).toBe(2);
 			expect(thirdSymbols).toEqual(['XRPUSDT', 'BTCUSDT']);
@@ -317,6 +317,37 @@ describe('NewsMonitorSchedulerService', () => {
 			await scheduler.sweep();
 			const options = analyzeSymbols.mock.calls[0][4];
 			expect(options.scheduledSweep).toBe(true);
+		});
+
+		it('injects notification manager via setNotificationManagerFn before analysis', async () => {
+			process.env.NEWS_SYMBOLS_CRYPTO = 'BTCUSDT';
+			process.env.NEWS_SYMBOLS_STOCKS = '';
+
+			const setNotificationManagerMock = jest.fn();
+			const fakeManager = { sendAlert: jest.fn() };
+			scheduler.getNotificationManagerFn = () => fakeManager;
+			scheduler.setNotificationManagerFn = setNotificationManagerMock;
+			scheduler.getAnalyzerFn = () => ({ analyzeSymbols: jest.fn().mockResolvedValue([]) });
+
+			await scheduler.sweep();
+			expect(setNotificationManagerMock).toHaveBeenCalledWith(fakeManager);
+		});
+
+		it('skips sweep when cadence guard nextAllowedSweepAt is in the future', async () => {
+			process.env.NEWS_SYMBOLS_CRYPTO = 'BTCUSDT';
+			mockDocs.set('singleton', {
+				lockedUntil: null,
+				lockedBy: null,
+				nextAllowedSweepAt: new Date(Date.now() + 60000).toISOString(),
+				updatedAt: new Date(Date.now() - 1000).toISOString(),
+			});
+
+			const analyzeSymbols = jest.fn().mockResolvedValue([]);
+			scheduler.getAnalyzerFn = () => ({ analyzeSymbols });
+
+			const result = await scheduler.sweep();
+			expect(result.skipped).toBe('lease-held');
+			expect(analyzeSymbols).not.toHaveBeenCalled();
 		});
 	});
 
@@ -386,6 +417,25 @@ describe('NewsMonitorSchedulerService', () => {
 			await scheduler.stopWorker({ drain: false });
 			expect(scheduler.running).toBe(false);
 			expect(scheduler.timer).toBeNull();
+		});
+
+		it('stopWorker with drain false aborts the active sweep controller', async () => {
+			let receivedSignal;
+			const analyzeSymbols = jest.fn((syms, reqId, tok, opt, sweepOptions) => {
+				receivedSignal = sweepOptions.signal;
+				return new Promise((resolve) => setTimeout(resolve, 5000));
+			});
+			scheduler.getAnalyzerFn = () => ({ analyzeSymbols });
+
+			const sweepPromise = scheduler.sweep();
+			await new Promise((resolve) => setImmediate(resolve));
+
+			expect(receivedSignal).toBeDefined();
+			expect(receivedSignal.aborted).toBe(false);
+
+			await scheduler.stopWorker({ drain: false });
+			expect(receivedSignal.aborted).toBe(true);
+			await sweepPromise;
 		});
 
 		it('does not start twice', () => {
