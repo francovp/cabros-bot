@@ -139,4 +139,97 @@ describe('Security: API Key Validation', () => {
 		spy.mockRestore();
 		console.error = originalConsoleError;
 	});
+
+	describe('Zero-downtime rotation via WEBHOOK_API_KEY_PREVIOUS', () => {
+		beforeEach(() => {
+			process.env.WEBHOOK_API_KEY = 'primary-key';
+			process.env.WEBHOOK_API_KEY_PREVIOUS = 'previous-key';
+		});
+
+		it('accepts the primary key when the grace key is configured', async () => {
+			const res = await request(app)
+				.post('/protected')
+				.set('x-api-key', 'primary-key')
+				.send({});
+
+			expect(res.status).toBe(200);
+		});
+
+		it('accepts the previous key when the grace key is configured', async () => {
+			const res = await request(app)
+				.post('/protected')
+				.set('x-api-key', 'previous-key')
+				.send({});
+
+			expect(res.status).toBe(200);
+		});
+
+		it('rejects a key that matches neither primary nor previous', async () => {
+			const res = await request(app)
+				.post('/protected')
+				.set('x-api-key', 'neither-key')
+				.send({});
+
+			expect(res.status).toBe(403);
+		});
+
+		it('rejects stale-only key after clearing WEBHOOK_API_KEY_PREVIOUS', async () => {
+			const resBefore = await request(app)
+				.post('/protected')
+				.set('x-api-key', 'previous-key')
+				.send({});
+			expect(resBefore.status).toBe(200);
+
+			delete process.env.WEBHOOK_API_KEY_PREVIOUS;
+
+			const resAfter = await request(app)
+				.post('/protected')
+				.set('x-api-key', 'previous-key')
+				.send({});
+			expect(resAfter.status).toBe(403);
+
+			const primaryStillWorks = await request(app)
+				.post('/protected')
+				.set('x-api-key', 'primary-key')
+				.send({});
+			expect(primaryStillWorks.status).toBe(200);
+		});
+
+		it('falls back to the single-key path when WEBHOOK_API_KEY_PREVIOUS is empty string', async () => {
+			process.env.WEBHOOK_API_KEY_PREVIOUS = '';
+
+			const accepted = await request(app)
+				.post('/protected')
+				.set('x-api-key', 'previous-key')
+				.send({});
+			expect(accepted.status).toBe(403);
+
+			const primary = await request(app)
+				.post('/protected')
+				.set('x-api-key', 'primary-key')
+				.send({});
+			expect(primary.status).toBe(200);
+		});
+
+		it('rejects when multiple x-api-key headers are sent (comma-joined)', async () => {
+			// Express joins duplicate headers with comma; the validator treats this as
+			// a single non-matching string and rejects. The first header alone would
+			// still be accepted via direct header injection.
+			const res = await request(app)
+				.post('/protected')
+				.set('x-api-key', ['primary-key', 'previous-key'])
+				.send({});
+
+			expect(res.status).toBe(403);
+		});
+
+		it('rejects when the only header value is the previous key as the first', async () => {
+			const res = await request(app)
+				.post('/protected')
+				.set('x-api-key', ['previous-key', 'not-the-key'])
+				.send({});
+
+			expect(res.status).toBe(403);
+		});
+	});
 });

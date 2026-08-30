@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "CabrosBot",
-    "description": "Collection for Cabros Bot API - Telegram + WhatsApp crypto/stock alert bot with TradingView MCP integration.",
+    "description": "Collection for Cabros Bot API - Telegram + WhatsApp crypto/stock alert bot with TradingView MCP integration.\n\n**API key rotation (zero-downtime):** When the server is configured with both `WEBHOOK_API_KEY` and `WEBHOOK_API_KEY_PREVIOUS`, the collection variable `{{apiKey}}` should be set to the primary key. The previous key (if needed during the rotation window) is read separately from the `WEBHOOK_API_KEY_PREVIOUS` environment variable on the server side, not from the collection. After all senders migrate to the new key, clear `WEBHOOK_API_KEY_PREVIOUS` on the server so the grace window closes.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [

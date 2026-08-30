@@ -35,6 +35,7 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 #### Security
 
 - `WEBHOOK_API_KEY` - API key used to secure `/api/*` webhook endpoints. Required in production-like environments (`NODE_ENV=production`, Render, Vercel, Railway), where endpoints fail-closed with HTTP 503 if unset. When configured, clients must provide the key via the `x-api-key` header (or the `api-key` query parameter)
+- `WEBHOOK_API_KEY_PREVIOUS` - Optional grace key used to rotate `WEBHOOK_API_KEY` without downtime. While set, requests carrying either the primary or the previous key in the `x-api-key` header are accepted with timing-safe comparison. See the [Zero-downtime `WEBHOOK_API_KEY` rotation](#zero-downtime-webhook_api_key-rotation) section for the rotation procedure. Classification: environment-only (excluded from Firebase Remote Config)
 - `ENABLE_FIREBASE_ADMIN_AUTH` - Enable opt-in Firebase email/password authentication for the browser admin console (`false` by default)
 - `FIREBASE_WEB_API_KEY` - Public Firebase Web API key used by the browser sign-in flow; not a service-account credential
 - `FIREBASE_AUTH_DOMAIN` - Public Firebase Auth domain used by the browser sign-in flow
@@ -347,6 +348,17 @@ If a credential may have been committed or exposed:
 3. Revoke and replace `BINANCE_API_KEY`/`BINANCE_API_SECRET`; validate on testnet before any approved live enablement.
 4. Revoke the exposed Firebase service-account key, create a replacement, update `FIREBASE_SERVICE_ACCOUNT_JSON` in the deployment secret store, and verify Firestore/Remote Config access.
 5. Review the scan result and confirm no credential remains in git history; treat the old credential as compromised even if the file was deleted.
+
+#### Zero-downtime `WEBHOOK_API_KEY` rotation
+
+Set the optional `WEBHOOK_API_KEY_PREVIOUS` env var to the previous key while rotating `WEBHOOK_API_KEY`. While it is configured, requests presenting either key in the `x-api-key` header pass authentication with timing-safe comparison. Recommended rotation flow:
+
+1. In the production secret store, set the **new** key as `WEBHOOK_API_KEY` and move the **old** key to `WEBHOOK_API_KEY_PREVIOUS`.
+2. Deploy; protected endpoints continue accepting both keys during the grace window.
+3. Migrate every upstream sender (TradingView webhooks, GitHub Actions, the admin console, Postman collections) to the new key at their own pace.
+4. Once every sender uses the new key, clear `WEBHOOK_API_KEY_PREVIOUS` and redeploy. After this step, only the new key is accepted and the grace window is closed.
+
+When `WEBHOOK_API_KEY_PREVIOUS` is unset, the validator behaves byte-for-byte identically to the single-key path. Classification: **environment-only** (authentication control, excluded from Firebase Remote Config).
 
 ### 4. Run Development Server
 

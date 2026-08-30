@@ -1621,7 +1621,8 @@
       "ApiKeyHeader": {
         "type": "apiKey",
         "in": "header",
-        "name": "x-api-key"
+        "name": "x-api-key",
+        "description": "API key configured via WEBHOOK_API_KEY. During a zero-downtime rotation window, requests carrying the previous key (configured via WEBHOOK_API_KEY_PREVIOUS) are also accepted; clear WEBHOOK_API_KEY_PREVIOUS once every sender has migrated. Timing-safe comparison via crypto.timingSafeEqual."
       },
       "ApiKeyQuery": {
         "type": "apiKey",
