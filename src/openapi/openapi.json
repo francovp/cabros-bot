@@ -1249,6 +1249,201 @@
         "x-admin-role": "admin.viewer"
       }
     },
+    "/api/trading/binance/orders/preview": {
+      "post": {
+        "tags": [
+          "Trading"
+        ],
+        "summary": "Preview a Binance Spot order without submitting it",
+        "description": "Returns a BINANCE_ORDER_PREVIEW response with the LOT_SIZE-adjusted quantity, projected notional, estimated maker/taker fees, slippage estimate from a fail-open depth probe (4-second AbortController deadline), and a 5-second expiresAt token. The endpoint is read-only and never calls submitNewOrder. Preview-time validation reuses the same exchange-info filters and Binance order-test filters as POST /api/trading/binance/orders, but cannot be replayed after expiresAt. maxSlippageBps is honored for MARKET BUY orders that include a depth snapshot; wouldExceedBudget is reported when the slippageBps estimate exceeds the supplied budget but no order is rejected. BINANCE_TRADING_MAX_NOTIONAL is enforced — previews above the cap return 403 MAX_NOTIONAL_EXCEEDED.",
+        "operationId": "postBinanceSpotOrderPreview",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BinanceOrderPreviewRequest"
+              },
+              "examples": {
+                "marketBuyPreview": {
+                  "summary": "MARKET BUY preview with a slippage budget",
+                  "value": {
+                    "symbol": "BTCUSDT",
+                    "side": "BUY",
+                    "type": "MARKET",
+                    "quantity": "0.01",
+                    "maxSlippageBps": 75
+                  }
+                },
+                "limitSellPreview": {
+                  "summary": "LIMIT SELL preview without depth probe",
+                  "value": {
+                    "symbol": "BTCUSDT",
+                    "side": "SELL",
+                    "type": "LIMIT",
+                    "quantity": "0.01",
+                    "price": "65000",
+                    "timeInForce": "GTC"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Preview generated without submitting an order.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BinanceOrderPreviewResult"
+                },
+                "examples": {
+                  "marketBuyPreview": {
+                    "value": {
+                      "success": true,
+                      "preview": true,
+                      "environment": "testnet",
+                      "order": {
+                        "symbol": "BTCUSDT",
+                        "side": "BUY",
+                        "type": "MARKET",
+                        "quantity": "0.01",
+                        "quoteOrderQty": null,
+                        "price": null,
+                        "timeInForce": null,
+                        "clientOrderId": null
+                      },
+                      "adjustedQuantity": "0.01",
+                      "adjustedNotional": "650",
+                      "constraints": {
+                        "lotSize": {
+                          "minQty": "0.00001",
+                          "maxQty": "9000",
+                          "stepSize": "0.00001"
+                        },
+                        "priceFilter": {
+                          "minPrice": "0.01",
+                          "maxPrice": "1000000",
+                          "tickSize": "0.01"
+                        },
+                        "notional": {
+                          "minNotional": "10",
+                          "maxNotional": null,
+                          "applyMinToMarket": true,
+                          "applyMaxToMarket": null
+                        }
+                      },
+                      "flags": {
+                        "lotSizeOk": true,
+                        "priceFilterOk": true,
+                        "minNotionalOk": true,
+                        "maxNotionalOk": true,
+                        "minNotionalExceededReason": null,
+                        "maxNotionalExceededReason": null
+                      },
+                      "effectivePriceEstimate": "65000",
+                      "priceSource": "avgPrice",
+                      "marketPriceError": null,
+                      "feeEstimate": {
+                        "takerFeeBps": 10,
+                        "makerFeeBps": 10,
+                        "appliedFeeBps": 10,
+                        "estimatedFeeQuote": "0.65",
+                        "label": "estimate — not a Binance fill guarantee"
+                      },
+                      "slippage": {
+                        "slippageBudgetBps": 75,
+                        "wouldExceedBudget": false
+                      },
+                      "depthSnapshot": {
+                        "limit": 20,
+                        "fetchedAt": "2026-08-30T02:30:32.043Z",
+                        "available": true
+                      },
+                      "expiresAt": "2026-08-30T02:30:37.043Z",
+                      "previewFingerprint": "8bcc995647ef3bb71bf0d6d7"
+                    }
+                  },
+                  "minNotionalViolation": {
+                    "value": {
+                      "success": false,
+                      "error": "order notional is below Binance minimum",
+                      "code": "INVALID_ORDER_REQUEST",
+                      "preview": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body or LOT_SIZE/PRICE_FILTER violation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "examples": {
+                  "lotSizeViolation": {
+                    "value": {
+                      "success": false,
+                      "error": "quantity does not match Binance lot-size step; suggested adjustedQuantity: 0.0001",
+                      "code": "INVALID_ORDER_REQUEST",
+                      "preview": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Feature disabled or preview exceeds the configured BINANCE_TRADING_MAX_NOTIONAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "examples": {
+                  "featureDisabled": {
+                    "value": {
+                      "success": false,
+                      "error": "Binance trading is disabled",
+                      "code": "FEATURE_DISABLED"
+                    }
+                  },
+                  "maxNotionalExceeded": {
+                    "value": {
+                      "success": false,
+                      "error": "order notional exceeds configured maximum",
+                      "code": "MAX_NOTIONAL_EXCEEDED"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "502": {
+            "$ref": "#/components/responses/BinanceOrderFailure"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      }
+    },
     "/api/trading/binance/orders": {
       "get": {
         "tags": [
@@ -4927,6 +5122,290 @@
           },
           "order": {
             "$ref": "#/components/schemas/JsonObject"
+          }
+        }
+      },
+      "BinanceOrderPreviewRequest": {
+        "type": "object",
+        "description": "Pre-trade preview body. The endpoint never calls submitNewOrder; the response includes a 5-second expiresAt token. maxSlippageBps is honored for MARKET BUY orders that include a depth snapshot.",
+        "required": [
+          "symbol",
+          "side",
+          "type"
+        ],
+        "properties": {
+          "symbol": {
+            "type": "string",
+            "pattern": "^[A-Z0-9]{5,20}$",
+            "description": "Allow-listed Binance Spot symbol, for example BTCUSDT."
+          },
+          "side": {
+            "type": "string",
+            "enum": [
+              "BUY",
+              "SELL"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "MARKET",
+              "LIMIT"
+            ]
+          },
+          "quantity": {
+            "type": [
+              "number",
+              "string"
+            ],
+            "description": "Base-asset quantity. Required for LIMIT. Optional for MARKET (must be paired with quoteOrderQty when provided)."
+          },
+          "quoteOrderQty": {
+            "type": [
+              "number",
+              "string"
+            ],
+            "description": "Quote-asset amount for MARKET orders."
+          },
+          "price": {
+            "type": [
+              "number",
+              "string"
+            ],
+            "description": "Required for LIMIT orders."
+          },
+          "timeInForce": {
+            "type": "string",
+            "enum": [
+              "GTC",
+              "IOC",
+              "FOK"
+            ],
+            "description": "LIMIT-only. MARKET orders must omit this field."
+          },
+          "clientOrderId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,36}$"
+          },
+          "maxSlippageBps": {
+            "type": "number",
+            "minimum": 0,
+            "exclusiveMinimum": true,
+            "description": "Optional slippage budget in basis points. MARKET BUY orders with an available depth snapshot return wouldExceedBudget when the slippageBps estimate exceeds this value; the budget never rejects the preview itself."
+          }
+        },
+        "oneOf": [
+          {
+            "required": [
+              "quantity"
+            ]
+          },
+          {
+            "required": [
+              "quoteOrderQty"
+            ]
+          }
+        ],
+        "additionalProperties": false
+      },
+      "BinanceOrderPreviewResult": {
+        "type": "object",
+        "required": [
+          "success",
+          "preview",
+          "environment",
+          "order",
+          "adjustedQuantity",
+          "constraints",
+          "flags",
+          "effectivePriceEstimate",
+          "priceSource",
+          "feeEstimate",
+          "depthSnapshot",
+          "expiresAt",
+          "previewFingerprint"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "preview": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "environment": {
+            "type": "string",
+            "enum": [
+              "testnet",
+              "live"
+            ]
+          },
+          "order": {
+            "type": "object",
+            "required": [
+              "symbol",
+              "side",
+              "type"
+            ],
+            "properties": {
+              "symbol": {
+                "type": "string"
+              },
+              "side": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string"
+              },
+              "quantity": {
+                "type": "string"
+              },
+              "quoteOrderQty": {
+                "type": "string"
+              },
+              "price": {
+                "type": "string"
+              },
+              "timeInForce": {
+                "type": "string"
+              },
+              "clientOrderId": {
+                "type": "string"
+              }
+            }
+          },
+          "adjustedQuantity": {
+            "type": "string"
+          },
+          "adjustedNotional": {
+            "type": "string"
+          },
+          "constraints": {
+            "type": "object",
+            "properties": {
+              "lotSize": {
+                "$ref": "#/components/schemas/JsonObject"
+              },
+              "priceFilter": {
+                "$ref": "#/components/schemas/JsonObject"
+              },
+              "notional": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          },
+          "flags": {
+            "type": "object",
+            "required": [
+              "lotSizeOk",
+              "priceFilterOk",
+              "minNotionalOk",
+              "maxNotionalOk"
+            ],
+            "properties": {
+              "lotSizeOk": {
+                "type": "boolean"
+              },
+              "priceFilterOk": {
+                "type": "boolean"
+              },
+              "minNotionalOk": {
+                "type": "boolean"
+              },
+              "maxNotionalOk": {
+                "type": "boolean"
+              },
+              "minNotionalExceededReason": {
+                "type": "string"
+              },
+              "maxNotionalExceededReason": {
+                "type": "string"
+              }
+            }
+          },
+          "effectivePriceEstimate": {
+            "type": "string"
+          },
+          "priceSource": {
+            "type": "string",
+            "enum": [
+              "limitPrice",
+              "avgPrice",
+              "quoteOrderQty",
+              "none"
+            ]
+          },
+          "marketPriceError": {
+            "type": "string"
+          },
+          "feeEstimate": {
+            "type": "object",
+            "required": [
+              "takerFeeBps",
+              "makerFeeBps",
+              "appliedFeeBps",
+              "estimatedFeeQuote",
+              "label"
+            ],
+            "properties": {
+              "takerFeeBps": {
+                "type": "integer"
+              },
+              "makerFeeBps": {
+                "type": "integer"
+              },
+              "appliedFeeBps": {
+                "type": "integer"
+              },
+              "estimatedFeeQuote": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              }
+            }
+          },
+          "slippage": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "slippageBudgetBps": {
+                "type": "number"
+              },
+              "wouldExceedBudget": {
+                "type": "boolean"
+              }
+            }
+          },
+          "depthSnapshot": {
+            "type": "object",
+            "required": [
+              "available"
+            ],
+            "properties": {
+              "limit": {
+                "type": "integer"
+              },
+              "fetchedAt": {
+                "type": "string"
+              },
+              "available": {
+                "type": "boolean"
+              },
+              "error": {
+                "type": "string"
+              }
+            }
+          },
+          "expiresAt": {
+            "type": "string",
+            "description": "ISO 8601 timestamp after which the preview must not be replayed."
+          },
+          "previewFingerprint": {
+            "type": "string",
+            "description": "Short SHA-256 fingerprint of the preview parameters and expiry."
           }
         }
       },

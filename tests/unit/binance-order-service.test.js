@@ -1145,6 +1145,190 @@ describe('BinanceOrderService', () => {
 		expect(client.submitNewOrder).toHaveBeenCalledTimes(1);
 	});
 
+	describe('previewOrder', () => {
+		it('rejects preview when Binance trading is disabled', async () => {
+			delete process.env.ENABLE_BINANCE_TRADING;
+			const createClient = jest.fn();
+			const service = createBinanceOrderService({ createClient });
+
+			await expect(service.previewOrder({
+				symbol: 'BTCUSDT',
+				side: 'BUY',
+				type: 'MARKET',
+				quantity: '0.01',
+			})).rejects.toMatchObject({ code: 'FEATURE_DISABLED', statusCode: 403 });
+
+			expect(createClient).not.toHaveBeenCalled();
+		});
+
+		it('returns a MARKET preview with adjusted notional, fees, and slippage budget flags', async () => {
+			const client = {
+				getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
+				getAvgPrice: jest.fn().mockResolvedValue({ price: '100' }),
+				depth: jest.fn().mockResolvedValue({
+					asks: [
+						['100.10', '5'],
+						['100.50', '10'],
+					],
+					limit: 20,
+				}),
+			};
+			const service = createBinanceOrderService({ createClient: () => client });
+
+			const result = await service.previewOrder({
+				symbol: 'BTCUSDT',
+				side: 'BUY',
+				type: 'MARKET',
+				quantity: '0.1',
+				maxSlippageBps: 75,
+			});
+
+			expect(result.success).toBe(true);
+			expect(result.preview).toBe(true);
+			expect(result.environment).toBe('testnet');
+			expect(result.order).toMatchObject({
+				symbol: 'BTCUSDT',
+				side: 'BUY',
+				type: 'MARKET',
+			});
+			expect(result.adjustedQuantity).toBe('0.1');
+			expect(result.adjustedNotional).toBe('10');
+			expect(result.effectivePriceEstimate).toBe('100');
+			expect(result.priceSource).toBe('avgPrice');
+			expect(result.feeEstimate.appliedFeeBps).toBe(10);
+			expect(result.feeEstimate.estimatedFeeQuote).toBe('0.01');
+			expect(result.flags.minNotionalOk).toBe(true);
+			expect(result.flags.maxNotionalOk).toBe(true);
+			expect(result.depthSnapshot.available).toBe(true);
+			expect(result.slippage).not.toBeNull();
+			expect(result.slippage.slippageBudgetBps).toBe(75);
+			expect(result.slippage.wouldExceedBudget).toBe(false);
+			expect(result.expiresAt).toMatch(/T/);
+			expect(typeof result.previewFingerprint).toBe('string');
+			expect(result.previewFingerprint.length).toBeGreaterThan(16);
+		});
+
+		it('flags min-notional violations and rejects fee math when order is below floor', async () => {
+			const client = {
+				getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
+				getAvgPrice: jest.fn().mockResolvedValue({ price: '50' }),
+			};
+			const service = createBinanceOrderService({ createClient: () => client });
+
+			const result = await service.previewOrder({
+				symbol: 'BTCUSDT',
+				side: 'BUY',
+				type: 'MARKET',
+				quantity: '0.1',
+			});
+
+			expect(result.flags.minNotionalOk).toBe(false);
+			expect(result.flags.minNotionalExceededReason).toBe('below Binance minimum');
+			expect(result.adjustedNotional).toBe('5');
+			expect(result.depthSnapshot.available).toBe(false);
+		});
+
+		it('rejects the preview when the order notional exceeds the configured maximum', async () => {
+			const client = {
+				getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
+				getAvgPrice: jest.fn().mockResolvedValue({ price: '5000' }),
+			};
+			const service = createBinanceOrderService({ createClient: () => client });
+
+			await expect(service.previewOrder({
+				symbol: 'BTCUSDT',
+				side: 'BUY',
+				type: 'MARKET',
+				quantity: '0.5',
+			})).rejects.toMatchObject({ code: 'MAX_NOTIONAL_EXCEEDED', statusCode: 403 });
+		});
+
+		it('returns 400 LOT_SIZE rejection with the suggested adjustedQuantity when stepSize is violated', async () => {
+			const client = {
+				getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
+				getAvgPrice: jest.fn().mockResolvedValue({ price: '100' }),
+			};
+			const service = createBinanceOrderService({ createClient: () => client });
+
+			await expect(service.previewOrder({
+				symbol: 'BTCUSDT',
+				side: 'BUY',
+				type: 'LIMIT',
+				quantity: '0.12345',
+				price: '100',
+				timeInForce: 'GTC',
+			})).rejects.toMatchObject({
+				code: 'INVALID_ORDER_REQUEST',
+				statusCode: 400,
+				message: expect.stringContaining('0.1234'),
+			});
+		});
+
+		it('reports wouldExceedBudget:true when the depth fill exceeds maxSlippageBps', async () => {
+			const client = {
+				getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
+				getAvgPrice: jest.fn().mockResolvedValue({ price: '100' }),
+				depth: jest.fn().mockResolvedValue({
+					asks: [
+						['120', '10'],
+					],
+					limit: 20,
+				}),
+			};
+			const service = createBinanceOrderService({ createClient: () => client });
+
+			const result = await service.previewOrder({
+				symbol: 'BTCUSDT',
+				side: 'BUY',
+				type: 'MARKET',
+				quantity: '0.1',
+				maxSlippageBps: 50,
+			});
+
+			expect(result.slippage).not.toBeNull();
+			expect(result.slippage.wouldExceedBudget).toBe(true);
+			expect(result.slippage.slippageBudgetBps).toBe(50);
+			expect(result.adjustedNotional).toBe('10');
+		});
+
+		it('keeps slippage=null and does not block when the depth probe fails', async () => {
+			const client = {
+				getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
+				getAvgPrice: jest.fn().mockResolvedValue({ price: '100' }),
+				depth: jest.fn().mockRejectedValue(new Error('depth timeout')),
+			};
+			const service = createBinanceOrderService({ createClient: () => client });
+
+			const result = await service.previewOrder({
+				symbol: 'BTCUSDT',
+				side: 'BUY',
+				type: 'MARKET',
+				quantity: '0.1',
+				maxSlippageBps: 50,
+			});
+
+			expect(result.depthSnapshot.available).toBe(false);
+			expect(result.depthSnapshot.error).toMatch(/depth/i);
+			expect(result.slippage).toBeNull();
+			expect(result.adjustedNotional).toBe('10');
+		});
+
+		it('rejects an invalid maxSlippageBps value', async () => {
+			const client = {
+				getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
+			};
+			const service = createBinanceOrderService({ createClient: () => client });
+
+			await expect(service.previewOrder({
+				symbol: 'BTCUSDT',
+				side: 'BUY',
+				type: 'MARKET',
+				quantity: '0.1',
+				maxSlippageBps: 0,
+			})).rejects.toMatchObject({ code: 'INVALID_ORDER_REQUEST', statusCode: 400 });
+		});
+	});
+
 	describe('getOrders', () => {
 		it('rejects disabled trading before constructing a Binance client', async () => {
 			delete process.env.ENABLE_BINANCE_TRADING;

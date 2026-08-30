@@ -63,7 +63,10 @@ describe('OpenAPI contract', () => {
 			'DELETE /api/scanner-presets/{id}', 'POST /api/scanner-presets/{id}/run',
 			'POST /api/jobs/tradingview-analysis', 'GET /api/jobs', 'GET /api/jobs/{jobId}',
 			'POST /api/jobs/{jobId}/cancel', 'POST /api/jobs/{jobId}/retry',
-			'POST /api/jobs/{jobId}/retry-failed', 'GET /api/outcomes', 'GET /api/outcomes/summary', 'GET /api/trading/binance/orders', 'POST /api/trading/binance/orders', 'GET /api/status', 'GET /api/capabilities',
+			'POST /api/jobs/{jobId}/retry-failed', 'GET /api/outcomes', 'GET /api/outcomes/summary',
+			'GET /api/trading/binance/orders', 'POST /api/trading/binance/orders',
+			'POST /api/trading/binance/orders/preview',
+			'GET /api/status', 'GET /api/capabilities',
 		]);
 
 		for (const operation of operations) {
@@ -82,6 +85,7 @@ describe('OpenAPI contract', () => {
 			'GET /api/outcomes': 'admin.viewer',
 			'GET /api/outcomes/summary': 'admin.viewer',
 			'GET /api/trading/binance/orders': 'admin.viewer',
+			'POST /api/trading/binance/orders/preview': 'admin.viewer',
 			'POST /api/trading/binance/orders': 'admin.operator',
 			'GET /api/alerts': 'admin.viewer',
 			'GET /api/jobs': 'admin.viewer',

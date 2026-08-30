@@ -4237,6 +4237,147 @@
       "description": "Operator-only Binance Spot order workflow. Feature is disabled by default, uses Spot Testnet by default, fails closed without API-key or Firebase admin authentication, derives a deterministic clientOrderId for idempotent live retries, preserves decimal strings, distinguishes definitive Binance rejections from transient failures, and never retries an order submission automatically.",
       "item": [
         {
+          "name": "POST Binance order preview (MARKET BUY with slippage budget)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"symbol\": \"BTCUSDT\",\n  \"side\": \"BUY\",\n  \"type\": \"MARKET\",\n  \"quantity\": \"0.01\",\n  \"maxSlippageBps\": 75\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/orders/preview",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "orders",
+                "preview"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Preview accepted (within slippage budget)",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"preview\": true,\n  \"environment\": \"testnet\",\n  \"order\": {\n    \"symbol\": \"BTCUSDT\",\n    \"side\": \"BUY\",\n    \"type\": \"MARKET\",\n    \"quantity\": \"0.01\"\n  },\n  \"adjustedQuantity\": \"0.01\",\n  \"adjustedNotional\": \"650\",\n  \"constraints\": {\n    \"lotSize\": { \"minQty\": \"0.00001\", \"maxQty\": \"9000\", \"stepSize\": \"0.00001\" },\n    \"priceFilter\": { \"minPrice\": \"0.01\", \"maxPrice\": \"1000000\", \"tickSize\": \"0.01\" },\n    \"notional\": { \"minNotional\": \"10\" }\n  },\n  \"flags\": {\n    \"lotSizeOk\": true,\n    \"priceFilterOk\": true,\n    \"minNotionalOk\": true,\n    \"maxNotionalOk\": true,\n    \"minNotionalExceededReason\": null,\n    \"maxNotionalExceededReason\": null\n  },\n  \"effectivePriceEstimate\": \"65000\",\n  \"priceSource\": \"avgPrice\",\n  \"marketPriceError\": null,\n  \"feeEstimate\": {\n    \"takerFeeBps\": 10,\n    \"makerFeeBps\": 10,\n    \"appliedFeeBps\": 10,\n    \"estimatedFeeQuote\": \"0.65\",\n    \"label\": \"estimate — not a Binance fill guarantee\"\n  },\n  \"slippage\": {\n    \"slippageBudgetBps\": 75,\n    \"wouldExceedBudget\": false\n  },\n  \"depthSnapshot\": {\n    \"limit\": 20,\n    \"fetchedAt\": \"2026-08-30T02:30:32.043Z\",\n    \"available\": true\n  },\n  \"expiresAt\": \"2026-08-30T02:30:37.043Z\",\n  \"previewFingerprint\": \"8bcc995647ef3bb71bf0d6d7\"\n}"
+            },
+            {
+              "name": "Lot-size violation",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"success\": false,\n  \"error\": \"quantity does not match Binance lot-size step; suggested adjustedQuantity: 0.0001\",\n  \"code\": \"INVALID_ORDER_REQUEST\",\n  \"preview\": true\n}"
+            },
+            {
+              "name": "Notional exceeds configured maximum",
+              "status": "Forbidden",
+              "code": 403,
+              "body": "{\n  \"success\": false,\n  \"error\": \"order notional exceeds configured maximum\",\n  \"code\": \"MAX_NOTIONAL_EXCEEDED\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST Binance order preview (LIMIT SELL without depth probe)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"symbol\": \"BTCUSDT\",\n  \"side\": \"SELL\",\n  \"type\": \"LIMIT\",\n  \"quantity\": \"0.01\",\n  \"price\": \"65000\",\n  \"timeInForce\": \"GTC\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/orders/preview",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "orders",
+                "preview"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Preview accepted (LIMIT SELL)",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"preview\": true,\n  \"environment\": \"testnet\",\n  \"order\": {\n    \"symbol\": \"BTCUSDT\",\n    \"side\": \"SELL\",\n    \"type\": \"LIMIT\",\n    \"quantity\": \"0.01\",\n    \"price\": \"65000\",\n    \"timeInForce\": \"GTC\"\n  },\n  \"adjustedQuantity\": \"0.01\",\n  \"adjustedNotional\": \"650\",\n  \"constraints\": {\n    \"lotSize\": { \"minQty\": \"0.00001\", \"maxQty\": \"9000\", \"stepSize\": \"0.00001\" },\n    \"priceFilter\": { \"minPrice\": \"0.01\", \"maxPrice\": \"1000000\", \"tickSize\": \"0.01\" },\n    \"notional\": { \"minNotional\": \"10\" }\n  },\n  \"flags\": {\n    \"lotSizeOk\": true,\n    \"priceFilterOk\": true,\n    \"minNotionalOk\": true,\n    \"maxNotionalOk\": true\n  },\n  \"effectivePriceEstimate\": \"65000\",\n  \"priceSource\": \"limitPrice\",\n  \"feeEstimate\": {\n    \"takerFeeBps\": 10,\n    \"makerFeeBps\": 10,\n    \"appliedFeeBps\": 10,\n    \"estimatedFeeQuote\": \"0.65\",\n    \"label\": \"estimate — not a Binance fill guarantee\"\n  },\n  \"slippage\": null,\n  \"depthSnapshot\": { \"available\": false },\n  \"expiresAt\": \"2026-08-30T02:30:37.043Z\",\n  \"previewFingerprint\": \"abcdef0123456789abcdef01\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST Binance order preview (feature disabled)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"symbol\": \"BTCUSDT\",\n  \"side\": \"BUY\",\n  \"type\": \"MARKET\",\n  \"quantity\": \"0.01\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/orders/preview",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "orders",
+                "preview"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Feature disabled",
+              "status": "Forbidden",
+              "code": 403,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Binance trading is disabled\",\n  \"code\": \"FEATURE_DISABLED\"\n}"
+            }
+          ]
+        },
+        {
           "name": "POST Binance order (dry-run LIMIT)",
           "request": {
             "method": "POST",
