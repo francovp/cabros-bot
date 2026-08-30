@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const admin = require('firebase-admin');
 
-const DEFAULT_COLLECTIONS = ['alerts', 'alertReplays', 'signalOutcomes', 'scannerPresets'];
+const DEFAULT_COLLECTIONS = ['alerts', 'alertReplays', 'tradingSignalOutcomes', 'scannerPresets'];
 const PAGE_SIZE = 400;
 
 function parseArgs(args = process.argv.slice(2)) {

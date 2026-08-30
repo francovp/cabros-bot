@@ -9,7 +9,7 @@ on:
       collections:
         description: 'Comma-separated collection IDs to export'
         required: false
-        default: 'alerts,alertReplays,signalOutcomes,scannerPresets'
+        default: 'alerts,alertReplays,tradingSignalOutcomes,scannerPresets'
 
 permissions:
   contents: read
@@ -49,7 +49,7 @@ jobs:
       - name: Execute Firestore Backup
         id: backup
         env:
-          COLLECTIONS_INPUT: ${{ inputs.collections || 'alerts,alertReplays,signalOutcomes,scannerPresets' }}
+          COLLECTIONS_INPUT: ${{ inputs.collections || 'alerts,alertReplays,tradingSignalOutcomes,scannerPresets' }}
         run: |
           if [ -n "$GCS_BACKUP_BUCKET" ] && command -v gcloud >/dev/null 2>&1; then
             echo "Running managed GCS export..."

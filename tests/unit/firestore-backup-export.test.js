@@ -184,18 +184,18 @@ describe('Firestore Backup & Export Tooling', () => {
 
 		it('parses custom export CLI arguments', () => {
 			const opts = parseExportArgs([
-				'--collections=alerts,signalOutcomes',
-				'--output-dir=/tmp/test-export',
-				'--page-size=200',
+				'--collections=alerts,tradingSignalOutcomes',
+				'--output-dir=/tmp/custom-backup',
+				'--page-size=250',
 				'--dry-run',
-				'--project=my-project',
+				'--project=my-custom-project',
 			]);
 
-			expect(opts.collections).toEqual(['alerts', 'signalOutcomes']);
-			expect(opts.outputDir).toBe('/tmp/test-export');
-			expect(opts.pageSize).toBe(200);
+			expect(opts.collections).toEqual(['alerts', 'tradingSignalOutcomes']);
+			expect(opts.outputDir).toBe('/tmp/custom-backup');
+			expect(opts.pageSize).toBe(250);
 			expect(opts.dryRun).toBe(true);
-			expect(opts.projectId).toBe('my-project');
+			expect(opts.projectId).toBe('my-custom-project');
 		});
 
 		it('parses restore CLI arguments', () => {
@@ -294,14 +294,14 @@ describe('Firestore Backup & Export Tooling', () => {
 
 			const results = await runExport({
 				firestore: mockFirestore,
-				collections: ['alerts', 'signalOutcomes'],
+				collections: ['alerts', 'tradingSignalOutcomes'],
 				outputDir: tempDir,
 				pageSize: 10,
 			});
 
 			expect(results.totalDocuments).toBe(2);
 			expect(results.collections.alerts.documentCount).toBe(1);
-			expect(results.collections.signalOutcomes.documentCount).toBe(1);
+			expect(results.collections.tradingSignalOutcomes.documentCount).toBe(1);
 
 			const manifestPath = path.join(tempDir, 'manifest.json');
 			expect(fs.existsSync(manifestPath)).toBe(true);
@@ -422,7 +422,7 @@ describe('Firestore Backup & Export Tooling', () => {
 			expect(writtenData.expiresAt).toBeUndefined();
 		});
 
-		it('skips existing documents when --no-overwrite is set', async () => {
+		it('skips existing documents atomically when --no-overwrite is set', async () => {
 			const jsonlFile = path.join(tempDir, 'alerts.jsonl');
 			const lines = [
 				JSON.stringify({ _id: 'doc-exists', text: 'Old Value' }),
@@ -430,22 +430,16 @@ describe('Firestore Backup & Export Tooling', () => {
 			];
 			fs.writeFileSync(jsonlFile, lines.join('\n') + '\n', 'utf8');
 
-			const mockBatch = {
-				set: jest.fn(),
-				commit: jest.fn().mockResolvedValue(undefined),
-			};
+			const mockCreate = jest.fn((data) => Promise.resolve(data));
 			const mockFirestore = {
 				collection: jest.fn().mockReturnValue({
 					doc: jest.fn((id) => ({
 						id,
-						get: jest.fn().mockResolvedValue({ exists: id === 'doc-exists' }),
+						create: id === 'doc-exists'
+							? jest.fn().mockRejectedValue(Object.assign(new Error('Document already exists'), { code: 6 }))
+							: mockCreate,
 					})),
 				}),
-				batch: jest.fn().mockReturnValue(mockBatch),
-				getAll: jest.fn().mockResolvedValue([
-					{ id: 'doc-exists', exists: true },
-					{ id: 'doc-new', exists: false },
-				]),
 			};
 
 			const result = await restoreCollectionFile(mockFirestore, 'alerts', jsonlFile, {
@@ -454,13 +448,50 @@ describe('Firestore Backup & Export Tooling', () => {
 
 			expect(result.totalRead).toBe(2);
 			expect(result.totalRestored).toBe(1);
+			expect(mockCreate).toHaveBeenCalledTimes(1);
+		});
+
+		it('runRestore forwards ttlPolicy and retentionDays to restoreCollectionFile', async () => {
+			const jsonlFile = path.join(tempDir, 'alerts.jsonl');
+			fs.writeFileSync(jsonlFile, JSON.stringify({ _id: 'a1', text: 'Alert 1' }) + '\n');
+
+			const mockBatch = {
+				set: jest.fn(),
+				commit: jest.fn().mockResolvedValue(undefined),
+			};
+			const mockFirestore = {
+				collection: jest.fn().mockReturnValue({ doc: (id) => ({ id }) }),
+				batch: jest.fn().mockReturnValue(mockBatch),
+			};
+
+			const result = await runRestore({
+				firestore: mockFirestore,
+				inputDir: tempDir,
+				ttlPolicy: 'refresh',
+				retentionDays: 30,
+			});
+
+			expect(result.totalDocuments).toBe(1);
 			expect(mockBatch.set).toHaveBeenCalledTimes(1);
-			expect(mockBatch.set).toHaveBeenCalledWith(expect.objectContaining({ id: 'doc-new' }), expect.objectContaining({ text: 'New Value' }));
+			const saved = mockBatch.set.mock.calls[0][1];
+			expect(saved.expiresAt).toBeDefined();
+		});
+
+		it('runRestore throws when an explicitly requested collection file is missing', async () => {
+			const mockFirestore = {
+				collection: jest.fn(),
+			};
+
+			await expect(runRestore({
+				firestore: mockFirestore,
+				inputDir: tempDir,
+				collections: ['nonExistentCollection'],
+			})).rejects.toThrow('Requested collection backup file not found');
 		});
 
 		it('runRestore discovers .jsonl files in input directory and restores all', async () => {
 			fs.writeFileSync(path.join(tempDir, 'alerts.jsonl'), JSON.stringify({ _id: 'a1' }) + '\n');
-			fs.writeFileSync(path.join(tempDir, 'signalOutcomes.jsonl'), JSON.stringify({ _id: 's1' }) + '\n');
+			fs.writeFileSync(path.join(tempDir, 'tradingSignalOutcomes.jsonl'), JSON.stringify({ _id: 's1' }) + '\n');
 
 			const mockBatch = {
 				set: jest.fn(),
@@ -478,7 +509,7 @@ describe('Firestore Backup & Export Tooling', () => {
 
 			expect(result.totalDocuments).toBe(2);
 			expect(result.collections.alerts.totalRestored).toBe(1);
-			expect(result.collections.signalOutcomes.totalRestored).toBe(1);
+			expect(result.collections.tradingSignalOutcomes.totalRestored).toBe(1);
 		});
 	});
 

@@ -9,7 +9,7 @@ This document details the backup and disaster recovery procedures for Firestore 
 Production Firestore uses automatic TTL policies for automated data lifecycle management:
 - `alerts` & `alertReplays`: 90-day retention (`ALERT_STORAGE_RETENTION_DAYS`) via `expiresAt`.
 - `tradingviewJobs` & operational collections: ~1 hour post-terminal retention via `expiresAt`.
-- `signalOutcomes`: Outcome evaluations for strategy performance tracking.
+- `tradingSignalOutcomes`: Outcome evaluations for strategy performance tracking.
 
 To prevent permanent loss of analytical, trade performance, and audit history, high-value collections are backed up periodically.
 
@@ -17,7 +17,7 @@ To prevent permanent loss of analytical, trade performance, and audit history, h
 - **High-Value Analytical Collections (Backed Up)**:
   - `alerts`: Ingested webhook alerts, analysis snapshots, metadata, and token usage.
   - `alertReplays`: Replay audit logs and idempotency traces.
-  - `signalOutcomes`: Win/loss evaluations, MFE/MAE price metrics, and hit-rate history.
+  - `tradingSignalOutcomes`: Win/loss evaluations, MFE/MAE price metrics, and hit-rate history.
   - `scannerPresets`: Custom market scanner configurations.
 - **Operational Collections (Excluded from long-term backup)**:
   - `idempotency_keys`: Ephemeral lock documents.
@@ -34,7 +34,7 @@ Performs a point-in-time snapshot directly in Google Cloud Firestore using `gclo
 ```bash
 export FIREBASE_PROJECT_ID="cabros-bot"
 export GCS_BACKUP_BUCKET="gs://cabros-bot-backups"
-export COLLECTION_IDS="alerts,alertReplays,signalOutcomes,scannerPresets"
+export COLLECTION_IDS="alerts,alertReplays,tradingSignalOutcomes,scannerPresets"
 
 ./ops/export-firestore-managed.sh
 ```
@@ -81,13 +81,13 @@ pnpm run backup:firestore
 
 # Or specify custom options:
 node ops/export-firestore-collections.js \
-  --collections=alerts,signalOutcomes \
+  --collections=alerts,tradingSignalOutcomes \
   --output-dir=./backups/my-backup \
   --page-size=400
 ```
 
 CLI Options:
-- `--collections=<col1,col2>`: Collections to export (default: `alerts,alertReplays,signalOutcomes,scannerPresets`).
+- `--collections=<col1,col2>`: Collections to export (default: `alerts,alertReplays,tradingSignalOutcomes,scannerPresets`).
 - `--output-dir=<path>`: Destination directory for `.jsonl` files and `manifest.json`.
 - `--page-size=<num>`: Page size per read batch (default: 400).
 - `--dry-run`: Scans and counts documents without writing files.
@@ -108,7 +108,7 @@ export FIREBASE_PROJECT_ID="cabros-bot"
 ./ops/restore-firestore-managed.sh gs://cabros-bot-backups/firestore-backups/2026-08-30T04-00-00Z
 
 # Or restore specific collections
-./ops/restore-firestore-managed.sh gs://cabros-bot-backups/firestore-backups/2026-08-30T04-00-00Z alerts,signalOutcomes
+./ops/restore-firestore-managed.sh gs://cabros-bot-backups/firestore-backups/2026-08-30T04-00-00Z alerts,tradingSignalOutcomes
 ```
 
 ---
@@ -127,7 +127,7 @@ pnpm run restore:firestore -- --input-dir=./backups/firestore-export-2026-08-30
 # Restore only specific collections without overwriting existing fields
 node ops/restore-firestore-collections.js \
   --input-dir=./backups/firestore-export-2026-08-30 \
-  --collections=signalOutcomes \
+  --collections=tradingSignalOutcomes \
   --no-overwrite
 ```
 

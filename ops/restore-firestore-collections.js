@@ -5,18 +5,18 @@ const path = require('path');
 const readline = require('readline');
 const admin = require('firebase-admin');
 
+const DEFAULT_COLLECTIONS = ['alerts', 'alertReplays', 'tradingSignalOutcomes', 'scannerPresets'];
 const BATCH_SIZE = 400;
 
 function parseArgs(args = process.argv.slice(2)) {
-	const defaultRetention = parseInt(process.env.ALERT_STORAGE_RETENTION_DAYS, 10) || 90;
 	const options = {
 		inputDir: null,
 		collections: null,
 		batchSize: BATCH_SIZE,
 		dryRun: false,
 		overwrite: true,
-		ttlPolicy: 'refresh', // 'refresh' | 'clear' | 'preserve'
-		retentionDays: defaultRetention,
+		ttlPolicy: 'refresh',
+		retentionDays: 90,
 		projectId: process.env.FIREBASE_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT,
 	};
 
@@ -36,7 +36,10 @@ function parseArgs(args = process.argv.slice(2)) {
 		} else if (arg === '--no-overwrite') {
 			options.overwrite = false;
 		} else if (arg.startsWith('--ttl-policy=')) {
-			options.ttlPolicy = arg.split('=')[1].trim().toLowerCase();
+			const policy = arg.split('=')[1].trim();
+			if (['refresh', 'clear', 'preserve'].includes(policy)) {
+				options.ttlPolicy = policy;
+			}
 		} else if (arg.startsWith('--retention-days=')) {
 			const days = Number(arg.split('=')[1]);
 			if (Number.isSafeInteger(days) && days > 0) {
@@ -153,7 +156,7 @@ function deserializeValue(val, firestore) {
 				try {
 					return new admin.firestore.GeoPoint(val.latitude, val.longitude);
 				} catch {
-					// Fallback below
+					// Fallback
 				}
 			}
 			return {
@@ -162,82 +165,92 @@ function deserializeValue(val, firestore) {
 			};
 		}
 
-		if (val.__type === 'DocumentReference' && typeof val.path === 'string' && firestore) {
-			return firestore.doc(val.path);
+		if (val.__type === 'DocumentReference') {
+			if (firestore && typeof firestore.doc === 'function') {
+				return firestore.doc(val.path);
+			}
+			return { path: val.path };
 		}
 
 		if (Array.isArray(val)) {
 			return val.map((item) => deserializeValue(item, firestore));
 		}
 
-		const result = {};
+		const deserialized = {};
 		for (const [key, value] of Object.entries(val)) {
-			result[key] = deserializeValue(value, firestore);
+			deserialized[key] = deserializeValue(value, firestore);
 		}
-		return result;
+		return deserialized;
 	}
 
 	return val;
 }
 
 function deserializeDocument(record, firestore) {
-	const { _id, ...rest } = record;
-	const deserialized = deserializeValue(rest, firestore);
-	return {
-		id: _id,
-		data: deserialized,
-	};
+	if (!record || typeof record !== 'object') {
+		return { id: null, data: {} };
+	}
+
+	const id = record._id || null;
+	const data = {};
+
+	for (const [key, value] of Object.entries(record)) {
+		if (key === '_id') continue;
+		data[key] = deserializeValue(value, firestore);
+	}
+
+	return { id, data };
 }
 
-async function writeBatchChunk(firestore, collectionName, chunk, options) {
+async function writeBatchChunk(firestore, collectionName, chunk, options = {}) {
 	const { isDryRun, overwrite, ttlPolicy, retentionDays } = options;
-	if (chunk.length === 0) return 0;
+	if (!chunk || chunk.length === 0) return 0;
 
 	if (isDryRun || !firestore) {
 		return chunk.length;
 	}
 
-	const existingIds = new Set();
 	if (!overwrite) {
-		if (typeof firestore.getAll === 'function') {
-			try {
-				const refs = chunk.map((item) => firestore.collection(collectionName).doc(item.id));
-				const snapshots = await firestore.getAll(...refs, { fieldMask: [] });
-				for (const snap of snapshots) {
-					if (snap && snap.exists) {
-						existingIds.add(snap.id);
-					}
-				}
-			} catch {
-				for (const item of chunk) {
-					const snap = await firestore.collection(collectionName).doc(item.id).get();
-					if (snap && snap.exists) {
-						existingIds.add(item.id);
-					}
+		// Atomic create per document: ensures concurrency-safe, non-destructive restore
+		let writeCount = 0;
+		const results = await Promise.allSettled(chunk.map(async (item) => {
+			const finalData = applyTtlPolicy(item.data, collectionName, ttlPolicy, retentionDays);
+			const docRef = firestore.collection(collectionName).doc(item.id);
+			if (typeof docRef.create === 'function') {
+				return await docRef.create(finalData);
+			}
+			if (typeof docRef.get === 'function') {
+				const snap = await docRef.get();
+				if (snap && snap.exists) {
+					const existsErr = new Error(`Document ${item.id} already exists`);
+					existsErr.code = 6;
+					throw existsErr;
 				}
 			}
-		} else {
-			for (const item of chunk) {
-				const docRef = firestore.collection(collectionName).doc(item.id);
-				if (typeof docRef.get === 'function') {
-					const snap = await docRef.get();
-					if (snap && snap.exists) {
-						existingIds.add(item.id);
-					}
+			return await docRef.set(finalData);
+		}));
+
+		for (const res of results) {
+			if (res.status === 'fulfilled') {
+				writeCount += 1;
+			} else {
+				const err = res.reason;
+				const isAlreadyExists = err?.code === 6 || err?.code === 'ALREADY_EXISTS' || err?.message?.includes('already exists') || err?.message?.includes('ALREADY_EXISTS');
+				if (isAlreadyExists) {
+					// Document already exists, skipped atomically
+					continue;
 				}
+				throw err;
 			}
 		}
+
+		return writeCount;
 	}
 
 	const batch = firestore.batch();
 	let writeCount = 0;
 
 	for (const item of chunk) {
-		if (!overwrite && existingIds.has(item.id)) {
-			// Skip existing document to protect live data
-			continue;
-		}
-
 		const finalData = applyTtlPolicy(item.data, collectionName, ttlPolicy, retentionDays);
 		const docRef = firestore.collection(collectionName).doc(item.id);
 		batch.set(docRef, finalData);
@@ -289,25 +302,25 @@ async function restoreCollectionFile(firestore, collectionName, filePath, option
 		currentChunk.push({ id, data });
 
 		if (currentChunk.length >= batchSize) {
-			const restoredCount = await writeBatchChunk(firestore, collectionName, currentChunk, {
+			const count = await writeBatchChunk(firestore, collectionName, currentChunk, {
 				isDryRun,
 				overwrite,
 				ttlPolicy,
 				retentionDays,
 			});
-			totalRestored += restoredCount;
+			totalRestored += count;
 			currentChunk = [];
 		}
 	}
 
 	if (currentChunk.length > 0) {
-		const restoredCount = await writeBatchChunk(firestore, collectionName, currentChunk, {
+		const count = await writeBatchChunk(firestore, collectionName, currentChunk, {
 			isDryRun,
 			overwrite,
 			ttlPolicy,
 			retentionDays,
 		});
-		totalRestored += restoredCount;
+		totalRestored += count;
 	}
 
 	return {
@@ -359,14 +372,18 @@ async function runRestore(options = {}) {
 
 	const isDryRun = Boolean(options.dryRun);
 	const firestore = isDryRun && !options.firestore ? null : (options.firestore || initializeFirestore(options.projectId));
+	const hasExplicitCollections = Array.isArray(options.collections) && options.collections.length > 0;
 
 	let targetCollections = options.collections;
-	if (!targetCollections || targetCollections.length === 0) {
+	if (!hasExplicitCollections) {
 		// Discover from files in inputDir
 		const files = fs.readdirSync(inputDir);
 		targetCollections = files
 			.filter((f) => f.endsWith('.jsonl'))
 			.map((f) => f.slice(0, -6));
+		if (targetCollections.length === 0) {
+			targetCollections = DEFAULT_COLLECTIONS;
+		}
 	}
 
 	const results = {
@@ -380,6 +397,9 @@ async function runRestore(options = {}) {
 	for (const colName of targetCollections) {
 		const filePath = path.join(inputDir, `${colName}.jsonl`);
 		if (!fs.existsSync(filePath)) {
+			if (hasExplicitCollections) {
+				throw new Error(`Requested collection backup file not found: ${filePath}`);
+			}
 			console.warn(JSON.stringify({
 				event: 'firestore_restore_collection_file_missing',
 				collection: colName,
@@ -392,6 +412,8 @@ async function runRestore(options = {}) {
 			batchSize: options.batchSize || BATCH_SIZE,
 			dryRun: isDryRun,
 			overwrite: options.overwrite !== false,
+			ttlPolicy: options.ttlPolicy,
+			retentionDays: options.retentionDays,
 		});
 
 		results.collections[colName] = colResult;

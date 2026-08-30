@@ -28,7 +28,7 @@ fi
 
 timestamp="$(date -u +%Y-%m-%dT%H-%M-%SZ)"
 export_uri="${bucket}/firestore-backups/${timestamp}"
-collections="${COLLECTION_IDS:-alerts,alertReplays,signalOutcomes,scannerPresets}"
+collections="${COLLECTION_IDS:-alerts,alertReplays,tradingSignalOutcomes,scannerPresets}"
 
 echo "Starting managed Firestore export for project '${project}' to '${export_uri}'..."
 echo "Collections: ${collections}"
