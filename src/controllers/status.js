@@ -17,6 +17,7 @@ const { whatsAppCommandBridgeService } = require('../services/notification/Whats
 const geminiQuotaManager = require('../services/grounding/geminiQuotaManager');
 const groundingMetrics = require('../services/grounding/metrics');
 const { signalRepeatCooldown } = require('../services/alerts/signalRepeatCooldown');
+const { signalFlipGuard } = require('../services/alerts/signalFlipGuard');
 const { getCoalescingStatus } = require('../services/grounding/grounding');
 const {
 	getDeploymentCommit,
@@ -351,6 +352,7 @@ function getStatus() {
 			jobExecutionWorker: jobExecutionQueueStatus.enabled || process.env.JOB_EXECUTION_MODE === 'firestore-poller',
 			notificationRedrive: notificationRedriveService.isEnabled(),
 			alertSignalRepeatSuppression: signalRepeatCooldown.isEnabled(),
+			alertFlipGuard: signalFlipGuard.isEnabled(),
 			whatsappCommands: whatsAppCommandBridgeService.isEnabled(),
 		},
 		deliveryChannels: {
@@ -418,6 +420,10 @@ function getStatus() {
 			alertSignalRepeatSuppression: {
 				enabled: signalRepeatCooldown.isEnabled(),
 				...signalRepeatCooldown.getStats(),
+			},
+			alertFlipGuard: {
+				enabled: signalFlipGuard.isEnabled(),
+				...signalFlipGuard.getStats(),
 			},
 			jobExecutionQueue: jobExecutionQueueStatus,
 			binanceTrading: binanceTradingStatus,

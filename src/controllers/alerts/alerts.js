@@ -27,6 +27,7 @@ const EXPORT_FIELDS = [
 	'channels',
 	'deliveryResults',
 	'suppressedRepeat',
+	'flipContext',
 	'tokenUsage',
 	'text',
 ];
