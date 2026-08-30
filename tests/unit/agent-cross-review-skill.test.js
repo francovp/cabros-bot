@@ -131,6 +131,18 @@ describe('detect-agent-prs.sh script', () => {
 				url: 'https://github.com/francovp/cabros-bot/pull/104',
 				commits: [{ authors: [{ name: 'Franco Valerio', email: 'franco@example.com' }], messageHeadline: 'fix: typo', messageBody: '' }],
 			},
+			{
+				number: 105,
+				title: 'fix(compat): resolve codex compatibility issue',
+				body: 'Fixing codex parameter serialization issue in tooling',
+				headRefName: 'claude/fix-codex-compat',
+				author: { login: 'francovp' },
+				labels: [],
+				createdAt: '2026-08-30T04:00:00Z',
+				state: 'OPEN',
+				url: 'https://github.com/francovp/cabros-bot/pull/105',
+				commits: [{ authors: [{ name: 'Claude Agent', email: 'claude@anthropic.local' }], messageHeadline: 'fix: resolve codex issue', messageBody: '' }],
+			},
 		];
 
 		writeFileSync(
@@ -157,7 +169,7 @@ fi
 		const resultAll = spawnSync('bash', [detectScriptPath, '--json'], { env, encoding: 'utf8' });
 		expect(resultAll.status).toBe(0);
 		const parsedAll = JSON.parse(resultAll.stdout);
-		expect(parsedAll).toHaveLength(4);
+		expect(parsedAll).toHaveLength(5);
 		expect(parsedAll[0].detectedAgent).toBe('codex');
 		expect(parsedAll[0].detectedModel).toBe('gpt-5.6-luna');
 		expect(parsedAll[0].agentLabel).toBe('codex-gpt-5.6-luna');
@@ -172,6 +184,9 @@ fi
 
 		expect(parsedAll[3].detectedAgent).toBe('human');
 		expect(parsedAll[3].agentLabel).toBeNull();
+
+		expect(parsedAll[4].detectedAgent).toBe('claude');
+		expect(parsedAll[4].agentLabel).toBeNull();
 
 		// 2. Filter by --agent codex
 		const resultCodex = spawnSync('bash', [detectScriptPath, '--agent', 'codex', '--json'], { env, encoding: 'utf8' });
@@ -191,8 +206,8 @@ fi
 		const resultExclude = spawnSync('bash', [detectScriptPath, '--exclude-self', 'antigravity', '--json'], { env, encoding: 'utf8' });
 		expect(resultExclude.status).toBe(0);
 		const parsedExclude = JSON.parse(resultExclude.stdout);
-		expect(parsedExclude).toHaveLength(3);
-		expect(parsedExclude.map(p => p.detectedAgent)).toEqual(['codex', 'github-copilot', 'human']);
+		expect(parsedExclude).toHaveLength(4);
+		expect(parsedExclude.map(p => p.detectedAgent)).toEqual(['codex', 'github-copilot', 'human', 'claude']);
 
 		rmSync(tempDir, { recursive: true, force: true });
 	});
