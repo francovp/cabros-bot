@@ -1569,6 +1569,92 @@
           }
         ],
         "x-admin-role": "admin.operator"
+      },
+      "delete": {
+        "tags": [
+          "Trading"
+        ],
+        "summary": "Cancel a resting Binance Spot order",
+        "description": "Cancels a single open or partially filled Binance Spot order using the same admin/feature gates as POST. The body must include the symbol plus exactly one of orderId or origClientOrderId; ambiguous requests return 400 INVALID_ORDER_REQUEST. Already-terminal orders (Binance error -2011, \"Unknown order sent\", or -2013) return 404 ORDER_NOT_FOUND without re-firing at Binance. Definitive rejections return 400 BINANCE_REQUEST_REJECTED; transient provider failures return retryable 502 BINANCE_QUERY_FAILED.",
+        "operationId": "deleteBinanceSpotOrder",
+        "requestBody": {
+          "$ref": "#/components/requestBodies/BinanceOrderCancel"
+        },
+        "responses": {
+          "200": {
+            "description": "Binance confirmed the cancel; the sanitized cancelled order is returned.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BinanceOrderCancelResult"
+                },
+                "examples": {
+                  "cancelled": {
+                    "value": {
+                      "success": true,
+                      "cancelled": true,
+                      "environment": "testnet",
+                      "order": {
+                        "symbol": "BTCUSDT",
+                        "orderId": 42,
+                        "clientOrderId": "cabros-574-1",
+                        "status": "CANCELED",
+                        "type": "LIMIT",
+                        "side": "SELL",
+                        "origQty": "0.00100000",
+                        "executedQty": "0.00000000",
+                        "price": "60000.00000000"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "description": "The requested Binance order is already terminal (filled, cancelled, expired, or rejected).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "examples": {
+                  "orderNotFound": {
+                    "value": {
+                      "success": false,
+                      "error": "Binance order not found",
+                      "code": "ORDER_NOT_FOUND"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "502": {
+            "$ref": "#/components/responses/BinanceOrderFailure"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.operator"
       }
     },
     "/api/status": {
@@ -2316,6 +2402,32 @@
                   "quantity": 0.00105,
                   "price": 60000,
                   "dryRun": true
+                }
+              }
+            }
+          }
+        }
+      },
+      "BinanceOrderCancel": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/BinanceOrderCancelRequest"
+            },
+            "examples": {
+              "cancelByOrderId": {
+                "summary": "Cancel a known Binance order ID",
+                "value": {
+                  "symbol": "BTCUSDT",
+                  "orderId": 42
+                }
+              },
+              "cancelByClientOrderId": {
+                "summary": "Cancel via the client-side stable identifier",
+                "value": {
+                  "symbol": "BTCUSDT",
+                  "origClientOrderId": "cabros-574-1"
                 }
               }
             }
@@ -5444,6 +5556,72 @@
             "$ref": "#/components/schemas/JsonObject"
           },
           "dependencies": {
+            "$ref": "#/components/schemas/JsonObject"
+          }
+        }
+      },
+      "BinanceOrderCancelRequest": {
+        "type": "object",
+        "required": [
+          "symbol"
+        ],
+        "properties": {
+          "symbol": {
+            "type": "string",
+            "pattern": "^[A-Z0-9]{5,20}$",
+            "description": "Allow-listed Binance Spot symbol, for example BTCUSDT."
+          },
+          "orderId": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Binance-assigned order ID returned by the original POST /api/trading/binance/orders response. Provide exactly one of orderId or origClientOrderId."
+          },
+          "origClientOrderId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,36}$",
+            "description": "Stable client-side order ID originally submitted with the order. Provide exactly one of orderId or origClientOrderId."
+          },
+          "clientOrderId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,36}$",
+            "description": "Alias accepted for origClientOrderId."
+          }
+        },
+        "oneOf": [
+          {
+            "required": [
+              "orderId"
+            ]
+          },
+          {
+            "required": [
+              "origClientOrderId"
+            ]
+          },
+          {
+            "required": [
+              "clientOrderId"
+            ]
+          }
+        ]
+      },
+      "BinanceOrderCancelResult": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "cancelled": {
+            "type": "boolean"
+          },
+          "environment": {
+            "type": "string",
+            "enum": [
+              "testnet",
+              "live"
+            ]
+          },
+          "order": {
             "$ref": "#/components/schemas/JsonObject"
           }
         }
