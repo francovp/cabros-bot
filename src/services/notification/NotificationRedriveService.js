@@ -629,11 +629,10 @@ class NotificationRedriveService {
 					if (Date.now() >= deadline) {
 						break;
 					}
-					const snapshotPromise = query.get().catch((error) => {
+					const snapshot = await query.get().catch((error) => {
 						console.warn('[NotificationRedriveService] Failed to get query snapshot in reconciliation:', error.message);
 						return null;
 					});
-					const snapshot = await resolveBeforeDeadline(snapshotPromise, deadline);
 					if (!snapshot) {
 						break;
 					}
