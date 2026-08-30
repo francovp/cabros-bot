@@ -24,7 +24,7 @@ const { getCacheInstance } = require('./src/controllers/webhooks/handlers/newsMo
 const { registerDebugSentryRoute } = require('./src/lib/debugSentryRoute');
 const { createProcessLifecycle } = require('./src/lib/processLifecycle');
 const { waitForBackgroundTasks } = require('./src/lib/backgroundTaskTracker');
-const { getTelegramBootstrapConfig } = require('./src/lib/telegramBootstrap');
+const { getTelegramBootstrapConfig, sendStartupDeploymentNotification } = require('./src/lib/telegramBootstrap');
 const { launchTelegramBot } = require('./src/lib/telegramCommandMenu');
 const { attachTelegramErrorBoundary, handlePollingError } = require('./src/lib/telegramErrorBoundary');
 const { jobService } = require('./src/services/jobs/JobService');
@@ -34,7 +34,6 @@ const { whatsAppCommandBridgeService } = require('./src/services/notification/Wh
 const { scannerPresetSchedulerService } = require('./src/services/scannerPresets');
 const { newsMonitorSchedulerService } = require('./src/services/newsMonitorScheduler');
 const sentryService = require('./src/services/monitoring/SentryService');
-const { getDeploymentCommit, getDeploymentRepoSlug } = require('./src/lib/deploymentEnvironment');
 const remoteConfigService = require('./src/services/remoteConfig/RemoteConfigService');
 const Sentry = require('@sentry/node');
 
@@ -137,19 +136,13 @@ async function bootstrapApplication() {
 			void handlePollingError(error, { bot });
 		});
 
-		if (!lifecycle.isShuttingDown() && process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID !== undefined) {
-			console.log('Telegram Admin Notifications Chat ID:', process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID);
-			let text, commitHash, gitCommitUrl;
-			const deploymentCommit = getDeploymentCommit();
-			if ((process.env.RENDER || process.env.VERCEL || process.env.RAILWAY_ENVIRONMENT_NAME) && deploymentCommit) {
-				commitHash = deploymentCommit.substring(0, 6);
-				gitCommitUrl = `https://github.com/${getDeploymentRepoSlug()}/commit/${commitHash}`;
-				console.log(`Telegram bot deployed from commit ${gitCommitUrl} is running`);
-				text = `*Telegram bot deployed from commit [${commitHash}](${gitCommitUrl}) is running*`;
-				await bot.telegram.sendMessage(
-					process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID, text, { parse_mode: 'MarkdownV2' },
-				);
-			}
+		if (!lifecycle.isShuttingDown()) {
+			await sendStartupDeploymentNotification({
+				bot,
+				timeoutMs: 10000,
+				logger: console,
+				sentry: sentryService,
+			});
 		}
 	} else {
 		console.log('Telegram Bot is disabled');
