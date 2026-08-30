@@ -298,13 +298,21 @@ Then edit `.env` with your specific values. See `.env.example` for complete docu
 
 See [Environment Configuration](#environment-configuration) section below for detailed descriptions of each variable.
 
-### 3. Run Development Server
+### 3. Check Configuration
+
+Run the fail-open configuration doctor before deployment. It exits successfully even when it finds warnings and never prints secret values:
+
+```bash
+pnpm run doctor
+```
+
+### 4. Run Development Server
 
 ```bash
 pnpm start-dev
 ```
 
-### 4. Run Production Server
+### 5. Run Production Server
 
 ```bash
 pnpm start

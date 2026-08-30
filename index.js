@@ -1,6 +1,9 @@
 // Load environment variables from .env file
 require('dotenv').config();
 require('./instrument.js');
+const { printWarnings, validateEnv } = require('./scripts/validate-env');
+
+printWarnings(validateEnv());
 
 const {
 	getPrice,

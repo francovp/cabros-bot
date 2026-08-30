@@ -1455,6 +1455,16 @@ The dedicated BullMQ worker and signal-outcome worker now await the existing fai
 
 No endpoint, OpenAPI, Postman, environment variable, or Remote Config change was required.
 
+## Fail-Open Configuration Doctor (CB-240 / Issue #535)
+
+`scripts/validate-env.js` provides `pnpm run doctor` and a non-blocking startup preflight for development and production. It warns about malformed values, missing credentials for enabled features, and unavailable Firebase prerequisites without throwing or printing secret values. `pnpm start-dev` runs the quiet preflight before `nodemon`; `pnpm start` keeps the existing startup command and logs structured warnings once through `index.js`.
+
+**Coverage**:
+- `tests/unit/validate-env.test.js` — Validator rules, bounds, URL/chat/symbol formats, and secret-safe warning formatting.
+- `tests/integration/config-doctor.test.js` — Doctor exit status and startup warning/gating behavior.
+
+No endpoint, OpenAPI, Postman, environment variable, or Remote Config change was required.
+
 ## News Monitor Indeterminate Lease Persistence (CB-189 / Issue #426)
 
 Cached news-monitor retries now distinguish active delivery ownership from durable persistence ownership. Proven lease loss still aborts the retry and removes its result from the response; an indeterminate renewal (`null` or an exception) keeps a successful delivery result in the current response and local cache while skipping only the durable cache merge, preventing a stale replica from overwriting a newer result. Persistent refreshes preserve successful finalized local-only results per delivery channel instead of replacing them with older Firestore snapshots; failed indeterminate retries do not create a local overlay. Per-channel timer renewals are serialized, and in-flight/final renewals are bounded by the analysis deadline; only channels still unresolved at that deadline lose persistence ownership.
