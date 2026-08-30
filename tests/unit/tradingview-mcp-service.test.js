@@ -118,6 +118,27 @@ describe('TradingViewMcpService', () => {
 		expect(service._rpcRequest).toHaveBeenCalledTimes(6);
 	});
 
+	it('does not cache wrapper-invalid shapes', async () => {
+		process.env.ENABLE_TRADINGVIEW_MCP_CACHE = 'true';
+		const service = new TradingViewMcpService({ maxRetries: 1 });
+		let failed = true;
+		service._rpcRequest = jest.fn().mockImplementation(async (payload) => {
+			if (payload.method === 'initialize') return { sessionId: 'session-1' };
+			if (payload.method === 'notifications/initialized') return { status: 202 };
+			return failed
+				? { rpc: { result: { structuredContent: [{ symbol: 'BINANCE:BTCUSDT' }] } } }
+				: { rpc: { result: { structuredContent: { symbol: 'BINANCE:BTCUSDT' } } } };
+		});
+
+		await expect(service.callCoinAnalysis({ symbol: 'BTCUSDT', exchange: 'BINANCE', timeframe: '1h' }))
+			.rejects.toThrow('invalid payload');
+		failed = false;
+		await service.callCoinAnalysis({ symbol: 'BTCUSDT', exchange: 'BINANCE', timeframe: '1h' });
+		await service.callCoinAnalysis({ symbol: 'BTCUSDT', exchange: 'BINANCE', timeframe: '1h' });
+
+		expect(service._rpcRequest).toHaveBeenCalledTimes(6);
+	});
+
 	it('coalesces concurrent cache misses for identical tool calls', async () => {
 		process.env.ENABLE_TRADINGVIEW_MCP_CACHE = 'true';
 		const service = new TradingViewMcpService({ maxRetries: 1 });
@@ -139,6 +160,31 @@ describe('TradingViewMcpService', () => {
 			{ symbol: 'BTCUSDT' },
 		]);
 		expect(service._rpcRequest).toHaveBeenCalledTimes(3);
+	});
+
+	it('does not let the first caller abort shared work for later callers', async () => {
+		process.env.ENABLE_TRADINGVIEW_MCP_CACHE = 'true';
+		const service = new TradingViewMcpService({ maxRetries: 1 });
+		const firstController = new AbortController();
+		const secondController = new AbortController();
+		let resolveTool;
+		const toolResponse = new Promise(resolve => { resolveTool = resolve; });
+		service._rpcRequest = jest.fn().mockImplementation(async (payload) => {
+			if (payload.method === 'initialize') return { sessionId: 'session-1' };
+			if (payload.method === 'notifications/initialized') return { status: 202 };
+			return toolResponse;
+		});
+
+		const first = service._callTool('coin_analysis', { symbol: 'BTCUSDT' }, { signal: firstController.signal });
+		await Promise.resolve();
+		const second = service._callTool('coin_analysis', { symbol: 'BTCUSDT' }, { signal: secondController.signal });
+		firstController.abort(new Error('first caller aborted'));
+		resolveTool({ rpc: { result: { structuredContent: { symbol: 'BTCUSDT' } } } });
+
+		await expect(first).rejects.toThrow('first caller aborted');
+		await expect(second).resolves.toEqual({ symbol: 'BTCUSDT' });
+		expect(service._rpcRequest).toHaveBeenCalledTimes(3);
+		expect(service._rpcRequest.mock.calls[2][1].signal).toBeUndefined();
 	});
 
 	it('bounds the number of cached tool results', async () => {
