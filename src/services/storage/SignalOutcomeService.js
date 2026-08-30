@@ -7,6 +7,7 @@ const geminiPriceService = require('../grounding/geminiPriceService');
 const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 const { MainClient } = require('binance');
+const tradingViewMcpService = require('../tradingview/TradingViewMcpService');
 
 const { encodeAlertPaginationCursor, parseAlertPaginationCursor } = require('./alertPaginationCursor');
 
@@ -26,6 +27,10 @@ const DEFAULT_BINANCE_DATA_BASE_URL = 'https://api.binance.com';
 const REASON_BINANCE_UNAVAILABLE = 'binance_unavailable';
 const REASON_BINANCE_REGION_BLOCKED = 'binance_region_blocked';
 const REASON_MARKET_DATA_REGION_BLOCKED = 'market_data_region_blocked';
+const REASON_MCP_PRICE_FAILED = 'mcp_price_failed';
+const REASON_MCP_BREAKER_OPEN = 'mcp_breaker_open';
+const ENTRY_PRICE_SOURCE_MCP = 'tradingview_mcp';
+const MCP_ENTRY_PRICE_TIMEOUT_MS = 5000;
 const REGION_BLOCK_MESSAGE_PATTERNS = [
 	'restricted location',
 	'service unavailable from restricted',
@@ -94,6 +99,61 @@ function resolveBinanceBaseUrl() {
 		);
 	}
 	return DEFAULT_BINANCE_DATA_BASE_URL;
+}
+
+function isMcpOutcomePriceEnabled() {
+	return process.env.ENABLE_MCP_OUTCOME_PRICES === 'true';
+}
+
+function parseCoinAnalysisPrice(analysis) {
+	if (!analysis || typeof analysis !== 'object') {
+		return null;
+	}
+	const priceData = analysis.price_data && typeof analysis.price_data === 'object' ? analysis.price_data : null;
+	const candidates = [];
+	if (priceData) {
+		candidates.push(priceData.current_price, priceData.close);
+	}
+	candidates.push(analysis.current_price, analysis.close, analysis.price);
+	for (const candidate of candidates) {
+		if (candidate === null || candidate === undefined) continue;
+		const parsed = typeof candidate === 'number' ? candidate : parseFloat(candidate);
+		if (Number.isFinite(parsed) && parsed > 0) {
+			return parsed;
+		}
+	}
+	return null;
+}
+
+async function fetchEntryPriceFromMcp({ symbol, exchange, timeframe }) {
+	if (!tradingViewMcpService || typeof tradingViewMcpService.callCoinAnalysis !== 'function') {
+		return { price: null, reason: REASON_MCP_PRICE_FAILED };
+	}
+	if (typeof tradingViewMcpService.isBreakerOpen === 'function' && tradingViewMcpService.isBreakerOpen()) {
+		return { price: null, reason: REASON_MCP_BREAKER_OPEN };
+	}
+	const safeTimeframe = typeof timeframe === 'string' && timeframe.trim() !== '' ? timeframe : '1D';
+	const abortController = new AbortController();
+	const timerId = setTimeout(() => abortController.abort(), MCP_ENTRY_PRICE_TIMEOUT_MS);
+	try {
+		const analysis = await tradingViewMcpService.callCoinAnalysis({
+			symbol,
+			exchange,
+			timeframe: safeTimeframe,
+			signal: abortController.signal,
+		});
+		const price = parseCoinAnalysisPrice(analysis);
+		if (price === null) {
+			return { price: null, reason: REASON_MCP_PRICE_FAILED };
+		}
+		return { price, reason: null };
+	} catch (err) {
+		const category = err && err.category === 'circuit_breaker_open' ? REASON_MCP_BREAKER_OPEN : REASON_MCP_PRICE_FAILED;
+		console.warn(`[SignalOutcomeService] Failed to fetch entry price from TradingView MCP for ${exchange}:${symbol}: ${err.message}`);
+		return { price: null, reason: category };
+	} finally {
+		clearTimeout(timerId);
+	}
 }
 
 function isRegionBlockedError(err) {
@@ -215,12 +275,23 @@ function normalizeAssetClass(rawAssetClass) {
 const DEFAULT_MAX_RETRY_ATTEMPTS = 3;
 const DEFAULT_MAX_RETRY_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
-function determineEligibility(normSymbolInfo, assetClass, entryPrice, equityProviderName = null, entryPriceReason = null) {
+function determineEligibility(normSymbolInfo, assetClass, entryPrice, equityProviderName = null, entryPriceReason = null, resolvedEntryPriceSource = null) {
 	const isClassifiedBareStock = normSymbolInfo.exchange === 'UNKNOWN' && assetClass === 'stock';
 	if (normSymbolInfo.symbol === 'UNKNOWN' || (normSymbolInfo.exchange === 'UNKNOWN' && !isClassifiedBareStock)) {
 		return {
 			state: 'unparseable_symbol',
 			reason: 'Symbol or exchange unparseable or unknown',
+		};
+	}
+	if (entryPrice !== null && entryPrice !== undefined) {
+		const providerLabel = equityProviderName
+			? `${equityProviderName} market data supported`
+			: (resolvedEntryPriceSource === ENTRY_PRICE_SOURCE_MCP
+				? 'TradingView MCP market data supported'
+				: 'Binance market data supported');
+		return {
+			state: 'supported_provider',
+			reason: providerLabel,
 		};
 	}
 	if (normSymbolInfo.exchange !== 'BINANCE'
@@ -243,7 +314,9 @@ function determineEligibility(normSymbolInfo, assetClass, entryPrice, equityProv
 			|| entryPriceReason === REASON_BINANCE_REGION_BLOCKED
 			|| entryPriceReason === 'twelve_data_unavailable'
 			|| entryPriceReason === 'twelve_data_rate_limited'
-			|| entryPriceReason === 'twelve_data_timeout';
+			|| entryPriceReason === 'twelve_data_timeout'
+			|| entryPriceReason === REASON_MCP_PRICE_FAILED
+			|| entryPriceReason === REASON_MCP_BREAKER_OPEN;
 		if (isTransient) {
 			return {
 				state: 'pending_entry_price',
@@ -387,7 +460,22 @@ async function recordSignalInternal({
 			}
 		}
 
-		const eligibility = determineEligibility(normSymbolInfo, normAssetClass, entryPrice, equityProviderName, entryPriceReason);
+		if (entryPrice === null && entryPriceReason !== 'binance_invalid_symbol' && isMcpOutcomePriceEnabled()) {
+			const mcpResult = await fetchEntryPriceFromMcp({
+				symbol: normSymbolInfo.symbol,
+				exchange: normSymbolInfo.exchange,
+				timeframe,
+			});
+			if (mcpResult.price !== null) {
+				entryPrice = mcpResult.price;
+				entryPriceSource = ENTRY_PRICE_SOURCE_MCP;
+				entryPriceReason = null;
+			} else if (entryPriceReason === null || entryPriceReason === equityMarketDataService.REASONS.UNAVAILABLE) {
+				entryPriceReason = mcpResult.reason || REASON_MCP_PRICE_FAILED;
+			}
+		}
+
+		const eligibility = determineEligibility(normSymbolInfo, normAssetClass, entryPrice, equityProviderName, entryPriceReason, entryPriceSource);
 		const isEligible = eligibility.state === 'supported_provider' || eligibility.state === 'pending_entry_price';
 
 		const outcomes = {};
@@ -1912,6 +2000,10 @@ module.exports = {
 	stopWorker,
 	getWorkerStatus,
 	getWorkerRole,
+	isMcpOutcomePriceEnabled,
+	REASON_MCP_PRICE_FAILED,
+	REASON_MCP_BREAKER_OPEN,
+	ENTRY_PRICE_SOURCE_MCP,
 	COLLECTION_NAME,
 	HEARTBEAT_COLLECTION_NAME,
 	STORAGE_UNAVAILABLE_CODE,
