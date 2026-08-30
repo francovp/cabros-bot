@@ -21,6 +21,11 @@
       "type": "string"
     },
     {
+      "key": "replayBefore",
+      "value": "eyJ2IjoxLCJyZWNlaXZlZEF0IjoiMjAyNi0wNi0wNlQxMjozNDo1Ni4wMDBaIiwiaWQiOiJhbGVydC0xX2hhc2hfdHNfdXVpZCJ9",
+      "type": "string"
+    },
+    {
       "key": "jobCreateIdempotencyKey",
       "value": "job-create-001",
       "type": "string"
@@ -2144,6 +2149,84 @@
               "code": 503,
               "_postman_previewlanguage": "json",
               "body": "{\n  \"error\": \"Alert storage is enabled but Firestore is unavailable. Check Firestore credentials and project configuration.\",\n  \"code\": \"STORAGE_UNAVAILABLE\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET List Replay Attempts (before cursor)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/replays?limit=50&before={{replayBefore}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "replays"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "50"
+                },
+                {
+                  "key": "before",
+                  "value": "{{replayBefore}}"
+                }
+              ]
+            },
+            "description": "Continue a replay-history read with the nextBefore cursor returned by a previous page."
+          }
+        },
+        {
+          "name": "GET List Replay Attempts (invalid input)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/replays?limit=999&before=not-a-cursor",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "replays"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "999"
+                },
+                {
+                  "key": "before",
+                  "value": "not-a-cursor"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "400 INVALID_REQUEST - invalid limit and cursor",
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"error\": \"Invalid limit. Use an integer between 1 and 100.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
             }
           ]
         },

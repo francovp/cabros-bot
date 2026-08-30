@@ -134,6 +134,17 @@ describe('Postman collection contract', () => {
 		]));
 	});
 
+	it('includes runnable replay cursor and invalid-input variants', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const cursor = findItem(collection.item, 'GET List Replay Attempts (before cursor)');
+		const invalid = findItem(collection.item, 'GET List Replay Attempts (invalid input)');
+
+		expect(cursor.request.url.query).toEqual(expect.arrayContaining([
+			expect.objectContaining({ key: 'before', value: '{{replayBefore}}' }),
+		]));
+		expect(invalid.request.url.raw).toContain('limit=999&before=not-a-cursor');
+	});
+
 	it('includes createdAt in both x-header job success examples', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const job = findItem(collection.item, 'POST Create TradingView Analysis Job (x-idempotency-key header)');

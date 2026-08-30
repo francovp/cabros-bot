@@ -1082,7 +1082,7 @@ describe('AlertStorageService', () => {
 			expect(mockCollection).toHaveBeenCalledWith('alertReplays');
 			expect(mockOrderBy).toHaveBeenNthCalledWith(1, 'replayedAt', 'desc');
 			expect(mockOrderBy).toHaveBeenNthCalledWith(2, '__name__', 'desc');
-			expect(mockLimit).toHaveBeenCalledWith(2);
+			expect(mockLimit).toHaveBeenCalledWith(100);
 			expect(result.replays).toEqual([
 				{
 					id: 'alert-1_hash_ts_uuid',
@@ -1113,6 +1113,30 @@ describe('AlertStorageService', () => {
 			await AlertStorageService.listReplayAttempts({ limit: 10, before });
 
 			expect(mockStartAfter).toHaveBeenCalledWith(expect.anything(), 'alert-1_hash_ts_uuid');
+		});
+
+		it('continues scanning after filtering expired replay records', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			jest.useFakeTimers().setSystemTime(new Date('2026-08-13T00:00:00.000Z'));
+			const expiredBatch = Array.from({ length: 100 }, (_, index) => buildQueryDoc(`expired-${index}`, {
+				replayedAt: buildTimestamp('2026-08-12T12:00:00.000Z'),
+				expiresAt: buildTimestamp('2026-08-12T23:59:59.000Z'),
+			}));
+			mockGet
+				.mockResolvedValueOnce({ empty: false, docs: expiredBatch })
+				.mockResolvedValueOnce({
+					empty: false,
+					docs: [buildQueryDoc('active-replay', {
+						alertId: 'alert-1',
+						replayedAt: buildTimestamp('2026-08-12T11:00:00.000Z'),
+						expiresAt: buildTimestamp('2026-11-11T00:00:00.000Z'),
+					})],
+				});
+
+			const result = await AlertStorageService.listReplayAttempts({ limit: 1 });
+
+			expect(mockGet).toHaveBeenCalledTimes(2);
+			expect(result.replays.map(replay => replay.id)).toEqual(['active-replay']);
 		});
 
 		it('filters by alertId when provided', async () => {

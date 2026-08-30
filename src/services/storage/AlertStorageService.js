@@ -1312,6 +1312,7 @@ async function listReplayAttempts({ limit = DEFAULT_PAGE_SIZE, alertId, before }
 
 	const pageSize = clampLimit(limit);
 	const targetCount = pageSize + 1;
+	const scanLimit = Math.max(targetCount, MAX_PAGE_SIZE);
 	const matches = [];
 	const parsedBeforeCursor = before
 		? parseAlertPaginationCursor(before)
@@ -1319,61 +1320,77 @@ async function listReplayAttempts({ limit = DEFAULT_PAGE_SIZE, alertId, before }
 	if (before && !parsedBeforeCursor) {
 		throw createInvalidCursorError();
 	}
-	const cursorTimestamp = parsedBeforeCursor
-		? buildParsedCursorTimestamp(parsedBeforeCursor)
+	let pageCursor = parsedBeforeCursor
+		? {
+			receivedAt: parsedBeforeCursor.receivedAt,
+			documentId: parsedBeforeCursor.documentId,
+		}
 		: null;
 
-	let query = firestore
-		.collection(REPLAY_COLLECTION_NAME)
-		.orderBy('replayedAt', 'desc')
-		.orderBy(admin.firestore.FieldPath.documentId(), 'desc')
-		.limit(targetCount);
-
-	if (typeof alertId === 'string' && alertId.trim()) {
-		query = firestore
+	while (matches.length < targetCount) {
+		let query = firestore
 			.collection(REPLAY_COLLECTION_NAME)
-			.where('alertId', '==', alertId.trim())
 			.orderBy('replayedAt', 'desc')
 			.orderBy(admin.firestore.FieldPath.documentId(), 'desc')
-			.limit(targetCount);
-	}
-	if (cursorTimestamp) {
-		if (parsedBeforeCursor.documentId) {
-			query = query.startAfter(cursorTimestamp, parsedBeforeCursor.documentId);
-		} else {
-			query = query.where('replayedAt', '<', cursorTimestamp);
+			.limit(scanLimit);
+
+		if (typeof alertId === 'string' && alertId.trim()) {
+			query = firestore
+				.collection(REPLAY_COLLECTION_NAME)
+				.where('alertId', '==', alertId.trim())
+				.orderBy('replayedAt', 'desc')
+				.orderBy(admin.firestore.FieldPath.documentId(), 'desc')
+				.limit(scanLimit);
 		}
-	}
+		if (pageCursor) {
+			const pageTimestamp = buildParsedCursorTimestamp(pageCursor);
+			if (pageCursor.documentId) {
+				query = query.startAfter(pageTimestamp, pageCursor.documentId);
+			} else {
+				query = query.where('replayedAt', '<', pageTimestamp);
+			}
+		}
 
-	let snapshot;
-	try {
-		snapshot = await query.get();
-	} catch (error) {
-		console.warn('[AlertStorageService] Failed to list replay attempts:', error.message);
-		throw createStorageUnavailableError(error);
-	}
+		let snapshot;
+		try {
+			snapshot = await query.get();
+		} catch (error) {
+			console.warn('[AlertStorageService] Failed to list replay attempts:', error.message);
+			throw createStorageUnavailableError(error);
+		}
 
-	if (!snapshot || !Array.isArray(snapshot.docs)) {
-		return { replays: [], hasMore: false, nextBefore: null };
-	}
-
-	const activeDocs = snapshot.docs.filter(doc => !isRetentionExpired(doc.data() || {}));
-	for (const doc of activeDocs) {
-		if (matches.length >= targetCount) {
+		if (!snapshot || !Array.isArray(snapshot.docs) || snapshot.docs.length === 0) {
 			break;
 		}
-		const formatted = formatReplayDocument(doc);
-		if (formatted) {
-			matches.push(formatted);
+
+		for (const doc of snapshot.docs) {
+			if (isRetentionExpired(doc.data() || {})) {
+				continue;
+			}
+			const formatted = formatReplayDocument(doc);
+			if (formatted) {
+				matches.push(formatted);
+				if (matches.length >= targetCount) {
+					break;
+				}
+			}
 		}
+
+		const lastDocCursor = getReplayCursorValues(snapshot.docs[snapshot.docs.length - 1]);
+		if (!lastDocCursor || snapshot.docs.length < scanLimit) {
+			break;
+		}
+		pageCursor = {
+			receivedAt: lastDocCursor.replayedAt,
+			documentId: lastDocCursor.documentId,
+		};
 	}
 
 	const hasMore = matches.length > pageSize;
 	const replays = hasMore ? matches.slice(0, pageSize) : matches;
-	const lastDoc = hasMore ? activeDocs[pageSize - 1] : activeDocs[activeDocs.length - 1];
-	const lastCursor = lastDoc ? getReplayCursorValues(lastDoc) : null;
-	const nextBefore = hasMore && lastCursor
-		? encodeAlertPaginationCursor({ receivedAt: lastCursor.replayedAt, id: lastCursor.documentId })
+	const lastReplay = replays[replays.length - 1];
+	const nextBefore = hasMore && lastReplay
+		? encodeAlertPaginationCursor({ receivedAt: lastReplay.replayedAt, id: lastReplay.id })
 		: null;
 
 	return { replays, hasMore, nextBefore };
