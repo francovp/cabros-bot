@@ -343,5 +343,25 @@ describe('signalRepeatCooldown', () => {
 			cooldown2.recordFire(key, Date.now());
 			expect(cooldown2.getStats().activeTrackedSignals).toBe(1);
 		});
+
+		it('allocates strictly monotonic generation sequences even in the same millisecond', () => {
+			const { nextMonotonicGeneration } = require('../../src/services/alerts/signalRepeatCooldown');
+			const now = 1_700_000_000_000;
+			const gen1 = nextMonotonicGeneration(now);
+			const gen2 = nextMonotonicGeneration(now);
+			const gen3 = nextMonotonicGeneration(now);
+
+			expect(gen2).toBeGreaterThan(gen1);
+			expect(gen3).toBeGreaterThan(gen2);
+		});
+
+		it('returns generation in reservation verdict', () => {
+			const cooldown = createSignalRepeatCooldown();
+			const buy = { exchange: 'BINANCE', symbol: 'ETHUSDT', timeframe: '4h', side: 'BUY' };
+			const verdict = cooldown.reserve(buy, ['telegram'], 1_700_000_000_000);
+			expect(verdict.suppressed).toBe(false);
+			expect(typeof verdict.generation).toBe('number');
+			expect(verdict.generation).toBeGreaterThan(0);
+		});
 	});
 });

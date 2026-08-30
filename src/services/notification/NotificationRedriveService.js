@@ -5,7 +5,7 @@ const crypto = require('crypto');
 const AlertStorageService = require('../storage/AlertStorageService');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
-const { signalRepeatCooldown } = require('../alerts/signalRepeatCooldown');
+const { signalRepeatCooldown, nextMonotonicGeneration } = require('../alerts/signalRepeatCooldown');
 
 const COLLECTION_NAME = 'notificationDeadLetters';
 const DEFAULT_REDRIVE_INTERVAL_MS = 60000;
@@ -43,9 +43,9 @@ function stripUndefinedFieldsDeep(value) {
 
 	const cleaned = {};
 	for (const [k, v] of Object.entries(value)) {
-		const child = stripUndefinedFieldsDeep(v);
-		if (child !== undefined) {
-			cleaned[k] = child;
+		const val = stripUndefinedFieldsDeep(v);
+		if (val !== undefined) {
+			cleaned[k] = val;
 		}
 	}
 	return cleaned;
@@ -64,10 +64,12 @@ function parsePositiveInteger(val, defaultVal) {
 
 function calculateBackoffMs(attemptCount) {
 	const count = Math.max(0, attemptCount);
-	const exponential = BASE_BACKOFF_MS * Math.pow(2, count);
-	const capped = Math.min(exponential, MAX_BACKOFF_MS);
-	const jitter = Math.floor(Math.random() * 2000);
-	return capped + jitter;
+	const exp = Math.min(count, 10);
+	const base = BASE_BACKOFF_MS * Math.pow(2, exp);
+	const bounded = Math.min(base, MAX_BACKOFF_MS);
+	// Add jitter up to 5s
+	const jitter = Math.floor(Math.random() * 5000);
+	return bounded + jitter;
 }
 
 function toTimestamp(date) {
@@ -90,7 +92,32 @@ function toMillis(timestampOrDate) {
 	if (typeof timestampOrDate === 'number') {
 		return timestampOrDate;
 	}
+	if (typeof timestampOrDate === 'object' && timestampOrDate.supersededAt) {
+		return toMillis(timestampOrDate.supersededAt);
+	}
 	return new Date(timestampOrDate).getTime() || 0;
+}
+
+function compareGenerations(supersessionGen, recordGen) {
+	if (Number.isFinite(supersessionGen) && Number.isFinite(recordGen)) {
+		return supersessionGen - recordGen;
+	}
+	return null;
+}
+
+function isSupersededByMarker(supersession, record) {
+	if (!supersession || supersession.status !== 'superseded') {
+		return false;
+	}
+	const supersessionGen = supersession.generation;
+	const recordGen = record?.repeatCooldown?.generation;
+	const genComparison = compareGenerations(supersessionGen, recordGen);
+	if (genComparison !== null) {
+		return genComparison >= 0;
+	}
+	const recordCreatedAt = toMillis(record?.repeatCooldown?.reservedAt) || toMillis(record?.createdAt);
+	const supersessionAt = toMillis(supersession.supersededAt);
+	return !recordCreatedAt || supersessionAt >= recordCreatedAt;
 }
 
 function releaseRepeatCooldown(record) {
@@ -238,6 +265,7 @@ class NotificationRedriveService {
 							key: String(options.repeatCooldown.key),
 							channel: options.repeatCooldown.channelsByName?.[channel] || null,
 							reservedAt: options.repeatCooldown.reservedAt,
+							generation: options.repeatCooldown.generation ?? null,
 						}
 					: null,
 				createdAt: toTimestamp(nowDate),
@@ -457,7 +485,7 @@ class NotificationRedriveService {
 		return updated;
 	}
 
-	async markTerminal(recordId, status, metadata = {}) {
+	async markTerminal(recordId, status, metadata = {}, deadline = Infinity) {
 		const nowMs = Date.now();
 		const nowDate = new Date(nowMs);
 		const updateData = {
@@ -478,8 +506,15 @@ class NotificationRedriveService {
 		const firestore = this.getFirestore();
 		if (firestore) {
 			try {
-				await firestore.collection(COLLECTION_NAME).doc(recordId).set(sanitized, { merge: true });
-				return true;
+				const writePromise = firestore.collection(COLLECTION_NAME).doc(recordId).set(sanitized, { merge: true }).then(() => true, (error) => {
+					console.warn(`[NotificationRedriveService] Failed to mark dead-letter ${recordId} terminal (${status}):`, error.message);
+					return false;
+				});
+				if (Number.isFinite(deadline)) {
+					const persisted = await resolveBeforeDeadline(writePromise, deadline);
+					return persisted === true;
+				}
+				return await writePromise;
 			} catch (error) {
 				console.warn(`[NotificationRedriveService] Failed to mark dead-letter ${recordId} terminal (${status}):`, error.message);
 				return false;
@@ -586,7 +621,11 @@ class NotificationRedriveService {
 					if (Date.now() >= deadline) {
 						break;
 					}
-					const snapshot = await query.get();
+					const snapshotPromise = query.get().catch((error) => {
+						console.warn('[NotificationRedriveService] Failed to get query snapshot in reconciliation:', error.message);
+						return null;
+					});
+					const snapshot = await resolveBeforeDeadline(snapshotPromise, deadline);
 					if (!snapshot) {
 						break;
 					}
@@ -655,10 +694,8 @@ class NotificationRedriveService {
 		}
 
 		const supersessionId = this.getSupersessionId(record.repeatCooldown.key, record.repeatCooldown.channel);
-		const recordCreatedAt = toMillis(record.repeatCooldown.reservedAt) || toMillis(record.createdAt);
 		const localSupersession = this.supersessionStore.get(supersessionId);
-		if ((localSupersession
-			&& (!recordCreatedAt || toMillis(localSupersession.supersededAt) >= recordCreatedAt))
+		if ((localSupersession && isSupersededByMarker(localSupersession, record))
 			|| this.inMemoryStore.get(record.id)?.status === 'cancelled') {
 			return true;
 		}
@@ -688,8 +725,7 @@ class NotificationRedriveService {
 			const [recordSnapshot, supersessionSnapshot] = snapshots;
 			const supersession = supersessionSnapshot?.exists ? supersessionSnapshot.data() : null;
 			return (recordSnapshot?.exists && recordSnapshot.data()?.status === 'cancelled')
-				|| (supersession?.status === 'superseded'
-					&& (!recordCreatedAt || toMillis(supersession.supersededAt) >= recordCreatedAt));
+				|| isSupersededByMarker(supersession, record);
 		} catch (error) {
 			console.warn('[NotificationRedriveService] Failed to check superseded redrive:', error.message);
 			return false;
@@ -719,13 +755,14 @@ class NotificationRedriveService {
 			return null;
 		}
 		const now = new Date();
+		const generation = nextMonotonicGeneration(now.getTime());
 		const firestore = this.getFirestore();
 		const supersessions = channels.map((channel) => ({
 			channel,
 			id: this.getSupersessionId(key, channel),
 		}));
 		for (const { channel, id } of supersessions) {
-			this.supersessionStore.set(id, { key, channel, status: 'superseded', supersededAt: now });
+			this.supersessionStore.set(id, { key, channel, status: 'superseded', supersededAt: now, generation });
 		}
 		if (firestore) {
 			const deadline = Date.now() + RECONCILIATION_TIMEOUT_MS;
@@ -735,6 +772,7 @@ class NotificationRedriveService {
 					channel,
 					status: 'superseded',
 					supersededAt: toTimestamp(now),
+					generation,
 				}, { merge: true }).then(() => true, (error) => {
 					console.warn('[NotificationRedriveService] Failed to persist repeat supersession:', error.message);
 					return false;
@@ -745,27 +783,34 @@ class NotificationRedriveService {
 				}
 			}));
 		}
-		return now;
+		return { supersededAt: now, generation };
 	}
 
-	async cancelPendingRepeatCooldowns(key, channels = []) {
+	async cancelPendingRepeatCooldowns(key, channels = [], deadline = Date.now() + RECONCILIATION_TIMEOUT_MS) {
 		if (!key || !Array.isArray(channels) || channels.length === 0) {
 			return 0;
 		}
-		const supersededAtMs = toMillis(await this.markRepeatSupersession(key, channels));
+		const supersessionResult = await this.markRepeatSupersession(key, channels);
+		const supersededAtMs = toMillis(supersessionResult?.supersededAt || supersessionResult);
+		const supersessionGen = supersessionResult?.generation;
 
 		const channelSet = new Set(channels);
 		const candidates = new Map();
-		const matches = (record) => (
-			record
-			&& ['pending', 'in_flight'].includes(record.status)
-			&& record.repeatCooldown?.key === key
-			&& channelSet.has(record.repeatCooldown.channel)
-			&& (() => {
-				const reservedAt = toMillis(record.repeatCooldown.reservedAt);
-				return !supersededAtMs || !reservedAt || reservedAt <= supersededAtMs;
-			})()
-		);
+		const matches = (record) => {
+			if (!record || !['pending', 'in_flight'].includes(record.status)) {
+				return false;
+			}
+			if (record.repeatCooldown?.key !== key || !channelSet.has(record.repeatCooldown?.channel)) {
+				return false;
+			}
+			const recordGen = record.repeatCooldown?.generation;
+			const genComparison = compareGenerations(supersessionGen, recordGen);
+			if (genComparison !== null) {
+				return genComparison >= 0;
+			}
+			const reservedAt = toMillis(record.repeatCooldown?.reservedAt);
+			return !supersededAtMs || !reservedAt || reservedAt <= supersededAtMs;
+		};
 
 		for (const record of this.inMemoryStore.values()) {
 			if (matches(record)) {
@@ -776,11 +821,18 @@ class NotificationRedriveService {
 		const firestore = this.getFirestore();
 		if (firestore) {
 			try {
-				const snapshot = await firestore.collection(COLLECTION_NAME)
+				const queryDeadline = Number.isFinite(deadline) ? deadline : Date.now() + RECONCILIATION_TIMEOUT_MS;
+				const queryPromise = firestore.collection(COLLECTION_NAME)
 					.where('repeatCooldown.key', '==', key)
 					.where('status', 'in', ['pending', 'in_flight'])
-					.get();
-				for (const doc of snapshot?.docs || []) {
+					.get()
+					.then((snapshot) => snapshot?.docs || [])
+					.catch((error) => {
+						console.warn('[NotificationRedriveService] Failed to query pending redrives for cancellation:', error.message);
+						return [];
+					});
+				const docs = await resolveBeforeDeadline(queryPromise, queryDeadline);
+				for (const doc of docs || []) {
 					const record = { ...doc.data(), id: doc.id };
 					if (matches(record)) {
 						candidates.set(record.id, record);
@@ -794,7 +846,7 @@ class NotificationRedriveService {
 		for (const record of candidates.values()) {
 			await this.markTerminal(record.id, 'cancelled', {
 				lastError: 'Superseded by an opposite-side signal',
-			});
+			}, deadline);
 		}
 		return candidates.size;
 	}

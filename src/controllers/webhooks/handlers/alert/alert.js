@@ -276,6 +276,7 @@ function postAlert(botOrGetter) {
 						repeatCooldownOptions = {
 							key: verdict.key,
 							reservedAt: verdict.reservedAt,
+							generation: verdict.generation,
 							channelsByName: Object.fromEntries(verdict.channels.map((channel) => [getChannelName(channel), channel])),
 							destinationsByName: Object.fromEntries(verdict.channels.map((channel) => {
 								const channelName = getChannelName(channel);
@@ -323,6 +324,7 @@ function postAlert(botOrGetter) {
 									key: reservation.key,
 									channel,
 									reservedAt: reservation.reservedAt,
+									generation: reservation.generation,
 								},
 							});
 							if (superseded) {

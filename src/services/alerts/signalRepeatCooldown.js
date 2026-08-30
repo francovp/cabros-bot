@@ -28,6 +28,19 @@ const DEFAULT_COOLDOWN_BARS = 1;
 const MAX_COOLDOWN_BARS = 10;
 const MAX_ENTRIES = 1000;
 const MAX_CHANNELS_PER_ENTRY = 100;
+let monotonicGenerationCounter = 0;
+let lastMonotonicGenerationTime = 0;
+
+function nextMonotonicGeneration(nowMs = Date.now()) {
+	const currentMs = Number.isFinite(nowMs) ? nowMs : Date.now();
+	if (currentMs === lastMonotonicGenerationTime) {
+		monotonicGenerationCounter += 1;
+	} else {
+		lastMonotonicGenerationTime = currentMs;
+		monotonicGenerationCounter = 0;
+	}
+	return (currentMs * 1000) + (monotonicGenerationCounter % 1000);
+}
 
 function getEntryFiredAt(entry) {
 	if (Number.isFinite(entry)) {
@@ -166,9 +179,11 @@ function reserve(signal, channels = [], now = Date.now()) {
 			}
 			trimChannels(entry);
 			entry.firedAt = now;
+			const generation = nextMonotonicGeneration(now);
+			entry.generation = generation;
 			this.store.set(key, entry);
 			evictIfNeeded.call(this, now);
-				return { suppressed: false, key, windowMs, channels: availableChannels, reservedAt: now };
+			return { suppressed: false, key, windowMs, channels: availableChannels, reservedAt: now, generation };
 		}
 
 		if (entry && currentIsActive) {
@@ -181,14 +196,16 @@ function reserve(signal, channels = [], now = Date.now()) {
 			};
 		}
 
+		const generation = nextMonotonicGeneration(now);
 		const nextEntry = {
 			firedAt: now,
+			generation,
 			channels: new Map(requestedChannels.map(channel => [channel, now])),
 		};
 		trimChannels(nextEntry);
 		this.store.set(key, nextEntry);
 		evictIfNeeded.call(this, now);
-		return { suppressed: false, key, windowMs, channels: requestedChannels, reservedAt: now };
+		return { suppressed: false, key, windowMs, channels: requestedChannels, reservedAt: now, generation };
 	} catch (error) {
 		console.warn('[SignalRepeatCooldown] Store reservation failed, failing open:', error.message);
 		return { suppressed: false, key, windowMs, channels: requestedChannels, storeError: true };
@@ -428,4 +445,5 @@ module.exports = {
 	MAX_CHANNELS_PER_ENTRY,
 	buildSignalKey,
 	oppositeKeyOf,
+	nextMonotonicGeneration,
 };

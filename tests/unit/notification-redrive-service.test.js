@@ -653,6 +653,57 @@ describe('NotificationRedriveService', () => {
 			expect(service.inMemoryStore.get('new').status).toBe('pending');
 		});
 
+		it('does not supersede same-millisecond re-entry reservation created after supersession marker with higher generation', async () => {
+			const key = 'BINANCE|ETHUSDT|4h|BUY';
+			const channel = 'telegram:destination-a';
+			const now = Date.now();
+			const supersession = await service.markRepeatSupersession(key, [channel]);
+			const supersessionGen = supersession.generation;
+
+			const oldRecord = {
+				id: 'old-gen',
+				status: 'pending',
+				repeatCooldown: { key, channel, reservedAt: now, generation: supersessionGen - 1 },
+			};
+			const newRecord = {
+				id: 'new-gen',
+				status: 'pending',
+				repeatCooldown: { key, channel, reservedAt: now, generation: supersessionGen + 1 },
+			};
+
+			const oldSuperseded = await service.isRepeatCooldownSuperseded(oldRecord);
+			const newSuperseded = await service.isRepeatCooldownSuperseded(newRecord);
+
+			expect(oldSuperseded).toBe(true);
+			expect(newSuperseded).toBe(false);
+		});
+
+		it('bounds cancellation scan and resolves within deadline when firestore stalls', async () => {
+			const key = 'BINANCE|ETHUSDT|4h|BUY';
+			const channel = 'telegram:destination-a';
+			let hanging = false;
+			alertStorageService.getFirestore.mockReturnValue({
+				collection: jest.fn(() => ({
+					doc: jest.fn(() => ({
+						set: jest.fn().mockResolvedValue(true),
+					})),
+					where: jest.fn().mockReturnThis(),
+					get: jest.fn(() => {
+						hanging = true;
+						return new Promise(() => {});
+					}),
+				})),
+			});
+
+			const startTime = Date.now();
+			const result = await service.cancelPendingRepeatCooldowns(key, [channel], Date.now() + 50);
+			const elapsed = Date.now() - startTime;
+
+			expect(hanging).toBe(true);
+			expect(elapsed).toBeLessThan(300);
+			expect(result).toBe(0);
+		});
+
 		it('marks all local supersessions before awaiting durable writes', async () => {
 			const key = 'BINANCE|ETHUSDT|4h|BUY';
 			const channels = ['telegram:destination-a', 'whatsapp:destination-b'];
