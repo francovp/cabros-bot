@@ -3,12 +3,15 @@ const remoteConfigService = require('../../src/services/remoteConfig/RemoteConfi
 
 describe('TradingViewMcpService', () => {
 	afterEach(() => {
+		jest.useRealTimers();
 		delete process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT;
 		delete process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT;
 		delete process.env.ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME;
 		delete process.env.ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION;
 		delete process.env.ENABLE_MESSAGE_FOOTER_METADATA;
 		delete process.env.ENABLE_FIREBASE_REMOTE_CONFIG;
+		delete process.env.ENABLE_TRADINGVIEW_MCP_CACHE;
+		delete process.env.TRADINGVIEW_MCP_CACHE_TTL_MS;
 		delete process.env.TRADINGVIEW_MCP_URL;
 		remoteConfigService._resetForTesting();
 	});
@@ -19,6 +22,79 @@ describe('TradingViewMcpService', () => {
 		const service = new TradingViewMcpService();
 
 		expect(service.getConfig().url).toBe('https://tradingview-mcp-yp6b.onrender.com/mcp');
+	});
+
+	it('serves identical successful tool calls from the cache within its TTL', async () => {
+		process.env.ENABLE_TRADINGVIEW_MCP_CACHE = 'true';
+		process.env.TRADINGVIEW_MCP_CACHE_TTL_MS = '1000';
+		const service = new TradingViewMcpService({
+			maxRetries: 1,
+			logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
+		});
+		service._rpcRequest = jest.fn()
+			.mockResolvedValueOnce({ sessionId: 'session-1' })
+			.mockResolvedValueOnce({ status: 202 })
+			.mockResolvedValue({
+				rpc: { result: { structuredContent: [{ symbol: 'BTCUSDT' }] } },
+			});
+
+		await service.callScanTool('coin_analysis', { timeframe: '1h', symbol: 'BTCUSDT', exchange: 'BINANCE' });
+		await service.callScanTool('coin_analysis', { exchange: 'BINANCE', symbol: 'BTCUSDT', timeframe: '1h' });
+
+		expect(service._rpcRequest).toHaveBeenCalledTimes(3);
+	});
+
+	it('does not cache when the feature flag is disabled', async () => {
+		const service = new TradingViewMcpService({ maxRetries: 1, cacheTtlMs: 1000 });
+		service._rpcRequest = jest.fn().mockImplementation(async (payload) => {
+			if (payload.method === 'initialize') return { sessionId: 'session-1' };
+			if (payload.method === 'notifications/initialized') return { status: 202 };
+			return { rpc: { result: { structuredContent: { symbol: 'BTCUSDT' } } } };
+		});
+
+		await service._callTool('coin_analysis', { symbol: 'BTCUSDT' });
+		await service._callTool('coin_analysis', { symbol: 'BTCUSDT' });
+
+		expect(service._rpcRequest).toHaveBeenCalledTimes(6);
+	});
+
+	it('misses for different arguments and after TTL expiry', async () => {
+		process.env.ENABLE_TRADINGVIEW_MCP_CACHE = 'true';
+		process.env.TRADINGVIEW_MCP_CACHE_TTL_MS = '1000';
+		const service = new TradingViewMcpService({ maxRetries: 1, cacheTtlMs: 1000 });
+		service._rpcRequest = jest.fn().mockImplementation(async (payload) => {
+			if (payload.method === 'initialize') return { sessionId: 'session-1' };
+			if (payload.method === 'notifications/initialized') return { status: 202 };
+			return { rpc: { result: { structuredContent: { symbol: payload.params.arguments.symbol } } } };
+		});
+		jest.useFakeTimers();
+
+		await service._callTool('coin_analysis', { symbol: 'BTCUSDT' });
+		await service._callTool('coin_analysis', { symbol: 'ETHUSDT' });
+		jest.advanceTimersByTime(1001);
+		await service._callTool('coin_analysis', { symbol: 'BTCUSDT' });
+
+		expect(service._rpcRequest).toHaveBeenCalledTimes(9);
+	});
+
+	it('does not cache failed tool calls', async () => {
+		process.env.ENABLE_TRADINGVIEW_MCP_CACHE = 'true';
+		const service = new TradingViewMcpService({ maxRetries: 1 });
+		let failed = true;
+		service._rpcRequest = jest.fn().mockImplementation(async (payload) => {
+			if (payload.method === 'initialize') return { sessionId: 'session-1' };
+			if (payload.method === 'notifications/initialized') return { status: 202 };
+			return failed
+				? { rpc: { result: { isError: true, content: [{ type: 'text', text: 'temporary failure' }] } } }
+				: { rpc: { result: { structuredContent: { symbol: 'BTCUSDT' } } } };
+		});
+
+		await expect(service._callTool('coin_analysis', { symbol: 'BTCUSDT' })).rejects.toThrow('temporary failure');
+		failed = false;
+		await service._callTool('coin_analysis', { symbol: 'BTCUSDT' });
+		await service._callTool('coin_analysis', { symbol: 'BTCUSDT' });
+
+		expect(service._rpcRequest).toHaveBeenCalledTimes(6);
 	});
 
 	it('reports unknown, ready, and degraded runtime state without exposing provider errors', async () => {

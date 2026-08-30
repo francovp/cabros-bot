@@ -65,10 +65,22 @@ describe('RemoteConfigService', () => {
 			['TRADINGVIEW_MCP_TIMEOUT_MS', '999', 12000],
 			['TRADINGVIEW_MCP_MAX_RETRIES', '6', 3],
 			['TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS', '-1', 12000],
+			['TRADINGVIEW_MCP_CACHE_TTL_MS', '9999', 90000],
+			['TRADINGVIEW_MCP_CACHE_TTL_MS', '600001', 90000],
 		].forEach(([key, value, expected]) => {
 			process.env[key] = value;
 			expect(remoteConfigService.getRuntimeConfig()[key]).toBe(expected);
 		});
+	});
+
+	it('preserves valid TradingView MCP cache environment settings', () => {
+		process.env.ENABLE_TRADINGVIEW_MCP_CACHE = 'true';
+		process.env.TRADINGVIEW_MCP_CACHE_TTL_MS = '120000';
+
+		expect(remoteConfigService.getRuntimeConfig()).toEqual(expect.objectContaining({
+			ENABLE_TRADINGVIEW_MCP_CACHE: true,
+			TRADINGVIEW_MCP_CACHE_TTL_MS: 120000,
+		}));
 	});
 
 	it('preserves valid environment values when Remote Config is disabled', async () => {

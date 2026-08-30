@@ -1101,6 +1101,15 @@ This feature introduces backend runtime error monitoring using Sentry's Node SDK
 
 No endpoint, OpenAPI, Postman, environment variable, or Remote Config contract changed.
 
+## TradingView MCP Result Cache (CB-252 / Issue #552)
+
+`TradingViewMcpService` optionally caches successful TradingView MCP tool results in a process-local TTL map keyed by tool name and recursively sorted arguments. The cache is disabled by default, only successful structured or JSON tool results are stored, expired or failed entries miss, and caller cancellation still wins over a cached result. `ENABLE_TRADINGVIEW_MCP_CACHE` is a Remote Config-eligible runtime gate; `TRADINGVIEW_MCP_CACHE_TTL_MS` is a bounded 10-second to 10-minute Remote Config-eligible tuning value with a 90-second default. No endpoint, response, dependency, or deployment secret changed.
+
+**Coverage**:
+- `src/services/tradingview/TradingViewMcpService.js` — Canonical cache keying, TTL lookup, successful-result storage, and fail-open cache handling.
+- `src/services/remoteConfig/RemoteConfigService.js` and `firebase-remote-config-template.json` — Allow-listed gate and TTL validation/defaults.
+- `tests/unit/tradingview-mcp-service.test.js`, `tests/unit/remote-config-service.test.js`, and `tests/unit/validate-env.test.js` — Cache hit/miss/expiry/failure behavior and configuration bounds.
+
 ## Webhook Ingest Rate-Limit Separation (CB-239 / Issue #532)
 
 The global rate limiter keeps its existing per-IP `RATE_LIMIT_MAX`/`RATE_LIMIT_WINDOW_MS` bucket for ordinary routes. Core `POST /api/webhook/alert` and `POST /api/webhook/message` requests use an isolated finite 1,000-request bucket per IP and the same window, with URL normalization matching Express's case-insensitive, non-strict routing. This prevents normal TradingView bursts from consuming the ordinary bucket while preserving downstream API-key validation. No new environment variable, Remote Config parameter, endpoint, OpenAPI, or Postman contract was added; the fixed cap remains a bounded security control.

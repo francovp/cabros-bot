@@ -10,7 +10,21 @@ const {
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 
 const DEFAULT_TRADINGVIEW_MCP_URL = 'https://tradingview-mcp-yp6b.onrender.com/mcp';
+const DEFAULT_TRADINGVIEW_MCP_CACHE_TTL_MS = 90000;
 const ENRICHMENT_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+function canonicalize(value) {
+	if (Array.isArray(value)) {
+		return value.map(canonicalize);
+	}
+	if (value && typeof value === 'object') {
+		return Object.keys(value).sort().reduce((result, key) => {
+			result[key] = canonicalize(value[key]);
+			return result;
+		}, {});
+	}
+	return value;
+}
 
 function getAbortMessage(signal, fallback) {
 	const reason = signal && signal.reason;
@@ -107,6 +121,7 @@ class TradingViewMcpService {
 		this.enrichmentEvents = [];
 		this.notifyAdmin = config.notifyAdmin || null;
 		this.notificationManager = config.notificationManager || null;
+		this.toolCache = new Map();
 	}
 
 	_resetForTesting() {
@@ -119,6 +134,7 @@ class TradingViewMcpService {
 		this.lastAdminPageSentAt = null;
 		this.hasActiveOutagePage = false;
 		this.enrichmentEvents = [];
+		this.toolCache.clear();
 	}
 
 	isEnabled() {
@@ -150,6 +166,13 @@ class TradingViewMcpService {
 			this.config.pageCooldownMs || runtimeConfig.TRADINGVIEW_MCP_PAGE_COOLDOWN_MS,
 			10,
 		);
+		const cacheTtlMs = parseInt(
+			this.config.cacheTtlMs ?? runtimeConfig.TRADINGVIEW_MCP_CACHE_TTL_MS,
+			10,
+		);
+		const cacheEnabled = typeof this.config.cacheEnabled === 'boolean'
+			? this.config.cacheEnabled
+			: runtimeConfig.ENABLE_TRADINGVIEW_MCP_CACHE;
 
 		return {
 			url: this.config.url || process.env.TRADINGVIEW_MCP_URL || DEFAULT_TRADINGVIEW_MCP_URL,
@@ -161,6 +184,8 @@ class TradingViewMcpService {
 			breakerThreshold: Number.isFinite(breakerThreshold) && breakerThreshold > 0 ? breakerThreshold : 5,
 			breakerCooldownMs: Number.isFinite(breakerCooldownMs) && breakerCooldownMs > 0 ? breakerCooldownMs : 600000,
 			pageCooldownMs: Number.isFinite(pageCooldownMs) && pageCooldownMs > 0 ? pageCooldownMs : 3600000,
+			cacheEnabled,
+			cacheTtlMs: Number.isFinite(cacheTtlMs) && cacheTtlMs > 0 ? cacheTtlMs : DEFAULT_TRADINGVIEW_MCP_CACHE_TTL_MS,
 		};
 	}
 
@@ -570,6 +595,38 @@ class TradingViewMcpService {
 
 	async _callTool(toolName, args = {}, options = {}) {
 		const { signal } = options;
+		const cfg = this.getConfig();
+		let cacheKey = null;
+		const cacheResult = (value) => {
+			if (cacheKey) {
+				try {
+					this.toolCache.set(cacheKey, { value, expiresAt: Date.now() + cfg.cacheTtlMs });
+				} catch {
+					// Cache failures are intentionally fail-open.
+				}
+			}
+			return value;
+		};
+		if (cfg.cacheEnabled) {
+			try {
+				cacheKey = `${toolName}:${JSON.stringify(canonicalize(args))}`;
+				const cached = this.toolCache.get(cacheKey);
+				if (cached) {
+					if (cached.expiresAt > Date.now()) {
+						if (signal?.aborted) {
+							throw new Error(getAbortMessage(signal, 'TradingView MCP request aborted'));
+						}
+						return cached.value;
+					}
+					this.toolCache.delete(cacheKey);
+				}
+			} catch (error) {
+				if (error.message === getAbortMessage(signal, 'TradingView MCP request aborted')) {
+					throw error;
+				}
+				cacheKey = null;
+			}
+		}
 		const initializeRequest = {
 			jsonrpc: '2.0',
 			id: this._nextRequestId('initialize'),
@@ -620,7 +677,7 @@ class TradingViewMcpService {
 		}
 
 		if (callResult.structuredContent && typeof callResult.structuredContent === 'object') {
-			return callResult.structuredContent;
+			return cacheResult(callResult.structuredContent);
 		}
 
 		const contentText = this._extractContentText(callResult);
@@ -628,7 +685,7 @@ class TradingViewMcpService {
 			throw new Error(`TradingView MCP tool ${toolName} returned empty content`);
 		}
 
-		return this._parseToolJson(contentText);
+		return cacheResult(this._parseToolJson(contentText));
 	}
 
 	_extractContentText(callResult) {
