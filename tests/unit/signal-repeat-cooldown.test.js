@@ -377,5 +377,47 @@ describe('signalRepeatCooldown', () => {
 			expect(typeof verdict.generation).toBe('number');
 			expect(verdict.generation).toBeGreaterThan(0);
 		});
+
+		it('releases failed destination when an overlapping request reserved a different destination with a newer generation', () => {
+			const cooldown = createSignalRepeatCooldown();
+			const signal = { exchange: 'BINANCE', symbol: 'ETHUSDT', timeframe: '4h', side: 'BUY' };
+			const first = cooldown.reserve(signal, ['telegram:chat-a'], 10_000);
+			const second = cooldown.reserve(signal, ['telegram:chat-b'], 10_001);
+
+			expect(first.suppressed).toBe(false);
+			expect(second.suppressed).toBe(false);
+			expect(second.generation).toBeGreaterThan(first.generation);
+			expect(cooldown.getChannelGeneration(first.key, 'telegram:chat-a')).toBe(first.generation);
+			expect(cooldown.getChannelGeneration(second.key, 'telegram:chat-b')).toBe(second.generation);
+
+			// First request fails on its channel and finalizes with empty retained channels and first.generation
+			cooldown.finalize(first.key, first.channels, [], [], first.generation);
+
+			// chat-a should now be released and available for reservation
+			const retryChatA = cooldown.reserve(signal, ['telegram:chat-a'], 10_002);
+			expect(retryChatA.suppressed).toBe(false);
+			expect(retryChatA.channels).toEqual(['telegram:chat-a']);
+
+			// chat-b should still be active / suppressed
+			const retryChatB = cooldown.reserve(signal, ['telegram:chat-b'], 10_002);
+			expect(retryChatB.suppressed).toBe(true);
+		});
+
+		it('fences release so that an older generation does not clear a newer reservation on the same channel', () => {
+			const cooldown = createSignalRepeatCooldown();
+			const signal = { exchange: 'BINANCE', symbol: 'ETHUSDT', timeframe: '4h', side: 'BUY' };
+			const first = cooldown.reserve(signal, ['telegram:chat-a'], 10_000);
+			const second = cooldown.reserve(signal, ['telegram:chat-a'], 10_001);
+
+			expect(second.suppressed).toBe(true); // suppressed because within window
+
+			// An expired/exhausted worker tries to release first.generation
+			cooldown.release(first.key, ['telegram:chat-a'], first.generation - 1);
+			expect(cooldown.getChannelTimestamp(first.key, 'telegram:chat-a')).toBe(10_000);
+
+			// Releasing with matching or newer generation clears it
+			cooldown.release(first.key, ['telegram:chat-a'], first.generation);
+			expect(cooldown.getChannelTimestamp(first.key, 'telegram:chat-a')).toBeNull();
+		});
 	});
 });

@@ -113,7 +113,7 @@ function isSupersededByMarker(supersession, record) {
 	const recordGen = record?.repeatCooldown?.generation;
 	const genComparison = compareGenerations(supersessionGen, recordGen);
 	if (genComparison !== null) {
-		return genComparison >= 0;
+		return genComparison > 0;
 	}
 	const recordCreatedAt = toMillis(record?.repeatCooldown?.reservedAt) || toMillis(record?.createdAt);
 	const supersessionAt = toMillis(supersession.supersededAt);
@@ -125,7 +125,15 @@ function releaseRepeatCooldown(record) {
 	if (!repeatCooldown || !repeatCooldown.key || !repeatCooldown.channel) {
 		return;
 	}
-	signalRepeatCooldown.release(repeatCooldown.key, [repeatCooldown.channel]);
+	if (Number.isFinite(repeatCooldown.generation)) {
+		signalRepeatCooldown.release(
+			repeatCooldown.key,
+			[repeatCooldown.channel],
+			repeatCooldown.generation,
+		);
+	} else {
+		signalRepeatCooldown.release(repeatCooldown.key, [repeatCooldown.channel]);
+	}
 }
 
 async function resolveBeforeDeadline(promise, deadline) {
@@ -654,6 +662,11 @@ class NotificationRedriveService {
 		for (const record of candidates.values()) {
 			const channel = record.repeatCooldown.channel;
 			const localTimestamp = signalRepeatCooldown.getChannelTimestamp(key, channel);
+			const localGen = signalRepeatCooldown.getChannelGeneration(key, channel);
+			const recordGen = record.repeatCooldown?.generation;
+			if (Number.isFinite(localGen) && Number.isFinite(recordGen) && localGen > recordGen) {
+				continue;
+			}
 			const reservedAt = toMillis(record.repeatCooldown.reservedAt);
 			if (reservedAt && Number.isFinite(localTimestamp) && localTimestamp > reservedAt) {
 				continue;
@@ -671,6 +684,11 @@ class NotificationRedriveService {
 			}
 			const channel = record.repeatCooldown.channel;
 			const localTimestamp = signalRepeatCooldown.getChannelTimestamp(key, channel);
+			const localGen = signalRepeatCooldown.getChannelGeneration(key, channel);
+			const recordGen = record.repeatCooldown?.generation;
+			if (Number.isFinite(localGen) && Number.isFinite(recordGen) && localGen > recordGen) {
+				continue;
+			}
 			const reservedAt = toMillis(record.repeatCooldown.reservedAt);
 			const terminalAt = toMillis(record.deliveredAt || record.terminalAt || record.updatedAt);
 			if (reservedAt && Number.isFinite(localTimestamp) && localTimestamp > reservedAt) {
@@ -724,8 +742,24 @@ class NotificationRedriveService {
 			}
 			const [recordSnapshot, supersessionSnapshot] = snapshots;
 			const supersession = supersessionSnapshot?.exists ? supersessionSnapshot.data() : null;
-			return (recordSnapshot?.exists && recordSnapshot.data()?.status === 'cancelled')
-				|| isSupersededByMarker(supersession, record);
+			if (recordSnapshot?.exists && recordSnapshot.data()?.status === 'cancelled') {
+				return true;
+			}
+			if (supersessionSnapshot?.exists && supersession?.status === 'superseded') {
+				const supersessionUpdateTime = supersessionSnapshot.updateTime || supersessionSnapshot.createTime;
+				const recordCreateTime = recordSnapshot?.createTime || recordSnapshot?.updateTime;
+				if (supersessionUpdateTime && recordCreateTime) {
+					const supersessionNanos = (BigInt(supersessionUpdateTime.seconds || 0) * 1_000_000_000n) + BigInt(supersessionUpdateTime.nanoseconds || 0);
+					const recordNanos = (BigInt(recordCreateTime.seconds || 0) * 1_000_000_000n) + BigInt(recordCreateTime.nanoseconds || 0);
+					if (supersessionNanos > recordNanos) {
+						return true;
+					}
+					if (recordNanos >= supersessionNanos) {
+						return false;
+					}
+				}
+			}
+			return isSupersededByMarker(supersession, record);
 		} catch (error) {
 			console.warn('[NotificationRedriveService] Failed to check superseded redrive:', error.message);
 			return false;

@@ -33,13 +33,13 @@ let lastMonotonicGenerationTime = 0;
 
 function nextMonotonicGeneration(nowMs = Date.now()) {
 	const currentMs = Number.isFinite(nowMs) ? nowMs : Date.now();
-	if (currentMs === lastMonotonicGenerationTime) {
-		monotonicGenerationCounter += 1;
-	} else {
+	if (currentMs > lastMonotonicGenerationTime) {
 		lastMonotonicGenerationTime = currentMs;
 		monotonicGenerationCounter = 0;
+	} else {
+		monotonicGenerationCounter += 1;
 	}
-	return (currentMs * 1000) + (monotonicGenerationCounter % 1000);
+	return (lastMonotonicGenerationTime * 1000) + (monotonicGenerationCounter % 1000);
 }
 
 function getEntryFiredAt(entry) {
@@ -156,9 +156,13 @@ function reserve(signal, channels = [], now = Date.now()) {
 			&& now - currentFiredAt < windowMs;
 
 		if (entry && entry.channels instanceof Map && currentIsActive) {
+			if (!(entry.channelGenerations instanceof Map)) {
+				entry.channelGenerations = new Map();
+			}
 			for (const [channel, firedAt] of entry.channels.entries()) {
 				if (Number.isFinite(firedAt) && firedAt <= now && now - firedAt >= windowMs) {
 					entry.channels.delete(channel);
+					entry.channelGenerations.delete(channel);
 				}
 			}
 			const availableChannels = requestedChannels.filter((channel) => {
@@ -174,12 +178,13 @@ function reserve(signal, channels = [], now = Date.now()) {
 					retryInMs: Math.max(0, windowMs - (now - currentFiredAt)),
 				};
 			}
+			const generation = nextMonotonicGeneration(now);
 			for (const channel of availableChannels) {
 				entry.channels.set(channel, now);
+				entry.channelGenerations.set(channel, generation);
 			}
 			trimChannels(entry);
 			entry.firedAt = now;
-			const generation = nextMonotonicGeneration(now);
 			entry.generation = generation;
 			this.store.set(key, entry);
 			evictIfNeeded.call(this, now);
@@ -201,6 +206,7 @@ function reserve(signal, channels = [], now = Date.now()) {
 			firedAt: now,
 			generation,
 			channels: new Map(requestedChannels.map(channel => [channel, now])),
+			channelGenerations: new Map(requestedChannels.map(channel => [channel, generation])),
 		};
 		trimChannels(nextEntry);
 		this.store.set(key, nextEntry);
@@ -223,6 +229,9 @@ function trimChannels(entry) {
 		.slice(0, entry.channels.size - MAX_CHANNELS_PER_ENTRY);
 	for (const [channel] of oldest) {
 		entry.channels.delete(channel);
+		if (entry.channelGenerations instanceof Map) {
+			entry.channelGenerations.delete(channel);
+		}
 	}
 }
 
@@ -235,7 +244,7 @@ function clearOpposite(key) {
 
 function clearOppositeChannels(key, successfulChannels) {
 	const opposite = oppositeKeyOf(key);
-	if (!opposite || successfulChannels.length === 0) {
+	if (!opposite || !Array.isArray(successfulChannels) || successfulChannels.length === 0) {
 		return;
 	}
 	const entry = this.store.get(opposite);
@@ -248,6 +257,9 @@ function clearOppositeChannels(key, successfulChannels) {
 	}
 	for (const channel of successfulChannels) {
 		entry.channels.delete(channel);
+		if (entry.channelGenerations instanceof Map) {
+			entry.channelGenerations.delete(channel);
+		}
 	}
 	if (entry.channels.size === 0) {
 		this.store.delete(opposite);
@@ -272,19 +284,28 @@ function finalize(key, reservedChannels = [], retainedChannels = [], oppositeSuc
 					firedAt: finalizedAt,
 					generation,
 					channels: new Map(retained.map((channel) => [channel, finalizedAt])),
+					channelGenerations: new Map(retained.map((channel) => [channel, generation])),
 				});
 			}
 			clearOppositeChannels.call(this, key, Array.isArray(oppositeSuccessfulChannels) ? oppositeSuccessfulChannels : retained);
 			return;
 		}
-		if (Number.isFinite(expectedGeneration) && Number.isFinite(entry.generation) && entry.generation > expectedGeneration) {
-			clearOppositeChannels.call(this, key, Array.isArray(oppositeSuccessfulChannels) ? oppositeSuccessfulChannels : retainedChannels);
-			return;
-		}
+
 		const retained = new Set(retainedChannels);
 		for (const channel of reservedChannels) {
 			if (!retained.has(channel)) {
+				if (Number.isFinite(expectedGeneration)) {
+					const channelGen = entry.channelGenerations instanceof Map && entry.channelGenerations.has(channel)
+						? entry.channelGenerations.get(channel)
+						: entry.generation;
+					if (Number.isFinite(channelGen) && channelGen > expectedGeneration) {
+						continue;
+					}
+				}
 				entry.channels.delete(channel);
+				if (entry.channelGenerations instanceof Map) {
+					entry.channelGenerations.delete(channel);
+				}
 			}
 		}
 		if (entry.channels.size === 0) {
@@ -308,11 +329,19 @@ function release(key, channels = [], expectedGeneration = null) {
 		if (!entry || !(entry.channels instanceof Map)) {
 			return;
 		}
-		if (Number.isFinite(expectedGeneration) && Number.isFinite(entry.generation) && entry.generation > expectedGeneration) {
-			return;
-		}
 		for (const channel of channels) {
+			if (Number.isFinite(expectedGeneration)) {
+				const channelGen = entry.channelGenerations instanceof Map && entry.channelGenerations.has(channel)
+					? entry.channelGenerations.get(channel)
+					: entry.generation;
+				if (Number.isFinite(channelGen) && channelGen > expectedGeneration) {
+					continue;
+				}
+			}
 			entry.channels.delete(channel);
+			if (entry.channelGenerations instanceof Map) {
+				entry.channelGenerations.delete(channel);
+			}
 		}
 		if (entry.channels.size === 0) {
 			this.store.delete(key);
@@ -334,16 +363,23 @@ function refresh(key, channels = [], now = Date.now(), expectedGeneration = null
 		if (!entry || !(entry.channels instanceof Map)) {
 			return;
 		}
-		if (Number.isFinite(expectedGeneration) && Number.isFinite(entry.generation) && entry.generation > expectedGeneration) {
-			return;
-		}
 		for (const channel of channels) {
+			if (Number.isFinite(expectedGeneration)) {
+				const channelGen = entry.channelGenerations instanceof Map && entry.channelGenerations.has(channel)
+					? entry.channelGenerations.get(channel)
+					: entry.generation;
+				if (Number.isFinite(channelGen) && channelGen > expectedGeneration) {
+					continue;
+				}
+			}
 			if (entry.channels.has(channel)) {
 				entry.channels.set(channel, now);
 			}
 		}
-		entry.firedAt = Math.max(...entry.channels.values());
-		this.store.set(key, entry);
+		if (entry.channels.size > 0) {
+			entry.firedAt = Math.max(...entry.channels.values());
+			this.store.set(key, entry);
+		}
 	} catch (error) {
 		console.warn('[SignalRepeatCooldown] Store refresh failed:', error.message);
 	}
@@ -353,6 +389,18 @@ function getChannelTimestamp(key, channel) {
 	try {
 		const entry = this.store.get(key);
 		return entry?.channels instanceof Map ? entry.channels.get(channel) : null;
+	} catch (error) {
+		return null;
+	}
+}
+
+function getChannelGeneration(key, channel) {
+	try {
+		const entry = this.store.get(key);
+		if (entry?.channelGenerations instanceof Map && entry.channelGenerations.has(channel)) {
+			return entry.channelGenerations.get(channel);
+		}
+		return entry?.generation ?? null;
 	} catch (error) {
 		return null;
 	}
@@ -431,6 +479,7 @@ function createSignalRepeatCooldown(options = {}) {
 		release: release.bind(state),
 		refresh: refresh.bind(state),
 		getChannelTimestamp: getChannelTimestamp.bind(state),
+		getChannelGeneration: getChannelGeneration.bind(state),
 		recordFire: recordFire.bind(state),
 		recordSuppression() {
 			state.suppressedCount += 1;

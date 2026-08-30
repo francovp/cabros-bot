@@ -616,6 +616,93 @@ describe('NotificationRedriveService', () => {
 			refreshSpy.mockRestore();
 		});
 
+		it('fences redrive cooldown release so an older terminal redrive does not release a newer reservation with a higher generation', async () => {
+			const key = 'BINANCE|ETHUSDT|5m|BUY';
+			const channel = 'telegram:destination-a';
+			signalRepeatCooldown.reset();
+			const firstRes = signalRepeatCooldown.reserve(
+				{ exchange: 'BINANCE', symbol: 'ETHUSDT', timeframe: '5m', side: 'BUY' },
+				[channel],
+				4_000,
+			);
+			const secondRes = signalRepeatCooldown.reserve(
+				{ exchange: 'BINANCE', symbol: 'ETHUSDT', timeframe: '5m', side: 'BUY' },
+				[channel],
+				5_000,
+			);
+
+			const releaseSpy = jest.spyOn(signalRepeatCooldown, 'release');
+
+			// Redrive record for first reservation with older generation expires/exhausts
+			const oldRecord = {
+				id: 'corr-old-gen_telegram',
+				status: 'exhausted',
+				repeatCooldown: {
+					key,
+					channel,
+					generation: firstRes.generation,
+				},
+			};
+
+			service.inMemoryStore.set(oldRecord.id, oldRecord);
+			// Trigger release via service helper
+			await service.reconcileRepeatCooldown(key, [channel]);
+
+			// Cooldown timestamp on channel should remain intact
+			expect(signalRepeatCooldown.getChannelTimestamp(key, channel)).toBe(4_000);
+			releaseSpy.mockRestore();
+		});
+
+		it('uses Firestore commit timestamps to determine supersession across replicas', async () => {
+			alertStorageService.getFirestore.mockReturnValue(mockFirestore);
+			const key = 'BINANCE|ETHUSDT|4h|BUY';
+			const channel = 'telegram:destination-a';
+			const supersessionId = service.getSupersessionId(key, channel);
+
+			const recordId = 'corr-reentry_telegram';
+			mockDocs.set(recordId, {
+				id: recordId,
+				status: 'pending',
+				repeatCooldown: { key, channel, generation: 1000 },
+			});
+			// Mock record document with createTime later than supersession (new re-entry)
+			mockFirestore.collection = jest.fn(() => ({
+				doc: jest.fn((id) => {
+					if (id === recordId) {
+						return {
+							id,
+							get: jest.fn(async () => ({
+								exists: true,
+								id,
+								data: () => mockDocs.get(recordId),
+								createTime: { seconds: 1005, nanoseconds: 500000 },
+							})),
+						};
+					}
+					if (id === supersessionId) {
+						return {
+							id,
+							get: jest.fn(async () => ({
+								exists: true,
+								id,
+								data: () => ({ status: 'superseded', key, channel, generation: 1000 }),
+								updateTime: { seconds: 1000, nanoseconds: 0 },
+							})),
+						};
+					}
+					return { id, get: jest.fn(async () => ({ exists: false })) };
+				}),
+			}));
+
+			const isSuperseded = await service.isRepeatCooldownSuperseded({
+				id: recordId,
+				repeatCooldown: { key, channel, generation: 1000 },
+			});
+
+			// Since record TrueTime is later than supersession TrueTime, it should NOT be superseded
+			expect(isSuperseded).toBe(false);
+		});
+
 		it('cancels pending opposite-side redrives', async () => {
 			await service.recordDeliveryResults(
 				{ text: 'BUY signal', correlationId: 'corr-cancel' },
