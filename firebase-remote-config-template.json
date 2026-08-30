@@ -224,6 +224,13 @@
       "description": "Maximum age in milliseconds for retrying transient market data failures before signal outcome window is marked unavailable",
       "valueType": "NUMBER"
     },
+    "SIGNAL_OUTCOME_RETENTION_DAYS": {
+      "defaultValue": {
+        "value": "365"
+      },
+      "description": "Retention window in days for tradingSignalOutcomes documents before expiration and cleanup",
+      "valueType": "NUMBER"
+    },
     "EQUITY_MARKET_DATA_RPM": {
       "defaultValue": {
         "value": "8"
