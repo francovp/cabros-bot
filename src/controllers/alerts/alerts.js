@@ -26,6 +26,7 @@ const EXPORT_FIELDS = [
 	'dedupStatus',
 	'channels',
 	'deliveryResults',
+	'suppressedRepeat',
 	'tokenUsage',
 	'text',
 ];

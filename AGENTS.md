@@ -1497,3 +1497,16 @@ Cached news-monitor retries now distinguish active delivery ownership from durab
 - `tests/integration/news-monitor-cache.test.js` and `tests/unit/news-monitor-persistent-dedup.test.js` — Verify successful indeterminate retries are retained locally, stalled renewals are bounded, completed channels keep durable persistence, and mixed-channel stale Firestore refreshes do not reintroduce failures.
 
 No endpoint, OpenAPI, Postman, environment variable, or Remote Config contract changed.
+
+## Webhook Alert Repeat Suppression (CB-230 / Issue #522)
+
+`/api/webhook/alert` supports opt-in same-signal repeat suppression. When `ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION=true`, a signal whose `(exchange, symbol, timeframe, side)` key already fired within a cooldown window of `ALERT_SIGNAL_COOLDOWN_BARS` bars (default `1`, bounded `1`-`10`) skips channel delivery but still returns 200 with `suppressedRepeat: true` and remains persisted with the marker so replay and audit stay complete. Opposite-side flips always deliver because they produce a different key; unknown timeframes never suppress; dry-run requests bypass the cooldown entirely. The in-process store fails open on read/write errors, and both Remote Config keys (`ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION`, `ALERT_SIGNAL_COOLDOWN_BARS`) follow the parity workflow with template entries.
+
+**Core Components**:
+- `src/services/alerts/signalRepeatCooldown.js` — Key building, bar-window math, suppression counters, fail-open store semantics.
+- `src/controllers/webhooks/handlers/alert/alert.js` — Post-enrichment gate before notification dispatch and persistence marker propagation.
+- `src/services/storage/AlertStorageService.js` — Persists `suppressedRepeat: true` (with empty delivery results) and returns it on reads.
+- `src/controllers/status.js` — `featureFlags.alertSignalRepeatSuppression` plus non-sensitive `dependencies.alertSignalRepeatSuppression` counters (`suppressedCount`, `lastSuppressedAt`, `activeTrackedSignals`).
+- `tests/unit/signal-repeat-cooldown.test.js`, `tests/integration/alert-repeat-suppression.test.js`, `tests/integration/status-endpoint.test.js` — Window/flip/fail-open coverage, endpoint double-post behavior, and status exposure.
+
+Disabled by default preserves existing webhook behavior byte-for-byte.

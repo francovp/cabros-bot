@@ -190,6 +190,9 @@ function formatAlertDocument(doc) {
 	if (VALID_TRADINGVIEW_ENRICHMENT_STATUSES.has(data.tradingViewEnrichmentStatus)) {
 		docObj.tradingViewEnrichmentStatus = data.tradingViewEnrichmentStatus;
 	}
+	if (data.suppressedRepeat === true) {
+		docObj.suppressedRepeat = true;
+	}
 	if (typeof data.eventCategory === 'string') {
 		docObj.eventCategory = data.eventCategory;
 	}
@@ -954,6 +957,7 @@ async function saveAlertInternal({
 	useTradingViewData,
 	tradingViewEnrichmentApplied,
 	tradingViewEnrichmentStatus,
+	suppressedRepeat,
 	processingTimeMs,
 	source,
 	eventCategory,
@@ -999,6 +1003,10 @@ async function saveAlertInternal({
 		}
 		if (VALID_TRADINGVIEW_ENRICHMENT_STATUSES.has(tradingViewEnrichmentStatus)) {
 			document.tradingViewEnrichmentStatus = tradingViewEnrichmentStatus;
+		}
+		if (suppressedRepeat === true) {
+			document.suppressedRepeat = true;
+			document.deliveryResults = [];
 		}
 		const normalizedProcessingTimeMs = normalizeProcessingTimeMs(processingTimeMs);
 		if (normalizedProcessingTimeMs !== null) {

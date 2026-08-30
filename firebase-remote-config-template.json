@@ -328,6 +328,20 @@
       },
       "description": "Enable rendering higher-timeframe trend alignment on enriched webhook alerts",
       "valueType": "BOOLEAN"
+    },
+    "ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION": {
+      "defaultValue": {
+        "value": "false"
+      },
+      "description": "Suppress duplicate channel delivery for the same exchange/symbol/timeframe/side signal within its cooldown window (alerts stay persisted with a suppression marker)",
+      "valueType": "BOOLEAN"
+    },
+    "ALERT_SIGNAL_COOLDOWN_BARS": {
+      "defaultValue": {
+        "value": "1"
+      },
+      "description": "Cooldown length in alert-timeframe bars for same-signal repeat suppression",
+      "valueType": "NUMBER"
     }
   },
   "version": {

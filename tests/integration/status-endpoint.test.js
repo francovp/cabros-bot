@@ -427,6 +427,35 @@ describe('Status endpoints', () => {
 		expect(response.body.featureFlags.messageFooterMetadata).toBe(false);
 	});
 
+	it('reports alert signal repeat suppression as disabled by default', async () => {
+		delete process.env.ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION;
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.alertSignalRepeatSuppression).toBe(false);
+		expect(response.body.dependencies.alertSignalRepeatSuppression).toEqual({
+			enabled: false,
+			suppressedCount: expect.any(Number),
+			lastSuppressedAt: null,
+			activeTrackedSignals: 0,
+		});
+	});
+
+	it('reports alert signal repeat suppression when enabled', async () => {
+		process.env.ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION = 'true';
+
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.alertSignalRepeatSuppression).toBe(true);
+		expect(response.body.dependencies.alertSignalRepeatSuppression.enabled).toBe(true);
+	});
+
 	it('reports safe Firebase Remote Config load metadata without values', async () => {
 		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
 
