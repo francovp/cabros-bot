@@ -37,6 +37,22 @@ describe('Postman collection contract', () => {
 		]));
 	});
 
+	it('documents groundingCoalescing dependency in the Get Status response example', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const status = findItem(collection.item, 'Get Status');
+
+		expect(status).toBeDefined();
+		const responseBody = JSON.parse(status.response[0].body);
+		expect(responseBody.dependencies.groundingCoalescing).toEqual({
+			enabled: false,
+			windowMs: 0,
+			activeEntries: 0,
+			hits: 0,
+			misses: 0,
+			failures: 0,
+		});
+	});
+
 	it('documents x-idempotency-key on the alert webhook request', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const sendAlert = findItem(collection.item, 'POST Send Alert');

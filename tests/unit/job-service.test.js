@@ -97,6 +97,40 @@ describe('JobService Unit Tests', () => {
 		});
 	});
 
+	describe('Telegram job visibility', () => {
+		it('filters job reads by the originating Telegram chat', async () => {
+			const createdAt = new Date().toISOString();
+			await jobService.repository.save({
+				jobId: 'telegram-chat-a',
+				type: 'expanded-analysis',
+				status: 'processing',
+				progress: { current: 0, total: 1 },
+				createdAt,
+				updatedAt: createdAt,
+				requestMetadata: { telegramChatId: '123' },
+				fullResults: [],
+				fullScanResults: [],
+			});
+			await jobService.repository.save({
+				jobId: 'telegram-chat-b',
+				type: 'expanded-analysis',
+				status: 'processing',
+				progress: { current: 0, total: 1 },
+				createdAt,
+				updatedAt: createdAt,
+				requestMetadata: { telegramChatId: '456' },
+				fullResults: [],
+				fullScanResults: [],
+			});
+
+			expect((await jobService.listJobs({ limit: 10, telegramChatId: '123' })).map((job) => job.jobId))
+				.toEqual(['telegram-chat-a']);
+			expect(await jobService.getJob('telegram-chat-b', { telegramChatId: '123' })).toBeNull();
+			expect((await jobService.getJob('telegram-chat-a', { telegramChatId: '123' })).jobId)
+				.toBe('telegram-chat-a');
+		});
+	});
+
 	describe('Shutdown draining', () => {
 		it('tracks background jobs until they finish', async () => {
 			let releaseJob;

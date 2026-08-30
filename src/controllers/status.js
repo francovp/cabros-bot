@@ -13,9 +13,14 @@ const remoteConfigService = require('../services/remoteConfig/RemoteConfigServic
 const { tradingViewMcpService } = require('../services/tradingview/TradingViewMcpService');
 const { binanceOrderService } = require('../services/trading/BinanceOrderService');
 const { notificationRedriveService } = require('../services/notification/NotificationRedriveService');
+const { whatsAppCommandBridgeService } = require('../services/notification/WhatsAppCommandBridgeService');
 const geminiQuotaManager = require('../services/grounding/geminiQuotaManager');
 const groundingMetrics = require('../services/grounding/metrics');
+<<<<<<< HEAD
 const { signalRepeatCooldown } = require('../services/alerts/signalRepeatCooldown');
+=======
+const { getCoalescingStatus } = require('../services/grounding/grounding');
+>>>>>>> origin/master
 const {
 	getDeploymentCommit,
 	isPreviewEnvironment,
@@ -306,6 +311,11 @@ function getStatus() {
 		signalOutcomeWorkerDependency.status = 'disabled';
 	}
 
+	const webhookAuth = dependencyStatus({
+		enabled: true,
+		configured: hasValue(process.env.WEBHOOK_API_KEY),
+	});
+
 	return {
 		service: {
 			name: process.env.SERVICE_NAME || packageJson.name || 'cabros-bot',
@@ -344,6 +354,7 @@ function getStatus() {
 			jobExecutionWorker: jobExecutionQueueStatus.enabled || process.env.JOB_EXECUTION_MODE === 'firestore-poller',
 			notificationRedrive: notificationRedriveService.isEnabled(),
 			alertSignalRepeatSuppression: signalRepeatCooldown.isEnabled(),
+			whatsappCommands: whatsAppCommandBridgeService.isEnabled(),
 		},
 		deliveryChannels: {
 			telegram: {
@@ -363,8 +374,11 @@ function getStatus() {
 			telegram,
 			whatsapp,
 			discord,
+			webhookAuth,
+			whatsappCommandBridge: whatsAppCommandBridgeService.getStatus(),
 			gemini,
 			geminiQuota,
+			groundingCoalescing: getCoalescingStatus(),
 			tradingViewMcp,
 			tradingViewVolumeConfirmation,
 			firestore,

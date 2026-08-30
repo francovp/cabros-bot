@@ -50,6 +50,31 @@ describe('PromptService', () => {
 		expect(prompt.userPrompt).toEqual(expect.stringContaining('risk_reward_ratio'));
 	});
 
+	it('should include evidence calibration guidance in the local alert enrichment prompt', async () => {
+		const service = new PromptService({ logger });
+
+		const prompt = await service.getChatPrompt(PromptKeys.ALERT_ENRICHMENT, {
+			alertContext: 'Bitcoin breaks resistance',
+		});
+
+		expect(prompt.userPrompt).toEqual(expect.stringContaining('0.9+'));
+		expect(prompt.userPrompt).toEqual(expect.stringContaining('0.6-0.8'));
+		expect(prompt.userPrompt).toEqual(expect.stringContaining('corroborating sources'));
+	});
+
+	it('should include setup_type evidence rubric and omission guidance in the local alert enrichment prompt', async () => {
+		const service = new PromptService({ logger });
+
+		const prompt = await service.getChatPrompt(PromptKeys.ALERT_ENRICHMENT, {
+			alertContext: 'Bitcoin breaks resistance',
+		});
+
+		expect(prompt.userPrompt).toEqual(expect.stringContaining('setup_evidence'));
+		expect(prompt.userPrompt).toEqual(expect.stringContaining('Setup type rubric:'));
+		expect(prompt.userPrompt).toEqual(expect.stringContaining('Do NOT infer `setup_type` solely from signal direction'));
+		expect(prompt.userPrompt).toEqual(expect.stringContaining('OMIT `setup_type` and `setup_evidence` entirely'));
+	});
+
 	it('should fetch and compile remote Langfuse chat prompts', async () => {
 		process.env.ENABLE_LANGFUSE_PROMPTS = 'true';
 
@@ -202,13 +227,34 @@ describe('PromptService', () => {
 		}));
 	});
 
+	it('should detect missing evidence calibration guidance in remote prompts', async () => {
+		process.env.ENABLE_LANGFUSE_PROMPTS = 'true';
+
+		const remotePrompt = {
+			version: 6,
+			compile: jest.fn().mockReturnValue([
+				{ role: 'system', content: 'Include invalidation_level, target_level, setup_type, and risk_reward_ratio.' },
+				{ role: 'user', content: 'Context: {{alertContext}}' },
+			]),
+		};
+		const service = new PromptService({
+			logger,
+			clientProvider: jest.fn().mockResolvedValue({ prompt: { get: jest.fn().mockResolvedValue(remotePrompt) } }),
+		});
+
+		const prompt = await service.getChatPrompt(PromptKeys.ALERT_ENRICHMENT, { alertContext: 'Bitcoin alert context' });
+
+		expect(prompt.schemaDriftDetected).toBe(true);
+		expect(prompt.missingCalibrationGuidance).toEqual(['0.9+', '0.6-0.8', 'corroborating sources']);
+	});
+
 	it('should mark schemaDriftDetected as false when remote alert-enrichment prompt includes all required risk fields', async () => {
 		process.env.ENABLE_LANGFUSE_PROMPTS = 'true';
 
 		const remotePrompt = {
 			version: 5,
 			compile: jest.fn().mockReturnValue([
-				{ role: 'system', content: 'You are an analyst. Include invalidation_level, target_level, setup_type, and risk_reward_ratio.' },
+				{ role: 'system', content: 'You are an analyst. Include invalidation_level, target_level, setup_type, and risk_reward_ratio. Use 0.9+ only with multiple independent corroborating sources; use 0.6-0.8 for partial evidence.' },
 				{ role: 'user', content: 'Context: {{alertContext}}' },
 			]),
 		};
@@ -233,4 +279,3 @@ describe('PromptService', () => {
 		expect(logger.warn).not.toHaveBeenCalled();
 	});
 });
-

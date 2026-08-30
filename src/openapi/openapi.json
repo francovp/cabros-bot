@@ -1721,9 +1721,16 @@
         "name": "source",
         "in": "query",
         "schema": {
-          "type": "string"
+          "type": "string",
+          "enum": [
+            "webhook",
+            "news-monitor",
+            "market-scanner",
+            "expanded-analysis"
+          ]
         },
-        "example": "webhook"
+        "example": "webhook",
+        "description": "Stored alert source filter. webhook covers /api/webhook/alert; news-monitor covers /api/news-monitor deliveries; market-scanner covers delivered /api/webhook/market-scanner-alert reports; expanded-analysis covers delivered /api/webhook/expanded-analysis-alert reports."
       },
       "Enriched": {
         "name": "enriched",
@@ -2705,7 +2712,7 @@
                 "alerts": {
                   "type": "array",
                   "items": {
-                    "$ref": "#/components/schemas/JsonObject"
+                    "$ref": "#/components/schemas/StoredAlert"
                   }
                 },
                 "nextCursor": {
@@ -2813,6 +2820,16 @@
                   "lastErrorCategory": null,
                   "successCount": 0,
                   "failureCount": 0,
+                  "enrichment": {
+                    "alertPath": {
+                      "windowMs": 86400000,
+                      "totalCount": 0,
+                      "appliedCount": 0,
+                      "failedCount": 0,
+                      "appliedRate24h": 0,
+                      "failureRate24h": 0
+                    }
+                  },
                   "circuitBreaker": {
                     "state": "closed",
                     "consecutiveFailures": 0,
@@ -3259,6 +3276,76 @@
           "maxAdverseExcursionPercent": {
             "type": "number",
             "example": -4.5
+          },
+          "bySide": {
+            "type": "object",
+            "description": "Per-side breakdown mirroring the parent WindowStats shape. Each side block is emitted only when at least one evaluated signal exists for that side.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/WindowStats"
+            },
+            "example": {
+              "BUY": {
+                "totalSignals": 20,
+                "hitRatePercent": 65,
+                "targetEligibleWindows": 18,
+                "stopEligibleWindows": 18,
+                "targetHitRatePercent": 60,
+                "stopHitRatePercent": 22,
+                "expectancyR": 0.92,
+                "averageReturnPercent": 2.4,
+                "averageMfePercent": 3.6,
+                "averageMaePercent": -1.05,
+                "maxAdverseExcursionPercent": -4.2
+              },
+              "SELL": {
+                "totalSignals": 15,
+                "hitRatePercent": 53,
+                "targetEligibleWindows": 12,
+                "stopEligibleWindows": 12,
+                "targetHitRatePercent": 48,
+                "stopHitRatePercent": 18,
+                "expectancyR": 0.71,
+                "averageReturnPercent": 1.8,
+                "averageMfePercent": 3.2,
+                "averageMaePercent": -1.2,
+                "maxAdverseExcursionPercent": -4.5
+              }
+            }
+          },
+          "bySetupType": {
+            "type": "object",
+            "description": "Per-setup-type breakdown mirroring the parent WindowStats shape. Each setup-type block is emitted only when at least one evaluated signal exists for that setup.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/WindowStats"
+            },
+            "example": {
+              "trend_continuation": {
+                "totalSignals": 25,
+                "hitRatePercent": 68,
+                "targetEligibleWindows": 22,
+                "stopEligibleWindows": 22,
+                "targetHitRatePercent": 64,
+                "stopHitRatePercent": 18,
+                "expectancyR": 1.05,
+                "averageReturnPercent": 2.6,
+                "averageMfePercent": 3.8,
+                "averageMaePercent": -0.95,
+                "maxAdverseExcursionPercent": -3.8
+              },
+              "reversal": {
+                "totalSignals": 10,
+                "hitRatePercent": 40,
+                "targetEligibleWindows": 8,
+                "stopEligibleWindows": 8,
+                "targetHitRatePercent": 38,
+                "stopHitRatePercent": 25,
+                "expectancyR": 0.45,
+                "averageReturnPercent": 1.2,
+                "averageMfePercent": 2.9,
+                "averageMaePercent": -1.5,
+                "maxAdverseExcursionPercent": -4.5
+              }
+            }
           }
         }
       },
@@ -3420,6 +3507,88 @@
           }
         }
       },
+      "StoredAlert": {
+        "type": "object",
+        "description": "Stored alert document. The `source` field identifies the producing flow (webhook, news-monitor, market-scanner, expanded-analysis). When the report text exceeded the 20,000-character storage cap, `truncated: true` and `originalLength` are populated so consumers and replay can flag the loss; replay will redeliver only the truncated text.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "receivedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "text": {
+            "type": "string"
+          },
+          "enriched": {
+            "type": "boolean"
+          },
+          "enrichmentData": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": true
+          },
+          "tokenUsage": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": true
+          },
+          "channels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "deliveryResults": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "webhook",
+              "news-monitor",
+              "market-scanner",
+              "expanded-analysis"
+            ]
+          },
+          "useTradingViewData": {
+            "type": "boolean"
+          },
+          "tradingViewEnrichmentApplied": {
+            "type": "boolean"
+          },
+          "symbol": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "exchange": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "True when the stored text was clipped to the 20,000-character cap; see originalLength for the pre-truncation size."
+          },
+          "originalLength": {
+            "type": "integer",
+            "minimum": 20001,
+            "description": "Length of the original alert text in characters before the 20,000-character cap was applied."
+          }
+        }
+      },
       "RiskMetadataCoverage": {
         "type": "object",
         "required": [
@@ -3515,8 +3684,68 @@
               "plainAlerts": {
                 "type": "integer"
               },
+              "tradingViewStatusCounts": {
+                "type": "object",
+                "description": "Counts TradingView enrichment outcomes; requested alerts without a stored status are reported as unrecorded.",
+                "properties": {
+                  "full": { "type": "integer", "minimum": 0 },
+                  "partial": { "type": "integer", "minimum": 0 },
+                  "failed": { "type": "integer", "minimum": 0 },
+                  "not_applicable": { "type": "integer", "minimum": 0 },
+                  "unrecorded": { "type": "integer", "minimum": 0 }
+                }
+              },
               "riskMetadataCoverage": {
                 "$ref": "#/components/schemas/RiskMetadataCoverage"
+              },
+              "evidenceCoverage": {
+                "type": "object",
+                "description": "Tracks whether enriched alerts cited grounding sources. Denominator counts only enriched alerts; legacy records missing a sources field count as zero. Grouped by prompt provenance (Langfuse vs. local fallback) for regression attribution.",
+                "properties": {
+                  "denominator": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Number of enriched alerts included in this coverage window."
+                  },
+                  "zeroSources": {
+                    "type": "object",
+                    "properties": {
+                      "populated": { "type": "integer", "minimum": 0 },
+                      "percentage": { "type": "number", "minimum": 0, "maximum": 100 }
+                    }
+                  },
+                  "oneToTwoSources": {
+                    "type": "object",
+                    "properties": {
+                      "populated": { "type": "integer", "minimum": 0 },
+                      "percentage": { "type": "number", "minimum": 0, "maximum": 100 }
+                    }
+                  },
+                  "threePlusSources": {
+                    "type": "object",
+                    "properties": {
+                      "populated": { "type": "integer", "minimum": 0 },
+                      "percentage": { "type": "number", "minimum": 0, "maximum": 100 }
+                    }
+                  },
+                  "totalSourceCount": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Sum of all source counts across enriched alerts in the window."
+                  },
+                  "averageSourceCount": {
+                    "type": "number",
+                    "minimum": 0,
+                    "description": "Average number of cited sources per enriched alert. 0 when denominator is 0."
+                  },
+                  "byPromptProvenance": {
+                    "type": "array",
+                    "description": "Per-provenance breakdown (Langfuse version, local fallback, etc.) using the same bucket shape.",
+                    "items": {
+                      "$ref": "#/components/schemas/JsonObject"
+                    }
+                  }
+                }
               },
               "tokenUsage": {
                 "$ref": "#/components/schemas/JsonObject"
@@ -4358,6 +4587,10 @@
                     ],
                     "description": "Current price supplied by TradingView MCP enrichment; null when unavailable."
                   },
+                  "sentiment_score_raw": {
+                    "type": "number",
+                    "description": "Original signed Gemini sentiment score when the effective score was capped because grounding returned no sources."
+                  },
                   "price_data": {
                     "type": [
                       "object",
@@ -4400,6 +4633,10 @@
                       "trend_continuation",
                       "reversal"
                     ]
+                  },
+                  "setup_evidence": {
+                    "type": "string",
+                    "description": "Optional one-line rationale or observed market structure supporting the setup_type"
                   },
                   "risk_reward_ratio": {
                     "type": [
@@ -4699,7 +4936,7 @@
       },
       "Status": {
         "type": "object",
-        "description": "Runtime status. TradingView dependencies expose configured endpoint metadata plus runtime status (unknown before an MCP operation, ready after success, degraded after failure), timestamps, sanitized error categories, and success/failure counters without provider response bodies. dependencies.geminiQuota reports Gemini quota cooldown state, remaining cooldown duration, trigger counters, Brave search fallback events during cooldown, and grounding request telemetry counters without exposing prompt text or provider credentials. featureFlags.firestoreJobStorage reports the ENABLE_FIRESTORE_JOB_STORAGE gate or the legacy ENABLE_FIRESTORE_ALERT_STORAGE gate; featureFlags.jobExecutionWorker reports JOB_EXECUTION_MODE=render-worker or firestore-poller; dependencies.jobExecutionQueue reports queue readiness and safe operational counters without broker credentials; featureFlags.firestoreScannerPresets reports ENABLE_FIRESTORE_SCANNER_PRESETS; dependencies.scannerPresetStorage reports the effective durable or ephemeral scanner-preset backend and readiness; dependencies.signalOutcomeWorker reports the scheduler role (web, worker, or disabled), graceful-shutdown state, cadence, heartbeat, and scanned/pending/evaluated/error counters; a disabled local scheduler reports ready false and status disabled because it is not the process evaluating outcomes; dependencies.firestoreJobStorage reports Firestore credential readiness for that runtime path; featureFlags.newsMonitorTestMode reports ENABLE_NEWS_MONITOR_TEST_MODE without changing news monitor behavior; featureFlags.messageFooterMetadata reports ENABLE_MESSAGE_FOOTER_METADATA and defaults to true unless explicitly set to false; featureFlags.cloudflareAig reports ENABLE_CLOUDFLARE_AIG and dependencies.cloudflareAig reports Cloudflare AI Gateway credential readiness; featureFlags.equityMarketData reports ENABLE_EQUITY_MARKET_DATA and dependencies.equityMarketData reports non-sensitive Twelve Data readiness for BATS/NASDAQ/NYSE/AMEX/NYSE ARCA outcome evaluation; featureFlags.firebaseRemoteConfig reports ENABLE_FIREBASE_REMOTE_CONFIG and dependencies.firebaseRemoteConfig reports only bounded loader metadata, source, template version, last successful load, and last error category without remote values or credentials; featureFlags.notificationRedrive reports ENABLE_NOTIFICATION_REDRIVE and dependencies.notificationRedrive reports dead-letter redrive worker role, configuration, running state, and safe operational counters. featureFlags.alertSignalRepeatSuppression reports ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION and dependencies.alertSignalRepeatSuppression reports the enabled state plus non-sensitive suppression counters (suppressedCount, lastSuppressedAt, activeTrackedSignals).",
+        "description": "Runtime status. TradingView dependencies expose configured endpoint metadata plus runtime status (unknown before an MCP operation, ready after success, degraded after failure), timestamps, sanitized error categories, success/failure counters, and dependencies.tradingViewMcp.enrichment.alertPath rolling 24-hour alert-path outcome rates without provider response bodies. dependencies.geminiQuota reports Gemini quota cooldown state, remaining cooldown duration, trigger counters, Brave search fallback events during cooldown, and grounding request telemetry counters without exposing prompt text or provider credentials. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters. featureFlags.firestoreJobStorage reports the ENABLE_FIRESTORE_JOB_STORAGE gate or the legacy ENABLE_FIRESTORE_ALERT_STORAGE gate; featureFlags.jobExecutionWorker reports JOB_EXECUTION_MODE=render-worker or firestore-poller; dependencies.jobExecutionQueue reports queue readiness and safe operational counters without broker credentials; featureFlags.firestoreScannerPresets reports ENABLE_FIRESTORE_SCANNER_PRESETS; dependencies.scannerPresetStorage reports the effective durable or ephemeral scanner-preset backend and readiness; dependencies.signalOutcomeWorker reports the scheduler role (web, worker, or disabled), graceful-shutdown state, cadence, heartbeat, and scanned/pending/evaluated/error counters; a disabled local scheduler reports ready false and status disabled because it is not the process evaluating outcomes; dependencies.firestoreJobStorage reports Firestore credential readiness for that runtime path; featureFlags.newsMonitorTestMode reports ENABLE_NEWS_MONITOR_TEST_MODE without changing news monitor behavior; featureFlags.messageFooterMetadata reports ENABLE_MESSAGE_FOOTER_METADATA and defaults to true unless explicitly set to false; featureFlags.cloudflareAig reports ENABLE_CLOUDFLARE_AIG and dependencies.cloudflareAig reports Cloudflare AI Gateway credential readiness; featureFlags.equityMarketData reports ENABLE_EQUITY_MARKET_DATA and dependencies.equityMarketData reports non-sensitive Twelve Data readiness for BATS/NASDAQ/NYSE/AMEX/NYSE ARCA outcome evaluation; featureFlags.firebaseRemoteConfig reports ENABLE_FIREBASE_REMOTE_CONFIG and dependencies.firebaseRemoteConfig reports only bounded loader metadata, source, template version, last successful load, and last error category without remote values or credentials; featureFlags.notificationRedrive reports ENABLE_NOTIFICATION_REDRIVE and dependencies.notificationRedrive reports dead-letter redrive worker role, configuration, running state, and safe operational counters. featureFlags.alertSignalRepeatSuppression reports ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION and dependencies.alertSignalRepeatSuppression reports the enabled state plus non-sensitive suppression counters (suppressedCount, lastSuppressedAt, activeTrackedSignals).",
         "properties": {
           "service": {
             "$ref": "#/components/schemas/JsonObject"
