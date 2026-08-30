@@ -280,6 +280,20 @@
       "description": "Maximum due scanner presets to process per scheduler sweep",
       "valueType": "NUMBER"
     },
+    "NEWS_MONITOR_SCHEDULER_INTERVAL_MS": {
+      "defaultValue": {
+        "value": "300000"
+      },
+      "description": "Background sweep interval in milliseconds for the built-in news-monitor scheduler",
+      "valueType": "NUMBER"
+    },
+    "NEWS_MONITOR_SCHEDULER_BATCH_LIMIT": {
+      "defaultValue": {
+        "value": "50"
+      },
+      "description": "Maximum default news-monitor symbols to process per scheduler sweep",
+      "valueType": "NUMBER"
+    },
     "ENABLE_GEMINI_GROUNDING": {
       "defaultValue": {
         "value": "false"
