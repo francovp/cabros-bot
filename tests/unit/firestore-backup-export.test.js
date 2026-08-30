@@ -152,7 +152,7 @@ describe('Firestore Backup & Export Tooling', () => {
 			expect(deserialized.metadata.location.latitude).toBe(40.7128);
 		});
 
-		it('serializes whole document attaching _id', () => {
+		it('serializes whole document in envelope separating document id', () => {
 			const mockDoc = {
 				id: 'doc-xyz',
 				data: () => ({
@@ -162,14 +162,47 @@ describe('Firestore Backup & Export Tooling', () => {
 			};
 
 			const record = serializeDocument(mockDoc);
-			expect(record._id).toBe('doc-xyz');
-			expect(record.symbol).toBe('BTCUSDT');
-			expect(record.receivedAt.__type).toBe('Timestamp');
+			expect(record.__id).toBe('doc-xyz');
+			expect(record.data.symbol).toBe('BTCUSDT');
+			expect(record.data.receivedAt.__type).toBe('Timestamp');
 
 			const { id, data } = deserializeDocument(record);
 			expect(id).toBe('doc-xyz');
 			expect(data.symbol).toBe('BTCUSDT');
 			expect(data.receivedAt.toDate().toISOString()).toBe('2026-08-30T01:00:00.000Z');
+		});
+
+		it('preserves user document _id field without collision with Firestore doc id', () => {
+			const mockDoc = {
+				id: 'firestore-doc-123',
+				data: () => ({
+					_id: 'custom-user-id-456',
+					name: 'Test Record',
+				}),
+			};
+
+			const record = serializeDocument(mockDoc);
+			expect(record.__id).toBe('firestore-doc-123');
+			expect(record.data._id).toBe('custom-user-id-456');
+
+			const { id, data } = deserializeDocument(record);
+			expect(id).toBe('firestore-doc-123');
+			expect(data._id).toBe('custom-user-id-456');
+			expect(data.name).toBe('Test Record');
+		});
+
+		it('deserializes legacy flattened JSONL records with backwards-compatibility', () => {
+			const legacyRecord = {
+				_id: 'legacy-doc-999',
+				title: 'Legacy Alert',
+				amount: 100,
+			};
+
+			const { id, data } = deserializeDocument(legacyRecord);
+			expect(id).toBe('legacy-doc-999');
+			expect(data.title).toBe('Legacy Alert');
+			expect(data.amount).toBe(100);
+			expect(data._id).toBeUndefined();
 		});
 	});
 
@@ -205,6 +238,8 @@ describe('Firestore Backup & Export Tooling', () => {
 				'--batch-size=300',
 				'--dry-run',
 				'--no-overwrite',
+				'--ttl-policy=preserve',
+				'--retention-days=180',
 				'--project=custom-proj',
 			]);
 
@@ -213,7 +248,43 @@ describe('Firestore Backup & Export Tooling', () => {
 			expect(opts.batchSize).toBe(300);
 			expect(opts.dryRun).toBe(true);
 			expect(opts.overwrite).toBe(false);
+			expect(opts.ttlPolicy).toBe('preserve');
+			expect(opts.retentionDays).toBe(180);
 			expect(opts.projectId).toBe('custom-proj');
+		});
+
+		it('defaults restore retentionDays from ALERT_STORAGE_RETENTION_DAYS environment variable', () => {
+			const origEnv = process.env.ALERT_STORAGE_RETENTION_DAYS;
+			try {
+				process.env.ALERT_STORAGE_RETENTION_DAYS = '60';
+				const opts = parseRestoreArgs(['--input-dir=/tmp/test-export']);
+				expect(opts.retentionDays).toBe(60);
+			} finally {
+				if (origEnv !== undefined) {
+					process.env.ALERT_STORAGE_RETENTION_DAYS = origEnv;
+				} else {
+					delete process.env.ALERT_STORAGE_RETENTION_DAYS;
+				}
+			}
+		});
+
+		it('throws when restore receives invalid --ttl-policy', () => {
+			expect(() => parseRestoreArgs([
+				'--input-dir=/tmp/test-export',
+				'--ttl-policy=preserv',
+			])).toThrow('Invalid --ttl-policy');
+		});
+
+		it('throws when restore receives invalid --retention-days', () => {
+			expect(() => parseRestoreArgs([
+				'--input-dir=/tmp/test-export',
+				'--retention-days=invalid',
+			])).toThrow('Invalid --retention-days');
+
+			expect(() => parseRestoreArgs([
+				'--input-dir=/tmp/test-export',
+				'--retention-days=-5',
+			])).toThrow('Invalid --retention-days');
 		});
 
 		it('throws when restore is missing --input-dir', () => {
@@ -253,8 +324,8 @@ describe('Firestore Backup & Export Tooling', () => {
 
 			const content = fs.readFileSync(targetFile, 'utf8').trim().split('\n');
 			expect(content.length).toBe(2);
-			expect(JSON.parse(content[0])).toEqual({ _id: 'doc-1', name: 'Doc 1' });
-			expect(JSON.parse(content[1])).toEqual({ _id: 'doc-2', name: 'Doc 2' });
+			expect(JSON.parse(content[0])).toEqual({ __id: 'doc-1', data: { name: 'Doc 1' } });
+			expect(JSON.parse(content[1])).toEqual({ __id: 'doc-2', data: { name: 'Doc 2' } });
 		});
 
 		it('dry-run counts documents without writing files', async () => {
@@ -521,14 +592,17 @@ describe('Firestore Backup & Export Tooling', () => {
 			expect(content).toContain('FIREBASE_PROJECT_ID');
 			expect(content).toContain('GCS_BACKUP_BUCKET');
 			expect(content).toContain('gcloud firestore export');
+			expect(content).toContain('tradingSignalOutcomes');
 		});
 
-		it('restore-firestore-managed.sh requires export URI', () => {
+		it('restore-firestore-managed.sh requires export URI and defaults to tradingSignalOutcomes', () => {
 			const scriptPath = path.join(__dirname, '../../ops/restore-firestore-managed.sh');
 			const content = fs.readFileSync(scriptPath, 'utf8');
 
 			expect(content).toContain('FIRESTORE_EXPORT_URI');
 			expect(content).toContain('gcloud firestore import');
+			expect(content).toContain('tradingSignalOutcomes');
+			expect(content).not.toContain('signalOutcomes,');
 		});
 	});
 });

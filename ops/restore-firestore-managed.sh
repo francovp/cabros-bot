@@ -13,11 +13,11 @@ fi
 export_uri="${1:-${FIRESTORE_EXPORT_URI:-}}"
 if [[ -z "$export_uri" ]]; then
 	echo "Usage: ./ops/restore-firestore-managed.sh <gs://bucket/path/to/export> [collection_ids]" >&2
-	echo "Example: ./ops/restore-firestore-managed.sh gs://my-bucket/firestore-backups/2026-08-30T00-00-00Z alerts,signalOutcomes" >&2
+	echo "Example: ./ops/restore-firestore-managed.sh gs://my-bucket/firestore-backups/2026-08-30T00-00-00Z alerts,tradingSignalOutcomes" >&2
 	exit 1
 fi
 
-collections="${2:-${COLLECTION_IDS:-alerts,alertReplays,signalOutcomes,scannerPresets}}"
+collections="${2:-${COLLECTION_IDS:-alerts,alertReplays,tradingSignalOutcomes,scannerPresets}}"
 
 if ! command -v gcloud >/dev/null 2>&1; then
 	echo "Error: gcloud CLI is required for managed Firestore imports." >&2

@@ -7,8 +7,25 @@ const admin = require('firebase-admin');
 
 const DEFAULT_COLLECTIONS = ['alerts', 'alertReplays', 'tradingSignalOutcomes', 'scannerPresets'];
 const BATCH_SIZE = 400;
+const DEFAULT_RETENTION_DAYS = 90;
+const MAX_RETENTION_DAYS = 3650;
+const VALID_TTL_POLICIES = ['refresh', 'clear', 'preserve'];
+
+function getDefaultRetentionDays() {
+	const rawValue = process.env.ALERT_STORAGE_RETENTION_DAYS;
+	if (rawValue === undefined) {
+		return DEFAULT_RETENTION_DAYS;
+	}
+	const normalized = rawValue.trim();
+	const parsed = Number(normalized);
+	if (/^\d+$/.test(normalized) && Number.isSafeInteger(parsed) && parsed >= 1 && parsed <= MAX_RETENTION_DAYS) {
+		return parsed;
+	}
+	return DEFAULT_RETENTION_DAYS;
+}
 
 function parseArgs(args = process.argv.slice(2)) {
+	const defaultRetention = getDefaultRetentionDays();
 	const options = {
 		inputDir: null,
 		collections: null,
@@ -16,7 +33,7 @@ function parseArgs(args = process.argv.slice(2)) {
 		dryRun: false,
 		overwrite: true,
 		ttlPolicy: 'refresh',
-		retentionDays: 90,
+		retentionDays: defaultRetention,
 		projectId: process.env.FIREBASE_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT,
 	};
 
@@ -37,13 +54,18 @@ function parseArgs(args = process.argv.slice(2)) {
 			options.overwrite = false;
 		} else if (arg.startsWith('--ttl-policy=')) {
 			const policy = arg.split('=')[1].trim();
-			if (['refresh', 'clear', 'preserve'].includes(policy)) {
+			if (VALID_TTL_POLICIES.includes(policy)) {
 				options.ttlPolicy = policy;
+			} else {
+				throw new Error(`Invalid --ttl-policy: "${policy}". Supported values: ${VALID_TTL_POLICIES.join(', ')}`);
 			}
 		} else if (arg.startsWith('--retention-days=')) {
-			const days = Number(arg.split('=')[1]);
-			if (Number.isSafeInteger(days) && days > 0) {
+			const rawDays = arg.split('=')[1].trim();
+			const days = Number(rawDays);
+			if (/^\d+$/.test(rawDays) && Number.isSafeInteger(days) && days >= 1 && days <= MAX_RETENTION_DAYS) {
 				options.retentionDays = days;
+			} else {
+				throw new Error(`Invalid --retention-days: "${rawDays}". Must be an integer between 1 and ${MAX_RETENTION_DAYS}.`);
 			}
 		} else if (arg.startsWith('--project=')) {
 			options.projectId = arg.split('=')[1].trim();
@@ -71,7 +93,8 @@ function applyTtlPolicy(data, collectionName, ttlPolicy = 'refresh', retentionDa
 
 	if (ttlPolicy === 'refresh') {
 		if (data.expiresAt !== undefined || collectionName === 'alerts' || collectionName === 'alertReplays') {
-			const refreshDate = new Date(Date.now() + (retentionDays * 86400000));
+			const safeDays = (typeof retentionDays === 'number' && retentionDays >= 1) ? retentionDays : getDefaultRetentionDays();
+			const refreshDate = new Date(Date.now() + (safeDays * 86400000));
 			let ts;
 			if (typeof admin.firestore.Timestamp?.fromDate === 'function') {
 				ts = admin.firestore.Timestamp.fromDate(refreshDate);
@@ -191,11 +214,28 @@ function deserializeDocument(record, firestore) {
 		return { id: null, data: {} };
 	}
 
-	const id = record._id || null;
+	// Envelope format: { __id: 'docId', data: { ... } }
+	if ('__id' in record && 'data' in record && record.data && typeof record.data === 'object' && !Array.isArray(record.data)) {
+		return {
+			id: record.__id,
+			data: deserializeValue(record.data, firestore),
+		};
+	}
+
+	// Envelope format with _id: { _id: 'docId', data: { ... } } (when keys are strictly _id and data)
+	if ('_id' in record && 'data' in record && Object.keys(record).length === 2 && record.data && typeof record.data === 'object' && !Array.isArray(record.data)) {
+		return {
+			id: record._id,
+			data: deserializeValue(record.data, firestore),
+		};
+	}
+
+	// Legacy flattened format: { _id, ...fields }
+	const id = record._id || record.id || null;
 	const data = {};
 
 	for (const [key, value] of Object.entries(record)) {
-		if (key === '_id') continue;
+		if (key === '_id' || (key === 'id' && !record._id)) continue;
 		data[key] = deserializeValue(value, firestore);
 	}
 
@@ -269,7 +309,11 @@ async function restoreCollectionFile(firestore, collectionName, filePath, option
 	const isDryRun = Boolean(options.dryRun);
 	const overwrite = options.overwrite !== false;
 	const ttlPolicy = options.ttlPolicy || 'refresh';
-	const retentionDays = options.retentionDays || 90;
+	const retentionDays = options.retentionDays || getDefaultRetentionDays();
+
+	if (!VALID_TTL_POLICIES.includes(ttlPolicy)) {
+		throw new Error(`Invalid ttlPolicy: "${ttlPolicy}". Supported values: ${VALID_TTL_POLICIES.join(', ')}`);
+	}
 
 	if (!fs.existsSync(filePath)) {
 		throw new Error(`Collection file not found: ${filePath}`);
@@ -370,6 +414,13 @@ async function runRestore(options = {}) {
 		throw new Error(`Input directory does not exist: ${inputDir}`);
 	}
 
+	const ttlPolicy = options.ttlPolicy || 'refresh';
+	const retentionDays = options.retentionDays || getDefaultRetentionDays();
+
+	if (!VALID_TTL_POLICIES.includes(ttlPolicy)) {
+		throw new Error(`Invalid ttlPolicy: "${ttlPolicy}". Supported values: ${VALID_TTL_POLICIES.join(', ')}`);
+	}
+
 	const isDryRun = Boolean(options.dryRun);
 	const firestore = isDryRun && !options.firestore ? null : (options.firestore || initializeFirestore(options.projectId));
 	const hasExplicitCollections = Array.isArray(options.collections) && options.collections.length > 0;
@@ -412,8 +463,8 @@ async function runRestore(options = {}) {
 			batchSize: options.batchSize || BATCH_SIZE,
 			dryRun: isDryRun,
 			overwrite: options.overwrite !== false,
-			ttlPolicy: options.ttlPolicy,
-			retentionDays: options.retentionDays,
+			ttlPolicy,
+			retentionDays,
 		});
 
 		results.collections[colName] = colResult;

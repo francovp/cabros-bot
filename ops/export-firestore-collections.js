@@ -107,8 +107,8 @@ function serializeDocument(doc) {
 	const rawData = doc.data() || {};
 	const data = serializeValue(rawData);
 	return {
-		_id: doc.id,
-		...data,
+		__id: doc.id,
+		data,
 	};
 }
 
