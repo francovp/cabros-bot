@@ -344,14 +344,23 @@ The system provides optional enrichment of webhook alerts using Google Gemini AP
 - Alert text too long (>4000 chars) → may be truncated by Gemini to avoid cost overruns
 - Non-English alert text → Gemini respects language; returns summary in same language if possible
 
+**Render-or-Skip Gate (CB-583 / Issue #583)**:
+- `enrichAlert` applies a post-call renderability check (`isEnrichmentRenderable` in `src/services/grounding/renderableEnrichment.js`) that discards Gemini output missing all of: insights, sources with title+url, technical levels, and risk metadata. Pure sentiment/score responses (the invisible-enrichment case) are dropped and reported as `enriched: false`.
+- When the gate discards a result, the shared `TokenUsageTracker` is `reset()` so `/api/alerts/summary` aggregates no longer charge for invisible work. Cost telemetry is also fixed: `addUsage()` always estimates cost (using the conservative Gemini 2.5 Flash default when the model name is missing or unknown), so `totalCost: 0` is no longer the default for production traffic.
+- `/api/alerts/summary` exposes the same cost under a clearer `enrichment.costEstimateUsd` alias. `tokenUsage.totalCost` is preserved for back-compat.
+- Behavior is byte-identical for renderable enrichments (sources ≥ 1 or rendered insights) — only invisible work is dropped.
+
 **Where to look first when extending or debugging**:
 - `instrument.js` / `index.js` for lifecycle (loads config; grounding runs per-request when `ENABLE_GEMINI_GROUNDING=true`)
 - `src/services/grounding/grounding.js` for orchestration logic and timeout handling
+- `src/controllers/webhooks/handlers/alert/grounding.js` for the post-call render-or-skip gate and `enrichAlert` flow
+- `src/services/grounding/renderableEnrichment.js` for the renderability predicate
+- `src/lib/tokenUsage.js` for cost accounting, `reset()` and the conservative default pricing
 - `src/controllers/webhooks/handlers/alert/alert.js` for webhook flow and grounding integration
 - `src/services/grounding/gemini.js` for response parsing and prompt variable assembly
 - `src/services/prompts/` for runtime prompt definitions, Langfuse labels, and local fallback behavior (`defaults/*.txt`)
 - Tests in `tests/integration/alert-grounding.test.js` for end-to-end behavior
-- Tests in `tests/unit/grounding.test.js` and `tests/unit/gemini-client.test.js` for core logic
+- Tests in `tests/unit/grounding.test.js`, `tests/unit/gemini-client.test.js`, `tests/unit/renderable-enrichment.test.js`, and `tests/unit/token-usage-cost.test.js` for core logic
 
 ## Centralized Prompt Management (Langfuse-backed)
 
