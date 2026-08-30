@@ -441,10 +441,11 @@ class ScannerPresetSchedulerService {
 					const routing = {
 						channels: preset.channels,
 						telegramChatId: preset.telegramChatId,
+						telegramThreadId: preset.telegramThreadId,
 						whatsappChatId: preset.whatsappChatId,
 						discordWebhookUrl: preset.discordWebhookUrl,
 					};
-					await requestRoutingModule.sendWithNotificationRouting(notificationManager, { text: alertText }, routing, {
+					await requestRoutingModule.sendWithNotificationRouting(notificationManager, { text: alertText, source: 'scanner-preset' }, routing, {
 						parentSpan: sentryService.getActiveSpan(),
 					});
 				}

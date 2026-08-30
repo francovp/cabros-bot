@@ -308,6 +308,33 @@ describe('AlertStorageService', () => {
 			});
 		});
 
+		it('persists telegramThreadId and channel destination overrides', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			const docId = 'topic-doc-123';
+			mockAdd.mockResolvedValueOnce({ id: docId });
+
+			const params = buildParams({
+				text: 'BTCUSDT signal in topic',
+				source: 'webhook-signal',
+				telegramChatId: 'chat-99',
+				telegramThreadId: 456,
+				whatsappChatId: '120363422033474991@g.us',
+				discordWebhookUrl: 'https://discord.com/api/webhooks/123/token',
+			});
+
+			const result = await AlertStorageService.saveAlert(params);
+
+			expect(result).toBe(docId);
+			expect(mockCollection).toHaveBeenCalledWith('alerts');
+			expect(mockAdd).toHaveBeenCalledWith(expect.objectContaining({
+				source: 'webhook-signal',
+				telegramChatId: 'chat-99',
+				telegramThreadId: 456,
+				whatsappChatId: '120363422033474991@g.us',
+				discordWebhookUrl: 'https://discord.com/api/webhooks/123/token',
+			}));
+		});
+
 		it('strips nested undefined properties before persisting without serialization errors', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 			mockAdd.mockResolvedValueOnce({ id: 'sanitized-alert' });
