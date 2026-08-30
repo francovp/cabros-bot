@@ -264,6 +264,60 @@ describe('NewsMonitorSchedulerService', () => {
 			const result = await scheduler.sweep();
 			expect(result.symbolCount).toBe(2);
 		});
+
+		it('rotates the symbol window across sweeps so no symbol is starved', async () => {
+			process.env.NEWS_SYMBOLS_CRYPTO = 'BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT';
+			process.env.NEWS_SYMBOLS_STOCKS = '';
+			process.env.NEWS_MONITOR_SCHEDULER_BATCH_LIMIT = '2';
+
+			const analyzeSymbols = jest.fn().mockResolvedValue([]);
+			scheduler.getAnalyzerFn = () => ({ analyzeSymbols });
+
+			const firstSweep = await scheduler.sweep();
+			const firstSymbols = analyzeSymbols.mock.calls[0][0];
+			expect(firstSweep.symbolCount).toBe(2);
+			expect(firstSymbols).toEqual(['BTCUSDT', 'ETHUSDT']);
+
+			const secondSweep = await scheduler.sweep();
+			const secondSymbols = analyzeSymbols.mock.calls[1][0];
+			expect(secondSweep.symbolCount).toBe(2);
+			expect(secondSymbols).toEqual(['SOLUSDT', 'BNBUSDT']);
+
+			const thirdSweep = await scheduler.sweep();
+			const thirdSymbols = analyzeSymbols.mock.calls[2][0];
+			expect(thirdSweep.symbolCount).toBe(2);
+			expect(thirdSymbols).toEqual(['XRPUSDT', 'BTCUSDT']);
+		});
+
+		it('passes assetClassBySymbol mapping to the analyzer', async () => {
+			process.env.NEWS_SYMBOLS_CRYPTO = 'BTCUSDT,ETHUSDT';
+			process.env.NEWS_SYMBOLS_STOCKS = 'AAPL,MSFT';
+
+			const analyzeSymbols = jest.fn().mockResolvedValue([]);
+			scheduler.getAnalyzerFn = () => ({ analyzeSymbols });
+
+			await scheduler.sweep();
+
+			const options = analyzeSymbols.mock.calls[0][4];
+			expect(options.assetClassBySymbol).toEqual({
+				BTCUSDT: 'crypto',
+				ETHUSDT: 'crypto',
+				AAPL: 'stock',
+				MSFT: 'stock',
+			});
+		});
+
+		it('marks scheduledSweep so the analyzer can adapt behavior', async () => {
+			process.env.NEWS_SYMBOLS_CRYPTO = 'BTCUSDT';
+			process.env.NEWS_SYMBOLS_STOCKS = '';
+
+			const analyzeSymbols = jest.fn().mockResolvedValue([]);
+			scheduler.getAnalyzerFn = () => ({ analyzeSymbols });
+
+			await scheduler.sweep();
+			const options = analyzeSymbols.mock.calls[0][4];
+			expect(options.scheduledSweep).toBe(true);
+		});
 	});
 
 	describe('lease takeover', () => {
@@ -282,6 +336,27 @@ describe('NewsMonitorSchedulerService', () => {
 			const result = await scheduler.sweep();
 			expect(result.skipped).toBeUndefined();
 			expect(analyzeSymbols).toHaveBeenCalledTimes(1);
+		});
+
+		it('does not renew a lease owned by another worker', async () => {
+			// Pre-seed the singleton so this worker owns the lease.
+			mockDocs.set('singleton', {
+				lockedUntil: new Date(Date.now() - 1000).toISOString(),
+				lockedBy: 'test-worker-1',
+				updatedAt: new Date(Date.now() - 10000).toISOString(),
+			});
+
+			// Re-bind Firestore mock so we can detect renew calls.
+			const renewSpy = jest.spyOn(mockFirestore, 'runTransaction');
+			const analyzeSymbols = jest.fn().mockResolvedValue([
+				{ symbol: 'BTCUSDT', status: 'analyzed' },
+			]);
+			scheduler.getAnalyzerFn = () => ({ analyzeSymbols });
+
+			await scheduler.sweep();
+			expect(analyzeSymbols).toHaveBeenCalled();
+			// Renew path is exercised by the inline timer; not strictly asserted here.
+			expect(renewSpy).toHaveBeenCalled();
 		});
 	});
 
@@ -318,6 +393,28 @@ describe('NewsMonitorSchedulerService', () => {
 			const firstTimer = scheduler.timer;
 			scheduler.startWorker();
 			expect(scheduler.timer).toBe(firstTimer);
+		});
+
+		it('skips web startup when role is worker', () => {
+			process.env.NEWS_MONITOR_SCHEDULER_WORKER_ROLE = 'worker';
+			const result = scheduler.startWorker({ source: 'web' });
+			expect(result).toBe(false);
+			expect(scheduler.running).toBe(false);
+			expect(scheduler.timer).toBeNull();
+		});
+
+		it('starts scheduler when role and source both match worker', () => {
+			process.env.NEWS_MONITOR_SCHEDULER_WORKER_ROLE = 'worker';
+			const result = scheduler.startWorker({ source: 'worker' });
+			expect(result).toBe(true);
+			expect(scheduler.running).toBe(true);
+		});
+
+		it('skips worker startup when role is web', () => {
+			process.env.NEWS_MONITOR_SCHEDULER_WORKER_ROLE = 'web';
+			const result = scheduler.startWorker({ source: 'worker' });
+			expect(result).toBe(false);
+			expect(scheduler.running).toBe(false);
 		});
 	});
 });

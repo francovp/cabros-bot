@@ -99,7 +99,7 @@ async function bootstrapApplication() {
 	scannerPresetSchedulerService.botGetter = () => bot;
 	scannerPresetSchedulerService.startWorker();
 	// Start background news-monitor scheduler if enabled
-	newsMonitorSchedulerService.startWorker();
+	newsMonitorSchedulerService.startWorker({ source: 'web' });
 	// Start WhatsApp inbound command bridge if enabled
 	if (whatsAppCommandBridgeService.isEnabled()) {
 		whatsAppCommandBridgeService.start();

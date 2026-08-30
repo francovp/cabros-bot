@@ -154,18 +154,24 @@ class NewsMonitorSchedulerService {
 		};
 	}
 
-	startWorker() {
+	startWorker(options = {}) {
 		if (!this.isEnabled() || this.getWorkerRole() === 'disabled') {
-			return;
+			return false;
+		}
+
+		const source = options.source === 'worker' ? 'worker' : 'web';
+		if (this.getWorkerRole() !== source) {
+			return false;
 		}
 
 		if (this.running) {
-			return;
+			return true;
 		}
 
 		this.running = true;
 		this.shutdownRequested = false;
 		this._scheduleNextSweep(this.getIntervalMs());
+		return true;
 	}
 
 	async stopWorker(options = {}) {
@@ -295,7 +301,11 @@ class NewsMonitorSchedulerService {
 		}
 
 		try {
-			const result = await this._executeAnalysis(symbols, timeoutMs, options);
+			const result = await this._executeAnalysis(symbols, timeoutMs, {
+				...options,
+				renewLease: (nextUntilMs) => this._renewLease(nextUntilMs, leaseMs),
+				leaseMs,
+			});
 			executedCount = result.executedCount;
 			errorCount = result.errorCount;
 			lastErrorMessage = result.lastError;
@@ -331,9 +341,23 @@ class NewsMonitorSchedulerService {
 		const merged = [...cryptoSymbols, ...stockSymbols]
 			.map((s) => String(s).trim().toUpperCase())
 			.filter((s, idx, arr) => arr.indexOf(s) === idx)
-			.filter((s) => validateSymbol(s))
-			.slice(0, batchLimit);
-		return merged;
+			.filter((s) => validateSymbol(s));
+
+		if (merged.length <= batchLimit) {
+			this._cursorIndex = 0;
+			return merged;
+		}
+
+		// Rotate a sliding window across sweeps so symbols past the batch limit
+		// are never starved. The cursor persists in-memory only — multi-replica
+		// fairness is provided by the Firestore lease, not by symbol rotation.
+		const start = this._cursorIndex || 0;
+		const slice = [];
+		for (let i = 0; i < batchLimit && i < merged.length; i += 1) {
+			slice.push(merged[(start + i) % merged.length]);
+		}
+		this._cursorIndex = (start + batchLimit) % merged.length;
+		return slice;
 	}
 
 	_getFirestore() {
@@ -377,6 +401,33 @@ class NewsMonitorSchedulerService {
 		}
 	}
 
+	async _renewLease(nowMs, leaseMs) {
+		const firestore = this._getFirestore();
+		if (!firestore || typeof firestore.runTransaction !== 'function') {
+			return false;
+		}
+
+		try {
+			const docRef = firestore.collection(COLLECTION_NAME).doc('singleton');
+			return await firestore.runTransaction(async (tx) => {
+				const doc = await tx.get(docRef);
+				if (!doc.exists) return false;
+				const data = doc.data() || {};
+				if (data.lockedBy && data.lockedBy !== this.workerId) {
+					return false;
+				}
+				tx.set(docRef, {
+					lockedUntil: new Date(nowMs + leaseMs).toISOString(),
+					updatedAt: new Date(nowMs).toISOString(),
+				}, { merge: true });
+				return true;
+			});
+		} catch (err) {
+			console.warn('[NewsMonitorScheduler] Lease renew failed:', err.message);
+			return false;
+		}
+	}
+
 	async _releaseLease(leaseUntilMs) {
 		const firestore = this._getFirestore();
 		if (!firestore || typeof firestore.runTransaction !== 'function') {
@@ -414,6 +465,19 @@ class NewsMonitorSchedulerService {
 		const timer = setTimeout(() => controller.abort(), timeoutMs);
 		const startedAt = Date.now();
 
+		// Renew the lease halfway through the sweep deadline so the lock
+		// covers the full execution even when analysis exceeds the initial
+		// lease window.
+		const renewLease = typeof options.renewLease === 'function' ? options.renewLease : null;
+		const leaseMs = options.leaseMs || this.getLeaseMs();
+		const renewHandle = renewLease
+			? setTimeout(() => {
+				renewLease(Date.now() + leaseMs).catch((err) => {
+					console.warn('[NewsMonitorScheduler] Lease renew tick failed:', err.message);
+				});
+			}, Math.max(1000, Math.floor(timeoutMs / 2)))
+			: null;
+
 		let executedCount = 0;
 		let errorCount = 0;
 		let lastError = null;
@@ -440,12 +504,18 @@ class NewsMonitorSchedulerService {
 			const tokenUsage = null;
 
 			executedCount = symbols.length;
+			const assetClassBySymbol = this._buildAssetClassBySymbol(symbols);
 			const results = await analyzer.analyzeSymbols(
 				symbols,
 				requestId,
 				tokenUsage,
 				{},
-				{ deadline: startedAt + timeoutMs, signal: controller.signal, scheduledSweep: true },
+				{
+					deadline: startedAt + timeoutMs,
+					signal: controller.signal,
+					scheduledSweep: true,
+					assetClassBySymbol,
+				},
 			);
 
 			if (Array.isArray(results)) {
@@ -469,9 +539,34 @@ class NewsMonitorSchedulerService {
 			});
 		} finally {
 			clearTimeout(timer);
+			if (renewHandle) clearTimeout(renewHandle);
 		}
 
 		return { executedCount, errorCount, lastError };
+	}
+
+	_buildAssetClassBySymbol(symbols) {
+		const cryptoSymbols = new Set(
+			getSymbolsFromEnv('NEWS_SYMBOLS_CRYPTO')
+				.map((s) => String(s).trim().toUpperCase())
+				.filter(Boolean),
+		);
+		const stockSymbols = new Set(
+			getSymbolsFromEnv('NEWS_SYMBOLS_STOCKS')
+				.map((s) => String(s).trim().toUpperCase())
+				.filter(Boolean),
+		);
+
+		const mapping = {};
+		for (const symbol of symbols) {
+			const upper = String(symbol).trim().toUpperCase();
+			if (cryptoSymbols.has(upper)) {
+				mapping[upper] = 'crypto';
+			} else if (stockSymbols.has(upper)) {
+				mapping[upper] = 'stock';
+			}
+		}
+		return mapping;
 	}
 }
 
