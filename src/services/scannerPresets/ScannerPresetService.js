@@ -145,6 +145,8 @@ function clonePreset(preset) {
 	if (Array.isArray(preset.channels)) {
 		cloned.channels = [...preset.channels];
 	}
+	if (preset.ranked !== undefined) cloned.ranked = preset.ranked;
+	if (preset.includeMultiTimeframe !== undefined) cloned.includeMultiTimeframe = preset.includeMultiTimeframe;
 	return cloned;
 }
 
@@ -448,6 +450,13 @@ class ScannerPresetService {
 			lockedUntil,
 			lockedBy,
 		};
+
+		if (params.ranked !== undefined) preset.ranked = Boolean(params.ranked);
+		if (params.includeMultiTimeframe !== undefined) {
+			preset.includeMultiTimeframe = Boolean(params.includeMultiTimeframe);
+		} else if (params.include_multi_timeframe !== undefined) {
+			preset.includeMultiTimeframe = Boolean(params.include_multi_timeframe);
+		}
 
 		if (routing.channels !== undefined) preset.channels = routing.channels;
 		if (routing.telegramChatId !== undefined) preset.telegramChatId = routing.telegramChatId;
@@ -755,6 +764,13 @@ class ScannerPresetService {
 			lockedUntil: typeof data.lockedUntil === 'string' ? data.lockedUntil : null,
 			lockedBy: typeof data.lockedBy === 'string' ? data.lockedBy : null,
 		};
+
+		if (typeof data.ranked === 'boolean') preset.ranked = data.ranked;
+		if (typeof data.includeMultiTimeframe === 'boolean') {
+			preset.includeMultiTimeframe = data.includeMultiTimeframe;
+		} else if (typeof data.include_multi_timeframe === 'boolean') {
+			preset.includeMultiTimeframe = data.include_multi_timeframe;
+		}
 
 		if (Array.isArray(data.channels)) preset.channels = data.channels.filter((c) => typeof c === 'string');
 		if (typeof data.telegramChatId === 'string') preset.telegramChatId = data.telegramChatId;
