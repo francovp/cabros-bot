@@ -25,6 +25,7 @@ const {
 const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteConfigService');
 const { parseTradingViewSignal, TIMEFRAME_MAP } = require('../../../../services/tradingview/parseTradingViewSignal');
 const { signalRepeatCooldown, oppositeKeyOf, buildSignalKey } = require('../../../../services/alerts/signalRepeatCooldown');
+const { signalFlipGuard, buildFlipKey } = require('../../../../services/alerts/signalFlipGuard');
 const { notificationRedriveService } = require('../../../../services/notification/NotificationRedriveService');
 const { isPreviewEnvironment } = require('../../../../lib/deploymentEnvironment');
 
@@ -188,6 +189,52 @@ function getCooldownChannelIdentityForDestination(channel, destination) {
 	return `${channel}:${fingerprint}`;
 }
 
+function evaluateFlipContext(parsedSignal) {
+	if (!parsedSignal || !signalFlipGuard.isEnabled()) {
+		return null;
+	}
+	try {
+		return signalFlipGuard.evaluate(parsedSignal);
+	} catch (error) {
+		console.warn('[Alert] Flip guard evaluation failed, failing open:', error.message);
+		return null;
+	}
+}
+
+function annotateAlertWithFlip(alert, verdict, parsedSignal) {
+	if (!alert || !verdict || !verdict.annotated) {
+		return alert;
+	}
+	const directionLabel = verdict.previousDirection === 'BUY' ? 'COMPRA' : 'VENTA';
+	const hoursLabel = verdict.hoursDelta >= 1
+		? `${Math.round(verdict.hoursDelta * 10) / 10}h`
+		: `${Math.round(verdict.hoursDelta * 60)}min`;
+	const note = `⚠️ señal opuesta hace ${hoursLabel} (${directionLabel})`;
+	if (typeof alert.text === 'string') {
+		alert.text = `${alert.text}\n${note}`;
+	}
+	alert.flipContext = {
+		previousDirection: verdict.previousDirection,
+		previousAt: new Date(verdict.previousAt).toISOString(),
+		hoursDelta: verdict.hoursDelta,
+		timeframe: parsedSignal && parsedSignal.timeframe ? parsedSignal.timeframe : null,
+		exchange: parsedSignal && parsedSignal.exchange ? parsedSignal.exchange : null,
+		symbol: parsedSignal && parsedSignal.symbol ? parsedSignal.symbol : null,
+	};
+	return alert;
+}
+
+function recordFlipFire(parsedSignal) {
+	if (!parsedSignal || !signalFlipGuard.isEnabled()) {
+		return;
+	}
+	try {
+		signalFlipGuard.recordFire(parsedSignal);
+	} catch (error) {
+		console.warn('[Alert] Flip guard recordFire failed, failing open:', error.message);
+	}
+}
+
 function getChannelName(identity) {
 	return String(identity).split(':', 1)[0];
 }
@@ -227,6 +274,14 @@ function postAlert(botOrGetter) {
 
 			if (dryRun) {
 				console.debug('[Alert] Dry-run mode: skipping delivery and Firestore persistence');
+				const dryParsedSignal = parseTradingViewSignal(alert.text);
+				if (dryParsedSignal) {
+					const dryVerdict = evaluateFlipContext(dryParsedSignal);
+					if (dryVerdict && dryVerdict.annotated) {
+						annotateAlertWithFlip(alert, dryVerdict, dryParsedSignal);
+					}
+					recordFlipFire(dryParsedSignal);
+				}
 				return res.json({
 					success: true,
 					dryRun: true,
@@ -235,6 +290,7 @@ function postAlert(botOrGetter) {
 						text: alert.text,
 						enrichedData: alert.enriched || null,
 					},
+					flipContext: alert.flipContext || undefined,
 					tokenUsage: tokenUsageJSON,
 					requestId,
 				});
@@ -247,6 +303,23 @@ function postAlert(botOrGetter) {
 			}
 			validateNotificationRouting(notificationManager, routing);
 			const requestedChannels = getRequestedChannels(notificationManager, routing);
+
+			// Opt-in opposite-flip guard: when the previous signal for the same
+			// `(exchange, symbol, timeframe)` had the opposite side within the
+			// cooldown window, annotate the alert text with a "señal opuesta"
+			// line and record flipContext for storage. Delivery is never blocked
+			// (fail-open); storage errors degrade to a non-annotated delivery.
+			let flipContextApplied = false;
+			const parsedForFlip = parseTradingViewSignal(alert.text);
+			if (parsedForFlip) {
+				const verdict = evaluateFlipContext(parsedForFlip);
+				if (verdict && verdict.annotated) {
+					annotateAlertWithFlip(alert, verdict, parsedForFlip);
+					signalFlipGuard.recordAnnotation();
+					flipContextApplied = true;
+				}
+				recordFlipFire(parsedForFlip);
+			}
 
 			// Opt-in repeat suppression: same (exchange, symbol, timeframe, side)
 			// inside its cooldown window skips channel delivery but is still
@@ -406,6 +479,7 @@ function postAlert(botOrGetter) {
 				results,
 				enriched,
 				suppressedRepeat: suppressedRepeat || undefined,
+				flipContext: alert.flipContext || undefined,
 				tokenUsage: tokenUsageJSON,
 				requestedChannels,
 				deliveredChannels,
@@ -443,6 +517,7 @@ function postAlert(botOrGetter) {
 				tradingViewEnrichmentApplied: Boolean(alert.enriched && alert.enriched.tradingViewEnrichmentApplied === true),
 				tradingViewEnrichmentStatus: alert.tradingViewEnrichmentStatus,
 				suppressedRepeat,
+				flipContext: alert.flipContext || undefined,
 				source: body.source || 'webhook-alert',
 				telegramChatId: routing.telegramChatId,
 				telegramThreadId: routing.telegramThreadId,

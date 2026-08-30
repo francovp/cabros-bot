@@ -308,6 +308,62 @@ describe('AlertStorageService', () => {
 			});
 		});
 
+		it('persists sanitized flipContext when provided', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockAdd.mockResolvedValueOnce({ id: 'flip-doc-1' });
+			const params = buildParams({
+				text: 'BINANCE:BTCUSDT(60) cambió a señal de COMPRA',
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+				flipContext: {
+					previousDirection: 'SELL',
+					previousAt: '2026-08-25T20:01:00.000Z',
+					hoursDelta: 12,
+					timeframe: '1h',
+					exchange: 'BINANCE',
+					symbol: 'BTCUSDT',
+				},
+			});
+			await AlertStorageService.saveAlert(params);
+			const callArgs = mockAdd.mock.calls[0][0];
+			expect(callArgs.flipContext).toEqual({
+				previousDirection: 'SELL',
+				previousAt: '2026-08-25T20:01:00.000Z',
+				hoursDelta: 12,
+				timeframe: '1h',
+				exchange: 'BINANCE',
+				symbol: 'BTCUSDT',
+			});
+		});
+
+		it('omits flipContext when previousDirection is invalid', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockAdd.mockResolvedValueOnce({ id: 'flip-doc-2' });
+			const params = buildParams({
+				flipContext: {
+					previousDirection: 'HOLD',
+					previousAt: '2026-08-25T20:01:00.000Z',
+					hoursDelta: 12,
+				},
+			});
+			await AlertStorageService.saveAlert(params);
+			expect(mockAdd.mock.calls[0][0].flipContext).toBeUndefined();
+		});
+
+		it('rounds and clamps negative flipContext.hoursDelta to null', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockAdd.mockResolvedValueOnce({ id: 'flip-doc-3' });
+			const params = buildParams({
+				flipContext: {
+					previousDirection: 'BUY',
+					previousAt: '2026-08-25T20:01:00.000Z',
+					hoursDelta: -1,
+				},
+			});
+			await AlertStorageService.saveAlert(params);
+			expect(mockAdd.mock.calls[0][0].flipContext).toBeUndefined();
+		});
+
 		it('persists telegramThreadId and channel destination overrides', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 			const docId = 'topic-doc-123';
@@ -1611,6 +1667,12 @@ describe('AlertStorageService', () => {
 						totalTokens: 30,
 						totalCost: 0.001,
 					},
+					flipRate: {
+						totalAlerts: 2,
+						flippedAlerts: 0,
+						flipRatePercent: 0,
+						byPreviousDirection: { BUY: 0, SELL: 0 },
+					},
 				},
 				delivery: {
 					totalSuccess: 2,
@@ -2173,6 +2235,78 @@ describe('AlertStorageService', () => {
 				TSM: 1,
 				SPX: 1,
 				unknown: 1,
+			});
+		});
+
+		it('aggregates flipRate from stored flipContext across alerts', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('flip-1', {
+						receivedAt: buildTimestamp('2026-08-25T20:01:00.000Z'),
+						enriched: false,
+						source: 'webhook',
+						text: 'BINANCE:ETHUSDT(60) cambió a señal de COMPRA',
+						flipContext: {
+							previousDirection: 'SELL',
+							previousAt: '2026-08-25T18:01:00.000Z',
+							hoursDelta: 2,
+						},
+					}),
+					buildQueryDoc('flip-2', {
+						receivedAt: buildTimestamp('2026-08-25T21:01:00.000Z'),
+						enriched: false,
+						source: 'webhook',
+						text: 'BINANCE:ETHUSDT(60) cambió a señal de VENTA',
+						flipContext: {
+							previousDirection: 'BUY',
+							previousAt: '2026-08-25T20:01:00.000Z',
+							hoursDelta: 1,
+						},
+					}),
+					buildQueryDoc('plain', {
+						receivedAt: buildTimestamp('2026-08-25T22:01:00.000Z'),
+						enriched: false,
+						source: 'webhook',
+						text: 'BINANCE:BTCUSDT(60) cambió a señal de COMPRA',
+					}),
+				],
+			});
+			const result = await AlertStorageService.summarizeAlerts({
+				from: '2026-08-25T00:00:00.000Z',
+				to: '2026-08-26T00:00:00.000Z',
+				limit: 100,
+			});
+			expect(result.enrichment.flipRate.totalAlerts).toBe(3);
+			expect(result.enrichment.flipRate.flippedAlerts).toBe(2);
+			expect(result.enrichment.flipRate.flipRatePercent).toBe(66.67);
+			expect(result.enrichment.flipRate.byPreviousDirection).toEqual({ BUY: 1, SELL: 1 });
+		});
+
+		it('flipRate is zero-safe when no alerts carry flipContext', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('plain-only', {
+						receivedAt: buildTimestamp('2026-08-25T20:01:00.000Z'),
+						enriched: false,
+						source: 'webhook',
+						text: 'BINANCE:BTCUSDT(60) cambió a señal de COMPRA',
+					}),
+				],
+			});
+			const result = await AlertStorageService.summarizeAlerts({
+				from: '2026-08-25T00:00:00.000Z',
+				to: '2026-08-26T00:00:00.000Z',
+				limit: 100,
+			});
+			expect(result.enrichment.flipRate).toEqual({
+				totalAlerts: 1,
+				flippedAlerts: 0,
+				flipRatePercent: 0,
+				byPreviousDirection: { BUY: 0, SELL: 0 },
 			});
 		});
 	});

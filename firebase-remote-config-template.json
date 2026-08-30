@@ -342,10 +342,24 @@
       },
       "description": "Cooldown length in alert-timeframe bars for same-signal repeat suppression",
       "valueType": "NUMBER"
+    },
+    "ENABLE_ALERT_FLIP_GUARD": {
+      "defaultValue": {
+        "value": "false"
+      },
+      "description": "Annotate (fail-open) opposite-direction flips for the same exchange/symbol/timeframe within the cooldown window with a 'señal opuesta' line",
+      "valueType": "BOOLEAN"
+    },
+    "ALERT_FLIP_COOLDOWN_HOURS": {
+      "defaultValue": {
+        "value": "24"
+      },
+      "description": "Cooldown length in hours for opposite-signal flip annotation (1-168)",
+      "valueType": "NUMBER"
     }
   },
   "version": {
-    "versionNumber": "21",
+    "versionNumber": "22",
     "isLegacy": true
   }
 }

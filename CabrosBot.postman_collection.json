@@ -1289,6 +1289,78 @@
               }
             }
           ]
+        },
+        {
+          "name": "POST Send Alert (opposite-flip annotated)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"text\": \"BINANCE:ETHUSDT (4h) COMPRA — segundo disparo tras un VENTA reciente\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/webhook/alert",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "webhook",
+                "alert"
+              ]
+            },
+            "description": "Send the opposite side of a recent signal for the same exchange/symbol/timeframe inside ALERT_FLIP_COOLDOWN_HOURS (default 24) with ENABLE_ALERT_FLIP_GUARD=true. The response carries flipContext with previousDirection, previousAt, hoursDelta, and the alert text is annotated with a ⚠️ señal opuesta line. Delivery is never blocked (fail-open); cache errors fall back to the original alert."
+          },
+          "response": [
+            {
+              "name": "Annotated flip",
+              "status": "OK",
+              "code": 200,
+              "body": "{\"success\":true,\"results\":[{\"channel\":\"telegram\",\"success\":true}],\"enriched\":false,\"flipContext\":{\"previousDirection\":\"SELL\",\"previousAt\":\"2026-08-25T18:01:00.000Z\",\"hoursDelta\":2,\"timeframe\":\"4h\",\"exchange\":\"BINANCE\",\"symbol\":\"ETHUSDT\"},\"requestedChannels\":[\"telegram\"],\"deliveredChannels\":[\"telegram\"],\"requestId\":\"req-flip-456\"}",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-api-key",
+                    "value": "{{apiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"text\": \"BINANCE:ETHUSDT (4h) COMPRA — opposite flip\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/webhook/alert",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "webhook",
+                    "alert"
+                  ]
+                }
+              }
+            }
+          ]
         }
       ]
     },

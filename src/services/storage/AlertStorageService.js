@@ -193,6 +193,12 @@ function formatAlertDocument(doc) {
 	if (data.suppressedRepeat === true) {
 		docObj.suppressedRepeat = true;
 	}
+	if (data.flipContext && typeof data.flipContext === 'object') {
+		const sanitizedFlipContext = sanitizeFlipContext(data.flipContext);
+		if (sanitizedFlipContext) {
+			docObj.flipContext = sanitizedFlipContext;
+		}
+	}
 	if (typeof data.eventCategory === 'string') {
 		docObj.eventCategory = data.eventCategory;
 	}
@@ -229,6 +235,39 @@ function formatAlertDocument(doc) {
 function getNumericValue(value) {
 	const numeric = Number(value);
 	return Number.isFinite(numeric) ? numeric : 0;
+}
+
+function sanitizeFlipContext(flipContext) {
+	if (!flipContext || typeof flipContext !== 'object' || Array.isArray(flipContext)) {
+		return null;
+	}
+	const direction = ['BUY', 'SELL'].includes(flipContext.previousDirection)
+		? flipContext.previousDirection
+		: null;
+	const previousAt = typeof flipContext.previousAt === 'string' && flipContext.previousAt.trim()
+		? flipContext.previousAt.trim()
+		: null;
+	const hoursDelta = typeof flipContext.hoursDelta === 'number' && Number.isFinite(flipContext.hoursDelta) && flipContext.hoursDelta >= 0
+		? Math.round(flipContext.hoursDelta * 10) / 10
+		: null;
+	if (!direction || !previousAt || hoursDelta === null) {
+		return null;
+	}
+	const sanitized = {
+		previousDirection: direction,
+		previousAt,
+		hoursDelta,
+	};
+	if (typeof flipContext.timeframe === 'string' && flipContext.timeframe.trim()) {
+		sanitized.timeframe = flipContext.timeframe.trim();
+	}
+	if (typeof flipContext.exchange === 'string' && flipContext.exchange.trim()) {
+		sanitized.exchange = flipContext.exchange.trim();
+	}
+	if (typeof flipContext.symbol === 'string' && flipContext.symbol.trim()) {
+		sanitized.symbol = flipContext.symbol.trim();
+	}
+	return sanitized;
 }
 
 function normalizePromptProvenance(provenance) {
@@ -609,6 +648,19 @@ function extractAlertSymbol(data) {
 	return result.symbol;
 }
 
+function collectFlipRate(bucket, flipContext) {
+	if (!bucket) return;
+	bucket.totalAlerts += 1;
+	if (flipContext && typeof flipContext === 'object'
+		&& ['BUY', 'SELL'].includes(flipContext.previousDirection)) {
+		bucket.flippedAlerts += 1;
+		bucket.byPreviousDirection[flipContext.previousDirection] += 1;
+	}
+	bucket.flipRatePercent = bucket.totalAlerts > 0
+		? Number(((bucket.flippedAlerts / bucket.totalAlerts) * 100).toFixed(2))
+		: 0;
+}
+
 function addTokenUsage(totals, tokenUsage) {
 	if (!tokenUsage || typeof tokenUsage !== 'object') {
 		return;
@@ -970,6 +1022,7 @@ async function saveAlertInternal({
 	tradingViewEnrichmentApplied,
 	tradingViewEnrichmentStatus,
 	suppressedRepeat,
+	flipContext,
 	processingTimeMs,
 	source,
 	eventCategory,
@@ -1031,6 +1084,10 @@ async function saveAlertInternal({
 		if (suppressedRepeat === true) {
 			document.suppressedRepeat = true;
 			document.deliveryResults = [];
+		}
+		const sanitizedFlipContext = sanitizeFlipContext(flipContext);
+		if (sanitizedFlipContext) {
+			document.flipContext = sanitizedFlipContext;
 		}
 		const normalizedProcessingTimeMs = normalizeProcessingTimeMs(processingTimeMs);
 		if (normalizedProcessingTimeMs !== null) {
@@ -1440,6 +1497,12 @@ async function summarizeAlerts({ from, to, limit, source, enriched } = {}) {
 				totalTokens: 0,
 				totalCost: 0,
 			},
+			flipRate: {
+				totalAlerts: 0,
+				flippedAlerts: 0,
+				flipRatePercent: 0,
+				byPreviousDirection: { BUY: 0, SELL: 0 },
+			},
 		},
 		delivery: {
 			totalSuccess: 0,
@@ -1495,6 +1558,7 @@ async function summarizeAlerts({ from, to, limit, source, enriched } = {}) {
 		addTokenUsage(summary.enrichment.tokenUsage, data.tokenUsage);
 		addDeliverySummary(summary.delivery, data.deliveryResults);
 		collectLatency(processingLatencySamples, data.processingTimeMs ?? data.processing_time_ms);
+		collectFlipRate(summary.enrichment.flipRate, data.flipContext);
 
 		if (Array.isArray(data.deliveryResults)) {
 			for (const result of data.deliveryResults) {
