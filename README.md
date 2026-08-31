@@ -208,6 +208,7 @@ pnpm test:firebase
 #### Server Configuration
 
 - `PORT` - HTTP server port (default: `80`)
+- HTTP server timeouts are fixed at 10 seconds for headers, 120 seconds for complete requests, and 30 seconds for keep-alive connections to bound slow-client resource use.
 - `SHUTDOWN_TIMEOUT_MS` - Maximum graceful shutdown budget in milliseconds (default: `10000`, hard cap: `30000`); after the deadline active jobs receive a bounded finalization attempt and are persisted as retryable cancellations, remaining HTTP connections are force-closed, and the process exits
 - `RENDER` - Render.com deployment flag (used internally)
 - `IS_PULL_REQUEST` - Render preview environment flag (disables bot in PRs)
