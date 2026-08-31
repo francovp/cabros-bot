@@ -2791,6 +2791,20 @@
                   "properties": {
                     "idempotencyReplayed": {
                       "type": "boolean"
+                    },
+                    "truncated": {
+                      "type": "boolean",
+                      "description": "True when the inbound message exceeded MAX_MESSAGE_LENGTH (4000) and was clipped before delivery. Caller can detect silent content loss; downstream delivery proceeds with the truncated text."
+                    },
+                    "originalLength": {
+                      "type": "integer",
+                      "description": "Inbound message character count before truncation. Only present when truncated=true.",
+                      "minimum": 4001
+                    },
+                    "deliveredLength": {
+                      "type": "integer",
+                      "description": "Character count of the text actually passed to the notification channels. Only present when truncated=true.",
+                      "minimum": 1
                     }
                   }
                 }
@@ -2800,6 +2814,22 @@
               "success": {
                 "value": {
                   "success": true,
+                  "results": [
+                    {
+                      "channel": "telegram",
+                      "success": true,
+                      "messageId": "tg-msg-123"
+                    }
+                  ]
+                }
+              },
+              "truncated": {
+                "summary": "Inbound message exceeded MAX_MESSAGE_LENGTH",
+                "value": {
+                  "success": true,
+                  "truncated": true,
+                  "originalLength": 6000,
+                  "deliveredLength": 4003,
                   "results": [
                     {
                       "channel": "telegram",
