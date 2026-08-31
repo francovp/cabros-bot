@@ -1540,3 +1540,14 @@ Binance 451 / `restricted location` errors are now classified as `binance_region
 - `BINANCE_DATA_BASE_URL` — Optional override for all Binance market-data REST calls. Default `https://api.binance.com` (preserves existing behavior when unset). Must be an http(s) URL; live trading also requires `https://`. Classified as **environment-only** for Remote Config parity (external destination; secrets/credentials/external-endpoint policy excludes it).
 
 No endpoint, OpenAPI, Postman, or Remote Config contract changed; the new env var follows the standard `environment-only` classification.
+
+## Admin Status Dependency Explorer (Issue #673)
+
+The dedicated `/admin` Status view now renders the existing `/api/status` response as an operational dashboard: overview metrics, delivery-channel cards, expandable dependency cards, enabled-capability chips, and a collapsed raw JSON response with copy support. Dependency cards show safe timing, counters, configuration, provider, error-category, storage, scheduler, and worker fields using DOM text nodes only. Client-side status filters and search sort attention items ahead of healthy dependencies and provide a filtered empty state. The existing overview dashboard continues to use the shared status renderer.
+
+**Coverage**:
+- `tests/unit/admin-client.test.js` — Status explorer rendering, attention-first ordering, safe error text, search, tone filtering, refresh timeout/auth behavior, and redacted output.
+- `src/admin/admin.js` / `src/admin/admin.css` — Dedicated explorer view, detail cards, filters, timestamp metadata, and responsive styling.
+- `public/admin/admin.js` / `public/admin/admin.css` — Hosting build output synchronized with source assets.
+
+No endpoint, OpenAPI, Postman, environment variable, or Remote Config contract changed.

@@ -265,6 +265,76 @@ describe('admin browser client', () => {
 		expect(overview.textContent).not.toContain('undefined');
 	});
 
+	it('renders the status view as a searchable dependency explorer', async () => {
+		const status = {
+			service: { name: 'cabros-bot', environment: 'production', commit: 'abc123' },
+			featureFlags: { telegramBot: true },
+			deliveryChannels: {
+				telegram: { enabled: true, status: 'ready' },
+				whatsapp: { enabled: false, status: 'disabled' },
+			},
+			dependencies: {
+				telegram: { enabled: true, configured: true, status: 'ready', provider: 'Telegram' },
+				tradingViewMcp: {
+					enabled: true,
+					configured: true,
+					status: 'degraded',
+					provider: 'MCP',
+					lastCheckedAt: '2026-08-31T00:00:00Z',
+					lastSuccessAt: '2026-08-30T23:00:00Z',
+					lastFailureAt: '2026-08-30T23:30:00Z',
+					lastErrorCategory: '<img src=x onerror=alert(1)>',
+					successCount: 4,
+					failureCount: 2,
+				},
+				scannerPresetStorage: {
+					enabled: false,
+					configured: false,
+					status: 'disabled',
+					mode: 'ephemeral',
+					backend: 'memory',
+				},
+			},
+		};
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/status') return response(status);
+				return response({});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'status');
+		await flush();
+
+		const view = browser.elementsById.view;
+		const cards = () => findAll(view, (node) => node.className.includes('status-detail-card'));
+		expect(view.textContent).toContain('Dependency health');
+		expect(view.textContent).toContain('TradingView MCP');
+		expect(view.textContent).toContain('Needs attention');
+		expect(view.textContent).toContain('<img src=x onerror=alert(1)>');
+		expect(view.textContent).toContain('Successes4');
+		expect(view.textContent).toContain('ephemeral');
+		expect(cards()[0].textContent).toContain('TradingView MCP');
+		expect(cards()[1].textContent).toContain('Scanner preset storage');
+		expect(findAll(view, (node) => node.tagName === 'IMG')).toHaveLength(0);
+
+		const search = find(view, (node) => node.tagName === 'INPUT' && node.name === 'dependency-search');
+		search.value = 'Telegram';
+		await search.dispatch('input');
+		expect(cards()).toHaveLength(1);
+		expect(cards()[0].textContent).toContain('Telegram');
+
+		search.value = '';
+		await search.dispatch('input');
+		const tone = find(view, (node) => node.tagName === 'SELECT' && node.name === 'dependency-tone');
+		tone.value = 'ready';
+		await tone.dispatch('change');
+		expect(cards()).toHaveLength(1);
+		expect(cards()[0].textContent).toContain('Telegram');
+	});
+
 	it('waits for an API key before loading protected overview status', async () => {
 		const requests = [];
 		const browser = createBrowser({
@@ -408,10 +478,10 @@ describe('admin browser client', () => {
 			},
 		});
 		await flush();
-		browser.elementsById['api-key'].value = 'test-key';
 		await selectView(browser, 'status');
-		const form = findForm(browser.elementsById.view, 'GET /api/status');
-		await form.dispatch('submit');
+		browser.elementsById['api-key'].value = 'test-key';
+		const refreshButton = findButton(browser.elementsById.view, 'Refresh status');
+		await refreshButton.dispatch('click');
 		await flush();
 
 		expect(browser.timers.size).toBe(1);
@@ -419,7 +489,7 @@ describe('admin browser client', () => {
 		await flush();
 
 		expect(signal.aborted).toBe(true);
-		expect(form.textContent).toContain('Network error');
+		expect(browser.elementsById.view.textContent).toContain('Network error');
 		expect(browser.timers.size).toBe(0);
 	});
 
@@ -591,9 +661,9 @@ describe('admin browser client', () => {
 		const overviewViewButton = find(browser.body, (node) => node.dataset.view === 'overview');
 		expect(statusViewButton.attributes['aria-current']).toBe('page');
 		expect(overviewViewButton.attributes['aria-current']).toBeUndefined();
-		const statusForm = findForm(browser.elementsById.view, 'GET /api/status');
-		expect(statusForm).toBeDefined();
-		await statusForm.dispatch('submit');
+		const refreshButton = findButton(browser.elementsById.view, 'Refresh status');
+		expect(refreshButton).toBeDefined();
+		await refreshButton.dispatch('click');
 		await flush();
 		expect(requests.at(-1)[1].headers.Authorization).toBe('Bearer firebase-token');
 
@@ -626,15 +696,15 @@ describe('admin browser client', () => {
 		await browser.elementsById['save-key'].dispatch('click');
 
 		await selectView(browser, 'status');
-		const statusForm = findForm(browser.elementsById.view, 'GET /api/status');
-		await statusForm.dispatch('submit');
+		const refreshButton = findButton(browser.elementsById.view, 'Refresh status');
+		await refreshButton.dispatch('click');
 		await flush();
 
 		expect(browser.helperCalls.at(-1).apiKey).toBe('current-secret');
 		expect(events.at(-1)[2].headers['x-api-key']).toBe('current-secret');
 		expect(browser.storage.get('cabros-admin-api-key')).toBe('current-secret');
-		expect(statusForm.textContent).toContain('[REDACTED]');
-		expect(statusForm.textContent).not.toContain('current-secret');
+		expect(browser.elementsById.view.textContent).toContain('[REDACTED]');
+		expect(browser.elementsById.view.textContent).not.toContain('current-secret');
 		expect(events.filter(([type]) => type === 'fetch').every(([, url]) => !url.includes('current-secret'))).toBe(true);
 
 		await selectView(browser, 'alerts');
@@ -1287,12 +1357,9 @@ describe('admin browser client', () => {
 		await flush();
 		browser.elementsById['api-key'].value = 'test-key';
 		await selectView(browser, 'status');
-
-		const statusForm = findForm(browser.elementsById.view, 'GET /api/status');
-		const pendingSubmit = statusForm.dispatch('submit');
 		await flush();
 
-		const output = find(statusForm, (node) => node.tagName === 'PRE');
+		const output = find(browser.elementsById.view, (node) => node.tagName === 'PRE');
 		expect(find(output, (node) => node.className === 'spinner')).toBeDefined();
 		expect(output.textContent).toContain('Request in progress');
 
@@ -1302,7 +1369,6 @@ describe('admin browser client', () => {
 			deliveryChannels: {},
 			dependencies: {},
 		}));
-		await pendingSubmit;
 		await flush();
 		expect(output.textContent).toContain('cabros-bot');
 	});
