@@ -3287,6 +3287,32 @@ describe('admin browser client', () => {
 		expect(detailForm.textContent).toContain('cb-order-42');
 	});
 
+	it('rejects exponent notation and canonicalizes order IDs', async () => {
+		const requests = [];
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				requests.push(url);
+				return response({ success: true, environment: 'testnet', order: { status: 'FILLED' } });
+			},
+		});
+		await flush();
+		await selectView(browser, 'orders');
+
+		const detailForm = findForm(browser.elementsById.view, 'Get single order');
+		detailForm.elements.symbol.value = 'BTCUSDT';
+		detailForm.elements['path-orderId'].value = '1e2';
+		await detailForm.dispatch('submit');
+		await flush();
+		expect(requests).toHaveLength(0);
+		expect(detailForm.textContent).toContain('orderId must be a positive integer');
+
+		detailForm.elements['path-orderId'].value = '0042';
+		await detailForm.dispatch('submit');
+		await flush();
+		expect(requests.at(-1)).toBe('/api/trading/binance/orders?symbol=BTCUSDT&orderId=42');
+	});
+
 	it('looks up a single Binance order by origClientOrderId through the dedicated form', async () => {
 		const requests = [];
 		const browser = createBrowser({

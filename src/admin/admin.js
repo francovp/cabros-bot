@@ -2497,6 +2497,11 @@ const ORDER_LIST_QUERY_VALIDATION = {
 		const parsed = Number(normalized);
 		return /^\d+$/.test(normalized) && Number.isFinite(parsed) && parsed >= 1 && parsed <= 100;
 	},
+	orderId: (value) => {
+		const normalized = String(value).trim();
+		const parsed = Number(normalized);
+		return /^\d+$/.test(normalized) && Number.isFinite(parsed) && parsed > 0;
+	},
 };
 
 const trimFormValue = (value) => (value === undefined || value === null ? '' : String(value).trim());
@@ -2621,8 +2626,12 @@ const createOrderLookupForm = () => {
 			showError(output, 'orderId or origClientOrderId is required for single-order lookup.');
 			return;
 		}
+		if (orderIdValue && !ORDER_LIST_QUERY_VALIDATION.orderId(orderIdValue)) {
+			showError(output, 'orderId must be a positive integer.');
+			return;
+		}
 		const query = { symbol: symbolValue };
-		if (orderIdValue) query.orderId = orderIdValue;
+		if (orderIdValue) query.orderId = orderIdValue.replace(/^0+(?=\d)/, '');
 		else if (origClientOrderIdValue) query.origClientOrderId = origClientOrderIdValue;
 		const data = await sendRequest({
 			definition,
