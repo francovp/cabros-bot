@@ -2,6 +2,8 @@ const {
 	parseExpandedAnalysisAlertRequest,
 	buildExpandedAnalysisAlertReport,
 	buildReportRow,
+	selectTakeProfitWithMinRatio,
+	getRiskRewardRatio,
 } = require('../../src/services/tradingview/expandedAnalysisAlertReport');
 
 describe('Expanded Analysis Alert report', () => {
@@ -534,6 +536,122 @@ describe('Expanded Analysis Alert report', () => {
 			expect(report).toContain('- *Stop Loss sugerido:* $106.00');
 			expect(report).toContain('- *Target sugerido:* $88.00');
 			expect(report).toContain('- *Invalidación:* $6.00 por encima del precio actual');
+		});
+	});
+
+	describe('selectTakeProfitWithMinRatio', () => {
+		it('prefers the next S/R level when the nearest resistance fails the floor', () => {
+			const result = selectTakeProfitWithMinRatio({
+				price: 100,
+				stopLoss: 94,
+				atr: 4,
+				techData: {
+					support_resistance: {
+						nearest_resistance: 102,
+						resistance_1: 130,
+						resistance_2: 150,
+					},
+				},
+				side: 'BUY',
+				minRatio: 1.5,
+			});
+			expect(result).toBe(130);
+		});
+
+		it('falls back to the opposite Bollinger band when S/R candidates fail', () => {
+			const result = selectTakeProfitWithMinRatio({
+				price: 100,
+				stopLoss: 94,
+				atr: 4,
+				techData: { support_resistance: { nearest_resistance: 102 } },
+				bollinger: { bb_upper: 116 },
+				side: 'BUY',
+				minRatio: 1.5,
+			});
+			expect(result).toBe(116);
+		});
+
+		it('uses the ATR fallback when no S/R or Bollinger candidate qualifies', () => {
+			const result = selectTakeProfitWithMinRatio({
+				price: 100,
+				stopLoss: 94,
+				atr: 4,
+				techData: {},
+				bollinger: {},
+				side: 'BUY',
+				minRatio: 1.5,
+			});
+			expect(result).toBe(112);
+		});
+
+		it('returns null when no candidate clears the floor', () => {
+			const result = selectTakeProfitWithMinRatio({
+				price: 100,
+				stopLoss: 80,
+				atr: 1,
+				techData: { support_resistance: { nearest_resistance: 102, resistance_1: 105 } },
+				bollinger: { bb_upper: 108 },
+				side: 'BUY',
+				minRatio: 5,
+			});
+			expect(result).toBeNull();
+		});
+
+		it('handles SELL-side geometry with progressively nearer supports', () => {
+			const result = selectTakeProfitWithMinRatio({
+				price: 100,
+				stopLoss: 115,
+				atr: 4,
+				techData: {
+					support_resistance: {
+						nearest_support: 98,
+						support_1: 80,
+						support_2: 70,
+					},
+				},
+				side: 'SELL',
+				minRatio: 1.5,
+			});
+			// SELL risk = 115-100 = 15.
+			// nearest_support 98 -> reward = 2, R:R = 2/15 = 0.13 (skip).
+			// support_1 80 -> reward = 20, R:R = 20/15 = 1.33 (skip).
+			// support_2 70 -> reward = 30, R:R = 30/15 = 2.0 (accept).
+			expect(result).toBe(70);
+		});
+	});
+
+	describe('buildReportRow plan-quality mirror', () => {
+		it('renders the controller R:R + plan-quality line for sub-floor plans', () => {
+			const report = buildExpandedAnalysisAlertReport([
+				{
+					input: { raw: 'BINANCE:ETHUSDT', exchange: 'BINANCE', symbol: 'ETHUSDT' },
+					analysis: {
+						technical: {
+							price_data: { current_price: 2495.64 },
+							technical_indicators: { RSI: 55 },
+							support_resistance: { nearest_resistance: 2655.56 },
+							bollinger_bands: { lower: 1564.74 },
+						},
+						confluence: { recommendation: 'BUY', confidence: 'HIGH' },
+					},
+					side: 'BUY',
+					risk: {
+						entry_price: 2495.64,
+						side: 'BUY',
+						stop_loss: 1564.74,
+						target: 2655.56,
+						invalidation_level: 1564.74,
+						risk_reward_ratio: 0.1718,
+						source: 'bollinger',
+						valid: false,
+						rejectionReason: 'risk_reward_below_minimum',
+						minRiskRewardRatio: 1.5,
+					},
+				},
+			], { now: new Date('2026-05-22T12:00:00Z') });
+
+			expect(report).toContain('- ⚠️ *R/R por debajo del mínimo 1.50:* plan descartado');
+			expect(report).toContain('- *Risk/Reward:* 0.17x');
 		});
 	});
 });

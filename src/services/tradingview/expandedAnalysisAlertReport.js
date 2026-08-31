@@ -193,7 +193,7 @@ function buildExpandedAnalysisAlertReport(items = [], options = {}) {
 	return lines.join('\n');
 }
 
-function buildReportRow({ input = {}, analysis = {}, multiTimeframe, side = 'BUY' }) {
+function buildReportRow({ input = {}, analysis = {}, multiTimeframe, side = 'BUY', risk = null }) {
 	const techData = analysis.technical || analysis || {};
 	const priceData = techData.price_data || {};
 	const indicators = techData.technical_indicators || {};
@@ -210,15 +210,28 @@ function buildReportRow({ input = {}, analysis = {}, multiTimeframe, side = 'BUY
 	const macdDirection = getMacdDirection(macd, macdSignal);
 	const volume = getVolumeLabel(techData);
 	const stopLossMeta = side ? getStopLossMeta(price, atr, bollinger, currentBollinger, side) : { value: null, source: 'missing' };
-	const stopLoss = stopLossMeta.value;
+	let stopLoss = stopLossMeta.value;
 	const isOverbought = rsi !== null && rsi > 70;
-	const takeProfit = !side
+	let takeProfit = !side
 		? null
 		: isOverbought && side !== 'SELL'
 			? null
 			: getTakeProfitTarget(price, atr, bollinger, currentBollinger, techData, side);
 	const invalidationDistance = getInvalidationDistance(price, stopLoss, stopLossMeta.source, side);
-	const riskRewardRatio = getRiskRewardRatio(price, stopLoss, takeProfit, side);
+	let riskRewardRatio = getRiskRewardRatio(price, stopLoss, takeProfit, side);
+
+	// Honor the controller's plan-quality gate: if the controller already picked
+	// an upgraded target or flagged a rejection, mirror it so the markdown report
+	// matches the structured `analysis.risk` payload exactly.
+	if (risk && Number.isFinite(risk.stop_loss)) {
+		stopLoss = risk.stop_loss;
+	}
+	if (risk && Number.isFinite(risk.target)) {
+		takeProfit = risk.target;
+	}
+	if (risk && Number.isFinite(risk.risk_reward_ratio)) {
+		riskRewardRatio = risk.risk_reward_ratio;
+	}
 
 	const sentiment = analysis.sentiment || null;
 	const confluence = analysis.confluence || null;
@@ -243,6 +256,8 @@ function buildReportRow({ input = {}, analysis = {}, multiTimeframe, side = 'BUY
 		sentiment,
 		confluence,
 		news,
+		rejectionReason: risk && risk.rejectionReason ? risk.rejectionReason : null,
+		minRiskRewardRatio: risk && Number.isFinite(risk.minRiskRewardRatio) ? risk.minRiskRewardRatio : null,
 	};
 }
 
@@ -260,6 +275,7 @@ function formatGroupRows(rows) {
 			formatTargetLine(row),
 			formatRiskRewardLine(row),
 			formatInvalidationLine(row),
+			formatPlanQualityLine(row),
 			`- *Sugerencia:* ${row.suggestion}`,
 		].filter(Boolean);
 
@@ -567,6 +583,104 @@ function getTakeProfitTarget(price, atr, bollinger, currentBollinger = {}, techD
 	return null;
 }
 
+/**
+ * Select a take-profit target that satisfies a minimum risk/reward ratio.
+ *
+ * Selection order (documented):
+ *  1. Nearest S/R level (nearest_resistance / nearest_support).
+ *  2. Additional S/R levels (resistance_1, resistance_2 / support_1, support_2).
+ *  3. Bollinger opposite band (upper for BUY, lower for SELL) and Bollinger mid
+ *     as a balanced fallback.
+ *  4. ATR-derived target (3 * ATR from entry).
+ *
+ * Each candidate is rejected if it fails the minimum R:R floor or its side
+ * constraint (BUY target must be > entry, SELL target must be < entry). The
+ * first candidate that satisfies the floor is returned. If none qualify, the
+ * function returns null so callers can mark the plan invalid.
+ */
+function selectTakeProfitWithMinRatio({
+	price,
+	stopLoss,
+	atr,
+	bollinger = {},
+	currentBollinger = {},
+	techData = {},
+	side = 'BUY',
+	minRatio,
+}) {
+	if (price === null || stopLoss === null || stopLoss <= 0) {
+		return null;
+	}
+	if (!Number.isFinite(minRatio) || minRatio <= 0) {
+		return null;
+	}
+
+	const isShort = side === 'SELL';
+	const srBlock = techData.support_resistance || {};
+
+	// Order documented above: nearest first, then progressively farther S/R.
+	const srCandidates = isShort
+		? [
+			srBlock.nearest_support,
+			srBlock.support_1,
+			srBlock.support_2,
+			srBlock.support_3,
+			techData.support?.nearest,
+			techData.support?.next,
+		]
+		: [
+			srBlock.nearest_resistance,
+			srBlock.resistance_1,
+			srBlock.resistance_2,
+			srBlock.resistance_3,
+			techData.resistance?.nearest,
+			techData.resistance?.next,
+		];
+
+	for (const candidate of srCandidates) {
+		const target = numberOrNull(candidate);
+		if (target === null) continue;
+		// Reject targets on the wrong side of price.
+		if (isShort ? target >= price : target <= price) continue;
+		const ratio = getRiskRewardRatio(price, stopLoss, target, side);
+		if (ratio !== null && ratio >= minRatio) {
+			return target;
+		}
+	}
+
+	// Bollinger opposite band then mid band — only considered if S/R candidates
+	// fail the floor.
+	const oppositeBand = numberOrNull(isShort
+		? bollinger.bb_lower ?? currentBollinger.lower
+		: bollinger.bb_upper ?? currentBollinger.upper);
+	if (oppositeBand !== null && (isShort ? oppositeBand < price : oppositeBand > price)) {
+		const ratio = getRiskRewardRatio(price, stopLoss, oppositeBand, side);
+		if (ratio !== null && ratio >= minRatio) {
+			return oppositeBand;
+		}
+	}
+	const midBand = numberOrNull(bollinger.bb_mid ?? currentBollinger.mid ?? bollinger.mid ?? currentBollinger.middle);
+	if (midBand !== null && (isShort ? midBand < price : midBand > price)) {
+		const ratio = getRiskRewardRatio(price, stopLoss, midBand, side);
+		if (ratio !== null && ratio >= minRatio) {
+			return midBand;
+		}
+	}
+
+	// ATR fallback (3 * ATR from entry).
+	if (atr !== null) {
+		const atrTarget = isShort ? price - (atr * 3) : price + (atr * 3);
+		if (isShort ? atrTarget < price : atrTarget > price) {
+			const ratio = getRiskRewardRatio(price, stopLoss, atrTarget, side);
+			if (ratio !== null && ratio >= minRatio) {
+				return atrTarget;
+			}
+		}
+	}
+
+	return null;
+}
+
 function getInvalidationDistance(price, stopLoss, stopLossSource, side = 'BUY') {
 	if (price === null || stopLoss === null || stopLossSource === 'fallback') {
 		return null;
@@ -609,6 +723,14 @@ function formatRiskRewardLine(row) {
 	}
 
 	return `- *Risk/Reward:* ${formatNumber(row.riskRewardRatio, 2)}x · Setup ${classifyRiskReward(row.riskRewardRatio)}`;
+}
+
+function formatPlanQualityLine(row) {
+	if (row.rejectionReason !== 'risk_reward_below_minimum' || row.riskRewardRatio === null) {
+		return null;
+	}
+	const minRatio = Number.isFinite(row.minRiskRewardRatio) ? row.minRiskRewardRatio : 1.5;
+	return `- ⚠️ *R/R por debajo del mínimo ${formatNumber(minRatio, 2)}:* plan descartado (R/R actual ${formatNumber(row.riskRewardRatio, 2)})`;
 }
 
 function formatInvalidationLine(row) {
@@ -712,4 +834,5 @@ module.exports = {
 	getStopLossMeta,
 	getTakeProfitTarget,
 	getRiskRewardRatio,
+	selectTakeProfitWithMinRatio,
 };

@@ -809,7 +809,13 @@
               "name": "Success - decision-ready analysis",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"symbol\": \"BINANCE:BTCUSDT\",\n  \"alertText\": \"*\ud83d\udd34 SOBRECOMPRADOS*\\nBTCUSDT $77,103.55 (-0.8%) | RSI 77.9...\",\n  \"analysis\": {\n    \"price_data\": {\n      \"close\": 77066.92,\n      \"change_percent\": -0.86\n    },\n    \"technical_indicators\": {\n      \"RSI\": 77.8,\n      \"ATR\": 1484.21\n    },\n    \"risk\": {\n      \"side\": \"SELL\",\n      \"stop_loss\": 79293.24,\n      \"target\": 72614.29,\n      \"valid\": true\n    },\n    \"decision\": {\n      \"action\": \"SELL\",\n      \"dataSufficient\": true\n    }\n  }\n}"
+              "body": "{\n  \"success\": true,\n  \"symbol\": \"BINANCE:BTCUSDT\",\n  \"alertText\": \"*\\ud83d\\udd34 SOBRECOMPRADOS*\\nBTCUSDT $77,103.55 (-0.8%) | RSI 77.9...\",\n  \"analysis\": {\n    \"price_data\": {\n      \"close\": 77066.92,\n      \"change_percent\": -0.86\n    },\n    \"technical_indicators\": {\n      \"RSI\": 77.8,\n      \"ATR\": 1484.21\n    },\n    \"risk\": {\n      \"side\": \"SELL\",\n      \"stop_loss\": 79293.24,\n      \"target\": 72614.29,\n      \"valid\": true,\n      \"rejectionReason\": null,\n      \"minRiskRewardRatio\": 1.5\n    },\n    \"decision\": {\n      \"action\": \"SELL\",\n      \"dataSufficient\": true,\n      \"warnings\": []\n    }\n  }\n}"
+            },
+            {
+              "name": "200 Plan-quality gate (sub-floor R:R downgraded to NO_TRADE)",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"symbol\": \"BINANCE:ETHUSDT\",\n  \"alertText\": \"...\\n- *Risk/Reward:* 0.17x\\n- \\u26a0\\ufe0f *R/R por debajo del m\\u00ednimo 1.50:* plan descartado (R/R actual 0.17)\\n...\",\n  \"analysis\": {\n    \"risk\": {\n      \"side\": \"BUY\",\n      \"stop_loss\": 1564.74,\n      \"target\": 2655.56,\n      \"risk_reward_ratio\": 0.1718,\n      \"valid\": false,\n      \"rejectionReason\": \"risk_reward_below_minimum\",\n      \"minRiskRewardRatio\": 1.5\n    },\n    \"decision\": {\n      \"action\": \"NO_TRADE\",\n      \"dataSufficient\": false,\n      \"warnings\": [\n        \"\\u26a0\\ufe0f R/R 0.17 por debajo del m\\u00ednimo 1.5 \\u2014 plan descartado.\"\n      ]\n    }\n  }\n}"
             },
             {
               "name": "400 Invalid symbol",
@@ -5272,7 +5278,7 @@
           ]
         },
         {
-          "name": "POST Binance order (dry-run LIMIT — demo env)",
+          "name": "POST Binance order (dry-run LIMIT \u2014 demo env)",
           "request": {
             "method": "POST",
             "header": [
@@ -5291,7 +5297,7 @@
               "mode": "raw",
               "raw": "{\n  \"symbol\": \"BTCUSDT\",\n  \"side\": \"BUY\",\n  \"type\": \"LIMIT\",\n  \"quantity\": 0.001,\n  \"price\": 60000,\n  \"timeInForce\": \"GTC\",\n  \"dryRun\": true\n}"
             },
-            "description": "Dry-run LIMIT order validated against the Binance Demo Trading API (demo-api.binance.com). Requires BINANCE_TRADING_ENV=demo on the server. The demo environment mirrors live production market data and exchange filters exactly — use this for pre-live validation before switching to BINANCE_TRADING_ENV=live.",
+            "description": "Dry-run LIMIT order validated against the Binance Demo Trading API (demo-api.binance.com). Requires BINANCE_TRADING_ENV=demo on the server. The demo environment mirrors live production market data and exchange filters exactly \u2014 use this for pre-live validation before switching to BINANCE_TRADING_ENV=live.",
             "url": {
               "raw": "{{baseUrl}}/api/trading/binance/orders",
               "host": [
@@ -5313,7 +5319,7 @@
               "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"environment\": \"demo\",\n  \"order\": {\n    \"symbol\": \"BTCUSDT\",\n    \"side\": \"BUY\",\n    \"type\": \"LIMIT\",\n    \"quantity\": 0.001,\n    \"price\": 60000,\n    \"timeInForce\": \"GTC\",\n    \"newOrderRespType\": \"FULL\"\n  }\n}"
             },
             {
-              "name": "Error — feature disabled (ENABLE_BINANCE_TRADING=false)",
+              "name": "Error \u2014 feature disabled (ENABLE_BINANCE_TRADING=false)",
               "status": "Forbidden",
               "code": 403,
               "body": "{\n  \"success\": false,\n  \"code\": \"FEATURE_DISABLED\",\n  \"error\": \"Binance trading is disabled\"\n}"
