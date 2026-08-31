@@ -403,16 +403,32 @@ const setupFirebaseAuth = async (config) => {
 			&& window.firebase.auth.Auth.Persistence.NONE;
 		if (persistence && typeof auth.setPersistence === 'function') await auth.setPersistence(persistence);
 
-		getElement('sign-in')?.addEventListener('click', async () => {
+		const submitFirebaseAuth = async (event) => {
+			if (event && typeof event.preventDefault === 'function') event.preventDefault();
+			const emailEl = getElement('auth-email');
+			const passwordEl = getElement('auth-password');
+			const emailMissing = !emailEl || !emailEl.value || !emailEl.value.trim();
+			const passwordMissing = !passwordEl || !passwordEl.value;
+			if (emailEl) emailEl.setAttribute('aria-invalid', emailMissing ? 'true' : 'false');
+			if (passwordEl) passwordEl.setAttribute('aria-invalid', passwordMissing ? 'true' : 'false');
+			if (emailMissing) {
+				showAuthState('Enter the email and password to sign in.', true);
+				return;
+			}
+			if (passwordMissing) {
+				showAuthState('Enter the email and password to sign in.', true);
+				return;
+			}
 			try {
-				await auth.signInWithEmailAndPassword(
-					getElement('auth-email')?.value || '',
-					getElement('auth-password')?.value || '',
-				);
+				await auth.signInWithEmailAndPassword(emailEl.value, passwordEl.value);
 			} catch (error) {
+				if (emailEl) emailEl.setAttribute('aria-invalid', 'true');
+				if (passwordEl) passwordEl.setAttribute('aria-invalid', 'true');
 				showAuthState('Sign-in failed. Check the account and try again.', true);
 			}
-		});
+		};
+		getElement('sign-in')?.addEventListener('click', () => submitFirebaseAuth());
+		getElement('auth-form')?.addEventListener('submit', submitFirebaseAuth);
 		getElement('sign-out')?.addEventListener('click', () => {
 			if (getElement('api-key')) getElement('api-key').value = '';
 			return auth.signOut();
@@ -2903,7 +2919,16 @@ const setupLegacyConsole = ({ persist = true } = {}) => {
 		keyState.textContent = 'API key is used only for webhook operations and is not stored.';
 	}
 
-	getElement('save-key')?.addEventListener('click', () => {
+	const submitLegacyKey = (event) => {
+		if (event && typeof event.preventDefault === 'function') event.preventDefault();
+		if (!apiKey.value || !apiKey.value.trim()) {
+			apiKey.setAttribute('aria-invalid', 'true');
+			keyState.className = 'response-error';
+			keyState.textContent = 'Enter the API key to save it for this session.';
+			return;
+		}
+		apiKey.setAttribute('aria-invalid', 'false');
+		keyState.className = 'request-state';
 		if (!persist) {
 			keyState.textContent = 'API key kept only in memory for webhook operations.';
 			return;
@@ -2912,9 +2937,12 @@ const setupLegacyConsole = ({ persist = true } = {}) => {
 			sessionStorage.setItem('cabros-admin-api-key', apiKey.value);
 			keyState.textContent = 'API key saved for this browser session.';
 		} catch (error) {
+			keyState.className = 'response-error';
 			keyState.textContent = `Could not save the API key: ${error.message}`;
 		}
-	});
+	};
+	getElement('save-key')?.addEventListener('click', () => submitLegacyKey());
+	getElement('connection-form')?.addEventListener('submit', submitLegacyKey);
 
 	getElement('clear-key')?.addEventListener('click', () => {
 		apiKey.value = '';
@@ -2935,11 +2963,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 	const view = getElement('view');
 	if (view) view.replaceChildren(createLoadingState('Checking authentication…'));
 	document.querySelectorAll('[data-view]').forEach((button) => button.addEventListener('click', () => navigateToView(button.dataset.view)));
-
-	getElement('connection-form')?.addEventListener('submit', (event) => {
-		event.preventDefault();
-		getElement('save-key')?.click();
-	});
 
 	const config = await loadAuthConfig();
 	if (config.enabled) {
