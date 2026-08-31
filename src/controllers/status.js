@@ -4,6 +4,7 @@ const {
 	scannerPresetService,
 	scannerPresetSchedulerService,
 } = require('../services/scannerPresets');
+const { newsMonitorSchedulerService } = require('../services/newsMonitorScheduler');
 const idempotencyStorageService = require('../services/storage/IdempotencyStorageService');
 const { isFirestoreConfigured } = require('../services/storage/firestoreConfig');
 const SignalOutcomeService = require('../services/storage/SignalOutcomeService');
@@ -12,6 +13,7 @@ const equityMarketDataService = require('../services/storage/EquityMarketDataSer
 const remoteConfigService = require('../services/remoteConfig/RemoteConfigService');
 const { tradingViewMcpService } = require('../services/tradingview/TradingViewMcpService');
 const { binanceOrderService } = require('../services/trading/BinanceOrderService');
+const bootstrapReadiness = require('../lib/bootstrapReadiness');
 const { notificationRedriveService } = require('../services/notification/NotificationRedriveService');
 const { whatsAppCommandBridgeService } = require('../services/notification/WhatsAppCommandBridgeService');
 const geminiQuotaManager = require('../services/grounding/geminiQuotaManager');
@@ -314,6 +316,7 @@ function getStatus() {
 	});
 
 	return {
+		readiness: bootstrapReadiness.getStatus(),
 		service: {
 			name: process.env.SERVICE_NAME || packageJson.name || 'cabros-bot',
 			version: packageJson.version || null,
@@ -335,6 +338,7 @@ function getStatus() {
 			firestoreScannerPresets: firestoreScannerPresetsEnabled,
 			firestoreJobStorage: firestoreJobStorageEnabled,
 			scannerPresetScheduler: scannerPresetSchedulerService.isEnabled(),
+			newsMonitorScheduler: newsMonitorSchedulerService.isEnabled(),
 			sentryMonitoring: sentryEnabled,
 			sentryProfiling: sentryService.isProfilingEnabled(),
 			langfusePrompts: langfusePromptsEnabled,
@@ -397,6 +401,7 @@ function getStatus() {
 			firebaseRemoteConfig: remoteConfigStatus,
 			scannerPresetStorage: scannerPresetService.getStorageStatus(),
 			scannerPresetScheduler: scannerPresetSchedulerService.getStatus(),
+			newsMonitorScheduler: newsMonitorSchedulerService.getStatus(),
 			equityMarketData: equityMarketDataStatus,
 			signalOutcomeWorker: {
 				...signalOutcomeWorkerDependency,

@@ -134,6 +134,13 @@ describe('Status endpoints', () => {
 		});
 		expect(response.body.service).not.toHaveProperty('timestamp');
 		expect(response.body.featureFlags.telegramBot).toBe(true);
+		expect(response.body.readiness).toEqual(expect.objectContaining({
+			status: 'pending',
+			ready: false,
+			components: expect.objectContaining({
+				telegramBot: { status: 'pending' },
+			}),
+		}));
 		expect(response.body.deliveryChannels.telegram).toEqual({ enabled: true, status: 'ready' });
 		expect(response.body.dependencies.gemini).toEqual({
 			enabled: true,
@@ -456,7 +463,7 @@ describe('Status endpoints', () => {
 		expect(response.body.dependencies.alertSignalRepeatSuppression.enabled).toBe(true);
 	});
 
-	it('reports safe Firebase Remote Config load metadata without values', async () => {
+	it('reports safe Firebase Remote Config load metadata without values and honest readiness', async () => {
 		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
 
 		const response = await request(app)
@@ -468,12 +475,35 @@ describe('Status endpoints', () => {
 		expect(response.body.dependencies.firebaseRemoteConfig).toEqual(expect.objectContaining({
 			enabled: true,
 			configured: true,
+			ready: false,
+			status: 'unknown',
 			source: 'environment',
 			templateVersion: null,
 			lastSuccessfulLoad: null,
 			lastErrorCategory: null,
+			consecutiveFailures: 0,
 		}));
 		expect(JSON.stringify(response.body.dependencies.firebaseRemoteConfig)).not.toContain('gemini-key');
+
+		// When remote overrides are loaded and fresh, status reports ready: true
+		const remoteConfigService = require('../../src/services/remoteConfig/RemoteConfigService');
+		remoteConfigService._setRemoteOverridesForTesting({ NEWS_ALERT_THRESHOLD: 0.85 }, Date.now());
+
+		const readyResponse = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(readyResponse.status).toBe(200);
+		expect(readyResponse.body.dependencies.firebaseRemoteConfig).toEqual(expect.objectContaining({
+			enabled: true,
+			configured: true,
+			ready: true,
+			status: 'ready',
+			source: 'remote',
+			templateVersion: 'test',
+			lastSuccessfulLoad: expect.any(String),
+			consecutiveFailures: 0,
+		}));
 	});
 
 	it('reports signal outcome tracking from the canonical environment variable', async () => {

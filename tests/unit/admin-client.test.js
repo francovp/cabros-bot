@@ -1677,6 +1677,149 @@ describe('admin browser client', () => {
 		await flush();
 		expect(statusCalls).toBe(1);
 	});
+	it('renders the single-symbol analysis verdict with badges, confidence meter, risk levels, indicators, and report preview', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/webhook/symbol-analysis') {
+					return response({
+						success: true,
+						symbol: 'BINANCE:BTCUSDT',
+						exchange: 'BINANCE',
+						asset: 'BTCUSDT',
+						timeframe: '1D',
+						analysisStatus: 'complete',
+						alertText: 'BTCUSDT Analysis: Bullish breakout above 65000',
+						analysis: {
+							price_data: { current_price: 65000 },
+							volume_analysis: { volume_ratio: 2.1, volume_strength: 'HIGH' },
+							technical_indicators: {
+								RSI: 62.5,
+								MACD: 'BULLISH',
+								BB_position: 'UPPER',
+								ATR: 1200,
+								ADX: 28,
+								SMA20: 63500,
+							},
+							risk: {
+								entry_price: 65000,
+								stop_loss: 63000,
+								target: 69000,
+								risk_reward_ratio: 2,
+								valid: true,
+							},
+							decision: {
+								action: 'BUY',
+								confidence: 0.82,
+								reasons: ['Confluencia: BUY', 'RSI: 62.5', 'Tendencia: BULLISH'],
+								warnings: [],
+								dataSufficient: true,
+							},
+							multi_timeframe: {
+								'4h': { trend: 'BULLISH' },
+								'1W': { trend: 'NEUTRAL' },
+							},
+						},
+					});
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'analysis');
+
+		const form = findForm(browser.elementsById.view, 'POST /api/webhook/symbol-analysis');
+		expect(form).toBeDefined();
+		await form.dispatch('submit');
+		await flush();
+
+		const verdict = find(form, (node) => node.className.includes('symbol-analysis-result'));
+		expect(verdict).toBeDefined();
+		expect(verdict.textContent).toContain('BUY');
+		expect(verdict.textContent).toContain('Status: Complete');
+		expect(verdict.textContent).toContain('BINANCE:BTCUSDT · 1D');
+		expect(verdict.textContent).toContain('82% confidence');
+		expect(verdict.textContent).toContain('Decision reasons');
+		expect(verdict.textContent).toContain('Confluencia: BUY');
+		expect(verdict.textContent).toContain('Price & Risk Levels');
+		expect(verdict.textContent).toContain('Entry Price');
+		expect(verdict.textContent).toContain('Stop Loss');
+		expect(verdict.textContent).toContain('Target');
+		expect(verdict.textContent).toContain('2:1');
+		expect(verdict.textContent).toContain('Technical Indicators');
+		expect(verdict.textContent).toContain('RSI: 62.5');
+		expect(verdict.textContent).toContain('Volume Ratio: 2.1x');
+		expect(verdict.textContent).toContain('Volume Strength: HIGH');
+		expect(verdict.textContent).toContain('Multi-timeframe Analysis');
+		expect(verdict.textContent).toContain('4h: BULLISH');
+		expect(verdict.textContent).toContain('Report preview');
+		expect(verdict.textContent).toContain('BTCUSDT Analysis: Bullish breakout above 65000');
+		expect(findButton(form, 'Copy JSON').hidden).toBe(false);
+	});
+
+	it('renders NO_TRADE decision action and warning chips when data is insufficient or neutral', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/webhook/symbol-analysis') {
+					return response({
+						success: true,
+						symbol: 'BINANCE:ETHUSDT',
+						timeframe: '4h',
+						analysis: {
+							decision: {
+								action: 'NO_TRADE',
+								confidence: 0.3,
+								dataSufficient: false,
+								reasons: [],
+								warnings: ['Falta el RSI para una decisión accionable.', 'El riesgo calculado no tiene niveles direccionales válidos.'],
+							},
+						},
+					});
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'analysis');
+
+		const form = findForm(browser.elementsById.view, 'POST /api/webhook/symbol-analysis');
+		await form.dispatch('submit');
+		await flush();
+
+		const verdict = find(form, (node) => node.className.includes('symbol-analysis-result'));
+		expect(verdict).toBeDefined();
+		expect(verdict.textContent).toContain('NO_TRADE');
+		expect(verdict.textContent).toContain('Insufficient data');
+		expect(verdict.textContent).toContain('30% confidence');
+		expect(verdict.textContent).toContain('Warnings');
+		expect(verdict.textContent).toContain('Falta el RSI para una decisión accionable.');
+	});
+
+	it('renders error response and status code on symbol-analysis failure', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/webhook/symbol-analysis') {
+					return response({ success: false, error: 'TradingView MCP service unavailable' }, 502);
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'analysis');
+
+		const form = findForm(browser.elementsById.view, 'POST /api/webhook/symbol-analysis');
+		await form.dispatch('submit');
+		await flush();
+
+		const errorBlock = find(form, (node) => node.className.includes('response-error'));
+		expect(errorBlock).toBeDefined();
+		expect(errorBlock.textContent).toContain('502');
+		expect(errorBlock.textContent).toContain('TradingView MCP service unavailable');
+		const verdict = find(form, (node) => node.className.includes('symbol-analysis-result'));
+		expect(verdict).toBeUndefined();
+	});
 
 	it('renders the volume confirmation verdict with a ratio meter', async () => {
 		const browser = createBrowser({
