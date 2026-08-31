@@ -283,17 +283,60 @@ describe('JobBacklogService', () => {
 		);
 	});
 
-	it('manages periodic timer with startMonitor and stop', () => {
+	it('does not record a page when Telegram reports an unsuccessful delivery', async () => {
+		const now = Date.now();
+		process.env = {
+			...savedEnv,
+			TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID: 'admin-12345',
+			JOB_BACKLOG_ALERT_THRESHOLD_MS: '60000',
+		};
+
+		const repository = {
+			isConfigured: jest.fn(() => false),
+			getMemoryBacklogDepth: jest.fn(() => ({
+				durableQueuedCount: 2,
+				oldestQueuedAgeMs: 120000,
+				oldestCreatedAt: new Date(now - 120000).toISOString(),
+			})),
+		};
+		const sendMessage = jest.fn().mockResolvedValue({ success: false });
+		const service = new JobBacklogService({
+			repository,
+			botGetter: () => ({ telegram: { sendMessage } }),
+		});
+
+		await service.probe(now);
+
+		expect(service.getStatus().backlogAlert.active).toBe(false);
+		expect(service.getStatus().backlogAlert.pagedAt).toBeNull();
+
+		await service.probe(now + 120000);
+		expect(sendMessage).toHaveBeenCalledTimes(2);
+	});
+
+	it('re-reads the probe interval after each scheduled probe', async () => {
 		jest.useFakeTimers();
 		try {
+			process.env.JOB_BACKLOG_PROBE_INTERVAL_MS = '60000';
 			const service = new JobBacklogService();
-			service.probe = jest.fn().mockResolvedValue({});
+			service.probe = jest.fn().mockImplementation(async () => {
+				process.env.JOB_BACKLOG_PROBE_INTERVAL_MS = '120000';
+			});
 
-			service.startMonitor();
+			service.startMonitor({ unref: false });
 			expect(service.timer).not.toBeNull();
 
 			jest.advanceTimersByTime(60000);
+			await Promise.resolve();
+			await Promise.resolve();
 			expect(service.probe).toHaveBeenCalledTimes(1);
+
+			jest.advanceTimersByTime(119999);
+			expect(service.probe).toHaveBeenCalledTimes(1);
+			jest.advanceTimersByTime(1);
+			await Promise.resolve();
+			await Promise.resolve();
+			expect(service.probe).toHaveBeenCalledTimes(2);
 
 			service.stop();
 			expect(service.timer).toBeNull();

@@ -151,9 +151,11 @@ class JobBacklogService {
 		if (oldestAge !== null && oldestAge >= alertThresholdMs) {
 			const shouldPage = !this.hasActiveAlert || (now - (this.lastPagedAt || 0) >= pageCooldownMs);
 			if (shouldPage) {
-				this.hasActiveAlert = true;
-				this.lastPagedAt = now;
-				await this._notifyAdminAlert(probeResult, alertThresholdMs);
+				const delivered = await this._notifyAdminAlert(probeResult, alertThresholdMs);
+				if (delivered) {
+					this.hasActiveAlert = true;
+					this.lastPagedAt = now;
+				}
 			}
 		} else if (this.hasActiveAlert && (oldestAge === null || oldestAge < alertThresholdMs || totalQueued === 0)) {
 			this.hasActiveAlert = false;
@@ -178,35 +180,39 @@ class JobBacklogService {
 
 		if (typeof this.notifyAdmin === 'function') {
 			try {
-				await this.notifyAdmin({
+				const result = await this.notifyAdmin({
 					type: 'backlog_alert',
 					message,
 					probeResult,
 					alertThresholdMs,
 				});
+				return result?.success !== false;
 			} catch (err) {
 				this.logger?.warn?.(`[JobBacklogService] notifyAdmin callback failed: ${err.message}`);
+				return false;
 			}
-			return;
 		}
 
 		if (!adminChatId) {
-			return;
+			return false;
 		}
 
 		const telegramService = this._getTelegramService();
 		if (!telegramService || !telegramService.isEnabled()) {
-			return;
+			return false;
 		}
 
 		try {
-			await telegramService.send({
+			const result = await telegramService.send({
 				text: message,
 				telegramChatId: adminChatId,
 			});
+			if (result?.success === false) return false;
 			this.logger.info?.('[JobBacklogService] Sent admin alert for async job backlog breach');
+			return true;
 		} catch (error) {
 			this.logger.warn?.('[JobBacklogService] Failed to send Telegram backlog alert (fail-open)', { error: error.message });
+			return false;
 		}
 	}
 
@@ -325,20 +331,28 @@ class JobBacklogService {
 		}
 
 		this.running = true;
-		const { probeIntervalMs } = this.getConfig();
-		this.timer = setInterval(() => {
-			void this.probe();
-		}, probeIntervalMs);
+		this._scheduleProbe();
 
 		if (unref && this.timer && typeof this.timer.unref === 'function') {
 			this.timer.unref();
 		}
 	}
 
+	_scheduleProbe() {
+		if (!this.running) return;
+		const { probeIntervalMs } = this.getConfig();
+		this.timer = setTimeout(() => {
+			this.timer = null;
+			Promise.resolve(this.probe())
+				.catch((error) => this.logger.warn?.('[JobBacklogService] Probe failed (fail-open):', error.message))
+				.finally(() => this._scheduleProbe());
+		}, probeIntervalMs);
+	}
+
 	stop() {
 		this.running = false;
 		if (this.timer) {
-			clearInterval(this.timer);
+			clearTimeout(this.timer);
 			this.timer = null;
 		}
 	}

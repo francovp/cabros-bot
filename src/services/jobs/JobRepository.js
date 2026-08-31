@@ -745,36 +745,50 @@ class JobRepository {
 		if (firestore) {
 			try {
 				let query = firestore.collection(COLLECTION_NAME);
-				if (typeof query.where === 'function') {
-					query = query.where('status', '==', 'processing');
-				}
-				if (typeof query.orderBy === 'function') {
-					query = query.orderBy('createdAt', 'asc');
-				}
-				if (typeof query.limit === 'function') {
-					query = query.limit(maxScan);
-				}
-
-				const snapshot = await query.get();
-				const docs = snapshot?.docs || [];
+				let lastDoc;
+				let lastDocId;
 				let durableQueuedCount = 0;
 				let oldestCreatedAt = null;
 
-				for (const doc of docs) {
-					const data = doc.data() || {};
-					const execution = data.execution || {};
-					const leaseUntilMs = Date.parse(execution.leaseUntil || '');
-					const expiredClaim = ['claimed', 'running'].includes(execution.status)
-						&& Number.isFinite(leaseUntilMs)
-						&& leaseUntilMs <= now;
-					const isQueued = execution.status === 'queued' || expiredClaim;
+				while (true) {
+					let pageQuery = query;
+					if (typeof pageQuery.where === 'function') {
+						pageQuery = pageQuery.where('status', '==', 'processing');
+					}
+					if (typeof pageQuery.orderBy === 'function') {
+						pageQuery = pageQuery.orderBy('createdAt', 'asc');
+					}
+					if (typeof pageQuery.limit === 'function') {
+						pageQuery = pageQuery.limit(maxScan);
+					}
+					if (lastDoc && typeof pageQuery.startAfter === 'function') {
+						pageQuery = pageQuery.startAfter(lastDoc);
+					}
 
-					if (isQueued) {
-						durableQueuedCount += 1;
-						if (!oldestCreatedAt && data.createdAt) {
-							oldestCreatedAt = data.createdAt;
+					const snapshot = await pageQuery.get();
+					const docs = snapshot?.docs || [];
+					for (const doc of docs) {
+						const data = doc.data() || {};
+						const execution = data.execution || {};
+						const leaseUntilMs = Date.parse(execution.leaseUntil || '');
+						const expiredClaim = ['claimed', 'running'].includes(execution.status)
+							&& Number.isFinite(leaseUntilMs)
+							&& leaseUntilMs <= now;
+						const isQueued = execution.status === 'queued' || expiredClaim;
+
+						if (isQueued) {
+							durableQueuedCount += 1;
+							if (data.createdAt && (!oldestCreatedAt || Date.parse(data.createdAt) < Date.parse(oldestCreatedAt))) {
+								oldestCreatedAt = data.createdAt;
+							}
 						}
 					}
+
+					if (docs.length < maxScan || typeof pageQuery.startAfter !== 'function') break;
+					const nextDoc = docs[docs.length - 1];
+					if (!nextDoc || !nextDoc.id || nextDoc.id === lastDocId) break;
+					lastDoc = nextDoc;
+					lastDocId = nextDoc.id;
 				}
 
 				const oldestCreatedAtMs = oldestCreatedAt ? Date.parse(oldestCreatedAt) : null;

@@ -848,6 +848,13 @@ describe('JobRepository durable claims', () => {
 				&& fields.some(f => f.fieldPath === 'createdAt' && f.order === 'DESCENDING');
 		});
 		expect(hasChatScopeIndex).toBe(true);
+
+		const hasBacklogIndex = jobIndexes.some(idx => {
+			const fields = idx.fields || [];
+			return fields.some(f => f.fieldPath === 'status' && f.order === 'ASCENDING')
+				&& fields.some(f => f.fieldPath === 'createdAt' && f.order === 'ASCENDING');
+		});
+		expect(hasBacklogIndex).toBe(true);
 	});
 
 	it('computes memory backlog depth accurately', async () => {
@@ -921,6 +928,48 @@ describe('JobRepository durable claims', () => {
 		expect(depth.oldestQueuedAgeMs).toBe(500000);
 		expect(depth.oldestCreatedAt).toBe(new Date(now - 500000).toISOString());
 	});
-});
 
+	it('paginates processing jobs before filtering queued work', async () => {
+		const now = Date.now();
+		const firstPage = Array.from({ length: 100 }, (_, index) => ({
+			id: `active-${index}`,
+			data: () => ({
+				status: 'processing',
+				execution: {
+					status: 'running',
+					leaseUntil: new Date(now + 600000).toISOString(),
+				},
+				createdAt: new Date(now - 900000 - index * 1000).toISOString(),
+			}),
+		}));
+		const queuedDoc = {
+			id: 'queued-after-active-page',
+			data: () => ({
+				status: 'processing',
+				execution: { status: 'queued' },
+				createdAt: new Date(now - 700000).toISOString(),
+			}),
+		};
+		let page = 0;
+		const query = {
+			where: jest.fn(() => query),
+			orderBy: jest.fn(() => query),
+			limit: jest.fn(() => query),
+			startAfter: jest.fn(() => {
+				page = 1;
+				return query;
+			}),
+			get: jest.fn(() => Promise.resolve({ docs: page === 0 ? firstPage : [queuedDoc] })),
+		};
+		const firestore = { collection: jest.fn(() => query) };
+		const repository = new JobRepository();
+		repository._getFirestore = jest.fn(() => firestore);
+
+		const depth = await repository.getBacklogDepth({ maxScan: 100, now });
+
+		expect(query.startAfter).toHaveBeenCalledWith(firstPage[firstPage.length - 1]);
+		expect(depth.durableQueuedCount).toBe(1);
+		expect(depth.oldestQueuedAgeMs).toBe(700000);
+	});
+});
 
