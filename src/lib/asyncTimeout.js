@@ -36,6 +36,9 @@ function awaitWithTimeout(promise, timeoutMs, message) {
 		timer = setTimeout(() => {
 			settle(reject, new Error(message));
 		}, timeoutMs);
+		if (timer && typeof timer.unref === 'function') {
+			timer.unref();
+		}
 
 		Promise.resolve(promise)
 			.then((value) => settle(resolve, value))

@@ -156,14 +156,13 @@ async function processOutcomeAnnotation(alert, options = {}) {
 		? alert.enriched.setup_type
 		: null;
 
+	const timeoutMs = typeof options.timeoutMs === 'number' ? options.timeoutMs : undefined;
 	const annotation = await outcomeAnnotationService.annotate({
 		exchange: parsed.exchange || null,
 		symbol: parsed.symbol,
 		side: parsed.side,
 		setupType,
-	}, {
-		timeoutMs: typeof options.timeoutMs === 'number' ? options.timeoutMs : undefined,
-	});
+	}, timeoutMs !== undefined ? { timeoutMs } : undefined);
 
 	if (annotation && annotation.summary) {
 		const existingExtra = typeof alert.extraText === 'string' && alert.extraText.length > 0
@@ -173,6 +172,12 @@ async function processOutcomeAnnotation(alert, options = {}) {
 			? `${existingExtra}\n${annotation.summary}`
 			: annotation.summary;
 		if (alert.enriched && typeof alert.enriched === 'object') {
+			const existingEnrichedExtra = typeof alert.enriched.extraText === 'string' && alert.enriched.extraText.length > 0
+				? alert.enriched.extraText
+				: '';
+			alert.enriched.extraText = existingEnrichedExtra
+				? `${existingEnrichedExtra}\n${annotation.summary}`
+				: annotation.summary;
 			alert.enriched.outcomeAnnotation = {
 				exchange: annotation.exchange,
 				symbol: annotation.symbol,
@@ -282,7 +287,7 @@ function postAlert(botOrGetter) {
 			const tokenUsageJSON = tokenUsage.toJSON();
 			tokenUsageJSON.formattedSummary = tokenUsage.formatSummary();
 
-			const outcomeAnnotation = await processOutcomeAnnotation(alert, { timeoutMs: 1500 });
+			const outcomeAnnotation = await processOutcomeAnnotation(alert);
 
 			if (dryRun) {
 				console.debug('[Alert] Dry-run mode: skipping delivery and Firestore persistence');

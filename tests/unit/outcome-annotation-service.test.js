@@ -60,15 +60,15 @@ describe('outcomeAnnotationService', () => {
 		expect(summarizeOutcomes).not.toHaveBeenCalled();
 	});
 
-	test('builds a BUY annotation from bySide aggregate when sample meets the threshold', async () => {
+	test('builds a BUY annotation from bySide aggregate when sample meets the threshold (totalSignals field)', async () => {
 		getRuntimeConfig.mockReturnValue({ ENABLE_OUTCOME_INFORMED_DELIVERY: true });
 		summarizeOutcomes.mockResolvedValueOnce({
 			available: true,
 			windows: {
 				'30d': {
-					ALL: { sampleSize: 12, hitRatePercent: 30, expectancyR: -0.4 },
+					ALL: { totalSignals: 12, hitRatePercent: 30, expectancyR: -0.4 },
 					bySide: {
-						BUY: { sampleSize: 10, hitRatePercent: 40, expectancyR: 0.2, totalWins: 4, totalLosses: 6 },
+						BUY: { totalSignals: 10, hitRatePercent: 40, expectancyR: 0.2, totalWins: 4, totalLosses: 6 },
 					},
 				},
 			},
@@ -85,9 +85,72 @@ describe('outcomeAnnotationService', () => {
 		expect(annotation.hitRatePercent).toBe(40);
 		expect(annotation.expectancyR).toBe(0.2);
 		expect(annotation.side).toBe('BUY');
+		expect(annotation.setupType).toBeNull();
 		expect(annotation.summary).toContain('hitRate 40%');
 		expect(annotation.summary).toContain('+0.20R');
 		expect(annotation.summary).toContain('W4/L6');
+	});
+
+	test('uses bySetupType aggregate when available and matches requested setup', async () => {
+		getRuntimeConfig.mockReturnValue({ ENABLE_OUTCOME_INFORMED_DELIVERY: true });
+		summarizeOutcomes.mockResolvedValueOnce({
+			available: true,
+			windows: {
+				'30d': {
+					bySide: {
+						BUY: { totalSignals: 20, hitRatePercent: 45, expectancyR: 0.1 },
+					},
+					bySetupType: {
+						breakout: { totalSignals: 8, hitRatePercent: 75, expectancyR: 1.5, totalWins: 6, totalLosses: 2 },
+					},
+				},
+			},
+		});
+
+		const annotation = await service.annotate({
+			exchange: 'BINANCE',
+			symbol: 'BTCUSDT',
+			side: 'BUY',
+			setupType: 'breakout',
+		});
+
+		expect(annotation).not.toBeNull();
+		expect(annotation.sampleSize).toBe(8);
+		expect(annotation.hitRatePercent).toBe(75);
+		expect(annotation.expectancyR).toBe(1.5);
+		expect(annotation.setupType).toBe('breakout');
+		expect(annotation.summary).toContain('· breakout');
+		expect(annotation.summary).toContain('hitRate 75%');
+	});
+
+	test('falls back to bySide when setupType is not found in bySetupType without falsely labeling summary', async () => {
+		getRuntimeConfig.mockReturnValue({ ENABLE_OUTCOME_INFORMED_DELIVERY: true });
+		summarizeOutcomes.mockResolvedValueOnce({
+			available: true,
+			windows: {
+				'30d': {
+					bySide: {
+						BUY: { totalSignals: 15, hitRatePercent: 50, expectancyR: 0.3 },
+					},
+					bySetupType: {
+						reversal: { totalSignals: 6, hitRatePercent: 60, expectancyR: 0.8 },
+					},
+				},
+			},
+		});
+
+		const annotation = await service.annotate({
+			exchange: 'BINANCE',
+			symbol: 'BTCUSDT',
+			side: 'BUY',
+			setupType: 'breakout',
+		});
+
+		expect(annotation).not.toBeNull();
+		expect(annotation.sampleSize).toBe(15);
+		expect(annotation.hitRatePercent).toBe(50);
+		expect(annotation.setupType).toBeNull();
+		expect(annotation.summary).not.toContain('· breakout');
 	});
 
 	test('falls back to the ALL aggregate when the side bucket is missing', async () => {
@@ -123,7 +186,7 @@ describe('outcomeAnnotationService', () => {
 			windows: {
 				'30d': {
 					bySide: {
-						BUY: { sampleSize: 4, hitRatePercent: 60, expectancyR: 0.5 },
+						BUY: { totalSignals: 4, hitRatePercent: 60, expectancyR: 0.5 },
 					},
 				},
 			},
@@ -214,6 +277,8 @@ describe('outcomeAnnotationService', () => {
 		expect(args.exchange).toBe('BINANCE');
 		expect(args.symbol).toBe('ETHUSDT');
 		expect(args.limit).toBe(1000);
+		expect(args.signal).toBeDefined();
+		expect(typeof args.signal.aborted).toBe('boolean');
 
 		const fromMs = new Date(args.from).getTime();
 		const toMs = new Date(args.to).getTime();

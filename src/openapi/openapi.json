@@ -3612,6 +3612,72 @@
           }
         }
       },
+      "OutcomeAnnotation": {
+        "type": [
+          "object",
+          "null"
+        ],
+        "description": "Bounded per-(exchange, symbol, side, setupType) outcome annotation populated when ENABLE_OUTCOME_INFORMED_DELIVERY is true and historical evaluations exist (GH-587 / CB-275).",
+        "additionalProperties": true,
+        "properties": {
+          "exchange": {
+            "type": "string"
+          },
+          "symbol": {
+            "type": "string"
+          },
+          "side": {
+            "type": "string",
+            "enum": [
+              "BUY",
+              "SELL"
+            ]
+          },
+          "setupType": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "windowLabel": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sampleSize": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "hitRatePercent": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "expectancyR": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "totalWins": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "totalLosses": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "summary": {
+            "type": "string"
+          }
+        }
+      },
       "CoverageBucket": {
         "type": "object",
         "required": [
@@ -4031,6 +4097,9 @@
             "type": "integer",
             "minimum": 20001,
             "description": "Length of the original alert text in characters before the 20,000-character cap was applied."
+          },
+          "outcomeAnnotation": {
+            "$ref": "#/components/schemas/OutcomeAnnotation"
           }
         }
       },
@@ -5271,6 +5340,12 @@
           "dryRun": {
             "type": "boolean"
           },
+          "enriched": {
+            "type": "boolean"
+          },
+          "outcomeAnnotation": {
+            "$ref": "#/components/schemas/OutcomeAnnotation"
+          },
           "payload": {
             "type": "object",
             "properties": {
@@ -5299,25 +5374,7 @@
                     "description": "Sanitized TradingView MCP outcome for this alert."
                   },
                   "outcomeAnnotation": {
-                    "type": [
-                      "object",
-                      "null"
-                    ],
-                    "description": "Bounded per-(exchange, symbol, side, setupType) outcome annotation populated when ENABLE_OUTCOME_INFORMED_DELIVERY is true and historical evaluations exist (GH-587 / CB-275).",
-                    "additionalProperties": true,
-                    "properties": {
-                      "exchange": { "type": "string" },
-                      "symbol": { "type": "string" },
-                      "side": { "type": "string", "enum": ["BUY", "SELL"] },
-                      "setupType": { "type": ["string", "null"] },
-                      "windowLabel": { "type": ["string", "null"] },
-                      "sampleSize": { "type": "integer", "minimum": 1 },
-                      "hitRatePercent": { "type": ["number", "null"] },
-                      "expectancyR": { "type": ["number", "null"] },
-                      "totalWins": { "type": ["integer", "null"] },
-                      "totalLosses": { "type": ["integer", "null"] },
-                      "summary": { "type": "string" }
-                    }
+                    "$ref": "#/components/schemas/OutcomeAnnotation"
                   },
                   "levelsSource": {
                     "type": "string",

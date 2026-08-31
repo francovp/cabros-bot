@@ -75,7 +75,7 @@ function resolveConfig() {
 	};
 }
 
-function pickAggregate(window, side) {
+function pickAggregate(window, side, setupType) {
 	if (!window || typeof window !== 'object') {
 		return null;
 	}
@@ -88,29 +88,64 @@ function pickAggregate(window, side) {
 		return null;
 	}
 
+	const normalizedSetup = typeof setupType === 'string' && setupType.trim().length > 0
+		? setupType.trim().toLowerCase()
+		: null;
+
+	if (normalizedSetup && windowBucket.bySetupType && windowBucket.bySetupType[normalizedSetup]) {
+		return {
+			aggregate: windowBucket.bySetupType[normalizedSetup],
+			isSetupSpecific: true,
+		};
+	}
 	if (side && windowBucket.bySide && windowBucket.bySide[side]) {
-		return windowBucket.bySide[side];
+		return {
+			aggregate: windowBucket.bySide[side],
+			isSetupSpecific: false,
+		};
 	}
 	if (windowBucket.ALL && typeof windowBucket.ALL === 'object') {
-		return windowBucket.ALL;
+		return {
+			aggregate: windowBucket.ALL,
+			isSetupSpecific: false,
+		};
+	}
+	if (Number.isFinite(windowBucket.totalSignals) || Number.isFinite(windowBucket.sampleSize)) {
+		return {
+			aggregate: windowBucket,
+			isSetupSpecific: false,
+		};
 	}
 	return null;
 }
 
-function buildAnnotationFromAggregate(aggregate, { side, symbol, exchange, setupType, windowLabel, sampleSizeThreshold }) {
-	if (!aggregate || typeof aggregate !== 'object') {
+function buildAnnotationFromAggregate(selection, { side, symbol, exchange, setupType, windowLabel, sampleSizeThreshold }) {
+	if (!selection || typeof selection !== 'object') {
 		return null;
 	}
 
-	const sampleSize = Number.isFinite(aggregate.sampleSize) ? aggregate.sampleSize : 0;
+	const aggregate = selection.aggregate && typeof selection.aggregate === 'object'
+		? selection.aggregate
+		: selection;
+	const isSetupSpecific = typeof selection.isSetupSpecific === 'boolean'
+		? selection.isSetupSpecific
+		: Boolean(setupType);
+
+	const sampleSize = Number.isFinite(aggregate.totalSignals)
+		? aggregate.totalSignals
+		: (Number.isFinite(aggregate.sampleSize) ? aggregate.sampleSize : 0);
 	if (sampleSize <= 0 || sampleSize < sampleSizeThreshold) {
 		return null;
 	}
 
 	const hitRatePercent = Number.isFinite(aggregate.hitRatePercent) ? aggregate.hitRatePercent : null;
 	const expectancyR = Number.isFinite(aggregate.expectancyR) ? aggregate.expectancyR : null;
-	const totalWins = Number.isFinite(aggregate.totalWins) ? aggregate.totalWins : null;
-	const totalLosses = Number.isFinite(aggregate.totalLosses) ? aggregate.totalLosses : null;
+	const totalWins = Number.isFinite(aggregate.totalWins)
+		? aggregate.totalWins
+		: (hitRatePercent !== null ? Math.round((hitRatePercent / 100) * sampleSize) : null);
+	const totalLosses = Number.isFinite(aggregate.totalLosses)
+		? aggregate.totalLosses
+		: (totalWins !== null ? Math.max(0, sampleSize - totalWins) : null);
 
 	if (hitRatePercent === null && expectancyR === null) {
 		return null;
@@ -119,7 +154,8 @@ function buildAnnotationFromAggregate(aggregate, { side, symbol, exchange, setup
 	const safeExchange = typeof exchange === 'string' && exchange.length > 0 ? exchange.toUpperCase() : 'UNKNOWN';
 	const safeSymbol = typeof symbol === 'string' && symbol.length > 0 ? symbol.toUpperCase() : 'UNKNOWN';
 	const safeSide = typeof side === 'string' && side.length > 0 ? side.toUpperCase() : 'ALL';
-	const setupSuffix = setupType ? ` \u00b7 ${setupType}` : '';
+	const effectiveSetupType = isSetupSpecific ? setupType : null;
+	const setupSuffix = effectiveSetupType ? ` \u00b7 ${effectiveSetupType}` : '';
 
 	const pieces = [];
 	if (hitRatePercent !== null) {
@@ -137,7 +173,7 @@ function buildAnnotationFromAggregate(aggregate, { side, symbol, exchange, setup
 		exchange: safeExchange,
 		symbol: safeSymbol,
 		side: safeSide,
-		setupType: setupType || null,
+		setupType: effectiveSetupType || null,
 		windowLabel: windowLabel || null,
 		sampleSize,
 		hitRatePercent,
@@ -174,40 +210,57 @@ async function getOutcomeAnnotation(context, options = {}) {
 		? context.setupType.trim().toLowerCase()
 		: null;
 
-	const timeoutMs = Number.isFinite(options.timeoutMs) ? Math.max(50, options.timeoutMs) : config.timeoutMs;
+	const timeoutMs = Number.isFinite(options.timeoutMs) ? Math.max(1, options.timeoutMs) : config.timeoutMs;
 	const now = Date.now();
 	const fromIso = new Date(now - config.lookbackDays * 24 * 60 * 60 * 1000).toISOString();
 	const toIso = new Date(now).toISOString();
 	const windowLabel = `${config.lookbackDays}d`;
 
-	const lookup = signalOutcomeService.summarizeOutcomes({
-		from: fromIso,
-		to: toIso,
-		limit: 1000,
-		exchange: exchange || undefined,
-		symbol,
-	});
+	const controller = new AbortController();
+	let timer = null;
+	timer = setTimeout(() => {
+		controller.abort(new Error(`OutcomeAnnotation lookup exceeded timeout of ${timeoutMs}ms`));
+	}, timeoutMs);
+	if (timer && typeof timer.unref === 'function') {
+		timer.unref();
+	}
 
 	let summary;
 	try {
-		summary = await awaitWithTimeout(lookup, timeoutMs, 'OutcomeAnnotation lookup exceeded timeout');
+		summary = await awaitWithTimeout(
+			signalOutcomeService.summarizeOutcomes({
+				from: fromIso,
+				to: toIso,
+				limit: 1000,
+				exchange: exchange || undefined,
+				symbol,
+				signal: controller.signal,
+			}),
+			timeoutMs,
+			'OutcomeAnnotation lookup exceeded timeout'
+		);
 	} catch (error) {
 		// Fail-open: any lookup error (timeout, network, malformed data) returns
 		// null without counting as an "unexpected" service error.
 		console.warn('[OutcomeAnnotation] Lookup failed, returning null (fail-open):', error && error.message ? error.message : error);
 		return null;
+	} finally {
+		if (timer !== null) {
+			clearTimeout(timer);
+			timer = null;
+		}
 	}
 
 	if (!summary || summary.available !== true) {
 		return null;
 	}
 
-	const aggregate = pickAggregate(summary.windows || {}, side);
-	if (!aggregate) {
+	const selection = pickAggregate(summary.windows || {}, side, setupType);
+	if (!selection) {
 		return null;
 	}
 
-	return buildAnnotationFromAggregate(aggregate, {
+	return buildAnnotationFromAggregate(selection, {
 		side,
 		symbol,
 		exchange,
