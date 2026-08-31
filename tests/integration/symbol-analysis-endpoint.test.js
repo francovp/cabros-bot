@@ -99,6 +99,7 @@ describe('Symbol analysis endpoint', () => {
 			asset: 'BTCUSDT',
 			timeframe: '1D',
 			alertText: expect.stringContaining('BTCUSDT'),
+			processingTimeMs: expect.any(Number),
 			analysis: expect.objectContaining({
 				price_data: expect.objectContaining({ close: 100, change_percent: -1.2 }),
 				volume_analysis: expect.objectContaining({ volume_ratio: 1.11 }),
@@ -118,6 +119,9 @@ describe('Symbol analysis endpoint', () => {
 			}),
 		}));
 		expect(res.body).not.toHaveProperty('deliveryResults');
+		expect(res.body).not.toHaveProperty('totalDurationMs');
+		expect(typeof res.body.processingTimeMs).toBe('number');
+		expect(res.body.processingTimeMs).toBeGreaterThanOrEqual(0);
 		expect(res.body.alertText).toContain('*Target sugerido:*');
 		expect(res.body.alertText).toContain('*Risk/Reward:*');
 		expect(tradingViewMcpService.analyzeSymbolIdentifier).toHaveBeenCalledWith(expect.objectContaining({
@@ -156,7 +160,10 @@ describe('Symbol analysis endpoint', () => {
 		expect(res.body).toEqual(expect.objectContaining({
 			success: false,
 			code: 'SYMBOL_ANALYSIS_FAILED',
+			processingTimeMs: expect.any(Number),
 		}));
+		expect(res.body).not.toHaveProperty('totalDurationMs');
+		expect(typeof res.body.processingTimeMs).toBe('number');
 		expect(sentryService.captureRuntimeError).toHaveBeenCalledWith(expect.objectContaining({
 			http: expect.objectContaining({ endpoint: '/api/webhook/symbol-analysis', statusCode: 502 }),
 		}));
@@ -216,7 +223,10 @@ describe('Symbol analysis endpoint', () => {
 		expect(res.body).toEqual(expect.objectContaining({
 			success: false,
 			code: 'SYMBOL_ANALYSIS_TIMEOUT',
+			processingTimeMs: expect.any(Number),
 		}));
+		expect(res.body).not.toHaveProperty('totalDurationMs');
+		expect(typeof res.body.processingTimeMs).toBe('number');
 		expect(sentryService.captureRuntimeError).toHaveBeenCalledWith(expect.objectContaining({
 			http: expect.objectContaining({ endpoint: '/api/webhook/symbol-analysis', statusCode: 504 }),
 		}));

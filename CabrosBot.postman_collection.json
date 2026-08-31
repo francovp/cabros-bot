@@ -809,7 +809,7 @@
               "name": "Success - decision-ready analysis",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"symbol\": \"BINANCE:BTCUSDT\",\n  \"alertText\": \"*\ud83d\udd34 SOBRECOMPRADOS*\\nBTCUSDT $77,103.55 (-0.8%) | RSI 77.9...\",\n  \"analysis\": {\n    \"price_data\": {\n      \"close\": 77066.92,\n      \"change_percent\": -0.86\n    },\n    \"technical_indicators\": {\n      \"RSI\": 77.8,\n      \"ATR\": 1484.21\n    },\n    \"risk\": {\n      \"side\": \"SELL\",\n      \"stop_loss\": 79293.24,\n      \"target\": 72614.29,\n      \"valid\": true\n    },\n    \"decision\": {\n      \"action\": \"SELL\",\n      \"dataSufficient\": true\n    }\n  }\n}"
+              "body": "{\n  \"success\": true,\n  \"symbol\": \"BINANCE:BTCUSDT\",\n  \"alertText\": \"*\ud83d\udd34 SOBRECOMPRADOS*\\nBTCUSDT $77,103.55 (-0.8%) | RSI 77.9...\",\n  \"analysis\": {\n    \"price_data\": {\n      \"close\": 77066.92,\n      \"change_percent\": -0.86\n    },\n    \"technical_indicators\": {\n      \"RSI\": 77.8,\n      \"ATR\": 1484.21\n    },\n    \"risk\": {\n      \"side\": \"SELL\",\n      \"stop_loss\": 79293.24,\n      \"target\": 72614.29,\n      \"valid\": true\n    },\n    \"decision\": {\n      \"action\": \"SELL\",\n      \"dataSufficient\": true\n    }\n  },\n  \"processingTimeMs\": 850\n}"
             },
             {
               "name": "400 Invalid symbol",
@@ -821,7 +821,7 @@
               "name": "502 TradingView failure",
               "status": "Bad Gateway",
               "code": 502,
-              "body": "{\n  \"success\": false,\n  \"error\": \"TradingView MCP unavailable\",\n  \"code\": \"SYMBOL_ANALYSIS_FAILED\"\n}"
+              "body": "{\n  \"success\": false,\n  \"error\": \"TradingView MCP unavailable\",\n  \"code\": \"SYMBOL_ANALYSIS_FAILED\",\n  \"processingTimeMs\": 1234\n}"
             }
           ]
         },

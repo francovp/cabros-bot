@@ -70,7 +70,7 @@ function postSymbolAnalysis() {
 				analysis: normalized,
 				analysisStatus,
 				requestId,
-				totalDurationMs: Date.now() - startTime,
+				processingTimeMs: Math.max(0, Date.now() - startTime),
 			});
 		} catch (error) {
 			if (error instanceof ExpandedAnalysisAlertRequestError) {
@@ -94,7 +94,7 @@ function postSymbolAnalysis() {
 					error: 'Symbol analysis timed out.',
 					code: 'SYMBOL_ANALYSIS_TIMEOUT',
 					requestId,
-					totalDurationMs: Date.now() - startTime,
+					processingTimeMs: Math.max(0, Date.now() - startTime),
 				});
 			}
 
@@ -115,7 +115,7 @@ function postSymbolAnalysis() {
 					error: error.message,
 					code: 'SYMBOL_ANALYSIS_FAILED',
 					requestId,
-					totalDurationMs: Date.now() - startTime,
+					processingTimeMs: Math.max(0, Date.now() - startTime),
 				});
 			}
 

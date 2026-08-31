@@ -55,11 +55,15 @@ describe('Volume confirmation endpoint', () => {
 			confirmed: true,
 			decision: 'confirm',
 			volumeRatio: 1.7,
+			processingTimeMs: expect.any(Number),
 			analysis: expect.objectContaining({
 				symbol: 'BINANCE:BTCUSDT',
 				confidence: 0.91,
 			}),
 		}));
+		expect(res.body).not.toHaveProperty('totalDurationMs');
+		expect(typeof res.body.processingTimeMs).toBe('number');
+		expect(res.body.processingTimeMs).toBeGreaterThanOrEqual(0);
 		expect(tradingViewMcpService.callVolumeConfirmation).toHaveBeenCalledWith({
 			symbol: 'BTCUSDT',
 			exchange: 'BINANCE',
@@ -94,7 +98,10 @@ describe('Volume confirmation endpoint', () => {
 			success: false,
 			code: 'VOLUME_CONFIRMATION_FAILED',
 			error: 'MCP unavailable',
+			processingTimeMs: expect.any(Number),
 		}));
+		expect(res.body).not.toHaveProperty('totalDurationMs');
+		expect(typeof res.body.processingTimeMs).toBe('number');
 	});
 
 	it('normalizes lowercase symbols and denies low-volume confirmations', async () => {
