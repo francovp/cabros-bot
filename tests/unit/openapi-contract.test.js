@@ -80,7 +80,7 @@ describe('OpenAPI contract', () => {
 			'DELETE /api/scanner-presets/{id}', 'POST /api/scanner-presets/{id}/run',
 			'POST /api/jobs/tradingview-analysis', 'GET /api/jobs', 'GET /api/jobs/{jobId}',
 			'POST /api/jobs/{jobId}/cancel', 'POST /api/jobs/{jobId}/retry',
-			'POST /api/jobs/{jobId}/retry-failed', 'GET /api/outcomes', 'GET /api/outcomes/summary', 'GET /api/trading/binance/orders', 'POST /api/trading/binance/orders', 'GET /api/status', 'GET /api/capabilities',
+			'POST /api/jobs/{jobId}/retry-failed', 'GET /api/outcomes', 'GET /api/outcomes/summary', 'GET /api/trading/binance/orders', 'POST /api/trading/binance/orders', 'DELETE /api/trading/binance/orders', 'GET /api/status', 'GET /api/capabilities',
 		]);
 
 		for (const operation of operations) {
@@ -100,6 +100,7 @@ describe('OpenAPI contract', () => {
 			'GET /api/outcomes/summary': 'admin.viewer',
 			'GET /api/trading/binance/orders': 'admin.viewer',
 			'POST /api/trading/binance/orders': 'admin.operator',
+			'DELETE /api/trading/binance/orders': 'admin.operator',
 			'GET /api/alerts': 'admin.viewer',
 			'GET /api/jobs': 'admin.viewer',
 			'POST /api/alerts/{alertId}/replay': 'admin.operator',
@@ -133,10 +134,31 @@ describe('OpenAPI contract', () => {
 		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
 		const shadowModeMetrics = contract.components.schemas.AlertSummary.properties.shadowModeMetrics;
 
-		expect(shadowModeMetrics.oneOf).toEqual(expect.arrayContaining([
-			{ type: 'string' },
-			{ $ref: '#/components/schemas/JsonObject' },
+		expect(shadowModeMetrics.$ref).toBe('#/components/schemas/ShadowModeMetrics');
+		expect(shadowModeMetrics.description).toContain('hitRatePercent');
+		expect(shadowModeMetrics.description).toContain('targetHitRatePercent');
+		expect(shadowModeMetrics.description).toContain('expectancyR');
+
+		const shadowModeMetricsSchema = contract.components.schemas.ShadowModeMetrics;
+		expect(shadowModeMetricsSchema.oneOf).toEqual(expect.arrayContaining([
+			{
+				type: 'string',
+				enum: ['No measurements found'],
+			},
+			{ $ref: '#/components/schemas/OutcomesSummary' },
 		]));
+	});
+
+	it('documents the X-Shadow-Mode-Metrics header on GET /api/alerts/export', () => {
+		if (!fs.existsSync(contractPath)) return;
+		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+		const exportResponse = contract.paths['/api/alerts/export'].get.responses['200'];
+
+		expect(exportResponse.headers).toBeDefined();
+		expect(exportResponse.headers['X-Shadow-Mode-Metrics']).toEqual({
+			description: expect.stringContaining('SignalOutcomeService.getMetricsSummary'),
+			schema: { type: 'string' },
+		});
 	});
 
 	it('documents generic-message idempotency key locations and replay conflicts', () => {
