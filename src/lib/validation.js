@@ -25,12 +25,21 @@ const validateAlert = (text, metadata = null) => {
 		throw new Error('Alert metadata must be a valid object if provided');
 	}
 
-	// Truncate text if needed
-	if (text.length > 4000) {
+	const originalLength = text.length;
+	const truncated = originalLength > 4000;
+	if (truncated) {
 		text = text.substring(0, 4000) + '...';
 	}
 
-	return { text, metadata };
+	return {
+		text,
+		metadata,
+		...(truncated ? {
+			truncated: true,
+			originalLength,
+			deliveredLength: text.length,
+		} : {}),
+	};
 };
 
 const validateSearchResult = (result) => {

@@ -97,6 +97,32 @@ describe('alert request ID resolution and echo', () => {
 	});
 
 	describe('postAlert handler requestId propagation', () => {
+		it('echoes truncation metadata when validation clips alert text', async () => {
+			const response = buildResponse();
+			const { validateAlert } = require('../../src/lib/validation');
+			validateAlert.mockImplementationOnce(() => ({
+				text: `${'A'.repeat(4000)}...`,
+				metadata: null,
+				truncated: true,
+				originalLength: 4001,
+				deliveredLength: 4003,
+			}));
+
+			const handler = postAlert({});
+
+			await handler({
+				headers: { 'x-request-id': 'truncated-alert-1' },
+				body: { text: 'A'.repeat(4001) },
+				query: { dryRun: 'true' },
+			}, response);
+
+			expect(response.json).toHaveBeenCalledWith(expect.objectContaining({
+				truncated: true,
+				originalLength: 4001,
+				deliveredLength: 4003,
+			}));
+		});
+
 		it('echoes inbound valid x-request-id in success response and persists it to storage', async () => {
 			const response = buildResponse();
 			const handler = postAlert({});

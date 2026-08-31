@@ -1541,3 +1541,11 @@ Binance 451 / `restricted location` errors are now classified as `binance_region
 - `BINANCE_DATA_BASE_URL` — Optional override for all Binance market-data REST calls. Default `https://api.binance.com` (preserves existing behavior when unset). Must be an http(s) URL; live trading also requires `https://`. Classified as **environment-only** for Remote Config parity (external destination; secrets/credentials/external-endpoint policy excludes it).
 
 No endpoint, OpenAPI, Postman, or Remote Config contract changed; the new env var follows the standard `environment-only` classification.
+
+## Shared Alert Validation Truncation (Issue #637)
+
+`validateAlert()` keeps the existing 4,000-character cap but now returns `truncated`, `originalLength`, and `deliveredLength` when clipping input. `/api/webhook/alert` propagates those fields in its 200 response and emits a structured warning, allowing callers to detect content loss without changing delivery or enrichment gates. No environment variable, Linear issue, or Remote Config key was added.
+
+**Coverage**:
+- `tests/unit/validation.test.js` — Boundary and no-truncation metadata behavior.
+- `tests/unit/alert-webhook-request-id.test.js` and `tests/integration/alert-grounding.test.js` — Response propagation through dry-run and the mounted webhook.
