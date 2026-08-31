@@ -1,5 +1,6 @@
 const admin = require('firebase-admin');
 const alertStorageService = require('../../src/services/storage/AlertStorageService');
+const { isFirestoreConfigured } = require('../../src/services/storage/firestoreConfig');
 const remoteConfigService = require('../../src/services/remoteConfig/RemoteConfigService');
 
 jest.mock('firebase-admin', () => ({
@@ -8,6 +9,10 @@ jest.mock('firebase-admin', () => ({
 
 jest.mock('../../src/services/storage/AlertStorageService', () => ({
 	getFirestore: jest.fn(),
+}));
+
+jest.mock('../../src/services/storage/firestoreConfig', () => ({
+	isFirestoreConfigured: jest.fn(() => true),
 }));
 
 describe('RemoteConfigService', () => {
@@ -20,6 +25,7 @@ describe('RemoteConfigService', () => {
 		process.env.NEWS_ALERT_THRESHOLD = '0.7';
 		process.env.TRADINGVIEW_MCP_TIMEOUT_MS = '12000';
 		jest.clearAllMocks();
+		isFirestoreConfigured.mockReturnValue(true);
 		remoteConfigService._resetForTesting();
 	});
 
@@ -485,5 +491,148 @@ describe('RemoteConfigService', () => {
 		expect(started).toBe(false);
 		expect(llmConcurrencyGate.maxConcurrent).toBe(4);
 		expect(llmConcurrencyGate.queueTimeoutMs).toBe(1200);
+	});
+
+	describe('getStatus readiness and lifecycle states', () => {
+		it('reports disabled readiness status when Remote Config is disabled', () => {
+			process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'false';
+			alertStorageService.getFirestore.mockReturnValue({});
+
+			const status = remoteConfigService.getStatus();
+			expect(status).toEqual(expect.objectContaining({
+				enabled: false,
+				configured: true,
+				ready: false,
+				status: 'disabled',
+				source: 'disabled',
+				lastSuccessfulLoad: null,
+				lastErrorCategory: null,
+				consecutiveFailures: 0,
+			}));
+		});
+
+		it('reports misconfigured status when Remote Config is enabled but Firestore is not configured', () => {
+			process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+			isFirestoreConfigured.mockReturnValue(false);
+			alertStorageService.getFirestore.mockReturnValue(null);
+
+			const status = remoteConfigService.getStatus();
+			expect(status).toEqual(expect.objectContaining({
+				enabled: true,
+				configured: false,
+				ready: false,
+				status: 'misconfigured',
+				lastSuccessfulLoad: null,
+				lastErrorCategory: null,
+				consecutiveFailures: 0,
+			}));
+		});
+
+		it('reports unknown status and ready: false when enabled and configured before initial load attempt', () => {
+			process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+			alertStorageService.getFirestore.mockReturnValue({});
+
+			const status = remoteConfigService.getStatus();
+			expect(status).toEqual(expect.objectContaining({
+				enabled: true,
+				configured: true,
+				ready: false,
+				status: 'unknown',
+				lastSuccessfulLoad: null,
+				lastErrorCategory: null,
+				consecutiveFailures: 0,
+			}));
+		});
+
+		it('reports degraded status and increments consecutiveFailures on load failure', async () => {
+			process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+			const load = jest.fn().mockRejectedValue(new Error('Firebase Remote Config template not published'));
+			mockTemplate({}, { load });
+			alertStorageService.getFirestore.mockReturnValue({});
+
+			await expect(remoteConfigService.loadNow()).resolves.toBe(false);
+
+			const status1 = remoteConfigService.getStatus();
+			expect(status1).toEqual(expect.objectContaining({
+				enabled: true,
+				configured: true,
+				ready: false,
+				status: 'degraded',
+				lastErrorCategory: 'load_failed',
+				consecutiveFailures: 1,
+			}));
+
+			// Subsequent failure increments consecutiveFailures
+			await expect(remoteConfigService.loadNow()).resolves.toBe(false);
+			const status2 = remoteConfigService.getStatus();
+			expect(status2.consecutiveFailures).toBe(2);
+			expect(status2.ready).toBe(false);
+			expect(status2.status).toBe('degraded');
+		});
+
+		it('reports ready: true on success, resets consecutiveFailures, and degrades on subsequent failure', async () => {
+			process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+			alertStorageService.getFirestore.mockReturnValue({});
+
+			// First, successful load
+			const { template } = mockTemplate({ NEWS_ALERT_THRESHOLD: 0.85 }, { versionNumber: '12' });
+			await expect(remoteConfigService.loadNow()).resolves.toBe(true);
+
+			const readyStatus = remoteConfigService.getStatus();
+			expect(readyStatus).toEqual(expect.objectContaining({
+				enabled: true,
+				configured: true,
+				ready: true,
+				status: 'ready',
+				source: 'remote',
+				templateVersion: '12',
+				lastErrorCategory: null,
+				consecutiveFailures: 0,
+				lastSuccessfulLoad: expect.any(String),
+			}));
+			const previousSuccessfulLoad = readyStatus.lastSuccessfulLoad;
+
+			// Next, refresh fails
+			template.load.mockRejectedValueOnce(new Error('Network error during refresh'));
+			await expect(remoteConfigService.loadNow()).resolves.toBe(false);
+
+			const degradedStatus = remoteConfigService.getStatus();
+			expect(degradedStatus).toEqual(expect.objectContaining({
+				enabled: true,
+				configured: true,
+				ready: false,
+				status: 'degraded',
+				lastSuccessfulLoad: previousSuccessfulLoad,
+				lastErrorCategory: 'load_failed',
+				consecutiveFailures: 1,
+			}));
+
+			// Next, refresh recovers
+			template.load.mockResolvedValueOnce(undefined);
+			await expect(remoteConfigService.loadNow()).resolves.toBe(true);
+
+			const recoveredStatus = remoteConfigService.getStatus();
+			expect(recoveredStatus.ready).toBe(true);
+			expect(recoveredStatus.status).toBe('ready');
+			expect(recoveredStatus.consecutiveFailures).toBe(0);
+		});
+
+		it('reports degraded status and stale category when cache max age expires', () => {
+			process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+			alertStorageService.getFirestore.mockReturnValue({});
+
+			const loadedAt = Date.now() - 3700000; // 3700s ago (> 3600s maxAgeMs)
+			remoteConfigService._setRemoteOverridesForTesting({ NEWS_ALERT_THRESHOLD: 0.85 }, loadedAt);
+
+			const status = remoteConfigService.getStatus();
+			expect(status).toEqual(expect.objectContaining({
+				enabled: true,
+				configured: true,
+				ready: false,
+				status: 'degraded',
+				lastErrorCategory: 'stale',
+				lastSuccessfulLoad: new Date(loadedAt).toISOString(),
+			}));
+		});
 	});
 });

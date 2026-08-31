@@ -123,7 +123,9 @@ query='query($owner:String!, $name:String!, $number:Int!) {
 scanned=0
 unresolved_total=0
 quota_total=0
+open_quota_total=0
 duplicates=0
+open_duplicates=0
 while IFS=$'\t' read -r number state title; do
   [[ -n "$number" ]] || continue
   scanned=$((scanned + 1))
@@ -138,17 +140,21 @@ while IFS=$'\t' read -r number state title; do
   unresolved_total=$((unresolved_total + unresolved))
   quota_total=$((quota_total + quota))
   duplicates=$((duplicates + duplicate))
+  if [[ "$state" == 'OPEN' ]]; then
+    open_quota_total=$((open_quota_total + quota))
+    open_duplicates=$((open_duplicates + duplicate))
+  fi
   if ((unresolved > 0 || quota > 0 || duplicate > 0)); then
     printf -- '- PR #%s (%s): unresolved=%s, codex-quota-comments=%s, duplicate-close-comments=%s\n' \
       "$number" "$state" "$unresolved" "$quota" "$duplicate"
   fi
 done < <(jq -r '.[] | [.number, .state, .title] | @tsv' <<<"$pr_json")
 
-printf -- '- Review summary: scanned=%s, unresolved-inline=%s, codex-quota-comments=%s, duplicate-close-comments=%s\n' \
-  "$scanned" "$unresolved_total" "$quota_total" "$duplicates"
-if ((quota_total > 0)); then
+printf -- '- Review summary: scanned=%s, unresolved-inline=%s, codex-quota-comments=%s (open=%s), duplicate-close-comments=%s (open=%s)\n' \
+  "$scanned" "$unresolved_total" "$quota_total" "$open_quota_total" "$duplicates" "$open_duplicates"
+if ((open_quota_total > 0)); then
   printf '%s\n' '- Action: use a bounded self-review fallback; do not wait for Codex quota recovery.'
 fi
-if ((duplicates > 0)); then
+if ((open_duplicates > 0)); then
   printf '%s\n' '- Action: strengthen early PR/Linear dedupe before implementation work.'
 fi

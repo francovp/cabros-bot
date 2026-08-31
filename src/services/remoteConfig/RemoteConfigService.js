@@ -80,6 +80,7 @@ let lastErrorCategory = null;
 let refreshTimer = null;
 let expirationTimer = null;
 let loadingPromise = null;
+let consecutiveFailures = 0;
 
 function clearExpirationTimer() {
 	if (expirationTimer) {
@@ -283,15 +284,32 @@ function getStatus() {
 	const enabled = isEnabled();
 	const configured = isFirestoreConfigured();
 	const stale = remoteLoadedAt !== null && !hasFreshRemoteConfig();
+	const effectiveErrorCategory = stale ? 'stale' : lastErrorCategory;
+	const isReady = enabled && configured && lastSuccessfulLoad !== null && hasFreshRemoteConfig() && !stale;
+
+	let status;
+	if (!enabled) {
+		status = 'disabled';
+	} else if (!configured) {
+		status = 'misconfigured';
+	} else if (isReady) {
+		status = 'ready';
+	} else if (lastSuccessfulLoad === null && effectiveErrorCategory === null) {
+		status = 'unknown';
+	} else {
+		status = 'degraded';
+	}
+
 	return {
 		enabled,
 		configured,
-		ready: enabled && configured,
-		status: !enabled ? 'disabled' : configured ? 'ready' : 'misconfigured',
+		ready: isReady,
+		status,
 		source: getSource(),
 		templateVersion,
 		lastSuccessfulLoad,
-		lastErrorCategory: stale ? 'stale' : lastErrorCategory,
+		lastErrorCategory: effectiveErrorCategory,
+		consecutiveFailures,
 		refreshIntervalMs: getRefreshIntervalMs(),
 		maxAgeMs: getMaxAgeMs(),
 	};
@@ -408,6 +426,7 @@ async function loadNow(options = {}) {
 			templateVersion = getTemplateVersion(template);
 			lastSuccessfulLoad = new Date(remoteLoadedAt).toISOString();
 			lastErrorCategory = invalidValue ? 'invalid_value' : null;
+			consecutiveFailures = 0;
 			if (invalidValue) {
 				console.warn('[RemoteConfigService] Ignored invalid allow-listed value');
 			}
@@ -418,6 +437,7 @@ async function loadNow(options = {}) {
 			remoteOverrides = {};
 			remoteLoadedAt = null;
 			lastErrorCategory = getErrorCategory(error);
+			consecutiveFailures += 1;
 			console.warn('[RemoteConfigService] Remote Config load failed:', lastErrorCategory);
 			clearExpirationTimer();
 			applyRuntimeConfig();
@@ -465,6 +485,7 @@ function resetForTesting() {
 	lastSuccessfulLoad = null;
 	lastErrorCategory = null;
 	loadingPromise = null;
+	consecutiveFailures = 0;
 	applyRuntimeConfig();
 }
 
@@ -480,6 +501,10 @@ module.exports = {
 	_setRemoteOverridesForTesting(overrides, loadedAt = Date.now()) {
 		remoteOverrides = { ...overrides };
 		remoteLoadedAt = loadedAt;
+		templateVersion = 'test';
+		lastSuccessfulLoad = new Date(loadedAt).toISOString();
+		lastErrorCategory = null;
+		consecutiveFailures = 0;
 		applyRuntimeConfig();
 		const remainingMs = (loadedAt + getMaxAgeMs()) - Date.now();
 		scheduleExpirationTimer(remainingMs);

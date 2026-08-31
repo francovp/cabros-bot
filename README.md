@@ -243,7 +243,7 @@ pnpm test:firebase
 
 - `ENABLE_BINANCE_TRADING` - Enable the operator-only Spot order endpoint (`true` or `false`, default: `false`)
 - `BINANCE_API_KEY` / `BINANCE_API_SECRET` - Server-side Binance credentials with Spot trading permission only; withdrawals must remain disabled and IP restrictions are recommended
-- `BINANCE_TRADING_ENV` - Binance environment: `testnet` (default) or explicit `live`
+- `BINANCE_TRADING_ENV` - Binance environment: `testnet` (default), `demo`, or explicit `live`. Use `demo` (`https://demo-api.binance.com`) for pre-live validation — it mirrors production market data and exchange filters exactly. Use `testnet` (`https://testnet.binance.vision`) for exploratory sandbox testing.
 - `BINANCE_TRADING_BASE_URL` - Optional custom base URL for Binance trading endpoints in live mode (default: unset / `https://api.binance.com`)
 - `BINANCE_TRADING_ALLOWED_SYMBOLS` - Comma-separated Spot symbol allow-list, for example `BTCUSDT,ETHUSDT`
 - `BINANCE_TRADING_MAX_NOTIONAL` - Maximum order notional in quote asset, enforced before submission
@@ -421,11 +421,11 @@ When `ENABLE_EQUITY_MARKET_DATA=true`, `dependencies.equityMarketData` reports T
 `dependencies.signalOutcomeWorker` reports the scheduler role, shutdown state, cadence/budgets, and the last-sweep heartbeat counters (`lastRunAt`, scanned, pending, evaluated, and error counts). The `worker` role is intended for the dedicated Render service; set the web service role to `disabled` during cutover so only one scheduler is active. A disabled local scheduler reports `ready: false` and `status: "disabled"` because it is not the process evaluating outcomes.
 
 The dedicated worker also persists the same non-sensitive heartbeat to `workerHeartbeats/signal-outcome` in Firestore. Heartbeat writes fail open and never block alert delivery.
-`featureFlags.firebaseRemoteConfig` reports `ENABLE_FIREBASE_REMOTE_CONFIG`. This is server-side Remote Config: the Firebase Admin SDK loads the published template with `initServerTemplate()`, while no Firebase Web/Client SDK configuration is involved. `dependencies.firebaseRemoteConfig` exposes only `enabled`, `configured`, `ready`, `status`, `source`, `templateVersion`, `lastSuccessfulLoad`, `lastErrorCategory`, and bounded loader settings; it never returns remote parameter values or credentials.
+`featureFlags.firebaseRemoteConfig` reports `ENABLE_FIREBASE_REMOTE_CONFIG`. This is server-side Remote Config: the Firebase Admin SDK loads the published template with `initServerTemplate()`, while no Firebase Web/Client SDK configuration is involved. `dependencies.firebaseRemoteConfig` exposes only `enabled`, `configured`, `ready` (true only after a successful, fresh template load), `status` (`ready`, `degraded`, `unknown`, `misconfigured`, or `disabled`), `source` (`remote`, `environment`, `default`, or `disabled`), `templateVersion`, `lastSuccessfulLoad`, `lastErrorCategory`, `consecutiveFailures`, and bounded loader settings; it never returns remote parameter values or credentials.
 
 `GET /api/capabilities` is an alias for the same payload.
 
-When configured, `featureFlags.binanceTrading` and `dependencies.binanceTrading` expose only the non-sensitive execution gate, selected `testnet`/`live` environment, allow-listed symbols, and readiness state.
+When configured, `featureFlags.binanceTrading` and `dependencies.binanceTrading` expose only the non-sensitive execution gate, selected `testnet`/`demo`/`live` environment, allow-listed symbols, and readiness state.
 
 ### Browser admin authentication
 

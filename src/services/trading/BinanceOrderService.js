@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const { MainClient } = require('binance');
 
 const TESTNET_BASE_URL = 'https://testnet.binance.vision';
+const DEMO_BASE_URL = 'https://demo-api.binance.com';
 const LIVE_BASE_URL = 'https://api.binance.com';
 const DEFAULT_BINANCE_DATA_BASE_URL = 'https://api.binance.com';
 const DEFAULT_TIMEOUT_MS = 10000;
@@ -214,7 +215,7 @@ function getConfig() {
 	const enabled = process.env.ENABLE_BINANCE_TRADING === 'true';
 	const configured = hasValue(process.env.BINANCE_API_KEY)
 		&& hasValue(process.env.BINANCE_API_SECRET)
-		&& (environment === 'testnet' || environment === 'live')
+		&& (environment === 'testnet' || environment === 'demo' || environment === 'live')
 		&& allowedSymbols.length > 0
 		&& Number.isFinite(maxNotional)
 		&& maxNotional > 0;
@@ -223,7 +224,7 @@ function getConfig() {
 		enabled,
 		configured,
 		environment,
-		baseUrl: environment === 'live' ? resolveLiveBaseUrl() : TESTNET_BASE_URL,
+		baseUrl: environment === 'live' ? resolveLiveBaseUrl() : environment === 'demo' ? DEMO_BASE_URL : TESTNET_BASE_URL,
 		allowedSymbols,
 		maxNotional,
 		timeoutMs: parseTimeout(process.env.BINANCE_TRADING_TIMEOUT_MS),
