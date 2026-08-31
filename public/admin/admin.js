@@ -2333,8 +2333,9 @@ const createOrderCard = (order) => {
 const ORDER_LIST_QUERY_VALIDATION = {
 	symbol: (value) => typeof value === 'string' && /^[A-Z0-9]{5,20}$/.test(String(value).trim().toUpperCase()),
 	limit: (value) => {
-		const parsed = Number.parseInt(String(value), 10);
-		return Number.isFinite(parsed) && parsed >= 1 && parsed <= 100;
+		const normalized = String(value).trim();
+		const parsed = Number(normalized);
+		return /^\d+$/.test(normalized) && Number.isFinite(parsed) && parsed >= 1 && parsed <= 100;
 	},
 };
 
@@ -2387,7 +2388,7 @@ const createOrderListForm = () => {
 		const symbolValue = trimFormValue(symbol.value).toUpperCase();
 		if (ORDER_LIST_QUERY_VALIDATION.symbol(symbolValue)) query.symbol = symbolValue;
 		const limitValue = trimFormValue(limit.value);
-		if (limitValue && ORDER_LIST_QUERY_VALIDATION.limit(limitValue)) query.limit = limitValue;
+		if (limitValue && ORDER_LIST_QUERY_VALIDATION.limit(limitValue)) query.limit = String(Number(limitValue));
 		if (!query.symbol) {
 			showError(output, 'Symbol must be a Binance Spot symbol such as BTCUSDT.');
 			return;
