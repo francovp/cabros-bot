@@ -4,6 +4,7 @@ const {
 	scannerPresetService,
 	scannerPresetSchedulerService,
 } = require('../services/scannerPresets');
+const { newsMonitorSchedulerService } = require('../services/newsMonitorScheduler');
 const idempotencyStorageService = require('../services/storage/IdempotencyStorageService');
 const { isFirestoreConfigured } = require('../services/storage/firestoreConfig');
 const SignalOutcomeService = require('../services/storage/SignalOutcomeService');
@@ -338,6 +339,7 @@ function getStatus() {
 			firestoreScannerPresets: firestoreScannerPresetsEnabled,
 			firestoreJobStorage: firestoreJobStorageEnabled,
 			scannerPresetScheduler: scannerPresetSchedulerService.isEnabled(),
+			newsMonitorScheduler: newsMonitorSchedulerService.isEnabled(),
 			sentryMonitoring: sentryEnabled,
 			sentryProfiling: sentryService.isProfilingEnabled(),
 			langfusePrompts: langfusePromptsEnabled,
@@ -400,6 +402,7 @@ function getStatus() {
 			firebaseRemoteConfig: remoteConfigStatus,
 			scannerPresetStorage: scannerPresetService.getStorageStatus(),
 			scannerPresetScheduler: scannerPresetSchedulerService.getStatus(),
+			newsMonitorScheduler: newsMonitorSchedulerService.getStatus(),
 			equityMarketData: equityMarketDataStatus,
 			signalOutcomeWorker: {
 				...signalOutcomeWorkerDependency,

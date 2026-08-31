@@ -21,6 +21,11 @@
       "type": "string"
     },
     {
+      "key": "replayBefore",
+      "value": "eyJ2IjoxLCJyZWNlaXZlZEF0IjoiMjAyNi0wNi0wNlQxMjozNDo1Ni4wMDBaIiwiaWQiOiJhbGVydC0xX2hhc2hfdHNfdXVpZCJ9",
+      "type": "string"
+    },
+    {
       "key": "jobCreateIdempotencyKey",
       "value": "job-create-001",
       "type": "string"
@@ -171,7 +176,7 @@
           "name": "Success",
           "status": "OK",
           "code": 200,
-          "body": "{\"service\":{\"name\":\"cabros-bot\",\"version\":\"0.1.0\"},\"featureFlags\":{\"telegramBot\":true,\"whatsappAlerts\":false,\"geminiGrounding\":false,\"newsMonitor\":false,\"newsMonitorTestMode\":false,\"tradingViewVolumeConfirmation\":false,\"firestoreJobStorage\":false,\"messageFooterMetadata\":true,\"firestoreIdempotency\":false,\"equityMarketData\":false,\"firebaseRemoteConfig\":false,\"jobExecutionWorker\":false},\"dependencies\":{\"geminiQuota\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"cooldownActive\":false,\"remainingCooldownMs\":0,\"lastTriggeredAt\":null,\"triggersTotal\":0,\"braveFallbacksDuringCooldown\":0,\"lastBraveFallbackAt\":null,\"metrics\":{\"totalRequests\":0,\"successRequests\":0,\"failureRequests\":0,\"timeoutRequests\":0},\"concurrencyGate\":{\"maxConcurrent\":null,\"queueTimeoutMs\":0,\"inFlight\":0,\"queueDepth\":0,\"acquiredTotal\":0,\"shedTotal\":0,\"timeoutTotal\":0}},\"groundingCoalescing\":{\"enabled\":false,\"windowMs\":0,\"activeEntries\":0,\"hits\":0,\"misses\":0,\"failures\":0},\"tradingViewMcp\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"lastCheckedAt\":null,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastErrorCategory\":null,\"successCount\":0,\"failureCount\":0,\"circuitBreaker\":{\"state\":\"closed\",\"consecutiveFailures\":0,\"openedAt\":null,\"lastStateChangeAt\":null,\"failureThreshold\":5,\"cooldownMs\":600000}},\"tradingViewVolumeConfirmation\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"lastCheckedAt\":null,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastErrorCategory\":null,\"successCount\":0,\"failureCount\":0,\"circuitBreaker\":{\"state\":\"closed\",\"consecutiveFailures\":0,\"openedAt\":null,\"lastStateChangeAt\":null,\"failureThreshold\":5,\"cooldownMs\":600000}},\"firestoreJobStorage\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\"},\"signalOutcomeWorker\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"role\":\"web\",\"running\":false,\"shutdownRequested\":false,\"lastRunScannedCount\":0,\"lastRunPendingCount\":0,\"lastRunEvaluatedCount\":0,\"lastRunErrorCount\":0},\"equityMarketData\":{\"provider\":null,\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"supportedExchanges\":[\"BATS\",\"NASDAQ\",\"NYSE\",\"AMEX\",\"NYSE ARCA\",\"FX_IDC\",\"SPCFD\"],\"timeoutMs\":5000},\"idempotencyStorage\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"mode\":\"ephemeral\",\"backend\":\"memory\"},\"firebaseRemoteConfig\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"source\":\"disabled\",\"templateVersion\":null,\"lastSuccessfulLoad\":null,\"lastErrorCategory\":null,\"refreshIntervalMs\":900000,\"maxAgeMs\":3600000}}}"
+          "body": "{\"service\":{\"name\":\"cabros-bot\",\"version\":\"0.1.0\"},\"featureFlags\":{\"telegramBot\":true,\"whatsappAlerts\":false,\"geminiGrounding\":false,\"newsMonitor\":false,\"newsMonitorTestMode\":false,\"tradingViewVolumeConfirmation\":false,\"firestoreJobStorage\":false,\"messageFooterMetadata\":true,\"firestoreIdempotency\":false,\"equityMarketData\":false,\"firebaseRemoteConfig\":false,\"jobExecutionWorker\":false},\"dependencies\":{\"geminiQuota\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"cooldownActive\":false,\"remainingCooldownMs\":0,\"lastTriggeredAt\":null,\"triggersTotal\":0,\"braveFallbacksDuringCooldown\":0,\"lastBraveFallbackAt\":null,\"metrics\":{\"totalRequests\":0,\"successRequests\":0,\"failureRequests\":0,\"timeoutRequests\":0}},\"groundingCoalescing\":{\"enabled\":false,\"windowMs\":0,\"activeEntries\":0,\"hits\":0,\"misses\":0,\"failures\":0},\"tradingViewMcp\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"lastCheckedAt\":null,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastErrorCategory\":null,\"successCount\":0,\"failureCount\":0,\"circuitBreaker\":{\"state\":\"closed\",\"consecutiveFailures\":0,\"openedAt\":null,\"lastStateChangeAt\":null,\"failureThreshold\":5,\"cooldownMs\":600000}},\"tradingViewVolumeConfirmation\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"lastCheckedAt\":null,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastErrorCategory\":null,\"successCount\":0,\"failureCount\":0,\"circuitBreaker\":{\"state\":\"closed\",\"consecutiveFailures\":0,\"openedAt\":null,\"lastStateChangeAt\":null,\"failureThreshold\":5,\"cooldownMs\":600000}},\"firestoreJobStorage\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\"},\"signalOutcomeWorker\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"role\":\"web\",\"running\":false,\"shutdownRequested\":false,\"lastRunScannedCount\":0,\"lastRunPendingCount\":0,\"lastRunEvaluatedCount\":0,\"lastRunErrorCount\":0},\"equityMarketData\":{\"provider\":null,\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"supportedExchanges\":[\"BATS\",\"NASDAQ\",\"NYSE\",\"AMEX\",\"NYSE ARCA\",\"FX_IDC\",\"SPCFD\"],\"timeoutMs\":5000},\"idempotencyStorage\":{\"enabled\":false,\"configured\":true,\"ready\":false,\"status\":\"disabled\",\"mode\":\"ephemeral\",\"backend\":\"memory\"},\"firebaseRemoteConfig\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"source\":\"disabled\",\"templateVersion\":null,\"lastSuccessfulLoad\":null,\"lastErrorCategory\":null,\"refreshIntervalMs\":900000,\"maxAgeMs\":3600000}}}"
         }
       ]
     },
@@ -235,7 +240,7 @@
           "name": "Success",
           "status": "OK",
           "code": 200,
-          "body": "{\"featureFlags\":{\"tradingViewVolumeConfirmation\":true,\"firestoreJobStorage\":true,\"newsMonitorTestMode\":false,\"messageFooterMetadata\":true,\"cloudflareAig\":false,\"equityMarketData\":false,\"firebaseRemoteConfig\":true},\"dependencies\":{\"geminiQuota\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\",\"cooldownActive\":false,\"remainingCooldownMs\":0,\"lastTriggeredAt\":null,\"triggersTotal\":0,\"braveFallbacksDuringCooldown\":0,\"lastBraveFallbackAt\":null,\"metrics\":{\"totalRequests\":0,\"successRequests\":0,\"failureRequests\":0,\"timeoutRequests\":0},\"concurrencyGate\":{\"maxConcurrent\":null,\"queueTimeoutMs\":0,\"inFlight\":0,\"queueDepth\":0,\"acquiredTotal\":0,\"shedTotal\":0,\"timeoutTotal\":0}},\"tradingViewMcp\":{\"enabled\":true,\"configured\":true,\"ready\":false,\"status\":\"unknown\",\"lastCheckedAt\":null,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastErrorCategory\":null,\"successCount\":0,\"failureCount\":0,\"circuitBreaker\":{\"state\":\"closed\",\"consecutiveFailures\":0,\"openedAt\":null,\"lastStateChangeAt\":null,\"failureThreshold\":5,\"cooldownMs\":600000}},\"tradingViewVolumeConfirmation\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\",\"circuitBreaker\":{\"state\":\"closed\",\"consecutiveFailures\":0,\"openedAt\":null,\"lastStateChangeAt\":null,\"failureThreshold\":5,\"cooldownMs\":600000}},\"firestoreJobStorage\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\"},\"cloudflareAig\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\"},\"equityMarketData\":{\"provider\":null,\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"supportedExchanges\":[\"BATS\",\"NASDAQ\",\"NYSE\",\"AMEX\",\"NYSE ARCA\",\"FX_IDC\",\"SPCFD\"],\"timeoutMs\":5000},\"firebaseRemoteConfig\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\",\"source\":\"remote\",\"templateVersion\":\"7\",\"lastSuccessfulLoad\":\"2026-08-02T08:30:00.000Z\",\"lastErrorCategory\":null,\"refreshIntervalMs\":900000,\"maxAgeMs\":3600000}}}"
+          "body": "{\"featureFlags\":{\"tradingViewVolumeConfirmation\":true,\"firestoreJobStorage\":true,\"newsMonitorTestMode\":false,\"messageFooterMetadata\":true,\"cloudflareAig\":false,\"equityMarketData\":false,\"firebaseRemoteConfig\":true},\"dependencies\":{\"geminiQuota\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\",\"cooldownActive\":false,\"remainingCooldownMs\":0,\"lastTriggeredAt\":null,\"triggersTotal\":0,\"braveFallbacksDuringCooldown\":0,\"lastBraveFallbackAt\":null,\"metrics\":{\"totalRequests\":0,\"successRequests\":0,\"failureRequests\":0,\"timeoutRequests\":0}},\"tradingViewMcp\":{\"enabled\":true,\"configured\":true,\"ready\":false,\"status\":\"unknown\",\"lastCheckedAt\":null,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastErrorCategory\":null,\"successCount\":0,\"failureCount\":0,\"circuitBreaker\":{\"state\":\"closed\",\"consecutiveFailures\":0,\"openedAt\":null,\"lastStateChangeAt\":null,\"failureThreshold\":5,\"cooldownMs\":600000}},\"tradingViewVolumeConfirmation\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\",\"circuitBreaker\":{\"state\":\"closed\",\"consecutiveFailures\":0,\"openedAt\":null,\"lastStateChangeAt\":null,\"failureThreshold\":5,\"cooldownMs\":600000}},\"firestoreJobStorage\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\"},\"cloudflareAig\":{\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\"},\"equityMarketData\":{\"provider\":null,\"enabled\":false,\"configured\":false,\"ready\":false,\"status\":\"disabled\",\"supportedExchanges\":[\"BATS\",\"NASDAQ\",\"NYSE\",\"AMEX\",\"NYSE ARCA\",\"FX_IDC\",\"SPCFD\"],\"timeoutMs\":5000},\"firebaseRemoteConfig\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\",\"source\":\"remote\",\"templateVersion\":\"7\",\"lastSuccessfulLoad\":\"2026-08-02T08:30:00.000Z\",\"lastErrorCategory\":null,\"refreshIntervalMs\":900000,\"maxAgeMs\":3600000}}}"
         }
       ]
     },
@@ -281,7 +286,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"text\": \"BTCUSDT: Price breakout above $85,000 with strong volume\",\n  \"channels\": [\"telegram\"],\n  \"telegramChatId\": \"-1001234567890\"\n}"
+              "raw": "{\n  \"text\": \"BTCUSDT: Price breakout above $85,000 with strong volume\",\n  \"channels\": [\"telegram\"],\n  \"telegramChatId\": \"-1001234567890\",\n  \"telegramThreadId\": 101\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/api/webhook/alert",
@@ -437,19 +442,19 @@
               "name": "Dry run - full TradingView enrichment",
               "status": "OK",
               "code": 200,
-              "body": "{\"success\":true,\"dryRun\":true,\"enriched\":true,\"payload\":{\"text\":\"BTCUSDT(240) pas\\u00f3 a se\\u00f1al de COMPRA\",\"enrichedData\":{\"tradingViewEnrichmentApplied\":true,\"tradingViewEnrichmentStatus\":\"full\",\"sentiment\":\"BULLISH\",\"sentiment_score\":0.8,\"current_price\":64863.03,\"price_data\":{\"current_price\":64863.03,\"high\":65000,\"low\":64000}}}}"
+              "body": "{\"success\":true,\"dryRun\":true,\"enriched\":true,\"payload\":{\"text\":\"BTCUSDT(240) pas\u00f3 a se\u00f1al de COMPRA\",\"enrichedData\":{\"tradingViewEnrichmentApplied\":true,\"tradingViewEnrichmentStatus\":\"full\",\"sentiment\":\"BULLISH\",\"sentiment_score\":0.8,\"current_price\":64863.03,\"price_data\":{\"current_price\":64863.03,\"high\":65000,\"low\":64000}}}}"
             },
             {
               "name": "Dry run - partial TradingView enrichment",
               "status": "OK",
               "code": 200,
-              "body": "{\"success\":true,\"dryRun\":true,\"enriched\":true,\"payload\":{\"text\":\"BTCUSDT(240) pas\\u00f3 a se\\u00f1al de COMPRA\",\"enrichedData\":{\"tradingViewEnrichmentApplied\":true,\"tradingViewEnrichmentStatus\":\"partial\",\"sentiment\":\"BULLISH\",\"current_price\":64863.03,\"price_data\":{\"current_price\":64863.03,\"high\":65000,\"low\":64000}}}}"
+              "body": "{\"success\":true,\"dryRun\":true,\"enriched\":true,\"payload\":{\"text\":\"BTCUSDT(240) pas\u00f3 a se\u00f1al de COMPRA\",\"enrichedData\":{\"tradingViewEnrichmentApplied\":true,\"tradingViewEnrichmentStatus\":\"partial\",\"sentiment\":\"BULLISH\",\"current_price\":64863.03,\"price_data\":{\"current_price\":64863.03,\"high\":65000,\"low\":64000}}}}"
             },
             {
               "name": "Dry run - failed TradingView enrichment",
               "status": "OK",
               "code": 200,
-              "body": "{\"success\":true,\"dryRun\":true,\"enriched\":true,\"payload\":{\"text\":\"BTCUSDT(240) pas\\u00f3 a se\\u00f1al de COMPRA\",\"enrichedData\":{\"tradingViewEnrichmentApplied\":false,\"tradingViewEnrichmentStatus\":\"failed\",\"sentiment\":\"NEUTRAL\",\"insights\":[\"RSI cercano a sobreventa\"],\"technical_levels\":{\"supports\":[\"79,500\"],\"resistances\":[\"82,300\"]},\"levelsSource\":\"gemini-grounding\"}}}"
+              "body": "{\"success\":true,\"dryRun\":true,\"enriched\":true,\"payload\":{\"text\":\"BTCUSDT(240) pas\u00f3 a se\u00f1al de COMPRA\",\"enrichedData\":{\"tradingViewEnrichmentApplied\":false,\"tradingViewEnrichmentStatus\":\"failed\",\"sentiment\":\"NEUTRAL\",\"insights\":[\"RSI cercano a sobreventa\"],\"technical_levels\":{\"supports\":[\"79,500\"],\"resistances\":[\"82,300\"]},\"levelsSource\":\"gemini-grounding\"}}}"
             },
             {
               "name": "Dry run - TradingView not applicable",
@@ -676,7 +681,7 @@
                   "value": "application/json"
                 }
               ],
-              "body": "{\"error\":\"ranked must be a boolean\",\"code\":\"INVALID_REQUEST\"}"
+              "body": "{\n  \"error\": \"ranked must be a boolean\",\n  \"code\": \"INVALID_REQUEST\"\n}"
             }
           ]
         },
@@ -730,7 +735,7 @@
                   "value": "application/json"
                 }
               ],
-              "body": "{\"error\":\"includeMultiTimeframe must be a boolean\",\"code\":\"INVALID_REQUEST\"}"
+              "body": "{\n  \"error\": \"includeMultiTimeframe must be a boolean\",\n  \"code\": \"INVALID_REQUEST\"\n}"
             }
           ]
         },
@@ -804,19 +809,19 @@
               "name": "Success - decision-ready analysis",
               "status": "OK",
               "code": 200,
-              "body": "{\"success\":true,\"symbol\":\"BINANCE:BTCUSDT\",\"alertText\":\"*\\ud83d\\udd34 SOBRECOMPRADOS*\\nBTCUSDT $77,103.55 (-0.8%) | RSI 77.9...\",\"analysis\":{\"price_data\":{\"close\":77066.92,\"change_percent\":-0.86},\"technical_indicators\":{\"RSI\":77.8,\"ATR\":1484.21},\"risk\":{\"side\":\"SELL\",\"stop_loss\":79293.24,\"target\":72614.29,\"valid\":true},\"decision\":{\"action\":\"SELL\",\"dataSufficient\":true}}}"
+              "body": "{\n  \"success\": true,\n  \"symbol\": \"BINANCE:BTCUSDT\",\n  \"alertText\": \"*\ud83d\udd34 SOBRECOMPRADOS*\\nBTCUSDT $77,103.55 (-0.8%) | RSI 77.9...\",\n  \"analysis\": {\n    \"price_data\": {\n      \"close\": 77066.92,\n      \"change_percent\": -0.86\n    },\n    \"technical_indicators\": {\n      \"RSI\": 77.8,\n      \"ATR\": 1484.21\n    },\n    \"risk\": {\n      \"side\": \"SELL\",\n      \"stop_loss\": 79293.24,\n      \"target\": 72614.29,\n      \"valid\": true\n    },\n    \"decision\": {\n      \"action\": \"SELL\",\n      \"dataSufficient\": true\n    }\n  }\n}"
             },
             {
               "name": "400 Invalid symbol",
               "status": "Bad Request",
               "code": 400,
-              "body": "{\"success\":false,\"error\":\"Symbol must use EXCHANGE:SYMBOL format: BTCUSDT\",\"code\":\"INVALID_REQUEST\"}"
+              "body": "{\n  \"success\": false,\n  \"error\": \"Symbol must use EXCHANGE:SYMBOL format: BTCUSDT\",\n  \"code\": \"INVALID_REQUEST\"\n}"
             },
             {
               "name": "502 TradingView failure",
               "status": "Bad Gateway",
               "code": 502,
-              "body": "{\"success\":false,\"error\":\"TradingView MCP unavailable\",\"code\":\"SYMBOL_ANALYSIS_FAILED\"}"
+              "body": "{\n  \"success\": false,\n  \"error\": \"TradingView MCP unavailable\",\n  \"code\": \"SYMBOL_ANALYSIS_FAILED\"\n}"
             }
           ]
         },
@@ -851,7 +856,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"message\": \"Custom notification from automation\",\n  \"channels\": [\"telegram\", \"whatsapp\", \"discord\"],\n  \"telegramChatId\": \"-1001234567890\",\n  \"whatsappChatId\": \"120363000000000000@g.us\",\n  \"discordWebhookUrl\": \"https://discord.com/api/webhooks/123456789/abc-xyz-token\",\n  \"idempotencyKey\": \"generic-message-demo-1\"\n}"
+              "raw": "{\n  \"message\": \"Custom notification from automation\",\n  \"channels\": [\"telegram\", \"whatsapp\", \"discord\"],\n  \"telegramChatId\": \"-1001234567890\",\n  \"telegramThreadId\": 101,\n  \"whatsappChatId\": \"120363000000000000@g.us\",\n  \"discordWebhookUrl\": \"https://discord.com/api/webhooks/123456789/abc-xyz-token\",\n  \"idempotencyKey\": \"generic-message-demo-1\"\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/api/webhook/message",
@@ -870,13 +875,13 @@
               "name": "Success (selected channels)",
               "status": "OK",
               "code": 200,
-              "body": "{\"success\":true,\"results\":[{\"channel\":\"telegram\",\"success\":true,\"messageId\":\"tg-msg-123\",\"attemptCount\":1,\"durationMs\":450},{\"channel\":\"whatsapp\",\"success\":true,\"messageId\":\"wa-msg-456\",\"attemptCount\":1,\"durationMs\":320},{\"channel\":\"discord\",\"success\":true,\"messageId\":\"discord-msg-789\"}]}"
+              "body": "{\n  \"success\": true,\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"tg-msg-123\",\n      \"attemptCount\": 1,\n      \"durationMs\": 450\n    },\n    {\n      \"channel\": \"whatsapp\",\n      \"success\": true,\n      \"messageId\": \"wa-msg-456\",\n      \"attemptCount\": 1,\n      \"durationMs\": 320\n    },\n    {\n      \"channel\": \"discord\",\n      \"success\": true,\n      \"messageId\": \"discord-msg-789\"\n    }\n  ]\n}"
             },
             {
               "name": "Success (single channel)",
               "status": "OK",
               "code": 200,
-              "body": "{\"success\":true,\"results\":[{\"channel\":\"telegram\",\"success\":true,\"messageId\":\"tg-msg-789\",\"attemptCount\":1,\"durationMs\":410}]}"
+              "body": "{\n  \"success\": true,\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"tg-msg-789\",\n      \"attemptCount\": 1,\n      \"durationMs\": 410\n    }\n  ]\n}"
             },
             {
               "name": "Success (idempotent replay)",
@@ -888,67 +893,73 @@
                   "value": "true"
                 }
               ],
-              "body": "{\"success\":true,\"idempotencyReplayed\":true,\"results\":[{\"channel\":\"telegram\",\"success\":true,\"messageId\":\"tg-msg-123\"}]}"
+              "body": "{\n  \"success\": true,\n  \"idempotencyReplayed\": true,\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"tg-msg-123\"\n    }\n  ]\n}"
             },
             {
               "name": "Error (idempotency conflict)",
               "status": "Conflict",
               "code": 409,
-              "body": "{\"error\":\"Idempotency key was reused with a different payload\",\"code\":\"IDEMPOTENCY_CONFLICT\"}"
+              "body": "{\n  \"error\": \"Idempotency key was reused with a different payload\",\n  \"code\": \"IDEMPOTENCY_CONFLICT\"\n}"
             },
             {
               "name": "Error (invalid idempotency key type)",
               "status": "Bad Request",
               "code": 400,
-              "body": "{\"error\":\"Idempotency key must be a non-empty string\",\"code\":\"INVALID_REQUEST\"}"
+              "body": "{\n  \"error\": \"Idempotency key must be a non-empty string\",\n  \"code\": \"INVALID_REQUEST\"\n}"
             },
             {
               "name": "Error (empty message)",
               "status": "Bad Request",
               "code": 400,
-              "body": "{\"success\":false,\"error\":\"'message' is required and must be a non-empty string\",\"details\":{\"field\":\"message\"}}"
+              "body": "{\n  \"success\": false,\n  \"error\": \"'message' is required and must be a non-empty string\",\n  \"details\": {\n    \"field\": \"message\"\n  }\n}"
             },
             {
               "name": "Error (invalid telegramChatId)",
               "status": "Bad Request",
               "code": 400,
-              "body": "{\"success\":false,\"error\":\"\\\"telegramChatId\\\" must be a non-empty string if provided\",\"details\":{\"field\":\"telegramChatId\"}}"
+              "body": "{\n  \"success\": false,\n  \"error\": \"\\\"telegramChatId\\\" must be a non-empty string if provided\",\n  \"details\": {\n    \"field\": \"telegramChatId\"\n  }\n}"
+            },
+            {
+              "name": "Error (invalid telegramThreadId)",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"success\": false,\n  \"error\": \"\\\"telegramThreadId\\\" must be a non-negative integer if provided\",\n  \"details\": {\n    \"field\": \"telegramThreadId\"\n  }\n}"
             },
             {
               "name": "Error (invalid whatsappChatId)",
               "status": "Bad Request",
               "code": 400,
-              "body": "{\"success\":false,\"error\":\"\\\"whatsappChatId\\\" must be a non-empty string if provided\",\"details\":{\"field\":\"whatsappChatId\"}}"
+              "body": "{\n  \"success\": false,\n  \"error\": \"\\\"whatsappChatId\\\" must be a non-empty string if provided\",\n  \"details\": {\n    \"field\": \"whatsappChatId\"\n  }\n}"
             },
             {
               "name": "Error (invalid discordWebhookUrl)",
               "status": "Bad Request",
               "code": 400,
-              "body": "{\"success\":false,\"error\":\"\\\"discordWebhookUrl\\\" must be a valid HTTPS Discord webhook URL\",\"details\":{\"field\":\"discordWebhookUrl\"}}"
+              "body": "{\n  \"success\": false,\n  \"error\": \"\\\"discordWebhookUrl\\\" must be a valid HTTPS Discord webhook URL\",\n  \"details\": {\n    \"field\": \"discordWebhookUrl\"\n  }\n}"
             },
             {
               "name": "Error (unknown channel)",
               "status": "Bad Request",
               "code": 400,
-              "body": "{\"success\":false,\"error\":\"Unknown channel(s): slack. Valid channels: telegram, whatsapp, discord\",\"details\":{\"field\":\"channels\",\"unknownChannels\":[\"slack\"]}}"
+              "body": "{\n  \"success\": false,\n  \"error\": \"Unknown channel(s): slack. Valid channels: telegram, whatsapp, discord\",\n  \"details\": {\n    \"field\": \"channels\",\n    \"unknownChannels\": [\"slack\"]\n  }\n}"
             },
             {
               "name": "Partial Failure (WhatsApp down)",
               "status": "OK",
               "code": 200,
-              "body": "{\"success\":true,\"results\":[{\"channel\":\"telegram\",\"success\":true,\"messageId\":\"tg-msg-789\",\"attemptCount\":1,\"durationMs\":450},{\"channel\":\"whatsapp\",\"success\":false,\"error\":\"GreenAPI request timeout\",\"attemptCount\":3,\"durationMs\":7800}]}"
+              "body": "{\n  \"success\": true,\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"tg-msg-789\",\n      \"attemptCount\": 1,\n      \"durationMs\": 450\n    },\n    {\n      \"channel\": \"whatsapp\",\n      \"success\": false,\n      \"error\": \"GreenAPI request timeout\",\n      \"attemptCount\": 3,\n      \"durationMs\": 7800\n    }\n  ]\n}"
             },
             {
               "name": "Unauthorized (missing API key)",
               "status": "Unauthorized",
               "code": 401,
-              "body": "{\"error\":\"Unauthorized: Missing API key\"}"
+              "body": "{\n  \"error\": \"Unauthorized: Missing API key\"\n}"
             },
             {
               "name": "Internal Server Error (500)",
               "status": "Internal Server Error",
               "code": 500,
-              "body": "{\"success\":false,\"error\":\"Internal server error\"}"
+              "body": "{\n  \"success\": false,\n  \"error\": \"Internal server error\"\n}"
             }
           ]
         },
@@ -996,7 +1007,7 @@
               "name": "Success",
               "status": "OK",
               "code": 200,
-              "body": "{\"success\":true,\"results\":[{\"channel\":\"telegram\",\"success\":true,\"messageId\":\"tg-msg-123\"}]}"
+              "body": "{\n  \"success\": true,\n  \"results\": [{\n    \"channel\": \"telegram\",\n    \"success\": true,\n    \"messageId\": \"tg-msg-123\"\n  }]\n}"
             }
           ]
         },
@@ -1038,7 +1049,7 @@
               "name": "Success",
               "status": "OK",
               "code": 200,
-              "body": "{\"success\":true,\"results\":[{\"channel\":\"telegram\",\"success\":true,\"messageId\":\"tg-msg-123\"}]}"
+              "body": "{\n  \"success\": true,\n  \"results\": [{\n    \"channel\": \"telegram\",\n    \"success\": true,\n    \"messageId\": \"tg-msg-123\"\n  }]\n}"
             }
           ]
         },
@@ -1085,7 +1096,7 @@
               "name": "Success (x-idempotency-key header)",
               "status": "OK",
               "code": 200,
-              "body": "{\"success\":true,\"results\":[{\"channel\":\"telegram\",\"success\":true,\"messageId\":\"tg-msg-123\",\"attemptCount\":1,\"durationMs\":450}]}",
+              "body": "{\n  \"success\": true,\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"tg-msg-123\",\n      \"attemptCount\": 1,\n      \"durationMs\": 450\n    }\n  ]\n}",
               "originalRequest": {
                 "method": "POST",
                 "header": [
@@ -1132,7 +1143,7 @@
                   "value": "true"
                 }
               ],
-              "body": "{\"success\":true,\"idempotencyReplayed\":true,\"results\":[{\"channel\":\"telegram\",\"success\":true,\"messageId\":\"tg-msg-123\",\"attemptCount\":1,\"durationMs\":450}]}",
+              "body": "{\n  \"success\": true,\n  \"idempotencyReplayed\": true,\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"tg-msg-123\",\n      \"attemptCount\": 1,\n      \"durationMs\": 450\n    }\n  ]\n}",
               "originalRequest": {
                 "method": "POST",
                 "header": [
@@ -1173,7 +1184,7 @@
               "name": "Error (idempotency conflict)",
               "status": "Conflict",
               "code": 409,
-              "body": "{\"error\":\"Idempotency key was reused with a different payload\",\"code\":\"IDEMPOTENCY_CONFLICT\"}",
+              "body": "{\n  \"error\": \"Idempotency key was reused with a different payload\",\n  \"code\": \"IDEMPOTENCY_CONFLICT\"\n}",
               "originalRequest": {
                 "method": "POST",
                 "header": [
@@ -1325,25 +1336,25 @@
               "name": "Storage mode contract",
               "status": "OK",
               "code": 201,
-              "body": "{\"success\":true,\"storage\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\",\"mode\":\"durable\",\"backend\":\"firestore\"},\"preset\":{\"id\":\"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\"name\":\"Daily Scan\"}}"
+              "body": "{\n  \"success\": true,\n  \"storage\": {\n    \"enabled\": true,\n    \"configured\": true,\n    \"ready\": true,\n    \"status\": \"ready\",\n    \"mode\": \"durable\",\n    \"backend\": \"firestore\"\n  },\n  \"preset\": {\n    \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n    \"name\": \"Daily Scan\"\n  }\n}"
             },
             {
               "name": "Error (invalid name)",
               "status": "Bad Request",
               "code": 400,
-              "body": "{\"error\":\"name must be a string\",\"code\":\"INVALID_REQUEST\"}"
+              "body": "{\n  \"error\": \"name must be a string\",\n  \"code\": \"INVALID_REQUEST\"\n}"
             },
             {
               "name": "Created with Schedule and Routing",
               "status": "Created",
               "code": 201,
-              "body": "{\"success\":true,\"preset\":{\"id\":\"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\"name\":\"Hourly Scan\",\"exchange\":\"BINANCE\",\"timeframe\":\"1h\",\"scans\":[\"top_gainers\",\"top_losers\"],\"limit\":5,\"bbwThreshold\":0.05,\"schedule\":{\"enabled\":true,\"cadence\":\"1h\",\"cadenceMs\":3600000},\"channels\":[\"telegram\"],\"lastRunAt\":null,\"nextRunAt\":\"2026-08-24T18:00:00.000Z\",\"lastStatus\":null,\"lastError\":null,\"lastDurationMs\":null,\"createdAt\":\"2026-08-24T17:00:00.000Z\",\"updatedAt\":\"2026-08-24T17:00:00.000Z\"}}"
+              "body": "{\n  \"success\": true,\n  \"preset\": {\n    \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n    \"name\": \"Hourly Scan\",\n    \"exchange\": \"BINANCE\",\n    \"timeframe\": \"1h\",\n    \"scans\": [\"top_gainers\", \"top_losers\"],\n    \"limit\": 5,\n    \"bbwThreshold\": 0.05,\n    \"schedule\": {\n      \"enabled\": true,\n      \"cadence\": \"1h\",\n      \"cadenceMs\": 3600000\n    },\n    \"channels\": [\"telegram\"],\n    \"lastRunAt\": null,\n    \"nextRunAt\": \"2026-08-24T18:00:00.000Z\",\n    \"lastStatus\": null,\n    \"lastError\": null,\n    \"lastDurationMs\": null,\n    \"createdAt\": \"2026-08-24T17:00:00.000Z\",\n    \"updatedAt\": \"2026-08-24T17:00:00.000Z\"\n  }\n}"
             },
             {
               "name": "Created",
               "status": "Created",
               "code": 201,
-              "body": "{\"success\":true,\"preset\":{\"id\":\"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\"name\":\"Daily Scan\",\"exchange\":\"BINANCE\",\"timeframe\":\"4h\",\"scans\":[\"top_gainers\",\"top_losers\",\"volume_breakout_scanner\"],\"limit\":10,\"bbwThreshold\":0.05,\"createdAt\":\"2026-06-13T04:43:15.301Z\",\"updatedAt\":\"2026-06-13T04:43:15.301Z\"}}"
+              "body": "{\n  \"success\": true,\n  \"preset\": {\n    \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n    \"name\": \"Daily Scan\",\n    \"exchange\": \"BINANCE\",\n    \"timeframe\": \"4h\",\n    \"scans\": [\"top_gainers\", \"top_losers\", \"volume_breakout_scanner\"],\n    \"limit\": 10,\n    \"bbwThreshold\": 0.05,\n    \"createdAt\": \"2026-06-13T04:43:15.301Z\",\n    \"updatedAt\": \"2026-06-13T04:43:15.301Z\"\n  }\n}"
             }
           ]
         },
@@ -1374,13 +1385,13 @@
               "name": "Storage mode contract",
               "status": "OK",
               "code": 200,
-              "body": "{\"success\":true,\"storage\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\",\"mode\":\"durable\",\"backend\":\"firestore\"},\"presets\":[]}"
+              "body": "{\n  \"success\": true,\n  \"storage\": {\n    \"enabled\": true,\n    \"configured\": true,\n    \"ready\": true,\n    \"status\": \"ready\",\n    \"mode\": \"durable\",\n    \"backend\": \"firestore\"\n  },\n  \"presets\": []\n}"
             },
             {
               "name": "Success",
               "status": "OK",
               "code": 200,
-              "body": "{\"success\":true,\"presets\":[{\"id\":\"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\"name\":\"Daily Scan\",\"exchange\":\"BINANCE\",\"timeframe\":\"4h\",\"scans\":[\"top_gainers\",\"top_losers\",\"volume_breakout_scanner\"],\"limit\":10,\"bbwThreshold\":0.05,\"createdAt\":\"2026-06-13T04:43:15.301Z\",\"updatedAt\":\"2026-06-13T04:43:15.301Z\"}]}"
+              "body": "{\n  \"success\": true,\n  \"presets\": [\n    {\n      \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n      \"name\": \"Daily Scan\",\n      \"exchange\": \"BINANCE\",\n      \"timeframe\": \"4h\",\n      \"scans\": [\"top_gainers\", \"top_losers\", \"volume_breakout_scanner\"],\n      \"limit\": 10,\n      \"bbwThreshold\": 0.05,\n      \"createdAt\": \"2026-06-13T04:43:15.301Z\",\n      \"updatedAt\": \"2026-06-13T04:43:15.301Z\"\n    }\n  ]\n}"
             }
           ]
         },
@@ -1412,18 +1423,24 @@
               "name": "Storage mode contract",
               "status": "OK",
               "code": 200,
-              "body": "{\"success\":true,\"storage\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\",\"mode\":\"durable\",\"backend\":\"firestore\"},\"preset\":{\"id\":\"83d1a85e-d433-4aa1-96b9-e62468bf0397\"}}"
+              "body": "{\n  \"success\": true,\n  \"storage\": {\n    \"enabled\": true,\n    \"configured\": true,\n    \"ready\": true,\n    \"status\": \"ready\",\n    \"mode\": \"durable\",\n    \"backend\": \"firestore\"\n  },\n  \"preset\": {\n    \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\"\n  }\n}"
             },
             {
               "name": "Success",
               "status": "OK",
               "code": 200,
-              "body": "{\"success\":true,\"preset\":{\"id\":\"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\"name\":\"Daily Scan\",\"exchange\":\"BINANCE\",\"timeframe\":\"4h\",\"scans\":[\"top_gainers\",\"top_losers\",\"volume_breakout_scanner\"],\"limit\":10,\"bbwThreshold\":0.05,\"createdAt\":\"2026-06-13T04:43:15.301Z\",\"updatedAt\":\"2026-06-13T04:43:15.301Z\"}}"
+              "body": "{\n  \"success\": true,\n  \"preset\": {\n    \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n    \"name\": \"Daily Scan\",\n    \"exchange\": \"BINANCE\",\n    \"timeframe\": \"4h\",\n    \"scans\": [\"top_gainers\", \"top_losers\", \"volume_breakout_scanner\"],\n    \"limit\": 10,\n    \"bbwThreshold\": 0.05,\n    \"createdAt\": \"2026-06-13T04:43:15.301Z\",\n    \"updatedAt\": \"2026-06-13T04:43:15.301Z\",\n    \"version\": 3\n  }\n}",
+              "header": [
+                {
+                  "key": "ETag",
+                  "value": "\"3\""
+                }
+              ]
             }
           ]
         },
         {
-          "name": "PUT Update Scanner Preset",
+          "name": "PUT Update Scanner Preset (matching If-Match)",
           "request": {
             "method": "PUT",
             "header": [
@@ -1436,6 +1453,11 @@
                 "key": "x-api-key",
                 "value": "{{apiKey}}",
                 "type": "text"
+              },
+              {
+                "key": "If-Match",
+                "value": "\"3\"",
+                "description": "Optimistic-concurrency token mirrored from the ETag response header"
               }
             ],
             "body": {
@@ -1459,13 +1481,37 @@
               "name": "Storage mode contract",
               "status": "OK",
               "code": 200,
-              "body": "{\"success\":true,\"storage\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\",\"mode\":\"durable\",\"backend\":\"firestore\"},\"preset\":{\"id\":\"83d1a85e-d433-4aa1-96b9-e62468bf0397\"}}"
+              "body": "{\n  \"success\": true,\n  \"storage\": {\n    \"enabled\": true,\n    \"configured\": true,\n    \"ready\": true,\n    \"status\": \"ready\",\n    \"mode\": \"durable\",\n    \"backend\": \"firestore\"\n  },\n  \"preset\": {\n    \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n    \"version\": 4\n  }\n}",
+              "header": [
+                {
+                  "key": "ETag",
+                  "value": "\"4\""
+                }
+              ]
             },
             {
               "name": "Success",
               "status": "OK",
               "code": 200,
-              "body": "{\"success\":true,\"preset\":{\"id\":\"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\"name\":\"Updated Scan\",\"exchange\":\"BINANCE\",\"timeframe\":\"4h\",\"scans\":[\"top_gainers\",\"top_losers\",\"volume_breakout_scanner\"],\"limit\":15,\"bbwThreshold\":0.05,\"createdAt\":\"2026-06-13T04:43:15.301Z\",\"updatedAt\":\"2026-06-13T04:43:15.301Z\"}}"
+              "body": "{\n  \"success\": true,\n  \"preset\": {\n    \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n    \"name\": \"Updated Scan\",\n    \"exchange\": \"BINANCE\",\n    \"timeframe\": \"4h\",\n    \"scans\": [\"top_gainers\", \"top_losers\", \"volume_breakout_scanner\"],\n    \"limit\": 15,\n    \"bbwThreshold\": 0.05,\n    \"createdAt\": \"2026-06-13T04:43:15.301Z\",\n    \"updatedAt\": \"2026-06-13T04:43:15.301Z\",\n    \"version\": 4\n  }\n}",
+              "header": [
+                {
+                  "key": "ETag",
+                  "value": "\"4\""
+                }
+              ]
+            },
+            {
+              "name": "Stale If-Match (412 PRECONDITION_FAILED)",
+              "status": "Precondition Failed",
+              "code": 412,
+              "body": "{\n  \"success\": false,\n  \"error\": \"If-Match version does not match current preset version (4)\",\n  \"code\": \"PRECONDITION_FAILED\",\n  \"storage\": {\n    \"enabled\": true,\n    \"configured\": true,\n    \"ready\": true,\n    \"status\": \"ready\",\n    \"mode\": \"durable\",\n    \"backend\": \"firestore\"\n  },\n  \"preset\": {\n    \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n    \"version\": 4\n  }\n}"
+            },
+            {
+              "name": "Locked preset (409 PRESET_LOCKED)",
+              "status": "Conflict",
+              "code": 409,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Preset is locked by an in-flight sweep until 2026-08-30T20:00:00.000Z\",\n  \"code\": \"PRESET_LOCKED\",\n  \"lockedUntil\": \"2026-08-30T20:00:00.000Z\",\n  \"storage\": {\n    \"enabled\": true,\n    \"configured\": true,\n    \"ready\": true,\n    \"status\": \"ready\",\n    \"mode\": \"durable\",\n    \"backend\": \"firestore\"\n  },\n  \"preset\": {\n    \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n    \"version\": 4\n  }\n}"
             }
           ]
         },
@@ -1478,6 +1524,12 @@
                 "key": "x-api-key",
                 "value": "{{apiKey}}",
                 "type": "text"
+              },
+              {
+                "key": "If-Match",
+                "value": "\"4\"",
+                "description": "Optional optimistic-concurrency token mirrored from the ETag response header",
+                "disabled": true
               }
             ],
             "url": {
@@ -1497,13 +1549,19 @@
               "name": "Storage mode contract",
               "status": "OK",
               "code": 200,
-              "body": "{\"success\":true,\"storage\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\",\"mode\":\"durable\",\"backend\":\"firestore\"}}"
+              "body": "{\n  \"success\": true,\n  \"storage\": {\n    \"enabled\": true,\n    \"configured\": true,\n    \"ready\": true,\n    \"status\": \"ready\",\n    \"mode\": \"durable\",\n    \"backend\": \"firestore\"\n  }\n}"
+            },
+            {
+              "name": "Stale If-Match (412 PRECONDITION_FAILED)",
+              "status": "Precondition Failed",
+              "code": 412,
+              "body": "{\n  \"success\": false,\n  \"error\": \"If-Match version does not match current preset version (4)\",\n  \"code\": \"PRECONDITION_FAILED\",\n  \"storage\": {\n    \"enabled\": true,\n    \"configured\": true,\n    \"ready\": true,\n    \"status\": \"ready\",\n    \"mode\": \"durable\",\n    \"backend\": \"firestore\"\n  },\n  \"preset\": {\n    \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n    \"version\": 4\n  }\n}"
             },
             {
               "name": "Success",
               "status": "OK",
               "code": 200,
-              "body": "{\"success\":true}"
+              "body": "{\n  \"success\": true\n}"
             }
           ]
         },
@@ -1545,7 +1603,7 @@
               "name": "Success",
               "status": "OK",
               "code": 200,
-              "body": "{\"success\":true,\"presetId\":\"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\"alertText\":\"\\ud83d\\udce1 *SCANNER DE MERCADO \\u2014 ...\",\"scanResults\":[{\"scan\":\"top_gainers\",\"status\":\"success\",\"itemCount\":3}],\"summary\":{\"totalScans\":1,\"success\":1,\"error\":0,\"timeout\":0,\"totalItems\":3,\"delivered\":1},\"timedOut\":false,\"timeoutMs\":90000,\"requestId\":\"req-xyz789\",\"totalDurationMs\":1450}"
+              "body": "{\n  \"success\": true,\n  \"presetId\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n  \"alertText\": \"\ud83d\udce1 *SCANNER DE MERCADO \u2014 ...\",\n  \"scanResults\": [\n    {\n      \"scan\": \"top_gainers\",\n      \"status\": \"success\",\n      \"itemCount\": 3\n    }\n  ],\n  \"summary\": {\n    \"totalScans\": 1,\n    \"success\": 1,\n    \"error\": 0,\n    \"timeout\": 0,\n    \"totalItems\": 3,\n    \"delivered\": 1\n  },\n  \"timedOut\": false,\n  \"timeoutMs\": 90000,\n  \"requestId\": \"req-xyz789\",\n  \"totalDurationMs\": 1450\n}"
             }
           ]
         },
@@ -1558,8 +1616,17 @@
                 "key": "x-api-key",
                 "value": "{{apiKey}}",
                 "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "preset-dryrun-key-123",
+                "type": "text"
               }
             ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dryRun\": true,\n  \"channels\": [\"telegram\"]\n}"
+            },
             "url": {
               "raw": "{{baseUrl}}/api/scanner-presets/{{presetId}}/run?dryRun=true",
               "host": [
@@ -1584,7 +1651,7 @@
               "name": "Success",
               "status": "OK",
               "code": 200,
-              "body": "{\"success\":true,\"dryRun\":true,\"presetId\":\"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\"payload\":{\"alertText\":\"\\ud83d\\udce1 *SCANNER DE MERCADO \\u2014 ...\"},\"scanResults\":[],\"summary\":{\"totalScans\":1,\"success\":1,\"error\":0,\"timeout\":0,\"totalItems\":3,\"delivered\":0},\"timedOut\":false,\"timeoutMs\":90000,\"requestId\":\"req-dryrun-abc\",\"totalDurationMs\":1200}"
+              "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"presetId\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n  \"preset\": {\n    \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n    \"name\": \"Daily Scan\",\n    \"exchange\": \"BINANCE\",\n    \"timeframe\": \"4h\",\n    \"scans\": [\n      \"top_gainers\"\n    ],\n    \"limit\": 5,\n    \"bbw_threshold\": 0.05,\n    \"ranked\": false,\n    \"includeMultiTimeframe\": false\n  },\n  \"validation\": {\n    \"ok\": true,\n    \"errors\": []\n  },\n  \"estimatedCalls\": {\n    \"coinAnalysis\": 1,\n    \"multiTimeframe\": 0\n  },\n  \"requestedChannels\": [\n    \"telegram\"\n  ],\n  \"mcpReadiness\": {\n    \"ready\": true,\n    \"lastCheckedAt\": \"2026-08-30T12:00:00.000Z\",\n    \"lastErrorCategory\": null\n  },\n  \"idempotencyKey\": \"preset-dryrun-key-123\",\n  \"requestId\": \"req-dryrun-abc\"\n}"
             }
           ]
         }
@@ -1626,7 +1693,7 @@
           "name": "Bad Request",
           "status": "Bad Request",
           "code": 400,
-          "body": "{\"error\":\"name must be a string\",\"code\":\"INVALID_REQUEST\"}"
+          "body": "{\n  \"error\": \"name must be a string\",\n  \"code\": \"INVALID_REQUEST\"\n}"
         }
       ]
     },
@@ -1705,7 +1772,7 @@
                   "value": "application/json"
                 }
               ],
-              "body": "{\"success\":true,\"results\":[{\"symbol\":\"BTCUSDT\",\"status\":\"analyzed\",\"alert\":null,\"cached\":false,\"requestId\":\"req-abc123\",\"totalDurationMs\":800}],\"summary\":{\"total\":1,\"analyzed\":1,\"cached\":0,\"timeout\":0,\"error\":0,\"quota_exhausted\":0,\"alerts_sent\":0},\"requestedChannels\":[\"telegram\"],\"deliveredChannels\":[],\"totalDurationMs\":850,\"requestId\":\"req-abc123\",\"tokenUsage\":{\"inputTokens\":10,\"outputTokens\":20,\"totalTokens\":30}}"
+              "body": "{\n  \"success\": true,\n  \"results\": [\n    {\n      \"symbol\": \"BTCUSDT\",\n      \"status\": \"analyzed\",\n      \"alert\": null,\n      \"cached\": false,\n      \"requestId\": \"req-abc123\",\n      \"totalDurationMs\": 800\n    }\n  ],\n  \"summary\": {\n    \"total\": 1,\n    \"analyzed\": 1,\n    \"cached\": 0,\n    \"timeout\": 0,\n    \"error\": 0,\n    \"quota_exhausted\": 0,\n    \"alerts_sent\": 0\n  },\n  \"requestedChannels\": [\"telegram\"],\n  \"deliveredChannels\": [],\n  \"totalDurationMs\": 850,\n  \"requestId\": \"req-abc123\",\n  \"tokenUsage\": {\n    \"inputTokens\": 10,\n    \"outputTokens\": 20,\n    \"totalTokens\": 30\n  }\n}"
             },
             {
               "name": "200 OK - Partial quota exhaustion",
@@ -1747,7 +1814,7 @@
                   "value": "application/json"
                 }
               ],
-              "body": "{\"success\":true,\"partial_success\":true,\"results\":[{\"symbol\":\"BTCUSDT\",\"status\":\"error\",\"error\":{\"code\":\"GEMINI_QUOTA_EXHAUSTED\",\"message\":\"429 RESOURCE_EXHAUSTED: quota exceeded\"},\"cached\":false,\"requestId\":\"req-quota123\",\"totalDurationMs\":0},{\"symbol\":\"ETHUSD\",\"status\":\"analyzed\",\"alert\":null,\"cached\":false,\"requestId\":\"req-quota123\",\"totalDurationMs\":900}],\"summary\":{\"total\":2,\"analyzed\":1,\"cached\":0,\"timeout\":0,\"error\":1,\"quota_exhausted\":1,\"alerts_sent\":0},\"requestedChannels\":[\"telegram\",\"whatsapp\"],\"deliveredChannels\":[],\"totalDurationMs\":950,\"requestId\":\"req-quota123\",\"tokenUsage\":{}}"
+              "body": "{\n  \"success\": true,\n  \"partial_success\": true,\n  \"results\": [\n    {\n      \"symbol\": \"BTCUSDT\",\n      \"status\": \"error\",\n      \"error\": {\n        \"code\": \"GEMINI_QUOTA_EXHAUSTED\",\n        \"message\": \"429 RESOURCE_EXHAUSTED: quota exceeded\"\n      },\n      \"cached\": false,\n      \"requestId\": \"req-quota123\",\n      \"totalDurationMs\": 0\n    },\n    {\n      \"symbol\": \"ETHUSD\",\n      \"status\": \"analyzed\",\n      \"alert\": null,\n      \"cached\": false,\n      \"requestId\": \"req-quota123\",\n      \"totalDurationMs\": 900\n    }\n  ],\n  \"summary\": {\n    \"total\": 2,\n    \"analyzed\": 1,\n    \"cached\": 0,\n    \"timeout\": 0,\n    \"error\": 1,\n    \"quota_exhausted\": 1,\n    \"alerts_sent\": 0\n  },\n  \"requestedChannels\": [\"telegram\", \"whatsapp\"],\n  \"deliveredChannels\": [],\n  \"totalDurationMs\": 950,\n  \"requestId\": \"req-quota123\",\n  \"tokenUsage\": {}\n}"
             }
           ]
         },
@@ -1831,7 +1898,7 @@
               "status": "OK",
               "code": 200,
               "_postman_previewlanguage": "json",
-              "body": "{\"success\":true,\"dryRun\":true,\"results\":[{\"symbol\":\"BTCUSDT\",\"status\":\"analyzed\",\"alert\":{\"eventCategory\":\"price_surge\",\"headline\":\"Bitcoin breaks resistance\"},\"deliveryResults\":[],\"cached\":false}],\"summary\":{\"total\":1,\"analyzed\":1,\"cached\":0,\"timeout\":0,\"error\":0,\"quota_exhausted\":0,\"alerts_sent\":1},\"requestedChannels\":[\"telegram\",\"whatsapp\",\"discord\"],\"deliveredChannels\":[],\"requestId\":\"req-dryrun123\"}"
+              "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"results\": [{\n    \"symbol\": \"BTCUSDT\",\n    \"status\": \"analyzed\",\n    \"alert\": {\n      \"eventCategory\": \"price_surge\",\n      \"headline\": \"Bitcoin breaks resistance\"\n    },\n    \"deliveryResults\": [],\n    \"cached\": false\n  }],\n  \"summary\": {\n    \"total\": 1,\n    \"analyzed\": 1,\n    \"cached\": 0,\n    \"timeout\": 0,\n    \"error\": 0,\n    \"quota_exhausted\": 0,\n    \"alerts_sent\": 1\n  },\n  \"requestedChannels\": [\"telegram\", \"whatsapp\", \"discord\"],\n  \"deliveredChannels\": [],\n  \"requestId\": \"req-dryrun123\"\n}"
             }
           ]
         }
@@ -1905,7 +1972,7 @@
               "status": "OK",
               "code": 200,
               "_postman_previewlanguage": "json",
-              "body": "{\"success\":true,\"alerts\":[{\"id\":\"alert-123\",\"receivedAt\":\"2026-06-06T12:00:00.000Z\",\"source\":\"webhook\",\"symbol\":\"BTCUSDT\",\"exchange\":\"BINANCE\",\"enriched\":true,\"useTradingViewData\":false,\"tradingViewEnrichmentApplied\":false,\"tradingViewEnrichmentStatus\":\"not_applicable\",\"channels\":[\"telegram\"],\"deliveryResults\":[{\"channel\":\"telegram\",\"success\":true,\"messageId\":\"123\"}],\"tokenUsage\":{\"inputTokens\":10,\"outputTokens\":20,\"totalTokens\":30,\"totalCost\":0.001}}]}"
+              "body": "{\n  \"success\": true,\n  \"alerts\": [\n    {\n      \"id\": \"alert-123\",\n      \"receivedAt\": \"2026-06-06T12:00:00.000Z\",\n      \"source\": \"webhook\",\n      \"symbol\": \"BTCUSDT\",\n      \"exchange\": \"BINANCE\",\n      \"enriched\": true,\n      \"useTradingViewData\": false,\n      \"tradingViewEnrichmentApplied\": false,\n      \"tradingViewEnrichmentStatus\": \"not_applicable\",\n      \"channels\": [\"telegram\"],\n      \"deliveryResults\": [\n        {\n          \"channel\": \"telegram\",\n          \"success\": true,\n          \"messageId\": \"123\"\n        }\n      ],\n      \"tokenUsage\": {\n        \"inputTokens\": 10,\n        \"outputTokens\": 20,\n        \"totalTokens\": 30,\n        \"totalCost\": 0.001\n      }\n    }\n  ]\n}"
             }
           ]
         },
@@ -1948,7 +2015,7 @@
               "status": "OK",
               "code": 200,
               "_postman_previewlanguage": "json",
-              "body": "{\"success\":true,\"alerts\":[{\"id\":\"news-doc-123\",\"receivedAt\":\"2026-08-24T02:00:00.000Z\",\"source\":\"news-monitor\",\"symbol\":\"BTCUSDT\",\"exchange\":\"BINANCE\",\"eventCategory\":\"price_surge\",\"confidence\":0.85,\"sentimentScore\":0.75,\"dedupStatus\":\"fresh\",\"enriched\":true,\"useTradingViewData\":false,\"tradingViewEnrichmentApplied\":false,\"channels\":[\"telegram\"],\"deliveryResults\":[{\"channel\":\"telegram\",\"success\":true,\"messageId\":\"12345\"}],\"tokenUsage\":{\"inputTokens\":100,\"outputTokens\":50,\"totalTokens\":150,\"totalCost\":0.00025}}]}"
+              "body": "{\n  \"success\": true,\n  \"alerts\": [\n    {\n      \"id\": \"news-doc-123\",\n      \"receivedAt\": \"2026-08-24T02:00:00.000Z\",\n      \"source\": \"news-monitor\",\n      \"symbol\": \"BTCUSDT\",\n      \"exchange\": \"BINANCE\",\n      \"eventCategory\": \"price_surge\",\n      \"confidence\": 0.85,\n      \"sentimentScore\": 0.75,\n      \"dedupStatus\": \"fresh\",\n      \"enriched\": true,\n      \"useTradingViewData\": false,\n      \"tradingViewEnrichmentApplied\": false,\n      \"channels\": [\"telegram\"],\n      \"deliveryResults\": [\n        {\n          \"channel\": \"telegram\",\n          \"success\": true,\n          \"messageId\": \"12345\"\n        }\n      ],\n      \"tokenUsage\": {\n        \"inputTokens\": 100,\n        \"outputTokens\": 50,\n        \"totalTokens\": 150,\n        \"totalCost\": 0.00025\n      }\n    }\n  ]\n}"
             }
           ]
         },
@@ -1991,7 +2058,7 @@
               "status": "OK",
               "code": 200,
               "_postman_previewlanguage": "json",
-              "body": "{\"success\":true,\"alerts\":[{\"id\":\"scanner-doc-456\",\"receivedAt\":\"2026-08-28T14:00:00.000Z\",\"source\":\"market-scanner\",\"symbol\":\"BINANCE:GMTUSDT\",\"exchange\":\"BINANCE\",\"enriched\":false,\"useTradingViewData\":false,\"tradingViewEnrichmentApplied\":false,\"channels\":[\"telegram\"],\"deliveryResults\":[{\"channel\":\"telegram\",\"success\":true,\"messageId\":\"scanner-msg-1\"}],\"tokenUsage\":null}]}"
+              "body": "{\n  \"success\": true,\n  \"alerts\": [\n    {\n      \"id\": \"scanner-doc-456\",\n      \"receivedAt\": \"2026-08-28T14:00:00.000Z\",\n      \"source\": \"market-scanner\",\n      \"symbol\": \"BINANCE:GMTUSDT\",\n      \"exchange\": \"BINANCE\",\n      \"enriched\": false,\n      \"useTradingViewData\": false,\n      \"tradingViewEnrichmentApplied\": false,\n      \"channels\": [\"telegram\"],\n      \"deliveryResults\": [\n        {\n          \"channel\": \"telegram\",\n          \"success\": true,\n          \"messageId\": \"scanner-msg-1\"\n        }\n      ],\n      \"tokenUsage\": null\n    }\n  ]\n}"
             }
           ]
         },
@@ -2034,7 +2101,7 @@
               "status": "OK",
               "code": 200,
               "_postman_previewlanguage": "json",
-              "body": "{\"success\":true,\"alerts\":[{\"id\":\"expanded-doc-789\",\"receivedAt\":\"2026-08-28T14:05:00.000Z\",\"source\":\"expanded-analysis\",\"symbol\":\"BTCUSDT\",\"exchange\":\"BINANCE\",\"enriched\":false,\"useTradingViewData\":false,\"tradingViewEnrichmentApplied\":false,\"channels\":[\"telegram\"],\"deliveryResults\":[{\"channel\":\"telegram\",\"success\":true,\"messageId\":\"expanded-msg-1\"}],\"tokenUsage\":null}]}"
+              "body": "{\n  \"success\": true,\n  \"alerts\": [\n    {\n      \"id\": \"expanded-doc-789\",\n      \"receivedAt\": \"2026-08-28T14:05:00.000Z\",\n      \"source\": \"expanded-analysis\",\n      \"symbol\": \"BTCUSDT\",\n      \"exchange\": \"BINANCE\",\n      \"enriched\": false,\n      \"useTradingViewData\": false,\n      \"tradingViewEnrichmentApplied\": false,\n      \"channels\": [\"telegram\"],\n      \"deliveryResults\": [\n        {\n          \"channel\": \"telegram\",\n          \"success\": true,\n          \"messageId\": \"expanded-msg-1\"\n        }\n      ],\n      \"tokenUsage\": null\n    }\n  ]\n}"
             }
           ]
         },
@@ -2077,7 +2144,151 @@
               "status": "OK",
               "code": 200,
               "_postman_previewlanguage": "json",
-              "body": "{\"success\":true,\"alerts\":[{\"id\":\"expanded-doc-clipped\",\"receivedAt\":\"2026-08-28T15:00:00.000Z\",\"source\":\"expanded-analysis\",\"symbol\":\"BTCUSDT\",\"exchange\":\"BINANCE\",\"enriched\":false,\"useTradingViewData\":false,\"tradingViewEnrichmentApplied\":false,\"truncated\":true,\"originalLength\":24513,\"channels\":[\"telegram\"],\"deliveryResults\":[{\"channel\":\"telegram\",\"success\":true,\"messageId\":\"expanded-msg-2\"}],\"tokenUsage\":null}]}"
+              "body": "{\n  \"success\": true,\n  \"alerts\": [\n    {\n      \"id\": \"expanded-doc-clipped\",\n      \"receivedAt\": \"2026-08-28T15:00:00.000Z\",\n      \"source\": \"expanded-analysis\",\n      \"symbol\": \"BTCUSDT\",\n      \"exchange\": \"BINANCE\",\n      \"enriched\": false,\n      \"useTradingViewData\": false,\n      \"tradingViewEnrichmentApplied\": false,\n      \"truncated\": true,\n      \"originalLength\": 24513,\n      \"channels\": [\"telegram\"],\n      \"deliveryResults\": [\n        {\n          \"channel\": \"telegram\",\n          \"success\": true,\n          \"messageId\": \"expanded-msg-2\"\n        }\n      ],\n      \"tokenUsage\": null\n    }\n  ]\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET List Replay Attempts",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/replays?limit=50",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "replays"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "50"
+                },
+                {
+                  "key": "alertId",
+                  "value": "{{alertId}}",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Lists bounded alert-replay audit records (alertReplays collection). Each replay creates a unique document so retries with the same idempotency key are preserved as history rather than overwritten. Raw idempotency keys and internal document IDs are never returned; only an opaque attempt ID and SHA-256 hash prefix are exposed."
+          },
+          "response": [
+            {
+              "name": "200 OK - Replay attempts list",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"success\": true,\n  \"replays\": [\n    {\n      \"id\": \"1700000000000_5b1f0c79-9f0b-4d6e-9b1f-3b8c0e6a5f1a\",\n      \"alertId\": \"alert-123\",\n      \"idempotencyKeyHashPrefix\": \"06bdeddf2a29\",\n      \"attemptId\": \"1700000000000_5b1f0c79-9f0b-4d6e-9b1f-3b8c0e6a5f1a\",\n      \"channels\": [\"telegram\"],\n      \"deliverySummary\": [\n        {\n          \"channel\": \"telegram\",\n          \"success\": true,\n          \"messageId\": \"tg-msg-123\"\n        }\n      ],\n      \"replayedAt\": \"2026-06-06T12:34:56.000Z\"\n    }\n  ],\n  \"pagination\": {\n    \"hasMore\": false,\n    \"limit\": 50,\n    \"nextBefore\": null\n  }\n}"
+            },
+            {
+              "name": "200 OK - Filtered to a single alertId",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"success\": true,\n  \"replays\": [\n    {\n      \"id\": \"1700000000000_bbbbbbbb-cccc-dddd-eeee-ffffffffffff\",\n      \"alertId\": \"alert-123\",\n      \"idempotencyKeyHashPrefix\": \"aaaaaaaaaaaa\",\n      \"attemptId\": \"1700000000000_bbbbbbbb-cccc-dddd-eeee-ffffffffffff\",\n      \"channels\": [\"whatsapp\"],\n      \"deliverySummary\": [\n        {\n          \"channel\": \"whatsapp\",\n          \"success\": false,\n          \"errorCode\": \"TIMEOUT\",\n          \"statusCode\": 504\n        }\n      ],\n      \"replayedAt\": \"2026-06-06T13:00:00.000Z\"\n    }\n  ],\n  \"pagination\": {\n    \"hasMore\": false,\n    \"limit\": 50,\n    \"nextBefore\": null\n  }\n}"
+            },
+            {
+              "name": "403 FEATURE_DISABLED - storage disabled",
+              "status": "Forbidden",
+              "code": 403,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"error\": \"Alert storage feature is disabled. Set ENABLE_FIRESTORE_ALERT_STORAGE=true to enable.\",\n  \"code\": \"FEATURE_DISABLED\"\n}"
+            },
+            {
+              "name": "503 STORAGE_UNAVAILABLE - Firestore read failed",
+              "status": "Service Unavailable",
+              "code": 503,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"error\": \"Alert storage is enabled but Firestore is unavailable. Check Firestore credentials and project configuration.\",\n  \"code\": \"STORAGE_UNAVAILABLE\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET List Replay Attempts (before cursor)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/replays?limit=50&before={{replayBefore}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "replays"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "50"
+                },
+                {
+                  "key": "before",
+                  "value": "{{replayBefore}}"
+                }
+              ]
+            },
+            "description": "Continue a replay-history read with the nextBefore cursor returned by a previous page."
+          }
+        },
+        {
+          "name": "GET List Replay Attempts (invalid input)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/replays?limit=999&before=not-a-cursor",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "replays"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "999"
+                },
+                {
+                  "key": "before",
+                  "value": "not-a-cursor"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "400 INVALID_REQUEST - invalid limit and cursor",
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"error\": \"Invalid limit. Use an integer between 1 and 100.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
             }
           ]
         },
@@ -2124,7 +2335,7 @@
               "name": "200 OK - Risk metadata coverage",
               "status": "OK",
               "code": 200,
-              "body": "{\"success\":true,\"summary\":{\"enrichment\":{\"enrichedAlerts\":2,\"plainAlerts\":0,\"riskMetadataCoverage\":{\"denominator\":2,\"fields\":{\"invalidation_level\":{\"populated\":1,\"percentage\":50},\"target_level\":{\"populated\":1,\"percentage\":50},\"setup_type\":{\"populated\":1,\"percentage\":50},\"risk_reward_ratio\":{\"populated\":1,\"percentage\":50}},\"byPromptProvenance\":[{\"provenance\":{\"name\":\"alert-enrichment\",\"source\":\"langfuse\",\"label\":\"production\",\"version\":12,\"schemaDriftDetected\":false},\"denominator\":1,\"fields\":{\"invalidation_level\":{\"populated\":1,\"percentage\":100},\"target_level\":{\"populated\":1,\"percentage\":100},\"setup_type\":{\"populated\":1,\"percentage\":100},\"risk_reward_ratio\":{\"populated\":1,\"percentage\":100}}},{\"provenance\":{\"name\":\"alert-enrichment\",\"source\":\"local\",\"label\":null,\"version\":null,\"schemaDriftDetected\":false},\"denominator\":1,\"fields\":{\"invalidation_level\":{\"populated\":0,\"percentage\":0},\"target_level\":{\"populated\":0,\"percentage\":0},\"setup_type\":{\"populated\":0,\"percentage\":0},\"risk_reward_ratio\":{\"populated\":0,\"percentage\":0}}}]},\"evidenceCoverage\":{\"denominator\":2,\"zeroSources\":{\"populated\":1,\"percentage\":50},\"oneToTwoSources\":{\"populated\":0,\"percentage\":0},\"threePlusSources\":{\"populated\":1,\"percentage\":50},\"totalSourceCount\":3,\"averageSourceCount\":1.5,\"byPromptProvenance\":[{\"provenance\":{\"name\":\"alert-enrichment\",\"source\":\"langfuse\",\"label\":\"production\",\"version\":12,\"schemaDriftDetected\":false},\"denominator\":1,\"zeroSources\":{\"populated\":0,\"percentage\":0},\"oneToTwoSources\":{\"populated\":0,\"percentage\":0},\"threePlusSources\":{\"populated\":1,\"percentage\":100},\"totalSourceCount\":3,\"averageSourceCount\":3},{\"provenance\":{\"name\":\"alert-enrichment\",\"source\":\"local\",\"label\":null,\"version\":null,\"schemaDriftDetected\":false},\"denominator\":1,\"zeroSources\":{\"populated\":1,\"percentage\":100},\"oneToTwoSources\":{\"populated\":0,\"percentage\":0},\"threePlusSources\":{\"populated\":0,\"percentage\":0},\"totalSourceCount\":0,\"averageSourceCount\":0}]}},\"shadowModeMetrics\":\"No measurements found\"}}"
+              "body": "{\n  \"success\": true,\n  \"summary\": {\n    \"enrichment\": {\n      \"enrichedAlerts\": 2,\n      \"plainAlerts\": 0,\n      \"riskMetadataCoverage\": {\n        \"denominator\": 2,\n        \"fields\": {\n          \"invalidation_level\": {\n            \"populated\": 1,\n            \"percentage\": 50\n          },\n          \"target_level\": {\n            \"populated\": 1,\n            \"percentage\": 50\n          },\n          \"setup_type\": {\n            \"populated\": 1,\n            \"percentage\": 50\n          },\n          \"risk_reward_ratio\": {\n            \"populated\": 1,\n            \"percentage\": 50\n          }\n        },\n        \"byPromptProvenance\": [\n          {\n            \"provenance\": {\n              \"name\": \"alert-enrichment\",\n              \"source\": \"langfuse\",\n              \"label\": \"production\",\n              \"version\": 12,\n              \"schemaDriftDetected\": false\n            },\n            \"denominator\": 1,\n            \"fields\": {\n              \"invalidation_level\": {\n                \"populated\": 1,\n                \"percentage\": 100\n              },\n              \"target_level\": {\n                \"populated\": 1,\n                \"percentage\": 100\n              },\n              \"setup_type\": {\n                \"populated\": 1,\n                \"percentage\": 100\n              },\n              \"risk_reward_ratio\": {\n                \"populated\": 1,\n                \"percentage\": 100\n              }\n            }\n          },\n          {\n            \"provenance\": {\n              \"name\": \"alert-enrichment\",\n              \"source\": \"local\",\n              \"label\": null,\n              \"version\": null,\n              \"schemaDriftDetected\": false\n            },\n            \"denominator\": 1,\n            \"fields\": {\n              \"invalidation_level\": {\n                \"populated\": 0,\n                \"percentage\": 0\n              },\n              \"target_level\": {\n                \"populated\": 0,\n                \"percentage\": 0\n              },\n              \"setup_type\": {\n                \"populated\": 0,\n                \"percentage\": 0\n              },\n              \"risk_reward_ratio\": {\n                \"populated\": 0,\n                \"percentage\": 0\n              }\n            }\n          }\n        ]\n      },\n      \"evidenceCoverage\": {\n        \"denominator\": 2,\n        \"zeroSources\": { \"populated\": 1, \"percentage\": 50 },\n        \"oneToTwoSources\": { \"populated\": 0, \"percentage\": 0 },\n        \"threePlusSources\": { \"populated\": 1, \"percentage\": 50 },\n        \"totalSourceCount\": 3,\n        \"averageSourceCount\": 1.5,\n        \"byPromptProvenance\": [\n          {\n            \"provenance\": { \"name\": \"alert-enrichment\", \"source\": \"langfuse\", \"label\": \"production\", \"version\": 12, \"schemaDriftDetected\": false },\n            \"denominator\": 1,\n            \"zeroSources\": { \"populated\": 0, \"percentage\": 0 },\n            \"oneToTwoSources\": { \"populated\": 0, \"percentage\": 0 },\n            \"threePlusSources\": { \"populated\": 1, \"percentage\": 100 },\n            \"totalSourceCount\": 3,\n            \"averageSourceCount\": 3\n          },\n          {\n            \"provenance\": { \"name\": \"alert-enrichment\", \"source\": \"local\", \"label\": null, \"version\": null, \"schemaDriftDetected\": false },\n            \"denominator\": 1,\n            \"zeroSources\": { \"populated\": 1, \"percentage\": 100 },\n            \"oneToTwoSources\": { \"populated\": 0, \"percentage\": 0 },\n            \"threePlusSources\": { \"populated\": 0, \"percentage\": 0 },\n            \"totalSourceCount\": 0,\n            \"averageSourceCount\": 0\n          }\n        ]\n      }\n    },\n    \"shadowModeMetrics\": \"No measurements found\"\n  }\n}"
             }
           ]
         },
@@ -2164,14 +2375,20 @@
                 }
               ]
             },
-            "description": "Returns bounded JSON-only aggregates for stored alerts. Requires ENABLE_FIRESTORE_ALERT_STORAGE=true and a valid x-api-key."
+            "description": "Protected summary request. Unfiltered responses include the full shadow-mode outcome metrics payload (coverage buckets, per-window WindowStats with hitRatePercent/targetHitRatePercent/stopHitRatePercent/expectancyR, drawdown proxy, and latency/cost metadata). The shadow-mode metrics field is the string sentinel \"No measurements found\" when signal-outcome tracking is disabled or has no data. Requires ENABLE_FIRESTORE_ALERT_STORAGE=true and a valid x-api-key."
           },
           "response": [
+            {
+              "name": "200 OK - Full shadow mode metrics coverage buckets",
+              "status": "OK",
+              "code": 200,
+              "body": "{\"success\": true, \"summary\": {\"shadowModeMetrics\": {\"available\": true, \"totalSignalsReceived\": 50, \"totalSignalsEligible\": 45, \"totalSignalsEvaluated\": 40, \"totalSignalsPending\": 5, \"totalSignalsUnavailable\": 5, \"coveragePercent\": 80, \"isCoverageComplete\": false, \"targetHitRatePercent\": 65.5, \"stopHitRatePercent\": 25.0, \"expectancyR\": 1.25, \"populationNote\": \"Metrics represent 40 evaluated signals out of 50 total received signals (80% coverage).\", \"exchangeBreakdown\": {\"BINANCE\": {\"received\": 30, \"eligible\": 28, \"evaluated\": 25, \"pending\": 3, \"unavailable\": 2}, \"NASDAQ\": {\"received\": 20, \"eligible\": 17, \"evaluated\": 15, \"pending\": 2, \"unavailable\": 3}}, \"providerBreakdown\": {\"binance\": {\"received\": 30, \"eligible\": 28, \"evaluated\": 25, \"pending\": 3, \"unavailable\": 2}, \"twelve-data\": {\"received\": 20, \"eligible\": 17, \"evaluated\": 15, \"pending\": 2, \"unavailable\": 3}}, \"entryPriceSourceBreakdown\": {\"binance\": 25, \"twelve-data\": 15, \"unknown\": 10}, \"eligibilityBreakdown\": {\"supported_provider\": 45, \"unsupported_exchange\": 5}, \"windows\": {\"1h\": {\"totalSignals\": 35, \"hitRatePercent\": 60.0, \"targetEligibleWindows\": 30, \"stopEligibleWindows\": 30, \"targetHitRatePercent\": 60.0, \"stopHitRatePercent\": 23.33, \"expectancyR\": 0.92, \"averageReturnPercent\": 1.85, \"averageMfePercent\": 2.4, \"averageMaePercent\": -0.85, \"maxAdverseExcursionPercent\": -3.5, \"bySide\": {\"BUY\": {\"totalSignals\": 20, \"hitRatePercent\": 65.0, \"targetEligibleWindows\": 18, \"stopEligibleWindows\": 18, \"targetHitRatePercent\": 60.0, \"stopHitRatePercent\": 22.22, \"expectancyR\": 0.92, \"averageReturnPercent\": 2.4, \"averageMfePercent\": 3.6, \"averageMaePercent\": -1.05, \"maxAdverseExcursionPercent\": -4.2}, \"SELL\": {\"totalSignals\": 15, \"hitRatePercent\": 53.33, \"targetEligibleWindows\": 12, \"stopEligibleWindows\": 12, \"targetHitRatePercent\": 48.0, \"stopHitRatePercent\": 18.0, \"expectancyR\": 0.71, \"averageReturnPercent\": 1.8, \"averageMfePercent\": 3.2, \"averageMaePercent\": -0.92, \"maxAdverseExcursionPercent\": -3.1}}}, \"4h\": {\"totalSignals\": 28, \"hitRatePercent\": 64.29, \"targetEligibleWindows\": 24, \"stopEligibleWindows\": 24, \"targetHitRatePercent\": 62.5, \"stopHitRatePercent\": 20.83, \"expectancyR\": 1.08, \"averageReturnPercent\": 2.15, \"averageMfePercent\": 3.1, \"averageMaePercent\": -0.95, \"maxAdverseExcursionPercent\": -3.8}, \"1D\": {\"totalSignals\": 18, \"hitRatePercent\": 66.67, \"targetEligibleWindows\": 15, \"stopEligibleWindows\": 15, \"targetHitRatePercent\": 73.33, \"stopHitRatePercent\": 13.33, \"expectancyR\": 1.45, \"averageReturnPercent\": 3.05, \"averageMfePercent\": 4.2, \"averageMaePercent\": -1.15, \"maxAdverseExcursionPercent\": -5.2}}, \"drawdownProxy\": {\"averageMaxAdverseExcursionPercent\": -1.85, \"absoluteMaxAdverseExcursionPercent\": -7.2}, \"falsePositiveCandidatesCount\": 2, \"falsePositiveCandidates\": [{\"symbol\": \"BTCUSDT\", \"source\": \"news-monitor\", \"side\": \"BUY\", \"score\": 0.85, \"price\": 68500.0, \"worstReturn\": -1.05, \"worstMae\": -3.6}], \"latencyCostMetadata\": {\"averageProcessingTimeMs\": 250, \"tokenUsage\": {\"inputTokens\": 120, \"outputTokens\": 240, \"totalCost\": 0.0012}}}}}"
+            },
             {
               "name": "200 OK - Analytics summary",
               "status": "OK",
               "code": 200,
-              "body": "{\"success\":true,\"summary\":{\"window\":{\"from\":\"2026-06-06T00:00:00.000Z\",\"to\":\"2026-06-07T00:00:00.000Z\",\"limit\":500,\"maxDays\":31},\"totalAlerts\":2,\"bySource\":{\"webhook\":2},\"bySymbol\":{\"BTCUSDT\":1,\"ETHUSDT\":1},\"byFeatureFlag\":{\"enriched\":1,\"plain\":1,\"tradingViewData\":1,\"withoutTradingViewData\":1},\"enrichment\":{\"enrichedAlerts\":1,\"plainAlerts\":1,\"riskMetadataCoverage\":{\"denominator\":1,\"fields\":{\"invalidation_level\":{\"populatedCount\":1,\"percentage\":100},\"target_level\":{\"populatedCount\":1,\"percentage\":100},\"setup_type\":{\"populatedCount\":1,\"percentage\":100},\"risk_reward_ratio\":{\"populatedCount\":1,\"percentage\":100}},\"byPromptProvenance\":{\"alert-enrichment:langfuse:production:1\":{\"name\":\"alert-enrichment\",\"source\":\"langfuse\",\"label\":\"production\",\"version\":1,\"denominator\":1,\"fields\":{\"invalidation_level\":{\"populatedCount\":1,\"percentage\":100},\"target_level\":{\"populatedCount\":1,\"percentage\":100},\"setup_type\":{\"populatedCount\":1,\"percentage\":100},\"risk_reward_ratio\":{\"populatedCount\":1,\"percentage\":100}}}}},\"tokenUsage\":{\"inputTokens\":10,\"outputTokens\":20,\"totalTokens\":30,\"totalCost\":0.001}},\"delivery\":{\"totalSuccess\":2,\"totalFailure\":1,\"byChannel\":{\"telegram\":{\"total\":2,\"success\":1,\"failure\":1},\"whatsapp\":{\"total\":1,\"success\":1,\"failure\":0}}},\"latency\":{\"averageProcessingMs\":250,\"averageDeliveryMs\":150},\"shadowModeMetrics\":{\"totalSignalsEvaluated\":1,\"targetHitRatePercent\":0,\"stopHitRatePercent\":0,\"expectancyR\":null,\"windows\":{\"1h\":{\"totalSignals\":1,\"hitRatePercent\":100,\"targetEligibleWindows\":0,\"stopEligibleWindows\":0,\"targetHitRatePercent\":0,\"stopHitRatePercent\":0,\"averageReturnPercent\":0.7353,\"averageMfePercent\":0.7353,\"averageMaePercent\":0.0,\"maxAdverseExcursionPercent\":0.0}},\"drawdownProxy\":{\"averageMaxAdverseExcursionPercent\":0.0,\"absoluteMaxAdverseExcursionPercent\":0.0},\"falsePositiveCandidatesCount\":0,\"falsePositiveCandidates\":[],\"latencyCostMetadata\":{\"averageProcessingTimeMs\":250,\"tokenUsage\":{\"inputTokens\":10,\"outputTokens\":20,\"totalCost\":0.001}}}}}"
+              "body": "{\n  \"success\": true,\n  \"summary\": {\n    \"window\": {\n      \"from\": \"2026-06-06T00:00:00.000Z\",\n      \"to\": \"2026-06-07T00:00:00.000Z\",\n      \"limit\": 500,\n      \"maxDays\": 31\n    },\n    \"totalAlerts\": 2,\n    \"bySource\": { \"webhook\": 2 },\n    \"bySymbol\": { \"BTCUSDT\": 1, \"ETHUSDT\": 1 },\n    \"byFeatureFlag\": {\n      \"enriched\": 1,\n      \"plain\": 1,\n      \"tradingViewData\": 1,\n      \"withoutTradingViewData\": 1\n    },\n    \"enrichment\": {\n      \"enrichedAlerts\": 1,\n      \"plainAlerts\": 1,\n      \"riskMetadataCoverage\": {\n        \"denominator\": 1,\n        \"fields\": {\n          \"invalidation_level\": {\n            \"populatedCount\": 1,\n            \"percentage\": 100\n          },\n          \"target_level\": {\n            \"populatedCount\": 1,\n            \"percentage\": 100\n          },\n          \"setup_type\": {\n            \"populatedCount\": 1,\n            \"percentage\": 100\n          },\n          \"risk_reward_ratio\": {\n            \"populatedCount\": 1,\n            \"percentage\": 100\n          }\n        },\n        \"byPromptProvenance\": {\n          \"alert-enrichment:langfuse:production:1\": {\n            \"name\": \"alert-enrichment\",\n            \"source\": \"langfuse\",\n            \"label\": \"production\",\n            \"version\": 1,\n            \"denominator\": 1,\n            \"fields\": {\n              \"invalidation_level\": {\n                \"populatedCount\": 1,\n                \"percentage\": 100\n              },\n              \"target_level\": {\n                \"populatedCount\": 1,\n                \"percentage\": 100\n              },\n              \"setup_type\": {\n                \"populatedCount\": 1,\n                \"percentage\": 100\n              },\n              \"risk_reward_ratio\": {\n                \"populatedCount\": 1,\n                \"percentage\": 100\n              }\n            }\n          }\n        }\n      },\n      \"tokenUsage\": {\n        \"inputTokens\": 10,\n        \"outputTokens\": 20,\n        \"totalTokens\": 30,\n        \"totalCost\": 0.001\n      }\n    },\n    \"delivery\": {\n      \"totalSuccess\": 2,\n      \"totalFailure\": 1,\n      \"byChannel\": {\n        \"telegram\": { \"total\": 2, \"success\": 1, \"failure\": 1 },\n        \"whatsapp\": { \"total\": 1, \"success\": 1, \"failure\": 0 }\n      }\n    },\n    \"latency\": {\n      \"averageProcessingMs\": 250,\n      \"averageDeliveryMs\": 150\n    },\n    \"shadowModeMetrics\": {\n      \"totalSignalsEvaluated\": 1,\n      \"targetHitRatePercent\": 0,\n      \"stopHitRatePercent\": 0,\n      \"expectancyR\": null,\n      \"windows\": {\n        \"1h\": {\n          \"totalSignals\": 1,\n          \"hitRatePercent\": 100,\n          \"targetEligibleWindows\": 0,\n          \"stopEligibleWindows\": 0,\n          \"targetHitRatePercent\": 0,\n          \"stopHitRatePercent\": 0,\n          \"averageReturnPercent\": 0.7353,\n          \"averageMfePercent\": 0.7353,\n          \"averageMaePercent\": 0.0,\n          \"maxAdverseExcursionPercent\": 0.0\n        }\n      },\n      \"drawdownProxy\": {\n        \"averageMaxAdverseExcursionPercent\": 0.0,\n        \"absoluteMaxAdverseExcursionPercent\": 0.0\n      },\n      \"falsePositiveCandidatesCount\": 0,\n      \"falsePositiveCandidates\": [],\n      \"latencyCostMetadata\": {\n        \"averageProcessingTimeMs\": 250,\n        \"tokenUsage\": {\n          \"inputTokens\": 10,\n          \"outputTokens\": 20,\n          \"totalCost\": 0.001\n        }\n      }\n    }\n  }\n}"
             },
             {
               "name": "200 OK - TradingView application counters",
@@ -2184,6 +2401,53 @@
               "status": "OK",
               "code": 200,
               "body": "{\"success\":true,\"summary\":{\"shadowModeMetrics\":{\"exchangeBreakdown\":{\"BATS\":{\"received\":1,\"eligible\":1,\"evaluated\":1,\"pending\":0,\"unavailable\":0}},\"providerBreakdown\":{\"twelve-data\":{\"received\":1,\"eligible\":1,\"evaluated\":1,\"pending\":0,\"unavailable\":0}}}}}"
+            }
+          ]
+        },
+        {
+          "name": "GET Alert Analytics Summary (shadow mode no measurements)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/summary?from=2026-06-06T00:00:00.000Z&to=2026-06-07T00:00:00.000Z&limit=500",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "2026-06-06T00:00:00.000Z"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-06-07T00:00:00.000Z"
+                },
+                {
+                  "key": "limit",
+                  "value": "500"
+                }
+              ]
+            },
+            "description": "Demonstrates the shadow-mode metrics string sentinel when signal-outcome tracking is disabled or has no data. The field becomes the literal string \"No measurements found\" instead of an object payload. The win-rate semantics (hitRatePercent = evaluated window outcomes with return > 0; targetHitRatePercent/stopHitRatePercent use barrier-eligible denominators and firstHit fallbacks; expectancyR averages finite rMultiple) apply only when the field is an object."
+          },
+          "response": [
+            {
+              "name": "200 OK - Shadow mode string sentinel",
+              "status": "OK",
+              "code": 200,
+              "body": "{\"success\": true, \"summary\": {\"shadowModeMetrics\": \"No measurements found\"}}"
             }
           ]
         },
@@ -2269,7 +2533,7 @@
               "name": "400 Bad Request - Invalid from timestamp",
               "status": "Bad Request",
               "code": 400,
-              "body": "{\"error\":\"Invalid from timestamp. Use an ISO-8601 timestamp.\",\"code\":\"INVALID_REQUEST\"}"
+              "body": "{\n  \"error\": \"Invalid from timestamp. Use an ISO-8601 timestamp.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
             }
           ]
         },
@@ -2321,7 +2585,7 @@
                 }
               ]
             },
-            "description": "Exports bounded stored alerts as JSON Lines. Requires from/to, validates x-api-key, and excludes raw text unless includeText=true"
+            "description": "Exports bounded stored alerts as JSON Lines. Requires from/to, validates x-api-key, and excludes raw text unless includeText=true. Unfiltered responses emit the X-Shadow-Mode-Metrics response header with the JSON-encoded shadow-mode outcome metrics payload (string sentinel \"No measurements found\" when tracking is disabled or has no data; full OutcomesSummary object form otherwise). The header is omitted when source or enriched filters are supplied."
           },
           "response": [
             {
@@ -2334,7 +2598,7 @@
                   "value": "{\"totalSignalsEvaluated\":1,\"windows\":{\"1h\":{\"totalSignals\":1,\"hitRatePercent\":100,\"averageReturnPercent\":0.7353,\"averageMfePercent\":0.7353,\"averageMaePercent\":0.0,\"maxAdverseExcursionPercent\":0.0}},\"drawdownProxy\":{\"averageMaxAdverseExcursionPercent\":0.0,\"absoluteMaxAdverseExcursionPercent\":0.0},\"falsePositiveCandidatesCount\":0,\"falsePositiveCandidates\":[],\"latencyCostMetadata\":{\"averageProcessingTimeMs\":250,\"tokenUsage\":{\"inputTokens\":10,\"outputTokens\":20,\"totalCost\":0.001}}}"
                 }
               ],
-              "body": "{\"id\":\"alert-123\",\"receivedAt\":\"2026-06-06T12:00:00.000Z\",\"source\":\"webhook\",\"enriched\":true,\"useTradingViewData\":false,\"tradingViewEnrichmentApplied\":false,\"tradingViewEnrichmentStatus\":\"not_applicable\",\"deliveryResults\":[{\"channel\":\"telegram\",\"success\":true,\"messageId\":\"123\",\"errorCode\":null,\"statusCode\":null}],\"tokenUsage\":{\"inputTokens\":10,\"outputTokens\":20,\"totalTokens\":30,\"totalCost\":0.001}}"
+              "body": "{\"id\":\"alert-123\",\"receivedAt\":\"2026-06-06T12:00:00.000Z\",\"source\":\"webhook\",\"enriched\":true,\"useTradingViewData\":false,\"tradingViewEnrichmentApplied\":false,\"tradingViewEnrichmentStatus\":\"not_applicable\",\"deliveryResults\":[{\"channel\":\"telegram\",\"success\":true,\"messageId\":\"123\",\"errorCode\":null,\"statusCode\":null}],\"tokenUsage\":{\"inputTokens\":10,\"outputTokens\":20,\"totalTokens\":30,\"totalCost\":0.001}}\n"
             }
           ]
         },
@@ -2390,7 +2654,7 @@
               "status": "OK",
               "code": 200,
               "_postman_previewlanguage": "json",
-              "body": "{\"id\":\"news-doc-123\",\"receivedAt\":\"2026-08-24T02:00:00.000Z\",\"source\":\"news-monitor\",\"enriched\":true,\"useTradingViewData\":false,\"tradingViewEnrichmentApplied\":false,\"deliveryResults\":[{\"channel\":\"telegram\",\"success\":true,\"messageId\":\"12345\",\"errorCode\":null,\"statusCode\":null}],\"tokenUsage\":{\"inputTokens\":100,\"outputTokens\":50,\"totalTokens\":150,\"totalCost\":0.00025},\"eventCategory\":\"price_surge\",\"confidence\":0.85,\"sentimentScore\":0.75,\"dedupStatus\":\"fresh\"}"
+              "body": "{\"id\":\"news-doc-123\",\"receivedAt\":\"2026-08-24T02:00:00.000Z\",\"source\":\"news-monitor\",\"enriched\":true,\"useTradingViewData\":false,\"tradingViewEnrichmentApplied\":false,\"deliveryResults\":[{\"channel\":\"telegram\",\"success\":true,\"messageId\":\"12345\",\"errorCode\":null,\"statusCode\":null}],\"tokenUsage\":{\"inputTokens\":100,\"outputTokens\":50,\"totalTokens\":150,\"totalCost\":0.00025},\"eventCategory\":\"price_surge\",\"confidence\":0.85,\"sentimentScore\":0.75,\"dedupStatus\":\"fresh\"}\n"
             }
           ]
         },
@@ -2446,7 +2710,7 @@
               "status": "OK",
               "code": 200,
               "_postman_previewlanguage": "json",
-              "body": "{\"id\":\"scanner-doc-456\",\"receivedAt\":\"2026-08-28T14:00:00.000Z\",\"source\":\"market-scanner\",\"enriched\":false,\"useTradingViewData\":false,\"tradingViewEnrichmentApplied\":false,\"deliveryResults\":[{\"channel\":\"telegram\",\"success\":true,\"messageId\":\"scanner-msg-1\",\"errorCode\":null,\"statusCode\":null}],\"tokenUsage\":null}"
+              "body": "{\"id\":\"scanner-doc-456\",\"receivedAt\":\"2026-08-28T14:00:00.000Z\",\"source\":\"market-scanner\",\"enriched\":false,\"useTradingViewData\":false,\"tradingViewEnrichmentApplied\":false,\"deliveryResults\":[{\"channel\":\"telegram\",\"success\":true,\"messageId\":\"scanner-msg-1\",\"errorCode\":null,\"statusCode\":null}],\"tokenUsage\":null}\n"
             }
           ]
         },
@@ -2502,7 +2766,7 @@
               "status": "OK",
               "code": 200,
               "_postman_previewlanguage": "json",
-              "body": "{\"id\":\"expanded-doc-789\",\"receivedAt\":\"2026-08-28T14:05:00.000Z\",\"source\":\"expanded-analysis\",\"enriched\":false,\"useTradingViewData\":false,\"tradingViewEnrichmentApplied\":false,\"deliveryResults\":[{\"channel\":\"telegram\",\"success\":true,\"messageId\":\"expanded-msg-1\",\"errorCode\":null,\"statusCode\":null}],\"tokenUsage\":null}"
+              "body": "{\"id\":\"expanded-doc-789\",\"receivedAt\":\"2026-08-28T14:05:00.000Z\",\"source\":\"expanded-analysis\",\"enriched\":false,\"useTradingViewData\":false,\"tradingViewEnrichmentApplied\":false,\"deliveryResults\":[{\"channel\":\"telegram\",\"success\":true,\"messageId\":\"expanded-msg-1\",\"errorCode\":null,\"statusCode\":null}],\"tokenUsage\":null}\n"
             }
           ]
         },
@@ -2600,7 +2864,7 @@
               "name": "400 Bad Request - Missing export bounds",
               "status": "Bad Request",
               "code": 400,
-              "body": "{\"error\":\"Export requests require bounded from and to ISO-8601 timestamps.\",\"code\":\"INVALID_REQUEST\"}"
+              "body": "{\n  \"error\": \"Export requests require bounded from and to ISO-8601 timestamps.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
             }
           ]
         },
@@ -2626,7 +2890,15 @@
                 "{{alertId}}"
               ]
             }
-          }
+          },
+          "response": [
+            {
+              "name": "200 OK - Stored alert with latest replay",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"alert\": {\n    \"id\": \"{{alertId}}\",\n    \"text\": \"BTC alert\"\n  },\n  \"lastReplay\": null\n}"
+            }
+          ]
         },
         {
           "name": "POST Replay Alert (telegram)",
@@ -2714,7 +2986,7 @@
               },
               "status": "OK",
               "code": 200,
-              "body": "{\"success\":true,\"alertId\":\"alert-123\",\"replayId\":\"alert-123_06bdeddf2a292e8940d24fb2847d88234dc85d7cd751d4cc7dbc471692aadf38\",\"results\":[{\"channel\":\"telegram\",\"success\":true,\"messageId\":\"123\"}]}"
+              "body": "{\n  \"success\": true,\n  \"alertId\": \"alert-123\",\n  \"replayId\": \"alert-123_06bdeddf2a292e8940d24fb2847d88234dc85d7cd751d4cc7dbc471692aadf38_1700000000000_5b1f0c79-9f0b-4d6e-9b1f-3b8c0e6a5f1a\",\n  \"results\": [\n    { \"channel\": \"telegram\", \"success\": true, \"messageId\": \"123\" }\n  ]\n}"
             },
             {
               "name": "Missing idempotency key",
@@ -2751,7 +3023,7 @@
               },
               "status": "Bad Request",
               "code": 400,
-              "body": "{\"error\":\"Replay requests require an idempotency-key or x-idempotency-key header or idempotencyKey body field.\",\"code\":\"INVALID_REQUEST\"}"
+              "body": "{\n  \"error\": \"Replay requests require an idempotency-key or x-idempotency-key header or idempotencyKey body field.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
             },
             {
               "name": "Invalid channel",
@@ -2793,7 +3065,7 @@
               },
               "status": "Bad Request",
               "code": 400,
-              "body": "{\"error\":\"Unknown channel(s): slack. Valid channels: telegram, whatsapp, discord.\",\"code\":\"INVALID_REQUEST\"}"
+              "body": "{\n  \"error\": \"Unknown channel(s): slack. Valid channels: telegram, whatsapp, discord.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
             }
           ]
         },
@@ -2841,7 +3113,7 @@
               "name": "Success (market-scanner replay)",
               "status": "OK",
               "code": 200,
-              "body": "{\"success\":true,\"alertId\":\"scanner-doc-456\",\"replayId\":\"scanner-doc-456_06bdeddf2a292e8940d24fb2847d88234dc85d7cd751d4cc7dbc471692aadf38\",\"results\":[{\"channel\":\"telegram\",\"success\":true,\"messageId\":\"replay-msg-1\"}]}"
+              "body": "{\n  \"success\": true,\n  \"alertId\": \"scanner-doc-456\",\n  \"replayId\": \"scanner-doc-456_06bdeddf2a292e8940d24fb2847d88234dc85d7cd751d4cc7dbc471692aadf38_1700000000000_5b1f0c79-9f0b-4d6e-9b1f-3b8c0e6a5f1a\",\n  \"results\": [\n    { \"channel\": \"telegram\", \"success\": true, \"messageId\": \"replay-msg-1\" }\n  ]\n}"
             }
           ]
         },
@@ -2889,7 +3161,7 @@
               "name": "Success (expanded-analysis replay)",
               "status": "OK",
               "code": 200,
-              "body": "{\"success\":true,\"alertId\":\"expanded-doc-789\",\"replayId\":\"expanded-doc-789_06bdeddf2a292e8940d24fb2847d88234dc85d7cd751d4cc7dbc471692aadf38\",\"results\":[{\"channel\":\"telegram\",\"success\":true,\"messageId\":\"replay-msg-2\"}]}"
+              "body": "{\n  \"success\": true,\n  \"alertId\": \"expanded-doc-789\",\n  \"replayId\": \"expanded-doc-789_06bdeddf2a292e8940d24fb2847d88234dc85d7cd751d4cc7dbc471692aadf38_1700000000000_5b1f0c79-9f0b-4d6e-9b1f-3b8c0e6a5f1a\",\n  \"results\": [\n    { \"channel\": \"telegram\", \"success\": true, \"messageId\": \"replay-msg-2\" }\n  ]\n}"
             }
           ]
         },
@@ -2937,7 +3209,7 @@
               "name": "Success (x-idempotency-key header)",
               "status": "OK",
               "code": 200,
-              "body": "{\"success\":true,\"alertId\":\"alert-123\",\"replayId\":\"alert-123_06bdeddf2a292e8940d24fb2847d88234dc85d7cd751d4cc7dbc471692aadf38\",\"results\":[{\"channel\":\"telegram\",\"success\":true,\"messageId\":\"123\"}]}",
+              "body": "{\n  \"success\": true,\n  \"alertId\": \"alert-123\",\n  \"replayId\": \"alert-123_06bdeddf2a292e8940d24fb2847d88234dc85d7cd751d4cc7dbc471692aadf38_1700000000000_5b1f0c79-9f0b-4d6e-9b1f-3b8c0e6a5f1a\",\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"123\"\n    }\n  ]\n}",
               "originalRequest": {
                 "method": "POST",
                 "header": [
@@ -2985,7 +3257,7 @@
                   "value": "true"
                 }
               ],
-              "body": "{\"success\":true,\"alertId\":\"alert-123\",\"replayId\":\"alert-123_06bdeddf2a292e8940d24fb2847d88234dc85d7cd751d4cc7dbc471692aadf38\",\"idempotencyReplayed\":true,\"results\":[{\"channel\":\"telegram\",\"success\":true,\"messageId\":\"123\"}]}",
+              "body": "{\n  \"success\": true,\n  \"alertId\": \"alert-123\",\n  \"replayId\": \"alert-123_06bdeddf2a292e8940d24fb2847d88234dc85d7cd751d4cc7dbc471692aadf38_1700000000000_5b1f0c79-9f0b-4d6e-9b1f-3b8c0e6a5f1a\",\n  \"idempotencyReplayed\": true,\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"123\"\n    }\n  ]\n}",
               "originalRequest": {
                 "method": "POST",
                 "header": [
@@ -3027,7 +3299,7 @@
               "name": "Error (idempotency conflict)",
               "status": "Conflict",
               "code": 409,
-              "body": "{\"error\":\"Idempotency key was reused with a different payload\",\"code\":\"IDEMPOTENCY_CONFLICT\"}",
+              "body": "{\n  \"error\": \"Idempotency key was reused with a different payload\",\n  \"code\": \"IDEMPOTENCY_CONFLICT\"\n}",
               "originalRequest": {
                 "method": "POST",
                 "header": [
@@ -3101,25 +3373,25 @@
               "name": "200 Success",
               "status": "OK",
               "code": 200,
-              "body": "{\"success\":true,\"outcomes\":[{\"id\":\"outcome-doc-1\",\"receivedAt\":\"2026-08-23T12:00:00.000Z\",\"requestId\":\"req-1\",\"source\":\"news-monitor\",\"symbol\":\"BTCUSDT\",\"exchange\":\"BINANCE\",\"assetClass\":\"crypto\",\"timeframe\":\"1h\",\"setupType\":\"breakout\",\"score\":0.9,\"side\":\"BUY\",\"price\":65000,\"entryPriceSource\":\"tradingview-mcp\",\"stop\":63000,\"target\":68000,\"marketDataProvider\":\"binance\",\"eligibilityState\":\"supported_provider\",\"eligibilityReason\":null,\"outcomeEvaluated\":true,\"outcomes\":{\"1h\":{\"status\":\"evaluated\",\"reason\":null,\"targetTime\":\"2026-08-23T13:00:00.000Z\",\"price\":66000,\"return\":1.5385,\"maxFavorableExcursion\":2.0,\"maxAdverseExcursion\":-0.2,\"firstHit\":null,\"targetHit\":false,\"stopHit\":false,\"firstHitTime\":null,\"rMultiple\":0.5}},\"sources\":[],\"tokenUsage\":{\"inputTokens\":100,\"outputTokens\":40,\"totalTokens\":140,\"totalCost\":3e-05},\"processingTimeMs\":150}],\"pagination\":{\"limit\":50,\"hasMore\":false,\"nextBefore\":null}}"
+              "body": "{\n  \"success\": true,\n  \"outcomes\": [\n    {\n      \"id\": \"outcome-doc-1\",\n      \"receivedAt\": \"2026-08-23T12:00:00.000Z\",\n      \"requestId\": \"req-1\",\n      \"source\": \"news-monitor\",\n      \"symbol\": \"BTCUSDT\",\n      \"exchange\": \"BINANCE\",\n      \"assetClass\": \"crypto\",\n      \"timeframe\": \"1h\",\n      \"setupType\": \"breakout\",\n      \"score\": 0.9,\n      \"side\": \"BUY\",\n      \"price\": 65000,\n      \"entryPriceSource\": \"tradingview-mcp\",\n      \"stop\": 63000,\n      \"target\": 68000,\n      \"marketDataProvider\": \"binance\",\n      \"eligibilityState\": \"supported_provider\",\n      \"eligibilityReason\": null,\n      \"outcomeEvaluated\": true,\n      \"outcomes\": {\n        \"1h\": {\n          \"status\": \"evaluated\",\n          \"reason\": null,\n          \"targetTime\": \"2026-08-23T13:00:00.000Z\",\n          \"price\": 66000,\n          \"return\": 1.5385,\n          \"maxFavorableExcursion\": 2.0,\n          \"maxAdverseExcursion\": -0.2,\n          \"firstHit\": null,\n          \"targetHit\": false,\n          \"stopHit\": false,\n          \"firstHitTime\": null,\n          \"rMultiple\": 0.5\n        }\n      },\n      \"sources\": [],\n      \"tokenUsage\": {\n        \"inputTokens\": 100,\n        \"outputTokens\": 40,\n        \"totalTokens\": 140,\n        \"totalCost\": 0.00003\n      },\n      \"processingTimeMs\": 150\n    }\n  ],\n  \"pagination\": {\n    \"limit\": 50,\n    \"hasMore\": false,\n    \"nextBefore\": null\n  }\n}"
             },
             {
               "name": "401 Unauthorized",
               "status": "Unauthorized",
               "code": 401,
-              "body": "{\"error\":\"Unauthorized: Missing or invalid API key.\",\"code\":\"UNAUTHORIZED\"}"
+              "body": "{\n  \"error\": \"Unauthorized: Missing or invalid API key.\",\n  \"code\": \"UNAUTHORIZED\"\n}"
             },
             {
               "name": "403 Feature Disabled",
               "status": "Forbidden",
               "code": 403,
-              "body": "{\"error\":\"Signal outcome tracking feature is disabled. Set ENABLE_SIGNAL_OUTCOME_TRACKING=true to enable.\",\"code\":\"FEATURE_DISABLED\"}"
+              "body": "{\n  \"error\": \"Signal outcome tracking feature is disabled. Set ENABLE_SIGNAL_OUTCOME_TRACKING=true to enable.\",\n  \"code\": \"FEATURE_DISABLED\"\n}"
             },
             {
               "name": "503 Storage Unavailable",
               "status": "Service Unavailable",
               "code": 503,
-              "body": "{\"error\":\"Signal outcome tracking is enabled but Firestore is unavailable. Check Firestore credentials and project configuration.\",\"code\":\"STORAGE_UNAVAILABLE\"}"
+              "body": "{\n  \"error\": \"Signal outcome tracking is enabled but Firestore is unavailable. Check Firestore credentials and project configuration.\",\n  \"code\": \"STORAGE_UNAVAILABLE\"\n}"
             }
           ]
         },
@@ -3181,7 +3453,7 @@
               "name": "200 Filtered Success",
               "status": "OK",
               "code": 200,
-              "body": "{\"success\":true,\"outcomes\":[],\"pagination\":{\"limit\":10,\"hasMore\":false,\"nextBefore\":null}}"
+              "body": "{\n  \"success\": true,\n  \"outcomes\": [],\n  \"pagination\": {\n    \"limit\": 10,\n    \"hasMore\": false,\n    \"nextBefore\": null\n  }\n}"
             }
           ]
         },
@@ -3219,7 +3491,7 @@
               "name": "200 Success",
               "status": "OK",
               "code": 200,
-              "body": "{\"success\":true,\"outcomes\":[],\"pagination\":{\"limit\":25,\"hasMore\":false,\"nextBefore\":null}}"
+              "body": "{\n  \"success\": true,\n  \"outcomes\": [],\n  \"pagination\": {\n    \"limit\": 25,\n    \"hasMore\": false,\n    \"nextBefore\": null\n  }\n}"
             }
           ]
         },
@@ -3257,7 +3529,7 @@
               "name": "400 Invalid Limit",
               "status": "Bad Request",
               "code": 400,
-              "body": "{\"error\":\"Invalid limit. Use an integer between 1 and 100.\",\"code\":\"INVALID_REQUEST\"}"
+              "body": "{\n  \"error\": \"Invalid limit. Use an integer between 1 and 100.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
             }
           ]
         },
@@ -3290,31 +3562,31 @@
               "name": "200 Success",
               "status": "OK",
               "code": 200,
-              "body": "{\"success\":true,\"summary\":{\"available\":true,\"totalSignalsReceived\":50,\"totalSignalsEligible\":45,\"totalSignalsEvaluated\":40,\"totalSignalsPending\":5,\"totalSignalsUnavailable\":5,\"coveragePercent\":80,\"isCoverageComplete\":false,\"targetHitRatePercent\":65.5,\"stopHitRatePercent\":25,\"expectancyR\":1.25,\"populationNote\":\"Metrics represent 40 evaluated signals out of 50 total received signals (80% coverage).\",\"exchangeBreakdown\":{\"BINANCE\":{\"received\":40,\"eligible\":40,\"evaluated\":35,\"pending\":3,\"unavailable\":2}},\"providerBreakdown\":{\"binance\":{\"received\":40,\"eligible\":40,\"evaluated\":35,\"pending\":3,\"unavailable\":2}},\"entryPriceSourceBreakdown\":{\"tradingview-mcp\":40},\"eligibilityBreakdown\":{\"supported_provider\":45},\"windows\":{\"1h\":{\"totalSignals\":35,\"hitRatePercent\":60,\"targetEligibleWindows\":30,\"stopEligibleWindows\":30,\"targetHitRatePercent\":55,\"stopHitRatePercent\":20,\"expectancyR\":0.85,\"averageReturnPercent\":2.15,\"averageMfePercent\":3.45,\"averageMaePercent\":-1.1,\"maxAdverseExcursionPercent\":-4.5,\"bySide\":{\"BUY\":{\"totalSignals\":20,\"hitRatePercent\":65,\"targetEligibleWindows\":18,\"stopEligibleWindows\":18,\"targetHitRatePercent\":60,\"stopHitRatePercent\":22,\"expectancyR\":0.92,\"averageReturnPercent\":2.4,\"averageMfePercent\":3.6,\"averageMaePercent\":-1.05,\"maxAdverseExcursionPercent\":-4.2},\"SELL\":{\"totalSignals\":15,\"hitRatePercent\":53,\"targetEligibleWindows\":12,\"stopEligibleWindows\":12,\"targetHitRatePercent\":48,\"stopHitRatePercent\":18,\"expectancyR\":0.71,\"averageReturnPercent\":1.8,\"averageMfePercent\":3.2,\"averageMaePercent\":-1.2,\"maxAdverseExcursionPercent\":-4.5}},\"bySetupType\":{\"trend_continuation\":{\"totalSignals\":25,\"hitRatePercent\":68,\"targetEligibleWindows\":22,\"stopEligibleWindows\":22,\"targetHitRatePercent\":64,\"stopHitRatePercent\":18,\"expectancyR\":1.05,\"averageReturnPercent\":2.6,\"averageMfePercent\":3.8,\"averageMaePercent\":-0.95,\"maxAdverseExcursionPercent\":-3.8},\"reversal\":{\"totalSignals\":10,\"hitRatePercent\":40,\"targetEligibleWindows\":8,\"stopEligibleWindows\":8,\"targetHitRatePercent\":38,\"stopHitRatePercent\":25,\"expectancyR\":0.45,\"averageReturnPercent\":1.2,\"averageMfePercent\":2.9,\"averageMaePercent\":-1.5,\"maxAdverseExcursionPercent\":-4.5}}}},\"drawdownProxy\":{\"averageMaxAdverseExcursionPercent\":-1.85,\"absoluteMaxAdverseExcursionPercent\":-7.2},\"falsePositiveCandidatesCount\":0,\"falsePositiveCandidates\":[],\"latencyCostMetadata\":{\"averageProcessingTimeMs\":450,\"tokenUsage\":{\"inputTokens\":1200,\"outputTokens\":400,\"totalCost\":0.0035}}}}"
+              "body": "{\n  \"success\": true,\n  \"summary\": {\n    \"available\": true,\n    \"totalSignalsReceived\": 50,\n    \"totalSignalsEligible\": 45,\n    \"totalSignalsEvaluated\": 40,\n    \"totalSignalsPending\": 5,\n    \"totalSignalsUnavailable\": 5,\n    \"coveragePercent\": 80,\n    \"isCoverageComplete\": false,\n    \"targetHitRatePercent\": 65.5,\n    \"stopHitRatePercent\": 25,\n    \"expectancyR\": 1.25,\n    \"populationNote\": \"Metrics represent 40 evaluated signals out of 50 total received signals (80% coverage).\",\n    \"exchangeBreakdown\": {\n      \"BINANCE\": {\n        \"received\": 40,\n        \"eligible\": 40,\n        \"evaluated\": 35,\n        \"pending\": 3,\n        \"unavailable\": 2\n      }\n    },\n    \"providerBreakdown\": {\n      \"binance\": {\n        \"received\": 40,\n        \"eligible\": 40,\n        \"evaluated\": 35,\n        \"pending\": 3,\n        \"unavailable\": 2\n      }\n    },\n    \"entryPriceSourceBreakdown\": {\n      \"tradingview-mcp\": 40\n    },\n    \"eligibilityBreakdown\": {\n      \"supported_provider\": 45\n    },\n    \"windows\": {\n      \"1h\": {\n        \"totalSignals\": 35,\n        \"hitRatePercent\": 60,\n        \"targetEligibleWindows\": 30,\n        \"stopEligibleWindows\": 30,\n        \"targetHitRatePercent\": 55,\n        \"stopHitRatePercent\": 20,\n        \"expectancyR\": 0.85,\n        \"averageReturnPercent\": 2.15,\n        \"averageMfePercent\": 3.45,\n        \"averageMaePercent\": -1.1,\n        \"maxAdverseExcursionPercent\": -4.5,\n        \"bySide\": {\n          \"BUY\": {\n            \"totalSignals\": 20,\n            \"hitRatePercent\": 65,\n            \"targetEligibleWindows\": 18,\n            \"stopEligibleWindows\": 18,\n            \"targetHitRatePercent\": 60,\n            \"stopHitRatePercent\": 22,\n            \"expectancyR\": 0.92,\n            \"averageReturnPercent\": 2.4,\n            \"averageMfePercent\": 3.6,\n            \"averageMaePercent\": -1.05,\n            \"maxAdverseExcursionPercent\": -4.2\n          },\n          \"SELL\": {\n            \"totalSignals\": 15,\n            \"hitRatePercent\": 53,\n            \"targetEligibleWindows\": 12,\n            \"stopEligibleWindows\": 12,\n            \"targetHitRatePercent\": 48,\n            \"stopHitRatePercent\": 18,\n            \"expectancyR\": 0.71,\n            \"averageReturnPercent\": 1.8,\n            \"averageMfePercent\": 3.2,\n            \"averageMaePercent\": -1.2,\n            \"maxAdverseExcursionPercent\": -4.5\n          }\n        },\n        \"bySetupType\": {\n          \"trend_continuation\": {\n            \"totalSignals\": 25,\n            \"hitRatePercent\": 68,\n            \"targetEligibleWindows\": 22,\n            \"stopEligibleWindows\": 22,\n            \"targetHitRatePercent\": 64,\n            \"stopHitRatePercent\": 18,\n            \"expectancyR\": 1.05,\n            \"averageReturnPercent\": 2.6,\n            \"averageMfePercent\": 3.8,\n            \"averageMaePercent\": -0.95,\n            \"maxAdverseExcursionPercent\": -3.8\n          },\n          \"reversal\": {\n            \"totalSignals\": 10,\n            \"hitRatePercent\": 40,\n            \"targetEligibleWindows\": 8,\n            \"stopEligibleWindows\": 8,\n            \"targetHitRatePercent\": 38,\n            \"stopHitRatePercent\": 25,\n            \"expectancyR\": 0.45,\n            \"averageReturnPercent\": 1.2,\n            \"averageMfePercent\": 2.9,\n            \"averageMaePercent\": -1.5,\n            \"maxAdverseExcursionPercent\": -4.5\n          }\n        }\n      }\n    },\n    \"drawdownProxy\": {\n      \"averageMaxAdverseExcursionPercent\": -1.85,\n      \"absoluteMaxAdverseExcursionPercent\": -7.2\n    },\n    \"falsePositiveCandidatesCount\": 0,\n    \"falsePositiveCandidates\": [],\n    \"latencyCostMetadata\": {\n      \"averageProcessingTimeMs\": 450,\n      \"tokenUsage\": {\n        \"inputTokens\": 1200,\n        \"outputTokens\": 400,\n        \"totalCost\": 0.0035\n      }\n    }\n  }\n}"
             },
             {
               "name": "200 Empty / No Measurements",
               "status": "OK",
               "code": 200,
-              "body": "{\"success\":true,\"summary\":{\"available\":false,\"totalSignalsReceived\":0,\"totalSignalsEligible\":0,\"totalSignalsEvaluated\":0,\"totalSignalsPending\":0,\"totalSignalsUnavailable\":0,\"coveragePercent\":0,\"isCoverageComplete\":true,\"targetHitRatePercent\":0,\"stopHitRatePercent\":0,\"expectancyR\":null,\"populationNote\":\"No outcome measurements found for the requested criteria.\",\"exchangeBreakdown\":{},\"providerBreakdown\":{},\"entryPriceSourceBreakdown\":{},\"eligibilityBreakdown\":{},\"windows\":{},\"drawdownProxy\":{\"averageMaxAdverseExcursionPercent\":0,\"absoluteMaxAdverseExcursionPercent\":0},\"falsePositiveCandidatesCount\":0,\"falsePositiveCandidates\":[],\"latencyCostMetadata\":{\"averageProcessingTimeMs\":null,\"tokenUsage\":{\"inputTokens\":0,\"outputTokens\":0,\"totalCost\":0}}}}"
+              "body": "{\n  \"success\": true,\n  \"summary\": {\n    \"available\": false,\n    \"totalSignalsReceived\": 0,\n    \"totalSignalsEligible\": 0,\n    \"totalSignalsEvaluated\": 0,\n    \"totalSignalsPending\": 0,\n    \"totalSignalsUnavailable\": 0,\n    \"coveragePercent\": 0,\n    \"isCoverageComplete\": true,\n    \"targetHitRatePercent\": 0,\n    \"stopHitRatePercent\": 0,\n    \"expectancyR\": null,\n    \"populationNote\": \"No outcome measurements found for the requested criteria.\",\n    \"exchangeBreakdown\": {},\n    \"providerBreakdown\": {},\n    \"entryPriceSourceBreakdown\": {},\n    \"eligibilityBreakdown\": {},\n    \"windows\": {},\n    \"drawdownProxy\": {\n      \"averageMaxAdverseExcursionPercent\": 0,\n      \"absoluteMaxAdverseExcursionPercent\": 0\n    },\n    \"falsePositiveCandidatesCount\": 0,\n    \"falsePositiveCandidates\": [],\n    \"latencyCostMetadata\": {\n      \"averageProcessingTimeMs\": null,\n      \"tokenUsage\": {\n        \"inputTokens\": 0,\n        \"outputTokens\": 0,\n        \"totalCost\": 0\n      }\n    }\n  }\n}"
             },
             {
               "name": "401 Unauthorized",
               "status": "Unauthorized",
               "code": 401,
-              "body": "{\"error\":\"Unauthorized: Missing or invalid API key.\",\"code\":\"UNAUTHORIZED\"}"
+              "body": "{\n  \"error\": \"Unauthorized: Missing or invalid API key.\",\n  \"code\": \"UNAUTHORIZED\"\n}"
             },
             {
               "name": "403 Feature Disabled",
               "status": "Forbidden",
               "code": 403,
-              "body": "{\"error\":\"Signal outcome tracking feature is disabled. Set ENABLE_SIGNAL_OUTCOME_TRACKING=true to enable.\",\"code\":\"FEATURE_DISABLED\"}"
+              "body": "{\n  \"error\": \"Signal outcome tracking feature is disabled. Set ENABLE_SIGNAL_OUTCOME_TRACKING=true to enable.\",\n  \"code\": \"FEATURE_DISABLED\"\n}"
             },
             {
               "name": "503 Storage Unavailable",
               "status": "Service Unavailable",
               "code": 503,
-              "body": "{\"error\":\"Signal outcome tracking is enabled but Firestore is unavailable. Check Firestore credentials and project configuration.\",\"code\":\"STORAGE_UNAVAILABLE\"}"
+              "body": "{\n  \"error\": \"Signal outcome tracking is enabled but Firestore is unavailable. Check Firestore credentials and project configuration.\",\n  \"code\": \"STORAGE_UNAVAILABLE\"\n}"
             }
           ]
         },
@@ -3377,7 +3649,7 @@
               "name": "200 Filtered Success",
               "status": "OK",
               "code": 200,
-              "body": "{\"success\":true,\"summary\":{\"available\":true,\"totalSignalsReceived\":10,\"totalSignalsEligible\":10,\"totalSignalsEvaluated\":10,\"totalSignalsPending\":0,\"totalSignalsUnavailable\":0,\"coveragePercent\":100,\"isCoverageComplete\":true,\"targetHitRatePercent\":70,\"stopHitRatePercent\":20,\"expectancyR\":1.1,\"populationNote\":\"Metrics represent 100% of received signals.\",\"exchangeBreakdown\":{\"BINANCE\":{\"received\":10,\"eligible\":10,\"evaluated\":10,\"pending\":0,\"unavailable\":0}},\"providerBreakdown\":{\"binance\":{\"received\":10,\"eligible\":10,\"evaluated\":10,\"pending\":0,\"unavailable\":0}},\"entryPriceSourceBreakdown\":{\"tradingview-mcp\":10},\"eligibilityBreakdown\":{\"supported_provider\":10},\"windows\":{\"1h\":{\"totalSignals\":10,\"hitRatePercent\":70,\"targetEligibleWindows\":10,\"stopEligibleWindows\":10,\"targetHitRatePercent\":70,\"stopHitRatePercent\":20,\"expectancyR\":1.1,\"averageReturnPercent\":2.5,\"averageMfePercent\":3.8,\"averageMaePercent\":-0.9,\"maxAdverseExcursionPercent\":-3.2}},\"drawdownProxy\":{\"averageMaxAdverseExcursionPercent\":-1.2,\"absoluteMaxAdverseExcursionPercent\":-4.5},\"falsePositiveCandidatesCount\":0,\"falsePositiveCandidates\":[],\"latencyCostMetadata\":{\"averageProcessingTimeMs\":380,\"tokenUsage\":{\"inputTokens\":300,\"outputTokens\":120,\"totalCost\":0.001}}}}"
+              "body": "{\n  \"success\": true,\n  \"summary\": {\n    \"available\": true,\n    \"totalSignalsReceived\": 10,\n    \"totalSignalsEligible\": 10,\n    \"totalSignalsEvaluated\": 10,\n    \"totalSignalsPending\": 0,\n    \"totalSignalsUnavailable\": 0,\n    \"coveragePercent\": 100,\n    \"isCoverageComplete\": true,\n    \"targetHitRatePercent\": 70,\n    \"stopHitRatePercent\": 20,\n    \"expectancyR\": 1.1,\n    \"populationNote\": \"Metrics represent 100% of received signals.\",\n    \"exchangeBreakdown\": {\n      \"BINANCE\": {\n        \"received\": 10,\n        \"eligible\": 10,\n        \"evaluated\": 10,\n        \"pending\": 0,\n        \"unavailable\": 0\n      }\n    },\n    \"providerBreakdown\": {\n      \"binance\": {\n        \"received\": 10,\n        \"eligible\": 10,\n        \"evaluated\": 10,\n        \"pending\": 0,\n        \"unavailable\": 0\n      }\n    },\n    \"entryPriceSourceBreakdown\": {\n      \"tradingview-mcp\": 10\n    },\n    \"eligibilityBreakdown\": {\n      \"supported_provider\": 10\n    },\n    \"windows\": {\n      \"1h\": {\n        \"totalSignals\": 10,\n        \"hitRatePercent\": 70,\n        \"targetEligibleWindows\": 10,\n        \"stopEligibleWindows\": 10,\n        \"targetHitRatePercent\": 70,\n        \"stopHitRatePercent\": 20,\n        \"expectancyR\": 1.1,\n        \"averageReturnPercent\": 2.5,\n        \"averageMfePercent\": 3.8,\n        \"averageMaePercent\": -0.9,\n        \"maxAdverseExcursionPercent\": -3.2\n      }\n    },\n    \"drawdownProxy\": {\n      \"averageMaxAdverseExcursionPercent\": -1.2,\n      \"absoluteMaxAdverseExcursionPercent\": -4.5\n    },\n    \"falsePositiveCandidatesCount\": 0,\n    \"falsePositiveCandidates\": [],\n    \"latencyCostMetadata\": {\n      \"averageProcessingTimeMs\": 380,\n      \"tokenUsage\": {\n        \"inputTokens\": 300,\n        \"outputTokens\": 120,\n        \"totalCost\": 0.001\n      }\n    }\n  }\n}"
             }
           ]
         },
@@ -3416,7 +3688,7 @@
               "name": "200 Success",
               "status": "OK",
               "code": 200,
-              "body": "{\"success\":true,\"summary\":{\"available\":true,\"totalSignalsReceived\":25,\"totalSignalsEligible\":25,\"totalSignalsEvaluated\":25,\"totalSignalsPending\":0,\"totalSignalsUnavailable\":0,\"coveragePercent\":100,\"isCoverageComplete\":true,\"targetHitRatePercent\":68,\"stopHitRatePercent\":24,\"expectancyR\":1.15,\"populationNote\":\"Metrics represent 100% of received signals.\",\"exchangeBreakdown\":{},\"providerBreakdown\":{},\"entryPriceSourceBreakdown\":{},\"eligibilityBreakdown\":{},\"windows\":{},\"drawdownProxy\":{\"averageMaxAdverseExcursionPercent\":-1.5,\"absoluteMaxAdverseExcursionPercent\":-5.5},\"falsePositiveCandidatesCount\":0,\"falsePositiveCandidates\":[],\"latencyCostMetadata\":{\"averageProcessingTimeMs\":400,\"tokenUsage\":{\"inputTokens\":800,\"outputTokens\":250,\"totalCost\":0.0025}}}}"
+              "body": "{\n  \"success\": true,\n  \"summary\": {\n    \"available\": true,\n    \"totalSignalsReceived\": 25,\n    \"totalSignalsEligible\": 25,\n    \"totalSignalsEvaluated\": 25,\n    \"totalSignalsPending\": 0,\n    \"totalSignalsUnavailable\": 0,\n    \"coveragePercent\": 100,\n    \"isCoverageComplete\": true,\n    \"targetHitRatePercent\": 68,\n    \"stopHitRatePercent\": 24,\n    \"expectancyR\": 1.15,\n    \"populationNote\": \"Metrics represent 100% of received signals.\",\n    \"exchangeBreakdown\": {},\n    \"providerBreakdown\": {},\n    \"entryPriceSourceBreakdown\": {},\n    \"eligibilityBreakdown\": {},\n    \"windows\": {},\n    \"drawdownProxy\": {\n      \"averageMaxAdverseExcursionPercent\": -1.5,\n      \"absoluteMaxAdverseExcursionPercent\": -5.5\n    },\n    \"falsePositiveCandidatesCount\": 0,\n    \"falsePositiveCandidates\": [],\n    \"latencyCostMetadata\": {\n      \"averageProcessingTimeMs\": 400,\n      \"tokenUsage\": {\n        \"inputTokens\": 800,\n        \"outputTokens\": 250,\n        \"totalCost\": 0.0025\n      }\n    }\n  }\n}"
             }
           ]
         },
@@ -3455,7 +3727,7 @@
               "name": "400 Invalid Limit",
               "status": "Bad Request",
               "code": 400,
-              "body": "{\"error\":\"Invalid limit. Use an integer between 1 and 100.\",\"code\":\"INVALID_REQUEST\"}"
+              "body": "{\n  \"error\": \"Invalid limit. Use an integer between 1 and 100.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
             }
           ]
         }
@@ -3506,7 +3778,7 @@
               "name": "Success",
               "status": "OK",
               "code": 200,
-              "body": "{\"success\":true,\"jobs\":[{\"jobId\":\"8f8ef192-349f-4318-8547-0e6d628bf739\",\"type\":\"expanded-analysis\",\"status\":\"completed\",\"progress\":{\"total\":1,\"current\":1},\"createdAt\":\"2026-05-25T01:30:00.000Z\",\"updatedAt\":\"2026-05-25T01:30:12.000Z\",\"totalDurationMs\":12053}]}"
+              "body": "{\n  \"success\": true,\n  \"jobs\": [\n    {\n      \"jobId\": \"8f8ef192-349f-4318-8547-0e6d628bf739\",\n      \"type\": \"expanded-analysis\",\n      \"status\": \"completed\",\n      \"progress\": {\"total\": 1, \"current\": 1},\n      \"createdAt\": \"2026-05-25T01:30:00.000Z\",\n      \"updatedAt\": \"2026-05-25T01:30:12.000Z\",\n      \"totalDurationMs\": 12053\n    }\n  ]\n}"
             },
             {
               "name": "Invalid limit",
@@ -3538,7 +3810,7 @@
               },
               "status": "Bad Request",
               "code": 400,
-              "body": "{\"error\":\"Invalid limit. Use an integer between 1 and 100.\",\"code\":\"INVALID_REQUEST\"}"
+              "body": "{\n  \"error\": \"Invalid limit. Use an integer between 1 and 100.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
             }
           ]
         },
@@ -3597,25 +3869,25 @@
                   "value": "true"
                 }
               ],
-              "body": "{\"success\":true,\"jobId\":\"job-uuid-123\",\"status\":\"processing\",\"idempotencyReplayed\":true}"
+              "body": "{\n  \"success\": true,\n  \"jobId\": \"job-uuid-123\",\n  \"status\": \"processing\",\n  \"idempotencyReplayed\": true\n}"
             },
             {
               "name": "Idempotency Key Conflict",
               "status": "Conflict",
               "code": 409,
-              "body": "{\"error\":\"Idempotency key was reused with a different payload\",\"code\":\"IDEMPOTENCY_CONFLICT\"}"
+              "body": "{\n  \"error\": \"Idempotency key was reused with a different payload\",\n  \"code\": \"IDEMPOTENCY_CONFLICT\"\n}"
             },
             {
               "name": "Render Worker Queue Unavailable",
               "status": "Service Unavailable",
               "code": 503,
-              "body": "{\"error\":\"The asynchronous job queue is unavailable.\",\"code\":\"JOB_QUEUE_UNAVAILABLE\"}"
+              "body": "{\n  \"error\": \"The asynchronous job queue is unavailable.\",\n  \"code\": \"JOB_QUEUE_UNAVAILABLE\"\n}"
             },
             {
               "name": "Render Worker Queue Acceptance Unknown",
               "status": "Service Unavailable",
               "code": 503,
-              "body": "{\"error\":\"The queue acceptance state could not be determined.\",\"code\":\"JOB_QUEUE_ACCEPTANCE_UNKNOWN\",\"jobId\":\"8f8ef192-349f-4318-8547-0e6d628bf739\"}"
+              "body": "{\n  \"error\": \"The queue acceptance state could not be determined.\",\n  \"code\": \"JOB_QUEUE_ACCEPTANCE_UNKNOWN\",\n  \"jobId\": \"8f8ef192-349f-4318-8547-0e6d628bf739\"\n}"
             },
             {
               "name": "Create Job with Callback",
@@ -3652,7 +3924,7 @@
               },
               "status": "Created",
               "code": 201,
-              "body": "{\"success\":true,\"jobId\":\"job-uuid-123\",\"status\":\"processing\",\"createdAt\":\"2026-06-19T12:00:00.000Z\",\"callbackStatus\":{\"status\":\"success\",\"attempts\":[{\"attempt\":1,\"event\":\"processing\",\"timestamp\":\"2026-06-19T12:00:01.000Z\",\"statusCode\":200}],\"events\":{\"processing\":{\"status\":\"success\",\"attempts\":[{\"attempt\":1,\"event\":\"processing\",\"timestamp\":\"2026-06-19T12:00:01.000Z\",\"statusCode\":200}]}}}}"
+              "body": "{\n  \"success\": true,\n  \"jobId\": \"job-uuid-123\",\n  \"status\": \"processing\",\n  \"createdAt\": \"2026-06-19T12:00:00.000Z\",\n  \"callbackStatus\": {\n    \"status\": \"success\",\n    \"attempts\": [\n      {\n        \"attempt\": 1,\n        \"event\": \"processing\",\n        \"timestamp\": \"2026-06-19T12:00:01.000Z\",\n        \"statusCode\": 200\n      }\n    ],\n    \"events\": {\n      \"processing\": {\n        \"status\": \"success\",\n        \"attempts\": [\n          {\n            \"attempt\": 1,\n            \"event\": \"processing\",\n            \"timestamp\": \"2026-06-19T12:00:01.000Z\",\n            \"statusCode\": 200\n          }\n        ]\n      }\n    }\n  }\n}"
             },
             {
               "name": "Create Job with Invalid Callback URL (HTTP)",
@@ -3688,7 +3960,7 @@
               },
               "status": "Bad Request",
               "code": 400,
-              "body": "{\"error\":\"callbackUrl must be a valid HTTPS URL (HTTP only allowed for local development)\",\"code\":\"INVALID_REQUEST\"}"
+              "body": "{\n  \"error\": \"callbackUrl must be a valid HTTPS URL (HTTP only allowed for local development)\",\n  \"code\": \"INVALID_REQUEST\"\n}"
             },
             {
               "name": "Create Job with Private Callback URL (SSRF Blocked)",
@@ -3724,7 +3996,7 @@
               },
               "status": "Bad Request",
               "code": 400,
-              "body": "{\"error\":\"callbackUrl must be a valid HTTPS URL (HTTP only allowed for local development)\",\"code\":\"INVALID_REQUEST\"}"
+              "body": "{\n  \"error\": \"callbackUrl must be a valid HTTPS URL (HTTP only allowed for local development)\",\n  \"code\": \"INVALID_REQUEST\"\n}"
             }
           ]
         },
@@ -3801,7 +4073,7 @@
               },
               "status": "Created",
               "code": 201,
-              "body": "{\"success\":true,\"jobId\":\"job-uuid-123\",\"status\":\"processing\",\"createdAt\":\"2026-06-19T12:00:00.000Z\",\"callbackStatus\":{\"status\":\"success\",\"attempts\":[{\"attempt\":1,\"event\":\"processing\",\"timestamp\":\"2026-06-19T12:00:01.000Z\",\"statusCode\":200}],\"events\":{\"processing\":{\"status\":\"success\",\"attempts\":[{\"attempt\":1,\"event\":\"processing\",\"timestamp\":\"2026-06-19T12:00:01.000Z\",\"statusCode\":200}]}}}}"
+              "body": "{\n  \"success\": true,\n  \"jobId\": \"job-uuid-123\",\n  \"status\": \"processing\",\n  \"createdAt\": \"2026-06-19T12:00:00.000Z\",\n  \"callbackStatus\": {\n    \"status\": \"success\",\n    \"attempts\": [\n      {\n        \"attempt\": 1,\n        \"event\": \"processing\",\n        \"timestamp\": \"2026-06-19T12:00:01.000Z\",\n        \"statusCode\": 200\n      }\n    ],\n    \"events\": {\n      \"processing\": {\n        \"status\": \"success\",\n        \"attempts\": [\n          {\n            \"attempt\": 1,\n            \"event\": \"processing\",\n            \"timestamp\": \"2026-06-19T12:00:01.000Z\",\n            \"statusCode\": 200\n          }\n        ]\n      }\n    }\n  }\n}"
             },
             {
               "name": "Create Job with Invalid Callback URL (HTTP)",
@@ -3837,7 +4109,7 @@
               },
               "status": "Bad Request",
               "code": 400,
-              "body": "{\"error\":\"callbackUrl must be a valid HTTPS URL (HTTP only allowed for local development)\",\"code\":\"INVALID_REQUEST\"}"
+              "body": "{\n  \"error\": \"callbackUrl must be a valid HTTPS URL (HTTP only allowed for local development)\",\n  \"code\": \"INVALID_REQUEST\"\n}"
             },
             {
               "name": "Create Job with Private Callback URL (SSRF Blocked)",
@@ -3873,7 +4145,7 @@
               },
               "status": "Bad Request",
               "code": 400,
-              "body": "{\"error\":\"callbackUrl must be a valid HTTPS URL (HTTP only allowed for local development)\",\"code\":\"INVALID_REQUEST\"}"
+              "body": "{\n  \"error\": \"callbackUrl must be a valid HTTPS URL (HTTP only allowed for local development)\",\n  \"code\": \"INVALID_REQUEST\"\n}"
             }
           ]
         },
@@ -3989,7 +4261,7 @@
               "status": "OK",
               "code": 200,
               "_postman_previewlanguage": "json",
-              "body": "{\"success\":true,\"jobId\":\"job-uuid-123\",\"type\":\"market-scanner\",\"status\":\"completed\",\"scanResults\":[{\"scan\":\"top_gainers\",\"status\":\"success\",\"itemCount\":1,\"scores\":[{\"symbol\":\"BINANCE:BTCUSDT\",\"score\":80,\"reason\":\"+3.5% \\u00b7 RSI 62.0 \\u00b7 Vol 1.8x \\u00b7 HTF aligned +10\",\"trendConfluence\":{\"status\":\"aligned\",\"direction\":\"bullish\",\"confidence\":82,\"adjustment\":10}}]}]}"
+              "body": "{\n  \"success\": true,\n  \"jobId\": \"job-uuid-123\",\n  \"type\": \"market-scanner\",\n  \"status\": \"completed\",\n  \"scanResults\": [{\n    \"scan\": \"top_gainers\",\n    \"status\": \"success\",\n    \"itemCount\": 1,\n    \"scores\": [{ \"symbol\": \"BINANCE:BTCUSDT\", \"score\": 80, \"reason\": \"+3.5% \u00b7 RSI 62.0 \u00b7 Vol 1.8x \u00b7 HTF aligned +10\", \"trendConfluence\": { \"status\": \"aligned\", \"direction\": \"bullish\", \"confidence\": 82, \"adjustment\": 10 } }]\n  }]\n}"
             }
           ]
         },
@@ -4065,13 +4337,13 @@
                   "value": "true"
                 }
               ],
-              "body": "{\"success\":true,\"oldJobId\":\"job-uuid-123\",\"newJobId\":\"job-uuid-456\",\"status\":\"processing\",\"idempotencyReplayed\":true}"
+              "body": "{\n  \"success\": true,\n  \"oldJobId\": \"job-uuid-123\",\n  \"newJobId\": \"job-uuid-456\",\n  \"status\": \"processing\",\n  \"idempotencyReplayed\": true\n}"
             },
             {
               "name": "Retry Idempotency Conflict",
               "status": "Conflict",
               "code": 409,
-              "body": "{\"error\":\"Idempotency key was reused with a different payload\",\"code\":\"IDEMPOTENCY_CONFLICT\"}"
+              "body": "{\n  \"error\": \"Idempotency key was reused with a different payload\",\n  \"code\": \"IDEMPOTENCY_CONFLICT\"\n}"
             }
           ]
         },
@@ -4122,13 +4394,13 @@
                   "value": "true"
                 }
               ],
-              "body": "{\"success\":true,\"oldJobId\":\"job-uuid-123\",\"newJobId\":\"job-uuid-789\",\"status\":\"processing\",\"idempotencyReplayed\":true}"
+              "body": "{\n  \"success\": true,\n  \"oldJobId\": \"job-uuid-123\",\n  \"newJobId\": \"job-uuid-789\",\n  \"status\": \"processing\",\n  \"idempotencyReplayed\": true\n}"
             },
             {
               "name": "Retry Failed Idempotency Conflict",
               "status": "Conflict",
               "code": 409,
-              "body": "{\"error\":\"Idempotency key was reused with a different payload\",\"code\":\"IDEMPOTENCY_CONFLICT\"}"
+              "body": "{\n  \"error\": \"Idempotency key was reused with a different payload\",\n  \"code\": \"IDEMPOTENCY_CONFLICT\"\n}"
             }
           ]
         },
@@ -4175,7 +4447,7 @@
               "name": "Success (x-idempotency-key header)",
               "status": "Created",
               "code": 201,
-              "body": "{\"success\":true,\"jobId\":\"job-uuid-123\",\"status\":\"processing\",\"createdAt\":\"2026-06-19T12:00:00.000Z\"}",
+              "body": "{\n  \"success\": true,\n  \"jobId\": \"job-uuid-123\",\n  \"status\": \"processing\",\n  \"createdAt\": \"2026-06-19T12:00:00.000Z\"\n}",
               "originalRequest": {
                 "method": "POST",
                 "header": [
@@ -4222,7 +4494,7 @@
                   "value": "true"
                 }
               ],
-              "body": "{\"success\":true,\"jobId\":\"job-uuid-123\",\"status\":\"processing\",\"createdAt\":\"2026-06-19T12:00:00.000Z\",\"idempotencyReplayed\":true}",
+              "body": "{\n  \"success\": true,\n  \"jobId\": \"job-uuid-123\",\n  \"status\": \"processing\",\n  \"createdAt\": \"2026-06-19T12:00:00.000Z\",\n  \"idempotencyReplayed\": true\n}",
               "originalRequest": {
                 "method": "POST",
                 "header": [
@@ -4263,7 +4535,7 @@
               "name": "Error (idempotency conflict)",
               "status": "Conflict",
               "code": 409,
-              "body": "{\"error\":\"Idempotency key was reused with a different payload\",\"code\":\"IDEMPOTENCY_CONFLICT\"}",
+              "body": "{\n  \"error\": \"Idempotency key was reused with a different payload\",\n  \"code\": \"IDEMPOTENCY_CONFLICT\"\n}",
               "originalRequest": {
                 "method": "POST",
                 "header": [
@@ -4346,7 +4618,7 @@
               "name": "Success (dry-run)",
               "status": "OK",
               "code": 200,
-              "body": "{\"success\":true,\"dryRun\":true,\"environment\":\"testnet\",\"order\":{\"symbol\":\"BTCUSDT\",\"side\":\"BUY\",\"type\":\"LIMIT\",\"quantity\":0.001,\"price\":60000,\"timeInForce\":\"GTC\",\"newOrderRespType\":\"FULL\"}}"
+              "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"environment\": \"testnet\",\n  \"order\": {\n    \"symbol\": \"BTCUSDT\",\n    \"side\": \"BUY\",\n    \"type\": \"LIMIT\",\n    \"quantity\": 0.001,\n    \"price\": 60000,\n    \"timeInForce\": \"GTC\",\n    \"newOrderRespType\": \"FULL\"\n  }\n}"
             }
           ]
         },
@@ -4393,7 +4665,7 @@
               "name": "Created",
               "status": "Created",
               "code": 201,
-              "body": "{\"success\":true,\"dryRun\":false,\"environment\":\"testnet\",\"order\":{\"symbol\":\"BTCUSDT\",\"orderId\":42,\"clientOrderId\":\"cabros-375-1\",\"status\":\"FILLED\",\"type\":\"MARKET\",\"side\":\"BUY\"}}"
+              "body": "{\n  \"success\": true,\n  \"dryRun\": false,\n  \"environment\": \"testnet\",\n  \"order\": {\n    \"symbol\": \"BTCUSDT\",\n    \"orderId\": 42,\n    \"clientOrderId\": \"cabros-375-1\",\n    \"status\": \"FILLED\",\n    \"type\": \"MARKET\",\n    \"side\": \"BUY\"\n  }\n}"
             },
             {
               "name": "Replay",
@@ -4405,7 +4677,7 @@
                   "value": "true"
                 }
               ],
-              "body": "{\"success\":true,\"dryRun\":false,\"idempotencyReplayed\":true,\"environment\":\"testnet\"}"
+              "body": "{\n  \"success\": true,\n  \"dryRun\": false,\n  \"idempotencyReplayed\": true,\n  \"environment\": \"testnet\"\n}"
             },
             {
               "name": "Indeterminate submission (replayed)",
@@ -4417,25 +4689,25 @@
                   "value": "true"
                 }
               ],
-              "body": "{\"success\":false,\"error\":\"Binance accepted or may have accepted the order, but its final status is unknown; do not resubmit with a new idempotency key\",\"code\":\"BINANCE_ORDER_STATUS_UNKNOWN\",\"idempotencyReplayed\":true}"
+              "body": "{\n  \"success\": false,\n  \"error\": \"Binance accepted or may have accepted the order, but its final status is unknown; do not resubmit with a new idempotency key\",\n  \"code\": \"BINANCE_ORDER_STATUS_UNKNOWN\",\n  \"idempotencyReplayed\": true\n}"
             },
             {
               "name": "Definitive Binance rejection",
               "status": "Bad Request",
               "code": 400,
-              "body": "{\"success\":false,\"error\":\"Binance rejected the order\",\"code\":\"BINANCE_ORDER_REJECTED\"}"
+              "body": "{\n  \"success\": false,\n  \"error\": \"Binance rejected the order\",\n  \"code\": \"BINANCE_ORDER_REJECTED\"\n}"
             },
             {
               "name": "Transient order-test failure",
               "status": "Bad Gateway",
               "code": 502,
-              "body": "{\"success\":false,\"error\":\"Binance order-test validation failed; retry without changing the order identity\",\"code\":\"BINANCE_VALIDATION_FAILED\"}"
+              "body": "{\n  \"success\": false,\n  \"error\": \"Binance order-test validation failed; retry without changing the order identity\",\n  \"code\": \"BINANCE_VALIDATION_FAILED\"\n}"
             },
             {
               "name": "Recovered order conflict",
               "status": "Conflict",
               "code": 409,
-              "body": "{\"success\":false,\"error\":\"Reconciled Binance order does not match the request\",\"code\":\"BINANCE_ORDER_CONFLICT\"}"
+              "body": "{\n  \"success\": false,\n  \"error\": \"Reconciled Binance order does not match the request\",\n  \"code\": \"BINANCE_ORDER_CONFLICT\"\n}"
             }
           ]
         },
@@ -4477,7 +4749,7 @@
               "name": "Bad Request",
               "status": "Bad Request",
               "code": 400,
-              "body": "{\"success\":false,\"error\":\"quantity does not match Binance lot-size step\",\"code\":\"INVALID_ORDER_REQUEST\"}"
+              "body": "{\n  \"success\": false,\n  \"error\": \"quantity does not match Binance lot-size step\",\n  \"code\": \"INVALID_ORDER_REQUEST\"\n}"
             }
           ]
         },
@@ -4519,7 +4791,7 @@
               "name": "OK",
               "status": "OK",
               "code": 200,
-              "body": "{\"success\":true,\"dryRun\":true,\"environment\":\"testnet\",\"order\":{\"symbol\":\"BTCUSDT\",\"side\":\"SELL\",\"type\":\"MARKET\",\"quantity\":0.001,\"newOrderRespType\":\"FULL\"}}"
+              "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"environment\": \"testnet\",\n  \"order\": {\n    \"symbol\": \"BTCUSDT\",\n    \"side\": \"SELL\",\n    \"type\": \"MARKET\",\n    \"quantity\": 0.001,\n    \"newOrderRespType\": \"FULL\"\n  }\n}"
             }
           ]
         },
@@ -4562,7 +4834,7 @@
               "name": "OK",
               "status": "OK",
               "code": 200,
-              "body": "{\"success\":true,\"dryRun\":true,\"environment\":\"testnet\",\"order\":{\"symbol\":\"BTCUSDT\",\"side\":\"BUY\",\"type\":\"MARKET\",\"quoteOrderQty\":\"50\",\"newOrderRespType\":\"FULL\"}}"
+              "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"environment\": \"testnet\",\n  \"order\": {\n    \"symbol\": \"BTCUSDT\",\n    \"side\": \"BUY\",\n    \"type\": \"MARKET\",\n    \"quoteOrderQty\": \"50\",\n    \"newOrderRespType\": \"FULL\"\n  }\n}"
             }
           ]
         },
@@ -4604,7 +4876,7 @@
               "name": "Bad Request",
               "status": "Bad Request",
               "code": 400,
-              "body": "{\"success\":false,\"error\":\"order notional exceeds configured maximum\",\"code\":\"INVALID_ORDER_REQUEST\"}"
+              "body": "{\n  \"success\": false,\n  \"error\": \"order notional exceeds configured maximum\",\n  \"code\": \"INVALID_ORDER_REQUEST\"\n}"
             }
           ]
         },
@@ -4646,7 +4918,7 @@
               "name": "Bad Request",
               "status": "Bad Request",
               "code": 400,
-              "body": "{\"success\":false,\"error\":\"Live orders require idempotencyKey or clientOrderId\",\"code\":\"LIVE_ORDER_ID_REQUIRED\"}"
+              "body": "{\n  \"success\": false,\n  \"error\": \"Live orders require idempotencyKey or clientOrderId\",\n  \"code\": \"LIVE_ORDER_ID_REQUIRED\"\n}"
             }
           ]
         },
@@ -4688,7 +4960,7 @@
               "name": "Bad Request",
               "status": "Bad Request",
               "code": 400,
-              "body": "{\"success\":false,\"error\":\"MARKET orders do not accept timeInForce\",\"code\":\"INVALID_ORDER_REQUEST\"}"
+              "body": "{\n  \"success\": false,\n  \"error\": \"MARKET orders do not accept timeInForce\",\n  \"code\": \"INVALID_ORDER_REQUEST\"\n}"
             }
           ]
         },
@@ -4730,7 +5002,7 @@
               "name": "Feature Disabled",
               "status": "Forbidden",
               "code": 403,
-              "body": "{\"success\":false,\"error\":\"Binance trading is disabled\",\"code\":\"FEATURE_DISABLED\"}"
+              "body": "{\n  \"success\": false,\n  \"error\": \"Binance trading is disabled\",\n  \"code\": \"FEATURE_DISABLED\"\n}"
             }
           ]
         },
@@ -4774,7 +5046,7 @@
               "name": "Success",
               "status": "OK",
               "code": 200,
-              "body": "{\"success\":true,\"environment\":\"testnet\",\"orders\":[{\"symbol\":\"BTCUSDT\",\"orderId\":42,\"clientOrderId\":\"cabros-375-1\",\"status\":\"FILLED\",\"type\":\"LIMIT\",\"side\":\"BUY\",\"price\":\"60000.00000000\",\"origQty\":\"0.00100000\",\"executedQty\":\"0.00100000\",\"cummulativeQuoteQty\":\"60.00000000\",\"time\":1700000000000}],\"count\":1}"
+              "body": "{\n  \"success\": true,\n  \"environment\": \"testnet\",\n  \"orders\": [\n    {\n      \"symbol\": \"BTCUSDT\",\n      \"orderId\": 42,\n      \"clientOrderId\": \"cabros-375-1\",\n      \"status\": \"FILLED\",\n      \"type\": \"LIMIT\",\n      \"side\": \"BUY\",\n      \"price\": \"60000.00000000\",\n      \"origQty\": \"0.00100000\",\n      \"executedQty\": \"0.00100000\",\n      \"cummulativeQuoteQty\": \"60.00000000\",\n      \"time\": 1700000000000\n    }\n  ],\n  \"count\": 1\n}"
             }
           ]
         },
@@ -4818,7 +5090,7 @@
               "name": "Success",
               "status": "OK",
               "code": 200,
-              "body": "{\"success\":true,\"environment\":\"testnet\",\"order\":{\"symbol\":\"BTCUSDT\",\"orderId\":42,\"clientOrderId\":\"cabros-375-1\",\"status\":\"FILLED\",\"type\":\"LIMIT\",\"side\":\"BUY\",\"price\":\"60000.00000000\",\"origQty\":\"0.00100000\",\"executedQty\":\"0.00100000\",\"cummulativeQuoteQty\":\"60.00000000\",\"time\":1700000000000,\"updateTime\":1700000005000,\"isWorking\":true}}"
+              "body": "{\n  \"success\": true,\n  \"environment\": \"testnet\",\n  \"order\": {\n    \"symbol\": \"BTCUSDT\",\n    \"orderId\": 42,\n    \"clientOrderId\": \"cabros-375-1\",\n    \"status\": \"FILLED\",\n    \"type\": \"LIMIT\",\n    \"side\": \"BUY\",\n    \"price\": \"60000.00000000\",\n    \"origQty\": \"0.00100000\",\n    \"executedQty\": \"0.00100000\",\n    \"cummulativeQuoteQty\": \"60.00000000\",\n    \"time\": 1700000000000,\n    \"updateTime\": 1700000005000,\n    \"isWorking\": true\n  }\n}"
             }
           ]
         },
@@ -4862,7 +5134,7 @@
               "name": "Success",
               "status": "OK",
               "code": 200,
-              "body": "{\"success\":true,\"environment\":\"testnet\",\"order\":{\"symbol\":\"BTCUSDT\",\"orderId\":42,\"clientOrderId\":\"cabros-375-1\",\"status\":\"FILLED\",\"type\":\"LIMIT\",\"side\":\"BUY\",\"price\":\"60000.00000000\",\"origQty\":\"0.00100000\",\"executedQty\":\"0.00100000\",\"cummulativeQuoteQty\":\"60.00000000\",\"time\":1700000000000,\"updateTime\":1700000005000,\"isWorking\":true}}"
+              "body": "{\n  \"success\": true,\n  \"environment\": \"testnet\",\n  \"order\": {\n    \"symbol\": \"BTCUSDT\",\n    \"orderId\": 42,\n    \"clientOrderId\": \"cabros-375-1\",\n    \"status\": \"FILLED\",\n    \"type\": \"LIMIT\",\n    \"side\": \"BUY\",\n    \"price\": \"60000.00000000\",\n    \"origQty\": \"0.00100000\",\n    \"executedQty\": \"0.00100000\",\n    \"cummulativeQuoteQty\": \"60.00000000\",\n    \"time\": 1700000000000,\n    \"updateTime\": 1700000005000,\n    \"isWorking\": true\n  }\n}"
             }
           ]
         },
@@ -4902,7 +5174,7 @@
               "name": "Bad Request",
               "status": "Bad Request",
               "code": 400,
-              "body": "{\"success\":false,\"error\":\"symbol is not allowed for Binance trading\",\"code\":\"INVALID_ORDER_REQUEST\"}"
+              "body": "{\n  \"success\": false,\n  \"error\": \"symbol is not allowed for Binance trading\",\n  \"code\": \"INVALID_ORDER_REQUEST\"\n}"
             }
           ]
         },
@@ -4946,7 +5218,185 @@
               "name": "Not Found",
               "status": "Not Found",
               "code": 404,
-              "body": "{\"success\":false,\"error\":\"Binance order not found\",\"code\":\"ORDER_NOT_FOUND\"}"
+              "body": "{\n  \"success\": false,\n  \"error\": \"Binance order not found\",\n  \"code\": \"ORDER_NOT_FOUND\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "DELETE Binance Order (by orderId)",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"symbol\": \"BTCUSDT\",\n  \"orderId\": 42\n}"
+            },
+            "description": "Cancels a resting LIMIT order using its Binance-assigned orderId. Already-terminal orders return 404 ORDER_NOT_FOUND; ambiguous bodies return 400 INVALID_ORDER_REQUEST.",
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/orders",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "orders"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"cancelled\": true,\n  \"environment\": \"testnet\",\n  \"order\": {\n    \"symbol\": \"BTCUSDT\",\n    \"orderId\": 42,\n    \"clientOrderId\": \"cabros-574-1\",\n    \"status\": \"CANCELED\",\n    \"type\": \"LIMIT\",\n    \"side\": \"SELL\",\n    \"origQty\": \"0.00100000\",\n    \"executedQty\": \"0.00000000\",\n    \"price\": \"60000.00000000\"\n  }\n}"
+            },
+            {
+              "name": "Order Not Found",
+              "status": "Not Found",
+              "code": 404,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Binance order not found\",\n  \"code\": \"ORDER_NOT_FOUND\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "DELETE Binance Order (by origClientOrderId)",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"symbol\": \"BTCUSDT\",\n  \"origClientOrderId\": \"cabros-574-1\"\n}"
+            },
+            "description": "Cancels a resting order using the client-side stable identifier that was supplied when the order was placed.",
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/orders",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "orders"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"cancelled\": true,\n  \"environment\": \"testnet\",\n  \"order\": {\n    \"symbol\": \"BTCUSDT\",\n    \"orderId\": 99,\n    \"clientOrderId\": \"cabros-574-1\",\n    \"status\": \"CANCELED\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "DELETE Binance Order (ambiguous - 400)",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"symbol\": \"BTCUSDT\"\n}"
+            },
+            "description": "Rejects cancel requests that supply neither orderId nor origClientOrderId.",
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/orders",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "orders"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Bad Request",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"success\": false,\n  \"error\": \"cancel requests require exactly one of orderId or origClientOrderId\",\n  \"code\": \"INVALID_ORDER_REQUEST\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "DELETE Binance Order (feature disabled - 403)",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"symbol\": \"BTCUSDT\",\n  \"orderId\": 42\n}"
+            },
+            "description": "Returns 403 FEATURE_DISABLED when ENABLE_BINANCE_TRADING is not 'true'.",
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/orders",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "orders"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Feature Disabled",
+              "status": "Forbidden",
+              "code": 403,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Binance trading is disabled\",\n  \"code\": \"FEATURE_DISABLED\"\n}"
             }
           ]
         }

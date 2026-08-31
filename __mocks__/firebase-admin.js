@@ -14,6 +14,12 @@ const mockDocUpdate = jest.fn();
 const mockDocDelete = jest.fn();
 const mockServerTimestamp = jest.fn(() => ({ _type: 'serverTimestamp' }));
 const mockTimestampFromDate = jest.fn((date) => ({ _type: 'timestamp', toDate: () => date }));
+const mockTimestampFromSeconds = jest.fn((seconds, nanoseconds = 0) => ({
+	_type: 'timestamp',
+	seconds,
+	nanoseconds,
+	toDate: () => new Date((seconds * 1000) + Math.floor(nanoseconds / 1000000)),
+}));
 const mockDocumentId = jest.fn(() => '__name__');
 const mockOrderBy = jest.fn(() => null);
 const mockWhere = jest.fn(() => null);
@@ -212,7 +218,7 @@ let apps = [];
 
 const firestore = jest.fn(() => ({ collection: mockCollection }));
 firestore.FieldValue = { serverTimestamp: mockServerTimestamp, delete: mockDeleteFieldValue };
-firestore.Timestamp = { fromDate: mockTimestampFromDate };
+firestore.Timestamp = { fromDate: mockTimestampFromDate, fromSeconds: mockTimestampFromSeconds };
 firestore.FieldPath = { documentId: mockDocumentId };
 
 const mock = {
@@ -235,6 +241,7 @@ const mock = {
 	__mockStartAfter: mockStartAfter,
 	__mockServerTimestamp: mockServerTimestamp,
 	__mockTimestampFromDate: mockTimestampFromDate,
+	__mockTimestampFromSeconds: mockTimestampFromSeconds,
 	__mockDocumentId: mockDocumentId,
 	__mockInitializeApp: mockInitializeApp,
 	__mockCert: mockCert,
