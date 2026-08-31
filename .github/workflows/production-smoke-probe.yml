@@ -1,0 +1,94 @@
+name: Production Smoke Probe
+
+# Scheduled GitHub Actions workflow that smoke-probes Railway production after
+# each deployment so silent bad deployments page operators via Telegram.
+#
+# Configuration:
+#   1. Add GitHub repository variable PRODUCTION_BASE_URL with the canonical
+#      deployment URL (default: https://cabros-bot-production.up.railway.app).
+#   2. Add GitHub secret WEBHOOK_API_KEY (matches the server's validateApiKey).
+#   3. (Optional) Add GitHub secret TELEGRAM_BOT_TOKEN (admin-notifications
+#      bot) and TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID (target chat id) to
+#      enable admin paging on persistent failures.
+#   4. (Optional) Override PRODUCTION_EXPECTED_COMMIT, PRODUCTION_REQUIRE_READY_DEPS,
+#      PRODUCTION_PROBE_TIMEOUT, and PRODUCTION_PROBE_FAILURE_COOLDOWN_MINUTES
+#      via repository variables.
+#
+# Security: WEBHOOK_API_KEY is sent via the `x-api-key` header (never in URLs
+# or query parameters) by piping it into curl through stdin. Job summaries and
+# logs never echo the key.
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: 'Override PRODUCTION_BASE_URL'
+        required: false
+        default: ''
+      expected_commit:
+        description: 'Override PRODUCTION_EXPECTED_COMMIT'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  smoke-probe:
+    name: Probe production deployment
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+
+    env:
+      PRODUCTION_BASE_URL: ${{ vars.PRODUCTION_BASE_URL || 'https://cabros-bot-production.up.railway.app' }}
+      PRODUCTION_REQUIRE_READY_DEPS: ${{ vars.PRODUCTION_REQUIRE_READY_DEPS || '' }}
+      PRODUCTION_PROBE_TIMEOUT: ${{ vars.PRODUCTION_PROBE_TIMEOUT || '15' }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID: ${{ secrets.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID }}
+
+    steps:
+      - name: Install jq (used by the probe script)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq jq
+
+      - name: Determine the latest master commit SHA
+        id: master-sha
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          sha=""
+          if [[ -n "${GH_TOKEN:-}" ]]; then
+            sha="$(curl --silent --show-error --max-time 10 \
+              -H 'accept: application/vnd.github+json' \
+              -H "authorization: Bearer ${GH_TOKEN}" \
+              "https://api.github.com/repos/${{ github.repository }}/commits/master" \
+              | jq -r '.sha // empty' || true)"
+          fi
+          if [[ -z "$sha" ]]; then
+            sha="$(git ls-remote https://github.com/${{ github.repository }}.git master | awk '{print $1}' || true)"
+          fi
+          if [[ -z "$sha" ]]; then
+            echo '::error::Unable to determine master SHA.'
+            exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "Latest master SHA: $sha"
+
+      - name: Run the smoke probe against the expected commit
+        id: probe
+        env:
+          WEBHOOK_API_KEY: ${{ secrets.WEBHOOK_API_KEY }}
+          PRODUCTION_EXPECTED_COMMIT: ${{ steps.master-sha.outputs.sha }}
+        run: |
+          set -euo pipefail
+          set +e
+          ops/production-smoke-probe.sh
+          rc=$?
+          set -e
+          echo "probe_exit=$rc" >> "$GITHUB_OUTPUT"
+          if [[ "$rc" -ne 0 ]]; then
+            echo "::warning::Smoke probe exited with code $rc"
+            exit 1
+          fi

@@ -10,6 +10,7 @@
  *   - news-monitor-dedup — defaults to NEWS_CACHE_TTL_HOURS (6 h) from createdAt,
  *                         or DELIVERY_LOCK_TTL_MS (30 s) for channel delivery leases
  *   - notificationDeadLetters — defaults to NOTIFICATION_REDRIVE_MAX_AGE_MS (1 h)
+ *   - tradingSignalOutcomes — defaults to SIGNAL_OUTCOME_RETENTION_DAYS (365 d) from receivedAt
  *
  * All collections write `expiresAt` on document creation, so legacy documents
  * only exist when the service was running an older version that did not set the
@@ -30,6 +31,13 @@
 
 const admin = require('firebase-admin');
 
+let RemoteConfigService;
+try {
+	RemoteConfigService = require('../src/services/remoteConfig/RemoteConfigService');
+} catch {
+	RemoteConfigService = null;
+}
+
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 const PAGE_SIZE = 400;
@@ -45,6 +53,10 @@ const MAX_DEDUP_TTL_HOURS = 720; // 30 days hard cap
 
 const DEFAULT_NOTIFICATION_REDRIVE_TTL_MS = 3_600_000; // 1 hour
 const MAX_NOTIFICATION_REDRIVE_TTL_MS = 24 * 60 * 60 * 1000; // 1 day hard cap
+
+const DEFAULT_SIGNAL_OUTCOME_RETENTION_DAYS = 365;
+const MAX_SIGNAL_OUTCOME_RETENTION_DAYS = 3650;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -82,6 +94,42 @@ function parseNotificationRedriveTtlMs(raw = process.env.NOTIFICATION_REDRIVE_MA
 	return val;
 }
 
+function parseSignalOutcomeRetentionTtlMs(raw) {
+	if (raw !== undefined && raw !== null) {
+		const str = String(raw).trim();
+		if (!/^\d+$/.test(str)) {
+			return DEFAULT_SIGNAL_OUTCOME_RETENTION_DAYS * DAY_MS;
+		}
+		const val = Number(str);
+		if (!Number.isSafeInteger(val) || val < 1 || val > MAX_SIGNAL_OUTCOME_RETENTION_DAYS) {
+			return DEFAULT_SIGNAL_OUTCOME_RETENTION_DAYS * DAY_MS;
+		}
+		return val * DAY_MS;
+	}
+
+	try {
+		const remoteDays = RemoteConfigService?.getRuntimeConfig?.().SIGNAL_OUTCOME_RETENTION_DAYS;
+		if (typeof remoteDays === 'number' && Number.isSafeInteger(remoteDays) && remoteDays >= 1 && remoteDays <= MAX_SIGNAL_OUTCOME_RETENTION_DAYS) {
+			return remoteDays * DAY_MS;
+		}
+	} catch {
+		// ignore
+	}
+
+	const envVal = process.env.SIGNAL_OUTCOME_RETENTION_DAYS;
+	if (envVal !== undefined && envVal !== null) {
+		const str = String(envVal).trim();
+		if (/^\d+$/.test(str)) {
+			const val = Number(str);
+			if (Number.isSafeInteger(val) && val >= 1 && val <= MAX_SIGNAL_OUTCOME_RETENTION_DAYS) {
+				return val * DAY_MS;
+			}
+		}
+	}
+
+	return DEFAULT_SIGNAL_OUTCOME_RETENTION_DAYS * DAY_MS;
+}
+
 function getOperationalCollectionConfigs() {
 	return [
 		{
@@ -97,6 +145,11 @@ function getOperationalCollectionConfigs() {
 		{
 			collectionName: 'notificationDeadLetters',
 			ttlMs: parseNotificationRedriveTtlMs(),
+			options: {},
+		},
+		{
+			collectionName: 'tradingSignalOutcomes',
+			ttlMs: parseSignalOutcomeRetentionTtlMs(),
 			options: {},
 		},
 	];
@@ -182,7 +235,8 @@ async function backfillCollection(firestore, collectionName, ttlMs, options = {}
 			}
 
 			// Compute the baseline timestamp for the TTL offset.
-			const baseMs = getTimestampMillis(data.createdAt)
+			const baseMs = getTimestampMillis(data.receivedAt)
+				?? getTimestampMillis(data.createdAt)
 				?? getTimestampMillis(doc.createTime)
 				?? nowMs;
 
@@ -241,11 +295,20 @@ async function main() {
 	const dryRun = process.argv.includes('--dry-run') || process.env.DRY_RUN === 'true';
 	const firestore = initializeFirestore();
 
+	if (RemoteConfigService && typeof RemoteConfigService.loadNow === 'function') {
+		try {
+			await RemoteConfigService.loadNow();
+		} catch (err) {
+			console.warn('[OperationalRetentionBackfill] Could not load Remote Config template, using env/defaults:', err.message);
+		}
+	}
+
 	const collections = {};
 	const operationalConfigs = getOperationalCollectionConfigs();
 	const idempotencyTtlMs = operationalConfigs.find(({ collectionName }) => collectionName === 'idempotency_keys').ttlMs;
 	const dedupTtlMs = operationalConfigs.find(({ collectionName }) => collectionName === 'news-monitor-dedup').ttlMs;
 	const notificationRedriveTtlMs = operationalConfigs.find(({ collectionName }) => collectionName === 'notificationDeadLetters').ttlMs;
+	const signalOutcomeRetentionTtlMs = operationalConfigs.find(({ collectionName }) => collectionName === 'tradingSignalOutcomes').ttlMs;
 
 	for (const { collectionName, ttlMs, options } of operationalConfigs) {
 		try {
@@ -271,6 +334,7 @@ async function main() {
 		idempotencyTtlMs,
 		dedupTtlMs,
 		notificationRedriveTtlMs,
+		signalOutcomeRetentionTtlMs,
 		collections,
 	}));
 }
@@ -291,7 +355,11 @@ module.exports = {
 	parseIdempotencyTtlMs,
 	parseDedupTtlMs,
 	parseNotificationRedriveTtlMs,
+	parseSignalOutcomeRetentionTtlMs,
 	isDeliveryLease,
 	DELIVERY_LOCK_TTL_MS,
 	PENDING_STALE_TIMEOUT_MS,
+	DEFAULT_SIGNAL_OUTCOME_RETENTION_DAYS,
+	MAX_SIGNAL_OUTCOME_RETENTION_DAYS,
+	DAY_MS,
 };

@@ -83,6 +83,7 @@ function createProcessLifecycle(options = {}) {
 		stopWhatsAppCommandBridge = () => undefined,
 		stopScannerPresetScheduler = () => undefined,
 		stopJobBacklogMonitor = () => undefined,
+		stopNewsMonitorScheduler = () => undefined,
 		stopRemoteConfig = () => undefined,
 		shutdownNewsMonitor = () => undefined,
 		flushSentry = () => undefined,
@@ -182,6 +183,7 @@ function createProcessLifecycle(options = {}) {
 					safelyRun(logger, 'whatsapp command bridge', () => stopWhatsAppCommandBridge({ drain: true })),
 					safelyRun(logger, 'scanner preset scheduler', () => stopScannerPresetScheduler({ drain: true })),
 					safelyRun(logger, 'job backlog monitor', stopJobBacklogMonitor),
+					safelyRun(logger, 'news monitor scheduler', () => stopNewsMonitorScheduler({ drain: true })),
 					safelyRun(logger, 'remote config service', stopRemoteConfig),
 					safelyRun(logger, 'news monitor cache', shutdownNewsMonitor),
 				]);

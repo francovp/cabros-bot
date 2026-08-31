@@ -59,6 +59,24 @@
           "order": "ASCENDING"
         }
       ]
+    },
+    {
+      "collectionGroup": "alertReplays",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "alertId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "replayedAt",
+          "order": "DESCENDING"
+        },
+        {
+          "fieldPath": "__name__",
+          "order": "DESCENDING"
+        }
+      ]
     }
   ],
   "fieldOverrides": []
