@@ -67,6 +67,19 @@ describe('CORS Integration Tests', () => {
 		expect(res.headers['access-control-allow-headers']).toMatch(/x-api-key/i);
 	});
 
+	it('permits idempotency and concurrency headers in preflight requests', async () => {
+		const res = await request(app)
+			.options('/api/jobs')
+			.set('Origin', 'https://cabros-bot.web.app')
+			.set('Access-Control-Request-Method', 'POST')
+			.set('Access-Control-Request-Headers', 'Content-Type, x-api-key, idempotency-key, If-Match');
+
+		expect([200, 204]).toContain(res.status);
+		expect(res.headers['access-control-allow-origin']).toBe('https://cabros-bot.web.app');
+		expect(res.headers['access-control-allow-headers']).toMatch(/idempotency-key/i);
+		expect(res.headers['access-control-allow-headers']).toMatch(/if-match/i);
+	});
+
 	it('rejects preflight OPTIONS requests for untrusted origins (no CORS headers)', async () => {
 		const res = await request(app)
 			.options('/openapi.json')

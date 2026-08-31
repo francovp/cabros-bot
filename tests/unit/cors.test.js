@@ -88,7 +88,20 @@ describe('CORS configuration', () => {
 			const options = createCorsOptions();
 			expect(options.credentials).toBe(true);
 			expect(options.methods).toEqual(expect.arrayContaining(['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS']));
-			expect(options.allowedHeaders).toEqual(expect.arrayContaining(['Content-Type', 'Authorization', 'x-api-key']));
+			expect(options.allowedHeaders).toEqual(
+				expect.arrayContaining([
+					'Content-Type',
+					'Authorization',
+					'x-api-key',
+					'idempotency-key',
+					'x-idempotency-key',
+					'If-Match',
+					'x-request-id',
+				])
+			);
+			expect(options.exposedHeaders).toEqual(
+				expect.arrayContaining(['ETag', 'Idempotency-Replay', 'x-request-id', 'Location'])
+			);
 		});
 
 		it('calls callback with true for allowed origins', (done) => {
