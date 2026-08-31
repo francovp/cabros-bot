@@ -756,6 +756,75 @@ describe('admin browser client', () => {
 		expect(requests.at(-1)[0]).toBe('/api/alerts?limit=10&before=cursor-2&source=webhook');
 	});
 
+	it('exposes source and enriched as select dropdowns with known alert sources', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {}),
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alerts');
+		const sourceSelect = listForm.elements.source;
+		const enrichedSelect = listForm.elements.enriched;
+		expect(sourceSelect.tagName).toBe('SELECT');
+		expect(enrichedSelect.tagName).toBe('SELECT');
+		const sourceValues = sourceSelect.children.map((option) => option.value);
+		expect(sourceValues).toEqual(expect.arrayContaining(['', 'webhook', 'webhook-alert', 'news-monitor', 'alert-replay']));
+		const enrichedValues = enrichedSelect.children.map((option) => option.value);
+		expect(enrichedValues).toEqual(['', 'true', 'false']);
+	});
+
+	it('renders an active-filters header that reflects the current selection', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {}),
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alerts');
+		const activeFilters = find(listForm, (node) => node.className === 'active-filters');
+		expect(activeFilters).toBeDefined();
+		expect(activeFilters.textContent).toBe('Active filters: none');
+
+		listForm.elements.source.value = 'webhook';
+		await listForm.elements.source.dispatch('change');
+		await flush();
+		expect(activeFilters.textContent).toContain('source=webhook');
+
+		listForm.elements.enriched.value = 'true';
+		await listForm.elements.enriched.dispatch('change');
+		await flush();
+		expect(activeFilters.textContent).toContain('source=webhook');
+		expect(activeFilters.textContent).toContain('enriched=true');
+	});
+
+	it('clears all filter selections when the Clear filters button is clicked', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {}),
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alerts');
+		listForm.elements.source.value = 'news-monitor';
+		await listForm.elements.source.dispatch('change');
+		await flush();
+		listForm.elements.enriched.value = 'false';
+		await listForm.elements.enriched.dispatch('change');
+		await flush();
+
+		const clearButton = findButton(listForm, 'Clear filters');
+		expect(clearButton.disabled).toBe(false);
+		await clearButton.dispatch('click');
+		await flush();
+
+		expect(listForm.elements.source.value).toBe('');
+		expect(listForm.elements.enriched.value).toBe('');
+		const activeFilters = find(listForm, (node) => node.className === 'active-filters');
+		expect(activeFilters.textContent).toBe('Active filters: none');
+		expect(clearButton.disabled).toBe(true);
+	});
+
 	it('renders dedicated alert analytics and export forms with safe defaults', async () => {
 		const browser = createBrowser({
 			fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {}),
