@@ -5,6 +5,7 @@ const TELEGRAM_COMMAND_MENU = Object.freeze([
 	{ command: 'scanner', description: 'Escaneo de mercado en TradingView' },
 	{ command: 'noticias', description: 'Monitor y análisis de noticias con IA' },
 	{ command: 'outcomes', description: 'Rendimiento reciente de señales evaluadas' },
+	{ command: 'history', description: 'Consulta alertas recientes' },
 	{ command: 'help', description: 'Muestra este mensaje de ayuda' },
 	{ command: 'start', description: 'Muestra este mensaje de ayuda' },
 ]);
