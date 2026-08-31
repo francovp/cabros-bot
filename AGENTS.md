@@ -1327,6 +1327,25 @@ The allow-list is limited to news thresholds/concurrency/retries, TradingView ti
 - `tests/integration/generic-message-webhook.test.js` covers sequential and concurrent replay, single dispatch across Telegram/WhatsApp/Discord, message/channel/destination conflicts, and legacy no-key behavior.
 - `src/openapi/openapi.json` and `CabrosBot.postman_collection.json` document key locations, replay output, invalid key handling, and the message-specific conflict response without overriding the shared async-job conflict component.
 
+## Alert Replay Dry-Run Mode (Issue #680)
+
+`POST /api/alerts/:alertId/replay` accepts an optional `dryRun` flag (boolean body field or `dryRun=true` query string). When enabled, the controller fetches the stored alert, builds the exact replay payload (text + enrichmentData + per-channel routing including the resolved Telegram `message_thread_id`), and returns it inside `payloadPreview` without dispatching to any notification channel and without persisting a `alertReplays` audit document. The dry-run response echoes the raw `idempotencyKey`; live replays never return it (only the SHA-256 hash prefix is exposed via `GET /api/alerts/replays`).
+
+**Behavior**:
+- Gated by the same `ENABLE_FIRESTORE_ALERT_STORAGE=true` requirement as the live replay; the existing `400 INVALID_REQUEST` and `404 NOT_FOUND` mappings apply unchanged.
+- `dryRun: false` (or omitted) preserves the existing replay behavior byte-for-byte: `sendToChannels()` runs, `saveReplayAttempt()` persists, and the response shape is `{ success, alertId, replayId, results }`.
+- A dry-run request that fails the `getAlertById` lookup still returns `404 NOT_FOUND` — we never run a no-op replay on a missing alert.
+- Notification-manager initialization is skipped on dry-run, so the dry-run path never lazy-starts Telegram/WhatsApp/Discord services when no actual delivery is requested.
+- MarkdownV2 rendering, idempotency contract, channel routing, and feature gates are untouched.
+
+**Coverage and contracts**:
+- `tests/integration/alerts-endpoint.test.js` adds four focused tests: dryRun via body returns `payloadPreview` and skips `sendToChannels`/`saveReplayAttempt`; dryRun via query string returns the same shape; explicit `dryRun: false` preserves the live path; missing alert returns `404 NOT_FOUND` in dry-run mode without dispatching.
+- `src/openapi/openapi.json` adds `dryRun` to the `Replay` request body schema and `payloadPreview` / `channels` / `idempotencyKey` / `replayId` to the `DeliveryResult` response schema.
+- `CabrosBot.postman_collection.json` adds a `POST Replay Alert (dry-run)` request variant with success and not-found response examples.
+- `README.md` documents the dry-run section under the alerts replay endpoint.
+
+## Durable Idempotency Claim Tokens (CB-127 / Issue #311)
+
 ## Durable Idempotency Claim Tokens (CB-127 / Issue #311)
 
 Firestore-backed idempotency reservations carry a unique `claimToken` for the current pending owner. `reserveEntry()` returns the token for fresh claims; `IdempotencyService` serializes local durable reservations per key, retries the waiting request's own durable lookup after a predecessor payload conflict, retains the token only for that owner, and passes it to completion/release operations. `setEntry()` and `releaseEntry()` use Firestore transactions that require the stored token, payload hash, and pending state to match, so a stale replica cannot overwrite or delete a newer reservation after stale-claim recovery. Records without a token fail closed, while disabled/unavailable Firestore continues to use the existing in-memory fallback.

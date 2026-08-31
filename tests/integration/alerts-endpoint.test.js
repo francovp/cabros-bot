@@ -730,6 +730,127 @@ describe('Alerts API Integration Tests', () => {
 		});
 	});
 
+	it('returns payload preview and skips delivery/persistence on dryRun=true via body', async () => {
+		alertStorageService.getAlertById.mockResolvedValue({
+			id: 'alert-123',
+			receivedAt: '2026-06-06T12:34:56.000Z',
+			text: 'Replay me (dry-run)',
+			enriched: true,
+			enrichmentData: { sentiment: 'bullish' },
+			tokenUsage: { totalTokens: 42 },
+			deliveryResults: [{ channel: 'telegram', success: true, threadId: 7 }],
+			source: 'webhook',
+			useTradingViewData: false,
+			telegramChatId: '111',
+			whatsappChatId: '222',
+		});
+
+		const res = await request(app)
+			.post('/api/alerts/alert-123/replay')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'replay-dry-key-1')
+			.send({ channels: ['telegram'], dryRun: true })
+			.expect(200);
+
+		expect(mockNotificationManager.sendToChannels).not.toHaveBeenCalled();
+		expect(alertStorageService.saveReplayAttempt).not.toHaveBeenCalled();
+
+		expect(res.body).toEqual({
+			success: true,
+			dryRun: true,
+			alertId: 'alert-123',
+			channels: ['telegram'],
+			idempotencyKey: 'replay-dry-key-1',
+			payloadPreview: {
+				text: 'Replay me (dry-run)',
+				enriched: { sentiment: 'bullish' },
+				channelRouting: {
+					telegramChatId: '111',
+					telegramThreadId: 7,
+					whatsappChatId: '222',
+				},
+			},
+		});
+	});
+
+	it('returns payload preview when dryRun is provided via query string', async () => {
+		alertStorageService.getAlertById.mockResolvedValue({
+			id: 'alert-456',
+			receivedAt: '2026-06-06T12:34:56.000Z',
+			text: 'Body-less dry-run',
+			enriched: false,
+			enrichmentData: null,
+			deliveryResults: [],
+			source: 'webhook',
+		});
+
+		const res = await request(app)
+			.post('/api/alerts/alert-456/replay?dryRun=true')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'replay-dry-key-2')
+			.send({ channels: ['whatsapp'] })
+			.expect(200);
+
+		expect(mockNotificationManager.sendToChannels).not.toHaveBeenCalled();
+		expect(alertStorageService.saveReplayAttempt).not.toHaveBeenCalled();
+
+		expect(res.body.dryRun).toBe(true);
+		expect(res.body.alertId).toBe('alert-456');
+		expect(res.body.channels).toEqual(['whatsapp']);
+		expect(res.body.idempotencyKey).toBe('replay-dry-key-2');
+		expect(res.body.payloadPreview).toEqual({
+			text: 'Body-less dry-run',
+			enriched: null,
+			channelRouting: {},
+		});
+	});
+
+	it('still returns payload preview when dryRun=false is explicitly provided', async () => {
+		alertStorageService.getAlertById.mockResolvedValue({
+			id: 'alert-789',
+			receivedAt: '2026-06-06T12:34:56.000Z',
+			text: 'Explicit false',
+			enriched: false,
+			enrichmentData: null,
+			deliveryResults: [],
+			source: 'webhook',
+		});
+
+		const res = await request(app)
+			.post('/api/alerts/alert-789/replay')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'replay-explicit-false')
+			.send({ channels: ['telegram'], dryRun: false })
+			.expect(200);
+
+		expect(res.body.dryRun).toBeUndefined();
+		expect(mockNotificationManager.sendToChannels).toHaveBeenCalledTimes(1);
+		expect(alertStorageService.saveReplayAttempt).toHaveBeenCalledWith({
+			alertId: 'alert-789',
+			idempotencyKey: 'replay-explicit-false',
+			channels: ['telegram'],
+			deliveryResults: [{ channel: 'telegram', success: true, messageId: 'tg-1' }],
+		});
+	});
+
+	it('returns 404 in dry-run mode when the stored alert does not exist', async () => {
+		alertStorageService.getAlertById.mockResolvedValue(null);
+
+		const res = await request(app)
+			.post('/api/alerts/missing/replay')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'replay-dry-key-3')
+			.send({ channels: ['telegram'], dryRun: true })
+			.expect(404);
+
+		expect(res.body).toEqual({
+			error: 'Alert not found',
+			code: 'NOT_FOUND',
+		});
+		expect(mockNotificationManager.sendToChannels).not.toHaveBeenCalled();
+		expect(alertStorageService.saveReplayAttempt).not.toHaveBeenCalled();
+	});
+
 	it('returns 403 when GET /api/alerts/replays has storage disabled', async () => {
 		alertStorageService.isEnabled.mockReturnValue(false);
 
