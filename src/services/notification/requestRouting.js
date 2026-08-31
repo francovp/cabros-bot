@@ -153,7 +153,7 @@ function normalizeSymbolRouteKey(rawKey) {
 		});
 	}
 
-	const key = rawKey.trim().toUpperCase().replace(/\s*:\s*/, ':').replace(/\s+/g, '_');
+	const key = rawKey.trim().toUpperCase().split(':').map((part) => part.trim()).join(':').replace(/\s+/g, '_');
 	if (!/^(?:[A-Z][A-Z0-9_]{1,15}:)?[A-Z0-9._-]{2,20}$/.test(key)) {
 		throw new NotificationRoutingValidationError(`Invalid symbolRoutes key: ${rawKey}`, {
 			field: 'symbolRoutes',

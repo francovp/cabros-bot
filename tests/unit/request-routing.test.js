@@ -154,7 +154,7 @@ describe('requestRouting - symbolRoutes', () => {
 		expect(parseNotificationRouting({
 			symbolRoutes: {
 				btcusdt: { channels: ['telegram'] },
-				'NASDAQ:NVDA': { channels: ['discord'] },
+				' NASDAQ : NVDA ': { channels: ['discord'] },
 			},
 		}).symbolRoutes).toEqual({
 			BTCUSDT: { channels: ['telegram'] },
