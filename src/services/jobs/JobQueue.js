@@ -231,15 +231,56 @@ class JobQueue {
 		this.queueConnection = null;
 		this.queueReady = false;
 		this.readyPromise = null;
+		this.backlogService = null;
 	}
 
-	getStatus() {
+	setBacklogService(backlogService) {
+		this.backlogService = backlogService;
+	}
+
+	async getJobCounts() {
+		if (!this.isEnabled() || !this.isConfigured()) {
+			return { waiting: 0, delayed: 0, failed: 0, active: 0, paused: 0 };
+		}
+
+		try {
+			const queue = await this._getQueue();
+			if (typeof queue.getJobCounts === 'function') {
+				const counts = await queue.getJobCounts('waiting', 'delayed', 'failed', 'active', 'paused');
+				return {
+					waiting: counts?.waiting || 0,
+					delayed: counts?.delayed || 0,
+					failed: counts?.failed || 0,
+					active: counts?.active || 0,
+					paused: counts?.paused || 0,
+				};
+			}
+		} catch (error) {
+			this._recordError(error);
+		}
+
+		return { waiting: 0, delayed: 0, failed: 0, active: 0, paused: 0 };
+	}
+
+	getStatus(backlog = null) {
 		const mode = process.env.JOB_EXECUTION_MODE || 'local';
 		const enabled = this.isEnabled();
 		const configured = this.isConfigured();
 		let status = 'disabled';
 		if (enabled) {
 			status = configured ? (this.queueReady ? 'ready' : 'not_started') : 'misconfigured';
+		}
+
+		let resolvedBacklog = backlog;
+		if (!resolvedBacklog) {
+			try {
+				const service = this.backlogService || require('./JobBacklogService').jobBacklogService;
+				if (service && typeof service.getStatus === 'function') {
+					resolvedBacklog = service.getStatus();
+				}
+			} catch (error) {
+				// fail-open
+			}
 		}
 
 		return {
@@ -255,6 +296,18 @@ class JobQueue {
 			failed: this.metrics.failed,
 			lastErrorCode: this.metrics.lastErrorCode,
 			lastEnqueuedAt: this.metrics.lastEnqueuedAt,
+			waitingCount: resolvedBacklog?.waitingCount ?? 0,
+			delayedCount: resolvedBacklog?.delayedCount ?? 0,
+			failedCount: resolvedBacklog?.failedCount ?? 0,
+			activeCount: resolvedBacklog?.activeCount ?? 0,
+			durableQueuedCount: resolvedBacklog?.durableQueuedCount ?? 0,
+			oldestQueuedAgeMs: resolvedBacklog?.oldestQueuedAgeMs ?? null,
+			backlogAlert: resolvedBacklog?.backlogAlert ?? {
+				active: false,
+				thresholdMs: 900000,
+				pagedAt: null,
+				lastRecoveryAt: null,
+			},
 		};
 	}
 

@@ -616,6 +616,15 @@ describe('Status endpoints', () => {
 			configured: false,
 			ready: false,
 			status: 'misconfigured',
+			waitingCount: expect.any(Number),
+			delayedCount: expect.any(Number),
+			failedCount: expect.any(Number),
+			activeCount: expect.any(Number),
+			durableQueuedCount: expect.any(Number),
+			backlogAlert: {
+				active: false,
+				thresholdMs: expect.any(Number),
+			},
 		});
 		expect(JSON.stringify(response.body.dependencies.jobExecutionQueue)).not.toContain('redis://');
 	});

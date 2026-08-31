@@ -363,10 +363,31 @@
       },
       "description": "Cooldown length in alert-timeframe bars for same-signal repeat suppression",
       "valueType": "NUMBER"
+    },
+    "JOB_BACKLOG_ALERT_THRESHOLD_MS": {
+      "defaultValue": {
+        "value": "900000"
+      },
+      "description": "Threshold in milliseconds before oldest queued job triggers operator alert paging (default: 15m)",
+      "valueType": "NUMBER"
+    },
+    "JOB_BACKLOG_PAGE_COOLDOWN_MS": {
+      "defaultValue": {
+        "value": "900000"
+      },
+      "description": "Cooldown in milliseconds between repeated backlog operator alert pages (default: 15m)",
+      "valueType": "NUMBER"
+    },
+    "JOB_BACKLOG_PROBE_INTERVAL_MS": {
+      "defaultValue": {
+        "value": "60000"
+      },
+      "description": "Interval in milliseconds between periodic async job backlog depth probes (default: 1m)",
+      "valueType": "NUMBER"
     }
   },
   "version": {
-    "versionNumber": "21",
+    "versionNumber": "22",
     "isLegacy": true
   }
 }

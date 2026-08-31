@@ -739,6 +739,111 @@ class JobRepository {
 		return [...memoryJobs.entries()].map(([id, job]) => [id, cloneJob(job)]);
 	}
 
+	async getBacklogDepth({ maxScan = 100, now = Date.now() } = {}) {
+		const firestore = this._getFirestore();
+
+		if (firestore) {
+			try {
+				let query = firestore.collection(COLLECTION_NAME);
+				let lastDoc;
+				let lastDocId;
+				let durableQueuedCount = 0;
+				let oldestCreatedAt = null;
+
+				while (true) {
+					let pageQuery = query;
+					if (typeof pageQuery.where === 'function') {
+						pageQuery = pageQuery.where('status', '==', 'processing');
+					}
+					if (typeof pageQuery.orderBy === 'function') {
+						pageQuery = pageQuery.orderBy('createdAt', 'asc');
+					}
+					if (typeof pageQuery.limit === 'function') {
+						pageQuery = pageQuery.limit(maxScan);
+					}
+					if (lastDoc && typeof pageQuery.startAfter === 'function') {
+						pageQuery = pageQuery.startAfter(lastDoc);
+					}
+
+					const snapshot = await pageQuery.get();
+					const docs = snapshot?.docs || [];
+					for (const doc of docs) {
+						const data = doc.data() || {};
+						const execution = data.execution || {};
+						const leaseUntilMs = Date.parse(execution.leaseUntil || '');
+						const expiredClaim = ['claimed', 'running'].includes(execution.status)
+							&& Number.isFinite(leaseUntilMs)
+							&& leaseUntilMs <= now;
+						const isQueued = execution.status === 'queued' || expiredClaim;
+
+						if (isQueued) {
+							durableQueuedCount += 1;
+							if (data.createdAt && (!oldestCreatedAt || Date.parse(data.createdAt) < Date.parse(oldestCreatedAt))) {
+								oldestCreatedAt = data.createdAt;
+							}
+						}
+					}
+
+					if (docs.length < maxScan || typeof pageQuery.startAfter !== 'function') break;
+					const nextDoc = docs[docs.length - 1];
+					if (!nextDoc || !nextDoc.id || nextDoc.id === lastDocId) break;
+					lastDoc = nextDoc;
+					lastDocId = nextDoc.id;
+				}
+
+				const oldestCreatedAtMs = oldestCreatedAt ? Date.parse(oldestCreatedAt) : null;
+				const oldestQueuedAgeMs = Number.isFinite(oldestCreatedAtMs)
+					? Math.max(0, now - oldestCreatedAtMs)
+					: null;
+
+				return {
+					durableQueuedCount,
+					oldestQueuedAgeMs,
+					oldestCreatedAt,
+				};
+			} catch (error) {
+				console.warn('[JobRepository] Failed to probe durable backlog depth from Firestore:', error.message);
+			}
+		}
+
+		return this.getMemoryBacklogDepth(now);
+	}
+
+	getMemoryBacklogDepth(now = Date.now()) {
+		let durableQueuedCount = 0;
+		let oldestCreatedAt = null;
+
+		for (const job of memoryJobs.values()) {
+			if (TERMINAL_JOB_STATUSES.has(job.status)) continue;
+			const execution = job.execution || {};
+			const leaseUntilMs = Date.parse(execution.leaseUntil || '');
+			const expiredClaim = ['claimed', 'running'].includes(execution.status)
+				&& Number.isFinite(leaseUntilMs)
+				&& leaseUntilMs <= now;
+			const isQueued = execution.status === 'queued' || expiredClaim;
+
+			if (isQueued) {
+				durableQueuedCount += 1;
+				if (job.createdAt) {
+					if (!oldestCreatedAt || Date.parse(job.createdAt) < Date.parse(oldestCreatedAt)) {
+						oldestCreatedAt = job.createdAt;
+					}
+				}
+			}
+		}
+
+		const oldestCreatedAtMs = oldestCreatedAt ? Date.parse(oldestCreatedAt) : null;
+		const oldestQueuedAgeMs = Number.isFinite(oldestCreatedAtMs)
+			? Math.max(0, now - oldestCreatedAtMs)
+			: null;
+
+		return {
+			durableQueuedCount,
+			oldestQueuedAgeMs,
+			oldestCreatedAt,
+		};
+	}
+
 	_getFirestore() {
 		if (!isFirestoreEnabled()) {
 			return null;

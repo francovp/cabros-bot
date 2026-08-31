@@ -848,7 +848,128 @@ describe('JobRepository durable claims', () => {
 				&& fields.some(f => f.fieldPath === 'createdAt' && f.order === 'DESCENDING');
 		});
 		expect(hasChatScopeIndex).toBe(true);
+
+		const hasBacklogIndex = jobIndexes.some(idx => {
+			const fields = idx.fields || [];
+			return fields.some(f => f.fieldPath === 'status' && f.order === 'ASCENDING')
+				&& fields.some(f => f.fieldPath === 'createdAt' && f.order === 'ASCENDING');
+		});
+		expect(hasBacklogIndex).toBe(true);
+	});
+
+	it('computes memory backlog depth accurately', async () => {
+		const now = Date.now();
+		const repository = new JobRepository();
+		_resetForTesting();
+
+		try {
+			await repository.save({
+				jobId: 'job-1',
+				status: 'processing',
+				execution: { status: 'queued' },
+				createdAt: new Date(now - 300000).toISOString(),
+			});
+			await repository.save({
+				jobId: 'job-2',
+				status: 'processing',
+				execution: { status: 'queued' },
+				createdAt: new Date(now - 100000).toISOString(),
+			});
+			await repository.save({
+				jobId: 'job-3',
+				status: 'completed',
+				execution: { status: 'completed' },
+				createdAt: new Date(now - 500000).toISOString(),
+			});
+
+			const depth = repository.getMemoryBacklogDepth(now);
+			expect(depth.durableQueuedCount).toBe(2);
+			expect(depth.oldestQueuedAgeMs).toBe(300000);
+			expect(depth.oldestCreatedAt).toBe(new Date(now - 300000).toISOString());
+		} finally {
+			_resetForTesting();
+		}
+	});
+
+	it('computes firestore backlog depth from non-terminal queued jobs', async () => {
+		const now = Date.now();
+		const docs = [
+			{
+				data: () => ({
+					jobId: 'job-fs-1',
+					status: 'processing',
+					execution: { status: 'queued' },
+					createdAt: new Date(now - 500000).toISOString(),
+				}),
+			},
+			{
+				data: () => ({
+					jobId: 'job-fs-2',
+					status: 'processing',
+					execution: { status: 'queued' },
+					createdAt: new Date(now - 200000).toISOString(),
+				}),
+			},
+		];
+
+		const get = jest.fn().mockResolvedValue({ docs });
+		const limit = jest.fn(() => ({ get }));
+		const orderBy = jest.fn(() => ({ limit }));
+		const where = jest.fn(() => ({ orderBy }));
+		const firestore = {
+			collection: jest.fn(() => ({ where })),
+		};
+
+		const repository = new JobRepository();
+		repository._getFirestore = jest.fn(() => firestore);
+
+		const depth = await repository.getBacklogDepth({ maxScan: 50, now });
+		expect(depth.durableQueuedCount).toBe(2);
+		expect(depth.oldestQueuedAgeMs).toBe(500000);
+		expect(depth.oldestCreatedAt).toBe(new Date(now - 500000).toISOString());
+	});
+
+	it('paginates processing jobs before filtering queued work', async () => {
+		const now = Date.now();
+		const firstPage = Array.from({ length: 100 }, (_, index) => ({
+			id: `active-${index}`,
+			data: () => ({
+				status: 'processing',
+				execution: {
+					status: 'running',
+					leaseUntil: new Date(now + 600000).toISOString(),
+				},
+				createdAt: new Date(now - 900000 - index * 1000).toISOString(),
+			}),
+		}));
+		const queuedDoc = {
+			id: 'queued-after-active-page',
+			data: () => ({
+				status: 'processing',
+				execution: { status: 'queued' },
+				createdAt: new Date(now - 700000).toISOString(),
+			}),
+		};
+		let page = 0;
+		const query = {
+			where: jest.fn(() => query),
+			orderBy: jest.fn(() => query),
+			limit: jest.fn(() => query),
+			startAfter: jest.fn(() => {
+				page = 1;
+				return query;
+			}),
+			get: jest.fn(() => Promise.resolve({ docs: page === 0 ? firstPage : [queuedDoc] })),
+		};
+		const firestore = { collection: jest.fn(() => query) };
+		const repository = new JobRepository();
+		repository._getFirestore = jest.fn(() => firestore);
+
+		const depth = await repository.getBacklogDepth({ maxScan: 100, now });
+
+		expect(query.startAfter).toHaveBeenCalledWith(firstPage[firstPage.length - 1]);
+		expect(depth.durableQueuedCount).toBe(1);
+		expect(depth.oldestQueuedAgeMs).toBe(700000);
 	});
 });
-
 

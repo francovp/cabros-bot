@@ -28,6 +28,7 @@ const { getTelegramBootstrapConfig, sendStartupDeploymentNotification } = requir
 const { launchTelegramBot } = require('./src/lib/telegramCommandMenu');
 const { attachTelegramErrorBoundary, handlePollingError } = require('./src/lib/telegramErrorBoundary');
 const { jobService } = require('./src/services/jobs/JobService');
+const { jobBacklogService } = require('./src/services/jobs/JobBacklogService');
 const SignalOutcomeService = require('./src/services/storage/SignalOutcomeService');
 const { notificationRedriveService } = require('./src/services/notification/NotificationRedriveService');
 const { whatsAppCommandBridgeService } = require('./src/services/notification/WhatsAppCommandBridgeService');
@@ -76,6 +77,7 @@ const lifecycle = createProcessLifecycle({
 	stopNotificationRedriveWorker: (options) => notificationRedriveService.stopWorker(options),
 	stopWhatsAppCommandBridge: (options) => whatsAppCommandBridgeService.stop(options),
 	stopScannerPresetScheduler: (options) => scannerPresetSchedulerService.stopWorker(options),
+	stopJobBacklogMonitor: () => jobBacklogService.stop(),
 	stopNewsMonitorScheduler: (options) => newsMonitorSchedulerService.stopWorker(options),
 	stopRemoteConfig: () => remoteConfigService.stop(),
 	shutdownNewsMonitor: () => getCacheInstance().shutdown(),
@@ -97,6 +99,8 @@ async function bootstrapApplication() {
 	// Start background scanner preset scheduler if enabled
 	scannerPresetSchedulerService.botGetter = () => bot;
 	scannerPresetSchedulerService.startWorker();
+	// Start background job backlog monitor if enabled
+	jobBacklogService.startMonitor();
 	// Start background news-monitor scheduler if enabled
 	newsMonitorSchedulerService.startWorker({ source: 'web' });
 	// Start WhatsApp inbound command bridge if enabled
