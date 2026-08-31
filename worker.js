@@ -37,7 +37,9 @@ async function main() {
 	}
 
 	void remoteConfigService.start();
-	remoteConfigService.applyRuntimeConfig();
+	if (typeof remoteConfigService.applyRuntimeConfig === 'function') {
+		remoteConfigService.applyRuntimeConfig();
+	}
 	const bot = buildNotificationBot();
 	await initializeNotificationServices(bot);
 	const runtime = await startJobWorker({ botOrGetter: bot });
