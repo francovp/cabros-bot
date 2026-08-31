@@ -60,6 +60,32 @@ function postMarketScannerAlert(botOrGetter) {
 			const routing = parseNotificationRouting(req.body);
 			const parsed = parseMarketScannerRequest(req);
 			const timeoutMs = getMarketScannerTimeoutMs();
+			let mcpStatus = null;
+			try {
+				mcpStatus = typeof tradingViewMcpService?.getStatus === 'function'
+					? tradingViewMcpService.getStatus({ enabled: true })
+					: null;
+			} catch (error) {
+				console.debug('[MarketScanner] MCP readiness lookup failed; continuing scan:', error.message);
+			}
+			if (mcpStatus?.status === 'degraded' && ['http_5xx', 'request_failed'].includes(mcpStatus.lastErrorCategory)) {
+				const reason = `TradingView MCP is currently unavailable (status: ${mcpStatus.status}, lastError: ${mcpStatus.lastErrorCategory}). Scans skipped.`;
+				const scanResults = buildSkippedScanResults(parsed.scans, reason);
+				console.debug(`[MarketScanner] ${reason}`);
+				return res.status(502).json({
+					success: false,
+					ranked: parsed.ranked === true,
+					includeMultiTimeframe: parsed.includeMultiTimeframe === true,
+					code: 'TRADINGVIEW_MCP_UNAVAILABLE',
+					error: reason,
+					scanResults: compactScanResults(scanResults),
+					summary: buildSummary(scanResults, []),
+					timedOut: false,
+					timeoutMs,
+					requestId,
+					totalDurationMs: Date.now() - startTime,
+				});
+			}
 			const deadline = createScannerDeadline(timeoutMs);
 			let scanResults;
 
@@ -372,6 +398,13 @@ function compactScanResults(results, includeScores = false) {
 				error: result.error,
 			};
 		}
+		if (result.status === 'skipped') {
+			return {
+				scan: result.scan,
+				status: result.status,
+				reason: result.reason,
+			};
+		}
 
 		const compact = {
 			scan: result.scan,
@@ -434,6 +467,15 @@ function appendTimeoutResults(results, scans, error) {
 			error,
 		});
 	});
+}
+
+function buildSkippedScanResults(scans, reason) {
+	return scans.map((scan) => ({
+		scan,
+		status: 'skipped',
+		reason,
+		items: [],
+	}));
 }
 
 function hasTimedOut(results) {

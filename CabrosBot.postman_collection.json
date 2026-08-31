@@ -605,7 +605,22 @@
                 "webhook",
                 "market-scanner-alert"
               ]
-            }
+            },
+            "response": [
+              {
+                "name": "502 TradingView MCP unavailable",
+                "status": "Bad Gateway",
+                "code": 502,
+                "_postman_previewlanguage": "json",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": "{\n  \"success\": false,\n  \"code\": \"TRADINGVIEW_MCP_UNAVAILABLE\",\n  \"error\": \"TradingView MCP is currently unavailable (status: degraded, lastError: http_5xx). Scans skipped.\",\n  \"scanResults\": [{\n    \"scan\": \"top_gainers\",\n    \"status\": \"skipped\",\n    \"reason\": \"TradingView MCP is currently unavailable (status: degraded, lastError: http_5xx). Scans skipped.\"\n  }]\n}"
+              }
+            ]
           }
         },
         {
