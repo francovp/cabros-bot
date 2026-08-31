@@ -1,4 +1,9 @@
-const { fetchSymbolPrice } = require('./commands/handlers/core/fetchPriceCryptoSymbol');
+const {
+	fetchSymbolPrice,
+	fetchSymbolsPrices,
+	parseSymbolList,
+	MAX_BATCH_SYMBOLS,
+} = require('./commands/handlers/core/fetchPriceCryptoSymbol');
 const { jobService } = require('../services/jobs/JobService');
 const { getNewsMonitor } = require('./webhooks/handlers/newsMonitor/newsMonitor');
 const signalOutcomeService = require('../services/storage/SignalOutcomeService');
@@ -9,7 +14,8 @@ const getPrice = async (context) => {
 	const chatId = getChatId(context);
 	const text = (context.message && context.message.text) || '';
 	const messageSplited = text.trim().split(/\s+/);
-	const symbol = messageSplited[1] || '';
+	const rawArg = messageSplited[1] || '';
+	const symbols = parseSymbolList(rawArg);
 	const commandSpan = sentryService.startInactiveSpan({
 		name: 'telegram.command.precio',
 		op: 'bot.command',
@@ -17,17 +23,39 @@ const getPrice = async (context) => {
 		attributes: {
 			'telegram.command': '/precio',
 			'telegram.chat_id': chatId ? String(chatId) : 'unknown',
-			'query.symbol': symbol || 'missing',
+			'query.symbol': rawArg || 'missing',
+			'query.batch_size': symbols.length,
 		},
 	});
 
 	try {
-		const result = await fetchSymbolPrice(context, { parentSpan: commandSpan });
-		if (result && result.message) {
-			await context.reply(result.message);
-		} else if (result && result.symbol && result.price !== undefined) {
-			await context.reply(`Precio de ${result.symbol} es ${result.price}`);
+		if (symbols.length === 0) {
+			const error = new Error('Por favor indica un símbolo. Ejemplo: /precio BTCUSDT o /precio NVDA');
+			error.userMessage = 'Por favor indica un símbolo. Ejemplo: /precio BTCUSDT o /precio NVDA';
+			error.isUserFriendly = true;
+			throw error;
 		}
+
+		if (symbols.length === 1) {
+			const result = await fetchSymbolPrice(context, { parentSpan: commandSpan });
+			if (result && result.message) {
+				await context.reply(result.message);
+			} else if (result && result.symbol && result.price !== undefined) {
+				await context.reply(`Precio de ${result.symbol} es ${result.price}`);
+			}
+			return;
+		}
+
+		const results = await fetchSymbolsPrices(symbols, { parentSpan: commandSpan });
+		const lines = ['Precios'];
+		for (const r of results) {
+			if (r.success && r.message) {
+				lines.push(`• ${r.message}`);
+			} else {
+				lines.push(`• ${r.symbol}: ${r.error || 'no disponible'}`);
+			}
+		}
+		await context.reply(lines.join('\n'));
 	} catch (error) {
 		console.error(error);
 		if (!error.isUserFriendly) {
@@ -37,13 +65,14 @@ const getPrice = async (context) => {
 				extra: {
 					command: 'getPrice',
 					chatId,
-					symbol,
+					symbol: rawArg,
+					batchSize: symbols.length,
 				},
 			});
 		}
 		try {
-			const replyText = error.userMessage || (symbol
-				? `No pude obtener el precio de ${symbol}. Verifica el símbolo e intenta de nuevo.`
+			const replyText = error.userMessage || (rawArg
+				? `No pude obtener el precio de ${rawArg}. Verifica el símbolo e intenta de nuevo.`
 				: 'Por favor indica un símbolo. Ejemplo: /precio BTCUSDT o /precio NVDA');
 			await context.reply(replyText);
 		} catch (replyError) {
