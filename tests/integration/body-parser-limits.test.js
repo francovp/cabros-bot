@@ -1,6 +1,8 @@
 'use strict';
 
+const express = require('express');
 const request = require('supertest');
+const { onError } = require('../../src/lib/expressErrorHandler');
 
 // Helper: build a JSON body larger than 100kb so express.json() rejects it
 // with 413 Payload Too Large. Each character is one byte when encoded as ASCII.
@@ -23,6 +25,7 @@ function buildOversizedUrlencodedPayload() {
 
 describe('Body parser size limits', () => {
 	let app;
+	let productionApp;
 	let savedEnv;
 
 	beforeAll(() => {
@@ -34,6 +37,9 @@ describe('Body parser size limits', () => {
 			return saved;
 		})();
 		app = require('../../app');
+		productionApp = express();
+		productionApp.use(app);
+		productionApp.use(onError);
 	});
 
 	afterAll(() => {
@@ -47,7 +53,7 @@ describe('Body parser size limits', () => {
 	});
 
 	it('accepts a normal-sized JSON payload under 100kb', async () => {
-		const res = await request(app)
+		const res = await request(productionApp)
 			.post('/api/webhook/alert')
 			.set('x-api-key', 'test-key')
 			.send({ text: 'BTCUSDT at 117000' });
@@ -59,7 +65,7 @@ describe('Body parser size limits', () => {
 	});
 
 	it('rejects an oversized JSON payload with 413', async () => {
-		const res = await request(app)
+		const res = await request(productionApp)
 			.post('/api/webhook/alert')
 			.set('x-api-key', 'test-key')
 			.set('Content-Type', 'application/json')
@@ -69,7 +75,7 @@ describe('Body parser size limits', () => {
 	});
 
 	it('rejects an oversized text/plain payload with 413', async () => {
-		const res = await request(app)
+		const res = await request(productionApp)
 			.post('/api/webhook/alert')
 			.set('x-api-key', 'test-key')
 			.set('Content-Type', 'text/plain')
@@ -79,7 +85,7 @@ describe('Body parser size limits', () => {
 	});
 
 	it('rejects an oversized urlencoded payload with 413', async () => {
-		const res = await request(app)
+		const res = await request(productionApp)
 			.post('/api/webhook/alert')
 			.set('x-api-key', 'test-key')
 			.set('Content-Type', 'application/x-www-form-urlencoded')
