@@ -179,6 +179,7 @@ class NotificationRedriveService {
 		this.lastRunScannedCount = 0;
 		this.lastRunRedrivenCount = 0;
 		this.lastRunErrorCount = 0;
+		this.lastRunExhaustedCount = 0;
 		this.totalDeliveredCount = 0;
 		this.totalExhaustedCount = 0;
 		this.totalZeroChannelBroadcasts = 0;
@@ -946,6 +947,7 @@ class NotificationRedriveService {
 	async _executeSweep(options = {}) {
 		const startTime = Date.now();
 		this.lastRunAt = new Date(startTime);
+		const exhaustedBaseline = this.totalExhaustedCount;
 
 		const runtimeConfig = getRuntimeConfig();
 		const batchLimit = parsePositiveInteger(
@@ -965,6 +967,7 @@ class NotificationRedriveService {
 		let scannedCount = 0;
 		let redrivenCount = 0;
 		let errorCount = 0;
+		let exhaustedCount = 0;
 
 		try {
 			const candidates = await this.getEligibleRecords(batchLimit, maxAgeMs);
@@ -1110,10 +1113,12 @@ class NotificationRedriveService {
 			console.error('[NotificationRedriveService] Sweep execution failed:', error.message);
 			errorCount += 1;
 		} finally {
+			exhaustedCount = Math.max(0, this.totalExhaustedCount - exhaustedBaseline);
 			this.lastRunDurationMs = Math.max(0, Date.now() - startTime);
 			this.lastRunScannedCount = scannedCount;
 			this.lastRunRedrivenCount = redrivenCount;
 			this.lastRunErrorCount = errorCount;
+			this.lastRunExhaustedCount = exhaustedCount;
 		}
 
 		return {
@@ -1212,6 +1217,7 @@ class NotificationRedriveService {
 		const enabled = this.isEnabled();
 		const role = this.getWorkerRole();
 		const runtimeConfig = getRuntimeConfig();
+		const lastRunAtIso = this.lastRunAt ? this.lastRunAt.toISOString() : null;
 
 		return {
 			enabled,
@@ -1219,6 +1225,7 @@ class NotificationRedriveService {
 			ready: enabled && role !== 'disabled',
 			status: !enabled ? 'disabled' : (role === 'disabled' ? 'disabled' : 'ready'),
 			role,
+			workerRole: role,
 			running: Boolean(this.running),
 			intervalMs: parsePositiveInteger(runtimeConfig.NOTIFICATION_REDRIVE_INTERVAL_MS ?? process.env.NOTIFICATION_REDRIVE_INTERVAL_MS, DEFAULT_REDRIVE_INTERVAL_MS),
 			batchLimit: parsePositiveInteger(runtimeConfig.NOTIFICATION_REDRIVE_BATCH_LIMIT ?? process.env.NOTIFICATION_REDRIVE_BATCH_LIMIT, DEFAULT_BATCH_LIMIT),
@@ -1228,11 +1235,21 @@ class NotificationRedriveService {
 			deliveredCount: this.totalDeliveredCount,
 			exhaustedCount: this.totalExhaustedCount,
 			zeroChannelBroadcasts: this.totalZeroChannelBroadcasts,
-			lastRunAt: this.lastRunAt ? this.lastRunAt.toISOString() : null,
+			lastRunAt: lastRunAtIso,
+			lastSweepAt: lastRunAtIso,
 			lastRunDurationMs: this.lastRunDurationMs,
 			lastRunScannedCount: this.lastRunScannedCount,
 			lastRunRedrivenCount: this.lastRunRedrivenCount,
 			lastRunErrorCount: this.lastRunErrorCount,
+			lastRunExhaustedCount: this.lastRunExhaustedCount,
+			lastSweepResult: this.lastRunAt
+				? {
+					processed: this.lastRunScannedCount,
+					succeeded: this.lastRunRedrivenCount,
+					exhausted: this.lastRunExhaustedCount,
+					errors: this.lastRunErrorCount,
+				}
+				: null,
 		};
 	}
 
@@ -1251,6 +1268,7 @@ class NotificationRedriveService {
 		this.lastRunScannedCount = 0;
 		this.lastRunRedrivenCount = 0;
 		this.lastRunErrorCount = 0;
+		this.lastRunExhaustedCount = 0;
 		this.totalDeliveredCount = 0;
 		this.totalExhaustedCount = 0;
 		this.totalZeroChannelBroadcasts = 0;
