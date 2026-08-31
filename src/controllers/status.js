@@ -13,6 +13,7 @@ const equityMarketDataService = require('../services/storage/EquityMarketDataSer
 const remoteConfigService = require('../services/remoteConfig/RemoteConfigService');
 const { tradingViewMcpService } = require('../services/tradingview/TradingViewMcpService');
 const { binanceOrderService } = require('../services/trading/BinanceOrderService');
+const bootstrapReadiness = require('../lib/bootstrapReadiness');
 const { notificationRedriveService } = require('../services/notification/NotificationRedriveService');
 const { whatsAppCommandBridgeService } = require('../services/notification/WhatsAppCommandBridgeService');
 const geminiQuotaManager = require('../services/grounding/geminiQuotaManager');
@@ -315,6 +316,7 @@ function getStatus() {
 	});
 
 	return {
+		readiness: bootstrapReadiness.getStatus(),
 		service: {
 			name: process.env.SERVICE_NAME || packageJson.name || 'cabros-bot',
 			version: packageJson.version || null,

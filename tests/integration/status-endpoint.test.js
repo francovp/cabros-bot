@@ -134,6 +134,13 @@ describe('Status endpoints', () => {
 		});
 		expect(response.body.service).not.toHaveProperty('timestamp');
 		expect(response.body.featureFlags.telegramBot).toBe(true);
+		expect(response.body.readiness).toEqual(expect.objectContaining({
+			status: 'pending',
+			ready: false,
+			components: expect.objectContaining({
+				telegramBot: { status: 'pending' },
+			}),
+		}));
 		expect(response.body.deliveryChannels.telegram).toEqual({ enabled: true, status: 'ready' });
 		expect(response.body.dependencies.gemini).toEqual({
 			enabled: true,
