@@ -14,6 +14,10 @@ describe('Rate Limiter Middleware', () => {
 		savedRateLimitEnv = {
 			RATE_LIMIT_MAX: process.env.RATE_LIMIT_MAX,
 			RATE_LIMIT_WINDOW_MS: process.env.RATE_LIMIT_WINDOW_MS,
+			RATE_LIMIT_TIER_HEAVY_MAX: process.env.RATE_LIMIT_TIER_HEAVY_MAX,
+			RATE_LIMIT_TIER_TRADING_MAX: process.env.RATE_LIMIT_TIER_TRADING_MAX,
+			RATE_LIMIT_TIER_STANDARD_MAX: process.env.RATE_LIMIT_TIER_STANDARD_MAX,
+			RATE_LIMIT_TIER_LIGHT_MAX: process.env.RATE_LIMIT_TIER_LIGHT_MAX,
 		};
 		rateLimiter.enableTestMode();
 		rateLimiter.reset();
@@ -96,8 +100,9 @@ describe('Rate Limiter Middleware', () => {
 		}
 	});
 
-	test.each(['', '0', '-1', 'NaN', 'Infinity', '1.5', '100abc'])
-		('uses the safe max default for invalid RATE_LIMIT_MAX=%s', (value) => {
+	test.each(['', '0', '-1', 'NaN', 'Infinity', '1.5', '100abc'])(
+		'uses the safe max default for invalid RATE_LIMIT_MAX=%s',
+		(value) => {
 			process.env.RATE_LIMIT_MAX = value;
 
 			for (let i = 0; i < 100; i++) {
@@ -110,10 +115,12 @@ describe('Rate Limiter Middleware', () => {
 
 			expect(nextBlocked).not.toHaveBeenCalled();
 			expect(resBlocked.statusCode).toBe(429);
-		});
+		},
+	);
 
-	test.each(['', '0', '-1', 'NaN', 'Infinity', '1.5', '100abc'])
-		('uses the safe window default for invalid RATE_LIMIT_WINDOW_MS=%s', (value) => {
+	test.each(['', '0', '-1', 'NaN', 'Infinity', '1.5', '100abc'])(
+		'uses the safe window default for invalid RATE_LIMIT_WINDOW_MS=%s',
+		(value) => {
 			const realNow = Date.now;
 			let mockTime = 1000000;
 			Date.now = jest.fn(() => mockTime);
@@ -132,7 +139,8 @@ describe('Rate Limiter Middleware', () => {
 			} finally {
 				Date.now = realNow;
 			}
-		});
+		},
+	);
 
 	test('preserves valid custom max and window settings', () => {
 		const realNow = Date.now;
@@ -156,18 +164,24 @@ describe('Rate Limiter Middleware', () => {
 		}
 	});
 
-	test.each(['/api/webhook/alert', '/api/webhook/alert/', '/API/WEBHOOK/MESSAGE/'])('uses a separate high-capacity bucket for %s', (url) => {
-		process.env.RATE_LIMIT_MAX = '2';
-		req.method = 'POST';
-		req.url = url;
-		req.originalUrl = url;
+	test.each(['/api/webhook/alert', '/api/webhook/alert/', '/API/WEBHOOK/MESSAGE/'])(
+		'uses the standard endpoint tier for %s',
+		(url) => {
+			process.env.RATE_LIMIT_MAX = '2';
+			req.method = 'POST';
+			req.url = url;
+			req.originalUrl = url;
 
-		for (let i = 0; i < 101; i++) {
-			rateLimiter(req, res, next);
-		}
+			for (let i = 0; i < 30; i++) {
+				rateLimiter(req, res, next);
+			}
 
-		expect(next).toHaveBeenCalledTimes(101);
-	});
+			expect(next).toHaveBeenCalledTimes(30);
+			const blocked = httpMocks.createResponse();
+			rateLimiter(req, blocked, jest.fn());
+			expect(blocked.statusCode).toBe(429);
+		},
+	);
 
 	test('keeps the ordinary bucket isolated and rate limited', () => {
 		process.env.RATE_LIMIT_MAX = '2';
@@ -185,5 +199,78 @@ describe('Rate Limiter Middleware', () => {
 		rateLimiter(req, res, next);
 
 		expect(next).toHaveBeenCalledTimes(3);
+	});
+
+	test('applies configured endpoint tiers to independent per-endpoint buckets', () => {
+		process.env.RATE_LIMIT_TIER_HEAVY_MAX = '2';
+		process.env.RATE_LIMIT_TIER_TRADING_MAX = '1';
+		process.env.RATE_LIMIT_TIER_STANDARD_MAX = '2';
+		process.env.RATE_LIMIT_TIER_LIGHT_MAX = '3';
+
+		const hit = (url) => {
+			const request = httpMocks.createRequest({ method: 'POST', url, originalUrl: url, ip: '10.0.0.8' });
+			const response = httpMocks.createResponse();
+			const continuation = jest.fn();
+			rateLimiter(request, response, continuation);
+			return { response, continuation };
+		};
+
+		hit('/api/webhook/expanded-analysis-alert');
+		hit('/api/webhook/expanded-analysis-alert');
+		expect(hit('/api/webhook/expanded-analysis-alert').response.statusCode).toBe(429);
+		expect(hit('/api/webhook/market-scanner-alert').continuation).toHaveBeenCalled();
+		expect(hit('/api/trading/binance/orders').continuation).toHaveBeenCalled();
+		hit('/api/status');
+		hit('/api/status');
+		hit('/api/status');
+		expect(hit('/api/status').response.statusCode).toBe(429);
+	});
+
+	test('uses a 60-second endpoint window', () => {
+		const realNow = Date.now;
+		let mockTime = 1000000;
+		Date.now = jest.fn(() => mockTime);
+		process.env.RATE_LIMIT_TIER_HEAVY_MAX = '1';
+
+		try {
+			rateLimiter(
+				httpMocks.createRequest({
+					method: 'POST',
+					url: '/api/news-monitor',
+					originalUrl: '/api/news-monitor',
+					ip: '10.0.0.9',
+				}),
+				res,
+				next,
+			);
+			const blocked = httpMocks.createResponse();
+			rateLimiter(
+				httpMocks.createRequest({
+					method: 'POST',
+					url: '/api/news-monitor',
+					originalUrl: '/api/news-monitor',
+					ip: '10.0.0.9',
+				}),
+				blocked,
+				jest.fn(),
+			);
+			expect(blocked.statusCode).toBe(429);
+
+			mockTime += 60001;
+			const afterWindow = httpMocks.createResponse();
+			rateLimiter(
+				httpMocks.createRequest({
+					method: 'POST',
+					url: '/api/news-monitor',
+					originalUrl: '/api/news-monitor',
+					ip: '10.0.0.9',
+				}),
+				afterWindow,
+				jest.fn(),
+			);
+			expect(afterWindow.statusCode).toBe(200);
+		} finally {
+			Date.now = realNow;
+		}
 	});
 });

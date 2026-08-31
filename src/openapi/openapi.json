@@ -3,7 +3,7 @@
   "info": {
     "title": "Cabros Bot API",
     "version": "0.1.0",
-    "description": "Protected alerting and market-analysis APIs. Machine clients use the x-api-key header; the api-key query parameter exists only for legacy compatibility and may leak through logs. The browser admin console can use Firebase ID tokens on documented admin operations when ENABLE_FIREBASE_ADMIN_AUTH=true."
+    "description": "Protected alerting and market-analysis APIs. Machine clients use the x-api-key header; the api-key query parameter exists only for legacy compatibility and may leak through logs. The browser admin console can use Firebase ID tokens on documented admin operations when ENABLE_FIREBASE_ADMIN_AUTH=true. HTTP 429 responses include Retry-After and retryAfterSeconds. Dedicated per-endpoint 60-second limits default to heavy 5, trading 10, standard 30, and light 100 requests; other routes use RATE_LIMIT_WINDOW_MS and RATE_LIMIT_MAX."
   },
   "servers": [
     {
@@ -109,6 +109,9 @@
           },
           "409": {
             "$ref": "#/components/responses/IdempotencyConflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimitExceeded"
           }
         },
         "security": [
@@ -157,6 +160,9 @@
           },
           "409": {
             "$ref": "#/components/responses/MessageIdempotencyConflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimitExceeded"
           }
         },
         "security": [
@@ -205,6 +211,9 @@
           },
           "504": {
             "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimitExceeded"
           }
         },
         "security": [
@@ -256,6 +265,9 @@
           },
           "504": {
             "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimitExceeded"
           }
         },
         "security": [
@@ -287,6 +299,9 @@
           },
           "502": {
             "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimitExceeded"
           }
         },
         "security": [
@@ -1252,6 +1267,9 @@
           },
           "403": {
             "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimitExceeded"
           }
         },
         "security": [
@@ -1286,6 +1304,9 @@
           },
           "403": {
             "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimitExceeded"
           }
         },
         "security": [
@@ -1347,6 +1368,9 @@
           },
           "503": {
             "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimitExceeded"
           }
         },
         "security": [
@@ -1412,6 +1436,9 @@
           },
           "503": {
             "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimitExceeded"
           }
         },
         "security": [
@@ -1511,6 +1538,9 @@
           },
           "503": {
             "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimitExceeded"
           }
         },
         "security": [
@@ -1699,6 +1729,9 @@
         "responses": {
           "200": {
             "$ref": "#/components/responses/StatusResult"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimitExceeded"
           }
         },
         "security": [
@@ -1725,6 +1758,9 @@
         "responses": {
           "200": {
             "$ref": "#/components/responses/StatusResult"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimitExceeded"
           }
         },
         "security": [
@@ -2603,6 +2639,29 @@
             "example": {
               "error": "Unauthorized",
               "code": "UNAUTHORIZED"
+            }
+          }
+        }
+      },
+      "RateLimitExceeded": {
+        "description": "The client exceeded the applicable global or per-endpoint rate limit.",
+        "headers": {
+          "Retry-After": {
+            "description": "Seconds until the current rate-limit window resets.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "example": {
+              "error": "Too many requests, please try again later.",
+              "retryAfterSeconds": 60
             }
           }
         }

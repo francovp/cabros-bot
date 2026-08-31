@@ -23,11 +23,12 @@ describe('Webhook rate-limit integration', () => {
 		restoreEnv(savedEnv);
 	});
 
-	test('allows a 101-request webhook burst while retaining the ordinary 429 boundary', async () => {
-		for (let i = 0; i < 101; i++) {
+	test('enforces the standard webhook tier while retaining the ordinary 429 boundary', async () => {
+		for (let i = 0; i < 30; i++) {
 			const response = await request(app).post('/api/webhook/alert');
 			expect(response.status).toBe(204);
 		}
+		expect((await request(app).post('/api/webhook/alert')).status).toBe(429);
 
 		await request(app).get('/api/other');
 		await request(app).get('/api/other');

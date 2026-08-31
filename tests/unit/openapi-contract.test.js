@@ -10,19 +10,23 @@ function normalizeExpressPath(routePath) {
 }
 
 function getMountedApiOperations() {
-	return getRoutes(null).stack
-		.filter((layer) => layer.route)
-		.flatMap((layer) => Object.keys(layer.route.methods)
-			.filter((method) => layer.route.methods[method])
-			.map((method) => `${method.toUpperCase()} ${normalizeExpressPath(layer.route.path)}`))
+	return getRoutes(null)
+		.stack.filter((layer) => layer.route)
+		.flatMap((layer) =>
+			Object.keys(layer.route.methods)
+				.filter((method) => layer.route.methods[method])
+				.map((method) => `${method.toUpperCase()} ${normalizeExpressPath(layer.route.path)}`),
+		)
 		.sort();
 }
 
 function getDocumentedApiOperations(contract) {
 	return Object.entries(contract.paths)
-		.flatMap(([routePath, pathItem]) => Object.keys(pathItem)
-			.filter((key) => ['get', 'post', 'put', 'patch', 'delete'].includes(key))
-			.map((method) => `${method.toUpperCase()} ${routePath}`))
+		.flatMap(([routePath, pathItem]) =>
+			Object.keys(pathItem)
+				.filter((key) => ['get', 'post', 'put', 'patch', 'delete'].includes(key))
+				.map((method) => `${method.toUpperCase()} ${routePath}`),
+		)
 		.filter((operation) => operation.includes(' /api/'))
 		.sort();
 }
@@ -33,16 +37,16 @@ describe('OpenAPI contract', () => {
 		const operation = contract.paths['/api/alerts/{alertId}'].get;
 
 		expect(operation.responses['200'].$ref).toBe('#/components/responses/AlertDetailResult');
-		expect(contract.components.responses.AlertDetailResult.content['application/json'].schema.$ref)
-			.toBe('#/components/schemas/AlertDetail');
+		expect(contract.components.responses.AlertDetailResult.content['application/json'].schema.$ref).toBe(
+			'#/components/schemas/AlertDetail',
+		);
 		expect(contract.components.schemas.AlertDetail.required).toEqual(
 			expect.arrayContaining(['success', 'alert', 'lastReplay']),
 		);
 		expect(contract.components.schemas.AlertDetail.properties.alert.$ref).toBe('#/components/schemas/StoredAlert');
-		expect(contract.components.schemas.AlertDetail.properties.lastReplay.oneOf).toEqual(expect.arrayContaining([
-			{ $ref: '#/components/schemas/ReplayAttempt' },
-			{ type: 'null' },
-		]));
+		expect(contract.components.schemas.AlertDetail.properties.lastReplay.oneOf).toEqual(
+			expect.arrayContaining([{ $ref: '#/components/schemas/ReplayAttempt' }, { type: 'null' }]),
+		);
 	});
 
 	it('exists as the canonical JSON source', () => {
@@ -67,20 +71,39 @@ describe('OpenAPI contract', () => {
 		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
 		const operations = Object.entries(contract.paths)
 			.filter(([routePath]) => routePath.startsWith('/api/'))
-			.flatMap(([path, pathItem]) => Object.entries(pathItem)
-				.filter(([method]) => ['get', 'post', 'put', 'patch', 'delete'].includes(method))
-				.map(([method, operation]) => ({ ...operation, method: method.toUpperCase(), path })))
+			.flatMap(([path, pathItem]) =>
+				Object.entries(pathItem)
+					.filter(([method]) => ['get', 'post', 'put', 'patch', 'delete'].includes(method))
+					.map(([method, operation]) => ({ ...operation, method: method.toUpperCase(), path })),
+			)
 			.filter((operation) => operation && operation.responses);
 
 		const firebaseAdminOperations = new Set([
-			'GET /api/alerts', 'GET /api/alerts/replays', 'GET /api/alerts/summary', 'GET /api/alerts/export',
-			'GET /api/alerts/{alertId}', 'POST /api/alerts/{alertId}/replay',
-			'GET /api/scanner-presets', 'POST /api/scanner-presets',
-			'GET /api/scanner-presets/{id}', 'PUT /api/scanner-presets/{id}',
-			'DELETE /api/scanner-presets/{id}', 'POST /api/scanner-presets/{id}/run',
-			'POST /api/jobs/tradingview-analysis', 'GET /api/jobs', 'GET /api/jobs/{jobId}',
-			'POST /api/jobs/{jobId}/cancel', 'POST /api/jobs/{jobId}/retry',
-			'POST /api/jobs/{jobId}/retry-failed', 'GET /api/outcomes', 'GET /api/outcomes/summary', 'GET /api/trading/binance/orders', 'POST /api/trading/binance/orders', 'DELETE /api/trading/binance/orders', 'GET /api/status', 'GET /api/capabilities',
+			'GET /api/alerts',
+			'GET /api/alerts/replays',
+			'GET /api/alerts/summary',
+			'GET /api/alerts/export',
+			'GET /api/alerts/{alertId}',
+			'POST /api/alerts/{alertId}/replay',
+			'GET /api/scanner-presets',
+			'POST /api/scanner-presets',
+			'GET /api/scanner-presets/{id}',
+			'PUT /api/scanner-presets/{id}',
+			'DELETE /api/scanner-presets/{id}',
+			'POST /api/scanner-presets/{id}/run',
+			'POST /api/jobs/tradingview-analysis',
+			'GET /api/jobs',
+			'GET /api/jobs/{jobId}',
+			'POST /api/jobs/{jobId}/cancel',
+			'POST /api/jobs/{jobId}/retry',
+			'POST /api/jobs/{jobId}/retry-failed',
+			'GET /api/outcomes',
+			'GET /api/outcomes/summary',
+			'GET /api/trading/binance/orders',
+			'POST /api/trading/binance/orders',
+			'DELETE /api/trading/binance/orders',
+			'GET /api/status',
+			'GET /api/capabilities',
 		]);
 
 		for (const operation of operations) {
@@ -140,13 +163,15 @@ describe('OpenAPI contract', () => {
 		expect(shadowModeMetrics.description).toContain('expectancyR');
 
 		const shadowModeMetricsSchema = contract.components.schemas.ShadowModeMetrics;
-		expect(shadowModeMetricsSchema.oneOf).toEqual(expect.arrayContaining([
-			{
-				type: 'string',
-				enum: ['No measurements found'],
-			},
-			{ $ref: '#/components/schemas/OutcomesSummary' },
-		]));
+		expect(shadowModeMetricsSchema.oneOf).toEqual(
+			expect.arrayContaining([
+				{
+					type: 'string',
+					enum: ['No measurements found'],
+				},
+				{ $ref: '#/components/schemas/OutcomesSummary' },
+			]),
+		);
 	});
 
 	it('documents the X-Shadow-Mode-Metrics header on GET /api/alerts/export', () => {
@@ -166,11 +191,13 @@ describe('OpenAPI contract', () => {
 		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
 		const operation = contract.paths['/api/webhook/message'].post;
 
-		expect(operation.parameters).toEqual(expect.arrayContaining([
-			{ $ref: '#/components/parameters/IdempotencyKeyHeader' },
-			{ $ref: '#/components/parameters/IdempotencyKeyQueryCamel' },
-			{ $ref: '#/components/parameters/IdempotencyKeyQuerySnake' },
-		]));
+		expect(operation.parameters).toEqual(
+			expect.arrayContaining([
+				{ $ref: '#/components/parameters/IdempotencyKeyHeader' },
+				{ $ref: '#/components/parameters/IdempotencyKeyQueryCamel' },
+				{ $ref: '#/components/parameters/IdempotencyKeyQuerySnake' },
+			]),
+		);
 		expect(operation.responses['200']).toEqual({
 			$ref: '#/components/responses/MessageDeliveryResult',
 		});
@@ -179,14 +206,38 @@ describe('OpenAPI contract', () => {
 		});
 		expect(contract.components.schemas.MessageRequest.properties.idempotencyKey).toBeDefined();
 		expect(contract.components.schemas.MessageRequest.properties.idempotency_key).toBeDefined();
-		expect(contract.components.responses.MessageDeliveryResult.content['application/json'].examples.replay.value)
-			.toMatchObject({ success: true, idempotencyReplayed: true });
-		expect(contract.components.responses.IdempotencyConflict.description)
-			.toBe('The idempotency key was reused with a different request fingerprint');
+		expect(
+			contract.components.responses.MessageDeliveryResult.content['application/json'].examples.replay.value,
+		).toMatchObject({ success: true, idempotencyReplayed: true });
+		expect(contract.components.responses.IdempotencyConflict.description).toBe(
+			'The idempotency key was reused with a different request fingerprint',
+		);
 		expect(contract.components.responses.MessageIdempotencyConflict.content['application/json'].example).toEqual({
 			error: 'Idempotency key was reused with a different payload',
 			code: 'IDEMPOTENCY_CONFLICT',
 		});
+	});
+
+	it('documents rate-limit responses for dedicated ingestion and operations endpoints', () => {
+		if (!fs.existsSync(contractPath)) return;
+		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+		const tieredOperations = [
+			['/api/webhook/alert', 'post'],
+			['/api/webhook/message', 'post'],
+			['/api/webhook/expanded-analysis-alert', 'post'],
+			['/api/webhook/market-scanner-alert', 'post'],
+			['/api/webhook/volume-confirmation', 'post'],
+			['/api/news-monitor', 'get'],
+			['/api/news-monitor', 'post'],
+			['/api/status', 'get'],
+			['/api/capabilities', 'get'],
+		];
+
+		for (const [routePath, method] of tieredOperations) {
+			expect(contract.paths[routePath][method].responses['429']).toEqual({
+				$ref: '#/components/responses/RateLimitExceeded',
+			});
+		}
 	});
 
 	it('aligns symbol analysis schema with runtime normalization', () => {
@@ -236,7 +287,8 @@ describe('OpenAPI contract', () => {
 		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
 		expect(contract.components.schemas.DeliveryResult.properties.suppressedRepeat).toEqual({
 			type: 'boolean',
-			description: 'True when this alert was persisted without channel delivery because it repeated a recent signal.',
+			description:
+				'True when this alert was persisted without channel delivery because it repeated a recent signal.',
 		});
 	});
 
