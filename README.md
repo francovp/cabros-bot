@@ -386,11 +386,40 @@ The canonical API contract is served publicly at [`/openapi.json`](http://localh
 
 ### GET /healthcheck
 
-Health check endpoint.
+Liveness health check endpoint. The default behavior returns 200 with `uptime` only.
 
-**Response:**
+When called with `?deep=true`, the endpoint reuses the existing channel readiness logic from `/api/status` dependencies and returns 200 when every enabled channel is ready, or 503 when any enabled channel is degraded. Disabled channels are treated as healthy (not required). The endpoint is never API-key protected.
+
+**Default response (200):**
 ```json
 {"uptime":"..."}
+```
+
+**Deep response (200 — all enabled channels ready):**
+```json
+{
+  "status": "healthy",
+  "uptime": 42.5,
+  "channels": {
+    "telegram": { "enabled": true, "ready": true, "status": "ready" },
+    "whatsapp": { "enabled": false, "ready": false, "status": "disabled" },
+    "discord": { "enabled": false, "ready": false, "status": "disabled" }
+  }
+}
+```
+
+**Deep response (503 — enabled channel degraded):**
+```json
+{
+  "status": "degraded",
+  "uptime": 42.5,
+  "degradedChannels": ["whatsapp"],
+  "channels": {
+    "telegram": { "enabled": true, "ready": true, "status": "ready" },
+    "whatsapp": { "enabled": true, "ready": false, "status": "error", "error": "Missing WHATSAPP_API_KEY" },
+    "discord": { "enabled": false, "ready": false, "status": "disabled" }
+  }
+}
 ```
 
 ### GET /ready
