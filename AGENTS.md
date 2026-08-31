@@ -211,6 +211,10 @@ The Remote Config workflow publishes the server-side template consumed by Fireba
 - `contract-alignment-review` (`.agents/skills/contract-alignment-review/`): reviews runtime/API/config/deployment changes for alignment across OpenAPI, Postman, `.env.example`, README/specs, and repository agent skills.
 - `agent-cross-review` (`.agents/skills/agent-cross-review/`): discovers and cross-reviews pull requests created by other AI coding agents (Codex, GitHub Copilot, OpenCode, Claude) against Cabros Bot fail-open async, formatting, persistence, auth, and contract standards.
 
+### Repository scripts
+
+- [`scripts/backlog-hygiene.js`](file:///Users/fgvaleriop/repositorios/copilot-worktrees/cabros-bot/francovp-turbo-telegram/scripts/backlog-hygiene.js): opt-in GitHub issue backlog hygiene pass driven by `gh`. Refreshes `status/*` labels from PR / comment signals (never demoting `In review` to `needs-triage`), detects duplicates via lexical + label-overlap similarity (composite score, threshold `0.7`), retires stale `agent-working` issues, and optionally appends production evidence for `priority/1-roi` issues when `SENTRY_AUTH_TOKEN` is set. Default mode is dry-run; pass `--apply` to mutate. Wired through `.github/workflows/backlog-hygiene.yml`, which is `workflow_dispatch`-only by default and enables the optional `schedule:` cron only when the `BACKLOG_HYGIENE_CRON` repository variable is set to a non-empty cron expression. Mirrors the safety pattern from `detect-unused-features` (fails closed if `gh` auth is missing). Tests: `tests/unit/backlog-hygiene.test.js` covers argument parsing, scoring math, classifier rules, label refresh, staleness logic, duplicate detection, and report formatting.
+
 ### When implementing a feature:
 
 1. **Read the spec** (`specs/*/spec.md`) for requirements and user stories
