@@ -913,6 +913,9 @@ class NewsAnalyzer {
 
 			if (meetsConviction) {
 				const side = (sentimentScore > 0) ? 'BUY' : 'SELL';
+				const outcomeScore = typeof alert.confidence === 'number' && Number.isFinite(alert.confidence)
+					? (side === 'SELL' ? -1 : 1) * Math.abs(alert.confidence)
+					: null;
 				const stop = (alert.marketContext && typeof alert.marketContext.stop === 'number')
 					? alert.marketContext.stop
 					: (typeof alert.stop === 'number' ? alert.stop : null);
@@ -930,7 +933,7 @@ class NewsAnalyzer {
 					exchange: alert.marketContext && alert.marketContext.source === 'binance' ? 'BINANCE' : 'UNKNOWN',
 					timeframe: null,
 					setupType: 'news-alert',
-					score: alert.confidence,
+					score: outcomeScore,
 					side,
 					price: alert.marketContext ? alert.marketContext.price : null,
 					priceSource: alert.marketContext ? alert.marketContext.source : null,
