@@ -42,6 +42,10 @@ app.get('/ready', (req, res) => {
 // Rate Limiter (must be after healthcheck to avoid limiting health checks)
 app.use(require('./src/lib/rateLimiter'));
 
+// Structured request logging — emits one JSON line per completed /api request,
+// capturing method, path, status code, duration, and per-request correlation id.
+app.use(require('./src/lib/requestLogger'));
+
 // Public, read-only API contract and interactive documentation.
 app.use(getOpenApiDocsRouter());
 
