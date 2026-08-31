@@ -171,8 +171,8 @@ function validateEnv(env = process.env) {
 		addMissing(warnings, 'BINANCE_API_SECRET', env.BINANCE_API_SECRET);
 		addMissing(warnings, 'BINANCE_TRADING_ALLOWED_SYMBOLS', env.BINANCE_TRADING_ALLOWED_SYMBOLS);
 		addMissing(warnings, 'BINANCE_TRADING_MAX_NOTIONAL', env.BINANCE_TRADING_MAX_NOTIONAL);
-		if (hasValue(env.BINANCE_TRADING_ENV) && !['testnet', 'live'].includes(env.BINANCE_TRADING_ENV.trim().toLowerCase())) {
-			addInvalid(warnings, 'BINANCE_TRADING_ENV', 'must be testnet or live');
+		if (hasValue(env.BINANCE_TRADING_ENV) && !['testnet', 'demo', 'live'].includes(env.BINANCE_TRADING_ENV.trim().toLowerCase())) {
+			addInvalid(warnings, 'BINANCE_TRADING_ENV', 'must be testnet, demo, or live');
 		}
 		if (hasValue(env.BINANCE_TRADING_MAX_NOTIONAL) && !isPositiveNumber(env.BINANCE_TRADING_MAX_NOTIONAL)) {
 			addInvalid(warnings, 'BINANCE_TRADING_MAX_NOTIONAL', 'must be a positive number');
