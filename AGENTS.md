@@ -1541,3 +1541,15 @@ Binance 451 / `restricted location` errors are now classified as `binance_region
 - `BINANCE_DATA_BASE_URL` — Optional override for all Binance market-data REST calls. Default `https://api.binance.com` (preserves existing behavior when unset). Must be an http(s) URL; live trading also requires `https://`. Classified as **environment-only** for Remote Config parity (external destination; secrets/credentials/external-endpoint policy excludes it).
 
 No endpoint, OpenAPI, Postman, or Remote Config contract changed; the new env var follows the standard `environment-only` classification.
+
+## Per-symbol Alert Notification Routing (Issue #627)
+
+`POST /api/webhook/alert` accepts optional `symbolRoutes`, an object whose bare or `EXCHANGE:SYMBOL` keys map to non-empty channel arrays. Matched symbol references are dispatched independently to their configured channels; unmatched references use the request-level `channels` list or the existing enabled-channel broadcast. Delivery results include the matched `symbol`. Without `symbolRoutes`, the existing broadcast and request-level routing path is unchanged.
+
+**Coverage**:
+- `src/services/notification/requestRouting.js` — validates symbol route keys/channels, extracts explicit and uppercase symbol references, and dispatches per-symbol routes with global fallback.
+- `src/controllers/webhooks/handlers/alert/alert.js` — passes alert text when calculating effective requested channels.
+- `tests/unit/request-routing.test.js` and `tests/integration/alert-grounding.test.js` — validation, multi-symbol channel isolation, fallback, and end-to-end delivery coverage.
+- `src/openapi/openapi.json`, `CabrosBot.postman_collection.json`, and `README.md` — request/response contract and valid/invalid examples.
+
+No new environment variable, startup gate, destination, secret, or Remote Config key was introduced. Linear issue creation was intentionally skipped per the automation operator instruction.

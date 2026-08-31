@@ -49,6 +49,22 @@ describe('OpenAPI contract', () => {
 		expect(fs.existsSync(contractPath)).toBe(true);
 	});
 
+	it('documents per-symbol alert routing and symbol-scoped results', () => {
+		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+		const alertRequest = contract.components.schemas.AlertRequest;
+		const symbolRoutes = alertRequest.properties.symbolRoutes;
+
+		expect(symbolRoutes).toEqual(expect.objectContaining({
+			type: 'object',
+			minProperties: 1,
+			propertyNames: expect.objectContaining({ type: 'string' }),
+		}));
+		expect(symbolRoutes.additionalProperties.required).toEqual(['channels']);
+		expect(symbolRoutes.additionalProperties.properties.channels.items.enum)
+			.toEqual(['telegram', 'whatsapp', 'discord']);
+		expect(contract.components.schemas.DeliveryResult.properties.results.items.properties.symbol.type).toBe('string');
+	});
+
 	it('documents every mounted API operation without stale operations', () => {
 		if (!fs.existsSync(contractPath)) return;
 		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));

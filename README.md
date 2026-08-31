@@ -980,9 +980,15 @@ Optional query param: `useTradingViewData=true` enables TradingView MCP technica
 **Request (JSON):**
 ```json
 {
-  "text": "BTC price is at $45,000 - breakout detected!"
+  "text": "BTCUSDT and NVDA momentum update",
+  "symbolRoutes": {
+    "BTCUSDT": { "channels": ["telegram"] },
+    "NVDA": { "channels": ["discord"] }
+  }
 }
 ```
+
+`symbolRoutes` is optional. Each key may be a bare symbol or an `EXCHANGE:SYMBOL` identifier and must map to a non-empty list of `telegram`, `whatsapp`, and/or `discord`. Matched symbols are delivered only to their configured channels; symbols without a route use the global `channels` list or the normal broadcast. When this field is absent, alert behavior is unchanged. Per-symbol delivery results include `symbol`.
 
 **Request (Plain Text):**
 ```

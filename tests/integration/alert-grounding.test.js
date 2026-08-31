@@ -363,6 +363,37 @@ describe('Alert Grounding Integration', () => {
 			expect(mockFetch).not.toHaveBeenCalled();
 		});
 
+		it('routes multiple symbols to their configured channels', async () => {
+			process.env.ENABLE_GEMINI_GROUNDING = 'false';
+			process.env.ENABLE_DISCORD_ALERTS = 'true';
+			process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/123/token';
+			mockFetch.mockResolvedValue({ ok: true, json: async () => ({ id: 'discord-message-id' }) });
+			await initializeNotificationServices(bot);
+
+			const response = await request(app)
+				.post('/api/webhook/alert').set('x-api-key', 'test-key')
+				.send({
+					text: 'BTCUSDT and NVDA momentum update',
+					symbolRoutes: {
+						BTCUSDT: { channels: ['telegram'] },
+						NVDA: { channels: ['discord'] },
+					},
+				})
+				.expect(200);
+
+			expect(response.body.requestedChannels).toEqual(['telegram', 'discord']);
+			expect(response.body.deliveredChannels).toEqual(['telegram', 'discord']);
+			expect(response.body.results).toEqual(expect.arrayContaining([
+				expect.objectContaining({ channel: 'telegram', symbol: 'BTCUSDT', success: true }),
+				expect.objectContaining({ channel: 'discord', symbol: 'NVDA', success: true }),
+			]));
+			expect(mockTelegramSendMessage).toHaveBeenCalledTimes(1);
+			expect(mockFetch).toHaveBeenCalledWith(
+				'https://discord.com/api/webhooks/123/token?wait=true',
+				expect.objectContaining({ method: 'POST' }),
+			);
+		});
+
 		it('should pass sanitized search query and asset context for BATS exchange alerts', async () => {
 			const alertText = 'BATS:TSM(D) cambió a señal de VENTA';
 

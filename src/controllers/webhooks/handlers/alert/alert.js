@@ -246,7 +246,7 @@ function postAlert(botOrGetter) {
 				await initializeNotificationServices(bot);
 			}
 			validateNotificationRouting(notificationManager, routing);
-			const requestedChannels = getRequestedChannels(notificationManager, routing);
+			const requestedChannels = getRequestedChannels(notificationManager, routing, alert.text);
 
 			// Opt-in repeat suppression: same (exchange, symbol, timeframe, side)
 			// inside its cooldown window skips channel delivery but is still
