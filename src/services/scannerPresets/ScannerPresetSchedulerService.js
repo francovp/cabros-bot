@@ -28,6 +28,14 @@ const MAX_SCHEDULER_BATCH_LIMIT = 500;
 const DEFAULT_LEASE_MS = 120000;
 const DEFAULT_SCANNER_TIMEOUT_MS = 90000;
 
+// Per-preset floor: even if the operator's cadence is shorter, the runtime
+// scheduler will not fire the same preset more often than this window. This
+// prevents MCP/Gemini/delivery burst traffic when cadenceMs is misconfigured,
+// downgraded mid-flight, or when nextRunAt lands in the past after a save.
+// Mirrors the lower bound enforced by parseCadenceToMs at config-save time so
+// multi-replica sweeps agree on the effective minimum interval.
+const MIN_PRESET_FLOOR_MS = 60000;
+
 function parseEnvInt(value, fallback, min = 1, max = Number.MAX_SAFE_INTEGER) {
 	if (value === undefined || value === null || value === '') {
 		return fallback;
@@ -78,6 +86,7 @@ class ScannerPresetSchedulerService {
 		this.lastRunScannedCount = 0;
 		this.lastRunExecutedCount = 0;
 		this.lastRunErrorCount = 0;
+		this.lastRunDeferredByFloorCount = 0;
 	}
 
 	isEnabled() {
@@ -132,6 +141,7 @@ class ScannerPresetSchedulerService {
 			lastRunScannedCount: this.lastRunScannedCount,
 			lastRunExecutedCount: this.lastRunExecutedCount,
 			lastRunErrorCount: this.lastRunErrorCount,
+			lastRunDeferredByFloorCount: this.lastRunDeferredByFloorCount,
 		};
 	}
 
@@ -219,6 +229,7 @@ class ScannerPresetSchedulerService {
 		let scannedCount = 0;
 		let executedCount = 0;
 		let errorCount = 0;
+		let deferredByFloorCount = 0;
 
 		try {
 			const candidates = await this._fetchDuePresets(nowMs, batchLimit);
@@ -227,6 +238,11 @@ class ScannerPresetSchedulerService {
 			for (const candidate of candidates) {
 				if (this.shutdownRequested) {
 					break;
+				}
+
+				if (this._isFloorDeferred(candidate, nowMs)) {
+					deferredByFloorCount += 1;
+					continue;
 				}
 
 				const claimed = await this._claimPreset(candidate, nowMs, leaseMs);
@@ -257,12 +273,14 @@ class ScannerPresetSchedulerService {
 			this.lastRunScannedCount = scannedCount;
 			this.lastRunExecutedCount = executedCount;
 			this.lastRunErrorCount = errorCount;
+			this.lastRunDeferredByFloorCount = deferredByFloorCount;
 		}
 
 		return {
 			scannedCount,
 			executedCount,
 			errorCount,
+			deferredByFloorCount,
 			durationMs: this.lastRunDurationMs,
 		};
 	}
@@ -321,6 +339,29 @@ class ScannerPresetSchedulerService {
 
 		const nextRunAtMs = new Date(preset.nextRunAt).getTime();
 		return !Number.isFinite(nextRunAtMs) || nextRunAtMs <= nowMs;
+	}
+
+	// Per-preset floor: even when _isDue returned true (e.g. a cadence downgrade
+	// pushed nextRunAt into the past), defer the run if the previous successful
+	// execution happened less than MIN_PRESET_FLOOR_MS ago. Brand-new presets
+	// without a lastRunAt are never deferred on their first run. The cadence
+	// argument is ignored here on purpose: parseCadenceToMs already enforces a
+	// 60s minimum at save time, so this floor matches the parser lower bound and
+	// keeps local web and dedicated-worker sweepers in agreement without
+	// introducing a new persisted field.
+	_isFloorDeferred(preset, nowMs) {
+		if (!preset || !preset.lastRunAt) {
+			return false;
+		}
+		const lastRunMs = new Date(preset.lastRunAt).getTime();
+		if (!Number.isFinite(lastRunMs)) {
+			return false;
+		}
+		const elapsedMs = nowMs - lastRunMs;
+		if (!Number.isFinite(elapsedMs) || elapsedMs < 0) {
+			return false;
+		}
+		return elapsedMs < MIN_PRESET_FLOOR_MS;
 	}
 
 	async _claimPreset(preset, nowMs, leaseMs) {
