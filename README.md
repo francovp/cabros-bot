@@ -423,7 +423,7 @@ The dedicated worker also persists the same non-sensitive heartbeat to `workerHe
 
 `GET /api/capabilities` is an alias for the same payload.
 
-When configured, `featureFlags.binanceTrading` and `dependencies.binanceTrading` expose only the non-sensitive execution gate, selected `testnet`/`live` environment, allow-listed symbols, and readiness state.
+When configured, `featureFlags.binanceTrading` and `dependencies.binanceTrading` expose only the non-sensitive execution gate, selected `testnet`/`demo`/`live` environment, allow-listed symbols, and readiness state.
 
 ### Browser admin authentication
 

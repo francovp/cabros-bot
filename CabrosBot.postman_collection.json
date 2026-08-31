@@ -5313,7 +5313,7 @@
               "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"environment\": \"demo\",\n  \"order\": {\n    \"symbol\": \"BTCUSDT\",\n    \"side\": \"BUY\",\n    \"type\": \"LIMIT\",\n    \"quantity\": 0.001,\n    \"price\": 60000,\n    \"timeInForce\": \"GTC\",\n    \"newOrderRespType\": \"FULL\"\n  }\n}"
             },
             {
-              "name": "Error — feature disabled (BINANCE_TRADING_ENV not set to demo)",
+              "name": "Error — feature disabled (ENABLE_BINANCE_TRADING=false)",
               "status": "Forbidden",
               "code": 403,
               "body": "{\n  \"success\": false,\n  \"code\": \"FEATURE_DISABLED\",\n  \"error\": \"Binance trading is disabled\"\n}"
