@@ -3225,6 +3225,95 @@
         "type": "object",
         "additionalProperties": true
       },
+      "DeliveryMetrics": {
+        "type": "object",
+        "description": "Aggregate in-memory delivery SLA counters exposed through /api/status and /api/capabilities. Reset on process restart. Omitted when no channel has recorded any delivery.",
+        "required": [
+          "window",
+          "success",
+          "failure",
+          "total",
+          "successRate",
+          "averageDeliveryMs",
+          "byChannel"
+        ],
+        "properties": {
+          "window": {
+            "type": "object",
+            "required": ["startedAt", "durationMs"],
+            "properties": {
+              "startedAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "durationMs": {
+                "type": "number",
+                "format": "int64"
+              }
+            }
+          },
+          "success": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "failure": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "successRate": {
+            "type": "number",
+            "format": "double",
+            "nullable": true,
+            "minimum": 0,
+            "maximum": 1
+          },
+          "averageDeliveryMs": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
+          },
+          "byChannel": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/DeliveryChannelMetrics"
+            }
+          }
+        }
+      },
+      "DeliveryChannelMetrics": {
+        "type": "object",
+        "required": ["success", "failure", "total", "successRate", "averageDeliveryMs"],
+        "properties": {
+          "success": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "failure": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "successRate": {
+            "type": "number",
+            "format": "double",
+            "nullable": true,
+            "minimum": 0,
+            "maximum": 1
+          },
+          "averageDeliveryMs": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
+          }
+        }
+      },
       "BootstrapReadiness": {
         "type": "object",
         "required": [
@@ -5676,6 +5765,9 @@
           },
           "deliveryChannels": {
             "$ref": "#/components/schemas/JsonObject"
+          },
+          "deliveryMetrics": {
+            "$ref": "#/components/schemas/DeliveryMetrics"
           },
           "dependencies": {
             "type": "object",

@@ -15,6 +15,7 @@ const { tradingViewMcpService } = require('../services/tradingview/TradingViewMc
 const { binanceOrderService } = require('../services/trading/BinanceOrderService');
 const bootstrapReadiness = require('../lib/bootstrapReadiness');
 const { notificationRedriveService } = require('../services/notification/NotificationRedriveService');
+const { deliveryMetricsService } = require('../services/notification/DeliveryMetricsService');
 const { whatsAppCommandBridgeService } = require('../services/notification/WhatsAppCommandBridgeService');
 const geminiQuotaManager = require('../services/grounding/geminiQuotaManager');
 const groundingMetrics = require('../services/grounding/metrics');
@@ -371,6 +372,9 @@ function getStatus() {
 				status: discord.status,
 			},
 		},
+		...(deliveryMetricsService.getSnapshot()
+			? { deliveryMetrics: deliveryMetricsService.getSnapshot() }
+			: {}),
 		dependencies: {
 			telegram,
 			whatsapp,

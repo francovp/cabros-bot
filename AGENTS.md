@@ -548,10 +548,29 @@ The system provides status and capability querying endpoints to verify service c
 **Core Components**:
 - `src/controllers/status.js` — Compiles the capabilities payload with feature flags, notification channels, and active integrations.
 - `src/routes/index.js` — Registers the routes behind the `validateApiKey` middleware.
+- `src/services/notification/DeliveryMetricsService.js` — In-memory per-channel delivery SLA counters (`success`, `failure`, `successRate`, `averageDeliveryMs`, `window`) tracked from `NotificationManager.sendToAll`/`sendToChannels` and exposed on `/api/status`/`/api/capabilities` as the optional `deliveryMetrics` section (omitted when nothing has been recorded).
 
 **Failure and Edge Case Behavior**:
 - The API gates checks behind the `validateApiKey` middleware.
 - Dependency checking (like querying the TradingView MCP or testing Firestore credentials) is done safely and returns detailed state status (`ready`, `error`, `unconfigured`) in a clean JSON format.
+- `deliveryMetrics` is fail-open: malformed or missing `durationMs` values are excluded from latency averages without blocking delivery; counters reset on process restart (acceptable for operational monitoring) and never return values for channels that have not recorded any deliveries.
+
+## Alert Delivery SLA & Error Budget Metrics (GH-687)
+
+`GET /api/status` and `/api/capabilities` now expose an optional `deliveryMetrics` section reporting in-memory per-channel delivery success/failure counts, success rate, and average delivery latency aggregated across the current process lifetime. The section is omitted entirely until at least one channel records a delivery; counters reset on process restart.
+
+**Core Components**:
+- `src/services/notification/DeliveryMetricsService.js` — Window-based in-memory counters with fail-open `record()` (malformed payloads logged as warnings, never thrown).
+- `src/services/notification/NotificationManager.js` — `_recordDeliveryMetrics()` hook runs after both `sendToAll` and `sendToChannels`, falling back to total dispatch duration when an individual channel does not report `durationMs`.
+- `src/controllers/status.js` — Adds the `deliveryMetrics` key only when the snapshot is non-null.
+- `src/openapi/openapi.json` — New `DeliveryMetrics` and `DeliveryChannelMetrics` schemas documented.
+- `CabrosBot.postman_collection.json` — Adds a "Get Status - delivery SLA" request with the populated payload example.
+
+**Coverage**:
+- `tests/unit/delivery-metrics-service.test.js` — Counter increment, successRate math, latency average, malformed-input rejection, and reset behavior.
+- `tests/integration/status-endpoint.test.js` — `deliveryMetrics` omitted when empty, populated per-channel after records, and surfaced on `/api/capabilities`.
+
+No new environment variable, endpoint, Remote Config key, or notification contract was added; this is a non-secret operational status addition.
 
 ## Multi-Channel Notification Architecture (002-whatsapp-alerts)
 

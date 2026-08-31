@@ -244,6 +244,38 @@
       ]
     },
     {
+      "name": "Get Status - delivery SLA",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{apiKey}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/status",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "status"
+          ]
+        },
+        "description": "Protected status request exposing the in-memory per-channel deliveryMetrics section. Counters reset on process restart; the section is omitted entirely until at least one channel records a delivery result."
+      },
+      "response": [
+        {
+          "name": "200 OK - deliveryMetrics populated",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"deliveryChannels\":{\"telegram\":{\"enabled\":true,\"status\":\"ready\"},\"whatsapp\":{\"enabled\":true,\"status\":\"ready\"},\"discord\":{\"enabled\":false,\"status\":\"disabled\"}},\"deliveryMetrics\":{\"window\":{\"startedAt\":\"2026-08-31T22:30:00.000Z\",\"durationMs\":60000},\"success\":3,\"failure\":1,\"total\":4,\"successRate\":0.75,\"averageDeliveryMs\":217.5,\"byChannel\":{\"telegram\":{\"success\":2,\"failure\":1,\"total\":3,\"successRate\":0.6667,\"averageDeliveryMs\":190},\"whatsapp\":{\"success\":1,\"failure\":0,\"total\":1,\"successRate\":1,\"averageDeliveryMs\":300}}}}"
+        }
+      ]
+    },
+    {
       "name": "Get Capabilities",
       "request": {
         "method": "GET",
