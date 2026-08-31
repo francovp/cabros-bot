@@ -4409,6 +4409,12 @@
           "whatsappChatId": {
             "type": "string",
             "minLength": 1
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "description": "Optional caller-supplied replay key. When set, the alert payload preserves the key for downstream dedupe (the redrive subsystem additionally generates its own deterministic key of the form `redrive:<deadLetterId>:<channel>:<attemptNumber>`)."
           }
         }
       },
