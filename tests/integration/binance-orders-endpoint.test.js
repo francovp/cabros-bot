@@ -622,6 +622,51 @@ describe('Binance orders API', () => {
 		});
 	});
 
+	describe('demo environment integration', () => {
+		beforeEach(() => {
+			process.env.BINANCE_TRADING_ENV = 'demo';
+		});
+
+		it('dry-run order in demo env returns environment:demo and routes to demo-api.binance.com', async () => {
+			const response = await request(app)
+				.post('/api/trading/binance/orders')
+				.set('x-api-key', 'test-key')
+				.send({
+					symbol: 'BTCUSDT',
+					side: 'BUY',
+					type: 'LIMIT',
+					quantity: '0.1',
+					price: '100',
+					dryRun: true,
+				})
+				.expect(200);
+
+			expect(response.body).toMatchObject({
+				success: true,
+				dryRun: true,
+				environment: 'demo',
+			});
+
+			expect(MainClient).toHaveBeenCalledWith(
+				expect.objectContaining({ baseUrl: 'https://demo-api.binance.com' }),
+				expect.any(Object),
+			);
+		});
+
+		it('capabilities endpoint reports environment:demo when BINANCE_TRADING_ENV=demo', async () => {
+			const response = await request(app)
+				.get('/api/capabilities')
+				.set('x-api-key', 'test-key')
+				.expect(200);
+
+			expect(response.body.dependencies.binanceTrading).toMatchObject({
+				enabled: true,
+				configured: true,
+				environment: 'demo',
+			});
+		});
+	});
+
 	describe('DELETE /api/trading/binance/orders', () => {
 		it('requires operator authentication before touching Binance', async () => {
 			const response = await request(app)

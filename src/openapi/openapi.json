@@ -5496,6 +5496,7 @@
             "type": "string",
             "enum": [
               "testnet",
+              "demo",
               "live"
             ]
           },
@@ -5532,6 +5533,7 @@
             "type": "string",
             "enum": [
               "testnet",
+              "demo",
               "live"
             ]
           },
@@ -5722,6 +5724,7 @@
             "type": "string",
             "enum": [
               "testnet",
+              "demo",
               "live"
             ]
           },
