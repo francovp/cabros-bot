@@ -1708,6 +1708,212 @@
         ],
         "x-admin-role": "admin.viewer"
       }
+    },
+    "/healthcheck": {
+      "get": {
+        "tags": [
+          "Operations"
+        ],
+        "summary": "Liveness probe (backward compatible)",
+        "description": "Returns the legacy `{ uptime }` payload. No authentication required. Pass `?depth=readiness` to opt into the readiness report instead.",
+        "operationId": "getHealthcheck",
+        "security": [],
+        "parameters": [
+          {
+            "in": "query",
+            "name": "depth",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "readiness"
+              ]
+            },
+            "description": "Set to `readiness` to receive the same structured dependency report as `/ready`."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Liveness confirmed (no dependency validation).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "uptime": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "uptime"
+                  ]
+                },
+                "examples": {
+                  "live": {
+                    "value": {
+                      "uptime": 1.234
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Readiness depth requested and at least one considered dependency is unhealthy.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadinessReport"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ready": {
+      "get": {
+        "tags": [
+          "Operations"
+        ],
+        "summary": "Readiness probe",
+        "description": "Validates Firestore, Gemini, TradingView MCP, Binance, and Telegram bot connectivity in parallel, each with a bounded timeout. Returns 200 when every considered dependency is healthy, 503 otherwise. Disabled features are reported as `skipped: true` and excluded from the overall verdict. No new environment variable is required.",
+        "operationId": "getReady",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "All considered dependencies are healthy.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadinessReport"
+                },
+                "examples": {
+                  "allHealthy": {
+                    "value": {
+                      "ready": true,
+                      "checkedAt": "2026-08-31T02:30:00.000Z",
+                      "latencyMs": 412,
+                      "dependencies": {
+                        "firestore": {
+                          "ready": true,
+                          "backend": "firestore",
+                          "latencyMs": 53
+                        },
+                        "gemini": {
+                          "ready": true,
+                          "backend": "gemini",
+                          "latencyMs": 124
+                        },
+                        "tradingViewMcp": {
+                          "ready": true,
+                          "backend": "tradingview_mcp",
+                          "latencyMs": 18
+                        },
+                        "binance": {
+                          "ready": true,
+                          "backend": "binance",
+                          "latencyMs": 36
+                        },
+                        "telegram": {
+                          "ready": true,
+                          "backend": "telegram",
+                          "latencyMs": 22
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "At least one considered dependency is unhealthy. Body still exposes the per-dependency breakdown so operators can act on the specific failure.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadinessReport"
+                },
+                "examples": {
+                  "partial": {
+                    "value": {
+                      "ready": false,
+                      "checkedAt": "2026-08-31T02:30:00.000Z",
+                      "latencyMs": 3001,
+                      "dependencies": {
+                        "firestore": {
+                          "ready": true,
+                          "backend": "firestore",
+                          "latencyMs": 84
+                        },
+                        "gemini": {
+                          "ready": false,
+                          "error": "gemini_http_503",
+                          "latencyMs": 3000
+                        },
+                        "tradingViewMcp": {
+                          "ready": true,
+                          "backend": "tradingview_mcp",
+                          "latencyMs": 22
+                        },
+                        "binance": {
+                          "ready": false,
+                          "error": "binance_http_451",
+                          "latencyMs": 124
+                        },
+                        "telegram": {
+                          "ready": true,
+                          "backend": "telegram",
+                          "latencyMs": 19
+                        }
+                      }
+                    }
+                  },
+                  "allSkipped": {
+                    "value": {
+                      "ready": false,
+                      "checkedAt": "2026-08-31T02:30:00.000Z",
+                      "latencyMs": 1,
+                      "dependencies": {
+                        "firestore": {
+                          "ready": false,
+                          "enabled": false,
+                          "skipped": true,
+                          "reason": "firestore_storage_disabled"
+                        },
+                        "gemini": {
+                          "ready": false,
+                          "enabled": false,
+                          "skipped": true,
+                          "reason": "gemini_disabled"
+                        },
+                        "tradingViewMcp": {
+                          "ready": false,
+                          "enabled": false,
+                          "skipped": true,
+                          "reason": "tradingview_disabled"
+                        },
+                        "binance": {
+                          "ready": false,
+                          "enabled": false,
+                          "skipped": true,
+                          "reason": "binance_disabled"
+                        },
+                        "telegram": {
+                          "ready": false,
+                          "enabled": false,
+                          "skipped": true,
+                          "reason": "telegram_disabled"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -4164,11 +4370,26 @@
                 "type": "object",
                 "description": "Counts TradingView enrichment outcomes; requested alerts without a stored status are reported as unrecorded.",
                 "properties": {
-                  "full": { "type": "integer", "minimum": 0 },
-                  "partial": { "type": "integer", "minimum": 0 },
-                  "failed": { "type": "integer", "minimum": 0 },
-                  "not_applicable": { "type": "integer", "minimum": 0 },
-                  "unrecorded": { "type": "integer", "minimum": 0 }
+                  "full": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "partial": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "failed": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "not_applicable": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "unrecorded": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
                 }
               },
               "riskMetadataCoverage": {
@@ -4186,22 +4407,43 @@
                   "zeroSources": {
                     "type": "object",
                     "properties": {
-                      "populated": { "type": "integer", "minimum": 0 },
-                      "percentage": { "type": "number", "minimum": 0, "maximum": 100 }
+                      "populated": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "percentage": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 100
+                      }
                     }
                   },
                   "oneToTwoSources": {
                     "type": "object",
                     "properties": {
-                      "populated": { "type": "integer", "minimum": 0 },
-                      "percentage": { "type": "number", "minimum": 0, "maximum": 100 }
+                      "populated": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "percentage": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 100
+                      }
                     }
                   },
                   "threePlusSources": {
                     "type": "object",
                     "properties": {
-                      "populated": { "type": "integer", "minimum": 0 },
-                      "percentage": { "type": "number", "minimum": 0, "maximum": 100 }
+                      "populated": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "percentage": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 100
+                      }
                     }
                   },
                   "totalSourceCount": {
@@ -5730,6 +5972,84 @@
           },
           "order": {
             "$ref": "#/components/schemas/JsonObject"
+          }
+        }
+      },
+      "ReadinessReport": {
+        "type": "object",
+        "description": "Structured dependency validation report returned by `/ready` and `/healthcheck?depth=readiness`. Disabled features are reported as `skipped: true` and do not count toward the overall `ready` verdict. No environment variable changes are required to enable the probe.",
+        "required": [
+          "ready",
+          "checkedAt",
+          "latencyMs",
+          "dependencies"
+        ],
+        "properties": {
+          "ready": {
+            "type": "boolean",
+            "description": "True when every considered (non-skipped) dependency reports `ready: true`."
+          },
+          "checkedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "latencyMs": {
+            "type": "number",
+            "description": "Total wall-clock time spent running all probes in parallel."
+          },
+          "dependencies": {
+            "type": "object",
+            "required": [
+              "firestore",
+              "gemini",
+              "tradingViewMcp",
+              "binance",
+              "telegram"
+            ],
+            "properties": {
+              "firestore": {
+                "$ref": "#/components/schemas/ReadinessDependencyStatus"
+              },
+              "gemini": {
+                "$ref": "#/components/schemas/ReadinessDependencyStatus"
+              },
+              "tradingViewMcp": {
+                "$ref": "#/components/schemas/ReadinessDependencyStatus"
+              },
+              "binance": {
+                "$ref": "#/components/schemas/ReadinessDependencyStatus"
+              },
+              "telegram": {
+                "$ref": "#/components/schemas/ReadinessDependencyStatus"
+              }
+            }
+          }
+        }
+      },
+      "ReadinessDependencyStatus": {
+        "type": "object",
+        "description": "Per-dependency status block. Disabled dependencies are reported as `skipped: true`; failing dependencies include a sanitized `error` string and the per-dep latency.",
+        "properties": {
+          "ready": {
+            "type": "boolean"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "skipped": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "backend": {
+            "type": "string"
+          },
+          "latencyMs": {
+            "type": "number"
+          },
+          "error": {
+            "type": "string"
           }
         }
       }

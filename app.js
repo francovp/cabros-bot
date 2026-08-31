@@ -32,7 +32,17 @@ contentSecurityPolicy['connect-src'] = [
 ];
 app.use(helmet({ contentSecurityPolicy: { directives: contentSecurityPolicy } }));
 
-app.use('/healthcheck', require('express-healthcheck')());
+const { handleReadiness } = require('./src/controllers/readiness');
+
+app.use('/healthcheck', (req, res, next) => {
+	const depth = typeof req.query.depth === 'string' ? req.query.depth.toLowerCase() : '';
+	if (depth === 'readiness') {
+		return handleReadiness(req, res);
+	}
+	return require('express-healthcheck')()(req, res, next);
+});
+
+app.get('/ready', handleReadiness);
 
 // Rate Limiter (must be after healthcheck to avoid limiting health checks)
 app.use(require('./src/lib/rateLimiter'));

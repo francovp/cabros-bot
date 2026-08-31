@@ -386,12 +386,57 @@ The canonical API contract is served publicly at [`/openapi.json`](http://localh
 
 ### GET /healthcheck
 
-Health check endpoint.
+Health check endpoint. No authentication is required and the legacy
+`{ uptime }` payload is preserved byte-for-byte so existing Render / load
+balancer probes keep working. Pass `?depth=readiness` (or use the new
+`/ready` endpoint below) to opt into a structured dependency report.
 
 **Response:**
 ```json
 {"uptime":"..."}
 ```
+
+### GET /ready (and `GET /healthcheck?depth=readiness`)
+
+Readiness probe for load balancers, Render health checks, and external
+monitoring. The probe validates Firestore, Gemini, TradingView MCP,
+Binance, and Telegram bot connectivity **in parallel**, each with a
+bounded 1–5 second timeout (default 3s, clamped). Disabled features are
+reported as `skipped: true` and excluded from the verdict so the same
+payload works in preview, development, and production. No new environment
+variable is required.
+
+The endpoint returns:
+
+- `200 OK` when every considered dependency reports `ready: true`.
+- `503 Service Unavailable` when at least one considered dependency is
+  unhealthy, or when every dependency is skipped (no feature flags on).
+
+**Response:**
+```json
+{
+  "ready": true,
+  "checkedAt": "2026-08-31T02:30:00.000Z",
+  "latencyMs": 412,
+  "dependencies": {
+    "firestore": { "ready": true, "backend": "firestore", "latencyMs": 53 },
+    "gemini": { "ready": true, "backend": "gemini", "latencyMs": 124 },
+    "tradingViewMcp": { "ready": true, "backend": "tradingview_mcp", "latencyMs": 18 },
+    "binance": { "ready": true, "backend": "binance", "latencyMs": 36 },
+    "telegram": { "ready": true, "backend": "telegram", "latencyMs": 22 }
+  }
+}
+```
+
+A disabled feature is reported as:
+
+```json
+{ "ready": false, "enabled": false, "skipped": true, "reason": "gemini_disabled" }
+```
+
+Probes never throw and fail open: a transient provider failure surfaces a
+per-dep `error` string and a 503 verdict without affecting webhook ingest,
+notification dispatch, or any other production path.
 
 ### GET /api/status
 

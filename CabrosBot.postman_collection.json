@@ -87,6 +87,83 @@
       ]
     },
     {
+      "name": "Healthcheck (readiness depth)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "description": "Returns the same structured dependency report as `/ready`. Pass `?depth=readiness` to opt in.",
+        "url": {
+          "raw": "{{baseUrl}}/healthcheck?depth=readiness",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "healthcheck"
+          ],
+          "query": [
+            { "key": "depth", "value": "readiness" }
+          ]
+        }
+      },
+      "response": [
+        {
+          "name": "200 All dependencies healthy",
+          "status": "OK",
+          "code": 200,
+          "header": [
+            { "key": "Content-Type", "value": "application/json; charset=utf-8" }
+          ],
+          "body": "{\"ready\":true,\"checkedAt\":\"2026-08-31T02:30:00.000Z\",\"latencyMs\":412,\"dependencies\":{\"firestore\":{\"ready\":true,\"backend\":\"firestore\",\"latencyMs\":53},\"gemini\":{\"ready\":true,\"backend\":\"gemini\",\"latencyMs\":124},\"tradingViewMcp\":{\"ready\":true,\"backend\":\"tradingview_mcp\",\"latencyMs\":18},\"binance\":{\"ready\":true,\"backend\":\"binance\",\"latencyMs\":36},\"telegram\":{\"ready\":true,\"backend\":\"telegram\",\"latencyMs\":22}}}"
+        },
+        {
+          "name": "503 All features disabled (skipped)",
+          "status": "Service Unavailable",
+          "code": 503,
+          "header": [
+            { "key": "Content-Type", "value": "application/json; charset=utf-8" }
+          ],
+          "body": "{\"ready\":false,\"checkedAt\":\"2026-08-31T02:30:00.000Z\",\"latencyMs\":1,\"dependencies\":{\"firestore\":{\"ready\":false,\"enabled\":false,\"skipped\":true,\"reason\":\"firestore_storage_disabled\"},\"gemini\":{\"ready\":false,\"enabled\":false,\"skipped\":true,\"reason\":\"gemini_disabled\"},\"tradingViewMcp\":{\"ready\":false,\"enabled\":false,\"skipped\":true,\"reason\":\"tradingview_disabled\"},\"binance\":{\"ready\":false,\"enabled\":false,\"skipped\":true,\"reason\":\"binance_disabled\"},\"telegram\":{\"ready\":false,\"enabled\":false,\"skipped\":true,\"reason\":\"telegram_disabled\"}}}"
+        }
+      ]
+    },
+    {
+      "name": "Get Ready",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "description": "Readiness probe. Validates Firestore, Gemini, TradingView MCP, Binance, and Telegram bot connectivity in parallel with bounded timeouts. Returns 200 when every considered dependency is healthy, 503 otherwise. Disabled features are reported as `skipped: true` and excluded from the verdict.",
+        "url": {
+          "raw": "{{baseUrl}}/ready",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "ready"
+          ]
+        }
+      },
+      "response": [
+        {
+          "name": "200 All dependencies healthy",
+          "status": "OK",
+          "code": 200,
+          "header": [
+            { "key": "Content-Type", "value": "application/json; charset=utf-8" }
+          ],
+          "body": "{\"ready\":true,\"checkedAt\":\"2026-08-31T02:30:00.000Z\",\"latencyMs\":412,\"dependencies\":{\"firestore\":{\"ready\":true,\"backend\":\"firestore\",\"latencyMs\":53},\"gemini\":{\"ready\":true,\"backend\":\"gemini\",\"latencyMs\":124},\"tradingViewMcp\":{\"ready\":true,\"backend\":\"tradingview_mcp\",\"latencyMs\":18},\"binance\":{\"ready\":true,\"backend\":\"binance\",\"latencyMs\":36},\"telegram\":{\"ready\":true,\"backend\":\"telegram\",\"latencyMs\":22}}}"
+        },
+        {
+          "name": "503 Partial degradation",
+          "status": "Service Unavailable",
+          "code": 503,
+          "header": [
+            { "key": "Content-Type", "value": "application/json; charset=utf-8" }
+          ],
+          "body": "{\"ready\":false,\"checkedAt\":\"2026-08-31T02:30:00.000Z\",\"latencyMs\":3001,\"dependencies\":{\"firestore\":{\"ready\":true,\"backend\":\"firestore\",\"latencyMs\":84},\"gemini\":{\"ready\":false,\"error\":\"gemini_http_503\",\"latencyMs\":3000},\"tradingViewMcp\":{\"ready\":true,\"backend\":\"tradingview_mcp\",\"latencyMs\":22},\"binance\":{\"ready\":false,\"error\":\"binance_http_451\",\"latencyMs\":124},\"telegram\":{\"ready\":true,\"backend\":\"telegram\",\"latencyMs\":19}}}"
+        }
+      ]
+    },
+    {
       "name": "Get OpenAPI Contract",
       "request": {
         "method": "GET",
