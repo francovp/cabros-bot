@@ -26,7 +26,65 @@ class NotificationManager {
 		);
 		this.zeroChannelBroadcastCount = 0;
 		this.lastZeroChannelAlertAt = 0;
+		this.deliveryHealth = new Map();
 		notificationRedriveService.setNotificationManagerGetter(() => this);
+	}
+
+	/**
+	 * Record a per-channel delivery outcome (success or failure) for status reporting.
+	 * Updates the in-memory rolling counters exposed by getDeliveryHealth().
+	 * @param {string} channelName
+	 * @param {boolean} success
+	 */
+	recordDeliveryOutcome(channelName, success) {
+		if (!channelName || typeof channelName !== 'string') {
+			return;
+		}
+		const now = Date.now();
+		const existing = this.deliveryHealth.get(channelName) || {
+			channel: channelName,
+			success: 0,
+			failure: 0,
+			lastSuccessAt: null,
+			lastFailureAt: null,
+			firstObservedAt: now,
+		};
+		const updated = { ...existing };
+		if (success) {
+			updated.success = existing.success + 1;
+			updated.lastSuccessAt = now;
+		} else {
+			updated.failure = existing.failure + 1;
+			updated.lastFailureAt = now;
+		}
+		this.deliveryHealth.set(channelName, updated);
+	}
+
+	/**
+	 * Snapshot of per-channel delivery health counters.
+	 * Channels that have never been observed are omitted.
+	 * @returns {Object<string, {channel:string,success:number,failure:number,lastSuccessAt:(string|null),lastFailureAt:(string|null),firstObservedAt:(string|null)}>}
+	 */
+	getDeliveryHealth() {
+		const snapshot = {};
+		for (const [name, stats] of this.deliveryHealth.entries()) {
+			snapshot[name] = {
+				channel: stats.channel,
+				success: stats.success,
+				failure: stats.failure,
+				lastSuccessAt: stats.lastSuccessAt ? new Date(stats.lastSuccessAt).toISOString() : null,
+				lastFailureAt: stats.lastFailureAt ? new Date(stats.lastFailureAt).toISOString() : null,
+				firstObservedAt: stats.firstObservedAt ? new Date(stats.firstObservedAt).toISOString() : null,
+			};
+		}
+		return snapshot;
+	}
+
+	/**
+	 * Reset delivery health counters (testing).
+	 */
+	resetDeliveryHealth() {
+		this.deliveryHealth = new Map();
 	}
 
 	/**
@@ -59,6 +117,7 @@ class NotificationManager {
 	resetForTesting() {
 		this.zeroChannelBroadcastCount = 0;
 		this.lastZeroChannelAlertAt = 0;
+		this.deliveryHealth = new Map();
 	}
 
 	/**
@@ -305,64 +364,70 @@ class NotificationManager {
 		});
 
 		// Report external failures to Sentry
-		const totalDurationMs = Date.now() - startTime;
-		const httpContext = options.http || (options.endpoint ? {
-			endpoint: options.endpoint,
-			method: options.method || 'POST',
-			statusCode: 500,
-		} : undefined);
+				const totalDurationMs = Date.now() - startTime;
+				const httpContext = options.http || (options.endpoint ? {
+					endpoint: options.endpoint,
+					method: options.method || 'POST',
+					statusCode: 500,
+				} : undefined);
 
-		for (const result of formattedResults) {
-			if (result && !result.success && result.error) {
-				const providerMap = {
-					telegram: 'telegram-api',
-					whatsapp: 'whatsapp-greenapi',
-					discord: 'discord-webhook',
-				};
-				const provider = providerMap[result.channel] || result.channel;
+				for (const result of formattedResults) {
+					if (result && !result.success && result.error) {
+						const providerMap = {
+							telegram: 'telegram-api',
+							whatsapp: 'whatsapp-greenapi',
+							discord: 'discord-webhook',
+						};
+						const provider = providerMap[result.channel] || result.channel;
 
-				sentryService.captureExternalFailure({
-					channel: result.channel,
-					external: {
-						provider,
-						attemptCount: result.attemptCount ?? 1,
-						durationMs: result.durationMs || totalDurationMs,
-						lastErrorMessage: result.error,
-						lastErrorCode: result.statusCode,
-					},
-					http: httpContext,
+						sentryService.captureExternalFailure({
+							channel: result.channel,
+							external: {
+								provider,
+								attemptCount: result.attemptCount ?? 1,
+								durationMs: result.durationMs || totalDurationMs,
+								lastErrorMessage: result.error,
+								lastErrorCode: result.statusCode,
+							},
+							http: httpContext,
+						});
+					}
+				}
+
+				if (!options.isRedrive && notificationRedriveService.isEnabled()) {
+					const failedResults = formattedResults.filter(result => result && !result.success);
+					if (failedResults.length > 0) {
+						trackBackgroundTask(notificationRedriveService.recordDeliveryResults(alert, formattedResults, options)).catch((error) => {
+							console.warn('[NotificationManager] Failed to record dead-letters for redrive:', error.message);
+						});
+					}
+				}
+
+				trackBackgroundTask(this.notifyAdminOfFailures(alert, formattedResults, options)).catch((error) => {
+					console.error('[NotificationManager] Unexpected admin notification failure:', error.message);
 				});
+
+				console.info('[NotificationManager] Delivery results:', JSON.stringify(formattedResults.map(r => ({
+					channel: r ? r.channel : 'unknown',
+					success: r ? r.success : false,
+					messageId: r ? r.messageId : undefined,
+					error: r ? r.error : undefined,
+				}))));
+
+			for (const result of formattedResults) {
+				if (result && result.channel) {
+					this.recordDeliveryOutcome(result.channel, !!result.success);
+				}
 			}
+
+			return formattedResults;
 		}
-
-		if (!options.isRedrive && notificationRedriveService.isEnabled()) {
-			const failedResults = formattedResults.filter(result => result && !result.success);
-			if (failedResults.length > 0) {
-				trackBackgroundTask(notificationRedriveService.recordDeliveryResults(alert, formattedResults, options)).catch((error) => {
-					console.warn('[NotificationManager] Failed to record dead-letters for redrive:', error.message);
-				});
-			}
-		}
-
-		trackBackgroundTask(this.notifyAdminOfFailures(alert, formattedResults, options)).catch((error) => {
-			console.error('[NotificationManager] Unexpected admin notification failure:', error.message);
-		});
-
-		console.info('[NotificationManager] Delivery results:', JSON.stringify(formattedResults.map(r => ({
-			channel: r ? r.channel : 'unknown',
-			success: r ? r.success : false,
-			messageId: r ? r.messageId : undefined,
-			error: r ? r.error : undefined,
-		}))));
-
-		return formattedResults;
-	}
 
 	/**
-    * Send alert to all enabled channels in parallel
-    * @param {Object} alert - Alert object with text and optional enriched content
-    * @returns {Promise<Array>} Array of SendResult objects (one per enabled channel)
-    */
+	 * Send alert to all enabled channels in parallel
+	 * @param {Object} alert - Alert object with text and optional enriched content
+	 * @returns {Promise<Array>} Array of SendResult objects (one per enabled channel)
+	 */
 	async sendToAll(alert, options = {}) {
 		const enabledChannels = Array.from(this.channels.values()).filter((ch) => ch.isEnabled());
 		const startTime = Date.now();
@@ -537,6 +602,12 @@ class NotificationManager {
 			messageId: r ? r.messageId : undefined,
 			error: r ? r.error : undefined,
 		}))));
+
+		for (const result of formattedResults) {
+			if (result && result.channel) {
+				this.recordDeliveryOutcome(result.channel, !!result.success);
+			}
+		}
 
 		return formattedResults;
 	}

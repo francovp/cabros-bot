@@ -467,3 +467,127 @@ describe('NotificationManager admin failure notifications', () => {
 	});
 });
 
+describe('NotificationManager delivery health counters', () => {
+	const originalDiscordEnabled = process.env.ENABLE_DISCORD_ALERTS;
+	const originalDiscordWebhookUrl = process.env.DISCORD_WEBHOOK_URL;
+
+	afterEach(() => {
+		resetForTesting();
+		if (originalDiscordEnabled === undefined) {
+			delete process.env.ENABLE_DISCORD_ALERTS;
+		} else {
+			process.env.ENABLE_DISCORD_ALERTS = originalDiscordEnabled;
+		}
+		if (originalDiscordWebhookUrl === undefined) {
+			delete process.env.DISCORD_WEBHOOK_URL;
+		} else {
+			process.env.DISCORD_WEBHOOK_URL = originalDiscordWebhookUrl;
+		}
+	});
+
+	it('increments per-channel success/failure counters on sendToAll', async () => {
+		const telegramService = {
+			name: 'telegram',
+			isEnabled: jest.fn(() => true),
+			send: jest.fn().mockResolvedValue({ success: true, channel: 'telegram', messageId: 'tg-1' }),
+		};
+		const whatsappService = {
+			name: 'whatsapp',
+			isEnabled: jest.fn(() => true),
+			send: jest.fn().mockResolvedValue({
+				success: false,
+				channel: 'whatsapp',
+				error: 'GreenAPI unavailable',
+				statusCode: 503,
+				attemptCount: 3,
+			}),
+		};
+		const manager = new NotificationManager(telegramService, whatsappService);
+		manager.resetDeliveryHealth();
+
+		await manager.sendToAll({ text: 'BTC alert' });
+		await waitForBackgroundTasks();
+
+		const health = manager.getDeliveryHealth();
+		expect(Object.keys(health).sort()).toEqual(['telegram', 'whatsapp']);
+		expect(health.telegram.success).toBe(1);
+		expect(health.telegram.failure).toBe(0);
+		expect(health.telegram.lastSuccessAt).toEqual(expect.any(String));
+		expect(health.telegram.lastFailureAt).toBeNull();
+		expect(health.whatsapp.success).toBe(0);
+		expect(health.whatsapp.failure).toBe(1);
+		expect(health.whatsapp.lastSuccessAt).toBeNull();
+		expect(health.whatsapp.lastFailureAt).toEqual(expect.any(String));
+		expect(health.telegram.firstObservedAt).toEqual(expect.any(String));
+	});
+
+	it('increments per-channel counters on sendToChannels', async () => {
+		const telegramService = {
+			name: 'telegram',
+			isEnabled: jest.fn(() => true),
+			send: jest.fn().mockResolvedValue({ success: true, channel: 'telegram', messageId: 'tg-2' }),
+		};
+		const whatsappService = {
+			name: 'whatsapp',
+			isEnabled: jest.fn(() => true),
+			send: jest.fn().mockResolvedValue({ success: true, channel: 'whatsapp', messageId: 'wa-2' }),
+		};
+		const manager = new NotificationManager(telegramService, whatsappService);
+		manager.resetDeliveryHealth();
+
+		await manager.sendToChannels({ text: 'ETH signal' }, ['whatsapp']);
+		await waitForBackgroundTasks();
+
+		const health = manager.getDeliveryHealth();
+		expect(health.whatsapp.success).toBe(1);
+		expect(health.whatsapp.failure).toBe(0);
+		expect(health.telegram).toBeUndefined();
+	});
+
+	it('omits channels that have never been observed', () => {
+		const telegramService = {
+			name: 'telegram',
+			isEnabled: jest.fn(() => true),
+			send: jest.fn(),
+		};
+		const manager = new NotificationManager(telegramService);
+		manager.resetDeliveryHealth();
+
+		expect(manager.getDeliveryHealth()).toEqual({});
+	});
+
+	it('resets counters on resetDeliveryHealth', async () => {
+		const telegramService = {
+			name: 'telegram',
+			isEnabled: jest.fn(() => true),
+			send: jest.fn().mockResolvedValue({ success: true, channel: 'telegram', messageId: 'tg-3' }),
+		};
+		const manager = new NotificationManager(telegramService);
+		manager.resetDeliveryHealth();
+
+		await manager.sendToAll({ text: 'first' });
+		await waitForBackgroundTasks();
+
+		expect(manager.getDeliveryHealth().telegram.success).toBe(1);
+
+		manager.resetDeliveryHealth();
+		expect(manager.getDeliveryHealth()).toEqual({});
+	});
+
+	it('ignores malformed channel names', () => {
+		const telegramService = {
+			name: 'telegram',
+			isEnabled: jest.fn(() => true),
+			send: jest.fn(),
+		};
+		const manager = new NotificationManager(telegramService);
+		manager.resetDeliveryHealth();
+
+		manager.recordDeliveryOutcome(null, true);
+		manager.recordDeliveryOutcome(undefined, true);
+		manager.recordDeliveryOutcome('', true);
+
+		expect(manager.getDeliveryHealth()).toEqual({});
+	});
+});
+

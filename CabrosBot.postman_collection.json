@@ -5272,7 +5272,7 @@
           ]
         },
         {
-          "name": "POST Binance order (dry-run LIMIT — demo env)",
+          "name": "POST Binance order (dry-run LIMIT \u2014 demo env)",
           "request": {
             "method": "POST",
             "header": [
@@ -5291,7 +5291,7 @@
               "mode": "raw",
               "raw": "{\n  \"symbol\": \"BTCUSDT\",\n  \"side\": \"BUY\",\n  \"type\": \"LIMIT\",\n  \"quantity\": 0.001,\n  \"price\": 60000,\n  \"timeInForce\": \"GTC\",\n  \"dryRun\": true\n}"
             },
-            "description": "Dry-run LIMIT order validated against the Binance Demo Trading API (demo-api.binance.com). Requires BINANCE_TRADING_ENV=demo on the server. The demo environment mirrors live production market data and exchange filters exactly — use this for pre-live validation before switching to BINANCE_TRADING_ENV=live.",
+            "description": "Dry-run LIMIT order validated against the Binance Demo Trading API (demo-api.binance.com). Requires BINANCE_TRADING_ENV=demo on the server. The demo environment mirrors live production market data and exchange filters exactly \u2014 use this for pre-live validation before switching to BINANCE_TRADING_ENV=live.",
             "url": {
               "raw": "{{baseUrl}}/api/trading/binance/orders",
               "host": [
@@ -5313,7 +5313,7 @@
               "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"environment\": \"demo\",\n  \"order\": {\n    \"symbol\": \"BTCUSDT\",\n    \"side\": \"BUY\",\n    \"type\": \"LIMIT\",\n    \"quantity\": 0.001,\n    \"price\": 60000,\n    \"timeInForce\": \"GTC\",\n    \"newOrderRespType\": \"FULL\"\n  }\n}"
             },
             {
-              "name": "Error — feature disabled (ENABLE_BINANCE_TRADING=false)",
+              "name": "Error \u2014 feature disabled (ENABLE_BINANCE_TRADING=false)",
               "status": "Forbidden",
               "code": 403,
               "body": "{\n  \"success\": false,\n  \"code\": \"FEATURE_DISABLED\",\n  \"error\": \"Binance trading is disabled\"\n}"

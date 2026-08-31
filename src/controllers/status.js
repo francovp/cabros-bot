@@ -19,6 +19,7 @@ const geminiQuotaManager = require('../services/grounding/geminiQuotaManager');
 const groundingMetrics = require('../services/grounding/metrics');
 const { signalRepeatCooldown } = require('../services/alerts/signalRepeatCooldown');
 const { getCoalescingStatus } = require('../services/grounding/grounding');
+const { getNotificationManager } = require('./webhooks/handlers/alert/alert');
 const {
 	getDeploymentCommit,
 	isPreviewEnvironment,
@@ -369,6 +370,13 @@ function getStatus() {
 				status: discord.status,
 			},
 		},
+		deliveryHealth: (() => {
+			const manager = getNotificationManager();
+			if (!manager || typeof manager.getDeliveryHealth !== 'function') {
+				return {};
+			}
+			return manager.getDeliveryHealth();
+		})(),
 		dependencies: {
 			telegram,
 			whatsapp,

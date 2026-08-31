@@ -246,6 +246,16 @@ describe('Status endpoints', () => {
 		expect(response.body.featureFlags.tradingViewConfluenceEnrichment).toBe(true);
 	});
 
+	it('exposes deliveryHealth as an empty object when NotificationManager is not initialized', async () => {
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body).toHaveProperty('deliveryHealth');
+		expect(response.body.deliveryHealth).toEqual({});
+	});
+
 	it('reports scanner presets as ephemeral when no Firestore gate is enabled', async () => {
 		delete process.env.ENABLE_FIRESTORE_ALERT_STORAGE;
 		delete process.env.ENABLE_FIRESTORE_SCANNER_PRESETS;

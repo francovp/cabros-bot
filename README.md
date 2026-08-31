@@ -423,6 +423,8 @@ The dedicated worker also persists the same non-sensitive heartbeat to `workerHe
 
 `GET /api/capabilities` is an alias for the same payload.
 
+`deliveryHealth` provides per-channel rolling counters (`success`, `failure`, `lastSuccessAt`, `lastFailureAt`, `firstObservedAt`) updated by `NotificationManager.sendToAll`/`sendToChannels`. Channels that have never sent an alert are omitted, the counters reset on process restart (in-memory only, no Firestore persistence), and `lastSuccessAt`/`lastFailureAt` are ISO-8601 UTC strings or `null`. This block answers operator questions about channel success/failure rates, latency degradation, and recent delivery health without requiring authenticated `/api/alerts/summary` queries.
+
 When configured, `featureFlags.binanceTrading` and `dependencies.binanceTrading` expose only the non-sensitive execution gate, selected `testnet`/`demo`/`live` environment, allow-listed symbols, and readiness state.
 
 ### Browser admin authentication
@@ -479,6 +481,24 @@ The `/admin` console is deployed as a static site on Firebase Hosting for the `c
   "deliveryChannels": {
     "telegram": { "enabled": true, "status": "ready" },
     "whatsapp": { "enabled": false, "status": "disabled" }
+  },
+  "deliveryHealth": {
+    "telegram": {
+      "channel": "telegram",
+      "success": 12,
+      "failure": 0,
+      "lastSuccessAt": "2026-08-30T15:04:11.000Z",
+      "lastFailureAt": null,
+      "firstObservedAt": "2026-08-30T14:55:07.000Z"
+    },
+    "whatsapp": {
+      "channel": "whatsapp",
+      "success": 8,
+      "failure": 1,
+      "lastSuccessAt": "2026-08-30T15:01:43.000Z",
+      "lastFailureAt": "2026-08-30T14:59:12.000Z",
+      "firstObservedAt": "2026-08-30T14:55:09.000Z"
+    }
   },
   "dependencies": {
     "telegram": { "enabled": true, "configured": true, "ready": true, "status": "ready" },
