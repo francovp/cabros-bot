@@ -1131,6 +1131,10 @@ No new environment variable or Remote Config key was added; the fixed cap is an 
 
 TradingView alert enrichment now exposes an in-process rolling 24-hour `dependencies.tradingViewMcp.enrichment.alertPath` snapshot with total, applied, failed, and percentage counters. The existing MCP circuit-breaker paging remains the single deduplicated admin outage page and continues to fail open. Stored-alert summaries expose `enrichment.tradingViewStatusCounts` with `full`, `partial`, `failed`, `not_applicable`, and `unrecorded`; requested legacy records without a persisted outcome are counted as `unrecorded`.
 
+TradingView MCP suspension responses and terminal upstream tool errors are classified as `provider_unavailable`, preserve `lastHttpStatusCode` in `/api/status`, and stop same-operation retries while retaining fail-open delivery. Transient HTTP and protocol failures keep the existing retry behavior.
+
+Issue #630 validation confirmed the configured TradingView MCP endpoint is live; no environment variable or Remote Config key was added.
+
 **Coverage**:
 - `src/services/tradingview/TradingViewMcpService.js` — Rolling alert-path outcome window and status projection, isolated from volume-confirmation runtime state.
 - `src/services/storage/AlertStorageService.js` — Explicit stored outcome buckets with legacy requested-record accounting.

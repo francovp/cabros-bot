@@ -5681,12 +5681,94 @@
             "type": "object",
             "additionalProperties": true,
             "properties": {
+              "tradingViewMcp": {
+                "$ref": "#/components/schemas/TradingViewMcpRuntimeStatus"
+              },
               "firebaseRemoteConfig": {
                 "$ref": "#/components/schemas/FirebaseRemoteConfigDependency"
               }
             }
           }
         }
+      },
+      "TradingViewMcpRuntimeStatus": {
+        "type": "object",
+        "description": "Fail-open TradingView MCP runtime telemetry. Terminal provider outages are classified as provider_unavailable and do not consume same-operation retries; provider response bodies and URLs are never exposed.",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "configured": {
+            "type": "boolean"
+          },
+          "ready": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "disabled",
+              "misconfigured",
+              "unknown",
+              "ready",
+              "degraded"
+            ]
+          },
+          "lastCheckedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "lastSuccessAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "lastFailureAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "lastErrorCategory": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "timeout",
+              "http_5xx",
+              "http_4xx",
+              "invalid_response",
+              "provider_unavailable",
+              "circuit_breaker_open",
+              "request_failed",
+              null
+            ]
+          },
+          "lastHttpStatusCode": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 100,
+            "maximum": 599
+          },
+          "successCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "failureCount": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": true
       },
       "FirebaseRemoteConfigDependency": {
         "type": "object",
