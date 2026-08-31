@@ -3345,6 +3345,51 @@ describe('admin browser client', () => {
 		expect(requests.at(-1)).toBe('/api/trading/binance/orders?symbol=ETHUSDT&origClientOrderId=cb-eth-7');
 	});
 
+	it('rejects ambiguous single-order identifiers', async () => {
+		const requests = [];
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				requests.push(url);
+				return response({ success: true, environment: 'testnet', order: {} });
+			},
+		});
+		await flush();
+		await selectView(browser, 'orders');
+
+		const detailForm = findForm(browser.elementsById.view, 'Get single order');
+		detailForm.elements.symbol.value = 'BTCUSDT';
+		detailForm.elements['path-orderId'].value = '42';
+		detailForm.elements['path-origClientOrderId'].value = 'cb-42';
+		await detailForm.dispatch('submit');
+		await flush();
+
+		expect(requests).toHaveLength(0);
+		expect(detailForm.textContent).toContain('Provide exactly one order identifier');
+	});
+
+	it('renders malformed Binance order timestamps without throwing', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				return response({
+					success: true,
+					environment: 'testnet',
+					orders: [{ symbol: 'BTCUSDT', orderId: 42, status: 'FILLED', type: 'MARKET', time: 'not-a-timestamp' }],
+				});
+			},
+		});
+		await flush();
+		await selectView(browser, 'orders');
+
+		const listForm = findForm(browser.elementsById.view, 'Load recent orders');
+		listForm.elements.symbol.value = 'BTCUSDT';
+		await expect(listForm.dispatch('submit')).resolves.toBeUndefined();
+		await flush();
+
+		expect(listForm.textContent).toContain('not-a-timestamp');
+	});
+
 	it('clears stale Binance orders when filters change before the response resolves', async () => {
 		let releaseList;
 		const slow = new Promise((resolve) => { releaseList = resolve; });

@@ -2466,7 +2466,7 @@ const createOrderCard = (order) => {
 	];
 	stampFields.forEach(([label, value]) => {
 		const dd = element('dd');
-		if (value !== undefined && value !== null && value !== '') dd.append(createTimestamp(new Date(Number(value)).toISOString()));
+		if (value !== undefined && value !== null && value !== '') dd.append(createTimestamp(value));
 		else dd.textContent = '—';
 		timestamps.append(element('dt', { text: label }), dd);
 	});
@@ -2624,6 +2624,10 @@ const createOrderLookupForm = () => {
 		}
 		if (!orderIdValue && !origClientOrderIdValue) {
 			showError(output, 'orderId or origClientOrderId is required for single-order lookup.');
+			return;
+		}
+		if (orderIdValue && origClientOrderIdValue) {
+			showError(output, 'Provide exactly one order identifier.');
 			return;
 		}
 		if (orderIdValue && !ORDER_LIST_QUERY_VALIDATION.orderId(orderIdValue)) {
