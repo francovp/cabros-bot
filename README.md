@@ -393,6 +393,29 @@ Health check endpoint.
 {"uptime":"..."}
 ```
 
+### GET /ready
+
+Public bootstrap-readiness endpoint for deployment traffic cutover. It returns `503` while startup is pending or failed, and `200` only after the required bootstrap components are ready. Telegram is `disabled` when the bot is disabled or the environment is a preview; the news monitor is `disabled` when it is not enabled. Readiness checks bootstrap completion only and does not continuously ping external providers, avoiding restart loops caused by transient dependency outages.
+
+Configure the deployment platform health check to use `/ready` (`healthCheckPath` in `render.yaml`; Railway's service healthcheck path should use the same value). Keep `/healthcheck` for process liveness.
+
+The protected `/api/status` response includes the same non-sensitive state under `readiness`.
+
+**Ready response:**
+```json
+{
+  "status": "ready",
+  "ready": true,
+  "components": {
+    "telegramBot": { "status": "disabled" },
+    "notificationServices": { "status": "ready" },
+    "newsMonitor": { "status": "disabled" }
+  }
+}
+```
+
+Pending and failed bootstrap states use the same body shape with HTTP `503`; failed responses include a sanitized `error` message.
+
 ### GET /api/status
 
 Machine-readable runtime status for operational tooling. This endpoint uses the same `WEBHOOK_API_KEY` protection as other `/api` endpoints when that environment variable is configured. Send the key with the `x-api-key` header.

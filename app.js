@@ -5,6 +5,7 @@ const app = express();
 const cors = require('cors');
 const helmet = require('helmet');
 const { getOpenApiDocsRouter } = require('./src/openapi/docs');
+const bootstrapReadiness = require('./src/lib/bootstrapReadiness');
 
 // Configure trusted proxies (e.g. Render reverse proxy or TRUST_PROXY setting)
 setupTrustProxy(app);
@@ -33,6 +34,10 @@ contentSecurityPolicy['connect-src'] = [
 app.use(helmet({ contentSecurityPolicy: { directives: contentSecurityPolicy } }));
 
 app.use('/healthcheck', require('express-healthcheck')());
+app.get('/ready', (req, res) => {
+	const status = bootstrapReadiness.getStatus();
+	return res.status(status.ready ? 200 : 503).json(status);
+});
 
 // Rate Limiter (must be after healthcheck to avoid limiting health checks)
 app.use(require('./src/lib/rateLimiter'));

@@ -87,6 +87,37 @@
       ]
     },
     {
+      "name": "Bootstrap Readiness",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "description": "Public deployment-readiness probe. HTTP 200 means bootstrap completed; HTTP 503 means startup is pending or failed. This does not continuously ping external providers.",
+        "url": {
+          "raw": "{{baseUrl}}/ready",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "ready"
+          ]
+        }
+      },
+      "response": [
+        {
+          "name": "200 Ready",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"status\":\"ready\",\"ready\":true,\"components\":{\"telegramBot\":{\"status\":\"disabled\"},\"notificationServices\":{\"status\":\"ready\"},\"newsMonitor\":{\"status\":\"disabled\"}}}"
+        },
+        {
+          "name": "503 Pending or failed",
+          "status": "Service Unavailable",
+          "code": 503,
+          "body": "{\"status\":\"pending\",\"ready\":false,\"components\":{\"telegramBot\":{\"status\":\"pending\"},\"notificationServices\":{\"status\":\"pending\"},\"newsMonitor\":{\"status\":\"disabled\"}}}"
+        }
+      ]
+    },
+    {
       "name": "Get OpenAPI Contract",
       "request": {
         "method": "GET",
