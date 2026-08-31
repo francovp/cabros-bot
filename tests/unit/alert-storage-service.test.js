@@ -1470,6 +1470,7 @@ describe('AlertStorageService', () => {
 					totalTokens: 30,
 					totalCost: 0.001,
 				},
+				feature: 'grounding',
 				text: expect.stringMatching(/^BTC breakout /),
 			});
 			expect(result.alerts[0].text.length).toBe(1000);
@@ -1666,6 +1667,43 @@ describe('AlertStorageService', () => {
 			expect(result.alerts[0].text.length).toBeLessThanOrEqual(1000);
 		});
 
+		it('exports feature tags with sanitized token usage', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('feature-export-1', {
+						receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+						source: 'webhook',
+						tokenUsage: {
+							inputTokens: 15,
+							outputTokens: 27,
+							totalTokens: 42,
+							totalCost: 0.004,
+							byFeature: {
+								grounding: { inputTokens: 15, outputTokens: 27, totalTokens: 42, totalCost: 0.004, calls: 2 },
+							},
+						},
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.exportAlerts({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+				includeText: false,
+			});
+
+			expect(result.alerts[0]).toMatchObject({
+				feature: 'grounding',
+				tokenUsage: {
+					byFeature: {
+						grounding: expect.objectContaining({ calls: 2, totalCost: 0.004 }),
+					},
+				},
+			});
+		});
+
 		it('omits truncated flag in export when stored text fits within the cap', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 			mockGet.mockResolvedValueOnce({
@@ -1691,6 +1729,45 @@ describe('AlertStorageService', () => {
 	});
 
 		describe('summarizeAlerts()', () => {
+		it('aggregates feature-tagged token costs without double-counting totals', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('feature-alert', {
+						receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+						source: 'webhook',
+						text: 'BINANCE:BTCUSDT',
+						tokenUsage: {
+							inputTokens: 15,
+							outputTokens: 27,
+							totalTokens: 42,
+							totalCost: 0.004,
+							byFeature: {
+								grounding: { inputTokens: 10, outputTokens: 20, totalTokens: 30, totalCost: 0.003, calls: 1 },
+								enrichment: { inputTokens: 5, outputTokens: 7, totalTokens: 12, totalCost: 0.001, calls: 1 },
+							},
+						},
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.summarizeAlerts({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+				limit: 10,
+			});
+
+			expect(result.enrichment.tokenUsage.totalCost).toBe(0.004);
+			expect(result.costByFeature).toEqual({
+				grounding: { alerts: 1, batches: 0, symbols: 1, inputTokens: 10, outputTokens: 20, totalTokens: 30, totalCost: 0.003 },
+				'news-analysis': { alerts: 0, batches: 0, symbols: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, totalCost: 0 },
+				'expanded-analysis': { alerts: 0, batches: 0, symbols: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, totalCost: 0 },
+				scanner: { alerts: 0, batches: 0, symbols: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, totalCost: 0 },
+				enrichment: { alerts: 1, batches: 0, symbols: 1, inputTokens: 5, outputTokens: 7, totalTokens: 12, totalCost: 0.001 },
+			});
+		});
+
 		it('counts recorded, not-applicable, and legacy unrecorded TradingView outcomes separately', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 			mockGet.mockResolvedValueOnce({
@@ -1838,6 +1915,13 @@ describe('AlertStorageService', () => {
 					tradingViewData: 1,
 					tradingViewDataApplied: 1,
 					withoutTradingViewData: 1,
+				},
+				costByFeature: {
+					grounding: { alerts: 1, batches: 0, symbols: 1, inputTokens: 10, outputTokens: 20, totalTokens: 30, totalCost: 0.001 },
+					'news-analysis': { alerts: 0, batches: 0, symbols: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, totalCost: 0 },
+					'expanded-analysis': { alerts: 0, batches: 0, symbols: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, totalCost: 0 },
+					scanner: { alerts: 0, batches: 0, symbols: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, totalCost: 0 },
+					enrichment: { alerts: 0, batches: 0, symbols: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, totalCost: 0 },
 				},
 				enrichment: {
 					enrichedAlerts: 1,

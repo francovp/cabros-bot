@@ -219,6 +219,13 @@ describe('Alerts API Integration Tests', () => {
 				tradingViewData: 1,
 				withoutTradingViewData: 1,
 			},
+			costByFeature: {
+				grounding: { alerts: 1, batches: 0, symbols: 1, inputTokens: 10, outputTokens: 20, totalTokens: 30, totalCost: 0.001 },
+				'news-analysis': { alerts: 0, batches: 0, symbols: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, totalCost: 0 },
+				'expanded-analysis': { alerts: 0, batches: 0, symbols: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, totalCost: 0 },
+				scanner: { alerts: 0, batches: 0, symbols: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, totalCost: 0 },
+				enrichment: { alerts: 0, batches: 0, symbols: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, totalCost: 0 },
+			},
 			enrichment: {
 				enrichedAlerts: 1,
 				plainAlerts: 1,
@@ -272,6 +279,13 @@ describe('Alerts API Integration Tests', () => {
 					plain: 1,
 					tradingViewData: 1,
 					withoutTradingViewData: 1,
+				},
+				costByFeature: {
+					grounding: { alerts: 1, batches: 0, symbols: 1, inputTokens: 10, outputTokens: 20, totalTokens: 30, totalCost: 0.001 },
+					'news-analysis': { alerts: 0, batches: 0, symbols: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, totalCost: 0 },
+					'expanded-analysis': { alerts: 0, batches: 0, symbols: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, totalCost: 0 },
+					scanner: { alerts: 0, batches: 0, symbols: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, totalCost: 0 },
+					enrichment: { alerts: 0, batches: 0, symbols: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, totalCost: 0 },
 				},
 				enrichment: {
 					enrichedAlerts: 1,
@@ -476,7 +490,7 @@ describe('Alerts API Integration Tests', () => {
 			includeText: true,
 		});
 		expect(res.headers['content-type']).toContain('text/csv');
-		expect(res.text).toContain('id,requestId,receivedAt,source,enriched,useTradingViewData,tradingViewEnrichmentApplied,tradingViewEnrichmentStatus,eventCategory,confidence,sentimentScore,dedupStatus,channels,deliveryResults,suppressedRepeat,tokenUsage,text');
+		expect(res.text).toContain('id,requestId,receivedAt,source,enriched,useTradingViewData,tradingViewEnrichmentApplied,tradingViewEnrichmentStatus,eventCategory,confidence,sentimentScore,dedupStatus,feature,channels,deliveryResults,suppressedRepeat,tokenUsage,text');
 		expect(res.text).toContain("'=alert-1,,-42,'@webhook");
 		expect(res.text).toContain('"\'=@SUM(1,1), ""quoted""\r\n+next"');
 		expect(res.text).not.toContain('=alert-1,-42,@webhook');
@@ -500,6 +514,7 @@ describe('Alerts API Integration Tests', () => {
 					confidence: 0.85,
 					sentimentScore: 0.75,
 					dedupStatus: 'fresh',
+					feature: 'news-analysis',
 					channels: ['telegram'],
 					deliveryResults: [{ channel: 'telegram', success: true }],
 					tokenUsage: { inputTokens: 100, outputTokens: 50, totalTokens: 150, totalCost: 0.001 },
@@ -514,9 +529,10 @@ describe('Alerts API Integration Tests', () => {
 			.expect(200);
 
 		expect(res.headers['content-type']).toContain('text/csv');
-		expect(res.text).toContain('id,requestId,receivedAt,source,enriched,useTradingViewData,tradingViewEnrichmentApplied,tradingViewEnrichmentStatus,eventCategory,confidence,sentimentScore,dedupStatus,channels,deliveryResults,suppressedRepeat,tokenUsage,text');
+		expect(res.text).toContain('id,requestId,receivedAt,source,enriched,useTradingViewData,tradingViewEnrichmentApplied,tradingViewEnrichmentStatus,eventCategory,confidence,sentimentScore,dedupStatus,feature,channels,deliveryResults,suppressedRepeat,tokenUsage,text');
 		expect(res.text).toContain('news-123,req-news-456,2026-06-06T12:00:00.000Z,news-monitor,true,false,false,not_applicable,price_surge,0.85,0.75,fresh');
 		expect(res.text).toContain('BTCUSDT: Bitcoin surges past 100k');
+		expect(res.text).toContain(',news-analysis,');
 	});
 
 	it('neutralizes tab- and carriage-return-prefixed formulas in CSV strings', async () => {
