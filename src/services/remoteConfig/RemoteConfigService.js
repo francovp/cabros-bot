@@ -58,6 +58,8 @@ const PARAMETER_SCHEMA = Object.freeze({
 	SCANNER_PRESET_SCHEDULER_BATCH_LIMIT: { type: 'number', defaultValue: 50, integer: true, min: 1, max: 500 },
 	NEWS_MONITOR_SCHEDULER_INTERVAL_MS: { type: 'number', defaultValue: 300000, integer: true, min: 10000, max: 3600000 },
 	NEWS_MONITOR_SCHEDULER_BATCH_LIMIT: { type: 'number', defaultValue: 50, integer: true, min: 1, max: 500 },
+	ALERT_SCHEDULER_INTERVAL_MS: { type: 'number', defaultValue: 60000, integer: true, min: 1000, max: 3600000 },
+	ALERT_SCHEDULER_BATCH_LIMIT: { type: 'number', defaultValue: 10, integer: true, min: 1, max: 100 },
 	ENABLE_GEMINI_GROUNDING: { type: 'boolean', defaultValue: false },
 	ENABLE_TRADINGVIEW_MCP_ENRICHMENT: { type: 'boolean', defaultValue: false },
 	ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION: { type: 'boolean', defaultValue: false },

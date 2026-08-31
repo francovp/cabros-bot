@@ -34,6 +34,7 @@ const { notificationRedriveService } = require('./src/services/notification/Noti
 const { whatsAppCommandBridgeService } = require('./src/services/notification/WhatsAppCommandBridgeService');
 const { scannerPresetSchedulerService } = require('./src/services/scannerPresets');
 const { newsMonitorSchedulerService } = require('./src/services/newsMonitorScheduler');
+const { alertSchedulerService } = require('./src/services/scheduler');
 const sentryService = require('./src/services/monitoring/SentryService');
 const remoteConfigService = require('./src/services/remoteConfig/RemoteConfigService');
 const Sentry = require('@sentry/node');
@@ -82,6 +83,7 @@ const lifecycle = createProcessLifecycle({
 	stopWhatsAppCommandBridge: (options) => whatsAppCommandBridgeService.stop(options),
 	stopScannerPresetScheduler: (options) => scannerPresetSchedulerService.stopWorker(options),
 	stopNewsMonitorScheduler: (options) => newsMonitorSchedulerService.stopWorker(options),
+	stopAlertScheduler: (options) => alertSchedulerService.stopWorker(options),
 	stopRemoteConfig: () => remoteConfigService.stop(),
 	shutdownNewsMonitor: () => getCacheInstance().shutdown(),
 	flushSentry: (timeout) => sentryService.flush(timeout),
@@ -104,6 +106,9 @@ async function bootstrapApplication() {
 	scannerPresetSchedulerService.startWorker();
 	// Start background news-monitor scheduler if enabled
 	newsMonitorSchedulerService.startWorker({ source: 'web' });
+	// Start background alert scheduler (JSON-defined news + scanner schedules) if enabled
+	alertSchedulerService.botGetter = () => bot;
+	alertSchedulerService.startWorker({ source: 'web' });
 	// Start WhatsApp inbound command bridge if enabled
 	if (whatsAppCommandBridgeService.isEnabled()) {
 		whatsAppCommandBridgeService.start();
