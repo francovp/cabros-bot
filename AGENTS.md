@@ -1541,3 +1541,15 @@ Binance 451 / `restricted location` errors are now classified as `binance_region
 - `BINANCE_DATA_BASE_URL` — Optional override for all Binance market-data REST calls. Default `https://api.binance.com` (preserves existing behavior when unset). Must be an http(s) URL; live trading also requires `https://`. Classified as **environment-only** for Remote Config parity (external destination; secrets/credentials/external-endpoint policy excludes it).
 
 No endpoint, OpenAPI, Postman, or Remote Config contract changed; the new env var follows the standard `environment-only` classification.
+
+## Scanner Preset Unique Name Enforcement (GH-875 / Issue #875)
+
+`ScannerPresetService` now enforces case-insensitive unique names across both storage backends. `POST /api/scanner-presets` and `PUT /api/scanner-presets/:id` look up the normalized `nameKey` (`name.trim().toLowerCase()`) against the in-memory map plus pending/in-flight writes (honoring `pendingFirestoreDeletes` tombstones) and, when `ENABLE_FIRESTORE_SCANNER_PRESETS=true`, against the durable `scannerPresets` Firestore collection via `where('nameKey', '==', key).limit(1)`. A collision returns `409 NAME_CONFLICT` with the conflicting preset attached so the operator can rename/reuse the existing record instead of producing an ambiguous duplicate. Renaming a preset to itself with a case-only change (e.g. `My Watchlist` → `my watchlist`) is allowed and exempted from the conflict check; an in-place update that does not change the name is also allowed. The precomputed `nameKey` field is persisted alongside `name` so Firestore lookups are bounded single-document reads. The Firestore lookup fails open on read errors (consistent with the rest of the service) so a Firestore outage does not block legitimate preset writes.
+
+**Core Components**:
+- `src/services/scannerPresets/ScannerPresetService.js` — `normalizeNameKey()`, `buildNameConflict()`, `_findPresetByName()`, uniqueness checks in `createPreset()` / `updatePreset()`, and `nameKey` field on the persisted preset.
+- `src/controllers/webhooks/handlers/scannerPresets/scannerPresets.js` — `postPreset` and `updatePreset` now honor the error's `statusCode` (so `409 NAME_CONFLICT` is returned correctly) and surface the conflicting preset (with ETag) in the response body.
+- `README.md`, `src/openapi/openapi.json`, `CabrosBot.postman_collection.json` — Documented the new `409 NAME_CONFLICT` response and added a `name-only` self-rename example.
+- `tests/unit/scanner-preset-service.test.js` and `tests/integration/scanner-presets-endpoint.test.js` — Cover case-insensitive duplicates in memory + durable modes, rename-to-existing, case-only self-rename, and in-place updates that keep the name.
+
+No environment variable, Remote Config key, or new endpoint was added.

@@ -701,6 +701,16 @@
           "400": {
             "$ref": "#/components/responses/Error"
           },
+          "409": {
+            "description": "A scanner preset with the same case-insensitive name already exists. Response body includes code=NAME_CONFLICT and the conflicting preset so the client can resolve the conflict.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScannerPresetConflictResponse"
+                }
+              }
+            }
+          },
           "500": {
             "$ref": "#/components/responses/Error"
           }
@@ -798,7 +808,7 @@
             "$ref": "#/components/responses/Error"
           },
           "409": {
-            "description": "Preset is locked by an in-flight sweep (lockedUntil > now). Response body includes code=PRESET_LOCKED and the lockedUntil timestamp; the current preset is also returned so the client can decide whether to retry.",
+            "description": "Preset is locked by an in-flight sweep (lockedUntil > now) OR the new name matches an existing preset's name case-insensitively (code=NAME_CONFLICT, body includes the conflicting preset).",
             "content": {
               "application/json": {
                 "schema": {

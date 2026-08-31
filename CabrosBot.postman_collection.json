@@ -1376,6 +1376,12 @@
               "body": "{\n  \"error\": \"name must be a string\",\n  \"code\": \"INVALID_REQUEST\"\n}"
             },
             {
+              "name": "Error (duplicate name)",
+              "status": "Conflict",
+              "code": 409,
+              "body": "{\n  \"error\": \"A scanner preset with this name already exists\",\n  \"code\": \"NAME_CONFLICT\",\n  \"storage\": {\n    \"enabled\": true,\n    \"configured\": true,\n    \"ready\": true,\n    \"status\": \"ready\",\n    \"mode\": \"durable\",\n    \"backend\": \"firestore\"\n  },\n  \"preset\": {\n    \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n    \"name\": \"Daily Scan\"\n  }\n}"
+            },
+            {
               "name": "Created with Schedule and Routing",
               "status": "Created",
               "code": 201,
@@ -1543,6 +1549,12 @@
               "status": "Conflict",
               "code": 409,
               "body": "{\n  \"success\": false,\n  \"error\": \"Preset is locked by an in-flight sweep until 2026-08-30T20:00:00.000Z\",\n  \"code\": \"PRESET_LOCKED\",\n  \"lockedUntil\": \"2026-08-30T20:00:00.000Z\",\n  \"storage\": {\n    \"enabled\": true,\n    \"configured\": true,\n    \"ready\": true,\n    \"status\": \"ready\",\n    \"mode\": \"durable\",\n    \"backend\": \"firestore\"\n  },\n  \"preset\": {\n    \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n    \"version\": 4\n  }\n}"
+            },
+            {
+              "name": "Rename to existing preset name (409 NAME_CONFLICT)",
+              "status": "Conflict",
+              "code": 409,
+              "body": "{\n  \"success\": false,\n  \"error\": \"A scanner preset with this name already exists\",\n  \"code\": \"NAME_CONFLICT\",\n  \"storage\": {\n    \"enabled\": true,\n    \"configured\": true,\n    \"ready\": true,\n    \"status\": \"ready\",\n    \"mode\": \"durable\",\n    \"backend\": \"firestore\"\n  },\n  \"preset\": {\n    \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n    \"name\": \"Updated Scan\"\n  }\n}"
             }
           ]
         },

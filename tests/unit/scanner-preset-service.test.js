@@ -803,4 +803,79 @@ describe('ScannerPresetService', () => {
 		// without leaking is verified by the bounded test runtime.
 		expect(inMemoryWriteLocks.size).toBe(0);
 	});
+
+	it('rejects a duplicate preset name on createPreset in memory mode', async () => {
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const service = new ScannerPresetService();
+
+		await service.createPreset({ name: 'Daily breakout' });
+
+		await expect(service.createPreset({ name: 'Daily breakout' }))
+			.rejects.toMatchObject({ code: 'NAME_CONFLICT', statusCode: 409 });
+	});
+
+	it('rejects a case-insensitive duplicate preset name on createPreset', async () => {
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const service = new ScannerPresetService();
+
+		await service.createPreset({ name: 'Daily Breakout' });
+
+		await expect(service.createPreset({ name: 'daily breakout' }))
+			.rejects.toMatchObject({ code: 'NAME_CONFLICT', statusCode: 409 });
+		await expect(service.createPreset({ name: '  DAILY BREAKOUT  ' }))
+			.rejects.toMatchObject({ code: 'NAME_CONFLICT', statusCode: 409 });
+	});
+
+	it('rejects a duplicate preset name on createPreset in durable mode', async () => {
+		process.env.ENABLE_FIRESTORE_SCANNER_PRESETS = 'true';
+
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const service = new ScannerPresetService();
+
+		await service.createPreset({ name: 'Swing watch' });
+
+		await expect(service.createPreset({ name: 'Swing Watch' }))
+			.rejects.toMatchObject({ code: 'NAME_CONFLICT', statusCode: 409 });
+	});
+
+	it('rejects renaming an existing preset to another preset name', async () => {
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const service = new ScannerPresetService();
+
+		await service.createPreset({ name: 'Alpha' });
+		const bravo = await service.createPreset({ name: 'Bravo' });
+
+		await expect(service.updatePreset(bravo.id, { name: 'Alpha' }))
+			.rejects.toMatchObject({ code: 'NAME_CONFLICT', statusCode: 409 });
+
+		// Original Bravo name preserved.
+		const refetched = await service.getPreset(bravo.id);
+		expect(refetched.name).toBe('Bravo');
+	});
+
+	it('allows a preset to rename itself with a case-only change', async () => {
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const service = new ScannerPresetService();
+
+		const created = await service.createPreset({ name: 'My Watchlist' });
+		const updated = await service.updatePreset(created.id, { name: 'my watchlist' });
+
+		expect(updated.name).toBe('my watchlist');
+		expect(updated.id).toBe(created.id);
+	});
+
+	it('allows updating a preset without changing the name even when another preset has the same case-insensitive name after a previous rename', async () => {
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const service = new ScannerPresetService();
+
+		const first = await service.createPreset({ name: 'Tracker' });
+		const second = await service.createPreset({ name: 'Other' });
+
+		// Renaming second to its own name is a no-op and must succeed even
+		// though "Tracker" is still owned by the first preset.
+		const updated = await service.updatePreset(second.id, { limit: 7 });
+		expect(updated.limit).toBe(7);
+		expect(updated.id).toBe(second.id);
+		expect(first.id).not.toBe(second.id);
+	});
 });

@@ -127,10 +127,17 @@ function postPreset(req, res) {
 			});
 		} catch (error) {
 			if (error instanceof MarketScannerRequestError) {
-				return res.status(400).json({
+				const statusCode = Number.isInteger(error.statusCode) ? error.statusCode : 400;
+				const body = {
 					error: error.message,
 					code: error.code || 'INVALID_REQUEST',
-				});
+					storage: getStorageMetadata(),
+				};
+				if (error.code === 'NAME_CONFLICT' && error.preset) {
+					body.preset = error.preset;
+					setPresetEtag(res, error.preset);
+				}
+				return res.status(statusCode).json(body);
 			}
 
 			console.error('[ScannerPresets] Create failed:', error.message);
@@ -323,6 +330,10 @@ function updatePreset(req, res) {
 						body.preset = error.preset;
 						setPresetEtag(res, error.preset);
 					}
+				}
+				if (error.code === 'NAME_CONFLICT' && error.preset) {
+					body.preset = error.preset;
+					setPresetEtag(res, error.preset);
 				}
 				return res.status(statusCode).json(body);
 			}
