@@ -431,7 +431,11 @@ async function loadNow(options = {}) {
 }
 
 async function start() {
-	if (!isEnabled() || refreshTimer) {
+	if (!isEnabled()) {
+		applyRuntimeConfig();
+		return false;
+	}
+	if (refreshTimer) {
 		return false;
 	}
 

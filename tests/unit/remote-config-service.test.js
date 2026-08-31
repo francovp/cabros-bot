@@ -474,4 +474,16 @@ describe('RemoteConfigService', () => {
 			jest.useRealTimers();
 		}
 	});
+
+	it('applies environment LLM gate configuration when start() is called and Remote Config is disabled', async () => {
+		const llmConcurrencyGate = require('../../src/services/llm/LlmConcurrencyGate');
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'false';
+		process.env.LLM_GLOBAL_MAX_CONCURRENT = '4';
+		process.env.LLM_GLOBAL_QUEUE_TIMEOUT_MS = '1200';
+
+		const started = await remoteConfigService.start();
+		expect(started).toBe(false);
+		expect(llmConcurrencyGate.maxConcurrent).toBe(4);
+		expect(llmConcurrencyGate.queueTimeoutMs).toBe(1200);
+	});
 });
