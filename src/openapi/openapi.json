@@ -3722,7 +3722,19 @@
             "example": "BUY"
           },
           "score": {
-            "type": "number",
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Signed score aligned with signal direction: positive for BUY, negative for SELL, clamped to [-1, 1]. Use the confidence field for magnitude-based filtering.",
+            "example": 0.85
+          },
+          "confidence": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Magnitude of the signal's signed score (|score|). Always non-negative when score is present; null when no score was recorded. Equivalent to the threshold used internally to classify high-confidence candidates, so consumers can filter on confidence >= 0.75 without re-deriving Math.abs() from score.",
             "example": 0.85
           },
           "price": {
