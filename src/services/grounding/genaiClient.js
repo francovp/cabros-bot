@@ -50,6 +50,7 @@ class NonRetryableProviderError extends Error {
 class GenaiClient {
 	constructor() {
 		this.genAI = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+		this.llmConcurrencyGate = llmConcurrencyGate;
 	}
 
 	async _searchBrave(query, count = 3, signal = null) {
@@ -194,6 +195,9 @@ class GenaiClient {
 			releaseGate();
 		} catch (error) {
 			if (abortCleanup) abortCleanup();
+			if (isGeminiQuotaError(error)) {
+				geminiQuotaManager.triggerQuotaCooldown(error);
+			}
 			releaseGate();
 			throw error;
 		}
@@ -445,12 +449,12 @@ class GenaiClient {
 			};
 		} catch (error) {
 			if (abortCleanup) abortCleanup();
+			if (isGeminiQuotaError(error)) {
+				geminiQuotaManager.triggerQuotaCooldown(error);
+			}
 			if (releaseGate) releaseGate();
 			if (signal?.aborted || error.name === 'AbortError' || error.message === 'Grounding timeout' || (typeof error.message === 'string' && error.message.includes('timeout'))) {
 				throw error;
-			}
-			if (isGeminiQuotaError(error)) {
-				geminiQuotaManager.triggerQuotaCooldown(error);
 			}
 			if (this._isNonRetryableGeminiError(error)) {
 				throw new NonRetryableProviderError(

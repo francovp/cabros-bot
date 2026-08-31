@@ -16,6 +16,7 @@ jest.mock('../../src/services/grounding/config', () => ({
 const genaiClient = require('../../src/services/grounding/genaiClient');
 const sentryService = require('../../src/services/monitoring/SentryService');
 const geminiQuotaManager = require('../../src/services/grounding/geminiQuotaManager');
+const llmConcurrencyGate = require('../../src/services/llm/LlmConcurrencyGate');
 
 // Mock fetch globally
 global.fetch = jest.fn();
@@ -23,6 +24,7 @@ global.fetch = jest.fn();
 describe('GenaiClient robustness', () => {
 	beforeEach(() => {
 		geminiQuotaManager.resetForTesting();
+		llmConcurrencyGate.resetForTesting();
 		// Reset genAI to avoid using the real SDK in tests
 		genaiClient.genAI = { models: { generateContent: jest.fn().mockResolvedValue({}) } };
 		jest.resetAllMocks();
@@ -446,6 +448,103 @@ describe('GenaiClient robustness', () => {
 			}));
 			captureSpy.mockRestore();
 			llmSpy.mockRestore();
+		});
+	});
+
+	describe('search quota cooldown and concurrency gate ordering', () => {
+		it('triggers quota cooldown before releasing gate so queued LLM waiters observe the active cooldown', async () => {
+			genaiClient.llmConcurrencyGate.configure({ maxConcurrent: 1, queueTimeoutMs: 5000 });
+
+			let rejectFirstCall;
+			const firstCallPromise = new Promise((_, reject) => {
+				rejectFirstCall = reject;
+			});
+
+			genaiClient.genAI.models.generateContent = jest.fn()
+				.mockImplementationOnce(() => firstCallPromise)
+				.mockImplementation(() => Promise.resolve({ response: { candidates: [] } }));
+
+			const call1 = genaiClient.llmCall({ prompt: 'prompt1' });
+			const call2 = genaiClient.llmCall({ prompt: 'prompt2' });
+
+			// Let call1 acquire gate slot and call2 queue up in the gate
+			await new Promise(resolve => setImmediate(resolve));
+
+			const quotaError = new Error('RESOURCE_EXHAUSTED');
+			quotaError.status = 429;
+
+			// Reject call1 with quota error
+			rejectFirstCall(quotaError);
+
+			let call1Err = null;
+			let call2Err = null;
+			try {
+				await call1;
+			} catch (err) {
+				call1Err = err;
+			}
+			try {
+				await call2;
+			} catch (err) {
+				call2Err = err;
+			}
+
+			expect(call1Err).toBeDefined();
+			expect(call1Err.message).toContain('RESOURCE_EXHAUSTED');
+			expect(call2Err).toMatchObject({
+				code: 'GEMINI_QUOTA_EXHAUSTED',
+				status: 429,
+			});
+			expect(call2Err.message).toContain('Gemini quota cooldown active');
+			expect(geminiQuotaManager.isCooldownActive()).toBe(true);
+
+			genaiClient.llmConcurrencyGate.resetForTesting();
+		});
+
+		it('triggers quota cooldown before releasing gate so queued search waiters observe the active cooldown in _executeGoogleSearch', async () => {
+			genaiClient.llmConcurrencyGate.configure({ maxConcurrent: 1, queueTimeoutMs: 5000 });
+
+			let rejectFirstCall;
+			const firstCallPromise = new Promise((_, reject) => {
+				rejectFirstCall = reject;
+			});
+
+			genaiClient.genAI.models.generateContent = jest.fn()
+				.mockImplementationOnce(() => firstCallPromise)
+				.mockImplementation(() => Promise.resolve({ response: { candidates: [] } }));
+
+			const call1 = genaiClient._executeGoogleSearch('query1', 'model', 3, false);
+			const call2 = genaiClient._executeGoogleSearch('query2', 'model', 3, false);
+
+			// Let call1 acquire gate slot and call2 queue up in the gate
+			await new Promise(resolve => setImmediate(resolve));
+
+			const quotaError = new Error('RESOURCE_EXHAUSTED');
+			quotaError.status = 429;
+			rejectFirstCall(quotaError);
+
+			let call1Err = null;
+			let call2Err = null;
+			try {
+				await call1;
+			} catch (err) {
+				call1Err = err;
+			}
+			try {
+				await call2;
+			} catch (err) {
+				call2Err = err;
+			}
+
+			expect(call1Err).toBeDefined();
+			expect(call2Err).toMatchObject({
+				code: 'GEMINI_QUOTA_EXHAUSTED',
+				status: 429,
+			});
+			expect(call2Err.message).toContain('Gemini quota cooldown active');
+			expect(geminiQuotaManager.isCooldownActive()).toBe(true);
+
+			genaiClient.llmConcurrencyGate.resetForTesting();
 		});
 	});
 });
