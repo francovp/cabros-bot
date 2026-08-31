@@ -82,6 +82,12 @@ class LlmConcurrencyGate {
 			: this.queueTimeoutMs;
 		const signal = options.signal || null;
 
+		if (signal && signal.aborted) {
+			this._abortedTotal += 1;
+			const error = createAbortError('Caller aborted before acquiring', signal.reason);
+			throw error;
+		}
+
 		if (this._counter < this.maxConcurrent) {
 			this._counter += 1;
 			this._acquiredTotal += 1;

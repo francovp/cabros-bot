@@ -78,7 +78,34 @@ let templateVersion = null;
 let lastSuccessfulLoad = null;
 let lastErrorCategory = null;
 let refreshTimer = null;
+let expirationTimer = null;
 let loadingPromise = null;
+
+function clearExpirationTimer() {
+	if (expirationTimer) {
+		clearTimeout(expirationTimer);
+		expirationTimer = null;
+	}
+}
+
+function scheduleExpirationTimer(delayMs) {
+	clearExpirationTimer();
+	if (!isEnabled()) {
+		return;
+	}
+	const timeout = typeof delayMs === 'number' ? delayMs : getMaxAgeMs();
+	if (timeout <= 0) {
+		applyRuntimeConfig();
+		return;
+	}
+	expirationTimer = setTimeout(() => {
+		expirationTimer = null;
+		applyRuntimeConfig();
+	}, timeout + 1);
+	if (typeof expirationTimer.unref === 'function') {
+		expirationTimer.unref();
+	}
+}
 
 function isEnabled() {
 	return process.env.ENABLE_FIREBASE_REMOTE_CONFIG === 'true';
@@ -385,12 +412,14 @@ async function loadNow(options = {}) {
 				console.warn('[RemoteConfigService] Ignored invalid allow-listed value');
 			}
 			applyRuntimeConfig();
+			scheduleExpirationTimer(getMaxAgeMs());
 			return true;
 		} catch (error) {
 			remoteOverrides = {};
 			remoteLoadedAt = null;
 			lastErrorCategory = getErrorCategory(error);
 			console.warn('[RemoteConfigService] Remote Config load failed:', lastErrorCategory);
+			clearExpirationTimer();
 			applyRuntimeConfig();
 			return false;
 		} finally {
@@ -421,6 +450,7 @@ function stop() {
 		clearInterval(refreshTimer);
 		refreshTimer = null;
 	}
+	clearExpirationTimer();
 }
 
 function resetForTesting() {
@@ -447,5 +477,7 @@ module.exports = {
 		remoteOverrides = { ...overrides };
 		remoteLoadedAt = loadedAt;
 		applyRuntimeConfig();
+		const remainingMs = (loadedAt + getMaxAgeMs()) - Date.now();
+		scheduleExpirationTimer(remainingMs);
 	},
 };

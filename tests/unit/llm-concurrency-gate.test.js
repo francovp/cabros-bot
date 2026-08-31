@@ -222,6 +222,18 @@ describe('LlmConcurrencyGate - review feedback', () => {
 		expect(g.getSnapshot().queueDepth).toBe(0);
 	});
 
+	it('rejects immediately when caller signal is already aborted and capacity is available without taking a slot', async () => {
+		g.configure({ maxConcurrent: 5, queueTimeoutMs: 5000 });
+		const controller = new AbortController();
+		controller.abort(new Error('aborted-before-free-slot'));
+		await expect(g.acquire({ signal: controller.signal })).rejects.toMatchObject({
+			code: 'LLM_GATE_ABORTED',
+		});
+		expect(g.getSnapshot().abortedTotal).toBe(1);
+		expect(g.getSnapshot().inFlight).toBe(0);
+		expect(g.getSnapshot().acquiredTotal).toBe(0);
+	});
+
 	it('skips already-aborted waiters during drain', async () => {
 		g.configure({ maxConcurrent: 1, queueTimeoutMs: 5000 });
 		const release = await g.acquire();
