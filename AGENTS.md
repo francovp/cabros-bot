@@ -1541,3 +1541,46 @@ Binance 451 / `restricted location` errors are now classified as `binance_region
 - `BINANCE_DATA_BASE_URL` — Optional override for all Binance market-data REST calls. Default `https://api.binance.com` (preserves existing behavior when unset). Must be an http(s) URL; live trading also requires `https://`. Classified as **environment-only** for Remote Config parity (external destination; secrets/credentials/external-endpoint policy excludes it).
 
 No endpoint, OpenAPI, Postman, or Remote Config contract changed; the new env var follows the standard `environment-only` classification.
+
+## Persisted Gemini-Grounding Entry Price (GH-599 / Issue #599)
+
+Alert-enrichment now persists an optional numeric `current_price` (with optional `price_currency`) sourced from grounded snippets, propagates it through `AlertStorageService`, and uses it both as a deterministic entry-price fallback for `SignalOutcomeService.recordSignal()` and as the basis for a deterministic `risk_reward_ratio` recompute. The goal: 37/37 enriched alerts that previously had `risk_reward_ratio: 0%` and landed in `missing_entry_price` for BINANCE now become gradeable whenever grounding returns a price.
+
+**Core Components**:
+- `src/services/prompts/defaults/alert-enrichment.user.txt` — adds `current_price` (number, optional, `>0`) and `price_currency` (ISO-4217 string, optional) fields plus an "Entry price context" rubric that explicitly tells the model to omit the field when no snippet is available (omission is the preferred and correct output).
+- `src/services/prompts/PromptService.js` — `REQUIRED_ALERT_ENRICHMENT_RISK_FIELDS` is unchanged; the new fields are intentionally **excluded** from `inspectAlertEnrichmentRiskSchema()` so legacy Langfuse prompts that pre-date the change MUST NOT be flagged as drift. The prompt text now ships the markers, so newly synced prompts will start including them.
+- `src/services/grounding/gemini.js` — `parseOptionalCurrentPrice()` accepts finite positive numbers and clean numeric strings (`"3240.51"` → `3240.51`); rejects `0`, negatives, `NaN`, `Infinity`, booleans, and unparseable strings. `parseOptionalPriceCurrency()` normalizes the 2-5 letter ISO-4217-style code and drops invalid values without dropping the underlying `current_price`. `price_currency` is dropped entirely when `current_price` is absent.
+- `src/services/storage/AlertStorageService.js`:
+  - `sanitizeEnrichmentData()` now also strips invalid `current_price` / `price_currency` (same drop rules as the parser) so a stray bad value can never reach Firestore.
+  - `applyDeterministicRiskReward(enrichmentData, side)` computes `(target-entry)/(entry-invalidation)` for `BUY` and `(entry-target)/(invalidation-entry)` for `SELL` when entry/invalidation/target are all finite positives and `risk_reward_ratio` is missing or invalid. Existing model-supplied ratios are preserved untouched; the new `risk_reward_ratio_source: "computed"` field only appears when the service filled the value in.
+  - `formatAlertDocument()` and `formatExportRecord()` surface top-level `currentPrice` / `priceCurrency` mirrors so list/detail/export reads can address the field without diving into `enrichmentData`.
+  - `saveAlert()` accepts a `side` parameter (parsed from `parseTradingViewSignal`) so deterministic R:R math knows the trade direction.
+- `src/controllers/webhooks/handlers/alert/alert.js` — adds `extractGeminiGroundingPrice()` (only fires when `tradingViewEnrichmentApplied` is falsy AND `levelsSource` is not `'derived-quote'`/`'tradingview-mcp'`) and threads it through `signalOutcomeService.recordSignal()` with `priceSource: 'gemini-grounding'` after MCP and `price_data`. Also parses the TradingView signal up-front so the same `parsedSignal.side` is shared between `saveAlert` (for R:R math) and `recordSignal`. MCP preference is preserved (`tradingViewEnrichmentApplied=true` ⇒ MCP path wins).
+- `src/services/storage/SignalOutcomeService.js` — unchanged at the type level; the existing `entryPriceSource` field and `entryPriceSourceBreakdown` aggregation automatically pick up the new `'gemini-grounding'` bucket as soon as `recordSignal()` propagates it.
+
+**Configuration**:
+- No new environment variable. No Remote Config key. No new endpoint. No new feature flag. The change is purely additive and gated by the existing `ENABLE_GEMINI_GROUNDING` flag; when grounding is disabled the new fields never appear.
+
+**Where to look first when extending or debugging**:
+- `src/services/prompts/defaults/alert-enrichment.user.txt` for the schema/rubric.
+- `src/services/grounding/gemini.js` (`parseOptionalCurrentPrice`, `parseOptionalPriceCurrency`) for parser validation.
+- `src/services/storage/AlertStorageService.js` (`sanitizeEnrichmentData`, `applyDeterministicRiskReward`, `formatAlertDocument`, `formatExportRecord`) for the persistence contract.
+- `src/controllers/webhooks/handlers/alert/alert.js` (`extractGeminiGroundingPrice`, the up-front `parseTradingViewSignal` call, the threaded `side` on `saveAlert`) for the outcome-fallback and R:R wiring.
+- `tests/unit/gemini-client.test.js` (`current_price and price_currency parsing (GH-599)`), `tests/unit/alert-storage-service.test.js` (`current_price, price_currency, and deterministic R:R (GH-599)` + `current_price read fields (GH-599)`), `tests/unit/alert-webhook-request-id.test.js` (`GH-599 Gemini-grounding entry-price fallback for recordSignal`), and `tests/unit/prompt-service.test.js` (`GH-599: does NOT mark alert-enrichment prompt as drift when only current_price / price_currency are missing`) for coverage.
+
+**Coverage**:
+- `pnpm test -- tests/unit/gemini-client.test.js`
+- `pnpm test -- tests/unit/alert-storage-service.test.js`
+- `pnpm test -- tests/unit/alert-handler.test.js`
+- `pnpm test -- tests/unit/alert-webhook-request-id.test.js`
+- `pnpm test -- tests/unit/prompt-service.test.js`
+
+**Validation plan (per issue #599)**:
+1. Unit tests cover: prompt schema fixture with `current_price`; parser rejection of `0`, negative, `NaN`, strings; persistence propagation (`sanitizeEnrichmentData`, `applyDeterministicRiskReward`, read-API mirrors); signal-outcome fallback path; deterministic R:R math; `entryPriceSourceBreakdown` shape (verified by reading `entryPriceSource` field as a generic string and observing the new `'gemini-grounding'` bucket at the contract level — the existing `SignalOutcomeService` aggregation is unchanged).
+2. Production observation window (post-deploy): compare `riskMetadataCoverage.risk_reward_ratio.percentage` before/after (baseline 0%) and `eligibilityBreakdown.missing_entry_price` (baseline 10/38).
+
+**Rollout check**:
+- Pre-deploy: ensure the deployed Langfuse `alert-enrichment` prompt is synced to a version that includes the `current_price` and `price_currency` markers. Legacy prompts continue to work — `parseOptionalCurrentPrice` returns `undefined` when the field is absent and the rest of the pipeline is unchanged.
+- Post-deploy: confirm `GET /api/status` reports `geminiGrounding` ready, then observe `enrichment.riskMetadataCoverage.risk_reward_ratio.percentage` rise from baseline 0% toward the projected ceiling, and `entryPriceSourceBreakdown.gemini-grounding` start appearing in `GET /api/outcomes/summary`.
+
+No endpoint, OpenAPI, Postman, environment variable, or Remote Config contract changed; the change is a schema-only prompt update plus an additive optional field.

@@ -278,4 +278,35 @@ describe('PromptService', () => {
 		expect(prompt.missingRiskFields).toEqual([]);
 		expect(logger.warn).not.toHaveBeenCalled();
 	});
+
+	it('GH-599: does NOT mark alert-enrichment prompt as drift when only current_price / price_currency are missing', async () => {
+		process.env.ENABLE_LANGFUSE_PROMPTS = 'true';
+
+		const remotePrompt = {
+			version: 7,
+			compile: jest.fn().mockReturnValue([
+				{ role: 'system', content: 'You are an analyst.' },
+				{ role: 'user', content: 'Include invalidation_level, target_level, setup_type, and risk_reward_ratio. Use 0.9+ only with multiple corroborating sources; use 0.6-0.8 for partial evidence.' },
+			]),
+		};
+		const client = {
+			prompt: {
+				get: jest.fn().mockResolvedValue(remotePrompt),
+			},
+		};
+		const service = new PromptService({
+			logger,
+			clientProvider: jest.fn().mockResolvedValue(client),
+		});
+
+		const prompt = await service.getChatPrompt(
+			PromptKeys.ALERT_ENRICHMENT,
+			{ alertContext: 'Bitcoin alert context' },
+		);
+
+		expect(prompt.source).toBe('langfuse');
+		expect(prompt.schemaDriftDetected).toBe(false);
+		expect(prompt.missingRiskFields).toEqual([]);
+		expect(logger.warn).not.toHaveBeenCalled();
+	});
 });

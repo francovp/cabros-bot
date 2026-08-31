@@ -4031,6 +4031,20 @@
             "type": "integer",
             "minimum": 20001,
             "description": "Length of the original alert text in characters before the 20,000-character cap was applied."
+          },
+          "currentPrice": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Top-level mirror of enrichmentData.current_price when present and finite positive (GH-599 / CB-XXX). Sourced from Gemini grounding snippets when only the alert-enrichment prompt ran, and from TradingView MCP when tradingViewEnrichmentApplied is true."
+          },
+          "priceCurrency": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Top-level mirror of enrichmentData.price_currency when currentPrice is present (GH-599 / CB-XXX)."
           }
         }
       },
@@ -5310,7 +5324,25 @@
                       "number",
                       "null"
                     ],
-                    "description": "Current price supplied by TradingView MCP enrichment; null when unavailable."
+                    "description": "Current entry-price context. Sourced from TradingView MCP when tradingViewEnrichmentApplied is true; sourced from Gemini grounding snippets (alert-enrichment prompt response) when only Gemini enrichment ran (GH-599 / CB-XXX). Null when neither provider supplies a finite positive price."
+                  },
+                  "price_currency": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "ISO-4217-style currency code paired with current_price when supplied by Gemini grounding (e.g. \"USD\", \"USDT\"); null when current_price is absent or currency is not declared (GH-599 / CB-XXX)."
+                  },
+                  "risk_reward_ratio_source": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "enum": [
+                      "computed",
+                      null
+                    ],
+                    "description": "Set to 'computed' when risk_reward_ratio was deterministically derived from current_price / invalidation_level / target_level / side. Absent (or null) when the value came from the LLM or MCP provider (GH-599 / CB-XXX)."
                   },
                   "sentiment_score_raw": {
                     "type": "number",
