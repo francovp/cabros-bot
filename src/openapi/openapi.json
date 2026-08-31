@@ -5637,7 +5637,15 @@
               "string",
               "null"
             ],
-            "description": "Sanitized error category if the last load failed (e.g. load_failed, timed_out, unsupported, stale), or null."
+            "enum": [
+              "timeout",
+              "credentials",
+              "unsupported_sdk",
+              "load_failed",
+              "stale",
+              null
+            ],
+            "description": "Sanitized error category if the last load failed or values are stale (timeout, credentials, unsupported_sdk, load_failed, stale), or null."
           },
           "consecutiveFailures": {
             "type": "integer",
@@ -5646,12 +5654,12 @@
           },
           "refreshIntervalMs": {
             "type": "integer",
-            "minimum": 1000,
+            "minimum": 1,
             "description": "Configured background refresh interval in milliseconds."
           },
           "maxAgeMs": {
             "type": "integer",
-            "minimum": 1000,
+            "minimum": 1,
             "description": "Configured cache max age in milliseconds before values are considered stale."
           }
         }
