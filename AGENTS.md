@@ -1541,3 +1541,7 @@ Binance 451 / `restricted location` errors are now classified as `binance_region
 - `BINANCE_DATA_BASE_URL` — Optional override for all Binance market-data REST calls. Default `https://api.binance.com` (preserves existing behavior when unset). Must be an http(s) URL; live trading also requires `https://`. Classified as **environment-only** for Remote Config parity (external destination; secrets/credentials/external-endpoint policy excludes it).
 
 No endpoint, OpenAPI, Postman, or Remote Config contract changed; the new env var follows the standard `environment-only` classification.
+
+## API Key Timing-Safe Comparison (Issue #667)
+
+`src/lib/auth.js` now copies supplied and configured webhook API keys into fixed-size zero-padded buffers before `crypto.timingSafeEqual`, ensuring mismatched-length keys take the fixed-length comparison path without triggering weak-password-hash analysis. Values above the 4 KiB comparison ceiling are rejected after comparison. The middleware's redundant key extraction was removed. `tests/security/auth_check.test.js` covers the short-key regression; no environment, endpoint, OpenAPI, Postman, or Remote Config contract changed.
