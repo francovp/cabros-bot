@@ -49,7 +49,7 @@ function markFailed(component, error) {
 }
 
 function markComponent(component, status) {
-	if (state.status !== 'pending' || !state.components[component]) return getStatus();
+	if (state.status === 'failed' || !state.components[component]) return getStatus();
 	state.components[component] = { status };
 	if (COMPONENTS.every((name) => ['ready', 'disabled'].includes(state.components[name].status))) {
 		state.status = 'ready';
@@ -61,7 +61,7 @@ function markComponent(component, status) {
 }
 
 function fail(error) {
-	if (state.status !== 'pending') return getStatus();
+	if (state.status === 'failed') return getStatus();
 	state.status = 'failed';
 	state.ready = false;
 	state.failedAt = new Date().toISOString();

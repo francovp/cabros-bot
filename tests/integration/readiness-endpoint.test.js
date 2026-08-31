@@ -55,4 +55,24 @@ describe('GET /ready', () => {
 		expect(response.body.error).toContain('25ms');
 		jest.useRealTimers();
 	});
+
+	it('revokes readiness and returns 503 when a component fails after initially reporting ready', async () => {
+		bootstrapReadiness.begin({ telegramRequired: true, newsMonitorRequired: false });
+		bootstrapReadiness.markReady('notificationServices');
+		bootstrapReadiness.markReady('telegramBot');
+
+		const initialResponse = await request(app).get('/ready');
+		expect(initialResponse.status).toBe(200);
+		expect(initialResponse.body.status).toBe('ready');
+		expect(initialResponse.body.ready).toBe(true);
+
+		bootstrapReadiness.markFailed('telegramBot', new Error('late polling failure'));
+
+		const response = await request(app).get('/ready');
+		expect(response.status).toBe(503);
+		expect(response.body.status).toBe('failed');
+		expect(response.body.ready).toBe(false);
+		expect(response.body.components.telegramBot).toEqual({ status: 'failed' });
+		expect(response.body.error).toBe('late polling failure');
+	});
 });
