@@ -2,7 +2,7 @@ const express = require('express');
 const { setupTrustProxy } = require('./src/lib/trustProxy');
 
 const app = express();
-const cors = require('cors');
+const { createCorsMiddleware } = require('./src/lib/cors');
 const helmet = require('helmet');
 const { getOpenApiDocsRouter } = require('./src/openapi/docs');
 
@@ -16,7 +16,7 @@ app.use(express.text({ type: 'text/plain' }));
 app.use(express.json());
 
 // Configurar Cabeseras y CORS
-app.use(cors());
+app.use(createCorsMiddleware());
 
 // Use helmet for improved security
 const contentSecurityPolicy = helmet.contentSecurityPolicy.getDefaultDirectives();
