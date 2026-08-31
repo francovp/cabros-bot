@@ -38,6 +38,43 @@
     }
   ],
   "paths": {
+    "/healthcheck": {
+      "get": {
+        "tags": [
+          "Operations"
+        ],
+        "summary": "Service healthcheck",
+        "description": "Default behavior returns 200 with `uptime` JSON only. With `?deep=true`, the endpoint reuses the existing channel readiness logic from `/api/status` dependencies and returns 200 when every enabled channel is ready, 503 when any enabled channel is degraded (with `degradedChannels` and per-channel readiness). The endpoint is never API-key protected.",
+        "operationId": "getHealthcheck",
+        "parameters": [
+          {
+            "name": "deep",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "boolean" },
+            "description": "When `true`, include channel readiness and return 503 if any enabled channel is degraded."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Service is healthy.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/DeepHealthcheck" }
+              }
+            }
+          },
+          "503": {
+            "description": "One or more enabled channels are degraded.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/DeepHealthcheck" }
+              }
+            }
+          }
+        }
+      }
+    },
     "/ready": {
       "get": {
         "tags": [
@@ -3224,6 +3261,73 @@
       "JsonObject": {
         "type": "object",
         "additionalProperties": true
+      },
+      "DeepHealthcheck": {
+        "type": "object",
+        "required": [
+          "status",
+          "uptime",
+          "channels"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "healthy",
+              "degraded"
+            ]
+          },
+          "uptime": {
+            "type": "number"
+          },
+          "degradedChannels": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "telegram",
+                "whatsapp",
+                "discord"
+              ]
+            }
+          },
+          "channels": {
+            "type": "object",
+            "required": [
+              "telegram",
+              "whatsapp",
+              "discord"
+            ],
+            "properties": {
+              "telegram": { "$ref": "#/components/schemas/ChannelReadiness" },
+              "whatsapp": { "$ref": "#/components/schemas/ChannelReadiness" },
+              "discord": { "$ref": "#/components/schemas/ChannelReadiness" }
+            }
+          }
+        }
+      },
+      "ChannelReadiness": {
+        "type": "object",
+        "required": [
+          "enabled",
+          "ready",
+          "status"
+        ],
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "ready": { "type": "boolean" },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "misconfigured",
+              "disabled",
+              "error",
+              "unknown"
+            ]
+          },
+          "error": { "type": "string" }
+        }
       },
       "BootstrapReadiness": {
         "type": "object",
