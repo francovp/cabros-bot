@@ -5,10 +5,30 @@ const { MainClient } = require('binance');
 const sentryService = require('../../../../services/monitoring/SentryService');
 const equityMarketDataService = require('../../../../services/storage/EquityMarketDataService');
 
-const client = new MainClient({
+function resolveBinanceBaseUrl() {
+	const configured = process.env.BINANCE_DATA_BASE_URL;
+	if (typeof configured === 'string' && configured.trim() !== '') {
+		const trimmed = configured.trim();
+		if (/^https?:\/\//i.test(trimmed)) {
+			return trimmed;
+		}
+		console.warn(
+			`[fetchPriceCryptoSymbol] Ignoring BINANCE_DATA_BASE_URL="${configured}" — must be an http(s) URL. Falling back to https://api.binance.com.`,
+		);
+	}
+	return 'https://api.binance.com';
+}
+
+const clientOptions = {
 	// Optional (default: false) - when true, response strings are parsed to floats (only for known keys).
 	beautifyResponses: true,
-});
+};
+const baseUrl = resolveBinanceBaseUrl();
+if (baseUrl) {
+	clientOptions.baseUrl = baseUrl;
+}
+
+const client = new MainClient(clientOptions);
 
 const CRYPTO_QUOTE_SUFFIXES = ['USDT', 'USDC', 'BUSD', 'FDUSD', 'TUSD', 'BTC', 'ETH', 'BNB'];
 const FOREX_PAIRS = new Set(['USDCLP', 'EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'USDCHF', 'NZDUSD']);

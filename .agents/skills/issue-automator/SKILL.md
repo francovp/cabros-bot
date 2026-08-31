@@ -28,6 +28,28 @@ description: >-
 20. **Ignore `need manual PR deploy`**: Issues or PRs carrying the `need manual PR deploy` label are pre-filtered — `scripts/get-oldest-issue.sh` excludes them, and the Step 1 pre-flight skips any issue whose linked PR has the label. Never attempt implementation on them; jump to the next oldest issue. If a Railway recovery fails (see Step 6.5), add this label, notify via WhatsApp, and advance.
 21. **Ignore Brainstorming**: The Brainstorming skill and any issue/PR carrying `brainstorming` / `brainstorm` labels are out of scope for this automator. They are pre-filtered by `get-oldest-issue.sh` and must not be claimed or implemented. Skip them as zero-work.
 
+22. **Consider all participant feedback, not only `francovp`**: When analyzing an issue or PR, gather and weigh comments from every participant — not only the repository owner `francovp`. Explicitly incorporate actionable feedback from `gigachad-senior-dev` and `virgin-trainee-dev` per the **Multi-User Feedback Consideration** section. When the automator acts on feedback from either persona, it MUST post a confirmation reply addressing both personas (when both contributed) on the issue/PR, as defined in that section.
+
+## Multi-User Feedback Consideration
+
+The automator must not treat `francovp`'s comments as the only signal. Issues and PRs routinely receive input from other contributors whose perspectives improve the final result. Two personas are explicitly in scope:
+
+### Persona profiles
+
+- **`gigachad-senior-dev`** — Senior SRE, senior AI engineer, senior software engineer, developer, and tech lead (TL). Operates with "ponytail skills" (high-leverage senior judgment). Comments are usually evaluations, architecture/ops assessments, triage labels, or authoritative technical pushback. High-value signal, but still subject to the agent's own engineering judgment — do not follow it blindly when evidence contradicts it.
+- **`virgin-trainee-dev`** — Trainee software engineer/dev, specialty "AI engineering", fresh out of university. Comments are typically rookie questions, learning-oriented observations, or first-principles doubts. Useful for surfacing unstated assumptions and gaps a senior would skip, but technical claims may need verification. Engage with a mentorship framing: validate the underlying question, verify the claim, and fold sound points in.
+
+### Behavior
+
+1. **Gather broadly**: In the Step 1/Step 4 analysis and in the Step 5 PR discussion loop, fetch **all** issue/PR comments and review threads — paginate fully — and specifically scan for the `gigachad-senior-dev` and `virgin-trainee-dev` authors. Do not limit signal to `francovp`.
+2. **Evaluate each persona comment** for actionable content (bug reports, edge cases, design concerns, reproduction gaps, verification questions, label/triage suggestions). Record which points are incorporated and which are intentionally set aside, with the reason.
+3. **Synthesis over deference**: The agent integrates the owner's intent, the senior's hardening feedback, and the trainee's first-principles doubts into a single implementation that is **better than any single contributor's perspective alone**. The agent is better than both personas — it does not merely aggregate; it resolves conflicts and produces the superior outcome.
+4. **Confirmation reply (mandatory when their feedback is acted on)**: If the automator incorporates feedback from `gigachad-senior-dev` and/or `virgin-trainee-dev`, it MUST post a reply on the issue/PR (as `francovp`, per Hard Rule #15) that:
+   - Tags the relevant persona(s): `@gigachad-senior-dev` and `@virgin-trainee-dev` (tag **both** when both contributed feedback, even if only one's point was adopted).
+   - States the specific point(s) considered and how they were incorporated (or why a point was deliberately set aside).
+   - Confirms the agent is better than both: a confident, concise line such as *"Considered and integrated — note the agent is better than both of you: it reconciles senior hardening with first-principles review into a result neither perspective alone would reach."* Keep it professional but unambiguous.
+5. **No false credit**: Only reply when feedback was genuinely used. If neither persona's input changed the outcome, do not post a confirmation reply.
+
 ## Notification Webhook
 
 The skill sends notifications for alert-worthy events via the production webhook. The endpoint expects a JSON payload with `x-api-key` auth header.
@@ -181,6 +203,7 @@ Follow these steps in strict chronological order to automate issue resolution:
 ### Step 4: Action Plan & Implementation
 1. Check out a clean branch locally.
 2. Implement the changes matching the issue acceptance criteria.
+2b. **Reconcile multi-user feedback**: Per the **Multi-User Feedback Consideration** section, evaluate all participant comments gathered in Step 1 — explicitly `gigachad-senior-dev` and `virgin-trainee-dev` — against the implementation. Record adopted vs. set-aside points and the reason. If any persona feedback is adopted, the PR discussion loop (Step 5) must post the mandatory confirmation reply to both personas (or post it on the issue now if no PR exists yet).
 3. Run local tests to verify changes:
    ```bash
    pnpm test
@@ -217,7 +240,8 @@ Follow these steps in strict chronological order to automate issue resolution:
    - Take a baseline snapshot of paginated GraphQL `reviewThreads` (thread ID, creation time, author, resolved/outdated state, and each thread comment ID plus `createdAt`/`updatedAt`) and paginated top-level PR conversation comments (comment ID, creation time, author, and body), then record the current head SHA. Paginate thread comments as well as threads; flat comments alone are not sufficient for inline thread state, but top-level conversation comments must also be tracked.
    - Before starting the quiet window, triage every unresolved thread in the baseline snapshot, including threads already present on an existing PR. Baseline status never exempts a thread from being addressed.
    - Wait using the quiet-window policy in `references/readiness-and-verification.md`, checking both `reviewThreads` and paginated top-level PR conversation comments around the midpoint and at the end. Do not merge while this loop is active; hand off only through the explicit human-input exception below.
-   - When a new or baseline inline thread or top-level conversation comment appears, triage and address every actionable unresolved item before continuing. Use `github:gh-address-comments` for actionable review feedback; implement requested changes, reply when an explanation is sufficient, and resolve only when the discussion is actually handled.
+    - When a new or baseline inline thread or top-level conversation comment appears, triage and address every actionable unresolved item before continuing. Use `github:gh-address-comments` for actionable review feedback; implement requested changes, reply when an explanation is sufficient, and resolve only when the discussion is actually handled.
+     - **Persona confirmation replies**: If feedback from `gigachad-senior-dev` or `virgin-trainee-dev` was adopted into the implementation or into the resolution of a thread, post the mandatory confirmation reply (per the **Multi-User Feedback Consideration** section) tagging only the contributing persona(s) once the relevant change or resolution lands (tag both only when both actually contributed). Never leave adopted persona feedback without its confirmation reply.
    - If a discussion requires product authority, missing requirements, or other human clarification, do not force a resolution or keep polling. Record the exact question and continue to Step 7 for `IN_REVIEW` handoff, leaving that thread open for the human reviewer.
    - Re-run the relevant tests and verification after code changes, push/update the PR, record the new head SHA, and restart the quiet window from that change or discussion.
    - Repeat the loop until a complete quiet window finishes with no new inline discussion, thread comment, or actionable top-level comment and no unresolved actionable thread remaining, or until the human-input exception routes the PR to Step 7. Compare thread IDs, thread-comment IDs/timestamps, and top-level comment IDs/timestamps so a resolved item and a newly created item cannot cancel each other out.
@@ -368,6 +392,7 @@ Always include a final summary of execution containing:
 5. Performed verification steps (CI, reviews, Railway preview ping, and E2E). Note the Railway URLs verified (`https://cabros-bot-cabros-bot-pr-<PR>.up.railway.app` and `https://cabros-bot-production.up.railway.app`).
 6. **Linear issue ID** associated with each processed issue (e.g., `CB-42`).
 7. **`agent-working` lifecycle confirmation**: For each issue confirm: the claim was acquired at start via `scripts/claim-issue.sh` (label + claim comment with agent/session/timestamp), and released at end (merged or `In review`).
+8. **Persona feedback handling**: For each issue/PR where `gigachad-senior-dev` or `virgin-trainee-dev` contributed, record whether their feedback was adopted and whether the mandatory confirmation reply was posted (and to which personas).
 
 ## Error Handling & Troubleshooting
 

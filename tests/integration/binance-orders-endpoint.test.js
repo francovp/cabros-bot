@@ -621,4 +621,162 @@ describe('Binance orders API', () => {
 			});
 		});
 	});
+
+	describe('DELETE /api/trading/binance/orders', () => {
+		it('requires operator authentication before touching Binance', async () => {
+			const response = await request(app)
+				.delete('/api/trading/binance/orders')
+				.send({ symbol: 'BTCUSDT', orderId: 42 })
+				.expect(401);
+
+			expect(response.body.error).toContain('Missing API key');
+			expect(MainClient).not.toHaveBeenCalled();
+		});
+
+		it('fails closed when no operator authentication mechanism is configured', async () => {
+			delete process.env.WEBHOOK_API_KEY;
+			delete process.env.ENABLE_FIREBASE_ADMIN_AUTH;
+
+			const response = await request(app)
+				.delete('/api/trading/binance/orders')
+				.send({ symbol: 'BTCUSDT', orderId: 42 })
+				.expect(503);
+
+			expect(response.body.code).toBe('ADMIN_AUTH_UNAVAILABLE');
+			expect(MainClient).not.toHaveBeenCalled();
+		});
+
+		it('fails closed when the feature is disabled', async () => {
+			process.env.ENABLE_BINANCE_TRADING = 'false';
+
+			const response = await request(app)
+				.delete('/api/trading/binance/orders')
+				.set('x-api-key', 'test-key')
+				.send({ symbol: 'BTCUSDT', orderId: 42 })
+				.expect(403);
+
+			expect(response.body.code).toBe('FEATURE_DISABLED');
+			expect(MainClient).not.toHaveBeenCalled();
+		});
+
+		it('cancels a resting order via orderId and returns a sanitized response', async () => {
+			client.cancelOrder = jest.fn().mockResolvedValue({
+				symbol: 'BTCUSDT',
+				orderId: 42,
+				clientOrderId: 'cabros-574-1',
+				status: 'CANCELED',
+				type: 'LIMIT',
+				side: 'SELL',
+				price: '60000.00000000',
+				origQty: '0.00100000',
+				executedQty: '0.00000000',
+				secret: 'must-not-leak',
+			});
+
+			const response = await request(app)
+				.delete('/api/trading/binance/orders')
+				.set('x-api-key', 'test-key')
+				.send({ symbol: 'BTCUSDT', orderId: 42 })
+				.expect(200);
+
+			expect(client.cancelOrder).toHaveBeenCalledWith({ symbol: 'BTCUSDT', orderId: 42 });
+			expect(response.body).toMatchObject({
+				success: true,
+				cancelled: true,
+				environment: 'testnet',
+				order: {
+					symbol: 'BTCUSDT',
+					orderId: 42,
+					clientOrderId: 'cabros-574-1',
+					status: 'CANCELED',
+				},
+			});
+			expect(response.body.order.secret).toBeUndefined();
+		});
+
+		it('cancels a resting order via origClientOrderId', async () => {
+			client.cancelOrder = jest.fn().mockResolvedValue({
+				symbol: 'BTCUSDT',
+				orderId: 99,
+				clientOrderId: 'cabros-574-2',
+				status: 'CANCELED',
+			});
+
+			const response = await request(app)
+				.delete('/api/trading/binance/orders')
+				.set('x-api-key', 'test-key')
+				.send({ symbol: 'BTCUSDT', origClientOrderId: 'cabros-574-2' })
+				.expect(200);
+
+			expect(client.cancelOrder).toHaveBeenCalledWith({
+				symbol: 'BTCUSDT',
+				origClientOrderId: 'cabros-574-2',
+			});
+			expect(response.body.order.clientOrderId).toBe('cabros-574-2');
+		});
+
+		it('returns 404 when the order is already terminal on Binance', async () => {
+			client.cancelOrder = jest.fn().mockRejectedValue({
+				code: -2011,
+				message: 'Unknown order sent.',
+			});
+
+			const response = await request(app)
+				.delete('/api/trading/binance/orders')
+				.set('x-api-key', 'test-key')
+				.send({ symbol: 'BTCUSDT', orderId: 42 })
+				.expect(404);
+
+			expect(response.body).toMatchObject({
+				success: false,
+				code: 'ORDER_NOT_FOUND',
+				error: 'Binance order not found',
+			});
+		});
+
+		it('returns 400 when the request supplies neither orderId nor origClientOrderId', async () => {
+			const response = await request(app)
+				.delete('/api/trading/binance/orders')
+				.set('x-api-key', 'test-key')
+				.send({ symbol: 'BTCUSDT' })
+				.expect(400);
+
+			expect(response.body.code).toBe('INVALID_ORDER_REQUEST');
+			expect(MainClient).not.toHaveBeenCalled();
+		});
+
+		it('returns 400 when the request supplies both orderId and origClientOrderId', async () => {
+			const response = await request(app)
+				.delete('/api/trading/binance/orders')
+				.set('x-api-key', 'test-key')
+				.send({ symbol: 'BTCUSDT', orderId: 42, origClientOrderId: 'cabros-574-both' })
+				.expect(400);
+
+			expect(response.body.code).toBe('INVALID_ORDER_REQUEST');
+			expect(MainClient).not.toHaveBeenCalled();
+		});
+
+		it('returns 400 when the symbol is not in the configured allow-list', async () => {
+			const response = await request(app)
+				.delete('/api/trading/binance/orders')
+				.set('x-api-key', 'test-key')
+				.send({ symbol: 'ETHUSDT', orderId: 42 })
+				.expect(400);
+
+			expect(response.body.error).toContain('not allowed for Binance trading');
+			expect(MainClient).not.toHaveBeenCalled();
+		});
+
+		it('returns 502 when the Binance provider fails transiently', async () => {
+			client.cancelOrder = jest.fn().mockRejectedValue(new Error('ETIMEDOUT'));
+
+			const response = await request(app)
+				.delete('/api/trading/binance/orders')
+				.set('x-api-key', 'test-key')
+				.send({ symbol: 'BTCUSDT', orderId: 42 })
+				.expect(502);
+
+			expect(response.body.code).toBe('BINANCE_QUERY_FAILED');
+		});
+	});
 });

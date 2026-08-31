@@ -1145,6 +1145,98 @@ describe('BinanceOrderService', () => {
 		expect(client.submitNewOrder).toHaveBeenCalledTimes(1);
 	});
 
+	describe('BINANCE_DATA_BASE_URL forwarding', () => {
+		it('forwards configured BINANCE_DATA_BASE_URL to the live Binance client', async () => {
+			process.env.ENABLE_BINANCE_TRADING = 'true';
+			process.env.BINANCE_API_KEY = 'test-api-key';
+			process.env.BINANCE_API_SECRET = 'test-api-secret';
+			process.env.BINANCE_TRADING_ENV = 'live';
+			process.env.BINANCE_TRADING_ALLOWED_SYMBOLS = 'BTCUSDT';
+			process.env.BINANCE_TRADING_MAX_NOTIONAL = '1000';
+			process.env.BINANCE_DATA_BASE_URL = 'https://api1.binance.com';
+
+			const client = {
+				getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
+				submitNewOrder: jest.fn().mockResolvedValue({ orderId: 1, status: 'FILLED' }),
+			};
+			MainClient.mockClear().mockImplementation(() => client);
+
+			await binanceOrderService.placeOrder({
+				symbol: 'BTCUSDT',
+				side: 'BUY',
+				type: 'LIMIT',
+				quantity: '0.1',
+				price: '100',
+				idempotencyKey: 'idem-base-url-live',
+				dryRun: false,
+			});
+
+			expect(MainClient).toHaveBeenCalledWith(expect.objectContaining({
+				baseUrl: 'https://api1.binance.com',
+			}), expect.any(Object));
+		});
+
+		it('keeps default testnet host for testnet environment when BINANCE_DATA_BASE_URL is set', async () => {
+			process.env.ENABLE_BINANCE_TRADING = 'true';
+			process.env.BINANCE_API_KEY = 'test-api-key';
+			process.env.BINANCE_API_SECRET = 'test-api-secret';
+			process.env.BINANCE_TRADING_ENV = 'testnet';
+			process.env.BINANCE_TRADING_ALLOWED_SYMBOLS = 'BTCUSDT';
+			process.env.BINANCE_TRADING_MAX_NOTIONAL = '1000';
+			process.env.BINANCE_DATA_BASE_URL = 'https://api1.binance.com';
+
+			const client = {
+				getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
+				submitNewOrder: jest.fn().mockResolvedValue({ orderId: 1, status: 'FILLED' }),
+			};
+			MainClient.mockClear().mockImplementation(() => client);
+
+			await binanceOrderService.placeOrder({
+				symbol: 'BTCUSDT',
+				side: 'BUY',
+				type: 'LIMIT',
+				quantity: '0.1',
+				price: '100',
+				idempotencyKey: 'idem-base-url-testnet',
+				dryRun: false,
+			});
+
+			expect(MainClient).toHaveBeenCalledWith(expect.objectContaining({
+				baseUrl: 'https://testnet.binance.vision',
+			}), expect.any(Object));
+		});
+
+		it('falls back to default live Binance base URL when BINANCE_DATA_BASE_URL is malformed', async () => {
+			process.env.ENABLE_BINANCE_TRADING = 'true';
+			process.env.BINANCE_API_KEY = 'test-api-key';
+			process.env.BINANCE_API_SECRET = 'test-api-secret';
+			process.env.BINANCE_TRADING_ENV = 'live';
+			process.env.BINANCE_TRADING_ALLOWED_SYMBOLS = 'BTCUSDT';
+			process.env.BINANCE_TRADING_MAX_NOTIONAL = '1000';
+			process.env.BINANCE_DATA_BASE_URL = 'not-a-url';
+
+			const client = {
+				getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
+				submitNewOrder: jest.fn().mockResolvedValue({ orderId: 1, status: 'FILLED' }),
+			};
+			MainClient.mockClear().mockImplementation(() => client);
+
+			await binanceOrderService.placeOrder({
+				symbol: 'BTCUSDT',
+				side: 'BUY',
+				type: 'LIMIT',
+				quantity: '0.1',
+				price: '100',
+				idempotencyKey: 'idem-base-url-malformed',
+				dryRun: false,
+			});
+
+			expect(MainClient).toHaveBeenCalledWith(expect.objectContaining({
+				baseUrl: 'https://api.binance.com',
+			}), expect.any(Object));
+		});
+	});
+
 	describe('getOrders', () => {
 		it('rejects disabled trading before constructing a Binance client', async () => {
 			delete process.env.ENABLE_BINANCE_TRADING;
@@ -1439,6 +1531,220 @@ describe('BinanceOrderService', () => {
 				code: 'BINANCE_QUERY_FAILED',
 				statusCode: 502,
 			});
+		});
+	});
+
+	describe('cancelOrder', () => {
+		it('rejects disabled trading before constructing a Binance client', async () => {
+			delete process.env.ENABLE_BINANCE_TRADING;
+			const createClient = jest.fn();
+			const service = createBinanceOrderService({ createClient });
+
+			await expect(service.cancelOrder({
+				symbol: 'BTCUSDT',
+				orderId: 42,
+			})).rejects.toMatchObject({ code: 'FEATURE_DISABLED', statusCode: 403 });
+
+			expect(createClient).not.toHaveBeenCalled();
+		});
+
+		it('rejects misconfigured trading before constructing a Binance client', async () => {
+			delete process.env.BINANCE_TRADING_MAX_NOTIONAL;
+			const createClient = jest.fn();
+			const service = createBinanceOrderService({ createClient });
+
+			await expect(service.cancelOrder({
+				symbol: 'BTCUSDT',
+				orderId: 42,
+			})).rejects.toMatchObject({ code: 'BINANCE_TRADING_UNAVAILABLE', statusCode: 503 });
+
+			expect(createClient).not.toHaveBeenCalled();
+		});
+
+		it('rejects symbols outside the allow-list before touching Binance', async () => {
+			const createClient = jest.fn();
+			const service = createBinanceOrderService({ createClient });
+
+			await expect(service.cancelOrder({
+				symbol: 'ETHUSDT',
+				orderId: 42,
+			})).rejects.toMatchObject({
+				code: 'INVALID_ORDER_REQUEST',
+				statusCode: 400,
+			});
+
+			expect(createClient).not.toHaveBeenCalled();
+		});
+
+		it('rejects missing symbol before touching Binance', async () => {
+			const createClient = jest.fn();
+			const service = createBinanceOrderService({ createClient });
+
+			await expect(service.cancelOrder({
+				orderId: 42,
+			})).rejects.toMatchObject({ code: 'INVALID_ORDER_REQUEST', statusCode: 400 });
+
+			expect(createClient).not.toHaveBeenCalled();
+		});
+
+		it('rejects ambiguous bodies missing both orderId and origClientOrderId', async () => {
+			const createClient = jest.fn();
+			const service = createBinanceOrderService({ createClient });
+
+			await expect(service.cancelOrder({
+				symbol: 'BTCUSDT',
+			})).rejects.toMatchObject({ code: 'INVALID_ORDER_REQUEST', statusCode: 400 });
+
+			expect(createClient).not.toHaveBeenCalled();
+		});
+
+		it('rejects bodies that supply both orderId and origClientOrderId', async () => {
+			const createClient = jest.fn();
+			const service = createBinanceOrderService({ createClient });
+
+			await expect(service.cancelOrder({
+				symbol: 'BTCUSDT',
+				orderId: 42,
+				origClientOrderId: 'cabros-574-1',
+			})).rejects.toMatchObject({ code: 'INVALID_ORDER_REQUEST', statusCode: 400 });
+
+			expect(createClient).not.toHaveBeenCalled();
+		});
+
+		it('rejects unknown body fields before touching Binance', async () => {
+			const createClient = jest.fn();
+			const service = createBinanceOrderService({ createClient });
+
+			await expect(service.cancelOrder({
+				symbol: 'BTCUSDT',
+				orderId: 42,
+				quantity: 0.5,
+			})).rejects.toMatchObject({ code: 'INVALID_ORDER_REQUEST', statusCode: 400 });
+
+			expect(createClient).not.toHaveBeenCalled();
+		});
+
+		it('cancels a resting order by orderId and returns a sanitized response', async () => {
+			const client = {
+				cancelOrder: jest.fn().mockResolvedValue({
+					symbol: 'BTCUSDT',
+					orderId: 42,
+					clientOrderId: 'cabros-574-1',
+					status: 'CANCELED',
+					type: 'LIMIT',
+					side: 'SELL',
+					origQty: '0.1',
+					executedQty: '0',
+					price: '60000.00',
+					secret: 'must-not-leak',
+				}),
+			};
+			const service = createBinanceOrderService({ createClient: () => client });
+
+			const result = await service.cancelOrder({
+				symbol: 'BTCUSDT',
+				orderId: 42,
+			});
+
+			expect(client.cancelOrder).toHaveBeenCalledWith({ symbol: 'BTCUSDT', orderId: 42 });
+			expect(result).toEqual({
+				success: true,
+				environment: 'testnet',
+				cancelled: true,
+				order: {
+					symbol: 'BTCUSDT',
+					orderId: 42,
+					clientOrderId: 'cabros-574-1',
+					status: 'CANCELED',
+					type: 'LIMIT',
+					side: 'SELL',
+					origQty: '0.1',
+					executedQty: '0',
+					price: '60000.00',
+				},
+			});
+			expect(result.order.secret).toBeUndefined();
+		});
+
+		it('cancels a resting order by origClientOrderId', async () => {
+			const client = {
+				cancelOrder: jest.fn().mockResolvedValue({
+					symbol: 'BTCUSDT',
+					orderId: 99,
+					clientOrderId: 'cabros-574-2',
+					status: 'CANCELED',
+				}),
+			};
+			const service = createBinanceOrderService({ createClient: () => client });
+
+			const result = await service.cancelOrder({
+				symbol: 'BTCUSDT',
+				origClientOrderId: 'cabros-574-2',
+			});
+
+			expect(client.cancelOrder).toHaveBeenCalledWith({
+				symbol: 'BTCUSDT',
+				origClientOrderId: 'cabros-574-2',
+			});
+			expect(result.order.clientOrderId).toBe('cabros-574-2');
+			expect(result.cancelled).toBe(true);
+		});
+
+		it('maps the Binance -2011 already-terminal error to ORDER_NOT_FOUND (404)', async () => {
+			const client = {
+				cancelOrder: jest.fn().mockRejectedValue({
+					code: -2011,
+					message: 'Unknown order sent.',
+				}),
+			};
+			const service = createBinanceOrderService({ createClient: () => client });
+
+			await expect(service.cancelOrder({
+				symbol: 'BTCUSDT',
+				orderId: 42,
+			})).rejects.toMatchObject({ code: 'ORDER_NOT_FOUND', statusCode: 404 });
+		});
+
+		it('maps the Binance -2013 unknown order error to ORDER_NOT_FOUND (404)', async () => {
+			const client = {
+				cancelOrder: jest.fn().mockRejectedValue({
+					code: -2013,
+					message: 'Unknown order sent.',
+				}),
+			};
+			const service = createBinanceOrderService({ createClient: () => client });
+
+			await expect(service.cancelOrder({
+				symbol: 'BTCUSDT',
+				origClientOrderId: 'cabros-574-3',
+			})).rejects.toMatchObject({ code: 'ORDER_NOT_FOUND', statusCode: 404 });
+		});
+
+		it('maps a definitive Binance rejection to BINANCE_REQUEST_REJECTED (400)', async () => {
+			const client = {
+				cancelOrder: jest.fn().mockRejectedValue({
+					code: -1015,
+					message: 'Too many requests',
+				}),
+			};
+			const service = createBinanceOrderService({ createClient: () => client });
+
+			await expect(service.cancelOrder({
+				symbol: 'BTCUSDT',
+				orderId: 42,
+			})).rejects.toMatchObject({ code: 'BINANCE_REQUEST_REJECTED', statusCode: 400 });
+		});
+
+		it('maps a transient provider failure to BINANCE_QUERY_FAILED (502)', async () => {
+			const client = {
+				cancelOrder: jest.fn().mockRejectedValue(new Error('ETIMEDOUT')),
+			};
+			const service = createBinanceOrderService({ createClient: () => client });
+
+			await expect(service.cancelOrder({
+				symbol: 'BTCUSDT',
+				orderId: 42,
+			})).rejects.toMatchObject({ code: 'BINANCE_QUERY_FAILED', statusCode: 502 });
 		});
 	});
 });

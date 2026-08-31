@@ -79,6 +79,75 @@ services:
   envVars:
   - key: JOB_EXECUTION_MODE
     value: render-worker
+  - key: ENABLE_NOTIFICATION_REDRIVE
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: ENABLE_NOTIFICATION_REDRIVE
+  - key: NOTIFICATION_REDRIVE_WORKER_ROLE
+    value: worker
+  - key: NOTIFICATION_REDRIVE_INTERVAL_MS
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: NOTIFICATION_REDRIVE_INTERVAL_MS
+  - key: NOTIFICATION_REDRIVE_BATCH_LIMIT
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: NOTIFICATION_REDRIVE_BATCH_LIMIT
+  - key: NOTIFICATION_REDRIVE_MAX_ATTEMPTS
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: NOTIFICATION_REDRIVE_MAX_ATTEMPTS
+  - key: NOTIFICATION_REDRIVE_MAX_AGE_MS
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: NOTIFICATION_REDRIVE_MAX_AGE_MS
+  - key: ENABLE_NEWS_MONITOR
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: ENABLE_NEWS_MONITOR
+  - key: ENABLE_NEWS_MONITOR_SCHEDULER
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: ENABLE_NEWS_MONITOR_SCHEDULER
+  - key: NEWS_MONITOR_SCHEDULER_WORKER_ROLE
+    value: worker
+  - key: NEWS_MONITOR_SCHEDULER_INTERVAL_MS
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: NEWS_MONITOR_SCHEDULER_INTERVAL_MS
+  - key: NEWS_MONITOR_SCHEDULER_BATCH_LIMIT
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: NEWS_MONITOR_SCHEDULER_BATCH_LIMIT
+  - key: NEWS_MONITOR_SCHEDULER_LEASE_MS
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: NEWS_MONITOR_SCHEDULER_LEASE_MS
+  - key: NEWS_MONITOR_SCHEDULER_TIMEOUT_MS
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: NEWS_MONITOR_SCHEDULER_TIMEOUT_MS
+  - key: NEWS_SYMBOLS_CRYPTO
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: NEWS_SYMBOLS_CRYPTO
+  - key: NEWS_SYMBOLS_STOCKS
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: NEWS_SYMBOLS_STOCKS
   - key: ENABLE_FIRESTORE_JOB_STORAGE
     value: true
   - key: REDIS_URL

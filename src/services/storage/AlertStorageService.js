@@ -83,7 +83,8 @@ function canInitializeFirestore() {
 		|| process.env.ENABLE_FIRESTORE_JOB_STORAGE === 'true'
 		|| process.env.ENABLE_SIGNAL_OUTCOME_TRACKING === 'true'
 		|| process.env.ENABLE_FIREBASE_REMOTE_CONFIG === 'true'
-		|| process.env.ENABLE_NOTIFICATION_REDRIVE === 'true';
+		|| process.env.ENABLE_NOTIFICATION_REDRIVE === 'true'
+		|| process.env.ENABLE_NEWS_MONITOR_SCHEDULER === 'true';
 }
 
 function getAlertStorageRetentionDays() {
@@ -190,6 +191,9 @@ function formatAlertDocument(doc) {
 	if (VALID_TRADINGVIEW_ENRICHMENT_STATUSES.has(data.tradingViewEnrichmentStatus)) {
 		docObj.tradingViewEnrichmentStatus = data.tradingViewEnrichmentStatus;
 	}
+	if (data.suppressedRepeat === true) {
+		docObj.suppressedRepeat = true;
+	}
 	if (typeof data.eventCategory === 'string') {
 		docObj.eventCategory = data.eventCategory;
 	}
@@ -198,6 +202,18 @@ function formatAlertDocument(doc) {
 	}
 	if (typeof data.sentimentScore === 'number' && Number.isFinite(data.sentimentScore)) {
 		docObj.sentimentScore = data.sentimentScore;
+	}
+	if (typeof data.telegramChatId === 'string' && data.telegramChatId.trim()) {
+		docObj.telegramChatId = data.telegramChatId.trim();
+	}
+	if (typeof data.telegramThreadId === 'number' && Number.isSafeInteger(data.telegramThreadId) && data.telegramThreadId >= 0) {
+		docObj.telegramThreadId = data.telegramThreadId;
+	}
+	if (typeof data.whatsappChatId === 'string' && data.whatsappChatId.trim()) {
+		docObj.whatsappChatId = data.whatsappChatId.trim();
+	}
+	if (typeof data.discordWebhookUrl === 'string' && data.discordWebhookUrl.trim()) {
+		docObj.discordWebhookUrl = data.discordWebhookUrl.trim();
 	}
 	if (typeof data.dedupStatus === 'string') {
 		docObj.dedupStatus = data.dedupStatus;
@@ -836,6 +852,13 @@ function createInvalidCursorError() {
 }
 
 function buildParsedCursorTimestamp(parsedCursor) {
+	if (parsedCursor && parsedCursor.timestamp
+		&& typeof admin.firestore.Timestamp.fromSeconds === 'function') {
+		return admin.firestore.Timestamp.fromSeconds(
+			parsedCursor.timestamp.seconds,
+			parsedCursor.timestamp.nanoseconds,
+		);
+	}
 	return admin.firestore.Timestamp.fromDate(new Date(parsedCursor.receivedAt));
 }
 
@@ -954,6 +977,7 @@ async function saveAlertInternal({
 	useTradingViewData,
 	tradingViewEnrichmentApplied,
 	tradingViewEnrichmentStatus,
+	suppressedRepeat,
 	processingTimeMs,
 	source,
 	eventCategory,
@@ -961,6 +985,11 @@ async function saveAlertInternal({
 	sentimentScore,
 	dedupStatus,
 	requestId,
+	telegramChatId,
+	telegramThreadId,
+	whatsappChatId,
+	discordWebhookUrl,
+	routing,
 }) {
 	if (!isEnabled()) {
 		return null;
@@ -975,6 +1004,13 @@ async function saveAlertInternal({
 		const extracted = extractSymbolAndExchange({ text, symbol, exchange, enrichmentData });
 		const rawText = typeof text === 'string' ? text : '';
 		const truncated = rawText.length > MAX_ALERT_TEXT_LENGTH;
+		const effectiveTelegramChatId = telegramChatId || (routing && routing.telegramChatId);
+		const effectiveTelegramThreadId = telegramThreadId !== undefined
+			? telegramThreadId
+			: (routing && routing.telegramThreadId !== undefined ? routing.telegramThreadId : undefined);
+		const effectiveWhatsappChatId = whatsappChatId || (routing && routing.whatsappChatId);
+		const effectiveDiscordWebhookUrl = discordWebhookUrl || (routing && routing.discordWebhookUrl);
+
 		const document = {
 			receivedAt: admin.firestore.FieldValue.serverTimestamp(),
 			expiresAt: buildRetentionExpiryTimestamp(),
@@ -1000,6 +1036,10 @@ async function saveAlertInternal({
 		if (VALID_TRADINGVIEW_ENRICHMENT_STATUSES.has(tradingViewEnrichmentStatus)) {
 			document.tradingViewEnrichmentStatus = tradingViewEnrichmentStatus;
 		}
+		if (suppressedRepeat === true) {
+			document.suppressedRepeat = true;
+			document.deliveryResults = [];
+		}
 		const normalizedProcessingTimeMs = normalizeProcessingTimeMs(processingTimeMs);
 		if (normalizedProcessingTimeMs !== null) {
 			document.processingTimeMs = normalizedProcessingTimeMs;
@@ -1022,6 +1062,18 @@ async function saveAlertInternal({
 		}
 		if (typeof dedupStatus === 'string' && dedupStatus.trim()) {
 			document.dedupStatus = dedupStatus.trim();
+		}
+		if (typeof effectiveTelegramChatId === 'string' && effectiveTelegramChatId.trim()) {
+			document.telegramChatId = effectiveTelegramChatId.trim();
+		}
+		if (typeof effectiveTelegramThreadId === 'number' && Number.isSafeInteger(effectiveTelegramThreadId) && effectiveTelegramThreadId >= 0) {
+			document.telegramThreadId = effectiveTelegramThreadId;
+		}
+		if (typeof effectiveWhatsappChatId === 'string' && effectiveWhatsappChatId.trim()) {
+			document.whatsappChatId = effectiveWhatsappChatId.trim();
+		}
+		if (typeof effectiveDiscordWebhookUrl === 'string' && effectiveDiscordWebhookUrl.trim()) {
+			document.discordWebhookUrl = effectiveDiscordWebhookUrl.trim();
 		}
 
 		const docRef = await firestore.collection(COLLECTION_NAME).add(document);
@@ -1176,6 +1228,12 @@ async function getAlertById(alertId) {
 /**
  * Persist a replay attempt separately from the immutable original alert.
  *
+ * Each call writes a unique audit document so retries with the same idempotency
+ * key do not overwrite history. The HTTP `Idempotency-Replay` contract is
+ * preserved upstream by the idempotency middleware, which replays the cached
+ * response without re-running this storage write; this layer only sees fresh
+ * attempts that survived middleware, so uniqueness is required for audit.
+ *
  * @param {Object} params
  * @param {string} params.alertId
  * @param {string} params.idempotencyKey
@@ -1190,10 +1248,12 @@ async function saveReplayAttempt({ alertId, idempotencyKey, channels, deliveryRe
 	}
 
 	const idempotencyKeyHash = crypto.createHash('sha256').update(idempotencyKey).digest('hex');
-	const replayId = `${alertId}_${idempotencyKeyHash}`;
+	const attemptId = `${Date.now()}_${crypto.randomUUID()}`;
+	const replayId = `${alertId}_${idempotencyKeyHash}_${attemptId}`;
 	const document = {
 		alertId,
 		idempotencyKeyHash,
+		attemptId,
 		channels: Array.isArray(channels) ? channels : [],
 		deliveryResults: Array.isArray(deliveryResults) ? deliveryResults : [],
 		replayedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -1207,6 +1267,241 @@ async function saveReplayAttempt({ alertId, idempotencyKey, channels, deliveryRe
 	} catch (error) {
 		console.warn('[AlertStorageService] Failed to store alert replay attempt:', error.message);
 		throw createStorageUnavailableError(error);
+	}
+}
+
+/**
+ * Format a replay document into an API-safe response payload. Only safe fields
+ * are exposed: the original idempotency key is never persisted or returned, and
+ * delivery results are reduced to a compact summary.
+ *
+ * @param {Object} doc Firestore snapshot document
+ * @returns {Object|null}
+ */
+function formatReplayDocument(doc) {
+	if (!doc || typeof doc.data !== 'function') {
+		return null;
+	}
+
+	const data = doc.data() || {};
+	const replayedAt = data.replayedAt && typeof data.replayedAt.toDate === 'function'
+		? data.replayedAt.toDate().toISOString()
+		: null;
+	const compactDelivery = (Array.isArray(data.deliveryResults) ? data.deliveryResults : []).map((entry) => {
+		if (!entry || typeof entry !== 'object') {
+			return null;
+		}
+		const compact = { channel: typeof entry.channel === 'string' ? entry.channel : null };
+		if (typeof entry.success === 'boolean') {
+			compact.success = entry.success;
+		}
+		if (typeof entry.messageId === 'string' && entry.messageId) {
+			compact.messageId = entry.messageId;
+		}
+		if (typeof entry.errorCode === 'string' && entry.errorCode) {
+			compact.errorCode = entry.errorCode;
+		}
+		if (typeof entry.statusCode === 'number' && Number.isFinite(entry.statusCode)) {
+			compact.statusCode = entry.statusCode;
+		}
+		return compact;
+	}).filter(Boolean);
+
+	return {
+		id: typeof data.attemptId === 'string' && data.attemptId
+			? data.attemptId
+			: crypto.createHash('sha256').update(doc.id).digest('hex').slice(0, 24),
+		alertId: typeof data.alertId === 'string' ? data.alertId : null,
+		idempotencyKeyHashPrefix: typeof data.idempotencyKeyHash === 'string'
+			? data.idempotencyKeyHash.slice(0, 12)
+			: null,
+		channels: Array.isArray(data.channels) ? data.channels : [],
+		deliverySummary: compactDelivery,
+		replayedAt,
+		attemptId: typeof data.attemptId === 'string' ? data.attemptId : null,
+	};
+}
+
+function getReplayCursorValues(doc) {
+	if (!doc || typeof doc.data !== 'function') {
+		return null;
+	}
+	const data = doc.data() || {};
+	const replayedAt = data.replayedAt && typeof data.replayedAt.toDate === 'function'
+		? data.replayedAt.toDate().toISOString()
+		: null;
+	if (!replayedAt || typeof doc.id !== 'string' || !doc.id) {
+		return null;
+	}
+	return { replayedAt, timestamp: data.replayedAt, documentId: doc.id };
+}
+
+/**
+ * Bounded list of replay audit records with retention filtering and optional
+ * alertId filter. Mirrors `listAlerts()` pagination and error semantics.
+ *
+ * @param {Object} params
+ * @param {number|undefined} params.limit
+ * @param {string|undefined} params.alertId
+ * @param {string|undefined} params.before
+ * @returns {Promise<{replays: Array, hasMore: boolean, nextBefore: string|null}|null>}
+ */
+async function listReplayAttempts({ limit = DEFAULT_PAGE_SIZE, alertId, before } = {}) {
+	if (!isEnabled()) {
+		return null;
+	}
+
+	const firestore = getFirestore();
+	if (!firestore) {
+		throw createStorageUnavailableError();
+	}
+
+	const pageSize = clampLimit(limit);
+	const targetCount = pageSize + 1;
+	const scanLimit = Math.max(targetCount, MAX_PAGE_SIZE);
+	const matches = [];
+	const matchCursors = [];
+	const parsedBeforeCursor = before
+		? parseAlertPaginationCursor(before)
+		: null;
+	if (before && !parsedBeforeCursor) {
+		throw createInvalidCursorError();
+	}
+	let pageCursor = parsedBeforeCursor
+		? {
+			receivedAt: parsedBeforeCursor.receivedAt,
+			timestamp: parsedBeforeCursor.timestamp,
+			documentId: parsedBeforeCursor.documentId,
+		}
+		: null;
+
+	while (matches.length < targetCount) {
+		let query = firestore
+			.collection(REPLAY_COLLECTION_NAME)
+			.orderBy('replayedAt', 'desc')
+			.orderBy(admin.firestore.FieldPath.documentId(), 'desc')
+			.limit(scanLimit);
+
+		if (typeof alertId === 'string' && alertId.trim()) {
+			query = firestore
+				.collection(REPLAY_COLLECTION_NAME)
+				.where('alertId', '==', alertId.trim())
+				.orderBy('replayedAt', 'desc')
+				.orderBy(admin.firestore.FieldPath.documentId(), 'desc')
+				.limit(scanLimit);
+		}
+		if (pageCursor) {
+			const pageTimestamp = buildParsedCursorTimestamp(pageCursor);
+			if (pageCursor.documentId) {
+				query = query.startAfter(pageTimestamp, pageCursor.documentId);
+			} else {
+				query = query.where('replayedAt', '<', pageTimestamp);
+			}
+		}
+
+		let snapshot;
+		try {
+			snapshot = await query.get();
+		} catch (error) {
+			console.warn('[AlertStorageService] Failed to list replay attempts:', error.message);
+			throw createStorageUnavailableError(error);
+		}
+
+		if (!snapshot || !Array.isArray(snapshot.docs) || snapshot.docs.length === 0) {
+			break;
+		}
+
+		for (const doc of snapshot.docs) {
+			if (isRetentionExpired(doc.data() || {})) {
+				continue;
+			}
+			const formatted = formatReplayDocument(doc);
+			const docCursor = getReplayCursorValues(doc);
+			if (formatted && docCursor) {
+				matches.push(formatted);
+				matchCursors.push(docCursor);
+				if (matches.length >= targetCount) {
+					break;
+				}
+			}
+		}
+
+		const lastDocCursor = getReplayCursorValues(snapshot.docs[snapshot.docs.length - 1]);
+		if (!lastDocCursor || snapshot.docs.length < scanLimit) {
+			break;
+		}
+		pageCursor = {
+			receivedAt: lastDocCursor.replayedAt,
+			timestamp: lastDocCursor.timestamp,
+			documentId: lastDocCursor.documentId,
+		};
+	}
+
+	const hasMore = matches.length > pageSize;
+	const replays = hasMore ? matches.slice(0, pageSize) : matches;
+	const lastCursor = hasMore ? matchCursors[pageSize - 1] : null;
+	const nextBefore = hasMore && lastCursor
+		? encodeAlertPaginationCursor({
+			receivedAt: lastCursor.replayedAt,
+			id: lastCursor.documentId,
+			timestamp: lastCursor.timestamp,
+		})
+		: null;
+
+	return { replays, hasMore, nextBefore };
+}
+
+/**
+ * Most recent replay metadata for a single alert, formatted for inclusion on
+ * `GET /api/alerts/:alertId`. Returns `null` if no replay exists.
+ *
+ * @param {string} alertId
+ * @returns {Promise<Object|null>}
+ */
+async function getLatestReplayForAlert(alertId) {
+	if (!isEnabled() || typeof alertId !== 'string' || !alertId.trim()) {
+		return null;
+	}
+
+	const firestore = getFirestore();
+	if (!firestore) {
+		throw createStorageUnavailableError();
+	}
+
+	let pageCursor = null;
+	while (true) {
+		let query = firestore
+			.collection(REPLAY_COLLECTION_NAME)
+			.where('alertId', '==', alertId.trim())
+			.orderBy('replayedAt', 'desc')
+			.orderBy(admin.firestore.FieldPath.documentId(), 'desc')
+			.limit(MAX_PAGE_SIZE);
+		if (pageCursor) {
+			query = query.startAfter(pageCursor.timestamp, pageCursor.documentId);
+		}
+
+		let snapshot;
+		try {
+			snapshot = await query.get();
+		} catch (error) {
+			console.warn('[AlertStorageService] Failed to read latest replay for alert:', error.message);
+			throw createStorageUnavailableError(error);
+		}
+
+		if (!snapshot || !Array.isArray(snapshot.docs) || snapshot.docs.length === 0) {
+			return null;
+		}
+
+		const doc = snapshot.docs.find(d => !isRetentionExpired(d.data() || {}));
+		if (doc) {
+			return formatReplayDocument(doc);
+		}
+
+		const lastDocCursor = getReplayCursorValues(snapshot.docs[snapshot.docs.length - 1]);
+		if (!lastDocCursor || snapshot.docs.length < MAX_PAGE_SIZE) {
+			return null;
+		}
+		pageCursor = lastDocCursor;
 	}
 }
 
@@ -1476,6 +1771,8 @@ module.exports = {
 	summarizeAlerts,
 	exportAlerts,
 	saveReplayAttempt,
+	listReplayAttempts,
+	getLatestReplayForAlert,
 	parseSymbolFromText,
 	extractSymbolAndExchange,
 	extractAlertSymbol,

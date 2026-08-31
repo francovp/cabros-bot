@@ -231,6 +231,38 @@ describe('ScannerPresetSchedulerService', () => {
 			const succeeding = await scannerPresetService.getPreset(succeedingPreset.id);
 			expect(succeeding.lastStatus).toBe('success');
 		});
+
+		it('advances the preset version on every scheduler mutation', async () => {
+			const created = await scannerPresetService.createPreset({
+				name: 'Version-bumping scheduler preset',
+				schedule: { enabled: true, cadence: '5m' },
+			});
+			const initialVersion = created.version;
+
+			// Force the preset to be due now so _claimPreset accepts the lease.
+			await scannerPresetService.updatePreset(created.id, {
+				nextRunAt: new Date(Date.now() - 1000).toISOString(),
+			});
+			const fresh = await scannerPresetService.getPreset(created.id);
+			const claimed = await scheduler._claimPreset(fresh, Date.now(), 60000);
+			expect(claimed).toBe(true);
+
+			const afterClaim = await scannerPresetService.getPreset(created.id);
+			expect(afterClaim.version).toBe(initialVersion + 2);
+			expect(afterClaim.lockedUntil).toBeTruthy();
+
+			await scheduler._finalizePresetRun(fresh, {
+				lastRunAt: new Date().toISOString(),
+				nextRunAt: new Date(Date.now() + 300000).toISOString(),
+				lastStatus: 'success',
+				lastError: null,
+				lastDurationMs: 12,
+			});
+			const afterFinalize = await scannerPresetService.getPreset(created.id);
+			expect(afterFinalize.version).toBe(initialVersion + 3);
+			expect(afterFinalize.lockedUntil).toBeNull();
+			expect(afterFinalize.lockedBy).toBeNull();
+		});
 	});
 
 	describe('claim exclusivity and concurrency', () => {

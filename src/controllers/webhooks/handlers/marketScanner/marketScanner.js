@@ -121,7 +121,12 @@ function postMarketScannerAlert(botOrGetter) {
 				notificationManager = await initializeNotificationServices(resolveBot(botOrGetter));
 			}
 
-			const deliveryResults = await sendWithNotificationRouting(notificationManager, { text: alertText }, routing, { parentSpan: requestSpan });
+			const deliveryResults = await sendWithNotificationRouting(
+				notificationManager,
+				{ text: alertText, source: 'market-scanner' },
+				routing,
+				{ parentSpan: requestSpan },
+			);
 			const requestedChannels = getRequestedChannels(notificationManager, routing);
 			const deliveredChannels = getDeliveredChannels(deliveryResults);
 			const summary = buildSummary(scanResults, deliveryResults);
@@ -148,6 +153,10 @@ function postMarketScannerAlert(botOrGetter) {
 					channels: requestedChannels,
 					deliveryResults,
 					source: 'market-scanner',
+					telegramChatId: routing.telegramChatId,
+					telegramThreadId: routing.telegramThreadId,
+					whatsappChatId: routing.whatsappChatId,
+					discordWebhookUrl: routing.discordWebhookUrl,
 					processingTimeMs: Date.now() - startTime,
 				}).catch(() => {});
 			}
