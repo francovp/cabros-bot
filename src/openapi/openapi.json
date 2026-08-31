@@ -38,6 +38,38 @@
     }
   ],
   "paths": {
+    "/ready": {
+      "get": {
+        "tags": [
+          "Operations"
+        ],
+        "summary": "Get bootstrap readiness",
+        "description": "Returns 200 only after required startup components have completed bootstrap. Returns 503 while pending or after a bootstrap failure. This endpoint checks bootstrap completion, not continuous external provider health.",
+        "operationId": "getReadiness",
+        "responses": {
+          "200": {
+            "description": "Bootstrap completed successfully.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BootstrapReadiness"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Bootstrap is pending or failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BootstrapReadiness"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/webhook/alert": {
       "post": {
         "tags": [
@@ -3178,6 +3210,7 @@
                   "templateVersion": null,
                   "lastSuccessfulLoad": null,
                   "lastErrorCategory": null,
+                  "consecutiveFailures": 0,
                   "refreshIntervalMs": 900000,
                   "maxAgeMs": 3600000
                 }
@@ -3191,6 +3224,90 @@
       "JsonObject": {
         "type": "object",
         "additionalProperties": true
+      },
+      "BootstrapReadiness": {
+        "type": "object",
+        "required": [
+          "status",
+          "ready",
+          "components"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "ready",
+              "failed"
+            ]
+          },
+          "ready": {
+            "type": "boolean"
+          },
+          "startedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "completedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "failedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "components": {
+            "type": "object",
+            "required": [
+              "telegramBot",
+              "notificationServices",
+              "newsMonitor"
+            ],
+            "properties": {
+              "telegramBot": {
+                "$ref": "#/components/schemas/BootstrapComponent"
+              },
+              "notificationServices": {
+                "$ref": "#/components/schemas/BootstrapComponent"
+              },
+              "newsMonitor": {
+                "$ref": "#/components/schemas/BootstrapComponent"
+              }
+            }
+          }
+        }
+      },
+      "BootstrapComponent": {
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "ready",
+              "disabled",
+              "failed"
+            ]
+          }
+        }
       },
       "Error": {
         "type": "object",
@@ -5507,6 +5624,7 @@
             "type": "string",
             "enum": [
               "testnet",
+              "demo",
               "live"
             ]
           },
@@ -5543,6 +5661,7 @@
             "type": "string",
             "enum": [
               "testnet",
+              "demo",
               "live"
             ]
           },
@@ -5556,8 +5675,11 @@
       },
       "Status": {
         "type": "object",
-        "description": "Runtime status. TradingView dependencies expose configured endpoint metadata plus runtime status (unknown before an MCP operation, ready after success, degraded after failure), timestamps, sanitized error categories, success/failure counters, and dependencies.tradingViewMcp.enrichment.alertPath rolling 24-hour alert-path outcome rates without provider response bodies. dependencies.geminiQuota reports Gemini quota cooldown state, remaining cooldown duration, trigger counters, Brave search fallback events during cooldown, and grounding request telemetry counters without exposing prompt text or provider credentials. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters. featureFlags.firestoreJobStorage reports the ENABLE_FIRESTORE_JOB_STORAGE gate or the legacy ENABLE_FIRESTORE_ALERT_STORAGE gate; featureFlags.jobExecutionWorker reports JOB_EXECUTION_MODE=render-worker or firestore-poller; dependencies.jobExecutionQueue reports queue readiness and safe operational counters without broker credentials; featureFlags.firestoreScannerPresets reports ENABLE_FIRESTORE_SCANNER_PRESETS; dependencies.scannerPresetStorage reports the effective durable or ephemeral scanner-preset backend and readiness; dependencies.signalOutcomeWorker reports the scheduler role (web, worker, or disabled), graceful-shutdown state, cadence, heartbeat, and scanned/pending/evaluated/error counters; a disabled local scheduler reports ready false and status disabled because it is not the process evaluating outcomes; dependencies.firestoreJobStorage reports Firestore credential readiness for that runtime path; featureFlags.newsMonitorTestMode reports ENABLE_NEWS_MONITOR_TEST_MODE without changing news monitor behavior; featureFlags.messageFooterMetadata reports ENABLE_MESSAGE_FOOTER_METADATA and defaults to true unless explicitly set to false; featureFlags.cloudflareAig reports ENABLE_CLOUDFLARE_AIG and dependencies.cloudflareAig reports Cloudflare AI Gateway credential readiness; featureFlags.equityMarketData reports ENABLE_EQUITY_MARKET_DATA and dependencies.equityMarketData reports non-sensitive Twelve Data readiness for BATS/NASDAQ/NYSE/AMEX/NYSE ARCA outcome evaluation; featureFlags.firebaseRemoteConfig reports ENABLE_FIREBASE_REMOTE_CONFIG and dependencies.firebaseRemoteConfig reports only bounded loader metadata, source, template version, last successful load, and last error category without remote values or credentials; featureFlags.notificationRedrive reports ENABLE_NOTIFICATION_REDRIVE and dependencies.notificationRedrive reports dead-letter redrive worker role, configuration, running state, and safe operational counters. featureFlags.alertSignalRepeatSuppression reports ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION and dependencies.alertSignalRepeatSuppression reports the enabled state plus non-sensitive suppression counters (suppressedCount, lastSuppressedAt, activeTrackedSignals).",
+        "description": "Runtime status. readiness reports one-time bootstrap completion for the Telegram bot, notification services, and news monitor without provider credentials. TradingView dependencies expose configured endpoint metadata plus runtime status (unknown before an MCP operation, ready after success, degraded after failure), timestamps, sanitized error categories, success/failure counters, and dependencies.tradingViewMcp.enrichment.alertPath rolling 24-hour alert-path outcome rates without provider response bodies. dependencies.geminiQuota reports Gemini quota cooldown state, remaining cooldown duration, trigger counters, Brave search fallback events during cooldown, and grounding request telemetry counters without exposing prompt text or provider credentials. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters. featureFlags.firestoreJobStorage reports the ENABLE_FIRESTORE_JOB_STORAGE gate or the legacy ENABLE_FIRESTORE_ALERT_STORAGE gate; featureFlags.jobExecutionWorker reports JOB_EXECUTION_MODE=render-worker or firestore-poller; dependencies.jobExecutionQueue reports queue readiness and safe operational counters without broker credentials; featureFlags.firestoreScannerPresets reports ENABLE_FIRESTORE_SCANNER_PRESETS; dependencies.scannerPresetStorage reports the effective durable or ephemeral scanner-preset backend and readiness; dependencies.signalOutcomeWorker reports the scheduler role (web, worker, or disabled), graceful-shutdown state, cadence, heartbeat, and scanned/pending/evaluated/error counters; a disabled local scheduler reports ready false and status disabled because it is not the process evaluating outcomes; dependencies.firestoreJobStorage reports Firestore credential readiness for that runtime path; featureFlags.newsMonitorTestMode reports ENABLE_NEWS_MONITOR_TEST_MODE without changing news monitor behavior; featureFlags.messageFooterMetadata reports ENABLE_MESSAGE_FOOTER_METADATA and defaults to true unless explicitly set to false; featureFlags.cloudflareAig reports ENABLE_CLOUDFLARE_AIG and dependencies.cloudflareAig reports Cloudflare AI Gateway credential readiness; featureFlags.equityMarketData reports ENABLE_EQUITY_MARKET_DATA and dependencies.equityMarketData reports non-sensitive Twelve Data readiness for BATS/NASDAQ/NYSE/AMEX/NYSE ARCA outcome evaluation; featureFlags.firebaseRemoteConfig reports ENABLE_FIREBASE_REMOTE_CONFIG and dependencies.firebaseRemoteConfig reports only bounded loader metadata, source, template version, last successful load, last error category, and consecutive failures without remote values or credentials; featureFlags.notificationRedrive reports ENABLE_NOTIFICATION_REDRIVE and dependencies.notificationRedrive reports dead-letter redrive worker role, configuration, running state, and safe operational counters. featureFlags.alertSignalRepeatSuppression reports ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION and dependencies.alertSignalRepeatSuppression reports the enabled state plus non-sensitive suppression counters (suppressedCount, lastSuppressedAt, activeTrackedSignals).",
         "properties": {
+          "readiness": {
+            "$ref": "#/components/schemas/BootstrapReadiness"
+          },
           "service": {
             "$ref": "#/components/schemas/JsonObject"
           },
@@ -5568,7 +5690,110 @@
             "$ref": "#/components/schemas/JsonObject"
           },
           "dependencies": {
-            "$ref": "#/components/schemas/JsonObject"
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+              "firebaseRemoteConfig": {
+                "$ref": "#/components/schemas/FirebaseRemoteConfigDependency"
+              }
+            }
+          }
+        }
+      },
+      "FirebaseRemoteConfigDependency": {
+        "type": "object",
+        "description": "Safe runtime metadata for Firebase Remote Config server-side template loader without returning remote parameter values or secrets.",
+        "required": [
+          "enabled",
+          "configured",
+          "ready",
+          "status",
+          "source",
+          "templateVersion",
+          "lastSuccessfulLoad",
+          "lastErrorCategory",
+          "consecutiveFailures",
+          "refreshIntervalMs",
+          "maxAgeMs"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether Firebase Remote Config is enabled via ENABLE_FIREBASE_REMOTE_CONFIG."
+          },
+          "configured": {
+            "type": "boolean",
+            "description": "Whether Firebase/Firestore credentials are configured."
+          },
+          "ready": {
+            "type": "boolean",
+            "description": "True only after a successful, fresh server template load; false if uninitialized, disabled, misconfigured, failed, or stale."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "disabled",
+              "misconfigured",
+              "unknown",
+              "ready",
+              "degraded"
+            ],
+            "description": "Granular lifecycle state of the server template loader."
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "remote",
+              "environment",
+              "default",
+              "disabled"
+            ],
+            "description": "Active configuration resolution source."
+          },
+          "templateVersion": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Version number of the currently loaded Remote Config template, or null."
+          },
+          "lastSuccessfulLoad": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "ISO-8601 timestamp of the most recent successful template load, or null."
+          },
+          "lastErrorCategory": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "timeout",
+              "credentials",
+              "unsupported_sdk",
+              "load_failed",
+              "stale",
+              null
+            ],
+            "description": "Sanitized error category if the last load failed or values are stale (timeout, credentials, unsupported_sdk, load_failed, stale), or null."
+          },
+          "consecutiveFailures": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Count of consecutive failed template loads since last success; reset to 0 on success."
+          },
+          "refreshIntervalMs": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Configured background refresh interval in milliseconds."
+          },
+          "maxAgeMs": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Configured cache max age in milliseconds before values are considered stale."
           }
         }
       },
@@ -5630,6 +5855,7 @@
             "type": "string",
             "enum": [
               "testnet",
+              "demo",
               "live"
             ]
           },

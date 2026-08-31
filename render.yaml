@@ -10,7 +10,7 @@ services:
   branch: master
   buildCommand: corepack enable && pnpm install --frozen-lockfile
   startCommand: corepack enable && pnpm start
-  healthCheckPath: /healthcheck
+  healthCheckPath: /ready
   pullRequestPreviewsEnabled: true
   envVars:
   - key: TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID
