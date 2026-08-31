@@ -83,6 +83,21 @@ class NotificationManager {
 		return await Promise.all(validationPromises);
 	}
 
+		/**
+   * Get per-channel runtime health (Discord health, future channel telemetry).
+   * Channels without a getStatus() method are skipped.
+   * @returns {Object<string, Object|null>}
+   */
+		getChannelStatuses() {
+			const statuses = {};
+			for (const [name, channel] of this.channels.entries()) {
+				if (channel && typeof channel.getStatus === 'function') {
+					statuses[name] = channel.getStatus();
+				}
+			}
+			return statuses;
+		}
+
 	/**
    * Get list of enabled channel names
    * @returns {Array<string>} Array of enabled channel names

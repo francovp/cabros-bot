@@ -177,6 +177,10 @@ function getStatus() {
 	const previewEnvironment = isPreview();
 	const modelProvider = getModelProvider();
 	const runtimeConfig = remoteConfigService.getRuntimeConfig();
+	const notificationManager = notificationRedriveService.getNotificationManager();
+	const channelStatuses = notificationManager && typeof notificationManager.getChannelStatuses === 'function'
+		? notificationManager.getChannelStatuses()
+		: {};
 	const telegramFlagEnabled = isEnabled(process.env.ENABLE_TELEGRAM_BOT);
 	const telegramEnabled = telegramFlagEnabled && !previewEnvironment;
 	const whatsappEnabled = isEnabled(process.env.ENABLE_WHATSAPP_ALERTS);
@@ -371,6 +375,7 @@ function getStatus() {
 				status: discord.status,
 			},
 		},
+		channelHealth: channelStatuses,
 		dependencies: {
 			telegram,
 			whatsapp,

@@ -247,7 +247,7 @@ describe('NotificationManager admin failure notifications', () => {
 	])('preserves Discord attemptCount through %s and admin failure alerting', async (_dispatchName, dispatch) => {
 		process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '-100-admin';
 		process.env.ENABLE_DISCORD_ALERTS = 'true';
-		process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/test/token';
+		process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/123456789012345678/test-token';
 		const captureExternalFailure = jest.spyOn(sentryService, 'captureExternalFailure').mockImplementation(() => ({ success: true }));
 		const discordService = new DiscordService({
 			logger: { warn: jest.fn() },
