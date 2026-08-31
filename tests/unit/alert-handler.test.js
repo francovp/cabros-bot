@@ -324,7 +324,7 @@ describe('Alert Handler', () => {
 			sentiment: 'BULLISH',
 			sentiment_score: 0.7,
 			insights: ['Confluencia: ALINEADA · Señales Alineadas YES · Confianza: 82', 'MCP secondary insight'],
-			confluenceData: { recommendation: 'ALINEADA', confidence: 82, signals_agree: true },
+			confluenceData: { recommendation: 'ALINEADA', confidence: 82, signals_agree: true, news: { count: 1 } },
 			sources: [],
 			truncated: false,
 		});
@@ -357,6 +357,42 @@ describe('Alert Handler', () => {
 		process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
 	});
 
+	it('should omit confluence insight when external evidence is empty', async () => {
+		const previousGeminiFlag = process.env.ENABLE_GEMINI_GROUNDING;
+		process.env.ENABLE_GEMINI_GROUNDING = 'true';
+
+		tradingViewMcpService.isEnabled.mockReturnValue(true);
+		tradingViewMcpService.enrichFromAlertText.mockResolvedValue({
+			original_text: 'BTCUSDT(240) pasó a señal de COMPRA',
+			sentiment: 'BULLISH',
+			sentiment_score: 0.7,
+			insights: ['Confluencia: BUY · Señales Alineadas ✅ · Confianza: HIGH'],
+			confluenceData: {
+				confluence: { recommendation: 'BUY', confidence: 'HIGH', signals_agree: true },
+				news: { count: 0, latest: [] },
+				sentiment: { posts_analyzed: 0 },
+			},
+			sources: [],
+			truncated: false,
+		});
+
+		groundAlert.mockResolvedValue({
+			sentiment: 'BULLISH',
+			sentiment_score: 0.8,
+			insights: ['Gemini insight'],
+			sources: [],
+			truncated: false,
+			modelUsed: 'gemini-2.5-flash',
+		});
+
+		const result = await enrichAlert({ text: 'BTCUSDT(240) pasó a señal de COMPRA' }, { useTradingViewData: true });
+
+		expect(result.insights).not.toContain('Confluencia: BUY · Señales Alineadas ✅ · Confianza: HIGH');
+		expect(result.insights).toContain('Gemini insight');
+
+		process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
+	});
+
 	it('should prioritize contradictory confluence insight and preserve raw MCP metadata when Gemini fills the insight cap', async () => {
 		const previousGeminiFlag = process.env.ENABLE_GEMINI_GROUNDING;
 		process.env.ENABLE_GEMINI_GROUNDING = 'true';
@@ -367,7 +403,7 @@ describe('Alert Handler', () => {
 			sentiment: 'NEUTRAL',
 			sentiment_score: 0.1,
 			insights: ['Confluencia contradictoria: SELL · Señales Mixtas ⚠️ · Confianza: 81', 'MCP secondary insight'],
-			confluenceData: { confluence: { recommendation: 'SELL', confidence: 81, signals_agree: false } },
+			confluenceData: { confluence: { recommendation: 'SELL', confidence: 81, signals_agree: false }, news: { count: 1 } },
 			multiTimeframeData: { alignment: 'bearish' },
 			sources: [],
 			truncated: false,
@@ -396,7 +432,10 @@ describe('Alert Handler', () => {
 		expect(result.insights).toHaveLength(6);
 		expect(result.insights[0]).toBe('Confluencia contradictoria: SELL · Señales Mixtas ⚠️ · Confianza: 81');
 		expect(result.insights).not.toContain('Gemini insight 6');
-		expect(result.confluenceData).toEqual({ confluence: { recommendation: 'SELL', confidence: 81, signals_agree: false } });
+		expect(result.confluenceData).toEqual({
+			confluence: { recommendation: 'SELL', confidence: 81, signals_agree: false },
+			news: { count: 1 },
+		});
 		expect(result.multiTimeframeData).toEqual({ alignment: 'bearish' });
 
 		process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
@@ -731,7 +770,7 @@ describe('Alert Handler', () => {
 			expect(result.sentiment_score).toBe(-0.65);
 			expect(result.sentimentConflict).toBe(true);
 			expect(warnSpy).toHaveBeenCalledWith(
-				expect.stringContaining('[Alert] Sentiment conflict between Gemini and TradingView MCP; selecting MCP indicators over LLM prose')
+				expect.stringContaining('[Alert] Sentiment conflict between Gemini and TradingView MCP; selecting MCP indicators over LLM prose'),
 			);
 
 			warnSpy.mockRestore();
@@ -790,6 +829,7 @@ describe('Alert Handler', () => {
 						recommendation: 'SELL',
 						confidence: 85,
 					},
+					news: { count: 1 },
 				},
 				sources: [],
 				truncated: false,

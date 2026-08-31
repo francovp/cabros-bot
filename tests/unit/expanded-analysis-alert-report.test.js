@@ -473,6 +473,27 @@ describe('Expanded Analysis Alert report', () => {
 			expect(report).toContain('  • Bitcoin surges past 68k (CoinDesk)');
 			expect(report).toContain('  • Crypto market gains momentum (bloomberg.com)');
 		});
+
+		it('omits confluence when external evidence is empty', () => {
+			const report = buildExpandedAnalysisAlertReport([
+				{
+					input: { raw: 'BINANCE:BTCUSDT', exchange: 'BINANCE', symbol: 'BTCUSDT' },
+					analysis: {
+						technical: { price_data: { current_price: 68000 } },
+						confluence: {
+							recommendation: 'STRONG BUY',
+							confidence: 'high',
+							signals_agree: true,
+						},
+						news: { count: 0, latest: [] },
+						sentiment: { posts_analyzed: 0 },
+					},
+				},
+			], { now: new Date('2026-05-22T12:00:00Z') });
+
+			expect(report).not.toContain('*Confluencia:*');
+			expect(report).not.toContain('Confianza: high');
+		});
 	});
 
 	describe('side-aware risk barriers', () => {

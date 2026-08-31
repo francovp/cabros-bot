@@ -2,6 +2,7 @@ const {
 	normalizeTradingViewTimeframe,
 	SUPPORTED_MCP_TIMEFRAMES,
 } = require('./parseTradingViewSignal');
+const { hasConfluenceEvidence } = require('./confluenceEvidence');
 
 const MAX_SYMBOLS = 50;
 const SUPPORTED_TIMEFRAME_ALIASES = new Set([
@@ -221,7 +222,7 @@ function buildReportRow({ input = {}, analysis = {}, multiTimeframe, side = 'BUY
 	const riskRewardRatio = getRiskRewardRatio(price, stopLoss, takeProfit, side);
 
 	const sentiment = analysis.sentiment || null;
-	const confluence = analysis.confluence || null;
+	const confluence = hasConfluenceEvidence(analysis) ? analysis.confluence || null : null;
 	const news = analysis.news || null;
 
 	return {

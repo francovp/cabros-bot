@@ -1541,3 +1541,13 @@ Binance 451 / `restricted location` errors are now classified as `binance_region
 - `BINANCE_DATA_BASE_URL` — Optional override for all Binance market-data REST calls. Default `https://api.binance.com` (preserves existing behavior when unset). Must be an http(s) URL; live trading also requires `https://`. Classified as **environment-only** for Remote Config parity (external destination; secrets/credentials/external-endpoint policy excludes it).
 
 No endpoint, OpenAPI, Postman, or Remote Config contract changed; the new env var follows the standard `environment-only` classification.
+
+## Confluence Evidence Gate (Issue #633)
+
+TradingView confluence recommendations, confidence, alignment, and contradictory sentiment dampening are now used only when combined-analysis evidence contains positive news or Reddit/post counts. Empty evidence is omitted from alert grounding and expanded reports, while raw analysis remains fail-open and response shapes are unchanged. The `/api/webhook/symbol-analysis` decision reasons and report apply the same guard.
+
+**Coverage**:
+- `src/services/tradingview/confluenceEvidence.js`, `src/services/tradingview/TradingViewMcpService.js`, `src/controllers/webhooks/handlers/alert/grounding.js`, `src/controllers/webhooks/handlers/symbolAnalysis/symbolAnalysis.js`, and `src/services/tradingview/expandedAnalysisAlertReport.js` implement the shared evidence gate.
+- `tests/unit/tradingview-mcp-service.test.js`, `tests/unit/alert-handler.test.js`, `tests/integration/symbol-analysis-endpoint.test.js`, and `tests/unit/expanded-analysis-alert-report.test.js` cover empty and populated evidence paths.
+
+No endpoint, OpenAPI, Postman, environment variable, or Remote Config contract changed.

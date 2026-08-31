@@ -830,6 +830,8 @@ describe('TradingViewMcpService', () => {
 				confidence: 81,
 				signals_agree: false,
 			},
+			news: { count: 0, latest: [] },
+			sentiment: { posts_analyzed: 2 },
 		});
 
 		const result = await service.enrichFromAlertText('BTCUSDT(240) pasó a señal de COMPRA');
@@ -838,6 +840,36 @@ describe('TradingViewMcpService', () => {
 		expect(Math.abs(result.sentiment_score)).toBeLessThanOrEqual(0.15);
 		expect(result.insights.join(' ')).toContain('Confluencia contradictoria');
 		expect(result.confluenceData.confluence.recommendation).toBe('SELL');
+	});
+
+	it('does not render or dampen confluence when external evidence is empty', async () => {
+		process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT = 'true';
+		const service = new TradingViewMcpService({
+			maxRetries: 1,
+			defaultExchange: 'BINANCE',
+			defaultTimeframe: '1h',
+			logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
+		});
+		service.callCoinAnalysis = jest.fn().mockResolvedValue({
+			price_data: { current_price: 65000 },
+			market_sentiment: { overall_rating: 4, momentum: 'Bullish' },
+			market_structure: { trend: 'Bullish', trend_score: 4 },
+		});
+		service.callCombinedAnalysis = jest.fn().mockResolvedValue({
+			confluence: {
+				recommendation: 'SELL',
+				confidence: 'HIGH',
+				signals_agree: false,
+			},
+			news: { count: 0, latest: [] },
+			sentiment: { posts_analyzed: 0 },
+		});
+
+		const result = await service.enrichFromAlertText('BTCUSDT(240) pasó a señal de COMPRA');
+
+		expect(result.sentiment).toBe('BULLISH');
+		expect(result.sentiment_score).toBeGreaterThan(0.15);
+		expect(result.insights.join(' ')).not.toContain('Confluencia');
 	});
 
 	it('fails open to coin analysis when confluence analysis is unavailable', async () => {
