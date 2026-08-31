@@ -3017,6 +3017,31 @@ describe('admin browser client', () => {
 		expect(last[1].headers['x-api-key']).toBe('session-secret');
 	});
 
+	it('rejects exponent notation and canonicalizes integer order limits', async () => {
+		const requests = [];
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				requests.push(url);
+				return response({ success: true, environment: 'testnet', orders: [] });
+			},
+		});
+		await flush();
+		await selectView(browser, 'orders');
+
+		const listForm = findForm(browser.elementsById.view, 'Load recent orders');
+		listForm.elements.symbol.value = 'BTCUSDT';
+		listForm.elements.limit.value = '1e2';
+		await listForm.dispatch('submit');
+		await flush();
+		expect(requests.at(-1)).toBe('/api/trading/binance/orders?symbol=BTCUSDT');
+
+		listForm.elements.limit.value = '005';
+		await listForm.dispatch('submit');
+		await flush();
+		expect(requests.at(-1)).toBe('/api/trading/binance/orders?symbol=BTCUSDT&limit=5');
+	});
+
 	it('renders sanitized Binance order summary fields and hides provider noise', async () => {
 		const browser = createBrowser({
 			fetchImpl: async (url) => {
