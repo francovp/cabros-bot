@@ -41,6 +41,7 @@ const STATE_DOC_PATH = 'tradingControl/state';
 const COLLECTION_NAME = 'tradingControl';
 const STATE_DOC_ID = 'state';
 const MAX_REASON_LENGTH = 280;
+const CONTROL_STATE_READ_TIMEOUT_MS = 5000;
 const REASON_KEYS = ['reason', 'pauseReason', 'resumeReason'];
 const ACTION_KEYS = ['action'];
 
@@ -83,6 +84,28 @@ function readAction(body) {
 		}
 	}
 	return null;
+}
+
+function withTimeout(promise, timeoutMs) {
+	return new Promise((resolve, reject) => {
+		const timer = setTimeout(() => {
+			const error = new Error('Trading control state read timed out');
+			error.code = 'TRADING_CONTROL_TIMEOUT';
+			reject(error);
+		}, timeoutMs);
+		timer.unref?.();
+
+		Promise.resolve(promise).then(
+			(value) => {
+				clearTimeout(timer);
+				resolve(value);
+			},
+			(error) => {
+				clearTimeout(timer);
+				reject(error);
+			},
+		);
+	});
 }
 
 class TradingControlError extends Error {
@@ -230,7 +253,10 @@ function createTradingControlService({
 	async function readFirestoreState() {
 		const db = getFirestore();
 		if (!db) return null;
-		const snapshot = await db.doc(STATE_DOC_PATH).get();
+		const snapshot = await withTimeout(
+			db.doc(STATE_DOC_PATH).get(),
+			CONTROL_STATE_READ_TIMEOUT_MS,
+		);
 		if (!snapshot.exists) {
 			return {
 				paused: false,

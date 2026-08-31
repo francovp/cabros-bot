@@ -124,6 +124,33 @@ describe('TradingControlService', () => {
 		expect(snapshot.isBlocked()).toBe(true);
 	});
 
+	it('fails closed when the Firestore pause-state read times out', async () => {
+		process.env.ENABLE_BINANCE_TRADING = 'true';
+		const { firestore, docApi } = makeFirestoreMock({
+			doc: {
+				get: jest.fn(() => new Promise(() => {})),
+				set: jest.fn(),
+			},
+		});
+		const service = createTradingControlService({ firestoreFactory: () => firestore });
+		jest.useFakeTimers();
+
+		try {
+			const pending = service.getPauseState();
+			await jest.advanceTimersByTimeAsync(5000);
+			const snapshot = await pending;
+
+			expect(snapshot).toMatchObject({
+				paused: false,
+				unavailable: true,
+				inactive: false,
+			});
+			expect(docApi.get).toHaveBeenCalledTimes(1);
+		} finally {
+			jest.useRealTimers();
+		}
+	});
+
 	it('reads paused state from Firestore when configured and trading is enabled', async () => {
 		process.env.ENABLE_BINANCE_TRADING = 'true';
 		const { firestore, docApi } = makeFirestoreMock({

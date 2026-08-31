@@ -1751,6 +1751,74 @@ describe('BinanceOrderService', () => {
 			expect(createClient).not.toHaveBeenCalled();
 		});
 
+		it('rechecks the pause state before a signed order-test request', async () => {
+			const openState = buildControlService().getPauseState;
+			const pausedState = buildControlService({ paused: true });
+			const getPauseState = jest.fn()
+				.mockResolvedValueOnce(await openState())
+				.mockResolvedValueOnce(await pausedState.getPauseState());
+			const controlService = {
+				getPauseState,
+			};
+			const client = {
+				getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo({
+					filters: [
+						...exchangeInfo().symbols[0].filters,
+						{ filterType: 'PERCENT_PRICE', multiplierUp: '2', multiplierDown: '0.5', avgPriceMins: 5 },
+					],
+				})),
+				testNewOrder: jest.fn().mockResolvedValue({}),
+			};
+			const service = createBinanceOrderService({ createClient: () => client, controlService });
+
+			await expect(service.placeOrder({
+				symbol: 'BTCUSDT',
+				side: 'BUY',
+				type: 'LIMIT',
+				quantity: '0.1',
+				price: '100',
+				dryRun: true,
+			})).rejects.toMatchObject({ code: 'TRADING_PAUSED', statusCode: 503 });
+
+			expect(getPauseState).toHaveBeenCalledTimes(2);
+			expect(client.testNewOrder).not.toHaveBeenCalled();
+		});
+
+		it('rechecks the pause state before submitting a live order', async () => {
+			const openState = buildControlService().getPauseState;
+			const pausedState = buildControlService({ paused: true });
+			const getPauseState = jest.fn()
+				.mockResolvedValueOnce(await openState())
+				.mockResolvedValueOnce(await openState())
+				.mockResolvedValueOnce(await pausedState.getPauseState());
+			const controlService = { getPauseState };
+			const client = {
+				getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo({
+					filters: [
+						...exchangeInfo().symbols[0].filters,
+						{ filterType: 'PERCENT_PRICE', multiplierUp: '2', multiplierDown: '0.5', avgPriceMins: 5 },
+					],
+				})),
+				testNewOrder: jest.fn().mockResolvedValue({}),
+				submitNewOrder: jest.fn().mockResolvedValue({ orderId: 1 }),
+			};
+			const service = createBinanceOrderService({ createClient: () => client, controlService });
+
+			await expect(service.placeOrder({
+				symbol: 'BTCUSDT',
+				side: 'BUY',
+				type: 'LIMIT',
+				quantity: '0.1',
+				price: '100',
+				clientOrderId: 'live-order-1',
+				dryRun: false,
+			})).rejects.toMatchObject({ code: 'TRADING_PAUSED', statusCode: 503 });
+
+			expect(getPauseState).toHaveBeenCalledTimes(3);
+			expect(client.testNewOrder).toHaveBeenCalledTimes(1);
+			expect(client.submitNewOrder).not.toHaveBeenCalled();
+		});
+
 		it('fails closed when the pause state is unavailable and trading is enabled', async () => {
 			const createClient = jest.fn();
 			const controlService = buildControlService({
@@ -1794,21 +1862,25 @@ describe('BinanceOrderService', () => {
 			expect(client.getExchangeInfo).toHaveBeenCalledTimes(1);
 		});
 
-		it('exposes pause state through getStatus without leaking secrets', () => {
+		it('refreshes persisted pause state through getStatus without leaking secrets', async () => {
 			const controlService = buildControlService({
+				getPauseState: undefined,
+			});
+			const persistedState = buildControlService({
 				paused: true,
 				pausedBy: 'incident-commander',
 				pausedAt: '2026-08-30T12:00:00Z',
 				pausedReason: 'investigation',
 				storage: 'firestore',
 				lastAction: 'pause',
-			});
+			}).getPauseState;
+			controlService.getPauseState = jest.fn(() => persistedState());
 			const service = createBinanceOrderService({
 				createClient: jest.fn(),
 				controlService,
 			});
 
-			const status = service.getStatus();
+			const status = await service.getStatus();
 			expect(status).toMatchObject({
 				paused: true,
 				pausedBy: 'incident-commander',

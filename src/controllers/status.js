@@ -171,7 +171,7 @@ function getGeminiQuotaDependency({ gemini }) {
 }
 
 
-function getStatus() {
+async function getStatus() {
 	const previewEnvironment = isPreview();
 	const modelProvider = getModelProvider();
 	const runtimeConfig = remoteConfigService.getRuntimeConfig();
@@ -203,7 +203,7 @@ function getStatus() {
 	const langfusePromptsEnabled = isEnabled(process.env.ENABLE_LANGFUSE_PROMPTS);
 	const binancePriceCheckEnabled = isEnabled(process.env.ENABLE_BINANCE_PRICE_CHECK);
 	const binanceTradingEnabled = isEnabled(process.env.ENABLE_BINANCE_TRADING);
-	const binanceTradingStatus = binanceOrderService.getStatus();
+	const binanceTradingStatus = await binanceOrderService.getStatus();
 	const binanceTradingKillSwitchEnabled = binanceTradingEnabled;
 	const llmAlertEnrichmentEnabled = isEnabled(process.env.ENABLE_LLM_ALERT_ENRICHMENT);
 	const cloudflareAigEnabled = isEnabled(process.env.ENABLE_CLOUDFLARE_AIG);
@@ -443,9 +443,9 @@ function getStatus() {
 	};
 }
 
-function getApiStatus(req, res) {
+async function getApiStatus(req, res) {
 	try {
-		return res.status(200).json(getStatus());
+		return res.status(200).json(await getStatus());
 	} catch (error) {
 		console.error('[StatusController] getStatus failed:', error);
 		return res.status(500).json({ error: error.message, code: 'INTERNAL_ERROR' });

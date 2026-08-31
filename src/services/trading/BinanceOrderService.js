@@ -463,7 +463,7 @@ function deriveBoundedMarketBuy(order, maxNotional, averagePrice, symbolInfo, fi
 	return { ...order, quantity: undefined, quoteOrderQty };
 }
 
-async function validateOrderTestFilters(client, order, orderParams, filters) {
+async function validateOrderTestFilters(client, order, orderParams, filters, beforeSignedRequest) {
 	const hasDynamicPriceFilters = order.type === 'LIMIT'
 		&& (filters.has('PERCENT_PRICE') || filters.has('PERCENT_PRICE_BY_SIDE'));
 	const hasAccountDependentFilters = [...ACCOUNT_DEPENDENT_FILTERS].some((filterType) => filters.has(filterType));
@@ -475,6 +475,7 @@ async function validateOrderTestFilters(client, order, orderParams, filters) {
 		);
 	}
 
+	if (typeof beforeSignedRequest === 'function') await beforeSignedRequest();
 	try {
 		await client.testNewOrder(orderParams);
 	} catch (error) {
@@ -486,6 +487,15 @@ async function validateOrderTestFilters(client, order, orderParams, filters) {
 			'BINANCE_VALIDATION_FAILED',
 		);
 	}
+}
+
+function getTradingPausedError(pauseState) {
+	const message = pauseState.paused
+		? `Binance order submissions are paused${pauseState.pausedBy ? ` by ${pauseState.pausedBy}` : ''}${pauseState.pausedReason ? `: ${pauseState.pausedReason}` : ''}`
+		: pauseState.unavailable
+			? 'Binance trading pause state is unavailable; refusing to submit until storage recovers'
+			: 'Binance order submissions are blocked';
+	return new BinanceOrderServiceError(message, 'TRADING_PAUSED', 503);
 }
 
 function sanitizeFill(fill) {
@@ -585,11 +595,13 @@ function createBinanceOrderService({
 	controlService = tradingControlService,
 } = {}) {
 	return {
-		getStatus() {
+		async getStatus() {
 			const config = getConfig();
-			const controlStatus = typeof controlService.getStatus === 'function'
-				? controlService.getStatus()
-				: { paused: false, storage: 'memory' };
+			const controlStatus = typeof controlService.getPauseState === 'function'
+				? await controlService.getPauseState()
+				: typeof controlService.getStatus === 'function'
+					? controlService.getStatus()
+					: { paused: false, storage: 'memory' };
 			return {
 				enabled: config.enabled,
 				configured: config.configured,
@@ -696,22 +708,14 @@ function createBinanceOrderService({
 
 			const order = normalizeRequest(body);
 
-			// Runtime kill-switch: a paused or unavailable pause state
-			// blocks every Binance path (live and dryRun) so the
-			// operator can stop new submissions instantly. The check
-			// happens before any client is constructed or signed call
-			// is made.
-			if (typeof controlService.getPauseState === 'function') {
+			const ensureTradingControlOpen = async () => {
+				if (typeof controlService.getPauseState !== 'function') return;
 				const pauseState = await controlService.getPauseState();
-				if (pauseState && pauseState.isBlocked && pauseState.isBlocked()) {
-					const message = pauseState.paused
-						? `Binance order submissions are paused${pauseState.pausedBy ? ` by ${pauseState.pausedBy}` : ''}${pauseState.pausedReason ? `: ${pauseState.pausedReason}` : ''}`
-						: pauseState.unavailable
-							? 'Binance trading pause state is unavailable; refusing to submit until storage recovers'
-							: 'Binance order submissions are blocked';
-					throw new BinanceOrderServiceError(message, 'TRADING_PAUSED', 503);
+				if (pauseState && typeof pauseState.isBlocked === 'function' && pauseState.isBlocked()) {
+					throw getTradingPausedError(pauseState);
 				}
-			}
+			};
+			await ensureTradingControlOpen();
 			const requestIdempotencyKey = hasValue(idempotencyKey)
 				? idempotencyKey
 				: [body.idempotencyKey, body.idempotency_key].find(hasValue);
@@ -818,7 +822,7 @@ function createBinanceOrderService({
 
 			const orderParams = buildOrderParams({ ...boundedOrder, clientOrderId });
 			if (order.dryRun) {
-				await validateOrderTestFilters(client, boundedOrder, orderParams, filters);
+				await validateOrderTestFilters(client, boundedOrder, orderParams, filters, ensureTradingControlOpen);
 				return {
 					success: true,
 					dryRun: true,
@@ -827,7 +831,8 @@ function createBinanceOrderService({
 				};
 			}
 
-			await validateOrderTestFilters(client, boundedOrder, orderParams, filters);
+			await validateOrderTestFilters(client, boundedOrder, orderParams, filters, ensureTradingControlOpen);
+			await ensureTradingControlOpen();
 			try {
 				const response = await client.submitNewOrder(orderParams);
 				return {
