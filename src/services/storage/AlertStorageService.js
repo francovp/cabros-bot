@@ -30,6 +30,10 @@ const admin = require('firebase-admin');
 const crypto = require('crypto');
 const { encodeAlertPaginationCursor, parseAlertPaginationCursor } = require('./alertPaginationCursor');
 const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
+const { firestoreWriteMetricsService } = require('./FirestoreWriteMetricsService');
+
+const WRITE_METRICS_DOMAIN_ALERTS = 'alerts';
+const WRITE_METRICS_DOMAIN_REPLAYS = 'alertReplays';
 
 const COLLECTION_NAME = 'alerts';
 const REPLAY_COLLECTION_NAME = 'alertReplays';
@@ -1078,9 +1082,11 @@ async function saveAlertInternal({
 
 		const docRef = await firestore.collection(COLLECTION_NAME).add(document);
 		console.debug(`[AlertStorageService] Alert stored with ID: ${docRef.id}`);
+		firestoreWriteMetricsService.recordWriteSuccess(WRITE_METRICS_DOMAIN_ALERTS);
 		return docRef.id;
 	} catch (error) {
 		console.warn('[AlertStorageService] Failed to store alert in Firestore:', error.message);
+		firestoreWriteMetricsService.recordWriteFailure(WRITE_METRICS_DOMAIN_ALERTS);
 		return null;
 	}
 }
@@ -1263,9 +1269,11 @@ async function saveReplayAttempt({ alertId, idempotencyKey, channels, deliveryRe
 
 	try {
 		await firestore.collection(REPLAY_COLLECTION_NAME).doc(replayId).set(document, { merge: false });
+		firestoreWriteMetricsService.recordWriteSuccess(WRITE_METRICS_DOMAIN_REPLAYS);
 		return replayId;
 	} catch (error) {
 		console.warn('[AlertStorageService] Failed to store alert replay attempt:', error.message);
+		firestoreWriteMetricsService.recordWriteFailure(WRITE_METRICS_DOMAIN_REPLAYS);
 		throw createStorageUnavailableError(error);
 	}
 }
@@ -1788,5 +1796,6 @@ module.exports = {
 	_resetForTesting() {
 		db = null;
 		lastRetentionWarningValue = null;
+		firestoreWriteMetricsService.resetForTesting();
 	},
 };

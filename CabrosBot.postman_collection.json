@@ -276,6 +276,38 @@
       ]
     },
     {
+      "name": "Get Status - firestore write metrics",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{apiKey}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/status",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "status"
+          ]
+        },
+        "description": "Protected status request exposing the in-memory per-domain Firestore write metrics. counters reset on process restart and the dependencies.firestoreWriteMetrics key is omitted entirely until at least one Firestore write attempt is recorded by AlertStorageService.saveAlert/saveReplayAttempt or JobRepository.save. Mirrors the existing per-channel deliveryMetrics pattern."
+      },
+      "response": [
+        {
+          "name": "200 OK - firestoreWriteMetrics populated",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"dependencies\":{\"firestoreWriteMetrics\":{\"window\":{\"startedAt\":\"2026-08-31T22:30:00.000Z\",\"durationMs\":60000},\"writesAttempted\":1247,\"writesSucceeded\":1245,\"writesFailed\":2,\"successRate\":0.9984,\"byDomain\":{\"alerts\":{\"success\":1100,\"failure\":1,\"total\":1101,\"successRate\":0.9991},\"alertReplays\":{\"success\":12,\"failure\":0,\"total\":12,\"successRate\":1},\"jobs\":{\"success\":133,\"failure\":1,\"total\":134,\"successRate\":0.9925}}}}}"
+        }
+      ]
+    },
+    {
       "name": "Get Capabilities",
       "request": {
         "method": "GET",

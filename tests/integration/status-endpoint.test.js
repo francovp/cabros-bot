@@ -12,6 +12,7 @@ const { tradingViewMcpService } = require('../../src/services/tradingview/Tradin
 const geminiQuotaManager = require('../../src/services/grounding/geminiQuotaManager');
 const groundingMetrics = require('../../src/services/grounding/metrics');
 const { deliveryMetricsService } = require('../../src/services/notification/DeliveryMetricsService');
+const { firestoreWriteMetricsService } = require('../../src/services/storage/FirestoreWriteMetricsService');
 const { getRoutes } = require('../../src/routes');
 
 const testPrivateKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({
@@ -106,6 +107,7 @@ describe('Status endpoints', () => {
 		geminiQuotaManager.resetForTesting();
 		groundingMetrics.resetForTesting();
 		deliveryMetricsService.resetForTesting();
+		firestoreWriteMetricsService.resetForTesting();
 		tradingViewMcpService.runtimeStatus = savedTradingViewRuntimeStatus;
 		tradingViewMcpService.volumeRuntimeStatus = savedTradingViewVolumeRuntimeStatus;
 		tradingViewMcpService.enrichmentEvents = savedTradingViewEnrichmentEvents;
@@ -1859,6 +1861,58 @@ describe('Status endpoints', () => {
 			byChannel: expect.objectContaining({
 				discord: expect.objectContaining({ successRate: 1.0 }),
 			}),
+		}));
+	});
+
+	it('omits firestoreWriteMetrics when no writes have been recorded', async () => {
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies).not.toHaveProperty('firestoreWriteMetrics');
+	});
+
+	it('exposes firestoreWriteMetrics counters after alert and job writes', async () => {
+		firestoreWriteMetricsService.recordWriteSuccess('alerts');
+		firestoreWriteMetricsService.recordWriteSuccess('alerts');
+		firestoreWriteMetricsService.recordWriteFailure('alerts');
+		firestoreWriteMetricsService.recordWriteSuccess('jobs');
+		firestoreWriteMetricsService.recordWriteFailure('jobs');
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		const metrics = response.body.dependencies.firestoreWriteMetrics;
+		expect(metrics).toEqual(expect.objectContaining({
+			writesAttempted: 5,
+			writesSucceeded: 3,
+			writesFailed: 2,
+			successRate: 3 / 5,
+			window: expect.objectContaining({
+				startedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
+				durationMs: expect.any(Number),
+			}),
+			byDomain: expect.objectContaining({
+				alerts: expect.objectContaining({ success: 2, failure: 1, total: 3, successRate: 2 / 3 }),
+				jobs: expect.objectContaining({ success: 1, failure: 1, total: 2, successRate: 0.5 }),
+			}),
+		}));
+	});
+
+	it('aliases /api/capabilities to expose firestoreWriteMetrics', async () => {
+		firestoreWriteMetricsService.recordWriteSuccess('alerts');
+
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.firestoreWriteMetrics).toEqual(expect.objectContaining({
+			writesSucceeded: 1,
+			writesFailed: 0,
 		}));
 	});
 });

@@ -16,6 +16,7 @@ const { binanceOrderService } = require('../services/trading/BinanceOrderService
 const bootstrapReadiness = require('../lib/bootstrapReadiness');
 const { notificationRedriveService } = require('../services/notification/NotificationRedriveService');
 const { deliveryMetricsService } = require('../services/notification/DeliveryMetricsService');
+const { firestoreWriteMetricsService } = require('../services/storage/FirestoreWriteMetricsService');
 const { whatsAppCommandBridgeService } = require('../services/notification/WhatsAppCommandBridgeService');
 const geminiQuotaManager = require('../services/grounding/geminiQuotaManager');
 const groundingMetrics = require('../services/grounding/metrics');
@@ -388,6 +389,9 @@ function getStatus() {
 			tradingViewVolumeConfirmation,
 			firestore,
 			firestoreJobStorage,
+			...(firestoreWriteMetricsService.getSnapshot()
+				? { firestoreWriteMetrics: firestoreWriteMetricsService.getSnapshot() }
+				: {}),
 			sentry,
 			langfuse,
 			braveSearch,
