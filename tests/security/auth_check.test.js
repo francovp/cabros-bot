@@ -139,4 +139,64 @@ describe('Security: API Key Validation', () => {
 		spy.mockRestore();
 		console.error = originalConsoleError;
 	});
+
+	describe('WEBHOOK_API_KEYS multi-key support (GH-692 follow-up)', () => {
+		beforeEach(() => {
+			process.env.WEBHOOK_API_KEY = 'primary-key';
+			process.env.WEBHOOK_API_KEYS = 'secondary-key,tertiary-key';
+		});
+
+		it('should accept requests that match any key in WEBHOOK_API_KEYS', async () => {
+			const res = await request(app)
+				.post('/protected')
+				.set('x-api-key', 'secondary-key')
+				.send({});
+
+			expect(res.status).toBe(200);
+			expect(res.body.success).toBe(true);
+		});
+
+		it('should still accept the primary WEBHOOK_API_KEY when WEBHOOK_API_KEYS is set', async () => {
+			const res = await request(app)
+				.post('/protected')
+				.set('x-api-key', 'primary-key')
+				.send({});
+
+			expect(res.status).toBe(200);
+			expect(res.body.success).toBe(true);
+		});
+
+		it('should accept the third key from WEBHOOK_API_KEYS', async () => {
+			const res = await request(app)
+				.post('/protected')
+				.set('x-api-key', 'tertiary-key')
+				.send({});
+
+			expect(res.status).toBe(200);
+			expect(res.body.success).toBe(true);
+		});
+
+		it('should reject requests with an unknown key', async () => {
+			const res = await request(app)
+				.post('/protected')
+				.set('x-api-key', 'not-a-real-key')
+				.send({});
+
+			expect(res.status).toBe(403);
+			expect(res.body.error).toBe('Forbidden: Invalid API key');
+		});
+
+		it('should accept WEBHOOK_API_KEYS alone when WEBHOOK_API_KEY is unset', async () => {
+			delete process.env.WEBHOOK_API_KEY;
+			process.env.WEBHOOK_API_KEYS = 'only-secondary';
+
+			const res = await request(app)
+				.post('/protected')
+				.set('x-api-key', 'only-secondary')
+				.send({});
+
+			expect(res.status).toBe(200);
+			expect(res.body.success).toBe(true);
+		});
+	});
 });

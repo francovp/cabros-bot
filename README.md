@@ -218,6 +218,10 @@ pnpm test:firebase
 - `TRUST_PROXY` - Express trusted proxy setting for reverse-proxy deployments (`true`, `false`, `1` hop, or subnet string; defaults to `1` on Render/Vercel/Railway, and `false` for direct deployments)
 - `RATE_LIMIT_WINDOW_MS` - Global API rate limiter window in milliseconds (default: `900000` / 15 minutes; invalid values use the default)
 - `RATE_LIMIT_MAX` - Global API rate limiter max requests per window (default: `100`; invalid values use the default). Core `/api/webhook/alert` and `/api/webhook/message` ingest uses an isolated finite bucket of 1,000 requests per window so TradingView bursts do not consume the ordinary client bucket; API-key validation still applies.
+- `RATE_LIMIT_API_KEY_MAX` - Optional per-window maximum for authenticated (`x-api-key`) callers. Defaults to `RATE_LIMIT_MAX` when unset. Lets operators grant trusted API keys a different per-window budget than anonymous traffic (issue #692).
+- `WEBHOOK_API_KEYS` - Optional comma-separated list of additional accepted webhook API keys. Each key receives its own rate-limit bucket so distinct consumers cannot exhaust each other's budget (issue #692). Single `WEBHOOK_API_KEY` is still supported.
+
+Behind a trusted proxy (`TRUST_PROXY` truthy or `RENDER`/`VERCEL`/`RAILWAY_ENVIRONMENT_NAME` set), unauthenticated traffic falls back to a `client-ip|user-agent` fingerprint instead of the proxy IP alone, so a single noisy caller no longer exhausts the limit for everyone sharing the proxy (issue #692).
 - `LOG_LEVEL` - Structured JSON log verbosity (`debug`, `info`, `warn`, `error`, `silent`; defaults to `debug` in development and `info` in production)
 - `SERVICE_NAME` - Optional service name included in JSON logs (default: package name or `cabros-bot`)
 
