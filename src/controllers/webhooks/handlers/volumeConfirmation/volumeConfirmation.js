@@ -30,7 +30,7 @@ function postVolumeConfirmation() {
 				...decision,
 				analysis,
 				requestId,
-				totalDurationMs: Date.now() - startTime,
+				processingTimeMs: Math.max(0, Date.now() - startTime),
 			});
 		} catch (error) {
 			if (error instanceof VolumeConfirmationRequestError) {
@@ -48,7 +48,7 @@ function postVolumeConfirmation() {
 					error: error.message,
 					code: 'VOLUME_CONFIRMATION_FAILED',
 					requestId,
-					totalDurationMs: Date.now() - startTime,
+					processingTimeMs: Math.max(0, Date.now() - startTime),
 				});
 			}
 

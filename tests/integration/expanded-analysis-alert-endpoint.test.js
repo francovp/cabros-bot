@@ -224,7 +224,9 @@ jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
 			code: 'EXPANDED_ANALYSIS_ALERT_TIMEOUT',
 			timedOut: true,
 			timeoutMs: 5,
+			processingTimeMs: expect.any(Number),
 		}));
+		expect(res.body).not.toHaveProperty('totalDurationMs');
 		expect(res.body.results).toEqual([
 			expect.objectContaining({
 				symbol: 'NASDAQ:NVDA',

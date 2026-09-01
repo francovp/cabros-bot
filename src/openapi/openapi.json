@@ -4806,9 +4806,10 @@
           "requestId": {
             "type": "string"
           },
-          "totalDurationMs": {
+          "processingTimeMs": {
             "type": "integer",
-            "minimum": 0
+            "minimum": 0,
+            "example": 850
           }
         }
       },
