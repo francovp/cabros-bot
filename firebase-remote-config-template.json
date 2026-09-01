@@ -363,10 +363,38 @@
       },
       "description": "Cooldown length in alert-timeframe bars for same-signal repeat suppression",
       "valueType": "NUMBER"
+    },
+    "ENABLE_OUTCOME_INFORMED_DELIVERY": {
+      "defaultValue": {
+        "value": "false"
+      },
+      "description": "Append per-(exchange, symbol, side, setupType) outcome annotation to enriched webhook alerts when historical data exists; lookup is fail-open and bounded",
+      "valueType": "BOOLEAN"
+    },
+    "OUTCOME_ANNOTATION_LOOKBACK_DAYS": {
+      "defaultValue": {
+        "value": "30"
+      },
+      "description": "Lookback window for outcome annotation aggregation, in days (range: 1-365)",
+      "valueType": "NUMBER"
+    },
+    "OUTCOME_ANNOTATION_MIN_SAMPLE": {
+      "defaultValue": {
+        "value": "5"
+      },
+      "description": "Minimum sample size required to render an outcome annotation (range: 1-100)",
+      "valueType": "NUMBER"
+    },
+    "OUTCOME_ANNOTATION_TIMEOUT_MS": {
+      "defaultValue": {
+        "value": "2000"
+      },
+      "description": "Bounded lookup timeout for the outcome annotation query, in milliseconds (range: 50-10000)",
+      "valueType": "NUMBER"
     }
   },
   "version": {
-    "versionNumber": "21",
+    "versionNumber": "22",
     "isLegacy": true
   }
 }

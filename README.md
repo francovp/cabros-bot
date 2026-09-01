@@ -128,6 +128,10 @@ To report a vulnerability, see [`SECURITY.md`](./SECURITY.md) — the project do
 - `ENABLE_ALERT_HTF_RENDER` - Enable rendering higher-timeframe trend alignment on enriched webhook alerts (`true` or `false`, default: `true`)
 - `ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION` - Suppress duplicate channel delivery for the same `exchange|symbol|timeframe|side` signal within its cooldown window; suppressed alerts are still persisted with a `suppressedRepeat: true` marker and opposite-side flips always deliver (`true` or `false`, default: `false`)
 - `ALERT_SIGNAL_COOLDOWN_BARS` - Cooldown length in alert-timeframe bars for repeat suppression (`1`-`10`, default: `1`)
+- `ENABLE_OUTCOME_INFORMED_DELIVERY` - Attach a bounded per-(exchange, symbol, side, setupType) outcome annotation to enriched webhook alerts when historical evaluations exist; lookup is fail-open and bounded. Phase 1 ships annotation only; suppression is a follow-up (`true` or `false`, default: `false`)
+- `OUTCOME_ANNOTATION_LOOKBACK_DAYS` - Lookback window for outcome annotation aggregation, in days (`1`-`365`, default: `30`)
+- `OUTCOME_ANNOTATION_MIN_SAMPLE` - Minimum sample size required to render an annotation (`1`-`100`, default: `5`)
+- `OUTCOME_ANNOTATION_TIMEOUT_MS` - Bounded lookup timeout for the annotation query, in milliseconds (`50`-`10000`, default: `2000`)
 - Runtime gate: TradingView MCP data is only used when webhook requests include `?useTradingViewData=true`
 
 #### Firestore Alert Storage
@@ -435,6 +439,8 @@ When `ENABLE_FIRESTORE_JOB_STORAGE=true`, `featureFlags.firestoreJobStorage` rep
 `featureFlags.messageFooterMetadata` reports the `ENABLE_MESSAGE_FOOTER_METADATA` setting. It defaults to `true` and is disabled only when the environment variable is explicitly set to `false`.
 
 When `ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION=true`, `/api/webhook/alert` suppresses duplicate channel delivery for the same `(exchange, symbol, timeframe, side)` signal within a cooldown window of `ALERT_SIGNAL_COOLDOWN_BARS` bars (default `1`). Suppressed requests still return 200 with `suppressedRepeat: true`, empty `results`/`deliveredChannels`, and remain persisted with a suppression marker so replay and audit stay complete. Opposite-side flips always deliver; storage failures fail open to normal delivery. `featureFlags.alertSignalRepeatSuppression` reports the gate and `dependencies.alertSignalRepeatSuppression` exposes non-sensitive counters (`suppressedCount`, `lastSuppressedAt`, `activeTrackedSignals`).
+
+When `ENABLE_OUTCOME_INFORMED_DELIVERY=true`, `/api/webhook/alert` annotates enriched alerts with rolling per-(exchange, symbol, side, setupType) hit-rate and expectancy from `SignalOutcomeService.summarizeOutcomes` over the last `OUTCOME_ANNOTATION_LOOKBACK_DAYS` (default `30`). The annotation is bounded by `OUTCOME_ANNOTATION_TIMEOUT_MS` (default `2000`) and only renders when `OUTCOME_ANNOTATION_MIN_SAMPLE` (default `5`) historical evaluations exist. Side-aware (BUY/SELL) aggregates win over the global bucket; side spellings `LONG/SHORT/COMPRA/VENTA` normalize to `BUY/SELL`. Lookup failures and disabled states fail open: the alert is delivered unannotated. `featureFlags.outcomeInformedDelivery` reports the gate; `dependencies.outcomeInformedDelivery` exposes non-sensitive counters (`lookups`, `annotated`, `disabled`, `errors`, `lastAnnotatedAt`).
 
 `featureFlags.cloudflareAig` reports `ENABLE_CLOUDFLARE_AIG`, while `dependencies.cloudflareAig` reports whether the Cloudflare AI Gateway credentials are configured and ready. Runtime provider selection is controlled separately by `MODEL_PROVIDER=cloudflare`; set both values when status/capability telemetry should match active Cloudflare routing.
 
