@@ -176,7 +176,7 @@ describe('Status endpoints', () => {
 			misses: 0,
 			failures: 0,
 		});
-		expect(response.body.dependencies.tradingViewMcp).toEqual({
+		expect(response.body.dependencies.tradingViewMcp).toEqual(expect.objectContaining({
 			enabled: true,
 			configured: true,
 			ready: false,
@@ -195,7 +195,14 @@ describe('Status endpoints', () => {
 				failureThreshold: 5,
 				cooldownMs: 600000,
 			},
-		});
+		}));
+		expect(response.body.dependencies.tradingViewMcp.mcpTools).toEqual(expect.objectContaining({
+			discoveredSource: expect.any(String),
+			wired: expect.objectContaining({
+				coin_analysis: expect.objectContaining({ wired: true }),
+				top_gainers: expect.objectContaining({ wired: true }),
+			}),
+		}));
 		expect(response.body.dependencies.braveSearch).toEqual({
 			enabled: false,
 			configured: false,
@@ -253,6 +260,103 @@ describe('Status endpoints', () => {
 
 		expect(response.status).toBe(200);
 		expect(response.body.featureFlags.tradingViewConfluenceEnrichment).toBe(true);
+	});
+
+	it('exposes MCP tool inventory under dependencies.tradingViewMcp.mcpTools using the static fallback catalog', async () => {
+		const originalFetch = tradingViewMcpService.mcpToolInventory._fetch;
+		tradingViewMcpService.mcpToolInventory._fetch = jest.fn().mockRejectedValue(new Error('ECONNREFUSED'));
+		tradingViewMcpService.mcpToolInventory._resetForTesting();
+		tradingViewMcpService.mcpToolInventory._url = 'https://example.test/mcp';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		tradingViewMcpService.mcpToolInventory._fetch = originalFetch;
+
+		expect(response.status).toBe(200);
+		const mcpTools = response.body.dependencies.tradingViewMcp.mcpTools;
+		expect(mcpTools).toBeDefined();
+		expect(mcpTools.discoveredSource).toBe('fallback-static-catalog');
+		expect(Array.isArray(mcpTools.discovered)).toBe(true);
+		expect(mcpTools.discovered).toEqual(expect.arrayContaining([
+			'coin_analysis',
+			'combined_analysis',
+			'multi_timeframe_analysis',
+			'volume_confirmation_analysis',
+			'top_gainers',
+			'top_losers',
+			'volume_breakout_scanner',
+			'smart_volume_scanner',
+			'bollinger_scan',
+			'backtest_strategy',
+			'compare_strategies',
+			'walk_forward_backtest_strategy',
+			'multi_agent_analysis',
+			'market_snapshot',
+			'rating_filter',
+			'consecutive_candles_scan',
+			'advanced_candle_pattern',
+		]));
+		expect(mcpTools.wired.coin_analysis).toEqual(expect.objectContaining({
+			wired: true,
+			callers: ['enrichFromSignal', 'alert/grounding'],
+			lastSuccessAt: null,
+			lastFailureAt: null,
+		}));
+		expect(mcpTools.wired.top_gainers).toEqual(expect.objectContaining({
+			wired: true,
+			callers: ['marketScanner'],
+		}));
+		expect(mcpTools.wired.backtest_strategy).toEqual(expect.objectContaining({ wired: false }));
+		expect(mcpTools.wired.multi_agent_analysis).toEqual(expect.objectContaining({ wired: false }));
+		expect(typeof mcpTools.discoveredAt).toBe('string');
+	});
+
+	it('records per-tool telemetry in the MCP tool inventory after a successful call', async () => {
+		const originalCallTool = tradingViewMcpService._callTool;
+		tradingViewMcpService._callTool = jest.fn().mockResolvedValue({
+			price_data: { current_price: 70000 },
+		});
+		try {
+			await tradingViewMcpService.callCoinAnalysis({
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+				timeframe: '1D',
+			});
+
+			const response = await request(app)
+				.get('/api/status')
+				.set('x-api-key', 'status-key');
+
+			expect(response.status).toBe(200);
+			const coinTelemetry = response.body.dependencies.tradingViewMcp.mcpTools.wired.coin_analysis;
+			expect(coinTelemetry.lastSuccessAt).not.toBeNull();
+		} finally {
+			tradingViewMcpService._callTool = originalCallTool;
+		}
+	});
+
+	it('returns an empty wired inventory when TradingView MCP enrichment is disabled and discovery fails', async () => {
+		process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT = 'false';
+		const originalFetch = tradingViewMcpService.mcpToolInventory._fetch;
+		tradingViewMcpService.mcpToolInventory._fetch = jest.fn().mockRejectedValue(new Error('ECONNREFUSED'));
+		tradingViewMcpService.mcpToolInventory._resetForTesting();
+		tradingViewMcpService.mcpToolInventory._url = 'https://example.test/mcp';
+		try {
+			const response = await request(app)
+				.get('/api/status')
+				.set('x-api-key', 'status-key');
+
+			expect(response.status).toBe(200);
+			const mcpTools = response.body.dependencies.tradingViewMcp.mcpTools;
+			expect(mcpTools.discoveredSource).toBe('fallback-static-catalog');
+			expect(mcpTools.discovered).toEqual(expect.arrayContaining(['coin_analysis', 'multi_agent_analysis']));
+			expect(mcpTools.wired.coin_analysis.wired).toBe(true);
+			expect(mcpTools.wired.multi_agent_analysis.wired).toBe(false);
+		} finally {
+			tradingViewMcpService.mcpToolInventory._fetch = originalFetch;
+		}
 	});
 
 	it('reports scanner presets as ephemeral when no Firestore gate is enabled', async () => {
@@ -1111,7 +1215,7 @@ describe('Status endpoints', () => {
 		expect(response.status).toBe(200);
 		expect(response.body.featureFlags.marketScanner).toBe(true);
 		expect(response.body.featureFlags.tradingViewMcpEnrichment).toBe(false);
-		expect(response.body.dependencies.tradingViewMcp).toEqual({
+		expect(response.body.dependencies.tradingViewMcp).toEqual(expect.objectContaining({
 			enabled: true,
 			configured: true,
 			ready: false,
@@ -1130,7 +1234,10 @@ describe('Status endpoints', () => {
 				failureThreshold: 5,
 				cooldownMs: 600000,
 			},
-		});
+			mcpTools: expect.objectContaining({
+				discoveredSource: 'fallback-static-catalog',
+			}),
+		}));
 	});
 
 	it('keeps observed MCP readiness visible after an always-mounted consumer uses it', async () => {
