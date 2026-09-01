@@ -45,6 +45,29 @@ const SETUP_TYPES = new Set([
 	'reversal',
 ]);
 
+const STRUCTURAL_KEYWORDS_REGEX = /\b(trend|tendencia|uptrend|downtrend|alcista|bajista|breakout|ruptura|revers|mean[-_\s]?reversion|support|soporte|resistance|resistencia|range|rango|channel|canal|pullback|consolidat|momentum|bounce|rebote|structure|estructura|moving\s+average|promedio\s+m[oó]vil|rsi|macd|bollinger|atr|volatility|volatilidad|level|nivel|pivot)\b/i;
+
+function hasStructuralEvidenceInSources(sources) {
+	if (!Array.isArray(sources) || sources.length === 0) {
+		return false;
+	}
+	return sources.some(source => {
+		if (!source) return false;
+		if (typeof source === 'string') {
+			return STRUCTURAL_KEYWORDS_REGEX.test(source);
+		}
+		const text = [
+			source.title,
+			source.snippet,
+			source.text,
+			source.content,
+			source.description,
+			source.summary,
+		].filter(Boolean).join(' ');
+		return STRUCTURAL_KEYWORDS_REGEX.test(text);
+	});
+}
+
 function parseOptionalRiskValue(value) {
 	if (typeof value === 'number' && Number.isFinite(value)) {
 		return value;
@@ -796,7 +819,9 @@ function parseEnrichedAlertResponse(response, sources) {
 			? Math.sign(sentimentScore) * ZERO_SOURCE_SENTIMENT_SCORE_CAP
 			: sentimentScore;
 
-		const parsedSetupType = parseOptionalSetupType(parsed.setup_type);
+		const hasEvidence = !Array.isArray(sources) || hasStructuralEvidenceInSources(sources);
+		const rawSetupType = parseOptionalSetupType(parsed.setup_type);
+		const parsedSetupType = hasEvidence ? rawSetupType : undefined;
 		const parsedSetupEvidence = parsedSetupType && typeof parsed.setup_evidence === 'string' && parsed.setup_evidence.trim()
 			? parsed.setup_evidence.trim()
 			: undefined;
