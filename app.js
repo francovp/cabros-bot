@@ -39,6 +39,13 @@ app.get('/ready', (req, res) => {
 	return res.status(status.ready ? 200 : 503).json(status);
 });
 
+// Request-deadline middleware enforces a per-handler time budget so that
+// slow external providers (Gemini, TradingView MCP, Twelve Data, etc.)
+// cannot hold the connection open past the reverse-proxy timeout.
+// Fast/read-only endpoints (`/healthcheck`, `/ready`, `/openapi.json`,
+// `/docs`) are exempted; the deadline applies to every other route.
+app.use(require('./src/lib/requestDeadline'));
+
 // Rate Limiter (must be after healthcheck to avoid limiting health checks)
 app.use(require('./src/lib/rateLimiter'));
 
