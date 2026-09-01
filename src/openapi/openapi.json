@@ -3147,6 +3147,16 @@
                   "triggersTotal": 0,
                   "braveFallbacksDuringCooldown": 0,
                   "lastBraveFallbackAt": null,
+                  "concurrencyGate": {
+                    "maxConcurrent": 10,
+                    "queueTimeoutMs": 0,
+                    "inFlight": 0,
+                    "queueDepth": 0,
+                    "acquiredTotal": 0,
+                    "shedTotal": 0,
+                    "timeoutTotal": 0,
+                    "abortedTotal": 0
+                  },
                   "metrics": {
                     "totalRequests": 0,
                     "successRequests": 0,

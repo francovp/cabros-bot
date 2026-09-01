@@ -68,6 +68,8 @@ const PARAMETER_SCHEMA = Object.freeze({
 	ENABLE_ALERT_HTF_RENDER: { type: 'boolean', defaultValue: true },
 	ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION: { type: 'boolean', defaultValue: false },
 	ALERT_SIGNAL_COOLDOWN_BARS: { type: 'number', defaultValue: 1, integer: true, min: 1, max: 10 },
+	LLM_GLOBAL_MAX_CONCURRENT: { type: 'number', defaultValue: Number.POSITIVE_INFINITY, integer: true, min: 1, max: 50 },
+	LLM_GLOBAL_QUEUE_TIMEOUT_MS: { type: 'number', defaultValue: 0, integer: true, min: 0, max: 30000 },
 });
 
 let remoteOverrides = {};
@@ -76,8 +78,35 @@ let templateVersion = null;
 let lastSuccessfulLoad = null;
 let lastErrorCategory = null;
 let refreshTimer = null;
+let expirationTimer = null;
 let loadingPromise = null;
 let consecutiveFailures = 0;
+
+function clearExpirationTimer() {
+	if (expirationTimer) {
+		clearTimeout(expirationTimer);
+		expirationTimer = null;
+	}
+}
+
+function scheduleExpirationTimer(delayMs) {
+	clearExpirationTimer();
+	if (!isEnabled()) {
+		return;
+	}
+	const timeout = typeof delayMs === 'number' ? delayMs : getMaxAgeMs();
+	if (timeout <= 0) {
+		applyRuntimeConfig();
+		return;
+	}
+	expirationTimer = setTimeout(() => {
+		expirationTimer = null;
+		applyRuntimeConfig();
+	}, timeout + 1);
+	if (typeof expirationTimer.unref === 'function') {
+		expirationTimer.unref();
+	}
+}
 
 function isEnabled() {
 	return process.env.ENABLE_FIREBASE_REMOTE_CONFIG === 'true';
@@ -219,6 +248,24 @@ function getRuntimeConfig() {
 		Object.assign(config, remoteOverrides);
 	}
 	return config;
+}
+
+/**
+ * Apply runtime config to consumers that need it (e.g. LlmConcurrencyGate).
+ * Called after environment and remote config are reconciled.
+ */
+function applyRuntimeConfig() {
+	try {
+		// Lazy-require to avoid pulling the gate into remote-config tests.
+		const llmConcurrencyGate = require('../llm/LlmConcurrencyGate');
+		const config = getRuntimeConfig();
+		llmConcurrencyGate.configure({
+			maxConcurrent: config.LLM_GLOBAL_MAX_CONCURRENT,
+			queueTimeoutMs: config.LLM_GLOBAL_QUEUE_TIMEOUT_MS,
+		});
+	} catch (error) {
+		console.warn('[remoteConfig] failed to apply runtime config:', error.message);
+	}
 }
 
 function getSource() {
@@ -383,6 +430,8 @@ async function loadNow(options = {}) {
 			if (invalidValue) {
 				console.warn('[RemoteConfigService] Ignored invalid allow-listed value');
 			}
+			applyRuntimeConfig();
+			scheduleExpirationTimer(getMaxAgeMs());
 			return true;
 		} catch (error) {
 			remoteOverrides = {};
@@ -390,6 +439,8 @@ async function loadNow(options = {}) {
 			lastErrorCategory = getErrorCategory(error);
 			consecutiveFailures += 1;
 			console.warn('[RemoteConfigService] Remote Config load failed:', lastErrorCategory);
+			clearExpirationTimer();
+			applyRuntimeConfig();
 			return false;
 		} finally {
 			loadingPromise = null;
@@ -400,7 +451,11 @@ async function loadNow(options = {}) {
 }
 
 async function start() {
-	if (!isEnabled() || refreshTimer) {
+	if (!isEnabled()) {
+		applyRuntimeConfig();
+		return false;
+	}
+	if (refreshTimer) {
 		return false;
 	}
 
@@ -419,6 +474,7 @@ function stop() {
 		clearInterval(refreshTimer);
 		refreshTimer = null;
 	}
+	clearExpirationTimer();
 }
 
 function resetForTesting() {
@@ -430,11 +486,13 @@ function resetForTesting() {
 	lastErrorCategory = null;
 	loadingPromise = null;
 	consecutiveFailures = 0;
+	applyRuntimeConfig();
 }
 
 module.exports = {
 	PARAMETER_SCHEMA,
 	getRuntimeConfig,
+	applyRuntimeConfig,
 	getStatus,
 	loadNow,
 	start,
@@ -447,5 +505,8 @@ module.exports = {
 		lastSuccessfulLoad = new Date(loadedAt).toISOString();
 		lastErrorCategory = null;
 		consecutiveFailures = 0;
+		applyRuntimeConfig();
+		const remainingMs = (loadedAt + getMaxAgeMs()) - Date.now();
+		scheduleExpirationTimer(remainingMs);
 	},
 };

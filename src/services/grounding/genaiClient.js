@@ -20,6 +20,7 @@ const { getCloudflareAiClient } = require('../inference/cloudflareAiClient');
 const { normalizeUsageMetadata } = require('../../lib/tokenUsage');
 const sentryService = require('../monitoring/SentryService');
 const geminiQuotaManager = require('./geminiQuotaManager');
+const llmConcurrencyGate = require('../llm/LlmConcurrencyGate');
 
 function isGeminiQuotaError(error) {
 	return geminiQuotaManager.isQuotaError(error);
@@ -49,6 +50,7 @@ class NonRetryableProviderError extends Error {
 class GenaiClient {
 	constructor() {
 		this.genAI = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+		this.llmConcurrencyGate = llmConcurrencyGate;
 	}
 
 	async _searchBrave(query, count = 3, signal = null) {
@@ -155,6 +157,21 @@ class GenaiClient {
 			throw signal.reason || new Error('Grounding timeout');
 		}
 
+		// Acquire a process-wide LLM concurrency slot so search calls respect
+		// the same cross-surface cap as llmCall().
+		const releaseGate = await llmConcurrencyGate.acquire({ signal });
+		// Recheck cooldown after acquire - another queued caller may have
+		// observed a 429 and opened the cooldown while we were waiting.
+		if (geminiQuotaManager.isCooldownActive()) {
+			releaseGate();
+			const remainingMs = geminiQuotaManager.getRemainingCooldownMs();
+			const error = new Error(`Gemini quota cooldown active (${remainingMs}ms remaining)`);
+			error.code = 'GEMINI_QUOTA_EXHAUSTED';
+			error.status = 429;
+			error.retryDelay = remainingMs;
+			throw error;
+		}
+
 		let abortCleanup = null;
 		let generatePromise = this.genAI.models.generateContent({
 			model: model,
@@ -175,8 +192,13 @@ class GenaiClient {
 		try {
 			result = await generatePromise;
 			if (abortCleanup) abortCleanup();
+			releaseGate();
 		} catch (error) {
 			if (abortCleanup) abortCleanup();
+			if (isGeminiQuotaError(error)) {
+				geminiQuotaManager.triggerQuotaCooldown(error);
+			}
+			releaseGate();
 			throw error;
 		}
 
@@ -342,6 +364,25 @@ class GenaiClient {
 			throw error;
 		}
 
+		// Acquire a process-wide LLM concurrency slot before contacting the
+		// provider. Shed / queue-timeout failures are typed errors callers
+		// catch and fail-open into the un-enriched path.
+		const releaseGate = await llmConcurrencyGate.acquire({
+			timeoutMs: opts.gateTimeoutMs,
+			signal,
+		});
+		// Recheck cooldown after acquire - another queued caller may have
+		// observed a 429 and opened the cooldown while we were waiting.
+		if (geminiQuotaManager.isCooldownActive()) {
+			releaseGate();
+			const remainingMs = geminiQuotaManager.getRemainingCooldownMs();
+			const error = new Error(`Gemini quota cooldown active (${remainingMs}ms remaining)`);
+			error.code = 'GEMINI_QUOTA_EXHAUSTED';
+			error.status = 429;
+			error.retryDelay = remainingMs;
+			throw error;
+		}
+
 		let abortCleanup = null;
 		let generatePromise = this.genAI.models.generateContent({
 			model,
@@ -366,6 +407,7 @@ class GenaiClient {
 		try {
 			const response = await generatePromise;
 			if (abortCleanup) abortCleanup();
+			if (releaseGate) releaseGate();
 
 			// Handle response structure - could be direct or wrapped in response property
 			const result = response?.response || response || {};
@@ -407,11 +449,12 @@ class GenaiClient {
 			};
 		} catch (error) {
 			if (abortCleanup) abortCleanup();
-			if (signal?.aborted || error.name === 'AbortError' || error.message === 'Grounding timeout' || (typeof error.message === 'string' && error.message.includes('timeout'))) {
-				throw error;
-			}
 			if (isGeminiQuotaError(error)) {
 				geminiQuotaManager.triggerQuotaCooldown(error);
+			}
+			if (releaseGate) releaseGate();
+			if (signal?.aborted || error.name === 'AbortError' || error.message === 'Grounding timeout' || (typeof error.message === 'string' && error.message.includes('timeout'))) {
+				throw error;
 			}
 			if (this._isNonRetryableGeminiError(error)) {
 				throw new NonRetryableProviderError(

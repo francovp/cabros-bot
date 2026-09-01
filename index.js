@@ -94,6 +94,7 @@ async function bootstrapApplication() {
 	if (lifecycle.isShuttingDown()) return;
 
 	void remoteConfigService.start();
+	remoteConfigService.applyRuntimeConfig();
 
 	// Start background signal outcome evaluation worker if enabled
 	SignalOutcomeService.startWorker();

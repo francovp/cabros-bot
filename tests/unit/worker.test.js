@@ -33,6 +33,7 @@ describe('Render worker shutdown', () => {
 			jest.doMock('../../src/services/remoteConfig/RemoteConfigService', () => ({
 				start: startRc,
 				stop: stopRc,
+				applyRuntimeConfig: jest.fn(),
 			}));
 			jest.doMock('../../src/controllers/webhooks/handlers/alert/alert', () => ({
 				initializeNotificationServices: jest.fn().mockResolvedValue(undefined),

@@ -428,6 +428,71 @@ describe('RemoteConfigService', () => {
 		expect(config.SIGNAL_OUTCOME_RETENTION_DAYS).toBe(180);
 	});
 
+	it('restores fallback LLM gate configuration when Remote Config load fails', async () => {
+		const llmConcurrencyGate = require('../../src/services/llm/LlmConcurrencyGate');
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+
+		// Step 1: Initial successful load sets finite gate
+		mockTemplate({
+			LLM_GLOBAL_MAX_CONCURRENT: 5,
+			LLM_GLOBAL_QUEUE_TIMEOUT_MS: 2500,
+		});
+		alertStorageService.getFirestore.mockReturnValue({});
+		await remoteConfigService.loadNow();
+		expect(llmConcurrencyGate.maxConcurrent).toBe(5);
+		expect(llmConcurrencyGate.queueTimeoutMs).toBe(2500);
+
+		// Step 2: Second load fails (e.g. timeout or rejected)
+		const rejectingLoad = jest.fn().mockRejectedValue(new Error('network error'));
+		mockTemplate({}, { load: rejectingLoad });
+		await remoteConfigService.loadNow();
+
+		// Gate should restore environment/default fallback (unbounded / 0)
+		expect(llmConcurrencyGate.maxConcurrent).toBe(Number.POSITIVE_INFINITY);
+		expect(llmConcurrencyGate.queueTimeoutMs).toBe(0);
+	});
+
+	it('restores fallback LLM gate configuration when Remote Config expires past max age', async () => {
+		jest.useFakeTimers();
+		try {
+			const llmConcurrencyGate = require('../../src/services/llm/LlmConcurrencyGate');
+			process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+			process.env.FIREBASE_REMOTE_CONFIG_MAX_AGE_MS = '3600000'; // 1 hour
+
+			// Step 1: Initial successful load sets finite gate
+			mockTemplate({
+				LLM_GLOBAL_MAX_CONCURRENT: 5,
+				LLM_GLOBAL_QUEUE_TIMEOUT_MS: 2500,
+			});
+			alertStorageService.getFirestore.mockReturnValue({});
+			await remoteConfigService.loadNow();
+			expect(llmConcurrencyGate.maxConcurrent).toBe(5);
+			expect(llmConcurrencyGate.queueTimeoutMs).toBe(2500);
+
+			// Step 2: Time passes past max age without a fresh network load
+			jest.advanceTimersByTime(3600000 + 1000);
+
+			// Gate should passively restore environment/default fallback (unbounded / 0)
+			expect(llmConcurrencyGate.maxConcurrent).toBe(Number.POSITIVE_INFINITY);
+			expect(llmConcurrencyGate.queueTimeoutMs).toBe(0);
+		} finally {
+			jest.clearAllTimers();
+			jest.useRealTimers();
+		}
+	});
+
+	it('applies environment LLM gate configuration when start() is called and Remote Config is disabled', async () => {
+		const llmConcurrencyGate = require('../../src/services/llm/LlmConcurrencyGate');
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'false';
+		process.env.LLM_GLOBAL_MAX_CONCURRENT = '4';
+		process.env.LLM_GLOBAL_QUEUE_TIMEOUT_MS = '1200';
+
+		const started = await remoteConfigService.start();
+		expect(started).toBe(false);
+		expect(llmConcurrencyGate.maxConcurrent).toBe(4);
+		expect(llmConcurrencyGate.queueTimeoutMs).toBe(1200);
+	});
+
 	describe('getStatus readiness and lifecycle states', () => {
 		it('reports disabled readiness status when Remote Config is disabled', () => {
 			process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'false';
@@ -493,7 +558,6 @@ describe('RemoteConfigService', () => {
 				configured: true,
 				ready: false,
 				status: 'degraded',
-				lastSuccessfulLoad: null,
 				lastErrorCategory: 'load_failed',
 				consecutiveFailures: 1,
 			}));
