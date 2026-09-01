@@ -363,6 +363,27 @@
       },
       "description": "Cooldown length in alert-timeframe bars for same-signal repeat suppression",
       "valueType": "NUMBER"
+    },
+    "ENABLE_MIN_ALERT_CONTEXT": {
+      "defaultValue": {
+        "value": "false"
+      },
+      "description": "Synthesize a degraded-but-honest decision package (entry reference + provisional invalidation/target) when TradingView MCP enrichment fails and the alert is a parseable trading signal (GH-581 / CB-269)",
+      "valueType": "BOOLEAN"
+    },
+    "MIN_ALERT_PROVISIONAL_STOP_PERCENT": {
+      "defaultValue": {
+        "value": "2.5"
+      },
+      "description": "Provisional stop percentage for the synthesized minimum alert context envelope (default 2.5%, bounded 0.1-20)",
+      "valueType": "NUMBER"
+    },
+    "MIN_ALERT_PROVISIONAL_TARGET_PERCENT": {
+      "defaultValue": {
+        "value": "5.0"
+      },
+      "description": "Provisional target percentage for the synthesized minimum alert context envelope (default 5.0%, bounded 0.1-40)",
+      "valueType": "NUMBER"
     }
   },
   "version": {
