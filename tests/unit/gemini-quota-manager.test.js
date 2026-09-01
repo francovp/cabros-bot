@@ -63,7 +63,7 @@ describe('GeminiQuotaManager', () => {
 		expect(result).toBe(false);
 
 		await expect(
-			geminiQuotaManager.waitForCooldownIfNeeded({ maxWaitMs: 2000, throwOnExceeded: true })
+			geminiQuotaManager.waitForCooldownIfNeeded({ maxWaitMs: 2000, throwOnExceeded: true }),
 		).rejects.toThrow('Gemini quota cooldown');
 	});
 
@@ -121,6 +121,12 @@ describe('GeminiQuotaManager', () => {
 	it('returns initial snapshot when no cooldowns have occurred', () => {
 		const snapshot = geminiQuotaManager.getSnapshot();
 		expect(snapshot).toEqual({
+			windowStartedAt: null,
+			windowDurationMs: 60000,
+			requestsInWindow: 0,
+			exhaustedEventsInWindow: 0,
+			lastExhaustedAt: null,
+			quotaStatus: 'healthy',
 			cooldownActive: false,
 			remainingCooldownMs: 0,
 			lastTriggeredAt: null,
@@ -188,6 +194,12 @@ describe('GeminiQuotaManager', () => {
 		geminiQuotaManager.resetForTesting();
 
 		expect(geminiQuotaManager.getSnapshot()).toEqual({
+			windowStartedAt: null,
+			windowDurationMs: 60000,
+			requestsInWindow: 0,
+			exhaustedEventsInWindow: 0,
+			lastExhaustedAt: null,
+			quotaStatus: 'healthy',
 			cooldownActive: false,
 			remainingCooldownMs: 0,
 			lastTriggeredAt: null,
@@ -196,5 +208,31 @@ describe('GeminiQuotaManager', () => {
 			lastBraveFallbackAt: null,
 		});
 	});
-});
 
+	it('tracks Gemini requests and quota exhaustion in a bounded window', () => {
+		jest.useFakeTimers().setSystemTime(new Date('2026-08-25T10:00:00.000Z'));
+
+		geminiQuotaManager.recordRequest();
+		geminiQuotaManager.recordRequest();
+		geminiQuotaManager.triggerQuotaCooldown({ status: 429, retryDelay: 0 });
+
+		expect(geminiQuotaManager.getSnapshot()).toEqual(expect.objectContaining({
+			windowStartedAt: '2026-08-25T10:00:00.000Z',
+			windowDurationMs: 60000,
+			requestsInWindow: 2,
+			exhaustedEventsInWindow: 1,
+			lastExhaustedAt: '2026-08-25T10:00:00.000Z',
+			quotaStatus: 'exhausted',
+		}));
+
+		jest.advanceTimersByTime(60001);
+
+		expect(geminiQuotaManager.getSnapshot()).toEqual(expect.objectContaining({
+			windowStartedAt: null,
+			requestsInWindow: 0,
+			exhaustedEventsInWindow: 0,
+			lastExhaustedAt: null,
+			quotaStatus: 'healthy',
+		}));
+	});
+});
