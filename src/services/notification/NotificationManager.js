@@ -8,6 +8,7 @@ const remoteConfigService = require('../remoteConfig/RemoteConfigService');
 const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
 const { notificationRedriveService } = require('./NotificationRedriveService');
 const { deliveryMetricsService } = require('./DeliveryMetricsService');
+const { snoozeService } = require('./SnoozeService');
 
 const DEFAULT_ZERO_CHANNEL_ALERT_COOLDOWN_MS = 300000;
 
@@ -60,6 +61,33 @@ class NotificationManager {
 	resetForTesting() {
 		this.zeroChannelBroadcastCount = 0;
 		this.lastZeroChannelAlertAt = 0;
+	}
+
+	/**
+	 * Return the snooze short-circuit results for the requested channel set.
+	 * If the snooze is active for a subset of the requested channels, only those
+	 * channels are short-circuited and the rest continue to dispatch.
+	 *
+	 * @param {string[]} channelNames - List of channel names being dispatched.
+	 * @returns {Array<{channel: string, success: boolean, category: string, snoozedUntil: string, error: string}>}
+	 */
+	_getSnoozedResults(channelNames) {
+		const snoozedResults = [];
+		for (const chName of channelNames) {
+			if (snoozeService.isSnoozed(chName)) {
+				const active = snoozeService.getActive();
+				snoozedResults.push({
+					channel: chName,
+					success: false,
+					category: 'SNOOZED',
+					snoozedUntil: active && active.expiresAt
+						? new Date(active.expiresAt).toISOString()
+						: null,
+					error: 'Notification channel is currently snoozed by operator',
+				});
+			}
+		}
+		return snoozedResults;
 	}
 
 	/**
@@ -237,6 +265,24 @@ class NotificationManager {
 			return [];
 		}
 
+		// Snooze short-circuit: if a snooze is active for any of the requested
+		// channels, surface SNOOZED SendResults for those channels and let the
+		// remaining channels dispatch normally.
+		const snoozedResults = this._getSnoozedResults(channels.map((ch) => ch.name));
+		if (snoozedResults.length === channels.length) {
+			console.info('[NotificationManager] All requested channels are snoozed; short-circuiting dispatch');
+			return snoozedResults;
+		}
+		if (snoozedResults.length > 0) {
+			// Filter out snoozed channels but keep their order-aware results for later merging.
+			const snoozedSet = new Set(snoozedResults.map((r) => r.channel));
+			for (let i = channels.length - 1; i >= 0; i--) {
+				if (snoozedSet.has(channels[i].name)) {
+					channels.splice(i, 1);
+				}
+			}
+		}
+
 		const startTime = Date.now();
 		const { parentSpan } = options;
 
@@ -351,14 +397,20 @@ class NotificationManager {
 
 				this._recordDeliveryMetrics(formattedResults, totalDurationMs);
 
-				console.info('[NotificationManager] Delivery results:', JSON.stringify(formattedResults.map(r => ({
+				// Merge in any SNOOZED results for channels we short-circuited before dispatch.
+				const finalResults = snoozedResults.length > 0
+					? [...snoozedResults, ...formattedResults]
+					: formattedResults;
+
+				console.info('[NotificationManager] Delivery results:', JSON.stringify(finalResults.map(r => ({
 					channel: r ? r.channel : 'unknown',
 					success: r ? r.success : false,
+					category: r ? r.category : undefined,
 					messageId: r ? r.messageId : undefined,
 					error: r ? r.error : undefined,
 				}))));
 
-				return formattedResults;
+				return finalResults;
 			}
 
 			/**
@@ -425,6 +477,20 @@ class NotificationManager {
 			return [];
 		}
 
+		// Snooze short-circuit: drop any enabled channel that is currently snoozed
+		// from the dispatch list and return SNOOZED SendResults so the caller
+		// (e.g. /api/webhook/alert) can surface the suppression to TradingView.
+		const snoozedResults = this._getSnoozedResults(enabledChannels.map((ch) => ch.name));
+		let dispatchChannels = enabledChannels;
+		if (snoozedResults.length > 0) {
+			const snoozedSet = new Set(snoozedResults.map((r) => r.channel));
+			dispatchChannels = enabledChannels.filter((ch) => !snoozedSet.has(ch.name));
+			if (dispatchChannels.length === 0) {
+				console.info('[NotificationManager] All enabled channels are snoozed; short-circuiting broadcast');
+				return snoozedResults;
+			}
+		}
+
 		console.debug('[NotificationManager] Sending alert to', enabledChannels.length, 'enabled channel(s):', enabledChannels.map(ch => ch.name).join(', '));
 		const dispatchSpan = sentryService.startInactiveSpan({
 			name: 'notification.send_to_all',
@@ -440,7 +506,7 @@ class NotificationManager {
 
 		let results;
 		try {
-			const sendPromises = enabledChannels.map((ch) => {
+			const sendPromises = dispatchChannels.map((ch) => {
 				const sendSpan = sentryService.startInactiveSpan({
 					name: `notification.send.${ch.name}`,
 					op: 'notification.send',
@@ -469,7 +535,7 @@ class NotificationManager {
 		}
 
 		const formattedResults = results.map((r, idx) => {
-			const chName = enabledChannels[idx] ? enabledChannels[idx].name : 'unknown';
+			const chName = dispatchChannels[idx] ? dispatchChannels[idx].name : 'unknown';
 			if (r.status === 'fulfilled') {
 				if (r.value && typeof r.value === 'object') {
 					return {
@@ -536,14 +602,20 @@ class NotificationManager {
 
 		this._recordDeliveryMetrics(formattedResults, totalDurationMs);
 
-		console.info('[NotificationManager] Delivery results:', JSON.stringify(formattedResults.map(r => ({
+		// Merge SNOOZED results for channels that were short-circuited before dispatch.
+		const finalResults = snoozedResults.length > 0
+			? [...snoozedResults, ...formattedResults]
+			: formattedResults;
+
+		console.info('[NotificationManager] Delivery results:', JSON.stringify(finalResults.map(r => ({
 			channel: r ? r.channel : 'unknown',
 			success: r ? r.success : false,
+			category: r ? r.category : undefined,
 			messageId: r ? r.messageId : undefined,
 			error: r ? r.error : undefined,
 		}))));
 
-		return formattedResults;
+		return finalResults;
 	}
 
 	_recordDeliveryMetrics(formattedResults, fallbackDurationMs) {

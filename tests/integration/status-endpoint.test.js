@@ -12,6 +12,7 @@ const { tradingViewMcpService } = require('../../src/services/tradingview/Tradin
 const geminiQuotaManager = require('../../src/services/grounding/geminiQuotaManager');
 const groundingMetrics = require('../../src/services/grounding/metrics');
 const { deliveryMetricsService } = require('../../src/services/notification/DeliveryMetricsService');
+const { snoozeService } = require('../../src/services/notification/SnoozeService');
 const { getRoutes } = require('../../src/routes');
 
 const testPrivateKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({
@@ -1794,6 +1795,26 @@ describe('Status endpoints', () => {
 			batchLimit: 50,
 			maxAttempts: 5,
 		});
+	});
+
+	it('reports snooze dependency as inactive by default and active after activation', async () => {
+		snoozeService.resetForTesting();
+		const inactiveResponse = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+		expect(inactiveResponse.status).toBe(200);
+		expect(inactiveResponse.body.dependencies.snooze).toEqual({ active: false });
+
+		snoozeService.activate({ durationMs: 60_000, reason: 'integration-test' });
+		const activeResponse = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+		expect(activeResponse.status).toBe(200);
+		expect(activeResponse.body.dependencies.snooze.active).toBe(true);
+		expect(activeResponse.body.dependencies.snooze.reason).toBe('integration-test');
+		expect(activeResponse.body.dependencies.snooze.channels).toEqual(['telegram', 'whatsapp', 'discord']);
+		expect(typeof activeResponse.body.dependencies.snooze.expiresAt).toBe('string');
+		snoozeService.resetForTesting();
 	});
 
 	it('omits deliveryMetrics when no deliveries have been recorded', async () => {

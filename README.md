@@ -448,6 +448,20 @@ The dedicated worker also persists the same non-sensitive heartbeat to `workerHe
 
 When configured, `featureFlags.binanceTrading` and `dependencies.binanceTrading` expose only the non-sensitive execution gate, selected `testnet`/`demo`/`live` environment, allow-listed symbols, and readiness state.
 
+### Operator-Incident Snooze
+
+`/api/ops/snooze` provides a small, in-process operator surface for temporarily suppressing all outgoing alerts on a chosen set of channels (use case: flash crash, exchange incident, FOMC window). The snooze is in-process per replica by default and fails open on read/write errors. Optional Firestore cross-replica persistence is not enabled here; the in-memory map is the source of truth for the delivery short-circuit.
+
+- `GET /api/ops/snooze` returns the active snooze (with `activatedAt`, `expiresAt`, `durationMs`, `reason`, and `channels`) or `{ active: false }`.
+- `POST /api/ops/snooze` activates a snooze. Body: `{ durationMs: number, reason?: string, channels?: string[], actorIp?: string }`. `durationMs` is clamped to `[60000, 21600000]` (1 minute to 6 hours). `channels` defaults to `["telegram", "whatsapp", "discord"]` when omitted.
+- `DELETE /api/ops/snooze` cancels the active snooze early. Idempotent: returns `{ active: false }` whether or not a snooze was active.
+
+`POST` and `DELETE` require the operator role (legacy `x-api-key` header or a Firebase `admin.operator` bearer). `GET` requires the viewer role.
+
+While a snooze is active, `NotificationManager.sendToAll` and `sendToChannels` short-circuit the named channels and return `SendResult` objects with `success: false`, `category: "SNOOZED"`, and `snoozedUntil`. The webhook response includes the same `SNOOZED` `deliveryResults` so the TradingView caller can see the alert was admitted but not delivered. Snoozed alerts are still persisted to Firestore (existing fire-and-forget path) and the existing dead-letter pipeline is unaffected; the `SNOOZED` category is a distinct `SendResult.category` so downstream admin paging does not treat it as a failure.
+
+`/api/status` and `/api/capabilities` expose the current snooze under `dependencies.snooze` (`{ active, activatedAt, expiresAt, reason, channels }` or `{ active: false }`) so operators can correlate "alerts look quiet" reports with the active suppression window.
+
 ### Browser admin authentication
 
 `/admin` is public shell content. With `ENABLE_FIREBASE_ADMIN_AUTH=false` (the default), it keeps the existing session-only `WEBHOOK_API_KEY` console flow. With the flag enabled, the shell shows Firebase email/password sign-in, keeps an API-key field only in memory for API-key-only webhook/news-monitor operations, and does not read or write that key to browser storage. `/admin/auth-config` returns only the public Firebase Web configuration needed by the client.
