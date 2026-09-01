@@ -1630,14 +1630,23 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, status, wi
 			absoluteMaxMae = worstMae;
 		}
 
-		const isHighConfidence = (Math.abs(signal.score) >= 0.75 || (signal.source === 'news-monitor' && Math.abs(signal.score) >= 0.7));
-		if (isHighConfidence && (resolvedReturn < -1 || worstMae < -3)) {
+		const rawScore = typeof signal.score === 'number' && Number.isFinite(signal.score) ? signal.score : null;
+		const confidence = rawScore !== null ? Math.abs(rawScore) : null;
+		const isHighConfidence = (confidence !== null && confidence >= 0.75)
+			|| (signal.source === 'news-monitor' && confidence !== null && confidence >= 0.7);
+		const hasSideSignCoherence = signal.side === 'BUY' ? (rawScore === null || rawScore >= 0)
+			: signal.side === 'SELL' ? (rawScore === null || rawScore <= 0)
+				: true;
+		if (isHighConfidence && !hasSideSignCoherence) {
+			console.warn(`[signal-outcome] dropping false-positive candidate for ${signal.symbol} (${signal.side}) due to sign-coherence mismatch (score=${rawScore})`);
+		} else if (isHighConfidence && (resolvedReturn < -1 || worstMae < -3)) {
 			falsePositiveCandidates.push({
 				symbol: signal.symbol,
 				source: signal.source,
 				side: signal.side,
-				score: signal.score,
+				score: rawScore,
 				price: signal.price,
+				confidence,
 				worstReturn: resolvedReturn,
 				worstMae,
 			});
