@@ -28,6 +28,7 @@ const { getTelegramBootstrapConfig, sendStartupDeploymentNotification } = requir
 const bootstrapReadiness = require('./src/lib/bootstrapReadiness');
 const { launchTelegramBot } = require('./src/lib/telegramCommandMenu');
 const { attachTelegramErrorBoundary, handlePollingError } = require('./src/lib/telegramErrorBoundary');
+const { registerAlertActionHandlers } = require('./src/lib/telegramAlertActions');
 const { jobService } = require('./src/services/jobs/JobService');
 const SignalOutcomeService = require('./src/services/storage/SignalOutcomeService');
 const { notificationRedriveService } = require('./src/services/notification/NotificationRedriveService');
@@ -128,6 +129,9 @@ async function bootstrapApplication() {
 		bot.command(['noticias', 'news'], newsMonitorCmd);
 		bot.command(['outcomes', 'rendimiento'], outcomesCommand);
 		bot.command(['help', 'start'], helpCmd);
+
+		// Register inline keyboard action handlers for Telegram alerts.
+		registerAlertActionHandlers(bot);
 
 		// Attach Telegram error boundary
 		attachTelegramErrorBoundary(bot);

@@ -990,6 +990,7 @@ async function saveAlertInternal({
 	whatsappChatId,
 	discordWebhookUrl,
 	routing,
+	alertId: providedAlertId,
 }) {
 	if (!isEnabled()) {
 		return null;
@@ -1008,6 +1009,9 @@ async function saveAlertInternal({
 		const effectiveTelegramThreadId = telegramThreadId !== undefined
 			? telegramThreadId
 			: (routing && routing.telegramThreadId !== undefined ? routing.telegramThreadId : undefined);
+		const sanitizedAlertId = typeof providedAlertId === 'string' && providedAlertId.trim()
+			? providedAlertId.trim().slice(0, 64)
+			: null;
 		const effectiveWhatsappChatId = whatsappChatId || (routing && routing.whatsappChatId);
 		const effectiveDiscordWebhookUrl = discordWebhookUrl || (routing && routing.discordWebhookUrl);
 
@@ -1076,7 +1080,14 @@ async function saveAlertInternal({
 			document.discordWebhookUrl = effectiveDiscordWebhookUrl.trim();
 		}
 
-		const docRef = await firestore.collection(COLLECTION_NAME).add(document);
+		const docRef = sanitizedAlertId
+			? firestore.collection(COLLECTION_NAME).doc(sanitizedAlertId)
+			: await firestore.collection(COLLECTION_NAME).add(document);
+		if (!sanitizedAlertId) {
+			console.debug(`[AlertStorageService] Alert stored with ID: ${docRef.id}`);
+			return docRef.id;
+		}
+		await docRef.set(document);
 		console.debug(`[AlertStorageService] Alert stored with ID: ${docRef.id}`);
 		return docRef.id;
 	} catch (error) {
