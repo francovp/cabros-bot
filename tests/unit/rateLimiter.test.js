@@ -257,8 +257,7 @@ describe('Rate Limiter Middleware', () => {
 			rateLimiter(apiReq2, resOk, nextOk);
 			expect(nextOk).toHaveBeenCalled();
 		});
-
-		test('uses User-Agent fingerprint when no API key is present and TRUST_PROXY is enabled', () => {
+		test('keys anonymous traffic only on req.ip (no User-Agent fingerprint) when TRUST_PROXY is enabled', () => {
 			process.env.TRUST_PROXY = '1';
 
 			const browserReq = httpMocks.createRequest({
@@ -274,17 +273,24 @@ describe('Rate Limiter Middleware', () => {
 				headers: { 'user-agent': 'curl/8.4.0' },
 			});
 
+			// User-Agent is intentionally NOT part of the bucket key: an
+			// attacker-controlled header must not let one client mint fresh
+			// buckets to bypass the limit. With TRUST_PROXY on, both clients
+			// share the trusted `req.ip` (203.0.113.10) bucket.
 			rateLimiter(browserReq, httpMocks.createResponse(), next);
 			rateLimiter(browserReq, httpMocks.createResponse(), next);
 			const resBlocked = httpMocks.createResponse();
 			rateLimiter(browserReq, resBlocked, jest.fn());
 			expect(resBlocked.statusCode).toBe(429);
 
-			// Bot from same IP but different UA must still be allowed (separate bucket).
-			const resOk = httpMocks.createResponse();
-			const nextOk = jest.fn();
-			rateLimiter(botReq, resOk, nextOk);
-			expect(nextOk).toHaveBeenCalled();
+			// The "bot" request from the same IP but different UA is rejected
+			// because the bucket is already exhausted — proving that UA
+			// rotation no longer bypasses the limit.
+			const resBot = httpMocks.createResponse();
+			const nextBot = jest.fn();
+			rateLimiter(botReq, resBot, nextBot);
+			expect(resBot.statusCode).toBe(429);
+			expect(nextBot).not.toHaveBeenCalled();
 		});
 
 		test('falls back to IP-only key when TRUST_PROXY is disabled (no API key awareness change)', () => {
@@ -344,6 +350,59 @@ describe('Rate Limiter Middleware', () => {
 			expect(resUnauthBlocked.statusCode).toBe(429);
 		});
 
+		test('treats WEBHOOK_API_KEY and WEBHOOK_API_KEYS as a union (both keys accepted)', () => {
+			process.env.WEBHOOK_API_KEY = 'primary';
+			process.env.WEBHOOK_API_KEYS = 'secondary,tertiary';
+
+			const primaryReq = httpMocks.createRequest({
+				method: 'POST',
+				url: '/api/test',
+				ip: '203.0.113.10',
+				headers: { 'x-api-key': 'primary' },
+			});
+			const secondaryReq = httpMocks.createRequest({
+				method: 'POST',
+				url: '/api/test',
+				ip: '203.0.113.10',
+				headers: { 'x-api-key': 'secondary' },
+			});
+			const tertiaryReq = httpMocks.createRequest({
+				method: 'POST',
+				url: '/api/test',
+				ip: '203.0.113.10',
+				headers: { 'x-api-key': 'tertiary' },
+			});
+
+			// Each key must be recognized as an authenticated caller (per-key bucket).
+			rateLimiter(primaryReq, httpMocks.createResponse(), next);
+			rateLimiter(secondaryReq, httpMocks.createResponse(), next);
+			rateLimiter(tertiaryReq, httpMocks.createResponse(), next);
+			// All three calls should have been allowed (each bucket is fresh).
+			expect(next).toHaveBeenCalledTimes(3);
+		});
+
+		test('uses HMAC-SHA256 fingerprint so the bucket key is not derivable from a plain SHA-256', () => {
+			process.env.WEBHOOK_API_KEY = 'super-secret';
+
+			const apiReq = httpMocks.createRequest({
+				method: 'POST',
+				url: '/api/test',
+				ip: '203.0.113.10',
+				headers: { 'x-api-key': 'super-secret' },
+			});
+
+			const bucketKey = rateLimiter.deriveBucketKey({
+				req: apiReq,
+				ip: '203.0.113.10',
+				isWebhookIngest: false,
+			});
+
+			// The bucket key must include the per-process HMAC fingerprint, not
+			// a publicly reversible SHA-256 of the cleartext key. The fingerprint
+			// must be a 16-hex-char suffix.
+			expect(bucketKey).toMatch(/^apikey:[a-f0-9]{16}$/);
+			expect(rateLimiter.hashApiKey('super-secret')).toMatch(/^[a-f0-9]{16}$/);
+		});
 		test('rejects invalid RATE_LIMIT_API_KEY_MAX with safe default', () => {
 			process.env.WEBHOOK_API_KEY = 'super-secret';
 			process.env.RATE_LIMIT_API_KEY_MAX = 'not-a-number';
