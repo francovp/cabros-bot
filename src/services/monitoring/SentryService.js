@@ -926,3 +926,21 @@ const sentryService = new SentryService();
 module.exports = sentryService;
 module.exports.SentryService = SentryService;
 module.exports.FEATURE_NAMES = FEATURE_NAMES;
+
+/**
+ * Single source of truth for the `SENTRY_SEND_ALERT_CONTENT` policy.
+ * Returns `true` when alert/news text should be included in Sentry events,
+ * `false` only when the operator explicitly sets `SENTRY_SEND_ALERT_CONTENT=false`.
+ * All other values (unset, empty, anything else) fall through to the
+ * documented default of `true` and match the README/.env.example contract.
+ * Consumers (e.g. `telegramErrorBoundary`) MUST go through this helper instead
+ * of re-reading `process.env.SENTRY_SEND_ALERT_CONTENT` directly, so the
+ * absent-state semantics stay aligned with the webhook/news SentryService
+ * configuration.
+ * @returns {boolean}
+ */
+function shouldSendAlertContent() {
+	return process.env.SENTRY_SEND_ALERT_CONTENT !== 'false';
+}
+
+module.exports.shouldSendAlertContent = shouldSendAlertContent;

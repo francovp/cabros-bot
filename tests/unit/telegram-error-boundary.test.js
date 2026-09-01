@@ -1,7 +1,11 @@
-jest.mock('../../src/services/monitoring/SentryService', () => ({
-	captureRuntimeError: jest.fn(),
-	captureExternalFailure: jest.fn(),
-}));
+jest.mock('../../src/services/monitoring/SentryService', () => {
+	const actual = jest.requireActual('../../src/services/monitoring/SentryService');
+	return {
+		captureRuntimeError: jest.fn(),
+		captureExternalFailure: jest.fn(),
+		shouldSendAlertContent: actual.shouldSendAlertContent,
+	};
+});
 
 const sentryService = require('../../src/services/monitoring/SentryService');
 const {
@@ -88,9 +92,39 @@ describe('Telegram Error Boundary', () => {
 			consoleErrorSpy.mockRestore();
 		});
 
-		it('does not include message text in Sentry extra when SENTRY_SEND_ALERT_CONTENT is not true', async () => {
+		it('includes message text in Sentry extra when SENTRY_SEND_ALERT_CONTENT is unset (matches docs default true)', async () => {
 			jest.spyOn(console, 'error').mockImplementation(() => {});
 			delete process.env.SENTRY_SEND_ALERT_CONTENT;
+
+			const error = new Error('Command exploded');
+			const ctx = {
+				updateType: 'message',
+				update: {
+					update_id: 112233,
+					message: {
+						text: '/precio BTCUSDT',
+						chat: { id: 123 },
+					},
+				},
+				reply: jest.fn().mockResolvedValue(undefined),
+			};
+
+			await handleTelegrafUpdateError(error, ctx);
+
+			expect(sentryService.captureRuntimeError).toHaveBeenCalledWith(
+				expect.objectContaining({
+					extra: expect.objectContaining({
+						rawText: '/precio BTCUSDT',
+					}),
+				}),
+			);
+
+			console.error.mockRestore();
+		});
+
+		it('does not include message text in Sentry extra when SENTRY_SEND_ALERT_CONTENT=false (privacy override)', async () => {
+			jest.spyOn(console, 'error').mockImplementation(() => {});
+			process.env.SENTRY_SEND_ALERT_CONTENT = 'false';
 
 			const error = new Error('Command exploded');
 			const ctx = {
@@ -118,7 +152,7 @@ describe('Telegram Error Boundary', () => {
 			console.error.mockRestore();
 		});
 
-		it('includes message text in Sentry extra when SENTRY_SEND_ALERT_CONTENT is true', async () => {
+		it('includes message text in Sentry extra when SENTRY_SEND_ALERT_CONTENT=true', async () => {
 			jest.spyOn(console, 'error').mockImplementation(() => {});
 			process.env.SENTRY_SEND_ALERT_CONTENT = 'true';
 
