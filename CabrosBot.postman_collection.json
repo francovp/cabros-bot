@@ -16,6 +16,16 @@
       "type": "string"
     },
     {
+      "key": "webhookTimestamp",
+      "value": "1700000000000",
+      "type": "string"
+    },
+    {
+      "key": "webhookSignature",
+      "value": "sha256=8f8b7d6c5b4a39281716151413121110ffeeddccbbaa99887766554433221100",
+      "type": "string"
+    },
+    {
       "key": "replayIdempotencyKey",
       "value": "replay-key-1",
       "type": "string"
@@ -802,6 +812,70 @@
               ]
             }
           }
+        },
+        {
+          "name": "POST Signed Volume Confirmation",
+          "request": {
+            "method": "POST",
+            "description": "When WEBHOOK_SIGNING_SECRET is configured, sign the exact request with HMAC-SHA256(secret, timestamp + '\\n' + method + '\\n' + path/query + '\\n' + raw body). Replace the example timestamp/signature variables with a freshly generated pair before sending.",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "x-webhook-timestamp",
+                "value": "{{webhookTimestamp}}",
+                "type": "text"
+              },
+              {
+                "key": "x-webhook-signature",
+                "value": "{{webhookSignature}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"symbol\": \"BINANCE:BTCUSDT\",\n  \"timeframe\": \"4h\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/webhook/volume-confirmation",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "webhook",
+                "volume-confirmation"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Success (valid signature)",
+              "status": "OK",
+              "code": 200,
+              "body": "{\"success\":true,\"symbol\":\"BINANCE:BTCUSDT\",\"decision\":\"confirm\",\"volumeRatio\":1.7}"
+            },
+            {
+              "name": "401 Missing signature",
+              "status": "Unauthorized",
+              "code": 401,
+              "body": "{\"error\":\"Unauthorized: Missing webhook signature\",\"code\":\"WEBHOOK_SIGNATURE_MISSING\"}"
+            },
+            {
+              "name": "403 Invalid signature",
+              "status": "Forbidden",
+              "code": 403,
+              "body": "{\"error\":\"Forbidden: Invalid webhook signature\",\"code\":\"WEBHOOK_SIGNATURE_INVALID\"}"
+            }
+          ]
         },
         {
           "name": "POST Single Symbol Analysis",

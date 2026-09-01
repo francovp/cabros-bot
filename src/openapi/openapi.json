@@ -92,6 +92,12 @@
           },
           {
             "$ref": "#/components/parameters/XRequestIdHeader"
+          },
+          {
+            "$ref": "#/components/parameters/WebhookTimestamp"
+          },
+          {
+            "$ref": "#/components/parameters/WebhookSignature"
           }
         ],
         "requestBody": {
@@ -106,6 +112,9 @@
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
           },
           "409": {
             "$ref": "#/components/responses/IdempotencyConflict"
@@ -140,6 +149,12 @@
           },
           {
             "$ref": "#/components/parameters/IdempotencyKeyQuerySnake"
+          },
+          {
+            "$ref": "#/components/parameters/WebhookTimestamp"
+          },
+          {
+            "$ref": "#/components/parameters/WebhookSignature"
           }
         ],
         "requestBody": {
@@ -154,6 +169,9 @@
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
           },
           "409": {
             "$ref": "#/components/responses/MessageIdempotencyConflict"
@@ -185,6 +203,12 @@
           },
           {
             "$ref": "#/components/parameters/XIdempotencyKeyHeader"
+          },
+          {
+            "$ref": "#/components/parameters/WebhookTimestamp"
+          },
+          {
+            "$ref": "#/components/parameters/WebhookSignature"
           }
         ],
         "requestBody": {
@@ -195,6 +219,12 @@
             "$ref": "#/components/responses/AnalysisResult"
           },
           "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
             "$ref": "#/components/responses/Error"
           },
           "409": {
@@ -233,6 +263,12 @@
           },
           {
             "$ref": "#/components/parameters/XIdempotencyKeyHeader"
+          },
+          {
+            "$ref": "#/components/parameters/WebhookTimestamp"
+          },
+          {
+            "$ref": "#/components/parameters/WebhookSignature"
           }
         ],
         "requestBody": {
@@ -244,6 +280,9 @@
           },
           "400": {
             "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
           },
           "403": {
             "$ref": "#/components/responses/Error"
@@ -275,6 +314,14 @@
         ],
         "summary": "Check TradingView volume confirmation",
         "operationId": "postVolumeConfirmation",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WebhookTimestamp"
+          },
+          {
+            "$ref": "#/components/parameters/WebhookSignature"
+          }
+        ],
         "requestBody": {
           "$ref": "#/components/requestBodies/VolumeConfirmation"
         },
@@ -283,6 +330,12 @@
             "$ref": "#/components/responses/AnalysisResult"
           },
           "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
             "$ref": "#/components/responses/Error"
           },
           "502": {
@@ -306,6 +359,14 @@
         ],
         "summary": "Analyze one TradingView symbol without delivery",
         "operationId": "postSymbolAnalysis",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WebhookTimestamp"
+          },
+          {
+            "$ref": "#/components/parameters/WebhookSignature"
+          }
+        ],
         "requestBody": {
           "$ref": "#/components/requestBodies/SymbolAnalysis"
         },
@@ -314,6 +375,12 @@
             "$ref": "#/components/responses/SymbolAnalysisResult"
           },
           "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
             "$ref": "#/components/responses/Error"
           },
           "502": {
@@ -1826,6 +1893,26 @@
           "minLength": 1
         },
         "description": "Optional legacy-compatible replay key query parameter."
+      },
+      "WebhookTimestamp": {
+        "name": "x-webhook-timestamp",
+        "in": "header",
+        "schema": {
+          "type": "string",
+          "pattern": "^[0-9]+$"
+        },
+        "example": "1700000000000",
+        "description": "Required when WEBHOOK_SIGNING_SECRET is configured. Unix timestamp in milliseconds used to prevent replay attacks."
+      },
+      "WebhookSignature": {
+        "name": "x-webhook-signature",
+        "in": "header",
+        "schema": {
+          "type": "string",
+          "pattern": "^sha256=[a-f0-9]{64}$"
+        },
+        "example": "sha256=8f8b7d6c5b4a39281716151413121110ffeeddccbbaa99887766554433221100",
+        "description": "Required when WEBHOOK_SIGNING_SECRET is configured. HMAC-SHA256 of timestamp + '\\n' + method + '\\n' + request path/query + '\\n' + raw request body."
       },
       "DryRun": {
         "name": "dryRun",

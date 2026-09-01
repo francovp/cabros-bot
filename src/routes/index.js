@@ -23,7 +23,7 @@ const {
 } = require('../controllers/webhooks/handlers/jobs/jobs');
 const { listAlerts, getAlertById, replayAlert, summarizeAlerts, exportAlerts, listReplays } = require('../controllers/alerts/alerts');
 const { listOutcomes, summarizeOutcomes } = require('../controllers/outcomes/outcomes');
-const { validateApiKey } = require('../lib/auth');
+const { validateApiKey, validateWebhookSignature } = require('../lib/auth');
 const { getApiStatus } = require('../controllers/status');
 const { postBinanceOrder, getBinanceOrders, deleteBinanceOrder } = require('../controllers/trading/binanceOrders');
 const { idempotencyMiddleware } = require('../lib/idempotency');
@@ -41,12 +41,12 @@ function getRoutes(botOrGetter) {
 	const adminWrite = [validateAdminAccess, requireAdminRole(ADMIN_OPERATOR)];
 	const binanceOrderRead = [requireConfiguredAdminAccess, requireAdminRole(ADMIN_VIEWER)];
 	const binanceOrderWrite = [requireConfiguredAdminAccess, requireAdminRole(ADMIN_OPERATOR)];
-	router.post('/webhook/alert', validateApiKey, idempotencyMiddleware, postAlert(botOrGetter));
-	router.post('/webhook/message', validateApiKey, idempotencyMiddleware, postMessage(botOrGetter));
-	router.post('/webhook/expanded-analysis-alert', validateApiKey, idempotencyMiddleware, postExpandedAnalysisAlert(botOrGetter));
-	router.post('/webhook/market-scanner-alert', validateApiKey, idempotencyMiddleware, postMarketScannerAlert(botOrGetter));
-	router.post('/webhook/volume-confirmation', validateApiKey, postVolumeConfirmation());
-	router.post('/webhook/symbol-analysis', validateApiKey, postSymbolAnalysis());
+	router.post('/webhook/alert', validateApiKey, validateWebhookSignature, idempotencyMiddleware, postAlert(botOrGetter));
+	router.post('/webhook/message', validateApiKey, validateWebhookSignature, idempotencyMiddleware, postMessage(botOrGetter));
+	router.post('/webhook/expanded-analysis-alert', validateApiKey, validateWebhookSignature, idempotencyMiddleware, postExpandedAnalysisAlert(botOrGetter));
+	router.post('/webhook/market-scanner-alert', validateApiKey, validateWebhookSignature, idempotencyMiddleware, postMarketScannerAlert(botOrGetter));
+	router.post('/webhook/volume-confirmation', validateApiKey, validateWebhookSignature, postVolumeConfirmation());
+	router.post('/webhook/symbol-analysis', validateApiKey, validateWebhookSignature, postSymbolAnalysis());
 	router.get('/alerts', ...adminRead, listAlerts);
 	router.get('/alerts/replays', ...adminRead, listReplays);
 	router.get('/alerts/summary', ...adminRead, summarizeAlerts);
