@@ -13,7 +13,9 @@ const equityMarketDataService = require('../services/storage/EquityMarketDataSer
 const remoteConfigService = require('../services/remoteConfig/RemoteConfigService');
 const { tradingViewMcpService } = require('../services/tradingview/TradingViewMcpService');
 const { binanceOrderService } = require('../services/trading/BinanceOrderService');
+const bootstrapReadiness = require('../lib/bootstrapReadiness');
 const { notificationRedriveService } = require('../services/notification/NotificationRedriveService');
+const { deliveryMetricsService } = require('../services/notification/DeliveryMetricsService');
 const { whatsAppCommandBridgeService } = require('../services/notification/WhatsAppCommandBridgeService');
 const geminiQuotaManager = require('../services/grounding/geminiQuotaManager');
 const groundingMetrics = require('../services/grounding/metrics');
@@ -316,6 +318,7 @@ function getStatus() {
 	});
 
 	return {
+		readiness: bootstrapReadiness.getStatus(),
 		service: {
 			name: process.env.SERVICE_NAME || packageJson.name || 'cabros-bot',
 			version: packageJson.version || null,
@@ -377,6 +380,9 @@ function getStatus() {
 			}
 			return manager.getDeliveryHealth();
 		})(),
+		...(deliveryMetricsService.getSnapshot()
+			? { deliveryMetrics: deliveryMetricsService.getSnapshot() }
+			: {}),
 		dependencies: {
 			telegram,
 			whatsapp,

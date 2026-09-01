@@ -87,6 +87,37 @@
       ]
     },
     {
+      "name": "Bootstrap Readiness",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "description": "Public deployment-readiness probe. HTTP 200 means bootstrap completed; HTTP 503 means startup is pending or failed. This does not continuously ping external providers.",
+        "url": {
+          "raw": "{{baseUrl}}/ready",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "ready"
+          ]
+        }
+      },
+      "response": [
+        {
+          "name": "200 Ready",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"status\":\"ready\",\"ready\":true,\"components\":{\"telegramBot\":{\"status\":\"disabled\"},\"notificationServices\":{\"status\":\"ready\"},\"newsMonitor\":{\"status\":\"disabled\"}}}"
+        },
+        {
+          "name": "503 Pending or failed",
+          "status": "Service Unavailable",
+          "code": 503,
+          "body": "{\"status\":\"pending\",\"ready\":false,\"components\":{\"telegramBot\":{\"status\":\"pending\"},\"notificationServices\":{\"status\":\"pending\"},\"newsMonitor\":{\"status\":\"disabled\"}}}"
+        }
+      ]
+    },
+    {
       "name": "Get OpenAPI Contract",
       "request": {
         "method": "GET",
@@ -215,6 +246,38 @@
           "status": "OK",
           "code": 200,
           "body": "{\"dependencies\":{\"tradingViewMcp\":{\"enrichment\":{\"alertPath\":{\"windowMs\":86400000,\"totalCount\":3,\"appliedCount\":2,\"failedCount\":1,\"appliedRate24h\":66.67,\"failureRate24h\":33.33}}}}}"
+        }
+      ]
+    },
+    {
+      "name": "Get Status - delivery SLA",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{apiKey}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/status",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "status"
+          ]
+        },
+        "description": "Protected status request exposing the in-memory per-channel deliveryMetrics section. Counters reset on process restart; the section is omitted entirely until at least one channel records a delivery result."
+      },
+      "response": [
+        {
+          "name": "200 OK - deliveryMetrics populated",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"deliveryChannels\":{\"telegram\":{\"enabled\":true,\"status\":\"ready\"},\"whatsapp\":{\"enabled\":true,\"status\":\"ready\"},\"discord\":{\"enabled\":false,\"status\":\"disabled\"}},\"deliveryMetrics\":{\"window\":{\"startedAt\":\"2026-08-31T22:30:00.000Z\",\"durationMs\":60000},\"success\":3,\"failure\":1,\"total\":4,\"successRate\":0.75,\"averageDeliveryMs\":217.5,\"byChannel\":{\"telegram\":{\"success\":2,\"failure\":1,\"total\":3,\"successRate\":0.6667,\"averageDeliveryMs\":190},\"whatsapp\":{\"success\":1,\"failure\":0,\"total\":1,\"successRate\":1,\"averageDeliveryMs\":300}}}}"
         }
       ]
     },

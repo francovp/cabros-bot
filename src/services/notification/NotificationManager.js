@@ -7,6 +7,7 @@ const sentryService = require('../monitoring/SentryService');
 const remoteConfigService = require('../remoteConfig/RemoteConfigService');
 const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
 const { notificationRedriveService } = require('./NotificationRedriveService');
+const { deliveryMetricsService } = require('./DeliveryMetricsService');
 
 const DEFAULT_ZERO_CHANNEL_ALERT_COOLDOWN_MS = 300000;
 
@@ -407,6 +408,8 @@ class NotificationManager {
 					console.error('[NotificationManager] Unexpected admin notification failure:', error.message);
 				});
 
+				this._recordDeliveryMetrics(formattedResults, totalDurationMs);
+
 				console.info('[NotificationManager] Delivery results:', JSON.stringify(formattedResults.map(r => ({
 					channel: r ? r.channel : 'unknown',
 					success: r ? r.success : false,
@@ -596,6 +599,8 @@ class NotificationManager {
 			console.error('[NotificationManager] Unexpected admin notification failure:', error.message);
 		});
 
+		this._recordDeliveryMetrics(formattedResults, totalDurationMs);
+
 		console.info('[NotificationManager] Delivery results:', JSON.stringify(formattedResults.map(r => ({
 			channel: r ? r.channel : 'unknown',
 			success: r ? r.success : false,
@@ -610,6 +615,25 @@ class NotificationManager {
 		}
 
 		return formattedResults;
+	}
+
+	_recordDeliveryMetrics(formattedResults, fallbackDurationMs) {
+		if (!Array.isArray(formattedResults) || formattedResults.length === 0) {
+			return;
+		}
+		for (const result of formattedResults) {
+			if (!result || typeof result !== 'object') {
+				continue;
+			}
+			const durationMs = typeof result.durationMs === 'number' && Number.isFinite(result.durationMs)
+				? result.durationMs
+				: fallbackDurationMs;
+			deliveryMetricsService.record({
+				channel: result.channel,
+				success: result.success === true,
+				durationMs,
+			});
+		}
 	}
 }
 
