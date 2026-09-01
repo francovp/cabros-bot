@@ -5791,7 +5791,7 @@
       },
       "GeminiQuotaDependency": {
         "type": "object",
-        "description": "Non-sensitive Gemini quota and request-window telemetry. The window is process-local and resets after 60 seconds without a new quota exhaustion event.",
+        "description": "Non-sensitive Gemini quota and request-window telemetry. The window is process-local and counters reset at the declared 60-second window boundary.",
         "required": [
           "enabled",
           "configured",

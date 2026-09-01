@@ -1545,7 +1545,7 @@ This change is workflow/documentation-only: no application environment variable,
 
 ## Gemini Quota Window Telemetry (Issue #622)
 
-Extended the existing process-local `geminiQuota` status dependency with a fixed 60-second window for actual Gemini API calls and quota exhaustion events: `windowStartedAt`, `windowDurationMs`, `requestsInWindow`, `exhaustedEventsInWindow`, `lastExhaustedAt`, and `quotaStatus`. The established readiness `status` field remains unchanged for compatibility. Both Gemini `generateContent` call sites record requests; window counters reset after 60 seconds without a new quota exhaustion event. No new environment variable or Remote Config key was added.
+Extended the existing process-local `geminiQuota` status dependency with a fixed 60-second window for actual Gemini API calls and quota exhaustion events: `windowStartedAt`, `windowDurationMs`, `requestsInWindow`, `exhaustedEventsInWindow`, `lastExhaustedAt`, and `quotaStatus`. The established readiness `status` field remains unchanged for compatibility. Both Gemini `generateContent` call sites record requests; counters expire at the declared window boundary, and the same propagated quota error is counted once. No new environment variable or Remote Config key was added.
 
 **Coverage**:
 - `tests/unit/gemini-quota-manager.test.js` and `tests/unit/genaiClient.test.js` — Window lifecycle and real Gemini request/error counting.
