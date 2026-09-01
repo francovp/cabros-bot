@@ -154,6 +154,56 @@ function isValidApiKey(req) {
 		&& sourceValidApiKey.length <= API_KEY_COMPARISON_LENGTH;
 }
 
+function isAdminApiKeyScoped() {
+	return Boolean(String(process.env.ADMIN_API_KEY || '').trim());
+}
+
+function getAdminApiKey() {
+	const adminKey = String(process.env.ADMIN_API_KEY || '').trim();
+	return adminKey || String(process.env.WEBHOOK_API_KEY || '');
+}
+
+function isValidConfiguredApiKey(supplied, configured) {
+	if (!configured) return false;
+	const keyToCheck = Array.isArray(supplied) ? supplied[0] : supplied;
+	if (typeof keyToCheck !== 'string') return false;
+
+	const sourceApiKey = Buffer.from(keyToCheck);
+	const sourceConfiguredApiKey = Buffer.from(configured);
+	const bufferApiKey = Buffer.alloc(API_KEY_COMPARISON_LENGTH);
+	const bufferConfiguredApiKey = Buffer.alloc(API_KEY_COMPARISON_LENGTH);
+	sourceApiKey.copy(bufferApiKey, 0, 0, API_KEY_COMPARISON_LENGTH);
+	sourceConfiguredApiKey.copy(bufferConfiguredApiKey, 0, 0, API_KEY_COMPARISON_LENGTH);
+	const buffersMatch = crypto.timingSafeEqual(bufferApiKey, bufferConfiguredApiKey);
+	return buffersMatch
+		&& sourceApiKey.length === sourceConfiguredApiKey.length
+		&& sourceApiKey.length <= API_KEY_COMPARISON_LENGTH
+		&& sourceConfiguredApiKey.length <= API_KEY_COMPARISON_LENGTH;
+}
+
+function isValidAdminApiKey(req) {
+	const adminKey = String(process.env.ADMIN_API_KEY || '').trim();
+	if (adminKey) {
+		const supplied = req && req.headers && (req.headers['x-api-key'] || req.headers['X-API-Key'])
+			|| req && req.query && req.query['api-key'];
+		return isValidConfiguredApiKey(supplied, adminKey);
+	}
+	// Preserve legacy webhook-key behavior, including query compatibility,
+	// until the operator configures the dedicated admin credential.
+	if (process.env.WEBHOOK_API_KEY) return isValidApiKey(req);
+	// Match validateApiKey's open local/test path without letting a supplied
+	// credential bypass Firebase auth in production-like deployments.
+	return process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'test';
+}
+
+function isValidBinanceTradingApiKey(req) {
+	const tradingKey = String(process.env.BINANCE_TRADING_API_KEY || '').trim();
+	if (!tradingKey) return false;
+	const supplied = req && req.headers && (req.headers['x-api-key'] || req.headers['X-API-Key'])
+		|| req && req.query && req.query['api-key'];
+	return isValidConfiguredApiKey(supplied, tradingKey);
+}
+
 function _resetQueryDeprecationFlagForTests() {
 	delete process.env[QUERY_DEPRECATION_FLAG_KEY];
 }
@@ -163,6 +213,10 @@ module.exports = {
 	_isQueryAuthSunsetReached: isQueryAuthSunsetReached,
 	_parseApiKeyQuerySunset: parseApiKeyQuerySunset,
 	_resetQueryDeprecationFlagForTests,
+	getAdminApiKey,
+	isAdminApiKeyScoped,
+	isValidAdminApiKey,
 	isValidApiKey,
+	isValidBinanceTradingApiKey,
 	validateApiKey,
 };
