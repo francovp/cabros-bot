@@ -2403,6 +2403,57 @@
           ]
         },
         {
+          "name": "GET Alert Analytics Summary (decision rollup)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/summary?from=2026-06-06T00:00:00.000Z&to=2026-06-07T00:00:00.000Z&limit=500&includeDecisionRollup=true",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "2026-06-06T00:00:00.000Z"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-06-07T00:00:00.000Z"
+                },
+                {
+                  "key": "limit",
+                  "value": "500"
+                },
+                {
+                  "key": "includeDecisionRollup",
+                  "value": "true"
+                }
+              ]
+            },
+            "description": "Protected summary request with the opt-in decision.gates[] rollup. The rollup is omitted (not zero) when ENABLE_ALERT_DECISION_AUDIT is false or includeDecisionRollup=true is not supplied. Each gate bucket reports the populated count and percentage of the summary window. Sorted alphabetically by name with ties broken by decision (allow < skip < suppress)."
+          },
+          "response": [
+            {
+              "name": "200 OK - Decision rollup populated",
+              "status": "OK",
+              "code": 200,
+              "body": "{\"success\":true,\"summary\":{\"window\":{\"from\":\"2026-06-06T00:00:00.000Z\",\"to\":\"2026-06-07T00:00:00.000Z\",\"limit\":500,\"maxDays\":31},\"totalAlerts\":2,\"bySource\":{\"webhook\":2},\"byFeatureFlag\":{\"enriched\":0,\"plain\":2,\"tradingViewData\":0,\"withoutTradingViewData\":2},\"enrichment\":{\"enrichedAlerts\":0,\"plainAlerts\":2,\"tradingViewStatusCounts\":{\"full\":0,\"partial\":0,\"failed\":0,\"not_applicable\":2,\"unrecorded\":0},\"riskMetadataCoverage\":{\"denominator\":0,\"fields\":{},\"byPromptProvenance\":[]},\"evidenceCoverage\":{\"denominator\":0,\"zeroSources\":{\"populated\":0,\"percentage\":0},\"oneToTwoSources\":{\"populated\":0,\"percentage\":0},\"threePlusSources\":{\"populated\":0,\"percentage\":0},\"totalSourceCount\":0,\"averageSourceCount\":0,\"byPromptProvenance\":[]},\"tokenUsage\":{\"inputTokens\":0,\"outputTokens\":0,\"totalTokens\":0,\"totalCost\":0}},\"delivery\":{\"totalSuccess\":0,\"totalFailure\":0,\"byChannel\":{}},\"latency\":{\"averageProcessingMs\":null,\"averageDeliveryMs\":null},\"decision\":{\"gates\":{\"denominator\":2,\"gates\":[{\"name\":\"dryRun\",\"decision\":\"skip\",\"populated\":1,\"percentage\":0.5},{\"name\":\"same-signal-cooldown\",\"decision\":\"suppress\",\"populated\":1,\"percentage\":0.5}]}},\"shadowModeMetrics\":\"No measurements found\"}}"
+            }
+          ]
+        },
+        {
           "name": "GET Alert Analytics Summary",
           "request": {
             "method": "GET",
@@ -2662,6 +2713,61 @@
                 }
               ],
               "body": "{\"id\":\"alert-123\",\"receivedAt\":\"2026-06-06T12:00:00.000Z\",\"source\":\"webhook\",\"enriched\":true,\"useTradingViewData\":false,\"tradingViewEnrichmentApplied\":false,\"tradingViewEnrichmentStatus\":\"not_applicable\",\"deliveryResults\":[{\"channel\":\"telegram\",\"success\":true,\"messageId\":\"123\",\"errorCode\":null,\"statusCode\":null}],\"tokenUsage\":{\"inputTokens\":10,\"outputTokens\":20,\"totalTokens\":30,\"totalCost\":0.001}}\n"
+            }
+          ]
+        },
+        {
+          "name": "GET Export Alerts (JSONL - decision audit)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/export?format=jsonl&from=2026-06-06T00:00:00.000Z&to=2026-06-07T00:00:00.000Z&limit=500&includeDecision=true",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "export"
+              ],
+              "query": [
+                {
+                  "key": "format",
+                  "value": "jsonl"
+                },
+                {
+                  "key": "from",
+                  "value": "2026-06-06T00:00:00.000Z"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-06-07T00:00:00.000Z"
+                },
+                {
+                  "key": "limit",
+                  "value": "500"
+                },
+                {
+                  "key": "includeDecision",
+                  "value": "true"
+                }
+              ]
+            },
+            "description": "Exports bounded stored alerts as JSON Lines with the opt-in per-alert decision audit trail. The decision field is only populated when ENABLE_ALERT_DECISION_AUDIT=true; otherwise the field is omitted from each row. Decision objects are sanitized (bounded depth 6, max 32 keys per object, string leaves <= 1000 chars)."
+          },
+          "response": [
+            {
+              "name": "200 OK - JSONL export with decision",
+              "status": "OK",
+              "code": 200,
+              "body": "{\"id\":\"alert-123\",\"receivedAt\":\"2026-06-06T12:00:00.000Z\",\"source\":\"webhook\",\"enriched\":true,\"useTradingViewData\":false,\"tradingViewEnrichmentApplied\":false,\"tradingViewEnrichmentStatus\":\"not_applicable\",\"deliveryResults\":[{\"channel\":\"telegram\",\"success\":true,\"messageId\":\"123\",\"errorCode\":null,\"statusCode\":null}],\"tokenUsage\":{\"inputTokens\":10,\"outputTokens\":20,\"totalTokens\":30,\"totalCost\":0.001},\"decision\":{\"requestId\":\"req-1\",\"parsed\":{\"ok\":true,\"exchange\":\"BINANCE\",\"symbol\":\"BTCUSDT\",\"side\":\"BUY\",\"rawTimeframe\":\"1h\",\"timeframe\":\"1h\"},\"enrichment\":{\"attempted\":true,\"provider\":\"gemini-grounding\",\"status\":\"success\",\"fallbackUsed\":false},\"gates\":[],\"dispatch\":{\"requestedChannels\":[\"telegram\"],\"sentTo\":[\"telegram\"]}}}\n"
             }
           ]
         },

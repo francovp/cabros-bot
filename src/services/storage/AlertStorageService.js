@@ -68,6 +68,10 @@ const VALID_SETUP_TYPES = new Set([
 	'reversal',
 ]);
 const VALID_TRADINGVIEW_ENRICHMENT_STATUSES = new Set(['full', 'partial', 'failed', 'not_applicable']);
+const VALID_DECISION_GATE_DECISIONS = new Set(['allow', 'suppress', 'skip']);
+const MAX_DECISION_DEPTH = 6;
+const MAX_DECISION_OBJECT_KEYS = 32;
+const MAX_DECISION_TEXT_LENGTH = 1000;
 
 // Lazy Firestore singleton
 let db = null;
@@ -224,6 +228,9 @@ function formatAlertDocument(doc) {
 			docObj.originalLength = data.originalLength;
 		}
 	}
+	if (isDecisionAuditEnabled() && data.decision && typeof data.decision === 'object' && !Array.isArray(data.decision)) {
+		docObj.decision = data.decision;
+	}
 	return docObj;
 }
 
@@ -302,6 +309,131 @@ function stripUndefinedFieldsDeep(value) {
 		}
 	}
 	return result;
+}
+
+function isDecisionAuditEnabled() {
+	return process.env.ENABLE_ALERT_DECISION_AUDIT === 'true';
+}
+
+// Bounded recursive sanitization for the opt-in `decision` audit trail.
+// - max depth 6
+// - max 32 keys per plain object
+// - string leaves truncated to MAX_DECISION_TEXT_LENGTH (1000 chars)
+// - non-object, non-plain-object leaves (Date/Timestamp/Number/etc.) pass through
+// - undefined/null dropped; arrays pass through with element-wise recursion
+function sanitizeDecisionAuditDepth(value, depth) {
+	if (value === null || value === undefined) {
+		return undefined;
+	}
+	if (depth > MAX_DECISION_DEPTH) {
+		return undefined;
+	}
+	if (typeof value === 'string') {
+		return value.length > MAX_DECISION_TEXT_LENGTH
+			? value.substring(0, MAX_DECISION_TEXT_LENGTH)
+			: value;
+	}
+	if (typeof value !== 'object') {
+		return value;
+	}
+	if (Array.isArray(value)) {
+		const sanitized = value
+			.map((item) => sanitizeDecisionAuditDepth(item, depth + 1))
+			.filter((item) => item !== undefined);
+		return sanitized;
+	}
+	const proto = Object.getPrototypeOf(value);
+	if (proto !== Object.prototype && proto !== null) {
+		return undefined;
+	}
+	const result = {};
+	let keyCount = 0;
+	for (const [key, item] of Object.entries(value)) {
+		if (keyCount >= MAX_DECISION_OBJECT_KEYS) {
+			break;
+		}
+		const sanitized = sanitizeDecisionAuditDepth(item, depth + 1);
+		if (sanitized !== undefined) {
+			result[key] = sanitized;
+			keyCount += 1;
+		}
+	}
+	return result;
+}
+
+function sanitizeDecisionAudit(value) {
+	if (!isDecisionAuditEnabled()) {
+		return null;
+	}
+	if (!value || typeof value !== 'object') {
+		return null;
+	}
+	const result = sanitizeDecisionAuditDepth(value, 1);
+	if (!result || typeof result !== 'object') {
+		return null;
+	}
+	return result;
+}
+
+// Validate a single gates[] entry shape; returns null when malformed.
+function sanitizeDecisionGate(rawGate) {
+	if (!rawGate || typeof rawGate !== 'object') {
+		return null;
+	}
+	const name = typeof rawGate.name === 'string' && rawGate.name.trim()
+		? rawGate.name.trim().substring(0, 64)
+		: null;
+	const decision = typeof rawGate.decision === 'string' && VALID_DECISION_GATE_DECISIONS.has(rawGate.decision)
+		? rawGate.decision
+		: null;
+	if (!name || !decision) {
+		return null;
+	}
+	const sanitized = { name, decision };
+	if (typeof rawGate.reason === 'string' && rawGate.reason.trim()) {
+		sanitized.reason = rawGate.reason.trim().substring(0, MAX_DECISION_TEXT_LENGTH);
+	}
+	if (rawGate.evidence && typeof rawGate.evidence === 'object' && !Array.isArray(rawGate.evidence)) {
+		const proto = Object.getPrototypeOf(rawGate.evidence);
+		if (proto === Object.prototype || proto === null) {
+			const evidence = {};
+			let count = 0;
+			for (const [key, val] of Object.entries(rawGate.evidence)) {
+				if (count >= MAX_DECISION_OBJECT_KEYS) {
+					break;
+				}
+				if (val === undefined) {
+					continue;
+				}
+				if (typeof val === 'string') {
+					evidence[key] = val.length > MAX_DECISION_TEXT_LENGTH
+						? val.substring(0, MAX_DECISION_TEXT_LENGTH)
+						: val;
+				} else if (typeof val === 'number' && Number.isFinite(val)) {
+					evidence[key] = val;
+				} else if (typeof val === 'boolean') {
+					evidence[key] = val;
+				}
+				count += 1;
+			}
+			sanitized.evidence = evidence;
+		}
+	}
+	return sanitized;
+}
+
+function sanitizeDecisionGates(gates) {
+	if (!Array.isArray(gates)) {
+		return [];
+	}
+	const out = [];
+	for (const gate of gates) {
+		const sanitized = sanitizeDecisionGate(gate);
+		if (sanitized) {
+			out.push(sanitized);
+		}
+	}
+	return out;
 }
 
 function createRiskMetadataCoverageBucket() {
@@ -447,6 +579,63 @@ function recordEvidenceCoverage(bucket, enrichmentData) {
 	} else {
 		bucket.threePlusSources.populated += 1;
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Decision audit rollup — counts each gate.name/decision across the window.
+// Mirrors the riskMetadataCoverage pattern: opt-in, bounded denominator, and
+// only enabled when ENABLE_ALERT_DECISION_AUDIT=true so the rollup field is
+// absent (not zero) on disabled deployments.
+// ---------------------------------------------------------------------------
+
+function createDecisionGatesRollup() {
+	return {
+		denominator: 0,
+		gates: [],
+	};
+}
+
+function recordDecisionGatesRollup(rollup, decision) {
+	rollup.denominator += 1;
+	const gates = decision && typeof decision === 'object' && Array.isArray(decision.gates)
+		? decision.gates
+		: [];
+	for (const gate of gates) {
+		if (!gate || typeof gate !== 'object') {
+			continue;
+		}
+		const name = typeof gate.name === 'string' && gate.name.trim()
+			? gate.name.trim()
+			: null;
+		const decision = typeof gate.decision === 'string' && VALID_DECISION_GATE_DECISIONS.has(gate.decision)
+			? gate.decision
+			: null;
+		if (!name || !decision) {
+			continue;
+		}
+		let entry = rollup.gates.find((g) => g.name === name && g.decision === decision);
+		if (!entry) {
+			entry = { name, decision, populated: 0, percentage: 0 };
+			rollup.gates.push(entry);
+		}
+		entry.populated += 1;
+	}
+}
+
+function finalizeDecisionGatesRollup(rollup) {
+	if (rollup.denominator <= 0) {
+		rollup.gates = [];
+		return;
+	}
+	for (const entry of rollup.gates) {
+		entry.percentage = Math.round((entry.populated / rollup.denominator) * 10000) / 10000;
+	}
+	rollup.gates.sort((a, b) => {
+		if (a.name === b.name) {
+			return a.decision.localeCompare(b.decision);
+		}
+		return a.name.localeCompare(b.name);
+	});
 }
 
 function finalizeEvidenceCoverage(bucket) {
@@ -686,7 +875,7 @@ function truncateAlertText(text) {
 		: text;
 }
 
-function formatExportRecord(doc, { includeText }) {
+function formatExportRecord(doc, { includeText, includeDecision = false }) {
 	const data = doc.data() || {};
 	const record = {
 		id: doc.id,
@@ -725,6 +914,10 @@ function formatExportRecord(doc, { includeText }) {
 				record.originalLength = data.originalLength;
 			}
 		}
+	}
+
+	if (includeDecision && data.decision && typeof data.decision === 'object' && !Array.isArray(data.decision)) {
+		record.decision = data.decision;
 	}
 
 	return record;
@@ -963,6 +1156,7 @@ function getFirestore() {
  * @param {Array}   params.deliveryResults   - Array of SendResult from notificationManager.sendToAll()
  * @param {boolean} params.useTradingViewData - Whether ?useTradingViewData=true was set on the request
  * @param {number}  params.processingTimeMs  - Bounded handler processing duration in milliseconds
+ * @param {Object|null} params.decision      - Opt-in per-alert decision audit trail (parsed/enrichment/gates/dispatch/errors)
  * @returns {Promise<string|null>} The new Firestore document ID, or null on failure/disabled
  */
 async function saveAlertInternal({
@@ -990,6 +1184,7 @@ async function saveAlertInternal({
 	whatsappChatId,
 	discordWebhookUrl,
 	routing,
+	decision,
 }) {
 	if (!isEnabled()) {
 		return null;
@@ -1074,6 +1269,11 @@ async function saveAlertInternal({
 		}
 		if (typeof effectiveDiscordWebhookUrl === 'string' && effectiveDiscordWebhookUrl.trim()) {
 			document.discordWebhookUrl = effectiveDiscordWebhookUrl.trim();
+		}
+
+		const sanitizedDecision = sanitizeDecisionAudit(decision);
+		if (sanitizedDecision) {
+			document.decision = sanitizedDecision;
 		}
 
 		const docRef = await firestore.collection(COLLECTION_NAME).add(document);
@@ -1517,7 +1717,7 @@ async function getLatestReplayForAlert(alertId) {
  * @param {boolean|undefined} params.includeText Include truncated alert text when true
  * @returns {Promise<{window: Object, alerts: Array}>}
  */
-async function exportAlerts({ from, to, limit, source, enriched, includeText = false } = {}) {
+async function exportAlerts({ from, to, limit, source, enriched, includeText = false, includeDecision = false } = {}) {
 	if (!isEnabled()) {
 		return null;
 	}
@@ -1578,7 +1778,7 @@ async function exportAlerts({ from, to, limit, source, enriched, includeText = f
 		}
 	}
 
-	const alerts = docs.map(doc => formatExportRecord(doc, { includeText }));
+	const alerts = docs.map(doc => formatExportRecord(doc, { includeText, includeDecision }));
 
 	return {
 		window,
@@ -1600,7 +1800,7 @@ async function exportAlerts({ from, to, limit, source, enriched, includeText = f
  * @param {boolean|undefined} params.enriched Optional enriched/plain filter
  * @returns {Promise<Object|null>}
  */
-async function summarizeAlerts({ from, to, limit, source, enriched } = {}) {
+async function summarizeAlerts({ from, to, limit, source, enriched, includeDecisionRollup = false } = {}) {
 	if (!isEnabled()) {
 		return null;
 	}
@@ -1702,6 +1902,11 @@ async function summarizeAlerts({ from, to, limit, source, enriched } = {}) {
 			averageDeliveryMs: null,
 		},
 	};
+	if (includeDecisionRollup && isDecisionAuditEnabled()) {
+		summary.decision = {
+			gates: createDecisionGatesRollup(),
+		};
+	}
 	const processingLatencySamples = [];
 	const deliveryLatencySamples = [];
 
@@ -1752,10 +1957,17 @@ async function summarizeAlerts({ from, to, limit, source, enriched } = {}) {
 				collectLatency(deliveryLatencySamples, result && (result.latencyMs || result.deliveryLatencyMs || result.durationMs));
 			}
 		}
+
+		if (summary.decision) {
+			recordDecisionGatesRollup(summary.decision.gates, data.decision);
+		}
 	}
 
 	finalizeRiskMetadataCoverageByProvenance(summary.enrichment.riskMetadataCoverage);
 	finalizeEvidenceCoverageByProvenance(summary.enrichment.evidenceCoverage);
+	if (summary.decision) {
+		finalizeDecisionGatesRollup(summary.decision.gates);
+	}
 	summary.enrichment.tokenUsage.totalCost = Number(summary.enrichment.tokenUsage.totalCost.toFixed(6));
 	summary.latency.averageProcessingMs = averageLatency(processingLatencySamples);
 	summary.latency.averageDeliveryMs = averageLatency(deliveryLatencySamples);
@@ -1780,6 +1992,13 @@ module.exports = {
 	INVALID_CURSOR_MESSAGE,
 	parseAlertPaginationCursor,
 	MAX_ALERT_TEXT_LENGTH,
+	isDecisionAuditEnabled,
+	sanitizeDecisionAudit,
+	sanitizeDecisionGates,
+	sanitizeDecisionGate,
+	createDecisionGatesRollup,
+	recordDecisionGatesRollup,
+	finalizeDecisionGatesRollup,
 	// Exported for testing
 	getFirestore,
 	COLLECTION_NAME,

@@ -128,6 +128,7 @@ To report a vulnerability, see [`SECURITY.md`](./SECURITY.md) — the project do
 - `ENABLE_ALERT_HTF_RENDER` - Enable rendering higher-timeframe trend alignment on enriched webhook alerts (`true` or `false`, default: `true`)
 - `ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION` - Suppress duplicate channel delivery for the same `exchange|symbol|timeframe|side` signal within its cooldown window; suppressed alerts are still persisted with a `suppressedRepeat: true` marker and opposite-side flips always deliver (`true` or `false`, default: `false`)
 - `ALERT_SIGNAL_COOLDOWN_BARS` - Cooldown length in alert-timeframe bars for repeat suppression (`1`-`10`, default: `1`)
+- `ENABLE_ALERT_DECISION_AUDIT` - Persist a per-alert decision audit trail (`requestId`, parsed signal, enrichment outcome, gate verdicts, requested/delivered channels) on every `/api/webhook/alert` document (`true` or `false`, default: `false`). Sanitization caps depth at 6 with at most 32 keys per object; the field is omitted from the document when disabled.
 - Runtime gate: TradingView MCP data is only used when webhook requests include `?useTradingViewData=true`
 
 #### Firestore Alert Storage
@@ -1229,8 +1230,11 @@ Similarly, `enrichment.evidenceCoverage` tracks whether enriched alerts cited gr
 - `from` - Optional ISO-8601 lower bound; defaults to 24 hours before `to`
 - `to` - Optional ISO-8601 upper bound; defaults to request time
 - `limit` - Integer between `1` and `1000` (default: `500`)
+- `includeDecisionRollup` - Optional boolean (`true`/`false`, default: `false`); adds `summary.decision.gates[]` rollup. Only populated when `ENABLE_ALERT_DECISION_AUDIT=true`; the field is omitted (not empty) when disabled or not requested.
 
 The service caps the queried window at 31 days to keep routine operator usage cheap.
+
+When the decision rollup is enabled, `summary.decision.gates.denominator` counts scanned alerts and `summary.decision.gates.gates[]` reports each `name`/`decision` bucket with `populated` and `percentage`. Sorted alphabetically by name with ties broken by decision (`allow` < `skip` < `suppress`).
 
 **Response (200 OK):**
 ```json

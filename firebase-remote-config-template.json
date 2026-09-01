@@ -363,6 +363,13 @@
       },
       "description": "Cooldown length in alert-timeframe bars for same-signal repeat suppression",
       "valueType": "NUMBER"
+    },
+    "ENABLE_ALERT_DECISION_AUDIT": {
+      "defaultValue": {
+        "value": "false"
+      },
+      "description": "Persist an opt-in per-alert decision audit trail (parsed signal, enrichment outcome, gate verdicts, requested/delivered channels) on every /api/webhook/alert document; sanitized with depth 6 and 32 keys per object",
+      "valueType": "BOOLEAN"
     }
   },
   "version": {

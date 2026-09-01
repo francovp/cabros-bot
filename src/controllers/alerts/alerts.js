@@ -28,6 +28,7 @@ const EXPORT_FIELDS = [
 	'deliveryResults',
 	'suppressedRepeat',
 	'tokenUsage',
+	'decision',
 	'text',
 ];
 
@@ -221,12 +222,21 @@ function summarizeAlerts(req, res) {
 			? req.query.source.trim()
 			: undefined;
 
+		const includeDecisionRollup = parseBooleanFlag(req.query.includeDecisionRollup, false);
+		if (includeDecisionRollup === null) {
+			return res.status(400).json({
+				error: 'Invalid includeDecisionRollup flag. Use true or false.',
+				code: 'INVALID_REQUEST',
+			});
+		}
+
 		const summary = await alertStorageService.summarizeAlerts({
 			from: from.value,
 			limit,
 			to: to.value,
 			source,
 			enriched,
+			includeDecisionRollup,
 		});
 
 		const hasReportFilters = Boolean(source) || typeof enriched === 'boolean';
@@ -336,6 +346,14 @@ function exportAlerts(req, res) {
 			});
 		}
 
+		const includeDecision = parseBooleanFlag(req.query.includeDecision, false);
+		if (includeDecision === null) {
+			return res.status(400).json({
+				error: 'Invalid includeDecision flag. Use true or false.',
+				code: 'INVALID_REQUEST',
+			});
+		}
+
 		const source = typeof req.query.source === 'string' && req.query.source.trim()
 			? req.query.source.trim()
 			: undefined;
@@ -347,6 +365,7 @@ function exportAlerts(req, res) {
 			source,
 			enriched,
 			includeText,
+			includeDecision,
 		});
 
 		const hasReportFilters = Boolean(source) || typeof enriched === 'boolean';
