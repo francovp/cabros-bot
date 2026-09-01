@@ -186,4 +186,182 @@ describe('Rate Limiter Middleware', () => {
 
 		expect(next).toHaveBeenCalledTimes(3);
 	});
+
+	describe('API-key aware rate limiting (issue #692)', () => {
+		beforeEach(() => {
+			process.env.RATE_LIMIT_MAX = '2';
+			delete process.env.RATE_LIMIT_API_KEY_MAX;
+		});
+
+		test('separates ordinary buckets by API-key hash when WEBHOOK_API_KEY is configured', () => {
+			process.env.WEBHOOK_API_KEY = 'super-secret';
+
+			const apiReq1 = httpMocks.createRequest({
+				method: 'POST',
+				url: '/api/test',
+				ip: '203.0.113.10',
+				headers: { 'x-api-key': 'super-secret' },
+			});
+			const apiReq2 = httpMocks.createRequest({
+				method: 'POST',
+				url: '/api/test',
+				ip: '203.0.113.99',
+				headers: { 'x-api-key': 'super-secret' },
+			});
+			const unauthReq = httpMocks.createRequest({
+				method: 'POST',
+				url: '/api/test',
+				ip: '203.0.113.10',
+			});
+
+			// Two authenticated requests from the SAME api-key (different IPs) share a bucket.
+			rateLimiter(apiReq1, httpMocks.createResponse(), next);
+			rateLimiter(apiReq2, httpMocks.createResponse(), next);
+			const resBlocked = httpMocks.createResponse();
+			rateLimiter(apiReq1, resBlocked, jest.fn());
+			expect(resBlocked.statusCode).toBe(429);
+
+			// Unauthenticated request from the same IP as the original blocked api-key caller
+			// must still be allowed (separate bucket).
+			const resOk = httpMocks.createResponse();
+			const nextOk = jest.fn();
+			rateLimiter(unauthReq, resOk, nextOk);
+			expect(nextOk).toHaveBeenCalled();
+		});
+
+		test('separates buckets by API-key identity when multiple keys are configured', () => {
+			process.env.WEBHOOK_API_KEYS = 'key-one,key-two';
+
+			const apiReq1 = httpMocks.createRequest({
+				method: 'POST',
+				url: '/api/test',
+				ip: '203.0.113.10',
+				headers: { 'x-api-key': 'key-one' },
+			});
+			const apiReq2 = httpMocks.createRequest({
+				method: 'POST',
+				url: '/api/test',
+				ip: '203.0.113.10',
+				headers: { 'x-api-key': 'key-two' },
+			});
+
+			rateLimiter(apiReq1, httpMocks.createResponse(), next);
+			rateLimiter(apiReq1, httpMocks.createResponse(), next);
+			const resBlocked = httpMocks.createResponse();
+			rateLimiter(apiReq1, resBlocked, jest.fn());
+			expect(resBlocked.statusCode).toBe(429);
+
+			// key-two from the SAME IP must still be allowed (different bucket).
+			const resOk = httpMocks.createResponse();
+			const nextOk = jest.fn();
+			rateLimiter(apiReq2, resOk, nextOk);
+			expect(nextOk).toHaveBeenCalled();
+		});
+
+		test('uses User-Agent fingerprint when no API key is present and TRUST_PROXY is enabled', () => {
+			process.env.TRUST_PROXY = '1';
+
+			const browserReq = httpMocks.createRequest({
+				method: 'POST',
+				url: '/api/test',
+				ip: '203.0.113.10',
+				headers: { 'user-agent': 'Mozilla/5.0 test-browser' },
+			});
+			const botReq = httpMocks.createRequest({
+				method: 'POST',
+				url: '/api/test',
+				ip: '203.0.113.10',
+				headers: { 'user-agent': 'curl/8.4.0' },
+			});
+
+			rateLimiter(browserReq, httpMocks.createResponse(), next);
+			rateLimiter(browserReq, httpMocks.createResponse(), next);
+			const resBlocked = httpMocks.createResponse();
+			rateLimiter(browserReq, resBlocked, jest.fn());
+			expect(resBlocked.statusCode).toBe(429);
+
+			// Bot from same IP but different UA must still be allowed (separate bucket).
+			const resOk = httpMocks.createResponse();
+			const nextOk = jest.fn();
+			rateLimiter(botReq, resOk, nextOk);
+			expect(nextOk).toHaveBeenCalled();
+		});
+
+		test('falls back to IP-only key when TRUST_PROXY is disabled (no API key awareness change)', () => {
+			process.env.TRUST_PROXY = 'false';
+			delete process.env.WEBHOOK_API_KEY;
+			delete process.env.WEBHOOK_API_KEYS;
+
+			const reqA = httpMocks.createRequest({
+				method: 'POST',
+				url: '/api/test',
+				ip: '203.0.113.10',
+				headers: { 'user-agent': 'Mozilla/5.0 test-browser' },
+			});
+			const reqB = httpMocks.createRequest({
+				method: 'POST',
+				url: '/api/test',
+				ip: '203.0.113.10',
+				headers: { 'user-agent': 'curl/8.4.0' },
+			});
+
+			// With TRUST_PROXY=false and no API keys configured, both requests share the
+			// IP-only bucket to preserve legacy single-replica behavior.
+			rateLimiter(reqA, httpMocks.createResponse(), next);
+			rateLimiter(reqB, httpMocks.createResponse(), next);
+			const resBlocked = httpMocks.createResponse();
+			rateLimiter(reqA, resBlocked, jest.fn());
+			expect(resBlocked.statusCode).toBe(429);
+		});
+
+		test('honors RATE_LIMIT_API_KEY_MAX override for authenticated callers', () => {
+			process.env.WEBHOOK_API_KEY = 'super-secret';
+			process.env.RATE_LIMIT_API_KEY_MAX = '1';
+
+			const authReq = httpMocks.createRequest({
+				method: 'POST',
+				url: '/api/test',
+				ip: '203.0.113.10',
+				headers: { 'x-api-key': 'super-secret' },
+			});
+			const unauthReq = httpMocks.createRequest({
+				method: 'POST',
+				url: '/api/test',
+				ip: '203.0.113.10',
+			});
+
+			// Authenticated bucket limited to RATE_LIMIT_API_KEY_MAX=1.
+			rateLimiter(authReq, httpMocks.createResponse(), next);
+			const resBlocked = httpMocks.createResponse();
+			rateLimiter(authReq, resBlocked, jest.fn());
+			expect(resBlocked.statusCode).toBe(429);
+
+			// Unauthenticated bucket has its own RATE_LIMIT_MAX=2 budget — fill it then block.
+			rateLimiter(unauthReq, httpMocks.createResponse(), next);
+			rateLimiter(unauthReq, httpMocks.createResponse(), next);
+			const resUnauthBlocked = httpMocks.createResponse();
+			rateLimiter(unauthReq, resUnauthBlocked, jest.fn());
+			expect(resUnauthBlocked.statusCode).toBe(429);
+		});
+
+		test('rejects invalid RATE_LIMIT_API_KEY_MAX with safe default', () => {
+			process.env.WEBHOOK_API_KEY = 'super-secret';
+			process.env.RATE_LIMIT_API_KEY_MAX = 'not-a-number';
+
+			const authReq = httpMocks.createRequest({
+				method: 'POST',
+				url: '/api/test',
+				ip: '203.0.113.10',
+				headers: { 'x-api-key': 'super-secret' },
+			});
+
+			// Invalid RATE_LIMIT_API_KEY_MAX falls back to RATE_LIMIT_MAX=2 for authenticated callers.
+			for (let i = 0; i < 2; i++) {
+				rateLimiter(authReq, httpMocks.createResponse(), next);
+			}
+			const resBlocked = httpMocks.createResponse();
+			rateLimiter(authReq, resBlocked, jest.fn());
+			expect(resBlocked.statusCode).toBe(429);
+		});
+	});
 });
