@@ -1341,6 +1341,54 @@ The service caps the queried window at 31 days to keep routine operator usage ch
 
 For rollout validation, first verify the active prompt provenance and coverage in preview, then observe a bounded production/shadow window after aligning the remote `alert-enrichment` prompt with the local optional-risk schema. Treat missing fields as unavailable data; do not use zero coverage as a trading outcome or fabricate stops, targets, setup types, or R:R values.
 
+#### POST /api/alerts/:alertId/replay
+
+Replay a stored alert through the configured notification channels. The endpoint requires an idempotency key (`idempotency-key`/`x-idempotency-key` header or `idempotencyKey` body/query field) and an `ENABLE_FIRESTORE_ALERT_STORAGE=true` gate. Successful replays persist a `alertReplays` audit document with a SHA-256 hash of the key.
+
+**Dry-run mode:** add `dryRun: true` to the body (or `?dryRun=true` to the URL) to fetch the stored alert and build the would-be payload, then return it without dispatching to any channel and without persisting a replay attempt. Use this to preview the text, enrichment data, and per-channel routing before triggering a real replay. The dry-run response echoes the raw `idempotencyKey` (the live endpoint never returns it).
+
+**Request body:**
+```json
+{
+  "channels": ["telegram", "whatsapp"],
+  "dryRun": true
+}
+```
+
+**Response (200 OK - dry-run):**
+```json
+{
+  "success": true,
+  "dryRun": true,
+  "alertId": "alert-123",
+  "channels": ["telegram"],
+  "idempotencyKey": "replay-key-1",
+  "payloadPreview": {
+    "text": "BINANCE:ETHUSDT(240) pasó a señal de COMPRA",
+    "enriched": { "sentiment": "BULLISH", "sentiment_score": 0.62 },
+    "channelRouting": {
+      "telegramChatId": "111",
+      "telegramThreadId": 7,
+      "whatsappChatId": "222"
+    }
+  }
+}
+```
+
+**Response (200 OK - live replay):**
+```json
+{
+  "success": true,
+  "alertId": "alert-123",
+  "replayId": "1700000000000_<uuid>",
+  "results": [
+    { "channel": "telegram", "success": true, "messageId": "tg-1" }
+  ]
+}
+```
+
+The same `403 FEATURE_DISABLED` (when `ENABLE_FIRESTORE_ALERT_STORAGE=false`), `503 STORAGE_UNAVAILABLE`, and `400 INVALID_REQUEST` mapping as the sibling endpoints applies. A reused idempotency key with a different request fingerprint returns `409 IDEMPOTENCY_CONFLICT`.
+
 #### GET /api/alerts/replays
 
 List bounded alert-replay audit records from the Firestore `alertReplays` collection, ordered by `replayedAt` descending. Each `POST /api/alerts/{alertId}/replay` writes a unique audit document so retries with the same idempotency key are preserved as history instead of overwriting prior attempts; the HTTP `Idempotency-Replay` contract remains upstream of storage. Raw idempotency keys are never stored or returned — only a SHA-256 hash prefix is exposed.

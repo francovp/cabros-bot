@@ -3133,6 +3133,132 @@
           ]
         },
         {
+          "name": "POST Replay Alert (dry-run)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "idempotency-key",
+                "value": "{{replayIdempotencyKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"channels\": [\"telegram\"],\n  \"dryRun\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/{{alertId}}/replay",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "{{alertId}}",
+                "replay"
+              ]
+            },
+            "description": "Dry-run replay: fetch the stored alert and build the would-be payload, then return it without dispatching to any notification channel and without persisting a replay attempt. Use this to preview payload text + enrichment data + per-channel routing before triggering a real replay."
+          },
+          "response": [
+            {
+              "name": "Success (dry-run preview)",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-api-key",
+                    "value": "{{apiKey}}",
+                    "type": "text"
+                  },
+                  {
+                    "key": "idempotency-key",
+                    "value": "{{replayIdempotencyKey}}",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"channels\": [\"telegram\"],\n  \"dryRun\": true\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/alerts/{{alertId}}/replay",
+                  "host": [
+                    "{{baseUrl}"
+                  ],
+                  "path": [
+                    "api",
+                    "alerts",
+                    "{{alertId}}",
+                    "replay"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"alertId\": \"alert-123\",\n  \"channels\": [\"telegram\"],\n  \"idempotencyKey\": \"replay-key-1\",\n  \"payloadPreview\": {\n    \"text\": \"BINANCE:ETHUSDT(240) pasó a señal de COMPRA\",\n    \"enriched\": {\n      \"sentiment\": \"BULLISH\",\n      \"sentiment_score\": 0.62,\n      \"insights\": [\"Volume confirms: YES (1.4x avg)\"],\n      \"technical_levels\": { \"supports\": [\"3200\"], \"resistances\": [\"3350\"] }\n    },\n    \"channelRouting\": {\n      \"telegramChatId\": \"111\",\n      \"telegramThreadId\": 7,\n      \"whatsappChatId\": \"222\"\n    }\n  }\n}"
+            },
+            {
+              "name": "Not found (dry-run, alert missing)",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-api-key",
+                    "value": "{{apiKey}}",
+                    "type": "text"
+                  },
+                  {
+                    "key": "idempotency-key",
+                    "value": "{{replayIdempotencyKey}}",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"channels\": [\"telegram\"],\n  \"dryRun\": true\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/alerts/missing/replay",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "alerts",
+                    "missing",
+                    "replay"
+                  ]
+                }
+              },
+              "status": "Not Found",
+              "code": 404,
+              "body": "{\n  \"error\": \"Alert not found\",\n  \"code\": \"NOT_FOUND\"\n}"
+            }
+          ]
+        },
+        {
           "name": "POST Replay Alert (market-scanner)",
           "request": {
             "method": "POST",

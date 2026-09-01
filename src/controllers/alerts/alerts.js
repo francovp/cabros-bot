@@ -497,6 +497,24 @@ function getIdempotencyKey(req) {
 		|| (req.query && (req.query.idempotencyKey || req.query.idempotency_key));
 }
 
+function resolveDryRun(req) {
+	const queryFlag = req.query && (req.query.dryRun === 'true' || req.query.dryRun === true);
+	const bodyFlag = req.body && typeof req.body === 'object'
+		&& (req.body.dryRun === true || req.body.dryRun === 'true');
+	return Boolean(queryFlag || bodyFlag);
+}
+
+function buildChannelRouting(storedAlert, storedTelegramThreadId) {
+	return {
+		...(storedAlert.telegramChatId ? { telegramChatId: storedAlert.telegramChatId } : {}),
+		...(storedTelegramThreadId !== undefined && storedTelegramThreadId !== null
+			? { telegramThreadId: storedTelegramThreadId }
+			: {}),
+		...(storedAlert.whatsappChatId ? { whatsappChatId: storedAlert.whatsappChatId } : {}),
+		...(storedAlert.discordWebhookUrl ? { discordWebhookUrl: storedAlert.discordWebhookUrl } : {}),
+	};
+}
+
 function replayAlert(botOrGetter) {
 	return function handleReplayAlert(req, res) {
 		return handleAsync(req, res, `/api/alerts/${req.params.alertId}/replay`, async () => {
@@ -539,19 +557,14 @@ function replayAlert(botOrGetter) {
 				});
 			}
 
+			const dryRun = resolveDryRun(req);
+
 			const storedAlert = await alertStorageService.getAlertById(alertId);
 			if (!storedAlert) {
 				return res.status(404).json({
 					error: 'Alert not found',
 					code: 'NOT_FOUND',
 				});
-			}
-
-			const { getNotificationManager, initializeNotificationServices } = require('../webhooks/handlers/alert/alert');
-			let notificationManager = getNotificationManager();
-			if (!notificationManager) {
-				const bot = typeof botOrGetter === 'function' ? botOrGetter() : botOrGetter || null;
-				notificationManager = await initializeNotificationServices(bot);
 			}
 
 			let storedTelegramThreadId = storedAlert.telegramThreadId;
@@ -566,6 +579,31 @@ function replayAlert(botOrGetter) {
 				}
 			}
 
+			const channelRouting = buildChannelRouting(storedAlert, storedTelegramThreadId);
+
+			if (dryRun) {
+				console.debug('[AlertsController] Replay dry-run: skipping delivery and persistence for alert', alertId);
+				return res.status(200).json({
+					success: true,
+					dryRun: true,
+					alertId,
+					channels,
+					idempotencyKey: idempotencyKey.trim(),
+					payloadPreview: {
+						text: storedAlert.text,
+						enriched: storedAlert.enrichmentData || null,
+						channelRouting,
+					},
+				});
+			}
+
+			const { getNotificationManager, initializeNotificationServices } = require('../webhooks/handlers/alert/alert');
+			let notificationManager = getNotificationManager();
+			if (!notificationManager) {
+				const bot = typeof botOrGetter === 'function' ? botOrGetter() : botOrGetter || null;
+				notificationManager = await initializeNotificationServices(bot);
+			}
+
 			const replayPayload = {
 				text: storedAlert.text,
 				enriched: storedAlert.enrichmentData || undefined,
@@ -574,12 +612,7 @@ function replayAlert(botOrGetter) {
 					originalAlertId: alertId,
 					idempotencyKey: idempotencyKey.trim(),
 				},
-				...(storedAlert.telegramChatId ? { telegramChatId: storedAlert.telegramChatId } : {}),
-				...(storedTelegramThreadId !== undefined && storedTelegramThreadId !== null
-					? { telegramThreadId: storedTelegramThreadId }
-					: {}),
-				...(storedAlert.whatsappChatId ? { whatsappChatId: storedAlert.whatsappChatId } : {}),
-				...(storedAlert.discordWebhookUrl ? { discordWebhookUrl: storedAlert.discordWebhookUrl } : {}),
+				...channelRouting,
 			};
 			const results = await notificationManager.sendToChannels(replayPayload, channels);
 			const replayId = await alertStorageService.saveReplayAttempt({

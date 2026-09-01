@@ -2244,13 +2244,19 @@
                       "discord"
                     ]
                   }
+                },
+                "dryRun": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "When true, fetch the stored alert and build the would-be payload, then return it without dispatching to any notification channel and without persisting a replay attempt."
                 }
               }
             },
             "example": {
               "channels": [
                 "telegram"
-              ]
+              ],
+              "dryRun": true
             }
           }
         }
@@ -2873,7 +2879,7 @@
         }
       },
       "DeliveryResult": {
-        "description": "Per-channel delivery result. When ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION is enabled and the same exchange/symbol/timeframe/side signal fires within its cooldown window, the response includes suppressedRepeat: true with empty results and deliveredChannels while the alert remains persisted with a suppression marker.",
+        "description": "Per-channel delivery result. When ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION is enabled and the same exchange/symbol/timeframe/side signal fires within its cooldown window, the response includes suppressedRepeat: true with empty results and deliveredChannels while the alert remains persisted with a suppression marker. Replay endpoints that run with dryRun=true return payloadPreview, alertId, channels, and idempotencyKey instead of dispatching to any channel.",
         "content": {
           "application/json": {
             "schema": {
@@ -5496,6 +5502,52 @@
             "items": {
               "type": "string"
             }
+          },
+          "alertId": {
+            "type": "string",
+            "description": "Stored alert ID echoed back from replay endpoints."
+          },
+          "channels": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "telegram",
+                "whatsapp",
+                "discord"
+              ]
+            },
+            "description": "Channels selected for this replay; when dryRun is true, no dispatch occurs."
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "description": "Idempotency key echoed back from replay endpoints (raw value is only returned in dryRun; persisted replays store a SHA-256 hash prefix)."
+          },
+          "payloadPreview": {
+            "type": "object",
+            "description": "Returned only by replay endpoints when dryRun=true. Contains the exact payload that would be dispatched (text, enriched data, channel routing) without sending to any channel or persisting a replay attempt.",
+            "properties": {
+              "text": {
+                "type": "string"
+              },
+              "enriched": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "additionalProperties": true,
+                "description": "Stored enrichmentData from the alert. Mirrors the alert.enriched shape (may include sentiment, insights, technical_levels, etc.)."
+              },
+              "channelRouting": {
+                "type": "object",
+                "additionalProperties": true,
+                "description": "Per-channel destination overrides that would have been applied (telegramChatId, telegramThreadId, whatsappChatId, discordWebhookUrl)."
+              }
+            }
+          },
+          "replayId": {
+            "type": "string",
+            "description": "Persisted replay attempt ID returned only on live replay; absent when dryRun=true."
           }
         }
       },
