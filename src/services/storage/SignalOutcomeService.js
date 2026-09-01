@@ -63,6 +63,9 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const SESSION_TIME_ZONE = 'America/New_York';
 const SESSION_ANCHOR_VERSION = 'v1';
 const REGULAR_EQUITY_EXCHANGES = new Set(['AMEX', 'BATS', 'NASDAQ', 'NYSE', 'NYSE ARCA']);
+const DEFAULT_OUTCOME_WINDOWS = Object.freeze(['1h', '4h', '1D', '1W']);
+const SUPPORTED_OUTCOME_WINDOWS = Object.freeze(['1m', '5m', '15m', '30m', '1h', '4h', '1D', '1W', '1M']);
+const DEFAULT_OUTCOME_WINDOW_LABELS = Object.freeze({ '1h': '1h', '4h': '4h', '1D': '1D', '1W': '1W' });
 
 let binanceClient = null;
 let isEvaluating = false;
@@ -104,6 +107,77 @@ function getEntryPriceSourceChains() {
 function getEntryPriceSourceChain(exchange, assetClass) {
 	const chains = getEntryPriceSourceChains();
 	return exchange === 'BINANCE' || assetClass === 'crypto' ? chains.crypto : chains.equity;
+}
+
+let lastWindowsWarningValue = null;
+let lastWindowLabelsWarningValue = null;
+
+function warnInvalidWindowConfig(name, rawValue) {
+	const lastValue = name === 'SIGNAL_OUTCOME_WINDOWS' ? lastWindowsWarningValue : lastWindowLabelsWarningValue;
+	if (lastValue !== rawValue) {
+		console.warn(`[SignalOutcomeService] Invalid ${name} configuration, using default`);
+		if (name === 'SIGNAL_OUTCOME_WINDOWS') {
+			lastWindowsWarningValue = rawValue;
+		} else {
+			lastWindowLabelsWarningValue = rawValue;
+		}
+	}
+}
+
+function defaultOutcomeWindowLabels(windows) {
+	return Object.fromEntries(windows.map(window => [window, DEFAULT_OUTCOME_WINDOW_LABELS[window] || window]));
+}
+
+function getConfiguredOutcomeWindows(runtimeConfig = getRuntimeConfig()) {
+	const rawValue = runtimeConfig.SIGNAL_OUTCOME_WINDOWS;
+	if (rawValue === undefined || rawValue === null) {
+		return [...DEFAULT_OUTCOME_WINDOWS];
+	}
+	if (String(rawValue).trim() === '') {
+		warnInvalidWindowConfig('SIGNAL_OUTCOME_WINDOWS', rawValue);
+		return [...DEFAULT_OUTCOME_WINDOWS];
+	}
+
+	const values = String(rawValue).split(',').map(value => value.trim());
+	const isValid = values.length > 0
+		&& values.every(value => SUPPORTED_OUTCOME_WINDOWS.includes(value))
+		&& new Set(values).size === values.length;
+	if (!isValid) {
+		warnInvalidWindowConfig('SIGNAL_OUTCOME_WINDOWS', rawValue);
+		return [...DEFAULT_OUTCOME_WINDOWS];
+	}
+
+	lastWindowsWarningValue = null;
+	return values;
+}
+
+function getOutcomeWindowLabels(windows = getConfiguredOutcomeWindows(), runtimeConfig = getRuntimeConfig()) {
+	const labels = defaultOutcomeWindowLabels(windows);
+	const rawValue = runtimeConfig.SIGNAL_OUTCOME_WINDOW_LABELS;
+	if (rawValue === undefined || rawValue === null || String(rawValue).trim() === '') {
+		lastWindowLabelsWarningValue = null;
+		return labels;
+	}
+
+	let parsed;
+	try {
+		parsed = JSON.parse(String(rawValue));
+	} catch (error) {
+		parsed = null;
+	}
+	if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)
+		|| Object.entries(parsed).some(([window, label]) => !SUPPORTED_OUTCOME_WINDOWS.includes(window) || typeof label !== 'string' || !label.trim() || label.length > 80)) {
+		warnInvalidWindowConfig('SIGNAL_OUTCOME_WINDOW_LABELS', rawValue);
+		return labels;
+	}
+
+	lastWindowLabelsWarningValue = null;
+	for (const window of windows) {
+		if (typeof parsed[window] === 'string' && parsed[window].trim()) {
+			labels[window] = parsed[window].trim();
+		}
+	}
+	return labels;
 }
 
 function getSignalOutcomeRetentionDays() {
@@ -761,10 +835,15 @@ function determineEligibility(normSymbolInfo, assetClass, entryPrice, equityProv
 }
 
 const WINDOW_CONFIGS = {
+	'1m': { durationMs: 1 * 60 * 1000, interval: '1m' },
+	'5m': { durationMs: 5 * 60 * 1000, interval: '5m' },
+	'15m': { durationMs: 15 * 60 * 1000, interval: '15m' },
+	'30m': { durationMs: 30 * 60 * 1000, interval: '30m' },
 	'1h': { durationMs: 1 * 60 * 60 * 1000, interval: '5m' },
 	'4h': { durationMs: 4 * 60 * 60 * 1000, interval: '15m' },
 	'1D': { durationMs: 24 * 60 * 60 * 1000, interval: '1h' },
 	'1W': { durationMs: 7 * 24 * 60 * 60 * 1000, interval: '4h' },
+	'1M': { durationMs: 30 * DAY_MS, interval: '1D' },
 };
 
 function normalizeConfidenceScore(val) {
@@ -960,8 +1039,12 @@ async function recordSignalInternal({
 		const eligibility = determineEligibility(normSymbolInfo, normAssetClass, entryPrice, equityProviderName, entryPriceReason);
 		const isEligible = eligibility.state === 'supported_provider' || eligibility.state === 'pending_entry_price';
 
+		const runtimeConfig = getRuntimeConfig();
+		const outcomeWindows = getConfiguredOutcomeWindows(runtimeConfig);
+		const outcomeWindowLabels = getOutcomeWindowLabels(outcomeWindows, runtimeConfig);
 		const outcomes = {};
-		for (const [winKey, config] of Object.entries(WINDOW_CONFIGS)) {
+		for (const winKey of outcomeWindows) {
+			const config = WINDOW_CONFIGS[winKey];
 			outcomes[winKey] = {
 				status: isEligible ? 'pending' : 'unavailable',
 				reason: isEligible ? null : eligibility.state,
@@ -1053,6 +1136,8 @@ async function recordSignalInternal({
 			tokenUsage: tokenUsage || null,
 			processingTimeMs: typeof processingTimeMs === 'number' && Number.isFinite(processingTimeMs) ? processingTimeMs : null,
 			marketDataProvider: normSymbolInfo.exchange === 'BINANCE' ? 'binance' : (equityProviderName || null),
+			outcomeWindows,
+			outcomeWindowLabels,
 			eligibilityState: eligibility.state,
 			eligibilityReason: eligibility.reason || null,
 			outcomeEvaluated: !isEligible,
@@ -1456,6 +1541,12 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 				}
 
 				const config = WINDOW_CONFIGS[winKey];
+				if (!config) {
+					outcome.status = 'unavailable';
+					outcome.reason = 'unsupported_outcome_window';
+					docUpdated = true;
+					continue;
+				}
 
 				let abortController = null;
 				let timerId = null;
@@ -1832,6 +1923,9 @@ function startWorker(options = {}) {
 	if (getWorkerRole() !== source) {
 		return false;
 	}
+
+	const outcomeWindows = getConfiguredOutcomeWindows();
+	getOutcomeWindowLabels(outcomeWindows);
 
 	if (workerTimer) {
 		return true;
@@ -2449,10 +2543,11 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, setupType,
 		}
 	}
 
+	const configuredWindows = getConfiguredOutcomeWindows();
 	const windowStats = {};
 	const windowKeysToAggregate = window
-		? [Object.keys(WINDOW_CONFIGS).find(k => k.toLowerCase() === window.toLowerCase()) || window]
-		: Object.keys(WINDOW_CONFIGS);
+		? [configuredWindows.find(k => k.toLowerCase() === window.toLowerCase()) || window]
+		: configuredWindows;
 	if (evaluatedSignals.length > 0) {
 		for (const winKey of windowKeysToAggregate) {
 			const accumulator = createWindowAccumulator();
@@ -2534,7 +2629,7 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, setupType,
 		let resolvedReturn = null;
 
 		for (const winKey of windowKeysToAggregate) {
-			const outcome = signal.outcomes ? signal.outcomes[winKey] : null;
+			const outcome = signal.outcomes && signal.outcomes[winKey];
 			if (outcome && outcome.status === 'evaluated') {
 				if (outcome.maxAdverseExcursion < worstMae) {
 					worstMae = outcome.maxAdverseExcursion;
@@ -2583,7 +2678,7 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, setupType,
 		const hasTargetBarrier = typeof signal.target === 'number' && Number.isFinite(signal.target) && signal.target > 0;
 		const hasStopBarrier = typeof signal.stop === 'number' && Number.isFinite(signal.stop) && signal.stop > 0;
 		for (const winKey of windowKeysToAggregate) {
-			const outcome = signal.outcomes ? signal.outcomes[winKey] : null;
+			const outcome = signal.outcomes && signal.outcomes[winKey];
 			if (outcome && outcome.status === 'evaluated') {
 				allEvaluatedWindows++;
 				if (hasTargetBarrier) {
@@ -2851,13 +2946,13 @@ function matchesOutcomeFilters(outcome, { symbol, exchange, setupType, status, w
 		}
 	}
 	if (window && status) {
-		const winKey = Object.keys(WINDOW_CONFIGS).find(k => k.toLowerCase() === window.toLowerCase()) || window;
+		const winKey = window === '1M' ? '1M' : Object.keys(WINDOW_CONFIGS).find(k => k.toLowerCase() === window.toLowerCase()) || window;
 		const winOutcome = outcome.outcomes && outcome.outcomes[winKey];
 		if (!winOutcome || winOutcome.status !== status) {
 			return false;
 		}
 	} else if (window) {
-		const winKey = Object.keys(WINDOW_CONFIGS).find(k => k.toLowerCase() === window.toLowerCase()) || window;
+		const winKey = window === '1M' ? '1M' : Object.keys(WINDOW_CONFIGS).find(k => k.toLowerCase() === window.toLowerCase()) || window;
 		if (!outcome.outcomes || !outcome.outcomes[winKey]) {
 			return false;
 		}
@@ -3312,6 +3407,8 @@ function _resetForTesting() {
 	lastBreakdownBucketCount = 0;
 	lastBreakdownTruncated = false;
 	breakdownTruncationCount = 0;
+	lastWindowsWarningValue = null;
+	lastWindowLabelsWarningValue = null;
 	binanceClient = null;
 	lastEvaluatedDoc = null;
 	isEvaluating = false;
@@ -3351,6 +3448,8 @@ module.exports = {
 	LEASE_RENEWAL,
 	parseEntryPriceSources,
 	getEntryPriceSourceChains,
+	getConfiguredOutcomeWindows,
+	getOutcomeWindowLabels,
 	COLLECTION_NAME,
 	HEARTBEAT_COLLECTION_NAME,
 	LOCK_COLLECTION_NAME,

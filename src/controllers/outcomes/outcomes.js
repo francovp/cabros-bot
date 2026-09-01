@@ -11,10 +11,15 @@ const DEFAULT_CALIBRATION_LIMIT = 1000;
 const MAX_CALIBRATION_LIMIT = 1000;
 const VALID_STATUSES = new Set(['pending', 'evaluated', 'unavailable']);
 const VALID_WINDOWS = {
+	'1m': '1m',
+	'5m': '5m',
+	'15m': '15m',
+	'30m': '30m',
 	'1h': '1h',
 	'4h': '4h',
 	'1d': '1D',
 	'1w': '1W',
+	'1M': '1M',
 };
 
 function parseLimit(rawLimit) {
@@ -84,6 +89,9 @@ function parseWindow(rawWindow) {
 	}
 
 	const win = rawWindow.trim().toLowerCase();
+	if (rawWindow.trim() === '1M') {
+		return '1M';
+	}
 	return VALID_WINDOWS[win] || null;
 }
 
@@ -156,7 +164,7 @@ function listOutcomes(req, res) {
 		const window = parseWindow(req.query.window);
 		if (window === null) {
 			return sendErrorFrom(res, 400, {
-				error: 'Invalid window filter. Use 1h, 4h, 1D, or 1W.',
+				error: 'Invalid window filter. Use 1m, 5m, 15m, 30m, 1h, 4h, 1D, 1W, or 1M.',
 				code: 'INVALID_REQUEST',
 			});
 		}
@@ -237,7 +245,7 @@ function summarizeOutcomes(req, res) {
 		const window = parseWindow(req.query.window);
 		if (window === null) {
 			return sendErrorFrom(res, 400, {
-				error: 'Invalid window filter. Use 1h, 4h, 1D, or 1W.',
+				error: 'Invalid window filter. Use 1m, 5m, 15m, 30m, 1h, 4h, 1D, 1W, or 1M.',
 				code: 'INVALID_REQUEST',
 			});
 		}
