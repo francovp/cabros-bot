@@ -109,6 +109,9 @@
           },
           "409": {
             "$ref": "#/components/responses/IdempotencyConflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
           }
         },
         "security": [
@@ -157,6 +160,9 @@
           },
           "409": {
             "$ref": "#/components/responses/MessageIdempotencyConflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
           }
         },
         "security": [
@@ -197,8 +203,14 @@
           "400": {
             "$ref": "#/components/responses/Error"
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
           "409": {
             "$ref": "#/components/responses/IdempotencyConflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
           },
           "502": {
             "$ref": "#/components/responses/Error"
@@ -251,6 +263,9 @@
           "409": {
             "$ref": "#/components/responses/IdempotencyConflict"
           },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
           "502": {
             "$ref": "#/components/responses/Error"
           },
@@ -285,6 +300,9 @@
           "400": {
             "$ref": "#/components/responses/Error"
           },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
           "502": {
             "$ref": "#/components/responses/Error"
           }
@@ -315,6 +333,9 @@
           },
           "400": {
             "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
           },
           "502": {
             "$ref": "#/components/responses/Error"
@@ -1252,6 +1273,9 @@
           },
           "403": {
             "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
           }
         },
         "security": [
@@ -1286,6 +1310,9 @@
           },
           "403": {
             "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
           }
         },
         "security": [
@@ -2635,6 +2662,22 @@
           }
         }
       },
+      "PayloadTooLarge": {
+        "description": "The request body exceeded the configured WEBHOOK_MAX_BODY_SIZE limit (default 256kb). Both JSON and text/plain body types share the same effective limit.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/PayloadTooLarge"
+            },
+            "example": {
+              "success": false,
+              "error": "PAYLOAD_TOO_LARGE",
+              "message": "Request body exceeds maximum size of 256kb",
+              "limit": "256kb"
+            }
+          }
+        }
+      },
       "JobConflict": {
         "description": "A job retry conflict, either because the job is not retryable or because the idempotency key conflicts with an earlier request",
         "content": {
@@ -3413,6 +3456,36 @@
           "jobId": {
             "type": "string",
             "description": "Durably stored job identifier returned when queue acceptance is indeterminate."
+          }
+        }
+      },
+      "PayloadTooLarge": {
+        "type": "object",
+        "description": "Structured 413 response returned when a webhook request body exceeds the WEBHOOK_MAX_BODY_SIZE limit (default 256kb).",
+        "required": [
+          "success",
+          "error"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "enum": [
+              false
+            ]
+          },
+          "error": {
+            "type": "string",
+            "enum": [
+              "PAYLOAD_TOO_LARGE"
+            ]
+          },
+          "message": {
+            "type": "string",
+            "description": "Human-readable explanation of the size violation."
+          },
+          "limit": {
+            "type": "string",
+            "description": "Effective size limit (e.g., `256kb`) the request exceeded, parsed from WEBHOOK_MAX_BODY_SIZE."
           }
         }
       },

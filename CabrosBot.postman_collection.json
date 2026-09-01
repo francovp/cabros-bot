@@ -1287,6 +1287,48 @@
           ]
         },
         {
+          "name": "POST Send Message (oversized body)",
+          "request": {
+            "method": "POST",
+            "description": "Both /api/webhook/alert and /api/webhook/message share the WEBHOOK_MAX_BODY_SIZE limit (default 256kb). Oversized JSON or text/plain payloads return a structured 413 PAYLOAD_TOO_LARGE response before any downstream middleware or controller runs. Set WEBHOOK_MAX_BODY_SIZE=1kb locally to reproduce with a smaller payload, or send a body larger than the configured limit.",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"message\": \"{{$randomAlphaNumeric}}\",\n  \"_pad\": \"{{$padString}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/webhook/message",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "webhook",
+                "message"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "413 Payload too large",
+              "status": "Payload Too Large",
+              "code": 413,
+              "body": "{\n  \"success\": false,\n  \"error\": \"PAYLOAD_TOO_LARGE\",\n  \"message\": \"Request body exceeds maximum size of 256kb\",\n  \"limit\": \"256kb\"\n}"
+            }
+          ]
+        },
+        {
           "name": "POST Send Alert (repeat suppressed)",
           "request": {
             "method": "POST",

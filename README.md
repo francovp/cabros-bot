@@ -35,6 +35,7 @@ Express + Telegraf-based Telegram bot service with multi-channel alert delivery 
 #### Security
 
 - `WEBHOOK_API_KEY` - API key used to secure `/api/*` webhook endpoints. Required in production-like environments (`NODE_ENV=production`, Render, Vercel, Railway), where endpoints fail-closed with HTTP 503 if unset. When configured, clients must provide the key via the `x-api-key` header (or the `api-key` query parameter)
+- `WEBHOOK_MAX_BODY_SIZE` - Maximum accepted webhook request body size for `/api/webhook/*` endpoints (default `256kb`). Applies to both `application/json` and `text/plain` bodies. Accepts human-readable units (`b`, `kb`, `mb`, `gb`). Values outside `[1kb, 10mb]` or malformed strings fall back to the default with a startup warning. Oversized payloads are rejected with a structured `413 PAYLOAD_TOO_LARGE` response before any controller or middleware downstream of the body parsers runs, so a misconfigured client cannot consume CPU/memory by streaming a 10 MB body. Classified as environment-only (security control; excluded from Remote Config).
 - `ENABLE_FIREBASE_ADMIN_AUTH` - Enable opt-in Firebase email/password authentication for the browser admin console (`false` by default)
 - `FIREBASE_WEB_API_KEY` - Public Firebase Web API key used by the browser sign-in flow; not a service-account credential
 - `FIREBASE_AUTH_DOMAIN` - Public Firebase Auth domain used by the browser sign-in flow
