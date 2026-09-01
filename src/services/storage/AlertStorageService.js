@@ -1757,6 +1757,10 @@ async function summarizeAlerts({ from, to, limit, source, enriched } = {}) {
 	finalizeRiskMetadataCoverageByProvenance(summary.enrichment.riskMetadataCoverage);
 	finalizeEvidenceCoverageByProvenance(summary.enrichment.evidenceCoverage);
 	summary.enrichment.tokenUsage.totalCost = Number(summary.enrichment.tokenUsage.totalCost.toFixed(6));
+	// CB-583 / Issue #583: expose the same cost under a clearer
+	// `costEstimateUsd` alias so operators can see real spend without
+	// confusing it with input/output token counts.
+	summary.enrichment.costEstimateUsd = summary.enrichment.tokenUsage.totalCost;
 	summary.latency.averageProcessingMs = averageLatency(processingLatencySamples);
 	summary.latency.averageDeliveryMs = averageLatency(deliveryLatencySamples);
 

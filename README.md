@@ -674,6 +674,7 @@ Resistances: $85,000
 - **API errors**: Missing `GEMINI_API_KEY` or API rate limits fall back to original text
 - **Long alerts**: Text >4000 chars may be truncated to manage costs
 - **Disabled enrichment**: Set `ENABLE_GEMINI_GROUNDING=false` to skip processing
+- **Render-or-skip gate (CB-583)**: When the Gemini response carries no renderable insights, sources, technical levels, or risk metadata, the call result is dropped and `enriched: false` is reported. The token spend is also reset, so cost telemetry no longer charges for invisible work. Renderable enrichments (sources ≥ 1 or rendered insights) are byte-identical to current delivery.
 
 ### POST /api/news-monitor
 
