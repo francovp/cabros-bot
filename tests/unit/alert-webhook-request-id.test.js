@@ -248,6 +248,33 @@ describe('alert request ID resolution and echo', () => {
 			}));
 		});
 
+		it('preserves a derived-quote price when TradingView MCP fails', async () => {
+			process.env.ENABLE_GEMINI_GROUNDING = 'true';
+			process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT = 'true';
+			setupOutcomeEnabled();
+			setupEnrichment({
+				sentiment: 'BULLISH',
+				current_price: 3250,
+				levelsSource: 'derived-quote',
+				tradingViewEnrichmentStatus: 'failed',
+				sources: [],
+				truncated: false,
+			});
+
+			const response = buildResponse();
+			const handler = postAlert({});
+			await handler({
+				headers: {},
+				body: { text: 'BINANCE:ETHUSDT(60) pasó a señal de COMPRA' },
+				query: { useTradingViewData: 'true' },
+			}, response);
+
+			expect(signalOutcomeService.recordSignal).toHaveBeenCalledWith(expect.objectContaining({
+				price: 3250,
+				priceSource: 'derived-quote',
+			}));
+		});
+
 		it('passes side to saveAlert so deterministic R:R can be computed', async () => {
 			process.env.ENABLE_GEMINI_GROUNDING = 'true';
 			process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT = 'false';

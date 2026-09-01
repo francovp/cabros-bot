@@ -486,9 +486,11 @@ function postAlert(botOrGetter) {
 				const parsed = parsedSignal;
 				{
 					const enrichedMcpApplied = Boolean(alert.enriched && alert.enriched.tradingViewEnrichmentApplied === true);
-					const mcpPrice = (alert.enriched && typeof alert.enriched.current_price === 'number' && Number.isFinite(alert.enriched.current_price) && alert.enriched.current_price > 0 && enrichedMcpApplied)
+					const levelsSource = alert.enriched && alert.enriched.levelsSource;
+					const structuredPriceAvailable = enrichedMcpApplied || levelsSource === 'derived-quote';
+					const mcpPrice = (alert.enriched && typeof alert.enriched.current_price === 'number' && Number.isFinite(alert.enriched.current_price) && alert.enriched.current_price > 0 && structuredPriceAvailable)
 						? alert.enriched.current_price
-						: (alert.enriched && alert.enriched.price_data && typeof alert.enriched.price_data.current_price === 'number' && Number.isFinite(alert.enriched.price_data.current_price) && alert.enriched.price_data.current_price > 0 && enrichedMcpApplied)
+						: (alert.enriched && alert.enriched.price_data && typeof alert.enriched.price_data.current_price === 'number' && Number.isFinite(alert.enriched.price_data.current_price) && alert.enriched.price_data.current_price > 0 && structuredPriceAvailable)
 							? alert.enriched.price_data.current_price
 							: null;
 
@@ -504,7 +506,6 @@ function postAlert(botOrGetter) {
 							? Number(alert.enriched.target_level)
 							: null);
 
-					const levelsSource = alert.enriched && alert.enriched.levelsSource;
 					// GH-599 / CB-XXX: a Gemini-grounding-sourced price (alert.enriched.current_price
 					// sourced from grounded snippets, NOT MCP-derived) is a valid entry price for
 					// outcome eligibility. Treat it as a last-resort fallback after MCP and price_data.

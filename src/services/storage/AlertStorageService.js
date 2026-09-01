@@ -321,7 +321,7 @@ function toPositiveFiniteNumber(value) {
 		if (!trimmed) {
 			return null;
 		}
-		const numeric = Number(trimmed);
+		const numeric = Number(trimmed.replace(/[$,]/g, ''));
 		return Number.isFinite(numeric) && numeric > 0 ? numeric : null;
 	}
 	return null;
@@ -376,14 +376,10 @@ function applyDeterministicRiskReward(enrichmentData, side) {
 	}
 
 	const invalidation = toPositiveFiniteNumber(
-		typeof enrichmentData.invalidation_level === 'string'
-			? Number(enrichmentData.invalidation_level)
-			: enrichmentData.invalidation_level,
+		enrichmentData.invalidation_level,
 	);
 	const target = toPositiveFiniteNumber(
-		typeof enrichmentData.target_level === 'string'
-			? Number(enrichmentData.target_level)
-			: enrichmentData.target_level,
+		enrichmentData.target_level,
 	);
 
 	if (invalidation === null || target === null) {
@@ -391,7 +387,8 @@ function applyDeterministicRiskReward(enrichmentData, side) {
 	}
 
 	const existing = enrichmentData.risk_reward_ratio;
-	const existingIsValid = typeof existing === 'number' && Number.isFinite(existing);
+	const existingIsValid = (typeof existing === 'number' && Number.isFinite(existing))
+		|| (typeof existing === 'string' && existing.trim().length > 0);
 	if (existingIsValid) {
 		return enrichmentData;
 	}

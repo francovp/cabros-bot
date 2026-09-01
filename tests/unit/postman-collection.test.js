@@ -177,6 +177,14 @@ describe('Postman collection contract', () => {
 		expect(enrichedData.price_data).toEqual({ current_price: 64863.03, high: 65000, low: 64000 });
 	});
 
+	it('does not claim deterministic R:R in the alert dry-run example', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const sendAlert = findItem(collection.item, 'POST Send Alert Dry Run (risk metadata)');
+		const enrichedData = JSON.parse(sendAlert.response[0].body).payload.enrichedData;
+
+		expect(enrichedData).not.toHaveProperty('risk_reward_ratio_source');
+	});
+
 	it('aligns Binance MARKET quantity dry-run example with request and runtime response', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const marketSell = findItem(collection.item, 'POST Binance order (valid MARKET quantity dry-run)');

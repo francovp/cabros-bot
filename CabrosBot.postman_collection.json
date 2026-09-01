@@ -383,7 +383,7 @@
               "name": "Enriched payload",
               "status": "OK",
               "code": 200,
-              "body": "{\"success\":true,\"requestId\":\"req-12345\",\"dryRun\":true,\"enriched\":true,\"payload\":{\"text\":\"Bitcoin breaks above $83,000 with strong volume\",\"enrichedData\":{\"original_text\":\"Bitcoin breaks above $83,000 with strong volume\",\"sentiment\":\"BULLISH\",\"sentiment_score\":0.55,\"sentiment_score_raw\":0.85,\"insights\":[\"Volume confirms momentum\"],\"current_price\":83000,\"price_currency\":\"USD\",\"invalidation_level\":\"$80,000\",\"target_level\":\"$90,000\",\"setup_type\":\"breakout\",\"setup_evidence\":\"Price broke above resistance range with volume confirmation\",\"risk_reward_ratio\":\"3.0\",\"risk_reward_ratio_source\":\"computed\",\"tradingViewEnrichmentApplied\":false,\"sources\":[]}},\"tokenUsage\":{}}"
+              "body": "{\"success\":true,\"requestId\":\"req-12345\",\"dryRun\":true,\"enriched\":true,\"payload\":{\"text\":\"Bitcoin breaks above $83,000 with strong volume\",\"enrichedData\":{\"original_text\":\"Bitcoin breaks above $83,000 with strong volume\",\"sentiment\":\"BULLISH\",\"sentiment_score\":0.55,\"sentiment_score_raw\":0.85,\"insights\":[\"Volume confirms momentum\"],\"current_price\":83000,\"price_currency\":\"USD\",\"invalidation_level\":\"$80,000\",\"target_level\":\"$90,000\",\"setup_type\":\"breakout\",\"setup_evidence\":\"Price broke above resistance range with volume confirmation\",\"risk_reward_ratio\":\"3.0\",\"tradingViewEnrichmentApplied\":false,\"sources\":[]}},\"tokenUsage\":{}}"
             }
           ]
         },
