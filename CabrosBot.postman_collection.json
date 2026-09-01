@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "CabrosBot",
-    "description": "Collection for Cabros Bot API - Telegram + WhatsApp crypto/stock alert bot with TradingView MCP integration.",
+    "description": "Collection for Cabros Bot API - Telegram + WhatsApp crypto/stock alert bot with TradingView MCP integration. Rate-limit tiers use independent 60-second per-endpoint buckets: heavy 5, trading 10, standard 30, and light 100 requests by default; other routes use RATE_LIMIT_WINDOW_MS and RATE_LIMIT_MAX.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
@@ -455,7 +455,21 @@
                   "value": "true"
                 }
               ]
-            }
+            },
+            "response": [
+              {
+                "name": "429 Rate limit exceeded",
+                "status": "Too Many Requests",
+                "code": 429,
+                "header": [
+                  {
+                    "key": "Retry-After",
+                    "value": "60"
+                  }
+                ],
+                "body": "{\n  \"error\": \"Too many requests, please try again later.\",\n  \"retryAfterSeconds\": 60\n}"
+              }
+            ]
           }
         },
         {

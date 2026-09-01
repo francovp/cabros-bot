@@ -59,7 +59,7 @@ This project is a small Express + Telegraf (Telegram) bot service that exposes a
 - `src/services/prompts/` — Langfuse-backed PromptService that resolves prompts with file-backed local defaults.
 - `src/controllers/helpers.js` — Small numeric helper (`round10`) used by price formatting.
 - `src/lib/logging.js` — Configures `console.*` levels via `LOG_LEVEL` and emits one-line structured JSON logs.
-- `src/lib/rateLimiter.js` — Global API rate limiting middleware (returns 429 when exceeded; configured via `RATE_LIMIT_WINDOW_MS`/`RATE_LIMIT_MAX`, with safe defaults for invalid values). Core alert/message webhook ingest uses a separate finite 1,000-request bucket per IP and window.
+- `src/lib/rateLimiter.js` — Global and per-endpoint API rate limiting middleware (returns 429 when exceeded; configured via `RATE_LIMIT_WINDOW_MS`/`RATE_LIMIT_MAX` and fixed 60-second tier windows with safe defaults for invalid values).
 - `src/lib/cors.js` — Express CORS middleware configuring explicit origin allowlists (`https://cabros-bot.web.app`, `https://cabros-bot.firebaseapp.com`, `https://cabros-bot-production.up.railway.app`, `http://localhost:*`, and `CORS_ALLOWED_ORIGINS`).
 - `src/openapi/openapi.json` — Canonical OpenAPI 3.1 contract for every mounted `/api` operation.
 - `src/openapi/docs.js` — Public, read-only `/openapi.json` and self-hosted Swagger UI `/docs` routes.
@@ -109,7 +109,7 @@ Maintain these patterns and rules in all contributions:
 ### Common Failure Modes
 - **Missing BOT_TOKEN**: Throws on startup (explicit check in `index.js`).
 - **Preview Environments**: Gated bot launch disabled in Render preview PR builds or Vercel preview deployments (`RENDER==='true' && IS_PULL_REQUEST==='true'` or `VERCEL_ENV==='preview'`).
-- **HTTP 429**: Non-ingest requests are rejected if the global rate limit window is exceeded (`RATE_LIMIT_WINDOW_MS` / `RATE_LIMIT_MAX`); core alert/message ingest has its own 1,000-request bucket.
+- **HTTP 429**: Routes without a dedicated tier use the global `RATE_LIMIT_WINDOW_MS` / `RATE_LIMIT_MAX` bucket. Heavy, trading, standard, and light endpoints use independent per-endpoint 60-second buckets configured by their `RATE_LIMIT_TIER_*_MAX` values.
 - **JSON Error Parsing**: Webhook error responses must not crash if `error.response` is missing or shaped unexpectedly.
 
 ### Commits and Cleanups
@@ -163,6 +163,8 @@ Implement the following security practices to safeguard endpoints and credential
 - Optional but relevant (non-exhaustive; see feature sections below for full config): `ENABLE_TELEGRAM_BOT`, `PORT`, `TELEGRAM_CHAT_ID`, `TELEGRAM_TOPIC_ROUTES`, `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID`, `ENABLE_WHATSAPP_ALERTS`, `ENABLE_DISCORD_ALERTS`, `ENABLE_NOTIFICATION_REDRIVE`, `NOTIFICATION_REDRIVE_WORKER_ROLE`, `NOTIFICATION_REDRIVE_INTERVAL_MS`, `NOTIFICATION_REDRIVE_BATCH_LIMIT`, `NOTIFICATION_REDRIVE_MAX_ATTEMPTS`, `NOTIFICATION_REDRIVE_MAX_AGE_MS`, `ZERO_CHANNEL_ALERT_COOLDOWN_MS`, `ENABLE_API_ONLY_MODE`, `ENABLE_GEMINI_GROUNDING`, `GEMINI_API_KEY`, `ENABLE_LANGFUSE_PROMPTS`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL`, `LANGFUSE_PROMPT_LABEL`, `LANGFUSE_PROMPT_CACHE_TTL_SECONDS`, `BRAVE_SEARCH_API_KEY`, `BRAVE_SEARCH_ENDPOINT`, `FORCE_BRAVE_SEARCH`, `MODEL_PROVIDER`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `ENABLE_NEWS_MONITOR`, `EXPANDED_ANALYSIS_ALERT_SYMBOLS`, `EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS`, `TRADINGVIEW_MCP_URL`, `TRADINGVIEW_MCP_TIMEOUT_MS`, `TRADINGVIEW_MCP_MAX_RETRIES`, `TRADINGVIEW_MCP_DEFAULT_TIMEFRAME`, `ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION`, `ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT`, `ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME`, `ENABLE_ALERT_HTF_RENDER`, `ENABLE_SENTRY`, `SENTRY_DSN`, `SENTRY_TRACES_SAMPLE_RATE`, `SENTRY_PROFILE_SESSION_SAMPLE_RATE`, `SENTRY_CONSOLE_LOG_LEVELS`, `ENABLE_SENTRY_DEBUG_ROUTE`, `LOG_LEVEL`, `SERVICE_NAME`, `TRUST_PROXY`, `RATE_LIMIT_WINDOW_MS`, `RATE_LIMIT_MAX`, `ENABLE_FIRESTORE_ALERT_STORAGE`, `ENABLE_FIRESTORE_SCANNER_PRESETS`, `ENABLE_FIRESTORE_IDEMPOTENCY`, `ENABLE_SIGNAL_OUTCOME_TRACKING`, `ENABLE_EQUITY_MARKET_DATA`, `EQUITY_MARKET_DATA_PROVIDER`, `TWELVE_DATA_API_KEY`, `TWELVE_DATA_BASE_URL`, `EQUITY_MARKET_DATA_TIMEOUT_MS`, `EQUITY_MARKET_DATA_RPM`, `TWELVE_DATA_RPM`, `SIGNAL_OUTCOME_WORKER_ROLE`, `SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS`, `SIGNAL_OUTCOME_EVALUATION_BATCH_LIMIT`, `SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS`, `SIGNAL_OUTCOME_MAX_RETRY_ATTEMPTS`, `SIGNAL_OUTCOME_MAX_RETRY_AGE_MS`, `SIGNAL_OUTCOME_RETENTION_DAYS`, `ENABLE_MARKET_SCANNER`, `ENABLE_MESSAGE_FOOTER_METADATA`, `ENABLE_FIREBASE_ADMIN_AUTH`, `FIREBASE_WEB_API_KEY`, `FIREBASE_AUTH_DOMAIN`, `FIREBASE_APP_ID`, `FIREBASE_WEB_CONFIG_JSON`, `FIREBASE_PROJECT_ID`, `FIREBASE_SERVICE_ACCOUNT_JSON`, `GOOGLE_APPLICATION_CREDENTIALS`, `GEMINI_MODEL_NAME_FALLBACK`, `RENDER`, `IS_PULL_REQUEST`, `RENDER_GIT_COMMIT`, `RENDER_GIT_REPO_SLUG`.
 
 ### Environment-template parity
+
+The tiered rate-limit controls are `RATE_LIMIT_TIER_HEAVY_MAX`, `RATE_LIMIT_TIER_TRADING_MAX`, `RATE_LIMIT_TIER_STANDARD_MAX`, and `RATE_LIMIT_TIER_LIGHT_MAX`; they remain deployment-controlled security settings and are excluded from Remote Config.
 
 `.env.example` is the canonical operator template. Static application-owned environment reads must appear there with defaults and valid-value guidance. The documentation-alignment test also extracts audited literal arguments for dynamic environment helpers (`parseEnvInt`, `getSymbolsFromEnv`, prompt `envVar` overrides, URL-shortener maps, and aliases created from `process.env`), so computed or aliased reads do not evade the guard. It explicitly classifies platform-injected values (Render, GitHub, Google runtime metadata), test-only controls (`ENABLE_TEST_RATE_LIMITER`), and deprecated aliases (`ENABLE_FIRESTORE_IDEMPOTENCY_STORAGE`, `SIGNAL_OUTCOME_EVALUATION_CADENCE_MS`) so they are not mistaken for production configuration.
 
@@ -1127,13 +1129,15 @@ This feature introduces backend runtime error monitoring using Sentry's Node SDK
 
 No endpoint, OpenAPI, Postman, environment variable, or Remote Config contract changed.
 
-## Webhook Ingest Rate-Limit Separation (CB-239 / Issue #532)
+## Tiered Endpoint Rate Limiting (Issue #601)
 
-The global rate limiter keeps its existing per-IP `RATE_LIMIT_MAX`/`RATE_LIMIT_WINDOW_MS` bucket for ordinary routes. Core `POST /api/webhook/alert` and `POST /api/webhook/message` requests use an isolated finite 1,000-request bucket per IP and the same window, with URL normalization matching Express's case-insensitive, non-strict routing. This prevents normal TradingView bursts from consuming the ordinary bucket while preserving downstream API-key validation. No new environment variable, Remote Config parameter, endpoint, OpenAPI, or Postman contract was added; the fixed cap remains a bounded security control.
+The global rate limiter keeps the per-IP `RATE_LIMIT_MAX`/`RATE_LIMIT_WINDOW_MS` fallback for routes without a dedicated tier. Expensive endpoints use independent per-endpoint buckets with fixed 60-second windows: heavy (`/api/webhook/expanded-analysis-alert`, `/api/webhook/market-scanner-alert`, `/api/news-monitor`) defaults to 5, trading (`/api/trading/binance/orders`) to 10, standard (`/api/webhook/alert`, `/api/webhook/message`, `/api/webhook/volume-confirmation`) to 30, and light (`/ready`, `/healthcheck`, `/api/status`, `/api/capabilities`, `/openapi.json`, `/docs`) to 100. Invalid tier values fall back safely. These variables are environment-only because rate limits are security controls and are intentionally excluded from Remote Config.
 
 **Coverage**:
-- `src/lib/rateLimiter.js` — Selects the isolated webhook bucket by exact request path and preserves bounded cleanup/fallback behavior.
-- `tests/unit/rateLimiter.test.js` and `tests/integration/rate-limiter-webhook.test.js` — Cover webhook burst headroom, bucket isolation, and the ordinary 429 boundary.
+- `src/lib/rateLimiter.js` — Selects a dedicated tier and per-endpoint bucket by normalized request path, preserving bounded cleanup and global fallback behavior.
+- `tests/unit/rateLimiter.test.js`, `tests/integration/rate-limiter-webhook.test.js`, and `tests/integration/trust-proxy-rate-limiter.test.js` — Cover tier limits, independent endpoint buckets, the 60-second window, proxy identity, healthcheck exemption, and the ordinary 429 boundary.
+
+No Firebase Remote Config keys are added: all four new values are security controls that must remain deployment-controlled.
 
 ## Gemini Evidence-Based Sentiment Calibration (CB-238 / Issue #530)
 

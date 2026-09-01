@@ -6,10 +6,23 @@ const rateLimit = new Map();
 const MAX_KEYS = 10000;
 // Protection against memory exhaustion
 const DEFAULT_MAX_REQUESTS = 100;
-// ponytail: fixed 1,000-request webhook bucket; split by API-key identity if isolation needs to scale.
-const WEBHOOK_MAX_REQUESTS = 1000;
 const DEFAULT_WINDOW_MS = 900000;
-const WEBHOOK_INGEST_PATHS = new Set(['/api/webhook/alert', '/api/webhook/message']);
+const ENDPOINT_WINDOW_MS = 60000;
+const ENDPOINT_LIMITS = new Map([
+	['/api/webhook/expanded-analysis-alert', ['heavy', 5]],
+	['/api/webhook/market-scanner-alert', ['heavy', 5]],
+	['/api/news-monitor', ['heavy', 5]],
+	['/api/trading/binance/orders', ['trading', 10]],
+	['/api/webhook/alert', ['standard', 30]],
+	['/api/webhook/message', ['standard', 30]],
+	['/api/webhook/volume-confirmation', ['standard', 30]],
+	['/healthcheck', ['light', 100]],
+	['/ready', ['light', 100]],
+	['/api/status', ['light', 100]],
+	['/api/capabilities', ['light', 100]],
+	['/openapi.json', ['light', 100]],
+	['/docs', ['light', 100]],
+]);
 const invalidConfigWarnings = new Set();
 
 let testModeEnabled = false;
@@ -53,14 +66,16 @@ function rateLimiter(req, res, next) {
 		.split('?')[0]
 		.replace(/\/+$/, '')
 		.toLowerCase();
-	const isWebhookIngest = WEBHOOK_INGEST_PATHS.has(requestPath);
-	const maxRequests = isWebhookIngest
-		? WEBHOOK_MAX_REQUESTS
-		: readPositiveInteger('RATE_LIMIT_MAX', DEFAULT_MAX_REQUESTS);
-	const windowMs = readPositiveInteger('RATE_LIMIT_WINDOW_MS', DEFAULT_WINDOW_MS);
-
 	const ip = req.ip || req.socket?.remoteAddress || '127.0.0.1';
-	const bucketKey = isWebhookIngest ? `webhook:${ip}` : ip;
+	const endpointLimit = ENDPOINT_LIMITS.get(requestPath);
+	const tier = endpointLimit?.[0];
+	const maxRequests = endpointLimit
+		? readPositiveInteger(`RATE_LIMIT_TIER_${tier.toUpperCase()}_MAX`, endpointLimit[1])
+		: readPositiveInteger('RATE_LIMIT_MAX', DEFAULT_MAX_REQUESTS);
+	const windowMs = endpointLimit
+		? ENDPOINT_WINDOW_MS
+		: readPositiveInteger('RATE_LIMIT_WINDOW_MS', DEFAULT_WINDOW_MS);
+	const bucketKey = endpointLimit ? `endpoint:${requestPath}:${ip}` : ip;
 	const now = Date.now();
 
 	let data = rateLimit.get(bucketKey);
