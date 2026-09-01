@@ -209,7 +209,14 @@ describe('Status endpoints', () => {
 			configured: true,
 			ready: true,
 			status: 'ready',
+			scope: 'webhook',
 		});
+		expect(response.body.dependencies.adminApiKey).toEqual(expect.objectContaining({
+			scope: 'admin',
+		}));
+		expect(response.body.dependencies.binanceTradingApiKey).toEqual(expect.objectContaining({
+			scope: 'binance-trading',
+		}));
 	});
 
 	it('exposes rolling alert-path MCP enrichment rates', async () => {
