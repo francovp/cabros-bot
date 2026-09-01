@@ -454,6 +454,9 @@
           },
           {
             "$ref": "#/components/parameters/Enriched"
+          },
+          {
+            "$ref": "#/components/parameters/IncludeDecisionRollup"
           }
         ],
         "responses": {
@@ -512,6 +515,9 @@
           },
           {
             "$ref": "#/components/parameters/IncludeText"
+          },
+          {
+            "$ref": "#/components/parameters/IncludeDecision"
           }
         ],
         "responses": {
@@ -2007,6 +2013,24 @@
       "IncludeText": {
         "name": "includeText",
         "in": "query",
+        "schema": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "IncludeDecision": {
+        "name": "includeDecision",
+        "in": "query",
+        "description": "When true, each exported alert includes the opt-in `decision` audit trail (parsed signal, enrichment outcome, gate verdicts, requested/delivered channels). Only populated when ENABLE_ALERT_DECISION_AUDIT=true; the field is omitted otherwise.",
+        "schema": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "IncludeDecisionRollup": {
+        "name": "includeDecisionRollup",
+        "in": "query",
+        "description": "When true, /api/alerts/summary includes the `decision.gates[]` rollup. Only populated when ENABLE_ALERT_DECISION_AUDIT=true; the field is omitted otherwise.",
         "schema": {
           "type": "boolean",
           "default": false
@@ -4120,6 +4144,14 @@
             "type": "integer",
             "minimum": 20001,
             "description": "Length of the original alert text in characters before the 20,000-character cap was applied."
+          },
+          "decision": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Opt-in per-alert decision audit trail (parsed signal, enrichment outcome, gate verdicts, requested/delivered channels, errors). Only populated when ENABLE_ALERT_DECISION_AUDIT=true; the field is absent (not null) on disabled deployments. Sanitization caps depth at6 with at most 32 keys per plain object and truncates string leaves to 1000 chars.",
+            "additionalProperties": true
           }
         }
       },
@@ -4442,6 +4474,51 @@
           "shadowModeMetrics": {
             "description": "Aggregated shadow-mode outcome metrics. When an object, includes the full OutcomesSummary payload (coverage buckets, per-window WindowStats with hit/target/stop rates and expectancyR, drawdown proxy, latency/cost metadata, and falsePositiveCandidates). When no data is available or signal-outcome tracking is disabled, the value is the string sentinel \"No measurements found\". Equity providers remain opt-in and fail open. This field is omitted when source or enriched filters are supplied because shadow-mode metrics do not support those filters. Win-rate field semantics: hitRatePercent counts evaluated window outcomes whose return > 0; targetHitRatePercent/stopHitRatePercent count explicit target/stop hits (including firstHit fallbacks) over barrier-eligible denominators only; expectancyR averages finite rMultiple over evaluated windows.",
             "$ref": "#/components/schemas/ShadowModeMetrics"
+          },
+          "decision": {
+            "type": "object",
+            "description": "Opt-in decision audit rollup. Only present when both ENABLE_ALERT_DECISION_AUDIT=true and the request supplies includeDecisionRollup=true; the field is omitted (not empty) when the gate is off or the rollup is not requested.",
+            "properties": {
+              "gates": {
+                "$ref": "#/components/schemas/DecisionGatesRollup"
+              }
+            }
+          }
+        }
+      },
+      "DecisionGatesRollup": {
+        "type": "object",
+        "description": "Per-gate counts for the decision audit trail across the summary window. The gates[] array is unordered; consumers should sort by name if a stable iteration order is required. Sorted alphabetically by name with ties broken by decision (allow < skip < suppress) at finalize time.",
+        "properties": {
+          "denominator": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Number of scanned alerts in this summary window."
+          },
+          "gates": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "Gate identifier (e.g. dryRun, same-signal-cooldown, idempotency-replay)."
+                },
+                "decision": {
+                  "type": "string",
+                  "enum": ["allow", "skip", "suppress"]
+                },
+                "populated": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "percentage": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 100
+                }
+              }
+            }
           }
         }
       },

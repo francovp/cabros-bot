@@ -1537,6 +1537,21 @@ No endpoint, OpenAPI, Postman, environment variable, or Remote Config contract c
 
 Disabled by default preserves existing webhook behavior byte-for-byte.
 
+## Per-Alert Decision Audit Trail (GH-763)
+
+`/api/webhook/alert` now persists an opt-in per-alert decision audit trail (parsed signal shape, enrichment outcome, gate verdicts, and requested/delivered channels) next to the existing alert document. When `ENABLE_ALERT_DECISION_AUDIT=true`, the `decision` field is written to Firestore with bounded sanitization (depth 6, 32 keys per plain object, 1000-char string leaves). The field is omitted from the document entirely when the gate is off so default deployments stay schema-clean.
+
+**Core Components**:
+- `src/services/storage/AlertStorageService.js` — `sanitizeDecisionAudit()` / `sanitizeDecisionGates()` sanitizers, `formatAlertDocument()` exposes the field on `/api/alerts/:alertId`, `exportAlerts({ includeDecision })` and `summarizeAlerts({ includeDecisionRollup })` opt-in extensions, and a per-gate rollup that mirrors `riskMetadataCoverage` shape.
+- `src/controllers/webhooks/handlers/alert/alert.js` — `buildDecisionAudit()` captures parsed signal, enrichment status, gate verdicts (`dryRun`, `same-signal-cooldown`, future `idempotency-replay`), and dispatch intent. The dry-run short-circuit now persists an opt-in `decision.gates: [{ name: 'dryRun', decision: 'skip' }]` record so audit consumers can correlate probes.
+- `src/controllers/alerts/alerts.js` — `includeDecision` and `includeDecisionRollup` query flags with strict boolean parsing.
+- `tests/unit/alert-decision-audit.test.js` — Sanitization depth/key/string limits, schema exposure, export/summary opt-in behavior, and dry-run gate propagation.
+- `tests/integration/alerts-endpoint.test.js` — Updated to reflect the new `includeDecision` / `includeDecisionRollup` parameters on `exportAlerts()` and `summarizeAlerts()`.
+- `README.md`, `src/openapi/openapi.json`, `CabrosBot.postman_collection.json`, `.env.example` — Documented the new env var, endpoint flags, response shape (`DecisionGatesRollup`), and CSV/JSONL examples.
+
+**Configuration**:
+- `ENABLE_ALERT_DECISION_AUDIT` — Opt-in gate for the audit trail (`true`/`false`, default: `false`). Default-off keeps existing webhook behavior byte-for-byte; only enabled deployments carry the `decision` field.
+
 ## CI Secret Scanning and Least-Privilege Workflows (CB-257 / Issue #556)
 
 `.github/workflows/secret-scan.yml` runs the pinned Gitleaks Action on pushes to `master`, pull requests, and manual dispatch with full git history. It uses only the GitHub token and optional organization license secret; no application credentials are introduced. `.gitleaks.toml` narrowly allowlists the intentionally public Firebase browser key already tracked in `render.yaml`, without disabling other detections. `.github/workflows/node.js.yml` and `.github/workflows/env-drift-check.yml` now explicitly grant `contents: read` permissions. README documents secret storage and rotation for webhook, Binance, and Firebase service-account credentials.

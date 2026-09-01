@@ -192,6 +192,70 @@ function getChannelName(identity) {
 	return String(identity).split(':', 1)[0];
 }
 
+// Build the opt-in per-alert decision audit trail. Captures the parsed signal
+// shape, enrichment outcome, gate verdicts (dryRun, idempotency-replay,
+// same-signal-cooldown), and dispatch requested/delivered channels. Returns
+// null when ENABLE_ALERT_DECISION_AUDIT is off so the call sites stay terse.
+function buildDecisionAudit({
+	requestId,
+	parsedSignal,
+	enrichment,
+	gates,
+	requestedChannels,
+	deliveredChannels,
+	errors,
+}) {
+	if (process.env.ENABLE_ALERT_DECISION_AUDIT !== 'true') {
+		return null;
+	}
+	const decision = {};
+	if (parsedSignal) {
+		decision.parsed = {
+			ok: true,
+			exchange: parsedSignal.exchange || null,
+			symbol: parsedSignal.symbol || null,
+			side: parsedSignal.side || null,
+			rawTimeframe: parsedSignal.rawTimeframe || null,
+			timeframe: parsedSignal.timeframe || null,
+		};
+	} else {
+		decision.parsed = { ok: false };
+	}
+	if (enrichment && typeof enrichment === 'object') {
+		decision.enrichment = {
+			attempted: Boolean(enrichment.attempted),
+			provider: typeof enrichment.provider === 'string' ? enrichment.provider : null,
+			status: typeof enrichment.status === 'string' ? enrichment.status : null,
+			fallbackUsed: Boolean(enrichment.fallbackUsed),
+		};
+	}
+	if (Array.isArray(gates) && gates.length > 0) {
+		decision.gates = gates.map((gate) => ({
+			name: gate.name,
+			decision: gate.decision,
+			...(gate.reason ? { reason: gate.reason } : {}),
+			...(gate.evidence ? { evidence: gate.evidence } : {}),
+		}));
+	}
+	if (Array.isArray(requestedChannels) || Array.isArray(deliveredChannels)) {
+		decision.dispatch = {
+			requestedChannels: Array.isArray(requestedChannels) ? requestedChannels.slice() : [],
+			sentTo: Array.isArray(deliveredChannels) ? deliveredChannels.slice() : [],
+		};
+	}
+	if (Array.isArray(errors) && errors.length > 0) {
+		decision.errors = errors.map((entry) => ({
+			stage: typeof entry.stage === 'string' ? entry.stage : 'unknown',
+			code: typeof entry.code === 'string' ? entry.code : null,
+			message: typeof entry.message === 'string' ? entry.message : null,
+		}));
+	}
+	if (requestId) {
+		decision.requestId = requestId;
+	}
+	return decision;
+}
+
 function postAlert(botOrGetter) {
 	return async (req, res) => {
 		const requestId = resolveRequestId(req);
@@ -226,8 +290,22 @@ function postAlert(botOrGetter) {
 			tokenUsageJSON.formattedSummary = tokenUsage.formatSummary();
 
 			if (dryRun) {
-				console.debug('[Alert] Dry-run mode: skipping delivery and Firestore persistence');
-				return res.json({
+				console.debug('[Alert] Dry-run mode: skipping delivery; persisting opt-in decision audit');
+				const dryRunRequestedChannels = parseNotificationRouting(typeof body === 'object' ? body : undefined).channels || [];
+				const dryRunDecision = buildDecisionAudit({
+					requestId,
+					parsedSignal: parseTradingViewSignal(alert.text),
+					enrichment: {
+						attempted: Boolean(enriched),
+						provider: useTradingViewData ? 'tradingview-mcp' : 'gemini-grounding',
+						status: alert.tradingViewEnrichmentStatus || (enriched ? 'success' : 'not_attempted'),
+						fallbackUsed: false,
+					},
+					gates: [{ name: 'dryRun', decision: 'skip' }],
+					requestedChannels: dryRunRequestedChannels,
+					deliveredChannels: [],
+				});
+				res.json({
 					success: true,
 					dryRun: true,
 					enriched,
@@ -238,6 +316,24 @@ function postAlert(botOrGetter) {
 					tokenUsage: tokenUsageJSON,
 					requestId,
 				});
+				if (alertStorageService.isEnabled()) {
+					alertStorageService.saveAlert({
+						requestId,
+						text: alert.text,
+						enriched,
+						enrichmentData: alert.enriched || null,
+						tokenUsage: tokenUsageJSON,
+						deliveryResults: [],
+						channels: dryRunRequestedChannels,
+						useTradingViewData,
+						processingTimeMs: Math.max(0, Date.now() - startTime),
+						tradingViewEnrichmentApplied: Boolean(alert.enriched && alert.enriched.tradingViewEnrichmentApplied === true),
+						tradingViewEnrichmentStatus: alert.tradingViewEnrichmentStatus,
+						source: body.source || 'webhook-alert',
+						decision: dryRunDecision,
+					}).catch(() => {});
+				}
+				return;
 			}
 
 			// Defer notification service initialization until we know we need delivery.
@@ -426,6 +522,38 @@ function postAlert(botOrGetter) {
 				}
 			}
 
+			// Opt-in per-alert decision audit trail: captures the parsed signal,
+			// enrichment outcome, gate verdicts, and dispatch intent. The
+			// sanitizer in AlertStorageService enforces bounded depth/keys and
+			// strips undefined before writing; the field stays out of the
+			// document entirely when ENABLE_ALERT_DECISION_AUDIT is off.
+			const parsedSignalForDecision = parseTradingViewSignal(alert.text);
+			const decisionGates = [];
+			if (suppressedRepeat) {
+				decisionGates.push({
+					name: 'same-signal-cooldown',
+					decision: 'suppress',
+					...(parsedSignalForDecision ? {
+						evidence: { key: parsedSignalForDecision.key || null },
+					} : {}),
+				});
+			}
+			const decisionAudit = buildDecisionAudit({
+				requestId,
+				parsedSignal: parsedSignalForDecision,
+				enrichment: {
+					attempted: Boolean(enriched),
+					provider: (alert.enriched && typeof alert.enriched.provider === 'string')
+						? alert.enriched.provider
+						: (useTradingViewData ? 'tradingview-mcp' : 'gemini-grounding'),
+					status: alert.tradingViewEnrichmentStatus || (enriched ? 'success' : 'not_attempted'),
+					fallbackUsed: false,
+				},
+				gates: decisionGates,
+				requestedChannels,
+				deliveredChannels,
+			});
+
 			// Fire-and-forget: persist alert to Firestore after responding to the caller.
 			// Errors are caught inside saveAlert — delivery is never blocked by storage.
 			alertStorageService.saveAlert({
@@ -448,6 +576,7 @@ function postAlert(botOrGetter) {
 				telegramThreadId: routing.telegramThreadId,
 				whatsappChatId: routing.whatsappChatId,
 				discordWebhookUrl: routing.discordWebhookUrl,
+				decision: decisionAudit,
 			}).catch(() => {}); // errors already logged inside AlertStorageService
 
 			if (signalOutcomeService.isEnabled() && !suppressedRepeat) {
