@@ -9,6 +9,7 @@ jest.mock('../../src/lib/validation', () => ({
 }));
 
 jest.mock('../../src/services/storage/AlertStorageService', () => ({
+	isEnabled: jest.fn(() => false),
 	extractSymbolAndExchange: jest.fn(() => ({ symbol: 'BTCUSDT', exchange: 'BINANCE' })),
 	saveAlert: jest.fn().mockResolvedValue('alert-id'),
 }));
@@ -35,10 +36,19 @@ jest.mock('../../src/services/storage/SignalOutcomeService', () => ({
 }));
 
 const alertStorageService = require('../../src/services/storage/AlertStorageService');
+const NotificationManager = require('../../src/services/notification/NotificationManager');
+const remoteConfigService = require('../../src/services/remoteConfig/RemoteConfigService');
 const sentryService = require('../../src/services/monitoring/SentryService');
 const { enrichAlert } = require('../../src/controllers/webhooks/handlers/alert/grounding');
 const signalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
-const { postAlert, resolveRequestId } = require('../../src/controllers/webhooks/handlers/alert/alert');
+const {
+	postAlert,
+	resolveRequestId,
+	resetNotificationManagerForTesting,
+	getCooldownChannelIdentity,
+} = require('../../src/controllers/webhooks/handlers/alert/alert');
+const { signalRepeatCooldown } = require('../../src/services/alerts/signalRepeatCooldown');
+const { parseTradingViewSignal } = require('../../src/services/tradingview/parseTradingViewSignal');
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -61,7 +71,13 @@ describe('alert request ID resolution and echo', () => {
 		process.env.ENABLE_TELEGRAM_BOT = 'false';
 		process.env.ENABLE_WHATSAPP_ALERTS = 'false';
 		process.env.ENABLE_DISCORD_ALERTS = 'false';
+		delete process.env.ENABLE_ALERT_DECISION_AUDIT;
+		delete process.env.ENABLE_FIRESTORE_ALERT_STORAGE;
+		remoteConfigService._resetForTesting();
 		jest.clearAllMocks();
+		alertStorageService.isEnabled.mockReturnValue(false);
+		resetNotificationManagerForTesting();
+		signalRepeatCooldown.reset();
 	});
 
 	describe('signal outcome price provenance', () => {
@@ -301,6 +317,107 @@ describe('alert request ID resolution and echo', () => {
 				requestId: 'dryrun-id-101',
 			}));
 		});
+
+		it('does not persist dry-run alerts when decision audit is disabled', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			process.env.ENABLE_ALERT_DECISION_AUDIT = 'false';
+			alertStorageService.isEnabled.mockReturnValue(true);
+			const response = buildResponse();
+
+			await postAlert({})({
+				headers: {},
+				body: { text: 'BINANCE:BTCUSDT (1h) BUY' },
+				query: { dryRun: 'true' },
+			}, response);
+
+			expect(response.json).toHaveBeenCalledWith(expect.objectContaining({ dryRun: true }));
+			expect(alertStorageService.saveAlert).not.toHaveBeenCalled();
+		});
+
+		it('persists an opted-in dry-run audit with no delivered channels', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			process.env.ENABLE_ALERT_DECISION_AUDIT = 'true';
+			alertStorageService.isEnabled.mockReturnValue(true);
+			const response = buildResponse();
+
+			await postAlert({})({
+				headers: { 'x-request-id': 'dryrun-audit-42' },
+				body: { text: 'BINANCE:BTCUSDT (1h) BUY' },
+				query: { dryRun: 'true' },
+			}, response);
+
+			expect(alertStorageService.saveAlert).toHaveBeenCalledWith(expect.objectContaining({
+				requestId: 'dryrun-audit-42',
+				decision: expect.objectContaining({
+					gates: [expect.objectContaining({ name: 'dryRun', decision: 'skip' })],
+					dispatch: { requestedChannels: [], sentTo: [] },
+				}),
+			}));
+		});
+
+		it('records a failed provider attempt even when enrichment returns no result', async () => {
+			process.env.ENABLE_GEMINI_GROUNDING = 'true';
+			process.env.ENABLE_ALERT_DECISION_AUDIT = 'true';
+			alertStorageService.isEnabled.mockReturnValue(true);
+			enrichAlert.mockRejectedValueOnce(new Error('provider timeout'));
+			const response = buildResponse();
+
+			await postAlert({})({
+				headers: {},
+				body: { text: 'BINANCE:BTCUSDT (1h) BUY' },
+				query: {},
+			}, response);
+
+			expect(alertStorageService.saveAlert).toHaveBeenCalledWith(expect.objectContaining({
+				decision: expect.objectContaining({
+					enrichment: expect.objectContaining({
+						attempted: true,
+						provider: 'gemini-grounding',
+						status: 'failed',
+						fallbackUsed: true,
+					}),
+				}),
+			}));
+		});
+
+		it('records a partial same-signal cooldown when one destination remains allowed', async () => {
+			const text = 'BINANCE:BTCUSDT (1h) BUY';
+			const parsedSignal = parseTradingViewSignal(text);
+			const routing = {};
+			const telegramIdentity = getCooldownChannelIdentity('telegram', routing);
+			signalRepeatCooldown.reserve(parsedSignal, [telegramIdentity], Date.now());
+			process.env.ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION = 'true';
+			process.env.ENABLE_ALERT_DECISION_AUDIT = 'true';
+			process.env.ENABLE_TELEGRAM_BOT = 'false';
+			alertStorageService.isEnabled.mockReturnValue(true);
+			NotificationManager.mockImplementationOnce(() => ({
+				validateAll: jest.fn().mockResolvedValue([]),
+				getEnabledChannels: jest.fn(() => ['telegram', 'whatsapp']),
+				sendToChannels: jest.fn().mockImplementation(async (_alert, channels) => (
+					channels.map((channel) => ({ channel, success: true }))
+				)),
+				isIntentionalApiOnly: jest.fn(() => false),
+			}));
+		const response = buildResponse();
+
+		await postAlert({})({
+			headers: {},
+			body: { text, channels: ['telegram', 'whatsapp'] },
+			query: {},
+		}, response);
+
+		const saveArgs = alertStorageService.saveAlert.mock.calls[0][0];
+		const gate = saveArgs.decision.gates.find((entry) => entry.name === 'same-signal-cooldown');
+		expect(gate).toMatchObject({ decision: 'suppress', reason: 'channel_cooldown' });
+		expect(gate.evidence).toEqual({
+			requestedChannels: 'telegram,whatsapp',
+			allowedChannels: 'whatsapp',
+			suppressedChannels: 'telegram',
+		});
+		expect(saveArgs.decision.dispatch.sentTo).toEqual(['whatsapp']);
+		resetNotificationManagerForTesting();
+		signalRepeatCooldown.reset();
+	});
 
 		it('includes requestId in Sentry error capture context on unexpected error', async () => {
 			const response = buildResponse();

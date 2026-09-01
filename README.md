@@ -159,6 +159,8 @@ Interactive Swagger documentation is available at `/docs`, and OpenAPI 3.1 schem
 
 `POST /api/webhook/message` truncates inbound text above `GENERIC_MESSAGE_MAX_LENGTH` (integer, default `4000`, range `1`-`20000`). A fresh valid Firebase Remote Config value takes precedence over the environment value; invalid environment values use the default, while invalid Remote Config values are ignored so the environment/default remains effective. Response truncation metadata remains conditional on clipping.
 
+`ENABLE_ALERT_DECISION_AUDIT` (default `false`) opts stored webhook alerts into a bounded audit of parsing, enrichment, gates, and channel dispatch. It is request-time tunable through Firebase Remote Config. `GET /api/alerts/summary?includeDecisionRollup=true` adds gate counts; `GET /api/alerts/export?includeDecision=true` includes per-alert audit fields, including the CSV column only when explicitly requested. See [Stored Alerts API](docs/alerts.md).
+
 | Variable | Type | Default | Bounds | Description |
 | :--- | :--- | :--- | :--- | :--- |
 | `GENERIC_MESSAGE_MAX_LENGTH` | Integer | `4000` | `1`-`20000` | Maximum inbound characters before generic message webhook truncation. Fresh valid Remote Config overrides the environment value; invalid Remote Config is ignored, leaving the environment/default effective. |

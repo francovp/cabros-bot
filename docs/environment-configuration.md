@@ -167,6 +167,7 @@ Unlike equity market data, this feature **does** run a bounded startup probe (5s
 - `ENABLE_SYMBOL_ANALYSIS_MULTI_AGENT` - Enable multi-agent consensus analysis fallback for `/api/webhook/symbol-analysis` (`true` or `false`, default: `false`)
 - `ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION` - Suppress duplicate channel delivery for the same `exchange|symbol|timeframe|side` signal within its cooldown window; suppressed alerts are still persisted with a `suppressedRepeat: true` marker and opposite-side flips always deliver (`true` or `false`, default: `false`)
 - `ALERT_SIGNAL_COOLDOWN_BARS` - Cooldown length in alert-timeframe bars for repeat suppression (`1`-`10`, default: `1`)
+- `ENABLE_ALERT_DECISION_AUDIT` - Persist bounded decision details (parsed signal, enrichment outcome, gates, and channel dispatch) on stored webhook alerts (`true` or `false`, default: `false`; request-time Remote Config eligible)
 - `ENABLE_OUTCOME_INFORMED_DELIVERY` - Append a bounded per-(exchange, symbol, side, setupType) historical outcome annotation to webhook alerts when evaluations exist; this phase annotates only and does not suppress delivery (`true` or `false`, default: `false`; Remote Config eligible)
 - `OUTCOME_ANNOTATION_LOOKBACK_DAYS` - Lookback window for outcome annotation aggregation (`1`-`365`, default: `30`; Remote Config eligible)
 - `OUTCOME_ANNOTATION_MIN_SAMPLE` - Minimum historical sample size required to render an annotation (`1`-`100`, default: `5`; Remote Config eligible)

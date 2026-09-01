@@ -104,6 +104,24 @@ describe('RemoteConfigService', () => {
 		expect(remoteConfigService.getStatus().lastErrorCategory).toBe('invalid_value');
 	});
 
+	it('supports the request-time alert decision audit gate in environment and Remote Config', async () => {
+		expect(remoteConfigService.PARAMETER_SCHEMA.ENABLE_ALERT_DECISION_AUDIT).toEqual({
+			type: 'boolean',
+			defaultValue: false,
+		});
+		expect(remoteConfigService.getRuntimeConfig().ENABLE_ALERT_DECISION_AUDIT).toBe(false);
+
+		process.env.ENABLE_ALERT_DECISION_AUDIT = 'true';
+		expect(remoteConfigService.getRuntimeConfig().ENABLE_ALERT_DECISION_AUDIT).toBe(true);
+
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		mockTemplate({ ENABLE_ALERT_DECISION_AUDIT: false });
+		alertStorageService.getFirestore.mockReturnValue({});
+		await remoteConfigService.loadNow();
+
+		expect(remoteConfigService.getRuntimeConfig().ENABLE_ALERT_DECISION_AUDIT).toBe(false);
+	});
+
 	it('falls back to bounded defaults for invalid TradingView MCP environment values', () => {
 		[
 			['TRADINGVIEW_MCP_TIMEOUT_MS', 'not-a-number', 12000],

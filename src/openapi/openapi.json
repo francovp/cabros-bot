@@ -1174,6 +1174,9 @@
           },
           {
             "$ref": "#/components/parameters/SummaryInterval"
+          },
+          {
+            "$ref": "#/components/parameters/IncludeDecisionRollup"
           }
         ],
         "responses": {
@@ -1373,6 +1376,9 @@
           },
           {
             "$ref": "#/components/parameters/AlertSignalClass"
+          },
+          {
+            "$ref": "#/components/parameters/IncludeDecision"
           }
         ],
         "responses": {
@@ -4758,6 +4764,24 @@
           ]
         },
         "description": "Filter by analysis decision action (BUY, SELL, or NO_TRADE)."
+      },
+      "IncludeDecision": {
+        "name": "includeDecision",
+        "in": "query",
+        "description": "When true, exported records include the bounded decision audit when ENABLE_ALERT_DECISION_AUDIT is enabled. The CSV decision column is opt-in.",
+        "schema": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "IncludeDecisionRollup": {
+        "name": "includeDecisionRollup",
+        "in": "query",
+        "description": "When true, the summary includes per-gate decision counts when ENABLE_ALERT_DECISION_AUDIT is enabled; otherwise the decision section is omitted.",
+        "schema": {
+          "type": "boolean",
+          "default": false
+        }
       }
     },
     "requestBodies": {
@@ -9969,7 +9993,7 @@
           "outcomeAnnotation": {
             "$ref": "#/components/schemas/OutcomeAnnotation"
           },
-"currentPrice": {
+          "currentPrice": {
             "type": [
               "number",
               "null"
@@ -9982,6 +10006,9 @@
               "null"
             ],
             "description": "Top-level mirror of enrichmentData.price_currency when currentPrice is present (GH-599 / CB-XXX)."
+          },
+          "decision": {
+            "$ref": "#/components/schemas/AlertDecision"
           }
         }
       },
@@ -10464,6 +10491,15 @@
           },
           "feedback": {
             "$ref": "#/components/schemas/AlertFeedbackBlock"
+          },
+          "decision": {
+            "type": "object",
+            "description": "Only present when includeDecisionRollup=true and ENABLE_ALERT_DECISION_AUDIT is enabled.",
+            "properties": {
+              "gates": {
+                "$ref": "#/components/schemas/DecisionGatesRollup"
+              }
+            }
           }
         }
       },
@@ -13219,7 +13255,7 @@
                   "outcomeAnnotation": {
                     "$ref": "#/components/schemas/OutcomeAnnotation"
                   },
-"exchange": {
+                  "exchange": {
                     "type": "string",
                     "description": "Exchange prefix reported by the upstream screener, unchanged by outbound MCP venue aliasing (GH-591)."
                   },
@@ -13350,9 +13386,6 @@
                 }
               }
             }
-          },
-          "enriched": {
-            "type": "boolean"
           },
           "tokenUsage": {
             "$ref": "#/components/schemas/JsonObject"
@@ -16409,6 +16442,165 @@
             ],
             "format": "date-time",
             "description": "ISO timestamp of the most recent burst window close, aggregated or not."
+          }
+        }
+      },
+      "AlertDecision": {
+        "type": "object",
+        "description": "Opt-in per-alert audit trail. Sanitization caps depth at 6, objects at 32 keys, arrays at 32 entries, and string values at 1000 characters.",
+        "properties": {
+          "parsed": {
+            "type": "object",
+            "properties": {
+              "ok": {
+                "type": "boolean"
+              },
+              "exchange": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "symbol": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "side": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "rawTimeframe": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "timeframe": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          },
+          "enrichment": {
+            "type": "object",
+            "properties": {
+              "attempted": {
+                "type": "boolean"
+              },
+              "provider": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "status": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "fallbackUsed": {
+                "type": "boolean"
+              }
+            }
+          },
+          "gates": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "decision": {
+                  "type": "string",
+                  "enum": [
+                    "allow",
+                    "suppress",
+                    "skip"
+                  ]
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "evidence": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "dispatch": {
+            "type": "object",
+            "properties": {
+              "requestedChannels": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "sentTo": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "requestId": {
+            "type": "string"
+          }
+        }
+      },
+      "DecisionGatesRollup": {
+        "type": "object",
+        "description": "Counts gate verdicts across the scanned summary window. Percentages use a 0-100 scale.",
+        "properties": {
+          "denominator": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Number of scanned alerts in the summary window."
+          },
+          "gates": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "decision": {
+                  "type": "string",
+                  "enum": [
+                    "allow",
+                    "suppress",
+                    "skip"
+                  ]
+                },
+                "populated": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "percentage": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 100
+                }
+              }
+            }
           }
         }
       }

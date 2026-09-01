@@ -99,6 +99,7 @@ const PARAMETER_SCHEMA = Object.freeze({
 	ENABLE_SIGNAL_CLASS_MARKER: { type: 'boolean', defaultValue: true },
 	ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION: { type: 'boolean', defaultValue: false },
 	ALERT_SIGNAL_COOLDOWN_BARS: { type: 'number', defaultValue: 1, integer: true, min: 1, max: 10 },
+	ENABLE_ALERT_DECISION_AUDIT: { type: 'boolean', defaultValue: false },
 	ENABLE_OUTCOME_INFORMED_DELIVERY: { type: 'boolean', defaultValue: false },
 	OUTCOME_ANNOTATION_LOOKBACK_DAYS: { type: 'number', defaultValue: 30, integer: true, min: 1, max: 365 },
 	OUTCOME_ANNOTATION_MIN_SAMPLE: { type: 'number', defaultValue: 5, integer: true, min: 1, max: 100 },

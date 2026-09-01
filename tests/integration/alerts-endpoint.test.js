@@ -837,6 +837,31 @@ describe('Alerts API Integration Tests', () => {
 		}));
 	});
 
+	it('passes includeDecisionRollup=true to the summary service', async () => {
+		alertStorageService.summarizeAlerts.mockResolvedValue({ totalAlerts: 0, bySource: {} });
+
+		await request(app)
+			.get('/api/alerts/summary?includeDecisionRollup=true')
+			.set('x-api-key', 'test-key')
+			.expect(200);
+
+		expect(alertStorageService.summarizeAlerts).toHaveBeenCalledWith(expect.objectContaining({
+			includeDecisionRollup: true,
+		}));
+	});
+
+	it('rejects non-boolean includeDecisionRollup values', async () => {
+		const res = await request(app)
+			.get('/api/alerts/summary?includeDecisionRollup=yes')
+			.set('x-api-key', 'test-key')
+			.expect(400);
+
+		expect(res.body).toEqual(expect.objectContaining({
+			error: 'Invalid includeDecisionRollup flag. Use true or false.',
+			code: 'INVALID_REQUEST',
+		}));
+	});
+
 	it('returns 400 when GET /api/alerts/summary receives invalid filter values', async () => {
 		const emptySymbol = await request(app)
 			.get('/api/alerts/summary?symbol=')
@@ -1157,6 +1182,25 @@ describe('Alerts API Integration Tests', () => {
 		expect(res.text).not.toContain('=alert-1,-42,@webhook');
 		expect(res.text).toContain('PROVIDER_LIMIT');
 		expect(res.text).toContain('}]",true,,');
+		expect(res.text.split('\n')[0]).not.toContain('decision');
+	});
+
+	it('includes the decision CSV column only when explicitly requested', async () => {
+		alertStorageService.exportAlerts.mockResolvedValue({
+			alerts: [{
+				id: 'alert-decision-1',
+				decision: { gates: [{ name: 'same-signal-cooldown', decision: 'suppress' }] },
+			}],
+		});
+
+		const res = await request(app)
+			.get('/api/alerts/export?format=csv&from=2026-06-06T00:00:00.000Z&to=2026-06-07T00:00:00.000Z&includeDecision=true')
+			.set('x-api-key', 'test-key')
+			.expect(200);
+
+		expect(alertStorageService.exportAlerts).toHaveBeenCalledWith(expect.objectContaining({ includeDecision: true }));
+		expect(res.text.split('\n')[0]).toContain('decision');
+		expect(res.text).toContain('same-signal-cooldown');
 	});
 
 	it('includes entry-price mirrors in CSV export', async () => {
@@ -1277,6 +1321,19 @@ describe('Alerts API Integration Tests', () => {
 			success: false,
 			retryable: false,
 			requestId: expect.any(String),
+		}));
+		expect(alertStorageService.exportAlerts).not.toHaveBeenCalled();
+	});
+
+	it('returns 400 when includeDecision flag is invalid', async () => {
+		const res = await request(app)
+			.get('/api/alerts/export?format=jsonl&from=2026-06-06T00:00:00.000Z&to=2026-06-07T00:00:00.000Z&includeDecision=maybe')
+			.set('x-api-key', 'test-key')
+			.expect(400);
+
+		expect(res.body).toEqual(expect.objectContaining({
+			error: 'Invalid includeDecision flag. Use true or false.',
+			code: 'INVALID_REQUEST',
 		}));
 		expect(alertStorageService.exportAlerts).not.toHaveBeenCalled();
 	});
