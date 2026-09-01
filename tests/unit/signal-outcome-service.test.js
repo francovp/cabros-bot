@@ -39,10 +39,22 @@ jest.mock('../../src/services/grounding/geminiPriceService', () => ({
 	isGeminiGroundingEnabled: () => mockIsGeminiGroundingEnabled(),
 }));
 
+// Mock TradingView MCP service for outcome entry-price fallback
+const mockCallCoinAnalysis = jest.fn();
+const mockIsBreakerOpen = jest.fn(() => false);
+jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
+	callCoinAnalysis: (...args) => mockCallCoinAnalysis(...args),
+	isBreakerOpen: () => mockIsBreakerOpen(),
+	isEnabled: jest.fn(() => true),
+	getStatus: jest.fn(() => ({ ready: true })),
+}));
+
 describe('SignalOutcomeService', () => {
 	beforeEach(() => {
 		jest.clearAllMocks();
 		mockFetchGeminiPrice.mockResolvedValue(null);
+		mockCallCoinAnalysis.mockResolvedValue(null);
+		mockIsBreakerOpen.mockReturnValue(false);
 		admin.__resetApps();
 		admin.__resetCollectionState();
 		AlertStorageService._resetForTesting();
@@ -58,6 +70,7 @@ describe('SignalOutcomeService', () => {
 		delete process.env.EQUITY_MARKET_DATA_TIMEOUT_MS;
 		process.env.EQUITY_MARKET_DATA_RPM = '0';
 		delete process.env.TWELVE_DATA_RPM;
+		delete process.env.ENABLE_MCP_OUTCOME_PRICES;
 	});
 
 	afterEach(() => {
@@ -73,6 +86,7 @@ describe('SignalOutcomeService', () => {
 		delete process.env.EQUITY_MARKET_DATA_TIMEOUT_MS;
 		process.env.EQUITY_MARKET_DATA_RPM = '0';
 		delete process.env.TWELVE_DATA_RPM;
+		delete process.env.ENABLE_MCP_OUTCOME_PRICES;
 	});
 
 	describe('isEnabled()', () => {
@@ -572,15 +586,16 @@ describe('SignalOutcomeService', () => {
 			expect(saved.outcomeEvaluated).toBe(false);
 		});
 
-		it('marks FX_IDC signals as twelve_data_not_configured when equity market data is not enabled', async () => {
+		it('marks FX_IDC signals as twelve_data_not_configured when equity market data is not enabled and no price is provided', async () => {
 			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
 			process.env.ENABLE_EQUITY_MARKET_DATA = 'false';
+			delete process.env.ENABLE_MCP_OUTCOME_PRICES;
 
 			const resId = await SignalOutcomeService.recordSignal({
 				requestId: 'req-fx-disabled',
 				source: 'webhook-alert',
 				symbol: 'FX_IDC:USDCLP(D)',
-				price: 950.25,
+				price: null,
 				side: 'BUY',
 			});
 
@@ -591,6 +606,174 @@ describe('SignalOutcomeService', () => {
 			expect(saved.symbol).toBe('USDCLP');
 			expect(saved.eligibilityState).toBe('twelve_data_not_configured');
 			expect(saved.outcomeEvaluated).toBe(true);
+		});
+
+		it('falls back to TradingView MCP for FX_IDC entries when MCP outcome prices are enabled', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_EQUITY_MARKET_DATA = 'false';
+			process.env.ENABLE_MCP_OUTCOME_PRICES = 'true';
+
+			mockCallCoinAnalysis.mockResolvedValueOnce({
+				price_data: { current_price: 951.42, change_percent: 0.5 },
+			});
+
+			const resId = await SignalOutcomeService.recordSignal({
+				requestId: 'req-mcp-fx-idc',
+				source: 'webhook-alert',
+				symbol: 'FX_IDC:USDCLP(D)',
+				price: null,
+				side: 'BUY',
+			});
+
+			expect(resId).not.toBeNull();
+			expect(mockCallCoinAnalysis).toHaveBeenCalledWith(expect.objectContaining({
+				symbol: 'USDCLP',
+				exchange: 'FX_IDC',
+			}));
+
+			const saved = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(resId);
+			expect(saved).toBeDefined();
+			expect(saved.exchange).toBe('FX_IDC');
+			expect(saved.symbol).toBe('USDCLP');
+			expect(saved.price).toBe(951.42);
+			expect(saved.entryPriceSource).toBe('tradingview_mcp');
+			expect(saved.eligibilityState).toBe('supported_provider');
+			expect(saved.outcomeEvaluated).toBe(false);
+		});
+
+		it('falls back to TradingView MCP for NASDAQ_DLY entries when MCP outcome prices are enabled', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_EQUITY_MARKET_DATA = 'false';
+			process.env.ENABLE_MCP_OUTCOME_PRICES = 'true';
+
+			mockCallCoinAnalysis.mockResolvedValueOnce({
+				price_data: { close: '18234.50' },
+			});
+
+			const resId = await SignalOutcomeService.recordSignal({
+				requestId: 'req-mcp-nasdaq-dly',
+				source: 'webhook-alert',
+				symbol: 'NASDAQ_DLY:NDX(D)',
+				price: null,
+				side: 'BUY',
+			});
+
+			expect(resId).not.toBeNull();
+			const saved = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(resId);
+			expect(saved).toBeDefined();
+			expect(saved.exchange).toBe('NASDAQ_DLY');
+			expect(saved.symbol).toBe('NDX');
+			expect(saved.price).toBe(18234.50);
+			expect(saved.entryPriceSource).toBe('tradingview_mcp');
+			expect(saved.eligibilityState).toBe('supported_provider');
+		});
+
+		it('marks FX_IDC signals as twelve_data_not_configured when MCP returns no price and equity provider is disabled', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_EQUITY_MARKET_DATA = 'false';
+			process.env.ENABLE_MCP_OUTCOME_PRICES = 'true';
+
+			mockCallCoinAnalysis.mockResolvedValueOnce({ price_data: {} });
+
+			const resId = await SignalOutcomeService.recordSignal({
+				requestId: 'req-mcp-fx-no-price',
+				source: 'webhook-alert',
+				symbol: 'FX_IDC:USDCLP(D)',
+				price: null,
+				side: 'BUY',
+			});
+
+			expect(resId).not.toBeNull();
+			expect(mockCallCoinAnalysis).toHaveBeenCalled();
+			const saved = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(resId);
+			expect(saved).toBeDefined();
+			expect(saved.entryPriceSource).toBeNull();
+			expect(saved.eligibilityState).toBe('twelve_data_not_configured');
+			expect(saved.outcomeEvaluated).toBe(true);
+		});
+
+		it('marks BINANCE signals as pending_entry_price when MCP fallback fails after Binance and Gemini', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_MCP_OUTCOME_PRICES = 'true';
+
+			mockGetAvgPrice.mockRejectedValueOnce(new Error('Binance unavailable'));
+			mockFetchGeminiPrice.mockResolvedValueOnce(null);
+			mockCallCoinAnalysis.mockRejectedValueOnce(new Error('MCP unavailable'));
+
+			const resId = await SignalOutcomeService.recordSignal({
+				requestId: 'req-binance-all-fail',
+				source: 'webhook-alert',
+				symbol: 'BINANCE:BTCUSDT',
+				price: null,
+				side: 'BUY',
+			});
+
+			expect(resId).not.toBeNull();
+			const saved = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(resId);
+			expect(saved.entryPriceSource).toBeNull();
+			expect(saved.eligibilityState).toBe('pending_entry_price');
+			expect(['binance_unavailable', 'mcp_price_failed']).toContain(saved.eligibilityReason);
+		});
+
+		it('skips MCP fallback when the MCP circuit breaker is open', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_EQUITY_MARKET_DATA = 'false';
+			process.env.ENABLE_MCP_OUTCOME_PRICES = 'true';
+			mockIsBreakerOpen.mockReturnValueOnce(true);
+
+			const resId = await SignalOutcomeService.recordSignal({
+				requestId: 'req-mcp-breaker-open',
+				source: 'webhook-alert',
+				symbol: 'FX_IDC:USDCLP(D)',
+				price: null,
+				side: 'BUY',
+			});
+
+			expect(resId).not.toBeNull();
+			expect(mockCallCoinAnalysis).not.toHaveBeenCalled();
+			const saved = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(resId);
+			expect(saved.entryPriceSource).toBeNull();
+		});
+
+		it('does not consult MCP fallback when ENABLE_MCP_OUTCOME_PRICES is disabled (default)', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_EQUITY_MARKET_DATA = 'false';
+
+			const resId = await SignalOutcomeService.recordSignal({
+				requestId: 'req-mcp-disabled',
+				source: 'webhook-alert',
+				symbol: 'FX_IDC:USDCLP(D)',
+				price: null,
+				side: 'BUY',
+			});
+
+			expect(resId).not.toBeNull();
+			expect(mockCallCoinAnalysis).not.toHaveBeenCalled();
+		});
+
+		it('adds TradingView MCP as a third source after Binance + Gemini for BINANCE signals', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_MCP_OUTCOME_PRICES = 'true';
+
+			mockGetAvgPrice.mockRejectedValueOnce(new Error('Binance unavailable'));
+			mockCallCoinAnalysis.mockResolvedValueOnce({
+				price_data: { current_price: '67000.10' },
+			});
+
+			const resId = await SignalOutcomeService.recordSignal({
+				requestId: 'req-mcp-binance-third',
+				source: 'webhook-alert',
+				symbol: 'BINANCE:BTCUSDT',
+				price: null,
+				side: 'BUY',
+			});
+
+			expect(resId).not.toBeNull();
+			expect(mockCallCoinAnalysis).toHaveBeenCalled();
+			const saved = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(resId);
+			expect(saved.price).toBe(67000.10);
+			expect(saved.entryPriceSource).toBe('tradingview_mcp');
+			expect(saved.eligibilityState).toBe('supported_provider');
 		});
 
 		it('sanitizes undefined properties to prevent Firestore serialization errors', async () => {
