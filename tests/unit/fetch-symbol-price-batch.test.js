@@ -34,6 +34,7 @@ jest.mock('../../src/services/monitoring/SentryService', () => ({
 
 const { mockGetAvgPrice } = require('binance');
 const equityMarketDataService = require('../../src/services/storage/EquityMarketDataService');
+const sentryService = require('../../src/services/monitoring/SentryService');
 const {
 	parseSymbolList,
 	fetchSymbolsPrices,
@@ -57,7 +58,7 @@ describe('/precio batch symbol support (issue #626)', () => {
 	beforeEach(() => {
 		jest.clearAllMocks();
 		equityMarketDataService.isSupportedExchange.mockImplementation((ex) =>
-			['BATS', 'NASDAQ', 'NYSE', 'AMEX', 'NYSE ARCA', 'FX_IDC', 'SPCFD'].includes(ex)
+			['BATS', 'NASDAQ', 'NYSE', 'AMEX', 'NYSE ARCA', 'FX_IDC', 'SPCFD'].includes(ex),
 		);
 		equityMarketDataService.getStatus.mockReturnValue({
 			enabled: true,
@@ -144,6 +145,22 @@ describe('/precio batch symbol support (issue #626)', () => {
 			expect(mockGetAvgPrice).toHaveBeenCalledTimes(2);
 		});
 
+		it('serializes equity lookups through the shared provider pacer', async () => {
+			let activeLookups = 0;
+			let maxActiveLookups = 0;
+			equityMarketDataService.getQuote.mockImplementation(async ({ symbol }) => {
+				activeLookups += 1;
+				maxActiveLookups = Math.max(maxActiveLookups, activeLookups);
+				await new Promise((resolve) => setImmediate(resolve));
+				activeLookups -= 1;
+				return { symbol, exchange: 'NASDAQ', price: 125.5, percentChange: 1.2 };
+			});
+
+			await fetchSymbolsPrices(['NVDA', 'AAPL']);
+
+			expect(maxActiveLookups).toBe(1);
+		});
+
 		it('returns failed entries without rejecting for partial failures', async () => {
 			mockGetAvgPrice.mockImplementation(({ symbol }) => {
 				if (symbol === 'BTCUSDT') return Promise.resolve({ price: 65000 });
@@ -160,6 +177,20 @@ describe('/precio batch symbol support (issue #626)', () => {
 				symbol: 'BADUSDT',
 				success: false,
 			});
+		});
+
+		it('captures non-user-friendly batch failures in Sentry', async () => {
+			mockGetAvgPrice.mockRejectedValue(new Error('Binance unavailable'));
+
+			await fetchSymbolsPrices(['BTCUSDT']);
+
+			expect(sentryService.captureRuntimeError).toHaveBeenCalledWith(expect.objectContaining({
+				channel: 'telegram',
+				extra: expect.objectContaining({
+					command: 'getPrice',
+					symbol: 'BTCUSDT',
+				}),
+			}));
 		});
 
 		it('throws when batch exceeds MAX_BATCH_SYMBOLS', async () => {
@@ -217,6 +248,17 @@ describe('/precio batch symbol support (issue #626)', () => {
 			expect(replyText).toContain('ETHUSDT');
 		});
 
+		it('includes every whitespace-separated symbol in the batch', async () => {
+			mockGetAvgPrice.mockImplementation(({ symbol }) =>
+				Promise.resolve({ price: symbol === 'BTCUSDT' ? 65000 : 3500 }));
+			const context = buildContext('/precio BTCUSDT ETHUSDT');
+
+			await getPrice(context);
+
+			expect(context.reply.mock.calls[0][0]).toContain('ETHUSDT');
+			expect(mockGetAvgPrice).toHaveBeenCalledTimes(2);
+		});
+
 		it('rejects batches over the cap with a helpful error', async () => {
 			const symbols = Array.from({ length: MAX_BATCH_SYMBOLS + 1 }, (_, i) => `S${i}USDT`).join(',');
 			const context = buildContext(`/precio ${symbols}`);
@@ -224,7 +266,7 @@ describe('/precio batch symbol support (issue #626)', () => {
 			await getPrice(context);
 
 			expect(context.reply).toHaveBeenCalledWith(
-				expect.stringContaining('ximo')
+				expect.stringContaining('ximo'),
 			);
 			expect(mockGetAvgPrice).not.toHaveBeenCalled();
 		});
