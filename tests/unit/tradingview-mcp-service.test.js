@@ -1148,4 +1148,99 @@ describe('TradingViewMcpService', () => {
 			expect(service.hasActiveOutagePage).toBe(false);
 		});
 	});
+
+	describe('exchange alias and deterministic-miss classification', () => {
+		it('aliases BATS to NASDAQ for coin_analysis calls', async () => {
+			process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT = 'true';
+			const callTool = jest.fn().mockResolvedValueOnce({
+				price_data: { current_price: 348.95 },
+			});
+
+			const service = new TradingViewMcpService({
+				maxRetries: 1,
+				callToolFn: callTool,
+				logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
+			});
+			service._callTool = callTool;
+
+			await service.callCoinAnalysis({ symbol: 'TSLA', exchange: 'BATS', timeframe: '1D' });
+
+			expect(callTool).toHaveBeenCalledWith('coin_analysis', expect.objectContaining({
+				symbol: 'TSLA',
+				exchange: 'NASDAQ',
+			}), expect.any(Object));
+		});
+
+		it('keeps the original exchange on the request envelope when aliases are applied via enrichFromSignal', async () => {
+			process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT = 'true';
+			const callTool = jest.fn().mockResolvedValueOnce({
+				price_data: { current_price: 200 },
+				technical_indicators: { rsi: 50 },
+			});
+			const service = new TradingViewMcpService({
+				maxRetries: 1,
+				enrichmentBudgetMs: 5000,
+				callToolFn: callTool,
+				logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
+			});
+			service._callTool = callTool;
+
+			const result = await service.enrichFromAlertText('BATS:TSLA(D) cambió a señal de COMPRA');
+
+			expect(callTool).toHaveBeenCalledWith('coin_analysis', expect.objectContaining({
+				exchange: 'NASDAQ',
+			}), expect.any(Object));
+			expect(result).toEqual(expect.objectContaining({
+				tradingViewEnrichmentApplied: true,
+				tradingViewEnrichmentStatus: 'full',
+			}));
+		});
+
+		it('classifies "No data found" responses as deterministic misses', () => {
+			const service = new TradingViewMcpService();
+			expect(service._isDeterministicMissError(new Error('No data found for TSLA on KUCOIN'))).toBe(true);
+			expect(service._isDeterministicMissError(new Error('No data found for QCOM on KUCOIN'))).toBe(true);
+			expect(service._isDeterministicMissError(new Error('symbol not supported'))).toBe(true);
+			expect(service._isDeterministicMissError(new Error('HTTP 503 Service Suspended'))).toBe(false);
+			expect(service._isDeterministicMissError(new Error('timeout after 12000ms'))).toBe(false);
+		});
+
+		it('short-circuits retries when the first attempt returns a deterministic miss', async () => {
+			process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT = 'true';
+			const callTool = jest.fn().mockRejectedValue(new Error('No data found for TSLA on KUCOIN'));
+			const service = new TradingViewMcpService({
+				maxRetries: 3,
+				callToolFn: callTool,
+				logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
+			});
+			service._callTool = callTool;
+
+			await expect(service.callCoinAnalysis({
+				symbol: 'TSLA',
+				exchange: 'BATS',
+				timeframe: '1D',
+			})).rejects.toThrow('No data found for TSLA on KUCOIN');
+
+			expect(callTool).toHaveBeenCalledTimes(1);
+		});
+
+		it('still retries when the first attempt is a transient timeout', async () => {
+			process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT = 'true';
+			const callTool = jest.fn().mockRejectedValue(new Error('TradingView MCP timeout after 12000ms'));
+			const service = new TradingViewMcpService({
+				maxRetries: 3,
+				callToolFn: callTool,
+				logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
+			});
+			service._callTool = callTool;
+
+			await expect(service.callCoinAnalysis({
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+				timeframe: '1D',
+			})).rejects.toThrow(/timeout/);
+
+			expect(callTool.mock.calls.length).toBeGreaterThan(1);
+		});
+	});
 });

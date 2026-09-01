@@ -1,7 +1,11 @@
 /* global fetch, AbortController */
 
 const { sendWithRetry } = require('../../lib/retryHelper');
-const { parseTradingViewSignal, normalizeTradingViewTimeframe } = require('./parseTradingViewSignal');
+const {
+	parseTradingViewSignal,
+	normalizeTradingViewTimeframe,
+	resolveExchangeAlias,
+} = require('./parseTradingViewSignal');
 const {
 	getStopLossMeta,
 	getTakeProfitTarget,
@@ -11,6 +15,22 @@ const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 
 const DEFAULT_TRADINGVIEW_MCP_URL = 'https://tradingview-mcp-yp6b.onrender.com/mcp';
 const ENRICHMENT_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+// Phrases returned by the configured MCP server when an exchange/symbol pair
+// cannot be resolved on the provider side. These are deterministic misses
+// (the same input always produces them) and short-circuit the retry chain.
+const DETERMINISTIC_MISS_PATTERNS = [
+	/no data found/i,
+	/symbol not supported/i,
+	/unsupported (symbol|exchange)/i,
+];
+
+function isDeterministicMissErrorMessage(message) {
+	if (typeof message !== 'string' || !message) {
+		return false;
+	}
+	return DETERMINISTIC_MISS_PATTERNS.some((pattern) => pattern.test(message));
+}
 
 function getAbortMessage(signal, fallback) {
 	const reason = signal && signal.reason;
@@ -123,6 +143,24 @@ class TradingViewMcpService {
 
 	isEnabled() {
 		return getRuntimeConfig().ENABLE_TRADINGVIEW_MCP_ENRICHMENT;
+	}
+
+	/**
+	 * Classify an error as a deterministic provider miss.
+	 *
+	 * Live probes (2026-08-24/25) showed the configured MCP server returns
+	 * "No data found for X on KUCOIN" for several equity/FX/index exchanges
+	 * (BATS, FX_IDC, SPCFD) when those prefixes are passed through unchanged.
+	 * These responses are stable for the same (symbol, exchange) pair and
+	 * cannot recover on retry; consuming the full retry budget against them
+	 * only burns the enrichment deadline. Returning true here lets the caller
+	 * short-circuit retries and move to the fallback tier immediately.
+	 */
+	_isDeterministicMissError(error) {
+		if (!error) {
+			return false;
+		}
+		return isDeterministicMissErrorMessage(error.message);
 	}
 
 	getConfig() {
@@ -252,7 +290,8 @@ class TradingViewMcpService {
 			: null;
 		const baseDeadlineAt = budgetDeadlineAt ? Math.min(budgetDeadlineAt, budgetStartedAt + baseBudgetMs) : null;
 		const symbol = parsedSignal.symbol.toUpperCase();
-		const exchange = (parsedSignal.exchange || cfg.defaultExchange).toUpperCase();
+		const rawExchange = (parsedSignal.exchange || cfg.defaultExchange).toUpperCase();
+		const exchange = resolveExchangeAlias(rawExchange) || cfg.defaultExchange;
 		const timeframe = normalizeTradingViewTimeframe(parsedSignal.timeframe || parsedSignal.rawTimeframe, cfg.defaultTimeframe);
 
 		// Create an overall budget controller for the enrichment timeout.
@@ -311,7 +350,11 @@ class TradingViewMcpService {
 			} finally {
 				clearTimeout(attemptTimeoutId);
 			}
-		}, cfg.maxRetries, this.logger, { signal: baseSignal, maxRetryDelayMs: retryDelayCapMs });
+		}, cfg.maxRetries, this.logger, {
+			signal: baseSignal,
+			maxRetryDelayMs: retryDelayCapMs,
+			shouldStop: ({ error }) => Boolean(error && /No data found|symbol not supported|unsupported (symbol|exchange)/i.test(error.error || '')),
+		});
 		cleanBaseBudget();
 
 		// Budget still applies for volume confirmation, but the budget timer
@@ -411,22 +454,47 @@ class TradingViewMcpService {
 
 	async callCoinAnalysis({ symbol, exchange, timeframe, signal }) {
 		return this._withRuntimeStatus(async () => {
-			const rpcResult = await this._callTool('coin_analysis', {
-				symbol,
-				exchange,
-				timeframe,
-			}, { signal });
-			const normalizedResult = this._unwrapSchemaResult(rpcResult);
+			const aliasedExchange = resolveExchangeAlias(exchange) || exchange;
+			const result = await sendWithRetry(async () => {
+				try {
+					const rpcResult = await this._callTool('coin_analysis', {
+						symbol,
+						exchange: aliasedExchange,
+						timeframe,
+					}, { signal });
+					const normalizedResult = this._unwrapSchemaResult(rpcResult);
 
-			if (normalizedResult && normalizedResult.error) {
-				throw new Error(normalizedResult.error);
+					if (normalizedResult && normalizedResult.error) {
+						throw new Error(normalizedResult.error);
+					}
+
+					if (!normalizedResult || typeof normalizedResult !== 'object' || Array.isArray(normalizedResult)) {
+						throw new Error('TradingView MCP coin_analysis returned invalid payload');
+					}
+
+					return {
+						success: true,
+						channel: 'tradingview-mcp',
+						normalizedResult,
+						aliasedExchange,
+					};
+				} catch (error) {
+					return {
+						success: false,
+						channel: 'tradingview-mcp',
+						error: error.message,
+						deterministic: this._isDeterministicMissError(error),
+					};
+				}
+			}, this.getConfig().maxRetries, this.logger, {
+				signal,
+				shouldStop: ({ error }) => Boolean(error && error.deterministic),
+			});
+
+			if (!result.success) {
+				throw new Error(result.error || 'TradingView MCP coin_analysis failed');
 			}
-
-			if (!normalizedResult || typeof normalizedResult !== 'object' || Array.isArray(normalizedResult)) {
-				throw new Error('TradingView MCP coin_analysis returned invalid payload');
-			}
-
-			return normalizedResult;
+			return result.normalizedResult;
 		}, { signal });
 	}
 
