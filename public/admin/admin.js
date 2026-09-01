@@ -561,6 +561,34 @@ const statusCounts = (entries) => entries.reduce((counts, [, detail]) => {
 	return counts;
 }, {});
 
+const statusNeedsAttention = (detail) => !['ready', 'disabled'].includes(detail.status);
+
+const statusDetailFields = [
+	['configured', 'Configured'],
+	['enabled', 'Enabled'],
+	['lastCheckedAt', 'Last checked', true],
+	['lastSuccessAt', 'Last success', true],
+	['lastFailureAt', 'Last failure', true],
+	['lastErrorCategory', 'Last error'],
+	['successCount', 'Successes'],
+	['failureCount', 'Failures'],
+	['mode', 'Mode'],
+	['backend', 'Backend'],
+	['role', 'Worker role'],
+	['running', 'Running'],
+	['shutdownRequested', 'Shutdown requested'],
+	['isEvaluating', 'Evaluating'],
+	['source', 'Source'],
+	['templateVersion', 'Template version'],
+	['consecutiveFailures', 'Consecutive failures'],
+	['lastRunAt', 'Last run', true],
+	['lastRunDurationMs', 'Last run duration (ms)'],
+	['lastRunScannedCount', 'Last run scanned'],
+	['lastRunEvaluatedCount', 'Last run evaluated'],
+	['lastRunPendingCount', 'Last run pending'],
+	['lastRunErrorCount', 'Last run errors'],
+];
+
 const SENTIMENT_TONES = {
 	bullish: 'status-ready',
 	bearish: 'status-danger',
@@ -594,8 +622,8 @@ const RESULT_STATUS_TONES = {
 };
 
 const createStatusBadge = (status, tones) => element('span', {
-	className: `status-badge ${(tones && tones[status]) || 'status-misconfigured'}`,
-	text: displayLabel(status),
+	className: `status-badge ${(tones && tones[status]) || `status-${statusTone(status)}`}`,
+	text: tones ? displayLabel(status) : displayStatus(status),
 });
 
 const createMeter = (fraction, labelText) => {
@@ -1204,13 +1232,33 @@ const createMetricCard = (label, value, meta) => {
 	return card;
 };
 
-const renderStatusCards = (container, entries, emptyText) => {
+const renderStatusCards = (container, entries, emptyText, { detailed = false } = {}) => {
 	container.replaceChildren();
 	if (!entries.length) {
 		container.append(createEmptyState(emptyText));
 		return;
 	}
 	entries.forEach(([name, detail]) => {
+		if (detailed) {
+			const card = element('details', { className: 'status-card status-detail-card' });
+			const summary = element('summary', { className: 'status-detail-summary' });
+			const copy = element('div');
+			copy.append(
+				element('strong', { text: displayLabel(name) }),
+				element('small', { text: detail.provider ? `Provider: ${detail.provider}` : displayStatus(detail.status) }),
+			);
+			summary.append(copy, createStatusBadge(detail.status));
+			const list = element('dl', { className: 'status-detail-list' });
+			statusDetailFields.forEach(([key, label, timestamp]) => {
+				if (detail[key] === undefined || detail[key] === null || detail[key] === '') return;
+				const value = element('dd');
+				value.append(timestamp ? createTimestamp(detail[key]) : element('span', { text: String(detail[key]) }));
+				list.append(element('dt', { text: label }), value);
+			});
+			card.append(summary, list);
+			container.append(card);
+			return;
+		}
 		const card = element('article', { className: 'status-card' });
 		const copy = element('div');
 		copy.append(
@@ -1226,7 +1274,26 @@ const renderStatusCards = (container, entries, emptyText) => {
 	});
 };
 
-const renderStatusDashboard = ({ metrics, channelGrid, dependencyGrid, featureGrid, lastChecked }, status) => {
+const renderStatusDependencies = (container, entries, filter = 'all', search = '') => {
+	const query = String(search).trim().toLowerCase();
+	const filtered = entries
+		.filter(([name, detail]) => {
+			const toneMatches = filter === 'all'
+				|| (filter === 'attention' && statusNeedsAttention(detail))
+				|| (filter === 'ready' && detail.status === 'ready')
+				|| (filter === 'disabled' && detail.status === 'disabled')
+				|| (filter === 'unknown' && statusTone(detail.status) === 'unknown');
+			const searchable = `${displayLabel(name)} ${detail.provider || ''} ${displayStatus(detail.status)}`.toLowerCase();
+			return toneMatches && (!query || searchable.includes(query));
+		})
+		.sort(([leftName, left], [rightName, right]) => {
+			const priority = (detail) => detail.status === 'ready' ? 2 : detail.status === 'disabled' ? 1 : 0;
+			return priority(left) - priority(right) || displayLabel(leftName).localeCompare(displayLabel(rightName));
+		});
+	renderStatusCards(container, filtered, 'No dependencies match these filters.', { detailed: true });
+};
+
+const renderStatusDashboard = ({ metrics, channelGrid, dependencyGrid, featureGrid, lastChecked }, status, { renderDependencies } = {}) => {
 	const service = asObject(status.service);
 	const features = Object.entries(asObject(status.featureFlags)).filter(([, enabled]) => enabled === true);
 	const channels = statusEntries(status.deliveryChannels);
@@ -1243,7 +1310,8 @@ const renderStatusDashboard = ({ metrics, channelGrid, dependencyGrid, featureGr
 	lastChecked.textContent = `Last checked ${new Date().toLocaleTimeString()}`;
 
 	renderStatusCards(channelGrid, channels, 'No delivery channels reported.');
-	renderStatusCards(dependencyGrid, dependencies, 'No dependencies reported.');
+	if (typeof renderDependencies === 'function') renderDependencies(dependencies);
+	else renderStatusCards(dependencyGrid, dependencies, 'No dependencies reported.');
 	featureGrid.replaceChildren();
 	if (!features.length) {
 		featureGrid.append(element('p', { className: 'request-state', text: 'No feature flags are enabled.' }));
@@ -1253,6 +1321,109 @@ const renderStatusDashboard = ({ metrics, channelGrid, dependencyGrid, featureGr
 		className: 'capability-chip',
 		text: displayLabel(name),
 	})));
+};
+
+const createStatusExplorer = () => {
+	const dashboard = element('div', { className: 'dashboard' });
+	const hero = element('section', { className: 'dashboard-hero' });
+	const heroCopy = element('div');
+	const lastChecked = element('p', { className: 'request-state', text: 'Waiting for live status…' });
+	heroCopy.append(
+		element('p', { className: 'eyebrow', text: 'Runtime status' }),
+		element('h2', { text: 'Status' }),
+		element('p', { text: 'Inspect dependency readiness, delivery channels and worker health.' }),
+		lastChecked,
+	);
+	const refreshButton = element('button', { className: 'button-primary', text: 'Refresh status' });
+	refreshButton.type = 'button';
+	hero.append(heroCopy, refreshButton);
+
+	const metrics = element('div', { className: 'metric-grid' });
+	metrics.append(element('p', { className: 'request-state', text: 'Loading live status…' }));
+	const channelGrid = element('div', { className: 'status-grid' });
+	const dependencyGrid = element('div', { className: 'status-grid' });
+	const featureGrid = element('div', { className: 'chip-grid' });
+	const searchLabel = element('label', { text: 'Search dependencies' });
+	const search = element('input');
+	search.name = 'dependency-search';
+	search.type = 'search';
+	search.placeholder = 'Name, provider or status';
+	searchLabel.append(search);
+	const toneLabel = element('label', { text: 'Filter by status' });
+	const tone = element('select');
+	tone.name = 'dependency-tone';
+	[
+		['all', 'All statuses'],
+		['attention', 'Needs attention'],
+		['ready', 'Ready'],
+		['disabled', 'Disabled'],
+		['unknown', 'Unknown'],
+	].forEach(([value, text]) => {
+		const option = element('option', { text });
+		option.value = value;
+		tone.append(option);
+	});
+	toneLabel.append(tone);
+	const filters = element('div', { className: 'status-filter-bar' });
+	filters.append(searchLabel, toneLabel);
+
+	const statusOutput = element('pre', { className: 'response-block', text: 'No status response yet.' });
+	let lastRawStatus = '';
+	const rawCopyButton = createCopyButton(() => lastRawStatus, 'Copy JSON');
+	rawCopyButton.hidden = true;
+	const rawStatus = element('details', { className: 'raw-status' });
+	rawStatus.append(
+		element('summary', { text: 'Show raw status response' }),
+		rawCopyButton,
+		statusOutput,
+	);
+
+	const section = (title, content) => {
+		const node = element('section', { className: 'dashboard-section' });
+		node.append(element('h3', { text: title }), content);
+		return node;
+	};
+	dashboard.append(
+		hero,
+		metrics,
+		section('Delivery channels', channelGrid),
+		section('Dependency filters', filters),
+		section('Dependency health', dependencyGrid),
+		section('Enabled capabilities', featureGrid),
+		rawStatus,
+	);
+
+	let dependencies = [];
+	const renderDependencies = () => renderStatusDependencies(dependencyGrid, dependencies, tone.value, search.value);
+	search.addEventListener('input', renderDependencies);
+	tone.addEventListener('change', renderDependencies);
+	const loadStatus = async () => {
+		lastRawStatus = '';
+		rawCopyButton.hidden = true;
+		const status = await sendRequest({
+			definition: STATUS_DEFINITION,
+			path: STATUS_DEFINITION.path,
+			button: refreshButton,
+			output: statusOutput,
+		});
+		if (status && typeof status === 'object') {
+			lastRawStatus = window.CabrosAdminRequest.redactSecret(
+				JSON.stringify(status, null, 2),
+				getElement('api-key')?.value || '',
+			);
+			rawCopyButton.hidden = false;
+			dependencies = statusEntries(status.dependencies);
+			renderStatusDashboard({ metrics, channelGrid, dependencyGrid, featureGrid, lastChecked }, status, { renderDependencies });
+		} else {
+			dependencies = [];
+			renderDependencies();
+			metrics.replaceChildren(element('p', { className: 'request-state', text: 'Status unavailable. Check the API key and service logs.' }));
+		}
+	};
+	refreshButton.addEventListener('click', () => { loadStatus(); });
+	if (getElement('api-key')?.value || (authState.enabled && authState.user)) loadStatus();
+	else metrics.replaceChildren(element('p', { className: 'request-state', text: 'Enter an API key to load live status.' }));
+	return dashboard;
 };
 
 const createOverviewDashboard = () => {
@@ -1310,14 +1481,17 @@ const createOverviewDashboard = () => {
 			output: statusOutput,
 		});
 		if (status && typeof status === 'object') {
-			lastRawStatus = JSON.stringify(status, null, 2);
+			lastRawStatus = window.CabrosAdminRequest.redactSecret(
+				JSON.stringify(status, null, 2),
+				getElement('api-key')?.value || '',
+			);
 			rawCopyButton.hidden = false;
 			renderStatusDashboard({ metrics, channelGrid, dependencyGrid, featureGrid, lastChecked }, status);
 		} else {
 			metrics.replaceChildren(element('p', { className: 'request-state', text: 'Status unavailable. Check the API key and service logs.' }));
 		}
 	};
-	refreshButton.addEventListener('click', loadStatus);
+	refreshButton.addEventListener('click', () => { loadStatus(); });
 	if (getElement('api-key')?.value || (authState.enabled && authState.user)) {
 		loadStatus();
 	} else {
@@ -2853,6 +3027,10 @@ const renderView = async (name) => {
 		}
 		if (name === 'overview') {
 			view.append(createOverviewDashboard());
+			return;
+		}
+		if (name === 'status') {
+			view.append(createStatusExplorer());
 			return;
 		}
 		view.append(element('h2', { text: name[0].toUpperCase() + name.slice(1) }));
