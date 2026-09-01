@@ -624,6 +624,17 @@ describe('AlertStorageService', () => {
 	});
 
 	describe('listAlerts()', () => {
+		it('declares the composite Firestore index required by alerts pagination reads', () => {
+			const fs = require('fs');
+			const path = require('path');
+			const indexes = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../../firestore.indexes.json'), 'utf8'));
+			const alertsIndex = indexes.indexes.find(index => index.collectionGroup === 'alerts'
+				&& index.fields.some(field => field.fieldPath === 'receivedAt' && field.order === 'DESCENDING')
+				&& index.fields.some(field => field.fieldPath === '__name__' && field.order === 'DESCENDING'));
+
+			expect(alertsIndex).toBeDefined();
+		});
+
 		it('returns null when alert storage is disabled', async () => {
 			const result = await AlertStorageService.listAlerts({ limit: 10 });
 			expect(result).toBeNull();
