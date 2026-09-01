@@ -14,7 +14,7 @@ const getPrice = async (context) => {
 	const chatId = getChatId(context);
 	const text = (context.message && context.message.text) || '';
 	const messageSplited = text.trim().split(/\s+/);
-	const rawArg = messageSplited[1] || '';
+	const rawArg = messageSplited.slice(1).join(' ');
 	const symbols = parseSymbolList(rawArg);
 	const commandSpan = sentryService.startInactiveSpan({
 		name: 'telegram.command.precio',

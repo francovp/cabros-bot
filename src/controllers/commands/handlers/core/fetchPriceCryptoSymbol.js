@@ -295,13 +295,14 @@ async function fetchSymbolsPrices(symbols, options = {}) {
 	}
 	if (symbols.length > MAX_BATCH_SYMBOLS) {
 		const error = new Error(
-			`Máximo ${MAX_BATCH_SYMBOLS} símbolos por consulta. Recibidos: ${symbols.length}.`
+			`Máximo ${MAX_BATCH_SYMBOLS} símbolos por consulta. Recibidos: ${symbols.length}.`,
 		);
 		error.userMessage = `Máximo ${MAX_BATCH_SYMBOLS} símbolos por consulta. Recibidos: ${symbols.length}.`;
 		error.isUserFriendly = true;
 		throw error;
 	}
 
+	let equityQueue = Promise.resolve();
 	const settled = await Promise.allSettled(
 		symbols.map(async (raw) => {
 			const classification = classifyPriceQuery(raw);
@@ -318,10 +319,14 @@ async function fetchSymbolsPrices(symbols, options = {}) {
 				throw err;
 			}
 			if (classification.assetClass === 'equity') {
-				return fetchEquityPrice(classification.symbol, classification.exchange, options);
+				const result = equityQueue.then(() =>
+					fetchEquityPrice(classification.symbol, classification.exchange, options),
+				);
+				equityQueue = result.catch(() => {});
+				return result;
 			}
 			return fetchCryptoPrice(classification.symbol, options);
-		})
+		}),
 	);
 
 	return symbols.map((raw, idx) => {
@@ -330,6 +335,17 @@ async function fetchSymbolsPrices(symbols, options = {}) {
 			return { ...outcome.value, success: true };
 		}
 		const err = outcome.reason || new Error('Unknown error');
+		if (!err.isUserFriendly) {
+			sentryService.captureRuntimeError({
+				channel: 'telegram',
+				error: err,
+				extra: {
+					command: 'getPrice',
+					symbol: raw,
+					batchSize: symbols.length,
+				},
+			});
+		}
 		return {
 			symbol: raw,
 			assetClass: 'unknown',
