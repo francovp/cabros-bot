@@ -3,7 +3,7 @@
 const request = require('supertest');
 const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
-const { initializeNotificationServices } = require('../../src/controllers/webhooks/handlers/alert/alert');
+const { initializeNotificationServices, resetNotificationManagerForTesting } = require('../../src/controllers/webhooks/handlers/alert/alert');
 const { tradingViewMcpService } = require('../../src/services/tradingview/TradingViewMcpService');
 
 jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
@@ -32,6 +32,7 @@ describe('Dry-run mode for webhook alert endpoints', () => {
 		});
 
 		jest.clearAllMocks();
+		resetNotificationManagerForTesting();
 		tradingViewMcpService.callScanTool.mockResolvedValue({ items: [] });
 
 		mockTelegramSendMessage = jest.fn().mockResolvedValue({ message_id: 'test-msg-id' });

@@ -13,7 +13,7 @@ const {
 } = require('../../../../services/tradingview/marketScannerReport');
 const {
 	getNotificationManager,
-	initializeNotificationServices,
+	getOrInitializeNotificationManager,
 } = require('../alert/alert');
 const sentryService = require('../../../../services/monitoring/SentryService');
 const {
@@ -118,7 +118,7 @@ function postMarketScannerAlert(botOrGetter) {
 
 			let notificationManager = getNotificationManager();
 			if (!notificationManager) {
-				notificationManager = await initializeNotificationServices(resolveBot(botOrGetter));
+				notificationManager = await getOrInitializeNotificationManager(resolveBot(botOrGetter));
 			}
 
 			const deliveryResults = await sendWithNotificationRouting(

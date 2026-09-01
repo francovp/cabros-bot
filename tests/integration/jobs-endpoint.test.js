@@ -4,7 +4,7 @@ const request = require('supertest');
 const app = require('../../app');
 const admin = require('firebase-admin');
 const { getRoutes } = require('../../src/routes');
-const { initializeNotificationServices } = require('../../src/controllers/webhooks/handlers/alert/alert');
+const { initializeNotificationServices, resetNotificationManagerForTesting } = require('../../src/controllers/webhooks/handlers/alert/alert');
 const { tradingViewMcpService } = require('../../src/services/tradingview/TradingViewMcpService');
 const { jobRepository, _resetForTesting: resetJobRepository } = require('../../src/services/jobs/JobRepository');
 const alertStorageService = require('../../src/services/storage/AlertStorageService');
@@ -36,6 +36,7 @@ describe('Jobs API Integration Tests', () => {
 		});
 
 		jest.clearAllMocks();
+		resetNotificationManagerForTesting();
 		admin.__resetCollectionState();
 		alertStorageService._resetForTesting();
 		resetJobRepository();

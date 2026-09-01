@@ -23,7 +23,7 @@ const {
 const { getIdempotencyKey } = require('../../../../lib/idempotency');
 const {
 	getNotificationManager,
-	initializeNotificationServices,
+	getOrInitializeNotificationManager,
 } = require('../alert/alert');
 const sentryService = require('../../../../services/monitoring/SentryService');
 const {
@@ -441,7 +441,7 @@ function postRunPreset(botOrGetter) {
 				let notificationManager = getNotificationManager();
 				if (!notificationManager) {
 					try {
-						notificationManager = await initializeNotificationServices(resolveBot(botOrGetter));
+						notificationManager = await getOrInitializeNotificationManager(resolveBot(botOrGetter));
 					} catch (_) {}
 				}
 				const requestedChannels = getRequestedChannels(notificationManager, routing);
@@ -554,7 +554,7 @@ function postRunPreset(botOrGetter) {
 
 			let notificationManager = getNotificationManager();
 			if (!notificationManager) {
-				notificationManager = await initializeNotificationServices(resolveBot(botOrGetter));
+				notificationManager = await getOrInitializeNotificationManager(resolveBot(botOrGetter));
 			}
 
 			const deliveryResults = await sendWithNotificationRouting(

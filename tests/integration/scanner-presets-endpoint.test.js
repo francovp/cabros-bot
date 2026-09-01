@@ -11,7 +11,7 @@ const { generateKeyPairSync } = require('crypto');
 const request = require('supertest');
 const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
-const { initializeNotificationServices } = require('../../src/controllers/webhooks/handlers/alert/alert');
+const { initializeNotificationServices, resetNotificationManagerForTesting } = require('../../src/controllers/webhooks/handlers/alert/alert');
 const { tradingViewMcpService } = require('../../src/services/tradingview/TradingViewMcpService');
 const { _resetForTesting: resetScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
 
@@ -51,6 +51,7 @@ describe('Scanner presets API integration tests', () => {
 		jest.clearAllMocks();
 		admin.__resetCollectionState();
 		resetScannerPresetService();
+		resetNotificationManagerForTesting();
 		mockTelegramSendMessage = jest.fn().mockResolvedValue({ message_id: 'preset-msg-id' });
 		mockBot = {
 			telegram: {
