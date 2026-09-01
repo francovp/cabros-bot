@@ -1541,6 +1541,8 @@ Disabled by default preserves existing webhook behavior byte-for-byte.
 
 `.github/workflows/secret-scan.yml` runs the pinned Gitleaks Action on pushes to `master`, pull requests, and manual dispatch with full git history. It uses only the GitHub token and optional organization license secret; no application credentials are introduced. `.gitleaks.toml` narrowly allowlists the intentionally public Firebase browser key already tracked in `render.yaml`, without disabling other detections. `.github/workflows/node.js.yml` and `.github/workflows/env-drift-check.yml` now explicitly grant `contents: read` permissions. README documents secret storage and rotation for webhook, Binance, and Firebase service-account credentials.
 
+The `.pre-commit-config.yaml` gitleaks hook mirrors the CI scan at commit time: when the `gitleaks` binary is on `PATH`, it runs `gitleaks protect --staged --redact --no-banner --config .gitleaks.toml` against staged files only and blocks the commit on any finding. When the binary is missing locally the hook emits a warning and lets the commit proceed — the `secret-scan.yml` workflow still gates every push and PR, so the missing binary cannot bypass the gate on shared branches. `.env.example` documents the allowlisted patterns so contributors can verify expected behavior before installing the binary.
+
 This change is workflow/documentation-only: no application environment variable, Remote Config key, endpoint, OpenAPI, or Postman contract changed.
 
 ## Binance Market-Data Host Configuration (CB-244 / Issue #539)
