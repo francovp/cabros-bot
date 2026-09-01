@@ -1849,6 +1849,26 @@ Display the list of available Telegram bot commands, argument syntax, and aliase
 /help
 ```
 
+### /start deep-link enrollment
+
+`/start` accepts a Telegram deep-link payload so operators can publish a single `t.me/<bot>?start=<token>` link in any channel or rules message and onboard the clicker in one tap. Recognized tokens:
+
+- `enroll` — registers the chat as a new onboarding and sends a localized welcome with an inline "Add to group" keyboard.
+- `lang=es` / `lang=en` — sets the chat language preference for future bot replies.
+- `watch=BTCUSDT,ETHUSDT` — pre-populates the chat watchlist.
+- `ref=<token>` — records an operator-issued referral source.
+
+Multiple tokens can be combined with `&` (e.g. `lang=es&watch=BTCUSDT,ETHUSDT&ref=launch`). Invalid/malformed payloads are silently ignored and the user receives the generic welcome. The raw payload is never echoed back to the chat. When `ENABLE_CHAT_ENROLLMENTS=true`, enrollments are persisted to the `chatEnrollments` Firestore collection with a 90-day TTL (`CHAT_ENROLLMENT_RETENTION_DAYS` overrides).
+
+**Examples:**
+```
+https://t.me/<bot>?start=enroll
+https://t.me/<bot>?start=lang=en
+https://t.me/<bot>?startgroup=enroll
+```
+
+Operators can monitor the rollout with `GET /api/enrollments` (admin viewer) which returns the sanitized count, language distribution, and watchlist symbol distribution. Admin operators can additionally request `?includeChatIds=true` to receive the per-chat records.
+
 ### /precio `<symbol>`
 
 Get real-time price for crypto pairs (Binance) or equities/stocks (Twelve Data).

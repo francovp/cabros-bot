@@ -14,6 +14,7 @@ const INTEGER_RULES = {
 	RATE_LIMIT_WINDOW_MS: [1000, 86400000],
 	RATE_LIMIT_MAX: [1, 100000],
 	SIGNAL_OUTCOME_RETENTION_DAYS: [1, 3650],
+	CHAT_ENROLLMENT_RETENTION_DAYS: [1, 365],
 };
 
 function hasValue(value) {
@@ -154,6 +155,7 @@ function validateEnv(env = process.env) {
 		'ENABLE_FIRESTORE_IDEMPOTENCY',
 		'ENABLE_FIREBASE_REMOTE_CONFIG',
 		'ENABLE_SIGNAL_OUTCOME_TRACKING',
+		'ENABLE_CHAT_ENROLLMENTS',
 	].some((name) => isEnabled(env, name));
 	if (firestoreGateEnabled && !isFirestoreConfigured()) {
 		addInvalid(warnings, 'FIREBASE_CREDENTIALS', 'are not configured or readable for an enabled Firebase feature');

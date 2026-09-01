@@ -23,6 +23,7 @@ const {
 } = require('../controllers/webhooks/handlers/jobs/jobs');
 const { listAlerts, getAlertById, replayAlert, summarizeAlerts, exportAlerts, listReplays } = require('../controllers/alerts/alerts');
 const { listOutcomes, summarizeOutcomes } = require('../controllers/outcomes/outcomes');
+const { listEnrollments } = require('../controllers/webhooks/handlers/enrollments/enrollments');
 const { validateApiKey } = require('../lib/auth');
 const { getApiStatus } = require('../controllers/status');
 const { postBinanceOrder, getBinanceOrders, deleteBinanceOrder } = require('../controllers/trading/binanceOrders');
@@ -55,6 +56,7 @@ function getRoutes(botOrGetter) {
 	router.get('/alerts/:alertId', ...adminRead, getAlertById);
 	router.get('/outcomes', ...adminRead, listOutcomes);
 	router.get('/outcomes/summary', ...adminRead, summarizeOutcomes);
+	router.get('/enrollments', ...adminRead, listEnrollments);
 	router.post('/scanner-presets', ...adminWrite, postPreset);
 	router.get('/scanner-presets', ...adminRead, listPresets);
 	router.get('/scanner-presets/:id', ...adminRead, getPreset);

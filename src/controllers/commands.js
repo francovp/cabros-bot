@@ -4,6 +4,7 @@ const { getNewsMonitor } = require('./webhooks/handlers/newsMonitor/newsMonitor'
 const signalOutcomeService = require('../services/storage/SignalOutcomeService');
 const sentryService = require('../services/monitoring/SentryService');
 const { getTelegramCommandMenu } = require('../lib/telegramCommandMenu');
+const { createStartCommand } = require('./commands/handlers/start/startCommand');
 
 const getPrice = async (context) => {
 	const chatId = getChatId(context);
@@ -539,6 +540,10 @@ const helpCmd = async (context) => {
 	}
 };
 
+const startCmd = createStartCommand({
+	captureRuntimeError: (payload) => sentryService.captureRuntimeError(payload),
+});
+
 function getChatId(context) {
 	return context.update && context.update.message && context.update.message.chat && context.update.message.chat.id;
 }
@@ -629,6 +634,7 @@ module.exports = {
 	jobsCommand,
 	newsMonitorCmd,
 	helpCmd,
+	startCmd,
 	outcomesCommand,
 	buildHelpMessage,
 	getTelegramCommandMenu,

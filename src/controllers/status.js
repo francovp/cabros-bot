@@ -21,6 +21,7 @@ const geminiQuotaManager = require('../services/grounding/geminiQuotaManager');
 const groundingMetrics = require('../services/grounding/metrics');
 const { signalRepeatCooldown } = require('../services/alerts/signalRepeatCooldown');
 const { getCoalescingStatus } = require('../services/grounding/grounding');
+const chatEnrollmentsService = require('../services/enrollments/ChatEnrollmentsService');
 const {
 	getDeploymentCommit,
 	isPreviewEnvironment,
@@ -357,6 +358,7 @@ function getStatus() {
 			notificationRedrive: notificationRedriveService.isEnabled(),
 			alertSignalRepeatSuppression: signalRepeatCooldown.isEnabled(),
 			whatsappCommands: whatsAppCommandBridgeService.isEnabled(),
+			chatEnrollments: isEnabled(process.env.ENABLE_CHAT_ENROLLMENTS),
 		},
 		deliveryChannels: {
 			telegram: {
@@ -405,6 +407,7 @@ function getStatus() {
 			firebaseRemoteConfig: remoteConfigStatus,
 			scannerPresetStorage: scannerPresetService.getStorageStatus(),
 			scannerPresetScheduler: scannerPresetSchedulerService.getStatus(),
+			chatEnrollments: chatEnrollmentsService.getStorageStatus(),
 			newsMonitorScheduler: newsMonitorSchedulerService.getStatus(),
 			equityMarketData: equityMarketDataStatus,
 			signalOutcomeWorker: {

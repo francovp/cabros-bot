@@ -13,6 +13,7 @@ const {
 	jobsCommand,
 	newsMonitorCmd,
 	helpCmd,
+	startCmd,
 	outcomesCommand,
 } = require('./src/controllers/commands');
 const app = require('./app.js');
@@ -127,7 +128,10 @@ async function bootstrapApplication() {
 		bot.command(['jobs', 'trabajos'], jobsCommand);
 		bot.command(['noticias', 'news'], newsMonitorCmd);
 		bot.command(['outcomes', 'rendimiento'], outcomesCommand);
-		bot.command(['help', 'start'], helpCmd);
+		bot.command(['help'], helpCmd);
+		// bot.start intercepts /start with ctx.startPayload from t.me deep links,
+		// falling back to the generic help message when the payload is empty.
+		bot.start(startCmd);
 
 		// Attach Telegram error boundary
 		attachTelegramErrorBoundary(bot);
