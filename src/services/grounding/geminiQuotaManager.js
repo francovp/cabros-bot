@@ -14,7 +14,7 @@ class GeminiQuotaManager {
 		this.requestsInWindow = 0;
 		this.exhaustedEventsInWindow = 0;
 		this.lastExhaustedAt = null;
-		this.lastExhaustedAtMs = 0;
+		this.recordedQuotaErrors = new WeakSet();
 		this.lastTriggeredAt = null;
 		this.triggersTotal = 0;
 		this.braveFallbacksDuringCooldown = 0;
@@ -22,24 +22,22 @@ class GeminiQuotaManager {
 	}
 
 	_startWindowIfNeeded(now = Date.now()) {
-		const windowAnchor = this.lastExhaustedAtMs || this.windowStartedAt;
+		const windowAnchor = this.windowStartedAt;
 		if (windowAnchor === null || now - windowAnchor >= QUOTA_WINDOW_DURATION_MS) {
 			this.windowStartedAt = now;
 			this.requestsInWindow = 0;
 			this.exhaustedEventsInWindow = 0;
 			this.lastExhaustedAt = null;
-			this.lastExhaustedAtMs = 0;
 		}
 	}
 
 	_resetExpiredWindow() {
-		const windowAnchor = this.lastExhaustedAtMs || this.windowStartedAt;
+		const windowAnchor = this.windowStartedAt;
 		if (windowAnchor !== null && Date.now() - windowAnchor >= QUOTA_WINDOW_DURATION_MS) {
 			this.windowStartedAt = null;
 			this.requestsInWindow = 0;
 			this.exhaustedEventsInWindow = 0;
 			this.lastExhaustedAt = null;
-			this.lastExhaustedAtMs = 0;
 		}
 	}
 
@@ -116,9 +114,15 @@ class GeminiQuotaManager {
 		const delayMs = this.extractRetryDelayMs(error, attempt, baseDelayMs);
 		const now = Date.now();
 		this._startWindowIfNeeded(now);
-		this.exhaustedEventsInWindow += 1;
-		this.lastExhaustedAt = new Date(now).toISOString();
-		this.lastExhaustedAtMs = now;
+		const isObjectError = error !== null && (typeof error === 'object' || typeof error === 'function');
+		const isNewQuotaError = !isObjectError || !this.recordedQuotaErrors.has(error);
+		if (isObjectError) {
+			this.recordedQuotaErrors.add(error);
+		}
+		if (isNewQuotaError) {
+			this.exhaustedEventsInWindow += 1;
+			this.lastExhaustedAt = new Date(now).toISOString();
+		}
 		const newCooldownUntil = now + delayMs;
 		this.triggersTotal += 1;
 		this.lastTriggeredAt = new Date(now).toISOString();
@@ -235,7 +239,7 @@ class GeminiQuotaManager {
 		this.requestsInWindow = 0;
 		this.exhaustedEventsInWindow = 0;
 		this.lastExhaustedAt = null;
-		this.lastExhaustedAtMs = 0;
+		this.recordedQuotaErrors = new WeakSet();
 		this.lastTriggeredAt = null;
 		this.triggersTotal = 0;
 		this.braveFallbacksDuringCooldown = 0;

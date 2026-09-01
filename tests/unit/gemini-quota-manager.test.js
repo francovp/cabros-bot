@@ -235,4 +235,33 @@ describe('GeminiQuotaManager', () => {
 			quotaStatus: 'healthy',
 		}));
 	});
+
+	it('expires counters from the window start after a later quota exhaustion', () => {
+		jest.useFakeTimers().setSystemTime(new Date('2026-08-25T10:00:00.000Z'));
+
+		geminiQuotaManager.recordRequest();
+		jest.advanceTimersByTime(50000);
+		geminiQuotaManager.triggerQuotaCooldown({ status: 429, retryDelay: 0 });
+		jest.advanceTimersByTime(10001);
+
+		expect(geminiQuotaManager.getSnapshot()).toEqual(expect.objectContaining({
+			windowStartedAt: null,
+			requestsInWindow: 0,
+			exhaustedEventsInWindow: 0,
+			lastExhaustedAt: null,
+			quotaStatus: 'healthy',
+		}));
+	});
+
+	it('counts one quota exhaustion event once when the same error is retriggered', () => {
+		const error = { status: 429, retryDelay: 1000 };
+
+		geminiQuotaManager.triggerQuotaCooldown(error);
+		geminiQuotaManager.triggerQuotaCooldown(error);
+
+		expect(geminiQuotaManager.getSnapshot()).toEqual(expect.objectContaining({
+			exhaustedEventsInWindow: 1,
+			triggersTotal: 2,
+		}));
+	});
 });
