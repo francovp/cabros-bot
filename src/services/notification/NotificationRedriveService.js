@@ -165,6 +165,75 @@ function getRedriveRouting(channel, routing, repeatCooldown) {
 	return { ...(routing || {}), [field]: destination };
 }
 
+/**
+ * Build the channel-level redrive options that resume chunked delivery from
+ * the first undelivered chunk when the dead-letter record carries chunk
+ * metadata. Channels without chunked metadata fall back to the documented
+ * full-replay path (legacy records) and emit a single warning so the
+ * operator can clean them up manually.
+ */
+function buildChunkResumeOptions(claimed, channel) {
+	if (!claimed || !channel) {
+		return {};
+	}
+	if (channel !== 'whatsapp' && channel !== 'discord') {
+		return {};
+	}
+	const resume = claimed.chunkResume;
+	if (!resume || !Number.isInteger(resume.resumeFromChunk)) {
+		if (claimed.chunkResume === undefined) {
+			console.warn(`[NotificationRedriveService] Legacy dead-letter ${claimed.id} has no chunk metadata; replaying the full message`);
+		}
+		return {};
+	}
+	if (!Number.isInteger(resume.splitMessageCount) || resume.splitMessageCount <= 1) {
+		return {};
+	}
+	if (resume.resumeFromChunk >= resume.splitMessageCount) {
+		// No chunks left to retry — record already failed beyond the last chunk.
+		return {};
+	}
+	return { startChunk: resume.resumeFromChunk };
+}
+
+/**
+ * Extract chunk-resume context from a failed chunked delivery result so a
+ * later redrive can skip already-delivered chunks instead of replaying the
+ * full payload from chunk 1.
+ *
+ * Returns `null` when the failure is not chunked (single message or no
+ * `splitMessageCount`/`failedPart` metadata). Legacy records lacking these
+ * fields will fall back to the documented full-replay path.
+ */
+function extractChunkResumeContext(failure) {
+	if (!failure || typeof failure !== 'object') {
+		return null;
+	}
+	const splitMessageCount = Number.isInteger(failure.splitMessageCount) && failure.splitMessageCount > 1
+		? failure.splitMessageCount
+		: null;
+	const failedPart = Number.isInteger(failure.failedPart) && failure.failedPart > 0
+		? Math.min(failure.failedPart, splitMessageCount || failure.failedPart)
+		: null;
+	const messageCount = Number.isInteger(failure.messageCount) && failure.messageCount >= 0
+		? Math.min(failure.messageCount, splitMessageCount || failure.messageCount)
+		: null;
+	if (!splitMessageCount || !failedPart) {
+		return null;
+	}
+	const resumeFromChunk = Math.max(0, failedPart - 1);
+	const messageIds = Array.isArray(failure.messageIds)
+		? failure.messageIds.slice(0, messageCount ?? undefined).filter((id) => typeof id === 'string' && id.length > 0)
+		: [];
+	return {
+		splitMessageCount,
+		failedPart,
+		messageCount,
+		resumeFromChunk,
+		deliveredMessageIds: messageIds,
+	};
+}
+
 class NotificationRedriveService {
 	constructor(options = {}) {
 		this.inMemoryStore = new Map();
@@ -250,6 +319,7 @@ class NotificationRedriveService {
 		for (const failure of failures) {
 			const channel = failure.channel;
 			const recordId = `${alertId}_${channel}`;
+			const chunkResume = extractChunkResumeContext(failure);
 			const record = {
 				id: recordId,
 				alertId: String(alertId),
@@ -270,13 +340,14 @@ class NotificationRedriveService {
 				attemptCount: 0,
 				lastError: failure.error ? String(failure.error) : 'Unknown delivery failure',
 				lastStatusCode: typeof failure.statusCode === 'number' ? failure.statusCode : null,
-					repeatCooldown: options.repeatCooldown && options.repeatCooldown.key
-						? {
-							key: String(options.repeatCooldown.key),
-							channel: options.repeatCooldown.channelsByName?.[channel] || null,
-							reservedAt: options.repeatCooldown.reservedAt,
-							generation: options.repeatCooldown.generation ?? null,
-						}
+				chunkResume,
+				repeatCooldown: options.repeatCooldown && options.repeatCooldown.key
+					? {
+						key: String(options.repeatCooldown.key),
+						channel: options.repeatCooldown.channelsByName?.[channel] || null,
+						reservedAt: options.repeatCooldown.reservedAt,
+						generation: options.repeatCooldown.generation ?? null,
+					}
 					: null,
 				createdAt: toTimestamp(nowDate),
 				updatedAt: toTimestamp(nowDate),
@@ -533,7 +604,7 @@ class NotificationRedriveService {
 		return true;
 	}
 
-	async markRetry(recordId, attemptCount, lastError, lastStatusCode) {
+	async markRetry(recordId, attemptCount, lastError, lastStatusCode, chunkResume) {
 		const nowMs = Date.now();
 		const nowDate = new Date(nowMs);
 		const backoffMs = calculateBackoffMs(attemptCount);
@@ -548,6 +619,7 @@ class NotificationRedriveService {
 			updatedAt: toTimestamp(nowDate),
 			workerId: null,
 			leaseUntil: null,
+			...(chunkResume !== undefined ? { chunkResume } : {}),
 		};
 
 		const sanitized = stripUndefinedFieldsDeep(updateData);
@@ -1023,6 +1095,7 @@ class NotificationRedriveService {
 						...(claimed.alert || {}),
 						...(claimed.destinationOverride || {}),
 					};
+					const chunkResumeOptions = buildChunkResumeOptions(claimed, claimed.channel);
 
 					let results;
 					try {
@@ -1031,6 +1104,7 @@ class NotificationRedriveService {
 							[claimed.channel],
 							{
 								...options,
+								...chunkResumeOptions,
 								isRedrive: true,
 								parentSpan: options.parentSpan,
 								signal: dispatchSignal,
@@ -1065,6 +1139,7 @@ class NotificationRedriveService {
 						const nextAttempts = (claimed.attemptCount || 0) + 1;
 						const lastErr = channelResult?.error || 'Redrive attempt failed';
 						const lastCode = channelResult?.statusCode || null;
+						const chunkResume = extractChunkResumeContext(channelResult) || claimed.chunkResume;
 
 						if (nextAttempts >= maxAttempts) {
 							releaseRepeatCooldown(claimed);
@@ -1072,6 +1147,7 @@ class NotificationRedriveService {
 								lastError: String(lastErr),
 								lastStatusCode: lastCode,
 								attemptCount: nextAttempts,
+								chunkResume,
 							});
 							this.totalExhaustedCount += 1;
 							trackBackgroundTask(this.notifyAdminPermanentFailure({
@@ -1081,7 +1157,7 @@ class NotificationRedriveService {
 							}, 'Exhausted maximum retry attempts')).catch(() => {});
 							errorCount += 1;
 						} else {
-							await this.markRetry(claimed.id, nextAttempts, lastErr, lastCode);
+							await this.markRetry(claimed.id, nextAttempts, lastErr, lastCode, chunkResume);
 							errorCount += 1;
 						}
 					}

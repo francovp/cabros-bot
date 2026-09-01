@@ -1198,4 +1198,262 @@ describe('NotificationRedriveService', () => {
 			});
 		});
 	});
+
+	describe('chunk resume', () => {
+		it('persists chunk metadata on the dead-letter record when the failed delivery is chunked', async () => {
+			const alert = { text: 'Chunked alert', correlationId: 'corr-chunk-1' };
+			const results = [
+				{
+					channel: 'whatsapp',
+					success: false,
+					error: 'Mid-sequence chunk failed',
+					statusCode: 502,
+					messageIds: ['msg-a', 'msg-b'],
+					messageCount: 2,
+					splitMessageCount: 5,
+					failedPart: 3,
+				},
+			];
+
+			await service.recordDeliveryResults(alert, results);
+
+			const stored = service.inMemoryStore.get('corr-chunk-1_whatsapp');
+			expect(stored.chunkResume).toEqual({
+				splitMessageCount: 5,
+				failedPart: 3,
+				messageCount: 2,
+				resumeFromChunk: 2,
+				deliveredMessageIds: ['msg-a', 'msg-b'],
+			});
+		});
+
+		it('omits chunk metadata when the failed delivery is not chunked', async () => {
+			const alert = { text: 'Single alert', correlationId: 'corr-single' };
+			const results = [
+				{ channel: 'whatsapp', success: false, error: 'Single chunk failed', statusCode: 500 },
+			];
+
+			await service.recordDeliveryResults(alert, results);
+
+			const stored = service.inMemoryStore.get('corr-single_whatsapp');
+			expect(stored.chunkResume).toBeNull();
+		});
+
+		it('passes startChunk = failedPart - 1 to the channel service on redrive', async () => {
+			const whatsappSend = jest.fn().mockResolvedValue({
+				success: true,
+				channel: 'whatsapp',
+				messageIds: ['msg-c', 'msg-d', 'msg-e'],
+				messageCount: 3,
+				splitMessageCount: 5,
+			});
+			const notificationManager = {
+				channels: new Map([['whatsapp', { name: 'whatsapp', send: whatsappSend, isEnabled: () => true }]]),
+				sendToChannels: jest.fn(async (payload, channels, opts) => [{
+					channel: channels[0],
+					...(await whatsappSend(payload, opts)),
+				}]),
+			};
+			service.setNotificationManagerGetter(() => notificationManager);
+
+			await service.recordDeliveryResults(
+				{ text: 'Chunked', correlationId: 'corr-resume' },
+				[{
+					channel: 'whatsapp',
+					success: false,
+					error: 'Part 3 failed',
+					statusCode: 502,
+					messageIds: ['msg-a', 'msg-b'],
+					messageCount: 2,
+					splitMessageCount: 5,
+					failedPart: 3,
+				}],
+			);
+
+			const item = service.inMemoryStore.get('corr-resume_whatsapp');
+			item.nextAttemptAt = Date.now() - 1000;
+			await service.sweep();
+
+			expect(whatsappSend).toHaveBeenCalledTimes(1);
+			expect(whatsappSend.mock.calls[0][1]).toMatchObject({ startChunk: 2, isRedrive: true });
+		});
+
+		it('advances the resume point after a later redrive chunk fails', async () => {
+			const whatsappSend = jest.fn()
+				.mockResolvedValueOnce({
+					success: false,
+					channel: 'whatsapp',
+					error: 'Part 4 failed',
+					statusCode: 502,
+					messageIds: ['msg-c'],
+					messageCount: 1,
+					splitMessageCount: 5,
+					failedPart: 4,
+				})
+				.mockResolvedValueOnce({
+					success: true,
+					channel: 'whatsapp',
+					messageIds: ['msg-d', 'msg-e'],
+					messageCount: 2,
+					splitMessageCount: 5,
+				});
+			const notificationManager = {
+				channels: new Map([['whatsapp', { name: 'whatsapp', send: whatsappSend, isEnabled: () => true }]]),
+				sendToChannels: jest.fn(async (payload, channels, opts) => [{
+					channel: channels[0],
+					...(await whatsappSend(payload, opts)),
+				}]),
+			};
+			service.setNotificationManagerGetter(() => notificationManager);
+
+			await service.recordDeliveryResults(
+				{ text: 'Chunked', correlationId: 'corr-resume-progress' },
+				[{
+					channel: 'whatsapp',
+					success: false,
+					error: 'Part 3 failed',
+					statusCode: 502,
+					messageIds: ['msg-a', 'msg-b'],
+					messageCount: 2,
+					splitMessageCount: 5,
+					failedPart: 3,
+				}],
+			);
+
+			service.inMemoryStore.get('corr-resume-progress_whatsapp').nextAttemptAt = Date.now() - 1000;
+			await service.sweep();
+			service.inMemoryStore.get('corr-resume-progress_whatsapp').nextAttemptAt = Date.now() - 1000;
+			await service.sweep();
+
+			expect(whatsappSend.mock.calls).toHaveLength(2);
+			expect(whatsappSend.mock.calls[0][1]).toMatchObject({ startChunk: 2, isRedrive: true });
+			expect(whatsappSend.mock.calls[1][1]).toMatchObject({ startChunk: 3, isRedrive: true });
+		});
+
+		it('does not pass startChunk on legacy dead-letter records without chunk metadata', async () => {
+			const whatsappSend = jest.fn().mockResolvedValue({
+				success: true,
+				channel: 'whatsapp',
+				messageIds: ['msg-z'],
+				messageCount: 1,
+			});
+			const notificationManager = {
+				channels: new Map([['whatsapp', { name: 'whatsapp', send: whatsappSend, isEnabled: () => true }]]),
+				sendToChannels: jest.fn(async (payload, channels, opts) => [{
+					channel: channels[0],
+					...(await whatsappSend(payload, opts)),
+				}]),
+			};
+			service.setNotificationManagerGetter(() => notificationManager);
+
+			// Inject a legacy record directly (no chunkResume)
+			const nowMs = Date.now();
+			mockDocs.set('legacy_whatsapp', {
+				id: 'legacy_whatsapp',
+				alertId: 'legacy',
+				channel: 'whatsapp',
+				status: 'pending',
+				alert: { text: 'Legacy alert' },
+				attemptCount: 0,
+				lastError: 'Legacy failure',
+				createdAt: { toDate: () => new Date(nowMs - 60000) },
+				updatedAt: { toDate: () => new Date(nowMs - 60000) },
+				nextAttemptAt: { toDate: () => new Date(nowMs - 1000) },
+				expiresAt: { toDate: () => new Date(nowMs + 600000) },
+				claimedAt: null,
+				leaseUntil: null,
+				workerId: null,
+				terminalAt: null,
+				deliveredAt: null,
+			});
+			alertStorageService.getFirestore.mockReturnValue(mockFirestore);
+
+			const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+			try {
+				await service.sweep();
+				expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Legacy dead-letter legacy_whatsapp'));
+			} finally {
+				warnSpy.mockRestore();
+			}
+
+			expect(whatsappSend).toHaveBeenCalledTimes(1);
+			expect(whatsappSend.mock.calls[0][1]).not.toHaveProperty('startChunk');
+			expect(whatsappSend.mock.calls[0][1].isRedrive).toBe(true);
+		});
+
+		it('skips startChunk for non-chunkable channels like telegram', async () => {
+			const telegramSend = jest.fn().mockResolvedValue({
+				success: true,
+				channel: 'telegram',
+				messageId: 'msg-x',
+			});
+			const notificationManager = {
+				channels: new Map([['telegram', { name: 'telegram', send: telegramSend, isEnabled: () => true }]]),
+				sendToChannels: jest.fn(async (payload, channels, opts) => [{
+					channel: channels[0],
+					...(await telegramSend(payload, opts)),
+				}]),
+			};
+			service.setNotificationManagerGetter(() => notificationManager);
+
+			await service.recordDeliveryResults(
+				{ text: 'Telegram', correlationId: 'corr-tg' },
+				[{
+					channel: 'telegram',
+					success: false,
+					error: 'Network',
+					// Even if a chunk-like payload is supplied, telegram is single-shot
+					splitMessageCount: 1,
+					failedPart: 1,
+				}],
+			);
+
+			const item = service.inMemoryStore.get('corr-tg_telegram');
+			item.nextAttemptAt = Date.now() - 1000;
+			await service.sweep();
+
+			expect(telegramSend).toHaveBeenCalledTimes(1);
+			expect(telegramSend.mock.calls[0][1]).not.toHaveProperty('startChunk');
+		});
+
+		it('records a delivered dead-letter after a chunk-resume redrive succeeds', async () => {
+			const whatsappSend = jest.fn().mockResolvedValue({
+				success: true,
+				channel: 'whatsapp',
+				messageIds: ['msg-c', 'msg-d', 'msg-e'],
+				messageCount: 3,
+				splitMessageCount: 5,
+			});
+			const notificationManager = {
+				channels: new Map([['whatsapp', { name: 'whatsapp', send: whatsappSend, isEnabled: () => true }]]),
+				sendToChannels: jest.fn(async (payload, channels, opts) => [{
+					channel: channels[0],
+					...(await whatsappSend(payload, opts)),
+				}]),
+			};
+			service.setNotificationManagerGetter(() => notificationManager);
+
+			await service.recordDeliveryResults(
+				{ text: 'Chunked', correlationId: 'corr-resume-ok' },
+				[{
+					channel: 'whatsapp',
+					success: false,
+					error: 'Part 3 failed',
+					statusCode: 502,
+					messageIds: ['msg-a', 'msg-b'],
+					messageCount: 2,
+					splitMessageCount: 5,
+					failedPart: 3,
+				}],
+			);
+
+			const item = service.inMemoryStore.get('corr-resume-ok_whatsapp');
+			item.nextAttemptAt = Date.now() - 1000;
+			await service.sweep();
+
+			const finalState = service.inMemoryStore.get('corr-resume-ok_whatsapp');
+			expect(finalState.status).toBe('delivered');
+			expect(whatsappSend.mock.calls[0][1].startChunk).toBe(2);
+		});
+	});
 });

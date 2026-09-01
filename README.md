@@ -1713,7 +1713,7 @@ Sources:
 - Discord retries 429 rate-limit responses with up to `DISCORD_MAX_RETRIES` additional attempts (default: `2`, up to 3 total attempts) per chunk using `Retry-After` backoff bounded by `DISCORD_MAX_TOTAL_RETRY_WAIT_MS`
 - Telegram retries 429 rate-limit responses up to 2 times
 
-**Message Chunking**: Payloads exceeding provider length limits (20,000 characters for WhatsApp, 2,000 characters for Discord) are automatically split into sequential chunks that deliver and retry independently; earlier delivered chunks are preserved if a later chunk fails.
+**Message Chunking**: Payloads exceeding provider length limits (20,000 characters for WhatsApp, 2,000 characters for Discord) are automatically split into sequential chunks that deliver and retry independently; earlier delivered chunks are preserved if a later chunk fails. When the redrive worker retries a dead-lettered chunked delivery, it resumes from the first undelivered chunk instead of replaying chunks already received by the chat (legacy dead-letter records without chunk metadata fall back to a full replay and are logged).
 
 **Graceful Degradation**: If one channel fails
 - Other channels still receive the alert

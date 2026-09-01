@@ -342,8 +342,12 @@ class WhatsAppService extends NotificationChannel {
 		const messageIds = [];
 		const startedAt = Date.now();
 		let totalAttempts = 0;
+		const isChunked = messageChunks.length > 1;
+		const resumeFromChunk = Number.isInteger(options.startChunk) && options.startChunk > 0
+			? Math.min(options.startChunk, messageChunks.length - 1)
+			: 0;
 
-		for (let index = 0; index < messageChunks.length; index += 1) {
+		for (let index = resumeFromChunk; index < messageChunks.length; index += 1) {
 			const includePreview = index === 0;
 			const result = await sendWithRetry(
 				({ signal } = {}) => this._sendMessageChunk(messageChunks[index], {
@@ -368,8 +372,11 @@ class WhatsAppService extends NotificationChannel {
 					category: result.category || 'PROVIDER_ERROR',
 					attemptCount: totalAttempts,
 					durationMs: Date.now() - startedAt,
-					splitMessageCount: messageChunks.length,
-					failedPart: index + 1,
+					...(isChunked ? {
+						splitMessageCount: messageChunks.length,
+						failedPart: index + 1,
+						resumedFromChunk: resumeFromChunk,
+					} : {}),
 				};
 			}
 
@@ -386,7 +393,10 @@ class WhatsAppService extends NotificationChannel {
 			messageCount: messageIds.length,
 			attemptCount: totalAttempts,
 			durationMs: Date.now() - startedAt,
-			splitMessageCount: messageChunks.length,
+			...(isChunked ? {
+				splitMessageCount: messageChunks.length,
+				resumedFromChunk: resumeFromChunk,
+			} : {}),
 		};
 	}
 }
