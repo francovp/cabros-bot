@@ -756,7 +756,7 @@ describe('admin browser client', () => {
 		expect(requests.at(-1)[0]).toBe('/api/alerts?limit=10&before=cursor-2&source=webhook');
 	});
 
-	it('exposes source and enriched as select dropdowns with known alert sources', async () => {
+	it('exposes source suggestions while preserving custom alert sources', async () => {
 		const browser = createBrowser({
 			fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {}),
 		});
@@ -764,11 +764,14 @@ describe('admin browser client', () => {
 		await selectView(browser, 'alerts');
 
 		const listForm = findForm(browser.elementsById.view, 'GET /api/alerts');
-		const sourceSelect = listForm.elements.source;
+		const sourceInput = listForm.elements.source;
 		const enrichedSelect = listForm.elements.enriched;
-		expect(sourceSelect.tagName).toBe('SELECT');
+		expect(sourceInput.tagName).toBe('INPUT');
+		expect(sourceInput.attributes.list).toBe('alert-source-options');
 		expect(enrichedSelect.tagName).toBe('SELECT');
-		const sourceValues = sourceSelect.children.map((option) => option.value);
+		const sourceOptions = find(listForm, (node) => node.tagName === 'DATALIST');
+		expect(sourceOptions.attributes.id).toBe('alert-source-options');
+		const sourceValues = sourceOptions.children.map((option) => option.value);
 		expect(sourceValues).toEqual(expect.arrayContaining([
 			'', 'webhook', 'webhook-alert', 'webhook-message', 'news-monitor',
 			'alert-replay', 'market-scanner', 'expanded-analysis',

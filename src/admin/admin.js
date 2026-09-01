@@ -1418,7 +1418,9 @@ const createAlertListForm = () => {
 	);
 	const limit = addField(form, 'Limit', 'limit', { type: 'number', min: 1, max: 100, value: 50 });
 	const before = addField(form, 'Before cursor', 'before', { placeholder: 'nextBefore from the previous page' });
-	const source = addField(form, 'Source', 'source', { tag: 'select' });
+	const source = addField(form, 'Source', 'source', { placeholder: 'Any source, including custom values' });
+	source.setAttribute('list', 'alert-source-options');
+	const sourceOptions = element('datalist', { attributes: { id: 'alert-source-options' } });
 	[
 		['', 'All sources'],
 		['webhook', 'Webhook'],
@@ -1431,8 +1433,9 @@ const createAlertListForm = () => {
 	].forEach(([value, text]) => {
 		const option = element('option', { text });
 		option.value = value;
-		source.append(option);
+		sourceOptions.append(option);
 	});
+	form.append(sourceOptions);
 	const enriched = addField(form, 'Enriched', 'enriched', { tag: 'select' });
 	[
 		['', 'All alerts'],
