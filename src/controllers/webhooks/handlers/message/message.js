@@ -2,7 +2,7 @@ require('dotenv').config();
 const sentryService = require('../../../../services/monitoring/SentryService');
 const {
 	getNotificationManager,
-	initializeNotificationServices,
+	getOrInitializeNotificationManager,
 	resolveRequestId,
 } = require('../alert/alert');
 const {
@@ -168,8 +168,7 @@ function postMessage(botOrGetter) {
 
 				const bot = typeof botOrGetter === 'function' ? botOrGetter() : (botOrGetter || null);
 				if (bot) {
-					await initializeNotificationServices(bot);
-					notificationManager = getNotificationManager();
+					notificationManager = await getOrInitializeNotificationManager(bot);
 				}
 
 				if (!notificationManager) {

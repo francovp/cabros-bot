@@ -11,7 +11,7 @@ const {
 } = require('../../../../services/tradingview/expandedAnalysisAlertReport');
 const {
 	getNotificationManager,
-	initializeNotificationServices,
+	getOrInitializeNotificationManager,
 } = require('../alert/alert');
 const sentryService = require('../../../../services/monitoring/SentryService');
 const {
@@ -110,7 +110,7 @@ function postExpandedAnalysisAlert(botOrGetter) {
 
 			let notificationManager = getNotificationManager();
 			if (!notificationManager) {
-				notificationManager = await initializeNotificationServices(resolveBot(botOrGetter));
+				notificationManager = await getOrInitializeNotificationManager(resolveBot(botOrGetter));
 			}
 
 			const deliveryResults = await sendWithNotificationRouting(

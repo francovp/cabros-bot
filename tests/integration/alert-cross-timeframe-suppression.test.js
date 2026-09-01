@@ -3,7 +3,7 @@
 const request = require('supertest');
 const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
-const { initializeNotificationServices } = require('../../src/controllers/webhooks/handlers/alert/alert');
+const { initializeNotificationServices, resetNotificationManagerForTesting } = require('../../src/controllers/webhooks/handlers/alert/alert');
 const { crossTimeframeCooldown } = require('../../src/services/alerts/crossTimeframeCooldown');
 const alertStorageService = require('../../src/services/storage/AlertStorageService');
 
@@ -31,6 +31,7 @@ describe('Alert cross-timeframe duplicate suppression endpoint behavior', () => 
 		});
 
 		jest.clearAllMocks();
+		resetNotificationManagerForTesting();
 		crossTimeframeCooldown.reset();
 
 		mockTelegramSendMessage = jest.fn().mockResolvedValue({ message_id: 'test-msg-id' });
@@ -184,6 +185,7 @@ describe('Alert cross-timeframe duplicate suppression endpoint behavior', () => 
 			process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/111/webhook-token';
 			const mockFetch = jest.fn().mockResolvedValue({ ok: true, status: 204, json: async () => ({}) });
 			global.fetch = mockFetch;
+			resetNotificationManagerForTesting();
 			await initializeNotificationServices(mockBot);
 
 			// DiscordService also probes the webhook, so count only the executions
@@ -268,6 +270,7 @@ describe('Alert cross-timeframe duplicate suppression endpoint behavior', () => 
 		it('leaves no reservation behind when the deployment cannot deliver at all', async () => {
 			process.env.ENABLE_TELEGRAM_BOT = 'false';
 			process.env.ENABLE_API_ONLY_MODE = 'true';
+			resetNotificationManagerForTesting();
 			await initializeNotificationServices(mockBot);
 
 			const first = await post(DAILY_SELL).expect(200);

@@ -11,7 +11,7 @@ const { generateKeyPairSync } = require('crypto');
 const request = require('supertest');
 const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
-const { initializeNotificationServices } = require('../../src/controllers/webhooks/handlers/alert/alert');
+const { initializeNotificationServices, resetNotificationManagerForTesting } = require('../../src/controllers/webhooks/handlers/alert/alert');
 const { tradingViewMcpService } = require('../../src/services/tradingview/TradingViewMcpService');
 const { _resetForTesting: resetScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
 const signalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
@@ -52,6 +52,7 @@ describe('Scanner presets API integration tests', () => {
 		jest.clearAllMocks();
 		admin.__resetCollectionState();
 		resetScannerPresetService();
+		resetNotificationManagerForTesting();
 		mockTelegramSendMessage = jest.fn().mockResolvedValue({ message_id: 'preset-msg-id' });
 		mockBot = {
 			telegram: {
@@ -373,6 +374,7 @@ describe('Scanner presets API integration tests', () => {
 		process.env.WHATSAPP_API_URL = 'https://api.greenapi.com/waInstance123/';
 		process.env.WHATSAPP_API_KEY = 'test-whatsapp-key';
 		process.env.WHATSAPP_CHAT_ID = '120363000000000000@g.us';
+		resetNotificationManagerForTesting();
 
 		tradingViewMcpService.callScanTool.mockResolvedValueOnce([
 			{
