@@ -85,7 +85,9 @@ describe('Outcomes Controller Unit Tests', () => {
 
 			it('returns null for invalid windows', () => {
 				expect(parseWindow('2h')).toBeNull();
-				expect(parseWindow('1m')).toBeNull();
+				expect(parseWindow('1m')).toBe('1m');
+				expect(parseWindow('5m')).toBe('5m');
+				expect(parseWindow('1M')).toBe('1M');
 				expect(parseWindow(123)).toBeNull();
 			});
 		});
@@ -178,7 +180,7 @@ describe('Outcomes Controller Unit Tests', () => {
 
 			expect(res.statusCode).toBe(400);
 			expect(res._getJSONData()).toEqual({
-				error: 'Invalid window filter. Use 1h, 4h, 1D, or 1W.',
+				error: 'Invalid window filter. Use 1m, 5m, 15m, 30m, 1h, 4h, 1D, 1W, or 1M.',
 				code: 'INVALID_REQUEST',
 			});
 		});
@@ -379,7 +381,7 @@ describe('Outcomes Controller Unit Tests', () => {
 
 			expect(res.statusCode).toBe(400);
 			expect(res._getJSONData()).toEqual({
-				error: 'Invalid window filter. Use 1h, 4h, 1D, or 1W.',
+				error: 'Invalid window filter. Use 1m, 5m, 15m, 30m, 1h, 4h, 1D, 1W, or 1M.',
 				code: 'INVALID_REQUEST',
 			});
 		});

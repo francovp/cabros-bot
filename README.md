@@ -137,6 +137,8 @@ To report a vulnerability, see [`SECURITY.md`](./SECURITY.md) — the project do
 - `ENABLE_FIRESTORE_JOB_STORAGE` - Enable Firestore persistence for async TradingView jobs without enabling alert read APIs (`true` or `false`, default: `false`)
 - `ENABLE_FIRESTORE_IDEMPOTENCY` - Enable durable webhook idempotency persistence in Cloud Firestore (`true` or `false`, default: `false`)
 - `ENABLE_SIGNAL_OUTCOME_TRACKING` - Enable shadow-mode signal outcome recording and evaluation (`true` or `false`, default: `false`)
+- `SIGNAL_OUTCOME_WINDOWS` - Ordered comma-separated evaluation windows (`1m`, `5m`, `15m`, `30m`, `1h`, `4h`, `1D`, `1W`, or `1M`; default: `1h,4h,1D,1W`). Invalid, duplicate, or empty values fall back to the default.
+- `SIGNAL_OUTCOME_WINDOW_LABELS` - Optional JSON object mapping configured window keys to display labels (default: empty; omitted labels use the window key)
 - `SIGNAL_OUTCOME_RETENTION_DAYS` - Retention for `tradingSignalOutcomes` records in days (`1`-`3650`, default: `365`). New records get `expiresAt`; run `bash ops/configure-operational-collection-retention.sh` (or with `BACKFILL=true`) once per Firebase project to backfill legacy records and enable native Firestore TTL deletion.
 - `ENABLE_EQUITY_MARKET_DATA` - Opt in to equity/forex/index outcome evaluation for `NASDAQ`, `BATS`, `NYSE`, `AMEX`, `NYSE ARCA`, `FX_IDC`, and `SPCFD` signals (`true` or `false`, default: `false`)
 - `EQUITY_MARKET_DATA_PROVIDER` - Equity provider name; currently `twelve-data`
@@ -173,7 +175,7 @@ The `shadowModeMetrics` payload (also surfaced as the `X-Shadow-Mode-Metrics` re
 - `maxAdverseExcursionPercent` — worst observed `maxAdverseExcursion` across the window.
 - `coveragePercent` — `(totalSignalsEvaluated / totalSignalsReceived) * 100`. `isCoverageComplete` is `true` when every received signal was evaluated.
 - `populationNote` — human-readable coverage summary, e.g. `"Metrics represent 40 evaluated signals out of 50 total received signals (80% coverage)."`
-- `windows.<1h|4h|1D|1W>` — the same metric set scoped to a single evaluation window. Each block may include `bySide` (`BUY` / `SELL`) and `bySetupType` sub-blocks when at least one evaluated signal exists for that bucket.
+- `windows.<configured window>` — the same metric set scoped to one configured evaluation window. Only keys from `SIGNAL_OUTCOME_WINDOWS` are returned; each block may include `bySide` (`BUY` / `SELL`) and `bySetupType` sub-blocks when at least one evaluated signal exists for that bucket.
 - `drawdownProxy` — `averageMaxAdverseExcursionPercent` (mean of per-signal worst excursion) and `absoluteMaxAdverseExcursionPercent` (single worst excursion observed).
 - `falsePositiveCandidates` / `falsePositiveCandidatesCount` — up to 5 high-confidence signals (`|score| >= 0.75`, or news-monitor `|score| >= 0.7`) with `return < -1%` or `maxAdverseExcursion < -3%`.
 - `latencyCostMetadata` — `averageProcessingTimeMs` and aggregated `tokenUsage` (numeric-only fields, `inputTokens` / `outputTokens` / `totalCost`).
@@ -187,7 +189,7 @@ When signal-outcome tracking is disabled, or when no measurements exist in the r
 - `FIREBASE_REMOTE_CONFIG_LOAD_TIMEOUT_MS` - Maximum template-load wait (default: `10000`, maximum: `30000`)
 - `FIREBASE_REMOTE_CONFIG_MAX_AGE_MS` - Maximum age of a successful template before environment/default fallback (default: `3600000`, maximum: `604800000`)
 
-The initial allow-list contains news thresholds, timeouts, concurrency, quota retries, TradingView timeouts/retries, `SIGNAL_OUTCOME_RETENTION_DAYS` (retention in days between `1` and `3650`, default `365`), and `ENABLE_MESSAGE_FOOTER_METADATA`. Remote values are parsed as numbers/booleans and must satisfy the existing finite, integer, positive, and range constraints. Credentials, API keys, webhook authentication, route/security gates, and Telegram destinations are never read from Remote Config.
+The initial allow-list contains news thresholds, timeouts, concurrency, quota retries, TradingView timeouts/retries, `SIGNAL_OUTCOME_WINDOWS`, `SIGNAL_OUTCOME_WINDOW_LABELS`, `SIGNAL_OUTCOME_RETENTION_DAYS` (retention in days between `1` and `3650`, default `365`), and `ENABLE_MESSAGE_FOOTER_METADATA`. Remote values are parsed as numbers/booleans/strings and must satisfy the existing finite, integer, positive, range, or service-specific validation constraints. Credentials, API keys, webhook authentication, route/security gates, and Telegram destinations are never read from Remote Config.
 
 The service loads once at startup and refreshes on the bounded cadence; it does not fetch Remote Config per alert. `SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS` remains environment-only because the worker timer is created during process startup and is not a request-time setting. Disabled, unavailable, timed-out, stale, malformed, or invalid values fail open to the current environment/default behavior. The server-side Remote Config API is currently a Firebase Preview feature, so monitor its quota and error rate before enabling it in production. `firebase-admin` is upgraded to the Node 24-compatible 12.x line (`^12.1.0`, lockfile resolution `12.7.0`).
 
@@ -1463,7 +1465,7 @@ Query durably recorded signal outcomes record-by-record with pagination and filt
 - `symbol` - Filter by trading symbol (e.g. `BTCUSDT` or `BINANCE:BTCUSDT`)
 - `exchange` - Filter by exchange identifier (e.g. `BINANCE`, `NASDAQ`)
 - `status` - Filter by evaluation status (`pending`, `evaluated`, `unavailable`)
-- `window` - Filter by measurement window (`1h`, `4h`, `1D`, `1W`)
+- `window` - Filter by measurement window (`1m`, `5m`, `15m`, `30m`, `1h`, `4h`, `1D`, `1W`, `1M`)
 - `from` - Optional ISO-8601 lower bound timestamp
 - `to` - Optional ISO-8601 upper bound timestamp
 
@@ -1535,7 +1537,7 @@ Query aggregated performance and coverage metrics for recorded signal outcomes, 
 - `symbol` - Filter by trading symbol (e.g. `BTCUSDT` or `BINANCE:BTCUSDT`)
 - `exchange` - Filter by exchange identifier (e.g. `BINANCE`, `NASDAQ`)
 - `status` - Filter by evaluation status (`pending`, `evaluated`, `unavailable`)
-- `window` - Filter by measurement window (`1h`, `4h`, `1D`, `1W`)
+- `window` - Filter by measurement window (`1m`, `5m`, `15m`, `30m`, `1h`, `4h`, `1D`, `1W`, `1M`)
 - `from` - Optional ISO-8601 lower bound timestamp
 - `to` - Optional ISO-8601 upper bound timestamp
 
