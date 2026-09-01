@@ -332,6 +332,13 @@ class NotificationManager {
 						...options,
 						signal: options.signalByChannel?.[ch.name] || options.signal,
 					}))
+					.then((result) => {
+						this.recordDeliveryOutcome(ch.name, !!(result && result.success));
+						return result;
+					}, (error) => {
+						this.recordDeliveryOutcome(ch.name, false);
+						throw error;
+					})
 					.finally(() => {
 						sentryService.endSpan(sendSpan);
 					});
@@ -416,12 +423,6 @@ class NotificationManager {
 					messageId: r ? r.messageId : undefined,
 					error: r ? r.error : undefined,
 				}))));
-
-			for (const result of formattedResults) {
-				if (result && result.channel) {
-					this.recordDeliveryOutcome(result.channel, !!result.success);
-				}
-			}
 
 			return formattedResults;
 		}
@@ -523,6 +524,13 @@ class NotificationManager {
 						...options,
 						signal: options.signalByChannel?.[ch.name] || options.signal,
 					}))
+					.then((result) => {
+						this.recordDeliveryOutcome(ch.name, !!(result && result.success));
+						return result;
+					}, (error) => {
+						this.recordDeliveryOutcome(ch.name, false);
+						throw error;
+					})
 					.finally(() => {
 						sentryService.endSpan(sendSpan);
 					});
@@ -607,12 +615,6 @@ class NotificationManager {
 			messageId: r ? r.messageId : undefined,
 			error: r ? r.error : undefined,
 		}))));
-
-		for (const result of formattedResults) {
-			if (result && result.channel) {
-				this.recordDeliveryOutcome(result.channel, !!result.success);
-			}
-		}
 
 		return formattedResults;
 	}

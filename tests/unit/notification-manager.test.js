@@ -544,6 +544,35 @@ describe('NotificationManager delivery health counters', () => {
 		expect(health.telegram).toBeUndefined();
 	});
 
+	it('records each channel outcome when that channel settles', async () => {
+		let releaseSlowChannel;
+		const slowChannel = new Promise((resolve) => {
+			releaseSlowChannel = resolve;
+		});
+		const telegramService = {
+			name: 'telegram',
+			isEnabled: jest.fn(() => true),
+			send: jest.fn().mockResolvedValue({ success: true, channel: 'telegram', messageId: 'tg-fast' }),
+		};
+		const whatsappService = {
+			name: 'whatsapp',
+			isEnabled: jest.fn(() => true),
+			send: jest.fn(() => slowChannel),
+		};
+		const manager = new NotificationManager(telegramService, whatsappService);
+		manager.resetDeliveryHealth();
+
+		const delivery = manager.sendToAll({ text: 'BTC alert' });
+		await new Promise(setImmediate);
+
+		expect(manager.getDeliveryHealth().telegram.success).toBe(1);
+		expect(manager.getDeliveryHealth().whatsapp).toBeUndefined();
+
+		releaseSlowChannel({ success: true, channel: 'whatsapp', messageId: 'wa-slow' });
+		await delivery;
+		expect(manager.getDeliveryHealth().whatsapp.success).toBe(1);
+	});
+
 	it('omits channels that have never been observed', () => {
 		const telegramService = {
 			name: 'telegram',
@@ -590,4 +619,3 @@ describe('NotificationManager delivery health counters', () => {
 		expect(manager.getDeliveryHealth()).toEqual({});
 	});
 });
-
