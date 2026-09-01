@@ -119,6 +119,20 @@
       "description": "News cache retention TTL in hours",
       "valueType": "NUMBER"
     },
+    "NEWS_CACHE_MAX_ENTRIES": {
+      "defaultValue": {
+        "value": "5000"
+      },
+      "description": "Maximum entries held in the in-memory news cache before LRU eviction kicks in",
+      "valueType": "NUMBER"
+    },
+    "NEWS_DELIVERY_LOCK_MAX_ENTRIES": {
+      "defaultValue": {
+        "value": "1000"
+      },
+      "description": "Maximum entries held in the news cache deliveryLocks map before size-based eviction",
+      "valueType": "NUMBER"
+    },
     "BINANCE_FETCH_TIMEOUT_MS": {
       "defaultValue": {
         "value": "5000"
