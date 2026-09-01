@@ -769,7 +769,10 @@ describe('admin browser client', () => {
 		expect(sourceSelect.tagName).toBe('SELECT');
 		expect(enrichedSelect.tagName).toBe('SELECT');
 		const sourceValues = sourceSelect.children.map((option) => option.value);
-		expect(sourceValues).toEqual(expect.arrayContaining(['', 'webhook', 'webhook-alert', 'news-monitor', 'alert-replay']));
+		expect(sourceValues).toEqual(expect.arrayContaining([
+			'', 'webhook', 'webhook-alert', 'webhook-message', 'news-monitor',
+			'alert-replay', 'market-scanner', 'expanded-analysis',
+		]));
 		const enrichedValues = enrichedSelect.children.map((option) => option.value);
 		expect(enrichedValues).toEqual(['', 'true', 'false']);
 	});

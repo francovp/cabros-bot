@@ -1426,6 +1426,8 @@ const createAlertListForm = () => {
 		['webhook-message', 'Webhook message'],
 		['news-monitor', 'News monitor'],
 		['alert-replay', 'Alert replay'],
+		['market-scanner', 'Market scanner'],
+		['expanded-analysis', 'Expanded analysis'],
 	].forEach(([value, text]) => {
 		const option = element('option', { text });
 		option.value = value;
