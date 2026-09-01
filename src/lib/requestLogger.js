@@ -98,9 +98,13 @@ function createRequestLogger(options = {}) {
 		}
 
 		const requestId = resolveRequestId(req);
+		req.requestId = requestId;
 		const clientIp = sanitizeClientIp(req.ip || (req.socket && req.socket.remoteAddress));
+		let finalized = false;
 
 		const finalize = () => {
+			if (finalized) return;
+			finalized = true;
 			const durationMs = Math.max(0, now() - startTime);
 			const statusCode = typeof res.statusCode === 'number' ? res.statusCode : 0;
 			const level = resolveLogLevel(statusCode);

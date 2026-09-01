@@ -105,6 +105,20 @@ describe('Request Logger Middleware', () => {
 			durationMs: expect.any(Number),
 		}));
 		expect(log.attributes.durationMs).toBeGreaterThanOrEqual(0);
+		expect(req.requestId).toBe('req-abc');
+	});
+
+	it('emits one log when finish and close both fire', () => {
+		const middleware = createRequestLogger();
+		const req = buildReq();
+		const res = buildRes();
+
+		middleware(req, res, jest.fn());
+		res.statusCode = 200;
+		triggerFinish(res);
+		res._closeCb();
+
+		expect(output.info).toHaveBeenCalledTimes(1);
 	});
 
 	it('skips /healthcheck and /openapi.json paths', () => {

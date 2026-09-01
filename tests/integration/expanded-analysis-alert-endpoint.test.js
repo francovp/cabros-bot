@@ -83,10 +83,12 @@ jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
 		const res = await request(app)
 			.post('/api/webhook/expanded-analysis-alert')
 			.set('x-api-key', 'test-key')
+			.set('x-request-id', 'expanded-trace-42')
 			.send({ symbols: ['NASDAQ:NVDA'], timeframe: '1D' })
 			.expect(200);
 
 		expect(res.body.success).toBe(true);
+		expect(res.body.requestId).toBe('expanded-trace-42');
 		expect(res.body.alertText).toContain('*🟡 NEUTROS*');
 		expect(res.body.summary).toEqual({
 			total: 1,

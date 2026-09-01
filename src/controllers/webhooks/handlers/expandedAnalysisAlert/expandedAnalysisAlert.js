@@ -52,7 +52,7 @@ function deriveItemSide(analysis = {}) {
 
 function postExpandedAnalysisAlert(botOrGetter) {
 	return async (req, res) => {
-		const requestId = uuidv4();
+		const requestId = req.requestId || uuidv4();
 		const startTime = Date.now();
 
 		try {

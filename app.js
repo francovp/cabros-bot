@@ -10,6 +10,10 @@ const bootstrapReadiness = require('./src/lib/bootstrapReadiness');
 // Configure trusted proxies (e.g. Render reverse proxy or TRUST_PROXY setting)
 setupTrustProxy(app);
 
+// Structured request logging — attach before response-producing middleware so
+// parser and rate-limit failures are included in request telemetry.
+app.use(require('./src/lib/requestLogger'));
+
 // Tell express to use body-parser's urlencoded parsing
 app.use(express.urlencoded({ extended: false }));
 // Tell express to use body-parser's JSON and text parsing
@@ -41,10 +45,6 @@ app.get('/ready', (req, res) => {
 
 // Rate Limiter (must be after healthcheck to avoid limiting health checks)
 app.use(require('./src/lib/rateLimiter'));
-
-// Structured request logging — emits one JSON line per completed /api request,
-// capturing method, path, status code, duration, and per-request correlation id.
-app.use(require('./src/lib/requestLogger'));
 
 // Public, read-only API contract and interactive documentation.
 app.use(getOpenApiDocsRouter());

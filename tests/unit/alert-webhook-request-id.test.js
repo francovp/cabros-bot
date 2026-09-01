@@ -135,6 +135,25 @@ describe('alert request ID resolution and echo', () => {
 			}));
 		});
 
+		it('reuses requestId assigned by request middleware', async () => {
+			const response = buildResponse();
+			const handler = postAlert({});
+
+			await handler({
+				headers: {},
+				requestId: 'middleware-request-42',
+				body: { text: 'BINANCE:BTCUSDT' },
+				query: {},
+			}, response);
+
+			expect(response.json).toHaveBeenCalledWith(expect.objectContaining({
+			requestId: 'middleware-request-42',
+		}));
+			expect(alertStorageService.saveAlert).toHaveBeenCalledWith(expect.objectContaining({
+			requestId: 'middleware-request-42',
+		}));
+		});
+
 		it('includes requestId in dry-run response', async () => {
 			const response = buildResponse();
 			const handler = postAlert({});

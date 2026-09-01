@@ -131,4 +131,22 @@ describe('Request Logger Integration', () => {
 		expect(log).not.toBeNull();
 		expect(log.attributes.requestId).toBe('trace-xyz');
 	});
+
+	it('logs malformed /api requests rejected by the body parser', async () => {
+		output.info.mockClear();
+		output.warn.mockClear();
+		output.error.mockClear();
+
+		await request(app)
+			.post('/api/webhook/alert')
+			.set('Content-Type', 'application/json')
+			.send('{"broken"')
+			.expect(400);
+
+		const log = findLogForPath(output.warn, '/api/webhook/alert') ||
+			findLogForPath(output.error, '/api/webhook/alert') ||
+			findLogForPath(output.info, '/api/webhook/alert');
+		expect(log).not.toBeNull();
+		expect(log.attributes.statusCode).toBe(400);
+	});
 });

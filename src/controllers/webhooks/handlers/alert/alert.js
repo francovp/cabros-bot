@@ -194,7 +194,7 @@ function getChannelName(identity) {
 
 function postAlert(botOrGetter) {
 	return async (req, res) => {
-		const requestId = resolveRequestId(req);
+		const requestId = req.requestId || resolveRequestId(req);
 		const startTime = Date.now();
 		const { body } = req;
 		const useTradingViewData = req.query && (req.query.useTradingViewData === true || req.query.useTradingViewData === 'true');
