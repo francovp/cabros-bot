@@ -305,6 +305,7 @@
           "Webhooks"
         ],
         "summary": "Analyze one TradingView symbol without delivery",
+        "description": "Runs TradingView MCP `coin_analysis` (and optionally `combined_analysis` / `multi_timeframe_analysis`) for a single EXCHANGE:SYMBOL identifier and returns decision-ready structured analysis plus a Spanish markdown report. Plans below SYMBOL_ANALYSIS_MIN_RISK_REWARD_RATIO (default 1.5) are downgraded to NO_TRADE with an explicit Spanish warning and `risk.rejectionReason: 'risk_reward_below_minimum'`; when a higher S/R level, Bollinger band, or ATR target clears the floor, the controller upgrades the take-profit automatically before flagging the plan.",
         "operationId": "postSymbolAnalysis",
         "requestBody": {
           "$ref": "#/components/requestBodies/SymbolAnalysis"
@@ -4801,7 +4802,22 @@
             ]
           },
           "analysis": {
-            "$ref": "#/components/schemas/JsonObject"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/JsonObject"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "risk": {
+                    "$ref": "#/components/schemas/SymbolAnalysisRisk"
+                  },
+                  "decision": {
+                    "$ref": "#/components/schemas/SymbolAnalysisDecision"
+                  }
+                }
+              }
+            ]
           },
           "requestId": {
             "type": "string"
@@ -4809,6 +4825,122 @@
           "totalDurationMs": {
             "type": "integer",
             "minimum": 0
+          }
+        }
+      },
+      "SymbolAnalysisRisk": {
+        "type": "object",
+        "description": "Plan-quality gate. When risk_reward_ratio is below the configured floor (default 1.5), `valid` is false and `rejectionReason` is `risk_reward_below_minimum`. Eligible for Firebase Remote Config override via SYMBOL_ANALYSIS_MIN_RISK_REWARD_RATIO.",
+        "required": [
+          "side",
+          "valid"
+        ],
+        "properties": {
+          "entry_price": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "side": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "BUY",
+              "SELL",
+              null
+            ]
+          },
+          "stop_loss": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "target": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "invalidation_level": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "risk_reward_ratio": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "source": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "valid": {
+            "type": "boolean"
+          },
+          "rejectionReason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "missing_levels",
+              "invalid_directional_levels",
+              "risk_reward_below_minimum",
+              null
+            ]
+          },
+          "minRiskRewardRatio": {
+            "type": "number",
+            "minimum": 0.1,
+            "maximum": 10
+          }
+        }
+      },
+      "SymbolAnalysisDecision": {
+        "type": "object",
+        "required": [
+          "action",
+          "dataSufficient"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "BUY",
+              "SELL",
+              "NO_TRADE"
+            ]
+          },
+          "confidence": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "dataSufficient": {
+            "type": "boolean"
+          },
+          "reasons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Spanish warnings surfaced from the plan-quality gate (e.g. R/R por debajo del mínimo)."
           }
         }
       },

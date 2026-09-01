@@ -37,6 +37,7 @@ const PARAMETER_SCHEMA = Object.freeze({
 	},
 	EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS: { type: 'number', defaultValue: 60000, integer: true, min: 1, max: 120000 },
 	EXPANDED_ANALYSIS_ALERT_CONCURRENCY: { type: 'number', defaultValue: 3, integer: true, min: 1, max: 10 },
+	SYMBOL_ANALYSIS_MIN_RISK_REWARD_RATIO: { type: 'number', defaultValue: 1.5, min: 0.1, max: 10 },
 	DISCORD_MAX_RETRIES: { type: 'number', defaultValue: 2, integer: true, min: 0, max: 10 },
 	DISCORD_FALLBACK_RETRY_DELAY_MS: { type: 'number', defaultValue: 500, integer: true, min: 1, max: 30000 },
 	DISCORD_MAX_RETRY_DELAY_MS: { type: 'number', defaultValue: 5000, integer: true, min: 1, max: 60000 },

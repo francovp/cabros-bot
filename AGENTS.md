@@ -460,10 +460,10 @@ The system provides a `POST /api/webhook/expanded-analysis-alert` endpoint that 
 
 - `src/controllers/webhooks/handlers/symbolAnalysis/symbolAnalysis.js` owns request validation, the bounded MCP call, optional multi-timeframe enrichment, risk normalization, and `BUY`/`SELL`/`NO_TRADE` decision output.
 - `src/services/tradingview/expandedAnalysisAlertReport.js` is reused for symbol parsing and Markdown formatting; risk levels are directional for both long and short setups.
-- `tests/integration/symbol-analysis-endpoint.test.js` covers the successful decision-ready response and malformed-symbol rejection.
+- `tests/integration/symbol-analysis-endpoint.test.js` covers the successful decision-ready response, plan-quality gate rejection, target-upgrade fallback, side-inference intermediate tier, and malformed-symbol rejection.
 - The route is API-key protected and documented in `src/openapi/openapi.json`, `CabrosBot.postman_collection.json`, and `README.md`.
 
-If price, indicators, or directional risk are insufficient, the endpoint returns `decision.action: "NO_TRADE"` and numeric missing values as `null`.
+If price, indicators, or directional risk are insufficient, the endpoint returns `decision.action: "NO_TRADE"` and numeric missing values as `null`. When `SYMBOL_ANALYSIS_MIN_RISK_REWARD_RATIO` (default `1.5`, Firebase Remote Config eligible) is configured, plans with `risk.risk_reward_ratio` below the floor are downgraded to `NO_TRADE` with `risk.valid: false` and `risk.rejectionReason: "risk_reward_below_minimum"`; the controller first walks the documented target-selection order (next S/R level, opposite Bollinger band, ATR target) so a structurally-sound plan isn't lost just because the nearest S/R sits too close to entry. The side-inference helper uses an intermediate tier (timeframe_context.bias, MACD direction, Bollinger position) before falling back to bare RSI extremes.
 
 ## TradingView Market Scanner Alerts
 

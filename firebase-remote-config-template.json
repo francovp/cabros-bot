@@ -147,6 +147,13 @@
       "description": "Maximum concurrent expanded-analysis MCP calls",
       "valueType": "NUMBER"
     },
+    "SYMBOL_ANALYSIS_MIN_RISK_REWARD_RATIO": {
+      "defaultValue": {
+        "value": "1.5"
+      },
+      "description": "Minimum risk/reward ratio for symbol-analysis plans. Plans below this floor return NO_TRADE and a risk_reward_below_minimum rejectionReason.",
+      "valueType": "NUMBER"
+    },
     "DISCORD_MAX_RETRIES": {
       "defaultValue": {
         "value": "2"

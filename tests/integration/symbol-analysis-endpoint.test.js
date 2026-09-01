@@ -268,7 +268,7 @@ describe('Symbol analysis endpoint', () => {
 			technical: {
 				price_data: { current_price: 100 },
 				technical_indicators: { rsi: 50, atr: 4 },
-				support_resistance: { nearest_resistance: 105 },
+				support_resistance: { nearest_resistance: 130 },
 			},
 			confluence: { recommendation: 'BUY', confidence: 'HIGH' },
 		});
@@ -279,8 +279,8 @@ describe('Symbol analysis endpoint', () => {
 			.send({ symbol: 'BINANCE:BTCUSDT' })
 			.expect(200);
 
-		expect(res.body.analysis.risk).toEqual(expect.objectContaining({ target: 105, valid: true }));
-		expect(res.body.alertText).toContain('- *Target sugerido:* $105.00');
+		expect(res.body.analysis.risk).toEqual(expect.objectContaining({ target: 130, valid: true }));
+		expect(res.body.alertText).toContain('- *Target sugerido:* $130.00');
 	});
 
 	it('uses current_price as the structured risk entry when close differs', async () => {
@@ -328,6 +328,141 @@ describe('Symbol analysis endpoint', () => {
 		expect(res.body.alertText).not.toContain('Stop Loss sugerido');
 		expect(res.body.alertText).not.toContain('Target sugerido');
 		expect(res.body.alertText).not.toContain('Risk/Reward');
+	});
+
+	it('rejects actionable BUY when risk_reward_ratio is below the minimum floor', async () => {
+		tradingViewMcpService.analyzeSymbolIdentifier.mockResolvedValueOnce({
+			technical: {
+				price_data: { current_price: 2495.64, high: 2700, low: 1500 },
+				technical_indicators: { RSI: 55 },
+				support_resistance: {
+					nearest_resistance: 2655.56,
+					resistance_1: 2810.0,
+					resistance_2: 2980.0,
+				},
+				bollinger_bands: { upper: 2520, lower: 1564.74, mid: 2042.37 },
+			},
+			confluence: { recommendation: 'BUY', confidence: 'HIGH' },
+		});
+
+		const res = await request(app)
+			.post('/api/webhook/symbol-analysis')
+			.set('x-api-key', 'test-key')
+			.send({ symbol: 'BINANCE:ETHUSDT', timeframe: '1D', analysisMode: 'combined' })
+			.expect(200);
+
+		expect(res.body.analysis.risk).toEqual(expect.objectContaining({
+			side: 'BUY',
+			stop_loss: 1564.74,
+			target: 2655.56,
+			risk_reward_ratio: expect.any(Number),
+			valid: false,
+			rejectionReason: 'risk_reward_below_minimum',
+		}));
+		expect(res.body.analysis.risk.risk_reward_ratio).toBeLessThan(1.5);
+		expect(res.body.analysis.decision).toEqual(expect.objectContaining({
+			action: 'NO_TRADE',
+			dataSufficient: false,
+			warnings: expect.arrayContaining([expect.stringMatching(/R\/R|R:R/i)]),
+		}));
+		expect(res.body.alertText).toMatch(/R\/R|R:R/);
+	});
+
+	it('upgrades the target to a higher S/R level when nearest resistance yields a sub-floor plan', async () => {
+		tradingViewMcpService.analyzeSymbolIdentifier.mockResolvedValueOnce({
+			technical: {
+				price_data: { current_price: 100 },
+				technical_indicators: { RSI: 50, ATR: 4 },
+				support_resistance: {
+					nearest_resistance: 102,
+					resistance_1: 130,
+					resistance_2: 150,
+				},
+			},
+			confluence: { recommendation: 'BUY', confidence: 'HIGH' },
+		});
+
+		const res = await request(app)
+			.post('/api/webhook/symbol-analysis')
+			.set('x-api-key', 'test-key')
+			.send({ symbol: 'BINANCE:BTCUSDT', timeframe: '1D' })
+			.expect(200);
+
+		expect(res.body.analysis.risk).toEqual(expect.objectContaining({
+			side: 'BUY',
+			valid: true,
+			target: 130,
+		}));
+		expect(res.body.analysis.risk.risk_reward_ratio).toBeGreaterThanOrEqual(1.5);
+		expect(res.body.analysis.decision).toEqual(expect.objectContaining({ action: 'BUY' }));
+	});
+
+	it('falls back to the opposite Bollinger band when S/R targets are exhausted and floor still unmet', async () => {
+		tradingViewMcpService.analyzeSymbolIdentifier.mockResolvedValueOnce({
+			technical: {
+				price_data: { current_price: 100 },
+				technical_indicators: { RSI: 50, ATR: 4 },
+				support_resistance: { nearest_resistance: 102 },
+				bollinger_bands: { upper: 116, lower: 84, mid: 100 },
+			},
+			confluence: { recommendation: 'BUY', confidence: 'HIGH' },
+		});
+
+		const res = await request(app)
+			.post('/api/webhook/symbol-analysis')
+			.set('x-api-key', 'test-key')
+			.send({ symbol: 'BINANCE:BTCUSDT', timeframe: '1D' })
+			.expect(200);
+
+		expect(res.body.analysis.risk).toEqual(expect.objectContaining({
+			side: 'BUY',
+			valid: true,
+			target: 116,
+		}));
+		expect(res.body.analysis.risk.risk_reward_ratio).toBeGreaterThanOrEqual(1.5);
+	});
+
+	it('keeps a healthy R:R plan unchanged when the floor is met by nearest resistance', async () => {
+		tradingViewMcpService.analyzeSymbolIdentifier.mockResolvedValueOnce({
+			technical: {
+				price_data: { current_price: 100 },
+				technical_indicators: { RSI: 50, ATR: 4 },
+				support_resistance: { nearest_resistance: 130 },
+			},
+			confluence: { recommendation: 'BUY', confidence: 'HIGH' },
+		});
+
+		const res = await request(app)
+			.post('/api/webhook/symbol-analysis')
+			.set('x-api-key', 'test-key')
+			.send({ symbol: 'BINANCE:BTCUSDT', timeframe: '1D' })
+			.expect(200);
+
+		expect(res.body.analysis.risk).toEqual(expect.objectContaining({
+			side: 'BUY',
+			valid: true,
+			target: 130,
+			rejectionReason: null,
+		}));
+	});
+
+	it('infers a coherent BUY side from timeframe_context.bias without relying on confluence', async () => {
+		tradingViewMcpService.analyzeSymbolIdentifier.mockResolvedValueOnce({
+			technical: {
+				price_data: { current_price: 100 },
+				technical_indicators: { RSI: 55, MACD: 0.5, MACD_signal: 0.1 },
+				bollinger_bands: { upper: 110, lower: 90 },
+				timeframe_context: { bias: 'BULLISH' },
+			},
+		});
+
+		const res = await request(app)
+			.post('/api/webhook/symbol-analysis')
+			.set('x-api-key', 'test-key')
+			.send({ symbol: 'BINANCE:BTCUSDT', timeframe: '1D' })
+			.expect(200);
+
+		expect(res.body.analysis.risk).toEqual(expect.objectContaining({ side: 'BUY' }));
 	});
 
 	it('formats uppercase indicator aliases consistently with structured analysis', async () => {
