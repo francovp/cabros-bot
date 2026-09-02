@@ -484,6 +484,126 @@
         "x-admin-role": "admin.viewer"
       }
     },
+    "/api/alerts/feedback": {
+      "post": {
+        "tags": [
+          "Alerts"
+        ],
+        "summary": "Record a trader verdict (👍 / 👎) for a stored alert",
+        "operationId": "submitAlertFeedback",
+        "description": "Persists a single trader verdict per (alertId, chatId) tuple. Re-clicks update the verdict instead of appending a new row. Bounded by ALERT_FEEDBACK_RETENTION_DAYS and a SHA-256 chat hash; raw chat ids are never returned through this surface.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AlertFeedbackSubmission"
+              },
+              "examples": {
+                "upvote": {
+                  "summary": "Thumbs-up verdict on a stored alert",
+                  "value": {
+                    "alertId": "alert-123",
+                    "chatId": "120363422033474991@g.us",
+                    "verdict": "up",
+                    "symbol": "BTCUSDT",
+                    "exchange": "BINANCE",
+                    "source": "webhook-alert"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Verdict recorded (or replayed via the idempotency middleware).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlertFeedbackResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.operator"
+      }
+    },
+    "/api/alerts/feedback/summary": {
+      "get": {
+        "tags": [
+          "Alerts"
+        ],
+        "summary": "Aggregate trader verdicts within a bounded time window",
+        "operationId": "getAlertFeedbackSummary",
+        "description": "Returns per-source, per-symbol, and per-exchange counts plus an up/down ratio. Raw chat ids are never included; only SHA-256 chat hashes are stored on documents.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/From"
+          },
+          {
+            "$ref": "#/components/parameters/To"
+          },
+          {
+            "$ref": "#/components/parameters/SummaryLimit"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Aggregated verdict counts.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlertFeedbackSummaryResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      }
+    },
     "/api/alerts/export": {
       "get": {
         "tags": [
@@ -4442,6 +4562,9 @@
           "shadowModeMetrics": {
             "description": "Aggregated shadow-mode outcome metrics. When an object, includes the full OutcomesSummary payload (coverage buckets, per-window WindowStats with hit/target/stop rates and expectancyR, drawdown proxy, latency/cost metadata, and falsePositiveCandidates). When no data is available or signal-outcome tracking is disabled, the value is the string sentinel \"No measurements found\". Equity providers remain opt-in and fail open. This field is omitted when source or enriched filters are supplied because shadow-mode metrics do not support those filters. Win-rate field semantics: hitRatePercent counts evaluated window outcomes whose return > 0; targetHitRatePercent/stopHitRatePercent count explicit target/stop hits (including firstHit fallbacks) over barrier-eligible denominators only; expectancyR averages finite rMultiple over evaluated windows.",
             "$ref": "#/components/schemas/ShadowModeMetrics"
+          },
+          "feedback": {
+            "$ref": "#/components/schemas/AlertFeedbackBlock"
           }
         }
       },
@@ -4457,6 +4580,186 @@
           },
           "summary": {
             "$ref": "#/components/schemas/AlertSummary"
+          }
+        }
+      },
+      "AlertFeedbackSubmission": {
+        "type": "object",
+        "required": [
+          "alertId",
+          "chatId",
+          "verdict"
+        ],
+        "properties": {
+          "alertId": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Stored alert document id; combined with the chat hash to form the upsert key."
+          },
+          "chatId": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Raw chat id (Telegram chat id, WhatsApp group id, etc.). Only its SHA-256 hash is exposed by summary endpoints."
+          },
+          "verdict": {
+            "type": "string",
+            "enum": [
+              "up",
+              "down"
+            ]
+          },
+          "symbol": {
+            "type": "string",
+            "description": "Optional extracted symbol (uppercase, exchange-less)."
+          },
+          "exchange": {
+            "type": "string",
+            "description": "Optional extracted exchange (uppercase)."
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "webhook-alert",
+              "expanded-analysis",
+              "scanner",
+              "news",
+              "unknown"
+            ],
+            "default": "unknown"
+          }
+        }
+      },
+      "AlertFeedbackResult": {
+        "type": "object",
+        "required": [
+          "success",
+          "persisted",
+          "source",
+          "alertId",
+          "verdict"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "persisted": {
+            "type": "boolean"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "firestore",
+              "memory"
+            ]
+          },
+          "alertId": {
+            "type": "string"
+          },
+          "verdict": {
+            "type": "string",
+            "enum": [
+              "up",
+              "down",
+              null
+            ],
+            "nullable": true
+          },
+          "idempotencyReplayed": {
+            "type": "boolean",
+            "description": "True when the response was replayed from the idempotency cache."
+          }
+        }
+      },
+      "AlertFeedbackBlock": {
+        "type": "object",
+        "required": [
+          "total",
+          "up",
+          "down",
+          "ratio",
+          "bySource",
+          "bySymbol",
+          "byExchange",
+          "source",
+          "window"
+        ],
+        "properties": {
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "up": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "down": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "ratio": {
+            "type": "number",
+            "description": "up / (up + down); 0 when total is 0."
+          },
+          "bySource": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "bySymbol": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "byExchange": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "firestore",
+              "memory"
+            ]
+          },
+          "window": {
+            "type": "object",
+            "properties": {
+              "from": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "to": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1000
+              }
+            }
+          }
+        }
+      },
+      "AlertFeedbackSummaryResult": {
+        "type": "object",
+        "required": [
+          "success",
+          "feedback"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "feedback": {
+            "$ref": "#/components/schemas/AlertFeedbackBlock"
           }
         }
       },

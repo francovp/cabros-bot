@@ -1,6 +1,7 @@
 'use strict';
 
 const alertStorageService = require('../../services/storage/AlertStorageService');
+const alertFeedbackStorageService = require('../../services/storage/AlertFeedbackStorageService');
 const sentryService = require('../../services/monitoring/SentryService');
 const signalOutcomeService = require('../../services/storage/SignalOutcomeService');
 
@@ -241,6 +242,17 @@ function summarizeAlerts(req, res) {
 			}
 			summary.shadowModeMetrics = shadowModeMetrics;
 		}
+
+		// Feedback aggregation always reflects the same window — it does not
+		// depend on alert storage and is intentionally included regardless of
+		// the report filters so traders can correlate prompt calibration with
+		// raw outcomes. Disabled feedback storage falls back to an in-memory
+		// surface that returns zeroed counts.
+		const feedbackBlock = await alertFeedbackStorageService.getSummaryBlock({
+			from: from.value,
+			to: to.value,
+		});
+		summary.feedback = feedbackBlock;
 
 		return res.status(200).json({
 			success: true,
@@ -603,6 +615,7 @@ function handleAsync(req, res, endpoint, handler) {
 	return Promise.resolve(handler()).catch((error) => {
 		console.error('[AlertsController] Request failed:', error.message);
 		const statusCode = error.code === alertStorageService.STORAGE_UNAVAILABLE_CODE
+			|| error.code === alertFeedbackStorageService.STORAGE_UNAVAILABLE_CODE
 			? 503
 			: (error.code === 'INVALID_REQUEST' ? 400 : 500);
 		sentryService.captureRuntimeError({
@@ -636,6 +649,94 @@ function handleAsync(req, res, endpoint, handler) {
 	});
 }
 
+function submitFeedback(req, res) {
+	return handleAsync(req, res, '/api/alerts/feedback', async () => {
+		const body = req.body || {};
+		const alertId = typeof body.alertId === 'string' ? body.alertId.trim() : '';
+		const chatId = typeof body.chatId === 'string' ? body.chatId.trim() : '';
+		const verdictRaw = body.verdict;
+		const source = body.source;
+
+		if (!alertId) {
+			return res.status(400).json({
+				error: 'alertId is required and must be a non-empty string.',
+				code: 'INVALID_REQUEST',
+			});
+		}
+		if (!chatId) {
+			return res.status(400).json({
+				error: 'chatId is required and must be a non-empty string.',
+				code: 'INVALID_REQUEST',
+			});
+		}
+		if (typeof verdictRaw !== 'string'
+			|| !alertFeedbackStorageService.VALID_VERDICTS.has(verdictRaw.trim().toLowerCase())) {
+			return res.status(400).json({
+				error: 'verdict must be "up" or "down".',
+				code: 'INVALID_REQUEST',
+			});
+		}
+
+		const result = await alertFeedbackStorageService.saveFeedback({
+			alertId,
+			chatId,
+			verdict: verdictRaw,
+			source,
+			symbol: body.symbol,
+			exchange: body.exchange,
+		});
+
+		return res.status(200).json({
+			success: true,
+			persisted: result.persisted,
+			source: result.source,
+			alertId,
+			verdict: result.persisted ? verdictRaw.trim().toLowerCase() : null,
+		});
+	});
+}
+
+function getFeedbackSummary(req, res) {
+	return handleAsync(req, res, '/api/alerts/feedback/summary', async () => {
+		const from = parseOptionalTimestamp(req.query.from, 'from');
+		if (from.error) {
+			return res.status(400).json(from.error);
+		}
+		const to = parseOptionalTimestamp(req.query.to, 'to');
+		if (to.error) {
+			return res.status(400).json(to.error);
+		}
+		const limit = parseSummaryLimit(req.query.limit);
+		if (limit === null) {
+			return res.status(400).json({
+				error: `Invalid limit. Use an integer between 1 and ${MAX_SUMMARY_LIMIT}.`,
+				code: 'INVALID_REQUEST',
+			});
+		}
+
+		const result = await alertFeedbackStorageService.listFeedbackEntries({
+			from: from.value,
+			to: to.value,
+			limit,
+		});
+
+		return res.status(200).json({
+			success: true,
+			feedback: {
+				total: result.aggregate.total,
+				up: result.aggregate.up,
+				down: result.aggregate.down,
+				ratio: result.aggregate.ratio,
+				bySource: result.aggregate.bySource,
+				bySymbol: result.aggregate.bySymbol,
+				byExchange: result.aggregate.byExchange,
+				source: result.source,
+				window: result.window,
+			},
+		});
+	});
+}
+
 module.exports = {
 	listAlerts,
 	getAlertById,
@@ -643,4 +744,6 @@ module.exports = {
 	replayAlert,
 	summarizeAlerts,
 	exportAlerts,
+	submitFeedback,
+	getFeedbackSummary,
 };

@@ -84,7 +84,8 @@ function canInitializeFirestore() {
 		|| process.env.ENABLE_SIGNAL_OUTCOME_TRACKING === 'true'
 		|| process.env.ENABLE_FIREBASE_REMOTE_CONFIG === 'true'
 		|| process.env.ENABLE_NOTIFICATION_REDRIVE === 'true'
-		|| process.env.ENABLE_NEWS_MONITOR_SCHEDULER === 'true';
+		|| process.env.ENABLE_NEWS_MONITOR_SCHEDULER === 'true'
+		|| process.env.ENABLE_FIRESTORE_ALERT_FEEDBACK === 'true';
 }
 
 function getAlertStorageRetentionDays() {
