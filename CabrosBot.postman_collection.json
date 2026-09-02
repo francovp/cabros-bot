@@ -892,7 +892,7 @@
           "name": "POST Send Message",
           "request": {
             "method": "POST",
-            "description": "Idempotency accepts the recommended idempotency-key header, x-idempotency-key header, idempotencyKey or idempotency_key in the JSON body, and idempotencyKey or idempotency_key in the query string. Replays return the cached response with idempotencyReplayed=true; conflicting payload reuse returns 409.",
+            "description": "Idempotency accepts the recommended idempotency-key header, x-idempotency-key header, idempotencyKey or idempotency_key in the JSON body, and idempotencyKey or idempotency_key in the query string. Replays return the cached response with idempotencyReplayed=true; conflicting payload reuse returns 409. The response always carries a requestId field that mirrors the inbound x-request-id header (when supplied, sanitized to printable ASCII and <=128 chars) or a generated UUIDv4 so callers can correlate deliveries with logs and Sentry.",
             "header": [
               {
                 "key": "Content-Type",
@@ -903,6 +903,12 @@
                 "key": "x-api-key",
                 "value": "{{apiKey}}",
                 "type": "text"
+              },
+              {
+                "key": "x-request-id",
+                "value": "msg-correlation-001",
+                "type": "text",
+                "description": "Optional correlation ID echoed in the response and propagated to Sentry."
               },
               {
                 "key": "idempotency-key",
@@ -938,13 +944,13 @@
               "name": "Success (selected channels)",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"tg-msg-123\",\n      \"attemptCount\": 1,\n      \"durationMs\": 450\n    },\n    {\n      \"channel\": \"whatsapp\",\n      \"success\": true,\n      \"messageId\": \"wa-msg-456\",\n      \"attemptCount\": 1,\n      \"durationMs\": 320\n    },\n    {\n      \"channel\": \"discord\",\n      \"success\": true,\n      \"messageId\": \"discord-msg-789\"\n    }\n  ]\n}"
+              "body": "{\n  \"success\": true,\n  \"requestId\": \"msg-correlation-001\",\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"tg-msg-123\",\n      \"attemptCount\": 1,\n      \"durationMs\": 450\n    },\n    {\n      \"channel\": \"whatsapp\",\n      \"success\": true,\n      \"messageId\": \"wa-msg-456\",\n      \"attemptCount\": 1,\n      \"durationMs\": 320\n    },\n    {\n      \"channel\": \"discord\",\n      \"success\": true,\n      \"messageId\": \"discord-msg-789\"\n    }\n  ]\n}"
             },
             {
               "name": "Success (single channel)",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"tg-msg-789\",\n      \"attemptCount\": 1,\n      \"durationMs\": 410\n    }\n  ]\n}"
+              "body": "{\n  \"success\": true,\n  \"requestId\": \"msg-correlation-002\",\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"tg-msg-789\",\n      \"attemptCount\": 1,\n      \"durationMs\": 410\n    }\n  ]\n}"
             },
             {
               "name": "Success (idempotent replay)",
@@ -956,7 +962,7 @@
                   "value": "true"
                 }
               ],
-              "body": "{\n  \"success\": true,\n  \"idempotencyReplayed\": true,\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"tg-msg-123\"\n    }\n  ]\n}"
+              "body": "{\n  \"success\": true,\n  \"idempotencyReplayed\": true,\n  \"requestId\": \"msg-correlation-001\",\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"tg-msg-123\"\n    }\n  ]\n}"
             },
             {
               "name": "Error (idempotency conflict)",
@@ -1022,7 +1028,7 @@
               "name": "Internal Server Error (500)",
               "status": "Internal Server Error",
               "code": 500,
-              "body": "{\n  \"success\": false,\n  \"error\": \"Internal server error\"\n}"
+              "body": "{\n  \"success\": false,\n  \"error\": \"Internal server error\",\n  \"requestId\": \"msg-correlation-500\"\n}"
             }
           ]
         },
