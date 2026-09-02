@@ -213,7 +213,7 @@ The Remote Config workflow publishes the server-side template consumed by Fireba
 
 ### When implementing a feature:
 
-1. **Read the spec** (`specs/*/spec.md`) for requirements and user stories
+1. **Read the requirements source-of-truth** for the area you are touching — see the [Documentation source-of-truth](#documentation-source-of-truth) section below. For the original five areas (`001-`…`005-`) a `specs/<area>/spec.md` exists; for every other feature the requirement story is this file (`agents.md`) plus `src/openapi/openapi.json`.
 2. **Check patterns** in this file for similar implementations
 3. **Understand failure modes** (see Common Failure Modes sections)
 4. **Follow existing code style**: Simple functions, explicit logging, env-driven config
@@ -227,6 +227,20 @@ The Remote Config workflow publishes the server-side template consumed by Fireba
 12. **Update this agents.md file** with the new context, recent PRs, and implementation details before creating a new PR
 13. **Agent & Model Attribution Labels**: Ensure every PR created or updated by an AI agent carries an attribution label matching `<agent>-<model>` (e.g. `antigravity-gemini-3.7-flash`, `codex-gpt-5.6-luna`, `github-copilot-minimax-m3:free`)
 14. **Final verification pass** before completion: run the exact relevant checks again, then do the full test suite `pnpm test` once per implementation to ensure no regressions
+
+### Documentation source-of-truth
+
+The repository mixes a `specs/` directory (used by the first five feature areas) and ad-hoc documentation inside `agents.md`, `README.md`, and `src/openapi/openapi.json`. Use the following contract hierarchy so agents do not waste cycles looking for a spec that does not exist:
+
+| Audience | Source | Covers |
+| --- | --- | --- |
+| API consumers / OpenAPI tooling | `src/openapi/openapi.json` | Every mounted `/api` operation (request/response shape, error codes, auth). |
+| Operators / on-call | `README.md` + `.env.example` + `render.yaml` / `railway.toml` | User-facing features, env-var knobs, deploy blueprints. |
+| Contributors / AI agents | `agents.md` (this file) | Implementation patterns, failure modes, workflows, recent PR history, test strategy. |
+| Historical feature design | `specs/001-gemini-grounding-alert/`, `specs/002-whatsapp-alerts/`, `specs/003-news-monitor/`, `specs/004-enrich-alert-output/`, `specs/005-sentry-runtime-errors/` | Only the original five feature areas retain `spec.md` + `quickstart.md` + `data-model.md` artifacts. They are kept as historical references and may be moved to `specs/archived/` on a future cleanup pass. |
+| Suppressed proposals / glossary | `agents.md` (this file) | The `/specs/TERMINOLOGY_GUIDE.md` path referenced below is intentionally absent — the canonical terminology guide now lives in the [Terminology Guide: Grounding vs Enrichment](#terminology-guide-grounding-vs-enrichment) section of this file. |
+
+When the area you are touching does not have a `specs/<area>/` directory, **do not create one** as part of routine feature work; document the change directly in the appropriate `agents.md` section, update `src/openapi/openapi.json` for any new or changed endpoint, and update `README.md` for user-visible behavior. The full `specs/` workflow (problem → user stories → acceptance criteria → failure modes) is reserved for the original five areas and is not required for new features.
 
 ### Post-merge production environment synchronization
 
@@ -855,7 +869,7 @@ The system uses two complementary terms with specific meanings:
 - All enrichment methods contribute to the same `alert.enriched` data
 - This approach allows switching enrichment providers without breaking alerts
 
-See `/specs/TERMINOLOGY_GUIDE.md` for extended discussion and examples.
+See the [Terminology Guide: Grounding vs Enrichment](#terminology-guide-grounding-vs-enrichment) section below for the extended discussion and examples (the historical `/specs/TERMINOLOGY_GUIDE.md` file is not tracked in the repository; the glossary lives in this file).
 
 
 - GH-401 / CB-163: `src/admin/admin.js` now validates both the `backend` query parameter and `cabros_backend_origin` localStorage override with an exact HTTPS origin allowlist before using them for API requests. The only allowed override is `https://cabros-bot-production.up.railway.app`; arbitrary origins, wildcards, HTTP URLs, and malformed values fall back to the normal same-origin or hosted-production behavior. `tests/unit/admin-client.test.js` covers rejection of an attacker-controlled override, and the generated Firebase Hosting asset must stay synchronized with `pnpm run build:hosting`.
