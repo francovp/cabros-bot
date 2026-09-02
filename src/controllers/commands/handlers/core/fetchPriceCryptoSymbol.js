@@ -4,6 +4,7 @@ const { round10 } = require('../../../helpers');
 const { MainClient } = require('binance');
 const sentryService = require('../../../../services/monitoring/SentryService');
 const equityMarketDataService = require('../../../../services/storage/EquityMarketDataService');
+const priceQuoteCache = require('../../../../services/cache/PriceQuoteCache');
 
 function resolveBinanceBaseUrl() {
 	const configured = process.env.BINANCE_DATA_BASE_URL;
@@ -99,6 +100,12 @@ function classifyPriceQuery(rawInput) {
 
 async function fetchCryptoPrice(symbol, options = {}) {
 	const { parentSpan } = options;
+
+	const cached = priceQuoteCache.get(priceQuoteCache.PROVIDERS.CRYPTO, symbol);
+	if (cached) {
+		return cached;
+	}
+
 	const priceFetchSpan = sentryService.startInactiveSpan({
 		name: 'binance.get_avg_price',
 		op: 'http.client',
@@ -108,18 +115,21 @@ async function fetchCryptoPrice(symbol, options = {}) {
 			'provider.name': 'binance',
 			'provider.operation': 'getAvgPrice',
 			'crypto.symbol': symbol || 'missing',
+			'cache.hit': false,
 		},
 	});
 
 	try {
 		const data = await client.getAvgPrice({ symbol });
 		const price = data.price >= 1 ? round10(data.price, 0) : data.price;
-		return {
+		const quote = {
 			symbol,
 			price,
 			assetClass: 'crypto',
 			message: `Precio de ${symbol} es ${price}`,
 		};
+		priceQuoteCache.set(priceQuoteCache.PROVIDERS.CRYPTO, symbol, quote);
+		return quote;
 	} catch (e) {
 		console.error('Error fetching symbol price from Binance:', e);
 		const isInvalidSymbol = (e && e.code === -1121) || (e && e.message && /invalid symbol/i.test(e.message));
@@ -152,6 +162,12 @@ async function fetchEquityPrice(symbol, exchange, options = {}) {
 		throw error;
 	}
 
+	const cacheKey = `${symbol}:${exchange || 'default'}`;
+	const cached = priceQuoteCache.get(priceQuoteCache.PROVIDERS.EQUITY, cacheKey);
+	if (cached) {
+		return cached;
+	}
+
 	const { parentSpan, timeoutMs } = options;
 	const priceFetchSpan = sentryService.startInactiveSpan({
 		name: 'twelve_data.get_quote',
@@ -163,6 +179,7 @@ async function fetchEquityPrice(symbol, exchange, options = {}) {
 			'provider.operation': 'getQuote',
 			'equity.symbol': symbol || 'missing',
 			'equity.exchange': exchange || 'default',
+			'cache.hit': false,
 		},
 	});
 
@@ -176,7 +193,7 @@ async function fetchEquityPrice(symbol, exchange, options = {}) {
 			changeStr = ` (${sign}${quote.percentChange.toFixed(2)}%)`;
 		}
 		const message = `Precio de ${quote.symbol} es ${price}${changeStr}`;
-		return {
+		const result = {
 			symbol: quote.symbol,
 			name: quote.name,
 			exchange: quote.exchange,
@@ -187,6 +204,8 @@ async function fetchEquityPrice(symbol, exchange, options = {}) {
 			assetClass: 'equity',
 			message,
 		};
+		priceQuoteCache.set(priceQuoteCache.PROVIDERS.EQUITY, cacheKey, result);
+		return result;
 	} catch (e) {
 		const durationMs = Date.now() - startTime;
 		console.error('Error fetching equity quote from Twelve Data:', e);

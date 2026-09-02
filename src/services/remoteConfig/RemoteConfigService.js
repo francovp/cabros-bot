@@ -68,6 +68,9 @@ const PARAMETER_SCHEMA = Object.freeze({
 	ENABLE_ALERT_HTF_RENDER: { type: 'boolean', defaultValue: true },
 	ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION: { type: 'boolean', defaultValue: false },
 	ALERT_SIGNAL_COOLDOWN_BARS: { type: 'number', defaultValue: 1, integer: true, min: 1, max: 10 },
+	PRICE_CACHE_TTL_MS_CRYPTO: { type: 'number', defaultValue: 15000, integer: true, min: 1000, max: 600000 },
+	PRICE_CACHE_TTL_MS_EQUITY: { type: 'number', defaultValue: 60000, integer: true, min: 1000, max: 600000 },
+	PRICE_CACHE_MAX_ENTRIES_PER_BUCKET: { type: 'number', defaultValue: 256, integer: true, min: 1, max: 10000 },
 });
 
 let remoteOverrides = {};

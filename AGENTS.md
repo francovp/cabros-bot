@@ -1537,6 +1537,20 @@ No endpoint, OpenAPI, Postman, environment variable, or Remote Config contract c
 
 Disabled by default preserves existing webhook behavior byte-for-byte.
 
+## /precio Price Quote Cache (GH-792)
+
+`/precio` (and any internal caller of `fetchSymbolPrice` / `fetchCryptoPrice` / `fetchEquityPrice`) now consults a bounded, process-local TTL cache before contacting Binance (`getAvgPrice`) or Twelve Data (`/quote`). Successful responses are cached; provider errors are never cached so the next call retries the upstream. Two TTL buckets match chat-tolerance vs provider pacing: `PRICE_CACHE_TTL_MS_CRYPTO` (default `15000`) and `PRICE_CACHE_TTL_MS_EQUITY` (default `60000`). Equity keys are exchange-scoped (`<SYMBOL>:<EXCHANGE>`) so a NASDAQ quote does not collide with a NYSE quote. `PRICE_CACHE_MAX_ENTRIES_PER_BUCKET` (default `256`, range `1`-`10000`) bounds LRU eviction per bucket, honoring the `newsMonitor`/`#689` precedent against unbounded growth. Provider quota never crashes the cache — malformed/expired entries are silently dropped on read, and storage errors are logged as warnings without throwing.
+
+**Core Components**:
+- `src/services/cache/PriceQuoteCache.js` — bounded TTL + LRU buckets, fail-open semantics, per-bucket hit/miss/set/eviction/error counters, and a `getStatus()` payload for `/api/status`.
+- `src/controllers/commands/handlers/core/fetchPriceCryptoSymbol.js` — Cache check before each provider call; cache write on success only; both `fetchCryptoPrice` and `fetchEquityPrice` use Sentry spans annotated with `cache.hit`.
+- `src/services/remoteConfig/RemoteConfigService.js` and `firebase-remote-config-template.json` — bounded schema entries for `PRICE_CACHE_TTL_MS_CRYPTO`, `PRICE_CACHE_TTL_MS_EQUITY`, and `PRICE_CACHE_MAX_ENTRIES_PER_BUCKET`; environment fallback remains the default.
+- `src/controllers/status.js` — `featureFlags.priceQuoteCache` (enabled state) and `dependencies.priceQuoteCache` (enabled/disabled, mode, TTLs, max entries, per-bucket counters).
+- `scripts/validate-env.js` and `tests/unit/validate-env.test.js` — Bounds validation (no fractional integers, range `1000`-`600000` for TTLs, `1`-`10000` for max entries).
+- `tests/unit/price-quote-cache.test.js`, `tests/unit/fetch-symbol-price.test.js`, `tests/unit/remote-config-service.test.js`, `tests/unit/validate-env.test.js`, `tests/unit/docs-alignment.test.js`, and `tests/integration/status-endpoint.test.js` — Cache hit/miss, TTL expiry, LRU eviction, never-caching-errors, parity, and exposure coverage.
+
+The cache is process-local; cross-replica freshness is out of scope and unchanged from the legacy implementation.
+
 ## CI Secret Scanning and Least-Privilege Workflows (CB-257 / Issue #556)
 
 `.github/workflows/secret-scan.yml` runs the pinned Gitleaks Action on pushes to `master`, pull requests, and manual dispatch with full git history. It uses only the GitHub token and optional organization license secret; no application credentials are introduced. `.gitleaks.toml` narrowly allowlists the intentionally public Firebase browser key already tracked in `render.yaml`, without disabling other detections. `.github/workflows/node.js.yml` and `.github/workflows/env-drift-check.yml` now explicitly grant `contents: read` permissions. README documents secret storage and rotation for webhook, Binance, and Firebase service-account credentials.
