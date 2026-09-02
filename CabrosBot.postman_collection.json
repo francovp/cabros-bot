@@ -2601,6 +2601,230 @@
           ]
         },
         {
+          "name": "POST Submit Alert Feedback (👍 upvote)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "idempotency-key",
+                "value": "fb-upvote-001",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"alertId\": \"alert-123\",\n  \"chatId\": \"120363422033474991@g.us\",\n  \"verdict\": \"up\",\n  \"symbol\": \"BTCUSDT\",\n  \"exchange\": \"BINANCE\",\n  \"source\": \"webhook-alert\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/feedback",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "feedback"
+              ]
+            },
+            "description": "Persist a trader thumbs-up verdict for a stored alert. Re-clicks with the same alertId + chatId update the verdict instead of appending a new row."
+          },
+          "response": [
+            {
+              "name": "200 OK - Verdict recorded",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"persisted\": true,\n  \"source\": \"firestore\",\n  \"alertId\": \"alert-123\",\n  \"verdict\": \"up\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST Submit Alert Feedback (👎 downvote)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "idempotency-key",
+                "value": "fb-downvote-001",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"alertId\": \"alert-456\",\n  \"chatId\": \"-1001234567890\",\n  \"verdict\": \"down\",\n  \"symbol\": \"ETHUSDT\",\n  \"exchange\": \"BINANCE\",\n  \"source\": \"scanner\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/feedback",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "feedback"
+              ]
+            },
+            "description": "Persist a trader thumbs-down verdict. Same (alertId, chatId) tuple collapses with the upvote request when re-keyed."
+          },
+          "response": [
+            {
+              "name": "200 OK - Verdict recorded",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"persisted\": true,\n  \"source\": \"firestore\",\n  \"alertId\": \"alert-456\",\n  \"verdict\": \"down\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST Submit Alert Feedback (invalid verdict)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"alertId\": \"alert-1\",\n  \"chatId\": \"120363422033474991@g.us\",\n  \"verdict\": \"maybe\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/feedback",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "feedback"
+              ]
+            },
+            "description": "Invalid input variant: verdict must be exactly \"up\" or \"down\"."
+          },
+          "response": [
+            {
+              "name": "400 Bad Request - Invalid verdict",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"verdict must be \\\"up\\\" or \\\"down\\\".\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Alert Feedback Summary",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/feedback/summary?from=2026-06-06T00:00:00.000Z&to=2026-06-13T00:00:00.000Z&limit=500",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "feedback",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "2026-06-06T00:00:00.000Z"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-06-13T00:00:00.000Z"
+                },
+                {
+                  "key": "limit",
+                  "value": "500"
+                }
+              ]
+            },
+            "description": "Aggregated trader verdict counts within a bounded time window. Raw chat ids are never returned — only SHA-256 chat hashes are persisted on the alertFeedback collection."
+          },
+          "response": [
+            {
+              "name": "200 OK - Aggregated verdict counts",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"feedback\": {\n    \"total\": 4,\n    \"up\": 3,\n    \"down\": 1,\n    \"ratio\": 0.75,\n    \"bySource\": { \"webhook-alert\": 3, \"scanner\": 1 },\n    \"bySymbol\": { \"BTCUSDT\": 3, \"ETHUSDT\": 1 },\n    \"byExchange\": { \"BINANCE\": 4 },\n    \"source\": \"firestore\",\n    \"window\": {\n      \"from\": \"2026-06-06T00:00:00.000Z\",\n      \"to\": \"2026-06-13T00:00:00.000Z\",\n      \"limit\": 500\n    }\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Alert Feedback Summary (limit out of range)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/feedback/summary?limit=99999",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "feedback",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "99999"
+                }
+              ]
+            },
+            "description": "Invalid input variant: limit must be an integer between 1 and 1000."
+          },
+          "response": [
+            {
+              "name": "400 Bad Request - Limit out of range",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"Invalid limit. Use an integer between 1 and 1000.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
+        },
+        {
           "name": "GET Export Alerts (JSONL)",
           "request": {
             "method": "GET",

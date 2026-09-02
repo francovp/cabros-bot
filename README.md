@@ -136,6 +136,8 @@ To report a vulnerability, see [`SECURITY.md`](./SECURITY.md) — the project do
 - `ALERT_STORAGE_RETENTION_DAYS` - Retention for `alerts` and `alertReplays` records in days (`1`-`3650`, default: `90`). New records get `expiresAt`; run `bash ops/configure-firestore-alert-retention.sh` once per Firebase project to backfill legacy records and enable native Firestore TTL deletion.
 - `ENABLE_FIRESTORE_JOB_STORAGE` - Enable Firestore persistence for async TradingView jobs without enabling alert read APIs (`true` or `false`, default: `false`)
 - `ENABLE_FIRESTORE_IDEMPOTENCY` - Enable durable webhook idempotency persistence in Cloud Firestore (`true` or `false`, default: `false`)
+- `ENABLE_FIRESTORE_ALERT_FEEDBACK` - Enable Firestore persistence for trader alert feedback (👍/👎 verdicts from inline keyboard callbacks) (`true` or `false`, default: `false`). Disabled falls back to a process-local in-memory surface so the summary endpoints still return aggregate counts in development.
+- `ALERT_FEEDBACK_RETENTION_DAYS` - Retention for `alertFeedback` records in days (`1`-`3650`, default: `90`, matches alert retention). New records get `expiresAt`; backfill + native TTL can be enabled via `ops/configure-firestore-alert-retention.sh` once per Firebase project.
 - `ENABLE_SIGNAL_OUTCOME_TRACKING` - Enable shadow-mode signal outcome recording and evaluation (`true` or `false`, default: `false`)
 - `SIGNAL_OUTCOME_RETENTION_DAYS` - Retention for `tradingSignalOutcomes` records in days (`1`-`3650`, default: `365`). New records get `expiresAt`; run `bash ops/configure-operational-collection-retention.sh` (or with `BACKFILL=true`) once per Firebase project to backfill legacy records and enable native Firestore TTL deletion.
 - `ENABLE_EQUITY_MARKET_DATA` - Opt in to equity/forex/index outcome evaluation for `NASDAQ`, `BATS`, `NYSE`, `AMEX`, `NYSE ARCA`, `FX_IDC`, and `SPCFD` signals (`true` or `false`, default: `false`)
@@ -1334,12 +1336,91 @@ The service caps the queried window at 31 days to keep routine operator usage ch
     "latency": {
       "averageProcessingMs": 250,
       "averageDeliveryMs": 150
+    },
+    "feedback": {
+      "total": 4,
+      "up": 3,
+      "down": 1,
+      "ratio": 0.75,
+      "bySource": { "webhook-alert": 3, "scanner": 1 },
+      "bySymbol": { "BTCUSDT": 3, "ETHUSDT": 1 },
+      "byExchange": { "BINANCE": 4 },
+      "source": "firestore",
+      "window": {
+        "from": "2026-06-06T00:00:00.000Z",
+        "to": "2026-06-07T00:00:00.000Z",
+        "limit": 500
+      }
     }
   }
 }
 ```
 
 For rollout validation, first verify the active prompt provenance and coverage in preview, then observe a bounded production/shadow window after aligning the remote `alert-enrichment` prompt with the local optional-risk schema. Treat missing fields as unavailable data; do not use zero coverage as a trading outcome or fabricate stops, targets, setup types, or R:R values.
+
+The `feedback` block is always included regardless of the report filters so traders can correlate prompt calibration with raw trader outcomes. Counts are sourced from the `alertFeedback` collection (when `ENABLE_FIRESTORE_ALERT_FEEDBACK=true`) or the in-process memory surface; only SHA-256 chat hashes are persisted and raw chat ids are never returned.
+
+#### POST /api/alerts/feedback
+
+Persist a trader verdict (👍 / 👎) for a stored alert. Re-clicks with the same `(alertId, chatId)` tuple update the verdict instead of appending a new row. Bounded by `ALERT_FEEDBACK_RETENTION_DAYS` (default: `90`, range `1`-`3650`). Requires `admin.operator` and the shared idempotency middleware (the `idempotency-key` header is recommended).
+
+**Request Body:**
+```json
+{
+  "alertId": "alert-123",
+  "chatId": "120363422033474991@g.us",
+  "verdict": "up",
+  "symbol": "BTCUSDT",
+  "exchange": "BINANCE",
+  "source": "webhook-alert"
+}
+```
+
+`verdict` must be exactly `"up"` or `"down"`. `source` is optional and is one of `webhook-alert`, `expanded-analysis`, `scanner`, `news`, or `unknown` (default). `symbol`/`exchange` are uppercased and used only for the per-symbol/per-exchange aggregates in the summary endpoint.
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "persisted": true,
+  "source": "firestore",
+  "alertId": "alert-123",
+  "verdict": "up"
+}
+```
+
+`source` reports `firestore` when `ENABLE_FIRESTORE_ALERT_FEEDBACK=true` and the write succeeded; it reports `memory` when Firestore is disabled or unavailable (fail-open). The endpoint is fail-open in every path: any Firestore outage falls back to a process-local in-memory map that is bounded by the configured retention window and is cleared on process restart.
+
+#### GET /api/alerts/feedback/summary
+
+Aggregate trader verdicts within a bounded time window. Requires `admin.viewer`. Raw chat ids are never returned — only the SHA-256 chat hashes persisted on the alertFeedback documents are aggregated into the per-source/per-symbol/per-exchange counts.
+
+**Query Parameters:**
+- `from` - Optional ISO-8601 lower bound; defaults to 7 days before `to`
+- `to` - Optional ISO-8601 upper bound; defaults to request time
+- `limit` - Integer between `1` and `1000` (default: `500`)
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "feedback": {
+    "total": 4,
+    "up": 3,
+    "down": 1,
+    "ratio": 0.75,
+    "bySource": { "webhook-alert": 3, "scanner": 1 },
+    "bySymbol": { "BTCUSDT": 3, "ETHUSDT": 1 },
+    "byExchange": { "BINANCE": 4 },
+    "source": "firestore",
+    "window": {
+      "from": "2026-06-06T00:00:00.000Z",
+      "to": "2026-06-13T00:00:00.000Z",
+      "limit": 500
+    }
+  }
+}
+```
 
 #### GET /api/alerts/replays
 
