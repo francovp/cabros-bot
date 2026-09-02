@@ -13,6 +13,7 @@ const geminiQuotaManager = require('../../src/services/grounding/geminiQuotaMana
 const groundingMetrics = require('../../src/services/grounding/metrics');
 const { deliveryMetricsService } = require('../../src/services/notification/DeliveryMetricsService');
 const { getRoutes } = require('../../src/routes');
+const conditionalGet = require('../../src/lib/conditionalGet');
 
 const testPrivateKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({
 	type: 'pkcs1',
@@ -106,6 +107,7 @@ describe('Status endpoints', () => {
 		geminiQuotaManager.resetForTesting();
 		groundingMetrics.resetForTesting();
 		deliveryMetricsService.resetForTesting();
+		conditionalGet.resetForTesting();
 		tradingViewMcpService.runtimeStatus = savedTradingViewRuntimeStatus;
 		tradingViewMcpService.volumeRuntimeStatus = savedTradingViewVolumeRuntimeStatus;
 		tradingViewMcpService.enrichmentEvents = savedTradingViewEnrichmentEvents;
@@ -1860,5 +1862,49 @@ describe('Status endpoints', () => {
 				discord: expect.objectContaining({ successRate: 1.0 }),
 			}),
 		}));
+	});
+
+	it('exposes the httpCache dependency snapshot with etag counters', async () => {
+		process.env.ENABLE_HTTP_CONDITIONAL_GET = 'true';
+		conditionalGet.resetForTesting();
+
+		const first = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+		expect(first.status).toBe(200);
+		expect(first.headers.etag).toMatch(/^W\/"[A-Za-z0-9+/=]+"$/);
+		expect(first.headers['cache-control']).toBe('private, max-age=0, must-revalidate');
+		expect(first.headers['x-conditional-get']).toBe('miss');
+
+		// Repeat the GET to verify a fresh ETag and the dependency snapshot.
+		const second = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+		expect(second.status).toBe(200);
+		expect(second.body.dependencies.httpCache).toEqual(expect.objectContaining({
+			enabled: true,
+			etagHits: expect.any(Number),
+			etagMisses: expect.any(Number),
+			shortCircuitedResponses: expect.any(Number),
+			bodyBytesSaved: expect.any(Number),
+		}));
+		// The counter may be 1 if the test ran in isolation with only the second
+		// request hitting a fresh middleware (status body changes between calls
+		// because of Date.now() in deliveryMetrics, so each GET is a miss).
+		expect(second.body.dependencies.httpCache.etagMisses).toBeGreaterThanOrEqual(1);
+		expect(second.body.featureFlags.httpConditionalGet).toBe(true);
+	});
+
+	it('reports the httpCache dependency as disabled when the gate is false', async () => {
+		process.env.ENABLE_HTTP_CONDITIONAL_GET = 'false';
+		conditionalGet.resetForTesting();
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+		expect(response.status).toBe(200);
+		expect(response.headers.etag).toBeUndefined();
+		expect(response.body.featureFlags.httpConditionalGet).toBe(false);
+		expect(response.body.dependencies.httpCache.enabled).toBe(false);
 	});
 });

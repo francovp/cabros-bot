@@ -329,6 +329,13 @@
       "description": "Enable persistent Firestore-backed deduplication for news monitor",
       "valueType": "BOOLEAN"
     },
+    "ENABLE_HTTP_CONDITIONAL_GET": {
+      "defaultValue": {
+        "value": "true"
+      },
+      "description": "Enable ETag/If-None-Match conditional GET on read-only /api/* endpoints so admin polling can short-circuit to 304 Not Modified",
+      "valueType": "BOOLEAN"
+    },
     "ZERO_CHANNEL_ALERT_COOLDOWN_MS": {
       "defaultValue": {
         "value": "300000"
