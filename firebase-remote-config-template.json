@@ -363,6 +363,27 @@
       },
       "description": "Cooldown length in alert-timeframe bars for same-signal repeat suppression",
       "valueType": "NUMBER"
+    },
+    "PRICE_CACHE_TTL_MS_CRYPTO": {
+      "defaultValue": {
+        "value": "15000"
+      },
+      "description": "Process-local TTL in milliseconds for cached /precio crypto (Binance) quotes",
+      "valueType": "NUMBER"
+    },
+    "PRICE_CACHE_TTL_MS_EQUITY": {
+      "defaultValue": {
+        "value": "60000"
+      },
+      "description": "Process-local TTL in milliseconds for cached /precio equity (Twelve Data) quotes",
+      "valueType": "NUMBER"
+    },
+    "PRICE_CACHE_MAX_ENTRIES_PER_BUCKET": {
+      "defaultValue": {
+        "value": "256"
+      },
+      "description": "Maximum number of cached entries per bucket in the /precio price cache (LRU eviction)",
+      "valueType": "NUMBER"
     }
   },
   "version": {

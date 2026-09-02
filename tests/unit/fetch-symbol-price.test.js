@@ -35,6 +35,7 @@ jest.mock('../../src/services/monitoring/SentryService', () => ({
 const { mockGetAvgPrice } = require('binance');
 const equityMarketDataService = require('../../src/services/storage/EquityMarketDataService');
 const sentryService = require('../../src/services/monitoring/SentryService');
+const priceQuoteCache = require('../../src/services/cache/PriceQuoteCache');
 const {
 	classifyPriceQuery,
 	fetchSymbolPrice,
@@ -56,6 +57,7 @@ function buildContext(text) {
 describe('fetchPriceCryptoSymbol and /precio command', () => {
 	beforeEach(() => {
 		jest.clearAllMocks();
+		priceQuoteCache._resetForTesting();
 		equityMarketDataService.isSupportedExchange.mockImplementation((ex) =>
 			['BATS', 'NASDAQ', 'NYSE', 'AMEX', 'NYSE ARCA', 'FX_IDC', 'SPCFD'].includes(ex)
 		);
@@ -226,6 +228,66 @@ describe('fetchPriceCryptoSymbol and /precio command', () => {
 			await expect(fetchSymbolPrice(context)).rejects.toMatchObject({
 				userMessage: 'No se encontró el símbolo INVALIDUSDT en Binance.',
 			});
+		});
+
+		it('caches crypto quotes so repeated lookups do not re-call Binance', async () => {
+			mockGetAvgPrice.mockResolvedValue({ price: 65000 });
+			const context1 = buildContext('/precio BTCUSDT');
+			const context2 = buildContext('/precio BTCUSDT');
+
+			const first = await fetchSymbolPrice(context1);
+			const second = await fetchSymbolPrice(context2);
+
+			expect(first).toEqual(second);
+			expect(mockGetAvgPrice).toHaveBeenCalledTimes(1);
+		});
+
+		it('caches equity quotes so repeated lookups do not re-call Twelve Data', async () => {
+			equityMarketDataService.getQuote.mockResolvedValue({
+				symbol: 'NVDA',
+				price: 125.5,
+				percentChange: 2.32,
+			});
+			const context1 = buildContext('/precio NVDA');
+			const context2 = buildContext('/precio NVDA');
+
+			await fetchSymbolPrice(context1);
+			await fetchSymbolPrice(context2);
+
+			expect(equityMarketDataService.getQuote).toHaveBeenCalledTimes(1);
+		});
+
+		it('never caches failed crypto lookups', async () => {
+			const err = new Error('Network error');
+			mockGetAvgPrice.mockRejectedValueOnce(err);
+			mockGetAvgPrice.mockResolvedValueOnce({ price: 65000 });
+			const context = buildContext('/precio BTCUSDT');
+
+			await expect(fetchSymbolPrice(context)).rejects.toMatchObject({
+				userMessage: 'No se pudo obtener el precio de BTCUSDT en Binance.',
+			});
+
+			const recovered = await fetchSymbolPrice(buildContext('/precio BTCUSDT'));
+			expect(recovered.price).toBe(65000);
+			expect(mockGetAvgPrice).toHaveBeenCalledTimes(2);
+		});
+
+		it('never caches failed equity lookups', async () => {
+			const err = new Error('Network error');
+			equityMarketDataService.getQuote.mockRejectedValueOnce(err);
+			equityMarketDataService.getQuote.mockResolvedValueOnce({
+				symbol: 'NVDA',
+				price: 125.5,
+				percentChange: 2.32,
+			});
+			const context = buildContext('/precio NVDA');
+
+			await expect(fetchSymbolPrice(context)).rejects.toMatchObject({
+				userMessage: 'No se pudo obtener el precio de NVDA en Twelve Data.',
+			});
+
+			await fetchSymbolPrice(buildContext('/precio NVDA'));
+			expect(equityMarketDataService.getQuote).toHaveBeenCalledTimes(2);
 		});
 
 		it('fetches and formats equity price with 24h change from Twelve Data when enabled', async () => {
