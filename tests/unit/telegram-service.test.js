@@ -591,4 +591,127 @@ describe('TelegramService', () => {
 		expect(result.attemptCount).toBe(1);
 		expect(bot.telegram.sendMessage).toHaveBeenCalledTimes(1);
 	});
+
+	describe('chart attachment (GH-799)', () => {
+		it('sends photo with caption when alert.chartBuffer is a Buffer and callApi is available', async () => {
+			const bot = {
+				telegram: {
+					callApi: jest.fn().mockResolvedValue({ message_id: 555 }),
+				},
+			};
+			const service = new TelegramService({
+				bot,
+				chatId: 'chat-1',
+				formatter: { format: (text) => text },
+			});
+			const chartBuffer = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+			const result = await service.send({
+				text: 'BTCUSDT short signal',
+				chartBuffer,
+			});
+
+			expect(result.success).toBe(true);
+			const sendPhotoCall = bot.telegram.callApi.mock.calls.find(
+				([method]) => method === 'sendPhoto',
+			);
+			expect(sendPhotoCall).toBeDefined();
+			expect(sendPhotoCall[1]).toEqual(expect.objectContaining({
+				chat_id: 'chat-1',
+				caption: 'BTCUSDT short signal',
+				photo: { source: chartBuffer },
+			}));
+			expect(result.messageId).toBe('555');
+		});
+
+		it('sends photo via sendPhoto when callApi is not available', async () => {
+			const bot = {
+				telegram: {
+					sendPhoto: jest.fn().mockResolvedValue({ message_id: 777 }),
+				},
+			};
+			const service = new TelegramService({
+				bot,
+				chatId: 'chat-2',
+				formatter: { format: (text) => text },
+			});
+			const chartBuffer = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+			const result = await service.send({
+				text: 'ETHUSDT long signal',
+				chartBuffer,
+			});
+
+			expect(result.success).toBe(true);
+			expect(bot.telegram.sendPhoto).toHaveBeenCalledWith('chat-2', { source: chartBuffer }, expect.objectContaining({
+				caption: 'ETHUSDT long signal',
+			}));
+		});
+
+		it('falls back to text-only delivery when sendPhoto fails', async () => {
+			const sendPhoto = jest.fn().mockRejectedValue(new Error('Telegram upload failed'));
+			const sendMessage = jest.fn().mockResolvedValue({ message_id: 999 });
+			const bot = {
+				telegram: {
+					sendPhoto,
+					sendMessage,
+				},
+			};
+			const service = new TelegramService({
+				bot,
+				chatId: 'chat-3',
+				formatter: { format: (text) => text },
+			});
+			const result = await service.send({
+				text: 'fallback text',
+				chartBuffer: Buffer.from([0x89, 0x50, 0x4e, 0x47]),
+			});
+
+			expect(result.success).toBe(true);
+			expect(sendPhoto).toHaveBeenCalledTimes(1);
+			expect(sendMessage).toHaveBeenCalledTimes(1);
+		});
+
+		it('skips photo when chartBuffer is missing or not a Buffer', async () => {
+			const sendPhoto = jest.fn().mockResolvedValue({ message_id: 1 });
+			const callApi = jest.fn().mockResolvedValue({ message_id: 2 });
+			const bot = {
+				telegram: { sendPhoto, callApi },
+			};
+			const service = new TelegramService({
+				bot,
+				chatId: 'chat-1',
+				formatter: { format: (text) => text },
+			});
+			const result1 = await service.send({ text: 'no chart here' });
+			expect(result1.success).toBe(true);
+			expect(sendPhoto).not.toHaveBeenCalled();
+
+			const result2 = await service.send({ text: 'still no chart', chartBuffer: 'not a buffer' });
+			expect(result2.success).toBe(true);
+			expect(sendPhoto).not.toHaveBeenCalled();
+		});
+
+		it('truncates the chart caption to the Telegram 1024-char limit', async () => {
+			const bot = {
+				telegram: {
+					callApi: jest.fn().mockResolvedValue({ message_id: 1 }),
+				},
+			};
+			const service = new TelegramService({
+				bot,
+				chatId: 'chat-1',
+				formatter: { format: (text) => text },
+			});
+			const longText = 'A'.repeat(2000);
+			await service.send({
+				text: longText,
+				chartBuffer: Buffer.from([0x89, 0x50, 0x4e, 0x47]),
+			});
+
+			const sendPhotoCall = bot.telegram.callApi.mock.calls.find(
+				([method]) => method === 'sendPhoto',
+			);
+			expect(sendPhotoCall).toBeDefined();
+			expect(sendPhotoCall[1].caption.length).toBe(1024);
+		});
+	});
 });

@@ -5131,6 +5131,84 @@
           }
         }
       },
+      "ChartRenderer": {
+        "type": "object",
+        "description": "Process-local, fail-open chart renderer used by the optional ENABLE_CHART_ATTACHMENTS feature. The renderer produces small sparkline PNG buffers for Telegram sendPhoto delivery without native canvas/sharp dependencies. All counters are bounded and redacted; the snapshot never includes chart pixel data, alert text, or symbol metadata.",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "True only when ENABLE_CHART_ATTACHMENTS=true is set in process.env or via Remote Config."
+          },
+          "renderCount": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Cumulative number of cache-miss renders since process start."
+          },
+          "cacheHitCount": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Cumulative number of cache hits since process start."
+          },
+          "cacheMissCount": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Cumulative number of cache misses since process start."
+          },
+          "successCount": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Cumulative number of successful renders since process start."
+          },
+          "failureCount": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Cumulative number of failed renders since process start (invalid input, timeout, encode failure)."
+          },
+          "lastFailureCategory": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "INVALID_INPUT",
+              "TIMEOUT",
+              null
+            ],
+            "description": "Sanitized last-failure category; null when no failure has been recorded."
+          },
+          "lastRenderedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "ISO-8601 timestamp of the most recent successful render; null until the first success."
+          },
+          "cacheSize": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Current number of cached chart PNG buffers."
+          },
+          "cacheMaxEntries": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10000,
+            "description": "Bounded maximum cache entries; older entries are evicted when this ceiling is reached."
+          },
+          "timeoutMs": {
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 60000,
+            "description": "Per-render timeout in milliseconds; renders exceeding the timeout return null so the alert falls back to text-only delivery."
+          },
+          "cacheTtlMs": {
+            "type": "integer",
+            "minimum": 1000,
+            "maximum": 3600000,
+            "description": "In-process cache TTL in milliseconds; cache entries are dropped after this window."
+          }
+        }
+      },
       "CallbackFields": {
         "type": "object",
         "description": "When callbackUrl is configured, each callback POST includes x-callback-timestamp (ISO-8601), x-callback-event, and a UUID x-callback-delivery-id. If a callback secret is configured (via callbackSecret or JOB_CALLBACK_SIGNING_SECRET), x-callback-signature is sent containing an HMAC-SHA256 hex digest over the newline-delimited timestamp, event, delivery ID, and raw JSON body. The secret itself is never transmitted. Hostname callback delivery is pinned to the public DNS answers that passed private-address validation for that attempt, preventing a second lookup from selecting a private destination; ALLOW_PRIVATE_CALLBACKS=true is an explicit override. Receivers should reject stale timestamps and deduplicate delivery IDs; retries use new IDs and signatures.",
@@ -5752,7 +5830,7 @@
       },
       "Status": {
         "type": "object",
-        "description": "Runtime status. readiness reports one-time bootstrap completion for the Telegram bot, notification services, and news monitor without provider credentials. TradingView dependencies expose configured endpoint metadata plus runtime status (unknown before an MCP operation, ready after success, degraded after failure), timestamps, sanitized error categories, success/failure counters, and dependencies.tradingViewMcp.enrichment.alertPath rolling 24-hour alert-path outcome rates without provider response bodies. dependencies.geminiQuota reports Gemini quota cooldown state, remaining cooldown duration, trigger counters, Brave search fallback events during cooldown, and grounding request telemetry counters without exposing prompt text or provider credentials. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters. featureFlags.firestoreJobStorage reports the ENABLE_FIRESTORE_JOB_STORAGE gate or the legacy ENABLE_FIRESTORE_ALERT_STORAGE gate; featureFlags.jobExecutionWorker reports JOB_EXECUTION_MODE=render-worker or firestore-poller; dependencies.jobExecutionQueue reports queue readiness and safe operational counters without broker credentials; featureFlags.firestoreScannerPresets reports ENABLE_FIRESTORE_SCANNER_PRESETS; dependencies.scannerPresetStorage reports the effective durable or ephemeral scanner-preset backend and readiness; dependencies.signalOutcomeWorker reports the scheduler role (web, worker, or disabled), graceful-shutdown state, cadence, heartbeat, and scanned/pending/evaluated/error counters; a disabled local scheduler reports ready false and status disabled because it is not the process evaluating outcomes; dependencies.firestoreJobStorage reports Firestore credential readiness for that runtime path; featureFlags.newsMonitorTestMode reports ENABLE_NEWS_MONITOR_TEST_MODE without changing news monitor behavior; featureFlags.messageFooterMetadata reports ENABLE_MESSAGE_FOOTER_METADATA and defaults to true unless explicitly set to false; featureFlags.cloudflareAig reports ENABLE_CLOUDFLARE_AIG and dependencies.cloudflareAig reports Cloudflare AI Gateway credential readiness; featureFlags.equityMarketData reports ENABLE_EQUITY_MARKET_DATA and dependencies.equityMarketData reports non-sensitive Twelve Data readiness for BATS/NASDAQ/NYSE/AMEX/NYSE ARCA outcome evaluation; featureFlags.firebaseRemoteConfig reports ENABLE_FIREBASE_REMOTE_CONFIG and dependencies.firebaseRemoteConfig reports only bounded loader metadata, source, template version, last successful load, last error category, and consecutive failures without remote values or credentials; featureFlags.notificationRedrive reports ENABLE_NOTIFICATION_REDRIVE and dependencies.notificationRedrive reports dead-letter redrive worker role, configuration, running state, and safe operational counters. featureFlags.alertSignalRepeatSuppression reports ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION and dependencies.alertSignalRepeatSuppression reports the enabled state plus non-sensitive suppression counters (suppressedCount, lastSuppressedAt, activeTrackedSignals).",
+        "description": "Runtime status. readiness reports one-time bootstrap completion for the Telegram bot, notification services, and news monitor without provider credentials. TradingView dependencies expose configured endpoint metadata plus runtime status (unknown before an MCP operation, ready after success, degraded after failure), timestamps, sanitized error categories, success/failure counters, and dependencies.tradingViewMcp.enrichment.alertPath rolling 24-hour alert-path outcome rates without provider response bodies. dependencies.geminiQuota reports Gemini quota cooldown state, remaining cooldown duration, trigger counters, Brave search fallback events during cooldown, and grounding request telemetry counters without exposing prompt text or provider credentials. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters. featureFlags.firestoreJobStorage reports the ENABLE_FIRESTORE_JOB_STORAGE gate or the legacy ENABLE_FIRESTORE_ALERT_STORAGE gate; featureFlags.jobExecutionWorker reports JOB_EXECUTION_MODE=render-worker or firestore-poller; dependencies.jobExecutionQueue reports queue readiness and safe operational counters without broker credentials; featureFlags.firestoreScannerPresets reports ENABLE_FIRESTORE_SCANNER_PRESETS; dependencies.scannerPresetStorage reports the effective durable or ephemeral scanner-preset backend and readiness; dependencies.signalOutcomeWorker reports the scheduler role (web, worker, or disabled), graceful-shutdown state, cadence, heartbeat, and scanned/pending/evaluated/error counters; a disabled local scheduler reports ready false and status disabled because it is not the process evaluating outcomes; dependencies.firestoreJobStorage reports Firestore credential readiness for that runtime path; featureFlags.newsMonitorTestMode reports ENABLE_NEWS_MONITOR_TEST_MODE without changing news monitor behavior; featureFlags.messageFooterMetadata reports ENABLE_MESSAGE_FOOTER_METADATA and defaults to true unless explicitly set to false; featureFlags.cloudflareAig reports ENABLE_CLOUDFLARE_AIG and dependencies.cloudflareAig reports Cloudflare AI Gateway credential readiness; featureFlags.equityMarketData reports ENABLE_EQUITY_MARKET_DATA and dependencies.equityMarketData reports non-sensitive Twelve Data readiness for BATS/NASDAQ/NYSE/AMEX/NYSE ARCA outcome evaluation; featureFlags.firebaseRemoteConfig reports ENABLE_FIREBASE_REMOTE_CONFIG and dependencies.firebaseRemoteConfig reports only bounded loader metadata, source, template version, last successful load, last error category, and consecutive failures without remote values or credentials; featureFlags.notificationRedrive reports ENABLE_NOTIFICATION_REDRIVE and dependencies.notificationRedrive reports dead-letter redrive worker role, configuration, running state, and safe operational counters. featureFlags.alertSignalRepeatSuppression reports ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION and dependencies.alertSignalRepeatSuppression reports the enabled state plus non-sensitive suppression counters (suppressedCount, lastSuppressedAt, activeTrackedSignals). featureFlags.chartAttachments reports ENABLE_CHART_ATTACHMENTS; dependencies.chartRenderer reports the chart renderer's enabled state, success/failure counters, cache hit/miss counters, and bounded timeout/TTL/cache-size settings without exposing chart pixel data, alert content, or symbol metadata.",
         "properties": {
           "readiness": {
             "$ref": "#/components/schemas/BootstrapReadiness"

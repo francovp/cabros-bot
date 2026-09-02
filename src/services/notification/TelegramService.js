@@ -254,6 +254,47 @@ class TelegramService extends NotificationChannel {
 			const messageIds = [];
 			let attemptCount = 0;
 			const retryState = { totalWaitMs: 0 };
+			const chartBuffer = alert.chartBuffer && Buffer.isBuffer(alert.chartBuffer) ? alert.chartBuffer : null;
+			if (chartBuffer && messageParts.length > 0) {
+				const photoCaption = messageParts[0];
+				if (signal?.aborted) {
+					return buildResult({
+						success: false,
+						channel: 'telegram',
+						error: signal.reason?.message || signal.reason || 'Operation aborted',
+						category: 'TIMEOUT',
+						attemptCount,
+						messageIds,
+						messageId: messageIds.join(','),
+						messageCount: messageIds.length,
+						aborted: true,
+						threadId,
+					});
+				}
+				const photoResult = await this.sendChartPhoto(chatId, chartBuffer, photoCaption, !!alert.enriched, threadId, signal);
+				attemptCount += photoResult.attemptCount;
+				if (!photoResult.success) {
+					if (photoResult.aborted) {
+						return buildResult({
+							success: false,
+							channel: 'telegram',
+							error: getErrorMessage(photoResult.error),
+							category: 'TIMEOUT',
+							attemptCount,
+							messageIds,
+							messageId: messageIds.join(','),
+							messageCount: messageIds.length,
+							aborted: true,
+							threadId,
+						});
+					}
+					// Fail-open: chart attachment failure must not block text delivery.
+					this.logger?.warn?.(`Telegram chart attachment failed, falling back to text-only: ${getErrorMessage(photoResult.error)}`);
+				} else {
+					messageIds.push(String(photoResult.response.message_id));
+					messageParts.shift();
+				}
+			}
 			for (const messagePart of messageParts) {
 				if (signal?.aborted) {
 					return buildResult({
@@ -324,6 +365,68 @@ class TelegramService extends NotificationChannel {
 				category: getCategory(error, getStatusCode(error)),
 			});
 		}
+	}
+
+	async sendChartPhoto(chatId, chartBuffer, caption, enriched, threadId, signal) {
+		let totalAttempts = 0;
+		const captionLimit = 1024;
+		const safeCaption = (typeof caption === 'string' && caption.length > 0)
+			? caption.substring(0, captionLimit)
+			: '';
+		const photoPayload = {
+			chat_id: chatId,
+			photo: { source: chartBuffer },
+			caption: safeCaption,
+		};
+		if (enriched) {
+			photoPayload.parse_mode = 'MarkdownV2';
+		}
+		if (threadId !== null && threadId !== undefined) {
+			photoPayload.message_thread_id = threadId;
+		}
+
+		const callSendPhoto = () => {
+			if (typeof this.bot.telegram.callApi === 'function') {
+				const extraOpts = signal ? { signal } : {};
+				return this.bot.telegram.callApi('sendPhoto', photoPayload, extraOpts);
+			}
+			return this.bot.telegram.sendPhoto(chatId, { source: chartBuffer }, {
+				caption: safeCaption,
+				...(enriched ? { parse_mode: 'MarkdownV2' } : {}),
+				...(threadId !== null && threadId !== undefined ? { message_thread_id: threadId } : {}),
+			});
+		};
+
+		for (let retry = 0; retry <= this.maxRetries; retry += 1) {
+			if (signal?.aborted) {
+				return {
+					success: false,
+					error: new Error(signal.reason?.message || signal.reason || 'Operation aborted'),
+					attemptCount: totalAttempts,
+					aborted: true,
+				};
+			}
+			totalAttempts += 1;
+			try {
+				const response = await callSendPhoto();
+				return { success: true, response, attemptCount: totalAttempts };
+			} catch (error) {
+				const statusCode = getStatusCode(error);
+				if (statusCode === 429) {
+					const delay = getRetryAfterMs(error, this.fallbackRetryDelayMs);
+					if (retry < this.maxRetries && delay <= this.maxRetryDelayMs) {
+						try {
+							await sleepWithSignal(delay, signal);
+						} catch (sleepError) {
+							return { success: false, error: sleepError, attemptCount: totalAttempts, aborted: !!signal?.aborted };
+						}
+						continue;
+					}
+				}
+				return { success: false, error, attemptCount: totalAttempts };
+			}
+		}
+		return { success: false, error: new Error('Telegram sendPhoto retries exhausted'), attemptCount: totalAttempts };
 	}
 
 	async sendMessagePart(sendMessage, chatId, messagePart, enriched, signal, retryState = { totalWaitMs: 0 }, threadId = null) {

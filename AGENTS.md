@@ -1560,3 +1560,36 @@ Binance 451 / `restricted location` errors are now classified as `binance_region
 - `BINANCE_DATA_BASE_URL` — Optional override for all Binance market-data REST calls. Default `https://api.binance.com` (preserves existing behavior when unset). Must be an http(s) URL; live trading also requires `https://`. Classified as **environment-only** for Remote Config parity (external destination; secrets/credentials/external-endpoint policy excludes it).
 
 No endpoint, OpenAPI, Postman, or Remote Config contract changed; the new env var follows the standard `environment-only` classification.
+
+## Inline Chart Attachments (CB-? / Issue #799)
+
+`/api/webhook/alert` and other alert-producing surfaces can attach a PNG chart to the Telegram delivery when the alert envelope includes a `chartBuffer` and `ENABLE_CHART_ATTACHMENTS=true`. The renderer is process-local, dependency-free (no `canvas`/`sharp` — uses Node's built-in `zlib` and a pure-JS PNG encoder at `src/services/notification/charts/pngEncoder.js`), and fail-open: invalid inputs, timeouts, and render errors all return `null` so alert delivery proceeds unchanged. WhatsApp and Discord currently fall back to text-only and log a `console.warn`; extending them is a follow-up.
+
+**Core Components**:
+- `src/services/notification/charts/pngEncoder.js` — Minimal RGBA/grayscale PNG encoder (max 1024×1024). Uses the standard PNG IHDR/IDAT/IEND chunks and the built-in `zlib` module. Returns `null` on invalid input so callers fall through.
+- `src/services/notification/charts/chartRenderer.js` — `ChartRenderer` class. `renderSparkline({ values, symbol, timeframe, rangeKey, width, height })` returns a `Buffer` or `null`. Bounded in-process Map cache keyed by `(type, symbol, timeframe, rangeKey, width, height, length, first, last, min, max)`. `getStatus()` returns a redacted counter snapshot.
+- `src/services/notification/charts/index.js` — Process-wide singleton. No hot-reload; tests instantiate `ChartRenderer` directly.
+- `src/services/notification/TelegramService.js` — `sendChartPhoto()` helper using Telegraf `callApi('sendPhoto', ...)` when available, falling back to `bot.telegram.sendPhoto(...)`. The `send()` entry point sends the photo with the first formatted-text chunk as the caption (truncated to 1024 chars), then continues with the existing text-loop for any remaining chunks. Photo failure is logged as a `console.warn` and the alert proceeds text-only.
+- `src/services/remoteConfig/RemoteConfigService.js` — Allow-list entries: `ENABLE_CHART_ATTACHMENTS` (boolean, default `false`), `CHART_RENDER_TIMEOUT_MS` (100–60000, default `5000`), `CHART_CACHE_TTL_MS` (1000–3600000, default `300000`), `CHART_CACHE_MAX_ENTRIES` (1–10000, default `256`), `CHART_DEFAULT_WIDTH` / `CHART_DEFAULT_HEIGHT` (16–1024, defaults `200` / `60`).
+- `src/controllers/status.js` — `featureFlags.chartAttachments` mirrors the merged env/Remote Config value. `dependencies.chartRenderer` exposes the redacted snapshot: `enabled`, `renderCount`, `cacheHitCount`, `cacheMissCount`, `successCount`, `failureCount`, `lastFailureCategory` (`INVALID_INPUT`/`TIMEOUT`/null), `lastRenderedAt`, `cacheSize`, `cacheMaxEntries`, `timeoutMs`, `cacheTtlMs`. No chart pixel data, alert text, or symbol metadata is ever returned.
+- `firebase-remote-config-template.json` — Six new entries mirror the schema.
+
+**Configuration**:
+- `ENABLE_CHART_ATTACHMENTS` — Master opt-in flag (default `false`). Env-only at first; the Remote Config allow-list exposes the same name so operators can roll it out per environment without a redeploy.
+- `CHART_RENDER_TIMEOUT_MS` — Per-render deadline (default `5000`, range `100`–`60000`).
+- `CHART_CACHE_TTL_MS` — Cache TTL in milliseconds (default `300000`, range `1000`–`3600000`).
+- `CHART_CACHE_MAX_ENTRIES` — Bounded cache size (default `256`, range `1`–`10000`).
+- `CHART_DEFAULT_WIDTH` / `CHART_DEFAULT_HEIGHT` — Default sparkline dimensions (defaults `200`/`60`, range `16`–`1024`).
+
+**Fail-open guarantees**:
+- Disabled flag, missing/non-Buffer `chartBuffer`, invalid series, render timeout, encode failure, and any Telegram photo-side failure all return to text-only delivery with a `console.warn` log.
+- Existing alerts (no `chartBuffer`) keep their byte-for-byte identical behavior; the `send()` text loop is unchanged.
+- Cache key includes width/height/series extremes so cached PNGs cannot be served for a different visible range.
+
+**Coverage**:
+- `tests/unit/chart-renderer.test.js` — Valid PNG signature, cache reuse, fail-open paths, flat-series division-by-zero safety, status redacted snapshot, and `pngEncoder` dimension/buffer validation.
+- `tests/unit/telegram-service.test.js` — Photo-send paths via `callApi` and `sendPhoto`, fallback to text-only on photo failure, missing/non-Buffer chartBuffer ignored, 1024-char caption truncation.
+
+**No new dependency** — the renderer uses Node's built-in `zlib` and a 100-line pure-JS PNG encoder. No `canvas`, `sharp`, `chartjs-node-canvas`, or `chart.js` runtime dependency was added.
+
+This adds one feature flag, one status field, one dependency snapshot, and six Remote Config parameters; the existing Telegram/WhatsApp/Discord notification contract is preserved when the flag is off.
