@@ -20,6 +20,7 @@ const { whatsAppCommandBridgeService } = require('../services/notification/Whats
 const geminiQuotaManager = require('../services/grounding/geminiQuotaManager');
 const groundingMetrics = require('../services/grounding/metrics');
 const { signalRepeatCooldown } = require('../services/alerts/signalRepeatCooldown');
+const { chartRenderer } = require('../services/notification/charts');
 const { getCoalescingStatus } = require('../services/grounding/grounding');
 const {
 	getDeploymentCommit,
@@ -210,6 +211,7 @@ function getStatus() {
 	const llmAlertEnrichmentEnabled = isEnabled(process.env.ENABLE_LLM_ALERT_ENRICHMENT);
 	const cloudflareAigEnabled = isEnabled(process.env.ENABLE_CLOUDFLARE_AIG);
 	const messageFooterMetadataEnabled = runtimeConfig.ENABLE_MESSAGE_FOOTER_METADATA;
+	const chartAttachmentsEnabled = runtimeConfig.ENABLE_CHART_ATTACHMENTS;
 	const remoteConfigStatus = remoteConfigService.getStatus();
 	const signalOutcomeTrackingEnabled = isEnabled(process.env.ENABLE_SIGNAL_OUTCOME_TRACKING);
 	const equityMarketDataStatus = equityMarketDataService.getStatus();
@@ -357,6 +359,7 @@ function getStatus() {
 			notificationRedrive: notificationRedriveService.isEnabled(),
 			alertSignalRepeatSuppression: signalRepeatCooldown.isEnabled(),
 			whatsappCommands: whatsAppCommandBridgeService.isEnabled(),
+			chartAttachments: chartAttachmentsEnabled,
 		},
 		deliveryChannels: {
 			telegram: {
@@ -430,6 +433,7 @@ function getStatus() {
 			},
 			jobExecutionQueue: jobExecutionQueueStatus,
 			binanceTrading: binanceTradingStatus,
+			chartRenderer: chartRenderer.getStatus(),
 		},
 	};
 }

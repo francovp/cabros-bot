@@ -363,6 +363,48 @@
       },
       "description": "Cooldown length in alert-timeframe bars for same-signal repeat suppression",
       "valueType": "NUMBER"
+    },
+    "ENABLE_CHART_ATTACHMENTS": {
+      "defaultValue": {
+        "value": "false"
+      },
+      "description": "Render small chart PNGs (sparklines, candlesticks) and attach them to Telegram alerts when the alert envelope provides a chartBuffer; WhatsApp and Discord fall back to text-only",
+      "valueType": "BOOLEAN"
+    },
+    "CHART_RENDER_TIMEOUT_MS": {
+      "defaultValue": {
+        "value": "5000"
+      },
+      "description": "Maximum time the chart renderer may spend producing a single PNG buffer before falling back to text-only delivery",
+      "valueType": "NUMBER"
+    },
+    "CHART_CACHE_TTL_MS": {
+      "defaultValue": {
+        "value": "300000"
+      },
+      "description": "In-process cache TTL for rendered chart PNGs keyed by (type, symbol, timeframe, rangeKey, width, height)",
+      "valueType": "NUMBER"
+    },
+    "CHART_CACHE_MAX_ENTRIES": {
+      "defaultValue": {
+        "value": "256"
+      },
+      "description": "Maximum number of cached chart entries before the oldest is evicted",
+      "valueType": "NUMBER"
+    },
+    "CHART_DEFAULT_WIDTH": {
+      "defaultValue": {
+        "value": "200"
+      },
+      "description": "Default width for rendered sparkline charts in pixels",
+      "valueType": "NUMBER"
+    },
+    "CHART_DEFAULT_HEIGHT": {
+      "defaultValue": {
+        "value": "60"
+      },
+      "description": "Default height for rendered sparkline charts in pixels",
+      "valueType": "NUMBER"
     }
   },
   "version": {

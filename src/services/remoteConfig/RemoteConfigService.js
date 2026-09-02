@@ -68,6 +68,12 @@ const PARAMETER_SCHEMA = Object.freeze({
 	ENABLE_ALERT_HTF_RENDER: { type: 'boolean', defaultValue: true },
 	ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION: { type: 'boolean', defaultValue: false },
 	ALERT_SIGNAL_COOLDOWN_BARS: { type: 'number', defaultValue: 1, integer: true, min: 1, max: 10 },
+	ENABLE_CHART_ATTACHMENTS: { type: 'boolean', defaultValue: false },
+	CHART_RENDER_TIMEOUT_MS: { type: 'number', defaultValue: 5000, integer: true, min: 100, max: 60000 },
+	CHART_CACHE_TTL_MS: { type: 'number', defaultValue: 300000, integer: true, min: 1000, max: 3600000 },
+	CHART_CACHE_MAX_ENTRIES: { type: 'number', defaultValue: 256, integer: true, min: 1, max: 10000 },
+	CHART_DEFAULT_WIDTH: { type: 'number', defaultValue: 200, integer: true, min: 16, max: 1024 },
+	CHART_DEFAULT_HEIGHT: { type: 'number', defaultValue: 60, integer: true, min: 16, max: 1024 },
 });
 
 let remoteOverrides = {};
