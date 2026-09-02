@@ -1695,12 +1695,21 @@
           "Operations"
         ],
         "summary": "Get runtime capabilities and dependency readiness",
+        "description": "Returns the runtime status payload. When the conditional GET middleware is enabled (default), the response includes an ETag header and Cache-Control: private, max-age=0, must-revalidate. A subsequent request that supplies a matching If-None-Match header is short-circuited to 304 Not Modified with an empty body. The X-Conditional-Get response header reports hit/miss/pass-through for the per-request outcome.",
         "operationId": "getStatus",
         "responses": {
           "200": {
             "$ref": "#/components/responses/StatusResult"
+          },
+          "304": {
+            "description": "Not Modified. Returned when the supplied If-None-Match header matches the current ETag and the conditional GET middleware is enabled. The response body is empty; the ETag and Cache-Control headers are preserved."
           }
         },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IfNoneMatch"
+          }
+        ],
         "security": [
           {
             "ApiKeyHeader": []
@@ -1721,12 +1730,21 @@
           "Operations"
         ],
         "summary": "Alias for runtime status",
+        "description": "Same response shape and conditional GET semantics as GET /api/status.",
         "operationId": "getCapabilities",
         "responses": {
           "200": {
             "$ref": "#/components/responses/StatusResult"
+          },
+          "304": {
+            "description": "Not Modified. Returned when the supplied If-None-Match header matches the current ETag and the conditional GET middleware is enabled."
           }
         },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IfNoneMatch"
+          }
+        ],
         "security": [
           {
             "ApiKeyHeader": []
@@ -2093,6 +2111,15 @@
           "maxLength": 128
         },
         "description": "Optional client-supplied request correlation ID. If provided, it must be 1-128 printable ASCII characters. If omitted or invalid, a UUIDv4 correlation ID is generated automatically. Echoed in the response and persisted on stored alerts."
+      },
+      "IfNoneMatch": {
+        "name": "if-none-match",
+        "in": "header",
+        "required": false,
+        "schema": {
+          "type": "string"
+        },
+        "description": "Optional conditional GET validator. When the supplied ETag (or `*`) matches the current response ETag, read endpoints short-circuit to 304 Not Modified with an empty body. Generated ETag values are weak (W/\"...\"); clients may send the unprefixed base64 hash as well. Honored when ENABLE_HTTP_CONDITIONAL_GET is true (default)."
       }
     },
     "requestBodies": {
@@ -3311,6 +3338,55 @@
             "type": "number",
             "format": "double",
             "nullable": true
+          }
+        }
+      },
+      "HttpCacheDependency": {
+        "type": "object",
+        "description": "In-memory conditional GET counters and gate status for read-only /api/* endpoints. Read endpoints emit a deterministic SHA-1 weak ETag and a Cache-Control: private, max-age=0, must-revalidate header. A subsequent request with a matching If-None-Match is short-circuited to 304 Not Modified with an empty body. The X-Conditional-Get response header reports the per-request outcome (hit, miss, or pass-through). Set ENABLE_HTTP_CONDITIONAL_GET=false to suppress the middleware (no ETag, no Cache-Control from this layer). Counters reset on process restart.",
+        "required": [
+          "enabled",
+          "etagHits",
+          "etagMisses",
+          "bodyBytesSaved",
+          "shortCircuitedResponses",
+          "shortCircuitErrors"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "True when the conditional GET middleware is active for this process."
+          },
+          "etagHits": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Cumulative number of 304 Not Modified short-circuits since the process started."
+          },
+          "etagMisses": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Cumulative number of responses that produced a fresh ETag (or were not eligible for 304) since the process started."
+          },
+          "bodyBytesSaved": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Cumulative payload bytes saved by 304 short-circuits since the process started."
+          },
+          "shortCircuitedResponses": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Number of GET responses served as 304 Not Modified since the process started."
+          },
+          "shortCircuitErrors": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Number of times the ETag computation or short-circuit path threw an error; non-fatal, fail-open."
+          },
+          "lastResetAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "ISO-8601 timestamp of the first request that activated the middleware in this process; null until the first call."
           }
         }
       },
@@ -5752,7 +5828,7 @@
       },
       "Status": {
         "type": "object",
-        "description": "Runtime status. readiness reports one-time bootstrap completion for the Telegram bot, notification services, and news monitor without provider credentials. TradingView dependencies expose configured endpoint metadata plus runtime status (unknown before an MCP operation, ready after success, degraded after failure), timestamps, sanitized error categories, success/failure counters, and dependencies.tradingViewMcp.enrichment.alertPath rolling 24-hour alert-path outcome rates without provider response bodies. dependencies.geminiQuota reports Gemini quota cooldown state, remaining cooldown duration, trigger counters, Brave search fallback events during cooldown, and grounding request telemetry counters without exposing prompt text or provider credentials. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters. featureFlags.firestoreJobStorage reports the ENABLE_FIRESTORE_JOB_STORAGE gate or the legacy ENABLE_FIRESTORE_ALERT_STORAGE gate; featureFlags.jobExecutionWorker reports JOB_EXECUTION_MODE=render-worker or firestore-poller; dependencies.jobExecutionQueue reports queue readiness and safe operational counters without broker credentials; featureFlags.firestoreScannerPresets reports ENABLE_FIRESTORE_SCANNER_PRESETS; dependencies.scannerPresetStorage reports the effective durable or ephemeral scanner-preset backend and readiness; dependencies.signalOutcomeWorker reports the scheduler role (web, worker, or disabled), graceful-shutdown state, cadence, heartbeat, and scanned/pending/evaluated/error counters; a disabled local scheduler reports ready false and status disabled because it is not the process evaluating outcomes; dependencies.firestoreJobStorage reports Firestore credential readiness for that runtime path; featureFlags.newsMonitorTestMode reports ENABLE_NEWS_MONITOR_TEST_MODE without changing news monitor behavior; featureFlags.messageFooterMetadata reports ENABLE_MESSAGE_FOOTER_METADATA and defaults to true unless explicitly set to false; featureFlags.cloudflareAig reports ENABLE_CLOUDFLARE_AIG and dependencies.cloudflareAig reports Cloudflare AI Gateway credential readiness; featureFlags.equityMarketData reports ENABLE_EQUITY_MARKET_DATA and dependencies.equityMarketData reports non-sensitive Twelve Data readiness for BATS/NASDAQ/NYSE/AMEX/NYSE ARCA outcome evaluation; featureFlags.firebaseRemoteConfig reports ENABLE_FIREBASE_REMOTE_CONFIG and dependencies.firebaseRemoteConfig reports only bounded loader metadata, source, template version, last successful load, last error category, and consecutive failures without remote values or credentials; featureFlags.notificationRedrive reports ENABLE_NOTIFICATION_REDRIVE and dependencies.notificationRedrive reports dead-letter redrive worker role, configuration, running state, and safe operational counters. featureFlags.alertSignalRepeatSuppression reports ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION and dependencies.alertSignalRepeatSuppression reports the enabled state plus non-sensitive suppression counters (suppressedCount, lastSuppressedAt, activeTrackedSignals).",
+        "description": "Runtime status. readiness reports one-time bootstrap completion for the Telegram bot, notification services, and news monitor without provider credentials. TradingView dependencies expose configured endpoint metadata plus runtime status (unknown before an MCP operation, ready after success, degraded after failure), timestamps, sanitized error categories, success/failure counters, and dependencies.tradingViewMcp.enrichment.alertPath rolling 24-hour alert-path outcome rates without provider response bodies. dependencies.geminiQuota reports Gemini quota cooldown state, remaining cooldown duration, trigger counters, Brave search fallback events during cooldown, and grounding request telemetry counters without exposing prompt text or provider credentials. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters. featureFlags.firestoreJobStorage reports the ENABLE_FIRESTORE_JOB_STORAGE gate or the legacy ENABLE_FIRESTORE_ALERT_STORAGE gate; featureFlags.jobExecutionWorker reports JOB_EXECUTION_MODE=render-worker or firestore-poller; dependencies.jobExecutionQueue reports queue readiness and safe operational counters without broker credentials; featureFlags.firestoreScannerPresets reports ENABLE_FIRESTORE_SCANNER_PRESETS; dependencies.scannerPresetStorage reports the effective durable or ephemeral scanner-preset backend and readiness; dependencies.signalOutcomeWorker reports the scheduler role (web, worker, or disabled), graceful-shutdown state, cadence, heartbeat, and scanned/pending/evaluated/error counters; a disabled local scheduler reports ready false and status disabled because it is not the process evaluating outcomes; dependencies.firestoreJobStorage reports Firestore credential readiness for that runtime path; featureFlags.newsMonitorTestMode reports ENABLE_NEWS_MONITOR_TEST_MODE without changing news monitor behavior; featureFlags.messageFooterMetadata reports ENABLE_MESSAGE_FOOTER_METADATA and defaults to true unless explicitly set to false; featureFlags.cloudflareAig reports ENABLE_CLOUDFLARE_AIG and dependencies.cloudflareAig reports Cloudflare AI Gateway credential readiness; featureFlags.equityMarketData reports ENABLE_EQUITY_MARKET_DATA and dependencies.equityMarketData reports non-sensitive Twelve Data readiness for BATS/NASDAQ/NYSE/AMEX/NYSE ARCA outcome evaluation; featureFlags.firebaseRemoteConfig reports ENABLE_FIREBASE_REMOTE_CONFIG and dependencies.firebaseRemoteConfig reports only bounded loader metadata, source, template version, last successful load, last error category, and consecutive failures without remote values or credentials; featureFlags.notificationRedrive reports ENABLE_NOTIFICATION_REDRIVE and dependencies.notificationRedrive reports dead-letter redrive worker role, configuration, running state, and safe operational counters. featureFlags.alertSignalRepeatSuppression reports ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION and dependencies.alertSignalRepeatSuppression reports the enabled state plus non-sensitive suppression counters (suppressedCount, lastSuppressedAt, activeTrackedSignals). featureFlags.httpConditionalGet reports ENABLE_HTTP_CONDITIONAL_GET (Remote Config allow-listed) and dependencies.httpCache reports the in-process ETag/304 hit, miss, body-bytes-saved, and short-circuit error counters; the gate defaults to true and never changes payload shape for handlers that already set their own ETag (such as scanner-presets version-based optimistic concurrency, which keeps the handler ETag and adds Cache-Control only).",
         "properties": {
           "readiness": {
             "$ref": "#/components/schemas/BootstrapReadiness"
@@ -5775,6 +5851,9 @@
             "properties": {
               "firebaseRemoteConfig": {
                 "$ref": "#/components/schemas/FirebaseRemoteConfigDependency"
+              },
+              "httpCache": {
+                "$ref": "#/components/schemas/HttpCacheDependency"
               }
             }
           }

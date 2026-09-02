@@ -308,6 +308,76 @@
       ]
     },
     {
+      "name": "Get Status - conditional GET (304)",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{apiKey}}",
+            "type": "text"
+          },
+          {
+            "key": "if-none-match",
+            "value": "W/\"<ETag returned by the previous /api/status response>\"",
+            "type": "text",
+            "description": "Echo the ETag header from a prior /api/status response. When the body is unchanged, the conditional GET middleware short-circuits to 304 Not Modified with an empty body. Accepts the unprefixed base64 hash, the W/ weak form, or *."
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/status",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "status"
+          ]
+        },
+        "description": "Protected status request demonstrating the ETag/If-None-Match short-circuit. The first call returns 200 with an ETag header; supplying that ETag (or *) in If-None-Match returns 304 with an empty body when the underlying state is unchanged. The X-Conditional-Get response header reports hit, miss, or pass-through. dependencies.httpCache exposes the in-process etagHits, etagMisses, bodyBytesSaved, and shortCircuitedResponses counters for operational visibility. Disabled by setting ENABLE_HTTP_CONDITIONAL_GET=false."
+      },
+      "response": [
+        {
+          "name": "304 Not Modified",
+          "status": "Not Modified",
+          "code": 304,
+          "body": ""
+        }
+      ]
+    },
+    {
+      "name": "Get Status - httpCache dependency snapshot",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{apiKey}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/status",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "status"
+          ]
+        },
+        "description": "Protected status request exposing the conditional GET dependency snapshot under dependencies.httpCache (enabled, etagHits, etagMisses, bodyBytesSaved, shortCircuitedResponses, shortCircuitErrors, lastResetAt) and the featureFlags.httpConditionalGet gate. Counters reset on process restart."
+      },
+      "response": [
+        {
+          "name": "200 OK - httpCache populated",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"featureFlags\":{\"httpConditionalGet\":true},\"dependencies\":{\"httpCache\":{\"enabled\":true,\"etagHits\":3,\"etagMisses\":12,\"bodyBytesSaved\":15732,\"shortCircuitedResponses\":3,\"shortCircuitErrors\":0,\"lastResetAt\":\"2026-09-02T17:00:00.000Z\"}}}"
+        }
+      ]
+    },
+    {
       "name": "Webhooks",
       "item": [
         {

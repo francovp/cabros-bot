@@ -27,6 +27,7 @@ const { validateApiKey } = require('../lib/auth');
 const { getApiStatus } = require('../controllers/status');
 const { postBinanceOrder, getBinanceOrders, deleteBinanceOrder } = require('../controllers/trading/binanceOrders');
 const { idempotencyMiddleware } = require('../lib/idempotency');
+const { withConditionalGet } = require('../lib/conditionalGet');
 const {
 	ADMIN_OPERATOR,
 	ADMIN_VIEWER,
@@ -41,35 +42,36 @@ function getRoutes(botOrGetter) {
 	const adminWrite = [validateAdminAccess, requireAdminRole(ADMIN_OPERATOR)];
 	const binanceOrderRead = [requireConfiguredAdminAccess, requireAdminRole(ADMIN_VIEWER)];
 	const binanceOrderWrite = [requireConfiguredAdminAccess, requireAdminRole(ADMIN_OPERATOR)];
+	const conditionalGet = withConditionalGet;
 	router.post('/webhook/alert', validateApiKey, idempotencyMiddleware, postAlert(botOrGetter));
 	router.post('/webhook/message', validateApiKey, idempotencyMiddleware, postMessage(botOrGetter));
 	router.post('/webhook/expanded-analysis-alert', validateApiKey, idempotencyMiddleware, postExpandedAnalysisAlert(botOrGetter));
 	router.post('/webhook/market-scanner-alert', validateApiKey, idempotencyMiddleware, postMarketScannerAlert(botOrGetter));
 	router.post('/webhook/volume-confirmation', validateApiKey, postVolumeConfirmation());
 	router.post('/webhook/symbol-analysis', validateApiKey, postSymbolAnalysis());
-	router.get('/alerts', ...adminRead, listAlerts);
-	router.get('/alerts/replays', ...adminRead, listReplays);
-	router.get('/alerts/summary', ...adminRead, summarizeAlerts);
-	router.get('/alerts/export', ...adminRead, exportAlerts);
+	router.get('/alerts', ...adminRead, conditionalGet(listAlerts));
+	router.get('/alerts/replays', ...adminRead, conditionalGet(listReplays));
+	router.get('/alerts/summary', ...adminRead, conditionalGet(summarizeAlerts));
+	router.get('/alerts/export', ...adminRead, conditionalGet(exportAlerts));
 	router.post('/alerts/:alertId/replay', ...adminWrite, idempotencyMiddleware, replayAlert(botOrGetter));
-	router.get('/alerts/:alertId', ...adminRead, getAlertById);
-	router.get('/outcomes', ...adminRead, listOutcomes);
-	router.get('/outcomes/summary', ...adminRead, summarizeOutcomes);
+	router.get('/alerts/:alertId', ...adminRead, conditionalGet(getAlertById));
+	router.get('/outcomes', ...adminRead, conditionalGet(listOutcomes));
+	router.get('/outcomes/summary', ...adminRead, conditionalGet(summarizeOutcomes));
 	router.post('/scanner-presets', ...adminWrite, postPreset);
-	router.get('/scanner-presets', ...adminRead, listPresets);
-	router.get('/scanner-presets/:id', ...adminRead, getPreset);
+	router.get('/scanner-presets', ...adminRead, conditionalGet(listPresets));
+	router.get('/scanner-presets/:id', ...adminRead, conditionalGet(getPreset));
 	router.put('/scanner-presets/:id', ...adminWrite, updatePreset);
 	router.delete('/scanner-presets/:id', ...adminWrite, deletePreset);
 	router.post('/scanner-presets/:id/run', ...adminWrite, idempotencyMiddleware, postRunPreset(botOrGetter));
 
 	// Async job endpoints
 	router.post('/jobs/tradingview-analysis', ...adminWrite, idempotencyMiddleware, postCreateJob(botOrGetter));
-	router.get('/jobs', ...adminRead, getJobList);
-	router.get('/jobs/:jobId', ...adminRead, getJobStatus);
+	router.get('/jobs', ...adminRead, conditionalGet(getJobList));
+	router.get('/jobs/:jobId', ...adminRead, conditionalGet(getJobStatus));
 	router.post('/jobs/:jobId/cancel', ...adminWrite, postCancelJob);
 	router.post('/jobs/:jobId/retry', ...adminWrite, idempotencyMiddleware, postRetryJob(botOrGetter));
 	router.post('/jobs/:jobId/retry-failed', ...adminWrite, idempotencyMiddleware, postRetryFailedJob(botOrGetter));
-	router.get('/trading/binance/orders', ...binanceOrderRead, getBinanceOrders);
+	router.get('/trading/binance/orders', ...binanceOrderRead, conditionalGet(getBinanceOrders));
 	router.post('/trading/binance/orders', ...binanceOrderWrite, idempotencyMiddleware, postBinanceOrder);
 	router.delete('/trading/binance/orders', ...binanceOrderWrite, deleteBinanceOrder);
 
@@ -78,8 +80,8 @@ function getRoutes(botOrGetter) {
 	router.post('/news-monitor', validateApiKey, newsMonitor.handleRequest.bind(newsMonitor));
 	router.get('/news-monitor', validateApiKey, newsMonitor.handleRequest.bind(newsMonitor));
 
-	router.get('/status', ...adminRead, getApiStatus);
-	router.get('/capabilities', ...adminRead, getApiStatus);
+	router.get('/status', ...adminRead, conditionalGet(getApiStatus));
+	router.get('/capabilities', ...adminRead, conditionalGet(getApiStatus));
 
 	return router;
 }
