@@ -25,6 +25,7 @@ const {
 const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteConfigService');
 const { parseTradingViewSignal, TIMEFRAME_MAP } = require('../../../../services/tradingview/parseTradingViewSignal');
 const { signalRepeatCooldown, oppositeKeyOf, buildSignalKey } = require('../../../../services/alerts/signalRepeatCooldown');
+const { alertModeration } = require('../../../../services/alerts/alertModeration');
 const { notificationRedriveService } = require('../../../../services/notification/NotificationRedriveService');
 const { isPreviewEnvironment } = require('../../../../lib/deploymentEnvironment');
 
@@ -218,6 +219,21 @@ function postAlert(botOrGetter) {
 				? body.source.trim()
 				: 'webhook-alert';
 			alert = { text, source };
+
+			if (alertModeration.isEnabled()) {
+				alertModeration.refreshConfig();
+				const verdict = alertModeration.evaluate(alert.text, { requestId });
+				if (verdict && verdict.rejected === true) {
+					console.warn(`[Alert] Moderation rejected payload (reason=${verdict.reason}, requestId=${requestId})`);
+					return res.json({
+						success: true,
+						delivered: false,
+						reason: 'moderation_rejected',
+						moderationReason: verdict.reason,
+						requestId,
+					});
+				}
+			}
 
 			const tokenUsage = new TokenUsageTracker();
 			const enriched = await processEnrichment(alert, { tokenUsage, useTradingViewData, parentSpan: requestSpan });
