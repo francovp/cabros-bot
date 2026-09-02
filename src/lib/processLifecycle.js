@@ -84,6 +84,7 @@ function createProcessLifecycle(options = {}) {
 		stopScannerPresetScheduler = () => undefined,
 		stopNewsMonitorScheduler = () => undefined,
 		stopRemoteConfig = () => undefined,
+		stopTelegramHealthProbe = () => undefined,
 		shutdownNewsMonitor = () => undefined,
 		flushSentry = () => undefined,
 		timeoutMs = DEFAULT_SHUTDOWN_TIMEOUT_MS,
@@ -183,6 +184,7 @@ function createProcessLifecycle(options = {}) {
 					safelyRun(logger, 'scanner preset scheduler', () => stopScannerPresetScheduler({ drain: true })),
 					safelyRun(logger, 'news monitor scheduler', () => stopNewsMonitorScheduler({ drain: true })),
 					safelyRun(logger, 'remote config service', stopRemoteConfig),
+					safelyRun(logger, 'telegram health probe', stopTelegramHealthProbe),
 					safelyRun(logger, 'news monitor cache', shutdownNewsMonitor),
 				]);
 				await safelyRun(logger, 'Sentry', () => flushSentry(Math.min(shutdownTimeoutMs, 2000)));
