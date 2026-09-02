@@ -276,6 +276,122 @@
       ]
     },
     {
+      "name": "Run Self-Test",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{apiKey}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/selftest/run",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "selftest",
+            "run"
+          ]
+        },
+        "description": "Runs the self-diagnostic suite. Each check has a 5s deadline; the whole suite has a 30s budget. Optional `only` query parameter scopes the run to a comma-separated list of check ids."
+      },
+      "response": [
+        {
+          "name": "200 OK - full run",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"status\":\"warn\",\"summary\":{\"pass\":4,\"warn\":1,\"fail\":1,\"skipped\":4},\"checks\":[{\"id\":\"telegram.bot_info\",\"status\":\"skipped\",\"message\":\"Telegram bot is disabled\",\"durationMs\":1,\"evidence\":null},{\"id\":\"telegram.env\",\"status\":\"pass\",\"message\":\"BOT_TOKEN and TELEGRAM_CHAT_ID are set\",\"durationMs\":0,\"evidence\":null},{\"id\":\"auth.api_key\",\"status\":\"pass\",\"message\":\"WEBHOOK_API_KEY is set\",\"durationMs\":0,\"evidence\":null},{\"id\":\"gemini.grounding\",\"status\":\"skipped\",\"message\":\"ENABLE_GEMINI_GROUNDING is not enabled\",\"durationMs\":0,\"evidence\":null},{\"id\":\"tradingview_mcp.endpoint\",\"status\":\"skipped\",\"message\":\"TRADINGVIEW_MCP_URL is not configured\",\"durationMs\":0,\"evidence\":null},{\"id\":\"firestore.collections\",\"status\":\"skipped\",\"message\":\"No Firestore feature is enabled\",\"durationMs\":0,\"evidence\":null},{\"id\":\"binance.trading\",\"status\":\"skipped\",\"message\":\"ENABLE_BINANCE_TRADING is not enabled\",\"durationMs\":0,\"evidence\":null},{\"id\":\"channels.enabled\",\"status\":\"warn\",\"message\":\"No outbound notification channels are enabled\",\"durationMs\":0,\"evidence\":null},{\"id\":\"rate_limiter.config\",\"status\":\"pass\",\"message\":\"Rate limiter is configured\",\"durationMs\":0,\"evidence\":{\"max\":100,\"windowMs\":60000}},{\"id\":\"service.metadata\",\"status\":\"pass\",\"message\":\"Service metadata is available\",\"durationMs\":0,\"evidence\":{\"name\":\"cabros-bot\",\"version\":\"0.1.0\",\"commit\":\"abc123\",\"uptimeSec\":12345,\"nodeVersion\":\"v24.18.0\"}}],\"service\":{\"name\":\"cabros-bot\",\"version\":\"0.1.0\",\"commit\":\"abc123\",\"uptimeSec\":12345,\"nodeVersion\":\"v24.18.0\"},\"startedAt\":\"2026-09-02T16:00:00.000Z\",\"finishedAt\":\"2026-09-02T16:00:00.020Z\",\"durationMs\":20,\"requestId\":\"selftest-001\",\"cached\":false}"
+        }
+      ]
+    },
+    {
+      "name": "Get Self-Test (cached)",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{apiKey}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/selftest",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "selftest"
+          ]
+        },
+        "description": "Returns the cached result of the most recent POST /api/selftest/run call. The result expires after 60 seconds; clients should call POST /api/selftest/run to refresh."
+      },
+      "response": [
+        {
+          "name": "200 OK - cached result",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"status\":\"warn\",\"summary\":{\"pass\":4,\"warn\":1,\"fail\":1,\"skipped\":4},\"checks\":[{\"id\":\"telegram.env\",\"status\":\"pass\",\"message\":\"BOT_TOKEN and TELEGRAM_CHAT_ID are set\",\"durationMs\":0,\"evidence\":null}],\"requestId\":\"selftest-002\",\"cached\":true}"
+        },
+        {
+          "name": "200 OK - no run yet",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"status\":\"unknown\",\"message\":\"No self-test has been run yet. POST /api/selftest/run to trigger one.\",\"requestId\":\"selftest-003\",\"cached\":false}"
+        }
+      ]
+    },
+    {
+      "name": "Run Self-Test (scoped to subset)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{apiKey}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/selftest/run?only=auth.api_key,service.metadata",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "selftest",
+            "run"
+          ],
+          "query": [
+            {
+              "key": "only",
+              "value": "auth.api_key,service.metadata"
+            }
+          ]
+        },
+        "description": "Scoped run: only executes the named checks. Unknown check ids return a fail result without running anything else."
+      },
+      "response": [
+        {
+          "name": "200 OK - scoped run",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"status\":\"pass\",\"summary\":{\"pass\":2,\"warn\":0,\"fail\":0,\"skipped\":0},\"checks\":[{\"id\":\"auth.api_key\",\"status\":\"pass\",\"message\":\"WEBHOOK_API_KEY is set\",\"durationMs\":0,\"evidence\":null},{\"id\":\"service.metadata\",\"status\":\"pass\",\"message\":\"Service metadata is available\",\"durationMs\":0,\"evidence\":{\"name\":\"cabros-bot\",\"version\":\"0.1.0\"}}],\"service\":{\"name\":\"cabros-bot\",\"version\":\"0.1.0\"},\"startedAt\":\"2026-09-02T16:00:00.000Z\",\"finishedAt\":\"2026-09-02T16:00:00.005Z\",\"durationMs\":5,\"requestId\":\"selftest-004\",\"cached\":false}"
+        },
+        {
+          "name": "200 OK - unknown ids reported as fail",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"status\":\"fail\",\"summary\":{\"pass\":0,\"warn\":0,\"fail\":1,\"skipped\":0},\"checks\":[{\"id\":\"unknown\",\"status\":\"fail\",\"message\":\"unknown checks: nope.nope\",\"durationMs\":0}],\"startedAt\":\"2026-09-02T16:00:00.000Z\",\"finishedAt\":\"2026-09-02T16:00:00.001Z\",\"durationMs\":1,\"requestId\":\"selftest-005\",\"cached\":false}"
+        }
+      ]
+    },
+    {
       "name": "Get Capabilities",
       "request": {
         "method": "GET",

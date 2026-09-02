@@ -1740,6 +1740,101 @@
         ],
         "x-admin-role": "admin.viewer"
       }
+    },
+    "/api/selftest": {
+      "get": {
+        "tags": [
+          "Operations"
+        ],
+        "summary": "Get the last self-test diagnostic result",
+        "description": "Returns the cached result of the most recent POST /api/selftest/run call. The result expires after 60 seconds; clients should call POST /api/selftest/run to refresh.",
+        "operationId": "getSelfTest",
+        "responses": {
+          "200": {
+            "description": "Last self-test result (or a `unknown` stub when no run has occurred).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    { "$ref": "#/components/schemas/SelfTestResult" },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": { "type": "string", "enum": ["unknown"] },
+                        "message": { "type": "string" },
+                        "requestId": { "type": "string" },
+                        "cached": { "type": "boolean" }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          { "ApiKeyHeader": [] },
+          { "ApiKeyQuery": [] },
+          { "FirebaseBearerAuth": [] }
+        ],
+        "x-admin-role": "admin.viewer"
+      }
+    },
+    "/api/selftest/run": {
+      "post": {
+        "tags": [
+          "Operations"
+        ],
+        "summary": "Run the self-test diagnostic suite",
+        "description": "Runs a bounded self-diagnostic suite (each check has a 5s deadline; the whole suite is bounded to 30s). Optional `only` filter scopes the run to a comma-separated list of check ids.",
+        "operationId": "postSelfTestRun",
+        "parameters": [
+          {
+            "name": "only",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string" },
+            "description": "Comma-separated check ids to scope the run to. Unknown ids return a fail result."
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "only": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Self-test result.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/SelfTestResult" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error running the suite.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          }
+        },
+        "security": [
+          { "ApiKeyHeader": [] },
+          { "ApiKeyQuery": [] },
+          { "FirebaseBearerAuth": [] }
+        ],
+        "x-admin-role": "admin.operator"
+      }
     }
   },
   "components": {
@@ -3312,6 +3407,73 @@
             "format": "double",
             "nullable": true
           }
+        }
+      },
+      "SelfTestResult": {
+        "type": "object",
+        "description": "Self-test diagnostic suite result. Sensitive evidence is redacted server-side; secrets are never returned.",
+        "required": ["status", "summary", "checks", "startedAt", "finishedAt", "durationMs", "requestId"],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": ["pass", "warn", "fail"]
+          },
+          "summary": {
+            "type": "object",
+            "required": ["pass", "warn", "fail", "skipped"],
+            "properties": {
+              "pass": { "type": "integer", "format": "int64" },
+              "warn": { "type": "integer", "format": "int64" },
+              "fail": { "type": "integer", "format": "int64" },
+              "skipped": { "type": "integer", "format": "int64" }
+            }
+          },
+          "checks": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/SelfTestCheck" }
+          },
+          "service": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "name": { "type": "string" },
+              "version": { "type": "string" },
+              "commit": { "type": "string", "nullable": true },
+              "uptimeSec": { "type": "integer" },
+              "nodeVersion": { "type": "string" }
+            }
+          },
+          "startedAt": { "type": "string", "format": "date-time" },
+          "finishedAt": { "type": "string", "format": "date-time" },
+          "durationMs": { "type": "integer", "format": "int64" },
+          "requestId": { "type": "string" },
+          "cached": { "type": "boolean" },
+          "expired": { "type": "boolean" }
+        }
+      },
+      "SelfTestCheck": {
+        "type": "object",
+        "required": ["id", "status", "message", "durationMs"],
+        "properties": {
+          "id": { "type": "string" },
+          "status": {
+            "type": "string",
+            "enum": ["pass", "warn", "fail", "skipped"]
+          },
+          "message": { "type": "string" },
+          "durationMs": { "type": "integer", "format": "int64" },
+          "evidence": { "nullable": true }
+        }
+      },
+      "SelfTestStatus": {
+        "type": "object",
+        "description": "Self-test dependency status surfaced under /api/status.dependencies.selfTest.",
+        "required": ["lastStatus", "ttlSec"],
+        "properties": {
+          "lastRunAt": { "type": ["string", "null"], "format": "date-time" },
+          "lastStatus": { "type": ["string", "null"], "enum": ["pass", "warn", "fail", "unknown", null] },
+          "ttlSec": { "type": "integer" },
+          "ageMs": { "type": ["integer", "null"], "format": "int64" }
         }
       },
       "BootstrapReadiness": {
@@ -5775,6 +5937,9 @@
             "properties": {
               "firebaseRemoteConfig": {
                 "$ref": "#/components/schemas/FirebaseRemoteConfigDependency"
+              },
+              "selfTest": {
+                "$ref": "#/components/schemas/SelfTestStatus"
               }
             }
           }
