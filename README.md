@@ -448,6 +448,30 @@ The dedicated worker also persists the same non-sensitive heartbeat to `workerHe
 
 When configured, `featureFlags.binanceTrading` and `dependencies.binanceTrading` expose only the non-sensitive execution gate, selected `testnet`/`demo`/`live` environment, allow-listed symbols, and readiness state.
 
+### GET /api/public/status
+
+Public, unauthenticated, secrets-free status snapshot for external monitoring widgets, status pages, and trader self-checks. No API key is required and the endpoint is mounted before the global rate limiter so monitoring traffic never consumes the ordinary bucket. The endpoint returns:
+
+```json
+{
+  "service": { "name": "cabros-bot", "version": "0.1.0" },
+  "status": {
+    "ok": true,
+    "uptimeSeconds": 42319,
+    "lastUpdated": "2026-08-27T19:30:00.000Z",
+    "shuttingDown": false
+  },
+  "channels": { "enabled": ["telegram"] },
+  "dependencies": {
+    "gemini":      { "ready": true },
+    "tradingview": { "ready": true },
+    "firestore":   { "ready": true }
+  }
+}
+```
+
+The snapshot is cached for 30 seconds per process. The endpoint returns HTTP `503` with `code: "SERVICE_NOT_READY"` while the process is still bootstrapping or shutting down; otherwise it returns `200`. Build commit, environment, configuration values, per-channel counters, feature flags, admin chat IDs, the `WEBHOOK_API_KEY`, Sentry DSN, Firebase project ID, and per-feature cost data are intentionally omitted.
+
 ### Browser admin authentication
 
 `/admin` is public shell content. With `ENABLE_FIREBASE_ADMIN_AUTH=false` (the default), it keeps the existing session-only `WEBHOOK_API_KEY` console flow. With the flag enabled, the shell shows Firebase email/password sign-in, keeps an API-key field only in memory for API-key-only webhook/news-monitor operations, and does not read or write that key to browser storage. `/admin/auth-config` returns only the public Firebase Web configuration needed by the client.

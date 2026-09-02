@@ -1740,6 +1740,58 @@
         ],
         "x-admin-role": "admin.viewer"
       }
+    },
+    "/api/public/status": {
+      "get": {
+        "tags": [
+          "Operations"
+        ],
+        "summary": "Public, unauthenticated service status snapshot",
+        "description": "Returns a redacted, secrets-free snapshot of service name/version, uptime, enabled notification channels, and dependency readiness booleans. No API key required. Cached for 30 seconds per process. Returns 503 when the process is still bootstrapping or shutting down.",
+        "operationId": "getPublicStatus",
+        "responses": {
+          "200": {
+            "description": "Public status snapshot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicStatus"
+                },
+                "example": {
+                  "service": {
+                    "name": "cabros-bot",
+                    "version": "1.2.3"
+                  },
+                  "status": {
+                    "ok": true,
+                    "uptimeSeconds": 42319,
+                    "lastUpdated": "2026-08-27T19:30:00.000Z",
+                    "shuttingDown": false
+                  },
+                  "channels": {
+                    "enabled": ["telegram"]
+                  },
+                  "dependencies": {
+                    "gemini": { "ready": true },
+                    "tradingview": { "ready": true },
+                    "firestore": { "ready": true }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service is not yet ready (bootstrap pending or shutdown draining)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicStatusNotReady"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -5778,6 +5830,85 @@
               }
             }
           }
+        }
+      },
+      "PublicStatusDependencyFlag": {
+        "type": "object",
+        "description": "Boolean readiness flag for a single dependency in the public, unauthenticated status snapshot. No credentials, configuration details, or provider metadata are exposed.",
+        "required": ["ready"],
+        "properties": {
+          "ready": {
+            "type": "boolean",
+            "description": "True when the dependency is enabled, configured, and currently ready."
+          }
+        }
+      },
+      "PublicStatusDependencies": {
+        "type": "object",
+        "description": "Subset of dependency readiness flags safe for public, unauthenticated consumption.",
+        "required": ["gemini", "tradingview", "firestore"],
+        "properties": {
+          "gemini": { "$ref": "#/components/schemas/PublicStatusDependencyFlag" },
+          "tradingview": { "$ref": "#/components/schemas/PublicStatusDependencyFlag" },
+          "firestore": { "$ref": "#/components/schemas/PublicStatusDependencyFlag" }
+        }
+      },
+      "PublicStatusChannels": {
+        "type": "object",
+        "description": "Notification channels currently enabled and ready. Order is not significant.",
+        "required": ["enabled"],
+        "properties": {
+          "enabled": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": ["telegram", "whatsapp", "discord"]
+            }
+          }
+        }
+      },
+      "PublicStatusBody": {
+        "type": "object",
+        "description": "Process lifecycle signal reported in the public snapshot.",
+        "required": ["ok", "uptimeSeconds", "lastUpdated", "shuttingDown"],
+        "properties": {
+          "ok": { "type": "boolean" },
+          "uptimeSeconds": { "type": "integer", "minimum": 0 },
+          "lastUpdated": { "type": "string", "format": "date-time" },
+          "shuttingDown": { "type": "boolean" }
+        }
+      },
+      "PublicStatusService": {
+        "type": "object",
+        "description": "Service identity exposed in the public snapshot. Build commit and environment are intentionally omitted.",
+        "required": ["name", "version"],
+        "properties": {
+          "name": { "type": "string" },
+          "version": { "type": ["string", "null"] }
+        }
+      },
+      "PublicStatus": {
+        "type": "object",
+        "description": "Public, unauthenticated service status snapshot. Intentionally omits credentials, configuration details, per-channel counters, feature flags, and operator identifiers.",
+        "required": ["service", "status", "channels", "dependencies"],
+        "properties": {
+          "service": { "$ref": "#/components/schemas/PublicStatusService" },
+          "status": { "$ref": "#/components/schemas/PublicStatusBody" },
+          "channels": { "$ref": "#/components/schemas/PublicStatusChannels" },
+          "dependencies": { "$ref": "#/components/schemas/PublicStatusDependencies" }
+        }
+      },
+      "PublicStatusNotReady": {
+        "type": "object",
+        "description": "Returned with HTTP 503 when the public snapshot cannot be served because the process is still bootstrapping or shutting down.",
+        "required": ["service", "status", "channels", "dependencies", "error", "code"],
+        "properties": {
+          "service": { "$ref": "#/components/schemas/PublicStatusService" },
+          "status": { "$ref": "#/components/schemas/PublicStatusBody" },
+          "channels": { "$ref": "#/components/schemas/PublicStatusChannels" },
+          "dependencies": { "$ref": "#/components/schemas/PublicStatusDependencies" },
+          "error": { "type": "string" },
+          "code": { "type": "string", "enum": ["SERVICE_NOT_READY"] }
         }
       },
       "FirebaseRemoteConfigDependency": {
