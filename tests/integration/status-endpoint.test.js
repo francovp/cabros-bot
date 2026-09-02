@@ -1861,4 +1861,64 @@ describe('Status endpoints', () => {
 			}),
 		}));
 	});
+
+	describe('discord source routing feature flag', () => {
+		afterEach(() => {
+			delete process.env.ENABLE_DISCORD_SOURCE_ROUTING;
+			delete process.env.DISCORD_SOURCE_ROUTING_JSON;
+		});
+
+		it('reports discordSourceRouting as disabled when env var is not set', async () => {
+			const response = await request(app)
+				.get('/api/status')
+				.set('x-api-key', 'status-key');
+
+			expect(response.status).toBe(200);
+			expect(response.body.featureFlags.discordSourceRouting).toBe(false);
+			expect(response.body.dependencies.discordSourceRouting).toEqual(expect.objectContaining({
+				enabled: false,
+				configured: false,
+				status: 'disabled',
+			}));
+		});
+
+		it('reports discordSourceRouting as misconfigured when enabled without routes', async () => {
+			process.env.ENABLE_DISCORD_SOURCE_ROUTING = 'true';
+			const response = await request(app)
+				.get('/api/status')
+				.set('x-api-key', 'status-key');
+
+			expect(response.status).toBe(200);
+			expect(response.body.featureFlags.discordSourceRouting).toBe(true);
+			expect(response.body.dependencies.discordSourceRouting).toEqual(expect.objectContaining({
+				enabled: true,
+				configured: false,
+				status: 'misconfigured',
+				routesConfigured: 0,
+			}));
+		});
+
+		it('reports discordSourceRouting as ready when enabled with valid JSON routes', async () => {
+			process.env.ENABLE_DISCORD_SOURCE_ROUTING = 'true';
+			process.env.DISCORD_SOURCE_ROUTING_JSON = JSON.stringify({
+				scanner: 'https://discord.com/api/webhooks/111/scanner',
+				'news-monitor': 'https://discord.com/api/webhooks/222/news',
+				default: 'https://discord.com/api/webhooks/000/default',
+			});
+			const response = await request(app)
+				.get('/api/status')
+				.set('x-api-key', 'status-key');
+
+			expect(response.status).toBe(200);
+			expect(response.body.featureFlags.discordSourceRouting).toBe(true);
+			expect(response.body.dependencies.discordSourceRouting).toEqual(expect.objectContaining({
+				enabled: true,
+				configured: true,
+				status: 'ready',
+				routesConfigured: 3,
+				hasDefault: true,
+				keys: expect.arrayContaining(['default', 'scanner', 'news-monitor']),
+			}));
+		});
+	});
 });
