@@ -81,6 +81,10 @@ function getRoutes(botOrGetter) {
 	router.get('/status', ...adminRead, getApiStatus);
 	router.get('/capabilities', ...adminRead, getApiStatus);
 
+	const { getSelfTest, postSelfTestRun } = require('../controllers/diagnostics/selftest');
+	router.get('/selftest', ...adminRead, getSelfTest(botOrGetter));
+	router.post('/selftest/run', ...adminWrite, postSelfTestRun(botOrGetter));
+
 	return router;
 }
 
