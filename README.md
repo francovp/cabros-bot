@@ -1936,6 +1936,7 @@ When enabled, it also forwards configured console levels to Sentry Logs using th
 - **Console Log Capture**: Configured console levels are captured as searchable Sentry Logs
 - **Optional Tracing/Spans**: Enable transaction traces plus custom spans for alert processing, news analysis, and multi-channel delivery
 - **Graceful Degradation**: Works without affecting existing fallback mechanisms
+- **Operator Runbook Link**: When `SentryService` or `TelegramService` paging surfaces an event, follow the matching section in [RUNBOOK.md](./RUNBOOK.md) for the per-incident mitigation steps.
 
 ### Configuration
 
@@ -2297,6 +2298,10 @@ PRODUCTION_BASE_URL=https://cabros-bot-production.up.railway.app \
 PRODUCTION_EXPECTED_COMMIT=$(git rev-parse origin/master) \
 ops/production-smoke-probe.sh
 ```
+
+### Operator Runbook
+
+Production pages from `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID`, Sentry, or the smoke probe all point at one document: [RUNBOOK.md](./RUNBOOK.md). It covers 12 incident classes (Gemini 429 burst, Telegram/Discord exhaustion, WhatsApp GreenAPI outage, TradingView MCP black-hole, Binance order rejection, Firestore credential rotation, dead signal-outcome/scanner/redrive workers, rate-limit storms, and Telegram deep-link onboarding) with a fixed `Symptoms → First check → Mitigation → Verification → Postmortem` template per section. Run `pnpm test -- tests/integration/runbook-links.test.js` to confirm the runbook still covers every `TelegramService` error category and Sentry tag.
 
 ### Logs
 

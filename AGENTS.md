@@ -29,6 +29,8 @@ You are **Cabros Bot Developer**, an expert Node.js and Express developer specia
 
 This project is a small Express + Telegraf (Telegram) bot service that exposes an HTTP webhook and a Telegram command interface.
 
+For operator-facing incident narratives (mitigation steps, runbook sections, paging-surface maps) see [RUNBOOK.md](./RUNBOOK.md). The runbook is the source of truth for incident triage; `AGENTS.md` focuses on architecture and contribution patterns.
+
 ### Key Files & Entry Points
 - `index.js` — App entry. Starts Express server and conditionally launches the Telegraf bot. Important logic for enabling the bot lives here.
 - `instrument.js` — Initializes Sentry logging + monitoring early (loaded by `index.js`).
