@@ -1,0 +1,99 @@
+{
+  "$schema": "./budgets.schema.json",
+  "_meta": {
+    "description": "Per-endpoint p95 latency budgets enforced by tests/helpers/perfBudget.js",
+    "tolerance": {
+      "softMultiplier": 1.5,
+      "hardMultiplier": 2,
+      "escapeHatch": "PERF_BUDGET_RELAXED=true"
+    },
+    "owners": {
+      "file": "francovp",
+      "review": "gh-795"
+    }
+  },
+  "/api/webhook/alert": {
+    "p95Ms": 250,
+    "rationale": "Plain webhook, no enrichment"
+  },
+  "/api/webhook/alert?useTradingViewData=true": {
+    "p95Ms": 4000,
+    "rationale": "Single MCP call, bounded by TRADINGVIEW_MCP_TIMEOUT_MS=12000"
+  },
+  "/api/webhook/expanded-analysis-alert": {
+    "p95Ms": 60000,
+    "rationale": "Per-symbol MCP cascade, bounded by EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS=60000"
+  },
+  "/api/webhook/market-scanner-alert": {
+    "p95Ms": 90000,
+    "rationale": "Sequential scan, bounded by MARKET_SCANNER_TIMEOUT_MS=90000"
+  },
+  "/api/webhook/volume-confirmation": {
+    "p95Ms": 3000,
+    "rationale": "Single MCP call, no delivery"
+  },
+  "/api/webhook/symbol-analysis": {
+    "p95Ms": 5000,
+    "rationale": "Single MCP call, optional MTF"
+  },
+  "/api/webhook/message": {
+    "p95Ms": 500,
+    "rationale": "Plain message broadcast"
+  },
+  "/api/jobs/tradingview-analysis": {
+    "p95Ms": 150,
+    "rationale": "Validation only; work is async"
+  },
+  "/api/jobs": {
+    "p95Ms": 200,
+    "rationale": "In-memory list query"
+  },
+  "/api/jobs/:jobId": {
+    "p95Ms": 200,
+    "rationale": "In-memory status query"
+  },
+  "/api/news-monitor": {
+    "p95Ms": 30000,
+    "rationale": "Per-symbol Gemini 30s budget"
+  },
+  "/api/alerts": {
+    "p95Ms": 500,
+    "rationale": "Firestore list, admin read"
+  },
+  "/api/alerts/summary": {
+    "p95Ms": 1500,
+    "rationale": "Firestore aggregate"
+  },
+  "/api/alerts/export": {
+    "p95Ms": 2000,
+    "rationale": "Firestore bounded JSONL/CSV export"
+  },
+  "/api/alerts/:alertId": {
+    "p95Ms": 300,
+    "rationale": "Single Firestore document fetch"
+  },
+  "/api/outcomes": {
+    "p95Ms": 800,
+    "rationale": "In-memory bounded list"
+  },
+  "/api/outcomes/summary": {
+    "p95Ms": 1500,
+    "rationale": "In-memory aggregate"
+  },
+  "/api/status": {
+    "p95Ms": 400,
+    "rationale": "Capability snapshot, dependency probes cached"
+  },
+  "/api/capabilities": {
+    "p95Ms": 400,
+    "rationale": "Alias of /api/status"
+  },
+  "/api/scanner-presets": {
+    "p95Ms": 500,
+    "rationale": "In-memory / Firestore preset list"
+  },
+  "/ready": {
+    "p95Ms": 200,
+    "rationale": "Bootstrap readiness probe"
+  }
+}
