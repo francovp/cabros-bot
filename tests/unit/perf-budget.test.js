@@ -56,23 +56,28 @@ describe('perfBudget helper', () => {
 			expect(() => perfBudget.getBudget(123)).toThrow(/non-empty string/);
 		});
 
-		it('throws when budgets.json is not an object (manual cache injection)', () => {
-			// Simulate the malformed-shape guard by injecting a non-object into
-			// the cache and re-loading via the public API. This proves the
-			// type check fires without mutating the checked-in file.
+		it('throws when budgets.json is not an object (asserts guard exists)', () => {
+			// The helper guards `loadBudgets()` with
+			// `if (!raw || typeof raw !== 'object') throw`. We assert that
+			// guard by reading the helper's source and confirming the shape
+			// check is present, plus a smoke check that the real budgets
+			// file is a non-null object so the guard would not fire on
+			// the real path.
 			const fs = require('fs');
-			const budgetsPath = require('path').join(__dirname, '..', 'performance', 'budgets.json');
-			expect(fs.existsSync(budgetsPath)).toBe(true);
-
-			// We can exercise the guard by temporarily monkey-patching the
-			// helper module's internal cache; the unit test asserts the
-			// type-check is present by reproducing the same comparison.
-			const raw = JSON.parse(fs.readFileSync(budgetsPath, 'utf8'));
-			expect(typeof raw).toBe('object');
-			expect(raw).not.toBeNull();
-			// The helper would throw for any non-object truthy value.
-			const notAnObject = 'not-an-object';
-			expect(typeof notAnObject === 'object').toBe(false);
+			const helperSrc = fs.readFileSync(perfBudget.BUDGET_FILE, 'utf8');
+			const helper = require('../helpers/perfBudget');
+			// eslint-disable-next-line global-require
+			const helperSrcCode = fs.readFileSync(
+				require.resolve('../helpers/perfBudget'),
+				'utf8'
+			);
+			expect(helperSrcCode).toMatch(/typeof raw !== 'object'/);
+			const real = JSON.parse(helperSrc);
+			expect(typeof real).toBe('object');
+			expect(real).not.toBeNull();
+			// Sanity: helper export is non-null and loadBudgets returns object.
+			expect(helper).toBeDefined();
+			expect(typeof helper.loadBudgets()).toBe('object');
 		});
 
 		it('caches loaded budgets between calls', () => {

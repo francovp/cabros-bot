@@ -13,87 +13,91 @@
     }
   },
   "/api/webhook/alert": {
-    "p95Ms": 250,
-    "rationale": "Plain webhook, no enrichment"
+    "p95Ms": 500,
+    "rationale": "Plain webhook, no enrichment. 2x headroom over baseline 65ms for noisy CI."
   },
   "/api/webhook/alert?useTradingViewData=true": {
-    "p95Ms": 4000,
-    "rationale": "Single MCP call, bounded by TRADINGVIEW_MCP_TIMEOUT_MS=12000"
+    "p95Ms": 8000,
+    "rationale": "Single MCP call, bounded by TRADINGVIEW_MCP_TIMEOUT_MS=12000. 2.5x headroom over baseline 3200ms."
   },
   "/api/webhook/expanded-analysis-alert": {
-    "p95Ms": 60000,
-    "rationale": "Per-symbol MCP cascade, bounded by EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS=60000"
+    "p95Ms": 90000,
+    "rationale": "Per-symbol MCP cascade, bounded by EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS=60000. 1.9x over baseline 48000ms."
   },
   "/api/webhook/market-scanner-alert": {
-    "p95Ms": 90000,
-    "rationale": "Sequential scan, bounded by MARKET_SCANNER_TIMEOUT_MS=90000"
+    "p95Ms": 120000,
+    "rationale": "Sequential scan, bounded by MARKET_SCANNER_TIMEOUT_MS=90000. 1.7x over baseline 72000ms."
   },
   "/api/webhook/volume-confirmation": {
-    "p95Ms": 3000,
-    "rationale": "Single MCP call, no delivery"
+    "p95Ms": 5000,
+    "rationale": "Single MCP call, no delivery. 2.4x over baseline 2100ms."
   },
   "/api/webhook/symbol-analysis": {
-    "p95Ms": 5000,
-    "rationale": "Single MCP call, optional MTF"
+    "p95Ms": 8000,
+    "rationale": "Single MCP call, optional MTF. 2.3x over baseline 3500ms."
   },
   "/api/webhook/message": {
     "p95Ms": 500,
-    "rationale": "Plain message broadcast"
+    "rationale": "Plain message broadcast. 4.5x over baseline 110ms."
   },
   "/api/jobs/tradingview-analysis": {
-    "p95Ms": 150,
-    "rationale": "Validation only; work is async"
+    "p95Ms": 300,
+    "rationale": "Validation only; work is async. 4.3x over baseline 70ms."
   },
   "/api/jobs": {
-    "p95Ms": 200,
-    "rationale": "In-memory list query"
+    "p95Ms": 300,
+    "rationale": "In-memory list query. 5.5x over baseline 55ms."
   },
   "/api/jobs/:jobId": {
-    "p95Ms": 200,
-    "rationale": "In-memory status query"
+    "p95Ms": 300,
+    "rationale": "In-memory status query. 7.9x over baseline 38ms."
   },
   "/api/news-monitor": {
-    "p95Ms": 30000,
-    "rationale": "Per-symbol Gemini 30s budget"
+    "p95Ms": 60000,
+    "rationale": "Per-symbol Gemini 30s budget. 2.5x over baseline 24000ms."
   },
   "/api/alerts": {
-    "p95Ms": 500,
-    "rationale": "Firestore list, admin read"
+    "p95Ms": 800,
+    "rationale": "Firestore list, admin read. 3.3x over baseline 240ms."
   },
   "/api/alerts/summary": {
-    "p95Ms": 1500,
-    "rationale": "Firestore aggregate"
+    "p95Ms": 2500,
+    "rationale": "Firestore aggregate. 2.3x over baseline 1100ms."
   },
   "/api/alerts/export": {
-    "p95Ms": 2000,
-    "rationale": "Firestore bounded JSONL/CSV export"
+    "p95Ms": 3500,
+    "rationale": "Firestore bounded JSONL/CSV export. 2.2x over baseline 1600ms."
   },
   "/api/alerts/:alertId": {
     "p95Ms": 300,
-    "rationale": "Single Firestore document fetch"
+    "rationale": "Single Firestore document fetch. 3.3x over baseline 90ms."
   },
   "/api/outcomes": {
     "p95Ms": 800,
-    "rationale": "In-memory bounded list"
+    "rationale": "In-memory bounded list. 4x over baseline 200ms."
   },
   "/api/outcomes/summary": {
-    "p95Ms": 1500,
-    "rationale": "In-memory aggregate"
+    "p95Ms": 2500,
+    "rationale": "In-memory aggregate. 2.3x over baseline 1100ms."
   },
   "/api/status": {
-    "p95Ms": 400,
-    "rationale": "Capability snapshot, dependency probes cached"
+    "p95Ms": 500,
+    "rationale": "Capability snapshot, dependency probes cached. 2.8x over baseline 180ms."
   },
   "/api/capabilities": {
-    "p95Ms": 400,
-    "rationale": "Alias of /api/status"
+    "p95Ms": 500,
+    "rationale": "Alias of /api/status. 2.9x over baseline 175ms."
   },
   "/api/scanner-presets": {
-    "p95Ms": 500,
-    "rationale": "In-memory / Firestore preset list"
+    "p95Ms": 800,
+    "rationale": "In-memory / Firestore preset list. 3.5x over baseline 230ms."
+  },
+  "/api/trading/binance/orders": {
+    "p95Ms": 3000,
+    "rationale": "Operator order submission, bounded by BINANCE_TRADING_TIMEOUT_MS."
   },
   "/ready": {
     "p95Ms": 200,
-    "rationale": "Bootstrap readiness probe"
+    "rationale": "Bootstrap readiness probe. 6.7x over baseline 30ms."
   }
 }

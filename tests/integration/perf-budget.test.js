@@ -34,6 +34,7 @@ const ROUTES_TO_HIT = [
 describe('Performance budget guard (GH-795)', () => {
 	let savedEnv;
 	let mockBot;
+	let mounted = false;
 
 	beforeAll(async () => {
 		savedEnv = saveEnv();
@@ -57,10 +58,17 @@ describe('Performance budget guard (GH-795)', () => {
 		};
 		await initializeNotificationServices(mockBot);
 		app.use('/api', getRoutes(mockBot));
+		mounted = true;
 	});
 
 	afterAll(() => {
 		restoreEnv(savedEnv);
+		// Pop the router we mounted in beforeAll so other suites that share
+		// this app instance (with maxWorkers: 1) don't see duplicate handlers.
+		if (mounted && app._router && app._router.stack && app._router.stack.length > 0) {
+			app._router.stack.pop();
+			mounted = false;
+		}
 	});
 
 	it('declares budgets for the routes we exercise', () => {
@@ -72,9 +80,9 @@ describe('Performance budget guard (GH-795)', () => {
 	});
 
 	ROUTES_TO_HIT.forEach(({ route, method, expectStatus }) => {
-		it(`keeps median latency for ${route} within budget`, async () => {
+		it(`keeps p95 latency for ${route} within budget (20 iterations)`, async () => {
 			const samples = [];
-			const ITERATIONS = 5;
+			const ITERATIONS = 20;
 			for (let i = 0; i < ITERATIONS; i++) {
 				const start = process.hrtime.bigint();
 				let response;
@@ -90,8 +98,10 @@ describe('Performance budget guard (GH-795)', () => {
 				expect(expectStatus).toContain(response.status);
 			}
 			samples.sort((a, b) => a - b);
-			const median = samples[Math.floor(samples.length / 2)];
-			assertWithinBudget(route, median);
+			// True p95 (ceil-style; clamped to the last sample).
+			const p95Index = Math.min(samples.length - 1, Math.floor(samples.length * 0.95));
+			const p95 = samples[p95Index];
+			assertWithinBudget(route, p95);
 		});
 	});
 });

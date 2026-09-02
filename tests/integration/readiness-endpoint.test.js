@@ -1,4 +1,5 @@
 const request = require('supertest');
+const { assertWithinBudget } = require('../helpers/perfBudget');
 const app = require('../../app');
 const bootstrapReadiness = require('../../src/lib/bootstrapReadiness');
 
@@ -19,7 +20,10 @@ describe('GET /ready', () => {
 		bootstrapReadiness.begin({ telegramRequired: false, newsMonitorRequired: false });
 		bootstrapReadiness.markReady('notificationServices');
 
+		const start = process.hrtime.bigint();
 		const response = await request(app).get('/ready');
+		const durationMs = Number(process.hrtime.bigint() - start) / 1e6;
+		assertWithinBudget('/ready', durationMs);
 
 		expect(response.status).toBe(200);
 		expect(response.body.status).toBe('ready');

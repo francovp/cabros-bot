@@ -6,6 +6,7 @@ jest.mock('binance', () => ({
 
 const express = require('express');
 const request = require('supertest');
+const { assertWithinBudget } = require('../helpers/perfBudget');
 const { MainClient } = require('binance');
 const { getRoutes } = require('../../src/routes');
 const { idempotencyService } = require('../../src/services/storage/IdempotencyService');
@@ -110,11 +111,14 @@ describe('Binance orders API', () => {
 	it('fails closed when the feature is disabled', async () => {
 		process.env.ENABLE_BINANCE_TRADING = 'false';
 
+		const start = process.hrtime.bigint();
 		const response = await request(app)
 			.post('/api/trading/binance/orders')
 			.set('x-api-key', 'test-key')
 			.send({ symbol: 'BTCUSDT', side: 'BUY', type: 'MARKET', quantity: 0.1, dryRun: true })
 			.expect(403);
+		const durationMs = Number(process.hrtime.bigint() - start) / 1e6;
+		assertWithinBudget('/api/trading/binance/orders', durationMs);
 
 		expect(response.body.code).toBe('FEATURE_DISABLED');
 		expect(MainClient).not.toHaveBeenCalled();

@@ -25,5 +25,5 @@
   "/api/status": { "p50Ms": 32, "p95Ms": 180 },
   "/api/capabilities": { "p50Ms": 30, "p95Ms": 175 },
   "/api/scanner-presets": { "p50Ms": 55, "p95Ms": 230 },
-  "/api/ready": { "p50Ms": 6, "p95Ms": 30 }
+  "/ready": { "p50Ms": 6, "p95Ms": 30 }
 }
