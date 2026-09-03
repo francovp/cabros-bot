@@ -448,6 +448,10 @@ The dedicated worker also persists the same non-sensitive heartbeat to `workerHe
 
 When configured, `featureFlags.binanceTrading` and `dependencies.binanceTrading` expose only the non-sensitive execution gate, selected `testnet`/`demo`/`live` environment, allow-listed symbols, and readiness state.
 
+### GET /api/metrics
+
+Protected Node.js process health endpoint. Requires `WEBHOOK_API_KEY` (or a Firebase ID token with the `admin.viewer` claim) on every call. The endpoint reports `memory`, `cpu`, `eventLoop` lag (mean + max across N samples in milliseconds), `process` metadata (PID, uptime, Node version, platform, active handles/requests), and a top-level `node` mirror of `process.version`. All fields are computed lazily on each request so the endpoint has zero overhead when not called. Idle processes return nulls for event-loop fields when the probe cannot collect samples.
+
 ### Browser admin authentication
 
 `/admin` is public shell content. With `ENABLE_FIREBASE_ADMIN_AUTH=false` (the default), it keeps the existing session-only `WEBHOOK_API_KEY` console flow. With the flag enabled, the shell shows Firebase email/password sign-in, keeps an API-key field only in memory for API-key-only webhook/news-monitor operations, and does not read or write that key to browser storage. `/admin/auth-config` returns only the public Firebase Web configuration needed by the client.

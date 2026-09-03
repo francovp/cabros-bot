@@ -308,6 +308,39 @@
       ]
     },
     {
+      "name": "Get Process Metrics",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{apiKey}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/metrics",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "metrics"
+          ]
+        },
+        "description": "Protected process-health endpoint returning Node.js memory, CPU, event-loop lag, uptime, and Node version. Requires admin.viewer role; returns 401 Unauthorized without an API key and 403 Forbidden for authenticated callers without the role. Metrics are computed lazily on each request so idle processes incur no overhead."
+      },
+      "response": [
+        {
+          "name": "Success",
+          "status": "OK",
+          "code": 200,
+          "body": "{\n  \"success\": true,\n  \"uptime\": 12345.678,\n  \"memory\": {\n    \"rss\": 123456789,\n    \"heapUsed\": 98765432,\n    \"heapTotal\": 150000000,\n    \"external\": 12345678,\n    \"arrayBuffers\": 1024000\n  },\n  \"cpu\": {\n    \"user\": 1234567,\n    \"system\": 234567\n  },\n  \"eventLoop\": {\n    \"lagMs\": 2.345,\n    \"maxLagMs\": 4.567,\n    \"samples\": 5\n  },\n  \"process\": {\n    \"pid\": 42,\n    \"uptime\": 12345.678,\n    \"nodeVersion\": \"v24.18.0\",\n    \"platform\": \"linux\",\n    \"activeHandles\": 12,\n    \"activeRequests\": 1\n  },\n  \"node\": \"v24.18.0\"\n}",
+          "_postman_previewlanguage": "json"
+        }
+      ]
+    },
+    {
       "name": "Webhooks",
       "item": [
         {
@@ -5335,7 +5368,7 @@
           ]
         },
         {
-          "name": "POST Binance order (dry-run LIMIT — demo env)",
+          "name": "POST Binance order (dry-run LIMIT \u2014 demo env)",
           "request": {
             "method": "POST",
             "header": [
@@ -5354,7 +5387,7 @@
               "mode": "raw",
               "raw": "{\n  \"symbol\": \"BTCUSDT\",\n  \"side\": \"BUY\",\n  \"type\": \"LIMIT\",\n  \"quantity\": 0.001,\n  \"price\": 60000,\n  \"timeInForce\": \"GTC\",\n  \"dryRun\": true\n}"
             },
-            "description": "Dry-run LIMIT order validated against the Binance Demo Trading API (demo-api.binance.com). Requires BINANCE_TRADING_ENV=demo on the server. The demo environment mirrors live production market data and exchange filters exactly — use this for pre-live validation before switching to BINANCE_TRADING_ENV=live.",
+            "description": "Dry-run LIMIT order validated against the Binance Demo Trading API (demo-api.binance.com). Requires BINANCE_TRADING_ENV=demo on the server. The demo environment mirrors live production market data and exchange filters exactly \u2014 use this for pre-live validation before switching to BINANCE_TRADING_ENV=live.",
             "url": {
               "raw": "{{baseUrl}}/api/trading/binance/orders",
               "host": [
@@ -5376,7 +5409,7 @@
               "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"environment\": \"demo\",\n  \"order\": {\n    \"symbol\": \"BTCUSDT\",\n    \"side\": \"BUY\",\n    \"type\": \"LIMIT\",\n    \"quantity\": 0.001,\n    \"price\": 60000,\n    \"timeInForce\": \"GTC\",\n    \"newOrderRespType\": \"FULL\"\n  }\n}"
             },
             {
-              "name": "Error — feature disabled (ENABLE_BINANCE_TRADING=false)",
+              "name": "Error \u2014 feature disabled (ENABLE_BINANCE_TRADING=false)",
               "status": "Forbidden",
               "code": 403,
               "body": "{\n  \"success\": false,\n  \"code\": \"FEATURE_DISABLED\",\n  \"error\": \"Binance trading is disabled\"\n}"
