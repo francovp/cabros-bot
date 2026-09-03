@@ -81,6 +81,11 @@ function getRoutes(botOrGetter) {
 	router.get('/status', ...adminRead, getApiStatus);
 	router.get('/capabilities', ...adminRead, getApiStatus);
 
+	const { getDemoAlert, getDemoOutcomes, getDemoScanner } = require('../controllers/demo');
+	router.get('/demo/alert', validateApiKey, getDemoAlert());
+	router.get('/demo/outcomes', validateApiKey, getDemoOutcomes());
+	router.get('/demo/scanner', validateApiKey, getDemoScanner());
+
 	return router;
 }
 

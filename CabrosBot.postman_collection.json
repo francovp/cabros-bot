@@ -308,6 +308,108 @@
       ]
     },
     {
+      "name": "Demo Mode",
+      "item": [
+        {
+          "name": "GET Demo Alert",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/demo/alert?text=Sample+demo+text&channels=telegram",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "demo", "alert"],
+              "query": [
+                { "key": "text", "value": "Sample demo text", "description": "Optional preview text" },
+                { "key": "channels", "value": "telegram", "description": "Comma-separated channels (telegram,whatsapp,discord)" }
+              ]
+            },
+            "description": "Synthetic alert preview. Requires ENABLE_DEMO_MODE=true. Output is wrapped in meta: { synthetic: true } and excluded from signal-outcome tracking, alert feedback, and Firestore alerts persistence."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "status": "OK",
+              "code": 200,
+              "body": "{\"success\":true,\"meta\":{\"demo\":true,\"synthetic\":true,\"banner\":\"🧪 DEMO · synthetic data, do not trade\",\"requestedAt\":\"2026-09-02T22:30:00.000Z\",\"endpoint\":\"/api/demo/alert\"},\"alert\":{\"text\":\"Sample demo text\",\"source\":\"demo\",\"enriched\":{\"sentiment_score\":0.42,\"sentiment\":\"bullish\",\"insights\":[\"This is synthetic data. No real provider was called.\"],\"technical_levels\":{\"support\":100,\"resistance\":110,\"invalidation\":95,\"target\":115},\"sources\":[{\"title\":\"Demo source — replace with real providers\",\"url\":\"https://example.com/demo\"}],\"truncated\":false,\"prompt_provenance\":{\"name\":\"demo\",\"source\":\"local\",\"label\":\"demo\",\"version\":1,\"schema_drift_detected\":false}},\"tokenUsage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"totalCost\":0,\"formattedSummary\":\"demo · 0 tokens · $0.0000\"},\"channels\":[\"telegram\"],\"delivery\":{\"results\":[{\"channel\":\"telegram\",\"success\":true,\"demo\":true,\"messageId\":\"demo-1234-telegram\",\"attemptCount\":0,\"durationMs\":0}]}}}"
+            },
+            {
+              "name": "404 FEATURE_DISABLED",
+              "status": "Not Found",
+              "code": 404,
+              "body": "{\"success\":false,\"error\":\"FEATURE_DISABLED\",\"message\":\"Demo endpoints are disabled. Set ENABLE_DEMO_MODE=true to enable them.\"}"
+            }
+          ]
+        },
+        {
+          "name": "GET Demo Outcomes",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/demo/outcomes?symbol=BINANCE:BTCUSDT",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "demo", "outcomes"],
+              "query": [
+                { "key": "symbol", "value": "BINANCE:BTCUSDT", "description": "Symbol in EXCHANGE:SYMBOL form" }
+              ]
+            },
+            "description": "Synthetic outcome preview for a symbol. Returns a fixed four-window cohort (+1h, +4h, +1D, +1W) with deterministic note: 'Synthetic cohort. Not derived from any historical bar query.'."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "status": "OK",
+              "code": 200,
+              "body": "{\"success\":true,\"meta\":{\"demo\":true,\"synthetic\":true,\"banner\":\"🧪 DEMO · synthetic data, do not trade\",\"requestedAt\":\"2026-09-02T22:30:00.000Z\",\"endpoint\":\"/api/demo/outcomes\"},\"outcomes\":{\"symbol\":\"BINANCE:BTCUSDT\",\"generatedAt\":\"2026-09-02T22:30:00.000Z\",\"windows\":[{\"window\":\"+1h\",\"returnPct\":0.005,\"mfePct\":0.012,\"maePct\":-0.004,\"hitRate\":true},{\"window\":\"+4h\",\"returnPct\":0.011,\"mfePct\":0.018,\"maePct\":-0.009,\"hitRate\":true},{\"window\":\"+1D\",\"returnPct\":0.022,\"mfePct\":0.04,\"maePct\":-0.022,\"hitRate\":true},{\"window\":\"+1W\",\"returnPct\":0.04,\"mfePct\":0.08,\"maePct\":-0.05,\"hitRate\":true}],\"hitRatePercent\":50,\"expectancyR\":0.5,\"note\":\"Synthetic cohort. Not derived from any historical bar query.\"}}"
+            }
+          ]
+        },
+        {
+          "name": "GET Demo Scanner",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/demo/scanner?exchange=BINANCE",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "demo", "scanner"],
+              "query": [
+                { "key": "exchange", "value": "BINANCE", "description": "Exchange prefix (uppercased)" }
+              ]
+            },
+            "description": "Synthetic scanner output. Hardcoded three-item list — does not query TradingView MCP."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "status": "OK",
+              "code": 200,
+              "body": "{\"success\":true,\"meta\":{\"demo\":true,\"synthetic\":true,\"banner\":\"🧪 DEMO · synthetic data, do not trade\",\"requestedAt\":\"2026-09-02T22:30:00.000Z\",\"endpoint\":\"/api/demo/scanner\"},\"scanner\":{\"exchange\":\"BINANCE\",\"generatedAt\":\"2026-09-02T22:30:00.000Z\",\"items\":[{\"symbol\":\"BINANCE:BTCUSDT\",\"changePct\":1.42,\"volumeUsd\":12345678,\"demo\":true},{\"symbol\":\"BINANCE:ETHUSDT\",\"changePct\":-0.83,\"volumeUsd\":8765432,\"demo\":true},{\"symbol\":\"BINANCE:SOLUSDT\",\"changePct\":3.21,\"volumeUsd\":4321098,\"demo\":true}],\"note\":\"Synthetic scanner output. Not derived from any TradingView MCP call.\"}}"
+            }
+          ]
+        }
+      ]
+    },
+    {
       "name": "Webhooks",
       "item": [
         {

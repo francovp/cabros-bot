@@ -1740,6 +1740,162 @@
         ],
         "x-admin-role": "admin.viewer"
       }
+    },
+    "/api/demo/alert": {
+      "get": {
+        "tags": [
+          "Demo"
+        ],
+        "summary": "Preview an alert with synthetic enrichment",
+        "description": "Returns a synthetic alert payload wrapped in `meta: { synthetic: true }`. Disabled when `ENABLE_DEMO_MODE` is not `true`. Excluded from signal-outcome tracking, alert feedback, and Firestore `alerts` persistence.",
+        "operationId": "getDemoAlert",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "text",
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "description": "Optional preview text. Defaults to a sample demo alert."
+          },
+          {
+            "in": "query",
+            "name": "channels",
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "description": "Comma-separated subset of `telegram,whatsapp,discord`. Default: no channels (preview only)."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Synthetic alert preview",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "meta",
+                    "alert"
+                  ],
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "demo": {
+                          "type": "boolean"
+                        },
+                        "synthetic": {
+                          "type": "boolean"
+                        },
+                        "banner": {
+                          "type": "string"
+                        },
+                        "requestedAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        }
+                      }
+                    },
+                    "alert": {
+                      "type": "object"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          }
+        ]
+      }
+    },
+    "/api/demo/outcomes": {
+      "get": {
+        "tags": [
+          "Demo"
+        ],
+        "summary": "Preview synthetic outcome data for a symbol",
+        "operationId": "getDemoOutcomes",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "symbol",
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "description": "Optional symbol such as `BINANCE:BTCUSDT`. Defaults to `BINANCE:BTCUSDT`."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Synthetic outcome preview"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          }
+        ]
+      }
+    },
+    "/api/demo/scanner": {
+      "get": {
+        "tags": [
+          "Demo"
+        ],
+        "summary": "Preview synthetic scanner results",
+        "operationId": "getDemoScanner",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "exchange",
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "description": "Optional exchange prefix such as `BINANCE`. Defaults to `BINANCE`."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Synthetic scanner preview"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          }
+        ]
+      }
     }
   },
   "components": {
