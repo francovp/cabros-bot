@@ -3136,6 +3136,20 @@
                 "firebaseRemoteConfig": false
               },
               "dependencies": {
+                "gemini": {
+                  "enabled": true,
+                  "configured": true,
+                  "ready": true,
+                  "status": "ready",
+                  "circuitBreaker": {
+                    "state": "closed",
+                    "consecutiveFailures": 0,
+                    "openedAt": null,
+                    "lastStateChangeAt": null,
+                    "failureThreshold": 5,
+                    "cooldownMs": 60000
+                  }
+                },
                 "geminiQuota": {
                   "enabled": true,
                   "configured": true,
@@ -3190,6 +3204,14 @@
                   "configured": false,
                   "ready": false,
                   "status": "disabled",
+                  "circuitBreaker": {
+                    "state": "closed",
+                    "consecutiveFailures": 0,
+                    "openedAt": null,
+                    "lastStateChangeAt": null,
+                    "failureThreshold": 5,
+                    "cooldownMs": 60000
+                  },
                   "supportedExchanges": [
                     "BATS",
                     "NASDAQ",

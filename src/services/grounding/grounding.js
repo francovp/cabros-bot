@@ -13,7 +13,9 @@ const metrics = require('./metrics');
 const sentryService = require('../monitoring/SentryService');
 const { deriveAssetContext, deriveCleanSearchQuery } = require('../tradingview/parseTradingViewSignal');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
+const { CircuitBreaker } = require('../../lib/circuitBreaker');
 
+const geminiCircuitBreaker = new CircuitBreaker({ name: 'gemini' });
 const promptService = getPromptService();
 const coalescedSearches = new Map();
 
@@ -84,6 +86,11 @@ function getCoalescingStatus() {
  * @returns {Promise<string>} Optimized search query
  */
 async function deriveSearchQuery(alertText, opts = {}) {
+	if (geminiCircuitBreaker.isOpen()) {
+		console.warn('[Grounding] Gemini circuit breaker is OPEN, falling back to raw alert text');
+		return alertText;
+	}
+
 	try {
 		const { systemPrompt, userPrompt } = await promptService.getChatPrompt(
 			PromptKeys.SEARCH_QUERY_DERIVATION,
@@ -104,9 +111,13 @@ async function deriveSearchQuery(alertText, opts = {}) {
 			throw new Error('Invalid response from LLM');
 		}
 
+		geminiCircuitBreaker.recordSuccess();
 		return response.text;
 	} catch (error) {
 		console.warn('[Grounding] Query derivation failed:', error.message);
+		if (!opts.signal?.aborted) {
+			geminiCircuitBreaker.recordFailure(error);
+		}
 		// Fall back to truncated alert text
 		return alertText;
 	}
@@ -137,6 +148,14 @@ async function groundAlert({ text, options = {} }) {
 	const systemPromptOverride = promptType === 'NEWS_ANALYSIS'
 		? NEWS_ANALYSIS_SYSTEM_PROMPT
 		: undefined;
+
+	if (!geminiCircuitBreaker.canExecute()) {
+		const cbError = new Error('Grounding failed: Gemini circuit breaker is OPEN');
+		cbError.category = 'circuit_breaker_open';
+		cbError.status = 503;
+		metrics.recordFailure('circuit_breaker_open', cbError, promptType);
+		throw cbError;
+	}
 
 	let currentPhase = 'search';
 	const controller = new AbortController();
@@ -221,10 +240,15 @@ async function groundAlert({ text, options = {} }) {
 			} : {}),
 		};
 
+		geminiCircuitBreaker.recordSuccess();
 		metrics.recordSuccess(Date.now() - startTime, promptType);
 		return response;
 	} catch (error) {
 		clearTimeout(timeoutId);
+		if (error && error.category === 'circuit_breaker_open') {
+			throw error;
+		}
+
 		const isTimeout = error.message === 'Grounding timeout' ||
 			error.name === 'AbortError' ||
 			signal.aborted ||
@@ -232,6 +256,7 @@ async function groundAlert({ text, options = {} }) {
 
 		if (isTimeout) {
 			const phaseError = new Error(`Grounding ${currentPhase} timeout`);
+			geminiCircuitBreaker.recordFailure(phaseError);
 			metrics.recordFailure('timeout', phaseError, promptType);
 			sentryService.captureRuntimeError({
 				channel: 'grounding',
@@ -242,6 +267,7 @@ async function groundAlert({ text, options = {} }) {
 			throw new Error('Grounding timeout');
 		}
 
+		geminiCircuitBreaker.recordFailure(error);
 		metrics.recordFailure('error', error, promptType);
 		throw new Error(`Grounding failed: ${error.message}`);
 	}
@@ -251,5 +277,10 @@ module.exports = {
 	groundAlert,
 	deriveSearchQuery,
 	getCoalescingStatus,
-	_resetForTesting: () => coalescedSearches.clear(),
+	getCircuitBreakerStatus: () => geminiCircuitBreaker.getStatus(),
+	_getCircuitBreakerForTesting: () => geminiCircuitBreaker,
+	_resetForTesting: () => {
+		coalescedSearches.clear();
+		geminiCircuitBreaker.reset();
+	},
 };

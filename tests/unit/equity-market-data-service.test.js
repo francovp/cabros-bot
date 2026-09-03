@@ -8,6 +8,7 @@ describe('EquityMarketDataService', () => {
 	beforeEach(() => {
 		jest.clearAllMocks();
 		EquityMarketDataService._resetPacerForTesting();
+		EquityMarketDataService._resetCircuitBreakerForTesting();
 		delete process.env.ENABLE_EQUITY_MARKET_DATA;
 		delete process.env.EQUITY_MARKET_DATA_PROVIDER;
 		delete process.env.TWELVE_DATA_API_KEY;
@@ -15,14 +16,19 @@ describe('EquityMarketDataService', () => {
 		delete process.env.EQUITY_MARKET_DATA_TIMEOUT_MS;
 		process.env.EQUITY_MARKET_DATA_RPM = '0';
 		delete process.env.TWELVE_DATA_RPM;
+		delete process.env.CIRCUIT_BREAKER_THRESHOLD;
+		delete process.env.CIRCUIT_BREAKER_COOLDOWN_MS;
 		delete process.env.ENABLE_FIREBASE_REMOTE_CONFIG;
 	});
 
 	afterEach(() => {
 		global.fetch = originalFetch;
 		EquityMarketDataService._resetPacerForTesting();
+		EquityMarketDataService._resetCircuitBreakerForTesting();
 		process.env.EQUITY_MARKET_DATA_RPM = '0';
 		delete process.env.TWELVE_DATA_RPM;
+		delete process.env.CIRCUIT_BREAKER_THRESHOLD;
+		delete process.env.CIRCUIT_BREAKER_COOLDOWN_MS;
 		delete process.env.ENABLE_FIREBASE_REMOTE_CONFIG;
 	});
 
@@ -411,6 +417,102 @@ describe('EquityMarketDataService', () => {
 			});
 
 			EquityMarketDataService._resetPacerForTesting();
+		});
+	});
+
+	describe('Circuit Breaker', () => {
+		it('initializes circuit breaker in closed state with 0 failures', () => {
+			configure();
+			const status = EquityMarketDataService.getStatus();
+			expect(status.status).toBe('ready');
+			expect(status.ready).toBe(true);
+			expect(status.circuitBreaker).toEqual(expect.objectContaining({
+				state: 'closed',
+				consecutiveFailures: 0,
+				openedAt: null,
+			}));
+		});
+
+		it('trips circuit breaker after reaching failure threshold and fast-fails without fetch', async () => {
+			configure();
+			process.env.CIRCUIT_BREAKER_THRESHOLD = '3';
+			global.fetch = jest.fn().mockRejectedValue(new Error('Network offline'));
+
+			// 3 consecutive failures
+			for (let i = 0; i < 3; i++) {
+				await expect(EquityMarketDataService.getEntryPrice({ symbol: 'AAPL', exchange: 'NASDAQ' }))
+					.rejects.toMatchObject({ reason: EquityMarketDataService.REASONS.UNAVAILABLE });
+			}
+			expect(global.fetch).toHaveBeenCalledTimes(3);
+
+			// Status should now be degraded and ready: false
+			const status = EquityMarketDataService.getStatus();
+			expect(status.status).toBe('degraded');
+			expect(status.ready).toBe(false);
+			expect(status.circuitBreaker.state).toBe('open');
+			expect(status.circuitBreaker.consecutiveFailures).toBe(3);
+
+			// 4th request must fast-fail with CIRCUIT_BREAKER_OPEN without invoking fetch
+			global.fetch.mockClear();
+			await expect(EquityMarketDataService.getEntryPrice({ symbol: 'AAPL', exchange: 'NASDAQ' }))
+				.rejects.toMatchObject({
+					reason: EquityMarketDataService.REASONS.CIRCUIT_BREAKER_OPEN,
+					status: 503,
+				});
+			expect(global.fetch).not.toHaveBeenCalled();
+		});
+
+		it('does not count NO_DATA (e.g. unknown symbol) as a circuit breaker failure', async () => {
+			configure();
+			process.env.CIRCUIT_BREAKER_THRESHOLD = '2';
+			global.fetch = jest.fn().mockResolvedValue({
+				ok: true,
+				status: 200,
+				json: async () => ({ status: 'ok', values: [] }),
+			});
+
+			await expect(EquityMarketDataService.getHistoricalBars({
+				symbol: 'NONEXISTENT',
+				exchange: 'NASDAQ',
+				interval: '1h',
+				startTime: 1000,
+				endTime: 2000,
+			})).rejects.toMatchObject({ reason: EquityMarketDataService.REASONS.NO_DATA });
+
+			const breakerStatus = EquityMarketDataService.getCircuitBreakerStatus();
+			expect(breakerStatus.state).toBe('closed');
+			expect(breakerStatus.consecutiveFailures).toBe(0);
+		});
+
+		it('transitions from open to half-open after cooldown and recovers to closed on successful probe', async () => {
+			configure();
+			process.env.CIRCUIT_BREAKER_THRESHOLD = '1';
+			process.env.CIRCUIT_BREAKER_COOLDOWN_MS = '1000';
+
+			global.fetch = jest.fn().mockRejectedValue(new Error('Provider outage'));
+			await expect(EquityMarketDataService.getEntryPrice({ symbol: 'AAPL', exchange: 'NASDAQ' }))
+				.rejects.toMatchObject({ reason: EquityMarketDataService.REASONS.UNAVAILABLE });
+
+			expect(EquityMarketDataService.getStatus().circuitBreaker.state).toBe('open');
+
+			// Fast-forward cooldown
+			const pastTime = Date.now() - 1500;
+			EquityMarketDataService._getCircuitBreakerForTesting().openedAt = new Date(pastTime).toISOString();
+
+			// Mock success for probe
+			global.fetch = jest.fn().mockResolvedValue({
+				ok: true,
+				status: 200,
+				json: async () => ({ status: 'ok', close: '155.00' }),
+			});
+
+			const price = await EquityMarketDataService.getEntryPrice({ symbol: 'AAPL', exchange: 'NASDAQ' });
+			expect(price).toBe(155.00);
+
+			const recoveredStatus = EquityMarketDataService.getStatus();
+			expect(recoveredStatus.status).toBe('ready');
+			expect(recoveredStatus.circuitBreaker.state).toBe('closed');
+			expect(recoveredStatus.circuitBreaker.consecutiveFailures).toBe(0);
 		});
 	});
 });

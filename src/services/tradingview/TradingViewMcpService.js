@@ -139,11 +139,17 @@ class TradingViewMcpService {
 			10,
 		);
 		const breakerThreshold = parseInt(
-			this.config.breakerThreshold || runtimeConfig.TRADINGVIEW_MCP_BREAKER_FAILURE_THRESHOLD,
+			this.config.breakerThreshold ||
+				runtimeConfig.TRADINGVIEW_MCP_BREAKER_FAILURE_THRESHOLD ||
+				runtimeConfig.CIRCUIT_BREAKER_THRESHOLD ||
+				process.env.CIRCUIT_BREAKER_THRESHOLD,
 			10,
 		);
 		const breakerCooldownMs = parseInt(
-			this.config.breakerCooldownMs || runtimeConfig.TRADINGVIEW_MCP_BREAKER_COOLDOWN_MS,
+			this.config.breakerCooldownMs ||
+				runtimeConfig.TRADINGVIEW_MCP_BREAKER_COOLDOWN_MS ||
+				runtimeConfig.CIRCUIT_BREAKER_COOLDOWN_MS ||
+				process.env.CIRCUIT_BREAKER_COOLDOWN_MS,
 			10,
 		);
 		const pageCooldownMs = parseInt(
