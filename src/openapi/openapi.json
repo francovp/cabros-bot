@@ -3021,7 +3021,12 @@
                     "timeout": 0,
                     "error": 0,
                     "quota_exhausted": 0,
-                    "alerts_sent": 1
+                    "alerts_sent": 1,
+                    "barrierProvenance": {
+                      "derivedAlertsCount": 1,
+                      "marketContextAlertsCount": 0,
+                      "totalAlertsWithBarriers": 1
+                    }
                   },
                   "requestedChannels": [
                     "telegram",
@@ -3595,6 +3600,7 @@
           "providerBreakdown",
           "entryPriceSourceBreakdown",
           "eligibilityBreakdown",
+          "barrierSourceBreakdown",
           "windows",
           "drawdownProxy",
           "falsePositiveCandidatesCount",
@@ -3677,6 +3683,13 @@
               "type": "integer"
             }
           },
+          "barrierSourceBreakdown": {
+            "description": "Barrier provenance breakdown. Counts each signal by the source of its stop/target so operators can compare derived (heuristic) barriers against provider-supplied (marketContext) barriers. Keys are typically derived, marketContext, and none.",
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/BarrierSourceBucket"
+            }
+          },
           "windows": {
             "type": "object",
             "additionalProperties": {
@@ -3730,6 +3743,54 @@
           "unavailable": {
             "type": "integer",
             "example": 1
+          }
+        }
+      },
+      "BarrierSourceBucket": {
+        "type": "object",
+        "description": "Counts and hit-rate metrics for one barrier provenance bucket (derived heuristic, provider marketContext, or none). targetHits/stopHits count explicit target/stop hits with firstHit fallbacks, and targetEligible/stopEligible are the denominator (signals that produced that window with a positive finite target or stop). Hit rates are zero-fill when the denominator is zero.",
+        "required": [
+          "received",
+          "eligible",
+          "targetEligible",
+          "stopEligible",
+          "targetHits",
+          "stopHits",
+          "targetHitRatePercent",
+          "stopHitRatePercent"
+        ],
+        "properties": {
+          "received": {
+            "type": "integer",
+            "example": 12
+          },
+          "eligible": {
+            "type": "integer",
+            "example": 12
+          },
+          "targetEligible": {
+            "type": "integer",
+            "example": 12
+          },
+          "stopEligible": {
+            "type": "integer",
+            "example": 12
+          },
+          "targetHits": {
+            "type": "integer",
+            "example": 6
+          },
+          "stopHits": {
+            "type": "integer",
+            "example": 2
+          },
+          "targetHitRatePercent": {
+            "type": "number",
+            "example": 50
+          },
+          "stopHitRatePercent": {
+            "type": "number",
+            "example": 16.67
           }
         }
       },
@@ -5315,6 +5376,24 @@
               },
               "alerts_sent": {
                 "type": "integer"
+              },
+              "barrierProvenance": {
+                "type": "object",
+                "description": "Counts of alerts grouped by the source of their stop/target. derived alerts used the NewsAnalyzer.deriveBarriers() heuristic; marketContext alerts carried provider-supplied levels. Reported when at least one alert with a barrier was generated.",
+                "properties": {
+                  "derivedAlertsCount": {
+                    "type": "integer",
+                    "example": 2
+                  },
+                  "marketContextAlertsCount": {
+                    "type": "integer",
+                    "example": 0
+                  },
+                  "totalAlertsWithBarriers": {
+                    "type": "integer",
+                    "example": 2
+                  }
+                }
               }
             }
           },

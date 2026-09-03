@@ -401,6 +401,9 @@ class NewsMonitorHandler {
 			alerts_sent: 0,
 		};
 
+		let derivedAlertsCount = 0;
+		let marketContextAlertsCount = 0;
+
 		for (const result of results) {
 			if (result.status === AnalysisStatus.ANALYZED) {
 				summary.analyzed++;
@@ -420,6 +423,27 @@ class NewsMonitorHandler {
 					summary.quota_exhausted++;
 				}
 			}
+
+			// Barrier provenance tally (issue #809 / CB-???): report how
+			// many alerts carried derived (heuristic) vs provider-supplied
+			// (marketContext) barriers so operators can see at a glance
+			// whether news alerts are relying on heuristic stop/targets.
+			const alertWithBarriers = result && result.alert;
+			const barriers = alertWithBarriers ? result.alert.barriers : null;
+			if (barriers && barriers.source === 'derived') {
+				derivedAlertsCount++;
+			} else if (barriers && barriers.source === 'marketContext') {
+				marketContextAlertsCount++;
+			}
+		}
+
+		const totalAlertsWithBarriers = derivedAlertsCount + marketContextAlertsCount;
+		if (totalAlertsWithBarriers > 0) {
+			summary.barrierProvenance = {
+				derivedAlertsCount,
+				marketContextAlertsCount,
+				totalAlertsWithBarriers,
+			};
 		}
 
 		return summary;
