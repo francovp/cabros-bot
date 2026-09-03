@@ -961,6 +961,266 @@
         "x-admin-role": "admin.operator"
       }
     },
+    "/api/chat-subscriptions": {
+      "get": {
+        "tags": [
+          "Chat subscriptions"
+        ],
+        "summary": "List per-chat recurring TradingView subscriptions",
+        "operationId": "listChatSubscriptions",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "chatId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Telegram chat id whose subscriptions should be listed"
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "default": 50
+            },
+            "description": "Maximum number of subscriptions to return (default 50, max 50)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of chat subscriptions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "subscriptions": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ChatSubscription"
+                      }
+                    },
+                    "count": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      },
+      "post": {
+        "tags": [
+          "Chat subscriptions"
+        ],
+        "summary": "Create or replay a per-chat recurring subscription",
+        "operationId": "createChatSubscription",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/XIdempotencyKeyHeader"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatSubscriptionCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Subscription created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "subscription": {
+                      "$ref": "#/components/schemas/ChatSubscription"
+                    },
+                    "replayed": { "type": "boolean" },
+                    "clamped": { "type": "boolean" }
+                  }
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Existing subscription replayed (idempotent)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "subscription": { "$ref": "#/components/schemas/ChatSubscription" },
+                    "replayed": { "type": "boolean" },
+                    "clamped": { "type": "boolean" }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/Error" },
+          "403": { "$ref": "#/components/responses/Error" },
+          "409": { "$ref": "#/components/responses/IdempotencyConflict" }
+        },
+        "security": [
+          { "ApiKeyHeader": [] },
+          { "ApiKeyQuery": [] },
+          { "FirebaseBearerAuth": [] }
+        ],
+        "x-admin-role": "admin.operator"
+      },
+      "delete": {
+        "tags": [
+          "Chat subscriptions"
+        ],
+        "summary": "Cancel every subscription for a chat (admin.operator)",
+        "operationId": "deleteAllChatSubscriptions",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["chatId"],
+                "properties": {
+                  "chatId": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Subscriptions removed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "deleted": { "type": "integer" },
+                    "requested": { "type": "string" }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/Error" },
+          "403": { "$ref": "#/components/responses/Error" }
+        },
+        "security": [
+          { "ApiKeyHeader": [] },
+          { "ApiKeyQuery": [] },
+          { "FirebaseBearerAuth": [] }
+        ],
+        "x-admin-role": "admin.operator"
+      }
+    },
+    "/api/chat-subscriptions/{subscriptionId}": {
+      "delete": {
+        "tags": [
+          "Chat subscriptions"
+        ],
+        "summary": "Cancel a single subscription",
+        "operationId": "deleteChatSubscription",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "subscriptionId",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["chatId"],
+                "properties": {
+                  "chatId": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "$ref": "#/components/responses/Error" },
+          "400": { "$ref": "#/components/responses/Error" },
+          "403": { "$ref": "#/components/responses/Error" }
+        },
+        "security": [
+          { "ApiKeyHeader": [] },
+          { "ApiKeyQuery": [] },
+          { "FirebaseBearerAuth": [] }
+        ],
+        "x-admin-role": "admin.operator"
+      }
+    },
+    "/api/chat-subscriptions/status": {
+      "get": {
+        "tags": [
+          "Chat subscriptions"
+        ],
+        "summary": "Readiness probe for the chat-subscription scheduler and surface",
+        "operationId": "chatSubscriptionStatus",
+        "responses": {
+          "200": {
+            "description": "Status snapshot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "enabled": { "type": "boolean" },
+                    "ready": { "type": "boolean" },
+                    "status": { "type": "string" }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          { "ApiKeyHeader": [] },
+          { "ApiKeyQuery": [] },
+          { "FirebaseBearerAuth": [] }
+        ],
+        "x-admin-role": "admin.viewer"
+      }
+    },
     "/api/jobs/tradingview-analysis": {
       "post": {
         "tags": [
@@ -5941,6 +6201,39 @@
           },
           "order": {
             "$ref": "#/components/schemas/JsonObject"
+          }
+        }
+      },
+      "ChatSubscription": {
+        "type": "object",
+        "properties": {
+          "subscriptionId": { "type": "string" },
+          "chatId": { "type": "string" },
+          "type": { "type": "string", "enum": ["scanner", "analysis"] },
+          "params": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "intervalMs": { "type": "integer" },
+          "nextRunAt": { "type": "string", "format": "date-time", "nullable": true },
+          "lastJobId": { "type": "string", "nullable": true },
+          "lastResultSummary": { "type": "string", "nullable": true },
+          "createdAt": { "type": "string", "format": "date-time" },
+          "updatedAt": { "type": "string", "format": "date-time", "nullable": true },
+          "expiresAt": { "type": "string", "format": "date-time", "nullable": true }
+        }
+      },
+      "ChatSubscriptionCreate": {
+        "type": "object",
+        "required": ["chatId", "type", "interval"],
+        "properties": {
+          "chatId": { "type": "string" },
+          "type": { "type": "string", "enum": ["scanner", "analysis"] },
+          "interval": { "type": "string", "description": "Human-readable interval like '4h' or '24h' (minimum 1h)" },
+          "params": {
+            "type": "object",
+            "description": "Type-specific parameters (scans/exchange/timeframe for scanner; symbols/exchange/timeframe for analysis)",
+            "additionalProperties": true
           }
         }
       }

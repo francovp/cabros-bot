@@ -11,6 +11,12 @@ const {
 	updatePreset,
 	postRunPreset,
 } = require('../controllers/webhooks/handlers/scannerPresets/scannerPresets');
+const {
+	listChatSubscriptions,
+	createChatSubscription,
+	deleteChatSubscription,
+	getChatSubscriptionStatus,
+} = require('../controllers/webhooks/handlers/chatSubscriptions/chatSubscriptions');
 const { postVolumeConfirmation } = require('../controllers/webhooks/handlers/volumeConfirmation/volumeConfirmation');
 const { postSymbolAnalysis } = require('../controllers/webhooks/handlers/symbolAnalysis/symbolAnalysis');
 const {
@@ -61,6 +67,11 @@ function getRoutes(botOrGetter) {
 	router.put('/scanner-presets/:id', ...adminWrite, updatePreset);
 	router.delete('/scanner-presets/:id', ...adminWrite, deletePreset);
 	router.post('/scanner-presets/:id/run', ...adminWrite, idempotencyMiddleware, postRunPreset(botOrGetter));
+	router.get('/chat-subscriptions', ...adminRead, listChatSubscriptions);
+	router.post('/chat-subscriptions', ...adminWrite, idempotencyMiddleware, createChatSubscription);
+	router.delete('/chat-subscriptions/:subscriptionId', ...adminWrite, deleteChatSubscription);
+	router.delete('/chat-subscriptions', ...adminWrite, deleteChatSubscription);
+	router.get('/chat-subscriptions/status', ...adminRead, getChatSubscriptionStatus);
 
 	// Async job endpoints
 	router.post('/jobs/tradingview-analysis', ...adminWrite, idempotencyMiddleware, postCreateJob(botOrGetter));

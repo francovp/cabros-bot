@@ -14,6 +14,9 @@ const {
 	newsMonitorCmd,
 	helpCmd,
 	outcomesCommand,
+	handleSubscribeCommand,
+	handleListSubscriptionsCommand,
+	handleUnsubscribeCommand,
 } = require('./src/controllers/commands');
 const app = require('./app.js');
 const { Telegraf, Markup } = require('telegraf');
@@ -34,6 +37,7 @@ const { notificationRedriveService } = require('./src/services/notification/Noti
 const { whatsAppCommandBridgeService } = require('./src/services/notification/WhatsAppCommandBridgeService');
 const { scannerPresetSchedulerService } = require('./src/services/scannerPresets');
 const { newsMonitorSchedulerService } = require('./src/services/newsMonitorScheduler');
+const { chatSubscriptionSchedulerService } = require('./src/services/chatSubscriptions/ChatSubscriptionSchedulerService');
 const sentryService = require('./src/services/monitoring/SentryService');
 const remoteConfigService = require('./src/services/remoteConfig/RemoteConfigService');
 const Sentry = require('@sentry/node');
@@ -82,6 +86,7 @@ const lifecycle = createProcessLifecycle({
 	stopWhatsAppCommandBridge: (options) => whatsAppCommandBridgeService.stop(options),
 	stopScannerPresetScheduler: (options) => scannerPresetSchedulerService.stopWorker(options),
 	stopNewsMonitorScheduler: (options) => newsMonitorSchedulerService.stopWorker(options),
+	stopChatSubscriptionScheduler: (options) => chatSubscriptionSchedulerService.stopWorker(options),
 	stopRemoteConfig: () => remoteConfigService.stop(),
 	shutdownNewsMonitor: () => getCacheInstance().shutdown(),
 	flushSentry: (timeout) => sentryService.flush(timeout),
@@ -104,6 +109,9 @@ async function bootstrapApplication() {
 	scannerPresetSchedulerService.startWorker();
 	// Start background news-monitor scheduler if enabled
 	newsMonitorSchedulerService.startWorker({ source: 'web' });
+	// Start background chat-subscription scheduler if enabled
+	chatSubscriptionSchedulerService.botGetter = () => bot;
+	chatSubscriptionSchedulerService.startWorker();
 	// Start WhatsApp inbound command bridge if enabled
 	if (whatsAppCommandBridgeService.isEnabled()) {
 		whatsAppCommandBridgeService.start();
@@ -128,6 +136,9 @@ async function bootstrapApplication() {
 		bot.command(['noticias', 'news'], newsMonitorCmd);
 		bot.command(['outcomes', 'rendimiento'], outcomesCommand);
 		bot.command(['help', 'start'], helpCmd);
+		bot.command(['subscribe'], handleSubscribeCommand);
+		bot.command(['subscriptions', 'suscripciones'], handleListSubscriptionsCommand);
+		bot.command(['unsubscribe'], handleUnsubscribeCommand);
 
 		// Attach Telegram error boundary
 		attachTelegramErrorBoundary(bot);
