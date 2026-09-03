@@ -1001,6 +1001,24 @@
               "body": "{\n  \"success\": false,\n  \"error\": \"\\\"discordWebhookUrl\\\" must be a valid HTTPS Discord webhook URL\",\n  \"details\": {\n    \"field\": \"discordWebhookUrl\"\n  }\n}"
             },
             {
+              "name": "Error (strict telegramChatId — non-numeric)",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"success\": false,\n  \"error\": \"\\\"telegramChatId\\\" must be a numeric chat ID (5-20 digits, optional \\\"-\\\" prefix)\",\n  \"details\": {\n    \"field\": \"telegramChatId\"\n  }\n}"
+            },
+            {
+              "name": "Error (strict telegramChatId — MarkdownV2 escape character)",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"success\": false,\n  \"error\": \"\\\"telegramChatId\\\" contains disallowed characters (whitespace or MarkdownV2 escape-trigger characters)\",\n  \"details\": {\n    \"field\": \"telegramChatId\"\n  }\n}"
+            },
+            {
+              "name": "Error (strict whatsappChatId — missing GreenAPI suffix)",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"success\": false,\n  \"error\": \"\\\"whatsappChatId\\\" must be a GreenAPI chat ID in the format <digits>@<c.us|g.us>\",\n  \"details\": {\n    \"field\": \"whatsappChatId\"\n  }\n}"
+            },
+            {
               "name": "Error (unknown channel)",
               "status": "Bad Request",
               "code": 400,
