@@ -13,6 +13,7 @@ const equityMarketDataService = require('../services/storage/EquityMarketDataSer
 const remoteConfigService = require('../services/remoteConfig/RemoteConfigService');
 const { tradingViewMcpService } = require('../services/tradingview/TradingViewMcpService');
 const { binanceOrderService } = require('../services/trading/BinanceOrderService');
+const { getDemoStatus } = require('./demo');
 const bootstrapReadiness = require('../lib/bootstrapReadiness');
 const { notificationRedriveService } = require('../services/notification/NotificationRedriveService');
 const { deliveryMetricsService } = require('../services/notification/DeliveryMetricsService');
@@ -357,6 +358,7 @@ function getStatus() {
 			notificationRedrive: notificationRedriveService.isEnabled(),
 			alertSignalRepeatSuppression: signalRepeatCooldown.isEnabled(),
 			whatsappCommands: whatsAppCommandBridgeService.isEnabled(),
+			demoMode: isEnabled(process.env.ENABLE_DEMO_MODE),
 		},
 		deliveryChannels: {
 			telegram: {
@@ -430,6 +432,7 @@ function getStatus() {
 			},
 			jobExecutionQueue: jobExecutionQueueStatus,
 			binanceTrading: binanceTradingStatus,
+			demo: getDemoStatus(),
 		},
 	};
 }

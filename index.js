@@ -13,6 +13,7 @@ const {
 	jobsCommand,
 	newsMonitorCmd,
 	helpCmd,
+	demoCmd,
 	outcomesCommand,
 } = require('./src/controllers/commands');
 const app = require('./app.js');
@@ -127,6 +128,7 @@ async function bootstrapApplication() {
 		bot.command(['jobs', 'trabajos'], jobsCommand);
 		bot.command(['noticias', 'news'], newsMonitorCmd);
 		bot.command(['outcomes', 'rendimiento'], outcomesCommand);
+		bot.command(['demo'], demoCmd);
 		bot.command(['help', 'start'], helpCmd);
 
 		// Attach Telegram error boundary

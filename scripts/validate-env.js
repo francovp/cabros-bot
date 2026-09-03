@@ -179,6 +179,14 @@ function validateEnv(env = process.env) {
 		}
 	}
 
+	if (isEnabled(env, 'ENABLE_DEMO_MODE') && !isEnabled(env, 'ENABLE_TELEGRAM_BOT') && !hasValue(env.WEBHOOK_API_KEY)) {
+		addInvalid(
+			warnings,
+			'ENABLE_DEMO_MODE',
+			'is enabled but neither ENABLE_TELEGRAM_BOT nor WEBHOOK_API_KEY is configured — demo routes will be unreachable',
+		);
+	}
+
 	for (const [variable, bounds] of Object.entries(INTEGER_RULES)) {
 		if (hasValue(env[variable]) && !isIntegerInRange(env[variable], bounds)) {
 			addInvalid(warnings, variable, `must be an integer between ${bounds[0]} and ${bounds[1]}`);

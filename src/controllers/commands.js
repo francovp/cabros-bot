@@ -505,9 +505,104 @@ function buildHelpMessage() {
 		'• `/outcomes <simbolo>` — Rendimiento reciente de señales evaluadas \\(alias: `/rendimiento`\\)',
 		'  _Ej: `/outcomes BINANCE:BTCUSDT`_',
 		'• `/jobs [jobId]` — Lista jobs recientes o muestra su estado \\(alias: `/trabajos`\\)',
+		'• `/demo <alert|outcomes|scanner>` — Vista previa sintética \\(requiere `ENABLE_DEMO_MODE=true`\\)',
 		'• `/help` / `/start` — Muestra este mensaje de ayuda',
 	].join('\n');
 }
+
+const DEMO_COMMAND_SUBCOMMANDS = new Set(['alert', 'outcomes', 'scanner']);
+
+const demoCmd = async (context) => {
+	const chatId = getChatId(context);
+	const { positionals, options } = parseCommandArgs(context);
+	const subcommand = (positionals[0] || 'alert').toLowerCase();
+	const commandSpan = sentryService.startInactiveSpan({
+		name: 'telegram.command.demo',
+		op: 'bot.command',
+		forceTransaction: true,
+		attributes: {
+			'telegram.command': '/demo',
+			'telegram.chat_id': chatId ? String(chatId) : 'unknown',
+			'demo.subcommand': subcommand,
+		},
+	});
+
+	try {
+		const { isDemoEnabled } = require('./demo');
+		if (!isDemoEnabled()) {
+			await context.reply('Demo deshabilitado. Configura `ENABLE_DEMO_MODE=true` para habilitarlo.', { parse_mode: 'MarkdownV2' });
+			return;
+		}
+
+		if (!DEMO_COMMAND_SUBCOMMANDS.has(subcommand)) {
+			await context.reply('Subcomando inválido. Usa `/demo alert`, `/demo outcomes`, o `/demo scanner`.', { parse_mode: 'MarkdownV2' });
+			return;
+		}
+
+		const symbolOption = typeof options.symbol === 'string' ? options.symbol : '';
+		const exchangeOption = typeof options.exchange === 'string' ? options.exchange : '';
+		const header = '🧪 *DEMO* · datos sintéticos, no operar';
+
+		if (subcommand === 'alert') {
+			const text = typeof options.text === 'string' && options.text.length > 0
+				? options.text
+				: 'Sample demo alert desde Cabros Bot.';
+			const reply = [
+				header,
+				'',
+				text,
+				'',
+				'_Origen_: `demo` · _canal_: `telegram`',
+			].join('\n');
+			await context.reply(reply, { parse_mode: 'MarkdownV2' });
+			return;
+		}
+
+		if (subcommand === 'outcomes') {
+			const symbol = symbolOption || 'BINANCE:BTCUSDT';
+			const reply = [
+				header,
+				'',
+				`Simbolo: \`${symbol}\``,
+				'Hit rate (sintético): 50%',
+				'MFE medio: +2.5% / MAE medio: -1.8%',
+				'',
+				'_Datos sintéticos_, no se derivan de ninguna consulta histórica._',
+			].join('\n');
+			await context.reply(reply, { parse_mode: 'MarkdownV2' });
+			return;
+		}
+
+		// scanner
+		const exchange = exchangeOption || 'BINANCE';
+		const reply = [
+			header,
+			'',
+			`Exchange: \`${exchange}\``,
+			'• BINANCE:BTCUSDT · +1.42%',
+			'• BINANCE:ETHUSDT · -0.83%',
+			'• BINANCE:SOLUSDT · +3.21%',
+			'',
+			'_Lista sintética_, no consulta TradingView MCP._',
+		].join('\n');
+		await context.reply(reply, { parse_mode: 'MarkdownV2' });
+	} catch (error) {
+		console.error('[Demo] command failed:', error.message);
+		sentryService.captureRuntimeError({
+			channel: 'telegram',
+			error,
+			feature: 'demo',
+			extra: { chatId, subcommand },
+		});
+		try {
+			await context.reply('No pude generar la vista demo. Revisa los logs.', { parse_mode: 'MarkdownV2' });
+		} catch (replyError) {
+			console.error('[Demo] failed to send error reply:', replyError);
+		}
+	} finally {
+		sentryService.endSpan(commandSpan);
+	}
+};
 
 const helpCmd = async (context) => {
 	const chatId = getChatId(context);
@@ -629,6 +724,7 @@ module.exports = {
 	jobsCommand,
 	newsMonitorCmd,
 	helpCmd,
+	demoCmd,
 	outcomesCommand,
 	buildHelpMessage,
 	getTelegramCommandMenu,
