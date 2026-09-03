@@ -844,12 +844,15 @@ Run TradingView MCP `volume_confirmation_analysis` on demand and return structur
 ```json
 {
   "symbol": "BINANCE:BTCUSDT",
-  "timeframe": "4h"
+  "timeframe": "4h",
+  "includeMultiTimeframe": true
 }
 ```
 
 - `symbol`: Required `EXCHANGE:SYMBOL` identifier.
 - `timeframe`: Optional indicator interval. Defaults to `TRADINGVIEW_MCP_DEFAULT_TIMEFRAME` or `1h`.
+- `includeMultiTimeframe`: Optional boolean. When `true` and `ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME=true`, executes higher-timeframe confluence analysis and includes `multiTimeframeAnalysis` and `htfAlignment` (`aligned` | `counter-trend` | `unknown`). Fails open if multi-timeframe analysis encounters an upstream error.
+- `side` / `direction`: Optional directional hints (`BUY`, `SELL`, `bullish`, `bearish`) used by `resolveTrendConfluence` to determine alignment.
 
 **Response (JSON):**
 ```json
@@ -868,11 +871,33 @@ Run TradingView MCP `volume_confirmation_analysis` on demand and return structur
       "volume_ratio": 1.7,
       "volume_strength": "HIGH"
     }
-  }
+  },
+  "volumeConfirmation": {
+    "confirmed": true,
+    "decision": "confirm",
+    "volumeRatio": 1.7,
+    "analysis": {
+      "symbol": "BINANCE:BTCUSDT",
+      "volume_analysis": {
+        "volume_ratio": 1.7,
+        "volume_strength": "HIGH"
+      }
+    }
+  },
+  "multiTimeframeAnalysis": {
+    "alignment": {
+      "status": "ALIGNED",
+      "confidence": 0.9
+    },
+    "recommendation": {
+      "action": "BUY"
+    }
+  },
+  "htfAlignment": "aligned"
 }
 ```
 
-If the symbol format is invalid, the endpoint returns `400 INVALID_REQUEST`. If TradingView MCP fails, it returns `502 VOLUME_CONFIRMATION_FAILED` with the upstream error message.
+If the symbol format is invalid, the endpoint returns `400 INVALID_REQUEST`. If TradingView MCP fails, it returns `502 VOLUME_CONFIRMATION_FAILED` with the upstream error message. Failures during the optional multi-timeframe call fail open (returning 200 with `multiTimeframeAnalysis: null` and `htfAlignment: "unknown"`).
 
 ### POST /api/webhook/symbol-analysis
 

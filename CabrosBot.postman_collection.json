@@ -820,7 +820,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"symbol\": \"BINANCE:BTCUSDT\",\n  \"timeframe\": \"4h\"\n}"
+              "raw": "{\n  \"symbol\": \"BINANCE:BTCUSDT\",\n  \"timeframe\": \"4h\",\n  \"includeMultiTimeframe\": true\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/api/webhook/volume-confirmation",
@@ -833,7 +833,35 @@
                 "volume-confirmation"
               ]
             }
-          }
+          },
+          "response": [
+            {
+              "name": "200 Confirmed with Multi-Timeframe Confluence",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"symbol\": \"BINANCE:BTCUSDT\",\n  \"exchange\": \"BINANCE\",\n  \"asset\": \"BTCUSDT\",\n  \"timeframe\": \"4h\",\n  \"confirmed\": true,\n  \"decision\": \"confirm\",\n  \"volumeRatio\": 1.7,\n  \"analysis\": {\n    \"symbol\": \"BINANCE:BTCUSDT\",\n    \"volume_analysis\": {\n      \"volume_ratio\": 1.7,\n      \"volume_strength\": \"HIGH\"\n    },\n    \"confidence\": 0.91\n  },\n  \"volumeConfirmation\": {\n    \"confirmed\": true,\n    \"decision\": \"confirm\",\n    \"volumeRatio\": 1.7,\n    \"analysis\": {\n      \"symbol\": \"BINANCE:BTCUSDT\",\n      \"volume_analysis\": {\n        \"volume_ratio\": 1.7,\n        \"volume_strength\": \"HIGH\"\n      },\n      \"confidence\": 0.91\n    }\n  },\n  \"multiTimeframeAnalysis\": {\n    \"alignment\": {\n      \"status\": \"ALIGNED\",\n      \"confidence\": 0.9\n    },\n    \"recommendation\": {\n      \"action\": \"BUY\"\n    }\n  },\n  \"htfAlignment\": \"aligned\",\n  \"requestId\": \"bfb6a023-9656-41da-9543-dd3ad211054c\",\n  \"totalDurationMs\": 150\n}"
+            },
+            {
+              "name": "400 Invalid multi-timeframe flag",
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"includeMultiTimeframe must be a boolean\",\n  \"code\": \"INVALID_REQUEST\",\n  \"requestId\": \"bfb6a023-9656-41da-9543-dd3ad211054c\"\n}"
+            }
+          ]
         },
         {
           "name": "POST Single Symbol Analysis",

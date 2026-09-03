@@ -5,6 +5,7 @@ const {
 	parseVolumeConfirmationRequest,
 	getVolumeDecision,
 } = require('../../../../services/tradingview/volumeConfirmationRequest');
+const { resolveTrendConfluence } = require('../../../../services/tradingview/marketScannerScoring');
 const sentryService = require('../../../../services/monitoring/SentryService');
 
 function postVolumeConfirmation() {
@@ -21,7 +22,36 @@ function postVolumeConfirmation() {
 			});
 			const decision = getVolumeDecision(analysis);
 
-			return res.status(200).json({
+			const isMultiTimeframeEnabled = process.env.ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME === 'true';
+			let multiTimeframeAnalysis = null;
+			let htfAlignment = 'unknown';
+
+			if (parsed.includeMultiTimeframe && isMultiTimeframeEnabled) {
+				try {
+					multiTimeframeAnalysis = await tradingViewMcpService.callMultiTimeframeAnalysis({
+						symbol: parsed.symbol,
+						exchange: parsed.exchange,
+					});
+					const item = {
+						...analysis,
+						breakout_type: parsed.breakoutType || parsed.direction || parsed.side,
+						trading_recommendation: parsed.tradingRecommendation || parsed.side || parsed.direction,
+					};
+					const trendConfluence = resolveTrendConfluence(item, 'volume_confirmation', {
+						trendConfluence: multiTimeframeAnalysis,
+					});
+					htfAlignment = trendConfluence?.status || 'unknown';
+				} catch (error) {
+					console.warn(
+						`[VolumeConfirmation] Multi-timeframe analysis failed for ${parsed.rawSymbol}:`,
+						error.message,
+					);
+					multiTimeframeAnalysis = null;
+					htfAlignment = 'unknown';
+				}
+			}
+
+			const response = {
 				success: true,
 				symbol: parsed.rawSymbol,
 				exchange: parsed.exchange,
@@ -29,9 +59,20 @@ function postVolumeConfirmation() {
 				timeframe: parsed.timeframe,
 				...decision,
 				analysis,
+				volumeConfirmation: {
+					...decision,
+					analysis,
+				},
 				requestId,
 				totalDurationMs: Date.now() - startTime,
-			});
+			};
+
+			if (parsed.includeMultiTimeframe && isMultiTimeframeEnabled) {
+				response.multiTimeframeAnalysis = multiTimeframeAnalysis;
+				response.htfAlignment = htfAlignment;
+			}
+
+			return res.status(200).json(response);
 		} catch (error) {
 			if (error instanceof VolumeConfirmationRequestError) {
 				return res.status(400).json({
