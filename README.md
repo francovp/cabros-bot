@@ -416,6 +416,18 @@ The protected `/api/status` response includes the same non-sensitive state under
 
 Pending and failed bootstrap states use the same body shape with HTTP `503`; failed responses include a sanitized `error` message.
 
+### Rate-limit response headers
+
+Every protected `/api` response (success and throttled) carries the standard `X-RateLimit-*` headers so callers can implement adaptive backpressure:
+
+| Header | Value |
+|---|---|
+| `X-RateLimit-Limit` | Max requests per window for the active bucket (`RATE_LIMIT_MAX` or `1000` for `/api/webhook/alert` and `/api/webhook/message`). |
+| `X-RateLimit-Remaining` | Requests remaining in the current window. Zero on a throttled response. |
+| `X-RateLimit-Reset` | Unix timestamp (seconds) when the current window resets. |
+
+Throttled (`429`) responses additionally include the existing `Retry-After` header (seconds) and the `retryAfterSeconds` field in the JSON body. `/healthcheck`, `/ready`, and static asset routes are exempt — the global rate limiter is mounted after them in `app.js`.
+
 ### GET /api/status
 
 Machine-readable runtime status for operational tooling. This endpoint uses the same `WEBHOOK_API_KEY` protection as other `/api` endpoints when that environment variable is configured. Send the key with the `x-api-key` header.

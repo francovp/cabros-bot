@@ -85,6 +85,12 @@ function rateLimiter(req, res, next) {
 		data.count++;
 	}
 
+	const remaining = Math.max(0, maxRequests - data.count);
+	const resetSeconds = Math.ceil(data.resetTime / 1000);
+	res.setHeader('X-RateLimit-Limit', String(maxRequests));
+	res.setHeader('X-RateLimit-Remaining', String(remaining));
+	res.setHeader('X-RateLimit-Reset', String(resetSeconds));
+
 	if (data.count > maxRequests) {
 		const retryAfterSeconds = Math.max(1, Math.ceil((data.resetTime - now) / 1000));
 		res.setHeader('Retry-After', String(retryAfterSeconds));

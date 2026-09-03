@@ -1357,6 +1357,95 @@
               }
             }
           ]
+        },
+        {
+          "name": "Rate limit headers (X-RateLimit-*)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"text\": \"BTCUSDT: rate-limit header smoke test\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/webhook/alert",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "webhook",
+                "alert"
+              ]
+            },
+            "description": "Every protected /api response carries the standard X-RateLimit-* headers so callers can implement adaptive backpressure. The webhook ingest endpoints use an isolated 1,000-request bucket; ordinary /api endpoints use RATE_LIMIT_MAX. Throttled (429) responses include the headers plus the existing Retry-After header and retryAfterSeconds body field. Healthcheck, /ready, and static asset routes are exempt \u2014 the global rate limiter is mounted after them in app.js."
+          },
+          "response": [
+            {
+              "name": "Success - rate-limit headers visible",
+              "status": "OK",
+              "code": 200,
+              "body": "{\"success\":true,\"requestId\":\"req-12345\",\"results\":[{\"channel\":\"telegram\",\"success\":true,\"messageId\":\"12345\"}],\"enriched\":false}",
+              "header": [
+                {
+                  "key": "X-RateLimit-Limit",
+                  "value": "1000",
+                  "description": "Max requests per window for the active bucket (webhook ingest uses 1,000)."
+                },
+                {
+                  "key": "X-RateLimit-Remaining",
+                  "value": "999",
+                  "description": "Requests remaining in the current window."
+                },
+                {
+                  "key": "X-RateLimit-Reset",
+                  "value": "1756819200",
+                  "description": "Unix timestamp (seconds) when the window resets."
+                }
+              ],
+              "cookie": []
+            },
+            {
+              "name": "Throttled (429) - headers + Retry-After",
+              "status": "Too Many Requests",
+              "code": 429,
+              "body": "{\"error\":\"Too many requests, please try again later.\",\"retryAfterSeconds\":120}",
+              "header": [
+                {
+                  "key": "X-RateLimit-Limit",
+                  "value": "2",
+                  "description": "Max requests per window for the active bucket."
+                },
+                {
+                  "key": "X-RateLimit-Remaining",
+                  "value": "0",
+                  "description": "Requests remaining in the current window (zero on a throttled response)."
+                },
+                {
+                  "key": "X-RateLimit-Reset",
+                  "value": "1756819200",
+                  "description": "Unix timestamp (seconds) when the window resets."
+                },
+                {
+                  "key": "Retry-After",
+                  "value": "120",
+                  "description": "Seconds until the caller may retry the request."
+                }
+              ],
+              "cookie": []
+            }
+          ]
         }
       ]
     },

@@ -3225,6 +3225,28 @@
         "type": "object",
         "additionalProperties": true
       },
+      "RateLimitHeaders": {
+        "type": "object",
+        "description": "Standard X-RateLimit-* response headers emitted by the global rate limiter on every protected /api response (success and throttled). The webhook ingest endpoints use an isolated 1,000-request bucket; ordinary /api endpoints use RATE_LIMIT_MAX.",
+        "required": ["X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset"],
+        "properties": {
+          "X-RateLimit-Limit": {
+            "type": "string",
+            "description": "Maximum requests per window for the current bucket.",
+            "examples": ["1000"]
+          },
+          "X-RateLimit-Remaining": {
+            "type": "string",
+            "description": "Requests remaining in the current window. Zero on a throttled response.",
+            "examples": ["999"]
+          },
+          "X-RateLimit-Reset": {
+            "type": "string",
+            "description": "Unix timestamp (seconds) when the current window resets.",
+            "examples": ["1756819200"]
+          }
+        }
+      },
       "DeliveryMetrics": {
         "type": "object",
         "description": "Aggregate in-memory delivery SLA counters exposed through /api/status and /api/capabilities. Reset on process restart. Omitted when no channel has recorded any delivery.",
