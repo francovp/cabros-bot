@@ -8,6 +8,7 @@ const remoteConfigService = require('../remoteConfig/RemoteConfigService');
 const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
 const { notificationRedriveService } = require('./NotificationRedriveService');
 const { deliveryMetricsService } = require('./DeliveryMetricsService');
+const { evaluateDeliveryGate } = require('../marketCalendar/notificationGate');
 
 const DEFAULT_ZERO_CHANNEL_ALERT_COOLDOWN_MS = 300000;
 
@@ -217,6 +218,41 @@ class NotificationManager {
 			return [];
 		}
 
+		// Market-calendar delivery gate: opt-in suppression when the alert's
+		// resolved exchange is closed (full-day holiday, half-day outside
+		// window, weekend, or weekday outside any session window). Routes the
+		// alert to the dead-letter queue with a structured `reason` for audit
+		// and replay. Fail-open when disabled, missing exchange, or classifier
+		// error.
+		const gate = evaluateDeliveryGate(alert, options);
+		if (gate.suppress) {
+			console.info(
+				`[NotificationManager] Suppressed by market calendar: exchange=${gate.exchange} reason=${gate.reason} state=${gate.sessionState && gate.sessionState.state}`,
+			);
+			if (notificationRedriveService.isEnabled()) {
+				trackBackgroundTask(notificationRedriveService.recordDeliveryResults(
+					{ ...alert, _marketCalendarGate: { suppress: true, reason: gate.reason, sessionState: gate.sessionState, exchange: gate.exchange } },
+					channelNames.map((name) => ({
+						channel: name,
+						success: false,
+						error: gate.reason,
+						errorCode: gate.reason,
+						skipped: true,
+					})),
+					{ ...options, isRedrive: false },
+				)).catch((error) => {
+					console.warn('[NotificationManager] Failed to record market-calendar dead-letter:', error.message);
+				});
+			}
+			return channelNames.map((name) => ({
+				channel: name,
+				success: false,
+				error: gate.reason,
+				errorCode: gate.reason,
+				skipped: true,
+			}));
+		}
+
 		const channels = channelNames
 			.map(name => {
 				const ch = this.channels.get(name);
@@ -370,6 +406,41 @@ class NotificationManager {
 		const enabledChannels = Array.from(this.channels.values()).filter((ch) => ch.isEnabled());
 		const startTime = Date.now();
 		const { parentSpan } = options;
+
+		// Market-calendar delivery gate: opt-in suppression when the alert's
+		// resolved exchange is closed (full-day holiday, half-day outside
+		// window, weekend, or weekday outside any session window). Routes the
+		// alert to the dead-letter queue with a structured `reason` for audit
+		// and replay. Fail-open when disabled, missing exchange, or classifier
+		// error.
+		const gate = evaluateDeliveryGate(alert, options);
+		if (gate.suppress) {
+			console.info(
+				`[NotificationManager] Suppressed by market calendar: exchange=${gate.exchange} reason=${gate.reason} state=${gate.sessionState && gate.sessionState.state}`,
+			);
+			const candidateChannels = enabledChannels.length > 0
+				? enabledChannels.map((ch) => ch.name)
+				: Array.from(this.channels.keys());
+			const syntheticResults = candidateChannels.map((channelName) => ({
+				channel: channelName,
+				success: false,
+				error: gate.reason,
+				errorCode: gate.reason,
+				skipped: true,
+			}));
+			if (!options.isRedrive && notificationRedriveService.isEnabled()) {
+				trackBackgroundTask(
+					notificationRedriveService.recordDeliveryResults(
+						{ ...alert, _marketCalendarGate: { suppress: true, reason: gate.reason, sessionState: gate.sessionState, exchange: gate.exchange } },
+						syntheticResults,
+						options,
+					),
+				).catch((error) => {
+					console.warn('[NotificationManager] Failed to record market-calendar dead-letter:', error.message);
+				});
+			}
+			return syntheticResults;
+		}
 
 		if (enabledChannels.length === 0) {
 			if (this.isIntentionalApiOnly()) {
