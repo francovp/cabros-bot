@@ -1560,3 +1560,26 @@ Binance 451 / `restricted location` errors are now classified as `binance_region
 - `BINANCE_DATA_BASE_URL` — Optional override for all Binance market-data REST calls. Default `https://api.binance.com` (preserves existing behavior when unset). Must be an http(s) URL; live trading also requires `https://`. Classified as **environment-only** for Remote Config parity (external destination; secrets/credentials/external-endpoint policy excludes it).
 
 No endpoint, OpenAPI, Postman, or Remote Config contract changed; the new env var follows the standard `environment-only` classification.
+
+## Market Calendar Gating (CB-? / GH-806)
+
+Adds an opt-in delivery gate that classifies U.S. equity venues against a static NYSE/NASDAQ holiday + half-day schedule (`src/services/marketCalendar/data/usMarketHolidays.json`) using IANA-resolved ET parts (no manual UTC offsets). The gate runs after enrichment, before `NotificationManager.sendToAll()` / `sendToChannels()`, and routes suppressed alerts to the existing `NotificationRedriveService` dead-letter queue with a structured `reason` (`market_holiday`, `market_half_day_outside_window`, or `market_closed`). Crypto venues are always 24/7; the gate is fail-open on classifier errors and disabled when `ENABLE_MARKET_CALENDAR_GATING` is unset. /api/status and /api/capabilities surface `featureFlags.marketCalendarGating` plus `dependencies.marketCalendar` (with the dataset metadata: version, lastUpdated, timezone, supportedYears, venues). Default-off preserves existing webhook behavior byte-for-byte.
+
+**Core Components**:
+- `src/services/marketCalendar/sessionState.js` — `getSessionState({ exchange, timestamp })` returns `regular | pre | post | closed | holiday | half_day | unknown` plus `suppressDelivery`, `venueKind`, `holiday`, `dateKey`, `timezone`. Uses `Intl.DateTimeFormat` with the IANA `America/New_York` zone.
+- `src/services/marketCalendar/notificationGate.js` — `evaluateDeliveryGate(alert)` resolves the alert's exchange (`alert.exchange` → `alert.enriched.exchange` → `alert.enriched.signal.exchange` → `alert.signal.exchange` → `alert.metadata.exchange`), consults the classifier, and returns `{ suppress, reason, sessionState, exchange }`. Always returns false when disabled.
+- `src/services/notification/NotificationManager.js` — `sendToAll` and `sendToChannels` early-return synthetic skipped results (`{ channel, success: false, error: gate.reason, errorCode: gate.reason, skipped: true }`) when the gate suppresses, and record the alert in `notificationRedriveService.recordDeliveryResults(...)` with `_marketCalendarGate` metadata so redrive keeps the suppression reason attached.
+- `src/controllers/status.js` — `featureFlags.marketCalendarGating` and `dependencies.marketCalendar` (with `enabled`, `gatesDelivery`, `dataset: { datasetVersion, lastUpdated, timezone, venues, supportedYears }`).
+- `src/services/marketCalendar/data/usMarketHolidays.json` — 2025/2026/2027 NYSE/NASDAQ full-day closures and half-day early closes (Black Friday, Christmas Eve, observed Independence Day).
+- `tests/unit/market-calendar-session-state.test.js` and `tests/unit/market-calendar-notification-gate.test.js` — Holiday, half-day, weekend, regular-hours, pre/post-market, crypto, unknown-venue, fail-open, and feature-flag coverage.
+
+**Configuration**:
+- `ENABLE_MARKET_CALENDAR_GATING` — Default-off opt-in flag. Classified as **environment-only** for Remote Config parity (operator-controlled behaviour, fail-open, non-secret runtime tuning). Never includes credentials, authentication, secrets, or destinations.
+
+**Failure modes**:
+- Classifier returns `unknown` (malformed timestamp, unsupported venue, or `Intl.DateTimeFormat` failure) → delivery proceeds unchanged.
+- `Intl.DateTimeFormat` throws → `console.warn` + `sentryService.captureRuntimeError(...)`; delivery proceeds unchanged.
+- Dataset is missing or malformed → `closed` (fail-closed for safety), `console.warn`, and an Sentry capture so operators notice the stale dataset.
+- Suppressed alerts skip Telegram/WhatsApp/Discord dispatch but stay persisted in the dead-letter queue, so audit and replay remain complete.
+
+This change adds a focused new module without expanding the env-var, OpenAPI, Postman, or Remote Config contracts beyond the documented opt-in flag.

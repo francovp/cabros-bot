@@ -1,0 +1,59 @@
+{
+  "$comment": "Static U.S. equity market holiday and half-day schedule. Generated from the published NYSE/NASDAQ official schedule.",
+  "datasetVersion": "2026.01",
+  "lastUpdated": "2026-08-28",
+  "timezone": "America/New_York",
+  "venues": ["BATS", "NASDAQ", "NYSE", "AMEX", "NYSE ARCA", "NYSE_ARCA", "ARCA", "CBOE"],
+  "earlyCloseET": "13:00",
+  "regularHoursET": {
+    "open": "09:30",
+    "close": "16:00",
+    "preOpen": "04:00",
+    "postClose": "20:00"
+  },
+  "holidays": {
+    "2025": [
+      { "date": "2025-01-01", "name": "New Year's Day", "type": "full_day" },
+      { "date": "2025-01-20", "name": "Martin Luther King Jr. Day", "type": "full_day" },
+      { "date": "2025-02-17", "name": "Presidents' Day", "type": "full_day" },
+      { "date": "2025-04-18", "name": "Good Friday", "type": "full_day" },
+      { "date": "2025-05-26", "name": "Memorial Day", "type": "full_day" },
+      { "date": "2025-06-19", "name": "Juneteenth National Independence Day", "type": "full_day" },
+      { "date": "2025-07-03", "name": "Independence Day (observed)", "type": "full_day" },
+      { "date": "2025-07-04", "name": "Independence Day", "type": "full_day" },
+      { "date": "2025-09-01", "name": "Labor Day", "type": "full_day" },
+      { "date": "2025-11-27", "name": "Thanksgiving Day", "type": "full_day" },
+      { "date": "2025-11-28", "name": "Day after Thanksgiving (Black Friday early close)", "type": "half_day" },
+      { "date": "2025-12-24", "name": "Christmas Eve (early close)", "type": "half_day" },
+      { "date": "2025-12-25", "name": "Christmas Day", "type": "full_day" }
+    ],
+    "2026": [
+      { "date": "2026-01-01", "name": "New Year's Day", "type": "full_day" },
+      { "date": "2026-01-19", "name": "Martin Luther King Jr. Day", "type": "full_day" },
+      { "date": "2026-02-16", "name": "Presidents' Day", "type": "full_day" },
+      { "date": "2026-04-03", "name": "Good Friday", "type": "full_day" },
+      { "date": "2026-05-25", "name": "Memorial Day", "type": "full_day" },
+      { "date": "2026-06-19", "name": "Juneteenth National Independence Day", "type": "full_day" },
+      { "date": "2026-07-03", "name": "Independence Day (observed)", "type": "full_day" },
+      { "date": "2026-09-07", "name": "Labor Day", "type": "full_day" },
+      { "date": "2026-11-26", "name": "Thanksgiving Day", "type": "full_day" },
+      { "date": "2026-11-27", "name": "Day after Thanksgiving (Black Friday early close)", "type": "half_day" },
+      { "date": "2026-12-24", "name": "Christmas Eve (early close)", "type": "half_day" },
+      { "date": "2026-12-25", "name": "Christmas Day", "type": "full_day" }
+    ],
+    "2027": [
+      { "date": "2027-01-01", "name": "New Year's Day", "type": "full_day" },
+      { "date": "2027-01-18", "name": "Martin Luther King Jr. Day", "type": "full_day" },
+      { "date": "2027-02-15", "name": "Presidents' Day", "type": "full_day" },
+      { "date": "2027-03-26", "name": "Good Friday", "type": "full_day" },
+      { "date": "2027-05-31", "name": "Memorial Day", "type": "full_day" },
+      { "date": "2027-06-18", "name": "Juneteenth National Independence Day (observed)", "type": "full_day" },
+      { "date": "2027-07-05", "name": "Independence Day (observed)", "type": "full_day" },
+      { "date": "2027-09-06", "name": "Labor Day", "type": "full_day" },
+      { "date": "2027-11-25", "name": "Thanksgiving Day", "type": "full_day" },
+      { "date": "2027-11-26", "name": "Day after Thanksgiving (Black Friday early close)", "type": "half_day" },
+      { "date": "2027-12-24", "name": "Christmas Eve (early close)", "type": "half_day" },
+      { "date": "2027-12-31", "name": "Christmas (observed, early close)", "type": "half_day" }
+    ]
+  }
+}

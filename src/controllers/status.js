@@ -21,6 +21,7 @@ const geminiQuotaManager = require('../services/grounding/geminiQuotaManager');
 const groundingMetrics = require('../services/grounding/metrics');
 const { signalRepeatCooldown } = require('../services/alerts/signalRepeatCooldown');
 const { getCoalescingStatus } = require('../services/grounding/grounding');
+const { isFeatureEnabled: isMarketCalendarGatingEnabled, getDatasetMetadata: getMarketCalendarMetadata } = require('../services/marketCalendar/notificationGate');
 const {
 	getDeploymentCommit,
 	isPreviewEnvironment,
@@ -357,6 +358,7 @@ function getStatus() {
 			notificationRedrive: notificationRedriveService.isEnabled(),
 			alertSignalRepeatSuppression: signalRepeatCooldown.isEnabled(),
 			whatsappCommands: whatsAppCommandBridgeService.isEnabled(),
+			marketCalendarGating: isMarketCalendarGatingEnabled(),
 		},
 		deliveryChannels: {
 			telegram: {
@@ -430,6 +432,11 @@ function getStatus() {
 			},
 			jobExecutionQueue: jobExecutionQueueStatus,
 			binanceTrading: binanceTradingStatus,
+			marketCalendar: {
+				enabled: isMarketCalendarGatingEnabled(),
+				gatesDelivery: isMarketCalendarGatingEnabled(),
+				dataset: getMarketCalendarMetadata(),
+			},
 		},
 	};
 }
