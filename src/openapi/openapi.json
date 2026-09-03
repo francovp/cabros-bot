@@ -1428,6 +1428,167 @@
         "x-admin-role": "admin.viewer"
       }
     },
+    "/api/outcomes/export": {
+      "get": {
+        "tags": [
+          "Signal outcomes"
+        ],
+        "summary": "Export bounded signal outcomes",
+        "operationId": "exportOutcomes",
+        "description": "Stream a bounded window of recorded signal outcomes as JSONL or CSV with optional symbol, exchange, and setupType filters. Requires both `from` and `to` ISO-8601 timestamps and caps the window at 31 days and `limit` at 1000. The export never includes rawMcpPayload, prompt text, provider responses, or credentials.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FromRequired"
+          },
+          {
+            "$ref": "#/components/parameters/ToRequired"
+          },
+          {
+            "$ref": "#/components/parameters/ExportFormat"
+          },
+          {
+            "$ref": "#/components/parameters/ExportLimit"
+          },
+          {
+            "$ref": "#/components/parameters/OutcomeSymbol"
+          },
+          {
+            "$ref": "#/components/parameters/OutcomeExchange"
+          },
+          {
+            "name": "setupType",
+            "in": "query",
+            "required": false,
+            "description": "Optional outcome setup-type filter (e.g. breakout, mean-reversion).",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON Lines or CSV export",
+            "headers": {
+              "Content-Disposition": {
+                "description": "Attachment filename in the format outcomes-YYYY-MM-DD-YYYY-MM-DD.{jsonl|csv}.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/x-ndjson": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      }
+    },
+    "/api/outcomes/{outcomeId}": {
+      "get": {
+        "tags": [
+          "Signal outcomes"
+        ],
+        "summary": "Get a stored signal outcome by id",
+        "operationId": "getOutcomeById",
+        "description": "Returns a single sanitized signal outcome document by its Firestore document id. 404 when the id is unknown or retention-expired; 503 when Firestore is unavailable.",
+        "parameters": [
+          {
+            "name": "outcomeId",
+            "in": "path",
+            "required": true,
+            "description": "Firestore document id of the signal outcome.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Stored signal outcome detail",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "outcome"
+                  ],
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "outcome": {
+                      "$ref": "#/components/schemas/SignalOutcome"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      }
+    },
     "/api/trading/binance/orders": {
       "get": {
         "tags": [

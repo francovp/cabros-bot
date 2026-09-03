@@ -3793,6 +3793,241 @@
               "body": "{\n  \"error\": \"Invalid limit. Use an integer between 1 and 100.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
             }
           ]
+        },
+        {
+          "name": "GET Get Signal Outcome by ID",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Returns a single sanitized signal outcome document by its Firestore document id. 404 when the id is unknown or retention-expired; 503 when Firestore is unavailable. Same response shape and fields as GET /api/outcomes.",
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes/outcome-123",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes",
+                "outcome-123"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"outcome\": {\n    \"id\": \"outcome-123\",\n    \"receivedAt\": \"2026-08-23T12:00:00.000Z\",\n    \"requestId\": \"req-1\",\n    \"source\": \"news-monitor\",\n    \"symbol\": \"BTCUSDT\",\n    \"exchange\": \"BINANCE\",\n    \"assetClass\": \"crypto\",\n    \"timeframe\": \"1h\",\n    \"setupType\": \"breakout\",\n    \"score\": 0.9,\n    \"side\": \"BUY\",\n    \"price\": 65000,\n    \"entryPriceSource\": \"tradingview-mcp\",\n    \"stop\": 63000,\n    \"target\": 68000,\n    \"marketDataProvider\": \"binance\",\n    \"eligibilityState\": \"supported_provider\",\n    \"eligibilityReason\": null,\n    \"outcomeEvaluated\": true,\n    \"outcomes\": {\n      \"1h\": {\n        \"status\": \"evaluated\",\n        \"return\": 1.5385,\n        \"maxFavorableExcursion\": 2.0,\n        \"maxAdverseExcursion\": -0.2,\n        \"targetHit\": false,\n        \"stopHit\": false,\n        \"rMultiple\": 0.5\n      }\n    },\n    \"sources\": [],\n    \"tokenUsage\": {\n      \"inputTokens\": 100,\n      \"outputTokens\": 40,\n      \"totalTokens\": 140,\n      \"totalCost\": 0.00003\n    },\n    \"processingTimeMs\": 150\n  }\n}"
+            },
+            {
+              "name": "404 Not Found",
+              "status": "Not Found",
+              "code": 404,
+              "body": "{\n  \"error\": \"Outcome not found\",\n  \"code\": \"NOT_FOUND\"\n}"
+            },
+            {
+              "name": "503 Storage Unavailable",
+              "status": "Service Unavailable",
+              "code": 503,
+              "body": "{\n  \"error\": \"Signal outcome tracking is enabled but Firestore is unavailable. Check Firestore credentials and project configuration.\",\n  \"code\": \"STORAGE_UNAVAILABLE\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Get Signal Outcome by ID (Firebase bearer)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{firebaseIdToken}}",
+                "type": "text"
+              }
+            ],
+            "description": "Returns a single signal outcome authenticated with a Firebase Admin ID token (admin.viewer role).",
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes/outcome-123",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes",
+                "outcome-123"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"outcome\": {\n    \"id\": \"outcome-123\",\n    \"receivedAt\": \"2026-08-23T12:00:00.000Z\",\n    \"symbol\": \"BTCUSDT\",\n    \"exchange\": \"BINANCE\",\n    \"side\": \"BUY\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Export Signal Outcomes (JSONL)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Exports bounded recorded signal outcomes as JSON Lines. Requires both `from` and `to` ISO-8601 timestamps, validates x-api-key, caps the window at 31 days and `limit` at 1000. Optional symbol/exchange/setupType filters narrow the result set. The export never includes rawMcpPayload, prompt text, provider responses, or credentials.",
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes/export?format=jsonl&from=2026-08-23T00:00:00.000Z&to=2026-08-24T00:00:00.000Z&limit=100&symbol=BTCUSDT&exchange=BINANCE",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes",
+                "export"
+              ],
+              "query": [
+                {
+                  "key": "format",
+                  "value": "jsonl"
+                },
+                {
+                  "key": "from",
+                  "value": "2026-08-23T00:00:00.000Z"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-08-24T00:00:00.000Z"
+                },
+                {
+                  "key": "limit",
+                  "value": "100"
+                },
+                {
+                  "key": "symbol",
+                  "value": "BTCUSDT"
+                },
+                {
+                  "key": "exchange",
+                  "value": "BINANCE"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "status": "OK",
+              "code": 200,
+              "header": [
+                {
+                  "key": "Content-Disposition",
+                  "value": "attachment; filename=\"outcomes-2026-08-23-2026-08-24.jsonl\""
+                }
+              ],
+              "body": "{\"id\":\"outcome-1\",\"receivedAt\":\"2026-08-23T12:00:00.000Z\",\"source\":\"webhook\",\"symbol\":\"BTCUSDT\",\"exchange\":\"BINANCE\",\"side\":\"BUY\",\"price\":65000,\"setupType\":\"breakout\",\"score\":0.9,\"outcomes\":{\"1h\":{\"status\":\"evaluated\",\"return\":1.5}}}\n"
+            }
+          ]
+        },
+        {
+          "name": "GET Export Signal Outcomes (CSV)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Exports bounded recorded signal outcomes as CSV with the same filters and bounds as the JSONL export. Formula-leading strings (`=`, `+`, `-`, `@`, plus tab/CR/LF prefixes) are prefixed with an apostrophe for spreadsheet safety; commas, quotes, and newlines inside string values are escaped per RFC 4180.",
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes/export?format=csv&from=2026-08-23T00:00:00.000Z&to=2026-08-24T00:00:00.000Z",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes",
+                "export"
+              ],
+              "query": [
+                {
+                  "key": "format",
+                  "value": "csv"
+                },
+                {
+                  "key": "from",
+                  "value": "2026-08-23T00:00:00.000Z"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-08-24T00:00:00.000Z"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "status": "OK",
+              "code": 200,
+              "header": [
+                {
+                  "key": "Content-Disposition",
+                  "value": "attachment; filename=\"outcomes-2026-08-23-2026-08-24.csv\""
+                }
+              ],
+              "body": "id,receivedAt,source,symbol,exchange,side,price,setupType,score,outcomes\noutcome-1,2026-08-23T12:00:00.000Z,webhook,BTCUSDT,BINANCE,BUY,65000,breakout,0.9,\"{ \"\"1h\"\": { \"\"status\"\": \"\"evaluated\"\" } }\"\n"
+            }
+          ]
+        },
+        {
+          "name": "GET Export Signal Outcomes (missing bounds)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Example of 400 INVALID_REQUEST response when the request omits either `from` or `to`.",
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes/export?format=jsonl",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes",
+                "export"
+              ],
+              "query": [
+                {
+                  "key": "format",
+                  "value": "jsonl"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "400 Missing Bounds",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"Export requests require bounded from and to ISO-8601 timestamps.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
         }
       ]
     },
