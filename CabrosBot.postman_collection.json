@@ -3797,6 +3797,68 @@
       ]
     },
     {
+      "name": "Portfolio Analytics",
+      "item": [
+        {
+          "name": "GET Portfolio Snapshot",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Builds the implied-paper portfolio snapshot from recent alerts. Aggregates per-symbol BUY/SELL counts, weighted average entry, implied notional, HHI concentration, and optional unrealized P&L. No real broker integration. Requires ENABLE_PORTFOLIO_ANALYTICS=true and ENABLE_FIRESTORE_ALERT_STORAGE=true.",
+            "url": {
+              "raw": "{{baseUrl}}/api/portfolio/snapshot",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "portfolio",
+                "snapshot"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 Populated Snapshot",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"snapshot\": {\n    \"mode\": \"implied_paper\",\n    \"window\": { \"from\": \"2026-08-26T00:00:00Z\", \"to\": \"2026-09-02T00:00:00Z\", \"hours\": 168 },\n    \"config\": { \"paperNotional\": 1000, \"concentrationThreshold\": 0.25, \"maxSymbols\": 25, \"maxAlerts\": 200 },\n    \"totals\": { \"totalAlerts\": 50, \"openCount\": 5, \"netSide\": \"long\", \"notional\": 5000, \"unrealizedPnl\": 250, \"concentrationIndex\": 0.4 },\n    \"symbols\": [\n      {\n        \"symbol\": \"BTCUSDT\",\n        \"exchange\": \"BINANCE\",\n        \"openCount\": 3,\n        \"buyCount\": 4,\n        \"sellCount\": 1,\n        \"netSide\": \"long\",\n        \"notional\": 3000,\n        \"averageEntry\": 50500,\n        \"currentPrice\": 55000,\n        \"unrealizedReturnPct\": 8.91,\n        \"unrealizedPnl\": 267,\n        \"setupTypeBreakdown\": { \"breakout\": 4 },\n        \"lastSignalAt\": \"2026-09-01T12:00:00Z\"\n      }\n    ],\n    \"topSymbols\": [\"BTCUSDT\"],\n    \"riskFlags\": [\"concentration_high\"],\n    \"generatedAt\": \"2026-09-02T00:00:00Z\"\n  }\n}"
+            },
+            {
+              "name": "200 Empty Snapshot",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"snapshot\": {\n    \"mode\": \"implied_paper\",\n    \"window\": { \"from\": \"2026-08-26T00:00:00Z\", \"to\": \"2026-09-02T00:00:00Z\", \"hours\": 168 },\n    \"config\": { \"paperNotional\": 1000, \"concentrationThreshold\": 0.25, \"maxSymbols\": 25, \"maxAlerts\": 200 },\n    \"totals\": { \"totalAlerts\": 0, \"openCount\": 0, \"netSide\": \"neutral\", \"notional\": 0, \"unrealizedPnl\": 0, \"concentrationIndex\": 0 },\n    \"symbols\": [],\n    \"topSymbols\": [],\n    \"riskFlags\": [],\n    \"generatedAt\": \"2026-09-02T00:00:00Z\"\n  }\n}"
+            },
+            {
+              "name": "401 Unauthorized",
+              "status": "Unauthorized",
+              "code": 401,
+              "body": "{\n  \"error\": \"Unauthorized: Missing or invalid API key.\",\n  \"code\": \"UNAUTHORIZED\"\n}"
+            },
+            {
+              "name": "403 Feature Disabled",
+              "status": "Forbidden",
+              "code": 403,
+              "body": "{\n  \"error\": \"Portfolio analytics is disabled. Set ENABLE_PORTFOLIO_ANALYTICS=true to enable.\",\n  \"code\": \"FEATURE_DISABLED\"\n}"
+            },
+            {
+              "name": "503 Storage Unavailable",
+              "status": "Service Unavailable",
+              "code": 503,
+              "body": "{\n  \"error\": \"Alert storage is not enabled or unavailable. Set ENABLE_FIRESTORE_ALERT_STORAGE=true to use portfolio analytics.\",\n  \"code\": \"STORAGE_UNAVAILABLE\"\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
       "name": "Async Jobs",
       "item": [
         {

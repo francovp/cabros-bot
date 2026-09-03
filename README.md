@@ -312,6 +312,17 @@ The response and audit logs include only sanitized order metadata. API credentia
 - `NEWS_MONITOR_SCHEDULER_TIMEOUT_MS` - Per-sweep execution deadline in milliseconds (default: `90000`, bounds `1000`-`600000`).
 - `dependencies.newsMonitorScheduler` in `/api/status` and `/api/capabilities` exposes `enabled`, `configured`, `ready`, `status`, `role`, `running`, `lastRunAt`, `lastRunDurationMs`, `lastRunSymbolCount`, `lastRunExecutedCount`, `lastRunErrorCount`, and `lastError` without secrets.
 
+#### Portfolio Analytics (Implied-Paper)
+
+- `ENABLE_PORTFOLIO_ANALYTICS` - Master gate for the implied-paper portfolio aggregator. When `false` the `/api/portfolio/snapshot` endpoint returns `403 FEATURE_DISABLED` (default: `false`).
+- `PORTFOLIO_ANALYTICS_WINDOW_HOURS` - Lookback window in hours (default: `168` / 1 week, range `1`-`8760`).
+- `PORTFOLIO_ANALYTICS_MAX_ALERTS` - Maximum stored alerts scanned per snapshot (default: `200`, range `1`-`1000`).
+- `PORTFOLIO_ANALYTICS_PAPER_NOTIONAL` - Implied notional per signal in USD-equivalent (default: `1000`, range `0.01`-`1000000`). The snapshot is always labeled `mode: "implied_paper"` and is **not** a real broker integration.
+- `PORTFOLIO_ANALYTICS_CONCENTRATION_THRESHOLD` - HHI threshold for the `concentration_high` risk flag (default: `0.25`, range `0.01`-`1`).
+- `PORTFOLIO_ANALYTICS_MAX_SYMBOLS` - Maximum symbols returned in the snapshot (default: `25`, range `1`-`100`).
+- `GET /api/portfolio/snapshot` returns `{ success, snapshot }` where `snapshot` includes `mode`, `window`, `config`, `totals` (open count, net side, notional, HHI, unrealized P&L), `symbols` (per-symbol breakdown with setup-type and exchange), `topSymbols`, `riskFlags`, and `generatedAt`. The endpoint is API-key/role-gated and admin-only.
+- `featureFlags.portfolioAnalytics` and `dependencies.portfolioAnalytics` in `/api/status` and `/api/capabilities` report enablement, Firestore readiness, and storage mode without secrets.
+
 ## Setup
 
 ### Supported Runtime
@@ -1612,6 +1623,48 @@ Query aggregated performance and coverage metrics for recorded signal outcomes, 
   }
 }
 ```
+
+#### GET /api/portfolio/snapshot
+
+Builds the **implied-paper** portfolio snapshot from the bot's own emitted alerts within the configured window. The response is always labeled `mode: "implied_paper"` and is **not** a real broker integration. Requires `ENABLE_PORTFOLIO_ANALYTICS=true` and `ENABLE_FIRESTORE_ALERT_STORAGE=true`. Protected with `x-api-key` header (or `api-key` query parameter) and a Firebase bearer token with `admin.viewer` or `admin.operator` role.
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "snapshot": {
+    "mode": "implied_paper",
+    "window": { "from": "2026-08-26T00:00:00Z", "to": "2026-09-02T00:00:00Z", "hours": 168 },
+    "config": { "paperNotional": 1000, "concentrationThreshold": 0.25, "maxSymbols": 25, "maxAlerts": 200 },
+    "totals": { "totalAlerts": 50, "openCount": 5, "netSide": "long", "notional": 5000, "unrealizedPnl": 250, "concentrationIndex": 0.4 },
+    "symbols": [
+      {
+        "symbol": "BTCUSDT",
+        "exchange": "BINANCE",
+        "openCount": 3,
+        "buyCount": 4,
+        "sellCount": 1,
+        "netSide": "long",
+        "notional": 3000,
+        "averageEntry": 50500,
+        "currentPrice": 55000,
+        "unrealizedReturnPct": 8.91,
+        "unrealizedPnl": 267,
+        "setupTypeBreakdown": { "breakout": 4 },
+        "lastSignalAt": "2026-09-01T12:00:00Z"
+      }
+    ],
+    "topSymbols": ["BTCUSDT"],
+    "riskFlags": ["concentration_high"],
+    "generatedAt": "2026-09-02T00:00:00Z"
+  }
+}
+```
+
+**Failure modes:**
+- `403 FEATURE_DISABLED` when `ENABLE_PORTFOLIO_ANALYTICS` is not `'true'`.
+- `503 STORAGE_UNAVAILABLE` when alert storage is disabled or Firestore is unreachable.
+- All numeric fields are guaranteed non-`NaN`/non-`Infinity`; missing data returns `null` for optional fields (e.g. `currentPrice` when no resolver is supplied).
 
 ## Multi-Channel Alerts (002)
 

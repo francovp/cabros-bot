@@ -1428,6 +1428,98 @@
         "x-admin-role": "admin.viewer"
       }
     },
+    "/api/portfolio/snapshot": {
+      "get": {
+        "tags": [
+          "Portfolio analytics"
+        ],
+        "summary": "Build the implied-paper portfolio snapshot from recent alerts",
+        "description": "Aggregates the bot's own emitted alerts within the configured window (default 168h) into an implied-paper portfolio snapshot. No real broker/position integration. The response is always labeled `mode: \"implied_paper\"`. Requires ENABLE_PORTFOLIO_ANALYTICS=true and ENABLE_FIRESTORE_ALERT_STORAGE=true.",
+        "operationId": "getPortfolioSnapshot",
+        "responses": {
+          "200": {
+            "description": "Implied-paper portfolio snapshot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PortfolioSnapshotResult"
+                },
+                "examples": {
+                  "populated": {
+                    "summary": "Snapshot with top symbols and risk flags",
+                    "value": {
+                      "success": true,
+                      "snapshot": {
+                        "mode": "implied_paper",
+                        "window": { "from": "2026-08-26T00:00:00Z", "to": "2026-09-02T00:00:00Z", "hours": 168 },
+                        "config": { "paperNotional": 1000, "concentrationThreshold": 0.25, "maxSymbols": 25, "maxAlerts": 200 },
+                        "totals": { "totalAlerts": 50, "openCount": 5, "netSide": "long", "notional": 5000, "unrealizedPnl": 250, "concentrationIndex": 0.4 },
+                        "symbols": [
+                          { "symbol": "BTCUSDT", "exchange": "BINANCE", "openCount": 3, "buyCount": 4, "sellCount": 1, "netSide": "long", "notional": 3000, "averageEntry": 50500, "currentPrice": 55000, "unrealizedReturnPct": 8.91, "unrealizedPnl": 267, "setupTypeBreakdown": { "breakout": 4 }, "lastSignalAt": "2026-09-01T12:00:00Z" }
+                        ],
+                        "topSymbols": ["BTCUSDT"],
+                        "riskFlags": ["concentration_high"],
+                        "generatedAt": "2026-09-02T00:00:00Z"
+                      }
+                    }
+                  },
+                  "empty": {
+                    "summary": "Empty snapshot when no alerts match the window",
+                    "value": {
+                      "success": true,
+                      "snapshot": {
+                        "mode": "implied_paper",
+                        "window": { "from": "2026-08-26T00:00:00Z", "to": "2026-09-02T00:00:00Z", "hours": 168 },
+                        "config": { "paperNotional": 1000, "concentrationThreshold": 0.25, "maxSymbols": 25, "maxAlerts": 200 },
+                        "totals": { "totalAlerts": 0, "openCount": 0, "netSide": "neutral", "notional": 0, "unrealizedPnl": 0, "concentrationIndex": 0 },
+                        "symbols": [],
+                        "topSymbols": [],
+                        "riskFlags": [],
+                        "generatedAt": "2026-09-02T00:00:00Z"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "description": "Portfolio analytics is disabled.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "description": "Alert storage is not enabled or unavailable.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      }
+    },
     "/api/trading/binance/orders": {
       "get": {
         "tags": [
@@ -3574,6 +3666,103 @@
             ],
             "example": 150
           }
+        }
+      },
+      "PortfolioSnapshot": {
+        "type": "object",
+        "required": [
+          "mode",
+          "window",
+          "config",
+          "totals",
+          "symbols",
+          "topSymbols",
+          "riskFlags",
+          "generatedAt"
+        ],
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": ["implied_paper"],
+            "description": "Always `implied_paper`; this endpoint never reads real broker positions."
+          },
+          "window": {
+            "type": "object",
+            "required": ["from", "to", "hours"],
+            "properties": {
+              "from": { "type": "string", "format": "date-time" },
+              "to": { "type": "string", "format": "date-time" },
+              "hours": { "type": "integer", "minimum": 1, "maximum": 8760 }
+            }
+          },
+          "config": {
+            "type": "object",
+            "required": ["paperNotional", "concentrationThreshold", "maxSymbols", "maxAlerts"],
+            "properties": {
+              "paperNotional": { "type": "number", "minimum": 0.01, "maximum": 1000000 },
+              "concentrationThreshold": { "type": "number", "minimum": 0.01, "maximum": 1 },
+              "maxSymbols": { "type": "integer", "minimum": 1, "maximum": 100 },
+              "maxAlerts": { "type": "integer", "minimum": 1, "maximum": 1000 }
+            }
+          },
+          "totals": {
+            "type": "object",
+            "required": ["totalAlerts", "openCount", "netSide", "notional", "unrealizedPnl", "concentrationIndex"],
+            "properties": {
+              "totalAlerts": { "type": "integer", "minimum": 0 },
+              "openCount": { "type": "integer" },
+              "netSide": { "type": "string", "enum": ["long", "short", "neutral"] },
+              "notional": { "type": "number", "minimum": 0 },
+              "unrealizedPnl": { "type": "number" },
+              "concentrationIndex": { "type": "number", "minimum": 0, "maximum": 1 }
+            }
+          },
+          "symbols": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/PortfolioSymbol" }
+          },
+          "topSymbols": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "riskFlags": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": ["concentration_high", "open_sells_overweight", "no_market_data", "stale_signals"]
+            }
+          },
+          "generatedAt": { "type": "string", "format": "date-time" }
+        }
+      },
+      "PortfolioSymbol": {
+        "type": "object",
+        "required": ["symbol", "openCount", "buyCount", "sellCount", "netSide", "notional", "setupTypeBreakdown"],
+        "properties": {
+          "symbol": { "type": "string" },
+          "exchange": { "type": ["string", "null"] },
+          "openCount": { "type": "integer" },
+          "buyCount": { "type": "integer" },
+          "sellCount": { "type": "integer" },
+          "netSide": { "type": "string", "enum": ["long", "short", "neutral"] },
+          "notional": { "type": "number", "minimum": 0 },
+          "averageEntry": { "type": ["number", "null"] },
+          "currentPrice": { "type": ["number", "null"] },
+          "unrealizedReturnPct": { "type": ["number", "null"] },
+          "unrealizedPnl": { "type": ["number", "null"] },
+          "setupTypeBreakdown": {
+            "type": "object",
+            "additionalProperties": { "type": "integer" }
+          },
+          "lastSignalAt": { "type": ["string", "null"], "format": "date-time" }
+        }
+      },
+      "PortfolioSnapshotResult": {
+        "type": "object",
+        "required": ["success", "snapshot"],
+        "properties": {
+          "success": { "type": "boolean", "example": true },
+          "snapshot": { "$ref": "#/components/schemas/PortfolioSnapshot" }
         }
       },
       "OutcomesSummary": {
