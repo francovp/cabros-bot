@@ -34,6 +34,12 @@ const REGION_BLOCK_MESSAGE_PATTERNS = [
 const DEFAULT_SIGNAL_OUTCOME_RETENTION_DAYS = 365;
 const MAX_SIGNAL_OUTCOME_RETENTION_DAYS = 3650;
 const DAY_MS = 24 * 60 * 60 * 1000;
+const VALID_GROUP_BY_AXES = new Set(['setupType', 'timeframe', 'exchange', 'window']);
+const VALID_COMPARE_MODES = new Set(['last7d', 'previous7d']);
+const DEFAULT_GROUP_BY_BUCKET_MIN_SIZE = 20;
+const GROUP_BY_BUCKET_CONFIDENCE_THRESHOLDS = { high: 100, medium: 50 };
+const GROUP_BY_MAX_AXES = 2;
+const COMPARE_WINDOW_MS = 7 * DAY_MS;
 
 let binanceClient = null;
 let isEvaluating = false;
@@ -1388,71 +1394,515 @@ function buildWindowStatsShape(bucket) {
 	};
 }
 
+function normalizeGroupBy(rawGroupBy) {
+	if (rawGroupBy === undefined || rawGroupBy === null || rawGroupBy === '') {
+		return { value: [] };
+	}
+	const list = Array.isArray(rawGroupBy)
+		? rawGroupBy
+		: (typeof rawGroupBy === 'string' ? [rawGroupBy] : null);
+	if (list === null) {
+		return {
+			error: buildInvalidGroupByError(),
+		};
+	}
+	const normalized = [];
+	for (const entry of list) {
+		if (typeof entry !== 'string') {
+			return { error: buildInvalidGroupByError() };
+		}
+ 		const trimmed = entry.trim();
+ 		if (!trimmed) {
+			return { error: buildInvalidGroupByError() };
+		}
+ 		let canonical = null;
+ 		for (const candidate of VALID_GROUP_BY_AXES) {
+ 			if (candidate.toLowerCase() === trimmed.toLowerCase()) {
+ 				canonical = candidate;
+ 				break;
+ 			}
+ 		}
+ 		if (!canonical) {
+ 			return { error: buildInvalidGroupByError() };
+ 		}
+ 		if (!normalized.includes(canonical)) {
+ 			normalized.push(canonical);
+ 		}
+ 	}
+ 	if (normalized.length === 0 || normalized.length > GROUP_BY_MAX_AXES) {
+ 		return { error: buildInvalidGroupByError() };
+ 	}
+ 	return { value: normalized };
+ }
+
+function buildInvalidGroupByError() {
+	const supported = Array.from(VALID_GROUP_BY_AXES).join(', ');
+	const error = new Error(`Invalid groupBy. Provide one or two axes from: ${supported}.`);
+	error.code = 'INVALID_REQUEST';
+	return error;
+}
+
+function normalizeCompare(rawCompare) {
+	if (rawCompare === undefined || rawCompare === null || rawCompare === '') {
+		return { value: null };
+	}
+	if (typeof rawCompare !== 'string') {
+		return {
+			error: buildInvalidCompareError(),
+		};
+	}
+	const trimmed = rawCompare.trim();
+	let canonical = null;
+	for (const candidate of VALID_COMPARE_MODES) {
+		if (candidate.toLowerCase() === trimmed.toLowerCase()) {
+			canonical = candidate;
+			break;
+		}
+	}
+	if (!canonical) {
+		return { error: buildInvalidCompareError() };
+	}
+	return { value: canonical };
+}
+
+function buildInvalidCompareError() {
+	const supported = Array.from(VALID_COMPARE_MODES).join(', ');
+	const error = new Error(`Invalid compare. Use one of: ${supported}.`);
+	error.code = 'INVALID_REQUEST';
+	return error;
+}
+
+function deriveGroupByBucketConfidence(count) {
+	if (count >= GROUP_BY_BUCKET_CONFIDENCE_THRESHOLDS.high) {
+		return 'high';
+	}
+	if (count >= GROUP_BY_BUCKET_CONFIDENCE_THRESHOLDS.medium) {
+		return 'medium';
+	}
+	return 'low';
+}
+
+function bucketKeyFromAxes(axes, doc) {
+	const key = {};
+	let skip = false;
+	for (const axis of axes) {
+		let rawValue;
+		if (axis === 'setupType') {
+			rawValue = typeof doc.setupType === 'string' && doc.setupType.trim()
+				? doc.setupType.trim()
+				: null;
+		} else if (axis === 'timeframe') {
+			rawValue = typeof doc.timeframe === 'string' && doc.timeframe.trim()
+				? doc.timeframe.trim()
+				: null;
+		} else if (axis === 'exchange') {
+			rawValue = doc.exchange || null;
+		} else if (axis === 'window') {
+			rawValue = doc.outcomeWindow || (Array.isArray(doc.outcomes) && doc.outcomes[0] && doc.outcomes[0].window) || null;
+		}
+		if (!rawValue) {
+			skip = true;
+			break;
+		}
+		key[axis] = rawValue;
+	}
+	if (skip) {
+		return null;
+	}
+	return key;
+}
+
+function buildBucketFromGroup(evaluatedDocs) {
+	const accumulator = createWindowAccumulator();
+	for (const doc of evaluatedDocs) {
+		const outcomes = doc.outcomes || {};
+		for (const outcome of Object.values(outcomes)) {
+			if (outcome && outcome.status === 'evaluated') {
+				accumulateWindowBucket(accumulator, doc, outcome, 'ALL');
+			}
+		}
+	}
+	return buildWindowStatsShape(accumulator.ALL);
+}
+
+function buildComparisonWindow(parsedFrom, parsedTo) {
+	const toMs = parsedTo.getTime();
+	const fromMs = parsedFrom.getTime();
+	return {
+		current: {
+			from: parsedFrom.toISOString(),
+			to: parsedTo.toISOString(),
+			durationMs: Math.max(0, toMs - fromMs),
+		},
+		baseline: {
+			from: new Date(fromMs - COMPARE_WINDOW_MS).toISOString(),
+			to: new Date(toMs - COMPARE_WINDOW_MS).toISOString(),
+			durationMs: COMPARE_WINDOW_MS,
+		},
+	};
+}
+
+async function fetchOutcomeDocs(firestore, parsedFrom, parsedTo) {
+	const retentionDays = getSignalOutcomeRetentionDays();
+	const retentionCutoffMs = Date.now() - (retentionDays * DAY_MS);
+	const effectiveFromMs = Math.max(parsedFrom.getTime(), retentionCutoffMs);
+	if (effectiveFromMs > parsedTo.getTime()) {
+		return [];
+	}
+	const effectiveFrom = new Date(effectiveFromMs);
+	const targetLimit = 1000;
+	const batchSize = Math.min(targetLimit, 100);
+	const activeDocs = [];
+	let lastDoc = null;
+
+	while (activeDocs.length < targetLimit) {
+		let query = firestore
+			.collection(COLLECTION_NAME)
+			.where('receivedAt', '>=', admin.firestore.Timestamp.fromDate(effectiveFrom))
+			.where('receivedAt', '<=', admin.firestore.Timestamp.fromDate(parsedTo))
+			.limit(batchSize);
+
+		if (lastDoc) {
+			query = query.startAfter(lastDoc);
+		}
+
+		let snapshot;
+		try {
+			snapshot = await query.get();
+		} catch (error) {
+			throw createStorageUnavailableError(error);
+		}
+
+		if (!snapshot || snapshot.empty) {
+			break;
+		}
+
+		for (const doc of snapshot.docs) {
+			if (!isRetentionExpired(doc.data() || {})) {
+				activeDocs.push(doc);
+				if (activeDocs.length >= targetLimit) {
+					break;
+				}
+			}
+		}
+
+		if (snapshot.docs.length < batchSize) {
+			break;
+		}
+		lastDoc = snapshot.docs[snapshot.docs.length - 1];
+	}
+
+	return activeDocs;
+}
+
+function computeRateDelta(currentRate, previousRate, currentEligible, previousEligible) {
+	if (currentEligible === 0 || previousEligible === 0) {
+		return null;
+	}
+	return parseFloat((currentRate - previousRate).toFixed(2));
+}
+
+function computeScalarDelta(currentValue, previousValue) {
+	if (currentValue === null || currentValue === undefined
+		|| previousValue === null || previousValue === undefined) {
+		return null;
+	}
+	return parseFloat((currentValue - previousValue).toFixed(4));
+}
+
+function buildGroupByBuckets(docs, evaluatedDocs, axes) {
+	const groups = new Map();
+	const evaluatedSet = new Set(evaluatedDocs);
+	for (const doc of docs) {
+		const key = bucketKeyFromAxes(axes, doc);
+		if (!key) continue;
+		const keyStr = JSON.stringify(key);
+		if (!groups.has(keyStr)) {
+			groups.set(keyStr, { key, members: [], evaluatedMembers: [] });
+		}
+		groups.get(keyStr).members.push(doc);
+		if (evaluatedSet.has(doc)) {
+			groups.get(keyStr).evaluatedMembers.push(doc);
+		}
+	}
+
+	const buckets = [];
+	for (const group of groups.values()) {
+		const stats = buildBucketFromGroup(group.evaluatedMembers);
+		const bucket = {
+			groupKey: group.key,
+			count: group.members.length,
+			evaluatedCount: group.evaluatedMembers.length,
+			coveragePercent: group.members.length > 0
+				? parseFloat(((group.evaluatedMembers.length / group.members.length) * 100).toFixed(2))
+				: 0,
+			confidence: deriveGroupByBucketConfidence(group.members.length),
+			targetHitRatePercent: stats.targetHitRatePercent,
+			stopHitRatePercent: stats.stopHitRatePercent,
+			expectancyR: stats.expectancyR,
+			hitRatePercent: stats.hitRatePercent,
+			targetEligibleWindows: stats.targetEligibleWindows,
+			stopEligibleWindows: stats.stopEligibleWindows,
+			populationNote: group.members.length < DEFAULT_GROUP_BY_BUCKET_MIN_SIZE
+				? `Bucket has ${group.members.length} signals, below the ${DEFAULT_GROUP_BY_BUCKET_MIN_SIZE}-signal noise floor; treat confidence as low.`
+				: null,
+		};
+		buckets.push(bucket);
+	}
+	buckets.sort((a, b) => (b.count - a.count) || JSON.stringify(a.groupKey).localeCompare(JSON.stringify(b.groupKey)));
+	return buckets;
+}
+
+function buildSummaryDelta(currentSummary, baselineSummary) {
+	return {
+		targetHitRatePercent: computeRateDelta(
+			currentSummary.targetHitRatePercent,
+			baselineSummary.targetHitRatePercent,
+			currentSummary.targetEligibleSignalWindows,
+			baselineSummary.targetEligibleSignalWindows,
+		),
+		stopHitRatePercent: computeRateDelta(
+			currentSummary.stopHitRatePercent,
+			baselineSummary.stopHitRatePercent,
+			currentSummary.stopEligibleSignalWindows,
+			baselineSummary.stopEligibleSignalWindows,
+		),
+		expectancyR: computeScalarDelta(currentSummary.expectancyR, baselineSummary.expectancyR),
+		count: currentSummary.totalSignalsEvaluated - baselineSummary.totalSignalsEvaluated,
+	};
+}
+
+function projectBaselineForDelta(baselineDocs) {
+	let allTargetHits = 0;
+	let allStopHits = 0;
+	let allEvaluatedWindows = 0;
+	let allTargetEligible = 0;
+	let allStopEligible = 0;
+	let allTotalR = 0;
+	let allRCount = 0;
+	const evaluatedDocs = [];
+	for (const doc of baselineDocs) {
+		const hasTargetBarrier = typeof doc.target === 'number' && Number.isFinite(doc.target) && doc.target > 0;
+		const hasStopBarrier = typeof doc.stop === 'number' && Number.isFinite(doc.stop) && doc.stop > 0;
+		const outcomesValues = doc.outcomes ? Object.values(doc.outcomes) : [];
+		const hasEvaluated = outcomesValues.some((o) => o && o.status === 'evaluated');
+		if (hasEvaluated) {
+			evaluatedDocs.push(doc);
+		}
+		for (const outcome of outcomesValues) {
+			if (outcome && outcome.status === 'evaluated') {
+				allEvaluatedWindows++;
+				if (hasTargetBarrier) allTargetEligible++;
+				if (hasStopBarrier) allStopEligible++;
+				if (outcome.targetHit === true || outcome.firstHit === 'target') allTargetHits++;
+				if (outcome.stopHit === true || outcome.firstHit === 'stop') allStopHits++;
+				if (typeof outcome.rMultiple === 'number' && Number.isFinite(outcome.rMultiple)) {
+					allTotalR += outcome.rMultiple;
+					allRCount++;
+				}
+			}
+		}
+	}
+	const targetHitRatePercent = allTargetEligible > 0 ? parseFloat(((allTargetHits / allTargetEligible) * 100).toFixed(2)) : 0;
+	const stopHitRatePercent = allStopEligible > 0 ? parseFloat(((allStopHits / allStopEligible) * 100).toFixed(2)) : 0;
+	const expectancyR = allRCount > 0 ? parseFloat((allTotalR / allRCount).toFixed(4)) : null;
+	return {
+		evaluatedDocs,
+		summaryShape: {
+			targetHitRatePercent,
+			stopHitRatePercent,
+			expectancyR,
+			totalSignalsEvaluated: evaluatedDocs.length,
+			targetEligibleSignalWindows: allTargetEligible,
+			stopEligibleSignalWindows: allStopEligible,
+		},
+	};
+}
+
+async function finalizeSummaryWithGroupingAndCompare(summary, axes, compare, groupingContext, compareContext) {
+	const finalSummary = { ...summary };
+	let baselineDocs = null;
+	let baselineEvaluatedByKey = null;
+
+	if (compare && compareContext) {
+		baselineDocs = await fetchBaselineDocsForContext(compareContext, groupingContext ? groupingContext.docs : null);
+		finalSummary.comparisonWindow = buildComparisonWindow(compareContext.parsedFrom, compareContext.parsedTo);
+		if (axes && axes.length > 0) {
+			baselineEvaluatedByKey = new Map();
+			for (const doc of baselineDocs) {
+				const key = bucketKeyFromAxes(axes, doc);
+				if (!key) continue;
+				const keyStr = JSON.stringify(key);
+				if (!baselineEvaluatedByKey.has(keyStr)) {
+					baselineEvaluatedByKey.set(keyStr, []);
+				}
+				const hasEvaluated = Object.values(doc.outcomes || {}).some((o) => o && o.status === 'evaluated');
+				if (hasEvaluated) {
+					baselineEvaluatedByKey.get(keyStr).push(doc);
+				}
+			}
+		}
+	}
+
+	if (axes && axes.length > 0) {
+		const buckets = buildGroupByBuckets(
+			groupingContext ? groupingContext.docs : [],
+			groupingContext ? groupingContext.evaluatedDocs : [],
+			axes,
+		);
+		if (compare && baselineEvaluatedByKey) {
+			for (const bucket of buckets) {
+				const baselineBucketMembers = baselineEvaluatedByKey.get(JSON.stringify(bucket.groupKey)) || [];
+				if (baselineBucketMembers.length === 0) {
+					bucket.delta = {
+						count: null,
+						targetHitRatePercent: null,
+						stopHitRatePercent: null,
+						expectancyR: null,
+					};
+					continue;
+				}
+				const baselineStats = buildBucketFromGroup(baselineBucketMembers);
+				bucket.delta = {
+					count: bucket.count - baselineBucketMembers.length,
+					targetHitRatePercent: computeRateDelta(
+						bucket.targetHitRatePercent,
+						baselineStats.targetHitRatePercent,
+						bucket.targetEligibleWindows,
+						baselineStats.targetEligibleWindows,
+					),
+					stopHitRatePercent: computeRateDelta(
+						bucket.stopHitRatePercent,
+						baselineStats.stopHitRatePercent,
+						bucket.stopEligibleWindows,
+						baselineStats.stopEligibleWindows,
+					),
+					expectancyR: computeScalarDelta(bucket.expectancyR, baselineStats.expectancyR),
+				};
+			}
+		}
+		finalSummary.buckets = buckets;
+	}
+
+	if (compare && baselineDocs && (!axes || axes.length === 0)) {
+		const baseline = projectBaselineForDelta(baselineDocs);
+		finalSummary.delta = buildSummaryDelta(compareContext.topLevelSummaryShape, baseline.summaryShape);
+	}
+
+	return finalSummary;
+}
+
+async function fetchBaselineDocsForContext(compareContext, currentDocs) {
+	const { firestore, parsedFrom } = compareContext;
+	if (!firestore) {
+		return [];
+	}
+	const retentionDays = getSignalOutcomeRetentionDays();
+	const retentionCutoffMs = Date.now() - (retentionDays * DAY_MS);
+	const baselineTo = new Date(parsedFrom.getTime() - 1);
+	const baselineFromMs = Math.max(parsedFrom.getTime() - COMPARE_WINDOW_MS, retentionCutoffMs);
+	if (baselineFromMs >= baselineTo.getTime()) {
+		return [];
+	}
+	const baselineFrom = new Date(baselineFromMs);
+	const baselineDocs = await fetchOutcomeDocs(firestore, baselineFrom, baselineTo);
+	if (currentDocs && currentDocs.length > 0) {
+		const currentIds = new Set(currentDocs.map((doc) => doc.id).filter(Boolean));
+		return baselineDocs.filter((doc) => !currentIds.has(doc.id));
+	}
+	return baselineDocs;
+}
+
 /**
  * Compute aggregated metrics.
+ *
+ * Optional grouping/compare support:
+ * - `groupBy` accepts a list of axes (1D or 2D) drawn from `setupType`,
+ *   `timeframe`, `exchange`, and `window`. When supplied, the response
+ *   additionally returns a `buckets[]` array with per-axis `groupKey`,
+ *   `count`, `targetHitRatePercent`, `stopHitRatePercent`, `expectancyR`,
+ *   `coveragePercent`, and a `confidence` label derived from `count`.
+ * - `compare` accepts `last7d` (paired with `previous7d`) to attach a
+ *   `delta` object to each bucket and to the top-level rates when no
+ *   grouping is supplied. `compare` is mutually exclusive with the
+ *   `from`/`to` filters because the response would otherwise be ambiguous.
  */
-async function summarizeOutcomes({ from, to, limit, symbol, exchange, status, window } = {}) {
+async function summarizeOutcomes({ from, to, limit, symbol, exchange, status, window, groupBy, compare } = {}) {
 	const firestore = AlertStorageService.getFirestore();
 	if (!firestore) {
 		throw createStorageUnavailableError();
 	}
 
-		const parsedFrom = from ? new Date(from) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-		const parsedTo = to ? new Date(to) : new Date();
+	const normalizedGroupBy = normalizeGroupBy(groupBy);
+	if (normalizedGroupBy.error) {
+		throw normalizedGroupBy.error;
+	}
+	const normalizedCompare = normalizeCompare(compare);
+	if (normalizedCompare.error) {
+		throw normalizedCompare.error;
+	}
+	if (normalizedCompare.value && (from || to)) {
+		const error = new Error('compare=last7d cannot be combined with from/to filters; pick one or the other so the baseline window stays unambiguous.');
+		error.code = 'INVALID_REQUEST';
+		throw error;
+	}
 
-		const retentionDays = getSignalOutcomeRetentionDays();
-		const retentionCutoffMs = Date.now() - (retentionDays * DAY_MS);
-		const effectiveFromMs = Math.max(parsedFrom.getTime(), retentionCutoffMs);
-		if (effectiveFromMs > parsedTo.getTime()) {
-			return createEmptyMetricsSummary();
+	const parsedFrom = from ? new Date(from) : new Date(Date.now() - 30 * DAY_MS);
+	const parsedTo = to ? new Date(to) : new Date();
+
+	const retentionDays = getSignalOutcomeRetentionDays();
+	const retentionCutoffMs = Date.now() - (retentionDays * DAY_MS);
+	const effectiveFromMs = Math.max(parsedFrom.getTime(), retentionCutoffMs);
+	if (effectiveFromMs > parsedTo.getTime()) {
+		return finalizeSummaryWithGroupingAndCompare(createEmptyMetricsSummary(), normalizedGroupBy.value, normalizedCompare.value, null, null);
+	}
+	const effectiveFrom = new Date(effectiveFromMs);
+
+	const targetLimit = limit || 1000;
+	const batchSize = Math.min(targetLimit, 100);
+	const activeDocs = [];
+	let lastDoc = null;
+
+	while (activeDocs.length < targetLimit) {
+		let query = firestore
+			.collection(COLLECTION_NAME)
+			.where('receivedAt', '>=', admin.firestore.Timestamp.fromDate(effectiveFrom))
+			.where('receivedAt', '<=', admin.firestore.Timestamp.fromDate(parsedTo))
+			.limit(batchSize);
+
+		if (lastDoc) {
+			query = query.startAfter(lastDoc);
 		}
-		const effectiveFrom = new Date(effectiveFromMs);
 
-		const targetLimit = limit || 1000;
-		const batchSize = Math.min(targetLimit, 100);
-		const activeDocs = [];
-		let lastDoc = null;
+		let snapshot;
+		try {
+			snapshot = await query.get();
+		} catch (error) {
+			throw createStorageUnavailableError(error);
+		}
 
-		while (activeDocs.length < targetLimit) {
-			let query = firestore
-				.collection(COLLECTION_NAME)
-				.where('receivedAt', '>=', admin.firestore.Timestamp.fromDate(effectiveFrom))
-				.where('receivedAt', '<=', admin.firestore.Timestamp.fromDate(parsedTo))
-				.limit(batchSize);
+		if (!snapshot || snapshot.empty) {
+			break;
+		}
 
-			if (lastDoc) {
-				query = query.startAfter(lastDoc);
-			}
-
-			let snapshot;
-			try {
-				snapshot = await query.get();
-			} catch (error) {
-				throw createStorageUnavailableError(error);
-			}
-
-			if (!snapshot || snapshot.empty) {
-				break;
-			}
-
-			for (const doc of snapshot.docs) {
-				if (!isRetentionExpired(doc.data() || {})) {
-					activeDocs.push(doc);
-					if (activeDocs.length >= targetLimit) {
-						break;
-					}
+		for (const doc of snapshot.docs) {
+			if (!isRetentionExpired(doc.data() || {})) {
+				activeDocs.push(doc);
+				if (activeDocs.length >= targetLimit) {
+					break;
 				}
 			}
-
-			if (snapshot.docs.length < batchSize) {
-				break;
-			}
-			lastDoc = snapshot.docs[snapshot.docs.length - 1];
 		}
 
-		if (activeDocs.length === 0) {
-			return createEmptyMetricsSummary();
+		if (snapshot.docs.length < batchSize) {
+			break;
 		}
+		lastDoc = snapshot.docs[snapshot.docs.length - 1];
+	}
+
+	if (activeDocs.length === 0) {
+		return finalizeSummaryWithGroupingAndCompare(createEmptyMetricsSummary(), normalizedGroupBy.value, normalizedCompare.value, null, null);
+	}
 
 	let docs = activeDocs.map(doc => ({
 		...doc.data(),
@@ -1465,7 +1915,7 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, status, wi
 	}
 
 	if (docs.length === 0) {
-		return createEmptyMetricsSummary();
+		return finalizeSummaryWithGroupingAndCompare(createEmptyMetricsSummary(), normalizedGroupBy.value, normalizedCompare.value, null, null);
 	}
 
 	let totalSignalsReceived = docs.length;
@@ -1693,7 +2143,7 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, status, wi
 		? parseFloat((allTotalR / allRCount).toFixed(4))
 		: null;
 
-	return {
+	const summary = {
 		available: true,
 		totalSignalsReceived,
 		totalSignalsEligible,
@@ -1728,6 +2178,31 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, status, wi
 			},
 		},
 	};
+
+	const topLevelSummaryShape = {
+		targetHitRatePercent: overallTargetHitRatePercent,
+		stopHitRatePercent: overallStopHitRatePercent,
+		expectancyR: overallExpectancyR,
+		totalSignalsEvaluated,
+		targetEligibleSignalWindows: allTargetEligible,
+		stopEligibleSignalWindows: allStopEligible,
+	};
+
+	const groupingContext = normalizedGroupBy.value.length > 0
+		? {
+			axes: normalizedGroupBy.value,
+			docs,
+			evaluatedDocs: evaluatedSignals,
+		}
+		: null;
+
+	return finalizeSummaryWithGroupingAndCompare(
+		summary,
+		normalizedGroupBy.value,
+		normalizedCompare.value,
+		groupingContext,
+		{ topLevelSummaryShape, parsedFrom, parsedTo, firestore },
+	);
 }
 
 async function getMetricsSummary({ from, to, limit } = {}) {

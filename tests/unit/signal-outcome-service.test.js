@@ -2323,6 +2323,360 @@ describe('SignalOutcomeService', () => {
 			expect(allRes.windows['1h'].totalSignals).toBe(2);
 			expect(allRes.windows['1h'].hitRatePercent).toBe(50);
 		});
+
+		it('rejects invalid groupBy values', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, new Map());
+
+			await expect(SignalOutcomeService.summarizeOutcomes({ groupBy: ['symbol'] }))
+				.rejects.toMatchObject({ code: 'INVALID_REQUEST' });
+			await expect(SignalOutcomeService.summarizeOutcomes({ groupBy: ['setupType', 'timeframe', 'exchange'] }))
+				.rejects.toMatchObject({ code: 'INVALID_REQUEST' });
+		});
+
+		it('rejects invalid compare values', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, new Map());
+
+			await expect(SignalOutcomeService.summarizeOutcomes({ compare: 'last30d' }))
+				.rejects.toMatchObject({ code: 'INVALID_REQUEST' });
+		});
+
+		it('rejects compare combined with from/to filters', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, new Map());
+
+			await expect(SignalOutcomeService.summarizeOutcomes({
+				compare: 'last7d',
+				from: '2026-08-20T00:00:00.000Z',
+			})).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
+		});
+
+		it('returns 1D buckets with groupKey, count, and confidence when groupBy is supplied', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			const now = new Date();
+			const docs = new Map();
+			// 3 BTC breakouts (BUY, profitable) and 2 ETH reversals (SELL, losing)
+			for (let i = 0; i < 3; i += 1) {
+				docs.set(`btc-breakout-${i}`, {
+					receivedAt: admin.firestore.Timestamp.fromDate(now),
+					requestId: `req-btc-${i}`,
+					source: 'alert',
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					timeframe: '4h',
+					setupType: 'breakout',
+					side: 'BUY',
+					price: 50000,
+					target: 52000,
+					stop: 49000,
+					score: 0.8,
+					outcomeEvaluated: true,
+					outcomes: {
+						'1h': {
+							status: 'evaluated',
+							return: 2.0,
+							targetHit: true,
+							stopHit: false,
+							rMultiple: 1.5,
+							maxFavorableExcursion: 3.0,
+							maxAdverseExcursion: -0.5,
+						},
+					},
+				});
+			}
+			for (let i = 0; i < 2; i += 1) {
+				docs.set(`eth-reversal-${i}`, {
+					receivedAt: admin.firestore.Timestamp.fromDate(now),
+					requestId: `req-eth-${i}`,
+					source: 'alert',
+					symbol: 'ETHUSDT',
+					exchange: 'BINANCE',
+					timeframe: '1h',
+					setupType: 'reversal',
+					side: 'SELL',
+					price: 3000,
+					target: 3100,
+					stop: 2950,
+					score: 0.7,
+					outcomeEvaluated: true,
+					outcomes: {
+						'1h': {
+							status: 'evaluated',
+							return: -1.0,
+							targetHit: false,
+							stopHit: true,
+							rMultiple: -0.7,
+							maxFavorableExcursion: 0.3,
+							maxAdverseExcursion: -1.2,
+						},
+					},
+				});
+			}
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, docs);
+
+			const res = await SignalOutcomeService.summarizeOutcomes({ groupBy: ['setupType'] });
+			expect(res.available).toBe(true);
+			expect(Array.isArray(res.buckets)).toBe(true);
+			expect(res.buckets).toHaveLength(2);
+
+			const breakoutBucket = res.buckets.find((b) => b.groupKey.setupType === 'breakout');
+			const reversalBucket = res.buckets.find((b) => b.groupKey.setupType === 'reversal');
+			expect(breakoutBucket).toBeDefined();
+			expect(reversalBucket).toBeDefined();
+			expect(breakoutBucket.count).toBe(3);
+			expect(breakoutBucket.evaluatedCount).toBe(3);
+			expect(breakoutBucket.targetHitRatePercent).toBe(100);
+			expect(breakoutBucket.expectancyR).toBe(1.5);
+			expect(breakoutBucket.confidence).toBe('low');
+			expect(reversalBucket.count).toBe(2);
+			expect(reversalBucket.stopHitRatePercent).toBe(100);
+			expect(reversalBucket.expectancyR).toBe(-0.7);
+		});
+
+		it('returns 2D buckets with combined groupKey when two axes are supplied', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			const now = new Date();
+			const docs = new Map();
+			for (const setupType of ['breakout', 'reversal']) {
+				for (const timeframe of ['1h', '4h']) {
+					docs.set(`${setupType}-${timeframe}`, {
+						receivedAt: admin.firestore.Timestamp.fromDate(now),
+						requestId: `${setupType}-${timeframe}`,
+						source: 'alert',
+						symbol: 'BTCUSDT',
+						exchange: 'BINANCE',
+						timeframe,
+						setupType,
+						side: 'BUY',
+						price: 50000,
+						target: 52000,
+						stop: 49000,
+						score: 0.8,
+						outcomeEvaluated: true,
+						outcomes: {
+							'1h': {
+								status: 'evaluated',
+								return: 2.0,
+								targetHit: true,
+								stopHit: false,
+								rMultiple: 1.5,
+								maxFavorableExcursion: 3.0,
+								maxAdverseExcursion: -0.5,
+							},
+						},
+					});
+				}
+			}
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, docs);
+
+			const res = await SignalOutcomeService.summarizeOutcomes({ groupBy: ['setupType', 'timeframe'] });
+			expect(res.buckets).toHaveLength(4);
+			for (const bucket of res.buckets) {
+				expect(bucket.groupKey).toHaveProperty('setupType');
+				expect(bucket.groupKey).toHaveProperty('timeframe');
+				expect(bucket.count).toBe(1);
+				expect(bucket.confidence).toBe('low');
+			}
+		});
+
+		it('skips docs missing any required axis in groupKey', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			const now = new Date();
+			const docs = new Map([
+				['with-setup', {
+					receivedAt: admin.firestore.Timestamp.fromDate(now),
+					requestId: 'with-setup',
+					source: 'alert',
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					timeframe: '1h',
+					setupType: 'breakout',
+					side: 'BUY',
+					price: 50000,
+					target: 52000,
+					stop: 49000,
+					outcomeEvaluated: true,
+					outcomes: {
+						'1h': {
+							status: 'evaluated',
+							return: 2.0,
+							targetHit: true,
+							stopHit: false,
+							rMultiple: 1.5,
+							maxFavorableExcursion: 3.0,
+							maxAdverseExcursion: -0.5,
+						},
+					},
+				}],
+				['no-setup', {
+					receivedAt: admin.firestore.Timestamp.fromDate(now),
+					requestId: 'no-setup',
+					source: 'alert',
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					timeframe: '1h',
+					side: 'BUY',
+					price: 50000,
+					target: 52000,
+					stop: 49000,
+					outcomeEvaluated: true,
+					outcomes: {
+						'1h': {
+							status: 'evaluated',
+							return: 0.5,
+							targetHit: false,
+							stopHit: false,
+							rMultiple: 0.2,
+							maxFavorableExcursion: 1.0,
+							maxAdverseExcursion: -0.3,
+						},
+					},
+				}],
+			]);
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, docs);
+
+			const res = await SignalOutcomeService.summarizeOutcomes({ groupBy: ['setupType', 'timeframe'] });
+			// Only the doc with both setupType + timeframe should appear
+			expect(res.buckets).toHaveLength(1);
+			expect(res.buckets[0].groupKey).toEqual({ setupType: 'breakout', timeframe: '1h' });
+		});
+
+		it('emits comparisonWindow and per-bucket delta when compare=last7d is supplied', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			const now = Date.now();
+			const recentDocs = new Map();
+			for (let i = 0; i < 5; i += 1) {
+				recentDocs.set(`recent-${i}`, {
+					receivedAt: admin.firestore.Timestamp.fromDate(new Date(now - 24 * 60 * 60 * 1000)),
+					requestId: `recent-${i}`,
+					source: 'alert',
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					timeframe: '1h',
+					setupType: 'breakout',
+					side: 'BUY',
+					price: 50000,
+					target: 52000,
+					stop: 49000,
+					score: 0.8,
+					outcomeEvaluated: true,
+					outcomes: {
+						'1h': {
+							status: 'evaluated',
+							return: 1.0,
+							targetHit: true,
+							stopHit: false,
+							rMultiple: 1.0,
+							maxFavorableExcursion: 2.0,
+							maxAdverseExcursion: -0.4,
+						},
+					},
+				});
+			}
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, recentDocs);
+
+			const res = await SignalOutcomeService.summarizeOutcomes({
+				groupBy: ['setupType'],
+				compare: 'last7d',
+			});
+			expect(res.comparisonWindow).toBeDefined();
+			expect(res.comparisonWindow.current.from).toBeDefined();
+			expect(res.comparisonWindow.baseline.from).toBeDefined();
+			expect(res.buckets).toHaveLength(1);
+			expect(res.buckets[0].delta).toBeDefined();
+			expect(res.buckets[0].delta.count).toBeNull();
+			expect(res.buckets[0].delta.targetHitRatePercent).toBeNull();
+		});
+
+		it('emits top-level delta when compare=last7d is used without groupBy', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			const now = new Date();
+			const docs = new Map([
+				['doc-1', {
+					receivedAt: admin.firestore.Timestamp.fromDate(now),
+					requestId: 'doc-1',
+					source: 'alert',
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					side: 'BUY',
+					price: 50000,
+					target: 52000,
+					stop: 49000,
+					outcomeEvaluated: true,
+					outcomes: {
+						'1h': {
+							status: 'evaluated',
+							return: 1.0,
+							targetHit: true,
+							stopHit: false,
+							rMultiple: 1.0,
+							maxFavorableExcursion: 2.0,
+							maxAdverseExcursion: -0.4,
+						},
+					},
+				}],
+			]);
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, docs);
+
+			const res = await SignalOutcomeService.summarizeOutcomes({ compare: 'last7d' });
+			expect(res.delta).toBeDefined();
+			expect(res.comparisonWindow).toBeDefined();
+			expect(res.delta.count).toBeDefined();
+		});
+
+		it('preserves backwards-compatible summary shape when no groupBy/compare is supplied', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			const now = new Date();
+			const docs = new Map([
+				['doc-1', {
+					receivedAt: admin.firestore.Timestamp.fromDate(now),
+					requestId: 'doc-1',
+					source: 'alert',
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					side: 'BUY',
+					price: 50000,
+					target: 52000,
+					stop: 49000,
+					outcomeEvaluated: true,
+					outcomes: {
+						'1h': {
+							status: 'evaluated',
+							return: 1.0,
+							targetHit: true,
+							stopHit: false,
+							rMultiple: 1.0,
+							maxFavorableExcursion: 2.0,
+							maxAdverseExcursion: -0.4,
+						},
+					},
+				}],
+			]);
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, docs);
+
+			const res = await SignalOutcomeService.summarizeOutcomes();
+			expect(res).not.toHaveProperty('buckets');
+			expect(res).not.toHaveProperty('comparisonWindow');
+			expect(res).not.toHaveProperty('delta');
+			expect(res.totalSignalsReceived).toBe(1);
+			expect(res.windows['1h'].totalSignals).toBe(1);
+		});
 	});
 
 	describe('worker lifecycle and scheduling', () => {

@@ -1369,7 +1369,7 @@
           "Signal outcomes"
         ],
         "summary": "Summarize signal outcomes metrics",
-        "description": "Query aggregated performance and coverage metrics for recorded signal outcomes, with optional filtering by symbol, exchange, status, window, and date range.",
+        "description": "Query aggregated performance and coverage metrics for recorded signal outcomes, with optional filtering by symbol, exchange, status, window, and date range. Pass `groupBy` once or twice (axes `setupType`, `timeframe`, `exchange`, `window`) to receive per-axis buckets. Pass `compare=last7d` to attach a 7-day baseline delta to each bucket (or to the top-level rates when no grouping is supplied). `compare` is mutually exclusive with `from`/`to`.",
         "operationId": "summarizeOutcomes",
         "parameters": [
           {
@@ -1392,6 +1392,41 @@
           },
           {
             "$ref": "#/components/parameters/To"
+          },
+          {
+            "name": "groupBy",
+            "in": "query",
+            "required": false,
+            "description": "Axis (or two axes) to bucket signals by. Repeat the parameter for 2D grouping (e.g. `?groupBy=setupType&groupBy=timeframe`). Supported axes: setupType, timeframe, exchange, window.",
+            "style": "form",
+            "explode": true,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "setupType",
+                  "timeframe",
+                  "exchange",
+                  "window"
+                ]
+              },
+              "maxItems": 2,
+              "uniqueItems": true
+            }
+          },
+          {
+            "name": "compare",
+            "in": "query",
+            "required": false,
+            "description": "Attach a baseline delta (current vs previous 7 days) to each bucket (or to the top-level rates when no `groupBy` is supplied). Mutually exclusive with `from`/`to`.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "last7d",
+                "previous7d"
+              ]
+            }
           }
         ],
         "responses": {
@@ -3698,6 +3733,179 @@
           },
           "latencyCostMetadata": {
             "$ref": "#/components/schemas/LatencyCostMetadata"
+          },
+          "buckets": {
+            "type": "array",
+            "description": "Per-axis buckets. Only present when `groupBy` is supplied.",
+            "items": {
+              "$ref": "#/components/schemas/OutcomesSummaryBucket"
+            }
+          },
+          "comparisonWindow": {
+            "$ref": "#/components/schemas/OutcomesComparisonWindow"
+          },
+          "delta": {
+            "$ref": "#/components/schemas/OutcomesSummaryDelta"
+          }
+        }
+      },
+      "OutcomesSummaryBucket": {
+        "type": "object",
+        "required": [
+          "groupKey",
+          "count",
+          "evaluatedCount",
+          "coveragePercent",
+          "confidence",
+          "targetHitRatePercent",
+          "stopHitRatePercent",
+          "expectancyR",
+          "hitRatePercent",
+          "targetEligibleWindows",
+          "stopEligibleWindows"
+        ],
+        "properties": {
+          "groupKey": {
+            "type": "object",
+            "description": "Key describing this bucket's axis values. Includes one key per requested groupBy axis (e.g. `{ setupType: \"breakout\" }` or `{ setupType: \"breakout\", timeframe: \"4h\" }`).",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "example": {
+              "setupType": "breakout"
+            }
+          },
+          "count": {
+            "type": "integer",
+            "example": 35
+          },
+          "evaluatedCount": {
+            "type": "integer",
+            "example": 30
+          },
+          "coveragePercent": {
+            "type": "number",
+            "example": 85.71
+          },
+          "confidence": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high"
+            ],
+            "example": "low"
+          },
+          "targetHitRatePercent": {
+            "type": "number",
+            "example": 60
+          },
+          "stopHitRatePercent": {
+            "type": "number",
+            "example": 25
+          },
+          "expectancyR": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "example": 0.95
+          },
+          "hitRatePercent": {
+            "type": "number",
+            "example": 55
+          },
+          "targetEligibleWindows": {
+            "type": "integer",
+            "example": 30
+          },
+          "stopEligibleWindows": {
+            "type": "integer",
+            "example": 30
+          },
+          "populationNote": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "example": null
+          },
+          "delta": {
+            "$ref": "#/components/schemas/OutcomesSummaryDelta"
+          }
+        }
+      },
+      "OutcomesComparisonWindow": {
+        "type": "object",
+        "required": [
+          "current",
+          "baseline"
+        ],
+        "properties": {
+          "current": {
+            "type": "object",
+            "properties": {
+              "from": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "to": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "durationMs": {
+                "type": "integer"
+              }
+            }
+          },
+          "baseline": {
+            "type": "object",
+            "properties": {
+              "from": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "to": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "durationMs": {
+                "type": "integer"
+              }
+            }
+          }
+        }
+      },
+      "OutcomesSummaryDelta": {
+        "type": "object",
+        "properties": {
+          "count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "example": 5
+          },
+          "targetHitRatePercent": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "example": 2.5
+          },
+          "stopHitRatePercent": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "example": -3
+          },
+          "expectancyR": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "example": 0.1
           }
         }
       },

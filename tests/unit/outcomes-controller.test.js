@@ -8,6 +8,8 @@ const {
 	parseStatus,
 	parseWindow,
 	parseOptionalTimestamp,
+	parseGroupBy,
+	parseCompare,
 } = require('../../src/controllers/outcomes/outcomes');
 const signalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
 const sentryService = require('../../src/services/monitoring/SentryService');
@@ -107,6 +109,72 @@ describe('Outcomes Controller Unit Tests', () => {
 						error: 'Invalid from timestamp. Use an ISO-8601 timestamp.',
 						code: 'INVALID_REQUEST',
 					},
+				});
+			});
+		});
+
+		describe('parseGroupBy', () => {
+			it('returns empty list when omitted', () => {
+				expect(parseGroupBy(undefined)).toEqual({ value: [] });
+				expect(parseGroupBy(null)).toEqual({ value: [] });
+				expect(parseGroupBy([])).toEqual({ value: [] });
+			});
+
+			it('accepts single axis string', () => {
+				expect(parseGroupBy('setupType')).toEqual({ value: ['setupType'] });
+				expect(parseGroupBy('SETUPTYPE')).toEqual({ value: ['setupType'] });
+			});
+
+			it('accepts array of axes (1D and 2D)', () => {
+				expect(parseGroupBy(['setupType'])).toEqual({ value: ['setupType'] });
+				expect(parseGroupBy(['setupType', 'timeframe'])).toEqual({ value: ['setupType', 'timeframe'] });
+				expect(parseGroupBy(['setupType', 'timeframe', 'exchange'])).toMatchObject({
+					error: expect.objectContaining({ code: 'INVALID_REQUEST' }),
+				});
+			});
+
+			it('deduplicates axes and trims whitespace', () => {
+				expect(parseGroupBy(['setupType', 'setupType', 'TIMEFRAME'])).toEqual({ value: ['setupType', 'timeframe'] });
+			});
+
+			it('rejects unsupported axis', () => {
+				expect(parseGroupBy('symbol')).toEqual({
+					error: expect.objectContaining({ code: 'INVALID_REQUEST' }),
+				});
+				expect(parseGroupBy(['setupType', 'invalid_axis'])).toEqual({
+					error: expect.objectContaining({ code: 'INVALID_REQUEST' }),
+				});
+			});
+
+			it('rejects non-string axis entries', () => {
+				expect(parseGroupBy([123])).toEqual({
+					error: expect.objectContaining({ code: 'INVALID_REQUEST' }),
+				});
+			});
+		});
+
+		describe('parseCompare', () => {
+			it('returns undefined when omitted', () => {
+				expect(parseCompare(undefined)).toEqual({ value: undefined });
+				expect(parseCompare(null)).toEqual({ value: undefined });
+				expect(parseCompare('')).toEqual({ value: undefined });
+			});
+
+			it('accepts supported compare modes', () => {
+				expect(parseCompare('last7d')).toEqual({ value: 'last7d' });
+				expect(parseCompare('LAST7D')).toEqual({ value: 'last7d' });
+				expect(parseCompare('previous7d')).toEqual({ value: 'previous7d' });
+			});
+
+			it('rejects unsupported compare modes', () => {
+				expect(parseCompare('last30d')).toEqual({
+					error: expect.objectContaining({ code: 'INVALID_REQUEST' }),
+				});
+			});
+
+			it('rejects non-string compare values', () => {
+				expect(parseCompare(123)).toEqual({
+					error: expect.objectContaining({ code: 'INVALID_REQUEST' }),
 				});
 			});
 		});
@@ -430,6 +498,85 @@ describe('Outcomes Controller Unit Tests', () => {
 			expect(res._getJSONData()).toEqual({
 				error: 'Invalid time window. from must be before or equal to to.',
 				code: 'INVALID_REQUEST',
+			});
+		});
+
+		it('returns 400 for invalid groupBy value', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			const req = httpMocks.createRequest({
+				method: 'GET',
+				url: '/api/outcomes/summary',
+				query: { groupBy: 'symbol' },
+			});
+			const res = httpMocks.createResponse();
+
+			await summarizeOutcomes(req, res);
+
+			expect(res.statusCode).toBe(400);
+			expect(res._getJSONData().code).toBe('INVALID_REQUEST');
+			expect(res._getJSONData().error).toContain('groupBy');
+		});
+
+		it('returns 400 for too many groupBy axes', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			const req = httpMocks.createRequest({
+				method: 'GET',
+				url: '/api/outcomes/summary',
+				query: { groupBy: ['setupType', 'timeframe', 'exchange'] },
+			});
+			const res = httpMocks.createResponse();
+
+			await summarizeOutcomes(req, res);
+
+			expect(res.statusCode).toBe(400);
+			expect(res._getJSONData().code).toBe('INVALID_REQUEST');
+		});
+
+		it('returns 400 for invalid compare value', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			const req = httpMocks.createRequest({
+				method: 'GET',
+				url: '/api/outcomes/summary',
+				query: { compare: 'last30d' },
+			});
+			const res = httpMocks.createResponse();
+
+			await summarizeOutcomes(req, res);
+
+			expect(res.statusCode).toBe(400);
+			expect(res._getJSONData().code).toBe('INVALID_REQUEST');
+			expect(res._getJSONData().error).toContain('compare');
+		});
+
+		it('passes groupBy and compare through to the service', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			signalOutcomeService.summarizeOutcomes.mockResolvedValue({
+				available: true,
+				totalSignalsReceived: 1,
+			});
+			const req = httpMocks.createRequest({
+				method: 'GET',
+				url: '/api/outcomes/summary',
+				query: {
+					groupBy: ['setupType', 'timeframe'],
+					compare: 'last7d',
+				},
+			});
+			const res = httpMocks.createResponse();
+
+			await summarizeOutcomes(req, res);
+
+			expect(res.statusCode).toBe(200);
+			expect(signalOutcomeService.summarizeOutcomes).toHaveBeenCalledWith({
+				limit: 50,
+				symbol: undefined,
+				exchange: undefined,
+				status: undefined,
+				window: undefined,
+				from: undefined,
+				to: undefined,
+				groupBy: ['setupType', 'timeframe'],
+				compare: 'last7d',
 			});
 		});
 

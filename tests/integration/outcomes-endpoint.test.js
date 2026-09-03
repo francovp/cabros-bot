@@ -453,5 +453,98 @@ describe('Signal Outcomes API Integration Tests', () => {
 
 			expect(res.body.success).toBe(true);
 		});
+
+		it('returns 400 INVALID_REQUEST when groupBy is unsupported', async () => {
+			const res = await request(app)
+				.get('/api/outcomes/summary?groupBy=symbol')
+				.set('x-api-key', 'test-key')
+				.expect(400);
+
+			expect(res.body).toMatchObject({
+				code: 'INVALID_REQUEST',
+			});
+			expect(res.body.error).toContain('groupBy');
+		});
+
+		it('returns 400 INVALID_REQUEST when more than two groupBy axes are supplied', async () => {
+			const res = await request(app)
+				.get('/api/outcomes/summary?groupBy=setupType&groupBy=timeframe&groupBy=exchange')
+				.set('x-api-key', 'test-key')
+				.expect(400);
+
+			expect(res.body).toMatchObject({
+				code: 'INVALID_REQUEST',
+			});
+		});
+
+		it('returns 400 INVALID_REQUEST for invalid compare values', async () => {
+			const res = await request(app)
+				.get('/api/outcomes/summary?compare=last30d')
+				.set('x-api-key', 'test-key')
+				.expect(400);
+
+			expect(res.body).toMatchObject({
+				code: 'INVALID_REQUEST',
+			});
+			expect(res.body.error).toContain('compare');
+		});
+
+		it('passes normalized groupBy and compare to the service and returns buckets', async () => {
+			const mockSummary = {
+				available: true,
+				totalSignalsReceived: 50,
+				totalSignalsEvaluated: 45,
+				coveragePercent: 90,
+				exchangeBreakdown: {},
+				providerBreakdown: {},
+				entryPriceSourceBreakdown: {},
+				eligibilityBreakdown: {},
+				windows: {},
+				drawdownProxy: {
+					averageMaxAdverseExcursionPercent: 0,
+					absoluteMaxAdverseExcursionPercent: 0,
+				},
+				falsePositiveCandidatesCount: 0,
+				falsePositiveCandidates: [],
+				latencyCostMetadata: {
+					averageProcessingTimeMs: 100,
+					tokenUsage: { inputTokens: 0, outputTokens: 0, totalCost: 0 },
+				},
+				buckets: [
+					{
+						groupKey: { setupType: 'breakout' },
+						count: 30,
+						evaluatedCount: 28,
+						coveragePercent: 93.33,
+						confidence: 'low',
+						targetHitRatePercent: 70,
+						stopHitRatePercent: 20,
+						expectancyR: 1.2,
+						hitRatePercent: 60,
+						targetEligibleWindows: 25,
+						stopEligibleWindows: 25,
+						populationNote: null,
+					},
+				],
+				comparisonWindow: {
+					current: { from: '2026-08-27T00:00:00.000Z', to: '2026-09-03T00:00:00.000Z', durationMs: 604800000 },
+					baseline: { from: '2026-08-20T00:00:00.000Z', to: '2026-08-27T00:00:00.000Z', durationMs: 604800000 },
+				},
+			};
+			signalOutcomeService.summarizeOutcomes.mockResolvedValue(mockSummary);
+
+			const res = await request(app)
+				.get('/api/outcomes/summary?groupBy=setupType&compare=last7d')
+				.set('x-api-key', 'test-key')
+				.expect(200);
+
+			expect(signalOutcomeService.summarizeOutcomes).toHaveBeenCalledWith(expect.objectContaining({
+				groupBy: ['setupType'],
+				compare: 'last7d',
+			}));
+			expect(res.body.success).toBe(true);
+			expect(res.body.summary.buckets).toHaveLength(1);
+			expect(res.body.summary.comparisonWindow).toBeDefined();
+		});
 	});
 });
