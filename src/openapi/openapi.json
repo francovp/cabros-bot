@@ -1428,6 +1428,75 @@
         "x-admin-role": "admin.viewer"
       }
     },
+    "/api/pretrade-check": {
+      "get": {
+        "tags": [
+          "Operations"
+        ],
+        "summary": "Compose a pre-trade decision-support snapshot for a single symbol",
+        "description": "Aggregates current price (Binance for crypto, Twelve Data for supported equity venues), recent (last 7 days) hit-rate from evaluated signal outcomes, and provenance metadata into a single response so a trader can decide whether to act without leaving the chat or running multiple commands. The endpoint is fail-open: missing price or outcome data is reported under `price.reason` / `hitRate.reason` rather than failing the whole call. Supports TradingView-style `BINANCE:BTCUSDT` symbols, bare crypto tickers (`BTCUSDT`), and supported equity exchanges (NASDAQ, NYSE, BATS, AMEX, NYSE ARCA).",
+        "operationId": "getPretradeCheck",
+        "parameters": [
+          {
+            "name": "symbol",
+            "in": "query",
+            "required": true,
+            "description": "TradingView-style symbol (BINANCE:BTCUSDT), bare crypto ticker (BTCUSDT), or supported equity symbol (NVDA with NASDAQ exchange via `symbol=NASDAQ:NVDA`).",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Maximum number of evaluated outcomes to read when computing the 7-day hit-rate (1-1000, default 200).",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 200
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Pre-trade snapshot successfully composed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PretradeCheckResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      }
+    },
     "/api/trading/binance/orders": {
       "get": {
         "tags": [
@@ -5941,6 +6010,137 @@
           },
           "order": {
             "$ref": "#/components/schemas/JsonObject"
+          }
+        }
+      },
+      "PretradeCheckResult": {
+        "type": "object",
+        "required": [
+          "success",
+          "pretradeCheck"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "example": true
+          },
+          "pretradeCheck": {
+            "type": "object",
+            "required": [
+              "symbol",
+              "normalized",
+              "price",
+              "hitRate",
+              "generatedAt",
+              "durationMs"
+            ],
+            "properties": {
+              "symbol": {
+                "type": "string",
+                "example": "BINANCE:BTCUSDT"
+              },
+              "normalized": {
+                "type": "object",
+                "properties": {
+                  "symbol": {
+                    "type": "string",
+                    "example": "BTCUSDT"
+                  },
+                  "exchange": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "example": "BINANCE"
+                  },
+                  "assetClass": {
+                    "type": "string",
+                    "enum": [
+                      "crypto",
+                      "equity",
+                      "unsupported"
+                    ]
+                  }
+                }
+              },
+              "price": {
+                "type": "object",
+                "required": [
+                  "available"
+                ],
+                "properties": {
+                  "available": {
+                    "type": "boolean"
+                  },
+                  "price": {
+                    "type": "number"
+                  },
+                  "change": {
+                    "type": "number"
+                  },
+                  "percentChange": {
+                    "type": "number"
+                  },
+                  "currency": {
+                    "type": "string"
+                  },
+                  "assetClass": {
+                    "type": "string"
+                  },
+                  "symbol": {
+                    "type": "string"
+                  },
+                  "exchange": {
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": "string"
+                  }
+                }
+              },
+              "hitRate": {
+                "type": "object",
+                "required": [
+                  "available"
+                ],
+                "properties": {
+                  "available": {
+                    "type": "boolean"
+                  },
+                  "reason": {
+                    "type": "string"
+                  },
+                  "evaluatedWindows": {
+                    "type": "integer"
+                  },
+                  "winWindows": {
+                    "type": "integer"
+                  },
+                  "hitRatePercent": {
+                    "type": "number"
+                  },
+                  "sampleSize": {
+                    "type": "integer"
+                  },
+                  "windowDays": {
+                    "type": "integer"
+                  }
+                }
+              },
+              "requestId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "generatedAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "durationMs": {
+                "type": "integer"
+              }
+            }
           }
         }
       }

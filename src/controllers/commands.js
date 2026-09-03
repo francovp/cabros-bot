@@ -4,6 +4,11 @@ const { getNewsMonitor } = require('./webhooks/handlers/newsMonitor/newsMonitor'
 const signalOutcomeService = require('../services/storage/SignalOutcomeService');
 const sentryService = require('../services/monitoring/SentryService');
 const { getTelegramCommandMenu } = require('../lib/telegramCommandMenu');
+const {
+	parseSymbol: parsePretradeSymbol,
+	composePretradeCheck,
+	formatPretradeCheckMessage,
+} = require('./pretradeCheck/pretradeCheck');
 
 const getPrice = async (context) => {
 	const chatId = getChatId(context);
@@ -327,6 +332,9 @@ const OUTCOME_SYMBOL_PATTERN = /^[A-Z0-9._-]{1,30}$/;
 // the handler open indefinitely behind a large Firestore scan.
 const OUTCOMES_COMMAND_TIMEOUT_MS = 8000;
 
+const PRETRADE_COMMAND_TIMEOUT_MS = 6000;
+const PRETRADE_COMMAND_HIT_RATE_LIMIT = 100;
+
 function escapeOutcomeText(value) {
 	return String(value).replace(/([_*[\]()~`>#+\-=|{}.!\\])/g, '\\$1');
 }
@@ -438,6 +446,70 @@ function parseOutcomeSymbol(rawSymbol) {
 	return { symbol: symbolPart, exchange: undefined };
 }
 
+const pretradeCheckCommand = async (context) => {
+	const chatId = getChatId(context);
+	const args = parseCommandArgs(context);
+	const rawSymbol = (args.positionals[0] || '').trim();
+	const commandSpan = sentryService.startInactiveSpan({
+		name: 'telegram.command.check',
+		op: 'bot.command',
+		forceTransaction: true,
+		attributes: {
+			'telegram.command': '/check',
+			'telegram.chat_id': chatId ? String(chatId) : 'unknown',
+			'query.symbol': rawSymbol || 'missing',
+		},
+	});
+
+	try {
+		const parsed = parsePretradeSymbol(rawSymbol);
+		if (!parsed) {
+			await context.reply(
+				'Uso: `/check <simbolo>` — por ejemplo `/check BTCUSDT` o `/check BINANCE:BTCUSDT`',
+				{ parse_mode: 'MarkdownV2' },
+			);
+			return;
+		}
+
+		const payload = await withTimeout(
+			(signal) => composePretradeCheck({
+				parsedSymbol: parsed,
+				limit: PRETRADE_COMMAND_HIT_RATE_LIMIT,
+				requestId: signal ? 'tg-check' : 'tg-check',
+			}),
+			PRETRADE_COMMAND_TIMEOUT_MS,
+			'pre-trade check timed out',
+		);
+		await context.reply(formatPretradeCheckMessage(payload), { parse_mode: 'MarkdownV2' });
+	} catch (error) {
+		console.error('[commands] /check failed:', error.message);
+		const isExpectedError = Boolean(
+			error.isUserFriendly
+			|| error.name === 'AbortError'
+			|| error.name === 'TimeoutError'
+			|| error.code === 'TIMEOUT',
+		);
+		if (!isExpectedError) {
+			sentryService.captureRuntimeError({
+				channel: 'telegram',
+				error,
+				extra: {
+					command: 'check',
+					chatId,
+					symbol: rawSymbol,
+				},
+			});
+		}
+		try {
+			await context.reply('No pude generar el pre-trade check ahora mismo. Intenta nuevamente más tarde.');
+		} catch (replyError) {
+			console.error('Failed to send /check error reply:', replyError);
+		}
+	} finally {
+		sentryService.endSpan(commandSpan);
+	}
+};
+
 async function withTimeout(asyncFn, timeoutMs, message) {
 	const ac = new AbortController();
 	let timer;
@@ -504,6 +576,8 @@ function buildHelpMessage() {
 		'  _Opciones: `crypto=BTCUSDT,ETHUSDT`, `stocks=NVDA`_',
 		'• `/outcomes <simbolo>` — Rendimiento reciente de señales evaluadas \\(alias: `/rendimiento`\\)',
 		'  _Ej: `/outcomes BINANCE:BTCUSDT`_',
+		'• `/check <simbolo>` — Pre\\-trade check \\(precio \\+ hit\\-rate\\) \\(alias: `/pretrade`, `/setup`\\)',
+		'  _Ej: `/check BINANCE:BTCUSDT` o `/check NVDA`_',
 		'• `/jobs [jobId]` — Lista jobs recientes o muestra su estado \\(alias: `/trabajos`\\)',
 		'• `/help` / `/start` — Muestra este mensaje de ayuda',
 	].join('\n');
@@ -630,6 +704,7 @@ module.exports = {
 	newsMonitorCmd,
 	helpCmd,
 	outcomesCommand,
+	pretradeCheckCommand,
 	buildHelpMessage,
 	getTelegramCommandMenu,
 	parseCommandArgs,
