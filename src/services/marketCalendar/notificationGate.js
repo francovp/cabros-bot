@@ -20,7 +20,7 @@
  */
 
 const sentryService = require('../monitoring/SentryService');
-const { getSessionState, shouldSuppressDelivery } = require('./sessionState');
+const { getSessionState, shouldSuppressDelivery, getDatasetMetadata } = require('./sessionState');
 
 const FEATURE_FLAG = 'ENABLE_MARKET_CALENDAR_GATING';
 
@@ -131,5 +131,6 @@ module.exports = {
 	isClosedOrHoliday,
 	resolveAlertExchange,
 	isFeatureEnabled,
+	getDatasetMetadata,
 	FEATURE_FLAG,
 };
