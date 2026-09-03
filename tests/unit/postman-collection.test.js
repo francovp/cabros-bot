@@ -22,6 +22,7 @@ function findHeader(item, key) {
 }
 
 function normalizeParamPath(routePath) {
+	if (typeof routePath !== 'string') return '';
 	return routePath
 		.replace(/\{\{[^}]+\}\}/g, '{param}')
 		.replace(/:([A-Za-z0-9_]+)/g, '{param}')
@@ -88,7 +89,7 @@ function extractReadmeApiPaths(readmeContent) {
 	return Array.from(paths).sort();
 }
 
-function findMissingReadmePaths(readmeContent, contract) {
+function findMissingReadmePaths(readmeContent, contract = {}) {
 	const readmePaths = extractReadmeApiPaths(readmeContent);
 	const openapiPaths = new Set(Object.keys(contract.paths || {}));
 	return readmePaths.filter((p) => !openapiPaths.has(p));
@@ -372,6 +373,15 @@ describe('CI coverage guards (Postman collection and README endpoints)', () => {
 
 		const missing = findMissingReadmePaths(mockReadme, mockContract);
 		expect(missing).toEqual([]);
+	});
+
+	it('handles defensive edge cases gracefully (non-string paths and missing contracts)', () => {
+		expect(normalizeParamPath(null)).toBe('');
+		expect(normalizeParamPath(undefined)).toBe('');
+		expect(normalizeParamPath(123)).toBe('');
+		expect(extractReadmeApiPaths(null)).toEqual([]);
+		expect(extractReadmeApiPaths(undefined)).toEqual([]);
+		expect(findMissingReadmePaths('GET /api/test', undefined)).toEqual(['/api/test']);
 	});
 });
 
