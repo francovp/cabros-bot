@@ -8,8 +8,50 @@ const remoteConfigService = require('../remoteConfig/RemoteConfigService');
 const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
 const { notificationRedriveService } = require('./NotificationRedriveService');
 const { deliveryMetricsService } = require('./DeliveryMetricsService');
+const {
+	globalAlertBudget,
+	notifyAdminBudgetExceeded,
+} = require('../notifications/globalAlertBudget');
 
 const DEFAULT_ZERO_CHANNEL_ALERT_COOLDOWN_MS = 300000;
+
+function buildBudgetRejectedResult(channelName, reservation) {
+	return {
+		success: false,
+		channel: channelName,
+		error: `Global alert budget exceeded: ${reservation.used}/${reservation.capacity} in last 24h`,
+		statusCode: 429,
+		errorCode: 'ALERT_BUDGET_EXCEEDED',
+		errorCategory: 'budget_exceeded',
+		attemptCount: 0,
+		durationMs: 0,
+		budget: {
+			enabled: true,
+			used: reservation.used,
+			capacity: reservation.capacity,
+			remaining: reservation.remaining,
+			resetAt: reservation.resetAt,
+		},
+	};
+}
+
+function isBudgetRejection(result) {
+	return result && result.errorCode === 'ALERT_BUDGET_EXCEEDED';
+}
+
+function tagBudgetSpanAttributes(span, reservation) {
+	if (!span || typeof span.setAttribute !== 'function') {
+		return;
+	}
+	try {
+		span.setAttribute('alert.budget.enabled', reservation.allowed !== false || reservation.used > 0);
+		span.setAttribute('alert.budget.used', reservation.used);
+		span.setAttribute('alert.budget.capacity', reservation.capacity);
+		span.setAttribute('alert.budget.remaining', reservation.remaining);
+	} catch (_error) {
+		// Fail-open: never break delivery on Sentry attribute errors.
+	}
+}
 
 class NotificationManager {
 	/**
@@ -269,10 +311,39 @@ class NotificationManager {
 				});
 
 				return Promise.resolve()
-					.then(() => ch.send(alert, {
-						...options,
-						signal: options.signalByChannel?.[ch.name] || options.signal,
-					}))
+					.then(() => {
+						const reservation = globalAlertBudget.reserve();
+						tagBudgetSpanAttributes(sendSpan, reservation);
+						if (!reservation.allowed) {
+							console.warn(`[NotificationManager] ${ch.name} blocked: global alert budget exceeded (${reservation.used}/${reservation.capacity})`);
+							sentryService.captureExternalFailure({
+								channel: ch.name,
+								external: {
+									provider: 'global-alert-budget',
+									attemptCount: 0,
+									durationMs: 0,
+									lastErrorMessage: `ALERT_BUDGET_EXCEEDED (${reservation.used}/${reservation.capacity})`,
+									lastErrorCode: 'ALERT_BUDGET_EXCEEDED',
+								},
+							});
+							trackBackgroundTask(notifyAdminBudgetExceeded({
+								used: reservation.used,
+								capacity: reservation.capacity,
+								resetAt: reservation.resetAt,
+								telegramService: this.channels.get('telegram'),
+							})).catch(() => {});
+							return buildBudgetRejectedResult(ch.name, reservation);
+						}
+						return ch.send(alert, {
+							...options,
+							signal: options.signalByChannel?.[ch.name] || options.signal,
+						}).then((result) => {
+							if (result && result.success) {
+								return result;
+							}
+							return result;
+						});
+					})
 					.finally(() => {
 						sentryService.endSpan(sendSpan);
 					});
@@ -314,7 +385,7 @@ class NotificationManager {
 		} : undefined);
 
 		for (const result of formattedResults) {
-			if (result && !result.success && result.error) {
+			if (result && !result.success && result.error && !isBudgetRejection(result)) {
 				const providerMap = {
 					telegram: 'telegram-api',
 					whatsapp: 'whatsapp-greenapi',
@@ -337,7 +408,7 @@ class NotificationManager {
 		}
 
 		if (!options.isRedrive && notificationRedriveService.isEnabled()) {
-			const failedResults = formattedResults.filter(result => result && !result.success);
+			const failedResults = formattedResults.filter(result => result && !result.success && !isBudgetRejection(result));
 			if (failedResults.length > 0) {
 				trackBackgroundTask(notificationRedriveService.recordDeliveryResults(alert, formattedResults, options)).catch((error) => {
 					console.warn('[NotificationManager] Failed to record dead-letters for redrive:', error.message);
@@ -345,9 +416,12 @@ class NotificationManager {
 			}
 		}
 
-		trackBackgroundTask(this.notifyAdminOfFailures(alert, formattedResults, options)).catch((error) => {
-			console.error('[NotificationManager] Unexpected admin notification failure:', error.message);
-		});
+		const realFailures = formattedResults.filter(result => result && !result.success && !isBudgetRejection(result));
+		if (realFailures.length > 0) {
+			trackBackgroundTask(this.notifyAdminOfFailures(alert, formattedResults, options)).catch((error) => {
+				console.error('[NotificationManager] Unexpected admin notification failure:', error.message);
+			});
+		}
 
 				this._recordDeliveryMetrics(formattedResults, totalDurationMs);
 
@@ -454,10 +528,34 @@ class NotificationManager {
 				});
 
 				return Promise.resolve()
-					.then(() => ch.send(alert, {
-						...options,
-						signal: options.signalByChannel?.[ch.name] || options.signal,
-					}))
+					.then(() => {
+						const reservation = globalAlertBudget.reserve();
+						tagBudgetSpanAttributes(sendSpan, reservation);
+						if (!reservation.allowed) {
+							console.warn(`[NotificationManager] ${ch.name} blocked: global alert budget exceeded (${reservation.used}/${reservation.capacity})`);
+							sentryService.captureExternalFailure({
+								channel: ch.name,
+								external: {
+									provider: 'global-alert-budget',
+									attemptCount: 0,
+									durationMs: 0,
+									lastErrorMessage: `ALERT_BUDGET_EXCEEDED (${reservation.used}/${reservation.capacity})`,
+									lastErrorCode: 'ALERT_BUDGET_EXCEEDED',
+								},
+							});
+							trackBackgroundTask(notifyAdminBudgetExceeded({
+								used: reservation.used,
+								capacity: reservation.capacity,
+								resetAt: reservation.resetAt,
+								telegramService: this.channels.get('telegram'),
+							})).catch(() => {});
+							return buildBudgetRejectedResult(ch.name, reservation);
+						}
+						return ch.send(alert, {
+							...options,
+							signal: options.signalByChannel?.[ch.name] || options.signal,
+						});
+					})
 					.finally(() => {
 						sentryService.endSpan(sendSpan);
 					});
@@ -522,7 +620,7 @@ class NotificationManager {
 		}
 
 		if (!options.isRedrive && notificationRedriveService.isEnabled()) {
-			const failedResults = formattedResults.filter(result => result && !result.success);
+			const failedResults = formattedResults.filter(result => result && !result.success && !isBudgetRejection(result));
 			if (failedResults.length > 0) {
 				trackBackgroundTask(notificationRedriveService.recordDeliveryResults(alert, formattedResults, options)).catch((error) => {
 					console.warn('[NotificationManager] Failed to record dead-letters for redrive:', error.message);
@@ -530,9 +628,12 @@ class NotificationManager {
 			}
 		}
 
-		trackBackgroundTask(this.notifyAdminOfFailures(alert, formattedResults, options)).catch((error) => {
-			console.error('[NotificationManager] Unexpected admin notification failure:', error.message);
-		});
+		const realFailures = formattedResults.filter(result => result && !result.success && !isBudgetRejection(result));
+		if (realFailures.length > 0) {
+			trackBackgroundTask(this.notifyAdminOfFailures(alert, formattedResults, options)).catch((error) => {
+				console.error('[NotificationManager] Unexpected admin notification failure:', error.message);
+			});
+		}
 
 		this._recordDeliveryMetrics(formattedResults, totalDurationMs);
 

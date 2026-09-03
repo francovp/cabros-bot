@@ -276,6 +276,135 @@
       ]
     },
     {
+      "name": "Get Status - global alert budget",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{apiKey}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/status",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "status"
+          ]
+        },
+        "description": "Protected status request exposing the in-process rolling 24h alert-delivery budget. featureFlags.globalAlertBudget reflects the effective GLOBAL_ALERT_BUDGET_PER_24H; dependencies.globalAlertBudget reports used/capacity/remaining/resetAt. Counters reset on process restart; failed deliveries do not consume budget. When capacity is exhausted, alert endpoints return results[].errorCode='ALERT_BUDGET_EXCEEDED' with statusCode=429 and a budget object describing the current usage."
+      },
+      "response": [
+        {
+          "name": "200 OK - budget enabled with remaining capacity",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"featureFlags\":{\"globalAlertBudget\":true},\"dependencies\":{\"globalAlertBudget\":{\"enabled\":true,\"used\":42,\"capacity\":500,\"remaining\":458,\"resetAt\":\"2026-09-04T20:30:00.000Z\"}}}"
+        },
+        {
+          "name": "200 OK - budget disabled (capacity 0)",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"featureFlags\":{\"globalAlertBudget\":false},\"dependencies\":{\"globalAlertBudget\":{\"enabled\":false,\"used\":0,\"capacity\":0,\"remaining\":0,\"resetAt\":\"2026-09-04T20:30:00.000Z\"}}}"
+        }
+      ]
+    },
+    {
+      "name": "Webhook Alert - global budget exceeded (dry-run)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{apiKey}}",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/webhook/alert?dryRun=true",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "webhook",
+            "alert"
+          ],
+          "query": [
+            {
+              "key": "dryRun",
+              "value": "true",
+              "description": "Run validation and analysis without notification delivery, dedup mutation, or signal-outcome persistence. Does not consume the global alert budget."
+            }
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"text\": \"BINANCE:ETHUSDT (4h) COMPRA — dry-run after budget exhausted\"\n}"
+        },
+        "description": "Dry-run alert delivery that does not consume the rolling 24h alert-delivery budget. Used to inspect the budget state via /api/status without sending further deliveries."
+      },
+      "response": [
+        {
+          "name": "200 OK - dryRun response",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"success\":true,\"dryRun\":true,\"results\":[],\"requestedChannels\":[\"telegram\"],\"deliveredChannels\":[],\"requestId\":\"abc-123\"}"
+        }
+      ]
+    },
+    {
+      "name": "Webhook Alert - budget exhausted 200 response",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{apiKey}}",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/webhook/alert",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "webhook",
+            "alert"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"text\": \"BINANCE:ETHUSDT (4h) COMPRA — budget exhausted example\"\n}"
+        },
+        "description": "When the rolling 24h alert-delivery budget is exhausted, alert endpoints return 200 OK with success=true (fail-open) and per-channel results carrying success=false, statusCode=429, errorCode=ALERT_BUDGET_EXCEEDED, and a budget object with the current usage. deliveredChannels is empty."
+      },
+      "response": [
+        {
+          "name": "200 OK - budget exhausted",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"success\":true,\"results\":[{\"channel\":\"telegram\",\"success\":false,\"error\":\"Global alert budget exceeded: 500/500 in last 24h\",\"statusCode\":429,\"errorCode\":\"ALERT_BUDGET_EXCEEDED\",\"errorCategory\":\"budget_exceeded\",\"attemptCount\":0,\"durationMs\":0,\"budget\":{\"enabled\":true,\"used\":500,\"capacity\":500,\"remaining\":0,\"resetAt\":\"2026-09-04T20:30:00.000Z\"}}],\"enriched\":false,\"tokenUsage\":{\"inputTokens\":0,\"outputTokens\":0,\"totalTokens\":0,\"inputCost\":0,\"outputCost\":0,\"totalCost\":0,\"formattedSummary\":\"Token usage:\\n- In 0 ($0.00)\\n- Out 0 ($0.00)\\n- Total 0 ($0.00)\"},\"requestedChannels\":[\"telegram\"],\"deliveredChannels\":[],\"requestId\":\"abc-456\"}"
+        }
+      ]
+    },
+    {
       "name": "Get Capabilities",
       "request": {
         "method": "GET",
