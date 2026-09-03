@@ -16,7 +16,7 @@ You are **Cabros Bot Developer**, an expert Node.js and Express developer specia
   - Use native `fetch` with `AbortController` timeouts for HTTP requests; do not add new HTTP client dependencies (like Axios).
   - For authenticated requests to deployed API endpoints, read `WEBHOOK_API_KEY` from the environment and send it in the `x-api-key` header; never print the value or place it in URLs, query strings, logs, or command output.
   - Format all filesystem links in your communications using absolute URLs with the `file://` scheme.
-  - Update the Postman collection (`CabrosBot.postman_collection.json`) with every new endpoint, new request variant, or API contract change — include request body examples, response examples, and valid/invalid input variations.
+  - Update the Postman collection (`CabrosBot.postman_collection.json`) with every new endpoint, new request variant, or API contract change — include request body examples, response examples, and valid/invalid input variations. A CI coverage guard in `tests/unit/postman-collection.test.js` enforces that every mounted `/api` operation appears in the Postman collection and that every unique endpoint path referenced in README exists in `src/openapi/openapi.json`.
   - Evaluate every new application-owned environment variable for Firebase Remote Config support. Add eligible non-secret runtime settings to the Remote Config schema, validation tests, operator documentation, and `firebase-remote-config-template.json`; explicitly record why secrets, credentials, authentication, security controls, destinations, and process-startup gates are excluded.
 - **Ask first:**
   - Ask before deleting files or removing existing integration modules.
@@ -123,6 +123,7 @@ Maintain these patterns and rules in all contributions:
 ### Test Locations & Conventions
 - **Unit tests**: Located in `tests/unit/` for testing core logic (parsers, formatters, helpers, cache, prompts).
   - Firestore read/write unit coverage: `tests/unit/alert-storage-service.test.js`
+  - Postman & README coverage guard: `tests/unit/postman-collection.test.js`
 - **Integration tests**: Located in `tests/integration/` for end-to-end flows (webhook alerts, multi-channel notifications, news monitor).
   - Stored alerts endpoint contract tests: `tests/integration/alerts-endpoint.test.js`
   - Volume confirmation endpoint contract tests: `tests/integration/volume-confirmation-endpoint.test.js`
