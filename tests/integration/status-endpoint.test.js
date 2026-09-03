@@ -465,6 +465,60 @@ describe('Status endpoints', () => {
 		expect(response.body.dependencies.alertSignalRepeatSuppression.enabled).toBe(true);
 	});
 
+	it('reports global alert budget as enabled by default with the default capacity', async () => {
+		delete process.env.GLOBAL_ALERT_BUDGET_PER_24H;
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.globalAlertBudget).toBe(true);
+		expect(response.body.dependencies.globalAlertBudget).toEqual(expect.objectContaining({
+			enabled: true,
+			used: 0,
+			capacity: 500,
+			remaining: 500,
+			resetAt: expect.any(String),
+		}));
+	});
+
+	it('reports global alert budget as disabled when capacity is set to 0', async () => {
+		process.env.GLOBAL_ALERT_BUDGET_PER_24H = '0';
+
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.globalAlertBudget).toBe(false);
+		expect(response.body.dependencies.globalAlertBudget).toEqual(expect.objectContaining({
+			enabled: false,
+			used: 0,
+			capacity: 0,
+			remaining: 0,
+			resetAt: expect.any(String),
+		}));
+	});
+
+	it('reports global alert budget with a custom capacity', async () => {
+		process.env.GLOBAL_ALERT_BUDGET_PER_24H = '100';
+
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.globalAlertBudget).toBe(true);
+		expect(response.body.dependencies.globalAlertBudget).toEqual(expect.objectContaining({
+			enabled: true,
+			used: 0,
+			capacity: 100,
+			remaining: 100,
+			resetAt: expect.any(String),
+		}));
+	});
+
 	it('reports safe Firebase Remote Config load metadata without values and honest readiness', async () => {
 		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
 

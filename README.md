@@ -74,6 +74,7 @@ To report a vulnerability, see [`SECURITY.md`](./SECURITY.md) — the project do
 - Firestore-backed `notificationDeadLetters` records use `expiresAt`; run `bash ops/configure-operational-collection-retention.sh` once per project to enable native TTL and optionally backfill legacy records.
 - `ZERO_CHANNEL_ALERT_COOLDOWN_MS` - Cooldown between admin notifications when all channels are disabled in milliseconds (default: `300000`, Remote Config supported)
 - `ENABLE_API_ONLY_MODE` - Declare intentional API-only mode without notification delivery, suppressing zero-channel alerts and dead-letters (default: `false`, Remote Config supported)
+- `GLOBAL_ALERT_BUDGET_PER_24H` - In-process rolling 24h cap on successful per-channel alert deliveries. Acts as an emergency valve against runaway signal sources, misconfigured scanner presets, or redrive loops that could otherwise drain Gemini/MCP quota or trigger Telegram/Discord rate-limit bans. Once exhausted, alert endpoints return `200 OK` with `results[].errorCode='ALERT_BUDGET_EXCEEDED'` (`statusCode: 429`) and a `budget` object describing the current usage; the rest of the response remains fail-open. Set to `0` to disable (default: `500`, Remote Config supported, range: `0`–`1000000`).
 
 #### URL Shortening (003-news-monitor)
 
