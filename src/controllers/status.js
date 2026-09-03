@@ -20,6 +20,7 @@ const { whatsAppCommandBridgeService } = require('../services/notification/Whats
 const geminiQuotaManager = require('../services/grounding/geminiQuotaManager');
 const groundingMetrics = require('../services/grounding/metrics');
 const { signalRepeatCooldown } = require('../services/alerts/signalRepeatCooldown');
+const portfolioAnalyticsService = require('../services/portfolio/PortfolioAnalyticsService');
 const { getCoalescingStatus } = require('../services/grounding/grounding');
 const {
 	getDeploymentCommit,
@@ -357,6 +358,7 @@ function getStatus() {
 			notificationRedrive: notificationRedriveService.isEnabled(),
 			alertSignalRepeatSuppression: signalRepeatCooldown.isEnabled(),
 			whatsappCommands: whatsAppCommandBridgeService.isEnabled(),
+			portfolioAnalytics: portfolioAnalyticsService.isEnabled(),
 		},
 		deliveryChannels: {
 			telegram: {
@@ -430,6 +432,15 @@ function getStatus() {
 			},
 			jobExecutionQueue: jobExecutionQueueStatus,
 			binanceTrading: binanceTradingStatus,
+			portfolioAnalytics: {
+				enabled: portfolioAnalyticsService.isEnabled(),
+				ready: portfolioAnalyticsService.isEnabled() && firestore.configured,
+				status: portfolioAnalyticsService.isEnabled()
+					? (firestore.configured ? 'ready' : 'storage_unavailable')
+					: 'disabled',
+				storage: firestore.configured ? 'firestore' : 'memory',
+				alertStorageEnabled: firestore.enabled,
+			},
 		},
 	};
 }
