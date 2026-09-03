@@ -27,7 +27,7 @@ function isEventStream(res) {
 		return false;
 	}
 	const value = Array.isArray(contentType) ? contentType.join(';') : String(contentType);
-	return value.includes('text/event-stream');
+	return value.toLowerCase().includes('text/event-stream');
 }
 
 /**

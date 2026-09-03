@@ -57,6 +57,16 @@ describe('Response Compression Middleware', () => {
 			expect(isEventStream(res)).toBe(true);
 		});
 
+		it('returns true when Content-Type is uppercase TEXT/EVENT-STREAM', () => {
+			const res = {
+				getHeader: jest.fn().mockImplementation((h) => {
+					if (h.toLowerCase() === 'content-type') return 'TEXT/EVENT-STREAM';
+					return undefined;
+				}),
+			};
+			expect(isEventStream(res)).toBe(true);
+		});
+
 		it('returns true when Content-Type is provided as an array', () => {
 			const res = {
 				getHeader: jest.fn().mockImplementation((h) => {
