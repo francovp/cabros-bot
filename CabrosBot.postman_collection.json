@@ -308,6 +308,114 @@
       ]
     },
     {
+      "name": "Ops Canary",
+      "description": "Post-deploy channel-delivery verification. Opt-in (ENABLE_CANARY_ENDPOINT). Sends synthetic alerts through the same notification pipeline used by real webhook traffic.",
+      "item": [
+        {
+          "name": "POST Ops Canary - test alert (all enabled channels)",
+          "request": {
+            "method": "POST",
+            "description": "Opt-in post-deploy channel-delivery canary. Requires ENABLE_CANARY_ENDPOINT=true on the target environment. Sends one synthetic alert (source: 'canary') through the same notification pipeline as a real webhook alert (formatter, retry, redrive). Pure delivery probe - no Gemini, TradingView MCP, or Langfuse enrichment. Wire this into a Render deploy hook or GitHub Action to verify the deployed build can actually deliver through every channel.",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"text\": \"Cabros Bot canary alert - ignore\",\n  \"channels\": [\"telegram\", \"whatsapp\"]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/ops/test-alert",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "ops",
+                "test-alert"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Success (all channels)",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"source\": \"canary\",\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"tg-msg-123\",\n      \"attemptCount\": 1,\n      \"durationMs\": 450\n    },\n    {\n      \"channel\": \"whatsapp\",\n      \"success\": true,\n      \"messageId\": \"wa-msg-456\",\n      \"attemptCount\": 1,\n      \"durationMs\": 320\n    }\n  ],\n  \"requestedChannels\": [\"telegram\", \"whatsapp\"],\n  \"successCount\": 2,\n  \"failureCount\": 0,\n  \"requestId\": \"8e9b0d1c-2f3a-4b5c-8d7e-9f0a1b2c3d4e\",\n  \"totalDurationMs\": 482\n}"
+            },
+            {
+              "name": "Mixed (one channel fails)",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": false,\n  \"source\": \"canary\",\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": false,\n      \"error\": \"Telegram API 5xx\",\n      \"statusCode\": 502,\n      \"attemptCount\": 3,\n      \"durationMs\": 1820\n    },\n    {\n      \"channel\": \"whatsapp\",\n      \"success\": true,\n      \"messageId\": \"wa-msg-456\"\n    }\n  ],\n  \"requestedChannels\": [\"telegram\", \"whatsapp\"],\n  \"successCount\": 1,\n  \"failureCount\": 1,\n  \"requestId\": \"8e9b0d1c-2f3a-4b5c-8d7e-9f0a1b2c3d4e\",\n  \"totalDurationMs\": 1880\n}"
+            },
+            {
+              "name": "Feature disabled",
+              "status": "Not Found",
+              "code": 404,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Canary endpoint is disabled\",\n  \"code\": \"FEATURE_DISABLED\",\n  \"requestId\": \"8e9b0d1c-2f3a-4b5c-8d7e-9f0a1b2c3d4e\"\n}"
+            },
+            {
+              "name": "Unauthorized (missing API key)",
+              "status": "Unauthorized",
+              "code": 401,
+              "body": "{\n  \"error\": \"Unauthorized: Missing API key\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST Ops Canary - test alert (single channel)",
+          "request": {
+            "method": "POST",
+            "description": "Canary restricted to a single channel. Useful for testing one channel at a time during a deploy rollout.",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"channels\": [\"telegram\"]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/ops/test-alert",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "ops",
+                "test-alert"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Success (telegram only)",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"source\": \"canary\",\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"tg-msg-789\",\n      \"attemptCount\": 1,\n      \"durationMs\": 410\n    }\n  ],\n  \"requestedChannels\": [\"telegram\"],\n  \"successCount\": 1,\n  \"failureCount\": 0,\n  \"requestId\": \"8e9b0d1c-2f3a-4b5c-8d7e-9f0a1b2c3d4e\",\n  \"totalDurationMs\": 425\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
       "name": "Webhooks",
       "item": [
         {
@@ -5335,7 +5443,7 @@
           ]
         },
         {
-          "name": "POST Binance order (dry-run LIMIT — demo env)",
+          "name": "POST Binance order (dry-run LIMIT \u2014 demo env)",
           "request": {
             "method": "POST",
             "header": [
@@ -5354,7 +5462,7 @@
               "mode": "raw",
               "raw": "{\n  \"symbol\": \"BTCUSDT\",\n  \"side\": \"BUY\",\n  \"type\": \"LIMIT\",\n  \"quantity\": 0.001,\n  \"price\": 60000,\n  \"timeInForce\": \"GTC\",\n  \"dryRun\": true\n}"
             },
-            "description": "Dry-run LIMIT order validated against the Binance Demo Trading API (demo-api.binance.com). Requires BINANCE_TRADING_ENV=demo on the server. The demo environment mirrors live production market data and exchange filters exactly — use this for pre-live validation before switching to BINANCE_TRADING_ENV=live.",
+            "description": "Dry-run LIMIT order validated against the Binance Demo Trading API (demo-api.binance.com). Requires BINANCE_TRADING_ENV=demo on the server. The demo environment mirrors live production market data and exchange filters exactly \u2014 use this for pre-live validation before switching to BINANCE_TRADING_ENV=live.",
             "url": {
               "raw": "{{baseUrl}}/api/trading/binance/orders",
               "host": [
@@ -5376,7 +5484,7 @@
               "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"environment\": \"demo\",\n  \"order\": {\n    \"symbol\": \"BTCUSDT\",\n    \"side\": \"BUY\",\n    \"type\": \"LIMIT\",\n    \"quantity\": 0.001,\n    \"price\": 60000,\n    \"timeInForce\": \"GTC\",\n    \"newOrderRespType\": \"FULL\"\n  }\n}"
             },
             {
-              "name": "Error — feature disabled (ENABLE_BINANCE_TRADING=false)",
+              "name": "Error \u2014 feature disabled (ENABLE_BINANCE_TRADING=false)",
               "status": "Forbidden",
               "code": 403,
               "body": "{\n  \"success\": false,\n  \"code\": \"FEATURE_DISABLED\",\n  \"error\": \"Binance trading is disabled\"\n}"

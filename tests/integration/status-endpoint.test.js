@@ -348,6 +348,21 @@ describe('Status endpoints', () => {
 		expect(response.body.dependencies.cloudflareAig.enabled).toBe(false);
 	});
 
+	it('reports canaryEndpoint as disabled by default and enabled when opted in', async () => {
+		const defaultResponse = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+		expect(defaultResponse.status).toBe(200);
+		expect(defaultResponse.body.featureFlags.canaryEndpoint).toBe(false);
+
+		process.env.ENABLE_CANARY_ENDPOINT = 'true';
+		const enabledResponse = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+		expect(enabledResponse.status).toBe(200);
+		expect(enabledResponse.body.featureFlags.canaryEndpoint).toBe(true);
+	});
+
 	it('reports Cloudflare AI Gateway when enabled', async () => {
 		process.env.ENABLE_CLOUDFLARE_AIG = 'true';
 		process.env.CF_AIG_TOKEN = 'cloudflare-token';
