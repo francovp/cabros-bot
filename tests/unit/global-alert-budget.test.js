@@ -138,8 +138,9 @@ describe('GlobalAlertBudget', () => {
 
 	it('getStatus() and dryRun() return equivalent shape', () => {
 		process.env.GLOBAL_ALERT_BUDGET_PER_24H = '5';
-		const dry = globalAlertBudget.dryRun();
-		const status = globalAlertBudget.getStatus();
+		const fixedNow = Date.now();
+		const dry = globalAlertBudget.dryRun(fixedNow);
+		const status = globalAlertBudget.getStatus(fixedNow);
 		expect(status).toEqual(dry);
 	});
 
