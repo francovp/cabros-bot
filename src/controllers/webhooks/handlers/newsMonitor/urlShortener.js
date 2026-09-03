@@ -4,6 +4,7 @@
  */
 const timersPromises = require('timers/promises');
 const { sendWithRetry } = require('../../../../lib/retryHelper');
+const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteConfigService');
 
 const DEFAULT_URL_SHORTENER_CACHE_MAX_ENTRIES = 1000;
 const DEFAULT_URL_SHORTENER_FAILURES_MAX_ENTRIES = 32;
@@ -45,7 +46,7 @@ class URLShortenerCache {
 		if (this._explicitMaxEntries !== undefined) {
 			return this._explicitMaxEntries;
 		}
-		const runtime = process.env.URL_SHORTENER_CACHE_MAX_ENTRIES;
+		const runtime = getRuntimeConfig().URL_SHORTENER_CACHE_MAX_ENTRIES;
 		return parsePositiveInteger(runtime, DEFAULT_URL_SHORTENER_CACHE_MAX_ENTRIES, 'URL_SHORTENER_CACHE_MAX_ENTRIES');
 	}
 
@@ -117,16 +118,14 @@ class URLShortenerCache {
  * Supports: Bitly, TinyURL, PicSee, reurl, Cutt.ly, Pixnet0rz.tw
  */
 class URLShortener {
-	constructor() {
+	constructor(options = {}) {
 		this.primaryService = (process.env.URL_SHORTENER_SERVICE || 'picsee').toLowerCase();
 		this.timeout = 60000; // 5s timeout per call
-		this.cache = new URLShortenerCache();
+		this.cache = new URLShortenerCache(options.cacheOptions);
 		this.serviceFailures = new Map(); // Track consecutive failures per service
-		this._serviceFailuresMaxEntries = parsePositiveInteger(
-			process.env.URL_SHORTENER_SERVICE_FAILURES_MAX_ENTRIES,
-			DEFAULT_URL_SHORTENER_FAILURES_MAX_ENTRIES,
-			'URL_SHORTENER_SERVICE_FAILURES_MAX_ENTRIES',
-		);
+		this._explicitServiceFailuresMaxEntries = options.serviceFailuresMaxEntries !== undefined
+			? parsePositiveInteger(options.serviceFailuresMaxEntries, DEFAULT_URL_SHORTENER_FAILURES_MAX_ENTRIES, 'serviceFailuresMaxEntries')
+			: undefined;
 		this._serviceFailureEvictionCount = 0;
 
 		// Validate service
@@ -252,8 +251,24 @@ class URLShortener {
 		return count;
 	}
 
+	get serviceFailuresMaxEntries() {
+		if (this._explicitServiceFailuresMaxEntries !== undefined) {
+			return this._explicitServiceFailuresMaxEntries;
+		}
+		const runtime = getRuntimeConfig().URL_SHORTENER_SERVICE_FAILURES_MAX_ENTRIES;
+		return parsePositiveInteger(
+			runtime,
+			DEFAULT_URL_SHORTENER_FAILURES_MAX_ENTRIES,
+			'URL_SHORTENER_SERVICE_FAILURES_MAX_ENTRIES',
+		);
+	}
+
+	get _serviceFailuresMaxEntries() {
+		return this.serviceFailuresMaxEntries;
+	}
+
 	_evictServiceFailuresIfOverCapacity() {
-		const max = this._serviceFailuresMaxEntries;
+		const max = this.serviceFailuresMaxEntries;
 		if (this.serviceFailures.size <= max) {
 			return;
 		}
@@ -274,7 +289,7 @@ class URLShortener {
 	get serviceFailuresStats() {
 		return {
 			size: this.serviceFailures.size,
-			maxEntries: this._serviceFailuresMaxEntries,
+			maxEntries: this.serviceFailuresMaxEntries,
 			evictionCount: this._serviceFailureEvictionCount,
 		};
 	}

@@ -120,4 +120,10 @@ describe('URLShortener.serviceFailures size bound', () => {
 		const localShortener = new URLShortener();
 		expect(localShortener._serviceFailuresMaxEntries).toBe(32);
 	});
+
+	it('allows explicit constructor options to override runtime config', () => {
+		const localShortener = new URLShortener({ serviceFailuresMaxEntries: 10 });
+		expect(localShortener.serviceFailuresMaxEntries).toBe(10);
+		expect(localShortener._serviceFailuresMaxEntries).toBe(10);
+	});
 });

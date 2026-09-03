@@ -207,6 +207,15 @@ class NewsCache {
 	}
 
 	/**
+	 * Insert or update a cache entry, refreshing LRU recency and enforcing maxEntries.
+	 */
+	_setCacheEntry(key, entry) {
+		this.cache.delete(key);
+		this.cache.set(key, entry);
+		this._evictIfOverCapacity();
+	}
+
+	/**
 	 * Enforce the cache size bound by evicting the oldest entry (LRU eviction).
 	 * JavaScript Map iteration order is insertion order, so the first key is
 	 * the least-recently inserted entry.
@@ -232,10 +241,9 @@ class NewsCache {
 	}
 
 	/**
-	 * Enforce the deliveryLocks size bound by evicting inactive leases first,
-	 * then the oldest active leases as a fallback. Delivery leases are
-	 * channel-scoped and short-lived so eviction must not break in-flight
-	 * retries — only drop leases whose persistent lease has expired.
+	 * Enforce the deliveryLocks size bound by evicting inactive leases.
+	 * Active leases (lease.active === true) must NEVER be evicted so concurrent
+	 * webhooks or retries cannot claim a duplicate delivery lease.
 	 */
 	_evictDeliveryLocksIfOverCapacity() {
 		const max = this.deliveryLockMaxEntries;
@@ -244,6 +252,7 @@ class NewsCache {
 		}
 		const now = Date.now();
 		let evicted = 0;
+		// First pass: evict inactive leases whose persistent lease has expired
 		for (const [key, lease] of this.deliveryLocks.entries()) {
 			if (this.deliveryLocks.size <= max) {
 				break;
@@ -253,13 +262,15 @@ class NewsCache {
 				evicted++;
 			}
 		}
-		while (this.deliveryLocks.size > max) {
-			const oldestKey = this.deliveryLocks.keys().next().value;
-			if (oldestKey === undefined) {
+		// Second pass: evict any remaining inactive leases
+		for (const [key, lease] of this.deliveryLocks.entries()) {
+			if (this.deliveryLocks.size <= max) {
 				break;
 			}
-			this.deliveryLocks.delete(oldestKey);
-			evicted++;
+			if (!lease.active) {
+				this.deliveryLocks.delete(key);
+				evicted++;
+			}
 		}
 		if (evicted > 0) {
 			this._deliveryLockEvictionCount += evicted;
@@ -336,6 +347,9 @@ class NewsCache {
 			if (this.isExpired(entry)) {
 				this.cache.delete(key);
 			} else {
+				// Refresh LRU recency on hit: move entry to the most-recently used position in the Map
+				this.cache.delete(key);
+				this.cache.set(key, entry);
 				localData = entry.data;
 			}
 		}
@@ -359,8 +373,8 @@ class NewsCache {
 					if (refreshedLocalData && refreshedLocalData.status !== 'claiming' && entryRecord.data?.status === 'claiming') {
 						return refreshedLocalData;
 					}
-					// Warm the local cache to avoid repeated Firestore lookups
-					this.cache.set(key, {
+					// Warm the local cache to avoid repeated Firestore lookups, enforcing LRU bounds
+					this._setCacheEntry(key, {
 						key,
 						timestamp: Date.now(),
 						expiresAt: entryRecord.expiresAtMs,
@@ -408,17 +422,14 @@ class NewsCache {
 			...existingLocalOnlyChannels.filter(channel => !locallyUpdatedChannels.has(channel)),
 		]));
 		const timestamp = existingEntry?.timestamp ?? Date.now();
-		// Delete-then-set ensures LRU recency: re-set on an existing key moves
-		// the entry to the most-recently-inserted position in the Map.
-		this.cache.delete(key);
-		this.cache.set(key, {
+		// _setCacheEntry handles delete-then-set for LRU recency and enforces maxEntries
+		this._setCacheEntry(key, {
 			key,
 			timestamp,
 			expiresAt: existingEntry?.expiresAt ?? timestamp + this.ttlMs,
 			data: dataToStore,
 			localOnlyChannels,
 		});
-		this._evictIfOverCapacity();
 
 		// Persistent dedup: write to Firestore (fail-open)
 		if (!options.skipPersistence && newsDedupStorageService.isEnabled() && newsDedupStorageService.isReady()) {
@@ -561,6 +572,16 @@ class NewsCache {
 			return false;
 		}
 
+		// Prune inactive/expired leases before capacity check
+		this._evictDeliveryLocksIfOverCapacity();
+
+		// If this is a new lease and capacity is already saturated with active leases,
+		// reject the claim to preserve existing active leases from eviction.
+		if (!existingLease && this.deliveryLocks.size >= this.deliveryLockMaxEntries) {
+			console.warn('[NewsCache] Delivery lock capacity saturated with active leases; rejecting new claim');
+			return false;
+		}
+
 		const persistentLeaseActive = existingLease && existingLease.persistentUntil > now;
 		const claimToken = persistentLeaseActive && existingLease.claimToken
 			? existingLease.claimToken
@@ -570,7 +591,6 @@ class NewsCache {
 			claimToken,
 			persistentUntil: persistentLeaseActive ? existingLease.persistentUntil : 0,
 		});
-		this._evictDeliveryLocksIfOverCapacity();
 
 		if (persistentLeaseActive || !(newsDedupStorageService.isEnabled() && newsDedupStorageService.isReady())) {
 			return true;
@@ -641,6 +661,7 @@ class NewsCache {
 		if (lease.persistentUntil <= Date.now()) {
 			this.deliveryLocks.delete(key);
 		}
+		this._evictDeliveryLocksIfOverCapacity();
 	}
 
 	/**
@@ -664,7 +685,7 @@ class NewsCache {
 				const claimed = await newsDedupStorageService.claimEntry(key, this.ttlMs);
 				if (claimed) {
 					// Warm local cache so we don't hit Firestore on future calls
-					this.cache.set(key, {
+					this._setCacheEntry(key, {
 						key,
 						timestamp: Date.now(),
 						data: { status: 'claiming' },
@@ -679,7 +700,7 @@ class NewsCache {
 		}
 
 		// Local claim
-		this.cache.set(key, {
+		this._setCacheEntry(key, {
 			key,
 			timestamp: Date.now(),
 			data: { status: 'claiming' },

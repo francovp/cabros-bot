@@ -59,6 +59,36 @@ describe('Cache Max Entries / LRU Eviction', () => {
 			expect(await cache.get('D', EventCategory.PRICE_SURGE)).not.toBeNull();
 		});
 
+		it('reading an existing key via get() refreshes LRU recency', async () => {
+			await cache.set('A', EventCategory.PRICE_SURGE, { v: 1 });
+			await cache.set('B', EventCategory.PRICE_SURGE, { v: 1 });
+			await cache.set('C', EventCategory.PRICE_SURGE, { v: 1 });
+
+			// Read A via get() — should move A to most-recently used
+			const hit = await cache.get('A', EventCategory.PRICE_SURGE);
+			expect(hit).toEqual({ v: 1 });
+
+			// Insert D — should evict B (oldest unread), keeping A, C, and D
+			await cache.set('D', EventCategory.PRICE_SURGE, { v: 1 });
+
+			expect(await cache.get('A', EventCategory.PRICE_SURGE)).not.toBeNull();
+			expect(await cache.get('B', EventCategory.PRICE_SURGE)).toBeNull();
+			expect(await cache.get('C', EventCategory.PRICE_SURGE)).not.toBeNull();
+			expect(await cache.get('D', EventCategory.PRICE_SURGE)).not.toBeNull();
+		});
+
+		it('enforces maxEntries cap on claim()', async () => {
+			await cache.set('A', EventCategory.PRICE_SURGE, { v: 1 });
+			await cache.set('B', EventCategory.PRICE_SURGE, { v: 1 });
+			await cache.set('C', EventCategory.PRICE_SURGE, { v: 1 });
+
+			const claimed = await cache.claim('D', EventCategory.PRICE_SURGE);
+			expect(claimed).toBe(true);
+			expect(cache.cache.size).toBe(3);
+			expect(await cache.get('A', EventCategory.PRICE_SURGE)).toBeNull();
+			expect(await cache.get('B', EventCategory.PRICE_SURGE)).not.toBeNull();
+		});
+
 		it('exposes maxEntries + evictionCount in getStats()', () => {
 			expect(cache.maxEntries).toBe(3);
 			const stats = cache.getStats();
@@ -80,9 +110,42 @@ describe('Cache Max Entries / LRU Eviction', () => {
 
 		it('respects the configured deliveryLockMaxEntries cap', async () => {
 			await cache.claimDelivery('BTCUSDT', EventCategory.PRICE_SURGE, 'telegram');
+			cache.releaseDelivery('BTCUSDT', EventCategory.PRICE_SURGE, 'telegram');
 			await cache.claimDelivery('ETHUSDT', EventCategory.PRICE_SURGE, 'telegram');
+			cache.releaseDelivery('ETHUSDT', EventCategory.PRICE_SURGE, 'telegram');
 			await cache.claimDelivery('BNBUSDT', EventCategory.PRICE_SURGE, 'telegram');
 			expect(cache.deliveryLocks.size).toBeLessThanOrEqual(2);
+		});
+
+		it('preserves active delivery leases and rejects new claims when saturated', async () => {
+			const claimed1 = await cache.claimDelivery('BTCUSDT', EventCategory.PRICE_SURGE, 'telegram');
+			const claimed2 = await cache.claimDelivery('ETHUSDT', EventCategory.PRICE_SURGE, 'telegram');
+			expect(claimed1).toBe(true);
+			expect(claimed2).toBe(true);
+			expect(cache.deliveryLocks.size).toBe(2);
+
+			// Both leases are currently active. A third claim should NOT evict active leases,
+			// and should be rejected (returns false).
+			const claimed3 = await cache.claimDelivery('BNBUSDT', EventCategory.PRICE_SURGE, 'telegram');
+			expect(claimed3).toBe(false);
+			expect(cache.deliveryLocks.size).toBe(2);
+
+			// Verify both active leases were preserved
+			const btcLease = cache.deliveryLocks.get('BTCUSDT:price_surge:delivery:telegram');
+			const ethLease = cache.deliveryLocks.get('ETHUSDT:price_surge:delivery:telegram');
+			expect(btcLease?.active).toBe(true);
+			expect(ethLease?.active).toBe(true);
+
+			// Now release BTC lease
+			cache.releaseDelivery('BTCUSDT', EventCategory.PRICE_SURGE, 'telegram');
+
+			// Now claiming BNB should succeed because the inactive BTC lease can be evicted
+			const claimed3Retry = await cache.claimDelivery('BNBUSDT', EventCategory.PRICE_SURGE, 'telegram');
+			expect(claimed3Retry).toBe(true);
+			expect(cache.deliveryLocks.size).toBe(2);
+			expect(cache.deliveryLocks.has('BTCUSDT:price_surge:delivery:telegram')).toBe(false);
+			expect(cache.deliveryLocks.has('ETHUSDT:price_surge:delivery:telegram')).toBe(true);
+			expect(cache.deliveryLocks.has('BNBUSDT:price_surge:delivery:telegram')).toBe(true);
 		});
 
 		it('exposes deliveryLocks stats in getStats()', () => {
