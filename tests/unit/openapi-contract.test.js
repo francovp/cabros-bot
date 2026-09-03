@@ -75,6 +75,7 @@ describe('OpenAPI contract', () => {
 		const firebaseAdminOperations = new Set([
 			'GET /api/alerts', 'GET /api/alerts/replays', 'GET /api/alerts/summary', 'GET /api/alerts/export',
 			'GET /api/alerts/{alertId}', 'POST /api/alerts/{alertId}/replay',
+			'POST /api/alerts/{alertId}/acknowledge', 'GET /api/alerts/{alertId}/acknowledgements/breakdown',
 			'GET /api/scanner-presets', 'POST /api/scanner-presets',
 			'GET /api/scanner-presets/{id}', 'PUT /api/scanner-presets/{id}',
 			'DELETE /api/scanner-presets/{id}', 'POST /api/scanner-presets/{id}/run',
@@ -104,6 +105,8 @@ describe('OpenAPI contract', () => {
 			'GET /api/alerts': 'admin.viewer',
 			'GET /api/jobs': 'admin.viewer',
 			'POST /api/alerts/{alertId}/replay': 'admin.operator',
+			'POST /api/alerts/{alertId}/acknowledge': 'admin.operator',
+			'GET /api/alerts/{alertId}/acknowledgements/breakdown': 'admin.viewer',
 			'POST /api/scanner-presets': 'admin.operator',
 			'POST /api/jobs/{jobId}/cancel': 'admin.operator',
 		};

@@ -1,6 +1,7 @@
 'use strict';
 
 const alertStorageService = require('../../services/storage/AlertStorageService');
+const alertAcknowledgementService = require('../../services/storage/AlertAcknowledgementService');
 const sentryService = require('../../services/monitoring/SentryService');
 const signalOutcomeService = require('../../services/storage/SignalOutcomeService');
 
@@ -599,10 +600,94 @@ function replayAlert(botOrGetter) {
 	};
 }
 
+function acknowledgeAlert(req, res) {
+	return handleAsync(req, res, `/api/alerts/${req.params.alertId}/acknowledge`, async () => {
+		if (!alertStorageService.isEnabled() || !alertAcknowledgementService.isEnabled()) {
+			return res.status(403).json({
+				error: 'Alert storage feature is disabled. Set ENABLE_FIRESTORE_ALERT_STORAGE=true to enable.',
+				code: 'FEATURE_DISABLED',
+			});
+		}
+
+		const { alertId } = req.params;
+		if (!alertId) {
+			return res.status(400).json({
+				error: 'Missing alertId parameter',
+				code: 'INVALID_REQUEST',
+			});
+		}
+
+		const body = req.body || {};
+		const chatId = typeof body.chatId === 'string' ? body.chatId : '';
+		if (!chatId.trim()) {
+			return res.status(400).json({
+				error: 'chatId is required in the request body.',
+				code: 'INVALID_REQUEST',
+			});
+		}
+
+		const storedAlert = await alertStorageService.getAlertById(alertId);
+		if (!storedAlert) {
+			return res.status(404).json({
+				error: 'Alert not found',
+				code: 'NOT_FOUND',
+			});
+		}
+
+		const record = await alertAcknowledgementService.saveAcknowledgement({
+			alertId,
+			chatId,
+			action: body.action,
+			notes: body.notes,
+		});
+
+		return res.status(201).json({
+			success: true,
+			ackId: record.ackId,
+			alertId: record.alertId,
+			action: record.action,
+			notes: record.notes,
+			acknowledgedAt: record.acknowledgedAt,
+			updatedAt: record.updatedAt,
+			storage: record.storage,
+		});
+	});
+}
+
+function getAcknowledgementBreakdown(req, res) {
+	return handleAsync(req, res, `/api/alerts/${req.params.alertId}/acknowledgements/breakdown`, async () => {
+		if (!alertStorageService.isEnabled() || !alertAcknowledgementService.isEnabled()) {
+			return res.status(403).json({
+				error: 'Alert storage feature is disabled. Set ENABLE_FIRESTORE_ALERT_STORAGE=true to enable.',
+				code: 'FEATURE_DISABLED',
+			});
+		}
+
+		const { alertId } = req.params;
+		if (!alertId) {
+			return res.status(400).json({
+				error: 'Missing alertId parameter',
+				code: 'INVALID_REQUEST',
+			});
+		}
+
+		const breakdown = await alertAcknowledgementService.getAcknowledgementBreakdown(alertId);
+		return res.status(200).json({
+			success: true,
+			alertId: breakdown.alertId,
+			total: breakdown.total,
+			breakdown: breakdown.breakdown,
+			storage: breakdown.storage,
+		});
+	});
+}
+
 function handleAsync(req, res, endpoint, handler) {
 	return Promise.resolve(handler()).catch((error) => {
 		console.error('[AlertsController] Request failed:', error.message);
-		const statusCode = error.code === alertStorageService.STORAGE_UNAVAILABLE_CODE
+		const isStorageUnavailable = error.code === alertStorageService.STORAGE_UNAVAILABLE_CODE
+			|| error.code === alertAcknowledgementService.STORAGE_UNAVAILABLE_CODE;
+		const statusCode = isStorageUnavailable
 			? 503
 			: (error.code === 'INVALID_REQUEST' ? 400 : 500);
 		sentryService.captureRuntimeError({
@@ -643,4 +728,6 @@ module.exports = {
 	replayAlert,
 	summarizeAlerts,
 	exportAlerts,
+	acknowledgeAlert,
+	getAcknowledgementBreakdown,
 };

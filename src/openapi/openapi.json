@@ -654,6 +654,259 @@
         "x-admin-role": "admin.operator"
       }
     },
+    "/api/alerts/{alertId}/acknowledge": {
+      "post": {
+        "tags": [
+          "Alerts"
+        ],
+        "summary": "Record a trader acknowledgement for a stored alert",
+        "description": "Persists a single acknowledgement record per (alertId, chatId) pair, joining the trader's action to the signal-outcome tracker. The same chat calling this endpoint twice updates the existing record instead of creating a duplicate; the chatId is never returned in any response. The endpoint is gated on the alert storage feature flag (`ENABLE_FIRESTORE_ALERT_STORAGE=true`) and requires the `admin.operator` role when Firebase Admin auth is enabled.",
+        "operationId": "acknowledgeAlert",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/AlertId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "chatId",
+                  "action"
+                ],
+                "properties": {
+                  "chatId": {
+                    "type": "string",
+                    "description": "Telegram chat id (numeric, may be negative for groups). Treated as sensitive — never returned in any response.",
+                    "example": "-1001234567890"
+                  },
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "took_trade",
+                      "skipped",
+                      "no_trade_no_signal",
+                      "snoozed"
+                    ],
+                    "description": "Trader action attributed to this alert.",
+                    "example": "took_trade"
+                  },
+                  "notes": {
+                    "type": "string",
+                    "maxLength": 280,
+                    "description": "Optional free-text note, trimmed and capped at 280 characters.",
+                    "example": "Entered at 100.5, stop 99.0"
+                  }
+                }
+              },
+              "examples": {
+                "tookTrade": {
+                  "summary": "Trader entered the trade",
+                  "value": {
+                    "chatId": "-1001234567890",
+                    "action": "took_trade",
+                    "notes": "Entered at 100.5, stop 99.0"
+                  }
+                },
+                "skipped": {
+                  "summary": "Trader skipped the alert",
+                  "value": {
+                    "chatId": "-1001234567890",
+                    "action": "skipped",
+                    "notes": "Wait for confirmation"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Acknowledgement created or updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlertAcknowledgement"
+                },
+                "examples": {
+                  "created": {
+                    "summary": "First acknowledgement for this (alert, chat) pair",
+                    "value": {
+                      "success": true,
+                      "ackId": "alert-123__1001234567890",
+                      "alertId": "alert-123",
+                      "action": "took_trade",
+                      "notes": "Entered at 100.5, stop 99.0",
+                      "acknowledgedAt": "2026-09-02T22:00:00.000Z",
+                      "updatedAt": "2026-09-02T22:00:00.000Z",
+                      "storage": "firestore"
+                    }
+                  },
+                  "updated": {
+                    "summary": "Subsequent acknowledgement for the same (alert, chat) pair",
+                    "value": {
+                      "success": true,
+                      "ackId": "alert-123__1001234567890",
+                      "alertId": "alert-123",
+                      "action": "skipped",
+                      "notes": "Wait for confirmation",
+                      "acknowledgedAt": "2026-09-02T22:00:00.000Z",
+                      "updatedAt": "2026-09-02T22:30:00.000Z",
+                      "storage": "firestore"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request (missing chatId, unknown action, etc.)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Alert storage feature is disabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Stored alert not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Acknowledgement storage is enabled but Firestore is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.operator"
+      }
+    },
+    "/api/alerts/{alertId}/acknowledgements/breakdown": {
+      "get": {
+        "tags": [
+          "Alerts"
+        ],
+        "summary": "Get acknowledgement counts grouped by action for a stored alert",
+        "description": "Returns a zero-safe breakdown of acknowledgement actions for the alert. Always emits every action in `VALID_ACTIONS` so clients can render 'took 0/4' without conditional rendering. The chatId field is never returned. Requires the alert storage feature flag and the `admin.viewer` role when Firebase Admin auth is enabled.",
+        "operationId": "getAlertAcknowledgementBreakdown",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/AlertId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Acknowledgement counts grouped by action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "alertId",
+                    "total",
+                    "breakdown"
+                  ],
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "alertId": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "total": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "breakdown": {
+                      "$ref": "#/components/schemas/AlertAcknowledgementBreakdown"
+                    },
+                    "storage": {
+                      "type": "string",
+                      "enum": [
+                        "firestore",
+                        "memory"
+                      ]
+                    }
+                  }
+                },
+                "example": {
+                  "success": true,
+                  "alertId": "alert-123",
+                  "total": 4,
+                  "breakdown": {
+                    "took_trade": 2,
+                    "skipped": 1,
+                    "no_trade_no_signal": 1,
+                    "snoozed": 0
+                  },
+                  "storage": "firestore"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Alert storage feature is disabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      }
+    },
     "/api/scanner-presets": {
       "get": {
         "tags": [
@@ -3224,6 +3477,98 @@
       "JsonObject": {
         "type": "object",
         "additionalProperties": true
+      },
+      "AlertAcknowledgement": {
+        "type": "object",
+        "description": "Sanitized record of a single trader's acknowledgement for a stored alert. The chatId is never returned in any response payload.",
+        "required": [
+          "success",
+          "ackId",
+          "alertId",
+          "action",
+          "notes",
+          "acknowledgedAt",
+          "updatedAt",
+          "storage"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "ackId": {
+            "type": "string",
+            "description": "Stable document id (`<alertId>__<sanitized chatId>`). Used as the idempotency key — the same (alert, chat) pair always returns the same ackId.",
+            "example": "alert-123__1001234567890"
+          },
+          "alertId": {
+            "type": "string",
+            "example": "alert-123"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "took_trade",
+              "skipped",
+              "no_trade_no_signal",
+              "snoozed"
+            ],
+            "example": "took_trade"
+          },
+          "notes": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 280,
+            "example": "Entered at 100.5, stop 99.0"
+          },
+          "acknowledgedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "Set on the first acknowledgement for the (alert, chat) pair; preserved across subsequent updates."
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "Refreshed on every write to the acknowledgement record."
+          },
+          "storage": {
+            "type": "string",
+            "enum": [
+              "firestore",
+              "memory"
+            ],
+            "description": "Effective backing store: `firestore` when the durable collection accepted the write, `memory` when the fail-open in-memory fallback is in use."
+          }
+        }
+      },
+      "AlertAcknowledgementBreakdown": {
+        "type": "object",
+        "description": "Zero-safe action counts for a stored alert. Every VALID_ACTIONS key is always present, even when the value is 0.",
+        "required": [
+          "took_trade",
+          "skipped",
+          "no_trade_no_signal",
+          "snoozed"
+        ],
+        "properties": {
+          "took_trade": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "skipped": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "no_trade_no_signal": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "snoozed": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
       },
       "DeliveryMetrics": {
         "type": "object",

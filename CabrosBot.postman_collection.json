@@ -3401,6 +3401,312 @@
               }
             }
           ]
+        },
+        {
+          "name": "POST Acknowledge Alert (took_trade)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"chatId\": \"-1001234567890\",\n  \"action\": \"took_trade\",\n  \"notes\": \"Entered at 100.5, stop 99.0\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/{{alertId}}/acknowledge",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "{{alertId}}",
+                "acknowledge"
+              ]
+            },
+            "description": "Records a trader acknowledgement for a stored alert. The (alertId, chatId) pair is idempotent — a second call updates the existing record's action/notes/updatedAt without creating a duplicate. The chatId is never returned in the response. Requires admin.operator authorization and ENABLE_FIRESTORE_ALERT_STORAGE=true."
+          },
+          "response": [
+            {
+              "name": "201 Created",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-api-key",
+                    "value": "{{apiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"chatId\": \"-1001234567890\",\n  \"action\": \"took_trade\",\n  \"notes\": \"Entered at 100.5, stop 99.0\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/alerts/{{alertId}}/acknowledge",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "alerts",
+                    "{{alertId}}",
+                    "acknowledge"
+                  ]
+                }
+              },
+              "status": "Created",
+              "code": 201,
+              "body": "{\n  \"success\": true,\n  \"ackId\": \"alert-123__-1001234567890\",\n  \"alertId\": \"alert-123\",\n  \"action\": \"took_trade\",\n  \"notes\": \"Entered at 100.5, stop 99.0\",\n  \"acknowledgedAt\": \"2026-09-02T22:00:00.000Z\",\n  \"updatedAt\": \"2026-09-02T22:00:00.000Z\",\n  \"storage\": \"firestore\"\n}"
+            },
+            {
+              "name": "400 Missing chatId",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-api-key",
+                    "value": "{{apiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"action\": \"took_trade\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/alerts/{{alertId}}/acknowledge",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "alerts",
+                    "{{alertId}}",
+                    "acknowledge"
+                  ]
+                }
+              },
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"chatId is required in the request body.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            },
+            {
+              "name": "400 Invalid action",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-api-key",
+                    "value": "{{apiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"chatId\": \"-1001234567890\",\n  \"action\": \"random\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/alerts/{{alertId}}/acknowledge",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "alerts",
+                    "{{alertId}}",
+                    "acknowledge"
+                  ]
+                }
+              },
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"Invalid action. Must be one of: took_trade, skipped, no_trade_no_signal, snoozed.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            },
+            {
+              "name": "404 Alert not found",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-api-key",
+                    "value": "{{apiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"chatId\": \"-1001234567890\",\n  \"action\": \"took_trade\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/alerts/missing-alert/acknowledge",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "alerts",
+                    "missing-alert",
+                    "acknowledge"
+                  ]
+                }
+              },
+              "status": "Not Found",
+              "code": 404,
+              "body": "{\n  \"error\": \"Alert not found\",\n  \"code\": \"NOT_FOUND\"\n}"
+            },
+            {
+              "name": "503 Storage unavailable",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-api-key",
+                    "value": "{{apiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"chatId\": \"-1001234567890\",\n  \"action\": \"took_trade\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/alerts/{{alertId}}/acknowledge",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "alerts",
+                    "{{alertId}}",
+                    "acknowledge"
+                  ]
+                }
+              },
+              "status": "Service Unavailable",
+              "code": 503,
+              "body": "{\n  \"error\": \"Acknowledgement storage is enabled but Firestore is unavailable. Check Firestore credentials and project configuration.\",\n  \"code\": \"STORAGE_UNAVAILABLE\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST Acknowledge Alert (skipped)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"chatId\": \"-1001234567890\",\n  \"action\": \"skipped\",\n  \"notes\": \"Wait for confirmation\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/{{alertId}}/acknowledge",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "{{alertId}}",
+                "acknowledge"
+              ]
+            },
+            "description": "Records a `skipped` acknowledgement. Updates the same record when the same (alertId, chatId) pair is acknowledged again — the ackId is stable, only the action/notes/updatedAt change."
+          },
+          "response": [
+            {
+              "name": "201 Created (idempotent update)",
+              "status": "Created",
+              "code": 201,
+              "body": "{\n  \"success\": true,\n  \"ackId\": \"alert-123__-1001234567890\",\n  \"alertId\": \"alert-123\",\n  \"action\": \"skipped\",\n  \"notes\": \"Wait for confirmation\",\n  \"acknowledgedAt\": \"2026-09-02T22:00:00.000Z\",\n  \"updatedAt\": \"2026-09-02T22:30:00.000Z\",\n  \"storage\": \"firestore\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Alert Acknowledgement Breakdown",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/{{alertId}}/acknowledgements/breakdown",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "{{alertId}}",
+                "acknowledgements",
+                "breakdown"
+              ]
+            },
+            "description": "Returns zero-safe acknowledgement counts grouped by action for the stored alert. Every action in `VALID_ACTIONS` is always present in the breakdown, even when the value is 0. The chatId field is never returned."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"alertId\": \"alert-123\",\n  \"total\": 4,\n  \"breakdown\": {\n    \"took_trade\": 2,\n    \"skipped\": 1,\n    \"no_trade_no_signal\": 1,\n    \"snoozed\": 0\n  },\n  \"storage\": \"firestore\"\n}"
+            },
+            {
+              "name": "403 Feature disabled",
+              "status": "Forbidden",
+              "code": 403,
+              "body": "{\n  \"error\": \"Alert storage feature is disabled. Set ENABLE_FIRESTORE_ALERT_STORAGE=true to enable.\",\n  \"code\": \"FEATURE_DISABLED\"\n}"
+            }
+          ]
         }
       ]
     },
