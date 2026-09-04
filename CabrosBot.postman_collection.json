@@ -938,13 +938,19 @@
               "name": "Success (selected channels)",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"tg-msg-123\",\n      \"attemptCount\": 1,\n      \"durationMs\": 450\n    },\n    {\n      \"channel\": \"whatsapp\",\n      \"success\": true,\n      \"messageId\": \"wa-msg-456\",\n      \"attemptCount\": 1,\n      \"durationMs\": 320\n    },\n    {\n      \"channel\": \"discord\",\n      \"success\": true,\n      \"messageId\": \"discord-msg-789\"\n    }\n  ]\n}"
+              "body": "{\n  \"success\": true,\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"tg-msg-123\",\n      \"attemptCount\": 1,\n      \"durationMs\": 450\n    },\n    {\n      \"channel\": \"whatsapp\",\n      \"success\": true,\n      \"messageId\": \"wa-msg-456\",\n      \"attemptCount\": 1,\n      \"durationMs\": 320\n    },\n    {\n      \"channel\": \"discord\",\n      \"success\": true,\n      \"messageId\": \"discord-msg-789\"\n    }\n  ],\n  \"truncated\": false,\n  \"messageLength\": 36,\n  \"originalLength\": 36,\n  \"maxMessageLength\": 4000\n}"
             },
             {
               "name": "Success (single channel)",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"tg-msg-789\",\n      \"attemptCount\": 1,\n      \"durationMs\": 410\n    }\n  ]\n}"
+              "body": "{\n  \"success\": true,\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"tg-msg-789\",\n      \"attemptCount\": 1,\n      \"durationMs\": 410\n    }\n  ],\n  \"truncated\": false,\n  \"messageLength\": 16,\n  \"originalLength\": 16,\n  \"maxMessageLength\": 4000\n}"
+            },
+            {
+              "name": "Success (truncated payload)",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"tg-msg-trunc\",\n      \"attemptCount\": 1,\n      \"durationMs\": 425\n    }\n  ],\n  \"truncated\": true,\n  \"messageLength\": 4003,\n  \"originalLength\": 5200,\n  \"maxMessageLength\": 4000\n}"
             },
             {
               "name": "Success (idempotent replay)",
@@ -956,7 +962,7 @@
                   "value": "true"
                 }
               ],
-              "body": "{\n  \"success\": true,\n  \"idempotencyReplayed\": true,\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"tg-msg-123\"\n    }\n  ]\n}"
+              "body": "{\n  \"success\": true,\n  \"idempotencyReplayed\": true,\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"tg-msg-123\"\n    }\n  ],\n  \"truncated\": false,\n  \"messageLength\": 36,\n  \"originalLength\": 36,\n  \"maxMessageLength\": 4000\n}"
             },
             {
               "name": "Error (idempotency conflict)",

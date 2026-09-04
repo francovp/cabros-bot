@@ -231,6 +231,13 @@
       "description": "Retention window in days for tradingSignalOutcomes documents before expiration and cleanup",
       "valueType": "NUMBER"
     },
+    "GENERIC_MESSAGE_MAX_LENGTH": {
+      "defaultValue": {
+        "value": "4000"
+      },
+      "description": "Maximum allowed character length for /api/webhook/message payloads; values outside the 1-20000 range fall back to the default",
+      "valueType": "NUMBER"
+    },
     "EQUITY_MARKET_DATA_RPM": {
       "defaultValue": {
         "value": "8"
