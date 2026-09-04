@@ -18,6 +18,7 @@ const {
 	NotificationRoutingValidationError,
 	parseNotificationRouting,
 	validateNotificationRouting,
+	assertChannelsAvailable,
 	sendWithNotificationRouting,
 	getRequestedChannels,
 	getDeliveredChannels,
@@ -218,6 +219,20 @@ function postAlert(botOrGetter) {
 				? body.source.trim()
 				: 'webhook-alert';
 			alert = { text, source };
+
+			// Fail-fast channel availability check (GH-854): when the caller
+			// explicitly requests channels, validate they are enabled and
+			// configured BEFORE spending Gemini/TradingView MCP enrichment
+			// budget. The notification manager is initialized eagerly here so
+			// the availability check can resolve the enabled-channel set;
+			// delivery still uses the same singleton.
+			if (routing.channels) {
+				const bot = resolveBot(botOrGetter);
+				if (!notificationManager) {
+					await initializeNotificationServices(bot);
+				}
+				assertChannelsAvailable(notificationManager, routing);
+			}
 
 			const tokenUsage = new TokenUsageTracker();
 			const enriched = await processEnrichment(alert, { tokenUsage, useTradingViewData, parentSpan: requestSpan });
