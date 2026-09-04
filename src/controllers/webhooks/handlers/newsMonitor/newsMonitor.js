@@ -20,6 +20,7 @@ const {
 	getDeliveredChannels,
 } = require('../../../../services/notification/requestRouting');
 const alertStorageService = require('../../../../services/storage/AlertStorageService');
+const { isNewsMonitorPaused, getNewsMonitorPauseState } = require('./pauseState');
 
 function resolveDryRun(req) {
 	const queryFlag = req.query && (req.query.dryRun === 'true' || req.query.dryRun === true);
@@ -68,6 +69,20 @@ class NewsMonitorHandler {
 				return res.status(403).json({
 					error: 'News monitor feature is disabled. Set ENABLE_NEWS_MONITOR=true to enable.',
 					code: 'FEATURE_DISABLED',
+					requestId,
+				});
+			}
+
+			if (isNewsMonitorPaused()) {
+				const pauseState = getNewsMonitorPauseState();
+				return res.status(503).json({
+					error: pauseState.reason
+						? `News monitor analysis is temporarily paused: ${pauseState.reason}`
+						: 'News monitor analysis is temporarily paused.',
+					code: 'NEWS_MONITOR_PAUSED',
+					paused: true,
+					pausedAt: pauseState.pausedAt,
+					reason: pauseState.reason,
 					requestId,
 				});
 			}

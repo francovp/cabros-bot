@@ -1878,6 +1878,19 @@
                 }
               ],
               "body": "{\n  \"success\": true,\n  \"partial_success\": true,\n  \"results\": [\n    {\n      \"symbol\": \"BTCUSDT\",\n      \"status\": \"error\",\n      \"error\": {\n        \"code\": \"GEMINI_QUOTA_EXHAUSTED\",\n        \"message\": \"429 RESOURCE_EXHAUSTED: quota exceeded\"\n      },\n      \"cached\": false,\n      \"requestId\": \"req-quota123\",\n      \"totalDurationMs\": 0\n    },\n    {\n      \"symbol\": \"ETHUSD\",\n      \"status\": \"analyzed\",\n      \"alert\": null,\n      \"cached\": false,\n      \"requestId\": \"req-quota123\",\n      \"totalDurationMs\": 900\n    }\n  ],\n  \"summary\": {\n    \"total\": 2,\n    \"analyzed\": 1,\n    \"cached\": 0,\n    \"timeout\": 0,\n    \"error\": 1,\n    \"quota_exhausted\": 1,\n    \"alerts_sent\": 0\n  },\n  \"requestedChannels\": [\"telegram\", \"whatsapp\"],\n  \"deliveredChannels\": [],\n  \"totalDurationMs\": 950,\n  \"requestId\": \"req-quota123\",\n  \"tokenUsage\": {}\n}"
+            },
+            {
+              "name": "503 Service Unavailable - News monitor paused",
+              "status": "Service Unavailable",
+              "code": 503,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"News monitor is temporarily paused: Gemini quota exhaustion\",\n  \"code\": \"NEWS_MONITOR_PAUSED\",\n  \"paused\": true,\n  \"pausedAt\": \"2026-09-04T05:00:00.000Z\",\n  \"reason\": \"Gemini quota exhaustion\",\n  \"requestId\": \"req-paused123\"\n}"
             }
           ]
         },
@@ -1962,6 +1975,187 @@
               "code": 200,
               "_postman_previewlanguage": "json",
               "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"results\": [{\n    \"symbol\": \"BTCUSDT\",\n    \"status\": \"analyzed\",\n    \"alert\": {\n      \"eventCategory\": \"price_surge\",\n      \"headline\": \"Bitcoin breaks resistance\"\n    },\n    \"deliveryResults\": [],\n    \"cached\": false\n  }],\n  \"summary\": {\n    \"total\": 1,\n    \"analyzed\": 1,\n    \"cached\": 0,\n    \"timeout\": 0,\n    \"error\": 0,\n    \"quota_exhausted\": 0,\n    \"alerts_sent\": 1\n  },\n  \"requestedChannels\": [\"telegram\", \"whatsapp\", \"discord\"],\n  \"deliveredChannels\": [],\n  \"requestId\": \"req-dryrun123\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST Pause News Monitor",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"Gemini quota exhaustion\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/news-monitor/pause",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "news-monitor",
+                "pause"
+              ]
+            },
+            "description": "Sets the runtime pause toggle for news monitor analysis. Incoming requests return 503 and background sweeps are skipped."
+          },
+          "response": [
+            {
+              "name": "200 OK - News monitor paused",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"message\": \"News monitor analysis paused\",\n  \"paused\": true,\n  \"pausedAt\": \"2026-09-04T05:00:00.000Z\",\n  \"reason\": \"Gemini quota exhaustion\"\n}"
+            },
+            {
+              "name": "401 Unauthorized - Missing API key",
+              "status": "Unauthorized",
+              "code": 401,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"Unauthorized\"\n}"
+            },
+            {
+              "name": "403 Forbidden - Operator role required",
+              "status": "Forbidden",
+              "code": 403,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"Admin operator role required\",\n  \"code\": \"ADMIN_ROLE_REQUIRED\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST Resume News Monitor",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/news-monitor/resume",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "news-monitor",
+                "resume"
+              ]
+            },
+            "description": "Clears the runtime pause toggle, restoring normal news monitor analysis and background scheduler sweeps."
+          },
+          "response": [
+            {
+              "name": "200 OK - News monitor resumed",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"message\": \"News monitor analysis resumed\",\n  \"paused\": false,\n  \"resumedAt\": \"2026-09-04T05:10:00.000Z\",\n  \"wasPaused\": true,\n  \"previouslyPausedAt\": \"2026-09-04T05:00:00.000Z\"\n}"
+            },
+            {
+              "name": "401 Unauthorized - Missing API key",
+              "status": "Unauthorized",
+              "code": 401,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"Unauthorized\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET News Monitor Status",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/news-monitor/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "news-monitor",
+                "status"
+              ]
+            },
+            "description": "Returns current runtime pause status, timestamp, and optional reason."
+          },
+          "response": [
+            {
+              "name": "200 OK - News monitor pause status",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"paused\": false,\n  \"pausedAt\": null,\n  \"reason\": null\n}"
+            },
+            {
+              "name": "401 Unauthorized - Missing API key",
+              "status": "Unauthorized",
+              "code": 401,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"Unauthorized\"\n}"
             }
           ]
         }

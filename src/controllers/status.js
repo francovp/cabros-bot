@@ -22,6 +22,10 @@ const groundingMetrics = require('../services/grounding/metrics');
 const { signalRepeatCooldown } = require('../services/alerts/signalRepeatCooldown');
 const { getCoalescingStatus } = require('../services/grounding/grounding');
 const {
+	isNewsMonitorPaused,
+	getNewsMonitorPauseState,
+} = require('./webhooks/handlers/newsMonitor/pauseState');
+const {
 	getDeploymentCommit,
 	isPreviewEnvironment,
 	isProductionLikeEnvironment,
@@ -330,6 +334,7 @@ function getStatus() {
 			discordAlerts: discordEnabled,
 			geminiGrounding: geminiGroundingEnabled,
 			newsMonitor: newsMonitorEnabled,
+			newsMonitorPaused: isNewsMonitorPaused(),
 			newsMonitorTestMode: newsMonitorTestModeEnabled,
 			tradingViewMcpEnrichment: tradingViewMcpEnrichmentEnabled,
 			tradingViewVolumeConfirmation: tradingViewVolumeConfirmationFlagEnabled,
@@ -391,6 +396,10 @@ function getStatus() {
 			sentry,
 			langfuse,
 			braveSearch,
+			newsMonitor: {
+				enabled: newsMonitorEnabled,
+				...getNewsMonitorPauseState(),
+			},
 			newsMonitorLlm,
 			llmAlertEnrichment,
 			cloudflareAig: dependencyStatus({
