@@ -8,6 +8,7 @@ jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
 	tradingViewMcpService: {
 		callScanTool: jest.fn(),
 		callMultiTimeframeAnalysis: jest.fn(),
+		getStatus: jest.fn(),
 	},
 }));
 
@@ -29,6 +30,7 @@ describe('Market Scanner Alert endpoint', () => {
 		});
 
 		jest.clearAllMocks();
+		tradingViewMcpService.getStatus.mockReset().mockReturnValue(undefined);
 
 		mockTelegramSendMessage = jest.fn().mockResolvedValue({ message_id: 'scan-msg-id' });
 		mockBot = {
@@ -400,6 +402,35 @@ describe('Market Scanner Alert endpoint', () => {
 		expect(mockTelegramSendMessage).not.toHaveBeenCalled();
 	});
 
+	it('fails fast with skipped scans when MCP is degraded', async () => {
+		tradingViewMcpService.getStatus.mockReturnValue({
+			status: 'degraded',
+			lastErrorCategory: 'request_failed',
+		});
+
+		const res = await request(app)
+			.post('/api/webhook/market-scanner-alert')
+			.set('x-api-key', 'test-key')
+			.send({ scans: ['top_gainers', 'top_losers'] })
+			.expect(502);
+
+		expect(res.body.code).toBe('TRADINGVIEW_MCP_UNAVAILABLE');
+		expect(res.body.scanResults).toEqual([
+			{
+				scan: 'top_gainers',
+				status: 'skipped',
+				reason: expect.stringContaining('request_failed'),
+			},
+			{
+				scan: 'top_losers',
+				status: 'skipped',
+				reason: expect.stringContaining('request_failed'),
+			},
+		]);
+		expect(tradingViewMcpService.callScanTool).not.toHaveBeenCalled();
+		expect(mockTelegramSendMessage).not.toHaveBeenCalled();
+	});
+
 	it('returns 504 when the scanner times out', async () => {
 		process.env.MARKET_SCANNER_TIMEOUT_MS = '10';
 
@@ -414,7 +445,7 @@ describe('Market Scanner Alert endpoint', () => {
 						reject(new Error('AbortError'));
 					});
 				}
-			})
+			}),
 		);
 
 		const res = await request(app)

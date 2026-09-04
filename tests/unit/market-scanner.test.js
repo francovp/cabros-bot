@@ -7,6 +7,7 @@ jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
 	tradingViewMcpService: {
 		callScanTool: jest.fn(),
 		callMultiTimeframeAnalysis: jest.fn(),
+		getStatus: jest.fn(),
 	},
 }));
 
@@ -34,6 +35,7 @@ describe('Market Scanner Handler', () => {
 			MARKET_SCANNER_TIMEOUT_MS: '5000',
 		};
 		jest.clearAllMocks();
+		tradingViewMcpService.getStatus.mockReset().mockReturnValue(undefined);
 
 		mockRes = {
 			status: jest.fn().mockReturnThis(),
@@ -133,6 +135,56 @@ describe('Market Scanner Handler', () => {
 					code: 'ALL_SCANS_FAILED',
 				}),
 			);
+		});
+
+		it('fails fast with skipped results when MCP is degraded', async () => {
+			mockReq = {
+				body: {
+					scans: ['top_gainers', 'top_losers'],
+				},
+			};
+			tradingViewMcpService.getStatus.mockReturnValue({
+				status: 'degraded',
+				lastErrorCategory: 'http_5xx',
+			});
+
+			const handler = postMarketScannerAlert(null);
+			await handler(mockReq, mockRes);
+
+			expect(tradingViewMcpService.callScanTool).not.toHaveBeenCalled();
+			expect(mockRes.status).toHaveBeenCalledWith(502);
+			expect(mockRes.json).toHaveBeenCalledWith(expect.objectContaining({
+				success: false,
+				code: 'TRADINGVIEW_MCP_UNAVAILABLE',
+				scanResults: [
+					{
+						scan: 'top_gainers',
+						status: 'skipped',
+						reason: expect.stringContaining('http_5xx'),
+					},
+					{
+						scan: 'top_losers',
+						status: 'skipped',
+						reason: expect.stringContaining('http_5xx'),
+					},
+				],
+			}));
+		});
+
+		it('continues scanning when MCP readiness lookup fails', async () => {
+			mockReq = { body: { scans: ['top_gainers'] } };
+			tradingViewMcpService.getStatus.mockImplementation(() => {
+				throw new Error('readiness unavailable');
+			});
+			tradingViewMcpService.callScanTool.mockResolvedValueOnce([
+				{ symbol: 'BINANCE:BTCUSDT', changePercent: 1.5 },
+			]);
+
+			const handler = postMarketScannerAlert(null);
+			await handler(mockReq, mockRes);
+
+			expect(tradingViewMcpService.callScanTool).toHaveBeenCalledTimes(1);
+			expect(mockRes.status).toHaveBeenCalledWith(200);
 		});
 
 		it('returns 504 if abort signal triggers timeout', async () => {
@@ -352,4 +404,3 @@ describe('Market Scanner Handler', () => {
 		});
 	});
 });
-

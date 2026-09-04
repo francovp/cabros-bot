@@ -956,6 +956,20 @@ Execute multiple market scanner tools on the TradingView MCP server (such as top
 }
 ```
 
+If the process-local TradingView MCP status is `degraded` after an HTTP 5xx or request failure, the endpoint fails fast with `502 TRADINGVIEW_MCP_UNAVAILABLE`. No scanner call is started; each requested scan is returned as `status: "skipped"` with a `reason`. An `unknown` or `ready` status proceeds normally, and readiness lookup failures remain fail-open.
+
+```json
+{
+  "success": false,
+  "code": "TRADINGVIEW_MCP_UNAVAILABLE",
+  "scanResults": [{
+    "scan": "top_gainers",
+    "status": "skipped",
+    "reason": "TradingView MCP is currently unavailable (status: degraded, lastError: http_5xx). Scans skipped."
+  }]
+}
+```
+
 When `ranked` is `true`, each successful scan also includes structured scores:
 
 ```json

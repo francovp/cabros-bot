@@ -252,7 +252,7 @@
             "$ref": "#/components/responses/IdempotencyConflict"
           },
           "502": {
-            "$ref": "#/components/responses/Error"
+            "$ref": "#/components/responses/TradingViewMcpUnavailable"
           },
           "504": {
             "$ref": "#/components/responses/Error"
@@ -2898,6 +2898,29 @@
           "application/json": {
             "schema": {
               "$ref": "#/components/schemas/JsonObject"
+            }
+          }
+        }
+      },
+      "TradingViewMcpUnavailable": {
+        "description": "TradingView MCP was recently degraded by an HTTP or request failure, so scanner calls were skipped without spending their timeout budget.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/JsonObject"
+            },
+            "example": {
+              "success": false,
+              "code": "TRADINGVIEW_MCP_UNAVAILABLE",
+              "error": "TradingView MCP is currently unavailable (status: degraded, lastError: http_5xx). Scans skipped.",
+              "scanResults": [
+                {
+                  "scan": "top_gainers",
+                  "status": "skipped",
+                  "reason": "TradingView MCP is currently unavailable (status: degraded, lastError: http_5xx). Scans skipped."
+                }
+              ],
+              "timedOut": false
             }
           }
         }

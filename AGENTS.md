@@ -1560,3 +1560,15 @@ Binance 451 / `restricted location` errors are now classified as `binance_region
 - `BINANCE_DATA_BASE_URL` — Optional override for all Binance market-data REST calls. Default `https://api.binance.com` (preserves existing behavior when unset). Must be an http(s) URL; live trading also requires `https://`. Classified as **environment-only** for Remote Config parity (external destination; secrets/credentials/external-endpoint policy excludes it).
 
 No endpoint, OpenAPI, Postman, or Remote Config contract changed; the new env var follows the standard `environment-only` classification.
+
+## Market Scanner MCP Readiness Gate (Issue #632)
+
+`POST /api/webhook/market-scanner-alert` reads the process-local TradingView MCP status before starting sequential scans. When the status is `degraded` with `http_5xx` or `request_failed`, it returns `502 TRADINGVIEW_MCP_UNAVAILABLE` immediately and reports every requested scan as `status: "skipped"` with a reason. Unknown/ready states proceed normally, and readiness lookup errors fail open so the scanner retains its existing per-call failure handling.
+
+**Coverage:** `tests/unit/market-scanner.test.js` and `tests/integration/market-scanner-endpoint.test.js` cover fast-fail, skipped results, and fail-open readiness lookup. OpenAPI, Postman, and README document the response variant. No new environment variable or Remote Config key was added.
+
+## Market Scanner MCP Readiness Gate (Issue #632)
+
+`POST /api/webhook/market-scanner-alert` reads the process-local TradingView MCP status before starting sequential scans. When the status is `degraded` with `http_5xx` or `request_failed`, it returns `502 TRADINGVIEW_MCP_UNAVAILABLE` immediately and reports every requested scan as `status: "skipped"` with a reason. Unknown/ready states proceed normally, and readiness lookup errors fail open so the scanner retains its existing per-call failure handling.
+
+**Coverage:** `tests/unit/market-scanner.test.js` and `tests/integration/market-scanner-endpoint.test.js` cover fast-fail, skipped results, and fail-open readiness lookup. OpenAPI, Postman, and README document the response variant. No new environment variable or Remote Config key was added.
