@@ -3,6 +3,8 @@
 const alertStorageService = require('../../services/storage/AlertStorageService');
 const sentryService = require('../../services/monitoring/SentryService');
 const signalOutcomeService = require('../../services/storage/SignalOutcomeService');
+const { tradingViewMcpService } = require('../../services/tradingview/TradingViewMcpService');
+const { getRuntimeConfig } = require('../../services/remoteConfig/RemoteConfigService');
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
@@ -497,6 +499,65 @@ function getIdempotencyKey(req) {
 		|| (req.query && (req.query.idempotencyKey || req.query.idempotency_key));
 }
 
+function parseReEnrichFlag(req) {
+	const rawCandidates = [
+		req.query && req.query.reEnrich,
+		req.query && req.query.re_enrich,
+		req.body && req.body.reEnrich,
+		req.body && req.body.re_enrich,
+	];
+	for (const raw of rawCandidates) {
+		if (raw === undefined || raw === null) {
+			continue;
+		}
+		if (typeof raw === 'boolean') {
+			return raw;
+		}
+		if (typeof raw === 'string') {
+			const trimmed = raw.trim().toLowerCase();
+			if (trimmed === 'true' || trimmed === '1') {
+				return true;
+			}
+			if (trimmed === 'false' || trimmed === '0' || trimmed === '') {
+				return false;
+			}
+			return undefined;
+		}
+		if (typeof raw === 'number') {
+			if (Number.isFinite(raw)) {
+				return raw !== 0;
+			}
+			return undefined;
+		}
+		return undefined;
+	}
+	return false;
+}
+
+async function reEnrichWithTradingView(text, storedAlert) {
+	const runtimeConfig = getRuntimeConfig();
+	const useTradingViewData = storedAlert && storedAlert.useTradingViewData === true;
+	const isTradingViewMcpEnabled = Boolean(runtimeConfig.ENABLE_TRADINGVIEW_MCP_ENRICHMENT && useTradingViewData);
+	if (!isTradingViewMcpEnabled) {
+		return { applied: false, reason: 'tradingview-mcp-disabled', enrichment: null };
+	}
+
+	try {
+		const enriched = await tradingViewMcpService.enrichFromAlertText(text, { useTradingViewData: true });
+		if (!enriched || typeof enriched !== 'object') {
+			return { applied: false, reason: 'mcp-no-data', enrichment: null };
+		}
+		return { applied: true, reason: null, enrichment: enriched };
+	} catch (error) {
+		console.warn(
+			`[AlertsController] Fresh TradingView MCP re-enrichment failed for replay (fail-open): ${
+				error && error.message ? error.message : 'unknown error'
+			}`,
+		);
+		return { applied: false, reason: 'mcp-error', enrichment: null };
+	}
+}
+
 function replayAlert(botOrGetter) {
 	return function handleReplayAlert(req, res) {
 		return handleAsync(req, res, `/api/alerts/${req.params.alertId}/replay`, async () => {
@@ -539,6 +600,15 @@ function replayAlert(botOrGetter) {
 				});
 			}
 
+			const reEnrichRaw = parseReEnrichFlag(req);
+			if (reEnrichRaw === undefined) {
+				return res.status(400).json({
+					error: 'reEnrich must be a boolean (true or false).',
+					code: 'INVALID_REQUEST',
+				});
+			}
+			const reEnrich = reEnrichRaw === true;
+
 			const storedAlert = await alertStorageService.getAlertById(alertId);
 			if (!storedAlert) {
 				return res.status(404).json({
@@ -566,13 +636,32 @@ function replayAlert(botOrGetter) {
 				}
 			}
 
+			const storedEnrichment = storedAlert.enrichmentData && typeof storedAlert.enrichmentData === 'object'
+				? storedAlert.enrichmentData
+				: null;
+
+			let reEnrichedEnrichment = null;
+			let reEnrichApplied = false;
+			let reEnrichReason = null;
+			if (reEnrich) {
+				const outcome = await reEnrichWithTradingView(storedAlert.text, storedAlert);
+				reEnrichedEnrichment = outcome.enrichment;
+				reEnrichApplied = outcome.applied;
+				reEnrichReason = outcome.reason;
+			}
+
+			const effectiveEnrichment = reEnrichApplied && reEnrichedEnrichment
+				? reEnrichedEnrichment
+				: (storedEnrichment || undefined);
+
 			const replayPayload = {
 				text: storedAlert.text,
-				enriched: storedAlert.enrichmentData || undefined,
+				enriched: effectiveEnrichment,
 				source: storedAlert.source || 'alert-replay',
 				replay: {
 					originalAlertId: alertId,
 					idempotencyKey: idempotencyKey.trim(),
+					...(reEnrich ? { reEnrich: true } : {}),
 				},
 				...(storedAlert.telegramChatId ? { telegramChatId: storedAlert.telegramChatId } : {}),
 				...(storedTelegramThreadId !== undefined && storedTelegramThreadId !== null
@@ -587,14 +676,28 @@ function replayAlert(botOrGetter) {
 				idempotencyKey: idempotencyKey.trim(),
 				channels,
 				deliveryResults: results,
+				...(reEnrich ? { reEnrich: true, reEnrichApplied, reEnrichReason } : {}),
+				...(reEnrich ? { originalEnrichment: storedEnrichment } : {}),
+				...(reEnrich ? { reEnriched: reEnrichedEnrichment } : {}),
 			});
 
-			return res.status(200).json({
+			const responseBody = {
 				success: true,
 				alertId,
 				replayId,
 				results,
-			});
+			};
+			if (reEnrich) {
+				responseBody.reEnrich = true;
+				responseBody.reEnrichApplied = reEnrichApplied;
+				if (reEnrichReason) {
+					responseBody.reEnrichReason = reEnrichReason;
+				}
+				responseBody.originalEnrichment = storedEnrichment;
+				responseBody.reEnriched = reEnrichedEnrichment;
+			}
+
+			return res.status(200).json(responseBody);
 		});
 	};
 }

@@ -1341,6 +1341,60 @@ The service caps the queried window at 31 days to keep routine operator usage ch
 
 For rollout validation, first verify the active prompt provenance and coverage in preview, then observe a bounded production/shadow window after aligning the remote `alert-enrichment` prompt with the local optional-risk schema. Treat missing fields as unavailable data; do not use zero coverage as a trading outcome or fabricate stops, targets, setup types, or R:R values.
 
+#### POST /api/alerts/:alertId/replay (with optional `reEnrich`)
+
+`POST /api/alerts/{alertId}/replay` re-delivers a stored alert to the requested notification channels. By default the original stored `enrichmentData` is attached, so the replay redelivers the exact payload that was sent at ingestion time.
+
+Set `reEnrich: true` in the body (or `?reEnrich=true` in the query) to opt in to a fresh TradingView MCP re-analysis of the stored alert text before delivery. The response then carries both the original stored enrichment and the fresh re-enrichment payload for A/B comparison.
+
+- Requires `ENABLE_FIRESTORE_ALERT_STORAGE=true` (returns `403 FEATURE_DISABLED` otherwise) and an `idempotency-key` (or `x-idempotency-key`) header or `idempotencyKey` body field.
+- Requires Firebase `admin.operator` role when using Firebase admin auth, or the legacy `x-api-key`.
+- `reEnrich` is opt-in (default `false`). When the TradingView MCP enrichment gate is disabled, the MCP call errors, or the call returns no data, the controller **fails open** to the stored enrichment and reports `reEnrichApplied: false` with a non-sensitive `reEnrichReason` (`tradingview-mcp-disabled`, `mcp-no-data`, or `mcp-error`).
+- The `reEnrich` flag participates in the idempotency fingerprint: a replay that flips the flag with the same key returns `409 IDEMPOTENCY_CONFLICT`.
+
+**Request body:**
+```json
+{
+  "channels": ["telegram"],
+  "reEnrich": true
+}
+```
+
+**Response (200 OK — fresh MCP applied):**
+```json
+{
+  "success": true,
+  "alertId": "alert-123",
+  "replayId": "alert-123_06bdeddf2a29..._1700000000000_<uuid>",
+  "reEnrich": true,
+  "reEnrichApplied": true,
+  "originalEnrichment": { "sentiment": "bullish", "insights": ["stored insight"] },
+  "reEnriched": {
+    "sentiment": "bullish",
+    "insights": ["fresh insight", "volume confirmed"],
+    "sources": ["https://tradingview-mcp.../mcp"]
+  },
+  "results": [{ "channel": "telegram", "success": true, "messageId": "tg-1" }]
+}
+```
+
+**Response (200 OK — MCP fail-open, stored fallback used):**
+```json
+{
+  "success": true,
+  "alertId": "alert-123",
+  "replayId": "alert-123_06bdeddf2a29..._1700000000000_<uuid>",
+  "reEnrich": true,
+  "reEnrichApplied": false,
+  "reEnrichReason": "mcp-error",
+  "originalEnrichment": { "sentiment": "bullish", "insights": ["stored insight"] },
+  "reEnriched": null,
+  "results": [{ "channel": "telegram", "success": true, "messageId": "tg-1" }]
+}
+```
+
+A non-boolean `reEnrich` value (anything other than `true`/`false`/`"true"`/`"false"`/`"1"`/`"0"`/`""`/a finite number) returns `400 INVALID_REQUEST` so callers learn immediately rather than receiving an unintended behavior.
+
 #### GET /api/alerts/replays
 
 List bounded alert-replay audit records from the Firestore `alertReplays` collection, ordered by `replayedAt` descending. Each `POST /api/alerts/{alertId}/replay` writes a unique audit document so retries with the same idempotency key are preserved as history instead of overwriting prior attempts; the HTTP `Idempotency-Replay` contract remains upstream of storage. Raw idempotency keys are never stored or returned — only a SHA-256 hash prefix is exposed.
