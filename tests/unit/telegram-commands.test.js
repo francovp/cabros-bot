@@ -263,6 +263,7 @@ describe('Telegram TradingView commands', () => {
 			expect(menu).toEqual([
 				{ command: 'precio', description: 'Consulta el precio en Binance o Twelve Data' },
 				{ command: 'cryptobot', description: 'Muestra el Chat ID actual de Telegram' },
+				{ command: 'resolve', description: 'Resuelve un ticker amigable a EXCHANGE:SYMBOL' },
 				{ command: 'analisis', description: 'Crea un análisis técnico en TradingView' },
 				{ command: 'scanner', description: 'Escaneo de mercado en TradingView' },
 				{ command: 'noticias', description: 'Monitor y análisis de noticias con IA' },

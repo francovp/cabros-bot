@@ -21,6 +21,7 @@ const geminiQuotaManager = require('../services/grounding/geminiQuotaManager');
 const groundingMetrics = require('../services/grounding/metrics');
 const { signalRepeatCooldown } = require('../services/alerts/signalRepeatCooldown');
 const { getCoalescingStatus } = require('../services/grounding/grounding');
+const aliasResolver = require('../services/symbols/aliasResolver');
 const {
 	getDeploymentCommit,
 	isPreviewEnvironment,
@@ -357,6 +358,7 @@ function getStatus() {
 			notificationRedrive: notificationRedriveService.isEnabled(),
 			alertSignalRepeatSuppression: signalRepeatCooldown.isEnabled(),
 			whatsappCommands: whatsAppCommandBridgeService.isEnabled(),
+			symbolAliasResolver: aliasResolver.isEnabled(),
 		},
 		deliveryChannels: {
 			telegram: {
@@ -427,6 +429,10 @@ function getStatus() {
 			alertSignalRepeatSuppression: {
 				enabled: signalRepeatCooldown.isEnabled(),
 				...signalRepeatCooldown.getStats(),
+			},
+			symbolAliasResolver: {
+				enabled: aliasResolver.isEnabled(),
+				totalEntries: aliasResolver.listAliases().length,
 			},
 			jobExecutionQueue: jobExecutionQueueStatus,
 			binanceTrading: binanceTradingStatus,

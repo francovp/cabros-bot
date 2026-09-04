@@ -22,6 +22,10 @@ const {
 	postRetryFailedJob,
 } = require('../controllers/webhooks/handlers/jobs/jobs');
 const { listAlerts, getAlertById, replayAlert, summarizeAlerts, exportAlerts, listReplays } = require('../controllers/alerts/alerts');
+const {
+	postResolveSymbol,
+	getAliases,
+} = require('../controllers/webhooks/handlers/symbols/symbols');
 const { listOutcomes, summarizeOutcomes } = require('../controllers/outcomes/outcomes');
 const { validateApiKey } = require('../lib/auth');
 const { getApiStatus } = require('../controllers/status');
@@ -61,6 +65,10 @@ function getRoutes(botOrGetter) {
 	router.put('/scanner-presets/:id', ...adminWrite, updatePreset);
 	router.delete('/scanner-presets/:id', ...adminWrite, deletePreset);
 	router.post('/scanner-presets/:id/run', ...adminWrite, idempotencyMiddleware, postRunPreset(botOrGetter));
+
+	// Symbol alias resolver (issue #845) — operator-only lookup endpoints.
+	router.post('/symbols/resolve', ...adminWrite, postResolveSymbol());
+	router.get('/symbols/aliases', ...adminRead, getAliases());
 
 	// Async job endpoints
 	router.post('/jobs/tradingview-analysis', ...adminWrite, idempotencyMiddleware, postCreateJob(botOrGetter));

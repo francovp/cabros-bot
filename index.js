@@ -14,6 +14,7 @@ const {
 	newsMonitorCmd,
 	helpCmd,
 	outcomesCommand,
+	resolveCmd,
 } = require('./src/controllers/commands');
 const app = require('./app.js');
 const { Telegraf, Markup } = require('telegraf');
@@ -127,6 +128,7 @@ async function bootstrapApplication() {
 		bot.command(['jobs', 'trabajos'], jobsCommand);
 		bot.command(['noticias', 'news'], newsMonitorCmd);
 		bot.command(['outcomes', 'rendimiento'], outcomesCommand);
+		bot.command(['resolve'], resolveCmd);
 		bot.command(['help', 'start'], helpCmd);
 
 		// Attach Telegram error boundary
