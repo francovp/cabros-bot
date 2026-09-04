@@ -5,7 +5,6 @@
  * 003-news-monitor: User Story 1 (endpoint & analysis), User Story 2 (alert delivery)
  */
 
-const { v4: uuidv4 } = require('uuid');
 const { getAnalyzer, setNotificationManager } = require('./analyzer');
 const { getCacheInstance } = require('./cache');
 const { AnalysisStatus } = require('./constants');
@@ -49,8 +48,8 @@ class NewsMonitorHandler {
    * @returns {void}
    */
 	async handleRequest(req, res) {
-		const requestId = uuidv4();
-		const startTime = Date.now();
+		const requestId = (req && req.requestId) || undefined;
+		const startTime = (req && req.startTime) || Date.now();
 		const tokenUsage = new TokenUsageTracker();
 
 		try {
