@@ -2873,7 +2873,7 @@
         }
       },
       "DeliveryResult": {
-        "description": "Per-channel delivery result. When ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION is enabled and the same exchange/symbol/timeframe/side signal fires within its cooldown window, the response includes suppressedRepeat: true with empty results and deliveredChannels while the alert remains persisted with a suppression marker.",
+        "description": "Per-channel delivery result. When the shared alert validator clips input above 4,000 characters, the response includes truncated, originalLength, and deliveredLength so callers can detect the loss. When ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION is enabled and the same exchange/symbol/timeframe/side signal fires within its cooldown window, the response includes suppressedRepeat: true with empty results and deliveredChannels while the alert remains persisted with a suppression marker.",
         "content": {
           "application/json": {
             "schema": {
@@ -2882,6 +2882,9 @@
             "example": {
               "success": true,
               "requestId": "req-123",
+              "truncated": true,
+              "originalLength": 4001,
+              "deliveredLength": 4003,
               "results": [
                 {
                   "channel": "telegram",
@@ -5348,6 +5351,20 @@
         "properties": {
           "success": {
             "type": "boolean"
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "True when the shared alert validator clipped the inbound text above 4,000 characters."
+          },
+          "originalLength": {
+            "type": "integer",
+            "minimum": 4001,
+            "description": "Length of the inbound alert text before validation truncation."
+          },
+          "deliveredLength": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Length of the validated alert text, including the truncation suffix."
           },
           "suppressedRepeat": {
             "type": "boolean",

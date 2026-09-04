@@ -213,11 +213,22 @@ function postAlert(botOrGetter) {
 				alertText = body;
 			}
 
-			const { text } = validateAlert(alertText);
 			const source = (typeof body === 'object' && body && typeof body.source === 'string' && body.source.trim())
 				? body.source.trim()
 				: 'webhook-alert';
-			alert = { text, source };
+			const validatedAlert = validateAlert(alertText);
+			const { text } = validatedAlert;
+			const truncation = validatedAlert && validatedAlert.truncated === true
+				? {
+					truncated: true,
+					originalLength: validatedAlert.originalLength,
+					deliveredLength: validatedAlert.deliveredLength,
+				}
+				: {};
+			if (truncation.truncated) {
+				console.warn('[Alert] Alert text truncated before processing', truncation);
+			}
+			alert = { text, source, ...truncation };
 
 			const tokenUsage = new TokenUsageTracker();
 			const enriched = await processEnrichment(alert, { tokenUsage, useTradingViewData, parentSpan: requestSpan });
@@ -230,6 +241,7 @@ function postAlert(botOrGetter) {
 				return res.json({
 					success: true,
 					dryRun: true,
+					...truncation,
 					enriched,
 					payload: {
 						text: alert.text,
@@ -404,6 +416,7 @@ function postAlert(botOrGetter) {
 			res.json({
 				success: true,
 				results,
+				...truncation,
 				enriched,
 				suppressedRepeat: suppressedRepeat || undefined,
 				tokenUsage: tokenUsageJSON,
@@ -522,7 +535,7 @@ function postAlert(botOrGetter) {
 					textLength: alertText ? alertText.length : 0,
 					hasEnrichment: !!(alert && alert.enriched),
 					enrichedSource: alert && alert.enriched && alert.enriched.extraText && alert.enriched.extraText.includes('tradingview-mcp') ? 'tradingview-mcp' : (alert && alert.enriched ? 'gemini-grounding' : undefined),
-					truncated: false,
+					truncated: Boolean(alert && alert.truncated),
 				},
 			});
 

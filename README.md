@@ -1012,6 +1012,8 @@ BTC price is at $45,000 - breakout detected!
 }
 ```
 
+When the shared validator clips an alert above 4,000 characters, the 200 response also includes `truncated: true`, `originalLength`, and `deliveredLength`. The service logs the truncation and continues processing the validated text.
+
 ### Asynchronous Jobs API
 
 To run long-running technical analysis or market scans without hitting HTTP request limits or gateway timeouts (502/504), you can use the asynchronous jobs API. All endpoints require the `x-api-key` header to be configured.
