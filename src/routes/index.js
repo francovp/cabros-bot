@@ -13,6 +13,7 @@ const {
 } = require('../controllers/webhooks/handlers/scannerPresets/scannerPresets');
 const { postVolumeConfirmation } = require('../controllers/webhooks/handlers/volumeConfirmation/volumeConfirmation');
 const { postSymbolAnalysis } = require('../controllers/webhooks/handlers/symbolAnalysis/symbolAnalysis');
+const { postCanaryAlert } = require('../controllers/webhooks/handlers/canaryAlert/canaryAlert');
 const {
 	postCreateJob,
 	getJobList,
@@ -47,6 +48,7 @@ function getRoutes(botOrGetter) {
 	router.post('/webhook/market-scanner-alert', validateApiKey, idempotencyMiddleware, postMarketScannerAlert(botOrGetter));
 	router.post('/webhook/volume-confirmation', validateApiKey, postVolumeConfirmation());
 	router.post('/webhook/symbol-analysis', validateApiKey, postSymbolAnalysis());
+	router.post('/webhook/canary-alert', validateApiKey, postCanaryAlert(botOrGetter));
 	router.get('/alerts', ...adminRead, listAlerts);
 	router.get('/alerts/replays', ...adminRead, listReplays);
 	router.get('/alerts/summary', ...adminRead, summarizeAlerts);

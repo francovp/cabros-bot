@@ -136,6 +136,7 @@ describe('Status endpoints', () => {
 		});
 		expect(response.body.service).not.toHaveProperty('timestamp');
 		expect(response.body.featureFlags.telegramBot).toBe(true);
+		expect(response.body.featureFlags.canaryAlert).toBe(false);
 		expect(response.body.readiness).toEqual(expect.objectContaining({
 			status: 'pending',
 			ready: false,
@@ -253,6 +254,16 @@ describe('Status endpoints', () => {
 
 		expect(response.status).toBe(200);
 		expect(response.body.featureFlags.tradingViewConfluenceEnrichment).toBe(true);
+	});
+
+	it('reports canaryAlert as true when enabled', async () => {
+		process.env.ENABLE_CANARY_ALERT = 'true';
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.canaryAlert).toBe(true);
 	});
 
 	it('reports scanner presets as ephemeral when no Firestore gate is enabled', async () => {

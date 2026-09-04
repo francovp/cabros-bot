@@ -208,6 +208,7 @@ function getStatus() {
 	const binanceTradingEnabled = isEnabled(process.env.ENABLE_BINANCE_TRADING);
 	const binanceTradingStatus = binanceOrderService.getStatus();
 	const llmAlertEnrichmentEnabled = isEnabled(process.env.ENABLE_LLM_ALERT_ENRICHMENT);
+	const canaryAlertEnabled = Boolean(runtimeConfig.ENABLE_CANARY_ALERT) || isEnabled(process.env.ENABLE_CANARY_ALERT);
 	const cloudflareAigEnabled = isEnabled(process.env.ENABLE_CLOUDFLARE_AIG);
 	const messageFooterMetadataEnabled = runtimeConfig.ENABLE_MESSAGE_FOOTER_METADATA;
 	const remoteConfigStatus = remoteConfigService.getStatus();
@@ -357,6 +358,7 @@ function getStatus() {
 			notificationRedrive: notificationRedriveService.isEnabled(),
 			alertSignalRepeatSuppression: signalRepeatCooldown.isEnabled(),
 			whatsappCommands: whatsAppCommandBridgeService.isEnabled(),
+			canaryAlert: canaryAlertEnabled,
 		},
 		deliveryChannels: {
 			telegram: {
