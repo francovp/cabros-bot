@@ -51,18 +51,20 @@ function handleResearchError(error, res, { requestId, startTime, toolName }) {
 		});
 	}
 
-	if (error.name === 'AbortError' || error.message.includes('timeout') || error.message.includes('aborted')) {
-		console.warn(`[StrategyResearch] ${toolName} timed out:`, error.message);
+	const errorMessage = error && typeof error.message === 'string' ? error.message : '';
+
+	if (error?.name === 'AbortError' || errorMessage.includes('timeout') || errorMessage.includes('aborted')) {
+		console.warn(`[StrategyResearch] ${toolName} timed out:`, errorMessage || 'timeout');
 		return res.status(504).json({
 			success: false,
-			error: `Strategy research call timed out: ${error.message}`,
+			error: `Strategy research call timed out: ${errorMessage || 'operation timed out'}`,
 			code: 'STRATEGY_RESEARCH_TIMEOUT',
 			requestId,
 			processingTimeMs,
 		});
 	}
 
-	if (error.message && (error.message.includes('429') || error.message.toLowerCase().includes('rate limit'))) {
+	if (errorMessage && (errorMessage.includes('429') || errorMessage.toLowerCase().includes('rate limit'))) {
 		console.warn(`[StrategyResearch] ${toolName} upstream rate limit:`, error.message);
 		return res.status(429).json({
 			success: false,

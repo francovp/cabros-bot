@@ -132,8 +132,8 @@ class StrategyResearchStorageService {
 				params: data.params,
 				result: data.result,
 				cached: Boolean(data.cached),
-				createdAt: now.toISOString(),
-				expiresAt: expiresAt.toISOString(),
+				createdAt: admin.firestore?.Timestamp?.fromDate ? admin.firestore.Timestamp.fromDate(now) : now.toISOString(),
+				expiresAt: admin.firestore?.Timestamp?.fromDate ? admin.firestore.Timestamp.fromDate(expiresAt) : expiresAt.toISOString(),
 			};
 
 			const cleanDoc = sanitizeFirestoreData(rawDoc);
