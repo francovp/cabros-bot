@@ -1560,3 +1560,7 @@ Binance 451 / `restricted location` errors are now classified as `binance_region
 - `BINANCE_DATA_BASE_URL` — Optional override for all Binance market-data REST calls. Default `https://api.binance.com` (preserves existing behavior when unset). Must be an http(s) URL; live trading also requires `https://`. Classified as **environment-only** for Remote Config parity (external destination; secrets/credentials/external-endpoint policy excludes it).
 
 No endpoint, OpenAPI, Postman, or Remote Config contract changed; the new env var follows the standard `environment-only` classification.
+
+## Global HTTP Request Timeouts (Issue #609)
+
+The HTTP server applies bounded Node.js timeouts at startup: 10 seconds for headers, 120 seconds for complete requests, and 30 seconds for keep-alive connections. `src/lib/serverTimeouts.js` owns the fixed values and `tests/unit/server-timeouts.test.js` verifies the configuration. No new environment variable, endpoint, OpenAPI, Postman, or Remote Config change was required.

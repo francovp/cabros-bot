@@ -36,6 +36,7 @@ const { scannerPresetSchedulerService } = require('./src/services/scannerPresets
 const { newsMonitorSchedulerService } = require('./src/services/newsMonitorScheduler');
 const sentryService = require('./src/services/monitoring/SentryService');
 const remoteConfigService = require('./src/services/remoteConfig/RemoteConfigService');
+const { configureServerTimeouts } = require('./src/lib/serverTimeouts');
 const Sentry = require('@sentry/node');
 
 const { token, shouldStartTelegramBot } = getTelegramBootstrapConfig();
@@ -161,6 +162,7 @@ async function bootstrapApplication() {
 }
 
 server = app.listen(port, () => {
+	configureServerTimeouts(server);
 	bootstrapPromise = bootstrapApplication();
 	void bootstrapPromise.catch((error) => {
 		bootstrapReadiness.fail(error);
