@@ -194,11 +194,40 @@ async function sendWithNotificationRouting(notificationManager, alert, routing =
 	};
 
 	if (routing.channels) {
+		// Late defensive backstop: fail-fast ordering should have already
+		// validated channel availability before any expensive work ran.
+		// This guard remains so a routing change between parse and delivery
+		// (e.g. an operator toggling a feature flag) still produces a 400
+		// instead of a silent failure.
 		validateNotificationRouting(notificationManager, routing);
 		return notificationManager.sendToChannels(alertPayload, routing.channels, options);
 	}
 
 	return notificationManager.sendToAll(alertPayload, options);
+}
+
+/**
+ * Fail-fast channel availability check for callers that have already parsed
+ * routing and want to short-circuit expensive work (enrichment, MCP scans)
+ * before any provider budget is spent on a request that is guaranteed to fail.
+ *
+ * Only validates when `routing.channels` is explicitly set; legacy requests
+ * without `channels` broadcast to all enabled channels and need no
+ * availability check here.
+ *
+ * Throws `NotificationRoutingValidationError` (statusCode 400) when any
+ * requested channel is disabled or misconfigured. The caller is responsible
+ * for translating that into an HTTP 400 response.
+ *
+ * @param {Object|null} notificationManager - NotificationManager instance
+ * @param {Object} routing - Parsed routing object from parseNotificationRouting
+ * @returns {void}
+ */
+function assertChannelsAvailable(notificationManager, routing = {}) {
+	if (!routing || !routing.channels) {
+		return;
+	}
+	validateNotificationRouting(notificationManager, routing);
 }
 
 function validateNotificationRouting(notificationManager, routing = {}) {
@@ -239,6 +268,7 @@ module.exports = {
 	NotificationRoutingValidationError,
 	parseNotificationRouting,
 	validateNotificationRouting,
+	assertChannelsAvailable,
 	sendWithNotificationRouting,
 	getRequestedChannels,
 	getDeliveredChannels,

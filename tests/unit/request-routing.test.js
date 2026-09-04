@@ -1,6 +1,7 @@
 const {
 	parseNotificationRouting,
 	sendWithNotificationRouting,
+	assertChannelsAvailable,
 	NotificationRoutingValidationError,
 } = require('../../src/services/notification/requestRouting');
 
@@ -149,3 +150,57 @@ describe('requestRouting - telegramThreadId validation', () => {
 	});
 });
 
+describe('requestRouting - assertChannelsAvailable (GH-854 fail-fast)', () => {
+	it('is a no-op when routing.channels is omitted (legacy broadcast)', () => {
+		const notificationManager = {
+			getEnabledChannels: jest.fn().mockReturnValue(['telegram']),
+		};
+
+		expect(() => assertChannelsAvailable(notificationManager, {})).not.toThrow();
+		expect(() => assertChannelsAvailable(notificationManager, { channels: undefined })).not.toThrow();
+		expect(() => assertChannelsAvailable(notificationManager, null)).not.toThrow();
+		// Legacy broadcast does not consult the notification manager
+		expect(notificationManager.getEnabledChannels).not.toHaveBeenCalled();
+	});
+
+	it('is a no-op when every requested channel is enabled', () => {
+		const notificationManager = {
+			getEnabledChannels: jest.fn().mockReturnValue(['telegram', 'whatsapp', 'discord']),
+		};
+
+		expect(() => assertChannelsAvailable(notificationManager, { channels: ['telegram', 'discord'] }))
+			.not.toThrow();
+		expect(notificationManager.getEnabledChannels).toHaveBeenCalledTimes(1);
+	});
+
+	it('throws NotificationRoutingValidationError when a requested channel is disabled', () => {
+		const notificationManager = {
+			getEnabledChannels: jest.fn().mockReturnValue(['telegram']),
+		};
+
+		expect(() => assertChannelsAvailable(notificationManager, { channels: ['whatsapp'] }))
+			.toThrow(NotificationRoutingValidationError);
+		try {
+			assertChannelsAvailable(notificationManager, { channels: ['whatsapp'] });
+		} catch (error) {
+			expect(error).toBeInstanceOf(NotificationRoutingValidationError);
+			expect(error.statusCode).toBe(400);
+			expect(error.message).toContain('Requested channel(s) disabled or misconfigured');
+			expect(error.details).toEqual(expect.objectContaining({ field: 'channels', unavailableChannels: ['whatsapp'] }));
+		}
+	});
+
+	it('lists every unavailable channel when multiple are missing', () => {
+		const notificationManager = {
+			getEnabledChannels: jest.fn().mockReturnValue(['telegram']),
+		};
+
+		expect(() => assertChannelsAvailable(notificationManager, { channels: ['whatsapp', 'discord'] }))
+			.toThrow(/whatsapp.*discord|discord.*whatsapp/);
+	});
+
+	it('tolerates a missing notification manager when routing.channels is absent', () => {
+		expect(() => assertChannelsAvailable(null, {})).not.toThrow();
+		expect(() => assertChannelsAvailable(undefined, { channels: undefined })).not.toThrow();
+	});
+});
