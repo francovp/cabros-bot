@@ -1689,6 +1689,123 @@ describe('AlertStorageService', () => {
 			expect(result.alerts[0]).not.toHaveProperty('truncated');
 			expect(result.alerts[0]).not.toHaveProperty('originalLength');
 		});
+
+		it('projects bounded safe enrichmentData when includeEnrichment is true', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('enriched-alert-1', {
+						receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+						source: 'webhook',
+						enriched: true,
+						useTradingViewData: true,
+						tradingViewEnrichmentApplied: true,
+						tradingViewEnrichmentStatus: 'full',
+						enrichmentData: {
+							sentiment: 'BULLISH',
+							sentiment_score: 0.85,
+							setup_type: 'breakout',
+							invalidation_level: 64200,
+							target_level: 68500,
+							risk_reward_ratio: 2.5,
+							sources: [
+								'https://www.coindesk.com/markets/2026/06/btc-breakout',
+								'https://cointelegraph.com/news/bitcoin-surge',
+								{ url: 'https://news.bitcoin.com/article-1', title: 'BTC analysis' },
+								'invalid-url',
+							],
+							tradingViewEnrichmentApplied: true,
+							tradingViewEnrichmentStatus: 'full',
+							promptProvenance: {
+								name: 'crypto-sentiment',
+								source: 'langfuse',
+								label: 'production',
+								version: 3,
+								schemaDriftDetected: false,
+								extraInternalPromptData: 'secret-prompt-content',
+							},
+							rawProviderResponse: { choices: [{ message: 'full-raw' }] },
+							internalSecret: 'sensitive-value',
+						},
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.exportAlerts({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+				includeEnrichment: true,
+			});
+
+			expect(result.alerts[0]).toHaveProperty('enrichmentData');
+			expect(result.alerts[0].enrichmentData).toEqual({
+				sentiment: 'BULLISH',
+				sentiment_score: 0.85,
+				setup_type: 'breakout',
+				invalidation_level: 64200,
+				target_level: 68500,
+				risk_reward_ratio: 2.5,
+				sourceCount: 4,
+				sourceDomains: ['www.coindesk.com', 'cointelegraph.com', 'news.bitcoin.com'],
+				tradingViewEnrichmentApplied: true,
+				tradingViewEnrichmentStatus: 'full',
+				promptProvenance: {
+					name: 'crypto-sentiment',
+					source: 'langfuse',
+					label: 'production',
+					version: 3,
+					schemaDriftDetected: false,
+				},
+			});
+			expect(result.alerts[0].enrichmentData).not.toHaveProperty('rawProviderResponse');
+			expect(result.alerts[0].enrichmentData).not.toHaveProperty('internalSecret');
+			expect(result.alerts[0].enrichmentData.promptProvenance).not.toHaveProperty('extraInternalPromptData');
+		});
+
+		it('returns enrichmentData: null when includeEnrichment is true but alert has no enrichmentData', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('unenriched-alert-1', {
+						receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+						source: 'webhook',
+						enriched: false,
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.exportAlerts({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+				includeEnrichment: true,
+			});
+
+			expect(result.alerts[0]).toHaveProperty('enrichmentData', null);
+		});
+
+		it('omits enrichmentData entirely when includeEnrichment is false or omitted', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('enriched-alert-default', {
+						receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+						source: 'webhook',
+						enriched: true,
+						enrichmentData: { sentiment: 'BULLISH' },
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.exportAlerts({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+			});
+
+			expect(result.alerts[0]).not.toHaveProperty('enrichmentData');
+		});
 	});
 
 		describe('summarizeAlerts()', () => {

@@ -687,7 +687,111 @@ function truncateAlertText(text) {
 		: text;
 }
 
-function formatExportRecord(doc, { includeText }) {
+function extractSourceDomains(sources) {
+	if (!Array.isArray(sources)) {
+		return [];
+	}
+
+	const domains = new Set();
+	for (const source of sources) {
+		let rawUrl = null;
+		if (typeof source === 'string') {
+			rawUrl = source;
+		} else if (source && typeof source === 'object' && typeof source.url === 'string') {
+			rawUrl = source.url;
+		}
+
+		if (rawUrl) {
+			try {
+				const { hostname } = new URL(rawUrl);
+				if (hostname) {
+					domains.add(hostname.toLowerCase().substring(0, 100));
+				}
+			} catch {
+				// Non-URL strings or invalid URLs are safely ignored
+			}
+		}
+	}
+
+	return Array.from(domains).slice(0, 10);
+}
+
+function formatExportEnrichmentData(enrichmentData, docData = {}) {
+	if (!enrichmentData || typeof enrichmentData !== 'object' || Array.isArray(enrichmentData)) {
+		return null;
+	}
+
+	const sentiment = typeof enrichmentData.sentiment === 'string' && enrichmentData.sentiment.trim()
+		? enrichmentData.sentiment.trim().substring(0, 32)
+		: null;
+
+	const sentimentScore = typeof enrichmentData.sentiment_score === 'number' && Number.isFinite(enrichmentData.sentiment_score)
+		? enrichmentData.sentiment_score
+		: (typeof enrichmentData.sentimentScore === 'number' && Number.isFinite(enrichmentData.sentimentScore)
+			? enrichmentData.sentimentScore
+			: null);
+
+	const setupType = typeof enrichmentData.setup_type === 'string' && enrichmentData.setup_type.trim()
+		? enrichmentData.setup_type.trim().substring(0, 64)
+		: (typeof enrichmentData.setupType === 'string' && enrichmentData.setupType.trim()
+			? enrichmentData.setupType.trim().substring(0, 64)
+			: null);
+
+	let invalidationLevel = null;
+	const rawInvalidation = enrichmentData.invalidation_level !== undefined ? enrichmentData.invalidation_level : enrichmentData.invalidationLevel;
+	if (typeof rawInvalidation === 'number' && Number.isFinite(rawInvalidation)) {
+		invalidationLevel = rawInvalidation;
+	} else if (typeof rawInvalidation === 'string' && rawInvalidation.trim()) {
+		invalidationLevel = rawInvalidation.trim().substring(0, 32);
+	}
+
+	let targetLevel = null;
+	const rawTarget = enrichmentData.target_level !== undefined ? enrichmentData.target_level : enrichmentData.targetLevel;
+	if (typeof rawTarget === 'number' && Number.isFinite(rawTarget)) {
+		targetLevel = rawTarget;
+	} else if (typeof rawTarget === 'string' && rawTarget.trim()) {
+		targetLevel = rawTarget.trim().substring(0, 32);
+	}
+
+	let riskRewardRatio = null;
+	const rawRrr = enrichmentData.risk_reward_ratio !== undefined ? enrichmentData.risk_reward_ratio : enrichmentData.riskRewardRatio;
+	if (typeof rawRrr === 'number' && Number.isFinite(rawRrr)) {
+		riskRewardRatio = rawRrr;
+	} else if (typeof rawRrr === 'string' && rawRrr.trim() && Number.isFinite(Number(rawRrr))) {
+		riskRewardRatio = Number(rawRrr);
+	}
+
+	const sourceCount = getSourceCount(enrichmentData);
+	const sourceDomains = extractSourceDomains(enrichmentData.sources);
+
+	const tradingViewEnrichmentApplied = enrichmentData.tradingViewEnrichmentApplied !== undefined
+		? Boolean(enrichmentData.tradingViewEnrichmentApplied)
+		: Boolean(docData.tradingViewEnrichmentApplied);
+
+	const tradingViewEnrichmentStatus = VALID_TRADINGVIEW_ENRICHMENT_STATUSES.has(enrichmentData.tradingViewEnrichmentStatus)
+		? enrichmentData.tradingViewEnrichmentStatus
+		: (VALID_TRADINGVIEW_ENRICHMENT_STATUSES.has(docData.tradingViewEnrichmentStatus)
+			? docData.tradingViewEnrichmentStatus
+			: null);
+
+	const promptProvenance = normalizePromptProvenance(enrichmentData.promptProvenance);
+
+	return {
+		sentiment,
+		sentiment_score: sentimentScore,
+		setup_type: setupType,
+		invalidation_level: invalidationLevel,
+		target_level: targetLevel,
+		risk_reward_ratio: riskRewardRatio,
+		sourceCount,
+		sourceDomains,
+		tradingViewEnrichmentApplied,
+		tradingViewEnrichmentStatus,
+		promptProvenance,
+	};
+}
+
+function formatExportRecord(doc, { includeText, includeEnrichment } = {}) {
 	const data = doc.data() || {};
 	const record = {
 		id: doc.id,
@@ -716,6 +820,10 @@ function formatExportRecord(doc, { includeText }) {
 	}
 	if (typeof data.dedupStatus === 'string') {
 		record.dedupStatus = data.dedupStatus;
+	}
+
+	if (includeEnrichment) {
+		record.enrichmentData = formatExportEnrichmentData(data.enrichmentData, data);
 	}
 
 	if (includeText) {
@@ -1516,9 +1624,10 @@ async function getLatestReplayForAlert(alertId) {
  * @param {string|undefined} params.source Optional exact source filter
  * @param {boolean|undefined} params.enriched Optional enriched/plain filter
  * @param {boolean|undefined} params.includeText Include truncated alert text when true
+ * @param {boolean|undefined} params.includeEnrichment Include bounded enrichmentData when true
  * @returns {Promise<{window: Object, alerts: Array}>}
  */
-async function exportAlerts({ from, to, limit, source, enriched, includeText = false } = {}) {
+async function exportAlerts({ from, to, limit, source, enriched, includeText = false, includeEnrichment = false } = {}) {
 	if (!isEnabled()) {
 		return null;
 	}
@@ -1579,7 +1688,7 @@ async function exportAlerts({ from, to, limit, source, enriched, includeText = f
 		}
 	}
 
-	const alerts = docs.map(doc => formatExportRecord(doc, { includeText }));
+	const alerts = docs.map(doc => formatExportRecord(doc, { includeText, includeEnrichment }));
 
 	return {
 		window,
