@@ -263,6 +263,7 @@ async function analyzeNewsForSymbol(symbol, context, options = {}) {
 			headline: 'Test Event: Positive Market Movement',
 			description: 'This is a test event analysis for news monitoring.',
 			confidence: 0.9,
+			promptVersion: 'test-v1',
 			sources: [
 				{ title: 'Test Source 1', snippet: 'This is a test snippet.', url: 'https://example.com/test1', sourceDomain: 'example.com' },
 				{ title: 'Test Source 2', snippet: 'This is another test snippet.', url: 'https://example.com/test2', sourceDomain: 'example.com' },
@@ -355,6 +356,11 @@ async function analyzeNewsForSymbol(symbol, context, options = {}) {
 		analysisResult.confidence_reason = confidence_reason;
 		if (calibration) {
 			analysisResult.calibration = calibration;
+		}
+		if (prompt && prompt.metadata && prompt.metadata.version != null) {
+			analysisResult.promptVersion = String(prompt.metadata.version);
+		} else if (prompt && prompt.version != null) {
+			analysisResult.promptVersion = String(prompt.version);
 		}
 
 		console.info('[Gemini] News analysis complete with grounding', {

@@ -20,6 +20,7 @@ const {
 	getDeliveredChannels,
 } = require('../../../../services/notification/requestRouting');
 const alertStorageService = require('../../../../services/storage/AlertStorageService');
+const newsAnalysisStorageService = require('../../../../services/storage/NewsAnalysisStorageService');
 
 function resolveDryRun(req) {
 	const queryFlag = req.query && (req.query.dryRun === 'true' || req.query.dryRun === true);
@@ -139,7 +140,7 @@ class NewsMonitorHandler {
 			// the public contract.
 			const analysisResults = results;
 			const responseResults = (results || []).map(
-				({ attemptedDeliveryResults, originalPersistedState, ...publicResult }) => publicResult,
+				({ attemptedDeliveryResults, originalPersistedState, analysisRecord, ...publicResult }) => publicResult,
 			);
 			const response = {
 				success: summary.analyzed > 0 || summary.cached > 0,
@@ -248,6 +249,23 @@ class NewsMonitorHandler {
 						}
 						console.warn('[NewsMonitor] Failed to persist alert to storage:', err.message);
 					});
+				}
+			}
+
+			// Fire-and-forget: persist analysis results to Firestore
+			if (!dryRun && newsAnalysisStorageService.isEnabled()) {
+				const recordsToPersist = [];
+				for (const result of analysisResults || []) {
+					if (!result || result.status !== AnalysisStatus.ANALYZED) {
+						continue;
+					}
+					if (result.analysisRecord) {
+						recordsToPersist.push(result.analysisRecord);
+					}
+				}
+				if (recordsToPersist.length > 0) {
+					newsAnalysisStorageService.recordAnalyses(recordsToPersist)
+						.catch((err) => console.warn('[NewsMonitor] Failed to persist news analysis to storage:', err.message));
 				}
 			}
 
@@ -423,6 +441,181 @@ class NewsMonitorHandler {
 		}
 
 		return summary;
+	}
+
+	/**
+	 * Handle GET /api/news-monitor/summary
+	 */
+	async handleSummary(req, res) {
+		try {
+			if (!newsAnalysisStorageService.isEnabled()) {
+				return res.status(403).json({
+					error: 'News analysis storage feature is disabled. Set ENABLE_FIRESTORE_NEWS_ANALYSIS=true to enable.',
+					code: 'FEATURE_DISABLED',
+				});
+			}
+
+			const { from, to, limit, symbol, threshold } = req.query || {};
+
+			let parsedFrom;
+			if (from !== undefined) {
+				if (typeof from !== 'string' || !from.trim() || Number.isNaN(Date.parse(from))) {
+					return res.status(400).json({
+						error: 'Invalid from timestamp. Use an ISO-8601 timestamp.',
+						code: 'INVALID_REQUEST',
+					});
+				}
+				parsedFrom = new Date(from).toISOString();
+			}
+
+			let parsedTo;
+			if (to !== undefined) {
+				if (typeof to !== 'string' || !to.trim() || Number.isNaN(Date.parse(to))) {
+					return res.status(400).json({
+						error: 'Invalid to timestamp. Use an ISO-8601 timestamp.',
+						code: 'INVALID_REQUEST',
+					});
+				}
+				parsedTo = new Date(to).toISOString();
+			}
+
+			let parsedLimit = 500;
+			if (limit !== undefined) {
+				const n = Number(limit);
+				if (!Number.isInteger(n) || n < 1 || n > 1000) {
+					return res.status(400).json({
+						error: 'Invalid limit. Use an integer between 1 and 1000.',
+						code: 'INVALID_REQUEST',
+					});
+				}
+				parsedLimit = n;
+			}
+
+			let parsedThreshold = 0.7;
+			if (threshold !== undefined) {
+				const th = Number(threshold);
+				if (!Number.isFinite(th) || th < 0 || th > 1) {
+					return res.status(400).json({
+						error: 'Invalid threshold. Use a number between 0 and 1.',
+						code: 'INVALID_REQUEST',
+					});
+				}
+				parsedThreshold = th;
+			}
+
+			const parsedSymbol = typeof symbol === 'string' && symbol.trim() ? symbol.trim().toUpperCase() : undefined;
+
+			const summary = await newsAnalysisStorageService.summarizeAnalyses({
+				from: parsedFrom,
+				to: parsedTo,
+				limit: parsedLimit,
+				symbol: parsedSymbol,
+				threshold: parsedThreshold,
+			});
+
+			return res.status(200).json(summary);
+		} catch (error) {
+			if (error && error.code === 'FEATURE_DISABLED') {
+				return res.status(403).json({
+					error: error.message,
+					code: 'FEATURE_DISABLED',
+				});
+			}
+			if (error && error.code === 'STORAGE_UNAVAILABLE') {
+				return res.status(503).json({
+					error: error.message,
+					code: 'STORAGE_UNAVAILABLE',
+				});
+			}
+			console.error('[NewsMonitor] Error in handleSummary:', error);
+			return res.status(500).json({
+				error: 'Internal server error while summarizing news analyses.',
+				code: 'INTERNAL_ERROR',
+			});
+		}
+	}
+
+	/**
+	 * Handle GET /api/news-monitor/analyses
+	 */
+	async handleListAnalyses(req, res) {
+		try {
+			if (!newsAnalysisStorageService.isEnabled()) {
+				return res.status(403).json({
+					error: 'News analysis storage feature is disabled. Set ENABLE_FIRESTORE_NEWS_ANALYSIS=true to enable.',
+					code: 'FEATURE_DISABLED',
+				});
+			}
+
+			const { from, to, limit, symbol, eventCategory, beforeCursor } = req.query || {};
+
+			let parsedFrom;
+			if (from !== undefined) {
+				if (typeof from !== 'string' || !from.trim() || Number.isNaN(Date.parse(from))) {
+					return res.status(400).json({
+						error: 'Invalid from timestamp. Use an ISO-8601 timestamp.',
+						code: 'INVALID_REQUEST',
+					});
+				}
+				parsedFrom = new Date(from).toISOString();
+			}
+
+			let parsedTo;
+			if (to !== undefined) {
+				if (typeof to !== 'string' || !to.trim() || Number.isNaN(Date.parse(to))) {
+					return res.status(400).json({
+						error: 'Invalid to timestamp. Use an ISO-8601 timestamp.',
+						code: 'INVALID_REQUEST',
+					});
+				}
+				parsedTo = new Date(to).toISOString();
+			}
+
+			let parsedLimit = 50;
+			if (limit !== undefined) {
+				const n = Number(limit);
+				if (!Number.isInteger(n) || n < 1 || n > 100) {
+					return res.status(400).json({
+						error: 'Invalid limit. Use an integer between 1 and 100.',
+						code: 'INVALID_REQUEST',
+					});
+				}
+				parsedLimit = n;
+			}
+
+			const parsedSymbol = typeof symbol === 'string' && symbol.trim() ? symbol.trim().toUpperCase() : undefined;
+			const parsedCategory = typeof eventCategory === 'string' && eventCategory.trim() ? eventCategory.trim().toLowerCase() : undefined;
+			const parsedCursor = typeof beforeCursor === 'string' && beforeCursor.trim() ? beforeCursor.trim() : undefined;
+
+			const result = await newsAnalysisStorageService.listAnalyses({
+				from: parsedFrom,
+				to: parsedTo,
+				limit: parsedLimit,
+				symbol: parsedSymbol,
+				eventCategory: parsedCategory,
+				beforeCursor: parsedCursor,
+			});
+
+			return res.status(200).json(result);
+		} catch (error) {
+			if (error && error.code === 'FEATURE_DISABLED') {
+				return res.status(403).json({
+					error: error.message,
+					code: 'FEATURE_DISABLED',
+				});
+			}
+			if (error && error.code === 'STORAGE_UNAVAILABLE') {
+				return res.status(503).json({
+					error: error.message,
+					code: 'STORAGE_UNAVAILABLE',
+				});
+			}
+			console.error('[NewsMonitor] Error in handleListAnalyses:', error);
+			return res.status(500).json({
+				error: 'Internal server error while listing news analyses.',
+				code: 'INTERNAL_ERROR',
+			});
+		}
 	}
 }
 

@@ -2008,6 +2008,142 @@
               "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"results\": [{\n    \"symbol\": \"BTCUSDT\",\n    \"status\": \"analyzed\",\n    \"alert\": {\n      \"eventCategory\": \"price_surge\",\n      \"headline\": \"Bitcoin breaks resistance\"\n    },\n    \"deliveryResults\": [],\n    \"cached\": false\n  }],\n  \"summary\": {\n    \"total\": 1,\n    \"analyzed\": 1,\n    \"cached\": 0,\n    \"timeout\": 0,\n    \"error\": 0,\n    \"quota_exhausted\": 0,\n    \"alerts_sent\": 1\n  },\n  \"requestedChannels\": [\"telegram\", \"whatsapp\", \"discord\"],\n  \"deliveredChannels\": [],\n  \"requestId\": \"req-dryrun123\"\n}"
             }
           ]
+        },
+        {
+          "name": "GET News Monitor Summary",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/news-monitor/summary?limit=500&threshold=0.7",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "news-monitor",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "500",
+                  "description": "Max analyses to scan (1-1000, default: 500)"
+                },
+                {
+                  "key": "threshold",
+                  "value": "0.7",
+                  "description": "Confidence threshold (0-1, default: 0.7)"
+                },
+                {
+                  "key": "symbol",
+                  "value": "BTCUSDT",
+                  "disabled": true,
+                  "description": "Optional symbol filter"
+                },
+                {
+                  "key": "from",
+                  "value": "2026-08-01T00:00:00.000Z",
+                  "disabled": true,
+                  "description": "ISO-8601 start timestamp"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-09-01T00:00:00.000Z",
+                  "disabled": true,
+                  "description": "ISO-8601 end timestamp"
+                }
+              ]
+            },
+            "description": "Retrieves aggregated statistics and false-positive tracking metrics for news-monitor analyses."
+          },
+          "response": [
+            {
+              "name": "200 OK - News Monitor Summary",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"success\": true,\n  \"totalAnalyses\": 50,\n  \"totalAlertsSent\": 10,\n  \"alertRatePercent\": 20,\n  \"bySymbol\": {\n    \"BTCUSDT\": {\n      \"count\": 25,\n      \"alertsSent\": 6,\n      \"alertRatePercent\": 24,\n      \"avgConfidence\": 0.78\n    }\n  },\n  \"byEventCategory\": {\n    \"price_surge\": {\n      \"count\": 15,\n      \"alertsSent\": 8\n    }\n  },\n  \"falsePositiveProxy\": {\n    \"totalHighConfidenceAlerts\": 10,\n    \"falsePositiveAlerts\": 1,\n    \"falsePositiveRatePercent\": 10,\n    \"description\": \"Measures high-confidence alerts that were followed within 24h by neutral/low-confidence analyses for the same symbol\"\n  },\n  \"window\": {\n    \"from\": null,\n    \"to\": null,\n    \"limit\": 500,\n    \"threshold\": 0.7,\n    \"symbol\": null\n  }\n}"
+            },
+            {
+              "name": "403 Forbidden - Feature disabled",
+              "status": "Forbidden",
+              "code": 403,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"error\": \"Firestore news analysis storage is not enabled\",\n  \"code\": \"FEATURE_DISABLED\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET List News Analyses",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/news-monitor/analyses?limit=50&symbol=BTCUSDT",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "news-monitor",
+                "analyses"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "50",
+                  "description": "Page size (1-100, default: 50)"
+                },
+                {
+                  "key": "symbol",
+                  "value": "BTCUSDT",
+                  "description": "Filter by trading symbol"
+                },
+                {
+                  "key": "eventCategory",
+                  "value": "price_surge",
+                  "disabled": true,
+                  "description": "Filter by event category"
+                },
+                {
+                  "key": "before",
+                  "value": "2026-09-04T22:00:00.000Z",
+                  "disabled": true,
+                  "description": "Pagination cursor from nextCursor"
+                }
+              ]
+            },
+            "description": "Queries paginated raw news analysis records from Firestore storage."
+          },
+          "response": [
+            {
+              "name": "200 OK - News Analyses List",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"success\": true,\n  \"analyses\": [\n    {\n      \"id\": \"news-analysis-123\",\n      \"symbol\": \"BTCUSDT\",\n      \"eventCategory\": \"price_surge\",\n      \"sentiment\": 0.8,\n      \"confidence\": 0.85,\n      \"headline\": \"Bitcoin surges past 70k resistance\",\n      \"alertSent\": true,\n      \"promptVersion\": \"v1.0.0\",\n      \"tokens\": {\n        \"inputTokens\": 120,\n        \"outputTokens\": 60,\n        \"totalTokens\": 180\n      },\n      \"analyzedAt\": \"2026-09-04T23:00:00.000Z\",\n      \"createdAt\": \"2026-09-04T23:00:00.000Z\"\n    }\n  ],\n  \"count\": 1,\n  \"limit\": 50,\n  \"nextCursor\": null\n}"
+            },
+            {
+              "name": "403 Forbidden - Feature disabled",
+              "status": "Forbidden",
+              "code": 403,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"error\": \"Firestore news analysis storage is not enabled\",\n  \"code\": \"FEATURE_DISABLED\"\n}"
+            }
+          ]
         }
       ]
     },
