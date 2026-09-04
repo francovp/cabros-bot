@@ -45,8 +45,8 @@ function getRoutes(botOrGetter) {
 	router.post('/webhook/message', validateApiKey, idempotencyMiddleware, postMessage(botOrGetter));
 	router.post('/webhook/expanded-analysis-alert', validateApiKey, idempotencyMiddleware, postExpandedAnalysisAlert(botOrGetter));
 	router.post('/webhook/market-scanner-alert', validateApiKey, idempotencyMiddleware, postMarketScannerAlert(botOrGetter));
-	router.post('/webhook/volume-confirmation', validateApiKey, postVolumeConfirmation());
-	router.post('/webhook/symbol-analysis', validateApiKey, postSymbolAnalysis());
+	router.post('/webhook/volume-confirmation', validateApiKey, idempotencyMiddleware, postVolumeConfirmation());
+	router.post('/webhook/symbol-analysis', validateApiKey, idempotencyMiddleware, postSymbolAnalysis());
 	router.get('/alerts', ...adminRead, listAlerts);
 	router.get('/alerts/replays', ...adminRead, listReplays);
 	router.get('/alerts/summary', ...adminRead, summarizeAlerts);
