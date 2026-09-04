@@ -3793,6 +3793,112 @@
               "body": "{\n  \"error\": \"Invalid limit. Use an integer between 1 and 100.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
             }
           ]
+        },
+        {
+          "name": "GET Summarize Signal Outcomes (groupBy=setupType)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Groups signal outcomes by setupType, returning per-setup buckets with hit-rate/expectancyR and a low/medium/high confidence label based on bucket size.",
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes/summary?groupBy=setupType&limit=100",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "groupBy",
+                  "value": "setupType"
+                },
+                {
+                  "key": "limit",
+                  "value": "100"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 Grouped Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"summary\": {\n    \"available\": true,\n    \"totalSignalsReceived\": 120,\n    \"totalSignalsEvaluated\": 105,\n    \"coveragePercent\": 87.5,\n    \"buckets\": [\n      {\n        \"groupKey\": { \"setupType\": \"breakout\" },\n        \"count\": 70,\n        \"evaluatedCount\": 60,\n        \"coveragePercent\": 85.71,\n        \"confidence\": \"low\",\n        \"targetHitRatePercent\": 65,\n        \"stopHitRatePercent\": 22,\n        \"expectancyR\": 0.92,\n        \"hitRatePercent\": 58,\n        \"targetEligibleWindows\": 55,\n        \"stopEligibleWindows\": 55,\n        \"populationNote\": null\n      },\n      {\n        \"groupKey\": { \"setupType\": \"reversal\" },\n        \"count\": 50,\n        \"evaluatedCount\": 45,\n        \"coveragePercent\": 90,\n        \"confidence\": \"low\",\n        \"targetHitRatePercent\": 42,\n        \"stopHitRatePercent\": 35,\n        \"expectancyR\": 0.18,\n        \"hitRatePercent\": 45,\n        \"targetEligibleWindows\": 42,\n        \"stopEligibleWindows\": 42,\n        \"populationNote\": null\n      }\n    ]\n  }\n}"
+            },
+            {
+              "name": "400 Invalid groupBy",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"Invalid groupBy. Provide one or two axes from: setupType, timeframe, exchange, window.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Summarize Signal Outcomes (groupBy=setupType&groupBy=timeframe, compare=last7d)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "2D groupBy (setupType x timeframe) with compare=last7d to surface per-bucket delta against the previous 7 days. Note that compare is mutually exclusive with from/to.",
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes/summary?groupBy=setupType&groupBy=timeframe&compare=last7d&limit=100",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "groupBy",
+                  "value": "setupType"
+                },
+                {
+                  "key": "groupBy",
+                  "value": "timeframe"
+                },
+                {
+                  "key": "compare",
+                  "value": "last7d"
+                },
+                {
+                  "key": "limit",
+                  "value": "100"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 2D Grouped With Delta",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"summary\": {\n    \"available\": true,\n    \"totalSignalsReceived\": 80,\n    \"totalSignalsEvaluated\": 70,\n    \"coveragePercent\": 87.5,\n    \"comparisonWindow\": {\n      \"current\": { \"from\": \"2026-08-27T00:00:00.000Z\", \"to\": \"2026-09-03T00:00:00.000Z\", \"durationMs\": 604800000 },\n      \"baseline\": { \"from\": \"2026-08-20T00:00:00.000Z\", \"to\": \"2026-08-27T00:00:00.000Z\", \"durationMs\": 604800000 }\n    },\n    \"buckets\": [\n      {\n        \"groupKey\": { \"setupType\": \"breakout\", \"timeframe\": \"4h\" },\n        \"count\": 30,\n        \"evaluatedCount\": 28,\n        \"coveragePercent\": 93.33,\n        \"confidence\": \"low\",\n        \"targetHitRatePercent\": 70,\n        \"stopHitRatePercent\": 18,\n        \"expectancyR\": 1.1,\n        \"hitRatePercent\": 64,\n        \"targetEligibleWindows\": 25,\n        \"stopEligibleWindows\": 25,\n        \"populationNote\": null,\n        \"delta\": {\n          \"count\": 5,\n          \"targetHitRatePercent\": 3.5,\n          \"stopHitRatePercent\": -2,\n          \"expectancyR\": 0.15\n        }\n      }\n    ]\n  }\n}"
+            },
+            {
+              "name": "400 Mutually Exclusive compare and from/to",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"compare=last7d cannot be combined with from/to filters; pick one or the other so the baseline window stays unambiguous.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
         }
       ]
     },
