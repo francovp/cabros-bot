@@ -192,6 +192,32 @@ function getChannelName(identity) {
 	return String(identity).split(':', 1)[0];
 }
 
+// GH-599 / CB-XXX: extracts the Gemini-grounding-sourced entry price when MCP
+// is absent. Only uses the top-level `current_price` field on alert.enriched,
+// which is sourced from grounding snippets by parseEnrichedAlertResponse. Any
+// other enrichment field (price_data, levelsSource-derived quotes, etc.) MUST
+// stay on the existing MCP / derived-quote / Binance paths.
+function extractGeminiGroundingPrice(enriched) {
+	if (!enriched || typeof enriched !== 'object') {
+		return null;
+	}
+
+	const value = enriched.current_price;
+	if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+		return null;
+	}
+
+	if (enriched.tradingViewEnrichmentApplied === true) {
+		return null;
+	}
+
+	if (enriched.levelsSource === 'derived-quote' || enriched.levelsSource === 'tradingview-mcp') {
+		return null;
+	}
+
+	return value;
+}
+
 function postAlert(botOrGetter) {
 	return async (req, res) => {
 		const requestId = resolveRequestId(req);
@@ -426,6 +452,11 @@ function postAlert(botOrGetter) {
 				}
 			}
 
+			// GH-599 / CB-XXX: parse the TradingView signal up-front so both the
+			// stored alert (deterministic R:R needs `side`) and the signal-outcome
+			// record can share the same parsed object.
+			const parsedSignal = parseTradingViewSignal(alert.text);
+
 			// Fire-and-forget: persist alert to Firestore after responding to the caller.
 			// Errors are caught inside saveAlert — delivery is never blocked by storage.
 			alertStorageService.saveAlert({
@@ -448,15 +479,18 @@ function postAlert(botOrGetter) {
 				telegramThreadId: routing.telegramThreadId,
 				whatsappChatId: routing.whatsappChatId,
 				discordWebhookUrl: routing.discordWebhookUrl,
+				side: parsedSignal ? parsedSignal.side : null,
 			}).catch(() => {}); // errors already logged inside AlertStorageService
 
-			if (signalOutcomeService.isEnabled() && !suppressedRepeat) {
-				const { parseTradingViewSignal } = require('../../../../services/tradingview/parseTradingViewSignal');
-				const parsed = parseTradingViewSignal(alert.text);
-				if (parsed) {
-					const mcpPrice = (alert.enriched && typeof alert.enriched.current_price === 'number' && Number.isFinite(alert.enriched.current_price) && alert.enriched.current_price > 0)
+			if (signalOutcomeService.isEnabled() && !suppressedRepeat && parsedSignal) {
+				const parsed = parsedSignal;
+				{
+					const enrichedMcpApplied = Boolean(alert.enriched && alert.enriched.tradingViewEnrichmentApplied === true);
+					const levelsSource = alert.enriched && alert.enriched.levelsSource;
+					const structuredPriceAvailable = enrichedMcpApplied || levelsSource === 'derived-quote';
+					const mcpPrice = (alert.enriched && typeof alert.enriched.current_price === 'number' && Number.isFinite(alert.enriched.current_price) && alert.enriched.current_price > 0 && structuredPriceAvailable)
 						? alert.enriched.current_price
-						: (alert.enriched && alert.enriched.price_data && typeof alert.enriched.price_data.current_price === 'number' && Number.isFinite(alert.enriched.price_data.current_price) && alert.enriched.price_data.current_price > 0)
+						: (alert.enriched && alert.enriched.price_data && typeof alert.enriched.price_data.current_price === 'number' && Number.isFinite(alert.enriched.price_data.current_price) && alert.enriched.price_data.current_price > 0 && structuredPriceAvailable)
 							? alert.enriched.price_data.current_price
 							: null;
 
@@ -472,10 +506,16 @@ function postAlert(botOrGetter) {
 							? Number(alert.enriched.target_level)
 							: null);
 
-					const levelsSource = alert.enriched && alert.enriched.levelsSource;
+					// GH-599 / CB-XXX: a Gemini-grounding-sourced price (alert.enriched.current_price
+					// sourced from grounded snippets, NOT MCP-derived) is a valid entry price for
+					// outcome eligibility. Treat it as a last-resort fallback after MCP and price_data.
+					const geminiGroundingPrice = mcpPrice !== null
+						? null
+						: extractGeminiGroundingPrice(alert.enriched);
+					const effectivePrice = mcpPrice !== null ? mcpPrice : geminiGroundingPrice;
 					const priceSource = mcpPrice !== null
 						? (levelsSource === 'derived-quote' ? 'derived-quote' : (levelsSource === 'gemini-grounding' ? 'gemini-grounding' : 'tradingview-mcp'))
-						: null;
+						: (geminiGroundingPrice !== null ? 'gemini-grounding' : null);
 
 					signalOutcomeService.recordSignal({
 						requestId,
@@ -486,7 +526,7 @@ function postAlert(botOrGetter) {
 						setupType: (alert.enriched && alert.enriched.setup_type) || 'tradingview-enrichment',
 						score: alert.enriched ? alert.enriched.sentiment_score : null,
 						side: parsed.side,
-						price: mcpPrice,
+						price: effectivePrice,
 						stop: stopLevel,
 						target: targetLevel,
 						priceSource,

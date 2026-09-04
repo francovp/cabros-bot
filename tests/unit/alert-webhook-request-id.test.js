@@ -24,8 +24,10 @@ jest.mock('../../src/services/notification/TelegramService', () => jest.fn());
 jest.mock('../../src/services/notification/WhatsAppService', () => jest.fn());
 jest.mock('../../src/services/notification/DiscordService', () => jest.fn());
 jest.mock('../../src/services/monitoring/SentryService', () => ({
-	getActiveSpan: jest.fn(),
+	getActiveSpan: jest.fn(() => null),
 	captureRuntimeError: jest.fn(),
+	startInactiveSpan: jest.fn(() => ({ finish: jest.fn(), setAttribute: jest.fn() })),
+	endSpan: jest.fn(),
 }));
 jest.mock('../../src/services/storage/SignalOutcomeService', () => ({
 	isEnabled: jest.fn(() => false),
@@ -173,6 +175,127 @@ describe('alert request ID resolution and echo', () => {
 					method: 'POST',
 					requestId: 'err-trace-777',
 				}),
+			}));
+		});
+	});
+
+	describe('GH-599 Gemini-grounding entry-price fallback for recordSignal', () => {
+		const signalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
+		const { enrichAlert } = require('../../src/controllers/webhooks/handlers/alert/grounding');
+
+		function setupOutcomeEnabled() {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			signalOutcomeService.recordSignal.mockClear();
+		}
+
+		function setupEnrichment(enrichmentPayload) {
+			enrichAlert.mockResolvedValue(enrichmentPayload);
+		}
+
+		it('records a gemini-grounding-sourced entry price when MCP is absent', async () => {
+			process.env.ENABLE_GEMINI_GROUNDING = 'true';
+			process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT = 'false';
+			setupOutcomeEnabled();
+			setupEnrichment({
+				sentiment: 'BULLISH',
+				sentiment_score: 0.7,
+				current_price: 85000,
+				invalidation_level: 83000,
+				target_level: 89000,
+				sources: [],
+				truncated: false,
+			});
+
+			const response = buildResponse();
+			const handler = postAlert({});
+			await handler({
+				headers: {},
+				body: { text: 'BINANCE:BTCUSDT(240) pasó a señal de COMPRA' },
+				query: {},
+			}, response);
+
+			expect(signalOutcomeService.recordSignal).toHaveBeenCalledWith(expect.objectContaining({
+				price: 85000,
+				priceSource: 'gemini-grounding',
+				side: 'BUY',
+			}));
+		});
+
+		it('prefers the TradingView-MCP price over the gemini-grounding fallback', async () => {
+			process.env.ENABLE_GEMINI_GROUNDING = 'true';
+			process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT = 'true';
+			setupOutcomeEnabled();
+			setupEnrichment({
+				sentiment: 'BULLISH',
+				sentiment_score: 0.6,
+				price_data: { current_price: 3250 },
+				tradingViewEnrichmentStatus: 'full',
+				sources: [],
+				truncated: false,
+			});
+
+			const response = buildResponse();
+			const handler = postAlert({});
+			await handler({
+				headers: {},
+				body: { text: 'BINANCE:ETHUSDT(60) pasó a señal de COMPRA' },
+				query: { useTradingViewData: 'true' },
+			}, response);
+
+			expect(signalOutcomeService.recordSignal).toHaveBeenCalledWith(expect.objectContaining({
+				price: 3250,
+				priceSource: 'tradingview-mcp',
+			}));
+		});
+
+		it('preserves a derived-quote price when TradingView MCP fails', async () => {
+			process.env.ENABLE_GEMINI_GROUNDING = 'true';
+			process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT = 'true';
+			setupOutcomeEnabled();
+			setupEnrichment({
+				sentiment: 'BULLISH',
+				current_price: 3250,
+				levelsSource: 'derived-quote',
+				tradingViewEnrichmentStatus: 'failed',
+				sources: [],
+				truncated: false,
+			});
+
+			const response = buildResponse();
+			const handler = postAlert({});
+			await handler({
+				headers: {},
+				body: { text: 'BINANCE:ETHUSDT(60) pasó a señal de COMPRA' },
+				query: { useTradingViewData: 'true' },
+			}, response);
+
+			expect(signalOutcomeService.recordSignal).toHaveBeenCalledWith(expect.objectContaining({
+				price: 3250,
+				priceSource: 'derived-quote',
+			}));
+		});
+
+		it('passes side to saveAlert so deterministic R:R can be computed', async () => {
+			process.env.ENABLE_GEMINI_GROUNDING = 'true';
+			process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT = 'false';
+			setupOutcomeEnabled();
+			setupEnrichment({
+				sentiment: 'BULLISH',
+				sentiment_score: 0.6,
+				sources: [],
+				truncated: false,
+			});
+
+			const response = buildResponse();
+			const handler = postAlert({});
+			await handler({
+				headers: {},
+				body: { text: 'BINANCE:ETHUSDT(60) pasó a señal de COMPRA' },
+				query: {},
+			}, response);
+
+			expect(alertStorageService.saveAlert).toHaveBeenCalledWith(expect.objectContaining({
+				side: 'BUY',
 			}));
 		});
 	});

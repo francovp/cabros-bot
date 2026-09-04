@@ -67,6 +67,42 @@ function parseOptionalSetupType(value) {
 	return SETUP_TYPES.has(normalized) ? normalized : undefined;
 }
 
+const PRICE_CURRENCY_PATTERN = /^[A-Z]{2,5}$/;
+
+// Normalize current_price to a finite, strictly-positive number. Strings that
+// already encode a clean positive finite number (e.g. "3240.51") are accepted;
+// everything else — null, NaN, negatives, zero, boolean, objects, arrays — is
+// silently dropped so a malformed response can never persist a wrong price.
+// Re-introduced by GH-599 / CB-XXX: alert-enrichment prompt now asks the model
+// for an optional `current_price` sourced from grounded snippets; this guard
+// keeps it from leaking into R:R math, outcome eligibility, and storage.
+function parseOptionalCurrentPrice(value) {
+	if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+		return value;
+	}
+
+	if (typeof value === 'string') {
+		const trimmed = value.trim();
+		if (!trimmed) {
+			return undefined;
+		}
+		const numeric = Number(trimmed);
+		return Number.isFinite(numeric) && numeric > 0 ? numeric : undefined;
+	}
+
+	return undefined;
+}
+
+// Currency must be a short ISO-4217-style uppercase code (USD, USDT, USDC, EUR, …).
+// Anything else — lowercase, mixed case with whitespace, free-form text — is dropped.
+function parseOptionalPriceCurrency(value, hasCurrentPrice) {
+	if (!hasCurrentPrice || typeof value !== 'string') {
+		return undefined;
+	}
+	const trimmed = value.trim().toUpperCase();
+	return PRICE_CURRENCY_PATTERN.test(trimmed) ? trimmed : undefined;
+}
+
 const MAX_TECHNICAL_LEVELS_PER_SIDE = 6;
 const ZERO_SOURCE_SENTIMENT_SCORE_CAP = 0.55;
 
@@ -810,6 +846,8 @@ function parseEnrichedAlertResponse(response, sources) {
 		};
 
 		const technicalLevels = parseOptionalTechnicalLevels(parsed.technical_levels);
+		const parsedCurrentPrice = parseOptionalCurrentPrice(parsed.current_price);
+		const parsedPriceCurrency = parseOptionalPriceCurrency(parsed.price_currency, parsedCurrentPrice !== undefined);
 
 		return {
 			sentiment: parsed.sentiment,
@@ -817,6 +855,8 @@ function parseEnrichedAlertResponse(response, sources) {
 			...(shouldCalibrate ? { sentiment_score_raw: sentimentScore } : {}),
 			insights: Array.isArray(parsed.insights) ? parsed.insights : [],
 			...(technicalLevels ? { technical_levels: technicalLevels } : {}),
+			...(parsedCurrentPrice !== undefined ? { current_price: parsedCurrentPrice } : {}),
+			...(parsedPriceCurrency !== undefined ? { price_currency: parsedPriceCurrency } : {}),
 			...Object.fromEntries(
 				Object.entries(optionalRiskMetadata).filter(([, value]) => value !== undefined),
 			),

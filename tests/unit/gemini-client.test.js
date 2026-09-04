@@ -173,6 +173,70 @@ describe('Gemini Service', () => {
 			expect(result).not.toHaveProperty('setup_evidence');
 		});
 
+		describe('current_price and price_currency parsing (GH-599)', () => {
+			it('accepts a finite positive numeric current_price with a normalized currency code', () => {
+				const result = parseEnrichedAlertResponse(JSON.stringify({
+					...mockEnrichedResponse,
+					current_price: 64863.03,
+					price_currency: 'usd',
+				}));
+
+				expect(result.current_price).toBe(64863.03);
+				expect(result.price_currency).toBe('USD');
+			});
+
+			it('accepts a clean positive numeric string and converts it to a number', () => {
+				const result = parseEnrichedAlertResponse(JSON.stringify({
+					...mockEnrichedResponse,
+					current_price: '3240.51',
+					price_currency: 'USDT',
+				}));
+
+				expect(result.current_price).toBe(3240.51);
+				expect(result.price_currency).toBe('USDT');
+			});
+
+			it('drops zero, negative, NaN, Infinity, and boolean current_price values', () => {
+				for (const badValue of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, true, false, {}]) {
+					const result = parseEnrichedAlertResponse(JSON.stringify({
+						...mockEnrichedResponse,
+						current_price: badValue,
+						price_currency: 'USD',
+					}));
+					expect(result).not.toHaveProperty('current_price');
+					expect(result).not.toHaveProperty('price_currency');
+				}
+			});
+
+			it('drops strings that cannot be parsed as finite positive numbers', () => {
+				const result = parseEnrichedAlertResponse(JSON.stringify({
+					...mockEnrichedResponse,
+					current_price: 'around 80k',
+					price_currency: 'USD',
+				}));
+				expect(result).not.toHaveProperty('current_price');
+				expect(result).not.toHaveProperty('price_currency');
+			});
+
+			it('drops an invalid price_currency without dropping the underlying current_price', () => {
+				const result = parseEnrichedAlertResponse(JSON.stringify({
+					...mockEnrichedResponse,
+					current_price: 50000,
+					price_currency: 'us dollars',
+				}));
+				expect(result.current_price).toBe(50000);
+				expect(result).not.toHaveProperty('price_currency');
+			});
+
+			it('drops price_currency when current_price is missing', () => {
+				const result = parseEnrichedAlertResponse(JSON.stringify({
+					...mockEnrichedResponse,
+					price_currency: 'USD',
+				}));
+				expect(result).not.toHaveProperty('price_currency');
+			});
+		});
+
 		it('parses valid technical_levels arrays from the model response', () => {
 			const result = parseEnrichedAlertResponse(JSON.stringify({
 				...mockEnrichedResponse,

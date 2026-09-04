@@ -195,6 +195,16 @@ function formatAlertDocument(doc) {
 	if (data.suppressedRepeat === true) {
 		docObj.suppressedRepeat = true;
 	}
+	if (data.enrichmentData && typeof data.enrichmentData === 'object') {
+		const currentPrice = toPositiveFiniteNumber(data.enrichmentData.current_price);
+		if (currentPrice !== null) {
+			docObj.currentPrice = currentPrice;
+		}
+		const priceCurrency = data.enrichmentData.price_currency;
+		if (typeof priceCurrency === 'string' && /^[A-Z]{2,5}$/.test(priceCurrency.trim().toUpperCase())) {
+			docObj.priceCurrency = priceCurrency.trim().toUpperCase();
+		}
+	}
 	if (typeof data.eventCategory === 'string') {
 		docObj.eventCategory = data.eventCategory;
 	}
@@ -275,7 +285,131 @@ function sanitizeEnrichmentData(enrichmentData) {
 		}
 	}
 
+	if (Object.prototype.hasOwnProperty.call(sanitized, 'current_price')) {
+		const price = toPositiveFiniteNumber(sanitized.current_price);
+		if (price !== null) {
+			sanitized.current_price = price;
+		} else {
+			delete sanitized.current_price;
+			delete sanitized.price_currency;
+		}
+	}
+	if (Object.prototype.hasOwnProperty.call(sanitized, 'price_currency')) {
+		if (typeof sanitized.price_currency === 'string') {
+			const trimmed = sanitized.price_currency.trim().toUpperCase();
+			if (/^[A-Z]{2,5}$/.test(trimmed)) {
+				sanitized.price_currency = trimmed;
+			} else {
+				delete sanitized.price_currency;
+			}
+		} else {
+			delete sanitized.price_currency;
+		}
+	}
+	if (!Object.prototype.hasOwnProperty.call(sanitized, 'current_price')) {
+		delete sanitized.price_currency;
+	}
+
 	return sanitized;
+}
+
+function toPositiveFiniteNumber(value) {
+	if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+		return value;
+	}
+	if (typeof value === 'string') {
+		const trimmed = value.trim();
+		if (!trimmed) {
+			return null;
+		}
+		const numeric = Number(trimmed.replace(/[$,]/g, ''));
+		return Number.isFinite(numeric) && numeric > 0 ? numeric : null;
+	}
+	return null;
+}
+
+// Direction-aware R:R helper. Re-introduced by GH-599 / CB-XXX.
+// When the LLM/MCP supplies invalidation_level, target_level, and current_price
+// (entry), we derive risk_reward_ratio deterministically instead of trusting
+// the model's arithmetic. The computation is purely additive: existing valid
+// values are preserved, only null/missing R:R is filled in.
+function computeDeterministicRiskReward({ entry, invalidation, target, side }) {
+	if (!Number.isFinite(entry) || !(entry > 0)) {
+		return null;
+	}
+	if (!Number.isFinite(invalidation) || !(invalidation > 0)) {
+		return null;
+	}
+	if (!Number.isFinite(target) || !(target > 0)) {
+		return null;
+	}
+
+	const upperSide = typeof side === 'string' ? side.trim().toUpperCase() : '';
+	if (upperSide === 'BUY' || upperSide === 'LONG') {
+		const reward = target - entry;
+		const risk = entry - invalidation;
+		if (reward > 0 && risk > 0) {
+			const ratio = reward / risk;
+			return Number.isFinite(ratio) ? ratio : null;
+		}
+		return null;
+	}
+	if (upperSide === 'SELL' || upperSide === 'SHORT') {
+		const reward = entry - target;
+		const risk = invalidation - entry;
+		if (reward > 0 && risk > 0) {
+			const ratio = reward / risk;
+			return Number.isFinite(ratio) ? ratio : null;
+		}
+		return null;
+	}
+	return null;
+}
+
+function applyDeterministicRiskReward(enrichmentData, side) {
+	if (!enrichmentData || typeof enrichmentData !== 'object' || Array.isArray(enrichmentData)) {
+		return enrichmentData;
+	}
+
+	const entry = toPositiveFiniteNumber(enrichmentData.current_price);
+	if (entry === null) {
+		return enrichmentData;
+	}
+
+	const invalidation = toPositiveFiniteNumber(
+		enrichmentData.invalidation_level,
+	);
+	const target = toPositiveFiniteNumber(
+		enrichmentData.target_level,
+	);
+
+	if (invalidation === null || target === null) {
+		return enrichmentData;
+	}
+
+	const existing = enrichmentData.risk_reward_ratio;
+	const existingIsValid = (typeof existing === 'number' && Number.isFinite(existing))
+		|| (typeof existing === 'string' && existing.trim().length > 0);
+	if (existingIsValid) {
+		return enrichmentData;
+	}
+
+	const deterministic = computeDeterministicRiskReward({
+		entry,
+		invalidation,
+		target,
+		side,
+	});
+
+	if (deterministic === null) {
+		return enrichmentData;
+	}
+
+	return {
+		...enrichmentData,
+		risk_reward_ratio: Number(deterministic.toFixed(4)),
+		risk_reward_ratio_source: 'computed',
+	};
 }
 
 // Firestore Admin SDK rejects `undefined` field values anywhere in a write.
@@ -718,6 +852,20 @@ function formatExportRecord(doc, { includeText }) {
 		record.dedupStatus = data.dedupStatus;
 	}
 
+	if (data.enrichmentData && typeof data.enrichmentData === 'object') {
+		const exportCurrentPrice = toPositiveFiniteNumber(data.enrichmentData.current_price);
+		if (exportCurrentPrice !== null) {
+			record.currentPrice = exportCurrentPrice;
+		}
+		const exportPriceCurrency = data.enrichmentData.price_currency;
+		if (typeof exportPriceCurrency === 'string') {
+			const trimmed = exportPriceCurrency.trim().toUpperCase();
+			if (/^[A-Z]{2,5}$/.test(trimmed)) {
+				record.priceCurrency = trimmed;
+			}
+		}
+	}
+
 	if (includeText) {
 		record.text = truncateAlertText(data.text);
 		if (data.truncated === true) {
@@ -991,6 +1139,7 @@ async function saveAlertInternal({
 	whatsappChatId,
 	discordWebhookUrl,
 	routing,
+	side,
 }) {
 	if (!isEnabled()) {
 		return null;
@@ -1051,6 +1200,11 @@ async function saveAlertInternal({
 		}
 		if (extracted.exchange) {
 			document.exchange = extracted.exchange;
+		}
+
+		const sanitizedEnrichment = applyDeterministicRiskReward(document.enrichmentData, side);
+		if (sanitizedEnrichment !== document.enrichmentData) {
+			document.enrichmentData = sanitizedEnrichment;
 		}
 		if (typeof eventCategory === 'string' && eventCategory.trim()) {
 			document.eventCategory = eventCategory.trim();

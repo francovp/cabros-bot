@@ -622,6 +622,204 @@ describe('AlertStorageService', () => {
 			const calledWith = mockAdd.mock.calls[0][0];
 			expect(calledWith.enriched).toBe(true);
 		});
+
+		describe('current_price, price_currency, and deterministic R:R (GH-599)', () => {
+			function captureSaveCall() {
+				return mockAdd.mock.calls[mockAdd.mock.calls.length - 1][0];
+			}
+
+			it('persists current_price and price_currency from enrichmentData', async () => {
+				process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+				mockAdd.mockResolvedValueOnce({ id: 'gh599-price' });
+
+				await AlertStorageService.saveAlert(buildParams({
+					enriched: true,
+					enrichmentData: {
+						current_price: 64863.03,
+						price_currency: 'USD',
+						sentiment: 'BULLISH',
+					},
+				}));
+
+				const doc = captureSaveCall();
+				expect(doc.enrichmentData).toEqual(expect.objectContaining({
+					current_price: 64863.03,
+					price_currency: 'USD',
+				}));
+			});
+
+			it('strips invalid current_price values during sanitization', async () => {
+				process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+				mockAdd.mockResolvedValueOnce({ id: 'gh599-bad-price' });
+
+				await AlertStorageService.saveAlert(buildParams({
+					enriched: true,
+					enrichmentData: {
+						current_price: -100,
+						price_currency: 'USD',
+						sentiment: 'BULLISH',
+					},
+				}));
+
+				const doc = captureSaveCall();
+				expect(doc.enrichmentData).not.toHaveProperty('current_price');
+				expect(doc.enrichmentData).not.toHaveProperty('price_currency');
+			});
+
+			it('strips an invalid price_currency without dropping the underlying price', async () => {
+				process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+				mockAdd.mockResolvedValueOnce({ id: 'gh599-bad-currency' });
+
+				await AlertStorageService.saveAlert(buildParams({
+					enriched: true,
+					enrichmentData: {
+						current_price: 50000,
+						price_currency: 'us dollars',
+					},
+				}));
+
+				const doc = captureSaveCall();
+				expect(doc.enrichmentData.current_price).toBe(50000);
+				expect(doc.enrichmentData).not.toHaveProperty('price_currency');
+			});
+
+			it('computes risk_reward_ratio deterministically for a BUY signal when entry/invalidation/target are present', async () => {
+				process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+				mockAdd.mockResolvedValueOnce({ id: 'gh599-rr-buy' });
+
+				await AlertStorageService.saveAlert(buildParams({
+					enriched: true,
+					side: 'BUY',
+					enrichmentData: {
+						current_price: 100,
+						invalidation_level: 90,
+						target_level: 130,
+						sentiment: 'BULLISH',
+					},
+				}));
+
+				const doc = captureSaveCall();
+				// (target - entry) / (entry - invalidation) = (130 - 100) / (100 - 90) = 30 / 10 = 3.0
+				expect(doc.enrichmentData.risk_reward_ratio).toBe(3);
+				expect(doc.enrichmentData.risk_reward_ratio_source).toBe('computed');
+			});
+
+			it('computes risk_reward_ratio directionally for a SELL signal', async () => {
+				process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+				mockAdd.mockResolvedValueOnce({ id: 'gh599-rr-sell' });
+
+				await AlertStorageService.saveAlert(buildParams({
+					enriched: true,
+					side: 'SELL',
+					enrichmentData: {
+						current_price: 100,
+						invalidation_level: 120,
+						target_level: 70,
+						sentiment: 'BEARISH',
+					},
+				}));
+
+				const doc = captureSaveCall();
+				// (entry - target) / (invalidation - entry) = (100 - 70) / (120 - 100) = 30 / 20 = 1.5
+				expect(doc.enrichmentData.risk_reward_ratio).toBe(1.5);
+				expect(doc.enrichmentData.risk_reward_ratio_source).toBe('computed');
+			});
+
+			it('does not overwrite an existing valid risk_reward_ratio from the model', async () => {
+				process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+				mockAdd.mockResolvedValueOnce({ id: 'gh599-rr-preserve' });
+
+				await AlertStorageService.saveAlert(buildParams({
+					enriched: true,
+					side: 'BUY',
+					enrichmentData: {
+						current_price: 100,
+						invalidation_level: 90,
+						target_level: 130,
+						risk_reward_ratio: 2.5,
+					},
+				}));
+
+				const doc = captureSaveCall();
+				expect(doc.enrichmentData.risk_reward_ratio).toBe(2.5);
+				expect(doc.enrichmentData).not.toHaveProperty('risk_reward_ratio_source');
+			});
+
+			it('computes R:R from currency-formatted risk levels', async () => {
+				process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+				mockAdd.mockResolvedValueOnce({ id: 'gh599-rr-formatted' });
+
+				await AlertStorageService.saveAlert(buildParams({
+					enriched: true,
+					side: 'BUY',
+					enrichmentData: {
+						current_price: 85000,
+						invalidation_level: '$80,000',
+						target_level: '$90,000',
+					},
+				}));
+
+				const doc = captureSaveCall();
+				expect(doc.enrichmentData.risk_reward_ratio).toBe(1);
+				expect(doc.enrichmentData.risk_reward_ratio_source).toBe('computed');
+			});
+
+			it('preserves a non-empty string risk_reward_ratio from the model', async () => {
+				process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+				mockAdd.mockResolvedValueOnce({ id: 'gh599-rr-string' });
+
+				await AlertStorageService.saveAlert(buildParams({
+					enriched: true,
+					side: 'BUY',
+					enrichmentData: {
+						current_price: 100,
+						invalidation_level: 90,
+						target_level: 130,
+						risk_reward_ratio: '2.5:1',
+					},
+				}));
+
+				const doc = captureSaveCall();
+				expect(doc.enrichmentData.risk_reward_ratio).toBe('2.5:1');
+				expect(doc.enrichmentData).not.toHaveProperty('risk_reward_ratio_source');
+			});
+
+			it('does not compute R:R when entry is missing', async () => {
+				process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+				mockAdd.mockResolvedValueOnce({ id: 'gh599-rr-no-entry' });
+
+				await AlertStorageService.saveAlert(buildParams({
+					enriched: true,
+					side: 'BUY',
+					enrichmentData: {
+						invalidation_level: 90,
+						target_level: 130,
+					},
+				}));
+
+				const doc = captureSaveCall();
+				expect(doc.enrichmentData).not.toHaveProperty('risk_reward_ratio');
+				expect(doc.enrichmentData).not.toHaveProperty('risk_reward_ratio_source');
+			});
+
+			it('does not compute R:R when the side is missing for a valid BUY/SELL pair', async () => {
+				process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+				mockAdd.mockResolvedValueOnce({ id: 'gh599-rr-no-side' });
+
+				await AlertStorageService.saveAlert(buildParams({
+					enriched: true,
+					enrichmentData: {
+						current_price: 100,
+						invalidation_level: 90,
+						target_level: 130,
+					},
+				}));
+
+				const doc = captureSaveCall();
+				expect(doc.enrichmentData).not.toHaveProperty('risk_reward_ratio');
+				expect(doc.enrichmentData).not.toHaveProperty('risk_reward_ratio_source');
+			});
+		});
 	});
 
 	describe('listAlerts()', () => {
@@ -917,6 +1115,60 @@ describe('AlertStorageService', () => {
 
 			await expect(AlertStorageService.listAlerts({ limit: 10 })).rejects.toMatchObject({
 				code: 'STORAGE_UNAVAILABLE',
+			});
+		});
+
+		describe('current_price read fields (GH-599)', () => {
+			it('surfaces currentPrice and priceCurrency on stored enriched alerts', async () => {
+				process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+				mockGet.mockResolvedValueOnce({
+					empty: false,
+					docs: [buildQueryDoc('gh599-read', {
+						receivedAt: buildTimestamp('2026-08-25T12:00:00.000Z'),
+						expiresAt: buildTimestamp('2026-11-23T12:00:00.000Z'),
+						text: 'ETHUSDT pasó a señal de COMPRA',
+						enriched: true,
+						enrichmentData: {
+							current_price: 3240.51,
+							price_currency: 'USDT',
+						},
+						tokenUsage: null,
+						deliveryResults: [],
+						source: 'webhook',
+						useTradingViewData: false,
+						tradingViewEnrichmentApplied: false,
+					})],
+				});
+
+				const result = await AlertStorageService.listAlerts({ limit: 1 });
+				expect(result.alerts[0].currentPrice).toBe(3240.51);
+				expect(result.alerts[0].priceCurrency).toBe('USDT');
+			});
+
+			it('omits the read fields when stored price is missing or invalid', async () => {
+				process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+				mockGet.mockResolvedValueOnce({
+					empty: false,
+					docs: [buildQueryDoc('gh599-read-bad', {
+						receivedAt: buildTimestamp('2026-08-25T12:00:00.000Z'),
+						expiresAt: buildTimestamp('2026-11-23T12:00:00.000Z'),
+						text: 'ETHUSDT pasó a señal de COMPRA',
+						enriched: true,
+						enrichmentData: {
+							current_price: -10,
+							price_currency: 'us dollars',
+						},
+						tokenUsage: null,
+						deliveryResults: [],
+						source: 'webhook',
+						useTradingViewData: false,
+						tradingViewEnrichmentApplied: false,
+					})],
+				});
+
+				const result = await AlertStorageService.listAlerts({ limit: 1 });
+				expect(result.alerts[0]).not.toHaveProperty('currentPrice');
+				expect(result.alerts[0]).not.toHaveProperty('priceCurrency');
 			});
 		});
 	});

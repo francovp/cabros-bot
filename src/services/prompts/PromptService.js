@@ -18,6 +18,17 @@ const REQUIRED_ALERT_ENRICHMENT_RISK_FIELDS = Object.freeze([
 	'setup_type',
 	'risk_reward_ratio',
 ]);
+
+// GH-599 / CB-XXX explicitly decided that the new optional `current_price` and
+// `price_currency` fields do NOT participate in schema-drift detection.
+// Reasoning:
+//   - They are additive, optional, and sourced from grounded snippets only.
+//   - Legacy prompts (shipped before this change) MUST NOT be flagged as drift
+//     just because they omit them — that would have caused a noisy alerting
+//     regression for every Langfuse prompt that pre-dates the change.
+//   - The prompt text now includes the fields, so newly deployed prompts WILL
+//     contain the markers once the operator syncs them. Old prompts remain
+//     valid fallbacks until operators choose to update them.
 const REQUIRED_ALERT_ENRICHMENT_CALIBRATION_GUIDANCE = Object.freeze([
 	'0.9+',
 	'0.6-0.8',
