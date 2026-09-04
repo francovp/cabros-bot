@@ -280,7 +280,7 @@
         },
         "responses": {
           "200": {
-            "$ref": "#/components/responses/AnalysisResult"
+            "$ref": "#/components/responses/VolumeConfirmationResult"
           },
           "400": {
             "$ref": "#/components/responses/Error"
@@ -2912,6 +2912,16 @@
           }
         }
       },
+      "VolumeConfirmationResult": {
+        "description": "Structured TradingView MCP volume confirmation data, decision, and timing metadata.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/VolumeConfirmationResult"
+            }
+          }
+        }
+      },
       "OutcomeList": {
         "description": "Signal outcome page",
         "content": {
@@ -4772,7 +4782,9 @@
           "success",
           "symbol",
           "analysis",
-          "alertText"
+          "alertText",
+          "requestId",
+          "processingTimeMs"
         ],
         "properties": {
           "success": {
@@ -4806,9 +4818,71 @@
           "requestId": {
             "type": "string"
           },
-          "totalDurationMs": {
+          "processingTimeMs": {
             "type": "integer",
-            "minimum": 0
+            "minimum": 0,
+            "description": "Total endpoint execution time in milliseconds."
+          }
+        }
+      },
+      "VolumeConfirmationResult": {
+        "type": "object",
+        "required": [
+          "success",
+          "symbol",
+          "exchange",
+          "asset",
+          "timeframe",
+          "decision",
+          "requestId",
+          "processingTimeMs"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "symbol": {
+            "type": "string"
+          },
+          "exchange": {
+            "type": "string"
+          },
+          "asset": {
+            "type": "string"
+          },
+          "timeframe": {
+            "type": "string"
+          },
+          "confirmed": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "confirm",
+              "deny",
+              "unknown"
+            ]
+          },
+          "volumeRatio": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "analysis": {
+            "$ref": "#/components/schemas/JsonObject"
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "processingTimeMs": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Total endpoint execution time in milliseconds."
           }
         }
       },

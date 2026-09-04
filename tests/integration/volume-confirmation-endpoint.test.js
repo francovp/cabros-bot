@@ -60,6 +60,9 @@ describe('Volume confirmation endpoint', () => {
 				confidence: 0.91,
 			}),
 		}));
+		expect(res.body.processingTimeMs).toBeGreaterThanOrEqual(0);
+		expect(Number.isInteger(res.body.processingTimeMs)).toBe(true);
+		expect(res.body).not.toHaveProperty('totalDurationMs');
 		expect(tradingViewMcpService.callVolumeConfirmation).toHaveBeenCalledWith({
 			symbol: 'BTCUSDT',
 			exchange: 'BINANCE',
@@ -77,6 +80,9 @@ describe('Volume confirmation endpoint', () => {
 		expect(res.body).toEqual(expect.objectContaining({
 			code: 'INVALID_REQUEST',
 		}));
+		expect(res.body.processingTimeMs).toBeGreaterThanOrEqual(0);
+		expect(Number.isInteger(res.body.processingTimeMs)).toBe(true);
+		expect(res.body).not.toHaveProperty('totalDurationMs');
 		expect(res.body.error).toContain('EXCHANGE:SYMBOL');
 		expect(tradingViewMcpService.callVolumeConfirmation).not.toHaveBeenCalled();
 	});
@@ -95,6 +101,9 @@ describe('Volume confirmation endpoint', () => {
 			code: 'VOLUME_CONFIRMATION_FAILED',
 			error: 'MCP unavailable',
 		}));
+		expect(res.body.processingTimeMs).toBeGreaterThanOrEqual(0);
+		expect(Number.isInteger(res.body.processingTimeMs)).toBe(true);
+		expect(res.body).not.toHaveProperty('totalDurationMs');
 	});
 
 	it('normalizes lowercase symbols and denies low-volume confirmations', async () => {

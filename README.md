@@ -832,7 +832,7 @@ The endpoint stops analysis at `EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS` (default 60 
     "delivered": 1
   },
   "requestId": "req-abc123",
-  "totalDurationMs": 1200
+  "processingTimeMs": 1200
 }
 ```
 
@@ -868,7 +868,9 @@ Run TradingView MCP `volume_confirmation_analysis` on demand and return structur
       "volume_ratio": 1.7,
       "volume_strength": "HIGH"
     }
-  }
+  },
+  "requestId": "req-vol-123",
+  "processingTimeMs": 310
 }
 ```
 
@@ -952,7 +954,7 @@ Execute multiple market scanner tools on the TradingView MCP server (such as top
   "includeMultiTimeframe": true,
   "timeoutMs": 90000,
   "requestId": "req-xyz789",
-  "totalDurationMs": 1450
+  "processingTimeMs": 1450
 }
 ```
 
