@@ -415,6 +415,7 @@ describe('RemoteConfigService', () => {
 		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
 		mockTemplate({
 			ZERO_CHANNEL_ALERT_COOLDOWN_MS: 600000,
+			ADMIN_PAGE_DEDUP_TTL_MS: 120000,
 			ENABLE_API_ONLY_MODE: true,
 			SIGNAL_OUTCOME_RETENTION_DAYS: 180,
 		});
@@ -424,6 +425,7 @@ describe('RemoteConfigService', () => {
 
 		const config = remoteConfigService.getRuntimeConfig();
 		expect(config.ZERO_CHANNEL_ALERT_COOLDOWN_MS).toBe(600000);
+		expect(config.ADMIN_PAGE_DEDUP_TTL_MS).toBe(120000);
 		expect(config.ENABLE_API_ONLY_MODE).toBe(true);
 		expect(config.SIGNAL_OUTCOME_RETENTION_DAYS).toBe(180);
 	});

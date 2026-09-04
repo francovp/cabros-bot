@@ -73,6 +73,7 @@ To report a vulnerability, see [`SECURITY.md`](./SECURITY.md) — the project do
 - `NOTIFICATION_REDRIVE_MAX_AGE_MS` - Maximum lifespan of dead-letter records before expiration (default: `3600000`, Remote Config supported)
 - Firestore-backed `notificationDeadLetters` records use `expiresAt`; run `bash ops/configure-operational-collection-retention.sh` once per project to enable native TTL and optionally backfill legacy records.
 - `ZERO_CHANNEL_ALERT_COOLDOWN_MS` - Cooldown between admin notifications when all channels are disabled in milliseconds (default: `300000`, Remote Config supported)
+- `ADMIN_PAGE_DEDUP_TTL_MS` - TTL for admin paging deduplication in milliseconds (default: `300000`, 0 disables deduplication, Remote Config supported)
 - `ENABLE_API_ONLY_MODE` - Declare intentional API-only mode without notification delivery, suppressing zero-channel alerts and dead-letters (default: `false`, Remote Config supported)
 
 #### URL Shortening (003-news-monitor)

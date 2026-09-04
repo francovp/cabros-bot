@@ -902,6 +902,19 @@ class NotificationRedriveService {
 			return;
 		}
 
+		const { adminPagingDeduplicator } = require('./adminPagingDeduplicator');
+		const fingerprint = adminPagingDeduplicator.computeFingerprint({
+			category: 'redrive_exhausted',
+			channel: record.channel || 'unknown',
+			requestId: record.alertId || record.id || 'none',
+			errorCode: record.lastErrorCode || record.statusCode || reason || 'exhausted',
+		});
+
+		if (adminPagingDeduplicator.shouldSuppress(fingerprint)) {
+			console.info(`[NotificationRedriveService] Admin notification suppressed by deduplicator: ${fingerprint}`);
+			return;
+		}
+
 		const message = [
 			'🚨 Notification Redrive Exhausted',
 			`Alert ID: ${record.alertId}`,
@@ -915,6 +928,8 @@ class NotificationRedriveService {
 			await telegramService.send({
 				text: message,
 				telegramChatId: adminChatId,
+				pagingFingerprint: fingerprint,
+				dedupChecked: true,
 			});
 			console.info(`[NotificationRedriveService] Sent admin alert for exhausted dead-letter ${record.id}`);
 		} catch (error) {

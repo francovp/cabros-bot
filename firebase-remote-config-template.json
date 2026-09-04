@@ -336,6 +336,13 @@
       "description": "Cooldown between admin notifications when all channels are disabled in milliseconds",
       "valueType": "NUMBER"
     },
+    "ADMIN_PAGE_DEDUP_TTL_MS": {
+      "defaultValue": {
+        "value": "300000"
+      },
+      "description": "TTL for admin paging deduplication in milliseconds (0 to disable)",
+      "valueType": "NUMBER"
+    },
     "ENABLE_API_ONLY_MODE": {
       "defaultValue": {
         "value": "false"
