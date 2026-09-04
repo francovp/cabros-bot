@@ -5315,6 +5315,10 @@
               },
               "alerts_sent": {
                 "type": "integer"
+              },
+              "narrativeClustered": {
+                "type": "integer",
+                "description": "Number of alerts collapsed into existing narrative clusters by the in-process narrative clustering pass. Populated only when ENABLE_NEWS_NARRATIVE_CLUSTERING=true; otherwise always 0."
               }
             }
           },

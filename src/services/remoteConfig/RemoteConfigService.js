@@ -68,6 +68,8 @@ const PARAMETER_SCHEMA = Object.freeze({
 	ENABLE_ALERT_HTF_RENDER: { type: 'boolean', defaultValue: true },
 	ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION: { type: 'boolean', defaultValue: false },
 	ALERT_SIGNAL_COOLDOWN_BARS: { type: 'number', defaultValue: 1, integer: true, min: 1, max: 10 },
+	ENABLE_NEWS_NARRATIVE_CLUSTERING: { type: 'boolean', defaultValue: false },
+	NEWS_NARRATIVE_CLUSTER_WINDOW_MS: { type: 'number', defaultValue: 600000, integer: true, min: 60000, max: 3600000 },
 });
 
 let remoteOverrides = {};

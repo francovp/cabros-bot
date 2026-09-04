@@ -357,6 +357,7 @@ function getStatus() {
 			notificationRedrive: notificationRedriveService.isEnabled(),
 			alertSignalRepeatSuppression: signalRepeatCooldown.isEnabled(),
 			whatsappCommands: whatsAppCommandBridgeService.isEnabled(),
+			newsNarrativeClustering: runtimeConfig.ENABLE_NEWS_NARRATIVE_CLUSTERING === true,
 		},
 		deliveryChannels: {
 			telegram: {
@@ -427,6 +428,10 @@ function getStatus() {
 			alertSignalRepeatSuppression: {
 				enabled: signalRepeatCooldown.isEnabled(),
 				...signalRepeatCooldown.getStats(),
+			},
+			narrativeClustering: {
+				enabled: runtimeConfig.ENABLE_NEWS_NARRATIVE_CLUSTERING === true,
+				windowMs: runtimeConfig.NEWS_NARRATIVE_CLUSTER_WINDOW_MS,
 			},
 			jobExecutionQueue: jobExecutionQueueStatus,
 			binanceTrading: binanceTradingStatus,
