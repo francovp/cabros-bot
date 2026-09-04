@@ -1560,3 +1560,17 @@ Binance 451 / `restricted location` errors are now classified as `binance_region
 - `BINANCE_DATA_BASE_URL` — Optional override for all Binance market-data REST calls. Default `https://api.binance.com` (preserves existing behavior when unset). Must be an http(s) URL; live trading also requires `https://`. Classified as **environment-only** for Remote Config parity (external destination; secrets/credentials/external-endpoint policy excludes it).
 
 No endpoint, OpenAPI, Postman, or Remote Config contract changed; the new env var follows the standard `environment-only` classification.
+
+## Channel Availability Fail-Fast (GH-854)
+
+`POST /api/webhook/alert` and `POST /api/scanner-presets/:id/run` now validate that any explicitly requested notification channel is enabled and configured **before** running Gemini grounding, TradingView MCP enrichment, or TradingView MCP scans. The previous ordering parsed routing, ran the full enrichment/scanner budget (up to 120s of TradingView MCP calls), and only then surfaced `400 INVALID_REQUEST` for a disabled channel — guaranteed-failing requests still consumed provider quota. A new `assertChannelsAvailable(notificationManager, routing)` helper in `src/services/notification/requestRouting.js` reuses the existing `validateNotificationRouting` enabled-channel check and throws `NotificationRoutingValidationError` (statusCode 400) before any provider work runs. The existing late-validation backstop in `sendWithNotificationRouting` is preserved for feature-flag race safety.
+
+**Core Components**:
+- `src/services/notification/requestRouting.js` — `assertChannelsAvailable(notificationManager, routing)` thin wrapper that only validates when `routing.channels` is set; legacy broadcasts (`channels` omitted) skip the call.
+- `src/controllers/webhooks/handlers/alert/alert.js` — initializes the notification manager eagerly when `routing.channels` is set and calls `assertChannelsAvailable` immediately before `processEnrichment`.
+- `src/controllers/webhooks/handlers/scannerPresets/scannerPresets.js` — same eager-init + `assertChannelsAvailable` ordering before `runScans`, so a 90–120s scanner budget cannot be burned on a guaranteed 400.
+- `tests/unit/request-routing.test.js` — 5 new cases covering the helper (no-op, valid, disabled, multi-missing, missing manager).
+- `tests/integration/scanner-presets-endpoint.test.js` — 1 new case proving `tradingViewMcpService.callScanTool` is **not** invoked when the requested channel is disabled.
+- `tests/integration/channel-availability-failfast.test.js` — new dedicated suite verifying `/api/webhook/alert` fail-fast (Gemini `groundAlert` is not invoked) plus the unchanged legacy broadcast path.
+
+**Coverage**: 9 new tests, 0 contracts changed. The 400 `INVALID_REQUEST` response shape is preserved; OpenAPI, Postman, and remote-config schema are unchanged. No new env var or Remote Config key was added — the fail-fast ordering is internal validation, not a configurable gate.
