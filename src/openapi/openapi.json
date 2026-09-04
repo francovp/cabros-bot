@@ -4782,7 +4782,9 @@
           "success",
           "symbol",
           "analysis",
-          "alertText"
+          "alertText",
+          "requestId",
+          "processingTimeMs"
         ],
         "properties": {
           "success": {
