@@ -6,6 +6,7 @@ const { createCorsMiddleware } = require('./src/lib/cors');
 const helmet = require('helmet');
 const { getOpenApiDocsRouter } = require('./src/openapi/docs');
 const bootstrapReadiness = require('./src/lib/bootstrapReadiness');
+const { buildEnvironmentBannerMiddleware } = require('./src/lib/environmentBanner');
 
 // Configure trusted proxies (e.g. Render reverse proxy or TRUST_PROXY setting)
 setupTrustProxy(app);
@@ -32,6 +33,11 @@ contentSecurityPolicy['connect-src'] = [
 	'https://cabros-bot-production.up.railway.app',
 ];
 app.use(helmet({ contentSecurityPolicy: { directives: contentSecurityPolicy } }));
+
+// Stamp non-secret deployment headers on every response so operators and
+// external integrators can immediately distinguish preview/staging from
+// production. Honors ENABLE_ENVIRONMENT_BANNER (default true).
+app.use(buildEnvironmentBannerMiddleware());
 
 app.use('/healthcheck', require('express-healthcheck')());
 app.get('/ready', (req, res) => {

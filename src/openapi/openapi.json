@@ -38,6 +38,29 @@
     }
   ],
   "paths": {
+    "/api/banner": {
+      "get": {
+        "tags": [
+          "Operations"
+        ],
+        "summary": "Get deployment banner snapshot",
+        "description": "Returns the public, unauthenticated deployment banner snapshot. Mirrors the X-Cabros-* response headers (when ENABLE_ENVIRONMENT_BANNER is enabled). The endpoint is auth-free and exposes only environment/commit/name/deployedAt — never credentials or webhook secrets. Use it for external status pages and badge generators that cannot read response headers.",
+        "operationId": "getBanner",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Banner snapshot returned successfully.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnvironmentBanner"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/ready": {
       "get": {
         "tags": [
@@ -3311,6 +3334,33 @@
             "type": "number",
             "format": "double",
             "nullable": true
+          }
+        }
+      },
+      "EnvironmentBanner": {
+        "type": "object",
+        "required": [
+          "environment",
+          "name"
+        ],
+        "properties": {
+          "environment": {
+            "type": "string",
+            "description": "Active deployment environment (e.g. production, preview, development, staging)."
+          },
+          "commit": {
+            "type": "string",
+            "nullable": true,
+            "description": "Active deployment commit SHA. Null when the deployment host does not expose the SHA."
+          },
+          "name": {
+            "type": "string",
+            "description": "Service name from SERVICE_NAME or package.json."
+          },
+          "deployedAt": {
+            "type": "string",
+            "nullable": true,
+            "description": "Deployment identifier or commit date exposed by the host, or null when unavailable."
           }
         }
       },

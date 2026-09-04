@@ -47,6 +47,14 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .console-nav button:hover, .console-nav button[aria-current="page"] { background: #173552; border-color: var(--border-bright); color: #fff; transform: none; }
 .sidebar-note { margin: auto 0 0; color: var(--muted); font-size: .75rem; line-height: 1.5; }
 .console-content { min-width: 0; display: grid; align-content: start; gap: 1rem; }
+.environment-banner { padding: .65rem 1rem; border-radius: .85rem; border: 1px solid #4b3b00; background: linear-gradient(135deg, #f6c4531f, #ff8a001a); color: #ffe8a3; font-size: .82rem; display: flex; align-items: center; justify-content: space-between; gap: .8rem; flex-wrap: wrap; }
+.environment-banner[data-tone="danger"] { border-color: #802929; background: linear-gradient(135deg, #ff51511f, #b600001a); color: #ffd5d5; }
+.environment-banner[data-tone="warning"] { border-color: #4b3b00; }
+.environment-banner strong { letter-spacing: .04em; text-transform: uppercase; }
+.environment-banner code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: .78rem; color: inherit; }
+.environment-banner .banner-actions { display: flex; gap: .5rem; align-items: center; }
+.environment-banner .banner-copy { padding: .35rem .65rem; border-radius: .55rem; border: 1px solid currentColor; background: transparent; color: inherit; font-size: .75rem; }
+.environment-banner .banner-copy:hover { background: rgba(255, 255, 255, .08); }
 .topbar, .connection-card { padding: 1rem 1.2rem; }
 .topbar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
 .topbar-title { margin: 0; color: #d7e5f6; font-size: 1.05rem; font-weight: 700; }

@@ -2931,6 +2931,85 @@ const setupLegacyConsole = ({ persist = true } = {}) => {
 	});
 };
 
+const PREVIEW_ENVIRONMENTS = new Set(['preview', 'development', 'staging']);
+const BANNER_FETCH_TIMEOUT_MS = 4000;
+
+const fetchEnvironmentBanner = async () => {
+	if (!window.fetch || typeof AbortController === 'undefined') return null;
+	const controller = new AbortController();
+	const timer = window.setTimeout(() => controller.abort(), BANNER_FETCH_TIMEOUT_MS);
+	try {
+		const base = getApiBaseUrl();
+		const url = `${base || ''}/api/banner`;
+		const response = await fetch(url, {
+			method: 'GET',
+			signal: controller.signal,
+			headers: { Accept: 'application/json' },
+		});
+		if (!response.ok) return null;
+		return await response.json();
+	} catch (_) {
+		return null;
+	} finally {
+		window.clearTimeout(timer);
+	}
+};
+
+const renderEnvironmentBanner = (banner) => {
+	const host = getElement('environment-banner');
+	if (!host) return;
+	if (!banner || !banner.environment) {
+		host.hidden = true;
+		host.replaceChildren();
+		return;
+	}
+	const isPreviewLike = PREVIEW_ENVIRONMENTS.has(String(banner.environment).toLowerCase());
+	if (!isPreviewLike) {
+		host.hidden = true;
+		host.replaceChildren();
+		return;
+	}
+	const tone = String(banner.environment).toLowerCase() === 'development' ? 'danger' : 'warning';
+	host.dataset.tone = tone;
+	const label = element('div');
+	label.append(
+		element('strong', { text: `${banner.environment} deployment` }),
+		banner.commit
+			? element('span', { text: ` · commit `, attributes: {} })
+			: null,
+		banner.commit ? element('code', { text: String(banner.commit).slice(0, 8) }) : null,
+		banner.name ? element('span', { text: ` · ${banner.name}` }) : null,
+	);
+	const actions = element('div', { className: 'banner-actions' });
+	if (typeof window !== 'undefined' && window.location) {
+		const copyButton = element('button', {
+			type: 'button',
+			className: 'banner-copy',
+			text: 'Copy preview URL',
+		});
+		copyButton.addEventListener('click', async () => {
+			try {
+				if (window.navigator && window.navigator.clipboard) {
+					await window.navigator.clipboard.writeText(window.location.origin);
+					copyButton.textContent = 'Copied ✓';
+					window.setTimeout(() => { copyButton.textContent = 'Copy preview URL'; }, 1500);
+				}
+			} catch (_) {
+				copyButton.textContent = 'Copy unavailable';
+				window.setTimeout(() => { copyButton.textContent = 'Copy preview URL'; }, 1500);
+			}
+		});
+		actions.append(copyButton);
+	}
+	host.replaceChildren(label, actions);
+	host.hidden = false;
+};
+
+const initializeEnvironmentBanner = async () => {
+	const banner = await fetchEnvironmentBanner();
+	if (banner) renderEnvironmentBanner(banner);
+};
+
 document.addEventListener('DOMContentLoaded', async () => {
 	const view = getElement('view');
 	if (view) view.replaceChildren(createLoadingState('Checking authentication…'));
@@ -2944,12 +3023,12 @@ document.addEventListener('DOMContentLoaded', async () => {
 	const config = await loadAuthConfig();
 	if (config.enabled) {
 		await setupFirebaseAuth(config);
-		return;
+	} else {
+		authState = { enabled: false, auth: null, user: null, role: 'admin.operator' };
+		setHidden('firebase-auth', true);
+		setHidden('legacy-connection', false);
+		setupLegacyConsole();
+		renderView('overview');
 	}
-
-	authState = { enabled: false, auth: null, user: null, role: 'admin.operator' };
-	setHidden('firebase-auth', true);
-	setHidden('legacy-connection', false);
-	setupLegacyConsole();
-	renderView('overview');
+	initializeEnvironmentBanner();
 });
