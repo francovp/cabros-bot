@@ -1740,6 +1740,135 @@
         ],
         "x-admin-role": "admin.viewer"
       }
+    },
+    "/api/release-notes": {
+      "get": {
+        "tags": [
+          "Operations"
+        ],
+        "summary": "List structured release-note entries from changelog.json",
+        "operationId": "listReleaseNotes",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "default": 20
+            },
+            "description": "Maximum entries to return (1-50, default 20)."
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "example": "feat,fix,perf"
+            },
+            "description": "Comma-separated list of Conventional Commits types to include."
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date-time",
+              "example": "2026-08-25T00:00:00Z"
+            },
+            "description": "Only include entries merged on or after this ISO-8601 timestamp."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Release-note summary",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleaseNotesSummary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      }
+    },
+    "/api/release-notes/{version}": {
+      "get": {
+        "tags": [
+          "Operations"
+        ],
+        "summary": "Get a release-note snapshot by version identifier or date",
+        "operationId": "getReleaseNotesSnapshot",
+        "parameters": [
+          {
+            "name": "version",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Version tag (e.g. \"v0.1.0\") or ISO-8601 date (e.g. \"2026-08-25\")."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Release-note snapshot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleaseNotesSnapshot"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Snapshot not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      }
     }
   },
   "components": {
@@ -3311,6 +3440,163 @@
             "type": "number",
             "format": "double",
             "nullable": true
+          }
+        }
+      },
+      "ReleaseNotesEntry": {
+        "type": "object",
+        "description": "Single changelog entry extracted from changelog.json",
+        "required": ["type", "summary", "mergedAt"],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "feat", "fix", "perf", "chore", "docs", "refactor",
+              "test", "build", "style", "ci", "revert", "other"
+            ]
+          },
+          "scope": {
+            "type": "string",
+            "nullable": true
+          },
+          "summary": {
+            "type": "string"
+          },
+          "breaking": {
+            "type": "boolean",
+            "default": false
+          },
+          "pr": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "author": {
+            "type": "string",
+            "nullable": true
+          },
+          "mergedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "commitSha": {
+            "type": "string",
+            "nullable": true
+          },
+          "shortSha": {
+            "type": "string",
+            "nullable": true
+          },
+          "issues": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        }
+      },
+      "ReleaseNotesSummary": {
+        "type": "object",
+        "required": ["success", "summary"],
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "summary": {
+            "type": "object",
+            "required": ["version", "total", "entries"],
+            "properties": {
+              "version": {
+                "type": "string"
+              },
+              "generatedAt": {
+                "type": "string",
+                "format": "date-time",
+                "nullable": true
+              },
+              "branch": {
+                "type": "string"
+              },
+              "sinceTag": {
+                "type": "string",
+                "nullable": true
+              },
+              "sinceDate": {
+                "type": "string",
+                "nullable": true
+              },
+              "reason": {
+                "type": "string",
+                "nullable": true,
+                "description": "Reason field when the changelog is unavailable (e.g. changelog_not_generated)."
+              },
+              "total": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "counts": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "integer",
+                  "format": "int64"
+                }
+              },
+              "days": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "integer",
+                  "format": "int64"
+                }
+              },
+              "entries": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ReleaseNotesEntry"
+                }
+              }
+            }
+          }
+        }
+      },
+      "ReleaseNotesSnapshot": {
+        "type": "object",
+        "required": ["success", "snapshot"],
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "snapshot": {
+            "type": "object",
+            "required": ["version", "entries"],
+            "properties": {
+              "version": {
+                "type": "string"
+              },
+              "generatedAt": {
+                "type": "string",
+                "format": "date-time",
+                "nullable": true
+              },
+              "branch": {
+                "type": "string"
+              },
+              "sinceTag": {
+                "type": "string",
+                "nullable": true
+              },
+              "sinceDate": {
+                "type": "string",
+                "nullable": true
+              },
+              "entries": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ReleaseNotesEntry"
+                }
+              }
+            }
           }
         }
       },
