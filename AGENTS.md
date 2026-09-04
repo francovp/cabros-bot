@@ -1560,3 +1560,27 @@ Binance 451 / `restricted location` errors are now classified as `binance_region
 - `BINANCE_DATA_BASE_URL` — Optional override for all Binance market-data REST calls. Default `https://api.binance.com` (preserves existing behavior when unset). Must be an http(s) URL; live trading also requires `https://`. Classified as **environment-only** for Remote Config parity (external destination; secrets/credentials/external-endpoint policy excludes it).
 
 No endpoint, OpenAPI, Postman, or Remote Config contract changed; the new env var follows the standard `environment-only` classification.
+
+## Global Request Deadline Middleware (GH-693)
+
+`app.js` mounts `src/lib/requestDeadline.js` so every `/api` route inherits a server-side time budget and 408s instead of holding the connection open past the reverse-proxy timeout.
+
+**Behavior**
+- `REQUEST_TIMEOUT_MS` (default 30000 ms; integer 1000-120000) caps the response lifecycle. When exceeded, the middleware writes a structured `408 REQUEST_TIMEOUT` with `{ error, code, requestId, deadlineMs, durationMs }` and logs a single `console.warn` with the route, method, duration, and request id.
+- The middleware reuses `req.requestId` from upstream (when available) or mints a fresh `randomUUID()`, stamps `X-Request-Id` on every response, and exposes it via `req.requestId`.
+- `/healthcheck`, `/ready`, `/openapi.json`, and `/docs` are always exempt. Operators can add more paths via `REQUEST_DEADLINE_EXEMPT_PATHS` (comma-separated, leading slash optional).
+- If the handler finishes before the deadline, `res.once('finish' | 'close', finalize)` clears the timer so no double-send happens.
+- Malformed, non-numeric, sub-minimum, or out-of-range `REQUEST_TIMEOUT_MS` values fall back to the documented default and log a single warning (no spam).
+- Handlers that already enforce per-call timeouts (e.g. `/api/webhook/expanded-analysis-alert` with `EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS`) keep their internal abort signal — the request deadline is the absolute backstop, not a replacement.
+
+**Core components**
+- `src/lib/requestDeadline.js` — bounded validation, request-id minting, deadline enforcement.
+- `app.js` — middleware mounted after `/healthcheck` and `/ready` (so probes are unaffected) and before the global rate limiter.
+- `tests/unit/requestDeadline.test.js` — exempt-path pass-through, request-id reuse/mint, structured 408 payload, `REQUEST_DEADLINE_EXEMPT_PATHS` extension, malformed-value fallback, and integration via supertest + real `http.Server`.
+- `.env.example` and `README.md` — documented the default, valid range, and opt-out behavior.
+
+**Configuration**
+- `REQUEST_TIMEOUT_MS` — Optional request-deadline ceiling (default 30000, integer 1000-120000; invalid values fall back to 30000 with a single warning). Classified as **remote-config eligible** because it is a non-secret, non-credential, non-destination runtime tuning. Out of scope per the existing `PARAMETER_SCHEMA` allow-list (TradingView MCP / signal-outcome / Remote Config news thresholds); promote only after coordinated Remote Config schema update.
+- `REQUEST_DEADLINE_EXEMPT_PATHS` — Optional comma-separated path list (defaults to `/healthcheck,/ready,/openapi.json,/docs`). Classified as **environment-only** for Remote Config parity (path allow-list is a route/security control, not a runtime tuning knob).
+
+No endpoint, OpenAPI, Postman, or Remote Config contract changed in this initial rollout.
