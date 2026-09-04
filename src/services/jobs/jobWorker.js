@@ -2,6 +2,7 @@
 
 const { jobQueue } = require('./JobQueue');
 const { JobService } = require('./JobService');
+const { applyStartupJitter, resolveStartupJitterMs } = require('../../lib/startupJitter');
 
 function getWorkerId() {
 	return process.env.RENDER_INSTANCE_ID
@@ -124,6 +125,14 @@ async function startJobWorker({
 			await worker.waitUntilReady();
 		}
 
+		const startupJitterMs = resolveStartupJitterMs({
+			envVar: 'WORKER_STARTUP_JITTER_MS',
+			runtimeKey: 'WORKER_STARTUP_JITTER_MS',
+		});
+		if (startupJitterMs > 0) {
+			console.info(`[JobWorker] Applying startup jitter (${startupJitterMs}ms max)`);
+		}
+
 		let reconciliationTimer = null;
 		if (service && typeof service.reconcileQueuedJobs === 'function') {
 			const reconcileQueuedJobs = async () => {
@@ -134,12 +143,32 @@ async function startJobWorker({
 				}
 			};
 
-			void reconcileQueuedJobs();
-			reconciliationTimer = globalThis.setInterval(() => {
+			const scheduleReconciliation = () => {
 				void reconcileQueuedJobs();
-			}, JOB_QUEUE_RECONCILIATION_INTERVAL_MS);
-			if (typeof reconciliationTimer.unref === 'function') {
-				reconciliationTimer.unref();
+				reconciliationTimer = globalThis.setInterval(() => {
+					void reconcileQueuedJobs();
+				}, JOB_QUEUE_RECONCILIATION_INTERVAL_MS);
+				if (typeof reconciliationTimer.unref === 'function') {
+					reconciliationTimer.unref();
+				}
+			};
+
+			if (startupJitterMs > 0) {
+				applyStartupJitter(startupJitterMs)
+					.then(() => {
+						if (stopped) {
+							return;
+						}
+						scheduleReconciliation();
+					})
+					.catch((error) => {
+						console.warn('[JobWorker] Startup jitter failed:', error.message);
+						if (!stopped) {
+							scheduleReconciliation();
+						}
+					});
+			} else {
+				scheduleReconciliation();
 			}
 		}
 

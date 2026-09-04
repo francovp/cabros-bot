@@ -3,6 +3,7 @@
 const admin = require('firebase-admin');
 const { isFirestoreConfigured } = require('../storage/firestoreConfig');
 const alertStorageService = require('../storage/AlertStorageService');
+const { applyStartupJitter, resolveStartupJitterMs } = require('../../lib/startupJitter');
 
 const DEFAULT_REFRESH_INTERVAL_MS = 15 * 60 * 1000;
 const DEFAULT_LOAD_TIMEOUT_MS = 10 * 1000;
@@ -68,6 +69,11 @@ const PARAMETER_SCHEMA = Object.freeze({
 	ENABLE_ALERT_HTF_RENDER: { type: 'boolean', defaultValue: true },
 	ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION: { type: 'boolean', defaultValue: false },
 	ALERT_SIGNAL_COOLDOWN_BARS: { type: 'number', defaultValue: 1, integer: true, min: 1, max: 10 },
+	WORKER_STARTUP_JITTER_MS: { type: 'number', defaultValue: 5000, integer: true, min: 0, max: 30000 },
+	SIGNAL_OUTCOME_WORKER_STARTUP_JITTER_MS: { type: 'number', defaultValue: 5000, integer: true, min: 0, max: 30000 },
+	NOTIFICATION_REDRIVE_WORKER_STARTUP_JITTER_MS: { type: 'number', defaultValue: 5000, integer: true, min: 0, max: 30000 },
+	SCANNER_PRESET_SCHEDULER_STARTUP_JITTER_MS: { type: 'number', defaultValue: 5000, integer: true, min: 0, max: 30000 },
+	REMOTE_CONFIG_REFRESH_JITTER_MS: { type: 'number', defaultValue: 5000, integer: true, min: 0, max: 30000 },
 });
 
 let remoteOverrides = {};
@@ -402,6 +408,22 @@ async function loadNow(options = {}) {
 async function start() {
 	if (!isEnabled() || refreshTimer) {
 		return false;
+	}
+
+	const globalStartupJitter = process.env.WORKER_STARTUP_JITTER_MS !== undefined && process.env.WORKER_STARTUP_JITTER_MS.trim() !== ''
+		? Number.parseInt(process.env.WORKER_STARTUP_JITTER_MS, 10)
+		: null;
+	const startupJitterMs = resolveStartupJitterMs({
+		envVar: 'REMOTE_CONFIG_REFRESH_JITTER_MS',
+		runtimeKey: 'REMOTE_CONFIG_REFRESH_JITTER_MS',
+		defaultValue: Number.isFinite(globalStartupJitter) ? globalStartupJitter : 5000,
+	});
+	if (startupJitterMs > 0) {
+		console.info(`[RemoteConfigService] Applying startup jitter (${startupJitterMs}ms max)`);
+		await applyStartupJitter(startupJitterMs);
+		if (!isEnabled() || refreshTimer) {
+			return false;
+		}
 	}
 
 	await loadNow();

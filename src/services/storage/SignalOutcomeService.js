@@ -6,6 +6,7 @@ const equityMarketDataService = require('./EquityMarketDataService');
 const geminiPriceService = require('../grounding/geminiPriceService');
 const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
+const { applyStartupJitter, resolveStartupJitterMs } = require('../../lib/startupJitter');
 const { MainClient } = require('binance');
 
 const { encodeAlertPaginationCursor, parseAlertPaginationCursor } = require('./alertPaginationCursor');
@@ -1178,10 +1179,32 @@ function startWorker(options = {}) {
 
 	activeIntervalMs = intervalMs;
 
-	// Trigger initial sweep non-blockingly after server readiness
-	Promise.resolve().then(() => {
-		runScheduledSweep();
+	const globalStartupJitter = process.env.WORKER_STARTUP_JITTER_MS !== undefined && process.env.WORKER_STARTUP_JITTER_MS.trim() !== ''
+		? Number.parseInt(process.env.WORKER_STARTUP_JITTER_MS, 10)
+		: null;
+	const startupJitterMs = resolveStartupJitterMs({
+		envVar: 'SIGNAL_OUTCOME_WORKER_STARTUP_JITTER_MS',
+		runtimeKey: 'SIGNAL_OUTCOME_WORKER_STARTUP_JITTER_MS',
+		defaultValue: Number.isFinite(globalStartupJitter) ? globalStartupJitter : 5000,
 	});
+	if (startupJitterMs > 0) {
+		console.info(`[SignalOutcomeService] Applying startup jitter (${startupJitterMs}ms max)`);
+	}
+
+	// Trigger initial sweep non-blockingly after server readiness, with optional startup jitter
+	if (startupJitterMs > 0) {
+		Promise.resolve().then(async () => {
+			await applyStartupJitter(startupJitterMs);
+			if (shutdownRequested) {
+				return;
+			}
+			runScheduledSweep();
+		});
+	} else {
+		Promise.resolve().then(() => {
+			runScheduledSweep();
+		});
+	}
 
 	workerTimer = setInterval(runScheduledSweep, intervalMs);
 

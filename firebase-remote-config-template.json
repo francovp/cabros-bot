@@ -363,10 +363,45 @@
       },
       "description": "Cooldown length in alert-timeframe bars for same-signal repeat suppression",
       "valueType": "NUMBER"
+    },
+    "WORKER_STARTUP_JITTER_MS": {
+      "defaultValue": {
+        "value": "5000"
+      },
+      "description": "Global upper bound (ms) for per-process startup jitter applied to background sweepers (signal-outcome, notification-redrive, scanner-preset scheduler, remote-config refresh). Range 0-30000. Set to 0 to disable jitter.",
+      "valueType": "NUMBER"
+    },
+    "SIGNAL_OUTCOME_WORKER_STARTUP_JITTER_MS": {
+      "defaultValue": {
+        "value": "5000"
+      },
+      "description": "Per-worker override (ms) for the signal-outcome evaluation sweep startup delay. Falls back to WORKER_STARTUP_JITTER_MS when unset. Range 0-30000.",
+      "valueType": "NUMBER"
+    },
+    "NOTIFICATION_REDRIVE_WORKER_STARTUP_JITTER_MS": {
+      "defaultValue": {
+        "value": "5000"
+      },
+      "description": "Per-worker override (ms) for the notification-redrive sweep startup delay. Falls back to WORKER_STARTUP_JITTER_MS when unset. Range 0-30000.",
+      "valueType": "NUMBER"
+    },
+    "SCANNER_PRESET_SCHEDULER_STARTUP_JITTER_MS": {
+      "defaultValue": {
+        "value": "5000"
+      },
+      "description": "Per-worker override (ms) for the scanner-preset scheduler startup delay. Falls back to WORKER_STARTUP_JITTER_MS when unset. Range 0-30000.",
+      "valueType": "NUMBER"
+    },
+    "REMOTE_CONFIG_REFRESH_JITTER_MS": {
+      "defaultValue": {
+        "value": "5000"
+      },
+      "description": "Per-worker override (ms) for the Firebase Remote Config refresh timer startup delay. Falls back to WORKER_STARTUP_JITTER_MS when unset. Range 0-30000.",
+      "valueType": "NUMBER"
     }
   },
   "version": {
-    "versionNumber": "21",
+    "versionNumber": "22",
     "isLegacy": true
   }
 }

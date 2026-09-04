@@ -35,6 +35,8 @@ describe('job worker runtime', () => {
 	});
 
 	it('schedules durable queued-job reconciliation while the worker is running', async () => {
+		const previousJitter = process.env.WORKER_STARTUP_JITTER_MS;
+		process.env.WORKER_STARTUP_JITTER_MS = '0';
 		jest.useFakeTimers();
 		try {
 			const queue = {
@@ -58,6 +60,11 @@ describe('job worker runtime', () => {
 			expect(service.reconcileQueuedJobs).toHaveBeenCalledTimes(2);
 		} finally {
 			jest.useRealTimers();
+			if (previousJitter === undefined) {
+				delete process.env.WORKER_STARTUP_JITTER_MS;
+			} else {
+				process.env.WORKER_STARTUP_JITTER_MS = previousJitter;
+			}
 		}
 	});
 

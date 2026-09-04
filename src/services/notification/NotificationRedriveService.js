@@ -5,6 +5,7 @@ const crypto = require('crypto');
 const AlertStorageService = require('../storage/AlertStorageService');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
+const { applyStartupJitter, resolveStartupJitterMs } = require('../../lib/startupJitter');
 const { signalRepeatCooldown, nextMonotonicGeneration } = require('../alerts/signalRepeatCooldown');
 
 const COLLECTION_NAME = 'notificationDeadLetters';
@@ -1151,6 +1152,18 @@ class NotificationRedriveService {
 			DEFAULT_REDRIVE_INTERVAL_MS,
 		);
 
+		const globalStartupJitter = process.env.WORKER_STARTUP_JITTER_MS !== undefined && process.env.WORKER_STARTUP_JITTER_MS.trim() !== ''
+			? Number.parseInt(process.env.WORKER_STARTUP_JITTER_MS, 10)
+			: null;
+		const startupJitterMs = resolveStartupJitterMs({
+			envVar: 'NOTIFICATION_REDRIVE_WORKER_STARTUP_JITTER_MS',
+			runtimeKey: 'NOTIFICATION_REDRIVE_WORKER_STARTUP_JITTER_MS',
+			defaultValue: Number.isFinite(globalStartupJitter) ? globalStartupJitter : 5000,
+		});
+		if (startupJitterMs > 0) {
+			console.info(`[NotificationRedriveService] Applying startup jitter (${startupJitterMs}ms max)`);
+		}
+
 		this.running = true;
 		this.workerTimer = setInterval(() => {
 			trackBackgroundTask(this.sweep()).catch((err) => {
@@ -1160,6 +1173,25 @@ class NotificationRedriveService {
 
 		if (options.unref !== false && typeof this.workerTimer.unref === 'function') {
 			this.workerTimer.unref();
+		}
+
+		if (startupJitterMs > 0) {
+			applyStartupJitter(startupJitterMs)
+				.then(() => {
+					if (!this.running) {
+						return;
+					}
+					trackBackgroundTask(this.sweep()).catch((err) => {
+						console.warn('[NotificationRedriveService] Initial sweep error:', err.message);
+					});
+				})
+				.catch((err) => {
+					console.warn('[NotificationRedriveService] Startup jitter failed:', err.message);
+				});
+		} else {
+			trackBackgroundTask(this.sweep()).catch((err) => {
+				console.warn('[NotificationRedriveService] Initial sweep error:', err.message);
+			});
 		}
 
 		console.info(`[NotificationRedriveService] Worker started in ${configuredRole} role (interval: ${intervalMs}ms)`);

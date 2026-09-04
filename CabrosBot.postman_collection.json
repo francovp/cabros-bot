@@ -276,6 +276,38 @@
       ]
     },
     {
+      "name": "Get Status - startup jitter",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{apiKey}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/status",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "status"
+          ]
+        },
+        "description": "Protected status request exposing the dependencies.startupJitter section: the effective per-worker startup-jitter upper bound (ms) applied before each background worker's first sweep or refresh after a process start. Reflects env / Remote Config / default precedence and is bounded to [0, 30000]. Workers (signal-outcome, notification-redrive, scanner-preset scheduler, remote-config refresh) wait a random value in [0, value] ms so multi-worker deploys do not all hit Redis / Firestore / Firebase Remote Config at the same wall-clock second."
+      },
+      "response": [
+        {
+          "name": "200 OK - startupJitter populated",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"dependencies\":{\"startupJitter\":{\"global\":5000,\"signalOutcome\":5000,\"notificationRedrive\":5000,\"scannerPresetScheduler\":5000,\"remoteConfigRefresh\":5000}}}"
+        }
+      ]
+    },
+    {
       "name": "Get Capabilities",
       "request": {
         "method": "GET",

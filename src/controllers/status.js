@@ -20,6 +20,7 @@ const { whatsAppCommandBridgeService } = require('../services/notification/Whats
 const geminiQuotaManager = require('../services/grounding/geminiQuotaManager');
 const groundingMetrics = require('../services/grounding/metrics');
 const { signalRepeatCooldown } = require('../services/alerts/signalRepeatCooldown');
+const { resolveStartupJitterMs } = require('../lib/startupJitter');
 const { getCoalescingStatus } = require('../services/grounding/grounding');
 const {
 	getDeploymentCommit,
@@ -430,6 +431,35 @@ function getStatus() {
 			},
 			jobExecutionQueue: jobExecutionQueueStatus,
 			binanceTrading: binanceTradingStatus,
+			startupJitter: (() => {
+				const globalJitter = process.env.WORKER_STARTUP_JITTER_MS !== undefined && process.env.WORKER_STARTUP_JITTER_MS.trim() !== ''
+					? Number.parseInt(process.env.WORKER_STARTUP_JITTER_MS, 10)
+					: null;
+				const fallback = Number.isFinite(globalJitter) ? globalJitter : 5000;
+				return {
+					global: resolveStartupJitterMs({ envVar: 'WORKER_STARTUP_JITTER_MS', runtimeKey: 'WORKER_STARTUP_JITTER_MS' }),
+					signalOutcome: resolveStartupJitterMs({
+						envVar: 'SIGNAL_OUTCOME_WORKER_STARTUP_JITTER_MS',
+						runtimeKey: 'SIGNAL_OUTCOME_WORKER_STARTUP_JITTER_MS',
+						defaultValue: fallback,
+					}),
+					notificationRedrive: resolveStartupJitterMs({
+						envVar: 'NOTIFICATION_REDRIVE_WORKER_STARTUP_JITTER_MS',
+						runtimeKey: 'NOTIFICATION_REDRIVE_WORKER_STARTUP_JITTER_MS',
+						defaultValue: fallback,
+					}),
+					scannerPresetScheduler: resolveStartupJitterMs({
+						envVar: 'SCANNER_PRESET_SCHEDULER_STARTUP_JITTER_MS',
+						runtimeKey: 'SCANNER_PRESET_SCHEDULER_STARTUP_JITTER_MS',
+						defaultValue: fallback,
+					}),
+					remoteConfigRefresh: resolveStartupJitterMs({
+						envVar: 'REMOTE_CONFIG_REFRESH_JITTER_MS',
+						runtimeKey: 'REMOTE_CONFIG_REFRESH_JITTER_MS',
+						defaultValue: fallback,
+					}),
+				};
+			})(),
 		},
 	};
 }

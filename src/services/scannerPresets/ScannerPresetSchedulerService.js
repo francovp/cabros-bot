@@ -16,6 +16,7 @@ const alertModule = require('../../controllers/webhooks/handlers/alert/alert');
 const requestRoutingModule = require('../notification/requestRouting');
 const sentryService = require('../monitoring/SentryService');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
+const { applyStartupJitter, resolveStartupJitterMs } = require('../../lib/startupJitter');
 
 const DEFAULT_SCHEDULER_INTERVAL_MS = 60000;
 const MIN_SCHEDULER_INTERVAL_MS = 1000;
@@ -146,7 +147,30 @@ class ScannerPresetSchedulerService {
 
 		this.running = true;
 		this.shutdownRequested = false;
-		this._scheduleNextSweep(this.getIntervalMs());
+
+		const globalStartupJitter = process.env.WORKER_STARTUP_JITTER_MS !== undefined && process.env.WORKER_STARTUP_JITTER_MS.trim() !== ''
+			? Number.parseInt(process.env.WORKER_STARTUP_JITTER_MS, 10)
+			: null;
+		const startupJitterMs = resolveStartupJitterMs({
+			envVar: 'SCANNER_PRESET_SCHEDULER_STARTUP_JITTER_MS',
+			runtimeKey: 'SCANNER_PRESET_SCHEDULER_STARTUP_JITTER_MS',
+			defaultValue: Number.isFinite(globalStartupJitter) ? globalStartupJitter : 5000,
+		});
+		if (startupJitterMs > 0) {
+			console.info(`[ScannerPresetScheduler] Applying startup jitter (${startupJitterMs}ms max)`);
+			applyStartupJitter(startupJitterMs)
+				.then(() => {
+					if (!this.running || this.shutdownRequested) {
+						return;
+					}
+					this._scheduleNextSweep(this.getIntervalMs());
+				})
+				.catch((err) => {
+					console.warn('[ScannerPresetScheduler] Startup jitter failed:', err.message);
+				});
+		} else {
+			this._scheduleNextSweep(this.getIntervalMs());
+		}
 	}
 
 	async stopWorker(options = {}) {
