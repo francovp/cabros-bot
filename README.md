@@ -1411,6 +1411,59 @@ Retrieve a single stored alert by Firestore document ID. The response also surfa
 }
 ```
 
+#### POST /api/alerts/:alertId/replay
+
+Replay a stored alert to specified notification channels. Each replay attempt creates a unique audit record in the Firestore `alertReplays` collection.
+
+**Authentication:** Requires `x-api-key` header (or `api-key` query parameter).
+
+**Headers:**
+- `idempotency-key` (or `x-idempotency-key`): Required UUID or unique idempotency key string.
+
+**Query Parameters:**
+- `reEnrich` (boolean, optional, default `false`): When `true`, re-runs the full enrichment pipeline (Gemini grounding and TradingView MCP data) on the stored alert text prior to dispatch.
+- `useTradingViewData` (boolean, optional): Whether to include TradingView MCP data when re-enriching. Defaults to the stored alert's setting or `true`.
+
+**Request Body:**
+```json
+{
+  "channels": ["telegram"],
+  "reEnrich": true
+}
+```
+
+**Re-enrichment Behavior:**
+- **Standard Replay (`reEnrich=false` or omitted):** Dispatches the stored alert text with its original enrichment data.
+- **Re-enriched Replay (`reEnrich=true`):** Runs fresh Gemini grounding and TradingView MCP enrichment before dispatching. When successful, dispatches the re-enriched analysis, records `reEnriched: true` and the new `enrichmentData` in the `alertReplays` collection, and returns `"reEnriched": true` in the response.
+- **Fail-Open Fallback:** If enrichment fails (timeout, API error), a warning is logged and the replay safely falls back to dispatching the original alert text without failing the request.
+- **Disabled Fallback:** If both `ENABLE_GEMINI_GROUNDING=false` and `ENABLE_TRADINGVIEW_MCP_ENRICHMENT=false`, the `reEnrich` flag is safely ignored with a logged warning, dispatching the original alert text.
+- **Rate Limits & Budgets:** Re-enrichment respects the same token usage tracking and timeout/rate limits as live alerts (`TokenUsageTracker`, `geminiQuotaManager`, and `TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS`).
+
+**Response (200 OK - Re-enriched):**
+```json
+{
+  "success": true,
+  "alertId": "alert-123",
+  "replayId": "alert-123_06bdeddf2a292e8940d24fb2847d88234dc85d7cd751d4cc7dbc471692aadf38_1700000000000_5b1f0c79-9f0b-4d6e-9b1f-3b8c0e6a5f1a",
+  "results": [
+    { "channel": "telegram", "success": true, "messageId": "123" }
+  ],
+  "reEnriched": true
+}
+```
+
+**Response (200 OK - Standard Replay):**
+```json
+{
+  "success": true,
+  "alertId": "alert-123",
+  "replayId": "alert-123_06bdeddf2a292e8940d24fb2847d88234dc85d7cd751d4cc7dbc471692aadf38_1700000000000_5b1f0c79-9f0b-4d6e-9b1f-3b8c0e6a5f1a",
+  "results": [
+    { "channel": "telegram", "success": true, "messageId": "123" }
+  ]
+}
+```
+
 **Response (200 OK - Completed):**
 ```json
 {

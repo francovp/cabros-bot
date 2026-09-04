@@ -611,6 +611,16 @@
             "$ref": "#/components/parameters/AlertId"
           },
           {
+            "name": "reEnrich",
+            "in": "query",
+            "required": false,
+            "description": "When true, re-runs the full enrichment pipeline (Gemini grounding and TradingView MCP) on the stored alert text before dispatching to channels. If enrichment fails or is disabled, the replay falls back to original text.",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            }
+          },
+          {
             "$ref": "#/components/parameters/DryRun"
           },
           {
@@ -2244,6 +2254,20 @@
                       "discord"
                     ]
                   }
+                },
+                "reEnrich": {
+                  "type": "boolean",
+                  "description": "Optional flag to re-run the full enrichment pipeline (Gemini grounding and TradingView MCP) before dispatch. When false or omitted, the stored alert text is dispatched without re-enrichment.",
+                  "default": false
+                },
+                "useTradingViewData": {
+                  "type": "boolean",
+                  "description": "Optional flag to include TradingView MCP data when re-enriching. Defaults to the stored alert setting or true.",
+                  "default": true
+                },
+                "idempotencyKey": {
+                  "type": "string",
+                  "description": "Optional idempotency key alternative to the idempotency-key header."
                 }
               }
             },
@@ -4198,6 +4222,14 @@
               "null"
             ],
             "format": "date-time"
+          },
+          "reEnriched": {
+            "type": "boolean",
+            "description": "True when the replay attempt re-ran enrichment before dispatch."
+          },
+          "enrichmentData": {
+            "type": "object",
+            "description": "New enrichment data produced during the replay attempt, if re-enrichment was performed."
           }
         }
       },
@@ -5496,6 +5528,16 @@
             "items": {
               "type": "string"
             }
+          },
+          "alertId": {
+            "type": "string"
+          },
+          "replayId": {
+            "type": "string"
+          },
+          "reEnriched": {
+            "type": "boolean",
+            "description": "True when the alert was re-enriched before replay delivery."
           }
         }
       },

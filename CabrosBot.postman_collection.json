@@ -3005,10 +3005,66 @@
                 "alerts",
                 "{{alertId}}",
                 "replay"
+              ],
+              "query": [
+                {
+                  "key": "reEnrich",
+                  "value": "true",
+                  "description": "Re-run the full enrichment pipeline before dispatch",
+                  "disabled": true
+                }
               ]
             }
           },
           "response": [
+            {
+              "name": "Success with re-enrichment",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-api-key",
+                    "value": "{{apiKey}}",
+                    "type": "text"
+                  },
+                  {
+                    "key": "idempotency-key",
+                    "value": "{{replayIdempotencyKey}}",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"channels\": [\"telegram\"],\n  \"reEnrich\": true\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/alerts/{{alertId}}/replay?reEnrich=true",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "alerts",
+                    "{{alertId}}",
+                    "replay"
+                  ],
+                  "query": [
+                    {
+                      "key": "reEnrich",
+                      "value": "true"
+                    }
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"alertId\": \"alert-123\",\n  \"replayId\": \"alert-123_06bdeddf2a292e8940d24fb2847d88234dc85d7cd751d4cc7dbc471692aadf38_1700000000000_5b1f0c79-9f0b-4d6e-9b1f-3b8c0e6a5f1a\",\n  \"results\": [\n    { \"channel\": \"telegram\", \"success\": true, \"messageId\": \"123\" }\n  ],\n  \"reEnriched\": true\n}"
+            },
             {
               "name": "Success",
               "originalRequest": {

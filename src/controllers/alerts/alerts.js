@@ -3,6 +3,8 @@
 const alertStorageService = require('../../services/storage/AlertStorageService');
 const sentryService = require('../../services/monitoring/SentryService');
 const signalOutcomeService = require('../../services/storage/SignalOutcomeService');
+const { TokenUsageTracker } = require('../../lib/tokenUsage');
+const { getRuntimeConfig } = require('../../services/remoteConfig/RemoteConfigService');
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
@@ -497,6 +499,22 @@ function getIdempotencyKey(req) {
 		|| (req.query && (req.query.idempotencyKey || req.query.idempotency_key));
 }
 
+function resolveReEnrich(req) {
+	const queryFlag = req.query && (req.query.reEnrich === 'true' || req.query.reEnrich === true);
+	const bodyFlag = req.body && typeof req.body === 'object' && (req.body.reEnrich === true || req.body.reEnrich === 'true');
+	return Boolean(queryFlag || bodyFlag);
+}
+
+function resolveUseTradingViewData(req, storedAlert) {
+	if (req.query && (req.query.useTradingViewData === 'true' || req.query.useTradingViewData === true)) return true;
+	if (req.query && (req.query.useTradingViewData === 'false' || req.query.useTradingViewData === false)) return false;
+	if (req.body && typeof req.body === 'object') {
+		if (req.body.useTradingViewData === true || req.body.useTradingViewData === 'true') return true;
+		if (req.body.useTradingViewData === false || req.body.useTradingViewData === 'false') return false;
+	}
+	return storedAlert && typeof storedAlert.useTradingViewData === 'boolean' ? storedAlert.useTradingViewData : true;
+}
+
 function replayAlert(botOrGetter) {
 	return function handleReplayAlert(req, res) {
 		return handleAsync(req, res, `/api/alerts/${req.params.alertId}/replay`, async () => {
@@ -547,11 +565,50 @@ function replayAlert(botOrGetter) {
 				});
 			}
 
-			const { getNotificationManager, initializeNotificationServices } = require('../webhooks/handlers/alert/alert');
+			const {
+				getNotificationManager,
+				initializeNotificationServices,
+				processEnrichment,
+			} = require('../webhooks/handlers/alert/alert');
 			let notificationManager = getNotificationManager();
 			if (!notificationManager) {
 				const bot = typeof botOrGetter === 'function' ? botOrGetter() : botOrGetter || null;
 				notificationManager = await initializeNotificationServices(bot);
+			}
+
+			const requestedReEnrich = resolveReEnrich(req);
+			let reEnriched = false;
+			let newEnrichmentData = null;
+
+			if (requestedReEnrich) {
+				const runtimeConfig = getRuntimeConfig();
+				const isGeminiEnabled = Boolean(runtimeConfig.ENABLE_GEMINI_GROUNDING);
+				const isTradingViewMcpEnabled = Boolean(runtimeConfig.ENABLE_TRADINGVIEW_MCP_ENRICHMENT);
+
+				if (!isGeminiEnabled && !isTradingViewMcpEnabled) {
+					console.warn('[AlertReplay] reEnrich requested but enrichment is disabled (ENABLE_GEMINI_GROUNDING=false, ENABLE_TRADINGVIEW_MCP_ENRICHMENT=false). Replaying original text.');
+				} else if (typeof processEnrichment === 'function') {
+					try {
+						const tokenUsage = new TokenUsageTracker();
+						const useTradingViewData = resolveUseTradingViewData(req, storedAlert);
+						const requestSpan = sentryService.getActiveSpan();
+						const alertCandidate = {
+							text: storedAlert.text,
+							source: storedAlert.source || 'alert-replay',
+						};
+						const success = await processEnrichment(alertCandidate, {
+							tokenUsage,
+							useTradingViewData,
+							parentSpan: requestSpan,
+						});
+						if (success && alertCandidate.enriched) {
+							reEnriched = true;
+							newEnrichmentData = alertCandidate.enriched;
+						}
+					} catch (error) {
+						console.warn('[AlertReplay] Enrichment failed, using original text:', error.message);
+					}
+				}
 			}
 
 			let storedTelegramThreadId = storedAlert.telegramThreadId;
@@ -568,7 +625,7 @@ function replayAlert(botOrGetter) {
 
 			const replayPayload = {
 				text: storedAlert.text,
-				enriched: storedAlert.enrichmentData || undefined,
+				enriched: (reEnriched ? newEnrichmentData : storedAlert.enrichmentData) || undefined,
 				source: storedAlert.source || 'alert-replay',
 				replay: {
 					originalAlertId: alertId,
@@ -582,18 +639,22 @@ function replayAlert(botOrGetter) {
 				...(storedAlert.discordWebhookUrl ? { discordWebhookUrl: storedAlert.discordWebhookUrl } : {}),
 			};
 			const results = await notificationManager.sendToChannels(replayPayload, channels);
-			const replayId = await alertStorageService.saveReplayAttempt({
+			const replayAttemptData = {
 				alertId,
 				idempotencyKey: idempotencyKey.trim(),
 				channels,
 				deliveryResults: results,
-			});
+				...(typeof reEnriched === 'boolean' && requestedReEnrich ? { reEnriched } : {}),
+				...(reEnriched && newEnrichmentData ? { enrichmentData: newEnrichmentData } : {}),
+			};
+			const replayId = await alertStorageService.saveReplayAttempt(replayAttemptData);
 
 			return res.status(200).json({
 				success: true,
 				alertId,
 				replayId,
 				results,
+				...(reEnriched ? { reEnriched: true } : {}),
 			});
 		});
 	};

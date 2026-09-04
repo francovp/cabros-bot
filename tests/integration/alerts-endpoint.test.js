@@ -18,6 +18,7 @@ jest.mock('../../src/controllers/webhooks/handlers/alert/alert', () => ({
 	postAlert: jest.fn(() => (_req, res) => res.status(501).json({ error: 'not mocked' })),
 	initializeNotificationServices: jest.fn(),
 	getNotificationManager: jest.fn(),
+	processEnrichment: jest.fn(),
 }));
 
 jest.mock('../../src/services/storage/SignalOutcomeService', () => ({
@@ -701,6 +702,180 @@ describe('Alerts API Integration Tests', () => {
 			deliveryResults: [{ channel: 'telegram', success: true, messageId: 'tg-1' }],
 		});
 		expect(res.body.success).toBe(true);
+	});
+
+	it('replays a stored alert with reEnrich=true query parameter, running enrichment pipeline', async () => {
+		process.env.ENABLE_GEMINI_GROUNDING = 'true';
+		alertStorageService.getAlertById.mockResolvedValue({
+			id: 'alert-123',
+			receivedAt: '2026-06-06T12:34:56.000Z',
+			text: 'Replay me',
+			enriched: true,
+			enrichmentData: { sentiment: 'bullish' },
+			tokenUsage: { totalTokens: 42 },
+			deliveryResults: [{ channel: 'whatsapp', success: false }],
+			source: 'webhook',
+			useTradingViewData: false,
+		});
+
+		const newEnrichment = { sentiment: 'super-bullish', current_price: 100 };
+		alertHandler.processEnrichment.mockImplementation(async (candidate) => {
+			candidate.enriched = newEnrichment;
+			return true;
+		});
+
+		const res = await request(app)
+			.post('/api/alerts/alert-123/replay?reEnrich=true')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'replay-key-enrich-query')
+			.send({ channels: ['telegram'] })
+			.expect(200);
+
+		expect(alertHandler.processEnrichment).toHaveBeenCalledWith(
+			expect.objectContaining({ text: 'Replay me', source: 'webhook' }),
+			expect.objectContaining({ useTradingViewData: false })
+		);
+		expect(mockNotificationManager.sendToChannels).toHaveBeenCalledWith(
+			expect.objectContaining({
+				text: 'Replay me',
+				enriched: newEnrichment,
+			}),
+			['telegram']
+		);
+		expect(alertStorageService.saveReplayAttempt).toHaveBeenCalledWith({
+			alertId: 'alert-123',
+			idempotencyKey: 'replay-key-enrich-query',
+			channels: ['telegram'],
+			deliveryResults: [{ channel: 'telegram', success: true, messageId: 'tg-1' }],
+			reEnriched: true,
+			enrichmentData: newEnrichment,
+		});
+		expect(res.body).toEqual({
+			success: true,
+			alertId: 'alert-123',
+			replayId: 'replay-1',
+			results: [{ channel: 'telegram', success: true, messageId: 'tg-1' }],
+			reEnriched: true,
+		});
+	});
+
+	it('replays a stored alert with reEnrich: true in JSON request body', async () => {
+		process.env.ENABLE_GEMINI_GROUNDING = 'true';
+		alertStorageService.getAlertById.mockResolvedValue({
+			id: 'alert-123',
+			receivedAt: '2026-06-06T12:34:56.000Z',
+			text: 'Replay me',
+			enriched: false,
+			enrichmentData: null,
+			deliveryResults: [],
+			source: 'webhook',
+		});
+
+		const newEnrichment = { sentiment: 'bullish' };
+		alertHandler.processEnrichment.mockImplementation(async (candidate) => {
+			candidate.enriched = newEnrichment;
+			return true;
+		});
+
+		const res = await request(app)
+			.post('/api/alerts/alert-123/replay')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'replay-key-enrich-body')
+			.send({ channels: ['telegram'], reEnrich: true })
+			.expect(200);
+
+		expect(alertHandler.processEnrichment).toHaveBeenCalled();
+		expect(res.body.reEnriched).toBe(true);
+		expect(alertStorageService.saveReplayAttempt).toHaveBeenCalledWith(
+			expect.objectContaining({
+				reEnriched: true,
+				enrichmentData: newEnrichment,
+			})
+		);
+	});
+
+	it('falls back to original text and logs warning when re-enrichment fails (fail-open)', async () => {
+		process.env.ENABLE_GEMINI_GROUNDING = 'true';
+		alertStorageService.getAlertById.mockResolvedValue({
+			id: 'alert-123',
+			receivedAt: '2026-06-06T12:34:56.000Z',
+			text: 'Replay me',
+			enriched: true,
+			enrichmentData: { sentiment: 'original-data' },
+			deliveryResults: [],
+			source: 'webhook',
+		});
+
+		alertHandler.processEnrichment.mockRejectedValue(new Error('Enrichment service timed out'));
+		const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+		const res = await request(app)
+			.post('/api/alerts/alert-123/replay?reEnrich=true')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'replay-key-enrich-fail')
+			.send({ channels: ['telegram'] })
+			.expect(200);
+
+		expect(warnSpy).toHaveBeenCalledWith(
+			expect.stringContaining('[AlertReplay] Enrichment failed'),
+			expect.stringContaining('Enrichment service timed out')
+		);
+		expect(mockNotificationManager.sendToChannels).toHaveBeenCalledWith(
+			expect.objectContaining({
+				text: 'Replay me',
+				enriched: { sentiment: 'original-data' },
+			}),
+			['telegram']
+		);
+		expect(alertStorageService.saveReplayAttempt).toHaveBeenCalledWith(
+			expect.objectContaining({
+				reEnriched: false,
+			})
+		);
+		expect(res.body.reEnriched).toBeUndefined();
+		warnSpy.mockRestore();
+	});
+
+	it('logs a warning and skips enrichment when both ENABLE_GEMINI_GROUNDING and ENABLE_TRADINGVIEW_MCP_ENRICHMENT are false', async () => {
+		process.env.ENABLE_GEMINI_GROUNDING = 'false';
+		process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT = 'false';
+		alertStorageService.getAlertById.mockResolvedValue({
+			id: 'alert-123',
+			receivedAt: '2026-06-06T12:34:56.000Z',
+			text: 'Replay me',
+			enriched: true,
+			enrichmentData: { sentiment: 'original-data' },
+			deliveryResults: [],
+			source: 'webhook',
+		});
+
+		const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+		const res = await request(app)
+			.post('/api/alerts/alert-123/replay?reEnrich=true')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'replay-key-enrich-disabled')
+			.send({ channels: ['telegram'] })
+			.expect(200);
+
+		expect(alertHandler.processEnrichment).not.toHaveBeenCalled();
+		expect(warnSpy).toHaveBeenCalledWith(
+			expect.stringContaining('[AlertReplay] reEnrich requested but enrichment is disabled')
+		);
+		expect(mockNotificationManager.sendToChannels).toHaveBeenCalledWith(
+			expect.objectContaining({
+				text: 'Replay me',
+				enriched: { sentiment: 'original-data' },
+			}),
+			['telegram']
+		);
+		expect(alertStorageService.saveReplayAttempt).toHaveBeenCalledWith(
+			expect.objectContaining({
+				reEnriched: false,
+			})
+		);
+		expect(res.body.reEnriched).toBeUndefined();
+		warnSpy.mockRestore();
 	});
 
 	it('returns 400 when replay is missing an idempotency key', async () => {
