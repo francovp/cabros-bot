@@ -27,6 +27,8 @@ const { parseTradingViewSignal, TIMEFRAME_MAP } = require('../../../../services/
 const { signalRepeatCooldown, oppositeKeyOf, buildSignalKey } = require('../../../../services/alerts/signalRepeatCooldown');
 const { notificationRedriveService } = require('../../../../services/notification/NotificationRedriveService');
 const { isPreviewEnvironment } = require('../../../../lib/deploymentEnvironment');
+const { buildReplyMarkup } = require('../../../../services/alerts/telegramAlertKeyboard');
+const { defaultStore: telegramActionStore } = require('../../../../services/alerts/telegramActionStore');
 
 // Initialize services
 let notificationManager = null;
@@ -309,6 +311,43 @@ function postAlert(botOrGetter) {
 			}
 
 			let results;
+			// Inline keyboard markup is opt-in: only when alert storage is
+			// enabled (so /api/alerts/:alertId/replay can resolve the alert
+			// after the user clicks "Replay") and the Telegram channel is
+			// actually selected for delivery. The alertId is generated
+			// synchronously so it can be embedded in the markup callback_data
+			// before the message is sent.
+			let inlineAlertId = null;
+			try {
+				const storageEnabled = typeof alertStorageService.isEnabled === 'function'
+					&& alertStorageService.isEnabled();
+				const telegramEnabled = process.env.ENABLE_TELEGRAM_BOT === 'true';
+				const telegramRequested = requestedChannels.length === 0
+					|| requestedChannels.includes('telegram');
+				if (storageEnabled && telegramEnabled && telegramRequested && !suppressedRepeat) {
+					inlineAlertId = uuidv4();
+					const chatIdForStore = routing.telegramChatId || process.env.TELEGRAM_CHAT_ID || null;
+					const threadIdForStore = routing.telegramThreadId !== undefined
+						? routing.telegramThreadId
+						: null;
+					const shortId = telegramActionStore.register(inlineAlertId, {
+						chatId: chatIdForStore,
+						threadId: threadIdForStore,
+						messageIds: [],
+					});
+					const replyMarkup = buildReplyMarkup({
+						shortId,
+						hasEnrichment: Boolean(alert.enriched),
+						includeReplay: true,
+					});
+					if (replyMarkup) {
+						alert.replyMarkup = replyMarkup;
+					}
+				}
+			} catch (error) {
+				console.warn('[Alert] Failed to attach inline keyboard markup:', error.message);
+				inlineAlertId = null;
+			}
 			try {
 				results = suppressedRepeat
 					? []
@@ -448,6 +487,7 @@ function postAlert(botOrGetter) {
 				telegramThreadId: routing.telegramThreadId,
 				whatsappChatId: routing.whatsappChatId,
 				discordWebhookUrl: routing.discordWebhookUrl,
+				alertId: inlineAlertId || undefined,
 			}).catch(() => {}); // errors already logged inside AlertStorageService
 
 			if (signalOutcomeService.isEnabled() && !suppressedRepeat) {
@@ -537,6 +577,9 @@ module.exports = {
 	postAlert,
 	resolveRequestId,
 	initializeNotificationServices,
+	__resetNotificationManagerForTesting: () => {
+		notificationManager = null;
+	},
 	getNotificationManager,
 	getCooldownChannelIdentity,
 };
