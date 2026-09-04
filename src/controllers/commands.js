@@ -4,6 +4,7 @@ const { getNewsMonitor } = require('./webhooks/handlers/newsMonitor/newsMonitor'
 const signalOutcomeService = require('../services/storage/SignalOutcomeService');
 const sentryService = require('../services/monitoring/SentryService');
 const { getTelegramCommandMenu } = require('../lib/telegramCommandMenu');
+const { resolveSymbolQuery } = require('../services/symbols/aliasResolver');
 
 const getPrice = async (context) => {
 	const chatId = getChatId(context);
@@ -496,6 +497,7 @@ function buildHelpMessage() {
 		'',
 		'• `/precio <simbolo>` — Consulta el precio en Binance o Twelve Data \\(ej: `/precio BTCUSDT`, `/precio NVDA`\\)',
 		'• `/cryptobot id` — Muestra el Chat ID actual de Telegram',
+		'• `/resolve <simbolo>` — Resuelve un ticker amigable a EXCHANGE:SYMBOL \\(ej: `/resolve GOLD` → `TVC:GOLD`\\)',
 		'• `/analisis <simbolos>` — Crea un análisis técnico en TradingView \\(alias: `/analysis`\\)',
 		'  _Opciones: `timeframe=1D`, `mtf=true`, `timeoutMs=300000`_',
 		'• `/scanner` — Escaneo de mercado en TradingView \\(top gainers, losers, breakouts\\)',
@@ -508,6 +510,91 @@ function buildHelpMessage() {
 		'• `/help` / `/start` — Muestra este mensaje de ayuda',
 	].join('\n');
 }
+
+const RESOLVE_COMMAND_MAX_RESULTS = 3;
+
+function escapeMdV2Inline(value) {
+	// Minimal MarkdownV2 escape for inline code/text inside the /resolve reply.
+	// We render the canonical identifier inside `…` (inline code) and free
+	// text outside, so we only escape the small set that breaks inline text.
+	return String(value).replace(/([_*`\[\]()~>#+\-=|{}.!\\])/g, '\\$1');
+}
+
+const resolveCmd = async (context) => {
+	const chatId = getChatId(context);
+	const args = parseCommandArgs(context);
+	const query = (args.positionals[0] || '').trim();
+	const defaultExchange = (args.options.exchange || args.options.exchange || '').trim();
+	const commandSpan = sentryService.startInactiveSpan({
+		name: 'telegram.command.resolve',
+		op: 'bot.command',
+		forceTransaction: true,
+		attributes: {
+			'telegram.command': '/resolve',
+			'telegram.chat_id': chatId ? String(chatId) : 'unknown',
+			'query.symbol': query || 'missing',
+		},
+	});
+
+	try {
+		if (!query) {
+			await context.reply(
+				'Uso: `/resolve <simbolo>`. Ejemplos: `/resolve GOLD`, `/resolve BTC`, `/resolve ES`',
+			);
+			return;
+		}
+
+		const { matches, normalizedQuery } = resolveSymbolQuery(query, {
+			defaultExchange: defaultExchange || undefined,
+			maxResults: RESOLVE_COMMAND_MAX_RESULTS,
+		});
+
+		if (matches.length === 0) {
+			const escapedQuery = escapeMdV2Inline(normalizedQuery || query);
+			await context.reply(
+				`Sin coincidencias para \`${escapedQuery}\`. Probá con el identificador canónico \`EXCHANGE:SYMBOL\`.`,
+			);
+			return;
+		}
+
+		const lines = matches.map((match, index) => {
+			const canonical = `${match.exchange}:${match.symbol}`;
+			const confidence = match.matchType === 'exact' ? 'exacto' : 'aproximado';
+			const assetClass = match.assetClass
+				? ` _\\(${escapeMdV2Inline(match.assetClass)}\\)_`
+				: '';
+			const aliases = match.aliases && match.aliases.length > 0
+				? `\n    _aliases:_ ${match.aliases.slice(0, 4).map((a) => '`' + escapeMdV2Inline(a) + '`').join(', ')}${match.aliases.length > 4 ? ', …' : ''}`
+				: '';
+			return `${index + 1}\\. \`${escapeMdV2Inline(canonical)}\` — ${confidence}${assetClass}${aliases}`;
+		});
+
+		const header = matches.length === 1
+			? '*Coincidencia para* \\`' + escapeMdV2Inline(query) + '\\`'
+			: '*Top ' + matches.length + ' coincidencias para* \\`' + escapeMdV2Inline(query) + '\\`\nUsa \\`/analisis EXCHANGE:SYMBOL\\` para ejecutar\\.';
+		const message = `${header}\n\n${lines.join('\n\n')}`;
+
+		await context.reply(message);
+	} catch (error) {
+		console.error(error);
+		sentryService.captureRuntimeError({
+			channel: 'telegram',
+			error,
+			extra: {
+				command: 'resolveCmd',
+				chatId,
+				query,
+			},
+		});
+		try {
+			await context.reply('No pude resolver el símbolo. Intenta de nuevo.');
+		} catch (replyError) {
+			console.error('Failed to send error reply:', replyError);
+		}
+	} finally {
+		sentryService.endSpan(commandSpan);
+	}
+};
 
 const helpCmd = async (context) => {
 	const chatId = getChatId(context);
@@ -630,6 +717,7 @@ module.exports = {
 	newsMonitorCmd,
 	helpCmd,
 	outcomesCommand,
+	resolveCmd,
 	buildHelpMessage,
 	getTelegramCommandMenu,
 	parseCommandArgs,

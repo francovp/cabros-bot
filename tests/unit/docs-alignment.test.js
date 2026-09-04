@@ -32,6 +32,7 @@ function getJavaScriptFiles(dirPath, arrayOfFiles = []) {
 const ENVIRONMENT_CLASSIFICATIONS = {
 	APPDATA: 'platform-injected credential path',
 	COMMIT_SHA: 'platform-injected release metadata',
+	DISABLE_SYMBOL_ALIAS_RESOLVER: 'opt-out feature flag for the symbol alias resolver (#845)',
 	ENABLE_FIRESTORE_IDEMPOTENCY_STORAGE: 'deprecated compatibility alias',
 	ENABLE_TEST_RATE_LIMITER: 'test-only override',
 	FUNCTION_NAME: 'platform-injected runtime metadata',

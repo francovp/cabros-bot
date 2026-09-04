@@ -34,6 +34,9 @@
       "name": "Signal outcomes"
     },
     {
+      "name": "Symbols"
+    },
+    {
       "name": "Operations"
     }
   ],
@@ -959,6 +962,155 @@
           }
         ],
         "x-admin-role": "admin.operator"
+      }
+    },
+    "/api/symbols/resolve": {
+      "post": {
+        "tags": [
+          "Symbols"
+        ],
+        "summary": "Resolve a friendly ticker to canonical EXCHANGE:SYMBOL identifiers",
+        "description": "Static alias resolver backing the Telegram `/resolve` command and the operator workflow that discovers canonical identifiers without burning TradingView MCP budget.",
+        "operationId": "resolveSymbol",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SymbolResolveRequest"
+              },
+              "examples": {
+                "gold": {
+                  "summary": "Resolve GOLD",
+                  "value": {
+                    "query": "GOLD"
+                  }
+                },
+                "xauusd": {
+                  "summary": "Resolve XAU/USD with TVC default",
+                  "value": {
+                    "query": "XAU/USD",
+                    "defaultExchange": "TVC"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Matches (possibly empty)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SymbolResolveResponse"
+                },
+                "examples": {
+                  "match": {
+                    "summary": "Match found",
+                    "value": {
+                      "matches": [
+                        {
+                          "exchange": "TVC",
+                          "symbol": "GOLD",
+                          "aliases": ["GOLD", "XAUUSD", "XAU/USD", "XAU"],
+                          "assetClass": "commodity",
+                          "matchType": "exact",
+                          "score": 100,
+                          "order": 0
+                        }
+                      ],
+                      "normalizedQuery": "GOLD",
+                      "totalEntries": 18,
+                      "query": "GOLD"
+                    }
+                  },
+                  "no-match": {
+                    "summary": "Empty match",
+                    "value": {
+                      "matches": [],
+                      "normalizedQuery": "ZZZ_FAKE",
+                      "totalEntries": 18,
+                      "query": "ZZZ_FAKE"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.operator"
+      }
+    },
+    "/api/symbols/aliases": {
+      "get": {
+        "tags": [
+          "Symbols"
+        ],
+        "summary": "Return the static symbol alias table for audit/discovery",
+        "description": "Returns every static alias entry in deterministic order so operators can audit or extend `src/services/symbols/aliases.json` without code changes.",
+        "operationId": "listSymbolAliases",
+        "responses": {
+          "200": {
+            "description": "Alias table snapshot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SymbolAliasesResponse"
+                },
+                "example": {
+                  "aliases": [
+                    {
+                      "aliases": ["GOLD", "XAUUSD", "XAU/USD", "XAU"],
+                      "exchange": "TVC",
+                      "symbol": "GOLD",
+                      "assetClass": "commodity"
+                    }
+                  ],
+                  "totalEntries": 18
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
       }
     },
     "/api/jobs/tradingview-analysis": {
@@ -5941,6 +6093,170 @@
           },
           "order": {
             "$ref": "#/components/schemas/JsonObject"
+          }
+        }
+      },
+      "SymbolResolveRequest": {
+        "type": "object",
+        "required": [
+          "query"
+        ],
+        "properties": {
+          "query": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Friendly ticker query (e.g. GOLD, XAU/USD, BTC, ES). Trimmed/normalized internally.",
+            "example": "GOLD"
+          },
+          "defaultExchange": {
+            "type": "string",
+            "description": "Optional preferred exchange for tie-breaking (e.g. TVC, BINANCE, CME_MINI).",
+            "example": "TVC"
+          },
+          "maxResults": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 25,
+            "default": 5,
+            "description": "Cap on returned matches. Default 5; max 25.",
+            "example": 5
+          }
+        }
+      },
+      "SymbolResolveMatch": {
+        "type": "object",
+        "required": [
+          "exchange",
+          "symbol",
+          "aliases",
+          "matchType",
+          "score",
+          "order"
+        ],
+        "properties": {
+          "exchange": {
+            "type": "string",
+            "description": "Canonical TradingView exchange identifier.",
+            "example": "TVC"
+          },
+          "symbol": {
+            "type": "string",
+            "description": "Canonical TradingView symbol (without the `EXCHANGE:` prefix).",
+            "example": "GOLD"
+          },
+          "aliases": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "All aliases that resolve to this canonical identifier.",
+            "example": ["GOLD", "XAUUSD", "XAU/USD", "XAU"]
+          },
+          "assetClass": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Informational asset class (commodity, crypto, fx, future, index).",
+            "example": "commodity"
+          },
+          "matchType": {
+            "type": "string",
+            "enum": [
+              "exact",
+              "prefix",
+              "alias-prefix"
+            ],
+            "description": "How the query matched this entry. `exact` is preferred.",
+            "example": "exact"
+          },
+          "score": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100,
+            "description": "Match score (0-100). Higher scores dominate the ordering.",
+            "example": 100
+          },
+          "order": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Deterministic alias-table index used as a tie-breaker.",
+            "example": 0
+          }
+        }
+      },
+      "SymbolResolveResponse": {
+        "type": "object",
+        "required": [
+          "matches",
+          "normalizedQuery",
+          "totalEntries",
+          "query"
+        ],
+        "properties": {
+          "matches": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SymbolResolveMatch"
+            },
+            "description": "Array of matches in deterministic order (empty array means no match)."
+          },
+          "normalizedQuery": {
+            "type": "string",
+            "description": "Internal normalized form of the input query (uppercase, slash-stripped, noise characters removed)."
+          },
+          "totalEntries": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Total static alias-table size for diagnostics."
+          },
+          "query": {
+            "type": "string",
+            "description": "Echo of the trimmed input query."
+          }
+        }
+      },
+      "SymbolAliasesResponse": {
+        "type": "object",
+        "required": [
+          "aliases",
+          "totalEntries"
+        ],
+        "properties": {
+          "aliases": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "aliases",
+                "exchange",
+                "symbol"
+              ],
+              "properties": {
+                "aliases": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "exchange": {
+                  "type": "string"
+                },
+                "symbol": {
+                  "type": "string"
+                },
+                "assetClass": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              }
+            }
+          },
+          "totalEntries": {
+            "type": "integer",
+            "minimum": 0
           }
         }
       }
