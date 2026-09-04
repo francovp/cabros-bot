@@ -2207,7 +2207,8 @@
             },
             "example": {
               "symbol": "BINANCE:BTCUSDT",
-              "timeframe": "1h"
+              "timeframe": "1h",
+              "includeMultiTimeframe": true
             }
           }
         }
@@ -4698,6 +4699,15 @@
             "pattern": "^[A-Z0-9_]+:[A-Z0-9._-]+$"
           },
           "timeframe": {
+            "type": "string"
+          },
+          "includeMultiTimeframe": {
+            "type": "boolean"
+          },
+          "side": {
+            "type": "string"
+          },
+          "direction": {
             "type": "string"
           }
         }

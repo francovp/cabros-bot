@@ -257,20 +257,22 @@ function resolveTrendConfluence(item = {}, scanType, options = {}) {
 	const direction = resolveDirectionFromRaw(raw);
 	const expectedDirection = getExpectedTrendDirection(item, scanType);
 
+	const isDirectionlessScan = scanType === 'bollinger_scan' || scanType === 'volume_confirmation';
+
 	let status = explicitStatus;
 	if (direction && expectedDirection) {
 		status = direction === expectedDirection ? 'aligned' : 'counter-trend';
-	} else if (scanType === 'bollinger_scan' && direction) {
+	} else if (isDirectionlessScan && direction) {
 		status = 'aligned';
 	} else if (!status && typeof raw.aligned === 'boolean') {
 		status = raw.aligned ? 'aligned' : 'counter-trend';
 	} else if (!status && direction) {
 		status = 'unknown';
 	}
-	if (!expectedDirection && scanType !== 'bollinger_scan' && (status === 'aligned' || status === 'counter-trend')) {
+	if (!expectedDirection && !isDirectionlessScan && (status === 'aligned' || status === 'counter-trend')) {
 		status = 'unknown';
 	}
-	if (!expectedDirection && scanType === 'bollinger_scan' && !direction && (status === 'aligned' || status === 'counter-trend')) {
+	if (!expectedDirection && isDirectionlessScan && !direction && (status === 'aligned' || status === 'counter-trend')) {
 		status = 'unknown';
 	}
 	if (!status) {

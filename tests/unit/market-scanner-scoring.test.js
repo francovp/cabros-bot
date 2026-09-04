@@ -1,4 +1,4 @@
-const { scoreScannerItem, rankScannerItems } = require('../../src/services/tradingview/marketScannerScoring');
+const { scoreScannerItem, rankScannerItems, resolveTrendConfluence } = require('../../src/services/tradingview/marketScannerScoring');
 
 describe('Market Scanner Scoring', () => {
 	describe('scoreScannerItem', () => {
@@ -370,6 +370,80 @@ describe('Market Scanner Scoring', () => {
 			expect(result.trendConfluence).toEqual(expect.objectContaining({
 				status: 'counter-trend',
 			}));
+		});
+	});
+
+	describe('resolveTrendConfluence for volume_confirmation', () => {
+		it('resolves aligned when HTF trend has directional bias and no candidate direction is given', () => {
+			const confluence = resolveTrendConfluence({}, 'volume_confirmation', {
+				trendConfluence: {
+					alignment: { status: 'ALIGNED', confidence: 85 },
+					recommendation: { action: 'BUY' },
+				},
+			});
+
+			expect(confluence).toEqual({
+				status: 'aligned',
+				direction: 'bullish',
+				confidence: 85,
+			});
+		});
+
+		it('resolves aligned when HTF trend matches expected candidate direction', () => {
+			const confluence = resolveTrendConfluence({
+				breakout_type: 'bullish',
+			}, 'volume_confirmation', {
+				trendConfluence: {
+					direction: 'bullish',
+					confidence: 90,
+				},
+			});
+
+			expect(confluence).toEqual({
+				status: 'aligned',
+				direction: 'bullish',
+				confidence: 90,
+			});
+		});
+
+		it('resolves counter-trend when HTF trend opposes candidate direction', () => {
+			const confluence = resolveTrendConfluence({
+				trading_recommendation: 'SELL',
+			}, 'volume_confirmation', {
+				trendConfluence: {
+					direction: 'bullish',
+					confidence: 80,
+				},
+			});
+
+			expect(confluence).toEqual({
+				status: 'counter-trend',
+				direction: 'bullish',
+				confidence: 80,
+			});
+		});
+
+		it('resolves unknown when HTF trend is neutral or directionless', () => {
+			const confluence = resolveTrendConfluence({}, 'volume_confirmation', {
+				trendConfluence: {
+					alignment: { status: 'MIXED' },
+					recommendation: { action: 'HOLD' },
+				},
+			});
+
+			expect(confluence).toEqual({
+				status: 'unknown',
+				direction: null,
+				confidence: null,
+			});
+		});
+
+		it('returns null when MTF data is missing or invalid', () => {
+			expect(resolveTrendConfluence({}, 'volume_confirmation', {
+				trendConfluence: null,
+			})).toBeNull();
+
+			expect(resolveTrendConfluence({}, 'volume_confirmation', {})).toBeNull();
 		});
 	});
 

@@ -6,6 +6,7 @@ const { tradingViewMcpService } = require('../../src/services/tradingview/Tradin
 jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
 	tradingViewMcpService: {
 		callVolumeConfirmation: jest.fn(),
+		callMultiTimeframeAnalysis: jest.fn(),
 	},
 }));
 
@@ -134,5 +135,158 @@ describe('Volume confirmation endpoint', () => {
 			decision: 'unknown',
 			volumeRatio: null,
 		}));
+	});
+
+	it('includes multiTimeframeAnalysis and htfAlignment when enabled and feature flag is on', async () => {
+		process.env.ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME = 'true';
+
+		tradingViewMcpService.callVolumeConfirmation.mockResolvedValueOnce({
+			symbol: 'BINANCE:BTCUSDT',
+			volume_analysis: {
+				volume_ratio: 1.8,
+				volume_strength: 'HIGH',
+			},
+			confidence: 0.95,
+		});
+		tradingViewMcpService.callMultiTimeframeAnalysis.mockResolvedValueOnce({
+			alignment: { status: 'ALIGNED', confidence: 0.9 },
+			recommendation: { action: 'BUY' },
+		});
+
+		const res = await request(app)
+			.post('/api/webhook/volume-confirmation')
+			.set('x-api-key', 'test-key')
+			.send({
+				symbol: 'BINANCE:BTCUSDT',
+				includeMultiTimeframe: true,
+			})
+			.expect(200);
+
+		expect(res.body).toEqual(expect.objectContaining({
+			success: true,
+			symbol: 'BINANCE:BTCUSDT',
+			confirmed: true,
+			decision: 'confirm',
+			volumeRatio: 1.8,
+			htfAlignment: 'aligned',
+			multiTimeframeAnalysis: expect.objectContaining({
+				alignment: { status: 'ALIGNED', confidence: 0.9 },
+			}),
+			volumeConfirmation: expect.objectContaining({
+				confirmed: true,
+				decision: 'confirm',
+				volumeRatio: 1.8,
+			}),
+		}));
+
+		expect(tradingViewMcpService.callMultiTimeframeAnalysis).toHaveBeenCalledWith({
+			symbol: 'BTCUSDT',
+			exchange: 'BINANCE',
+		});
+	});
+
+	it('evaluates htfAlignment as counter-trend when direction opposes HTF trend', async () => {
+		process.env.ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME = 'true';
+
+		tradingViewMcpService.callVolumeConfirmation.mockResolvedValueOnce({
+			symbol: 'BINANCE:BTCUSDT',
+			volume_analysis: { volume_ratio: 1.5 },
+		});
+		tradingViewMcpService.callMultiTimeframeAnalysis.mockResolvedValueOnce({
+			direction: 'bullish',
+			confidence: 0.85,
+		});
+
+		const res = await request(app)
+			.post('/api/webhook/volume-confirmation')
+			.set('x-api-key', 'test-key')
+			.send({
+				symbol: 'BINANCE:BTCUSDT',
+				includeMultiTimeframe: true,
+				side: 'SELL',
+			})
+			.expect(200);
+
+		expect(res.body).toEqual(expect.objectContaining({
+			success: true,
+			htfAlignment: 'counter-trend',
+		}));
+	});
+
+	it('fails open when multi-timeframe analysis throws an error', async () => {
+		process.env.ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME = 'true';
+
+		tradingViewMcpService.callVolumeConfirmation.mockResolvedValueOnce({
+			symbol: 'BINANCE:BTCUSDT',
+			volume_analysis: { volume_ratio: 1.6 },
+		});
+		tradingViewMcpService.callMultiTimeframeAnalysis.mockRejectedValueOnce(
+			new Error('MCP multi-timeframe timeout'),
+		);
+
+		const res = await request(app)
+			.post('/api/webhook/volume-confirmation')
+			.set('x-api-key', 'test-key')
+			.send({
+				symbol: 'BINANCE:BTCUSDT',
+				includeMultiTimeframe: true,
+			})
+			.expect(200);
+
+		expect(res.body).toEqual(expect.objectContaining({
+			success: true,
+			symbol: 'BINANCE:BTCUSDT',
+			confirmed: true,
+			decision: 'confirm',
+			volumeRatio: 1.6,
+			multiTimeframeAnalysis: null,
+			htfAlignment: 'unknown',
+		}));
+	});
+
+	it('does not invoke multi-timeframe analysis when feature flag is disabled', async () => {
+		process.env.ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME = 'false';
+
+		tradingViewMcpService.callVolumeConfirmation.mockResolvedValueOnce({
+			symbol: 'BINANCE:BTCUSDT',
+			volume_analysis: { volume_ratio: 1.5 },
+		});
+
+		const res = await request(app)
+			.post('/api/webhook/volume-confirmation')
+			.set('x-api-key', 'test-key')
+			.send({
+				symbol: 'BINANCE:BTCUSDT',
+				includeMultiTimeframe: true,
+			})
+			.expect(200);
+
+		expect(res.body).toEqual(expect.objectContaining({
+			success: true,
+			symbol: 'BINANCE:BTCUSDT',
+			confirmed: true,
+			decision: 'confirm',
+		}));
+		expect(res.body.multiTimeframeAnalysis).toBeUndefined();
+		expect(res.body.htfAlignment).toBeUndefined();
+		expect(tradingViewMcpService.callMultiTimeframeAnalysis).not.toHaveBeenCalled();
+	});
+
+	it('returns 400 when includeMultiTimeframe is not a boolean', async () => {
+		const res = await request(app)
+			.post('/api/webhook/volume-confirmation')
+			.set('x-api-key', 'test-key')
+			.send({
+				symbol: 'BINANCE:BTCUSDT',
+				includeMultiTimeframe: 'not-a-bool',
+			})
+			.expect(400);
+
+		expect(res.body).toEqual(expect.objectContaining({
+			code: 'INVALID_REQUEST',
+			error: 'includeMultiTimeframe must be a boolean',
+		}));
+		expect(tradingViewMcpService.callVolumeConfirmation).not.toHaveBeenCalled();
+		expect(tradingViewMcpService.callMultiTimeframeAnalysis).not.toHaveBeenCalled();
 	});
 });
