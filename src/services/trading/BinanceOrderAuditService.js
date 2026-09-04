@@ -38,30 +38,33 @@ function getRetentionDays() {
 	return DEFAULT_RETENTION_DAYS;
 }
 
+const AUDIT_SALT = 'cabros-bot:binance-order-audit';
+
 function hashOperator(operator) {
-	if (!operator || typeof operator !== 'string') return 'unknown';
-	const trimmed = operator.trim();
-	if (!trimmed) return 'unknown';
-	if (/^[a-f0-9]{64}$/i.test(trimmed)) {
-		return trimmed.toLowerCase();
+	if (!operator || typeof operator !== 'string') {
+		return 'unknown';
 	}
-	return crypto.createHash('sha256').update(trimmed).digest('hex');
+	const trimmed = operator.trim();
+	if (!trimmed) {
+		return 'unknown';
+	}
+	if (/^[a-f0-9]{64}$/i.test(trimmed)) {
+		return trimmed;
+	}
+	return crypto.pbkdf2Sync(trimmed, AUDIT_SALT, 10000, 32, 'sha256').toString('hex');
 }
 
 function extractOperatorHash(req) {
 	if (!req) return 'unknown';
-	const rawKey = req.headers?.['x-api-key']
-		|| req.headers?.['X-API-Key']
-		|| req.query?.['api-key'];
-	const key = Array.isArray(rawKey) ? rawKey[0] : rawKey;
+	const key = req.headers?.['x-api-key'] || req.headers?.['X-API-Key'] || req.query?.['api-key'];
 	if (typeof key === 'string' && key.trim()) {
-		return crypto.createHash('sha256').update(key.trim()).digest('hex');
+		return hashOperator(key.trim());
 	}
 	const auth = req.headers?.authorization;
 	if (typeof auth === 'string' && auth.trim()) {
-		return crypto.createHash('sha256').update(auth.trim()).digest('hex');
+		return hashOperator(auth.trim());
 	}
-	return 'unknown';
+	return 'anonymous';
 }
 
 function sanitizeFirestoreValue(value) {

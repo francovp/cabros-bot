@@ -73,9 +73,9 @@ describe('BinanceOrderAuditService', () => {
 			expect(getRetentionDays()).toBe(30);
 		});
 
-		it('hashes operator strings to 64-char sha256 hex', () => {
+		it('hashes operator strings to 64-char hex', () => {
 			const raw = 'my-secret-operator-key';
-			const expected = crypto.createHash('sha256').update(raw).digest('hex');
+			const expected = crypto.pbkdf2Sync(raw, 'cabros-bot:binance-order-audit', 10000, 32, 'sha256').toString('hex');
 			expect(hashOperator(raw)).toBe(expected);
 			expect(hashOperator(expected)).toBe(expected);
 			expect(hashOperator('')).toBe('unknown');
@@ -84,16 +84,16 @@ describe('BinanceOrderAuditService', () => {
 		});
 
 		it('extracts and hashes operator from request headers or query params', () => {
-			const expected = crypto.createHash('sha256').update('test-api-key').digest('hex');
+			const expected = crypto.pbkdf2Sync('test-api-key', 'cabros-bot:binance-order-audit', 10000, 32, 'sha256').toString('hex');
 
 			expect(extractOperatorHash({ headers: { 'x-api-key': 'test-api-key' } })).toBe(expected);
 			expect(extractOperatorHash({ headers: { 'X-API-Key': 'test-api-key' } })).toBe(expected);
 			expect(extractOperatorHash({ query: { 'api-key': 'test-api-key' } })).toBe(expected);
 			expect(extractOperatorHash({ headers: { authorization: 'Bearer jwt.token.here' } })).toBe(
-				crypto.createHash('sha256').update('Bearer jwt.token.here').digest('hex'),
+				crypto.pbkdf2Sync('Bearer jwt.token.here', 'cabros-bot:binance-order-audit', 10000, 32, 'sha256').toString('hex'),
 			);
 			expect(extractOperatorHash(null)).toBe('unknown');
-			expect(extractOperatorHash({})).toBe('unknown');
+			expect(extractOperatorHash({})).toBe('anonymous');
 		});
 
 		it('sanitizes Firestore values by removing undefined and redacting credentials', () => {
@@ -212,7 +212,7 @@ describe('BinanceOrderAuditService', () => {
 			const writtenData = mockDocRef.set.mock.calls[0][0];
 			expect(writtenData).toMatchObject({
 				orderId: 'test-order-uuid-1',
-				operator: crypto.createHash('sha256').update('operator-key-123').digest('hex'),
+				operator: hashOperator('operator-key-123'),
 				action: 'PLACE',
 				symbol: 'BTCUSDT',
 				side: 'BUY',
