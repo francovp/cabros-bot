@@ -1861,4 +1861,64 @@ describe('Status endpoints', () => {
 			}),
 		}));
 	});
+
+	it('exposes grounding operational metrics in /api/status when ENABLE_GEMINI_GROUNDING is true', async () => {
+		groundingMetrics.recordSuccess(100, 'ALERT_ENRICHMENT');
+		groundingMetrics.recordFailure('error', new Error('API error'), 'ALERT_ENRICHMENT');
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.grounding).toEqual({
+			enabled: true,
+			configured: true,
+			ready: true,
+			status: 'ready',
+			metrics: {
+				totalRequests: 2,
+				successRequests: 1,
+				failureRequests: 1,
+				timeoutRequests: 0,
+				successRate: 0.5,
+				uptimeSince: expect.any(String),
+			},
+		});
+	});
+
+	it('omits grounding section when ENABLE_GEMINI_GROUNDING is disabled', async () => {
+		process.env.ENABLE_GEMINI_GROUNDING = 'false';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies).not.toHaveProperty('grounding');
+	});
+
+	it('reports grounding as misconfigured when credentials are missing but grounding is enabled', async () => {
+		delete process.env.GEMINI_API_KEY;
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.grounding).toEqual({
+			enabled: true,
+			configured: false,
+			ready: false,
+			status: 'misconfigured',
+			metrics: expect.objectContaining({
+				totalRequests: 0,
+				successRequests: 0,
+				failureRequests: 0,
+				timeoutRequests: 0,
+				successRate: 0,
+				uptimeSince: expect.any(String),
+			}),
+		});
+	});
 });
