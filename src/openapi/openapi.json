@@ -4762,9 +4762,38 @@
           "include_multi_timeframe": {
             "type": "boolean",
             "default": false
+          },
+          "includeMultiAgent": {
+            "type": "boolean",
+            "default": false
+          },
+          "include_multi_agent": {
+            "type": "boolean",
+            "default": false
           }
         },
         "additionalProperties": false
+      },
+      "SymbolAnalysisMultiAgent": {
+        "type": "object",
+        "properties": {
+          "decision": {
+            "type": "string",
+            "nullable": true
+          },
+          "confidence": {
+            "type": "string",
+            "nullable": true
+          },
+          "net_score": {
+            "type": "number",
+            "nullable": true
+          },
+          "agents": {
+            "$ref": "#/components/schemas/JsonObject",
+            "nullable": true
+          }
+        }
       },
       "SymbolAnalysisResult": {
         "type": "object",
@@ -4802,6 +4831,9 @@
           },
           "analysis": {
             "$ref": "#/components/schemas/JsonObject"
+          },
+          "multiAgent": {
+            "$ref": "#/components/schemas/SymbolAnalysisMultiAgent"
           },
           "requestId": {
             "type": "string"

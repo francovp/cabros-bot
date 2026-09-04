@@ -499,6 +499,27 @@ class TradingViewMcpService {
 		}, { signal });
 	}
 
+	async callMultiAgentAnalysis({ symbol, exchange, timeframe, signal }) {
+		return this._withRuntimeStatus(async () => {
+			const rpcResult = await this._callTool('multi_agent_analysis', {
+				symbol,
+				exchange,
+				timeframe,
+			}, { signal });
+			const normalizedResult = this._unwrapSchemaResult(rpcResult);
+
+			if (normalizedResult && normalizedResult.error) {
+				throw new Error(normalizedResult.error);
+			}
+
+			if (!normalizedResult || typeof normalizedResult !== 'object' || Array.isArray(normalizedResult)) {
+				throw new Error('TradingView MCP multi_agent_analysis returned invalid payload');
+			}
+
+			return normalizedResult;
+		}, { signal });
+	}
+
 	async callVolumeConfirmation({ symbol, exchange, timeframe, signal }) {
 		return this._withRuntimeStatus(async () => {
 			const fullSymbol = symbol.includes(':') ? symbol : `${exchange}:${symbol}`;
