@@ -4496,6 +4496,36 @@
               ]
             }
           },
+          "symbolRoutes": {
+            "type": "object",
+            "minProperties": 1,
+            "description": "Optional per-symbol channel routing. Matched symbols use their configured channels; symbols without a route use the global channels or enabled-channel broadcast.",
+            "propertyNames": {
+              "type": "string",
+              "pattern": "^(?:[A-Za-z][A-Za-z0-9_]{1,15}:)?[A-Za-z0-9._-]{2,20}$"
+            },
+            "additionalProperties": {
+              "type": "object",
+              "required": [
+                "channels"
+              ],
+              "properties": {
+                "channels": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "telegram",
+                      "whatsapp",
+                      "discord"
+                    ]
+                  }
+                }
+              },
+              "additionalProperties": false
+            }
+          },
           "telegramChatId": {
             "type": "string",
             "minLength": 1
@@ -5546,6 +5576,10 @@
                 },
                 "success": {
                   "type": "boolean"
+                },
+                "symbol": {
+                  "type": "string",
+                  "description": "Symbol whose configured route produced this delivery result. Present when symbolRoutes is used."
                 },
                 "error": {
                   "type": "string"

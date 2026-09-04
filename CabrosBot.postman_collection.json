@@ -373,6 +373,88 @@
           ]
         },
         {
+          "name": "POST Send Alert (per-symbol routing)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"text\": \"BTCUSDT and NVDA momentum update\",\n  \"symbolRoutes\": {\n    \"BTCUSDT\": { \"channels\": [\"telegram\"] },\n    \"NVDA\": { \"channels\": [\"discord\"] }\n  }\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/webhook/alert",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "webhook",
+                "alert"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\"success\":true,\"results\":[{\"channel\":\"telegram\",\"symbol\":\"BTCUSDT\",\"success\":true},{\"channel\":\"discord\",\"symbol\":\"NVDA\",\"success\":true}],\"requestedChannels\":[\"telegram\",\"discord\"],\"deliveredChannels\":[\"telegram\",\"discord\"]}"
+            }
+          ]
+        },
+        {
+          "name": "POST Send Alert (invalid symbol route)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"text\": \"BTCUSDT momentum update\",\n  \"symbolRoutes\": {\n    \"BTCUSDT\": { \"channels\": [\"slack\"] }\n  }\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/webhook/alert",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "webhook",
+                "alert"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Invalid symbol route",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\"success\":false,\"error\":\"Unknown channel(s): slack. Valid channels: telegram, whatsapp, discord\",\"details\":{\"field\":\"symbolRoutes\"}}"
+            }
+          ]
+        },
+        {
           "name": "POST Send Alert Dry Run (risk metadata)",
           "request": {
             "method": "POST",

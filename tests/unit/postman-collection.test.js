@@ -66,6 +66,22 @@ describe('Postman collection contract', () => {
 		]));
 	});
 
+	it('documents valid and invalid per-symbol alert routing variants', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const valid = findItem(collection.item, 'POST Send Alert (per-symbol routing)');
+		const invalid = findItem(collection.item, 'POST Send Alert (invalid symbol route)');
+
+		expect(valid).toBeDefined();
+		expect(JSON.parse(valid.request.body.raw).symbolRoutes).toEqual({
+			BTCUSDT: { channels: ['telegram'] },
+			NVDA: { channels: ['discord'] },
+		});
+		expect(valid.response[0].body).toContain('"symbol":"BTCUSDT"');
+		expect(invalid).toBeDefined();
+		expect(JSON.parse(invalid.request.body.raw).symbolRoutes.BTCUSDT.channels).toEqual(['slack']);
+		expect(invalid.response[0].code).toBe(400);
+	});
+
 	it('uses distinct demo keys for middleware-backed scanner requests', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const expandedAnalysis = findItem(collection.item, 'POST Expanded Analysis Alert');

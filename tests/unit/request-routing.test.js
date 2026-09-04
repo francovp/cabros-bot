@@ -149,3 +149,89 @@ describe('requestRouting - telegramThreadId validation', () => {
 	});
 });
 
+describe('requestRouting - symbolRoutes', () => {
+	it('normalizes per-symbol channel routes', () => {
+		expect(parseNotificationRouting({
+			symbolRoutes: {
+				btcusdt: { channels: ['telegram'] },
+				' NASDAQ : NVDA ': { channels: ['discord'] },
+			},
+		}).symbolRoutes).toEqual({
+			BTCUSDT: { channels: ['telegram'] },
+			'NASDAQ:NVDA': { channels: ['discord'] },
+		});
+	});
+
+	it('rejects invalid per-symbol channel routes', () => {
+		expect(() => parseNotificationRouting({
+			symbolRoutes: { BTCUSDT: { channels: ['slack'] } },
+		})).toThrow(NotificationRoutingValidationError);
+		expect(() => parseNotificationRouting({
+			symbolRoutes: { BTCUSDT: { channels: ['telegram', 123] } },
+		})).toThrow(NotificationRoutingValidationError);
+	});
+
+	it('dispatches matched symbols to their own channels', async () => {
+		const notificationManager = {
+			getEnabledChannels: jest.fn().mockReturnValue(['telegram', 'discord']),
+			sendToChannels: jest.fn(({ symbol }, channels) => Promise.resolve([
+				{ success: true, channel: channels[0], symbol },
+			])),
+			sendToAll: jest.fn(),
+		};
+
+		const routing = parseNotificationRouting({
+			symbolRoutes: {
+				BTCUSDT: { channels: ['telegram'] },
+				'NASDAQ:NVDA': { channels: ['discord'] },
+			},
+		});
+
+		const results = await sendWithNotificationRouting(
+			notificationManager,
+			{ text: 'BTCUSDT and NASDAQ:NVDA momentum update' },
+			routing,
+		);
+
+		expect(notificationManager.sendToChannels).toHaveBeenCalledTimes(2);
+		expect(notificationManager.sendToChannels.mock.calls.map(([, channels]) => channels)).toEqual([
+			['telegram'],
+			['discord'],
+		]);
+		expect(results).toEqual([
+			{ success: true, channel: 'telegram', symbol: 'BTCUSDT' },
+			{ success: true, channel: 'discord', symbol: 'NVDA' },
+		]);
+		expect(notificationManager.sendToAll).not.toHaveBeenCalled();
+	});
+
+	it('uses global channels for symbols without a route', async () => {
+		const notificationManager = {
+			getEnabledChannels: jest.fn().mockReturnValue(['telegram', 'whatsapp']),
+			sendToChannels: jest.fn().mockResolvedValue([{ success: true, channel: 'telegram' }]),
+			sendToAll: jest.fn().mockResolvedValue([{ success: true, channel: 'whatsapp' }]),
+		};
+
+		const routing = parseNotificationRouting({
+			channels: ['whatsapp'],
+			symbolRoutes: { BTCUSDT: { channels: ['telegram'] } },
+		});
+
+		await sendWithNotificationRouting(
+			notificationManager,
+			{ text: 'BTCUSDT and ETHUSDT momentum update' },
+			routing,
+		);
+
+		expect(notificationManager.sendToChannels).toHaveBeenCalledWith(
+			expect.objectContaining({ symbol: 'BTCUSDT' }),
+			['telegram'],
+			expect.any(Object),
+		);
+		expect(notificationManager.sendToChannels).toHaveBeenCalledWith(
+			expect.objectContaining({ symbol: 'ETHUSDT' }),
+			['whatsapp'],
+			expect.any(Object),
+		);
+	});
+});

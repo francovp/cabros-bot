@@ -1,6 +1,7 @@
 'use strict';
 
 const VALID_CHANNELS = ['telegram', 'whatsapp', 'discord'];
+const SYMBOL_STOP_WORDS = new Set(['AND', 'THE', 'THIS', 'ONLY', 'SEND', 'ALERT', 'UPDATE', 'WITH', 'FROM', 'TO', 'BUY', 'SELL', 'VENTA', 'COMPRA']);
 
 class NotificationRoutingValidationError extends Error {
 	constructor(message, details = null) {
@@ -145,6 +146,96 @@ function validateDiscordWebhookOverride(field, value) {
 	return value;
 }
 
+function normalizeSymbolRouteKey(rawKey) {
+	if (typeof rawKey !== 'string') {
+		throw new NotificationRoutingValidationError('"symbolRoutes" keys must be non-empty symbol strings', {
+			field: 'symbolRoutes',
+		});
+	}
+
+	const key = rawKey.trim().toUpperCase().split(':').map((part) => part.trim()).join(':').replace(/\s+/g, '_');
+	if (!/^(?:[A-Z][A-Z0-9_]{1,15}:)?[A-Z0-9._-]{2,20}$/.test(key)) {
+		throw new NotificationRoutingValidationError(`Invalid symbolRoutes key: ${rawKey}`, {
+			field: 'symbolRoutes',
+		});
+	}
+
+	return key;
+}
+
+function normalizeSymbolRoutes(rawSymbolRoutes) {
+	if (rawSymbolRoutes === undefined) {
+		return undefined;
+	}
+	if (!rawSymbolRoutes || typeof rawSymbolRoutes !== 'object' || Array.isArray(rawSymbolRoutes) || Object.keys(rawSymbolRoutes).length === 0) {
+		throw new NotificationRoutingValidationError('"symbolRoutes" must be a non-empty object', {
+			field: 'symbolRoutes',
+		});
+	}
+
+	return Object.fromEntries(Object.entries(rawSymbolRoutes).map(([rawKey, rawRoute]) => {
+		if (!rawRoute || typeof rawRoute !== 'object' || Array.isArray(rawRoute)) {
+			throw new NotificationRoutingValidationError(`Route for ${rawKey} must be an object`, {
+				field: 'symbolRoutes',
+			});
+		}
+
+		return [normalizeSymbolRouteKey(rawKey), {
+			channels: normalizeChannels(rawRoute.channels, { required: true }),
+		}];
+	}));
+}
+
+function extractSymbolReferences(text) {
+	if (typeof text !== 'string') {
+		return [];
+	}
+
+	const references = [];
+	const seen = new Set();
+	// ponytail: token heuristic; use structured alert metadata if symbol grammars expand.
+	const symbolPattern = /\b(?:([A-Za-z][A-Za-z0-9_]{1,15}):)?([A-Za-z][A-Za-z0-9._-]{1,19})\b/g;
+	let match;
+	while ((match = symbolPattern.exec(text)) !== null) {
+		const rawExchange = match[1];
+		const rawSymbol = match[2];
+		const symbol = rawSymbol.toUpperCase();
+		if ((!rawExchange && rawSymbol !== symbol) || SYMBOL_STOP_WORDS.has(symbol)) {
+			continue;
+		}
+		const referenceKey = rawExchange ? `${rawExchange}:${symbol}`.toUpperCase() : symbol;
+		if (seen.has(referenceKey)) {
+			continue;
+		}
+		seen.add(referenceKey);
+		references.push({
+			symbol,
+			lookupKeys: rawExchange ? [normalizeSymbolRouteKey(referenceKey), symbol] : [symbol],
+		});
+	}
+
+	return references;
+}
+
+function resolveSymbolRouteDispatches(text, symbolRoutes, routing = {}) {
+	if (!symbolRoutes) {
+		return null;
+	}
+
+	const references = extractSymbolReferences(text);
+	if (references.length === 0) {
+		return null;
+	}
+
+	return references.map((reference) => {
+		const route = reference.lookupKeys.map((key) => symbolRoutes[key]).find(Boolean);
+		return {
+			symbol: reference.symbol,
+			channels: route ? route.channels : routing.channels,
+		};
+	});
+}
+
 function parseNotificationRouting(raw = {}, options = {}) {
 	const {
 		requiredChannels = false,
@@ -161,6 +252,7 @@ function parseNotificationRouting(raw = {}, options = {}) {
 			telegramThreadId: undefined,
 			whatsappChatId: undefined,
 			discordWebhookUrl: undefined,
+			symbolRoutes: undefined,
 		};
 	}
 
@@ -181,6 +273,7 @@ function parseNotificationRouting(raw = {}, options = {}) {
 		telegramThreadId: validateThreadIdOverride('telegramThreadId', rawThreadId),
 		whatsappChatId: validateChatOverride('whatsappChatId', raw.whatsappChatId),
 		discordWebhookUrl: validateDiscordWebhookOverride('discordWebhookUrl', raw.discordWebhookUrl),
+		symbolRoutes: normalizeSymbolRoutes(raw.symbolRoutes),
 	};
 }
 
@@ -192,6 +285,17 @@ async function sendWithNotificationRouting(notificationManager, alert, routing =
 		whatsappChatId: routing.whatsappChatId,
 		discordWebhookUrl: routing.discordWebhookUrl,
 	};
+	const symbolDispatches = resolveSymbolRouteDispatches(alert && alert.text, routing.symbolRoutes, routing);
+	if (symbolDispatches) {
+		const results = await Promise.all(symbolDispatches.map(async ({ symbol, channels }) => {
+			const symbolAlert = { ...alertPayload, symbol };
+			const delivered = channels
+				? await notificationManager.sendToChannels(symbolAlert, channels, options)
+				: await notificationManager.sendToAll(symbolAlert, options);
+			return delivered.map((result) => ({ ...result, symbol }));
+		}));
+		return results.flat();
+	}
 
 	if (routing.channels) {
 		validateNotificationRouting(notificationManager, routing);
@@ -202,12 +306,16 @@ async function sendWithNotificationRouting(notificationManager, alert, routing =
 }
 
 function validateNotificationRouting(notificationManager, routing = {}) {
-	if (!routing.channels) {
+	const requestedChannels = [
+		...(routing.channels || []),
+		...Object.values(routing.symbolRoutes || {}).flatMap((route) => route.channels),
+	];
+	if (requestedChannels.length === 0) {
 		return;
 	}
 
 	const enabledChannels = getRequestedChannels(notificationManager);
-	const unavailableChannels = routing.channels.filter((channel) => !enabledChannels.includes(channel));
+	const unavailableChannels = [...new Set(requestedChannels)].filter((channel) => !enabledChannels.includes(channel));
 	if (unavailableChannels.length > 0) {
 		throw new NotificationRoutingValidationError(
 			`Requested channel(s) disabled or misconfigured: ${unavailableChannels.join(', ')}`,
@@ -216,16 +324,22 @@ function validateNotificationRouting(notificationManager, routing = {}) {
 	}
 }
 
-function getRequestedChannels(notificationManager, routing = {}) {
+function getRequestedChannels(notificationManager, routing = {}, text) {
+	const enabledChannels = !notificationManager || typeof notificationManager.getEnabledChannels !== 'function'
+		? []
+		: notificationManager.getEnabledChannels();
+	if (routing.symbolRoutes) {
+		const dispatches = resolveSymbolRouteDispatches(text, routing.symbolRoutes, routing);
+		if (dispatches) {
+			return [...new Set(dispatches.flatMap(({ channels }) => channels || enabledChannels))];
+		}
+	}
+
 	if (routing.channels) {
 		return routing.channels;
 	}
 
-	if (!notificationManager || typeof notificationManager.getEnabledChannels !== 'function') {
-		return [];
-	}
-
-	return notificationManager.getEnabledChannels();
+	return enabledChannels;
 }
 
 function getDeliveredChannels(results = []) {
@@ -242,4 +356,6 @@ module.exports = {
 	sendWithNotificationRouting,
 	getRequestedChannels,
 	getDeliveredChannels,
+	extractSymbolReferences,
+	resolveSymbolRouteDispatches,
 };
