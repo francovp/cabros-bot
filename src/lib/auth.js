@@ -2,6 +2,8 @@ const crypto = require('crypto');
 const sentryService = require('../services/monitoring/SentryService');
 const { isProductionLikeEnvironment, isPreviewEnvironment } = require('./deploymentEnvironment');
 
+const API_KEY_COMPARISON_LENGTH = 4096;
+
 /**
  * Middleware to validate API key for webhook endpoints.
  * Requires `x-api-key` header to match `WEBHOOK_API_KEY` environment variable.
@@ -55,9 +57,6 @@ function validateApiKey(req, res, next) {
 		return res.status(401).json({ error: 'Unauthorized: Missing API key' });
 	}
 
-	// Ensure apiKey is a string (in case of multiple headers)
-	const keyToCheck = Array.isArray(apiKey) ? apiKey[0] : apiKey;
-
 	if (!isValidApiKey(req)) {
 		return res.status(403).json({ error: 'Forbidden: Invalid API key' });
 	}
@@ -74,10 +73,18 @@ function isValidApiKey(req) {
 	const keyToCheck = Array.isArray(apiKey) ? apiKey[0] : apiKey;
 	if (typeof keyToCheck !== 'string') return false;
 
-	const bufferApiKey = Buffer.from(keyToCheck);
-	const bufferValidApiKey = Buffer.from(validApiKey);
-	return bufferApiKey.length === bufferValidApiKey.length
-		&& crypto.timingSafeEqual(bufferApiKey, bufferValidApiKey);
+	// ponytail: 4 KiB ceiling keeps comparison work fixed; raise only for larger operator keys.
+	const bufferApiKey = Buffer.alloc(API_KEY_COMPARISON_LENGTH);
+	const bufferValidApiKey = Buffer.alloc(API_KEY_COMPARISON_LENGTH);
+	const sourceApiKey = Buffer.from(keyToCheck);
+	const sourceValidApiKey = Buffer.from(validApiKey);
+	sourceApiKey.copy(bufferApiKey, 0, 0, API_KEY_COMPARISON_LENGTH);
+	sourceValidApiKey.copy(bufferValidApiKey, 0, 0, API_KEY_COMPARISON_LENGTH);
+	const buffersMatch = crypto.timingSafeEqual(bufferApiKey, bufferValidApiKey);
+	return buffersMatch
+		&& sourceApiKey.length === sourceValidApiKey.length
+		&& sourceApiKey.length <= API_KEY_COMPARISON_LENGTH
+		&& sourceValidApiKey.length <= API_KEY_COMPARISON_LENGTH;
 }
 
 module.exports = { isValidApiKey, validateApiKey };
