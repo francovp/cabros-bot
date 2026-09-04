@@ -11,6 +11,7 @@ const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 
 const DEFAULT_TRADINGVIEW_MCP_URL = 'https://tradingview-mcp-yp6b.onrender.com/mcp';
 const ENRICHMENT_WINDOW_MS = 24 * 60 * 60 * 1000;
+const TERMINAL_PROVIDER_ERROR_PATTERN = /service suspended|analysis failed:|no data found/i;
 
 function getAbortMessage(signal, fallback) {
 	const reason = signal && signal.reason;
@@ -25,6 +26,14 @@ function getAbortMessage(signal, fallback) {
 	return fallback;
 }
 
+function createMcpError(message) {
+	const error = new Error(message);
+	if (TERMINAL_PROVIDER_ERROR_PATTERN.test(message)) {
+		error.category = 'provider_unavailable';
+	}
+	return error;
+}
+
 function createRuntimeStatus({ includeEnrichment = true } = {}) {
 	const status = {
 		status: 'unknown',
@@ -32,6 +41,7 @@ function createRuntimeStatus({ includeEnrichment = true } = {}) {
 		lastSuccessAt: null,
 		lastFailureAt: null,
 		lastErrorCategory: null,
+		lastHttpStatusCode: null,
 		successCount: 0,
 		failureCount: 0,
 	};
@@ -307,7 +317,12 @@ class TradingViewMcpService {
 				const analysis = await this.callCoinAnalysis({ symbol, exchange, timeframe, signal: combinedSignal });
 				return { success: true, channel: 'tradingview-mcp', analysis };
 			} catch (error) {
-				return { success: false, channel: 'tradingview-mcp', error: error.message };
+				return {
+					success: false,
+					channel: 'tradingview-mcp',
+					error: error.message,
+					retryable: error.category !== 'provider_unavailable',
+				};
 			} finally {
 				clearTimeout(attemptTimeoutId);
 			}
@@ -341,7 +356,12 @@ class TradingViewMcpService {
 						const volConfirm = await this.callVolumeConfirmation({ symbol, exchange, timeframe, signal: combinedSignal });
 						return { success: true, channel: 'tradingview-mcp', volConfirm };
 					} catch (error) {
-						return { success: false, channel: 'tradingview-mcp', error: error.message };
+						return {
+							success: false,
+							channel: 'tradingview-mcp',
+							error: error.message,
+							retryable: error.category !== 'provider_unavailable',
+						};
 					}
 				}, 1, this.logger, { signal: AbortSignal.any([controller.signal, budgetController.signal]) });
 
@@ -419,7 +439,7 @@ class TradingViewMcpService {
 			const normalizedResult = this._unwrapSchemaResult(rpcResult);
 
 			if (normalizedResult && normalizedResult.error) {
-				throw new Error(normalizedResult.error);
+				throw createMcpError(normalizedResult.error);
 			}
 
 			if (!normalizedResult || typeof normalizedResult !== 'object' || Array.isArray(normalizedResult)) {
@@ -442,7 +462,12 @@ class TradingViewMcpService {
 				}
 				return { success: true, channel: 'tradingview-mcp', analysis };
 			} catch (error) {
-				return { success: false, channel: 'tradingview-mcp', error: error.message };
+				return {
+					success: false,
+					channel: 'tradingview-mcp',
+					error: error.message,
+					retryable: error.category !== 'provider_unavailable',
+				};
 			}
 		}, cfg.maxRetries, this.logger, { signal });
 
@@ -468,7 +493,7 @@ class TradingViewMcpService {
 			const normalizedResult = this._unwrapSchemaResult(rpcResult);
 
 			if (normalizedResult && normalizedResult.error) {
-				throw new Error(normalizedResult.error);
+				throw createMcpError(normalizedResult.error);
 			}
 
 			if (!normalizedResult || typeof normalizedResult !== 'object' || Array.isArray(normalizedResult)) {
@@ -488,7 +513,7 @@ class TradingViewMcpService {
 			const normalizedResult = this._unwrapSchemaResult(rpcResult);
 
 			if (normalizedResult && normalizedResult.error) {
-				throw new Error(normalizedResult.error);
+				throw createMcpError(normalizedResult.error);
 			}
 
 			if (!normalizedResult || typeof normalizedResult !== 'object' || Array.isArray(normalizedResult)) {
@@ -510,7 +535,7 @@ class TradingViewMcpService {
 			const normalizedResult = this._unwrapSchemaResult(rpcResult);
 
 			if (normalizedResult && normalizedResult.error) {
-				throw new Error(normalizedResult.error);
+				throw createMcpError(normalizedResult.error);
 			}
 
 			if (!normalizedResult || typeof normalizedResult !== 'object' || Array.isArray(normalizedResult)) {
@@ -531,12 +556,22 @@ class TradingViewMcpService {
 					const rpcResult = await this._callTool(toolName, args, { signal });
 					return { success: true, channel: 'tradingview-mcp', data: rpcResult };
 				} catch (error) {
-					return { success: false, channel: 'tradingview-mcp', error: error.message };
+					return {
+						success: false,
+						channel: 'tradingview-mcp',
+						error: error.message,
+						category: error.category,
+						httpStatusCode: error.httpStatusCode,
+						retryable: error.category !== 'provider_unavailable',
+					};
 				}
 			}, cfg.maxRetries, this.logger, { signal });
 
 			if (!result.success) {
-				throw new Error(`TradingView MCP scan ${toolName} failed: ${result.error || 'unknown error'}`);
+				const error = new Error(`TradingView MCP scan ${toolName} failed: ${result.error || 'unknown error'}`);
+				error.category = result.category;
+				error.httpStatusCode = result.httpStatusCode;
+				throw error;
 			}
 
 			return this._normalizeScanResult(result.data);
@@ -616,7 +651,7 @@ class TradingViewMcpService {
 
 		if (callResult.isError) {
 			const errorMessage = this._extractContentText(callResult) || `TradingView MCP tool ${toolName} returned isError=true`;
-			throw new Error(errorMessage);
+			throw createMcpError(errorMessage);
 		}
 
 		if (callResult.structuredContent && typeof callResult.structuredContent === 'object') {
@@ -708,7 +743,9 @@ class TradingViewMcpService {
 		const nextSessionId = response.headers.get('mcp-session-id') || sessionId;
 
 		if (!response.ok && !(response.status === 202 && !expectResponse)) {
-			throw new Error(`TradingView MCP HTTP ${response.status}: ${bodyText || 'empty response'}`);
+			const error = createMcpError(`TradingView MCP HTTP ${response.status}: ${bodyText || 'empty response'}`);
+			error.httpStatusCode = response.status;
+			throw error;
 		}
 
 		if (!expectResponse) {
@@ -1125,6 +1162,7 @@ class TradingViewMcpService {
 					lastCheckedAt: timestamp,
 					lastSuccessAt: timestamp,
 					lastErrorCategory: null,
+					lastHttpStatusCode: null,
 					successCount: this[key].successCount + 1,
 				};
 			});
@@ -1143,6 +1181,7 @@ class TradingViewMcpService {
 					lastCheckedAt: timestamp,
 					lastFailureAt: timestamp,
 					lastErrorCategory: this._getErrorCategory(error),
+					lastHttpStatusCode: Number.isInteger(error?.httpStatusCode) ? error.httpStatusCode : null,
 					failureCount: this[key].failureCount + 1,
 				};
 			});
@@ -1286,6 +1325,9 @@ class TradingViewMcpService {
 		const message = error && typeof error.message === 'string' ? error.message : '';
 		if (error && error.category === 'circuit_breaker_open') {
 			return 'circuit_breaker_open';
+		}
+		if (error && error.category === 'provider_unavailable') {
+			return 'provider_unavailable';
 		}
 		if (/circuit breaker/i.test(message)) {
 			return 'circuit_breaker_open';
