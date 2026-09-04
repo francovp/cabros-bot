@@ -10,6 +10,8 @@ const SUPPORTED_SCAN_TYPES = new Set([
 	'bollinger_scan',
 	'volume_breakout_scanner',
 	'smart_volume_scanner',
+	'rating_filter',
+	'consecutive_candles_scan',
 ]);
 
 const DEFAULT_SCAN_LIMIT = 5;
@@ -22,6 +24,8 @@ const SCAN_SECTIONS = {
 	volume_breakout_scanner: { emoji: '💥', title: 'BREAKOUT DE VOLUMEN' },
 	smart_volume_scanner: { emoji: '🔎', title: 'VOLUMEN INTELIGENTE' },
 	bollinger_scan: { emoji: '🔥', title: 'SQUEEZE BOLLINGER' },
+	rating_filter: { emoji: '📊', title: 'RATING BOLLINGER' },
+	consecutive_candles_scan: { emoji: '🕯️', title: 'VELAS CONSECUTIVAS' },
 };
 
 const DEFAULT_SCANS = ['top_gainers', 'top_losers', 'volume_breakout_scanner'];
@@ -67,10 +71,26 @@ function parseMarketScannerRequest(req = {}) {
 	const scans = parseScans(body);
 	const limit = parseLimit(body);
 	const bbwThreshold = parseBbwThreshold(body);
+	const rating = parseRating(body);
+	const consecutiveCandlesPatternType = parseConsecutiveCandlesPatternType(body);
+	const candleCount = parseCandleCount(body);
+	const minGrowth = parseMinGrowth(body);
 	const ranked = parseRanked(body);
 	const includeMultiTimeframe = parseIncludeMultiTimeframe(body);
 
-	return { exchange, timeframe, scans, limit, bbwThreshold, ranked, includeMultiTimeframe };
+	return {
+		exchange,
+		timeframe,
+		scans,
+		limit,
+		bbwThreshold,
+		rating,
+		consecutiveCandlesPatternType,
+		candleCount,
+		minGrowth,
+		ranked,
+		includeMultiTimeframe,
+	};
 }
 
 function getRequestBody(req = {}) {
@@ -222,6 +242,68 @@ function parseIncludeMultiTimeframe(body = {}) {
 	throw new MarketScannerRequestError('includeMultiTimeframe must be a boolean');
 }
 
+function parseRating(body = {}) {
+	const raw = body.rating !== undefined ? body.rating : body.rating_filter_rating;
+	if (raw === undefined || raw === null || raw === '') {
+		return 3;
+	}
+	if (typeof raw === 'boolean') {
+		throw new MarketScannerRequestError('rating must be an integer between -3 and 3');
+	}
+	const num = Number(raw);
+	if (!Number.isInteger(num) || num < -3 || num > 3) {
+		throw new MarketScannerRequestError('rating must be an integer between -3 and 3');
+	}
+	return num;
+}
+
+function parseConsecutiveCandlesPatternType(body = {}) {
+	const raw = body.pattern_type !== undefined
+		? body.pattern_type
+		: (body.patternType !== undefined ? body.patternType : body.consecutive_candles_pattern_type);
+	if (raw === undefined || raw === null || raw === '') {
+		return 'bullish';
+	}
+	if (typeof raw !== 'string') {
+		throw new MarketScannerRequestError('pattern_type must be either "bullish" or "bearish"');
+	}
+	const lower = raw.trim().toLowerCase();
+	if (lower !== 'bullish' && lower !== 'bearish') {
+		throw new MarketScannerRequestError('pattern_type must be either "bullish" or "bearish"');
+	}
+	return lower;
+}
+
+function parseCandleCount(body = {}) {
+	const raw = body.candle_count !== undefined ? body.candle_count : body.candleCount;
+	if (raw === undefined || raw === null || raw === '') {
+		return 3;
+	}
+	if (typeof raw === 'boolean') {
+		throw new MarketScannerRequestError('candle_count must be an integer between 2 and 5');
+	}
+	const num = Number(raw);
+	if (!Number.isInteger(num) || num < 2 || num > 5) {
+		throw new MarketScannerRequestError('candle_count must be an integer between 2 and 5');
+	}
+	return num;
+}
+
+function parseMinGrowth(body = {}) {
+	const raw = body.min_growth !== undefined ? body.min_growth : body.minGrowth;
+	if (raw === undefined || raw === null || raw === '') {
+		return undefined;
+	}
+	if (typeof raw === 'boolean') {
+		throw new MarketScannerRequestError('min_growth must be a non-negative number');
+	}
+	const num = Number(raw);
+	if (!Number.isFinite(num) || num < 0) {
+		throw new MarketScannerRequestError('min_growth must be a non-negative number');
+	}
+	return num;
+}
+
 function buildMarketScannerReport(scanResults = [], options = {}) {
 	const now = options.now || new Date();
 	const exchange = options.exchange || DEFAULT_EXCHANGE;
@@ -340,6 +422,30 @@ function formatScanItem(item, rank, scanType, ranked = false) {
 	} else if (scanType === 'bollinger_scan') {
 		const bbw = numberOrNull(item.bbw ?? null);
 		suffix = ` | BBW ${formatNumber(bbw, 2)}`;
+	} else if (scanType === 'rating_filter') {
+		const bbRating = item.bollinger_rating !== undefined && item.bollinger_rating !== null
+			? item.bollinger_rating
+			: item.rating;
+		if (bbRating !== undefined && bbRating !== null) {
+			const sign = Number(bbRating) > 0 ? '+' : '';
+			suffix = ` | BB Rating ${sign}${bbRating}`;
+		}
+		const rsi = numberOrNull(item.indicators?.RSI ?? null);
+		if (rsi !== null) {
+			suffix += ` | RSI ${formatNumber(rsi, 1)}`;
+		}
+	} else if (scanType === 'consecutive_candles_scan') {
+		const count = item.candle_count ? `${item.candle_count} velas` : '';
+		const patternType = typeof item.pattern_type === 'string'
+			? (item.pattern_type.toLowerCase() === 'bullish' ? '🟢 Bullish' : '🔴 Bearish')
+			: '';
+		const patternDetails = [count, patternType].filter(Boolean).join(' ');
+		if (patternDetails) {
+			suffix = ` | ${patternDetails}`;
+		}
+		if (item.pattern_strength !== undefined && item.pattern_strength !== null) {
+			suffix += ` | Fuerza ${item.pattern_strength}`;
+		}
 	}
 
 	if (ranked && item._score !== undefined) {
@@ -443,12 +549,29 @@ function getCandidateDirection(item = {}) {
 		}
 	}
 
+	if (typeof item.pattern_type === 'string') {
+		if (/(bull|buy|long|alcist|compra)/i.test(item.pattern_type)) {
+			return 'bullish';
+		}
+		if (/(bear|sell|short|bajist|venta)/i.test(item.pattern_type)) {
+			return 'bearish';
+		}
+	}
+
 	return null;
 }
 
 function getScanItemSide(scanType, item = {}) {
 	if (scanType === 'top_losers') {
 		return 'SELL';
+	}
+
+	if (scanType === 'rating_filter') {
+		const bbRating = numberOrNull(item.bollinger_rating ?? item.rating);
+		if (bbRating !== null && bbRating < 0) {
+			return 'SELL';
+		}
+		return 'BUY';
 	}
 
 	const candidateDirection = getCandidateDirection(item);

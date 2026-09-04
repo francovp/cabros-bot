@@ -4646,7 +4646,9 @@
                 "top_losers",
                 "volume_breakout_scanner",
                 "smart_volume_scanner",
-                "bollinger_scan"
+                "bollinger_scan",
+                "rating_filter",
+                "consecutive_candles_scan"
               ]
             }
           },
@@ -4659,6 +4661,34 @@
           "bbw_threshold": {
             "type": "number",
             "default": 0.05
+          },
+          "rating": {
+            "type": "integer",
+            "minimum": -3,
+            "maximum": 3,
+            "default": 3,
+            "description": "Bollinger Band rating threshold (-3 to 3) for rating_filter scan."
+          },
+          "pattern_type": {
+            "type": "string",
+            "enum": [
+              "bullish",
+              "bearish"
+            ],
+            "default": "bullish",
+            "description": "Candle pattern direction for consecutive_candles_scan."
+          },
+          "candle_count": {
+            "type": "integer",
+            "minimum": 2,
+            "maximum": 5,
+            "default": 3,
+            "description": "Number of consecutive candles (2-5) for consecutive_candles_scan."
+          },
+          "min_growth": {
+            "type": "number",
+            "minimum": 0,
+            "description": "Optional minimum growth threshold for consecutive_candles_scan."
           },
           "ranked": {
             "type": "boolean",
