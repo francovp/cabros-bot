@@ -24,6 +24,7 @@ describe('public OpenAPI documentation', () => {
 			type: 'apiKey',
 			in: 'header',
 			name: 'x-api-key',
+			description: expect.stringContaining('X-Cabros-Key-Slot'),
 		});
 		expect(response.text).not.toContain(process.env.WEBHOOK_API_KEY);
 	});
