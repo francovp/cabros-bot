@@ -3471,7 +3471,7 @@
             ],
             "description": "Lists signal outcomes filtered by symbol, exchange, status, window, and time range.",
             "url": {
-              "raw": "{{baseUrl}}/api/outcomes?symbol=BTCUSDT&exchange=BINANCE&status=evaluated&window=1h&limit=10&from=2026-08-23T00:00:00.000Z&to=2026-08-23T23:59:59.000Z",
+              "raw": "{{baseUrl}}/api/outcomes?symbol=BTCUSDT&exchange=BINANCE&status=evaluated&window=5m&limit=10&from=2026-08-23T00:00:00.000Z&to=2026-08-23T23:59:59.000Z",
               "host": [
                 "{{baseUrl}}"
               ],
@@ -3494,7 +3494,7 @@
                 },
                 {
                   "key": "window",
-                  "value": "1h"
+                  "value": "5m"
                 },
                 {
                   "key": "limit",

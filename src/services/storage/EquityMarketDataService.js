@@ -9,12 +9,15 @@ const MAX_TIMEOUT_MS = 30000;
 const DEFAULT_RPM = 8;
 const SUPPORTED_EXCHANGES = Object.freeze(['BATS', 'NASDAQ', 'NYSE', 'AMEX', 'NYSE ARCA', 'FX_IDC', 'SPCFD']);
 const INTERVALS = Object.freeze({
+	'1m': '1min',
 	'5m': '5min',
 	'15m': '15min',
+	'30m': '30min',
 	'1h': '1h',
 	'4h': '4h',
 	'1D': '1day',
 	'1W': '1week',
+	'1M': '1month',
 });
 
 const REASONS = Object.freeze({

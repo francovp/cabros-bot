@@ -210,6 +210,20 @@
       "description": "Maximum execution duration per signal outcome evaluation sweep in milliseconds",
       "valueType": "NUMBER"
     },
+    "SIGNAL_OUTCOME_WINDOWS": {
+      "defaultValue": {
+        "value": "1h,4h,1D,1W"
+      },
+      "description": "Ordered comma-separated signal outcome evaluation windows",
+      "valueType": "STRING"
+    },
+    "SIGNAL_OUTCOME_WINDOW_LABELS": {
+      "defaultValue": {
+        "value": ""
+      },
+      "description": "Optional JSON display labels for configured signal outcome windows",
+      "valueType": "STRING"
+    },
     "SIGNAL_OUTCOME_MAX_RETRY_ATTEMPTS": {
       "defaultValue": {
         "value": "3"

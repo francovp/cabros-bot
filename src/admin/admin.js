@@ -1965,7 +1965,7 @@ const createOutcomeCard = (outcome) => {
 	}
 
 	const outcomesMap = asObject(outcome && outcome.outcomes);
-	const windowKeys = ['1h', '4h', '1D', '1W'];
+	const windowKeys = Object.keys(outcomesMap);
 	const windowsGrid = element('div', { className: 'outcome-windows-grid' });
 	windowKeys.forEach((winKey) => {
 		const win = outcomesMap[winKey] || outcomesMap[winKey.toLowerCase()] || null;

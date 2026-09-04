@@ -24,6 +24,8 @@ describe('RemoteConfigService', () => {
 		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'false';
 		process.env.NEWS_ALERT_THRESHOLD = '0.7';
 		process.env.TRADINGVIEW_MCP_TIMEOUT_MS = '12000';
+		process.env.SIGNAL_OUTCOME_WINDOWS = '1h,4h,1D,1W';
+		process.env.SIGNAL_OUTCOME_WINDOW_LABELS = '';
 		jest.clearAllMocks();
 		isFirestoreConfigured.mockReturnValue(true);
 		remoteConfigService._resetForTesting();
@@ -344,7 +346,23 @@ describe('RemoteConfigService', () => {
 		expect(config.NOTIFICATION_REDRIVE_MAX_AGE_MS).toBe(7200000);
 		expect(config.TRADINGVIEW_MCP_BREAKER_FAILURE_THRESHOLD).toBe(10);
 		expect(config.TRADINGVIEW_MCP_BREAKER_COOLDOWN_MS).toBe(300000);
-		expect(config.TRADINGVIEW_MCP_PAGE_COOLDOWN_MS).toBe(1800000);
+			expect(config.TRADINGVIEW_MCP_PAGE_COOLDOWN_MS).toBe(1800000);
+	});
+
+	it('supports configurable signal outcome windows and labels in Remote Config', async () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		mockTemplate({
+			SIGNAL_OUTCOME_WINDOWS: '5m,1h,1M',
+			SIGNAL_OUTCOME_WINDOW_LABELS: '{"5m":"5 minutos","1h":"1 hora","1M":"1 mes"}',
+		});
+		alertStorageService.getFirestore.mockReturnValue({});
+
+		await remoteConfigService.loadNow();
+
+		expect(remoteConfigService.getRuntimeConfig()).toEqual(expect.objectContaining({
+			SIGNAL_OUTCOME_WINDOWS: '5m,1h,1M',
+			SIGNAL_OUTCOME_WINDOW_LABELS: '{"5m":"5 minutos","1h":"1 hora","1M":"1 mes"}',
+		}));
 	});
 
 	it('validates and applies safe request-time feature flags from remote config', async () => {

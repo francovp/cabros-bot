@@ -49,6 +49,8 @@ describe('SignalOutcomeService', () => {
 		EquityMarketDataService._resetPacerForTesting();
 		delete process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING;
 		delete process.env.SIGNAL_OUTCOME_WORKER_ROLE;
+		delete process.env.SIGNAL_OUTCOME_WINDOWS;
+		delete process.env.SIGNAL_OUTCOME_WINDOW_LABELS;
 		delete process.env.ENABLE_SIGNAL_OUTCOME_TRACKING;
 		delete process.env.ENABLE_FIRESTORE_ALERT_STORAGE;
 		delete process.env.ENABLE_EQUITY_MARKET_DATA;
@@ -64,6 +66,8 @@ describe('SignalOutcomeService', () => {
 		EquityMarketDataService._resetPacerForTesting();
 		delete process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING;
 		delete process.env.SIGNAL_OUTCOME_WORKER_ROLE;
+		delete process.env.SIGNAL_OUTCOME_WINDOWS;
+		delete process.env.SIGNAL_OUTCOME_WINDOW_LABELS;
 		delete process.env.ENABLE_SIGNAL_OUTCOME_TRACKING;
 		delete process.env.ENABLE_FIRESTORE_ALERT_STORAGE;
 		delete process.env.ENABLE_EQUITY_MARKET_DATA;
@@ -93,6 +97,46 @@ describe('SignalOutcomeService', () => {
 		it('returns true when ENABLE_SIGNAL_OUTCOME_TRACKING is "true"', () => {
 			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
 			expect(SignalOutcomeService.isEnabled()).toBe(true);
+		});
+	});
+
+	describe('configured outcome windows', () => {
+		it('uses the current default windows and labels', () => {
+			expect(SignalOutcomeService.getConfiguredOutcomeWindows()).toEqual(['1h', '4h', '1D', '1W']);
+			expect(SignalOutcomeService.getOutcomeWindowLabels()).toEqual({
+				'1h': '1h',
+				'4h': '4h',
+				'1D': '1D',
+				'1W': '1W',
+			});
+		});
+
+		it('parses custom supported windows and optional JSON labels', () => {
+			process.env.SIGNAL_OUTCOME_WINDOWS = '5m, 1h, 1M';
+			process.env.SIGNAL_OUTCOME_WINDOW_LABELS = '{"5m":"5 minutos","1h":"1 hora","1M":"1 mes"}';
+
+			expect(SignalOutcomeService.getConfiguredOutcomeWindows()).toEqual(['5m', '1h', '1M']);
+			expect(SignalOutcomeService.getOutcomeWindowLabels()).toEqual({
+				'5m': '5 minutos',
+				'1h': '1 hora',
+				'1M': '1 mes',
+			});
+		});
+
+		it.each(['', '5m,5m', '1h,2h', '1h,1.5h', '1h,-5m', '1h,1e3m'])('falls back for invalid window configuration %s', (value) => {
+			process.env.SIGNAL_OUTCOME_WINDOWS = value;
+			expect(SignalOutcomeService.getConfiguredOutcomeWindows()).toEqual(['1h', '4h', '1D', '1W']);
+		});
+
+		it('warns once for a repeated invalid window value', () => {
+			const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+			process.env.SIGNAL_OUTCOME_WINDOWS = '2h';
+
+			SignalOutcomeService.getConfiguredOutcomeWindows();
+			SignalOutcomeService.getConfiguredOutcomeWindows();
+
+			expect(warn).toHaveBeenCalledTimes(1);
+			warn.mockRestore();
 		});
 	});
 
@@ -216,6 +260,22 @@ describe('SignalOutcomeService', () => {
 			expect(saved.outcomeEvaluated).toBe(false);
 			expect(saved.outcomes['1h']).toBeDefined();
 			expect(saved.outcomes['1h'].status).toBe('pending');
+		});
+
+		it('persists only the configured windows and their labels', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.SIGNAL_OUTCOME_WINDOWS = '5m,1h';
+			process.env.SIGNAL_OUTCOME_WINDOW_LABELS = '{"5m":"5 minutos","1h":"1 hora"}';
+
+			const resId = await SignalOutcomeService.recordSignal({
+				symbol: 'BINANCE:BTCUSDT',
+				price: 50000,
+			});
+
+			const saved = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(resId);
+			expect(saved.outcomeWindows).toEqual(['5m', '1h']);
+			expect(saved.outcomeWindowLabels).toEqual({ '5m': '5 minutos', '1h': '1 hora' });
+			expect(Object.keys(saved.outcomes)).toEqual(['5m', '1h']);
 		});
 
 		it('resolves a configured equity entry price without using Binance', async () => {
@@ -622,6 +682,39 @@ describe('SignalOutcomeService', () => {
 	});
 
 	describe('evaluatePendingOutcomes()', () => {
+		it('evaluates a configured short window using its matching market-data interval', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			process.env.SIGNAL_OUTCOME_WINDOWS = '5m';
+
+			const receivedAtDate = new Date(Date.now() - 10 * 60 * 1000);
+			const mockDocId = 'test-custom-window';
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, new Map([
+				[mockDocId, {
+					receivedAt: admin.firestore.Timestamp.fromDate(receivedAtDate),
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					side: 'BUY',
+					price: 50000,
+					outcomeEvaluated: false,
+					outcomes: {
+						'5m': {
+							status: 'pending',
+							targetTime: new Date(receivedAtDate.getTime() + 5 * 60 * 1000).toISOString(),
+						},
+					},
+				}],
+			]));
+			mockGetKlines.mockResolvedValue([
+				[receivedAtDate.getTime(), '50000', '52000', '49000', '51000'],
+			]);
+
+			await SignalOutcomeService.evaluatePendingOutcomes();
+
+			expect(mockGetKlines).toHaveBeenCalledWith(expect.objectContaining({ interval: '5m' }));
+			expect(global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(mockDocId).outcomes['5m'].status).toBe('evaluated');
+		});
+
 		it('evaluates pending outcomes using mocked klines', async () => {
 			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
@@ -2167,6 +2260,33 @@ describe('SignalOutcomeService', () => {
 	});
 
 	describe('summarizeOutcomes()', () => {
+		it('returns only the currently configured windows while preserving legacy outcome data', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			process.env.SIGNAL_OUTCOME_WINDOWS = '5m';
+
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, new Map([
+				['custom-summary', {
+					receivedAt: admin.firestore.Timestamp.fromDate(new Date()),
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					price: 50000,
+					side: 'BUY',
+					outcomeEvaluated: true,
+					outcomes: {
+						'5m': { status: 'evaluated', return: 1, maxFavorableExcursion: 2, maxAdverseExcursion: -1 },
+						'1h': { status: 'evaluated', return: 9, maxFavorableExcursion: 10, maxAdverseExcursion: -2 },
+					},
+				}],
+			]));
+
+			const summary = await SignalOutcomeService.summarizeOutcomes();
+
+			expect(Object.keys(summary.windows)).toEqual(['5m']);
+			expect(summary.windows['5m'].averageReturnPercent).toBe(1);
+			expect(summary.expectancyR).toBeNull();
+		});
+
 		it('throws STORAGE_UNAVAILABLE when Firestore is unavailable', async () => {
 			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
 			const origGetFirestore = AlertStorageService.getFirestore;
