@@ -1722,6 +1722,47 @@ describe('Status endpoints', () => {
 		});
 	});
 
+	it('reports newsMonitorCache metrics under dependencies when ENABLE_NEWS_MONITOR is true', async () => {
+		process.env.ENABLE_NEWS_MONITOR = 'true';
+		process.env.ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP = 'false';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.newsMonitorCache).toBeDefined();
+		expect(response.body.dependencies.newsMonitorCache).toEqual({
+			enabled: true,
+			configured: true,
+			ready: true,
+			status: 'ready',
+			mode: 'in-memory',
+			backend: null,
+			metrics: expect.objectContaining({
+				hits: expect.any(Number),
+				misses: expect.any(Number),
+				hitRate: expect.any(Number),
+				totalEntries: expect.any(Number),
+				evictions: expect.any(Number),
+				estimatedMemoryBytes: expect.any(Number),
+				lastHitAt: null,
+				lastMissAt: null,
+			}),
+		});
+	});
+
+	it('omits newsMonitorCache from dependencies when ENABLE_NEWS_MONITOR is false', async () => {
+		process.env.ENABLE_NEWS_MONITOR = 'false';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.newsMonitorCache).toBeUndefined();
+	});
+
 	it('reports Cloudflare as the primary news monitor provider and fallback model as configured', async () => {
 		process.env.ENABLE_GEMINI_GROUNDING = 'false';
 		process.env.ENABLE_NEWS_MONITOR = 'true';
