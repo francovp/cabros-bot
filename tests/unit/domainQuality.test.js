@@ -427,11 +427,28 @@ describe('domainQuality', () => {
 			expect(result.staleSources).toBe(0);
 		});
 
+		it('handles a single source passed as an object', () => {
+			const source = { publishedAt: '2026-09-04T12:00:00.000Z' };
+			const result = scoreFreshness(source, { now: fixedNow });
+			expect(result.freshness).toBe(1);
+			expect(result.freshnessReason).toBe('fresh');
+			expect(result.totalDated).toBe(1);
+		});
+
 		it('defaults now to current date when options.now is omitted', () => {
 			const recentSource = [
 				{ publishedAt: new Date().toISOString() },
 			];
 			const result = scoreFreshness(recentSource);
+			expect(result.hasExplicitDates).toBe(true);
+			expect(result.freshness).toBeGreaterThan(0.95);
+		});
+
+		it('falls back safely when options.now is an invalid Date', () => {
+			const recentSource = [
+				{ publishedAt: new Date().toISOString() },
+			];
+			const result = scoreFreshness(recentSource, { now: new Date('invalid') });
 			expect(result.hasExplicitDates).toBe(true);
 			expect(result.freshness).toBeGreaterThan(0.95);
 		});
